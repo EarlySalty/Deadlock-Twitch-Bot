@@ -50,20 +50,13 @@ TWITCH_API_BASE = "https://api.twitch.tv/helix"
 # Hinweis: Re-Auth notwendig, falls bisher nur channel:manage:raids erteilt war.
 RAID_SCOPES = [
     "channel:manage:raids",
-    "moderator:read:followers",
-    "moderator:manage:banned_users",
-    "moderator:manage:chat_messages",
     "channel:read:subscriptions",
     "channel:manage:moderators",
     "channel:bot",
-    "chat:read",
-    "chat:edit",
     "clips:edit",
     "channel:read:ads",
     "bits:read",
     "channel:read:hype_train",
-    "moderator:read:chatters",
-    "moderator:manage:shoutouts",
     "channel:read:redemptions",
 ]
 
@@ -125,6 +118,7 @@ class RaidBot:
         self._pending_raids: dict[str, tuple[str, dict | None, float, bool, int, float | None]] = {}
         # Unterdrückt den nächsten Offline-Auto-Raid, wenn kurz zuvor ein manueller/externer Raid erkannt wurde.
         self._manual_raid_suppression: dict[str, float] = {}
+        self._user_scope_fallback_warned: set[tuple[str, str]] = set()
 
         # Cleanup-Task starten
         self._cleanup_task = asyncio.create_task(self._periodic_cleanup())
@@ -265,6 +259,56 @@ class RaidBot:
         """
         self._cog = cog
         log.debug("Cog reference set for dynamic EventSub subscriptions")
+
+    async def _resolve_bot_oauth_context(self) -> tuple[str | None, str | None, set[str]]:
+        """Resolve bot OAuth token + bot id + scopes (best-effort).
+
+        This enables moderator-scoped reads/actions to be executed via the central bot token,
+        while keeping broadcaster tokens as a fallback during migration.
+        """
+        token_mgr = None
+        chat_bot = getattr(self, "chat_bot", None)
+        if chat_bot is not None:
+            token_mgr = getattr(chat_bot, "_token_manager", None)
+        if token_mgr is None:
+            cog = getattr(self, "_cog", None)
+            token_mgr = getattr(cog, "_bot_token_manager", None) if cog is not None else None
+        if token_mgr is None:
+            return None, None, set()
+
+        try:
+            token, bot_id = await token_mgr.get_valid_token()
+        except Exception:
+            return None, None, set()
+
+        token = str(token or "").strip()
+        if token.lower().startswith("oauth:"):
+            token = token[6:]
+        resolved_bot_id = str(bot_id or getattr(token_mgr, "bot_id", "") or "").strip() or None
+        scopes = {
+            str(scope).strip().lower()
+            for scope in (getattr(token_mgr, "scopes", None) or set())
+            if str(scope).strip()
+        }
+        return token or None, resolved_bot_id, scopes
+
+    def _warn_user_scope_fallback_once(
+        self,
+        *,
+        area: str,
+        subject: str,
+    ) -> None:
+        subject_key = str(subject or "").strip().lower() or "<unknown>"
+        key = (str(area or "").strip().lower(), subject_key)
+        if key in self._user_scope_fallback_warned:
+            return
+        self._user_scope_fallback_warned.add(key)
+        log.warning(
+            "RaidBot: nutze Legacy-Broadcaster-Token fuer %s (%s). "
+            "Der Bot-Token sollte diesen Pfad uebernehmen.",
+            area,
+            subject or "<unknown>",
+        )
 
     @staticmethod
     def _row_value(row, key: str, index: int, default=None):
@@ -1596,21 +1640,38 @@ class RaidBot:
         except Exception:
             return None
 
-        user_token: str | None = None
-        try:
-            user_token = await self.auth_manager.get_valid_token(resolved_target_id, self.session)
-        except Exception:
-            user_token = None
-
         try:
             api = TwitchAPI(
                 self.auth_manager.client_id,
                 self.auth_manager.client_secret,
                 session=self.session,
             )
-            followers_total = await api.get_followers_total(
-                resolved_target_id, user_token=user_token
-            )
+            # Prefer the central bot token for moderator-scoped reads; fall back to broadcaster grants.
+            followers_total = None
+            bot_token, _bot_id, bot_scopes = await self._resolve_bot_oauth_context()
+            if bot_token and (not bot_scopes or "moderator:read:followers" in bot_scopes):
+                followers_total = await api.get_followers_total(
+                    resolved_target_id,
+                    user_token=bot_token,
+                )
+            if followers_total is None:
+                user_token: str | None = None
+                try:
+                    user_token = await self.auth_manager.get_valid_token(
+                        resolved_target_id,
+                        self.session,
+                    )
+                except Exception:
+                    user_token = None
+                if user_token:
+                    self._warn_user_scope_fallback_once(
+                        area="recruitment follower lookup",
+                        subject=login or resolved_target_id,
+                    )
+                followers_total = await api.get_followers_total(
+                    resolved_target_id,
+                    user_token=user_token,
+                )
         except Exception:
             log.debug("Follower-Check fehlgeschlagen fuer %s", login, exc_info=True)
             return None
@@ -1950,19 +2011,39 @@ class RaidBot:
             self.auth_manager.client_secret,
             session=self.session,
         )
+        bot_token, _bot_id, bot_scopes = await self._resolve_bot_oauth_context()
+        bot_can_read_followers = bool(
+            bot_token and (not bot_scopes or "moderator:read:followers" in bot_scopes)
+        )
 
         async def _fetch_one(candidate: dict) -> None:
             user_id = str(candidate.get("user_id") or "").strip()
-            try:
-                token = await self.auth_manager.get_valid_token(user_id, self.session)
-            except Exception:
+            if not user_id:
                 return
-            if not token:
-                return
-            try:
-                followers = await api.get_followers_total(user_id, user_token=token)
-            except Exception:
-                return
+
+            # Prefer bot token; fall back to broadcaster token for edge cases.
+            followers = None
+            if bot_can_read_followers and bot_token:
+                try:
+                    followers = await api.get_followers_total(user_id, user_token=bot_token)
+                except Exception:
+                    followers = None
+
+            if followers is None:
+                try:
+                    token = await self.auth_manager.get_valid_token(user_id, self.session)
+                except Exception:
+                    token = None
+                if token:
+                    self._warn_user_scope_fallback_once(
+                        area="raid candidate follower lookup",
+                        subject=str(candidate.get("user_login") or user_id),
+                    )
+                    try:
+                        followers = await api.get_followers_total(user_id, user_token=token)
+                    except Exception:
+                        followers = None
+
             if followers is not None:
                 candidate["followers_total"] = int(followers)
 

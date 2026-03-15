@@ -13,52 +13,57 @@ from ... import storage as _storage
 from ...core.constants import log
 from ..billing.billing_plans import BILLING_PLANS as _BILLING_PLANS
 
-# Alle Scopes die ein vollständig autorisierter Streamer haben sollte
+# Alle Broadcaster-Scopes, die ein vollständig autorisierter Streamer haben sollte.
 _REQUIRED_SCOPES: list[str] = [
     "channel:manage:raids",
-    "moderator:read:followers",
-    "moderator:manage:banned_users",
-    "moderator:manage:chat_messages",
     "channel:read:subscriptions",
     "channel:manage:moderators",
     "channel:bot",
-    "chat:read",
-    "chat:edit",
     "clips:edit",
     "channel:read:ads",
     "bits:read",
     "channel:read:hype_train",
-    "moderator:read:chatters",
-    "moderator:manage:shoutouts",
     "channel:read:redemptions",
 ]
 
 _SCOPE_COLUMN_LABELS: dict[str, str] = {
     "channel:manage:raids": "Raids",
-    "moderator:read:followers": "Follower",
-    "moderator:manage:banned_users": "Bans",
-    "moderator:manage:chat_messages": "Chat Mod",
     "channel:read:subscriptions": "Subs",
     "channel:manage:moderators": "Mods",
     "channel:bot": "Bot",
-    "chat:read": "Chat Read",
-    "chat:edit": "Chat Edit",
     "clips:edit": "Clips",
     "channel:read:ads": "Ads",
     "bits:read": "Bits",
     "channel:read:hype_train": "Hype",
-    "moderator:read:chatters": "Chatters",
-    "moderator:manage:shoutouts": "Shoutouts",
     "channel:read:redemptions": "Points",
 }
 
 # Scopes die besonders wichtig für Analytics/Lurker-Tracking sind
 _CRITICAL_SCOPES: set[str] = {
-    "moderator:read:chatters",  # Lurker-Tracking via Chatters API
     "channel:read:redemptions",  # Channel Point Redemptions
     "bits:read",  # Bits Events
     "channel:read:hype_train",  # Hype Train Events
     "channel:read:subscriptions",  # Sub Events
+}
+
+_BOT_REQUIRED_SCOPES: tuple[str, ...] = (
+    "user:read:chat",
+    "user:write:chat",
+    "moderator:read:chatters",
+    "moderator:read:followers",
+    "moderator:manage:chat_messages",
+    "moderator:manage:banned_users",
+    "moderator:manage:shoutouts",
+)
+
+_BOT_SCOPE_LABELS: dict[str, str] = {
+    "user:read:chat": "Bot Chat Read",
+    "user:write:chat": "Bot Chat Write",
+    "moderator:read:chatters": "Bot Chatters",
+    "moderator:read:followers": "Bot Followers",
+    "moderator:manage:chat_messages": "Bot Chat Mod",
+    "moderator:manage:banned_users": "Bot Bans",
+    "moderator:manage:shoutouts": "Bot Shoutouts",
 }
 
 _DASHBOARD_OWNER_DISCORD_ID = "662995601738170389"
@@ -105,6 +110,35 @@ class DashboardLiveMixin:
         if cog is None:
             return None
         return getattr(cog, "_twitch_chat_bot", None)
+
+    def _resolve_dashboard_bot_scope_state(self) -> dict[str, Any]:
+        token_mgr = None
+        chat_bot = self._resolve_dashboard_chat_bot()
+        if chat_bot is not None:
+            token_mgr = getattr(chat_bot, "_token_manager", None)
+
+        if token_mgr is None:
+            raid_bot = getattr(self, "_raid_bot", None)
+            cog = getattr(raid_bot, "_cog", None) if raid_bot is not None else None
+            if cog is not None:
+                token_mgr = getattr(cog, "_bot_token_manager", None)
+
+        if token_mgr is None:
+            return {"available": False, "loaded": False, "scopes": set()}
+
+        try:
+            scopes = {
+                str(scope).strip().lower()
+                for scope in (getattr(token_mgr, "scopes", None) or set())
+                if str(scope).strip()
+            }
+            loaded = bool(
+                getattr(token_mgr, "bot_id", None) or getattr(token_mgr, "expires_at", None)
+            )
+            return {"available": True, "loaded": loaded, "scopes": scopes}
+        except Exception:
+            log.debug("Could not resolve dashboard bot scope state", exc_info=True)
+            return {"available": True, "loaded": False, "scopes": set()}
 
     @staticmethod
     def _build_dashboard_chat_channel(chat_bot: Any, login: str, channel_id: str) -> Any:
@@ -1272,6 +1306,30 @@ class DashboardLiveMixin:
             f"<span class='pill ok'>{full_scope_count} vollständig</span>"
             f"<span class='pill warn'>{missing_scope_count} unvollständig</span>"
         )
+        bot_scope_state = self._resolve_dashboard_bot_scope_state()
+        bot_scope_pills_html = ""
+        if not bool(bot_scope_state.get("available")):
+            bot_scope_pills_html = (
+                "<span class='pill err'>Zentraler Bot-TokenManager fehlt</span>"
+            )
+        elif not bool(bot_scope_state.get("loaded")):
+            bot_scope_pills_html = (
+                "<span class='pill neutral'>Zentrale Bot-Scopes noch nicht geladen</span>"
+            )
+        else:
+            bot_scope_set = {
+                str(scope).strip().lower()
+                for scope in (bot_scope_state.get("scopes") or set())
+                if str(scope).strip()
+            }
+            bot_scope_pills_html = "".join(
+                (
+                    f"<span class='pill {'ok' if scope in bot_scope_set else 'warn'}'>"
+                    f"{html.escape(_BOT_SCOPE_LABELS.get(scope, scope))}"
+                    "</span>"
+                )
+                for scope in _BOT_REQUIRED_SCOPES
+            )
         scope_empty_row_html = (
             f"<tr><td colspan='{scope_table_colspan}'>Kein Streamer mit OAuth autorisiert</td></tr>"
         )
@@ -1283,7 +1341,7 @@ class DashboardLiveMixin:
             "    <div>"
             "      <p class='eyebrow'>OAuth Token Scopes</p>"
             "      <h2>Scope-Status pro Streamer</h2>"
-            "      <p class='lead'>Zeigt welche Streamer alle erforderlichen Scopes autorisiert haben – besonders wichtig für Lurker-Tracking (<code>moderator:read:chatters</code>) und Channel Points (<code>channel:read:redemptions</code>).</p>"
+            "      <p class='lead'>Zeigt welche Streamer alle erforderlichen Broadcaster-Scopes autorisiert haben – besonders wichtig für Channel Points (<code>channel:read:redemptions</code>). Lurker-Tracking läuft über den zentralen Bot-Scope <code>moderator:read:chatters</code>.</p>"
             "    </div>"
             "    <div class='raid-metrics'>"
             f"      <div class='mini-stat'><strong>{total_authorized}</strong><span>Mit OAuth</span></div>"
@@ -1294,6 +1352,10 @@ class DashboardLiveMixin:
             "  <div class='status-meta' style='margin-bottom:.8rem;'>"
             f"    {scope_summary_pills}"
             "    <span class='pill neutral'>Re-Auth Link → Raid Bot Autorisierung</span>"
+            "  </div>"
+            "  <div class='status-meta' style='margin-bottom:.8rem;'>"
+            "    <span class='pill neutral'>Zentraler Bot</span>"
+            f"    {bot_scope_pills_html}"
             "  </div>"
             "  <div class='table-wrap'>"
             "  <table>"

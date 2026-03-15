@@ -301,13 +301,38 @@ class PromoMixin:
             log.debug("Lurker-Tax settings lookup failed for %s", normalized_login, exc_info=True)
             return default_payload
 
+        token_mgr = getattr(self, "_token_manager", None)
+        bot_scopes: set[str] = set()
+        bot_scopes_loaded = False
+        if token_mgr is not None:
+            try:
+                bot_scopes = {
+                    str(scope).strip().lower()
+                    for scope in (getattr(token_mgr, "scopes", None) or set())
+                    if str(scope).strip()
+                }
+                # If the token manager hasn't validated yet, scopes may still be unknown.
+                bot_scopes_loaded = bool(
+                    getattr(token_mgr, "bot_id", None) or getattr(token_mgr, "expires_at", None)
+                )
+            except Exception:
+                bot_scopes = set()
+                bot_scopes_loaded = False
+
+        has_chatters_scope = (_LURKER_TAX_SCOPE in scopes) or (
+            token_mgr is not None
+            and bot_scopes_loaded
+            and _LURKER_TAX_SCOPE in bot_scopes
+        )
+
         return {
             "login": canonical_login.lower(),
             "twitch_user_id": twitch_user_id,
             "plan_id": plan_id,
             "is_paid_plan": billing_is_paid_plan_id(plan_id),
             "enabled": enabled,
-            "has_moderator_read_chatters": _LURKER_TAX_SCOPE in scopes,
+            # Migration: Lurker-Tax wird bot-zentriert ueber den zentralen Bot-Token ermoeglicht.
+            "has_moderator_read_chatters": has_chatters_scope,
             "active_session_id": int(active_session_id) if active_session_id else None,
             "is_live": is_live,
         }

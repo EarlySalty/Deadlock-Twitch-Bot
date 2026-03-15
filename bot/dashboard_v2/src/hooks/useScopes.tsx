@@ -24,27 +24,6 @@ const scopeCatalog: ScopeDefinition[] = [
     addedAt: '2026-02-01',
   },
   {
-    id: 'moderator:read:followers',
-    label: 'Follower (Mod)',
-    description: 'Liest neue Follower über die Moderator-API.',
-    why: 'Für Growth-Funnel, Alerts und Discord-Sync brauchen wir die exakten Follower-Events.',
-    importance: 'required',
-  },
-  {
-    id: 'moderator:manage:banned_users',
-    label: 'Bans & Timeouts',
-    description: 'Verwalten von Bans/Timeouts direkt aus dem Bot.',
-    why: 'Ermöglicht automatische Entbanns (Appeals) oder Safety-Automation bei Raids.',
-    importance: 'required',
-  },
-  {
-    id: 'moderator:manage:chat_messages',
-    label: 'Chat Moderation',
-    description: 'Nachrichten löschen oder systemische Spamfilter anwenden.',
-    why: 'Braucht der Bot für Link-Filter, Timeout-Macros und Safety-Modes.',
-    importance: 'required',
-  },
-  {
     id: 'channel:read:subscriptions',
     label: 'Subs lesen',
     description: 'Sub-Events inkl. Tiers, Gifts und Prime.',
@@ -65,20 +44,6 @@ const scopeCatalog: ScopeDefinition[] = [
     why: 'Aktiviert Deadlock-spezifische Automationen direkt im Channel.',
     importance: 'required',
     addedAt: '2026-02-01',
-  },
-  {
-    id: 'chat:read',
-    label: 'Chat lesen',
-    description: 'Live-Chat mitlesen.',
-    why: 'Grundlage für Chat-Analytics, Lurker-Tracking und Trigger.',
-    importance: 'required',
-  },
-  {
-    id: 'chat:edit',
-    label: 'Chat schreiben',
-    description: 'Nachrichten und Replies senden.',
-    why: 'Für Commands, Shoutouts, Hinweise und Auto-Replies.',
-    importance: 'required',
   },
   {
     id: 'clips:edit',
@@ -112,21 +77,6 @@ const scopeCatalog: ScopeDefinition[] = [
     addedAt: '2026-02-15',
   },
   {
-    id: 'moderator:read:chatters',
-    label: 'Chatters',
-    description: 'Live-Liste aller Chat-Teilnehmer.',
-    why: 'Ermöglicht Lurker-Tracking und Activity-Heatmaps.',
-    importance: 'critical',
-  },
-  {
-    id: 'moderator:manage:shoutouts',
-    label: 'Shoutouts',
-    description: 'Shoutouts automatisieren und mit Cooldowns versehen.',
-    why: 'Für Raid-/Collab-Workflows und Auto-Shoutouts.',
-    importance: 'optional',
-    addedAt: '2026-02-01',
-  },
-  {
     id: 'channel:read:redemptions',
     label: 'Channel Points',
     description: 'Channel-Point-Redemptions abrufen.',
@@ -137,7 +87,6 @@ const scopeCatalog: ScopeDefinition[] = [
 ];
 
 const CRITICAL_SCOPE_IDS = new Set<string>([
-  'moderator:read:chatters',
   'channel:read:redemptions',
   'bits:read',
   'channel:read:hype_train',
@@ -160,7 +109,7 @@ const scopeChangelog: ScopeChangelogEntry[] = [
     title: 'Raid-Bot Refresh',
     items: [
       'Erforderlich: channel:bot + channel:manage:raids für den neuen Auto-Raid-Flow.',
-      'Empfohlen: moderator:manage:shoutouts für automatisierte Shoutouts nach Raids.',
+      'Empfohlen: channel:manage:moderators für Self-Service Bot-Mod im Onboarding.',
     ],
     tags: ['Raid Bot'],
   },

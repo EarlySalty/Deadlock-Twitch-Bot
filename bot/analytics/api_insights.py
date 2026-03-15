@@ -420,10 +420,13 @@ class _AnalyticsInsightsMixin:
                 ).fetchall()
                 session_message_density_values: list[float] = []
                 for row in session_benchmark_rows:
-                    session_viewer_minutes = float(row[2] or 0.0)
+                    try:
+                        session_viewer_minutes = float(row[2] or 0.0)
+                        session_messages = int(row[1] or 0)
+                    except Exception:
+                        continue
                     if session_viewer_minutes <= 0:
                         continue
-                    session_messages = int(row[1] or 0)
                     session_message_density_values.append(
                         (session_messages / session_viewer_minutes) * 100.0
                     )

@@ -399,10 +399,6 @@ _INTERNAL_HOME_BAN_REASON_KEYWORDS: tuple[str, ...] = (
 )
 _INTERNAL_HOME_REQUIRED_SCOPES: tuple[str, ...] = (
     "channel:manage:raids",
-    "moderator:read:followers",
-    "moderator:manage:banned_users",
-    "moderator:manage:chat_messages",
-    "moderator:read:chatters",
 )
 _INTERNAL_HOME_CHANGELOG_MAX_ENTRIES = 20
 _INTERNAL_HOME_CHANGELOG_TITLE_MAX_LENGTH = 160

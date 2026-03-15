@@ -29,20 +29,13 @@ TWITCH_API_BASE = "https://api.twitch.tv/helix"
 # Hinweis: Re-Auth notwendig, falls bisher nur channel:manage:raids erteilt war.
 RAID_SCOPES = [
     "channel:manage:raids",
-    "moderator:read:followers",
-    "moderator:manage:banned_users",
-    "moderator:manage:chat_messages",
     "channel:read:subscriptions",
     "channel:manage:moderators",
     "channel:bot",
-    "chat:read",
-    "chat:edit",
     "clips:edit",
     "channel:read:ads",
     "bits:read",
     "channel:read:hype_train",
-    "moderator:read:chatters",
-    "moderator:manage:shoutouts",
     "channel:read:redemptions",
 ]
 

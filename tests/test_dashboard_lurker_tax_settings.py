@@ -169,6 +169,24 @@ class DashboardLurkerTaxTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("moderator:read:chatters", html)
         self.assertIn("checked", html)
 
+    async def test_abbo_entry_keeps_warning_when_bot_scope_is_unknown(self) -> None:
+        handler = _AbboHarness(plan_id="raid_boost")
+        handler._raid_bot = SimpleNamespace(
+            chat_bot=SimpleNamespace(
+                _token_manager=SimpleNamespace(
+                    scopes=set(),
+                    bot_id=None,
+                    expires_at=None,
+                )
+            )
+        )
+
+        with self._conn_patch():
+            response = await handler.abbo_entry(SimpleNamespace(query={}))
+
+        html = response.text
+        self.assertIn("Bot-Scope <code>moderator:read:chatters</code> fehlt", html)
+
     async def test_abbo_entry_login_only_lookup_ignores_unrelated_blank_user_id_rows(self) -> None:
         handler = _AbboHarness(
             plan_id="raid_boost",

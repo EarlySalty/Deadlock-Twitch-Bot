@@ -21,7 +21,7 @@ Verhalten im Abo-Bereich:
 
 - `raid_free`: gesperrte Teaser-Karte mit Upgrade-Hinweis
 - Bezahlplan: Toggle für aktiv/inaktiv
-- Wenn `moderator:read:chatters` fehlt, zeigt die Karte einen Readiness-Hinweis; ohne diesen Scope feuert das Feature nicht
+- Wenn der zentrale Bot-Scope `moderator:read:chatters` fehlt oder noch nicht geladen ist, zeigt die Karte einen Readiness-Hinweis; ohne diesen Zugriff feuert das Feature nicht
 
 ## Laufzeitlogik
 
@@ -33,7 +33,7 @@ Ein Reminder wird nur gesendet, wenn alle Bedingungen erfüllt sind:
 - es gibt eine aktive Session
 - der Streamer hat einen bezahlten Plan
 - `lurker_tax_enabled = true`
-- `moderator:read:chatters` ist vorhanden
+- der zentrale Bot-Zugriff fuer `moderator:read:chatters` ist verfuegbar
 - es gibt frische Präsenzdaten in `twitch_session_chatters`
 
 ## Kandidatenlogik

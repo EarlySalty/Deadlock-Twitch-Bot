@@ -725,10 +725,8 @@ class ConnectionMixin:
             if not login_norm:
                 continue
             scopes = [s.strip().lower() for s in (scopes_raw or "").split() if s.strip()]
-            has_chat_scope = any(
-                s in {"user:read:chat", "user:write:chat", "chat:read", "chat:edit"} for s in scopes
-            )
-            if not has_chat_scope:
+            has_channel_bot_grant = "channel:bot" in scopes
+            if not has_channel_bot_grant:
                 continue
             if (is_live is None or not bool(is_live)) and not CHAT_JOIN_OFFLINE:
                 continue

@@ -13,6 +13,27 @@ except Exception:  # pragma: no cover - partial deploy safety
 
 class _SessionsMixin:
 
+    def _get_session_followers_user_fallback_warned_cache(self) -> set[str]:
+        cache = getattr(self, "_session_followers_user_fallback_warned", None)
+        if cache is None:
+            cache = set()
+            self._session_followers_user_fallback_warned = cache
+        return cache
+
+    def _warn_session_followers_user_fallback_once(self, login: str) -> None:
+        key = str(login or "").strip().lower()
+        if not key:
+            key = "<unknown>"
+        cache = self._get_session_followers_user_fallback_warned_cache()
+        if key in cache:
+            return
+        cache.add(key)
+        log.warning(
+            "Follower-Abfrage: nutze Legacy-Broadcaster-Token fuer %s. "
+            "Der botzentrierte Pfad sollte 'moderator:read:followers' ueber den Bot abdecken.",
+            login or "<unknown>",
+        )
+
     def _get_active_sessions_cache(self) -> dict[str, int]:
         cache = getattr(self, "_active_sessions", None)
         if cache is None:
@@ -669,6 +690,37 @@ class _SessionsMixin:
         if not user_id and stream:
             user_id = stream.get("user_id")
 
+        # Prefer the central bot token for moderator-scoped reads; fall back to broadcaster grants.
+        bot_token: str | None = None
+        try:
+            token_mgr = getattr(self, "_bot_token_manager", None)
+            if token_mgr:
+                token, _ = await token_mgr.get_valid_token()
+                scopes = {
+                    str(scope).strip().lower()
+                    for scope in (getattr(token_mgr, "scopes", None) or set())
+                    if str(scope).strip()
+                }
+                if token and (not scopes or "moderator:read:followers" in scopes):
+                    bot_token = str(token or "").strip()
+        except Exception:
+            bot_token = None
+
+        if user_id and bot_token:
+            try:
+                followers_total = await self.api.get_followers_total(
+                    str(user_id),
+                    user_token=bot_token,
+                )
+                if followers_total is not None:
+                    return followers_total
+            except Exception:
+                log.debug(
+                    "Follower-Abfrage via Bot-Token fehlgeschlagen fuer %s",
+                    login,
+                    exc_info=True,
+                )
+
         user_token: str | None = None
         try:
             if hasattr(self, "_raid_bot") and self._raid_bot and self.api is not None:
@@ -688,6 +740,8 @@ class _SessionsMixin:
         if not user_id:
             return None
         try:
+            if user_token:
+                self._warn_session_followers_user_fallback_once(login)
             return await self.api.get_followers_total(str(user_id), user_token=user_token)
         except Exception:
             log.debug("Follower-Abfrage fehlgeschlagen fuer %s", login, exc_info=True)

@@ -188,38 +188,78 @@ def load_partner_by_discord_user_id(conn: Any, discord_user_id: str | None) -> A
     normalized_discord_user_id = str(discord_user_id or "").strip()
     if not normalized_discord_user_id:
         return None
-    return conn.execute(
-        """
-        SELECT
-            p.id,
-            p.twitch_user_id,
-            p.twitch_login,
-            p.require_discord_link,
-            p.next_link_check_at,
-            p.manual_verified_permanent,
-            p.manual_verified_until,
-            p.manual_verified_at,
-            p.manual_partner_opt_out,
-            p.raid_bot_enabled,
-            p.silent_ban,
-            p.silent_raid,
-            p.live_ping_role_id,
-            COALESCE(p.live_ping_enabled, 1) AS live_ping_enabled,
-            p.partnered_at,
-            p.departnered_at,
-            p.status,
-            i.discord_user_id,
-            i.discord_display_name,
-            i.is_on_discord
-        FROM twitch_partners p
-        JOIN twitch_streamer_identities i
-          ON i.twitch_user_id = p.twitch_user_id
-        WHERE p.status = ?
-          AND i.discord_user_id = ?
-        LIMIT 1
-        """,
-        (PARTNER_STATUS_ACTIVE, normalized_discord_user_id),
-    ).fetchone()
+    try:
+        return conn.execute(
+            """
+            SELECT
+                p.id,
+                p.twitch_user_id,
+                p.twitch_login,
+                p.require_discord_link,
+                p.next_link_check_at,
+                p.manual_verified_permanent,
+                p.manual_verified_until,
+                p.manual_verified_at,
+                p.manual_partner_opt_out,
+                p.raid_bot_enabled,
+                p.silent_ban,
+                p.silent_raid,
+                p.live_ping_role_id,
+                COALESCE(p.live_ping_enabled, 1) AS live_ping_enabled,
+                p.partnered_at,
+                p.departnered_at,
+                p.status,
+                i.discord_user_id,
+                i.discord_display_name,
+                i.is_on_discord
+            FROM twitch_partners p
+            JOIN twitch_streamer_identities i
+              ON i.twitch_user_id = p.twitch_user_id
+            WHERE p.status = ?
+              AND i.discord_user_id = ?
+            LIMIT 1
+            """,
+            (PARTNER_STATUS_ACTIVE, normalized_discord_user_id),
+        ).fetchone()
+    except Exception as exc:
+        # Backwards-compat fallback for minimal schemas (e.g. unit tests) where the partner tables
+        # are not present yet. Do not silently swallow unrelated DB errors.
+        msg = str(exc).lower()
+        if "twitch_partners" not in msg and "twitch_streamer_identities" not in msg:
+            raise
+
+    try:
+        return conn.execute(
+            """
+            SELECT
+                NULL AS id,
+                s.twitch_user_id,
+                s.twitch_login,
+                0 AS require_discord_link,
+                NULL AS next_link_check_at,
+                0 AS manual_verified_permanent,
+                NULL AS manual_verified_until,
+                NULL AS manual_verified_at,
+                0 AS manual_partner_opt_out,
+                0 AS raid_bot_enabled,
+                0 AS silent_ban,
+                0 AS silent_raid,
+                NULL AS live_ping_role_id,
+                1 AS live_ping_enabled,
+                NULL AS partnered_at,
+                NULL AS departnered_at,
+                ? AS status,
+                s.discord_user_id,
+                NULL AS discord_display_name,
+                1 AS is_on_discord
+            FROM twitch_streamers s
+            WHERE s.discord_user_id = ?
+            LIMIT 1
+            """,
+            (PARTNER_STATUS_ACTIVE, normalized_discord_user_id),
+        ).fetchone()
+    except Exception:
+        return None
 
 
 def load_streamer_identity(

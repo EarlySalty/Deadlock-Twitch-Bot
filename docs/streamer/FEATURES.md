@@ -64,20 +64,13 @@ Der aktuelle OAuth-/Raid-Flow ist nicht nur fuer Auto-Raids da, sondern auch fue
 ### Aktuell benoetigte OAuth-Scopes
 
 - `channel:manage:raids`
-- `moderator:read:followers`
-- `moderator:manage:banned_users`
-- `moderator:manage:chat_messages`
 - `channel:read:subscriptions`
 - `channel:manage:moderators`
 - `channel:bot`
-- `chat:read`
-- `chat:edit`
 - `clips:edit`
 - `channel:read:ads`
 - `bits:read`
 - `channel:read:hype_train`
-- `moderator:read:chatters`
-- `moderator:manage:shoutouts`
 - `channel:read:redemptions`
 
 ### Wichtige Hinweise
@@ -86,6 +79,7 @@ Der aktuelle OAuth-/Raid-Flow ist nicht nur fuer Auto-Raids da, sondern auch fue
 - Der OAuth-Callback landet standardmaessig wieder auf `/twitch/dashboard`.
 - Die Seiten `/twitch/raid/requirements`, `/twitch/raid/history` und `/twitch/raid/analytics` sind aktuell eher Legacy-/Admin-Surfaces. Fuer Streamer selbst sind Commands und Dashboard der stabile Weg.
 - Der Dashboard-Login selbst ist getrennt von diesen Bot-Scopes. Der reine Dashboard-Zugang und die Bot-/Analytics-Funktionen nutzen unterschiedliche Auth-Schichten.
+- Bot-zentrierte Chat- und Moderator-Scopes wie `user:read:chat`, `user:write:chat` oder `moderator:read:chatters` laufen zentral ueber den Bot-Account und sind keine harte Streamer-Pflicht mehr.
 
 ## Live-Announcement Builder
 
@@ -186,7 +180,7 @@ Aktuelle Regeln:
 - verfuegbar nur in `raid_boost`, `analysis_dashboard` und `bundle_analysis_raid_boost`
 - Toggle auf `/twitch/abbo`
 - Speichern ueber `POST /twitch/abbo/lurker-tax-settings`
-- benoetigt `moderator:read:chatters`
+- benoetigt den zentralen Bot-Zugriff fuer `moderator:read:chatters`
 - im Chat dauerhaft abschaltbar ueber `!lurkersteuer_off`, `!lurkersteuer_aus`, `!lurker_tax_off`
 - Reaktivierung aktuell ueber den Abo-Bereich
 - teilt sich den 60-Minuten-Cooldown mit dem Promo-/Announcement-Loop

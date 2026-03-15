@@ -136,9 +136,43 @@ class _DashboardRoutesMixin:
             for scope in str((row[0] if row else "") or "").split()
             if scope.strip()
         }
+        bot_scopes: set[str] = set()
+        bot_scopes_loaded = False
+        token_mgr = None
+        try:
+            raid_bot = getattr(self, "_raid_bot", None)
+            chat_bot = getattr(raid_bot, "chat_bot", None) if raid_bot else None
+            if chat_bot is None and raid_bot is not None:
+                cog = getattr(raid_bot, "_cog", None)
+                chat_bot = getattr(cog, "_twitch_chat_bot", None) if cog is not None else None
+            if chat_bot is not None:
+                token_mgr = getattr(chat_bot, "_token_manager", None)
+            if token_mgr is None and raid_bot is not None:
+                cog = getattr(raid_bot, "_cog", None)
+                token_mgr = getattr(cog, "_bot_token_manager", None) if cog is not None else None
+            if token_mgr is not None:
+                bot_scopes = {
+                    str(scope).strip().lower()
+                    for scope in (getattr(token_mgr, "scopes", None) or set())
+                    if str(scope).strip()
+                }
+                # If the token manager hasn't validated yet, scopes may still be unknown.
+                bot_scopes_loaded = bool(
+                    getattr(token_mgr, "bot_id", None) or getattr(token_mgr, "expires_at", None)
+                )
+        except Exception:
+            bot_scopes = set()
+            bot_scopes_loaded = False
+
+        has_chatters_scope = ("moderator:read:chatters" in scopes) or (
+            token_mgr is not None
+            and bot_scopes_loaded
+            and "moderator:read:chatters" in bot_scopes
+        )
         return {
             "scopes": scopes,
-            "has_moderator_read_chatters": "moderator:read:chatters" in scopes,
+            # Migration: Chatters-Reads laufen bot-zentriert; Streamer-Scopes gelten als Legacy-Fallback.
+            "has_moderator_read_chatters": has_chatters_scope,
         }
 
     def _abbo_upsert_lurker_tax_setting(
@@ -1121,8 +1155,8 @@ class _DashboardRoutesMixin:
             if not has_chatters_scope:
                 readiness_notice_html = (
                     "<div class='notice notice-warn' style='margin-bottom:10px;'>"
-                    "Readiness-Hinweis: <code>moderator:read:chatters</code> fehlt. "
-                    "Solange der Scope fehlt, feuert die Lurker Steuer nicht."
+                    "Readiness-Hinweis: Bot-Scope <code>moderator:read:chatters</code> fehlt oder ist noch nicht geladen. "
+                    "Solange der Zugriff fehlt, feuert die Lurker Steuer nicht."
                     "</div>"
                 )
             toggle_checked = " checked" if lurker_tax_enabled else ""
@@ -1141,7 +1175,7 @@ class _DashboardRoutesMixin:
                 f"<input type='checkbox' name='lurker_tax_enabled' value='1'{toggle_checked}>"
                 "<span>Lurker Steuer aktivieren"
                 "<span class='muted'>"
-                "Benötigt eine Live-Session, frische Präsenzdaten und den Scope "
+                "Benötigt eine Live-Session, frische Präsenzdaten und den Bot-Scope "
                 "<code>moderator:read:chatters</code>."
                 "</span>"
                 "</span>"

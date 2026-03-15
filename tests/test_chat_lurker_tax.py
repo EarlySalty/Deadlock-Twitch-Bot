@@ -520,6 +520,25 @@ class ChatLurkerTaxReminderTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(ok)
         self.assertEqual(self.handler.announcement_calls, [])
 
+    async def test_reminder_requires_known_bot_chatters_scope(self) -> None:
+        self.conn.execute("UPDATE twitch_raid_auth SET scopes = 'chat:read chat:edit'")
+        self.conn.commit()
+        self.handler._token_manager = SimpleNamespace(
+            scopes=set(),
+            bot_id=None,
+            expires_at=None,
+        )
+
+        with self._conn_patch():
+            ok = await self.handler._maybe_send_lurker_tax_reminder(
+                "partner_one",
+                "1001",
+                now=0.0,
+            )
+
+        self.assertFalse(ok)
+        self.assertEqual(self.handler.announcement_calls, [])
+
     async def test_login_only_lookup_ignores_unrelated_blank_user_id_rows(self) -> None:
         self.conn.execute(
             "INSERT INTO twitch_streamers (twitch_user_id, twitch_login) VALUES (?, ?)",

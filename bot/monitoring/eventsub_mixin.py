@@ -483,7 +483,7 @@ class _EventSubMixin:
             return []
 
     def _get_chat_scope_streamers_for_eventsub(self) -> list[dict[str, str]]:
-        """Broadcaster mit OAuth + Chat-Scopes (aktuell nicht für EventSub genutzt, nur für Info)."""
+        """Broadcaster mit `channel:bot`-Freigabe fuer botzentrierte Chat-Features."""
         try:
             with storage.get_conn() as c:
                 rows = c.execute(
@@ -503,11 +503,8 @@ class _EventSubMixin:
                 login = str(row["twitch_login"] if hasattr(row, "keys") else row[1]).strip().lower()
                 scopes_raw = row["scopes"] if hasattr(row, "keys") else row[2]
                 scopes = [s.strip().lower() for s in (scopes_raw or "").split() if s.strip()]
-                has_chat_scope = any(
-                    s in {"user:read:chat", "user:write:chat", "chat:read", "chat:edit"}
-                    for s in scopes
-                )
-                if not has_chat_scope or not user_id or not login:
+                has_channel_bot_grant = "channel:bot" in scopes
+                if not has_channel_bot_grant or not user_id or not login:
                     continue
                 key = f"{user_id}:{login}"
                 if key in seen:
@@ -1073,8 +1070,9 @@ class _EventSubMixin:
                                 exc_info=True,
                             )
 
-                # 3. Broadcaster-Token Subscriptions (Bits, Hype, Subs, Ads)
+                # 3. Broadcaster-Token Subscriptions (Bits, Hype, Subs, Ads, Channel Points)
                 broadcaster_token = await self._resolve_eventsub_broadcaster_token(str(bid))
+                token_scopes: set[str] = set()
                 if broadcaster_token:
                     # Scopes des Tokens aus DB laden – nur Subs subscriben, für die der Scope vorhanden ist
                     try:
@@ -1083,16 +1081,18 @@ class _EventSubMixin:
                                 "SELECT scopes FROM twitch_raid_auth WHERE twitch_user_id = ?",
                                 (str(bid),),
                             ).fetchone()
-                        _token_scopes: set[str] = set(
-                            (_scope_row[0] if _scope_row and _scope_row[0] else "").split()
-                        )
+                        token_scopes = {
+                            scope.strip().lower()
+                            for scope in str((_scope_row[0] if _scope_row else "") or "").split()
+                            if scope.strip()
+                        }
                     except Exception:
                         log.debug(
                             "EventSub: Konnte Scopes für %s nicht laden",
                             login or bid,
                             exc_info=True,
                         )
-                        _token_scopes = set()
+                        token_scopes = set()
 
                     broadcaster_subs = [
                         # (sub_type, version, required_scope)
@@ -1102,22 +1102,10 @@ class _EventSubMixin:
                         ("channel.hype_train.progress", "1", "channel:read:hype_train"),
                         ("channel.hype_train.end", "1", "channel:read:hype_train"),
                         ("channel.subscribe", "1", "channel:read:subscriptions"),
-                        (
-                            "channel.subscription.gift",
-                            "1",
-                            "channel:read:subscriptions",
-                        ),
-                        (
-                            "channel.subscription.message",
-                            "1",
-                            "channel:read:subscriptions",
-                        ),
+                        ("channel.subscription.gift", "1", "channel:read:subscriptions"),
+                        ("channel.subscription.message", "1", "channel:read:subscriptions"),
                         ("channel.subscription.end", "1", "channel:read:subscriptions"),
                         ("channel.ad_break.begin", "1", "channel:read:ads"),
-                        ("channel.ban", "1", "moderator:manage:banned_users"),
-                        ("channel.unban", "1", "moderator:manage:banned_users"),
-                        ("channel.shoutout.create", "1", "moderator:manage:shoutouts"),
-                        ("channel.shoutout.receive", "1", "moderator:manage:shoutouts"),
                         (
                             "channel.channel_points_automatic_reward_redemption.add",
                             "2",
@@ -1131,7 +1119,7 @@ class _EventSubMixin:
                     ]
                     for sub_type, version, required_scope in broadcaster_subs:
                         # Scope-Check: überspringen wenn Token den Scope nicht hat
-                        if _token_scopes and required_scope not in _token_scopes:
+                        if token_scopes and required_scope not in token_scopes:
                             log.debug(
                                 "EventSub Webhook: %s übersprungen für %s (Scope '%s' fehlt im Token)",
                                 sub_type,
@@ -1153,6 +1141,7 @@ class _EventSubMixin:
                                 webhook_url=webhook_url,
                                 secret=webhook_secret,
                                 version=version,
+                                oauth_token=broadcaster_token,
                             )
                             self._eventsub_track_sub(sub_type, str(bid))
                             log.debug(
@@ -1184,35 +1173,143 @@ class _EventSubMixin:
                                 exc_info=True,
                             )
 
-                    # channel.follow v2 – braucht moderator_user_id in der Condition
-                    if self._eventsub_has_sub("channel.follow", str(bid)):
-                        log.debug(
-                            "EventSub Webhook: channel.follow bereits subscribed für %s, überspringe",
-                            login or bid,
-                        )
-                    else:
+                # 4. Moderator-Subscriptions (Bans, Shoutouts, Follow) → Bot-Token bevorzugen
+                bot_token, bot_id, bot_scopes = await self._resolve_eventsub_bot_auth()
+                moderator_subs = [
+                    # (sub_type, version, required_scope, requires_moderator_user_id)
+                    ("channel.ban", "1", "moderator:manage:banned_users", True),
+                    ("channel.unban", "1", "moderator:manage:banned_users", True),
+                    ("channel.shoutout.create", "1", "moderator:manage:shoutouts", True),
+                    ("channel.shoutout.receive", "1", "moderator:manage:shoutouts", True),
+                    ("channel.follow", "2", "moderator:read:followers", True),
+                ]
+
+                for sub_type, version, required_scope, needs_moderator_id in moderator_subs:
+                    if self._eventsub_has_sub(sub_type, str(bid)):
+                        continue
+
+                    async def _try_moderator_subscription(
+                        *,
+                        auth_label: str,
+                        oauth_token: str,
+                        condition: dict[str, str],
+                    ) -> bool:
                         try:
                             await self.api.subscribe_eventsub_webhook(
-                                sub_type="channel.follow",
-                                condition={
-                                    "broadcaster_user_id": str(bid),
-                                    "moderator_user_id": str(bid),
-                                },
+                                sub_type=sub_type,
+                                condition=condition,
                                 webhook_url=webhook_url,
                                 secret=webhook_secret,
-                                version="2",
+                                version=version,
+                                oauth_token=oauth_token,
                             )
-                            self._eventsub_track_sub("channel.follow", str(bid))
+                            self._eventsub_track_sub(sub_type, str(bid))
+                            if auth_label == "broadcaster":
+                                log.warning(
+                                    "EventSub Webhook: %s Subscription erstellt fuer %s via Broadcaster-Fallback. "
+                                    "Der Bot-Token sollte diesen Moderator-Pfad uebernehmen.",
+                                    sub_type,
+                                    login or bid,
+                                )
+                            else:
+                                log.debug(
+                                    "EventSub Webhook: %s Subscription erstellt für %s via %s",
+                                    sub_type,
+                                    login or bid,
+                                    auth_label,
+                                )
+                            return True
+                        except aiohttp.ClientResponseError as exc:
+                            # Twitch may require `moderator_user_id` for some mod events; retry once if we can.
+                            if (
+                                int(getattr(exc, "status", 0) or 0) == 400
+                                and not needs_moderator_id
+                                and "moderator_user_id" in str(getattr(exc, "message", "") or "").lower()
+                            ):
+                                retry_condition = dict(condition)
+                                if oauth_token == bot_token and bot_id:
+                                    retry_condition["moderator_user_id"] = str(bot_id)
+                                elif oauth_token == broadcaster_token:
+                                    retry_condition["moderator_user_id"] = str(bid)
+                                if "moderator_user_id" in retry_condition:
+                                    try:
+                                        await self.api.subscribe_eventsub_webhook(
+                                            sub_type=sub_type,
+                                            condition=retry_condition,
+                                            webhook_url=webhook_url,
+                                            secret=webhook_secret,
+                                            version=version,
+                                            oauth_token=oauth_token,
+                                        )
+                                        self._eventsub_track_sub(sub_type, str(bid))
+                                        if auth_label == "broadcaster":
+                                            log.warning(
+                                                "EventSub Webhook: %s Subscription erstellt fuer %s via Broadcaster-Fallback "
+                                                "(retry mit moderator_user_id). Der Bot-Token sollte diesen Moderator-Pfad uebernehmen.",
+                                                sub_type,
+                                                login or bid,
+                                            )
+                                        else:
+                                            log.debug(
+                                                "EventSub Webhook: %s Subscription erstellt für %s via %s (retry with moderator_user_id)",
+                                                sub_type,
+                                                login or bid,
+                                                auth_label,
+                                            )
+                                        return True
+                                    except Exception:
+                                        log.debug(
+                                            "EventSub Webhook: %s retry fehlgeschlagen für %s via %s",
+                                            sub_type,
+                                            login or bid,
+                                            auth_label,
+                                            exc_info=True,
+                                        )
                             log.debug(
-                                "EventSub Webhook: channel.follow v2 subscribed für %s",
+                                "EventSub Webhook: %s fehlgeschlagen für %s via %s (HTTP %s, evtl. Scope fehlt)",
+                                sub_type,
                                 login or bid,
-                            )
-                        except Exception:
-                            log.debug(
-                                "EventSub Webhook: channel.follow v2 fehlgeschlagen für %s (evtl. Scope fehlt)",
-                                login or bid,
+                                auth_label,
+                                int(getattr(exc, "status", 0) or 0),
                                 exc_info=True,
                             )
+                            return False
+                        except Exception:
+                            log.debug(
+                                "EventSub Webhook: %s fehlgeschlagen für %s via %s (evtl. Scope fehlt)",
+                                sub_type,
+                                login or bid,
+                                auth_label,
+                                exc_info=True,
+                            )
+                            return False
+
+                    auth_attempts: list[tuple[str, str, dict[str, str]]] = []
+
+                    if bot_token and (not bot_scopes or required_scope in bot_scopes):
+                        bot_condition = {"broadcaster_user_id": str(bid)}
+                        if needs_moderator_id:
+                            if bot_id:
+                                bot_condition["moderator_user_id"] = str(bot_id)
+                                auth_attempts.append(("bot", bot_token, bot_condition))
+                        else:
+                            auth_attempts.append(("bot", bot_token, bot_condition))
+
+                    if broadcaster_token and (not token_scopes or required_scope in token_scopes):
+                        broadcaster_condition = {"broadcaster_user_id": str(bid)}
+                        if needs_moderator_id:
+                            broadcaster_condition["moderator_user_id"] = str(bid)
+                        auth_attempts.append(
+                            ("broadcaster", broadcaster_token, broadcaster_condition)
+                        )
+
+                    for auth_label, oauth_token, condition in auth_attempts:
+                        if await _try_moderator_subscription(
+                            auth_label=auth_label,
+                            oauth_token=oauth_token,
+                            condition=condition,
+                        ):
+                            break
 
             except Exception:
                 log.exception("Polling: Go-Live Handler fehlgeschlagen für %s", login or bid)
@@ -1339,22 +1436,35 @@ class _EventSubMixin:
         except Exception:
             log.debug("EventSub: Startup-Capacity-Snapshot fehlgeschlagen", exc_info=True)
 
-    async def _resolve_eventsub_bot_token(self) -> str | None:
-        """Gibt den aktuellen Bot-Token zurück (ohne 'oauth:' Präfix)."""
+    async def _resolve_eventsub_bot_auth(self) -> tuple[str | None, str | None, set[str]]:
+        """Return bot token + bot id + scopes (best-effort) for EventSub auth.
+
+        Token: always without the legacy `oauth:` prefix.
+        Scopes: may be empty when unknown/uninitialised.
+        """
         bot_token_mgr = getattr(self, "_bot_token_manager", None)
         if not bot_token_mgr:
-            return None
+            return None, None, set()
         try:
-            token, _ = await bot_token_mgr.get_valid_token()
-            if not token:
-                return None
-            token = token.strip()
+            token, bot_id = await bot_token_mgr.get_valid_token()
+            token = str(token or "").strip()
             if token.lower().startswith("oauth:"):
                 token = token[6:]
-            return token
+            resolved_bot_id = str(bot_id or getattr(bot_token_mgr, "bot_id", "") or "").strip() or None
+            scopes = {
+                str(scope).strip().lower()
+                for scope in (getattr(bot_token_mgr, "scopes", None) or set())
+                if str(scope).strip()
+            }
+            return token or None, resolved_bot_id, scopes
         except Exception:
-            log.debug("EventSub Webhook: konnte Bot-Token nicht laden", exc_info=True)
-            return None
+            log.debug("EventSub Webhook: konnte Bot-Auth nicht laden", exc_info=True)
+            return None, None, set()
+
+    async def _resolve_eventsub_bot_token(self) -> str | None:
+        """Gibt den aktuellen Bot-Token zurück (ohne 'oauth:' Präfix)."""
+        token, _, _ = await self._resolve_eventsub_bot_auth()
+        return token
 
     async def _resolve_eventsub_broadcaster_token(self, broadcaster_user_id: str) -> str | None:
         """Gibt den Broadcaster-Token für eine bestimmte User-ID zurück.

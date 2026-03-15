@@ -29,6 +29,7 @@ class TwitchAnalyticsMixin:
         super().__init__(*args, **kwargs)
         # Warn about missing chatters scope only once per live session to avoid log spam
         self._chatters_scope_warned: set[tuple[str, int]] = set()
+        self._chatters_user_fallback_warned: set[tuple[str, int]] = set()
         self._analytics_task = self.collect_analytics_data.start()
         self._chatters_task = self.collect_chatters_data.start()
         self._retention_task = self.compute_raid_retention.start()
@@ -229,6 +230,40 @@ class TwitchAnalyticsMixin:
     # Tracked Lurker via GET /helix/chat/chatters (moderator:read:chatters)
     # ------------------------------------------------------------------
 
+    def _get_chatters_user_fallback_warned_cache(self) -> set[tuple[str, int]]:
+        warned = getattr(self, "_chatters_user_fallback_warned", None)
+        if warned is None:
+            warned = set()
+            self._chatters_user_fallback_warned = warned
+        return warned
+
+    def _warn_chatters_user_fallback_once(
+        self,
+        *,
+        user_id: str,
+        session_id: int,
+        login: str,
+    ) -> None:
+        key = (str(user_id), int(session_id))
+        warned = self._get_chatters_user_fallback_warned_cache()
+        if key in warned:
+            return
+        warned.add(key)
+        log.warning(
+            "Chatters-Poller: nutze Legacy-Broadcaster-Token fuer %s (Session %s). "
+            "Der botzentrierte Pfad sollte 'moderator:read:chatters' ueber den Bot abdecken.",
+            login,
+            session_id,
+        )
+
+    def _clear_chatters_user_fallback_warning(
+        self,
+        *,
+        user_id: str,
+        session_id: int,
+    ) -> None:
+        self._get_chatters_user_fallback_warned_cache().discard((str(user_id), int(session_id)))
+
     async def _poll_chatters_single(
         self,
         user_id: str,
@@ -241,7 +276,9 @@ class TwitchAnalyticsMixin:
         chatters = []
         missing_streamer_scope = False
 
-        # 1. Versuch: Offizielle API mit Token (wenn vorhanden)
+        # Legacy: Prefer the broadcaster token if it already has the required scope.
+        # This keeps behavior stable for older streamers while the product migrates
+        # moderator-scoped reads to the central bot token.
         if token:
             scopes = (
                 {s.lower() for s in self._raid_bot.auth_manager.get_scopes(user_id)}
@@ -249,6 +286,65 @@ class TwitchAnalyticsMixin:
                 else set()
             )
             if "moderator:read:chatters" in scopes:
+                self._warn_chatters_user_fallback_once(
+                    user_id=user_id,
+                    session_id=session_id,
+                    login=login,
+                )
+                try:
+                    chatters = await self.api.get_chatters(
+                        broadcaster_id=user_id,
+                        moderator_id=user_id,
+                        user_token=token,
+                    )
+                    if chatters:
+                        return (session_id, login, chatters)
+                except Exception:
+                    log.warning(
+                        "Chatters-Poller: Helix API fehlgeschlagen fuer %s",
+                        login,
+                        exc_info=True,
+                    )
+            else:
+                missing_streamer_scope = True
+
+        # 1. Versuch: Bot-Token verwenden, wenn der Bot den Channel bereits überwacht
+        bot_fallback_used = False
+        bot_token, bot_id, bot_scopes = await self._resolve_bot_chatters_fallback(login)
+        if bot_token and bot_id and (not bot_scopes or "moderator:read:chatters" in bot_scopes):
+            try:
+                chatters = await self.api.get_chatters(
+                    broadcaster_id=user_id,
+                    moderator_id=bot_id,
+                    user_token=bot_token,
+                )
+                bot_fallback_used = bool(chatters)
+                if chatters:
+                    log.debug(
+                        "Chatters-Poller: %d Chatters via Bot-Fallback für %s",
+                        len(chatters),
+                        login,
+                    )
+            except Exception:
+                log.warning(
+                    "Chatters-Poller: Bot-Fallback via Helix API fehlgeschlagen für %s",
+                    login,
+                    exc_info=True,
+                )
+
+        # 2. Fallback: Offizielle API mit Broadcaster-Token (wenn vorhanden)
+        if not chatters and token:
+            scopes = (
+                {s.lower() for s in self._raid_bot.auth_manager.get_scopes(user_id)}
+                if getattr(self, "_raid_bot", None)
+                else set()
+            )
+            if "moderator:read:chatters" in scopes:
+                self._warn_chatters_user_fallback_once(
+                    user_id=user_id,
+                    session_id=session_id,
+                    login=login,
+                )
                 try:
                     chatters = await self.api.get_chatters(
                         broadcaster_id=user_id,
@@ -269,41 +365,14 @@ class TwitchAnalyticsMixin:
             else:
                 missing_streamer_scope = True
 
-        # 2. Fallback: Bot-Token verwenden, wenn der Bot den Channel bereits überwacht
-        bot_fallback_used = False
-        if not chatters:
-            bot_token, bot_id, bot_scopes = await self._resolve_bot_chatters_fallback(login)
-            if bot_token and bot_id and (
-                not bot_scopes or "moderator:read:chatters" in bot_scopes
-            ):
-                try:
-                    chatters = await self.api.get_chatters(
-                        broadcaster_id=user_id,
-                        moderator_id=bot_id,
-                        user_token=bot_token,
-                    )
-                    bot_fallback_used = bool(chatters)
-                    if chatters:
-                        log.debug(
-                            "Chatters-Poller: %d Chatters via Bot-Fallback für %s",
-                            len(chatters),
-                            login,
-                        )
-                except Exception:
-                    log.warning(
-                        "Chatters-Poller: Bot-Fallback via Helix API fehlgeschlagen für %s",
-                        login,
-                        exc_info=True,
-                    )
-
         if not chatters:
             if missing_streamer_scope:
                 key = (user_id, session_id)
                 if key not in self._chatters_scope_warned:
                     self._chatters_scope_warned.add(key)
                     log.warning(
-                        "Chatters-Poller: %s missing required 'moderator:read:chatters' scope. "
-                        "Streamer re-auth or bot-moderator fallback is required.",
+                        "Chatters-Poller: %s hat keinen Zugriff auf 'moderator:read:chatters'. "
+                        "Bot-Token (Scope + Mod-Status im Channel) ist erforderlich; Streamer-Token dient nur als Legacy-Fallback.",
                         login,
                     )
             return None
@@ -311,6 +380,8 @@ class TwitchAnalyticsMixin:
         if bot_fallback_used and missing_streamer_scope:
             key = (user_id, session_id)
             self._chatters_scope_warned.discard(key)
+        if bot_fallback_used:
+            self._clear_chatters_user_fallback_warning(user_id=user_id, session_id=session_id)
 
         log.debug(
             "Chatters-Poller: %d Chatters für %s (session %s)",
@@ -419,6 +490,12 @@ class TwitchAnalyticsMixin:
             if self._chatters_scope_warned:
                 self._chatters_scope_warned = {
                     key for key in self._chatters_scope_warned if key[1] in active_sessions
+                }
+            if self._get_chatters_user_fallback_warned_cache():
+                self._chatters_user_fallback_warned = {
+                    key
+                    for key in self._get_chatters_user_fallback_warned_cache()
+                    if key[1] in active_sessions
                 }
 
             if rows:

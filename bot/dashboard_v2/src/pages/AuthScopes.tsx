@@ -12,15 +12,10 @@ import { useScopes } from '@/hooks/useScopes';
 import type { ScopeStatus } from '@/types/scopes';
 
 const demoScopes = new Set<string>([
-  'chat:read',
-  'chat:edit',
   'channel:manage:raids',
   'channel:read:subscriptions',
   'channel:manage:moderators',
   'channel:bot',
-  'moderator:manage:chat_messages',
-  'moderator:manage:banned_users',
-  'moderator:read:followers',
 ]);
 
 function ScopeCard({ scope }: { scope: ScopeStatus }) {
@@ -162,7 +157,7 @@ export function AuthScopes() {
               Minimal-Link
             </div>
             <span className="break-all text-xs text-text-secondary">
-              ?scopes=chat:read,chat:edit,channel:manage:raids
+              ?scopes=channel:manage:raids,channel:bot
             </span>
           </div>
         </div>
@@ -211,10 +206,10 @@ export function AuthScopes() {
           onChange={e => setInput(e.target.value)}
           rows={3}
           className="w-full rounded-xl border border-border bg-black/30 px-3 py-3 text-sm text-white outline-none ring-0 focus:border-accent focus:ring-2 focus:ring-accent/40"
-          placeholder="channel:manage:raids channel:bot chat:read chat:edit …"
+          placeholder="channel:manage:raids channel:bot channel:read:subscriptions …"
         />
         <p className="mt-2 text-xs text-text-secondary">
-          Tipp: Du kannst Scopes auch per URL setzen (&quot;?scopes=chat:read,chat:edit&quot;), wir
+          Tipp: Du kannst Scopes auch per URL setzen (&quot;?scopes=channel:manage:raids,channel:bot&quot;), wir
           lesen sie beim Laden ein und speichern sie lokal.
         </p>
       </div>
