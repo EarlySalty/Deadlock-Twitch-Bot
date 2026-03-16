@@ -81,9 +81,9 @@ class ModerationMixin:
             for key in stale_keys:
                 cache.pop(key, None)
 
-        # Expected skips (non-partner, wrong game, known bot) are normal
+        # Expected skips (non-partner, wrong game, known bot, offline streamer) are normal
         # filtering — no log output needed.
-        if reason in {"skip_partner_gate", "skip_target_game_gate", "skip_known_chat_bot"} and exception is None:
+        if reason in {"skip_partner_gate", "skip_target_game_gate", "skip_known_chat_bot", "skip_missing_session"} and exception is None:
             return
 
         log.warning(
