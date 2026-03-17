@@ -227,20 +227,29 @@ class TwitchMonitoringMixin(_EventSubMixin, _ExpSessionsMixin, _SessionsMixin, _
         )
         marker = hashlib.sha256(marker_raw.encode("utf-8")).hexdigest()[:32]
         cached_state = self._live_announcement_retry_cache().get(login_key)
+        cached_rendered_at_for_retry = None
         if not message_id and isinstance(cached_state, dict):
             cached_marker = str(cached_state.get("marker") or "").strip()
             cached_stream = cached_state.get("stream")
             cached_token = str(cached_state.get("tracking_token") or "").strip()
             cached_rendered_at = str(cached_state.get("rendered_at") or "").strip()
             if cached_marker == marker and isinstance(cached_stream, dict) and cached_token:
+                # Cache hit on retry: use cached timestamp to maintain idempotency
                 return (
                     dict(cached_stream),
                     cached_token,
                     self._parse_live_announcement_render_now(cached_rendered_at),
                 )
+            # Cache miss (marker mismatch): preserve timestamp for idempotency
+            cached_rendered_at_for_retry = cached_rendered_at
 
         announcement_stream = dict(stream)
         render_now_value = str(rendered_at or "").strip()
+
+        # On retry: use cached timestamp if available to ensure payload consistency
+        if cached_rendered_at_for_retry and not render_now_value:
+            render_now_value = cached_rendered_at_for_retry
+
         if (
             not message_id
             and self._is_same_live_announcement_stream(
@@ -275,6 +284,9 @@ class TwitchMonitoringMixin(_EventSubMixin, _ExpSessionsMixin, _SessionsMixin, _
             started_at=str(announcement_stream.get("started_at") or started_at or ""),
             fallback_title=str(announcement_stream.get("title") or ""),
         )
+        # Cache new announcement: preserve timestamp across retries for idempotency.
+        # When retrying, cache hit (above) returns early with cached timestamp.
+        # Here we only write cache on first attempt (cache miss).
         self._live_announcement_retry_cache()[login_key] = {
             "marker": marker,
             "stream": dict(announcement_stream),
