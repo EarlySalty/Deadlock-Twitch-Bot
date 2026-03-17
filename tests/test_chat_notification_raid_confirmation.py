@@ -7,6 +7,7 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import ANY, AsyncMock, patch
 
+from bot.chat.bot import RaidChatBot
 from bot.chat.connection import ConnectionMixin
 from bot.raid.bot import RaidBot
 from tests.sqlite_twitch_schema import ensure_sqlite_twitch_schema
@@ -370,6 +371,33 @@ class ChatNotificationRaidCorrelationTests(unittest.IsolatedAsyncioTestCase):
         ).fetchone()["c"]
         self.assertEqual(count, 0)
 
+    async def test_source_self_unraid_cancels_pending_raid(self) -> None:
+        raid_bot = self._build_raid_bot()
+        raid_bot._pending_raids["9009"] = raid_bot._build_pending_raid_record(
+            from_broadcaster_login="source_login",
+            to_broadcaster_id="9009",
+            target_stream_data={"user_login": "targetlogin"},
+            is_partner_raid=True,
+            viewer_count=12,
+            offline_trigger_ts=None,
+            raid_flow_id="raid-flow-source-unraid",
+            channel_raid_ready=True,
+            channel_raid_ready_detail=None,
+            chat_notification_state="subscribed",
+            chat_notification_detail=None,
+        )
+
+        await raid_bot.on_source_self_unraid_notification(
+            broadcaster_id="1001",
+            broadcaster_login="source_login",
+            message_id="msg-unraid-1",
+            event_timestamp="2026-03-17T16:03:01+00:00",
+        )
+
+        self.assertEqual(raid_bot._pending_raids, {})
+        raid_bot._send_partner_raid_message.assert_not_awaited()
+        raid_bot._send_recruitment_message_now.assert_not_awaited()
+
     async def test_independent_partner_raid_is_classified_external(self) -> None:
         self._insert_partner("targetlogin", "9009")
         raid_bot = self._build_raid_bot()
@@ -482,6 +510,36 @@ class ChatNotificationRaidCorrelationTests(unittest.IsolatedAsyncioTestCase):
         )
 
         subscribe_dynamic.assert_awaited_once_with("9009", "targetlogin")
+
+
+class ChatNotificationPayloadParsingTests(unittest.IsolatedAsyncioTestCase):
+    async def test_event_chat_notification_routes_self_unraid_to_source_handler(self) -> None:
+        raid_bot = SimpleNamespace(
+            on_chat_raid_notification=AsyncMock(),
+            on_chat_unraid_notification=AsyncMock(),
+            on_source_self_unraid_notification=AsyncMock(),
+        )
+        chat_bot = RaidChatBot.__new__(RaidChatBot)
+        chat_bot._raid_bot = raid_bot
+
+        payload = SimpleNamespace(
+            broadcaster=SimpleNamespace(id="9009", name="denoshock"),
+            notice_type="unraid",
+            chatter=SimpleNamespace(id="9009", name="denoshock"),
+            id="msg-123",
+            timestamp="2026-03-17T16:03:01+00:00",
+        )
+
+        await chat_bot.event_chat_notification(payload)
+
+        raid_bot.on_chat_raid_notification.assert_not_awaited()
+        raid_bot.on_chat_unraid_notification.assert_not_awaited()
+        raid_bot.on_source_self_unraid_notification.assert_awaited_once_with(
+            broadcaster_id="9009",
+            broadcaster_login="denoshock",
+            message_id="msg-123",
+            event_timestamp="2026-03-17T16:03:01+00:00",
+        )
 
 
 if __name__ == "__main__":

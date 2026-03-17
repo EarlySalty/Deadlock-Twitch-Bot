@@ -274,41 +274,16 @@ class TwitchAnalyticsMixin:
     ) -> tuple[int, str, list[dict]] | None:
         """Pollt Chatters für einen Streamer via Helix API (nur wenn Token + moderator:read:chatters Scope vorhanden)."""
         chatters = []
-        missing_streamer_scope = False
+        streamer_scopes = (
+            {s.lower() for s in self._raid_bot.auth_manager.get_scopes(user_id)}
+            if token and getattr(self, "_raid_bot", None)
+            else set()
+        )
+        has_streamer_chatters_scope = "moderator:read:chatters" in streamer_scopes
+        missing_streamer_scope = bool(token) and not has_streamer_chatters_scope
 
-        # Legacy: Prefer the broadcaster token if it already has the required scope.
-        # This keeps behavior stable for older streamers while the product migrates
-        # moderator-scoped reads to the central bot token.
-        if token:
-            scopes = (
-                {s.lower() for s in self._raid_bot.auth_manager.get_scopes(user_id)}
-                if getattr(self, "_raid_bot", None)
-                else set()
-            )
-            if "moderator:read:chatters" in scopes:
-                self._warn_chatters_user_fallback_once(
-                    user_id=user_id,
-                    session_id=session_id,
-                    login=login,
-                )
-                try:
-                    chatters = await self.api.get_chatters(
-                        broadcaster_id=user_id,
-                        moderator_id=user_id,
-                        user_token=token,
-                    )
-                    if chatters:
-                        return (session_id, login, chatters)
-                except Exception:
-                    log.warning(
-                        "Chatters-Poller: Helix API fehlgeschlagen fuer %s",
-                        login,
-                        exc_info=True,
-                    )
-            else:
-                missing_streamer_scope = True
-
-        # 1. Versuch: Bot-Token verwenden, wenn der Bot den Channel bereits überwacht
+        # 1. Versuch: Bot-Token verwenden, wenn der Bot den Channel bereits überwacht.
+        # Bot-first ist das gewollte Zielbild; Broadcaster-Scopes bleiben nur Fallback.
         bot_fallback_used = False
         bot_token, bot_id, bot_scopes = await self._resolve_bot_chatters_fallback(login)
         if bot_token and bot_id and (not bot_scopes or "moderator:read:chatters" in bot_scopes):
@@ -332,14 +307,9 @@ class TwitchAnalyticsMixin:
                     exc_info=True,
                 )
 
-        # 2. Fallback: Offizielle API mit Broadcaster-Token (wenn vorhanden)
+        # 2. Fallback: Broadcaster-Token nur noch als Legacy-Rettungsnetz verwenden.
         if not chatters and token:
-            scopes = (
-                {s.lower() for s in self._raid_bot.auth_manager.get_scopes(user_id)}
-                if getattr(self, "_raid_bot", None)
-                else set()
-            )
-            if "moderator:read:chatters" in scopes:
+            if has_streamer_chatters_scope:
                 self._warn_chatters_user_fallback_once(
                     user_id=user_id,
                     session_id=session_id,
@@ -362,8 +332,6 @@ class TwitchAnalyticsMixin:
                         login,
                         exc_info=True,
                     )
-            else:
-                missing_streamer_scope = True
 
         if not chatters:
             if missing_streamer_scope:

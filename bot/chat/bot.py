@@ -1325,6 +1325,30 @@ if TWITCHIO_AVAILABLE:
                         .lower()
                     )
                     from_broadcaster_id = str(getattr(chatter, "id", None) or "").strip() or None
+                    # Source-side self-unraid notices do not identify a target raid arrival.
+                    # Treat them as source-side cancellation diagnostics instead of
+                    # target-arrival correlation to avoid misleading "source -> source" logs.
+                    if from_broadcaster_login and from_broadcaster_login == broadcaster_login:
+                        if from_broadcaster_id is None or from_broadcaster_id == broadcaster_id:
+                            handle_source_unraid = getattr(
+                                raid_bot,
+                                "on_source_self_unraid_notification",
+                                None,
+                            )
+                            if callable(handle_source_unraid):
+                                await handle_source_unraid(
+                                    broadcaster_id=broadcaster_id,
+                                    broadcaster_login=broadcaster_login,
+                                    message_id=str(getattr(payload, "id", None) or "").strip() or None,
+                                    event_timestamp=event_timestamp,
+                                )
+                            else:
+                                log.debug(
+                                    "Ignoring self unraid chat notification in source channel %s (message_id=%s)",
+                                    broadcaster_login,
+                                    str(getattr(payload, "id", None) or "").strip() or "n/a",
+                                )
+                            return
                     await raid_bot.on_chat_unraid_notification(
                         to_broadcaster_id=broadcaster_id,
                         to_broadcaster_login=broadcaster_login,

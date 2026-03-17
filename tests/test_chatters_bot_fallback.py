@@ -56,7 +56,7 @@ class _AnalyticsHarness(TwitchAnalyticsMixin):
 
 
 class ChattersBotFallbackTests(unittest.IsolatedAsyncioTestCase):
-    async def test_poll_chatters_uses_streamer_scope_when_available(self) -> None:
+    async def test_poll_chatters_prefers_bot_scope_when_streamer_scope_is_also_available(self) -> None:
         harness = _AnalyticsHarness(
             streamer_scopes={"1001": ["moderator:read:chatters"]},
             bot_scopes={"moderator:read:chatters"},
@@ -74,8 +74,8 @@ class ChattersBotFallbackTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result, (77, "partner_one", [{"user_login": "lurker_a", "user_id": "42"}]))
         harness.api.get_chatters.assert_awaited_once_with(
             broadcaster_id="1001",
-            moderator_id="1001",
-            user_token="streamer-token",
+            moderator_id="9999",
+            user_token="bot-token",
         )
 
     async def test_poll_chatters_falls_back_to_bot_scope_when_streamer_scope_missing(self) -> None:
@@ -100,6 +100,29 @@ class ChattersBotFallbackTests(unittest.IsolatedAsyncioTestCase):
             user_token="bot-token",
         )
         self.assertEqual(harness._chatters_scope_warned, set())
+
+    async def test_poll_chatters_uses_streamer_scope_as_legacy_fallback_when_bot_is_unavailable(self) -> None:
+        harness = _AnalyticsHarness(
+            streamer_scopes={"1001": ["moderator:read:chatters"]},
+            bot_scopes={"moderator:read:chatters"},
+            monitored={"other_channel"},
+        )
+        harness.api.get_chatters.return_value = [{"user_login": "lurker_c", "user_id": "21"}]
+
+        result = await harness._poll_chatters_single(
+            "1001",
+            "partner_one",
+            89,
+            "2026-03-15T10:00:00+00:00",
+            token="streamer-token",
+        )
+
+        self.assertEqual(result, (89, "partner_one", [{"user_login": "lurker_c", "user_id": "21"}]))
+        harness.api.get_chatters.assert_awaited_once_with(
+            broadcaster_id="1001",
+            moderator_id="1001",
+            user_token="streamer-token",
+        )
 
     async def test_poll_chatters_returns_none_when_neither_streamer_nor_bot_have_scope(self) -> None:
         harness = _AnalyticsHarness(

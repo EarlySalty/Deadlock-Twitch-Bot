@@ -1941,6 +1941,72 @@ class RaidBot:
                 details={"replaced_by": current_target_key},
             )
 
+    def _cancel_pending_raids_for_source_unraid(
+        self,
+        *,
+        from_broadcaster_login: str,
+        from_broadcaster_id: str | None = None,
+        message_id: str | None = None,
+        event_timestamp: str | None = None,
+    ) -> int:
+        normalized_from = self._normalize_broadcaster_login(from_broadcaster_login)
+        if not normalized_from:
+            return 0
+
+        canceled = 0
+        for to_id, pending in list(self._pending_raids.items()):
+            pending_record = self._coerce_pending_raid_record(pending, to_broadcaster_id=to_id)
+            if pending_record is None:
+                continue
+            pending_from = self._normalize_broadcaster_login(
+                pending_record.get("from_broadcaster_login")
+            )
+            if pending_from != normalized_from:
+                continue
+
+            self._record_pending_signal_observation(
+                pending_record,
+                signal_type="channel.chat.notification.unraid_source",
+                status="canceled",
+                reason="source_self_unraid",
+                detail=str(event_timestamp or message_id or "").strip() or None,
+            )
+            removed = self._pending_raids.pop(str(to_id), None)
+            if removed is None:
+                continue
+
+            target_stream_data = pending_record.get("target_stream_data")
+            target_login = ""
+            if isinstance(target_stream_data, dict):
+                target_login = self._normalize_broadcaster_login(
+                    target_stream_data.get("user_login")
+                )
+            target_login = target_login or str(to_id)
+            raid_flow_id = (
+                str(pending_record.get("raid_flow_id") or "").strip()
+                or self._next_raid_observability_flow_id(prefix="raid-source-unraid")
+            )
+            self._increment_raid_observability_counter("raid_pending_canceled_source_unraid_total")
+            log.info(
+                "Pending raid canceled by source unraid: %s -> %s (message_id=%s)",
+                normalized_from,
+                target_login,
+                message_id or "n/a",
+            )
+            self._log_raid_observability_event(
+                raid_flow_id=raid_flow_id,
+                step="pending_canceled_source_unraid",
+                decision="canceled",
+                from_broadcaster_login=normalized_from,
+                from_broadcaster_id=from_broadcaster_id,
+                to_broadcaster_login=target_login if target_login != str(to_id) else None,
+                to_broadcaster_id=str(to_id),
+                details={"message_id": message_id, "event_timestamp": event_timestamp},
+            )
+            canceled += 1
+
+        return canceled
+
     async def _ensure_raid_arrival_subscription_ready(
         self,
         *,
@@ -2730,6 +2796,29 @@ class RaidBot:
             "channel.chat.notification unraid observed without confirmed raid correlation: %s -> %s",
             normalized_from_login,
             to_broadcaster_login,
+        )
+
+    async def on_source_self_unraid_notification(
+        self,
+        *,
+        broadcaster_id: str,
+        broadcaster_login: str,
+        message_id: str | None = None,
+        event_timestamp: str | None = None,
+    ) -> None:
+        canceled = self._cancel_pending_raids_for_source_unraid(
+            from_broadcaster_login=broadcaster_login,
+            from_broadcaster_id=broadcaster_id,
+            message_id=message_id,
+            event_timestamp=event_timestamp,
+        )
+        if canceled > 0:
+            return
+
+        log.info(
+            "Source self-unraid observed without pending auto-raid: %s (message_id=%s)",
+            self._normalize_broadcaster_login(broadcaster_login),
+            message_id or "n/a",
         )
 
     async def _send_partner_raid_message(
