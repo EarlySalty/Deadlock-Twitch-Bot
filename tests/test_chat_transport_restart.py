@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import sqlite3
 import unittest
@@ -104,6 +105,55 @@ class ChatTransportRestartTests(unittest.IsolatedAsyncioTestCase):
 
         dummy.join.assert_not_awaited()
         self.assertFalse(dummy._skip_initial_join_once)
+
+    @unittest.skipUnless(
+        getattr(chat_bot_module, "TWITCHIO_AVAILABLE", False)
+        and hasattr(chat_bot_module, "RaidChatBot"),
+        "TwitchIO chat bot unavailable in test environment",
+    )
+    async def test_restart_after_transport_failure_clears_subscription_caches(self) -> None:
+        created_coroutines = []
+
+        def _fake_create_task(coro, *, name=None):
+            created_coroutines.append((coro, name))
+            if asyncio.iscoroutine(coro):
+                coro.close()
+            return SimpleNamespace(name=name)
+
+        dummy = SimpleNamespace(
+            _restart_lock=asyncio.Lock(),
+            _managed_start_with_adapter=False,
+            _managed_load_tokens=False,
+            _managed_save_tokens=False,
+            _skip_initial_join_once=False,
+            _monitored_streamers={"partner_channel"},
+            _channel_subscription_types={"partner_channel": {"channel.chat.message"}},
+            _channel_subscription_state={
+                "partner_channel": {"channel.chat.message": {"state": "ok"}}
+            },
+            _channel_ids={"partner_channel": "1001"},
+            close=AsyncMock(),
+            start=AsyncMock(),
+            _rejoin_channels_after_restart=AsyncMock(),
+            adapter=None,
+        )
+
+        with (
+            patch("bot.chat.bot.asyncio.sleep", new=AsyncMock(return_value=None)),
+            patch("bot.chat.bot.asyncio.create_task", side_effect=_fake_create_task),
+        ):
+            await chat_bot_module.RaidChatBot._restart_after_transport_failure(
+                dummy,
+                channel_list=["partner_channel"],
+                reason="broken transport",
+            )
+
+        self.assertEqual(dummy._monitored_streamers, set())
+        self.assertEqual(dummy._channel_subscription_types, {})
+        self.assertEqual(dummy._channel_subscription_state, {})
+        self.assertEqual(dummy._channel_ids, {})
+        self.assertTrue(dummy._skip_initial_join_once)
+        self.assertEqual(len(created_coroutines), 2)
 
     async def test_join_purges_stale_removed_channel_before_mod_retry(self) -> None:
         conn = sqlite3.connect(":memory:")

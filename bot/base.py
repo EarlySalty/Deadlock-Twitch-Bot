@@ -593,14 +593,50 @@ class TwitchBaseCog(commands.Cog):
 
                 # --- 3. Sync Chat Bot ---
                 chat_bot = getattr(self, "_twitch_chat_bot", None)
+                heal_logins: list[str] = []
                 if chat_bot:
-                    # Join new
-                    if new_logins:
-                        log.info("Scout: Joining %d new channels", len(new_logins))
+                    ready_check = getattr(chat_bot, "is_channel_subscription_ready", None)
+                    monitored_runtime = getattr(chat_bot, "_monitored_streamers", None)
+                    runtime_monitored = {
+                        str(login or "").strip().lower()
+                        for login in monitored_runtime
+                    } if isinstance(monitored_runtime, set) else set()
+                    for login in sorted(current_deadlock_logins.intersection(existing_monitored)):
+                        if login in new_logins or login in to_remove:
+                            continue
+                        is_ready = False
+                        if callable(ready_check):
+                            try:
+                                is_ready = bool(ready_check(login))
+                            except Exception:
+                                log.debug(
+                                    "Scout: readiness check failed for %s",
+                                    login,
+                                    exc_info=True,
+                                )
+                        else:
+                            is_ready = login in runtime_monitored
+                        if not is_ready:
+                            heal_logins.append(login)
+                if chat_bot:
+                    join_targets: list[str] = []
+                    for login in [*new_logins, *heal_logins]:
+                        if login and login not in join_targets:
+                            join_targets.append(login)
+
+                    # Join new or heal missing runtime subscriptions
+                    if join_targets:
+                        if new_logins:
+                            log.info("Scout: Joining %d new channels", len(new_logins))
+                        if heal_logins:
+                            log.info(
+                                "Scout: Rejoining %d monitored channels missing from chat runtime",
+                                len(heal_logins),
+                            )
                         set_monitored_channels = getattr(chat_bot, "set_monitored_channels", None)
                         if callable(set_monitored_channels):
                             try:
-                                set_monitored_channels(new_logins)
+                                set_monitored_channels(join_targets)
                             except Exception:
                                 log.debug(
                                     "Scout: set_monitored_channels failed",
@@ -609,12 +645,12 @@ class TwitchBaseCog(commands.Cog):
 
                         join_channels = getattr(chat_bot, "join_channels", None)
                         if callable(join_channels):
-                            await join_channels(new_logins)
+                            await join_channels(join_targets)
                         else:
                             join_single = getattr(chat_bot, "join", None)
                             if callable(join_single):
                                 joined = 0
-                                for login in new_logins:
+                                for login in join_targets:
                                     try:
                                         if await join_single(login):
                                             joined += 1
@@ -627,12 +663,12 @@ class TwitchBaseCog(commands.Cog):
                                 log.warning(
                                     "Scout: chat bot has no join_channels; fallback join used (%d/%d).",
                                     joined,
-                                    len(new_logins),
+                                    len(join_targets),
                                 )
                             else:
                                 log.warning(
                                     "Scout: chat bot has neither join_channels nor join; cannot join %d channels.",
-                                    len(new_logins),
+                                    len(join_targets),
                                 )
 
                     # Leave old

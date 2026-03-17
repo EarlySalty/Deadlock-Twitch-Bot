@@ -1807,10 +1807,10 @@ class RaidBot:
             return True
 
         has_sub = getattr(cog, "_eventsub_has_sub", None)
+        locally_tracked = False
         if callable(has_sub):
             try:
-                if has_sub("channel.raid", str(to_broadcaster_id)):
-                    return True
+                locally_tracked = bool(has_sub("channel.raid", str(to_broadcaster_id)))
             except Exception:
                 log.debug(
                     "EventSub channel.raid local tracking lookup failed for %s",
@@ -1839,6 +1839,8 @@ class RaidBot:
                     detail,
                 )
             else:
+                if locally_tracked:
+                    detail = f"{detail}; local_tracking_only"
                 log.warning(
                     "EventSub channel.raid not confirmed enabled for %s before raid start (%s). Proceeding best-effort.",
                     to_broadcaster_login,
@@ -1846,6 +1848,11 @@ class RaidBot:
                 )
             return ready
 
+        if locally_tracked:
+            log.debug(
+                "EventSub channel.raid for %s is only locally tracked; remote readiness check unavailable.",
+                to_broadcaster_login,
+            )
         return True
 
     async def _register_pending_raid(
@@ -1904,25 +1911,12 @@ class RaidBot:
             chat_notification_state or "unknown",
         )
 
-        if self._cog and hasattr(self._cog, "_eventsub_has_sub"):
-            try:
-                if self._cog._eventsub_has_sub("channel.raid", str(to_broadcaster_id)):
-                    log.debug(
-                        "EventSub channel.raid subscription already tracked for %s - skipping duplicate create",
-                        to_broadcaster_login,
-                    )
-                    success = True
-                else:
-                    success = False
-            except Exception:
-                log.debug(
-                    "EventSub channel.raid local tracking lookup failed for %s",
-                    to_broadcaster_login,
-                    exc_info=True,
-                )
-                success = False
-        else:
-            success = False
+        success = bool(channel_raid_ready)
+        if success:
+            log.debug(
+                "EventSub channel.raid readiness already confirmed for %s - skipping duplicate create",
+                to_broadcaster_login,
+            )
 
         # Dynamische EventSub subscription erstellen
         if not success and self._cog and hasattr(self._cog, "subscribe_raid_target_dynamic"):

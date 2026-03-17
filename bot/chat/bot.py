@@ -248,6 +248,8 @@ if TWITCHIO_AVAILABLE:
                 )
 
                 self._monitored_streamers.clear()
+                self._channel_subscription_types.clear()
+                self._channel_subscription_state.clear()
                 self._channel_ids.clear()
 
                 try:

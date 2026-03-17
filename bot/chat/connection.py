@@ -743,6 +743,19 @@ class ConnectionMixin:
                         channel_login,
                     )
                     return False
+                if join_state["is_partner_active"] and not join_state["has_raid_auth"]:
+                    for sub_type in remaining_missing:
+                        self._record_chat_subscription_state(
+                            normalized_login,
+                            sub_type,
+                            "missing_broadcaster_authorization",
+                            detail="partner channel has no twitch_raid_auth authorization record",
+                        )
+                    log.warning(
+                        "join(): Chat-Subscription für %s blockiert – Partner-Channel hat keine Broadcaster-Autorisierung. Kein Mod-Retry.",
+                        channel_login,
+                    )
+                    return False
                 if (
                     not join_state["exists_in_streamers"]
                     and not join_state["is_partner_active"]

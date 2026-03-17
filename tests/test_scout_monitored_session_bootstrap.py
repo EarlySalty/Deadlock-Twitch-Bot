@@ -44,6 +44,24 @@ class _ScoutConnection:
         self.commits += 1
 
 
+class _ExistingMonitoredScoutConnection:
+    def __init__(self) -> None:
+        self.commits = 0
+
+    def execute(self, sql: str, params=(), *args, **kwargs):
+        normalized_sql = " ".join(str(sql).split())
+        if "SELECT twitch_login FROM twitch_streamers WHERE is_monitored_only = 1" in normalized_sql:
+            return _FetchAllResult([("mewgles",)])
+        if "SELECT 1 FROM twitch_streamers WHERE twitch_login = ?" in normalized_sql:
+            return _FetchOneResult((1,))
+        raise AssertionError(
+            f"Unexpected SQL in test_scout_monitored_session_bootstrap: {normalized_sql}"
+        )
+
+    def commit(self) -> None:
+        self.commits += 1
+
+
 class _ScoutApi:
     async def get_streams_for_game(self, *, game_id, game_name, language, limit):
         return [
@@ -97,6 +115,20 @@ class _ScoutHarness:
         )
 
 
+class _HealingScoutHarness(_ScoutHarness):
+    def __init__(self) -> None:
+        super().__init__()
+        self._twitch_chat_bot = SimpleNamespace(
+            _monitored_streamers=set(),
+            is_channel_subscription_ready=lambda login: False,
+            set_monitored_channels=self._set_monitored_channels,
+            join_channels=self._join_channels,
+        )
+
+    async def _ensure_stream_session(self, *, login, stream, previous_state, twitch_user_id):
+        raise AssertionError("Existing monitored channels must not prime a new session")
+
+
 class ScoutMonitoredSessionBootstrapTests(unittest.IsolatedAsyncioTestCase):
     async def test_scout_primes_session_before_joining_new_monitored_channel(self) -> None:
         harness = _ScoutHarness()
@@ -124,6 +156,32 @@ class ScoutMonitoredSessionBootstrapTests(unittest.IsolatedAsyncioTestCase):
             harness.calls,
             [
                 ("ensure_session", "mewgles"),
+                ("set_monitored_channels", ["mewgles"]),
+                ("join_channels", ["mewgles"]),
+            ],
+        )
+
+    async def test_scout_rejoins_existing_monitored_channel_missing_from_runtime(self) -> None:
+        harness = _HealingScoutHarness()
+        conn = _ExistingMonitoredScoutConnection()
+        sleep_calls: list[float] = []
+
+        async def _fake_sleep(delay: float) -> None:
+            sleep_calls.append(delay)
+            if len(sleep_calls) >= 2:
+                raise asyncio.CancelledError
+
+        with patch(
+            "bot.base.storage.get_conn",
+            side_effect=lambda: contextlib.nullcontext(conn),
+        ), patch("bot.base.asyncio.sleep", side_effect=_fake_sleep):
+            with self.assertRaises(asyncio.CancelledError):
+                await TwitchBaseCog._scout_deadlock_channels(harness)
+
+        self.assertEqual(conn.commits, 1)
+        self.assertEqual(
+            harness.calls,
+            [
                 ("set_monitored_channels", ["mewgles"]),
                 ("join_channels", ["mewgles"]),
             ],
