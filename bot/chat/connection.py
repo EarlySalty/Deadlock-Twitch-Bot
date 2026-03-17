@@ -9,8 +9,388 @@ from .constants import CHAT_JOIN_OFFLINE, eventsub
 
 log = logging.getLogger("TwitchStreams.ChatBot")
 
+_CHAT_EVENTSUB_TYPES: tuple[str, ...] = (
+    "channel.chat.message",
+    "channel.chat.notification",
+)
+_CHAT_EVENTSUB_CLASS_NAMES: frozenset[str] = frozenset(
+    {
+        "ChannelChatMessage",
+        "ChannelChatNotification",
+    }
+)
+_CHAT_REQUIRED_BOT_SCOPES: frozenset[str] = frozenset({"user:read:chat"})
+_CHAT_REQUIRED_BROADCASTER_GRANTS: frozenset[str] = frozenset({"channel:bot"})
+
 
 class ConnectionMixin:
+    @staticmethod
+    def _required_chat_subscription_types() -> tuple[str, ...]:
+        return _CHAT_EVENTSUB_TYPES
+
+    @staticmethod
+    def _is_chat_eventsub_subscription_type(sub_type: object) -> bool:
+        sub_type_value = str(sub_type or "").strip()
+        if not sub_type_value:
+            return False
+        if sub_type_value in _CHAT_EVENTSUB_TYPES:
+            return True
+        return any(class_name in sub_type_value for class_name in _CHAT_EVENTSUB_CLASS_NAMES)
+
+    def _get_tracked_chat_subscription_types(self, channel_login: str) -> set[str]:
+        normalized_login = str(channel_login or "").strip().lower().lstrip("#")
+        tracked = getattr(self, "_channel_subscription_types", None)
+        if not isinstance(tracked, dict):
+            tracked = {}
+            self._channel_subscription_types = tracked
+        entry = tracked.get(normalized_login)
+        if isinstance(entry, set):
+            return set(entry)
+        return set()
+
+    def _record_chat_subscription_state(
+        self,
+        channel_login: str,
+        sub_type: str,
+        state: str,
+        *,
+        detail: str | None = None,
+    ) -> None:
+        normalized_login = str(channel_login or "").strip().lower().lstrip("#")
+        if not normalized_login or not sub_type:
+            return
+        snapshot = getattr(self, "_channel_subscription_state", None)
+        if not isinstance(snapshot, dict):
+            snapshot = {}
+            self._channel_subscription_state = snapshot
+        channel_snapshot = snapshot.get(normalized_login)
+        if not isinstance(channel_snapshot, dict):
+            channel_snapshot = {}
+            snapshot[normalized_login] = channel_snapshot
+        payload = {"state": str(state or "").strip()}
+        detail_text = str(detail or "").strip()
+        if detail_text:
+            payload["detail"] = detail_text
+        channel_snapshot[str(sub_type)] = payload
+
+    def _track_chat_subscription(
+        self,
+        channel_login: str,
+        *,
+        channel_id: str,
+        sub_type: str,
+    ) -> None:
+        normalized_login = str(channel_login or "").strip().lower().lstrip("#")
+        if not normalized_login or not sub_type:
+            return
+        tracked = getattr(self, "_channel_subscription_types", None)
+        if not isinstance(tracked, dict):
+            tracked = {}
+            self._channel_subscription_types = tracked
+        sub_types = tracked.get(normalized_login)
+        if not isinstance(sub_types, set):
+            sub_types = set()
+            tracked[normalized_login] = sub_types
+        sub_types.add(str(sub_type))
+        self._monitored_streamers.add(normalized_login)
+        self._channel_ids[normalized_login] = str(channel_id)
+        self._record_chat_subscription_state(normalized_login, sub_type, "ok")
+
+    def _untrack_chat_subscription(self, channel_login: str, *, sub_type: str | None = None) -> None:
+        normalized_login = str(channel_login or "").strip().lower().lstrip("#")
+        if not normalized_login:
+            return
+        tracked = getattr(self, "_channel_subscription_types", None)
+        if isinstance(tracked, dict):
+            if sub_type:
+                entry = tracked.get(normalized_login)
+                if isinstance(entry, set):
+                    entry.discard(str(sub_type))
+                    if not entry:
+                        tracked.pop(normalized_login, None)
+            else:
+                tracked.pop(normalized_login, None)
+        snapshot = getattr(self, "_channel_subscription_state", None)
+        if isinstance(snapshot, dict):
+            if sub_type:
+                channel_snapshot = snapshot.get(normalized_login)
+                if isinstance(channel_snapshot, dict):
+                    channel_snapshot.pop(str(sub_type), None)
+                    if not channel_snapshot:
+                        snapshot.pop(normalized_login, None)
+            else:
+                snapshot.pop(normalized_login, None)
+
+    def is_channel_subscription_ready(self, channel_login: str, sub_type: str | None = None) -> bool:
+        normalized_login = str(channel_login or "").strip().lower().lstrip("#")
+        tracked_types = self._get_tracked_chat_subscription_types(normalized_login)
+        if sub_type:
+            return str(sub_type) in tracked_types
+        return set(self._required_chat_subscription_types()).issubset(tracked_types)
+
+    def get_channel_subscription_state(self, channel_login: str) -> dict[str, dict[str, str]]:
+        normalized_login = str(channel_login or "").strip().lower().lstrip("#")
+        snapshot = getattr(self, "_channel_subscription_state", None)
+        if not isinstance(snapshot, dict):
+            return {}
+        channel_snapshot = snapshot.get(normalized_login)
+        if not isinstance(channel_snapshot, dict):
+            return {}
+        return {
+            str(sub_type): {
+                str(key): str(value)
+                for key, value in payload.items()
+                if isinstance(payload, dict)
+            }
+            for sub_type, payload in channel_snapshot.items()
+            if isinstance(payload, dict)
+        }
+
+    def _build_required_chat_subscription_payloads(
+        self,
+        *,
+        broadcaster_id: str,
+        user_id: str,
+    ) -> tuple[tuple[str, object], ...]:
+        return (
+            (
+                "channel.chat.message",
+                eventsub.ChatMessageSubscription(
+                    broadcaster_user_id=str(broadcaster_id),
+                    user_id=str(user_id),
+                ),
+            ),
+            (
+                "channel.chat.notification",
+                eventsub.ChatNotificationSubscription(
+                    broadcaster_user_id=str(broadcaster_id),
+                    user_id=str(user_id),
+                ),
+            ),
+        )
+
+    async def _subscribe_missing_chat_subscriptions(
+        self,
+        *,
+        channel_login: str,
+        channel_id: str,
+        safe_bot_id: str,
+    ) -> bool:
+        normalized_login = str(channel_login or "").strip().lower().lstrip("#")
+        missing_types = [
+            sub_type
+            for sub_type in self._required_chat_subscription_types()
+            if not self.is_channel_subscription_ready(normalized_login, sub_type)
+        ]
+        if not missing_types:
+            self._monitored_streamers.add(normalized_login)
+            self._channel_ids[normalized_login] = str(channel_id)
+            return True
+
+        for sub_type, payload in self._build_required_chat_subscription_payloads(
+            broadcaster_id=str(channel_id),
+            user_id=str(safe_bot_id),
+        ):
+            if sub_type not in missing_types:
+                continue
+            await self.subscribe_websocket(payload=payload)
+            self._track_chat_subscription(
+                normalized_login,
+                channel_id=str(channel_id),
+                sub_type=sub_type,
+            )
+        return self.is_channel_subscription_ready(normalized_login)
+
+    def _resolve_chat_bot_scope_set(self) -> set[str]:
+        token_mgr = getattr(self, "_token_manager", None)
+        scopes = getattr(token_mgr, "scopes", None) if token_mgr is not None else None
+        return {
+            str(scope).strip().lower()
+            for scope in (scopes or set())
+            if str(scope).strip()
+        }
+
+    def _load_broadcaster_chat_scope_set(
+        self,
+        *,
+        channel_id: str | None,
+        channel_login: str,
+    ) -> set[str]:
+        target_id = str(channel_id or "").strip()
+        normalized_login = str(channel_login or "").strip().lower().lstrip("#")
+        try:
+            with get_conn() as conn:
+                row = conn.execute(
+                    """
+                    SELECT scopes
+                    FROM twitch_raid_auth
+                    WHERE (? <> '' AND twitch_user_id = ?)
+                       OR (? <> '' AND LOWER(twitch_login) = ?)
+                    ORDER BY authorized_at DESC
+                    LIMIT 1
+                    """,
+                    (
+                        target_id,
+                        target_id,
+                        normalized_login,
+                        normalized_login,
+                    ),
+                ).fetchone()
+        except Exception:
+            log.debug(
+                "Konnte Broadcaster-Scopes für Chat-Subscription nicht laden: %s",
+                normalized_login or target_id,
+                exc_info=True,
+            )
+            return set()
+        scopes_raw = ""
+        if row is not None:
+            scopes_raw = str(row[0] if not hasattr(row, "keys") else row["scopes"] or "")
+        return {
+            scope.strip().lower()
+            for scope in scopes_raw.split()
+            if scope.strip()
+        }
+
+    def _diagnose_chat_subscription_authorization(
+        self,
+        *,
+        channel_login: str,
+        channel_id: str | None,
+    ) -> dict[str, list[str]]:
+        bot_scopes = self._resolve_chat_bot_scope_set()
+        broadcaster_scopes = self._load_broadcaster_chat_scope_set(
+            channel_id=channel_id,
+            channel_login=channel_login,
+        )
+        missing_bot_scopes = sorted(
+            scope for scope in _CHAT_REQUIRED_BOT_SCOPES if bot_scopes and scope not in bot_scopes
+        )
+        missing_broadcaster_scopes = sorted(
+            scope
+            for scope in _CHAT_REQUIRED_BROADCASTER_GRANTS
+            if broadcaster_scopes and scope not in broadcaster_scopes
+        )
+        return {
+            "missing_bot_scopes": missing_bot_scopes,
+            "missing_broadcaster_scopes": missing_broadcaster_scopes,
+        }
+
+    def _purge_local_channel_state(self, channel_login: str) -> None:
+        normalized_login = str(channel_login or "").strip().lower().lstrip("#")
+        if not normalized_login:
+            return
+        monitored = getattr(self, "_monitored_streamers", None)
+        if isinstance(monitored, set):
+            monitored.discard(normalized_login)
+        channel_ids = getattr(self, "_channel_ids", None)
+        if isinstance(channel_ids, dict):
+            channel_ids.pop(normalized_login, None)
+        channel_subscriptions = getattr(self, "_channel_subscription_types", None)
+        if isinstance(channel_subscriptions, dict):
+            channel_subscriptions.pop(normalized_login, None)
+        channel_subscription_state = getattr(self, "_channel_subscription_state", None)
+        if isinstance(channel_subscription_state, dict):
+            channel_subscription_state.pop(normalized_login, None)
+        monitored_only = getattr(self, "_monitored_only_channels", None)
+        if isinstance(monitored_only, set):
+            monitored_only.discard(normalized_login)
+        initial_channels = getattr(self, "_initial_channels", None)
+        if isinstance(initial_channels, list):
+            self._initial_channels = [
+                channel
+                for channel in initial_channels
+                if str(channel or "").strip().lower().lstrip("#") != normalized_login
+            ]
+
+    def _load_chat_join_channel_state(
+        self,
+        *,
+        channel_login: str,
+        channel_id: str | None,
+    ) -> dict[str, bool]:
+        normalized_login = str(channel_login or "").strip().lower().lstrip("#")
+        target_id = str(channel_id or "").strip()
+        state = {
+            "is_partner_active": False,
+            "exists_in_streamers": False,
+            "is_monitored_only": False,
+            "has_raid_auth": False,
+        }
+        if not normalized_login and not target_id:
+            return state
+        try:
+            with get_conn() as conn:
+                partner_row = conn.execute(
+                    """
+                    SELECT is_partner_active
+                    FROM twitch_streamers_partner_state
+                    WHERE (? <> '' AND twitch_user_id = ?)
+                       OR (? <> '' AND LOWER(twitch_login) = ?)
+                    ORDER BY is_partner_active DESC
+                    LIMIT 1
+                    """,
+                    (
+                        target_id,
+                        target_id,
+                        normalized_login,
+                        normalized_login,
+                    ),
+                ).fetchone()
+                if partner_row is not None:
+                    state["is_partner_active"] = bool(
+                        partner_row[0]
+                        if not hasattr(partner_row, "keys")
+                        else partner_row["is_partner_active"]
+                    )
+
+                streamer_row = conn.execute(
+                    """
+                    SELECT COALESCE(is_monitored_only, 0) AS is_monitored_only
+                    FROM twitch_streamers
+                    WHERE (? <> '' AND twitch_user_id = ?)
+                       OR (? <> '' AND LOWER(twitch_login) = ?)
+                    LIMIT 1
+                    """,
+                    (
+                        target_id,
+                        target_id,
+                        normalized_login,
+                        normalized_login,
+                    ),
+                ).fetchone()
+                if streamer_row is not None:
+                    state["exists_in_streamers"] = True
+                    state["is_monitored_only"] = bool(
+                        streamer_row[0]
+                        if not hasattr(streamer_row, "keys")
+                        else streamer_row["is_monitored_only"]
+                    )
+
+                auth_row = conn.execute(
+                    """
+                    SELECT 1
+                    FROM twitch_raid_auth
+                    WHERE (? <> '' AND twitch_user_id = ?)
+                       OR (? <> '' AND LOWER(twitch_login) = ?)
+                    LIMIT 1
+                    """,
+                    (
+                        target_id,
+                        target_id,
+                        normalized_login,
+                        normalized_login,
+                    ),
+                ).fetchone()
+                state["has_raid_auth"] = auth_row is not None
+        except Exception:
+            log.debug(
+                "Konnte Channel-Status für Chat-Join nicht laden: %s",
+                normalized_login or target_id,
+                exc_info=True,
+            )
+        return state
+
     @staticmethod
     def _looks_like_transport_session_gone_error(text: str) -> bool:
         lowered = str(text or "").lower()
@@ -205,11 +585,6 @@ class ConnectionMixin:
         try:
             normalized_login = channel_login.lower().lstrip("#")
 
-            # Prüfe ZUERST, ob wir bereits subscribed sind
-            if normalized_login in self._monitored_streamers:
-                log.debug("Channel %s already monitored, skipping subscribe", channel_login)
-                return True
-
             if not channel_id:
                 user = await self.fetch_user(login=channel_login.lstrip("#"))
                 if not user:
@@ -226,20 +601,37 @@ class ConnectionMixin:
             # "invalid transport and auth combination" wenn setup_hook()
             # noch nicht vollständig abgeschlossen war.
             await self._ensure_bot_token_registered()
-
-            payload = eventsub.ChatMessageSubscription(
-                broadcaster_user_id=str(channel_id), user_id=str(safe_bot_id)
+            if await self._subscribe_missing_chat_subscriptions(
+                channel_login=normalized_login,
+                channel_id=str(channel_id),
+                safe_bot_id=str(safe_bot_id),
+            ):
+                return True
+            log.warning(
+                "join(): Chat-Subscriptions für %s sind unvollständig (%s)",
+                channel_login,
+                ", ".join(
+                    sorted(
+                        self._required_chat_subscription_types()
+                    )
+                ),
             )
-
-            # Wir abonnieren über den Standard-WebSocket des Bots
-            await self.subscribe_websocket(payload=payload)
-
-            self._monitored_streamers.add(normalized_login)
-            self._channel_ids[normalized_login] = str(channel_id)
-            return True
+            return False
         except Exception as e:
             msg = str(e)
+            remaining_missing = [
+                sub_type
+                for sub_type in self._required_chat_subscription_types()
+                if not self.is_channel_subscription_ready(normalized_login, sub_type)
+            ]
             if self._looks_like_transport_session_gone_error(msg):
+                for sub_type in remaining_missing:
+                    self._record_chat_subscription_state(
+                        normalized_login,
+                        sub_type,
+                        "transport_session_invalid",
+                        detail="eventsub websocket transport session does not exist",
+                    )
                 log.warning(
                     "join(): transport session invalid for %s - scheduling chat bot restart.",
                     channel_login,
@@ -267,20 +659,26 @@ class ConnectionMixin:
                     "Token wird neu registriert und ein Retry folgt.",
                     channel_login,
                 )
+                for sub_type in remaining_missing:
+                    self._record_chat_subscription_state(
+                        normalized_login,
+                        sub_type,
+                        "bot_token_not_registered",
+                        detail="invalid transport and auth combination",
+                    )
                 await asyncio.sleep(1)
                 await self._ensure_bot_token_registered()
                 try:
-                    payload = eventsub.ChatMessageSubscription(
-                        broadcaster_user_id=str(channel_id), user_id=str(safe_bot_id)
-                    )
-                    await self.subscribe_websocket(payload=payload)
-                    self._monitored_streamers.add(normalized_login)
-                    self._channel_ids[normalized_login] = str(channel_id)
-                    log.info(
-                        "join(): Retry erfolgreich für %s nach Token-Registrierung",
-                        channel_login,
-                    )
-                    return True
+                    if await self._subscribe_missing_chat_subscriptions(
+                        channel_login=normalized_login,
+                        channel_id=str(channel_id),
+                        safe_bot_id=str(safe_bot_id),
+                    ):
+                        log.info(
+                            "join(): Retry erfolgreich für %s nach Token-Registrierung",
+                            channel_login,
+                        )
+                        return True
                 except Exception as retry_err:
                     log.error(
                         "join(): Retry für %s fehlgeschlagen: %s",
@@ -289,10 +687,75 @@ class ConnectionMixin:
                     )
                 return False
             if "403" in msg and "subscription missing proper authorization" in msg:
+                auth_diagnostics = self._diagnose_chat_subscription_authorization(
+                    channel_login=normalized_login,
+                    channel_id=str(channel_id),
+                )
+                join_state = self._load_chat_join_channel_state(
+                    channel_login=normalized_login,
+                    channel_id=str(channel_id),
+                )
+                if auth_diagnostics["missing_bot_scopes"]:
+                    missing_bot_scopes = ", ".join(auth_diagnostics["missing_bot_scopes"])
+                    for sub_type in remaining_missing:
+                        self._record_chat_subscription_state(
+                            normalized_login,
+                            sub_type,
+                            "missing_bot_scope",
+                            detail=missing_bot_scopes,
+                        )
+                    log.warning(
+                        "join(): Chat-Subscription für %s blockiert – zentraler Bot-Scope fehlt (%s).",
+                        channel_login,
+                        missing_bot_scopes,
+                    )
+                    return False
+                if auth_diagnostics["missing_broadcaster_scopes"]:
+                    missing_broadcaster_scopes = ", ".join(
+                        auth_diagnostics["missing_broadcaster_scopes"]
+                    )
+                    for sub_type in remaining_missing:
+                        self._record_chat_subscription_state(
+                            normalized_login,
+                            sub_type,
+                            "missing_broadcaster_scope",
+                            detail=missing_broadcaster_scopes,
+                        )
+                    log.warning(
+                        "join(): Chat-Subscription für %s blockiert – Broadcaster-Freigabe fehlt (%s).",
+                        channel_login,
+                        missing_broadcaster_scopes,
+                    )
+                    return False
+                if (
+                    not join_state["exists_in_streamers"]
+                    and not join_state["is_partner_active"]
+                    and not join_state["has_raid_auth"]
+                ):
+                    for sub_type in remaining_missing:
+                        self._record_chat_subscription_state(
+                            normalized_login,
+                            sub_type,
+                            "stale_removed_channel",
+                            detail="channel no longer tracked locally or authorized",
+                        )
+                    self._purge_local_channel_state(normalized_login)
+                    log.info(
+                        "join(): stale/removed channel %s detected after 403; local chat state purged, no mod retry.",
+                        channel_login,
+                    )
+                    return False
                 # Monitored-Only Channels: kein Mod-Versuch, einfach überspringen.
                 # Diese Channels haben keinen Streamer-Token, daher ist _ensure_bot_is_mod
                 # sinnlos und würde nur Warnungen produzieren.
-                if self._is_monitored_only(normalized_login):
+                if self._is_monitored_only(normalized_login) or join_state["is_monitored_only"]:
+                    for sub_type in remaining_missing:
+                        self._record_chat_subscription_state(
+                            normalized_login,
+                            sub_type,
+                            "monitored_only_no_broadcaster_auth",
+                            detail="subscription missing proper authorization",
+                        )
                     log.info(
                         "join(): 403 für Monitored-Only Channel %s – kein Mod-Versuch, "
                         "Channel wird übersprungen (kein Streamer-Token verfügbar).",
@@ -321,18 +784,16 @@ class ConnectionMixin:
                     # Kurze Pause damit Twitch den Mod-Status propagiert
                     await asyncio.sleep(1)
                     try:
-                        payload = eventsub.ChatMessageSubscription(
-                            broadcaster_user_id=str(channel_id),
-                            user_id=str(safe_bot_id),
-                        )
-                        await self.subscribe_websocket(payload=payload)
-                        self._monitored_streamers.add(normalized_login)
-                        self._channel_ids[normalized_login] = str(channel_id)
-                        log.info(
-                            "join(): Retry erfolgreich für %s nach Mod-Autorisierung",
-                            channel_login,
-                        )
-                        return True
+                        if await self._subscribe_missing_chat_subscriptions(
+                            channel_login=normalized_login,
+                            channel_id=str(channel_id),
+                            safe_bot_id=str(safe_bot_id),
+                        ):
+                            log.info(
+                                "join(): Retry erfolgreich für %s nach Mod-Autorisierung",
+                                channel_login,
+                            )
+                            return True
                     except Exception as retry_err:
                         log.warning(
                             "join(): Retry für %s fehlgeschlagen nach Mod-Autorisierung: %s",
@@ -351,12 +812,26 @@ class ConnectionMixin:
                         channel_login,
                     )
             elif "429" in msg or "transport limit exceeded" in msg.lower():
+                for sub_type in remaining_missing:
+                    self._record_chat_subscription_state(
+                        normalized_login,
+                        sub_type,
+                        "transport_limit",
+                        detail="WebSocket transport limit reached",
+                    )
                 log.error(
                     "Cannot join chat for %s: WebSocket Transport Limit (429) reached. "
                     "Ensure the bot uses only one WebSocket connection.",
                     channel_login,
                 )
             else:
+                for sub_type in remaining_missing:
+                    self._record_chat_subscription_state(
+                        normalized_login,
+                        sub_type,
+                        "subscribe_failed",
+                        detail=msg[:200],
+                    )
                 log.error("Failed to join channel %s: %s", channel_login, e)
             return False
 
@@ -501,7 +976,7 @@ class ConnectionMixin:
                 for sub in subs_list:
                     try:
                         sub_type = getattr(sub, "type", "") or getattr(sub, "subscription_type", "")
-                        if sub_type != "channel.chat.message":
+                        if not self._is_chat_eventsub_subscription_type(sub_type):
                             continue
                         condition = getattr(sub, "condition", None)
                         if isinstance(condition, dict):
@@ -565,10 +1040,7 @@ class ConnectionMixin:
                                 sub_type_value = getattr(sub_type, "value", None) or str(sub_type or "")
                                 if not sub_type_value:
                                     continue
-                                if (
-                                    "channel.chat.message" not in sub_type_value
-                                    and "ChannelChatMessage" not in sub_type_value
-                                ):
+                                if not self._is_chat_eventsub_subscription_type(sub_type_value):
                                     continue
 
                                 await ws_delete(sub_id)
@@ -589,10 +1061,26 @@ class ConnectionMixin:
         if isinstance(channel_id_map, dict):
             for login in normalized:
                 channel_id_map.pop(login, None)
+        channel_subscriptions = getattr(self, "_channel_subscription_types", None)
+        if isinstance(channel_subscriptions, dict):
+            for login in normalized:
+                channel_subscriptions.pop(login, None)
+        channel_subscription_state = getattr(self, "_channel_subscription_state", None)
+        if isinstance(channel_subscription_state, dict):
+            for login in normalized:
+                channel_subscription_state.pop(login, None)
         monitored_only = getattr(self, "_monitored_only_channels", None)
         if isinstance(monitored_only, set):
             for login in normalized:
                 monitored_only.discard(login)
+        initial_channels = getattr(self, "_initial_channels", None)
+        if isinstance(initial_channels, list):
+            normalized_set = set(normalized)
+            self._initial_channels = [
+                channel
+                for channel in initial_channels
+                if str(channel or "").strip().lower().lstrip("#") not in normalized_set
+            ]
 
         if unsubscribed:
             log.info(
@@ -733,7 +1221,7 @@ class ConnectionMixin:
             # Normalisieren und prüfen
             normalized_login = login_norm.lower().lstrip("#")
 
-            if normalized_login in self._monitored_streamers:
+            if self.is_channel_subscription_ready(normalized_login):
                 continue
             channels_to_join.append((login_norm, uid))
 

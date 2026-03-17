@@ -105,13 +105,14 @@ const scopeChangelog: ScopeChangelogEntry[] = [
     tags: ['Beispiel', 'Backend folgt'],
   },
   {
-    date: '2026-02-01',
-    title: 'Raid-Bot Refresh',
+    date: '2026-03-16',
+    title: 'Bot- vs. Streamer-Scopes getrennt',
     items: [
-      'Erforderlich: channel:bot + channel:manage:raids für den neuen Auto-Raid-Flow.',
-      'Empfohlen: channel:manage:moderators für Self-Service Bot-Mod im Onboarding.',
+      'Streamer-Matrix bleibt bei Broadcaster-Scopes wie channel:bot und channel:manage:raids.',
+      'Bot-Scopes wie user:read:chat laufen zentral auf dem Bot-Account und sind keine Streamer-Pflicht.',
+      'user:bot bleibt für den aktuellen User-Token-Chat-Flow optional und wird erst bei App-Token-EventSub Pflicht.',
     ],
-    tags: ['Raid Bot'],
+    tags: ['Scope Modell'],
   },
 ];
 

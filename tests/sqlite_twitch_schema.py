@@ -177,6 +177,30 @@ def ensure_sqlite_twitch_schema(conn: sqlite3.Connection) -> None:
     )
     conn.execute(
         """
+        CREATE TABLE IF NOT EXISTS twitch_raid_arrival_tracking (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            detected_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            last_signal_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            from_broadcaster_id TEXT,
+            from_broadcaster_login TEXT NOT NULL,
+            to_broadcaster_id TEXT NOT NULL,
+            to_broadcaster_login TEXT NOT NULL,
+            viewer_count INTEGER DEFAULT 0,
+            classification TEXT NOT NULL,
+            confirmation_signals TEXT DEFAULT '',
+            primary_signal TEXT,
+            correlation_status TEXT,
+            correlation_detail TEXT,
+            source_resolution TEXT,
+            raid_history_id INTEGER,
+            raid_history_executed_at TEXT,
+            unraid_seen INTEGER DEFAULT 0,
+            last_unraid_at TEXT
+        )
+        """
+    )
+    conn.execute(
+        """
         CREATE TABLE IF NOT EXISTS twitch_raid_blacklist (
             target_id TEXT,
             target_login TEXT PRIMARY KEY,

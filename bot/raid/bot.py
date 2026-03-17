@@ -15,6 +15,7 @@ import os
 import secrets
 import time
 from datetime import UTC, datetime
+from typing import Any
 from urllib.parse import urlencode
 
 import aiohttp
@@ -77,6 +78,9 @@ except ValueError:
     RECRUIT_DIRECT_INVITE_MAX_FOLLOWERS = 120
 log = logging.getLogger("TwitchStreams.RaidManager")
 
+_PENDING_CHAT_NOTIFICATION_GRACE_SECONDS = 15.0
+_RECENT_RAID_ARRIVAL_TTL_SECONDS = 600.0
+
 
 def _mask_log_identifier(value: object, *, visible_prefix: int = 3, visible_suffix: int = 2) -> str:
     text = str(value or "").strip()
@@ -114,8 +118,11 @@ class RaidBot:
         self._bot_id = None  # Wird bei set_chat_bot gesetzt als Fallback
         self._cog = None  # Referenz zum TwitchStreamCog für EventSub subscriptions
 
-        # Pending Raids: {to_broadcaster_id: (from_login, target_stream_data, registered_ts, is_partner_raid, viewer_count, offline_trigger_ts)}
-        self._pending_raids: dict[str, tuple[str, dict | None, float, bool, int, float | None]] = {}
+        # Pending Raids werden bis zur Ziel-Bestaetigung per channel.raid und/oder
+        # channel.chat.notification gehalten.
+        self._pending_raids: dict[str, dict[str, Any] | tuple[Any, ...]] = {}
+        self._recent_raid_arrivals: dict[tuple[str, str], dict[str, Any]] = {}
+        self._orphan_chat_raid_notifications: dict[tuple[str, str], dict[str, Any]] = {}
         # Unterdrückt den nächsten Offline-Auto-Raid, wenn kurz zuvor ein manueller/externer Raid erkannt wurde.
         self._manual_raid_suppression: dict[str, float] = {}
         self._user_scope_fallback_warned: set[tuple[str, str]] = set()
@@ -224,6 +231,8 @@ class RaidBot:
                 # 3. Pending Raids Cleanup (alle 2min)
                 if now - last_raid_cleanup >= pending_raid_cleanup_interval:
                     self._cleanup_stale_pending_raids()
+                    self._cleanup_recent_raid_arrivals()
+                    self._promote_stale_orphan_chat_raid_notifications()
                     self._cleanup_expired_manual_raid_suppressions()
                     last_raid_cleanup = now
 
@@ -259,6 +268,560 @@ class RaidBot:
         """
         self._cog = cog
         log.debug("Cog reference set for dynamic EventSub subscriptions")
+
+    @staticmethod
+    def _normalize_broadcaster_login(raw_value: str | None) -> str:
+        return str(raw_value or "").strip().lower()
+
+    @staticmethod
+    def _build_raid_arrival_cache_key(
+        *,
+        to_broadcaster_id: str,
+        from_broadcaster_login: str,
+    ) -> tuple[str, str]:
+        return (
+            str(to_broadcaster_id or "").strip(),
+            str(from_broadcaster_login or "").strip().lower(),
+        )
+
+    @staticmethod
+    def _serialize_confirmation_signals(signals: set[str] | list[str] | tuple[str, ...]) -> str:
+        return ",".join(sorted({str(signal).strip() for signal in signals if str(signal).strip()}))
+
+    def _ensure_runtime_raid_tracking_state(self) -> None:
+        if not isinstance(getattr(self, "_recent_raid_arrivals", None), dict):
+            self._recent_raid_arrivals = {}
+        if not isinstance(getattr(self, "_orphan_chat_raid_notifications", None), dict):
+            self._orphan_chat_raid_notifications = {}
+
+    def _coerce_pending_raid_record(
+        self,
+        pending: dict[str, Any] | tuple[Any, ...] | None,
+        *,
+        to_broadcaster_id: str | None = None,
+    ) -> dict[str, Any] | None:
+        if pending is None:
+            return None
+        if isinstance(pending, dict):
+            record = dict(pending)
+        else:
+            record = {
+                "from_broadcaster_login": pending[0] if len(pending) > 0 else "",
+                "target_stream_data": pending[1] if len(pending) > 1 else None,
+                "registered_ts": pending[2] if len(pending) > 2 else time.time(),
+                "is_partner_raid": pending[3] if len(pending) > 3 else False,
+                "registered_viewer_count": pending[4] if len(pending) > 4 else 0,
+                "offline_trigger_ts": pending[5] if len(pending) > 5 else None,
+            }
+        record["to_broadcaster_id"] = str(
+            record.get("to_broadcaster_id") or to_broadcaster_id or ""
+        ).strip()
+        record["from_broadcaster_login"] = self._normalize_broadcaster_login(
+            record.get("from_broadcaster_login")
+        )
+        record["registered_ts"] = float(record.get("registered_ts") or time.time())
+        record["is_partner_raid"] = bool(record.get("is_partner_raid"))
+        record["registered_viewer_count"] = int(record.get("registered_viewer_count") or 0)
+        offline_trigger_ts = record.get("offline_trigger_ts")
+        record["offline_trigger_ts"] = (
+            float(offline_trigger_ts) if offline_trigger_ts is not None else None
+        )
+        signal_observations = record.get("signal_observations")
+        record["signal_observations"] = (
+            dict(signal_observations) if isinstance(signal_observations, dict) else {}
+        )
+        return record
+
+    def _build_pending_raid_record(
+        self,
+        *,
+        from_broadcaster_login: str,
+        to_broadcaster_id: str,
+        target_stream_data: dict | None,
+        is_partner_raid: bool,
+        viewer_count: int,
+        offline_trigger_ts: float | None,
+        channel_raid_ready: bool | None,
+        chat_notification_state: str | None,
+        chat_notification_detail: str | None,
+    ) -> dict[str, Any]:
+        return {
+            "from_broadcaster_login": self._normalize_broadcaster_login(from_broadcaster_login),
+            "to_broadcaster_id": str(to_broadcaster_id or "").strip(),
+            "target_stream_data": target_stream_data,
+            "registered_ts": time.time(),
+            "is_partner_raid": bool(is_partner_raid),
+            "registered_viewer_count": int(viewer_count or 0),
+            "offline_trigger_ts": float(offline_trigger_ts) if offline_trigger_ts else None,
+            "channel_raid_ready": channel_raid_ready,
+            "chat_notification_state": str(chat_notification_state or "").strip() or None,
+            "chat_notification_detail": str(chat_notification_detail or "").strip() or None,
+            "signal_observations": {},
+        }
+
+    @staticmethod
+    def _record_pending_signal_observation(
+        pending_record: dict[str, Any],
+        *,
+        signal_type: str,
+        status: str,
+        reason: str | None = None,
+        detail: str | None = None,
+    ) -> None:
+        signal_observations = pending_record.get("signal_observations")
+        if not isinstance(signal_observations, dict):
+            signal_observations = {}
+            pending_record["signal_observations"] = signal_observations
+        observation = {"status": str(status or "").strip()}
+        if reason:
+            observation["reason"] = str(reason).strip()
+        if detail:
+            observation["detail"] = str(detail).strip()
+        signal_observations[str(signal_type)] = observation
+
+    def _snapshot_chat_notification_subscription(
+        self,
+        broadcaster_login: str,
+    ) -> tuple[str | None, str | None]:
+        chat_bot = getattr(self, "chat_bot", None)
+        if chat_bot is None:
+            return "no_chat_bot", "chat bot unavailable"
+
+        get_state = getattr(chat_bot, "get_channel_subscription_state", None)
+        if callable(get_state):
+            try:
+                state = get_state(broadcaster_login)
+            except Exception:
+                log.debug(
+                    "Could not resolve channel.chat.notification subscription state for %s",
+                    broadcaster_login,
+                    exc_info=True,
+                )
+            else:
+                notification_state = state.get("channel.chat.notification")
+                if isinstance(notification_state, dict):
+                    return (
+                        str(notification_state.get("state") or "").strip() or None,
+                        str(notification_state.get("detail") or "").strip() or None,
+                    )
+
+        is_ready = getattr(chat_bot, "is_channel_subscription_ready", None)
+        if callable(is_ready):
+            try:
+                if is_ready(broadcaster_login, "channel.chat.notification"):
+                    return "subscribed", None
+            except Exception:
+                log.debug(
+                    "Could not check channel.chat.notification readiness for %s",
+                    broadcaster_login,
+                    exc_info=True,
+                )
+
+        return "not_joined", "channel.chat.notification not subscribed"
+
+    def _lookup_recent_raid_arrival(
+        self,
+        *,
+        to_broadcaster_id: str,
+        from_broadcaster_login: str,
+    ) -> dict[str, Any] | None:
+        self._ensure_runtime_raid_tracking_state()
+        key = self._build_raid_arrival_cache_key(
+            to_broadcaster_id=to_broadcaster_id,
+            from_broadcaster_login=from_broadcaster_login,
+        )
+        arrival = self._recent_raid_arrivals.get(key)
+        if not arrival:
+            return None
+        confirmed_ts = float(arrival.get("confirmed_ts") or 0.0)
+        if time.time() - confirmed_ts > _RECENT_RAID_ARRIVAL_TTL_SECONDS:
+            self._recent_raid_arrivals.pop(key, None)
+            return None
+        return arrival
+
+    def _remember_recent_raid_arrival(
+        self,
+        *,
+        to_broadcaster_id: str,
+        from_broadcaster_login: str,
+        from_broadcaster_id: str | None,
+        to_broadcaster_login: str,
+        viewer_count: int,
+        classification: str | None,
+        confirmation_signals: set[str],
+        arrival_tracking_id: int | None,
+    ) -> None:
+        self._ensure_runtime_raid_tracking_state()
+        key = self._build_raid_arrival_cache_key(
+            to_broadcaster_id=to_broadcaster_id,
+            from_broadcaster_login=from_broadcaster_login,
+        )
+        self._recent_raid_arrivals[key] = {
+            "to_broadcaster_id": str(to_broadcaster_id or "").strip(),
+            "to_broadcaster_login": self._normalize_broadcaster_login(to_broadcaster_login),
+            "from_broadcaster_id": str(from_broadcaster_id or "").strip() or None,
+            "from_broadcaster_login": self._normalize_broadcaster_login(from_broadcaster_login),
+            "viewer_count": int(viewer_count or 0),
+            "classification": str(classification or "").strip() or None,
+            "confirmation_signals": set(confirmation_signals),
+            "arrival_tracking_id": arrival_tracking_id,
+            "confirmed_ts": time.time(),
+        }
+
+    def _cleanup_recent_raid_arrivals(self) -> None:
+        self._ensure_runtime_raid_tracking_state()
+        now = time.time()
+        expired = [
+            key
+            for key, payload in self._recent_raid_arrivals.items()
+            if now - float(payload.get("confirmed_ts") or 0.0) > _RECENT_RAID_ARRIVAL_TTL_SECONDS
+        ]
+        for key in expired:
+            self._recent_raid_arrivals.pop(key, None)
+
+    def _store_orphan_chat_raid_notification(self, payload: dict[str, Any]) -> None:
+        self._ensure_runtime_raid_tracking_state()
+        key = self._build_raid_arrival_cache_key(
+            to_broadcaster_id=str(payload.get("to_broadcaster_id") or "").strip(),
+            from_broadcaster_login=str(payload.get("from_broadcaster_login") or "").strip(),
+        )
+        payload_copy = dict(payload)
+        payload_copy["observed_ts"] = float(payload_copy.get("observed_ts") or time.time())
+        self._orphan_chat_raid_notifications[key] = payload_copy
+
+    def _pop_orphan_chat_raid_notification(
+        self,
+        *,
+        to_broadcaster_id: str,
+        from_broadcaster_login: str,
+    ) -> dict[str, Any] | None:
+        self._ensure_runtime_raid_tracking_state()
+        key = self._build_raid_arrival_cache_key(
+            to_broadcaster_id=to_broadcaster_id,
+            from_broadcaster_login=from_broadcaster_login,
+        )
+        return self._orphan_chat_raid_notifications.pop(key, None)
+
+    def _promote_stale_orphan_chat_raid_notifications(self) -> None:
+        self._ensure_runtime_raid_tracking_state()
+        now = time.time()
+        stale_payloads = [
+            payload
+            for payload in self._orphan_chat_raid_notifications.values()
+            if now - float(payload.get("observed_ts") or 0.0)
+            >= _PENDING_CHAT_NOTIFICATION_GRACE_SECONDS
+        ]
+        if not stale_payloads:
+            return
+        for payload in stale_payloads:
+            self._pop_orphan_chat_raid_notification(
+                to_broadcaster_id=str(payload.get("to_broadcaster_id") or ""),
+                from_broadcaster_login=str(payload.get("from_broadcaster_login") or ""),
+            )
+            self._process_independent_partner_raid_arrival(
+                to_broadcaster_id=str(payload.get("to_broadcaster_id") or ""),
+                to_broadcaster_login=str(payload.get("to_broadcaster_login") or ""),
+                from_broadcaster_login=str(payload.get("from_broadcaster_login") or ""),
+                from_broadcaster_id=str(payload.get("from_broadcaster_id") or "") or None,
+                viewer_count=int(payload.get("viewer_count") or 0),
+                signal_type="channel.chat.notification",
+                correlation_status="orphan_chat_notification",
+                correlation_detail="channel.chat.notification arrived before pending raid registration",
+            )
+
+    def _resolve_known_streamer_identity(
+        self,
+        *,
+        broadcaster_login: str,
+        broadcaster_id: str | None = None,
+    ) -> dict[str, str] | None:
+        login_key = self._normalize_broadcaster_login(broadcaster_login)
+        broadcaster_key = str(broadcaster_id or "").strip()
+        if not login_key and not broadcaster_key:
+            return None
+        try:
+            with get_conn() as conn:
+                row = load_streamer_identity(
+                    conn,
+                    twitch_user_id=broadcaster_key or None,
+                    twitch_login=login_key or None,
+                )
+        except Exception:
+            log.debug(
+                "Konnte Streamer-Identity nicht auflösen: %s/%s",
+                broadcaster_key,
+                login_key,
+                exc_info=True,
+            )
+            return None
+        if not row:
+            return None
+        return {
+            "twitch_user_id": str(row[0] if not hasattr(row, "keys") else row["twitch_user_id"] or "").strip(),
+            "twitch_login": self._normalize_broadcaster_login(
+                row[1] if not hasattr(row, "keys") else row["twitch_login"]
+            ),
+        }
+
+    def _is_partner_target_channel(
+        self,
+        *,
+        broadcaster_id: str,
+        broadcaster_login: str,
+    ) -> bool:
+        broadcaster_key = str(broadcaster_id or "").strip()
+        login_key = self._normalize_broadcaster_login(broadcaster_login)
+        try:
+            with get_conn() as conn:
+                row = load_active_partner(
+                    conn,
+                    twitch_user_id=broadcaster_key or None,
+                    twitch_login=login_key or None,
+                )
+            return bool(row)
+        except Exception:
+            log.debug(
+                "Partner target lookup failed for %s (%s)",
+                login_key,
+                broadcaster_key,
+                exc_info=True,
+            )
+            return False
+
+    def _classify_partner_raid_arrival(
+        self,
+        *,
+        from_broadcaster_login: str,
+        from_broadcaster_id: str | None,
+        to_broadcaster_id: str,
+        to_broadcaster_login: str,
+    ) -> tuple[str | None, str]:
+        if not self._is_partner_target_channel(
+            broadcaster_id=to_broadcaster_id,
+            broadcaster_login=to_broadcaster_login,
+        ):
+            return None, "non_partner_target"
+
+        known_source = self._resolve_known_streamer_identity(
+            broadcaster_login=from_broadcaster_login,
+            broadcaster_id=from_broadcaster_id,
+        )
+        if known_source:
+            if known_source.get("twitch_user_id"):
+                return "ours_to_partner", "known_streamer_id"
+            return "ours_to_partner", "known_streamer_login"
+
+        if not self._normalize_broadcaster_login(from_broadcaster_login) and not str(
+            from_broadcaster_id or ""
+        ).strip():
+            return "unknown_source_to_partner", "missing_source_identity"
+
+        return "external_to_partner", "unmatched_source"
+
+    def _load_recent_raid_history_reference(
+        self,
+        *,
+        from_broadcaster_login: str,
+        to_broadcaster_id: str,
+    ) -> tuple[int | None, str | None]:
+        try:
+            with get_conn() as conn:
+                row = conn.execute(
+                    """
+                    SELECT id, executed_at
+                    FROM twitch_raid_history
+                    WHERE LOWER(from_broadcaster_login) = ?
+                      AND to_broadcaster_id = ?
+                      AND COALESCE(success, FALSE) IS TRUE
+                    ORDER BY executed_at DESC
+                    LIMIT 1
+                    """,
+                    (
+                        self._normalize_broadcaster_login(from_broadcaster_login),
+                        str(to_broadcaster_id or "").strip(),
+                    ),
+                ).fetchone()
+        except Exception:
+            log.debug(
+                "Could not load raid history reference for %s -> %s",
+                from_broadcaster_login,
+                to_broadcaster_id,
+                exc_info=True,
+            )
+            return None, None
+        if not row:
+            return None, None
+        raid_history_id = int(row[0] if not hasattr(row, "keys") else row["id"])
+        executed_at = (
+            str(row[1] if not hasattr(row, "keys") else row["executed_at"] or "").strip() or None
+        )
+        return raid_history_id, executed_at
+
+    def _store_partner_raid_arrival(
+        self,
+        *,
+        from_broadcaster_id: str | None,
+        from_broadcaster_login: str,
+        to_broadcaster_id: str,
+        to_broadcaster_login: str,
+        viewer_count: int,
+        classification: str,
+        confirmation_signals: set[str],
+        primary_signal: str,
+        correlation_status: str,
+        correlation_detail: str | None = None,
+        source_resolution: str,
+        raid_history_id: int | None = None,
+        raid_history_executed_at: str | None = None,
+        unraid_seen: bool = False,
+    ) -> int | None:
+        confirmation_signal_text = self._serialize_confirmation_signals(confirmation_signals)
+        try:
+            with get_conn() as conn:
+                row = conn.execute(
+                    """
+                    INSERT INTO twitch_raid_arrival_tracking (
+                        from_broadcaster_id,
+                        from_broadcaster_login,
+                        to_broadcaster_id,
+                        to_broadcaster_login,
+                        viewer_count,
+                        classification,
+                        confirmation_signals,
+                        primary_signal,
+                        correlation_status,
+                        correlation_detail,
+                        source_resolution,
+                        raid_history_id,
+                        raid_history_executed_at,
+                        unraid_seen,
+                        last_unraid_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    RETURNING id
+                    """,
+                    (
+                        str(from_broadcaster_id or "").strip() or None,
+                        self._normalize_broadcaster_login(from_broadcaster_login),
+                        str(to_broadcaster_id or "").strip(),
+                        self._normalize_broadcaster_login(to_broadcaster_login),
+                        int(viewer_count or 0),
+                        str(classification or "").strip(),
+                        confirmation_signal_text,
+                        str(primary_signal or "").strip(),
+                        str(correlation_status or "").strip(),
+                        str(correlation_detail or "").strip() or None,
+                        str(source_resolution or "").strip(),
+                        raid_history_id,
+                        raid_history_executed_at,
+                        bool(unraid_seen),
+                        datetime.now(UTC).isoformat() if unraid_seen else None,
+                    ),
+                ).fetchone()
+            if not row:
+                return None
+            return int(row[0] if not hasattr(row, "keys") else row["id"])
+        except Exception:
+            log.exception(
+                "Failed to store partner raid arrival: %s -> %s (%s)",
+                from_broadcaster_login,
+                to_broadcaster_login,
+                correlation_status,
+            )
+            return None
+
+    def _update_partner_raid_arrival(
+        self,
+        *,
+        arrival_tracking_id: int,
+        confirmation_signals: set[str],
+        unraid_seen: bool = False,
+    ) -> None:
+        if not arrival_tracking_id:
+            return
+        try:
+            with get_conn() as conn:
+                conn.execute(
+                    """
+                    UPDATE twitch_raid_arrival_tracking
+                    SET confirmation_signals = ?,
+                        last_signal_at = CURRENT_TIMESTAMP,
+                        unraid_seen = CASE WHEN ? THEN TRUE ELSE unraid_seen END,
+                        last_unraid_at = CASE WHEN ? THEN ? ELSE last_unraid_at END
+                    WHERE id = ?
+                    """,
+                    (
+                        self._serialize_confirmation_signals(confirmation_signals),
+                        bool(unraid_seen),
+                        bool(unraid_seen),
+                        datetime.now(UTC).isoformat() if unraid_seen else None,
+                        int(arrival_tracking_id),
+                    ),
+                )
+        except Exception:
+            log.debug(
+                "Could not update partner raid arrival tracking row %s",
+                arrival_tracking_id,
+                exc_info=True,
+            )
+
+    def _process_independent_partner_raid_arrival(
+        self,
+        *,
+        to_broadcaster_id: str,
+        to_broadcaster_login: str,
+        from_broadcaster_login: str,
+        from_broadcaster_id: str | None,
+        viewer_count: int,
+        signal_type: str,
+        correlation_status: str,
+        correlation_detail: str | None = None,
+    ) -> bool:
+        classification, source_resolution = self._classify_partner_raid_arrival(
+            from_broadcaster_login=from_broadcaster_login,
+            from_broadcaster_id=from_broadcaster_id,
+            to_broadcaster_id=to_broadcaster_id,
+            to_broadcaster_login=to_broadcaster_login,
+        )
+        if classification is None:
+            return False
+
+        from_broadcaster_key = str(from_broadcaster_id or "").strip()
+        if not from_broadcaster_key:
+            from_broadcaster_key = self._resolve_streamer_id_by_login(from_broadcaster_login) or ""
+        if from_broadcaster_key:
+            self.mark_manual_raid_started(from_broadcaster_key, ttl_seconds=180.0)
+
+        arrival_tracking_id = self._store_partner_raid_arrival(
+            from_broadcaster_id=from_broadcaster_id,
+            from_broadcaster_login=from_broadcaster_login,
+            to_broadcaster_id=to_broadcaster_id,
+            to_broadcaster_login=to_broadcaster_login,
+            viewer_count=viewer_count,
+            classification=classification,
+            confirmation_signals={signal_type},
+            primary_signal=signal_type,
+            correlation_status=correlation_status,
+            correlation_detail=correlation_detail,
+            source_resolution=source_resolution,
+        )
+        self._remember_recent_raid_arrival(
+            to_broadcaster_id=to_broadcaster_id,
+            from_broadcaster_login=from_broadcaster_login,
+            from_broadcaster_id=from_broadcaster_id,
+            to_broadcaster_login=to_broadcaster_login,
+            viewer_count=viewer_count,
+            classification=classification,
+            confirmation_signals={signal_type},
+            arrival_tracking_id=arrival_tracking_id,
+        )
+        log.info(
+            "Partner raid arrival classified: %s -> %s (%s via %s)",
+            from_broadcaster_login,
+            to_broadcaster_login,
+            classification,
+            signal_type,
+        )
+        return True
 
     async def _resolve_bot_oauth_context(self) -> tuple[str | None, str | None, set[str]]:
         """Resolve bot OAuth token + bot id + scopes (best-effort).
@@ -1164,20 +1727,33 @@ class RaidBot:
         stale = [
             to_id
             for to_id, pending in self._pending_raids.items()
-            if now - (pending[2] if len(pending) > 2 else 0) > timeout
+            if now
+            - float(
+                (
+                    self._coerce_pending_raid_record(pending, to_broadcaster_id=to_id) or {}
+                ).get("registered_ts")
+                or 0.0
+            )
+            > timeout
         ]
         for to_id in stale:
-            pending = self._pending_raids.pop(to_id)
-            from_login = pending[0] if len(pending) > 0 else "<unknown>"
-            registered_ts = pending[2] if len(pending) > 2 else 0.0
-            offline_ts = pending[5] if len(pending) > 5 else None
+            pending = self._coerce_pending_raid_record(
+                self._pending_raids.pop(to_id),
+                to_broadcaster_id=to_id,
+            )
+            if pending is None:
+                continue
+            from_login = str(pending.get("from_broadcaster_login") or "<unknown>")
+            registered_ts = float(pending.get("registered_ts") or 0.0)
+            offline_ts = pending.get("offline_trigger_ts")
             age = now - registered_ts
             offline_pending_s = (time.monotonic() - offline_ts) if offline_ts else -1.0
             log.warning(
-                "Pending raid timed out after %.0fs: %s -> (ID: %s). EventSub event never arrived. offline->pending=%.0fs",
+                "Pending raid timed out after %.0fs: %s -> (ID: %s). %s offline->pending=%.0fs",
                 age,
                 from_login,
                 to_id,
+                self._build_pending_timeout_detail(pending),
                 offline_pending_s,
             )
 
@@ -1192,20 +1768,23 @@ class RaidBot:
             return
 
         current_target_key = str(current_target_id or "").strip()
-        superseded: list[tuple[str, tuple[str, dict | None, float, bool, int, float | None]]] = []
+        superseded: list[tuple[str, dict[str, Any]]] = []
         for to_id, pending in list(self._pending_raids.items()):
             if str(to_id) == current_target_key:
                 continue
-            pending_from = str(pending[0] if len(pending) > 0 else "").strip().lower()
+            pending_record = self._coerce_pending_raid_record(pending, to_broadcaster_id=to_id)
+            if pending_record is None:
+                continue
+            pending_from = str(pending_record.get("from_broadcaster_login") or "").strip().lower()
             if pending_from != normalized_from:
                 continue
-            superseded.append((str(to_id), pending))
+            superseded.append((str(to_id), pending_record))
 
-        for to_id, pending in superseded:
+        for to_id, pending_record in superseded:
             removed = self._pending_raids.pop(to_id, None)
             if removed is None:
                 continue
-            target_stream_data = pending[1] if len(pending) > 1 else None
+            target_stream_data = pending_record.get("target_stream_data")
             old_target_login = ""
             if isinstance(target_stream_data, dict):
                 old_target_login = str(target_stream_data.get("user_login") or "").strip().lower()
@@ -1278,6 +1857,7 @@ class RaidBot:
         is_partner_raid: bool = False,
         viewer_count: int = 0,
         offline_trigger_ts: float | None = None,
+        channel_raid_ready: bool | None = None,
     ):
         """
         Registriert einen Raid, der auf EventSub Bestätigung wartet.
@@ -1293,28 +1873,35 @@ class RaidBot:
             is_partner_raid: True wenn es ein Partner-Raid ist (für Partner-Message)
             viewer_count: Viewer-Count beim Raid-Start (für Partner-Message)
         """
-        registered_ts = time.time()
+        chat_notification_state, chat_notification_detail = (
+            self._snapshot_chat_notification_subscription(to_broadcaster_login)
+        )
         self._clear_superseded_pending_raids(
             from_broadcaster_login=from_broadcaster_login,
             current_target_id=to_broadcaster_id,
         )
-        self._pending_raids[to_broadcaster_id] = (
-            from_broadcaster_login,
-            target_stream_data,
-            registered_ts,
-            is_partner_raid,
-            viewer_count,
-            offline_trigger_ts,
+        pending_record = self._build_pending_raid_record(
+            from_broadcaster_login=from_broadcaster_login,
+            to_broadcaster_id=to_broadcaster_id,
+            target_stream_data=target_stream_data,
+            is_partner_raid=is_partner_raid,
+            viewer_count=viewer_count,
+            offline_trigger_ts=offline_trigger_ts,
+            channel_raid_ready=channel_raid_ready,
+            chat_notification_state=chat_notification_state,
+            chat_notification_detail=chat_notification_detail,
         )
+        self._pending_raids[to_broadcaster_id] = pending_record
         offline_to_pending_ms = (
             (time.monotonic() - offline_trigger_ts) * 1000 if offline_trigger_ts else None
         )
         log.info(
-            "Pending raid registered: %s -> %s (ID: %s). Creating EventSub subscription... offline->pending=%s",
+            "Pending raid registered: %s -> %s (ID: %s). Creating EventSub subscription... offline->pending=%s, chat_notification=%s",
             from_broadcaster_login,
             to_broadcaster_login,
             to_broadcaster_id,
             f"{offline_to_pending_ms:.0f}ms" if offline_to_pending_ms is not None else "n/a",
+            chat_notification_state or "unknown",
         )
 
         if self._cog and hasattr(self._cog, "_eventsub_has_sub"):
@@ -1359,6 +1946,256 @@ class RaidBot:
                 to_broadcaster_login,
             )
 
+        orphan_notification = self._pop_orphan_chat_raid_notification(
+            to_broadcaster_id=to_broadcaster_id,
+            from_broadcaster_login=from_broadcaster_login,
+        )
+        if orphan_notification:
+            log.info(
+                "Pending raid %s -> %s matched earlier channel.chat.notification raid signal.",
+                from_broadcaster_login,
+                to_broadcaster_login,
+            )
+            await self.on_chat_raid_notification(
+                to_broadcaster_id=str(orphan_notification.get("to_broadcaster_id") or to_broadcaster_id),
+                to_broadcaster_login=str(
+                    orphan_notification.get("to_broadcaster_login") or to_broadcaster_login
+                ),
+                from_broadcaster_login=str(
+                    orphan_notification.get("from_broadcaster_login") or from_broadcaster_login
+                ),
+                viewer_count=int(orphan_notification.get("viewer_count") or viewer_count),
+                from_broadcaster_id=str(orphan_notification.get("from_broadcaster_id") or "") or None,
+                message_id=str(orphan_notification.get("message_id") or "") or None,
+                event_timestamp=str(orphan_notification.get("event_timestamp") or "") or None,
+            )
+
+    def _build_pending_timeout_detail(self, pending_record: dict[str, Any]) -> str:
+        observations = pending_record.get("signal_observations")
+        observation_parts: list[str] = []
+        if isinstance(observations, dict):
+            for signal_type in ("channel.raid", "channel.chat.notification"):
+                observation = observations.get(signal_type)
+                if not isinstance(observation, dict):
+                    continue
+                status = str(observation.get("status") or "").strip()
+                reason = str(observation.get("reason") or "").strip()
+                detail = str(observation.get("detail") or "").strip()
+                text = f"{signal_type}:{status}" if status else signal_type
+                if reason:
+                    text += f" ({reason})"
+                if detail:
+                    text += f" [{detail}]"
+                observation_parts.append(text)
+
+        if not observation_parts:
+            channel_raid_ready = pending_record.get("channel_raid_ready")
+            channel_raid_detail = (
+                "ready" if channel_raid_ready is not False else "subscription_not_ready"
+            )
+            chat_state = str(pending_record.get("chat_notification_state") or "").strip()
+            chat_detail = str(pending_record.get("chat_notification_detail") or "").strip()
+            if not chat_state:
+                chat_state = "missing"
+            chat_text = f"channel.chat.notification:{chat_state}"
+            if chat_detail:
+                chat_text += f" [{chat_detail}]"
+            observation_parts.extend(
+                [
+                    f"channel.raid:{channel_raid_detail}",
+                    chat_text,
+                ]
+            )
+
+        return "Timeout detail: " + "; ".join(observation_parts)
+
+    def _lookup_silent_raid_enabled(self, broadcaster_login: str) -> bool:
+        try:
+            with get_conn() as conn:
+                partner_row = load_active_partner(
+                    conn,
+                    twitch_login=self._normalize_broadcaster_login(broadcaster_login),
+                )
+                return bool(
+                    int(
+                        (
+                            partner_row["silent_raid"]
+                            if partner_row and hasattr(partner_row, "keys")
+                            else (partner_row[15] if partner_row else 0)
+                        )
+                        or 0
+                    )
+                )
+        except Exception:
+            log.debug(
+                "Raid arrival: silent_raid lookup failed for %s",
+                broadcaster_login,
+                exc_info=True,
+            )
+            return False
+
+    def _handle_secondary_confirmed_signal(
+        self,
+        *,
+        signal_type: str,
+        to_broadcaster_id: str,
+        to_broadcaster_login: str,
+        from_broadcaster_login: str,
+        viewer_count: int,
+        unraid_seen: bool = False,
+    ) -> bool:
+        recent_arrival = self._lookup_recent_raid_arrival(
+            to_broadcaster_id=to_broadcaster_id,
+            from_broadcaster_login=from_broadcaster_login,
+        )
+        if not recent_arrival:
+            return False
+
+        confirmation_signals = set(recent_arrival.get("confirmation_signals") or set())
+        confirmation_signals.add(signal_type)
+        recent_arrival["confirmation_signals"] = confirmation_signals
+        recent_arrival["confirmed_ts"] = time.time()
+        recent_arrival["viewer_count"] = max(
+            int(recent_arrival.get("viewer_count") or 0),
+            int(viewer_count or 0),
+        )
+        arrival_tracking_id = int(recent_arrival.get("arrival_tracking_id") or 0) or None
+        if arrival_tracking_id is not None:
+            self._update_partner_raid_arrival(
+                arrival_tracking_id=arrival_tracking_id,
+                confirmation_signals=confirmation_signals,
+                unraid_seen=unraid_seen,
+            )
+
+        log.info(
+            "Raid arrival secondary signal recorded: %s -> %s via %s (signals=%s)",
+            from_broadcaster_login,
+            to_broadcaster_login,
+            signal_type,
+            self._serialize_confirmation_signals(confirmation_signals),
+        )
+        return True
+
+    async def _confirm_pending_raid_arrival(
+        self,
+        *,
+        signal_type: str,
+        to_broadcaster_id: str,
+        to_broadcaster_login: str,
+        from_broadcaster_login: str,
+        viewer_count: int,
+        from_broadcaster_id: str | None = None,
+    ) -> None:
+        pending = self._coerce_pending_raid_record(
+            self._pending_raids.pop(to_broadcaster_id, None),
+            to_broadcaster_id=to_broadcaster_id,
+        )
+        if pending is None:
+            return
+
+        target_stream_data = pending.get("target_stream_data")
+        registered_ts = float(pending.get("registered_ts") or time.time())
+        is_partner_raid = bool(pending.get("is_partner_raid"))
+        registered_viewer_count = int(pending.get("registered_viewer_count") or viewer_count)
+        offline_trigger_ts = pending.get("offline_trigger_ts")
+        effective_viewer_count = int(viewer_count or registered_viewer_count or 0)
+
+        classification, source_resolution = self._classify_partner_raid_arrival(
+            from_broadcaster_login=from_broadcaster_login,
+            from_broadcaster_id=from_broadcaster_id,
+            to_broadcaster_id=to_broadcaster_id,
+            to_broadcaster_login=to_broadcaster_login,
+        )
+        raid_history_id = None
+        raid_history_executed_at = None
+        if is_partner_raid:
+            raid_history_id, raid_history_executed_at = self._load_recent_raid_history_reference(
+                from_broadcaster_login=from_broadcaster_login,
+                to_broadcaster_id=to_broadcaster_id,
+            )
+
+        log.info(
+            "Raid arrival confirmed via %s: %s -> %s (%d viewers, partner_raid=%s, classification=%s, api->arrival=%.0fs, offline->arrival=%.0fs)",
+            signal_type,
+            from_broadcaster_login,
+            to_broadcaster_login,
+            effective_viewer_count,
+            is_partner_raid,
+            classification or "non_partner_target",
+            time.time() - registered_ts,
+            (time.monotonic() - offline_trigger_ts) if offline_trigger_ts else -1.0,
+        )
+
+        arrival_tracking_id = None
+        if classification is not None:
+            arrival_tracking_id = self._store_partner_raid_arrival(
+                from_broadcaster_id=from_broadcaster_id,
+                from_broadcaster_login=from_broadcaster_login,
+                to_broadcaster_id=to_broadcaster_id,
+                to_broadcaster_login=to_broadcaster_login,
+                viewer_count=effective_viewer_count,
+                classification=classification,
+                confirmation_signals={signal_type},
+                primary_signal=signal_type,
+                correlation_status="matched_pending",
+                correlation_detail=None,
+                source_resolution=source_resolution,
+                raid_history_id=raid_history_id,
+                raid_history_executed_at=raid_history_executed_at,
+            )
+
+        self._remember_recent_raid_arrival(
+            to_broadcaster_id=to_broadcaster_id,
+            from_broadcaster_login=from_broadcaster_login,
+            from_broadcaster_id=from_broadcaster_id,
+            to_broadcaster_login=to_broadcaster_login,
+            viewer_count=effective_viewer_count,
+            classification=classification,
+            confirmation_signals={signal_type},
+            arrival_tracking_id=arrival_tracking_id,
+        )
+
+        if is_partner_raid:
+            await self._refresh_partner_score_cache_if_available(
+                to_broadcaster_id,
+                reason="incoming_partner_raid_confirmed",
+            )
+            if callable(track_confirmed_partner_raid):
+                track_confirmed_partner_raid(
+                    to_broadcaster_id=to_broadcaster_id,
+                    to_broadcaster_login=to_broadcaster_login,
+                    from_broadcaster_login=from_broadcaster_login,
+                    from_broadcaster_id=from_broadcaster_id,
+                    viewer_count=effective_viewer_count,
+                    score_snapshot=(
+                        target_stream_data.get("_partner_score")
+                        if isinstance(target_stream_data, dict)
+                        else None
+                    ),
+                )
+
+        if self._lookup_silent_raid_enabled(to_broadcaster_login):
+            log.info(
+                "Raid message suppressed (silent_raid): %s -> %s",
+                from_broadcaster_login,
+                to_broadcaster_login,
+            )
+            return
+
+        if is_partner_raid:
+            await self._send_partner_raid_message(
+                from_broadcaster_login=from_broadcaster_login,
+                to_broadcaster_login=to_broadcaster_login,
+                to_broadcaster_id=to_broadcaster_id,
+                viewer_count=effective_viewer_count,
+            )
+        else:
+            await self._send_recruitment_message_now(
+                from_broadcaster_login=from_broadcaster_login,
+                to_broadcaster_login=to_broadcaster_login,
+                target_stream_data=target_stream_data,
+            )
+
     async def on_raid_arrival(
         self,
         to_broadcaster_id: str,
@@ -1374,119 +2211,213 @@ class RaidBot:
         - Partner-Message (bei Partner-Raids)
         - Recruitment-Message (bei Non-Partner-Raids)
         """
-        pending = self._pending_raids.pop(to_broadcaster_id, None)
+        normalized_from_login = self._normalize_broadcaster_login(from_broadcaster_login)
+        pending = self._coerce_pending_raid_record(
+            self._pending_raids.get(to_broadcaster_id),
+            to_broadcaster_id=to_broadcaster_id,
+        )
+
+        if self._handle_secondary_confirmed_signal(
+            signal_type="channel.raid",
+            to_broadcaster_id=to_broadcaster_id,
+            to_broadcaster_login=to_broadcaster_login,
+            from_broadcaster_login=normalized_from_login,
+            viewer_count=viewer_count,
+        ):
+            return
+
         if not pending:
+            if self._process_independent_partner_raid_arrival(
+                to_broadcaster_id=to_broadcaster_id,
+                to_broadcaster_login=to_broadcaster_login,
+                from_broadcaster_login=normalized_from_login,
+                from_broadcaster_id=from_broadcaster_id,
+                viewer_count=viewer_count,
+                signal_type="channel.raid",
+                correlation_status="independent_channel_raid",
+                correlation_detail=None,
+            ):
+                return
             from_broadcaster_key = str(from_broadcaster_id or "").strip()
             if not from_broadcaster_key:
-                from_broadcaster_key = (
-                    self._resolve_streamer_id_by_login(from_broadcaster_login) or ""
-                )
+                from_broadcaster_key = self._resolve_streamer_id_by_login(normalized_from_login) or ""
             if from_broadcaster_key:
                 self.mark_manual_raid_started(from_broadcaster_key, ttl_seconds=180.0)
                 log.info(
                     "External/manual raid detected via EventSub: %s -> %s. "
                     "Suppressing next offline auto-raid for broadcaster_id=%s (ttl=180s/3min)",
-                    from_broadcaster_login,
+                    normalized_from_login,
                     to_broadcaster_login,
                     from_broadcaster_key,
                 )
             log.debug(
                 "Raid arrival ignored (not pending): %s -> %s",
-                from_broadcaster_login,
+                normalized_from_login,
                 to_broadcaster_login,
             )
             return
 
-        expected_from = pending[0] if len(pending) > 0 else from_broadcaster_login
-        target_stream_data = pending[1] if len(pending) > 1 else None
-        registered_ts = pending[2] if len(pending) > 2 else time.time()
-        is_partner_raid = pending[3] if len(pending) > 3 else False
-        registered_viewer_count = pending[4] if len(pending) > 4 else viewer_count
-        offline_trigger_ts = pending[5] if len(pending) > 5 else None
-
-        # Verify it's the same raid we started
-        if expected_from.lower() != from_broadcaster_login.lower():
+        expected_from = str(pending.get("from_broadcaster_login") or normalized_from_login)
+        if expected_from != normalized_from_login:
+            self._record_pending_signal_observation(
+                pending,
+                signal_type="channel.raid",
+                status="ignored",
+                reason="source_target_mismatch",
+                detail=f"expected={expected_from} actual={normalized_from_login}",
+            )
+            self._pending_raids[to_broadcaster_id] = pending
             log.warning(
                 "Raid arrival mismatch: expected from %s, got from %s",
                 expected_from,
-                from_broadcaster_login,
+                normalized_from_login,
+            )
+            return
+
+        self._record_pending_signal_observation(
+            pending,
+            signal_type="channel.raid",
+            status="matched_pending",
+        )
+        self._pending_raids[to_broadcaster_id] = pending
+        await self._confirm_pending_raid_arrival(
+            signal_type="channel.raid",
+            to_broadcaster_id=to_broadcaster_id,
+            to_broadcaster_login=to_broadcaster_login,
+            from_broadcaster_login=normalized_from_login,
+            viewer_count=viewer_count,
+            from_broadcaster_id=from_broadcaster_id,
+        )
+
+    async def on_chat_raid_notification(
+        self,
+        *,
+        to_broadcaster_id: str,
+        to_broadcaster_login: str,
+        from_broadcaster_login: str,
+        viewer_count: int,
+        from_broadcaster_id: str | None = None,
+        message_id: str | None = None,
+        event_timestamp: str | None = None,
+    ) -> None:
+        normalized_from_login = self._normalize_broadcaster_login(from_broadcaster_login)
+        pending = self._coerce_pending_raid_record(
+            self._pending_raids.get(to_broadcaster_id),
+            to_broadcaster_id=to_broadcaster_id,
+        )
+
+        if self._handle_secondary_confirmed_signal(
+            signal_type="channel.chat.notification",
+            to_broadcaster_id=to_broadcaster_id,
+            to_broadcaster_login=to_broadcaster_login,
+            from_broadcaster_login=normalized_from_login,
+            viewer_count=viewer_count,
+        ):
+            return
+
+        if not pending:
+            self._store_orphan_chat_raid_notification(
+                {
+                    "to_broadcaster_id": str(to_broadcaster_id or "").strip(),
+                    "to_broadcaster_login": self._normalize_broadcaster_login(
+                        to_broadcaster_login
+                    ),
+                    "from_broadcaster_id": str(from_broadcaster_id or "").strip() or None,
+                    "from_broadcaster_login": normalized_from_login,
+                    "viewer_count": int(viewer_count or 0),
+                    "message_id": str(message_id or "").strip() or None,
+                    "event_timestamp": str(event_timestamp or "").strip() or None,
+                    "observed_ts": time.time(),
+                }
+            )
+            log.info(
+                "Orphan channel.chat.notification raid observed: %s -> %s (viewer_count=%d, grace=%.0fs, message_id=%s)",
+                normalized_from_login,
+                to_broadcaster_login,
+                viewer_count,
+                _PENDING_CHAT_NOTIFICATION_GRACE_SECONDS,
+                message_id or "n/a",
+            )
+            return
+
+        expected_from = str(pending.get("from_broadcaster_login") or normalized_from_login)
+        if expected_from != normalized_from_login:
+            self._record_pending_signal_observation(
+                pending,
+                signal_type="channel.chat.notification",
+                status="ignored",
+                reason="source_target_mismatch",
+                detail=f"expected={expected_from} actual={normalized_from_login}",
+            )
+            self._pending_raids[to_broadcaster_id] = pending
+            log.warning(
+                "Raid chat notification mismatch: expected from %s, got from %s",
+                expected_from,
+                normalized_from_login,
+            )
+            return
+
+        self._record_pending_signal_observation(
+            pending,
+            signal_type="channel.chat.notification",
+            status="matched_pending",
+            detail=str(message_id or "").strip() or None,
+        )
+        self._pending_raids[to_broadcaster_id] = pending
+        await self._confirm_pending_raid_arrival(
+            signal_type="channel.chat.notification",
+            to_broadcaster_id=to_broadcaster_id,
+            to_broadcaster_login=to_broadcaster_login,
+            from_broadcaster_login=normalized_from_login,
+            viewer_count=viewer_count,
+            from_broadcaster_id=from_broadcaster_id,
+        )
+
+    async def on_chat_unraid_notification(
+        self,
+        *,
+        to_broadcaster_id: str,
+        to_broadcaster_login: str,
+        from_broadcaster_login: str,
+        from_broadcaster_id: str | None = None,
+        event_timestamp: str | None = None,
+    ) -> None:
+        normalized_from_login = self._normalize_broadcaster_login(from_broadcaster_login)
+        pending = self._coerce_pending_raid_record(
+            self._pending_raids.get(to_broadcaster_id),
+            to_broadcaster_id=to_broadcaster_id,
+        )
+        if pending is not None:
+            self._record_pending_signal_observation(
+                pending,
+                signal_type="channel.chat.notification.unraid",
+                status="diagnostic_only",
+                reason="unraid_does_not_confirm",
+                detail=str(event_timestamp or "").strip() or None,
+            )
+            self._pending_raids[to_broadcaster_id] = pending
+
+        secondary_handled = self._handle_secondary_confirmed_signal(
+            signal_type="channel.chat.notification.unraid",
+            to_broadcaster_id=to_broadcaster_id,
+            to_broadcaster_login=to_broadcaster_login,
+            from_broadcaster_login=normalized_from_login,
+            viewer_count=0,
+            unraid_seen=True,
+        )
+        if secondary_handled:
+            log.info(
+                "channel.chat.notification unraid observed after confirmed raid: %s -> %s",
+                normalized_from_login,
+                to_broadcaster_login,
             )
             return
 
         log.info(
-            "✅ Raid arrival confirmed: %s -> %s (%d viewers, partner_raid=%s, api->arrival=%.0fs, offline->arrival=%.0fs)",
-            from_broadcaster_login,
+            "channel.chat.notification unraid observed without confirmed raid correlation: %s -> %s",
+            normalized_from_login,
             to_broadcaster_login,
-            viewer_count,
-            is_partner_raid,
-            time.time() - registered_ts,
-            (time.monotonic() - offline_trigger_ts) if offline_trigger_ts else -1.0,
         )
-
-        if is_partner_raid:
-            await self._refresh_partner_score_cache_if_available(
-                to_broadcaster_id,
-                reason="incoming_partner_raid_confirmed",
-            )
-            if callable(track_confirmed_partner_raid):
-                track_confirmed_partner_raid(
-                    to_broadcaster_id=to_broadcaster_id,
-                    to_broadcaster_login=to_broadcaster_login,
-                    from_broadcaster_login=from_broadcaster_login,
-                    from_broadcaster_id=from_broadcaster_id,
-                    viewer_count=viewer_count,
-                    score_snapshot=(
-                        target_stream_data.get("_partner_score")
-                        if isinstance(target_stream_data, dict)
-                        else None
-                    ),
-                )
-
-        # silent_raid Check: Streamer kann Raid-Nachrichten im Chat unterdrücken
-        silent_raid = False
-        try:
-            with get_conn() as conn:
-                _sr_row = load_active_partner(conn, twitch_login=to_broadcaster_login.lower())
-                silent_raid = bool(
-                    int(
-                        (
-                            _sr_row["silent_raid"]
-                            if _sr_row and hasattr(_sr_row, "keys")
-                            else (_sr_row[15] if _sr_row else 0)
-                        )
-                        or 0
-                    )
-                )
-        except Exception:
-            log.debug(
-                "Raid arrival: silent_raid lookup failed for %s",
-                to_broadcaster_login,
-                exc_info=True,
-            )
-
-        if silent_raid:
-            log.info(
-                "Raid message suppressed (silent_raid): %s -> %s",
-                from_broadcaster_login,
-                to_broadcaster_login,
-            )
-            return
-
-        # Partner-Raid: Sende Partner-Message
-        if is_partner_raid:
-            await self._send_partner_raid_message(
-                from_broadcaster_login=from_broadcaster_login,
-                to_broadcaster_login=to_broadcaster_login,
-                to_broadcaster_id=to_broadcaster_id,
-                viewer_count=viewer_count,
-            )
-        # Non-Partner-Raid: Sende Recruitment-Message
-        else:
-            await self._send_recruitment_message_now(
-                from_broadcaster_login=from_broadcaster_login,
-                to_broadcaster_login=to_broadcaster_login,
-                target_stream_data=target_stream_data,
-            )
 
     async def _send_partner_raid_message(
         self,
@@ -2531,7 +3462,7 @@ class RaidBot:
                 reason,
             )
 
-            await self._ensure_raid_arrival_subscription_ready(
+            channel_raid_ready = await self._ensure_raid_arrival_subscription_ready(
                 to_broadcaster_id=target_id,
                 to_broadcaster_login=target_login,
             )
@@ -2561,6 +3492,7 @@ class RaidBot:
                     is_partner_raid=is_partner_raid,
                     viewer_count=viewer_count,
                     offline_trigger_ts=offline_trigger_ts,
+                    channel_raid_ready=channel_raid_ready,
                 )
                 if set_manual_suppression:
                     self.mark_manual_raid_started(

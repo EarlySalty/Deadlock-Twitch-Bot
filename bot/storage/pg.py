@@ -2717,6 +2717,42 @@ def ensure_schema(conn) -> None:
         "CREATE INDEX IF NOT EXISTS idx_partner_raid_tracking_history_ref "
         "ON twitch_partner_raid_score_tracking(raid_history_id, raid_history_executed_at)"
     )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS twitch_raid_arrival_tracking (
+            id                        SERIAL PRIMARY KEY,
+            detected_at               TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            last_signal_at            TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            from_broadcaster_id       TEXT,
+            from_broadcaster_login    TEXT NOT NULL,
+            to_broadcaster_id         TEXT NOT NULL,
+            to_broadcaster_login      TEXT NOT NULL,
+            viewer_count              INTEGER NOT NULL DEFAULT 0,
+            classification            TEXT NOT NULL,
+            confirmation_signals      TEXT NOT NULL DEFAULT '',
+            primary_signal            TEXT,
+            correlation_status        TEXT,
+            correlation_detail        TEXT,
+            source_resolution         TEXT,
+            raid_history_id           BIGINT,
+            raid_history_executed_at  TIMESTAMPTZ,
+            unraid_seen               BOOLEAN NOT NULL DEFAULT FALSE,
+            last_unraid_at            TIMESTAMPTZ
+        )
+        """
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_twitch_raid_arrival_tracking_target "
+        "ON twitch_raid_arrival_tracking(to_broadcaster_id, detected_at DESC)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_twitch_raid_arrival_tracking_source "
+        "ON twitch_raid_arrival_tracking(from_broadcaster_login, detected_at DESC)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_twitch_raid_arrival_tracking_history_ref "
+        "ON twitch_raid_arrival_tracking(raid_history_id, raid_history_executed_at)"
+    )
     _repair_raid_identity_schema()
 
     # 20) Web-Sessions (migrated from SQLite)

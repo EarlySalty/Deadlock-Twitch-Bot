@@ -1,0 +1,303 @@
+from __future__ import annotations
+
+import contextlib
+import sqlite3
+import time
+import unittest
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, patch
+
+from bot.chat.connection import ConnectionMixin
+from bot.raid.bot import RaidBot
+from tests.sqlite_twitch_schema import ensure_sqlite_twitch_schema
+
+
+class _JoinHarness(ConnectionMixin):
+    def __init__(self, *, bot_scopes: set[str] | None = None) -> None:
+        self._client_id = "client-id"
+        self._bot_token = "oauth:test-token"
+        self._bot_refresh_token = "refresh-token"
+        self._token_manager = SimpleNamespace(scopes=set(bot_scopes or set()))
+        self.bot_id_safe = "9999"
+        self.bot_id = "9999"
+        self._monitored_streamers: set[str] = {"targetlogin"}
+        self._channel_subscription_types: dict[str, set[str]] = {
+            "targetlogin": {"channel.chat.message"}
+        }
+        self._channel_subscription_state: dict[str, dict[str, dict[str, str]]] = {}
+        self._channel_ids: dict[str, str] = {"targetlogin": "9009"}
+        self._mod_retry_cooldown: dict[str, object] = {}
+        self._monitored_only_channels: set[str] = set()
+        self.subscribe_calls: list[str] = []
+
+    async def fetch_user(self, login: str):
+        return SimpleNamespace(id="9009")
+
+    async def _ensure_bot_token_registered(self) -> None:
+        return None
+
+    async def subscribe_websocket(self, payload) -> None:
+        self.subscribe_calls.append(type(payload).__name__)
+
+    def _is_monitored_only(self, channel_name: str) -> bool:
+        return False
+
+
+class _JoinFailureHarness(_JoinHarness):
+    async def subscribe_websocket(self, payload) -> None:
+        raise Exception("403 subscription missing proper authorization")
+
+
+class ChatJoinNotificationSubscriptionTests(unittest.IsolatedAsyncioTestCase):
+    async def test_join_subscribes_missing_chat_notification_subscription(self) -> None:
+        harness = _JoinHarness(bot_scopes={"user:read:chat"})
+
+        result = await harness.join("targetlogin", channel_id="9009")
+
+        self.assertTrue(result)
+        self.assertEqual(harness.subscribe_calls, ["ChatNotificationSubscription"])
+        self.assertTrue(
+            harness.is_channel_subscription_ready("targetlogin", "channel.chat.notification")
+        )
+
+    async def test_join_records_missing_broadcaster_scope(self) -> None:
+        conn = sqlite3.connect(":memory:")
+        conn.row_factory = sqlite3.Row
+        ensure_sqlite_twitch_schema(conn)
+        conn.execute(
+            """
+            INSERT INTO twitch_raid_auth (twitch_user_id, twitch_login, scopes)
+            VALUES (?, ?, ?)
+            """,
+            ("9009", "targetlogin", "channel:manage:raids"),
+        )
+        conn.commit()
+
+        harness = _JoinFailureHarness(bot_scopes={"user:read:chat"})
+        try:
+            with patch(
+                "bot.chat.connection.get_conn",
+                side_effect=lambda: contextlib.nullcontext(conn),
+            ):
+                result = await harness.join("targetlogin", channel_id="9009")
+        finally:
+            conn.close()
+
+        self.assertFalse(result)
+        state = harness.get_channel_subscription_state("targetlogin")
+        self.assertEqual(
+            state["channel.chat.notification"]["state"],
+            "missing_broadcaster_scope",
+        )
+        self.assertIn("channel:bot", state["channel.chat.notification"]["detail"])
+
+    async def test_join_records_missing_bot_scope(self) -> None:
+        conn = sqlite3.connect(":memory:")
+        conn.row_factory = sqlite3.Row
+        ensure_sqlite_twitch_schema(conn)
+        conn.execute(
+            """
+            INSERT INTO twitch_raid_auth (twitch_user_id, twitch_login, scopes)
+            VALUES (?, ?, ?)
+            """,
+            ("9009", "targetlogin", "channel:bot"),
+        )
+        conn.commit()
+
+        harness = _JoinFailureHarness(bot_scopes={"user:write:chat"})
+        try:
+            with patch(
+                "bot.chat.connection.get_conn",
+                side_effect=lambda: contextlib.nullcontext(conn),
+            ):
+                result = await harness.join("targetlogin", channel_id="9009")
+        finally:
+            conn.close()
+
+        self.assertFalse(result)
+        state = harness.get_channel_subscription_state("targetlogin")
+        self.assertEqual(
+            state["channel.chat.notification"]["state"],
+            "missing_bot_scope",
+        )
+        self.assertIn("user:read:chat", state["channel.chat.notification"]["detail"])
+
+
+class ChatNotificationRaidCorrelationTests(unittest.IsolatedAsyncioTestCase):
+    def setUp(self) -> None:
+        self.conn = sqlite3.connect(":memory:")
+        self.conn.row_factory = sqlite3.Row
+        ensure_sqlite_twitch_schema(self.conn)
+
+    def tearDown(self) -> None:
+        self.conn.close()
+
+    def _insert_partner(self, login: str, user_id: str, *, silent_raid: int = 0) -> None:
+        self.conn.execute(
+            """
+            INSERT INTO twitch_streamer_identities (twitch_user_id, twitch_login)
+            VALUES (?, ?)
+            """,
+            (user_id, login),
+        )
+        self.conn.execute(
+            """
+            INSERT INTO twitch_partners (
+                twitch_user_id,
+                twitch_login,
+                raid_bot_enabled,
+                silent_raid,
+                manual_verified_at,
+                status
+            ) VALUES (?, ?, 1, ?, CURRENT_TIMESTAMP, 'active')
+            """,
+            (user_id, login, silent_raid),
+        )
+        self.conn.commit()
+
+    def _insert_streamer_identity(self, login: str, user_id: str) -> None:
+        self.conn.execute(
+            """
+            INSERT INTO twitch_streamer_identities (twitch_user_id, twitch_login)
+            VALUES (?, ?)
+            """,
+            (user_id, login),
+        )
+        self.conn.commit()
+
+    def _build_raid_bot(self) -> RaidBot:
+        raid_bot = RaidBot.__new__(RaidBot)
+        raid_bot._pending_raids = {}
+        raid_bot._recent_raid_arrivals = {}
+        raid_bot._orphan_chat_raid_notifications = {}
+        raid_bot._manual_raid_suppression = {}
+        raid_bot._user_scope_fallback_warned = set()
+        raid_bot.chat_bot = None
+        raid_bot._bot_id = None
+        raid_bot._cog = None
+        raid_bot._session = None
+        raid_bot._refresh_partner_score_cache_if_available = AsyncMock()
+        raid_bot._send_partner_raid_message = AsyncMock()
+        raid_bot._send_recruitment_message_now = AsyncMock()
+        return raid_bot
+
+    async def test_chat_notification_confirms_pending_raid_and_second_signal_is_telemetry(self) -> None:
+        self._insert_partner("targetlogin", "9009")
+        self._insert_streamer_identity("source_login", "1001")
+        raid_bot = self._build_raid_bot()
+        raid_bot._pending_raids["9009"] = raid_bot._build_pending_raid_record(
+            from_broadcaster_login="source_login",
+            to_broadcaster_id="9009",
+            target_stream_data={"_partner_score": {"final_score": 1.15}},
+            is_partner_raid=True,
+            viewer_count=42,
+            offline_trigger_ts=None,
+            channel_raid_ready=True,
+            chat_notification_state="subscribed",
+            chat_notification_detail=None,
+        )
+
+        with (
+            patch(
+                "bot.raid.bot.get_conn",
+                side_effect=lambda: contextlib.nullcontext(self.conn),
+            ),
+            patch(
+                "bot.raid.bot.track_confirmed_partner_raid",
+                return_value=321,
+            ) as track_mock,
+        ):
+            await raid_bot.on_chat_raid_notification(
+                to_broadcaster_id="9009",
+                to_broadcaster_login="targetlogin",
+                from_broadcaster_login="source_login",
+                from_broadcaster_id="1001",
+                viewer_count=42,
+                message_id="raid-msg-1",
+            )
+            await raid_bot.on_raid_arrival(
+                to_broadcaster_id="9009",
+                to_broadcaster_login="targetlogin",
+                from_broadcaster_login="source_login",
+                from_broadcaster_id="1001",
+                viewer_count=42,
+            )
+
+        raid_bot._send_partner_raid_message.assert_awaited_once()
+        track_mock.assert_called_once()
+        row = self.conn.execute(
+            """
+            SELECT classification, confirmation_signals
+            FROM twitch_raid_arrival_tracking
+            """
+        ).fetchone()
+        self.assertIsNotNone(row)
+        self.assertEqual(row["classification"], "ours_to_partner")
+        self.assertEqual(
+            set(str(row["confirmation_signals"]).split(",")),
+            {"channel.chat.notification", "channel.raid"},
+        )
+
+    async def test_chat_unraid_does_not_confirm_pending_raid(self) -> None:
+        self._insert_partner("targetlogin", "9009")
+        raid_bot = self._build_raid_bot()
+        raid_bot._pending_raids["9009"] = raid_bot._build_pending_raid_record(
+            from_broadcaster_login="source_login",
+            to_broadcaster_id="9009",
+            target_stream_data=None,
+            is_partner_raid=True,
+            viewer_count=12,
+            offline_trigger_ts=None,
+            channel_raid_ready=True,
+            chat_notification_state="subscribed",
+            chat_notification_detail=None,
+        )
+
+        with patch(
+            "bot.raid.bot.get_conn",
+            side_effect=lambda: contextlib.nullcontext(self.conn),
+        ):
+            await raid_bot.on_chat_unraid_notification(
+                to_broadcaster_id="9009",
+                to_broadcaster_login="targetlogin",
+                from_broadcaster_login="source_login",
+                event_timestamp="2026-03-16T12:00:00+00:00",
+            )
+
+        self.assertIn("9009", raid_bot._pending_raids)
+        raid_bot._send_partner_raid_message.assert_not_awaited()
+        count = self.conn.execute(
+            "SELECT COUNT(*) AS c FROM twitch_raid_arrival_tracking"
+        ).fetchone()["c"]
+        self.assertEqual(count, 0)
+
+    async def test_independent_partner_raid_is_classified_external(self) -> None:
+        self._insert_partner("targetlogin", "9009")
+        raid_bot = self._build_raid_bot()
+
+        with patch(
+            "bot.raid.bot.get_conn",
+            side_effect=lambda: contextlib.nullcontext(self.conn),
+        ):
+            await raid_bot.on_raid_arrival(
+                to_broadcaster_id="9009",
+                to_broadcaster_login="targetlogin",
+                from_broadcaster_login="outside_streamer",
+                from_broadcaster_id="7777",
+                viewer_count=18,
+            )
+
+        row = self.conn.execute(
+            """
+            SELECT classification, correlation_status, confirmation_signals
+            FROM twitch_raid_arrival_tracking
+            """
+        ).fetchone()
+        self.assertIsNotNone(row)
+        self.assertEqual(row["classification"], "external_to_partner")
+        self.assertEqual(row["correlation_status"], "independent_channel_raid")
+        self.assertEqual(row["confirmation_signals"], "channel.raid")
+
+
+if __name__ == "__main__":
+    unittest.main()

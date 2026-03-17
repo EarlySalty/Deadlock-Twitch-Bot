@@ -55,6 +55,7 @@ _BOT_REQUIRED_SCOPES: tuple[str, ...] = (
     "moderator:manage:banned_users",
     "moderator:manage:shoutouts",
 )
+_BOT_OPTIONAL_SCOPES: tuple[str, ...] = ("user:bot",)
 
 _BOT_SCOPE_LABELS: dict[str, str] = {
     "user:read:chat": "Bot Chat Read",
@@ -64,6 +65,7 @@ _BOT_SCOPE_LABELS: dict[str, str] = {
     "moderator:manage:chat_messages": "Bot Chat Mod",
     "moderator:manage:banned_users": "Bot Bans",
     "moderator:manage:shoutouts": "Bot Shoutouts",
+    "user:bot": "Bot App-Token",
 }
 
 _DASHBOARD_OWNER_DISCORD_ID = "662995601738170389"
@@ -1330,6 +1332,21 @@ class DashboardLiveMixin:
                 )
                 for scope in _BOT_REQUIRED_SCOPES
             )
+        bot_optional_scope_pills_html = ""
+        if bool(bot_scope_state.get("loaded")):
+            bot_scope_set = {
+                str(scope).strip().lower()
+                for scope in (bot_scope_state.get("scopes") or set())
+                if str(scope).strip()
+            }
+            bot_optional_scope_pills_html = "".join(
+                (
+                    f"<span class='pill {'ok' if scope in bot_scope_set else 'neutral'}'>"
+                    f"{html.escape(_BOT_SCOPE_LABELS.get(scope, scope))}"
+                    "</span>"
+                )
+                for scope in _BOT_OPTIONAL_SCOPES
+            )
         scope_empty_row_html = (
             f"<tr><td colspan='{scope_table_colspan}'>Kein Streamer mit OAuth autorisiert</td></tr>"
         )
@@ -1341,7 +1358,7 @@ class DashboardLiveMixin:
             "    <div>"
             "      <p class='eyebrow'>OAuth Token Scopes</p>"
             "      <h2>Scope-Status pro Streamer</h2>"
-            "      <p class='lead'>Zeigt welche Streamer alle erforderlichen Broadcaster-Scopes autorisiert haben – besonders wichtig für Channel Points (<code>channel:read:redemptions</code>). Lurker-Tracking läuft über den zentralen Bot-Scope <code>moderator:read:chatters</code>.</p>"
+            "      <p class='lead'>Die Tabelle zeigt nur Broadcaster-/Streamer-Scopes wie <code>channel:bot</code> oder <code>channel:manage:raids</code>. Bot-User-Scopes wie <code>user:read:chat</code> werden darunter getrennt als globaler Bot-Zustand angezeigt.</p>"
             "    </div>"
             "    <div class='raid-metrics'>"
             f"      <div class='mini-stat'><strong>{total_authorized}</strong><span>Mit OAuth</span></div>"
@@ -1357,6 +1374,10 @@ class DashboardLiveMixin:
             "    <span class='pill neutral'>Zentraler Bot</span>"
             f"    {bot_scope_pills_html}"
             "  </div>"
+            "  <div class='status-meta' style='margin-bottom:.8rem;'>"
+            "    <span class='pill neutral'>Optional / Zukunft</span>"
+            f"    {bot_optional_scope_pills_html or '<span class=\"pill neutral\">user:bot nur für App-Token-Chat-EventSub nötig</span>'}"
+            "  </div>"
             "  <div class='table-wrap'>"
             "  <table>"
             "    <thead><tr>"
@@ -1369,6 +1390,90 @@ class DashboardLiveMixin:
             "  </div>"
             "</div>"
         )
+
+        raid_arrival_card_html = ""
+        try:
+            with _storage.get_conn() as _sc:
+                arrival_rows = _sc.execute(
+                    """
+                    SELECT detected_at,
+                           from_broadcaster_login,
+                           to_broadcaster_login,
+                           viewer_count,
+                           classification,
+                           confirmation_signals,
+                           correlation_status
+                    FROM twitch_raid_arrival_tracking
+                    ORDER BY detected_at DESC
+                    LIMIT 12
+                    """
+                ).fetchall()
+        except Exception:
+            arrival_rows = []
+
+        if arrival_rows:
+            arrival_table_rows = []
+            for row in arrival_rows:
+                detected_at = str(
+                    row[0] if not hasattr(row, "keys") else row["detected_at"] or ""
+                )[:19]
+                from_login = str(
+                    row[1] if not hasattr(row, "keys") else row["from_broadcaster_login"] or ""
+                )
+                to_login = str(
+                    row[2] if not hasattr(row, "keys") else row["to_broadcaster_login"] or ""
+                )
+                viewer_count = str(row[3] if not hasattr(row, "keys") else row["viewer_count"] or 0)
+                classification = str(
+                    row[4] if not hasattr(row, "keys") else row["classification"] or ""
+                )
+                confirmation_signals = str(
+                    row[5] if not hasattr(row, "keys") else row["confirmation_signals"] or ""
+                ).replace(",", " + ")
+                correlation_status = str(
+                    row[6] if not hasattr(row, "keys") else row["correlation_status"] or ""
+                )
+                arrival_table_rows.append(
+                    "<tr>"
+                    f"<td>{html.escape(detected_at, quote=True)}</td>"
+                    f"<td><strong>{html.escape(from_login, quote=True)}</strong></td>"
+                    f"<td><strong>{html.escape(to_login, quote=True)}</strong></td>"
+                    f"<td>{html.escape(viewer_count, quote=True)}</td>"
+                    f"<td>{html.escape(classification, quote=True)}</td>"
+                    f"<td>{html.escape(confirmation_signals, quote=True)}</td>"
+                    f"<td>{html.escape(correlation_status, quote=True)}</td>"
+                    "</tr>"
+                )
+
+            raid_arrival_card_html = (
+                "<div class='card scope-card' style='margin-top:1.2rem;'>"
+                "  <div class='card-header'>"
+                "    <div>"
+                "      <p class='eyebrow'>Partner Raid Arrivals</p>"
+                "      <h2>Bestätigungssignale und Klassifizierung</h2>"
+                "      <p class='lead'>Zeigt zuletzt erkannte Partner-Raid-Ankünfte mit Bestätigungspfad (<code>channel.raid</code> und/oder <code>channel.chat.notification</code>) sowie der fachlichen Klassifizierung.</p>"
+                "    </div>"
+                "  </div>"
+                "  <div class='table-wrap'>"
+                "    <table>"
+                "      <thead><tr><th>Zeitpunkt</th><th>Von</th><th>Nach</th><th>Viewer</th><th>Klassifizierung</th><th>Signale</th><th>Korrelation</th></tr></thead>"
+                f"      <tbody>{''.join(arrival_table_rows)}</tbody>"
+                "    </table>"
+                "  </div>"
+                "</div>"
+            )
+        else:
+            raid_arrival_card_html = (
+                "<div class='card scope-card' style='margin-top:1.2rem;'>"
+                "  <div class='card-header'>"
+                "    <div>"
+                "      <p class='eyebrow'>Partner Raid Arrivals</p>"
+                "      <h2>Bestätigungssignale und Klassifizierung</h2>"
+                "      <p class='lead'>Noch keine gespeicherten Partner-Raid-Ankünfte mit Zielseiten-Bestätigung.</p>"
+                "    </div>"
+                "  </div>"
+                "</div>"
+            )
 
         raid_history_link = ""
         if raid_bot_available:
@@ -1431,6 +1536,7 @@ class DashboardLiveMixin:
 {table_html}
 
 {scope_card_html}
+{raid_arrival_card_html}
 {plan_management_card_html}
 
 {archived_card_html}

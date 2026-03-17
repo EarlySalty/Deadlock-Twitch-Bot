@@ -102,9 +102,9 @@ export function AuthScopes() {
             </div>
             <h2 className="text-2xl font-bold text-white">OAuth Scope Checker</h2>
             <p className="max-w-3xl text-sm text-text-secondary">
-              Vergleicht die aktuell erteilten OAuth-Scopes mit unserer benötigten Liste. Backend
-              folgt – bis dahin kannst du die Scopes aus deinem Token hier einfügen oder via URL
-              übergeben.
+              Vergleicht die aktuell erteilten Broadcaster-/Streamer-Scopes mit unserer
+              benötigten Liste. Bot-User-Scopes wie <code>user:read:chat</code> laufen zentral über
+              den Bot-Account und sind bewusst nicht Teil dieser Streamer-Matrix.
             </p>
           </div>
 
@@ -131,7 +131,7 @@ export function AuthScopes() {
           <div className="rounded-lg border border-border bg-black/20 px-4 py-3 text-sm text-text-secondary">
             <div className="mb-1 flex items-center gap-2 text-white">
               <Sparkles className="h-4 w-4 text-accent" />
-              Schnell-Check
+              Streamer-Scopes
             </div>
             {summary.missing.length === 0 ? (
               <span className="text-success">Alle Scopes vorhanden ✔</span>
@@ -154,10 +154,11 @@ export function AuthScopes() {
           <div className="rounded-lg border border-border bg-black/20 px-4 py-3 text-sm text-text-secondary">
             <div className="mb-1 flex items-center gap-2 text-white">
               <RefreshCw className="h-4 w-4 text-accent" />
-              Minimal-Link
+              Bot-Scopes
             </div>
-            <span className="break-all text-xs text-text-secondary">
-              ?scopes=channel:manage:raids,channel:bot
+            <span className="text-xs text-text-secondary">
+              Zentral: <code>user:read:chat</code>, <code>user:write:chat</code>.
+              <code>user:bot</code> erst bei App-Token-Chat-EventSub.
             </span>
           </div>
         </div>
@@ -167,10 +168,10 @@ export function AuthScopes() {
       <div className="rounded-2xl border border-border bg-card/80 p-5 shadow">
         <div className="mb-3 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
           <div>
-            <h3 className="text-lg font-semibold text-white">Aktuelle Token-Scopes</h3>
+            <h3 className="text-lg font-semibold text-white">Aktuelle Streamer-Scopes</h3>
             <p className="text-sm text-text-secondary">
-              Füge hier die Scopes deines Tokens ein (Komma oder Leerzeichen getrennt). Wir merken
-              uns den Wert lokal, kein Backend-Call.
+              Füge hier die Broadcaster-Scopes des Streamer-Tokens ein (Komma oder Leerzeichen
+              getrennt). Bot-Scopes werden getrennt zentral geprüft.
             </p>
           </div>
           <div className="flex flex-wrap gap-2">
@@ -210,7 +211,8 @@ export function AuthScopes() {
         />
         <p className="mt-2 text-xs text-text-secondary">
           Tipp: Du kannst Scopes auch per URL setzen (&quot;?scopes=channel:manage:raids,channel:bot&quot;), wir
-          lesen sie beim Laden ein und speichern sie lokal.
+          lesen sie beim Laden ein und speichern sie lokal. <code>user:read:chat</code> oder
+          <code>user:bot</code> gehoeren nicht in diese Streamer-Liste.
         </p>
       </div>
 

@@ -441,6 +441,36 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_twitch_raid_history_id_executed_at
 ALTER TABLE twitch_raid_history SET (timescaledb.compress, timescaledb.compress_segmentby = 'from_broadcaster_login', timescaledb.compress_orderby = 'executed_at DESC');
 SELECT add_compression_policy('twitch_raid_history', INTERVAL '7 days', if_not_exists => TRUE);
 
+CREATE TABLE IF NOT EXISTS twitch_raid_arrival_tracking (
+    id                        BIGSERIAL PRIMARY KEY,
+    detected_at               TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    last_signal_at            TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    from_broadcaster_id       TEXT,
+    from_broadcaster_login    TEXT NOT NULL,
+    to_broadcaster_id         TEXT NOT NULL,
+    to_broadcaster_login      TEXT NOT NULL,
+    viewer_count              INTEGER NOT NULL DEFAULT 0,
+    classification            TEXT NOT NULL,
+    confirmation_signals      TEXT NOT NULL DEFAULT '',
+    primary_signal            TEXT,
+    correlation_status        TEXT,
+    correlation_detail        TEXT,
+    source_resolution         TEXT,
+    raid_history_id           BIGINT,
+    raid_history_executed_at  TIMESTAMPTZ,
+    unraid_seen               BOOLEAN NOT NULL DEFAULT FALSE,
+    last_unraid_at            TIMESTAMPTZ
+);
+SELECT create_hypertable('twitch_raid_arrival_tracking', 'detected_at', if_not_exists => TRUE, migrate_data => TRUE, chunk_time_interval => INTERVAL '7 days');
+ALTER TABLE twitch_raid_arrival_tracking SET (timescaledb.compress, timescaledb.compress_segmentby = 'to_broadcaster_id', timescaledb.compress_orderby = 'detected_at DESC');
+SELECT add_compression_policy('twitch_raid_arrival_tracking', INTERVAL '7 days', if_not_exists => TRUE);
+CREATE INDEX IF NOT EXISTS idx_twitch_raid_arrival_tracking_target
+    ON twitch_raid_arrival_tracking(to_broadcaster_id, detected_at DESC);
+CREATE INDEX IF NOT EXISTS idx_twitch_raid_arrival_tracking_source
+    ON twitch_raid_arrival_tracking(from_broadcaster_login, detected_at DESC);
+CREATE INDEX IF NOT EXISTS idx_twitch_raid_arrival_tracking_history_ref
+    ON twitch_raid_arrival_tracking(raid_history_id, raid_history_executed_at);
+
 -- ========= Snapshots =========
 CREATE TABLE IF NOT EXISTS twitch_subscriptions_snapshot (
     id             BIGSERIAL PRIMARY KEY,

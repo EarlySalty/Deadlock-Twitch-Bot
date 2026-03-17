@@ -122,6 +122,8 @@ if TWITCHIO_AVAILABLE:
             self._raid_bot = None  # Wird später gesetzt
             self._initial_channels = initial_channels or []
             self._monitored_streamers: set[str] = set()
+            self._channel_subscription_types: dict[str, set[str]] = {}
+            self._channel_subscription_state: dict[str, dict[str, dict[str, str]]] = {}
             self._session_cache: dict[str, tuple[int, datetime]] = {}
             self._last_autoban: dict[str, dict[str, str]] = {}
             # Cooldown: Verhindert, dass _ensure_bot_is_mod auf einem
@@ -159,6 +161,7 @@ if TWITCHIO_AVAILABLE:
             self._restart_task: asyncio.Task | None = None
             self._restart_cooldown_until: float = 0.0
             self._restart_cooldown_seconds: float = 30.0
+            self._skip_initial_join_once: bool = False
             self._managed_start_with_adapter: bool | None = None
             self._managed_load_tokens: bool = False
             self._managed_save_tokens: bool = False
@@ -171,7 +174,11 @@ if TWITCHIO_AVAILABLE:
         def set_monitored_channels(self, channels: list[str]) -> None:
             """Set the list of read-only monitored channels."""
             for ch in channels:
-                self._monitored_only_channels.add(ch.lower())
+                normalized = str(ch or "").strip().lower().lstrip("#")
+                if normalized:
+                    self._monitored_only_channels.add(normalized)
+                    if normalized not in self._initial_channels:
+                        self._initial_channels.append(normalized)
 
         def _is_monitored_only(self, channel_name: str) -> bool:
             return channel_name.lower() in self._monitored_only_channels
@@ -255,6 +262,7 @@ if TWITCHIO_AVAILABLE:
                     with_adapter = getattr(self, "adapter", None) is not None
 
                 try:
+                    self._skip_initial_join_once = True
                     asyncio.create_task(
                         self.start(
                             with_adapter=with_adapter,
@@ -713,7 +721,10 @@ if TWITCHIO_AVAILABLE:
             log.info("Registered Chat Commands: %s", cmds)
 
             # Initial channels erst hier joinen – WS-Session ist jetzt bereit
-            if self._initial_channels:
+            if self._skip_initial_join_once:
+                self._skip_initial_join_once = False
+                log.info("Skipping initial channel join after managed transport restart.")
+            elif self._initial_channels:
                 log.info("Joining %d initial channels...", len(self._initial_channels))
                 for channel in self._initial_channels:
                     try:
@@ -1038,6 +1049,82 @@ if TWITCHIO_AVAILABLE:
 
             # Verarbeite Commands
             await self.process_commands(message)
+
+        async def event_chat_notification(self, payload) -> None:
+            """Raid-relevante channel.chat.notification Events an den RaidBot delegieren."""
+            raid_bot = getattr(self, "_raid_bot", None)
+            if raid_bot is None:
+                return
+
+            try:
+                broadcaster = getattr(payload, "broadcaster", None)
+                broadcaster_login = (
+                    str(
+                        getattr(broadcaster, "name", None)
+                        or getattr(broadcaster, "login", None)
+                        or ""
+                    )
+                    .strip()
+                    .lower()
+                )
+                broadcaster_id = str(getattr(broadcaster, "id", None) or "").strip()
+                if not broadcaster_id or not broadcaster_login:
+                    return
+
+                notice_type = str(getattr(payload, "notice_type", "") or "").strip().lower()
+                timestamp_value = getattr(payload, "timestamp", None)
+                event_timestamp = str(timestamp_value).strip() if timestamp_value else None
+
+                if notice_type == "raid":
+                    raid_payload = getattr(payload, "raid", None)
+                    if raid_payload is None:
+                        return
+                    raid_user = getattr(raid_payload, "user", None)
+                    from_broadcaster_login = (
+                        str(
+                            getattr(raid_user, "name", None)
+                            or getattr(raid_user, "login", None)
+                            or ""
+                        )
+                        .strip()
+                        .lower()
+                    )
+                    if not from_broadcaster_login:
+                        return
+                    from_broadcaster_id = str(getattr(raid_user, "id", None) or "").strip() or None
+                    viewer_count = int(getattr(raid_payload, "viewer_count", 0) or 0)
+                    await raid_bot.on_chat_raid_notification(
+                        to_broadcaster_id=broadcaster_id,
+                        to_broadcaster_login=broadcaster_login,
+                        from_broadcaster_login=from_broadcaster_login,
+                        from_broadcaster_id=from_broadcaster_id,
+                        viewer_count=viewer_count,
+                        message_id=str(getattr(payload, "id", None) or "").strip() or None,
+                        event_timestamp=event_timestamp,
+                    )
+                    return
+
+                if notice_type == "unraid":
+                    chatter = getattr(payload, "chatter", None)
+                    from_broadcaster_login = (
+                        str(
+                            getattr(chatter, "name", None)
+                            or getattr(chatter, "login", None)
+                            or ""
+                        )
+                        .strip()
+                        .lower()
+                    )
+                    from_broadcaster_id = str(getattr(chatter, "id", None) or "").strip() or None
+                    await raid_bot.on_chat_unraid_notification(
+                        to_broadcaster_id=broadcaster_id,
+                        to_broadcaster_login=broadcaster_login,
+                        from_broadcaster_login=from_broadcaster_login,
+                        from_broadcaster_id=from_broadcaster_id,
+                        event_timestamp=event_timestamp,
+                    )
+            except Exception:
+                log.exception("event_chat_notification failed")
 
         def _get_streamer_by_channel(self, channel_name: str) -> tuple | None:
             """
