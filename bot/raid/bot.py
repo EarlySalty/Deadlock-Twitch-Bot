@@ -1911,16 +1911,21 @@ class RaidBot:
                         "EventSub channel.raid subscription already tracked for %s - skipping duplicate create",
                         to_broadcaster_login,
                     )
-                    return
+                    success = True
+                else:
+                    success = False
             except Exception:
                 log.debug(
                     "EventSub channel.raid local tracking lookup failed for %s",
                     to_broadcaster_login,
                     exc_info=True,
                 )
+                success = False
+        else:
+            success = False
 
         # Dynamische EventSub subscription erstellen
-        if self._cog and hasattr(self._cog, "subscribe_raid_target_dynamic"):
+        if not success and self._cog and hasattr(self._cog, "subscribe_raid_target_dynamic"):
             try:
                 success = await self._cog.subscribe_raid_target_dynamic(
                     to_broadcaster_id, to_broadcaster_login
@@ -1941,10 +1946,11 @@ class RaidBot:
                     to_broadcaster_login,
                 )
         else:
-            log.warning(
-                "Cog reference not set - cannot create dynamic EventSub subscription for %s",
-                to_broadcaster_login,
-            )
+            if not success:
+                log.warning(
+                    "Cog reference not set - cannot create dynamic EventSub subscription for %s",
+                    to_broadcaster_login,
+                )
 
         orphan_notification = self._pop_orphan_chat_raid_notification(
             to_broadcaster_id=to_broadcaster_id,

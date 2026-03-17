@@ -301,7 +301,11 @@ if TWITCHIO_AVAILABLE:
                 return
 
             try:
-                joined = await self.join_channels(normalized, rate_limit_delay=0.35)
+                joined = await self.join_channels(
+                    normalized,
+                    rate_limit_delay=0.35,
+                    mark_monitored_only=False,
+                )
                 log.info(
                     "Chat transport restart: rejoin finished (%d/%d).",
                     joined,

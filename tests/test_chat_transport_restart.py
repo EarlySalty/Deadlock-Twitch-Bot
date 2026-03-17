@@ -24,6 +24,11 @@ class _PartChannelsHarness(ConnectionMixin):
         }
         self._monitored_only_channels = {"cemo_336", "dragskope"}
 
+    async def join(self, channel_login: str, channel_id: str | None = None):
+        normalized = str(channel_login or "").strip().lower().lstrip("#")
+        self._monitored_streamers.add(normalized)
+        return True
+
 
 class _StaleJoinHarness(ConnectionMixin):
     def __init__(self) -> None:
@@ -65,6 +70,19 @@ class ChatTransportRestartTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(harness._initial_channels, ["partner_channel", "dragskope"])
         self.assertNotIn("cemo_336", harness._monitored_only_channels)
         self.assertNotIn("cemo_336", harness._monitored_streamers)
+
+    async def test_join_channels_can_skip_monitored_only_marking(self) -> None:
+        harness = _PartChannelsHarness()
+        harness._monitored_only_channels.clear()
+
+        joined = await harness.join_channels(
+            ["partner_channel", "derechtecoolys"],
+            rate_limit_delay=0,
+            mark_monitored_only=False,
+        )
+
+        self.assertEqual(joined, 2)
+        self.assertEqual(harness._monitored_only_channels, set())
 
     @unittest.skipUnless(
         getattr(chat_bot_module, "TWITCHIO_AVAILABLE", False)

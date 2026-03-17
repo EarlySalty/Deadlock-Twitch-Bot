@@ -257,12 +257,13 @@ class ConnectionMixin:
         *,
         channel_login: str,
         channel_id: str | None,
-    ) -> dict[str, list[str]]:
+    ) -> dict[str, object]:
         bot_scopes = self._resolve_chat_bot_scope_set()
         broadcaster_scopes = self._load_broadcaster_chat_scope_set(
             channel_id=channel_id,
             channel_login=channel_login,
         )
+        bot_scope_state_known = bool(bot_scopes)
         missing_bot_scopes = sorted(
             scope for scope in _CHAT_REQUIRED_BOT_SCOPES if bot_scopes and scope not in bot_scopes
         )
@@ -272,6 +273,7 @@ class ConnectionMixin:
             if broadcaster_scopes and scope not in broadcaster_scopes
         )
         return {
+            "bot_scope_state_known": bot_scope_state_known,
             "missing_bot_scopes": missing_bot_scopes,
             "missing_broadcaster_scopes": missing_broadcaster_scopes,
         }
@@ -691,6 +693,7 @@ class ConnectionMixin:
                     channel_login=normalized_login,
                     channel_id=str(channel_id),
                 )
+                bot_scope_state_known = bool(auth_diagnostics.get("bot_scope_state_known"))
                 join_state = self._load_chat_join_channel_state(
                     channel_login=normalized_login,
                     channel_id=str(channel_id),
@@ -725,6 +728,19 @@ class ConnectionMixin:
                         "join(): Chat-Subscription für %s blockiert – Broadcaster-Freigabe fehlt (%s).",
                         channel_login,
                         missing_broadcaster_scopes,
+                    )
+                    return False
+                if not bot_scope_state_known:
+                    for sub_type in remaining_missing:
+                        self._record_chat_subscription_state(
+                            normalized_login,
+                            sub_type,
+                            "unknown_bot_scope_state",
+                            detail="central bot scope set unavailable during 403 auth diagnosis",
+                        )
+                    log.warning(
+                        "join(): Chat-Subscription für %s blockiert – zentraler Bot-Scope-Zustand ist unbekannt. Kein Mod-Retry.",
+                        channel_login,
                     )
                     return False
                 if (
@@ -835,7 +851,13 @@ class ConnectionMixin:
                 log.error("Failed to join channel %s: %s", channel_login, e)
             return False
 
-    async def join_channels(self, channels: list[str], rate_limit_delay: float = 0.2) -> int:
+    async def join_channels(
+        self,
+        channels: list[str],
+        rate_limit_delay: float = 0.2,
+        *,
+        mark_monitored_only: bool = True,
+    ) -> int:
         """Kompatibilitäts-Helper für Bulk-Joins (z.B. Scout-Task)."""
         if not channels:
             return 0
@@ -847,7 +869,7 @@ class ConnectionMixin:
 
         try:
             set_monitored = getattr(self, "set_monitored_channels", None)
-            if callable(set_monitored):
+            if mark_monitored_only and callable(set_monitored):
                 set_monitored(normalized)
         except Exception:
             log.debug(

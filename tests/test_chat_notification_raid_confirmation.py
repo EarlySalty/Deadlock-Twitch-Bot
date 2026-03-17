@@ -122,6 +122,45 @@ class ChatJoinNotificationSubscriptionTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertIn("user:read:chat", state["channel.chat.notification"]["detail"])
 
+    async def test_join_records_unknown_bot_scope_state_without_mod_retry(self) -> None:
+        conn = sqlite3.connect(":memory:")
+        conn.row_factory = sqlite3.Row
+        ensure_sqlite_twitch_schema(conn)
+        conn.execute(
+            """
+            INSERT INTO twitch_streamers (twitch_login, twitch_user_id, is_monitored_only)
+            VALUES (?, ?, 0)
+            """,
+            ("targetlogin", "9009"),
+        )
+        conn.execute(
+            """
+            INSERT INTO twitch_raid_auth (twitch_user_id, twitch_login, scopes)
+            VALUES (?, ?, ?)
+            """,
+            ("9009", "targetlogin", "channel:bot"),
+        )
+        conn.commit()
+
+        harness = _JoinFailureHarness(bot_scopes=set())
+        harness._ensure_bot_is_mod = AsyncMock(return_value=False)
+        try:
+            with patch(
+                "bot.chat.connection.get_conn",
+                side_effect=lambda: contextlib.nullcontext(conn),
+            ):
+                result = await harness.join("targetlogin", channel_id="9009")
+        finally:
+            conn.close()
+
+        self.assertFalse(result)
+        harness._ensure_bot_is_mod.assert_not_awaited()
+        state = harness.get_channel_subscription_state("targetlogin")
+        self.assertEqual(
+            state["channel.chat.notification"]["state"],
+            "unknown_bot_scope_state",
+        )
+
 
 class ChatNotificationRaidCorrelationTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self) -> None:
@@ -297,6 +336,55 @@ class ChatNotificationRaidCorrelationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(row["classification"], "external_to_partner")
         self.assertEqual(row["correlation_status"], "independent_channel_raid")
         self.assertEqual(row["confirmation_signals"], "channel.raid")
+
+    async def test_register_pending_raid_matches_orphan_notification_even_when_subscription_exists(self) -> None:
+        self._insert_partner("targetlogin", "9009")
+        self._insert_streamer_identity("source_login", "1001")
+        raid_bot = self._build_raid_bot()
+        raid_bot._cog = SimpleNamespace(_eventsub_has_sub=lambda sub_type, user_id: True)
+
+        with (
+            patch(
+                "bot.raid.bot.get_conn",
+                side_effect=lambda: contextlib.nullcontext(self.conn),
+            ),
+            patch(
+                "bot.raid.bot.track_confirmed_partner_raid",
+                return_value=654,
+            ) as track_mock,
+        ):
+            await raid_bot.on_chat_raid_notification(
+                to_broadcaster_id="9009",
+                to_broadcaster_login="targetlogin",
+                from_broadcaster_login="source_login",
+                from_broadcaster_id="1001",
+                viewer_count=21,
+                message_id="raid-msg-2",
+            )
+            await raid_bot._register_pending_raid(
+                from_broadcaster_login="source_login",
+                to_broadcaster_id="9009",
+                to_broadcaster_login="targetlogin",
+                target_stream_data={"_partner_score": {"final_score": 1.05}},
+                is_partner_raid=True,
+                viewer_count=21,
+                offline_trigger_ts=None,
+                channel_raid_ready=True,
+            )
+
+        self.assertEqual(raid_bot._pending_raids, {})
+        self.assertEqual(raid_bot._orphan_chat_raid_notifications, {})
+        raid_bot._send_partner_raid_message.assert_awaited_once()
+        track_mock.assert_called_once()
+        row = self.conn.execute(
+            """
+            SELECT confirmation_signals, primary_signal
+            FROM twitch_raid_arrival_tracking
+            """
+        ).fetchone()
+        self.assertIsNotNone(row)
+        self.assertEqual(row["confirmation_signals"], "channel.chat.notification")
+        self.assertEqual(row["primary_signal"], "channel.chat.notification")
 
 
 if __name__ == "__main__":
