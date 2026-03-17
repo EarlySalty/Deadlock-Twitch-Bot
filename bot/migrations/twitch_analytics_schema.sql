@@ -263,6 +263,23 @@ CREATE INDEX IF NOT EXISTS idx_twitch_chat_messages_session ON twitch_chat_messa
 CREATE INDEX IF NOT EXISTS idx_twitch_chat_messages_streamer_ts ON twitch_chat_messages(streamer_login, message_ts);
 CREATE INDEX IF NOT EXISTS idx_twitch_chat_messages_message_id ON twitch_chat_messages(message_id);
 
+CREATE TABLE IF NOT EXISTS twitch_observability_events (
+    id           BIGSERIAL PRIMARY KEY,
+    flow_type    TEXT NOT NULL,
+    flow_id      TEXT NOT NULL,
+    entity_login TEXT,
+    entity_id    TEXT,
+    step         TEXT NOT NULL,
+    decision     TEXT NOT NULL,
+    details_json TEXT NOT NULL DEFAULT '{}',
+    created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+SELECT create_hypertable('twitch_observability_events', 'created_at', if_not_exists => TRUE, migrate_data => TRUE, chunk_time_interval => INTERVAL '7 days');
+ALTER TABLE twitch_observability_events SET (timescaledb.compress, timescaledb.compress_segmentby = 'flow_type,flow_id', timescaledb.compress_orderby = 'created_at DESC');
+SELECT add_compression_policy('twitch_observability_events', INTERVAL '7 days', if_not_exists => TRUE);
+CREATE INDEX IF NOT EXISTS idx_twitch_observability_events_flow ON twitch_observability_events(flow_type, flow_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_twitch_observability_events_entity ON twitch_observability_events(entity_login, created_at DESC);
+
 -- ========= Periodic Stats =========
 CREATE TABLE IF NOT EXISTS twitch_stats_tracked (
     ts_utc       TIMESTAMPTZ NOT NULL,

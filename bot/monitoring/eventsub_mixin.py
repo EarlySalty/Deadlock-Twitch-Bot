@@ -1594,6 +1594,7 @@ class _EventSubMixin:
         broadcaster_id: str,
         broadcaster_login: str,
         *,
+        raid_flow_id: str | None = None,
         wait_timeout_seconds: float = 8.0,
         poll_interval_seconds: float = 0.5,
     ) -> tuple[bool, str]:
@@ -1617,11 +1618,37 @@ class _EventSubMixin:
             broadcaster_id=target_id,
             webhook_url=webhook_url,
         )
+        local_tracking = False
+        has_sub = getattr(self, "_eventsub_has_sub", None)
+        if callable(has_sub):
+            try:
+                local_tracking = bool(has_sub("channel.raid", target_id))
+            except Exception:
+                log.debug(
+                    "EventSub readiness local tracking lookup failed for %s",
+                    broadcaster_login,
+                    exc_info=True,
+                )
         if current_status == "enabled":
             self._eventsub_track_sub("channel.raid", target_id)
+            log.info(
+                "eventsub_raid_ready raid_flow_id=%s broadcaster_id=%s broadcaster_login=%s local_tracking=%s remote_status_before=%s subscribe_attempted=%s subscribe_success=%s final_ready=%s final_detail=%s",
+                raid_flow_id or "-",
+                target_id,
+                broadcaster_login,
+                local_tracking,
+                current_status,
+                False,
+                None,
+                True,
+                "already_enabled",
+            )
             return True, "already_enabled"
 
+        subscribe_attempted = False
+        subscribe_success = None
         if current_status != "webhook_callback_verification_pending":
+            subscribe_attempted = True
             subscribe_success = await self.subscribe_raid_target_dynamic(
                 target_id,
                 broadcaster_login,
@@ -1634,7 +1661,33 @@ class _EventSubMixin:
                 )
                 if current_status == "enabled":
                     self._eventsub_track_sub("channel.raid", target_id)
+                    log.info(
+                        "eventsub_raid_ready raid_flow_id=%s broadcaster_id=%s broadcaster_login=%s local_tracking=%s remote_status_before=%s remote_status_after=%s subscribe_attempted=%s subscribe_success=%s final_ready=%s final_detail=%s",
+                        raid_flow_id or "-",
+                        target_id,
+                        broadcaster_login,
+                        local_tracking,
+                        "missing",
+                        current_status,
+                        subscribe_attempted,
+                        subscribe_success,
+                        True,
+                        "enabled_after_retry",
+                    )
                     return True, "enabled_after_retry"
+                log.warning(
+                    "eventsub_raid_ready raid_flow_id=%s broadcaster_id=%s broadcaster_login=%s local_tracking=%s remote_status_before=%s remote_status_after=%s subscribe_attempted=%s subscribe_success=%s final_ready=%s final_detail=%s",
+                    raid_flow_id or "-",
+                    target_id,
+                    broadcaster_login,
+                    local_tracking,
+                    "missing",
+                    current_status or "missing",
+                    subscribe_attempted,
+                    subscribe_success,
+                    False,
+                    f"subscribe_failed:{current_status or 'missing'}",
+                )
                 return False, f"subscribe_failed:{current_status or 'missing'}"
 
         deadline = time.monotonic() + max(0.0, float(wait_timeout_seconds))
@@ -1649,8 +1702,34 @@ class _EventSubMixin:
                 last_status = current_status
             if current_status == "enabled":
                 self._eventsub_track_sub("channel.raid", target_id)
+                log.info(
+                    "eventsub_raid_ready raid_flow_id=%s broadcaster_id=%s broadcaster_login=%s local_tracking=%s remote_status_before=%s remote_status_after=%s subscribe_attempted=%s subscribe_success=%s final_ready=%s final_detail=%s",
+                    raid_flow_id or "-",
+                    target_id,
+                    broadcaster_login,
+                    local_tracking,
+                    last_status,
+                    current_status,
+                    subscribe_attempted,
+                    subscribe_success,
+                    True,
+                    "enabled",
+                )
                 return True, "enabled"
             if current_status not in (None, "", "webhook_callback_verification_pending"):
+                log.warning(
+                    "eventsub_raid_ready raid_flow_id=%s broadcaster_id=%s broadcaster_login=%s local_tracking=%s remote_status_before=%s remote_status_after=%s subscribe_attempted=%s subscribe_success=%s final_ready=%s final_detail=%s",
+                    raid_flow_id or "-",
+                    target_id,
+                    broadcaster_login,
+                    local_tracking,
+                    last_status,
+                    current_status,
+                    subscribe_attempted,
+                    subscribe_success,
+                    False,
+                    f"status:{current_status}",
+                )
                 return False, f"status:{current_status}"
             await asyncio.sleep(max(0.0, float(poll_interval_seconds)))
 
@@ -1661,9 +1740,35 @@ class _EventSubMixin:
         )
         if current_status == "enabled":
             self._eventsub_track_sub("channel.raid", target_id)
+            log.info(
+                "eventsub_raid_ready raid_flow_id=%s broadcaster_id=%s broadcaster_login=%s local_tracking=%s remote_status_before=%s remote_status_after=%s subscribe_attempted=%s subscribe_success=%s final_ready=%s final_detail=%s",
+                raid_flow_id or "-",
+                target_id,
+                broadcaster_login,
+                local_tracking,
+                last_status,
+                current_status,
+                subscribe_attempted,
+                subscribe_success,
+                True,
+                "enabled",
+            )
             return True, "enabled"
         if current_status:
             last_status = current_status
+        log.warning(
+            "eventsub_raid_ready raid_flow_id=%s broadcaster_id=%s broadcaster_login=%s local_tracking=%s remote_status_before=%s remote_status_after=%s subscribe_attempted=%s subscribe_success=%s final_ready=%s final_detail=%s",
+            raid_flow_id or "-",
+            target_id,
+            broadcaster_login,
+            local_tracking,
+            "missing",
+            current_status or last_status,
+            subscribe_attempted,
+            subscribe_success,
+            False,
+            f"status:{last_status}",
+        )
         return False, f"status:{last_status}"
 
     async def subscribe_raid_target_dynamic(

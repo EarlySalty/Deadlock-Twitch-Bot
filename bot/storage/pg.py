@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import contextlib
 import hashlib
+import json
 import logging
 import os
 import time
@@ -45,6 +46,13 @@ KEYRING_SERVICE = "DeadlockBot"
 ENV_DSN = "TWITCH_ANALYTICS_DSN"
 _DB_FINGERPRINT_SALT = b"deadlock.analytics-db-fingerprint.v1"
 _DB_FINGERPRINT_ITERATIONS = 100_000
+
+
+def _safe_observability_text(value: object, *, limit: int = 200) -> str | None:
+    text = str(value or "").replace("\r", " ").replace("\n", " ").strip()
+    if not text:
+        return None
+    return text[:limit]
 
 
 def _normalize_conninfo_value(value: object) -> str:
@@ -742,6 +750,65 @@ def query_one(sql: str, params: Iterable | None = None):
 def query_all(sql: str, params: Iterable | None = None):
     with get_conn() as conn:
         return conn.execute(sql, params or []).fetchall()
+
+
+def insert_observability_event(
+    *,
+    flow_type: str,
+    flow_id: str,
+    step: str,
+    decision: str,
+    entity_login: str | None = None,
+    entity_id: str | None = None,
+    details: dict[str, object] | None = None,
+) -> None:
+    safe_flow_type = _safe_observability_text(flow_type, limit=40)
+    safe_flow_id = _safe_observability_text(flow_id, limit=80)
+    safe_step = _safe_observability_text(step, limit=80)
+    safe_decision = _safe_observability_text(decision, limit=80)
+    if not safe_flow_type or not safe_flow_id or not safe_step or not safe_decision:
+        return
+
+    safe_login = _safe_observability_text(entity_login, limit=80)
+    safe_entity_id = _safe_observability_text(entity_id, limit=80)
+    try:
+        details_json = json.dumps(details or {}, sort_keys=True, default=str)
+    except Exception:
+        details_json = "{}"
+
+    try:
+        with get_conn() as conn:
+            conn.execute(
+                """
+                INSERT INTO twitch_observability_events (
+                    flow_type,
+                    flow_id,
+                    entity_login,
+                    entity_id,
+                    step,
+                    decision,
+                    details_json
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s)
+                """,
+                (
+                    safe_flow_type,
+                    safe_flow_id,
+                    safe_login,
+                    safe_entity_id,
+                    safe_step,
+                    safe_decision,
+                    details_json,
+                ),
+            )
+            conn.commit()
+    except Exception:
+        log.debug(
+            "Could not persist observability event flow_type=%s flow_id=%s step=%s",
+            safe_flow_type,
+            safe_flow_id,
+            safe_step,
+            exc_info=True,
+        )
 
 
 def backfill_tracked_stats_from_category(conn, login: str) -> int:
@@ -1911,6 +1978,29 @@ def ensure_schema(conn) -> None:
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_twitch_raw_chat_backfill_runs_streamer "
         "ON twitch_raw_chat_backfill_runs(streamer_login, started_at DESC)"
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS twitch_observability_events (
+            id           BIGSERIAL PRIMARY KEY,
+            flow_type    TEXT NOT NULL,
+            flow_id      TEXT NOT NULL,
+            entity_login TEXT,
+            entity_id    TEXT,
+            step         TEXT NOT NULL,
+            decision     TEXT NOT NULL,
+            details_json TEXT NOT NULL DEFAULT '{}',
+            created_at   TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+        )
+        """
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_twitch_observability_events_flow "
+        "ON twitch_observability_events(flow_type, flow_id, created_at DESC)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_twitch_observability_events_created "
+        "ON twitch_observability_events(created_at DESC)"
     )
 
     # 6) Raid history & blacklist

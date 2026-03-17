@@ -98,6 +98,8 @@ class ChatTransportRestartTests(unittest.IsolatedAsyncioTestCase):
             _initial_channels=["cemo_336", "dragskope"],
             join=AsyncMock(return_value=True),
             _promo_task=None,
+            _next_chat_observability_flow_id=lambda prefix: f"{prefix}-test",
+            _log_chat_runtime_snapshot=lambda **kwargs: None,
         )
 
         with patch.object(chat_bot_module, "PROMO_MESSAGES", []):
@@ -137,16 +139,31 @@ class ChatTransportRestartTests(unittest.IsolatedAsyncioTestCase):
             _rejoin_channels_after_restart=AsyncMock(),
             adapter=None,
         )
+        dummy._bounded_runtime_sample = lambda values, limit=8: chat_bot_module.RaidChatBot._bounded_runtime_sample(  # type: ignore[assignment]
+            values,
+            limit=limit,
+        )
+        dummy._snapshot_chat_runtime_state = lambda: chat_bot_module.RaidChatBot._snapshot_chat_runtime_state(dummy)  # type: ignore[assignment]
+        dummy._chat_observability_normalize = lambda value, limit=240: ConnectionMixin._chat_observability_normalize(  # type: ignore[assignment]
+            value,
+            limit=limit,
+        )
+        dummy._format_chat_observability_fields = lambda **fields: ConnectionMixin._format_chat_observability_fields(dummy, **fields)  # type: ignore[assignment]
+        dummy._log_chat_runtime_snapshot = lambda **kwargs: chat_bot_module.RaidChatBot._log_chat_runtime_snapshot(dummy, **kwargs)  # type: ignore[assignment]
 
-        with (
-            patch("bot.chat.bot.asyncio.sleep", new=AsyncMock(return_value=None)),
-            patch("bot.chat.bot.asyncio.create_task", side_effect=_fake_create_task),
-        ):
-            await chat_bot_module.RaidChatBot._restart_after_transport_failure(
-                dummy,
-                channel_list=["partner_channel"],
-                reason="broken transport",
-            )
+        with self.assertLogs("TwitchStreams.ChatBot", level="INFO") as captured:
+            with patch("bot.chat.bot.asyncio.sleep", new=AsyncMock(return_value=None)):
+                with patch(
+                    "bot.chat.bot.asyncio.create_task",
+                    side_effect=_fake_create_task,
+                ):
+                    await chat_bot_module.RaidChatBot._restart_after_transport_failure(
+                        dummy,
+                        channel_list=["partner_channel"],
+                        reason="broken transport",
+                        flow_id="restart-test-1",
+                        failed_channel="partner_channel",
+                    )
 
         self.assertEqual(dummy._monitored_streamers, set())
         self.assertEqual(dummy._channel_subscription_types, {})
@@ -154,6 +171,14 @@ class ChatTransportRestartTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(dummy._channel_ids, {})
         self.assertTrue(dummy._skip_initial_join_once)
         self.assertEqual(len(created_coroutines), 2)
+        self.assertTrue(
+            any(
+                "chat_runtime_snapshot" in entry
+                and "flow_id=restart-test-1" in entry
+                and "phase=restart_begin" in entry
+                for entry in captured.output
+            )
+        )
 
     async def test_join_purges_stale_removed_channel_before_mod_retry(self) -> None:
         conn = sqlite3.connect(":memory:")

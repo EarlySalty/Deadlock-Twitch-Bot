@@ -24,7 +24,7 @@ import discord
 from ..api.token_manager import TwitchBotTokenManager
 from ..core.constants import TWITCH_NOTIFY_CHANNEL_ID, TWITCH_TARGET_GAME_NAME
 from ..logging_setup import ensure_twitch_logger_file_handler, log_path
-from ..storage import get_conn
+from ..storage import get_conn, insert_observability_event
 from .commands import RaidCommandsMixin
 from .connection import ConnectionMixin
 from .constants import (
@@ -183,6 +183,97 @@ if TWITCHIO_AVAILABLE:
         def _is_monitored_only(self, channel_name: str) -> bool:
             return channel_name.lower() in self._monitored_only_channels
 
+        @staticmethod
+        def _bounded_runtime_sample(values: object, *, limit: int = 8) -> list[str]:
+            if isinstance(values, dict):
+                source = values.keys()
+            elif isinstance(values, (set, list, tuple)):
+                source = values
+            else:
+                return []
+            normalized = [
+                str(value or "").strip().lower().lstrip("#")
+                for value in source
+                if str(value or "").strip()
+            ]
+            return sorted(dict.fromkeys(normalized))[:limit]
+
+        def _snapshot_chat_runtime_state(self) -> dict[str, object]:
+            return {
+                "monitored_count": len(getattr(self, "_monitored_streamers", set()) or ()),
+                "subscription_entry_count": len(
+                    getattr(self, "_channel_subscription_types", {}) or {}
+                ),
+                "subscription_state_entry_count": len(
+                    getattr(self, "_channel_subscription_state", {}) or {}
+                ),
+                "channel_id_count": len(getattr(self, "_channel_ids", {}) or {}),
+                "initial_channel_count": len(getattr(self, "_initial_channels", []) or []),
+                "monitored_only_count": len(
+                    getattr(self, "_monitored_only_channels", set()) or ()
+                ),
+                "monitored_sample": self._bounded_runtime_sample(
+                    getattr(self, "_monitored_streamers", set())
+                ),
+                "subscription_sample": self._bounded_runtime_sample(
+                    getattr(self, "_channel_subscription_types", {})
+                ),
+                "channel_id_sample": self._bounded_runtime_sample(getattr(self, "_channel_ids", {})),
+                "initial_channel_sample": self._bounded_runtime_sample(
+                    getattr(self, "_initial_channels", [])
+                ),
+                "monitored_only_sample": self._bounded_runtime_sample(
+                    getattr(self, "_monitored_only_channels", set())
+                ),
+            }
+
+        def get_observability_snapshot(self) -> dict[str, object]:
+            restart_task = getattr(self, "_restart_task", None)
+            return {
+                "runtime": self._snapshot_chat_runtime_state(),
+                "counters": dict(getattr(self, "_chat_observability_counter_store", {}) or {}),
+                "last_join_diagnostic": getattr(self, "_last_chat_join_diagnostic", None),
+                "last_runtime_snapshot": getattr(self, "_last_chat_runtime_snapshot", None),
+                "restart_task_pending": bool(restart_task and not restart_task.done()),
+            }
+
+        def _log_chat_runtime_snapshot(
+            self,
+            *,
+            flow_id: str,
+            phase: str,
+            reason: str,
+            failed_channel: str | None = None,
+            channel_list: list[str] | None = None,
+            level: int = logging.INFO,
+            **extra_fields: object,
+        ) -> None:
+            payload = {
+                "flow_id": flow_id,
+                "phase": str(phase or "").strip() or "unknown",
+                "reason": str(reason or "").strip() or "unknown",
+                "failed_channel": str(failed_channel or "").strip().lower().lstrip("#") or None,
+                "channel_list_count": len(channel_list or []),
+                "channel_list_sample": self._bounded_runtime_sample(channel_list or []),
+                "skip_initial_join_once": bool(getattr(self, "_skip_initial_join_once", False)),
+                **self._snapshot_chat_runtime_state(),
+                **extra_fields,
+            }
+            self._last_chat_runtime_snapshot = payload
+            log.log(
+                level,
+                "chat_runtime_snapshot %s",
+                self._format_chat_observability_fields(**payload),
+            )
+            insert_observability_event(
+                flow_type="chat_runtime",
+                flow_id=flow_id,
+                entity_login=payload.get("failed_channel"),
+                step=str(payload.get("phase") or "runtime_snapshot"),
+                decision=str(payload.get("reason") or "unknown"),
+                details=payload,
+            )
+
         def configure_managed_start(
             self,
             *,
@@ -207,7 +298,17 @@ if TWITCHIO_AVAILABLE:
             Returns True if a restart was scheduled, False if one is already pending or throttled.
             """
             now = time.monotonic()
+            flow_id = self._next_chat_observability_flow_id(prefix="restart")
             if self._restart_task and not self._restart_task.done():
+                self._increment_chat_observability_counter("chat_transport_restart_duplicate_total")
+                self._log_chat_runtime_snapshot(
+                    flow_id=flow_id,
+                    phase="restart_request_duplicate",
+                    reason=reason,
+                    failed_channel=failed_channel,
+                    level=logging.INFO,
+                    restart_task_pending=True,
+                )
                 log.info(
                     "Chat transport restart already pending; ignoring duplicate request (%s).",
                     reason,
@@ -215,6 +316,15 @@ if TWITCHIO_AVAILABLE:
                 return False
             if now < self._restart_cooldown_until:
                 remaining = max(0.0, self._restart_cooldown_until - now)
+                self._increment_chat_observability_counter("chat_transport_restart_throttled_total")
+                self._log_chat_runtime_snapshot(
+                    flow_id=flow_id,
+                    phase="restart_request_throttled",
+                    reason=reason,
+                    failed_channel=failed_channel,
+                    level=logging.INFO,
+                    cooldown_remaining_ms=int(remaining * 1000),
+                )
                 log.info(
                     "Chat transport restart throttled for %.1fs (%s).",
                     remaining,
@@ -228,8 +338,23 @@ if TWITCHIO_AVAILABLE:
                 channel_list.append(normalized_failed)
 
             self._restart_cooldown_until = now + self._restart_cooldown_seconds
+            self._increment_chat_observability_counter("chat_transport_restart_total")
+            self._log_chat_runtime_snapshot(
+                flow_id=flow_id,
+                phase="restart_request_scheduled",
+                reason=reason,
+                failed_channel=normalized_failed,
+                channel_list=channel_list,
+                level=logging.WARNING,
+                cooldown_remaining_ms=int(self._restart_cooldown_seconds * 1000),
+            )
             self._restart_task = asyncio.create_task(
-                self._restart_after_transport_failure(channel_list=channel_list, reason=reason),
+                self._restart_after_transport_failure(
+                    channel_list=channel_list,
+                    reason=reason,
+                    flow_id=flow_id,
+                    failed_channel=normalized_failed or None,
+                ),
                 name="twitch.chat_bot.transport_restart",
             )
             return True
@@ -239,8 +364,18 @@ if TWITCHIO_AVAILABLE:
             *,
             channel_list: list[str],
             reason: str,
+            flow_id: str,
+            failed_channel: str | None = None,
         ) -> None:
             async with self._restart_lock:
+                self._log_chat_runtime_snapshot(
+                    flow_id=flow_id,
+                    phase="restart_begin",
+                    reason=reason,
+                    failed_channel=failed_channel,
+                    channel_list=channel_list,
+                    level=logging.WARNING,
+                )
                 log.warning(
                     "Restarting Twitch Chat Bot after broken EventSub transport (%s). channels=%d",
                     reason,
@@ -251,6 +386,14 @@ if TWITCHIO_AVAILABLE:
                 self._channel_subscription_types.clear()
                 self._channel_subscription_state.clear()
                 self._channel_ids.clear()
+                self._log_chat_runtime_snapshot(
+                    flow_id=flow_id,
+                    phase="restart_caches_cleared",
+                    reason=reason,
+                    failed_channel=failed_channel,
+                    channel_list=channel_list,
+                    level=logging.INFO,
+                )
 
                 try:
                     await self.close()
@@ -273,20 +416,46 @@ if TWITCHIO_AVAILABLE:
                         ),
                         name="twitch.chat_bot.restart_start",
                     )
+                    self._log_chat_runtime_snapshot(
+                        flow_id=flow_id,
+                        phase="restart_start_scheduled",
+                        reason=reason,
+                        failed_channel=failed_channel,
+                        channel_list=channel_list,
+                        level=logging.INFO,
+                        with_adapter=with_adapter,
+                    )
                 except Exception:
                     log.exception("Chat transport restart: could not schedule bot start")
                     return
 
                 if channel_list:
                     asyncio.create_task(
-                        self._rejoin_channels_after_restart(channel_list),
+                        self._rejoin_channels_after_restart(
+                            channel_list,
+                            flow_id=flow_id,
+                            reason=reason,
+                        ),
                         name="twitch.chat_bot.restart_rejoin",
                     )
 
-        async def _rejoin_channels_after_restart(self, channels: list[str]) -> None:
+        async def _rejoin_channels_after_restart(
+            self,
+            channels: list[str],
+            *,
+            flow_id: str,
+            reason: str,
+        ) -> None:
             try:
                 await self.wait_until_ready()
             except Exception:
+                self._log_chat_runtime_snapshot(
+                    flow_id=flow_id,
+                    phase="restart_wait_until_ready_failed",
+                    reason=reason,
+                    channel_list=channels,
+                    level=logging.ERROR,
+                )
                 log.exception("Chat transport restart: wait_until_ready failed during rejoin")
                 return
 
@@ -300,13 +469,33 @@ if TWITCHIO_AVAILABLE:
                 normalized.append(login)
 
             if not normalized:
+                self._log_chat_runtime_snapshot(
+                    flow_id=flow_id,
+                    phase="restart_rejoin_skipped",
+                    reason=reason,
+                    channel_list=channels,
+                    level=logging.INFO,
+                    rejoin_candidates=0,
+                )
                 return
 
             try:
+                self._increment_chat_observability_counter("chat_rejoin_attempt_total")
                 joined = await self.join_channels(
                     normalized,
                     rate_limit_delay=0.35,
                     mark_monitored_only=False,
+                )
+                self._increment_chat_observability_counter("chat_rejoin_success_total", joined)
+                self._log_chat_runtime_snapshot(
+                    flow_id=flow_id,
+                    phase="restart_rejoin_finished",
+                    reason=reason,
+                    channel_list=normalized,
+                    level=logging.INFO,
+                    rejoin_candidates=len(normalized),
+                    rejoin_joined=joined,
+                    rejoin_failed=max(0, len(normalized) - joined),
                 )
                 log.info(
                     "Chat transport restart: rejoin finished (%d/%d).",
@@ -314,6 +503,14 @@ if TWITCHIO_AVAILABLE:
                     len(normalized),
                 )
             except Exception:
+                self._log_chat_runtime_snapshot(
+                    flow_id=flow_id,
+                    phase="restart_rejoin_failed",
+                    reason=reason,
+                    channel_list=normalized,
+                    level=logging.ERROR,
+                    rejoin_candidates=len(normalized),
+                )
                 log.exception("Chat transport restart: rejoin failed")
 
         def _is_partner_channel_for_chat_tracking(self, login: str) -> bool:
@@ -729,6 +926,12 @@ if TWITCHIO_AVAILABLE:
             # Initial channels erst hier joinen – WS-Session ist jetzt bereit
             if self._skip_initial_join_once:
                 self._skip_initial_join_once = False
+                self._log_chat_runtime_snapshot(
+                    flow_id=self._next_chat_observability_flow_id(prefix="ready"),
+                    phase="event_ready_skip_initial_join",
+                    reason="managed_transport_restart",
+                    level=logging.INFO,
+                )
                 log.info("Skipping initial channel join after managed transport restart.")
             elif self._initial_channels:
                 log.info("Joining %d initial channels...", len(self._initial_channels))

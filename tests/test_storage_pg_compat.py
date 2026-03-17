@@ -5,16 +5,21 @@ from bot.storage.pg import (
     _CompatConnection,
     analytics_db_fingerprint,
     analytics_db_fingerprint_details,
+    insert_observability_event,
 )
 
 
 class _RecordingConnection:
     def __init__(self) -> None:
         self.executed: list[tuple[str, tuple[object, ...]]] = []
+        self.commits = 0
 
     def execute(self, sql: str, params=(), *args, **kwargs):
         self.executed.append((sql, tuple(params or ())))
         return SimpleNamespace(rowcount=0)
+
+    def commit(self) -> None:
+        self.commits += 1
 
 
 class CompatConnectionExecuteScriptTests(unittest.TestCase):
@@ -45,6 +50,40 @@ class CompatConnectionExecuteScriptTests(unittest.TestCase):
         self.assertIn("RETURN 'hello;world'", raw.executed[0][0])
         self.assertIn("CREATE TABLE affiliate_demo", raw.executed[1][0])
         self.assertIn("DEFAULT 'semi;colon'", raw.executed[1][0])
+
+
+class ObservabilityEventInsertTests(unittest.TestCase):
+    def test_insert_observability_event_persists_json_payload(self) -> None:
+        conn = _RecordingConnection()
+
+        from unittest.mock import patch
+        import contextlib
+
+        with patch(
+            "bot.storage.pg.get_conn",
+            side_effect=lambda: contextlib.nullcontext(conn),
+        ):
+            insert_observability_event(
+                flow_type="chat_join",
+                flow_id="flow-123",
+                step="decision",
+                decision="missing_scope",
+                entity_login="partner_one",
+                entity_id="1001",
+                details={"missing": ["channel:bot"]},
+            )
+
+        self.assertEqual(conn.commits, 1)
+        self.assertEqual(len(conn.executed), 1)
+        sql, params = conn.executed[0]
+        self.assertIn("INSERT INTO twitch_observability_events", sql)
+        self.assertEqual(params[0], "chat_join")
+        self.assertEqual(params[1], "flow-123")
+        self.assertEqual(params[2], "partner_one")
+        self.assertEqual(params[3], "1001")
+        self.assertEqual(params[4], "decision")
+        self.assertEqual(params[5], "missing_scope")
+        self.assertIn('"missing": ["channel:bot"]', params[6])
 
 
 class AnalyticsDbFingerprintTests(unittest.TestCase):

@@ -5,7 +5,7 @@ import sqlite3
 import time
 import unittest
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, patch
+from unittest.mock import ANY, AsyncMock, patch
 
 from bot.chat.connection import ConnectionMixin
 from bot.raid.bot import RaidBot
@@ -52,12 +52,21 @@ class ChatJoinNotificationSubscriptionTests(unittest.IsolatedAsyncioTestCase):
     async def test_join_subscribes_missing_chat_notification_subscription(self) -> None:
         harness = _JoinHarness(bot_scopes={"user:read:chat"})
 
-        result = await harness.join("targetlogin", channel_id="9009")
+        with self.assertLogs("TwitchStreams.ChatBot", level="INFO") as captured:
+            result = await harness.join("targetlogin", channel_id="9009")
 
         self.assertTrue(result)
         self.assertEqual(harness.subscribe_calls, ["ChatNotificationSubscription"])
         self.assertTrue(
             harness.is_channel_subscription_ready("targetlogin", "channel.chat.notification")
+        )
+        self.assertTrue(
+            any(
+                "join_decision" in entry
+                and "decision=joined" in entry
+                and "flow_id=" in entry
+                for entry in captured.output
+            )
         )
 
     async def test_join_records_missing_broadcaster_scope(self) -> None:
@@ -255,6 +264,8 @@ class ChatNotificationRaidCorrelationTests(unittest.IsolatedAsyncioTestCase):
         raid_bot._recent_raid_arrivals = {}
         raid_bot._orphan_chat_raid_notifications = {}
         raid_bot._manual_raid_suppression = {}
+        raid_bot._raid_readiness_by_flow_id = {}
+        raid_bot._raid_observability_counter_store = {}
         raid_bot._user_scope_fallback_warned = set()
         raid_bot.chat_bot = None
         raid_bot._bot_id = None
@@ -276,7 +287,9 @@ class ChatNotificationRaidCorrelationTests(unittest.IsolatedAsyncioTestCase):
             is_partner_raid=True,
             viewer_count=42,
             offline_trigger_ts=None,
+            raid_flow_id="raid-flow-1",
             channel_raid_ready=True,
+            channel_raid_ready_detail=None,
             chat_notification_state="subscribed",
             chat_notification_detail=None,
         )
@@ -332,7 +345,9 @@ class ChatNotificationRaidCorrelationTests(unittest.IsolatedAsyncioTestCase):
             is_partner_raid=True,
             viewer_count=12,
             offline_trigger_ts=None,
+            raid_flow_id="raid-flow-2",
             channel_raid_ready=True,
+            channel_raid_ready_detail=None,
             chat_notification_state="subscribed",
             chat_notification_detail=None,
         )
@@ -445,7 +460,7 @@ class ChatNotificationRaidCorrelationTests(unittest.IsolatedAsyncioTestCase):
         )
 
         self.assertFalse(ready)
-        ensure_ready.assert_awaited_once_with("9009", "targetlogin")
+        ensure_ready.assert_awaited_once_with("9009", "targetlogin", raid_flow_id=ANY)
 
     async def test_register_pending_raid_recreates_subscription_when_remote_readiness_failed(self) -> None:
         raid_bot = self._build_raid_bot()

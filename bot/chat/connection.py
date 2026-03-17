@@ -1,10 +1,12 @@
 import asyncio
 import inspect
+import json
 import logging
+import time
 from datetime import UTC, datetime, timedelta
 
 from ..core.partner_utils import is_partner_channel_for_chat_tracking
-from ..storage import get_conn
+from ..storage import get_conn, insert_observability_event
 from .constants import CHAT_JOIN_OFFLINE, eventsub
 
 log = logging.getLogger("TwitchStreams.ChatBot")
@@ -24,6 +26,121 @@ _CHAT_REQUIRED_BROADCASTER_GRANTS: frozenset[str] = frozenset({"channel:bot"})
 
 
 class ConnectionMixin:
+    def _next_chat_observability_flow_id(self, *, prefix: str) -> str:
+        sequence = int(getattr(self, "_chat_observability_sequence", 0) or 0) + 1
+        self._chat_observability_sequence = sequence
+        return f"{str(prefix or 'chat').strip().lower()}-{int(time.time() * 1000)}-{sequence}"
+
+    def _chat_observability_counters(self) -> dict[str, int]:
+        counters = getattr(self, "_chat_observability_counter_store", None)
+        if not isinstance(counters, dict):
+            counters = {}
+            self._chat_observability_counter_store = counters
+        return counters
+
+    def _increment_chat_observability_counter(self, name: str, amount: int = 1) -> int:
+        counter_name = str(name or "").strip()
+        if not counter_name:
+            return 0
+        counters = self._chat_observability_counters()
+        counters[counter_name] = int(counters.get(counter_name, 0) or 0) + int(amount)
+        return counters[counter_name]
+
+    @staticmethod
+    def _chat_observability_normalize(value: object, *, limit: int = 240) -> str:
+        def _convert(obj: object) -> object:
+            if obj is None:
+                return None
+            if isinstance(obj, datetime):
+                return obj.isoformat()
+            if isinstance(obj, set):
+                return sorted(str(item) for item in obj)
+            if isinstance(obj, (list, tuple)):
+                return [_convert(item) for item in obj]
+            if isinstance(obj, dict):
+                return {str(key): _convert(val) for key, val in obj.items()}
+            if isinstance(obj, (str, int, float, bool)):
+                return obj
+            return str(obj)
+
+        normalized = _convert(value)
+        if isinstance(normalized, str):
+            text = normalized.replace("\r", " ").replace("\n", " ").strip()
+        else:
+            text = json.dumps(normalized, sort_keys=True, ensure_ascii=True, separators=(",", ":"))
+        if len(text) > limit:
+            return f"{text[:limit]}..."
+        return text
+
+    def _format_chat_observability_fields(self, **fields: object) -> str:
+        ordered = []
+        for key in sorted(fields):
+            value = fields[key]
+            if value is None:
+                continue
+            ordered.append(
+                f"{str(key).strip()}={self._chat_observability_normalize(value)}"
+            )
+        return " ".join(ordered)
+
+    def _log_chat_join_decision(
+        self,
+        *,
+        flow_id: str,
+        channel_login: str,
+        channel_id: str | None,
+        remaining_missing: list[str],
+        decision: str,
+        decision_detail: str | None = None,
+        level: int = logging.INFO,
+        auth_diagnostics: dict[str, object] | None = None,
+        join_state: dict[str, bool] | None = None,
+        exception: Exception | None = None,
+    ) -> None:
+        normalized_login = str(channel_login or "").strip().lower().lstrip("#")
+        cooldown_store = getattr(self, "_mod_retry_cooldown", None)
+        cooldown_until = None
+        if isinstance(cooldown_store, dict):
+            cooldown_until = cooldown_store.get(normalized_login)
+        payload = {
+            "flow_id": flow_id,
+            "channel_login": normalized_login or str(channel_login or "").strip(),
+            "channel_id": str(channel_id or "").strip() or None,
+            "remaining_missing": sorted(str(item) for item in remaining_missing if str(item).strip()),
+            "tracked_subscription_types": sorted(self._get_tracked_chat_subscription_types(normalized_login)),
+            "subscription_state": self.get_channel_subscription_state(normalized_login),
+            "auth_diagnostics": auth_diagnostics or {},
+            "join_state": join_state or {},
+            "decision": str(decision or "").strip() or "unknown",
+            "decision_detail": str(decision_detail or "").strip() or None,
+            "mod_retry_cooldown_until": (
+                cooldown_until.isoformat()
+                if isinstance(cooldown_until, datetime)
+                else str(cooldown_until or "").strip() or None
+            ),
+            "exception_class": exception.__class__.__name__ if exception is not None else None,
+            "exception_text": (
+                str(exception or "").replace("\r", " ").replace("\n", " ").strip()[:240]
+                if exception is not None
+                else None
+            ),
+        }
+        self._last_chat_join_diagnostic = payload
+        log.log(
+            level,
+            "join_decision %s",
+            self._format_chat_observability_fields(**payload),
+        )
+        insert_observability_event(
+            flow_type="chat_join",
+            flow_id=flow_id,
+            entity_login=payload.get("channel_login"),
+            entity_id=payload.get("channel_id"),
+            step="terminal_decision",
+            decision=str(payload.get("decision") or "unknown"),
+            details=payload,
+        )
+
     @staticmethod
     def _required_chat_subscription_types() -> tuple[str, ...]:
         return _CHAT_EVENTSUB_TYPES
@@ -584,13 +701,53 @@ class ConnectionMixin:
 
     async def join(self, channel_login: str, channel_id: str | None = None):
         """Joint einen Channel via EventSub (TwitchIO 3.x)."""
-        try:
-            normalized_login = channel_login.lower().lstrip("#")
+        normalized_login = str(channel_login or "").strip().lower().lstrip("#")
+        flow_id = self._next_chat_observability_flow_id(prefix="join")
+        self._increment_chat_observability_counter("chat_join_attempt_total")
 
+        def _remaining_missing() -> list[str]:
+            if not normalized_login:
+                return list(self._required_chat_subscription_types())
+            return [
+                sub_type
+                for sub_type in self._required_chat_subscription_types()
+                if not self.is_channel_subscription_ready(normalized_login, sub_type)
+            ]
+
+        def _emit_join_decision(
+            *,
+            decision: str,
+            detail: str | None = None,
+            level: int = logging.INFO,
+            auth_diagnostics: dict[str, object] | None = None,
+            join_state: dict[str, bool] | None = None,
+            exception: Exception | None = None,
+        ) -> None:
+            self._log_chat_join_decision(
+                flow_id=flow_id,
+                channel_login=normalized_login or channel_login,
+                channel_id=str(channel_id or "").strip() or None,
+                remaining_missing=_remaining_missing(),
+                decision=decision,
+                decision_detail=detail,
+                level=level,
+                auth_diagnostics=auth_diagnostics,
+                join_state=join_state,
+                exception=exception,
+            )
+
+        try:
             if not channel_id:
                 user = await self.fetch_user(login=channel_login.lstrip("#"))
                 if not user:
                     log.error("Could not find user ID for channel %s", channel_login)
+                    self._increment_chat_observability_counter("chat_join_failure_total")
+                    self._increment_chat_observability_counter("chat_join_failure_total_channel_not_found")
+                    _emit_join_decision(
+                        decision="channel_not_found",
+                        detail="fetch_user returned no user",
+                        level=logging.ERROR,
+                    )
                     return False
                 channel_id = str(user.id)
 
@@ -608,6 +765,11 @@ class ConnectionMixin:
                 channel_id=str(channel_id),
                 safe_bot_id=str(safe_bot_id),
             ):
+                self._increment_chat_observability_counter("chat_join_success_total")
+                _emit_join_decision(
+                    decision="joined",
+                    detail="required chat subscriptions ready",
+                )
                 return True
             log.warning(
                 "join(): Chat-Subscriptions für %s sind unvollständig (%s)",
@@ -618,14 +780,17 @@ class ConnectionMixin:
                     )
                 ),
             )
+            self._increment_chat_observability_counter("chat_join_failure_total")
+            self._increment_chat_observability_counter("chat_join_failure_total_incomplete_subscriptions")
+            _emit_join_decision(
+                decision="subscriptions_incomplete",
+                detail="required chat subscriptions still not ready after subscribe attempt",
+                level=logging.WARNING,
+            )
             return False
         except Exception as e:
             msg = str(e)
-            remaining_missing = [
-                sub_type
-                for sub_type in self._required_chat_subscription_types()
-                if not self.is_channel_subscription_ready(normalized_login, sub_type)
-            ]
+            remaining_missing = _remaining_missing()
             if self._looks_like_transport_session_gone_error(msg):
                 for sub_type in remaining_missing:
                     self._record_chat_subscription_state(
@@ -651,6 +816,14 @@ class ConnectionMixin:
                             channel_login,
                         )
                 log.error("Failed to join channel %s: %s", channel_login, e)
+                self._increment_chat_observability_counter("chat_join_failure_total")
+                self._increment_chat_observability_counter("chat_join_failure_total_transport_session_invalid")
+                _emit_join_decision(
+                    decision="transport_session_invalid",
+                    detail="eventsub websocket transport session does not exist",
+                    level=logging.ERROR,
+                    exception=e,
+                )
                 return False
             if "invalid transport and auth combination" in msg:
                 # Token war zum Zeitpunkt des ersten Versuchs noch nicht
@@ -671,22 +844,45 @@ class ConnectionMixin:
                 await asyncio.sleep(1)
                 await self._ensure_bot_token_registered()
                 try:
-                    if await self._subscribe_missing_chat_subscriptions(
-                        channel_login=normalized_login,
-                        channel_id=str(channel_id),
-                        safe_bot_id=str(safe_bot_id),
-                    ):
-                        log.info(
-                            "join(): Retry erfolgreich für %s nach Token-Registrierung",
-                            channel_login,
-                        )
-                        return True
+                        if await self._subscribe_missing_chat_subscriptions(
+                            channel_login=normalized_login,
+                            channel_id=str(channel_id),
+                            safe_bot_id=str(safe_bot_id),
+                        ):
+                            log.info(
+                                "join(): Retry erfolgreich für %s nach Token-Registrierung",
+                                channel_login,
+                            )
+                            self._increment_chat_observability_counter("chat_join_success_total")
+                            _emit_join_decision(
+                                decision="joined_after_token_retry",
+                                detail="retry after bot token registration succeeded",
+                                exception=e,
+                            )
+                            return True
                 except Exception as retry_err:
                     log.error(
                         "join(): Retry für %s fehlgeschlagen: %s",
                         channel_login,
                         retry_err,
                     )
+                    self._increment_chat_observability_counter("chat_join_failure_total")
+                    self._increment_chat_observability_counter("chat_join_failure_total_token_retry_failed")
+                    _emit_join_decision(
+                        decision="bot_token_retry_failed",
+                        detail="retry after bot token registration failed",
+                        level=logging.ERROR,
+                        exception=retry_err,
+                    )
+                    return False
+                self._increment_chat_observability_counter("chat_join_failure_total")
+                self._increment_chat_observability_counter("chat_join_failure_total_bot_token_not_registered")
+                _emit_join_decision(
+                    decision="bot_token_not_registered",
+                    detail="invalid transport and auth combination",
+                    level=logging.WARNING,
+                    exception=e,
+                )
                 return False
             if "403" in msg and "subscription missing proper authorization" in msg:
                 auth_diagnostics = self._diagnose_chat_subscription_authorization(
@@ -712,6 +908,16 @@ class ConnectionMixin:
                         channel_login,
                         missing_bot_scopes,
                     )
+                    self._increment_chat_observability_counter("chat_join_failure_total")
+                    self._increment_chat_observability_counter("chat_join_failure_total_missing_bot_scope")
+                    _emit_join_decision(
+                        decision="missing_bot_scope",
+                        detail=missing_bot_scopes,
+                        level=logging.WARNING,
+                        auth_diagnostics=auth_diagnostics,
+                        join_state=join_state,
+                        exception=e,
+                    )
                     return False
                 if auth_diagnostics["missing_broadcaster_scopes"]:
                     missing_broadcaster_scopes = ", ".join(
@@ -729,6 +935,16 @@ class ConnectionMixin:
                         channel_login,
                         missing_broadcaster_scopes,
                     )
+                    self._increment_chat_observability_counter("chat_join_failure_total")
+                    self._increment_chat_observability_counter("chat_join_failure_total_missing_broadcaster_scope")
+                    _emit_join_decision(
+                        decision="missing_broadcaster_scope",
+                        detail=missing_broadcaster_scopes,
+                        level=logging.WARNING,
+                        auth_diagnostics=auth_diagnostics,
+                        join_state=join_state,
+                        exception=e,
+                    )
                     return False
                 if not bot_scope_state_known:
                     for sub_type in remaining_missing:
@@ -742,6 +958,16 @@ class ConnectionMixin:
                         "join(): Chat-Subscription für %s blockiert – zentraler Bot-Scope-Zustand ist unbekannt. Kein Mod-Retry.",
                         channel_login,
                     )
+                    self._increment_chat_observability_counter("chat_join_failure_total")
+                    self._increment_chat_observability_counter("chat_join_failure_total_unknown_bot_scope_state")
+                    _emit_join_decision(
+                        decision="unknown_bot_scope_state",
+                        detail="central bot scope set unavailable during 403 auth diagnosis",
+                        level=logging.WARNING,
+                        auth_diagnostics=auth_diagnostics,
+                        join_state=join_state,
+                        exception=e,
+                    )
                     return False
                 if join_state["is_partner_active"] and not join_state["has_raid_auth"]:
                     for sub_type in remaining_missing:
@@ -754,6 +980,16 @@ class ConnectionMixin:
                     log.warning(
                         "join(): Chat-Subscription für %s blockiert – Partner-Channel hat keine Broadcaster-Autorisierung. Kein Mod-Retry.",
                         channel_login,
+                    )
+                    self._increment_chat_observability_counter("chat_join_failure_total")
+                    self._increment_chat_observability_counter("chat_join_failure_total_missing_broadcaster_authorization")
+                    _emit_join_decision(
+                        decision="missing_broadcaster_authorization",
+                        detail="partner channel has no twitch_raid_auth authorization record",
+                        level=logging.WARNING,
+                        auth_diagnostics=auth_diagnostics,
+                        join_state=join_state,
+                        exception=e,
                     )
                     return False
                 if (
@@ -773,6 +1009,16 @@ class ConnectionMixin:
                         "join(): stale/removed channel %s detected after 403; local chat state purged, no mod retry.",
                         channel_login,
                     )
+                    self._increment_chat_observability_counter("chat_join_failure_total")
+                    self._increment_chat_observability_counter("chat_join_purged_stale_total")
+                    self._increment_chat_observability_counter("chat_join_failure_total_stale_removed_channel")
+                    _emit_join_decision(
+                        decision="stale_removed_channel",
+                        detail="channel no longer tracked locally or authorized",
+                        auth_diagnostics=auth_diagnostics,
+                        join_state=join_state,
+                        exception=e,
+                    )
                     return False
                 # Monitored-Only Channels: kein Mod-Versuch, einfach überspringen.
                 # Diese Channels haben keinen Streamer-Token, daher ist _ensure_bot_is_mod
@@ -790,6 +1036,15 @@ class ConnectionMixin:
                         "Channel wird übersprungen (kein Streamer-Token verfügbar).",
                         channel_login,
                     )
+                    self._increment_chat_observability_counter("chat_join_failure_total")
+                    self._increment_chat_observability_counter("chat_join_failure_total_monitored_only_no_broadcaster_auth")
+                    _emit_join_decision(
+                        decision="monitored_only_no_broadcaster_auth",
+                        detail="subscription missing proper authorization",
+                        auth_diagnostics=auth_diagnostics,
+                        join_state=join_state,
+                        exception=e,
+                    )
                     return False
 
                 # Cooldown-Prüfung: Bei gebannen Bots nicht wiederholt versuchen
@@ -801,9 +1056,20 @@ class ConnectionMixin:
                         channel_login,
                         cd_until.isoformat(),
                     )
+                    self._increment_chat_observability_counter("chat_join_failure_total")
+                    self._increment_chat_observability_counter("chat_join_failure_total_mod_retry_cooldown")
+                    _emit_join_decision(
+                        decision="mod_retry_cooldown",
+                        detail="mod retry cooldown active",
+                        level=logging.DEBUG,
+                        auth_diagnostics=auth_diagnostics,
+                        join_state=join_state,
+                        exception=e,
+                    )
                     return False
 
                 # Automatischer Retry: Bot als Mod setzen und nochmal versuchen
+                self._increment_chat_observability_counter("chat_join_mod_retry_total")
                 log.info(
                     "join(): 403 für %s – versuche Bot automatisch als Mod zu setzen...",
                     channel_login,
@@ -822,6 +1088,14 @@ class ConnectionMixin:
                                 "join(): Retry erfolgreich für %s nach Mod-Autorisierung",
                                 channel_login,
                             )
+                            self._increment_chat_observability_counter("chat_join_success_total")
+                            _emit_join_decision(
+                                decision="joined_after_mod_retry",
+                                detail="retry after mod authorization succeeded",
+                                auth_diagnostics=auth_diagnostics,
+                                join_state=join_state,
+                                exception=e,
+                            )
                             return True
                     except Exception as retry_err:
                         log.warning(
@@ -829,6 +1103,17 @@ class ConnectionMixin:
                             channel_login,
                             retry_err,
                         )
+                        self._increment_chat_observability_counter("chat_join_failure_total")
+                        self._increment_chat_observability_counter("chat_join_failure_total_mod_retry_failed")
+                        _emit_join_decision(
+                            decision="mod_retry_failed",
+                            detail="retry after mod authorization failed",
+                            level=logging.WARNING,
+                            auth_diagnostics=auth_diagnostics,
+                            join_state=join_state,
+                            exception=retry_err,
+                        )
+                        return False
                 else:
                     # Cooldown setzen: Nächster Retry erst nach 10 Minuten
                     self._mod_retry_cooldown[cd_key] = datetime.now(UTC) + timedelta(minutes=10)
@@ -840,6 +1125,16 @@ class ConnectionMixin:
                         "Nächster Retry in 10 min.",
                         channel_login,
                     )
+                self._increment_chat_observability_counter("chat_join_failure_total")
+                self._increment_chat_observability_counter("chat_join_failure_total_mod_retry_not_resolved")
+                _emit_join_decision(
+                    decision="mod_retry_not_resolved",
+                    detail="mod retry path did not restore required chat subscriptions",
+                    level=logging.WARNING,
+                    auth_diagnostics=auth_diagnostics,
+                    join_state=join_state,
+                    exception=e,
+                )
             elif "429" in msg or "transport limit exceeded" in msg.lower():
                 for sub_type in remaining_missing:
                     self._record_chat_subscription_state(
@@ -853,6 +1148,14 @@ class ConnectionMixin:
                     "Ensure the bot uses only one WebSocket connection.",
                     channel_login,
                 )
+                self._increment_chat_observability_counter("chat_join_failure_total")
+                self._increment_chat_observability_counter("chat_join_failure_total_transport_limit")
+                _emit_join_decision(
+                    decision="transport_limit",
+                    detail="websocket transport limit reached",
+                    level=logging.ERROR,
+                    exception=e,
+                )
             else:
                 for sub_type in remaining_missing:
                     self._record_chat_subscription_state(
@@ -862,6 +1165,14 @@ class ConnectionMixin:
                         detail=msg[:200],
                     )
                 log.error("Failed to join channel %s: %s", channel_login, e)
+                self._increment_chat_observability_counter("chat_join_failure_total")
+                self._increment_chat_observability_counter("chat_join_failure_total_subscribe_failed")
+                _emit_join_decision(
+                    decision="subscribe_failed",
+                    detail=msg[:200],
+                    level=logging.ERROR,
+                    exception=e,
+                )
             return False
 
     async def join_channels(

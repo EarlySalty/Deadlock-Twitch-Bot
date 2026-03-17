@@ -47,6 +47,56 @@ class InternalApiAuthTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.status, 200)
         self.assertTrue(payload.get("ok"))
 
+    async def test_observability_debug_returns_scrubbed_payload(self) -> None:
+        async def _observability_snapshot_cb() -> dict[str, object]:
+            return {
+                "chat": {"counters": {"chat_join_attempt_total": 3}},
+                "raid": {"pending_count": 1},
+            }
+
+        app = build_internal_api_app(
+            token="secret-token",
+            observability_snapshot_cb=_observability_snapshot_cb,
+        )
+        async with TestServer(app) as server:
+            async with TestClient(server) as client:
+                response = await client.get(
+                    f"{INTERNAL_API_BASE_PATH}/debug/observability",
+                    headers={INTERNAL_TOKEN_HEADER: "secret-token"},
+                )
+                payload = await response.json()
+
+        self.assertEqual(response.status, 200)
+        self.assertTrue(payload.get("ok"))
+        self.assertEqual(
+            payload.get("observability", {}).get("chat", {}).get("counters", {}).get("chat_join_attempt_total"),
+            3,
+        )
+
+    async def test_observability_debug_returns_callback_payload(self) -> None:
+        async def _observability_snapshot_cb() -> dict[str, object]:
+            return {
+                "chat": {"joinAttempts": 4},
+                "raid": {"pendingCount": 2},
+            }
+
+        app = build_internal_api_app(
+            token="secret-token",
+            observability_snapshot_cb=_observability_snapshot_cb,
+        )
+        async with TestServer(app) as server:
+            async with TestClient(server) as client:
+                response = await client.get(
+                    f"{INTERNAL_API_BASE_PATH}/debug/observability",
+                    headers={INTERNAL_TOKEN_HEADER: "secret-token"},
+                )
+                payload = await response.json()
+
+        self.assertEqual(response.status, 200)
+        self.assertTrue(payload.get("ok"))
+        self.assertEqual(payload.get("observability", {}).get("chat", {}).get("joinAttempts"), 4)
+        self.assertEqual(payload.get("observability", {}).get("raid", {}).get("pendingCount"), 2)
+
     async def test_healthz_rejects_non_loopback_host_header(self) -> None:
         app = build_internal_api_app(token="secret-token")
         async with TestServer(app) as server:

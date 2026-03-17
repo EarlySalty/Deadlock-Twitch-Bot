@@ -75,6 +75,7 @@ class InternalApiServer:
         raid_oauth_callback_cb: Callable[..., Awaitable[dict[str, Any]]] | None = None,
         live_active_announcements_cb: Callable[[], Awaitable[list[dict[str, Any]]]] | None = None,
         live_link_click_cb: Callable[..., Awaitable[dict[str, Any] | None]] | None = None,
+        observability_snapshot_cb: Callable[[], Awaitable[dict[str, Any]]] | None = None,
     ) -> None:
         self._token = (token or "").strip()
         base = (base_path or INTERNAL_API_BASE_PATH).strip()
@@ -135,6 +136,11 @@ class InternalApiServer:
         self._live_link_click = (
             live_link_click_cb if callable(live_link_click_cb) else self._empty_live_link_click
         )
+        self._observability_snapshot = (
+            observability_snapshot_cb
+            if callable(observability_snapshot_cb)
+            else self._empty_observability_snapshot
+        )
         self._idempotency_cache: dict[str, dict[str, Any]] = {}
         self._idempotency_inflight: dict[str, _IdempotencyInFlight] = {}
         self._idempotency_ttl_seconds = 15 * 60
@@ -160,6 +166,9 @@ class InternalApiServer:
 
     async def _empty_list(self) -> list[dict[str, Any]]:
         return []
+
+    async def _empty_observability_snapshot(self) -> dict[str, Any]:
+        return {}
 
     async def _empty_stats(self, **_: Any) -> dict[str, Any]:
         return {}
@@ -933,6 +942,36 @@ class InternalApiServer:
                 "analyticsDb": analytics_db,
             }
         )
+
+    async def observability_debug(self, request: web.Request) -> web.Response:
+        analytics_db = request.app.get(ANALYTICS_DB_FINGERPRINT_DETAILS_KEY) or {}
+        try:
+            payload = await self._observability_snapshot()
+            if not isinstance(payload, dict):
+                payload = {"value": payload}
+            return self._json_response(
+                {
+                    "ok": True,
+                    "service": "twitch-internal-api",
+                    "analyticsDbFingerprint": analytics_db.get("fingerprint"),
+                    "observability": payload,
+                }
+            )
+        except ValueError as exc:
+            return self._safe_exception_error(
+                context="observability snapshot",
+                exc=exc,
+                error="internal_error",
+                status=500,
+                message="failed to build observability snapshot",
+            )
+        except Exception:
+            log.exception("internal api observability snapshot failed")
+            return self._json_error(
+                "internal_error",
+                500,
+                "failed to build observability snapshot",
+            )
 
     async def live_active_announcements(self, request: web.Request) -> web.Response:
         del request
@@ -1803,6 +1842,7 @@ class InternalApiServer:
         app.add_routes(
             [
                 web.get(f"{base}/healthz", self.healthz),
+                web.get(f"{base}/debug/observability", self.observability_debug),
                 web.get(
                     f"{base}/live/active-announcements",
                     self.live_active_announcements,
@@ -1858,6 +1898,7 @@ def build_internal_api_app(
     raid_oauth_callback_cb: Callable[..., Awaitable[dict[str, Any]]] | None = None,
     live_active_announcements_cb: Callable[[], Awaitable[list[dict[str, Any]]]] | None = None,
     live_link_click_cb: Callable[..., Awaitable[dict[str, Any] | None]] | None = None,
+    observability_snapshot_cb: Callable[[], Awaitable[dict[str, Any]]] | None = None,
 ) -> web.Application:
     server = InternalApiServer(
         token=token,
@@ -1881,6 +1922,7 @@ def build_internal_api_app(
         raid_oauth_callback_cb=raid_oauth_callback_cb,
         live_active_announcements_cb=live_active_announcements_cb,
         live_link_click_cb=live_link_click_cb,
+        observability_snapshot_cb=observability_snapshot_cb,
     )
 
     @web.middleware

@@ -198,6 +198,16 @@ class InternalApiClient:
         if self._owns_session and self._session is not None and not self._session.closed:
             await self._session.close()
 
+    async def get_observability_snapshot(self) -> dict[str, Any]:
+        payload = await self._request_json("GET", f"{INTERNAL_API_BASE_PATH}/debug/observability")
+        if isinstance(payload, dict):
+            return payload
+        raise InternalApiClientError(
+            status=502,
+            code="invalid_payload",
+            message="Bot internal API returned an invalid observability payload.",
+        )
+
     async def _request_json(
         self,
         method: str,

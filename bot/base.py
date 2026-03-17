@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import inspect
 import ipaddress
+import json
 import os
 import re
 import socket
@@ -73,6 +74,60 @@ def _parse_env_int(name: str, default: int) -> int:
         return int(raw)
     except ValueError:
         return default
+
+
+def _observability_flow_id(prefix: str) -> str:
+    normalized = str(prefix or "flow").strip().lower() or "flow"
+    return f"{normalized}-{int(time.time() * 1000)}"
+
+
+def _observability_sample(values: object, *, limit: int = 8) -> list[str]:
+    if isinstance(values, dict):
+        source = values.keys()
+    elif isinstance(values, (set, list, tuple)):
+        source = values
+    else:
+        return []
+    normalized = [
+        str(value or "").strip().lower().lstrip("#")
+        for value in source
+        if str(value or "").strip()
+    ]
+    return sorted(dict.fromkeys(normalized))[:limit]
+
+
+def _observability_value(value: object, *, limit: int = 240) -> str:
+    def _convert(obj: object) -> object:
+        if obj is None:
+            return None
+        if isinstance(obj, datetime):
+            return obj.isoformat()
+        if isinstance(obj, set):
+            return sorted(str(item) for item in obj)
+        if isinstance(obj, (list, tuple)):
+            return [_convert(item) for item in obj]
+        if isinstance(obj, dict):
+            return {str(key): _convert(val) for key, val in obj.items()}
+        if isinstance(obj, (str, int, float, bool)):
+            return obj
+        return str(obj)
+
+    normalized = _convert(value)
+    if isinstance(normalized, str):
+        text = normalized.replace("\r", " ").replace("\n", " ").strip()
+    else:
+        text = json.dumps(normalized, sort_keys=True, ensure_ascii=True, separators=(",", ":"))
+    return f"{text[:limit]}..." if len(text) > limit else text
+
+
+def _observability_fields(**fields: object) -> str:
+    parts = []
+    for key in sorted(fields):
+        value = fields[key]
+        if value is None:
+            continue
+        parts.append(f"{str(key).strip()}={_observability_value(value)}")
+    return " ".join(parts)
 
 
 class TwitchBaseCog(commands.Cog):
@@ -220,6 +275,11 @@ class TwitchBaseCog(commands.Cog):
                 None,
             ),
             live_link_click_cb=getattr(self, "_dashboard_live_link_click", None),
+            observability_snapshot_cb=getattr(
+                self,
+                "_internal_observability_snapshot",
+                None,
+            ),
         )
 
         # EventSub Webhook Handler – früh initialisieren damit er sowohl im Dashboard
@@ -440,6 +500,59 @@ class TwitchBaseCog(commands.Cog):
         ))
         log.debug("Subsystem reload manager ready (%d subsystems)", len(self._reload_manager.get_all_names()))
 
+    @staticmethod
+    def _sample_observability_items(values: object, *, limit: int = 10) -> list[str]:
+        if not isinstance(values, (list, tuple, set)):
+            return []
+        sampled: list[str] = []
+        for value in values:
+            text = str(value or "").strip()
+            if not text:
+                continue
+            sampled.append(text)
+            if len(sampled) >= limit:
+                break
+        return sampled
+
+    async def _internal_observability_snapshot(self) -> dict[str, Any]:
+        chat_bot = getattr(self, "_twitch_chat_bot", None)
+        raid_bot = getattr(self, "_raid_bot", None)
+
+        chat_snapshot = None
+        if chat_bot and hasattr(chat_bot, "get_observability_snapshot"):
+            try:
+                maybe_chat_snapshot = chat_bot.get_observability_snapshot()
+                if inspect.isawaitable(maybe_chat_snapshot):
+                    maybe_chat_snapshot = await maybe_chat_snapshot
+                if isinstance(maybe_chat_snapshot, dict):
+                    chat_snapshot = maybe_chat_snapshot
+            except Exception:
+                log.debug("Observability snapshot: chat bot snapshot failed", exc_info=True)
+
+        raid_snapshot = None
+        if raid_bot and hasattr(raid_bot, "get_observability_snapshot"):
+            try:
+                maybe_raid_snapshot = raid_bot.get_observability_snapshot()
+                if inspect.isawaitable(maybe_raid_snapshot):
+                    maybe_raid_snapshot = await maybe_raid_snapshot
+                if isinstance(maybe_raid_snapshot, dict):
+                    raid_snapshot = maybe_raid_snapshot
+            except Exception:
+                log.debug("Observability snapshot: raid bot snapshot failed", exc_info=True)
+
+        return {
+            "generatedAt": datetime.now(UTC).isoformat(timespec="seconds"),
+            "pollIntervalSeconds": self._poll_interval_seconds,
+            "activeSessionCount": len(getattr(self, "_active_sessions", {}) or {}),
+            "activeSessionSample": self._sample_observability_items(
+                sorted((getattr(self, "_active_sessions", {}) or {}).keys())
+            ),
+            "chatRuntimeAvailable": bool(chat_bot),
+            "raidRuntimeAvailable": bool(raid_bot),
+            "chat": chat_snapshot,
+            "raid": raid_snapshot,
+        }
+
     async def _reload_social_teardown(self) -> None:
         """Stop ClipFetcher and UploadWorker before hot-reloading social modules."""
         if self.clip_fetcher:
@@ -482,6 +595,22 @@ class TwitchBaseCog(commands.Cog):
         await asyncio.sleep(60)
 
         while True:
+            scout_flow_id = _observability_flow_id("scout")
+            scout_summary: dict[str, object] = {
+                "flow_id": scout_flow_id,
+                "new_logins": [],
+                "heal_logins": [],
+                "heal_reasons": {},
+                "to_remove": [],
+                "streams_seen": 0,
+                "current_deadlock_logins_count": 0,
+                "existing_monitored_count": 0,
+                "chat_runtime_monitored_count": 0,
+                "ready_check_available": False,
+                "set_monitored_channels_ok": None,
+                "join_channels_ok": None,
+                "part_channels_ok": None,
+            }
             try:
                 if not self.api:
                     log.warning("Scout: Twitch API not available, skipping.")
@@ -505,10 +634,12 @@ class TwitchBaseCog(commands.Cog):
                     language="de",
                     limit=100,
                 )
+                scout_summary["streams_seen"] = len(streams)
 
                 current_deadlock_logins = {
                     s.get("user_login", "").lower() for s in streams if s.get("user_login")
                 }
+                scout_summary["current_deadlock_logins_count"] = len(current_deadlock_logins)
                 new_logins = []
                 now = datetime.now(UTC).isoformat(timespec="seconds")
 
@@ -520,6 +651,7 @@ class TwitchBaseCog(commands.Cog):
                             "SELECT twitch_login FROM twitch_streamers WHERE is_monitored_only = 1"
                         ).fetchall()
                     }
+                    scout_summary["existing_monitored_count"] = len(existing_monitored)
 
                     for s in streams:
                         login = s.get("user_login", "").lower()
@@ -541,6 +673,7 @@ class TwitchBaseCog(commands.Cog):
                                 (login, s.get("user_id"), now),
                             )
                             new_logins.append(login)
+                    scout_summary["new_logins"] = list(new_logins)
 
                     conn.commit()
 
@@ -557,6 +690,7 @@ class TwitchBaseCog(commands.Cog):
                 for login in existing_monitored:
                     if login not in current_deadlock_logins:
                         to_remove.append(login)
+                scout_summary["to_remove"] = list(to_remove)
 
                 if to_remove:
                     with storage.get_conn() as conn:
@@ -594,6 +728,7 @@ class TwitchBaseCog(commands.Cog):
                 # --- 3. Sync Chat Bot ---
                 chat_bot = getattr(self, "_twitch_chat_bot", None)
                 heal_logins: list[str] = []
+                heal_reasons: dict[str, str] = {}
                 if chat_bot:
                     ready_check = getattr(chat_bot, "is_channel_subscription_ready", None)
                     monitored_runtime = getattr(chat_bot, "_monitored_streamers", None)
@@ -601,6 +736,8 @@ class TwitchBaseCog(commands.Cog):
                         str(login or "").strip().lower()
                         for login in monitored_runtime
                     } if isinstance(monitored_runtime, set) else set()
+                    scout_summary["chat_runtime_monitored_count"] = len(runtime_monitored)
+                    scout_summary["ready_check_available"] = callable(ready_check)
                     for login in sorted(current_deadlock_logins.intersection(existing_monitored)):
                         if login in new_logins or login in to_remove:
                             continue
@@ -618,6 +755,13 @@ class TwitchBaseCog(commands.Cog):
                             is_ready = login in runtime_monitored
                         if not is_ready:
                             heal_logins.append(login)
+                            heal_reasons[login] = (
+                                "subscription_not_ready"
+                                if login in runtime_monitored and callable(ready_check)
+                                else "missing_runtime_membership"
+                            )
+                    scout_summary["heal_logins"] = list(heal_logins)
+                    scout_summary["heal_reasons"] = heal_reasons
                 if chat_bot:
                     join_targets: list[str] = []
                     for login in [*new_logins, *heal_logins]:
@@ -637,7 +781,9 @@ class TwitchBaseCog(commands.Cog):
                         if callable(set_monitored_channels):
                             try:
                                 set_monitored_channels(join_targets)
+                                scout_summary["set_monitored_channels_ok"] = True
                             except Exception:
+                                scout_summary["set_monitored_channels_ok"] = False
                                 log.debug(
                                     "Scout: set_monitored_channels failed",
                                     exc_info=True,
@@ -646,6 +792,7 @@ class TwitchBaseCog(commands.Cog):
                         join_channels = getattr(chat_bot, "join_channels", None)
                         if callable(join_channels):
                             await join_channels(join_targets)
+                            scout_summary["join_channels_ok"] = True
                         else:
                             join_single = getattr(chat_bot, "join", None)
                             if callable(join_single):
@@ -665,11 +812,13 @@ class TwitchBaseCog(commands.Cog):
                                     joined,
                                     len(join_targets),
                                 )
+                                scout_summary["join_channels_ok"] = joined == len(join_targets)
                             else:
                                 log.warning(
                                     "Scout: chat bot has neither join_channels nor join; cannot join %d channels.",
                                     len(join_targets),
                                 )
+                                scout_summary["join_channels_ok"] = False
 
                     # Leave old
                     if to_remove:
@@ -677,6 +826,7 @@ class TwitchBaseCog(commands.Cog):
                         if callable(part_channels):
                             log.info("Scout: Leaving %d channels", len(to_remove))
                             await part_channels(to_remove)
+                            scout_summary["part_channels_ok"] = True
                         else:
                             monitored = getattr(chat_bot, "_monitored_streamers", None)
                             if isinstance(monitored, set):
@@ -690,8 +840,43 @@ class TwitchBaseCog(commands.Cog):
                                 "Scout: part_channels not available; removed %d channels from local monitor cache.",
                                 len(to_remove),
                             )
+                            scout_summary["part_channels_ok"] = False
+
+                log.info(
+                    "scout_cycle_summary %s",
+                    _observability_fields(
+                        **scout_summary,
+                        new_logins_sample=_observability_sample(scout_summary["new_logins"]),
+                        heal_logins_sample=_observability_sample(scout_summary["heal_logins"]),
+                        to_remove_sample=_observability_sample(scout_summary["to_remove"]),
+                    ),
+                )
+                storage.insert_observability_event(
+                    flow_type="scout",
+                    flow_id=scout_flow_id,
+                    step="cycle_complete",
+                    decision="ok",
+                    details=dict(scout_summary),
+                )
 
             except Exception:
+                scout_summary["error"] = "exception"
+                log.warning(
+                    "scout_cycle_summary %s",
+                    _observability_fields(
+                        **scout_summary,
+                        new_logins_sample=_observability_sample(scout_summary["new_logins"]),
+                        heal_logins_sample=_observability_sample(scout_summary["heal_logins"]),
+                        to_remove_sample=_observability_sample(scout_summary["to_remove"]),
+                    ),
+                )
+                storage.insert_observability_event(
+                    flow_type="scout",
+                    flow_id=scout_flow_id,
+                    step="cycle_complete",
+                    decision="exception",
+                    details=dict(scout_summary),
+                )
                 log.exception("Scout: Error during Deadlock channel scouting")
 
             # Run every 5 minutes

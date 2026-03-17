@@ -26,6 +26,7 @@ from ..discord_role_sync import normalize_discord_user_id, sync_streamer_role
 from ..storage import (
     backfill_tracked_stats_from_category,
     get_conn,
+    insert_observability_event,
     load_active_partner,
     load_streamer_identity,
     promote_streamer_to_partner,
@@ -288,11 +289,120 @@ class RaidBot:
     def _serialize_confirmation_signals(signals: set[str] | list[str] | tuple[str, ...]) -> str:
         return ",".join(sorted({str(signal).strip() for signal in signals if str(signal).strip()}))
 
+    def _next_raid_observability_flow_id(self, *, prefix: str) -> str:
+        sequence = int(getattr(self, "_raid_observability_sequence", 0) or 0) + 1
+        self._raid_observability_sequence = sequence
+        return f"{str(prefix or 'raid').strip().lower()}-{int(time.time() * 1000)}-{sequence}"
+
+    def _raid_observability_counters(self) -> dict[str, int]:
+        counters = getattr(self, "_raid_observability_counter_store", None)
+        if not isinstance(counters, dict):
+            counters = {}
+            self._raid_observability_counter_store = counters
+        return counters
+
+    def _increment_raid_observability_counter(self, name: str, amount: int = 1) -> int:
+        counter_name = str(name or "").strip()
+        if not counter_name:
+            return 0
+        counters = self._raid_observability_counters()
+        counters[counter_name] = int(counters.get(counter_name, 0) or 0) + int(amount)
+        return counters[counter_name]
+
+    @staticmethod
+    def _raid_observability_value(value: object, *, limit: int = 240) -> str:
+        def _convert(obj: object) -> object:
+            if obj is None:
+                return None
+            if isinstance(obj, datetime):
+                return obj.isoformat()
+            if isinstance(obj, set):
+                return sorted(str(item) for item in obj)
+            if isinstance(obj, (list, tuple)):
+                return [_convert(item) for item in obj]
+            if isinstance(obj, dict):
+                return {str(key): _convert(val) for key, val in obj.items()}
+            if isinstance(obj, (str, int, float, bool)):
+                return obj
+            return str(obj)
+
+        normalized = _convert(value)
+        if isinstance(normalized, str):
+            text = normalized.replace("\r", " ").replace("\n", " ").strip()
+        else:
+            text = json.dumps(normalized, sort_keys=True, ensure_ascii=True, separators=(",", ":"))
+        if len(text) > limit:
+            return f"{text[:limit]}..."
+        return text
+
+    def _format_raid_observability_fields(self, **fields: object) -> str:
+        parts = []
+        for key in sorted(fields):
+            value = fields[key]
+            if value is None:
+                continue
+            parts.append(f"{str(key).strip()}={self._raid_observability_value(value)}")
+        return " ".join(parts)
+
+    def _log_raid_observability_event(
+        self,
+        *,
+        raid_flow_id: str,
+        step: str,
+        decision: str,
+        level: int = logging.INFO,
+        from_broadcaster_login: str | None = None,
+        from_broadcaster_id: str | None = None,
+        to_broadcaster_login: str | None = None,
+        to_broadcaster_id: str | None = None,
+        details: dict[str, object] | None = None,
+    ) -> None:
+        payload = {
+            "raid_flow_id": str(raid_flow_id or "").strip() or None,
+            "step": str(step or "").strip() or None,
+            "decision": str(decision or "").strip() or None,
+            "from_broadcaster_login": self._normalize_broadcaster_login(from_broadcaster_login),
+            "from_broadcaster_id": str(from_broadcaster_id or "").strip() or None,
+            "to_broadcaster_login": self._normalize_broadcaster_login(to_broadcaster_login),
+            "to_broadcaster_id": str(to_broadcaster_id or "").strip() or None,
+            "details": details or {},
+        }
+        self._last_raid_observability_event = payload
+        log.log(level, "raid_flow %s", self._format_raid_observability_fields(**payload))
+        insert_observability_event(
+            flow_type="raid",
+            flow_id=str(payload.get("raid_flow_id") or ""),
+            entity_login=str(payload.get("to_broadcaster_login") or payload.get("from_broadcaster_login") or ""),
+            entity_id=str(payload.get("to_broadcaster_id") or payload.get("from_broadcaster_id") or ""),
+            step=str(payload.get("step") or "event"),
+            decision=str(payload.get("decision") or "unknown"),
+            details=payload,
+        )
+
+    def get_observability_snapshot(self) -> dict[str, Any]:
+        self._ensure_runtime_raid_tracking_state()
+        pending_raids = getattr(self, "_pending_raids", {}) or {}
+        recent_arrivals = getattr(self, "_recent_raid_arrivals", {}) or {}
+        orphan_notifications = getattr(self, "_orphan_chat_raid_notifications", {}) or {}
+        readiness_by_flow = getattr(self, "_raid_readiness_by_flow_id", {}) or {}
+        return {
+            "pendingCount": len(pending_raids),
+            "pendingTargets": sorted(str(key) for key in list(pending_raids.keys())[:10]),
+            "recentArrivalCount": len(recent_arrivals),
+            "orphanChatNotificationCount": len(orphan_notifications),
+            "readinessFlowCount": len(readiness_by_flow),
+            "counters": dict(self._raid_observability_counters()),
+            "lastEvent": getattr(self, "_last_raid_observability_event", None),
+        }
+
     def _ensure_runtime_raid_tracking_state(self) -> None:
         if not isinstance(getattr(self, "_recent_raid_arrivals", None), dict):
             self._recent_raid_arrivals = {}
         if not isinstance(getattr(self, "_orphan_chat_raid_notifications", None), dict):
             self._orphan_chat_raid_notifications = {}
+        readiness_by_flow = getattr(self, "_raid_readiness_by_flow_id", None)
+        if not isinstance(readiness_by_flow, dict):
+            self._raid_readiness_by_flow_id = {}
 
     def _coerce_pending_raid_record(
         self,
@@ -322,6 +432,10 @@ class RaidBot:
         record["registered_ts"] = float(record.get("registered_ts") or time.time())
         record["is_partner_raid"] = bool(record.get("is_partner_raid"))
         record["registered_viewer_count"] = int(record.get("registered_viewer_count") or 0)
+        record["raid_flow_id"] = str(record.get("raid_flow_id") or "").strip() or None
+        record["channel_raid_ready_detail"] = (
+            str(record.get("channel_raid_ready_detail") or "").strip() or None
+        )
         offline_trigger_ts = record.get("offline_trigger_ts")
         record["offline_trigger_ts"] = (
             float(offline_trigger_ts) if offline_trigger_ts is not None else None
@@ -341,9 +455,11 @@ class RaidBot:
         is_partner_raid: bool,
         viewer_count: int,
         offline_trigger_ts: float | None,
-        channel_raid_ready: bool | None,
-        chat_notification_state: str | None,
-        chat_notification_detail: str | None,
+        raid_flow_id: str | None = None,
+        channel_raid_ready: bool | None = None,
+        channel_raid_ready_detail: str | None = None,
+        chat_notification_state: str | None = None,
+        chat_notification_detail: str | None = None,
     ) -> dict[str, Any]:
         return {
             "from_broadcaster_login": self._normalize_broadcaster_login(from_broadcaster_login),
@@ -353,7 +469,9 @@ class RaidBot:
             "is_partner_raid": bool(is_partner_raid),
             "registered_viewer_count": int(viewer_count or 0),
             "offline_trigger_ts": float(offline_trigger_ts) if offline_trigger_ts else None,
+            "raid_flow_id": str(raid_flow_id or "").strip() or None,
             "channel_raid_ready": channel_raid_ready,
+            "channel_raid_ready_detail": str(channel_raid_ready_detail or "").strip() or None,
             "chat_notification_state": str(chat_notification_state or "").strip() or None,
             "chat_notification_detail": str(chat_notification_detail or "").strip() or None,
             "signal_observations": {},
@@ -450,6 +568,7 @@ class RaidBot:
         classification: str | None,
         confirmation_signals: set[str],
         arrival_tracking_id: int | None,
+        raid_flow_id: str | None = None,
     ) -> None:
         self._ensure_runtime_raid_tracking_state()
         key = self._build_raid_arrival_cache_key(
@@ -465,6 +584,7 @@ class RaidBot:
             "classification": str(classification or "").strip() or None,
             "confirmation_signals": set(confirmation_signals),
             "arrival_tracking_id": arrival_tracking_id,
+            "raid_flow_id": str(raid_flow_id or "").strip() or None,
             "confirmed_ts": time.time(),
         }
 
@@ -1748,6 +1868,8 @@ class RaidBot:
             offline_ts = pending.get("offline_trigger_ts")
             age = now - registered_ts
             offline_pending_s = (time.monotonic() - offline_ts) if offline_ts else -1.0
+            raid_flow_id = str(pending.get("raid_flow_id") or "").strip() or self._next_raid_observability_flow_id(prefix="raid-timeout")
+            self._increment_raid_observability_counter("raid_pending_timeout_total")
             log.warning(
                 "Pending raid timed out after %.0fs: %s -> (ID: %s). %s offline->pending=%.0fs",
                 age,
@@ -1755,6 +1877,19 @@ class RaidBot:
                 to_id,
                 self._build_pending_timeout_detail(pending),
                 offline_pending_s,
+            )
+            self._log_raid_observability_event(
+                raid_flow_id=raid_flow_id,
+                step="pending_timeout",
+                decision="timeout",
+                level=logging.WARNING,
+                from_broadcaster_login=from_login,
+                to_broadcaster_id=to_id,
+                details={
+                    "age_seconds": round(age, 1),
+                    "offline_to_pending_seconds": round(offline_pending_s, 1),
+                    "timeout_detail": self._build_pending_timeout_detail(pending),
+                },
             )
 
     def _clear_superseded_pending_raids(
@@ -1788,6 +1923,7 @@ class RaidBot:
             old_target_login = ""
             if isinstance(target_stream_data, dict):
                 old_target_login = str(target_stream_data.get("user_login") or "").strip().lower()
+            raid_flow_id = str(pending_record.get("raid_flow_id") or "").strip() or self._next_raid_observability_flow_id(prefix="raid-supersede")
             log.info(
                 "Pending raid superseded before arrival: %s old_target=%s%s replaced_by=%s",
                 from_broadcaster_login,
@@ -1795,15 +1931,34 @@ class RaidBot:
                 f' ({old_target_login})' if old_target_login else "",
                 current_target_key,
             )
+            self._log_raid_observability_event(
+                raid_flow_id=raid_flow_id,
+                step="pending_superseded",
+                decision="superseded",
+                from_broadcaster_login=from_broadcaster_login,
+                to_broadcaster_login=old_target_login or None,
+                to_broadcaster_id=to_id,
+                details={"replaced_by": current_target_key},
+            )
 
     async def _ensure_raid_arrival_subscription_ready(
         self,
         *,
         to_broadcaster_id: str,
         to_broadcaster_login: str,
+        raid_flow_id: str | None = None,
     ) -> bool:
+        self._ensure_runtime_raid_tracking_state()
         cog = self._cog
+        flow_id = str(raid_flow_id or "").strip() or self._next_raid_observability_flow_id(prefix="raid-ready")
         if cog is None:
+            self._log_raid_observability_event(
+                raid_flow_id=flow_id,
+                step="readiness_check",
+                decision="no_cog_best_effort",
+                to_broadcaster_login=to_broadcaster_login,
+                to_broadcaster_id=to_broadcaster_id,
+            )
             return True
 
         has_sub = getattr(cog, "_eventsub_has_sub", None)
@@ -1824,28 +1979,57 @@ class RaidBot:
                 ready, detail = await ensure_ready(
                     str(to_broadcaster_id),
                     to_broadcaster_login,
+                    raid_flow_id=flow_id,
                 )
             except Exception:
+                self._increment_raid_observability_counter("raid_eventsub_ready_check_failed_total")
+                self._log_raid_observability_event(
+                    raid_flow_id=flow_id,
+                    step="readiness_check",
+                    decision="exception",
+                    level=logging.ERROR,
+                    to_broadcaster_login=to_broadcaster_login,
+                    to_broadcaster_id=to_broadcaster_id,
+                    details={"local_tracking": locally_tracked},
+                )
                 log.exception(
                     "EventSub channel.raid readiness check failed for %s",
                     to_broadcaster_login,
                 )
                 return False
 
+            self._raid_readiness_by_flow_id[flow_id] = {
+                "ready": bool(ready),
+                "detail": str(detail or "").strip() or None,
+                "local_tracking": bool(locally_tracked),
+            }
+
             if ready:
+                self._increment_raid_observability_counter("raid_eventsub_ready_true_total")
                 log.info(
                     "EventSub channel.raid ready before raid start for %s (%s)",
                     to_broadcaster_login,
                     detail,
                 )
             else:
+                self._increment_raid_observability_counter("raid_eventsub_ready_false_total")
                 if locally_tracked:
+                    self._increment_raid_observability_counter("raid_eventsub_ready_false_local_true_total")
                     detail = f"{detail}; local_tracking_only"
                 log.warning(
                     "EventSub channel.raid not confirmed enabled for %s before raid start (%s). Proceeding best-effort.",
                     to_broadcaster_login,
                     detail,
                 )
+            self._log_raid_observability_event(
+                raid_flow_id=flow_id,
+                step="readiness_check",
+                decision="ready" if ready else "not_ready",
+                level=logging.INFO if ready else logging.WARNING,
+                to_broadcaster_login=to_broadcaster_login,
+                to_broadcaster_id=to_broadcaster_id,
+                details={"local_tracking": locally_tracked, "detail": detail},
+            )
             return ready
 
         if locally_tracked:
@@ -1853,6 +2037,19 @@ class RaidBot:
                 "EventSub channel.raid for %s is only locally tracked; remote readiness check unavailable.",
                 to_broadcaster_login,
             )
+        self._raid_readiness_by_flow_id[flow_id] = {
+            "ready": True,
+            "detail": "local_tracking_only" if locally_tracked else "best_effort",
+            "local_tracking": bool(locally_tracked),
+        }
+        self._log_raid_observability_event(
+            raid_flow_id=flow_id,
+            step="readiness_check",
+            decision="best_effort",
+            to_broadcaster_login=to_broadcaster_login,
+            to_broadcaster_id=to_broadcaster_id,
+            details={"local_tracking": locally_tracked},
+        )
         return True
 
     async def _register_pending_raid(
@@ -1864,6 +2061,7 @@ class RaidBot:
         is_partner_raid: bool = False,
         viewer_count: int = 0,
         offline_trigger_ts: float | None = None,
+        raid_flow_id: str | None = None,
         channel_raid_ready: bool | None = None,
     ):
         """
@@ -1880,9 +2078,12 @@ class RaidBot:
             is_partner_raid: True wenn es ein Partner-Raid ist (für Partner-Message)
             viewer_count: Viewer-Count beim Raid-Start (für Partner-Message)
         """
+        self._ensure_runtime_raid_tracking_state()
         chat_notification_state, chat_notification_detail = (
             self._snapshot_chat_notification_subscription(to_broadcaster_login)
         )
+        flow_id = str(raid_flow_id or "").strip() or self._next_raid_observability_flow_id(prefix="raid-pending")
+        readiness_state = self._raid_readiness_by_flow_id.get(flow_id, {})
         self._clear_superseded_pending_raids(
             from_broadcaster_login=from_broadcaster_login,
             current_target_id=to_broadcaster_id,
@@ -1894,11 +2095,14 @@ class RaidBot:
             is_partner_raid=is_partner_raid,
             viewer_count=viewer_count,
             offline_trigger_ts=offline_trigger_ts,
+            raid_flow_id=flow_id,
             channel_raid_ready=channel_raid_ready,
+            channel_raid_ready_detail=str(readiness_state.get("detail") or "").strip() or None,
             chat_notification_state=chat_notification_state,
             chat_notification_detail=chat_notification_detail,
         )
         self._pending_raids[to_broadcaster_id] = pending_record
+        self._increment_raid_observability_counter("raid_pending_registered_total")
         offline_to_pending_ms = (
             (time.monotonic() - offline_trigger_ts) * 1000 if offline_trigger_ts else None
         )
@@ -1909,6 +2113,22 @@ class RaidBot:
             to_broadcaster_id,
             f"{offline_to_pending_ms:.0f}ms" if offline_to_pending_ms is not None else "n/a",
             chat_notification_state or "unknown",
+        )
+        self._log_raid_observability_event(
+            raid_flow_id=flow_id,
+            step="pending_registered",
+            decision="registered",
+            from_broadcaster_login=from_broadcaster_login,
+            to_broadcaster_login=to_broadcaster_login,
+            to_broadcaster_id=to_broadcaster_id,
+            details={
+                "viewer_count": viewer_count,
+                "offline_to_pending_ms": int(offline_to_pending_ms) if offline_to_pending_ms is not None else None,
+                "channel_raid_ready": channel_raid_ready,
+                "channel_raid_ready_detail": readiness_state.get("detail"),
+                "chat_notification_state": chat_notification_state,
+                "chat_notification_detail": chat_notification_detail,
+            },
         )
 
         success = bool(channel_raid_ready)
@@ -1921,20 +2141,24 @@ class RaidBot:
         # Dynamische EventSub subscription erstellen
         if not success and self._cog and hasattr(self._cog, "subscribe_raid_target_dynamic"):
             try:
+                self._increment_raid_observability_counter("raid_eventsub_subscribe_attempt_total")
                 success = await self._cog.subscribe_raid_target_dynamic(
                     to_broadcaster_id, to_broadcaster_login
                 )
                 if success:
+                    self._increment_raid_observability_counter("raid_eventsub_subscribe_success_total")
                     log.info(
                         "EventSub channel.raid subscription created for %s",
                         to_broadcaster_login,
                     )
                 else:
+                    self._increment_raid_observability_counter("raid_eventsub_subscribe_failed_total")
                     log.warning(
                         "Failed to create EventSub subscription for %s - raid message may not be sent",
                         to_broadcaster_login,
                     )
             except Exception:
+                self._increment_raid_observability_counter("raid_eventsub_subscribe_failed_total")
                 log.exception(
                     "Error creating dynamic EventSub subscription for %s",
                     to_broadcaster_login,
@@ -1945,16 +2169,36 @@ class RaidBot:
                     "Cog reference not set - cannot create dynamic EventSub subscription for %s",
                     to_broadcaster_login,
                 )
+        self._log_raid_observability_event(
+            raid_flow_id=flow_id,
+            step="pending_subscription_create",
+            decision="created" if success else "best_effort_only",
+            level=logging.INFO if success else logging.WARNING,
+            from_broadcaster_login=from_broadcaster_login,
+            to_broadcaster_login=to_broadcaster_login,
+            to_broadcaster_id=to_broadcaster_id,
+            details={"channel_raid_ready": channel_raid_ready},
+        )
 
         orphan_notification = self._pop_orphan_chat_raid_notification(
             to_broadcaster_id=to_broadcaster_id,
             from_broadcaster_login=from_broadcaster_login,
         )
         if orphan_notification:
+            self._increment_raid_observability_counter("raid_orphan_chat_notification_total")
             log.info(
                 "Pending raid %s -> %s matched earlier channel.chat.notification raid signal.",
                 from_broadcaster_login,
                 to_broadcaster_login,
+            )
+            self._log_raid_observability_event(
+                raid_flow_id=flow_id,
+                step="pending_orphan_notification_match",
+                decision="matched",
+                from_broadcaster_login=from_broadcaster_login,
+                to_broadcaster_login=to_broadcaster_login,
+                to_broadcaster_id=to_broadcaster_id,
+                details={"message_id": orphan_notification.get("message_id")},
             )
             await self.on_chat_raid_notification(
                 to_broadcaster_id=str(orphan_notification.get("to_broadcaster_id") or to_broadcaster_id),
@@ -2067,6 +2311,17 @@ class RaidBot:
                 unraid_seen=unraid_seen,
             )
 
+        raid_flow_id = str(recent_arrival.get("raid_flow_id") or "").strip() or self._next_raid_observability_flow_id(prefix="raid-secondary")
+        self._log_raid_observability_event(
+            raid_flow_id=raid_flow_id,
+            step="secondary_signal",
+            decision=signal_type,
+            from_broadcaster_login=from_broadcaster_login,
+            to_broadcaster_login=to_broadcaster_login,
+            to_broadcaster_id=to_broadcaster_id,
+            details={"confirmation_signals": sorted(confirmation_signals), "unraid_seen": unraid_seen},
+        )
+
         log.info(
             "Raid arrival secondary signal recorded: %s -> %s via %s (signals=%s)",
             from_broadcaster_login,
@@ -2092,6 +2347,7 @@ class RaidBot:
         )
         if pending is None:
             return
+        raid_flow_id = str(pending.get("raid_flow_id") or "").strip() or self._next_raid_observability_flow_id(prefix="raid-arrival")
 
         target_stream_data = pending.get("target_stream_data")
         registered_ts = float(pending.get("registered_ts") or time.time())
@@ -2153,6 +2409,23 @@ class RaidBot:
             classification=classification,
             confirmation_signals={signal_type},
             arrival_tracking_id=arrival_tracking_id,
+            raid_flow_id=raid_flow_id,
+        )
+        self._increment_raid_observability_counter(f"raid_arrival_confirmed_{signal_type.replace('.', '_')}_total")
+        self._log_raid_observability_event(
+            raid_flow_id=raid_flow_id,
+            step="arrival_confirmed",
+            decision=signal_type,
+            from_broadcaster_login=from_broadcaster_login,
+            from_broadcaster_id=from_broadcaster_id,
+            to_broadcaster_login=to_broadcaster_login,
+            to_broadcaster_id=to_broadcaster_id,
+            details={
+                "classification": classification,
+                "source_resolution": source_resolution,
+                "viewer_count": effective_viewer_count,
+                "api_to_arrival_seconds": round(time.time() - registered_ts, 2),
+            },
         )
 
         if is_partner_raid:
@@ -2255,6 +2528,15 @@ class RaidBot:
                 normalized_from_login,
                 to_broadcaster_login,
             )
+            self._log_raid_observability_event(
+                raid_flow_id=self._next_raid_observability_flow_id(prefix="raid-independent"),
+                step="arrival_no_pending",
+                decision="ignored_or_independent",
+                from_broadcaster_login=normalized_from_login,
+                from_broadcaster_id=from_broadcaster_id,
+                to_broadcaster_login=to_broadcaster_login,
+                to_broadcaster_id=to_broadcaster_id,
+            )
             return
 
         expected_from = str(pending.get("from_broadcaster_login") or normalized_from_login)
@@ -2271,6 +2553,16 @@ class RaidBot:
                 "Raid arrival mismatch: expected from %s, got from %s",
                 expected_from,
                 normalized_from_login,
+            )
+            self._log_raid_observability_event(
+                raid_flow_id=str(pending.get("raid_flow_id") or "") or self._next_raid_observability_flow_id(prefix="raid-mismatch"),
+                step="arrival_mismatch",
+                decision="ignored",
+                level=logging.WARNING,
+                from_broadcaster_login=normalized_from_login,
+                to_broadcaster_login=to_broadcaster_login,
+                to_broadcaster_id=to_broadcaster_id,
+                details={"expected_from": expected_from},
             )
             return
 
@@ -2330,6 +2622,7 @@ class RaidBot:
                     "observed_ts": time.time(),
                 }
             )
+            self._increment_raid_observability_counter("raid_orphan_chat_notification_total")
             log.info(
                 "Orphan channel.chat.notification raid observed: %s -> %s (viewer_count=%d, grace=%.0fs, message_id=%s)",
                 normalized_from_login,
@@ -2337,6 +2630,16 @@ class RaidBot:
                 viewer_count,
                 _PENDING_CHAT_NOTIFICATION_GRACE_SECONDS,
                 message_id or "n/a",
+            )
+            self._log_raid_observability_event(
+                raid_flow_id=self._next_raid_observability_flow_id(prefix="raid-orphan"),
+                step="chat_notification_orphaned",
+                decision="stored",
+                from_broadcaster_login=normalized_from_login,
+                from_broadcaster_id=from_broadcaster_id,
+                to_broadcaster_login=to_broadcaster_login,
+                to_broadcaster_id=to_broadcaster_id,
+                details={"viewer_count": viewer_count, "message_id": message_id},
             )
             return
 
@@ -2354,6 +2657,16 @@ class RaidBot:
                 "Raid chat notification mismatch: expected from %s, got from %s",
                 expected_from,
                 normalized_from_login,
+            )
+            self._log_raid_observability_event(
+                raid_flow_id=str(pending.get("raid_flow_id") or "") or self._next_raid_observability_flow_id(prefix="raid-chat-mismatch"),
+                step="chat_notification_mismatch",
+                decision="ignored",
+                level=logging.WARNING,
+                from_broadcaster_login=normalized_from_login,
+                to_broadcaster_login=to_broadcaster_login,
+                to_broadcaster_id=to_broadcaster_id,
+                details={"expected_from": expected_from, "message_id": message_id},
             )
             return
 
@@ -3451,6 +3764,24 @@ class RaidBot:
             target_started_at = target.get("started_at", "")
 
             selection_ms = (time.monotonic() - attempt_start_ts) * 1000.0
+            raid_flow_id = self._next_raid_observability_flow_id(prefix="raid")
+            self._increment_raid_observability_counter("raid_flow_started_total")
+            self._log_raid_observability_event(
+                raid_flow_id=raid_flow_id,
+                step="attempt_selected",
+                decision="candidate_selected",
+                from_broadcaster_login=broadcaster_login,
+                from_broadcaster_id=broadcaster_id,
+                to_broadcaster_login=target_login,
+                to_broadcaster_id=target_id,
+                details={
+                    "attempt": attempt + 1,
+                    "max_attempts": max_attempts,
+                    "selection_ms": int(selection_ms),
+                    "candidates_count": candidates_count,
+                    "reason": reason,
+                },
+            )
             log.info(
                 "Executing raid attempt %d/%d: %s -> %s (selection %.0fms, candidates=%d, reason=%s)",
                 attempt + 1,
@@ -3465,6 +3796,7 @@ class RaidBot:
             channel_raid_ready = await self._ensure_raid_arrival_subscription_ready(
                 to_broadcaster_id=target_id,
                 to_broadcaster_login=target_login,
+                raid_flow_id=raid_flow_id,
             )
 
             api_call_start = time.monotonic()
@@ -3492,6 +3824,7 @@ class RaidBot:
                     is_partner_raid=is_partner_raid,
                     viewer_count=viewer_count,
                     offline_trigger_ts=offline_trigger_ts,
+                    raid_flow_id=raid_flow_id,
                     channel_raid_ready=channel_raid_ready,
                 )
                 if set_manual_suppression:

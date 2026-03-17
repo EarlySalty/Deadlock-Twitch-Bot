@@ -26,3 +26,4 @@ Twitch bot, dashboard service, analytics, raid automation, and streamer tooling 
 - [`docs/DATABASE.md`](docs/DATABASE.md)
 - [`docs/ADMIN.md`](docs/ADMIN.md)
 - [`docs/STREAMER.md`](docs/STREAMER.md)
+- [`docs/BOT_TOKEN_SCOPES.md`](docs/BOT_TOKEN_SCOPES.md)

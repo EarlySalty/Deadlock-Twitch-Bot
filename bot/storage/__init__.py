@@ -10,6 +10,7 @@ from .pg import (  # noqa: F401
     analytics_db_fingerprint,
     analytics_db_fingerprint_details,
     backfill_tracked_stats_from_category,
+    insert_observability_event,
     delete_streamer,
     archive_active_partner,
     bulk_update_partner_flags,

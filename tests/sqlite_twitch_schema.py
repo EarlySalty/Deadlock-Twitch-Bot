@@ -210,6 +210,21 @@ def ensure_sqlite_twitch_schema(conn: sqlite3.Connection) -> None:
     )
     conn.execute(
         """
+        CREATE TABLE IF NOT EXISTS twitch_observability_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            flow_type TEXT NOT NULL,
+            flow_id TEXT NOT NULL,
+            entity_login TEXT,
+            entity_id TEXT,
+            step TEXT NOT NULL,
+            decision TEXT NOT NULL,
+            details_json TEXT NOT NULL DEFAULT '{}',
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        )
+        """
+    )
+    conn.execute(
+        """
         CREATE TABLE IF NOT EXISTS streamer_plans (
             twitch_user_id TEXT PRIMARY KEY,
             twitch_login TEXT,

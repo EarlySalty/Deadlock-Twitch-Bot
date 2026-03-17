@@ -32,6 +32,28 @@ class _FakeSession:
 
 
 class InternalApiClientTests(unittest.IsolatedAsyncioTestCase):
+    async def test_get_observability_snapshot_calls_internal_endpoint(self) -> None:
+        session = _FakeSession(
+            response=_FakeResponse(
+                status=200,
+                text='{"ok":true,"observability":{"chat":{"joinAttempts":3}}}',
+            )
+        )
+        client = InternalApiClient(
+            base_url="http://127.0.0.1:8776",
+            token="secret",
+            session=session,
+        )
+
+        payload = await client.get_observability_snapshot()
+
+        self.assertTrue(payload["ok"])
+        self.assertEqual(payload["observability"]["chat"]["joinAttempts"], 3)
+        self.assertEqual(
+            session.calls[0]["url"],
+            "http://127.0.0.1:8776/internal/twitch/v1/debug/observability",
+        )
+
     async def test_get_active_live_announcements_calls_internal_endpoint(self) -> None:
         session = _FakeSession(
             response=_FakeResponse(

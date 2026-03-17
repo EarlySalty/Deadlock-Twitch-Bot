@@ -144,7 +144,10 @@ class ScoutMonitoredSessionBootstrapTests(unittest.IsolatedAsyncioTestCase):
             "bot.base.storage.get_conn",
             side_effect=lambda: contextlib.nullcontext(conn),
         ), patch("bot.base.asyncio.sleep", side_effect=_fake_sleep):
-            with self.assertRaises(asyncio.CancelledError):
+            with (
+                self.assertLogs("TwitchStreams", level="INFO") as captured,
+                self.assertRaises(asyncio.CancelledError),
+            ):
                 await TwitchBaseCog._scout_deadlock_channels(harness)
 
         self.assertEqual(conn.commits, 1)
@@ -159,6 +162,14 @@ class ScoutMonitoredSessionBootstrapTests(unittest.IsolatedAsyncioTestCase):
                 ("set_monitored_channels", ["mewgles"]),
                 ("join_channels", ["mewgles"]),
             ],
+        )
+        self.assertTrue(
+            any(
+                "scout_cycle_summary" in entry
+                and "flow_id=" in entry
+                and "new_logins=" in entry
+                for entry in captured.output
+            )
         )
 
     async def test_scout_rejoins_existing_monitored_channel_missing_from_runtime(self) -> None:

@@ -52,6 +52,7 @@ _BOT_REQUIRED_SCOPES: tuple[str, ...] = (
     "moderator:read:chatters",
     "moderator:read:followers",
     "moderator:manage:chat_messages",
+    "moderator:manage:announcements",
     "moderator:manage:banned_users",
     "moderator:manage:shoutouts",
 )
@@ -63,6 +64,7 @@ _BOT_SCOPE_LABELS: dict[str, str] = {
     "moderator:read:chatters": "Bot Chatters",
     "moderator:read:followers": "Bot Followers",
     "moderator:manage:chat_messages": "Bot Chat Mod",
+    "moderator:manage:announcements": "Bot Announcements",
     "moderator:manage:banned_users": "Bot Bans",
     "moderator:manage:shoutouts": "Bot Shoutouts",
     "user:bot": "Bot App-Token",
