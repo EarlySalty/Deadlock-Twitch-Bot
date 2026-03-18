@@ -354,39 +354,94 @@ class SocialMediaOAuthManager:
                     tokens["client_secret"], aad_secret, kid="v1"
                 )
 
-            # Save to database
-            conn.execute(
-                """
+            params = (
+                platform,
+                streamer_login,
+                access_enc,
+                refresh_enc,
+                tokens.get("client_id"),
+                secret_enc,
+                tokens["expires_at"].isoformat()
+                if isinstance(tokens["expires_at"], datetime)
+                else tokens["expires_at"],
+                tokens.get("scopes"),
+                tokens.get("user_id"),
+                tokens.get("username"),
+            )
+
+            upsert_sql = """
                 INSERT INTO social_media_platform_auth
                     (platform, streamer_login, access_token_enc, refresh_token_enc,
                      client_id, client_secret_enc, token_expires_at, scopes,
                      platform_user_id, platform_username, enc_version, enc_kid)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 'v1')
-                ON CONFLICT(platform, streamer_login) DO UPDATE SET
-                    access_token_enc = excluded.access_token_enc,
-                    refresh_token_enc = excluded.refresh_token_enc,
-                    client_secret_enc = excluded.client_secret_enc,
-                    token_expires_at = excluded.token_expires_at,
-                    scopes = excluded.scopes,
-                    platform_user_id = excluded.platform_user_id,
-                    platform_username = excluded.platform_username,
+            """
+            if streamer_login is None:
+                upsert_sql += """
+                ON CONFLICT (platform) WHERE streamer_login IS NULL DO UPDATE SET
+                    access_token_enc = EXCLUDED.access_token_enc,
+                    refresh_token_enc = COALESCE(
+                        EXCLUDED.refresh_token_enc,
+                        social_media_platform_auth.refresh_token_enc
+                    ),
+                    client_id = COALESCE(EXCLUDED.client_id, social_media_platform_auth.client_id),
+                    client_secret_enc = COALESCE(
+                        EXCLUDED.client_secret_enc,
+                        social_media_platform_auth.client_secret_enc
+                    ),
+                    token_expires_at = COALESCE(
+                        EXCLUDED.token_expires_at,
+                        social_media_platform_auth.token_expires_at
+                    ),
+                    scopes = COALESCE(EXCLUDED.scopes, social_media_platform_auth.scopes),
+                    platform_user_id = COALESCE(
+                        EXCLUDED.platform_user_id,
+                        social_media_platform_auth.platform_user_id
+                    ),
+                    platform_username = COALESCE(
+                        EXCLUDED.platform_username,
+                        social_media_platform_auth.platform_username
+                    ),
+                    enc_version = EXCLUDED.enc_version,
+                    enc_kid = EXCLUDED.enc_kid,
+                    enabled = 1,
                     last_refreshed_at = CURRENT_TIMESTAMP
-                """,
-                (
-                    platform,
-                    streamer_login,
-                    access_enc,
-                    refresh_enc,
-                    tokens.get("client_id"),
-                    secret_enc,
-                    tokens["expires_at"].isoformat()
-                    if isinstance(tokens["expires_at"], datetime)
-                    else tokens["expires_at"],
-                    tokens.get("scopes"),
-                    tokens.get("user_id"),
-                    tokens.get("username"),
-                ),
-            )
+                """
+            else:
+                upsert_sql += """
+                ON CONFLICT (platform, streamer_login) WHERE streamer_login IS NOT NULL
+                DO UPDATE SET
+                    access_token_enc = EXCLUDED.access_token_enc,
+                    refresh_token_enc = COALESCE(
+                        EXCLUDED.refresh_token_enc,
+                        social_media_platform_auth.refresh_token_enc
+                    ),
+                    client_id = COALESCE(EXCLUDED.client_id, social_media_platform_auth.client_id),
+                    client_secret_enc = COALESCE(
+                        EXCLUDED.client_secret_enc,
+                        social_media_platform_auth.client_secret_enc
+                    ),
+                    token_expires_at = COALESCE(
+                        EXCLUDED.token_expires_at,
+                        social_media_platform_auth.token_expires_at
+                    ),
+                    scopes = COALESCE(EXCLUDED.scopes, social_media_platform_auth.scopes),
+                    platform_user_id = COALESCE(
+                        EXCLUDED.platform_user_id,
+                        social_media_platform_auth.platform_user_id
+                    ),
+                    platform_username = COALESCE(
+                        EXCLUDED.platform_username,
+                        social_media_platform_auth.platform_username
+                    ),
+                    enc_version = EXCLUDED.enc_version,
+                    enc_kid = EXCLUDED.enc_kid,
+                    enabled = 1,
+                    last_refreshed_at = CURRENT_TIMESTAMP
+                """
+
+            # Save to database
+            conn.execute(upsert_sql, params)
 
             safe_platform = _sanitize_log_value(platform)
             safe_streamer = _sanitize_log_value(streamer_login)

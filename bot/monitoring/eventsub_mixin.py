@@ -721,6 +721,7 @@ class _EventSubMixin:
             await self.bot.wait_until_ready()
         except Exception:
             log.exception("EventSub Webhook: wait_until_ready fehlgeschlagen")
+            self._eventsub_started = False
             return
 
         # Callbacks registrieren
@@ -1321,6 +1322,7 @@ class _EventSubMixin:
 
         # Lokale Subscription-Tracking-Liste leeren
         self._eventsub_webhook_active_subs = []
+        self._eventsub_webhook_tracked = set()
 
         # 2. Broadcaster sammeln
         raid_enabled_streamers = self._get_raid_enabled_streamers_for_eventsub()

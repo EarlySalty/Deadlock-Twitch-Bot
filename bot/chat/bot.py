@@ -332,7 +332,15 @@ if TWITCHIO_AVAILABLE:
                 )
                 return False
 
-            channel_list = sorted(self._monitored_streamers)
+            channel_candidates = {
+                self._normalize_channel_login(channel)
+                for channel in (
+                    list(getattr(self, "_initial_channels", []) or [])
+                    + list(getattr(self, "_monitored_streamers", set()) or set())
+                    + list(getattr(self, "_monitored_only_channels", set()) or set())
+                )
+            }
+            channel_list = sorted(channel for channel in channel_candidates if channel)
             normalized_failed = self._normalize_channel_login(failed_channel or "")
             if normalized_failed and normalized_failed not in channel_list:
                 channel_list.append(normalized_failed)

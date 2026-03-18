@@ -59,7 +59,7 @@ class SocialMediaCredentialManager:
         """
         with get_conn() as conn:
             # Try streamer-specific first, then fall back to global
-            # ORDER BY prioritizes streamer-specific over global
+            # ORDER BY prioritizes an exact streamer match over the global fallback.
             row = conn.execute(
                 """
                 SELECT id, platform, streamer_login,
@@ -68,12 +68,24 @@ class SocialMediaCredentialManager:
                        enc_version, enc_kid
                 FROM social_media_platform_auth
                 WHERE platform = ?
-                  AND COALESCE(streamer_login, '') = COALESCE(?, '')
                   AND enabled = 1
-                ORDER BY streamer_login IS NOT NULL DESC
+                  AND (
+                      streamer_login = ?
+                      OR (? IS NOT NULL AND streamer_login IS NULL)
+                      OR (? IS NULL AND streamer_login IS NULL)
+                  )
+                ORDER BY CASE WHEN streamer_login = ? THEN 1 ELSE 0 END DESC,
+                         authorized_at DESC,
+                         id DESC
                 LIMIT 1
                 """,
-                (platform, streamer_login),
+                (
+                    platform,
+                    streamer_login,
+                    streamer_login,
+                    streamer_login,
+                    streamer_login,
+                ),
             ).fetchone()
 
             if not row:
@@ -187,6 +199,7 @@ class SocialMediaCredentialManager:
             creds = self.get_credentials(platform, streamer_login)
 
             if creds:
+                uses_global_fallback = streamer_login is not None and creds.get("streamer_login") is None
                 platforms[platform] = {
                     "connected": True,
                     "username": creds.get("platform_username"),
@@ -194,6 +207,7 @@ class SocialMediaCredentialManager:
                     "expires_at": creds.get("expires_at"),
                     "expired": self.is_token_expired(creds),
                     "scopes": creds.get("scopes"),
+                    "uses_global_fallback": uses_global_fallback,
                 }
             else:
                 platforms[platform] = {
@@ -203,6 +217,7 @@ class SocialMediaCredentialManager:
                     "expires_at": None,
                     "expired": False,
                     "scopes": None,
+                    "uses_global_fallback": False,
                 }
 
         return platforms

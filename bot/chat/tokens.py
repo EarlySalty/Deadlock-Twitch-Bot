@@ -124,6 +124,12 @@ class TokenPersistenceMixin:
             self._token_manager.access_token = access_token
             if refresh_token:
                 self._token_manager.refresh_token = refresh_token
+            if scopes is not None:
+                self._token_manager.scopes = {
+                    str(scope).strip().lower()
+                    for scope in scopes
+                    if str(scope).strip()
+                }
             if user_id:
                 self._token_manager.bot_id = str(user_id)
             if expires_in:

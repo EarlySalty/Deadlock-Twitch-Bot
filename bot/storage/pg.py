@@ -9,10 +9,13 @@
 from __future__ import annotations
 
 import contextlib
+import atexit
 import hashlib
 import json
 import logging
 import os
+import queue
+import threading
 import time
 from collections.abc import Iterable, Sequence
 from urllib.parse import urlsplit
@@ -46,6 +49,63 @@ KEYRING_SERVICE = "DeadlockBot"
 ENV_DSN = "TWITCH_ANALYTICS_DSN"
 _DB_FINGERPRINT_SALT = b"deadlock.analytics-db-fingerprint.v1"
 _DB_FINGERPRINT_ITERATIONS = 100_000
+
+
+def _env_int(name: str, default: int, *, minimum: int) -> int:
+    raw = str(os.getenv(name) or "").strip()
+    if not raw:
+        return default
+    try:
+        return max(minimum, int(raw))
+    except ValueError:
+        log.warning("Invalid %s=%r; using default %s", name, raw, default)
+        return default
+
+
+def _env_float(name: str, default: float, *, minimum: float) -> float:
+    raw = str(os.getenv(name) or "").strip()
+    if not raw:
+        return default
+    try:
+        return max(minimum, float(raw))
+    except ValueError:
+        log.warning("Invalid %s=%r; using default %s", name, raw, default)
+        return default
+
+
+_OBSERVABILITY_QUEUE_MAXSIZE = _env_int(
+    "TWITCH_OBSERVABILITY_QUEUE_MAXSIZE",
+    5000,
+    minimum=100,
+)
+_OBSERVABILITY_BATCH_SIZE = _env_int(
+    "TWITCH_OBSERVABILITY_BATCH_SIZE",
+    50,
+    minimum=1,
+)
+_OBSERVABILITY_FLUSH_INTERVAL_SECONDS = _env_float(
+    "TWITCH_OBSERVABILITY_FLUSH_INTERVAL_SECONDS",
+    0.5,
+    minimum=0.05,
+)
+_OBSERVABILITY_INSERT_SQL = """
+    INSERT INTO twitch_observability_events (
+        flow_type,
+        flow_id,
+        entity_login,
+        entity_id,
+        step,
+        decision,
+        details_json
+    ) VALUES (%s, %s, %s, %s, %s, %s, %s)
+"""
+_OBSERVABILITY_STOP = object()
+_observability_event_queue: queue.Queue[object] | None = None
+_observability_writer_lock = threading.Lock()
+_observability_writer_thread: threading.Thread | None = None
+_observability_writer_stop = threading.Event()
+_observability_dropped_events = 0
+_observability_drop_log_ts = 0.0
 
 
 def _safe_observability_text(value: object, *, limit: int = 200) -> str | None:
@@ -248,6 +308,141 @@ def _coerce_column_to_boolean(
         log.debug("Skipping default migration on %s.%s: %s", table, column, exc)
 
 
+def _table_exists(conn: psycopg.Connection, table: str) -> bool:
+    """Return True when the table exists in the current schema."""
+    try:
+        row = conn.execute(
+            """
+            SELECT 1
+            FROM information_schema.tables
+            WHERE table_schema = current_schema()
+              AND table_name = %s
+            """,
+            (table,),
+        ).fetchone()
+        return bool(row)
+    except Exception as exc:  # pragma: no cover - best effort guard
+        log.debug("Could not inspect table %s: %s", table, exc)
+        return False
+
+
+def _index_definition(conn: psycopg.Connection, index_name: str) -> str | None:
+    """Return the CREATE INDEX statement for an index in the current schema."""
+    try:
+        row = conn.execute(
+            """
+            SELECT indexdef
+            FROM pg_indexes
+            WHERE schemaname = current_schema()
+              AND indexname = %s
+            """,
+            (index_name,),
+        ).fetchone()
+    except Exception as exc:  # pragma: no cover - best effort guard
+        log.debug("Could not inspect index %s: %s", index_name, exc)
+        return None
+
+    if not row:
+        return None
+
+    value = row[0] if not hasattr(row, "keys") else row["indexdef"]
+    normalized = str(value or "").strip()
+    return normalized or None
+
+
+def _cleanup_duplicate_global_social_media_auth_rows(conn: psycopg.Connection) -> None:
+    """Keep only the newest enabled global auth row per platform."""
+    if not _table_exists(conn, "social_media_platform_auth"):
+        return
+
+    duplicates = conn.execute(
+        """
+        SELECT platform, COUNT(*) AS row_count
+        FROM social_media_platform_auth
+        WHERE streamer_login IS NULL
+        GROUP BY platform
+        HAVING COUNT(*) > 1
+        """
+    ).fetchall()
+    if not duplicates:
+        return
+
+    conn.execute(
+        """
+        WITH ranked AS (
+            SELECT id,
+                   ROW_NUMBER() OVER (
+                       PARTITION BY platform
+                       ORDER BY enabled DESC,
+                                COALESCE(last_refreshed_at, authorized_at, '') DESC,
+                                id DESC
+                   ) AS rn
+            FROM social_media_platform_auth
+            WHERE streamer_login IS NULL
+        )
+        DELETE FROM social_media_platform_auth
+        WHERE id IN (SELECT id FROM ranked WHERE rn > 1)
+        """
+    )
+    log.warning(
+        "Removed duplicate global social_media_platform_auth rows for platforms=%s",
+        ",".join(
+            sorted(
+                str(row[0] if not hasattr(row, "keys") else row["platform"])
+                for row in duplicates
+            )
+        ),
+    )
+
+
+def _ensure_social_media_auth_indexes(conn: psycopg.Connection) -> None:
+    """Enforce correct uniqueness for streamer-specific and global social auth rows."""
+    if not _table_exists(conn, "social_media_platform_auth"):
+        return
+
+    _cleanup_duplicate_global_social_media_auth_rows(conn)
+    conn.execute(
+        """
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_social_platform_auth_streamer_unique
+            ON social_media_platform_auth(platform, streamer_login)
+         WHERE streamer_login IS NOT NULL
+        """
+    )
+    conn.execute(
+        """
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_social_platform_auth_global_unique
+            ON social_media_platform_auth(platform)
+         WHERE streamer_login IS NULL
+        """
+    )
+
+
+def _ensure_twitch_raid_auth_login_index(conn: psycopg.Connection) -> None:
+    """Align runtime bootstrap with the case-insensitive login uniqueness migration."""
+    if not _table_exists(conn, "twitch_raid_auth"):
+        return
+
+    indexdef = (_index_definition(conn, "idx_twitch_raid_auth_login") or "").lower()
+    if "lower(" in indexdef and "twitch_login" in indexdef:
+        return
+
+    if indexdef:
+        conn.execute("DROP INDEX IF EXISTS idx_twitch_raid_auth_login")
+
+    try:
+        conn.execute(
+            """
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_twitch_raid_auth_login
+                ON twitch_raid_auth (LOWER(twitch_login))
+            """
+        )
+    except psycopg.errors.UniqueViolation as exc:  # pragma: no cover - best effort guard
+        log.warning(
+            "Could not enforce case-insensitive twitch_raid_auth login uniqueness: %s",
+            exc,
+        )
+
+
 def _run_startup_maintenance(conn: psycopg.Connection) -> None:
     """
     One-time runtime maintenance for existing schemas.
@@ -273,6 +468,14 @@ def _run_startup_maintenance(conn: psycopg.Connection) -> None:
         _ensure_unique_live_state_login_index(conn)
     except Exception as exc:  # pragma: no cover - best effort guard
         log.debug("Skipping twitch_live_state login uniqueness index: %s", exc)
+    try:
+        _ensure_twitch_raid_auth_login_index(conn)
+    except Exception as exc:  # pragma: no cover - best effort guard
+        log.debug("Skipping twitch_raid_auth login index maintenance: %s", exc)
+    try:
+        _ensure_social_media_auth_indexes(conn)
+    except Exception as exc:  # pragma: no cover - best effort guard
+        log.debug("Skipping social_media_platform_auth index maintenance: %s", exc)
 
     _run_startup_maintenance._done = True
 
@@ -752,6 +955,200 @@ def query_all(sql: str, params: Iterable | None = None):
         return conn.execute(sql, params or []).fetchall()
 
 
+def _observability_queue_instance() -> queue.Queue[object]:
+    global _observability_event_queue
+    if _observability_event_queue is None:
+        _observability_event_queue = queue.Queue(maxsize=_OBSERVABILITY_QUEUE_MAXSIZE)
+    return _observability_event_queue
+
+
+def _ensure_observability_schema(conn: _CompatConnection) -> None:
+    if getattr(get_conn, "_schema_ok", False):
+        return
+
+    schema_version_exists = False
+    try:
+        row = conn.execute(
+            """
+            SELECT 1
+              FROM information_schema.tables
+             WHERE table_schema = 'public'
+               AND table_name = 'schema_version'
+            """
+        ).fetchone()
+        schema_version_exists = bool(row)
+    except Exception as exc:  # pragma: no cover - lightweight check only
+        log.debug("schema_version existence check failed for observability writer: %s", exc)
+
+    if schema_version_exists:
+        get_conn._schema_ok = True
+        return
+
+    try:
+        ensure_schema(conn)
+        get_conn._schema_ok = True
+    except Exception as exc:  # pragma: no cover - best effort
+        log.warning("Schema initialization failed in observability writer: %s", exc, exc_info=True)
+
+
+def _open_observability_writer_connection() -> _CompatConnection:
+    dsn = _load_dsn()
+    raw_conn = psycopg.connect(dsn, row_factory=_compat_row_factory, autocommit=False)
+    try:
+        _ensure_compat_functions(raw_conn)
+        conn = _CompatConnection(raw_conn)
+        _ensure_observability_schema(conn)
+        return conn
+    except Exception:
+        raw_conn.close()
+        raise
+
+
+def _flush_observability_batch(
+    conn: _CompatConnection | None,
+    batch: list[tuple[str, str, str | None, str | None, str, str, str]],
+) -> _CompatConnection | None:
+    if not batch:
+        return conn
+
+    active_conn = conn
+    try:
+        if active_conn is None or getattr(active_conn, "closed", False):
+            active_conn = _open_observability_writer_connection()
+        active_conn.executemany(_OBSERVABILITY_INSERT_SQL, batch)
+        active_conn.commit()
+        return active_conn
+    except Exception:
+        log.debug(
+            "Could not persist observability batch size=%s",
+            len(batch),
+            exc_info=True,
+        )
+        if active_conn is not None:
+            try:
+                active_conn.rollback()
+            except Exception:
+                pass
+            try:
+                active_conn.close()
+            except Exception:
+                pass
+        return None
+
+
+def _observability_writer_loop() -> None:
+    conn: _CompatConnection | None = None
+    batch: list[tuple[str, str, str | None, str | None, str, str, str]] = []
+
+    while True:
+        stop_requested = False
+        try:
+            item = _observability_queue_instance().get(
+                timeout=_OBSERVABILITY_FLUSH_INTERVAL_SECONDS
+            )
+        except queue.Empty:
+            item = None
+
+        if item is _OBSERVABILITY_STOP:
+            stop_requested = True
+        elif item is not None:
+            batch.append(item)
+
+        while len(batch) < _OBSERVABILITY_BATCH_SIZE:
+            try:
+                queued_item = _observability_queue_instance().get_nowait()
+            except queue.Empty:
+                break
+            if queued_item is _OBSERVABILITY_STOP:
+                stop_requested = True
+                break
+            batch.append(queued_item)
+
+        if batch and (
+            stop_requested
+            or len(batch) >= _OBSERVABILITY_BATCH_SIZE
+            or item is None
+        ):
+            conn = _flush_observability_batch(conn, batch)
+            batch = []
+
+        if stop_requested or (
+            _observability_writer_stop.is_set()
+            and not batch
+            and _observability_queue_instance().empty()
+        ):
+            break
+
+    if batch:
+        conn = _flush_observability_batch(conn, batch)
+    if conn is not None:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+
+def _shutdown_observability_writer() -> None:
+    global _observability_writer_thread
+
+    with _observability_writer_lock:
+        thread = _observability_writer_thread
+        if thread is None:
+            return
+        _observability_writer_stop.set()
+        try:
+            _observability_queue_instance().put_nowait(_OBSERVABILITY_STOP)
+        except queue.Full:
+            pass
+
+    thread.join(timeout=max(10.0, _OBSERVABILITY_FLUSH_INTERVAL_SECONDS * 20.0))
+    with _observability_writer_lock:
+        if _observability_writer_thread is thread and not thread.is_alive():
+            _observability_writer_thread = None
+    if thread.is_alive():
+        log.warning("Observability writer did not stop cleanly before shutdown.")
+
+
+def _ensure_observability_writer_started() -> None:
+    global _observability_writer_thread
+
+    with _observability_writer_lock:
+        thread = _observability_writer_thread
+        if thread is not None and thread.is_alive():
+            return
+        _observability_writer_stop.clear()
+        thread = threading.Thread(
+            target=_observability_writer_loop,
+            name="TwitchObservabilityWriter",
+            daemon=False,
+        )
+        thread.start()
+        _observability_writer_thread = thread
+        atexit.unregister(_shutdown_observability_writer)
+        atexit.register(_shutdown_observability_writer)
+
+
+def _enqueue_observability_event(
+    record: tuple[str, str, str | None, str | None, str, str, str],
+) -> None:
+    global _observability_dropped_events
+    global _observability_drop_log_ts
+
+    _ensure_observability_writer_started()
+    try:
+        _observability_queue_instance().put_nowait(record)
+    except queue.Full:
+        _observability_dropped_events += 1
+        now = time.time()
+        if now - _observability_drop_log_ts >= 60.0:
+            _observability_drop_log_ts = now
+            log.warning(
+                "Observability queue full; dropped events=%s capacity=%s",
+                _observability_dropped_events,
+                _OBSERVABILITY_QUEUE_MAXSIZE,
+            )
+
+
 def insert_observability_event(
     *,
     flow_type: str,
@@ -776,39 +1173,17 @@ def insert_observability_event(
     except Exception:
         details_json = "{}"
 
-    try:
-        with get_conn() as conn:
-            conn.execute(
-                """
-                INSERT INTO twitch_observability_events (
-                    flow_type,
-                    flow_id,
-                    entity_login,
-                    entity_id,
-                    step,
-                    decision,
-                    details_json
-                ) VALUES (%s, %s, %s, %s, %s, %s, %s)
-                """,
-                (
-                    safe_flow_type,
-                    safe_flow_id,
-                    safe_login,
-                    safe_entity_id,
-                    safe_step,
-                    safe_decision,
-                    details_json,
-                ),
-            )
-            conn.commit()
-    except Exception:
-        log.debug(
-            "Could not persist observability event flow_type=%s flow_id=%s step=%s",
+    _enqueue_observability_event(
+        (
             safe_flow_type,
             safe_flow_id,
+            safe_login,
+            safe_entity_id,
             safe_step,
-            exc_info=True,
+            safe_decision,
+            details_json,
         )
+    )
 
 
 def backfill_tracked_stats_from_category(conn, login: str) -> int:
@@ -1994,13 +2369,49 @@ def ensure_schema(conn) -> None:
         )
         """
     )
-    conn.execute(
+    try:
+        conn.execute(
+            "SELECT create_hypertable("
+            "'twitch_observability_events', "
+            "'created_at', "
+            "if_not_exists => TRUE, "
+            "migrate_data => TRUE, "
+            "chunk_time_interval => INTERVAL '7 days'"
+            ")"
+        )
+    except Exception as exc:
+        log.debug("Could not convert twitch_observability_events to hypertable: %s", exc)
+    try:
+        conn.execute(
+            "ALTER TABLE twitch_observability_events "
+            "SET (timescaledb.compress, "
+            "timescaledb.compress_segmentby = 'flow_type,flow_id', "
+            "timescaledb.compress_orderby = 'created_at DESC')"
+        )
+    except Exception as exc:
+        log.debug("Could not enable compression on twitch_observability_events: %s", exc)
+    try:
+        conn.execute(
+            "SELECT add_compression_policy("
+            "'twitch_observability_events', "
+            "INTERVAL '7 days', "
+            "if_not_exists => TRUE"
+            ")"
+        )
+    except Exception as exc:
+        log.debug(
+            "Could not add compression policy on twitch_observability_events: %s",
+            exc,
+        )
+    _create_index_allowing_compressed_hypertable(
+        "twitch_observability_events",
         "CREATE INDEX IF NOT EXISTS idx_twitch_observability_events_flow "
-        "ON twitch_observability_events(flow_type, flow_id, created_at DESC)"
+        "ON twitch_observability_events(flow_type, flow_id, created_at DESC)",
     )
-    conn.execute(
-        "CREATE INDEX IF NOT EXISTS idx_twitch_observability_events_created "
-        "ON twitch_observability_events(created_at DESC)"
+    _create_index_allowing_compressed_hypertable(
+        "twitch_observability_events",
+        "CREATE INDEX IF NOT EXISTS idx_twitch_observability_events_entity "
+        "ON twitch_observability_events(entity_login, created_at DESC)",
     )
 
     # 6) Raid history & blacklist
@@ -2634,9 +3045,7 @@ def ensure_schema(conn) -> None:
         )
         """
     )
-    conn.execute(
-        "CREATE UNIQUE INDEX IF NOT EXISTS idx_twitch_raid_auth_login ON twitch_raid_auth(twitch_login)"
-    )
+    _ensure_twitch_raid_auth_login_index(conn)
     # Legacy-Plaintext-Spalten wurden per drop_legacy_tokens.py Migration entfernt.
 
     # 15) Social media platform OAuth (encrypted)
@@ -2658,11 +3067,11 @@ def ensure_schema(conn) -> None:
             enc_kid           TEXT DEFAULT 'v1',
             authorized_at     TEXT DEFAULT CURRENT_TIMESTAMP,
             last_refreshed_at TEXT,
-            enabled           INTEGER DEFAULT 1,
-            UNIQUE (platform, streamer_login)
+            enabled           INTEGER DEFAULT 1
         )
         """
     )
+    _ensure_social_media_auth_indexes(conn)
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_social_platform_auth ON social_media_platform_auth(platform, streamer_login, enabled)"
     )

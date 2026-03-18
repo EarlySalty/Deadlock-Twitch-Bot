@@ -1,5 +1,7 @@
+import contextlib
 import json
 import pathlib
+import sqlite3
 import tempfile
 import unittest
 from types import SimpleNamespace
@@ -80,6 +82,10 @@ class _DummyOverviewAssetsAuth(_AnalyticsOverviewMixin):
 
     def _should_use_discord_admin_login(self, request):
         return False
+
+
+class _DummyOverviewMetrics(_AnalyticsOverviewMixin):
+    pass
 
 
 class _DummyAdminOverviewAssets(_AnalyticsOverviewMixin):
@@ -504,6 +510,191 @@ class DashboardSecurityRegressionTests(unittest.IsolatedAsyncioTestCase):
 
         with self.assertRaises(web.HTTPServiceUnavailable):
             dashboard._require_auth(request)
+
+    def test_social_media_redirects_to_login_when_unauthenticated(self) -> None:
+        dashboard = SocialMediaDashboard(
+            clip_manager=ClipManager(),
+            auth_checker=lambda _req: False,
+            oauth_ready_checker=lambda: True,
+        )
+        request = SimpleNamespace()
+
+        with self.assertRaises(web.HTTPFound) as ctx:
+            dashboard._require_auth(request)
+
+        self.assertEqual(ctx.exception.location, "/twitch/auth/login?next=%2Fsocial-media")
+
+    def test_overview_monetization_counts_use_twitch_user_id_backed_schema(self) -> None:
+        conn = sqlite3.connect(":memory:")
+        try:
+            conn.execute(
+                """
+                CREATE TABLE twitch_subscription_events (
+                    session_id INTEGER,
+                    twitch_user_id TEXT NOT NULL,
+                    received_at TEXT NOT NULL
+                )
+                """
+            )
+            conn.execute(
+                """
+                CREATE TABLE twitch_bits_events (
+                    session_id INTEGER,
+                    twitch_user_id TEXT NOT NULL,
+                    received_at TEXT NOT NULL
+                )
+                """
+            )
+            conn.execute(
+                """
+                CREATE TABLE twitch_hype_train_events (
+                    session_id INTEGER,
+                    started_at TEXT NOT NULL,
+                    ended_at TEXT
+                )
+                """
+            )
+            conn.execute(
+                """
+                CREATE TABLE twitch_stream_sessions (
+                    id INTEGER PRIMARY KEY,
+                    streamer_login TEXT NOT NULL
+                )
+                """
+            )
+            conn.execute(
+                """
+                CREATE TABLE twitch_live_state (
+                    twitch_user_id TEXT PRIMARY KEY,
+                    streamer_login TEXT NOT NULL
+                )
+                """
+            )
+            conn.execute(
+                """
+                INSERT INTO twitch_live_state (twitch_user_id, streamer_login)
+                VALUES ('user-1', 'streamer_a'), ('user-2', 'other_streamer')
+                """
+            )
+            conn.execute(
+                """
+                INSERT INTO twitch_subscription_events (session_id, twitch_user_id, received_at)
+                VALUES (NULL, 'user-1', '2026-03-18T10:00:00+00:00')
+                """
+            )
+            conn.execute(
+                """
+                INSERT INTO twitch_bits_events (session_id, twitch_user_id, received_at)
+                VALUES (NULL, 'user-1', '2026-03-18T10:05:00+00:00')
+                """
+            )
+            conn.execute(
+                """
+                INSERT INTO twitch_bits_events (session_id, twitch_user_id, received_at)
+                VALUES (NULL, 'user-2', '2026-03-18T10:06:00+00:00')
+                """
+            )
+
+            result = _DummyOverviewMetrics()._get_monetization_event_counts(
+                conn,
+                "2026-03-18T00:00:00+00:00",
+                "streamer_a",
+            )
+        finally:
+            conn.close()
+
+        self.assertEqual(result["sub_events"], 1)
+        self.assertEqual(result["bits_events"], 1)
+        self.assertEqual(result["hype_trains"], 0)
+
+    async def test_social_media_platform_status_masks_global_fallback_identity_for_streamer_scope(
+        self,
+    ) -> None:
+        dashboard = SocialMediaDashboard(
+            clip_manager=ClipManager(),
+            auth_checker=lambda _req: True,
+            auth_level_getter=lambda _req: "admin",
+        )
+        request = SimpleNamespace(query={"streamer": "streamer_a"})
+
+        fake_status = {
+            "youtube": {
+                "connected": True,
+                "username": "shared-channel",
+                "user_id": "shared-user-id",
+                "expires_at": "2026-03-18T10:00:00+00:00",
+                "expired": False,
+                "uses_global_fallback": True,
+            }
+        }
+        fake_manager = SimpleNamespace(get_all_platforms_status=lambda _streamer: fake_status)
+
+        with patch(
+            "bot.social_media.credential_manager.SocialMediaCredentialManager",
+            return_value=fake_manager,
+        ):
+            response = await dashboard.api_platforms_status(request)
+
+        payload = json.loads(response.text)
+        self.assertEqual(response.status, 200)
+        self.assertEqual(payload["platforms"][0]["platform"], "youtube")
+        self.assertTrue(payload["platforms"][0]["connected"])
+        self.assertIsNone(payload["platforms"][0]["username"])
+        self.assertIsNone(payload["platforms"][0]["user_id"])
+        self.assertTrue(payload["platforms"][0]["uses_global_fallback"])
+
+    async def test_social_media_oauth_start_allows_global_scope_without_streamer(self) -> None:
+        dashboard = SocialMediaDashboard(
+            clip_manager=ClipManager(),
+            auth_checker=lambda _req: True,
+            auth_level_getter=lambda _req: "admin",
+            public_base_url="https://safe.example",
+        )
+        request = SimpleNamespace(match_info={"platform": "youtube"}, query={})
+
+        captured: list[tuple[str, str | None, str]] = []
+        fake_manager = SimpleNamespace(
+            generate_auth_url=lambda platform, streamer, redirect_uri: (
+                captured.append((platform, streamer, redirect_uri)) or "https://oauth.example/start"
+            )
+        )
+
+        with patch(
+            "bot.social_media.oauth_manager.SocialMediaOAuthManager",
+            return_value=fake_manager,
+        ):
+            response = await dashboard.oauth_start(request)
+
+        self.assertEqual(response.location, "https://oauth.example/start")
+        self.assertEqual(
+            captured,
+            [("youtube", None, "https://safe.example/social-media/oauth/callback")],
+        )
+
+    async def test_social_media_oauth_disconnect_allows_global_scope_without_streamer(self) -> None:
+        dashboard = SocialMediaDashboard(
+            clip_manager=ClipManager(),
+            auth_checker=lambda _req: True,
+            auth_level_getter=lambda _req: "admin",
+        )
+        request = SimpleNamespace(match_info={"platform": "youtube"}, query={})
+
+        class _Conn:
+            def __init__(self) -> None:
+                self.executed: list[tuple[str, tuple[object, ...]]] = []
+
+            def execute(self, sql, params=()):
+                self.executed.append((str(sql), tuple(params or ())))
+                return None
+
+        conn = _Conn()
+        with patch("bot.storage.get_conn", return_value=contextlib.nullcontext(conn)):
+            response = await dashboard.oauth_disconnect(request)
+
+        payload = json.loads(response.text)
+        self.assertEqual(response.status, 200)
+        self.assertTrue(payload["success"])
+        self.assertEqual(conn.executed[0][1], ("youtube", None, None))
 
     async def test_social_media_clips_list_rejects_invalid_limit(self) -> None:
         dashboard = SocialMediaDashboard(

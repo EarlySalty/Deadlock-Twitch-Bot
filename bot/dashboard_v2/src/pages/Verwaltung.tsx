@@ -63,8 +63,9 @@ export function VerwaltungPage() {
   const displayName = home.displayName?.trim() || twitchLogin || 'Creator';
   const grantedScopes = home.oauth?.grantedScopes ?? [];
   const missingScopes = home.oauth?.missingScopes ?? [];
+  const needsReauth = Boolean(home.oauth?.needsReauth) || home.oauth?.status === 'reauth';
   const missingScopeCount = missingScopes.length;
-  const hasScopeIssue = missingScopeCount > 0 || home.oauth?.status === 'partial' || home.oauth?.status === 'missing';
+  const hasScopeIssue = needsReauth || missingScopeCount > 0 || home.oauth?.status === 'partial' || home.oauth?.status === 'missing';
   const oauthStatus = home.oauth?.status || (home.oauth?.connected ? 'connected' : hasScopeIssue ? 'missing' : 'partial');
   const oauthFallbackUrl = '/twitch/auth/login?next=%2Ftwitch%2Fdashboard';
   const discordConnectFallbackUrl = '/twitch/auth/discord/login?next=%2Ftwitch%2Fdashboard';
@@ -74,11 +75,13 @@ export function VerwaltungPage() {
   const userId = (authStatus as any)?.userId || (home as any)?.userId || '';
 
   const oauthConnected = oauthStatus === 'connected' && !hasScopeIssue;
-  const oauthStatusText = oauthConnected ? 'Verbunden' : missingScopeCount > 1 ? 'Re-Auth nötig' : 'Unvollständig';
-  const oauthStatusClass = oauthConnected ? 'text-success' : missingScopeCount === 1 ? 'text-error' : 'text-warning';
+  const oauthStatusText = oauthConnected ? 'Verbunden' : needsReauth ? 'Re-Auth nötig' : 'Unvollständig';
+  const oauthStatusClass = oauthConnected ? 'text-success' : needsReauth ? 'text-error' : 'text-warning';
   const oauthHintText = oauthConnected
     ? 'Twitch-OAuth ist aktiv und vollständig.'
-    : missingScopeCount > 1
+    : needsReauth
+      ? 'Das bestehende Twitch-OAuth ist zur Re-Auth markiert. Bitte neu autorisieren.'
+      : missingScopeCount > 1
       ? `${missingScopeCount} Scopes fehlen. Neu autorisieren, um alle Funktionen zu nutzen.`
       : '1 Scope fehlt. Bitte neu autorisieren.';
 

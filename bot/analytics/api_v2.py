@@ -8,6 +8,7 @@ import ipaddress
 import json
 import logging
 import os
+import secrets
 from collections import deque
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
@@ -102,6 +103,37 @@ def _row_get_value(row: Any, key: str, index: int, default: Any = None) -> Any:
         return row.get(key, default)
     values = tuple(row)
     return values[index] if index < len(values) else default
+
+
+def _oauth_scope_snapshot(scopes_raw: Any, needs_reauth: Any) -> dict[str, Any]:
+    granted_scopes = sorted(
+        {
+            str(scope or "").strip().lower()
+            for scope in str(scopes_raw or "").split()
+            if str(scope or "").strip()
+        }
+    )
+    granted_scope_set = set(granted_scopes)
+    missing_scopes = [
+        scope for scope in _INTERNAL_HOME_REQUIRED_SCOPES if scope not in granted_scope_set
+    ]
+    needs_reauth_bool = bool(needs_reauth)
+    connected = bool(granted_scopes)
+    if needs_reauth_bool:
+        status = "reauth"
+    elif not connected:
+        status = "missing"
+    elif missing_scopes:
+        status = "partial"
+    else:
+        status = "connected"
+    return {
+        "connected": connected,
+        "status": status,
+        "needs_reauth": needs_reauth_bool,
+        "granted_scopes": granted_scopes,
+        "missing_scopes": missing_scopes,
+    }
 
 
 def _parse_plan_override_datetime(raw_value: Any) -> datetime | None:
@@ -248,10 +280,10 @@ def _compute_health_score(login: str, conn: Any) -> dict[str, Any] | None:
         cur = conn.execute(
             """
             SELECT AVG(viewer_count) AS avg_viewers,
-                   COUNT(DISTINCT strftime('%Y-%m-%d', timestamp)) AS stream_days
+                   COUNT(DISTINCT strftime('%Y-%m-%d', ts_utc)) AS stream_days
             FROM twitch_stats_tracked
-            WHERE LOWER(streamer_login) = LOWER(?)
-              AND timestamp >= ?
+            WHERE LOWER(streamer) = LOWER(?)
+              AND ts_utc >= ?
             """,
             (login, week_ago.isoformat()),
         ).fetchone()
@@ -260,10 +292,10 @@ def _compute_health_score(login: str, conn: Any) -> dict[str, Any] | None:
         prev = conn.execute(
             """
             SELECT AVG(viewer_count) AS avg_viewers,
-                   COUNT(DISTINCT strftime('%Y-%m-%d', timestamp)) AS stream_days
+                   COUNT(DISTINCT strftime('%Y-%m-%d', ts_utc)) AS stream_days
             FROM twitch_stats_tracked
-            WHERE LOWER(streamer_login) = LOWER(?)
-              AND timestamp >= ? AND timestamp < ?
+            WHERE LOWER(streamer) = LOWER(?)
+              AND ts_utc >= ? AND ts_utc < ?
             """,
             (login, two_weeks_ago.isoformat(), week_ago.isoformat()),
         ).fetchone()
@@ -288,8 +320,8 @@ def _compute_health_score(login: str, conn: Any) -> dict[str, Any] | None:
             chat_row = conn.execute(
                 """
                 SELECT COUNT(*) FROM twitch_chat_messages
-                WHERE LOWER(channel) = LOWER(?)
-                  AND timestamp >= ?
+                WHERE LOWER(streamer_login) = LOWER(?)
+                  AND message_ts >= ?
                 """,
                 (login, week_ago.isoformat()),
             ).fetchone()
@@ -336,8 +368,8 @@ def _compute_week_comparison(login: str, conn: Any) -> dict[str, Any]:
             """
             SELECT AVG(viewer_count), COUNT(*) * 15.0 / 3600
             FROM twitch_stats_tracked
-            WHERE LOWER(streamer_login) = LOWER(?)
-              AND timestamp >= ? AND timestamp < ?
+            WHERE LOWER(streamer) = LOWER(?)
+              AND ts_utc >= ? AND ts_utc < ?
             """,
             (login, start.isoformat(), end.isoformat()),
         ).fetchone()
@@ -855,12 +887,20 @@ class AnalyticsV2Mixin(
         partner_header = request.headers.get("X-Partner-Token")
 
         # Admin token = full access
-        if admin_token and admin_header == admin_token:
-            return "admin"
+        if admin_token and admin_header:
+            try:
+                if secrets.compare_digest(str(admin_header), str(admin_token)):
+                    return "admin"
+            except Exception:
+                pass
 
         # Partner token
-        if partner_token and partner_header == partner_token:
-            return "partner"
+        if partner_token and partner_header:
+            try:
+                if secrets.compare_digest(str(partner_header), str(partner_token)):
+                    return "partner"
+            except Exception:
+                pass
 
         return "none"
 
@@ -1589,6 +1629,7 @@ class AnalyticsV2Mixin(
         bot_bans_keyword_count = 0
         granted_scopes: list[str] = []
         missing_scopes: list[str] = []
+        oauth_needs_reauth = False
         oauth_status = "missing"
         discord_connected = False
         recent_streams: list[dict[str, Any]] = []
@@ -1637,25 +1678,33 @@ class AnalyticsV2Mixin(
             if resolved_login:
                 oauth_row = conn.execute(
                     """
-                    SELECT scopes
+                    SELECT scopes, needs_reauth
                     FROM twitch_raid_auth
-                    WHERE LOWER(twitch_login) = ?
+                    WHERE (? != '' AND TRIM(COALESCE(twitch_user_id, '')) = ?)
+                       OR (? != '' AND LOWER(COALESCE(twitch_login, '')) = LOWER(?))
+                    ORDER BY CASE
+                        WHEN (? != '' AND TRIM(COALESCE(twitch_user_id, '')) = ?) THEN 0
+                        ELSE 1
+                    END
                     LIMIT 1
                     """,
-                    [resolved_login],
+                    [
+                        resolved_user_id,
+                        resolved_user_id,
+                        resolved_login,
+                        resolved_login,
+                        resolved_user_id,
+                        resolved_user_id,
+                    ],
                 ).fetchone()
                 if oauth_row:
-                    scope_set = {
-                        str(scope or "").strip().lower()
-                        for scope in str(oauth_row[0] or "").split()
-                        if str(scope or "").strip()
-                    }
-                    granted_scopes = sorted(scope_set)
-                    missing_scopes = [
-                        scope for scope in _INTERNAL_HOME_REQUIRED_SCOPES if scope not in scope_set
-                    ]
-                    oauth_status = "connected" if not missing_scopes else "partial"
+                    scope_snapshot = _oauth_scope_snapshot(oauth_row[0], oauth_row[1])
+                    granted_scopes = list(scope_snapshot["granted_scopes"])
+                    missing_scopes = list(scope_snapshot["missing_scopes"])
+                    oauth_needs_reauth = bool(scope_snapshot["needs_reauth"])
+                    oauth_status = str(scope_snapshot["status"])
                 else:
+                    oauth_needs_reauth = False
                     missing_scopes = list(_INTERNAL_HOME_REQUIRED_SCOPES)
                     oauth_status = "missing"
 
@@ -1832,8 +1881,8 @@ class AnalyticsV2Mixin(
                     chat_row = conn.execute(
                         """
                         SELECT COUNT(*) FROM twitch_chat_messages
-                        WHERE LOWER(channel) = LOWER(?)
-                          AND timestamp >= ? AND timestamp <= ?
+                        WHERE LOWER(streamer_login) = LOWER(?)
+                          AND message_ts >= ? AND message_ts <= ?
                         """,
                         (resolved_login, ls.get("started_at", ""), ls.get("ended_at", "")),
                     ).fetchone()
@@ -1885,8 +1934,9 @@ class AnalyticsV2Mixin(
                 "streamer_bound": bool(resolved_login or resolved_user_id),
                 "period_days": days,
                 "oauth": {
-                    "connected": oauth_status != "missing",
+                    "connected": bool(granted_scopes),
                     "status": oauth_status,
+                    "needs_reauth": oauth_needs_reauth,
                     "granted_scopes": granted_scopes,
                     "missing_scopes": missing_scopes,
                     "reconnect_url": oauth_reconnect_url,

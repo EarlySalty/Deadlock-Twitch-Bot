@@ -83,10 +83,7 @@ class SocialMediaDashboard:
                             "Bitte OAuth-Einstellungen prüfen."
                         )
                     )
-            raise web.HTTPUnauthorized(
-                text="Bitte melde dich mit deinem Twitch-Partner-Account an.",
-                headers={"Location": "/twitch/auth/login?next=/social-media"},
-            )
+            raise web.HTTPFound("/twitch/auth/login?next=%2Fsocial-media")
 
     def _get_auth_streamer_login(self, request: web.Request) -> str | None:
         """Return Twitch login from dashboard OAuth session when available."""
@@ -1358,7 +1355,7 @@ anfordern.</p>
                                 <div class="platform-name">${{config.name}}</div>
                                 <div class="platform-status ${{isConnected ? 'connected' : ''}}">
                                     ${{isConnected
-                                        ? `✅ Konto verknüpft${{p.username ? ` (${{p.username}})` : ''}}`
+                                        ? `✅ ${{p.uses_global_fallback ? 'Shared-Konto verknüpft' : 'Konto verknüpft'}}${{p.username ? ` (${{p.username}})` : ''}}`
                                         : '○ Konto nicht verbunden'
                                     }}
                                 </div>
@@ -1607,7 +1604,7 @@ anfordern.</p>
         streamer = self._resolve_streamer_scope(
             request,
             request.query.get("streamer"),
-            required=True,
+            required=False,
         )
 
         templates = self.clip_manager.get_streamer_templates(streamer_login=streamer)
@@ -1847,7 +1844,7 @@ anfordern.</p>
         streamer = self._resolve_streamer_scope(
             request,
             request.query.get("streamer"),
-            required=True,
+            required=False,
         )
 
         hashtags = self.clip_manager.get_last_hashtags(streamer_login=streamer)
@@ -1864,7 +1861,7 @@ anfordern.</p>
         streamer = self._resolve_streamer_scope(
             request,
             request.query.get("streamer"),
-            required=True,
+            required=False,
         )
 
         if platform not in ["tiktok", "youtube", "instagram"]:
@@ -1925,7 +1922,7 @@ anfordern.</p>
         streamer = self._resolve_streamer_scope(
             request,
             request.query.get("streamer"),
-            required=True,
+            required=False,
         )
 
         if platform not in ["tiktok", "youtube", "instagram"]:
@@ -1961,7 +1958,7 @@ anfordern.</p>
         streamer = self._resolve_streamer_scope(
             request,
             request.query.get("streamer"),
-            required=True,
+            required=False,
         )
 
         from .credential_manager import SocialMediaCredentialManager
@@ -1977,10 +1974,19 @@ anfordern.</p>
                     {
                         "platform": platform_name,
                         "connected": status["connected"],
-                        "username": status.get("username"),
-                        "user_id": status.get("user_id"),
+                        "username": (
+                            None
+                            if streamer and status.get("uses_global_fallback")
+                            else status.get("username")
+                        ),
+                        "user_id": (
+                            None
+                            if streamer and status.get("uses_global_fallback")
+                            else status.get("user_id")
+                        ),
                         "expires_at": status.get("expires_at"),
                         "expired": status.get("expired", False),
+                        "uses_global_fallback": status.get("uses_global_fallback", False),
                     }
                 )
 

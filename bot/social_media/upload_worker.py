@@ -17,7 +17,8 @@ from pathlib import Path
 from discord.ext import commands
 
 from ..storage import get_conn
-from .clip_manager import ClipManager
+from .clip_manager import ClipManager, UPLOAD_PROCESSING_STALE_AFTER
+from .credential_manager import SocialMediaCredentialManager
 from .uploaders import VideoProcessor
 
 log = logging.getLogger("TwitchStreams.UploadWorker")
@@ -38,17 +39,15 @@ class UploadWorker(commands.Cog):
         self.interval_seconds = 60  # Check queue every minute
         self.max_parallel = 2  # Max parallel uploads per run
 
-        # Initialize uploaders from env
-        self.uploaders = self._init_uploaders()
+        self.credential_manager = SocialMediaCredentialManager()
         self.video_processor = VideoProcessor()
 
         # Start background worker
         self._task = bot.loop.create_task(self._worker_loop())
         log.info(
-            "Upload worker started (interval=%ss, max_parallel=%s, uploaders=%s)",
+            "Upload worker started (interval=%ss, max_parallel=%s)",
             self.interval_seconds,
             self.max_parallel,
-            list(self.uploaders.keys()),
         )
 
     def cog_unload(self):
@@ -56,72 +55,87 @@ class UploadWorker(commands.Cog):
         if self._task:
             self._task.cancel()
 
-    def _init_uploaders(self) -> dict:
-        """Initialize platform uploaders from encrypted database credentials."""
-        from .credential_manager import SocialMediaCredentialManager
+    async def _build_uploader(self, platform: str, credentials: dict):
+        """Create and authenticate a platform uploader for one credential record."""
+        if platform == "tiktok":
+            if not credentials.get("client_id") or not credentials.get("access_token"):
+                return None
 
-        uploaders = {}
-        cred_mgr = SocialMediaCredentialManager()
+            from .uploaders import TikTokUploader
 
-        # TikTok
-        try:
-            creds = cred_mgr.get_credentials("tiktok")
-            if creds and creds.get("client_id") and creds.get("access_token"):
-                from .uploaders import TikTokUploader
+            uploader = TikTokUploader(
+                credentials["client_id"],
+                credentials.get("client_secret", ""),
+            )
+            uploader.access_token = credentials["access_token"]
+            return uploader
 
-                uploader = TikTokUploader(creds["client_id"], creds.get("client_secret", ""))
-                uploader.access_token = creds["access_token"]
-                uploaders["tiktok"] = uploader
-                log.info("TikTok uploader initialized (encrypted credentials)")
-        except Exception:
-            log.exception("Failed to initialize TikTok uploader")
+        if platform == "youtube":
+            if not credentials.get("client_id") or not credentials.get("access_token"):
+                return None
 
-        # YouTube
-        try:
-            creds = cred_mgr.get_credentials("youtube")
-            if creds and creds.get("client_id") and creds.get("access_token"):
-                from .uploaders import YouTubeUploader
+            from .uploaders import YouTubeUploader
 
-                uploader = YouTubeUploader(creds["client_id"], creds.get("client_secret", ""))
+            uploader = YouTubeUploader(
+                credentials["client_id"],
+                credentials.get("client_secret", ""),
+            )
+            authenticated = await uploader.authenticate(
+                {
+                    "access_token": credentials["access_token"],
+                    "refresh_token": credentials.get("refresh_token"),
+                }
+            )
+            return uploader if authenticated else None
 
-                # Authenticate with encrypted tokens
-                if creds.get("refresh_token"):
-                    asyncio.create_task(
-                        uploader.authenticate(
-                            {
-                                "access_token": creds["access_token"],
-                                "refresh_token": creds["refresh_token"],
-                            }
-                        )
-                    )
-                else:
-                    uploader.access_token = creds["access_token"]
+        if platform == "instagram":
+            if not credentials.get("access_token") or not credentials.get("platform_user_id"):
+                return None
 
-                uploaders["youtube"] = uploader
-                log.info("YouTube uploader initialized (encrypted credentials)")
-        except Exception:
-            log.exception("Failed to initialize YouTube uploader")
+            from .uploaders import InstagramUploader
 
-        # Instagram
-        try:
-            creds = cred_mgr.get_credentials("instagram")
-            if creds and creds.get("access_token") and creds.get("platform_user_id"):
-                from .uploaders import InstagramUploader
-
-                uploaders["instagram"] = InstagramUploader(
-                    creds["access_token"], creds["platform_user_id"]
-                )
-                log.info("Instagram uploader initialized (encrypted credentials)")
-        except Exception:
-            log.exception("Failed to initialize Instagram uploader")
-
-        if not uploaders:
-            log.debug(
-                "No platform uploaders initialized. "
-                "Use Social Media Dashboard to connect platforms via OAuth."
+            return InstagramUploader(
+                credentials["access_token"],
+                credentials["platform_user_id"],
             )
 
-        return uploaders
+        log.warning("Skipping upload for unsupported platform=%s", platform)
+        return None
+
+    async def _resolve_uploader(
+        self,
+        platform: str,
+        streamer_login: str | None,
+        uploader_cache: dict[tuple[str, int], object | None],
+    ):
+        """Resolve a platform uploader for the queue item's streamer, with global fallback."""
+        credentials = self.credential_manager.get_credentials(platform, streamer_login)
+        if not credentials:
+            return None
+
+        cache_key = (platform, credentials["id"])
+        if cache_key in uploader_cache:
+            return uploader_cache[cache_key]
+
+        try:
+            uploader = await self._build_uploader(platform, credentials)
+        except Exception:
+            log.exception(
+                "Failed to initialize uploader for platform=%s, streamer=%s",
+                platform,
+                credentials.get("streamer_login") or streamer_login or "<global>",
+            )
+            uploader = None
+
+        if uploader and streamer_login and credentials.get("streamer_login") is None:
+            log.info(
+                "Using global %s credentials as fallback for streamer=%s",
+                platform,
+                streamer_login,
+            )
+
+        uploader_cache[cache_key] = uploader
+        return uploader
 
     async def _worker_loop(self):
         """Main worker loop - runs every minute."""
@@ -139,31 +153,57 @@ class UploadWorker(commands.Cog):
     async def _process_queue(self):
         """Process pending uploads from queue."""
         stats = {"processed": 0, "success": 0, "failed": 0}
+        queue_scan_limit = max(self.max_parallel * 10, self.max_parallel)
+        stale_cutoff = (datetime.now(UTC) - UPLOAD_PROCESSING_STALE_AFTER).isoformat()
+        queue = self.clip_manager.get_upload_queue(
+            status="pending",
+            limit=queue_scan_limit,
+            reclaim_stale_processing_before=stale_cutoff,
+        )
 
-        for platform, uploader in self.uploaders.items():
-            # Get pending uploads for this platform
-            queue = self.clip_manager.get_upload_queue(
-                platform=platform,
-                status="pending",
-                limit=self.max_parallel,
+        if not queue:
+            return
+
+        uploader_cache: dict[tuple[str, int], object | None] = {}
+        batch: list[tuple[dict, object]] = []
+
+        for item in queue:
+            uploader = await self._resolve_uploader(
+                item["platform"],
+                item.get("streamer_login"),
+                uploader_cache,
             )
-
-            if not queue:
+            if not uploader:
+                log.warning(
+                    "No uploader credentials available for queue_id=%s, platform=%s, streamer=%s",
+                    item["id"],
+                    item["platform"],
+                    item.get("streamer_login") or "<global>",
+                )
                 continue
 
-            log.info("Processing %s uploads for %s", len(queue), platform)
+            batch.append((item, uploader))
+            if len(batch) >= self.max_parallel:
+                break
 
-            # Process uploads (in parallel within limit)
-            tasks = [self._process_upload(item, uploader) for item in queue]
-            results = await asyncio.gather(*tasks, return_exceptions=True)
+        if not batch:
+            return
 
-            # Count results
-            for result in results:
-                stats["processed"] += 1
-                if result is True:
-                    stats["success"] += 1
-                else:
-                    stats["failed"] += 1
+        log.info(
+            "Processing %s uploads across %s platform/account combinations",
+            len(batch),
+            len({(item['platform'], item.get('streamer_login')) for item, _ in batch}),
+        )
+
+        tasks = [self._process_upload(item, uploader) for item, uploader in batch]
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+
+        for result in results:
+            stats["processed"] += 1
+            if result is True:
+                stats["success"] += 1
+            else:
+                stats["failed"] += 1
 
         if stats["processed"] > 0:
             log.info(
@@ -200,9 +240,11 @@ class UploadWorker(commands.Cog):
             # Download clip if not already downloaded
             if not local_path or not Path(local_path).exists():
                 local_path = await self._download_clip(clip_url, clip_id)
+                self.clip_manager.update_upload_status(queue_id, "processing")
 
             # Convert to vertical format (9:16)
             converted_path = await self._convert_to_vertical(local_path, platform)
+            self.clip_manager.update_upload_status(queue_id, "processing")
 
             # Upload to platform
             title = queue_item.get("title") or clip_title

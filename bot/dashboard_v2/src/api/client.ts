@@ -340,7 +340,8 @@ export async function fetchAuthStatus(): Promise<AuthStatus> {
 // Internal Home
 export interface InternalHomeOAuthStatus {
   connected?: boolean;
-  status?: 'connected' | 'partial' | 'missing' | 'error';
+  status?: 'connected' | 'partial' | 'missing' | 'reauth' | 'error';
+  needsReauth?: boolean;
   grantedScopes?: string[];
   missingScopes?: string[];
   reconnectUrl?: string | null;
@@ -716,10 +717,13 @@ export async function fetchInternalHome(streamer?: string | null): Promise<Inter
 
   const connected = Boolean(oauth.connected);
   const oauthStatus = String(oauth.status || '').toLowerCase();
+  const needsReauth = Boolean((oauth as { needs_reauth?: boolean }).needs_reauth) || oauthStatus === 'reauth';
   const normalizedOauthStatus: InternalHomeOAuthStatus['status'] =
-    oauthStatus === 'connected' || oauthStatus === 'partial' || oauthStatus === 'missing'
+    oauthStatus === 'connected' || oauthStatus === 'partial' || oauthStatus === 'missing' || oauthStatus === 'reauth'
       ? oauthStatus
-      : connected
+      : needsReauth
+        ? 'reauth'
+        : connected
         ? 'connected'
         : missingScopes.length > 0
           ? 'missing'
@@ -737,6 +741,7 @@ export async function fetchInternalHome(streamer?: string | null): Promise<Inter
     oauth: {
       connected,
       status: normalizedOauthStatus,
+      needsReauth,
       grantedScopes: oauth.granted_scopes || [],
       missingScopes,
       reconnectUrl,

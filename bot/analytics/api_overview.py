@@ -1456,25 +1456,35 @@ class _AnalyticsOverviewMixin:
         try:
             subs_row = conn.execute(
                 """
-                SELECT COUNT(*) FROM twitch_subscription_events
-                WHERE received_at >= ? AND (? = '' OR LOWER(streamer_login) = ?)
+                SELECT COUNT(*)
+                  FROM twitch_subscription_events e
+                  LEFT JOIN twitch_stream_sessions s ON s.id = e.session_id
+                  LEFT JOIN twitch_live_state l ON l.twitch_user_id = e.twitch_user_id
+                 WHERE e.received_at >= ?
+                   AND (? = '' OR LOWER(COALESCE(s.streamer_login, l.streamer_login, '')) = ?)
                 """,
                 [since_date, sl, sl],
             ).fetchone()
             sub_events = int(subs_row[0]) if subs_row else 0
         except Exception:
+            log.debug("Subscription event count query failed", exc_info=True)
             sub_events = 0
 
         try:
             bits_row = conn.execute(
                 """
-                SELECT COUNT(*) FROM twitch_bits_events
-                WHERE received_at >= ? AND (? = '' OR LOWER(streamer_login) = ?)
+                SELECT COUNT(*)
+                  FROM twitch_bits_events e
+                  LEFT JOIN twitch_stream_sessions s ON s.id = e.session_id
+                  LEFT JOIN twitch_live_state l ON l.twitch_user_id = e.twitch_user_id
+                 WHERE e.received_at >= ?
+                   AND (? = '' OR LOWER(COALESCE(s.streamer_login, l.streamer_login, '')) = ?)
                 """,
                 [since_date, sl, sl],
             ).fetchone()
             bits_events = int(bits_row[0]) if bits_row else 0
         except Exception:
+            log.debug("Bits event count query failed", exc_info=True)
             bits_events = 0
 
         try:

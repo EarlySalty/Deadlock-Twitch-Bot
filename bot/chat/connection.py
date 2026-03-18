@@ -263,6 +263,231 @@ class ConnectionMixin:
             if isinstance(payload, dict)
         }
 
+    @staticmethod
+    def _normalize_chat_subscription_type(sub_type: object) -> str:
+        sub_type_value = str(getattr(sub_type, "value", None) or sub_type or "").strip()
+        if sub_type_value in _CHAT_EVENTSUB_TYPES:
+            return sub_type_value
+        lowered = sub_type_value.lower()
+        if "channelchatmessage" in lowered or "channel.chat.message" in lowered:
+            return "channel.chat.message"
+        if "channelchatnotification" in lowered or "channel.chat.notification" in lowered:
+            return "channel.chat.notification"
+        return sub_type_value
+
+    @staticmethod
+    def _extract_chat_subscription_broadcaster_id(subscription: object) -> str:
+        condition = getattr(subscription, "condition", None)
+        if isinstance(condition, dict):
+            return str(
+                condition.get("broadcaster_user_id")
+                or condition.get("broadcaster_id")
+                or ""
+            ).strip()
+        return str(
+            getattr(condition, "broadcaster_user_id", "")
+            or getattr(condition, "broadcaster_id", "")
+            or ""
+        ).strip()
+
+    @staticmethod
+    def _extract_chat_subscription_status(
+        subscription: object,
+        *,
+        default: str,
+    ) -> str:
+        raw_status = getattr(subscription, "status", None)
+        status = str(getattr(raw_status, "value", None) or raw_status or "").strip().lower()
+        return status or default
+
+    @staticmethod
+    def _prefer_chat_subscription_status(current: str | None, new_value: str) -> str:
+        new_status = str(new_value or "").strip().lower() or "unknown"
+        current_status = str(current or "").strip().lower()
+        if current_status == "enabled":
+            return current_status
+        if new_status == "enabled" or not current_status:
+            return new_status
+        return current_status
+
+    async def _load_remote_chat_subscription_statuses(
+        self,
+        *,
+        channel_id: str,
+    ) -> tuple[dict[str, str], str | None]:
+        target_id = str(channel_id or "").strip()
+        if not target_id:
+            return {}, None
+
+        async def _collect_subscription_objects(source: object) -> list[object]:
+            items: list[object] = []
+            if source is None:
+                return items
+            if hasattr(source, "__aiter__"):
+                async for item in source:
+                    items.append(item)
+                return items
+            if hasattr(source, "__anext__"):
+                while True:
+                    try:
+                        item = await source.__anext__()
+                    except StopAsyncIteration:
+                        break
+                    items.append(item)
+                return items
+
+            nested = getattr(source, "subscriptions", None)
+            if nested is not None:
+                return await _collect_subscription_objects(nested)
+
+            try:
+                items.extend(list(source))
+            except TypeError:
+                log.debug(
+                    "join(): unerwarteter EventSub subscriptions-Typ: %s",
+                    type(source),
+                )
+            return items
+
+        fetch_subs = getattr(self, "fetch_eventsub_subscriptions", None)
+        if callable(fetch_subs):
+            try:
+                subs_result = fetch_subs()
+                if inspect.isawaitable(subs_result):
+                    subs_result = await subs_result
+                statuses: dict[str, str] = {}
+                for sub in await _collect_subscription_objects(subs_result):
+                    sub_type = self._normalize_chat_subscription_type(
+                        getattr(sub, "type", "")
+                        or getattr(sub, "subscription_type", "")
+                    )
+                    if not self._is_chat_eventsub_subscription_type(sub_type):
+                        continue
+                    broadcaster_id = self._extract_chat_subscription_broadcaster_id(sub)
+                    if broadcaster_id != target_id:
+                        continue
+                    statuses[sub_type] = self._prefer_chat_subscription_status(
+                        statuses.get(sub_type),
+                        self._extract_chat_subscription_status(sub, default="unknown"),
+                    )
+                return statuses, "helix"
+            except Exception:
+                log.debug(
+                    "join(): fetch_eventsub_subscriptions fehlgeschlagen für %s",
+                    target_id,
+                    exc_info=True,
+                )
+
+        ws_subs = getattr(self, "websocket_subscriptions", None)
+        if callable(ws_subs):
+            try:
+                subs_map = await ws_subs()
+                statuses = {}
+                if isinstance(subs_map, dict):
+                    for sub in subs_map.values():
+                        sub_type = self._normalize_chat_subscription_type(
+                            getattr(getattr(sub, "type", ""), "value", None)
+                            or getattr(sub, "type", "")
+                        )
+                        if not self._is_chat_eventsub_subscription_type(sub_type):
+                            continue
+                        broadcaster_id = self._extract_chat_subscription_broadcaster_id(sub)
+                        if broadcaster_id != target_id:
+                            continue
+                        statuses[sub_type] = self._prefer_chat_subscription_status(
+                            statuses.get(sub_type),
+                            self._extract_chat_subscription_status(sub, default="enabled"),
+                        )
+                return statuses, "websocket_registry"
+            except Exception:
+                log.debug(
+                    "join(): websocket_subscriptions fehlgeschlagen für %s",
+                    target_id,
+                    exc_info=True,
+                )
+
+        return {}, None
+
+    async def _refresh_remote_chat_subscription_tracking(
+        self,
+        *,
+        channel_login: str,
+        channel_id: str,
+        wait_timeout_seconds: float = 6.0,
+        poll_interval_seconds: float = 0.5,
+    ) -> bool:
+        normalized_login = str(channel_login or "").strip().lower().lstrip("#")
+        target_id = str(channel_id or "").strip()
+        if not normalized_login or not target_id:
+            return False
+
+        required_types = tuple(self._required_chat_subscription_types())
+        deadline = time.monotonic() + max(0.0, float(wait_timeout_seconds))
+        last_source: str | None = None
+
+        while True:
+            statuses, source = await self._load_remote_chat_subscription_statuses(
+                channel_id=target_id,
+            )
+            if source is not None:
+                last_source = source
+                for sub_type in required_types:
+                    status = str(statuses.get(sub_type) or "").strip().lower()
+                    if status == "enabled":
+                        self._track_chat_subscription(
+                            normalized_login,
+                            channel_id=target_id,
+                            sub_type=sub_type,
+                        )
+                        self._record_chat_subscription_state(
+                            normalized_login,
+                            sub_type,
+                            "ok",
+                            detail=f"verified via {source}",
+                        )
+                        continue
+
+                    self._untrack_chat_subscription(normalized_login, sub_type=sub_type)
+                    if status:
+                        self._record_chat_subscription_state(
+                            normalized_login,
+                            sub_type,
+                            "subscription_not_enabled",
+                            detail=f"{source}:{status}",
+                        )
+                    else:
+                        self._record_chat_subscription_state(
+                            normalized_login,
+                            sub_type,
+                            "subscription_missing",
+                            detail=f"{source}:missing",
+                        )
+
+                if self.is_channel_subscription_ready(normalized_login):
+                    return True
+
+            if time.monotonic() >= deadline:
+                break
+            await asyncio.sleep(max(0.0, float(poll_interval_seconds)))
+
+        if last_source is None:
+            for sub_type in required_types:
+                self._untrack_chat_subscription(normalized_login, sub_type=sub_type)
+                self._record_chat_subscription_state(
+                    normalized_login,
+                    sub_type,
+                    "verification_unavailable",
+                    detail="no remote EventSub listing available",
+                )
+        return False
+
+    def _has_active_transport_restart(self) -> bool:
+        restart_task = getattr(self, "_restart_task", None)
+        if restart_task is not None and not restart_task.done():
+            return True
+        cooldown_until = float(getattr(self, "_restart_cooldown_until", 0.0) or 0.0)
+        return cooldown_until > time.monotonic()
+
     def _build_required_chat_subscription_payloads(
         self,
         *,
@@ -310,13 +535,16 @@ class ConnectionMixin:
         ):
             if sub_type not in missing_types:
                 continue
-            await self.subscribe_websocket(payload=payload)
-            self._track_chat_subscription(
+            self._record_chat_subscription_state(
                 normalized_login,
-                channel_id=str(channel_id),
-                sub_type=sub_type,
+                sub_type,
+                "subscribe_requested",
             )
-        return self.is_channel_subscription_ready(normalized_login)
+            await self.subscribe_websocket(payload=payload)
+        return await self._refresh_remote_chat_subscription_tracking(
+            channel_login=normalized_login,
+            channel_id=str(channel_id),
+        )
 
     def _resolve_chat_bot_scope_set(self) -> set[str]:
         token_mgr = getattr(self, "_token_manager", None)
@@ -1209,8 +1437,20 @@ class ConnectionMixin:
                     joined += 1
                     if rate_limit_delay > 0:
                         await asyncio.sleep(rate_limit_delay)
+                elif self._has_active_transport_restart():
+                    log.warning(
+                        "join_channels: breche Batch nach %s ab, da ein Chat-Transport-Restart aktiv ist.",
+                        login,
+                    )
+                    break
             except Exception:
                 log.exception("join_channels: unerwarteter Fehler bei %s", login)
+                if self._has_active_transport_restart():
+                    log.warning(
+                        "join_channels: breche Batch nach Fehler bei %s ab, da ein Chat-Transport-Restart aktiv ist.",
+                        login,
+                    )
+                    break
 
         return joined
 

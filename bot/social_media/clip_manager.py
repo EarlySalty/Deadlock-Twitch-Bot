@@ -6,7 +6,7 @@ Verwaltet Twitch-Clips und deren Upload auf TikTok, YouTube Shorts, Instagram Re
 
 import json
 import logging
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from ..storage import get_conn
@@ -16,6 +16,7 @@ log = logging.getLogger("TwitchStreams.ClipManager")
 # Konfiguration
 CLIPS_DOWNLOAD_DIR = Path("data/clips")
 CLIPS_CONVERTED_DIR = Path("data/clips/converted")
+UPLOAD_PROCESSING_STALE_AFTER = timedelta(minutes=30)
 
 # Sicherstellen dass Verzeichnisse existieren
 CLIPS_DOWNLOAD_DIR.mkdir(parents=True, exist_ok=True)
@@ -283,23 +284,80 @@ class ClipManager:
 
         try:
             with get_conn() as conn:
-                # Prüfe ob Upload bereits in Queue
-                existing = conn.execute(
+                # Pending jobs are always reused.
+                pending = conn.execute(
                     """
                     SELECT id FROM twitch_clips_upload_queue
-                     WHERE clip_id = ? AND platform = ? AND status IN ('pending', 'processing')
+                     WHERE clip_id = ? AND platform = ? AND status = 'pending'
+                     ORDER BY priority DESC, created_at ASC, id ASC
+                     LIMIT 1
                     """,
                     (clip_db_id, platform),
                 ).fetchone()
 
-                if existing:
+                if pending:
                     log.debug(
                         "Upload bereits in Queue: Clip %s -> %s (Queue ID: %s)",
                         clip_db_id,
                         platform,
-                        existing[0],
+                        pending[0],
                     )
-                    return existing[0]
+                    return pending[0]
+
+                stale_cutoff = (datetime.now(UTC) - UPLOAD_PROCESSING_STALE_AFTER).isoformat()
+                processing = conn.execute(
+                    """
+                    SELECT id, COALESCE(last_attempt_at, created_at) AS last_seen_at
+                      FROM twitch_clips_upload_queue
+                     WHERE clip_id = ? AND platform = ? AND status = 'processing'
+                     ORDER BY COALESCE(last_attempt_at, created_at) DESC, id DESC
+                     LIMIT 1
+                    """,
+                    (clip_db_id, platform),
+                ).fetchone()
+
+                if processing:
+                    queue_id = processing[0]
+                    last_seen_at = str(processing[1] or "")
+                    if last_seen_at and last_seen_at >= stale_cutoff:
+                        log.debug(
+                            "Upload wird noch verarbeitet: Clip %s -> %s (Queue ID: %s)",
+                            clip_db_id,
+                            platform,
+                            queue_id,
+                        )
+                        return queue_id
+
+                    conn.execute(
+                        """
+                        UPDATE twitch_clips_upload_queue
+                           SET status = 'pending',
+                               title = ?,
+                               description = ?,
+                               hashtags = ?,
+                               scheduled_at = ?,
+                               priority = ?,
+                               last_error = NULL,
+                               last_attempt_at = NULL,
+                               completed_at = NULL
+                         WHERE id = ?
+                        """,
+                        (
+                            title,
+                            description,
+                            json.dumps(hashtags) if hashtags else None,
+                            scheduled_at,
+                            priority,
+                            queue_id,
+                        ),
+                    )
+                    log.warning(
+                        "Stale processing upload re-queued: Clip %s -> %s (Queue ID: %s)",
+                        clip_db_id,
+                        platform,
+                        queue_id,
+                    )
+                    return queue_id
 
                 # Neue Queue eintragen
                 cursor = conn.execute(
@@ -342,6 +400,7 @@ class ClipManager:
         platform: str | None = None,
         status: str = "pending",
         limit: int = 10,
+        reclaim_stale_processing_before: str | None = None,
     ) -> list[dict]:
         """
         Gibt Upload-Queue zurück.
@@ -350,12 +409,26 @@ class ClipManager:
             platform: Optional filter by platform
             status: Filter by status (default: 'pending')
             limit: Max results
+            reclaim_stale_processing_before: Optional ISO timestamp for resetting stale
+                processing jobs back to pending before loading the queue.
 
         Returns:
             Liste von Queue-Items mit Clip-Daten
         """
         try:
             with get_conn() as conn:
+                if status == "pending" and reclaim_stale_processing_before:
+                    conn.execute(
+                        """
+                        UPDATE twitch_clips_upload_queue
+                           SET status = 'pending',
+                               last_error = NULL
+                         WHERE status = 'processing'
+                           AND COALESCE(last_attempt_at, created_at) < ?
+                        """,
+                        (reclaim_stale_processing_before,),
+                    )
+
                 query = """
                     SELECT q.*, c.clip_id, c.clip_url, c.clip_title, c.streamer_login,
                            c.local_file_path, c.converted_file_path
