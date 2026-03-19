@@ -14,6 +14,7 @@ from aiohttp import web
 
 from ... import storage
 from ...core.constants import log
+from ...raid.scope_profiles import scopes_for_profile
 from ...raid.views import RaidAuthGenerateView, build_raid_requirements_embed
 
 TWITCH_HELIX_USERS_URL = "https://api.twitch.tv/helix/users"
@@ -834,8 +835,8 @@ new Chart(ctx, {{
                 content_type="text/html",
             )
 
-        login = auth_manager.verify_state(state)
-        if not login:
+        state_info = auth_manager.consume_state_details(state)
+        if not state_info:
             return web.Response(
                 text=self._render_oauth_page(
                     "Ungültiger State",
@@ -844,11 +845,8 @@ new Chart(ctx, {{
                 status=400,
                 content_type="text/html",
             )
-        state_discord_user_id: str | None = None
-        if login.lower().startswith("discord:"):
-            candidate_discord_id = login.split(":", 1)[1].strip()
-            if candidate_discord_id.isdigit():
-                state_discord_user_id = candidate_discord_id
+        login = state_info.requested_login
+        state_discord_user_id = state_info.discord_user_id
 
         session = getattr(raid_bot, "session", None)
         owns_session = False
@@ -888,6 +886,28 @@ new Chart(ctx, {{
             if not twitch_user_id or not twitch_login:
                 raise RuntimeError("Invalid Twitch user payload in OAuth callback")
 
+            expected_twitch_login = str(state_info.expected_twitch_login or "").strip().lower()
+            if not expected_twitch_login:
+                requested_login = str(state_info.requested_login or "").strip().lower()
+                if requested_login and not requested_login.startswith("discord:"):
+                    expected_twitch_login = requested_login
+            if expected_twitch_login and twitch_login != expected_twitch_login:
+                log.warning(
+                    "Raid OAuth callback login mismatch: expected=%s actual=%s state=%s",
+                    expected_twitch_login,
+                    twitch_login,
+                    login,
+                )
+                return web.Response(
+                    text=self._render_oauth_page(
+                        "Falscher Twitch-Account",
+                        "<p>Die Autorisierung wurde mit dem falschen Twitch-Account abgeschlossen.</p>"
+                        "<p>Bitte den Link erneut öffnen und dich mit dem vorgesehenen Kanal anmelden.</p>",
+                    ),
+                    status=403,
+                    content_type="text/html",
+                )
+
             scopes_raw = token_data.get("scope", [])
             if isinstance(scopes_raw, str):
                 scopes = [scope for scope in scopes_raw.split() if scope]
@@ -895,6 +915,28 @@ new Chart(ctx, {{
                 scopes = [str(scope).strip() for scope in scopes_raw if str(scope).strip()]
             else:
                 scopes = []
+            allowed_scopes = set(scopes_for_profile(state_info.scope_profile))
+            unexpected_scopes = sorted({scope for scope in scopes if scope not in allowed_scopes})
+            if unexpected_scopes:
+                log.warning(
+                    "Raid OAuth callback returned scopes outside expected profile for %s: %s",
+                    twitch_login,
+                    ", ".join(unexpected_scopes),
+                )
+                return web.Response(
+                    text=self._render_oauth_page(
+                        "Ungültige Berechtigungen",
+                        "<p>Die Autorisierung wurde mit unerwarteten Berechtigungen abgeschlossen.</p>"
+                        "<p>Bitte den Vorgang neu starten.</p>",
+                    ),
+                    status=400,
+                    content_type="text/html",
+                )
+
+            had_existing_auth = auth_manager.has_saved_auth_record(
+                twitch_user_id=twitch_user_id,
+                twitch_login=twitch_login,
+            )
 
             auth_manager.save_auth(
                 twitch_user_id=twitch_user_id,
@@ -903,15 +945,18 @@ new Chart(ctx, {{
                 refresh_token=refresh_token,
                 expires_in=int(token_data.get("expires_in", 3600) or 3600),
                 scopes=scopes,
+                scope_profile=state_info.scope_profile,
+                activate_raid_features=not had_existing_auth,
             )
 
             post_setup = getattr(raid_bot, "complete_setup_for_streamer", None)
-            if callable(post_setup):
+            if callable(post_setup) and not had_existing_auth:
                 asyncio.create_task(
                     post_setup(
                         twitch_user_id,
                         twitch_login,
                         state_discord_user_id=state_discord_user_id,
+                        activate_partner_features=not had_existing_auth,
                     ),
                     name="twitch.raid.complete_setup",
                 )

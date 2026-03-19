@@ -513,6 +513,163 @@ class ChatNotificationRaidCorrelationTests(unittest.IsolatedAsyncioTestCase):
 
 
 class ChatNotificationPayloadParsingTests(unittest.IsolatedAsyncioTestCase):
+    async def test_event_chat_notification_routes_sub_notice_to_subscription_handler(self) -> None:
+        raid_bot = SimpleNamespace(
+            on_chat_raid_notification=AsyncMock(),
+            on_chat_unraid_notification=AsyncMock(),
+            on_source_self_unraid_notification=AsyncMock(),
+            on_chat_subscription_notification=AsyncMock(),
+        )
+        chat_bot = RaidChatBot.__new__(RaidChatBot)
+        chat_bot._raid_bot = raid_bot
+
+        payload = SimpleNamespace(
+            broadcaster=SimpleNamespace(id="9009", name="denoshock"),
+            notice_type="sub",
+            chatter=SimpleNamespace(id="1001", name="viewerone"),
+            sub=SimpleNamespace(sub_tier="2000"),
+            message=SimpleNamespace(text=""),
+            timestamp="2026-03-18T20:15:00+00:00",
+        )
+
+        await chat_bot.event_chat_notification(payload)
+
+        raid_bot.on_chat_raid_notification.assert_not_awaited()
+        raid_bot.on_chat_unraid_notification.assert_not_awaited()
+        raid_bot.on_chat_subscription_notification.assert_awaited_once()
+        kwargs = raid_bot.on_chat_subscription_notification.await_args.kwargs
+        self.assertEqual(kwargs["broadcaster_id"], "9009")
+        self.assertEqual(kwargs["broadcaster_login"], "denoshock")
+        self.assertEqual(kwargs["notice_type"], "sub")
+        self.assertEqual(kwargs["event_type"], "subscribe")
+        self.assertEqual(kwargs["event"]["user_login"], "viewerone")
+        self.assertEqual(kwargs["event"]["tier"], "2000")
+        self.assertFalse(kwargs["event"]["is_gift"])
+
+    async def test_event_chat_notification_routes_shared_chat_sub_notice_to_subscription_handler(self) -> None:
+        raid_bot = SimpleNamespace(
+            on_chat_raid_notification=AsyncMock(),
+            on_chat_unraid_notification=AsyncMock(),
+            on_source_self_unraid_notification=AsyncMock(),
+            on_chat_subscription_notification=AsyncMock(),
+        )
+        chat_bot = RaidChatBot.__new__(RaidChatBot)
+        chat_bot._raid_bot = raid_bot
+
+        payload = SimpleNamespace(
+            broadcaster=SimpleNamespace(id="9009", name="denoshock"),
+            notice_type="shared_chat_sub",
+            chatter=SimpleNamespace(id="1001", name="viewerone"),
+            sub=SimpleNamespace(sub_tier="2000"),
+            text="",
+            timestamp="2026-03-18T20:15:00+00:00",
+        )
+
+        await chat_bot.event_chat_notification(payload)
+
+        raid_bot.on_chat_subscription_notification.assert_awaited_once()
+        kwargs = raid_bot.on_chat_subscription_notification.await_args.kwargs
+        self.assertEqual(kwargs["event_type"], "subscribe")
+
+    async def test_event_chat_notification_routes_resub_notice_with_real_payload_shape(self) -> None:
+        raid_bot = SimpleNamespace(
+            on_chat_raid_notification=AsyncMock(),
+            on_chat_unraid_notification=AsyncMock(),
+            on_source_self_unraid_notification=AsyncMock(),
+            on_chat_subscription_notification=AsyncMock(),
+        )
+        chat_bot = RaidChatBot.__new__(RaidChatBot)
+        chat_bot._raid_bot = raid_bot
+
+        payload = SimpleNamespace(
+            broadcaster=SimpleNamespace(id="9009", name="denoshock"),
+            notice_type="resub",
+            chatter=SimpleNamespace(id="1001", name="viewerone"),
+            resub=SimpleNamespace(
+                gift=True,
+                sub_tier="1000",
+                cumulative_months=12,
+                streak_months=4,
+                gifter=SimpleNamespace(id="2002", name="giftername"),
+            ),
+            text="great stream",
+            fragments=[SimpleNamespace(text="great "), SimpleNamespace(text="stream")],
+            timestamp="2026-03-18T20:15:00+00:00",
+        )
+
+        await chat_bot.event_chat_notification(payload)
+
+        raid_bot.on_chat_subscription_notification.assert_awaited_once()
+        kwargs = raid_bot.on_chat_subscription_notification.await_args.kwargs
+        self.assertEqual(kwargs["event_type"], "resub")
+        self.assertEqual(kwargs["event"]["user_login"], "viewerone")
+        self.assertEqual(kwargs["event"]["gifter_login"], "giftername")
+        self.assertTrue(kwargs["event"]["is_gift"])
+        self.assertEqual(kwargs["event"]["message"]["text"], "great stream")
+
+    async def test_event_chat_notification_routes_gift_notice_with_nested_recipient(self) -> None:
+        raid_bot = SimpleNamespace(
+            on_chat_raid_notification=AsyncMock(),
+            on_chat_unraid_notification=AsyncMock(),
+            on_source_self_unraid_notification=AsyncMock(),
+            on_chat_subscription_notification=AsyncMock(),
+        )
+        chat_bot = RaidChatBot.__new__(RaidChatBot)
+        chat_bot._raid_bot = raid_bot
+
+        payload = SimpleNamespace(
+            broadcaster=SimpleNamespace(id="9009", name="denoshock"),
+            notice_type="sub_gift",
+            chatter=SimpleNamespace(id="3003", name="giftername"),
+            sub_gift=SimpleNamespace(
+                recipient=SimpleNamespace(id="4004", name="GiftedViewer"),
+                sub_tier="2000",
+                cumulative_total=9,
+            ),
+            timestamp="2026-03-18T20:15:00+00:00",
+        )
+
+        await chat_bot.event_chat_notification(payload)
+
+        raid_bot.on_chat_subscription_notification.assert_awaited_once()
+        kwargs = raid_bot.on_chat_subscription_notification.await_args.kwargs
+        self.assertEqual(kwargs["event_type"], "gift")
+        self.assertEqual(kwargs["event"]["user_login"], "giftedviewer")
+        self.assertEqual(kwargs["event"]["user_id"], "4004")
+        self.assertEqual(kwargs["event"]["total"], 1)
+        self.assertEqual(kwargs["event"]["gift_total"], 9)
+        self.assertEqual(kwargs["event"]["gift_total_kind"], "cumulative_total")
+
+    async def test_event_chat_notification_routes_community_gift_notice_with_batch_total(self) -> None:
+        raid_bot = SimpleNamespace(
+            on_chat_raid_notification=AsyncMock(),
+            on_chat_unraid_notification=AsyncMock(),
+            on_source_self_unraid_notification=AsyncMock(),
+            on_chat_subscription_notification=AsyncMock(),
+        )
+        chat_bot = RaidChatBot.__new__(RaidChatBot)
+        chat_bot._raid_bot = raid_bot
+
+        payload = SimpleNamespace(
+            broadcaster=SimpleNamespace(id="9009", name="denoshock"),
+            notice_type="community_sub_gift",
+            chatter=SimpleNamespace(id="3003", name="giftername"),
+            community_sub_gift=SimpleNamespace(
+                sub_tier="1000",
+                total=3,
+            ),
+            timestamp="2026-03-18T20:15:00+00:00",
+        )
+
+        await chat_bot.event_chat_notification(payload)
+
+        raid_bot.on_chat_subscription_notification.assert_awaited_once()
+        kwargs = raid_bot.on_chat_subscription_notification.await_args.kwargs
+        self.assertEqual(kwargs["event_type"], "gift")
+        self.assertIsNone(kwargs["event"].get("user_login"))
+        self.assertEqual(kwargs["event"]["gift_total"], 3)
+        self.assertEqual(kwargs["event"]["gift_total_kind"], "batch_total")
+
     async def test_event_chat_notification_routes_self_unraid_to_source_handler(self) -> None:
         raid_bot = SimpleNamespace(
             on_chat_raid_notification=AsyncMock(),
@@ -539,6 +696,55 @@ class ChatNotificationPayloadParsingTests(unittest.IsolatedAsyncioTestCase):
             broadcaster_login="denoshock",
             message_id="msg-123",
             event_timestamp="2026-03-17T16:03:01+00:00",
+        )
+
+
+class ChatSubscriptionFallbackTests(unittest.IsolatedAsyncioTestCase):
+    def _build_raid_bot(self, *, cog=None) -> RaidBot:
+        raid_bot = RaidBot.__new__(RaidBot)
+        raid_bot._cog = cog
+        return raid_bot
+
+    async def test_on_chat_subscription_notification_delegates_to_storage_handler(self) -> None:
+        store_handler = AsyncMock()
+        raid_bot = self._build_raid_bot(
+            cog=SimpleNamespace(
+                _eventsub_has_sub=lambda _sub_type, _user_id: False,
+                _store_subscription_event=store_handler,
+            )
+        )
+
+        handled = await raid_bot.on_chat_subscription_notification(
+            broadcaster_id="9009",
+            broadcaster_login="targetlogin",
+            notice_type="resub",
+            event_type="resub",
+            event={"user_login": "viewerone", "tier": "1000"},
+        )
+
+        self.assertTrue(handled)
+        store_handler.assert_awaited_once_with(
+            "9009",
+            {"user_login": "viewerone", "tier": "1000"},
+            "resub",
+        )
+
+    async def test_should_capture_chat_subscription_notice_skips_when_dedicated_eventsub_exists(self) -> None:
+        raid_bot = self._build_raid_bot(
+            cog=SimpleNamespace(_eventsub_has_sub=lambda sub_type, user_id: sub_type == "channel.subscribe" and user_id == "9009")
+        )
+
+        self.assertFalse(
+            raid_bot.should_capture_chat_subscription_notice(
+                broadcaster_id="9009",
+                notice_type="sub",
+            )
+        )
+        self.assertTrue(
+            raid_bot.should_capture_chat_subscription_notice(
+                broadcaster_id="9009",
+                notice_type="community_sub_gift",
+            )
         )
 
 

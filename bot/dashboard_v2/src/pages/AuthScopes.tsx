@@ -13,7 +13,6 @@ import type { ScopeStatus } from '@/types/scopes';
 
 const demoScopes = new Set<string>([
   'channel:manage:raids',
-  'channel:read:subscriptions',
   'channel:manage:moderators',
   'channel:bot',
 ]);
@@ -207,7 +206,7 @@ export function AuthScopes() {
           onChange={e => setInput(e.target.value)}
           rows={3}
           className="w-full rounded-xl border border-border bg-black/30 px-3 py-3 text-sm text-white outline-none ring-0 focus:border-accent focus:ring-2 focus:ring-accent/40"
-          placeholder="channel:manage:raids channel:bot channel:read:subscriptions …"
+          placeholder="channel:manage:raids channel:bot bits:read …"
         />
         <p className="mt-2 text-xs text-text-secondary">
           Tipp: Du kannst Scopes auch per URL setzen (&quot;?scopes=channel:manage:raids,channel:bot&quot;), wir

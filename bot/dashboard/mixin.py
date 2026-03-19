@@ -20,6 +20,7 @@ from ..core.constants import (
     log,
 )
 from ..discord_role_sync import normalize_discord_user_id, sync_streamer_role
+from ..raid.scope_profiles import scopes_for_profile
 from ..raid.integration_state import RaidIntegrationStateResolver
 from ..storage import pg as storage
 from ..raid.views import RaidAuthGenerateView, build_raid_requirements_embed
@@ -249,6 +250,7 @@ class TwitchDashboardMixin:
                                s.discord_display_name,
                                s.raid_bot_enabled,
                                a.raid_enabled AS raid_auth_enabled,
+                               a.needs_reauth AS raid_needs_reauth,
                                a.authorized_at AS raid_authorized_at,
                                a.token_expires_at AS raid_token_expires_at,
                                sess.last_deadlock_stream_at
@@ -286,13 +288,20 @@ class TwitchDashboardMixin:
                 await asyncio.sleep(0.3 * (attempt + 1))
         return []
 
-    async def _dashboard_raid_auth_url(self, login: str) -> str:
+    async def _dashboard_raid_auth_url(
+        self,
+        login: str,
+        discord_user_id: str | None = None,
+    ) -> str:
         raw = str(login or "").strip()
         if not raw:
             raise ValueError("invalid or missing login")
 
         normalized: str
         use_discord_button_url = False
+        normalized_discord_user_id = (
+            str(discord_user_id or "").strip() if str(discord_user_id or "").strip().isdigit() else None
+        )
         if raw.lower().startswith("discord:"):
             discord_id = raw.split(":", 1)[1].strip()
             if not discord_id.isdigit():
@@ -309,8 +318,21 @@ class TwitchDashboardMixin:
             raise RuntimeError("Raid bot not initialized")
 
         if use_discord_button_url:
-            return str(auth_manager.generate_discord_button_url(normalized))
-        return str(auth_manager.generate_auth_url(normalized))
+            return str(
+                auth_manager.generate_discord_button_url(
+                    normalized,
+                    discord_user_id=normalized_discord_user_id or normalized.split(":", 1)[1],
+                )
+            )
+        if normalized_discord_user_id:
+            return str(
+                auth_manager.generate_discord_button_url(
+                    normalized,
+                    expected_twitch_login=normalized,
+                    discord_user_id=normalized_discord_user_id,
+                )
+            )
+        return str(auth_manager.generate_auth_url(normalized, expected_twitch_login=normalized))
 
     async def _dashboard_raid_go_url(self, state: str) -> str | None:
         state_clean = str(state or "").strip()
@@ -436,8 +458,8 @@ class TwitchDashboardMixin:
                 ),
             }
 
-        login = auth_manager.verify_state(state_clean)
-        if not login:
+        state_info = auth_manager.consume_state_details(state_clean)
+        if not state_info:
             return {
                 "status": 400,
                 "title": "Ungültiger State",
@@ -447,11 +469,8 @@ class TwitchDashboardMixin:
                 ),
             }
 
-        state_discord_user_id: str | None = None
-        if login.lower().startswith("discord:"):
-            candidate_discord_id = login.split(":", 1)[1].strip()
-            if candidate_discord_id.isdigit():
-                state_discord_user_id = candidate_discord_id
+        login = state_info.requested_login
+        state_discord_user_id = state_info.discord_user_id
 
         session = getattr(raid_bot, "session", None)
         owns_session = False
@@ -491,6 +510,27 @@ class TwitchDashboardMixin:
             if not twitch_user_id or not twitch_login:
                 raise RuntimeError("Invalid Twitch user payload in OAuth callback")
 
+            expected_twitch_login = str(state_info.expected_twitch_login or "").strip().lower()
+            if not expected_twitch_login:
+                requested_login = str(state_info.requested_login or "").strip().lower()
+                if requested_login and not requested_login.startswith("discord:"):
+                    expected_twitch_login = requested_login
+            if expected_twitch_login and twitch_login != expected_twitch_login:
+                log.warning(
+                    "Raid OAuth callback login mismatch: expected=%s actual=%s state=%s",
+                    expected_twitch_login,
+                    twitch_login,
+                    login,
+                )
+                return {
+                    "status": 403,
+                    "title": "Falscher Twitch-Account",
+                    "body_html": (
+                        "<p>Die Autorisierung wurde mit dem falschen Twitch-Account abgeschlossen.</p>"
+                        "<p>Bitte den Link erneut öffnen und dich mit dem vorgesehenen Kanal anmelden.</p>"
+                    ),
+                }
+
             scopes_raw = token_data.get("scope", [])
             if isinstance(scopes_raw, str):
                 scopes = [scope for scope in scopes_raw.split() if scope]
@@ -498,6 +538,27 @@ class TwitchDashboardMixin:
                 scopes = [str(scope).strip() for scope in scopes_raw if str(scope).strip()]
             else:
                 scopes = []
+            allowed_scopes = set(scopes_for_profile(state_info.scope_profile))
+            unexpected_scopes = sorted({scope for scope in scopes if scope not in allowed_scopes})
+            if unexpected_scopes:
+                log.warning(
+                    "Raid OAuth callback returned scopes outside expected profile for %s: %s",
+                    twitch_login,
+                    ", ".join(unexpected_scopes),
+                )
+                return {
+                    "status": 400,
+                    "title": "Ungültige Berechtigungen",
+                    "body_html": (
+                        "<p>Die Autorisierung wurde mit unerwarteten Berechtigungen abgeschlossen.</p>"
+                        "<p>Bitte den Vorgang neu starten.</p>"
+                    ),
+                }
+
+            had_existing_auth = auth_manager.has_saved_auth_record(
+                twitch_user_id=twitch_user_id,
+                twitch_login=twitch_login,
+            )
 
             auth_manager.save_auth(
                 twitch_user_id=twitch_user_id,
@@ -506,15 +567,18 @@ class TwitchDashboardMixin:
                 refresh_token=refresh_token,
                 expires_in=int(token_data.get("expires_in", 3600) or 3600),
                 scopes=scopes,
+                scope_profile=state_info.scope_profile,
+                activate_raid_features=not had_existing_auth,
             )
 
             post_setup = getattr(raid_bot, "complete_setup_for_streamer", None)
-            if callable(post_setup):
+            if callable(post_setup) and not had_existing_auth:
                 asyncio.create_task(
                     post_setup(
                         twitch_user_id,
                         twitch_login,
                         state_discord_user_id=state_discord_user_id,
+                        activate_partner_features=not had_existing_auth,
                     ),
                     name="twitch.raid.complete_setup",
                 )

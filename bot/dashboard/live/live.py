@@ -11,40 +11,24 @@ from aiohttp import web
 
 from ... import storage as _storage
 from ...core.constants import log
+from ...raid.scope_profiles import BASE_CRITICAL_STREAMER_SCOPES, BASE_STREAMER_SCOPES
 from ..billing.billing_plans import BILLING_PLANS as _BILLING_PLANS
 
 # Alle Broadcaster-Scopes, die ein vollständig autorisierter Streamer haben sollte.
-_REQUIRED_SCOPES: list[str] = [
-    "channel:manage:raids",
-    "channel:read:subscriptions",
-    "channel:manage:moderators",
-    "channel:bot",
-    "clips:edit",
-    "channel:read:ads",
-    "bits:read",
-    "channel:read:hype_train",
-    "channel:read:redemptions",
-]
+_REQUIRED_SCOPES: list[str] = list(BASE_STREAMER_SCOPES)
 
 _SCOPE_COLUMN_LABELS: dict[str, str] = {
     "channel:manage:raids": "Raids",
-    "channel:read:subscriptions": "Subs",
     "channel:manage:moderators": "Mods",
     "channel:bot": "Bot",
     "clips:edit": "Clips",
     "channel:read:ads": "Ads",
     "bits:read": "Bits",
-    "channel:read:hype_train": "Hype",
     "channel:read:redemptions": "Points",
 }
 
 # Scopes die besonders wichtig für Analytics/Lurker-Tracking sind
-_CRITICAL_SCOPES: set[str] = {
-    "channel:read:redemptions",  # Channel Point Redemptions
-    "bits:read",  # Bits Events
-    "channel:read:hype_train",  # Hype Train Events
-    "channel:read:subscriptions",  # Sub Events
-}
+_CRITICAL_SCOPES: set[str] = set(BASE_CRITICAL_STREAMER_SCOPES)
 
 _BOT_REQUIRED_SCOPES: tuple[str, ...] = (
     "user:read:chat",
@@ -573,10 +557,14 @@ class DashboardLiveMixin:
                 inactive_days = (now.date() - last_deadlock_dt.date()).days
             partner_opt_out = bool(st.get("manual_partner_opt_out"))
             raid_auth_enabled = st.get("raid_auth_enabled")
+            raid_needs_reauth = bool(st.get("raid_needs_reauth"))
             raid_authorized_at = st.get("raid_authorized_at")
             raid_bot_enabled = bool(st.get("raid_bot_enabled"))
-            raid_is_authorized = raid_auth_enabled is not None or bool(raid_authorized_at)
-            raid_auto_active = bool(raid_auth_enabled) and raid_bot_enabled
+            raid_is_authorized = (
+                not raid_needs_reauth
+                and (raid_auth_enabled is not None or bool(raid_authorized_at))
+            )
+            raid_auto_active = (not raid_needs_reauth) and bool(raid_auth_enabled) and raid_bot_enabled
 
             if not partner_opt_out and not is_archived:
                 if raid_is_authorized:

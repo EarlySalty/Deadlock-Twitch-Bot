@@ -24,13 +24,6 @@ const scopeCatalog: ScopeDefinition[] = [
     addedAt: '2026-02-01',
   },
   {
-    id: 'channel:read:subscriptions',
-    label: 'Subs lesen',
-    description: 'Sub-Events inkl. Tiers, Gifts und Prime.',
-    why: 'Kritisch für Revenue-KPIs, Alerts und Loyalty-Analysen.',
-    importance: 'critical',
-  },
-  {
     id: 'channel:manage:moderators',
     label: 'Mods verwalten',
     description: 'Mod-Status prüfen oder setzen (z. B. für den Bot).',
@@ -69,14 +62,6 @@ const scopeCatalog: ScopeDefinition[] = [
     addedAt: '2026-02-15',
   },
   {
-    id: 'channel:read:hype_train',
-    label: 'Hype Train',
-    description: 'Hype-Train-Events live lesen.',
-    why: 'Für Alerts, KPIs und Funnel-Messung bei Hype-Trains.',
-    importance: 'critical',
-    addedAt: '2026-02-15',
-  },
-  {
     id: 'channel:read:redemptions',
     label: 'Channel Points',
     description: 'Channel-Point-Redemptions abrufen.',
@@ -89,11 +74,19 @@ const scopeCatalog: ScopeDefinition[] = [
 const CRITICAL_SCOPE_IDS = new Set<string>([
   'channel:read:redemptions',
   'bits:read',
-  'channel:read:hype_train',
-  'channel:read:subscriptions',
 ]);
 
 const scopeChangelog: ScopeChangelogEntry[] = [
+  {
+    date: '2026-03-18',
+    title: 'Basis-Auth entschlackt',
+    items: [
+      'Neu-Auth fragt channel:read:subscriptions und channel:read:hype_train nicht mehr im ersten Consent ab.',
+      'Sub-Ereignisse koennen initial ueber channel.chat.notification als Fallback mitlaufen.',
+      'Monetization-Upgrade-Scopes werden spaeter gezielt fuer Dashboard-Erweiterungen nachgezogen.',
+    ],
+    tags: ['Auth Split', 'Consent'],
+  },
   {
     date: '2026-02-20',
     title: 'Channel Points, Bits & Hype-Train Tracking',

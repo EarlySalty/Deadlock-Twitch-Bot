@@ -9,6 +9,7 @@ from bot.dashboard.raid_mixin import (
     DEFAULT_RAID_OAUTH_SUCCESS_REDIRECT_URL,
     _DashboardRaidMixin,
 )
+from bot.raid.scope_profiles import BASE_SCOPE_PROFILE, BASE_STREAMER_SCOPES
 
 
 class _FakeUsersResponse:
@@ -41,15 +42,26 @@ class _FakeAuthManager:
     client_id = "client-id"
     redirect_uri = "https://raid.earlysalty.com/twitch/raid/callback"
 
-    def verify_state(self, _state: str) -> str:
-        return "discord:123456789"
+    def __init__(self) -> None:
+        self._scopes = list(BASE_STREAMER_SCOPES)
+
+    def consume_state_details(self, _state: str):
+        return SimpleNamespace(
+            requested_login="partner_one",
+            scope_profile=BASE_SCOPE_PROFILE,
+            expected_twitch_login="partner_one",
+            discord_user_id="123456789",
+        )
+
+    def has_saved_auth_record(self, **_kwargs) -> bool:
+        return False
 
     async def exchange_code_for_token(self, _code: str, _session) -> dict:
         return {
             "access_token": "access-token",
             "refresh_token": "refresh-token",
             "expires_in": 3600,
-            "scope": [],
+            "scope": list(self._scopes),
         }
 
     def save_auth(self, **_kwargs) -> None:

@@ -13,6 +13,7 @@ from .constants import (
     DEADLOCK_INVITE_REPLY,
     INVITE_ACCESS_RE,
     INVITE_GAME_CONTEXT_RE,
+    INVITE_JOIN_RE,
     INVITE_STRONG_ACCESS_RE,
     SPAM_FRAGMENTS,
     SPAM_PHRASES,
@@ -480,8 +481,12 @@ class ModerationMixin:
         raw = content.strip().lower()
         has_deadlock_context = "deadlock" in raw
         has_game_context = bool(INVITE_GAME_CONTEXT_RE.search(raw))
+        has_join_intent = bool(INVITE_JOIN_RE.search(raw))
         has_strong_access = bool(INVITE_STRONG_ACCESS_RE.search(raw))
-        has_access = bool(INVITE_ACCESS_RE.search(raw))
+        has_access = bool(INVITE_ACCESS_RE.search(raw)) or has_join_intent
+        has_where_to_play_question = has_game_context and bool(
+            re.search(r"\bwo(?:her)?\b", raw)
+        )
         if not has_access:
             return False
         has_question = "?" in raw or bool(_INVITE_QUESTION_RE.search(raw))
@@ -497,7 +502,9 @@ class ModerationMixin:
         if (
             has_deadlock_context
             or (has_game_context and has_strong_access)
+            or has_join_intent
             or has_direct_invite_request
+            or has_where_to_play_question
         ):
             return True
         return False

@@ -12,6 +12,7 @@ import logging
 import os
 import secrets
 import time
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from urllib.parse import urlencode
 
@@ -29,8 +30,16 @@ from ..storage import (
     get_conn,
     load_active_partner,
     load_streamer_identity,
-    promote_streamer_to_partner,
     set_partner_raid_bot_enabled,
+)
+from .scope_profiles import (
+    AUTO_SCOPE_PROFILE,
+    BASE_SCOPE_PROFILE,
+    BASE_STREAMER_SCOPES,
+    DASHBOARD_REAUTH_SCOPE_PROFILE,
+    normalize_scope_profile,
+    parse_scope_profile_meta,
+    scopes_for_profile,
 )
 
 TWITCH_TOKEN_URL = "https://id.twitch.tv/oauth2/token"  # noqa: S105
@@ -39,17 +48,7 @@ TWITCH_API_BASE = "https://api.twitch.tv/helix"
 
 # Erforderliche Scopes für Raid-Funktionalität + Zusatz-Metriken (Follower/Chat)
 # Hinweis: Re-Auth notwendig, falls bisher nur channel:manage:raids erteilt war.
-RAID_SCOPES = [
-    "channel:manage:raids",
-    "channel:read:subscriptions",
-    "channel:manage:moderators",
-    "channel:bot",
-    "clips:edit",
-    "channel:read:ads",
-    "bits:read",
-    "channel:read:hype_train",
-    "channel:read:redemptions",
-]
+RAID_SCOPES = list(BASE_STREAMER_SCOPES)
 
 RAID_TARGET_COOLDOWN_DAYS = 7  # Avoid repeating the same raid target if alternatives exist
 RECRUIT_DISCORD_INVITE = (
@@ -87,11 +86,65 @@ _OAUTH_STATE_PLATFORM_RAID = "twitch_raid"
 _OAUTH_STATE_TTL_SECONDS = 600
 
 
+@dataclass(frozen=True, slots=True)
+class RaidOAuthState:
+    requested_login: str
+    scope_profile: str
+    expected_twitch_login: str | None = None
+    discord_user_id: str | None = None
+
+
 def _safe_int(val, default: int = 0) -> int:
     try:
         return int(val)
     except Exception:
         return default
+
+
+def _normalize_twitch_login(value: str | None) -> str | None:
+    normalized = str(value or "").strip().lower()
+    return normalized or None
+
+
+def _normalize_state_discord_user_id(value: str | int | None) -> str | None:
+    normalized = str(value or "").strip()
+    if normalized.isdigit():
+        return normalized
+    return None
+
+
+def _serialize_state_meta(
+    scope_profile: str | None,
+    *,
+    expected_twitch_login: str | None = None,
+    discord_user_id: str | None = None,
+) -> str:
+    payload: dict[str, str] = {
+        "scope_profile": normalize_scope_profile(scope_profile),
+    }
+    normalized_login = _normalize_twitch_login(expected_twitch_login)
+    if normalized_login:
+        payload["expected_twitch_login"] = normalized_login
+    normalized_discord_user_id = _normalize_state_discord_user_id(discord_user_id)
+    if normalized_discord_user_id:
+        payload["discord_user_id"] = normalized_discord_user_id
+    return json.dumps(payload, separators=(",", ":"), sort_keys=True)
+
+
+def _parse_state_meta(raw_value: str | None) -> tuple[str, str | None, str | None]:
+    raw_text = str(raw_value or "").strip()
+    if not raw_text:
+        return BASE_SCOPE_PROFILE, None, None
+    try:
+        decoded = json.loads(raw_text)
+    except Exception:
+        return parse_scope_profile_meta(raw_text), None, None
+    if not isinstance(decoded, dict):
+        return parse_scope_profile_meta(raw_text), None, None
+    scope_profile = normalize_scope_profile(decoded.get("scope_profile"))
+    expected_login = _normalize_twitch_login(decoded.get("expected_twitch_login"))
+    discord_user_id = _normalize_state_discord_user_id(decoded.get("discord_user_id"))
+    return scope_profile, expected_login, discord_user_id
 
 
 def _parse_expiry_ts(val) -> float:
@@ -137,7 +190,7 @@ class RaidAuthManager:
         self.client_id = normalize_twitch_credential(client_id)
         self.client_secret = normalize_twitch_credential(client_secret)
         self.redirect_uri = redirect_uri
-        self._state_tokens: dict[str, tuple[str, float]] = {}  # state -> (twitch_login, timestamp)
+        self._state_tokens: dict[str, tuple[RaidOAuthState, float]] = {}  # state -> (meta, ts)
         self._pending_auth_urls: dict[str, str] = {}  # state -> full_twitch_auth_url
         self._lock = asyncio.Lock()
         self.token_error_handler = TokenErrorHandler()
@@ -180,7 +233,12 @@ class RaidAuthManager:
             log.error(reason)
         raise self._block_client_auth(reason)
 
-    def _persist_state_token(self, state: str, twitch_login: str, created_ts: float) -> None:
+    def _persist_state_token(
+        self,
+        state: str,
+        state_info: RaidOAuthState,
+        created_ts: float,
+    ) -> None:
         """Persist OAuth state to shared DB so callback verification works across instances/restarts."""
         expires_at = datetime.fromtimestamp(created_ts, tz=UTC) + timedelta(
             seconds=_OAUTH_STATE_TTL_SECONDS
@@ -202,24 +260,29 @@ class RaidAuthManager:
                     (
                         state,
                         _OAUTH_STATE_PLATFORM_RAID,
-                        twitch_login,
+                        state_info.requested_login,
                         self.redirect_uri,
-                        None,
+                        _serialize_state_meta(
+                            state_info.scope_profile,
+                            expected_twitch_login=state_info.expected_twitch_login,
+                            discord_user_id=state_info.discord_user_id,
+                        ),
                         expires_at.isoformat(),
                     ),
                 )
         except Exception:
             log.exception(
-                "Failed to persist raid oauth state for %s", _mask_log_identifier(twitch_login)
+                "Failed to persist raid oauth state for %s",
+                _mask_log_identifier(state_info.requested_login),
             )
 
-    def _lookup_state_token(self, state: str) -> str | None:
+    def _lookup_state_token(self, state: str) -> RaidOAuthState | None:
         """Look up a still-valid raid OAuth state without consuming it."""
         try:
             with get_conn() as conn:
                 row = conn.execute(
                     """
-                    SELECT streamer_login
+                    SELECT streamer_login, pkce_verifier
                     FROM oauth_state_tokens
                     WHERE state_token = ?
                       AND platform = ?
@@ -238,9 +301,19 @@ class RaidAuthManager:
 
         if not row:
             return None
-        return str(row["streamer_login"] if hasattr(row, "keys") else row[0] or "").strip() or None
+        login = str(row["streamer_login"] if hasattr(row, "keys") else row[0] or "").strip()
+        if not login:
+            return None
+        meta_raw = row["pkce_verifier"] if hasattr(row, "keys") else row[1]
+        scope_profile, expected_login, discord_user_id = _parse_state_meta(meta_raw)
+        return RaidOAuthState(
+            requested_login=login,
+            scope_profile=scope_profile,
+            expected_twitch_login=expected_login,
+            discord_user_id=discord_user_id,
+        )
 
-    def _consume_state_token(self, state: str) -> str | None:
+    def _consume_state_token(self, state: str) -> RaidOAuthState | None:
         """Atomically consume a still-valid raid OAuth state from shared DB."""
         try:
             with get_conn() as conn:
@@ -250,7 +323,7 @@ class RaidAuthManager:
                     WHERE state_token = ?
                       AND platform = ?
                       AND expires_at > ?
-                    RETURNING streamer_login
+                    RETURNING streamer_login, pkce_verifier
                     """,
                     (
                         state,
@@ -264,7 +337,131 @@ class RaidAuthManager:
 
         if not row:
             return None
-        return str(row["streamer_login"] if hasattr(row, "keys") else row[0] or "").strip() or None
+        login = str(row["streamer_login"] if hasattr(row, "keys") else row[0] or "").strip()
+        if not login:
+            return None
+        meta_raw = row["pkce_verifier"] if hasattr(row, "keys") else row[1]
+        scope_profile, expected_login, discord_user_id = _parse_state_meta(meta_raw)
+        return RaidOAuthState(
+            requested_login=login,
+            scope_profile=scope_profile,
+            expected_twitch_login=expected_login,
+            discord_user_id=discord_user_id,
+        )
+
+    @staticmethod
+    def _has_existing_auth_row(
+        conn,
+        *,
+        twitch_user_id: str | None = None,
+        twitch_login: str | None = None,
+    ) -> bool:
+        normalized_user_id = str(twitch_user_id or "").strip()
+        normalized_login = _normalize_twitch_login(twitch_login)
+        if not normalized_user_id and not normalized_login:
+            return False
+        row = conn.execute(
+            """
+            SELECT 1
+            FROM twitch_raid_auth
+            WHERE (? <> '' AND twitch_user_id = ?)
+               OR (? <> '' AND LOWER(COALESCE(twitch_login, '')) = ?)
+            LIMIT 1
+            """,
+            (
+                normalized_user_id,
+                normalized_user_id,
+                normalized_login or "",
+                normalized_login or "",
+            ),
+        ).fetchone()
+        return bool(row)
+
+    def _has_existing_streamer_context(self, twitch_login: str) -> bool:
+        normalized_login = str(twitch_login or "").strip().lower()
+        if not normalized_login:
+            return False
+
+        discord_user_id = ""
+        if normalized_login.startswith("discord:"):
+            discord_user_id = normalized_login.split(":", 1)[1].strip()
+
+        try:
+            with get_conn() as conn:
+                if discord_user_id:
+                    identity = load_streamer_identity(conn, discord_user_id=discord_user_id)
+                    if not identity:
+                        return False
+                    identity_login = (
+                        identity["twitch_login"] if hasattr(identity, "keys") else identity[1]
+                    )
+                    identity_user_id = (
+                        identity["twitch_user_id"] if hasattr(identity, "keys") else identity[0]
+                    )
+                    return bool(
+                        load_active_partner(
+                            conn,
+                            twitch_login=identity_login,
+                            twitch_user_id=identity_user_id,
+                        )
+                        or self._has_existing_auth_row(
+                            conn,
+                            twitch_user_id=identity_user_id,
+                            twitch_login=identity_login,
+                        )
+                    )
+                return bool(
+                    load_active_partner(conn, twitch_login=normalized_login)
+                    or self._has_existing_auth_row(conn, twitch_login=normalized_login)
+                )
+        except Exception:
+            log.debug(
+                "Could not resolve existing streamer context for %s",
+                _mask_log_identifier(twitch_login),
+                exc_info=True,
+            )
+            return False
+
+    def _resolve_scope_profile(self, twitch_login: str, requested_profile: str | None) -> str:
+        normalized = str(requested_profile or "").strip().lower()
+        if normalized == DASHBOARD_REAUTH_SCOPE_PROFILE:
+            return DASHBOARD_REAUTH_SCOPE_PROFILE
+        if normalized == BASE_SCOPE_PROFILE:
+            return BASE_SCOPE_PROFILE
+        if self._has_existing_streamer_context(twitch_login):
+            return DASHBOARD_REAUTH_SCOPE_PROFILE
+        return BASE_SCOPE_PROFILE
+
+    def _build_state_info(
+        self,
+        twitch_login: str,
+        *,
+        scope_profile: str,
+        expected_twitch_login: str | None = None,
+        discord_user_id: str | int | None = None,
+    ) -> RaidOAuthState:
+        requested_login = str(twitch_login or "").strip().lower()
+        resolved_profile = self._resolve_scope_profile(requested_login, scope_profile)
+        normalized_expected_login = _normalize_twitch_login(expected_twitch_login)
+        if not normalized_expected_login and not requested_login.startswith("discord:"):
+            normalized_expected_login = requested_login
+        return RaidOAuthState(
+            requested_login=requested_login,
+            scope_profile=resolved_profile,
+            expected_twitch_login=normalized_expected_login,
+            discord_user_id=_normalize_state_discord_user_id(discord_user_id),
+        )
+
+    def _build_authorize_url(self, *, state: str, scope_profile: str) -> str:
+        params = {
+            "client_id": self.client_id,
+            "redirect_uri": self.redirect_uri,
+            "response_type": "code",
+            "scope": " ".join(scopes_for_profile(scope_profile)),
+            "state": state,
+            "force_verify": "true",
+        }
+        return f"{TWITCH_AUTHORIZE_URL}?{urlencode(params)}"
 
     # ------------------------------------------------------------------
     # Encryption helpers (field-level AES-256-GCM)
@@ -397,24 +594,35 @@ class RaidAuthManager:
 
     # ------------------------------------------------------------------
 
-    def generate_auth_url(self, twitch_login: str) -> str:
+    def generate_auth_url(
+        self,
+        twitch_login: str,
+        *,
+        scope_profile: str = AUTO_SCOPE_PROFILE,
+        expected_twitch_login: str | None = None,
+        discord_user_id: str | int | None = None,
+    ) -> str:
         """Generiert eine OAuth-URL für Streamer-Autorisierung."""
         state = secrets.token_urlsafe(16)
         ts = time.time()
-        self._state_tokens[state] = (twitch_login, ts)
-        self._persist_state_token(state, twitch_login, ts)
+        state_info = self._build_state_info(
+            twitch_login,
+            scope_profile=scope_profile,
+            expected_twitch_login=expected_twitch_login,
+            discord_user_id=discord_user_id,
+        )
+        self._state_tokens[state] = (state_info, ts)
+        self._persist_state_token(state, state_info, ts)
+        return self._build_authorize_url(state=state, scope_profile=state_info.scope_profile)
 
-        params = {
-            "client_id": self.client_id,
-            "redirect_uri": self.redirect_uri,
-            "response_type": "code",
-            "scope": " ".join(RAID_SCOPES),
-            "state": state,
-            "force_verify": "true",
-        }
-        return f"{TWITCH_AUTHORIZE_URL}?{urlencode(params)}"
-
-    def generate_discord_button_url(self, twitch_login: str) -> str:
+    def generate_discord_button_url(
+        self,
+        twitch_login: str,
+        *,
+        scope_profile: str = AUTO_SCOPE_PROFILE,
+        expected_twitch_login: str | None = None,
+        discord_user_id: str | int | None = None,
+    ) -> str:
         """Generiert einen kurzen Redirect-URL für Discord-Buttons (max 512 Zeichen).
 
         Discord-Button-URLs dürfen max. 512 Zeichen lang sein.  Der volle Twitch-
@@ -424,18 +632,16 @@ class RaidAuthManager:
         """
         state = secrets.token_urlsafe(16)
         ts = time.time()
-        self._state_tokens[state] = (twitch_login, ts)
-        self._persist_state_token(state, twitch_login, ts)
+        state_info = self._build_state_info(
+            twitch_login,
+            scope_profile=scope_profile,
+            expected_twitch_login=expected_twitch_login,
+            discord_user_id=discord_user_id,
+        )
+        self._state_tokens[state] = (state_info, ts)
+        self._persist_state_token(state, state_info, ts)
 
-        params = {
-            "client_id": self.client_id,
-            "redirect_uri": self.redirect_uri,
-            "response_type": "code",
-            "scope": " ".join(RAID_SCOPES),
-            "state": state,
-            "force_verify": "true",
-        }
-        full_url = f"{TWITCH_AUTHORIZE_URL}?{urlencode(params)}"
+        full_url = self._build_authorize_url(state=state, scope_profile=state_info.scope_profile)
         self._pending_auth_urls[state] = full_url
 
         if self._base_url:
@@ -453,48 +659,46 @@ class RaidAuthManager:
 
         # Fallback für split/multi-instance/restart:
         # wenn der state in DB noch gültig ist, den vollen OAuth-URL on-the-fly rekonstruieren.
-        persisted_login = self._lookup_state_token(state)
-        if not persisted_login:
+        persisted_state = self._lookup_state_token(state)
+        if not persisted_state:
             self._pending_auth_urls.pop(state, None)
             return None
-
-        params = {
-            "client_id": self.client_id,
-            "redirect_uri": self.redirect_uri,
-            "response_type": "code",
-            "scope": " ".join(RAID_SCOPES),
-            "state": state,
-            "force_verify": "true",
-        }
-        full_url = f"{TWITCH_AUTHORIZE_URL}?{urlencode(params)}"
+        full_url = self._build_authorize_url(state=state, scope_profile=persisted_state.scope_profile)
         self._pending_auth_urls[state] = full_url
         return full_url
 
-    def verify_state(self, state: str) -> str | None:
-        """Verifiziert State-Token und gibt den zugehörigen Login zurück (max 10 Min alt)."""
-        self._pending_auth_urls.pop(state, None)  # Cleanup Short-URL Eintrag
-        # Primär aus Shared-DB konsumieren (robust bei split runtime / mehreren Instanzen).
-        login_from_db = self._consume_state_token(state)
-        if login_from_db:
+    def consume_state_details(self, state: str) -> RaidOAuthState | None:
+        """Verifiziert State-Token und gibt die vollständigen Metadaten zurück."""
+        self._pending_auth_urls.pop(state, None)
+        state_from_db = self._consume_state_token(state)
+        if state_from_db:
             self._state_tokens.pop(state, None)
-            return login_from_db
+            return state_from_db
 
-        # Fallback: lokaler RAM-State (wenn DB gerade nicht erreichbar war).
         data = self._state_tokens.pop(state, None)
         if not data:
             return None
 
-        login, timestamp = data
+        state_info, timestamp = data
         if time.time() - timestamp > _OAUTH_STATE_TTL_SECONDS:
-            log.warning("OAuth state for %s expired", login)
+            log.warning("OAuth state for %s expired", state_info.requested_login)
             return None
 
-        return login
+        return state_info
+
+    def verify_state(self, state: str) -> str | None:
+        """Verifiziert State-Token und gibt den zugehörigen Login zurück (max 10 Min alt)."""
+        state_info = self.consume_state_details(state)
+        return state_info.requested_login if state_info else None
 
     def cleanup_states(self) -> None:
         """Entfernt abgelaufene State-Tokens aus dem Speicher."""
         now = time.time()
-        expired = [s for s, (_, ts) in self._state_tokens.items() if now - ts > _OAUTH_STATE_TTL_SECONDS]
+        expired = [
+            s
+            for s, (_state_info, ts) in self._state_tokens.items()
+            if now - ts > _OAUTH_STATE_TTL_SECONDS
+        ]
         for s in expired:
             del self._state_tokens[s]
             self._pending_auth_urls.pop(s, None)
@@ -806,11 +1010,17 @@ class RaidAuthManager:
         """Setzt needs_reauth=1 für alle. Gibt Anzahl betroffener Zeilen zurück."""
         with get_conn() as conn:
             conn.execute("""
-                UPDATE twitch_raid_auth SET
-                    needs_reauth  = TRUE,
-                    access_token  = 'ENC',
-                    refresh_token = 'ENC'
-                WHERE access_token <> 'ENC'
+                UPDATE twitch_raid_auth
+                SET needs_reauth = TRUE,
+                    reauth_notified_at = NULL
+                WHERE needs_reauth IS NOT TRUE
+                  AND (
+                        access_token_enc IS NOT NULL
+                     OR refresh_token_enc IS NOT NULL
+                     OR NULLIF(access_token, '') IS NOT NULL
+                     OR NULLIF(refresh_token, '') IS NOT NULL
+                     OR authorized_at IS NOT NULL
+                  )
             """)
             count = conn.execute("SELECT changes()").fetchone()[0]
         log.info(
@@ -818,6 +1028,27 @@ class RaidAuthManager:
             count,
         )
         return count
+
+    def has_saved_auth_record(
+        self,
+        *,
+        twitch_user_id: str | None = None,
+        twitch_login: str | None = None,
+    ) -> bool:
+        try:
+            with get_conn() as conn:
+                return self._has_existing_auth_row(
+                    conn,
+                    twitch_user_id=twitch_user_id,
+                    twitch_login=twitch_login,
+                )
+        except Exception:
+            log.debug(
+                "Could not resolve existing auth record for %s",
+                _mask_log_identifier(twitch_user_id or twitch_login),
+                exc_info=True,
+            )
+            return False
 
     def save_auth(
         self,
@@ -827,12 +1058,24 @@ class RaidAuthManager:
         refresh_token: str,
         expires_in: int | str,
         scopes: list[str],
+        *,
+        scope_profile: str = AUTO_SCOPE_PROFILE,
+        activate_raid_features: bool = True,
     ) -> None:
         """Speichert OAuth-Tokens verschlüsselt in der Datenbank."""
         now = datetime.now(UTC)
         expires_at = now.timestamp() + _safe_int(expires_in, 3600)
         expires_at_iso = datetime.fromtimestamp(expires_at, UTC).isoformat()
         authorized_at = now.isoformat()
+        resolved_profile = self._resolve_scope_profile(twitch_login, scope_profile)
+        expected_scopes = list(scopes_for_profile(resolved_profile))
+        normalized_scopes = [
+            str(scope or "").strip()
+            for scope in scopes
+            if str(scope or "").strip()
+        ]
+        if set(normalized_scopes) != set(expected_scopes):
+            raise ValueError(f"unexpected_scopes_for_profile:{resolved_profile}")
 
         access_enc = self._try_encrypt(
             access_token,
@@ -853,6 +1096,24 @@ class RaidAuthManager:
             return
 
         with get_conn() as conn:
+            existing_row = conn.execute(
+                """
+                SELECT raid_enabled
+                FROM twitch_raid_auth
+                WHERE twitch_user_id = ?
+                   OR LOWER(COALESCE(twitch_login, '')) = LOWER(?)
+                LIMIT 1
+                """,
+                (
+                    twitch_user_id,
+                    twitch_login,
+                ),
+            ).fetchone()
+            raid_enabled_value = (
+                bool(existing_row["raid_enabled"] if hasattr(existing_row, "keys") else existing_row[0])
+                if existing_row
+                else bool(activate_raid_features)
+            )
             conn.execute(
                 """
                 INSERT INTO twitch_raid_auth
@@ -877,21 +1138,10 @@ class RaidAuthManager:
                     access_enc,
                     refresh_enc,
                     expires_at_iso,
-                    " ".join(scopes),
+                    " ".join(expected_scopes),
                     authorized_at,
-                    True,
+                    raid_enabled_value,
                 ),
-            )
-            # Aktivieren, damit Auto-Raid unmittelbar nach OAuth freigeschaltet ist
-            promote_streamer_to_partner(
-                conn,
-                twitch_login=twitch_login,
-                twitch_user_id=twitch_user_id,
-                manual_verified_permanent=1,
-                manual_verified_until=None,
-                manual_verified_at=authorized_at,
-                manual_partner_opt_out=0,
-                raid_bot_enabled=1,
             )
             # Re-Auth abgeschlossen: needs_reauth zurücksetzen
             conn.execute(

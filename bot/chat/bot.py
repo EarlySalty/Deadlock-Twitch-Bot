@@ -1268,7 +1268,7 @@ if TWITCHIO_AVAILABLE:
             await self.process_commands(message)
 
         async def event_chat_notification(self, payload) -> None:
-            """Raid-relevante channel.chat.notification Events an den RaidBot delegieren."""
+            """Raid- und Subscription-relevante channel.chat.notification Events verarbeiten."""
             raid_bot = getattr(self, "_raid_bot", None)
             if raid_bot is None:
                 return
@@ -1364,8 +1364,223 @@ if TWITCHIO_AVAILABLE:
                         from_broadcaster_id=from_broadcaster_id,
                         event_timestamp=event_timestamp,
                     )
+                    return
+
+                subscription_notice = self._build_subscription_event_from_chat_notification(
+                    payload,
+                    notice_type=notice_type,
+                )
+                if subscription_notice is not None:
+                    event_type, event = subscription_notice
+                    handle_subscription = getattr(
+                        raid_bot,
+                        "on_chat_subscription_notification",
+                        None,
+                    )
+                    if callable(handle_subscription):
+                        await handle_subscription(
+                            broadcaster_id=broadcaster_id,
+                            broadcaster_login=broadcaster_login,
+                            notice_type=notice_type,
+                            event_type=event_type,
+                            event=event,
+                        )
             except Exception:
                 log.exception("event_chat_notification failed")
+
+        @staticmethod
+        def _chat_notification_extract_user(user_obj) -> tuple[str | None, str | None]:
+            if user_obj is None:
+                return None, None
+
+            candidates = [user_obj]
+            for attr_name in ("recipient", "user", "gifter", "chatter"):
+                nested = getattr(user_obj, attr_name, None)
+                if nested is not None and nested is not user_obj:
+                    candidates.append(nested)
+
+            for candidate in candidates:
+                login = (
+                    str(
+                        getattr(candidate, "login", None)
+                        or getattr(candidate, "user_login", None)
+                        or getattr(candidate, "name", None)
+                        or getattr(candidate, "user_name", None)
+                        or getattr(candidate, "display_name", None)
+                        or ""
+                    )
+                    .strip()
+                    .lower()
+                ) or None
+                user_id = str(getattr(candidate, "id", None) or "").strip() or None
+                if login or user_id:
+                    return login, user_id
+
+            return None, None
+
+        @staticmethod
+        def _chat_notification_message_text(payload) -> str | None:
+            for candidate in (getattr(payload, "message", None), payload):
+                if candidate is None:
+                    continue
+
+                text = str(getattr(candidate, "text", None) or "").strip()
+                if text:
+                    return text
+
+                fragments = getattr(candidate, "fragments", None)
+                if isinstance(fragments, (list, tuple)):
+                    joined = "".join(
+                        str(getattr(fragment, "text", None) or "")
+                        for fragment in fragments
+                    ).strip()
+                    if joined:
+                        return joined
+            return None
+
+        def _build_subscription_event_from_chat_notification(
+            self,
+            payload,
+            *,
+            notice_type: str,
+        ) -> tuple[str, dict[str, object]] | None:
+            normalized_notice = str(notice_type or "").strip().lower()
+            if normalized_notice.startswith("shared_chat_"):
+                normalized_notice = normalized_notice.removeprefix("shared_chat_")
+            chatter_login, chatter_id = self._chat_notification_extract_user(
+                getattr(payload, "chatter", None)
+            )
+            message_text = self._chat_notification_message_text(payload)
+
+            if normalized_notice == "sub":
+                sub_payload = getattr(payload, "sub", None)
+                if sub_payload is None:
+                    return None
+                return (
+                    "subscribe",
+                    {
+                        "user_login": chatter_login,
+                        "user_id": chatter_id,
+                        "tier": str(
+                            getattr(sub_payload, "sub_tier", None)
+                            or getattr(sub_payload, "tier", None)
+                            or "1000"
+                        ).strip(),
+                        "is_gift": False,
+                    },
+                )
+
+            if normalized_notice == "resub":
+                resub_payload = getattr(payload, "resub", None)
+                if resub_payload is None:
+                    return None
+                gifter_login, gifter_id = self._chat_notification_extract_user(
+                    getattr(resub_payload, "gifter", None)
+                )
+                is_gift = bool(
+                    getattr(resub_payload, "gift", None)
+                    if getattr(resub_payload, "gift", None) is not None
+                    else getattr(resub_payload, "is_gift", False)
+                )
+                event = {
+                    "user_login": chatter_login,
+                    "user_id": chatter_id,
+                    "tier": str(
+                        getattr(resub_payload, "sub_tier", None)
+                        or getattr(resub_payload, "tier", None)
+                        or "1000"
+                    ).strip(),
+                    "is_gift": is_gift,
+                    "gifter_login": gifter_login,
+                    "gifter_user_id": gifter_id,
+                    "cumulative_months": int(
+                        getattr(resub_payload, "cumulative_months", 0) or 0
+                    )
+                    or None,
+                    "streak_months": int(getattr(resub_payload, "streak_months", 0) or 0)
+                    or None,
+                }
+                if message_text:
+                    event["message"] = {"text": message_text}
+                return "resub", event
+
+            if normalized_notice == "sub_gift":
+                gift_payload = getattr(payload, "sub_gift", None)
+                if gift_payload is None:
+                    return None
+                recipient_source = getattr(gift_payload, "recipient", None) or gift_payload
+                recipient_login, recipient_id = self._chat_notification_extract_user(
+                    recipient_source
+                )
+                gift_total = int(
+                    getattr(gift_payload, "cumulative_total", None)
+                    or getattr(gift_payload, "total", 0)
+                    or 0
+                ) or None
+                recipient_login = (
+                    recipient_login
+                    or (
+                        str(
+                            getattr(gift_payload, "recipient_user_login", None)
+                            or getattr(gift_payload, "recipient_user_name", None)
+                            or ""
+                        )
+                        .strip()
+                        .lower()
+                    )
+                    or None
+                )
+                recipient_id = recipient_id or (
+                    str(getattr(gift_payload, "recipient_user_id", None) or "").strip() or None
+                )
+                return (
+                    "gift",
+                    {
+                        "user_login": recipient_login,
+                        "user_id": recipient_id,
+                        "recipient_login": recipient_login,
+                        "recipient_user_id": recipient_id,
+                        "tier": str(
+                            getattr(gift_payload, "sub_tier", None)
+                            or getattr(gift_payload, "tier", None)
+                            or "1000"
+                        ).strip(),
+                        "is_gift": True,
+                        "gifter_login": chatter_login,
+                        "gifter_user_id": chatter_id,
+                        "total": 1,
+                        "gift_total": gift_total,
+                        "gift_total_kind": "cumulative_total",
+                    },
+                )
+
+            if normalized_notice == "community_sub_gift":
+                community_gift_payload = getattr(payload, "community_sub_gift", None)
+                if community_gift_payload is None:
+                    return None
+                gift_total = int(
+                    getattr(community_gift_payload, "total", None)
+                    or getattr(community_gift_payload, "gift_total", None)
+                    or 0
+                ) or None
+                return (
+                    "gift",
+                    {
+                        "tier": str(
+                            getattr(community_gift_payload, "sub_tier", None)
+                            or getattr(community_gift_payload, "tier", None)
+                            or "1000"
+                        ).strip(),
+                        "is_gift": True,
+                        "gifter_login": chatter_login,
+                        "gifter_user_id": chatter_id,
+                        "total": gift_total,
+                        "gift_total": gift_total,
+                        "gift_total_kind": "batch_total",
+                    },
+                )
+
+            return None
 
         def _get_streamer_by_channel(self, channel_name: str) -> tuple | None:
             """

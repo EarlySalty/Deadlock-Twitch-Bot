@@ -40,6 +40,7 @@ def _split_runtime_enforced_role() -> str:
 
 
 def _split_internal_api_auth_url(
+    twitch_login: str,
     discord_user_id: int,
 ) -> tuple[str, dict[str, str]] | None:
     base_url = (os.getenv("TWITCH_INTERNAL_API_BASE_URL") or "").strip()
@@ -73,19 +74,24 @@ def _split_internal_api_auth_url(
         (parsed.scheme, parsed.netloc, base_path.rstrip("/"), "", "")
     )
     endpoint = f"{normalized_base.rstrip('/')}{internal_base}/raid/auth-url"
-    query = urlencode({"login": f"discord:{discord_user_id}"})
+    query = urlencode(
+        {
+            "login": twitch_login,
+            "discord_user_id": str(discord_user_id),
+        }
+    )
     headers = {INTERNAL_TOKEN_HEADER: token}
     return f"{endpoint}?{query}", headers
 
 
 def _prefer_split_internal_raid_auth_api() -> bool:
-    if _split_internal_api_auth_url(0) is None:
+    if _split_internal_api_auth_url("placeholder", 0) is None:
         return False
     return _split_runtime_enforced_role() != "bot"
 
 
-async def _fetch_split_raid_auth_url(discord_user_id: int) -> str | None:
-    request_data = _split_internal_api_auth_url(discord_user_id)
+async def _fetch_split_raid_auth_url(twitch_login: str, discord_user_id: int) -> str | None:
+    request_data = _split_internal_api_auth_url(twitch_login, discord_user_id)
     if request_data is None:
         return None
 
@@ -189,7 +195,7 @@ class _RaidAuthGenerateButton(discord.ui.Button):
             button_url = ""
             if _prefer_split_internal_raid_auth_api():
                 button_url = str(
-                    await _fetch_split_raid_auth_url(int(interaction.user.id)) or ""
+                    await _fetch_split_raid_auth_url(login, int(interaction.user.id)) or ""
                 ).strip()
 
             if not button_url:
@@ -201,12 +207,17 @@ class _RaidAuthGenerateButton(discord.ui.Button):
                         break
                 if auth_manager:
                     button_url = str(
-                        auth_manager.generate_discord_button_url(login) or ""
+                        auth_manager.generate_discord_button_url(
+                            login,
+                            discord_user_id=str(interaction.user.id),
+                        )
+                        or ""
                     ).strip()
                 elif not _prefer_split_internal_raid_auth_api():
                     # Legacy fallback: if split mode is not preferred, try internal API if configured.
                     button_url = str(
-                        await _fetch_split_raid_auth_url(int(interaction.user.id)) or ""
+                        await _fetch_split_raid_auth_url(login, int(interaction.user.id))
+                        or ""
                     ).strip()
 
             if not button_url:

@@ -23,6 +23,7 @@ import discord
 
 from ..core.constants import TWITCH_TARGET_GAME_NAME
 from ..discord_role_sync import normalize_discord_user_id, sync_streamer_role
+from .scope_profiles import BASE_STREAMER_SCOPES
 from ..storage import (
     backfill_tracked_stats_from_category,
     get_conn,
@@ -50,17 +51,7 @@ TWITCH_API_BASE = "https://api.twitch.tv/helix"
 
 # Erforderliche Scopes für Raid-Funktionalität + Zusatz-Metriken (Follower/Chat)
 # Hinweis: Re-Auth notwendig, falls bisher nur channel:manage:raids erteilt war.
-RAID_SCOPES = [
-    "channel:manage:raids",
-    "channel:read:subscriptions",
-    "channel:manage:moderators",
-    "channel:bot",
-    "clips:edit",
-    "channel:read:ads",
-    "bits:read",
-    "channel:read:hype_train",
-    "channel:read:redemptions",
-]
+RAID_SCOPES = list(BASE_STREAMER_SCOPES)
 
 RAID_TARGET_COOLDOWN_DAYS = 7  # Avoid repeating the same raid target if alternatives exist
 RECRUIT_DISCORD_INVITE = (
@@ -273,6 +264,78 @@ class RaidBot:
         """
         self._cog = cog
         log.debug("Cog reference set for dynamic EventSub subscriptions")
+
+    @staticmethod
+    def _subscription_notice_eventsub_type(notice_type: str | None) -> str | None:
+        normalized = str(notice_type or "").strip().lower()
+        if normalized.startswith("shared_chat_"):
+            normalized = normalized.removeprefix("shared_chat_")
+        if normalized == "sub":
+            return "channel.subscribe"
+        if normalized == "resub":
+            return "channel.subscription.message"
+        if normalized in {"sub_gift", "community_sub_gift"}:
+            return "channel.subscription.gift"
+        return None
+
+    def should_capture_chat_subscription_notice(
+        self,
+        *,
+        broadcaster_id: str,
+        notice_type: str | None,
+    ) -> bool:
+        eventsub_type = self._subscription_notice_eventsub_type(notice_type)
+        if not eventsub_type:
+            return False
+
+        cog = getattr(self, "_cog", None)
+        has_sub = getattr(cog, "_eventsub_has_sub", None) if cog is not None else None
+        if not callable(has_sub):
+            return True
+
+        try:
+            return not bool(has_sub(eventsub_type, str(broadcaster_id or "").strip()))
+        except Exception:
+            log.debug(
+                "Chat subscription notice fallback check failed for %s (%s)",
+                broadcaster_id,
+                eventsub_type,
+                exc_info=True,
+            )
+            return True
+
+    async def on_chat_subscription_notification(
+        self,
+        *,
+        broadcaster_id: str,
+        broadcaster_login: str,
+        notice_type: str | None,
+        event_type: str,
+        event: dict[str, Any],
+    ) -> bool:
+        if not self.should_capture_chat_subscription_notice(
+            broadcaster_id=broadcaster_id,
+            notice_type=notice_type,
+        ):
+            log.debug(
+                "Skipping chat-derived subscription fallback for %s (%s): dedicated EventSub active",
+                broadcaster_login or broadcaster_id,
+                notice_type or event_type,
+            )
+            return False
+
+        cog = getattr(self, "_cog", None)
+        store_event = getattr(cog, "_store_subscription_event", None) if cog is not None else None
+        if not callable(store_event):
+            log.debug(
+                "Skipping chat-derived subscription fallback for %s (%s): no storage handler",
+                broadcaster_login or broadcaster_id,
+                notice_type or event_type,
+            )
+            return False
+
+        await store_event(str(broadcaster_id or "").strip(), event, event_type)
+        return True
 
     @staticmethod
     def _normalize_broadcaster_login(raw_value: str | None) -> str:
@@ -1836,6 +1899,7 @@ class RaidBot:
         twitch_login: str,
         *,
         state_discord_user_id: str | None = None,
+        activate_partner_features: bool = True,
     ) -> str | None:
         provided_discord_id = self._normalize_discord_user_id(state_discord_user_id)
         existing_discord_id: str | None = None
@@ -1865,18 +1929,26 @@ class RaidBot:
 
         is_on_discord_value = 1 if final_discord_id else 0
         with get_conn() as conn:
+            partner_kwargs: dict[str, object] = {
+                "discord_user_id": final_discord_id,
+                "discord_display_name": final_display_name,
+                "is_on_discord": is_on_discord_value,
+                "manual_verified_permanent": 1,
+                "manual_verified_until": None,
+                "manual_verified_at": datetime.now(UTC).isoformat(),
+            }
+            if activate_partner_features:
+                partner_kwargs.update(
+                    {
+                        "manual_partner_opt_out": 0,
+                        "raid_bot_enabled": 1,
+                    }
+                )
             promote_streamer_to_partner(
                 conn,
                 twitch_login=twitch_login,
                 twitch_user_id=twitch_user_id,
-                discord_user_id=final_discord_id,
-                discord_display_name=final_display_name,
-                is_on_discord=is_on_discord_value,
-                manual_verified_permanent=1,
-                manual_verified_until=None,
-                manual_verified_at=datetime.now(UTC).isoformat(),
-                manual_partner_opt_out=0,
-                raid_bot_enabled=1,
+                **partner_kwargs,
             )
             copied = backfill_tracked_stats_from_category(conn, twitch_login)
             if copied:
@@ -1900,6 +1972,7 @@ class RaidBot:
         twitch_user_id: str,
         twitch_login: str,
         state_discord_user_id: str | None = None,
+        activate_partner_features: bool = True,
     ):
         """
         Führt Aktionen nach erfolgreicher OAuth-Autorisierung aus:
@@ -1913,6 +1986,7 @@ class RaidBot:
                 twitch_user_id,
                 twitch_login,
                 state_discord_user_id=state_discord_user_id,
+                activate_partner_features=activate_partner_features,
             )
         except Exception:
             log.exception(

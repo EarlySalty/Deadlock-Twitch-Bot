@@ -67,7 +67,7 @@ class InternalApiServer:
         streamer_analytics_cb: Callable[[str, int], Awaitable[dict[str, Any]]] | None = None,
         comparison_cb: Callable[[int], Awaitable[dict[str, Any]]] | None = None,
         session_cb: Callable[[int], Awaitable[dict[str, Any]]] | None = None,
-        raid_auth_url_cb: Callable[[str], Awaitable[str]] | None = None,
+        raid_auth_url_cb: Callable[..., Awaitable[str]] | None = None,
         raid_auth_state_cb: Callable[[str], Awaitable[dict[str, Any]]] | None = None,
         raid_block_state_cb: Callable[..., Awaitable[dict[str, Any]]] | None = None,
         raid_go_url_cb: Callable[[str], Awaitable[str | None]] | None = None,
@@ -200,7 +200,7 @@ class InternalApiServer:
     async def _empty_session(self, _: int) -> dict[str, Any]:
         return {}
 
-    async def _empty_raid_auth_url(self, _: str) -> str:
+    async def _empty_raid_auth_url(self, *_: Any, **__: Any) -> str:
         return ""
 
     async def _empty_raid_auth_state(self, discord_user_id: str) -> dict[str, Any]:
@@ -1446,8 +1446,23 @@ class InternalApiServer:
         login = self._normalize_raid_auth_target(request.query.get("login", ""))
         if not login:
             return self._json_error("bad_request", 400, "invalid or missing login")
+        discord_user_id = self._normalize_discord_user_id_param(
+            request.query.get("discord_user_id"),
+            required=False,
+        )
         try:
-            auth_url = str(await self._raid_auth_url(login)).strip()
+            try:
+                if discord_user_id is None:
+                    auth_url = str(await self._raid_auth_url(login)).strip()
+                else:
+                    auth_url = str(
+                        await self._raid_auth_url(
+                            login,
+                            discord_user_id=discord_user_id,
+                        )
+                    ).strip()
+            except TypeError:
+                auth_url = str(await self._raid_auth_url(login)).strip()
             if not auth_url:
                 return self._json_error("upstream_unavailable", 503, "raid bot not initialized")
             return self._json_response({"ok": True, "auth_url": auth_url, "login": login})
@@ -1890,7 +1905,7 @@ def build_internal_api_app(
     streamer_analytics_cb: Callable[[str, int], Awaitable[dict[str, Any]]] | None = None,
     comparison_cb: Callable[[int], Awaitable[dict[str, Any]]] | None = None,
     session_cb: Callable[[int], Awaitable[dict[str, Any]]] | None = None,
-    raid_auth_url_cb: Callable[[str], Awaitable[str]] | None = None,
+    raid_auth_url_cb: Callable[..., Awaitable[str]] | None = None,
     raid_auth_state_cb: Callable[[str], Awaitable[dict[str, Any]]] | None = None,
     raid_block_state_cb: Callable[..., Awaitable[dict[str, Any]]] | None = None,
     raid_go_url_cb: Callable[[str], Awaitable[str | None]] | None = None,

@@ -626,11 +626,20 @@ class InternalApiClient:
             )
         return payload
 
-    async def get_raid_auth_url(self, login: str) -> str:
+    async def get_raid_auth_url(
+        self,
+        login: str,
+        discord_user_id: str | int | None = None,
+    ) -> str:
+        query: dict[str, Any] = {"login": login}
+        if discord_user_id is not None:
+            normalized_discord_user_id = str(discord_user_id).strip()
+            if normalized_discord_user_id:
+                query["discord_user_id"] = normalized_discord_user_id
         payload = await self._request_json(
             "GET",
             f"{INTERNAL_API_BASE_PATH}/raid/auth-url",
-            query={"login": login},
+            query=query,
         )
         if not isinstance(payload, dict):
             raise InternalApiClientError(

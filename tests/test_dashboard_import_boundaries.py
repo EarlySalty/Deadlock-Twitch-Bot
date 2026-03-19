@@ -96,6 +96,17 @@ class DashboardImportBoundaryTests(unittest.TestCase):
         )
         self.assertNotIn("bot.dashboard.raids.raid_mixin", loaded["dashboard"])
 
+    def test_live_announcement_mode_shim_loads_admin_target(self) -> None:
+        loaded = self._run_import(
+            "import bot.dashboard.live.announcement_mode_mixin as legacy_announcement\n"
+            "assert hasattr(legacy_announcement, 'DashboardAdminAnnouncementMixin')\n"
+        )
+
+        self.assertIn("bot.dashboard.live.announcement_mode_mixin", loaded["dashboard"])
+        self.assertIn("bot.dashboard.admin.announcement_mode_mixin", loaded["dashboard"])
+        self.assertNotIn("bot.dashboard.live.live_announcement_mixin", loaded["dashboard"])
+        self.assertNotIn("bot.dashboard.billing.billing_mixin", loaded["dashboard"])
+
 
 if __name__ == "__main__":
     unittest.main()

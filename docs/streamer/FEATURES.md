@@ -64,13 +64,11 @@ Der aktuelle OAuth-/Raid-Flow ist nicht nur fuer Auto-Raids da, sondern auch fue
 ### Aktuell benoetigte OAuth-Scopes
 
 - `channel:manage:raids`
-- `channel:read:subscriptions`
 - `channel:manage:moderators`
 - `channel:bot`
 - `clips:edit`
 - `channel:read:ads`
 - `bits:read`
-- `channel:read:hype_train`
 - `channel:read:redemptions`
 
 ### Wichtige Hinweise
@@ -80,6 +78,7 @@ Der aktuelle OAuth-/Raid-Flow ist nicht nur fuer Auto-Raids da, sondern auch fue
 - Die Seiten `/twitch/raid/requirements`, `/twitch/raid/history` und `/twitch/raid/analytics` sind aktuell eher Legacy-/Admin-Surfaces. Fuer Streamer selbst sind Commands und Dashboard der stabile Weg.
 - Der Dashboard-Login selbst ist getrennt von diesen Bot-Scopes. Der reine Dashboard-Zugang und die Bot-/Analytics-Funktionen nutzen unterschiedliche Auth-Schichten.
 - Bot-zentrierte Chat- und Moderator-Scopes wie `user:read:chat`, `user:write:chat` oder `moderator:read:chatters` laufen zentral ueber den Bot-Account und sind keine harte Streamer-Pflicht mehr.
+- Monetarisierungsnahe Zusatzrechte wie `channel:read:subscriptions` oder `channel:read:hype_train` sollen spaeter gezielt per Upgrade-/Dashboard-Reauth angefordert werden statt im ersten Consent.
 
 ## Live-Announcement Builder
 

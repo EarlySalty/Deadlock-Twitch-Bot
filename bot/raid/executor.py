@@ -20,6 +20,7 @@ import discord
 
 from ..api.token_error_handler import TokenErrorHandler
 from ..storage import backfill_tracked_stats_from_category, get_conn
+from .scope_profiles import BASE_STREAMER_SCOPES
 
 TWITCH_TOKEN_URL = "https://id.twitch.tv/oauth2/token"  # noqa: S105
 TWITCH_AUTHORIZE_URL = "https://id.twitch.tv/oauth2/authorize"
@@ -27,17 +28,7 @@ TWITCH_API_BASE = "https://api.twitch.tv/helix"
 
 # Erforderliche Scopes für Raid-Funktionalität + Zusatz-Metriken (Follower/Chat)
 # Hinweis: Re-Auth notwendig, falls bisher nur channel:manage:raids erteilt war.
-RAID_SCOPES = [
-    "channel:manage:raids",
-    "channel:read:subscriptions",
-    "channel:manage:moderators",
-    "channel:bot",
-    "clips:edit",
-    "channel:read:ads",
-    "bits:read",
-    "channel:read:hype_train",
-    "channel:read:redemptions",
-]
+RAID_SCOPES = list(BASE_STREAMER_SCOPES)
 
 RAID_TARGET_COOLDOWN_DAYS = 7  # Avoid repeating the same raid target if alternatives exist
 RECRUIT_DISCORD_INVITE = (
