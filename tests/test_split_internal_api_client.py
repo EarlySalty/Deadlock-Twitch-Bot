@@ -81,6 +81,28 @@ class InternalApiClientTests(unittest.IsolatedAsyncioTestCase):
             "http://127.0.0.1:8776/internal/twitch/v1/live/active-announcements",
         )
 
+    async def test_get_chatters_debug_calls_internal_endpoint(self) -> None:
+        session = _FakeSession(
+            response=_FakeResponse(
+                status=200,
+                text='{"ok":true,"chattersDebug":{"login":"partner_one","isLive":true}}',
+            )
+        )
+        client = InternalApiClient(
+            base_url="http://127.0.0.1:8776",
+            token="secret",
+            session=session,
+        )
+
+        payload = await client.get_chatters_debug("Partner_One")
+
+        self.assertTrue(payload["ok"])
+        self.assertEqual(payload["chattersDebug"]["login"], "partner_one")
+        self.assertEqual(
+            session.calls[0]["url"],
+            "http://127.0.0.1:8776/internal/twitch/v1/debug/chatters/partner_one",
+        )
+
     async def test_record_live_link_click_sends_expected_payload_and_idempotency_header(self) -> None:
         session = _FakeSession(response=_FakeResponse(status=200, text='{"ok":true}'))
         client = InternalApiClient(

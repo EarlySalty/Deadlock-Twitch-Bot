@@ -1,10 +1,9 @@
 """
-IRC Lurker Tracker für Twitch Chat.
+Experimental IRC Lurker Tracker für Twitch Chat.
 
-Nutzt eine separate IRC-Connection (parallel zum EventSub WebSocket) um:
-- NAMES-Liste zu pollen (alle Chatters inkl. Lurker)
-- JOIN/PART Events zu tracken
-- Keine OAuth benötigt (anonymous oder App Token)
+Nutzt optional eine separate IRC-Connection als zweite Datenquelle neben Helix
+`Get Chatters`, um Presence-Signale wie JOIN/PART/NAMES früher oder dichter zu
+sehen. Das ist bewusst ein Experiment und nicht der primäre produktive Pfad.
 
 Twitch IRC: irc.chat.twitch.tv:6667 (oder SSL auf :443)
 """
@@ -22,21 +21,31 @@ log = logging.getLogger("TwitchStreams.IRCLurkerTracker")
 
 class IRCLurkerTracker:
     """
-    Separate IRC-Connection für Lurker-Tracking UND Category-wide Message-Collection.
+    Experimentelle zweite IRC-Quelle für Lurker-Tracking und Presence-Snapshots.
 
-    Zwei Modi:
-    1. PARTNER: Volle Lurker-Tracking (NAMES, JOIN/PART, Messages)
-    2. CATEGORY: Nur Messages sammeln (keine Lurker-Daten)
+    `partner_channels` und `category_channels` klassifizieren die Quelle,
+    begrenzen aber nicht die Datensammlung. Alle getrackten Channels liefern
+    JOIN/PART/NAMES-Daten, damit Partner-Analysen möglichst vollständig auf
+    derselben Datenbasis aufsetzen können.
+
+    Wichtig:
+    - Primäre Quelle bleibt `GET /helix/chat/chatters`
+    - IRC ist hier nur eine ergänzende, experimentelle Presence-Quelle
+    - Für produktive Nutzung sollte ein echter Bot-User-Token plus Bot-Login
+      verwendet werden, nicht ein App-Token
     """
 
-    def __init__(self, client_id: str, access_token: str):
+    def __init__(self, client_id: str, access_token: str, *, nick: str | None = None):
         """
         client_id: Twitch Client ID
-        access_token: App Access Token (NICHT User Token) oder Bot Token
+        access_token: Bot User Access Token für den IRC-Login
+        nick: Bot-Login/Nick für die IRC-Authentifizierung
         """
         self.client_id = client_id
         self.access_token = access_token
-        self.nick = "justinfan12345"  # Anonymous Twitch IRC nick
+        normalized_nick = str(nick or "").strip().lower()
+        self.nick = normalized_nick or "justinfan12345"
+        self._authenticated = bool(self.access_token and normalized_nick)
 
         # Connection State
         self.reader: asyncio.StreamReader | None = None
@@ -45,9 +54,15 @@ class IRCLurkerTracker:
         self.running = False
 
         # Tracked Channels
-        self.partner_channels: set[str] = set()  # Partner: Volle Lurker-Tracking
-        self.category_channels: set[str] = set()  # Category: Nur Messages
-        self.channel_chatters: dict[str, set[str]] = {}  # channel -> set of nicks (nur Partner!)
+        # WICHTIG: `partner_channels` und `category_channels` sind nur Metadaten fuer
+        # die Herkunft/Klassifizierung. Sie duerfen NICHT als Gate fuer JOIN/PART/NAMES-
+        # Datensammlung verwendet werden. Die Sammlung laeuft bewusst fuer alle
+        # `self.channels`, damit spaetere Partner-Analysen auf moeglichst vielen
+        # historischen Chat-/Lurker-Daten aufsetzen koennen.
+        self.channels: set[str] = set()  # Unified runtime set used by reconnect/poll loops
+        self.partner_channels: set[str] = set()  # Channel classification: partner
+        self.category_channels: set[str] = set()  # Channel classification: category
+        self.channel_chatters: dict[str, set[str]] = {}  # channel -> set of observed nicks
 
         # Tasks
         self.connect_task: asyncio.Task | None = None
@@ -99,10 +114,12 @@ class IRCLurkerTracker:
             # Connect to Twitch IRC (non-SSL)
             self.reader, self.writer = await asyncio.open_connection("irc.chat.twitch.tv", 6667)
 
-            # Authenticate
-            # Twitch IRC accepts "oauth:token" or anonymous (justinfan...)
-            # Anonymous users can read chat but not send messages
-            self.writer.write(f"PASS oauth:{self.access_token}\r\n".encode())
+            # Experimental second source:
+            # bevorzugt echter Bot-Login + User-Token; faellt nur fuer lokale Tests
+            # auf anonymous/justinfan zurueck.
+            if self._authenticated:
+                clean_token = str(self.access_token or "").replace("oauth:", "").strip()
+                self.writer.write(f"PASS oauth:{clean_token}\r\n".encode())
             self.writer.write(f"NICK {self.nick}\r\n".encode())
             await self.writer.drain()
 
@@ -119,7 +136,12 @@ class IRCLurkerTracker:
                 if msg.startswith(":tmi.twitch.tv 001"):
                     # Connection successful
                     self.connected = True
-                    log.info("IRC connected successfully")
+                    log.info(
+                        "IRC connected successfully (experimental=%s, authenticated=%s, nick=%s)",
+                        True,
+                        self._authenticated,
+                        self.nick,
+                    )
                     return True
                 elif msg.startswith("PING"):
                     pong = msg.replace("PING", "PONG")
@@ -417,19 +439,30 @@ class IRCLurkerTracker:
 
     # Public API
 
-    async def track_channel(self, channel: str):
-        """Add channel to tracking list."""
-        channel = channel.lower().lstrip("#")
+    async def track_channel(self, channel: str, *, mode: str = "partner"):
+        """Add channel to tracking list.
 
-        if channel in self.channels:
-            return
+        `mode` klassifiziert den Kanal nur fachlich. Die IRC-Datensammlung selbst
+        bleibt absichtlich fuer alle getrackten Kanaele aktiv.
+        """
+        channel = channel.lower().lstrip("#")
+        normalized_mode = str(mode or "partner").strip().lower() or "partner"
+        if normalized_mode not in {"partner", "category"}:
+            normalized_mode = "partner"
 
         self.channels.add(channel)
+        if normalized_mode == "partner":
+            self.partner_channels.add(channel)
+            self.category_channels.discard(channel)
+        else:
+            self.category_channels.add(channel)
+            self.partner_channels.discard(channel)
+            self.channel_chatters.pop(channel, None)
 
         if self.connected:
             await self._join_channel(channel)
 
-        log.info("IRC: Now tracking #%s", channel)
+        log.info("IRC: Now tracking #%s (mode=%s)", channel, normalized_mode)
 
     async def untrack_channel(self, channel: str):
         """Remove channel from tracking list."""
@@ -439,6 +472,9 @@ class IRCLurkerTracker:
             return
 
         self.channels.discard(channel)
+        self.partner_channels.discard(channel)
+        self.category_channels.discard(channel)
+        self.channel_chatters.pop(channel, None)
 
         if self.connected and self.writer:
             try:
@@ -453,3 +489,17 @@ class IRCLurkerTracker:
         """Get current chatters for a channel."""
         channel = channel.lower().lstrip("#")
         return self.channel_chatters.get(channel, set()).copy()
+
+    def get_observability_snapshot(self) -> dict[str, object]:
+        """Return a compact snapshot for debug/observability endpoints."""
+        return {
+            "experimental": True,
+            "authenticated": self._authenticated,
+            "nick": self.nick,
+            "running": self.running,
+            "connected": self.connected,
+            "trackedChannelCount": len(self.channels),
+            "trackedChannelSample": sorted(self.channels)[:8],
+            "partnerChannelCount": len(self.partner_channels),
+            "categoryChannelCount": len(self.category_channels),
+        }

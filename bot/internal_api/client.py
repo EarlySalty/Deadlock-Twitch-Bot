@@ -208,6 +208,20 @@ class InternalApiClient:
             message="Bot internal API returned an invalid observability payload.",
         )
 
+    async def get_chatters_debug(self, login: str) -> dict[str, Any]:
+        normalized_login = str(login or "").strip().lower().lstrip("@").lstrip("#")
+        payload = await self._request_json(
+            "GET",
+            f"{INTERNAL_API_BASE_PATH}/debug/chatters/{normalized_login}",
+        )
+        if isinstance(payload, dict):
+            return payload
+        raise InternalApiClientError(
+            status=502,
+            code="invalid_payload",
+            message="Bot internal API returned an invalid chatters debug payload.",
+        )
+
     async def _request_json(
         self,
         method: str,

@@ -1,6 +1,7 @@
 """_SessionsMixin – Stream session lifecycle management."""
 from __future__ import annotations
 
+import time
 from datetime import UTC, datetime
 
 from .. import storage
@@ -12,6 +13,61 @@ except Exception:  # pragma: no cover - partial deploy safety
 
 
 class _SessionsMixin:
+
+    def _next_analytics_observability_flow_id(self, prefix: str) -> str:
+        normalized = str(prefix or "analytics").strip().lower() or "analytics"
+        sequence = int(getattr(self, "_analytics_observability_sequence", 0) or 0) + 1
+        self._analytics_observability_sequence = sequence
+        return f"{normalized}-{int(time.time() * 1000)}-{sequence}"
+
+    def _increment_analytics_observability_counter(self, name: str, amount: int = 1) -> int:
+        counters = getattr(self, "_analytics_observability_counter_store", None)
+        if not isinstance(counters, dict):
+            counters = {}
+            self._analytics_observability_counter_store = counters
+        counter_name = str(name or "").strip()
+        if not counter_name:
+            return 0
+        counters[counter_name] = int(counters.get(counter_name, 0) or 0) + int(amount)
+        return counters[counter_name]
+
+    @staticmethod
+    def _scope_presence_state(
+        *,
+        scopes: set[str] | None,
+        required_scope: str,
+        token_available: bool,
+    ) -> str:
+        if not token_available:
+            return "absent"
+        normalized_scopes = {str(scope).strip().lower() for scope in (scopes or set()) if str(scope).strip()}
+        if not normalized_scopes:
+            return "unknown"
+        return "present" if required_scope in normalized_scopes else "missing"
+
+    @staticmethod
+    def _structured_result_meta(result: dict[str, object] | None) -> tuple[str, int | None, str | None]:
+        payload = result or {}
+        request_result = "success" if payload.get("ok") else "failed"
+        http_status_raw = payload.get("http_status")
+        try:
+            http_status = int(http_status_raw) if http_status_raw is not None else None
+        except (TypeError, ValueError):
+            http_status = None
+        error_code = str(payload.get("error_code") or "").strip() or None
+        return request_result, http_status, error_code
+
+    def _build_analytics_runtime_state(self, login: str | None = None) -> dict[str, object]:
+        return {
+            "analytics_runtime_available": bool(getattr(self, "api", None)),
+            "chat_bot_available": bool(getattr(self, "_twitch_chat_bot", None)),
+            "bot_token_manager_available": bool(getattr(self, "_bot_token_manager", None)),
+            "raid_bot_available": bool(getattr(self, "_raid_bot", None)),
+            "runtime_sources": [],
+        }
+
+    def _log_analytics_decision(self, **_kwargs) -> dict[str, object]:
+        return dict(_kwargs)
 
     def _get_session_followers_user_fallback_warned_cache(self) -> set[str]:
         cache = getattr(self, "_session_followers_user_fallback_warned", None)
@@ -33,6 +89,12 @@ class _SessionsMixin:
             "Der botzentrierte Pfad sollte 'moderator:read:followers' ueber den Bot abdecken.",
             login or "<unknown>",
         )
+
+    def _clear_session_followers_user_fallback_warning(self, login: str) -> None:
+        key = str(login or "").strip().lower()
+        if not key:
+            return
+        self._get_session_followers_user_fallback_warned_cache().discard(key)
 
     def _get_active_sessions_cache(self) -> dict[str, int]:
         cache = getattr(self, "_active_sessions", None)
@@ -554,6 +616,7 @@ class _SessionsMixin:
             )
         finally:
             cache.pop(login_lower, None)
+            self._clear_session_followers_user_fallback_warning(login_lower)
 
         if callable(resolve_partner_raid_tracking_for_session):
             try:
@@ -586,6 +649,23 @@ class _SessionsMixin:
                     )
         except Exception:
             log.debug("exp: _exp_on_session_finalize fehlgeschlagen für %s", login_lower, exc_info=True)
+
+        try:
+            irc_finalize = getattr(self, "_finalize_irc_lurker_experiment_session", None)
+            if callable(irc_finalize):
+                irc_finalize(
+                    login=login_lower,
+                    session_id=session_id,
+                    reason=reason,
+                    ended_at=now_dt,
+                )
+        except Exception:
+            log.debug(
+                "IRC experiment: session finalize failed for %s session=%s",
+                login_lower,
+                session_id,
+                exc_info=True,
+            )
 
     def _adopt_incomplete_session(self, session_id: int, stream: dict) -> None:
         """Update a session that was created with incomplete data (e.g. by scout).
@@ -634,6 +714,7 @@ class _SessionsMixin:
            streamers not in the partner view)
         """
         total_closed = 0
+        closed_sessions: list[tuple[int, str]] = []
         try:
             with storage.get_conn() as c:
                 # Case 1: zero-sample orphans older than 24h
@@ -646,10 +727,20 @@ class _SessionsMixin:
                     WHERE ended_at IS NULL
                       AND samples = 0
                       AND started_at < NOW() - INTERVAL '24 hours'
-                    RETURNING id
+                    RETURNING id, streamer_login
                     """
                 )
-                total_closed += len(cur.fetchall())
+                closed_sessions.extend(
+                    [
+                        (
+                            int(row["id"] if hasattr(row, "keys") else row[0]),
+                            str(
+                                row["streamer_login"] if hasattr(row, "keys") else row[1] or ""
+                            ).strip().lower(),
+                        )
+                        for row in cur.fetchall()
+                    ]
+                )
 
                 # Case 2: sessions with data but stale (last viewer entry > 1h ago)
                 cur = c.execute(
@@ -669,12 +760,42 @@ class _SessionsMixin:
                     ) sub
                     WHERE s.id = sub.session_id
                       AND s.ended_at IS NULL
-                    RETURNING s.id
+                    RETURNING s.id, s.streamer_login
                     """
                 )
-                total_closed += len(cur.fetchall())
+                closed_sessions.extend(
+                    [
+                        (
+                            int(row["id"] if hasattr(row, "keys") else row[0]),
+                            str(
+                                row["streamer_login"] if hasattr(row, "keys") else row[1] or ""
+                            ).strip().lower(),
+                        )
+                        for row in cur.fetchall()
+                    ]
+                )
+
+                closed_session_ids = [session_id for session_id, _ in closed_sessions]
+                if closed_session_ids:
+                    c.execute(
+                        """
+                        UPDATE twitch_live_state
+                           SET active_session_id = NULL,
+                               is_live = 0
+                         WHERE active_session_id = ANY(%s)
+                        """,
+                        (closed_session_ids,),
+                    )
         except Exception:
             log.debug("Orphaned session cleanup fehlgeschlagen", exc_info=True)
+            return total_closed
+
+        total_closed = len(closed_sessions)
+        if closed_sessions:
+            cache = self._get_active_sessions_cache()
+            for session_id, login in closed_sessions:
+                if login and cache.get(login) == session_id:
+                    cache.pop(login, None)
         return total_closed
 
     async def _fetch_followers_total_safe(
@@ -686,42 +807,99 @@ class _SessionsMixin:
     ) -> int | None:
         if self.api is None:
             return None
+        flow_id = self._next_analytics_observability_flow_id("followers-session")
         user_id = twitch_user_id
         if not user_id and stream:
             user_id = stream.get("user_id")
+        runtime_state = self._build_analytics_runtime_state(login)
+        bot_token_manager_available = bool(getattr(self, "_bot_token_manager", None))
+        bot_token_present = False
+        bot_scope_present = "unknown"
+        streamer_scope_present = "absent"
+        bot_request_attempted = False
+        bot_request_success = False
+        bot_http_status: int | None = None
+        streamer_http_status: int | None = None
+        final_request_attempted: object = "none"
+        final_request_result = "not_attempted"
+        final_reason = "unknown"
 
         # Prefer the central bot token for moderator-scoped reads; fall back to broadcaster grants.
         bot_token: str | None = None
+        bot_scopes: set[str] = set()
         try:
             token_mgr = getattr(self, "_bot_token_manager", None)
             if token_mgr:
                 token, _ = await token_mgr.get_valid_token()
-                scopes = {
+                bot_scopes = {
                     str(scope).strip().lower()
                     for scope in (getattr(token_mgr, "scopes", None) or set())
                     if str(scope).strip()
                 }
-                if token and (not scopes or "moderator:read:followers" in scopes):
+                bot_token_present = bool(str(token or "").strip())
+                bot_scope_present = self._scope_presence_state(
+                    scopes=bot_scopes,
+                    required_scope="moderator:read:followers",
+                    token_available=bot_token_present,
+                )
+                if token and (not bot_scopes or "moderator:read:followers" in bot_scopes):
                     bot_token = str(token or "").strip()
         except Exception:
             bot_token = None
 
         if user_id and bot_token:
-            try:
-                followers_total = await self.api.get_followers_total(
-                    str(user_id),
-                    user_token=bot_token,
+            bot_request_attempted = True
+            final_request_attempted = "bot"
+            self._increment_analytics_observability_counter("followers_session_bot_path_attempt_total")
+            followers_result_getter = getattr(self.api, "get_followers_total_result", None)
+            if callable(followers_result_getter):
+                bot_result = await followers_result_getter(str(user_id), user_token=bot_token)
+            else:
+                legacy_total = await self.api.get_followers_total(str(user_id), user_token=bot_token)
+                bot_result = {
+                    "ok": legacy_total is not None,
+                    "data": legacy_total,
+                    "http_status": 200 if legacy_total is not None else None,
+                    "error_code": None if legacy_total is not None else "legacy_none_result",
+                    "request_attempted": True,
+                }
+            final_request_result, bot_http_status, bot_error_code = self._structured_result_meta(
+                bot_result
+            )
+            if bot_result.get("ok") and bot_result.get("data") is not None:
+                bot_request_success = True
+                self._clear_session_followers_user_fallback_warning(login)
+                self._increment_analytics_observability_counter("followers_session_bot_path_success_total")
+                self._log_analytics_decision(
+                    flow_id=flow_id,
+                    flow="followers_session",
+                    login=login,
+                    decision="success",
+                    reason="bot_path_success",
+                    request_attempted=final_request_attempted,
+                    request_result=final_request_result,
+                    http_status=bot_http_status or 200,
+                    scope_state={
+                        "bot": bot_scope_present,
+                        "streamer": streamer_scope_present,
+                    },
+                    runtime_state=runtime_state,
+                    chat_bot_available=runtime_state.get("chat_bot_available"),
+                    bot_token_manager_available=bot_token_manager_available,
+                    bot_token_present=bot_token_present,
+                    bot_scope_present=bot_scope_present,
+                    streamer_scope_present=streamer_scope_present,
+                    bot_request_attempted=bot_request_attempted,
+                    bot_request_success=bot_request_success,
+                    bot_http_status=bot_http_status,
                 )
-                if followers_total is not None:
-                    return followers_total
-            except Exception:
-                log.debug(
-                    "Follower-Abfrage via Bot-Token fehlgeschlagen fuer %s",
-                    login,
-                    exc_info=True,
-                )
+                return int(bot_result["data"])
+            self._increment_analytics_observability_counter("followers_session_bot_path_failure_total")
+            final_reason = bot_error_code or "helix_followers_failed"
 
         user_token: str | None = None
+        auth_user_id: str | None = None
+        streamer_scopes: set[str] = set()
         try:
             if hasattr(self, "_raid_bot") and self._raid_bot and self.api is not None:
                 session = self.api.get_http_session()
@@ -730,6 +908,16 @@ class _SessionsMixin:
                     auth_user_id, token = result
                     user_id = user_id or auth_user_id
                     user_token = token
+                    streamer_scopes = {
+                        str(scope).strip().lower()
+                        for scope in self._raid_bot.auth_manager.get_scopes(auth_user_id)
+                        if str(scope).strip()
+                    }
+                    streamer_scope_present = self._scope_presence_state(
+                        scopes=streamer_scopes,
+                        required_scope="moderator:read:followers",
+                        token_available=bool(user_token),
+                    )
         except Exception:
             log.debug(
                 "Konnte OAuth-Daten fuer Follower-Check nicht laden: %s",
@@ -738,11 +926,106 @@ class _SessionsMixin:
             )
 
         if not user_id:
+            final_reason = "missing_user_id"
+            self._increment_analytics_observability_counter("followers_session_reason_missing_user_id_total")
+            self._log_analytics_decision(
+                flow_id=flow_id,
+                flow="followers_session",
+                login=login,
+                decision="failed",
+                reason=final_reason,
+                request_attempted=final_request_attempted,
+                request_result=final_request_result,
+                http_status=bot_http_status,
+                scope_state={"bot": bot_scope_present, "streamer": streamer_scope_present},
+                runtime_state=runtime_state,
+                chat_bot_available=runtime_state.get("chat_bot_available"),
+                bot_token_manager_available=bot_token_manager_available,
+                bot_token_present=bot_token_present,
+                bot_scope_present=bot_scope_present,
+                streamer_scope_present=streamer_scope_present,
+                bot_request_attempted=bot_request_attempted,
+                bot_request_success=bot_request_success,
+                bot_http_status=bot_http_status,
+            )
             return None
-        try:
-            if user_token:
-                self._warn_session_followers_user_fallback_once(login)
-            return await self.api.get_followers_total(str(user_id), user_token=user_token)
-        except Exception:
-            log.debug("Follower-Abfrage fehlgeschlagen fuer %s", login, exc_info=True)
-            return None
+        if user_token:
+            self._warn_session_followers_user_fallback_once(login)
+            followers_result_getter = getattr(self.api, "get_followers_total_result", None)
+            if callable(followers_result_getter):
+                streamer_result = await followers_result_getter(str(user_id), user_token=user_token)
+            else:
+                legacy_total = await self.api.get_followers_total(str(user_id), user_token=user_token)
+                streamer_result = {
+                    "ok": legacy_total is not None,
+                    "data": legacy_total,
+                    "http_status": 200 if legacy_total is not None else None,
+                    "error_code": None if legacy_total is not None else "legacy_none_result",
+                    "request_attempted": True,
+                }
+            final_request_attempted = "bot,streamer" if bot_request_attempted else "streamer"
+            final_request_result, streamer_http_status, streamer_error_code = self._structured_result_meta(
+                streamer_result
+            )
+            if streamer_result.get("ok") and streamer_result.get("data") is not None:
+                self._increment_analytics_observability_counter(
+                    "followers_session_reason_fallback_to_streamer_token_total"
+                )
+                self._log_analytics_decision(
+                    flow_id=flow_id,
+                    flow="followers_session",
+                    login=login,
+                    decision="success",
+                    reason="fallback_to_streamer_token",
+                    request_attempted=final_request_attempted,
+                    request_result=final_request_result,
+                    http_status=streamer_http_status or 200,
+                    scope_state={"bot": bot_scope_present, "streamer": streamer_scope_present},
+                    runtime_state=runtime_state,
+                    chat_bot_available=runtime_state.get("chat_bot_available"),
+                    bot_token_manager_available=bot_token_manager_available,
+                    bot_token_present=bot_token_present,
+                    bot_scope_present=bot_scope_present,
+                    streamer_scope_present=streamer_scope_present,
+                    bot_request_attempted=bot_request_attempted,
+                    bot_request_success=bot_request_success,
+                    bot_http_status=bot_http_status,
+                    streamer_http_status=streamer_http_status,
+                )
+                return int(streamer_result["data"])
+            final_reason = streamer_error_code or final_reason or "helix_followers_failed"
+
+        if final_reason == "unknown":
+            if bot_token_manager_available and bot_token_present and bot_scope_present == "missing":
+                final_reason = "bot_scope_missing"
+            elif not bot_token_manager_available:
+                final_reason = "bot_token_manager_unavailable"
+            elif not bot_token_present:
+                final_reason = "bot_token_missing"
+            else:
+                final_reason = "bot_path_unavailable"
+        self._increment_analytics_observability_counter(
+            f"followers_session_reason_{final_reason}_total"
+        )
+        self._log_analytics_decision(
+            flow_id=flow_id,
+            flow="followers_session",
+            login=login,
+            decision="failed",
+            reason=final_reason,
+            request_attempted=final_request_attempted,
+            request_result=final_request_result,
+            http_status=streamer_http_status if streamer_http_status is not None else bot_http_status,
+            scope_state={"bot": bot_scope_present, "streamer": streamer_scope_present},
+            runtime_state=runtime_state,
+            chat_bot_available=runtime_state.get("chat_bot_available"),
+            bot_token_manager_available=bot_token_manager_available,
+            bot_token_present=bot_token_present,
+            bot_scope_present=bot_scope_present,
+            streamer_scope_present=streamer_scope_present,
+            bot_request_attempted=bot_request_attempted,
+            bot_request_success=bot_request_success,
+            bot_http_status=bot_http_status,
+            streamer_http_status=streamer_http_status,
+        )
+        return None

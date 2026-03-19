@@ -805,6 +805,24 @@ class _CompatConnection:
         return getattr(self._conn, item)
 
 
+def _execute_with_savepoint(conn, sql: str, params=None):
+    if getattr(conn, "autocommit", False):
+        return conn.execute(sql, params or ())
+
+    savepoint = f"ddl_guard_{time.monotonic_ns()}"
+    conn.execute(f"SAVEPOINT {savepoint}")
+    try:
+        result = conn.execute(sql, params or ())
+    except Exception:
+        with contextlib.suppress(Exception):
+            conn.execute(f"ROLLBACK TO SAVEPOINT {savepoint}")
+        with contextlib.suppress(Exception):
+            conn.execute(f"RELEASE SAVEPOINT {savepoint}")
+        raise
+    conn.execute(f"RELEASE SAVEPOINT {savepoint}")
+    return result
+
+
 def _ensure_compat_functions(conn: psycopg.Connection) -> None:
     """Install lightweight sqlite compatibility helpers (strftime, printf, julianday, datetime) once per process."""
     if getattr(_ensure_compat_functions, "_installed", False):
@@ -1120,7 +1138,7 @@ def _ensure_observability_writer_started() -> None:
         thread = threading.Thread(
             target=_observability_writer_loop,
             name="TwitchObservabilityWriter",
-            daemon=False,
+            daemon=True,
         )
         thread.start()
         _observability_writer_thread = thread
@@ -1435,46 +1453,57 @@ def ensure_schema(conn) -> None:
 
     def _has_unique_constraint(table: str, columns: Sequence[str]) -> bool:
         """
-        Return True when there is a PRIMARY KEY, UNIQUE constraint, or UNIQUE index
-        matching the provided column list exactly (order-sensitive).
+        Return True when there is a PRIMARY KEY or UNIQUE constraint matching the
+        provided column list exactly (order-sensitive).
         """
-        if _has_key_constraint(table, columns, ["PRIMARY KEY", "UNIQUE"]):
+        return _has_key_constraint(table, columns, ["PRIMARY KEY", "UNIQUE"])
+
+    def _drop_constraint_if_exists(table: str, constraint_name: str) -> bool:
+        if not _constraint_exists(table, constraint_name):
+            return False
+        conn.execute(
+            f"ALTER TABLE {table} DROP CONSTRAINT {constraint_name}"
+        )
+        return True
+
+    def _ensure_unique_constraint_allowing_compressed_hypertable(
+        table: str,
+        constraint_name: str,
+        columns: Sequence[str],
+    ) -> bool:
+        if _has_unique_constraint(table, columns):
             return True
-        try:
-            row = conn.execute(
-                """
-                SELECT 1
-                FROM (
-                    SELECT array_agg(att.attname ORDER BY ord.pos) AS column_names
-                    FROM pg_class tbl
-                    JOIN pg_namespace ns
-                      ON ns.oid = tbl.relnamespace
-                    JOIN pg_index idx
-                      ON idx.indrelid = tbl.oid
-                    JOIN LATERAL unnest(idx.indkey) WITH ORDINALITY AS ord(attnum, pos)
-                      ON TRUE
-                    JOIN pg_attribute att
-                      ON att.attrelid = tbl.oid
-                     AND att.attnum = ord.attnum
-                    WHERE ns.nspname = current_schema()
-                      AND tbl.relname = %s
-                      AND idx.indisunique
-                    GROUP BY idx.indexrelid
-                ) indexed
-                WHERE indexed.column_names = %s
-                LIMIT 1
-                """,
-                (table, list(columns)),
-            ).fetchone()
-            return bool(row)
-        except Exception as exc:
-            log.debug(
-                "Could not inspect unique key on %s(%s): %s",
+
+        compression_was_enabled = _timescale_compression_enabled(table)
+        if compression_was_enabled and not _set_timescale_compression(table, False):
+            log.warning(
+                "Could not add unique constraint %s on %s because compression could not be disabled.",
+                constraint_name,
                 table,
-                ",".join(columns),
-                exc,
             )
             return False
+
+        columns_sql = ", ".join(columns)
+        try:
+            _execute_with_savepoint(
+                conn,
+                f"ALTER TABLE {table} ADD CONSTRAINT {constraint_name} UNIQUE ({columns_sql})",
+            )
+        except psycopg.errors.DuplicateObject:
+            pass
+        except Exception as exc:
+            log.warning(
+                "Could not add unique constraint %s on %s(%s): %s",
+                constraint_name,
+                table,
+                columns_sql,
+                exc,
+            )
+        finally:
+            if compression_was_enabled:
+                _set_timescale_compression(table, True)
+
+        return _has_unique_constraint(table, columns)
 
     def _column_data_type(table: str, column: str) -> str | None:
         """Return the normalized information_schema data_type for a column."""
@@ -1496,7 +1525,8 @@ def ensure_schema(conn) -> None:
     def _decompress_compressed_chunks(table: str) -> bool:
         """Decompress all compressed chunks for a hypertable. Returns success flag."""
         try:
-            conn.execute(
+            _execute_with_savepoint(
+                conn,
                 """
                 SELECT decompress_chunk((quote_ident(chunk_schema) || '.' || quote_ident(chunk_name))::regclass)
                 FROM timescaledb_information.chunks
@@ -1513,7 +1543,8 @@ def ensure_schema(conn) -> None:
         """Best-effort toggle for Timescale compression; returns success flag."""
         action = "enable" if enable else "disable"
         try:
-            conn.execute(
+            _execute_with_savepoint(
+                conn,
                 f"ALTER TABLE {table} SET (timescaledb.compress = {'true' if enable else 'false'})"
             )
             return True
@@ -1527,7 +1558,10 @@ def ensure_schema(conn) -> None:
                 log.warning("Unable to disable compression on %s because chunks could not be decompressed.", table)
                 return False
             try:
-                conn.execute(f"ALTER TABLE {table} SET (timescaledb.compress = false)")
+                _execute_with_savepoint(
+                    conn,
+                    f"ALTER TABLE {table} SET (timescaledb.compress = false)",
+                )
                 return True
             except Exception as exc2:  # pragma: no cover - defensive
                 log.warning("Disabling compression on %s still failed after decompressing chunks: %s", table, exc2)
@@ -1542,7 +1576,7 @@ def ensure_schema(conn) -> None:
         Timescale refuses DDL while compression is on, so we disable it temporarily.
         """
         try:
-            conn.execute(sql)
+            _execute_with_savepoint(conn, sql)
             return True
         except psycopg.errors.FeatureNotSupported:
             if not _timescale_compression_enabled(table):
@@ -1555,7 +1589,7 @@ def ensure_schema(conn) -> None:
                 log.warning("Index skipped because compression could not be disabled on %s.", table)
                 return False
             try:
-                conn.execute(sql)
+                _execute_with_savepoint(conn, sql)
                 return True
             except Exception as exc:
                 log.warning("Creating index on %s failed even after disabling compression: %s", table, exc)
@@ -1603,7 +1637,6 @@ def ensure_schema(conn) -> None:
                 _column_data_type("twitch_partner_raid_score_tracking", "raid_history_executed_at")
                 != "timestamp with time zone",
                 not partner_has_fk,
-                not _index_exists("idx_twitch_raid_history_id_executed_at"),
                 not _index_exists("idx_twitch_raid_retention_raid_id"),
                 not _index_exists("idx_partner_raid_tracking_history_ref"),
             ]
@@ -1639,19 +1672,30 @@ def ensure_schema(conn) -> None:
 
             _align_serial_sequence(conn, "twitch_raid_history", "id")
             if not history_has_reference_key:
-                created_reference_index = _create_index_allowing_compressed_hypertable(
+                if _drop_constraint_if_exists(
+                    "twitch_raid_retention",
+                    "twitch_raid_retention_raid_history_ref_fkey",
+                ):
+                    retention_has_fk = False
+                if _drop_constraint_if_exists(
+                    "twitch_partner_raid_score_tracking",
+                    "twitch_partner_raid_score_tracking_raid_history_ref_fkey",
+                ):
+                    partner_has_fk = False
+            if not history_has_reference_key:
+                _create_index_allowing_compressed_hypertable(
                     "twitch_raid_history",
                     "CREATE UNIQUE INDEX IF NOT EXISTS idx_twitch_raid_history_id_executed_at "
                     "ON twitch_raid_history(id, executed_at)",
                 )
-                history_has_reference_key = (
-                    _has_unique_constraint("twitch_raid_history", ["id", "executed_at"])
-                    if created_reference_index
-                    else _has_unique_constraint("twitch_raid_history", ["id", "executed_at"])
+                history_has_reference_key = _ensure_unique_constraint_allowing_compressed_hypertable(
+                    "twitch_raid_history",
+                    "twitch_raid_history_id_executed_at_key",
+                    ["id", "executed_at"],
                 )
             if not history_has_reference_key:
                 raise RuntimeError(
-                    "twitch_raid_history(id, executed_at) is not uniquely indexable; "
+                    "twitch_raid_history(id, executed_at) is missing a PRIMARY KEY/UNIQUE constraint; "
                     "raid identity repair cannot continue."
                 )
 
@@ -2370,7 +2414,8 @@ def ensure_schema(conn) -> None:
         """
     )
     try:
-        conn.execute(
+        _execute_with_savepoint(
+            conn,
             "SELECT create_hypertable("
             "'twitch_observability_events', "
             "'created_at', "
@@ -2382,7 +2427,8 @@ def ensure_schema(conn) -> None:
     except Exception as exc:
         log.debug("Could not convert twitch_observability_events to hypertable: %s", exc)
     try:
-        conn.execute(
+        _execute_with_savepoint(
+            conn,
             "ALTER TABLE twitch_observability_events "
             "SET (timescaledb.compress, "
             "timescaledb.compress_segmentby = 'flow_type,flow_id', "
@@ -2391,7 +2437,8 @@ def ensure_schema(conn) -> None:
     except Exception as exc:
         log.debug("Could not enable compression on twitch_observability_events: %s", exc)
     try:
-        conn.execute(
+        _execute_with_savepoint(
+            conn,
             "SELECT add_compression_policy("
             "'twitch_observability_events', "
             "INTERVAL '7 days', "
@@ -2466,19 +2513,23 @@ def ensure_schema(conn) -> None:
         log.debug("Skipping default migration on twitch_raid_history.success: %s", exc)
     raid_history_has_reference_key = _has_unique_constraint("twitch_raid_history", ["id", "executed_at"])
     if not raid_history_has_reference_key:
-        created_reference_index = _create_index_allowing_compressed_hypertable(
+        _create_index_allowing_compressed_hypertable(
             "twitch_raid_history",
             "CREATE UNIQUE INDEX IF NOT EXISTS idx_twitch_raid_history_id_executed_at "
             "ON twitch_raid_history(id, executed_at)",
         )
-        raid_history_has_reference_key = (
-            _has_unique_constraint("twitch_raid_history", ["id", "executed_at"])
-            if created_reference_index
-            else _has_unique_constraint("twitch_raid_history", ["id", "executed_at"])
+        raid_history_has_reference_key = _ensure_unique_constraint_allowing_compressed_hypertable(
+            "twitch_raid_history",
+            "twitch_raid_history_id_executed_at_key",
+            ["id", "executed_at"],
         )
-        if _index_exists("idx_twitch_raid_history_id_executed_at") and not raid_history_has_reference_key:
+        if (
+            _index_exists("idx_twitch_raid_history_id_executed_at")
+            and not raid_history_has_reference_key
+        ):
             log.warning(
-                "Index idx_twitch_raid_history_id_executed_at already exists but is not UNIQUE; "
+                "Index idx_twitch_raid_history_id_executed_at exists but "
+                "twitch_raid_history(id, executed_at) still has no PRIMARY KEY/UNIQUE constraint; "
                 "raid reference foreign keys remain deferred until the table is repaired."
             )
 
@@ -2496,8 +2547,8 @@ def ensure_schema(conn) -> None:
     # 6b) Raid retention rollup (computed)
     if not raid_history_has_reference_key:
         log.warning(
-            "twitch_raid_history(id, executed_at) is still missing a unique key; "
-            "raid reference foreign keys will be added by the repair path once the index exists."
+            "twitch_raid_history(id, executed_at) is still missing a PRIMARY KEY/UNIQUE constraint; "
+            "raid reference foreign keys will be added by the repair path once the constraint exists."
         )
 
     conn.execute(

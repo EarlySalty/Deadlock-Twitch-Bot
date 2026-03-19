@@ -464,7 +464,64 @@ class RaidBot:
             "readinessFlowCount": len(readiness_by_flow),
             "counters": dict(self._raid_observability_counters()),
             "lastEvent": getattr(self, "_last_raid_observability_event", None),
+            "lastAnalyticsFollowersDiagnostic": getattr(
+                self,
+                "_last_analytics_followers_diagnostic",
+                None,
+            ),
         }
+
+    def _build_analytics_followers_runtime_state(self) -> dict[str, object]:
+        chat_bot = getattr(self, "chat_bot", None)
+        token_mgr = getattr(chat_bot, "_token_manager", None) if chat_bot is not None else None
+        return {
+            "chat_bot_available": bool(chat_bot),
+            "bot_token_manager_available": bool(token_mgr),
+            "raid_session_available": bool(self.session),
+        }
+
+    def _log_analytics_followers_decision(
+        self,
+        *,
+        flow_id: str,
+        flow: str,
+        login: str,
+        target_id: str | None,
+        decision: str,
+        reason: str,
+        request_attempted: object,
+        request_result: str,
+        http_status: int | None,
+        scope_state: dict[str, object],
+        runtime_state: dict[str, object],
+        level: int = logging.INFO,
+        **extra_fields: object,
+    ) -> None:
+        payload = {
+            "flow_id": str(flow_id or "").strip() or None,
+            "flow": str(flow or "").strip().lower() or "followers",
+            "login": str(login or "").strip().lower() or None,
+            "target_id": str(target_id or "").strip() or None,
+            "decision": str(decision or "").strip() or "unknown",
+            "reason": str(reason or "").strip() or "unknown",
+            "request_attempted": request_attempted,
+            "request_result": str(request_result or "").strip() or "unknown",
+            "http_status": int(http_status) if http_status is not None else None,
+            "scope_state": scope_state,
+            "runtime_state": runtime_state,
+            **extra_fields,
+        }
+        self._last_analytics_followers_diagnostic = payload
+        log.log(level, "analytics_decision %s", self._format_raid_observability_fields(**payload))
+        insert_observability_event(
+            flow_type="analytics",
+            flow_id=str(payload.get("flow_id") or ""),
+            entity_login=str(payload.get("login") or ""),
+            entity_id=str(payload.get("target_id") or ""),
+            step="terminal_decision",
+            decision=str(payload.get("decision") or "unknown"),
+            details=payload,
+        )
 
     def _ensure_runtime_raid_tracking_state(self) -> None:
         if not isinstance(getattr(self, "_pending_raids", None), dict):
@@ -1262,6 +1319,35 @@ class RaidBot:
             area,
             subject or "<unknown>",
         )
+
+    def _clear_user_scope_fallback_warning(
+        self,
+        *,
+        area: str,
+        subject: str,
+    ) -> None:
+        subject_key = str(subject or "").strip().lower() or "<unknown>"
+        key = (str(area or "").strip().lower(), subject_key)
+        self._user_scope_fallback_warned.discard(key)
+
+    @staticmethod
+    async def _get_followers_total_result_with_legacy_fallback(
+        api,
+        user_id: str,
+        *,
+        user_token: str | None = None,
+    ) -> dict[str, object]:
+        result_getter = getattr(api, "get_followers_total_result", None)
+        if callable(result_getter):
+            return await result_getter(user_id, user_token=user_token)
+        legacy_total = await api.get_followers_total(user_id, user_token=user_token)
+        return {
+            "ok": legacy_total is not None,
+            "data": legacy_total,
+            "http_status": 200 if legacy_total is not None else None,
+            "error_code": None if legacy_total is not None else "legacy_none_result",
+            "request_attempted": True,
+        }
 
     @staticmethod
     def _row_value(row, key: str, index: int, default=None):
@@ -3234,8 +3320,26 @@ class RaidBot:
         if cached_total is not None:
             return cached_total
 
+        flow_id = self._next_raid_observability_flow_id(prefix="followers-recruitment")
         resolved_target_id = str(target_id or "").strip()
+        runtime_state = self._build_analytics_followers_runtime_state()
         if not resolved_target_id or not self.session:
+            self._increment_raid_observability_counter(
+                "followers_recruitment_reason_missing_target_id_total"
+            )
+            self._log_analytics_followers_decision(
+                flow_id=flow_id,
+                flow="followers_recruitment",
+                login=login,
+                target_id=resolved_target_id,
+                decision="failed",
+                reason="missing_target_id" if not resolved_target_id else "raid_session_unavailable",
+                request_attempted="none",
+                request_result="not_attempted",
+                http_status=None,
+                scope_state={"bot": "unknown", "streamer": "absent"},
+                runtime_state=runtime_state,
+            )
             return None
 
         try:
@@ -3252,11 +3356,56 @@ class RaidBot:
             # Prefer the central bot token for moderator-scoped reads; fall back to broadcaster grants.
             followers_total = None
             bot_token, _bot_id, bot_scopes = await self._resolve_bot_oauth_context()
+            bot_scope_state = (
+                "present"
+                if bot_token and "moderator:read:followers" in bot_scopes
+                else ("unknown" if bot_token and not bot_scopes else ("absent" if not bot_token else "missing"))
+            )
+            bot_http_status: int | None = None
+            streamer_http_status: int | None = None
             if bot_token and (not bot_scopes or "moderator:read:followers" in bot_scopes):
-                followers_total = await api.get_followers_total(
+                self._increment_raid_observability_counter(
+                    "followers_recruitment_bot_path_attempt_total"
+                )
+                bot_result = await self._get_followers_total_result_with_legacy_fallback(
+                    api,
                     resolved_target_id,
                     user_token=bot_token,
                 )
+                bot_http_status = (
+                    int(bot_result.get("http_status"))
+                    if bot_result.get("http_status") is not None
+                    else None
+                )
+                if bot_result.get("ok") and bot_result.get("data") is not None:
+                    followers_total = bot_result.get("data")
+                    self._clear_user_scope_fallback_warning(
+                        area="recruitment follower lookup",
+                        subject=login or resolved_target_id,
+                    )
+                    self._increment_raid_observability_counter(
+                        "followers_recruitment_bot_path_success_total"
+                    )
+                    self._log_analytics_followers_decision(
+                        flow_id=flow_id,
+                        flow="followers_recruitment",
+                        login=login,
+                        target_id=resolved_target_id,
+                        decision="success",
+                        reason="bot_path_success",
+                        request_attempted="bot",
+                        request_result="success",
+                        http_status=bot_http_status or 200,
+                        scope_state={"bot": bot_scope_state, "streamer": "absent"},
+                        runtime_state=runtime_state,
+                        bot_request_attempted=True,
+                        bot_request_success=True,
+                        bot_http_status=bot_http_status,
+                    )
+                else:
+                    self._increment_raid_observability_counter(
+                        "followers_recruitment_bot_path_failure_total"
+                    )
             if followers_total is None:
                 user_token: str | None = None
                 try:
@@ -3266,15 +3415,94 @@ class RaidBot:
                     )
                 except Exception:
                     user_token = None
+                streamer_scope_state = "absent" if not user_token else "unknown"
                 if user_token:
                     self._warn_user_scope_fallback_once(
                         area="recruitment follower lookup",
                         subject=login or resolved_target_id,
                     )
-                followers_total = await api.get_followers_total(
-                    resolved_target_id,
-                    user_token=user_token,
-                )
+                    streamer_result = await self._get_followers_total_result_with_legacy_fallback(
+                        api,
+                        resolved_target_id,
+                        user_token=user_token,
+                    )
+                    streamer_http_status = (
+                        int(streamer_result.get("http_status"))
+                        if streamer_result.get("http_status") is not None
+                        else None
+                    )
+                    if streamer_result.get("ok") and streamer_result.get("data") is not None:
+                        followers_total = streamer_result.get("data")
+                        self._increment_raid_observability_counter(
+                            "followers_recruitment_reason_fallback_to_streamer_token_total"
+                        )
+                        self._log_analytics_followers_decision(
+                            flow_id=flow_id,
+                            flow="followers_recruitment",
+                            login=login,
+                            target_id=resolved_target_id,
+                            decision="success",
+                            reason="fallback_to_streamer_token",
+                            request_attempted="bot,streamer" if bot_token else "streamer",
+                            request_result="success",
+                            http_status=streamer_http_status or 200,
+                            scope_state={"bot": bot_scope_state, "streamer": streamer_scope_state},
+                            runtime_state=runtime_state,
+                            bot_request_attempted=bool(bot_token),
+                            bot_request_success=False,
+                            bot_http_status=bot_http_status,
+                            streamer_http_status=streamer_http_status,
+                        )
+                    else:
+                        final_reason = str(
+                            streamer_result.get("error_code")
+                            or "helix_followers_failed"
+                        )
+                        self._increment_raid_observability_counter(
+                            f"followers_recruitment_reason_{final_reason}_total"
+                        )
+                        self._log_analytics_followers_decision(
+                            flow_id=flow_id,
+                            flow="followers_recruitment",
+                            login=login,
+                            target_id=resolved_target_id,
+                            decision="failed",
+                            reason=final_reason,
+                            request_attempted="bot,streamer" if bot_token else "streamer",
+                            request_result="failed",
+                            http_status=streamer_http_status,
+                            scope_state={"bot": bot_scope_state, "streamer": streamer_scope_state},
+                            runtime_state=runtime_state,
+                            bot_request_attempted=bool(bot_token),
+                            bot_request_success=False,
+                            bot_http_status=bot_http_status,
+                            streamer_http_status=streamer_http_status,
+                        )
+                else:
+                    final_reason = (
+                        "bot_scope_missing"
+                        if bot_scope_state == "missing"
+                        else ("bot_token_missing" if not bot_token else "bot_path_unavailable")
+                    )
+                    self._increment_raid_observability_counter(
+                        f"followers_recruitment_reason_{final_reason}_total"
+                    )
+                    self._log_analytics_followers_decision(
+                        flow_id=flow_id,
+                        flow="followers_recruitment",
+                        login=login,
+                        target_id=resolved_target_id,
+                        decision="failed",
+                        reason=final_reason,
+                        request_attempted="bot" if bot_token else "none",
+                        request_result="failed" if bot_token else "not_attempted",
+                        http_status=bot_http_status,
+                        scope_state={"bot": bot_scope_state, "streamer": "absent"},
+                        runtime_state=runtime_state,
+                        bot_request_attempted=bool(bot_token),
+                        bot_request_success=False,
+                        bot_http_status=bot_http_status,
+                    )
         except Exception:
             log.debug("Follower-Check fehlgeschlagen fuer %s", login, exc_info=True)
             return None
@@ -3623,14 +3851,62 @@ class RaidBot:
             user_id = str(candidate.get("user_id") or "").strip()
             if not user_id:
                 return
+            login = str(candidate.get("user_login") or user_id).strip().lower()
+            flow_id = self._next_raid_observability_flow_id(prefix="followers-candidate")
+            runtime_state = self._build_analytics_followers_runtime_state()
+            bot_scope_state = (
+                "present"
+                if bot_token and "moderator:read:followers" in bot_scopes
+                else ("unknown" if bot_token and not bot_scopes else ("absent" if not bot_token else "missing"))
+            )
+            bot_http_status: int | None = None
+            streamer_http_status: int | None = None
 
             # Prefer bot token; fall back to broadcaster token for edge cases.
             followers = None
             if bot_can_read_followers and bot_token:
-                try:
-                    followers = await api.get_followers_total(user_id, user_token=bot_token)
-                except Exception:
-                    followers = None
+                self._increment_raid_observability_counter(
+                    "followers_candidate_bot_path_attempt_total"
+                )
+                bot_result = await self._get_followers_total_result_with_legacy_fallback(
+                    api,
+                    user_id,
+                    user_token=bot_token,
+                )
+                bot_http_status = (
+                    int(bot_result.get("http_status"))
+                    if bot_result.get("http_status") is not None
+                    else None
+                )
+                if bot_result.get("ok") and bot_result.get("data") is not None:
+                    followers = bot_result.get("data")
+                    self._clear_user_scope_fallback_warning(
+                        area="raid candidate follower lookup",
+                        subject=str(candidate.get("user_login") or user_id),
+                    )
+                    self._increment_raid_observability_counter(
+                        "followers_candidate_bot_path_success_total"
+                    )
+                    self._log_analytics_followers_decision(
+                        flow_id=flow_id,
+                        flow="followers_candidate",
+                        login=login,
+                        target_id=user_id,
+                        decision="success",
+                        reason="bot_path_success",
+                        request_attempted="bot",
+                        request_result="success",
+                        http_status=bot_http_status or 200,
+                        scope_state={"bot": bot_scope_state, "streamer": "absent"},
+                        runtime_state=runtime_state,
+                        bot_request_attempted=True,
+                        bot_request_success=True,
+                        bot_http_status=bot_http_status,
+                    )
+                else:
+                    self._increment_raid_observability_counter(
+                        "followers_candidate_bot_path_failure_total"
+                    )
 
             if followers is None:
                 try:
@@ -3642,10 +3918,88 @@ class RaidBot:
                         area="raid candidate follower lookup",
                         subject=str(candidate.get("user_login") or user_id),
                     )
-                    try:
-                        followers = await api.get_followers_total(user_id, user_token=token)
-                    except Exception:
-                        followers = None
+                    streamer_result = await self._get_followers_total_result_with_legacy_fallback(
+                        api,
+                        user_id,
+                        user_token=token,
+                    )
+                    streamer_http_status = (
+                        int(streamer_result.get("http_status"))
+                        if streamer_result.get("http_status") is not None
+                        else None
+                    )
+                    if streamer_result.get("ok") and streamer_result.get("data") is not None:
+                        followers = streamer_result.get("data")
+                        self._increment_raid_observability_counter(
+                            "followers_candidate_reason_fallback_to_streamer_token_total"
+                        )
+                        self._log_analytics_followers_decision(
+                            flow_id=flow_id,
+                            flow="followers_candidate",
+                            login=login,
+                            target_id=user_id,
+                            decision="success",
+                            reason="fallback_to_streamer_token",
+                            request_attempted="bot,streamer" if bot_can_read_followers and bot_token else "streamer",
+                            request_result="success",
+                            http_status=streamer_http_status or 200,
+                            scope_state={"bot": bot_scope_state, "streamer": "unknown"},
+                            runtime_state=runtime_state,
+                            bot_request_attempted=bool(bot_can_read_followers and bot_token),
+                            bot_request_success=False,
+                            bot_http_status=bot_http_status,
+                            streamer_http_status=streamer_http_status,
+                        )
+                    else:
+                        final_reason = str(
+                            streamer_result.get("error_code")
+                            or "helix_followers_failed"
+                        )
+                        self._increment_raid_observability_counter(
+                            f"followers_candidate_reason_{final_reason}_total"
+                        )
+                        self._log_analytics_followers_decision(
+                            flow_id=flow_id,
+                            flow="followers_candidate",
+                            login=login,
+                            target_id=user_id,
+                            decision="failed",
+                            reason=final_reason,
+                            request_attempted="bot,streamer" if bot_can_read_followers and bot_token else "streamer",
+                            request_result="failed",
+                            http_status=streamer_http_status,
+                            scope_state={"bot": bot_scope_state, "streamer": "unknown"},
+                            runtime_state=runtime_state,
+                            bot_request_attempted=bool(bot_can_read_followers and bot_token),
+                            bot_request_success=False,
+                            bot_http_status=bot_http_status,
+                            streamer_http_status=streamer_http_status,
+                        )
+                elif followers is None:
+                    final_reason = (
+                        str(bot_result.get("error_code") or "helix_followers_failed")
+                        if bot_can_read_followers and bot_token
+                        else ("bot_scope_missing" if bot_scope_state == "missing" else "bot_token_missing")
+                    )
+                    self._increment_raid_observability_counter(
+                        f"followers_candidate_reason_{final_reason}_total"
+                    )
+                    self._log_analytics_followers_decision(
+                        flow_id=flow_id,
+                        flow="followers_candidate",
+                        login=login,
+                        target_id=user_id,
+                        decision="failed",
+                        reason=final_reason,
+                        request_attempted="bot" if bot_can_read_followers and bot_token else "none",
+                        request_result="failed" if bot_can_read_followers and bot_token else "not_attempted",
+                        http_status=bot_http_status,
+                        scope_state={"bot": bot_scope_state, "streamer": "absent"},
+                        runtime_state=runtime_state,
+                        bot_request_attempted=bool(bot_can_read_followers and bot_token),
+                        bot_request_success=False,
+                        bot_http_status=bot_http_status,
+                    )
 
             if followers is not None:
                 candidate["followers_total"] = int(followers)

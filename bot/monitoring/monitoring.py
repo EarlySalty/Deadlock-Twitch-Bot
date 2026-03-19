@@ -1004,7 +1004,7 @@ class TwitchMonitoringMixin(_EventSubMixin, _ExpSessionsMixin, _SessionsMixin, _
                 rows = c.execute(
                     """
                     SELECT twitch_login, twitch_user_id, require_discord_link,
-                           archived_at, is_partner, discord_user_id,
+                           archived_at::text AS archived_at, is_partner, discord_user_id,
                            live_ping_role_id, COALESCE(live_ping_enabled, 1) AS live_ping_enabled
                       FROM twitch_streamers_partner_state
                     UNION ALL

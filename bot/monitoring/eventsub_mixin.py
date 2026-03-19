@@ -614,7 +614,8 @@ class _EventSubMixin:
                     """
                     UPDATE twitch_live_state
                        SET is_live = 0,
-                           last_seen_at = ?
+                           last_seen_at = ?,
+                           active_session_id = NULL
                      WHERE twitch_user_id = ?
                     """,
                     (

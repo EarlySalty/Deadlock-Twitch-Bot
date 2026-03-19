@@ -45,6 +45,7 @@ class TwitchBotTokenManager:
         self.refresh_token: str | None = None
         self.expires_at: datetime | None = None
         self.bot_id: str | None = None
+        self.bot_login: str | None = None
         self.scopes: set[str] = set()
 
         self._lock = asyncio.Lock()
@@ -153,6 +154,7 @@ class TwitchBotTokenManager:
 
                     data = await resp.json()
                     self.bot_id = data.get("user_id") or self.bot_id
+                    self.bot_login = data.get("login") or self.bot_login
 
                     scopes = data.get("scopes", [])
                     self.scopes = {
@@ -161,8 +163,9 @@ class TwitchBotTokenManager:
                         if str(scope).strip()
                     }
                     log.info(
-                        "Bot auth validated. ID: %s, scope_count=%d",
+                        "Bot auth validated. ID: %s, login=%s, scope_count=%d",
                         self.bot_id,
+                        self.bot_login or "unknown",
                         len(self.scopes),
                     )
 
@@ -190,6 +193,9 @@ class TwitchBotTokenManager:
                             user_data = await user_resp.json()
                             if user_data.get("data"):
                                 self.bot_id = user_data["data"][0].get("id") or self.bot_id
+                                self.bot_login = (
+                                    user_data["data"][0].get("login") or self.bot_login
+                                )
                                 return True
                         else:
                             log.warning(

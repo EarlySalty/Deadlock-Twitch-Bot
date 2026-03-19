@@ -1,8 +1,12 @@
 import unittest
 from types import SimpleNamespace
 
+import psycopg
+
 from bot.storage.pg import (
     _CompatConnection,
+    _execute_with_savepoint,
+    _ensure_observability_writer_started,
     analytics_db_fingerprint,
     analytics_db_fingerprint_details,
     insert_observability_event,
@@ -20,6 +24,58 @@ class _RecordingConnection:
 
     def commit(self) -> None:
         self.commits += 1
+
+
+class _SchemaCursor:
+    def __init__(self, row=None, rows=None) -> None:
+        self._row = row
+        self._rows = rows or []
+        self.rowcount = 0
+
+    def fetchone(self):
+        return self._row
+
+    def fetchall(self):
+        return list(self._rows)
+
+
+class _SavepointAwareSchemaConnection:
+    def __init__(self) -> None:
+        self.executed: list[tuple[str, tuple[object, ...]]] = []
+        self.aborted = False
+        self.observability_flow_index_attempts = 0
+        self.autocommit = False
+
+    def execute(self, sql: str, params=(), *args, **kwargs):
+        sql_text = str(sql).strip()
+        params_tuple = tuple(params or ())
+        self.executed.append((sql_text, params_tuple))
+        upper = sql_text.upper()
+
+        if upper.startswith("SAVEPOINT "):
+            return _SchemaCursor()
+        if upper.startswith("ROLLBACK TO SAVEPOINT "):
+            self.aborted = False
+            return _SchemaCursor()
+        if upper.startswith("RELEASE SAVEPOINT "):
+            return _SchemaCursor()
+        if self.aborted:
+            raise psycopg.errors.InFailedSqlTransaction("current transaction is aborted")
+
+        if "FROM timescaledb_information.hypertables" in sql_text:
+            return _SchemaCursor((True,))
+        if "FROM timescaledb_information.dimensions" in sql_text:
+            return _SchemaCursor(rows=[])
+        if "SELECT COUNT(*) FROM clip_templates_global" in sql_text:
+            return _SchemaCursor((0,))
+        if "CREATE INDEX IF NOT EXISTS idx_twitch_observability_events_flow" in sql_text:
+            self.observability_flow_index_attempts += 1
+            if self.observability_flow_index_attempts == 1:
+                self.aborted = True
+                raise psycopg.errors.FeatureNotSupported("compressed hypertable")
+        if "SELECT" in upper:
+            return _SchemaCursor(None, [])
+        return _SchemaCursor()
 
 
 class CompatConnectionExecuteScriptTests(unittest.TestCase):
@@ -54,14 +110,12 @@ class CompatConnectionExecuteScriptTests(unittest.TestCase):
 
 class ObservabilityEventInsertTests(unittest.TestCase):
     def test_insert_observability_event_persists_json_payload(self) -> None:
-        conn = _RecordingConnection()
-
         from unittest.mock import patch
-        import contextlib
+        queued_records: list[tuple[str, str, str | None, str | None, str, str, str]] = []
 
         with patch(
-            "bot.storage.pg.get_conn",
-            side_effect=lambda: contextlib.nullcontext(conn),
+            "bot.storage.pg._enqueue_observability_event",
+            side_effect=lambda record: queued_records.append(record),
         ):
             insert_observability_event(
                 flow_type="chat_join",
@@ -73,10 +127,8 @@ class ObservabilityEventInsertTests(unittest.TestCase):
                 details={"missing": ["channel:bot"]},
             )
 
-        self.assertEqual(conn.commits, 1)
-        self.assertEqual(len(conn.executed), 1)
-        sql, params = conn.executed[0]
-        self.assertIn("INSERT INTO twitch_observability_events", sql)
+        self.assertEqual(len(queued_records), 1)
+        params = queued_records[0]
         self.assertEqual(params[0], "chat_join")
         self.assertEqual(params[1], "flow-123")
         self.assertEqual(params[2], "partner_one")
@@ -84,6 +136,41 @@ class ObservabilityEventInsertTests(unittest.TestCase):
         self.assertEqual(params[4], "decision")
         self.assertEqual(params[5], "missing_scope")
         self.assertIn('"missing": ["channel:bot"]', params[6])
+
+    def test_observability_writer_thread_is_daemonized(self) -> None:
+        from unittest.mock import patch
+        from bot.storage import pg as storage_pg
+
+        class _FakeThread:
+            def __init__(self, *, target=None, name=None, daemon=None):
+                self.target = target
+                self.name = name
+                self.daemon = daemon
+                self.started = False
+
+            def start(self) -> None:
+                self.started = True
+
+            def is_alive(self) -> bool:
+                return self.started
+
+        fake_threads: list[_FakeThread] = []
+
+        def _thread_factory(*args, **kwargs):
+            thread = _FakeThread(*args, **kwargs)
+            fake_threads.append(thread)
+            return thread
+
+        with patch.object(storage_pg, "_observability_writer_thread", None), patch.object(
+            storage_pg, "_observability_writer_stop", SimpleNamespace(clear=lambda: None)
+        ), patch("bot.storage.pg.threading.Thread", side_effect=_thread_factory), patch(
+            "bot.storage.pg.atexit.unregister"
+        ), patch("bot.storage.pg.atexit.register"):
+            _ensure_observability_writer_started()
+
+        self.assertEqual(len(fake_threads), 1)
+        self.assertTrue(fake_threads[0].started)
+        self.assertTrue(fake_threads[0].daemon)
 
 
 class AnalyticsDbFingerprintTests(unittest.TestCase):
@@ -116,6 +203,34 @@ class AnalyticsDbFingerprintTests(unittest.TestCase):
         self.assertEqual(
             analytics_db_fingerprint_details(dsn_a),
             analytics_db_fingerprint_details(dsn_b),
+        )
+
+
+class ExecuteWithSavepointTests(unittest.TestCase):
+    def test_autocommit_connection_skips_savepoint(self) -> None:
+        conn = _RecordingConnection()
+        conn.autocommit = True
+
+        _execute_with_savepoint(conn, "SELECT 1")
+
+        self.assertEqual(conn.executed, [("SELECT 1", ())])
+
+
+class EnsureSchemaSavepointTests(unittest.TestCase):
+    def test_ensure_schema_recovers_from_best_effort_observability_index_failure(self) -> None:
+        from bot.storage import pg as storage_pg
+
+        conn = _SavepointAwareSchemaConnection()
+
+        storage_pg.ensure_schema(conn)
+
+        statements = [sql for sql, _ in conn.executed]
+        self.assertGreaterEqual(conn.observability_flow_index_attempts, 2)
+        self.assertTrue(any(sql.startswith("ROLLBACK TO SAVEPOINT ddl_guard_") for sql in statements))
+        self.assertIn(
+            "CREATE INDEX IF NOT EXISTS idx_twitch_observability_events_entity "
+            "ON twitch_observability_events(entity_login, created_at DESC)",
+            statements,
         )
 
 

@@ -6,6 +6,7 @@ import asyncio
 import inspect
 import ipaddress
 import json
+import logging
 import os
 import re
 import socket
@@ -30,6 +31,7 @@ from .api.token_manager import TwitchBotTokenManager
 from .api.twitch_api import TwitchAPI
 from .chat.bot import TWITCHIO_AVAILABLE, create_twitch_chat_bot, load_bot_tokens
 from .chat.constants import CHAT_JOIN_OFFLINE
+from .chat.irc_lurker_tracker import IRCLurkerTracker
 from .core.constants import (
     POLL_INTERVAL_SECONDS,
     TWITCH_ALERT_CHANNEL_ID,
@@ -74,6 +76,20 @@ def _parse_env_int(name: str, default: int) -> int:
         return int(raw)
     except ValueError:
         return default
+
+
+def _parse_env_csv(name: str, default: tuple[str, ...] = ()) -> tuple[str, ...]:
+    raw = str(os.getenv(name) or "").strip()
+    source = raw.split(",") if raw else list(default)
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for item in source:
+        value = str(item or "").strip().lower().lstrip("#")
+        if not value or value in seen:
+            continue
+        seen.add(value)
+        normalized.append(value)
+    return tuple(normalized)
 
 
 def _observability_flow_id(prefix: str) -> str:
@@ -221,6 +237,17 @@ class TwitchBaseCog(commands.Cog):
         self._legacy_stats_url = (os.getenv("TWITCH_LEGACY_STATS_URL") or "").strip() or None
         self._required_marker_default = TWITCH_REQUIRED_DISCORD_MARKER or None
         self._internal_api_runner: InternalApiRunner | None = None
+        self._experimental_irc_lurker_channels = set(
+            _parse_env_csv(
+                "TWITCH_EXPERIMENTAL_IRC_LURKER_CHANNELS",
+                default=("earlysalty",),
+            )
+        )
+        self._experimental_irc_lurker_enabled = _parse_env_bool(
+            "TWITCH_EXPERIMENTAL_IRC_LURKER_TRACKER",
+            bool(self._experimental_irc_lurker_channels),
+        )
+        self._irc_lurker_tracker: IRCLurkerTracker | None = None
 
         # Internal API for split dashboard deployments
         self._internal_api_token = (
@@ -280,6 +307,7 @@ class TwitchBaseCog(commands.Cog):
                 "_internal_observability_snapshot",
                 None,
             ),
+            chatters_debug_cb=getattr(self, "_internal_chatters_debug", None),
         )
 
         # EventSub Webhook Handler – früh initialisieren damit er sowohl im Dashboard
@@ -341,6 +369,7 @@ class TwitchBaseCog(commands.Cog):
         # Raid-Bot initialisieren
         self._raid_bot: RaidBot | None = None
         self._twitch_chat_bot = None
+        self._periodic_channel_join_task: asyncio.Task | None = None
         bot_token, bot_refresh_token, _ = load_bot_tokens(log_missing=False)
         self._twitch_bot_token: str | None = bot_token
         self._twitch_bot_refresh_token: str | None = bot_refresh_token
@@ -514,9 +543,37 @@ class TwitchBaseCog(commands.Cog):
                 break
         return sampled
 
+    def _log_chat_bot_lifecycle_event(
+        self,
+        *,
+        flow_id: str,
+        event: str,
+        level: int = logging.INFO,
+        **fields: object,
+    ) -> None:
+        payload = {
+            "flow_id": str(flow_id or "").strip() or None,
+            "event": str(event or "").strip() or "unknown",
+            "chat_bot_available": bool(getattr(self, "_twitch_chat_bot", None)),
+            "bot_token_manager_available": bool(getattr(self, "_bot_token_manager", None)),
+            **fields,
+        }
+        log.log(level, "%s %s", str(payload["event"]), _observability_fields(**payload))
+        storage.insert_observability_event(
+            flow_type="chat_runtime",
+            flow_id=str(payload.get("flow_id") or ""),
+            step=str(payload.get("event") or "unknown"),
+            decision=str(payload.get("event") or "unknown"),
+            entity_login=None,
+            entity_id=None,
+            details=payload,
+        )
+
     async def _internal_observability_snapshot(self) -> dict[str, Any]:
         chat_bot = getattr(self, "_twitch_chat_bot", None)
         raid_bot = getattr(self, "_raid_bot", None)
+        analytics_snapshot = None
+        irc_lurker_snapshot = None
 
         chat_snapshot = None
         if chat_bot and hasattr(chat_bot, "get_observability_snapshot"):
@@ -540,6 +597,34 @@ class TwitchBaseCog(commands.Cog):
             except Exception:
                 log.debug("Observability snapshot: raid bot snapshot failed", exc_info=True)
 
+        analytics_getter = getattr(self, "get_analytics_observability_snapshot", None)
+        if callable(analytics_getter):
+            try:
+                maybe_analytics_snapshot = analytics_getter()
+                if inspect.isawaitable(maybe_analytics_snapshot):
+                    maybe_analytics_snapshot = await maybe_analytics_snapshot
+                if isinstance(maybe_analytics_snapshot, dict):
+                    analytics_snapshot = maybe_analytics_snapshot
+            except Exception:
+                log.debug("Observability snapshot: analytics snapshot failed", exc_info=True)
+
+        irc_lurker_tracker = getattr(self, "_irc_lurker_tracker", None)
+        if irc_lurker_tracker and hasattr(irc_lurker_tracker, "get_observability_snapshot"):
+            try:
+                maybe_irc_snapshot = irc_lurker_tracker.get_observability_snapshot()
+                if inspect.isawaitable(maybe_irc_snapshot):
+                    maybe_irc_snapshot = await maybe_irc_snapshot
+                if isinstance(maybe_irc_snapshot, dict):
+                    irc_lurker_snapshot = maybe_irc_snapshot
+            except Exception:
+                log.debug("Observability snapshot: IRC lurker snapshot failed", exc_info=True)
+
+        last_followers_diagnostic = None
+        if isinstance(analytics_snapshot, dict):
+            last_followers_diagnostic = analytics_snapshot.get("lastFollowersDiagnostic")
+        if last_followers_diagnostic is None and isinstance(raid_snapshot, dict):
+            last_followers_diagnostic = raid_snapshot.get("lastAnalyticsFollowersDiagnostic")
+
         return {
             "generatedAt": datetime.now(UTC).isoformat(timespec="seconds"),
             "pollIntervalSeconds": self._poll_interval_seconds,
@@ -549,8 +634,162 @@ class TwitchBaseCog(commands.Cog):
             ),
             "chatRuntimeAvailable": bool(chat_bot),
             "raidRuntimeAvailable": bool(raid_bot),
+            "analyticsRuntimeAvailable": bool(
+                isinstance(analytics_snapshot, dict)
+                and analytics_snapshot.get("runtimeAvailable")
+            ),
+            "botTokenManagerAvailable": bool(getattr(self, "_bot_token_manager", None)),
+            "chatBotAvailable": bool(chat_bot),
+            "ircLurkerExperimentEnabled": bool(self._experimental_irc_lurker_enabled),
+            "ircLurkerRuntimeAvailable": bool(irc_lurker_tracker),
+            "ircLurkerExperimentChannels": sorted(
+                str(channel or "").strip().lower().lstrip("#")
+                for channel in (getattr(self, "_experimental_irc_lurker_channels", set()) or set())
+                if str(channel or "").strip()
+            ),
+            "lastChattersDiagnostic": (
+                analytics_snapshot.get("lastChattersDiagnostic")
+                if isinstance(analytics_snapshot, dict)
+                else None
+            ),
+            "lastFollowersDiagnostic": last_followers_diagnostic,
+            "lastAnalyticsDecisionSample": (
+                analytics_snapshot.get("lastDecisionSample")
+                if isinstance(analytics_snapshot, dict)
+                else None
+            ),
             "chat": chat_snapshot,
             "raid": raid_snapshot,
+            "analytics": analytics_snapshot,
+            "ircLurker": irc_lurker_snapshot,
+        }
+
+    async def _internal_chatters_debug(self, login: str) -> dict[str, Any]:
+        normalized_login = str(login or "").strip().lower().lstrip("#")
+        if not normalized_login:
+            raise ValueError("login is required")
+
+        current_session_id: int | None = None
+        current_user_id: str | None = None
+        is_live = False
+        try:
+            with storage.get_conn() as conn:
+                row = conn.execute(
+                    """
+                    SELECT twitch_user_id, active_session_id, is_live
+                    FROM twitch_live_state
+                    WHERE LOWER(streamer_login) = ?
+                    LIMIT 1
+                    """,
+                    (normalized_login,),
+                ).fetchone()
+            if row is not None:
+                current_user_id = str(
+                    row["twitch_user_id"] if hasattr(row, "keys") else row[0] or ""
+                ).strip() or None
+                current_session_id = int(
+                    row["active_session_id"] if hasattr(row, "keys") else row[1]
+                ) if (row["active_session_id"] if hasattr(row, "keys") else row[1]) is not None else None
+                is_live = bool(row["is_live"] if hasattr(row, "keys") else row[2])
+        except Exception:
+            log.debug("Chatters debug: live state lookup failed for %s", normalized_login, exc_info=True)
+
+        runtime_state: dict[str, Any] = {}
+        runtime_builder = getattr(self, "_build_analytics_runtime_state", None)
+        if callable(runtime_builder):
+            try:
+                runtime_state = dict(runtime_builder(normalized_login))
+            except Exception:
+                log.debug("Chatters debug: runtime builder failed for %s", normalized_login, exc_info=True)
+
+        bot_token, bot_id, bot_scopes, bot_diagnostics = (None, None, set(), {})
+        resolver = getattr(self, "_resolve_bot_chatters_fallback", None)
+        if callable(resolver):
+            try:
+                bot_token, bot_id, bot_scopes, bot_diagnostics = await resolver(
+                    normalized_login,
+                    allow_untracked=True,
+                )
+            except Exception:
+                log.debug("Chatters debug: bot fallback resolution failed for %s", normalized_login, exc_info=True)
+
+        streamer_token_present = False
+        streamer_scope_state = "absent"
+        if getattr(self, "_raid_bot", None) and self.api is not None:
+            try:
+                session = self.api.get_http_session()
+                token_result = await self._raid_bot.auth_manager.get_valid_token_for_login(
+                    normalized_login,
+                    session,
+                )
+                if token_result:
+                    auth_user_id, auth_token = token_result
+                    current_user_id = current_user_id or str(auth_user_id or "").strip() or None
+                    streamer_token_present = bool(str(auth_token or "").strip())
+                    streamer_scopes = {
+                        str(scope).strip().lower()
+                        for scope in self._raid_bot.auth_manager.get_scopes(auth_user_id)
+                        if str(scope).strip()
+                    }
+                    scope_helper = getattr(self, "_scope_presence_state", None)
+                    if callable(scope_helper):
+                        streamer_scope_state = scope_helper(
+                            scopes=streamer_scopes,
+                            required_scope="moderator:read:chatters",
+                            token_available=streamer_token_present,
+                        )
+            except Exception:
+                log.debug("Chatters debug: streamer token lookup failed for %s", normalized_login, exc_info=True)
+
+        snapshot = await self._internal_observability_snapshot()
+        last_chatters_diagnostic = (
+            snapshot.get("lastChattersDiagnostic")
+            if isinstance(snapshot, dict)
+            else None
+        )
+        last_decision_matches_login = (
+            isinstance(last_chatters_diagnostic, dict)
+            and str(last_chatters_diagnostic.get("login") or "").strip().lower() == normalized_login
+        )
+        return {
+            "login": normalized_login,
+            "currentUserId": current_user_id,
+            "currentSessionId": current_session_id,
+            "isLive": is_live,
+            "runtimeState": runtime_state,
+            "botTokenPresent": bool(bot_token),
+            "botId": str(bot_id or "").strip() or None,
+            "botScopeState": (
+                str(bot_diagnostics.get("bot_scope_present") or "unknown")
+                if isinstance(bot_diagnostics, dict)
+                else "unknown"
+            ),
+            "botDiagnostics": bot_diagnostics if isinstance(bot_diagnostics, dict) else {},
+            "streamerTokenPresent": streamer_token_present,
+            "streamerScopeState": streamer_scope_state,
+            "lastDecisionRecord": last_chatters_diagnostic if last_decision_matches_login else None,
+            "lastApiStatus": (
+                last_chatters_diagnostic.get("http_status")
+                if last_decision_matches_login and isinstance(last_chatters_diagnostic, dict)
+                else None
+            ),
+            "observabilitySnapshotSample": {
+                "lastAnalyticsDecisionSample": (
+                    snapshot.get("lastAnalyticsDecisionSample")
+                    if isinstance(snapshot, dict)
+                    else None
+                ),
+                "chatBotAvailable": (
+                    snapshot.get("chatBotAvailable")
+                    if isinstance(snapshot, dict)
+                    else None
+                ),
+                "botTokenManagerAvailable": (
+                    snapshot.get("botTokenManagerAvailable")
+                    if isinstance(snapshot, dict)
+                    else None
+                ),
+            },
         }
 
     async def _reload_social_teardown(self) -> None:
@@ -1033,6 +1272,20 @@ class TwitchBaseCog(commands.Cog):
             except Exception:
                 log.exception("Konnte UploadWorker nicht canceln")
 
+        try:
+            await self._cancel_periodic_channel_join_task()
+        except Exception:
+            log.exception("Konnte periodic channel maintenance task nicht stoppen")
+
+        if self._irc_lurker_tracker:
+            try:
+                await self._irc_lurker_tracker.stop()
+                log.debug("Experimental IRC Lurker Tracker gestoppt")
+            except Exception:
+                log.exception("Konnte Experimental IRC Lurker Tracker nicht stoppen")
+            finally:
+                self._irc_lurker_tracker = None
+
         # 2. EventSub: Webhook Handler hat keinen persistenten Zustand der explizit
         #    gestoppt werden muss. Etwaige Background-Tasks (dispatch) werden beim
         #    asyncio-Shutdown automatisch gecancelt.
@@ -1209,6 +1462,208 @@ class TwitchBaseCog(commands.Cog):
             log.error("Cannot start background task %s (no running loop yet): %s", name, exc)
         except Exception:
             log.exception("Failed to start background task %s", name)
+
+    def _ensure_periodic_channel_join_task(self) -> asyncio.Task | None:
+        """Start the periodic chat channel maintenance loop at most once."""
+        existing = getattr(self, "_periodic_channel_join_task", None)
+        if existing is not None and not existing.done():
+            return existing
+        try:
+            task = asyncio.create_task(
+                self._periodic_channel_join(), name="twitch.chat_bot.join_channels"
+            )
+        except RuntimeError as exc:
+            log.error(
+                "Cannot start background task %s (no running loop yet): %s",
+                "twitch.chat_bot.join_channels",
+                exc,
+            )
+            return None
+        except Exception:
+            log.exception("Failed to start background task %s", "twitch.chat_bot.join_channels")
+            return None
+        self._periodic_channel_join_task = task
+        return task
+
+    async def _cancel_periodic_channel_join_task(self) -> None:
+        """Cancel the periodic chat channel maintenance loop if it is running."""
+        task = getattr(self, "_periodic_channel_join_task", None)
+        self._periodic_channel_join_task = None
+        if task is None or task.done():
+            return
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            log.debug("Periodic channel maintenance task cancelled")
+        except Exception:
+            log.debug("Periodic channel maintenance task failed during shutdown", exc_info=True)
+
+    async def _ensure_experimental_irc_lurker_tracker_started(self) -> bool:
+        """
+        Start the experimental IRC lurker tracker as a secondary presence source.
+
+        This is intentionally optional and does not replace Helix `Get Chatters`.
+        """
+        if not bool(getattr(self, "_experimental_irc_lurker_enabled", False)):
+            return False
+
+        existing = getattr(self, "_irc_lurker_tracker", None)
+        if existing is not None and getattr(existing, "running", False):
+            return True
+
+        allowlist = sorted(
+            str(channel or "").strip().lower().lstrip("#")
+            for channel in (getattr(self, "_experimental_irc_lurker_channels", set()) or set())
+            if str(channel or "").strip()
+        )
+        if not allowlist:
+            return False
+
+        token_manager = getattr(self, "_bot_token_manager", None)
+        token = str(getattr(token_manager, "access_token", "") or "").strip()
+        bot_login = str(getattr(token_manager, "bot_login", "") or "").strip().lower()
+        bot_scopes = {
+            str(scope).strip().lower()
+            for scope in (getattr(token_manager, "scopes", set()) or set())
+            if str(scope).strip()
+        }
+        if not token or not bot_login:
+            self._log_chat_bot_lifecycle_event(
+                flow_id=_observability_flow_id("irc-lurker"),
+                event="irc_lurker_experiment_skipped",
+                level=logging.WARNING,
+                experimental=True,
+                reason="missing_bot_token_or_login",
+                token_present=bool(token),
+                bot_login_present=bool(bot_login),
+            )
+            return False
+        if bot_scopes and "user:read:chat" not in bot_scopes:
+            self._log_chat_bot_lifecycle_event(
+                flow_id=_observability_flow_id("irc-lurker"),
+                event="irc_lurker_experiment_skipped",
+                level=logging.WARNING,
+                experimental=True,
+                reason="missing_user_read_chat_scope",
+                bot_scopes=sorted(bot_scopes),
+            )
+            return False
+
+        tracker = IRCLurkerTracker(
+            self._twitch_bot_client_id,
+            token,
+            nick=bot_login,
+        )
+        await tracker.start()
+        self._irc_lurker_tracker = tracker
+        self._log_chat_bot_lifecycle_event(
+            flow_id=_observability_flow_id("irc-lurker"),
+            event="irc_lurker_experiment_started",
+            experimental=True,
+            source_role="secondary_presence_source",
+            allowlist=allowlist,
+            bot_login=bot_login,
+            bot_scopes=sorted(bot_scopes),
+        )
+        log.info(
+            "Experimental IRC Lurker Tracker gestartet: zweite Presence-Quelle neben Helix Chatters "
+            "(bot_login=%s, channels=%s)",
+            bot_login,
+            ",".join(allowlist),
+        )
+        return True
+
+    async def _sync_experimental_irc_lurker_tracker_channels(self) -> dict[str, object]:
+        """Mirror current chat-bot runtime channels into the experimental IRC tracker."""
+        tracker = getattr(self, "_irc_lurker_tracker", None)
+        chat_bot = getattr(self, "_twitch_chat_bot", None)
+        if tracker is None or chat_bot is None:
+            return {"tracked": 0, "untracked": 0, "runtime_sources": []}
+
+        runtime_sources: list[str] = []
+        target_channels: set[str] = set()
+        allowlist = {
+            str(channel or "").strip().lower().lstrip("#")
+            for channel in (getattr(self, "_experimental_irc_lurker_channels", set()) or set())
+            if str(channel or "").strip()
+        }
+
+        monitored = getattr(chat_bot, "_monitored_streamers", None)
+        if isinstance(monitored, set) and monitored:
+            runtime_sources.append("monitored_streamers")
+            target_channels.update(
+                str(channel or "").strip().lower().lstrip("#")
+                for channel in monitored
+                if str(channel or "").strip()
+            )
+
+        subscription_types = getattr(chat_bot, "_channel_subscription_types", None)
+        if isinstance(subscription_types, dict) and subscription_types:
+            runtime_sources.append("channel_subscription_types")
+            target_channels.update(
+                str(channel or "").strip().lower().lstrip("#")
+                for channel in subscription_types.keys()
+                if str(channel or "").strip()
+            )
+
+        channel_ids = getattr(chat_bot, "_channel_ids", None)
+        if isinstance(channel_ids, dict) and channel_ids:
+            runtime_sources.append("channel_ids")
+            target_channels.update(
+                str(channel or "").strip().lower().lstrip("#")
+                for channel in channel_ids.keys()
+                if str(channel or "").strip()
+            )
+
+        initial_channels = getattr(chat_bot, "_initial_channels", None)
+        if not target_channels and isinstance(initial_channels, list) and initial_channels:
+            runtime_sources.append("initial_channels_bootstrap")
+            target_channels.update(
+                str(channel or "").strip().lower().lstrip("#")
+                for channel in initial_channels
+                if str(channel or "").strip()
+            )
+
+        if allowlist:
+            runtime_sources.append("forced_allowlist")
+            target_channels.update(allowlist)
+
+        if allowlist:
+            target_channels = {channel for channel in target_channels if channel in allowlist}
+
+        current_channels = set(getattr(tracker, "channels", set()) or set())
+        to_track = sorted(channel for channel in target_channels if channel not in current_channels)
+        to_untrack = sorted(channel for channel in current_channels if channel not in target_channels)
+
+        classifier = getattr(chat_bot, "_is_partner_channel_for_chat_tracking", None)
+        for channel in to_track:
+            mode = "partner"
+            if callable(classifier):
+                try:
+                    if not bool(classifier(channel)):
+                        mode = "category"
+                except Exception:
+                    log.debug("IRC experiment: channel classification failed for %s", channel, exc_info=True)
+            await tracker.track_channel(channel, mode=mode)
+
+        for channel in to_untrack:
+            await tracker.untrack_channel(channel)
+
+        if to_track or to_untrack:
+            log.info(
+                "Experimental IRC Lurker Tracker synchronisiert "
+                "(tracked=%d, untracked=%d, runtime_sources=%s)",
+                len(to_track),
+                len(to_untrack),
+                ",".join(runtime_sources) or "-",
+            )
+
+        return {
+            "tracked": len(to_track),
+            "untracked": len(to_untrack),
+            "runtime_sources": runtime_sources,
+        }
 
     # -------------------------------------------------------
     # DB-Helpers / Guild-Setup / Invites
@@ -1482,7 +1937,13 @@ class TwitchBaseCog(commands.Cog):
 
     async def _init_twitch_chat_bot(self):
         """Initialisiert den Twitch Chat Bot für Raid-Commands."""
+        flow_id = _observability_flow_id("chat-bot-init")
         try:
+            self._log_chat_bot_lifecycle_event(
+                flow_id=flow_id,
+                event="chat_bot_init_started",
+                token_manager_ready_before_chat_bot=bool(self._bot_token_manager),
+            )
             await self.bot.wait_until_ready()
             if not self._raid_bot:
                 log.info("Raid-Bot nicht verfügbar, überspringe Twitch Chat Bot")
@@ -1515,6 +1976,12 @@ class TwitchBaseCog(commands.Cog):
                     self._twitch_bot_client_id,
                     (self._twitch_bot_secret or self.client_secret or ""),
                 )
+            if self._bot_token_manager is not None:
+                self._log_chat_bot_lifecycle_event(
+                    flow_id=flow_id,
+                    event="token_manager_ready_before_chat_bot",
+                    token_manager_ready_before_chat_bot=True,
+                )
 
             self._twitch_chat_bot = await create_twitch_chat_bot(
                 client_id=self._twitch_bot_client_id,
@@ -1529,6 +1996,12 @@ class TwitchBaseCog(commands.Cog):
             )
 
             if self._twitch_chat_bot:
+                self._log_chat_bot_lifecycle_event(
+                    flow_id=flow_id,
+                    event="chat_bot_init_ready",
+                    token_manager_ready_before_chat_bot=bool(self._bot_token_manager),
+                    start_with_adapter_pending=True,
+                )
                 if self._bot_token_manager:
                     self._twitch_bot_token = (
                         self._bot_token_manager.access_token or self._twitch_bot_token
@@ -1553,13 +2026,16 @@ class TwitchBaseCog(commands.Cog):
                         load_tokens=False,
                         save_tokens=False,
                     )
-                asyncio.create_task(
-                    self._twitch_chat_bot.start(
-                        with_adapter=start_with_adapter,
-                        load_tokens=False,  # vermeidet kaputte .tio.tokens.json ohne scope
-                        save_tokens=False,
-                    ),
-                    name="twitch.chat_bot.start",
+                start_coro = self._twitch_chat_bot.start(
+                    with_adapter=start_with_adapter,
+                    load_tokens=False,  # vermeidet kaputte .tio.tokens.json ohne scope
+                    save_tokens=False,
+                )
+                asyncio.create_task(start_coro, name="twitch.chat_bot.start")
+                self._log_chat_bot_lifecycle_event(
+                    flow_id=flow_id,
+                    event="chat_bot_start_scheduled",
+                    start_with_adapter=start_with_adapter,
                 )
                 log.info(
                     "Twitch Chat Bot gestartet (Web Adapter: %s)",
@@ -1572,11 +2048,21 @@ class TwitchBaseCog(commands.Cog):
                     log.debug("Chat-Bot mit Raid-Bot verknüpft für Recruitment-Messages")
 
                 # Periodisch neue Partner-Channels joinen
-                asyncio.create_task(
-                    self._periodic_channel_join(), name="twitch.chat_bot.join_channels"
-                )
+                self._ensure_periodic_channel_join_task()
+                if await self._ensure_experimental_irc_lurker_tracker_started():
+                    try:
+                        await self._sync_experimental_irc_lurker_tracker_channels()
+                    except Exception:
+                        log.exception(
+                            "Experimental IRC Lurker Tracker initial sync failed"
+                        )
 
         except Exception:
+            self._log_chat_bot_lifecycle_event(
+                flow_id=flow_id,
+                event="chat_bot_start_failed",
+                level=logging.ERROR,
+            )
             log.exception("Fehler beim Initialisieren des Twitch Chat Bots")
 
     async def _periodic_channel_join(self):
@@ -1592,6 +2078,8 @@ class TwitchBaseCog(commands.Cog):
                 if hasattr(self._twitch_chat_bot, "join_partner_channels"):
                     await self._twitch_chat_bot.join_partner_channels()
                 await self._cleanup_offline_channels()
+                if getattr(self, "_irc_lurker_tracker", None) is not None:
+                    await self._sync_experimental_irc_lurker_tracker_channels()
             except Exception:
                 log.exception("Fehler in periodic channel maintenance")
 

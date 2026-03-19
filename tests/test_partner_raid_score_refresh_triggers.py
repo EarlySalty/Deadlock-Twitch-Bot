@@ -356,7 +356,9 @@ class PartnerRaidScoreRefreshTriggerTests(unittest.IsolatedAsyncioTestCase):
                 }
             ],
         )
-        self.assertTrue(any("UPDATE twitch_live_state" in sql for sql, _ in conn.executed))
+        live_state_updates = [sql for sql, _ in conn.executed if "UPDATE twitch_live_state" in sql]
+        self.assertTrue(live_state_updates)
+        self.assertIn("active_session_id = NULL", live_state_updates[0])
 
 
 if __name__ == "__main__":

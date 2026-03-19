@@ -3,12 +3,18 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
+import logging.handlers
+import time
 from datetime import UTC, datetime
+from pathlib import Path
+from typing import Any
 
 from discord.ext import tasks
 
 from ..core.chat_bots import build_known_chat_bot_not_in_clause, is_known_chat_bot
+from ..logging_setup import log_path
 from .. import storage as storage_oauth  # SQLite — OAuth tokens & raid auth state
 from ..storage import pg as storage  # PostgreSQL — analytics data
 
@@ -17,6 +23,36 @@ from ..storage import pg as storage  # PostgreSQL — analytics data
 # streamer channels, so we do not request or query it in this product.
 
 log = logging.getLogger("TwitchStreams.Analytics")
+_IRC_EXPERIMENT_LOG = logging.getLogger("TwitchStreams.Analytics.IRCLurkerExperiment")
+_IRC_EXPERIMENT_LOG_FILE = log_path("twitch_irc_lurker_experiment.log")
+
+
+def _ensure_irc_experiment_logger() -> logging.Logger:
+    formatter = logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
+    target = Path(_IRC_EXPERIMENT_LOG_FILE)
+    for handler in _IRC_EXPERIMENT_LOG.handlers:
+        if isinstance(handler, logging.handlers.RotatingFileHandler):
+            try:
+                if Path(str(getattr(handler, "baseFilename", ""))).resolve() == target.resolve():
+                    handler.setFormatter(formatter)
+                    if handler.level > logging.INFO:
+                        handler.setLevel(logging.INFO)
+                    return _IRC_EXPERIMENT_LOG
+            except Exception:
+                continue
+    handler = logging.handlers.RotatingFileHandler(
+        target,
+        maxBytes=5 * 1024 * 1024,
+        backupCount=5,
+        encoding="utf-8",
+    )
+    handler.setFormatter(formatter)
+    handler.setLevel(logging.INFO)
+    _IRC_EXPERIMENT_LOG.addHandler(handler)
+    if _IRC_EXPERIMENT_LOG.level == logging.NOTSET or _IRC_EXPERIMENT_LOG.level > logging.INFO:
+        _IRC_EXPERIMENT_LOG.setLevel(logging.INFO)
+    _IRC_EXPERIMENT_LOG.propagate = True
+    return _IRC_EXPERIMENT_LOG
 
 
 class TwitchAnalyticsMixin:
@@ -30,6 +66,12 @@ class TwitchAnalyticsMixin:
         # Warn about missing chatters scope only once per live session to avoid log spam
         self._chatters_scope_warned: set[tuple[str, int]] = set()
         self._chatters_user_fallback_warned: set[tuple[str, int]] = set()
+        self._analytics_observability_counter_store: dict[str, int] = {}
+        self._last_chatters_diagnostic: dict[str, object] | None = None
+        self._last_followers_diagnostic: dict[str, object] | None = None
+        self._last_analytics_decision_sample: dict[str, object] | None = None
+        self._irc_lurker_experiment_session_stats: dict[int, dict[str, object]] = {}
+        _ensure_irc_experiment_logger()
         self._analytics_task = self.collect_analytics_data.start()
         self._chatters_task = self.collect_chatters_data.start()
         self._retention_task = self.compute_raid_retention.start()
@@ -39,6 +81,442 @@ class TwitchAnalyticsMixin:
         self.collect_analytics_data.cancel()
         self.collect_chatters_data.cancel()
         self.compute_raid_retention.cancel()
+
+    def _analytics_observability_counters(self) -> dict[str, int]:
+        counters = getattr(self, "_analytics_observability_counter_store", None)
+        if not isinstance(counters, dict):
+            counters = {}
+            self._analytics_observability_counter_store = counters
+        return counters
+
+    @staticmethod
+    def _analytics_login_sample(values: set[str], *, limit: int = 12) -> list[str]:
+        return sorted(str(value or "").strip().lower() for value in values if str(value or "").strip())[
+            :limit
+        ]
+
+    def _record_irc_lurker_experiment_sample(
+        self,
+        *,
+        login: str,
+        session_id: int,
+        now_iso: str,
+        helix_chatters: list[dict[str, object]],
+    ) -> None:
+        tracker = getattr(self, "_irc_lurker_tracker", None)
+        if tracker is None or not hasattr(tracker, "get_chatters"):
+            return
+        allowlist = {
+            str(channel or "").strip().lower().lstrip("#")
+            for channel in (getattr(self, "_experimental_irc_lurker_channels", set()) or set())
+            if str(channel or "").strip()
+        }
+        login_lower = str(login or "").strip().lower().lstrip("#")
+        if allowlist and login_lower not in allowlist:
+            return
+
+        helix_set = {
+            str(
+                entry.get("user_login")
+                or entry.get("chatter_login")
+                or entry.get("login")
+                or ""
+            )
+            .strip()
+            .lower()
+            for entry in (helix_chatters or [])
+            if isinstance(entry, dict)
+        }
+        helix_set.discard("")
+        try:
+            irc_set = {
+                str(value or "").strip().lower()
+                for value in (tracker.get_chatters(login_lower) or set())
+                if str(value or "").strip()
+            }
+        except Exception:
+            log.debug("IRC experiment: get_chatters failed for %s", login_lower, exc_info=True)
+            return
+
+        overlap = helix_set & irc_set
+        helix_only = helix_set - irc_set
+        irc_only = irc_set - helix_set
+        comparison_store = getattr(self, "_irc_lurker_experiment_session_stats", None)
+        if not isinstance(comparison_store, dict):
+            comparison_store = {}
+            self._irc_lurker_experiment_session_stats = comparison_store
+        stats = comparison_store.get(session_id)
+        if not isinstance(stats, dict):
+            stats = {
+                "login": login_lower,
+                "first_sample_at": now_iso,
+                "last_sample_at": now_iso,
+                "sample_count": 0,
+                "equal_sample_count": 0,
+                "helix_led_sample_count": 0,
+                "irc_led_sample_count": 0,
+                "helix_total_sum": 0,
+                "irc_total_sum": 0,
+                "overlap_total_sum": 0,
+                "helix_only_total_sum": 0,
+                "irc_only_total_sum": 0,
+                "max_helix_count": 0,
+                "max_irc_count": 0,
+                "max_overlap_count": 0,
+                "max_helix_only_count": 0,
+                "max_irc_only_count": 0,
+                "distinct_helix": set(),
+                "distinct_irc": set(),
+                "distinct_overlap": set(),
+                "distinct_helix_only": set(),
+                "distinct_irc_only": set(),
+            }
+            comparison_store[session_id] = stats
+
+        helix_count = len(helix_set)
+        irc_count = len(irc_set)
+        overlap_count = len(overlap)
+        helix_only_count = len(helix_only)
+        irc_only_count = len(irc_only)
+
+        stats["last_sample_at"] = now_iso
+        stats["sample_count"] = int(stats.get("sample_count", 0) or 0) + 1
+        if helix_count == irc_count:
+            stats["equal_sample_count"] = int(stats.get("equal_sample_count", 0) or 0) + 1
+        elif helix_count > irc_count:
+            stats["helix_led_sample_count"] = int(stats.get("helix_led_sample_count", 0) or 0) + 1
+        else:
+            stats["irc_led_sample_count"] = int(stats.get("irc_led_sample_count", 0) or 0) + 1
+        stats["helix_total_sum"] = int(stats.get("helix_total_sum", 0) or 0) + helix_count
+        stats["irc_total_sum"] = int(stats.get("irc_total_sum", 0) or 0) + irc_count
+        stats["overlap_total_sum"] = int(stats.get("overlap_total_sum", 0) or 0) + overlap_count
+        stats["helix_only_total_sum"] = int(stats.get("helix_only_total_sum", 0) or 0) + helix_only_count
+        stats["irc_only_total_sum"] = int(stats.get("irc_only_total_sum", 0) or 0) + irc_only_count
+        stats["max_helix_count"] = max(int(stats.get("max_helix_count", 0) or 0), helix_count)
+        stats["max_irc_count"] = max(int(stats.get("max_irc_count", 0) or 0), irc_count)
+        stats["max_overlap_count"] = max(int(stats.get("max_overlap_count", 0) or 0), overlap_count)
+        stats["max_helix_only_count"] = max(
+            int(stats.get("max_helix_only_count", 0) or 0),
+            helix_only_count,
+        )
+        stats["max_irc_only_count"] = max(
+            int(stats.get("max_irc_only_count", 0) or 0),
+            irc_only_count,
+        )
+        stats["distinct_helix"].update(helix_set)
+        stats["distinct_irc"].update(irc_set)
+        stats["distinct_overlap"].update(overlap)
+        stats["distinct_helix_only"].update(helix_only)
+        stats["distinct_irc_only"].update(irc_only)
+
+        _IRC_EXPERIMENT_LOG.info(
+            "irc_vs_helix_sample %s",
+            self._format_analytics_observability_fields(
+                login=login_lower,
+                session_id=session_id,
+                sample_at=now_iso,
+                helix_count=helix_count,
+                irc_count=irc_count,
+                overlap_count=overlap_count,
+                helix_only_count=helix_only_count,
+                irc_only_count=irc_only_count,
+                helix_only_sample=self._analytics_login_sample(helix_only),
+                irc_only_sample=self._analytics_login_sample(irc_only),
+            ),
+        )
+
+    def _finalize_irc_lurker_experiment_session(
+        self,
+        *,
+        login: str,
+        session_id: int,
+        reason: str,
+        ended_at: datetime,
+    ) -> None:
+        comparison_store = getattr(self, "_irc_lurker_experiment_session_stats", None)
+        if not isinstance(comparison_store, dict):
+            return
+        stats = comparison_store.pop(int(session_id), None)
+        if not isinstance(stats, dict):
+            return
+
+        def _safe_avg(total_key: str, count_key: str = "sample_count") -> float:
+            divisor = int(stats.get(count_key, 0) or 0)
+            if divisor <= 0:
+                return 0.0
+            return round(float(stats.get(total_key, 0) or 0) / divisor, 2)
+
+        distinct_helix = set(stats.get("distinct_helix", set()) or set())
+        distinct_irc = set(stats.get("distinct_irc", set()) or set())
+        distinct_overlap = set(stats.get("distinct_overlap", set()) or set())
+        distinct_helix_only = set(stats.get("distinct_helix_only", set()) or set())
+        distinct_irc_only = set(stats.get("distinct_irc_only", set()) or set())
+        distinct_union_count = len(distinct_helix | distinct_irc)
+        distinct_overlap_count = len(distinct_overlap)
+        distinct_jaccard = (
+            round(distinct_overlap_count / distinct_union_count, 3)
+            if distinct_union_count > 0
+            else 0.0
+        )
+        _IRC_EXPERIMENT_LOG.info(
+            "irc_vs_helix_summary %s",
+            self._format_analytics_observability_fields(
+                login=str(login or "").strip().lower().lstrip("#"),
+                session_id=session_id,
+                reason=reason,
+                first_sample_at=stats.get("first_sample_at"),
+                last_sample_at=stats.get("last_sample_at"),
+                ended_at=ended_at.isoformat(timespec="seconds"),
+                sample_count=stats.get("sample_count"),
+                equal_sample_count=stats.get("equal_sample_count"),
+                helix_led_sample_count=stats.get("helix_led_sample_count"),
+                irc_led_sample_count=stats.get("irc_led_sample_count"),
+                avg_helix_count=_safe_avg("helix_total_sum"),
+                avg_irc_count=_safe_avg("irc_total_sum"),
+                avg_overlap_count=_safe_avg("overlap_total_sum"),
+                avg_helix_only_count=_safe_avg("helix_only_total_sum"),
+                avg_irc_only_count=_safe_avg("irc_only_total_sum"),
+                max_helix_count=stats.get("max_helix_count"),
+                max_irc_count=stats.get("max_irc_count"),
+                max_overlap_count=stats.get("max_overlap_count"),
+                max_helix_only_count=stats.get("max_helix_only_count"),
+                max_irc_only_count=stats.get("max_irc_only_count"),
+                distinct_helix_count=len(distinct_helix),
+                distinct_irc_count=len(distinct_irc),
+                distinct_overlap_count=distinct_overlap_count,
+                distinct_helix_only_count=len(distinct_helix_only),
+                distinct_irc_only_count=len(distinct_irc_only),
+                distinct_jaccard=distinct_jaccard,
+                helix_only_sample=self._analytics_login_sample(distinct_helix_only),
+                irc_only_sample=self._analytics_login_sample(distinct_irc_only),
+            ),
+        )
+
+    def _increment_analytics_observability_counter(self, name: str, amount: int = 1) -> int:
+        counter_name = str(name or "").strip()
+        if not counter_name:
+            return 0
+        counters = self._analytics_observability_counters()
+        counters[counter_name] = int(counters.get(counter_name, 0) or 0) + int(amount)
+        return counters[counter_name]
+
+    def _next_analytics_observability_flow_id(self, prefix: str) -> str:
+        normalized = str(prefix or "analytics").strip().lower() or "analytics"
+        sequence = int(getattr(self, "_analytics_observability_sequence", 0) or 0) + 1
+        self._analytics_observability_sequence = sequence
+        return f"{normalized}-{int(time.time() * 1000)}-{sequence}"
+
+    @staticmethod
+    def _analytics_observability_value(value: object, *, limit: int = 240) -> str:
+        def _convert(obj: object) -> object:
+            if obj is None:
+                return None
+            if isinstance(obj, datetime):
+                return obj.isoformat()
+            if isinstance(obj, set):
+                return sorted(str(item) for item in obj)
+            if isinstance(obj, (list, tuple)):
+                return [_convert(item) for item in obj]
+            if isinstance(obj, dict):
+                return {str(key): _convert(val) for key, val in obj.items()}
+            if isinstance(obj, (str, int, float, bool)):
+                return obj
+            return str(obj)
+
+        normalized = _convert(value)
+        if isinstance(normalized, str):
+            text = normalized.replace("\r", " ").replace("\n", " ").strip()
+        else:
+            text = json.dumps(normalized, sort_keys=True, ensure_ascii=True, separators=(",", ":"))
+        return f"{text[:limit]}..." if len(text) > limit else text
+
+    def _format_analytics_observability_fields(self, **fields: object) -> str:
+        parts = []
+        for key in sorted(fields):
+            value = fields[key]
+            if value is None:
+                continue
+            parts.append(
+                f"{str(key).strip()}={self._analytics_observability_value(value)}"
+            )
+        return " ".join(parts)
+
+    @staticmethod
+    def _scope_presence_state(
+        *,
+        scopes: set[str] | None,
+        required_scope: str,
+        token_available: bool,
+    ) -> str:
+        if not token_available:
+            return "absent"
+        normalized_scopes = {str(scope).strip().lower() for scope in (scopes or set()) if str(scope).strip()}
+        if not normalized_scopes:
+            return "unknown"
+        return "present" if required_scope in normalized_scopes else "missing"
+
+    @staticmethod
+    def _structured_result_meta(result: dict[str, object] | None) -> tuple[str, int | None, str | None]:
+        payload = result or {}
+        request_result = "success" if payload.get("ok") else "failed"
+        http_status_raw = payload.get("http_status")
+        try:
+            http_status = int(http_status_raw) if http_status_raw is not None else None
+        except (TypeError, ValueError):
+            http_status = None
+        error_code = str(payload.get("error_code") or "").strip() or None
+        return request_result, http_status, error_code
+
+    def _build_analytics_runtime_state(self, login: str | None = None) -> dict[str, object]:
+        normalized_login = str(login or "").strip().lower().lstrip("#")
+        runtime_sources = []
+        collect_sources = getattr(self, "_collect_bot_chatters_runtime_sources", None)
+        if normalized_login and callable(collect_sources):
+            try:
+                runtime_sources = sorted(collect_sources(normalized_login))
+            except Exception:
+                log.debug(
+                    "Analytics runtime source collection failed for %s",
+                    normalized_login,
+                    exc_info=True,
+                )
+        return {
+            "analytics_runtime_available": bool(getattr(self, "api", None)),
+            "chat_bot_available": bool(getattr(self, "_twitch_chat_bot", None)),
+            "bot_token_manager_available": bool(getattr(self, "_bot_token_manager", None)),
+            "raid_bot_available": bool(getattr(self, "_raid_bot", None)),
+            "runtime_sources": runtime_sources,
+        }
+
+    async def _get_chatters_result_with_legacy_fallback(
+        self,
+        *,
+        broadcaster_id: str,
+        moderator_id: str,
+        user_token: str,
+    ) -> dict[str, object]:
+        result_getter = getattr(self.api, "get_chatters_result", None)
+        if callable(result_getter):
+            return await result_getter(
+                broadcaster_id=broadcaster_id,
+                moderator_id=moderator_id,
+                user_token=user_token,
+            )
+        legacy_chatters = await self.api.get_chatters(
+            broadcaster_id=broadcaster_id,
+            moderator_id=moderator_id,
+            user_token=user_token,
+        )
+        return {
+            "ok": isinstance(legacy_chatters, list),
+            "data": legacy_chatters,
+            "http_status": 200 if isinstance(legacy_chatters, list) else None,
+            "error_code": None if isinstance(legacy_chatters, list) else "legacy_none_result",
+            "request_attempted": True,
+        }
+
+    async def _get_subscriptions_result_with_legacy_fallback(
+        self,
+        *,
+        user_id: str,
+        user_token: str,
+    ) -> dict[str, object]:
+        result_getter = getattr(self.api, "get_broadcaster_subscriptions_result", None)
+        if callable(result_getter):
+            return await result_getter(user_id, user_token)
+        legacy_payload = await self.api.get_broadcaster_subscriptions(user_id, user_token)
+        return {
+            "ok": isinstance(legacy_payload, dict),
+            "data": legacy_payload,
+            "http_status": 200 if isinstance(legacy_payload, dict) else None,
+            "error_code": None if isinstance(legacy_payload, dict) else "legacy_none_result",
+            "request_attempted": True,
+        }
+
+    async def _get_ad_schedule_result_with_legacy_fallback(
+        self,
+        *,
+        user_id: str,
+        user_token: str,
+    ) -> dict[str, object]:
+        result_getter = getattr(self.api, "get_ad_schedule_result", None)
+        if callable(result_getter):
+            return await result_getter(user_id, user_token)
+        legacy_payload = await self.api.get_ad_schedule(user_id, user_token)
+        return {
+            "ok": isinstance(legacy_payload, dict),
+            "data": legacy_payload,
+            "http_status": 200 if isinstance(legacy_payload, dict) else None,
+            "error_code": None if isinstance(legacy_payload, dict) else "legacy_none_result",
+            "request_attempted": True,
+        }
+
+    def _store_analytics_diagnostic(self, flow: str, payload: dict[str, object]) -> None:
+        flow_key = str(flow or "").strip().lower()
+        self._last_analytics_decision_sample = payload
+        if flow_key == "chatters":
+            self._last_chatters_diagnostic = payload
+        if "followers" in flow_key:
+            self._last_followers_diagnostic = payload
+
+    def _log_analytics_decision(
+        self,
+        *,
+        flow_id: str,
+        flow: str,
+        login: str,
+        session_id: int | None = None,
+        decision: str,
+        reason: str,
+        request_attempted: object,
+        request_result: str,
+        http_status: int | None,
+        scope_state: dict[str, object],
+        runtime_state: dict[str, object],
+        level: int = logging.INFO,
+        **extra_fields: object,
+    ) -> dict[str, object]:
+        payload: dict[str, object] = {
+            "flow_id": str(flow_id or "").strip() or None,
+            "flow": str(flow or "").strip().lower() or "analytics",
+            "login": str(login or "").strip().lower().lstrip("#") or None,
+            "session_id": int(session_id) if session_id is not None else None,
+            "decision": str(decision or "").strip() or "unknown",
+            "reason": str(reason or "").strip() or "unknown",
+            "request_attempted": request_attempted,
+            "request_result": str(request_result or "").strip() or "unknown",
+            "http_status": int(http_status) if http_status is not None else None,
+            "scope_state": scope_state,
+            "runtime_state": runtime_state,
+            **extra_fields,
+        }
+        self._store_analytics_diagnostic(str(payload.get("flow") or ""), payload)
+        log.log(
+            level,
+            "analytics_decision %s",
+            self._format_analytics_observability_fields(**payload),
+        )
+        storage.insert_observability_event(
+            flow_type="analytics",
+            flow_id=str(payload.get("flow_id") or ""),
+            entity_login=str(payload.get("login") or ""),
+            entity_id=str(payload.get("session_id") or ""),
+            step="terminal_decision",
+            decision=str(payload.get("decision") or "unknown"),
+            details=payload,
+        )
+        return payload
+
+    def get_analytics_observability_snapshot(self) -> dict[str, Any]:
+        return {
+            "runtimeAvailable": bool(getattr(self, "api", None)),
+            "chatBotAvailable": bool(getattr(self, "_twitch_chat_bot", None)),
+            "botTokenManagerAvailable": bool(getattr(self, "_bot_token_manager", None)),
+            "counters": dict(self._analytics_observability_counters()),
+            "lastChattersDiagnostic": getattr(self, "_last_chatters_diagnostic", None),
+            "lastFollowersDiagnostic": getattr(self, "_last_followers_diagnostic", None),
+            "lastDecisionSample": getattr(self, "_last_analytics_decision_sample", None),
+        }
 
     @tasks.loop(hours=6)
     async def collect_analytics_data(self):
@@ -125,8 +603,32 @@ class TwitchAnalyticsMixin:
 
     async def _collect_subs_for_user(self, user_id: str, login: str, token: str) -> bool:
         """Fetch and store subscription data."""
-        data = await self.api.get_broadcaster_subscriptions(user_id, token)
-        if not data:
+        flow_id = self._next_analytics_observability_flow_id("subscriptions")
+        result = await self._get_subscriptions_result_with_legacy_fallback(
+            user_id=user_id,
+            user_token=token,
+        )
+        data = result.get("data") if isinstance(result.get("data"), dict) else None
+        request_result, http_status, error_code = self._structured_result_meta(result)
+        if not result.get("ok") or not data:
+            reason = error_code or "helix_subscriptions_failed"
+            self._increment_analytics_observability_counter("subscriptions_request_failure_total")
+            self._increment_analytics_observability_counter(
+                f"subscriptions_reason_{reason}_total"
+            )
+            self._log_analytics_decision(
+                flow_id=flow_id,
+                flow="subscriptions",
+                login=login,
+                decision="failed",
+                reason=reason,
+                request_attempted=result.get("request_attempted"),
+                request_result=request_result,
+                http_status=http_status,
+                scope_state={"streamer": "present"},
+                runtime_state=self._build_analytics_runtime_state(login),
+                request_message=result.get("message"),
+            )
             return False
 
         total = int(data.get("total", 0))
@@ -154,12 +656,49 @@ class TwitchAnalyticsMixin:
                 """,
                 (user_id, login, total, points, now_iso),
             )
+        self._increment_analytics_observability_counter("subscriptions_request_success_total")
+        self._log_analytics_decision(
+            flow_id=flow_id,
+            flow="subscriptions",
+            login=login,
+            decision="success",
+            reason="subscriptions_collected",
+            request_attempted=result.get("request_attempted"),
+            request_result=request_result,
+            http_status=http_status,
+            scope_state={"streamer": "present"},
+            runtime_state=self._build_analytics_runtime_state(login),
+            snapshot_total=total,
+            snapshot_points=points,
+        )
         return True
 
     async def _collect_ads_schedule_for_user(self, user_id: str, login: str, token: str) -> bool:
         """Fetch and store ad schedule data."""
-        data = await self.api.get_ad_schedule(user_id, token)
-        if not data:
+        flow_id = self._next_analytics_observability_flow_id("ads")
+        result = await self._get_ad_schedule_result_with_legacy_fallback(
+            user_id=user_id,
+            user_token=token,
+        )
+        data = result.get("data") if isinstance(result.get("data"), dict) else None
+        request_result, http_status, error_code = self._structured_result_meta(result)
+        if not result.get("ok") or not data:
+            reason = error_code or "helix_ads_failed"
+            self._increment_analytics_observability_counter("ads_request_failure_total")
+            self._increment_analytics_observability_counter(f"ads_reason_{reason}_total")
+            self._log_analytics_decision(
+                flow_id=flow_id,
+                flow="ads",
+                login=login,
+                decision="failed",
+                reason=reason,
+                request_attempted=result.get("request_attempted"),
+                request_result=request_result,
+                http_status=http_status,
+                scope_state={"streamer": "present"},
+                runtime_state=self._build_analytics_runtime_state(login),
+                request_message=result.get("message"),
+            )
             return False
 
         def _safe_int(value):
@@ -219,6 +758,21 @@ class TwitchAnalyticsMixin:
                     now_iso,
                 ),
             )
+        self._increment_analytics_observability_counter("ads_request_success_total")
+        self._log_analytics_decision(
+            flow_id=flow_id,
+            flow="ads",
+            login=login,
+            decision="success",
+            reason="ads_collected",
+            request_attempted=result.get("request_attempted"),
+            request_result=request_result,
+            http_status=http_status,
+            scope_state={"streamer": "present"},
+            runtime_state=self._build_analytics_runtime_state(login),
+            next_ad_at=next_ad_at,
+            last_ad_at=last_ad_at,
+        )
         return True
 
     @collect_analytics_data.before_loop
@@ -243,17 +797,20 @@ class TwitchAnalyticsMixin:
         user_id: str,
         session_id: int,
         login: str,
+        bot_diagnostics: dict[str, object] | None = None,
     ) -> None:
         key = (str(user_id), int(session_id))
         warned = self._get_chatters_user_fallback_warned_cache()
         if key in warned:
             return
         warned.add(key)
+        diagnostics = self._format_bot_chatters_diagnostics(bot_diagnostics)
         log.warning(
             "Chatters-Poller: nutze Legacy-Broadcaster-Token fuer %s (Session %s). "
-            "Der botzentrierte Pfad sollte 'moderator:read:chatters' ueber den Bot abdecken.",
+            "Bot-Pfad: %s",
             login,
             session_id,
+            diagnostics,
         )
 
     def _clear_chatters_user_fallback_warning(
@@ -273,7 +830,8 @@ class TwitchAnalyticsMixin:
         token: str | None = None,
     ) -> tuple[int, str, list[dict]] | None:
         """Pollt Chatters für einen Streamer via Helix API (nur wenn Token + moderator:read:chatters Scope vorhanden)."""
-        chatters = []
+        flow_id = self._next_analytics_observability_flow_id("chatters")
+        chatters: list[dict] = []
         streamer_scopes = (
             {s.lower() for s in self._raid_bot.auth_manager.get_scopes(user_id)}
             if token and getattr(self, "_raid_bot", None)
@@ -281,81 +839,232 @@ class TwitchAnalyticsMixin:
         )
         has_streamer_chatters_scope = "moderator:read:chatters" in streamer_scopes
         missing_streamer_scope = bool(token) and not has_streamer_chatters_scope
+        runtime_state = self._build_analytics_runtime_state(login)
+        final_reason = "unknown"
+        final_request_attempted: object = "none"
+        final_request_result = "not_attempted"
+        final_http_status: int | None = None
+        bot_request_result = "not_attempted"
+        bot_http_status: int | None = None
+        streamer_request_result = "not_attempted"
+        streamer_http_status: int | None = None
 
-        # 1. Versuch: Bot-Token verwenden, wenn der Bot den Channel bereits überwacht.
-        # Bot-first ist das gewollte Zielbild; Broadcaster-Scopes bleiben nur Fallback.
-        bot_fallback_used = False
-        bot_token, bot_id, bot_scopes = await self._resolve_bot_chatters_fallback(login)
+        # 1. Versuch: Bot-Token verwenden, sobald der Channel lokal als Bot-Channel
+        # bekannt ist oder der Streamer selbst autorisiert ist. Fuer /chat/chatters
+        # zaehlt Twitch-seitig der Mod-Status des Bots, nicht der lokale Runtime-Cache.
+        bot_request_succeeded = False
+        bot_token, bot_id, bot_scopes, bot_diagnostics = await self._resolve_bot_chatters_fallback(
+            login,
+            allow_untracked=bool(token),
+        )
         if bot_token and bot_id and (not bot_scopes or "moderator:read:chatters" in bot_scopes):
-            try:
-                chatters = await self.api.get_chatters(
-                    broadcaster_id=user_id,
-                    moderator_id=bot_id,
-                    user_token=bot_token,
-                )
-                bot_fallback_used = bool(chatters)
-                if chatters:
+            bot_diagnostics["bot_request_attempted"] = True
+            self._increment_analytics_observability_counter("chatters_bot_path_attempt_total")
+            bot_result = await self._get_chatters_result_with_legacy_fallback(
+                broadcaster_id=user_id,
+                moderator_id=bot_id,
+                user_token=bot_token,
+            )
+            bot_request_result, bot_http_status, bot_error_code = self._structured_result_meta(bot_result)
+            if bot_result.get("ok"):
+                bot_chatters = bot_result.get("data")
+                if isinstance(bot_chatters, list):
+                    chatters = bot_chatters
+                    bot_request_succeeded = True
+                    bot_diagnostics["reason"] = "bot_path_success"
+                    bot_diagnostics["bot_request_success"] = True
+                    self._increment_analytics_observability_counter("chatters_bot_path_success_total")
                     log.debug(
                         "Chatters-Poller: %d Chatters via Bot-Fallback für %s",
                         len(chatters),
                         login,
                     )
-            except Exception:
-                log.warning(
-                    "Chatters-Poller: Bot-Fallback via Helix API fehlgeschlagen für %s",
-                    login,
-                    exc_info=True,
-                )
+                else:
+                    bot_diagnostics["reason"] = "invalid_response"
+                    self._increment_analytics_observability_counter("chatters_bot_path_failure_total")
+            else:
+                bot_diagnostics["reason"] = bot_error_code or "helix_chatters_failed"
+                bot_diagnostics["error"] = bot_result.get("message")
+                bot_diagnostics["bot_request_success"] = False
+                self._increment_analytics_observability_counter("chatters_bot_path_failure_total")
+        elif bot_token and bot_id:
+            bot_diagnostics["reason"] = "bot_scope_missing"
+        else:
+            bot_diagnostics["bot_request_success"] = False
 
         # 2. Fallback: Broadcaster-Token nur noch als Legacy-Rettungsnetz verwenden.
-        if not chatters and token:
+        if not bot_request_succeeded and not chatters and token:
             if has_streamer_chatters_scope:
                 self._warn_chatters_user_fallback_once(
                     user_id=user_id,
                     session_id=session_id,
                     login=login,
+                    bot_diagnostics=bot_diagnostics,
                 )
-                try:
-                    chatters = await self.api.get_chatters(
-                        broadcaster_id=user_id,
-                        moderator_id=user_id,
-                        user_token=token,
-                    )
-                    log.debug(
-                        "Chatters-Poller: %d Chatters via Helix API für %s",
-                        len(chatters),
-                        login,
-                    )
-                except Exception:
-                    log.warning(
-                        "Chatters-Poller: Helix API fehlgeschlagen für %s",
-                        login,
-                        exc_info=True,
-                    )
+                streamer_result = await self._get_chatters_result_with_legacy_fallback(
+                    broadcaster_id=user_id,
+                    moderator_id=user_id,
+                    user_token=token,
+                )
+                streamer_request_result, streamer_http_status, streamer_error_code = (
+                    self._structured_result_meta(streamer_result)
+                )
+                if streamer_result.get("ok"):
+                    streamer_chatters = streamer_result.get("data")
+                    if isinstance(streamer_chatters, list):
+                        chatters = streamer_chatters
+                        log.debug(
+                            "Chatters-Poller: %d Chatters via Helix API für %s",
+                            len(chatters),
+                            login,
+                        )
+                else:
+                    bot_diagnostics["streamer_error"] = streamer_result.get("message")
+                    if not bot_request_succeeded:
+                        final_reason = streamer_error_code or "helix_chatters_failed"
 
         if not chatters:
-            if missing_streamer_scope:
+            if missing_streamer_scope and not bot_request_succeeded:
                 key = (user_id, session_id)
                 if key not in self._chatters_scope_warned:
                     self._chatters_scope_warned.add(key)
                     log.warning(
                         "Chatters-Poller: %s hat keinen Zugriff auf 'moderator:read:chatters'. "
-                        "Bot-Token (Scope + Mod-Status im Channel) ist erforderlich; Streamer-Token dient nur als Legacy-Fallback.",
+                        "Bot-Token (Scope + Mod-Status im Channel) ist erforderlich; "
+                        "Bot-Pfad: %s; Streamer-Token dient nur als Legacy-Fallback.",
                         login,
+                        self._format_bot_chatters_diagnostics(bot_diagnostics),
                     )
+            final_request_attempted = (
+                "bot,streamer"
+                if bot_diagnostics.get("bot_request_attempted") and has_streamer_chatters_scope and token
+                else ("bot" if bot_diagnostics.get("bot_request_attempted") else ("streamer" if token and has_streamer_chatters_scope else "none"))
+            )
+            if bot_diagnostics.get("bot_request_attempted"):
+                final_request_result = bot_request_result
+                final_http_status = bot_http_status
+                final_reason = str(bot_diagnostics.get("reason") or final_reason or "helix_chatters_failed")
+            elif token and has_streamer_chatters_scope:
+                final_request_result = streamer_request_result
+                final_http_status = streamer_http_status
+                final_reason = final_reason if final_reason != "unknown" else "helix_chatters_failed"
+            else:
+                final_reason = str(bot_diagnostics.get("reason") or "bot_path_unavailable")
+            if missing_streamer_scope and not bot_request_succeeded and final_reason == "unknown":
+                final_reason = "bot_scope_missing" if str(bot_diagnostics.get("reason")) == "bot_scope_missing" else "bot_path_unavailable"
+            self._increment_analytics_observability_counter(
+                f"chatters_reason_{final_reason}_total"
+            )
+            self._log_analytics_decision(
+                flow_id=flow_id,
+                flow="chatters",
+                login=login,
+                session_id=session_id,
+                decision="failed",
+                reason=final_reason,
+                request_attempted=final_request_attempted,
+                request_result=final_request_result,
+                http_status=final_http_status,
+                scope_state={
+                    "bot": bot_diagnostics.get("bot_scope_present"),
+                    "streamer": self._scope_presence_state(
+                        scopes=streamer_scopes,
+                        required_scope="moderator:read:chatters",
+                        token_available=bool(token),
+                    ),
+                },
+                runtime_state=runtime_state,
+                chat_bot_available=bot_diagnostics.get("chat_bot_available"),
+                bot_token_manager_available=bot_diagnostics.get("bot_token_manager_available"),
+                bot_token_present=bot_diagnostics.get("bot_token_present"),
+                bot_id_present=bot_diagnostics.get("bot_id_present"),
+                bot_scope_present=bot_diagnostics.get("bot_scope_present"),
+                streamer_scope_present=self._scope_presence_state(
+                    scopes=streamer_scopes,
+                    required_scope="moderator:read:chatters",
+                    token_available=bool(token),
+                ),
+                runtime_sources=bot_diagnostics.get("runtime_sources"),
+                allow_untracked=bot_diagnostics.get("allow_untracked"),
+                bot_request_attempted=bot_diagnostics.get("bot_request_attempted", False),
+                bot_request_success=bot_diagnostics.get("bot_request_success", False),
+                bot_http_status=bot_http_status,
+                streamer_http_status=streamer_http_status,
+                diagnostic_now=now_iso,
+            )
             return None
 
-        if bot_fallback_used and missing_streamer_scope:
+        if bot_request_succeeded and missing_streamer_scope:
             key = (user_id, session_id)
             self._chatters_scope_warned.discard(key)
-        if bot_fallback_used:
+        if bot_request_succeeded:
             self._clear_chatters_user_fallback_warning(user_id=user_id, session_id=session_id)
+        try:
+            self._record_irc_lurker_experiment_sample(
+                login=login,
+                session_id=session_id,
+                now_iso=now_iso,
+                helix_chatters=chatters,
+            )
+        except Exception:
+            log.debug(
+                "IRC experiment: comparison sampling failed for %s session=%s",
+                login,
+                session_id,
+                exc_info=True,
+            )
 
         log.debug(
             "Chatters-Poller: %d Chatters für %s (session %s)",
             len(chatters),
             login,
             session_id,
+        )
+        final_reason = "bot_path_success" if bot_request_succeeded else "fallback_to_streamer_token"
+        if not bot_request_succeeded:
+            self._increment_analytics_observability_counter("chatters_reason_fallback_to_streamer_token_total")
+        final_request_attempted = "bot" if bot_request_succeeded else (
+            "bot,streamer" if bot_diagnostics.get("bot_request_attempted") else "streamer"
+        )
+        final_request_result = "success"
+        final_http_status = 200
+        self._log_analytics_decision(
+            flow_id=flow_id,
+            flow="chatters",
+            login=login,
+            session_id=session_id,
+            decision="success",
+            reason=final_reason,
+            request_attempted=final_request_attempted,
+            request_result=final_request_result,
+            http_status=final_http_status,
+            scope_state={
+                "bot": bot_diagnostics.get("bot_scope_present"),
+                "streamer": self._scope_presence_state(
+                    scopes=streamer_scopes,
+                    required_scope="moderator:read:chatters",
+                    token_available=bool(token),
+                ),
+            },
+            runtime_state=runtime_state,
+            chat_bot_available=bot_diagnostics.get("chat_bot_available"),
+            bot_token_manager_available=bot_diagnostics.get("bot_token_manager_available"),
+            bot_token_present=bot_diagnostics.get("bot_token_present"),
+            bot_id_present=bot_diagnostics.get("bot_id_present"),
+            bot_scope_present=bot_diagnostics.get("bot_scope_present"),
+            streamer_scope_present=self._scope_presence_state(
+                scopes=streamer_scopes,
+                required_scope="moderator:read:chatters",
+                token_available=bool(token),
+            ),
+            runtime_sources=bot_diagnostics.get("runtime_sources"),
+            allow_untracked=bot_diagnostics.get("allow_untracked"),
+            bot_request_attempted=bot_diagnostics.get("bot_request_attempted", False),
+            bot_request_success=bot_request_succeeded,
+            bot_http_status=bot_http_status,
+            streamer_http_status=streamer_http_status,
+            chatter_count=len(chatters),
+            diagnostic_now=now_iso,
         )
         return (session_id, login, chatters)
 
@@ -371,35 +1080,138 @@ class TwitchAnalyticsMixin:
             }
         return set()
 
-    async def _resolve_bot_chatters_fallback(
-        self,
-        login: str,
-    ) -> tuple[str | None, str | None, set[str]]:
-        login_norm = str(login or "").strip().lower()
+    @staticmethod
+    def _normalize_login_values(values_raw) -> set[str]:
+        if isinstance(values_raw, dict):
+            values_iterable = values_raw.keys()
+        elif isinstance(values_raw, (list, tuple, set)):
+            values_iterable = values_raw
+        else:
+            return set()
+        return {
+            str(value or "").strip().lower().lstrip("#")
+            for value in values_iterable
+            if str(value or "").strip()
+        }
+
+    def _collect_bot_chatters_runtime_sources(self, login: str) -> set[str]:
+        login_norm = str(login or "").strip().lower().lstrip("#")
         if not login_norm:
-            return None, None, set()
+            return set()
 
         chat_bot = getattr(self, "_twitch_chat_bot", None)
         if not chat_bot:
-            return None, None, set()
+            return set()
 
-        monitored = {
-            str(channel or "").strip().lower()
-            for channel in (getattr(chat_bot, "_monitored_streamers", set()) or set())
-            if str(channel or "").strip()
+        runtime_sources: set[str] = set()
+        if login_norm in self._normalize_login_values(
+            getattr(chat_bot, "_monitored_streamers", set())
+        ):
+            runtime_sources.add("monitored_streamers")
+        if login_norm in self._normalize_login_values(
+            getattr(chat_bot, "_initial_channels", [])
+        ):
+            runtime_sources.add("initial_channels")
+        if login_norm in self._normalize_login_values(
+            getattr(chat_bot, "_monitored_only_channels", set())
+        ):
+            runtime_sources.add("monitored_only_channels")
+        if login_norm in self._normalize_login_values(getattr(chat_bot, "_channel_ids", {})):
+            runtime_sources.add("channel_ids")
+        if login_norm in self._normalize_login_values(
+            getattr(chat_bot, "_channel_subscription_types", {})
+        ):
+            runtime_sources.add("channel_subscription_types")
+
+        is_subscription_ready = getattr(chat_bot, "is_channel_subscription_ready", None)
+        if callable(is_subscription_ready):
+            try:
+                if is_subscription_ready(login_norm):
+                    runtime_sources.add("subscription_ready")
+            except Exception:
+                log.debug(
+                    "Chatters-Poller: konnte Subscription-Readiness fuer %s nicht pruefen",
+                    login_norm,
+                    exc_info=True,
+                )
+
+        return runtime_sources
+
+    @staticmethod
+    def _format_bot_chatters_diagnostics(bot_diagnostics: dict[str, object] | None) -> str:
+        diagnostics = bot_diagnostics or {}
+        reason = str(diagnostics.get("reason") or "unknown").strip() or "unknown"
+        runtime_sources = diagnostics.get("runtime_sources") or []
+        if isinstance(runtime_sources, (set, tuple)):
+            runtime_sources = list(runtime_sources)
+        if not isinstance(runtime_sources, list):
+            runtime_sources = [str(runtime_sources)]
+        runtime_sources_text = ",".join(
+            sorted(str(source).strip() for source in runtime_sources if str(source).strip())
+        ) or "-"
+        bot_scope_state = str(diagnostics.get("bot_scope_present") or diagnostics.get("bot_scope_state") or "unknown").strip() or "unknown"
+        details = [
+            f"reason={reason}",
+            f"runtime_sources={runtime_sources_text}",
+            f"bot_scope={bot_scope_state}",
+        ]
+        if diagnostics.get("chat_bot_available") is False:
+            details.append("chat_bot=absent")
+        if diagnostics.get("bot_token_manager_available") is False:
+            details.append("token_manager=absent")
+        if diagnostics.get("allow_untracked"):
+            details.append("auth_override=1")
+        if diagnostics.get("bot_request_attempted"):
+            details.append("bot_request=attempted")
+        error_text = str(diagnostics.get("error") or "").strip()
+        if error_text:
+            details.append(f"error={error_text[:180]}")
+        return "; ".join(details)
+
+    async def _resolve_bot_chatters_fallback(
+        self,
+        login: str,
+        *,
+        allow_untracked: bool = False,
+    ) -> tuple[str | None, str | None, set[str], dict[str, object]]:
+        login_norm = str(login or "").strip().lower().lstrip("#")
+        diagnostics: dict[str, object] = {
+            "allow_untracked": bool(allow_untracked),
+            "runtime_sources": [],
+            "chat_bot_available": False,
+            "bot_token_manager_available": False,
+            "bot_token_present": False,
+            "bot_id_present": False,
+            "bot_scope_present": "unknown",
         }
-        if login_norm not in monitored:
-            return None, None, set()
+        if not login_norm:
+            diagnostics["reason"] = "missing_login"
+            return None, None, set(), diagnostics
+
+        chat_bot = getattr(self, "_twitch_chat_bot", None)
+        diagnostics["chat_bot_available"] = bool(chat_bot)
+        runtime_sources = sorted(self._collect_bot_chatters_runtime_sources(login_norm))
+        diagnostics["runtime_sources"] = runtime_sources
+        if not chat_bot:
+            diagnostics["reason"] = "chat_bot_unavailable"
+            if not allow_untracked:
+                return None, None, set(), diagnostics
+        elif not runtime_sources and not allow_untracked:
+            diagnostics["reason"] = "channel_not_tracked_in_chat_runtime"
+            return None, None, set(), diagnostics
 
         token_mgr = getattr(self, "_bot_token_manager", None)
         if not token_mgr:
-            return None, None, set()
+            diagnostics["reason"] = "bot_token_manager_unavailable"
+            return None, None, set(), diagnostics
+        diagnostics["bot_token_manager_available"] = True
 
         try:
             token, manager_bot_id = await token_mgr.get_valid_token()
         except Exception:
             log.debug("Chatters-Poller: konnte Bot-Token nicht laden", exc_info=True)
-            return None, None, set()
+            diagnostics["reason"] = "bot_token_load_failed"
+            return None, None, set(), diagnostics
 
         token = str(token or "").strip()
         if token.lower().startswith("oauth:"):
@@ -414,9 +1226,22 @@ class TwitchAnalyticsMixin:
             or None
         )
         bot_scopes = self._normalize_scope_values(getattr(token_mgr, "scopes", ()))
-        if not token or not bot_id:
-            return None, bot_id, bot_scopes
-        return token, bot_id, bot_scopes
+        diagnostics["bot_token_present"] = bool(token)
+        diagnostics["bot_id_present"] = bool(bot_id)
+        diagnostics["bot_scope_present"] = (
+            "present"
+            if "moderator:read:chatters" in bot_scopes
+            else ("unknown" if not bot_scopes else "missing")
+        )
+        diagnostics["bot_scope_state"] = diagnostics["bot_scope_present"]
+        if not token:
+            diagnostics["reason"] = "bot_token_missing"
+            return None, bot_id, bot_scopes, diagnostics
+        if not bot_id:
+            diagnostics["reason"] = "bot_id_missing"
+            return None, bot_id, bot_scopes, diagnostics
+        diagnostics["reason"] = "ready"
+        return token, bot_id, bot_scopes, diagnostics
 
     @tasks.loop(seconds=30)
     async def collect_chatters_data(self):

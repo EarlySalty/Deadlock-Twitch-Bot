@@ -30,6 +30,7 @@ class _JoinHarness(ConnectionMixin):
         self._mod_retry_cooldown: dict[str, object] = {}
         self._monitored_only_channels: set[str] = set()
         self.subscribe_calls: list[str] = []
+        self.fetch_eventsub_subscriptions_calls: list[dict[str, str]] = []
 
     async def fetch_user(self, login: str):
         return SimpleNamespace(id="9009")
@@ -40,6 +41,27 @@ class _JoinHarness(ConnectionMixin):
     async def subscribe_websocket(self, payload) -> None:
         self.subscribe_calls.append(type(payload).__name__)
 
+    async def fetch_eventsub_subscriptions(self, **kwargs):
+        self.fetch_eventsub_subscriptions_calls.append(
+            {str(key): str(value) for key, value in kwargs.items() if value is not None}
+        )
+        subscriptions = [
+            SimpleNamespace(
+                type="channel.chat.message",
+                status="enabled",
+                condition={"broadcaster_user_id": "9009", "user_id": "9999"},
+            )
+        ]
+        if "ChatNotificationSubscription" in self.subscribe_calls:
+            subscriptions.append(
+                SimpleNamespace(
+                    type="channel.chat.notification",
+                    status="enabled",
+                    condition={"broadcaster_user_id": "9009", "user_id": "9999"},
+                )
+            )
+        return subscriptions
+
     def _is_monitored_only(self, channel_name: str) -> bool:
         return False
 
@@ -49,15 +71,59 @@ class _JoinFailureHarness(_JoinHarness):
         raise Exception("403 subscription missing proper authorization")
 
 
+class _JoinRemoteVerificationHarness(_JoinHarness):
+    async def fetch_eventsub_subscriptions(self, **kwargs):
+        self.fetch_eventsub_subscriptions_calls.append(
+            {str(key): str(value) for key, value in kwargs.items() if value is not None}
+        )
+        expected = {"token_for": "9999", "user_id": "9999"}
+        if self.fetch_eventsub_subscriptions_calls[-1] != expected:
+            return []
+        return [
+            SimpleNamespace(
+                type="channel.chat.message",
+                status="enabled",
+                condition={"broadcaster_user_id": "9009", "user_id": "9999"},
+            ),
+            SimpleNamespace(
+                type="channel.chat.notification",
+                status="enabled",
+                condition={"broadcaster_user_id": "9009", "user_id": "9999"},
+            ),
+        ]
+
+
 class ChatJoinNotificationSubscriptionTests(unittest.IsolatedAsyncioTestCase):
+    async def test_join_verifies_chat_subscriptions_with_bot_user_context(self) -> None:
+        harness = _JoinRemoteVerificationHarness(bot_scopes={"user:read:chat"})
+
+        result = await harness.join("targetlogin", channel_id="9009")
+
+        self.assertTrue(result)
+        self.assertGreaterEqual(len(harness.fetch_eventsub_subscriptions_calls), 1)
+        self.assertEqual(
+            harness.fetch_eventsub_subscriptions_calls[0],
+            {"token_for": "9999", "user_id": "9999"},
+        )
+        self.assertEqual(
+            harness.get_channel_subscription_state("targetlogin")["channel.chat.notification"][
+                "detail"
+            ],
+            "verified via helix",
+        )
+
     async def test_join_subscribes_missing_chat_notification_subscription(self) -> None:
         harness = _JoinHarness(bot_scopes={"user:read:chat"})
 
-        with self.assertLogs("TwitchStreams.ChatBot", level="INFO") as captured:
+        with self.assertLogs("TwitchStreams.ChatBot", level="DEBUG") as captured:
             result = await harness.join("targetlogin", channel_id="9009")
 
         self.assertTrue(result)
         self.assertEqual(harness.subscribe_calls, ["ChatNotificationSubscription"])
+        self.assertEqual(
+            harness.fetch_eventsub_subscriptions_calls[0],
+            {"token_for": "9999", "user_id": "9999"},
+        )
         self.assertTrue(
             harness.is_channel_subscription_ready("targetlogin", "channel.chat.notification")
         )

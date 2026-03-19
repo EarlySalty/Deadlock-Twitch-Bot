@@ -30,14 +30,34 @@ class _BotTokenManager:
 
 
 class _ChatBot:
-    def __init__(self, *, bot_id: str = "9999", monitored: set[str] | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        bot_id: str = "9999",
+        monitored: set[str] | None = None,
+        initial_channels: list[str] | None = None,
+        monitored_only: set[str] | None = None,
+        channel_ids: dict[str, str] | None = None,
+        subscription_types: dict[str, set[str]] | None = None,
+    ) -> None:
         self.bot_id = bot_id
         self._bot_id_stored = bot_id
         self._monitored_streamers = set(monitored or set())
+        self._initial_channels = list(initial_channels or [])
+        self._monitored_only_channels = set(monitored_only or set())
+        self._channel_ids = dict(channel_ids or {})
+        self._channel_subscription_types = dict(subscription_types or {})
 
     @property
     def bot_id_safe(self) -> str:
         return self._bot_id_stored
+
+    def is_channel_subscription_ready(self, channel_login: str, sub_type: str | None = None) -> bool:
+        required_types = {"channel.chat.message", "channel.chat.notification"}
+        tracked = self._channel_subscription_types.get(str(channel_login), set())
+        if sub_type:
+            return str(sub_type) in tracked
+        return required_types.issubset(tracked)
 
 
 class _AnalyticsHarness(TwitchAnalyticsMixin):
@@ -47,11 +67,21 @@ class _AnalyticsHarness(TwitchAnalyticsMixin):
         streamer_scopes: dict[str, list[str]] | None = None,
         bot_scopes: set[str] | None = None,
         monitored: set[str] | None = None,
+        initial_channels: list[str] | None = None,
+        monitored_only: set[str] | None = None,
+        channel_ids: dict[str, str] | None = None,
+        subscription_types: dict[str, set[str]] | None = None,
     ) -> None:
         self.api = SimpleNamespace(get_chatters=AsyncMock())
         self._raid_bot = SimpleNamespace(auth_manager=_AuthManager(streamer_scopes))
         self._bot_token_manager = _BotTokenManager(scopes=bot_scopes)
-        self._twitch_chat_bot = _ChatBot(monitored=monitored or {"partner_one"})
+        self._twitch_chat_bot = _ChatBot(
+            monitored=monitored or {"partner_one"},
+            initial_channels=initial_channels,
+            monitored_only=monitored_only,
+            channel_ids=channel_ids,
+            subscription_types=subscription_types,
+        )
         self._chatters_scope_warned: set[tuple[str, int]] = set()
 
 
@@ -101,10 +131,90 @@ class ChattersBotFallbackTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(harness._chatters_scope_warned, set())
 
-    async def test_poll_chatters_uses_streamer_scope_as_legacy_fallback_when_bot_is_unavailable(self) -> None:
+    async def test_poll_chatters_uses_bot_scope_for_authorized_channel_even_when_runtime_cache_is_empty(self) -> None:
         harness = _AnalyticsHarness(
             streamer_scopes={"1001": ["moderator:read:chatters"]},
             bot_scopes={"moderator:read:chatters"},
+            monitored=set(),
+        )
+        harness.api.get_chatters.return_value = [{"user_login": "lurker_auth", "user_id": "123"}]
+
+        result = await harness._poll_chatters_single(
+            "1001",
+            "partner_one",
+            90,
+            "2026-03-15T10:00:00+00:00",
+            token="streamer-token",
+        )
+
+        self.assertEqual(
+            result,
+            (90, "partner_one", [{"user_login": "lurker_auth", "user_id": "123"}]),
+        )
+        harness.api.get_chatters.assert_awaited_once_with(
+            broadcaster_id="1001",
+            moderator_id="9999",
+            user_token="bot-token",
+        )
+
+    async def test_poll_chatters_uses_bot_scope_for_initial_channel_without_monitored_flag(self) -> None:
+        harness = _AnalyticsHarness(
+            streamer_scopes={},
+            bot_scopes={"moderator:read:chatters"},
+            monitored=set(),
+            initial_channels=["partner_one"],
+        )
+        harness.api.get_chatters.return_value = [{"user_login": "lurker_init", "user_id": "321"}]
+
+        result = await harness._poll_chatters_single(
+            "1001",
+            "partner_one",
+            91,
+            "2026-03-15T10:00:00+00:00",
+            token=None,
+        )
+
+        self.assertEqual(
+            result,
+            (91, "partner_one", [{"user_login": "lurker_init", "user_id": "321"}]),
+        )
+        harness.api.get_chatters.assert_awaited_once_with(
+            broadcaster_id="1001",
+            moderator_id="9999",
+            user_token="bot-token",
+        )
+
+    async def test_poll_chatters_uses_bot_scope_when_chat_bot_runtime_is_not_initialized_yet(self) -> None:
+        harness = _AnalyticsHarness(
+            streamer_scopes={"1001": ["moderator:read:chatters"]},
+            bot_scopes={"moderator:read:chatters"},
+            monitored=set(),
+        )
+        harness._twitch_chat_bot = None
+        harness.api.get_chatters.return_value = [{"user_login": "lurker_boot", "user_id": "777"}]
+
+        result = await harness._poll_chatters_single(
+            "1001",
+            "partner_one",
+            92,
+            "2026-03-15T10:00:00+00:00",
+            token="streamer-token",
+        )
+
+        self.assertEqual(
+            result,
+            (92, "partner_one", [{"user_login": "lurker_boot", "user_id": "777"}]),
+        )
+        harness.api.get_chatters.assert_awaited_once_with(
+            broadcaster_id="1001",
+            moderator_id="9999",
+            user_token="bot-token",
+        )
+
+    async def test_poll_chatters_uses_streamer_scope_as_legacy_fallback_when_bot_is_unavailable(self) -> None:
+        harness = _AnalyticsHarness(
+            streamer_scopes={"1001": ["moderator:read:chatters"]},
+            bot_scopes={"user:read:chat"},
             monitored={"other_channel"},
         )
         harness.api.get_chatters.return_value = [{"user_login": "lurker_c", "user_id": "21"}]

@@ -314,10 +314,12 @@ class ConnectionMixin:
         self,
         *,
         channel_id: str,
+        auth_user_id: str | None = None,
     ) -> tuple[dict[str, str], str | None]:
         target_id = str(channel_id or "").strip()
         if not target_id:
             return {}, None
+        normalized_auth_user_id = str(auth_user_id or "").strip()
 
         async def _collect_subscription_objects(source: object) -> list[object]:
             items: list[object] = []
@@ -352,7 +354,14 @@ class ConnectionMixin:
         fetch_subs = getattr(self, "fetch_eventsub_subscriptions", None)
         if callable(fetch_subs):
             try:
-                subs_result = fetch_subs()
+                fetch_kwargs = {}
+                if normalized_auth_user_id:
+                    # WebSocket EventSub subscriptions are user-bound. Without the
+                    # bot user context Helix lists only app-token subscriptions and
+                    # falsely reports chat subscriptions as missing.
+                    fetch_kwargs["token_for"] = normalized_auth_user_id
+                    fetch_kwargs["user_id"] = normalized_auth_user_id
+                subs_result = fetch_subs(**fetch_kwargs)
                 if inspect.isawaitable(subs_result):
                     subs_result = await subs_result
                 statuses: dict[str, str] = {}
@@ -413,6 +422,7 @@ class ConnectionMixin:
         *,
         channel_login: str,
         channel_id: str,
+        auth_user_id: str | None = None,
         wait_timeout_seconds: float = 6.0,
         poll_interval_seconds: float = 0.5,
     ) -> bool:
@@ -428,6 +438,7 @@ class ConnectionMixin:
         while True:
             statuses, source = await self._load_remote_chat_subscription_statuses(
                 channel_id=target_id,
+                auth_user_id=auth_user_id,
             )
             if source is not None:
                 last_source = source
@@ -544,6 +555,7 @@ class ConnectionMixin:
         return await self._refresh_remote_chat_subscription_tracking(
             channel_login=normalized_login,
             channel_id=str(channel_id),
+            auth_user_id=str(safe_bot_id),
         )
 
     def _resolve_chat_bot_scope_set(self) -> set[str]:
@@ -997,6 +1009,7 @@ class ConnectionMixin:
                 _emit_join_decision(
                     decision="joined",
                     detail="required chat subscriptions ready",
+                    level=logging.DEBUG,
                 )
                 return True
             log.warning(

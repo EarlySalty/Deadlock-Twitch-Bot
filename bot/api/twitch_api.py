@@ -172,6 +172,66 @@ class TwitchAPI:
     def _headers(self) -> dict[str, str]:
         return {"Client-ID": self.client_id, "Authorization": f"Bearer {self._token}"}
 
+    @staticmethod
+    def _normalize_bearer_token(token_value: str | None) -> str:
+        token = str(token_value or "").strip()
+        if token.lower().startswith("oauth:"):
+            token = token.split(":", 1)[1].strip()
+        return token
+
+    @staticmethod
+    def _sanitize_error_text(text: object, *, limit: int = 240) -> str | None:
+        cleaned = str(text or "").replace("\r", " ").replace("\n", " ").strip()
+        if not cleaned:
+            return None
+        return cleaned[:limit]
+
+    @classmethod
+    def _helix_result(
+        cls,
+        *,
+        ok: bool,
+        data: object = None,
+        http_status: int | None = None,
+        error_code: str | None = None,
+        message: str | None = None,
+        request_attempted: bool = False,
+    ) -> dict[str, object]:
+        return {
+            "ok": bool(ok),
+            "data": data,
+            "http_status": int(http_status) if http_status is not None else None,
+            "error_code": str(error_code or "").strip() or None,
+            "message": cls._sanitize_error_text(message),
+            "request_attempted": bool(request_attempted),
+        }
+
+    @staticmethod
+    def _map_helix_error_code(
+        *,
+        http_status: int | None,
+        message: str | None,
+        default: str,
+    ) -> str:
+        text = str(message or "").strip().lower()
+        if http_status == 401:
+            if "must match" in text or "does not match" in text or "token" in text:
+                return "helix_401_token_mismatch"
+            return "helix_401_unauthorized"
+        if http_status == 403:
+            if "moderator" in text or "forbidden" in text or "mod" in text:
+                return "helix_403_not_moderator"
+            return "helix_403_forbidden"
+        if http_status == 404:
+            return "helix_404_not_found"
+        if http_status == 410:
+            return "helix_410_gone"
+        if http_status == 429:
+            return "helix_429_rate_limited"
+        if http_status is not None and http_status >= 500:
+            return "helix_5xx_upstream"
+        return str(default or "helix_request_failed").strip() or "helix_request_failed"
+
     async def _post(
         self,
         path: str,
@@ -637,12 +697,27 @@ class TwitchAPI:
         thumb = thumb.replace("{width}", "1280").replace("{height}", "720")
         return f"{thumb}?rand={int(time.time())}"
 
-    async def get_followers_total(self, user_id: str, user_token: str | None = None) -> int | None:
-        """Liefert die Follower-Gesamtzahl für einen Broadcaster (best-effort, via /channels/followers)."""
+    async def get_followers_total_result(
+        self,
+        user_id: str,
+        user_token: str | None = None,
+    ) -> dict[str, object]:
+        """Structured result for /channels/followers."""
         if not user_id:
-            return None
+            return self._helix_result(
+                ok=False,
+                error_code="missing_user_id",
+                message="broadcaster_id is required",
+            )
         try:
             if user_token:
+                token = self._normalize_bearer_token(user_token)
+                if not token:
+                    return self._helix_result(
+                        ok=False,
+                        error_code="missing_user_token",
+                        message="user token is required",
+                    )
                 self._ensure_session()
                 assert self._session is not None
                 url = f"{TWITCH_API_BASE}/channels/followers"
@@ -650,7 +725,7 @@ class TwitchAPI:
                     url,
                     headers={
                         "Client-ID": self.client_id,
-                        "Authorization": f"Bearer {user_token}",
+                        "Authorization": f"Bearer {token}",
                     },
                     params={"broadcaster_id": user_id, "first": "1"},
                 ) as r:
@@ -661,36 +736,98 @@ class TwitchAPI:
                             r.status,
                             txt[:180].replace("\n", " "),
                         )
-                        r.raise_for_status()
+                        return self._helix_result(
+                            ok=False,
+                            http_status=r.status,
+                            error_code=self._map_helix_error_code(
+                                http_status=r.status,
+                                message=txt,
+                                default="helix_followers_failed",
+                            ),
+                            message=txt,
+                            request_attempted=True,
+                        )
                     js = await r.json()
             else:
-                js = await self._get(
-                    "/channels/followers",
-                    params={"broadcaster_id": user_id, "first": "1"},
-                    log_on_error=False,
-                )
+                try:
+                    js = await self._get(
+                        "/channels/followers",
+                        params={"broadcaster_id": user_id, "first": "1"},
+                        log_on_error=False,
+                    )
+                except aiohttp.ClientResponseError as exc:
+                    return self._helix_result(
+                        ok=False,
+                        http_status=exc.status,
+                        error_code=self._map_helix_error_code(
+                            http_status=exc.status,
+                            message=exc.message,
+                            default="helix_followers_failed",
+                        ),
+                        message=exc.message,
+                        request_attempted=True,
+                    )
             if not isinstance(js, dict):
-                return None
+                return self._helix_result(
+                    ok=False,
+                    error_code="invalid_response",
+                    message="followers response was not a JSON object",
+                    request_attempted=True,
+                )
             total = js.get("total")
-            return int(total) if total is not None else None
-        except aiohttp.ClientResponseError as exc:
-            if exc.status in {401, 403, 404, 410}:
-                self._log.debug("Follower-API nicht verfuegbar (%s) fuer %s", exc.status, user_id)
-                return None
-            self._log.debug("Follower-API Fehler fuer %s: %s", user_id, exc)
-            return None
+            parsed_total = int(total) if total is not None else None
+            return self._helix_result(
+                ok=parsed_total is not None,
+                data=parsed_total,
+                http_status=200,
+                error_code=None if parsed_total is not None else "missing_total",
+                message=None if parsed_total is not None else "followers response did not contain total",
+                request_attempted=True,
+            )
+        except asyncio.TimeoutError:
+            return self._helix_result(
+                ok=False,
+                error_code="helix_timeout",
+                message="followers request timed out",
+                request_attempted=True,
+            )
         except Exception:
-            self._log.debug("get_followers_total failed for %s", user_id, exc_info=True)
-            return None
+            self._log.debug("get_followers_total_result failed for %s", user_id, exc_info=True)
+            return self._helix_result(
+                ok=False,
+                error_code="helix_exception",
+                message="followers request raised an exception",
+                request_attempted=True,
+            )
 
-    async def get_broadcaster_subscriptions(self, user_id: str, user_token: str) -> dict | None:
+    async def get_followers_total(self, user_id: str, user_token: str | None = None) -> int | None:
+        """Liefert die Follower-Gesamtzahl für einen Broadcaster (best-effort, via /channels/followers)."""
+        result = await self.get_followers_total_result(user_id, user_token=user_token)
+        return int(result["data"]) if result.get("ok") and result.get("data") is not None else None
+
+    async def get_broadcaster_subscriptions_result(
+        self,
+        user_id: str,
+        user_token: str,
+    ) -> dict[str, object]:
         """
-        Liefert Subscription-Daten für einen Broadcaster.
+        Structured result for /subscriptions.
         Benötigt Scope: channel:read:subscriptions
         """
         if not user_id or not user_token:
-            return None
+            return self._helix_result(
+                ok=False,
+                error_code="missing_credentials",
+                message="user_id and user_token are required",
+            )
         try:
+            token = self._normalize_bearer_token(user_token)
+            if not token:
+                return self._helix_result(
+                    ok=False,
+                    error_code="missing_user_token",
+                    message="user token is required",
+                )
             self._ensure_session()
             assert self._session is not None
             url = f"{TWITCH_API_BASE}/subscriptions"
@@ -698,7 +835,7 @@ class TwitchAPI:
                 url,
                 headers={
                     "Client-ID": self.client_id,
-                    "Authorization": f"Bearer {user_token}",
+                    "Authorization": f"Bearer {token}",
                 },
                 params={"broadcaster_id": user_id, "first": "1"},
             ) as r:
@@ -709,24 +846,75 @@ class TwitchAPI:
                         r.status,
                         txt[:180].replace("\n", " "),
                     )
-                    return None
+                    return self._helix_result(
+                        ok=False,
+                        http_status=r.status,
+                        error_code=self._map_helix_error_code(
+                            http_status=r.status,
+                            message=txt,
+                            default="helix_subscriptions_failed",
+                        ),
+                        message=txt,
+                        request_attempted=True,
+                    )
                 js = await r.json()
-                return js
+                if not isinstance(js, dict):
+                    return self._helix_result(
+                        ok=False,
+                        error_code="invalid_response",
+                        message="subscriptions response was not a JSON object",
+                        request_attempted=True,
+                    )
+                return self._helix_result(
+                    ok=True,
+                    data=js,
+                    http_status=200,
+                    request_attempted=True,
+                )
+        except asyncio.TimeoutError:
+            return self._helix_result(
+                ok=False,
+                error_code="helix_timeout",
+                message="subscriptions request timed out",
+                request_attempted=True,
+            )
         except Exception:
-            self._log.debug("get_broadcaster_subscriptions failed for %s", user_id, exc_info=True)
-            return None
+            self._log.debug(
+                "get_broadcaster_subscriptions_result failed for %s",
+                user_id,
+                exc_info=True,
+            )
+            return self._helix_result(
+                ok=False,
+                error_code="helix_exception",
+                message="subscriptions request raised an exception",
+                request_attempted=True,
+            )
 
-    async def get_ad_schedule(self, user_id: str, user_token: str) -> dict | None:
+    async def get_broadcaster_subscriptions(self, user_id: str, user_token: str) -> dict | None:
+        result = await self.get_broadcaster_subscriptions_result(user_id, user_token)
+        data = result.get("data")
+        return data if result.get("ok") and isinstance(data, dict) else None
+
+    async def get_ad_schedule_result(self, user_id: str, user_token: str) -> dict[str, object]:
         """
-        Liefert den aktuellen Ads-Schedule eines Broadcasters.
+        Structured result for /channels/ads.
         Benötigt Scope: channel:read:ads
         """
         if not user_id or not user_token:
-            return None
+            return self._helix_result(
+                ok=False,
+                error_code="missing_credentials",
+                message="user_id and user_token are required",
+            )
         try:
-            token = user_token.strip()
-            if token.lower().startswith("oauth:"):
-                token = token.split(":", 1)[1]
+            token = self._normalize_bearer_token(user_token)
+            if not token:
+                return self._helix_result(
+                    ok=False,
+                    error_code="missing_user_token",
+                    message="user token is required",
+                )
             self._ensure_session()
             assert self._session is not None
             url = f"{TWITCH_API_BASE}/channels/ads"
@@ -745,34 +933,91 @@ class TwitchAPI:
                         r.status,
                         txt[:180].replace("\n", " "),
                     )
-                    return None
+                    return self._helix_result(
+                        ok=False,
+                        http_status=r.status,
+                        error_code=self._map_helix_error_code(
+                            http_status=r.status,
+                            message=txt,
+                            default="helix_ads_failed",
+                        ),
+                        message=txt,
+                        request_attempted=True,
+                    )
                 js = await r.json()
                 data = js.get("data", []) or []
                 if not data:
-                    return None
+                    return self._helix_result(
+                        ok=False,
+                        http_status=200,
+                        error_code="empty_data",
+                        message="ads response did not contain data",
+                        request_attempted=True,
+                    )
                 first = data[0]
-                return first if isinstance(first, dict) else None
+                if not isinstance(first, dict):
+                    return self._helix_result(
+                        ok=False,
+                        http_status=200,
+                        error_code="invalid_response",
+                        message="ads response contained an invalid data item",
+                        request_attempted=True,
+                    )
+                return self._helix_result(
+                    ok=True,
+                    data=first,
+                    http_status=200,
+                    request_attempted=True,
+                )
+        except asyncio.TimeoutError:
+            return self._helix_result(
+                ok=False,
+                error_code="helix_timeout",
+                message="ads request timed out",
+                request_attempted=True,
+            )
         except Exception:
-            self._log.debug("get_ad_schedule failed for %s", user_id, exc_info=True)
-            return None
+            self._log.debug("get_ad_schedule_result failed for %s", user_id, exc_info=True)
+            return self._helix_result(
+                ok=False,
+                error_code="helix_exception",
+                message="ads request raised an exception",
+                request_attempted=True,
+            )
 
-    async def get_chatters(
+    async def get_ad_schedule(self, user_id: str, user_token: str) -> dict | None:
+        result = await self.get_ad_schedule_result(user_id, user_token)
+        data = result.get("data")
+        return data if result.get("ok") and isinstance(data, dict) else None
+
+    async def get_chatters_result(
         self,
         broadcaster_id: str,
         moderator_id: str,
         user_token: str,
         first: int = 1000,
-    ) -> list[dict]:
+    ) -> dict[str, object]:
         """
-        Gibt alle aktuell verbundenen Chatters zurück (inkl. stille Lurker).
+        Structured result for /chat/chatters.
         Benötigt Scope: moderator:read:chatters
         broadcaster_id == moderator_id wenn der Streamer selbst seinen Chat abfragt.
         """
         if not broadcaster_id or not moderator_id or not user_token:
-            return []
+            return self._helix_result(
+                ok=False,
+                error_code="missing_credentials",
+                message="broadcaster_id, moderator_id and user_token are required",
+            )
         all_chatters: list[dict] = []
         cursor: str | None = None
         try:
+            token = self._normalize_bearer_token(user_token)
+            if not token:
+                return self._helix_result(
+                    ok=False,
+                    error_code="missing_user_token",
+                    message="user token is required",
+                )
             self._ensure_session()
             assert self._session is not None
             url = f"{TWITCH_API_BASE}/chat/chatters"
@@ -788,7 +1033,7 @@ class TwitchAPI:
                     url,
                     headers={
                         "Client-ID": self.client_id,
-                        "Authorization": f"Bearer {user_token}",
+                        "Authorization": f"Bearer {token}",
                     },
                     params=params,
                 ) as r:
@@ -799,16 +1044,60 @@ class TwitchAPI:
                             r.status,
                             txt[:180].replace("\n", " "),
                         )
-                        break
+                        return self._helix_result(
+                            ok=False,
+                            http_status=r.status,
+                            error_code=self._map_helix_error_code(
+                                http_status=r.status,
+                                message=txt,
+                                default="helix_chatters_failed",
+                            ),
+                            message=txt,
+                            request_attempted=True,
+                        )
                     js = await r.json()
                     page = js.get("data") or []
                     all_chatters.extend(page)
                     cursor = (js.get("pagination") or {}).get("cursor")
                     if not cursor or not page:
                         break
+        except asyncio.TimeoutError:
+            return self._helix_result(
+                ok=False,
+                error_code="helix_timeout",
+                message="chatters request timed out",
+                request_attempted=True,
+            )
         except Exception:
-            self._log.debug("get_chatters failed for broadcaster %s", broadcaster_id, exc_info=True)
-        return all_chatters
+            self._log.debug("get_chatters_result failed for broadcaster %s", broadcaster_id, exc_info=True)
+            return self._helix_result(
+                ok=False,
+                error_code="helix_exception",
+                message="chatters request raised an exception",
+                request_attempted=True,
+            )
+        return self._helix_result(
+            ok=True,
+            data=all_chatters,
+            http_status=200,
+            request_attempted=True,
+        )
+
+    async def get_chatters(
+        self,
+        broadcaster_id: str,
+        moderator_id: str,
+        user_token: str,
+        first: int = 1000,
+    ) -> list[dict] | None:
+        result = await self.get_chatters_result(
+            broadcaster_id=broadcaster_id,
+            moderator_id=moderator_id,
+            user_token=user_token,
+            first=first,
+        )
+        data = result.get("data")
+        return data if result.get("ok") and isinstance(data, list) else None
 
     async def subscribe_eventsub_websocket(
         self,
@@ -953,13 +1242,26 @@ class TwitchAPI:
                             r.status,
                             txt[:200],
                         )
-                        break
+                        return []
                     js = await r.json()
             except Exception as exc:
                 self._log.error("list_eventsub_subscriptions fehlgeschlagen: %s", exc)
-                break
+                return []
+
+            if not isinstance(js, dict):
+                self._log.warning(
+                    "GET /eventsub/subscriptions: invalid response payload type %s",
+                    type(js).__name__,
+                )
+                return []
 
             data = js.get("data") or []
+            if not isinstance(data, list):
+                self._log.warning(
+                    "GET /eventsub/subscriptions: invalid data payload type %s",
+                    type(data).__name__,
+                )
+                return []
             results.extend(data)
             pagination = js.get("pagination") or {}
             cursor = pagination.get("cursor")

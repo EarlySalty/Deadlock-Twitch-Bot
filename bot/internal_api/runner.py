@@ -44,6 +44,7 @@ class InternalApiRunner:
         live_active_announcements_cb: Callable[[], Awaitable[list[dict[str, Any]]]] | None = None,
         live_link_click_cb: Callable[..., Awaitable[dict[str, Any] | None]] | None = None,
         observability_snapshot_cb: Callable[[], Awaitable[dict[str, Any]]] | None = None,
+        chatters_debug_cb: Callable[[str], Awaitable[dict[str, Any]]] | None = None,
     ) -> None:
         self.host = host
         self.port = int(port)
@@ -70,6 +71,7 @@ class InternalApiRunner:
         self._live_active_announcements_cb = live_active_announcements_cb
         self._live_link_click_cb = live_link_click_cb
         self._observability_snapshot_cb = observability_snapshot_cb
+        self._chatters_debug_cb = chatters_debug_cb
 
         self._runner: web.AppRunner | None = None
         self._app: web.Application | None = None
@@ -125,6 +127,7 @@ class InternalApiRunner:
                     live_active_announcements_cb=self._live_active_announcements_cb,
                     live_link_click_cb=self._live_link_click_cb,
                     observability_snapshot_cb=self._observability_snapshot_cb,
+                    chatters_debug_cb=self._chatters_debug_cb,
                 )
                 runner = web.AppRunner(app)
                 await runner.setup()
