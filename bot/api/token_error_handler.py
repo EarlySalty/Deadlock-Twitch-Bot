@@ -499,8 +499,8 @@ class TokenErrorHandler:
             embed.add_field(
                 name="Aktion erforderlich",
                 value=(
-                    "Der Streamer muss sich **neu autorisieren**, damit Raid-Bot und Twitch-Integrationen wieder funktionieren.\n"
-                    "➡️ Bitte im Dashboard einloggen und Twitch neu verbinden oder alternativ `/traid` verwenden."
+                    "Der Streamer muss den Bot **neu für seinen Kanal aktivieren**, damit Auto-Raid und Twitch-Integrationen wieder funktionieren.\n"
+                    "➡️ Bitte im Dashboard neu verbinden oder alternativ `/traid` verwenden."
                 ),
                 inline=False,
             )
@@ -568,8 +568,8 @@ class TokenErrorHandler:
 
         if is_reminder:
             embed = discord.Embed(
-                title="⚠️ Twitch Bot – Re-Auth weiterhin ausstehend",
-                description=f"Die Twitch-Autorisierung für **{twitch_login}** wurde seit {GRACE_PERIOD_DAYS} Tagen noch nicht erneuert.",
+                title="⚠️ Twitch Bot – Aktivierung weiterhin ausstehend",
+                description=f"Die Verbindung für **{twitch_login}** wurde seit {GRACE_PERIOD_DAYS} Tagen noch nicht erneuert.",
                 color=discord.Color.dark_red(),
                 timestamp=datetime.now(UTC),
             )
@@ -580,15 +580,15 @@ class TokenErrorHandler:
             )
             embed.add_field(
                 name="Status",
-                value="⚠️ Bot-Funktionen bleiben deaktiviert bis zur Re-Autorisierung",
+                value="⚠️ Bot-Funktionen bleiben deaktiviert, bis dein Kanal wieder verbunden ist.",
                 inline=True,
             )
             embed.add_field(
                 name="Lösung",
                 value=(
-                    "Klicke auf den Button unten, um einen neuen Auth-Link zu erhalten.\n"
+                    "Klicke auf den Button unten, um einen neuen Link für deinen Kanal zu erhalten.\n"
                     "Melde dich dazu im Dashboard an und verbinde Twitch erneut.\n\n"
-                    "Alternativ: `/traid` auf dem Discord-Server nutzen."
+                    "Alternativ kannst du `/traid` auf dem Discord-Server nutzen."
                 ),
                 inline=False,
             )
@@ -596,14 +596,14 @@ class TokenErrorHandler:
                 name="Hinweis",
                 value=(
                     "Bei Problemen oder Fragen bitte auf dem Server melden.\n"
-                    "Die Autorisierung ist erforderlich, damit Auto-Raid, Chat-Schutz und Analytics wieder laufen."
+                    "Die Verbindung ist erforderlich, damit Auto-Raid, Chat-Schutz und Analytics wieder laufen."
                 ),
                 inline=False,
             )
         else:
             embed = discord.Embed(
-                title="⚠️ Twitch Bot – Autorisierung fehlgeschlagen",
-                description=f"Die Autorisierung für den Twitch Bot ist für **{twitch_login}** fehlgeschlagen und muss erneuert werden.",
+                title="⚠️ Twitch Bot – Verbindung fehlgeschlagen",
+                description=f"Die Verbindung für den Twitch Bot ist für **{twitch_login}** fehlgeschlagen und muss erneuert werden.",
                 color=discord.Color.orange(),
                 timestamp=datetime.now(UTC),
             )
@@ -627,17 +627,17 @@ class TokenErrorHandler:
             embed.add_field(
                 name="Lösung",
                 value=(
-                    "Klicke auf den Button unten, um einen neuen Auth-Link zu erhalten.\n"
+                    "Klicke auf den Button unten, um einen neuen Link für deinen Kanal zu erhalten.\n"
                     "Melde dich dazu im Dashboard an und verbinde Twitch erneut.\n"
-                    "Nach erfolgreicher Autorisierung wird der Bot automatisch wieder aktiviert.\n\n"
+                    "Nach erfolgreicher Verbindung wird der Bot automatisch wieder aktiviert.\n\n"
                 ),
                 inline=False,
             )
             embed.add_field(
                 name="Status",
                 value=(
-                    f"Bis zur Re-Autorisierung bleiben die Twitch-Bot-Funktionen fuer **{twitch_login}** deaktiviert.\n"
-                    f"Die aktuelle Frist im System laeuft bis <t:{deadline_ts}:F>."
+                    f"Bis zur erneuten Verbindung bleiben die Twitch-Bot-Funktionen für **{twitch_login}** deaktiviert.\n"
+                    f"Die aktuelle Frist im System läuft bis <t:{deadline_ts}:F>."
                 ),
                 inline=False,
             )
@@ -645,7 +645,7 @@ class TokenErrorHandler:
                 name="Hinweis",
                 value=(
                     "Bei Problemen oder Fragen bitte dich sofort bei @EarlySalty melden :).\n"
-                    "Die Autorisierung ist erforderlich, damit alle Features wieder laufen "
+                    "Die Verbindung ist erforderlich, damit alle Features wieder laufen "
                     "(Auto-Raid, Chat-Schutz, Analytics)."
                 ),
                 inline=False,
@@ -658,7 +658,7 @@ class TokenErrorHandler:
             from ..raid.views import RaidAuthGenerateView
 
             view = RaidAuthGenerateView(
-                twitch_login=twitch_login, button_label="🔗 Auth-Link erzeugen"
+                twitch_login=twitch_login, button_label="🔗 Link für deinen Kanal erzeugen"
             )
         except Exception:
             view = None

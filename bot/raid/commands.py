@@ -152,7 +152,7 @@ class RaidCommandsMixin:
 
         if not hasattr(self, "_raid_bot") or not self._raid_bot:
             await ctx.send(
-                "⚠️ Der Twitch-Bot ist derzeit nicht verfügbar. Bitte wende dich an @earlyalty.",
+                "⚠️ Der Twitch-Bot ist derzeit nicht verfügbar. Bitte wende dich an @EarlySalty.",
                 ephemeral=True,
             )
             return
@@ -162,7 +162,7 @@ class RaidCommandsMixin:
             twitch_login=twitch_login,
         )
         await ctx.send(
-            "Klicke auf den Button, um einen frischen Twitch-OAuth-Link zu erzeugen.",
+            "Klicke auf den Button, um einen neuen Link für deinen Kanal zu erzeugen.",
             view=view,
             ephemeral=True,
         )
@@ -236,7 +236,7 @@ class RaidCommandsMixin:
 
         await ctx.send(
             f"✅ Auto-Raid wurde für **{twitch_login}** aktiviert!\n"
-            "Wenn du offline gehst, raidet der Bot automatisch einen anderen Online-Partner.",
+            "Wenn du Deadlock streamst und offline gehst, raidet der Bot automatisch einen passenden Online-Partner.",
             ephemeral=True,
         )
         log.info("Enabled auto-raid for %s (%s)", twitch_login, discord_user_id)

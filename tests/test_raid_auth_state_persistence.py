@@ -67,6 +67,34 @@ class RaidAuthStatePersistenceTests(unittest.TestCase):
         self.assertEqual(meta["expected_twitch_user_id"], "1001")
         self.assertEqual(meta["discord_user_id"], "123456789")
 
+    def test_generate_auth_url_for_public_onboarding_leaves_expected_login_empty(self) -> None:
+        fake_conn = _FakeConn()
+
+        manager = RaidAuthManager(
+            client_id="cid",
+            client_secret="secret",
+            redirect_uri="https://raid.earlysalty.com/twitch/raid/callback",
+        )
+
+        with (
+            patch("bot.raid.auth.secrets.token_urlsafe", return_value="state-public"),
+            patch("bot.raid.auth.time.time", return_value=1700000000.0),
+            patch(
+                "bot.raid.auth.get_conn",
+                side_effect=lambda: contextlib.nullcontext(fake_conn),
+            ),
+        ):
+            auth_url = manager.generate_auth_url("public:website_onboarding")
+
+        self.assertIn("state=state-public", auth_url)
+        insert_calls = [call for call in fake_conn.calls if "INSERT INTO oauth_state_tokens" in call[0]]
+        self.assertEqual(len(insert_calls), 1)
+        _, params = insert_calls[0]
+        meta = json.loads(params[4])
+        self.assertEqual(params[2], "public:website_onboarding")
+        self.assertEqual(meta["scope_profile"], "base")
+        self.assertNotIn("expected_twitch_login", meta)
+
     def test_get_pending_auth_url_rebuilds_from_persisted_state(self) -> None:
         fake_conn = _FakeConn(
             rows_by_fragment={

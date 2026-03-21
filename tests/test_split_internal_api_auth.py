@@ -278,6 +278,30 @@ class InternalApiAuthTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(payload.get("auth_url"), "https://auth.example/discord:123456789")
         self.assertEqual(seen_logins, ["discord:123456789"])
 
+    async def test_raid_auth_url_allows_public_onboarding_target(self) -> None:
+        seen_logins: list[str] = []
+
+        async def _raid_auth_url_cb(login: str) -> str:
+            seen_logins.append(login)
+            return f"https://auth.example/{login}"
+
+        app = build_internal_api_app(token="secret-token", raid_auth_url_cb=_raid_auth_url_cb)
+        async with TestServer(app) as server:
+            async with TestClient(server) as client:
+                response = await client.get(
+                    f"{INTERNAL_API_BASE_PATH}/raid/auth-url?login=public:website_onboarding",
+                    headers={INTERNAL_TOKEN_HEADER: "secret-token"},
+                )
+                payload = await response.json()
+
+        self.assertEqual(response.status, 200)
+        self.assertEqual(payload.get("login"), "public:website_onboarding")
+        self.assertEqual(
+            payload.get("auth_url"),
+            "https://auth.example/public:website_onboarding",
+        )
+        self.assertEqual(seen_logins, ["public:website_onboarding"])
+
     async def test_raid_auth_url_rejects_mismatched_discord_target_and_query_id(self) -> None:
         seen_calls: list[tuple[str, str | None]] = []
 
@@ -321,6 +345,29 @@ class InternalApiAuthTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.status, 200)
         self.assertEqual(payload.get("auth_url"), "https://auth.example/partner_one/123456789")
         self.assertEqual(seen_calls, [("partner_one", "123456789")])
+
+    async def test_raid_auth_url_passes_scope_profile_when_callback_supports_it(self) -> None:
+        seen_calls: list[tuple[str, str | None]] = []
+
+        async def _raid_auth_url_cb(login: str, scope_profile: str | None = None) -> str:
+            seen_calls.append((login, scope_profile))
+            return f"https://auth.example/{login}/{scope_profile or 'none'}"
+
+        app = build_internal_api_app(token="secret-token", raid_auth_url_cb=_raid_auth_url_cb)
+        async with TestServer(app) as server:
+            async with TestClient(server) as client:
+                response = await client.get(
+                    f"{INTERNAL_API_BASE_PATH}/raid/auth-url?login=public:website_onboarding&scope_profile=base",
+                    headers={INTERNAL_TOKEN_HEADER: "secret-token"},
+                )
+                payload = await response.json()
+
+        self.assertEqual(response.status, 200)
+        self.assertEqual(
+            payload.get("auth_url"),
+            "https://auth.example/public:website_onboarding/base",
+        )
+        self.assertEqual(seen_calls, [("public:website_onboarding", "base")])
 
     async def test_raid_auth_url_legacy_callback_still_works_without_discord_kwarg(self) -> None:
         seen_logins: list[str] = []

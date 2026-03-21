@@ -319,13 +319,18 @@ def build_dashboard_service_app(
             _warn_upstream_once("discord_profile", exc)
             return "Bot internal API unavailable; action not applied."
 
-    async def _raid_auth_url_cb(login: str, discord_user_id: str | None = None) -> str:
+    async def _raid_auth_url_cb(
+        login: str,
+        discord_user_id: str | None = None,
+        scope_profile: str | None = None,
+    ) -> str:
         if client is None:
             return ""
         try:
             return await client.get_raid_auth_url(
                 login,
                 discord_user_id=discord_user_id,
+                scope_profile=scope_profile,
             )
         except BotApiClientError as exc:
             _warn_upstream_once("raid_auth_url", exc)

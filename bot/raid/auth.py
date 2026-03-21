@@ -45,6 +45,7 @@ from .scope_profiles import (
 TWITCH_TOKEN_URL = "https://id.twitch.tv/oauth2/token"  # noqa: S105
 TWITCH_AUTHORIZE_URL = "https://id.twitch.tv/oauth2/authorize"
 TWITCH_API_BASE = "https://api.twitch.tv/helix"
+PUBLIC_WEBSITE_ONBOARDING_LOGIN = "public:website_onboarding"
 
 # Erforderliche Scopes für Raid-Funktionalität + Zusatz-Metriken (Follower/Chat)
 # Hinweis: Re-Auth notwendig, falls bisher nur channel:manage:raids erteilt war.
@@ -497,6 +498,8 @@ class RaidAuthManager:
                 )
                 if not normalized_expected_user_id:
                     normalized_expected_user_id = linked_expected_user_id
+            elif requested_login == PUBLIC_WEBSITE_ONBOARDING_LOGIN:
+                normalized_expected_login = None
             else:
                 normalized_expected_login = requested_login
         return RaidOAuthState(

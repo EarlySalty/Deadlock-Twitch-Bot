@@ -13,8 +13,8 @@ from ..internal_api import INTERNAL_API_BASE_PATH, INTERNAL_TOKEN_HEADER
 
 log = logging.getLogger("TwitchStreams.RaidViews")
 
-AUTH_BUTTON_LABEL = "OAuth-Link erzeugen"
-AUTH_LINK_LABEL = "Twitch autorisieren"
+AUTH_BUTTON_LABEL = "Link für deinen Kanal erzeugen"
+AUTH_LINK_LABEL = "Bot für deinen Kanal aktivieren"
 
 
 def _parse_env_bool(var_name: str, default: bool = False) -> bool:
@@ -131,20 +131,20 @@ def build_raid_requirements_embed(twitch_login: str) -> discord.Embed:
     login = (twitch_login or "").strip() or "dein Kanal"
     description = (
         f"Hey **{login}**!\n\n"
-        "Wir haben eine **neue Anforderungen** für unser Streamer-Partner-Programm. \n"
-        "Bitte stell sicher, dass du sie erfüllst, damit alle Features für dich aktiv sind :).\n\n"
-        "Eine Pflicht-Anforderung erfüllst du momentan noch nicht: \n"
-        "Twitch-Bot-Autorisierung - bitte stelle sicher das du die neue Anforderung erfüllst :).\n\n"
-        "**Twitch Bot-Update: Das ist im Hintergrund passiert**\n"
-        "1) **Auto-Raid Manager**\n"
-        "- Sobald dein Stream offline geht, raidet der Bot einen live-Partner.\n"
-        "2) **Chat Guard - Schutz vor Müll im Chat**\n"
-        '- Filtert Viewer-Bot/Spam-Muster (Phrasen/Fragmente wie "Best viewers", "streamboo.com").\n'
-        "3) **Analytics Dashboard (Geplant für 03-05/26)**\n"
-        "- Retention (5/10/20 Min), Unique Chatters, Kategorie-Vergleich (DE).\n\n"
+        "Dein Kanal ist noch nicht vollständig für das **Deadlock-Partnernetzwerk** eingerichtet.\n\n"
+        "Was noch fehlt:\n"
+        "Du musst den Bot einmal für deinen Kanal aktivieren.\n\n"
+        "**Was dir das bringt**\n"
+        "1) **Auto-Raid im Deadlock-Partnernetzwerk**\n"
+        "- Wenn du Deadlock streamst und offline gehst, kann der Bot deine Viewer automatisch an passende Partner weiterleiten.\n"
+        "2) **Chat Guard**\n"
+        '- Der Bot filtert typische Spam- und Viewer-Bot-Muster wie "Best viewers" oder "streamboo.com".\n'
+        "3) **Dashboard & weitere Funktionen**\n"
+        "- Nach der Aktivierung stehen dir Dashboard, Netzwerk-Funktionen und weitere Tools zur Verfügung.\n\n"
+        "Wichtig: Auto-Raids greifen nur bei Deadlock. Dein normales manuelles Raiden bleibt unverändert.\n"
     )
     return discord.Embed(
-        title="🔐 Twitch-Bot Autorisierung",
+        title="🔗 Bot für deinen Kanal aktivieren",
         description=description,
         color=0x9146FF,
     )
@@ -187,7 +187,7 @@ class _RaidAuthGenerateButton(discord.ui.Button):
             if not login:
                 await interaction.response.send_message(
                     "⚠️ Bot nicht bereit – bitte kurz warten und nochmal versuchen.\n"
-                    "Alternativ: `/traid` in Discord nutzen.",
+                    "Alternativ kannst du `/traid` in Discord nutzen.",
                     ephemeral=True,
                 )
                 return
@@ -223,7 +223,7 @@ class _RaidAuthGenerateButton(discord.ui.Button):
             if not button_url:
                 await interaction.response.send_message(
                     "⚠️ Bot nicht bereit – bitte kurz warten und nochmal versuchen.\n"
-                    "Alternativ: `/traid` in Discord nutzen.",
+                    "Alternativ kannst du `/traid` in Discord nutzen.",
                     ephemeral=True,
                 )
                 return
@@ -239,7 +239,7 @@ class _RaidAuthGenerateButton(discord.ui.Button):
                 )
             )
             content = (
-                f"Hier ist dein Twitch OAuth-Link für **{login}**.\n"
+                f"Hier ist dein Link, um den Bot für **{login}** zu aktivieren.\n"
                 "Bitte innerhalb von 10 Minuten öffnen, danach läuft der Link ab."
             )
             await _send_interaction_message(interaction, content, view=link_view)
@@ -249,7 +249,7 @@ class _RaidAuthGenerateButton(discord.ui.Button):
             try:
                 if not interaction.response.is_done():
                     await interaction.response.send_message(
-                        "❌ Fehler beim Erzeugen des Links. Bitte `/traid` in Discord nutzen.",
+                        "❌ Fehler beim Erzeugen des Links. Bitte nutze `/traid` in Discord.",
                         ephemeral=True,
                     )
             except Exception:

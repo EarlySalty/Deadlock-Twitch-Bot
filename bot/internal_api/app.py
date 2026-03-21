@@ -28,6 +28,7 @@ INTERNAL_API_BASE_PATH = "/internal/twitch/v1"
 INTERNAL_TOKEN_HEADER = "X-Internal-Token"
 IDEMPOTENCY_KEY_HEADER = "Idempotency-Key"
 _LOGIN_RE = re.compile(r"^[a-z0-9_]{3,25}$")
+PUBLIC_WEBSITE_ONBOARDING_LOGIN = "public:website_onboarding"
 
 
 @dataclass(slots=True)
@@ -457,34 +458,44 @@ class InternalApiServer:
         login: str,
         *,
         discord_user_id: str | None = None,
+        scope_profile: str | None = None,
     ) -> str:
-        if discord_user_id is None:
-            return str(await self._raid_auth_url(login)).strip()
-
         try:
             signature = inspect.signature(self._raid_auth_url)
         except (TypeError, ValueError):
             signature = None
 
+        kwargs: dict[str, Any] = {}
+        if discord_user_id is not None:
+            kwargs["discord_user_id"] = discord_user_id
+        if scope_profile is not None:
+            kwargs["scope_profile"] = scope_profile
+
         if signature is not None:
+            if kwargs and (
+                all(name in signature.parameters for name in kwargs)
+                or any(
+                    parameter.kind == inspect.Parameter.VAR_KEYWORD
+                    for parameter in signature.parameters.values()
+                )
+            ):
+                return str(await self._raid_auth_url(login, **kwargs)).strip()
             if "discord_user_id" in signature.parameters or any(
                 parameter.kind == inspect.Parameter.VAR_KEYWORD
                 for parameter in signature.parameters.values()
             ):
-                return str(
-                    await self._raid_auth_url(
-                        login,
-                        discord_user_id=discord_user_id,
-                    )
-                ).strip()
+                filtered_kwargs = {}
+                if "discord_user_id" in signature.parameters and discord_user_id is not None:
+                    filtered_kwargs["discord_user_id"] = discord_user_id
+                if "scope_profile" in signature.parameters and scope_profile is not None:
+                    filtered_kwargs["scope_profile"] = scope_profile
+                if filtered_kwargs:
+                    return str(await self._raid_auth_url(login, **filtered_kwargs)).strip()
             return str(await self._raid_auth_url(login)).strip()
 
-        return str(
-            await self._raid_auth_url(
-                login,
-                discord_user_id=discord_user_id,
-            )
-        ).strip()
+        if kwargs:
+            return str(await self._raid_auth_url(login, **kwargs)).strip()
+        return str(await self._raid_auth_url(login)).strip()
 
     def _prepare_idempotency(
         self,
@@ -825,6 +836,8 @@ class InternalApiServer:
             return None
 
         lowered = value.lower()
+        if lowered == PUBLIC_WEBSITE_ONBOARDING_LOGIN:
+            return lowered
         if lowered.startswith("discord:"):
             discord_id = lowered.split(":", 1)[1].strip()
             if discord_id.isdigit():
@@ -1534,6 +1547,7 @@ class InternalApiServer:
             request.query.get("discord_user_id"),
             required=False,
         )
+        scope_profile = str(request.query.get("scope_profile") or "").strip() or None
         try:
             if login.startswith("discord:"):
                 target_discord_user_id = login.split(":", 1)[1]
@@ -1543,6 +1557,7 @@ class InternalApiServer:
             auth_url = await self._invoke_raid_auth_url(
                 login,
                 discord_user_id=discord_user_id,
+                scope_profile=scope_profile,
             )
             if not auth_url:
                 return self._json_error("upstream_unavailable", 503, "raid bot not initialized")

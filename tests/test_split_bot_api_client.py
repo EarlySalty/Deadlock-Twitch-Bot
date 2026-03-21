@@ -188,6 +188,36 @@ class BotApiClientErrorMappingTests(unittest.IsolatedAsyncioTestCase):
             "http://127.0.0.1:8766/internal/twitch/v1/raid/auth-state?discord_user_id=123",
         )
 
+    async def test_get_raid_auth_url_passes_scope_profile_query(self) -> None:
+        session = _FakeSession(
+            response=_FakeResponse(
+                status=200,
+                text=(
+                    '{"ok":true,"auth_url":"https://auth.example/public:website_onboarding",'
+                    '"login":"public:website_onboarding"}'
+                ),
+            )
+        )
+        client = BotApiClient(
+            base_url="http://127.0.0.1:8766",
+            token="secret",
+            session=session,
+        )
+
+        auth_url = await client.get_raid_auth_url(
+            "public:website_onboarding",
+            scope_profile="base",
+        )
+
+        self.assertEqual(auth_url, "https://auth.example/public:website_onboarding")
+        self.assertEqual(
+            session.calls[0]["url"],
+            (
+                "http://127.0.0.1:8766/internal/twitch/v1/raid/auth-url"
+                "?login=public%3Awebsite_onboarding&scope_profile=base"
+            ),
+        )
+
     async def test_get_raid_block_state_supports_login_only(self) -> None:
         session = _FakeSession(
             response=_FakeResponse(

@@ -453,12 +453,16 @@ class BotApiClient:
         login: str,
         *,
         discord_user_id: str | int | None = None,
+        scope_profile: str | None = None,
     ) -> str:
         query: dict[str, object] = {"login": login}
         if discord_user_id is not None:
             normalized_discord_user_id = str(discord_user_id).strip()
             if normalized_discord_user_id:
                 query["discord_user_id"] = normalized_discord_user_id
+        normalized_scope_profile = str(scope_profile or "").strip()
+        if normalized_scope_profile:
+            query["scope_profile"] = normalized_scope_profile
         payload = await self._request_json(
             "GET",
             f"{INTERNAL_API_BASE_PATH}/raid/auth-url",

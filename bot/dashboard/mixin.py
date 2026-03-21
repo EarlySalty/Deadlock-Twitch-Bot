@@ -27,6 +27,7 @@ from ..raid.views import RaidAuthGenerateView, build_raid_requirements_embed
 from .server_v2 import build_v2_app
 TWITCH_HELIX_USERS_URL = "https://api.twitch.tv/helix/users"
 RAID_OAUTH_SUCCESS_REDIRECT_URL = "https://twitch.earlysalty.com/twitch/dashboard"
+PUBLIC_WEBSITE_ONBOARDING_LOGIN = "public:website_onboarding"
 
 
 VERIFICATION_SUCCESS_DM_MESSAGE = (
@@ -292,6 +293,7 @@ class TwitchDashboardMixin:
         self,
         login: str,
         discord_user_id: str | None = None,
+        scope_profile: str | None = None,
     ) -> str:
         raw = str(login or "").strip()
         if not raw:
@@ -310,6 +312,8 @@ class TwitchDashboardMixin:
                 raise ValueError("discord_user_id does not match login target")
             normalized = f"discord:{discord_id}"
             use_discord_button_url = True
+        elif raw.lower() == PUBLIC_WEBSITE_ONBOARDING_LOGIN:
+            normalized = PUBLIC_WEBSITE_ONBOARDING_LOGIN
         else:
             normalized = self._normalize_login(raw)
             if not normalized:
@@ -323,6 +327,7 @@ class TwitchDashboardMixin:
             return str(
                 auth_manager.generate_discord_button_url(
                     normalized,
+                    scope_profile=scope_profile or None,
                     discord_user_id=normalized_discord_user_id or normalized.split(":", 1)[1],
                 )
             )
@@ -330,11 +335,20 @@ class TwitchDashboardMixin:
             return str(
                 auth_manager.generate_discord_button_url(
                     normalized,
+                    scope_profile=scope_profile or None,
                     expected_twitch_login=normalized,
                     discord_user_id=normalized_discord_user_id,
                 )
             )
-        return str(auth_manager.generate_auth_url(normalized, expected_twitch_login=normalized))
+        if normalized == PUBLIC_WEBSITE_ONBOARDING_LOGIN:
+            return str(auth_manager.generate_auth_url(normalized, scope_profile=scope_profile or None))
+        return str(
+            auth_manager.generate_auth_url(
+                normalized,
+                scope_profile=scope_profile or None,
+                expected_twitch_login=normalized,
+            )
+        )
 
     async def _dashboard_raid_go_url(self, state: str) -> str | None:
         state_clean = str(state or "").strip()
@@ -532,7 +546,10 @@ class TwitchDashboardMixin:
             expected_twitch_login = str(state_info.expected_twitch_login or "").strip().lower()
             if not expected_twitch_login:
                 requested_login = str(state_info.requested_login or "").strip().lower()
-                if requested_login and not requested_login.startswith("discord:"):
+                if requested_login and not (
+                    requested_login.startswith("discord:")
+                    or requested_login == PUBLIC_WEBSITE_ONBOARDING_LOGIN
+                ):
                     expected_twitch_login = requested_login
             if not expected_twitch_user_id and expected_twitch_login and twitch_login != expected_twitch_login:
                 log.warning(

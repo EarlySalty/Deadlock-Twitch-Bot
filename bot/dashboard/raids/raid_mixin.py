@@ -14,12 +14,13 @@ from aiohttp import web
 
 from ... import storage
 from ...core.constants import log
-from ...raid.scope_profiles import scopes_for_profile
+from ...raid.scope_profiles import BASE_SCOPE_PROFILE, normalize_scope_profile, scopes_for_profile
 from ...raid.views import RaidAuthGenerateView, build_raid_requirements_embed
 
 TWITCH_HELIX_USERS_URL = "https://api.twitch.tv/helix/users"
 DEFAULT_RAID_OAUTH_SUCCESS_REDIRECT_URL = "https://twitch.earlysalty.com/twitch/dashboard"
 PUBLIC_STREAMER_ONBOARDING_URL = "https://twitch.earlysalty.com/twitch/onboarding"
+PUBLIC_STREAMER_ONBOARDING_LOGIN = "public:website_onboarding"
 
 
 class _DashboardRaidMixin:
@@ -35,19 +36,19 @@ class _DashboardRaidMixin:
         safe_auth_url = html.escape(auth_url, quote=True)
         return "".join(
             [
-                "<html><head><title>Raid Bot Autorisierung</title></head>",
+                "<html><head><title>Bot für deinen Kanal aktivieren</title></head>",
                 "<body style='font-family: sans-serif; max-width: 680px; margin: 48px auto;'>",
-                "<h1>Raid Bot Autorisierung</h1>",
+                "<h1>Bot für deinen Kanal aktivieren</h1>",
                 "<p>Streamer: <strong>",
                 safe_login,
                 "</strong></p>",
-                "<p>Klicke auf den Link unten, um den Raid Bot zu autorisieren:</p>",
+                "<p>Klicke auf den Link unten, um deinen Kanal mit dem Deadlock-Partnernetzwerk zu verbinden:</p>",
                 "<p><a href='",
                 safe_auth_url,
                 "' style='padding: 10px 20px; background: #9146FF; color: white; text-decoration: none; border-radius: 5px;'>",
-                "Auf Twitch autorisieren</a></p>",
+                "Bot für deinen Kanal aktivieren</a></p>",
                 "<p style='color: #666; font-size: 0.9em;'>",
-                "Der Raid Bot kann dann automatisch in deinem Namen raiden, wenn du offline gehst.",
+                "Wenn du Deadlock streamst und offline gehst, kann der Bot danach automatisch einen passenden Partner raiden.",
                 "</p></body></html>",
             ]
         )
@@ -431,8 +432,16 @@ new Chart(ctx, {{
         Access policy:
         - Streamer dashboard session may only authorize its own Twitch login.
         - Explicit `?login=` overrides require admin token/session gate.
+        - Public website onboarding may start the reduced base-scope OAuth without a session.
         """
         requested_login = (request.query.get("login") or "").strip().lower()
+        requested_scope_profile_raw = (request.query.get("scope_profile") or "").strip()
+        requested_scope_profile = (
+            normalize_scope_profile(requested_scope_profile_raw)
+            if requested_scope_profile_raw
+            else ""
+        )
+        request_source = (request.query.get("source") or "").strip().lower()
         login = ""
         session_getter = getattr(self, "_get_dashboard_auth_session", None)
         if callable(session_getter):
@@ -449,9 +458,16 @@ new Chart(ctx, {{
                 self._require_token(request)
             login = requested_login
         elif not login:
-            # Public streamer onboarding was moved to the website landing page.
-            # Unauthenticated visits should no longer enter the raid OAuth flow directly.
-            raise web.HTTPFound(location=PUBLIC_STREAMER_ONBOARDING_URL)
+            public_scope_profile = requested_scope_profile or BASE_SCOPE_PROFILE
+            allow_public_onboarding = (
+                public_scope_profile == BASE_SCOPE_PROFILE
+                and request_source in {"", "website_onboarding"}
+            )
+            if allow_public_onboarding:
+                login = PUBLIC_STREAMER_ONBOARDING_LOGIN
+                requested_scope_profile = public_scope_profile
+            else:
+                raise web.HTTPFound(location=PUBLIC_STREAMER_ONBOARDING_URL)
 
         if not login:
             return web.Response(text="Missing login parameter", status=400)
@@ -462,13 +478,19 @@ new Chart(ctx, {{
             redirect_uri = str(getattr(auth_manager, "redirect_uri", "") or "").strip()
             if not client_id or not redirect_uri:
                 return web.Response(text="Raid bot OAuth is not configured", status=503)
-            auth_url = str(auth_manager.generate_auth_url(login))
+            auth_kwargs: dict[str, str] = {}
+            if requested_scope_profile:
+                auth_kwargs["scope_profile"] = requested_scope_profile
+            auth_url = str(auth_manager.generate_auth_url(login, **auth_kwargs))
         else:
             raid_auth_url_cb = getattr(self, "_raid_auth_url_cb", None)
             if not callable(raid_auth_url_cb):
                 return web.Response(text="Raid bot not initialized", status=503)
             try:
-                auth_url = str(await raid_auth_url_cb(login)).strip()
+                auth_kwargs: dict[str, str] = {}
+                if requested_scope_profile:
+                    auth_kwargs["scope_profile"] = requested_scope_profile
+                auth_url = str(await raid_auth_url_cb(login, **auth_kwargs)).strip()
             except Exception as exc:
                 status = int(getattr(exc, "status", 503) or 503)
                 return web.Response(
@@ -907,7 +929,10 @@ new Chart(ctx, {{
             expected_twitch_login = str(state_info.expected_twitch_login or "").strip().lower()
             if not expected_twitch_login:
                 requested_login = str(state_info.requested_login or "").strip().lower()
-                if requested_login and not requested_login.startswith("discord:"):
+                if requested_login and not (
+                    requested_login.startswith("discord:")
+                    or requested_login == PUBLIC_STREAMER_ONBOARDING_LOGIN
+                ):
                     expected_twitch_login = requested_login
             if not expected_twitch_user_id and expected_twitch_login and twitch_login != expected_twitch_login:
                 log.warning(

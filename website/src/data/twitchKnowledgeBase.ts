@@ -2,14 +2,12 @@ import {
   DISCORD_INVITE_URL,
   TWITCH_AFFILIATE_URL,
   TWITCH_AGB_URL,
-  TWITCH_DASHBOARD_V2_URL,
   TWITCH_DATENSCHUTZ_URL,
   TWITCH_DEMO_DASHBOARD_URL,
   TWITCH_FAQ_URL,
   TWITCH_IMPRESSUM_URL,
   TWITCH_ONBOARDING_URL,
-  TWITCH_RAID_ANALYTICS_URL,
-  TWITCH_RAID_HISTORY_URL,
+  buildTwitchBotAuthUrl,
   buildTwitchDashboardLoginUrl,
 } from "@/data/externalLinks";
 
@@ -63,73 +61,73 @@ export interface FaqSection {
 }
 
 export const ONBOARDING_HIGHLIGHTS: OnboardingHighlight[] = [
-  { label: "Netzwerk", value: "30+ Deadlock-Streamer" },
-  { label: "Analytics", value: "13 Dashboard-Tabs, Echtzeit" },
-  { label: "Kostenlos starten", value: "Kein Abo nötig zum Loslegen" },
+  { label: "Partnernetzwerk", value: "30+ Deadlock-Streamer" },
+  { label: "Auto-Raid", value: "Nur bei Deadlock aktiv" },
+  { label: "Start", value: "Kanal verbinden und loslegen" },
 ];
 
 export const ONBOARDING_STEPS: OnboardingStep[] = [
   {
-    eyebrow: "1. Autorisieren",
-    title: "Bot autorisieren und loslegen",
+    eyebrow: "1. Verbinden",
+    title: "Bot für deinen Kanal aktivieren",
     description:
-      "Ein Klick auf \"Mit Twitch einloggen\", Bot autorisieren — damit hast du 90% geschafft. Kein extra Passwort, keine Bewerbung. Sofort startklar.",
+      "Du verbindest deinen Twitch-Kanal mit dem Deadlock-Partnernetzwerk. Danach kann dein Kanal für Auto-Raids und weitere Bot-Funktionen eingerichtet werden.",
     bullets: [
-      "Kein Registrierungsformular, kein Freischaltungs-Prozess — du loggst dich ein und bist dabei.",
-      "Dein Twitch-Account reicht aus, um alle Features sofort nutzen zu können.",
-      "Innerhalb von Sekunden hast du Zugriff auf dein persönliches Dashboard.",
+      "Kein extra Konto und kein Formular auf der Website.",
+      "Nach der Aktivierung landest du direkt im Dashboard.",
+      "Ab dort kannst du sofort sehen, was für deinen Kanal aktiv ist.",
     ],
-    routeLabel: "Mit Twitch einloggen",
-    routeHref: buildTwitchDashboardLoginUrl(),
+    routeLabel: "Bot für deinen Kanal aktivieren",
+    routeHref: buildTwitchBotAuthUrl(),
   },
   {
-    eyebrow: "2. Dashboard",
-    title: "Entdecke dein Dashboard",
+    eyebrow: "2. Auto-Raid",
+    title: "So funktioniert das Deadlock-Raid-Netzwerk",
     description:
-      "Dein persönliches Analytics-Cockpit: Viewer-Trends, Heatmaps, Rankings, Session-Details und KI-gestützte Empfehlungen. Eine Demo zum Vorher-Testen ist ebenfalls verfügbar.",
+      "Wenn du Deadlock streamst und offline gehst, kann der Bot deine Viewer automatisch an passende Partner weiterleiten. Umgekehrt kannst du genauso von deren Raids profitieren.",
     bullets: [
-      "13 Tabs mit Echtzeit-Daten zu deinem Stream — von Viewer-Zahlen bis Zuschauer-Segmenten.",
-      "Interaktive Charts und Heatmaps zeigen dir auf einen Blick, wann dein Stream am stärksten performt.",
-      "KI-Coaching gibt dir personalisierte Empfehlungen basierend auf deinen echten Daten.",
+      "Auto-Raids greifen nur bei Deadlock, nicht bei anderen Spielen.",
+      "Dein normales manuelles Raiden bleibt unverändert.",
+      "Das Netzwerk arbeitet in beide Richtungen und hilft beim gegenseitigen Wachstum.",
+    ],
+    routeLabel: "Mehr zum Auto-Raid in der FAQ",
+    routeHref: `${TWITCH_FAQ_URL}#raids`,
+  },
+  {
+    eyebrow: "3. Dashboard",
+    title: "Behalte dein Netzwerk und deine Zahlen im Blick",
+    description:
+      "Im Dashboard siehst du, was auf deinem Kanal passiert: Raid-Verlauf, Viewer-Daten, Muster über Zeit und weitere Funktionen rund um deinen Stream.",
+    bullets: [
+      "Viewer-Trends, Heatmaps und Session-Details an einem Ort.",
+      "Raid-History und Analytics zeigen dir, wie das Netzwerk für dich arbeitet.",
+      "Weitere Tools kannst du danach in deinem Tempo entdecken.",
     ],
     routeLabel: "Demo ansehen",
     routeHref: TWITCH_DEMO_DASHBOARD_URL,
   },
   {
-    eyebrow: "3. Auto-Raid",
-    title: "Auto-Raid — dein Netzwerk arbeitet für dich",
-    description:
-      "Kein Schalter, kein Setup: Das Raid-Netzwerk ist automatisch aktiv. Wenn dein Stream endet, leitet der Bot deine Zuschauer an einen passenden Live-Partner im Deadlock-Netzwerk weiter. Deine Community bleibt in Bewegung, und du profitierst genauso von den Raids anderer.",
-    bullets: [
-      "Vollautomatisch — du musst nichts aktivieren oder konfigurieren.",
-      "Der Bot wählt intelligent den passenden Raid-Partner aus dem Netzwerk.",
-      "Du bekommst auch Raids von anderen Streamern, wenn diese offline gehen.",
-    ],
-    routeLabel: "Raid Analytics",
-    routeHref: TWITCH_RAID_ANALYTICS_URL,
-  },
-  {
     eyebrow: "4. Discord",
-    title: "Discord beitreten — kostenlose Reichweite mitnehmen",
+    title: "Discord beitreten und sichtbar werden",
     description:
-      "Nicht Pflicht, aber extrem empfohlen: Im Discord wirst du als Streamer hervorgehoben und bekommst Sichtbarkeit, die du sonst nirgends bekommst.",
+      "Nicht Pflicht, aber sehr sinnvoll: Im Discord bekommst du mehr Sichtbarkeit, direkten Austausch und schnellen Support aus der Community.",
     bullets: [
-      "Go-Live-Posts: Sobald du live gehst, erscheint automatisch ein Post im Discord — alle sehen, dass du streamst.",
-      "Es gibt einen eigenen Streamer-Bereich mit exklusiven Infos und direktem Austausch.",
-      "Pro-Tipp: Zock mit der Community! Wer mit anderen Deadlock-Spielern unterwegs ist, baut sich organisch eine treue Zuschauerschaft auf.",
+      "Go-Live-Posts machen sichtbar, wenn du streamst.",
+      "Es gibt einen Bereich für Streamer und direkten Austausch mit der Community.",
+      "Wer mit anderen Deadlock-Spielern unterwegs ist, baut oft schneller eine feste Zuschauerschaft auf.",
     ],
     routeLabel: "Discord beitreten",
     routeHref: DISCORD_INVITE_URL,
   },
   {
-    eyebrow: "5. Entdecken",
-    title: "Weitere Features entdecken",
+    eyebrow: "5. Mehr",
+    title: "Wenn du willst, geht danach noch mehr",
     description:
-      "Affiliate-Links, Chat-Commands, Leaderboards und mehr warten darauf, von dir erkundet zu werden. Schau dich im Dashboard um — es gibt immer etwas Neues zu entdecken.",
+      "Auto-Raid ist der Einstieg. Danach kannst du weitere Funktionen wie Commands, Leaderboards, Affiliate-Links und Analysen nach und nach freischalten und nutzen.",
     bullets: [
-      "Erstelle Affiliate-Links und tracke Klicks direkt im Dashboard.",
-      "Nutze Chat-Commands wie !twl um deinen Zuschauern Live-Partner zu zeigen.",
-      "Das Viewer-Leaderboard zeigt, wer deine treuesten Zuschauer sind.",
+      "Commands wie !twl zeigen deinen Viewern weitere live gehende Partner.",
+      "Leaderboards und Analytics helfen dir, deine Community besser zu verstehen.",
+      "Weitere Funktionen warten im Dashboard und in der FAQ auf dich.",
     ],
     routeLabel: "Alle Features in der FAQ",
     routeHref: TWITCH_FAQ_URL,
@@ -138,88 +136,95 @@ export const ONBOARDING_STEPS: OnboardingStep[] = [
 
 export const ONBOARDING_CAPABILITIES: CapabilityCard[] = [
   {
-    title: "Echtzeit-Analytics",
+    title: "Deadlock-Partnernetzwerk",
     description:
-      "Dein Cockpit für alles rund um deinen Stream: Viewer-Trends, Heatmaps, Rankings und Streamer-Vergleich.",
+      "Das Herzstück des Bots: Streamer unterstützen sich über automatische Raids gegenseitig und bleiben im Deadlock-Netzwerk sichtbar.",
     bullets: [
-      "Live-Viewer-Tracking und Session-Details",
-      "Stunden- und Kalender-Heatmaps",
-      "Streamer-Ranking und direkter Vergleich",
+      "Auto-Raids nur bei Deadlock",
+      "Das Netzwerk funktioniert in beide Richtungen",
+      "Manuelles Raiden bleibt wie gewohnt",
     ],
   },
   {
-    title: "Auto-Raid-Netzwerk",
+    title: "Dashboard & Insights",
     description:
-      "Deine Zuschauer finden immer den nächsten Stream. Automatische Weiterleitung an Live-Partner wenn du offline gehst.",
+      "Hier siehst du, wie dein Kanal läuft und was im Netzwerk passiert. Von Raid-Verlauf bis Viewer-Mustern ist alles an einem Ort.",
     bullets: [
-      "Vollautomatische Raid-Auswahl",
+      "Viewer-Trends und Session-Details",
+      "Heatmaps und Verlauf über Zeit",
       "Raid-History und Analytics",
-      "Das Netzwerk arbeitet in beide Richtungen",
     ],
   },
   {
     title: "Discord-Community",
     description:
-      "Go-Live-Posts zeigen automatisch wenn du streamst, eigener Streamer-Bereich, und eine Community die zusammen spielt und wächst.",
+      "Go-Live-Posts, Community-Sichtbarkeit und direkter Kontakt zu anderen Deadlock-Spielern machen den Discord zum sinnvollen Zusatz für jeden Partner.",
     bullets: [
       "Automatische Go-Live-Benachrichtigungen",
-      "Exklusiver Streamer-Bereich",
+      "Streamer-Bereich und Support",
       "Community-Events und gemeinsames Spielen",
     ],
   },
   {
     title: "KI-Coaching",
     description:
-      "Personalisierte Tipps basierend auf deinen Daten: Beste Streaming-Zeiten, Titel-Performance, Zuschauer-Retention.",
+      "Wenn du tiefer einsteigen willst, bekommst du datenbasierte Hinweise dazu, wann dein Stream gut läuft und was bei deiner Community funktioniert.",
     bullets: [
-      "Datenbasierte Empfehlungen für dein Wachstum",
+      "Empfehlungen für Wachstum",
       "Tag- und Titel-Analyse",
-      "Watch-Time und Retention-Auswertung",
+      "Watch-Time und Retention",
     ],
   },
   {
     title: "Community & Netzwerk",
     description:
-      "Viewer-Leaderboard, Affiliate-Links, Chat-Commands und mehr — alles was dein Netzwerk stärkt.",
+      "Commands, Leaderboards und weitere Tools helfen dir dabei, deine Zuschauer besser einzubinden und das Netzwerk aktiv zu nutzen.",
     bullets: [
       "Viewer-Leaderboard für treue Zuschauer",
-      "Affiliate-Links mit Klick-Tracking",
-      "Chat-Commands wie !twl für Live-Partner",
+      "Chat-Commands wie !twl",
+      "Weitere Tools direkt im Dashboard",
     ],
   },
 ];
 
 export const START_CHECKLIST: ChecklistItem[] = [
   {
-    title: "Bot autorisieren",
+    title: "Kanal verbinden",
     description:
-      "Mit Twitch einloggen — das war's. Kein Formular, kein Warten. 90% geschafft!",
-    href: buildTwitchDashboardLoginUrl(),
-    label: "Mit Twitch einloggen",
+      "Aktiviere den Bot für deinen Kanal und werde Teil des Deadlock-Partnernetzwerks.",
+    href: buildTwitchBotAuthUrl(),
+    label: "Bot für deinen Kanal aktivieren",
+  },
+  {
+    title: "Auto-Raid verstehen",
+    description:
+      "Wichtigster Punkt für den Start: Der Bot raidet nur dann automatisch, wenn du Deadlock streamst und offline gehst.",
+    href: `${TWITCH_FAQ_URL}#raids`,
+    label: "Auto-Raid erklärt",
   },
   {
     title: "Dashboard erkunden",
     description:
-      "Deine Zahlen auf einen Blick: Viewer-Trends, Heatmaps, Rankings und Session-Details.",
-    href: TWITCH_DASHBOARD_V2_URL,
+      "Schau dir an, was für deinen Kanal sichtbar ist und welche Funktionen du direkt nutzen kannst.",
+    href: buildTwitchDashboardLoginUrl("/twitch/dashboard-v2"),
     label: "Dashboard öffnen",
   },
   {
     title: "Discord beitreten",
     description:
-      "Sichtbarkeit, automatische Go-Live-Posts, Streamer-Bereich und eine aktive Community.",
+      "Mehr Sichtbarkeit, automatische Go-Live-Posts und schneller Kontakt zur Community.",
     href: DISCORD_INVITE_URL,
     label: "Discord beitreten",
   },
   {
-    title: "Mit der Community zocken",
+    title: "Mit anderen Streamern connecten",
     description:
-      "Spiel mit anderen Deadlock-Spielern — wer zusammen spielt, baut organisch eine treue Zuschauerschaft auf.",
+      "Je stärker du im Netzwerk unterwegs bist, desto mehr lohnt sich das Partnernetzwerk auch für deinen Kanal.",
   },
   {
-    title: "Fragen? Ab in die FAQ",
+    title: "Danach tiefer einsteigen",
     description:
-      "Antworten zu Analytics, Raids, Discord, Affiliate und allem rund um EarlySalty.",
+      "In der FAQ findest du alle weiteren Details zu Auto-Raid, Dashboard, Discord und den restlichen Features.",
     href: TWITCH_FAQ_URL,
     label: "FAQ öffnen",
   },
@@ -254,16 +259,16 @@ FAQ_SECTIONS.push(
       {
         question: "Wie starte ich?",
         answer:
-          "Klick auf \"Mit Twitch einloggen\", autorisiere den Bot — fertig. Kein Bewerbungsformular, keine Wartezeit. Du bist sofort dabei und hast Zugriff auf alle Features.",
+          "Klick auf \"Bot für deinen Kanal aktivieren\" und verbinde deinen Twitch-Kanal mit dem Deadlock-Partnernetzwerk. Danach landest du direkt im Dashboard.",
         details: [
           "Der gesamte Anmeldeprozess dauert weniger als 30 Sekunden.",
           "Du brauchst nur deinen bestehenden Twitch-Account.",
-          "Nach dem Login landest du direkt in deinem persönlichen Dashboard.",
+          "Auto-Raids sind für Deadlock gedacht und greifen nicht bei anderen Spielen.",
         ],
         access: "Alle",
         tags: ["start", "anmeldung", "login", "registrierung", "einloggen"],
         routes: [
-          { label: "Mit Twitch einloggen", href: buildTwitchDashboardLoginUrl() },
+          { label: "Bot für deinen Kanal aktivieren", href: buildTwitchBotAuthUrl() },
         ],
       },
       {
@@ -330,7 +335,10 @@ FAQ_SECTIONS.push(
         access: "Alle",
         tags: ["dashboard", "analytics", "viewer", "heatmap", "ranking", "session"],
         routes: [
-          { label: "Dashboard", href: TWITCH_DASHBOARD_V2_URL },
+          {
+            label: "Dashboard öffnen",
+            href: buildTwitchDashboardLoginUrl("/twitch/dashboard-v2"),
+          },
           { label: "Demo", href: TWITCH_DEMO_DASHBOARD_URL },
         ],
       },
@@ -346,7 +354,10 @@ FAQ_SECTIONS.push(
         access: "Alle",
         tags: ["echtzeit", "aktuell", "daten", "tracking", "live"],
         routes: [
-          { label: "Dashboard", href: TWITCH_DASHBOARD_V2_URL },
+          {
+            label: "Dashboard öffnen",
+            href: buildTwitchDashboardLoginUrl("/twitch/dashboard-v2"),
+          },
         ],
       },
       {
@@ -361,7 +372,10 @@ FAQ_SECTIONS.push(
         access: "Alle",
         tags: ["ranking", "vergleich", "streamer", "wettbewerb", "netzwerk"],
         routes: [
-          { label: "Dashboard", href: TWITCH_DASHBOARD_V2_URL },
+          {
+            label: "Dashboard öffnen",
+            href: buildTwitchDashboardLoginUrl("/twitch/dashboard-v2"),
+          },
         ],
       },
       {
@@ -377,7 +391,10 @@ FAQ_SECTIONS.push(
         access: "Alle",
         tags: ["ki", "coaching", "ai", "empfehlung", "tipps", "optimierung"],
         routes: [
-          { label: "Dashboard", href: TWITCH_DASHBOARD_V2_URL },
+          {
+            label: "Dashboard öffnen",
+            href: buildTwitchDashboardLoginUrl("/twitch/dashboard-v2"),
+          },
         ],
       },
     ],
@@ -404,8 +421,11 @@ FAQ_SECTIONS.push(
         access: "Alle",
         tags: ["auto-raid", "raid", "automatisch", "netzwerk", "weiterleitung"],
         routes: [
-          { label: "Raid Analytics", href: TWITCH_RAID_ANALYTICS_URL },
-          { label: "Raid History", href: TWITCH_RAID_HISTORY_URL },
+          { label: "Bot für deinen Kanal aktivieren", href: buildTwitchBotAuthUrl() },
+          {
+            label: "Dashboard öffnen",
+            href: buildTwitchDashboardLoginUrl("/twitch/dashboard-v2"),
+          },
         ],
       },
       {
@@ -420,23 +440,26 @@ FAQ_SECTIONS.push(
         access: "Alle",
         tags: ["raid-auswahl", "algorithmus", "partner", "kriterien"],
         routes: [
-          { label: "Raid Analytics", href: TWITCH_RAID_ANALYTICS_URL },
+          { label: "Bot für deinen Kanal aktivieren", href: buildTwitchBotAuthUrl() },
+          { label: "FAQ", href: `${TWITCH_FAQ_URL}#raids` },
         ],
       },
       {
         question: "Kann ich sehen, wen ich geraidet habe?",
         answer:
-          "Ja! In der Raid History siehst du alle deine vergangenen Raids mit Details. Die Raid Analytics zeigen dir zusätzlich, wie effektiv deine Raids waren.",
+          "Ja. Nach dem Verbinden siehst du im Dashboard, wie dein Kanal im Netzwerk läuft und welche Raid-Daten für dich erfasst wurden.",
         details: [
-          "Die Raid History listet jeden einzelnen Raid mit Datum, Partner und Viewer-Anzahl.",
-          "Raid Analytics zeigen dir Trends und Muster über Zeit.",
-          "Du siehst auch, wie viele Viewer nach dem Raid beim Partner geblieben sind.",
+          "Dort bekommst du den Überblick über deine Raid-Daten und deine Entwicklung im Netzwerk.",
+          "Du siehst Muster über Zeit, statt nur einen einzelnen Moment.",
+          "Das Dashboard ist der richtige Einstiegspunkt für deinen Streamer-Bereich.",
         ],
         access: "Alle",
         tags: ["raid history", "raid analytics", "verlauf", "statistik"],
         routes: [
-          { label: "Raid History", href: TWITCH_RAID_HISTORY_URL },
-          { label: "Raid Analytics", href: TWITCH_RAID_ANALYTICS_URL },
+          {
+            label: "Dashboard öffnen",
+            href: buildTwitchDashboardLoginUrl("/twitch/dashboard-v2"),
+          },
         ],
       },
       {
@@ -445,13 +468,16 @@ FAQ_SECTIONS.push(
           "Ja, das Netzwerk arbeitet in beide Richtungen! Wenn andere Streamer offline gehen, können deren Zuschauer automatisch zu dir weitergeleitet werden, solange du live bist.",
         details: [
           "Je aktiver du im Netzwerk bist, desto mehr profitierst du von eingehenden Raids.",
-          "Eingehende Raids siehst du ebenfalls in deiner Raid History.",
+          "Eingehende Raids und deine Entwicklung im Netzwerk findest du später gesammelt im Dashboard.",
           "Das System sorgt dafür, dass alle Partner fair berücksichtigt werden.",
         ],
         access: "Alle",
         tags: ["eingehende raids", "netzwerk", "gegenseitig", "wachstum"],
         routes: [
-          { label: "Raid History", href: TWITCH_RAID_HISTORY_URL },
+          {
+            label: "Dashboard öffnen",
+            href: buildTwitchDashboardLoginUrl("/twitch/dashboard-v2"),
+          },
         ],
       },
     ],
@@ -517,7 +543,10 @@ FAQ_SECTIONS.push(
         access: "Alle",
         tags: ["leaderboard", "viewer", "community", "ranking", "treue"],
         routes: [
-          { label: "Dashboard", href: TWITCH_DASHBOARD_V2_URL },
+          {
+            label: "Dashboard öffnen",
+            href: buildTwitchDashboardLoginUrl("/twitch/dashboard-v2"),
+          },
         ],
       },
     ],
@@ -549,7 +578,7 @@ FAQ_SECTIONS.push({
     {
       question: "Wie melde ich mich an?",
       answer:
-        "Du klickst auf \"Mit Twitch einloggen\" und bist damit startklar. Kein Formular, kein Papierkram, in etwa 2 Minuten erledigt.",
+        "Du aktivierst den Bot für deinen Kanal und kannst danach direkt loslegen. Kein Formular, kein Papierkram, in etwa 2 Minuten erledigt.",
       details: [
         "Die Anmeldung läuft direkt über deinen Twitch-Account.",
         "Es werden keine separaten Registrierungsformulare verlangt.",

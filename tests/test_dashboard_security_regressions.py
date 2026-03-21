@@ -21,6 +21,7 @@ from bot.dashboard.live import DashboardLiveMixin
 from bot.dashboard.raid_mixin import PUBLIC_STREAMER_ONBOARDING_URL, _DashboardRaidMixin
 from bot.dashboard.routes_mixin import _DashboardRoutesMixin
 from bot.dashboard.server_v2 import DashboardV2Server
+from bot.raid.scope_profiles import BASE_SCOPE_PROFILE
 from bot.social_media.clip_manager import ClipManager
 from bot.social_media.dashboard import SocialMediaDashboard
 
@@ -293,11 +294,21 @@ class _DummyRaidAuthRoute(_DashboardRaidMixin):
     def __init__(self) -> None:
         self.dashboard_session = None
         self.require_token_calls = 0
+        self.last_auth_login = None
+        self.last_auth_scope_profile = None
+
+        def _generate_auth_url(login: str, **kwargs) -> str:
+            self.last_auth_login = login
+            self.last_auth_scope_profile = kwargs.get("scope_profile")
+            if self.last_auth_scope_profile:
+                return f"https://auth.example/{login}?scope_profile={self.last_auth_scope_profile}"
+            return f"https://auth.example/{login}"
+
         self._raid_bot = SimpleNamespace(
             auth_manager=SimpleNamespace(
                 client_id="raid-client-id",
                 redirect_uri="https://twitch.earlysalty.com/twitch/raid/callback",
-                generate_auth_url=lambda login: f"https://auth.example/{login}"
+                generate_auth_url=_generate_auth_url,
             )
         )
 
@@ -1372,19 +1383,57 @@ class DashboardSecurityRegressionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(ctx.exception.location, "https://auth.example/victim")
         self.assertEqual(handler.require_token_calls, 1)
 
-    async def test_raid_auth_start_without_session_redirects_to_public_onboarding(self) -> None:
+    async def test_raid_auth_start_without_session_starts_public_base_scope(self) -> None:
         handler = _DummyRaidAuthRoute()
         request = SimpleNamespace(query={})
 
         with self.assertRaises(web.HTTPFound) as ctx:
             await handler.raid_auth_start(request)
-        self.assertEqual(ctx.exception.location, PUBLIC_STREAMER_ONBOARDING_URL)
+        self.assertEqual(
+            ctx.exception.location,
+            "https://auth.example/public:website_onboarding?scope_profile=base",
+        )
         self.assertEqual(handler.require_token_calls, 0)
+        self.assertEqual(handler.last_auth_login, "public:website_onboarding")
+        self.assertEqual(handler.last_auth_scope_profile, BASE_SCOPE_PROFILE)
 
-    async def test_raid_auth_start_without_session_ignores_missing_oauth(self) -> None:
+    async def test_raid_auth_start_without_session_requires_public_oauth_config(self) -> None:
         handler = _DummyRaidAuthRoute()
         handler._raid_bot.auth_manager.client_id = ""
         request = SimpleNamespace(query={})
+
+        response = await handler.raid_auth_start(request)
+        self.assertEqual(response.status, 503)
+        self.assertEqual(response.text, "Raid bot OAuth is not configured")
+        self.assertEqual(handler.require_token_calls, 0)
+
+    async def test_raid_auth_start_public_onboarding_starts_base_scope_without_session(self) -> None:
+        handler = _DummyRaidAuthRoute()
+        request = SimpleNamespace(
+            query={
+                "source": "website_onboarding",
+                "scope_profile": "base",
+            }
+        )
+
+        with self.assertRaises(web.HTTPFound) as ctx:
+            await handler.raid_auth_start(request)
+        self.assertEqual(
+            ctx.exception.location,
+            "https://auth.example/public:website_onboarding?scope_profile=base",
+        )
+        self.assertEqual(handler.require_token_calls, 0)
+        self.assertEqual(handler.last_auth_login, "public:website_onboarding")
+        self.assertEqual(handler.last_auth_scope_profile, BASE_SCOPE_PROFILE)
+
+    async def test_raid_auth_start_public_onboarding_rejects_non_base_scope_without_session(self) -> None:
+        handler = _DummyRaidAuthRoute()
+        request = SimpleNamespace(
+            query={
+                "source": "website_onboarding",
+                "scope_profile": "dashboard_reauth",
+            }
+        )
 
         with self.assertRaises(web.HTTPFound) as ctx:
             await handler.raid_auth_start(request)

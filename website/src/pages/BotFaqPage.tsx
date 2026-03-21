@@ -7,7 +7,7 @@ import { ScrollReveal } from "@/components/ui/ScrollReveal";
 import { SectionHeading } from "@/components/ui/SectionHeading";
 import {
   TWITCH_ONBOARDING_URL,
-  buildTwitchDashboardLoginUrl,
+  buildTwitchBotAuthUrl,
 } from "@/data/externalLinks";
 import { FAQ_SECTIONS } from "@/data/twitchKnowledgeBase";
 
@@ -31,6 +31,7 @@ function normalize(value: string) {
 export function BotFaqPage() {
   const [query, setQuery] = useState("");
   const deferredQuery = useDeferredValue(normalize(query));
+  const onboardingAuthUrl = buildTwitchBotAuthUrl();
 
   const visibleSections = FAQ_SECTIONS.map((section) => {
     if (!deferredQuery) {
@@ -69,8 +70,8 @@ export function BotFaqPage() {
       <PublicInfoHeader
         navLinks={NAV_LINKS}
         primaryAction={{
-          label: "Mit Twitch einloggen",
-          href: buildTwitchDashboardLoginUrl(),
+          label: "Bot für deinen Kanal aktivieren",
+          href: onboardingAuthUrl,
         }}
         secondaryAction={{
           label: "Zum Onboarding",
@@ -263,12 +264,12 @@ export function BotFaqPage() {
                     Weiter im Flow
                   </p>
                   <h2 className="mt-4 text-3xl font-bold text-text-primary md:text-4xl">
-                    FAQ gelesen, jetzt zur richtigen Produktfläche wechseln.
+                    FAQ gelesen, jetzt den nächsten sinnvollen Schritt gehen.
                   </h2>
                   <p className="mt-4 max-w-2xl text-base leading-relaxed text-text-secondary">
-                    Für neue Streamer ist das Onboarding der bessere Einstieg. Für
-                    bestehende Partner ist der Login direkt ins Dashboard der schnellste
-                    nächste Schritt.
+                    Wenn du neu dabei bist, starte mit dem Onboarding und aktiviere
+                    den Bot für deinen Kanal. Wenn dein Kanal schon verbunden ist,
+                    ist das Dashboard der schnellste nächste Schritt.
                   </p>
                 </div>
 
@@ -280,10 +281,10 @@ export function BotFaqPage() {
                     Onboarding
                   </a>
                   <a
-                    href={buildTwitchDashboardLoginUrl()}
+                    href={onboardingAuthUrl}
                     className="gradient-accent inline-flex items-center justify-center gap-2 rounded-xl px-6 py-3 font-semibold text-white no-underline transition-all duration-200 hover:brightness-110"
                   >
-                    Login
+                    Bot aktivieren
                   </a>
                 </div>
               </div>
@@ -296,4 +297,3 @@ export function BotFaqPage() {
     </>
   );
 }
-

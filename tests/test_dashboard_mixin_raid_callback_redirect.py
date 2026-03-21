@@ -42,19 +42,22 @@ class _FakeAuthManager:
     def __init__(
         self,
         *,
+        requested_login: str = "partner_one",
         expected_twitch_login: str = "partner_one",
         expected_twitch_user_id: str | None = None,
         scopes: list[str] | None = None,
         existing_auth: bool = False,
     ):
+        self._requested_login = requested_login
         self._expected_twitch_login = expected_twitch_login
         self._expected_twitch_user_id = expected_twitch_user_id
         self._scopes = list(scopes or BASE_STREAMER_SCOPES)
         self._existing_auth = existing_auth
+        self.generated_calls: list[tuple[str, dict[str, object]]] = []
 
     def consume_state_details(self, _state: str):
         return SimpleNamespace(
-            requested_login="partner_one",
+            requested_login=self._requested_login,
             scope_profile=BASE_SCOPE_PROFILE,
             expected_twitch_login=self._expected_twitch_login,
             expected_twitch_user_id=self._expected_twitch_user_id,
@@ -71,6 +74,14 @@ class _FakeAuthManager:
             "expires_in": 3600,
             "scope": list(self._scopes),
         }
+
+    def generate_auth_url(self, login: str, **kwargs) -> str:
+        self.generated_calls.append((login, kwargs))
+        return f"https://auth.example/{login}"
+
+    def generate_discord_button_url(self, login: str, **kwargs) -> str:
+        self.generated_calls.append((login, kwargs))
+        return f"https://auth.example/discord/{login}"
 
     def save_auth(self, **_kwargs) -> None:
         return None
@@ -130,6 +141,39 @@ class DashboardMixinRaidCallbackRedirectTests(unittest.IsolatedAsyncioTestCase):
         )
 
         self.assertEqual(payload.get("status"), 200)
+
+    async def test_dashboard_callback_accepts_public_onboarding_without_expected_login(self) -> None:
+        handler = _DummyDashboardMixin(
+            auth_manager=_FakeAuthManager(
+                requested_login="public:website_onboarding",
+                expected_twitch_login="",
+                expected_twitch_user_id=None,
+            ),
+            user_login="fresh_partner",
+        )
+
+        payload = await handler._dashboard_raid_oauth_callback(
+            code="oauth-code",
+            state="valid-state",
+            error="",
+        )
+
+        self.assertEqual(payload.get("status"), 200)
+
+    async def test_dashboard_raid_auth_url_allows_public_onboarding_login(self) -> None:
+        auth_manager = _FakeAuthManager()
+        handler = _DummyDashboardMixin(auth_manager=auth_manager)
+
+        auth_url = await handler._dashboard_raid_auth_url(
+            "public:website_onboarding",
+            scope_profile="base",
+        )
+
+        self.assertEqual(auth_url, "https://auth.example/public:website_onboarding")
+        self.assertEqual(
+            auth_manager.generated_calls,
+            [("public:website_onboarding", {"scope_profile": "base"})],
+        )
 
     async def test_dashboard_callback_rejects_unexpected_scope_widening(self) -> None:
         handler = _DummyDashboardMixin(

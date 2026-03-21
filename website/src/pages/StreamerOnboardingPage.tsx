@@ -9,7 +9,7 @@ import {
   DISCORD_INVITE_URL,
   TWITCH_FAQ_URL,
   TWITCH_ONBOARDING_URL,
-  buildTwitchDashboardLoginUrl,
+  buildTwitchBotAuthUrl,
 } from "@/data/externalLinks";
 import {
   ONBOARDING_CAPABILITIES,
@@ -20,20 +20,22 @@ import {
 
 const NAV_LINKS = [
   { label: "Ablauf", href: "#ablauf" },
-  { label: "Module", href: "#module" },
+  { label: "Features", href: "#module" },
   { label: "Erste Schritte", href: "#erste-schritte" },
   { label: "FAQ", href: "#faq-hinweis" },
 ];
 
 export function StreamerOnboardingPage() {
+  const onboardingAuthUrl = buildTwitchBotAuthUrl();
+
   return (
     <>
       <GlowOrb />
       <PublicInfoHeader
         navLinks={NAV_LINKS}
         primaryAction={{
-          label: "Mit Twitch einloggen",
-          href: buildTwitchDashboardLoginUrl(),
+          label: "Bot für deinen Kanal aktivieren",
+          href: onboardingAuthUrl,
         }}
         secondaryAction={{ label: "Zur FAQ", href: TWITCH_FAQ_URL, variant: "ghost" }}
       />
@@ -57,12 +59,12 @@ export function StreamerOnboardingPage() {
                 transition={{ duration: 0.6, delay: 0.1 }}
                 className="mt-6 max-w-4xl text-5xl font-bold leading-tight text-text-primary md:text-6xl lg:text-7xl"
               >
-                Vom ersten Klick
+                Werde Teil des
                 <br />
                 <span className="bg-gradient-to-r from-primary to-accent bg-clip-text text-transparent">
-                  bis zum produktiven
-                </span>{" "}
-                Partner-Setup.
+                  Deadlock-Partnernetzwerks
+                </span>
+                .
               </motion.h1>
 
               <motion.p
@@ -71,8 +73,11 @@ export function StreamerOnboardingPage() {
                 transition={{ duration: 0.6, delay: 0.2 }}
                 className="mt-6 max-w-2xl text-lg leading-relaxed text-text-secondary md:text-xl"
               >
-                Alles, was du brauchst, um als Deadlock-Streamer durchzustarten —
-                in wenigen Minuten eingerichtet.
+                Aktiviere den Bot für deinen Kanal und vernetze dich mit anderen
+                Deadlock-Streamern. Wenn du Deadlock streamst und offline gehst,
+                kann der Bot deine Viewer automatisch an passende Partner
+                weiterleiten. Und wenn andere offline gehen, kannst du genauso von
+                ihren Raids profitieren.
               </motion.p>
 
               <motion.div
@@ -82,10 +87,10 @@ export function StreamerOnboardingPage() {
                 className="mt-10 flex flex-wrap gap-4"
               >
                 <a
-                  href={buildTwitchDashboardLoginUrl()}
+                  href={onboardingAuthUrl}
                   className="gradient-accent inline-flex items-center gap-2 rounded-xl px-7 py-3.5 font-semibold text-white no-underline transition-all duration-200 hover:brightness-110"
                 >
-                  Mit Twitch einloggen
+                  Bot für deinen Kanal aktivieren
                   <ArrowRight size={18} />
                 </a>
                 <a
@@ -94,6 +99,11 @@ export function StreamerOnboardingPage() {
                 >
                   Alle Bot-Funktionen ansehen
                 </a>
+                <p className="mt-4 text-sm leading-relaxed text-text-secondary">
+                  Gilt nur für Deadlock-Streams. Manuelles Raiden bleibt wie
+                  gewohnt, der Bot übernimmt nur den automatischen Raid beim
+                  Offline-Gehen.
+                </p>
               </motion.div>
             </div>
 
@@ -128,8 +138,8 @@ export function StreamerOnboardingPage() {
                   Kurzform für neue Streamer
                 </p>
                 <p className="mt-2 text-sm leading-relaxed text-text-secondary">
-                  Bot autorisieren, Dashboard entdecken, Discord beitreten, mit der
-                  Community loszocken — fertig!
+                  Kanal verbinden, ins Deadlock-Partnernetzwerk kommen, Auto-Raids
+                  nutzen und danach dein Dashboard entdecken.
                 </p>
               </div>
             </motion.aside>
@@ -140,8 +150,8 @@ export function StreamerOnboardingPage() {
           <div className="mx-auto max-w-7xl">
             <SectionHeading
               badge="Ablauf"
-              title="So läuft das Onboarding wirklich ab"
-              subtitle="Die Reihenfolge orientiert sich an den vorhandenen Produktflächen und nicht an losem Website-Marketing."
+              title="So startest du im Deadlock-Partnernetzwerk"
+              subtitle="Erst verstehen, was aktiviert wird. Dann verbinden. Alles Weitere kommt danach."
             />
 
             <div className="mt-12 grid gap-5 lg:grid-cols-2">
@@ -192,9 +202,9 @@ export function StreamerOnboardingPage() {
         <section id="module" className="px-6 py-20">
           <div className="mx-auto max-w-7xl">
             <SectionHeading
-              badge="Module"
-              title="Was der Bot als Produkt überhaupt abdeckt"
-              subtitle="Das hier sind die großen Funktionsbereiche, die im Dashboard und den angrenzenden Services bereits vorhanden sind."
+              badge="Features"
+              title="Was du nach der Aktivierung nutzen kannst"
+              subtitle="Der Auto-Raid ist der Einstieg. Danach kommen Dashboard, Community und weitere Tools dazu."
             />
 
             <div className="mt-12 grid gap-5 md:grid-cols-2 xl:grid-cols-3">
@@ -202,7 +212,7 @@ export function StreamerOnboardingPage() {
                 <ScrollReveal key={capability.title} delay={index * 0.04}>
                   <article className="panel-card h-full rounded-[1.75rem] p-6">
                     <div className="inline-flex rounded-full border border-border px-3 py-1 text-xs uppercase tracking-[0.14em] text-accent">
-                      Modul {index + 1}
+                      Feature {index + 1}
                     </div>
                     <h3 className="mt-5 text-2xl font-bold text-text-primary">
                       {capability.title}
@@ -229,8 +239,8 @@ export function StreamerOnboardingPage() {
           <div className="mx-auto max-w-7xl">
             <SectionHeading
               badge="Erste Schritte"
-              title="Empfohlene Reihenfolge für den ersten produktiven Tag"
-              subtitle="Nicht jede Funktion muss sofort aktiviert werden. Diese Checkliste bringt Streamer am schnellsten in einen sauberen Produktzustand."
+              title="Die sinnvollste Reihenfolge für deinen Start"
+              subtitle="Du musst nicht alles auf einmal nutzen. Diese Schritte bringen dich am schnellsten sauber ins Netzwerk."
             />
 
             <div className="mt-12 grid gap-5 xl:grid-cols-2">
@@ -273,13 +283,12 @@ export function StreamerOnboardingPage() {
                     FAQ und Support
                   </p>
                   <h2 className="mt-4 text-4xl font-bold text-text-primary md:text-5xl">
-                    Die Bot-FAQ erklärt wirklich alle dokumentierten Funktionen.
+                    In der FAQ findest du alle Details zum Bot und zum Netzwerk.
                   </h2>
                   <p className="mt-5 max-w-2xl text-base leading-relaxed text-text-secondary">
-                    Dort sind nicht nur Onboarding und Kernmodule dokumentiert, sondern
-                    auch Analytics-Tiefe, AI, Affiliate, Social Media, Community-Tools
-                    und Admin-Flächen. Wenn du verstehen willst, was der Bot alles
-                    anbietet, ist das die zentrale Wissensbasis.
+                    Wenn du nach dem Einstieg genauer verstehen willst, wie Auto-Raid,
+                    Dashboard, Discord und die restlichen Funktionen zusammenspielen,
+                    ist die FAQ die richtige Stelle dafür.
                   </p>
                 </div>
 
@@ -316,5 +325,3 @@ export function StreamerOnboardingPage() {
     </>
   );
 }
-
-
