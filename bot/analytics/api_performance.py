@@ -17,6 +17,7 @@ from typing import Any
 from aiohttp import web
 
 from ..storage import pg as storage
+from .error_utils import analytics_internal_error_response
 
 log = logging.getLogger("TwitchStreams.AnalyticsV2")
 
@@ -71,7 +72,7 @@ class _AnalyticsPerformanceMixin:
                 return web.json_response(data)
         except Exception as exc:
             log.exception("Error in hourly heatmap API")
-            return web.json_response({"error": str(exc)}, status=500)
+            return analytics_internal_error_response()
 
     async def _api_v2_calendar_heatmap(self, request: web.Request) -> web.Response:
         """Get calendar heatmap data."""
@@ -112,7 +113,7 @@ class _AnalyticsPerformanceMixin:
                 return web.json_response(data)
         except Exception as exc:
             log.exception("Error in calendar heatmap API")
-            return web.json_response({"error": str(exc)}, status=500)
+            return analytics_internal_error_response()
 
     async def _api_v2_monthly_stats(self, request: web.Request) -> web.Response:
         """Get monthly aggregated stats."""
@@ -183,7 +184,7 @@ class _AnalyticsPerformanceMixin:
                 return web.json_response(data)
         except Exception as exc:
             log.exception("Error in monthly stats API")
-            return web.json_response({"error": str(exc)}, status=500)
+            return analytics_internal_error_response()
 
     async def _api_v2_weekly_stats(self, request: web.Request) -> web.Response:
         """Get weekday analysis stats."""
@@ -234,7 +235,7 @@ class _AnalyticsPerformanceMixin:
                 return web.json_response(data)
         except Exception as exc:
             log.exception("Error in weekly stats API")
-            return web.json_response({"error": str(exc)}, status=500)
+            return analytics_internal_error_response()
 
     async def _api_v2_tag_analysis(self, request: web.Request) -> web.Response:
         """Get tag performance analysis."""
@@ -246,7 +247,7 @@ class _AnalyticsPerformanceMixin:
             return web.json_response([])
         except Exception as exc:
             log.exception("Error in tag analysis API")
-            return web.json_response({"error": str(exc)}, status=500)
+            return analytics_internal_error_response()
 
     async def _api_v2_tag_analysis_extended(self, request: web.Request) -> web.Response:
         """Get extended tag performance with trends."""
@@ -373,7 +374,7 @@ class _AnalyticsPerformanceMixin:
                 return web.json_response(result)
         except Exception as exc:
             log.exception("Error in tag analysis extended API")
-            return web.json_response({"error": str(exc)}, status=500)
+            return analytics_internal_error_response()
 
     async def _api_v2_title_performance(self, request: web.Request) -> web.Response:
         """Get stream title performance analysis."""
@@ -454,7 +455,7 @@ class _AnalyticsPerformanceMixin:
                 return web.json_response(result)
         except Exception as exc:
             log.exception("Error in title performance API")
-            return web.json_response({"error": str(exc)}, status=500)
+            return analytics_internal_error_response()
 
     async def _api_v2_rankings(self, request: web.Request) -> web.Response:
         """Get streamer rankings."""
@@ -535,7 +536,7 @@ class _AnalyticsPerformanceMixin:
                 return web.json_response(data)
         except Exception as exc:
             log.exception("Error in rankings API")
-            return web.json_response({"error": str(exc)}, status=500)
+            return analytics_internal_error_response()
 
     async def _api_v2_category_comparison(self, request: web.Request) -> web.Response:
         """Compare streamer to category averages."""
@@ -761,7 +762,7 @@ class _AnalyticsPerformanceMixin:
                 )
         except Exception as exc:
             log.exception("Error in category comparison API")
-            return web.json_response({"error": str(exc)}, status=500)
+            return analytics_internal_error_response()
 
     async def _api_v2_viewer_timeline(self, request: web.Request) -> web.Response:
         """Return bucketed viewer data from twitch_stats_tracked."""
@@ -848,7 +849,7 @@ class _AnalyticsPerformanceMixin:
                 return web.json_response(data)
         except Exception as exc:
             log.exception("Error in viewer timeline API")
-            return web.json_response({"error": str(exc)}, status=500)
+            return analytics_internal_error_response()
 
     async def _api_v2_category_leaderboard(self, request: web.Request) -> web.Response:
         """Top-N streamers from twitch_stats_category."""
@@ -948,7 +949,7 @@ class _AnalyticsPerformanceMixin:
                 )
         except Exception as exc:
             log.exception("Error in category leaderboard API")
-            return web.json_response({"error": str(exc)}, status=500)
+            return analytics_internal_error_response()
 
     async def _api_v2_category_timings(self, request: web.Request) -> web.Response:
         """
@@ -997,7 +998,7 @@ class _AnalyticsPerformanceMixin:
                     ).fetchall()
         except Exception as exc:
             log.exception("category-timings query failed")
-            return web.json_response({"error": str(exc)}, status=500)
+            return analytics_internal_error_response()
 
         # --- Stunde: Streamer -> Stunde -> Liste Viewerzahlen ---
         # hour_data[hour][streamer] = [viewer_counts...]
@@ -1142,7 +1143,7 @@ class _AnalyticsPerformanceMixin:
                 ).fetchall()
         except Exception as exc:
             log.exception("category-activity-series query failed")
-            return web.json_response({"error": str(exc)}, status=500)
+            return analytics_internal_error_response()
 
         def _float_or_none(value: Any, *, digits: int = 1) -> float | None:
             if value is None:
@@ -1382,4 +1383,4 @@ class _AnalyticsPerformanceMixin:
                 })
         except Exception as exc:
             log.exception("Error in retention curve API")
-            return web.json_response({"error": str(exc)}, status=500)
+            return analytics_internal_error_response()

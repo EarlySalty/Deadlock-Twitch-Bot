@@ -1,14 +1,18 @@
 import contextlib
 import json
+import io
 import pathlib
 import sqlite3
 import tempfile
 import unittest
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
+from urllib.error import HTTPError
 
 from aiohttp import web
 
+from bot import _invoke_twitch_leaderboard_callback
+from bot.analytics.api_ai import _AnalyticsAIMixin
 from bot.analytics.api_overview import _AnalyticsOverviewMixin
 from bot.analytics.api_v2 import AnalyticsV2Mixin
 from bot.dashboard.auth_mixin import _DashboardAuthMixin
@@ -176,6 +180,32 @@ class _DummyInternalHomeApi(AnalyticsV2Mixin):
             "content": content,
             "created_at": "2026-03-03T13:00:00+00:00",
         }
+
+
+class _DummyV2Errors(AnalyticsV2Mixin):
+    def _check_v2_auth(self, request):
+        return True
+
+
+class _DummyInternalHomeRateLimit(AnalyticsV2Mixin):
+    def _check_rate_limit(
+        self,
+        request,
+        *,
+        max_requests: int = 10,
+        window_seconds: float = 60.0,
+    ):
+        del request, max_requests, window_seconds
+        raise TypeError("internal bug")
+
+
+class _DummyAIErrors(_AnalyticsAIMixin):
+    def _require_v2_admin_api(self, request):
+        return None
+
+    async def _run_ai_analysis(self, streamer: str, days: int, since: str, game_filter: str):
+        del streamer, days, since, game_filter
+        raise RuntimeError("secret upstream detail")
 
 
 class _DummyLiveActions(DashboardLiveMixin):
@@ -466,6 +496,99 @@ class DashboardSecurityRegressionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(session_obj, {"id": "cs_test"})
         self.assertIsNone(error)
         mocked_to_thread.assert_awaited_once()
+
+    async def test_v2_streamers_error_is_sanitized(self) -> None:
+        api = _DummyV2Errors()
+
+        with patch(
+            "bot.analytics.api_v2.storage.get_conn",
+            side_effect=RuntimeError("db password leaked"),
+        ):
+            response = await api._api_v2_streamers(SimpleNamespace())
+
+        payload = json.loads(response.text)
+        self.assertEqual(response.status, 500)
+        self.assertEqual(payload["code"], "streamers_load_failed")
+        self.assertEqual(payload["error"], "Streamer konnten nicht geladen werden.")
+        self.assertNotIn("db password leaked", response.text)
+
+    def test_internal_home_rate_limit_type_error_fails_closed(self) -> None:
+        api = _DummyInternalHomeRateLimit()
+
+        response = api._internal_home_rate_limit_response(
+            SimpleNamespace(),
+            max_requests=3,
+            window_seconds=30.0,
+        )
+
+        self.assertIsNotNone(response)
+        self.assertEqual(response.status, 429)
+        payload = json.loads(response.text)
+        self.assertEqual(payload["error"], "rate_limit_exceeded")
+
+    async def test_ai_analysis_error_is_sanitized(self) -> None:
+        api = _DummyAIErrors()
+        request = SimpleNamespace(query={"streamer": "streamer_one", "days": "30"})
+
+        response = await api._api_v2_ai_analysis(request)
+
+        payload = json.loads(response.text)
+        self.assertEqual(response.status, 500)
+        self.assertEqual(payload["code"], "ai_analysis_failed")
+        self.assertEqual(payload["error"], "KI-Analyse konnte nicht geladen werden.")
+        self.assertNotIn("secret upstream detail", response.text)
+
+    async def test_twitch_leaderboard_helper_does_not_mask_internal_type_error(self) -> None:
+        calls: list[str] = []
+
+        async def _leaderboard(_ctx, *, filters: str = ""):
+            calls.append(filters)
+            raise TypeError("internal bug")
+
+        with self.assertRaises(TypeError):
+            await _invoke_twitch_leaderboard_callback(
+                _leaderboard,
+                SimpleNamespace(),
+                filters="samples=7",
+            )
+
+        self.assertEqual(calls, ["samples=7"])
+
+    def test_checkout_session_rest_http_error_is_sanitized(self) -> None:
+        with patch(
+            "bot.dashboard.routes_mixin._urlrequest.urlopen",
+            side_effect=HTTPError(
+                url="https://api.stripe.com/v1/checkout/sessions",
+                code=402,
+                msg="payment required",
+                hdrs=None,
+                fp=io.BytesIO(
+                    b'{"error":{"message":"secret upstream detail","type":"card_error"}}'
+                ),
+            ),
+        ):
+            session_obj, error = _DummyRoutes._billing_create_checkout_session_rest(
+                stripe_secret_key="sk_test",
+                session_payload={"mode": "subscription"},
+            )
+
+        self.assertIsNone(session_obj)
+        self.assertEqual(error, "stripe_http_error_402")
+        self.assertNotIn("secret", error)
+
+    def test_checkout_session_rest_generic_error_is_sanitized(self) -> None:
+        with patch(
+            "bot.dashboard.routes_mixin._urlrequest.urlopen",
+            side_effect=RuntimeError("dsn=postgres://secret"),
+        ):
+            session_obj, error = _DummyRoutes._billing_create_checkout_session_rest(
+                stripe_secret_key="sk_test",
+                session_payload={"mode": "subscription"},
+            )
+
+        self.assertIsNone(session_obj)
+        self.assertEqual(error, "stripe_checkout_create_failed")
+        self.assertNotIn("secret", error)
 
     def test_social_media_blocks_partner_token_without_session_scope(self) -> None:
         dashboard = SocialMediaDashboard(
@@ -777,6 +900,140 @@ class DashboardSecurityRegressionTests(unittest.IsolatedAsyncioTestCase):
         payload = json.loads(response.text)
         self.assertEqual(payload.get("error"), "admin_required")
 
+    async def test_stripe_sync_products_product_error_is_sanitized(self) -> None:
+        class _StripeSyncProductError(_DummyRoutesApi):
+            _billing_stripe_secret_key = "sk_test"
+
+            def _get_auth_level(self, request):
+                return "admin"
+
+            async def _billing_read_request_body(self, _request):
+                return {}
+
+            def _billing_import_stripe(self):
+                class _Stripe:
+                    api_key = ""
+
+                    class Product:
+                        @staticmethod
+                        def retrieve(_product_id):
+                            raise RuntimeError("missing")
+
+                        @staticmethod
+                        def create(**_kwargs):
+                            exc = RuntimeError("secret product failure")
+                            exc.user_message = "secret product detail"
+                            raise exc
+
+                    class Price:
+                        @staticmethod
+                        def retrieve(_price_id):
+                            raise RuntimeError("missing")
+
+                        @staticmethod
+                        def list(**_kwargs):
+                            return {"data": []}
+
+                return _Stripe, None
+
+            def _billing_product_id_map(self):
+                return {}
+
+            def _billing_price_id_map(self):
+                return {}
+
+            def _billing_save_product_id_map(self, _mapping):
+                return None
+
+            def _billing_save_price_id_map(self, _mapping):
+                return None
+
+            @staticmethod
+            def _billing_stripe_obj_get(obj, key, default=None):
+                if isinstance(obj, dict):
+                    return obj.get(key, default)
+                return getattr(obj, key, default)
+
+        handler = _StripeSyncProductError()
+        request = SimpleNamespace(headers={}, query={})
+
+        response = await handler.api_billing_stripe_sync_products(request)
+
+        self.assertEqual(response.status, 502)
+        payload = json.loads(response.text)
+        self.assertEqual(payload.get("error"), "stripe_product_create_failed")
+        self.assertEqual(payload.get("message"), "stripe_product_create_failed")
+        self.assertNotIn("secret", payload.get("message", ""))
+
+    async def test_stripe_sync_products_price_error_is_sanitized(self) -> None:
+        class _StripeSyncPriceError(_DummyRoutesApi):
+            _billing_stripe_secret_key = "sk_test"
+
+            def _get_auth_level(self, request):
+                return "admin"
+
+            async def _billing_read_request_body(self, _request):
+                return {}
+
+            def _billing_import_stripe(self):
+                class _Stripe:
+                    api_key = ""
+
+                    class Product:
+                        @staticmethod
+                        def retrieve(_product_id):
+                            raise RuntimeError("missing")
+
+                        @staticmethod
+                        def create(**_kwargs):
+                            return SimpleNamespace(id="prod_test")
+
+                    class Price:
+                        @staticmethod
+                        def retrieve(_price_id):
+                            raise RuntimeError("missing")
+
+                        @staticmethod
+                        def list(**_kwargs):
+                            return {"data": []}
+
+                        @staticmethod
+                        def create(**_kwargs):
+                            exc = RuntimeError("secret price failure")
+                            exc.user_message = "secret price detail"
+                            raise exc
+
+                return _Stripe, None
+
+            def _billing_product_id_map(self):
+                return {}
+
+            def _billing_price_id_map(self):
+                return {}
+
+            def _billing_save_product_id_map(self, _mapping):
+                return None
+
+            def _billing_save_price_id_map(self, _mapping):
+                return None
+
+            @staticmethod
+            def _billing_stripe_obj_get(obj, key, default=None):
+                if isinstance(obj, dict):
+                    return obj.get(key, default)
+                return getattr(obj, key, default)
+
+        handler = _StripeSyncPriceError()
+        request = SimpleNamespace(headers={}, query={})
+
+        response = await handler.api_billing_stripe_sync_products(request)
+
+        self.assertEqual(response.status, 502)
+        payload = json.loads(response.text)
+        self.assertEqual(payload.get("error"), "stripe_price_create_failed")
+        self.assertEqual(payload.get("message"), "stripe_price_create_failed")
+        self.assertNotIn("secret", payload.get("message", ""))
+
     async def test_market_data_allows_discord_admin_session(self) -> None:
         class _MarketAuth(_DummyRoutesApi):
             def _is_discord_admin_request(self, request):
@@ -788,6 +1045,37 @@ class DashboardSecurityRegressionTests(unittest.IsolatedAsyncioTestCase):
         with patch("bot.dashboard.routes_mixin.storage.get_conn", side_effect=RuntimeError("boom")):
             response = await handler.api_market_data(request)
         self.assertEqual(response.status, 500)
+
+    async def test_live_fetch_user_internal_type_error_is_not_retried(self) -> None:
+        class _BrokenFetchBot:
+            def __init__(self) -> None:
+                self.calls: list[str] = []
+
+            async def fetch_user(self, *, login: str):
+                self.calls.append(login)
+                raise TypeError("broken internals")
+
+        handler = _DummyLiveOwnerChatAction(api_user_id=None)
+        chat_bot = _BrokenFetchBot()
+
+        resolved = await handler._resolve_streamer_user_id_from_twitch(chat_bot, "partner_one")
+
+        self.assertEqual(resolved, "")
+        self.assertEqual(chat_bot.calls, ["partner_one"])
+
+    async def test_live_fetch_user_positional_fallback_still_works(self) -> None:
+        class _PositionalFetchBot:
+            async def fetch_user(self, login: str):
+                return SimpleNamespace(id="12345", login=login)
+
+        handler = _DummyLiveOwnerChatAction(api_user_id=None)
+
+        resolved = await handler._resolve_streamer_user_id_from_twitch(
+            _PositionalFetchBot(),
+            "partner_one",
+        )
+
+        self.assertEqual(resolved, "12345")
 
     async def test_market_dashboard_uses_html_escaping_in_templates(self) -> None:
         class _MarketPage(_DummyRoutes):

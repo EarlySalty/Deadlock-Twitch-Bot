@@ -192,12 +192,12 @@ def _to_template_config(cfg: dict[str, Any]) -> dict[str, Any]:
 def _validate_config_dict(cfg: dict[str, Any]) -> list[dict[str, str]]:
     try:
         config_obj = LiveAnnouncementConfig.from_dict(_to_template_config(cfg))
-    except Exception as exc:
-        return [{"path": "config", "message": f"config_parse_failed: {exc}"}]
+    except Exception:
+        return [{"path": "config", "message": "Config konnte nicht verarbeitet werden."}]
     try:
         raw_errors = list(validate_live_announcement_config(config_obj))
-    except Exception as exc:
-        return [{"path": "config", "message": f"config_validation_failed: {exc}"}]
+    except Exception:
+        return [{"path": "config", "message": "Config konnte nicht validiert werden."}]
     return [{"path": "config", "message": str(err)} for err in raw_errors]
 
 
@@ -221,7 +221,7 @@ class DashboardLiveAnnouncementMixin:
         row = self._la_load(streamer)
         role_state = await self._la_ensure_streamer_ping_role(
             streamer_login=streamer,
-            create_if_missing=True,
+            create_if_missing=False,
         )
         streamer_ping_role_id = self._la_coerce_role_id(role_state.get("role_id"))
         preview = self._la_preview_payload(
@@ -262,7 +262,7 @@ class DashboardLiveAnnouncementMixin:
         row = self._la_load(streamer)
         role_state = await self._la_ensure_streamer_ping_role(
             streamer_login=streamer,
-            create_if_missing=True,
+            create_if_missing=False,
         )
         streamer_ping_role_id = self._la_coerce_role_id(role_state.get("role_id"))
         return web.json_response(
@@ -382,7 +382,7 @@ class DashboardLiveAnnouncementMixin:
         )
         role_state = await self._la_ensure_streamer_ping_role(
             streamer_login=streamer,
-            create_if_missing=True,
+            create_if_missing=False,
         )
         streamer_ping_role_id = self._la_coerce_role_id(role_state.get("role_id"))
         preview = self._la_preview_payload(

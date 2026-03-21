@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import html
+import inspect
 from datetime import UTC, datetime
 from typing import Any
 from urllib.parse import quote_plus
@@ -217,9 +218,20 @@ class DashboardLiveMixin:
 
         try:
             try:
-                user = await fetch_user(login=login)
-            except TypeError:
+                signature = inspect.signature(fetch_user)
+            except (TypeError, ValueError):
+                signature = None
+
+            if signature is not None and not (
+                "login" in signature.parameters
+                or any(
+                    parameter.kind == inspect.Parameter.VAR_KEYWORD
+                    for parameter in signature.parameters.values()
+                )
+            ):
                 user = await fetch_user(login)
+            else:
+                user = await fetch_user(login=login)
         except Exception:
             safe_login = str(login or "").replace("\r", "\\r").replace("\n", "\\n")
             log.debug("Could not resolve twitch_user_id via Twitch API for %s", safe_login, exc_info=True)

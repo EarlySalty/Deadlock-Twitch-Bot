@@ -16,6 +16,7 @@ from aiohttp import web
 
 from ..core.chat_bots import build_known_chat_bot_not_in_clause
 from ..storage import pg as storage
+from .error_utils import analytics_internal_error_response
 from .raw_chat_status import build_raw_chat_status
 
 log = logging.getLogger("TwitchStreams.AnalyticsV2")
@@ -679,7 +680,7 @@ class _AnalyticsChatDeepMixin:
             raise
         except Exception as exc:
             log.exception("Error in chat-hype-timeline API")
-            return web.json_response({"error": str(exc)}, status=500)
+            return analytics_internal_error_response()
 
     # ─────────────────────────────────────────────────────────────────────
     # Endpoint 2: /twitch/api/v2/chat-content-analysis
@@ -949,7 +950,7 @@ class _AnalyticsChatDeepMixin:
             raise
         except Exception as exc:
             log.exception("Error in chat-content-analysis API")
-            return web.json_response({"error": str(exc)}, status=500)
+            return analytics_internal_error_response()
 
     # ─────────────────────────────────────────────────────────────────────
     # Endpoint 3: /twitch/api/v2/chat-social-graph
@@ -1072,4 +1073,4 @@ class _AnalyticsChatDeepMixin:
             raise
         except Exception as exc:
             log.exception("Error in chat-social-graph API")
-            return web.json_response({"error": str(exc)}, status=500)
+            return analytics_internal_error_response()

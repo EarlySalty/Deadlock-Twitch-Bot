@@ -50,6 +50,9 @@ _LURKER_TAX_FRESHNESS_MINUTES = 5
 _LURKER_TAX_MIN_PRIOR_SESSIONS = 3
 _LURKER_TAX_MIN_WATCHTIME_MINUTES = 240
 _LURKER_TAX_MAX_MENTIONS = 2
+_PROMO_ACTIVITY_BUCKET_MAXLEN = 2048
+_PROMO_RUNTIME_STATE_MAX_AGE_SEC = 24 * 60 * 60
+_PROMO_RUNTIME_PRUNE_INTERVAL_SEC = 60
 
 
 def _sanitize_log_value(value: object | None) -> str:
@@ -567,17 +570,19 @@ class PromoMixin:
         if not login:
             return
 
+        now = time.monotonic()
         raw_map = getattr(self, "_last_raw_chat_message_ts", None)
         if not isinstance(raw_map, dict):
             raw_map = {}
             self._last_raw_chat_message_ts = raw_map
-        raw_map[login] = time.monotonic()
+        raw_map[login] = now
 
         raw_count_map = getattr(self, "_raw_msg_count_since_promo", None)
         if not isinstance(raw_count_map, dict):
             raw_count_map = {}
             self._raw_msg_count_since_promo = raw_count_map
         raw_count_map[login] = int(raw_count_map.get(login, 0)) + 1
+        self._prune_promo_runtime_state(now)
 
     def _raw_msg_count_since_last_promo(self, login: str) -> int:
         raw_count_map = getattr(self, "_raw_msg_count_since_promo", None)
@@ -604,6 +609,65 @@ class PromoMixin:
         window_sec = PROMO_ACTIVITY_WINDOW_MIN * 60
         while bucket and now - bucket[0][0] > window_sec:
             bucket.popleft()
+
+    def _get_promo_activity_bucket(self, login: str) -> deque[tuple[float, str]]:
+        bucket = self._promo_activity.get(login)
+        if isinstance(bucket, deque) and bucket.maxlen == _PROMO_ACTIVITY_BUCKET_MAXLEN:
+            return bucket
+        normalized = deque(bucket or (), maxlen=_PROMO_ACTIVITY_BUCKET_MAXLEN)
+        self._promo_activity[login] = normalized
+        return normalized
+
+    def _prune_promo_runtime_state(self, now: float, *, force: bool = False) -> None:
+        last_pruned = float(getattr(self, "_promo_runtime_state_last_pruned_monotonic", 0.0) or 0.0)
+        if not force and (now - last_pruned) < float(_PROMO_RUNTIME_PRUNE_INTERVAL_SEC):
+            return
+        self._promo_runtime_state_last_pruned_monotonic = now
+
+        activity = getattr(self, "_promo_activity", None)
+        if isinstance(activity, dict):
+            for login, bucket in list(activity.items()):
+                if not isinstance(bucket, deque):
+                    activity.pop(login, None)
+                    continue
+                self._prune_promo_activity(bucket, now)
+                if not bucket:
+                    activity.pop(login, None)
+
+        dedupe_state = getattr(self, "_promo_chatter_dedupe", None)
+        if isinstance(dedupe_state, dict):
+            for login in list(dedupe_state):
+                self._prune_promo_chatter_dedupe(login, now)
+
+        stale_before = now - float(_PROMO_RUNTIME_STATE_MAX_AGE_SEC)
+        timestamp_maps = (
+            getattr(self, "_last_raw_chat_message_ts", None),
+            getattr(self, "_last_promo_sent", None),
+            getattr(self, "_last_promo_attempt", None),
+            getattr(self, "_last_promo_viewer_spike", None),
+        )
+        active_logins: set[str] = set()
+        for mapping in timestamp_maps:
+            if not isinstance(mapping, dict):
+                continue
+            for login, ts in list(mapping.items()):
+                try:
+                    ts_value = float(ts)
+                except (TypeError, ValueError):
+                    mapping.pop(login, None)
+                    continue
+                if ts_value < stale_before:
+                    mapping.pop(login, None)
+                else:
+                    active_logins.add(str(login))
+
+        raw_count_map = getattr(self, "_raw_msg_count_since_promo", None)
+        if isinstance(raw_count_map, dict):
+            for login in list(raw_count_map):
+                if str(login) not in active_logins and str(login) not in getattr(
+                    self, "_promo_activity", {}
+                ):
+                    raw_count_map.pop(login, None)
 
     def _prune_promo_chatter_dedupe(self, login: str, now: float) -> None:
         dedupe_state = getattr(self, "_promo_chatter_dedupe", None)
@@ -639,9 +703,10 @@ class PromoMixin:
         chatter_last[chatter_login] = now
         self._prune_promo_chatter_dedupe(login, now)
 
-        bucket = self._promo_activity.setdefault(login, deque())
+        bucket = self._get_promo_activity_bucket(login)
         bucket.append((now, chatter_login))
         self._prune_promo_activity(bucket, now)
+        self._prune_promo_runtime_state(now)
 
     def _get_promo_activity_stats(self, login: str, now: float) -> tuple[int, int, float]:
         bucket = self._promo_activity.get(login)
@@ -1151,6 +1216,7 @@ class PromoMixin:
     async def _send_promo_if_due(self) -> None:
         """Sendet eine Promo in jeden live-Kanal, für den das Intervall abgelaufen ist."""
         now = time.monotonic()
+        self._prune_promo_runtime_state(now)
         live_channels = await self._get_live_channels_for_promo()
         lurker_tax_channels = await self._get_live_channels_for_lurker_tax()
 

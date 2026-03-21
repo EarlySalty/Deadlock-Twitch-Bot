@@ -112,6 +112,31 @@ _SERVICE_WARNING_OBSERVED_MSG_CACHE_TTL_SEC = _env_int(
     24 * 60 * 60,
     minimum=300,
 )
+_SERVICE_WARNING_MESSAGE_HISTORY_MAXLEN = _env_int(
+    "TWITCH_SERVICE_WARNING_MESSAGE_HISTORY_MAXLEN",
+    32,
+    minimum=3,
+)
+_SERVICE_WARNING_ACTIVITY_BUCKET_MAXLEN = _env_int(
+    "TWITCH_SERVICE_WARNING_ACTIVITY_BUCKET_MAXLEN",
+    64,
+    minimum=4,
+)
+_SERVICE_WARNING_TRACKED_USER_STATE_MAXLEN = _env_int(
+    "TWITCH_SERVICE_WARNING_TRACKED_USER_STATE_MAXLEN",
+    8192,
+    minimum=256,
+)
+_SERVICE_WARNING_CHANNEL_STATE_MAXLEN = _env_int(
+    "TWITCH_SERVICE_WARNING_CHANNEL_STATE_MAXLEN",
+    2048,
+    minimum=64,
+)
+_SERVICE_WARNING_STATE_PRUNE_INTERVAL_SEC = _env_int(
+    "TWITCH_SERVICE_WARNING_STATE_PRUNE_INTERVAL_SEC",
+    60,
+    minimum=5,
+)
 
 if _SERVICE_WARNING_PUBLIC_THRESHOLD < _SERVICE_WARNING_LIGHT_THRESHOLD:
     _SERVICE_WARNING_PUBLIC_THRESHOLD = _SERVICE_WARNING_LIGHT_THRESHOLD
@@ -306,6 +331,7 @@ class ServicePitchWarningMixin:
         self._service_warning_account_age_cache: dict[str, tuple[float, int | None]] = {}
         self._service_warning_follower_cache: dict[str, tuple[float, int | None]] = {}
         self._service_warning_seen_messages: dict[tuple[str, str], tuple[float, int]] = {}
+        self._service_warning_state_last_pruned_monotonic = 0.0
 
     @staticmethod
     def _normalize_text(content: str) -> str:
@@ -379,6 +405,34 @@ class ServicePitchWarningMixin:
     ) -> None:
         while bucket and (now - float(bucket[0][0])) > float(_SERVICE_WARNING_SEQUENCE_WINDOW_SEC):
             bucket.popleft()
+
+    def _get_service_message_history_bucket(
+        self,
+        key: tuple[str, str],
+    ) -> deque[tuple[float, str, set[str]]]:
+        history = self._service_warning_message_history.get(key)
+        if isinstance(history, deque) and history.maxlen == int(_SERVICE_WARNING_MESSAGE_HISTORY_MAXLEN):
+            return history
+        normalized = deque(
+            history or (),
+            maxlen=int(_SERVICE_WARNING_MESSAGE_HISTORY_MAXLEN),
+        )
+        self._service_warning_message_history[key] = normalized
+        return normalized
+
+    def _get_service_activity_bucket(
+        self,
+        key: tuple[str, str],
+    ) -> deque[tuple[float, int]]:
+        bucket = self._service_warning_activity.get(key)
+        if isinstance(bucket, deque) and bucket.maxlen == int(_SERVICE_WARNING_ACTIVITY_BUCKET_MAXLEN):
+            return bucket
+        normalized = deque(
+            bucket or (),
+            maxlen=int(_SERVICE_WARNING_ACTIVITY_BUCKET_MAXLEN),
+        )
+        self._service_warning_activity[key] = normalized
+        return normalized
 
     @staticmethod
     def _token_count(content: str) -> int:
@@ -519,10 +573,9 @@ class ServicePitchWarningMixin:
     def _prune_simple_monotonic_cache(
         cache: dict, now: float, *, max_len: int, max_age_sec: float
     ) -> None:
-        if len(cache) <= max_len:
-            return
         stale_before = now - float(max_age_sec)
         stale_keys = []
+        fresh_keys: list[tuple[float, object]] = []
         for key, value in cache.items():
             if isinstance(value, tuple) and len(value) == 2:
                 cache_ts = float(value[0])
@@ -533,8 +586,69 @@ class ServicePitchWarningMixin:
                 continue
             if cache_ts < stale_before:
                 stale_keys.append(key)
+            else:
+                fresh_keys.append((cache_ts, key))
         for key in stale_keys:
             cache.pop(key, None)
+        overflow = len(cache) - int(max_len)
+        if overflow <= 0:
+            return
+        for _, key in sorted(fresh_keys)[:overflow]:
+            cache.pop(key, None)
+
+    def _prune_service_warning_state(self, now: float, *, force: bool = False) -> None:
+        last_pruned = float(
+            getattr(self, "_service_warning_state_last_pruned_monotonic", 0.0) or 0.0
+        )
+        if not force and (now - last_pruned) < float(_SERVICE_WARNING_STATE_PRUNE_INTERVAL_SEC):
+            return
+        self._service_warning_state_last_pruned_monotonic = now
+
+        for key, bucket in list(self._service_warning_message_history.items()):
+            if not isinstance(bucket, deque):
+                self._service_warning_message_history.pop(key, None)
+                continue
+            self._prune_service_message_history_bucket(bucket, now)
+            if not bucket:
+                self._service_warning_message_history.pop(key, None)
+        for key, bucket in list(self._service_warning_activity.items()):
+            if not isinstance(bucket, deque):
+                self._service_warning_activity.pop(key, None)
+                continue
+            self._prune_service_activity_bucket(bucket, now)
+            if not bucket:
+                self._service_warning_activity.pop(key, None)
+
+        self._prune_simple_monotonic_cache(
+            self._service_warning_first_seen,
+            now,
+            max_len=int(_SERVICE_WARNING_TRACKED_USER_STATE_MAXLEN),
+            max_age_sec=max(float(_SERVICE_WARNING_FIRST_CHAT_WINDOW_SEC) * 20.0, 3600.0),
+        )
+        self._prune_simple_monotonic_cache(
+            self._service_warning_channel_cd,
+            now,
+            max_len=int(_SERVICE_WARNING_CHANNEL_STATE_MAXLEN),
+            max_age_sec=max(float(_SERVICE_WARNING_CHANNEL_COOLDOWN_SEC) * 2.0, 1800.0),
+        )
+        self._prune_simple_monotonic_cache(
+            self._service_warning_user_cd,
+            now,
+            max_len=int(_SERVICE_WARNING_TRACKED_USER_STATE_MAXLEN),
+            max_age_sec=max(float(_SERVICE_WARNING_USER_COOLDOWN_SEC) * 2.0, 3600.0),
+        )
+        self._prune_simple_monotonic_cache(
+            self._service_warning_hint_cd,
+            now,
+            max_len=int(_SERVICE_WARNING_TRACKED_USER_STATE_MAXLEN),
+            max_age_sec=max(float(_SERVICE_WARNING_HINT_COOLDOWN_SEC) * 4.0, 300.0),
+        )
+        self._prune_simple_monotonic_cache(
+            self._service_warning_seen_messages,
+            now,
+            max_len=32768,
+            max_age_sec=float(_SERVICE_WARNING_OBSERVED_MSG_CACHE_TTL_SEC) * 2.0,
+        )
 
     async def _get_account_age_days(self, author_id: str, author_login: str) -> int | None:
         cache_key = (author_id or author_login or "").strip().lower()
@@ -700,6 +814,7 @@ class ServicePitchWarningMixin:
         chatter_id = str(getattr(author, "id", "") or "").strip()
         chatter_key = chatter_login or chatter_id or "unknown"
         now = time.monotonic()
+        self._prune_service_warning_state(now)
         _, is_first_observed_message = self._observe_service_message_position(
             channel_login, chatter_key, now
         )
@@ -751,7 +866,7 @@ class ServicePitchWarningMixin:
             reasons.extend(early_reasons)
 
         bucket_key = (channel_login, chatter_key)
-        history_bucket = self._service_warning_message_history.setdefault(bucket_key, deque())
+        history_bucket = self._get_service_message_history_bucket(bucket_key)
         history_bucket.append((now, raw_content, set(features)))
         self._prune_service_message_history_bucket(history_bucket, now)
 
@@ -760,7 +875,7 @@ class ServicePitchWarningMixin:
             score += sequence_score
             reasons.extend(sequence_reasons)
 
-        bucket = self._service_warning_activity.setdefault(bucket_key, deque())
+        bucket = self._get_service_activity_bucket(bucket_key)
         bucket.append((now, int(score)))
         self._prune_service_activity_bucket(bucket, now)
 
@@ -892,8 +1007,9 @@ class ServicePitchWarningMixin:
             self._service_warning_user_cd[bucket_key] = now + float(
                 _SERVICE_WARNING_USER_COOLDOWN_SEC
             )
-            bucket.clear()
-            history_bucket.clear()
+            self._service_warning_activity.pop(bucket_key, None)
+            self._service_warning_message_history.pop(bucket_key, None)
+            self._service_warning_first_seen.pop(bucket_key, None)
         else:
             self._service_warning_hint_cd[bucket_key] = now + float(
                 _SERVICE_WARNING_HINT_COOLDOWN_SEC

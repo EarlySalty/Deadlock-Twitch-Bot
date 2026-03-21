@@ -243,10 +243,7 @@ class TwitchBaseCog(commands.Cog):
                 default=("earlysalty",),
             )
         )
-        self._experimental_irc_lurker_enabled = _parse_env_bool(
-            "TWITCH_EXPERIMENTAL_IRC_LURKER_TRACKER",
-            bool(self._experimental_irc_lurker_channels),
-        )
+        self._experimental_irc_lurker_enabled = False
         self._irc_lurker_tracker: IRCLurkerTracker | None = None
 
         # Internal API for split dashboard deployments
@@ -1445,6 +1442,11 @@ class TwitchBaseCog(commands.Cog):
             return
         try:
             await runner.start()
+            if not runner.is_running:
+                log.error(
+                    "Konnte interne Twitch API nicht starten%s",
+                    f": {runner.last_start_error}" if runner.last_start_error else "",
+                )
         except Exception:
             log.exception("Konnte interne Twitch API nicht starten")
 

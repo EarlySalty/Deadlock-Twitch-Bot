@@ -18,6 +18,7 @@ from aiohttp import web
 
 from ..core.chat_bots import build_known_chat_bot_not_in_clause
 from ..storage import pg as storage
+from .error_utils import analytics_internal_error_response
 from .engagement_metrics import EngagementInputs, calculate_engagement
 
 log = logging.getLogger("TwitchStreams.AnalyticsV2")
@@ -523,7 +524,7 @@ class _AnalyticsAudienceMixin:
                 )
         except Exception as exc:
             log.exception("Error in watch time distribution API")
-            return web.json_response({"error": str(exc)}, status=500)
+            return analytics_internal_error_response()
 
     async def _api_v2_follower_funnel(self, request: web.Request) -> web.Response:
         """Get follower conversion funnel data."""
@@ -733,7 +734,7 @@ class _AnalyticsAudienceMixin:
                 )
         except Exception as exc:
             log.exception("Error in follower funnel API")
-            return web.json_response({"error": str(exc)}, status=500)
+            return analytics_internal_error_response()
 
     async def _api_v2_viewer_overlap(self, request: web.Request) -> web.Response:
         """Get viewer overlap with other channels."""
@@ -837,7 +838,7 @@ class _AnalyticsAudienceMixin:
                 return web.json_response(data)
         except Exception as exc:
             log.exception("Error in viewer overlap API")
-            return web.json_response({"error": str(exc)}, status=500)
+            return analytics_internal_error_response()
 
     async def _api_v2_audience_insights(self, request: web.Request) -> web.Response:
         """Get combined audience insights (all in one call)."""
@@ -981,7 +982,7 @@ class _AnalyticsAudienceMixin:
                 )
         except Exception as exc:
             log.exception("Error in audience insights API")
-            return web.json_response({"error": str(exc)}, status=500)
+            return analytics_internal_error_response()
 
     async def _api_v2_audience_demographics(self, request: web.Request) -> web.Response:
         """Get estimated audience demographics based on available data."""
@@ -1515,7 +1516,7 @@ class _AnalyticsAudienceMixin:
                 )
         except Exception as exc:
             log.exception("Error in audience demographics API")
-            return web.json_response({"error": str(exc)}, status=500)
+            return analytics_internal_error_response()
 
     async def _api_v2_loyalty_curve(self, request: web.Request) -> web.Response:
         """Loyalty/churn distribution: how many chatters came 1x, 2x, 3x, 10x+."""
@@ -1566,4 +1567,4 @@ class _AnalyticsAudienceMixin:
                 })
         except Exception as exc:
             log.exception("Error in loyalty curve API")
-            return web.json_response({"error": str(exc)}, status=500)
+            return analytics_internal_error_response()

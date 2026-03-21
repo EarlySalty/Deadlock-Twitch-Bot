@@ -191,6 +191,10 @@ def analytics_db_fingerprint_details(dsn: str | None = None) -> dict[str, str]:
     }
 
 
+def _db_cache_key(dsn: str | None = None) -> str:
+    return analytics_db_fingerprint(dsn)
+
+
 def _placeholder_sql(sql: str) -> str:
     """Escape literal '%' and convert sqlite-style '?' to psycopg placeholders."""
     # Escape all percent signs first; psycopg treats '%%' as literal '%'.
@@ -443,13 +447,15 @@ def _ensure_twitch_raid_auth_login_index(conn: psycopg.Connection) -> None:
         )
 
 
-def _run_startup_maintenance(conn: psycopg.Connection) -> None:
+def _run_startup_maintenance(conn: psycopg.Connection, *, dsn: str | None = None) -> None:
     """
     One-time runtime maintenance for existing schemas.
     Keeps known SERIAL sequences aligned even when ensure_schema() is skipped
     (for example when a migration-managed schema_version table exists).
     """
-    if getattr(_run_startup_maintenance, "_done", False):
+    cache_key = _db_cache_key(dsn)
+    done_for = set(getattr(_run_startup_maintenance, "_done_for", set()))
+    if cache_key in done_for:
         return
 
     # Keep this list focused on tables where stale sequences have caused issues.
@@ -477,7 +483,8 @@ def _run_startup_maintenance(conn: psycopg.Connection) -> None:
     except Exception as exc:  # pragma: no cover - best effort guard
         log.debug("Skipping social_media_platform_auth index maintenance: %s", exc)
 
-    _run_startup_maintenance._done = True
+    done_for.add(cache_key)
+    _run_startup_maintenance._done_for = done_for
 
 
 def _cleanup_duplicate_live_state_rows(conn: psycopg.Connection) -> None:
@@ -823,9 +830,11 @@ def _execute_with_savepoint(conn, sql: str, params=None):
     return result
 
 
-def _ensure_compat_functions(conn: psycopg.Connection) -> None:
-    """Install lightweight sqlite compatibility helpers (strftime, printf, julianday, datetime) once per process."""
-    if getattr(_ensure_compat_functions, "_installed", False):
+def _ensure_compat_functions(conn: psycopg.Connection, *, dsn: str | None = None) -> None:
+    """Install lightweight sqlite compatibility helpers once per target analytics DB."""
+    cache_key = _db_cache_key(dsn)
+    installed_for = set(getattr(_ensure_compat_functions, "_installed_for", set()))
+    if cache_key in installed_for:
         return
     with conn.cursor() as _cur:
         cur = _CompatCursor(_cur)
@@ -919,7 +928,8 @@ def _ensure_compat_functions(conn: psycopg.Connection) -> None:
             """
         )
     conn.commit()
-    _ensure_compat_functions._installed = True
+    installed_for.add(cache_key)
+    _ensure_compat_functions._installed_for = installed_for
 
 
 @contextlib.contextmanager
@@ -928,8 +938,10 @@ def get_conn():
     dsn = _load_dsn()
     conn = psycopg.connect(dsn, row_factory=_compat_row_factory, autocommit=True)
     try:
-        _ensure_compat_functions(conn)
-        if not getattr(get_conn, "_schema_ok", False):
+        cache_key = _db_cache_key(dsn)
+        _ensure_compat_functions(conn, dsn=dsn)
+        schema_ok_for = set(getattr(get_conn, "_schema_ok_for", set()))
+        if cache_key not in schema_ok_for:
             schema_version_exists = False
             try:
                 row = conn.execute(
@@ -945,14 +957,16 @@ def get_conn():
                 log.debug("schema_version existence check failed: %s", exc)
 
             if schema_version_exists:
-                get_conn._schema_ok = True
+                schema_ok_for.add(cache_key)
+                get_conn._schema_ok_for = schema_ok_for
             else:
                 try:
                     ensure_schema(conn)
-                    get_conn._schema_ok = True
+                    schema_ok_for.add(cache_key)
+                    get_conn._schema_ok_for = schema_ok_for
                 except Exception as exc:  # pragma: no cover - best effort
                     log.warning("Schema initialization failed: %s", exc, exc_info=True)
-        _run_startup_maintenance(conn)
+        _run_startup_maintenance(conn, dsn=dsn)
         yield _CompatConnection(conn)
     finally:
         conn.close()
@@ -980,8 +994,10 @@ def _observability_queue_instance() -> queue.Queue[object]:
     return _observability_event_queue
 
 
-def _ensure_observability_schema(conn: _CompatConnection) -> None:
-    if getattr(get_conn, "_schema_ok", False):
+def _ensure_observability_schema(conn: _CompatConnection, *, dsn: str | None = None) -> None:
+    cache_key = _db_cache_key(dsn)
+    schema_ok_for = set(getattr(get_conn, "_schema_ok_for", set()))
+    if cache_key in schema_ok_for:
         return
 
     schema_version_exists = False
@@ -999,12 +1015,14 @@ def _ensure_observability_schema(conn: _CompatConnection) -> None:
         log.debug("schema_version existence check failed for observability writer: %s", exc)
 
     if schema_version_exists:
-        get_conn._schema_ok = True
+        schema_ok_for.add(cache_key)
+        get_conn._schema_ok_for = schema_ok_for
         return
 
     try:
         ensure_schema(conn)
-        get_conn._schema_ok = True
+        schema_ok_for.add(cache_key)
+        get_conn._schema_ok_for = schema_ok_for
     except Exception as exc:  # pragma: no cover - best effort
         log.warning("Schema initialization failed in observability writer: %s", exc, exc_info=True)
 
@@ -1013,9 +1031,9 @@ def _open_observability_writer_connection() -> _CompatConnection:
     dsn = _load_dsn()
     raw_conn = psycopg.connect(dsn, row_factory=_compat_row_factory, autocommit=False)
     try:
-        _ensure_compat_functions(raw_conn)
+        _ensure_compat_functions(raw_conn, dsn=dsn)
         conn = _CompatConnection(raw_conn)
-        _ensure_observability_schema(conn)
+        _ensure_observability_schema(conn, dsn=dsn)
         return conn
     except Exception:
         raw_conn.close()

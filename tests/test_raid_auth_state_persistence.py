@@ -50,6 +50,7 @@ class RaidAuthStatePersistenceTests(unittest.TestCase):
             auth_url = manager.generate_auth_url(
                 "partner_one",
                 expected_twitch_login="partner_one",
+                expected_twitch_user_id="1001",
                 discord_user_id="123456789",
             )
 
@@ -63,6 +64,7 @@ class RaidAuthStatePersistenceTests(unittest.TestCase):
         meta = json.loads(params[4])
         self.assertEqual(meta["scope_profile"], "base")
         self.assertEqual(meta["expected_twitch_login"], "partner_one")
+        self.assertEqual(meta["expected_twitch_user_id"], "1001")
         self.assertEqual(meta["discord_user_id"], "123456789")
 
     def test_get_pending_auth_url_rebuilds_from_persisted_state(self) -> None:
@@ -74,6 +76,7 @@ class RaidAuthStatePersistenceTests(unittest.TestCase):
                         {
                             "scope_profile": "dashboard_reauth",
                             "expected_twitch_login": "partner_one",
+                            "expected_twitch_user_id": "1001",
                             "discord_user_id": "42",
                         }
                     ),
@@ -106,6 +109,7 @@ class RaidAuthStatePersistenceTests(unittest.TestCase):
                         {
                             "scope_profile": "base",
                             "expected_twitch_login": "partner_one",
+                            "expected_twitch_user_id": "1001",
                             "discord_user_id": "777",
                         }
                     ),
@@ -137,6 +141,7 @@ class RaidAuthStatePersistenceTests(unittest.TestCase):
                         {
                             "scope_profile": "dashboard_reauth",
                             "expected_twitch_login": "partner_one",
+                            "expected_twitch_user_id": "1001",
                             "discord_user_id": "123456789",
                         }
                     ),
@@ -158,6 +163,7 @@ class RaidAuthStatePersistenceTests(unittest.TestCase):
         assert state is not None
         self.assertEqual(state.requested_login, "partner_one")
         self.assertEqual(state.expected_twitch_login, "partner_one")
+        self.assertEqual(state.expected_twitch_user_id, "1001")
         self.assertEqual(state.discord_user_id, "123456789")
         self.assertEqual(state.scope_profile, "dashboard_reauth")
 

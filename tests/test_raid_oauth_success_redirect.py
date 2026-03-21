@@ -50,6 +50,7 @@ class _FakeAuthManager:
             requested_login="partner_one",
             scope_profile=BASE_SCOPE_PROFILE,
             expected_twitch_login="partner_one",
+            expected_twitch_user_id="1001",
             discord_user_id="123456789",
         )
 

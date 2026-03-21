@@ -535,7 +535,12 @@ class TwitchMonitoringMixin(_EventSubMixin, _ExpSessionsMixin, _SessionsMixin, _
                         result = await func(**kwargs)
                     else:
                         result = await asyncio.to_thread(func, **kwargs)
-                except TypeError:
+                except Exception:
+                    log.exception(
+                        "Partner raid score refresh handler failed (candidate=%s, func=%s)",
+                        type(candidate).__name__,
+                        name,
+                    )
                     continue
                 if inspect.isawaitable(result):
                     await result
@@ -1162,7 +1167,7 @@ class TwitchMonitoringMixin(_EventSubMixin, _ExpSessionsMixin, _SessionsMixin, _
             except Exception:
                 log.exception("Fehler beim Stats-Logging")
 
-        if self._tick_count % 100 == 0:
+        if self._tick_count % 10 == 0:
             try:
                 closed = self._cleanup_orphaned_sessions()
                 if closed:

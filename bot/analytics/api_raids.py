@@ -15,6 +15,7 @@ from aiohttp import web
 from ..core.chat_bots import build_known_chat_bot_not_in_clause
 from .raid_metrics import raid_identity_key, recalculate_raid_chat_metrics
 from ..storage import pg as storage
+from .error_utils import analytics_internal_error_response
 
 log = logging.getLogger("TwitchStreams.AnalyticsV2")
 
@@ -290,4 +291,4 @@ class _AnalyticsRaidsMixin:
 
         except Exception as exc:
             log.exception("Error in raid analytics API")
-            return web.json_response({"error": str(exc)}, status=500)
+            return analytics_internal_error_response()

@@ -40,6 +40,12 @@ TWITCH_ABBO_LOGIN_URL = "/twitch/auth/login?next=%2Ftwitch%2Fabbo"
 TWITCH_ABBO_DISCORD_LOGIN_URL = "/twitch/auth/discord/login?next=%2Ftwitch%2Fabbo"
 
 
+def _billing_public_error_message(default_code: str, *, http_status: int | None = None) -> str:
+    if http_status is not None and int(http_status) > 0:
+        return f"stripe_http_error_{int(http_status)}"
+    return str(default_code or "stripe_checkout_create_failed")
+
+
 class _DashboardRoutesMixin:
     """Core dashboard routes and route table registration."""
 
@@ -274,7 +280,7 @@ class _DashboardRoutesMixin:
                 raw_text = response.read().decode("utf-8", errors="replace")
         except _urlerror.HTTPError as exc:
             raw_text = exc.read().decode("utf-8", errors="replace")
-            message = raw_text or f"stripe_http_error_{int(exc.code or 0)}"
+            status_code = int(exc.code or 0)
             try:
                 parsed = json.loads(raw_text)
             except Exception:
@@ -282,10 +288,23 @@ class _DashboardRoutesMixin:
             if isinstance(parsed, dict):
                 error_obj = parsed.get("error")
                 if isinstance(error_obj, dict):
-                    message = str(error_obj.get("message") or message)
-            return None, message
+                    error_type = str(error_obj.get("type") or "").strip() or "unknown"
+                    log.warning(
+                        "stripe rest checkout create failed (HTTP %s, type=%s)",
+                        status_code,
+                        error_type,
+                    )
+                else:
+                    log.warning("stripe rest checkout create failed (HTTP %s)", status_code)
+            else:
+                log.warning("stripe rest checkout create failed (HTTP %s)", status_code)
+            return None, _billing_public_error_message(
+                "stripe_checkout_create_failed",
+                http_status=status_code,
+            )
         except Exception as exc:
-            return None, str(exc)
+            log.warning("stripe rest checkout create failed (%s)", type(exc).__name__)
+            return None, _billing_public_error_message("stripe_checkout_create_failed")
 
         try:
             payload = json.loads(raw_text)
@@ -297,7 +316,9 @@ class _DashboardRoutesMixin:
             return payload, None
         error_obj = payload.get("error")
         if isinstance(error_obj, dict):
-            return None, str(error_obj.get("message") or "stripe_checkout_create_failed")
+            error_type = str(error_obj.get("type") or "").strip() or "unknown"
+            log.warning("stripe rest checkout create returned error payload (type=%s)", error_type)
+            return None, _billing_public_error_message("stripe_checkout_create_failed")
         return None, "stripe_checkout_create_failed"
 
     def _billing_create_checkout_session_best_effort(
@@ -324,7 +345,10 @@ class _DashboardRoutesMixin:
                     session = stripe.checkout.Session.create(**session_payload)
                 return session, None
             except Exception as exc:
-                log.warning("stripe sdk checkout create failed; fallback to REST: %s", str(exc))
+                log.warning(
+                    "stripe sdk checkout create failed; fallback to REST (%s)",
+                    type(exc).__name__,
+                )
 
         return self._billing_create_checkout_session_rest(
             stripe_secret_key=stripe_secret_key,
@@ -2333,7 +2357,7 @@ class _DashboardRoutesMixin:
             return web.json_response(
                 {
                     "error": "stripe_sdk_missing",
-                    "details": import_error or "stripe import failed",
+                    "message": _billing_public_error_message("stripe_sdk_missing"),
                 },
                 status=503,
             )
@@ -2402,11 +2426,16 @@ class _DashboardRoutesMixin:
                             },
                         )
                     except Exception as exc:
+                        log.warning(
+                            "stripe product create failed for %s (%s)",
+                            plan_id,
+                            type(exc).__name__,
+                        )
                         return web.json_response(
                             {
                                 "error": "stripe_product_create_failed",
                                 "plan_id": plan_id,
-                                "message": str(getattr(exc, "user_message", "") or str(exc)),
+                                "message": "stripe_product_create_failed",
                             },
                             status=502,
                         )
@@ -2493,12 +2522,18 @@ class _DashboardRoutesMixin:
                                 },
                             )
                         except Exception as exc:
+                            log.warning(
+                                "stripe price create failed for %s/%sm (%s)",
+                                plan_id,
+                                cycle,
+                                type(exc).__name__,
+                            )
                             return web.json_response(
                                 {
                                     "error": "stripe_price_create_failed",
                                     "plan_id": plan_id,
                                     "cycle_months": cycle,
-                                    "message": str(getattr(exc, "user_message", "") or str(exc)),
+                                    "message": "stripe_price_create_failed",
                                 },
                                 status=502,
                             )

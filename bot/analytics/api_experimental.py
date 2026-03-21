@@ -13,6 +13,7 @@ from datetime import UTC, datetime, timedelta
 from aiohttp import web
 
 from ..storage import pg as storage
+from .error_utils import analytics_internal_error_response
 
 log = logging.getLogger("TwitchStreams.AnalyticsV2.Experimental")
 
@@ -91,7 +92,7 @@ class _AnalyticsExperimentalMixin:
                 })
         except Exception as exc:
             log.exception("Error in exp_overview API")
-            return web.json_response({"error": str(exc)}, status=500)
+            return analytics_internal_error_response()
 
     # ------------------------------------------------------------------
     #  GET /twitch/api/v2/exp/game-breakdown
@@ -150,7 +151,7 @@ class _AnalyticsExperimentalMixin:
                 return web.json_response(data)
         except Exception as exc:
             log.exception("Error in exp_game_breakdown API")
-            return web.json_response({"error": str(exc)}, status=500)
+            return analytics_internal_error_response()
 
     # ------------------------------------------------------------------
     #  GET /twitch/api/v2/exp/game-transitions
@@ -208,7 +209,7 @@ class _AnalyticsExperimentalMixin:
                 return web.json_response(data)
         except Exception as exc:
             log.exception("Error in exp_game_transitions API")
-            return web.json_response({"error": str(exc)}, status=500)
+            return analytics_internal_error_response()
 
     # ------------------------------------------------------------------
     #  GET /twitch/api/v2/exp/growth-curves
@@ -266,4 +267,4 @@ class _AnalyticsExperimentalMixin:
                 return web.json_response(data)
         except Exception as exc:
             log.exception("Error in exp_growth_curves API")
-            return web.json_response({"error": str(exc)}, status=500)
+            return analytics_internal_error_response()

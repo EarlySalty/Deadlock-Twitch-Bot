@@ -18,6 +18,7 @@ from aiohttp import web
 
 from ..core.chat_bots import build_known_chat_bot_not_in_clause
 from ..storage import pg as storage
+from .error_utils import analytics_internal_error_response
 from .raw_chat_status import build_raw_chat_status
 from .coaching_engine import CoachingEngine
 from .engagement_metrics import EngagementInputs, calculate_engagement
@@ -841,7 +842,7 @@ class _AnalyticsInsightsMixin:
                 )
         except Exception as exc:
             log.exception("Error in chat analytics API")
-            return web.json_response({"error": str(exc)}, status=500)
+            return analytics_internal_error_response()
 
     async def _api_v2_coaching(self, request: web.Request) -> web.Response:
         """Get personalized coaching data for a streamer."""
@@ -874,7 +875,7 @@ class _AnalyticsInsightsMixin:
                 return web.json_response(data)
         except Exception as exc:
             log.exception("Error in coaching API")
-            return web.json_response({"error": str(exc)}, status=500)
+            return analytics_internal_error_response()
 
     async def _api_v2_monetization(self, request: web.Request) -> web.Response:
         """Monetization & Hype Train overview for the last N days."""
@@ -1215,7 +1216,7 @@ class _AnalyticsInsightsMixin:
 
         except Exception as exc:
             log.exception("Error in monetization API")
-            return web.json_response({"error": str(exc)}, status=500)
+            return analytics_internal_error_response()
 
         return web.json_response(
             {

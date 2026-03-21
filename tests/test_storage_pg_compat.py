@@ -1,12 +1,16 @@
+import contextlib
 import unittest
 from types import SimpleNamespace
+from unittest.mock import patch
 
 import psycopg
 
 from bot.storage.pg import (
     _CompatConnection,
     _execute_with_savepoint,
+    _ensure_compat_functions,
     _ensure_observability_writer_started,
+    _run_startup_maintenance,
     analytics_db_fingerprint,
     analytics_db_fingerprint_details,
     insert_observability_event,
@@ -24,6 +28,15 @@ class _RecordingConnection:
 
     def commit(self) -> None:
         self.commits += 1
+
+    def cursor(self):
+        return self
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        return False
 
 
 class _SchemaCursor:
@@ -232,6 +245,39 @@ class EnsureSchemaSavepointTests(unittest.TestCase):
             "ON twitch_observability_events(entity_login, created_at DESC)",
             statements,
         )
+
+
+class PerDatabaseCacheTests(unittest.TestCase):
+    def tearDown(self) -> None:
+        with contextlib.suppress(Exception):
+            delattr(_ensure_compat_functions, "_installed_for")
+        with contextlib.suppress(Exception):
+            delattr(_run_startup_maintenance, "_done_for")
+
+    def test_ensure_compat_functions_is_cached_per_database(self) -> None:
+        conn = _RecordingConnection()
+
+        _ensure_compat_functions(conn, dsn="postgresql://demo@host-a:5432/db_a")
+        _ensure_compat_functions(conn, dsn="postgresql://demo@host-a:5432/db_a")
+        _ensure_compat_functions(conn, dsn="postgresql://demo@host-b:5432/db_b")
+
+        self.assertEqual(conn.commits, 2)
+
+    def test_startup_maintenance_is_cached_per_database(self) -> None:
+        conn = object()
+
+        with patch("bot.storage.pg._align_serial_sequence") as align_mock, patch(
+            "bot.storage.pg._coerce_column_to_boolean"
+        ), patch("bot.storage.pg._cleanup_duplicate_live_state_rows"), patch(
+            "bot.storage.pg._ensure_unique_live_state_login_index"
+        ), patch("bot.storage.pg._ensure_twitch_raid_auth_login_index"), patch(
+            "bot.storage.pg._ensure_social_media_auth_indexes"
+        ):
+            _run_startup_maintenance(conn, dsn="postgresql://demo@host-a:5432/db_a")
+            _run_startup_maintenance(conn, dsn="postgresql://demo@host-a:5432/db_a")
+            _run_startup_maintenance(conn, dsn="postgresql://demo@host-b:5432/db_b")
+
+        self.assertEqual(align_mock.call_count, 8)
 
 
 if __name__ == "__main__":

@@ -278,6 +278,70 @@ class InternalApiAuthTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(payload.get("auth_url"), "https://auth.example/discord:123456789")
         self.assertEqual(seen_logins, ["discord:123456789"])
 
+    async def test_raid_auth_url_rejects_mismatched_discord_target_and_query_id(self) -> None:
+        seen_calls: list[tuple[str, str | None]] = []
+
+        async def _raid_auth_url_cb(login: str, discord_user_id: str | None = None) -> str:
+            seen_calls.append((login, discord_user_id))
+            return f"https://auth.example/{login}/{discord_user_id or 'none'}"
+
+        app = build_internal_api_app(token="secret-token", raid_auth_url_cb=_raid_auth_url_cb)
+        async with TestServer(app) as server:
+            async with TestClient(server) as client:
+                response = await client.get(
+                    (
+                        f"{INTERNAL_API_BASE_PATH}/raid/auth-url"
+                        "?login=discord:123456789&discord_user_id=987654321"
+                    ),
+                    headers={INTERNAL_TOKEN_HEADER: "secret-token"},
+                )
+                payload = await response.json()
+
+        self.assertEqual(response.status, 400)
+        self.assertEqual(payload.get("error"), "bad_request")
+        self.assertEqual(payload.get("message"), "invalid request parameters")
+        self.assertEqual(seen_calls, [])
+
+    async def test_raid_auth_url_passes_discord_user_id_when_callback_supports_it(self) -> None:
+        seen_calls: list[tuple[str, str | None]] = []
+
+        async def _raid_auth_url_cb(login: str, discord_user_id: str | None = None) -> str:
+            seen_calls.append((login, discord_user_id))
+            return f"https://auth.example/{login}/{discord_user_id or 'none'}"
+
+        app = build_internal_api_app(token="secret-token", raid_auth_url_cb=_raid_auth_url_cb)
+        async with TestServer(app) as server:
+            async with TestClient(server) as client:
+                response = await client.get(
+                    f"{INTERNAL_API_BASE_PATH}/raid/auth-url?login=partner_one&discord_user_id=123456789",
+                    headers={INTERNAL_TOKEN_HEADER: "secret-token"},
+                )
+                payload = await response.json()
+
+        self.assertEqual(response.status, 200)
+        self.assertEqual(payload.get("auth_url"), "https://auth.example/partner_one/123456789")
+        self.assertEqual(seen_calls, [("partner_one", "123456789")])
+
+    async def test_raid_auth_url_legacy_callback_still_works_without_discord_kwarg(self) -> None:
+        seen_logins: list[str] = []
+
+        async def _raid_auth_url_cb(login: str) -> str:
+            seen_logins.append(login)
+            return f"https://auth.example/{login}"
+
+        app = build_internal_api_app(token="secret-token", raid_auth_url_cb=_raid_auth_url_cb)
+        async with TestServer(app) as server:
+            async with TestClient(server) as client:
+                response = await client.get(
+                    f"{INTERNAL_API_BASE_PATH}/raid/auth-url?login=partner_one&discord_user_id=123456789",
+                    headers={INTERNAL_TOKEN_HEADER: "secret-token"},
+                )
+                payload = await response.json()
+
+        self.assertEqual(response.status, 200)
+        self.assertEqual(payload.get("auth_url"), "https://auth.example/partner_one")
+        self.assertEqual(seen_logins, ["partner_one"])
+
     async def test_raid_auth_url_rejects_invalid_discord_state_target(self) -> None:
         async def _raid_auth_url_cb(login: str) -> str:
             return f"https://auth.example/{login}"
@@ -563,10 +627,11 @@ class InternalApiAuthTests(unittest.IsolatedAsyncioTestCase):
                 payload={"login": "some_streamer"},
             )
 
-        self.assertEqual(key, scope_key)
-        self.assertIsNone(replay)
+        self.assertEqual(key, "")
+        self.assertEqual(fingerprint, "")
+        self.assertIsNotNone(replay)
         self.assertIsNone(wait_future)
-        self.assertTrue(is_owner)
+        self.assertFalse(is_owner)
         self.assertTrue(stale_future.done())
         self.assertEqual(
             stale_future.result(),
@@ -578,10 +643,45 @@ class InternalApiAuthTests(unittest.IsolatedAsyncioTestCase):
                 },
             ),
         )
-        self.assertNotIn(scope_key, server._idempotency_cache)
-        self.assertIn(scope_key, server._idempotency_inflight)
-        self.assertEqual(server._idempotency_inflight[scope_key].fingerprint, fingerprint)
-        self.assertIsNot(server._idempotency_inflight[scope_key].future, stale_future)
+        self.assertEqual(replay.status, 409)
+        self.assertIn(scope_key, server._idempotency_cache)
+        self.assertNotIn(scope_key, server._idempotency_inflight)
+
+    async def test_prepare_idempotency_replays_timeout_for_same_request_after_inflight_expiry(self) -> None:
+        server = InternalApiServer(token="secret-token")
+        server._idempotency_ttl_seconds = 30
+        request = SimpleNamespace(
+            headers={IDEMPOTENCY_KEY_HEADER: "idem-ttl-expired-2"},
+            method="POST",
+            path=f"{INTERNAL_API_BASE_PATH}/streamers",
+            path_qs=f"{INTERNAL_API_BASE_PATH}/streamers",
+        )
+        payload = {"login": "same_streamer"}
+        scope_key = server._idempotency_scope_key(request=request, key="idem-ttl-expired-2")
+        fingerprint = server._request_fingerprint(request=request, payload=payload)
+        stale_future = asyncio.get_running_loop().create_future()
+        server._idempotency_inflight[scope_key] = SimpleNamespace(
+            fingerprint=fingerprint,
+            future=stale_future,
+            created_at=100.0,
+        )
+
+        with patch("bot.internal_api.app.time_module.time", return_value=200.0):
+            key, seen_fingerprint, replay, wait_future, is_owner = server._prepare_idempotency(
+                request=request,
+                payload=payload,
+            )
+
+        self.assertEqual(key, "")
+        self.assertEqual(seen_fingerprint, "")
+        self.assertIsNotNone(replay)
+        self.assertIsNone(wait_future)
+        self.assertFalse(is_owner)
+        self.assertEqual(replay.status, 503)
+        self.assertEqual(replay.headers.get("X-Idempotency-Replayed"), "1")
+        self.assertTrue(stale_future.done())
+        self.assertIn(scope_key, server._idempotency_cache)
+        self.assertNotIn(scope_key, server._idempotency_inflight)
 
     async def test_live_active_announcements_returns_minimal_entries(self) -> None:
         async def _live_active_announcements_cb() -> list[dict[str, object]]:
@@ -809,6 +909,29 @@ class InternalApiAuthTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("super-secret", payload.get("message", ""))
         self.assertTrue(any("raid auth url runtime failed (RuntimeError)" in line for line in captured.output))
         self.assertTrue(all("super-secret" not in line for line in captured.output))
+
+    async def test_raid_auth_url_internal_type_error_is_not_silently_retried(self) -> None:
+        seen_calls: list[tuple[str, str | None]] = []
+
+        async def _raid_auth_url_cb(login: str, discord_user_id: str | None = None) -> str:
+            seen_calls.append((login, discord_user_id))
+            raise TypeError("broken callback internals")
+
+        app = build_internal_api_app(token="secret-token", raid_auth_url_cb=_raid_auth_url_cb)
+        with self.assertLogs("TwitchStreams", level="WARNING") as captured:
+            async with TestServer(app) as server:
+                async with TestClient(server) as client:
+                    response = await client.get(
+                        f"{INTERNAL_API_BASE_PATH}/raid/auth-url?login=partner_one&discord_user_id=123456789",
+                        headers={INTERNAL_TOKEN_HEADER: "secret-token"},
+                    )
+                    payload = await response.json()
+
+        self.assertEqual(response.status, 500)
+        self.assertEqual(payload.get("error"), "internal_error")
+        self.assertEqual(payload.get("message"), "failed to generate raid auth url")
+        self.assertEqual(seen_calls, [("partner_one", "123456789")])
+        self.assertTrue(any("internal api raid auth url failed" in line for line in captured.output))
 
     async def test_discord_profile_scope_allowlist_rejects_unlisted_ids(self) -> None:
         seen: list[dict[str, str | bool | None]] = []

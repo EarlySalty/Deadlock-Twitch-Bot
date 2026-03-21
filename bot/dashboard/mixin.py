@@ -306,6 +306,8 @@ class TwitchDashboardMixin:
             discord_id = raw.split(":", 1)[1].strip()
             if not discord_id.isdigit():
                 raise ValueError("invalid discord user id")
+            if normalized_discord_user_id is not None and normalized_discord_user_id != discord_id:
+                raise ValueError("discord_user_id does not match login target")
             normalized = f"discord:{discord_id}"
             use_discord_button_url = True
         else:
@@ -510,12 +512,29 @@ class TwitchDashboardMixin:
             if not twitch_user_id or not twitch_login:
                 raise RuntimeError("Invalid Twitch user payload in OAuth callback")
 
+            expected_twitch_user_id = str(state_info.expected_twitch_user_id or "").strip()
+            if expected_twitch_user_id and twitch_user_id != expected_twitch_user_id:
+                log.warning(
+                    "Raid OAuth callback user mismatch: expected=%s actual=%s state=%s",
+                    expected_twitch_user_id,
+                    twitch_user_id,
+                    login,
+                )
+                return {
+                    "status": 403,
+                    "title": "Falscher Twitch-Account",
+                    "body_html": (
+                        "<p>Die Autorisierung wurde mit dem falschen Twitch-Account abgeschlossen.</p>"
+                        "<p>Bitte den Link erneut öffnen und dich mit dem vorgesehenen Kanal anmelden.</p>"
+                    ),
+                }
+
             expected_twitch_login = str(state_info.expected_twitch_login or "").strip().lower()
             if not expected_twitch_login:
                 requested_login = str(state_info.requested_login or "").strip().lower()
                 if requested_login and not requested_login.startswith("discord:"):
                     expected_twitch_login = requested_login
-            if expected_twitch_login and twitch_login != expected_twitch_login:
+            if not expected_twitch_user_id and expected_twitch_login and twitch_login != expected_twitch_login:
                 log.warning(
                     "Raid OAuth callback login mismatch: expected=%s actual=%s state=%s",
                     expected_twitch_login,
@@ -572,6 +591,7 @@ class TwitchDashboardMixin:
             )
 
             post_setup = getattr(raid_bot, "complete_setup_for_streamer", None)
+            sync_partner_state = getattr(raid_bot, "_sync_partner_state_after_auth", None)
             if callable(post_setup) and not had_existing_auth:
                 asyncio.create_task(
                     post_setup(
@@ -581,6 +601,16 @@ class TwitchDashboardMixin:
                         activate_partner_features=not had_existing_auth,
                     ),
                     name="twitch.raid.complete_setup",
+                )
+            elif callable(sync_partner_state) and state_discord_user_id:
+                asyncio.create_task(
+                    sync_partner_state(
+                        twitch_user_id,
+                        twitch_login,
+                        state_discord_user_id=state_discord_user_id,
+                        activate_partner_features=False,
+                    ),
+                    name="twitch.raid.sync_partner_state_after_auth",
                 )
 
             log.info("Raid auth successful for %s", twitch_login)

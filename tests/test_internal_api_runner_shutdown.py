@@ -33,6 +33,22 @@ class InternalApiRunnerShutdownTests(unittest.IsolatedAsyncioTestCase):
             await runner.start()
 
         self.assertFalse(runner.is_running)
+        self.assertIsNotNone(runner.last_start_error)
+
+    async def test_start_records_last_error_on_unexpected_failure(self) -> None:
+        runner = InternalApiRunner(host="127.0.0.1", port=8776, token="secret")
+        with patch.dict(
+            "os.environ",
+            {
+                "TWITCH_RUNTIME_ROLE": "twitch_worker",
+                "TWITCH_RUNTIME_ENFORCE": "1",
+            },
+            clear=True,
+        ), patch("bot.internal_api.runner.build_internal_api_app", side_effect=RuntimeError("boom")):
+            await runner.start()
+
+        self.assertFalse(runner.is_running)
+        self.assertEqual(runner.last_start_error, "Unexpected internal API startup failure")
 
 
 if __name__ == "__main__":

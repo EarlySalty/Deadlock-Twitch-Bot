@@ -91,6 +91,7 @@ class RaidOAuthState:
     requested_login: str
     scope_profile: str
     expected_twitch_login: str | None = None
+    expected_twitch_user_id: str | None = None
     discord_user_id: str | None = None
 
 
@@ -117,6 +118,7 @@ def _serialize_state_meta(
     scope_profile: str | None,
     *,
     expected_twitch_login: str | None = None,
+    expected_twitch_user_id: str | None = None,
     discord_user_id: str | None = None,
 ) -> str:
     payload: dict[str, str] = {
@@ -125,26 +127,30 @@ def _serialize_state_meta(
     normalized_login = _normalize_twitch_login(expected_twitch_login)
     if normalized_login:
         payload["expected_twitch_login"] = normalized_login
+    normalized_user_id = str(expected_twitch_user_id or "").strip()
+    if normalized_user_id:
+        payload["expected_twitch_user_id"] = normalized_user_id
     normalized_discord_user_id = _normalize_state_discord_user_id(discord_user_id)
     if normalized_discord_user_id:
         payload["discord_user_id"] = normalized_discord_user_id
     return json.dumps(payload, separators=(",", ":"), sort_keys=True)
 
 
-def _parse_state_meta(raw_value: str | None) -> tuple[str, str | None, str | None]:
+def _parse_state_meta(raw_value: str | None) -> tuple[str, str | None, str | None, str | None]:
     raw_text = str(raw_value or "").strip()
     if not raw_text:
-        return BASE_SCOPE_PROFILE, None, None
+        return BASE_SCOPE_PROFILE, None, None, None
     try:
         decoded = json.loads(raw_text)
     except Exception:
-        return parse_scope_profile_meta(raw_text), None, None
+        return parse_scope_profile_meta(raw_text), None, None, None
     if not isinstance(decoded, dict):
-        return parse_scope_profile_meta(raw_text), None, None
+        return parse_scope_profile_meta(raw_text), None, None, None
     scope_profile = normalize_scope_profile(decoded.get("scope_profile"))
     expected_login = _normalize_twitch_login(decoded.get("expected_twitch_login"))
+    expected_user_id = str(decoded.get("expected_twitch_user_id") or "").strip() or None
     discord_user_id = _normalize_state_discord_user_id(decoded.get("discord_user_id"))
-    return scope_profile, expected_login, discord_user_id
+    return scope_profile, expected_login, expected_user_id, discord_user_id
 
 
 def _parse_expiry_ts(val) -> float:
@@ -265,6 +271,7 @@ class RaidAuthManager:
                         _serialize_state_meta(
                             state_info.scope_profile,
                             expected_twitch_login=state_info.expected_twitch_login,
+                            expected_twitch_user_id=state_info.expected_twitch_user_id,
                             discord_user_id=state_info.discord_user_id,
                         ),
                         expires_at.isoformat(),
@@ -305,11 +312,12 @@ class RaidAuthManager:
         if not login:
             return None
         meta_raw = row["pkce_verifier"] if hasattr(row, "keys") else row[1]
-        scope_profile, expected_login, discord_user_id = _parse_state_meta(meta_raw)
+        scope_profile, expected_login, expected_user_id, discord_user_id = _parse_state_meta(meta_raw)
         return RaidOAuthState(
             requested_login=login,
             scope_profile=scope_profile,
             expected_twitch_login=expected_login,
+            expected_twitch_user_id=expected_user_id,
             discord_user_id=discord_user_id,
         )
 
@@ -341,11 +349,12 @@ class RaidAuthManager:
         if not login:
             return None
         meta_raw = row["pkce_verifier"] if hasattr(row, "keys") else row[1]
-        scope_profile, expected_login, discord_user_id = _parse_state_meta(meta_raw)
+        scope_profile, expected_login, expected_user_id, discord_user_id = _parse_state_meta(meta_raw)
         return RaidOAuthState(
             requested_login=login,
             scope_profile=scope_profile,
             expected_twitch_login=expected_login,
+            expected_twitch_user_id=expected_user_id,
             discord_user_id=discord_user_id,
         )
 
@@ -432,23 +441,69 @@ class RaidAuthManager:
             return DASHBOARD_REAUTH_SCOPE_PROFILE
         return BASE_SCOPE_PROFILE
 
+    def _linked_twitch_login_for_discord_user(self, discord_user_id: str | None) -> str | None:
+        identity_login, _identity_user_id = self._linked_twitch_identity_for_discord_user(
+            discord_user_id
+        )
+        return identity_login
+
+    def _linked_twitch_identity_for_discord_user(
+        self,
+        discord_user_id: str | None,
+    ) -> tuple[str | None, str | None]:
+        normalized_discord_user_id = _normalize_state_discord_user_id(discord_user_id)
+        if not normalized_discord_user_id:
+            return None, None
+        try:
+            with get_conn() as conn:
+                identity = load_streamer_identity(conn, discord_user_id=normalized_discord_user_id)
+        except Exception:
+            log.debug(
+                "Could not resolve linked twitch login for discord_user_id=%s",
+                normalized_discord_user_id,
+                exc_info=True,
+            )
+            return None, None
+        if not identity:
+            return None, None
+        identity_login = _normalize_twitch_login(
+            identity["twitch_login"] if hasattr(identity, "keys") else identity[1]
+        )
+        identity_user_id = str(
+            identity["twitch_user_id"] if hasattr(identity, "keys") else identity[0] or ""
+        ).strip() or None
+        return identity_login, identity_user_id
+
     def _build_state_info(
         self,
         twitch_login: str,
         *,
         scope_profile: str,
         expected_twitch_login: str | None = None,
+        expected_twitch_user_id: str | None = None,
         discord_user_id: str | int | None = None,
     ) -> RaidOAuthState:
         requested_login = str(twitch_login or "").strip().lower()
         resolved_profile = self._resolve_scope_profile(requested_login, scope_profile)
         normalized_expected_login = _normalize_twitch_login(expected_twitch_login)
-        if not normalized_expected_login and not requested_login.startswith("discord:"):
-            normalized_expected_login = requested_login
+        normalized_expected_user_id = str(expected_twitch_user_id or "").strip() or None
+        if not normalized_expected_login:
+            if requested_login.startswith("discord:"):
+                (
+                    normalized_expected_login,
+                    linked_expected_user_id,
+                ) = self._linked_twitch_identity_for_discord_user(
+                    requested_login.split(":", 1)[1].strip()
+                )
+                if not normalized_expected_user_id:
+                    normalized_expected_user_id = linked_expected_user_id
+            else:
+                normalized_expected_login = requested_login
         return RaidOAuthState(
             requested_login=requested_login,
             scope_profile=resolved_profile,
             expected_twitch_login=normalized_expected_login,
+            expected_twitch_user_id=normalized_expected_user_id,
             discord_user_id=_normalize_state_discord_user_id(discord_user_id),
         )
 
@@ -600,6 +655,7 @@ class RaidAuthManager:
         *,
         scope_profile: str = AUTO_SCOPE_PROFILE,
         expected_twitch_login: str | None = None,
+        expected_twitch_user_id: str | None = None,
         discord_user_id: str | int | None = None,
     ) -> str:
         """Generiert eine OAuth-URL für Streamer-Autorisierung."""
@@ -609,6 +665,7 @@ class RaidAuthManager:
             twitch_login,
             scope_profile=scope_profile,
             expected_twitch_login=expected_twitch_login,
+            expected_twitch_user_id=expected_twitch_user_id,
             discord_user_id=discord_user_id,
         )
         self._state_tokens[state] = (state_info, ts)
@@ -621,6 +678,7 @@ class RaidAuthManager:
         *,
         scope_profile: str = AUTO_SCOPE_PROFILE,
         expected_twitch_login: str | None = None,
+        expected_twitch_user_id: str | None = None,
         discord_user_id: str | int | None = None,
     ) -> str:
         """Generiert einen kurzen Redirect-URL für Discord-Buttons (max 512 Zeichen).
@@ -636,6 +694,7 @@ class RaidAuthManager:
             twitch_login,
             scope_profile=scope_profile,
             expected_twitch_login=expected_twitch_login,
+            expected_twitch_user_id=expected_twitch_user_id,
             discord_user_id=discord_user_id,
         )
         self._state_tokens[state] = (state_info, ts)

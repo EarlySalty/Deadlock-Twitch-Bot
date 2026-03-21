@@ -18,6 +18,7 @@ from ..core.chat_bots import build_known_chat_bot_not_in_clause
 from ..dashboard.live import DashboardLiveMixin
 from .raid_metrics import raid_identity_key, recalculate_raid_chat_metrics
 from ..storage import pg as storage
+from .error_utils import analytics_internal_error_response
 
 log = logging.getLogger("TwitchStreams.AnalyticsV2")
 DASHBOARD_LOGIN_URL = "/twitch/auth/login?next=%2Ftwitch%2Fdashboard"
@@ -784,7 +785,7 @@ class _AnalyticsOverviewMixin:
             return web.json_response(data)
         except Exception as exc:
             log.exception("Error in overview API")
-            return web.json_response({"error": str(exc)}, status=500)
+            return analytics_internal_error_response()
 
     async def _get_overview_data(self, streamer: str | None, days: int) -> dict[str, Any]:
         """Get comprehensive overview data for the dashboard."""

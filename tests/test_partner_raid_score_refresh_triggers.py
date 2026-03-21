@@ -111,6 +111,27 @@ class _AsyncPreferredService:
         return {"mode": "async"}
 
 
+class _BrokenRefreshService:
+    def __init__(self) -> None:
+        self.calls: list[dict[str, object]] = []
+
+    def refresh_partner_raid_score(
+        self,
+        *,
+        twitch_user_id: str | None = None,
+        login: str | None = None,
+        trigger: str,
+    ):
+        self.calls.append(
+            {
+                "twitch_user_id": twitch_user_id,
+                "login": login,
+                "trigger": trigger,
+            }
+        )
+        raise TypeError("internal refresh bug")
+
+
 class _EventSubHarness(_EventSubMixin):
     def __init__(self) -> None:
         self.offline_calls: list[dict[str, object]] = []
@@ -245,6 +266,30 @@ class PartnerRaidScoreRefreshTriggerTests(unittest.IsolatedAsyncioTestCase):
                 }
             ],
         )
+
+    async def test_request_partner_raid_score_refresh_logs_internal_type_error(self) -> None:
+        service = _BrokenRefreshService()
+        harness = _MonitoringDispatchHarness(service)
+
+        with patch("bot.monitoring.monitoring.log.exception") as log_exception:
+            ok = await harness._request_partner_raid_score_refresh(
+                twitch_user_id="9999",
+                login="partner_x",
+                trigger="unit_test",
+            )
+
+        self.assertFalse(ok)
+        self.assertEqual(
+            service.calls,
+            [
+                {
+                    "twitch_user_id": "9999",
+                    "login": "partner_x",
+                    "trigger": "unit_test",
+                }
+            ],
+        )
+        log_exception.assert_called()
 
     async def test_billing_refresh_uses_async_wrapper_on_running_loop(self) -> None:
         harness = _BillingHarness()

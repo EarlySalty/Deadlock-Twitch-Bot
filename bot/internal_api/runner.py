@@ -76,18 +76,25 @@ class InternalApiRunner:
         self._runner: web.AppRunner | None = None
         self._app: web.Application | None = None
         self._missing_token_warning_emitted = False
+        self._last_start_error: str | None = None
 
     @property
     def is_running(self) -> bool:
         return self._runner is not None
 
+    @property
+    def last_start_error(self) -> str | None:
+        return self._last_start_error
+
     async def start(self) -> None:
         if self._runner is not None:
+            self._last_start_error = None
             return
 
         try:
             enforce_internal_api_runtime(port=self.port)
         except RuntimeError as exc:
+            self._last_start_error = str(exc)
             log.error("%s", exc)
             return
 
@@ -136,6 +143,7 @@ class InternalApiRunner:
 
                 self._app = app
                 self._runner = runner
+                self._last_start_error = None
                 log.info(
                     "Internal API running on http://%s:%s%s",
                     self.host,
@@ -146,6 +154,7 @@ class InternalApiRunner:
             except asyncio.CancelledError:
                 if runner is not None:
                     await runner.cleanup()
+                self._last_start_error = "Internal API startup cancelled"
                 log.info("Internal API startup cancelled")
                 return
             except OSError as exc:
@@ -164,11 +173,13 @@ class InternalApiRunner:
                     await asyncio.sleep(retry_delay)
                     retry_delay *= 2
                     continue
+                self._last_start_error = f"{type(exc).__name__}: {exc}"
                 log.exception("Failed to start internal API")
                 return
             except Exception:
                 if runner is not None:
                     await runner.cleanup()
+                self._last_start_error = "Unexpected internal API startup failure"
                 log.exception("Failed to start internal API")
                 return
 

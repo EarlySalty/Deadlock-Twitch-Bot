@@ -5,6 +5,7 @@
 
 import asyncio
 import hashlib
+import inspect
 import json
 import logging
 import os
@@ -48,6 +49,25 @@ def _parse_sync_guild_ids(raw: str) -> list[int]:
         if guild_id > 0 and guild_id not in ids:
             ids.append(guild_id)
     return ids
+
+
+async def _invoke_twitch_leaderboard_callback(leaderboard_cb, ctx, *, filters: str) -> None:
+    try:
+        params = inspect.signature(leaderboard_cb).parameters
+    except (TypeError, ValueError):
+        params = None
+
+    supports_filters = True
+    if params is not None:
+        supports_filters = "filters" in params or any(
+            param.kind == inspect.Parameter.VAR_KEYWORD
+            for param in params.values()
+        )
+
+    if supports_filters:
+        await leaderboard_cb(ctx, filters=filters)
+        return
+    await leaderboard_cb(ctx)
 
 
 async def _sync_app_commands_after_ready(bot: commands.Bot) -> None:
@@ -134,22 +154,15 @@ async def setup(bot: commands.Bot):
             log.error("twitch_leaderboard callable missing on active cog")
             return
 
-        # Einheitlicher Call: wir geben Context + keyword-only 'filters' weiter
         try:
-            await leaderboard_cb(ctx, filters=filters)
-        except TypeError as e:
-            # Fallbacks, falls ältere Signaturen aktiv sind
-            log.warning(
-                "Signature mismatch when calling twitch_leaderboard: %s",
-                e,
-                exc_info=True,
+            await _invoke_twitch_leaderboard_callback(
+                leaderboard_cb,
+                ctx,
+                filters=filters,
             )
-            try:
-                await leaderboard_cb(ctx)
-            except TypeError:
-                await ctx.reply(
-                    "Twitch-Statistiken konnten nicht geladen werden (Kompatibilitätsproblem)."
-                )
+        except Exception:
+            log.exception("Failed to call twitch_leaderboard")
+            await ctx.reply("Twitch-Statistiken konnten nicht geladen werden.")
 
     prefix_command = commands.Command(
         _twl_proxy,

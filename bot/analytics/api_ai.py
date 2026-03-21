@@ -14,6 +14,7 @@ from datetime import UTC, datetime, timedelta
 
 from aiohttp import web
 
+from .error_utils import analytics_internal_error_response
 from ..storage import pg as storage
 
 log = logging.getLogger("TwitchStreams.AnalyticsV2.AI")
@@ -131,9 +132,9 @@ class _AnalyticsAIMixin:
             return await self._api_v2_ai_analysis_inner(request)
         except Exception as exc:
             log.exception("Unhandled exception in _api_v2_ai_analysis")
-            return web.json_response(
-                {"error": f"Interner Fehler: {type(exc).__name__}: {str(exc)[:300]}"},
-                status=500,
+            return analytics_internal_error_response(
+                error="KI-Analyse konnte nicht geladen werden.",
+                code="ai_analysis_failed",
             )
 
     async def _api_v2_ai_analysis_inner(self, request: web.Request) -> web.Response:
@@ -176,15 +177,20 @@ class _AnalyticsAIMixin:
             ctx = self._collect_ai_context(streamer, days, since, game_filter)
         except Exception as exc:
             log.exception("Error collecting AI context")
-            return web.json_response(
-                {"error": f"Datensammlung fehlgeschlagen: {str(exc)[:300]}"}, status=500
+            return analytics_internal_error_response(
+                error="Analyse-Daten konnten nicht gesammelt werden.",
+                code="ai_context_collection_failed",
             )
 
         # Step 2: call Claude Opus
         try:
             points = await self._call_claude_opus(streamer, days, ctx, game_filter)
-        except RuntimeError as exc:
-            return web.json_response({"error": str(exc)[:300]}, status=503)
+        except RuntimeError:
+            return analytics_internal_error_response(
+                error="KI-Service ist aktuell nicht verfuegbar.",
+                code="ai_service_unavailable",
+                status=503,
+            )
         except Exception as exc:
             log.exception("Error calling Claude Opus")
             err_str = str(exc)
@@ -193,8 +199,9 @@ class _AnalyticsAIMixin:
                     {"error": "Kein Guthaben auf dem Anthropic-Konto. Bitte auf console.anthropic.com/billing Credits kaufen."},
                     status=503,
                 )
-            return web.json_response(
-                {"error": f"KI-Analyse fehlgeschlagen: {err_str[:400]}"}, status=500
+            return analytics_internal_error_response(
+                error="KI-Analyse konnte nicht abgeschlossen werden.",
+                code="ai_analysis_failed",
             )
 
         generated_at = datetime.now(UTC)
@@ -236,9 +243,9 @@ class _AnalyticsAIMixin:
             })
         except Exception as exc:
             log.exception("JSON serialization error in _api_v2_ai_analysis")
-            return web.json_response(
-                {"error": f"Serialisierungsfehler: {type(exc).__name__}: {str(exc)[:200]}"},
-                status=500,
+            return analytics_internal_error_response(
+                error="KI-Analyse konnte nicht serialisiert werden.",
+                code="ai_analysis_serialization_failed",
             )
 
     def _collect_ai_context(
@@ -764,4 +771,7 @@ Vollständige Viewer-Metriken nur für Einträge ohne diesen Hinweis verwenden."
             return web.json_response(result)
         except Exception as exc:
             log.exception("Error in ai_history API")
-            return web.json_response({"error": str(exc)}, status=500)
+            return analytics_internal_error_response(
+                error="KI-Analyse-Historie konnte nicht geladen werden.",
+                code="ai_history_load_failed",
+            )

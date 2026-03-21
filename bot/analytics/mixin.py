@@ -103,16 +103,23 @@ class TwitchAnalyticsMixin:
         now_iso: str,
         helix_chatters: list[dict[str, object]],
     ) -> None:
+        if not getattr(self, "_experimental_irc_lurker_enabled", False):
+            return
+
         tracker = getattr(self, "_irc_lurker_tracker", None)
         if tracker is None or not hasattr(tracker, "get_chatters"):
             return
+
         allowlist = {
             str(channel or "").strip().lower().lstrip("#")
             for channel in (getattr(self, "_experimental_irc_lurker_channels", set()) or set())
             if str(channel or "").strip()
         }
+        if not allowlist:
+            return
+
         login_lower = str(login or "").strip().lower().lstrip("#")
-        if allowlist and login_lower not in allowlist:
+        if login_lower not in allowlist:
             return
 
         helix_set = {
@@ -459,6 +466,32 @@ class TwitchAnalyticsMixin:
         if "followers" in flow_key:
             self._last_followers_diagnostic = payload
 
+    @staticmethod
+    def _analytics_decision_log_level(
+        *,
+        flow: str,
+        decision: str,
+        reason: str,
+        level: int,
+    ) -> int:
+        flow_key = str(flow or "").strip().lower()
+        decision_key = str(decision or "").strip().lower()
+        reason_key = str(reason or "").strip().lower()
+        if (
+            level == logging.INFO
+            and flow_key == "chatters"
+            and (
+                (decision_key == "failed" and reason_key in {
+                    "chat_bot_unavailable",
+                    "channel_not_tracked_in_chat_runtime",
+                    "helix_403_not_moderator",
+                })
+                or (decision_key == "success" and reason_key == "bot_path_success")
+            )
+        ):
+            return logging.DEBUG
+        return level
+
     def _log_analytics_decision(
         self,
         *,
@@ -491,8 +524,14 @@ class TwitchAnalyticsMixin:
             **extra_fields,
         }
         self._store_analytics_diagnostic(str(payload.get("flow") or ""), payload)
+        effective_level = self._analytics_decision_log_level(
+            flow=str(payload.get("flow") or ""),
+            decision=str(payload.get("decision") or ""),
+            reason=str(payload.get("reason") or ""),
+            level=level,
+        )
         log.log(
-            level,
+            effective_level,
             "analytics_decision %s",
             self._format_analytics_observability_fields(**payload),
         )
@@ -1291,6 +1330,13 @@ class TwitchAnalyticsMixin:
                     if key[1] in active_sessions
                 }
 
+            # Proactive cleanup for experiment stats if sessions were missed by finalizer
+            comparison_store = getattr(self, "_irc_lurker_experiment_session_stats", None)
+            if isinstance(comparison_store, dict) and comparison_store:
+                expired_sessions = [sid for sid in comparison_store if sid not in active_sessions]
+                for sid in expired_sessions:
+                    comparison_store.pop(sid, None)
+
             if rows:
                 log.debug(
                     "Chatters-Poller: Tracking %d live Streamer (alle für Analyse)",
@@ -1545,7 +1591,13 @@ class TwitchAnalyticsMixin:
             message = (message_data.get("text") or "").strip() or None
         else:
             message = str(message_data).strip() or None
-        total_gifted = int(event.get("total") or 0) or None
+        gift_total_kind = str(event.get("gift_total_kind") or "").strip().lower()
+        if gift_total_kind == "batch_total":
+            total_gifted = int(event.get("gift_total") or event.get("total") or 0) or None
+        elif gift_total_kind == "cumulative_total":
+            total_gifted = int(event.get("total") or 1)
+        else:
+            total_gifted = int(event.get("total") or event.get("gift_total") or 0) or None
 
         session_id = self._get_active_session_id_by_user_id(broadcaster_user_id)
 

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import unittest
+from unittest.mock import patch
 
 from aiohttp import web
 
@@ -32,6 +33,7 @@ class _DummyLiveAnnouncementApi(DashboardLiveAnnouncementMixin):
         self.allow_auth = True
         self.valid_csrf = "csrf-ok"
         self.active_partners = {"earlysalty", "otherstreamer"}
+        self.ensure_role_calls: list[bool] = []
 
     def _require_token(self, _request):
         if not self.allow_auth:
@@ -99,6 +101,16 @@ class _DummyLiveAnnouncementApi(DashboardLiveAnnouncementMixin):
     def _la_dm_target_user_id(self, request, *, streamer_login: str):
         del request, streamer_login
         return 12345
+
+    async def _la_ensure_streamer_ping_role(self, *, streamer_login: str, create_if_missing: bool):
+        del streamer_login
+        self.ensure_role_calls.append(bool(create_if_missing))
+        return {
+            "role_id": None,
+            "role_name": None,
+            "created": False,
+            "message": "Keine Ping-Rolle gefunden. Sie wird beim Live-Post automatisch erstellt.",
+        }
 
 
 class DashboardLiveAnnouncementApiTests(unittest.IsolatedAsyncioTestCase):
@@ -168,6 +180,40 @@ class DashboardLiveAnnouncementApiTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(payload["streamer_login"], "earlysalty")
         self.assertIn("earlysalty", handler.records)
         self.assertNotIn("otherstreamer", handler.records)
+
+    async def test_config_get_does_not_create_missing_role(self) -> None:
+        handler = _DummyLiveAnnouncementApi()
+
+        response = await handler.api_live_announcement_config(_FakeRequest(query={"streamer": "earlysalty"}))
+
+        self.assertEqual(response.status, 200)
+        self.assertEqual(handler.ensure_role_calls, [False])
+
+    async def test_test_send_does_not_create_missing_role(self) -> None:
+        handler = _DummyLiveAnnouncementApi()
+        request = _FakeRequest(
+            query={"streamer": "earlysalty"},
+            headers={"X-CSRF-Token": "csrf-ok"},
+            body={"csrf_token": "csrf-ok", "streamer_login": "earlysalty", "config": {"content": "x"}},
+        )
+
+        response = await handler.api_live_announcement_test_send(request)
+
+        self.assertEqual(response.status, 200)
+        self.assertEqual(handler.ensure_role_calls, [False])
+
+    async def test_validation_errors_do_not_leak_internal_exception_text(self) -> None:
+        handler = _DummyLiveAnnouncementApi()
+
+        with patch(
+            "bot.dashboard.live_announcement_mixin.LiveAnnouncementConfig.from_dict",
+            side_effect=RuntimeError("secret parser detail"),
+        ):
+            response = await handler.api_live_announcement_config(_FakeRequest(query={"streamer": "earlysalty"}))
+
+        self.assertEqual(response.status, 200)
+        payload = json.loads(response.text)
+        self.assertEqual(payload["validation"], [{"path": "config", "message": "Config konnte nicht verarbeitet werden."}])
 
 
 if __name__ == "__main__":

@@ -282,7 +282,12 @@ class IRCLurkerTracker:
         channel = channel.lower()
         nicks_lower = [n.lower() for n in nicks]
 
-        self.channel_chatters[channel] = set(nicks_lower)
+        # Only keep in memory if it's a partner channel (to save RAM)
+        if channel in self.partner_channels:
+            self.channel_chatters[channel] = set(nicks_lower)
+        else:
+            self.channel_chatters.pop(channel, None)
+
         log.info("IRC: NAMES for #%s: %d chatters", channel, len(nicks_lower))
 
         # Update DB for all chatters

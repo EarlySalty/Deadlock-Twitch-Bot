@@ -172,6 +172,8 @@ class BillingSecurityTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(response.status, 503)
         self.assertEqual(payload.get("error"), "stripe_sdk_missing")
+        self.assertEqual(payload.get("message"), "stripe_sdk_missing")
+        self.assertNotIn("details", payload)
         self.assertEqual(handler.import_calls, 1)
 
 

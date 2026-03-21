@@ -15,6 +15,7 @@ from aiohttp import web
 
 from ..core.chat_bots import build_known_chat_bot_not_in_clause, is_known_chat_bot
 from ..storage import pg as storage
+from .error_utils import analytics_internal_error_response
 from .raw_chat_status import build_raw_chat_status, build_viewer_window_metadata
 
 log = logging.getLogger("TwitchStreams.AnalyticsV2")
@@ -390,7 +391,7 @@ class _AnalyticsViewersMixin:
 
         except Exception as exc:
             log.exception("Error in viewer-directory API")
-            return web.json_response({"error": str(exc)}, status=500)
+            return analytics_internal_error_response()
 
     async def _api_v2_viewer_detail(self, request: web.Request) -> web.Response:
         """Deep-dive into a single viewer's activity and cross-channel presence."""
@@ -625,7 +626,7 @@ class _AnalyticsViewersMixin:
 
         except Exception as exc:
             log.exception("Error in viewer-detail API")
-            return web.json_response({"error": str(exc)}, status=500)
+            return analytics_internal_error_response()
 
     async def _api_v2_viewer_segments(self, request: web.Request) -> web.Response:
         """Viewer segmentation with churn risk and cross-channel stats."""
@@ -848,4 +849,4 @@ class _AnalyticsViewersMixin:
 
         except Exception as exc:
             log.exception("Error in viewer-segments API")
-            return web.json_response({"error": str(exc)}, status=500)
+            return analytics_internal_error_response()

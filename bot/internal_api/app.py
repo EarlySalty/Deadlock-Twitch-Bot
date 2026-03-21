@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import json
 import os
 import re
@@ -431,18 +432,59 @@ class InternalApiServer:
                 expired.append(key)
                 continue
             if now - float(entry.created_at) > self._idempotency_ttl_seconds:
+                timeout_payload = {
+                    "error": "upstream_unavailable",
+                    "message": "idempotent request timed out",
+                }
+                self._idempotency_cache[key] = {
+                    "fingerprint": entry.fingerprint,
+                    "status": 503,
+                    "payload": dict(timeout_payload),
+                    "created_at": now,
+                }
                 entry.future.set_result(
                     (
                         503,
-                        {
-                            "error": "upstream_unavailable",
-                            "message": "idempotent request timed out",
-                        },
+                        dict(timeout_payload),
                     )
                 )
                 expired.append(key)
         for key in expired:
             self._idempotency_inflight.pop(key, None)
+
+    async def _invoke_raid_auth_url(
+        self,
+        login: str,
+        *,
+        discord_user_id: str | None = None,
+    ) -> str:
+        if discord_user_id is None:
+            return str(await self._raid_auth_url(login)).strip()
+
+        try:
+            signature = inspect.signature(self._raid_auth_url)
+        except (TypeError, ValueError):
+            signature = None
+
+        if signature is not None:
+            if "discord_user_id" in signature.parameters or any(
+                parameter.kind == inspect.Parameter.VAR_KEYWORD
+                for parameter in signature.parameters.values()
+            ):
+                return str(
+                    await self._raid_auth_url(
+                        login,
+                        discord_user_id=discord_user_id,
+                    )
+                ).strip()
+            return str(await self._raid_auth_url(login)).strip()
+
+        return str(
+            await self._raid_auth_url(
+                login,
+                discord_user_id=discord_user_id,
+            )
+        ).strip()
 
     def _prepare_idempotency(
         self,
@@ -1493,18 +1535,15 @@ class InternalApiServer:
             required=False,
         )
         try:
-            try:
-                if discord_user_id is None:
-                    auth_url = str(await self._raid_auth_url(login)).strip()
-                else:
-                    auth_url = str(
-                        await self._raid_auth_url(
-                            login,
-                            discord_user_id=discord_user_id,
-                        )
-                    ).strip()
-            except TypeError:
-                auth_url = str(await self._raid_auth_url(login)).strip()
+            if login.startswith("discord:"):
+                target_discord_user_id = login.split(":", 1)[1]
+                if discord_user_id is not None and discord_user_id != target_discord_user_id:
+                    raise ValueError("discord_user_id does not match login target")
+                discord_user_id = target_discord_user_id
+            auth_url = await self._invoke_raid_auth_url(
+                login,
+                discord_user_id=discord_user_id,
+            )
             if not auth_url:
                 return self._json_error("upstream_unavailable", 503, "raid bot not initialized")
             return self._json_response({"ok": True, "auth_url": auth_url, "login": login})

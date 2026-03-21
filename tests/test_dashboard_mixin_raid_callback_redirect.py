@@ -1,5 +1,6 @@
 import unittest
 from types import SimpleNamespace
+from unittest.mock import AsyncMock, patch
 
 from bot.dashboard.mixin import (
     RAID_OAUTH_SUCCESS_REDIRECT_URL,
@@ -38,20 +39,30 @@ class _FakeAuthManager:
     client_id = "client-id"
     redirect_uri = "https://raid.earlysalty.com/twitch/raid/callback"
 
-    def __init__(self, *, expected_twitch_login: str = "partner_one", scopes: list[str] | None = None):
+    def __init__(
+        self,
+        *,
+        expected_twitch_login: str = "partner_one",
+        expected_twitch_user_id: str | None = None,
+        scopes: list[str] | None = None,
+        existing_auth: bool = False,
+    ):
         self._expected_twitch_login = expected_twitch_login
+        self._expected_twitch_user_id = expected_twitch_user_id
         self._scopes = list(scopes or BASE_STREAMER_SCOPES)
+        self._existing_auth = existing_auth
 
     def consume_state_details(self, _state: str):
         return SimpleNamespace(
             requested_login="partner_one",
             scope_profile=BASE_SCOPE_PROFILE,
             expected_twitch_login=self._expected_twitch_login,
+            expected_twitch_user_id=self._expected_twitch_user_id,
             discord_user_id="123456789",
         )
 
     def has_saved_auth_record(self, **_kwargs) -> bool:
-        return False
+        return self._existing_auth
 
     async def exchange_code_for_token(self, _code: str, _session) -> dict:
         return {
@@ -103,6 +114,23 @@ class DashboardMixinRaidCallbackRedirectTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(payload.get("status"), 403)
         self.assertEqual(payload.get("title"), "Falscher Twitch-Account")
 
+    async def test_dashboard_callback_accepts_login_rename_when_user_id_matches(self) -> None:
+        handler = _DummyDashboardMixin(
+            auth_manager=_FakeAuthManager(
+                expected_twitch_login="old_partner_name",
+                expected_twitch_user_id="1001",
+            ),
+            user_login="partner_one",
+        )
+
+        payload = await handler._dashboard_raid_oauth_callback(
+            code="oauth-code",
+            state="valid-state",
+            error="",
+        )
+
+        self.assertEqual(payload.get("status"), 200)
+
     async def test_dashboard_callback_rejects_unexpected_scope_widening(self) -> None:
         handler = _DummyDashboardMixin(
             auth_manager=_FakeAuthManager(
@@ -118,6 +146,40 @@ class DashboardMixinRaidCallbackRedirectTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(payload.get("status"), 400)
         self.assertEqual(payload.get("title"), "Ungültige Berechtigungen")
+
+    async def test_dashboard_callback_syncs_discord_link_on_reauth_without_full_setup(self) -> None:
+        raid_bot = SimpleNamespace(
+            auth_manager=_FakeAuthManager(existing_auth=True),
+            session=_FakeSession(payload={"data": [{"id": "1001", "login": "partner_one"}]}),
+            complete_setup_for_streamer=AsyncMock(),
+            _sync_partner_state_after_auth=AsyncMock(),
+        )
+        handler = _DummyDashboardMixin()
+        handler._raid_bot = raid_bot
+        created_coroutines = []
+
+        def _capture_task(coro, *, name=None):
+            created_coroutines.append((name, coro))
+            return None
+
+        with patch("bot.dashboard.mixin.asyncio.create_task", side_effect=_capture_task):
+            payload = await handler._dashboard_raid_oauth_callback(
+                code="oauth-code",
+                state="valid-state",
+                error="",
+            )
+
+        self.assertEqual(payload.get("status"), 200)
+        raid_bot.complete_setup_for_streamer.assert_not_called()
+        self.assertEqual(len(created_coroutines), 1)
+        self.assertEqual(created_coroutines[0][0], "twitch.raid.sync_partner_state_after_auth")
+        await created_coroutines[0][1]
+        raid_bot._sync_partner_state_after_auth.assert_awaited_once_with(
+            "1001",
+            "partner_one",
+            state_discord_user_id="123456789",
+            activate_partner_features=False,
+        )
 
 
 if __name__ == "__main__":

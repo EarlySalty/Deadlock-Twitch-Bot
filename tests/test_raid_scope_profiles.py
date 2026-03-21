@@ -95,6 +95,28 @@ class RaidScopeProfileTests(unittest.TestCase):
         self.assertIn("channel:read:subscriptions", scopes)
         self.assertIn("channel:read:hype_train", scopes)
 
+    def test_generate_auth_url_binds_expected_login_for_existing_discord_link(self) -> None:
+        self.conn.execute(
+            """
+            INSERT INTO twitch_streamer_identities (twitch_user_id, twitch_login, discord_user_id)
+            VALUES (?, ?, ?)
+            """,
+            ("9009", "knownstreamer", "42"),
+        )
+        self.conn.commit()
+        manager = self._manager()
+
+        with patch(
+            "bot.raid.auth.get_conn",
+            side_effect=lambda: contextlib.nullcontext(self.conn),
+        ):
+            manager.generate_auth_url("discord:42")
+
+        state_info, _created_ts = next(iter(manager._state_tokens.values()))
+        self.assertEqual(state_info.requested_login, "discord:42")
+        self.assertEqual(state_info.expected_twitch_login, "knownstreamer")
+        self.assertEqual(state_info.expected_twitch_user_id, "9009")
+
 
 if __name__ == "__main__":
     unittest.main()

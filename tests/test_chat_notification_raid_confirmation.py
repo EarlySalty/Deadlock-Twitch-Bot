@@ -347,18 +347,20 @@ class ChatNotificationRaidCorrelationTests(unittest.IsolatedAsyncioTestCase):
         self._insert_partner("targetlogin", "9009")
         self._insert_streamer_identity("source_login", "1001")
         raid_bot = self._build_raid_bot()
-        raid_bot._pending_raids["9009"] = raid_bot._build_pending_raid_record(
-            from_broadcaster_login="source_login",
-            to_broadcaster_id="9009",
-            target_stream_data={"_partner_score": {"final_score": 1.15}},
-            is_partner_raid=True,
-            viewer_count=42,
-            offline_trigger_ts=None,
-            raid_flow_id="raid-flow-1",
-            channel_raid_ready=True,
-            channel_raid_ready_detail=None,
-            chat_notification_state="subscribed",
-            chat_notification_detail=None,
+        raid_bot._store_pending_raid(
+            raid_bot._build_pending_raid_record(
+                from_broadcaster_login="source_login",
+                to_broadcaster_id="9009",
+                target_stream_data={"_partner_score": {"final_score": 1.15}},
+                is_partner_raid=True,
+                viewer_count=42,
+                offline_trigger_ts=None,
+                raid_flow_id="raid-flow-1",
+                channel_raid_ready=True,
+                channel_raid_ready_detail=None,
+                chat_notification_state="subscribed",
+                chat_notification_detail=None,
+            )
         )
 
         with (
@@ -405,18 +407,20 @@ class ChatNotificationRaidCorrelationTests(unittest.IsolatedAsyncioTestCase):
     async def test_chat_unraid_does_not_confirm_pending_raid(self) -> None:
         self._insert_partner("targetlogin", "9009")
         raid_bot = self._build_raid_bot()
-        raid_bot._pending_raids["9009"] = raid_bot._build_pending_raid_record(
-            from_broadcaster_login="source_login",
-            to_broadcaster_id="9009",
-            target_stream_data=None,
-            is_partner_raid=True,
-            viewer_count=12,
-            offline_trigger_ts=None,
-            raid_flow_id="raid-flow-2",
-            channel_raid_ready=True,
-            channel_raid_ready_detail=None,
-            chat_notification_state="subscribed",
-            chat_notification_detail=None,
+        raid_bot._store_pending_raid(
+            raid_bot._build_pending_raid_record(
+                from_broadcaster_login="source_login",
+                to_broadcaster_id="9009",
+                target_stream_data=None,
+                is_partner_raid=True,
+                viewer_count=12,
+                offline_trigger_ts=None,
+                raid_flow_id="raid-flow-2",
+                channel_raid_ready=True,
+                channel_raid_ready_detail=None,
+                chat_notification_state="subscribed",
+                chat_notification_detail=None,
+            )
         )
 
         with patch(
@@ -430,7 +434,12 @@ class ChatNotificationRaidCorrelationTests(unittest.IsolatedAsyncioTestCase):
                 event_timestamp="2026-03-16T12:00:00+00:00",
             )
 
-        self.assertIn("9009", raid_bot._pending_raids)
+        self.assertIsNotNone(
+            raid_bot._get_pending_raid(
+                to_broadcaster_id="9009",
+                from_broadcaster_login="source_login",
+            )
+        )
         raid_bot._send_partner_raid_message.assert_not_awaited()
         count = self.conn.execute(
             "SELECT COUNT(*) AS c FROM twitch_raid_arrival_tracking"
@@ -439,18 +448,20 @@ class ChatNotificationRaidCorrelationTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_source_self_unraid_cancels_pending_raid(self) -> None:
         raid_bot = self._build_raid_bot()
-        raid_bot._pending_raids["9009"] = raid_bot._build_pending_raid_record(
-            from_broadcaster_login="source_login",
-            to_broadcaster_id="9009",
-            target_stream_data={"user_login": "targetlogin"},
-            is_partner_raid=True,
-            viewer_count=12,
-            offline_trigger_ts=None,
-            raid_flow_id="raid-flow-source-unraid",
-            channel_raid_ready=True,
-            channel_raid_ready_detail=None,
-            chat_notification_state="subscribed",
-            chat_notification_detail=None,
+        raid_bot._store_pending_raid(
+            raid_bot._build_pending_raid_record(
+                from_broadcaster_login="source_login",
+                to_broadcaster_id="9009",
+                target_stream_data={"user_login": "targetlogin"},
+                is_partner_raid=True,
+                viewer_count=12,
+                offline_trigger_ts=None,
+                raid_flow_id="raid-flow-source-unraid",
+                channel_raid_ready=True,
+                channel_raid_ready_detail=None,
+                chat_notification_state="subscribed",
+                chat_notification_detail=None,
+            )
         )
 
         await raid_bot.on_source_self_unraid_notification(

@@ -5,6 +5,7 @@ Analytics API v2 - Backend endpoints for the new React TypeScript dashboard.
 from __future__ import annotations
 
 import ipaddress
+import inspect
 import json
 import logging
 import os
@@ -20,6 +21,7 @@ from aiohttp import web
 from ..core.chat_bots import build_known_chat_bot_not_in_clause
 from ..core.constants import TWITCH_DISCORD_REF_CODE
 from ..logging_setup import log_path
+from .error_utils import analytics_internal_error_response
 from .api_ai import _AnalyticsAIMixin
 from .api_admin import _AnalyticsAdminMixin
 from .api_audience import _AnalyticsAudienceMixin
@@ -1506,20 +1508,41 @@ class AnalyticsV2Mixin(
 
         allowed = True
         try:
-            allowed = bool(
-                check_rate_limit(
-                    request,
-                    max_requests=max_requests,
-                    window_seconds=window_seconds,
-                )
+            params = inspect.signature(check_rate_limit).parameters
+        except (TypeError, ValueError):
+            log.warning("internal-home rate-limit hook has no inspectable signature")
+            allowed = False
+        else:
+            non_receiver_params = [
+                param
+                for name, param in params.items()
+                if name not in {"self", "cls"}
+            ]
+            accepts_kwargs = any(
+                param.kind == inspect.Parameter.VAR_KEYWORD
+                for param in non_receiver_params
             )
-        except TypeError:
+            supports_limits = accepts_kwargs or {
+                "max_requests",
+                "window_seconds",
+            }.issubset(params)
             try:
-                allowed = bool(check_rate_limit(request))
+                if supports_limits:
+                    allowed = bool(
+                        check_rate_limit(
+                            request,
+                            max_requests=max_requests,
+                            window_seconds=window_seconds,
+                        )
+                    )
+                elif len(non_receiver_params) == 1:
+                    allowed = bool(check_rate_limit(request))
+                else:
+                    log.warning("internal-home rate-limit hook has unsupported signature")
+                    allowed = False
             except Exception:
-                log.debug("internal-home rate-limit hook failed", exc_info=True)
-        except Exception:
-            log.debug("internal-home rate-limit hook failed", exc_info=True)
+                log.warning("internal-home rate-limit hook failed", exc_info=True)
+                allowed = False
 
         if allowed:
             return None
@@ -2211,7 +2234,10 @@ class AnalyticsV2Mixin(
                 return web.json_response(data)
         except Exception as exc:
             log.exception("Error in streamers API")
-            return web.json_response({"error": str(exc)}, status=500)
+            return analytics_internal_error_response(
+                error="Streamer konnten nicht geladen werden.",
+                code="streamers_load_failed",
+            )
 
     async def _api_v2_session_detail(self, request: web.Request) -> web.Response:
         """Get detailed session data."""
@@ -2350,7 +2376,10 @@ class AnalyticsV2Mixin(
                 )
         except Exception as exc:
             log.exception("Error in session detail API")
-            return web.json_response({"error": str(exc)}, status=500)
+            return analytics_internal_error_response(
+                error="Session-Details konnten nicht geladen werden.",
+                code="session_detail_load_failed",
+            )
 
     async def _api_v2_billing_catalog(self, request: web.Request) -> web.Response:
         """GET /twitch/api/v2/billing/catalog — plan catalog with tier info."""
@@ -2612,7 +2641,10 @@ class AnalyticsV2Mixin(
             normalized = str(exc).strip().lower()
             if any(m in normalized for m in ("does not exist", "no such table", "undefined table")):
                 return web.json_response({"error": "not_found"}, status=404)
-            return web.json_response({"error": str(exc)}, status=500)
+            return analytics_internal_error_response(
+                error="Affiliate-Portal konnte nicht geladen werden.",
+                code="affiliate_portal_load_failed",
+            )
 
         ref_code = str(TWITCH_DISCORD_REF_CODE or "").strip()
         total_claims = int(_row_get_value(claim_stats_row, "total_claims", 0, 0) or 0)

@@ -1,6 +1,7 @@
 import unittest
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch
+import logging
 
 from bot.analytics.mixin import TwitchAnalyticsMixin
 
@@ -86,6 +87,122 @@ class _AnalyticsHarness(TwitchAnalyticsMixin):
 
 
 class ChattersBotFallbackTests(unittest.IsolatedAsyncioTestCase):
+    async def test_chat_bot_unavailable_failure_logs_at_debug(self) -> None:
+        harness = _AnalyticsHarness()
+
+        with (
+            patch("bot.analytics.mixin.storage.insert_observability_event"),
+            patch("bot.analytics.mixin.log.log") as log_mock,
+        ):
+            harness._log_analytics_decision(
+                flow_id="chatters-1",
+                flow="chatters",
+                login="partner_one",
+                session_id=77,
+                decision="failed",
+                reason="chat_bot_unavailable",
+                request_attempted="none",
+                request_result="not_attempted",
+                http_status=None,
+                scope_state={"bot": "unknown", "streamer": "absent"},
+                runtime_state=harness._build_analytics_runtime_state("partner_one"),
+            )
+
+        self.assertEqual(log_mock.call_args.args[0], logging.DEBUG)
+
+    async def test_channel_not_tracked_failure_logs_at_debug(self) -> None:
+        harness = _AnalyticsHarness()
+
+        with (
+            patch("bot.analytics.mixin.storage.insert_observability_event"),
+            patch("bot.analytics.mixin.log.log") as log_mock,
+        ):
+            harness._log_analytics_decision(
+                flow_id="chatters-1b",
+                flow="chatters",
+                login="partner_one",
+                session_id=79,
+                decision="failed",
+                reason="channel_not_tracked_in_chat_runtime",
+                request_attempted="none",
+                request_result="not_attempted",
+                http_status=None,
+                scope_state={"bot": "unknown", "streamer": "absent"},
+                runtime_state=harness._build_analytics_runtime_state("partner_one"),
+            )
+
+        self.assertEqual(log_mock.call_args.args[0], logging.DEBUG)
+
+    async def test_helix_not_moderator_failure_logs_at_debug(self) -> None:
+        harness = _AnalyticsHarness()
+
+        with (
+            patch("bot.analytics.mixin.storage.insert_observability_event"),
+            patch("bot.analytics.mixin.log.log") as log_mock,
+        ):
+            harness._log_analytics_decision(
+                flow_id="chatters-1c",
+                flow="chatters",
+                login="partner_one",
+                session_id=80,
+                decision="failed",
+                reason="helix_403_not_moderator",
+                request_attempted="bot",
+                request_result="failed",
+                http_status=403,
+                scope_state={"bot": "present", "streamer": "absent"},
+                runtime_state=harness._build_analytics_runtime_state("partner_one"),
+            )
+
+        self.assertEqual(log_mock.call_args.args[0], logging.DEBUG)
+
+    async def test_bot_path_success_logs_at_debug(self) -> None:
+        harness = _AnalyticsHarness()
+
+        with (
+            patch("bot.analytics.mixin.storage.insert_observability_event"),
+            patch("bot.analytics.mixin.log.log") as log_mock,
+        ):
+            harness._log_analytics_decision(
+                flow_id="chatters-1d",
+                flow="chatters",
+                login="partner_one",
+                session_id=81,
+                decision="success",
+                reason="bot_path_success",
+                request_attempted="bot",
+                request_result="success",
+                http_status=200,
+                scope_state={"bot": "present", "streamer": "present"},
+                runtime_state=harness._build_analytics_runtime_state("partner_one"),
+                chatter_count=6,
+            )
+
+        self.assertEqual(log_mock.call_args.args[0], logging.DEBUG)
+
+    async def test_other_chatters_failures_remain_info(self) -> None:
+        harness = _AnalyticsHarness()
+
+        with (
+            patch("bot.analytics.mixin.storage.insert_observability_event"),
+            patch("bot.analytics.mixin.log.log") as log_mock,
+        ):
+            harness._log_analytics_decision(
+                flow_id="chatters-2",
+                flow="chatters",
+                login="partner_one",
+                session_id=78,
+                decision="failed",
+                reason="bot_scope_missing",
+                request_attempted="bot",
+                request_result="failed",
+                http_status=403,
+                scope_state={"bot": "missing", "streamer": "absent"},
+                runtime_state=harness._build_analytics_runtime_state("partner_one"),
+            )
+
+        self.assertEqual(log_mock.call_args.args[0], logging.INFO)
+
     async def test_poll_chatters_prefers_bot_scope_when_streamer_scope_is_also_available(self) -> None:
         harness = _AnalyticsHarness(
             streamer_scopes={"1001": ["moderator:read:chatters"]},
