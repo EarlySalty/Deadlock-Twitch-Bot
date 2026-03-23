@@ -91,7 +91,7 @@ class PartnerRaidScoreTrackingTests(unittest.TestCase):
 
         with patch(
             "bot.raid.partner_raid_score_tracking.transaction",
-            side_effect=lambda: contextlib.nullcontext(conn),
+            side_effect=lambda: contextlib.nullcontext(_CompatConn(conn)),
         ):
             tracking_id = track_confirmed_partner_raid(
                 to_broadcaster_id="2002",
@@ -173,7 +173,7 @@ class PartnerRaidScoreTrackingTests(unittest.TestCase):
 
         with patch(
             "bot.raid.partner_raid_score_tracking.transaction",
-            side_effect=lambda: contextlib.nullcontext(conn),
+            side_effect=lambda: contextlib.nullcontext(_CompatConn(conn)),
         ):
             tracking_id = track_confirmed_partner_raid(
                 to_broadcaster_id="2002",
@@ -226,7 +226,7 @@ class PartnerRaidScoreTrackingTests(unittest.TestCase):
 
         with patch(
             "bot.raid.partner_raid_score_tracking.transaction",
-            side_effect=lambda: contextlib.nullcontext(conn),
+            side_effect=lambda: contextlib.nullcontext(_CompatConn(conn)),
         ):
             resolved = resolve_partner_raid_tracking_for_session(
                 twitch_user_id="2002",
@@ -292,7 +292,7 @@ class PartnerRaidScoreTrackingTests(unittest.TestCase):
 
         with patch(
             "bot.raid.partner_raid_score_tracking.transaction",
-            side_effect=lambda: contextlib.nullcontext(conn),
+            side_effect=lambda: contextlib.nullcontext(_CompatConn(conn)),
         ):
             resolved = resolve_partner_raid_tracking_for_session(
                 twitch_user_id="2002",
@@ -373,7 +373,7 @@ class PartnerRaidScoreTrackingTests(unittest.TestCase):
 
         with patch(
             "bot.raid.partner_raid_score_tracking.transaction",
-            side_effect=lambda: contextlib.nullcontext(conn),
+            side_effect=lambda: contextlib.nullcontext(_CompatConn(conn)),
         ):
             resolved = resolve_partner_raid_tracking_for_session(
                 twitch_user_id="2002",

@@ -3,16 +3,73 @@
 from __future__ import annotations
 
 import contextlib
+import hashlib
 import queue
 import threading
 import time
 from collections.abc import Callable, Iterator
+from urllib.parse import parse_qsl, urlsplit
 
 import psycopg
+from psycopg.conninfo import conninfo_to_dict
 
 
 ConnectFn = Callable[[str, bool], psycopg.Connection]
 PrepareFn = Callable[[psycopg.Connection, str], None]
+
+
+def _normalized_conninfo_value(value: object) -> str:
+    return str(value or "").strip()
+
+
+def _dsn_registry_key(dsn: str) -> tuple[tuple[str, str], ...]:
+    """Return a canonical, non-raw registry key for a DSN string."""
+    raw_dsn = str(dsn or "").strip()
+    if not raw_dsn:
+        return (("dsn_hash", ""),)
+
+    try:
+        parsed = conninfo_to_dict(raw_dsn)
+    except Exception:
+        parsed = {}
+
+    items: list[tuple[str, str]] = []
+    for key, value in parsed.items():
+        normalized = _normalized_conninfo_value(value)
+        if not normalized:
+            continue
+        items.append((str(key).strip().lower(), normalized))
+    if items:
+        return tuple(sorted(items))
+
+    try:
+        parsed_url = urlsplit(raw_dsn if "://" in raw_dsn else f"postgresql://{raw_dsn}")
+    except Exception:
+        parsed_url = None
+
+    if parsed_url is not None:
+        url_items: list[tuple[str, str]] = []
+        host = (parsed_url.hostname or "").strip().lower()
+        if host:
+            url_items.append(("host", host))
+        if parsed_url.port is not None:
+            url_items.append(("port", str(parsed_url.port).strip()))
+        user = (parsed_url.username or "").strip()
+        if user:
+            url_items.append(("user", user))
+        dbname = (parsed_url.path or "").strip().lstrip("/")
+        if dbname:
+            url_items.append(("dbname", dbname))
+        query_items = []
+        for key, value in sorted(parse_qsl(parsed_url.query, keep_blank_values=True)):
+            normalized = _normalized_conninfo_value(value)
+            if normalized:
+                query_items.append((f"query:{key.strip().lower()}", normalized))
+        if url_items or query_items:
+            return tuple(sorted(url_items + query_items))
+
+    digest = hashlib.sha256(raw_dsn.encode("utf-8", errors="ignore")).hexdigest()
+    return (("dsn_hash", digest),)
 
 
 class PostgresConnectionPool:
@@ -159,7 +216,7 @@ class PostgresConnectionPool:
 
 
 class ConnectionPoolRegistry:
-    """Maintain one pool per DSN fingerprinted by the raw DSN string."""
+    """Maintain one pool per canonical DSN identity."""
 
     def __init__(
         self,
@@ -174,11 +231,12 @@ class ConnectionPoolRegistry:
         self._connect_fn = connect_fn
         self._prepare_fn = prepare_fn
         self._lock = threading.Lock()
-        self._pools: dict[str, PostgresConnectionPool] = {}
+        self._pools: dict[tuple[tuple[str, str], ...], PostgresConnectionPool] = {}
 
     def get_pool(self, dsn: str) -> PostgresConnectionPool:
+        key = _dsn_registry_key(dsn)
         with self._lock:
-            pool = self._pools.get(dsn)
+            pool = self._pools.get(key)
             if pool is None:
                 pool = PostgresConnectionPool(
                     dsn=dsn,
@@ -187,7 +245,7 @@ class ConnectionPoolRegistry:
                     connect_fn=self._connect_fn,
                     prepare_fn=self._prepare_fn,
                 )
-                self._pools[dsn] = pool
+                self._pools[key] = pool
             return pool
 
     def close_all(self) -> None:

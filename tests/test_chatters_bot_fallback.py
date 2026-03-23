@@ -2,6 +2,7 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 import logging
+import time
 
 from bot.analytics.mixin import TwitchAnalyticsMixin
 
@@ -21,10 +22,13 @@ class _BotTokenManager:
         token: str = "bot-token",
         bot_id: str = "9999",
         scopes: set[str] | None = None,
+        hydrated: bool = True,
     ) -> None:
         self._token = token
         self._bot_id = bot_id
         self.scopes = set(scopes or set())
+        self.access_token = token if hydrated else None
+        self.bot_id = bot_id if hydrated else None
 
     async def get_valid_token(self, force_refresh: bool = False) -> tuple[str, str]:
         return self._token, self._bot_id
@@ -72,10 +76,14 @@ class _AnalyticsHarness(TwitchAnalyticsMixin):
         monitored_only: set[str] | None = None,
         channel_ids: dict[str, str] | None = None,
         subscription_types: dict[str, set[str]] | None = None,
+        bot_manager_hydrated: bool = True,
     ) -> None:
         self.api = SimpleNamespace(get_chatters=AsyncMock())
         self._raid_bot = SimpleNamespace(auth_manager=_AuthManager(streamer_scopes))
-        self._bot_token_manager = _BotTokenManager(scopes=bot_scopes)
+        self._bot_token_manager = _BotTokenManager(
+            scopes=bot_scopes,
+            hydrated=bot_manager_hydrated,
+        )
         self._twitch_chat_bot = _ChatBot(
             monitored=monitored or {"partner_one"},
             initial_channels=initial_channels,
@@ -83,7 +91,10 @@ class _AnalyticsHarness(TwitchAnalyticsMixin):
             channel_ids=channel_ids,
             subscription_types=subscription_types,
         )
+        self._twitch_bot_token = "bot-token"
         self._chatters_scope_warned: set[tuple[str, int]] = set()
+        self._chatters_startup_grace_started_at = time.monotonic()
+        self._chatters_startup_deferral_logged = False
 
 
 class ChattersBotFallbackTests(unittest.IsolatedAsyncioTestCase):
@@ -156,6 +167,26 @@ class ChattersBotFallbackTests(unittest.IsolatedAsyncioTestCase):
             )
 
         self.assertEqual(log_mock.call_args.args[0], logging.DEBUG)
+
+    async def test_chatters_collection_defers_during_startup_until_bot_auth_is_ready(self) -> None:
+        harness = _AnalyticsHarness(
+            bot_scopes={"moderator:read:chatters"},
+            bot_manager_hydrated=False,
+        )
+        harness._twitch_chat_bot = None
+
+        with patch("bot.analytics.mixin.log.debug") as log_mock:
+            self.assertTrue(harness._should_defer_chatters_collection_for_startup())
+
+        self.assertTrue(log_mock.called)
+
+    async def test_chatters_collection_does_not_defer_once_bot_auth_is_ready(self) -> None:
+        harness = _AnalyticsHarness(
+            bot_scopes={"moderator:read:chatters"},
+        )
+        harness._twitch_chat_bot = None
+
+        self.assertFalse(harness._should_defer_chatters_collection_for_startup())
 
     async def test_channel_not_tracked_failure_logs_at_debug(self) -> None:
         harness = _AnalyticsHarness()

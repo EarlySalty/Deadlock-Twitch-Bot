@@ -303,7 +303,7 @@ def load_global_promo_mode(conn: Any) -> dict[str, Any]:
         """
         SELECT mode, custom_message, starts_at, ends_at, is_enabled, updated_at, updated_by
           FROM twitch_global_promo_modes
-         WHERE config_key = ?
+         WHERE config_key = %s
          LIMIT 1
         """,
         (PROMO_MODE_SINGLETON_KEY,),
@@ -339,7 +339,7 @@ def save_global_promo_mode(
         """
         INSERT INTO twitch_global_promo_modes (
             config_key, mode, custom_message, starts_at, ends_at, is_enabled, updated_at, updated_by
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
         ON CONFLICT (config_key) DO UPDATE SET
             mode = EXCLUDED.mode,
             custom_message = EXCLUDED.custom_message,

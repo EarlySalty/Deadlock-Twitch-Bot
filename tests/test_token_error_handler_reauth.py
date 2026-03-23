@@ -46,6 +46,28 @@ class _CompatConn:
 
 
 class TokenErrorHandlerReauthTests(unittest.TestCase):
+    def test_migrate_db_prepares_runtime_storage_when_called_too_early(self) -> None:
+        transaction_calls = 0
+        conn = _CompatConn(_make_conn())
+
+        def _transaction():
+            nonlocal transaction_calls
+            transaction_calls += 1
+            if transaction_calls == 1:
+                raise RuntimeError(
+                    "PostgreSQL storage is not initialized. Call prepare_runtime_storage() during startup before serving runtime requests."
+                )
+            return contextlib.nullcontext(conn)
+
+        with (
+            patch("bot.api.token_error_handler.transaction", side_effect=_transaction),
+            patch("bot.api.token_error_handler.storage_pg.prepare_runtime_storage") as prepare_storage,
+        ):
+            TokenErrorHandler._migrate_db()
+
+        prepare_storage.assert_called_once_with()
+        self.assertEqual(transaction_calls, 2)
+
     def test_disable_raid_bot_marks_reauth_without_removing_auth_row(self) -> None:
         conn = _make_conn()
         conn.execute(

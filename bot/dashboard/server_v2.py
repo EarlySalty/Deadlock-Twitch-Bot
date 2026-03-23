@@ -175,7 +175,6 @@ class DashboardV2Server(
         self._auth_sessions: dict[str, dict[str, Any]] = {}
         self._sessions_db_loaded: bool = False
         self._oauth_state_ttl_seconds = 600
-        self._rate_limits: dict[str, list[float]] = {}
         self._add = add_cb if callable(add_cb) else self._empty_add
         self._remove = remove_cb if callable(remove_cb) else self._empty_remove
         self._list = list_cb if callable(list_cb) else self._empty_list
@@ -713,7 +712,7 @@ class DashboardV2Server(
         if referer:
             try:
                 parts = urlsplit(referer)
-                if parts.path:
+                if parts.path and parts.path.startswith("/") and not parts.path.startswith("//"):
                     params = dict(parse_qsl(parts.query, keep_blank_values=True))
                     params.pop("ok", None)
                     params.pop("err", None)
@@ -721,7 +720,11 @@ class DashboardV2Server(
                         params["ok"] = ok
                     if err:
                         params["err"] = err
-                    return urlunsplit(("", "", parts.path, urlencode(params), "")) or default_path
+                    candidate = urlunsplit(("", "", parts.path, urlencode(params), ""))
+                    safe_redirect = getattr(self, "_safe_internal_redirect", None)
+                    if callable(safe_redirect):
+                        return safe_redirect(candidate, fallback=default_path)
+                    return candidate or default_path
             except Exception:
                 log.debug("Could not construct redirect from referer", exc_info=True)
 
@@ -730,9 +733,11 @@ class DashboardV2Server(
             params["ok"] = ok
         if err:
             params["err"] = err
-        if params:
-            return f"{default_path}?{urlencode(params)}"
-        return default_path
+        candidate = f"{default_path}?{urlencode(params)}" if params else default_path
+        safe_redirect = getattr(self, "_safe_internal_redirect", None)
+        if callable(safe_redirect):
+            return safe_redirect(candidate, fallback=default_path)
+        return candidate
 
     def _is_secure_request(self, request: web.Request) -> bool:
         peer = self._peer_host(request)

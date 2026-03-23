@@ -76,7 +76,7 @@ def _recalculate_raid_chat_metrics_batch(
                 COALESCE(r.executed_at_key, '') AS executed_at_key,
                 CAST(r.target_session_id AS BIGINT) AS target_session_id,
                 CAST(r.executed_at AS TIMESTAMPTZ) AS executed_at
-            FROM json_to_recordset(?::json) AS r(
+            FROM json_to_recordset(%s::json) AS r(
                 raid_id TEXT,
                 executed_at_key TEXT,
                 target_session_id TEXT,
@@ -112,7 +112,7 @@ def _recalculate_raid_chat_metrics_batch(
            AND {session_bot_clause}
         GROUP BY ri.raid_id, ri.executed_at_key
         """,
-        [payload, *session_bot_params],
+        (payload, *session_bot_params),
     ).fetchall()
 
     for row in retention_rows:
@@ -132,7 +132,7 @@ def _recalculate_raid_chat_metrics_batch(
                 CAST(r.target_session_id AS BIGINT) AS target_session_id,
                 CAST(r.executed_at AS TIMESTAMPTZ) AS executed_at,
                 LOWER(COALESCE(r.from_login, '')) AS from_login
-            FROM json_to_recordset(?::json) AS r(
+            FROM json_to_recordset(%s::json) AS r(
                 raid_id TEXT,
                 executed_at_key TEXT,
                 target_session_id TEXT,
@@ -160,7 +160,7 @@ def _recalculate_raid_chat_metrics_batch(
            AND {rollup_bot_clause}
         GROUP BY ri.raid_id, ri.executed_at_key
         """,
-        [payload, *session_bot_params, *rollup_bot_params],
+        (payload, *session_bot_params, *rollup_bot_params),
     ).fetchall()
 
     for row in known_rows:
@@ -178,7 +178,7 @@ def _recalculate_raid_chat_metrics_batch(
                 CAST(r.target_session_id AS BIGINT) AS target_session_id,
                 CAST(r.executed_at AS TIMESTAMPTZ) AS executed_at,
                 LOWER(COALESCE(r.to_login, '')) AS to_login
-            FROM json_to_recordset(?::json) AS r(
+            FROM json_to_recordset(%s::json) AS r(
                 raid_id TEXT,
                 executed_at_key TEXT,
                 target_session_id TEXT,
@@ -208,7 +208,7 @@ def _recalculate_raid_chat_metrics_batch(
            OR cr.chatter_login IS NULL
         GROUP BY ri.raid_id, ri.executed_at_key
         """,
-        [payload, *session_bot_params, *rollup_bot_params],
+        (payload, *session_bot_params, *rollup_bot_params),
     ).fetchall()
 
     for row in new_rows:

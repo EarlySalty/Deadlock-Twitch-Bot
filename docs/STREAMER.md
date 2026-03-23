@@ -208,7 +208,7 @@ Zeigt welche Viewer am meisten Zeit mit Deadlock-Streams verbracht haben.
 1. GET `/twitch/auth/login?next=...`
 2. Redirect zu Twitch OAuth (Scope: `openid user:read:email`)
 3. Callback: GET `/twitch/auth/callback`
-4. Session wird in `sessions.sqlite3` (Fernet-verschluesselt) gespeichert
+4. Session wird in `dashboard_sessions` in PostgreSQL (Fernet-verschluesselt) gespeichert
 5. Redirect zu `next` Parameter
 
 ### Discord-Login (alternativ)

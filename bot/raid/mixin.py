@@ -226,9 +226,9 @@ class TwitchRaidMixin:
                            success, error_message, target_stream_started_at,
                            candidates_count
                     FROM twitch_raid_history
-                    WHERE from_broadcaster_login = ?
+                    WHERE from_broadcaster_login = %s
                     ORDER BY executed_at DESC
-                    LIMIT ?
+                    LIMIT %s
                     """,
                     (from_broadcaster.lower(), limit),
                 ).fetchall()
@@ -242,7 +242,7 @@ class TwitchRaidMixin:
                            candidates_count
                     FROM twitch_raid_history
                     ORDER BY executed_at DESC
-                    LIMIT ?
+                    LIMIT %s
                     """,
                     (limit,),
                 ).fetchall()

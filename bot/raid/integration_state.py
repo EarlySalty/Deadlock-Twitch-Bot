@@ -75,7 +75,7 @@ class RaidIntegrationStateResolver:
             SELECT twitch_login, twitch_user_id, discord_user_id, manual_partner_opt_out,
                    manual_verified_at, created_at
             FROM twitch_streamers_partner_state
-            WHERE discord_user_id = ?
+            WHERE discord_user_id = %s
             ORDER BY
                 CASE WHEN manual_verified_at IS NULL THEN 1 ELSE 0 END,
                 manual_verified_at DESC,
@@ -92,7 +92,7 @@ class RaidIntegrationStateResolver:
             SELECT twitch_login, twitch_user_id, discord_user_id, manual_partner_opt_out,
                    manual_verified_at, created_at
             FROM twitch_streamers_partner_state
-            WHERE LOWER(twitch_login) = LOWER(?)
+            WHERE LOWER(twitch_login) = LOWER(%s)
             ORDER BY
                 CASE WHEN manual_verified_at IS NULL THEN 1 ELSE 0 END,
                 manual_verified_at DESC,
@@ -109,7 +109,7 @@ class RaidIntegrationStateResolver:
             """
             SELECT twitch_login, twitch_user_id, raid_enabled, authorized_at
             FROM twitch_raid_auth
-            WHERE twitch_user_id = ?
+            WHERE twitch_user_id = %s
             LIMIT 1
             """,
             (twitch_user_id,),
@@ -121,7 +121,7 @@ class RaidIntegrationStateResolver:
             """
             SELECT twitch_login, twitch_user_id, raid_enabled, authorized_at
             FROM twitch_raid_auth
-            WHERE LOWER(twitch_login) = LOWER(?)
+            WHERE LOWER(twitch_login) = LOWER(%s)
             LIMIT 1
             """,
             (twitch_login,),
@@ -133,7 +133,7 @@ class RaidIntegrationStateResolver:
             """
             SELECT error_count
             FROM twitch_token_blacklist
-            WHERE twitch_user_id = ?
+            WHERE twitch_user_id = %s
             LIMIT 1
             """,
             (twitch_user_id,),
@@ -151,7 +151,7 @@ class RaidIntegrationStateResolver:
             """
             SELECT 1
             FROM twitch_raid_blacklist
-            WHERE LOWER(target_login) = LOWER(?)
+            WHERE LOWER(target_login) = LOWER(%s)
             LIMIT 1
             """,
             (twitch_login,),

@@ -7,7 +7,7 @@ in the Windows Credential Manager (service: DeadlockBot, key: SESSIONS_ENCRYPTIO
 If the key is missing it is auto-generated and saved to the keyring on first run.
 Without the key the ciphertext is useless to an attacker even if they access the DB.
 
-Public API is identical to the previous SQLite implementation - callers are unchanged.
+Public API remains stable while storage stays PostgreSQL-backed.
 """
 
 from __future__ import annotations

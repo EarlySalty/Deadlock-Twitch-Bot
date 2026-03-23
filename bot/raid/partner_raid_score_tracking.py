@@ -93,10 +93,10 @@ def _lookup_open_session_id(
         """
         SELECT id
         FROM twitch_stream_sessions
-        WHERE LOWER(streamer_login) = LOWER(?)
+        WHERE LOWER(streamer_login) = LOWER(%s)
           AND ended_at IS NULL
         ORDER BY
-            CASE WHEN COALESCE(started_at, '') = COALESCE(?, '') THEN 0 ELSE 1 END,
+            CASE WHEN COALESCE(started_at, '') = COALESCE(%s, '') THEN 0 ELSE 1 END,
             started_at DESC,
             id DESC
         LIMIT 1
@@ -113,7 +113,7 @@ def _load_cached_score_snapshot(conn, twitch_user_id: str) -> dict[str, object]:
                new_partner_multiplier, raid_boost_multiplier,
                today_received_raids, last_computed_at
         FROM twitch_partner_raid_scores
-        WHERE twitch_user_id = ?
+        WHERE twitch_user_id = %s
         """,
         (twitch_user_id,),
     ).fetchone()
@@ -152,12 +152,12 @@ def _load_raid_history_reference(
             """
             SELECT id, executed_at
             FROM twitch_raid_history
-            WHERE to_broadcaster_id = ?
-              AND LOWER(to_broadcaster_login) = LOWER(?)
-              AND from_broadcaster_id = ?
-              AND LOWER(from_broadcaster_login) = LOWER(?)
+            WHERE to_broadcaster_id = %s
+              AND LOWER(to_broadcaster_login) = LOWER(%s)
+              AND from_broadcaster_id = %s
+              AND LOWER(from_broadcaster_login) = LOWER(%s)
               AND COALESCE(success, FALSE) IS TRUE
-              AND executed_at <= ?
+              AND executed_at <= %s
             ORDER BY executed_at DESC, id DESC
             LIMIT 1
             """,
@@ -170,11 +170,11 @@ def _load_raid_history_reference(
         """
         SELECT id, executed_at
         FROM twitch_raid_history
-        WHERE to_broadcaster_id = ?
-          AND LOWER(to_broadcaster_login) = LOWER(?)
-          AND LOWER(from_broadcaster_login) = LOWER(?)
+        WHERE to_broadcaster_id = %s
+          AND LOWER(to_broadcaster_login) = LOWER(%s)
+          AND LOWER(from_broadcaster_login) = LOWER(%s)
           AND COALESCE(success, FALSE) IS TRUE
-          AND executed_at <= ?
+          AND executed_at <= %s
         ORDER BY executed_at DESC, id DESC
         LIMIT 1
         """,
@@ -188,7 +188,7 @@ def _load_session_started_at(conn, session_id: int) -> datetime | None:
         """
         SELECT started_at
         FROM twitch_stream_sessions
-        WHERE id = ?
+        WHERE id = %s
         LIMIT 1
         """,
         (int(session_id),),
@@ -209,7 +209,7 @@ def _load_unresolved_tracking_rows_for_session(
         """
         SELECT id, confirmed_at, to_broadcaster_id, was_deadlock_at_raid
         FROM twitch_partner_raid_score_tracking
-        WHERE target_session_id = ?
+        WHERE target_session_id = %s
           AND resolved_at IS NULL
         ORDER BY confirmed_at ASC, id ASC
         """,
@@ -221,10 +221,10 @@ def _load_unresolved_tracking_rows_for_session(
     target_identifier_sql = ""
     params: list[object] = []
     if target_id:
-        target_identifier_sql = "to_broadcaster_id = ?"
+        target_identifier_sql = "to_broadcaster_id = %s"
         params.append(target_id)
     elif login_lower:
-        target_identifier_sql = "LOWER(to_broadcaster_login) = LOWER(?)"
+        target_identifier_sql = "LOWER(to_broadcaster_login) = LOWER(%s)"
         params.append(login_lower)
     else:
         return []
@@ -243,11 +243,11 @@ def _load_unresolved_tracking_rows_for_session(
         WHERE target_session_id IS NULL
           AND resolved_at IS NULL
           AND {target_identifier_sql}
-          AND confirmed_at >= ?
-          AND confirmed_at <= ?
+          AND confirmed_at >= %s
+          AND confirmed_at <= %s
           AND (
               target_stream_started_at IS NULL
-              OR target_stream_started_at = ?
+              OR target_stream_started_at = %s
           )
         ORDER BY confirmed_at ASC, id ASC
         """,
@@ -302,7 +302,7 @@ def track_confirmed_partner_raid(
                 """
                 SELECT active_session_id, last_started_at, last_game, streamer_login
                 FROM twitch_live_state
-                WHERE twitch_user_id = ?
+                WHERE twitch_user_id = %s
                 """,
                 (target_id,),
             ).fetchone()
@@ -368,7 +368,7 @@ def track_confirmed_partner_raid(
                     deadlock_continued_sec,
                     resolved_at,
                     resolution_reason
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 """,
                 (
                     raid_history_id,
@@ -402,10 +402,10 @@ def track_confirmed_partner_raid(
                     """
                     SELECT id
                     FROM twitch_partner_raid_score_tracking
-                    WHERE raid_history_id = ?
+                    WHERE raid_history_id = %s
                       AND (
-                          raid_history_executed_at = ?
-                          OR (? IS NULL AND raid_history_executed_at IS NULL)
+                          raid_history_executed_at = %s
+                          OR (%s IS NULL AND raid_history_executed_at IS NULL)
                       )
                     ORDER BY id DESC
                     LIMIT 1
@@ -481,9 +481,9 @@ def resolve_partner_raid_tracking_for_session(
                         """
                         SELECT game_name, recorded_at
                         FROM twitch_channel_updates
-                        WHERE twitch_user_id = ?
-                          AND recorded_at >= ?
-                          AND recorded_at <= ?
+                        WHERE twitch_user_id = %s
+                          AND recorded_at >= %s
+                          AND recorded_at <= %s
                         ORDER BY recorded_at ASC
                         """,
                         (
@@ -508,11 +508,11 @@ def resolve_partner_raid_tracking_for_session(
                 conn.execute(
                     """
                     UPDATE twitch_partner_raid_score_tracking
-                    SET deadlock_continued_until = ?,
-                        deadlock_continued_sec = ?,
-                        resolved_at = ?,
-                        resolution_reason = ?
-                    WHERE id = ?
+                    SET deadlock_continued_until = %s,
+                        deadlock_continued_sec = %s,
+                        resolved_at = %s,
+                        resolution_reason = %s
+                    WHERE id = %s
                     """,
                     (
                         _iso_utc(resolution_dt),

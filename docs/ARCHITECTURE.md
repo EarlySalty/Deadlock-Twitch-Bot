@@ -82,7 +82,7 @@ Whitelist-Architektur: `twitch.earlysalty.com` erlaubt nur explizit gelistete Pf
 
 | Bereich | Storage | Verschluesselung |
 |---------|---------|------------------|
-| Web-Sessions | sessions.sqlite3 | Fernet (AES-128) |
+| Web-Sessions | PostgreSQL `dashboard_sessions` | Fernet (AES-128) |
 | Social Media Tokens | PostgreSQL | AES-256-GCM |
 | Raid OAuth Tokens | PostgreSQL | AES-256-GCM |
 | OAuth State Tokens | PostgreSQL | Klartext (10min TTL, ephemaer) |

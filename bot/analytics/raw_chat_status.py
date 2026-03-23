@@ -44,23 +44,23 @@ def _query_scope_presence_stats(
                 "sessionsWithPresence": 0,
                 "gapStart": None,
             }
-        placeholders = ",".join("?" for _ in session_ids)
+        placeholders = ",".join("%s" for _ in session_ids)
         presence_row = conn.execute(
             f"""
             SELECT
                 COUNT(*) AS presence_rows,
                 COUNT(DISTINCT sc.session_id) AS sessions_with_presence
             FROM twitch_session_chatters sc
-            WHERE LOWER(sc.streamer_login) = ?
+            WHERE LOWER(sc.streamer_login) = %s
               AND sc.session_id IN ({placeholders})
             """,
-            [streamer_login, *session_ids],
+            (streamer_login, *session_ids),
         ).fetchone()
         gap_row = conn.execute(
             f"""
             SELECT MIN(s.started_at) AS gap_start
             FROM twitch_stream_sessions s
-            WHERE LOWER(s.streamer_login) = ?
+            WHERE LOWER(s.streamer_login) = %s
               AND s.id IN ({placeholders})
               AND EXISTS (
                   SELECT 1
@@ -73,7 +73,7 @@ def _query_scope_presence_stats(
                   WHERE m.session_id = s.id
               )
             """,
-            [streamer_login, *session_ids],
+            (streamer_login, *session_ids),
         ).fetchone()
     else:
         presence_row = conn.execute(
@@ -83,17 +83,17 @@ def _query_scope_presence_stats(
                 COUNT(DISTINCT sc.session_id) AS sessions_with_presence
             FROM twitch_session_chatters sc
             JOIN twitch_stream_sessions s ON s.id = sc.session_id
-            WHERE LOWER(s.streamer_login) = ?
-              AND s.started_at >= ?
+            WHERE LOWER(s.streamer_login) = %s
+              AND s.started_at >= %s
             """,
-            [streamer_login, since_date],
+            (streamer_login, since_date),
         ).fetchone()
         gap_row = conn.execute(
             """
             SELECT MIN(s.started_at) AS gap_start
             FROM twitch_stream_sessions s
-            WHERE LOWER(s.streamer_login) = ?
-              AND s.started_at >= ?
+            WHERE LOWER(s.streamer_login) = %s
+              AND s.started_at >= %s
               AND EXISTS (
                   SELECT 1
                   FROM twitch_session_chatters sc
@@ -105,7 +105,7 @@ def _query_scope_presence_stats(
                   WHERE m.session_id = s.id
               )
             """,
-            [streamer_login, since_date],
+            (streamer_login, since_date),
         ).fetchone()
 
     return {
@@ -129,7 +129,7 @@ def _query_scope_raw_stats(
                 "sessionsWithRaw": 0,
                 "lastMessageAt": None,
             }
-        placeholders = ",".join("?" for _ in session_ids)
+        placeholders = ",".join("%s" for _ in session_ids)
         row = conn.execute(
             f"""
             SELECT
@@ -137,10 +137,10 @@ def _query_scope_raw_stats(
                 COUNT(DISTINCT m.session_id) AS sessions_with_raw,
                 MAX(m.message_ts) AS last_message_at
             FROM twitch_chat_messages m
-            WHERE LOWER(m.streamer_login) = ?
+            WHERE LOWER(m.streamer_login) = %s
               AND m.session_id IN ({placeholders})
             """,
-            [streamer_login, *session_ids],
+            (streamer_login, *session_ids),
         ).fetchone()
     else:
         row = conn.execute(
@@ -150,10 +150,10 @@ def _query_scope_raw_stats(
                 COUNT(DISTINCT m.session_id) AS sessions_with_raw,
                 MAX(m.message_ts) AS last_message_at
             FROM twitch_chat_messages m
-            WHERE LOWER(m.streamer_login) = ?
-              AND m.message_ts >= ?
+            WHERE LOWER(m.streamer_login) = %s
+              AND m.message_ts >= %s
             """,
-            [streamer_login, since_date],
+            (streamer_login, since_date),
         ).fetchone()
 
     return {
@@ -193,10 +193,10 @@ def build_raw_chat_status(
                 last_raw_chat_insert_error_at,
                 last_raw_chat_error
             FROM twitch_raw_chat_ingest_health
-            WHERE LOWER(streamer_login) = ?
+            WHERE LOWER(streamer_login) = %s
             LIMIT 1
             """,
-            [normalized_streamer],
+            (normalized_streamer,),
         ).fetchone()
     except Exception:
         health_row = None
@@ -206,9 +206,9 @@ def build_raw_chat_status(
             """
             SELECT MAX(message_ts) AS last_message_at
             FROM twitch_chat_messages
-            WHERE LOWER(streamer_login) = ?
+            WHERE LOWER(streamer_login) = %s
             """,
-            [normalized_streamer],
+            (normalized_streamer,),
         ).fetchone()
         last_message_at = _iso_or_none(fallback_row[0] if fallback_row else None)
     except Exception:
@@ -245,11 +245,11 @@ def build_raw_chat_status(
             """
             SELECT status, note
             FROM twitch_raw_chat_backfill_runs
-            WHERE LOWER(streamer_login) = ?
+            WHERE LOWER(streamer_login) = %s
             ORDER BY COALESCE(finished_at, started_at) DESC
             LIMIT 1
             """,
-            [normalized_streamer],
+            (normalized_streamer,),
         ).fetchone()
     except Exception:
         latest_backfill_row = None
@@ -306,7 +306,7 @@ def build_viewer_window_metadata(
     if not normalized_streamer or not normalized_logins:
         return {}
 
-    placeholders = ",".join("?" for _ in normalized_logins)
+    placeholders = ",".join("%s" for _ in normalized_logins)
 
     presence_rows = conn.execute(
         f"""
@@ -316,12 +316,12 @@ def build_viewer_window_metadata(
             COALESCE(SUM(sc.messages), 0) AS window_presence_messages
         FROM twitch_session_chatters sc
         JOIN twitch_stream_sessions s ON s.id = sc.session_id
-        WHERE LOWER(s.streamer_login) = ?
-          AND s.started_at >= ?
+        WHERE LOWER(s.streamer_login) = %s
+          AND s.started_at >= %s
           AND LOWER(sc.chatter_login) IN ({placeholders})
         GROUP BY LOWER(sc.chatter_login)
         """,
-        [normalized_streamer, since_date, *normalized_logins],
+        (normalized_streamer, since_date, *normalized_logins),
     ).fetchall()
 
     raw_rows = conn.execute(
@@ -330,12 +330,12 @@ def build_viewer_window_metadata(
             LOWER(m.chatter_login) AS chatter_login,
             COUNT(*) AS raw_messages
         FROM twitch_chat_messages m
-        WHERE LOWER(m.streamer_login) = ?
-          AND m.message_ts >= ?
+        WHERE LOWER(m.streamer_login) = %s
+          AND m.message_ts >= %s
           AND LOWER(m.chatter_login) IN ({placeholders})
         GROUP BY LOWER(m.chatter_login)
         """,
-        [normalized_streamer, since_date, *normalized_logins],
+        (normalized_streamer, since_date, *normalized_logins),
     ).fetchall()
 
     result: dict[str, dict[str, Any]] = {

@@ -9,6 +9,7 @@ from aiohttp import web
 
 from . import abbo_routes as _abbo_routes
 from . import abbo_billing_routes as _abbo_billing_routes
+from .route_deps import BillingRouteDeps
 
 
 def build_route_defs(server: Any) -> list[web.RouteDef]:
@@ -69,12 +70,12 @@ async def api_billing_catalog(
     server: Any,
     request: web.Request,
     *,
-    deps: dict[str, Any],
+    deps: BillingRouteDeps,
 ) -> web.Response:
     """Expose prepared subscription plans and cycle pricing for dashboard UI."""
-    billing_is_paid_plan = deps["billing_is_paid_plan"]
-    build_billing_catalog = deps["build_billing_catalog"]
-    json_module = deps["json"]
+    billing_is_paid_plan = deps.billing_is_paid_plan
+    build_billing_catalog = deps.build_billing_catalog
+    json_module = deps.json
 
     if not server._check_v2_auth(request):
         return web.json_response({"error": "auth_required"}, status=401)
@@ -114,10 +115,10 @@ async def api_billing_readiness(
     server: Any,
     request: web.Request,
     *,
-    deps: dict[str, Any],
+    deps: BillingRouteDeps,
 ) -> web.Response:
     """Expose Stripe setup readiness without leaking any secrets."""
-    json_module = deps["json"]
+    json_module = deps.json
 
     if not server._check_v2_auth(request):
         return web.json_response({"error": "auth_required"}, status=401)
@@ -130,12 +131,12 @@ async def api_billing_stripe_webhook(
     server: Any,
     request: web.Request,
     *,
-    deps: dict[str, Any],
+    deps: BillingRouteDeps,
 ) -> web.Response:
     """Receive and verify Stripe webhook events for subscription lifecycle updates."""
-    json_module = deps["json"]
-    log = deps["log"]
-    storage_module = deps["storage"]
+    json_module = deps.json
+    log = deps.log
+    storage_module = deps.storage
 
     server._billing_refresh_runtime_secrets()
     webhook_secret = str(getattr(server, "_billing_stripe_webhook_secret", "") or "").strip()
@@ -231,12 +232,12 @@ async def api_billing_checkout_preview(
     server: Any,
     request: web.Request,
     *,
-    deps: dict[str, Any],
+    deps: BillingRouteDeps,
 ) -> web.Response:
     """Validate plan selection and return Stripe-ready checkout metadata."""
-    build_billing_catalog = deps["build_billing_catalog"]
-    quickstart_url = deps["billing_stripe_quickstart_url"]
-    json_module = deps["json"]
+    build_billing_catalog = deps.build_billing_catalog
+    quickstart_url = deps.billing_stripe_quickstart_url
+    json_module = deps.json
 
     if not server._check_v2_auth(request):
         return web.json_response({"error": "auth_required"}, status=401)
@@ -301,12 +302,12 @@ async def api_billing_checkout_session(
     server: Any,
     request: web.Request,
     *,
-    deps: dict[str, Any],
+    deps: BillingRouteDeps,
 ) -> web.Response:
     """Create a live Stripe Checkout Session for a paid billing plan."""
-    build_billing_catalog = deps["build_billing_catalog"]
-    format_eur_cents = deps["format_eur_cents"]
-    json_module = deps["json"]
+    build_billing_catalog = deps.build_billing_catalog
+    format_eur_cents = deps.format_eur_cents
+    json_module = deps.json
 
     if not server._check_v2_auth(request):
         return web.json_response({"error": "auth_required"}, status=401)
@@ -510,12 +511,12 @@ async def api_billing_invoice_preview(
     server: Any,
     request: web.Request,
     *,
-    deps: dict[str, Any],
+    deps: BillingRouteDeps,
 ) -> web.Response:
     """Return structured and HTML invoice preview for the selected billing plan."""
-    build_billing_catalog = deps["build_billing_catalog"]
-    json_module = deps["json"]
-    normalize_billing_cycle = deps["normalize_billing_cycle"]
+    build_billing_catalog = deps.build_billing_catalog
+    json_module = deps.json
+    normalize_billing_cycle = deps.normalize_billing_cycle
 
     if not server._check_v2_auth(request):
         return web.json_response({"error": "auth_required"}, status=401)
@@ -583,16 +584,16 @@ async def api_billing_stripe_sync_products(
     server: Any,
     request: web.Request,
     *,
-    deps: dict[str, Any],
+    deps: BillingRouteDeps,
 ) -> web.Response:
     """Create or reuse Stripe products and prices and persist IDs into the Windows vault."""
-    asyncio_module = deps["asyncio"]
-    billing_cycle_discounts = deps["billing_cycle_discounts"]
-    billing_is_paid_plan = deps["billing_is_paid_plan"]
-    billing_public_error_message = deps["billing_public_error_message"]
-    build_billing_catalog = deps["build_billing_catalog"]
-    json_module = deps["json"]
-    log = deps["log"]
+    asyncio_module = deps.asyncio
+    billing_cycle_discounts = deps.billing_cycle_discounts
+    billing_is_paid_plan = deps.billing_is_paid_plan
+    billing_public_error_message = deps.billing_public_error_message
+    build_billing_catalog = deps.build_billing_catalog
+    json_module = deps.json
+    log = deps.log
 
     admin_error = server._require_v2_admin_api(request)
     if admin_error is not None:

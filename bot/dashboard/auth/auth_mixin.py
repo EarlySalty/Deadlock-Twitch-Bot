@@ -12,7 +12,11 @@ from aiohttp import web
 
 from ... import storage
 from ...core.constants import log
-from .state_store import DashboardAuthRateLimitStore, DashboardAuthStateRepository
+from .state_store import (
+    DashboardAuthRateLimitStore,
+    DashboardAuthRateLimitStoreUnavailable,
+    DashboardAuthStateRepository,
+)
 
 TWITCH_OAUTH_AUTHORIZE_URL = "https://id.twitch.tv/oauth2/authorize"
 TWITCH_OAUTH_TOKEN_URL = "https://id.twitch.tv/oauth2/token"  # noqa: S105
@@ -288,12 +292,23 @@ class _DashboardAuthMixin:
                     key = "unknown"
             else:
                 key = "unknown"
-        return self._dashboard_auth_rate_limit_store().allow_request(
-            owner=self,
-            key=key,
-            max_requests=max_requests,
-            window_seconds=window_seconds,
-        )
+        try:
+            return self._dashboard_auth_rate_limit_store().allow_request(
+                key=key,
+                max_requests=max_requests,
+                window_seconds=window_seconds,
+            )
+        except DashboardAuthRateLimitStoreUnavailable as exc:
+            log.warning(
+                "Dashboard auth rate limit denied because the durable store is unavailable: %s",
+                exc,
+            )
+            return False
+        except Exception:
+            log.exception(
+                "Unexpected dashboard auth rate limit failure; denying request"
+            )
+            return False
 
     # ------------------------------------------------------------------ #
     # Twitch OAuth session management                                      #

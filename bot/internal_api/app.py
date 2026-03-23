@@ -698,7 +698,16 @@ class InternalApiServer:
         message: str,
         code: str = "bad_request",
     ) -> web.Response:
-        log.warning("internal api %s bad request (%s)", context, type(exc).__name__)
+        detail = self._safe_bad_request_detail(exc)
+        if detail:
+            log.warning(
+                "internal api %s bad request (%s: %s)",
+                context,
+                type(exc).__name__,
+                detail,
+            )
+        else:
+            log.warning("internal api %s bad request (%s)", context, type(exc).__name__)
         return self._json_error(code, 400, message)
 
     def _safe_exception_error(
@@ -717,6 +726,34 @@ class InternalApiServer:
         else:
             log.warning("internal api %s failed: %s", context, exc)
         return self._json_error(error, status, message)
+
+    @staticmethod
+    def _safe_bad_request_detail(exc: Exception) -> str:
+        text = str(exc or "").replace("\r", " ").replace("\n", " ").strip()
+        if not text:
+            return ""
+        if len(text) > 120:
+            return ""
+        lowered = text.lower()
+        if "://" in text:
+            return ""
+        if any(
+            token in lowered
+            for token in (
+                "token",
+                "secret",
+                "password",
+                "authorization",
+                "bearer",
+                "cookie",
+                "session",
+                "dsn",
+            )
+        ):
+            return ""
+        if "=" in text:
+            return ""
+        return text
 
     @staticmethod
     def _parse_allowlist_ids(raw: str | None, *, env_name: str) -> set[int] | None:

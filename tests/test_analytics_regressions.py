@@ -53,6 +53,14 @@ class _RaidAnalyticsConn:
             return _FakeCursor(self._full_rows)
         if "FROM twitch_follow_events fe" in sql:
             return _FakeCursor(self._follow_rows)
+        if "FROM twitch_raid_arrival_tracking rat" in sql:
+            return _FakeCursor([])
+        if "FROM twitch_stream_sessions ss" in sql and "ss.started_at <=" in sql:
+            return _FakeCursor([])
+        if "FROM twitch_session_viewers" in sql and "WHERE session_id = %s" in sql:
+            return _FakeCursor([])
+        if "COUNT(*) as follows" in sql and "FROM twitch_follow_events" in sql:
+            return _FakeCursor([{"follows": 0}])
         raise AssertionError(f"Unexpected SQL in raid analytics test: {sql[:200]}")
 
 
@@ -101,6 +109,44 @@ class _OverviewRaidRetentionConn:
         if "FROM twitch_raid_retention" in sql:
             return _FakeCursor(self._rows)
         raise AssertionError(f"Unexpected SQL in overview raid retention test: {sql[:200]}")
+
+
+class _PlaceholderParityCursor:
+    def __init__(self, rows=None):
+        self._rows = list(rows or [])
+
+    def fetchall(self):
+        return list(self._rows)
+
+    def fetchone(self):
+        return self._rows[0] if self._rows else None
+
+
+class _OverviewPlaceholderParityConn:
+    def execute(self, sql, params=None):
+        params = list(params or [])
+        placeholder_count = str(sql).count("%s")
+        if placeholder_count != len(params):
+            raise AssertionError(
+                f"Expected placeholder/param parity, got {placeholder_count} placeholders and {len(params)} params"
+            )
+        if "?" in str(sql):
+            raise AssertionError("Unexpected sqlite-style '?' placeholder in psycopg query")
+
+        sql_text = str(sql)
+        if "ORDER BY s.started_at DESC" in sql_text and "LIMIT %s" in sql_text:
+            return _PlaceholderParityCursor([])
+        if "AVG(s.avg_viewers) as avg_avg_viewers" in sql_text:
+            return _PlaceholderParityCursor([(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)])
+        if "SUM(CASE WHEN s.follower_delta > 0" in sql_text:
+            return _PlaceholderParityCursor([(0,)])
+        if "FROM twitch_chatter_rollup" in sql_text:
+            return _PlaceholderParityCursor([(0,)])
+        if "COUNT(CASE" in sql_text and "retention_10m" in sql_text:
+            return _PlaceholderParityCursor([(0, 0, 0)])
+        if "SELECT COUNT(DISTINCT COALESCE(NULLIF(sc.chatter_login, ''), sc.chatter_id))" in sql_text:
+            return _PlaceholderParityCursor([(0,)])
+        raise AssertionError(f"Unexpected SQL in placeholder parity test: {sql[:200]}")
 
 
 class _ChatAnalyticsSqlGuardConn:
@@ -1231,6 +1277,28 @@ class OverviewSessionsRegressionTests(unittest.TestCase):
         self.assertEqual(metrics["total_unique_chatters"], 14)
         self.assertAlmostEqual(metrics["chat_per_100"], 17.0, places=3)
         self.assertEqual(metrics["active_chatters"], 2)
+
+    def test_get_sessions_uses_psycopg_placeholders_for_bot_filter(self) -> None:
+        handler = _DummyOverview()
+        sessions = handler._get_sessions(
+            conn=_OverviewPlaceholderParityConn(),
+            since_date="2026-01-01T00:00:00+00:00",
+            streamer="target",
+            limit=10,
+        )
+
+        self.assertEqual(sessions, [])
+
+    def test_calculate_overview_metrics_uses_psycopg_placeholders_for_bot_filters(self) -> None:
+        handler = _DummyOverview()
+        metrics = handler._calculate_overview_metrics(
+            conn=_OverviewPlaceholderParityConn(),
+            since_date="2026-01-01T00:00:00+00:00",
+            streamer="target",
+        )
+
+        self.assertEqual(metrics["total_unique_chatters"], 0)
+        self.assertEqual(metrics["active_chatters"], 0)
 
 
 class OverviewRaidRetentionRegressionTests(unittest.IsolatedAsyncioTestCase):

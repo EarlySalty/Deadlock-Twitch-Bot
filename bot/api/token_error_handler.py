@@ -15,6 +15,7 @@ from ..discord_role_sync import (
     normalize_discord_user_id,
     schedule_streamer_role_sync as schedule_discord_role_sync,
 )
+from ..storage import pg as storage_pg
 from ..storage import (
     load_streamer_identity,
     readonly_connection,
@@ -58,7 +59,8 @@ class TokenErrorHandler:
             "reminder_sent": "ALTER TABLE twitch_token_blacklist ADD COLUMN reminder_sent INTEGER DEFAULT 0",
             "role_removed": "ALTER TABLE twitch_token_blacklist ADD COLUMN role_removed INTEGER DEFAULT 0",
         }
-        try:
+
+        def _apply_migration() -> None:
             with transaction() as conn:
                 existing = {
                     row[0]
@@ -73,6 +75,23 @@ class TokenErrorHandler:
                 for col_name, statement in column_add_statements.items():
                     if col_name not in existing:
                         conn.execute(statement)
+        try:
+            _apply_migration()
+        except RuntimeError as exc:
+            if "prepare_runtime_storage" not in str(exc):
+                log.warning(
+                    "DB migration for twitch_token_blacklist failed (non-critical)",
+                    exc_info=True,
+                )
+                return
+            try:
+                storage_pg.prepare_runtime_storage()
+                _apply_migration()
+            except Exception:
+                log.warning(
+                    "DB migration for twitch_token_blacklist failed (non-critical)",
+                    exc_info=True,
+                )
         except Exception:
             log.warning(
                 "DB migration for twitch_token_blacklist failed (non-critical)",

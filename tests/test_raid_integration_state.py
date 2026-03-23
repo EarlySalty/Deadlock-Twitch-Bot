@@ -6,6 +6,17 @@ from unittest.mock import patch
 from bot.raid.integration_state import RaidIntegrationStateResolver
 
 
+class _CompatConn:
+    def __init__(self, conn: sqlite3.Connection) -> None:
+        self._conn = conn
+
+    def execute(self, sql: str, params=()):
+        return self._conn.execute(str(sql).replace("%s", "?"), params)
+
+    def __getattr__(self, name: str):
+        return getattr(self._conn, name)
+
+
 class _FakeAuthManager:
     def __init__(self, authorized_user_ids: set[str] | None = None) -> None:
         self.authorized_user_ids = authorized_user_ids or set()
@@ -88,7 +99,7 @@ class RaidIntegrationStateResolverTests(unittest.TestCase):
 
         with patch(
             "bot.raid.integration_state.readonly_connection",
-            side_effect=lambda: contextlib.nullcontext(conn),
+            side_effect=lambda: contextlib.nullcontext(_CompatConn(conn)),
         ):
             state = resolver.resolve_auth_state("123")
 
@@ -119,7 +130,7 @@ class RaidIntegrationStateResolverTests(unittest.TestCase):
 
         with patch(
             "bot.raid.integration_state.readonly_connection",
-            side_effect=lambda: contextlib.nullcontext(conn),
+            side_effect=lambda: contextlib.nullcontext(_CompatConn(conn)),
         ):
             state = resolver.resolve_block_state(discord_user_id="456")
 
@@ -144,7 +155,7 @@ class RaidIntegrationStateResolverTests(unittest.TestCase):
 
         with patch(
             "bot.raid.integration_state.readonly_connection",
-            side_effect=lambda: contextlib.nullcontext(conn),
+            side_effect=lambda: contextlib.nullcontext(_CompatConn(conn)),
         ):
             state = resolver.resolve_block_state(twitch_login="solo_streamer")
 

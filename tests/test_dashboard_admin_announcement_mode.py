@@ -78,13 +78,24 @@ class _DummyAnnouncementPage(DashboardAdminAnnouncementMixin, DashboardTemplateM
 
 class _ConnCtx:
     def __init__(self, conn: sqlite3.Connection) -> None:
-        self._conn = conn
+        self._conn = _CompatConn(conn)
 
-    def __enter__(self) -> sqlite3.Connection:
+    def __enter__(self) -> "_CompatConn":
         return self._conn
 
     def __exit__(self, exc_type, exc, tb) -> bool:
         return False
+
+
+class _CompatConn:
+    def __init__(self, conn: sqlite3.Connection) -> None:
+        self._conn = conn
+
+    def execute(self, sql: str, params=()):
+        return self._conn.execute(str(sql).replace("%s", "?"), params)
+
+    def __getattr__(self, name: str):
+        return getattr(self._conn, name)
 
 
 class DashboardAdminAnnouncementModeTests(unittest.IsolatedAsyncioTestCase):
@@ -108,7 +119,7 @@ class DashboardAdminAnnouncementModeTests(unittest.IsolatedAsyncioTestCase):
     async def test_admin_page_renders_saved_values_and_status(self) -> None:
         with self._storage_patch()[0], self._storage_patch()[1]:
             save_global_promo_mode(
-                self.conn,
+                _CompatConn(self.conn),
                 config={
                     "mode": "custom_event",
                     "custom_message": "Event live",
@@ -139,7 +150,7 @@ class DashboardAdminAnnouncementModeTests(unittest.IsolatedAsyncioTestCase):
         with self._storage_patch()[0], self._storage_patch()[1]:
             with self.assertRaises(web.HTTPFound) as ctx:
                 await self.handler.admin_announcements_save(request)
-            saved = load_global_promo_mode(self.conn)
+            saved = load_global_promo_mode(_CompatConn(self.conn))
 
         self.assertEqual(ctx.exception.location, "/twitch/admin/announcements?ok=1")
         self.assertEqual(saved["mode"], "custom_event")

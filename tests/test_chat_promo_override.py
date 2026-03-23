@@ -113,7 +113,7 @@ class ChatPromoOverrideTests(unittest.IsolatedAsyncioTestCase):
             ("partner_one", "Streamer Override {invite}"),
         )
         save_global_promo_mode(
-            self.conn,
+            _CompatConn(self.conn),
             config={
                 "mode": "custom_event",
                 "custom_message": "Global Event {invite}",
@@ -148,7 +148,7 @@ class ChatPromoOverrideTests(unittest.IsolatedAsyncioTestCase):
             ("partner_one", "Streamer Override {invite}"),
         )
         save_global_promo_mode(
-            self.conn,
+            _CompatConn(self.conn),
             config={
                 "mode": "custom_event",
                 "custom_message": "Global Event ohne Invite",
@@ -225,7 +225,7 @@ class ChatPromoOverrideTests(unittest.IsolatedAsyncioTestCase):
             ("partner_one", "Streamer Override {invite}"),
         )
         save_global_promo_mode(
-            self.conn,
+            _CompatConn(self.conn),
             config={
                 "mode": "custom_event",
                 "custom_message": "Expired Event {invite}",

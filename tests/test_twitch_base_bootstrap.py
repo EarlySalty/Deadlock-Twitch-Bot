@@ -77,6 +77,7 @@ class TwitchBaseBootstrapLifecycleTests(unittest.IsolatedAsyncioTestCase):
         harness._managed_bg_tasks = set()
         harness.spawned_names: list[str] = []
         harness.sync_calls: list[tuple[bool, bool]] = []
+        harness._runtime_bootstrap._ensure_social_media_workers = lambda: None
 
         def _spawn_bg_task(coro, name: str):
             harness.spawned_names.append(name)
@@ -118,12 +119,19 @@ class TwitchBaseBootstrapLifecycleTests(unittest.IsolatedAsyncioTestCase):
         harness._runtime_started = False
         harness._runtime_bootstrap = TwitchRuntimeBootstrap(harness)
         harness.api = object()
+        harness._internal_api_runner = object()
+        harness._bot_token_manager = object()
+        clip_fetcher = SimpleNamespace(cog_unload=lambda: None)
+        upload_worker = SimpleNamespace(cog_unload=lambda: None)
+        harness.clip_fetcher = clip_fetcher
+        harness.upload_worker = upload_worker
         harness._raid_bot = None
         harness._twitch_bot_token = ""
         harness._dashboard_embedded = False
         harness._managed_bg_tasks = set()
         harness._spawn_bg_task = lambda coro, name: coro.close()
         harness._sync_poll_interval_from_storage = lambda **kwargs: None
+        harness._runtime_bootstrap._ensure_social_media_workers = lambda: None
 
         class _FailOnceLoop(_FakeLoop):
             def __init__(self) -> None:
@@ -138,6 +146,7 @@ class TwitchBaseBootstrapLifecycleTests(unittest.IsolatedAsyncioTestCase):
                 self.running = True
 
         harness.poll_streams = _FailOnceLoop()
+        harness.invites_refresh = _FakeLoop()
 
         async def _cancel_managed_bg_tasks() -> None:
             return None
@@ -149,11 +158,116 @@ class TwitchBaseBootstrapLifecycleTests(unittest.IsolatedAsyncioTestCase):
                 await TwitchBaseCog.cog_load(harness)
 
             self.assertFalse(harness._runtime_started)
+            self.assertIsNotNone(harness.api)
+            self.assertIsNotNone(harness._internal_api_runner)
+            self.assertIsNotNone(harness._bot_token_manager)
+            self.assertIsNone(harness.clip_fetcher)
+            self.assertIsNone(harness.upload_worker)
 
             await TwitchBaseCog.cog_load(harness)
 
         self.assertTrue(harness._runtime_started)
         self.assertEqual(harness.poll_streams.start_calls, 2)
+
+    async def test_stop_runtime_shuts_down_components_in_order(self) -> None:
+        harness = _LifecycleHarness()
+        harness._runtime_started = True
+        harness._runtime_bootstrap = TwitchRuntimeBootstrap(harness)
+        harness._runtime_start_lock = asyncio.Lock()
+        harness._runtime_stop_lock = harness._runtime_start_lock
+        call_order: list[str] = []
+
+        class _FakeLoop:
+            def __init__(self, name: str) -> None:
+                self.name = name
+                self.running = True
+
+            def is_running(self) -> bool:
+                return self.running
+
+            def cancel(self) -> None:
+                call_order.append(f"{self.name}.cancel")
+                self.running = False
+
+        class _FakeChatBot:
+            def __init__(self) -> None:
+                self.adapter = SimpleNamespace(_host="127.0.0.1", _port=4343)
+
+            async def close(self) -> None:
+                call_order.append("chat_bot.close")
+
+        class _FakeWorker:
+            def __init__(self, name: str) -> None:
+                self.name = name
+
+            def cog_unload(self) -> None:
+                call_order.append(f"{self.name}.cog_unload")
+
+        harness.poll_streams = _FakeLoop("poll_streams")
+        harness.invites_refresh = _FakeLoop("invites_refresh")
+        harness._managed_bg_tasks = set()
+        harness._cancel_managed_bg_tasks = AsyncMock(side_effect=lambda: call_order.append("managed_tasks"))
+        harness.clip_fetcher = _FakeWorker("clip_fetcher")
+        harness.upload_worker = _FakeWorker("upload_worker")
+        harness._cancel_periodic_channel_join_task = AsyncMock(
+            side_effect=lambda: call_order.append("periodic_join")
+        )
+        harness._irc_lurker_tracker = SimpleNamespace(
+            stop=AsyncMock(side_effect=lambda: call_order.append("irc_tracker.stop"))
+        )
+        harness._twitch_chat_bot = _FakeChatBot()
+        harness._bot_token_manager = SimpleNamespace(
+            cleanup=AsyncMock(side_effect=lambda: call_order.append("bot_token_manager.cleanup"))
+        )
+        harness._web = object()
+        harness._stop_dashboard = AsyncMock(side_effect=lambda: call_order.append("dashboard.stop"))
+        harness._internal_api_runner = SimpleNamespace(is_running=True)
+        harness._stop_internal_api = AsyncMock(side_effect=lambda: call_order.append("internal_api.stop"))
+        harness._raid_bot = SimpleNamespace(
+            cleanup=AsyncMock(side_effect=lambda: call_order.append("raid_bot.cleanup"))
+        )
+        harness.api = SimpleNamespace(aclose=AsyncMock(side_effect=lambda: call_order.append("api.aclose")))
+        twl_command = SimpleNamespace(name="twl")
+        harness._twl_command = twl_command
+        harness.bot = SimpleNamespace(
+            get_command=lambda name: twl_command if name == "twl" else None,
+            remove_command=lambda name: call_order.append(f"remove_command:{name}"),
+        )
+        harness._can_bind_port_async = AsyncMock(return_value=(True, None))
+
+        with patch("bot.runtime_bootstrap.asyncio.sleep", AsyncMock(return_value=None)):
+            await TwitchRuntimeBootstrap(harness).stop_runtime()
+
+        self.assertEqual(
+            call_order,
+            [
+                "managed_tasks",
+                "poll_streams.cancel",
+                "invites_refresh.cancel",
+                "clip_fetcher.cog_unload",
+                "upload_worker.cog_unload",
+                "periodic_join",
+                "irc_tracker.stop",
+                "chat_bot.close",
+                "bot_token_manager.cleanup",
+                "dashboard.stop",
+                "internal_api.stop",
+                "raid_bot.cleanup",
+                "api.aclose",
+                "remove_command:twl",
+            ],
+        )
+        self.assertFalse(harness._runtime_started)
+        self.assertIsNone(harness.clip_fetcher)
+        self.assertIsNone(harness.upload_worker)
+        self.assertIsNone(harness._irc_lurker_tracker)
+        self.assertIsNone(harness._twitch_chat_bot)
+        self.assertIsNone(harness._bot_token_manager)
+        self.assertIsNone(harness._internal_api_runner)
+        self.assertIsNone(harness._raid_bot)
+        self.assertIsNone(harness.api)
+        self.assertIsNone(harness._twl_command)
+        self.assertEqual(harness._can_bind_port_async.await_count, 2)
 
     async def test_spawn_bg_task_tracks_and_discards_completed_tasks(self) -> None:
         harness = _LifecycleHarness()

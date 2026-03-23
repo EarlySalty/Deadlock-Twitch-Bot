@@ -6,6 +6,7 @@ import asyncio
 import contextlib
 import ipaddress
 import os
+import socket
 from typing import Any
 from urllib.parse import urlparse
 
@@ -126,6 +127,7 @@ class TwitchRuntimeBootstrap:
         cog._managed_bg_tasks = set()
         cog._runtime_started = False
         cog._runtime_start_lock = asyncio.Lock()
+        cog._runtime_stop_lock = cog._runtime_start_lock
 
         cog._dashboard_token = load_secret_value("TWITCH_DASHBOARD_TOKEN") or None
         cog._dashboard_noauth = _parse_env_bool(
@@ -343,19 +345,54 @@ class TwitchRuntimeBootstrap:
         else:
             log.warning("Raid-Bot und Chat-Bot deaktiviert, da TWITCH_CLIENT_ID/SECRET fehlen.")
 
-        if cog.api:
-            from .social_media.clip_fetcher import ClipFetcher
-            from .social_media.clip_manager import ClipManager
-            from .social_media.upload_worker import UploadWorker
-
-            cog.clip_manager = ClipManager(twitch_api=cog.api)
-            cog.clip_fetcher = ClipFetcher(cog.bot, cog.api, cog.clip_manager)
-            cog.upload_worker = UploadWorker(cog.bot, cog.clip_manager)
-            log.info(
-                "Social Media Clip Management initialized (ClipManager + ClipFetcher + UploadWorker)"
-            )
+        self._ensure_social_media_workers()
 
         self._register_reload_manager()
+
+    def _ensure_social_media_workers(self) -> None:
+        cog = self._cog
+        if not cog.api:
+            return
+        if (
+            getattr(cog, "clip_manager", None) is not None
+            and getattr(cog, "clip_fetcher", None) is not None
+            and getattr(cog, "upload_worker", None) is not None
+        ):
+            return
+
+        from .social_media.clip_fetcher import ClipFetcher
+        from .social_media.clip_manager import ClipManager
+        from .social_media.upload_worker import UploadWorker
+
+        cog.clip_manager = ClipManager(twitch_api=cog.api)
+        cog.clip_fetcher = ClipFetcher(cog.bot, cog.api, cog.clip_manager)
+        cog.upload_worker = UploadWorker(cog.bot, cog.clip_manager)
+        log.info(
+            "Social Media Clip Management initialized (ClipManager + ClipFetcher + UploadWorker)"
+        )
+
+    def _stop_social_media_workers(self) -> None:
+        cog = self._cog
+
+        if cog.clip_fetcher:
+            try:
+                cog.clip_fetcher.cog_unload()
+                log.debug("ClipFetcher gecancelt")
+            except Exception:
+                log.exception("Konnte ClipFetcher nicht canceln")
+            finally:
+                cog.clip_fetcher = None
+
+        if cog.upload_worker:
+            try:
+                cog.upload_worker.cog_unload()
+                log.debug("UploadWorker gecancelt")
+            except Exception:
+                log.exception("Konnte UploadWorker nicht canceln")
+            finally:
+                cog.upload_worker = None
+
+        cog.clip_manager = None
 
     def _register_reload_manager(self) -> None:
         cog = self._cog
@@ -450,21 +487,249 @@ class TwitchRuntimeBootstrap:
             len(cog._reload_manager.get_all_names()),
         )
 
+    def _runtime_lifecycle_lock(self) -> asyncio.Lock:
+        cog = self._cog
+        lock = getattr(cog, "_runtime_start_lock", None)
+        if lock is None:
+            lock = getattr(cog, "_runtime_stop_lock", None)
+        if lock is None:
+            lock = asyncio.Lock()
+        cog._runtime_start_lock = lock
+        cog._runtime_stop_lock = lock
+        return lock
+
+    async def _can_bind_port_async(self, host: str, port: int) -> tuple[bool, str | None]:
+        port_probe = getattr(self._cog, "_can_bind_port_async", None)
+        if callable(port_probe):
+            return await port_probe(host, port)
+
+        max_retries = 5
+        retry_delay = 0.5
+        last_error: str | None = None
+
+        for attempt in range(max_retries):
+            try:
+                families = [
+                    info[0] for info in socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
+                ]
+            except Exception as exc:
+                families = [socket.AF_INET]
+                last_error = str(exc)
+
+            success = False
+            seen = set()
+            for family in families or [socket.AF_INET]:
+                if family in seen:
+                    continue
+                seen.add(family)
+                try:
+                    with socket.socket(family, socket.SOCK_STREAM) as sock:
+                        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                        sock.bind((host, port))
+                    success = True
+                    break
+                except OSError as exc:
+                    last_error = str(exc)
+                    continue
+
+            if success:
+                return True, None
+
+            if attempt < max_retries - 1:
+                log.debug(
+                    "Port %s:%s belegt, versuche es erneut in %ss... (Versuch %s/%s)",
+                    host,
+                    port,
+                    retry_delay,
+                    attempt + 1,
+                    max_retries,
+                )
+                await asyncio.sleep(retry_delay)
+
+        return False, last_error
+
+    async def _wait_for_port_release(self, *, host: str, port: int, component: str) -> None:
+        await asyncio.sleep(2.0)
+        for retry in range(10):
+            can_bind, _ = await self._can_bind_port_async(host, port)
+            if can_bind:
+                log.info(
+                    "%s Port %s:%s erfolgreich freigegeben",
+                    component,
+                    host,
+                    port,
+                )
+                return
+            if retry < 9:
+                log.debug(
+                    "Warte auf Port-Freigabe %s:%s... (%d/10)",
+                    host,
+                    port,
+                    retry + 1,
+                )
+                await asyncio.sleep(1.0)
+            else:
+                log.warning(
+                    "Port %s:%s nach 10s noch belegt – fahre trotzdem fort",
+                    host,
+                    port,
+                )
+
+    async def _cleanup_runtime_components(
+        self,
+        *,
+        wait_for_port_release: bool,
+        full_shutdown: bool,
+    ) -> None:
+        cog = self._cog
+        cog._runtime_started = False
+
+        try:
+            await cog._cancel_managed_bg_tasks()
+        except Exception:
+            log.exception("Konnte verwaltete Background-Tasks nicht stoppen")
+
+        loops = (cog.poll_streams, cog.invites_refresh)
+        for lp in loops:
+            try:
+                if lp.is_running():
+                    lp.cancel()
+                    log.debug("Loop gecancelt: %r", lp)
+            except Exception:
+                log.exception("Konnte Loop nicht canceln: %r", lp)
+
+        self._stop_social_media_workers()
+
+        try:
+            await cog._cancel_periodic_channel_join_task()
+        except Exception:
+            log.exception("Konnte periodic channel maintenance task nicht stoppen")
+
+        if cog._irc_lurker_tracker:
+            try:
+                await cog._irc_lurker_tracker.stop()
+                log.debug("Experimental IRC Lurker Tracker gestoppt")
+            except Exception:
+                log.exception("Konnte Experimental IRC Lurker Tracker nicht stoppen")
+            finally:
+                cog._irc_lurker_tracker = None
+
+        log.debug("EventSub Webhook: kein expliziter Teardown nötig")
+
+        chat_bot = getattr(cog, "_twitch_chat_bot", None)
+        if chat_bot:
+            log.info("Beende Twitch Chat Bot...")
+            try:
+                if hasattr(chat_bot, "close"):
+                    await chat_bot.close()
+                    log.debug("Chat Bot close() abgeschlossen")
+
+                if wait_for_port_release:
+                    adapter = getattr(chat_bot, "adapter", None)
+                    if adapter:
+                        adapter_host = getattr(adapter, "_host", "127.0.0.1")
+                        adapter_port = int(getattr(adapter, "_port", 4343))
+                        await self._wait_for_port_release(
+                            host=adapter_host,
+                            port=adapter_port,
+                            component="Chat Bot Adapter",
+                        )
+
+                log.info("Twitch Chat Bot beendet")
+            except Exception:
+                log.exception("Twitch Chat Bot shutdown fehlgeschlagen")
+            finally:
+                cog._twitch_chat_bot = None
+
+        if full_shutdown and cog._bot_token_manager:
+            try:
+                await cog._bot_token_manager.cleanup()
+                log.debug("Bot Token Manager cleanup abgeschlossen")
+            except Exception:
+                log.exception("Twitch Bot Token Manager shutdown fehlgeschlagen")
+            finally:
+                cog._bot_token_manager = None
+
+        if cog._web:
+            log.info("Stoppe Twitch Dashboard...")
+            try:
+                await cog._stop_dashboard()
+                if wait_for_port_release:
+                    dashboard_host = getattr(
+                        cog,
+                        "_dashboard_host",
+                        TWITCH_DASHBOARD_HOST or "127.0.0.1",
+                    )
+                    dashboard_port_raw = getattr(cog, "_dashboard_port", TWITCH_DASHBOARD_PORT)
+                    try:
+                        dashboard_port = int(dashboard_port_raw)
+                    except Exception:
+                        dashboard_port = int(TWITCH_DASHBOARD_PORT)
+                    await self._wait_for_port_release(
+                        host=dashboard_host,
+                        port=dashboard_port,
+                        component="Dashboard",
+                    )
+                log.info("Twitch Dashboard gestoppt")
+            except Exception:
+                log.exception("Dashboard shutdown fehlgeschlagen")
+
+        runner = cog._internal_api_runner
+        if runner and runner.is_running:
+            log.info("Stoppe interne Twitch API...")
+            try:
+                await cog._stop_internal_api()
+            except Exception:
+                log.exception("Internal API shutdown fehlgeschlagen")
+        if full_shutdown and runner is not None:
+            cog._internal_api_runner = None
+
+        if full_shutdown and cog._raid_bot:
+            try:
+                await cog._raid_bot.cleanup()
+                log.debug("RaidBot cleanup abgeschlossen")
+            except Exception:
+                log.exception("RaidBot cleanup fehlgeschlagen")
+            finally:
+                cog._raid_bot = None
+
+        if full_shutdown and cog.api is not None:
+            log.info("Schließe Twitch API Session...")
+            try:
+                if wait_for_port_release:
+                    await asyncio.sleep(1.0)
+                await cog.api.aclose()
+                log.info("Twitch API Session geschlossen")
+            except asyncio.CancelledError as exc:
+                log.debug("Schließen der TwitchAPI-Session abgebrochen: %s", exc)
+                raise
+            except Exception:
+                log.exception("TwitchAPI-Session konnte nicht geschlossen werden")
+            finally:
+                cog.api = None
+
+        if full_shutdown:
+            try:
+                if cog._twl_command is not None:
+                    existing = cog.bot.get_command(cog._twl_command.name)
+                    if existing is cog._twl_command:
+                        cog.bot.remove_command(cog._twl_command.name)
+                        log.debug("!twl Command deregistriert")
+            except Exception:
+                log.exception("Konnte !twl-Command nicht deregistrieren")
+            finally:
+                cog._twl_command = None
+
     async def start_runtime(self) -> None:
         cog = self._cog
-        start_lock = getattr(cog, "_runtime_start_lock", None)
-        if start_lock is None:
-            start_lock = asyncio.Lock()
-            cog._runtime_start_lock = start_lock
-
-        async with start_lock:
+        async with self._runtime_lifecycle_lock():
             if getattr(cog, "_runtime_started", False):
                 return
 
-            started_poll_streams = False
             try:
                 if cog.api:
                     await asyncio.to_thread(storage_pg.prepare_runtime_storage)
+                    self._ensure_social_media_workers()
                     cog._spawn_bg_task(cog._startup_db_warmup(), "twitch.db_warmup")
 
                 if cog._raid_bot and cog._twitch_bot_token:
@@ -487,7 +752,6 @@ class TwitchRuntimeBootstrap:
 
                 if not cog.poll_streams.is_running():
                     cog.poll_streams.start()
-                    started_poll_streams = True
 
                 cog._spawn_bg_task(cog._ensure_category_id(), "twitch.ensure_category_id")
                 cog._spawn_bg_task(cog._load_invite_codes_from_db(), "twitch.load_invites")
@@ -503,13 +767,21 @@ class TwitchRuntimeBootstrap:
                     cog._spawn_bg_task(cog._scout_deadlock_channels(), "twitch.scout_deadlock")
                 cog._spawn_bg_task(cog._register_views_after_ready(), "twitch.views_warmup")
             except Exception:
-                if started_poll_streams and cog.poll_streams.is_running():
-                    with contextlib.suppress(Exception):
-                        cog.poll_streams.cancel()
-                cancel_tasks = getattr(cog, "_cancel_managed_bg_tasks", None)
-                if callable(cancel_tasks):
-                    with contextlib.suppress(Exception):
-                        await cancel_tasks()
+                with contextlib.suppress(Exception):
+                    await self._cleanup_runtime_components(
+                        wait_for_port_release=False,
+                        full_shutdown=False,
+                    )
                 raise
             else:
                 cog._runtime_started = True
+
+    async def stop_runtime(self) -> None:
+        async with self._runtime_lifecycle_lock():
+            log.info("Twitch Cog Unload gestartet – fahre alle Ressourcen herunter...")
+            await self._cleanup_runtime_components(
+                wait_for_port_release=True,
+                full_shutdown=True,
+            )
+            await asyncio.sleep(0.5)
+            log.info("Twitch Cog Unload abgeschlossen")

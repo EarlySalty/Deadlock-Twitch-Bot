@@ -1,8 +1,7 @@
 """PostgreSQL storage layer for Twitch analytics.
 
-The storage boundary is now native psycopg with pooled connections, explicit
-transactions, and PostgreSQL-oriented helpers. Remaining sqlite-era SQL
-constructs in callers are transitional blockers, not storage architecture.
+The storage boundary is native psycopg with pooled connections, explicit
+transactions, and PostgreSQL-oriented helpers.
 """
 
 from __future__ import annotations
@@ -1024,7 +1023,7 @@ def delete_streamer(conn, login: str) -> int:
 
 
 # ---------------------------------------------------------------------------
-# Schema: all non-auth Twitch tables (auth tables stay in SQLite)
+# Schema bootstrap for Twitch runtime tables
 # ---------------------------------------------------------------------------
 
 
@@ -2931,7 +2930,7 @@ def ensure_schema(conn) -> None:
     _seed_default_templates_pg(conn)
 
     # -----------------------------------------------------------------------
-    # Auth tables (migrated from SQLite → PostgreSQL)
+    # Auth tables
     # -----------------------------------------------------------------------
 
     # 14) Raid OAuth tokens (encrypted)
@@ -3177,7 +3176,7 @@ def ensure_schema(conn) -> None:
     )
     _repair_raid_identity_schema()
 
-    # 20) Web-Sessions (migrated from SQLite)
+    # 20) Web-Sessions
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS dashboard_sessions (

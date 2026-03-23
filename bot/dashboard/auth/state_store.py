@@ -7,7 +7,6 @@ import secrets
 import time
 from typing import Any
 
-from ...core.constants import log
 from ...storage import sessions_db
 
 _TWITCH_OAUTH_STATE_TYPE = "oauth_state:twitch"
@@ -19,6 +18,10 @@ _RATE_LIMIT_SESSION_TYPE = "rate_limit:dashboard_auth"
 
 def _now() -> float:
     return time.time()
+
+
+class DashboardAuthRateLimitStoreUnavailable(RuntimeError):
+    """Raised when the durable auth rate-limit store cannot be reached."""
 
 
 class DashboardAuthStateRepository:
@@ -165,12 +168,11 @@ class DashboardAuthStateRepository:
 
 
 class DashboardAuthRateLimitStore:
-    """Durable sliding-window limiter with in-memory fallback for degraded mode."""
+    """Durable sliding-window limiter backed by shared PostgreSQL session storage."""
 
     def allow_request(
         self,
         *,
-        owner: Any,
         key: str,
         max_requests: int,
         window_seconds: float,
@@ -184,7 +186,7 @@ class DashboardAuthRateLimitStore:
 
         bucket_prefix = self._bucket_prefix(key=key, window_seconds=window_seconds)
         try:
-            allowed = sessions_db.reserve_rate_limit_slot(
+            return sessions_db.reserve_rate_limit_slot(
                 bucket_key=bucket_prefix,
                 session_type=_RATE_LIMIT_SESSION_TYPE,
                 session_id=self._hit_record_id(bucket_prefix, current),
@@ -197,20 +199,10 @@ class DashboardAuthRateLimitStore:
                 expires_at=current + float(window_seconds),
                 max_requests=max_requests,
             )
-            if not allowed:
-                self._mirror_rate_limit(owner, key, current, window_seconds, append_now=False)
-                return False
-            self._mirror_rate_limit(owner, key, current, window_seconds, append_now=True)
-            return True
         except Exception as exc:
-            log.debug("Dashboard auth rate limit store unavailable; using local fallback: %s", exc)
-            return self._fallback_allow_request(
-                owner=owner,
-                key=key,
-                max_requests=max_requests,
-                window_seconds=window_seconds,
-                now=current,
-            )
+            raise DashboardAuthRateLimitStoreUnavailable(
+                "dashboard auth rate limit store unavailable"
+            ) from exc
 
     @staticmethod
     def _bucket_prefix(*, key: str, window_seconds: float) -> str:
@@ -220,47 +212,3 @@ class DashboardAuthRateLimitStore:
     @staticmethod
     def _hit_record_id(bucket_prefix: str, now: float) -> str:
         return f"{bucket_prefix}:{int(now * 1000)}:{secrets.token_urlsafe(6)}"
-
-    @staticmethod
-    def _rate_limit_cache(owner: Any) -> dict[str, list[float]]:
-        cache = getattr(owner, "_rate_limits", None)
-        if isinstance(cache, dict):
-            return cache
-        cache = {}
-        setattr(owner, "_rate_limits", cache)
-        return cache
-
-    def _fallback_allow_request(
-        self,
-        *,
-        owner: Any,
-        key: str,
-        max_requests: int,
-        window_seconds: float,
-        now: float,
-    ) -> bool:
-        cache = self._rate_limit_cache(owner)
-        hits = [ts for ts in cache.get(key, []) if now - float(ts) < window_seconds]
-        if len(hits) >= max_requests:
-            cache[key] = hits
-            return False
-        hits.append(now)
-        cache[key] = hits
-        if len(cache) > 1000:
-            cache.clear()
-        return True
-
-    def _mirror_rate_limit(
-        self,
-        owner: Any,
-        key: str,
-        now: float,
-        window_seconds: float,
-        *,
-        append_now: bool,
-    ) -> None:
-        cache = self._rate_limit_cache(owner)
-        hits = [ts for ts in cache.get(key, []) if now - float(ts) < window_seconds]
-        if append_now:
-            hits.append(now)
-        cache[key] = hits

@@ -6,6 +6,9 @@ from typing import Any
 
 from aiohttp import web
 
+from .pages import build_market_research_page
+from .route_deps import MarketRouteDeps
+
 
 def build_route_defs(server: Any) -> list[web.RouteDef]:
     """Return route definitions for market research routes."""
@@ -18,303 +21,20 @@ def build_route_defs(server: Any) -> list[web.RouteDef]:
 async def market_research(server: Any, request: web.Request) -> web.StreamResponse:
     """Serve the internal Market Research dashboard."""
     server._require_token(request)
-
-    page_html = """
-        <!DOCTYPE html>
-        <html lang="de">
-        <head>
-            <meta charset="UTF-8">
-            <meta name="viewport" content="width=device-width, initial-scale=1.0">
-            <title>Deadlock Market Research (Internal)</title>
-            <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-            <style>
-                body { font-family: 'Segoe UI', sans-serif; background: #0f172a; color: #e2e8f0; margin: 0; padding: 20px; }
-                .container { max-width: 1400px; margin: 0 auto; }
-                h1 { color: #f8fafc; border-bottom: 1px solid #334155; padding-bottom: 10px; }
-                .card { background: #1e293b; border-radius: 8px; padding: 20px; margin-bottom: 20px; border: 1px solid #334155; }
-                .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
-                table { width: 100%; border-collapse: collapse; margin-top: 10px; }
-                th, td { text-align: left; padding: 12px; border-bottom: 1px solid #334155; }
-                th { color: #94a3b8; font-weight: 600; text-transform: uppercase; font-size: 0.85rem; }
-                tr:hover { background: #334155; }
-                .badge { padding: 4px 8px; border-radius: 4px; font-size: 0.8rem; font-weight: 600; }
-                .badge-live { background: #ef4444; color: white; }
-                .stat-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 20px; margin-bottom: 20px; }
-                .stat-box { background: #0f172a; padding: 15px; border-radius: 6px; text-align: center; border: 1px solid #334155; }
-                .stat-val { font-size: 2rem; font-weight: bold; color: #38bdf8; }
-                .stat-label { color: #94a3b8; font-size: 0.9rem; }
-                .progress-bar { background: #334155; height: 8px; border-radius: 4px; overflow: hidden; margin-top: 5px; }
-                .progress-fill { height: 100%; background: #38bdf8; }
-                .sentiment-pos { color: #4ade80; }
-                .sentiment-neg { color: #f87171; }
-                .question-item { border-left: 4px solid #38bdf8; padding: 10px; margin-bottom: 10px; background: #0f172a; border-radius: 0 4px 4px 0; }
-                .question-meta { font-size: 0.8rem; color: #94a3b8; margin-top: 5px; }
-            </style>
-        </head>
-        <body>
-            <div class="container">
-                <h1>Deadlock DACH Market Research 🕵️‍♂️</h1>
-
-                <div class="stat-grid" id="kpi">
-                    <!-- Loaded via JS -->
-                </div>
-
-                <div class="card">
-                    <h2>📈 Market Volume (24h)</h2>
-                    <div style="height: 300px; position: relative;">
-                        <canvas id="marketChart"></canvas>
-                    </div>
-                </div>
-
-                <div class="grid-2">
-                    <div class="card">
-                        <h2>🔥 Meta Snapshot (Top Mentions 1h)</h2>
-                        <table id="meta-table">
-                            <thead><tr><th>Term</th><th>Mentions</th><th>Trend</th></tr></thead>
-                            <tbody></tbody>
-                        </table>
-                    </div>
-                    <div class="card">
-                        <h2>🌡️ Sentiment Analysis</h2>
-                        <div id="sentiment-chart" style="padding: 20px; text-align: center;"></div>
-                    </div>
-                </div>
-
-                <div class="grid-2">
-                    <div class="card">
-                        <h2>🕸️ Viewer Overlap (Shared Chatters)</h2>
-                        <table id="overlap-table">
-                            <thead><tr><th>Streamer A</th><th>Streamer B</th><th>Shared Users</th></tr></thead>
-                            <tbody></tbody>
-                        </table>
-                    </div>
-                    <div class="card">
-                        <h2>❓ Question Radar (Latest)</h2>
-                        <div id="questions" style="max-height: 400px; overflow-y: auto; padding-right: 10px;">
-                            <!-- Questions go here -->
-                        </div>
-                    </div>
-                </div>
-
-                <div class="card">
-                    <h2>Live Monitored Channels</h2>
-                    <table id="channels">
-                        <thead>
-                            <tr>
-                                <th>Streamer</th>
-                                <th>Viewers</th>
-                                <th>Chat Activity</th>
-                                <th>Lurker %</th>
-                                <th>Msg/Min</th>
-                                <th>Top Topic</th>
-                            </tr>
-                        </thead>
-                        <tbody></tbody>
-                    </table>
-                </div>
-            </div>
-
-            <script>
-                let marketChart = null;
-                const escapeHtml = (value) => String(value ?? '')
-                    .replace(/&/g, '&amp;')
-                    .replace(/</g, '&lt;')
-                    .replace(/>/g, '&gt;')
-                    .replace(/"/g, '&quot;')
-                    .replace(/'/g, '&#39;');
-
-                const showError = (msg) => {
-                    const kpi = document.getElementById('kpi');
-                    if (kpi) {
-                        kpi.innerHTML = `
-                            <div class="stat-box">
-                                <div class="stat-val" style="color:#f87171;">Fehler</div>
-                                <div class="stat-label">${escapeHtml(msg)}</div>
-                            </div>
-                        `;
-                    }
-                };
-
-                async function loadData() {
-                    const res = await fetch('/twitch/api/market_data');
-                    let data = null;
-                    try {
-                        data = await res.json();
-                    } catch (err) {
-                        console.error('market_data: invalid JSON', err);
-                        showError('Daten konnten nicht geladen werden.');
-                        return;
-                    }
-
-                    if (!res.ok || !data || data.error) {
-                        const msg = (data && data.error) ? data.error : `${res.status} ${res.statusText}`;
-                        console.error('market_data: request failed', msg);
-                        showError(msg);
-                        return;
-                    }
-
-                    const {
-                        total_monitored = 0,
-                        total_viewers = 0,
-                        avg_chat_health = 0,
-                        total_messages = 0,
-                        avg_lurker_ratio = 0,
-                        market_history = [],
-                        questions = [],
-                        meta_snapshot = [],
-                        sentiment = { positive: 0, negative: 0, neutral: 0, pos_pct: 0, neg_pct: 0, neu_pct: 0 },
-                        overlap = [],
-                        channels = [],
-                    } = data || {};
-
-                    const safeNumber = (val) => {
-                        const num = Number(val);
-                        return Number.isFinite(num) ? num : 0;
-                    };
-
-                    document.getElementById('kpi').innerHTML = `
-                        <div class="stat-box">
-                            <div class="stat-val">${total_monitored}</div>
-                            <div class="stat-label">Active Monitored Channels</div>
-                        </div>
-                        <div class="stat-box">
-                            <div class="stat-val">${safeNumber(total_viewers).toLocaleString()}</div>
-                            <div class="stat-label">Total Deadlock Viewers (DACH)</div>
-                        </div>
-                        <div class="stat-box">
-                            <div class="stat-val">${safeNumber(avg_chat_health).toFixed(1)}%</div>
-                            <div class="stat-label">Avg Chat Engagement</div>
-                        </div>
-                        <div class="stat-box">
-                            <div class="stat-val">${safeNumber(total_messages).toLocaleString()}</div>
-                            <div class="stat-label">Messages Analyzed (1h)</div>
-                        </div>
-                        <div class="stat-box">
-                            <div class="stat-val">${safeNumber(avg_lurker_ratio).toFixed(1)}%</div>
-                            <div class="stat-label">Avg Lurker Ratio</div>
-                        </div>
-                    `;
-
-                    const ctx = document.getElementById('marketChart').getContext('2d');
-                    const chartLabels = market_history.map(h => {
-                        const d = new Date(h.ts + 'Z');
-                        return d.getHours().toString().padStart(2, '0') + ':' + d.getMinutes().toString().padStart(2, '0');
-                    });
-
-                    const chartData = {
-                        labels: chartLabels,
-                        datasets: [
-                            {
-                                label: 'Total Viewers',
-                                data: market_history.map(h => safeNumber(h.total_viewers)),
-                                borderColor: '#38bdf8',
-                                backgroundColor: 'rgba(56, 189, 248, 0.1)',
-                                fill: true,
-                                tension: 0.4
-                            },
-                            {
-                                label: 'Streamer Count',
-                                data: market_history.map(h => safeNumber(h.streamer_count) * 10),
-                                borderColor: '#f472b6',
-                                borderDash: [5, 5],
-                                tension: 0.1,
-                                yAxisID: 'y1'
-                            }
-                        ]
-                    };
-
-                    if (marketChart) {
-                        marketChart.data = chartData;
-                        marketChart.update();
-                    } else {
-                        marketChart = new Chart(ctx, {
-                            type: 'line',
-                            data: chartData,
-                            options: {
-                                responsive: true,
-                                maintainAspectRatio: false,
-                                scales: {
-                                    y: { beginAtZero: true, grid: { color: '#334155' } },
-                                    y1: { position: 'right', beginAtZero: true, grid: { display: false } },
-                                    x: { grid: { display: false } }
-                                },
-                                plugins: { legend: { labels: { color: '#e2e8f0' } } }
-                            }
-                        });
-                    }
-
-                    document.getElementById('questions').innerHTML = questions.map(q => `
-                        <div class="question-item">
-                            <div>${escapeHtml(q.content)}</div>
-                            <div class="question-meta">in @${escapeHtml(q.streamer)} • ${((q.ts || '').split('T')[1] || '').substring(0, 5) || '--:--'} Uhr</div>
-                        </div>
-                    `).join('');
-
-                    document.getElementById('meta-table').querySelector('tbody').innerHTML = meta_snapshot.map(m => `
-                        <tr>
-                            <td><strong>${escapeHtml(m.term)}</strong></td>
-                            <td>${safeNumber(m.count)}</td>
-                            <td><div class="progress-bar"><div class="progress-fill" style="width: ${Math.min(100, safeNumber(m.count) * 2)}%"></div></div></td>
-                        </tr>
-                    `).join('');
-
-                    const sent = sentiment;
-                    document.getElementById('sentiment-chart').innerHTML = `
-                        <div style="display: flex; justify-content: space-around; font-size: 1.2rem;">
-                            <div class="sentiment-pos">Positiv: ${sent.positive} (${sent.pos_pct}%)</div>
-                            <div style="color: #94a3b8;">Neutral: ${sent.neutral} (${sent.neu_pct}%)</div>
-                            <div class="sentiment-neg">Negativ: ${sent.negative} (${sent.neg_pct}%)</div>
-                        </div>
-                        <div style="display: flex; height: 20px; margin-top: 15px; border-radius: 10px; overflow: hidden;">
-                            <div style="width: ${sent.pos_pct}%; background: #4ade80;"></div>
-                            <div style="width: ${sent.neu_pct}%; background: #94a3b8;"></div>
-                            <div style="width: ${sent.neg_pct}%; background: #f87171;"></div>
-                        </div>
-                    `;
-
-                    document.getElementById('overlap-table').querySelector('tbody').innerHTML = overlap.map(o => `
-                        <tr>
-                            <td>${escapeHtml(o.a)}</td>
-                            <td>${escapeHtml(o.b)}</td>
-                            <td>${safeNumber(o.shared)}</td>
-                        </tr>
-                    `).join('');
-
-                    const tbody = document.querySelector('#channels tbody');
-                    tbody.innerHTML = channels.map(c => `
-                        <tr>
-                            <td>
-                                <strong>${escapeHtml(c.login)}</strong>
-                                ${c.is_live ? '<span class="badge badge-live">LIVE</span>' : ''}
-                            </td>
-                            <td>${safeNumber(c.viewers)}</td>
-                            <td>${safeNumber(c.chat_health).toFixed(1)}%</td>
-                            <td>${safeNumber(c.lurker_ratio).toFixed(1)}%</td>
-                            <td>${safeNumber(c.msg_per_min).toFixed(1)}</td>
-                            <td>${escapeHtml(c.top_topic || '-')}</td>
-                        </tr>
-                    `).join('');
-                }
-                loadData();
-                setInterval(loadData, 30000);
-            </script>
-        </body>
-        </html>
-        """
-    return web.Response(text=page_html, content_type="text/html")
+    return web.Response(text=build_market_research_page(), content_type="text/html")
 
 
 async def api_market_data(
     server: Any,
     request: web.Request,
     *,
-    deps: dict[str, Any],
+    deps: MarketRouteDeps,
 ) -> web.Response:
     """API providing aggregated data for market research including Meta & Sentiment."""
-    json_module = deps["json"]
-    log = deps["log"]
-    storage_module = deps["storage"]
-    uuid4_fn = deps["uuid4"]
+    json_module = deps.json
+    log = deps.log
+    storage_module = deps.storage
+    uuid4_fn = deps.uuid4
 
     admin_token = request.headers.get("X-Admin-Token")
     if not (
@@ -361,7 +81,6 @@ async def api_market_data(
 
                 msgs = chat_stats[0] or 0
                 active_chatters = chat_stats[1] or 0
-
                 session_id_row = conn.execute(
                     "SELECT active_session_id FROM twitch_live_state WHERE streamer_login = %s",
                     (login,),

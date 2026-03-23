@@ -402,7 +402,7 @@ Kontakt über den Discord-Server.</p>
 Community-Clips auf TikTok, YouTube und Instagram verwendet.</p>
 
 <h2>4. Speicherung & Sicherheit</h2>
-<p>Clip-Metadaten und OAuth-Tokens werden in einer lokalen SQLite-Datenbank gespeichert.
+<p>Clip-Metadaten und OAuth-Tokens werden in der gemeinsamen PostgreSQL-Datenbank gespeichert.
 Zugangsdaten werden mit AES-256-GCM verschlüsselt. Ein Zugriff von außen auf die
 Datenbank besteht nicht.</p>
 

@@ -249,13 +249,44 @@ class InternalApiAuthTests(unittest.IsolatedAsyncioTestCase):
                 self.assertNotIn(case["secret_fragment"], raw_text)
                 self.assertTrue(
                     any(
-                        f"internal api {case['context']} bad request (ValueError)" in line
+                        f"internal api {case['context']} bad request (ValueError" in line
                         for line in captured.output
                     )
                 )
                 self.assertTrue(
                     all(case["secret_fragment"] not in line for line in captured.output)
                 )
+
+    async def test_raid_requirements_safe_bad_request_logs_sanitized_reason(self) -> None:
+        async def _raise_raid_requirements_cb(login: str) -> str:
+            del login
+            raise ValueError("Invalid Discord user id")
+
+        app = build_internal_api_app(
+            token="secret-token",
+            raid_requirements_cb=_raise_raid_requirements_cb,
+        )
+
+        with self.assertLogs("TwitchStreams", level="WARNING") as captured:
+            async with TestServer(app) as server:
+                async with TestClient(server) as client:
+                    response = await client.post(
+                        f"{INTERNAL_API_BASE_PATH}/raid/requirements",
+                        headers={INTERNAL_TOKEN_HEADER: "secret-token"},
+                        json={"login": "partner_one"},
+                    )
+                    payload = await response.json()
+
+        self.assertEqual(response.status, 400)
+        self.assertEqual(payload.get("error"), "bad_request")
+        self.assertEqual(payload.get("message"), "invalid request body")
+        self.assertTrue(
+            any(
+                "internal api raid requirements bad request (ValueError: Invalid Discord user id)"
+                in line
+                for line in captured.output
+            )
+        )
 
     async def test_raid_auth_url_allows_discord_state_target(self) -> None:
         seen_logins: list[str] = []

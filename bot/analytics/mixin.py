@@ -15,8 +15,8 @@ from discord.ext import tasks
 
 from ..core.chat_bots import build_known_chat_bot_not_in_clause, is_known_chat_bot
 from ..logging_setup import log_path
-from .. import storage as storage_oauth  # SQLite — OAuth tokens & raid auth state
-from ..storage import pg as storage  # PostgreSQL — analytics data
+from .. import storage as storage_runtime
+from ..storage import pg as storage
 
 # NOTE: Twitch game-owner analytics are intentionally unused.
 # The data is global and tied to owned/managed games, not to individual
@@ -25,6 +25,7 @@ from ..storage import pg as storage  # PostgreSQL — analytics data
 log = logging.getLogger("TwitchStreams.Analytics")
 _IRC_EXPERIMENT_LOG = logging.getLogger("TwitchStreams.Analytics.IRCLurkerExperiment")
 _IRC_EXPERIMENT_LOG_FILE = log_path("twitch_irc_lurker_experiment.log")
+_CHATTERS_STARTUP_GRACE_SECONDS = 45.0
 
 
 def _ensure_irc_experiment_logger() -> logging.Logger:
@@ -71,6 +72,8 @@ class TwitchAnalyticsMixin:
         self._last_followers_diagnostic: dict[str, object] | None = None
         self._last_analytics_decision_sample: dict[str, object] | None = None
         self._irc_lurker_experiment_session_stats: dict[int, dict[str, object]] = {}
+        self._chatters_startup_grace_started_at = time.monotonic()
+        self._chatters_startup_deferral_logged = False
         _ensure_irc_experiment_logger()
         self._analytics_task = self.collect_analytics_data.start()
         self._chatters_task = self.collect_chatters_data.start()
@@ -586,7 +589,7 @@ class TwitchAnalyticsMixin:
         # Note: We should actually check if they have the specific scope,
         # but for now we assume the new scope set is used if they re-authed.
         try:
-            with storage_oauth.transaction() as conn:
+            with storage_runtime.transaction() as conn:
                 rows = conn.execute(
                     """
                     SELECT twitch_user_id, twitch_login
@@ -838,6 +841,45 @@ class TwitchAnalyticsMixin:
             warned = set()
             self._chatters_user_fallback_warned = warned
         return warned
+
+    def _should_defer_chatters_collection_for_startup(self) -> bool:
+        """Avoid false chatters failures while bot auth/chat runtime is still warming up."""
+        if getattr(self, "_twitch_chat_bot", None):
+            self._chatters_startup_deferral_logged = False
+            return False
+
+        token_mgr = getattr(self, "_bot_token_manager", None)
+        if not token_mgr or not getattr(self, "_raid_bot", None):
+            return False
+
+        cached_bot_token = str(getattr(self, "_twitch_bot_token", "") or "").strip()
+        manager_token = str(getattr(token_mgr, "access_token", "") or "").strip()
+        manager_bot_id = str(getattr(token_mgr, "bot_id", "") or "").strip()
+
+        if manager_token and manager_bot_id:
+            self._chatters_startup_deferral_logged = False
+            return False
+        if not cached_bot_token and not manager_token:
+            return False
+
+        started_at = float(getattr(self, "_chatters_startup_grace_started_at", 0.0) or 0.0)
+        if started_at <= 0:
+            started_at = time.monotonic()
+            self._chatters_startup_grace_started_at = started_at
+        startup_age = time.monotonic() - started_at
+        if startup_age > _CHATTERS_STARTUP_GRACE_SECONDS:
+            return False
+
+        if not getattr(self, "_chatters_startup_deferral_logged", False):
+            log.debug(
+                "Chatters-Poller: delaying startup cycle while bot auth/chat runtime is still initialising "
+                "(age=%.1fs, cached_token=%s, bot_id_present=%s)",
+                startup_age,
+                "yes" if (cached_bot_token or manager_token) else "no",
+                bool(manager_bot_id),
+            )
+            self._chatters_startup_deferral_logged = True
+        return True
 
     def _warn_chatters_user_fallback_once(
         self,
@@ -1301,6 +1343,8 @@ class TwitchAnalyticsMixin:
         """
         if not self.api:
             return
+        if self._should_defer_chatters_collection_for_startup():
+            return
 
         try:
             # Live-Sessions kommen aus Postgres (Analytics-DB)
@@ -1314,10 +1358,10 @@ class TwitchAnalyticsMixin:
                     """
                 ).fetchall()
 
-            # OAuth/Permissions bleiben in SQLite (canonical raid_auth)
+            # OAuth/Permissions live in the shared runtime storage.
             auth_ids: set[str] = set()
-            with storage_oauth.transaction() as conn_sqlite:
-                auth_rows = conn_sqlite.execute(
+            with storage_runtime.transaction() as conn:
+                auth_rows = conn.execute(
                     "SELECT twitch_user_id FROM twitch_raid_auth WHERE raid_enabled IS TRUE"
                 ).fetchall()
                 auth_ids = {

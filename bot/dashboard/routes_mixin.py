@@ -20,6 +20,7 @@ from aiohttp import web
 from .. import storage
 from ..core.constants import log
 from . import abbo_routes as _abbo_routes
+from .route_deps import BillingRouteDeps, EntryRouteDeps, MarketRouteDeps
 from . import routes_billing as _routes_billing
 from . import routes_entry as _routes_entry
 from . import routes_market as _routes_market
@@ -375,42 +376,42 @@ class _DashboardRoutesMixin:
                 )
         return web.HTTPFound(fallback_login_url)
 
-    def _entry_route_deps(self) -> dict[str, Any]:
-        return {
-            "critical_scopes": _CRITICAL_SCOPES,
-            "dashboard_v2_login_url": TWITCH_DASHBOARD_V2_LOGIN_URL,
-            "dashboards_discord_login_url": TWITCH_DASHBOARDS_DISCORD_LOGIN_URL,
-            "dashboards_login_url": TWITCH_DASHBOARDS_LOGIN_URL,
-            "html": html,
-            "json": json,
-            "log": log,
-            "required_scopes": _REQUIRED_SCOPES,
-            "scope_column_labels": _SCOPE_COLUMN_LABELS,
-            "storage": storage,
-        }
+    def _entry_route_deps(self) -> EntryRouteDeps:
+        return EntryRouteDeps(
+            critical_scopes=_CRITICAL_SCOPES,
+            dashboard_v2_login_url=TWITCH_DASHBOARD_V2_LOGIN_URL,
+            dashboards_discord_login_url=TWITCH_DASHBOARDS_DISCORD_LOGIN_URL,
+            dashboards_login_url=TWITCH_DASHBOARDS_LOGIN_URL,
+            html=html,
+            json=json,
+            log=log,
+            required_scopes=_REQUIRED_SCOPES,
+            scope_column_labels=_SCOPE_COLUMN_LABELS,
+            storage=storage,
+        )
 
-    def _billing_route_deps(self) -> dict[str, Any]:
-        return {
-            "asyncio": asyncio,
-            "billing_cycle_discounts": _BILLING_CYCLE_DISCOUNTS,
-            "billing_is_paid_plan": _billing_is_paid_plan,
-            "billing_public_error_message": _billing_public_error_message,
-            "billing_stripe_quickstart_url": _BILLING_STRIPE_QUICKSTART_URL,
-            "build_billing_catalog": _build_billing_catalog,
-            "format_eur_cents": _format_eur_cents,
-            "json": json,
-            "log": log,
-            "normalize_billing_cycle": _normalize_billing_cycle,
-            "storage": storage,
-        }
+    def _billing_route_deps(self) -> BillingRouteDeps:
+        return BillingRouteDeps(
+            asyncio=asyncio,
+            billing_cycle_discounts=_BILLING_CYCLE_DISCOUNTS,
+            billing_is_paid_plan=_billing_is_paid_plan,
+            billing_public_error_message=_billing_public_error_message,
+            billing_stripe_quickstart_url=_BILLING_STRIPE_QUICKSTART_URL,
+            build_billing_catalog=_build_billing_catalog,
+            format_eur_cents=_format_eur_cents,
+            json=json,
+            log=log,
+            normalize_billing_cycle=_normalize_billing_cycle,
+            storage=storage,
+        )
 
-    def _market_route_deps(self) -> dict[str, Any]:
-        return {
-            "json": json,
-            "log": log,
-            "storage": storage,
-            "uuid4": uuid4,
-        }
+    def _market_route_deps(self) -> MarketRouteDeps:
+        return MarketRouteDeps(
+            json=json,
+            log=log,
+            storage=storage,
+            uuid4=uuid4,
+        )
 
     async def index(self, request: web.Request) -> web.StreamResponse:
         return await _routes_entry.index(self, request)

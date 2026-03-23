@@ -223,7 +223,7 @@ class RaidExecutor:
                 (from_broadcaster_id, from_broadcaster_login, to_broadcaster_id,
                  to_broadcaster_login, viewer_count, stream_duration_sec, reason,
                  success, error_message, target_stream_started_at, candidates_count)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 """,
                 (
                     from_broadcaster_id,

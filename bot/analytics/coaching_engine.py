@@ -197,7 +197,7 @@ def _efficiency(conn, streamer: str, since: str) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 
-def _title_analysis(conn: sqlite3.Connection, streamer: str, since: str) -> dict[str, Any]:
+def _title_analysis(conn: Any, streamer: str, since: str) -> dict[str, Any]:
     # Your titles
     your_titles = conn.execute(
         """
@@ -356,7 +356,7 @@ def _extract_keywords(titles: list[str]) -> list[str]:
 # ---------------------------------------------------------------------------
 
 
-def _schedule_optimizer(conn: sqlite3.Connection, streamer: str, since: str) -> dict[str, Any]:
+def _schedule_optimizer(conn: Any, streamer: str, since: str) -> dict[str, Any]:
     # Category competition heatmap
     competition = conn.execute(
         """
@@ -430,7 +430,7 @@ def _schedule_optimizer(conn: sqlite3.Connection, streamer: str, since: str) -> 
 # ---------------------------------------------------------------------------
 
 
-def _duration_analysis(conn: sqlite3.Connection, streamer: str, since: str) -> dict[str, Any]:
+def _duration_analysis(conn: Any, streamer: str, since: str) -> dict[str, Any]:
     rows = conn.execute(
         """
         SELECT
@@ -519,7 +519,7 @@ def _duration_analysis(conn: sqlite3.Connection, streamer: str, since: str) -> d
 # ---------------------------------------------------------------------------
 
 
-def _cross_community(conn: sqlite3.Connection, streamer: str, since: str) -> dict[str, Any]:
+def _cross_community(conn: Any, streamer: str, since: str) -> dict[str, Any]:
     # Your unique chatters
     your_chatters_row = conn.execute(
         """
@@ -608,7 +608,7 @@ def _cross_community(conn: sqlite3.Connection, streamer: str, since: str) -> dic
 # ---------------------------------------------------------------------------
 
 
-def _tag_optimization(conn: sqlite3.Connection, streamer: str, since: str) -> dict[str, Any]:
+def _tag_optimization(conn: Any, streamer: str, since: str) -> dict[str, Any]:
     # Your tags
     your_rows = conn.execute(
         """
@@ -685,7 +685,7 @@ def _split_tags_from_rows(rows: list) -> set:
 # ---------------------------------------------------------------------------
 
 
-def _retention_coaching(conn: sqlite3.Connection, streamer: str, since: str) -> dict[str, Any]:
+def _retention_coaching(conn: Any, streamer: str, since: str) -> dict[str, Any]:
     # Your 5-min retention average
     your_ret = conn.execute(
         """
@@ -761,7 +761,7 @@ def _retention_coaching(conn: sqlite3.Connection, streamer: str, since: str) -> 
 
 
 def _build_viewer_curve(
-    conn: sqlite3.Connection, session_ids: list[int], peak_viewers: list[int]
+    conn: Any, session_ids: list[int], peak_viewers: list[int]
 ) -> list[dict[str, Any]]:
     """Build normalized viewer curve from session_viewers data."""
     if not session_ids:
@@ -810,7 +810,7 @@ def _build_viewer_curve(
 # ---------------------------------------------------------------------------
 
 
-def _double_stream_detection(conn: sqlite3.Connection, streamer: str, since: str) -> dict[str, Any]:
+def _double_stream_detection(conn: Any, streamer: str, since: str) -> dict[str, Any]:
     rows = conn.execute(
         """
         SELECT
@@ -879,7 +879,7 @@ def _double_stream_detection(conn: sqlite3.Connection, streamer: str, since: str
 # ---------------------------------------------------------------------------
 
 
-def _chat_concentration(conn: sqlite3.Connection, streamer: str, since: str) -> dict[str, Any]:
+def _chat_concentration(conn: Any, streamer: str, since: str) -> dict[str, Any]:
     """Analyse chat dependency and chatter loyalty distribution."""
     # Loyalty buckets
     buckets_raw = conn.execute(
@@ -985,7 +985,7 @@ def _chat_concentration(conn: sqlite3.Connection, streamer: str, since: str) -> 
 # ---------------------------------------------------------------------------
 
 
-def _raid_network(conn: sqlite3.Connection, streamer: str, since: str) -> dict[str, Any]:
+def _raid_network(conn: Any, streamer: str, since: str) -> dict[str, Any]:
     """Analyse raid send/receive balance and partner reciprocity."""
     sent = conn.execute(
         """
@@ -1071,7 +1071,7 @@ def _raid_network(conn: sqlite3.Connection, streamer: str, since: str) -> dict[s
 # ---------------------------------------------------------------------------
 
 
-def _peer_comparison(conn: sqlite3.Connection, streamer: str, since: str) -> dict[str, Any]:
+def _peer_comparison(conn: Any, streamer: str, since: str) -> dict[str, Any]:
     """Multi-metric comparison vs similar and aspirational peers."""
     all_rows = conn.execute(
         """
@@ -1180,7 +1180,7 @@ def _peer_comparison(conn: sqlite3.Connection, streamer: str, since: str) -> dic
 # ---------------------------------------------------------------------------
 
 
-def _competition_density(conn: sqlite3.Connection, streamer: str, since: str) -> dict[str, Any]:
+def _competition_density(conn: Any, streamer: str, since: str) -> dict[str, Any]:
     """Competition density using actual stream sessions (not aggregated stats)."""
     # How many streamers are active per hour-of-day?
     density = conn.execute(

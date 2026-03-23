@@ -5,6 +5,7 @@ from unittest.mock import patch
 
 import psycopg
 
+from bot.storage._pool import ConnectionPoolRegistry
 from bot.storage._rows import StorageRow
 from bot.storage.pg import (
     _execute_with_savepoint,
@@ -391,6 +392,30 @@ class ConnectionPoolArchitectureTests(unittest.TestCase):
                 self.assertIsInstance(conn, _PoolConnection)
 
         self.assertEqual(len(connections), 1)
+
+    def test_connection_pool_registry_reuses_equivalent_dsn_variants(self) -> None:
+        connections: list[_PoolConnection] = []
+
+        def _connect(*args, **kwargs):
+            conn = _PoolConnection(f"conn-{len(connections) + 1}")
+            connections.append(conn)
+            return conn
+
+        registry = ConnectionPoolRegistry(
+            max_size=1,
+            checkout_timeout=1.0,
+            connect_fn=_connect,
+        )
+
+        pool_a = registry.get_pool(
+            "postgresql://demo:secret@example.internal:5432/analytics?sslmode=require&application_name=deadlock"
+        )
+        pool_b = registry.get_pool(
+            "postgresql://demo:secret@example.internal:5432/analytics?application_name=deadlock&sslmode=require"
+        )
+
+        self.assertIs(pool_a, pool_b)
+        self.assertEqual(len(connections), 0)
 
     def test_prepare_runtime_storage_runs_bootstrap_before_runtime_requests(self) -> None:
         connections: list[_PoolConnection] = []

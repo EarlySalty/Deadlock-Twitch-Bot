@@ -16,7 +16,7 @@ CREATE TABLE IF NOT EXISTS streamer_dim (
     updated_at             TIMESTAMPTZ DEFAULT NOW()
 );
 
--- ========= Streamer Registry (parity with legacy SQLite twitch_streamers) =========
+-- ========= Streamer Registry =========
 CREATE TABLE IF NOT EXISTS twitch_streamers (
     id                       BIGSERIAL PRIMARY KEY,
     twitch_login             TEXT UNIQUE NOT NULL,
@@ -46,7 +46,7 @@ CREATE TABLE IF NOT EXISTS twitch_streamers (
 CREATE UNIQUE INDEX IF NOT EXISTS idx_twitch_streamers_login_lower
     ON twitch_streamers (LOWER(twitch_login));
 
--- Companion view: calculated partner flags (mirrors SQLite view)
+-- Companion view: calculated partner flags
 -- Drop/recreate avoids CREATE OR REPLACE failures when prior versions used s.*
 -- and later table columns changed order.
 DROP VIEW IF EXISTS twitch_streamers_partner_state;
@@ -115,7 +115,7 @@ SELECT
     base.live_ping_enabled
 FROM base;
 
--- ========= Live State (mirrors legacy sqlite schema) =========
+-- ========= Live State =========
 CREATE TABLE IF NOT EXISTS twitch_live_state (
     twitch_user_id            TEXT PRIMARY KEY,
     streamer_login            TEXT NOT NULL,

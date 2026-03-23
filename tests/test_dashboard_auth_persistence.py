@@ -6,7 +6,10 @@ from unittest.mock import patch
 from aiohttp import web
 
 from bot.dashboard.auth.auth_mixin import _DashboardAuthMixin
-from bot.dashboard.auth.state_store import DashboardAuthRateLimitStore
+from bot.dashboard.auth.state_store import (
+    DashboardAuthRateLimitStore,
+    DashboardAuthRateLimitStoreUnavailable,
+)
 from bot.dashboard.server_v2 import DashboardV2Server
 
 
@@ -57,7 +60,6 @@ class _PersistentAuthHarness(_DashboardAuthMixin):
         self._discord_admin_oauth_states = {}
         self._discord_admin_sessions = {}
         self._discord_sessions_db_loaded = False
-        self._rate_limits = {}
         self.created_sessions = []
         self.exchange_calls = []
 
@@ -163,21 +165,18 @@ class DashboardAuthPersistenceTests(unittest.IsolatedAsyncioTestCase):
 
     def test_rate_limit_store_counts_persisted_hits(self) -> None:
         store = DashboardAuthRateLimitStore()
-        owner = SimpleNamespace(_rate_limits={})
 
         with patch(
             "bot.dashboard.auth.state_store.sessions_db.reserve_rate_limit_slot",
             side_effect=[True, False],
         ) as reserve_slot:
             allowed_first = store.allow_request(
-                owner=owner,
                 key="client-1",
                 max_requests=1,
                 window_seconds=60.0,
                 now=1000.0,
             )
             allowed_second = store.allow_request(
-                owner=owner,
                 key="client-1",
                 max_requests=1,
                 window_seconds=60.0,
@@ -187,6 +186,32 @@ class DashboardAuthPersistenceTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(allowed_first)
         self.assertFalse(allowed_second)
         self.assertEqual(reserve_slot.call_count, 2)
+
+    def test_rate_limit_store_raises_when_durable_store_is_unavailable(self) -> None:
+        store = DashboardAuthRateLimitStore()
+
+        with patch(
+            "bot.dashboard.auth.state_store.sessions_db.reserve_rate_limit_slot",
+            side_effect=RuntimeError("db down"),
+        ):
+            with self.assertRaises(DashboardAuthRateLimitStoreUnavailable):
+                store.allow_request(
+                    key="client-1",
+                    max_requests=1,
+                    window_seconds=60.0,
+                    now=1000.0,
+                )
+
+    def test_auth_mixin_rate_limit_fails_closed_when_store_is_unavailable(self) -> None:
+        handler = _PersistentAuthHarness()
+
+        class _BrokenStore:
+            def allow_request(self, **kwargs):
+                del kwargs
+                raise DashboardAuthRateLimitStoreUnavailable("db down")
+
+        with patch.object(handler, "_dashboard_auth_rate_limit_store", return_value=_BrokenStore()):
+            self.assertFalse(handler._check_rate_limit(_make_request()))
 
 
 if __name__ == "__main__":

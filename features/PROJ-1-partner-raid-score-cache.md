@@ -26,7 +26,7 @@
 - Als neu integrierter Partner möchte ich in meinen ersten erhaltenen Netzwerk-Raids bevorzugt werden, damit ich schneller Sichtbarkeit im Netzwerk bekomme.
 - Als Boost-Partner möchte ich einen proportionalen Score-Vorteil erhalten, damit mein aktiver Raid-Boost messbar in die Auswahl einfließt.
 - Als Betreiber möchte ich, dass Live-Starts, Live-Enden, erfolgreiche Incoming-Raids und Plan-Änderungen sofort im Cache sichtbar werden, damit die Auswahl mit aktuellen Daten arbeitet.
-- Als Entwickler möchte ich für SQLite und PostgreSQL denselben Refresh-Pfad verwenden, damit Logik, Tests und Verhalten konsistent bleiben.
+- Als Entwickler möchte ich einen einzigen Postgres-Refresh-Pfad verwenden, damit Logik, Tests und Verhalten konsistent bleiben.
 
 ## Acceptance Criteria
 
@@ -42,7 +42,7 @@
 - Offline-Partner haben `is_live = 0` und werden von der Raid-Auswahl ignoriert, auch wenn ein älterer Score-Snapshot vorhanden ist.
 
 ### 2. Einheitlicher Refresh-Pfad
-- Es existiert genau ein interner Refresh-Pfad für Partner-Scores, der sowohl für SQLite als auch für PostgreSQL verwendet wird.
+- Es existiert genau ein interner Refresh-Pfad für Partner-Scores, der den Postgres-Produktionspfad abbildet.
 - Der Refresh-Pfad kann einen einzelnen Partner und alle aktiven Partner aktualisieren.
 - Der Refresh-Pfad lädt:
   - aktive Partner aus `twitch_streamers_partner_state`

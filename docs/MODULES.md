@@ -132,8 +132,8 @@ Alle Python-Dateien mit Pfad, Zweck und Zugriffslevel (A=Admin, S=Streamer, I=In
 
 | Datei | Zweck | Level |
 |-------|-------|-------|
-| `pg.py` | PostgreSQL-Verbindung, Schema-Migration, SQLite-Compat-Layer | I |
-| `sessions_db.py` | Web-Session-Storage (aktuell SQLite, Migration geplant) | I |
+| `pg.py` | PostgreSQL-Verbindung, Schema-Migration, Runtime-Storage | I |
+| `sessions_db.py` | Web-Session-Storage auf PostgreSQL | I |
 
 ## bot/api/
 

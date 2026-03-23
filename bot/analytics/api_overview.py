@@ -957,7 +957,8 @@ class _AnalyticsOverviewMixin:
         """Get list of sessions with metrics."""
         streamer_login = streamer.lower() if streamer else None
         session_bot_clause, session_bot_params = build_known_chat_bot_not_in_clause(
-            column_expr="sc.chatter_login"
+            column_expr="sc.chatter_login",
+            placeholder="%s",
         )
         rows = conn.execute(
             f"""
@@ -1115,10 +1116,12 @@ class _AnalyticsOverviewMixin:
         """Calculate all overview metrics."""
         streamer_login = streamer.lower() if streamer else None
         session_bot_clause, session_bot_params = build_known_chat_bot_not_in_clause(
-            column_expr="sc.chatter_login"
+            column_expr="sc.chatter_login",
+            placeholder="%s",
         )
         rollup_bot_clause, rollup_bot_params = build_known_chat_bot_not_in_clause(
-            column_expr="chatter_login"
+            column_expr="chatter_login",
+            placeholder="%s",
         )
 
         row = conn.execute(
@@ -1555,7 +1558,8 @@ class _AnalyticsOverviewMixin:
         try:
             with storage.readonly_connection() as conn:
                 session_bot_clause, session_bot_params = build_known_chat_bot_not_in_clause(
-                    column_expr="sc.chatter_login"
+                    column_expr="sc.chatter_login",
+                    placeholder="%s",
                 )
                 agg_row = conn.execute(
                     f"""

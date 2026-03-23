@@ -1147,6 +1147,25 @@ class DashboardSecurityRegressionTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("const escapeHtml", response.text)
         self.assertIn("${escapeHtml(q.content)}", response.text)
         self.assertIn("${escapeHtml(c.login)}", response.text)
+        self.assertIn("integrity=", response.text)
+
+    def test_redirect_location_rejects_scheme_relative_referer_paths(self) -> None:
+        handler = DashboardV2Server(
+            app_token=None,
+            noauth=False,
+            partner_token=None,
+            oauth_client_id=None,
+            oauth_client_secret=None,
+            oauth_redirect_uri="https://twitch.earlysalty.com/twitch/auth/callback",
+        )
+        request = SimpleNamespace(
+            path="/twitch/live",
+            headers={"Referer": "https://admin.earlysalty.de//evil.example?ok=1"},
+        )
+
+        location = handler._redirect_location(request, err="denied")
+
+        self.assertEqual(location, "/twitch/admin?err=denied")
 
     async def test_stripe_webhook_duplicate_event_returns_idempotent_success(self) -> None:
         handler = _DummyWebhookRoutes()
