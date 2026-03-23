@@ -594,10 +594,12 @@ export function Viewers({ streamer, days }: ViewersProps) {
             </div>
             <div>
               <h3 className="text-sm font-bold text-white">Top Shared Channels</h3>
-              <p className="text-xs text-text-secondary">Ø {directory?.summary.avgOtherChannels ?? 0} andere Channels</p>
+              <p className="text-xs text-text-secondary">
+                Ø {segments?.crossChannelStats.avgOtherChannels ?? directory?.summary.avgOtherChannels ?? 0} andere Channels
+              </p>
             </div>
           </div>
-          {segments?.crossChannelStats.topSharedChannels ? (
+          {segments?.crossChannelStats.topSharedChannels && segments.crossChannelStats.topSharedChannels.length > 0 ? (
             <div className="space-y-1.5">
               {segments.crossChannelStats.topSharedChannels.slice(0, 5).map(ch => (
                 <div key={ch.streamer} className="flex items-center justify-between text-xs">
@@ -607,7 +609,7 @@ export function Viewers({ streamer, days }: ViewersProps) {
               ))}
             </div>
           ) : (
-            <Loader2 className="w-5 h-5 animate-spin text-text-secondary" />
+            <p className="text-xs text-text-secondary">Keine Shared-Channel-Daten</p>
           )}
         </div>
 

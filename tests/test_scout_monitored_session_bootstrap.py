@@ -186,7 +186,7 @@ class ScoutMonitoredSessionBootstrapTests(unittest.IsolatedAsyncioTestCase):
             )
         )
 
-    async def test_scout_rejoins_existing_monitored_channel_missing_from_runtime(self) -> None:
+    async def test_scout_does_not_heal_existing_monitored_only_channel_missing_from_runtime(self) -> None:
         harness = _HealingScoutHarness()
         conn = _ExistingMonitoredScoutConnection()
         sleep_calls: list[float] = []
@@ -216,13 +216,7 @@ class ScoutMonitoredSessionBootstrapTests(unittest.IsolatedAsyncioTestCase):
                 await TwitchBaseCog._scout_deadlock_channels(harness)
 
         self.assertEqual(conn.commits, 1)
-        self.assertEqual(
-            harness.calls,
-            [
-                ("set_monitored_channels", ["mewgles"]),
-                ("join_channels", ["mewgles"]),
-            ],
-        )
+        self.assertEqual(harness.calls, [])
 
 
 if __name__ == "__main__":

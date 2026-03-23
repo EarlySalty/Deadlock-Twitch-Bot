@@ -138,7 +138,7 @@ function AnalyticsDashboard() {
       const d = parseInt(urlDays, 10);
       if (d === 7 || d === 30 || d === 90) setDays(d);
     }
-  }, []);
+  }, [isDemoShell]);
 
   // Auto-set streamer to logged-in Twitch user on first auth load
   useEffect(() => {

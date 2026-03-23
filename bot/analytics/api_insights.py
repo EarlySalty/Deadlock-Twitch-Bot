@@ -730,7 +730,7 @@ class _AnalyticsInsightsMixin:
                 top = conn.execute(
                     f"""
                     SELECT
-                        COALESCE(NULLIF(cm.chatter_login, ''), cm.chatter_id, 'unknown') as chatter_key,
+                        COALESCE(NULLIF(cm.chatter_login, ''), cm.chatter_id) as chatter_key,
                         COUNT(*) as messages,
                         COUNT(DISTINCT cm.session_id) as sessions,
                         MIN(cm.message_ts) as first_seen,
@@ -738,8 +738,9 @@ class _AnalyticsInsightsMixin:
                     FROM twitch_chat_messages cm
                     WHERE cm.message_ts >= %s
                       AND LOWER(cm.streamer_login) = %s
+                      AND COALESCE(NULLIF(cm.chatter_login, ''), cm.chatter_id) IS NOT NULL
                       AND {msg_bot_clause_cm}
-                    GROUP BY COALESCE(NULLIF(cm.chatter_login, ''), cm.chatter_id, 'unknown')
+                    GROUP BY COALESCE(NULLIF(cm.chatter_login, ''), cm.chatter_id)
                     ORDER BY messages DESC
                     LIMIT 20
                     """,

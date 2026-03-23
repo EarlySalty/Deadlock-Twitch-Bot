@@ -445,19 +445,21 @@ export interface TagAnalysisResponse {
 
 // Kombinierte Funnel & Distribution Daten
 export interface AudienceInsights {
-  watchTimeDistribution: WatchTimeDistribution;
-  followerFunnel: FollowerFunnel;
-  tagPerformance: TagPerformanceExtended[];
-  titlePerformance: TitlePerformance[];
-  // Trends im Vergleich zur Vorperiode
   trends: {
-    watchTimeChange: number;      // % Änderung avg watch time
-    conversionChange: number;     // % Änderung conversion rate
-    viewerReturnRate: number;     // % der Viewer die zurückkommen
-    viewerReturnChange: number;   // % Änderung return rate
+    watchTimeChange: number | null;
+    conversionChange: number | null;
+    viewerReturnRate: number;
+    viewerReturnChange: number | null;
   };
   distinctViewers?: number;
   returnRateMethod?: string;
+  dataQuality?: {
+    botFilterApplied?: boolean;
+    watchTimeMethod?: string;
+    watchTimeTrendAvailable?: boolean;
+    viewerReturnTrendAvailable?: boolean;
+    conversionTrendAvailable?: boolean;
+  };
 }
 
 // API Response Types
@@ -1108,7 +1110,7 @@ export interface ChurnRisk {
 export interface SharedChannel {
   streamer: string;
   sharedCount: number;
-  direction: 'bidirectional' | 'outgoing' | 'incoming';
+  direction: 'bidirectional' | 'outgoing' | 'incoming' | 'unknown';
 }
 
 export interface CrossChannelStats {

@@ -361,8 +361,8 @@ def _schedule_optimizer(conn: Any, streamer: str, since: str) -> dict[str, Any]:
     competition = conn.execute(
         """
         SELECT
-            CAST(EXTRACT(DOW FROM (ts_utc AT TIME ZONE 'UTC'))::int) as weekday,
-            CAST(EXTRACT(HOUR FROM (ts_utc AT TIME ZONE 'UTC'))::int) as hour,
+            EXTRACT(DOW FROM (ts_utc AT TIME ZONE 'UTC'))::int as weekday,
+            EXTRACT(HOUR FROM (ts_utc AT TIME ZONE 'UTC'))::int as hour,
             COUNT(DISTINCT streamer) as competitors,
             AVG(viewer_count) as cat_viewers
         FROM twitch_stats_category
@@ -386,8 +386,8 @@ def _schedule_optimizer(conn: Any, streamer: str, since: str) -> dict[str, Any]:
     your_slots = conn.execute(
         """
         SELECT
-            CAST(EXTRACT(DOW FROM (started_at AT TIME ZONE 'UTC'))::int) as weekday,
-            CAST(EXTRACT(HOUR FROM (started_at AT TIME ZONE 'UTC'))::int) as hour,
+            EXTRACT(DOW FROM (started_at AT TIME ZONE 'UTC'))::int as weekday,
+            EXTRACT(HOUR FROM (started_at AT TIME ZONE 'UTC'))::int as hour,
             COUNT(*) as cnt
         FROM twitch_stream_sessions
         WHERE streamer_login = %s AND started_at >= %s

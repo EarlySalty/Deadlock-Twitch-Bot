@@ -233,6 +233,23 @@ def build_dashboard_service_app(
             message="Bot internal API is unavailable.",
         )
 
+    def _upstream_service_unavailable(
+        context: str,
+        exc: Exception | None = None,
+    ) -> web.HTTPServiceUnavailable:
+        if exc is not None:
+            _warn_upstream_once(context, exc)
+        elif client is None:
+            _warn_upstream_once(
+                context,
+                BotApiClientError(
+                    status=503,
+                    code="upstream_unavailable",
+                    message="Bot internal API is unavailable.",
+                ),
+            )
+        return web.HTTPServiceUnavailable(text="Bot internal API is unavailable.")
+
     async def _add_cb(login: str, require_link: bool) -> str:
         if client is None:
             return "Bot internal API unavailable; action not applied."
@@ -253,16 +270,15 @@ def build_dashboard_service_app(
 
     async def _list_cb() -> list[dict[str, Any]]:
         if client is None:
-            return []
+            raise _upstream_service_unavailable("streamers_list")
         try:
             return await client.get_streamers()
         except BotApiClientError as exc:
-            _warn_upstream_once("streamers_list", exc)
-            return []
+            raise _upstream_service_unavailable("streamers_list", exc) from exc
 
     async def _stats_cb(**kwargs: Any) -> dict[str, Any]:
         if client is None:
-            return {}
+            raise _upstream_service_unavailable("stats")
         try:
             return await client.get_stats(
                 hour_from=kwargs.get("hour_from"),
@@ -270,8 +286,7 @@ def build_dashboard_service_app(
                 streamer=kwargs.get("streamer"),
             )
         except BotApiClientError as exc:
-            _warn_upstream_once("stats", exc)
-            return {}
+            raise _upstream_service_unavailable("stats", exc) from exc
 
     async def _verify_cb(login: str, mode: str) -> str:
         if client is None:

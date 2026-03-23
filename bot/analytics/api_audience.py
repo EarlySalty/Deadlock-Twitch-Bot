@@ -554,7 +554,8 @@ class _AnalyticsAudienceMixin:
                 since_date = (datetime.now(UTC) - timedelta(days=days)).isoformat()
                 streamer_login = streamer.lower()
                 session_bot_clause, session_bot_params = build_known_chat_bot_not_in_clause(
-                    column_expr="sc.chatter_login"
+                    column_expr="sc.chatter_login",
+                    placeholder="%s",
                 )
 
                 # Base session and follower stats.
@@ -762,13 +763,16 @@ class _AnalyticsAudienceMixin:
             with storage.transaction() as conn:
                 base = streamer.lower()
                 rollup_bot_clause_c1, rollup_bot_params_c1 = build_known_chat_bot_not_in_clause(
-                    column_expr="c1.chatter_login"
+                    column_expr="c1.chatter_login",
+                    placeholder="%s",
                 )
                 rollup_bot_clause_c2, rollup_bot_params_c2 = build_known_chat_bot_not_in_clause(
-                    column_expr="c2.chatter_login"
+                    column_expr="c2.chatter_login",
+                    placeholder="%s",
                 )
                 rollup_bot_clause, rollup_bot_params = build_known_chat_bot_not_in_clause(
-                    column_expr="chatter_login"
+                    column_expr="chatter_login",
+                    placeholder="%s",
                 )
                 rows = conn.execute(
                     f"""
@@ -864,35 +868,53 @@ class _AnalyticsAudienceMixin:
             return web.json_response({"error": "Streamer required"}, status=400)
 
         try:
-            # Fetch all data in parallel-ish (reuse endpoints)
-            watch_time_req = type(
-                "Request", (), {"query": {"streamer": streamer, "days": str(days)}}
-            )()
-            watch_time_req.headers = request.headers
-            funnel_req = type("Request", (), {"query": {"streamer": streamer, "days": str(days)}})()
-            funnel_req.headers = request.headers
-            tags_req = type(
-                "Request",
-                (),
-                {"query": {"streamer": streamer, "days": str(days), "limit": "10"}},
-            )()
-            tags_req.headers = request.headers
-            titles_req = type(
-                "Request",
-                (),
-                {"query": {"streamer": streamer, "days": str(days), "limit": "10"}},
-            )()
-            titles_req.headers = request.headers
-
             # Call internal methods directly
             with storage.transaction() as conn:
                 since_date = (datetime.now(UTC) - timedelta(days=days)).isoformat()
                 prev_since = (datetime.now(UTC) - timedelta(days=days * 2)).isoformat()
                 session_bot_clause, session_bot_params = build_known_chat_bot_not_in_clause(
-                    column_expr="sc.chatter_login"
+                    column_expr="sc.chatter_login",
+                    placeholder="%s",
                 )
                 rollup_bot_clause, rollup_bot_params = build_known_chat_bot_not_in_clause(
-                    column_expr="cr.chatter_login"
+                    column_expr="cr.chatter_login",
+                    placeholder="%s",
+                )
+
+                # Watch-time trend should use the same real watch-time distribution logic
+                # as the dedicated endpoint, not retention as a proxy.
+                current_sessions = conn.execute(
+                    """
+                    SELECT s.id, s.retention_5m, s.retention_10m,
+                           s.retention_20m, s.avg_viewers, s.start_viewers, s.end_viewers,
+                           s.duration_seconds
+                    FROM twitch_stream_sessions s
+                    WHERE s.started_at >= %s AND LOWER(s.streamer_login) = %s AND s.ended_at IS NOT NULL
+                """,
+                    [since_date, streamer.lower()],
+                ).fetchall()
+                prev_sessions = conn.execute(
+                    """
+                    SELECT s.id, s.retention_5m, s.retention_10m,
+                           s.retention_20m, s.avg_viewers, s.start_viewers, s.end_viewers,
+                           s.duration_seconds
+                    FROM twitch_stream_sessions s
+                    WHERE s.started_at >= %s AND s.started_at < %s AND LOWER(s.streamer_login) = %s AND s.ended_at IS NOT NULL
+                """,
+                    [prev_since, since_date, streamer.lower()],
+                ).fetchall()
+                current_sessions_remapped = [
+                    (r[7], r[1], r[2], r[3], r[4]) for r in current_sessions
+                ]
+                prev_sessions_remapped = [(r[7], r[1], r[2], r[3], r[4]) for r in prev_sessions]
+                current_ids = [r[0] for r in current_sessions]
+                prev_ids = [r[0] for r in prev_sessions]
+                self._backfill_last_seen_from_messages(conn, current_ids + prev_ids)
+                current_watch = self._calc_watch_distribution(
+                    current_sessions_remapped, conn=conn, session_ids=current_ids
+                )
+                previous_watch = self._calc_watch_distribution(
+                    prev_sessions_remapped, conn=conn, session_ids=prev_ids
                 )
 
                 # Retention trend from session aggregates
@@ -974,21 +996,51 @@ class _AnalyticsAudienceMixin:
                         return 0
                     return round(((curr - prev) / prev) * 100, 1)
 
+                current_watch_method = str(
+                    (current_watch.get("dataQuality", {}) or {}).get("method") or "no_data"
+                )
+                previous_watch_method = str(
+                    (previous_watch.get("dataQuality", {}) or {}).get("method") or "no_data"
+                )
+                current_avg_watch_time = float(current_watch.get("avgWatchTime", 0) or 0)
+                previous_avg_watch_time = float(previous_watch.get("avgWatchTime", 0) or 0)
+                watch_time_trend_available = (
+                    current_watch_method == "real_samples"
+                    and previous_watch_method == "real_samples"
+                    and previous_avg_watch_time > 0
+                )
+                if watch_time_trend_available:
+                    watch_time_change = calc_trend(
+                        current_avg_watch_time,
+                        previous_avg_watch_time,
+                    )
+                else:
+                    watch_time_change = None
+
                 return_rate = curr_rate
                 prev_return_rate = prev_rate
+                viewer_return_trend_available = prev_return_rate > 0
 
                 return web.json_response(
                     {
                         "trends": {
-                            "watchTimeChange": calc_trend(curr_retention, prev_retention),
-                            "conversionChange": 0,  # Would need follower tracking improvement
+                            "watchTimeChange": watch_time_change,
+                            "conversionChange": None,
                             "viewerReturnRate": round(return_rate, 1),
-                            "viewerReturnChange": calc_trend(return_rate, prev_return_rate),
-                            "distinctViewers": curr_total,
-                            "returnRateMethod": "distinct_rollup",
+                            "viewerReturnChange": (
+                                calc_trend(return_rate, prev_return_rate)
+                                if viewer_return_trend_available
+                                else None
+                            ),
                         },
+                        "distinctViewers": curr_total,
+                        "returnRateMethod": "distinct_rollup",
                         "dataQuality": {
                             "botFilterApplied": True,
+                            "watchTimeMethod": current_watch_method,
+                            "watchTimeTrendAvailable": watch_time_trend_available,
+                            "viewerReturnTrendAvailable": viewer_return_trend_available,
+                            "conversionTrendAvailable": False,
                         },
                     }
                 )
@@ -1013,13 +1065,16 @@ class _AnalyticsAudienceMixin:
             with storage.transaction() as conn:
                 since_date = (datetime.now(UTC) - timedelta(days=days)).isoformat()
                 msg_bot_clause, msg_bot_params = build_known_chat_bot_not_in_clause(
-                    column_expr="cm.chatter_login"
+                    column_expr="cm.chatter_login",
+                    placeholder="%s",
                 )
                 session_bot_clause, session_bot_params = build_known_chat_bot_not_in_clause(
-                    column_expr="sc.chatter_login"
+                    column_expr="sc.chatter_login",
+                    placeholder="%s",
                 )
                 rollup_bot_clause, rollup_bot_params = build_known_chat_bot_not_in_clause(
-                    column_expr="chatter_login"
+                    column_expr="chatter_login",
+                    placeholder="%s",
                 )
 
                 # Language mix (avoid hard-coded German defaults)
@@ -1542,7 +1597,8 @@ class _AnalyticsAudienceMixin:
         try:
             with storage.transaction() as conn:
                 rollup_bot_clause, rollup_bot_params = build_known_chat_bot_not_in_clause(
-                    column_expr="chatter_login"
+                    column_expr="chatter_login",
+                    placeholder="%s",
                 )
                 rows = conn.execute(
                     f"""

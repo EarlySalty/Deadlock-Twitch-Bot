@@ -50,10 +50,12 @@ def _recalculate_raid_chat_metrics_batch(
 ) -> dict[tuple[int, str], dict[str, int]]:
     payload = json.dumps(normalized_raids)
     session_bot_clause, session_bot_params = build_known_chat_bot_not_in_clause(
-        column_expr="sc.chatter_login"
+        column_expr="sc.chatter_login",
+        placeholder="%s",
     )
     rollup_bot_clause, rollup_bot_params = build_known_chat_bot_not_in_clause(
-        column_expr="cr.chatter_login"
+        column_expr="cr.chatter_login",
+        placeholder="%s",
     )
 
     metrics: dict[tuple[int, str], dict[str, int]] = {

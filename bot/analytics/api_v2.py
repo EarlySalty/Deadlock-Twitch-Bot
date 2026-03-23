@@ -30,7 +30,7 @@ from ..entitlements.catalog import (
 from ..entitlements.resolver import (
     resolve_plan_snapshot_for_login as _resolve_plan_snapshot_for_login,
 )
-from ..core.chat_bots import build_known_chat_bot_not_in_clause
+from ..core.chat_bots import KNOWN_CHAT_BOTS, build_known_chat_bot_not_in_clause
 from ..core.constants import TWITCH_DISCORD_REF_CODE
 from ..logging_setup import log_path
 from .error_utils import analytics_internal_error_response
@@ -250,8 +250,38 @@ def _compute_health_score(login: str, conn: Any) -> dict[str, Any] | None:
         except Exception:
             pass
 
-        # Community: returning viewers
-        community = 50  # default
+        # Community: share of returning active viewers in the current week.
+        community = 0
+        try:
+            community_clause, community_params = build_known_chat_bot_not_in_clause(
+                column_expr="sc.chatter_login",
+                placeholder="%s",
+                bots=[*KNOWN_CHAT_BOTS, login],
+            )
+            community_row = conn.execute(
+                f"""
+                SELECT
+                    COUNT(DISTINCT COALESCE(NULLIF(sc.chatter_login, ''), sc.chatter_id)) AS total_viewers,
+                    COUNT(
+                        DISTINCT CASE
+                            WHEN LOWER(COALESCE(CAST(sc.is_first_time_streamer AS TEXT), '0')) NOT IN ('1', 't', 'true')
+                            THEN COALESCE(NULLIF(sc.chatter_login, ''), sc.chatter_id)
+                        END
+                    ) AS returning_viewers
+                FROM twitch_session_chatters sc
+                JOIN twitch_stream_sessions s ON s.id = sc.session_id
+                WHERE LOWER(s.streamer_login) = LOWER(%s)
+                  AND s.started_at >= %s
+                  AND {community_clause}
+                """,
+                (login, week_ago.isoformat(), *community_params),
+            ).fetchone()
+            total_viewers = int(community_row[0] or 0) if community_row else 0
+            returning_viewers = int(community_row[1] or 0) if community_row else 0
+            if total_viewers > 0:
+                community = min(100, max(0, int(round(returning_viewers / total_viewers * 100))))
+        except Exception:
+            pass
 
         # Overall weighted
         overall = int(growth * 0.30 + retention * 0.25 + engagement * 0.25 + community * 0.20)
@@ -260,7 +290,7 @@ def _compute_health_score(login: str, conn: Any) -> dict[str, Any] | None:
         if prev_avg > 0:
             trend = round(((cur_avg - prev_avg) / prev_avg) * 100, 1)
         else:
-            trend = 0.0
+            trend = None
 
         return {
             "overall": overall,
@@ -2215,7 +2245,8 @@ class AnalyticsV2Mixin(
                     return web.json_response({"error": "Session not found"}, status=404)
 
                 session_bot_clause, session_bot_params = build_known_chat_bot_not_in_clause(
-                    column_expr="sc.chatter_login"
+                    column_expr="sc.chatter_login",
+                    placeholder="%s",
                 )
 
                 chatter_presence = conn.execute(

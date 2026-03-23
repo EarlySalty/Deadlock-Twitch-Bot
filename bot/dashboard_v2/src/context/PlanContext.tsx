@@ -30,20 +30,22 @@ interface PlanProviderProps {
 export function PlanProvider({ children, plan, isAdmin, isLocalhost, isDemoMode }: PlanProviderProps) {
   const hasFullAccess = isAdmin || isLocalhost || isDemoMode;
   const tier: PlanTier = hasFullAccess ? 'extended' : (plan?.tier ?? 'free');
-  const entitlements: EntitlementId[] = hasFullAccess
-    ? ALL_ENTITLEMENTS
-    : (plan?.entitlements ?? []);
+  const entitlements = useMemo<EntitlementId[]>(
+    () => (hasFullAccess ? ALL_ENTITLEMENTS : (plan?.entitlements ?? [])),
+    [hasFullAccess, plan?.entitlements],
+  );
+  const hasExtendedAnalytics = hasFullAccess || entitlements.includes('analytics.extended');
   const [view, setView] = useState<DashboardView>(
-    hasFullAccess || entitlements.includes('analytics.extended') ? 'extended' : 'basic'
+    hasExtendedAnalytics ? 'extended' : 'basic'
   );
   // Sync view when tier changes after mount (e.g. auth loads async)
   useEffect(() => {
-    if (hasFullAccess || entitlements.includes('analytics.extended')) {
+    if (hasExtendedAnalytics) {
       setView('extended');
     }
-  }, [entitlements, hasFullAccess]);
+  }, [hasExtendedAnalytics]);
 
-  const isPreviewMode = view === 'extended' && !hasFullAccess && !entitlements.includes('analytics.extended');
+  const isPreviewMode = view === 'extended' && !hasExtendedAnalytics;
 
   const value = useMemo<PlanContextType>(() => ({
     tier,

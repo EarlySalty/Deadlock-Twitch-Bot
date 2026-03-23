@@ -141,15 +141,20 @@ def get_overview(days: int = 30) -> dict[str, Any]:
         "categoryRank": 12,
         "categoryTotal": 58,
         "audienceInsights": {
-            "watchTimeDistribution": _watch_time_distribution(),
-            "followerFunnel": _follower_funnel(),
-            "tagPerformance": _tag_analysis_extended(),
-            "titlePerformance": _title_performance(),
             "trends": {
                 "watchTimeChange": 8.4,
-                "conversionChange": 2.1,
+                "conversionChange": None,
                 "viewerReturnRate": 38.2,
                 "viewerReturnChange": 4.7,
+            },
+            "distinctViewers": 412,
+            "returnRateMethod": "distinct_rollup",
+            "dataQuality": {
+                "botFilterApplied": True,
+                "watchTimeMethod": "real_samples",
+                "watchTimeTrendAvailable": True,
+                "viewerReturnTrendAvailable": True,
+                "conversionTrendAvailable": False,
             },
         },
     }
@@ -786,15 +791,20 @@ def get_follower_funnel() -> dict[str, Any]:
 
 def get_audience_insights() -> dict[str, Any]:
     return {
-        "watchTimeDistribution": _watch_time_distribution(),
-        "followerFunnel": _follower_funnel(),
-        "tagPerformance": _tag_analysis_extended(),
-        "titlePerformance": _title_performance(),
         "trends": {
             "watchTimeChange": 8.4,
-            "conversionChange": 2.1,
+            "conversionChange": None,
             "viewerReturnRate": 38.2,
             "viewerReturnChange": 4.7,
+        },
+        "distinctViewers": 412,
+        "returnRateMethod": "distinct_rollup",
+        "dataQuality": {
+            "botFilterApplied": True,
+            "watchTimeMethod": "real_samples",
+            "watchTimeTrendAvailable": True,
+            "viewerReturnTrendAvailable": True,
+            "conversionTrendAvailable": False,
         },
     }
 
@@ -2129,11 +2139,8 @@ def get_viewer_segments() -> dict[str, Any]:
             top_shared_counts[channel] = top_shared_counts.get(channel, 0) + 1
     top_shared = sorted(top_shared_counts.items(), key=lambda item: item[1], reverse=True)[:10]
     top_shared_payload = []
-    for i, (channel, count) in enumerate(top_shared):
-        if i < 3:
-            direction = "bidirectional"
-        else:
-            direction = "outgoing" if i % 2 == 0 else "incoming"
+    for channel, count in top_shared:
+        direction = _demo_shared_channel_direction(channel)
         top_shared_payload.append(
             {"streamer": channel, "sharedCount": count, "direction": direction}
         )
@@ -2151,6 +2158,12 @@ def get_viewer_segments() -> dict[str, Any]:
             "topSharedChannels": top_shared_payload,
         },
     }
+
+
+def _demo_shared_channel_direction(channel: str) -> str:
+    directions = ("incoming", "outgoing", "unknown", "bidirectional")
+    checksum = sum(ord(ch) for ch in str(channel or "").lower())
+    return directions[checksum % len(directions)]
 
 
 def _profile_viewer_pool(spec: dict[str, Any]) -> list[dict[str, Any]]:
@@ -2473,8 +2486,8 @@ def build_demo_viewer_segments(spec: dict[str, Any]) -> dict[str, Any]:
             top_shared_counts[channel] = top_shared_counts.get(channel, 0) + 1
     top_shared = sorted(top_shared_counts.items(), key=lambda item: item[1], reverse=True)[:10]
     top_shared_payload = []
-    for i, (channel, count) in enumerate(top_shared):
-        direction = "bidirectional" if i < 3 else ("outgoing" if i % 2 == 0 else "incoming")
+    for channel, count in top_shared:
+        direction = _demo_shared_channel_direction(channel)
         top_shared_payload.append(
             {"streamer": channel, "sharedCount": count, "direction": direction}
         )

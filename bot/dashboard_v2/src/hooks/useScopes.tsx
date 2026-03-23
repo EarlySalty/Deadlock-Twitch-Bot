@@ -181,7 +181,7 @@ export function ScopeProvider({ children }: { children: ReactNode }) {
       coverage,
       lastChange: scopeChangelog[0]?.date,
     }),
-    [statuses.length, grantedCount, missing, criticalMissing],
+    [statuses.length, grantedCount, missing, criticalMissing, coverage],
   );
 
   const setFromList = useCallback(

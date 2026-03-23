@@ -620,6 +620,7 @@ def _ensure_storage_bootstrap(conn: psycopg.Connection, *, dsn: str) -> None:
         _mark_schema_ready(cache_key)
     except Exception as exc:  # pragma: no cover - best effort
         log.warning("Schema initialization failed: %s", exc, exc_info=True)
+        raise
 
 
 def _prepare_postgres_connection(conn: psycopg.Connection, *, dsn: str) -> None:

@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { motion } from 'framer-motion';
 import { useQuery } from '@tanstack/react-query';
 import {
-  buildApiUrl,
+  fetchApi,
   fetchInternalHome,
   type InternalHomeActionEntry,
   type InternalHomeChangelogEntry,
@@ -31,7 +31,7 @@ import {
 
 interface HealthScoreData {
   overall: number;
-  trend: number;
+  trend: number | null;
   sub_scores: {
     growth: number;
     retention: number;
@@ -78,35 +78,22 @@ interface RawInternalHomeExtras {
 }
 
 // ---------------------------------------------------------------------------
-// Small fetch helper (mirrors client.ts buildUrl logic without importing private fn)
+// Small fetch helper for the additional internal-home fields.
 // ---------------------------------------------------------------------------
 
-function getPartnerToken(): string | null {
-  const urlParams = new URLSearchParams(window.location.search);
-  const token = urlParams.get('partner_token');
-  if (token) {
-    localStorage.setItem('partner_token', token);
-    return token;
-  }
-  return localStorage.getItem('partner_token');
-}
-
 async function fetchInternalHomeExtras(streamer?: string | null): Promise<RawInternalHomeExtras> {
-  const params: Record<string, string> = {};
-  if (streamer) params.streamer = streamer;
-  const token = getPartnerToken();
-  if (token) params.partner_token = token;
-
-  const res = await fetch(buildApiUrl('/internal-home', params), {
-    headers: { Accept: 'application/json' },
-  });
-  if (!res.ok) return {};
-  const raw = await res.json();
-  return {
-    health_score: raw.health_score ?? null,
-    last_stream_summary: raw.last_stream_summary ?? null,
-    week_comparison: raw.week_comparison ?? null,
-  };
+  try {
+    const raw = await fetchApi<RawInternalHomeExtras>('/internal-home', {
+      ...(streamer ? { streamer } : {}),
+    });
+    return {
+      health_score: raw.health_score ?? null,
+      last_stream_summary: raw.last_stream_summary ?? null,
+      week_comparison: raw.week_comparison ?? null,
+    };
+  } catch {
+    return {};
+  }
 }
 
 // ---------------------------------------------------------------------------

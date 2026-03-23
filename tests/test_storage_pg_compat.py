@@ -7,6 +7,7 @@ import psycopg
 
 from bot.storage._pool import ConnectionPoolRegistry
 from bot.storage._rows import StorageRow
+from bot.storage import pg as storage_pg
 from bot.storage.pg import (
     _execute_with_savepoint,
     _ensure_observability_writer_started,
@@ -139,6 +140,15 @@ class _PoolConnection:
 
     def cursor(self):
         return _PoolCursor()
+
+
+def _clear_storage_bootstrap_state() -> None:
+    with contextlib.suppress(Exception):
+        _reset_connection_pools()
+    with contextlib.suppress(Exception):
+        delattr(storage_pg._ensure_storage_bootstrap, "_schema_ok_for")
+    with contextlib.suppress(Exception):
+        delattr(storage_pg._require_runtime_storage_ready, "_ready_for")
 
 
 class StorageRowTests(unittest.TestCase):
@@ -316,7 +326,7 @@ class PerDatabaseCacheTests(unittest.TestCase):
 
 class ConnectionPoolArchitectureTests(unittest.TestCase):
     def tearDown(self) -> None:
-        _reset_connection_pools()
+        _clear_storage_bootstrap_state()
 
     def test_readonly_connection_reuses_pooled_native_connection(self) -> None:
         connections: list[_PoolConnection] = []
@@ -437,6 +447,38 @@ class ConnectionPoolArchitectureTests(unittest.TestCase):
 
         self.assertEqual(len(connections), 1)
         prepare_mock.assert_called_once()
+
+    def test_prepare_runtime_storage_propagates_schema_bootstrap_failures(self) -> None:
+        connections: list[_PoolConnection] = []
+
+        def _connect(*args, **kwargs):
+            conn = _PoolConnection(f"conn-{len(connections) + 1}")
+            connections.append(conn)
+            return conn
+
+        with (
+            patch("bot.storage.pg.psycopg.connect", side_effect=_connect),
+            patch(
+                "bot.storage.pg._load_dsn",
+                return_value="postgresql://demo@host:5432/failing_db",
+            ),
+            patch("bot.storage.pg.ensure_schema", side_effect=RuntimeError("schema boom")),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "schema boom"):
+                prepare_runtime_storage()
+
+        with patch(
+            "bot.storage.pg._load_dsn",
+            return_value="postgresql://demo@host:5432/failing_db",
+        ):
+            with self.assertRaisesRegex(RuntimeError, "prepare_runtime_storage"):
+                with readonly_connection():
+                    self.fail("runtime storage should not be marked ready after bootstrap failure")
+
+        cache_key = storage_pg._db_cache_key("postgresql://demo@host:5432/failing_db")
+        ready_for = set(getattr(storage_pg._require_runtime_storage_ready, "_ready_for", set()))
+        self.assertNotIn(cache_key, ready_for)
+        self.assertEqual(len(connections), 1)
 
     def test_readonly_connection_requires_explicit_runtime_bootstrap(self) -> None:
         with patch(

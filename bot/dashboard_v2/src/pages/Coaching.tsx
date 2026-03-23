@@ -417,10 +417,12 @@ function DurationSection({ data }: { data: CoachingData }) {
 
 function ScheduleSection({ data }: { data: CoachingData }) {
   const sched = data.scheduleOptimizer;
-  if (!sched) return null;
 
   // Build 7x24 grid
   const grid = useMemo(() => {
+    if (!sched) {
+      return { cells: {}, maxOpp: 1 };
+    }
     const cells: Record<string, { opportunity: number; competitors: number; viewers: number; isYourSlot: boolean }> = {};
     let maxOpp = 1;
 
@@ -440,6 +442,8 @@ function ScheduleSection({ data }: { data: CoachingData }) {
   }, [sched]);
 
   const hours = Array.from({ length: 24 }, (_, i) => i);
+
+  if (!sched) return null;
 
   return (
     <motion.div
@@ -729,9 +733,9 @@ function TagSection({ data }: { data: CoachingData }) {
 
 function RetentionSection({ data }: { data: CoachingData }) {
   const ret = data.retentionCoaching;
-  if (!ret) return null;
 
   const chartData = useMemo(() => {
+    if (!ret) return [];
     const merged: { minute: number; you: number; top: number }[] = [];
     const maxMin = Math.max(
       ret.yourViewerCurve.length ? ret.yourViewerCurve[ret.yourViewerCurve.length - 1].minute : 0,
@@ -748,6 +752,8 @@ function RetentionSection({ data }: { data: CoachingData }) {
     }
     return merged;
   }, [ret]);
+
+  if (!ret) return null;
 
   return (
     <motion.div

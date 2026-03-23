@@ -75,8 +75,15 @@ export function Category({ streamer, days, onStreamerSelect, onNavigate }: Categ
   });
 
   const isLoading = activeView === 'category' ? loadingCat : loadingTracked;
-  const rawEntries = (activeView === 'category' ? catLeaderboard : trackedLeaderboard)?.leaderboard ?? [];
-  const totalStreamers = (activeView === 'category' ? catLeaderboard : trackedLeaderboard)?.totalStreamers ?? 0;
+  const activeLeaderboard = useMemo(
+    () => (activeView === 'category' ? catLeaderboard : trackedLeaderboard),
+    [activeView, catLeaderboard, trackedLeaderboard],
+  );
+  const rawEntries = useMemo(
+    () => activeLeaderboard?.leaderboard ?? [],
+    [activeLeaderboard],
+  );
+  const totalStreamers = activeLeaderboard?.totalStreamers ?? 0;
 
   const filtered = useMemo(() => {
     let list = [...rawEntries];

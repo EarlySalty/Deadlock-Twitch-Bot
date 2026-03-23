@@ -28,6 +28,7 @@ from . import storage
 from .chat.bot import TWITCHIO_AVAILABLE, create_twitch_chat_bot, load_bot_tokens
 from .chat.constants import CHAT_JOIN_OFFLINE
 from .chat.irc_lurker_tracker import IRCLurkerTracker
+from .chat.lurker_policy import should_attempt_runtime_heal
 from .core.constants import (
     log,
 )
@@ -546,6 +547,17 @@ class TwitchBaseCog(commands.Cog):
                     for login in sorted(current_deadlock_logins.intersection(existing_monitored)):
                         if login in new_logins or login in to_remove:
                             continue
+                        is_monitored_only = True
+                        is_monitored_only_check = getattr(chat_bot, "_is_monitored_only", None)
+                        if callable(is_monitored_only_check):
+                            try:
+                                is_monitored_only = bool(is_monitored_only_check(login))
+                            except Exception:
+                                log.debug(
+                                    "Scout: monitored-only check failed for %s",
+                                    login,
+                                    exc_info=True,
+                                )
                         is_ready = False
                         if callable(ready_check):
                             try:
@@ -558,7 +570,10 @@ class TwitchBaseCog(commands.Cog):
                                 )
                         else:
                             is_ready = login in runtime_monitored
-                        if not is_ready:
+                        if should_attempt_runtime_heal(
+                            is_monitored_only=is_monitored_only,
+                            is_ready=is_ready,
+                        ):
                             heal_logins.append(login)
                             heal_reasons[login] = (
                                 "subscription_not_ready"

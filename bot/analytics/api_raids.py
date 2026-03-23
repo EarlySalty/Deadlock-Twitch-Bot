@@ -42,7 +42,8 @@ class _AnalyticsRaidsMixin:
         try:
             with storage.readonly_connection() as c:
                 follower_bot_clause, follower_bot_params = build_known_chat_bot_not_in_clause(
-                    column_expr="fe.follower_login"
+                    column_expr="fe.follower_login",
+                    placeholder="%s",
                 )
 
                 base_raids_full_rows = c.execute(

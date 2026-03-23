@@ -48,7 +48,7 @@ import type {
   ExpGrowthCurve,
   AIAnalysisResult,
 } from '@/types/analytics';
-import { dashboardRuntimeConfig } from '@/runtimeConfig';
+import { dashboardRuntimeConfig } from '../runtimeConfig';
 
 const API_BASE = dashboardRuntimeConfig.apiBase;
 const INTERNAL_REDIRECT_PREFIX = '/twitch';
@@ -56,17 +56,84 @@ const INTERNAL_HOME_LOGIN_FALLBACK = '/twitch/auth/login?next=%2Ftwitch%2Fdashbo
 const INTERNAL_HOME_DISCORD_CONNECT_FALLBACK = '/twitch/auth/discord/login?next=%2Ftwitch%2Fdashboard';
 const DASHBOARD_V2_LOGIN_FALLBACK = '/twitch/auth/login?next=%2Ftwitch%2Fdashboard-v2';
 const INTERNAL_HOME_BLOCKED_OAUTH_PATHS = ['/twitch/raid/requirements'] as const;
+const PARTNER_TOKEN_STORAGE_KEY = 'partner_token';
+let partnerTokenMemory: string | null = null;
 
-// Get partner token from URL or localStorage
-function getPartnerToken(): string | null {
-  const urlParams = new URLSearchParams(window.location.search);
-  const token = urlParams.get('partner_token');
-  if (token) {
-    localStorage.setItem('partner_token', token);
-    return token;
+function getPartnerTokenStorage(): Storage | null {
+  if (typeof window === 'undefined') {
+    return null;
   }
-  return localStorage.getItem('partner_token');
+  try {
+    return window.sessionStorage;
+  } catch {
+    return null;
+  }
 }
+
+function readPartnerToken(): string | null {
+  const storage = getPartnerTokenStorage();
+  if (storage) {
+    const stored = storage.getItem(PARTNER_TOKEN_STORAGE_KEY);
+    return stored ? stored.trim() || null : null;
+  }
+  return partnerTokenMemory ? partnerTokenMemory.trim() || null : null;
+}
+
+function writePartnerToken(token: string | null): void {
+  const normalized = String(token || '').trim();
+  const storage = getPartnerTokenStorage();
+  if (storage) {
+    if (normalized) {
+      storage.setItem(PARTNER_TOKEN_STORAGE_KEY, normalized);
+    } else {
+      storage.removeItem(PARTNER_TOKEN_STORAGE_KEY);
+    }
+    return;
+  }
+  partnerTokenMemory = normalized || null;
+}
+
+export function getPartnerToken(): string | null {
+  return readPartnerToken();
+}
+
+export function capturePartnerTokenFromUrl(search?: string): string | null {
+  if (typeof window === 'undefined') {
+    return null;
+  }
+  const urlParams = new URLSearchParams(search ?? window.location.search ?? '');
+  const token = urlParams.get('partner_token')?.trim() || '';
+  if (!token) {
+    return readPartnerToken();
+  }
+  writePartnerToken(token);
+  return token;
+}
+
+export function scrubPartnerTokenFromUrl(): void {
+  if (typeof window === 'undefined' || !window.location || !window.history) {
+    return;
+  }
+  const nextUrl = new URL(window.location.href);
+  if (!nextUrl.searchParams.has('partner_token')) {
+    return;
+  }
+  nextUrl.searchParams.delete('partner_token');
+  const cleanUrl = `${nextUrl.pathname}${nextUrl.search ? nextUrl.search : ''}${nextUrl.hash}`;
+  window.history.replaceState({}, '', cleanUrl);
+}
+
+function bootstrapPartnerTokenFromUrl(): void {
+  if (typeof window === 'undefined') {
+    return;
+  }
+  const token = capturePartnerTokenFromUrl(window.location.search);
+  if (token) {
+    scrubPartnerTokenFromUrl();
+  }
+}
+
+bootstrapPartnerTokenFromUrl();
 
 function isAllowedInternalRedirectPath(pathname: string): boolean {
   return pathname === INTERNAL_REDIRECT_PREFIX || pathname.startsWith(`${INTERNAL_REDIRECT_PREFIX}/`);
@@ -147,10 +214,6 @@ export function buildApiUrl(
   params: Record<string, string | number | boolean> = {}
 ): string {
   const url = new URL(`${API_BASE}${endpoint}`, window.location.origin);
-  const token = getPartnerToken();
-  if (token) {
-    url.searchParams.set('partner_token', token);
-  }
   Object.entries(params).forEach(([key, value]) => {
     if (value !== undefined && value !== null) {
       url.searchParams.set(key, String(value));
@@ -168,7 +231,7 @@ function getBrowserTimezone(): string {
 }
 
 // Generic fetch wrapper
-async function fetchApi<T>(endpoint: string, params: Record<string, string | number | boolean> = {}, timeoutMs?: number): Promise<T> {
+export async function fetchApi<T>(endpoint: string, params: Record<string, string | number | boolean> = {}, timeoutMs?: number): Promise<T> {
   const url = buildApiUrl(endpoint, params);
 
   const abortCtrl = timeoutMs ? new AbortController() : null;
@@ -1326,11 +1389,6 @@ export interface AffiliatePortalData {
 
 async function fetchAdminApi<T>(path: string): Promise<T> {
   const url = new URL(`/twitch/api/admin${path}`, window.location.origin);
-  const token = getPartnerToken();
-  if (token) {
-    url.searchParams.set('partner_token', token);
-  }
-
   const response = await fetch(url.toString(), {
     headers: withPartnerHeaders({ 'Accept': 'application/json' }),
   });
@@ -1377,11 +1435,6 @@ export async function toggleAffiliate(
     throw new Error('Missing CSRF token');
   }
   const url = new URL(`/twitch/api/admin/affiliates/${login}/toggle`, window.location.origin);
-  const token = getPartnerToken();
-  if (token) {
-    url.searchParams.set('partner_token', token);
-  }
-
   const response = await fetch(url.toString(), {
     method: 'POST',
     headers: withPartnerHeaders({

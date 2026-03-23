@@ -2,6 +2,8 @@ import asyncio
 import unittest
 from unittest.mock import patch
 
+from aiohttp import web
+
 from bot.app_keys import (
     ANALYTICS_DB_FINGERPRINT_KEY,
     ANALYTICS_DB_FINGERPRINT_MISMATCH_KEY,
@@ -311,6 +313,44 @@ class BotApiClientErrorMappingTests(unittest.IsolatedAsyncioTestCase):
 
         for callback in app.on_cleanup:
             await callback(app)
+
+    async def test_dashboard_service_stats_callback_raises_503_when_upstream_is_unavailable(
+        self,
+    ) -> None:
+        captured_build_kwargs: dict[str, object] = {}
+
+        def _fake_build_v2_app(**kwargs):
+            captured_build_kwargs.update(kwargs)
+            return web.Application()
+
+        with (
+            patch.dict(
+                "os.environ",
+                {
+                    "TWITCH_ALLOW_DASHBOARD_NOAUTH": "1",
+                    "TWITCH_DASHBOARD_NOAUTH": "1",
+                    "TWITCH_INTERNAL_API_TOKEN": "",
+                    "TWITCH_INTERNAL_API_BASE_URL": "http://127.0.0.1:8776",
+                },
+                clear=False,
+            ),
+            patch("bot.dashboard_service.app.build_v2_app", side_effect=_fake_build_v2_app),
+        ):
+            app = build_dashboard_service_app(
+                noauth=True,
+                oauth_client_id="client-id",
+                oauth_client_secret="client-secret",
+            )
+
+        self.assertIsInstance(app, web.Application)
+        stats_cb = captured_build_kwargs.get("stats_cb")
+        self.assertTrue(callable(stats_cb))
+
+        with self.assertRaises(web.HTTPServiceUnavailable) as ctx:
+            await stats_cb()
+
+        self.assertEqual(ctx.exception.status, 503)
+        self.assertEqual(ctx.exception.text, "Bot internal API is unavailable.")
 
     def test_rejects_non_loopback_base_url_by_default(self) -> None:
         with self.assertRaises(ValueError) as ctx:

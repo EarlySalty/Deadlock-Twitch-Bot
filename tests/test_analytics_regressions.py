@@ -1,8 +1,10 @@
+import ast
 import json
 import os
 import sqlite3
 import unittest
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -10,9 +12,11 @@ from bot.analytics.api_audience import _AnalyticsAudienceMixin
 from bot.analytics.api_insights import _AnalyticsInsightsMixin
 from bot.analytics.api_overview import _AnalyticsOverviewMixin
 from bot.analytics.api_raids import _AnalyticsRaidsMixin
+from bot.analytics.coaching_engine import _schedule_optimizer
+from bot.analytics.demo_data import get_audience_insights, get_overview
 from bot.analytics.raid_metrics import raid_identity_key
 from bot.analytics.api_viewers import _AnalyticsViewersMixin
-from bot.analytics.api_v2 import AnalyticsV2Mixin
+from bot.analytics.api_v2 import AnalyticsV2Mixin, _compute_health_score
 
 
 class _FakeCursor:
@@ -101,6 +105,47 @@ class _AudienceDemographicsConn:
         raise AssertionError(f"Unexpected SQL in audience demographics test: {sql[:200]}")
 
 
+class _AudienceInsightsConn:
+    def execute(self, sql, params=None):
+        sql_text = str(sql)
+        if (
+            "SELECT s.id, s.retention_5m, s.retention_10m," in sql_text
+            and "s.started_at >= %s AND LOWER(s.streamer_login) = %s" in sql_text
+            and "s.started_at < %s" not in sql_text
+        ):
+            return _FakeCursor(
+                [
+                    (101, 0.4, 0.5, 0.6, 20.0, 10, 18, 3600),
+                    (102, 0.45, 0.55, 0.65, 24.0, 12, 20, 4200),
+                ]
+            )
+        if (
+            "SELECT s.id, s.retention_5m, s.retention_10m," in sql_text
+            and "s.started_at >= %s AND s.started_at < %s" in sql_text
+        ):
+            return _FakeCursor(
+                [
+                    (91, 0.35, 0.4, 0.5, 18.0, 9, 16, 3300),
+                    (92, 0.38, 0.42, 0.52, 19.0, 10, 17, 3500),
+                ]
+            )
+        if "AVG(s.retention_10m) as curr_ret" in sql_text:
+            return _FakeCursor([(0.55, 0.44)])
+        if "COUNT(DISTINCT pv.viewer_key) AS total_viewers" in sql_text:
+            if "s.started_at < %s" in sql_text:
+                return _FakeCursor([(8, 4)])
+            return _FakeCursor([(10, 6)])
+        raise AssertionError(f"Unexpected SQL in audience insights test: {sql[:200]}")
+
+
+class _AudienceInsightsNoBaselineConn(_AudienceInsightsConn):
+    def execute(self, sql, params=None):
+        sql_text = str(sql)
+        if "COUNT(DISTINCT pv.viewer_key) AS total_viewers" in sql_text and "s.started_at < %s" in sql_text:
+            return _FakeCursor([(0, 0)])
+        return super().execute(sql, params)
+
+
 class _OverviewRaidRetentionConn:
     def __init__(self, rows):
         self._rows = rows
@@ -152,6 +197,7 @@ class _OverviewPlaceholderParityConn:
 class _ChatAnalyticsSqlGuardConn:
     def __init__(self):
         self.checked_first_time_cast = False
+        self.checked_top_chatter_identity = False
 
     def execute(self, sql, params=None):
         if "viewer_minutes_fallback" in sql and "FROM twitch_stream_sessions s" in sql:
@@ -173,6 +219,11 @@ class _ChatAnalyticsSqlGuardConn:
         if "SELECT COUNT(DISTINCT sc.session_id)" in sql and "FROM twitch_session_chatters sc" in sql:
             return _FakeCursor([(0,)])
         if "FROM twitch_chat_messages cm" in sql:
+            if "COALESCE(NULLIF(cm.chatter_login, ''), cm.chatter_id, 'unknown')" in sql:
+                raise AssertionError("Top chatter query should not synthesize an 'unknown' chatter key")
+            if "COALESCE(NULLIF(cm.chatter_login, ''), cm.chatter_id) IS NOT NULL" not in sql:
+                raise AssertionError("Top chatter query must exclude rows without any chatter identity")
+            self.checked_top_chatter_identity = True
             return _FakeCursor([])
         raise AssertionError(f"Unexpected SQL in chat analytics SQL guard test: {sql[:200]}")
 
@@ -586,6 +637,164 @@ class AudienceDemographicsRegressionTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(payload["dataQuality"]["botFilterApplied"])
 
 
+class AudienceInsightsRegressionTests(unittest.IsolatedAsyncioTestCase):
+    async def test_audience_insights_uses_watch_time_delta_and_exposes_top_level_contract_fields(
+        self,
+    ) -> None:
+        handler = _DummyAudience()
+        request = SimpleNamespace(query={"streamer": "target", "days": "30"})
+
+        def _fake_watch_distribution(_sessions, conn=None, session_ids=None):
+            if list(session_ids or []) == [101, 102]:
+                return {
+                    "avgWatchTime": 30.0,
+                    "dataQuality": {"method": "real_samples"},
+                }
+            if list(session_ids or []) == [91, 92]:
+                return {
+                    "avgWatchTime": 20.0,
+                    "dataQuality": {"method": "real_samples"},
+                }
+            raise AssertionError(f"Unexpected session_ids for watch distribution: {session_ids}")
+
+        with (
+            patch(
+                "bot.analytics.api_audience.storage.transaction",
+                return_value=_ConnContext(_AudienceInsightsConn()),
+            ),
+            patch.object(
+                _DummyAudience,
+                "_backfill_last_seen_from_messages",
+                return_value=0,
+            ),
+            patch.object(
+                _DummyAudience,
+                "_calc_watch_distribution",
+                side_effect=_fake_watch_distribution,
+            ),
+        ):
+            response = await handler._api_v2_audience_insights(request)
+
+        payload = json.loads(response.body.decode("utf-8"))
+        self.assertEqual(response.status, 200)
+        self.assertEqual(payload["trends"]["watchTimeChange"], 50.0)
+        self.assertIsNone(payload["trends"]["conversionChange"])
+        self.assertEqual(payload["trends"]["viewerReturnRate"], 60.0)
+        self.assertEqual(payload["trends"]["viewerReturnChange"], 20.0)
+        self.assertEqual(payload["distinctViewers"], 10)
+        self.assertEqual(payload["returnRateMethod"], "distinct_rollup")
+        self.assertEqual(payload["dataQuality"]["watchTimeMethod"], "real_samples")
+        self.assertTrue(payload["dataQuality"]["watchTimeTrendAvailable"])
+        self.assertTrue(payload["dataQuality"]["viewerReturnTrendAvailable"])
+        self.assertFalse(payload["dataQuality"]["conversionTrendAvailable"])
+
+    async def test_audience_insights_returns_null_watch_time_change_without_real_baseline(
+        self,
+    ) -> None:
+        handler = _DummyAudience()
+        request = SimpleNamespace(query={"streamer": "target", "days": "30"})
+
+        def _fake_watch_distribution(_sessions, conn=None, session_ids=None):
+            if list(session_ids or []) == [101, 102]:
+                return {
+                    "avgWatchTime": 30.0,
+                    "dataQuality": {"method": "real_samples"},
+                }
+            if list(session_ids or []) == [91, 92]:
+                return {
+                    "avgWatchTime": 0.0,
+                    "dataQuality": {"method": "low_coverage"},
+                }
+            raise AssertionError(f"Unexpected session_ids for watch distribution: {session_ids}")
+
+        with (
+            patch(
+                "bot.analytics.api_audience.storage.transaction",
+                return_value=_ConnContext(_AudienceInsightsConn()),
+            ),
+            patch.object(
+                _DummyAudience,
+                "_backfill_last_seen_from_messages",
+                return_value=0,
+            ),
+            patch.object(
+                _DummyAudience,
+                "_calc_watch_distribution",
+                side_effect=_fake_watch_distribution,
+            ),
+        ):
+            response = await handler._api_v2_audience_insights(request)
+
+        payload = json.loads(response.body.decode("utf-8"))
+        self.assertEqual(response.status, 200)
+        self.assertIsNone(payload["trends"]["watchTimeChange"])
+        self.assertFalse(payload["dataQuality"]["watchTimeTrendAvailable"])
+        self.assertTrue(payload["dataQuality"]["viewerReturnTrendAvailable"])
+        self.assertFalse(payload["dataQuality"]["conversionTrendAvailable"])
+
+    async def test_audience_insights_returns_null_viewer_return_change_without_previous_baseline(
+        self,
+    ) -> None:
+        handler = _DummyAudience()
+        request = SimpleNamespace(query={"streamer": "target", "days": "30"})
+
+        def _fake_watch_distribution(_sessions, conn=None, session_ids=None):
+            if list(session_ids or []) in ([101, 102], [91, 92]):
+                return {
+                    "avgWatchTime": 20.0,
+                    "dataQuality": {"method": "real_samples"},
+                }
+            raise AssertionError(f"Unexpected session_ids for watch distribution: {session_ids}")
+
+        with (
+            patch(
+                "bot.analytics.api_audience.storage.transaction",
+                return_value=_ConnContext(_AudienceInsightsNoBaselineConn()),
+            ),
+            patch.object(
+                _DummyAudience,
+                "_backfill_last_seen_from_messages",
+                return_value=0,
+            ),
+            patch.object(
+                _DummyAudience,
+                "_calc_watch_distribution",
+                side_effect=_fake_watch_distribution,
+            ),
+        ):
+            response = await handler._api_v2_audience_insights(request)
+
+        payload = json.loads(response.body.decode("utf-8"))
+        self.assertEqual(response.status, 200)
+        self.assertIsNone(payload["trends"]["viewerReturnChange"])
+        self.assertFalse(payload["dataQuality"]["viewerReturnTrendAvailable"])
+        self.assertFalse(payload["dataQuality"]["conversionTrendAvailable"])
+
+
+class DemoAudienceInsightsRegressionTests(unittest.TestCase):
+    def test_demo_audience_insights_matches_live_contract(self) -> None:
+        payload = get_audience_insights()
+        self.assertNotIn("watchTimeDistribution", payload)
+        self.assertNotIn("followerFunnel", payload)
+        self.assertNotIn("tagPerformance", payload)
+        self.assertNotIn("titlePerformance", payload)
+        self.assertIsNone(payload["trends"]["conversionChange"])
+        self.assertEqual(payload["returnRateMethod"], "distinct_rollup")
+        self.assertTrue(payload["dataQuality"]["watchTimeTrendAvailable"])
+        self.assertTrue(payload["dataQuality"]["viewerReturnTrendAvailable"])
+        self.assertFalse(payload["dataQuality"]["conversionTrendAvailable"])
+
+    def test_demo_overview_embeds_live_audience_insights_contract(self) -> None:
+        payload = get_overview()
+        audience_insights = payload["audienceInsights"]
+        self.assertNotIn("watchTimeDistribution", audience_insights)
+        self.assertNotIn("followerFunnel", audience_insights)
+        self.assertIsNone(audience_insights["trends"]["conversionChange"])
+        self.assertEqual(audience_insights["returnRateMethod"], "distinct_rollup")
+        self.assertTrue(audience_insights["dataQuality"]["watchTimeTrendAvailable"])
+        self.assertTrue(audience_insights["dataQuality"]["viewerReturnTrendAvailable"])
+
+
 class InsightsSqlRegressionTests(unittest.IsolatedAsyncioTestCase):
     async def test_chat_analytics_uses_cast_based_first_time_expression(self) -> None:
         handler = _DummyInsights()
@@ -613,6 +822,7 @@ class InsightsSqlRegressionTests(unittest.IsolatedAsyncioTestCase):
         payload = json.loads(response.body.decode("utf-8"))
         self.assertEqual(response.status, 200)
         self.assertTrue(conn.checked_first_time_cast)
+        self.assertTrue(conn.checked_top_chatter_identity)
         self.assertTrue(payload["dataQuality"]["botFilterApplied"])
 
 
@@ -804,14 +1014,19 @@ class ViewerDirectoryGapRegressionTests(unittest.IsolatedAsyncioTestCase):
     async def test_viewer_segments_respects_selected_window(self) -> None:
         conn = sqlite3.connect(":memory:")
         self._setup_tables(conn)
+        now = datetime.now(UTC)
+        recent_started = now - timedelta(days=5)
+        recent_ended = recent_started + timedelta(hours=2)
+        old_started = now - timedelta(days=120)
+        old_ended = old_started + timedelta(hours=2)
         conn.executemany(
             """
             INSERT INTO twitch_stream_sessions (id, streamer_login, started_at, ended_at)
             VALUES (?, ?, ?, ?)
             """,
             [
-                (1, "target", "2026-02-21T20:00:00+00:00", "2026-02-21T22:00:00+00:00"),
-                (2, "target", "2025-12-10T20:00:00+00:00", "2025-12-10T22:00:00+00:00"),
+                (1, "target", recent_started.isoformat(), recent_ended.isoformat()),
+                (2, "target", old_started.isoformat(), old_ended.isoformat()),
             ],
         )
         conn.executemany(
@@ -832,8 +1047,8 @@ class ViewerDirectoryGapRegressionTests(unittest.IsolatedAsyncioTestCase):
             ) VALUES (?, ?, ?, ?, ?, ?)
             """,
             [
-                ("target", "recent_user", 5, 10, "2025-11-01T20:00:00+00:00", "2026-02-21T22:00:00+00:00"),
-                ("target", "old_user", 7, 20, "2025-10-01T20:00:00+00:00", "2025-12-10T22:00:00+00:00"),
+                ("target", "recent_user", 5, 10, (recent_started - timedelta(days=60)).isoformat(), recent_ended.isoformat()),
+                ("target", "old_user", 7, 20, (old_started - timedelta(days=30)).isoformat(), old_ended.isoformat()),
             ],
         )
         conn.commit()
@@ -851,6 +1066,334 @@ class ViewerDirectoryGapRegressionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(payload["days"], 30)
         total_segment_viewers = sum(item["count"] for item in payload["segments"].values())
         self.assertEqual(total_segment_viewers, 1)
+
+    async def test_viewer_tab_excludes_streamer_and_runtime_bot_identities(self) -> None:
+        conn = sqlite3.connect(":memory:")
+        self._setup_tables(conn)
+        conn.execute(
+            """
+            INSERT INTO twitch_stream_sessions (id, streamer_login, started_at, ended_at)
+            VALUES (?, ?, ?, ?)
+            """,
+            (1, "target", "2026-02-25T20:00:00+00:00", "2026-02-25T22:00:00+00:00"),
+        )
+        conn.executemany(
+            """
+            INSERT INTO twitch_session_chatters (
+                session_id, streamer_login, chatter_login, messages
+            ) VALUES (?, ?, ?, ?)
+            """,
+            [
+                (1, "target", "target", 2),
+                (1, "target", "deadlockbot", 4),
+                (1, "target", "deutschedeadlockcommunity", 1),
+                (1, "target", "real_viewer", 3),
+                (1, "deutschedeadlockcommunity", "real_viewer", 2),
+            ],
+        )
+        conn.executemany(
+            """
+            INSERT INTO twitch_chatter_rollup (
+                streamer_login, chatter_login, total_sessions, total_messages, first_seen_at, last_seen_at
+            ) VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            [
+                ("target", "target", 1, 2, "2026-02-25T20:00:00+00:00", "2026-02-25T22:00:00+00:00"),
+                ("target", "deadlockbot", 1, 4, "2026-02-25T20:00:00+00:00", "2026-02-25T22:00:00+00:00"),
+                (
+                    "target",
+                    "deutschedeadlockcommunity",
+                    1,
+                    1,
+                    "2026-02-25T20:00:00+00:00",
+                    "2026-02-25T22:00:00+00:00",
+                ),
+                ("target", "real_viewer", 1, 3, "2026-02-25T20:00:00+00:00", "2026-02-25T22:00:00+00:00"),
+                (
+                    "deutschedeadlockcommunity",
+                    "real_viewer",
+                    1,
+                    2,
+                    "2026-02-25T20:00:00+00:00",
+                    "2026-02-25T22:00:00+00:00",
+                ),
+            ],
+        )
+        conn.commit()
+
+        handler = _DummyViewers()
+        handler._bot_token_manager = SimpleNamespace(bot_login="deutschedeadlockcommunity")
+        handler._twitch_chat_bot = SimpleNamespace(
+            nick="deadlockbot",
+            _token_manager=SimpleNamespace(bot_login="deadlockbot"),
+        )
+
+        directory_request = SimpleNamespace(query={"streamer": "target", "days": "30"})
+        segments_request = SimpleNamespace(query={"streamer": "target", "days": "30"})
+        try:
+            with patch("bot.analytics.api_viewers.storage.readonly_connection", return_value=_ConnContext(conn)):
+                directory_response = await handler._api_v2_viewer_directory(directory_request)
+                segments_response = await handler._api_v2_viewer_segments(segments_request)
+        finally:
+            conn.close()
+
+        directory_payload = json.loads(directory_response.body.decode("utf-8"))
+        segments_payload = json.loads(segments_response.body.decode("utf-8"))
+
+        self.assertEqual(directory_response.status, 200)
+        self.assertEqual([viewer["login"] for viewer in directory_payload["viewers"]], ["real_viewer"])
+        self.assertEqual(directory_payload["summary"]["totalViewers"], 1)
+
+        self.assertEqual(segments_response.status, 200)
+        self.assertEqual(
+            sum(item["count"] for item in segments_payload["segments"].values()),
+            1,
+        )
+        self.assertEqual(
+            segments_payload["crossChannelStats"]["topSharedChannels"],
+            [],
+        )
+
+    async def test_viewer_segments_shared_channel_direction_is_not_hardcoded(self) -> None:
+        conn = sqlite3.connect(":memory:")
+        self._setup_tables(conn)
+        conn.executemany(
+            """
+            INSERT INTO twitch_stream_sessions (id, streamer_login, started_at, ended_at)
+            VALUES (?, ?, ?, ?)
+            """,
+            [
+                (1, "target", "2026-02-25T20:00:00+00:00", "2026-02-25T22:00:00+00:00"),
+                (2, "other_in", "2026-02-25T20:00:00+00:00", "2026-02-25T22:00:00+00:00"),
+                (3, "other_out", "2026-02-25T20:00:00+00:00", "2026-02-25T22:00:00+00:00"),
+            ],
+        )
+        conn.executemany(
+            """
+            INSERT INTO twitch_session_chatters (
+                session_id, streamer_login, chatter_login, messages
+            ) VALUES (?, ?, ?, ?)
+            """,
+            [
+                (1, "target", "viewer_a", 2),
+                (1, "target", "viewer_b", 3),
+                (1, "target", "viewer_c", 1),
+                (2, "other_in", "viewer_a", 4),
+                (2, "other_in", "viewer_b", 5),
+                (3, "other_out", "viewer_b", 2),
+                (3, "other_out", "viewer_c", 2),
+            ],
+        )
+        conn.executemany(
+            """
+            INSERT INTO twitch_chatter_rollup (
+                streamer_login, chatter_login, total_sessions, total_messages, first_seen_at, last_seen_at
+            ) VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            [
+                ("target", "viewer_a", 2, 2, "2026-02-10T20:00:00+00:00", "2026-02-25T22:00:00+00:00"),
+                ("target", "viewer_b", 3, 3, "2026-02-10T20:00:00+00:00", "2026-02-25T22:00:00+00:00"),
+                ("target", "viewer_c", 1, 1, "2026-02-10T20:00:00+00:00", "2026-02-25T22:00:00+00:00"),
+                ("other_in", "viewer_a", 4, 4, "2026-02-01T20:00:00+00:00", "2026-02-25T22:00:00+00:00"),
+                ("other_in", "viewer_b", 5, 5, "2026-02-02T20:00:00+00:00", "2026-02-25T22:00:00+00:00"),
+                ("other_out", "viewer_b", 2, 2, "2026-02-20T20:00:00+00:00", "2026-02-25T22:00:00+00:00"),
+                ("other_out", "viewer_c", 2, 2, "2026-02-21T20:00:00+00:00", "2026-02-25T22:00:00+00:00"),
+            ],
+        )
+        conn.commit()
+
+        handler = _DummyViewers()
+        request = SimpleNamespace(query={"streamer": "target", "days": "30"})
+        try:
+            with patch(
+                "bot.analytics.api_viewers.storage.readonly_connection",
+                return_value=_ConnContext(conn),
+            ):
+                response = await handler._api_v2_viewer_segments(request)
+        finally:
+            conn.close()
+
+        payload = json.loads(response.body.decode("utf-8"))
+        self.assertEqual(response.status, 200)
+        direction_map = {
+            entry["streamer"]: entry["direction"]
+            for entry in payload["crossChannelStats"]["topSharedChannels"]
+        }
+        self.assertEqual(direction_map["other_in"], "incoming")
+        self.assertEqual(direction_map["other_out"], "outgoing")
+
+    async def test_viewer_segments_uses_unknown_when_direction_cannot_be_inferred(self) -> None:
+        conn = sqlite3.connect(":memory:")
+        self._setup_tables(conn)
+        conn.executemany(
+            """
+            INSERT INTO twitch_stream_sessions (id, streamer_login, started_at, ended_at)
+            VALUES (?, ?, ?, ?)
+            """,
+            [
+                (1, "target", "2026-02-25T20:00:00+00:00", "2026-02-25T22:00:00+00:00"),
+                (2, "other_unknown", "2026-02-25T20:00:00+00:00", "2026-02-25T22:00:00+00:00"),
+            ],
+        )
+        conn.executemany(
+            """
+            INSERT INTO twitch_session_chatters (
+                session_id, streamer_login, chatter_login, messages
+            ) VALUES (?, ?, ?, ?)
+            """,
+            [
+                (1, "target", "viewer_a", 2),
+                (2, "other_unknown", "viewer_a", 3),
+            ],
+        )
+        conn.commit()
+
+        handler = _DummyViewers()
+        request = SimpleNamespace(query={"streamer": "target", "days": "30"})
+        try:
+            with patch(
+                "bot.analytics.api_viewers.storage.readonly_connection",
+                return_value=_ConnContext(conn),
+            ):
+                response = await handler._api_v2_viewer_segments(request)
+        finally:
+            conn.close()
+
+        payload = json.loads(response.body.decode("utf-8"))
+        self.assertEqual(response.status, 200)
+        direction_map = {
+            entry["streamer"]: entry["direction"]
+            for entry in payload["crossChannelStats"]["topSharedChannels"]
+        }
+        self.assertEqual(direction_map["other_unknown"], "unknown")
+
+
+class CoachingSqlRegressionTests(unittest.TestCase):
+    def test_schedule_optimizer_uses_valid_postgres_extract_casts(self) -> None:
+        test_case = self
+
+        class _GuardConn:
+            def __init__(self) -> None:
+                self.calls = 0
+
+            def execute(self, sql, params=None):
+                sql_text = str(sql)
+                self.calls += 1
+                self_ref = self
+
+                class _Cursor:
+                    def fetchall(self_inner):
+                        if self_ref.calls == 1:
+                            test_case.assertIn(
+                                "EXTRACT(DOW FROM (ts_utc AT TIME ZONE 'UTC'))::int as weekday",
+                                sql_text,
+                            )
+                            test_case.assertIn(
+                                "EXTRACT(HOUR FROM (ts_utc AT TIME ZONE 'UTC'))::int as hour",
+                                sql_text,
+                            )
+                        if self_ref.calls == 2:
+                            test_case.assertIn(
+                                "EXTRACT(DOW FROM (started_at AT TIME ZONE 'UTC'))::int as weekday",
+                                sql_text,
+                            )
+                            test_case.assertIn(
+                                "EXTRACT(HOUR FROM (started_at AT TIME ZONE 'UTC'))::int as hour",
+                                sql_text,
+                            )
+                        return []
+
+                return _Cursor()
+
+        result = _schedule_optimizer(_GuardConn(), "target", "2026-02-01T00:00:00+00:00")
+        self.assertEqual(result["competitionHeatmap"], [])
+        self.assertEqual(result["yourCurrentSlots"], [])
+
+
+class InternalHomeHealthScoreRegressionTests(unittest.TestCase):
+    def test_health_score_uses_real_community_score_and_null_trend_without_previous_week(self) -> None:
+        conn = sqlite3.connect(":memory:")
+        conn.execute(
+            """
+            CREATE TABLE twitch_stats_tracked (
+                streamer TEXT,
+                ts_utc TEXT,
+                viewer_count INTEGER
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE twitch_stream_sessions (
+                id INTEGER PRIMARY KEY,
+                streamer_login TEXT,
+                started_at TEXT,
+                ended_at TEXT
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE twitch_session_chatters (
+                session_id INTEGER,
+                chatter_login TEXT,
+                chatter_id TEXT,
+                is_first_time_streamer INTEGER
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE twitch_chat_messages (
+                streamer_login TEXT,
+                message_ts TEXT
+            )
+            """
+        )
+
+        now = datetime.now(UTC)
+        current_ts = (now - timedelta(days=2)).isoformat()
+        conn.executemany(
+            "INSERT INTO twitch_stats_tracked (streamer, ts_utc, viewer_count) VALUES (?, ?, ?)",
+            [
+                ("target", current_ts, 20),
+                ("target", (now - timedelta(days=1)).isoformat(), 30),
+            ],
+        )
+        conn.execute(
+            """
+            INSERT INTO twitch_stream_sessions (id, streamer_login, started_at, ended_at)
+            VALUES (?, ?, ?, ?)
+            """,
+            (1, "target", current_ts, (now - timedelta(days=2, hours=-2)).isoformat()),
+        )
+        conn.executemany(
+            """
+            INSERT INTO twitch_session_chatters (session_id, chatter_login, chatter_id, is_first_time_streamer)
+            VALUES (?, ?, ?, ?)
+            """,
+            [
+                (1, "target", None, 0),
+                (1, "nightbot", None, 0),
+                (1, "viewer_a", None, 0),
+                (1, "viewer_b", None, 1),
+            ],
+        )
+        conn.executemany(
+            "INSERT INTO twitch_chat_messages (streamer_login, message_ts) VALUES (?, ?)",
+            [("target", current_ts), ("target", current_ts)],
+        )
+        conn.commit()
+
+        try:
+            payload = _compute_health_score("target", _CompatSqliteConn(conn))
+        finally:
+            conn.close()
+
+        self.assertIsNotNone(payload)
+        assert payload is not None
+        self.assertIsNone(payload["trend"])
+        self.assertEqual(payload["sub_scores"]["community"], 50)
 
 
 class ChatHypeTimelineRegressionTests(unittest.IsolatedAsyncioTestCase):
@@ -1299,6 +1842,64 @@ class OverviewSessionsRegressionTests(unittest.TestCase):
 
         self.assertEqual(metrics["total_unique_chatters"], 0)
         self.assertEqual(metrics["active_chatters"], 0)
+
+
+class BotClausePlaceholderRegressionTests(unittest.TestCase):
+    def test_runtime_queries_use_psycopg_placeholders_for_known_bot_filters(self) -> None:
+        repo_root = Path(__file__).resolve().parents[1]
+        runtime_files = [
+            Path("bot/analytics/api_audience.py"),
+            Path("bot/analytics/api_chat_deep.py"),
+            Path("bot/analytics/api_insights.py"),
+            Path("bot/analytics/api_overview.py"),
+            Path("bot/analytics/api_raids.py"),
+            Path("bot/analytics/api_v2.py"),
+            Path("bot/analytics/api_viewers.py"),
+            Path("bot/analytics/mixin.py"),
+            Path("bot/analytics/raid_metrics.py"),
+            Path("bot/chat/promos.py"),
+        ]
+
+        missing_placeholder: list[str] = []
+        wrong_placeholder: list[str] = []
+
+        for rel_path in runtime_files:
+            source = (repo_root / rel_path).read_text(encoding="utf-8")
+            tree = ast.parse(source, filename=str(rel_path))
+            for node in ast.walk(tree):
+                if not isinstance(node, ast.Call):
+                    continue
+                if not isinstance(node.func, ast.Name):
+                    continue
+                if node.func.id != "build_known_chat_bot_not_in_clause":
+                    continue
+
+                placeholder_kw = next(
+                    (kw for kw in node.keywords if kw.arg == "placeholder"),
+                    None,
+                )
+                location = f"{rel_path}:{node.lineno}"
+                if placeholder_kw is None:
+                    missing_placeholder.append(location)
+                    continue
+                if not (
+                    isinstance(placeholder_kw.value, ast.Constant)
+                    and placeholder_kw.value.value == "%s"
+                ):
+                    wrong_placeholder.append(location)
+
+        self.assertEqual(
+            missing_placeholder,
+            [],
+            msg="Missing placeholder=\"%s\" for known chat bot filters: "
+            + ", ".join(missing_placeholder),
+        )
+        self.assertEqual(
+            wrong_placeholder,
+            [],
+            msg="Unexpected placeholder for known chat bot filters: "
+            + ", ".join(wrong_placeholder),
+        )
 
 
 class OverviewRaidRetentionRegressionTests(unittest.IsolatedAsyncioTestCase):

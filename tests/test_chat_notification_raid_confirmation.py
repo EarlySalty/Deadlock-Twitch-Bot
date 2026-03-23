@@ -5,7 +5,7 @@ import sqlite3
 import time
 import unittest
 from types import SimpleNamespace
-from unittest.mock import ANY, AsyncMock, patch
+from unittest.mock import ANY, AsyncMock, Mock, patch
 
 from bot.chat.bot import RaidChatBot
 from bot.chat.connection import ConnectionMixin
@@ -310,6 +310,41 @@ class ChatJoinNotificationSubscriptionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             state["channel.chat.notification"]["state"],
             "missing_broadcaster_authorization",
+        )
+
+    async def test_join_silently_skips_passive_monitored_only_channel(self) -> None:
+        conn = sqlite3.connect(":memory:")
+        conn.row_factory = sqlite3.Row
+        ensure_sqlite_twitch_schema(conn)
+        conn.execute(
+            """
+            INSERT INTO twitch_streamers (twitch_login, twitch_user_id, is_monitored_only)
+            VALUES (?, ?, 1)
+            """,
+            ("targetlogin", "9009"),
+        )
+        conn.commit()
+
+        harness = _JoinFailureHarness(bot_scopes={"user:read:chat"})
+        harness._log_chat_join_decision = Mock()
+        harness._ensure_bot_is_mod = AsyncMock(return_value=False)
+        try:
+            with patch(
+                "bot.chat.connection.readonly_connection",
+                side_effect=lambda: contextlib.nullcontext(_CompatConn(conn)),
+            ):
+                result = await harness.join("targetlogin", channel_id="9009")
+        finally:
+            conn.close()
+
+        self.assertFalse(result)
+        self.assertEqual(harness.subscribe_calls, [])
+        harness._ensure_bot_is_mod.assert_not_awaited()
+        harness._log_chat_join_decision.assert_not_called()
+        state = harness.get_channel_subscription_state("targetlogin")
+        self.assertEqual(
+            state["channel.chat.notification"]["state"],
+            "passive_lurker",
         )
 
 

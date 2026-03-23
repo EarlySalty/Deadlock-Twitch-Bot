@@ -13,12 +13,56 @@ from datetime import UTC, datetime, timedelta
 
 from aiohttp import web
 
-from ..core.chat_bots import build_known_chat_bot_not_in_clause, is_known_chat_bot
+from ..core.chat_bots import (
+    KNOWN_CHAT_BOTS,
+    build_known_chat_bot_not_in_clause,
+    is_known_chat_bot,
+)
 from ..storage import pg as storage
 from .error_utils import analytics_internal_error_response
 from .raw_chat_status import build_raw_chat_status, build_viewer_window_metadata
 
 log = logging.getLogger("TwitchStreams.AnalyticsV2")
+
+
+def _normalize_login(value: object) -> str:
+    return str(value or "").strip().lower().lstrip("#")
+
+
+def _collect_viewer_exclusion_logins(owner: object | None, streamer: str | None) -> list[str]:
+    excluded = {_normalize_login(streamer)}
+
+    bot_token_manager = getattr(owner, "_bot_token_manager", None)
+    if bot_token_manager is not None:
+        excluded.add(_normalize_login(getattr(bot_token_manager, "bot_login", None)))
+
+    chat_bot = getattr(owner, "_twitch_chat_bot", None)
+    if chat_bot is not None:
+        excluded.add(_normalize_login(getattr(chat_bot, "nick", None)))
+        token_manager = getattr(chat_bot, "_token_manager", None)
+        if token_manager is not None:
+            excluded.add(_normalize_login(getattr(token_manager, "bot_login", None)))
+
+    raid_bot = getattr(owner, "_raid_bot", None)
+    auth_manager = getattr(raid_bot, "auth_manager", None)
+    token_manager = getattr(auth_manager, "token_manager", None)
+    if token_manager is not None:
+        excluded.add(_normalize_login(getattr(token_manager, "bot_login", None)))
+
+    return sorted(login for login in excluded if login)
+
+
+def _build_viewer_identity_not_in_clause(
+    *,
+    column_expr: str,
+    excluded_logins: list[str] | tuple[str, ...] | None = None,
+) -> tuple[str, list[str]]:
+    combined = [*KNOWN_CHAT_BOTS, *(excluded_logins or [])]
+    return build_known_chat_bot_not_in_clause(
+        column_expr=column_expr,
+        placeholder="%s",
+        bots=combined,
+    )
 
 
 def _coerce_utc_datetime(value):
@@ -84,9 +128,10 @@ def _classify_viewer(total_sessions: int, total_messages: int, first_seen_at, la
     return "casual"
 
 
-def _fetch_window_viewer_rows(conn, *, streamer: str, since_date: str):
-    rollup_bot_clause, rollup_bot_params = build_known_chat_bot_not_in_clause(
-        column_expr="sc.chatter_login"
+def _fetch_window_viewer_rows(conn, *, streamer: str, since_date: str, excluded_logins=None):
+    rollup_bot_clause, rollup_bot_params = _build_viewer_identity_not_in_clause(
+        column_expr="sc.chatter_login",
+        excluded_logins=excluded_logins,
     )
     return conn.execute(
         f"""
@@ -107,9 +152,13 @@ def _fetch_window_viewer_rows(conn, *, streamer: str, since_date: str):
     ).fetchall()
 
 
-def _fetch_window_viewer_row(conn, *, streamer: str, login: str, since_date: str):
+def _fetch_window_viewer_row(conn, *, streamer: str, login: str, since_date: str, excluded_logins=None):
+    rollup_bot_clause, rollup_bot_params = _build_viewer_identity_not_in_clause(
+        column_expr="sc.chatter_login",
+        excluded_logins=excluded_logins,
+    )
     return conn.execute(
-        """
+        f"""
         SELECT
             COUNT(DISTINCT sc.session_id) AS total_sessions,
             COALESCE(SUM(sc.messages), 0) AS total_messages,
@@ -120,8 +169,9 @@ def _fetch_window_viewer_row(conn, *, streamer: str, login: str, since_date: str
         WHERE LOWER(sc.streamer_login) = %s
           AND LOWER(sc.chatter_login) = %s
           AND s.started_at >= %s
+          AND {rollup_bot_clause}
         """,
-        [streamer, login, since_date],
+        [streamer, login, since_date, *rollup_bot_params],
     ).fetchone()
 
 
@@ -157,19 +207,22 @@ class _AnalyticsViewersMixin:
 
         try:
             with storage.readonly_connection() as conn:
+                excluded_logins = _collect_viewer_exclusion_logins(self, streamer)
                 raw_chat_status = build_raw_chat_status(
                     conn,
                     streamer,
                     since_date=since_date,
                 )
-                rollup_bot_clause, rollup_bot_params = build_known_chat_bot_not_in_clause(
-                    column_expr="chatter_login"
+                rollup_bot_clause, rollup_bot_params = _build_viewer_identity_not_in_clause(
+                    column_expr="chatter_login",
+                    excluded_logins=excluded_logins,
                 )
                 # ── Core viewer data ──
                 rows = _fetch_window_viewer_rows(
                     conn,
                     streamer=streamer,
                     since_date=since_date,
+                    excluded_logins=excluded_logins,
                 )
 
                 if not rows:
@@ -402,7 +455,8 @@ class _AnalyticsViewersMixin:
         login = request.query.get("login", "").strip().lower()
         if not streamer or not login:
             return web.json_response({"error": "streamer and login required"}, status=400)
-        if is_known_chat_bot(login):
+        excluded_logins = set(_collect_viewer_exclusion_logins(self, streamer))
+        if is_known_chat_bot(login) or login in excluded_logins:
             return web.json_response({"error": "Viewer not found"}, status=404)
         days = min(365, max(1, int(request.query.get("days", "30"))))
 
@@ -422,6 +476,7 @@ class _AnalyticsViewersMixin:
                     streamer=streamer,
                     login=login,
                     since_date=cutoff_window,
+                    excluded_logins=excluded_logins,
                 )
 
                 if not row or int(row[0] or 0) <= 0:
@@ -542,7 +597,8 @@ class _AnalyticsViewersMixin:
                 # ── Personality: classify messages into types ──
                 personality = None
                 personality_bot_clause, personality_bot_params = build_known_chat_bot_not_in_clause(
-                    column_expr="m.chatter_login"
+                    column_expr="m.chatter_login",
+                    placeholder="%s",
                 )
                 msg_rows = conn.execute(
                     f"""
@@ -643,13 +699,16 @@ class _AnalyticsViewersMixin:
 
         try:
             with storage.readonly_connection() as conn:
-                rollup_bot_clause, rollup_bot_params = build_known_chat_bot_not_in_clause(
-                    column_expr="chatter_login"
+                excluded_logins = _collect_viewer_exclusion_logins(self, streamer)
+                rollup_bot_clause, rollup_bot_params = _build_viewer_identity_not_in_clause(
+                    column_expr="chatter_login",
+                    excluded_logins=excluded_logins,
                 )
                 rows = _fetch_window_viewer_rows(
                     conn,
                     streamer=streamer,
                     since_date=since_date,
+                    excluded_logins=excluded_logins,
                 )
 
                 if not rows:
@@ -725,6 +784,10 @@ class _AnalyticsViewersMixin:
                 viewer_whereabouts: dict[str, list[str]] = {}
                 if at_risk_logins:
                     placeholders = ",".join("%s" for _ in at_risk_logins)
+                    whereabout_streamer_clause, whereabout_streamer_params = _build_viewer_identity_not_in_clause(
+                        column_expr="streamer_login",
+                        excluded_logins=excluded_logins,
+                    )
                     whereabout_rows = conn.execute(
                         f"""
                         SELECT chatter_login, streamer_login, last_seen_at
@@ -732,10 +795,11 @@ class _AnalyticsViewersMixin:
                         WHERE LOWER(chatter_login) IN ({placeholders})
                           AND LOWER(streamer_login) != %s
                           AND last_seen_at >= %s
+                          AND {whereabout_streamer_clause}
                         ORDER BY chatter_login, last_seen_at DESC
                         """,
                         [login.lower() for login in at_risk_logins]
-                        + [streamer, (now - timedelta(days=30)).isoformat()],
+                        + [streamer, (now - timedelta(days=30)).isoformat(), *whereabout_streamer_params],
                     ).fetchall()
                     for wr in whereabout_rows:
                         wl = wr[0].lower()
@@ -775,6 +839,10 @@ class _AnalyticsViewersMixin:
                 for i in range(0, len(all_logins), batch_size):
                     batch = all_logins[i : i + batch_size]
                     placeholders = ",".join("%s" for _ in batch)
+                    cross_channel_streamer_clause, cross_channel_streamer_params = _build_viewer_identity_not_in_clause(
+                        column_expr="sc.streamer_login",
+                        excluded_logins=excluded_logins,
+                    )
                     cc_rows = conn.execute(
                         f"""
                         SELECT
@@ -785,9 +853,15 @@ class _AnalyticsViewersMixin:
                         WHERE LOWER(sc.chatter_login) IN ({placeholders})
                           AND s.started_at >= %s
                           AND {rollup_bot_clause}
+                          AND {cross_channel_streamer_clause}
                         GROUP BY LOWER(sc.chatter_login)
                         """,
-                        [login.lower() for login in batch] + [since_date, *rollup_bot_params],
+                        [
+                            *[login.lower() for login in batch],
+                            since_date,
+                            *rollup_bot_params,
+                            *cross_channel_streamer_params,
+                        ],
                     ).fetchall()
                     for cr in cc_rows:
                         ch_count = cr[1]
@@ -799,8 +873,13 @@ class _AnalyticsViewersMixin:
                 avg_other = round(other_channel_sum / total, 1) if total > 0 else 0
 
                 # Top shared channels
-                rollup_bot_clause_cr1, rollup_bot_params_cr1 = build_known_chat_bot_not_in_clause(
-                    column_expr="sc1.chatter_login"
+                rollup_bot_clause_cr1, rollup_bot_params_cr1 = _build_viewer_identity_not_in_clause(
+                    column_expr="sc1.chatter_login",
+                    excluded_logins=excluded_logins,
+                )
+                shared_streamer_clause, shared_streamer_params = _build_viewer_identity_not_in_clause(
+                    column_expr="sc2.streamer_login",
+                    excluded_logins=excluded_logins,
                 )
                 shared_rows = conn.execute(
                     f"""
@@ -816,20 +895,100 @@ class _AnalyticsViewersMixin:
                       AND LOWER(sc2.streamer_login) != %s
                       AND s2.started_at >= %s
                       AND {rollup_bot_clause_cr1}
+                      AND {shared_streamer_clause}
                     GROUP BY LOWER(sc2.streamer_login)
                     ORDER BY shared_count DESC
                     LIMIT 10
                     """,
-                    [streamer, since_date, streamer, since_date, *rollup_bot_params_cr1],
+                    [
+                        streamer,
+                        since_date,
+                        streamer,
+                        since_date,
+                        *rollup_bot_params_cr1,
+                        *shared_streamer_params,
+                    ],
                 ).fetchall()
+
+                shared_direction_map: dict[str, str] = {}
+                if shared_rows:
+                    other_streamers = [
+                        str(sr[0]).lower()
+                        for sr in shared_rows
+                        if sr and sr[0]
+                    ]
+                    if other_streamers:
+                        placeholders = ",".join("%s" for _ in other_streamers)
+                        target_rollup_clause, target_rollup_params = _build_viewer_identity_not_in_clause(
+                            column_expr="target_rollup.chatter_login",
+                            excluded_logins=excluded_logins,
+                        )
+                        other_rollup_clause, other_rollup_params = _build_viewer_identity_not_in_clause(
+                            column_expr="other_rollup.chatter_login",
+                            excluded_logins=excluded_logins,
+                        )
+                        other_streamer_clause, other_streamer_params = _build_viewer_identity_not_in_clause(
+                            column_expr="other_rollup.streamer_login",
+                            excluded_logins=excluded_logins,
+                        )
+                        direction_rows = conn.execute(
+                            f"""
+                            SELECT
+                                LOWER(other_rollup.streamer_login) AS streamer_login,
+                                SUM(
+                                    CASE
+                                        WHEN target_rollup.first_seen_at < other_rollup.first_seen_at
+                                        THEN 1 ELSE 0
+                                    END
+                                ) AS outgoing_votes,
+                                SUM(
+                                    CASE
+                                        WHEN other_rollup.first_seen_at < target_rollup.first_seen_at
+                                        THEN 1 ELSE 0
+                                    END
+                                ) AS incoming_votes
+                            FROM twitch_chatter_rollup target_rollup
+                            JOIN twitch_chatter_rollup other_rollup
+                              ON LOWER(target_rollup.chatter_login) = LOWER(other_rollup.chatter_login)
+                            WHERE LOWER(target_rollup.streamer_login) = %s
+                              AND LOWER(other_rollup.streamer_login) IN ({placeholders})
+                              AND {target_rollup_clause}
+                              AND {other_rollup_clause}
+                              AND {other_streamer_clause}
+                            GROUP BY LOWER(other_rollup.streamer_login)
+                            """,
+                            [
+                                streamer,
+                                *other_streamers,
+                                *target_rollup_params,
+                                *other_rollup_params,
+                                *other_streamer_params,
+                            ],
+                        ).fetchall()
+
+                        for direction_row in direction_rows:
+                            other_login = str(direction_row[0] or "").lower()
+                            outgoing_votes = int(direction_row[1] or 0)
+                            incoming_votes = int(direction_row[2] or 0)
+                            if incoming_votes > 0 and outgoing_votes > 0:
+                                direction = "bidirectional"
+                            elif incoming_votes > 0:
+                                direction = "incoming"
+                            elif outgoing_votes > 0:
+                                direction = "outgoing"
+                            else:
+                                direction = "unknown"
+                            shared_direction_map[other_login] = direction
 
                 top_shared = []
                 for sr in shared_rows:
-                    # Check if bidirectional (does the other streamer also share viewers back%s)
                     top_shared.append({
                         "streamer": sr[0],
                         "sharedCount": sr[1],
-                        "direction": "bidirectional",
+                        "direction": shared_direction_map.get(
+                            str(sr[0] or "").lower(),
+                            "unknown",
+                        ),
                     })
 
                 return web.json_response({

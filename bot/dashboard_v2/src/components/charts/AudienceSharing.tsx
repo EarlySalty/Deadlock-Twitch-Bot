@@ -14,11 +14,9 @@ interface AudienceSharingProps {
 const LINE_COLORS = ['var(--color-primary)', 'var(--color-accent)', 'var(--color-warning)'];
 
 export function AudienceSharing({ data }: AudienceSharingProps) {
-  if (!data || !data.dataAvailable) {
-    return <NoDataCard message={data?.message || "Keine Sharing-Daten vorhanden"} />;
-  }
-
-  const { current, timeline, totalUniqueViewers } = data;
+  const current = useMemo(() => data?.current ?? [], [data]);
+  const timeline = useMemo(() => data?.timeline ?? [], [data]);
+  const totalUniqueViewers = data?.totalUniqueViewers ?? 0;
 
   // Prepare bar chart data (top 10 partners by shared viewers)
   const barData = useMemo(
@@ -49,6 +47,10 @@ export function AudienceSharing({ data }: AudienceSharingProps) {
       .sort(([a], [b]) => a.localeCompare(b))
       .map(([month, values]) => ({ month, ...values }));
   }, [timeline, topStreamers]);
+
+  if (!data || !data.dataAvailable) {
+    return <NoDataCard message={data?.message || "Keine Sharing-Daten vorhanden"} />;
+  }
 
   return (
     <div className="space-y-4">

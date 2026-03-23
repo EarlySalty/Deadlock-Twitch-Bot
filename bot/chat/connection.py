@@ -9,6 +9,11 @@ from types import MethodType
 from ..core.partner_utils import is_partner_channel_for_chat_tracking
 from ..storage import insert_observability_event, readonly_connection, transaction
 from .constants import CHAT_JOIN_OFFLINE, eventsub
+from .lurker_policy import (
+    PASSIVE_LURKER_DETAIL,
+    PASSIVE_LURKER_STATE,
+    is_passive_lurker_channel,
+)
 
 log = logging.getLogger("TwitchStreams.ChatBot")
 
@@ -1137,6 +1142,25 @@ class ConnectionMixin:
             # Das hält die Anzahl der WebSocket-Verbindungen auf 1 (Limit bei Twitch ist 3 pro Client ID).
             # Voraussetzung: Der Bot muss Moderator im Ziel-Kanal sein.
             safe_bot_id = self.bot_id_safe or self.bot_id or ""
+            remaining_missing = _remaining_missing()
+            join_state = self._load_chat_join_channel_state(
+                channel_login=normalized_login,
+                channel_id=str(channel_id),
+            )
+            runtime_monitored_only = self._is_monitored_only(normalized_login)
+            if remaining_missing and is_passive_lurker_channel(
+                is_monitored_only=runtime_monitored_only or join_state["is_monitored_only"],
+                is_partner_active=join_state["is_partner_active"],
+                has_raid_auth=join_state["has_raid_auth"],
+            ):
+                for sub_type in remaining_missing:
+                    self._record_chat_subscription_state(
+                        normalized_login,
+                        sub_type,
+                        PASSIVE_LURKER_STATE,
+                        detail=PASSIVE_LURKER_DETAIL,
+                    )
+                return False
 
             # Token vor dem Subscribe sicherstellen – verhindert
             # "invalid transport and auth combination" wenn setup_hook()
@@ -1413,31 +1437,15 @@ class ConnectionMixin:
                         exception=e,
                     )
                     return False
-                # Monitored-Only Channels: kein Mod-Versuch, einfach überspringen.
-                # Diese Channels haben keinen Streamer-Token, daher ist _ensure_bot_is_mod
-                # sinnlos und würde nur Warnungen produzieren.
+                # Passive lurker channels are handled by a silent preflight path above.
                 if self._is_monitored_only(normalized_login) or join_state["is_monitored_only"]:
                     for sub_type in remaining_missing:
                         self._record_chat_subscription_state(
                             normalized_login,
                             sub_type,
-                            "monitored_only_no_broadcaster_auth",
-                            detail="subscription missing proper authorization",
+                            PASSIVE_LURKER_STATE,
+                            detail=PASSIVE_LURKER_DETAIL,
                         )
-                    log.info(
-                        "join(): 403 für Monitored-Only Channel %s – kein Mod-Versuch, "
-                        "Channel wird übersprungen (kein Streamer-Token verfügbar).",
-                        channel_login,
-                    )
-                    self._increment_chat_observability_counter("chat_join_failure_total")
-                    self._increment_chat_observability_counter("chat_join_failure_total_monitored_only_no_broadcaster_auth")
-                    _emit_join_decision(
-                        decision="monitored_only_no_broadcaster_auth",
-                        detail="subscription missing proper authorization",
-                        auth_diagnostics=auth_diagnostics,
-                        join_state=join_state,
-                        exception=e,
-                    )
                     return False
 
                 # Cooldown-Prüfung: Bei gebannen Bots nicht wiederholt versuchen
