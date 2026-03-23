@@ -1,6 +1,7 @@
-import { TrendingDown, Zap, Gift, Radio, AlertCircle, Loader2, Clock, BarChart3, Lightbulb, ArrowLeftRight } from 'lucide-react';
-import { useMonetization } from '@/hooks/useAnalytics';
-import type { TimeRange, AdBucketData, RecoveryBucketData } from '@/types/analytics';
+import { TrendingDown, Zap, Gift, Radio, AlertCircle, Loader2, Clock, BarChart3, Lightbulb, ArrowLeftRight, Timer, BellOff, Calendar } from 'lucide-react';
+import { motion } from 'framer-motion';
+import { useMonetization, useAdsSchedule } from '@/hooks/useAnalytics';
+import type { TimeRange, AdBucketData, RecoveryBucketData, AdsSchedule } from '@/types/analytics';
 
 interface MonetizationProps {
   streamer: string | null;
@@ -78,8 +79,191 @@ function AdStrategyRecommendation({ recommendations }: { recommendations: string
   );
 }
 
+function AdScheduleSection({ scheduleData, loading }: { scheduleData: AdsSchedule | null; loading: boolean }) {
+  if (loading) {
+    return (
+      <div className="mb-4 bg-card border border-border rounded-xl p-5 flex items-center gap-2 text-text-secondary text-sm">
+        <Loader2 className="w-4 h-4 animate-spin" />
+        Lade Ad-Zeitplan…
+      </div>
+    );
+  }
+
+  if (!scheduleData || !scheduleData.current) {
+    return (
+      <div className="mb-4 p-4 bg-card border border-border rounded-xl text-text-secondary text-sm">
+        Keine Ad-Zeitplan-Daten vorhanden.
+      </div>
+    );
+  }
+
+  const { current, history } = scheduleData;
+
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: 20 }}
+      animate={{ opacity: 1, y: 0 }}
+      className="mb-4 space-y-4"
+    >
+      {/* Section Header */}
+      <div className="flex items-center gap-2">
+        <Calendar className="w-4 h-4 text-primary" />
+        <h4 className="font-semibold text-white">Ad-Zeitplan</h4>
+        <span className="text-xs text-text-secondary ml-auto">
+          Stand: {formatTimestamp(current.snapshot_at)}
+        </span>
+      </div>
+
+      {/* Current Status Tiles */}
+      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
+        <div className="bg-card border border-border rounded-xl p-4 flex flex-col gap-1">
+          <div className="flex items-center gap-1.5">
+            <Clock className="w-3.5 h-3.5 text-accent" />
+            <span className="text-xs text-text-secondary uppercase tracking-wide">Nächste Ad</span>
+          </div>
+          <span className="text-lg font-bold text-white">
+            {current.next_ad_at ? formatRelativeTime(current.next_ad_at) : 'Keine geplant'}
+          </span>
+          {current.next_ad_at && (
+            <span className="text-xs text-text-secondary">{formatTimestamp(current.next_ad_at)}</span>
+          )}
+        </div>
+
+        <div className="bg-card border border-border rounded-xl p-4 flex flex-col gap-1">
+          <div className="flex items-center gap-1.5">
+            <Timer className="w-3.5 h-3.5 text-success" />
+            <span className="text-xs text-text-secondary uppercase tracking-wide">Preroll-frei</span>
+          </div>
+          <span className="text-lg font-bold text-white">
+            {formatDurationMin(current.preroll_free_time)}
+          </span>
+          <span className="text-xs text-text-secondary">verbleibend</span>
+        </div>
+
+        <div className="bg-card border border-border rounded-xl p-4 flex flex-col gap-1">
+          <div className="flex items-center gap-1.5">
+            <BellOff className="w-3.5 h-3.5 text-warning" />
+            <span className="text-xs text-text-secondary uppercase tracking-wide">Snooze</span>
+          </div>
+          <span className="text-lg font-bold text-white">
+            {current.snooze_count !== null ? `${current.snooze_count}x` : '-'}
+          </span>
+          {current.snooze_refresh_at && (
+            <span className="text-xs text-text-secondary">
+              Refresh: {formatTimestamp(current.snooze_refresh_at)}
+            </span>
+          )}
+        </div>
+
+        <div className="bg-card border border-border rounded-xl p-4 flex flex-col gap-1">
+          <div className="flex items-center gap-1.5">
+            <Clock className="w-3.5 h-3.5 text-text-secondary" />
+            <span className="text-xs text-text-secondary uppercase tracking-wide">Letzte Ad</span>
+          </div>
+          <span className="text-lg font-bold text-white">
+            {current.last_ad_at ? formatTimestamp(current.last_ad_at) : '-'}
+          </span>
+        </div>
+
+        <div className="bg-card border border-border rounded-xl p-4 flex flex-col gap-1">
+          <div className="flex items-center gap-1.5">
+            <Timer className="w-3.5 h-3.5 text-text-secondary" />
+            <span className="text-xs text-text-secondary uppercase tracking-wide">Dauer</span>
+          </div>
+          <span className="text-lg font-bold text-white">
+            {current.duration !== null ? `${current.duration} s` : '-'}
+          </span>
+        </div>
+      </div>
+
+      {/* Schedule History */}
+      {history.length > 1 && (
+        <div className="bg-card border border-border rounded-xl p-5">
+          <div className="flex items-center gap-2 mb-3">
+            <BarChart3 className="w-4 h-4 text-accent" />
+            <span className="text-sm font-medium text-white">Schedule-Verlauf</span>
+            <span className="text-xs text-text-secondary ml-auto">Letzte {history.length} Snapshots</span>
+          </div>
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="text-text-secondary border-b border-border">
+                  <th className="text-left py-2 pr-4 font-medium">Snapshot</th>
+                  <th className="text-left py-2 pr-4 font-medium">Nächste Ad</th>
+                  <th className="text-right py-2 pr-4 font-medium">Dauer</th>
+                  <th className="text-right py-2 font-medium">Preroll-frei</th>
+                </tr>
+              </thead>
+              <tbody>
+                {history.map((entry, i) => (
+                  <tr key={i} className="border-b border-border/50 hover:bg-card/50">
+                    <td className="py-2 pr-4 text-white font-mono text-xs">
+                      {formatTimestamp(entry.snapshot_at)}
+                    </td>
+                    <td className="py-2 pr-4 text-text-secondary text-xs">
+                      {entry.next_ad_at ? formatTimestamp(entry.next_ad_at) : 'Keine'}
+                    </td>
+                    <td className="py-2 pr-4 text-right text-text-secondary">
+                      {entry.duration !== null ? `${entry.duration} s` : '-'}
+                    </td>
+                    <td className="py-2 text-right text-text-secondary">
+                      {formatDurationMin(entry.preroll_free_time)}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+    </motion.div>
+  );
+}
+
+function formatTimestamp(iso: string | null): string {
+  if (!iso) return '-';
+  try {
+    return new Date(iso).toLocaleString('de-DE', {
+      day: '2-digit', month: '2-digit', year: 'numeric',
+      hour: '2-digit', minute: '2-digit',
+    });
+  } catch {
+    return iso;
+  }
+}
+
+function formatDurationMin(seconds: number | null): string {
+  if (seconds === null || seconds === undefined) return '-';
+  if (seconds < 60) return `${seconds} s`;
+  const mins = Math.floor(seconds / 60);
+  const hrs = Math.floor(mins / 60);
+  if (hrs > 0) {
+    const remainMin = mins % 60;
+    return remainMin > 0 ? `${hrs} h ${remainMin} min` : `${hrs} h`;
+  }
+  return `${mins} min`;
+}
+
+function formatRelativeTime(iso: string | null): string {
+  if (!iso) return '-';
+  try {
+    const target = new Date(iso);
+    const now = new Date();
+    const diffMs = target.getTime() - now.getTime();
+    if (diffMs <= 0) return 'Abgelaufen';
+    const diffMin = Math.floor(diffMs / 60000);
+    if (diffMin < 60) return `in ${diffMin} min`;
+    const diffH = Math.floor(diffMin / 60);
+    const remainMin = diffMin % 60;
+    return remainMin > 0 ? `in ${diffH} h ${remainMin} min` : `in ${diffH} h`;
+  } catch {
+    return iso;
+  }
+}
+
 export function Monetization({ streamer, days }: MonetizationProps) {
   const { data, isLoading, isError } = useMonetization(streamer, days);
+  const { data: adsSchedule, isLoading: scheduleLoading } = useAdsSchedule(streamer);
 
   if (isLoading) {
     return (
@@ -307,6 +491,9 @@ export function Monetization({ streamer, days }: MonetizationProps) {
           </>
         )}
       </section>
+
+      {/* Ad-Zeitplan (unabhängig von Ad-Break Events) */}
+      <AdScheduleSection scheduleData={adsSchedule ?? null} loading={scheduleLoading} />
 
       {/* Hype Train */}
       <section>

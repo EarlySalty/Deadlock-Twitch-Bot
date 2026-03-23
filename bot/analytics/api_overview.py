@@ -83,6 +83,7 @@ class _AnalyticsOverviewMixin:
         router.add_get("/twitch/api/v2/category-leaderboard", self._api_v2_category_leaderboard)
         router.add_get("/twitch/api/v2/coaching", self._api_v2_coaching)
         router.add_get("/twitch/api/v2/monetization", self._api_v2_monetization)
+        router.add_get("/twitch/api/v2/ads-schedule", self._api_v2_ads_schedule)
         router.add_get("/twitch/api/v2/category-timings", self._api_v2_category_timings)
         router.add_get(
             "/twitch/api/v2/category-activity-series",

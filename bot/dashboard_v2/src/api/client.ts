@@ -2,6 +2,7 @@
 
 import type {
   AIHistoryEntry,
+  AdsSchedule,
   MonetizationStats,
   CategoryTimings,
   CategoryActivitySeries,
@@ -27,6 +28,7 @@ import type {
   CoachingData,
   LurkerAnalysis,
   RaidRetention,
+  RaidAnalytics,
   ViewerProfiles,
   AudienceSharing,
   ViewerDirectory,
@@ -1025,6 +1027,15 @@ export async function fetchMonetization(
   });
 }
 
+// Ads Schedule
+export async function fetchAdsSchedule(
+  streamer: string
+): Promise<AdsSchedule> {
+  return fetchApi<AdsSchedule>('/ads-schedule', {
+    streamer,
+  });
+}
+
 // Lurker Analysis
 export async function fetchLurkerAnalysis(
   streamer: string | null,
@@ -1042,6 +1053,17 @@ export async function fetchRaidRetention(
   days: TimeRange
 ): Promise<RaidRetention> {
   return fetchApi<RaidRetention>('/raid-retention', {
+    streamer: streamer || '',
+    days,
+  });
+}
+
+// Raid Analytics (includes incoming raids)
+export async function fetchRaidAnalytics(
+  streamer: string | null,
+  days: TimeRange
+): Promise<RaidAnalytics> {
+  return fetchApi<RaidAnalytics>('/raid-analytics', {
     streamer: streamer || '',
     days,
   });

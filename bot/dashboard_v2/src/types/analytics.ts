@@ -646,6 +646,24 @@ export interface CoachingData {
   aiSummary: string | null;
 }
 
+export interface AdsSchedule {
+  current: {
+    next_ad_at: string | null;
+    last_ad_at: string | null;
+    duration: number | null;
+    preroll_free_time: number | null;
+    snooze_count: number | null;
+    snooze_refresh_at: string | null;
+    snapshot_at: string;
+  } | null;
+  history: Array<{
+    snapshot_at: string;
+    next_ad_at: string | null;
+    duration: number | null;
+    preroll_free_time: number | null;
+  }>;
+}
+
 export type TimeRange = 7 | 30 | 90 | 365;
 export type { TabId } from '@/components/layout/TabNavigation';
 
@@ -742,6 +760,74 @@ export interface RaidRetention {
     raidCount: number;
   };
   raids: RaidRetentionEntry[];
+}
+
+// --- Incoming Raid Analytics ---
+export interface RaidImpact {
+  viewers_before: number | null;
+  viewers_peak_after: number | null;
+  boost_pct: number | null;
+  retention_5m_pct: number | null;
+  retention_15m_pct: number | null;
+  retention_30m_pct: number | null;
+  follows_after_raid: number;
+}
+
+export interface IncomingRaid {
+  from_channel: string;
+  detected_at: string;
+  viewers_sent: number;
+  classification: string;
+  unraid_seen: boolean;
+  impact: RaidImpact;
+}
+
+export interface IncomingSummary {
+  total_raids_received: number;
+  avg_viewers_received: number;
+  avg_boost_pct: number | null;
+  avg_retention_15m: number | null;
+  best_raider: string | null;
+  raid_balance: { sent: number; received: number };
+}
+
+export interface RaidAnalytics {
+  per_source: Array<{
+    from_channel: string;
+    raids_received: number;
+    avg_viewers_sent: number;
+    avg_new_chatters: number;
+    avg_retention_30m: number | null;
+    follows_attributed: number;
+    conversion_rate: number | null;
+    known_audience_overlap: number | null;
+  }>;
+  follow_attribution: {
+    total_follows: number;
+    raid_follows: number;
+    organic_follows: number;
+    raid_conversion_rate: number | null;
+  } | null;
+  retention_curves: Array<{
+    raid_id: number;
+    from: string;
+    viewers_sent: number;
+    new_chatters: number;
+    retention_curve: {
+      plus5m: number;
+      plus15m: number;
+      plus30m: number;
+    };
+  }>;
+  incoming_raids: IncomingRaid[];
+  incoming_summary: IncomingSummary | null;
+  window_days: number;
+  dataQuality: {
+    botFilterApplied: boolean;
+    retentionCurveSampleSize: number;
+    perSourceUsesFullWindow: boolean;
+    raidMetricBatchSize: number;
+  };
 }
 
 // Category Timings (Median-basiert)

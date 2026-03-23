@@ -29,6 +29,7 @@ import {
   fetchCategoryActivitySeries,
   fetchLurkerAnalysis,
   fetchRaidRetention,
+  fetchRaidAnalytics,
   fetchViewerProfiles,
   fetchAudienceSharing,
   fetchViewerDirectory,
@@ -47,6 +48,7 @@ import {
   fetchAdminAffiliateStats,
   fetchAdminAffiliateDetail,
   fetchAffiliatePortal,
+  fetchAdsSchedule,
 } from '@/api/client';
 import type { TimeRange, ViewerSortField, ViewerFilterType } from '@/types/analytics';
 
@@ -268,6 +270,16 @@ export function useCategoryActivitySeries(days: TimeRange) {
   });
 }
 
+// Ads Schedule Hook
+export function useAdsSchedule(streamer: string | null) {
+  return useQuery({
+    queryKey: ['ads-schedule', streamer],
+    queryFn: () => fetchAdsSchedule(streamer!),
+    enabled: !!streamer,
+    staleTime: STALE_TIME,
+  });
+}
+
 // Monetization Hook
 export function useMonetization(streamer: string | null, days: TimeRange) {
   return useQuery({
@@ -292,6 +304,16 @@ export function useRaidRetention(streamer: string | null, days: TimeRange) {
   return useQuery({
     queryKey: ['raid-retention', streamer, days],
     queryFn: () => fetchRaidRetention(streamer, days),
+    staleTime: STALE_TIME,
+    enabled: !!streamer,
+  });
+}
+
+// Raid Analytics Hook (includes incoming raids)
+export function useRaidAnalytics(streamer: string | null, days: TimeRange) {
+  return useQuery({
+    queryKey: ['raid-analytics', streamer, days],
+    queryFn: () => fetchRaidAnalytics(streamer, days),
     staleTime: STALE_TIME,
     enabled: !!streamer,
   });

@@ -1231,3 +1231,60 @@ class _AnalyticsInsightsMixin:
                 "window_days": days,
             }
         )
+
+    async def _api_v2_ads_schedule(self, request: web.Request) -> web.Response:
+        """Ad schedule snapshot data (from twitch_ads_schedule_snapshot)."""
+        self._require_v2_auth(request)
+        streamer = request.query.get("streamer", "").strip().lower()
+
+        if not streamer:
+            return web.json_response({"error": "Streamer required"}, status=400)
+
+        try:
+            with storage.readonly_connection() as conn:
+                rows = conn.execute(
+                    """
+                    SELECT twitch_login, next_ad_at, last_ad_at, duration,
+                           preroll_free_time, snooze_count, snooze_refresh_at, snapshot_at
+                      FROM twitch_ads_schedule_snapshot
+                     WHERE LOWER(twitch_login) = %s
+                     ORDER BY snapshot_at DESC
+                     LIMIT 50
+                    """,
+                    (streamer,),
+                ).fetchall()
+
+                if not rows:
+                    return web.json_response({"current": None, "history": []})
+
+                def _iso(val: Any) -> str | None:
+                    if val is None:
+                        return None
+                    if isinstance(val, (datetime, date)):
+                        return val.isoformat()
+                    return str(val)
+
+                first = rows[0]
+                current = {
+                    "next_ad_at": _iso(first["next_ad_at"]),
+                    "last_ad_at": _iso(first["last_ad_at"]),
+                    "duration": int(first["duration"]) if first["duration"] is not None else None,
+                    "preroll_free_time": int(first["preroll_free_time"]) if first["preroll_free_time"] is not None else None,
+                    "snooze_count": int(first["snooze_count"]) if first["snooze_count"] is not None else None,
+                    "snooze_refresh_at": _iso(first["snooze_refresh_at"]),
+                    "snapshot_at": _iso(first["snapshot_at"]),
+                }
+
+                history = []
+                for row in rows[:10]:
+                    history.append({
+                        "snapshot_at": _iso(row["snapshot_at"]),
+                        "next_ad_at": _iso(row["next_ad_at"]),
+                        "duration": int(row["duration"]) if row["duration"] is not None else None,
+                        "preroll_free_time": int(row["preroll_free_time"]) if row["preroll_free_time"] is not None else None,
+                    })
+
+                return web.json_response({"current": current, "history": history})
+        except Exception:
+            log.exception("Error in ads-schedule API")
+            return analytics_internal_error_response()
