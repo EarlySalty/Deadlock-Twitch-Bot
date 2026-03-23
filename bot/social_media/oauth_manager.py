@@ -29,7 +29,7 @@ try:
 except ModuleNotFoundError:  # pragma: no cover - split runtime fallback
     from ..compat.field_crypto import get_crypto
 
-from ..storage import get_conn
+from ..storage import transaction
 
 log = logging.getLogger("TwitchStreams.OAuthManager")
 
@@ -71,12 +71,12 @@ class SocialMediaOAuthManager:
         # Store state in DB (expires in 10 minutes)
         expires_at = datetime.now(UTC) + timedelta(minutes=10)
 
-        with get_conn() as conn:
+        with transaction() as conn:
             conn.execute(
                 """
                 INSERT INTO oauth_state_tokens
                     (state_token, platform, streamer_login, redirect_uri, pkce_verifier, expires_at)
-                VALUES (?, ?, ?, ?, ?, ?)
+                VALUES (%s, %s, %s, %s, %s, %s)
                 """,
                 (
                     state,
@@ -191,12 +191,12 @@ class SocialMediaOAuthManager:
             ValueError: If state invalid or expired
         """
         # Atomically consume state token (single-use, race-safe)
-        with get_conn() as conn:
+        with transaction() as conn:
             state_row = conn.execute(
                 """
                 DELETE FROM oauth_state_tokens
-                WHERE state_token = ?
-                  AND expires_at > ?
+                WHERE state_token = %s
+                  AND expires_at > %s
                 RETURNING platform, streamer_login, redirect_uri, pkce_verifier
                 """,
                 (state, datetime.now(UTC).isoformat()),
@@ -330,7 +330,7 @@ class SocialMediaOAuthManager:
             streamer_login: Streamer login (None = bot-global)
             tokens: Token data from exchange
         """
-        with get_conn() as conn:
+        with transaction() as conn:
             # Build row identifier for AAD
             row_id = f"{platform}|{streamer_login or 'global'}"
 
@@ -374,7 +374,7 @@ class SocialMediaOAuthManager:
                     (platform, streamer_login, access_token_enc, refresh_token_enc,
                      client_id, client_secret_enc, token_expires_at, scopes,
                      platform_user_id, platform_username, enc_version, enc_kid)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 'v1')
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 1, 'v1')
             """
             if streamer_login is None:
                 upsert_sql += """

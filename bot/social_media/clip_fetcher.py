@@ -11,7 +11,7 @@ import time
 
 from discord.ext import commands
 
-from ..storage import get_conn
+from ..storage import readonly_connection, transaction
 from .clip_manager import ClipManager
 
 log = logging.getLogger("TwitchStreams.ClipFetcher")
@@ -76,7 +76,7 @@ class ClipFetcher(commands.Cog):
 
         try:
             # Get all active, verified partners (exclude monitored-only and opt-out)
-            with get_conn() as conn:
+            with readonly_connection() as conn:
                 streamers = conn.execute(
                     """
                     SELECT twitch_login
@@ -108,9 +108,9 @@ class ClipFetcher(commands.Cog):
                     clips_new = len([c for c in clips if c.get("db_id")])
 
                     # Record fetch history
-                    with get_conn() as conn:
+                    with transaction() as conn:
                         conn.execute(
-                            "INSERT INTO twitch_streamers (twitch_login) VALUES (?) "
+                            "INSERT INTO twitch_streamers (twitch_login) VALUES (%s) "
                             "ON CONFLICT (twitch_login) DO NOTHING",
                             (streamer,),
                         )
@@ -118,7 +118,7 @@ class ClipFetcher(commands.Cog):
                             """
                             INSERT INTO clip_fetch_history
                                 (streamer_login, clips_found, clips_new, fetch_duration_ms)
-                            VALUES (?, ?, ?, ?)
+                            VALUES (%s, %s, %s, %s)
                             """,
                             (streamer, len(clips), clips_new, fetch_duration_ms),
                         )
@@ -142,9 +142,9 @@ class ClipFetcher(commands.Cog):
                     stats["errors"] += 1
 
                     # Record error in fetch history
-                    with get_conn() as conn:
+                    with transaction() as conn:
                         conn.execute(
-                            "INSERT INTO twitch_streamers (twitch_login) VALUES (?) "
+                            "INSERT INTO twitch_streamers (twitch_login) VALUES (%s) "
                             "ON CONFLICT (twitch_login) DO NOTHING",
                             (streamer,),
                         )
@@ -152,7 +152,7 @@ class ClipFetcher(commands.Cog):
                             """
                             INSERT INTO clip_fetch_history
                                 (streamer_login, clips_found, clips_new, error)
-                            VALUES (?, 0, 0, ?)
+                            VALUES (%s, 0, 0, %s)
                             """,
                             (streamer, str(e)),
                         )
@@ -194,9 +194,9 @@ class ClipFetcher(commands.Cog):
             clips_new = len([c for c in clips if c.get("db_id")])
 
             # Record fetch history
-            with get_conn() as conn:
+            with transaction() as conn:
                 conn.execute(
-                    "INSERT INTO twitch_streamers (twitch_login) VALUES (?) "
+                    "INSERT INTO twitch_streamers (twitch_login) VALUES (%s) "
                     "ON CONFLICT (twitch_login) DO NOTHING",
                     (streamer_login,),
                 )
@@ -204,7 +204,7 @@ class ClipFetcher(commands.Cog):
                     """
                     INSERT INTO clip_fetch_history
                         (streamer_login, clips_found, clips_new, fetch_duration_ms)
-                    VALUES (?, ?, ?, ?)
+                    VALUES (%s, %s, %s, %s)
                     """,
                     (streamer_login, len(clips), clips_new, duration_ms),
                 )
@@ -243,27 +243,27 @@ class ClipFetcher(commands.Cog):
             List of fetch history entries
         """
         try:
-            with get_conn() as conn:
+            with readonly_connection() as conn:
                 if streamer_login:
                     rows = conn.execute(
                         """
-                        SELECT id, streamer_login, fetched_at, clips_found, clips_new,
+                    SELECT id, streamer_login, fetched_at, clips_found, clips_new,
                                fetch_duration_ms, error
                           FROM clip_fetch_history
-                         WHERE streamer_login = ?
+                         WHERE streamer_login = %s
                          ORDER BY fetched_at DESC
-                         LIMIT ?
+                         LIMIT %s
                         """,
                         (streamer_login, limit),
                     ).fetchall()
                 else:
                     rows = conn.execute(
                         """
-                        SELECT id, streamer_login, fetched_at, clips_found, clips_new,
+                    SELECT id, streamer_login, fetched_at, clips_found, clips_new,
                                fetch_duration_ms, error
                           FROM clip_fetch_history
                          ORDER BY fetched_at DESC
-                         LIMIT ?
+                         LIMIT %s
                         """,
                         (limit,),
                     ).fetchall()

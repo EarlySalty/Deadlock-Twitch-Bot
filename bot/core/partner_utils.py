@@ -9,7 +9,7 @@ Klare Trennung zwischen:
 import logging
 from datetime import UTC, datetime
 
-from ..storage import get_conn
+from ..storage import readonly_connection
 
 log = logging.getLogger("TwitchStreams.PartnerUtils")
 
@@ -79,7 +79,7 @@ def get_all_partners(include_archived: bool = False) -> list[dict]:
     Returns:
         Liste von Streamer-Dicts mit allen relevanten Feldern
     """
-    with get_conn() as conn:
+    with readonly_connection() as conn:
         query = """
             SELECT twitch_login,
                    twitch_user_id,
@@ -112,7 +112,7 @@ def get_live_partners() -> list[dict]:
     Returns:
         Liste von Dicts mit Streamer-Infos und Live-Status
     """
-    with get_conn() as conn:
+    with readonly_connection() as conn:
         rows = conn.execute("""
             SELECT s.twitch_login,
                    s.twitch_user_id,
@@ -144,7 +144,7 @@ def get_monitored_only() -> set[str]:
     Returns:
         Set von lowercase Logins
     """
-    with get_conn() as conn:
+    with readonly_connection() as conn:
         rows = conn.execute("""
             SELECT twitch_login
               FROM twitch_streamers
@@ -169,12 +169,12 @@ def is_partner_channel_for_chat_tracking(login: str) -> bool:
     """
     login_lower = str(login).lower().lstrip("#")
 
-    with get_conn() as conn:
+    with readonly_connection() as conn:
         row = conn.execute(
             """
             SELECT is_partner_active
               FROM twitch_streamers_partner_state
-             WHERE LOWER(twitch_login) = ?
+            WHERE LOWER(twitch_login) = %s
         """,
             (login_lower,),
         ).fetchone()
@@ -192,7 +192,7 @@ def get_partner_stats() -> dict:
     Returns:
         Dict mit Stats
     """
-    with get_conn() as conn:
+    with readonly_connection() as conn:
         # Partner Count
         partner_count = conn.execute("""
             SELECT COUNT(*)

@@ -222,7 +222,7 @@ class ChatMessageBlacklistTests(unittest.IsolatedAsyncioTestCase):
             content="!ping",
         )
 
-        with patch("bot.chat.moderation.get_conn", return_value=_RecordingConnContext(conn)):
+        with patch("bot.chat.moderation.transaction", return_value=_RecordingConnContext(conn)):
             with patch.object(handler, "_is_partner_channel_for_chat_tracking", return_value=True):
                 self.assertIsNone(await handler._track_chat_health(message))
 

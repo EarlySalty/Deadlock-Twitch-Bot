@@ -26,6 +26,32 @@ class RaidScopeProfileTests(unittest.TestCase):
             redirect_uri="https://example.com/twitch/auth/callback",
         )
 
+    @contextlib.contextmanager
+    def _patch_conn(self):
+        compat = self._SqlitePgCompatConnection(self.conn)
+        with (
+            patch("bot.raid.auth.readonly_connection", return_value=contextlib.nullcontext(compat)),
+            patch("bot.raid.auth.transaction", return_value=contextlib.nullcontext(compat)),
+        ):
+            yield
+
+    class _SqlitePgCompatConnection:
+        def __init__(self, conn: sqlite3.Connection) -> None:
+            self._conn = conn
+
+        @staticmethod
+        def _translate_sql(sql: str) -> str:
+            return str(sql).replace("%s", "?")
+
+        def execute(self, sql, params=()):
+            return self._conn.execute(self._translate_sql(sql), params)
+
+        def executemany(self, sql, params_seq):
+            return self._conn.executemany(self._translate_sql(sql), params_seq)
+
+        def __getattr__(self, name):
+            return getattr(self._conn, name)
+
     @staticmethod
     def _extract_scope_set(auth_url: str) -> set[str]:
         parsed = urlparse(auth_url)
@@ -35,10 +61,7 @@ class RaidScopeProfileTests(unittest.TestCase):
     def test_generate_auth_url_uses_base_scopes_for_fresh_login(self) -> None:
         manager = self._manager()
 
-        with patch(
-            "bot.raid.auth.get_conn",
-            side_effect=lambda: contextlib.nullcontext(self.conn),
-        ):
+        with self._patch_conn():
             auth_url = manager.generate_auth_url("freshstreamer")
 
         scopes = self._extract_scope_set(auth_url)
@@ -57,10 +80,7 @@ class RaidScopeProfileTests(unittest.TestCase):
         self.conn.commit()
         manager = self._manager()
 
-        with patch(
-            "bot.raid.auth.get_conn",
-            side_effect=lambda: contextlib.nullcontext(self.conn),
-        ):
+        with self._patch_conn():
             auth_url = manager.generate_auth_url("knownstreamer")
 
         scopes = self._extract_scope_set(auth_url)
@@ -85,10 +105,7 @@ class RaidScopeProfileTests(unittest.TestCase):
         self.conn.commit()
         manager = self._manager()
 
-        with patch(
-            "bot.raid.auth.get_conn",
-            side_effect=lambda: contextlib.nullcontext(self.conn),
-        ):
+        with self._patch_conn():
             auth_url = manager.generate_auth_url("discord:42")
 
         scopes = self._extract_scope_set(auth_url)
@@ -106,10 +123,7 @@ class RaidScopeProfileTests(unittest.TestCase):
         self.conn.commit()
         manager = self._manager()
 
-        with patch(
-            "bot.raid.auth.get_conn",
-            side_effect=lambda: contextlib.nullcontext(self.conn),
-        ):
+        with self._patch_conn():
             manager.generate_auth_url("discord:42")
 
         state_info, _created_ts = next(iter(manager._state_tokens.values()))

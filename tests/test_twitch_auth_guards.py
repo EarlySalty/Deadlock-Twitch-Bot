@@ -210,7 +210,7 @@ class RaidAuthManagerAuthGuardTests(unittest.IsolatedAsyncioTestCase):
         fake_conn = _RecordingConn()
 
         with patch(
-            "bot.raid.auth.get_conn",
+            "bot.raid.auth.readonly_connection",
             side_effect=lambda: contextlib.nullcontext(fake_conn),
         ):
             refreshed = await manager.refresh_all_tokens(_RecordingSession())

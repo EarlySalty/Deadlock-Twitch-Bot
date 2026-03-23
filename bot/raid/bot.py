@@ -26,11 +26,12 @@ from ..discord_role_sync import normalize_discord_user_id, sync_streamer_role
 from .scope_profiles import BASE_STREAMER_SCOPES
 from ..storage import (
     backfill_tracked_stats_from_category,
-    get_conn,
     insert_observability_event,
     load_active_partner,
     load_streamer_identity,
     promote_streamer_to_partner,
+    readonly_connection,
+    transaction,
 )
 try:
     from .partner_scores import (
@@ -987,7 +988,7 @@ class RaidBot:
         if not login_key and not broadcaster_key:
             return None
         try:
-            with get_conn() as conn:
+            with readonly_connection() as conn:
                 row = load_streamer_identity(
                     conn,
                     twitch_user_id=broadcaster_key or None,
@@ -1019,7 +1020,7 @@ class RaidBot:
         broadcaster_key = str(broadcaster_id or "").strip()
         login_key = self._normalize_broadcaster_login(broadcaster_login)
         try:
-            with get_conn() as conn:
+            with readonly_connection() as conn:
                 row = load_active_partner(
                     conn,
                     twitch_user_id=broadcaster_key or None,
@@ -1072,13 +1073,13 @@ class RaidBot:
         to_broadcaster_id: str,
     ) -> tuple[int | None, str | None]:
         try:
-            with get_conn() as conn:
+            with readonly_connection() as conn:
                 row = conn.execute(
                     """
                     SELECT id, executed_at
                     FROM twitch_raid_history
-                    WHERE LOWER(from_broadcaster_login) = ?
-                      AND to_broadcaster_id = ?
+                    WHERE LOWER(from_broadcaster_login) = %s
+                      AND to_broadcaster_id = %s
                       AND COALESCE(success, FALSE) IS TRUE
                     ORDER BY executed_at DESC
                     LIMIT 1
@@ -1124,7 +1125,7 @@ class RaidBot:
     ) -> int | None:
         confirmation_signal_text = self._serialize_confirmation_signals(confirmation_signals)
         try:
-            with get_conn() as conn:
+            with transaction() as conn:
                 row = conn.execute(
                     """
                     INSERT INTO twitch_raid_arrival_tracking (
@@ -1143,7 +1144,7 @@ class RaidBot:
                         raid_history_executed_at,
                         unraid_seen,
                         last_unraid_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                     RETURNING id
                     """,
                     (
@@ -1186,15 +1187,15 @@ class RaidBot:
         if not arrival_tracking_id:
             return
         try:
-            with get_conn() as conn:
+            with transaction() as conn:
                 conn.execute(
                     """
                     UPDATE twitch_raid_arrival_tracking
-                    SET confirmation_signals = ?,
+                    SET confirmation_signals = %s,
                         last_signal_at = CURRENT_TIMESTAMP,
-                        unraid_seen = CASE WHEN ? THEN TRUE ELSE unraid_seen END,
-                        last_unraid_at = CASE WHEN ? THEN ? ELSE last_unraid_at END
-                    WHERE id = ?
+                        unraid_seen = CASE WHEN %s THEN TRUE ELSE unraid_seen END,
+                        last_unraid_at = CASE WHEN %s THEN %s ELSE last_unraid_at END
+                    WHERE id = %s
                     """,
                     (
                         self._serialize_confirmation_signals(confirmation_signals),
@@ -1522,7 +1523,7 @@ class RaidBot:
         return False
 
     def _load_partner_roster_for_raid(self, source_user_id: str) -> list[dict[str, object]]:
-        with get_conn() as conn:
+        with readonly_connection() as conn:
             rows = conn.execute(
                 """
                 SELECT DISTINCT s.twitch_login, s.twitch_user_id,
@@ -1532,7 +1533,7 @@ class RaidBot:
                  WHERE s.is_partner_active = 1
                    AND s.twitch_user_id IS NOT NULL
                    AND s.twitch_login IS NOT NULL
-                   AND s.twitch_user_id != ?
+                   AND s.twitch_user_id != %s
                 """,
                 (source_user_id,),
             ).fetchall()
@@ -1583,8 +1584,8 @@ class RaidBot:
         if not partner_logins_lower:
             return {}
 
-        placeholders = ",".join("?" * len(partner_logins_lower))
-        with get_conn() as conn:
+        placeholders = ",".join("%s" for _ in partner_logins_lower)
+        with readonly_connection() as conn:
             rows = conn.execute(
                 f"""
                 SELECT streamer_login, had_deadlock_in_session, last_game, last_deadlock_seen_at
@@ -1666,13 +1667,13 @@ class RaidBot:
         return eligible_partners, filtered_out
 
     def _load_broadcaster_live_state(self, broadcaster_id: str) -> dict[str, object]:
-        with get_conn() as conn:
+        with readonly_connection() as conn:
             row = conn.execute(
                 """
                 SELECT twitch_user_id, streamer_login, is_live, last_started_at,
                        last_game, last_viewer_count, had_deadlock_in_session, last_deadlock_seen_at
                   FROM twitch_live_state
-                 WHERE twitch_user_id = ?
+                 WHERE twitch_user_id = %s
                 """,
                 (broadcaster_id,),
             ).fetchone()
@@ -1902,7 +1903,7 @@ class RaidBot:
         if not login_key:
             return None
         try:
-            with get_conn() as conn:
+            with readonly_connection() as conn:
                 row = load_active_partner(conn, twitch_login=login_key)
             if not row:
                 return None
@@ -1991,7 +1992,7 @@ class RaidBot:
         existing_discord_id: str | None = None
         existing_display_name: str | None = None
 
-        with get_conn() as conn:
+        with readonly_connection() as conn:
             row = load_streamer_identity(
                 conn,
                 twitch_user_id=twitch_user_id,
@@ -2014,7 +2015,7 @@ class RaidBot:
         )
 
         is_on_discord_value = 1 if final_discord_id else 0
-        with get_conn() as conn:
+        with transaction() as conn:
             partner_kwargs: dict[str, object] = {
                 "discord_user_id": final_discord_id,
                 "discord_display_name": final_display_name,
@@ -2677,7 +2678,7 @@ class RaidBot:
 
     def _lookup_silent_raid_enabled(self, broadcaster_login: str) -> bool:
         try:
-            with get_conn() as conn:
+            with readonly_connection() as conn:
                 partner_row = load_active_partner(
                     conn,
                     twitch_login=self._normalize_broadcaster_login(broadcaster_login),
@@ -3278,12 +3279,12 @@ class RaidBot:
             return 0
 
         try:
-            with get_conn() as conn:
+            with readonly_connection() as conn:
                 row = conn.execute(
                     """
                     SELECT COUNT(*)
                     FROM twitch_raid_history
-                    WHERE to_broadcaster_id = ?
+                    WHERE to_broadcaster_id = %s
                       AND COALESCE(success, FALSE) IS TRUE
                     """,
                     (target_id,),
@@ -3583,13 +3584,13 @@ class RaidBot:
         try:
             # 2. Anti-Spam Check: Haben wir diesen Streamer schon "kürzlich" geraidet?
             # Wir prüfen, ob es mehr als 1 erfolgreichen Raid in den letzten 24 Stunden gab.
-            with get_conn() as conn:
+            with readonly_connection() as conn:
                 raid_check = conn.execute(
                     """
                     SELECT COUNT(*) FROM twitch_raid_history
-                    WHERE to_broadcaster_id = ?
+                    WHERE to_broadcaster_id = %s
                       AND COALESCE(success, FALSE) IS TRUE
-                      AND executed_at > datetime('now', '-1 day')
+                      AND executed_at > NOW() - INTERVAL '1 day'
                     """,
                     (target_id,),
                 ).fetchone()
@@ -3622,14 +3623,14 @@ class RaidBot:
 
             stats_teaser = ""
             try:
-                with get_conn() as conn:
+                with readonly_connection() as conn:
                     stats = conn.execute(
                         """
                         SELECT
                             ROUND(AVG(viewer_count)) as avg_viewers,
                             MAX(viewer_count) as peak_viewers
                         FROM twitch_stats_category
-                        WHERE streamer = ?
+                        WHERE streamer = %s
                           AND viewer_count > 0
                         """,
                         (to_broadcaster_login.lower(),),
@@ -3759,16 +3760,16 @@ class RaidBot:
     def _get_recent_raid_targets(self, from_broadcaster_id: str, days: int) -> set[str]:
         if not from_broadcaster_id or days <= 0:
             return set()
-        cutoff = f"-{int(days)} days"
+        cutoff = f"{int(days)} days"
         try:
-            with get_conn() as conn:
+            with readonly_connection() as conn:
                 rows = conn.execute(
                     """
                     SELECT DISTINCT to_broadcaster_id
                     FROM twitch_raid_history
-                    WHERE from_broadcaster_id = ?
+                    WHERE from_broadcaster_id = %s
                       AND COALESCE(success, FALSE) IS TRUE
-                      AND executed_at >= datetime('now', ?)
+                      AND executed_at >= NOW() - (%s::interval)
                     """,
                     (from_broadcaster_id, cutoff),
                 ).fetchall()
@@ -3803,8 +3804,8 @@ class RaidBot:
         ]
         if logins_needed:
             try:
-                _ph = ",".join("?" * len(logins_needed))
-                with get_conn() as conn:
+                _ph = ",".join("%s" for _ in logins_needed)
+                with readonly_connection() as conn:
                     _db_rows = conn.execute(
                         f"""
                         SELECT streamer_login, COALESCE(followers_end, followers_start) AS follower_total
@@ -4025,10 +4026,10 @@ class RaidBot:
             "duration_score, time_pattern_score, base_score, new_partner_multiplier, "
             "raid_boost_multiplier, last_computed_at "
             "FROM twitch_partner_raid_scores "
-            f"WHERE twitch_user_id IN ({','.join('?' for _ in requested)})"
+            f"WHERE twitch_user_id IN ({','.join('%s' for _ in requested)})"
         )
         try:
-            with get_conn() as conn:
+            with readonly_connection() as conn:
                 rows = conn.execute(sql, tuple(requested)).fetchall()
         except Exception:
             log.debug("Prepared partner score DB query failed", exc_info=True)
@@ -4313,12 +4314,12 @@ class RaidBot:
     def _is_blacklisted(self, target_id: str, target_login: str) -> bool:
         """Prüft, ob ein Ziel auf der Blacklist steht."""
         try:
-            with get_conn() as conn:
+            with readonly_connection() as conn:
                 row = conn.execute(
                     """
                     SELECT 1 FROM twitch_raid_blacklist
-                    WHERE (target_id IS NOT NULL AND target_id = ?)
-                       OR lower(target_login) = lower(?)
+                    WHERE (target_id IS NOT NULL AND target_id = %s)
+                       OR lower(target_login) = lower(%s)
                     """,
                     (target_id, target_login),
                 ).fetchone()
@@ -4330,11 +4331,11 @@ class RaidBot:
     def _add_to_blacklist(self, target_id: str, target_login: str, reason: str):
         """Fügt ein Ziel zur Blacklist hinzu."""
         try:
-            with get_conn() as conn:
+            with transaction() as conn:
                 conn.execute(
                     """
                     INSERT INTO twitch_raid_blacklist (target_id, target_login, reason)
-                    VALUES (?, ?, ?)
+                    VALUES (%s, %s, %s)
                     ON CONFLICT (target_login) DO UPDATE SET
                         target_id = EXCLUDED.target_id,
                         reason = EXCLUDED.reason
@@ -4399,7 +4400,7 @@ class RaidBot:
         blacklisted_ids: set[str] = set()
         blacklisted_logins: set[str] = set()
         try:
-            with get_conn() as conn:
+            with readonly_connection() as conn:
                 for bl_row in conn.execute(
                     "SELECT target_id, lower(target_login) FROM twitch_raid_blacklist"
                 ).fetchall():
@@ -4715,11 +4716,11 @@ class RaidBot:
             return None
 
         # Prüfen, ob Streamer Auto-Raid aktiviert hat
-        with get_conn() as conn:
+        with readonly_connection() as conn:
             _s_row = load_active_partner(conn, twitch_user_id=broadcaster_id)
-        with get_conn() as conn:
+        with readonly_connection() as conn:
             _a_row = conn.execute(
-                "SELECT raid_enabled FROM twitch_raid_auth WHERE twitch_user_id = ?",
+                "SELECT raid_enabled FROM twitch_raid_auth WHERE twitch_user_id = %s",
                 (broadcaster_id,),
             ).fetchone()
         row = (

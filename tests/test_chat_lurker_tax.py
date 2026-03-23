@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import re
 import sqlite3
 import unittest
+from contextlib import ExitStack
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -11,11 +13,42 @@ from bot.chat.constants import PROMO_OVERALL_COOLDOWN_MIN
 from bot.chat.promos import PromoMixin
 
 
-class _ConnCtx:
+class _CompatConn:
     def __init__(self, conn: sqlite3.Connection) -> None:
         self._conn = conn
 
-    def __enter__(self) -> sqlite3.Connection:
+    @staticmethod
+    def _translate(sql: str) -> str:
+        translated = str(sql)
+        translated = translated.replace("%s", "?")
+        translated = translated.replace(
+            "NOW() - INTERVAL '30 days'",
+            "datetime('now', '-30 days')",
+        )
+        translated = translated.replace(
+            "NOW() - INTERVAL '7 days'",
+            "datetime('now', '-7 days')",
+        )
+        translated = re.sub(
+            r"EXTRACT\(EPOCH FROM\s*\(\s*sc\.last_seen_at\s*-\s*sc\.first_message_at\s*\)\s*\)\s*/\s*60\.0",
+            "(julianday(sc.last_seen_at) - julianday(sc.first_message_at)) * 24.0 * 60.0",
+            translated,
+            flags=re.IGNORECASE,
+        )
+        return translated
+
+    def execute(self, sql: str, params=()):
+        return self._conn.execute(self._translate(sql), params)
+
+    def __getattr__(self, name: str):
+        return getattr(self._conn, name)
+
+
+class _ConnCtx:
+    def __init__(self, conn: sqlite3.Connection) -> None:
+        self._conn = _CompatConn(conn)
+
+    def __enter__(self) -> _CompatConn:
         return self._conn
 
     def __exit__(self, exc_type, exc, tb) -> bool:
@@ -352,7 +385,14 @@ class ChatLurkerTaxReminderTests(unittest.IsolatedAsyncioTestCase):
         self.conn.close()
 
     def _conn_patch(self):
-        return patch("bot.chat.promos.get_conn", return_value=_ConnCtx(self.conn))
+        stack = ExitStack()
+        stack.enter_context(
+            patch("bot.chat.promos.readonly_connection", return_value=_ConnCtx(self.conn))
+        )
+        stack.enter_context(
+            patch("bot.chat.promos.transaction", return_value=_ConnCtx(self.conn))
+        )
+        return stack
 
     async def test_candidate_selection_filters_and_sorts(self) -> None:
         with self._conn_patch():

@@ -18,6 +18,10 @@ class _ConnContext:
         return self._conn
 
     def __exit__(self, exc_type, exc, tb):
+        if exc_type is None:
+            commit = getattr(self._conn, "commit", None)
+            if callable(commit):
+                commit()
         return False
 
 
@@ -176,7 +180,7 @@ class AffiliateStripeConnectTests(unittest.IsolatedAsyncioTestCase):
             return_value=http_session,
         ):
             with patch(
-                "bot.dashboard.affiliate_mixin.storage.get_conn",
+                "bot.dashboard.affiliate_mixin.storage.transaction",
                 return_value=_ConnContext(conn),
             ):
                 with self.assertRaises(web.HTTPFound) as ctx:
@@ -205,7 +209,7 @@ class AffiliateStripeConnectTests(unittest.IsolatedAsyncioTestCase):
         request = SimpleNamespace(query={"state": "state-123", "code": "oauth-code"})
 
         with patch("bot.dashboard.affiliate_mixin.aiohttp.ClientSession") as client_session:
-            with patch("bot.dashboard.affiliate_mixin.storage.get_conn") as get_conn:
+            with patch("bot.dashboard.affiliate_mixin.storage.transaction") as tx:
                 response = await handler._affiliate_connect_stripe_callback(request)
 
         self.assertEqual(response.status, 403)
@@ -215,7 +219,7 @@ class AffiliateStripeConnectTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(handler.loader_calls, [])
         client_session.assert_not_called()
-        get_conn.assert_not_called()
+        tx.assert_not_called()
 
     def test_dashboard_server_prefers_static_connect_client_id(self) -> None:
         with patch("bot.dashboard.server_v2.STATIC_STRIPE_CONNECT_CLIENT_ID", "ca_static_789"):

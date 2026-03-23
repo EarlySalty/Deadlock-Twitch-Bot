@@ -27,7 +27,7 @@ def run() -> None:
         "legacy_saved_at",
     )
 
-    with storage_pg.get_conn() as conn:
+    with storage_pg.transaction() as conn:
         for col in legacy_cols:
             conn.execute(
                 f"ALTER TABLE twitch_raid_auth DROP COLUMN IF EXISTS {col}"

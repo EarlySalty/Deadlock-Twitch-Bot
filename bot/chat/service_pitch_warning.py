@@ -5,7 +5,7 @@ import time
 from collections import deque
 from datetime import UTC, datetime
 
-from ..storage import get_conn
+from ..storage import readonly_connection
 from ..logging_setup import log_path
 
 log = logging.getLogger("TwitchStreams.ChatBot")
@@ -711,12 +711,12 @@ class ServicePitchWarningMixin:
 
         follower_count: int | None = None
         try:
-            with get_conn() as conn:
+            with readonly_connection() as conn:
                 row = conn.execute(
                     """
                     SELECT COALESCE(followers_end, followers_start) AS follower_total
                       FROM twitch_stream_sessions
-                     WHERE streamer_login = ?
+                     WHERE streamer_login = %s
                        AND COALESCE(followers_end, followers_start) IS NOT NULL
                      ORDER BY COALESCE(ended_at, started_at) DESC
                      LIMIT 1

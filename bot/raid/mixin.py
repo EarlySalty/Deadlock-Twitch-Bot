@@ -5,7 +5,7 @@ import logging
 import time
 from datetime import UTC, datetime
 
-from ..storage import get_conn, load_active_partner
+from ..storage import load_active_partner, readonly_connection
 
 log = logging.getLogger("TwitchStreams.RaidMixin")
 
@@ -41,7 +41,7 @@ class TwitchRaidMixin:
 
         # Nur wenn Streamer Auto-Raid explizit aktiviert und autorisiert hat
         try:
-            with get_conn() as conn:
+            with readonly_connection() as conn:
                 row = load_active_partner(conn, twitch_user_id=twitch_user_id)
 
             # Falls er nicht in twitch_streamers steht (noch kein Partner),
@@ -216,7 +216,7 @@ class TwitchRaidMixin:
         self, limit: int = 50, from_broadcaster: str = ""
     ) -> list[dict]:
         """Callback für Dashboard: Raid-History abrufen."""
-        with get_conn() as conn:
+        with readonly_connection() as conn:
             if from_broadcaster:
                 rows = conn.execute(
                     """

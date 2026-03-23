@@ -7,6 +7,7 @@ audience insights, audience demographics.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 import math
@@ -22,6 +23,15 @@ from .error_utils import analytics_internal_error_response
 from .engagement_metrics import EngagementInputs, calculate_engagement
 
 log = logging.getLogger("TwitchStreams.AnalyticsV2")
+
+
+def _executemany(conn, sql: str, params_seq) -> None:
+    executemany = getattr(conn, "executemany", None)
+    if callable(executemany):
+        executemany(sql, params_seq)
+        return
+    with contextlib.closing(conn.cursor()) as cur:
+        cur.executemany(sql, params_seq)
 
 
 class _AnalyticsAudienceMixin:
@@ -116,11 +126,11 @@ class _AnalyticsAudienceMixin:
             """
             SELECT s.id, s.started_at
             FROM twitch_stream_sessions s
-            WHERE s.started_at >= ?
-              AND LOWER(s.streamer_login) = ?
+            WHERE s.started_at >= %s
+              AND LOWER(s.streamer_login) = %s
               AND s.ended_at IS NOT NULL
             ORDER BY s.started_at DESC
-            LIMIT ?
+            LIMIT %s
             """,
             [since_date, streamer_login, self.PEAK_SESSION_WINDOW],
         ).fetchall()
@@ -242,25 +252,27 @@ class _AnalyticsAudienceMixin:
                 updates_by_id.append((max_seen, session_id, chatter_id, max_seen))
 
         if updates_by_login:
-            conn.executemany(
+            _executemany(
+                conn,
                 """
                 UPDATE twitch_session_chatters
-                   SET last_seen_at = ?
-                 WHERE session_id = ?
-                   AND LOWER(chatter_login) = ?
-                   AND (last_seen_at IS NULL OR last_seen_at < ?)
+                   SET last_seen_at = %s
+                 WHERE session_id = %s
+                   AND LOWER(chatter_login) = %s
+                   AND (last_seen_at IS NULL OR last_seen_at < %s)
                 """,
                 updates_by_login,
             )
         if updates_by_id:
-            conn.executemany(
+            _executemany(
+                conn,
                 """
                 UPDATE twitch_session_chatters
-                   SET last_seen_at = ?
-                 WHERE session_id = ?
-                   AND chatter_id = ?
+                   SET last_seen_at = %s
+                 WHERE session_id = %s
+                   AND chatter_id = %s
                    AND (chatter_login IS NULL OR chatter_login = '')
-                   AND (last_seen_at IS NULL OR last_seen_at < ?)
+                   AND (last_seen_at IS NULL OR last_seen_at < %s)
                 """,
                 updates_by_id,
             )
@@ -418,7 +430,7 @@ class _AnalyticsAudienceMixin:
             return web.json_response({"error": "Streamer required"}, status=400)
 
         try:
-            with storage.get_conn() as conn:
+            with storage.transaction() as conn:
                 since_date = (datetime.now(UTC) - timedelta(days=days)).isoformat()
                 prev_since_date = (datetime.now(UTC) - timedelta(days=days * 2)).isoformat()
 
@@ -429,7 +441,7 @@ class _AnalyticsAudienceMixin:
                            s.retention_20m, s.avg_viewers, s.start_viewers, s.end_viewers,
                            s.duration_seconds
                     FROM twitch_stream_sessions s
-                    WHERE s.started_at >= ? AND LOWER(s.streamer_login) = ? AND s.ended_at IS NOT NULL
+                    WHERE s.started_at >= %s AND LOWER(s.streamer_login) = %s AND s.ended_at IS NOT NULL
                 """,
                     [since_date, streamer.lower()],
                 ).fetchall()
@@ -445,7 +457,7 @@ class _AnalyticsAudienceMixin:
                            s.retention_20m, s.avg_viewers, s.start_viewers, s.end_viewers,
                            s.duration_seconds
                     FROM twitch_stream_sessions s
-                    WHERE s.started_at >= ? AND s.started_at < ? AND LOWER(s.streamer_login) = ? AND s.ended_at IS NOT NULL
+                    WHERE s.started_at >= %s AND s.started_at < %s AND LOWER(s.streamer_login) = %s AND s.ended_at IS NOT NULL
                 """,
                     [prev_since_date, since_date, streamer.lower()],
                 ).fetchall()
@@ -538,7 +550,7 @@ class _AnalyticsAudienceMixin:
             return web.json_response({"error": "Streamer required"}, status=400)
 
         try:
-            with storage.get_conn() as conn:
+            with storage.transaction() as conn:
                 since_date = (datetime.now(UTC) - timedelta(days=days)).isoformat()
                 streamer_login = streamer.lower()
                 session_bot_clause, session_bot_params = build_known_chat_bot_not_in_clause(
@@ -564,8 +576,8 @@ class _AnalyticsAudienceMixin:
                              AND NOT (s.followers_end = 0 AND s.followers_start > 0)
                              THEN 1 END) as follower_valid_samples
                     FROM twitch_stream_sessions s
-                    WHERE s.started_at >= ?
-                      AND LOWER(s.streamer_login) = ?
+                    WHERE s.started_at >= %s
+                      AND LOWER(s.streamer_login) = %s
                       AND s.ended_at IS NOT NULL
                     """,
                     [since_date, streamer_login],
@@ -618,8 +630,8 @@ class _AnalyticsAudienceMixin:
                         COUNT(DISTINCT COALESCE(NULLIF(sc.chatter_login, ''), sc.chatter_id)) as tracked_viewers
                     FROM twitch_session_chatters sc
                     JOIN twitch_stream_sessions s ON s.id = sc.session_id
-                    WHERE s.started_at >= ?
-                      AND LOWER(s.streamer_login) = ?
+                    WHERE s.started_at >= %s
+                      AND LOWER(s.streamer_login) = %s
                       AND s.ended_at IS NOT NULL
                       AND {session_bot_clause}
                     """,
@@ -642,8 +654,8 @@ class _AnalyticsAudienceMixin:
                         ON ss.streamer_login = fe.streamer_login
                        AND fe.followed_at BETWEEN ss.started_at
                            AND COALESCE(ss.ended_at, NOW())
-                    WHERE LOWER(ss.streamer_login) = ?
-                      AND ss.started_at >= ?
+                    WHERE LOWER(ss.streamer_login) = %s
+                      AND ss.started_at >= %s
                       AND ss.ended_at IS NOT NULL
                     """,
                     [streamer_login, since_date],
@@ -684,8 +696,8 @@ class _AnalyticsAudienceMixin:
                     """
                     SELECT COUNT(*), COALESCE(SUM(viewer_count), 0)
                     FROM twitch_raid_history
-                    WHERE LOWER(to_broadcaster_login) = ?
-                      AND executed_at >= ?
+                    WHERE LOWER(to_broadcaster_login) = %s
+                      AND executed_at >= %s
                       AND COALESCE(success, FALSE) IS TRUE
                     """,
                     [streamer_login, since_date],
@@ -747,7 +759,7 @@ class _AnalyticsAudienceMixin:
             return web.json_response({"error": "Streamer required"}, status=400)
 
         try:
-            with storage.get_conn() as conn:
+            with storage.transaction() as conn:
                 base = streamer.lower()
                 rollup_bot_clause_c1, rollup_bot_params_c1 = build_known_chat_bot_not_in_clause(
                     column_expr="c1.chatter_login"
@@ -765,13 +777,13 @@ class _AnalyticsAudienceMixin:
                         COUNT(DISTINCT c1.chatter_login) as shared_chatters
                     FROM twitch_chatter_rollup c1
                     JOIN twitch_chatter_rollup c2 ON c1.chatter_login = c2.chatter_login
-                    WHERE LOWER(c1.streamer_login) = ?
-                      AND LOWER(c2.streamer_login) != ?
+                    WHERE LOWER(c1.streamer_login) = %s
+                      AND LOWER(c2.streamer_login) != %s
                       AND {rollup_bot_clause_c1}
                       AND {rollup_bot_clause_c2}
                     GROUP BY c2.streamer_login
                     ORDER BY shared_chatters DESC
-                    LIMIT ?
+                    LIMIT %s
                 """,
                     [
                         base,
@@ -788,7 +800,7 @@ class _AnalyticsAudienceMixin:
                         f"""
                         SELECT COUNT(DISTINCT chatter_login)
                         FROM twitch_chatter_rollup
-                        WHERE LOWER(streamer_login) = ?
+                        WHERE LOWER(streamer_login) = %s
                           AND {rollup_bot_clause}
                     """,
                         [base, *rollup_bot_params],
@@ -802,7 +814,7 @@ class _AnalyticsAudienceMixin:
                             f"""
                         SELECT COUNT(DISTINCT chatter_login)
                         FROM twitch_chatter_rollup
-                        WHERE LOWER(streamer_login) = ?
+                        WHERE LOWER(streamer_login) = %s
                           AND {rollup_bot_clause}
                         """,
                             [r[0].lower(), *rollup_bot_params],
@@ -873,7 +885,7 @@ class _AnalyticsAudienceMixin:
             titles_req.headers = request.headers
 
             # Call internal methods directly
-            with storage.get_conn() as conn:
+            with storage.transaction() as conn:
                 since_date = (datetime.now(UTC) - timedelta(days=days)).isoformat()
                 prev_since = (datetime.now(UTC) - timedelta(days=days * 2)).isoformat()
                 session_bot_clause, session_bot_params = build_known_chat_bot_not_in_clause(
@@ -890,11 +902,11 @@ class _AnalyticsAudienceMixin:
                         AVG(s.retention_10m) as curr_ret,
                         (SELECT AVG(s2.retention_10m)
                          FROM twitch_stream_sessions s2
-                         WHERE s2.started_at >= ? AND s2.started_at < ?
-                           AND LOWER(s2.streamer_login) = ? AND s2.ended_at IS NOT NULL
+                         WHERE s2.started_at >= %s AND s2.started_at < %s
+                           AND LOWER(s2.streamer_login) = %s AND s2.ended_at IS NOT NULL
                         ) as prev_ret
                     FROM twitch_stream_sessions s
-                    WHERE s.started_at >= ? AND LOWER(s.streamer_login) = ? AND s.ended_at IS NOT NULL
+                    WHERE s.started_at >= %s AND LOWER(s.streamer_login) = %s AND s.ended_at IS NOT NULL
                     """,
                     [prev_since, since_date, streamer.lower(), since_date, streamer.lower()],
                 ).fetchone()
@@ -911,7 +923,7 @@ class _AnalyticsAudienceMixin:
                     Counts DISTINCT viewers in the window, then checks twitch_chatter_rollup
                     to see which were known before the window started.
                     """
-                    end_filter = "AND s.started_at < ?" if period_end else ""
+                    end_filter = "AND s.started_at < %s" if period_end else ""
                     # Params order: period_start [period_end] streamer  streamer period_start
                     q_params = (
                         [period_start] + ([period_end] if period_end else []) + [streamer.lower()]
@@ -927,9 +939,9 @@ class _AnalyticsAudienceMixin:
                                 NULLIF(LOWER(sc.chatter_login), '') AS chatter_login
                             FROM twitch_session_chatters sc
                             JOIN twitch_stream_sessions s ON s.id = sc.session_id
-                            WHERE s.started_at >= ?
+                            WHERE s.started_at >= %s
                               {end_filter}
-                              AND LOWER(s.streamer_login) = ?
+                              AND LOWER(s.streamer_login) = %s
                               AND s.ended_at IS NOT NULL
                               AND COALESCE(NULLIF(sc.chatter_login, ''), sc.chatter_id) IS NOT NULL
                               AND {session_bot_clause}
@@ -942,9 +954,9 @@ class _AnalyticsAudienceMixin:
                         FROM period_viewers pv
                         LEFT JOIN twitch_chatter_rollup cr
                             ON cr.chatter_login = pv.chatter_login
-                           AND LOWER(cr.streamer_login) = ?
+                           AND LOWER(cr.streamer_login) = %s
                            AND {rollup_bot_clause}
-                           AND cr.first_seen_at < ?
+                           AND cr.first_seen_at < %s
                         """,
                         q_params,
                     ).fetchone()
@@ -998,7 +1010,7 @@ class _AnalyticsAudienceMixin:
             return web.json_response({"error": "Streamer required"}, status=400)
 
         try:
-            with storage.get_conn() as conn:
+            with storage.transaction() as conn:
                 since_date = (datetime.now(UTC) - timedelta(days=days)).isoformat()
                 msg_bot_clause, msg_bot_params = build_known_chat_bot_not_in_clause(
                     column_expr="cm.chatter_login"
@@ -1018,7 +1030,7 @@ class _AnalyticsAudienceMixin:
                         COUNT(*) as sessions,
                         AVG(s.avg_viewers) as avg_viewers
                     FROM twitch_stream_sessions s
-                    WHERE s.started_at >= ? AND LOWER(s.streamer_login) = ? AND s.ended_at IS NOT NULL
+                    WHERE s.started_at >= %s AND LOWER(s.streamer_login) = %s AND s.ended_at IS NOT NULL
                     GROUP BY lang
                     ORDER BY sessions DESC
                 """,
@@ -1066,11 +1078,11 @@ class _AnalyticsAudienceMixin:
                 time_stats = conn.execute(
                     """
                     SELECT
-                        CAST(strftime('%H', s.started_at) AS INTEGER) as hour,
+                        EXTRACT(HOUR FROM (s.started_at AT TIME ZONE 'UTC'))::int as hour,
                         AVG(s.avg_viewers) as avg_viewers,
                         COUNT(*) as stream_count
                     FROM twitch_stream_sessions s
-                    WHERE s.started_at >= ? AND LOWER(s.streamer_login) = ? AND s.ended_at IS NOT NULL
+                    WHERE s.started_at >= %s AND LOWER(s.streamer_login) = %s AND s.ended_at IS NOT NULL
                     GROUP BY hour
                 """,
                     [since_date, streamer.lower()],
@@ -1158,7 +1170,7 @@ class _AnalyticsAudienceMixin:
                             0
                         ) as viewer_minutes_fallback
                     FROM twitch_stream_sessions s
-                    WHERE s.started_at >= ? AND LOWER(s.streamer_login) = ? AND s.ended_at IS NOT NULL
+                    WHERE s.started_at >= %s AND LOWER(s.streamer_login) = %s AND s.ended_at IS NOT NULL
                     """,
                     [since_date, streamer.lower()],
                 ).fetchone()
@@ -1175,8 +1187,8 @@ class _AnalyticsAudienceMixin:
                         COALESCE(SUM(GREATEST(sv.viewer_count, 0)), 0) as viewer_minutes
                     FROM twitch_session_viewers sv
                     JOIN twitch_stream_sessions s ON s.id = sv.session_id
-                    WHERE s.started_at >= ?
-                      AND LOWER(s.streamer_login) = ?
+                    WHERE s.started_at >= %s
+                      AND LOWER(s.streamer_login) = %s
                       AND s.ended_at IS NOT NULL
                     """,
                     [since_date, streamer.lower()],
@@ -1213,7 +1225,7 @@ class _AnalyticsAudienceMixin:
                             MAX(CASE WHEN sc.seen_via_chatters_api IS TRUE THEN 1 ELSE 0 END) AS seen_flag
                         FROM twitch_session_chatters sc
                         JOIN twitch_stream_sessions s ON s.id = sc.session_id
-                        WHERE s.started_at >= ? AND LOWER(s.streamer_login) = ? AND s.ended_at IS NOT NULL
+                        WHERE s.started_at >= %s AND LOWER(s.streamer_login) = %s AND s.ended_at IS NOT NULL
                           AND COALESCE(NULLIF(sc.chatter_login, ''), sc.chatter_id) IS NOT NULL
                           AND {session_bot_clause}
                         GROUP BY user_id, chatter_login
@@ -1224,7 +1236,7 @@ class _AnalyticsAudienceMixin:
                             LOWER(chatter_login) AS chatter_login,
                             first_seen_at
                         FROM twitch_chatter_rollup
-                        WHERE LOWER(streamer_login) = ?
+                        WHERE LOWER(streamer_login) = %s
                           AND {rollup_bot_clause}
                     )
                     SELECT
@@ -1237,7 +1249,7 @@ class _AnalyticsAudienceMixin:
                         pu.has_first_flag,
                         pu.seen_flag,
                         CASE
-                            WHEN r.chatter_login IS NOT NULL AND r.first_seen_at < ?
+                            WHEN r.chatter_login IS NOT NULL AND r.first_seen_at < %s
                             THEN 1 ELSE 0
                         END AS seen_before
                     FROM per_user pu
@@ -1356,7 +1368,7 @@ class _AnalyticsAudienceMixin:
                     f"""
                     SELECT COUNT(*)
                     FROM twitch_chat_messages cm
-                    WHERE cm.message_ts >= ? AND LOWER(cm.streamer_login) = ?
+                    WHERE cm.message_ts >= %s AND LOWER(cm.streamer_login) = %s
                       AND {msg_bot_clause}
                     """,
                     [since_date, streamer.lower(), *msg_bot_params],
@@ -1369,8 +1381,8 @@ class _AnalyticsAudienceMixin:
                     SELECT COUNT(DISTINCT sc.session_id)
                     FROM twitch_session_chatters sc
                     JOIN twitch_stream_sessions s ON s.id = sc.session_id
-                    WHERE s.started_at >= ?
-                      AND LOWER(s.streamer_login) = ?
+                    WHERE s.started_at >= %s
+                      AND LOWER(s.streamer_login) = %s
                       AND s.ended_at IS NOT NULL
                       AND {session_bot_clause}
                     """,
@@ -1417,10 +1429,10 @@ class _AnalyticsAudienceMixin:
                 schedule_stats = conn.execute(
                     """
                     SELECT
-                        CAST(strftime('%w', s.started_at) AS INTEGER) as weekday,
+                        EXTRACT(DOW FROM (s.started_at AT TIME ZONE 'UTC'))::int as weekday,
                         COUNT(*) as count
                     FROM twitch_stream_sessions s
-                    WHERE s.started_at >= ? AND LOWER(s.streamer_login) = ? AND s.ended_at IS NOT NULL
+                    WHERE s.started_at >= %s AND LOWER(s.streamer_login) = %s AND s.ended_at IS NOT NULL
                     GROUP BY weekday
                 """,
                     [since_date, streamer.lower()],
@@ -1528,7 +1540,7 @@ class _AnalyticsAudienceMixin:
             return web.json_response({"error": "Streamer required"}, status=400)
 
         try:
-            with storage.get_conn() as conn:
+            with storage.transaction() as conn:
                 rollup_bot_clause, rollup_bot_params = build_known_chat_bot_not_in_clause(
                     column_expr="chatter_login"
                 )
@@ -1536,7 +1548,7 @@ class _AnalyticsAudienceMixin:
                     f"""
                     SELECT total_sessions, COUNT(DISTINCT chatter_login) AS chatter_count
                     FROM twitch_chatter_rollup
-                    WHERE LOWER(streamer_login) = ?
+                    WHERE LOWER(streamer_login) = %s
                       AND {rollup_bot_clause}
                     GROUP BY total_sessions
                     ORDER BY total_sessions

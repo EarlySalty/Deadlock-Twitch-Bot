@@ -47,6 +47,15 @@ class _FakeCrypto:
         return f"enc:{value}"
 
 
+class _SqliteCompatConn:
+    def __init__(self, conn):
+        self._conn = conn
+
+    def execute(self, sql: str, params=(), *args, **kwargs):
+        del args, kwargs
+        return self._conn.execute(sql.replace("%s", "?"), params)
+
+
 class SocialMediaCredentialManagerTests(unittest.TestCase):
     def test_get_credentials_queries_streamer_specific_then_global_fallback(self) -> None:
         conn = _RecordingConn(
@@ -68,7 +77,7 @@ class SocialMediaCredentialManagerTests(unittest.TestCase):
         )
 
         with patch(
-            "bot.social_media.credential_manager.get_conn",
+            "bot.social_media.credential_manager.readonly_connection",
             side_effect=lambda: contextlib.nullcontext(conn),
         ):
             with patch(
@@ -82,9 +91,9 @@ class SocialMediaCredentialManagerTests(unittest.TestCase):
         self.assertIsNone(creds["streamer_login"])
         self.assertEqual(creds["access_token"], "access-token")
         sql, params = conn.executed[0]
-        self.assertIn("streamer_login = ?", sql)
+        self.assertIn("streamer_login = %s", sql)
         self.assertIn("streamer_login IS NULL", sql)
-        self.assertIn("CASE WHEN streamer_login = ? THEN 1 ELSE 0 END DESC", sql)
+        self.assertIn("CASE WHEN streamer_login = %s THEN 1 ELSE 0 END DESC", sql)
         self.assertEqual(
             params,
             ("youtube", "earlysalty", "earlysalty", "earlysalty", "earlysalty"),
@@ -179,8 +188,8 @@ class ClipManagerQueueRecoveryTests(unittest.TestCase):
         manager = ClipManager()
 
         with patch(
-            "bot.social_media.clip_manager.get_conn",
-            side_effect=lambda: contextlib.nullcontext(self.conn),
+            "bot.social_media.clip_manager.transaction",
+            side_effect=lambda: contextlib.nullcontext(_SqliteCompatConn(self.conn)),
         ):
             queue_id = manager.queue_upload(
                 clip_db_id=1,
@@ -225,8 +234,8 @@ class ClipManagerQueueRecoveryTests(unittest.TestCase):
         manager = ClipManager()
 
         with patch(
-            "bot.social_media.clip_manager.get_conn",
-            side_effect=lambda: contextlib.nullcontext(self.conn),
+            "bot.social_media.clip_manager.transaction",
+            side_effect=lambda: contextlib.nullcontext(_SqliteCompatConn(self.conn)),
         ):
             queue = manager.get_upload_queue(
                 status="pending",
@@ -251,7 +260,7 @@ class SocialMediaOAuthManagerTests(unittest.IsolatedAsyncioTestCase):
         conn = _RecordingConn()
 
         with patch(
-            "bot.social_media.oauth_manager.get_conn",
+            "bot.social_media.oauth_manager.transaction",
             side_effect=lambda: contextlib.nullcontext(conn),
         ):
             with patch(
@@ -285,7 +294,7 @@ class SocialMediaOAuthManagerTests(unittest.IsolatedAsyncioTestCase):
         conn = _RecordingConn()
 
         with patch(
-            "bot.social_media.oauth_manager.get_conn",
+            "bot.social_media.oauth_manager.transaction",
             side_effect=lambda: contextlib.nullcontext(conn),
         ):
             with patch(

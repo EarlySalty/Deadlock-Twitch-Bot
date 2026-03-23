@@ -17,8 +17,6 @@ from datetime import UTC, datetime, timedelta
 from urllib.parse import urlencode
 
 import aiohttp
-import discord
-
 from ..api.twitch_auth import (
     TwitchClientConfigError,
     is_invalid_client_response,
@@ -27,10 +25,11 @@ from ..api.twitch_auth import (
 from ..api.token_error_handler import TokenErrorHandler
 from ..storage import (
     backfill_tracked_stats_from_category,
-    get_conn,
     load_active_partner,
     load_streamer_identity,
+    readonly_connection,
     set_partner_raid_bot_enabled,
+    transaction,
 )
 from .scope_profiles import (
     AUTO_SCOPE_PROFILE,
@@ -51,7 +50,9 @@ PUBLIC_WEBSITE_ONBOARDING_LOGIN = "public:website_onboarding"
 # Hinweis: Re-Auth notwendig, falls bisher nur channel:manage:raids erteilt war.
 RAID_SCOPES = list(BASE_STREAMER_SCOPES)
 
-RAID_TARGET_COOLDOWN_DAYS = 7  # Avoid repeating the same raid target if alternatives exist
+RAID_TARGET_COOLDOWN_DAYS = (
+    7  # Avoid repeating the same raid target if alternatives exist
+)
 RECRUIT_DISCORD_INVITE = (
     os.getenv("RECRUIT_DISCORD_INVITE") or ""
 ).strip() or "Discord: Server hinzufügen & Code eingeben: z5TfVHuQq2"
@@ -63,7 +64,9 @@ _recruit_direct_invite_threshold_raw = (
     os.getenv("RECRUIT_DIRECT_INVITE_MAX_FOLLOWERS") or "120"
 ).strip()
 try:
-    RECRUIT_DIRECT_INVITE_MAX_FOLLOWERS = max(0, int(_recruit_direct_invite_threshold_raw))
+    RECRUIT_DIRECT_INVITE_MAX_FOLLOWERS = max(
+        0, int(_recruit_direct_invite_threshold_raw)
+    )
 except ValueError:
     RECRUIT_DIRECT_INVITE_MAX_FOLLOWERS = 120
 
@@ -137,7 +140,9 @@ def _serialize_state_meta(
     return json.dumps(payload, separators=(",", ":"), sort_keys=True)
 
 
-def _parse_state_meta(raw_value: str | None) -> tuple[str, str | None, str | None, str | None]:
+def _parse_state_meta(
+    raw_value: str | None,
+) -> tuple[str, str | None, str | None, str | None]:
     raw_text = str(raw_value or "").strip()
     if not raw_text:
         return BASE_SCOPE_PROFILE, None, None, None
@@ -181,7 +186,9 @@ def _parse_expiry_ts(val) -> float:
         return 0.0
 
 
-def _mask_log_identifier(value: object, *, visible_prefix: int = 3, visible_suffix: int = 2) -> str:
+def _mask_log_identifier(
+    value: object, *, visible_prefix: int = 3, visible_suffix: int = 2
+) -> str:
     text = str(value or "").strip()
     if not text:
         return "<empty>"
@@ -197,7 +204,9 @@ class RaidAuthManager:
         self.client_id = normalize_twitch_credential(client_id)
         self.client_secret = normalize_twitch_credential(client_secret)
         self.redirect_uri = redirect_uri
-        self._state_tokens: dict[str, tuple[RaidOAuthState, float]] = {}  # state -> (meta, ts)
+        self._state_tokens: dict[
+            str, tuple[RaidOAuthState, float]
+        ] = {}  # state -> (meta, ts)
         self._pending_auth_urls: dict[str, str] = {}  # state -> full_twitch_auth_url
         self._lock = asyncio.Lock()
         self.token_error_handler = TokenErrorHandler()
@@ -236,7 +245,10 @@ class RaidAuthManager:
             "Twitch client credentials are missing or blank after trimming whitespace. "
             "Verify TWITCH_CLIENT_ID and TWITCH_CLIENT_SECRET, then restart the bot."
         )
-        if not self.is_client_auth_blocked() or self._client_auth_block_reason != reason:
+        if (
+            not self.is_client_auth_blocked()
+            or self._client_auth_block_reason != reason
+        ):
             log.error(reason)
         raise self._block_client_auth(reason)
 
@@ -251,12 +263,12 @@ class RaidAuthManager:
             seconds=_OAUTH_STATE_TTL_SECONDS
         )
         try:
-            with get_conn() as conn:
+            with transaction() as conn:
                 conn.execute(
                     """
                     INSERT INTO oauth_state_tokens
                         (state_token, platform, streamer_login, redirect_uri, pkce_verifier, expires_at)
-                    VALUES (?, ?, ?, ?, ?, ?)
+                    VALUES (%s, %s, %s, %s, %s, %s)
                     ON CONFLICT (state_token) DO UPDATE SET
                         platform = excluded.platform,
                         streamer_login = excluded.streamer_login,
@@ -287,14 +299,14 @@ class RaidAuthManager:
     def _lookup_state_token(self, state: str) -> RaidOAuthState | None:
         """Look up a still-valid raid OAuth state without consuming it."""
         try:
-            with get_conn() as conn:
+            with readonly_connection() as conn:
                 row = conn.execute(
                     """
                     SELECT streamer_login, pkce_verifier
                     FROM oauth_state_tokens
-                    WHERE state_token = ?
-                      AND platform = ?
-                      AND expires_at > ?
+                    WHERE state_token = %s
+                      AND platform = %s
+                      AND expires_at > %s
                     LIMIT 1
                     """,
                     (
@@ -309,11 +321,15 @@ class RaidAuthManager:
 
         if not row:
             return None
-        login = str(row["streamer_login"] if hasattr(row, "keys") else row[0] or "").strip()
+        login = str(
+            row["streamer_login"] if hasattr(row, "keys") else row[0] or ""
+        ).strip()
         if not login:
             return None
         meta_raw = row["pkce_verifier"] if hasattr(row, "keys") else row[1]
-        scope_profile, expected_login, expected_user_id, discord_user_id = _parse_state_meta(meta_raw)
+        scope_profile, expected_login, expected_user_id, discord_user_id = (
+            _parse_state_meta(meta_raw)
+        )
         return RaidOAuthState(
             requested_login=login,
             scope_profile=scope_profile,
@@ -325,13 +341,13 @@ class RaidAuthManager:
     def _consume_state_token(self, state: str) -> RaidOAuthState | None:
         """Atomically consume a still-valid raid OAuth state from shared DB."""
         try:
-            with get_conn() as conn:
+            with transaction() as conn:
                 row = conn.execute(
                     """
                     DELETE FROM oauth_state_tokens
-                    WHERE state_token = ?
-                      AND platform = ?
-                      AND expires_at > ?
+                    WHERE state_token = %s
+                      AND platform = %s
+                      AND expires_at > %s
                     RETURNING streamer_login, pkce_verifier
                     """,
                     (
@@ -346,11 +362,15 @@ class RaidAuthManager:
 
         if not row:
             return None
-        login = str(row["streamer_login"] if hasattr(row, "keys") else row[0] or "").strip()
+        login = str(
+            row["streamer_login"] if hasattr(row, "keys") else row[0] or ""
+        ).strip()
         if not login:
             return None
         meta_raw = row["pkce_verifier"] if hasattr(row, "keys") else row[1]
-        scope_profile, expected_login, expected_user_id, discord_user_id = _parse_state_meta(meta_raw)
+        scope_profile, expected_login, expected_user_id, discord_user_id = (
+            _parse_state_meta(meta_raw)
+        )
         return RaidOAuthState(
             requested_login=login,
             scope_profile=scope_profile,
@@ -374,8 +394,8 @@ class RaidAuthManager:
             """
             SELECT 1
             FROM twitch_raid_auth
-            WHERE (? <> '' AND twitch_user_id = ?)
-               OR (? <> '' AND LOWER(COALESCE(twitch_login, '')) = ?)
+            WHERE (%s <> '' AND twitch_user_id = %s)
+               OR (%s <> '' AND LOWER(COALESCE(twitch_login, '')) = %s)
             LIMIT 1
             """,
             (
@@ -397,16 +417,22 @@ class RaidAuthManager:
             discord_user_id = normalized_login.split(":", 1)[1].strip()
 
         try:
-            with get_conn() as conn:
+            with readonly_connection() as conn:
                 if discord_user_id:
-                    identity = load_streamer_identity(conn, discord_user_id=discord_user_id)
+                    identity = load_streamer_identity(
+                        conn, discord_user_id=discord_user_id
+                    )
                     if not identity:
                         return False
                     identity_login = (
-                        identity["twitch_login"] if hasattr(identity, "keys") else identity[1]
+                        identity["twitch_login"]
+                        if hasattr(identity, "keys")
+                        else identity[1]
                     )
                     identity_user_id = (
-                        identity["twitch_user_id"] if hasattr(identity, "keys") else identity[0]
+                        identity["twitch_user_id"]
+                        if hasattr(identity, "keys")
+                        else identity[0]
                     )
                     return bool(
                         load_active_partner(
@@ -432,7 +458,9 @@ class RaidAuthManager:
             )
             return False
 
-    def _resolve_scope_profile(self, twitch_login: str, requested_profile: str | None) -> str:
+    def _resolve_scope_profile(
+        self, twitch_login: str, requested_profile: str | None
+    ) -> str:
         normalized = str(requested_profile or "").strip().lower()
         if normalized == DASHBOARD_REAUTH_SCOPE_PROFILE:
             return DASHBOARD_REAUTH_SCOPE_PROFILE
@@ -442,9 +470,11 @@ class RaidAuthManager:
             return DASHBOARD_REAUTH_SCOPE_PROFILE
         return BASE_SCOPE_PROFILE
 
-    def _linked_twitch_login_for_discord_user(self, discord_user_id: str | None) -> str | None:
-        identity_login, _identity_user_id = self._linked_twitch_identity_for_discord_user(
-            discord_user_id
+    def _linked_twitch_login_for_discord_user(
+        self, discord_user_id: str | None
+    ) -> str | None:
+        identity_login, _identity_user_id = (
+            self._linked_twitch_identity_for_discord_user(discord_user_id)
         )
         return identity_login
 
@@ -456,8 +486,10 @@ class RaidAuthManager:
         if not normalized_discord_user_id:
             return None, None
         try:
-            with get_conn() as conn:
-                identity = load_streamer_identity(conn, discord_user_id=normalized_discord_user_id)
+            with readonly_connection() as conn:
+                identity = load_streamer_identity(
+                    conn, discord_user_id=normalized_discord_user_id
+                )
         except Exception:
             log.debug(
                 "Could not resolve linked twitch login for discord_user_id=%s",
@@ -470,9 +502,14 @@ class RaidAuthManager:
         identity_login = _normalize_twitch_login(
             identity["twitch_login"] if hasattr(identity, "keys") else identity[1]
         )
-        identity_user_id = str(
-            identity["twitch_user_id"] if hasattr(identity, "keys") else identity[0] or ""
-        ).strip() or None
+        identity_user_id = (
+            str(
+                identity["twitch_user_id"]
+                if hasattr(identity, "keys")
+                else identity[0] or ""
+            ).strip()
+            or None
+        )
         return identity_login, identity_user_id
 
     def _build_state_info(
@@ -642,10 +679,10 @@ class RaidAuthManager:
             """
             UPDATE twitch_raid_auth
                SET access_token = 'ENC', refresh_token = 'ENC',
-                   access_token_enc = ?, refresh_token_enc = ?,
+                   access_token_enc = %s, refresh_token_enc = %s,
                    enc_version = 1, enc_kid = 'v1',
-                   token_expires_at = ?, last_refreshed_at = CURRENT_TIMESTAMP
-             WHERE twitch_user_id = ?
+                   token_expires_at = %s, last_refreshed_at = CURRENT_TIMESTAMP
+             WHERE twitch_user_id = %s
             """,
             (
                 access_enc,
@@ -678,7 +715,9 @@ class RaidAuthManager:
         )
         self._state_tokens[state] = (state_info, ts)
         self._persist_state_token(state, state_info, ts)
-        return self._build_authorize_url(state=state, scope_profile=state_info.scope_profile)
+        return self._build_authorize_url(
+            state=state, scope_profile=state_info.scope_profile
+        )
 
     def generate_discord_button_url(
         self,
@@ -708,7 +747,9 @@ class RaidAuthManager:
         self._state_tokens[state] = (state_info, ts)
         self._persist_state_token(state, state_info, ts)
 
-        full_url = self._build_authorize_url(state=state, scope_profile=state_info.scope_profile)
+        full_url = self._build_authorize_url(
+            state=state, scope_profile=state_info.scope_profile
+        )
         self._pending_auth_urls[state] = full_url
 
         if self._base_url:
@@ -721,7 +762,11 @@ class RaidAuthManager:
         # Wir löschen den Eintrag NICHT hier – verify_state macht das beim echten Callback.
         entry = self._pending_auth_urls.get(state)
         token_data = self._state_tokens.get(state)
-        if entry and token_data and time.time() - token_data[1] <= _OAUTH_STATE_TTL_SECONDS:
+        if (
+            entry
+            and token_data
+            and time.time() - token_data[1] <= _OAUTH_STATE_TTL_SECONDS
+        ):
             return entry
 
         # Fallback für split/multi-instance/restart:
@@ -730,7 +775,9 @@ class RaidAuthManager:
         if not persisted_state:
             self._pending_auth_urls.pop(state, None)
             return None
-        full_url = self._build_authorize_url(state=state, scope_profile=persisted_state.scope_profile)
+        full_url = self._build_authorize_url(
+            state=state, scope_profile=persisted_state.scope_profile
+        )
         self._pending_auth_urls[state] = full_url
         return full_url
 
@@ -770,12 +817,12 @@ class RaidAuthManager:
             del self._state_tokens[s]
             self._pending_auth_urls.pop(s, None)
         try:
-            with get_conn() as conn:
+            with transaction() as conn:
                 conn.execute(
                     """
                     DELETE FROM oauth_state_tokens
-                    WHERE platform = ?
-                      AND expires_at <= ?
+                    WHERE platform = %s
+                      AND expires_at <= %s
                     """,
                     (_OAUTH_STATE_PLATFORM_RAID, datetime.now(UTC).isoformat()),
                 )
@@ -784,7 +831,9 @@ class RaidAuthManager:
         if expired:
             log.debug("Cleaned up %d expired auth states", len(expired))
 
-    async def exchange_code_for_token(self, code: str, session: aiohttp.ClientSession) -> dict:
+    async def exchange_code_for_token(
+        self, code: str, session: aiohttp.ClientSession
+    ) -> dict:
         """Tauscht Authorization Code gegen User Access Token."""
         self._raise_if_client_auth_blocked()
         self._ensure_client_credentials()
@@ -809,7 +858,10 @@ class RaidAuthManager:
                         "rotate the secret if needed, then restart the bot. "
                         "Suppressing additional Twitch OAuth requests for 15 minutes."
                     )
-                    if not self.is_client_auth_blocked() or self._client_auth_block_reason != reason:
+                    if (
+                        not self.is_client_auth_blocked()
+                        or self._client_auth_block_reason != reason
+                    ):
                         log.error(reason)
                     raise self._block_client_auth(reason)
                 log.error(
@@ -850,7 +902,10 @@ class RaidAuthManager:
                         "rotate the secret if needed, then restart the bot. "
                         "Suppressing additional Twitch OAuth refresh attempts for 15 minutes."
                     )
-                    if not self.is_client_auth_blocked() or self._client_auth_block_reason != reason:
+                    if (
+                        not self.is_client_auth_blocked()
+                        or self._client_auth_block_reason != reason
+                    ):
                         log.error(reason)
                     raise self._block_client_auth(reason)
                 error_msg = f"HTTP {r.status}: {txt[:300]}"
@@ -872,7 +927,9 @@ class RaidAuthManager:
                         parsed_message = str(payload.get("message", "")).lower()
                         parsed_error = str(payload.get("error", "")).lower()
                 except Exception:
-                    log.debug("OAuth refresh error payload was not valid JSON", exc_info=True)
+                    log.debug(
+                        "OAuth refresh error payload was not valid JSON", exc_info=True
+                    )
 
                 is_invalid_refresh_grant = r.status == 400 and (
                     "invalid refresh token" in response_lc
@@ -925,7 +982,7 @@ class RaidAuthManager:
         if self.is_client_auth_blocked():
             return 0
         refreshed_count = 0
-        with get_conn() as conn:
+        with readonly_connection() as conn:
             # Hole alle User mit raid_enabled=TRUE
             rows = conn.execute(
                 """
@@ -990,10 +1047,10 @@ class RaidAuthManager:
                     # Double-Check im Lock: Expiry UND Refresh-Token neu lesen.
                     # Wenn ein anderer Prozess den Token bereits refresht hat, ist
                     # refresh_token_enc in der DB anders als unser pre-lock refresh_tok.
-                    with get_conn() as conn:
+                    with readonly_connection() as conn:
                         current = conn.execute(
                             """SELECT token_expires_at, refresh_token_enc, enc_version
-                               FROM twitch_raid_auth WHERE twitch_user_id = ?""",
+                               FROM twitch_raid_auth WHERE twitch_user_id = %s""",
                             (user_id,),
                         ).fetchone()
 
@@ -1034,7 +1091,9 @@ class RaidAuthManager:
                     )
                     continue
 
-                log.debug("Auto-refreshing OAuth grant for %s (background maintenance)", login)
+                log.debug(
+                    "Auto-refreshing OAuth grant for %s (background maintenance)", login
+                )
                 try:
                     token_data = await self.refresh_token(
                         refresh_tok, session, twitch_user_id=user_id, twitch_login=login
@@ -1044,9 +1103,11 @@ class RaidAuthManager:
                     expires_in = _safe_int(token_data.get("expires_in", 3600), 3600)
 
                     new_expires_at = datetime.now(UTC).timestamp() + expires_in
-                    new_expires_iso = datetime.fromtimestamp(new_expires_at, UTC).isoformat()
+                    new_expires_iso = datetime.fromtimestamp(
+                        new_expires_at, UTC
+                    ).isoformat()
 
-                    with get_conn() as conn:
+                    with transaction() as conn:
                         self._write_token_refresh(
                             conn, user_id, new_access, new_refresh, new_expires_iso
                         )
@@ -1060,7 +1121,9 @@ class RaidAuthManager:
                 except Exception as exc:
                     if isinstance(exc, TwitchClientConfigError):
                         break
-                    if isinstance(exc, RuntimeError) and "Session is closed" in str(exc):
+                    if isinstance(exc, RuntimeError) and "Session is closed" in str(
+                        exc
+                    ):
                         log.warning(
                             "Background refresh aborted for %s: shared HTTP session is closed",
                             login,
@@ -1075,8 +1138,8 @@ class RaidAuthManager:
 
     async def snapshot_and_flag_reauth(self) -> int:
         """Setzt needs_reauth=1 für alle. Gibt Anzahl betroffener Zeilen zurück."""
-        with get_conn() as conn:
-            conn.execute("""
+        with transaction() as conn:
+            result = conn.execute("""
                 UPDATE twitch_raid_auth
                 SET needs_reauth = TRUE,
                     reauth_notified_at = NULL
@@ -1089,7 +1152,7 @@ class RaidAuthManager:
                      OR authorized_at IS NOT NULL
                   )
             """)
-            count = conn.execute("SELECT changes()").fetchone()[0]
+            count = int(getattr(result, "rowcount", 0) or 0)
         log.info(
             "snapshot_and_flag_reauth: %d Tokens auf needs_reauth=1 gesetzt",
             count,
@@ -1103,7 +1166,7 @@ class RaidAuthManager:
         twitch_login: str | None = None,
     ) -> bool:
         try:
-            with get_conn() as conn:
+            with readonly_connection() as conn:
                 return self._has_existing_auth_row(
                     conn,
                     twitch_user_id=twitch_user_id,
@@ -1137,9 +1200,7 @@ class RaidAuthManager:
         resolved_profile = self._resolve_scope_profile(twitch_login, scope_profile)
         expected_scopes = list(scopes_for_profile(resolved_profile))
         normalized_scopes = [
-            str(scope or "").strip()
-            for scope in scopes
-            if str(scope or "").strip()
+            str(scope or "").strip() for scope in scopes if str(scope or "").strip()
         ]
         if set(normalized_scopes) != set(expected_scopes):
             raise ValueError(f"unexpected_scopes_for_profile:{resolved_profile}")
@@ -1162,13 +1223,13 @@ class RaidAuthManager:
             )
             return
 
-        with get_conn() as conn:
+        with transaction() as conn:
             existing_row = conn.execute(
                 """
                 SELECT raid_enabled
                 FROM twitch_raid_auth
-                WHERE twitch_user_id = ?
-                   OR LOWER(COALESCE(twitch_login, '')) = LOWER(?)
+                WHERE twitch_user_id = %s
+                   OR LOWER(COALESCE(twitch_login, '')) = LOWER(%s)
                 LIMIT 1
                 """,
                 (
@@ -1177,7 +1238,11 @@ class RaidAuthManager:
                 ),
             ).fetchone()
             raid_enabled_value = (
-                bool(existing_row["raid_enabled"] if hasattr(existing_row, "keys") else existing_row[0])
+                bool(
+                    existing_row["raid_enabled"]
+                    if hasattr(existing_row, "keys")
+                    else existing_row[0]
+                )
                 if existing_row
                 else bool(activate_raid_features)
             )
@@ -1187,7 +1252,7 @@ class RaidAuthManager:
                 (twitch_user_id, twitch_login, access_token, refresh_token,
                  access_token_enc, refresh_token_enc, enc_version, enc_kid,
                  token_expires_at, scopes, authorized_at, raid_enabled)
-                VALUES (?, ?, 'ENC', 'ENC', ?, ?, 1, 'v1', ?, ?, ?, ?)
+                VALUES (%s, %s, 'ENC', 'ENC', %s, %s, 1, 'v1', %s, %s, %s, %s)
                 ON CONFLICT (twitch_user_id) DO UPDATE SET
                     twitch_login      = EXCLUDED.twitch_login,
                     access_token_enc  = EXCLUDED.access_token_enc,
@@ -1216,7 +1281,7 @@ class RaidAuthManager:
                 UPDATE twitch_raid_auth
                 SET needs_reauth = FALSE,
                     reauth_notified_at = NULL
-                WHERE twitch_user_id = ?
+                WHERE twitch_user_id = %s
                 """,
                 (twitch_user_id,),
             )
@@ -1256,13 +1321,13 @@ class RaidAuthManager:
             )
             return None
 
-        with get_conn() as conn:
+        with readonly_connection() as conn:
             row = conn.execute(
                 """
                 SELECT access_token_enc, refresh_token_enc,
                        enc_version, token_expires_at, twitch_login, needs_reauth
                 FROM twitch_raid_auth
-                WHERE twitch_user_id = ?
+                WHERE twitch_user_id = %s
                 """,
                 (twitch_user_id,),
             ).fetchone()
@@ -1309,19 +1374,23 @@ class RaidAuthManager:
         # Token abgelaufen -> refresh
         async with self._lock:
             # Erneuter Check innerhalb des Locks (Double-Check Locking Pattern)
-            with get_conn() as conn:
+            with readonly_connection() as conn:
                 row_check = conn.execute(
                     """SELECT token_expires_at,
                               access_token_enc,
                               refresh_token_enc,
                               enc_version,
                               needs_reauth
-                       FROM twitch_raid_auth WHERE twitch_user_id = ?""",
+                       FROM twitch_raid_auth WHERE twitch_user_id = %s""",
                     (twitch_user_id,),
                 ).fetchone()
 
             if row_check:
-                if bool(row_check["needs_reauth"] if hasattr(row_check, "keys") else row_check[4]):
+                if bool(
+                    row_check["needs_reauth"]
+                    if hasattr(row_check, "keys")
+                    else row_check[4]
+                ):
                     log.info(
                         "Auth lookup denied for user_id=%s inside refresh lock: dashboard reauth required",
                         _mask_log_identifier(twitch_user_id),
@@ -1363,9 +1432,11 @@ class RaidAuthManager:
 
                 # Token in DB aktualisieren
                 new_expires_at = datetime.now(UTC).timestamp() + expires_in
-                new_expires_at_iso = datetime.fromtimestamp(new_expires_at, UTC).isoformat()
+                new_expires_at_iso = datetime.fromtimestamp(
+                    new_expires_at, UTC
+                ).isoformat()
 
-                with get_conn() as conn:
+                with transaction() as conn:
                     self._write_token_refresh(
                         conn,
                         twitch_user_id,
@@ -1408,13 +1479,13 @@ class RaidAuthManager:
             return None
 
         # SCHRITT 2: Token aus DB holen
-        with get_conn() as conn:
+        with readonly_connection() as conn:
             row = conn.execute(
                 """
                 SELECT access_token_enc, refresh_token_enc,
                        enc_version, token_expires_at, twitch_login, needs_reauth
                 FROM twitch_raid_auth
-                WHERE twitch_user_id = ? AND raid_enabled IS TRUE
+                WHERE twitch_user_id = %s AND raid_enabled IS TRUE
                 """,
                 (twitch_user_id,),
             ).fetchone()
@@ -1461,18 +1532,26 @@ class RaidAuthManager:
         # SCHRITT 4: Token abgelaufen -> refresh (mit Blacklist-Protection)
         async with self._lock:
             # Double-Check Locking
-            with get_conn() as conn:
+            with readonly_connection() as conn:
                 row_check = conn.execute(
                     """SELECT token_expires_at,
                               access_token_enc, enc_version,
                               raid_enabled, needs_reauth
-                       FROM twitch_raid_auth WHERE twitch_user_id = ?""",
+                       FROM twitch_raid_auth WHERE twitch_user_id = %s""",
                     (twitch_user_id,),
                 ).fetchone()
 
             if row_check:
-                raid_enabled = bool(row_check["raid_enabled"] if hasattr(row_check, "keys") else row_check[3])
-                needs_reauth = bool(row_check["needs_reauth"] if hasattr(row_check, "keys") else row_check[4])
+                raid_enabled = bool(
+                    row_check["raid_enabled"]
+                    if hasattr(row_check, "keys")
+                    else row_check[3]
+                )
+                needs_reauth = bool(
+                    row_check["needs_reauth"]
+                    if hasattr(row_check, "keys")
+                    else row_check[4]
+                )
                 if not raid_enabled or needs_reauth:
                     return None
                 _dc_uid = str(twitch_user_id)
@@ -1510,9 +1589,11 @@ class RaidAuthManager:
 
                 # Token in DB aktualisieren
                 new_expires_at = datetime.now(UTC).timestamp() + expires_in
-                new_expires_at_iso = datetime.fromtimestamp(new_expires_at, UTC).isoformat()
+                new_expires_at_iso = datetime.fromtimestamp(
+                    new_expires_at, UTC
+                ).isoformat()
 
-                with get_conn() as conn:
+                with transaction() as conn:
                     self._write_token_refresh(
                         conn,
                         twitch_user_id,
@@ -1537,7 +1618,7 @@ class RaidAuthManager:
         login = (twitch_login or "").strip().lower()
         if not login:
             return None
-        with get_conn() as conn:
+        with readonly_connection() as conn:
             row = load_active_partner(conn, twitch_login=login)
         if not row:
             return None
@@ -1551,14 +1632,16 @@ class RaidAuthManager:
         """Entfernt die Raid-Autorisierung für einen Streamer."""
         login_hint = ""
         discord_user_id = ""
-        with get_conn() as conn:
+        with transaction() as conn:
             auth_row = conn.execute(
-                "SELECT twitch_login FROM twitch_raid_auth WHERE twitch_user_id = ?",
+                "SELECT twitch_login FROM twitch_raid_auth WHERE twitch_user_id = %s",
                 (twitch_user_id,),
             ).fetchone()
             if auth_row:
                 login_hint = str(
-                    auth_row[0] if not hasattr(auth_row, "keys") else auth_row["twitch_login"] or ""
+                    auth_row[0]
+                    if not hasattr(auth_row, "keys")
+                    else auth_row["twitch_login"] or ""
                 )
 
             streamer_row = load_streamer_identity(
@@ -1570,19 +1653,22 @@ class RaidAuthManager:
                 discord_user_id = str(
                     streamer_row["discord_user_id"]
                     if hasattr(streamer_row, "keys")
-                    else streamer_row[2]
-                    or ""
+                    else streamer_row[2] or ""
                 ).strip()
 
-            set_partner_raid_bot_enabled(conn, twitch_user_id=twitch_user_id, enabled=False)
+            set_partner_raid_bot_enabled(
+                conn, twitch_user_id=twitch_user_id, enabled=False
+            )
 
             conn.execute(
-                "DELETE FROM twitch_raid_auth WHERE twitch_user_id = ?",
+                "DELETE FROM twitch_raid_auth WHERE twitch_user_id = %s",
                 (twitch_user_id,),
             )
             # autocommit – no explicit commit needed
 
-        if discord_user_id and hasattr(self.token_error_handler, "schedule_streamer_role_sync"):
+        if discord_user_id and hasattr(
+            self.token_error_handler, "schedule_streamer_role_sync"
+        ):
             self.token_error_handler.schedule_streamer_role_sync(
                 discord_user_id,
                 should_have_role=False,
@@ -1592,12 +1678,14 @@ class RaidAuthManager:
 
     def set_raid_enabled(self, twitch_user_id: str, enabled: bool) -> None:
         """Aktiviert/Deaktiviert Auto-Raid für einen Streamer."""
-        with get_conn() as conn:
+        with transaction() as conn:
             conn.execute(
-                "UPDATE twitch_raid_auth SET raid_enabled = ? WHERE twitch_user_id = ?",
+                "UPDATE twitch_raid_auth SET raid_enabled = %s WHERE twitch_user_id = %s",
                 (bool(enabled), twitch_user_id),
             )
-            set_partner_raid_bot_enabled(conn, twitch_user_id=twitch_user_id, enabled=enabled)
+            set_partner_raid_bot_enabled(
+                conn, twitch_user_id=twitch_user_id, enabled=enabled
+            )
             # autocommit – no explicit commit needed
         log.info("Set raid_enabled=%s for user_id=%s", enabled, twitch_user_id)
 
@@ -1606,9 +1694,9 @@ class RaidAuthManager:
         True, wenn ein OAuth-Grant mit raid_enabled=1 für den Streamer existiert.
         Nutzt DB-Check, damit wir vor Auto-Raids kurzschließen können.
         """
-        with get_conn() as conn:
+        with readonly_connection() as conn:
             row = conn.execute(
-                "SELECT raid_enabled FROM twitch_raid_auth WHERE twitch_user_id = ?",
+                "SELECT raid_enabled FROM twitch_raid_auth WHERE twitch_user_id = %s",
                 (twitch_user_id,),
             ).fetchone()
         return bool(row and row[0])
@@ -1616,9 +1704,9 @@ class RaidAuthManager:
     def get_scopes(self, twitch_user_id: str) -> list[str]:
         """Liefert die gespeicherten OAuth-Scopes für einen Streamer (lowercased, unabhängig von raid_enabled)."""
         try:
-            with get_conn() as conn:
+            with readonly_connection() as conn:
                 row = conn.execute(
-                    "SELECT scopes FROM twitch_raid_auth WHERE twitch_user_id = ?",
+                    "SELECT scopes FROM twitch_raid_auth WHERE twitch_user_id = %s",
                     (twitch_user_id,),
                 ).fetchone()
             scopes_raw = (row[0] if row else "") or ""
@@ -1627,4 +1715,3 @@ class RaidAuthManager:
         except Exception:
             log.debug("get_scopes failed for %s", twitch_user_id, exc_info=True)
             return []
-

@@ -107,7 +107,7 @@ class _SessionsMixin:
         cache = self._get_active_sessions_cache()
         cache.clear()
         try:
-            with storage.get_conn() as c:
+            with storage.readonly_connection() as c:
                 rows = c.execute(
                     "SELECT id, streamer_login FROM twitch_stream_sessions WHERE ended_at IS NULL"
                 ).fetchall()
@@ -125,9 +125,9 @@ class _SessionsMixin:
 
     def _lookup_open_session_id(self, login: str) -> int | None:
         try:
-            with storage.get_conn() as c:
+            with storage.readonly_connection() as c:
                 row = c.execute(
-                    "SELECT id FROM twitch_stream_sessions WHERE streamer_login = ? AND ended_at IS NULL "
+                    "SELECT id FROM twitch_stream_sessions WHERE streamer_login = %s AND ended_at IS NULL "
                     "ORDER BY started_at DESC LIMIT 1",
                     (login.lower(),),
                 ).fetchone()
@@ -162,9 +162,9 @@ class _SessionsMixin:
         session_id = self._get_active_session_id(login_lower)
         if session_id:
             try:
-                with storage.get_conn() as c:
+                with storage.readonly_connection() as c:
                     row = c.execute(
-                        "SELECT stream_id FROM twitch_stream_sessions WHERE id = ?",
+                        "SELECT stream_id FROM twitch_stream_sessions WHERE id = %s",
                         (session_id,),
                     ).fetchone()
                 current_stream_id = (
@@ -234,14 +234,14 @@ class _SessionsMixin:
         had_deadlock_initial = bool(self._stream_is_in_target_category(stream))
         session_id: int | None = None
         try:
-            with storage.get_conn() as c:
+            with storage.transaction() as c:
                 cur = c.execute(
                     """
                     INSERT INTO twitch_stream_sessions (
                         streamer_login, stream_id, started_at, start_viewers, peak_viewers,
                         end_viewers, avg_viewers, samples, followers_start, stream_title,
                         language, is_mature, tags, game_name, had_deadlock_in_session
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                     RETURNING id
                     """,
                     (
@@ -264,7 +264,7 @@ class _SessionsMixin:
                 )
                 session_id = int(cur.fetchone()[0])
                 c.execute(
-                    "UPDATE twitch_live_state SET active_session_id = ? WHERE streamer_login = ?",
+                    "UPDATE twitch_live_state SET active_session_id = %s WHERE streamer_login = %s",
                     (session_id, login),
                 )
         except Exception:
@@ -281,10 +281,10 @@ class _SessionsMixin:
         now_dt = datetime.now(UTC)
         viewer_count = int(stream.get("viewer_count") or 0)
         try:
-            with storage.get_conn() as c:
+            with storage.transaction() as c:
                 session_row = c.execute(
                     "SELECT started_at, samples, avg_viewers, start_viewers, peak_viewers "
-                    "FROM twitch_stream_sessions WHERE id = ?",
+                    "FROM twitch_stream_sessions WHERE id = %s",
                     (session_id,),
                 ).fetchone()
                 if not session_row:
@@ -302,7 +302,7 @@ class _SessionsMixin:
                     """
                     INSERT INTO twitch_session_viewers
                         (session_id, ts_utc, minutes_from_start, viewer_count)
-                    VALUES (?, ?, ?, ?)
+                    VALUES (%s, %s, %s, %s)
                     ON CONFLICT (session_id, ts_utc) DO UPDATE SET
                         minutes_from_start = EXCLUDED.minutes_from_start,
                         viewer_count = EXCLUDED.viewer_count
@@ -341,8 +341,8 @@ class _SessionsMixin:
                 c.execute(
                     """
                     UPDATE twitch_stream_sessions
-                       SET samples = ?, avg_viewers = ?, peak_viewers = ?, end_viewers = ?, start_viewers = ?
-                     WHERE id = ?
+                       SET samples = %s, avg_viewers = %s, peak_viewers = %s, end_viewers = %s, start_viewers = %s
+                     WHERE id = %s
                     """,
                     (
                         new_samples,
@@ -376,9 +376,9 @@ class _SessionsMixin:
 
         now_dt = datetime.now(UTC)
         try:
-            with storage.get_conn() as c:
+            with storage.readonly_connection() as c:
                 session_row = c.execute(
-                    "SELECT * FROM twitch_stream_sessions WHERE id = ?",
+                    "SELECT * FROM twitch_stream_sessions WHERE id = %s",
                     (session_id,),
                 ).fetchone()
         except Exception:
@@ -403,9 +403,9 @@ class _SessionsMixin:
         duration_seconds = int(max(0, (now_dt - start_dt).total_seconds()))
 
         try:
-            with storage.get_conn() as c:
+            with storage.readonly_connection() as c:
                 viewer_rows = c.execute(
-                    "SELECT minutes_from_start, viewer_count FROM twitch_session_viewers WHERE session_id = ? ORDER BY ts_utc",
+                    "SELECT minutes_from_start, viewer_count FROM twitch_session_viewers WHERE session_id = %s ORDER BY ts_utc",
                     (session_id,),
                 ).fetchall()
         except Exception:
@@ -496,13 +496,13 @@ class _SessionsMixin:
             prev_val = current_val
 
         try:
-            with storage.get_conn() as c:
+            with storage.readonly_connection() as c:
                 chatter_row = c.execute(
                     """
                     SELECT COUNT(*) AS uniq,
                            SUM(is_first_time_streamer) AS firsts
                       FROM twitch_session_chatters
-                     WHERE session_id = ?
+                     WHERE session_id = %s
                     """,
                     (session_id,),
                 ).fetchone()
@@ -517,9 +517,9 @@ class _SessionsMixin:
         twitch_user_id: str | None = None
         had_deadlock_state = False
         try:
-            with storage.get_conn() as c:
+            with storage.readonly_connection() as c:
                 state_row = c.execute(
-                    "SELECT twitch_user_id, last_game, had_deadlock_in_session FROM twitch_live_state WHERE streamer_login = ?",
+                    "SELECT twitch_user_id, last_game, had_deadlock_in_session FROM twitch_live_state WHERE streamer_login = %s",
                     (login_lower,),
                 ).fetchone()
             if state_row is not None:
@@ -556,30 +556,30 @@ class _SessionsMixin:
         )
 
         try:
-            with storage.get_conn() as c:
+            with storage.transaction() as c:
                 c.execute(
                     """
                     UPDATE twitch_stream_sessions
-                       SET ended_at = ?,
-                           duration_seconds = ?,
-                           end_viewers = ?,
-                           peak_viewers = ?,
-                           avg_viewers = ?,
-                           samples = ?,
-                           retention_5m = ?,
-                           retention_10m = ?,
-                           retention_20m = ?,
-                           dropoff_pct = ?,
-                           dropoff_label = ?,
-                           unique_chatters = ?,
-                           first_time_chatters = ?,
-                           returning_chatters = ?,
-                           followers_end = ?,
-                           follower_delta = ?,
-                           notes = ?,
-                           had_deadlock_in_session = ?,
-                           game_name = COALESCE(game_name, ?)
-                     WHERE id = ?
+                       SET ended_at = %s,
+                           duration_seconds = %s,
+                           end_viewers = %s,
+                           peak_viewers = %s,
+                           avg_viewers = %s,
+                           samples = %s,
+                           retention_5m = %s,
+                           retention_10m = %s,
+                           retention_20m = %s,
+                           dropoff_pct = %s,
+                           dropoff_label = %s,
+                           unique_chatters = %s,
+                           first_time_chatters = %s,
+                           returning_chatters = %s,
+                           followers_end = %s,
+                           follower_delta = %s,
+                           notes = %s,
+                           had_deadlock_in_session = %s,
+                           game_name = COALESCE(game_name, %s)
+                     WHERE id = %s
                     """,
                     (
                         now_dt.isoformat(timespec="seconds"),
@@ -605,7 +605,7 @@ class _SessionsMixin:
                     ),
                 )
                 c.execute(
-                    "UPDATE twitch_live_state SET active_session_id = NULL WHERE streamer_login = ?",
+                    "UPDATE twitch_live_state SET active_session_id = NULL WHERE streamer_login = %s",
                     (login_lower,),
                 )
         except Exception:
@@ -679,9 +679,9 @@ class _SessionsMixin:
         had_deadlock = bool(self._stream_is_in_target_category(stream))
         stream_title = (stream.get("title") or "").strip() or None
         try:
-            with storage.get_conn() as c:
+            with storage.transaction() as c:
                 row = c.execute(
-                    "SELECT samples, start_viewers FROM twitch_stream_sessions WHERE id = ?",
+                    "SELECT samples, start_viewers FROM twitch_stream_sessions WHERE id = %s",
                     (session_id,),
                 ).fetchone()
                 if not row:
@@ -692,12 +692,12 @@ class _SessionsMixin:
                     c.execute(
                         """
                         UPDATE twitch_stream_sessions
-                        SET start_viewers = ?,
-                            peak_viewers = GREATEST(peak_viewers, ?),
-                            had_deadlock_in_session = COALESCE(had_deadlock_in_session, ?) OR ?,
-                            game_name = COALESCE(game_name, ?),
-                            stream_title = COALESCE(stream_title, ?)
-                        WHERE id = ?
+                        SET start_viewers = %s,
+                            peak_viewers = GREATEST(peak_viewers, %s),
+                            had_deadlock_in_session = COALESCE(had_deadlock_in_session, %s) OR %s,
+                            game_name = COALESCE(game_name, %s),
+                            stream_title = COALESCE(stream_title, %s)
+                        WHERE id = %s
                         """,
                         (viewer_count, viewer_count, had_deadlock, had_deadlock, game_name, stream_title, session_id),
                     )
@@ -716,7 +716,7 @@ class _SessionsMixin:
         total_closed = 0
         closed_sessions: list[tuple[int, str]] = []
         try:
-            with storage.get_conn() as c:
+            with storage.readonly_connection() as c:
                 # Case 1: zero-sample orphans older than 24h
                 cur = c.execute(
                     """

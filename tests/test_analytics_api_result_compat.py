@@ -37,7 +37,7 @@ class AnalyticsApiResultCompatTests(unittest.IsolatedAsyncioTestCase):
 
         with (
             patch(
-                "bot.analytics.mixin.storage.get_conn",
+                "bot.analytics.mixin.storage.transaction",
                 side_effect=lambda: contextlib.nullcontext(conn),
             ),
             patch("bot.analytics.mixin.storage.insert_observability_event"),
@@ -69,7 +69,7 @@ class AnalyticsApiResultCompatTests(unittest.IsolatedAsyncioTestCase):
 
         with (
             patch(
-                "bot.analytics.mixin.storage.get_conn",
+                "bot.analytics.mixin.storage.transaction",
                 side_effect=lambda: contextlib.nullcontext(conn),
             ),
             patch("bot.analytics.mixin.storage.insert_observability_event"),

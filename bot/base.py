@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import inspect
-import ipaddress
 import json
 import logging
 import os
@@ -16,7 +15,6 @@ from datetime import UTC, datetime
 from typing import Any
 from urllib.parse import urlparse
 
-from aiohttp import web
 from discord import Forbidden, Guild, HTTPException
 from discord.ext import commands
 
@@ -27,69 +25,13 @@ except Exception:  # pragma: no cover - fallback if master package not in path
         return
 
 from . import storage
-from .api.token_manager import TwitchBotTokenManager
-from .api.twitch_api import TwitchAPI
 from .chat.bot import TWITCHIO_AVAILABLE, create_twitch_chat_bot, load_bot_tokens
 from .chat.constants import CHAT_JOIN_OFFLINE
 from .chat.irc_lurker_tracker import IRCLurkerTracker
 from .core.constants import (
-    POLL_INTERVAL_SECONDS,
-    TWITCH_ALERT_CHANNEL_ID,
-    TWITCH_ALERT_MENTION,
-    TWITCH_CATEGORY_SAMPLE_LIMIT,
-    TWITCH_DASHBOARD_HOST,
-    TWITCH_DASHBOARD_NOAUTH,
-    TWITCH_DASHBOARD_PORT,
-    TWITCH_INTERNAL_API_HOST,
-    TWITCH_INTERNAL_API_PORT,
-    TWITCH_LANGUAGE,
-    TWITCH_LOG_EVERY_N_TICKS,
-    TWITCH_NOTIFY_CHANNEL_ID,
-    TWITCH_RAID_REDIRECT_URI,
-    TWITCH_REQUIRED_DISCORD_MARKER,
-    TWITCH_TARGET_GAME_NAME,
     log,
 )
-from .internal_api import InternalApiRunner
-from .raid.manager import RaidBot
-from .raid import partner_scores as partner_raid_scores
-from .reload_manager import LoopSpec, SubsystemDef, TwitchReloadManager
-from .secret_store import load_secret_value
-
-
-def _parse_env_bool(name: str, default: bool) -> bool:
-    raw = (os.getenv(name) or "").strip().lower()
-    if not raw:
-        return default
-    if raw in {"1", "true", "yes", "on"}:
-        return True
-    if raw in {"0", "false", "no", "off"}:
-        return False
-    return default
-
-
-def _parse_env_int(name: str, default: int) -> int:
-    raw = (os.getenv(name) or "").strip()
-    if not raw:
-        return default
-    try:
-        return int(raw)
-    except ValueError:
-        return default
-
-
-def _parse_env_csv(name: str, default: tuple[str, ...] = ()) -> tuple[str, ...]:
-    raw = str(os.getenv(name) or "").strip()
-    source = raw.split(",") if raw else list(default)
-    normalized: list[str] = []
-    seen: set[str] = set()
-    for item in source:
-        value = str(item or "").strip().lower().lstrip("#")
-        if not value or value in seen:
-            continue
-        seen.add(value)
-        normalized.append(value)
-    return tuple(normalized)
+from .runtime_bootstrap import TwitchRuntimeBootstrap
 
 
 def _observability_flow_id(prefix: str) -> str:
@@ -152,379 +94,9 @@ class TwitchBaseCog(commands.Cog):
     def __init__(self, bot: commands.Bot):
         super().__init__()
         self.bot = bot
-
-        # Diagnose: Welche Keys sind da?
-        twitch_keys = [k for k in os.environ.keys() if k.startswith("TWITCH_")]
-        log.debug("Detected Twitch Keys in ENV: %s", ", ".join(twitch_keys))
-
-        # 🔒 Secrets nur aus ENV (nicht hardcoden!)
-        # TWITCH_CLIENT_ID/SECRET sind für die Haupt-App (Raids, Dashboard)
-        self.client_id = load_secret_value("TWITCH_CLIENT_ID")
-        self.client_secret = load_secret_value("TWITCH_CLIENT_SECRET")
-
-        # TWITCH_BOT_CLIENT_ID ist speziell für den Chat-Bot (Fallback auf Haupt-App)
-        self._twitch_bot_client_id: str = (
-            load_secret_value("TWITCH_BOT_CLIENT_ID") or self.client_id
-        )
-
-        # Bot-Secret laden: 1. Spezieller Key, 2. Fallback auf Haupt-Secret (wenn ID identisch)
-        bot_secret_env = load_secret_value("TWITCH_BOT_CLIENT_SECRET")
-        if bot_secret_env:
-            self._twitch_bot_secret = bot_secret_env
-        elif self._twitch_bot_client_id == self.client_id:
-            self._twitch_bot_secret = self.client_secret
-        else:
-            self._twitch_bot_secret = ""
-
-        # Runtime attributes initialised even if the cog is disabled
-        self.api: TwitchAPI | None
-        self._web: web.AppRunner | None = None
-        self._web_app: web.Application | None = None
-        self._category_id: str | None = None
-        self._language_filters = self._parse_language_filters(TWITCH_LANGUAGE)
-        self._tick_count = 0
-        self._log_every_n = max(1, int(TWITCH_LOG_EVERY_N_TICKS or 1))
-        self._category_sample_limit = max(50, int(TWITCH_CATEGORY_SAMPLE_LIMIT or 400))
-        self._poll_interval_seconds = max(5, min(3600, int(POLL_INTERVAL_SECONDS or 15)))
-        self._poll_interval_resync_interval_seconds = 60.0
-        self._poll_interval_last_sync_monotonic = 0.0
-        self._poll_interval_last_error_log_at = 0.0
-        self._poll_interval_last_invalid_value: str | None = None
-        self._poll_interval_settings_table = "twitch_global_settings"
-        self._poll_interval_settings_key = "poll_interval_seconds"
-        self._admin_polling_interval_seconds = self._poll_interval_seconds
-        self._active_sessions: dict[str, int] = {}
-        self._notify_channel_id = int(TWITCH_NOTIFY_CHANNEL_ID or 0)
-        self._alert_channel_id = int(TWITCH_ALERT_CHANNEL_ID or 0)
-        self._alert_mention = TWITCH_ALERT_MENTION or ""
-        self._invite_codes: dict[int, set[str]] = {}
-        self._twl_command: commands.Command | None = None
-        self._target_game_name = (TWITCH_TARGET_GAME_NAME or "").strip()
-        self._target_game_lower = self._target_game_name.lower()
-        self.partner_raid_score_service = partner_raid_scores
-
-        # Dashboard/Auth (aus Config-Header)
-        self._dashboard_token = load_secret_value("TWITCH_DASHBOARD_TOKEN") or None
-        self._dashboard_noauth = _parse_env_bool(
-            "TWITCH_DASHBOARD_NOAUTH",
-            bool(TWITCH_DASHBOARD_NOAUTH),
-        )
-        env_dashboard_host = (os.getenv("TWITCH_DASHBOARD_HOST") or "").strip()
-        default_dashboard_host = TWITCH_DASHBOARD_HOST or "127.0.0.1"
-        self._dashboard_host = env_dashboard_host or default_dashboard_host
-        try:
-            if ipaddress.ip_address(self._dashboard_host).is_unspecified:
-                log.warning(
-                    "TWITCH_DASHBOARD_HOST resolves to an unspecified address; keep this behind auth/reverse proxy."
-                )
-        except ValueError:
-            log.warning("TWITCH_DASHBOARD_HOST is not a valid IP; using it as-is: %s", self._dashboard_host)
-        self._dashboard_port = _parse_env_int("TWITCH_DASHBOARD_PORT", int(TWITCH_DASHBOARD_PORT))
-        embedded_env = (os.getenv("TWITCH_DASHBOARD_EMBEDDED", "") or "").strip().lower()
-        self._dashboard_embedded = embedded_env not in {"0", "false", "no", "off"}
-        if not self._dashboard_embedded:
-            log.info(
-                "TWITCH_DASHBOARD_EMBEDDED disabled - assuming external reverse proxy serves the dashboard"
-            )
-        self._partner_dashboard_token = load_secret_value("TWITCH_PARTNER_TOKEN") or None
-        self._dashboard_auth_redirect_uri = (
-            os.getenv("TWITCH_DASHBOARD_AUTH_REDIRECT_URI") or ""
-        ).strip() or "https://twitch.earlysalty.com/twitch/auth/callback"
-        self._dashboard_session_ttl = max(
-            6 * 3600,
-            _parse_env_int("TWITCH_DASHBOARD_SESSION_TTL_SEC", 6 * 3600),
-        )
-        self._legacy_stats_url = (os.getenv("TWITCH_LEGACY_STATS_URL") or "").strip() or None
-        self._required_marker_default = TWITCH_REQUIRED_DISCORD_MARKER or None
-        self._internal_api_runner: InternalApiRunner | None = None
-        self._experimental_irc_lurker_channels = set(
-            _parse_env_csv(
-                "TWITCH_EXPERIMENTAL_IRC_LURKER_CHANNELS",
-                default=("earlysalty",),
-            )
-        )
-        self._experimental_irc_lurker_enabled = False
-        self._irc_lurker_tracker: IRCLurkerTracker | None = None
-
-        # Internal API for split dashboard deployments
-        self._internal_api_token = (
-            load_secret_value(
-                "TWITCH_INTERNAL_API_TOKEN",
-                prefer_env=True,
-                allow_empty_env_override=True,
-            )
-            or None
-        )
-        env_internal_host = (os.getenv("TWITCH_INTERNAL_API_HOST") or "").strip()
-        default_internal_host = TWITCH_INTERNAL_API_HOST or "127.0.0.1"
-        self._internal_api_host = env_internal_host or default_internal_host
-        try:
-            if ipaddress.ip_address(self._internal_api_host).is_unspecified:
-                log.warning(
-                    "TWITCH_INTERNAL_API_HOST resolves to an unspecified address; keep it private."
-                )
-        except ValueError:
-            log.warning(
-                "TWITCH_INTERNAL_API_HOST is not a valid IP; using it as-is: %s",
-                self._internal_api_host,
-            )
-        self._internal_api_port = _parse_env_int(
-            "TWITCH_INTERNAL_API_PORT",
-            int(TWITCH_INTERNAL_API_PORT),
-        )
-        self._internal_api_runner = InternalApiRunner(
-            host=self._internal_api_host,
-            port=self._internal_api_port,
-            token=self._internal_api_token,
-            add_cb=getattr(self, "_dashboard_add", None),
-            remove_cb=getattr(self, "_dashboard_remove", None),
-            list_cb=getattr(self, "_dashboard_list", None),
-            stats_cb=getattr(self, "_dashboard_stats", None),
-            verify_cb=getattr(self, "_dashboard_verify", None),
-            archive_cb=getattr(self, "_dashboard_archive", None),
-            discord_flag_cb=getattr(self, "_dashboard_set_discord_flag", None),
-            discord_profile_cb=getattr(self, "_dashboard_save_discord_profile", None),
-            streamer_analytics_cb=getattr(self, "_dashboard_streamer_analytics_data", None),
-            comparison_cb=getattr(self, "_dashboard_comparison_stats", None),
-            session_cb=getattr(self, "_dashboard_session_detail", None),
-            raid_auth_url_cb=getattr(self, "_dashboard_raid_auth_url", None),
-            raid_auth_state_cb=getattr(self, "_integration_raid_auth_state", None),
-            raid_block_state_cb=getattr(self, "_integration_raid_block_state", None),
-            raid_go_url_cb=getattr(self, "_dashboard_raid_go_url", None),
-            raid_requirements_cb=getattr(self, "_dashboard_raid_requirements", None),
-            raid_oauth_callback_cb=getattr(self, "_dashboard_raid_oauth_callback", None),
-            live_active_announcements_cb=getattr(
-                self,
-                "_dashboard_live_active_announcements",
-                None,
-            ),
-            live_link_click_cb=getattr(self, "_dashboard_live_link_click", None),
-            observability_snapshot_cb=getattr(
-                self,
-                "_internal_observability_snapshot",
-                None,
-            ),
-            chatters_debug_cb=getattr(self, "_internal_chatters_debug", None),
-        )
-
-        # EventSub Webhook Handler – früh initialisieren damit er sowohl im Dashboard
-        # als auch in _start_eventsub_listener verfügbar ist.
-        _webhook_secret = load_secret_value("TWITCH_WEBHOOK_SECRET")
-        if _webhook_secret:
-            try:
-                from .monitoring.eventsub_webhook import EventSubWebhookHandler
-
-                self._eventsub_webhook_handler = EventSubWebhookHandler(
-                    secret=_webhook_secret,
-                    logger=log,
-                )
-                # Webhook-Basis-URL aus dem Auth-Redirect-URI ableiten
-                _parsed_redirect = urlparse(self._dashboard_auth_redirect_uri)
-                self._webhook_base_url: str | None = (
-                    f"{_parsed_redirect.scheme}://{_parsed_redirect.netloc}"
-                    if _parsed_redirect.netloc
-                    else None
-                )
-                self._webhook_secret: str | None = _webhook_secret
-                log.debug(
-                    "EventSub Webhook Handler initialisiert (base_url=%s)",
-                    self._webhook_base_url,
-                )
-            except Exception:
-                log.exception("EventSub Webhook Handler konnte nicht initialisiert werden")
-                self._eventsub_webhook_handler = None
-                self._webhook_base_url = None
-                self._webhook_secret = None
-        else:
-            log.info(
-                "TWITCH_WEBHOOK_SECRET nicht gesetzt – EventSub Webhook deaktiviert, "
-                "WebSocket-Fallback wird verwendet."
-            )
-            self._eventsub_webhook_handler = None
-            self._webhook_base_url = None
-            self._webhook_secret = None
-
-        if not self.client_id:
-            log.error(
-                "TWITCH_CLIENT_ID not configured; Twitch features will be limited or disabled."
-            )
-            self.api = None
-            # Wir machen hier nicht 'return', damit der Chat-Bot (der seine eigene ID hat) evtl. trotzdem starten kann.
-        else:
-            if not self.client_secret:
-                log.warning(
-                    "TWITCH_CLIENT_SECRET missing. API calls and Raids will fail, but Chat Bot might work."
-                )
-                self.api = None
-            else:
-                self.api = TwitchAPI(self.client_id, self.client_secret)
-
-        if self.api:
-            # Rehydrate offene Streams/Sessions nach einem Neustart
-            self._spawn_bg_task(self._startup_db_warmup(), "twitch.db_warmup")
-
-        # Raid-Bot initialisieren
-        self._raid_bot: RaidBot | None = None
-        self._twitch_chat_bot = None
-        self._periodic_channel_join_task: asyncio.Task | None = None
-        bot_token, bot_refresh_token, _ = load_bot_tokens(log_missing=False)
-        self._twitch_bot_token: str | None = bot_token
-        self._twitch_bot_refresh_token: str | None = bot_refresh_token
-        env_bot_client_id = os.getenv("TWITCH_BOT_CLIENT_ID", "").strip()
-        self._twitch_bot_client_id = (
-            env_bot_client_id or self._twitch_bot_client_id or self.client_id
-        )
-        if not self._twitch_bot_secret:
-            env_bot_secret = os.getenv("TWITCH_BOT_CLIENT_SECRET", "").strip()
-            if env_bot_secret:
-                self._twitch_bot_secret = env_bot_secret
-            elif self._twitch_bot_client_id == self.client_id:
-                self._twitch_bot_secret = self.client_secret
-            else:
-                self._twitch_bot_secret = None
-        self._bot_token_manager: TwitchBotTokenManager | None = None
-        if self._twitch_bot_client_id:
-            self._bot_token_manager = TwitchBotTokenManager(
-                self._twitch_bot_client_id,
-                (self._twitch_bot_secret or self.client_secret or ""),
-            )
-
-        # Redirect-URL: Priorität 1: ENV/Tresor, Priorität 2: Constant
-        redirect_uri = os.getenv("TWITCH_RAID_REDIRECT_URI", "").strip() or TWITCH_RAID_REDIRECT_URI
-        self._raid_redirect_uri = redirect_uri
-
-        if self.api:
-            try:
-                session = self.api.get_http_session()
-                self._raid_bot = RaidBot(
-                    client_id=self.client_id,
-                    client_secret=self.client_secret,
-                    redirect_uri=redirect_uri,
-                    session=session,
-                )
-                self._raid_bot.partner_raid_score_service = partner_raid_scores
-                self._raid_bot.set_discord_bot(self.bot)
-                self._raid_bot.set_cog(self)  # For dynamic EventSub subscriptions
-                log.debug("Raid-Bot initialisiert (redirect_uri: %s)", redirect_uri)
-
-                # Twitch Chat Bot starten (falls Token vorhanden)
-                if self._twitch_bot_token:
-                    self._spawn_bg_task(self._init_twitch_chat_bot(), "twitch.chat_bot")
-                else:
-                    log.info(
-                        "Twitch Chat Bot nicht verfuegbar (kein Token gesetzt). "
-                        "Setze TWITCH_BOT_TOKEN oder TWITCH_BOT_TOKEN_FILE, um den Chat-Bot zu aktivieren."
-                    )
-            except Exception:
-                log.exception("Fehler beim Initialisieren des Raid-Bots")
-                self._raid_bot = None
-        else:
-            log.warning("Raid-Bot und Chat-Bot deaktiviert, da TWITCH_CLIENT_ID/SECRET fehlen.")
-
-        # Background tasks
-        sync_poll_interval = getattr(self, "_sync_poll_interval_from_storage", None)
-        if callable(sync_poll_interval):
-            try:
-                sync_poll_interval(force=True, startup=True)
-            except Exception:
-                log.debug("Persistiertes Polling-Intervall konnte vor Loop-Start nicht geladen werden", exc_info=True)
-        self.poll_streams.start()
-        # invites_refresh.start() → DEAKTIVIERT: On-Demand statt periodisch
-        self._spawn_bg_task(self._ensure_category_id(), "twitch.ensure_category_id")
-        self._spawn_bg_task(self._load_invite_codes_from_db(), "twitch.load_invites")
-        self._spawn_bg_task(self._start_internal_api(), "twitch.start_internal_api")
-        if self._dashboard_embedded:
-            self._spawn_bg_task(self._start_dashboard(), "twitch.start_dashboard")
-        else:
-            log.info("Skipping internal Twitch dashboard server startup")
-        self._spawn_bg_task(self._refresh_all_invites(), "twitch.refresh_all_invites")
-        # NUR EINEN EventSub Listener starten (konsolidiert stream.online + stream.offline)
-        self._spawn_bg_task(self._start_eventsub_listener(), "twitch.eventsub")
-        # Beim Start fehlende user_ids in twitch_streamers nachfüllen
-        if self.api:
-            self._spawn_bg_task(self._sync_missing_user_ids(), "twitch.sync_user_ids")
-            self._spawn_bg_task(self._scout_deadlock_channels(), "twitch.scout_deadlock")
-
-        # Persistente Views und Session-Rehydrate nach Bot-Ready erledigen
-        self._spawn_bg_task(self._register_views_after_ready(), "twitch.views_warmup")
-
-        # Social Media Clip Management
-        self.clip_manager = None
-        self.clip_fetcher = None
-        self.upload_worker = None
-        if self.api:
-            from .social_media.clip_fetcher import ClipFetcher
-            from .social_media.clip_manager import ClipManager
-            from .social_media.upload_worker import UploadWorker
-
-            self.clip_manager = ClipManager(twitch_api=self.api)
-            self.clip_fetcher = ClipFetcher(bot, self.api, self.clip_manager)
-            self.upload_worker = UploadWorker(bot, self.clip_manager)
-            log.info(
-                "Social Media Clip Management initialized (ClipManager + ClipFetcher + UploadWorker)"
-            )
-
-        # Subsystem hot-reload manager
-        self._reload_manager = TwitchReloadManager(self)
-        self._reload_manager.register(SubsystemDef(
-            name="analytics",
-            display_name="Analytics",
-            modules=["bot.analytics.mixin"],
-            loops=[
-                LoopSpec("collect_analytics_data"),
-                LoopSpec("collect_chatters_data"),
-                LoopSpec("compute_raid_retention"),
-            ],
-            hot_reloadable=True,
-        ))
-        self._reload_manager.register(SubsystemDef(
-            name="community",
-            display_name="Community",
-            modules=["bot.community.admin", "bot.community.leaderboard", "bot.community.partner_recruit"],
-            loops=[],
-            hot_reloadable=True,
-        ))
-        self._reload_manager.register(SubsystemDef(
-            name="social",
-            display_name="Social Media",
-            modules=["bot.social_media.clip_fetcher", "bot.social_media.clip_manager", "bot.social_media.upload_worker"],
-            loops=[],
-            hot_reloadable=True,
-            teardown_hook="_reload_social_teardown",
-            startup_hook="_reload_social_startup",
-        ))
-        self._reload_manager.register(SubsystemDef(
-            name="monitoring",
-            display_name="Monitoring",
-            modules=["bot.monitoring.monitoring", "bot.monitoring.eventsub_mixin", "bot.monitoring.sessions_mixin", "bot.monitoring.embeds_mixin"],
-            loops=[
-                LoopSpec("poll_streams"),
-                LoopSpec("invites_refresh"),
-            ],
-            hot_reloadable=False,
-        ))
-        self._reload_manager.register(SubsystemDef(
-            name="chat",
-            display_name="Chat Bot",
-            modules=["bot.chat.bot", "bot.chat.commands", "bot.chat.connection"],
-            loops=[],
-            hot_reloadable=False,
-        ))
-        self._reload_manager.register(SubsystemDef(
-            name="dashboard",
-            display_name="Dashboard",
-            modules=["bot.dashboard.mixin", "bot.dashboard.server_v2", "bot.dashboard.routes_mixin"],
-            loops=[],
-            hot_reloadable=False,
-        ))
-        self._reload_manager.register(SubsystemDef(
-            name="raid",
-            display_name="Raid",
-            modules=["bot.raid.mixin", "bot.raid.manager", "bot.raid.commands", "bot.raid.auth"],
-            loops=[],
-            hot_reloadable=False,
-        ))
-        log.debug("Subsystem reload manager ready (%d subsystems)", len(self._reload_manager.get_all_names()))
+        self._runtime_bootstrap = TwitchRuntimeBootstrap(self)
+        self._runtime_bootstrap.configure_runtime()
+        self._runtime_bootstrap.wire_runtime_dependencies()
 
     @staticmethod
     def _sample_observability_items(values: object, *, limit: int = 10) -> list[str]:
@@ -670,12 +242,12 @@ class TwitchBaseCog(commands.Cog):
         current_user_id: str | None = None
         is_live = False
         try:
-            with storage.get_conn() as conn:
+            with storage.readonly_connection() as conn:
                 row = conn.execute(
                     """
                     SELECT twitch_user_id, active_session_id, is_live
                     FROM twitch_live_state
-                    WHERE LOWER(streamer_login) = ?
+                    WHERE LOWER(streamer_login) = %s
                     LIMIT 1
                     """,
                     (normalized_login,),
@@ -879,7 +451,7 @@ class TwitchBaseCog(commands.Cog):
                 new_logins = []
                 now = datetime.now(UTC).isoformat(timespec="seconds")
 
-                with storage.get_conn() as conn:
+                with storage.transaction() as conn:
                     # Get currently monitored
                     existing_monitored = {
                         row[0].lower()
@@ -896,7 +468,7 @@ class TwitchBaseCog(commands.Cog):
 
                         # Only add if not already tracked (as partner or monitor)
                         exists = conn.execute(
-                            "SELECT 1 FROM twitch_streamers WHERE twitch_login = ?",
+                            "SELECT 1 FROM twitch_streamers WHERE twitch_login = %s",
                             (login,),
                         ).fetchone()
 
@@ -904,14 +476,12 @@ class TwitchBaseCog(commands.Cog):
                             conn.execute(
                                 """
                                 INSERT INTO twitch_streamers (twitch_login, twitch_user_id, is_monitored_only, created_at)
-                                VALUES (?, ?, 1, ?)
+                                VALUES (%s, %s, 1, %s)
                                 """,
                                 (login, s.get("user_id"), now),
                             )
                             new_logins.append(login)
                     scout_summary["new_logins"] = list(new_logins)
-
-                    conn.commit()
 
                 if new_logins:
                     await self._prime_monitored_only_sessions(
@@ -929,7 +499,7 @@ class TwitchBaseCog(commands.Cog):
                 scout_summary["to_remove"] = list(to_remove)
 
                 if to_remove:
-                    with storage.get_conn() as conn:
+                    with storage.transaction() as conn:
                         for login in to_remove:
                             # Finalize open sessions before deleting
                             try:
@@ -939,7 +509,7 @@ class TwitchBaseCog(commands.Cog):
                                     SET ended_at = CURRENT_TIMESTAMP,
                                         duration_seconds = EXTRACT(EPOCH FROM (CURRENT_TIMESTAMP - started_at))::int,
                                         notes = COALESCE(notes || '; ', '') || 'auto-closed: scout-removed'
-                                    WHERE streamer_login = ? AND ended_at IS NULL
+                                    WHERE streamer_login = %s AND ended_at IS NULL
                                     """,
                                     (login,),
                                 )
@@ -948,13 +518,12 @@ class TwitchBaseCog(commands.Cog):
                             # Clean up stale live_state
                             try:
                                 conn.execute(
-                                    "DELETE FROM twitch_live_state WHERE streamer_login = ?",
+                                    "DELETE FROM twitch_live_state WHERE streamer_login = %s",
                                     (login,),
                                 )
                             except Exception:
                                 log.debug("Scout: live_state cleanup failed for %s", login, exc_info=True)
                             storage.delete_streamer(conn, login)
-                        conn.commit()
                     log.info(
                         "Scout: Removing %d monitored channels (no longer Deadlock/DE/Live): %s",
                         len(to_remove),
@@ -1175,7 +744,7 @@ class TwitchBaseCog(commands.Cog):
         from .raid.views import RaidAuthGenerateView
 
         try:
-            with storage.get_conn() as conn:
+            with storage.readonly_connection() as conn:
                 rows = conn.execute(
                     "SELECT twitch_login FROM twitch_raid_auth WHERE twitch_login IS NOT NULL"
                 ).fetchall()
@@ -1228,6 +797,14 @@ class TwitchBaseCog(commands.Cog):
     # -------------------------------------------------------
     # Lifecycle
     # -------------------------------------------------------
+    async def cog_load(self) -> None:
+        super_cog_load = getattr(super(), "cog_load", None)
+        if callable(super_cog_load):
+            await super_cog_load()
+        bootstrap = getattr(self, "_runtime_bootstrap", None)
+        if bootstrap is not None:
+            await bootstrap.start_runtime()
+
     async def cog_unload(self):
         """Ensure background resources are torn down when the cog is removed.
 
@@ -1243,6 +820,11 @@ class TwitchBaseCog(commands.Cog):
         9. Commands deregistrieren
         """
         log.info("Twitch Cog Unload gestartet – fahre alle Ressourcen herunter...")
+
+        try:
+            await self._cancel_managed_bg_tasks()
+        except Exception:
+            log.exception("Konnte verwaltete Background-Tasks nicht stoppen")
 
         # 1. Background Loops canceln
         loops = (self.poll_streams, self.invites_refresh)
@@ -1456,14 +1038,61 @@ class TwitchBaseCog(commands.Cog):
             return
         await runner.stop()
 
-    def _spawn_bg_task(self, coro: Coroutine[Any, Any, Any], name: str) -> None:
-        """Start a background coroutine without relying on Bot.loop (removed in d.py 2.4)."""
+    def _managed_bg_task_registry(self) -> set[asyncio.Task[Any]]:
+        tasks = getattr(self, "_managed_bg_tasks", None)
+        if not isinstance(tasks, set):
+            tasks = set()
+            self._managed_bg_tasks = tasks
+        return tasks
+
+    def _track_bg_task(self, task: asyncio.Task[Any]) -> asyncio.Task[Any]:
+        registry = self._managed_bg_task_registry()
+        registry.add(task)
+
+        def _discard(completed: asyncio.Task[Any]) -> None:
+            registry.discard(completed)
+
+        task.add_done_callback(_discard)
+        return task
+
+    async def _cancel_managed_bg_tasks(self) -> None:
+        registry = list(self._managed_bg_task_registry())
+        if not registry:
+            return
+        self._managed_bg_tasks = set()
+        for task in registry:
+            if task.done():
+                continue
+            task.cancel()
+        for task in registry:
+            if task.done():
+                continue
+            try:
+                await task
+            except asyncio.CancelledError:
+                log.debug("Managed background task cancelled: %s", task.get_name())
+            except Exception:
+                log.debug(
+                    "Managed background task failed during shutdown: %s",
+                    task.get_name(),
+                    exc_info=True,
+                )
+
+    def _spawn_bg_task(
+        self,
+        coro: Coroutine[Any, Any, Any],
+        name: str,
+    ) -> asyncio.Task[Any] | None:
+        """Start and track a background coroutine without relying on Bot.loop."""
         try:
-            asyncio.create_task(coro, name=name)
+            return self._track_bg_task(asyncio.create_task(coro, name=name))
         except RuntimeError as exc:
             log.error("Cannot start background task %s (no running loop yet): %s", name, exc)
+            coro.close()
         except Exception:
             log.exception("Failed to start background task %s", name)
+            coro.close()
+        return None
 
     def _ensure_periodic_channel_join_task(self) -> asyncio.Task | None:
         """Start the periodic chat channel maintenance loop at most once."""
@@ -1671,10 +1300,10 @@ class TwitchBaseCog(commands.Cog):
     # DB-Helpers / Guild-Setup / Invites
     # -------------------------------------------------------
     def _set_channel(self, guild_id: int, channel_id: int) -> None:
-        with storage.get_conn() as c:
+        with storage.transaction() as c:
             c.execute(
                 "INSERT INTO twitch_guild_settings (guild_id, notify_channel_id) "
-                "VALUES (?, ?) "
+                "VALUES (%s, %s) "
                 "ON CONFLICT (guild_id) DO UPDATE SET notify_channel_id = EXCLUDED.notify_channel_id",
                 (int(guild_id), int(channel_id)),
             )
@@ -1714,7 +1343,7 @@ class TwitchBaseCog(commands.Cog):
             return
 
         try:
-            with storage.get_conn() as conn:
+            with storage.readonly_connection() as conn:
                 rows = conn.execute(
                     "SELECT guild_id, invite_code FROM discord_invite_codes"
                 ).fetchall()
@@ -1762,8 +1391,8 @@ class TwitchBaseCog(commands.Cog):
 
         # --- Phase 1: Sync aus raid_auth (offline, instant) ---
         try:
-            with storage.get_conn() as conn:
-                conn.execute("""
+            with storage.transaction() as conn:
+                result = conn.execute("""
                     UPDATE twitch_streamers
                     SET twitch_user_id = (
                         SELECT tra.twitch_user_id
@@ -1777,7 +1406,7 @@ class TwitchBaseCog(commands.Cog):
                             AND tra.twitch_user_id IS NOT NULL
                       )
                 """)
-                synced = conn.execute("SELECT changes()").fetchone()[0]
+                synced = int(getattr(result, "rowcount", 0) or 0)
             if synced:
                 log.info(
                     "_sync_missing_user_ids: %d user_ids aus raid_auth übernommen",
@@ -1788,7 +1417,7 @@ class TwitchBaseCog(commands.Cog):
 
         # --- Phase 2: Rest per API auflösen ---
         try:
-            with storage.get_conn() as conn:
+            with storage.readonly_connection() as conn:
                 rows = conn.execute(
                     "SELECT twitch_login FROM twitch_streamers WHERE twitch_user_id IS NULL"
                 ).fetchall()
@@ -1821,13 +1450,13 @@ class TwitchBaseCog(commands.Cog):
             return
 
         try:
-            with storage.get_conn() as conn:
+            with storage.transaction() as conn:
                 for login, user_data in users.items():
                     uid = user_data.get("id")
                     if uid:
                         conn.execute(
-                            "UPDATE twitch_streamers SET twitch_user_id = ? "
-                            "WHERE LOWER(twitch_login) = LOWER(?) AND twitch_user_id IS NULL",
+                            "UPDATE twitch_streamers SET twitch_user_id = %s "
+                            "WHERE LOWER(twitch_login) = LOWER(%s) AND twitch_user_id IS NULL",
                             (uid, login),
                         )
             log.info("_sync_missing_user_ids: %d user_ids per API aktualisiert", len(users))
@@ -1836,7 +1465,7 @@ class TwitchBaseCog(commands.Cog):
 
         # --- Abschliessender Bericht ---
         try:
-            with storage.get_conn() as conn:
+            with storage.readonly_connection() as conn:
                 still_missing = conn.execute(
                     "SELECT twitch_login FROM twitch_streamers WHERE twitch_user_id IS NULL"
                 ).fetchall()
@@ -1901,12 +1530,12 @@ class TwitchBaseCog(commands.Cog):
                 from datetime import datetime
 
                 now = datetime.now(UTC).isoformat(timespec="seconds")
-                with storage.get_conn() as conn:
+                with storage.transaction() as conn:
                     # Lösche alte Codes die nicht mehr existieren
                     existing = {
                         row[0]
                         for row in conn.execute(
-                            "SELECT invite_code FROM discord_invite_codes WHERE guild_id = ?",
+                            "SELECT invite_code FROM discord_invite_codes WHERE guild_id = %s",
                             (guild.id,),
                         ).fetchall()
                     }
@@ -1915,7 +1544,7 @@ class TwitchBaseCog(commands.Cog):
                     if to_remove:
                         for invite_code in to_remove:
                             conn.execute(
-                                "DELETE FROM discord_invite_codes WHERE guild_id = ? AND invite_code = ?",
+                                "DELETE FROM discord_invite_codes WHERE guild_id = %s AND invite_code = %s",
                                 (guild.id, invite_code),
                             )
 
@@ -1923,12 +1552,11 @@ class TwitchBaseCog(commands.Cog):
                     for code in codes:
                         conn.execute(
                             """INSERT INTO discord_invite_codes (guild_id, invite_code, created_at, last_seen_at)
-                               VALUES (?, ?, ?, ?)
+                               VALUES (%s, %s, %s, %s)
                                ON CONFLICT(guild_id, invite_code) 
-                               DO UPDATE SET last_seen_at = ?""",
+                               DO UPDATE SET last_seen_at = %s""",
                             (guild.id, code, now, now, now),
                         )
-                    conn.commit()
                     log.debug(
                         "Invite-Codes für Guild %s in DB gespeichert: %s",
                         guild.id,
@@ -2104,7 +1732,7 @@ class TwitchBaseCog(commands.Cog):
         offline_ids: dict[str, str] = {}
 
         try:
-            with storage.get_conn() as conn:
+            with storage.readonly_connection() as conn:
                 rows = []
                 for login in monitored:
                     row = conn.execute(
@@ -2112,7 +1740,7 @@ class TwitchBaseCog(commands.Cog):
                         SELECT s.twitch_login, l.is_live, s.twitch_user_id
                           FROM twitch_streamers s
                           LEFT JOIN twitch_live_state l ON s.twitch_user_id = l.twitch_user_id
-                         WHERE LOWER(s.twitch_login) = ?
+                         WHERE LOWER(s.twitch_login) = %s
                         """,
                         (login,),
                     ).fetchone()

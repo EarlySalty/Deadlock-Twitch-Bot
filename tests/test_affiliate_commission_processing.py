@@ -31,7 +31,7 @@ class _RecordingSqliteConn:
         if sql_text.startswith("SELECT pg_advisory_unlock"):
             self.lock_calls.append(("unlock", sql_params))
             return _NoRowsResult()
-        return self._conn.execute(sql, sql_params)
+        return self._conn.execute(str(sql or "").replace("%s", "?"), sql_params)
 
     def commit(self) -> None:
         self._conn.commit()

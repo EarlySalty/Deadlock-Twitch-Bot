@@ -9,13 +9,24 @@ from bot.raid.commands import RaidCommandsMixin
 
 class _ConnContext:
     def __init__(self, conn: sqlite3.Connection):
-        self._conn = conn
+        self._conn = _CompatConn(conn)
 
     def __enter__(self) -> sqlite3.Connection:
         return self._conn
 
     def __exit__(self, exc_type, exc, tb) -> bool:
         return False
+
+
+class _CompatConn:
+    def __init__(self, conn: sqlite3.Connection) -> None:
+        self._conn = conn
+
+    def execute(self, sql: str, params=()):
+        return self._conn.execute(str(sql).replace("%s", "?"), params)
+
+    def __getattr__(self, name: str):
+        return getattr(self._conn, name)
 
 
 class _DummyCtx:
@@ -72,7 +83,13 @@ class CheckAuthCommandTests(unittest.IsolatedAsyncioTestCase):
 
             cog = _DummyRaidCommands()
             ctx = _DummyCtx(author_id=42)
-            with patch("bot.raid.commands.get_conn", return_value=_ConnContext(conn)):
+            with (
+                patch("bot.raid.commands.readonly_connection", return_value=_ConnContext(conn)),
+                patch(
+                    "bot.raid.commands.load_partner_by_discord_user_id",
+                    return_value={"twitch_login": "alpha", "twitch_user_id": "uid_1"},
+                ),
+            ):
                 await _DummyRaidCommands.cmd_check_auth.callback(cog, ctx)
 
             self.assertEqual(len(ctx.sent_messages), 1)
@@ -99,7 +116,13 @@ class CheckAuthCommandTests(unittest.IsolatedAsyncioTestCase):
             cog = _DummyRaidCommands()
             cog._raid_bot = SimpleNamespace(auth_manager=SimpleNamespace())
             ctx = _DummyCtx(author_id=42)
-            with patch("bot.raid.commands.get_conn", return_value=_ConnContext(conn)):
+            with (
+                patch("bot.raid.commands.readonly_connection", return_value=_ConnContext(conn)),
+                patch(
+                    "bot.raid.commands.load_partner_by_discord_user_id",
+                    return_value={"twitch_login": "alpha", "twitch_user_id": "uid_1"},
+                ),
+            ):
                 await _DummyRaidCommands.cmd_check_auth.callback(cog, ctx)
 
             self.assertEqual(len(ctx.sent_messages), 1)
@@ -125,7 +148,13 @@ class CheckAuthCommandTests(unittest.IsolatedAsyncioTestCase):
             cog = _DummyRaidCommands()
             cog._raid_bot = None
             ctx = _DummyCtx(author_id=42)
-            with patch("bot.raid.commands.get_conn", return_value=_ConnContext(conn)):
+            with (
+                patch("bot.raid.commands.readonly_connection", return_value=_ConnContext(conn)),
+                patch(
+                    "bot.raid.commands.load_partner_by_discord_user_id",
+                    return_value={"twitch_login": "alpha", "twitch_user_id": "uid_1"},
+                ),
+            ):
                 await _DummyRaidCommands.cmd_check_auth.callback(cog, ctx)
 
             self.assertEqual(len(ctx.sent_messages), 1)

@@ -69,6 +69,7 @@ class _AuthHarness(_DashboardAuthMixin):
         self.discord_exchange_calls: list[tuple[str, str]] = []
         self.discord_user_tokens: list[str] = []
         self.discord_membership_checks: list[int] = []
+        self._state_repo = _InMemoryAuthStateRepo(self)
 
     def _check_v2_auth(self, request) -> bool:
         del request
@@ -91,6 +92,9 @@ class _AuthHarness(_DashboardAuthMixin):
 
     def _normalized_discord_admin_redirect_uri(self):
         return DashboardV2Server._normalized_discord_admin_redirect_uri(self)
+
+    def _dashboard_auth_state_repo(self):
+        return self._state_repo
 
     async def _exchange_code_for_user(self, code: str, redirect_uri: str):
         self.exchange_calls.append((code, redirect_uri))
@@ -132,6 +136,56 @@ class _AuthHarness(_DashboardAuthMixin):
             }
         )
         return "session-123"
+
+
+class _InMemoryAuthStateRepo:
+    def __init__(self, owner: _AuthHarness) -> None:
+        self.owner = owner
+
+    def save_twitch_oauth_state(self, *, state: str, payload: dict, ttl_seconds: float, now=None) -> None:
+        del ttl_seconds, now
+        self.owner._oauth_states[state] = dict(payload)
+
+    def consume_twitch_oauth_state(self, state: str, *, now=None) -> dict | None:
+        del now
+        return self.owner._oauth_states.pop(state, None)
+
+    def save_discord_admin_oauth_state(
+        self, *, state: str, payload: dict, ttl_seconds: float, now=None
+    ) -> None:
+        del ttl_seconds, now
+        self.owner._discord_admin_oauth_states[state] = dict(payload)
+
+    def consume_discord_admin_oauth_state(self, state: str, *, now=None) -> dict | None:
+        del now
+        return self.owner._discord_admin_oauth_states.pop(state, None)
+
+    def load_dashboard_session(self, session_id: str, *, now=None) -> dict | None:
+        del now
+        return self.owner._auth_sessions.get(session_id)
+
+    def save_dashboard_session(
+        self, *, session_id: str, payload: dict, created_at: float, expires_at: float
+    ) -> None:
+        del created_at, expires_at
+        self.owner._auth_sessions[session_id] = dict(payload)
+
+    def load_discord_admin_session(self, session_id: str, *, now=None) -> dict | None:
+        del now
+        return self.owner._discord_admin_sessions.get(session_id)
+
+    def save_discord_admin_session(
+        self, *, session_id: str, payload: dict, created_at: float, expires_at: float
+    ) -> None:
+        del created_at, expires_at
+        self.owner._discord_admin_sessions[session_id] = dict(payload)
+
+    def delete_session(self, session_id: str) -> None:
+        self.owner._auth_sessions.pop(session_id, None)
+        self.owner._discord_admin_sessions.pop(session_id, None)
+
+    def delete_expired(self, now: float | None = None) -> None:
+        del now
 
 
 class DashboardOAuthStateBindingTests(unittest.IsolatedAsyncioTestCase):

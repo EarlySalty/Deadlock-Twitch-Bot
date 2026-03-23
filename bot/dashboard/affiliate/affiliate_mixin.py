@@ -46,13 +46,18 @@ class _DashboardAffiliateMixin:
     # ------------------------------------------------------------------ #
 
     @staticmethod
+    def _affiliate_execute_schema(conn: Any, sql: str) -> None:
+        for statement in (chunk.strip() for chunk in sql.split(";")):
+            if statement:
+                conn.execute(statement)
+
+    @staticmethod
     def _affiliate_ensure_tables(conn: Any) -> None:
         schema_path = Path(__file__).resolve().parents[2] / "migrations" / "affiliate_schema.sql"
         sql = schema_path.read_text(encoding="utf-8")
-        conn.executescript(sql)
+        _DashboardAffiliateMixin._affiliate_execute_schema(conn, sql)
         AffiliateGutschriftService.ensure_schema(conn)
         AffiliatePII.migrate_from_plaintext(conn)
-        conn.commit()
 
     @staticmethod
     def _affiliate_profile_payload(
@@ -146,7 +151,7 @@ class _DashboardAffiliateMixin:
         month: int | None = None,
         force: bool = False,
     ) -> dict[str, Any]:
-        with storage.get_conn() as conn:
+        with storage.transaction() as conn:
             self._affiliate_ensure_tables(conn)
             if year and month:
                 results = AffiliateGutschriftService.generate_monthly_gutschriften(
@@ -158,7 +163,6 @@ class _DashboardAffiliateMixin:
                     affiliate_login=affiliate_login,
                     force=force,
                 )
-                conn.commit()
                 return {"results": results}
 
             if affiliate_login:
@@ -177,7 +181,6 @@ class _DashboardAffiliateMixin:
                             force=force,
                         )
                     )
-                conn.commit()
                 return {"results": results}
 
             results = AffiliateGutschriftService.run_pending(
@@ -185,7 +188,6 @@ class _DashboardAffiliateMixin:
                 email_sender=self._affiliate_email_sender(),
                 seller=self._affiliate_gutschrift_seller(),
             )
-            conn.commit()
             return {"results": results}
 
     async def _affiliate_background_context(self, _app: web.Application):
@@ -310,38 +312,19 @@ class _DashboardAffiliateMixin:
             return
 
         namespace, lock_key = self._affiliate_commission_lock_key(affiliate_login)
-        conn.execute("SELECT pg_advisory_lock(?, ?)", (namespace, lock_key))
+        conn.execute("SELECT pg_advisory_lock(%s, %s)", (namespace, lock_key))
         try:
             yield
         finally:
-            conn.execute("SELECT pg_advisory_unlock(?, ?)", (namespace, lock_key))
+            conn.execute("SELECT pg_advisory_unlock(%s, %s)", (namespace, lock_key))
 
     @contextlib.contextmanager
     def _affiliate_db_transaction(self, conn: Any):
         transaction_factory = getattr(conn, "transaction", None)
-        if callable(transaction_factory):
-            with transaction_factory():
-                yield
-            return
-
-        raw_conn = getattr(conn, "_conn", conn)
-        began_transaction = raw_conn.__class__.__module__.startswith("sqlite3")
-        if began_transaction:
-            conn.execute("BEGIN IMMEDIATE")
-
-        try:
+        if not callable(transaction_factory):
+            raise RuntimeError("affiliate_db_transaction requires transaction-capable PG connection")
+        with transaction_factory():
             yield
-        except Exception:
-            if began_transaction:
-                rollback = getattr(conn, "rollback", None)
-                if callable(rollback):
-                    rollback()
-            raise
-        else:
-            if began_transaction:
-                commit = getattr(conn, "commit", None)
-                if callable(commit):
-                    commit()
 
     def _affiliate_replay_pending_commissions(
         self,
@@ -356,7 +339,7 @@ class _DashboardAffiliateMixin:
         pending_result = conn.execute(
             """SELECT id, stripe_event_id, commission_cents, currency
                FROM affiliate_commissions
-               WHERE affiliate_twitch_login = ?
+               WHERE affiliate_twitch_login = %s
                  AND status IN ('pending', 'failed')
                  AND stripe_transfer_id IS NULL
                  AND transferred_at IS NULL
@@ -397,8 +380,8 @@ class _DashboardAffiliateMixin:
             conn.execute(
                 """UPDATE affiliate_commissions
                    SET status = 'pending', stripe_transfer_id = NULL, transferred_at = NULL,
-                       error_message = ?
-                   WHERE id = ?""",
+                       error_message = %s
+                   WHERE id = %s""",
                 (str(error_message)[:500], commission_id),
             )
             if commit:
@@ -418,8 +401,8 @@ class _DashboardAffiliateMixin:
             conn.execute(
                 """UPDATE affiliate_commissions
                    SET status = 'pending', stripe_transfer_id = NULL, transferred_at = NULL,
-                       error_message = ?
-                   WHERE id = ?""",
+                       error_message = %s
+                   WHERE id = %s""",
                 (str(exc)[:500], commission_id),
             )
             if commit:
@@ -428,9 +411,9 @@ class _DashboardAffiliateMixin:
 
         conn.execute(
             """UPDATE affiliate_commissions
-               SET status = 'transferred', stripe_transfer_id = ?, transferred_at = ?,
+               SET status = 'transferred', stripe_transfer_id = %s, transferred_at = %s,
                    error_message = NULL
-               WHERE id = ?""",
+               WHERE id = %s""",
             (transfer.id, datetime.now(UTC).isoformat(), commission_id),
         )
         if commit:
@@ -528,10 +511,10 @@ class _DashboardAffiliateMixin:
         )
 
         now = datetime.now(UTC).isoformat()
-        with storage.get_conn() as conn:
+        with storage.transaction() as conn:
             self._affiliate_ensure_tables(conn)
             result = conn.execute(
-                "SELECT twitch_login FROM affiliate_accounts WHERE twitch_login = ?",
+                "SELECT twitch_login FROM affiliate_accounts WHERE twitch_login = %s",
                 (twitch_login,),
             )
             row = result.fetchone() if result else None
@@ -542,7 +525,7 @@ class _DashboardAffiliateMixin:
                            (twitch_login, twitch_user_id, display_name, email, full_name,
                             address_line1, address_city, address_zip, address_country,
                             created_at, updated_at)
-                           VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'DE', ?, ?)""",
+                           VALUES (%s, %s, %s, %s, %s, %s, %s, %s, 'DE', %s, %s)""",
                         (
                             twitch_login,
                             twitch_user_id,
@@ -557,14 +540,12 @@ class _DashboardAffiliateMixin:
                         ),
                     )
                     AffiliatePII.save_pii(conn, twitch_login, {"email": email})
-                    conn.commit()
                 except Exception as _dup_exc:
                     if "unique" not in str(_dup_exc).lower() and "duplicate" not in str(_dup_exc).lower():
                         raise
             else:
                 if email:
                     AffiliatePII.save_pii(conn, twitch_login, {"email": email})
-                    conn.commit()
 
         destination = "/twitch/affiliate/portal"
 
@@ -721,17 +702,16 @@ class _DashboardAffiliateMixin:
         twitch_login = session_login
         now = datetime.now(UTC).isoformat()
 
-        with storage.get_conn() as conn:
+        with storage.transaction() as conn:
             self._affiliate_ensure_tables(conn)
             with self._affiliate_commission_lock(conn, twitch_login):
                 conn.execute(
                     """UPDATE affiliate_accounts
-                       SET stripe_account_id = ?, stripe_connected_at = ?,
-                           stripe_connect_status = 'connected', updated_at = ?
-                       WHERE twitch_login = ?""",
+                       SET stripe_account_id = %s, stripe_connected_at = %s,
+                           stripe_connect_status = 'connected', updated_at = %s
+                       WHERE twitch_login = %s""",
                     (stripe_user_id, now, now, twitch_login),
                 )
-                conn.commit()
 
                 stripe, stripe_import_error = self._affiliate_import_stripe()
                 if stripe is not None:
@@ -743,6 +723,7 @@ class _DashboardAffiliateMixin:
                     stripe_account_id=stripe_user_id,
                     affiliate_login=twitch_login,
                     error_message=stripe_import_error or None,
+                    commit=False,
                 )
 
         raise web.HTTPFound("/twitch/affiliate/portal")
@@ -768,12 +749,12 @@ class _DashboardAffiliateMixin:
         twitch_login = session.get("twitch_login", "")
         now = datetime.now(UTC).isoformat()
 
-        with storage.get_conn() as conn:
+        with storage.transaction() as conn:
             self._affiliate_ensure_tables(conn)
 
             # Check if streamer is already a registered partner
             row = conn.execute(
-                "SELECT twitch_login FROM twitch_streamers_partner_state WHERE LOWER(twitch_login) = LOWER(?) AND is_partner_active = 1",
+                "SELECT twitch_login FROM twitch_streamers_partner_state WHERE LOWER(twitch_login) = LOWER(%s) AND is_partner_active = 1",
                 (streamer_login,),
             ).fetchone()
             if row:
@@ -783,10 +764,9 @@ class _DashboardAffiliateMixin:
                 conn.execute(
                     """INSERT INTO affiliate_streamer_claims
                        (affiliate_twitch_login, claimed_streamer_login, claimed_at)
-                       VALUES (?, ?, ?)""",
+                       VALUES (%s, %s, %s)""",
                     (twitch_login, streamer_login, now),
                 )
-                conn.commit()
             except Exception as _dup_exc:
                 if "unique" in str(_dup_exc).lower() or "duplicate" in str(_dup_exc).lower():
                     return web.json_response({"error": "already_claimed"}, status=409)
@@ -805,10 +785,10 @@ class _DashboardAffiliateMixin:
 
         twitch_login = session.get("twitch_login", "")
 
-        with storage.get_conn() as conn:
+        with storage.readonly_connection() as conn:
             self._affiliate_ensure_tables(conn)
             row = conn.execute(
-                "SELECT * FROM affiliate_accounts WHERE twitch_login = ?",
+                "SELECT * FROM affiliate_accounts WHERE twitch_login = %s",
                 (twitch_login,),
             ).fetchone()
             pii = AffiliatePII.load_pii(conn, twitch_login) if row else None
@@ -852,10 +832,10 @@ class _DashboardAffiliateMixin:
         }
         now = datetime.now(UTC).isoformat()
 
-        with storage.get_conn() as conn:
+        with storage.transaction() as conn:
             self._affiliate_ensure_tables(conn)
             row = conn.execute(
-                "SELECT * FROM affiliate_accounts WHERE twitch_login = ?",
+                "SELECT * FROM affiliate_accounts WHERE twitch_login = %s",
                 (twitch_login,),
             ).fetchone()
             if not row:
@@ -863,15 +843,14 @@ class _DashboardAffiliateMixin:
 
             AffiliatePII.save_pii(conn, twitch_login, payload)
             conn.execute(
-                "UPDATE affiliate_accounts SET updated_at = ? WHERE twitch_login = ?",
+                "UPDATE affiliate_accounts SET updated_at = %s WHERE twitch_login = %s",
                 (now, twitch_login),
             )
             updated_row = conn.execute(
-                "SELECT * FROM affiliate_accounts WHERE twitch_login = ?",
+                "SELECT * FROM affiliate_accounts WHERE twitch_login = %s",
                 (twitch_login,),
             ).fetchone()
             pii = AffiliatePII.load_pii(conn, twitch_login)
-            conn.commit()
 
         readiness = AffiliateGutschriftService.build_readiness(pii)
         return web.json_response(
@@ -892,7 +871,7 @@ class _DashboardAffiliateMixin:
 
         twitch_login = session.get("twitch_login", "")
 
-        with storage.get_conn() as conn:
+        with storage.readonly_connection() as conn:
             self._affiliate_ensure_tables(conn)
             rows = conn.execute(
                 """SELECT c.claimed_streamer_login, c.claimed_at,
@@ -902,7 +881,7 @@ class _DashboardAffiliateMixin:
                    LEFT JOIN affiliate_commissions co
                        ON co.affiliate_twitch_login = c.affiliate_twitch_login
                        AND co.streamer_login = c.claimed_streamer_login
-                   WHERE c.affiliate_twitch_login = ?
+                   WHERE c.affiliate_twitch_login = %s
                    GROUP BY c.claimed_streamer_login, c.claimed_at""",
                 (twitch_login,),
             ).fetchall()
@@ -931,10 +910,10 @@ class _DashboardAffiliateMixin:
             page, page_size = 1, 25
         offset = (page - 1) * page_size
 
-        with storage.get_conn() as conn:
+        with storage.readonly_connection() as conn:
             self._affiliate_ensure_tables(conn)
             total_row = conn.execute(
-                "SELECT COUNT(*) AS cnt FROM affiliate_commissions WHERE affiliate_twitch_login = ?",
+                "SELECT COUNT(*) AS cnt FROM affiliate_commissions WHERE affiliate_twitch_login = %s",
                 (twitch_login,),
             ).fetchone()
             total = total_row["cnt"] if total_row else 0
@@ -943,9 +922,9 @@ class _DashboardAffiliateMixin:
                 """SELECT id, streamer_login, brutto_cents, commission_cents, currency,
                           status, period_start, period_end, created_at, transferred_at
                    FROM affiliate_commissions
-                   WHERE affiliate_twitch_login = ?
+                   WHERE affiliate_twitch_login = %s
                    ORDER BY created_at DESC
-                   LIMIT ? OFFSET ?""",
+                   LIMIT %s OFFSET %s""",
                 (twitch_login, page_size, offset),
             ).fetchall()
 
@@ -977,10 +956,10 @@ class _DashboardAffiliateMixin:
             return web.json_response({"error": "unauthorized"}, status=401)
 
         twitch_login = str(session.get("twitch_login") or "").strip().lower()
-        with storage.get_conn() as conn:
+        with storage.readonly_connection() as conn:
             self._affiliate_ensure_tables(conn)
             account_row = conn.execute(
-                "SELECT * FROM affiliate_accounts WHERE twitch_login = ?",
+                "SELECT * FROM affiliate_accounts WHERE twitch_login = %s",
                 (twitch_login,),
             ).fetchone()
             if not account_row:
@@ -1014,7 +993,7 @@ class _DashboardAffiliateMixin:
             return web.json_response({"error": "invalid_gutschrift_id"}, status=400)
 
         twitch_login = str(session.get("twitch_login") or "").strip().lower()
-        with storage.get_conn() as conn:
+        with storage.readonly_connection() as conn:
             self._affiliate_ensure_tables(conn)
             resolved = AffiliateGutschriftService.get_pdf(
                 conn,
@@ -1104,7 +1083,7 @@ class _DashboardAffiliateMixin:
 
         # Look up streamer from billing subscription
         row = conn.execute(
-            "SELECT twitch_login FROM twitch_billing_subscriptions WHERE stripe_customer_id = ?",
+            "SELECT twitch_login FROM twitch_billing_subscriptions WHERE stripe_customer_id = %s",
             (stripe_customer_id,),
         ).fetchone()
         if not row:
@@ -1113,7 +1092,7 @@ class _DashboardAffiliateMixin:
 
         # Look up affiliate claim
         claim = conn.execute(
-            "SELECT affiliate_twitch_login FROM affiliate_streamer_claims WHERE claimed_streamer_login = ?",
+            "SELECT affiliate_twitch_login FROM affiliate_streamer_claims WHERE claimed_streamer_login = %s",
             (streamer_login,),
         ).fetchone()
         if not claim:
@@ -1133,7 +1112,7 @@ class _DashboardAffiliateMixin:
             try:
                 with self._affiliate_db_transaction(conn):
                     acct_result = conn.execute(
-                        "SELECT stripe_account_id FROM affiliate_accounts WHERE twitch_login = ?",
+                        "SELECT stripe_account_id FROM affiliate_accounts WHERE twitch_login = %s",
                         (affiliate_login,),
                     )
                     acct = acct_result.fetchone() if acct_result else None
@@ -1145,7 +1124,7 @@ class _DashboardAffiliateMixin:
                         pending_total_result = conn.execute(
                             """SELECT COALESCE(SUM(commission_cents), 0) AS pending_total
                                FROM affiliate_commissions
-                               WHERE affiliate_twitch_login = ? AND status = 'pending'""",
+                               WHERE affiliate_twitch_login = %s AND status = 'pending'""",
                             (affiliate_login,),
                         )
                         pending_total_row = pending_total_result.fetchone() if pending_total_result else None
@@ -1160,7 +1139,7 @@ class _DashboardAffiliateMixin:
                            (affiliate_twitch_login, streamer_login, stripe_event_id, stripe_invoice_id,
                             stripe_customer_id, brutto_cents, commission_cents, currency,
                             status, period_start, period_end, created_at)
-                           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                           VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
                         (affiliate_login, streamer_login, stripe_event_id, invoice_id,
                          stripe_customer_id, amount_paid_cents, commission_cents, currency,
                          initial_status, period_start, period_end, now),
@@ -1178,10 +1157,11 @@ class _DashboardAffiliateMixin:
                 stripe=stripe,
                 stripe_account_id=stripe_account_id,
                 affiliate_login=affiliate_login,
+                commit=False,
             )
 
             status_result = conn.execute(
-                "SELECT status FROM affiliate_commissions WHERE stripe_event_id = ?",
+                "SELECT status FROM affiliate_commissions WHERE stripe_event_id = %s",
                 (stripe_event_id,),
             )
             status_row = status_result.fetchone() if status_result else None
@@ -1192,7 +1172,7 @@ class _DashboardAffiliateMixin:
     # ------------------------------------------------------------------ #
 
     def _affiliate_register_routes(self, app: web.Application) -> None:
-        with storage.get_conn() as conn:
+        with storage.transaction() as conn:
             self._affiliate_ensure_tables(conn)
         if not getattr(self, "_affiliate_background_registered", False):
             app.cleanup_ctx.append(self._affiliate_background_context)

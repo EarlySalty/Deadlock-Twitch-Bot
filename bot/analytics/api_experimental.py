@@ -43,7 +43,7 @@ class _AnalyticsExperimentalMixin:
         since = (datetime.now(UTC) - timedelta(days=days)).isoformat()
 
         try:
-            with storage.get_conn() as conn:
+            with storage.readonly_connection() as conn:
                 row = conn.execute(
                     """
                     SELECT
@@ -116,7 +116,7 @@ class _AnalyticsExperimentalMixin:
         since = (datetime.now(UTC) - timedelta(days=days)).isoformat()
 
         try:
-            with storage.get_conn() as conn:
+            with storage.readonly_connection() as conn:
                 rows = conn.execute(
                     """
                     SELECT
@@ -175,7 +175,7 @@ class _AnalyticsExperimentalMixin:
         since = (datetime.now(UTC) - timedelta(days=days)).isoformat()
 
         try:
-            with storage.get_conn() as conn:
+            with storage.readonly_connection() as conn:
                 rows = conn.execute(
                     """
                     SELECT
@@ -233,7 +233,7 @@ class _AnalyticsExperimentalMixin:
         since = (datetime.now(UTC) - timedelta(days=days)).isoformat()
 
         try:
-            with storage.get_conn() as conn:
+            with storage.readonly_connection() as conn:
                 rows = conn.execute(
                     """
                     SELECT

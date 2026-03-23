@@ -65,7 +65,7 @@ class _ExpSessionsMixin:
         # existiert, diese zurückgeben ohne eine neue anzulegen.
         if stream_id:
             try:
-                with storage.get_conn() as c:
+                with storage.readonly_connection() as c:
                     row = c.execute(
                         "SELECT id FROM exp_sessions WHERE stream_id = %s AND ended_at IS NULL LIMIT 1",
                         (stream_id,),
@@ -78,7 +78,7 @@ class _ExpSessionsMixin:
                 log.debug("exp: Konnte offene Session nicht prüfen für %s", login, exc_info=True)
 
         try:
-            with storage.get_conn() as c:
+            with storage.transaction() as c:
                 row = c.execute(
                     """
                     INSERT INTO exp_sessions (
@@ -116,7 +116,7 @@ class _ExpSessionsMixin:
         login_lower = login.lower()
 
         try:
-            with storage.get_conn() as c:
+            with storage.readonly_connection() as c:
                 session_row = c.execute(
                     "SELECT started_at, samples, avg_viewers, peak_viewers "
                     "FROM exp_sessions WHERE id = %s",
@@ -183,7 +183,7 @@ class _ExpSessionsMixin:
         login_lower = login.lower()
         now_iso = datetime.now(UTC).isoformat(timespec="seconds")
         try:
-            with storage.get_conn() as c:
+            with storage.transaction() as c:
                 c.execute(
                     """
                     INSERT INTO exp_game_transitions
@@ -225,7 +225,7 @@ class _ExpSessionsMixin:
         now_iso = now_dt.isoformat(timespec="seconds")
 
         try:
-            with storage.get_conn() as c:
+            with storage.readonly_connection() as c:
                 session_row = c.execute(
                     "SELECT started_at FROM exp_sessions WHERE id = %s",
                     (exp_session_id,),

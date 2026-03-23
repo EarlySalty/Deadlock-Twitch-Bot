@@ -14,6 +14,7 @@ class _AnalyticsHarness(TwitchAnalyticsMixin):
 class IRCLurkerExperimentAnalysisTests(unittest.TestCase):
     def test_record_sample_aggregates_helix_and_irc_differences(self) -> None:
         harness = _AnalyticsHarness()
+        harness._experimental_irc_lurker_enabled = True
         harness._experimental_irc_lurker_channels = {"earlysalty"}
         harness._irc_lurker_tracker = SimpleNamespace(
             get_chatters=lambda login: {"viewer_a", "viewer_c"}

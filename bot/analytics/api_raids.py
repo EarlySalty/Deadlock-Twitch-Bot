@@ -40,7 +40,7 @@ class _AnalyticsRaidsMixin:
         cutoff = (datetime.now(UTC) - timedelta(days=days)).isoformat()
 
         try:
-            with storage.get_conn() as c:
+            with storage.readonly_connection() as c:
                 follower_bot_clause, follower_bot_params = build_known_chat_bot_not_in_clause(
                     column_expr="fe.follower_login"
                 )
@@ -59,8 +59,8 @@ class _AnalyticsRaidsMixin:
                       ON rh.id = rr.raid_id
                      AND rh.executed_at = rr.executed_at
                     JOIN twitch_stream_sessions ss ON ss.id = rr.target_session_id
-                    WHERE LOWER(ss.streamer_login) = ?
-                      AND ss.started_at >= ?
+                    WHERE LOWER(ss.streamer_login) = %s
+                      AND ss.started_at >= %s
                     ORDER BY ss.started_at DESC
                     """,
                     [streamer, cutoff],
@@ -85,7 +85,7 @@ class _AnalyticsRaidsMixin:
                     FROM twitch_follow_events fe
                     JOIN twitch_stream_sessions ss
                         ON LOWER(ss.streamer_login) = LOWER(fe.streamer_login)
-                       AND fe.followed_at BETWEEN ss.started_at AND COALESCE(ss.ended_at, datetime('now'))
+                       AND fe.followed_at BETWEEN ss.started_at AND COALESCE(ss.ended_at, NOW())
                     LEFT JOIN twitch_session_chatters sc
                         ON sc.session_id = ss.id
                        AND LOWER(sc.chatter_login) = LOWER(fe.follower_login)
@@ -97,8 +97,8 @@ class _AnalyticsRaidsMixin:
                         ON LOWER(cr_before.chatter_login) = LOWER(fe.follower_login)
                        AND LOWER(cr_before.streamer_login) = LOWER(fe.streamer_login)
                        AND cr_before.first_seen_at < ss.started_at
-                    WHERE LOWER(fe.streamer_login) = ?
-                      AND fe.followed_at >= ?
+                    WHERE LOWER(fe.streamer_login) = %s
+                      AND fe.followed_at >= %s
                       AND {follower_bot_clause}
                     """,
                     [streamer, cutoff, *follower_bot_params],

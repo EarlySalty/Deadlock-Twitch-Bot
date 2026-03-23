@@ -21,6 +21,26 @@ class _ConnContext:
         return False
 
 
+class _CompatSqliteConn:
+    def __init__(self, conn: sqlite3.Connection) -> None:
+        self._conn = conn
+
+    def execute(self, sql: str, params=None):
+        return self._conn.execute(str(sql or "").replace("%s", "?"), tuple(params or ()))
+
+    def executemany(self, sql: str, params=None):
+        return self._conn.executemany(str(sql or "").replace("%s", "?"), params or ())
+
+    def commit(self) -> None:
+        self._conn.commit()
+
+    def rollback(self) -> None:
+        self._conn.rollback()
+
+    def __getattr__(self, item):
+        return getattr(self._conn, item)
+
+
 class _FakeCrypto:
     def __init__(self) -> None:
         self.encrypt_calls: list[tuple[str, str]] = []
@@ -60,6 +80,7 @@ class AffiliatePIITests(unittest.IsolatedAsyncioTestCase):
     def setUp(self) -> None:
         self.conn = sqlite3.connect(":memory:")
         self.conn.row_factory = sqlite3.Row
+        self.compat_conn = _CompatSqliteConn(self.conn)
         self.conn.executescript(
             """
             CREATE TABLE affiliate_accounts (
@@ -126,7 +147,7 @@ class AffiliatePIITests(unittest.IsolatedAsyncioTestCase):
         crypto = _FakeCrypto()
         with patch("bot.dashboard.affiliate.affiliate_pii.get_crypto", return_value=crypto):
             AffiliatePII.save_pii(
-                self.conn,
+                self.compat_conn,
                 "affiliate_one",
                 {
                     "full_name": "Affiliate One GmbH",
@@ -139,7 +160,7 @@ class AffiliatePIITests(unittest.IsolatedAsyncioTestCase):
                     "ust_status": "regelbesteuert",
                 },
             )
-            payload = AffiliatePII.load_pii(self.conn, "affiliate_one")
+            payload = AffiliatePII.load_pii(self.compat_conn, "affiliate_one")
 
         raw = self.conn.execute(
             "SELECT email_enc, full_name_enc, address_country, ust_status FROM affiliate_pii WHERE twitch_login = ?",
@@ -186,8 +207,8 @@ class AffiliatePIITests(unittest.IsolatedAsyncioTestCase):
 
         crypto = _FakeCrypto()
         with patch("bot.dashboard.affiliate.affiliate_pii.get_crypto", return_value=crypto):
-            migrated = AffiliatePII.migrate_from_plaintext(self.conn)
-            payload = AffiliatePII.load_pii(self.conn, "affiliate_one")
+            migrated = AffiliatePII.migrate_from_plaintext(self.compat_conn)
+            payload = AffiliatePII.load_pii(self.compat_conn, "affiliate_one")
 
         row = self.conn.execute(
             """
@@ -211,7 +232,7 @@ class AffiliatePIITests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(row["address_zip"], "")
         self.assertEqual(row["address_country"], "")
         with patch("bot.dashboard.affiliate.affiliate_pii.get_crypto", return_value=crypto):
-            self.assertEqual(AffiliatePII.migrate_from_plaintext(self.conn), 0)
+            self.assertEqual(AffiliatePII.migrate_from_plaintext(self.compat_conn), 0)
 
     async def test_affiliate_api_me_reads_decrypted_profile_fields(self) -> None:
         crypto = _FakeCrypto()
@@ -219,7 +240,7 @@ class AffiliatePIITests(unittest.IsolatedAsyncioTestCase):
         handler._affiliate_ensure_tables = lambda _conn: None  # type: ignore[method-assign]
         with patch("bot.dashboard.affiliate.affiliate_pii.get_crypto", return_value=crypto):
             AffiliatePII.save_pii(
-                self.conn,
+                self.compat_conn,
                 "affiliate_one",
                 {
                     "full_name": "Affiliate One",
@@ -234,8 +255,8 @@ class AffiliatePIITests(unittest.IsolatedAsyncioTestCase):
             )
             self.conn.commit()
             with patch(
-                "bot.dashboard.affiliate_mixin.storage.get_conn",
-                return_value=_ConnContext(self.conn),
+                "bot.dashboard.affiliate_mixin.storage.readonly_connection",
+                return_value=_ConnContext(self.compat_conn),
             ):
                 response = await handler._affiliate_api_me(SimpleNamespace())
 
@@ -269,8 +290,8 @@ class AffiliatePIITests(unittest.IsolatedAsyncioTestCase):
 
         with patch("bot.dashboard.affiliate.affiliate_pii.get_crypto", return_value=crypto):
             with patch(
-                "bot.dashboard.affiliate_mixin.storage.get_conn",
-                return_value=_ConnContext(self.conn),
+                "bot.dashboard.affiliate_mixin.storage.transaction",
+                return_value=_ConnContext(self.compat_conn),
             ):
                 response = await handler._affiliate_api_profile_update(request)
 
@@ -304,11 +325,7 @@ class AffiliatePIITests(unittest.IsolatedAsyncioTestCase):
         handler._affiliate_ensure_tables = lambda _conn: None  # type: ignore[method-assign]
         request = _AffiliateProfileRequest({"ust_status": "foo"})
 
-        with patch(
-            "bot.dashboard.affiliate_mixin.storage.get_conn",
-            return_value=_ConnContext(self.conn),
-        ):
-            response = await handler._affiliate_api_profile_update(request)
+        response = await handler._affiliate_api_profile_update(request)
 
         payload = json.loads(response.body.decode("utf-8"))
         self.assertEqual(response.status, 400)

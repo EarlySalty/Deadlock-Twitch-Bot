@@ -67,7 +67,7 @@ class _EventSubMixin:
 
         wanted_ids = set(unique_ids)
         try:
-            with storage.get_conn() as c:
+            with storage.readonly_connection() as c:
                 rows = c.execute(
                     """
                     SELECT twitch_user_id, twitch_login
@@ -234,13 +234,13 @@ class _EventSubMixin:
         )
 
         try:
-            with storage.get_conn() as c:
+            with storage.transaction() as c:
                 c.execute(
                     """
                     INSERT INTO twitch_eventsub_capacity_snapshot (
                         ts_utc, trigger_reason, listener_count, ready_listeners, failed_listeners,
                         used_slots, total_slots, headroom_slots, listeners_at_limit, utilization_pct, listeners_json
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                     """,
                     (
                         snapshot.get("ts_utc"),
@@ -262,7 +262,7 @@ class _EventSubMixin:
                     retention_days = self._eventsub_capacity_retention_days()
                     cutoff = datetime.now(UTC) - timedelta(days=retention_days)
                     c.execute(
-                        "DELETE FROM twitch_eventsub_capacity_snapshot WHERE ts_utc < ?",
+                        "DELETE FROM twitch_eventsub_capacity_snapshot WHERE ts_utc < %s",
                         (cutoff.isoformat(timespec="seconds"),),
                     )
                     self._eventsub_capacity_last_cleanup = now_monotonic
@@ -286,23 +286,23 @@ class _EventSubMixin:
 
     async def _get_eventsub_capacity_overview(self, *, hours: int = 24) -> dict[str, Any]:
         hours = max(1, min(168, int(hours or 24)))
-        lookback = f"-{hours} hours"
+        lookback_interval = f"{hours} hours"
 
         try:
-            with storage.get_conn() as c:
+            with storage.readonly_connection() as c:
                 rows = c.execute(
                     """
                     SELECT ts_utc, trigger_reason, listener_count, ready_listeners, failed_listeners,
                            used_slots, total_slots, headroom_slots, listeners_at_limit, utilization_pct
                       FROM twitch_eventsub_capacity_snapshot
-                     WHERE ts_utc >= datetime('now', ?)
+                     WHERE ts_utc >= NOW() - (%s::interval)
                      ORDER BY ts_utc ASC
                     """,
-                    (lookback,),
+                    (lookback_interval,),
                 ).fetchall()
                 hourly_rows = c.execute(
                     """
-                    SELECT CAST(strftime('%H', ts_utc) AS INTEGER) AS hour,
+                    SELECT EXTRACT(HOUR FROM ts_utc AT TIME ZONE 'UTC')::int AS hour,
                            COUNT(*) AS samples,
                            AVG(utilization_pct) AS avg_utilization_pct,
                            MAX(utilization_pct) AS max_utilization_pct,
@@ -311,11 +311,11 @@ class _EventSubMixin:
                            AVG(listener_count) AS avg_listener_count,
                            MAX(listener_count) AS max_listener_count
                       FROM twitch_eventsub_capacity_snapshot
-                     WHERE ts_utc >= datetime('now', ?)
+                     WHERE ts_utc >= NOW() - (%s::interval)
                      GROUP BY hour
                      ORDER BY hour ASC
                     """,
-                    (lookback,),
+                    (lookback_interval,),
                 ).fetchall()
                 reason_rows = c.execute(
                     """
@@ -323,11 +323,11 @@ class _EventSubMixin:
                            COUNT(*) AS samples,
                            MAX(utilization_pct) AS peak_utilization_pct
                       FROM twitch_eventsub_capacity_snapshot
-                     WHERE ts_utc >= datetime('now', ?)
+                     WHERE ts_utc >= NOW() - (%s::interval)
                      GROUP BY trigger_reason
                      ORDER BY samples DESC, trigger_reason ASC
                     """,
-                    (lookback,),
+                    (lookback_interval,),
                 ).fetchall()
         except Exception:
             log.debug("EventSub: konnte Capacity-Overview nicht laden", exc_info=True)
@@ -460,7 +460,7 @@ class _EventSubMixin:
     def _get_raid_enabled_streamers_for_eventsub(self) -> list[dict[str, str]]:
         """Broadcaster-Liste für EventSub stream.offline (nur raid_bot_enabled=1)."""
         try:
-            with storage.get_conn() as c:
+            with storage.readonly_connection() as c:
                 rows = c.execute(
                     """
                     SELECT twitch_user_id, twitch_login
@@ -485,7 +485,7 @@ class _EventSubMixin:
     def _get_chat_scope_streamers_for_eventsub(self) -> list[dict[str, str]]:
         """Broadcaster mit `channel:bot`-Freigabe fuer botzentrierte Chat-Features."""
         try:
-            with storage.get_conn() as c:
+            with storage.readonly_connection() as c:
                 rows = c.execute(
                     """
                     SELECT s.twitch_user_id, s.twitch_login, a.scopes
@@ -519,7 +519,7 @@ class _EventSubMixin:
     def _get_tracked_logins_for_eventsub(self) -> list[str]:
         """Alle bekannten Streamer-Logins (für Online-Status der Partner bei EventSub)."""
         try:
-            with storage.get_conn() as c:
+            with storage.readonly_connection() as c:
                 rows = c.execute(
                     """
                     SELECT twitch_login
@@ -559,13 +559,13 @@ class _EventSubMixin:
         if not login_lower:
             return {}
         try:
-            with storage.get_conn() as c:
+            with storage.readonly_connection() as c:
                 row = c.execute(
                     """
                     SELECT is_live, last_seen_at, last_title, last_game, last_viewer_count,
                            last_stream_id, last_started_at, had_deadlock_in_session
                       FROM twitch_live_state
-                     WHERE streamer_login = ?
+                     WHERE streamer_login = %s
                     """,
                     (login_lower,),
                 ).fetchone()
@@ -609,14 +609,14 @@ class _EventSubMixin:
 
         previous_state = self._load_live_state_row(login_lower)
         try:
-            with storage.get_conn() as c:
+            with storage.transaction() as c:
                 c.execute(
                     """
                     UPDATE twitch_live_state
                        SET is_live = 0,
-                           last_seen_at = ?,
+                           last_seen_at = %s,
                            active_session_id = NULL
-                     WHERE twitch_user_id = ?
+                     WHERE twitch_user_id = %s
                     """,
                     (
                         datetime.now(UTC).isoformat(timespec="seconds"),
@@ -915,12 +915,12 @@ class _EventSubMixin:
             followed_at = event.get("followed_at") or datetime.now(UTC).isoformat()
             log.debug("EventSub: channel.follow – %s followed %s", user_login, login)
             try:
-                with storage.get_conn() as c:
+                with storage.transaction() as c:
                     c.execute(
                         """
                         INSERT INTO twitch_follow_events
                             (streamer_login, twitch_user_id, follower_login, follower_id, followed_at)
-                        VALUES (?, ?, ?, ?, ?)
+                        VALUES (%s, %s, %s, %s, %s)
                         """,
                         (login, bid, user_login, user_id or None, followed_at),
                     )
@@ -1000,7 +1000,7 @@ class _EventSubMixin:
                     login_norm = login or ""
                     if not login_norm:
                         try:
-                            with storage.get_conn() as c:
+                            with storage.readonly_connection() as c:
                                 row = storage.load_streamer_identity(c, twitch_user_id=bid)
                             if row:
                                 login_norm = str(
@@ -1078,9 +1078,9 @@ class _EventSubMixin:
                 if broadcaster_token:
                     # Scopes des Tokens aus DB laden – nur Subs subscriben, für die der Scope vorhanden ist
                     try:
-                        with storage.get_conn() as _sc:
+                        with storage.readonly_connection() as _sc:
                             _scope_row = _sc.execute(
-                                "SELECT scopes FROM twitch_raid_auth WHERE twitch_user_id = ?",
+                                "SELECT scopes FROM twitch_raid_auth WHERE twitch_user_id = %s",
                                 (str(bid),),
                             ).fetchone()
                         token_scopes = {

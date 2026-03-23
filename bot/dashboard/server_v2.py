@@ -6,7 +6,6 @@ import ipaddress
 import os
 import re
 import secrets
-import time
 from collections.abc import Awaitable, Callable
 from typing import Any
 from urllib.parse import parse_qsl, unquote, urlencode, urlparse, urlsplit, urlunsplit
@@ -15,6 +14,7 @@ from aiohttp import web
 
 from ..analytics.api_v2 import AnalyticsV2Mixin
 from ..core.constants import log
+from ..storage import pg as storage_pg
 from .admin.legal_mixin import _DashboardLegalMixin
 from .affiliate.affiliate_mixin import _DashboardAffiliateMixin
 from .auth.auth_mixin import _DashboardAuthMixin
@@ -74,6 +74,11 @@ _DEMO_EMBED_ALLOWED_ANCESTORS: tuple[str, ...] = tuple(
         ).split(",")
     )
     if origin
+)
+
+_DEFAULT_TRUSTED_PROXY_CIDRS: tuple[str, ...] = (
+    "127.0.0.1/32",
+    "::1/128",
 )
 
 
@@ -223,7 +228,14 @@ class DashboardV2Server(
                 self._discord_admin_owner_user_id,
             )
         self._discord_admin_moderator_role_id = DEFAULT_DASHBOARD_MODERATOR_ROLE_ID
-        self._discord_admin_guild_ids: tuple[int, ...] = ()
+        self._discord_admin_guild_ids = self._parse_int_csv_env(
+            "TWITCH_ADMIN_DISCORD_GUILD_IDS",
+            "DISCORD_ADMIN_GUILD_IDS",
+        )
+        self._trusted_proxy_networks = self._parse_proxy_networks(
+            "TWITCH_TRUSTED_PROXY_CIDRS",
+            "TRUSTED_PROXY_CIDRS",
+        )
         self._discord_admin_cookie_name = "twitch_admin_session"
         self._discord_admin_session_ttl = self._session_ttl_seconds
         self._discord_admin_state_ttl = 600
@@ -334,6 +346,64 @@ class DashboardV2Server(
             return None
         return parsed if parsed > 0 else None
 
+    @classmethod
+    def _parse_int_csv_env(cls, *keys: str) -> tuple[int, ...]:
+        values: list[int] = []
+        seen: set[int] = set()
+        for raw_key in keys:
+            raw_value = str(os.getenv(str(raw_key or "").strip()) or "").strip()
+            if not raw_value:
+                continue
+            for item in raw_value.split(","):
+                parsed = cls._parse_optional_int(item)
+                if parsed is None or parsed in seen:
+                    continue
+                seen.add(parsed)
+                values.append(parsed)
+        return tuple(values)
+
+    @staticmethod
+    def _parse_proxy_networks(*keys: str) -> tuple[ipaddress._BaseNetwork, ...]:
+        raw_values = [
+            str(os.getenv(str(raw_key or "").strip()) or "").strip()
+            for raw_key in keys
+            if str(raw_key or "").strip()
+        ]
+        source = next((value for value in raw_values if value), "")
+        cidrs = source.split(",") if source else list(_DEFAULT_TRUSTED_PROXY_CIDRS)
+        networks: list[ipaddress._BaseNetwork] = []
+        seen: set[str] = set()
+        for item in cidrs:
+            candidate = str(item or "").strip()
+            if not candidate or candidate in seen:
+                continue
+            try:
+                network = ipaddress.ip_network(candidate, strict=False)
+            except ValueError:
+                log.warning("Ignoring invalid trusted proxy CIDR: %s", candidate)
+                continue
+            seen.add(candidate)
+            networks.append(network)
+        return tuple(networks)
+
+    def _is_trusted_proxy_host(self, raw: str | None) -> bool:
+        host = self._host_without_port(raw)
+        if not host:
+            return False
+        try:
+            address = ipaddress.ip_address(host)
+        except ValueError:
+            return False
+        return any(address in network for network in self._trusted_proxy_networks)
+
+    def _forwarded_client_host(self, request: web.Request) -> str:
+        forwarded_for = request.headers.get("X-Forwarded-For") or ""
+        for candidate in forwarded_for.split(","):
+            host = self._host_without_port(candidate)
+            if host:
+                return host
+        return self._host_without_port(request.headers.get("X-Real-IP"))
+
     def _check_admin_token(self, token: str | None) -> bool:
         if self._noauth:
             return True
@@ -387,9 +457,10 @@ class DashboardV2Server(
         return ""
 
     def _effective_client_host(self, request: web.Request, peer_host: str) -> str:
-        # Deliberately ignore forwarded headers. Without an explicit trusted-proxy
-        # allowlist, user-controlled forwarding headers can be spoofed.
-        del request
+        if self._is_trusted_proxy_host(peer_host):
+            forwarded_host = self._forwarded_client_host(request)
+            if forwarded_host:
+                return forwarded_host
         return self._host_without_port(peer_host)
 
     def _rate_limit_key(self, request: web.Request) -> str:
@@ -663,34 +734,9 @@ class DashboardV2Server(
             return f"{default_path}?{urlencode(params)}"
         return default_path
 
-    def _check_rate_limit(
-        self,
-        request: web.Request,
-        *,
-        max_requests: int = 10,
-        window_seconds: float = 60.0,
-    ) -> bool:
-        """Sliding-window rate limiter per peer IP. Returns True if allowed."""
-        key = self._rate_limit_key(request)
-        now = time.time()
-        hits = self._rate_limits.get(key, [])
-        hits = [t for t in hits if now - t < window_seconds]
-        if len(hits) >= max_requests:
-            self._rate_limits[key] = hits
-            return False
-        hits.append(now)
-        self._rate_limits[key] = hits
-        # Prevent unbounded growth – clear when tracking too many distinct IPs
-        if len(self._rate_limits) > 1000:
-            self._rate_limits.clear()
-        return True
-
     def _is_secure_request(self, request: web.Request) -> bool:
-        # Only trust X-Forwarded-Proto when the TCP peer is a loopback address
-        # (i.e. a trusted local proxy).  Accepting this header from arbitrary
-        # clients would allow spoofing the "secure" flag and mis-marking cookies.
         peer = self._peer_host(request)
-        if self._is_loopback_host(peer):
+        if self._is_trusted_proxy_host(peer):
             forwarded_proto = (
                 (request.headers.get("X-Forwarded-Proto") or "").split(",")[0].strip().lower()
             )
@@ -779,6 +825,7 @@ def build_v2_app(
     eventsub_webhook_handler: Any | None = None,
 ) -> web.Application:
     app = web.Application(middlewares=[_security_headers_middleware])
+    storage_pg.prepare_runtime_storage()
     DashboardV2Server(
         app_token=token,
         noauth=noauth,

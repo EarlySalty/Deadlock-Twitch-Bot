@@ -789,7 +789,7 @@ class _AnalyticsOverviewMixin:
 
     async def _get_overview_data(self, streamer: str | None, days: int) -> dict[str, Any]:
         """Get comprehensive overview data for the dashboard."""
-        with storage.get_conn() as conn:
+        with storage.readonly_connection() as conn:
             since_date = (datetime.now(UTC) - timedelta(days=days)).isoformat()
             prev_since_date = (datetime.now(UTC) - timedelta(days=days * 2)).isoformat()
 
@@ -800,9 +800,9 @@ class _AnalyticsOverviewMixin:
                 """
                 SELECT COUNT(*)
                 FROM twitch_stream_sessions s
-                WHERE s.started_at >= ?
+                WHERE s.started_at >= %s
                   AND s.ended_at IS NOT NULL
-                  AND (COALESCE(?, '') = '' OR LOWER(s.streamer_login) = ?)
+                  AND (COALESCE(%s, '') = '' OR LOWER(s.streamer_login) = %s)
                 """,
                 [since_date, streamer_login, streamer_login],
             ).fetchone()[0]
@@ -830,9 +830,9 @@ class _AnalyticsOverviewMixin:
                         ELSE NULL
                     END) as retention
                 FROM twitch_stream_sessions s
-                WHERE s.started_at >= ? AND s.started_at < ?
+                WHERE s.started_at >= %s AND s.started_at < %s
                   AND s.ended_at IS NOT NULL
-                  AND (COALESCE(?, '') = '' OR LOWER(s.streamer_login) = ?)
+                  AND (COALESCE(%s, '') = '' OR LOWER(s.streamer_login) = %s)
                 """,
                 [prev_since_date, since_date, streamer_login, streamer_login],
             ).fetchone()
@@ -851,11 +851,11 @@ class _AnalyticsOverviewMixin:
             prev_ret_sample = conn.execute(
                 """
                 SELECT COUNT(*) FROM twitch_stream_sessions s
-                WHERE s.started_at >= ? AND s.started_at < ?
+                WHERE s.started_at >= %s AND s.started_at < %s
                   AND s.ended_at IS NOT NULL
                   AND s.avg_viewers >= 3 AND s.peak_viewers > 0
                   AND s.retention_10m IS NOT NULL
-                  AND (COALESCE(?, '') = '' OR LOWER(s.streamer_login) = ?)
+                  AND (COALESCE(%s, '') = '' OR LOWER(s.streamer_login) = %s)
                 """,
                 [prev_since_date, since_date, streamer_login, streamer_login],
             ).fetchone()
@@ -979,11 +979,11 @@ class _AnalyticsOverviewMixin:
                     s.followers_end,
                     s.stream_title
                 FROM twitch_stream_sessions s
-                WHERE s.started_at >= ?
+                WHERE s.started_at >= %s
                   AND s.ended_at IS NOT NULL
-                  AND (COALESCE(?, '') = '' OR LOWER(s.streamer_login) = ?)
+                  AND (COALESCE(%s, '') = '' OR LOWER(s.streamer_login) = %s)
                 ORDER BY s.started_at DESC
-                LIMIT ?
+                LIMIT %s
             ),
             filtered_chatters AS (
                 SELECT
@@ -1133,9 +1133,9 @@ class _AnalyticsOverviewMixin:
                     ) AS unique_chatters
                 FROM twitch_session_chatters sc
                 JOIN twitch_stream_sessions s ON s.id = sc.session_id
-                WHERE s.started_at >= ?
+                WHERE s.started_at >= %s
                   AND s.ended_at IS NOT NULL
-                  AND (COALESCE(?, '') = '' OR LOWER(s.streamer_login) = ?)
+                  AND (COALESCE(%s, '') = '' OR LOWER(s.streamer_login) = %s)
                   AND {session_bot_clause}
                 GROUP BY sc.session_id
             ),
@@ -1145,9 +1145,9 @@ class _AnalyticsOverviewMixin:
                     1 AS has_any_chatters
                 FROM twitch_session_chatters sc
                 JOIN twitch_stream_sessions s ON s.id = sc.session_id
-                WHERE s.started_at >= ?
+                WHERE s.started_at >= %s
                   AND s.ended_at IS NOT NULL
-                  AND (COALESCE(?, '') = '' OR LOWER(s.streamer_login) = ?)
+                  AND (COALESCE(%s, '') = '' OR LOWER(s.streamer_login) = %s)
                 GROUP BY sc.session_id
             )
             SELECT
@@ -1196,9 +1196,9 @@ class _AnalyticsOverviewMixin:
             FROM twitch_stream_sessions s
             LEFT JOIN filtered_session_chatters fsc ON fsc.session_id = s.id
             LEFT JOIN session_chatter_presence scp ON scp.session_id = s.id
-            WHERE s.started_at >= ?
+            WHERE s.started_at >= %s
               AND s.ended_at IS NOT NULL
-              AND (COALESCE(?, '') = '' OR LOWER(s.streamer_login) = ?)
+              AND (COALESCE(%s, '') = '' OR LOWER(s.streamer_login) = %s)
         """,
             [
                 since_date,
@@ -1224,9 +1224,9 @@ class _AnalyticsOverviewMixin:
                  AND NOT (s.followers_end = 0 AND s.followers_start > 0)
                  THEN s.follower_delta ELSE 0 END), 0)
             FROM twitch_stream_sessions s
-            WHERE s.started_at >= ?
+            WHERE s.started_at >= %s
               AND s.ended_at IS NOT NULL
-              AND (COALESCE(?, '') = '' OR LOWER(s.streamer_login) = ?)
+              AND (COALESCE(%s, '') = '' OR LOWER(s.streamer_login) = %s)
         """,
             [since_date, streamer_login, streamer_login],
         ).fetchone()
@@ -1239,7 +1239,7 @@ class _AnalyticsOverviewMixin:
                 f"""
                 SELECT COUNT(DISTINCT chatter_login)
                 FROM twitch_chatter_rollup
-                WHERE LOWER(streamer_login) = ?
+                WHERE LOWER(streamer_login) = %s
                   AND {rollup_bot_clause}
             """,
                 [streamer.lower(), *rollup_bot_params],
@@ -1263,9 +1263,9 @@ class _AnalyticsOverviewMixin:
                 COUNT(CASE WHEN s.follower_delta IS NOT NULL
                      AND NOT (s.followers_end = 0 AND s.followers_start > 0) THEN 1 END)
             FROM twitch_stream_sessions s
-            WHERE s.started_at >= ?
+            WHERE s.started_at >= %s
               AND s.ended_at IS NOT NULL
-              AND (COALESCE(?, '') = '' OR LOWER(s.streamer_login) = ?)
+              AND (COALESCE(%s, '') = '' OR LOWER(s.streamer_login) = %s)
         """,
             [since_date, streamer_login, streamer_login],
         ).fetchone()
@@ -1279,9 +1279,9 @@ class _AnalyticsOverviewMixin:
             SELECT COUNT(DISTINCT COALESCE(NULLIF(sc.chatter_login, ''), sc.chatter_id))
             FROM twitch_session_chatters sc
             JOIN twitch_stream_sessions s ON s.id = sc.session_id
-            WHERE s.started_at >= ?
+            WHERE s.started_at >= %s
               AND s.ended_at IS NOT NULL
-              AND (COALESCE(?, '') = '' OR LOWER(s.streamer_login) = ?)
+              AND (COALESCE(%s, '') = '' OR LOWER(s.streamer_login) = %s)
               AND sc.messages > 0
               AND {session_bot_clause}
             """,
@@ -1297,9 +1297,9 @@ class _AnalyticsOverviewMixin:
             SELECT COUNT(DISTINCT COALESCE(NULLIF(sc.chatter_login, ''), sc.chatter_id))
             FROM twitch_session_chatters sc
             JOIN twitch_stream_sessions s ON s.id = sc.session_id
-            WHERE s.started_at >= ?
+            WHERE s.started_at >= %s
               AND s.ended_at IS NOT NULL
-              AND (COALESCE(?, '') = '' OR LOWER(s.streamer_login) = ?)
+              AND (COALESCE(%s, '') = '' OR LOWER(s.streamer_login) = %s)
               AND (sc.messages > 0 OR COALESCE(sc.seen_via_chatters_api, FALSE) IS TRUE)
               AND {session_bot_clause}
             """,
@@ -1426,7 +1426,7 @@ class _AnalyticsOverviewMixin:
             """
             SELECT COUNT(*), COALESCE(SUM(viewer_count), 0)
             FROM twitch_raid_history
-            WHERE LOWER(from_broadcaster_login) = ? AND executed_at >= ? AND COALESCE(success, FALSE) IS TRUE
+            WHERE LOWER(from_broadcaster_login) = %s AND executed_at >= %s AND COALESCE(success, FALSE) IS TRUE
         """,
             [streamer.lower(), since_date],
         ).fetchone()
@@ -1435,7 +1435,7 @@ class _AnalyticsOverviewMixin:
             """
             SELECT COUNT(*)
             FROM twitch_raid_history
-            WHERE LOWER(to_broadcaster_login) = ? AND executed_at >= ? AND COALESCE(success, FALSE) IS TRUE
+            WHERE LOWER(to_broadcaster_login) = %s AND executed_at >= %s AND COALESCE(success, FALSE) IS TRUE
         """,
             [streamer.lower(), since_date],
         ).fetchone()
@@ -1461,8 +1461,8 @@ class _AnalyticsOverviewMixin:
                   FROM twitch_subscription_events e
                   LEFT JOIN twitch_stream_sessions s ON s.id = e.session_id
                   LEFT JOIN twitch_live_state l ON l.twitch_user_id = e.twitch_user_id
-                 WHERE e.received_at >= ?
-                   AND (? = '' OR LOWER(COALESCE(s.streamer_login, l.streamer_login, '')) = ?)
+                 WHERE e.received_at >= %s
+                   AND (%s = '' OR LOWER(COALESCE(s.streamer_login, l.streamer_login, '')) = %s)
                 """,
                 [since_date, sl, sl],
             ).fetchone()
@@ -1478,8 +1478,8 @@ class _AnalyticsOverviewMixin:
                   FROM twitch_bits_events e
                   LEFT JOIN twitch_stream_sessions s ON s.id = e.session_id
                   LEFT JOIN twitch_live_state l ON l.twitch_user_id = e.twitch_user_id
-                 WHERE e.received_at >= ?
-                   AND (? = '' OR LOWER(COALESCE(s.streamer_login, l.streamer_login, '')) = ?)
+                 WHERE e.received_at >= %s
+                   AND (%s = '' OR LOWER(COALESCE(s.streamer_login, l.streamer_login, '')) = %s)
                 """,
                 [since_date, sl, sl],
             ).fetchone()
@@ -1493,8 +1493,8 @@ class _AnalyticsOverviewMixin:
                 """
                 SELECT COUNT(*) FROM twitch_hype_train_events h
                 LEFT JOIN twitch_stream_sessions s ON s.id = h.session_id
-                WHERE h.started_at >= ? AND h.ended_at IS NOT NULL
-                  AND (? = '' OR LOWER(s.streamer_login) = ?)
+                WHERE h.started_at >= %s AND h.ended_at IS NOT NULL
+                  AND (%s = '' OR LOWER(s.streamer_login) = %s)
                 """,
                 [since_date, sl, sl],
             ).fetchone()
@@ -1551,7 +1551,7 @@ class _AnalyticsOverviewMixin:
 
         since_date = (datetime.now(UTC) - timedelta(days=days)).isoformat()
         try:
-            with storage.get_conn() as conn:
+            with storage.readonly_connection() as conn:
                 session_bot_clause, session_bot_params = build_known_chat_bot_not_in_clause(
                     column_expr="sc.chatter_login"
                 )
@@ -1560,9 +1560,9 @@ class _AnalyticsOverviewMixin:
                     WITH sessions AS (
                         SELECT id
                         FROM twitch_stream_sessions
-                        WHERE started_at >= ?
+                        WHERE started_at >= %s
                           AND ended_at IS NOT NULL
-                          AND LOWER(streamer_login) = ?
+                          AND LOWER(streamer_login) = %s
                     ),
                     chatter AS (
                         SELECT
@@ -1651,9 +1651,9 @@ class _AnalyticsOverviewMixin:
                     WITH sessions AS (
                         SELECT id
                         FROM twitch_stream_sessions
-                        WHERE started_at >= ?
+                        WHERE started_at >= %s
                           AND ended_at IS NOT NULL
-                          AND LOWER(streamer_login) = ?
+                          AND LOWER(streamer_login) = %s
                     ),
                     chatter AS (
                         SELECT
@@ -1740,7 +1740,7 @@ class _AnalyticsOverviewMixin:
 
         since_date = (datetime.now(UTC) - timedelta(days=days)).isoformat()
         try:
-            with storage.get_conn() as conn:
+            with storage.readonly_connection() as conn:
                 base_rows = conn.execute(
                     """
                     SELECT
@@ -1756,8 +1756,8 @@ class _AnalyticsOverviewMixin:
                         new_chatters,
                         known_from_raider
                     FROM twitch_raid_retention
-                    WHERE executed_at >= ?
-                      AND LOWER(from_broadcaster_login) = ?
+                    WHERE executed_at >= %s
+                      AND LOWER(from_broadcaster_login) = %s
                     ORDER BY executed_at DESC
                     LIMIT 100
                     """,
@@ -1922,7 +1922,7 @@ class _AnalyticsOverviewMixin:
         }
 
         try:
-            with storage.get_conn() as conn:
+            with storage.readonly_connection() as conn:
                 rollup_bot_clause, rollup_bot_params = build_known_chat_bot_not_in_clause(
                     column_expr="chatter_login",
                     placeholder="%s",
@@ -2014,7 +2014,7 @@ class _AnalyticsOverviewMixin:
 
         since_date = (datetime.now(UTC) - timedelta(days=days)).isoformat()
         try:
-            with storage.get_conn() as conn:
+            with storage.readonly_connection() as conn:
                 rollup_bot_clause, rollup_bot_params = build_known_chat_bot_not_in_clause(
                     column_expr="chatter_login",
                     placeholder="%s",
@@ -2083,9 +2083,16 @@ class _AnalyticsOverviewMixin:
                     timeline_rows = conn.execute(
                         f"""
                         SELECT
-                            strftime('%Y-%m', CASE
-                                WHEN cr1.first_seen_at > cr2.first_seen_at THEN cr1.first_seen_at
-                                ELSE cr2.first_seen_at END) AS month,
+                            TO_CHAR(
+                                date_trunc(
+                                    'month',
+                                    CASE
+                                        WHEN cr1.first_seen_at > cr2.first_seen_at THEN cr1.first_seen_at
+                                        ELSE cr2.first_seen_at
+                                    END
+                                ),
+                                'YYYY-MM'
+                            ) AS month,
                             cr2.streamer_login AS other_streamer,
                             COUNT(DISTINCT cr1.chatter_login) AS shared_viewers_that_month
                         FROM twitch_chatter_rollup cr1

@@ -7,7 +7,7 @@ from datetime import UTC, datetime, timedelta
 from types import MethodType
 
 from ..core.partner_utils import is_partner_channel_for_chat_tracking
-from ..storage import get_conn, insert_observability_event
+from ..storage import insert_observability_event, readonly_connection, transaction
 from .constants import CHAT_JOIN_OFFLINE, eventsub
 
 log = logging.getLogger("TwitchStreams.ChatBot")
@@ -637,13 +637,13 @@ class ConnectionMixin:
         target_id = str(channel_id or "").strip()
         normalized_login = str(channel_login or "").strip().lower().lstrip("#")
         try:
-            with get_conn() as conn:
+            with readonly_connection() as conn:
                 row = conn.execute(
                     """
                     SELECT scopes
                     FROM twitch_raid_auth
-                    WHERE (? <> '' AND twitch_user_id = ?)
-                       OR (? <> '' AND LOWER(twitch_login) = ?)
+                    WHERE (%s <> '' AND twitch_user_id = %s)
+                       OR (%s <> '' AND LOWER(twitch_login) = %s)
                     ORDER BY authorized_at DESC
                     LIMIT 1
                     """,
@@ -740,13 +740,13 @@ class ConnectionMixin:
         if not normalized_login and not target_id:
             return state
         try:
-            with get_conn() as conn:
+            with readonly_connection() as conn:
                 partner_row = conn.execute(
                     """
                     SELECT is_partner_active
                     FROM twitch_streamers_partner_state
-                    WHERE (? <> '' AND twitch_user_id = ?)
-                       OR (? <> '' AND LOWER(twitch_login) = ?)
+                    WHERE (%s <> '' AND twitch_user_id = %s)
+                       OR (%s <> '' AND LOWER(twitch_login) = %s)
                     ORDER BY is_partner_active DESC
                     LIMIT 1
                     """,
@@ -768,8 +768,8 @@ class ConnectionMixin:
                     """
                     SELECT COALESCE(is_monitored_only, 0) AS is_monitored_only
                     FROM twitch_streamers
-                    WHERE (? <> '' AND twitch_user_id = ?)
-                       OR (? <> '' AND LOWER(twitch_login) = ?)
+                    WHERE (%s <> '' AND twitch_user_id = %s)
+                       OR (%s <> '' AND LOWER(twitch_login) = %s)
                     LIMIT 1
                     """,
                     (
@@ -791,8 +791,8 @@ class ConnectionMixin:
                     """
                     SELECT 1
                     FROM twitch_raid_auth
-                    WHERE (? <> '' AND twitch_user_id = ?)
-                       OR (? <> '' AND LOWER(twitch_login) = ?)
+                    WHERE (%s <> '' AND twitch_user_id = %s)
+                       OR (%s <> '' AND LOWER(twitch_login) = %s)
                     LIMIT 1
                     """,
                     (
@@ -876,18 +876,17 @@ class ConnectionMixin:
             raid_bot._add_to_blacklist(target_id, login, reason)
         else:
             try:
-                with get_conn() as conn:
+                with transaction() as conn:
                     conn.execute(
                         """
                         INSERT INTO twitch_raid_blacklist (target_id, target_login, reason)
-                        VALUES (?, ?, ?)
+                        VALUES (%s, %s, %s)
                         ON CONFLICT (target_login) DO UPDATE SET
                             target_id = EXCLUDED.target_id,
                             reason = EXCLUDED.reason
                         """,
                         (target_id, login, reason),
                     )
-                    conn.commit()
             except Exception:
                 log.debug(
                     "Konnte Bot-Ban Blacklist nicht schreiben fuer %s",
@@ -1941,7 +1940,7 @@ class ConnectionMixin:
         Datensammlung: ALLE
         Bot-Funktionen: Nur Partner (wird in event_message geprüft)
         """
-        with get_conn() as conn:
+        with readonly_connection() as conn:
             # Hole ALLE Streamer mit OAuth (Partner + wer OAuth hat)
             # Datensammlung läuft für alle, Bot-Funktionen nur für Partner
             partners = conn.execute(

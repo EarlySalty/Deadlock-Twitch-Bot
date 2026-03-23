@@ -206,7 +206,7 @@ class InternalHomeRegressionTests(unittest.TestCase):
         )
         handler = _InternalHomeHarness()
 
-        with patch("bot.storage.pg.get_conn", return_value=_ConnCtx(self.conn)):
+        with patch("bot.storage.pg.readonly_connection", return_value=_ConnCtx(self.conn)):
             payload = handler._build_internal_home_payload(
                 twitch_login="new_login",
                 twitch_user_id="1001",
@@ -241,7 +241,7 @@ class InternalHomeRegressionTests(unittest.TestCase):
         )
         handler = _InternalHomeHarness()
 
-        with patch("bot.storage.pg.get_conn", return_value=_ConnCtx(self.conn)):
+        with patch("bot.storage.pg.readonly_connection", return_value=_ConnCtx(self.conn)):
             payload = handler._build_internal_home_payload(
                 twitch_login="new_login",
                 twitch_user_id="1001",

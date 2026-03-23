@@ -15,7 +15,12 @@ from ..discord_role_sync import (
     normalize_discord_user_id,
     schedule_streamer_role_sync as schedule_discord_role_sync,
 )
-from ..storage import get_conn, load_streamer_identity, set_partner_raid_bot_enabled
+from ..storage import (
+    load_streamer_identity,
+    readonly_connection,
+    set_partner_raid_bot_enabled,
+    transaction,
+)
 
 log = logging.getLogger("TwitchStreams.TokenErrorHandler")
 
@@ -54,7 +59,7 @@ class TokenErrorHandler:
             "role_removed": "ALTER TABLE twitch_token_blacklist ADD COLUMN role_removed INTEGER DEFAULT 0",
         }
         try:
-            with get_conn() as conn:
+            with transaction() as conn:
                 existing = {
                     row[0]
                     for row in conn.execute(
@@ -68,7 +73,6 @@ class TokenErrorHandler:
                 for col_name, statement in column_add_statements.items():
                     if col_name not in existing:
                         conn.execute(statement)
-                conn.commit()
         except Exception:
             log.warning(
                 "DB migration for twitch_token_blacklist failed (non-critical)",
@@ -113,16 +117,16 @@ class TokenErrorHandler:
         """Disables Twitch auth usage until the streamer re-authorizes in the dashboard."""
         login_hint = str(twitch_login or "").strip().lower()
         try:
-            with get_conn() as conn:
+            with transaction() as conn:
                 if mark_notified:
                     conn.execute(
                         """
                         UPDATE twitch_raid_auth
                         SET raid_enabled = FALSE,
                             needs_reauth = TRUE,
-                            twitch_login = COALESCE(NULLIF(?, ''), twitch_login),
-                            reauth_notified_at = COALESCE(reauth_notified_at, ?)
-                        WHERE twitch_user_id = ?
+                            twitch_login = COALESCE(NULLIF(%s, ''), twitch_login),
+                            reauth_notified_at = COALESCE(reauth_notified_at, %s)
+                        WHERE twitch_user_id = %s
                         """,
                         (
                             login_hint,
@@ -136,8 +140,8 @@ class TokenErrorHandler:
                         UPDATE twitch_raid_auth
                         SET raid_enabled = FALSE,
                             needs_reauth = TRUE,
-                            twitch_login = COALESCE(NULLIF(?, ''), twitch_login)
-                        WHERE twitch_user_id = ?
+                            twitch_login = COALESCE(NULLIF(%s, ''), twitch_login)
+                        WHERE twitch_user_id = %s
                         """,
                         (
                             login_hint,
@@ -152,7 +156,6 @@ class TokenErrorHandler:
                         _mask_log_identifier(twitch_user_id),
                         exc_info=True,
                     )
-                conn.commit()
         except Exception:
             log.warning(
                 "Could not flag dashboard reauth for user_id=%s",
@@ -171,9 +174,9 @@ class TokenErrorHandler:
             True wenn Token dauerhaft blacklisted ist
         """
         try:
-            with get_conn() as conn:
+            with readonly_connection() as conn:
                 row = conn.execute(
-                    "SELECT error_count FROM twitch_token_blacklist WHERE twitch_user_id = ?",
+                    "SELECT error_count FROM twitch_token_blacklist WHERE twitch_user_id = %s",
                     (twitch_user_id,),
                 ).fetchone()
                 if not row:
@@ -200,10 +203,10 @@ class TokenErrorHandler:
         now = datetime.now(UTC).isoformat()
 
         try:
-            with get_conn() as conn:
+            with transaction() as conn:
                 # Prüfe ob bereits vorhanden
                 existing = conn.execute(
-                    "SELECT error_count, last_error_at FROM twitch_token_blacklist WHERE twitch_user_id = ?",
+                    "SELECT error_count, last_error_at FROM twitch_token_blacklist WHERE twitch_user_id = %s",
                     (twitch_user_id,),
                 ).fetchone()
 
@@ -230,9 +233,9 @@ class TokenErrorHandler:
                         conn.execute(
                             """
                             UPDATE twitch_token_blacklist
-                            SET error_count = ?, first_error_at = ?, last_error_at = ?,
-                                error_message = ?, notified = 0
-                            WHERE twitch_user_id = ?
+                            SET error_count = %s, first_error_at = %s, last_error_at = %s,
+                                error_message = %s, notified = 0
+                            WHERE twitch_user_id = %s
                             """,
                             (new_count, now, now, error_message, twitch_user_id),
                         )
@@ -247,8 +250,8 @@ class TokenErrorHandler:
                         conn.execute(
                             """
                             UPDATE twitch_token_blacklist
-                            SET error_count = ?, last_error_at = ?, error_message = ?
-                            WHERE twitch_user_id = ?
+                            SET error_count = %s, last_error_at = %s, error_message = %s
+                            WHERE twitch_user_id = %s
                             """,
                             (new_count, now, error_message, twitch_user_id),
                         )
@@ -262,7 +265,7 @@ class TokenErrorHandler:
                         INSERT INTO twitch_token_blacklist
                         (twitch_user_id, twitch_login, error_message, first_error_at, last_error_at,
                          grace_expires_at)
-                        VALUES (?, ?, ?, ?, ?, ?)
+                        VALUES (%s, %s, %s, %s, %s, %s)
                         """,
                         (
                             twitch_user_id,
@@ -274,13 +277,11 @@ class TokenErrorHandler:
                         ),
                     )
 
-                conn.commit()
-
             # error_count nach dem Commit neu lesen (könnte direkt aus dem UPSERT stammen)
             try:
-                with get_conn() as conn:
+                with readonly_connection() as conn:
                     cnt_row = conn.execute(
-                        "SELECT error_count FROM twitch_token_blacklist WHERE twitch_user_id = ?",
+                        "SELECT error_count FROM twitch_token_blacklist WHERE twitch_user_id = %s",
                         (twitch_user_id,),
                     ).fetchone()
                 current_count = int(cnt_row[0]) if cnt_row else 1
@@ -315,9 +316,9 @@ class TokenErrorHandler:
         """Keeps raid/auth disabled for a streamer with repeated token failures."""
         login_hint = ""
         try:
-            with get_conn() as conn:
+            with transaction() as conn:
                 auth_row = conn.execute(
-                    "SELECT twitch_login FROM twitch_raid_auth WHERE twitch_user_id = ?",
+                    "SELECT twitch_login FROM twitch_raid_auth WHERE twitch_user_id = %s",
                     (twitch_user_id,),
                 ).fetchone()
                 if auth_row:
@@ -335,9 +336,9 @@ class TokenErrorHandler:
             # Rolle wird NICHT sofort entfernt – User hat %d Tage Grace-Period
             # Stelle sicher dass grace_expires_at gesetzt ist (wurde beim ersten Blacklist-Eintrag gesetzt)
             try:
-                with get_conn() as conn:
+                with transaction() as conn:
                     row = conn.execute(
-                        "SELECT grace_expires_at FROM twitch_token_blacklist WHERE twitch_user_id = ?",
+                        "SELECT grace_expires_at FROM twitch_token_blacklist WHERE twitch_user_id = %s",
                         (twitch_user_id,),
                     ).fetchone()
                     if row and not row[0]:
@@ -345,10 +346,9 @@ class TokenErrorHandler:
                             datetime.now(UTC) + timedelta(days=GRACE_PERIOD_DAYS)
                         ).isoformat()
                         conn.execute(
-                            "UPDATE twitch_token_blacklist SET grace_expires_at = ? WHERE twitch_user_id = ?",
+                            "UPDATE twitch_token_blacklist SET grace_expires_at = %s WHERE twitch_user_id = %s",
                             (grace_expires, twitch_user_id),
                         )
-                        conn.commit()
             except Exception:
                 log.warning(
                     "Could not ensure grace_expires_at for %s",
@@ -369,9 +369,9 @@ class TokenErrorHandler:
         wird bereits via is_token_blacklisted() abgefangen).
         """
         try:
-            with get_conn() as conn:
+            with readonly_connection() as conn:
                 row = conn.execute(
-                    "SELECT error_count, last_error_at FROM twitch_token_blacklist WHERE twitch_user_id = ?",
+                    "SELECT error_count, last_error_at FROM twitch_token_blacklist WHERE twitch_user_id = %s",
                     (twitch_user_id,),
                 ).fetchone()
                 if not row or not row[1]:
@@ -397,12 +397,11 @@ class TokenErrorHandler:
         Löscht den Blacklist-Eintrag komplett, falls vorhanden.
         """
         try:
-            with get_conn() as conn:
+            with transaction() as conn:
                 conn.execute(
-                    "DELETE FROM twitch_token_blacklist WHERE twitch_user_id = ?",
+                    "DELETE FROM twitch_token_blacklist WHERE twitch_user_id = %s",
                     (twitch_user_id,),
                 )
-                conn.commit()
         except Exception:
             log.error("Error clearing failure count for %s", twitch_user_id, exc_info=True)
 
@@ -414,12 +413,11 @@ class TokenErrorHandler:
             twitch_user_id: Twitch User ID
         """
         try:
-            with get_conn() as conn:
+            with transaction() as conn:
                 conn.execute(
-                    "DELETE FROM twitch_token_blacklist WHERE twitch_user_id = ?",
+                    "DELETE FROM twitch_token_blacklist WHERE twitch_user_id = %s",
                     (twitch_user_id,),
                 )
-                conn.commit()
             log.info(
                 "Removed user_id=%s from OAuth refresh blacklist",
                 _mask_log_identifier(twitch_user_id),
@@ -448,9 +446,9 @@ class TokenErrorHandler:
 
         # Prüfe ob bereits benachrichtigt
         try:
-            with get_conn() as conn:
+            with readonly_connection() as conn:
                 row = conn.execute(
-                    "SELECT notified FROM twitch_token_blacklist WHERE twitch_user_id = ?",
+                    "SELECT notified FROM twitch_token_blacklist WHERE twitch_user_id = %s",
                     (twitch_user_id,),
                 ).fetchone()
 
@@ -520,16 +518,15 @@ class TokenErrorHandler:
             self._mark_reauth_required(twitch_user_id, twitch_login, mark_notified=True)
 
             # Markiere als benachrichtigt
-            with get_conn() as conn:
+            with transaction() as conn:
                 conn.execute(
                     """
                     UPDATE twitch_token_blacklist
                     SET notified = 1
-                    WHERE twitch_user_id = ?
+                    WHERE twitch_user_id = %s
                     """,
                     (twitch_user_id,),
                 )
-                conn.commit()
 
             log.info(
                 "Sent auth error notification for %s to channel %s",
@@ -672,12 +669,11 @@ class TokenErrorHandler:
             )
             # user_dm_sent in DB markieren
             try:
-                with get_conn() as conn:
+                with transaction() as conn:
                     conn.execute(
-                        "UPDATE twitch_token_blacklist SET user_dm_sent = 1 WHERE twitch_user_id = ?",
+                        "UPDATE twitch_token_blacklist SET user_dm_sent = 1 WHERE twitch_user_id = %s",
                         (twitch_user_id,),
                     )
-                    conn.commit()
             except Exception:
                 log.debug(
                     "Failed to mark user_dm_sent for broadcaster=%s",
@@ -699,7 +695,7 @@ class TokenErrorHandler:
     def _get_discord_user_id(self, twitch_user_id: str, twitch_login: str) -> str | None:
         """Holt die Discord User ID eines Streamers aus der DB."""
         try:
-            with get_conn() as conn:
+            with readonly_connection() as conn:
                 row = load_streamer_identity(
                     conn,
                     twitch_user_id=twitch_user_id,
@@ -722,15 +718,15 @@ class TokenErrorHandler:
         """
         now_iso = datetime.now(UTC).isoformat()
         try:
-            with get_conn() as conn:
+            with readonly_connection() as conn:
                 expired = conn.execute(
                     """
                     SELECT twitch_user_id, twitch_login, error_message,
                            reminder_sent, role_removed, grace_expires_at
                     FROM twitch_token_blacklist
-                    WHERE error_count >= ?
+                    WHERE error_count >= %s
                       AND grace_expires_at IS NOT NULL
-                      AND grace_expires_at <= ?
+                      AND grace_expires_at <= %s
                       AND role_removed = 0
                     """,
                     (self.BLACKLIST_DISABLE_THRESHOLD, now_iso),
@@ -749,12 +745,11 @@ class TokenErrorHandler:
                 # Admin-Channel benachrichtigen damit Admin selbst auch schreiben kann
                 await self._notify_admin_grace_expired(uid, login, discord_user_id)
                 try:
-                    with get_conn() as conn:
+                    with transaction() as conn:
                         conn.execute(
-                            "UPDATE twitch_token_blacklist SET reminder_sent = 1 WHERE twitch_user_id = ?",
+                            "UPDATE twitch_token_blacklist SET reminder_sent = 1 WHERE twitch_user_id = %s",
                             (uid,),
                         )
-                        conn.commit()
                 except Exception:
                     log.warning("Could not set reminder_sent for %s", login, exc_info=True)
 
@@ -766,12 +761,11 @@ class TokenErrorHandler:
                     reason=f"Twitch-Token seit {GRACE_PERIOD_DAYS} Tagen ungültig – Grace-Period abgelaufen",
                 )
             try:
-                with get_conn() as conn:
+                with transaction() as conn:
                     conn.execute(
-                        "UPDATE twitch_token_blacklist SET role_removed = 1 WHERE twitch_user_id = ?",
+                        "UPDATE twitch_token_blacklist SET role_removed = 1 WHERE twitch_user_id = %s",
                         (uid,),
                     )
-                    conn.commit()
             except Exception:
                 log.warning("Could not set role_removed for %s", login, exc_info=True)
 
@@ -841,16 +835,15 @@ class TokenErrorHandler:
             cutoff = datetime.now(UTC).timestamp() - (days * 86400)
             cutoff_iso = datetime.fromtimestamp(cutoff, UTC).isoformat()
 
-            with get_conn() as conn:
+            with transaction() as conn:
                 result = conn.execute(
                     """
                     DELETE FROM twitch_token_blacklist
-                    WHERE last_error_at < ?
+                    WHERE last_error_at < %s
                     """,
                     (cutoff_iso,),
                 )
                 deleted = result.rowcount
-                conn.commit()
 
             if deleted > 0:
                 log.info(

@@ -74,6 +74,7 @@ async def run_bot_service(*, port: int | None = None) -> None:
         cog = TwitchStreamCog(bot)
 
         try:
+            await cog.cog_load()
             await asyncio.Event().wait()
         except asyncio.CancelledError:
             log.info("twitch_worker: shutdown requested")

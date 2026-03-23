@@ -16,6 +16,25 @@ from bot.raid.partner_raid_score_tracking import (
 from tests.sqlite_twitch_schema import ensure_sqlite_twitch_schema
 
 
+class _CompatConn:
+    def __init__(self, conn: sqlite3.Connection) -> None:
+        self._conn = conn
+
+    @staticmethod
+    def _translate(sql: str) -> str:
+        translated = str(sql).replace("%s", "?")
+        translated = translated.replace("NOW() - INTERVAL '1 day'", "datetime('now', '-1 day')")
+        translated = translated.replace("NOW() - INTERVAL '7 days'", "datetime('now', '-7 days')")
+        translated = translated.replace("NOW() - INTERVAL '30 days'", "datetime('now', '-30 days')")
+        return translated
+
+    def execute(self, sql: str, params=()):
+        return self._conn.execute(self._translate(sql), params)
+
+    def __getattr__(self, name: str):
+        return getattr(self._conn, name)
+
+
 def _iso_utc(value: datetime) -> str:
     return value.astimezone(UTC).isoformat(timespec="seconds")
 
@@ -71,7 +90,7 @@ class PartnerRaidScoreTrackingTests(unittest.TestCase):
         conn.commit()
 
         with patch(
-            "bot.raid.partner_raid_score_tracking.get_conn",
+            "bot.raid.partner_raid_score_tracking.transaction",
             side_effect=lambda: contextlib.nullcontext(conn),
         ):
             tracking_id = track_confirmed_partner_raid(
@@ -153,7 +172,7 @@ class PartnerRaidScoreTrackingTests(unittest.TestCase):
         conn.commit()
 
         with patch(
-            "bot.raid.partner_raid_score_tracking.get_conn",
+            "bot.raid.partner_raid_score_tracking.transaction",
             side_effect=lambda: contextlib.nullcontext(conn),
         ):
             tracking_id = track_confirmed_partner_raid(
@@ -206,7 +225,7 @@ class PartnerRaidScoreTrackingTests(unittest.TestCase):
         conn.commit()
 
         with patch(
-            "bot.raid.partner_raid_score_tracking.get_conn",
+            "bot.raid.partner_raid_score_tracking.transaction",
             side_effect=lambda: contextlib.nullcontext(conn),
         ):
             resolved = resolve_partner_raid_tracking_for_session(
@@ -272,7 +291,7 @@ class PartnerRaidScoreTrackingTests(unittest.TestCase):
         conn.commit()
 
         with patch(
-            "bot.raid.partner_raid_score_tracking.get_conn",
+            "bot.raid.partner_raid_score_tracking.transaction",
             side_effect=lambda: contextlib.nullcontext(conn),
         ):
             resolved = resolve_partner_raid_tracking_for_session(
@@ -353,7 +372,7 @@ class PartnerRaidScoreTrackingTests(unittest.TestCase):
         conn.commit()
 
         with patch(
-            "bot.raid.partner_raid_score_tracking.get_conn",
+            "bot.raid.partner_raid_score_tracking.transaction",
             side_effect=lambda: contextlib.nullcontext(conn),
         ):
             resolved = resolve_partner_raid_tracking_for_session(
@@ -420,8 +439,12 @@ class PartnerRaidScoreTrackingHookTests(unittest.IsolatedAsyncioTestCase):
         try:
             with (
                 patch(
-                    "bot.raid.bot.get_conn",
-                    side_effect=lambda: contextlib.nullcontext(conn),
+                    "bot.raid.bot.readonly_connection",
+                    side_effect=lambda: contextlib.nullcontext(_CompatConn(conn)),
+                ),
+                patch(
+                    "bot.raid.bot.transaction",
+                    side_effect=lambda: contextlib.nullcontext(_CompatConn(conn)),
                 ),
                 patch(
                     "bot.raid.bot.track_confirmed_partner_raid",
@@ -491,7 +514,7 @@ class PartnerRaidScoreTrackingHookTests(unittest.IsolatedAsyncioTestCase):
 
             def execute(self, sql, params=()):
                 self.calls.append((sql, tuple(params or ())))
-                if "SELECT * FROM twitch_stream_sessions WHERE id = ?" in sql:
+                if "SELECT * FROM twitch_stream_sessions WHERE id = %s" in sql:
                     self.stage = 1
                     return SimpleNamespace(
                         fetchone=lambda: {
@@ -523,7 +546,11 @@ class PartnerRaidScoreTrackingHookTests(unittest.IsolatedAsyncioTestCase):
 
         with (
             patch(
-                "bot.monitoring.sessions_mixin.storage.get_conn",
+                "bot.monitoring.sessions_mixin.storage.readonly_connection",
+                side_effect=lambda: _ConnContext(fake_conn),
+            ),
+            patch(
+                "bot.monitoring.sessions_mixin.storage.transaction",
                 side_effect=lambda: _ConnContext(fake_conn),
             ),
             patch(

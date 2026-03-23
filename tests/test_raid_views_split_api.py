@@ -26,7 +26,7 @@ class RaidViewsSplitApiTests(unittest.TestCase):
         url, headers = result
         self.assertEqual(
             url,
-            "http://127.0.0.1:8776/internal/twitch/v1/raid/auth-url?login=discord%3A12345",
+            "http://127.0.0.1:8776/internal/twitch/v1/raid/auth-url?login=discord%3A12345&discord_user_id=12345",
         )
         self.assertEqual(headers, {"X-Internal-Token": "secret-token"})
 

@@ -5,7 +5,7 @@ import time
 from datetime import UTC, datetime, timedelta
 
 from ..core.chat_bots import is_known_chat_bot
-from ..storage import get_conn, load_active_partner
+from ..storage import load_active_partner, readonly_connection, transaction
 from .constants import (
     _INVITE_QUESTION_CHANNEL_COOLDOWN_SEC,
     _INVITE_QUESTION_RE,
@@ -137,7 +137,7 @@ class ModerationMixin:
                 last_raw_chat_error,
                 raw_chat_lag_seconds,
                 updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s)
             ON CONFLICT (streamer_login) DO UPDATE SET
                 last_raw_chat_message_at = COALESCE(
                     EXCLUDED.last_raw_chat_message_at,
@@ -152,7 +152,7 @@ class ModerationMixin:
                     twitch_raw_chat_ingest_health.last_raw_chat_insert_error_at
                 ),
                 last_raw_chat_error = CASE
-                    WHEN ? THEN ?
+            WHEN %s THEN %s
                     ELSE twitch_raw_chat_ingest_health.last_raw_chat_error
                 END,
                 raw_chat_lag_seconds = COALESCE(
@@ -184,7 +184,7 @@ class ModerationMixin:
         last_raw_chat_error: object = _RAW_CHAT_HEALTH_UNSET,
     ) -> None:
         try:
-            with get_conn() as conn:
+            with transaction() as conn:
                 self._upsert_raw_chat_ingest_health_row(
                     conn,
                     streamer_login,
@@ -256,12 +256,12 @@ class ModerationMixin:
 
         known = False
         try:
-            with get_conn() as conn:
+            with readonly_connection() as conn:
                 row = conn.execute(
                     """
                     SELECT 1
                       FROM twitch_session_chatters
-                     WHERE streamer_login = ? AND chatter_login = ?
+                     WHERE streamer_login = %s AND chatter_login = %s
                      LIMIT 1
                     """,
                     (streamer, mention),
@@ -271,7 +271,7 @@ class ModerationMixin:
                         """
                         SELECT 1
                           FROM twitch_chatter_rollup
-                         WHERE streamer_login = ? AND chatter_login = ?
+                         WHERE streamer_login = %s AND chatter_login = %s
                          LIMIT 1
                         """,
                         (streamer, mention),
@@ -640,7 +640,7 @@ class ModerationMixin:
         if getattr(self, "_outbound_chat_suppression_schema_ok", False):
             return True
         try:
-            with get_conn() as conn:
+            with transaction() as conn:
                 conn.execute(
                     """
                     CREATE TABLE IF NOT EXISTS twitch_outbound_chat_suppressions (
@@ -703,7 +703,7 @@ class ModerationMixin:
         detail = self._truncate_raw_chat_error(reason_detail, limit=240)
 
         try:
-            with get_conn() as conn:
+            with readonly_connection() as conn:
                 conn.execute(
                     """
                     INSERT INTO twitch_outbound_chat_suppressions (
@@ -715,7 +715,7 @@ class ModerationMixin:
                         suppressed_until,
                         created_at,
                         updated_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
                     ON CONFLICT (target_login, source) DO UPDATE SET
                         target_id = EXCLUDED.target_id,
                         reason_code = EXCLUDED.reason_code,
@@ -761,14 +761,14 @@ class ModerationMixin:
             return None
 
         try:
-            with get_conn() as conn:
+            with readonly_connection() as conn:
                 row = conn.execute(
                     """
                     SELECT target_id, reason_code, reason_detail, suppressed_until
                     FROM twitch_outbound_chat_suppressions
-                    WHERE target_login = ?
-                      AND source = ?
-                      AND suppressed_until > ?
+                    WHERE target_login = %s
+                      AND source = %s
+                      AND suppressed_until > %s
                     LIMIT 1
                     """,
                     (login, source_tag, datetime.now(UTC)),
@@ -904,18 +904,17 @@ class ModerationMixin:
             raid_bot._add_to_blacklist(target_id, login, reason)
         else:
             try:
-                with get_conn() as conn:
+                with transaction() as conn:
                     conn.execute(
                         """
                         INSERT INTO twitch_raid_blacklist (target_id, target_login, reason)
-                        VALUES (?, ?, ?)
+                        VALUES (%s, %s, %s)
                         ON CONFLICT (target_login) DO UPDATE SET
                             target_id = EXCLUDED.target_id,
                             reason = EXCLUDED.reason
                         """,
                         (target_id, login, reason),
                     )
-                    conn.commit()
             except Exception:
                 log.debug(
                     "Konnte Bot-Ban-Blacklist nicht schreiben fuer %s",
@@ -1329,7 +1328,7 @@ class ModerationMixin:
                                 # Nachricht an den Chat senden, WARUM gebannt wurde (wenn nicht silent)
                                 silent = False
                                 try:
-                                    with get_conn() as _conn:
+                                    with readonly_connection() as _conn:
                                         _sb_row = load_active_partner(
                                             _conn,
                                             twitch_user_id=twitch_user_id,
@@ -1517,12 +1516,12 @@ class ModerationMixin:
 
         is_partner = False
         try:
-            with get_conn() as conn:
+            with readonly_connection() as conn:
                 row = conn.execute(
                     """
                     SELECT is_partner_active
                       FROM twitch_streamers_partner_state
-                     WHERE LOWER(twitch_login) = ?
+                     WHERE LOWER(twitch_login) = %s
                      LIMIT 1
                     """,
                     (login,),
@@ -1568,12 +1567,12 @@ class ModerationMixin:
 
         should_track = False
         try:
-            with get_conn() as conn:
+            with readonly_connection() as conn:
                 state_row = conn.execute(
                     """
                     SELECT is_live, last_game
                       FROM twitch_live_state
-                     WHERE streamer_login = ?
+                     WHERE streamer_login = %s
                     """,
                     (login,),
                 ).fetchone()
@@ -1599,7 +1598,7 @@ class ModerationMixin:
                         """
                         SELECT game_name
                           FROM twitch_stream_sessions
-                         WHERE id = ? AND ended_at IS NULL
+                         WHERE id = %s AND ended_at IS NULL
                         """,
                         (session_id,),
                     ).fetchone()
@@ -1749,7 +1748,7 @@ class ModerationMixin:
         target_game_gate = "allowed"
 
         try:
-            with get_conn() as conn:
+            with transaction() as conn:
                 self._upsert_raw_chat_ingest_health_row(
                     conn,
                     login,
@@ -1769,7 +1768,7 @@ class ModerationMixin:
                         is_command,
                         content
                     )
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
                     """,
                     (
                         resolved_session_id,
@@ -1788,7 +1787,7 @@ class ModerationMixin:
                     """
                     SELECT messages, is_first_time_streamer, seen_via_chatters_api
                       FROM twitch_session_chatters
-                     WHERE session_id = ? AND chatter_login = ?
+                     WHERE session_id = %s AND chatter_login = %s
                     """,
                     (resolved_session_id, chatter_login),
                 ).fetchone()
@@ -1797,7 +1796,7 @@ class ModerationMixin:
                     """
                     SELECT total_messages, total_sessions
                       FROM twitch_chatter_rollup
-                     WHERE streamer_login = ? AND chatter_login = ?
+                     WHERE streamer_login = %s AND chatter_login = %s
                     """,
                     (login, chatter_login),
                 ).fetchone()
@@ -1809,10 +1808,10 @@ class ModerationMixin:
                         """
                         UPDATE twitch_chatter_rollup
                            SET total_messages = total_messages + 1,
-                               total_sessions = total_sessions + ?,
-                               last_seen_at = ?,
-                               chatter_id = COALESCE(chatter_id, ?)
-                         WHERE streamer_login = ? AND chatter_login = ?
+                               total_sessions = total_sessions + %s,
+                               last_seen_at = %s,
+                               chatter_id = COALESCE(chatter_id, %s)
+                         WHERE streamer_login = %s AND chatter_login = %s
                         """,
                         (total_sessions_inc, ts_iso, chatter_id, login, chatter_login),
                     )
@@ -1822,7 +1821,7 @@ class ModerationMixin:
                         INSERT INTO twitch_chatter_rollup (
                             streamer_login, chatter_login, chatter_id, first_seen_at, last_seen_at,
                             total_messages, total_sessions
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                        ) VALUES (%s, %s, %s, %s, %s, %s, %s)
                         """,
                         (login, chatter_login, chatter_id, ts_iso, ts_iso, 1, 1),
                     )
@@ -1845,11 +1844,11 @@ class ModerationMixin:
                         """
                         UPDATE twitch_session_chatters
                            SET messages = messages + 1,
-                               last_seen_at = ?,
-                               seen_via_chatters_api = ?,
-                               is_first_time_streamer = ?,
-                               chatter_id = COALESCE(chatter_id, ?)
-                         WHERE session_id = ? AND chatter_login = ?
+                               last_seen_at = %s,
+                               seen_via_chatters_api = %s,
+                               is_first_time_streamer = %s,
+                               chatter_id = COALESCE(chatter_id, %s)
+                         WHERE session_id = %s AND chatter_login = %s
                         """,
                         (
                             ts_iso,
@@ -1866,7 +1865,7 @@ class ModerationMixin:
                         INSERT INTO twitch_session_chatters (
                             session_id, streamer_login, chatter_login, chatter_id, first_message_at,
                             messages, is_first_time_streamer, seen_via_chatters_api, last_seen_at
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
                         """,
                         (
                             resolved_session_id,

@@ -49,7 +49,7 @@ class TwitchAdminMixin:
     async def _cmd_list_streamers(self) -> tuple[str, Iterable[dict]]:
         """Return a formatted list of streamers and the raw rows."""
         try:
-            with storage.get_conn() as c:
+            with storage.readonly_connection() as c:
                 rows = c.execute(
                     """
                     SELECT twitch_login, manual_verified_permanent, manual_verified_until
@@ -127,9 +127,9 @@ class TwitchAdminMixin:
 
         # Zuerst: Versuche aus DB zu laden (schnell, kein API-Call)
         try:
-            with storage.get_conn() as conn:
+            with storage.readonly_connection() as conn:
                 rows = conn.execute(
-                    "SELECT invite_code FROM discord_invite_codes WHERE guild_id = ?",
+                    "SELECT invite_code FROM discord_invite_codes WHERE guild_id = %s",
                     (guild_id,),
                 ).fetchall()
                 if rows:
@@ -215,7 +215,7 @@ class TwitchAdminMixin:
             return "Unbekannter Twitch-Login"
 
         try:
-            with storage.get_conn() as c:
+            with storage.transaction() as c:
                 partner_row = storage.load_active_partner(
                     c,
                     twitch_login=user["login"].lower(),
@@ -255,11 +255,11 @@ class TwitchAdminMixin:
 
         deleted = 0
         try:
-            with storage.get_conn() as c:
+            with storage.transaction() as c:
                 archived = storage.archive_active_partner(c, twitch_login=normalized)
                 deleted = 1 if archived else storage.delete_streamer(c, normalized)
                 c.execute(
-                    "DELETE FROM twitch_live_state WHERE streamer_login=?",
+                    "DELETE FROM twitch_live_state WHERE streamer_login=%s",
                     (normalized,),
                 )
         except Exception:

@@ -241,8 +241,8 @@ class _DashboardBillingMixin:
                 """
                 SELECT customer_reference, plan_id, status, updated_at
                 FROM twitch_billing_subscriptions
-                WHERE LOWER(customer_reference) = LOWER(?)
-                  AND status IN (?, ?, ?)
+                WHERE LOWER(customer_reference) = LOWER(%s)
+                  AND status IN (%s, %s, %s)
                 ORDER BY updated_at DESC
                 LIMIT 1
                 """,
@@ -287,10 +287,10 @@ class _DashboardBillingMixin:
                     manual_plan_notes,
                     manual_plan_updated_at
                 FROM streamer_plans
-                WHERE TRIM(COALESCE(twitch_user_id, '')) = ?
-                   OR LOWER(COALESCE(twitch_login, '')) = LOWER(?)
+                WHERE TRIM(COALESCE(twitch_user_id, '')) = %s
+                   OR LOWER(COALESCE(twitch_login, '')) = LOWER(%s)
                 ORDER BY
-                    CASE WHEN TRIM(COALESCE(twitch_user_id, '')) = ? THEN 0 ELSE 1 END,
+                    CASE WHEN TRIM(COALESCE(twitch_user_id, '')) = %s THEN 0 ELSE 1 END,
                     manual_plan_updated_at DESC
                 LIMIT 1
                 """,
@@ -628,7 +628,7 @@ class _DashboardBillingMixin:
                 ended_at,
                 last_event_id
             FROM twitch_billing_subscriptions
-            WHERE stripe_subscription_id = ?
+            WHERE stripe_subscription_id = %s
             """,
             (sub_id,),
         ).fetchone()
@@ -687,7 +687,7 @@ class _DashboardBillingMixin:
                 ended_at,
                 last_event_id,
                 updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             ON CONFLICT (stripe_subscription_id) DO UPDATE SET
                 stripe_customer_id = EXCLUDED.stripe_customer_id,
                 customer_reference = EXCLUDED.customer_reference,
@@ -788,14 +788,14 @@ class _DashboardBillingMixin:
         refreshed_user_id = ""
         refreshed_login = str(customer_reference or "").strip().lower()
         try:
-            with storage.get_conn() as conn:
+            with storage.transaction() as conn:
                 self._billing_ensure_streamer_plan_columns(conn)
                 conn.execute(
                     """
                     INSERT INTO streamer_plans (twitch_user_id, twitch_login, plan_name, expires_at)
-                    SELECT twitch_user_id, twitch_login, ?, NULL
+                    SELECT twitch_user_id, twitch_login, %s, NULL
                     FROM twitch_streamers_partner_state
-                    WHERE LOWER(twitch_login) = LOWER(?)
+                    WHERE LOWER(twitch_login) = LOWER(%s)
                     ON CONFLICT(twitch_user_id) DO UPDATE SET
                         plan_name = EXCLUDED.plan_name,
                         expires_at = EXCLUDED.expires_at
@@ -806,7 +806,7 @@ class _DashboardBillingMixin:
                     """
                     SELECT twitch_user_id, twitch_login
                     FROM twitch_streamers_partner_state
-                    WHERE LOWER(twitch_login) = LOWER(?)
+                    WHERE LOWER(twitch_login) = LOWER(%s)
                     LIMIT 1
                     """,
                     (customer_reference,),
@@ -1037,16 +1037,16 @@ class _DashboardBillingMixin:
             return fallback
 
         active_like_statuses = ("active", "trialing", "past_due")
-        ordered_statuses = "CASE WHEN status IN (?, ?, ?) THEN 0 ELSE 1 END"
+        ordered_statuses = "CASE WHEN status IN (%s, %s, %s) THEN 0 ELSE 1 END"
         try:
-            with storage.get_conn() as conn:
+            with storage.readonly_connection() as conn:
                 self._billing_ensure_storage_tables(conn)
                 for ref in refs:
                     row = conn.execute(
                         f"""
                         SELECT customer_reference, stripe_customer_id, stripe_subscription_id, status, updated_at
                         FROM twitch_billing_subscriptions
-                        WHERE LOWER(customer_reference) = LOWER(?)
+                        WHERE LOWER(customer_reference) = LOWER(%s)
                           AND TRIM(COALESCE(stripe_customer_id, '')) <> ''
                         ORDER BY {ordered_statuses}, updated_at DESC
                         LIMIT 1
@@ -1182,7 +1182,7 @@ class _DashboardBillingMixin:
             return profile
 
         try:
-            with storage.get_conn() as conn:
+            with storage.readonly_connection() as conn:
                 self._billing_ensure_storage_tables(conn)
                 row = conn.execute(
                     """
@@ -1197,7 +1197,7 @@ class _DashboardBillingMixin:
                         country_code,
                         vat_id
                     FROM twitch_billing_profiles
-                    WHERE LOWER(customer_reference) = LOWER(?)
+                    WHERE LOWER(customer_reference) = LOWER(%s)
                     LIMIT 1
                     """,
                     (primary_ref,),
@@ -1266,7 +1266,7 @@ class _DashboardBillingMixin:
                 country_code,
                 vat_id,
                 updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             ON CONFLICT (customer_reference) DO UPDATE SET
                 recipient_name = EXCLUDED.recipient_name,
                 recipient_email = EXCLUDED.recipient_email,
@@ -1299,7 +1299,7 @@ class _DashboardBillingMixin:
             return self._billing_effective_plan_payload()
 
         try:
-            with storage.get_conn() as conn:
+            with storage.readonly_connection() as conn:
                 self._billing_ensure_storage_tables(conn)
                 self._billing_ensure_streamer_plan_columns(conn)
                 return _resolve_plan_snapshot_for_refs(
@@ -1316,7 +1316,7 @@ class _DashboardBillingMixin:
     def _billing_admin_plan_rows_for_all_streamers(self) -> list[dict[str, Any]]:
         rows_payload: list[dict[str, Any]] = []
         try:
-            with storage.get_conn() as conn:
+            with storage.readonly_connection() as conn:
                 self._billing_ensure_storage_tables(conn)
                 self._billing_ensure_streamer_plan_columns(conn)
                 base_rows = conn.execute(
@@ -1406,14 +1406,14 @@ class _DashboardBillingMixin:
             notes_value = notes_value[:1000]
         updated_at_iso = datetime.now(UTC).isoformat()
 
-        with storage.get_conn() as conn:
+        with storage.transaction() as conn:
             self._billing_ensure_storage_tables(conn)
             self._billing_ensure_streamer_plan_columns(conn)
             streamer_row = conn.execute(
                 """
                 SELECT twitch_user_id, twitch_login
                 FROM twitch_streamers_partner_state
-                WHERE LOWER(twitch_login) = LOWER(?)
+                WHERE LOWER(twitch_login) = LOWER(%s)
                 LIMIT 1
                 """,
                 (normalized_login,),
@@ -1433,7 +1433,7 @@ class _DashboardBillingMixin:
             conn.execute(
                 """
                 INSERT INTO streamer_plans (twitch_user_id, twitch_login, activated_at)
-                VALUES (?, ?, CURRENT_TIMESTAMP)
+                VALUES (%s, %s, CURRENT_TIMESTAMP)
                 ON CONFLICT (twitch_user_id) DO UPDATE SET
                     twitch_login = EXCLUDED.twitch_login
                 """,
@@ -1443,12 +1443,12 @@ class _DashboardBillingMixin:
                 """
                 UPDATE streamer_plans
                 SET
-                    twitch_login = ?,
-                    manual_plan_id = ?,
-                    manual_plan_expires_at = ?,
-                    manual_plan_notes = ?,
-                    manual_plan_updated_at = ?
-                WHERE twitch_user_id = ?
+                    twitch_login = %s,
+                    manual_plan_id = %s,
+                    manual_plan_expires_at = %s,
+                    manual_plan_notes = %s,
+                    manual_plan_updated_at = %s
+                WHERE twitch_user_id = %s
                 """,
                 (
                     canonical_login,
@@ -1478,14 +1478,14 @@ class _DashboardBillingMixin:
             raise ValueError("twitch_login_required")
         updated_at_iso = datetime.now(UTC).isoformat()
 
-        with storage.get_conn() as conn:
+        with storage.transaction() as conn:
             self._billing_ensure_storage_tables(conn)
             self._billing_ensure_streamer_plan_columns(conn)
             streamer_row = conn.execute(
                 """
                 SELECT twitch_user_id, twitch_login
                 FROM twitch_streamers_partner_state
-                WHERE LOWER(twitch_login) = LOWER(?)
+                WHERE LOWER(twitch_login) = LOWER(%s)
                 LIMIT 1
                 """,
                 (normalized_login,),
@@ -1505,8 +1505,8 @@ class _DashboardBillingMixin:
                     manual_plan_id = NULL,
                     manual_plan_expires_at = NULL,
                     manual_plan_notes = '',
-                    manual_plan_updated_at = ?
-                WHERE twitch_user_id = ?
+                    manual_plan_updated_at = %s
+                WHERE twitch_user_id = %s
                 """,
                 (updated_at_iso, twitch_user_id),
             )

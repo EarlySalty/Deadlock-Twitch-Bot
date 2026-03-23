@@ -13,6 +13,23 @@ def _iso_utc(value: datetime) -> str:
 
 
 class PartnerRaidScoreCacheTests(unittest.TestCase):
+    class _CompatPgConn:
+        def __init__(self, conn: sqlite3.Connection) -> None:
+            self._conn = conn
+
+        @staticmethod
+        def _translate_sql(sql: str) -> str:
+            return str(sql).replace("%s", "?")
+
+        def execute(self, sql, params=()):
+            return self._conn.execute(self._translate_sql(sql), params)
+
+        def executemany(self, sql, params_seq):
+            return self._conn.executemany(self._translate_sql(sql), params_seq)
+
+        def __getattr__(self, name):
+            return getattr(self._conn, name)
+
     def _make_conn(self) -> sqlite3.Connection:
         conn = sqlite3.connect(":memory:")
         conn.row_factory = sqlite3.Row
@@ -20,7 +37,9 @@ class PartnerRaidScoreCacheTests(unittest.TestCase):
         return conn
 
     def _make_service(self, conn: sqlite3.Connection) -> PartnerRaidScoreService:
-        return PartnerRaidScoreService(lambda: contextlib.nullcontext(conn))
+        return PartnerRaidScoreService(
+            lambda: contextlib.nullcontext(self._CompatPgConn(conn))
+        )
 
     def _insert_partner(self, conn: sqlite3.Connection, login: str, user_id: str) -> None:
         conn.execute(

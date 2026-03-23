@@ -50,7 +50,7 @@ def _load_abbo_saved_settings(
         return False, "", False
 
     try:
-        with storage.get_conn() as conn:
+        with storage.readonly_connection() as conn:
             ensure_cols = getattr(handler, "_billing_ensure_streamer_plan_columns", None)
             if callable(ensure_cols):
                 ensure_cols(conn)
@@ -59,10 +59,10 @@ def _load_abbo_saved_settings(
                     """
                     SELECT promo_disabled, promo_message, lurker_tax_enabled
                       FROM streamer_plans
-                     WHERE TRIM(COALESCE(twitch_user_id, '')) = ?
-                        OR LOWER(COALESCE(twitch_login, '')) = LOWER(?)
+                     WHERE TRIM(COALESCE(twitch_user_id, '')) = %s
+                        OR LOWER(COALESCE(twitch_login, '')) = LOWER(%s)
                      ORDER BY
-                        CASE WHEN TRIM(COALESCE(twitch_user_id, '')) = ? THEN 0 ELSE 1 END
+                        CASE WHEN TRIM(COALESCE(twitch_user_id, '')) = %s THEN 0 ELSE 1 END
                      LIMIT 1
                     """,
                     (twitch_user_id, twitch_login, twitch_user_id),
@@ -72,7 +72,7 @@ def _load_abbo_saved_settings(
                     """
                     SELECT promo_disabled, promo_message, lurker_tax_enabled
                       FROM streamer_plans
-                     WHERE LOWER(COALESCE(twitch_login, '')) = LOWER(?)
+                     WHERE LOWER(COALESCE(twitch_login, '')) = LOWER(%s)
                      LIMIT 1
                     """,
                     (twitch_login,),
@@ -99,16 +99,16 @@ def _abbo_scope_state(
         }
 
     try:
-        with storage.get_conn() as conn:
+        with storage.readonly_connection() as conn:
             if user_id_value:
                 row = conn.execute(
                     """
                     SELECT scopes
                       FROM twitch_raid_auth
-                     WHERE TRIM(COALESCE(twitch_user_id, '')) = ?
-                        OR LOWER(COALESCE(twitch_login, '')) = LOWER(?)
+                     WHERE TRIM(COALESCE(twitch_user_id, '')) = %s
+                        OR LOWER(COALESCE(twitch_login, '')) = LOWER(%s)
                      ORDER BY
-                        CASE WHEN TRIM(COALESCE(twitch_user_id, '')) = ? THEN 0 ELSE 1 END
+                        CASE WHEN TRIM(COALESCE(twitch_user_id, '')) = %s THEN 0 ELSE 1 END
                      LIMIT 1
                     """,
                     (user_id_value, login_value, user_id_value),
@@ -118,7 +118,7 @@ def _abbo_scope_state(
                     """
                     SELECT scopes
                       FROM twitch_raid_auth
-                     WHERE LOWER(COALESCE(twitch_login, '')) = LOWER(?)
+                     WHERE LOWER(COALESCE(twitch_login, '')) = LOWER(%s)
                      LIMIT 1
                     """,
                     (login_value,),
@@ -187,7 +187,7 @@ def _abbo_upsert_lurker_tax_setting(
         else "free"
     )
 
-    with storage.get_conn() as conn:
+    with storage.transaction() as conn:
         ensure_cols = getattr(handler, "_billing_ensure_streamer_plan_columns", None)
         if callable(ensure_cols):
             ensure_cols(conn)
@@ -201,7 +201,7 @@ def _abbo_upsert_lurker_tax_setting(
                     plan_name,
                     lurker_tax_enabled
                 )
-                VALUES (?, ?, ?, ?)
+                VALUES (%s, %s, %s, %s)
                 ON CONFLICT (twitch_user_id) DO UPDATE SET
                     twitch_login = COALESCE(NULLIF(EXCLUDED.twitch_login, ''), streamer_plans.twitch_login),
                     plan_name = COALESCE(NULLIF(EXCLUDED.plan_name, ''), streamer_plans.plan_name),
@@ -219,7 +219,7 @@ def _abbo_upsert_lurker_tax_setting(
                 """
                 SELECT 1
                   FROM streamer_plans
-                 WHERE LOWER(COALESCE(twitch_login, '')) = LOWER(?)
+                 WHERE LOWER(COALESCE(twitch_login, '')) = LOWER(%s)
                  LIMIT 1
                 """,
                 (login_value,),
@@ -229,14 +229,11 @@ def _abbo_upsert_lurker_tax_setting(
             conn.execute(
                 """
                 UPDATE streamer_plans
-                   SET lurker_tax_enabled = ?
-                 WHERE LOWER(COALESCE(twitch_login, '')) = LOWER(?)
+                   SET lurker_tax_enabled = %s
+                 WHERE LOWER(COALESCE(twitch_login, '')) = LOWER(%s)
                 """,
                 (1 if enabled else 0, login_value),
             )
-        commit = getattr(conn, "commit", None)
-        if callable(commit):
-            commit()
     return True
 
 
@@ -626,9 +623,9 @@ async def abbo_promo_settings(handler: Any, request: web.Request) -> web.StreamR
         raise web.HTTPFound("/twitch/abbo")
 
     try:
-        with storage.get_conn() as conn:
+        with storage.transaction() as conn:
             conn.execute(
-                "UPDATE streamer_plans SET promo_disabled = ? WHERE LOWER(twitch_login) = LOWER(?)",
+                "UPDATE streamer_plans SET promo_disabled = %s WHERE LOWER(twitch_login) = LOWER(%s)",
                 (promo_disabled, twitch_login),
             )
     except Exception:
@@ -700,10 +697,10 @@ async def abbo_promo_message(handler: Any, request: web.Request) -> web.StreamRe
         raise web.HTTPFound(f"/twitch/abbo?promo_error={promo_error}")
 
     try:
-        with storage.get_conn() as conn:
+        with storage.transaction() as conn:
             val = promo_message if promo_message else None
             updated = conn.execute(
-                "UPDATE streamer_plans SET promo_message = ? WHERE LOWER(twitch_login) = LOWER(?)",
+                "UPDATE streamer_plans SET promo_message = %s WHERE LOWER(twitch_login) = LOWER(%s)",
                 (val, twitch_login),
             ).rowcount
             if not updated:

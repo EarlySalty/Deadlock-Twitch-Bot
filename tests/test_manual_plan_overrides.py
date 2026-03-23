@@ -1,3 +1,4 @@
+import contextlib
 import sqlite3
 import unittest
 from datetime import UTC, datetime, timedelta
@@ -8,9 +9,31 @@ from bot.analytics.api_v2 import _get_plan_details_for_login, _get_plan_for_logi
 from bot.dashboard.billing_mixin import _DashboardBillingMixin
 
 
+class _CompatSqliteConn:
+    def __init__(self, conn: sqlite3.Connection) -> None:
+        self._conn = conn
+
+    def execute(self, sql: str, params=None):
+        sql_text = str(sql or "").replace("%s", "?")
+        return self._conn.execute(sql_text, tuple(params or ()))
+
+    def executemany(self, sql: str, params=None):
+        sql_text = str(sql or "").replace("%s", "?")
+        return self._conn.executemany(sql_text, params or ())
+
+    def commit(self) -> None:
+        self._conn.commit()
+
+    def rollback(self) -> None:
+        self._conn.rollback()
+
+    def __getattr__(self, item):
+        return getattr(self._conn, item)
+
+
 class _ConnContext:
     def __init__(self, conn: sqlite3.Connection):
-        self._conn = conn
+        self._conn = _CompatSqliteConn(conn)
 
     def __enter__(self):
         return self._conn
@@ -108,14 +131,24 @@ class ManualPlanOverrideTests(unittest.TestCase):
         self.conn.close()
 
     def _patch_billing_conn(self):
-        return patch(
-            "bot.dashboard.billing_mixin.storage.get_conn",
-            return_value=_ConnContext(self.conn),
+        stack = contextlib.ExitStack()
+        stack.enter_context(
+            patch(
+                "bot.dashboard.billing.billing_mixin.storage.readonly_connection",
+                return_value=_ConnContext(self.conn),
+            )
         )
+        stack.enter_context(
+            patch(
+                "bot.dashboard.billing.billing_mixin.storage.transaction",
+                return_value=_ConnContext(self.conn),
+            )
+        )
+        return stack
 
     def _patch_api_v2_conn(self):
         return patch(
-            "bot.entitlements.resolver.storage.get_conn",
+            "bot.entitlements.resolver.storage.readonly_connection",
             return_value=_ConnContext(self.conn),
         )
 

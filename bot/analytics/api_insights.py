@@ -49,7 +49,7 @@ class _AnalyticsInsightsMixin:
         When threshold is set, streamers with avg_viewers above it are excluded
         (external-reach filter – e.g. EXTERNAL_REACH_AVG_THRESHOLD = 100).
         """
-        having_clause = "HAVING AVG(viewer_count) <= ?" if threshold is not None else ""
+        having_clause = "HAVING AVG(viewer_count) <= %s" if threshold is not None else ""
         params: list = [since_date]
         if threshold is not None:
             params.append(threshold)
@@ -57,7 +57,7 @@ class _AnalyticsInsightsMixin:
             f"""
             SELECT streamer, AVG(viewer_count) as avg_vc
             FROM twitch_stats_category
-            WHERE ts_utc >= ?
+            WHERE ts_utc >= %s
             GROUP BY streamer
             {having_clause}
             ORDER BY avg_vc
@@ -296,23 +296,27 @@ class _AnalyticsInsightsMixin:
         target_tz, timezone_name = self._resolve_target_timezone(tz_requested)
 
         try:
-            with storage.get_conn() as conn:
+            with storage.readonly_connection() as conn:
                 since_date = (datetime.now(UTC) - timedelta(days=days)).isoformat()
 
                 if not streamer:
                     return web.json_response({"error": "Streamer required"}, status=400)
                 streamer_login = streamer.lower()
                 msg_bot_clause, msg_bot_params = build_known_chat_bot_not_in_clause(
-                    column_expr="chatter_login"
+                    column_expr="chatter_login",
+                    placeholder="%s",
                 )
                 msg_bot_clause_cm, _ = build_known_chat_bot_not_in_clause(
-                    column_expr="cm.chatter_login"
+                    column_expr="cm.chatter_login",
+                    placeholder="%s",
                 )
                 session_bot_clause, session_bot_params = build_known_chat_bot_not_in_clause(
-                    column_expr="sc.chatter_login"
+                    column_expr="sc.chatter_login",
+                    placeholder="%s",
                 )
                 rollup_bot_clause, rollup_bot_params = build_known_chat_bot_not_in_clause(
-                    column_expr="chatter_login"
+                    column_expr="chatter_login",
+                    placeholder="%s",
                 )
 
                 # Session context for normalization (e.g. messages/minute, loyalty score).
@@ -329,8 +333,8 @@ class _AnalyticsInsightsMixin:
                             0
                         ) as viewer_minutes_fallback
                     FROM twitch_stream_sessions s
-                    WHERE s.started_at >= ?
-                      AND LOWER(s.streamer_login) = ?
+                    WHERE s.started_at >= %s
+                      AND LOWER(s.streamer_login) = %s
                       AND s.ended_at IS NOT NULL
                     """,
                     [since_date, streamer_login],
@@ -351,8 +355,8 @@ class _AnalyticsInsightsMixin:
                         COALESCE(SUM(GREATEST(sv.viewer_count, 0)), 0) as viewer_minutes
                     FROM twitch_session_viewers sv
                     JOIN twitch_stream_sessions s ON s.id = sv.session_id
-                    WHERE s.started_at >= ?
-                      AND LOWER(s.streamer_login) = ?
+                    WHERE s.started_at >= %s
+                      AND LOWER(s.streamer_login) = %s
                       AND s.ended_at IS NOT NULL
                     """,
                     [since_date, streamer_login],
@@ -376,8 +380,8 @@ class _AnalyticsInsightsMixin:
                             COUNT(*) AS message_count
                         FROM twitch_chat_messages cm
                         JOIN twitch_stream_sessions s ON s.id = cm.session_id
-                        WHERE s.started_at >= ?
-                          AND LOWER(s.streamer_login) = ?
+                        WHERE s.started_at >= %s
+                          AND LOWER(s.streamer_login) = %s
                           AND s.ended_at IS NOT NULL
                           AND {msg_bot_clause_cm}
                         GROUP BY cm.session_id
@@ -389,8 +393,8 @@ class _AnalyticsInsightsMixin:
                             COALESCE(SUM(GREATEST(sv.viewer_count, 0)), 0) AS viewer_minutes
                         FROM twitch_session_viewers sv
                         JOIN twitch_stream_sessions s ON s.id = sv.session_id
-                        WHERE s.started_at >= ?
-                          AND LOWER(s.streamer_login) = ?
+                        WHERE s.started_at >= %s
+                          AND LOWER(s.streamer_login) = %s
                           AND s.ended_at IS NOT NULL
                         GROUP BY sv.session_id
                     )
@@ -405,8 +409,8 @@ class _AnalyticsInsightsMixin:
                     FROM twitch_stream_sessions s
                     LEFT JOIN session_messages sm ON sm.session_id = s.id
                     LEFT JOIN session_viewer_samples svs ON svs.session_id = s.id
-                    WHERE s.started_at >= ?
-                      AND LOWER(s.streamer_login) = ?
+                    WHERE s.started_at >= %s
+                      AND LOWER(s.streamer_login) = %s
                       AND s.ended_at IS NOT NULL
                     """,
                     [
@@ -437,8 +441,8 @@ class _AnalyticsInsightsMixin:
                     f"""
                     SELECT message_ts, content, is_command, chatter_login, chatter_id
                     FROM twitch_chat_messages
-                    WHERE message_ts >= ?
-                      AND LOWER(streamer_login) = ?
+                    WHERE message_ts >= %s
+                      AND LOWER(streamer_login) = %s
                       AND {msg_bot_clause}
                     """,
                     [since_date, streamer_login, *msg_bot_params],
@@ -493,8 +497,8 @@ class _AnalyticsInsightsMixin:
                                 MAX(CASE WHEN LOWER(COALESCE(CAST(sc.seen_via_chatters_api AS TEXT), '0')) IN ('1', 't', 'true') THEN 1 ELSE 0 END) AS seen_flag
                             FROM twitch_session_chatters sc
                             JOIN twitch_stream_sessions s ON s.id = sc.session_id
-                            WHERE s.started_at >= ?
-                              AND LOWER(s.streamer_login) = ?
+                            WHERE s.started_at >= %s
+                              AND LOWER(s.streamer_login) = %s
                               AND s.ended_at IS NOT NULL
                               AND {session_bot_clause}
                             GROUP BY 1, 2
@@ -507,7 +511,7 @@ class _AnalyticsInsightsMixin:
                             LOWER(chatter_login) AS chatter_login,
                             first_seen_at
                         FROM twitch_chatter_rollup
-                        WHERE LOWER(streamer_login) = ?
+                        WHERE LOWER(streamer_login) = %s
                           AND {rollup_bot_clause}
                     )
                     SELECT
@@ -521,7 +525,7 @@ class _AnalyticsInsightsMixin:
                         pu.has_first_flag,
                         pu.seen_flag,
                         CASE
-                            WHEN r.chatter_login IS NOT NULL AND r.first_seen_at < ?
+                            WHEN r.chatter_login IS NOT NULL AND r.first_seen_at < %s
                             THEN 1 ELSE 0
                         END AS seen_before
                     FROM per_user pu
@@ -561,8 +565,8 @@ class _AnalyticsInsightsMixin:
                     SELECT COUNT(DISTINCT sc.session_id)
                     FROM twitch_session_chatters sc
                     JOIN twitch_stream_sessions s ON s.id = sc.session_id
-                    WHERE s.started_at >= ?
-                      AND LOWER(s.streamer_login) = ?
+                    WHERE s.started_at >= %s
+                      AND LOWER(s.streamer_login) = %s
                       AND s.ended_at IS NOT NULL
                       AND {session_bot_clause}
                     """,
@@ -732,8 +736,8 @@ class _AnalyticsInsightsMixin:
                         MIN(cm.message_ts) as first_seen,
                         MAX(cm.message_ts) as last_seen
                     FROM twitch_chat_messages cm
-                    WHERE cm.message_ts >= ?
-                      AND LOWER(cm.streamer_login) = ?
+                    WHERE cm.message_ts >= %s
+                      AND LOWER(cm.streamer_login) = %s
                       AND {msg_bot_clause_cm}
                     GROUP BY COALESCE(NULLIF(cm.chatter_login, ''), cm.chatter_id, 'unknown')
                     ORDER BY messages DESC
@@ -856,7 +860,7 @@ class _AnalyticsInsightsMixin:
             return web.json_response({"error": "Streamer required"}, status=400)
 
         try:
-            with storage.get_conn() as conn:
+            with storage.readonly_connection() as conn:
                 data = CoachingEngine.get_coaching_data(conn, streamer, days)
 
                 # Normalize Decimal/Datetime values for JSON serialization
@@ -907,18 +911,18 @@ class _AnalyticsInsightsMixin:
         subs: dict = {"total_events": 0, "gifted": 0}
 
         try:
-            with storage.get_conn() as c:
+            with storage.readonly_connection() as c:
                 # --- Ad Break overview ---
                 ad_agg = c.execute(
                     """
                     SELECT COUNT(*) AS total_ads,
                            SUM(CASE WHEN a.is_automatic IS TRUE THEN 1 ELSE 0 END) AS auto_ads,
                            AVG(a.duration_seconds) AS avg_duration,
-                           COUNT(DISTINCT a.session_id) AS sessions_with_ads
+                      COUNT(DISTINCT a.session_id) AS sessions_with_ads
                       FROM twitch_ad_break_events a
                       LEFT JOIN twitch_stream_sessions s ON s.id = a.session_id
-                     WHERE a.started_at >= ?
-                       AND (? = '' OR LOWER(s.streamer_login) = ?)
+                     WHERE a.started_at >= %s
+                       AND (%s = '' OR LOWER(s.streamer_login) = %s)
                     """,
                     (cutoff, streamer, streamer),
                 ).fetchone()
@@ -938,9 +942,9 @@ class _AnalyticsInsightsMixin:
                            s.started_at AS session_start
                       FROM twitch_ad_break_events a
                       JOIN twitch_stream_sessions s ON s.id = a.session_id
-                     WHERE a.started_at >= ?
+                     WHERE a.started_at >= %s
                        AND a.session_id IS NOT NULL
-                       AND (? = '' OR LOWER(s.streamer_login) = ?)
+                       AND (%s = '' OR LOWER(s.streamer_login) = %s)
                      ORDER BY a.started_at DESC
                      LIMIT 200
                     """,
@@ -955,7 +959,7 @@ class _AnalyticsInsightsMixin:
                             """
                             SELECT session_id, minutes_from_start, viewer_count
                               FROM twitch_session_viewers
-                             WHERE session_id = ANY(?)
+                             WHERE session_id = ANY(%s)
                              ORDER BY session_id, minutes_from_start
                             """,
                             (session_ids,),
@@ -1159,9 +1163,9 @@ class _AnalyticsInsightsMixin:
                                MAX(h.level) AS max_level, AVG(h.duration_seconds) AS avg_dur
                           FROM twitch_hype_train_events h
                           LEFT JOIN twitch_stream_sessions s ON s.id = h.session_id
-                         WHERE h.started_at >= ?
+                         WHERE h.started_at >= %s
                            AND h.ended_at IS NOT NULL
-                           AND (? = '' OR LOWER(s.streamer_login) = ?)
+                           AND (%s = '' OR LOWER(s.streamer_login) = %s)
                         """,
                         (cutoff, streamer, streamer),
                     ).fetchone()
@@ -1181,8 +1185,8 @@ class _AnalyticsInsightsMixin:
                         """
                         SELECT SUM(amount) AS total, COUNT(*) AS events
                           FROM twitch_bits_events
-                         WHERE received_at >= ?
-                           AND (? = '' OR LOWER(streamer_login) = ?)
+                         WHERE received_at >= %s
+                           AND (%s = '' OR LOWER(streamer_login) = %s)
                         """,
                         (cutoff, streamer, streamer),
                     ).fetchone()
@@ -1201,8 +1205,8 @@ class _AnalyticsInsightsMixin:
                         SELECT COUNT(*) AS total,
                                SUM(CASE WHEN is_gift=1 THEN 1 ELSE 0 END) AS gifted
                           FROM twitch_subscription_events
-                         WHERE received_at >= ?
-                           AND (? = '' OR LOWER(streamer_login) = ?)
+                         WHERE received_at >= %s
+                           AND (%s = '' OR LOWER(streamer_login) = %s)
                         """,
                         (cutoff, streamer, streamer),
                     ).fetchone()

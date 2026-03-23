@@ -170,7 +170,7 @@ class DashboardLiveMixin:
 
     def _resolve_streamer_user_id_from_db(self, login: str) -> str:
         try:
-            with _storage.get_conn() as conn:
+            with _storage.readonly_connection() as conn:
                 partner_row = _storage.load_active_partner(conn, twitch_login=login)
                 if partner_row:
                     raw = (
@@ -197,7 +197,7 @@ class DashboardLiveMixin:
                     """
                     SELECT twitch_user_id
                     FROM twitch_raid_auth
-                    WHERE LOWER(COALESCE(twitch_login, '')) = LOWER(?)
+                    WHERE LOWER(COALESCE(twitch_login, '')) = LOWER(%s)
                     LIMIT 1
                     """,
                     (login,),
@@ -243,7 +243,7 @@ class DashboardLiveMixin:
         if not login or not user_id:
             return
         try:
-            with _storage.get_conn() as conn:
+            with _storage.transaction() as conn:
                 existing = _storage.load_streamer_identity(conn, twitch_login=login)
                 canonical_login = str(
                     (
@@ -1249,7 +1249,7 @@ class DashboardLiveMixin:
         total_authorized = 0
         full_scope_count = 0
         try:
-            with _storage.get_conn() as _sc:
+            with _storage.readonly_connection() as _sc:
                 auth_rows = _sc.execute(
                     "SELECT twitch_login, scopes, needs_reauth FROM twitch_raid_auth ORDER BY twitch_login"
                 ).fetchall()
@@ -1395,7 +1395,7 @@ class DashboardLiveMixin:
 
         raid_arrival_card_html = ""
         try:
-            with _storage.get_conn() as _sc:
+            with _storage.readonly_connection() as _sc:
                 arrival_rows = _sc.execute(
                     """
                     SELECT detected_at,

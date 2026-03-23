@@ -12,6 +12,17 @@ from bot.chat.connection import ConnectionMixin
 from tests.sqlite_twitch_schema import ensure_sqlite_twitch_schema
 
 
+class _CompatConn:
+    def __init__(self, conn: sqlite3.Connection) -> None:
+        self._conn = conn
+
+    def execute(self, sql: str, params=()):
+        return self._conn.execute(str(sql).replace("%s", "?"), params)
+
+    def __getattr__(self, name: str):
+        return getattr(self._conn, name)
+
+
 class _PartChannelsHarness(ConnectionMixin):
     def __init__(self) -> None:
         self._initial_channels = ["partner_channel", "cemo_336", "dragskope"]
@@ -507,8 +518,8 @@ class ChatTransportRestartTests(unittest.IsolatedAsyncioTestCase):
         harness = _StaleJoinHarness()
         try:
             with patch(
-                "bot.chat.connection.get_conn",
-                side_effect=lambda: contextlib.nullcontext(conn),
+                "bot.chat.connection.readonly_connection",
+                side_effect=lambda: contextlib.nullcontext(_CompatConn(conn)),
             ):
                 result = await harness.join("cemo_336", channel_id="494921554")
         finally:

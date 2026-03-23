@@ -549,7 +549,7 @@ new Chart(ctx, {{
             return web.Response(text="Missing login parameter", status=400)
 
         try:
-            with storage.get_conn() as conn:
+            with storage.readonly_connection() as conn:
                 row = storage.load_active_partner(conn, twitch_login=login)
                 session_partner = (
                     storage.load_active_partner(conn, twitch_login=session_login)
@@ -673,7 +673,7 @@ new Chart(ctx, {{
         """Raid analytics: sent/received balance, leechers, manual raids."""
         self._require_token(request)
 
-        with storage.get_conn() as conn:
+        with storage.readonly_connection() as conn:
             # Active partners set
             partner_rows = conn.execute(
                 "SELECT twitch_login FROM twitch_streamers_partner_state WHERE is_partner_active = 1"

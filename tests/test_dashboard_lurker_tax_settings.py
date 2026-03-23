@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import contextlib
 import sqlite3
 import unittest
 from types import SimpleNamespace
@@ -15,11 +16,23 @@ class _ConnCtx:
     def __init__(self, conn: sqlite3.Connection) -> None:
         self._conn = conn
 
-    def __enter__(self) -> sqlite3.Connection:
-        return self._conn
+    def __enter__(self) -> _CompatSqliteConn:
+        return _CompatSqliteConn(self._conn)
 
     def __exit__(self, exc_type, exc, tb) -> bool:
         return False
+
+
+class _CompatSqliteConn:
+    def __init__(self, conn: sqlite3.Connection) -> None:
+        self._conn = conn
+
+    def execute(self, sql: str, params=None):
+        sql_text = str(sql or "").replace("%s", "?")
+        return self._conn.execute(sql_text, tuple(params or ()))
+
+    def __getattr__(self, item):
+        return getattr(self._conn, item)
 
 
 class _PostRequest(SimpleNamespace):
@@ -137,10 +150,15 @@ class DashboardLurkerTaxTests(unittest.IsolatedAsyncioTestCase):
         self.conn.close()
 
     def _conn_patch(self):
-        return patch(
-            "bot.dashboard.routes_mixin.storage.get_conn",
-            return_value=_ConnCtx(self.conn),
+        stack = contextlib.ExitStack()
+        compat = _ConnCtx(self.conn)
+        stack.enter_context(
+            patch("bot.dashboard.abbo_routes.storage.readonly_connection", return_value=compat)
         )
+        stack.enter_context(
+            patch("bot.dashboard.abbo_routes.storage.transaction", return_value=compat)
+        )
+        return stack
 
     async def test_abbo_entry_shows_locked_teaser_for_free_plan(self) -> None:
         handler = _AbboHarness(plan_id="raid_free")

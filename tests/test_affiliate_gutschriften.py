@@ -22,6 +22,45 @@ class _ConnContext:
         return False
 
 
+class _ListCursor:
+    def __init__(self, rows):
+        self._rows = list(rows)
+
+    def fetchone(self):
+        return self._rows[0] if self._rows else None
+
+    def fetchall(self):
+        return list(self._rows)
+
+
+class _CompatSqliteConn:
+    def __init__(self, conn: sqlite3.Connection) -> None:
+        self._conn = conn
+
+    def execute(self, sql: str, params=None):
+        sql_text = str(sql or "")
+        sql_params = tuple(params or ())
+        if "FROM information_schema.columns" in sql_text:
+            table_name = str(sql_params[0] if sql_params else "").strip()
+            pragma_rows = self._conn.execute(f"PRAGMA table_info({table_name})").fetchall()
+            return _ListCursor(
+                [((row["name"] if hasattr(row, "keys") else row[1]),) for row in pragma_rows]
+            )
+        return self._conn.execute(sql_text.replace("%s", "?"), sql_params)
+
+    def executemany(self, sql: str, params=None):
+        return self._conn.executemany(str(sql or "").replace("%s", "?"), params or ())
+
+    def commit(self) -> None:
+        self._conn.commit()
+
+    def rollback(self) -> None:
+        self._conn.rollback()
+
+    def __getattr__(self, item):
+        return getattr(self._conn, item)
+
+
 class _FakeCrypto:
     def encrypt_field(self, plaintext: str, aad: str, kid: str = "v1") -> bytes:
         del kid
@@ -71,6 +110,7 @@ class AffiliateGutschriftTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self) -> None:
         self.conn = sqlite3.connect(":memory:", check_same_thread=False)
         self.conn.row_factory = sqlite3.Row
+        self.compat_conn = _CompatSqliteConn(self.conn)
         self.conn.executescript(
             """
             CREATE TABLE affiliate_accounts (
@@ -220,7 +260,7 @@ class AffiliateGutschriftTests(unittest.IsolatedAsyncioTestCase):
 
     def _save_profile(self, affiliate_login: str, data: dict[str, object]) -> None:
         with patch("bot.dashboard.affiliate.affiliate_pii.get_crypto", return_value=_FakeCrypto()):
-            AffiliatePII.save_pii(self.conn, affiliate_login, data)
+            AffiliatePII.save_pii(self.compat_conn, affiliate_login, data)
             self.conn.commit()
 
     @staticmethod
@@ -257,7 +297,7 @@ class AffiliateGutschriftTests(unittest.IsolatedAsyncioTestCase):
 
         with patch("bot.dashboard.affiliate.affiliate_pii.get_crypto", return_value=_FakeCrypto()):
             result = AffiliateGutschriftService.generate_for_period(
-                self.conn,
+                self.compat_conn,
                 affiliate_login="affiliate_one",
                 year=2026,
                 month=2,
@@ -301,7 +341,7 @@ class AffiliateGutschriftTests(unittest.IsolatedAsyncioTestCase):
                 return_value=b"%PDF-small",
             ):
                 result = AffiliateGutschriftService.generate_for_period(
-                    self.conn,
+                    self.compat_conn,
                     affiliate_login="affiliate_one",
                     year=2026,
                     month=2,
@@ -388,7 +428,7 @@ class AffiliateGutschriftTests(unittest.IsolatedAsyncioTestCase):
                 return_value=b"%PDF-seq",
             ):
                 results = AffiliateGutschriftService.generate_monthly_gutschriften(
-                    self.conn,
+                    self.compat_conn,
                     2026,
                     2,
                     seller=self._seller(),
@@ -426,7 +466,7 @@ class AffiliateGutschriftTests(unittest.IsolatedAsyncioTestCase):
                 return_value=b"%PDF-regular",
             ):
                 result = AffiliateGutschriftService.generate_for_period(
-                    self.conn,
+                    self.compat_conn,
                     affiliate_login="affiliate_one",
                     year=2026,
                     month=2,
@@ -485,7 +525,8 @@ class AffiliateGutschriftTests(unittest.IsolatedAsyncioTestCase):
             );
             """
         )
-        AffiliateGutschriftService.ensure_schema(legacy_conn)
+        legacy_compat = _CompatSqliteConn(legacy_conn)
+        AffiliateGutschriftService.ensure_schema(legacy_compat)
         legacy_conn.execute(
             """
             INSERT INTO affiliate_gutschrift_counter (counter_year, last_counter, updated_at)
@@ -493,7 +534,7 @@ class AffiliateGutschriftTests(unittest.IsolatedAsyncioTestCase):
             """,
             (202602, 3, "2026-03-01T00:00:00+00:00"),
         )
-        next_number = AffiliateGutschriftService._next_gutschrift_number(legacy_conn, "202602")
+        next_number = AffiliateGutschriftService._next_gutschrift_number(legacy_compat, "202602")
         columns = {
             row["name"]
             for row in legacy_conn.execute("PRAGMA table_info(affiliate_gutschriften)").fetchall()
@@ -531,7 +572,7 @@ class AffiliateGutschriftTests(unittest.IsolatedAsyncioTestCase):
                 return_value=b"%PDF-api",
             ):
                 AffiliateGutschriftService.generate_for_period(
-                    self.conn,
+                    self.compat_conn,
                     affiliate_login="affiliate_one",
                     year=2026,
                     month=2,
@@ -542,8 +583,8 @@ class AffiliateGutschriftTests(unittest.IsolatedAsyncioTestCase):
             handler = _AffiliateHarness()
             handler._affiliate_ensure_tables = lambda _conn: None  # type: ignore[method-assign]
             with patch(
-                "bot.dashboard.affiliate_mixin.storage.get_conn",
-                return_value=_ConnContext(self.conn),
+                "bot.dashboard.affiliate_mixin.storage.readonly_connection",
+                return_value=_ConnContext(self.compat_conn),
             ):
                 response = await handler._affiliate_api_gutschriften(SimpleNamespace())
 
@@ -596,8 +637,8 @@ class AffiliateGutschriftTests(unittest.IsolatedAsyncioTestCase):
         handler._affiliate_ensure_tables = lambda _conn: None  # type: ignore[method-assign]
         request = SimpleNamespace(match_info={"gutschrift_id": "1"})
         with patch(
-            "bot.dashboard.affiliate_mixin.storage.get_conn",
-            return_value=_ConnContext(self.conn),
+            "bot.dashboard.affiliate_mixin.storage.readonly_connection",
+            return_value=_ConnContext(self.compat_conn),
         ):
             response = await handler._affiliate_api_gutschrift_pdf(request)
 
@@ -635,8 +676,8 @@ class AffiliateGutschriftTests(unittest.IsolatedAsyncioTestCase):
                 return_value=b"%PDF-admin",
             ):
                 with patch(
-                    "bot.dashboard.affiliate_mixin.storage.get_conn",
-                    return_value=_ConnContext(self.conn),
+                    "bot.dashboard.affiliate_mixin.storage.transaction",
+                    return_value=_ConnContext(self.compat_conn),
                 ):
                     response = await handler._affiliate_api_gutschrift_trigger(request)
 

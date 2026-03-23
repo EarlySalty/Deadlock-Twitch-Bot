@@ -209,7 +209,7 @@ class _AnalyticsAIMixin:
         # Step 3: persist to DB (best-effort, never blocks the response)
         record_id: int | None = None
         try:
-            with storage.get_conn() as conn:
+            with storage.transaction() as conn:
                 _ensure_ai_table(conn)
                 row = conn.execute(
                     """
@@ -255,7 +255,7 @@ class _AnalyticsAIMixin:
         # SQL-Fragment das auf alle Haupt-Queries angewendet wird
         gf_sql = "AND had_deadlock_in_session = true" if game_filter == "deadlock" else ""
 
-        with storage.get_conn() as conn:
+        with storage.readonly_connection() as conn:
             # 1. Overview KPIs
             ov = conn.execute(
                 f"""
@@ -734,7 +734,7 @@ Vollständige Viewer-Metriken nur für Einträge ohne diesen Hinweis verwenden."
             limit = 20
 
         try:
-            with storage.get_conn() as conn:
+            with storage.readonly_connection() as conn:
                 _ensure_ai_table(conn)
                 rows = conn.execute(
                     """

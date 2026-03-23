@@ -146,7 +146,7 @@ async def abbo_profile_save(handler: Any, request: web.Request) -> web.StreamRes
         raise web.HTTPFound(f"/twitch/abbo?cycle={cycle}&profile=invalid")
 
     try:
-        with storage.get_conn() as conn:
+        with storage.transaction() as conn:
             handler._billing_ensure_storage_tables(conn)
             handler._billing_upsert_profile(
                 conn,
@@ -219,7 +219,7 @@ async def abbo_cancel(handler: Any, request: web.Request) -> web.StreamResponse:
             cancel_at_period_end=True,
             proration_behavior="none",
         )
-        with storage.get_conn() as conn:
+        with storage.transaction() as conn:
             handler._billing_ensure_storage_tables(conn)
             payload = handler._billing_subscription_payload_from_object(subscription_obj)
             if payload:

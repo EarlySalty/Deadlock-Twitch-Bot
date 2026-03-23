@@ -516,7 +516,7 @@ class TwitchLeaderboardMixin:
 
         now_utc = datetime.now(UTC)
         try:
-            with storage.get_conn() as c:
+            with storage.readonly_connection() as c:
                 rows = c.execute(
                     """
                     SELECT twitch_login,
@@ -627,14 +627,18 @@ class TwitchLeaderboardMixin:
 
         def _aggregate(sql: str, params: Sequence[object]) -> list[dict]:
             try:
-                with storage.get_conn() as c:
+                with storage.readonly_connection() as c:
                     rows = c.execute(sql, tuple(params)).fetchall()
                 return [dict(r) for r in rows]
             except Exception:
                 log.exception("Fehler bei Stats-Aggregation")
                 return []
 
-        top_sql = """
+        recent_30_days_sql = "NOW() - INTERVAL '30 days'"
+        hour_bucket_sql = "EXTRACT(HOUR FROM (ts_utc AT TIME ZONE 'UTC'))::int"
+        weekday_bucket_sql = "EXTRACT(DOW FROM (ts_utc AT TIME ZONE 'UTC'))::int"
+
+        top_sql = f"""
         WITH source_rows AS (
             SELECT 'tracked' AS source_key, streamer, viewer_count, is_partner, ts_utc
             FROM twitch_stats_tracked
@@ -648,8 +652,8 @@ class TwitchLeaderboardMixin:
                COUNT(*)          AS samples,
                MAX(CASE WHEN is_partner THEN 1 ELSE 0 END) AS is_partner
           FROM source_rows
-         WHERE source_key = ?
-           AND ts_utc >= datetime('now', '-30 days')
+         WHERE source_key = %s
+           AND ts_utc >= {recent_30_days_sql}
            AND (
                 (source_key = 'tracked' AND LOWER(streamer) IN (
                     SELECT LOWER(twitch_login)
@@ -664,17 +668,17 @@ class TwitchLeaderboardMixin:
                 ))
            )
            AND (
-                ? = 'none'
-                OR (? = 'between' AND CAST(strftime('%H', ts_utc) AS INTEGER) BETWEEN ? AND ?)
-                OR (? = 'wrap' AND (
-                        CAST(strftime('%H', ts_utc) AS INTEGER) >= ?
-                        OR CAST(strftime('%H', ts_utc) AS INTEGER) <= ?
+                %s = 'none'
+                OR (%s = 'between' AND {hour_bucket_sql} BETWEEN %s AND %s)
+                OR (%s = 'wrap' AND (
+                        {hour_bucket_sql} >= %s
+                        OR {hour_bucket_sql} <= %s
                     ))
            )
          GROUP BY streamer
          ORDER BY avg_viewers DESC
         """
-        hourly_sql = """
+        hourly_sql = f"""
         WITH source_rows AS (
             SELECT 'tracked' AS source_key, streamer, viewer_count, is_partner, ts_utc
             FROM twitch_stats_tracked
@@ -682,13 +686,13 @@ class TwitchLeaderboardMixin:
             SELECT 'category' AS source_key, streamer, viewer_count, is_partner, ts_utc
             FROM twitch_stats_category
         )
-        SELECT CAST(strftime('%H', ts_utc) AS INTEGER) AS hour,
+        SELECT {hour_bucket_sql} AS hour,
                AVG(viewer_count) AS avg_viewers,
                MAX(viewer_count) AS max_viewers,
                COUNT(*)          AS samples
           FROM source_rows
-         WHERE source_key = ?
-           AND ts_utc >= datetime('now', '-30 days')
+         WHERE source_key = %s
+           AND ts_utc >= {recent_30_days_sql}
            AND (
                 (source_key = 'tracked' AND LOWER(streamer) IN (
                     SELECT LOWER(twitch_login)
@@ -703,17 +707,17 @@ class TwitchLeaderboardMixin:
                 ))
            )
            AND (
-                ? = 'none'
-                OR (? = 'between' AND CAST(strftime('%H', ts_utc) AS INTEGER) BETWEEN ? AND ?)
-                OR (? = 'wrap' AND (
-                        CAST(strftime('%H', ts_utc) AS INTEGER) >= ?
-                        OR CAST(strftime('%H', ts_utc) AS INTEGER) <= ?
+                %s = 'none'
+                OR (%s = 'between' AND {hour_bucket_sql} BETWEEN %s AND %s)
+                OR (%s = 'wrap' AND (
+                        {hour_bucket_sql} >= %s
+                        OR {hour_bucket_sql} <= %s
                     ))
            )
          GROUP BY hour
          ORDER BY hour
         """
-        weekday_sql = """
+        weekday_sql = f"""
         WITH source_rows AS (
             SELECT 'tracked' AS source_key, streamer, viewer_count, is_partner, ts_utc
             FROM twitch_stats_tracked
@@ -721,13 +725,13 @@ class TwitchLeaderboardMixin:
             SELECT 'category' AS source_key, streamer, viewer_count, is_partner, ts_utc
             FROM twitch_stats_category
         )
-        SELECT CAST(strftime('%w', ts_utc) AS INTEGER) AS weekday,
+        SELECT {weekday_bucket_sql} AS weekday,
                AVG(viewer_count) AS avg_viewers,
                MAX(viewer_count) AS max_viewers,
                COUNT(*)          AS samples
           FROM source_rows
-         WHERE source_key = ?
-           AND ts_utc >= datetime('now', '-30 days')
+         WHERE source_key = %s
+           AND ts_utc >= {recent_30_days_sql}
            AND (
                 (source_key = 'tracked' AND LOWER(streamer) IN (
                     SELECT LOWER(twitch_login)
@@ -742,17 +746,17 @@ class TwitchLeaderboardMixin:
                 ))
            )
            AND (
-                ? = 'none'
-                OR (? = 'between' AND CAST(strftime('%H', ts_utc) AS INTEGER) BETWEEN ? AND ?)
-                OR (? = 'wrap' AND (
-                        CAST(strftime('%H', ts_utc) AS INTEGER) >= ?
-                        OR CAST(strftime('%H', ts_utc) AS INTEGER) <= ?
+                %s = 'none'
+                OR (%s = 'between' AND {hour_bucket_sql} BETWEEN %s AND %s)
+                OR (%s = 'wrap' AND (
+                        {hour_bucket_sql} >= %s
+                        OR {hour_bucket_sql} <= %s
                     ))
            )
          GROUP BY weekday
          ORDER BY weekday
         """
-        user_top_sql = """
+        user_top_sql = f"""
         WITH source_rows AS (
             SELECT 'tracked' AS source_key, streamer, viewer_count, is_partner, ts_utc
             FROM twitch_stats_tracked
@@ -766,8 +770,8 @@ class TwitchLeaderboardMixin:
                COUNT(*)          AS samples,
                MAX(CASE WHEN is_partner THEN 1 ELSE 0 END) AS is_partner
           FROM source_rows
-         WHERE source_key = ?
-           AND ts_utc >= datetime('now', '-30 days')
+         WHERE source_key = %s
+           AND ts_utc >= {recent_30_days_sql}
            AND (
                 (source_key = 'tracked' AND LOWER(streamer) IN (
                     SELECT LOWER(twitch_login)
@@ -781,18 +785,18 @@ class TwitchLeaderboardMixin:
                      WHERE is_partner_active = 1
                 ))
            )
-           AND streamer = ?
+           AND streamer = %s
            AND (
-                ? = 'none'
-                OR (? = 'between' AND CAST(strftime('%H', ts_utc) AS INTEGER) BETWEEN ? AND ?)
-                OR (? = 'wrap' AND (
-                        CAST(strftime('%H', ts_utc) AS INTEGER) >= ?
-                        OR CAST(strftime('%H', ts_utc) AS INTEGER) <= ?
+                %s = 'none'
+                OR (%s = 'between' AND {hour_bucket_sql} BETWEEN %s AND %s)
+                OR (%s = 'wrap' AND (
+                        {hour_bucket_sql} >= %s
+                        OR {hour_bucket_sql} <= %s
                     ))
            )
          GROUP BY streamer
         """
-        user_hourly_sql = """
+        user_hourly_sql = f"""
         WITH source_rows AS (
             SELECT 'tracked' AS source_key, streamer, viewer_count, is_partner, ts_utc
             FROM twitch_stats_tracked
@@ -800,13 +804,13 @@ class TwitchLeaderboardMixin:
             SELECT 'category' AS source_key, streamer, viewer_count, is_partner, ts_utc
             FROM twitch_stats_category
         )
-        SELECT CAST(strftime('%H', ts_utc) AS INTEGER) AS hour,
+        SELECT {hour_bucket_sql} AS hour,
                AVG(viewer_count) AS avg_viewers,
                MAX(viewer_count) AS max_viewers,
                COUNT(*)          AS samples
           FROM source_rows
-         WHERE source_key = ?
-           AND ts_utc >= datetime('now', '-30 days')
+         WHERE source_key = %s
+           AND ts_utc >= {recent_30_days_sql}
            AND (
                 (source_key = 'tracked' AND LOWER(streamer) IN (
                     SELECT LOWER(twitch_login)
@@ -820,19 +824,19 @@ class TwitchLeaderboardMixin:
                      WHERE is_partner_active = 1
                 ))
            )
-           AND streamer = ?
+           AND streamer = %s
            AND (
-                ? = 'none'
-                OR (? = 'between' AND CAST(strftime('%H', ts_utc) AS INTEGER) BETWEEN ? AND ?)
-                OR (? = 'wrap' AND (
-                        CAST(strftime('%H', ts_utc) AS INTEGER) >= ?
-                        OR CAST(strftime('%H', ts_utc) AS INTEGER) <= ?
+                %s = 'none'
+                OR (%s = 'between' AND {hour_bucket_sql} BETWEEN %s AND %s)
+                OR (%s = 'wrap' AND (
+                        {hour_bucket_sql} >= %s
+                        OR {hour_bucket_sql} <= %s
                     ))
            )
          GROUP BY hour
          ORDER BY hour
         """
-        user_weekday_sql = """
+        user_weekday_sql = f"""
         WITH source_rows AS (
             SELECT 'tracked' AS source_key, streamer, viewer_count, is_partner, ts_utc
             FROM twitch_stats_tracked
@@ -840,13 +844,13 @@ class TwitchLeaderboardMixin:
             SELECT 'category' AS source_key, streamer, viewer_count, is_partner, ts_utc
             FROM twitch_stats_category
         )
-        SELECT CAST(strftime('%w', ts_utc) AS INTEGER) AS weekday,
+        SELECT {weekday_bucket_sql} AS weekday,
                AVG(viewer_count) AS avg_viewers,
                MAX(viewer_count) AS max_viewers,
                COUNT(*)          AS samples
           FROM source_rows
-         WHERE source_key = ?
-           AND ts_utc >= datetime('now', '-30 days')
+         WHERE source_key = %s
+           AND ts_utc >= {recent_30_days_sql}
            AND (
                 (source_key = 'tracked' AND LOWER(streamer) IN (
                     SELECT LOWER(twitch_login)
@@ -860,13 +864,13 @@ class TwitchLeaderboardMixin:
                      WHERE is_partner_active = 1
                 ))
            )
-           AND streamer = ?
+           AND streamer = %s
            AND (
-                ? = 'none'
-                OR (? = 'between' AND CAST(strftime('%H', ts_utc) AS INTEGER) BETWEEN ? AND ?)
-                OR (? = 'wrap' AND (
-                        CAST(strftime('%H', ts_utc) AS INTEGER) >= ?
-                        OR CAST(strftime('%H', ts_utc) AS INTEGER) <= ?
+                %s = 'none'
+                OR (%s = 'between' AND {hour_bucket_sql} BETWEEN %s AND %s)
+                OR (%s = 'wrap' AND (
+                        {hour_bucket_sql} >= %s
+                        OR {hour_bucket_sql} <= %s
                     ))
            )
          GROUP BY weekday
@@ -954,10 +958,10 @@ class TwitchLeaderboardMixin:
                 user_entry["is_on_discord"] = 1 if is_member else 0
 
                 try:
-                    with storage.get_conn() as c:
+                    with storage.readonly_connection() as c:
                         # Subs
                         sub_row = c.execute(
-                            "SELECT total, points, snapshot_at FROM twitch_subscriptions_snapshot WHERE twitch_login = ? ORDER BY snapshot_at DESC LIMIT 1",
+                            "SELECT total, points, snapshot_at FROM twitch_subscriptions_snapshot WHERE twitch_login = %s ORDER BY snapshot_at DESC LIMIT 1",
                             (normalized_login,),
                         ).fetchone()
                         if sub_row:
@@ -973,9 +977,9 @@ class TwitchLeaderboardMixin:
                             SELECT other.streamer_login, COUNT(DISTINCT t1.chatter_login) as overlap
                             FROM twitch_chatter_rollup t1
                             JOIN twitch_chatter_rollup other ON t1.chatter_login = other.chatter_login
-                            WHERE t1.streamer_login = ? 
-                              AND other.streamer_login != ?
-                              AND t1.last_seen_at >= datetime('now', '-30 days')
+                            WHERE t1.streamer_login = %s 
+                              AND other.streamer_login != %s
+                              AND t1.last_seen_at >= NOW() - INTERVAL '30 days'
                             GROUP BY other.streamer_login
                             ORDER BY overlap DESC
                             LIMIT 10
@@ -1018,7 +1022,7 @@ class TwitchLeaderboardMixin:
             out["streamer"] = user_entry
 
         try:
-            with storage.get_conn() as c:
+            with storage.readonly_connection() as c:
                 session_rows = c.execute(
                     """
                     SELECT id, streamer_login, started_at, duration_seconds, start_viewers, peak_viewers,
@@ -1027,7 +1031,7 @@ class TwitchLeaderboardMixin:
                            returning_chatters, follower_delta, followers_start, followers_end,
                            stream_title, notification_text
                       FROM twitch_stream_sessions
-                     WHERE started_at >= datetime('now', '-30 days')
+                     WHERE started_at >= NOW() - INTERVAL '30 days'
                        AND ended_at IS NOT NULL
                      ORDER BY started_at DESC
                      LIMIT 400
@@ -1039,11 +1043,14 @@ class TwitchLeaderboardMixin:
                     SELECT cm.session_id,
                            s.streamer_login,
                            s.started_at,
-                           strftime('%Y-%m-%dT%H:%M:00Z', cm.message_ts) AS minute_bucket,
+                           TO_CHAR(
+                               date_trunc('minute', cm.message_ts AT TIME ZONE 'UTC'),
+                               'YYYY-MM-DD"T"HH24:MI:00"Z"'
+                           ) AS minute_bucket,
                            COUNT(*) AS messages
                       FROM twitch_chat_messages cm
                       JOIN twitch_stream_sessions s ON s.id = cm.session_id
-                     WHERE cm.message_ts >= datetime('now', '-30 days')
+                     WHERE cm.message_ts >= NOW() - INTERVAL '30 days'
                      GROUP BY cm.session_id, minute_bucket
                      ORDER BY messages DESC
                      LIMIT 5
@@ -1051,25 +1058,25 @@ class TwitchLeaderboardMixin:
                 ).fetchall()
 
                 active_7_row = c.execute(
-                    "SELECT COUNT(*) FROM twitch_chatter_rollup WHERE last_seen_at >= datetime('now','-7 days')"
+                    "SELECT COUNT(*) FROM twitch_chatter_rollup WHERE last_seen_at >= NOW() - INTERVAL '7 days'"
                 ).fetchone()
                 returning_7_row = c.execute(
                     """
                     SELECT COUNT(*)
                       FROM twitch_chatter_rollup
-                     WHERE first_seen_at < datetime('now','-7 days')
-                       AND last_seen_at >= datetime('now','-7 days')
+                     WHERE first_seen_at < NOW() - INTERVAL '7 days'
+                       AND last_seen_at >= NOW() - INTERVAL '7 days'
                     """
                 ).fetchone()
                 active_30_row = c.execute(
-                    "SELECT COUNT(*) FROM twitch_chatter_rollup WHERE last_seen_at >= datetime('now','-30 days')"
+                    "SELECT COUNT(*) FROM twitch_chatter_rollup WHERE last_seen_at >= NOW() - INTERVAL '30 days'"
                 ).fetchone()
                 returning_30_row = c.execute(
                     """
                     SELECT COUNT(*)
                       FROM twitch_chatter_rollup
-                     WHERE first_seen_at < datetime('now','-30 days')
-                       AND last_seen_at >= datetime('now','-30 days')
+                     WHERE first_seen_at < NOW() - INTERVAL '30 days'
+                       AND last_seen_at >= NOW() - INTERVAL '30 days'
                     """
                 ).fetchone()
         except Exception:
@@ -1359,3 +1366,5 @@ class TwitchLeaderboardMixin:
         embed.add_field(name="Top Kategorie", value=_format_lines(category_sorted), inline=False)
         embed.set_footer(text="Nutze !twl help für weitere Optionen.")
         return embed
+
+

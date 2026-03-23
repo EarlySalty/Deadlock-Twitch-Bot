@@ -439,6 +439,24 @@ class _ConnCtx:
         return False
 
 
+class _CompatSqliteConn:
+    def __init__(self, conn: sqlite3.Connection) -> None:
+        self._conn = conn
+
+    @staticmethod
+    def _translate_sql(sql: str) -> str:
+        return str(sql).replace("%s", "?")
+
+    def execute(self, sql, params=()):
+        return self._conn.execute(self._translate_sql(sql), params)
+
+    def executemany(self, sql, params_seq):
+        return self._conn.executemany(self._translate_sql(sql), params_seq)
+
+    def __getattr__(self, name):
+        return getattr(self._conn, name)
+
+
 class _DummyWebhookRoutes(_DashboardRoutesMixin, _DashboardBillingMixin):
     def __init__(self) -> None:
         self._billing_stripe_webhook_secret = "whsec_test"
@@ -512,7 +530,7 @@ class DashboardSecurityRegressionTests(unittest.IsolatedAsyncioTestCase):
         api = _DummyV2Errors()
 
         with patch(
-            "bot.analytics.api_v2.storage.get_conn",
+            "bot.analytics.api_v2.storage.readonly_connection",
             side_effect=RuntimeError("db password leaked"),
         ):
             response = await api._api_v2_streamers(SimpleNamespace())
@@ -730,7 +748,7 @@ class DashboardSecurityRegressionTests(unittest.IsolatedAsyncioTestCase):
             )
 
             result = _DummyOverviewMetrics()._get_monetization_event_counts(
-                conn,
+                _CompatSqliteConn(conn),
                 "2026-03-18T00:00:00+00:00",
                 "streamer_a",
             )
@@ -822,7 +840,7 @@ class DashboardSecurityRegressionTests(unittest.IsolatedAsyncioTestCase):
                 return None
 
         conn = _Conn()
-        with patch("bot.storage.get_conn", return_value=contextlib.nullcontext(conn)):
+        with patch("bot.social_media.dashboard.transaction", return_value=contextlib.nullcontext(conn)):
             response = await dashboard.oauth_disconnect(request)
 
         payload = json.loads(response.text)
@@ -852,7 +870,10 @@ class DashboardSecurityRegressionTests(unittest.IsolatedAsyncioTestCase):
         handler = _MarketAuth()
         request = SimpleNamespace(headers={}, query={})
 
-        with patch("bot.dashboard.routes_mixin.storage.get_conn", side_effect=RuntimeError("dsn leak")):
+        with patch(
+            "bot.dashboard.routes_mixin.storage.readonly_connection",
+            side_effect=RuntimeError("dsn leak"),
+        ):
             response = await handler.api_market_data(request)
 
         payload = json.loads(response.text)
@@ -1053,7 +1074,10 @@ class DashboardSecurityRegressionTests(unittest.IsolatedAsyncioTestCase):
         handler = _MarketAuth()
         request = SimpleNamespace(headers={}, query={})
 
-        with patch("bot.dashboard.routes_mixin.storage.get_conn", side_effect=RuntimeError("boom")):
+        with patch(
+            "bot.dashboard.routes_mixin.storage.readonly_connection",
+            side_effect=RuntimeError("boom"),
+        ):
             response = await handler.api_market_data(request)
         self.assertEqual(response.status, 500)
 
@@ -1114,7 +1138,7 @@ class DashboardSecurityRegressionTests(unittest.IsolatedAsyncioTestCase):
 
         request = _Req()
         with patch(
-            "bot.dashboard.routes_mixin.storage.get_conn",
+            "bot.dashboard.routes_mixin.storage.transaction",
             return_value=_ConnCtx(_WebhookConn()),
         ):
             response = await handler.api_billing_stripe_webhook(request)
@@ -1336,7 +1360,14 @@ class DashboardSecurityRegressionTests(unittest.IsolatedAsyncioTestCase):
             noauth=False,
             partner_token="partner-secret",
         )
-        handler.attach(app)
+        fake_conn = SimpleNamespace(
+            execute=lambda *args, **kwargs: SimpleNamespace(fetchall=lambda: [])
+        )
+        with patch(
+            "bot.dashboard.affiliate.affiliate_mixin.storage.transaction",
+            return_value=contextlib.nullcontext(fake_conn),
+        ):
+            handler.attach(app)
 
         for path in (
             "/twitch/add_any",
@@ -1354,7 +1385,14 @@ class DashboardSecurityRegressionTests(unittest.IsolatedAsyncioTestCase):
             noauth=False,
             partner_token="partner-secret",
         )
-        handler.attach(app)
+        fake_conn = SimpleNamespace(
+            execute=lambda *args, **kwargs: SimpleNamespace(fetchall=lambda: [])
+        )
+        with patch(
+            "bot.dashboard.affiliate.affiliate_mixin.storage.transaction",
+            return_value=contextlib.nullcontext(fake_conn),
+        ):
+            handler.attach(app)
 
         methods = {
             route.method
@@ -1456,8 +1494,24 @@ class DashboardSecurityRegressionTests(unittest.IsolatedAsyncioTestCase):
             "/twitch/live-announcement?streamer=earlysalty",
         )
 
-    def test_rate_limit_key_ignores_forwarded_headers(self) -> None:
+    def test_rate_limit_key_uses_forwarded_headers_for_trusted_proxy(self) -> None:
         handler = DashboardV2Server.__new__(DashboardV2Server)
+        handler._trusted_proxy_networks = DashboardV2Server._parse_proxy_networks()
+        request = SimpleNamespace(
+            headers={
+                "X-Forwarded-For": "203.0.113.99",
+                "X-Real-IP": "198.51.100.42",
+            },
+            remote="127.0.0.1",
+            transport=None,
+        )
+
+        key = DashboardV2Server._rate_limit_key(handler, request)
+        self.assertEqual(key, "203.0.113.99")
+
+    def test_rate_limit_key_ignores_forwarded_headers_for_untrusted_proxy(self) -> None:
+        handler = DashboardV2Server.__new__(DashboardV2Server)
+        handler._trusted_proxy_networks = ()
         request = SimpleNamespace(
             headers={
                 "X-Forwarded-For": "203.0.113.99",
@@ -1469,6 +1523,28 @@ class DashboardSecurityRegressionTests(unittest.IsolatedAsyncioTestCase):
 
         key = DashboardV2Server._rate_limit_key(handler, request)
         self.assertEqual(key, "127.0.0.1")
+
+    def test_dashboard_server_uses_auth_mixin_rate_limiter(self) -> None:
+        self.assertIs(DashboardV2Server._check_rate_limit, _DashboardAuthMixin._check_rate_limit)
+
+    async def test_discord_admin_membership_fails_closed_without_allowlist(self) -> None:
+        handler = DashboardV2Server.__new__(DashboardV2Server)
+        handler._discord_admin_owner_user_id = None
+        handler._discord_admin_guild_ids = ()
+        handler._discord_admin_moderator_role_id = 55
+        handler._raid_bot = SimpleNamespace(
+            auth_manager=SimpleNamespace(
+                _discord_bot=SimpleNamespace(
+                    guilds=[SimpleNamespace(id=1)],
+                    get_guild=lambda _guild_id: None,
+                )
+            )
+        )
+
+        allowed, reason = await DashboardV2Server._check_discord_admin_membership(handler, 42)
+
+        self.assertFalse(allowed)
+        self.assertEqual(reason, "admin_guild_not_configured")
 
     async def test_live_add_any_requires_csrf(self) -> None:
         handler = _DummyLiveActions()

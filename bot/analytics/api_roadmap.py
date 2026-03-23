@@ -21,7 +21,7 @@ _VALID_STATUSES = {"planned", "in_progress", "done"}
 
 
 def _ensure_roadmap_table() -> None:
-    with storage.get_conn() as conn:
+    with storage.transaction() as conn:
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS twitch_roadmap_items (
@@ -75,7 +75,7 @@ class _AnalyticsRoadmapMixin:
     async def _api_v2_roadmap_get(self, request: web.Request) -> web.Response:
         try:
             _ensure_roadmap_table()
-            with storage.get_conn() as conn:
+            with storage.transaction() as conn:
                 rows = conn.execute(
                     "SELECT id, title, description, status, priority, created_at, updated_at "
                     "FROM twitch_roadmap_items ORDER BY priority DESC, id ASC"
@@ -139,17 +139,16 @@ class _AnalyticsRoadmapMixin:
 
         try:
             _ensure_roadmap_table()
-            with storage.get_conn() as conn:
-                cur = conn.execute(
+            with storage.transaction() as conn:
+                row = conn.execute(
                     "INSERT INTO twitch_roadmap_items (title, description, status, priority) "
-                    "VALUES (?, ?, ?, ?)",
+                    "VALUES (%s, %s, %s, %s) RETURNING id",
                     (title, description, status, priority),
-                )
-                row_id = cur.lastrowid
-                conn.commit()
+                ).fetchone()
+                row_id = int(row[0]) if row else 0
                 row = conn.execute(
                     "SELECT id, title, description, status, priority, created_at, updated_at "
-                    "FROM twitch_roadmap_items WHERE id = ?",
+                    "FROM twitch_roadmap_items WHERE id = %s",
                     (row_id,),
                 ).fetchone()
         except Exception:
@@ -201,21 +200,21 @@ class _AnalyticsRoadmapMixin:
         if "title" in body:
             title = str(body["title"] or "").strip()
             if title:
-                updates.append("title = ?")
+                updates.append("title = %s")
                 params.append(title)
 
         if "description" in body:
-            updates.append("description = ?")
+            updates.append("description = %s")
             params.append(str(body["description"] or "").strip() or None)
 
         if "status" in body:
             status = str(body["status"] or "").strip().lower()
             if status in _VALID_STATUSES:
-                updates.append("status = ?")
+                updates.append("status = %s")
                 params.append(status)
 
         if "priority" in body:
-            updates.append("priority = ?")
+            updates.append("priority = %s")
             params.append(int(body["priority"] or 0))
 
         if not updates:
@@ -225,21 +224,20 @@ class _AnalyticsRoadmapMixin:
                 text=json.dumps({"error": "Keine änderbaren Felder angegeben"}),
             )
 
-        updates.append("updated_at = ?")
-        params.append(datetime.now(UTC).strftime("%Y-%m-%d %H:%M:%S"))
+        updates.append("updated_at = %s")
+        params.append(datetime.now(UTC))
         params.append(int(item_id))
 
         try:
             _ensure_roadmap_table()
-            with storage.get_conn() as conn:
+            with storage.transaction() as conn:
                 conn.execute(
-                    f"UPDATE twitch_roadmap_items SET {', '.join(updates)} WHERE id = ?",
+                    f"UPDATE twitch_roadmap_items SET {', '.join(updates)} WHERE id = %s",
                     params,
                 )
-                conn.commit()
                 row = conn.execute(
                     "SELECT id, title, description, status, priority, created_at, updated_at "
-                    "FROM twitch_roadmap_items WHERE id = ?",
+                    "FROM twitch_roadmap_items WHERE id = %s",
                     (int(item_id),),
                 ).fetchone()
         except Exception:
@@ -284,12 +282,11 @@ class _AnalyticsRoadmapMixin:
 
         try:
             _ensure_roadmap_table()
-            with storage.get_conn() as conn:
+            with storage.transaction() as conn:
                 conn.execute(
-                    "DELETE FROM twitch_roadmap_items WHERE id = ?",
+                    "DELETE FROM twitch_roadmap_items WHERE id = %s",
                     (int(item_id),),
                 )
-                conn.commit()
         except Exception:
             log.exception("roadmap_delete failed")
             return web.Response(

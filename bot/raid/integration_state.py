@@ -6,7 +6,7 @@ from typing import Any
 from ..api.token_error_handler import TokenErrorHandler
 from ..core.constants import log
 from ..discord_role_sync import normalize_discord_user_id
-from ..storage import get_conn
+from ..storage import readonly_connection
 
 
 def _normalize_bool(value: object) -> bool:
@@ -221,7 +221,7 @@ class RaidIntegrationStateResolver:
         candidate_logins: set[str] = set()
         candidate_user_ids: set[str] = set()
 
-        with get_conn() as conn:
+        with readonly_connection() as conn:
             if normalized_discord_id is not None:
                 discord_rows = self._query_streamer_rows_by_discord(conn, normalized_discord_id)
                 if discord_rows:

@@ -12,7 +12,7 @@ from aiohttp import web
 
 from ... import storage
 from ...core.constants import log
-from ...storage import sessions_db
+from .state_store import DashboardAuthRateLimitStore, DashboardAuthStateRepository
 
 TWITCH_OAUTH_AUTHORIZE_URL = "https://id.twitch.tv/oauth2/authorize"
 TWITCH_OAUTH_TOKEN_URL = "https://id.twitch.tv/oauth2/token"  # noqa: S105
@@ -241,77 +241,135 @@ class _DashboardAuthMixin:
             return web.HTTPFound(safe_discord_login_url)
         return self._oauth_unavailable_response()
 
+    def _dashboard_auth_state_repo(self) -> DashboardAuthStateRepository:
+        repo = getattr(self, "_dashboard_auth_state_repo_cache", None)
+        if isinstance(repo, DashboardAuthStateRepository):
+            return repo
+        repo = DashboardAuthStateRepository()
+        self._dashboard_auth_state_repo_cache = repo
+        return repo
+
+    def _dashboard_auth_rate_limit_store(self) -> DashboardAuthRateLimitStore:
+        store = getattr(self, "_dashboard_auth_rate_limit_store_cache", None)
+        if isinstance(store, DashboardAuthRateLimitStore):
+            return store
+        store = DashboardAuthRateLimitStore()
+        self._dashboard_auth_rate_limit_store_cache = store
+        return store
+
+    @staticmethod
+    def _compat_state_cache(owner: Any, attr_name: str) -> dict[str, dict[str, Any]]:
+        cache = getattr(owner, attr_name, None)
+        if isinstance(cache, dict):
+            return cache
+        cache = {}
+        setattr(owner, attr_name, cache)
+        return cache
+
+    def _check_rate_limit(
+        self,
+        request: web.Request,
+        *,
+        max_requests: int = 10,
+        window_seconds: float = 60.0,
+    ) -> bool:
+        key_builder = getattr(self, "_rate_limit_key", None)
+        if callable(key_builder):
+            try:
+                key = str(key_builder(request) or "").strip() or "unknown"
+            except Exception:
+                key = "unknown"
+        else:
+            peer_host = getattr(self, "_peer_host", None)
+            if callable(peer_host):
+                try:
+                    key = str(peer_host(request) or "").strip() or "unknown"
+                except Exception:
+                    key = "unknown"
+            else:
+                key = "unknown"
+        return self._dashboard_auth_rate_limit_store().allow_request(
+            owner=self,
+            key=key,
+            max_requests=max_requests,
+            window_seconds=window_seconds,
+        )
+
     # ------------------------------------------------------------------ #
     # Twitch OAuth session management                                      #
     # ------------------------------------------------------------------ #
 
     def _cleanup_auth_state(self) -> None:
         now = time.time()
+        oauth_states = self._compat_state_cache(self, "_oauth_states")
+        auth_sessions = self._compat_state_cache(self, "_auth_sessions")
         expired_states = [
             key
-            for key, row in self._oauth_states.items()
+            for key, row in oauth_states.items()
             if now - float(row.get("created_at", 0.0)) > self._oauth_state_ttl_seconds
         ]
         for key in expired_states:
-            self._oauth_states.pop(key, None)
+            oauth_states.pop(key, None)
 
         expired_sessions = [
             sid
-            for sid, row in self._auth_sessions.items()
+            for sid, row in auth_sessions.items()
             if float(row.get("expires_at", 0.0)) <= now
         ]
         for sid in expired_sessions:
-            self._auth_sessions.pop(sid, None)
+            auth_sessions.pop(sid, None)
 
-        if expired_sessions:
-            try:
-                sessions_db.delete_expired_sessions(now)
-            except Exception as _exc:
-                log.debug("Could not purge expired dashboard sessions from DB: %s", _exc)
+        try:
+            self._dashboard_auth_state_repo().delete_expired(now)
+        except Exception as _exc:
+            log.debug("Could not purge expired dashboard auth state from DB: %s", _exc)
 
         # Hard cap to prevent unbounded growth under heavy abuse
         _MAX_STATES = 500
-        if len(self._oauth_states) > _MAX_STATES:
+        if len(oauth_states) > _MAX_STATES:
             oldest = sorted(
-                self._oauth_states.items(),
+                oauth_states.items(),
                 key=lambda kv: float(kv[1].get("created_at", 0)),
             )
-            for k, _ in oldest[: len(self._oauth_states) - _MAX_STATES]:
-                self._oauth_states.pop(k, None)
+            for k, _ in oldest[: len(oauth_states) - _MAX_STATES]:
+                oauth_states.pop(k, None)
 
         _MAX_SESSIONS = 2000
-        if len(self._auth_sessions) > _MAX_SESSIONS:
+        if len(auth_sessions) > _MAX_SESSIONS:
             oldest_s = sorted(
-                self._auth_sessions.items(),
+                auth_sessions.items(),
                 key=lambda kv: float(kv[1].get("created_at", 0)),
             )
-            for k, _ in oldest_s[: len(self._auth_sessions) - _MAX_SESSIONS]:
-                self._auth_sessions.pop(k, None)
+            for k, _ in oldest_s[: len(auth_sessions) - _MAX_SESSIONS]:
+                auth_sessions.pop(k, None)
 
     def _get_dashboard_auth_session(self, request: web.Request) -> dict[str, Any] | None:
-        if not self._sessions_db_loaded:
-            self._sessions_db_loaded = True
-            try:
-                for sid, data in sessions_db.load_valid_sessions("twitch", time.time()):
-                    if sid not in self._auth_sessions:
-                        self._auth_sessions[sid] = data
-            except Exception as _exc:
-                log.debug("Could not load dashboard sessions from DB: %s", _exc)
-
         self._cleanup_auth_state()
+        self._sessions_db_loaded = True
+        auth_sessions = self._compat_state_cache(self, "_auth_sessions")
         session_id = (request.cookies.get(self._session_cookie_name) or "").strip()
         if not session_id:
             return None
-        session = self._auth_sessions.get(session_id)
+        session = auth_sessions.get(session_id)
         if not session:
-            return None
+            try:
+                session = self._dashboard_auth_state_repo().load_dashboard_session(
+                    session_id,
+                    now=time.time(),
+                )
+            except Exception as _exc:
+                log.debug("Could not load dashboard session from DB: %s", _exc)
+                session = None
+            if not session:
+                return None
+            auth_sessions[session_id] = session
 
         now = time.time()
         expires_at = float(session.get("expires_at", 0.0))
         if expires_at <= now:
-            self._auth_sessions.pop(session_id, None)
+            auth_sessions.pop(session_id, None)
             try:
-                sessions_db.delete_session(session_id)
+                self._dashboard_auth_state_repo().delete_session(session_id)
             except Exception as _exc:
                 log.debug("Could not delete expired session from DB: %s", _exc)
             return None
@@ -320,9 +378,11 @@ class _DashboardAuthMixin:
         session["expires_at"] = now + self._session_ttl_seconds
         if session["expires_at"] - old_expires > 1800:
             try:
-                sessions_db.upsert_session(
-                    session_id, "twitch", session,
-                    float(session.get("created_at", now)), session["expires_at"],
+                self._dashboard_auth_state_repo().save_dashboard_session(
+                    session_id=session_id,
+                    payload=session,
+                    created_at=float(session.get("created_at", now)),
+                    expires_at=session["expires_at"],
                 )
             except Exception as _exc:
                 log.debug("Could not refresh dashboard session in DB: %s", _exc)
@@ -431,10 +491,13 @@ class _DashboardAuthMixin:
             "created_at": now,
             "expires_at": now + self._session_ttl_seconds,
         }
-        self._auth_sessions[session_id] = session_data
+        self._compat_state_cache(self, "_auth_sessions")[session_id] = session_data
         try:
-            sessions_db.upsert_session(
-                session_id, "twitch", session_data, now, now + self._session_ttl_seconds
+            self._dashboard_auth_state_repo().save_dashboard_session(
+                session_id=session_id,
+                payload=session_data,
+                created_at=now,
+                expires_at=now + self._session_ttl_seconds,
             )
         except Exception as _exc:
             log.debug("Could not persist dashboard session to DB: %s", _exc)
@@ -448,15 +511,15 @@ class _DashboardAuthMixin:
         if not login and not user_id:
             return None
 
-        with storage.get_conn() as conn:
+        with storage.readonly_connection() as conn:
             row = conn.execute(
                 """
                 SELECT twitch_login, twitch_user_id
                 FROM twitch_streamers_partner_state
                 WHERE is_partner = 1
                   AND (
-                      LOWER(twitch_login) = LOWER(?)
-                      OR (? != '' AND twitch_user_id = ?)
+                      LOWER(twitch_login) = LOWER(%s)
+                      OR (%s != '' AND twitch_user_id = %s)
                   )
                 LIMIT 1
                 """,
@@ -535,39 +598,46 @@ class _DashboardAuthMixin:
 
     def _cleanup_discord_admin_state(self) -> None:
         now = time.time()
+        oauth_states = self._compat_state_cache(self, "_discord_admin_oauth_states")
+        admin_sessions = self._compat_state_cache(self, "_discord_admin_sessions")
         expired_states = [
             key
-            for key, row in self._discord_admin_oauth_states.items()
+            for key, row in oauth_states.items()
             if now - float(row.get("created_at", 0.0)) > self._discord_admin_state_ttl
         ]
         for key in expired_states:
-            self._discord_admin_oauth_states.pop(key, None)
+            oauth_states.pop(key, None)
 
         expired_sessions = [
             key
-            for key, row in self._discord_admin_sessions.items()
+            for key, row in admin_sessions.items()
             if float(row.get("expires_at", 0.0)) <= now
         ]
         for key in expired_sessions:
-            self._discord_admin_sessions.pop(key, None)
+            admin_sessions.pop(key, None)
+
+        try:
+            self._dashboard_auth_state_repo().delete_expired(now)
+        except Exception as _exc:
+            log.debug("Could not purge expired discord auth state from DB: %s", _exc)
 
         max_states = 1000
-        if len(self._discord_admin_oauth_states) > max_states:
+        if len(oauth_states) > max_states:
             oldest_states = sorted(
-                self._discord_admin_oauth_states.items(),
+                oauth_states.items(),
                 key=lambda item: float(item[1].get("created_at", 0.0)),
             )
-            for key, _ in oldest_states[: len(self._discord_admin_oauth_states) - max_states]:
-                self._discord_admin_oauth_states.pop(key, None)
+            for key, _ in oldest_states[: len(oauth_states) - max_states]:
+                oauth_states.pop(key, None)
 
         max_sessions = 5000
-        if len(self._discord_admin_sessions) > max_sessions:
+        if len(admin_sessions) > max_sessions:
             oldest_sessions = sorted(
-                self._discord_admin_sessions.items(),
+                admin_sessions.items(),
                 key=lambda item: float(item[1].get("created_at", 0.0)),
             )
-            for key, _ in oldest_sessions[: len(self._discord_admin_sessions) - max_sessions]:
-                self._discord_admin_sessions.pop(key, None)
+            for key, _ in oldest_sessions[: len(admin_sessions) - max_sessions]:
+                admin_sessions.pop(key, None)
 
     def _set_discord_admin_cookie(
         self,
@@ -600,27 +670,30 @@ class _DashboardAuthMixin:
         if not self._discord_admin_required:
             return None
 
-        if not self._discord_sessions_db_loaded:
-            self._discord_sessions_db_loaded = True
-            try:
-                for sid, data in sessions_db.load_valid_sessions("discord_admin", time.time()):
-                    if sid not in self._discord_admin_sessions:
-                        self._discord_admin_sessions[sid] = data
-            except Exception as _exc:
-                log.debug("Could not load discord admin sessions from DB: %s", _exc)
-
         self._cleanup_discord_admin_state()
+        self._discord_sessions_db_loaded = True
+        admin_sessions = self._compat_state_cache(self, "_discord_admin_sessions")
         session_id = (request.cookies.get(self._discord_admin_cookie_name) or "").strip()
         if not session_id:
             return None
-        session = self._discord_admin_sessions.get(session_id)
+        session = admin_sessions.get(session_id)
         if not session:
-            return None
+            try:
+                session = self._dashboard_auth_state_repo().load_discord_admin_session(
+                    session_id,
+                    now=time.time(),
+                )
+            except Exception as _exc:
+                log.debug("Could not load discord admin session from DB: %s", _exc)
+                session = None
+            if not session:
+                return None
+            admin_sessions[session_id] = session
         now = time.time()
         if float(session.get("expires_at", 0.0)) <= now:
-            self._discord_admin_sessions.pop(session_id, None)
+            admin_sessions.pop(session_id, None)
             try:
-                sessions_db.delete_session(session_id)
+                self._dashboard_auth_state_repo().delete_session(session_id)
             except Exception as _exc:
                 log.debug("Could not delete expired discord session from DB: %s", _exc)
             return None
@@ -631,9 +704,11 @@ class _DashboardAuthMixin:
         session.setdefault("auth_type", "discord_admin")
         if session["expires_at"] - old_expires > 1800:
             try:
-                sessions_db.upsert_session(
-                    session_id, "discord_admin", session,
-                    float(session.get("created_at", now)), session["expires_at"],
+                self._dashboard_auth_state_repo().save_discord_admin_session(
+                    session_id=session_id,
+                    payload=session,
+                    created_at=float(session.get("created_at", now)),
+                    expires_at=session["expires_at"],
                 )
             except Exception as _exc:
                 log.debug("Could not refresh discord admin session in DB: %s", _exc)
@@ -717,8 +792,11 @@ class _DashboardAuthMixin:
             if guild and guild.id not in seen:
                 guilds.append(guild)
                 seen.add(guild.id)
-        if not guilds and discord_bot:
-            guilds = list(getattr(discord_bot, "guilds", []) or [])
+        if not self._discord_admin_guild_ids:
+            log.error(
+                "Discord admin login denied because no admin guild allowlist is configured."
+            )
+            return False, "admin_guild_not_configured"
 
         for guild in guilds:
             member = guild.get_member(user_id)
@@ -780,12 +858,26 @@ class _DashboardAuthMixin:
             else secrets.token_urlsafe(24)
         )
         state = secrets.token_urlsafe(24)
-        self._oauth_states[state] = {
+        state_payload = {
             "created_at": time.time(),
             "next_path": next_path,
             "redirect_uri": redirect_uri,
             "context_token": context_token,
         }
+        self._compat_state_cache(self, "_oauth_states")[state] = dict(state_payload)
+        try:
+            self._dashboard_auth_state_repo().save_twitch_oauth_state(
+                state=state,
+                payload=state_payload,
+                ttl_seconds=self._oauth_state_ttl_seconds,
+            )
+        except Exception as exc:
+            log.warning("Could not persist Twitch OAuth state %s: %s", state, exc)
+            self._compat_state_cache(self, "_oauth_states").pop(state, None)
+            return web.Response(
+                text="OAuth-Status konnte nicht sicher gespeichert werden. Bitte erneut versuchen.",
+                status=503,
+            )
         auth_url = f"{TWITCH_OAUTH_AUTHORIZE_URL}?{urlencode({'client_id': self._oauth_client_id, 'redirect_uri': redirect_uri, 'response_type': 'code', 'state': state})}"
         safe_auth_url = self._safe_oauth_authorize_redirect(auth_url)
         response = web.HTTPFound(safe_auth_url)
@@ -815,7 +907,17 @@ class _DashboardAuthMixin:
         if not state or not code:
             return web.Response(text="Fehlender OAuth state/code.", status=400)
 
-        state_data = self._oauth_states.pop(state, None)
+        cached_state_data = self._compat_state_cache(self, "_oauth_states").pop(state, None)
+        try:
+            state_data = self._dashboard_auth_state_repo().consume_twitch_oauth_state(
+                state,
+                now=time.time(),
+            )
+        except Exception as exc:
+            log.warning("Could not load persisted Twitch OAuth state %s: %s", state, exc)
+            state_data = None
+        if state_data is None:
+            state_data = cached_state_data
         if not state_data:
             return web.Response(text="OAuth state ungültig oder abgelaufen.", status=400)
         created_at = float(state_data.get("created_at", 0.0) or 0.0)
@@ -926,12 +1028,26 @@ class _DashboardAuthMixin:
         self._cleanup_discord_admin_state()
         state = secrets.token_urlsafe(32)
         context_token = secrets.token_urlsafe(24)
-        self._discord_admin_oauth_states[state] = {
+        state_payload = {
             "created_at": time.time(),
             "next_path": next_path,
             "redirect_uri": redirect_uri,
             "context_token": context_token,
         }
+        self._compat_state_cache(self, "_discord_admin_oauth_states")[state] = dict(state_payload)
+        try:
+            self._dashboard_auth_state_repo().save_discord_admin_oauth_state(
+                state=state,
+                payload=state_payload,
+                ttl_seconds=self._discord_admin_state_ttl,
+            )
+        except Exception as exc:
+            log.warning("Could not persist Discord admin OAuth state %s: %s", state, exc)
+            self._compat_state_cache(self, "_discord_admin_oauth_states").pop(state, None)
+            return web.Response(
+                text="Discord OAuth Status konnte nicht sicher gespeichert werden.",
+                status=503,
+            )
         query = urlencode(
             {
                 "client_id": self._discord_admin_client_id,
@@ -971,7 +1087,20 @@ class _DashboardAuthMixin:
             return web.Response(text="Fehlender OAuth state/code.", status=400)
 
         self._cleanup_discord_admin_state()
-        state_data = self._discord_admin_oauth_states.pop(state, None)
+        cached_state_data = self._compat_state_cache(self, "_discord_admin_oauth_states").pop(
+            state,
+            None,
+        )
+        try:
+            state_data = self._dashboard_auth_state_repo().consume_discord_admin_oauth_state(
+                state,
+                now=time.time(),
+            )
+        except Exception as exc:
+            log.warning("Could not load persisted Discord OAuth state %s: %s", state, exc)
+            state_data = None
+        if state_data is None:
+            state_data = cached_state_data
         if not state_data:
             return web.Response(text="OAuth state ungültig oder abgelaufen.", status=400)
 
@@ -1043,11 +1172,13 @@ class _DashboardAuthMixin:
             "last_seen_at": now,
             "expires_at": now + self._discord_admin_session_ttl,
         }
-        self._discord_admin_sessions[session_id] = discord_session_data
+        self._compat_state_cache(self, "_discord_admin_sessions")[session_id] = discord_session_data
         try:
-            sessions_db.upsert_session(
-                session_id, "discord_admin", discord_session_data,
-                now, now + self._discord_admin_session_ttl,
+            self._dashboard_auth_state_repo().save_discord_admin_session(
+                session_id=session_id,
+                payload=discord_session_data,
+                created_at=now,
+                expires_at=now + self._discord_admin_session_ttl,
             )
         except Exception as _exc:
             log.debug("Could not persist discord admin session to DB: %s", _exc)
@@ -1068,9 +1199,9 @@ class _DashboardAuthMixin:
     async def discord_auth_logout(self, request: web.Request) -> web.StreamResponse:
         session_id = (request.cookies.get(self._discord_admin_cookie_name) or "").strip()
         if session_id:
-            self._discord_admin_sessions.pop(session_id, None)
+            self._compat_state_cache(self, "_discord_admin_sessions").pop(session_id, None)
             try:
-                sessions_db.delete_session(session_id)
+                self._dashboard_auth_state_repo().delete_session(session_id)
             except Exception as _exc:
                 log.debug("Could not delete discord admin session from DB: %s", _exc)
         login_url = (

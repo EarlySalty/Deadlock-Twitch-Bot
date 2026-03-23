@@ -25,11 +25,21 @@ class _FakeConn:
         self.calls.append((sql, params_tuple))
         for fragment, row in self.rows_by_fragment.items():
             if fragment in sql:
+                if isinstance(row, tuple) and len(row) == 2 and isinstance(row[1], int):
+                    return _FakeCursor(row=row[0], rowcount=row[1])
                 return _FakeCursor(row=row, rowcount=1 if row is not None else 0)
         return _FakeCursor(row=None, rowcount=0)
 
 
 class RaidAuthStatePersistenceTests(unittest.TestCase):
+    @contextlib.contextmanager
+    def _patch_conn(self, conn):
+        with (
+            patch("bot.raid.auth.readonly_connection", return_value=contextlib.nullcontext(conn)),
+            patch("bot.raid.auth.transaction", return_value=contextlib.nullcontext(conn)),
+        ):
+            yield
+
     def test_generate_auth_url_persists_state_token_in_db(self) -> None:
         fake_conn = _FakeConn()
 
@@ -42,10 +52,7 @@ class RaidAuthStatePersistenceTests(unittest.TestCase):
         with (
             patch("bot.raid.auth.secrets.token_urlsafe", return_value="state-123"),
             patch("bot.raid.auth.time.time", return_value=1700000000.0),
-            patch(
-                "bot.raid.auth.get_conn",
-                side_effect=lambda: contextlib.nullcontext(fake_conn),
-            ),
+            self._patch_conn(fake_conn),
         ):
             auth_url = manager.generate_auth_url(
                 "partner_one",
@@ -55,7 +62,11 @@ class RaidAuthStatePersistenceTests(unittest.TestCase):
             )
 
         self.assertIn("state=state-123", auth_url)
-        insert_calls = [call for call in fake_conn.calls if "INSERT INTO oauth_state_tokens" in call[0]]
+        insert_calls = [
+            call
+            for call in fake_conn.calls
+            if "INSERT INTO oauth_state_tokens" in call[0]
+        ]
         self.assertEqual(len(insert_calls), 1)
         _, params = insert_calls[0]
         self.assertEqual(params[0], "state-123")
@@ -67,7 +78,9 @@ class RaidAuthStatePersistenceTests(unittest.TestCase):
         self.assertEqual(meta["expected_twitch_user_id"], "1001")
         self.assertEqual(meta["discord_user_id"], "123456789")
 
-    def test_generate_auth_url_for_public_onboarding_leaves_expected_login_empty(self) -> None:
+    def test_generate_auth_url_for_public_onboarding_leaves_expected_login_empty(
+        self,
+    ) -> None:
         fake_conn = _FakeConn()
 
         manager = RaidAuthManager(
@@ -79,15 +92,16 @@ class RaidAuthStatePersistenceTests(unittest.TestCase):
         with (
             patch("bot.raid.auth.secrets.token_urlsafe", return_value="state-public"),
             patch("bot.raid.auth.time.time", return_value=1700000000.0),
-            patch(
-                "bot.raid.auth.get_conn",
-                side_effect=lambda: contextlib.nullcontext(fake_conn),
-            ),
+            self._patch_conn(fake_conn),
         ):
             auth_url = manager.generate_auth_url("public:website_onboarding")
 
         self.assertIn("state=state-public", auth_url)
-        insert_calls = [call for call in fake_conn.calls if "INSERT INTO oauth_state_tokens" in call[0]]
+        insert_calls = [
+            call
+            for call in fake_conn.calls
+            if "INSERT INTO oauth_state_tokens" in call[0]
+        ]
         self.assertEqual(len(insert_calls), 1)
         _, params = insert_calls[0]
         meta = json.loads(params[4])
@@ -95,7 +109,9 @@ class RaidAuthStatePersistenceTests(unittest.TestCase):
         self.assertEqual(meta["scope_profile"], "base")
         self.assertNotIn("expected_twitch_login", meta)
 
-    def test_generate_discord_button_url_derives_discord_user_id_from_login(self) -> None:
+    def test_generate_discord_button_url_derives_discord_user_id_from_login(
+        self,
+    ) -> None:
         fake_conn = _FakeConn()
 
         manager = RaidAuthManager(
@@ -107,15 +123,16 @@ class RaidAuthStatePersistenceTests(unittest.TestCase):
         with (
             patch("bot.raid.auth.secrets.token_urlsafe", return_value="state-discord"),
             patch("bot.raid.auth.time.time", return_value=1700000000.0),
-            patch(
-                "bot.raid.auth.get_conn",
-                side_effect=lambda: contextlib.nullcontext(fake_conn),
-            ),
+            self._patch_conn(fake_conn),
         ):
             auth_url = manager.generate_discord_button_url("discord:123456789")
 
         self.assertIn("state=state-discord", auth_url)
-        insert_calls = [call for call in fake_conn.calls if "INSERT INTO oauth_state_tokens" in call[0]]
+        insert_calls = [
+            call
+            for call in fake_conn.calls
+            if "INSERT INTO oauth_state_tokens" in call[0]
+        ]
         self.assertEqual(len(insert_calls), 1)
         _, params = insert_calls[0]
         self.assertEqual(params[2], "discord:123456789")
@@ -145,10 +162,7 @@ class RaidAuthStatePersistenceTests(unittest.TestCase):
             redirect_uri="https://raid.earlysalty.com/twitch/raid/callback",
         )
 
-        with patch(
-            "bot.raid.auth.get_conn",
-            side_effect=lambda: contextlib.nullcontext(fake_conn),
-        ):
+        with self._patch_conn(fake_conn):
             full_url = manager.get_pending_auth_url("state-xyz")
 
         assert full_url is not None
@@ -178,14 +192,15 @@ class RaidAuthStatePersistenceTests(unittest.TestCase):
             redirect_uri="https://raid.earlysalty.com/twitch/raid/callback",
         )
 
-        with patch(
-            "bot.raid.auth.get_conn",
-            side_effect=lambda: contextlib.nullcontext(fake_conn),
-        ):
+        with self._patch_conn(fake_conn):
             login = manager.verify_state("state-consume")
 
         self.assertEqual(login, "partner_one")
-        delete_calls = [call for call in fake_conn.calls if "DELETE FROM oauth_state_tokens" in call[0]]
+        delete_calls = [
+            call
+            for call in fake_conn.calls
+            if "DELETE FROM oauth_state_tokens" in call[0]
+        ]
         self.assertEqual(len(delete_calls), 1)
 
     def test_consume_state_details_returns_bound_discord_user_id(self) -> None:
@@ -210,10 +225,7 @@ class RaidAuthStatePersistenceTests(unittest.TestCase):
             redirect_uri="https://raid.earlysalty.com/twitch/raid/callback",
         )
 
-        with patch(
-            "bot.raid.auth.get_conn",
-            side_effect=lambda: contextlib.nullcontext(fake_conn),
-        ):
+        with self._patch_conn(fake_conn):
             state = manager.consume_state_details("state-consume")
 
         assert state is not None
@@ -225,18 +237,25 @@ class RaidAuthStatePersistenceTests(unittest.TestCase):
 
 
 class RaidAuthReauthFlagTests(unittest.IsolatedAsyncioTestCase):
-    async def test_snapshot_and_flag_reauth_marks_existing_grants_without_plaintext_filter(self) -> None:
-        fake_conn = _FakeConn(rows_by_fragment={"SELECT changes()": (4,)})
+    @contextlib.contextmanager
+    def _patch_conn(self, conn):
+        with (
+            patch("bot.raid.auth.readonly_connection", return_value=contextlib.nullcontext(conn)),
+            patch("bot.raid.auth.transaction", return_value=contextlib.nullcontext(conn)),
+        ):
+            yield
+
+    async def test_snapshot_and_flag_reauth_marks_existing_grants_without_plaintext_filter(
+        self,
+    ) -> None:
+        fake_conn = _FakeConn(rows_by_fragment={"UPDATE twitch_raid_auth": (None, 4)})
         manager = RaidAuthManager(
             client_id="cid",
             client_secret="secret",
             redirect_uri="https://raid.earlysalty.com/twitch/raid/callback",
         )
 
-        with patch(
-            "bot.raid.auth.get_conn",
-            side_effect=lambda: contextlib.nullcontext(fake_conn),
-        ):
+        with self._patch_conn(fake_conn):
             changed = await manager.snapshot_and_flag_reauth()
 
         self.assertEqual(changed, 4)
@@ -250,4 +269,3 @@ class RaidAuthReauthFlagTests(unittest.IsolatedAsyncioTestCase):
 
 if __name__ == "__main__":
     unittest.main()
-

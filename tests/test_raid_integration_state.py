@@ -87,7 +87,7 @@ class RaidIntegrationStateResolverTests(unittest.TestCase):
         )
 
         with patch(
-            "bot.raid.integration_state.get_conn",
+            "bot.raid.integration_state.readonly_connection",
             side_effect=lambda: contextlib.nullcontext(conn),
         ):
             state = resolver.resolve_auth_state("123")
@@ -118,7 +118,7 @@ class RaidIntegrationStateResolverTests(unittest.TestCase):
         resolver = RaidIntegrationStateResolver(token_error_handler=token_error_handler)
 
         with patch(
-            "bot.raid.integration_state.get_conn",
+            "bot.raid.integration_state.readonly_connection",
             side_effect=lambda: contextlib.nullcontext(conn),
         ):
             state = resolver.resolve_block_state(discord_user_id="456")
@@ -143,7 +143,7 @@ class RaidIntegrationStateResolverTests(unittest.TestCase):
         resolver = RaidIntegrationStateResolver()
 
         with patch(
-            "bot.raid.integration_state.get_conn",
+            "bot.raid.integration_state.readonly_connection",
             side_effect=lambda: contextlib.nullcontext(conn),
         ):
             state = resolver.resolve_block_state(twitch_login="solo_streamer")

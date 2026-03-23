@@ -459,9 +459,10 @@ class _AnalyticsChatDeepMixin:
         session_id_raw = request.query.get("session_id", "").strip()
 
         try:
-            with storage.get_conn() as conn:
+            with storage.readonly_connection() as conn:
                 bot_clause, bot_params = build_known_chat_bot_not_in_clause(
-                    column_expr="m.chatter_login"
+                    column_expr="m.chatter_login",
+                    placeholder="%s",
                 )
 
                 # Resolve session
@@ -473,11 +474,11 @@ class _AnalyticsChatDeepMixin:
                 else:
                     row = conn.execute(
                         """
-                        SELECT id FROM twitch_stream_sessions
-                        WHERE LOWER(streamer_login) = ?
+                    SELECT id FROM twitch_stream_sessions
+                        WHERE LOWER(streamer_login) = %s
                         ORDER BY started_at DESC LIMIT 1
-                        """,
-                        [streamer],
+                    """,
+                        (streamer,),
                     ).fetchone()
                     if not row:
                         return web.json_response({"error": "No sessions found"}, status=404)
@@ -487,9 +488,9 @@ class _AnalyticsChatDeepMixin:
                 sess = conn.execute(
                     """
                     SELECT id, streamer_login, started_at, duration_seconds, stream_title
-                    FROM twitch_stream_sessions WHERE id = ?
+                    FROM twitch_stream_sessions WHERE id = %s
                     """,
-                    [session_id],
+                    (session_id,),
                 ).fetchone()
                 if not sess:
                     return web.json_response({"error": "Session not found"}, status=404)
@@ -506,13 +507,13 @@ class _AnalyticsChatDeepMixin:
                         COUNT(*) AS messages,
                         COUNT(DISTINCT m.chatter_login) AS unique_chatters
                     FROM twitch_chat_messages m
-                    WHERE m.session_id = ?
+                    WHERE m.session_id = %s
                       AND m.chatter_login IS NOT NULL
                       AND {bot_clause}
                     GROUP BY bucket
                     ORDER BY bucket
                     """,
-                    [session_id, *bot_params],
+                    (session_id, *bot_params),
                 ).fetchall()
 
                 # Viewer timeline
@@ -520,10 +521,10 @@ class _AnalyticsChatDeepMixin:
                     """
                     SELECT minutes_from_start, viewer_count
                     FROM twitch_session_viewers
-                    WHERE session_id = ?
+                    WHERE session_id = %s
                     ORDER BY minutes_from_start
                     """,
-                    [session_id],
+                    (session_id,),
                 ).fetchall()
                 viewer_map: dict[int, int] = {}
                 for viewer_row in viewer_rows:
@@ -620,12 +621,12 @@ class _AnalyticsChatDeepMixin:
                     f"""
                     SELECT s.id, DATE(s.started_at), s.stream_title
                     FROM twitch_stream_sessions s
-                    WHERE LOWER(s.streamer_login) = ?
-                      AND s.id != ?
+                    WHERE LOWER(s.streamer_login) = %s
+                      AND s.id != %s
                     ORDER BY s.started_at DESC
                     LIMIT 10
                     """,
-                    [streamer, session_id],
+                    (streamer, session_id),
                 ).fetchall()
 
                 recent_sessions: list[dict] = []
@@ -637,10 +638,10 @@ class _AnalyticsChatDeepMixin:
                                    EXTRACT(EPOCH FROM MAX(m.message_ts) - MIN(m.message_ts)) / 60
                                ) AS avg_mpm
                         FROM twitch_chat_messages m
-                        WHERE m.session_id = ?
+                        WHERE m.session_id = %s
                           AND {bot_clause}
                         """,
-                        [rs[0], *bot_params],
+                        (rs[0], *bot_params),
                     ).fetchone()
                     total_msgs = int(rs_mpm[0]) if rs_mpm else 0
                     rs_avg = float(rs_mpm[1]) if rs_mpm and rs_mpm[1] else 0
@@ -704,9 +705,10 @@ class _AnalyticsChatDeepMixin:
         cutoff = (datetime.now(UTC) - timedelta(days=days)).isoformat()
 
         try:
-            with storage.get_conn() as conn:
+            with storage.readonly_connection() as conn:
                 bot_clause, bot_params = build_known_chat_bot_not_in_clause(
-                    column_expr="m.chatter_login"
+                    column_expr="m.chatter_login",
+                    placeholder="%s",
                 )
 
                 rows = conn.execute(
@@ -717,14 +719,14 @@ class _AnalyticsChatDeepMixin:
                         m.chatter_login
                     FROM twitch_chat_messages m
                     JOIN twitch_stream_sessions s ON s.id = m.session_id
-                    WHERE LOWER(s.streamer_login) = ?
-                      AND m.message_ts >= ?
+                    WHERE LOWER(s.streamer_login) = %s
+                      AND m.message_ts >= %s
                       AND m.content IS NOT NULL
                       AND m.content != ''
                       AND {bot_clause}
                     ORDER BY m.message_ts
                     """,
-                    [streamer, cutoff, *bot_params],
+                    (streamer, cutoff, *bot_params),
                 ).fetchall()
 
                 # Hero mentions
@@ -974,9 +976,10 @@ class _AnalyticsChatDeepMixin:
         cutoff = (datetime.now(UTC) - timedelta(days=days)).isoformat()
 
         try:
-            with storage.get_conn() as conn:
+            with storage.readonly_connection() as conn:
                 bot_clause, bot_params = build_known_chat_bot_not_in_clause(
-                    column_expr="m.chatter_login"
+                    column_expr="m.chatter_login",
+                    placeholder="%s",
                 )
 
                 rows = conn.execute(
@@ -984,12 +987,12 @@ class _AnalyticsChatDeepMixin:
                     SELECT m.chatter_login, m.content
                     FROM twitch_chat_messages m
                     JOIN twitch_stream_sessions s ON s.id = m.session_id
-                    WHERE LOWER(s.streamer_login) = ?
-                      AND m.message_ts >= ?
+                    WHERE LOWER(s.streamer_login) = %s
+                      AND m.message_ts >= %s
                       AND m.content LIKE '%@%'
                       AND {bot_clause}
                     """,
-                    [streamer, cutoff, *bot_params],
+                    (streamer, cutoff, *bot_params),
                 ).fetchall()
 
                 # Build mention graph

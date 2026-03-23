@@ -162,7 +162,7 @@ class AffiliatePII:
             SELECT full_name_enc, email_enc, address_line1_enc, address_city_enc,
                    address_zip_enc, tax_id_enc, address_country, ust_status
             FROM affiliate_pii
-            WHERE twitch_login = ?
+            WHERE twitch_login = %s
             """,
             (normalized_login,),
         ).fetchone()
@@ -231,7 +231,7 @@ class AffiliatePII:
             INSERT INTO affiliate_pii (
                 twitch_login, full_name_enc, email_enc, address_line1_enc, address_city_enc,
                 address_zip_enc, tax_id_enc, address_country, ust_status, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             ON CONFLICT(twitch_login) DO UPDATE SET
                 full_name_enc = excluded.full_name_enc,
                 email_enc = excluded.email_enc,
@@ -265,7 +265,7 @@ class AffiliatePII:
             SELECT full_name_enc, email_enc, address_line1_enc, address_city_enc,
                    address_zip_enc, tax_id_enc, address_country, ust_status, updated_at
             FROM affiliate_pii
-            WHERE twitch_login = ?
+            WHERE twitch_login = %s
             """,
             (normalized_login,),
         ).fetchone()
@@ -341,7 +341,7 @@ class AffiliatePII:
                     address_city = '',
                     address_zip = '',
                     address_country = ''
-                WHERE twitch_login = ?
+                WHERE twitch_login = %s
                 """,
                 (str(row["twitch_login"] or ""),),
             )

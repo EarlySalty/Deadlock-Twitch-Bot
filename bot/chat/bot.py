@@ -24,7 +24,7 @@ import discord
 from ..api.token_manager import TwitchBotTokenManager
 from ..core.constants import TWITCH_NOTIFY_CHANNEL_ID, TWITCH_TARGET_GAME_NAME
 from ..logging_setup import ensure_twitch_logger_file_handler, log_path
-from ..storage import get_conn, insert_observability_event
+from ..storage import insert_observability_event, readonly_connection, transaction
 from .commands import RaidCommandsMixin
 from .connection import ConnectionMixin
 from .constants import (
@@ -881,12 +881,12 @@ if TWITCHIO_AVAILABLE:
             if not login_norm:
                 return None
             try:
-                with get_conn() as conn:
+                with readonly_connection() as conn:
                     row = conn.execute(
                         """
                         SELECT invite_url, invite_code
                           FROM twitch_streamer_invites
-                         WHERE streamer_login = ?
+                         WHERE streamer_login = %s
                         """,
                         (login_norm,),
                     ).fetchone()
@@ -916,7 +916,7 @@ if TWITCHIO_AVAILABLE:
                 return
             now = datetime.now(UTC).isoformat(timespec="seconds")
             try:
-                with get_conn() as conn:
+                with transaction() as conn:
                     conn.execute(
                         """
                         INSERT INTO twitch_streamer_invites (
@@ -927,7 +927,7 @@ if TWITCHIO_AVAILABLE:
                             invite_url,
                             created_at,
                             last_sent_at
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                        ) VALUES (%s, %s, %s, %s, %s, %s, %s)
                         ON CONFLICT(streamer_login) DO UPDATE SET
                             guild_id = excluded.guild_id,
                             channel_id = excluded.channel_id,
@@ -952,13 +952,12 @@ if TWITCHIO_AVAILABLE:
                             invite_code,
                             created_at,
                             last_seen_at
-                        ) VALUES (?, ?, ?, ?)
+                        ) VALUES (%s, %s, %s, %s)
                         ON CONFLICT(guild_id, invite_code)
                         DO UPDATE SET last_seen_at = excluded.last_seen_at
                         """,
                         (int(guild_id), str(invite_code), now, now),
                     )
-                    conn.commit()
             except Exception:
                 log.debug("Could not store promo invite for %s", login_norm, exc_info=True)
 
@@ -968,12 +967,11 @@ if TWITCHIO_AVAILABLE:
                 return
             now = datetime.now(UTC).isoformat(timespec="seconds")
             try:
-                with get_conn() as conn:
+                with transaction() as conn:
                     conn.execute(
-                        "UPDATE twitch_streamer_invites SET last_sent_at = ? WHERE streamer_login = ?",
+                        "UPDATE twitch_streamer_invites SET last_sent_at = %s WHERE streamer_login = %s",
                         (now, login_norm),
                     )
-                    conn.commit()
             except Exception:
                 log.debug(
                     "Could not update promo invite last_sent_at for %s",
@@ -1844,12 +1842,12 @@ if TWITCHIO_AVAILABLE:
             Bot-Funktionen (Commands, Raids, etc.) nur für Partner.
             """
             normalized = self._normalize_channel_login(channel_name)
-            with get_conn() as conn:
+            with readonly_connection() as conn:
                 row = conn.execute(
                     """
                     SELECT twitch_login, twitch_user_id, raid_bot_enabled
                     FROM twitch_streamers_partner_state
-                    WHERE LOWER(twitch_login) = ?
+                    WHERE LOWER(twitch_login) = %s
                       AND is_partner_active = 1
                     """,
                     (normalized,),
@@ -1870,11 +1868,11 @@ if TWITCHIO_AVAILABLE:
                 if (now_ts - cached_at).total_seconds() < 60:
                     return cached_id
 
-            with get_conn() as conn:
+            with readonly_connection() as conn:
                 row = conn.execute(
                     """
                     SELECT id FROM twitch_stream_sessions
-                     WHERE streamer_login = ? AND ended_at IS NULL
+                     WHERE streamer_login = %s AND ended_at IS NULL
                      ORDER BY started_at DESC
                      LIMIT 1
                     """,
@@ -1968,7 +1966,7 @@ async def create_twitch_chat_bot(
         bot_id = token_mgr.bot_id
 
     # Partner-Channels abrufen (nur wenn Raid-Auth + Chat-Scopes + aktuell live)
-    with get_conn() as conn:
+    with readonly_connection() as conn:
         partners = conn.execute(
             """
             SELECT DISTINCT s.twitch_login,

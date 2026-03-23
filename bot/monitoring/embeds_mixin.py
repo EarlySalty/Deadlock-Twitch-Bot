@@ -170,12 +170,12 @@ class _EmbedsMixin:
         if not normalized_login:
             return defaults
         try:
-            with storage.get_conn() as c:
+            with storage.readonly_connection() as c:
                 row = c.execute(
                     """
                     SELECT config_json
                       FROM twitch_live_announcement_configs
-                     WHERE LOWER(streamer_login) = LOWER(?)
+                     WHERE LOWER(streamer_login) = LOWER(%s)
                      LIMIT 1
                     """,
                     (normalized_login,),
@@ -549,7 +549,7 @@ class _EmbedsMixin:
         role_id = int(role.id) if role is not None else role_id
         if role_id:
             try:
-                with storage.get_conn() as c:
+                with storage.transaction() as c:
                     storage.set_partner_live_ping_settings(
                         c,
                         twitch_login=login,
@@ -964,7 +964,7 @@ class _EmbedsMixin:
             return
 
         try:
-            with storage.get_conn() as c:
+            with storage.readonly_connection() as c:
                 rows = c.execute(
                     "SELECT streamer_login, last_discord_message_id, last_tracking_token "
                     "FROM twitch_live_state "
@@ -1055,7 +1055,7 @@ class _EmbedsMixin:
         ref_code = (TWITCH_DISCORD_REF_CODE or "").strip() or None
 
         try:
-            with storage.get_conn() as c:
+            with storage.transaction() as c:
                 c.execute(
                     """
                     INSERT INTO twitch_link_clicks (
@@ -1069,7 +1069,7 @@ class _EmbedsMixin:
                         message_id,
                         ref_code,
                         source_hint
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                     """,
                     (
                         clicked_at,

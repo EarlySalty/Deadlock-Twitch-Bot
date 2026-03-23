@@ -15,7 +15,7 @@ import logging
 import time
 from datetime import UTC, datetime, timedelta
 
-from ..storage import get_conn
+from ..storage import transaction
 
 log = logging.getLogger("TwitchStreams.PartnerRecruit")
 
@@ -86,7 +86,7 @@ class TwitchPartnerRecruitMixin:
     def _detect_recruit_candidates(self) -> list[dict]:
         """SQL-Query: Streamer mit 5+ Tagen, avg ≥ 2h/Tag, keine Partner, kein aktiver Cooldown."""
         try:
-            with get_conn() as conn:
+            with transaction() as conn:
                 rows = conn.execute(
                     """
                     SELECT
@@ -94,20 +94,20 @@ class TwitchPartnerRecruitMixin:
                         COUNT(DISTINCT DATE(ts_utc))                              AS distinct_days,
                         CAST(COUNT(*) AS REAL) / COUNT(DISTINCT DATE(ts_utc))      AS avg_samples_per_day
                     FROM twitch_stats_category
-                    WHERE ts_utc > datetime('now', ?)
+                    WHERE ts_utc > NOW() + (%s || ' days')::interval
                       AND LOWER(streamer) NOT IN (
                             SELECT LOWER(twitch_login) FROM twitch_streamer_identities
                           )
                       AND LOWER(streamer) NOT IN (
                             SELECT streamer_login FROM twitch_partner_outreach
-                             WHERE cooldown_until > datetime('now')
+                             WHERE cooldown_until > NOW()
                           )
                       AND LOWER(streamer) NOT IN (
                             SELECT LOWER(target_login) FROM twitch_raid_blacklist
                           )
                     GROUP BY streamer
-                    HAVING COUNT(DISTINCT DATE(ts_utc)) >= ?
-                      AND CAST(COUNT(*) AS REAL) / COUNT(DISTINCT DATE(ts_utc)) >= ?
+                    HAVING COUNT(DISTINCT DATE(ts_utc)) >= %s
+                      AND CAST(COUNT(*) AS REAL) / COUNT(DISTINCT DATE(ts_utc)) >= %s
                     ORDER BY distinct_days DESC
                     """,
                     (
@@ -219,12 +219,12 @@ class TwitchPartnerRecruitMixin:
         status = "sent" if success else "failed"
 
         try:
-            with get_conn() as conn:
+            with transaction() as conn:
                 conn.execute(
                     """
                     INSERT INTO twitch_partner_outreach
                         (streamer_login, streamer_user_id, detected_at, contacted_at, status, cooldown_until)
-                    VALUES (?, ?, ?, ?, ?, ?)
+                    VALUES (%s, %s, %s, %s, %s, %s)
                     ON CONFLICT (streamer_login) DO UPDATE SET
                         streamer_user_id = EXCLUDED.streamer_user_id,
                         detected_at = EXCLUDED.detected_at,

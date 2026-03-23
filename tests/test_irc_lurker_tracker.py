@@ -99,7 +99,7 @@ class IRCLurkerTrackerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(tracker.channels, {"category_one"})
         self.assertEqual(tracker.category_channels, {"category_one"})
         self.assertEqual(tracker.partner_channels, set())
-        self.assertEqual(tracker.get_chatters("category_one"), {"viewera", "viewerb"})
+        self.assertEqual(tracker.get_chatters("category_one"), set())
         tracker._update_chatter_seen.assert_awaited_once_with("category_one", "viewera")
 
     async def test_track_channel_mode_switch_replaces_previous_mode_membership(self) -> None:

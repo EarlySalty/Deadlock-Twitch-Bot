@@ -13,17 +13,6 @@ from bot.dashboard.templates import DashboardTemplateMixin
 from bot.promo_mode import load_global_promo_mode, save_global_promo_mode
 
 
-class _ConnCtx:
-    def __init__(self, conn: sqlite3.Connection) -> None:
-        self._conn = conn
-
-    def __enter__(self) -> sqlite3.Connection:
-        return self._conn
-
-    def __exit__(self, exc_type, exc, tb) -> bool:
-        return False
-
-
 class _FakeRequest:
     def __init__(
         self,
@@ -87,23 +76,37 @@ class _DummyAnnouncementPage(DashboardAdminAnnouncementMixin, DashboardTemplateM
         return default_path
 
 
+class _ConnCtx:
+    def __init__(self, conn: sqlite3.Connection) -> None:
+        self._conn = conn
+
+    def __enter__(self) -> sqlite3.Connection:
+        return self._conn
+
+    def __exit__(self, exc_type, exc, tb) -> bool:
+        return False
+
+
 class DashboardAdminAnnouncementModeTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self) -> None:
+        self.handler = _DummyAnnouncementPage()
         self.conn = sqlite3.connect(":memory:")
         self.conn.row_factory = sqlite3.Row
-        self.handler = _DummyAnnouncementPage()
 
     def tearDown(self) -> None:
         self.conn.close()
 
     def _storage_patch(self):
         return patch(
-            "bot.dashboard.announcement_mode_mixin._storage.get_conn",
+            "bot.dashboard.admin.announcement_mode_mixin._storage.readonly_connection",
+            return_value=_ConnCtx(self.conn),
+        ), patch(
+            "bot.dashboard.admin.announcement_mode_mixin._storage.transaction",
             return_value=_ConnCtx(self.conn),
         )
 
     async def test_admin_page_renders_saved_values_and_status(self) -> None:
-        with self._storage_patch():
+        with self._storage_patch()[0], self._storage_patch()[1]:
             save_global_promo_mode(
                 self.conn,
                 config={
@@ -133,7 +136,7 @@ class DashboardAdminAnnouncementModeTests(unittest.IsolatedAsyncioTestCase):
             },
         )
 
-        with self._storage_patch():
+        with self._storage_patch()[0], self._storage_patch()[1]:
             with self.assertRaises(web.HTTPFound) as ctx:
                 await self.handler.admin_announcements_save(request)
             saved = load_global_promo_mode(self.conn)
@@ -156,14 +159,14 @@ class DashboardAdminAnnouncementModeTests(unittest.IsolatedAsyncioTestCase):
             },
         )
 
-        with self._storage_patch():
+        with self._storage_patch()[0], self._storage_patch()[1]:
             with self.assertRaises(web.HTTPFound) as ctx:
                 await self.handler.admin_announcements_save(request)
 
         self.assertEqual(ctx.exception.location, "/twitch/admin/announcements?err=1")
 
     async def test_non_admin_host_redirects_to_canonical_admin_domain(self) -> None:
-        with self._storage_patch():
+        with self._storage_patch()[0], self._storage_patch()[1]:
             with self.assertRaises(web.HTTPFound) as ctx:
                 await self.handler.admin_announcements_page(
                     _FakeRequest(host="twitch.earlysalty.com")
@@ -177,7 +180,7 @@ class DashboardAdminAnnouncementModeTests(unittest.IsolatedAsyncioTestCase):
     async def test_non_admin_request_is_blocked(self) -> None:
         self.handler.authenticated = False
 
-        with self._storage_patch():
+        with self._storage_patch()[0], self._storage_patch()[1]:
             with self.assertRaises(web.HTTPUnauthorized):
                 await self.handler.admin_announcements_page(_FakeRequest())
 

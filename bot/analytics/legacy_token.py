@@ -17,7 +17,7 @@ class LegacyTokenAnalyticsMixin:
         False = Token fehlt oder ungültig → eingeschränkter Betrieb.
         """
         try:
-            with storage.get_conn() as conn:
+            with storage.readonly_connection() as conn:
                 row = conn.execute(
                     "SELECT needs_reauth FROM twitch_raid_auth WHERE twitch_user_id=%s",
                     (twitch_user_id,),
@@ -36,7 +36,7 @@ class LegacyTokenAnalyticsMixin:
     async def _get_pending_reauth_count(self) -> int:
         """Anzahl Streamer die noch re-authen müssen (needs_reauth=1)."""
         try:
-            with storage.get_conn() as conn:
+            with storage.readonly_connection() as conn:
                 return conn.execute(
                     "SELECT COUNT(*) FROM twitch_raid_auth WHERE needs_reauth IS TRUE"
                 ).fetchone()[0]

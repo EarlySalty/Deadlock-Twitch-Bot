@@ -121,7 +121,7 @@ class BillingSecurityTests(unittest.IsolatedAsyncioTestCase):
         conn = _BillingLookupConn()
 
         with patch(
-            "bot.dashboard.billing_mixin.storage.get_conn",
+            "bot.dashboard.billing_mixin.storage.readonly_connection",
             return_value=_ConnContext(conn),
         ):
             record = handler._billing_customer_record_for_request(request)
@@ -148,7 +148,7 @@ class BillingSecurityTests(unittest.IsolatedAsyncioTestCase):
         )
 
         with patch(
-            "bot.dashboard.routes_mixin.storage.get_conn",
+            "bot.dashboard.abbo_billing_routes.storage.transaction",
             return_value=_ConnContext(object()),
         ):
             with self.assertRaises(web.HTTPFound):

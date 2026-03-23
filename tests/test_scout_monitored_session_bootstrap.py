@@ -30,6 +30,7 @@ class _ScoutConnection:
 
     def execute(self, sql: str, params=(), *args, **kwargs):
         normalized_sql = " ".join(str(sql).split())
+        normalized_sql = normalized_sql.replace("%s", "?")
         if "SELECT twitch_login FROM twitch_streamers WHERE is_monitored_only = 1" in normalized_sql:
             return _FetchAllResult([])
         if "SELECT 1 FROM twitch_streamers WHERE twitch_login = ?" in normalized_sql:
@@ -50,6 +51,7 @@ class _ExistingMonitoredScoutConnection:
 
     def execute(self, sql: str, params=(), *args, **kwargs):
         normalized_sql = " ".join(str(sql).split())
+        normalized_sql = normalized_sql.replace("%s", "?")
         if "SELECT twitch_login FROM twitch_streamers WHERE is_monitored_only = 1" in normalized_sql:
             return _FetchAllResult([("mewgles",)])
         if "SELECT 1 FROM twitch_streamers WHERE twitch_login = ?" in normalized_sql:
@@ -140,9 +142,21 @@ class ScoutMonitoredSessionBootstrapTests(unittest.IsolatedAsyncioTestCase):
             if len(sleep_calls) >= 2:
                 raise asyncio.CancelledError
 
+        class _TxCtx:
+            def __init__(self, inner):
+                self._inner = inner
+
+            def __enter__(self):
+                return self._inner
+
+            def __exit__(self, exc_type, exc, tb):
+                if exc_type is None:
+                    self._inner.commit()
+                return False
+
         with patch(
-            "bot.base.storage.get_conn",
-            side_effect=lambda: contextlib.nullcontext(conn),
+            "bot.base.storage.transaction",
+            side_effect=lambda: _TxCtx(conn),
         ), patch("bot.base.asyncio.sleep", side_effect=_fake_sleep):
             with (
                 self.assertLogs("TwitchStreams", level="INFO") as captured,
@@ -182,9 +196,21 @@ class ScoutMonitoredSessionBootstrapTests(unittest.IsolatedAsyncioTestCase):
             if len(sleep_calls) >= 2:
                 raise asyncio.CancelledError
 
+        class _TxCtx:
+            def __init__(self, inner):
+                self._inner = inner
+
+            def __enter__(self):
+                return self._inner
+
+            def __exit__(self, exc_type, exc, tb):
+                if exc_type is None:
+                    self._inner.commit()
+                return False
+
         with patch(
-            "bot.base.storage.get_conn",
-            side_effect=lambda: contextlib.nullcontext(conn),
+            "bot.base.storage.transaction",
+            side_effect=lambda: _TxCtx(conn),
         ), patch("bot.base.asyncio.sleep", side_effect=_fake_sleep):
             with self.assertRaises(asyncio.CancelledError):
                 await TwitchBaseCog._scout_deadlock_channels(harness)

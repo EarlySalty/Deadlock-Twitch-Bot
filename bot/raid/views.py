@@ -40,11 +40,17 @@ def _split_runtime_enforced_role() -> str:
 
 
 def _split_internal_api_auth_url(
-    twitch_login: str,
-    discord_user_id: int,
+    twitch_login_or_discord_user_id: str | int,
+    discord_user_id: int | None = None,
 ) -> tuple[str, dict[str, str]] | None:
     base_url = (os.getenv("TWITCH_INTERNAL_API_BASE_URL") or "").strip()
     from ..secret_store import load_secret_value
+
+    if discord_user_id is None:
+        discord_user_id = int(twitch_login_or_discord_user_id)
+        twitch_login = f"discord:{discord_user_id}"
+    else:
+        twitch_login = str(twitch_login_or_discord_user_id).strip()
 
     token = load_secret_value(
         "TWITCH_INTERNAL_API_TOKEN",
@@ -76,9 +82,9 @@ def _split_internal_api_auth_url(
     endpoint = f"{normalized_base.rstrip('/')}{internal_base}/raid/auth-url"
     query = urlencode(
         {
-            "login": twitch_login,
-            "discord_user_id": str(discord_user_id),
-        }
+                "login": twitch_login,
+                "discord_user_id": str(discord_user_id),
+            }
     )
     headers = {INTERNAL_TOKEN_HEADER: token}
     return f"{endpoint}?{query}", headers

@@ -284,7 +284,7 @@ class AdminStreamersDedupTests(unittest.IsolatedAsyncioTestCase):
         harness = _AdminHarness()
         request = SimpleNamespace(headers={}, match_info={}, query={})
 
-        with patch("bot.analytics.api_admin.storage.get_conn", return_value=_ConnCtx(self.conn)):
+        with patch("bot.analytics.api_admin.storage.transaction", return_value=_ConnCtx(self.conn)):
             response = await harness._api_admin_streamers(request)
 
         payload = json.loads(response.text)
@@ -300,7 +300,7 @@ class AdminStreamersDedupTests(unittest.IsolatedAsyncioTestCase):
         harness = _AdminHarness()
         request = SimpleNamespace(headers={}, match_info={"login": "alpha"})
 
-        with patch("bot.analytics.api_admin.storage.get_conn", return_value=_ConnCtx(self.conn)):
+        with patch("bot.analytics.api_admin.storage.transaction", return_value=_ConnCtx(self.conn)):
             response = await harness._api_admin_streamer_detail(request)
 
         payload = json.loads(response.text)
@@ -315,7 +315,7 @@ class AdminStreamersDedupTests(unittest.IsolatedAsyncioTestCase):
         harness = _AdminHarness()
         request = SimpleNamespace(headers={}, match_info={}, query={"view": "all"})
 
-        with patch("bot.analytics.api_admin.storage.get_conn", return_value=_ConnCtx(self.conn)):
+        with patch("bot.analytics.api_admin.storage.transaction", return_value=_ConnCtx(self.conn)):
             response = await harness._api_admin_streamers(request)
 
         payload = json.loads(response.text)
@@ -328,7 +328,7 @@ class AdminStreamersDedupTests(unittest.IsolatedAsyncioTestCase):
         harness = _AdminHarness()
         request = SimpleNamespace(headers={}, match_info={})
 
-        with patch("bot.analytics.api_admin.storage.get_conn", return_value=_ConnCtx(self.conn)):
+        with patch("bot.analytics.api_admin.storage.transaction", return_value=_ConnCtx(self.conn)):
             response = await harness._api_admin_system_oauth_scopes(request)
 
         payload = json.loads(response.text)
@@ -421,7 +421,7 @@ class AdminStreamersDedupTests(unittest.IsolatedAsyncioTestCase):
         harness = _AdminHarness()
         request = SimpleNamespace(headers={}, match_info={}, query={"view": "all"})
 
-        with patch("bot.analytics.api_admin.storage.get_conn", return_value=_ConnCtx(self.conn)):
+        with patch("bot.analytics.api_admin.storage.transaction", return_value=_ConnCtx(self.conn)):
             response = await harness._api_admin_streamers(request)
 
         payload = json.loads(response.text)
@@ -498,7 +498,7 @@ class AdminStreamersDedupTests(unittest.IsolatedAsyncioTestCase):
         harness = _AdminHarness()
         request = SimpleNamespace(headers={}, match_info={})
 
-        with patch("bot.analytics.api_admin.storage.get_conn", return_value=_ConnCtx(self.conn)):
+        with patch("bot.analytics.api_admin.storage.transaction", return_value=_ConnCtx(self.conn)):
             response = await harness._api_admin_system_oauth_scopes(request)
 
         payload = json.loads(response.text)
@@ -552,7 +552,7 @@ class AdminStreamersDedupTests(unittest.IsolatedAsyncioTestCase):
         harness = _AdminHarness()
         request = SimpleNamespace(headers={}, match_info={})
 
-        with patch("bot.analytics.api_admin.storage.get_conn", return_value=_ConnCtx(self.conn)):
+        with patch("bot.analytics.api_admin.storage.transaction", return_value=_ConnCtx(self.conn)):
             response = await harness._api_admin_system_oauth_scopes(request)
 
         payload = json.loads(response.text)
@@ -602,7 +602,7 @@ class AdminStreamersDedupTests(unittest.IsolatedAsyncioTestCase):
             )
         ]
 
-        with patch("bot.monitoring.monitoring.storage.get_conn", return_value=_ConnCtx(self.conn)):
+        with patch("bot.monitoring.monitoring.storage.transaction", return_value=_ConnCtx(self.conn)):
             await harness._persist_live_state_rows(rows)
 
         live_rows = self.conn.execute(

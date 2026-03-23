@@ -9,14 +9,24 @@ Twitch IRC: irc.chat.twitch.tv:6667 (oder SSL auf :443)
 """
 
 import asyncio
+import contextlib
 import logging
 import re
 from datetime import UTC, datetime
 
 from ..core.chat_bots import is_known_chat_bot
-from ..storage import get_conn
+from ..storage import readonly_connection, transaction
 
 log = logging.getLogger("TwitchStreams.IRCLurkerTracker")
+
+
+def _executemany(conn, sql: str, params_seq) -> None:
+    executemany = getattr(conn, "executemany", None)
+    if callable(executemany):
+        executemany(sql, params_seq)
+        return
+    with contextlib.closing(conn.cursor()) as cur:
+        cur.executemany(sql, params_seq)
 
 
 class IRCLurkerTracker:
@@ -294,10 +304,10 @@ class IRCLurkerTracker:
         now_iso = datetime.now(UTC).isoformat(timespec="seconds")
 
         try:
-            with get_conn() as conn:
+            with transaction() as conn:
                 # Get active session for this channel
                 session_row = conn.execute(
-                    "SELECT active_session_id FROM twitch_live_state WHERE LOWER(streamer_login) = ? AND is_live = 1",
+                    "SELECT active_session_id FROM twitch_live_state WHERE LOWER(streamer_login) = %s AND is_live = 1",
                     (channel,),
                 ).fetchone()
 
@@ -311,7 +321,7 @@ class IRCLurkerTracker:
                 existing = {
                     r[0]
                     for r in conn.execute(
-                        "SELECT chatter_login FROM twitch_session_chatters WHERE session_id = ?",
+                        "SELECT chatter_login FROM twitch_session_chatters WHERE session_id = %s",
                         (session_id,),
                     ).fetchall()
                 }
@@ -330,19 +340,21 @@ class IRCLurkerTracker:
                         to_insert.append((session_id, channel, nick, None, now_iso, now_iso))
 
                 if to_update:
-                    conn.executemany(
-                        "UPDATE twitch_session_chatters SET last_seen_at = ? WHERE session_id = ? AND chatter_login = ?",
+                    _executemany(
+                        conn,
+                        "UPDATE twitch_session_chatters SET last_seen_at = %s WHERE session_id = %s AND chatter_login = %s",
                         to_update,
                     )
 
                 if to_insert:
-                    conn.executemany(
+                    _executemany(
+                        conn,
                         """
                         INSERT INTO twitch_session_chatters
                             (session_id, streamer_login, chatter_login, chatter_id,
                              first_message_at, messages, is_first_time_streamer,
                              seen_via_chatters_api, last_seen_at)
-                        VALUES (?, ?, ?, ?, ?, 0, 0, 1, ?)
+                        VALUES (%s, %s, %s, %s, %s, 0, 0, 1, %s)
                         ON CONFLICT (session_id, chatter_login) DO NOTHING
                         """,
                         to_insert,
@@ -366,9 +378,9 @@ class IRCLurkerTracker:
         now_iso = datetime.now(UTC).isoformat(timespec="seconds")
 
         try:
-            with get_conn() as conn:
+            with transaction() as conn:
                 session_row = conn.execute(
-                    "SELECT active_session_id FROM twitch_live_state WHERE LOWER(streamer_login) = ? AND is_live = 1",
+                    "SELECT active_session_id FROM twitch_live_state WHERE LOWER(streamer_login) = %s AND is_live = 1",
                     (channel,),
                 ).fetchone()
 
@@ -384,7 +396,7 @@ class IRCLurkerTracker:
                         (session_id, streamer_login, chatter_login, chatter_id,
                          first_message_at, messages, is_first_time_streamer,
                          seen_via_chatters_api, last_seen_at)
-                    VALUES (?, ?, ?, ?, ?, 0, 0, 1, ?)
+                    VALUES (%s, %s, %s, %s, %s, 0, 0, 1, %s)
                     ON CONFLICT(session_id, chatter_login) DO UPDATE SET
                         last_seen_at = excluded.last_seen_at
                     """,

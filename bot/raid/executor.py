@@ -19,7 +19,7 @@ import aiohttp
 import discord
 
 from ..api.token_error_handler import TokenErrorHandler
-from ..storage import backfill_tracked_stats_from_category, get_conn
+from ..storage import backfill_tracked_stats_from_category, transaction
 from .scope_profiles import BASE_STREAMER_SCOPES
 
 TWITCH_TOKEN_URL = "https://id.twitch.tv/oauth2/token"  # noqa: S105
@@ -216,7 +216,7 @@ class RaidExecutor:
     ) -> None:
         """Speichert Raid-Metadaten in der Datenbank."""
         history_reason = (reason or "").strip() or "auto_raid_on_offline"
-        with get_conn() as conn:
+        with transaction() as conn:
             conn.execute(
                 """
                 INSERT INTO twitch_raid_history

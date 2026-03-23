@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import hashlib
 import inspect
 import json
@@ -33,6 +34,15 @@ from .sessions_mixin import _SessionsMixin
 
 class TwitchMonitoringMixin(_EventSubMixin, _ExpSessionsMixin, _SessionsMixin, _EmbedsMixin):
     """Polling loops and helpers used by the Twitch cog."""
+
+    @staticmethod
+    def _executemany(conn, sql: str, params_seq) -> None:
+        executemany = getattr(conn, "executemany", None)
+        if callable(executemany):
+            executemany(sql, params_seq)
+            return
+        with contextlib.closing(conn.cursor()) as cur:
+            cur.executemany(sql, params_seq)
 
     @staticmethod
     def _env_truthy(value: str | None) -> bool:
@@ -772,10 +782,10 @@ class TwitchMonitoringMixin(_EventSubMixin, _ExpSessionsMixin, _SessionsMixin, _
         ).strip()
 
         try:
-            with storage.get_conn() as conn:
+            with storage.readonly_connection() as conn:
                 self._ensure_poll_interval_settings_storage(conn)
                 row = conn.execute(
-                    f"SELECT setting_value FROM {table_name} WHERE setting_key = ? LIMIT 1",
+                    f"SELECT setting_value FROM {table_name} WHERE setting_key = %s LIMIT 1",
                     (setting_key,),
                 ).fetchone()
         except Exception:
@@ -1071,7 +1081,7 @@ class TwitchMonitoringMixin(_EventSubMixin, _ExpSessionsMixin, _SessionsMixin, _
         partner_logins: set[str] = set()
         tracked: list[dict[str, object]] = []
         try:
-            with storage.get_conn() as c:
+            with storage.readonly_connection() as c:
                 rows = c.execute(
                     """
                     SELECT twitch_login, twitch_user_id, require_discord_link,
@@ -1279,7 +1289,7 @@ class TwitchMonitoringMixin(_EventSubMixin, _ExpSessionsMixin, _SessionsMixin, _
         ] = []
         partner_score_refreshes: list[tuple[str, str | None, str]] = []
 
-        with storage.get_conn() as c:
+        with storage.readonly_connection() as c:
             live_state_rows = c.execute("SELECT * FROM twitch_live_state").fetchall()
 
         live_state: dict[str, dict] = {}
@@ -1314,7 +1324,7 @@ class TwitchMonitoringMixin(_EventSubMixin, _ExpSessionsMixin, _SessionsMixin, _
                 if handler:
                     # Checke ob der Streamer raid_bot_enabled hat
                     try:
-                        with storage.get_conn() as c:
+                        with storage.readonly_connection() as c:
                             partner_row = storage.load_active_partner(
                                 c,
                                 twitch_user_id=twitch_user_id,
@@ -1585,9 +1595,9 @@ class TwitchMonitoringMixin(_EventSubMixin, _ExpSessionsMixin, _SessionsMixin, _
 
                 if message_id_to_store and active_session_id:
                     try:
-                        with storage.get_conn() as c:
+                        with storage.transaction() as c:
                             c.execute(
-                                "UPDATE twitch_stream_sessions SET notification_text = ? WHERE id = ?",
+                                "UPDATE twitch_stream_sessions SET notification_text = %s WHERE id = %s",
                                 (content or "", active_session_id),
                             )
                     except Exception:
@@ -1768,7 +1778,7 @@ class TwitchMonitoringMixin(_EventSubMixin, _ExpSessionsMixin, _SessionsMixin, _
         retry_delay = 0.5
         for attempt in range(3):
             try:
-                with storage.get_conn() as c:
+                with storage.transaction() as c:
                     conflict_cleanup_rows = sorted(
                         {
                             (str(streamer_login or "").strip(), str(twitch_user_id or "").strip())
@@ -1778,18 +1788,20 @@ class TwitchMonitoringMixin(_EventSubMixin, _ExpSessionsMixin, _SessionsMixin, _
                         }
                     )
                     if conflict_cleanup_rows:
-                        c.executemany(
+                        self._executemany(
+                            c,
                             "DELETE FROM twitch_live_state "
-                            "WHERE LOWER(streamer_login) = LOWER(?) "
-                            "AND LOWER(COALESCE(twitch_user_id, '')) <> LOWER(?)",
+                            "WHERE LOWER(streamer_login) = LOWER(%s) "
+                            "AND LOWER(COALESCE(twitch_user_id, '')) <> LOWER(%s)",
                             conflict_cleanup_rows,
                         )
-                    c.executemany(
+                    self._executemany(
+                        c,
                         "INSERT INTO twitch_live_state ("
                         "twitch_user_id, streamer_login, is_live, last_seen_at, last_title, last_game, "
                         "last_viewer_count, last_discord_message_id, last_tracking_token, last_stream_id, "
                         "last_started_at, had_deadlock_in_session, active_session_id, last_deadlock_seen_at"
-                        ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+                        ") VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) "
                         "ON CONFLICT (twitch_user_id) DO UPDATE SET "
                         "streamer_login = EXCLUDED.streamer_login, "
                         "is_live = EXCLUDED.is_live, "
@@ -1835,14 +1847,14 @@ class TwitchMonitoringMixin(_EventSubMixin, _ExpSessionsMixin, _SessionsMixin, _
             target_game = (
                 os.getenv("TWITCH_TARGET_GAME_NAME") or TWITCH_TARGET_GAME_NAME or ""
             ).strip()
-            with storage.get_conn() as c:
+            with storage.readonly_connection() as c:
                 rows = c.execute(
                     """
                     SELECT s.twitch_login,
                            s.archived_at,
                            MAX(
                                CASE
-                                 WHEN LOWER(COALESCE(sess.game_name,'')) = LOWER(?)
+                                 WHEN LOWER(COALESCE(sess.game_name,'')) = LOWER(%s)
                                  THEN COALESCE(sess.ended_at, sess.started_at)
                                END
                             ) AS last_deadlock_stream_at
@@ -1940,12 +1952,13 @@ class TwitchMonitoringMixin(_EventSubMixin, _ExpSessionsMixin, _SessionsMixin, _
                 rows.append((now_utc, login, viewers, is_partner, game_name, stream_title, tags))
 
             if rows:
-                with storage.get_conn() as c:
-                    c.executemany(
+                with storage.transaction() as c:
+                    self._executemany(
+                        c,
                         """
                         INSERT INTO twitch_stats_tracked (
                             ts_utc, streamer, viewer_count, is_partner, game_name, stream_title, tags
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                        ) VALUES (%s, %s, %s, %s, %s, %s, %s)
                         """,
                         rows,
                     )
@@ -1979,12 +1992,13 @@ class TwitchMonitoringMixin(_EventSubMixin, _ExpSessionsMixin, _SessionsMixin, _
                 rows.append((now_utc, login, viewers, is_partner, game_name, stream_title, tags))
 
             if rows:
-                with storage.get_conn() as c:
-                    c.executemany(
+                with storage.transaction() as c:
+                    self._executemany(
+                        c,
                         """
                         INSERT INTO twitch_stats_category (
                             ts_utc, streamer, viewer_count, is_partner, game_name, stream_title, tags
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                        ) VALUES (%s, %s, %s, %s, %s, %s, %s)
                         """,
                         rows,
                     )

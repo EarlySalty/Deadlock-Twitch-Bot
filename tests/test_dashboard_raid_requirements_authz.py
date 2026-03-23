@@ -54,7 +54,7 @@ class DashboardRaidRequirementsAuthzTests(unittest.IsolatedAsyncioTestCase):
 
         with (
             patch(
-                "bot.dashboard.raids.raid_mixin.storage.get_conn",
+                "bot.dashboard.raids.raid_mixin.storage.readonly_connection",
                 side_effect=lambda: contextlib.nullcontext(object()),
             ),
             patch(
@@ -82,7 +82,7 @@ class DashboardRaidRequirementsAuthzTests(unittest.IsolatedAsyncioTestCase):
 
         with (
             patch(
-                "bot.dashboard.raids.raid_mixin.storage.get_conn",
+                "bot.dashboard.raids.raid_mixin.storage.readonly_connection",
                 side_effect=lambda: contextlib.nullcontext(object()),
             ),
             patch(
@@ -107,7 +107,7 @@ class DashboardRaidRequirementsAuthzTests(unittest.IsolatedAsyncioTestCase):
 
         with (
             patch(
-                "bot.dashboard.raids.raid_mixin.storage.get_conn",
+                "bot.dashboard.raids.raid_mixin.storage.readonly_connection",
                 side_effect=lambda: contextlib.nullcontext(object()),
             ),
             patch(

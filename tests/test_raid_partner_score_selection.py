@@ -14,6 +14,26 @@ from bot.raid.mixin import TwitchRaidMixin
 from tests.sqlite_twitch_schema import ensure_sqlite_twitch_schema
 
 
+class _CompatConn:
+    def __init__(self, conn: sqlite3.Connection) -> None:
+        self._conn = conn
+
+    @staticmethod
+    def _translate(sql: str) -> str:
+        translated = str(sql).replace("%s", "?")
+        translated = translated.replace("NOW() - (%s::interval)", "datetime('now', ?)")
+        translated = translated.replace("NOW() - INTERVAL '1 day'", "datetime('now', '-1 day')")
+        translated = translated.replace("NOW() - INTERVAL '7 days'", "datetime('now', '-7 days')")
+        translated = translated.replace("NOW() - INTERVAL '30 days'", "datetime('now', '-30 days')")
+        return translated
+
+    def execute(self, sql: str, params=()):
+        return self._conn.execute(self._translate(sql), params)
+
+    def __getattr__(self, name: str):
+        return getattr(self._conn, name)
+
+
 class _FrozenDateTime(datetime):
     @classmethod
     def now(cls, tz=None):
@@ -52,10 +72,20 @@ class RaidPartnerScoreSelectionTests(unittest.IsolatedAsyncioTestCase):
         self.conn.close()
 
     def _conn_patch(self):
-        return patch(
-            "bot.raid.bot.get_conn",
-            side_effect=lambda: contextlib.nullcontext(self.conn),
+        stack = contextlib.ExitStack()
+        stack.enter_context(
+            patch(
+                "bot.raid.bot.readonly_connection",
+                side_effect=lambda: contextlib.nullcontext(_CompatConn(self.conn)),
+            )
         )
+        stack.enter_context(
+            patch(
+                "bot.raid.bot.transaction",
+                side_effect=lambda: contextlib.nullcontext(_CompatConn(self.conn)),
+            )
+        )
+        return stack
 
     @staticmethod
     def _score_map(rows: dict[str, dict[str, object]]):
@@ -342,13 +372,13 @@ class RaidPartnerScoreSelectionTests(unittest.IsolatedAsyncioTestCase):
         )
 
         self.assertNotIn("old-target", self.raid_bot._pending_raids)
-        self.assertIn("new-target", self.raid_bot._pending_raids)
+        self.assertIn(("new-target", "source_login"), self.raid_bot._pending_raids)
 
     async def test_execute_raid_pipeline_prepares_fresh_raid_subscription_before_start(self) -> None:
         call_order: list[str] = []
         tracked_subs: set[tuple[str, str]] = set()
 
-        async def _ensure_ready(broadcaster_id: str, broadcaster_login: str):
+        async def _ensure_ready(broadcaster_id: str, broadcaster_login: str, **_kwargs):
             call_order.append(f"ensure:{broadcaster_id}:{broadcaster_login}")
             tracked_subs.add(("channel.raid", str(broadcaster_id)))
             return True, "enabled"
@@ -433,10 +463,20 @@ class ManualRaidFlowTests(unittest.IsolatedAsyncioTestCase):
         self.conn.close()
 
     def _conn_patch(self):
-        return patch(
-            "bot.raid.bot.get_conn",
-            side_effect=lambda: contextlib.nullcontext(self.conn),
+        stack = contextlib.ExitStack()
+        stack.enter_context(
+            patch(
+                "bot.raid.bot.readonly_connection",
+                side_effect=lambda: contextlib.nullcontext(_CompatConn(self.conn)),
+            )
         )
+        stack.enter_context(
+            patch(
+                "bot.raid.bot.transaction",
+                side_effect=lambda: contextlib.nullcontext(_CompatConn(self.conn)),
+            )
+        )
+        return stack
 
     def _insert_partner(self, login: str, user_id: str) -> None:
         self.conn.execute(
@@ -1055,7 +1095,7 @@ class OfflineRaidSourceLoggingTests(unittest.IsolatedAsyncioTestCase):
 
     def _conn_patch(self):
         return patch(
-            "bot.raid.mixin.get_conn",
+            "bot.raid.mixin.readonly_connection",
             side_effect=lambda: contextlib.nullcontext(self.conn),
         )
 

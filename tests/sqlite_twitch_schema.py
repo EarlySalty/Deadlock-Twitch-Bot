@@ -162,6 +162,18 @@ def ensure_sqlite_twitch_schema(conn: sqlite3.Connection) -> None:
     )
     conn.execute(
         """
+        CREATE TABLE IF NOT EXISTS oauth_state_tokens (
+            state_token TEXT PRIMARY KEY,
+            platform TEXT NOT NULL,
+            streamer_login TEXT,
+            redirect_uri TEXT,
+            pkce_verifier TEXT,
+            expires_at TEXT
+        )
+        """
+    )
+    conn.execute(
+        """
         CREATE TABLE IF NOT EXISTS twitch_raid_history (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             from_broadcaster_id TEXT,

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import contextlib
 import sqlite3
 import unittest
 from unittest.mock import patch
@@ -13,11 +14,23 @@ class _ConnCtx:
     def __init__(self, conn: sqlite3.Connection) -> None:
         self._conn = conn
 
-    def __enter__(self) -> sqlite3.Connection:
-        return self._conn
+    def __enter__(self) -> _CompatSqliteConn:
+        return _CompatSqliteConn(self._conn)
 
     def __exit__(self, exc_type, exc, tb) -> bool:
         return False
+
+
+class _CompatSqliteConn:
+    def __init__(self, conn: sqlite3.Connection) -> None:
+        self._conn = conn
+
+    def execute(self, sql: str, params=None):
+        sql_text = str(sql or "").replace("%s", "?")
+        return self._conn.execute(sql_text, tuple(params or ()))
+
+    def __getattr__(self, item):
+        return getattr(self._conn, item)
 
 
 class _FakeRequest:
@@ -65,10 +78,8 @@ class DashboardStreamerPromoMessageTests(unittest.IsolatedAsyncioTestCase):
         self.conn.close()
 
     def _conn_patch(self):
-        return patch(
-            "bot.dashboard.routes_mixin.storage.get_conn",
-            return_value=_ConnCtx(self.conn),
-        )
+        compat = _ConnCtx(self.conn)
+        return patch("bot.dashboard.abbo_routes.storage.transaction", return_value=compat)
 
     async def test_save_accepts_valid_multiline_message_with_invite(self) -> None:
         request = _FakeRequest(

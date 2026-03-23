@@ -98,8 +98,8 @@ def _fetch_window_viewer_rows(conn, *, streamer: str, since_date: str):
             MAX(COALESCE(s.ended_at, s.started_at)) AS last_seen_at
         FROM twitch_session_chatters sc
         JOIN twitch_stream_sessions s ON s.id = sc.session_id
-        WHERE LOWER(sc.streamer_login) = ?
-          AND s.started_at >= ?
+        WHERE LOWER(sc.streamer_login) = %s
+          AND s.started_at >= %s
           AND {rollup_bot_clause}
         GROUP BY LOWER(sc.chatter_login)
         """,
@@ -117,9 +117,9 @@ def _fetch_window_viewer_row(conn, *, streamer: str, login: str, since_date: str
             MAX(COALESCE(s.ended_at, s.started_at)) AS last_seen_at
         FROM twitch_session_chatters sc
         JOIN twitch_stream_sessions s ON s.id = sc.session_id
-        WHERE LOWER(sc.streamer_login) = ?
-          AND LOWER(sc.chatter_login) = ?
-          AND s.started_at >= ?
+        WHERE LOWER(sc.streamer_login) = %s
+          AND LOWER(sc.chatter_login) = %s
+          AND s.started_at >= %s
         """,
         [streamer, login, since_date],
     ).fetchone()
@@ -156,7 +156,7 @@ class _AnalyticsViewersMixin:
         since_date = (now - timedelta(days=days)).isoformat()
 
         try:
-            with storage.get_conn() as conn:
+            with storage.readonly_connection() as conn:
                 raw_chat_status = build_raw_chat_status(
                     conn,
                     streamer,
@@ -206,7 +206,7 @@ class _AnalyticsViewersMixin:
                 batch_size = 200
                 for i in range(0, len(all_logins), batch_size):
                     batch = all_logins[i : i + batch_size]
-                    placeholders = ",".join("?" for _ in batch)
+                    placeholders = ",".join("%s" for _ in batch)
 
                     # Count other channels per viewer
                     cc_rows = conn.execute(
@@ -217,7 +217,7 @@ class _AnalyticsViewersMixin:
                         FROM twitch_session_chatters sc
                         JOIN twitch_stream_sessions s ON s.id = sc.session_id
                         WHERE LOWER(sc.chatter_login) IN ({placeholders})
-                          AND s.started_at >= ?
+                          AND s.started_at >= %s
                           AND {rollup_bot_clause}
                         GROUP BY LOWER(sc.chatter_login)
                         """,
@@ -236,9 +236,9 @@ class _AnalyticsViewersMixin:
                         FROM twitch_session_chatters sc
                         JOIN twitch_stream_sessions s ON s.id = sc.session_id
                         WHERE LOWER(sc.chatter_login) IN ({placeholders})
-                          AND s.started_at >= ?
+                          AND s.started_at >= %s
                           AND {rollup_bot_clause}
-                          AND LOWER(sc.streamer_login) != ?
+                          AND LOWER(sc.streamer_login) != %s
                         GROUP BY LOWER(sc.chatter_login), LOWER(sc.streamer_login)
                         ORDER BY chatter_login, total_sessions DESC
                         """,
@@ -410,7 +410,7 @@ class _AnalyticsViewersMixin:
         cutoff_window = (now - timedelta(days=days)).isoformat()
 
         try:
-            with storage.get_conn() as conn:
+            with storage.readonly_connection() as conn:
                 raw_chat_status = build_raw_chat_status(
                     conn,
                     streamer,
@@ -453,9 +453,9 @@ class _AnalyticsViewersMixin:
                         COALESCE(SUM(sc.messages), 0) AS messages
                     FROM twitch_stream_sessions s
                     JOIN twitch_session_chatters sc ON sc.session_id = s.id
-                    WHERE LOWER(s.streamer_login) = ?
-                      AND LOWER(sc.chatter_login) = ?
-                      AND s.started_at >= ?
+                    WHERE LOWER(s.streamer_login) = %s
+                      AND LOWER(sc.chatter_login) = %s
+                      AND s.started_at >= %s
                     GROUP BY DATE(s.started_at)
                     ORDER BY session_date
                     """,
@@ -478,9 +478,9 @@ class _AnalyticsViewersMixin:
                         MAX(COALESCE(s.ended_at, s.started_at)) AS last_seen_at
                     FROM twitch_session_chatters sc
                     JOIN twitch_stream_sessions s ON s.id = sc.session_id
-                    WHERE LOWER(sc.chatter_login) = ?
-                      AND LOWER(s.streamer_login) != ?
-                      AND s.started_at >= ?
+                    WHERE LOWER(sc.chatter_login) = %s
+                      AND LOWER(s.streamer_login) != %s
+                      AND s.started_at >= %s
                     GROUP BY LOWER(s.streamer_login)
                     ORDER BY total_sessions DESC
                     LIMIT 15
@@ -518,9 +518,9 @@ class _AnalyticsViewersMixin:
                         EXTRACT(DOW FROM message_ts) AS dow,
                         COUNT(*) AS cnt
                     FROM twitch_chat_messages
-                    WHERE LOWER(chatter_login) = ?
-                      AND LOWER(streamer_login) = ?
-                      AND message_ts >= ?
+                    WHERE LOWER(chatter_login) = %s
+                      AND LOWER(streamer_login) = %s
+                      AND message_ts >= %s
                     GROUP BY EXTRACT(HOUR FROM message_ts), EXTRACT(DOW FROM message_ts)
                     """,
                     [login, streamer, cutoff_window],
@@ -549,9 +549,9 @@ class _AnalyticsViewersMixin:
                     SELECT m.content
                     FROM twitch_chat_messages m
                     JOIN twitch_stream_sessions s ON s.id = m.session_id
-                    WHERE LOWER(s.streamer_login) = ?
-                      AND LOWER(m.chatter_login) = ?
-                      AND m.message_ts >= ?
+                    WHERE LOWER(s.streamer_login) = %s
+                      AND LOWER(m.chatter_login) = %s
+                      AND m.message_ts >= %s
                       AND {personality_bot_clause}
                     LIMIT 2000
                     """,
@@ -642,7 +642,7 @@ class _AnalyticsViewersMixin:
         since_date = (now - timedelta(days=days)).isoformat()
 
         try:
-            with storage.get_conn() as conn:
+            with storage.readonly_connection() as conn:
                 rollup_bot_clause, rollup_bot_params = build_known_chat_bot_not_in_clause(
                     column_expr="chatter_login"
                 )
@@ -724,14 +724,14 @@ class _AnalyticsViewersMixin:
                 at_risk_logins = [v["login"] for v in at_risk_detailed[:20]]
                 viewer_whereabouts: dict[str, list[str]] = {}
                 if at_risk_logins:
-                    placeholders = ",".join("?" for _ in at_risk_logins)
+                    placeholders = ",".join("%s" for _ in at_risk_logins)
                     whereabout_rows = conn.execute(
                         f"""
                         SELECT chatter_login, streamer_login, last_seen_at
                         FROM twitch_chatter_rollup
                         WHERE LOWER(chatter_login) IN ({placeholders})
-                          AND LOWER(streamer_login) != ?
-                          AND last_seen_at >= ?
+                          AND LOWER(streamer_login) != %s
+                          AND last_seen_at >= %s
                         ORDER BY chatter_login, last_seen_at DESC
                         """,
                         [login.lower() for login in at_risk_logins]
@@ -774,7 +774,7 @@ class _AnalyticsViewersMixin:
                 batch_size = 200
                 for i in range(0, len(all_logins), batch_size):
                     batch = all_logins[i : i + batch_size]
-                    placeholders = ",".join("?" for _ in batch)
+                    placeholders = ",".join("%s" for _ in batch)
                     cc_rows = conn.execute(
                         f"""
                         SELECT
@@ -783,7 +783,7 @@ class _AnalyticsViewersMixin:
                         FROM twitch_session_chatters sc
                         JOIN twitch_stream_sessions s ON s.id = sc.session_id
                         WHERE LOWER(sc.chatter_login) IN ({placeholders})
-                          AND s.started_at >= ?
+                          AND s.started_at >= %s
                           AND {rollup_bot_clause}
                         GROUP BY LOWER(sc.chatter_login)
                         """,
@@ -811,10 +811,10 @@ class _AnalyticsViewersMixin:
                     JOIN twitch_session_chatters sc2
                       ON LOWER(sc1.chatter_login) = LOWER(sc2.chatter_login)
                     JOIN twitch_stream_sessions s2 ON s2.id = sc2.session_id
-                    WHERE LOWER(sc1.streamer_login) = ?
-                      AND s1.started_at >= ?
-                      AND LOWER(sc2.streamer_login) != ?
-                      AND s2.started_at >= ?
+                    WHERE LOWER(sc1.streamer_login) = %s
+                      AND s1.started_at >= %s
+                      AND LOWER(sc2.streamer_login) != %s
+                      AND s2.started_at >= %s
                       AND {rollup_bot_clause_cr1}
                     GROUP BY LOWER(sc2.streamer_login)
                     ORDER BY shared_count DESC
@@ -825,7 +825,7 @@ class _AnalyticsViewersMixin:
 
                 top_shared = []
                 for sr in shared_rows:
-                    # Check if bidirectional (does the other streamer also share viewers back?)
+                    # Check if bidirectional (does the other streamer also share viewers back%s)
                     top_shared.append({
                         "streamer": sr[0],
                         "sharedCount": sr[1],

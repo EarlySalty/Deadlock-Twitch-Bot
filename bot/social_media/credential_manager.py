@@ -21,7 +21,7 @@ try:
 except ModuleNotFoundError:  # pragma: no cover - split runtime fallback
     from ..compat.field_crypto import DecryptFailed, get_crypto
 
-from ..storage import get_conn
+from ..storage import readonly_connection
 
 log = logging.getLogger("TwitchStreams.CredentialManager")
 
@@ -57,7 +57,7 @@ class SocialMediaCredentialManager:
                 access_token = creds["access_token"]
                 refresh_token = creds["refresh_token"]
         """
-        with get_conn() as conn:
+        with readonly_connection() as conn:
             # Try streamer-specific first, then fall back to global
             # ORDER BY prioritizes an exact streamer match over the global fallback.
             row = conn.execute(
@@ -67,14 +67,14 @@ class SocialMediaCredentialManager:
                        token_expires_at, scopes, platform_user_id, platform_username,
                        enc_version, enc_kid
                 FROM social_media_platform_auth
-                WHERE platform = ?
+                WHERE platform = %s
                   AND enabled = 1
                   AND (
-                      streamer_login = ?
-                      OR (? IS NOT NULL AND streamer_login IS NULL)
-                      OR (? IS NULL AND streamer_login IS NULL)
+                      streamer_login = %s
+                      OR (%s IS NOT NULL AND streamer_login IS NULL)
+                      OR (%s IS NULL AND streamer_login IS NULL)
                   )
-                ORDER BY CASE WHEN streamer_login = ? THEN 1 ELSE 0 END DESC,
+                ORDER BY CASE WHEN streamer_login = %s THEN 1 ELSE 0 END DESC,
                          authorized_at DESC,
                          id DESC
                 LIMIT 1

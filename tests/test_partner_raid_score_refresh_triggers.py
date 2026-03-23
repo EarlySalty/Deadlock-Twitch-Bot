@@ -169,7 +169,7 @@ class PartnerRaidScoreRefreshTriggerTests(unittest.IsolatedAsyncioTestCase):
         conn = _RecordingConnection()
 
         with patch(
-            "bot.analytics.mixin.storage.get_conn",
+            "bot.analytics.mixin.storage.transaction",
             side_effect=lambda: contextlib.nullcontext(conn),
         ):
             await harness._handle_stream_online(
@@ -196,7 +196,7 @@ class PartnerRaidScoreRefreshTriggerTests(unittest.IsolatedAsyncioTestCase):
         conn = _RecordingConnection()
 
         with patch(
-            "bot.analytics.mixin.storage.get_conn",
+            "bot.analytics.mixin.storage.transaction",
             side_effect=lambda: contextlib.nullcontext(conn),
         ):
             await harness._handle_channel_update(
@@ -385,7 +385,7 @@ class PartnerRaidScoreRefreshTriggerTests(unittest.IsolatedAsyncioTestCase):
         conn = _RecordingConnection()
 
         with patch(
-            "bot.monitoring.eventsub_mixin.storage.get_conn",
+            "bot.monitoring.eventsub_mixin.storage.transaction",
             side_effect=lambda: contextlib.nullcontext(conn),
         ):
             await harness._on_eventsub_stream_offline("1234", "partner_one")

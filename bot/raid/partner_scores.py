@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
@@ -11,7 +12,7 @@ from typing import Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from ..entitlements.catalog import legacy_plan_name_has_entitlement, plan_has_entitlement
-from ..storage import get_conn
+from ..storage import transaction
 
 log = logging.getLogger("TwitchStreams.PartnerRaidScores")
 
@@ -26,6 +27,15 @@ try:
     BERLIN_TZ = ZoneInfo("Europe/Berlin")
 except ZoneInfoNotFoundError:  # pragma: no cover - environment dependent fallback
     BERLIN_TZ = UTC
+
+
+def _executemany(conn, sql: str, params_seq) -> None:
+    executemany = getattr(conn, "executemany", None)
+    if callable(executemany):
+        executemany(sql, params_seq)
+        return
+    with contextlib.closing(conn.cursor()) as cur:
+        cur.executemany(sql, params_seq)
 
 
 @dataclass(slots=True)
@@ -178,7 +188,7 @@ def _round_score(value: float) -> float:
 
 
 def _placeholders(values: Sequence[object]) -> str:
-    return ",".join("?" for _ in values)
+    return ",".join("%s" for _ in values)
 
 
 def _today_in_berlin(now_utc: datetime) -> date:
@@ -194,7 +204,7 @@ def _new_partner_multiplier(received_successful_raids_total: int) -> float:
 class PartnerRaidScoreService:
     """Computes and loads prepared partner raid scores."""
 
-    def __init__(self, conn_factory=get_conn):
+    def __init__(self, conn_factory=transaction):
         self._conn_factory = conn_factory
 
     def refresh_partner_score(
@@ -556,7 +566,8 @@ class PartnerRaidScoreService:
     def _upsert_scores(self, conn, prepared_rows: Sequence[_PreparedScore]) -> None:
         if not prepared_rows:
             return
-        conn.executemany(
+        _executemany(
+            conn,
             """
             INSERT INTO twitch_partner_raid_scores (
                 twitch_user_id,
@@ -576,7 +587,7 @@ class PartnerRaidScoreService:
                 final_score,
                 today_received_raids,
                 last_computed_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             ON CONFLICT (twitch_user_id) DO UPDATE SET
                 twitch_login = EXCLUDED.twitch_login,
                 avg_duration_sec = EXCLUDED.avg_duration_sec,

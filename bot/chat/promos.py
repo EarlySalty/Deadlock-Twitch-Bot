@@ -13,7 +13,12 @@ from ..promo_mode import (
     load_global_promo_mode,
     validate_streamer_promo_message,
 )
-from ..storage import get_conn, query_one as _pg_query_one, query_all as _pg_query_all
+from ..storage import (
+    query_one as _pg_query_one,
+    query_all as _pg_query_all,
+    readonly_connection,
+    transaction,
+)
 from .constants import (
     _PROMO_ACTIVITY_ENABLED,
     _PROMO_COOLDOWN_MAX,
@@ -145,14 +150,14 @@ class PromoMixin:
             return default_payload
 
         try:
-            with get_conn() as conn:
+            with readonly_connection() as conn:
                 self._ensure_lurker_tax_streamer_plan_columns(conn)
 
                 streamer_row = conn.execute(
                     """
                     SELECT twitch_user_id, twitch_login
                       FROM twitch_streamer_identities
-                     WHERE LOWER(twitch_login) = LOWER(?)
+                     WHERE LOWER(twitch_login) = LOWER(%s)
                      LIMIT 1
                     """,
                     (normalized_login,),
@@ -173,10 +178,10 @@ class PromoMixin:
                         """
                         SELECT twitch_user_id, twitch_login, lurker_tax_enabled, manual_plan_id, manual_plan_expires_at
                           FROM streamer_plans
-                         WHERE TRIM(COALESCE(twitch_user_id, '')) = ?
-                            OR LOWER(COALESCE(twitch_login, '')) = LOWER(?)
+                         WHERE TRIM(COALESCE(twitch_user_id, '')) = %s
+                            OR LOWER(COALESCE(twitch_login, '')) = LOWER(%s)
                          ORDER BY
-                            CASE WHEN TRIM(COALESCE(twitch_user_id, '')) = ? THEN 0 ELSE 1 END
+                            CASE WHEN TRIM(COALESCE(twitch_user_id, '')) = %s THEN 0 ELSE 1 END
                          LIMIT 1
                         """,
                         (twitch_user_id, canonical_login, twitch_user_id),
@@ -186,7 +191,7 @@ class PromoMixin:
                         """
                         SELECT twitch_user_id, twitch_login, lurker_tax_enabled
                           FROM streamer_plans
-                         WHERE LOWER(COALESCE(twitch_login, '')) = LOWER(?)
+                         WHERE LOWER(COALESCE(twitch_login, '')) = LOWER(%s)
                          LIMIT 1
                         """,
                         (canonical_login,),
@@ -214,10 +219,10 @@ class PromoMixin:
                         """
                         SELECT scopes
                           FROM twitch_raid_auth
-                         WHERE TRIM(COALESCE(twitch_user_id, '')) = ?
-                            OR LOWER(COALESCE(twitch_login, '')) = LOWER(?)
+                         WHERE TRIM(COALESCE(twitch_user_id, '')) = %s
+                            OR LOWER(COALESCE(twitch_login, '')) = LOWER(%s)
                          ORDER BY
-                            CASE WHEN TRIM(COALESCE(twitch_user_id, '')) = ? THEN 0 ELSE 1 END
+                            CASE WHEN TRIM(COALESCE(twitch_user_id, '')) = %s THEN 0 ELSE 1 END
                          LIMIT 1
                         """,
                         (twitch_user_id, canonical_login, twitch_user_id),
@@ -227,7 +232,7 @@ class PromoMixin:
                         """
                         SELECT scopes
                           FROM twitch_raid_auth
-                         WHERE LOWER(COALESCE(twitch_login, '')) = LOWER(?)
+                         WHERE LOWER(COALESCE(twitch_login, '')) = LOWER(%s)
                          LIMIT 1
                         """,
                         (canonical_login,),
@@ -242,7 +247,7 @@ class PromoMixin:
                     """
                     SELECT active_session_id, is_live
                       FROM twitch_live_state
-                     WHERE LOWER(streamer_login) = LOWER(?)
+                     WHERE LOWER(streamer_login) = LOWER(%s)
                      LIMIT 1
                     """,
                     (canonical_login,),
@@ -318,7 +323,7 @@ class PromoMixin:
             return False
 
         try:
-            with get_conn() as conn:
+            with transaction() as conn:
                 self._ensure_lurker_tax_streamer_plan_columns(conn)
                 if user_id_value:
                     conn.execute(
@@ -329,7 +334,7 @@ class PromoMixin:
                             plan_name,
                             lurker_tax_enabled
                         )
-                        VALUES (?, ?, ?, ?)
+                        VALUES (%s, %s, %s, %s)
                         ON CONFLICT (twitch_user_id) DO UPDATE SET
                             twitch_login = COALESCE(NULLIF(EXCLUDED.twitch_login, ''), streamer_plans.twitch_login),
                             plan_name = COALESCE(NULLIF(EXCLUDED.plan_name, ''), streamer_plans.plan_name),
@@ -342,7 +347,7 @@ class PromoMixin:
                         """
                         SELECT 1
                           FROM streamer_plans
-                         WHERE LOWER(COALESCE(twitch_login, '')) = LOWER(?)
+                         WHERE LOWER(COALESCE(twitch_login, '')) = LOWER(%s)
                          LIMIT 1
                         """,
                         (login_value,),
@@ -352,14 +357,11 @@ class PromoMixin:
                     conn.execute(
                         """
                         UPDATE streamer_plans
-                           SET lurker_tax_enabled = ?
-                         WHERE LOWER(COALESCE(twitch_login, '')) = LOWER(?)
+                           SET lurker_tax_enabled = %s
+                         WHERE LOWER(COALESCE(twitch_login, '')) = LOWER(%s)
                         """,
                         (1 if enabled else 0, login_value),
                     )
-                commit = getattr(conn, "commit", None)
-                if callable(commit):
-                    commit()
         except Exception:
             log.debug("Lurker-Tax setting update failed for %s", login_value, exc_info=True)
             return False
@@ -392,18 +394,18 @@ class PromoMixin:
     ) -> list[dict[str, object]]:
         current_bot_clause, current_bot_params = build_known_chat_bot_not_in_clause(
             column_expr="live_candidates.chatter_login",
-            placeholder="?",
+            placeholder="%s",
         )
         historical_bot_clause, historical_bot_params = build_known_chat_bot_not_in_clause(
             column_expr="sc.chatter_login",
-            placeholder="?",
+            placeholder="%s",
         )
         freshness_cutoff = (
             (now_utc or datetime.now(UTC)) - timedelta(minutes=_LURKER_TAX_FRESHNESS_MINUTES)
         ).isoformat(timespec="seconds")
         rows = []
         try:
-            with get_conn() as conn:
+            with readonly_connection() as conn:
                 rows = conn.execute(
                     f"""
                     WITH historical_lurks AS (
@@ -417,15 +419,15 @@ class PromoMixin:
                                 SUM(
                                     CASE
                                         WHEN sc.first_message_at IS NULL OR sc.last_seen_at IS NULL THEN 0
-                                        WHEN julianday(sc.last_seen_at) <= julianday(sc.first_message_at) THEN 0
-                                        ELSE (julianday(sc.last_seen_at) - julianday(sc.first_message_at)) * 24.0 * 60.0
+                                        WHEN sc.last_seen_at <= sc.first_message_at THEN 0
+                                        ELSE EXTRACT(EPOCH FROM (sc.last_seen_at - sc.first_message_at)) / 60.0
                                     END
                                 ),
                                 0
                             ) AS estimated_lurk_minutes
                         FROM twitch_session_chatters sc
                         JOIN twitch_stream_sessions s ON s.id = sc.session_id
-                        WHERE LOWER(sc.streamer_login) = LOWER(?)
+                        WHERE LOWER(sc.streamer_login) = LOWER(%s)
                           AND s.ended_at IS NOT NULL
                           AND COALESCE(sc.messages, 0) = 0
                           AND LOWER(COALESCE(CAST(sc.seen_via_chatters_api AS TEXT), '0')) IN ('1', 't', 'true')
@@ -445,12 +447,12 @@ class PromoMixin:
                                 ELSE 'login:' || LOWER(live_sc.chatter_login)
                             END AS chatter_identity_key
                         FROM twitch_session_chatters live_sc
-                        WHERE live_sc.session_id = ?
-                          AND LOWER(live_sc.streamer_login) = LOWER(?)
+                        WHERE live_sc.session_id = %s
+                          AND LOWER(live_sc.streamer_login) = LOWER(%s)
                           AND COALESCE(live_sc.messages, 0) = 0
                           AND LOWER(COALESCE(CAST(live_sc.seen_via_chatters_api AS TEXT), '0')) IN ('1', 't', 'true')
                           AND live_sc.last_seen_at IS NOT NULL
-                          AND live_sc.last_seen_at >= ?
+                          AND live_sc.last_seen_at >= %s
                     )
                     SELECT
                         live_candidates.chatter_login,
@@ -460,8 +462,8 @@ class PromoMixin:
                     FROM live_candidates
                     JOIN historical_lurks
                       ON historical_lurks.chatter_identity_key = live_candidates.chatter_identity_key
-                    WHERE historical_lurks.prior_lurk_sessions >= ?
-                      AND historical_lurks.estimated_lurk_minutes >= ?
+                    WHERE historical_lurks.prior_lurk_sessions >= %s
+                      AND historical_lurks.estimated_lurk_minutes >= %s
                       AND {current_bot_clause}
                     ORDER BY historical_lurks.estimated_lurk_minutes DESC, LOWER(live_candidates.chatter_login) ASC
                     """,
@@ -727,9 +729,9 @@ class PromoMixin:
 
     def _load_streamer_promo_message(self, login: str) -> str | None:
         try:
-            with get_conn() as conn:
+            with readonly_connection() as conn:
                 row = conn.execute(
-                    "SELECT promo_message FROM streamer_plans WHERE LOWER(twitch_login) = LOWER(?)",
+                    "SELECT promo_message FROM streamer_plans WHERE LOWER(twitch_login) = LOWER(%s)",
                     (login,),
                 ).fetchone()
                 if row and row["promo_message"]:
@@ -749,7 +751,7 @@ class PromoMixin:
 
     def _load_global_promo_message(self) -> str | None:
         try:
-            with get_conn() as conn:
+            with readonly_connection() as conn:
                 config = load_global_promo_mode(conn)
         except Exception:
             log.debug("Global promo mode lookup failed", exc_info=True)
@@ -900,18 +902,18 @@ class PromoMixin:
         row_stats = None
 
         try:
-            with get_conn():
+            with readonly_connection():
                 row_sessions = _pg_query_one(
                     """
                     SELECT AVG(avg_viewers) AS avg_viewers, COUNT(*) AS sample_count
                       FROM (
                             SELECT avg_viewers
                               FROM twitch_stream_sessions
-                             WHERE streamer_login = ?
+                             WHERE streamer_login = %s
                                AND ended_at IS NOT NULL
                                AND avg_viewers > 0
                              ORDER BY started_at DESC
-                             LIMIT ?
+                             LIMIT %s
                       ) recent_sessions
                     """,
                     (login, int(max(1, PROMO_VIEWER_SPIKE_SESSION_SAMPLE_LIMIT))),
@@ -922,10 +924,10 @@ class PromoMixin:
                       FROM (
                             SELECT viewer_count
                               FROM twitch_stats_tracked
-                             WHERE LOWER(streamer) = ?
+                             WHERE LOWER(streamer) = %s
                                AND viewer_count > 0
                              ORDER BY ts_utc DESC
-                             LIMIT ?
+                             LIMIT %s
                       ) recent_stats
                     """,
                     (login, int(max(1, PROMO_VIEWER_SPIKE_STATS_SAMPLE_LIMIT))),
@@ -934,7 +936,7 @@ class PromoMixin:
                     """
                     SELECT last_viewer_count
                       FROM twitch_live_state
-                     WHERE streamer_login = ?
+                     WHERE streamer_login = %s
                        AND is_live = 1
                     """,
                     (login,),
@@ -1315,8 +1317,7 @@ class PromoMixin:
         target_game_lower = (getattr(self, "_target_game_lower", None) or "deadlock").strip().lower()
 
         try:
-            # Uses storage.get_conn() so twitch_* schema is ensured before querying.
-            with get_conn():
+            with readonly_connection():
                 if SUBSCRIPTION_PLANS_ENABLED:
                     rows = _pg_query_all(
                         """
@@ -1325,7 +1326,7 @@ class PromoMixin:
                           JOIN twitch_live_state l ON s.twitch_user_id = l.twitch_user_id
                           LEFT JOIN streamer_plans p ON s.twitch_user_id = p.twitch_user_id
                          WHERE l.is_live = 1
-                           AND LOWER(COALESCE(l.last_game, '')) = ?
+                            AND LOWER(COALESCE(l.last_game, '')) = %s
                            AND COALESCE(p.promo_disabled, 0) = 0
                         """,
                         (target_game_lower,),
@@ -1337,7 +1338,7 @@ class PromoMixin:
                           FROM twitch_streamer_identities s
                           JOIN twitch_live_state l ON s.twitch_user_id = l.twitch_user_id
                          WHERE l.is_live = 1
-                           AND LOWER(COALESCE(l.last_game, '')) = ?
+                            AND LOWER(COALESCE(l.last_game, '')) = %s
                         """,
                         (target_game_lower,),
                     )

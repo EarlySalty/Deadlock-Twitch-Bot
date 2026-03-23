@@ -16,6 +16,7 @@ from urllib.parse import urlencode, urlsplit, urlunsplit
 from aiohttp import web
 
 from .clip_manager import ClipManager
+from ..storage import readonly_connection, transaction
 
 log = logging.getLogger("TwitchStreams.SocialMediaDashboard")
 
@@ -248,14 +249,12 @@ class SocialMediaDashboard:
         return clip_id if clip_id > 0 else None
 
     def _clip_owned_by_streamer(self, clip_id: int, streamer_login: str) -> bool:
-        from ..storage import get_conn
-
-        with get_conn() as conn:
+        with readonly_connection() as conn:
             row = conn.execute(
                 """
                 SELECT 1
                 FROM twitch_clips_social_media
-                WHERE id = ? AND LOWER(streamer_login) = LOWER(?)
+                WHERE id = %s AND LOWER(streamer_login) = LOWER(%s)
                 LIMIT 1
                 """,
                 (clip_id, streamer_login),
@@ -263,14 +262,12 @@ class SocialMediaDashboard:
         return bool(row)
 
     def _streamer_template_owned_by_streamer(self, template_id: int, streamer_login: str) -> bool:
-        from ..storage import get_conn
-
-        with get_conn() as conn:
+        with readonly_connection() as conn:
             row = conn.execute(
                 """
                 SELECT 1
                 FROM clip_templates_streamer
-                WHERE id = ? AND LOWER(streamer_login) = LOWER(?)
+                WHERE id = %s AND LOWER(streamer_login) = LOWER(%s)
                 LIMIT 1
                 """,
                 (template_id, streamer_login),
@@ -1928,16 +1925,14 @@ anfordern.</p>
         if platform not in ["tiktok", "youtube", "instagram"]:
             return web.json_response({"error": "Invalid platform"}, status=400)
 
-        from ..storage import get_conn
-
         try:
-            with get_conn() as conn:
+            with transaction() as conn:
                 conn.execute(
                     """
                     UPDATE social_media_platform_auth
                     SET enabled = 0
-                    WHERE platform = ?
-                      AND (streamer_login = ? OR (streamer_login IS NULL AND ? IS NULL))
+                    WHERE platform = %s
+                      AND (streamer_login = %s OR (streamer_login IS NULL AND %s IS NULL))
                     """,
                     (platform, streamer, streamer),
                 )

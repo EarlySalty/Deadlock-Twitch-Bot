@@ -1,10 +1,9 @@
 """Storage layer — public symbols re-exported from pg.py."""
 
 from .pg import (  # noqa: F401
-    get_conn,
+    readonly_connection,
+    transaction,
     ensure_schema,
-    _CompatConnection,
-    RowCompat,
     query_one,
     query_all,
     analytics_db_fingerprint,

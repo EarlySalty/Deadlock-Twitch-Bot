@@ -7,7 +7,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from ..core.constants import TWITCH_TARGET_GAME_NAME
-from ..storage import get_conn
+from ..storage import transaction
 
 log = logging.getLogger("TwitchStreams.PartnerRaidScoreTracking")
 
@@ -297,7 +297,7 @@ def track_confirmed_partner_raid(
     source_id = str(from_broadcaster_id or "").strip() or None
 
     try:
-        with get_conn() as conn:
+        with transaction() as conn:
             live_state = conn.execute(
                 """
                 SELECT active_session_id, last_started_at, last_game, streamer_login
@@ -451,7 +451,7 @@ def resolve_partner_raid_tracking_for_session(
         return 0
 
     try:
-        with get_conn() as conn:
+        with transaction() as conn:
             session_started_at = _load_session_started_at(conn, int(session_id))
             rows = _load_unresolved_tracking_rows_for_session(
                 conn,

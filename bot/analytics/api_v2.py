@@ -51,7 +51,7 @@ log = logging.getLogger("TwitchStreams.AnalyticsV2")
 
 _AFFILIATE_REVENUE_STATUSES: tuple[str, ...] = ("pending", "transferred")
 _AFFILIATE_REVENUE_STATUS_PLACEHOLDERS = ", ".join(
-    ["?"] * len(_AFFILIATE_REVENUE_STATUSES)
+    ["%s"] * len(_AFFILIATE_REVENUE_STATUSES)
 )
 _ANALYTICS_EXTENDED_ENTITLEMENT = "analytics.extended"
 
@@ -143,7 +143,7 @@ def _manual_override_plan_for_login(conn: Any, login: str) -> str:
         """
         SELECT manual_plan_id, manual_plan_expires_at
         FROM streamer_plans
-        WHERE LOWER(twitch_login) = LOWER(?)
+        WHERE LOWER(twitch_login) = LOWER(%s)
         LIMIT 1
         """,
         (login,),
@@ -198,10 +198,10 @@ def _compute_health_score(login: str, conn: Any) -> dict[str, Any] | None:
         cur = conn.execute(
             """
             SELECT AVG(viewer_count) AS avg_viewers,
-                   COUNT(DISTINCT strftime('%Y-%m-%d', ts_utc)) AS stream_days
+                   COUNT(DISTINCT DATE(ts_utc)) AS stream_days
             FROM twitch_stats_tracked
-            WHERE LOWER(streamer) = LOWER(?)
-              AND ts_utc >= ?
+            WHERE LOWER(streamer) = LOWER(%s)
+              AND ts_utc >= %s
             """,
             (login, week_ago.isoformat()),
         ).fetchone()
@@ -210,10 +210,10 @@ def _compute_health_score(login: str, conn: Any) -> dict[str, Any] | None:
         prev = conn.execute(
             """
             SELECT AVG(viewer_count) AS avg_viewers,
-                   COUNT(DISTINCT strftime('%Y-%m-%d', ts_utc)) AS stream_days
+                   COUNT(DISTINCT DATE(ts_utc)) AS stream_days
             FROM twitch_stats_tracked
-            WHERE LOWER(streamer) = LOWER(?)
-              AND ts_utc >= ? AND ts_utc < ?
+            WHERE LOWER(streamer) = LOWER(%s)
+              AND ts_utc >= %s AND ts_utc < %s
             """,
             (login, two_weeks_ago.isoformat(), week_ago.isoformat()),
         ).fetchone()
@@ -238,8 +238,8 @@ def _compute_health_score(login: str, conn: Any) -> dict[str, Any] | None:
             chat_row = conn.execute(
                 """
                 SELECT COUNT(*) FROM twitch_chat_messages
-                WHERE LOWER(streamer_login) = LOWER(?)
-                  AND message_ts >= ?
+                WHERE LOWER(streamer_login) = LOWER(%s)
+                  AND message_ts >= %s
                 """,
                 (login, week_ago.isoformat()),
             ).fetchone()
@@ -286,8 +286,8 @@ def _compute_week_comparison(login: str, conn: Any) -> dict[str, Any]:
             """
             SELECT AVG(viewer_count), COUNT(*) * 15.0 / 3600
             FROM twitch_stats_tracked
-            WHERE LOWER(streamer) = LOWER(?)
-              AND ts_utc >= ? AND ts_utc < ?
+            WHERE LOWER(streamer) = LOWER(%s)
+              AND ts_utc >= %s AND ts_utc < %s
             """,
             (login, start.isoformat(), end.isoformat()),
         ).fetchone()
@@ -298,8 +298,8 @@ def _compute_week_comparison(login: str, conn: Any) -> dict[str, Any]:
             """
             SELECT SUM(follower_delta)
             FROM twitch_stream_sessions
-            WHERE LOWER(streamer_login) = LOWER(?)
-              AND started_at >= ? AND started_at < ?
+            WHERE LOWER(streamer_login) = LOWER(%s)
+              AND started_at >= %s AND started_at < %s
             """,
             (login, start.isoformat(), end.isoformat()),
         ).fetchone()
@@ -832,7 +832,7 @@ class AnalyticsV2Mixin(
     def _internal_home_keyword_clause(column_expr: str) -> tuple[str, list[str]]:
         if not _INTERNAL_HOME_BAN_REASON_KEYWORDS:
             return "1=0", []
-        like_parts = [f"LOWER(COALESCE({column_expr}, '')) LIKE ?" for _ in _INTERNAL_HOME_BAN_REASON_KEYWORDS]
+        like_parts = [f"LOWER(COALESCE({column_expr}, '')) LIKE %s" for _ in _INTERNAL_HOME_BAN_REASON_KEYWORDS]
         like_params = [f"%{keyword}%" for keyword in _INTERNAL_HOME_BAN_REASON_KEYWORDS]
         return f"({' OR '.join(like_parts)})", like_params
 
@@ -1310,16 +1310,16 @@ class AnalyticsV2Mixin(
             SELECT id, entry_date, title, content, created_at
             FROM internal_home_changelog
             ORDER BY entry_date DESC, created_at DESC, id DESC
-            LIMIT ?
+            LIMIT %s
             """,
-            [_INTERNAL_HOME_CHANGELOG_MAX_ENTRIES],
+            (_INTERNAL_HOME_CHANGELOG_MAX_ENTRIES,),
         ).fetchall()
         return [self._serialize_internal_home_changelog_entry(row) for row in rows]
 
     def _get_internal_home_changelog_payload(self, *, can_write: bool) -> dict[str, Any]:
         from ..storage import pg as storage
 
-        with storage.get_conn() as conn:
+        with storage.readonly_connection() as conn:
             self._ensure_internal_home_changelog_storage(conn)
             payload = self._empty_internal_home_changelog_payload(can_write=can_write)
             payload["entries"] = self._fetch_internal_home_changelog_entries(conn)
@@ -1334,15 +1334,15 @@ class AnalyticsV2Mixin(
     ) -> dict[str, Any]:
         from ..storage import pg as storage
 
-        with storage.get_conn() as conn:
+        with storage.transaction() as conn:
             self._ensure_internal_home_changelog_storage(conn)
             row = conn.execute(
                 """
                 INSERT INTO internal_home_changelog (entry_date, title, content)
-                VALUES (?, ?, ?)
+                VALUES (%s, %s, %s)
                 RETURNING id, entry_date, title, content, created_at
                 """,
-                [entry_date, title, content],
+                (entry_date, title, content),
             ).fetchone()
             conn.execute(
                 """
@@ -1351,10 +1351,10 @@ class AnalyticsV2Mixin(
                     SELECT id
                     FROM internal_home_changelog
                     ORDER BY entry_date DESC, created_at DESC, id DESC
-                    OFFSET ?
+                    OFFSET %s
                 )
                 """,
-                [_INTERNAL_HOME_CHANGELOG_MAX_ENTRIES],
+                (_INTERNAL_HOME_CHANGELOG_MAX_ENTRIES,),
             )
         return self._serialize_internal_home_changelog_entry(row)
 
@@ -1586,7 +1586,7 @@ class AnalyticsV2Mixin(
         last_stream: dict[str, Any] | None = None
         week_comparison: dict[str, Any] | None = None
 
-        with storage.get_conn() as conn:
+        with storage.readonly_connection() as conn:
             identity_row = conn.execute(
                 """
                 SELECT
@@ -1598,22 +1598,22 @@ class AnalyticsV2Mixin(
                         ELSE 0
                     END AS discord_connected
                 FROM twitch_streamer_identities
-                WHERE (COALESCE(?, '') != '' AND LOWER(twitch_login) = ?)
-                   OR (COALESCE(?, '') != '' AND twitch_user_id = ?)
+                WHERE (COALESCE(%s, '') != '' AND LOWER(twitch_login) = %s)
+                   OR (COALESCE(%s, '') != '' AND twitch_user_id = %s)
                 ORDER BY CASE
-                    WHEN (COALESCE(?, '') != '' AND LOWER(twitch_login) = ?) THEN 0
+                    WHEN (COALESCE(%s, '') != '' AND LOWER(twitch_login) = %s) THEN 0
                     ELSE 1
                 END
                 LIMIT 1
                 """,
-                [
+                (
                     twitch_login,
                     twitch_login,
                     twitch_user_id,
                     twitch_user_id,
                     twitch_login,
                     twitch_login,
-                ],
+                ),
             ).fetchone()
             if identity_row:
                 resolved_login = str(identity_row[0] or resolved_login or "").strip().lower()
@@ -1625,22 +1625,22 @@ class AnalyticsV2Mixin(
                     """
                     SELECT scopes, needs_reauth
                     FROM twitch_raid_auth
-                    WHERE (? != '' AND TRIM(COALESCE(twitch_user_id, '')) = ?)
-                       OR (? != '' AND LOWER(COALESCE(twitch_login, '')) = LOWER(?))
+                    WHERE (%s != '' AND TRIM(COALESCE(twitch_user_id, '')) = %s)
+                       OR (%s != '' AND LOWER(COALESCE(twitch_login, '')) = LOWER(%s))
                     ORDER BY CASE
-                        WHEN (? != '' AND TRIM(COALESCE(twitch_user_id, '')) = ?) THEN 0
+                        WHEN (%s != '' AND TRIM(COALESCE(twitch_user_id, '')) = %s) THEN 0
                         ELSE 1
                     END
                     LIMIT 1
                     """,
-                    [
+                    (
                         resolved_user_id,
                         resolved_user_id,
                         resolved_login,
                         resolved_login,
                         resolved_user_id,
                         resolved_user_id,
-                    ],
+                    ),
                 ).fetchone()
                 if oauth_row:
                     scope_snapshot = _oauth_scope_snapshot(oauth_row[0], oauth_row[1])
@@ -1666,11 +1666,11 @@ class AnalyticsV2Mixin(
                             ELSE 0
                         END), 0) AS follower_delta
                     FROM twitch_stream_sessions s
-                    WHERE s.started_at >= ?
+                    WHERE s.started_at >= %s
                       AND s.ended_at IS NOT NULL
-                      AND LOWER(s.streamer_login) = ?
+                      AND LOWER(s.streamer_login) = %s
                     """,
-                    [since_date, resolved_login],
+                    (since_date, resolved_login),
                 ).fetchone()
                 if kpi_row:
                     streams_count = int(kpi_row[0] or 0)
@@ -1693,13 +1693,13 @@ class AnalyticsV2Mixin(
                         END AS follower_delta,
                         s.stream_title
                     FROM twitch_stream_sessions s
-                    WHERE s.started_at >= ?
+                    WHERE s.started_at >= %s
                       AND s.ended_at IS NOT NULL
-                      AND LOWER(s.streamer_login) = ?
+                      AND LOWER(s.streamer_login) = %s
                     ORDER BY s.started_at DESC
                     LIMIT 5
                     """,
-                    [since_date, resolved_login],
+                    (since_date, resolved_login),
                 ).fetchall()
                 for row in recent_rows:
                     started_iso = self._internal_home_iso(row[0])
@@ -1722,12 +1722,12 @@ class AnalyticsV2Mixin(
                     f"""
                     SELECT COUNT(*)
                     FROM twitch_ban_events b
-                    WHERE b.received_at >= ?
-                      AND b.twitch_user_id = ?
+                    WHERE b.received_at >= %s
+                      AND b.twitch_user_id = %s
                       AND LOWER(COALESCE(b.event_type, '')) = 'ban'
                       AND {ban_clause}
                     """,
-                    [since_date, resolved_user_id, *ban_params],
+                    (since_date, resolved_user_id, *ban_params),
                 ).fetchone()
                 bot_bans_keyword_count = int((ban_count_row[0] if ban_count_row else 0) or 0)
 
@@ -1735,13 +1735,13 @@ class AnalyticsV2Mixin(
                     """
                     SELECT b.received_at, b.target_login, b.target_id, b.moderator_login, b.reason
                     FROM twitch_ban_events b
-                    WHERE b.received_at >= ?
-                      AND b.twitch_user_id = ?
+                    WHERE b.received_at >= %s
+                      AND b.twitch_user_id = %s
                       AND LOWER(COALESCE(b.event_type, '')) = 'ban'
                     ORDER BY b.received_at DESC
                     LIMIT 20
                     """,
-                    [since_date, resolved_user_id],
+                    (since_date, resolved_user_id),
                 ).fetchall()
                 for row in ban_event_rows:
                     target_login = str(row[1] or "").strip()
@@ -1787,15 +1787,21 @@ class AnalyticsV2Mixin(
                         r.reason,
                         r.success
                     FROM twitch_raid_history r
-                    WHERE r.executed_at >= ?
+                    WHERE r.executed_at >= %s
                       AND (
-                          (COALESCE(?, '') != '' AND r.from_broadcaster_id = ?)
-                          OR (COALESCE(?, '') != '' AND LOWER(r.from_broadcaster_login) = ?)
+                          (COALESCE(%s, '') != '' AND r.from_broadcaster_id = %s)
+                          OR (COALESCE(%s, '') != '' AND LOWER(r.from_broadcaster_login) = %s)
                       )
                     ORDER BY r.executed_at DESC
                     LIMIT 10
                     """,
-                    [since_date, resolved_user_id, resolved_user_id, resolved_login, resolved_login],
+                    (
+                        since_date,
+                        resolved_user_id,
+                        resolved_user_id,
+                        resolved_login,
+                        resolved_login,
+                    ),
                 ).fetchall()
                 for row in raid_rows:
                     raid_event = {
@@ -1826,8 +1832,8 @@ class AnalyticsV2Mixin(
                     chat_row = conn.execute(
                         """
                         SELECT COUNT(*) FROM twitch_chat_messages
-                        WHERE LOWER(streamer_login) = LOWER(?)
-                          AND message_ts >= ? AND message_ts <= ?
+                        WHERE LOWER(streamer_login) = LOWER(%s)
+                          AND message_ts >= %s AND message_ts <= %s
                         """,
                         (resolved_login, ls.get("started_at", ""), ls.get("ended_at", "")),
                     ).fetchone()
@@ -2118,7 +2124,7 @@ class AnalyticsV2Mixin(
         from ..storage import pg as storage
 
         try:
-            with storage.get_conn() as conn:
+            with storage.readonly_connection() as conn:
                 # Detect optional partner table
                 has_partner_table = True
                 try:
@@ -2174,7 +2180,7 @@ class AnalyticsV2Mixin(
             return web.json_response({"error": "Invalid session ID"}, status=400)
 
         try:
-            with storage.get_conn() as conn:
+            with storage.readonly_connection() as conn:
                 # Session data
                 row = conn.execute(
                     """
@@ -2185,9 +2191,9 @@ class AnalyticsV2Mixin(
                         s.dropoff_pct, s.unique_chatters, s.first_time_chatters,
                         s.returning_chatters, s.stream_title
                     FROM twitch_stream_sessions s
-                    WHERE s.id = ?
+                    WHERE s.id = %s
                 """,
-                    [session_id],
+                    (session_id,),
                 ).fetchone()
 
                 if not row:
@@ -2201,10 +2207,10 @@ class AnalyticsV2Mixin(
                     """
                     SELECT 1
                     FROM twitch_session_chatters
-                    WHERE session_id = ?
+                    WHERE session_id = %s
                     LIMIT 1
                     """,
-                    [session_id],
+                    (session_id,),
                 ).fetchone()
 
                 chatter_stats = conn.execute(
@@ -2234,10 +2240,10 @@ class AnalyticsV2Mixin(
                             END
                         ) AS returning_chatters
                     FROM twitch_session_chatters sc
-                    WHERE sc.session_id = ?
+                    WHERE sc.session_id = %s
                       AND {session_bot_clause}
                     """,
-                    [session_id, *session_bot_params],
+                    (session_id, *session_bot_params),
                 ).fetchone()
 
                 if chatter_presence:
@@ -2254,10 +2260,10 @@ class AnalyticsV2Mixin(
                     """
                     SELECT minutes_from_start, viewer_count
                     FROM twitch_session_viewers
-                    WHERE session_id = ?
+                    WHERE session_id = %s
                     ORDER BY minutes_from_start
                 """,
-                    [session_id],
+                    (session_id,),
                 ).fetchall()
 
                 # Top chatters
@@ -2265,12 +2271,12 @@ class AnalyticsV2Mixin(
                     f"""
                     SELECT chatter_login, messages
                     FROM twitch_session_chatters sc
-                    WHERE sc.session_id = ?
+                    WHERE sc.session_id = %s
                       AND {session_bot_clause}
                     ORDER BY messages DESC
                     LIMIT 20
                 """,
-                    [session_id, *session_bot_params],
+                    (session_id, *session_bot_params),
                 ).fetchall()
 
                 return web.json_response(
@@ -2369,7 +2375,7 @@ class AnalyticsV2Mixin(
                     """
                     SELECT display_name
                     FROM twitch_streamers
-                    WHERE LOWER(twitch_login) = LOWER(?)
+                    WHERE LOWER(twitch_login) = LOWER(%s)
                     LIMIT 1
                     """,
                     (login,),
@@ -2384,7 +2390,7 @@ class AnalyticsV2Mixin(
                     """
                     SELECT twitch_login AS display_name
                     FROM twitch_streamer_identities
-                    WHERE LOWER(twitch_login) = LOWER(?)
+                    WHERE LOWER(twitch_login) = LOWER(%s)
                     LIMIT 1
                     """,
                     (login,),
@@ -2402,12 +2408,12 @@ class AnalyticsV2Mixin(
             return None
 
         try:
-            with storage.get_conn() as conn:
+            with storage.readonly_connection() as conn:
                 acct_row = conn.execute(
                     """
                     SELECT twitch_login, display_name, is_active
                     FROM affiliate_accounts
-                    WHERE LOWER(twitch_login) = LOWER(?)
+                    WHERE LOWER(twitch_login) = LOWER(%s)
                     LIMIT 1
                     """,
                     (twitch_login,),
@@ -2419,10 +2425,10 @@ class AnalyticsV2Mixin(
                     """
                     SELECT
                         COUNT(*) AS total_claims,
-                        COALESCE(SUM(CASE WHEN claimed_at >= ? THEN 1 ELSE 0 END), 0)
+                        COALESCE(SUM(CASE WHEN claimed_at >= %s THEN 1 ELSE 0 END), 0)
                             AS this_month_claims
                     FROM affiliate_streamer_claims
-                    WHERE LOWER(affiliate_twitch_login) = LOWER(?)
+                    WHERE LOWER(affiliate_twitch_login) = LOWER(%s)
                     """,
                     (month_start_iso, twitch_login),
                 ).fetchone()
@@ -2442,7 +2448,7 @@ class AnalyticsV2Mixin(
                         COALESCE(
                             SUM(
                                 CASE
-                                    WHEN created_at >= ?
+                                    WHEN created_at >= %s
                                      AND status IN ({_AFFILIATE_REVENUE_STATUS_PLACEHOLDERS})
                                     THEN commission_cents
                                     ELSE 0
@@ -2461,7 +2467,7 @@ class AnalyticsV2Mixin(
                             0
                         ) AS pending_payout_cents
                     FROM affiliate_commissions
-                    WHERE LOWER(affiliate_twitch_login) = LOWER(?)
+                    WHERE LOWER(affiliate_twitch_login) = LOWER(%s)
                     """,
                     (
                         *_AFFILIATE_REVENUE_STATUSES,
@@ -2478,10 +2484,10 @@ class AnalyticsV2Mixin(
                         COALESCE(SUM(co.commission_cents), 0) AS commission_cents
                     FROM affiliate_streamer_claims c
                     LEFT JOIN affiliate_commissions co
-                      ON LOWER(co.affiliate_twitch_login) = LOWER(c.affiliate_twitch_login)
+                     ON LOWER(co.affiliate_twitch_login) = LOWER(c.affiliate_twitch_login)
                      AND LOWER(co.streamer_login) = LOWER(c.claimed_streamer_login)
                      AND co.status IN ({_AFFILIATE_REVENUE_STATUS_PLACEHOLDERS})
-                    WHERE LOWER(c.affiliate_twitch_login) = LOWER(?)
+                    WHERE LOWER(c.affiliate_twitch_login) = LOWER(%s)
                     GROUP BY c.claimed_streamer_login, c.claimed_at
                     ORDER BY c.claimed_at DESC
                     LIMIT 10

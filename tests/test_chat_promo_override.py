@@ -2,17 +2,43 @@ from __future__ import annotations
 
 import sqlite3
 import unittest
+from contextlib import ExitStack
 from unittest.mock import AsyncMock, patch
 
 from bot.chat.promos import PromoMixin
 from bot.promo_mode import ensure_global_promo_mode_storage, save_global_promo_mode
 
 
-class _ConnCtx:
+class _CompatConn:
     def __init__(self, conn: sqlite3.Connection) -> None:
         self._conn = conn
 
-    def __enter__(self) -> sqlite3.Connection:
+    @staticmethod
+    def _translate(sql: str) -> str:
+        translated = str(sql)
+        translated = translated.replace("%s", "?")
+        translated = translated.replace(
+            "NOW() - INTERVAL '30 days'",
+            "datetime('now', '-30 days')",
+        )
+        translated = translated.replace(
+            "NOW() - INTERVAL '7 days'",
+            "datetime('now', '-7 days')",
+        )
+        return translated
+
+    def execute(self, sql: str, params=()):
+        return self._conn.execute(self._translate(sql), params)
+
+    def __getattr__(self, name: str):
+        return getattr(self._conn, name)
+
+
+class _ConnCtx:
+    def __init__(self, conn: sqlite3.Connection) -> None:
+        self._conn = _CompatConn(conn)
+
+    def __enter__(self) -> _CompatConn:
         return self._conn
 
     def __exit__(self, exc_type, exc, tb) -> bool:
@@ -72,7 +98,14 @@ class ChatPromoOverrideTests(unittest.IsolatedAsyncioTestCase):
         self.conn.close()
 
     def _conn_patch(self):
-        return patch("bot.chat.promos.get_conn", return_value=_ConnCtx(self.conn))
+        stack = ExitStack()
+        stack.enter_context(
+            patch("bot.chat.promos.readonly_connection", return_value=_ConnCtx(self.conn))
+        )
+        stack.enter_context(
+            patch("bot.chat.promos.transaction", return_value=_ConnCtx(self.conn))
+        )
+        return stack
 
     async def test_active_global_event_overrides_streamer_message(self) -> None:
         self.conn.execute(
@@ -92,6 +125,12 @@ class ChatPromoOverrideTests(unittest.IsolatedAsyncioTestCase):
         with self._conn_patch(), patch(
             "bot.chat.promos.PROMO_MESSAGES",
             ["Default Fallback {invite}"],
+        ), patch(
+            "bot.chat.promos.PROMO_MESSAGES_CATEGORIZED",
+            {},
+        ), patch(
+            "bot.chat.promos.PROMO_CHANNEL_ALLOWLIST",
+            [],
         ):
             ok = await self.handler._send_promo_message(
                 "partner_one",
@@ -121,6 +160,12 @@ class ChatPromoOverrideTests(unittest.IsolatedAsyncioTestCase):
         with self._conn_patch(), patch(
             "bot.chat.promos.PROMO_MESSAGES",
             ["Default Fallback {invite}"],
+        ), patch(
+            "bot.chat.promos.PROMO_MESSAGES_CATEGORIZED",
+            {},
+        ), patch(
+            "bot.chat.promos.PROMO_CHANNEL_ALLOWLIST",
+            [],
         ):
             ok = await self.handler._send_promo_message(
                 "partner_one",
@@ -134,15 +179,24 @@ class ChatPromoOverrideTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_sent_promo_logs_channel_id_without_login(self) -> None:
         self.handler._last_promo_sent["partner_one"] = 0.0
-        with patch(
+        with self._conn_patch(), patch(
             "bot.chat.promos.PROMO_MESSAGES",
             ["Default Fallback {invite}"],
+        ), patch(
+            "bot.chat.promos.PROMO_MESSAGES_CATEGORIZED",
+            {},
+        ), patch(
+            "bot.chat.promos.PROMO_CHANNEL_ALLOWLIST",
+            [],
         ), patch(
             "bot.chat.promos._PROMO_ACTIVITY_ENABLED",
             False,
         ), patch(
             "bot.chat.promos.PROMO_VIEWER_SPIKE_ENABLED",
             False,
+        ), patch(
+            "bot.chat.promos.time.monotonic",
+            return_value=10_000.0,
         ), patch(
             "bot.core.partner_utils.is_partner_channel_for_chat_tracking",
             return_value=True,
@@ -184,6 +238,12 @@ class ChatPromoOverrideTests(unittest.IsolatedAsyncioTestCase):
         with self._conn_patch(), patch(
             "bot.chat.promos.PROMO_MESSAGES",
             ["Default Fallback {invite}"],
+        ), patch(
+            "bot.chat.promos.PROMO_MESSAGES_CATEGORIZED",
+            {},
+        ), patch(
+            "bot.chat.promos.PROMO_CHANNEL_ALLOWLIST",
+            [],
         ):
             ok = await self.handler._send_promo_message(
                 "partner_one",
@@ -202,6 +262,12 @@ class ChatPromoOverrideTests(unittest.IsolatedAsyncioTestCase):
         with self._conn_patch(), patch(
             "bot.chat.promos.PROMO_MESSAGES",
             ["Default Fallback {invite}"],
+        ), patch(
+            "bot.chat.promos.PROMO_MESSAGES_CATEGORIZED",
+            {},
+        ), patch(
+            "bot.chat.promos.PROMO_CHANNEL_ALLOWLIST",
+            [],
         ):
             ok = await self.handler._send_promo_message(
                 "partner_one",
@@ -225,6 +291,12 @@ class ChatPromoOverrideTests(unittest.IsolatedAsyncioTestCase):
         with self._conn_patch(), patch(
             "bot.chat.promos.PROMO_MESSAGES",
             ["Default Fallback {invite}"],
+        ), patch(
+            "bot.chat.promos.PROMO_MESSAGES_CATEGORIZED",
+            {},
+        ), patch(
+            "bot.chat.promos.PROMO_CHANNEL_ALLOWLIST",
+            [],
         ):
             ok = await self.handler._send_promo_message(
                 "partner_one",

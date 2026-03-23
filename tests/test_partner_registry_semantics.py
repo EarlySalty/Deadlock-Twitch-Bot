@@ -11,6 +11,24 @@ from bot.storage.partner_registry import (
 )
 
 
+class _SqlitePgCompatConnection:
+    def __init__(self, conn: sqlite3.Connection) -> None:
+        self._conn = conn
+
+    @staticmethod
+    def _translate_sql(sql: str) -> str:
+        return str(sql).replace("%s", "?")
+
+    def execute(self, sql, params=()):
+        return self._conn.execute(self._translate_sql(sql), params)
+
+    def executemany(self, sql, params_seq):
+        return self._conn.executemany(self._translate_sql(sql), params_seq)
+
+    def __getattr__(self, name):
+        return getattr(self._conn, name)
+
+
 def _make_conn() -> sqlite3.Connection:
     conn = sqlite3.connect(":memory:")
     conn.row_factory = sqlite3.Row
@@ -102,6 +120,7 @@ def _make_conn() -> sqlite3.Connection:
 class PartnerRegistrySemanticsTests(unittest.TestCase):
     def test_migrate_legacy_partner_registry_prefers_active_partner_for_duplicate_discord_user(self) -> None:
         conn = _make_conn()
+        compat_conn = _SqlitePgCompatConnection(conn)
         conn.executemany(
             """
             INSERT INTO twitch_streamers (
@@ -136,7 +155,7 @@ class PartnerRegistrySemanticsTests(unittest.TestCase):
             ],
         )
 
-        stats = migrate_legacy_partner_registry(conn)
+        stats = migrate_legacy_partner_registry(compat_conn)
 
         self.assertEqual(stats["identity_upserts"], 2)
         identity_rows = conn.execute(
@@ -158,6 +177,7 @@ class PartnerRegistrySemanticsTests(unittest.TestCase):
 
     def test_upsert_streamer_identity_reassigns_duplicate_discord_user(self) -> None:
         conn = _make_conn()
+        compat_conn = _SqlitePgCompatConnection(conn)
         conn.execute(
             """
             INSERT INTO twitch_streamer_identities (
@@ -168,7 +188,7 @@ class PartnerRegistrySemanticsTests(unittest.TestCase):
         )
 
         upsert_streamer_identity(
-            conn,
+            compat_conn,
             twitch_user_id="2002",
             twitch_login="bravo",
             discord_user_id="662995601738170389",
@@ -194,6 +214,7 @@ class PartnerRegistrySemanticsTests(unittest.TestCase):
 
     def test_archive_active_partner_keeps_non_partner_table_empty(self) -> None:
         conn = _make_conn()
+        compat_conn = _SqlitePgCompatConnection(conn)
         conn.execute(
             """
             INSERT INTO twitch_streamer_identities (
@@ -218,7 +239,7 @@ class PartnerRegistrySemanticsTests(unittest.TestCase):
             ("1001", "alpha"),
         )
 
-        result = archive_active_partner(conn, twitch_login="alpha")
+        result = archive_active_partner(compat_conn, twitch_login="alpha")
 
         self.assertIsNotNone(result)
         status_row = conn.execute(
@@ -237,6 +258,7 @@ class PartnerRegistrySemanticsTests(unittest.TestCase):
 
     def test_bulk_update_scope_all_only_mutates_active_rows(self) -> None:
         conn = _make_conn()
+        compat_conn = _SqlitePgCompatConnection(conn)
         conn.executemany(
             """
             INSERT INTO twitch_partners (
@@ -261,7 +283,7 @@ class PartnerRegistrySemanticsTests(unittest.TestCase):
             ],
         )
 
-        total = bulk_update_partner_flags(conn, scope="all", silent_raid=1)
+        total = bulk_update_partner_flags(compat_conn, scope="all", silent_raid=1)
 
         self.assertEqual(total, 1)
         rows = conn.execute(

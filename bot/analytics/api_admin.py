@@ -584,7 +584,7 @@ class _AnalyticsAdminMixin:
         where_clause = ""
         params: list[Any] = []
         if affiliate_login:
-            where_clause = "WHERE affiliate_twitch_login = ?"
+            where_clause = "WHERE affiliate_twitch_login = %s"
             params.append(affiliate_login)
 
         try:
@@ -972,7 +972,7 @@ class _AnalyticsAdminMixin:
         where_clause = self._admin_streamer_view_filter_sql(view)
 
         try:
-            with storage.get_conn() as conn:
+            with storage.transaction() as conn:
                 rows = conn.execute(
                     f"""
                     WITH latest_billing AS (
@@ -1144,7 +1144,7 @@ class _AnalyticsAdminMixin:
             return web.json_response({"error": "invalid_login"}, status=400)
 
         try:
-            with storage.get_conn() as conn:
+            with storage.transaction() as conn:
                 row = conn.execute(
                     f"""
                     WITH latest_billing AS (
@@ -1211,7 +1211,7 @@ class _AnalyticsAdminMixin:
                     LEFT JOIN latest_billing lb
                         ON LOWER(lb.customer_reference) = LOWER(s.twitch_login)
                        AND lb.rn = 1
-                    WHERE LOWER(s.twitch_login) = LOWER(?)
+                    WHERE LOWER(s.twitch_login) = LOWER(%s)
                     LIMIT 1
                     """,
                     (login,),
@@ -1228,7 +1228,7 @@ class _AnalyticsAdminMixin:
                         COALESCE(MAX(peak_viewers), 0) AS peak_viewers,
                         COALESCE(SUM(follower_delta), 0) AS follower_delta
                     FROM twitch_stream_sessions
-                    WHERE LOWER(streamer_login) = LOWER(?)
+                    WHERE LOWER(streamer_login) = LOWER(%s)
                     """,
                     (login,),
                 ).fetchone()
@@ -1245,7 +1245,7 @@ class _AnalyticsAdminMixin:
                         duration_seconds,
                         follower_delta
                     FROM twitch_stream_sessions
-                    WHERE LOWER(streamer_login) = LOWER(?)
+                    WHERE LOWER(streamer_login) = LOWER(%s)
                     ORDER BY started_at DESC
                     LIMIT 10
                     """,
@@ -1373,7 +1373,7 @@ class _AnalyticsAdminMixin:
             return auth_error
 
         try:
-            with storage.get_conn() as conn:
+            with storage.transaction() as conn:
                 rows = conn.execute(
                     f"""
                     WITH auth_rows AS (
@@ -1576,7 +1576,7 @@ class _AnalyticsAdminMixin:
             "isLiveScope": False,
         }
         try:
-            with storage.get_conn() as conn:
+            with storage.transaction() as conn:
                 row = conn.execute(
                     """
                     SELECT MAX(COALESCE(last_seen_at, last_started_at)) AS last_tick_at
@@ -1758,7 +1758,7 @@ class _AnalyticsAdminMixin:
         tables: list[dict[str, Any]] = []
         database_size_bytes = None
         try:
-            with storage.get_conn() as conn:
+            with storage.transaction() as conn:
                 database_size_bytes = self._admin_database_size_bytes(conn)
                 for table_name in _DATABASE_STATS_TABLES:
                     row_count = self._admin_database_row_count(conn, table_name)
@@ -1841,7 +1841,7 @@ class _AnalyticsAdminMixin:
                 status=400,
             )
         try:
-            with storage.get_conn() as conn:
+            with storage.transaction() as conn:
                 promo_config = evaluate_global_promo_mode(load_global_promo_mode(conn))
                 raid_snapshot, chat_snapshot = self._admin_load_streamer_config_snapshots(
                     conn,
@@ -1882,7 +1882,7 @@ class _AnalyticsAdminMixin:
 
         actor_label = self._admin_actor_label(request, getattr(self, "_get_discord_admin_session", None))
         try:
-            with storage.get_conn() as conn:
+            with storage.transaction() as conn:
                 saved = save_global_promo_mode(conn, config=normalized, updated_by=actor_label)
                 evaluation = evaluate_global_promo_mode(saved)
         except ValueError as exc:
@@ -1935,7 +1935,7 @@ class _AnalyticsAdminMixin:
         updated_at = datetime.now(UTC).isoformat()
 
         try:
-            with storage.get_conn() as conn:
+            with storage.transaction() as conn:
                 target_count = storage.bulk_update_partner_flags(
                     conn,
                     scope=scope,
@@ -2010,7 +2010,7 @@ class _AnalyticsAdminMixin:
         updated_at = datetime.now(UTC).isoformat()
 
         try:
-            with storage.get_conn() as conn:
+            with storage.transaction() as conn:
                 target_count = storage.bulk_update_partner_flags(
                     conn,
                     scope=scope,
@@ -2048,7 +2048,7 @@ class _AnalyticsAdminMixin:
             return auth_error
 
         try:
-            with storage.get_conn() as conn:
+            with storage.transaction() as conn:
                 rows = conn.execute(
                     """
                     SELECT
@@ -2094,7 +2094,7 @@ class _AnalyticsAdminMixin:
             return auth_error
 
         try:
-            with storage.get_conn() as conn:
+            with storage.transaction() as conn:
                 rows = conn.execute(
                     """
                     SELECT
@@ -2138,7 +2138,7 @@ class _AnalyticsAdminMixin:
             return auth_error
 
         try:
-            with storage.get_conn() as conn:
+            with storage.transaction() as conn:
                 self._admin_affiliate_prepare_conn(conn)
                 try:
                     rows = conn.execute(
@@ -2263,7 +2263,7 @@ class _AnalyticsAdminMixin:
             return auth_error
 
         try:
-            with storage.get_conn() as conn:
+            with storage.transaction() as conn:
                 self._admin_affiliate_prepare_conn(conn)
                 try:
                     rows = conn.execute(
@@ -2363,13 +2363,13 @@ class _AnalyticsAdminMixin:
             return web.json_response({"error": "invalid_login"}, status=400)
 
         try:
-            with storage.get_conn() as conn:
+            with storage.transaction() as conn:
                 self._admin_affiliate_prepare_conn(conn)
                 account_row = conn.execute(
                     """
                     SELECT twitch_login, display_name, is_active, created_at, updated_at
                     FROM affiliate_accounts
-                    WHERE twitch_login = ?
+                    WHERE twitch_login = %s
                     """,
                     (login,),
                 ).fetchone()
@@ -2431,13 +2431,13 @@ class _AnalyticsAdminMixin:
             return web.json_response({"error": "invalid_gutschrift_id"}, status=400)
 
         try:
-            with storage.get_conn() as conn:
+            with storage.transaction() as conn:
                 self._admin_affiliate_prepare_conn(conn)
                 row = conn.execute(
                     """
                     SELECT affiliate_twitch_login
                     FROM affiliate_gutschriften
-                    WHERE id = ?
+                    WHERE id = %s
                     """,
                     (gutschrift_id,),
                 ).fetchone()
@@ -2551,7 +2551,7 @@ class _AnalyticsAdminMixin:
             return web.json_response({"error": "invalid_login"}, status=400)
 
         try:
-            with storage.get_conn() as conn:
+            with storage.transaction() as conn:
                 self._admin_affiliate_prepare_conn(conn)
                 # Fetch affiliate account
                 acct_row = conn.execute(
@@ -2704,7 +2704,7 @@ class _AnalyticsAdminMixin:
             revenue_status_placeholders = ", ".join(
                 ["%s"] * len(_AFFILIATE_REVENUE_STATUSES)
             )
-            with storage.get_conn() as conn:
+            with storage.transaction() as conn:
                 row = conn.execute(
                     "SELECT is_active FROM affiliate_accounts WHERE twitch_login = %s",
                     (login,),
@@ -2744,7 +2744,7 @@ class _AnalyticsAdminMixin:
             .isoformat()
         )
         try:
-            with storage.get_conn() as conn:
+            with storage.transaction() as conn:
                 self._admin_affiliate_prepare_conn(conn)
                 acct_row = conn.execute(
                     """

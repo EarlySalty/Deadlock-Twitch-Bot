@@ -11,6 +11,27 @@ class _RecruitHarness(TwitchPartnerRecruitMixin):
     pass
 
 
+class _CompatConn:
+    def __init__(self, conn: sqlite3.Connection) -> None:
+        self._conn = conn
+
+    def execute(self, sql: str, params=None):
+        sql_text = str(sql or "").replace("%s", "?")
+        sql_text = sql_text.replace(
+            "ts_utc > NOW() + (? || ' days')::interval",
+            "ts_utc > datetime('now', ?)",
+        )
+        sql_text = sql_text.replace("cooldown_until > NOW()", "cooldown_until > datetime('now')")
+        return self._conn.execute(sql_text, tuple(params or ()))
+
+    def executemany(self, sql: str, params=None):
+        sql_text = str(sql or "").replace("%s", "?")
+        return self._conn.executemany(sql_text, params or ())
+
+    def __getattr__(self, item):
+        return getattr(self._conn, item)
+
+
 class PartnerRecruitSamplingThresholdTests(unittest.TestCase):
     def _make_conn(self) -> sqlite3.Connection:
         conn = sqlite3.connect(":memory:")
@@ -52,8 +73,8 @@ class PartnerRecruitSamplingThresholdTests(unittest.TestCase):
         conn.commit()
 
         with patch(
-            "bot.community.partner_recruit.get_conn",
-            side_effect=lambda: contextlib.nullcontext(conn),
+            "bot.community.partner_recruit.transaction",
+            side_effect=lambda: contextlib.nullcontext(_CompatConn(conn)),
         ):
             candidates = _RecruitHarness()._detect_recruit_candidates()
 
@@ -71,8 +92,8 @@ class PartnerRecruitSamplingThresholdTests(unittest.TestCase):
         conn.commit()
 
         with patch(
-            "bot.community.partner_recruit.get_conn",
-            side_effect=lambda: contextlib.nullcontext(conn),
+            "bot.community.partner_recruit.transaction",
+            side_effect=lambda: contextlib.nullcontext(_CompatConn(conn)),
         ):
             candidates = _RecruitHarness()._detect_recruit_candidates()
 

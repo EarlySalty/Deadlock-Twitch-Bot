@@ -94,7 +94,10 @@ class MonitoringStatsLoggingIntervalTests(unittest.IsolatedAsyncioTestCase):
         )
 
         with patch(
-            "bot.monitoring.monitoring.storage.get_conn",
+            "bot.monitoring.monitoring.storage.readonly_connection",
+            side_effect=lambda: contextlib.nullcontext(conn),
+        ), patch(
+            "bot.monitoring.monitoring.storage.transaction",
             side_effect=lambda: contextlib.nullcontext(conn),
         ):
             tracked, partner_logins = harness._load_tracked_streamers()
@@ -114,7 +117,10 @@ class MonitoringStatsLoggingIntervalTests(unittest.IsolatedAsyncioTestCase):
         conn = _PartnerStateConnection()
 
         with patch(
-            "bot.monitoring.monitoring.storage.get_conn",
+            "bot.monitoring.monitoring.storage.readonly_connection",
+            side_effect=lambda: contextlib.nullcontext(conn),
+        ), patch(
+            "bot.monitoring.monitoring.storage.transaction",
             side_effect=lambda: contextlib.nullcontext(conn),
         ):
             await harness._tick()
@@ -133,7 +139,10 @@ class MonitoringStatsLoggingIntervalTests(unittest.IsolatedAsyncioTestCase):
         conn = _PartnerStateConnection()
 
         with patch(
-            "bot.monitoring.monitoring.storage.get_conn",
+            "bot.monitoring.monitoring.storage.readonly_connection",
+            side_effect=lambda: contextlib.nullcontext(conn),
+        ), patch(
+            "bot.monitoring.monitoring.storage.transaction",
             side_effect=lambda: contextlib.nullcontext(conn),
         ):
             await harness._tick()

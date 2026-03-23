@@ -29,7 +29,7 @@ class CoachingEngine:
 
         # Check if streamer has any data
         count = conn.execute(
-            "SELECT COUNT(*) FROM twitch_stream_sessions WHERE streamer_login = ? AND started_at >= ?",
+            "SELECT COUNT(*) FROM twitch_stream_sessions WHERE streamer_login = %s AND started_at >= %s",
             (streamer_login, since_date),
         ).fetchone()[0]
 
@@ -81,7 +81,7 @@ def _efficiency(conn, streamer: str, since: str) -> dict[str, Any]:
             SUM(s.avg_viewers * s.duration_seconds / 3600.0)
                 / NULLIF(SUM(s.duration_seconds / 3600.0), 0) as efficiency_ratio
         FROM twitch_stream_sessions s
-        WHERE s.started_at >= ?
+        WHERE s.started_at >= %s
           AND s.duration_seconds > 300
         GROUP BY s.streamer_login
         HAVING SUM(s.duration_seconds) / 3600.0 > 1
@@ -144,7 +144,7 @@ def _efficiency(conn, streamer: str, since: str) -> dict[str, Any]:
             SUM(CASE WHEN s.follower_delta > 0 THEN s.follower_delta ELSE 0 END)
               / NULLIF(SUM(s.duration_seconds / 3600.0), 0) * 10.0 as growth_per_10h
         FROM twitch_stream_sessions s
-        WHERE s.started_at >= ? AND s.duration_seconds > 300
+        WHERE s.started_at >= %s AND s.duration_seconds > 300
         GROUP BY s.streamer_login
         HAVING SUM(s.duration_seconds) / 3600.0 > 1
         ORDER BY growth_per_10h DESC
@@ -208,7 +208,7 @@ def _title_analysis(conn: sqlite3.Connection, streamer: str, since: str) -> dict
             AVG(s.unique_chatters) as chatters,
             COUNT(*) as usage_count
         FROM twitch_stream_sessions s
-        WHERE s.streamer_login = ? AND s.started_at >= ?
+        WHERE s.streamer_login = %s AND s.started_at >= %s
           AND s.stream_title IS NOT NULL AND s.stream_title != ''
         GROUP BY s.stream_title
         ORDER BY avg_v DESC
@@ -235,9 +235,9 @@ def _title_analysis(conn: sqlite3.Connection, streamer: str, since: str) -> dict
             s.streamer_login,
             AVG(s.avg_viewers) as avg_v
         FROM twitch_stream_sessions s
-        WHERE s.started_at >= ?
+        WHERE s.started_at >= %s
           AND s.stream_title IS NOT NULL AND s.stream_title != ''
-          AND s.streamer_login != ?
+          AND s.streamer_login != %s
         GROUP BY s.stream_title, s.streamer_login
         HAVING COUNT(*) >= 2
         ORDER BY avg_v DESC
@@ -258,7 +258,7 @@ def _title_analysis(conn: sqlite3.Connection, streamer: str, since: str) -> dict
     # --- Title variety comparison ---
     own_total = (
         conn.execute(
-            "SELECT COUNT(*) FROM twitch_stream_sessions WHERE streamer_login = ? AND started_at >= ? AND duration_seconds > 300",
+            "SELECT COUNT(*) FROM twitch_stream_sessions WHERE streamer_login = %s AND started_at >= %s AND duration_seconds > 300",
             (streamer, since),
         ).fetchone()[0]
         or 0
@@ -274,8 +274,8 @@ def _title_analysis(conn: sqlite3.Connection, streamer: str, since: str) -> dict
             COUNT(*) as total_s,
             ROUND(COUNT(DISTINCT s.stream_title) * 100.0 / COUNT(*), 1) as variety
         FROM twitch_stream_sessions s
-        WHERE s.started_at >= ? AND s.duration_seconds > 300
-          AND s.streamer_login != ?
+        WHERE s.started_at >= %s AND s.duration_seconds > 300
+          AND s.streamer_login != %s
           AND s.stream_title IS NOT NULL AND s.stream_title != ''
         GROUP BY s.streamer_login
         HAVING COUNT(*) >= 3
@@ -361,12 +361,12 @@ def _schedule_optimizer(conn: sqlite3.Connection, streamer: str, since: str) -> 
     competition = conn.execute(
         """
         SELECT
-            CAST(strftime('%w', ts_utc) AS INTEGER) as weekday,
-            CAST(strftime('%H', ts_utc) AS INTEGER) as hour,
+            CAST(EXTRACT(DOW FROM (ts_utc AT TIME ZONE 'UTC'))::int) as weekday,
+            CAST(EXTRACT(HOUR FROM (ts_utc AT TIME ZONE 'UTC'))::int) as hour,
             COUNT(DISTINCT streamer) as competitors,
             AVG(viewer_count) as cat_viewers
         FROM twitch_stats_category
-        WHERE ts_utc >= ?
+        WHERE ts_utc >= %s
         GROUP BY weekday, hour
         """,
         (since,),
@@ -386,11 +386,11 @@ def _schedule_optimizer(conn: sqlite3.Connection, streamer: str, since: str) -> 
     your_slots = conn.execute(
         """
         SELECT
-            CAST(strftime('%w', started_at) AS INTEGER) as weekday,
-            CAST(strftime('%H', started_at) AS INTEGER) as hour,
+            CAST(EXTRACT(DOW FROM (started_at AT TIME ZONE 'UTC'))::int) as weekday,
+            CAST(EXTRACT(HOUR FROM (started_at AT TIME ZONE 'UTC'))::int) as hour,
             COUNT(*) as cnt
         FROM twitch_stream_sessions
-        WHERE streamer_login = ? AND started_at >= ?
+        WHERE streamer_login = %s AND started_at >= %s
         GROUP BY weekday, hour
         ORDER BY cnt DESC
         """,
@@ -439,7 +439,7 @@ def _duration_analysis(conn: sqlite3.Connection, streamer: str, since: str) -> d
             s.unique_chatters,
             s.retention_5m
         FROM twitch_stream_sessions s
-        WHERE s.streamer_login = ? AND s.started_at >= ?
+        WHERE s.streamer_login = %s AND s.started_at >= %s
           AND s.duration_seconds > 300
         """,
         (streamer, since),
@@ -525,7 +525,7 @@ def _cross_community(conn: sqlite3.Connection, streamer: str, since: str) -> dic
         """
         SELECT COUNT(DISTINCT chatter_login)
         FROM twitch_chatter_rollup
-        WHERE streamer_login = ? AND last_seen_at >= ?
+        WHERE streamer_login = %s AND last_seen_at >= %s
         """,
         (streamer, since),
     ).fetchone()
@@ -549,9 +549,9 @@ def _cross_community(conn: sqlite3.Connection, streamer: str, since: str) -> dic
         FROM twitch_chatter_rollup c1
         JOIN twitch_chatter_rollup c2
           ON c1.chatter_login = c2.chatter_login
-          AND c2.streamer_login != ?
-          AND c2.last_seen_at >= ?
-        WHERE c1.streamer_login = ? AND c1.last_seen_at >= ?
+          AND c2.streamer_login != %s
+          AND c2.last_seen_at >= %s
+        WHERE c1.streamer_login = %s AND c1.last_seen_at >= %s
         GROUP BY c2.streamer_login
         ORDER BY shared DESC
         LIMIT 15
@@ -573,12 +573,12 @@ def _cross_community(conn: sqlite3.Connection, streamer: str, since: str) -> dic
         """
         SELECT COUNT(DISTINCT c1.chatter_login)
         FROM twitch_chatter_rollup c1
-        WHERE c1.streamer_login = ? AND c1.last_seen_at >= ?
+        WHERE c1.streamer_login = %s AND c1.last_seen_at >= %s
           AND EXISTS (
             SELECT 1 FROM twitch_chatter_rollup c2
             WHERE c2.chatter_login = c1.chatter_login
-              AND c2.streamer_login != ?
-              AND c2.last_seen_at >= ?
+              AND c2.streamer_login != %s
+              AND c2.last_seen_at >= %s
           )
         """,
         (streamer, since, streamer, since),
@@ -614,7 +614,7 @@ def _tag_optimization(conn: sqlite3.Connection, streamer: str, since: str) -> di
         """
         SELECT s.tags, AVG(s.avg_viewers) as avg_v, COUNT(*) as cnt
         FROM twitch_stream_sessions s
-        WHERE s.streamer_login = ? AND s.started_at >= ?
+        WHERE s.streamer_login = %s AND s.started_at >= %s
           AND s.tags IS NOT NULL AND s.tags != ''
         GROUP BY s.tags
         ORDER BY avg_v DESC
@@ -634,7 +634,7 @@ def _tag_optimization(conn: sqlite3.Connection, streamer: str, since: str) -> di
         """
         SELECT s.tags, AVG(s.avg_viewers) as avg_v, COUNT(DISTINCT s.streamer_login) as streamer_cnt
         FROM twitch_stream_sessions s
-        WHERE s.started_at >= ?
+        WHERE s.started_at >= %s
           AND s.tags IS NOT NULL AND s.tags != ''
         GROUP BY s.tags
         HAVING COUNT(*) >= 3
@@ -691,7 +691,7 @@ def _retention_coaching(conn: sqlite3.Connection, streamer: str, since: str) -> 
         """
         SELECT AVG(retention_5m)
         FROM twitch_stream_sessions
-        WHERE streamer_login = ? AND started_at >= ?
+        WHERE streamer_login = %s AND started_at >= %s
           AND retention_5m IS NOT NULL
         """,
         (streamer, since),
@@ -703,7 +703,7 @@ def _retention_coaching(conn: sqlite3.Connection, streamer: str, since: str) -> 
         """
         SELECT AVG(retention_5m)
         FROM twitch_stream_sessions
-        WHERE started_at >= ? AND retention_5m IS NOT NULL
+        WHERE started_at >= %s AND retention_5m IS NOT NULL
         """,
         (since,),
     ).fetchone()
@@ -714,7 +714,7 @@ def _retention_coaching(conn: sqlite3.Connection, streamer: str, since: str) -> 
         """
         SELECT s.id, s.peak_viewers
         FROM twitch_stream_sessions s
-        WHERE s.streamer_login = ? AND s.started_at >= ?
+        WHERE s.streamer_login = %s AND s.started_at >= %s
           AND s.peak_viewers > 0
         ORDER BY s.started_at DESC
         LIMIT 20
@@ -731,8 +731,8 @@ def _retention_coaching(conn: sqlite3.Connection, streamer: str, since: str) -> 
         """
         SELECT s.id, s.peak_viewers
         FROM twitch_stream_sessions s
-        WHERE s.started_at >= ?
-          AND s.streamer_login != ?
+        WHERE s.started_at >= %s
+          AND s.streamer_login != %s
           AND s.peak_viewers > 0
         ORDER BY s.avg_viewers DESC
         LIMIT 20
@@ -818,7 +818,7 @@ def _double_stream_detection(conn: sqlite3.Connection, streamer: str, since: str
             COUNT(*) as session_count,
             AVG(avg_viewers) as avg_v
         FROM twitch_stream_sessions
-        WHERE streamer_login = ? AND started_at >= ?
+        WHERE streamer_login = %s AND started_at >= %s
           AND duration_seconds > 300
         GROUP BY stream_date
         HAVING COUNT(*) > 1
@@ -842,7 +842,7 @@ def _double_stream_detection(conn: sqlite3.Connection, streamer: str, since: str
         SELECT AVG(day_avg) FROM (
             SELECT DATE(started_at) as d, AVG(avg_viewers) as day_avg
             FROM twitch_stream_sessions
-            WHERE streamer_login = ? AND started_at >= ? AND duration_seconds > 300
+            WHERE streamer_login = %s AND started_at >= %s AND duration_seconds > 300
             GROUP BY d
             HAVING COUNT(*) = 1
         )
@@ -856,7 +856,7 @@ def _double_stream_detection(conn: sqlite3.Connection, streamer: str, since: str
         SELECT AVG(day_avg) FROM (
             SELECT DATE(started_at) as d, AVG(avg_viewers) as day_avg
             FROM twitch_stream_sessions
-            WHERE streamer_login = ? AND started_at >= ? AND duration_seconds > 300
+            WHERE streamer_login = %s AND started_at >= %s AND duration_seconds > 300
             GROUP BY d
             HAVING COUNT(*) > 1
         )
@@ -894,7 +894,7 @@ def _chat_concentration(conn: sqlite3.Connection, streamer: str, since: str) -> 
             COUNT(*) as cnt,
             SUM(total_messages) as msgs
         FROM twitch_chatter_rollup
-        WHERE streamer_login = ? AND last_seen_at >= ?
+        WHERE streamer_login = %s AND last_seen_at >= %s
         GROUP BY bucket
         """,
         (streamer, since),
@@ -915,7 +915,7 @@ def _chat_concentration(conn: sqlite3.Connection, streamer: str, since: str) -> 
         """
         SELECT chatter_login, total_messages, total_sessions
         FROM twitch_chatter_rollup
-        WHERE streamer_login = ? AND last_seen_at >= ?
+        WHERE streamer_login = %s AND last_seen_at >= %s
         ORDER BY total_messages DESC
         LIMIT 15
         """,
@@ -951,7 +951,7 @@ def _chat_concentration(conn: sqlite3.Connection, streamer: str, since: str) -> 
             COUNT(*) as total,
             SUM(CASE WHEN total_sessions = 1 THEN 1 ELSE 0 END) as one_timers
         FROM twitch_chatter_rollup
-        WHERE last_seen_at >= ?
+        WHERE last_seen_at >= %s
         GROUP BY streamer_login
         HAVING COUNT(*) >= 5
         """,
@@ -991,7 +991,7 @@ def _raid_network(conn: sqlite3.Connection, streamer: str, since: str) -> dict[s
         """
         SELECT LOWER(to_broadcaster_login), COUNT(*), AVG(viewer_count), SUM(viewer_count)
         FROM twitch_raid_history
-        WHERE LOWER(from_broadcaster_login) = ? AND executed_at >= ? AND COALESCE(success, FALSE) IS TRUE
+        WHERE LOWER(from_broadcaster_login) = %s AND executed_at >= %s AND COALESCE(success, FALSE) IS TRUE
         GROUP BY LOWER(to_broadcaster_login)
         ORDER BY COUNT(*) DESC
         """,
@@ -1002,7 +1002,7 @@ def _raid_network(conn: sqlite3.Connection, streamer: str, since: str) -> dict[s
         """
         SELECT LOWER(from_broadcaster_login), COUNT(*), AVG(viewer_count), SUM(viewer_count)
         FROM twitch_raid_history
-        WHERE LOWER(to_broadcaster_login) = ? AND executed_at >= ? AND COALESCE(success, FALSE) IS TRUE
+        WHERE LOWER(to_broadcaster_login) = %s AND executed_at >= %s AND COALESCE(success, FALSE) IS TRUE
         GROUP BY LOWER(from_broadcaster_login)
         ORDER BY COUNT(*) DESC
         """,
@@ -1087,7 +1087,7 @@ def _peer_comparison(conn: sqlite3.Connection, streamer: str, since: str) -> dic
             SUM(CASE WHEN s.follower_delta > 0 THEN s.follower_delta ELSE 0 END) as follows_gained,
             COUNT(DISTINCT s.stream_title) as unique_titles
         FROM twitch_stream_sessions s
-        WHERE s.started_at >= ? AND s.duration_seconds > 300 AND s.ended_at IS NOT NULL
+        WHERE s.started_at >= %s AND s.duration_seconds > 300 AND s.ended_at IS NOT NULL
         GROUP BY s.streamer_login
         HAVING COUNT(*) >= 3
         ORDER BY avg_v DESC
@@ -1186,12 +1186,12 @@ def _competition_density(conn: sqlite3.Connection, streamer: str, since: str) ->
     density = conn.execute(
         """
         SELECT
-            CAST(strftime('%H', s.started_at) AS INTEGER) as hour,
+            EXTRACT(HOUR FROM (s.started_at AT TIME ZONE 'UTC'))::int as hour,
             COUNT(DISTINCT s.streamer_login) as active_streamers,
             AVG(s.avg_viewers) as avg_viewers,
             AVG(s.peak_viewers) as avg_peak
         FROM twitch_stream_sessions s
-        WHERE s.started_at >= ? AND s.duration_seconds > 300 AND s.ended_at IS NOT NULL
+        WHERE s.started_at >= %s AND s.duration_seconds > 300 AND s.ended_at IS NOT NULL
         GROUP BY hour
         ORDER BY hour
         """,
@@ -1202,13 +1202,13 @@ def _competition_density(conn: sqlite3.Connection, streamer: str, since: str) ->
     own_hours = conn.execute(
         """
         SELECT
-            CAST(strftime('%H', s.started_at) AS INTEGER) as hour,
+            EXTRACT(HOUR FROM (s.started_at AT TIME ZONE 'UTC'))::int as hour,
             COUNT(*) as cnt,
             AVG(s.avg_viewers) as avg_v,
             AVG(s.peak_viewers) as avg_peak,
             AVG(s.unique_chatters) as avg_chat
         FROM twitch_stream_sessions s
-        WHERE s.streamer_login = ? AND s.started_at >= ? AND s.duration_seconds > 300
+        WHERE s.streamer_login = %s AND s.started_at >= %s AND s.duration_seconds > 300
         GROUP BY hour
         ORDER BY hour
         """,
@@ -1247,11 +1247,11 @@ def _competition_density(conn: sqlite3.Connection, streamer: str, since: str) ->
     weekday_density = conn.execute(
         """
         SELECT
-            CAST(strftime('%w', s.started_at) AS INTEGER) as weekday,
+            EXTRACT(DOW FROM (s.started_at AT TIME ZONE 'UTC'))::int as weekday,
             COUNT(DISTINCT s.streamer_login) as active_streamers,
             AVG(s.avg_viewers) as avg_viewers
         FROM twitch_stream_sessions s
-        WHERE s.started_at >= ? AND s.duration_seconds > 300 AND s.ended_at IS NOT NULL
+        WHERE s.started_at >= %s AND s.duration_seconds > 300 AND s.ended_at IS NOT NULL
         GROUP BY weekday
         ORDER BY weekday
         """,
@@ -1261,12 +1261,12 @@ def _competition_density(conn: sqlite3.Connection, streamer: str, since: str) ->
     own_weekdays = conn.execute(
         """
         SELECT
-            CAST(strftime('%w', s.started_at) AS INTEGER) as weekday,
+            EXTRACT(DOW FROM (s.started_at AT TIME ZONE 'UTC'))::int as weekday,
             COUNT(*) as cnt,
             AVG(s.avg_viewers) as avg_v,
             AVG(s.peak_viewers) as avg_peak
         FROM twitch_stream_sessions s
-        WHERE s.streamer_login = ? AND s.started_at >= ? AND s.duration_seconds > 300
+        WHERE s.streamer_login = %s AND s.started_at >= %s AND s.duration_seconds > 300
         GROUP BY weekday
         """,
         (streamer, since),

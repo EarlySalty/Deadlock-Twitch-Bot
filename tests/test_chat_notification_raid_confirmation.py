@@ -13,6 +13,25 @@ from bot.raid.bot import RaidBot
 from tests.sqlite_twitch_schema import ensure_sqlite_twitch_schema
 
 
+class _CompatConn:
+    def __init__(self, conn: sqlite3.Connection) -> None:
+        self._conn = conn
+
+    @staticmethod
+    def _translate(sql: str) -> str:
+        translated = str(sql).replace("%s", "?")
+        translated = translated.replace("NOW() - INTERVAL '1 day'", "datetime('now', '-1 day')")
+        translated = translated.replace("NOW() - INTERVAL '7 days'", "datetime('now', '-7 days')")
+        translated = translated.replace("NOW() - INTERVAL '30 days'", "datetime('now', '-30 days')")
+        return translated
+
+    def execute(self, sql: str, params=()):
+        return self._conn.execute(self._translate(sql), params)
+
+    def __getattr__(self, name: str):
+        return getattr(self._conn, name)
+
+
 class _JoinHarness(ConnectionMixin):
     def __init__(self, *, bot_scopes: set[str] | None = None) -> None:
         self._client_id = "client-id"
@@ -64,6 +83,17 @@ class _JoinHarness(ConnectionMixin):
 
     def _is_monitored_only(self, channel_name: str) -> bool:
         return False
+
+
+class _CompatConn:
+    def __init__(self, conn: sqlite3.Connection) -> None:
+        self._conn = conn
+
+    def execute(self, sql: str, params=()):
+        return self._conn.execute(str(sql).replace("%s", "?"), params)
+
+    def __getattr__(self, name: str):
+        return getattr(self._conn, name)
 
 
 class _JoinFailureHarness(_JoinHarness):
@@ -152,8 +182,8 @@ class ChatJoinNotificationSubscriptionTests(unittest.IsolatedAsyncioTestCase):
         harness = _JoinFailureHarness(bot_scopes={"user:read:chat"})
         try:
             with patch(
-                "bot.chat.connection.get_conn",
-                side_effect=lambda: contextlib.nullcontext(conn),
+                "bot.chat.connection.readonly_connection",
+                side_effect=lambda: contextlib.nullcontext(_CompatConn(conn)),
             ):
                 result = await harness.join("targetlogin", channel_id="9009")
         finally:
@@ -183,8 +213,8 @@ class ChatJoinNotificationSubscriptionTests(unittest.IsolatedAsyncioTestCase):
         harness = _JoinFailureHarness(bot_scopes={"user:write:chat"})
         try:
             with patch(
-                "bot.chat.connection.get_conn",
-                side_effect=lambda: contextlib.nullcontext(conn),
+                "bot.chat.connection.readonly_connection",
+                side_effect=lambda: contextlib.nullcontext(_CompatConn(conn)),
             ):
                 result = await harness.join("targetlogin", channel_id="9009")
         finally:
@@ -222,8 +252,8 @@ class ChatJoinNotificationSubscriptionTests(unittest.IsolatedAsyncioTestCase):
         harness._ensure_bot_is_mod = AsyncMock(return_value=False)
         try:
             with patch(
-                "bot.chat.connection.get_conn",
-                side_effect=lambda: contextlib.nullcontext(conn),
+                "bot.chat.connection.readonly_connection",
+                side_effect=lambda: contextlib.nullcontext(_CompatConn(conn)),
             ):
                 result = await harness.join("targetlogin", channel_id="9009")
         finally:
@@ -267,8 +297,8 @@ class ChatJoinNotificationSubscriptionTests(unittest.IsolatedAsyncioTestCase):
         harness._ensure_bot_is_mod = AsyncMock(return_value=False)
         try:
             with patch(
-                "bot.chat.connection.get_conn",
-                side_effect=lambda: contextlib.nullcontext(conn),
+                "bot.chat.connection.readonly_connection",
+                side_effect=lambda: contextlib.nullcontext(_CompatConn(conn)),
             ):
                 result = await harness.join("targetlogin", channel_id="9009")
         finally:
@@ -365,8 +395,12 @@ class ChatNotificationRaidCorrelationTests(unittest.IsolatedAsyncioTestCase):
 
         with (
             patch(
-                "bot.raid.bot.get_conn",
-                side_effect=lambda: contextlib.nullcontext(self.conn),
+                "bot.raid.bot.readonly_connection",
+                side_effect=lambda: contextlib.nullcontext(_CompatConn(self.conn)),
+            ),
+            patch(
+                "bot.raid.bot.transaction",
+                side_effect=lambda: contextlib.nullcontext(_CompatConn(self.conn)),
             ),
             patch(
                 "bot.raid.bot.track_confirmed_partner_raid",
@@ -424,8 +458,11 @@ class ChatNotificationRaidCorrelationTests(unittest.IsolatedAsyncioTestCase):
         )
 
         with patch(
-            "bot.raid.bot.get_conn",
-            side_effect=lambda: contextlib.nullcontext(self.conn),
+            "bot.raid.bot.readonly_connection",
+            side_effect=lambda: contextlib.nullcontext(_CompatConn(self.conn)),
+        ), patch(
+            "bot.raid.bot.transaction",
+            side_effect=lambda: contextlib.nullcontext(_CompatConn(self.conn)),
         ):
             await raid_bot.on_chat_unraid_notification(
                 to_broadcaster_id="9009",
@@ -480,8 +517,11 @@ class ChatNotificationRaidCorrelationTests(unittest.IsolatedAsyncioTestCase):
         raid_bot = self._build_raid_bot()
 
         with patch(
-            "bot.raid.bot.get_conn",
-            side_effect=lambda: contextlib.nullcontext(self.conn),
+            "bot.raid.bot.readonly_connection",
+            side_effect=lambda: contextlib.nullcontext(_CompatConn(self.conn)),
+        ), patch(
+            "bot.raid.bot.transaction",
+            side_effect=lambda: contextlib.nullcontext(_CompatConn(self.conn)),
         ):
             await raid_bot.on_raid_arrival(
                 to_broadcaster_id="9009",
@@ -510,8 +550,12 @@ class ChatNotificationRaidCorrelationTests(unittest.IsolatedAsyncioTestCase):
 
         with (
             patch(
-                "bot.raid.bot.get_conn",
-                side_effect=lambda: contextlib.nullcontext(self.conn),
+                "bot.raid.bot.readonly_connection",
+                side_effect=lambda: contextlib.nullcontext(_CompatConn(self.conn)),
+            ),
+            patch(
+                "bot.raid.bot.transaction",
+                side_effect=lambda: contextlib.nullcontext(_CompatConn(self.conn)),
             ),
             patch(
                 "bot.raid.bot.track_confirmed_partner_raid",

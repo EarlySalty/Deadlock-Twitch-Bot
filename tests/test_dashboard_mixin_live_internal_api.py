@@ -71,7 +71,7 @@ class DashboardMixinLiveInternalApiTests(unittest.IsolatedAsyncioTestCase):
         handler = _DummyDashboardMixin()
         fake_conn = _FakeConn()
 
-        with patch("bot.dashboard.mixin.storage.get_conn", return_value=_FakeConnCtx(fake_conn)):
+        with patch("bot.dashboard.mixin.storage.readonly_connection", return_value=_FakeConnCtx(fake_conn)):
             payload = await handler._dashboard_live_active_announcements()
 
         self.assertEqual(
@@ -92,7 +92,7 @@ class DashboardMixinLiveInternalApiTests(unittest.IsolatedAsyncioTestCase):
         handler = _DummyDashboardMixin()
         fake_conn = _FakeConn()
 
-        with patch("bot.dashboard.mixin.storage.get_conn", return_value=_FakeConnCtx(fake_conn)):
+        with patch("bot.dashboard.mixin.storage.transaction", return_value=_FakeConnCtx(fake_conn)):
             payload = await handler._dashboard_live_link_click(
                 streamer_login="partner_one",
                 tracking_token="deadbeef1234",

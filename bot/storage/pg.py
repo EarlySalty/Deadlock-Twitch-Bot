@@ -1,9 +1,8 @@
-"""PostgreSQL/TimescaleDB storage layer for Twitch analytics (Windows Tresor friendly).
+"""PostgreSQL storage layer for Twitch analytics.
 
-- DSN lookup order: env TWITCH_ANALYTICS_DSN, then Windows Credential Manager (service: DeadlockBot, key: TWITCH_ANALYTICS_DSN).
-- Provides a sqlite-like interface: get_conn() yields a psycopg connection; execute() etc. available via conn.
-- Supports sqlite-style '?' placeholders by translating to '%s'.
-- Adds minimal compatibility functions (strftime, printf) inside the target DB so existing analytics SQL keeps running.
+The storage boundary is now native psycopg with pooled connections, explicit
+transactions, and PostgreSQL-oriented helpers. Remaining sqlite-era SQL
+constructs in callers are transitional blockers, not storage architecture.
 """
 
 from __future__ import annotations
@@ -23,6 +22,8 @@ from urllib.parse import urlsplit
 import psycopg
 from psycopg.conninfo import conninfo_to_dict
 
+from ._pool import ConnectionPoolRegistry
+from ._rows import storage_row_factory
 from .partner_registry import (
     archive_active_partner,
     bulk_update_partner_flags,
@@ -44,6 +45,39 @@ from .partner_registry import (
 )
 
 log = logging.getLogger("TwitchStreams.StoragePG")
+
+__all__ = [
+    "prepare_runtime_storage",
+    "readonly_connection",
+    "transaction",
+    "ensure_schema",
+    "query_one",
+    "query_all",
+    "analytics_db_fingerprint",
+    "analytics_db_fingerprint_details",
+    "backfill_tracked_stats_from_category",
+    "insert_observability_event",
+    "delete_streamer",
+    "archive_active_partner",
+    "bulk_update_partner_flags",
+    "load_active_partner",
+    "load_latest_partner_history",
+    "load_partner_by_discord_user_id",
+    "load_streamer_identity",
+    "promote_streamer_to_partner",
+    "reactivate_partner",
+    "save_streamer_discord_profile",
+    "set_partner_live_ping_settings",
+    "set_partner_raid_bot_enabled",
+    "set_partner_silent_flags",
+    "set_streamer_discord_member",
+    "upsert_non_partner_streamer",
+    "upsert_streamer_identity",
+    "verification_payload",
+    "save_promo_cooldown",
+    "load_promo_cooldowns",
+    "cleanup_stale_promo_cooldowns",
+]
 
 KEYRING_SERVICE = "DeadlockBot"
 ENV_DSN = "TWITCH_ANALYTICS_DSN"
@@ -71,6 +105,18 @@ def _env_float(name: str, default: float, *, minimum: float) -> float:
     except ValueError:
         log.warning("Invalid %s=%r; using default %s", name, raw, default)
         return default
+
+
+_CONNECTION_POOL_MAXSIZE = _env_int(
+    "TWITCH_ANALYTICS_POOL_MAXSIZE",
+    12,
+    minimum=1,
+)
+_CONNECTION_POOL_TIMEOUT_SECONDS = _env_float(
+    "TWITCH_ANALYTICS_POOL_TIMEOUT_SECONDS",
+    5.0,
+    minimum=0.1,
+)
 
 
 _OBSERVABILITY_QUEUE_MAXSIZE = _env_int(
@@ -195,48 +241,6 @@ def _db_cache_key(dsn: str | None = None) -> str:
     return analytics_db_fingerprint(dsn)
 
 
-def _placeholder_sql(sql: str) -> str:
-    """Escape literal '%' and convert sqlite-style '?' to psycopg placeholders."""
-    # Escape all percent signs first; psycopg treats '%%' as literal '%'.
-    sql = sql.replace("%", "%%")
-    # Restore the valid placeholder forms.
-    sql = sql.replace("%%s", "%s").replace("%%b", "%b").replace("%%t", "%t")
-    # Translate sqlite-style '?' placeholders to '%s'.
-    return sql.replace("?", "%s")
-
-
-def _monkey_patch_psycopg() -> None:
-    """
-    Add a couple of sqlite-compat helpers directly onto psycopg.Connection so
-    legacy call-sites that accidentally hold the raw connection won't explode.
-    """
-    if not hasattr(psycopg.Connection, "executemany"):
-        def _conn_executemany(self, sql, params=None, *args, **kwargs):
-            with self.cursor() as cur:
-                return cur.executemany(_placeholder_sql(sql), params or (), *args, **kwargs)
-
-        psycopg.Connection.executemany = _conn_executemany  # type: ignore[attr-defined]
-
-    if not hasattr(psycopg.Connection, "executescript"):
-        def _conn_executescript(self, script):
-            last_cursor = None
-            for statement in _split_sql_script(script or ""):
-                last_cursor = self.execute(statement)
-            return last_cursor
-
-        psycopg.Connection.executescript = _conn_executescript  # type: ignore[attr-defined]
-
-    # No-op stub that mirrors SQLite's `changes()` to avoid UndefinedFunction errors
-    # when someone runs "SELECT changes()" on a raw connection.
-    if not hasattr(psycopg.Connection, "_deadlock_changes_stub"):
-        def _mark_changes_stub(self):
-            return 0
-        psycopg.Connection._deadlock_changes_stub = _mark_changes_stub  # type: ignore[attr-defined]
-
-
-_monkey_patch_psycopg()
-
-
 def _align_serial_sequence(conn: psycopg.Connection, table: str, column: str) -> None:
     """
     Ensure the backing sequence for a SERIAL/IDENTITY column is ahead of existing rows.
@@ -301,7 +305,12 @@ def _coerce_column_to_boolean(
             )
             log.info("DB migration: converted %s.%s to BOOLEAN", table, column)
         except Exception as exc:  # pragma: no cover - best effort guard
-            log.warning("DB migration: could not convert %s.%s to BOOLEAN: %s", table, column, exc)
+            log.warning(
+                "DB migration: could not convert %s.%s to BOOLEAN: %s",
+                table,
+                column,
+                exc,
+            )
             return
 
     try:
@@ -440,14 +449,18 @@ def _ensure_twitch_raid_auth_login_index(conn: psycopg.Connection) -> None:
                 ON twitch_raid_auth (LOWER(twitch_login))
             """
         )
-    except psycopg.errors.UniqueViolation as exc:  # pragma: no cover - best effort guard
+    except (
+        psycopg.errors.UniqueViolation
+    ) as exc:  # pragma: no cover - best effort guard
         log.warning(
             "Could not enforce case-insensitive twitch_raid_auth login uniqueness: %s",
             exc,
         )
 
 
-def _run_startup_maintenance(conn: psycopg.Connection, *, dsn: str | None = None) -> None:
+def _run_startup_maintenance(
+    conn: psycopg.Connection, *, dsn: str | None = None
+) -> None:
     """
     One-time runtime maintenance for existing schemas.
     Keeps known SERIAL sequences aligned even when ensure_schema() is skipped
@@ -463,8 +476,12 @@ def _run_startup_maintenance(conn: psycopg.Connection, *, dsn: str | None = None
     _align_serial_sequence(conn, "twitch_raid_history", "id")
     _align_serial_sequence(conn, "clip_fetch_history", "id")
     _align_serial_sequence(conn, "twitch_clips_social_media", "id")
-    _coerce_column_to_boolean(conn, "twitch_session_chatters", "is_first_time_streamer", default=False)
-    _coerce_column_to_boolean(conn, "twitch_session_chatters", "seen_via_chatters_api", default=False)
+    _coerce_column_to_boolean(
+        conn, "twitch_session_chatters", "is_first_time_streamer", default=False
+    )
+    _coerce_column_to_boolean(
+        conn, "twitch_session_chatters", "seen_via_chatters_api", default=False
+    )
     _coerce_column_to_boolean(conn, "twitch_chat_messages", "is_command", default=False)
     try:
         _cleanup_duplicate_live_state_rows(conn)
@@ -511,52 +528,6 @@ def _ensure_unique_live_state_login_index(conn: psycopg.Connection) -> None:
     )
 
 
-class RowCompat:
-    """Row that supports both numeric and name-based access."""
-
-    __slots__ = ("_values", "_map")
-
-    def __init__(self, names: Sequence[str], values: Sequence[object]):
-        self._values = tuple(values)
-        self._map = {name: val for name, val in zip(names, values, strict=False)}
-
-    def __getitem__(self, key):
-        if isinstance(key, int):
-            return self._values[key]
-        return self._map[key]
-
-    def get(self, key, default=None):
-        return self._map.get(key, default)
-
-    def keys(self):
-        return self._map.keys()
-
-    def values(self):
-        return self._map.values()
-
-    def items(self):
-        return self._map.items()
-
-    def __iter__(self):
-        return iter(self._values)
-
-    def __len__(self):
-        return len(self._values)
-
-    def __repr__(self) -> str:  # pragma: no cover - debug helper
-        return f"RowCompat({self._map})"
-
-
-def _compat_row_factory(cursor: psycopg.Cursor) -> psycopg.rows.RowMaker[RowCompat]:
-    """Row factory returning RowCompat with both index and name access."""
-    names = [col.name for col in cursor.description] if cursor.description else []
-
-    def _maker(values: Sequence[object]) -> RowCompat:
-        return RowCompat(names, values)
-
-    return _maker
-
-
 def _load_dsn() -> str:
     env_dsn = (os.getenv(ENV_DSN) or "").strip()
     if env_dsn:
@@ -571,245 +542,9 @@ def _load_dsn() -> str:
             return val
     except Exception as exc:  # pragma: no cover - best-effort Tresor lookup
         log.debug("Keyring lookup failed: %s", exc)
-    raise RuntimeError(f"{ENV_DSN} not set (env or Windows Credential Manager '{KEYRING_SERVICE}')")
-
-
-def _split_sql_script(script: str) -> list[str]:
-    """Split a SQL script into executable statements without breaking quoted sections."""
-
-    statements: list[str] = []
-    current: list[str] = []
-    in_single = False
-    in_double = False
-    in_line_comment = False
-    in_block_comment = False
-    dollar_tag: str | None = None
-    i = 0
-    length = len(script)
-
-    while i < length:
-        ch = script[i]
-        nxt = script[i + 1] if i + 1 < length else ""
-
-        if in_line_comment:
-            current.append(ch)
-            if ch == "\n":
-                in_line_comment = False
-            i += 1
-            continue
-
-        if in_block_comment:
-            current.append(ch)
-            if ch == "*" and nxt == "/":
-                current.append(nxt)
-                i += 2
-                in_block_comment = False
-                continue
-            i += 1
-            continue
-
-        if dollar_tag is not None:
-            if script.startswith(dollar_tag, i):
-                current.append(dollar_tag)
-                i += len(dollar_tag)
-                dollar_tag = None
-                continue
-            current.append(ch)
-            i += 1
-            continue
-
-        if in_single:
-            current.append(ch)
-            if ch == "'" and nxt == "'":
-                current.append(nxt)
-                i += 2
-                continue
-            if ch == "'":
-                in_single = False
-            i += 1
-            continue
-
-        if in_double:
-            current.append(ch)
-            if ch == '"' and nxt == '"':
-                current.append(nxt)
-                i += 2
-                continue
-            if ch == '"':
-                in_double = False
-            i += 1
-            continue
-
-        if ch == "-" and nxt == "-":
-            current.append(ch)
-            current.append(nxt)
-            i += 2
-            in_line_comment = True
-            continue
-
-        if ch == "/" and nxt == "*":
-            current.append(ch)
-            current.append(nxt)
-            i += 2
-            in_block_comment = True
-            continue
-
-        if ch == "'":
-            current.append(ch)
-            in_single = True
-            i += 1
-            continue
-
-        if ch == '"':
-            current.append(ch)
-            in_double = True
-            i += 1
-            continue
-
-        if ch == "$":
-            j = i + 1
-            while j < length and (script[j].isalnum() or script[j] == "_"):
-                j += 1
-            if j < length and script[j] == "$":
-                tag = script[i : j + 1]
-                current.append(tag)
-                i = j + 1
-                dollar_tag = tag
-                continue
-
-        if ch == ";":
-            statement = "".join(current).strip()
-            if statement:
-                statements.append(statement)
-            current = []
-            i += 1
-            continue
-
-        current.append(ch)
-        i += 1
-
-    trailing = "".join(current).strip()
-    if trailing:
-        statements.append(trailing)
-
-    return statements
-
-
-class _CompatCursor:
-    """Lightweight wrapper to apply placeholder translation on execute calls."""
-
-    def __init__(self, cursor: psycopg.Cursor):
-        self._cursor = cursor
-
-    def execute(self, sql: str, params=None, *args, **kwargs):
-        return self._cursor.execute(_placeholder_sql(sql), params or (), *args, **kwargs)
-
-    def executemany(self, sql: str, params_seq, *args, **kwargs):
-        return self._cursor.executemany(_placeholder_sql(sql), params_seq, *args, **kwargs)
-
-    # Passthrough for fetch* and iteration
-    def __getattr__(self, item):
-        return getattr(self._cursor, item)
-
-    def __iter__(self):
-        return iter(self._cursor)
-
-    def __enter__(self):
-        self._cursor.__enter__()
-        return self
-
-    def __exit__(self, exc_type, exc, tb):
-        return self._cursor.__exit__(exc_type, exc, tb)
-
-
-class _ScalarCursor:
-    """Minimal cursor-like object for compatibility helpers (changes(), last_insert_rowid())."""
-
-    def __init__(self, value: int | None):
-        self._value = value or 0
-        self.rowcount = 1
-
-    def fetchone(self):
-        return (self._value,)
-
-    def fetchall(self):
-        return [(self._value,)]
-
-    def __iter__(self):
-        yield (self._value,)
-
-
-class _CompatConnection:
-    """Wrapper exposing a psycopg connection with sqlite-style execute()."""
-
-    def __init__(self, conn: psycopg.Connection):
-        self._conn = conn
-        self._last_rowcount: int = 0
-        self._last_insert_rowid: int | None = None
-
-    # Basic helpers expected by callers
-    def execute(self, sql: str, params=None, *args, **kwargs):
-        sql_text = sql or ""
-        normalized = sql_text.strip().lower().rstrip(";")
-
-        if normalized == "select changes()":
-            return _ScalarCursor(self._last_rowcount)
-        if normalized in {"select last_insert_rowid()", "select last_insert_rowid"}:
-            return _ScalarCursor(self._last_insert_rowid)
-
-        cur = self._conn.execute(_placeholder_sql(sql_text), params or (), *args, **kwargs)
-        self._last_rowcount = getattr(cur, "rowcount", 0)
-
-        if normalized.startswith("insert"):
-            try:
-                lastval_row = self._conn.execute("SELECT LASTVAL()").fetchone()
-                self._last_insert_rowid = lastval_row[0] if lastval_row else None
-            except Exception:
-                self._last_insert_rowid = None
-
-        return cur
-
-    def executemany(self, sql: str, params_seq, *args, **kwargs):
-        sql_text = sql or ""
-        normalized = sql_text.strip().lower().rstrip(";")
-
-        if normalized == "select changes()":
-            return _ScalarCursor(self._last_rowcount)
-
-        with self._conn.cursor() as _cur:
-            cur = _CompatCursor(_cur)
-            cur.executemany(sql_text, params_seq, *args, **kwargs)
-            self._last_rowcount = getattr(cur, "rowcount", 0)
-
-        if normalized.startswith("insert"):
-            try:
-                lastval_row = self._conn.execute("SELECT LASTVAL()").fetchone()
-                self._last_insert_rowid = lastval_row[0] if lastval_row else None
-            except Exception:
-                self._last_insert_rowid = None
-
-        return cur
-
-    def executescript(self, script: str):
-        last_cursor = None
-        for statement in _split_sql_script(script or ""):
-            last_cursor = self.execute(statement)
-        return last_cursor if last_cursor is not None else _ScalarCursor(0)
-
-    def cursor(self, *args, **kwargs):
-        return _CompatCursor(self._conn.cursor(*args, **kwargs))
-
-    # Context manager support
-    def __enter__(self):
-        self._conn.__enter__()
-        return self
-
-    def __exit__(self, exc_type, exc, tb):
-        return self._conn.__exit__(exc_type, exc, tb)
-
-    # Delegate everything else to the real connection
-    def __getattr__(self, item):
-        return getattr(self._conn, item)
+    raise RuntimeError(
+        f"{ENV_DSN} not set (env or Windows Credential Manager '{KEYRING_SERVICE}')"
+    )
 
 
 def _execute_with_savepoint(conn, sql: str, params=None):
@@ -830,173 +565,36 @@ def _execute_with_savepoint(conn, sql: str, params=None):
     return result
 
 
-def _ensure_compat_functions(conn: psycopg.Connection, *, dsn: str | None = None) -> None:
-    """Install lightweight sqlite compatibility helpers once per target analytics DB."""
+def _connect_raw_connection(dsn: str, autocommit: bool) -> psycopg.Connection:
+    return psycopg.connect(dsn, row_factory=storage_row_factory, autocommit=autocommit)
+
+
+def _mark_schema_ready(cache_key: str) -> None:
+    schema_ok_for = set(getattr(_ensure_storage_bootstrap, "_schema_ok_for", set()))
+    schema_ok_for.add(cache_key)
+    _ensure_storage_bootstrap._schema_ok_for = schema_ok_for
+
+
+def _mark_runtime_storage_ready(cache_key: str) -> None:
+    ready_for = set(getattr(_require_runtime_storage_ready, "_ready_for", set()))
+    ready_for.add(cache_key)
+    _require_runtime_storage_ready._ready_for = ready_for
+
+
+def _require_runtime_storage_ready(dsn: str) -> None:
     cache_key = _db_cache_key(dsn)
-    installed_for = set(getattr(_ensure_compat_functions, "_installed_for", set()))
-    if cache_key in installed_for:
+    ready_for = set(getattr(_require_runtime_storage_ready, "_ready_for", set()))
+    if cache_key in ready_for:
         return
-    with conn.cursor() as _cur:
-        cur = _CompatCursor(_cur)
-        cur.execute(
-            """
-            CREATE OR REPLACE FUNCTION strftime(fmt text, ts timestamptz)
-            RETURNS text
-            LANGUAGE plpgsql IMMUTABLE AS $$
-            DECLARE p text := fmt;
-            BEGIN
-              IF fmt = '%w' THEN
-                RETURN (EXTRACT(dow FROM ts))::int::text; -- 0=Sonntag wie SQLite
-              END IF;
-              p := replace(p, '%Y', 'YYYY');
-              p := replace(p, '%m', 'MM');
-              p := replace(p, '%d', 'DD');
-              p := replace(p, '%H', 'HH24');
-              p := replace(p, '%M', 'MI');
-              RETURN to_char(ts, p);
-            END;
-            $$;
-            """
-        )
-        cur.execute(
-            """
-            CREATE OR REPLACE FUNCTION printf(fmt text, arg numeric)
-            RETURNS text
-            LANGUAGE plpgsql IMMUTABLE AS $$
-            BEGIN
-              IF fmt = '%02d' THEN
-                RETURN lpad((arg::int)::text, 2, '0');
-              END IF;
-              RETURN format(fmt, arg);
-            END;
-            $$;
-            """
-        )
-        cur.execute(
-            """
-            CREATE OR REPLACE FUNCTION julianday(ts timestamptz)
-            RETURNS double precision
-            LANGUAGE plpgsql IMMUTABLE AS $$
-            BEGIN
-              RETURN EXTRACT(EPOCH FROM ts) / 86400.0 + 2440587.5;
-            END;
-            $$;
-            """
-        )
-        cur.execute(
-            """
-            CREATE OR REPLACE FUNCTION julianday(ts text)
-            RETURNS double precision
-            LANGUAGE sql IMMUTABLE AS $$
-              SELECT julianday(ts::timestamptz);
-            $$;
-            """
-        )
-        cur.execute(
-            """
-            CREATE OR REPLACE FUNCTION changes()
-            RETURNS integer
-            LANGUAGE plpgsql VOLATILE AS $$
-            BEGIN
-              RETURN 0;
-            END;
-            $$;
-            """
-        )
-        cur.execute(
-            """
-            CREATE OR REPLACE FUNCTION datetime(ts text, modifier text DEFAULT NULL)
-            RETURNS timestamptz
-            LANGUAGE plpgsql STABLE AS $$
-            DECLARE
-              base_ts timestamptz;
-            BEGIN
-              IF ts IS NULL THEN
-                RETURN NULL;
-              END IF;
-              IF lower(ts) = 'now' THEN
-                base_ts := NOW();
-              ELSE
-                base_ts := ts::timestamptz;
-              END IF;
-              IF modifier IS NOT NULL THEN
-                base_ts := base_ts + modifier::interval;
-              END IF;
-              RETURN base_ts;
-            END;
-            $$;
-            """
-        )
-    conn.commit()
-    installed_for.add(cache_key)
-    _ensure_compat_functions._installed_for = installed_for
+    raise RuntimeError(
+        "PostgreSQL storage is not initialized. Call prepare_runtime_storage() during startup "
+        "before serving runtime requests."
+    )
 
 
-@contextlib.contextmanager
-def get_conn():
-    """Context manager returning a psycopg connection with dict rows and autocommit."""
-    dsn = _load_dsn()
-    conn = psycopg.connect(dsn, row_factory=_compat_row_factory, autocommit=True)
-    try:
-        cache_key = _db_cache_key(dsn)
-        _ensure_compat_functions(conn, dsn=dsn)
-        schema_ok_for = set(getattr(get_conn, "_schema_ok_for", set()))
-        if cache_key not in schema_ok_for:
-            schema_version_exists = False
-            try:
-                row = conn.execute(
-                    """
-                    SELECT 1
-                      FROM information_schema.tables
-                     WHERE table_schema = 'public'
-                       AND table_name = 'schema_version'
-                    """
-                ).fetchone()
-                schema_version_exists = bool(row)
-            except Exception as exc:  # pragma: no cover - lightweight check only
-                log.debug("schema_version existence check failed: %s", exc)
-
-            if schema_version_exists:
-                schema_ok_for.add(cache_key)
-                get_conn._schema_ok_for = schema_ok_for
-            else:
-                try:
-                    ensure_schema(conn)
-                    schema_ok_for.add(cache_key)
-                    get_conn._schema_ok_for = schema_ok_for
-                except Exception as exc:  # pragma: no cover - best effort
-                    log.warning("Schema initialization failed: %s", exc, exc_info=True)
-        _run_startup_maintenance(conn, dsn=dsn)
-        yield _CompatConnection(conn)
-    finally:
-        conn.close()
-
-
-def execute(sql: str, params: Iterable | None = None):
-    with get_conn() as conn:
-        return conn.execute(sql, params or [])
-
-
-def query_one(sql: str, params: Iterable | None = None):
-    with get_conn() as conn:
-        return conn.execute(sql, params or []).fetchone()
-
-
-def query_all(sql: str, params: Iterable | None = None):
-    with get_conn() as conn:
-        return conn.execute(sql, params or []).fetchall()
-
-
-def _observability_queue_instance() -> queue.Queue[object]:
-    global _observability_event_queue
-    if _observability_event_queue is None:
-        _observability_event_queue = queue.Queue(maxsize=_OBSERVABILITY_QUEUE_MAXSIZE)
-    return _observability_event_queue
-
-
-def _ensure_observability_schema(conn: _CompatConnection, *, dsn: str | None = None) -> None:
+def _ensure_storage_bootstrap(conn: psycopg.Connection, *, dsn: str) -> None:
     cache_key = _db_cache_key(dsn)
-    schema_ok_for = set(getattr(get_conn, "_schema_ok_for", set()))
+    schema_ok_for = set(getattr(_ensure_storage_bootstrap, "_schema_ok_for", set()))
     if cache_key in schema_ok_for:
         return
 
@@ -1012,38 +610,173 @@ def _ensure_observability_schema(conn: _CompatConnection, *, dsn: str | None = N
         ).fetchone()
         schema_version_exists = bool(row)
     except Exception as exc:  # pragma: no cover - lightweight check only
-        log.debug("schema_version existence check failed for observability writer: %s", exc)
+        log.debug("schema_version existence check failed: %s", exc)
 
     if schema_version_exists:
-        schema_ok_for.add(cache_key)
-        get_conn._schema_ok_for = schema_ok_for
+        _mark_schema_ready(cache_key)
         return
 
     try:
         ensure_schema(conn)
-        schema_ok_for.add(cache_key)
-        get_conn._schema_ok_for = schema_ok_for
+        _mark_schema_ready(cache_key)
     except Exception as exc:  # pragma: no cover - best effort
-        log.warning("Schema initialization failed in observability writer: %s", exc, exc_info=True)
+        log.warning("Schema initialization failed: %s", exc, exc_info=True)
 
 
-def _open_observability_writer_connection() -> _CompatConnection:
+def _prepare_postgres_connection(conn: psycopg.Connection, *, dsn: str) -> None:
+    _ensure_storage_bootstrap(conn, dsn=dsn)
+    _run_startup_maintenance(conn, dsn=dsn)
+
+
+def prepare_runtime_storage() -> None:
+    """Run explicit storage bootstrap before runtime traffic is served."""
     dsn = _load_dsn()
-    raw_conn = psycopg.connect(dsn, row_factory=_compat_row_factory, autocommit=False)
+    cache_key = _db_cache_key(dsn)
+    ready_for = set(getattr(_require_runtime_storage_ready, "_ready_for", set()))
+    if cache_key in ready_for:
+        return
+
+    registry = _connection_pool_registry()
+    conn = registry.get_pool(dsn).open_dedicated(autocommit=False)
     try:
-        _ensure_compat_functions(raw_conn, dsn=dsn)
-        conn = _CompatConnection(raw_conn)
-        _ensure_observability_schema(conn, dsn=dsn)
-        return conn
+        _prepare_postgres_connection(conn, dsn=dsn)
+        conn.commit()
+        _mark_runtime_storage_ready(cache_key)
+    except Exception:
+        with contextlib.suppress(Exception):
+            conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+def _connection_pool_registry() -> ConnectionPoolRegistry:
+    registry = getattr(_connection_pool_registry, "_registry", None)
+    if registry is None:
+        registry = ConnectionPoolRegistry(
+            max_size=_CONNECTION_POOL_MAXSIZE,
+            checkout_timeout=_CONNECTION_POOL_TIMEOUT_SECONDS,
+            connect_fn=_connect_raw_connection,
+        )
+        _connection_pool_registry._registry = registry
+        atexit.register(registry.close_all)
+    return registry
+
+
+def _reset_connection_pools() -> None:
+    registry = getattr(_connection_pool_registry, "_registry", None)
+    if registry is not None:
+        registry.close_all()
+        delattr(_connection_pool_registry, "_registry")
+    if hasattr(_require_runtime_storage_ready, "_ready_for"):
+        delattr(_require_runtime_storage_ready, "_ready_for")
+
+
+@contextlib.contextmanager
+def readonly_connection():
+    """Yield a pooled raw PostgreSQL connection for PostgreSQL-first reads."""
+    dsn = _load_dsn()
+    _require_runtime_storage_ready(dsn)
+    pool = _connection_pool_registry().get_pool(dsn)
+    with pool.connection(autocommit=True) as conn:
+        yield conn
+
+
+@contextlib.contextmanager
+def transaction():
+    """Yield a pooled raw PostgreSQL connection and commit or rollback explicitly."""
+    dsn = _load_dsn()
+    _require_runtime_storage_ready(dsn)
+    pool = _connection_pool_registry().get_pool(dsn)
+    with pool.connection(autocommit=False) as conn:
+        try:
+            yield conn
+        except Exception:
+            with contextlib.suppress(Exception):
+                conn.rollback()
+            raise
+        else:
+            conn.commit()
+
+
+def execute(sql: str, params: Iterable | None = None):
+    with transaction() as conn:
+        return conn.execute(sql, params or [])
+
+
+def query_one(sql: str, params: Iterable | None = None):
+    with readonly_connection() as conn:
+        return conn.execute(sql, params or []).fetchone()
+
+
+def query_all(sql: str, params: Iterable | None = None):
+    with readonly_connection() as conn:
+        return conn.execute(sql, params or []).fetchall()
+
+
+def _observability_queue_instance() -> queue.Queue[object]:
+    global _observability_event_queue
+    if _observability_event_queue is None:
+        _observability_event_queue = queue.Queue(maxsize=_OBSERVABILITY_QUEUE_MAXSIZE)
+    return _observability_event_queue
+
+
+def _ensure_observability_schema(
+    conn: psycopg.Connection, *, dsn: str | None = None
+) -> None:
+    cache_key = _db_cache_key(dsn)
+    schema_ok_for = set(getattr(_ensure_storage_bootstrap, "_schema_ok_for", set()))
+    if cache_key in schema_ok_for:
+        return
+
+    schema_version_exists = False
+    try:
+        row = conn.execute(
+            """
+            SELECT 1
+              FROM information_schema.tables
+             WHERE table_schema = 'public'
+               AND table_name = 'schema_version'
+            """
+        ).fetchone()
+        schema_version_exists = bool(row)
+    except Exception as exc:  # pragma: no cover - lightweight check only
+        log.debug(
+            "schema_version existence check failed for observability writer: %s", exc
+        )
+
+    if schema_version_exists:
+        _mark_schema_ready(cache_key)
+        return
+
+    try:
+        ensure_schema(conn)
+        _mark_schema_ready(cache_key)
+    except Exception as exc:  # pragma: no cover - best effort
+        log.warning(
+            "Schema initialization failed in observability writer: %s",
+            exc,
+            exc_info=True,
+        )
+
+
+def _open_observability_writer_connection() -> psycopg.Connection:
+    dsn = _load_dsn()
+    _require_runtime_storage_ready(dsn)
+    raw_conn = (
+        _connection_pool_registry().get_pool(dsn).open_dedicated(autocommit=False)
+    )
+    try:
+        return raw_conn
     except Exception:
         raw_conn.close()
         raise
 
 
 def _flush_observability_batch(
-    conn: _CompatConnection | None,
+    conn: psycopg.Connection | None,
     batch: list[tuple[str, str, str | None, str | None, str, str, str]],
-) -> _CompatConnection | None:
+) -> psycopg.Connection | None:
     if not batch:
         return conn
 
@@ -1051,7 +784,8 @@ def _flush_observability_batch(
     try:
         if active_conn is None or getattr(active_conn, "closed", False):
             active_conn = _open_observability_writer_connection()
-        active_conn.executemany(_OBSERVABILITY_INSERT_SQL, batch)
+        with active_conn.cursor() as cursor:
+            cursor.executemany(_OBSERVABILITY_INSERT_SQL, batch)
         active_conn.commit()
         return active_conn
     except Exception:
@@ -1073,7 +807,7 @@ def _flush_observability_batch(
 
 
 def _observability_writer_loop() -> None:
-    conn: _CompatConnection | None = None
+    conn: psycopg.Connection | None = None
     batch: list[tuple[str, str, str | None, str | None, str, str, str]] = []
 
     while True:
@@ -1101,9 +835,7 @@ def _observability_writer_loop() -> None:
             batch.append(queued_item)
 
         if batch and (
-            stop_requested
-            or len(batch) >= _OBSERVABILITY_BATCH_SIZE
-            or item is None
+            stop_requested or len(batch) >= _OBSERVABILITY_BATCH_SIZE or item is None
         ):
             conn = _flush_observability_batch(conn, batch)
             batch = []
@@ -1235,7 +967,7 @@ def backfill_tracked_stats_from_category(conn, login: str) -> int:
         SELECT c.ts_utc, c.streamer, c.viewer_count, c.is_partner,
                c.game_name, c.stream_title, c.tags
           FROM twitch_stats_category c
-         WHERE LOWER(c.streamer) = ?
+         WHERE LOWER(c.streamer) = %s
            AND NOT EXISTS (
                SELECT 1
                  FROM twitch_stats_tracked t
@@ -1258,32 +990,43 @@ def delete_streamer(conn, login: str) -> int:
     conn.execute(
         """DELETE FROM twitch_clips_social_analytics
            WHERE clip_id IN (
-               SELECT id FROM twitch_clips_social_media WHERE streamer_login = ?
+               SELECT id FROM twitch_clips_social_media WHERE streamer_login = %s
            )""",
         (normalized,),
     )
     conn.execute(
         """DELETE FROM twitch_clips_upload_queue
            WHERE clip_id IN (
-               SELECT id FROM twitch_clips_social_media WHERE streamer_login = ?
+               SELECT id FROM twitch_clips_social_media WHERE streamer_login = %s
            )""",
         (normalized,),
     )
 
     # Child tables
-    conn.execute("DELETE FROM twitch_clips_social_media WHERE streamer_login = ?", (normalized,))
-    conn.execute("DELETE FROM clip_templates_streamer WHERE streamer_login = ?", (normalized,))
-    conn.execute("DELETE FROM clip_last_hashtags WHERE streamer_login = ?", (normalized,))
-    conn.execute("DELETE FROM clip_fetch_history WHERE streamer_login = ?", (normalized,))
+    conn.execute(
+        "DELETE FROM twitch_clips_social_media WHERE streamer_login = %s", (normalized,)
+    )
+    conn.execute(
+        "DELETE FROM clip_templates_streamer WHERE streamer_login = %s", (normalized,)
+    )
+    conn.execute(
+        "DELETE FROM clip_last_hashtags WHERE streamer_login = %s", (normalized,)
+    )
+    conn.execute(
+        "DELETE FROM clip_fetch_history WHERE streamer_login = %s", (normalized,)
+    )
 
     # The streamer itself
-    cur = conn.execute("DELETE FROM twitch_streamers WHERE twitch_login = ?", (normalized,))
+    cur = conn.execute(
+        "DELETE FROM twitch_streamers WHERE twitch_login = %s", (normalized,)
+    )
     return int(getattr(cur, "rowcount", 0) or 0)
 
 
 # ---------------------------------------------------------------------------
 # Schema: all non-auth Twitch tables (auth tables stay in SQLite)
 # ---------------------------------------------------------------------------
+
 
 def _pg_add_col_if_missing(conn, table: str, column: str, col_type: str) -> None:
     conn.execute(f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS {column} {col_type}")
@@ -1294,11 +1037,41 @@ def _seed_default_templates_pg(conn) -> None:
     if existing and int(existing) > 0:
         return
     templates = [
-        ("Gaming Highlight", "Epic {{game}} moment by {{streamer}}! 🎮", '["gaming","twitch","{{game}}"]', "Gaming", "system"),
-        ("Funny Moment", "😂 {{title}} | {{streamer}}", '["funny","gaming","twitch"]', "Entertainment", "system"),
-        ("Pro Play", "Insane {{game}} play by {{streamer}} 🔥", '["esports","progaming","{{game}}"]', "Competitive", "system"),
-        ("Clutch Moment", "CLUTCH! {{title}} 💪", '["clutch","gaming","{{game}}"]', "Gaming", "system"),
-        ("Fails & Funnies", "This didn't go as planned 😅 | {{streamer}}", '["fail","funny","gaming"]', "Entertainment", "system"),
+        (
+            "Gaming Highlight",
+            "Epic {{game}} moment by {{streamer}}! 🎮",
+            '["gaming","twitch","{{game}}"]',
+            "Gaming",
+            "system",
+        ),
+        (
+            "Funny Moment",
+            "😂 {{title}} | {{streamer}}",
+            '["funny","gaming","twitch"]',
+            "Entertainment",
+            "system",
+        ),
+        (
+            "Pro Play",
+            "Insane {{game}} play by {{streamer}} 🔥",
+            '["esports","progaming","{{game}}"]',
+            "Competitive",
+            "system",
+        ),
+        (
+            "Clutch Moment",
+            "CLUTCH! {{title}} 💪",
+            '["clutch","gaming","{{game}}"]',
+            "Gaming",
+            "system",
+        ),
+        (
+            "Fails & Funnies",
+            "This didn't go as planned 😅 | {{streamer}}",
+            '["fail","funny","gaming"]',
+            "Entertainment",
+            "system",
+        ),
     ]
     conn.execute(
         """
@@ -1346,7 +1119,9 @@ def ensure_schema(conn) -> None:
             ).fetchall()
             dims: set[str] = set()
             for row in rows or []:
-                col = str((row[0] if not hasattr(row, "keys") else row["column_name"]) or "").strip()
+                col = str(
+                    (row[0] if not hasattr(row, "keys") else row["column_name"]) or ""
+                ).strip()
                 if col:
                     dims.add(col.lower())
             return dims
@@ -1419,9 +1194,15 @@ def ensure_schema(conn) -> None:
                 (table, constraint_type, list(columns)),
             ).fetchall()
             return [
-                str((row[0] if not hasattr(row, "keys") else row["constraint_name"]) or "").strip()
+                str(
+                    (row[0] if not hasattr(row, "keys") else row["constraint_name"])
+                    or ""
+                ).strip()
                 for row in rows or []
-                if str((row[0] if not hasattr(row, "keys") else row["constraint_name"]) or "").strip()
+                if str(
+                    (row[0] if not hasattr(row, "keys") else row["constraint_name"])
+                    or ""
+                ).strip()
             ]
         except Exception as exc:
             log.debug(
@@ -1479,9 +1260,7 @@ def ensure_schema(conn) -> None:
     def _drop_constraint_if_exists(table: str, constraint_name: str) -> bool:
         if not _constraint_exists(table, constraint_name):
             return False
-        conn.execute(
-            f"ALTER TABLE {table} DROP CONSTRAINT {constraint_name}"
-        )
+        conn.execute(f"ALTER TABLE {table} DROP CONSTRAINT {constraint_name}")
         return True
 
     def _ensure_unique_constraint_allowing_compressed_hypertable(
@@ -1563,7 +1342,7 @@ def ensure_schema(conn) -> None:
         try:
             _execute_with_savepoint(
                 conn,
-                f"ALTER TABLE {table} SET (timescaledb.compress = {'true' if enable else 'false'})"
+                f"ALTER TABLE {table} SET (timescaledb.compress = {'true' if enable else 'false'})",
             )
             return True
         except psycopg.errors.FeatureNotSupported as exc:
@@ -1573,7 +1352,10 @@ def ensure_schema(conn) -> None:
                 return False
             log.warning("Could not disable compression on %s: %s", table, exc)
             if not _decompress_compressed_chunks(table):
-                log.warning("Unable to disable compression on %s because chunks could not be decompressed.", table)
+                log.warning(
+                    "Unable to disable compression on %s because chunks could not be decompressed.",
+                    table,
+                )
                 return False
             try:
                 _execute_with_savepoint(
@@ -1582,7 +1364,11 @@ def ensure_schema(conn) -> None:
                 )
                 return True
             except Exception as exc2:  # pragma: no cover - defensive
-                log.warning("Disabling compression on %s still failed after decompressing chunks: %s", table, exc2)
+                log.warning(
+                    "Disabling compression on %s still failed after decompressing chunks: %s",
+                    table,
+                    exc2,
+                )
                 return False
         except Exception as exc:
             log.warning("Could not %s compression on %s: %s", action, table, exc)
@@ -1604,13 +1390,20 @@ def ensure_schema(conn) -> None:
                 table,
             )
             if not _set_timescale_compression(table, False):
-                log.warning("Index skipped because compression could not be disabled on %s.", table)
+                log.warning(
+                    "Index skipped because compression could not be disabled on %s.",
+                    table,
+                )
                 return False
             try:
                 _execute_with_savepoint(conn, sql)
                 return True
             except Exception as exc:
-                log.warning("Creating index on %s failed even after disabling compression: %s", table, exc)
+                log.warning(
+                    "Creating index on %s failed even after disabling compression: %s",
+                    table,
+                    exc,
+                )
             finally:
                 _set_timescale_compression(table, True)
             return False
@@ -1628,7 +1421,9 @@ def ensure_schema(conn) -> None:
         ):
             return
 
-        history_has_reference_key = _has_unique_constraint("twitch_raid_history", ["id", "executed_at"])
+        history_has_reference_key = _has_unique_constraint(
+            "twitch_raid_history", ["id", "executed_at"]
+        )
         retention_has_reference_key = _has_key_constraint(
             "twitch_raid_retention",
             ["raid_id", "executed_at"],
@@ -1647,12 +1442,19 @@ def ensure_schema(conn) -> None:
             [
                 not history_has_reference_key,
                 _column_data_type("twitch_raid_retention", "raid_id") != "bigint",
-                _column_data_type("twitch_raid_retention", "executed_at") != "timestamp with time zone",
-                _column_data_type("twitch_raid_retention", "computed_at") != "timestamp with time zone",
+                _column_data_type("twitch_raid_retention", "executed_at")
+                != "timestamp with time zone",
+                _column_data_type("twitch_raid_retention", "computed_at")
+                != "timestamp with time zone",
                 not retention_has_reference_key,
                 not retention_has_fk,
-                _column_data_type("twitch_partner_raid_score_tracking", "raid_history_id") != "bigint",
-                _column_data_type("twitch_partner_raid_score_tracking", "raid_history_executed_at")
+                _column_data_type(
+                    "twitch_partner_raid_score_tracking", "raid_history_id"
+                )
+                != "bigint",
+                _column_data_type(
+                    "twitch_partner_raid_score_tracking", "raid_history_executed_at"
+                )
                 != "timestamp with time zone",
                 not partner_has_fk,
                 not _index_exists("idx_twitch_raid_retention_raid_id"),
@@ -1663,7 +1465,9 @@ def ensure_schema(conn) -> None:
             _align_serial_sequence(conn, "twitch_raid_history", "id")
             return
 
-        log.info("DB migration: repairing raid identity references with (raid_id, executed_at)")
+        log.info(
+            "DB migration: repairing raid identity references with (raid_id, executed_at)"
+        )
         with conn.transaction():
             conn.execute(
                 """
@@ -1706,10 +1510,12 @@ def ensure_schema(conn) -> None:
                     "CREATE UNIQUE INDEX IF NOT EXISTS idx_twitch_raid_history_id_executed_at "
                     "ON twitch_raid_history(id, executed_at)",
                 )
-                history_has_reference_key = _ensure_unique_constraint_allowing_compressed_hypertable(
-                    "twitch_raid_history",
-                    "twitch_raid_history_id_executed_at_key",
-                    ["id", "executed_at"],
+                history_has_reference_key = (
+                    _ensure_unique_constraint_allowing_compressed_hypertable(
+                        "twitch_raid_history",
+                        "twitch_raid_history_id_executed_at_key",
+                        ["id", "executed_at"],
+                    )
                 )
             if not history_has_reference_key:
                 raise RuntimeError(
@@ -1725,7 +1531,10 @@ def ensure_schema(conn) -> None:
                     USING raid_id::bigint
                     """
                 )
-            if _column_data_type("twitch_raid_retention", "executed_at") != "timestamp with time zone":
+            if (
+                _column_data_type("twitch_raid_retention", "executed_at")
+                != "timestamp with time zone"
+            ):
                 conn.execute(
                     """
                     ALTER TABLE twitch_raid_retention
@@ -1733,7 +1542,10 @@ def ensure_schema(conn) -> None:
                     USING NULLIF(BTRIM(executed_at::text), '')::timestamptz
                     """
                 )
-            if _column_data_type("twitch_raid_retention", "computed_at") != "timestamp with time zone":
+            if (
+                _column_data_type("twitch_raid_retention", "computed_at")
+                != "timestamp with time zone"
+            ):
                 conn.execute(
                     """
                     ALTER TABLE twitch_raid_retention
@@ -1741,8 +1553,12 @@ def ensure_schema(conn) -> None:
                     USING NULLIF(BTRIM(computed_at::text), '')::timestamptz
                     """
                 )
-            if not _has_key_constraint("twitch_raid_retention", ["raid_id", "executed_at"], ["PRIMARY KEY"]):
-                if _constraint_exists("twitch_raid_retention", "twitch_raid_retention_pkey"):
+            if not _has_key_constraint(
+                "twitch_raid_retention", ["raid_id", "executed_at"], ["PRIMARY KEY"]
+            ):
+                if _constraint_exists(
+                    "twitch_raid_retention", "twitch_raid_retention_pkey"
+                ):
                     conn.execute(
                         "ALTER TABLE twitch_raid_retention DROP CONSTRAINT twitch_raid_retention_pkey"
                     )
@@ -1772,7 +1588,12 @@ def ensure_schema(conn) -> None:
                 """
             )
 
-            if _column_data_type("twitch_partner_raid_score_tracking", "raid_history_id") != "bigint":
+            if (
+                _column_data_type(
+                    "twitch_partner_raid_score_tracking", "raid_history_id"
+                )
+                != "bigint"
+            ):
                 conn.execute(
                     """
                     ALTER TABLE twitch_partner_raid_score_tracking
@@ -1872,7 +1693,9 @@ def ensure_schema(conn) -> None:
         """
     )
     _pg_add_col_if_missing(conn, "twitch_streamers", "live_ping_role_id", "BIGINT")
-    _pg_add_col_if_missing(conn, "twitch_streamers", "live_ping_enabled", "INTEGER DEFAULT 1")
+    _pg_add_col_if_missing(
+        conn, "twitch_streamers", "live_ping_enabled", "INTEGER DEFAULT 1"
+    )
     conn.execute(
         "CREATE UNIQUE INDEX IF NOT EXISTS idx_twitch_streamers_user_id ON twitch_streamers(twitch_user_id)"
     )
@@ -2049,7 +1872,9 @@ def ensure_schema(conn) -> None:
         $$;
         """
     )
-    conn.execute("DROP TRIGGER IF EXISTS trg_twitch_streamers_sync_identity ON twitch_streamers")
+    conn.execute(
+        "DROP TRIGGER IF EXISTS trg_twitch_streamers_sync_identity ON twitch_streamers"
+    )
     conn.execute(
         """
         CREATE TRIGGER trg_twitch_streamers_sync_identity
@@ -2093,7 +1918,9 @@ def ensure_schema(conn) -> None:
         $$;
         """
     )
-    conn.execute("DROP TRIGGER IF EXISTS trg_twitch_partners_sync_identity ON twitch_partners")
+    conn.execute(
+        "DROP TRIGGER IF EXISTS trg_twitch_partners_sync_identity ON twitch_partners"
+    )
     conn.execute(
         """
         CREATE TRIGGER trg_twitch_partners_sync_identity
@@ -2235,7 +2062,9 @@ def ensure_schema(conn) -> None:
         )
         """
     )
-    conn.execute("ALTER TABLE twitch_global_settings ADD COLUMN IF NOT EXISTS updated_by TEXT")
+    conn.execute(
+        "ALTER TABLE twitch_global_settings ADD COLUMN IF NOT EXISTS updated_by TEXT"
+    )
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_twitch_global_settings_updated_at "
         "ON twitch_global_settings(updated_at)"
@@ -2333,7 +2162,9 @@ def ensure_schema(conn) -> None:
                 "ALTER TABLE twitch_session_chatters"
                 " RENAME COLUMN is_first_time_global TO is_first_time_streamer"
             )
-            log.info("DB migration: renamed twitch_session_chatters.is_first_time_global → is_first_time_streamer")
+            log.info(
+                "DB migration: renamed twitch_session_chatters.is_first_time_global → is_first_time_streamer"
+            )
     except Exception as exc:
         log.warning("DB migration: could not rename is_first_time_global: %s", exc)
 
@@ -2440,20 +2271,24 @@ def ensure_schema(conn) -> None:
             "if_not_exists => TRUE, "
             "migrate_data => TRUE, "
             "chunk_time_interval => INTERVAL '7 days'"
-            ")"
+            ")",
         )
     except Exception as exc:
-        log.debug("Could not convert twitch_observability_events to hypertable: %s", exc)
+        log.debug(
+            "Could not convert twitch_observability_events to hypertable: %s", exc
+        )
     try:
         _execute_with_savepoint(
             conn,
             "ALTER TABLE twitch_observability_events "
             "SET (timescaledb.compress, "
             "timescaledb.compress_segmentby = 'flow_type,flow_id', "
-            "timescaledb.compress_orderby = 'created_at DESC')"
+            "timescaledb.compress_orderby = 'created_at DESC')",
         )
     except Exception as exc:
-        log.debug("Could not enable compression on twitch_observability_events: %s", exc)
+        log.debug(
+            "Could not enable compression on twitch_observability_events: %s", exc
+        )
     try:
         _execute_with_savepoint(
             conn,
@@ -2461,7 +2296,7 @@ def ensure_schema(conn) -> None:
             "'twitch_observability_events', "
             "INTERVAL '7 days', "
             "if_not_exists => TRUE"
-            ")"
+            ")",
         )
     except Exception as exc:
         log.debug(
@@ -2524,22 +2359,31 @@ def ensure_schema(conn) -> None:
             )
             log.info("DB migration: converted twitch_raid_history.success to BOOLEAN")
         except Exception as exc:
-            log.warning("DB migration: could not convert twitch_raid_history.success to BOOLEAN: %s", exc)
+            log.warning(
+                "DB migration: could not convert twitch_raid_history.success to BOOLEAN: %s",
+                exc,
+            )
     try:
-        conn.execute("ALTER TABLE twitch_raid_history ALTER COLUMN success SET DEFAULT TRUE")
+        conn.execute(
+            "ALTER TABLE twitch_raid_history ALTER COLUMN success SET DEFAULT TRUE"
+        )
     except Exception as exc:
         log.debug("Skipping default migration on twitch_raid_history.success: %s", exc)
-    raid_history_has_reference_key = _has_unique_constraint("twitch_raid_history", ["id", "executed_at"])
+    raid_history_has_reference_key = _has_unique_constraint(
+        "twitch_raid_history", ["id", "executed_at"]
+    )
     if not raid_history_has_reference_key:
         _create_index_allowing_compressed_hypertable(
             "twitch_raid_history",
             "CREATE UNIQUE INDEX IF NOT EXISTS idx_twitch_raid_history_id_executed_at "
             "ON twitch_raid_history(id, executed_at)",
         )
-        raid_history_has_reference_key = _ensure_unique_constraint_allowing_compressed_hypertable(
-            "twitch_raid_history",
-            "twitch_raid_history_id_executed_at_key",
-            ["id", "executed_at"],
+        raid_history_has_reference_key = (
+            _ensure_unique_constraint_allowing_compressed_hypertable(
+                "twitch_raid_history",
+                "twitch_raid_history_id_executed_at_key",
+                ["id", "executed_at"],
+            )
         )
         if (
             _index_exists("idx_twitch_raid_history_id_executed_at")
@@ -3186,14 +3030,24 @@ def ensure_schema(conn) -> None:
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_streamer_plans_login ON streamer_plans(twitch_login)"
     )
-    conn.execute("ALTER TABLE streamer_plans ADD COLUMN IF NOT EXISTS raid_boost_enabled INTEGER NOT NULL DEFAULT 0")
-    conn.execute("ALTER TABLE streamer_plans ADD COLUMN IF NOT EXISTS promo_message TEXT")
-    conn.execute("ALTER TABLE streamer_plans ADD COLUMN IF NOT EXISTS manual_plan_id TEXT")
-    conn.execute("ALTER TABLE streamer_plans ADD COLUMN IF NOT EXISTS manual_plan_expires_at TEXT")
+    conn.execute(
+        "ALTER TABLE streamer_plans ADD COLUMN IF NOT EXISTS raid_boost_enabled INTEGER NOT NULL DEFAULT 0"
+    )
+    conn.execute(
+        "ALTER TABLE streamer_plans ADD COLUMN IF NOT EXISTS promo_message TEXT"
+    )
+    conn.execute(
+        "ALTER TABLE streamer_plans ADD COLUMN IF NOT EXISTS manual_plan_id TEXT"
+    )
+    conn.execute(
+        "ALTER TABLE streamer_plans ADD COLUMN IF NOT EXISTS manual_plan_expires_at TEXT"
+    )
     conn.execute(
         "ALTER TABLE streamer_plans ADD COLUMN IF NOT EXISTS manual_plan_notes TEXT NOT NULL DEFAULT ''"
     )
-    conn.execute("ALTER TABLE streamer_plans ADD COLUMN IF NOT EXISTS manual_plan_updated_at TEXT")
+    conn.execute(
+        "ALTER TABLE streamer_plans ADD COLUMN IF NOT EXISTS manual_plan_updated_at TEXT"
+    )
 
     # 18) Vorgecachte Partner-Raid-Scores
     conn.execute(
@@ -3355,32 +3209,40 @@ def ensure_schema(conn) -> None:
         "CREATE INDEX IF NOT EXISTS idx_twitch_promo_cooldowns_wall_ts ON twitch_promo_cooldowns(wall_ts)"
     )
 
-    migrate_legacy_partner_registry(_CompatConnection(conn))
+    migrate_legacy_partner_registry(conn)
 
 
 def save_promo_cooldown(login: str, cooldown_type: str, wall_ts: float) -> None:
     """Persist a promo cooldown timestamp. Non-fatal on failure."""
     try:
-        with get_conn() as conn:
+        with transaction() as conn:
             conn.execute(
                 """INSERT INTO twitch_promo_cooldowns (login, cooldown_type, wall_ts, updated_at)
-                   VALUES (?, ?, ?, now())
+                   VALUES (%s, %s, %s, now())
                    ON CONFLICT (login, cooldown_type)
                    DO UPDATE SET wall_ts = EXCLUDED.wall_ts, updated_at = now()""",
                 (login.lower(), cooldown_type, wall_ts),
             )
     except Exception:
-        log.debug("Failed to persist promo cooldown for %s/%s", login, cooldown_type, exc_info=True)
+        log.debug(
+            "Failed to persist promo cooldown for %s/%s",
+            login,
+            cooldown_type,
+            exc_info=True,
+        )
 
 
 def load_promo_cooldowns() -> list[tuple[str, str, float]]:
     """Load all promo cooldowns. Returns list of (login, cooldown_type, wall_ts)."""
     try:
-        with get_conn() as conn:
+        with readonly_connection() as conn:
             rows = conn.execute(
                 "SELECT login, cooldown_type, wall_ts FROM twitch_promo_cooldowns"
             ).fetchall()
-            return [(str(r["login"]), str(r["cooldown_type"]), float(r["wall_ts"])) for r in (rows or [])]
+            return [
+                (str(r["login"]), str(r["cooldown_type"]), float(r["wall_ts"]))
+                for r in (rows or [])
+            ]
     except Exception:
         log.debug("Failed to load promo cooldowns", exc_info=True)
         return []
@@ -3389,9 +3251,9 @@ def load_promo_cooldowns() -> list[tuple[str, str, float]]:
 def cleanup_stale_promo_cooldowns(max_age_hours: int = 24) -> None:
     """Delete cooldown entries older than max_age_hours."""
     try:
-        with get_conn() as conn:
+        with transaction() as conn:
             conn.execute(
-                "DELETE FROM twitch_promo_cooldowns WHERE wall_ts < ?",
+                "DELETE FROM twitch_promo_cooldowns WHERE wall_ts < %s",
                 (time.time() - max_age_hours * 3600,),
             )
     except Exception:

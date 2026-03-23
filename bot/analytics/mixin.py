@@ -586,7 +586,7 @@ class TwitchAnalyticsMixin:
         # Note: We should actually check if they have the specific scope,
         # but for now we assume the new scope set is used if they re-authed.
         try:
-            with storage_oauth.get_conn() as conn:
+            with storage_oauth.transaction() as conn:
                 rows = conn.execute(
                     """
                     SELECT twitch_user_id, twitch_login
@@ -695,7 +695,7 @@ class TwitchAnalyticsMixin:
 
         now_iso = datetime.now(UTC).isoformat()
 
-        with storage.get_conn() as conn:
+        with storage.transaction() as conn:
             conn.execute(
                 """
                 INSERT INTO twitch_subscriptions_snapshot
@@ -784,7 +784,7 @@ class TwitchAnalyticsMixin:
         snooze_count = _safe_int(data.get("snooze_count"))
         snooze_refresh_at = _safe_time_text(data.get("snooze_refresh_at"))
 
-        with storage.get_conn() as conn:
+        with storage.transaction() as conn:
             conn.execute(
                 """
                 INSERT INTO twitch_ads_schedule_snapshot
@@ -1304,7 +1304,7 @@ class TwitchAnalyticsMixin:
 
         try:
             # Live-Sessions kommen aus Postgres (Analytics-DB)
-            with storage.get_conn() as conn:
+            with storage.transaction() as conn:
                 rows = conn.execute(
                     """
                     SELECT twitch_user_id, streamer_login, active_session_id
@@ -1316,7 +1316,7 @@ class TwitchAnalyticsMixin:
 
             # OAuth/Permissions bleiben in SQLite (canonical raid_auth)
             auth_ids: set[str] = set()
-            with storage_oauth.get_conn() as conn_sqlite:
+            with storage_oauth.transaction() as conn_sqlite:
                 auth_rows = conn_sqlite.execute(
                     "SELECT twitch_user_id FROM twitch_raid_auth WHERE raid_enabled IS TRUE"
                 ).fetchall()
@@ -1390,7 +1390,7 @@ class TwitchAnalyticsMixin:
             return
 
         try:
-            with storage.get_conn() as conn:
+            with storage.transaction() as conn:
                 for session_id, login, chatters in payloads:
                     # Build normalized chatter list from API response
                     chatter_entries: list[tuple[str, str | None]] = []
@@ -1481,7 +1481,7 @@ class TwitchAnalyticsMixin:
         now_iso = datetime.now(UTC).isoformat(timespec="seconds")
 
         try:
-            with storage.get_conn() as c:
+            with storage.transaction() as c:
                 if login_value:
                     c.execute(
                         """
@@ -1548,7 +1548,7 @@ class TwitchAnalyticsMixin:
         game_name = (event.get("category_name") or event.get("game_name") or "").strip() or None
         language = (event.get("broadcaster_language") or "").strip() or None
         try:
-            with storage.get_conn() as c:
+            with storage.transaction() as c:
                 c.execute(
                     """
                     INSERT INTO twitch_channel_updates (twitch_user_id, title, game_name, language, recorded_at)
@@ -1611,7 +1611,7 @@ class TwitchAnalyticsMixin:
         session_id = self._get_active_session_id_by_user_id(broadcaster_user_id)
 
         try:
-            with storage.get_conn() as c:
+            with storage.transaction() as c:
                 c.execute(
                     """
                     INSERT INTO twitch_subscription_events
@@ -1649,7 +1649,7 @@ class TwitchAnalyticsMixin:
         twitch_live_state.active_session_id lookupaben.
         """
         try:
-            with storage.get_conn() as c:
+            with storage.transaction() as c:
                 row = c.execute(
                     "SELECT active_session_id FROM twitch_live_state WHERE twitch_user_id = %s",
                     (broadcaster_user_id,),
@@ -1674,7 +1674,7 @@ class TwitchAnalyticsMixin:
         session_id = self._get_active_session_id_by_user_id(broadcaster_user_id)
 
         try:
-            with storage.get_conn() as c:
+            with storage.transaction() as c:
                 c.execute(
                     """
                     INSERT INTO twitch_ad_break_events
@@ -1712,7 +1712,7 @@ class TwitchAnalyticsMixin:
         session_id = self._get_active_session_id_by_user_id(broadcaster_user_id)
 
         try:
-            with storage.get_conn() as c:
+            with storage.transaction() as c:
                 c.execute(
                     """
                     INSERT INTO twitch_bits_events
@@ -1748,7 +1748,7 @@ class TwitchAnalyticsMixin:
         session_id = self._get_active_session_id_by_user_id(broadcaster_user_id)
 
         try:
-            with storage.get_conn() as c:
+            with storage.transaction() as c:
                 c.execute(
                     """
                     INSERT INTO twitch_channel_points_events
@@ -1803,7 +1803,7 @@ class TwitchAnalyticsMixin:
         session_id = self._get_active_session_id_by_user_id(broadcaster_user_id)
 
         try:
-            with storage.get_conn() as c:
+            with storage.transaction() as c:
                 if ended:
                     # Versuche, ein bereits vorhandenes begin-Event zu aktualisieren
                     updated = c.execute(
@@ -1869,7 +1869,7 @@ class TwitchAnalyticsMixin:
         session_id = self._get_active_session_id_by_user_id(broadcaster_user_id)
 
         try:
-            with storage.get_conn() as c:
+            with storage.transaction() as c:
                 c.execute(
                     """
                     INSERT INTO twitch_ban_events
@@ -1910,7 +1910,7 @@ class TwitchAnalyticsMixin:
             viewer_count = int(event.get("viewer_count") or 0)
 
         try:
-            with storage.get_conn() as c:
+            with storage.transaction() as c:
                 c.execute(
                     """
                     INSERT INTO twitch_shoutout_events
@@ -1939,13 +1939,13 @@ class TwitchAnalyticsMixin:
     async def compute_raid_retention(self):
         """Hourly: compute retention metrics for recent outgoing raids into twitch_raid_retention."""
         try:
-            with storage.get_conn() as analytics_conn:
+            with storage.transaction() as analytics_conn:
                 raids = analytics_conn.execute(
                     """
                     SELECT id, from_broadcaster_login, to_broadcaster_login,
                            viewer_count, executed_at
                     FROM twitch_raid_history
-                    WHERE executed_at >= datetime('now', '-7 days')
+                    WHERE executed_at >= NOW() - INTERVAL '7 days'
                     ORDER BY executed_at DESC
                     """
                 ).fetchall()
@@ -1984,7 +1984,7 @@ class TwitchAnalyticsMixin:
                 else:
                     continue
 
-                with storage.get_conn() as pg:
+                with storage.transaction() as pg:
                     existing = pg.execute(
                         """
                         SELECT raid_id

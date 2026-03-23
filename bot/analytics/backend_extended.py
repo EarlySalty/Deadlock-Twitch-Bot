@@ -27,7 +27,7 @@ class AnalyticsBackendExtended:
         Returns structure compatible with the new React dashboard.
         """
         try:
-            with storage.get_conn() as conn:
+            with storage.readonly_connection() as conn:
                 since_date = (datetime.now(UTC) - timedelta(days=days)).isoformat()
 
                 # Check for data
@@ -36,9 +36,9 @@ class AnalyticsBackendExtended:
                         """
                         SELECT COUNT(*) as cnt
                         FROM twitch_stream_sessions s
-                        WHERE s.started_at >= ?
+                        WHERE s.started_at >= %s
                           AND s.ended_at IS NOT NULL
-                          AND LOWER(s.streamer_login) = ?
+                          AND LOWER(s.streamer_login) = %s
                         """,
                         [since_date, streamer_login.lower().strip()],
                     ).fetchone()
@@ -47,7 +47,7 @@ class AnalyticsBackendExtended:
                         """
                         SELECT COUNT(*) as cnt
                         FROM twitch_stream_sessions s
-                        WHERE s.started_at >= ?
+                        WHERE s.started_at >= %s
                           AND s.ended_at IS NOT NULL
                         """,
                         [since_date],
@@ -135,9 +135,9 @@ class AnalyticsBackendExtended:
                         SUM(s.returning_chatters) as total_returning,
                         AVG(s.avg_viewers) as avg_avg_viewers
                     FROM twitch_stream_sessions s
-                    WHERE s.started_at >= ?
+                    WHERE s.started_at >= %s
                       AND s.ended_at IS NOT NULL
-                      AND LOWER(s.streamer_login) = ?
+                      AND LOWER(s.streamer_login) = %s
                     """,
                     [since_date, normalized_login],
                 ).fetchone()
@@ -159,7 +159,7 @@ class AnalyticsBackendExtended:
                         SUM(s.returning_chatters) as total_returning,
                         AVG(s.avg_viewers) as avg_avg_viewers
                     FROM twitch_stream_sessions s
-                    WHERE s.started_at >= ?
+                    WHERE s.started_at >= %s
                       AND s.ended_at IS NOT NULL
                     """,
                     [since_date],
@@ -183,9 +183,9 @@ class AnalyticsBackendExtended:
                         SUM(s.returning_chatters) as total_returning,
                         AVG(s.avg_viewers) as avg_avg_viewers
                     FROM twitch_stream_sessions s
-                    WHERE s.started_at >= ?
+                    WHERE s.started_at >= %s
                       AND s.ended_at IS NOT NULL
-                      AND LOWER(s.streamer_login) = ?
+                      AND LOWER(s.streamer_login) = %s
                     """,
                     [since_date, normalized_login],
                 ).fetchone()
@@ -207,7 +207,7 @@ class AnalyticsBackendExtended:
                         SUM(s.returning_chatters) as total_returning,
                         AVG(s.avg_viewers) as avg_avg_viewers
                     FROM twitch_stream_sessions s
-                    WHERE s.started_at >= ?
+                    WHERE s.started_at >= %s
                       AND s.ended_at IS NOT NULL
                     """,
                     [since_date],
@@ -251,9 +251,9 @@ class AnalyticsBackendExtended:
                         SUM(COALESCE(s.follower_delta, 0)) as total_followers,
                         AVG(CASE WHEN s.avg_viewers > 0 THEN (s.unique_chatters * 100.0 / s.avg_viewers) ELSE 0 END) as chat_per_100
                     FROM twitch_stream_sessions s
-                    WHERE s.started_at >= ? AND s.started_at < ?
+                    WHERE s.started_at >= %s AND s.started_at < %s
                       AND s.ended_at IS NOT NULL
-                      AND LOWER(s.streamer_login) = ?
+                      AND LOWER(s.streamer_login) = %s
                     """,
                     [prev_since, since_date, normalized_login],
                 ).fetchone()
@@ -266,7 +266,7 @@ class AnalyticsBackendExtended:
                         SUM(COALESCE(s.follower_delta, 0)) as total_followers,
                         AVG(CASE WHEN s.avg_viewers > 0 THEN (s.unique_chatters * 100.0 / s.avg_viewers) ELSE 0 END) as chat_per_100
                     FROM twitch_stream_sessions s
-                    WHERE s.started_at >= ? AND s.started_at < ?
+                    WHERE s.started_at >= %s AND s.started_at < %s
                       AND s.ended_at IS NOT NULL
                     """,
                     [prev_since, since_date],
@@ -281,9 +281,9 @@ class AnalyticsBackendExtended:
                         0 as total_followers,
                         AVG(CASE WHEN s.avg_viewers > 0 THEN (s.unique_chatters * 100.0 / s.avg_viewers) ELSE 0 END) as chat_per_100
                     FROM twitch_stream_sessions s
-                    WHERE s.started_at >= ? AND s.started_at < ?
+                    WHERE s.started_at >= %s AND s.started_at < %s
                       AND s.ended_at IS NOT NULL
-                      AND LOWER(s.streamer_login) = ?
+                      AND LOWER(s.streamer_login) = %s
                     """,
                     [prev_since, since_date, normalized_login],
                 ).fetchone()
@@ -296,7 +296,7 @@ class AnalyticsBackendExtended:
                         0 as total_followers,
                         AVG(CASE WHEN s.avg_viewers > 0 THEN (s.unique_chatters * 100.0 / s.avg_viewers) ELSE 0 END) as chat_per_100
                     FROM twitch_stream_sessions s
-                    WHERE s.started_at >= ? AND s.started_at < ?
+                    WHERE s.started_at >= %s AND s.started_at < %s
                       AND s.ended_at IS NOT NULL
                     """,
                     [prev_since, since_date],
@@ -367,10 +367,10 @@ class AnalyticsBackendExtended:
                     AVG(s.retention_20m) as ret_20m,
                     AVG(s.dropoff_pct) as dropoff
                 FROM twitch_stream_sessions s
-                WHERE s.started_at >= ?
+                WHERE s.started_at >= %s
                   AND s.retention_5m IS NOT NULL
                   AND s.ended_at IS NOT NULL
-                  AND LOWER(s.streamer_login) = ?
+                  AND LOWER(s.streamer_login) = %s
                 GROUP BY DATE(s.started_at)
                 ORDER BY date ASC
                 """,
@@ -386,7 +386,7 @@ class AnalyticsBackendExtended:
                     AVG(s.retention_20m) as ret_20m,
                     AVG(s.dropoff_pct) as dropoff
                 FROM twitch_stream_sessions s
-                WHERE s.started_at >= ?
+                WHERE s.started_at >= %s
                   AND s.retention_5m IS NOT NULL
                   AND s.ended_at IS NOT NULL
                 GROUP BY DATE(s.started_at)
@@ -432,9 +432,9 @@ class AnalyticsBackendExtended:
                         SUM(COALESCE(s.follower_delta, 0)) as followers_delta,
                         AVG(s.avg_viewers) as avg_viewers
                     FROM twitch_stream_sessions s
-                    WHERE s.started_at >= ?
+                    WHERE s.started_at >= %s
                       AND s.ended_at IS NOT NULL
-                      AND LOWER(s.streamer_login) = ?
+                      AND LOWER(s.streamer_login) = %s
                     GROUP BY DATE(s.started_at)
                     ORDER BY date ASC
                     """,
@@ -449,7 +449,7 @@ class AnalyticsBackendExtended:
                         SUM(COALESCE(s.follower_delta, 0)) as followers_delta,
                         AVG(s.avg_viewers) as avg_viewers
                     FROM twitch_stream_sessions s
-                    WHERE s.started_at >= ?
+                    WHERE s.started_at >= %s
                       AND s.ended_at IS NOT NULL
                     GROUP BY DATE(s.started_at)
                     ORDER BY date ASC
@@ -466,9 +466,9 @@ class AnalyticsBackendExtended:
                         0 as followers_delta,
                         AVG(s.avg_viewers) as avg_viewers
                     FROM twitch_stream_sessions s
-                    WHERE s.started_at >= ?
+                    WHERE s.started_at >= %s
                       AND s.ended_at IS NOT NULL
-                      AND LOWER(s.streamer_login) = ?
+                      AND LOWER(s.streamer_login) = %s
                     GROUP BY DATE(s.started_at)
                     ORDER BY date ASC
                     """,
@@ -483,7 +483,7 @@ class AnalyticsBackendExtended:
                         0 as followers_delta,
                         AVG(s.avg_viewers) as avg_viewers
                     FROM twitch_stream_sessions s
-                    WHERE s.started_at >= ?
+                    WHERE s.started_at >= %s
                       AND s.ended_at IS NOT NULL
                     GROUP BY DATE(s.started_at)
                     ORDER BY date ASC
@@ -516,10 +516,10 @@ class AnalyticsBackendExtended:
                     SUM(s.first_time_chatters) as first_time,
                     SUM(s.returning_chatters) as "returning"
                 FROM twitch_stream_sessions s
-                WHERE s.started_at >= ?
+                WHERE s.started_at >= %s
                   AND s.ended_at IS NOT NULL
                   AND s.avg_viewers > 0
-                  AND LOWER(s.streamer_login) = ?
+                  AND LOWER(s.streamer_login) = %s
                 GROUP BY DATE(s.started_at)
                 ORDER BY date ASC
                 """,
@@ -535,7 +535,7 @@ class AnalyticsBackendExtended:
                     SUM(s.first_time_chatters) as first_time,
                     SUM(s.returning_chatters) as "returning"
                 FROM twitch_stream_sessions s
-                WHERE s.started_at >= ?
+                WHERE s.started_at >= %s
                   AND s.ended_at IS NOT NULL
                   AND s.avg_viewers > 0
                 GROUP BY DATE(s.started_at)
@@ -586,11 +586,11 @@ class AnalyticsBackendExtended:
                     COALESCE(s.followers_end, 0) as followers_end,
                     s.stream_title
                 FROM twitch_stream_sessions s
-                WHERE s.started_at >= ?
+                WHERE s.started_at >= %s
                   AND s.ended_at IS NOT NULL
-                  AND LOWER(s.streamer_login) = ?
+                  AND LOWER(s.streamer_login) = %s
                 ORDER BY s.started_at DESC
-                LIMIT ?
+                LIMIT %s
                 """,
                 [since_date, normalized_login, safe_limit],
             ).fetchall()
@@ -617,10 +617,10 @@ class AnalyticsBackendExtended:
                     COALESCE(s.followers_end, 0) as followers_end,
                     s.stream_title
                 FROM twitch_stream_sessions s
-                WHERE s.started_at >= ?
+                WHERE s.started_at >= %s
                   AND s.ended_at IS NOT NULL
                 ORDER BY s.started_at DESC
-                LIMIT ?
+                LIMIT %s
                 """,
                 [since_date, safe_limit],
             ).fetchall()
@@ -757,7 +757,7 @@ class AnalyticsBackendExtended:
                 AVG(viewer_count) as avg_viewers,
                 MAX(viewer_count) as peak_viewers
             FROM twitch_stats_category
-            WHERE ts_utc >= ?
+            WHERE ts_utc >= %s
         """
         cat_row = conn.execute(category_query, [since_date]).fetchone()
 
@@ -775,7 +775,7 @@ class AnalyticsBackendExtended:
                 AVG(viewer_count) as avg_viewers,
                 MAX(viewer_count) as peak_viewers
             FROM twitch_stats_tracked
-            WHERE ts_utc >= ?
+            WHERE ts_utc >= %s
             GROUP BY streamer
             ORDER BY avg_viewers DESC
             LIMIT 10
@@ -801,8 +801,8 @@ class AnalyticsBackendExtended:
                     AVG(s.retention_10m) as retention10m,
                     AVG(CASE WHEN s.avg_viewers > 0 THEN (s.unique_chatters * 100.0 / s.avg_viewers) ELSE 0 END) as chat_health
                 FROM twitch_stream_sessions s
-                WHERE s.started_at >= ?
-                  AND LOWER(s.streamer_login) = ?
+                WHERE s.started_at >= %s
+                  AND LOWER(s.streamer_login) = %s
                   AND s.ended_at IS NOT NULL
             """
             your_row = conn.execute(

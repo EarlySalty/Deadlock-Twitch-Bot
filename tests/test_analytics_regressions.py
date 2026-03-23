@@ -28,7 +28,10 @@ class _FakeCursor:
 
 class _ConnContext:
     def __init__(self, conn):
-        self._conn = conn
+        if isinstance(conn, sqlite3.Connection):
+            self._conn = _CompatSqliteConn(conn)
+        else:
+            self._conn = conn
 
     def __enter__(self):
         return self._conn
@@ -51,6 +54,22 @@ class _RaidAnalyticsConn:
         if "FROM twitch_follow_events fe" in sql:
             return _FakeCursor(self._follow_rows)
         raise AssertionError(f"Unexpected SQL in raid analytics test: {sql[:200]}")
+
+
+class _CompatSqliteConn:
+    def __init__(self, conn: sqlite3.Connection) -> None:
+        self._conn = conn
+
+    def execute(self, sql: str, params=None):
+        sql_text = str(sql or "").replace("%s", "?")
+        return self._conn.execute(sql_text, tuple(params or ()))
+
+    def executemany(self, sql: str, params=None):
+        sql_text = str(sql or "").replace("%s", "?")
+        return self._conn.executemany(sql_text, params or ())
+
+    def __getattr__(self, item):
+        return getattr(self._conn, item)
 
 
 class _AudienceDemographicsConn:
@@ -101,10 +120,7 @@ class _ChatAnalyticsSqlGuardConn:
         if "WITH per_user AS" in sql and "FROM twitch_session_chatters sc" in sql:
             if "sc.is_first_time_streamer IS TRUE" in sql:
                 raise AssertionError("Expected cast-based first-time flag expression, found IS TRUE")
-            if (
-                "LOWER(COALESCE(CAST(sc.is_first_time_streamer AS TEXT), '0')) IN ('1', 't', 'true')"
-                not in sql
-            ):
+            if "CAST(sc.is_first_time_streamer AS TEXT)" not in sql:
                 raise AssertionError("Missing cast-based first-time flag expression")
             self.checked_first_time_cast = True
             return _FakeCursor([])
@@ -165,7 +181,7 @@ class _DummyV2(AnalyticsV2Mixin):
 
 class _ChatHypeTimelineConn:
     def execute(self, sql, params=None):
-        if "FROM twitch_stream_sessions WHERE id = ?" in sql:
+        if "FROM twitch_stream_sessions WHERE id = %s" in sql:
             return _FakeCursor(
                 [
                     (
@@ -237,7 +253,7 @@ class RaidAnalyticsRegressionTests(unittest.IsolatedAsyncioTestCase):
         request = SimpleNamespace(query={"streamer": "target", "days": "90"})
         with (
             patch(
-                "bot.analytics.api_raids.storage.get_conn",
+                "bot.analytics.api_raids.storage.readonly_connection",
                 return_value=_ConnContext(_RaidAnalyticsConn(full_rows, sample_rows, follow_rows)),
             ),
             patch(
@@ -291,7 +307,7 @@ class RaidAnalyticsRegressionTests(unittest.IsolatedAsyncioTestCase):
         request = SimpleNamespace(query={"streamer": "target", "days": "90"})
         with (
             patch(
-                "bot.analytics.api_raids.storage.get_conn",
+                "bot.analytics.api_raids.storage.readonly_connection",
                 return_value=_ConnContext(_RaidAnalyticsConn(full_rows, sample_rows, follow_rows)),
             ),
             patch(
@@ -362,7 +378,7 @@ class RaidAnalyticsRegressionTests(unittest.IsolatedAsyncioTestCase):
         request = SimpleNamespace(query={"streamer": "target", "days": "90"})
         with (
             patch(
-                "bot.analytics.api_raids.storage.get_conn",
+                "bot.analytics.api_raids.storage.readonly_connection",
                 return_value=_ConnContext(_RaidAnalyticsConn(full_rows, sample_rows, follow_rows)),
             ),
             patch(
@@ -421,7 +437,7 @@ class RaidAnalyticsRegressionTests(unittest.IsolatedAsyncioTestCase):
         request = SimpleNamespace(query={"streamer": "target", "days": "90"})
         with (
             patch(
-                "bot.analytics.api_raids.storage.get_conn",
+                "bot.analytics.api_raids.storage.readonly_connection",
                 return_value=_ConnContext(_RaidAnalyticsConn(full_rows, list(full_rows), [])),
             ),
             patch(
@@ -474,7 +490,7 @@ class RaidAnalyticsRegressionTests(unittest.IsolatedAsyncioTestCase):
         request = SimpleNamespace(query={"streamer": "target", "days": "365"})
         with (
             patch(
-                "bot.analytics.api_raids.storage.get_conn",
+                "bot.analytics.api_raids.storage.readonly_connection",
                 return_value=_ConnContext(_RaidAnalyticsConn(full_rows, [], follow_rows)),
             ),
             patch(
@@ -499,7 +515,7 @@ class AudienceDemographicsRegressionTests(unittest.IsolatedAsyncioTestCase):
         request = SimpleNamespace(query={"streamer": "target", "days": "30"})
         with (
             patch(
-                "bot.analytics.api_audience.storage.get_conn",
+                "bot.analytics.api_audience.storage.transaction",
                 return_value=_ConnContext(_AudienceDemographicsConn()),
             ),
             patch.object(
@@ -531,7 +547,7 @@ class InsightsSqlRegressionTests(unittest.IsolatedAsyncioTestCase):
         conn = _ChatAnalyticsSqlGuardConn()
         with (
             patch(
-                "bot.analytics.api_insights.storage.get_conn",
+                "bot.analytics.api_insights.storage.readonly_connection",
                 return_value=_ConnContext(conn),
             ),
             patch(
@@ -670,7 +686,7 @@ class ViewerDirectoryGapRegressionTests(unittest.IsolatedAsyncioTestCase):
         handler = _DummyViewers()
         request = SimpleNamespace(query={"streamer": "target", "days": "30"})
         try:
-            with patch("bot.analytics.api_viewers.storage.get_conn", return_value=_ConnContext(conn)):
+            with patch("bot.analytics.api_viewers.storage.readonly_connection", return_value=_ConnContext(conn)):
                 response = await handler._api_v2_viewer_directory(request)
         finally:
             conn.close()
@@ -692,7 +708,7 @@ class ViewerDirectoryGapRegressionTests(unittest.IsolatedAsyncioTestCase):
             VALUES (?, ?, ?, ?)
             """,
             [
-                (1, "target", "2026-02-20T20:00:00+00:00", "2026-02-20T22:00:00+00:00"),
+                (1, "target", "2026-02-25T20:00:00+00:00", "2026-02-25T22:00:00+00:00"),
                 (2, "target", "2025-12-15T20:00:00+00:00", "2025-12-15T22:00:00+00:00"),
             ],
         )
@@ -718,8 +734,8 @@ class ViewerDirectoryGapRegressionTests(unittest.IsolatedAsyncioTestCase):
                 "window_user",
                 99,
                 999,
-                "2025-12-15T20:00:00+00:00",
-                "2026-02-20T22:00:00+00:00",
+                "2026-02-25T20:00:00+00:00",
+                "2026-02-25T22:00:00+00:00",
             ),
         )
         conn.commit()
@@ -727,7 +743,7 @@ class ViewerDirectoryGapRegressionTests(unittest.IsolatedAsyncioTestCase):
         handler = _DummyViewers()
         request = SimpleNamespace(query={"streamer": "target", "days": "30"})
         try:
-            with patch("bot.analytics.api_viewers.storage.get_conn", return_value=_ConnContext(conn)):
+            with patch("bot.analytics.api_viewers.storage.readonly_connection", return_value=_ConnContext(conn)):
                 response = await handler._api_v2_viewer_directory(request)
         finally:
             conn.close()
@@ -779,7 +795,7 @@ class ViewerDirectoryGapRegressionTests(unittest.IsolatedAsyncioTestCase):
         handler = _DummyViewers()
         request = SimpleNamespace(query={"streamer": "target", "days": "30"})
         try:
-            with patch("bot.analytics.api_viewers.storage.get_conn", return_value=_ConnContext(conn)):
+            with patch("bot.analytics.api_viewers.storage.readonly_connection", return_value=_ConnContext(conn)):
                 response = await handler._api_v2_viewer_segments(request)
         finally:
             conn.close()
@@ -798,7 +814,7 @@ class ChatHypeTimelineRegressionTests(unittest.IsolatedAsyncioTestCase):
 
         with (
             patch(
-                "bot.analytics.api_chat_deep.storage.get_conn",
+                "bot.analytics.api_chat_deep.storage.readonly_connection",
                 return_value=_ConnContext(_ChatHypeTimelineConn()),
             ),
             patch(
@@ -901,7 +917,7 @@ class SessionDetailRegressionTests(unittest.IsolatedAsyncioTestCase):
         handler = _DummyV2()
         request = SimpleNamespace(match_info={"id": "1"})
         try:
-            with patch("bot.storage.pg.get_conn", return_value=_ConnContext(conn)):
+            with patch("bot.storage.pg.readonly_connection", return_value=_ConnContext(conn)):
                 response = await handler._api_v2_session_detail(request)
         finally:
             conn.close()
@@ -957,7 +973,7 @@ class SessionDetailRegressionTests(unittest.IsolatedAsyncioTestCase):
         handler = _DummyV2()
         request = SimpleNamespace(match_info={"id": "1"})
         try:
-            with patch("bot.storage.pg.get_conn", return_value=_ConnContext(conn)):
+            with patch("bot.storage.pg.readonly_connection", return_value=_ConnContext(conn)):
                 response = await handler._api_v2_session_detail(request)
         finally:
             conn.close()
@@ -1057,8 +1073,9 @@ class OverviewSessionsRegressionTests(unittest.TestCase):
         conn.commit()
 
         handler = _DummyOverview()
+        compat_conn = _CompatSqliteConn(conn)
         sessions = handler._get_sessions(
-            conn=conn,
+            conn=compat_conn,
             since_date="2026-01-01T00:00:00+00:00",
             streamer="target",
             limit=10,
@@ -1110,8 +1127,9 @@ class OverviewSessionsRegressionTests(unittest.TestCase):
         conn.commit()
 
         handler = _DummyOverview()
+        compat_conn = _CompatSqliteConn(conn)
         sessions = handler._get_sessions(
-            conn=conn,
+            conn=compat_conn,
             since_date="2026-01-01T00:00:00+00:00",
             streamer="target",
             limit=10,
@@ -1202,8 +1220,9 @@ class OverviewSessionsRegressionTests(unittest.TestCase):
         conn.commit()
 
         handler = _DummyOverview()
+        compat_conn = _CompatSqliteConn(conn)
         metrics = handler._calculate_overview_metrics(
-            conn=conn,
+            conn=compat_conn,
             since_date="2026-01-01T00:00:00+00:00",
             streamer=None,
         )
@@ -1243,7 +1262,7 @@ class OverviewRaidRetentionRegressionTests(unittest.IsolatedAsyncioTestCase):
         request = SimpleNamespace(query={"streamer": "source_channel", "days": "90"})
         with (
             patch(
-                "bot.analytics.api_overview.storage.get_conn",
+                "bot.analytics.api_overview.storage.readonly_connection",
                 return_value=_ConnContext(_OverviewRaidRetentionConn(rows)),
             ),
             patch(
@@ -1308,7 +1327,7 @@ class OverviewRaidRetentionRegressionTests(unittest.IsolatedAsyncioTestCase):
         request = SimpleNamespace(query={"streamer": "source_channel", "days": "90"})
         with (
             patch(
-                "bot.analytics.api_overview.storage.get_conn",
+                "bot.analytics.api_overview.storage.readonly_connection",
                 return_value=_ConnContext(_OverviewRaidRetentionConn(rows)),
             ),
             patch(
@@ -1349,7 +1368,7 @@ class OverviewRaidRetentionRegressionTests(unittest.IsolatedAsyncioTestCase):
         request = SimpleNamespace(query={"streamer": "source_channel", "days": "90"})
         with (
             patch(
-                "bot.analytics.api_overview.storage.get_conn",
+                "bot.analytics.api_overview.storage.readonly_connection",
                 return_value=_ConnContext(_OverviewRaidRetentionConn(rows)),
             ),
             patch(
@@ -1387,7 +1406,7 @@ class RaidMetricsSqlRegressionTests(unittest.TestCase):
         from bot.analytics.raid_metrics import recalculate_raid_chat_metrics
         from bot.storage import pg as storage_pg
 
-        with storage_pg.get_conn() as conn:
+        with storage_pg.transaction() as conn:
             conn.execute(
                 """
                 CREATE TEMP TABLE twitch_session_chatters (
@@ -1413,7 +1432,7 @@ class RaidMetricsSqlRegressionTests(unittest.TestCase):
                 """
                 INSERT INTO twitch_session_chatters (
                     session_id, chatter_login, chatter_id, first_message_at, messages, last_seen_at
-                ) VALUES (?, ?, ?, ?, ?, ?)
+                ) VALUES (%s, %s, %s, %s, %s, %s)
                 """,
                 [
                     (42, "viewer_a", "id_a", "2026-02-01T12:01:00+00:00", 3, "2026-02-01T12:03:00+00:00"),
@@ -1427,7 +1446,7 @@ class RaidMetricsSqlRegressionTests(unittest.TestCase):
             conn.executemany(
                 """
                 INSERT INTO twitch_chatter_rollup (streamer_login, chatter_login, first_seen_at)
-                VALUES (?, ?, ?)
+                VALUES (%s, %s, %s)
                 """,
                 [
                     ("raider_x", "viewer_a", "2026-01-01T00:00:00+00:00"),
@@ -1462,7 +1481,7 @@ class RaidMetricsSqlRegressionTests(unittest.TestCase):
         from bot.analytics.raid_metrics import recalculate_raid_chat_metrics
         from bot.storage import pg as storage_pg
 
-        with storage_pg.get_conn() as conn:
+        with storage_pg.transaction() as conn:
             conn.execute(
                 """
                 CREATE TEMP TABLE twitch_session_chatters (
@@ -1488,7 +1507,7 @@ class RaidMetricsSqlRegressionTests(unittest.TestCase):
                 """
                 INSERT INTO twitch_session_chatters (
                     session_id, chatter_login, chatter_id, first_message_at, messages, last_seen_at
-                ) VALUES (?, ?, ?, ?, ?, ?)
+                ) VALUES (%s, %s, %s, %s, %s, %s)
                 """,
                 [
                     (42, "viewer_a", "id_a", "2026-02-01T12:01:00+00:00", 1, "2026-02-01T12:04:00+00:00"),

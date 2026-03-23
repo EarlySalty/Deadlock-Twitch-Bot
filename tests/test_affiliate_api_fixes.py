@@ -134,9 +134,12 @@ class AffiliateApiFixTests(unittest.IsolatedAsyncioTestCase):
         self.conn.execute(
             """
             CREATE TABLE streamer_plans (
+                twitch_user_id TEXT,
                 twitch_login TEXT,
                 manual_plan_id TEXT,
-                manual_plan_expires_at TEXT
+                manual_plan_expires_at TEXT,
+                manual_plan_notes TEXT DEFAULT '',
+                manual_plan_updated_at TEXT
             )
             """
         )
@@ -146,6 +149,7 @@ class AffiliateApiFixTests(unittest.IsolatedAsyncioTestCase):
                 customer_reference TEXT,
                 plan_id TEXT,
                 status TEXT,
+                current_period_end TEXT,
                 updated_at TEXT
             )
             """
@@ -219,10 +223,12 @@ class AffiliateApiFixTests(unittest.IsolatedAsyncioTestCase):
         )
         self.conn.execute(
             """
-            INSERT INTO streamer_plans (twitch_login, manual_plan_id, manual_plan_expires_at)
-            VALUES (?, ?, ?)
+            INSERT INTO streamer_plans (
+                twitch_user_id, twitch_login, manual_plan_id, manual_plan_expires_at, manual_plan_updated_at
+            )
+            VALUES (?, ?, ?, ?, ?)
             """,
-            ("customer_alpha", "raid_boost", None),
+            ("cust_alpha_id", "customer_alpha", "raid_boost", None, now.isoformat()),
         )
         self.conn.commit()
 
@@ -233,7 +239,7 @@ class AffiliateApiFixTests(unittest.IsolatedAsyncioTestCase):
         handler = _AdminAffiliateHarness()
         request = _AdminRequest(login="affiliate_one", body={"csrf_token": "bad"})
 
-        with patch("bot.storage.pg.get_conn", return_value=_ConnCtx(self.conn)):
+        with patch("bot.storage.pg.transaction", return_value=_ConnCtx(self.conn)):
             response = await handler._api_admin_affiliate_toggle(request)
 
         payload = json.loads(response.body.decode("utf-8"))
@@ -248,7 +254,7 @@ class AffiliateApiFixTests(unittest.IsolatedAsyncioTestCase):
     async def test_admin_affiliate_detail_and_stats_use_claim_rows_for_counts(self) -> None:
         handler = _AdminAffiliateHarness()
 
-        with patch("bot.storage.pg.get_conn", return_value=_ConnCtx(self.conn)):
+        with patch("bot.storage.pg.transaction", return_value=_ConnCtx(self.conn)):
             detail_response = await handler._api_admin_affiliate_detail(
                 _AdminRequest(login="affiliate_one")
             )
@@ -283,7 +289,7 @@ class AffiliateApiFixTests(unittest.IsolatedAsyncioTestCase):
     async def test_affiliate_portal_returns_claim_centric_stats_and_pending_payout(self) -> None:
         handler = _AffiliatePortalHarness()
 
-        with patch("bot.storage.pg.get_conn", return_value=_ConnCtx(self.conn)):
+        with patch("bot.storage.pg.readonly_connection", return_value=_ConnCtx(self.conn)):
             response = await handler._api_v2_affiliate_portal(SimpleNamespace())
 
         payload = json.loads(response.body.decode("utf-8"))
@@ -310,7 +316,7 @@ class AffiliateApiFixTests(unittest.IsolatedAsyncioTestCase):
             session={"twitch_login": "missing_affiliate", "display_name": "Missing Affiliate"}
         )
 
-        with patch("bot.storage.pg.get_conn", return_value=_ConnCtx(self.conn)):
+        with patch("bot.storage.pg.readonly_connection", return_value=_ConnCtx(self.conn)):
             response = await handler._api_v2_affiliate_portal(SimpleNamespace())
 
         payload = json.loads(response.body.decode("utf-8"))

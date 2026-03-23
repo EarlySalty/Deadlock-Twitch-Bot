@@ -16,8 +16,18 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import contextlib
 import os
 import sys
+
+
+def _executemany(conn, sql: str, params_seq) -> None:
+    executemany = getattr(conn, "executemany", None)
+    if callable(executemany):
+        executemany(sql, params_seq)
+        return
+    with contextlib.closing(conn.cursor()) as cur:
+        cur.executemany(sql, params_seq)
 
 
 def parse_args() -> argparse.Namespace:
@@ -219,7 +229,8 @@ def main() -> int:
                         )
                         for vr in viewer_rows
                     ]
-                    conn.executemany(
+                    _executemany(
+                        conn,
                         """
                         INSERT INTO exp_snapshots (exp_session_id, ts_utc, viewer_count, minutes_from_start)
                         VALUES (%s, %s, %s, %s)

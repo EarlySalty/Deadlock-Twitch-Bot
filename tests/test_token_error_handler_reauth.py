@@ -3,7 +3,7 @@ from __future__ import annotations
 import contextlib
 import sqlite3
 import unittest
-from unittest.mock import patch
+from unittest.mock import ANY, patch
 
 from bot.api.token_error_handler import TokenErrorHandler
 
@@ -34,6 +34,17 @@ def _make_conn() -> sqlite3.Connection:
     return conn
 
 
+class _CompatConn:
+    def __init__(self, conn: sqlite3.Connection) -> None:
+        self._conn = conn
+
+    def execute(self, sql: str, params=()):
+        return self._conn.execute(str(sql).replace("%s", "?"), params)
+
+    def __getattr__(self, name: str):
+        return getattr(self._conn, name)
+
+
 class TokenErrorHandlerReauthTests(unittest.TestCase):
     def test_disable_raid_bot_marks_reauth_without_removing_auth_row(self) -> None:
         conn = _make_conn()
@@ -54,8 +65,12 @@ class TokenErrorHandlerReauthTests(unittest.TestCase):
 
         with (
             patch(
-                "bot.api.token_error_handler.get_conn",
-                side_effect=lambda: contextlib.nullcontext(conn),
+                "bot.api.token_error_handler.transaction",
+                side_effect=lambda: contextlib.nullcontext(_CompatConn(conn)),
+            ),
+            patch(
+                "bot.api.token_error_handler.readonly_connection",
+                side_effect=lambda: contextlib.nullcontext(_CompatConn(conn)),
             ),
             patch("bot.api.token_error_handler.set_partner_raid_bot_enabled") as set_partner_flag,
             patch.object(TokenErrorHandler, "_migrate_db", return_value=None),
@@ -75,7 +90,7 @@ class TokenErrorHandlerReauthTests(unittest.TestCase):
         self.assertEqual(int(row["raid_enabled"]), 0)
         self.assertEqual(int(row["needs_reauth"]), 1)
         self.assertEqual(row["twitch_login"], "alpha")
-        set_partner_flag.assert_called_once_with(conn, twitch_user_id="1001", enabled=False)
+        set_partner_flag.assert_called_once_with(ANY, twitch_user_id="1001", enabled=False)
 
 
 if __name__ == "__main__":

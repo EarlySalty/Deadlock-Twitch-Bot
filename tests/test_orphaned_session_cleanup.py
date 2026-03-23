@@ -52,7 +52,7 @@ class OrphanedSessionCleanupTests(unittest.TestCase):
         conn = _RecordingConn()
 
         with patch(
-            "bot.monitoring.sessions_mixin.storage.get_conn",
+            "bot.monitoring.sessions_mixin.storage.readonly_connection",
             side_effect=lambda: contextlib.nullcontext(conn),
         ):
             closed = harness._cleanup_orphaned_sessions()

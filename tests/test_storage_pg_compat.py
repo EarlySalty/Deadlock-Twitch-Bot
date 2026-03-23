@@ -5,15 +5,18 @@ from unittest.mock import patch
 
 import psycopg
 
+from bot.storage._rows import StorageRow
 from bot.storage.pg import (
-    _CompatConnection,
     _execute_with_savepoint,
-    _ensure_compat_functions,
     _ensure_observability_writer_started,
+    _reset_connection_pools,
     _run_startup_maintenance,
     analytics_db_fingerprint,
     analytics_db_fingerprint_details,
     insert_observability_event,
+    prepare_runtime_storage,
+    readonly_connection,
+    transaction,
 )
 
 
@@ -73,7 +76,9 @@ class _SavepointAwareSchemaConnection:
         if upper.startswith("RELEASE SAVEPOINT "):
             return _SchemaCursor()
         if self.aborted:
-            raise psycopg.errors.InFailedSqlTransaction("current transaction is aborted")
+            raise psycopg.errors.InFailedSqlTransaction(
+                "current transaction is aborted"
+            )
 
         if "FROM timescaledb_information.hypertables" in sql_text:
             return _SchemaCursor((True,))
@@ -81,7 +86,10 @@ class _SavepointAwareSchemaConnection:
             return _SchemaCursor(rows=[])
         if "SELECT COUNT(*) FROM clip_templates_global" in sql_text:
             return _SchemaCursor((0,))
-        if "CREATE INDEX IF NOT EXISTS idx_twitch_observability_events_flow" in sql_text:
+        if (
+            "CREATE INDEX IF NOT EXISTS idx_twitch_observability_events_flow"
+            in sql_text
+        ):
             self.observability_flow_index_attempts += 1
             if self.observability_flow_index_attempts == 1:
                 self.aborted = True
@@ -91,40 +99,63 @@ class _SavepointAwareSchemaConnection:
         return _SchemaCursor()
 
 
-class CompatConnectionExecuteScriptTests(unittest.TestCase):
-    def test_executescript_splits_statements_without_breaking_quoted_sections(self) -> None:
-        raw = _RecordingConnection()
-        conn = _CompatConnection(raw)
+class _PoolCursor:
+    def __init__(self) -> None:
+        self.rowcount = 0
 
-        conn.executescript(
-            """
-            -- semicolon in comment;
-            CREATE FUNCTION demo() RETURNS text
-            LANGUAGE plpgsql
-            AS $func$
-            BEGIN
-              RETURN 'hello;world';
-            END;
-            $func$;
+    def executemany(self, sql, params_seq, *args, **kwargs):
+        self.rowcount = len(list(params_seq))
+        return self
 
-            CREATE TABLE affiliate_demo (
-              id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-              note TEXT DEFAULT 'semi;colon'
-            );
-            """
-        )
+    def __enter__(self):
+        return self
 
-        self.assertEqual(len(raw.executed), 2)
-        self.assertIn("CREATE FUNCTION demo()", raw.executed[0][0])
-        self.assertIn("RETURN 'hello;world'", raw.executed[0][0])
-        self.assertIn("CREATE TABLE affiliate_demo", raw.executed[1][0])
-        self.assertIn("DEFAULT 'semi;colon'", raw.executed[1][0])
+    def __exit__(self, exc_type, exc, tb):
+        return False
+
+
+class _PoolConnection:
+    def __init__(self, name: str) -> None:
+        self.name = name
+        self.closed = False
+        self.autocommit = True
+        self.commit_calls = 0
+        self.rollback_calls = 0
+        self.executed: list[tuple[str, tuple[object, ...]]] = []
+
+    def execute(self, sql: str, params=(), *args, **kwargs):
+        self.executed.append((sql, tuple(params or ())))
+        return _SchemaCursor()
+
+    def commit(self) -> None:
+        self.commit_calls += 1
+
+    def rollback(self) -> None:
+        self.rollback_calls += 1
+
+    def close(self) -> None:
+        self.closed = True
+
+    def cursor(self):
+        return _PoolCursor()
+
+
+class StorageRowTests(unittest.TestCase):
+    def test_storage_row_supports_index_and_name_access(self) -> None:
+        row = StorageRow(("id", "login"), (7, "partner_one"))
+
+        self.assertEqual(row[0], 7)
+        self.assertEqual(row["login"], "partner_one")
+        self.assertEqual(row.get("missing", "fallback"), "fallback")
 
 
 class ObservabilityEventInsertTests(unittest.TestCase):
     def test_insert_observability_event_persists_json_payload(self) -> None:
         from unittest.mock import patch
-        queued_records: list[tuple[str, str, str | None, str | None, str, str, str]] = []
+
+        queued_records: list[
+            tuple[str, str, str | None, str | None, str, str, str]
+        ] = []
 
         with patch(
             "bot.storage.pg._enqueue_observability_event",
@@ -174,11 +205,17 @@ class ObservabilityEventInsertTests(unittest.TestCase):
             fake_threads.append(thread)
             return thread
 
-        with patch.object(storage_pg, "_observability_writer_thread", None), patch.object(
-            storage_pg, "_observability_writer_stop", SimpleNamespace(clear=lambda: None)
-        ), patch("bot.storage.pg.threading.Thread", side_effect=_thread_factory), patch(
-            "bot.storage.pg.atexit.unregister"
-        ), patch("bot.storage.pg.atexit.register"):
+        with (
+            patch.object(storage_pg, "_observability_writer_thread", None),
+            patch.object(
+                storage_pg,
+                "_observability_writer_stop",
+                SimpleNamespace(clear=lambda: None),
+            ),
+            patch("bot.storage.pg.threading.Thread", side_effect=_thread_factory),
+            patch("bot.storage.pg.atexit.unregister"),
+            patch("bot.storage.pg.atexit.register"),
+        ):
             _ensure_observability_writer_started()
 
         self.assertEqual(len(fake_threads), 1)
@@ -230,7 +267,9 @@ class ExecuteWithSavepointTests(unittest.TestCase):
 
 
 class EnsureSchemaSavepointTests(unittest.TestCase):
-    def test_ensure_schema_recovers_from_best_effort_observability_index_failure(self) -> None:
+    def test_ensure_schema_recovers_from_best_effort_observability_index_failure(
+        self,
+    ) -> None:
         from bot.storage import pg as storage_pg
 
         conn = _SavepointAwareSchemaConnection()
@@ -239,7 +278,11 @@ class EnsureSchemaSavepointTests(unittest.TestCase):
 
         statements = [sql for sql, _ in conn.executed]
         self.assertGreaterEqual(conn.observability_flow_index_attempts, 2)
-        self.assertTrue(any(sql.startswith("ROLLBACK TO SAVEPOINT ddl_guard_") for sql in statements))
+        self.assertTrue(
+            any(
+                sql.startswith("ROLLBACK TO SAVEPOINT ddl_guard_") for sql in statements
+            )
+        )
         self.assertIn(
             "CREATE INDEX IF NOT EXISTS idx_twitch_observability_events_entity "
             "ON twitch_observability_events(entity_login, created_at DESC)",
@@ -250,34 +293,134 @@ class EnsureSchemaSavepointTests(unittest.TestCase):
 class PerDatabaseCacheTests(unittest.TestCase):
     def tearDown(self) -> None:
         with contextlib.suppress(Exception):
-            delattr(_ensure_compat_functions, "_installed_for")
-        with contextlib.suppress(Exception):
             delattr(_run_startup_maintenance, "_done_for")
-
-    def test_ensure_compat_functions_is_cached_per_database(self) -> None:
-        conn = _RecordingConnection()
-
-        _ensure_compat_functions(conn, dsn="postgresql://demo@host-a:5432/db_a")
-        _ensure_compat_functions(conn, dsn="postgresql://demo@host-a:5432/db_a")
-        _ensure_compat_functions(conn, dsn="postgresql://demo@host-b:5432/db_b")
-
-        self.assertEqual(conn.commits, 2)
 
     def test_startup_maintenance_is_cached_per_database(self) -> None:
         conn = object()
 
-        with patch("bot.storage.pg._align_serial_sequence") as align_mock, patch(
-            "bot.storage.pg._coerce_column_to_boolean"
-        ), patch("bot.storage.pg._cleanup_duplicate_live_state_rows"), patch(
-            "bot.storage.pg._ensure_unique_live_state_login_index"
-        ), patch("bot.storage.pg._ensure_twitch_raid_auth_login_index"), patch(
-            "bot.storage.pg._ensure_social_media_auth_indexes"
+        with (
+            patch("bot.storage.pg._align_serial_sequence") as align_mock,
+            patch("bot.storage.pg._coerce_column_to_boolean"),
+            patch("bot.storage.pg._cleanup_duplicate_live_state_rows"),
+            patch("bot.storage.pg._ensure_unique_live_state_login_index"),
+            patch("bot.storage.pg._ensure_twitch_raid_auth_login_index"),
+            patch("bot.storage.pg._ensure_social_media_auth_indexes"),
         ):
             _run_startup_maintenance(conn, dsn="postgresql://demo@host-a:5432/db_a")
             _run_startup_maintenance(conn, dsn="postgresql://demo@host-a:5432/db_a")
             _run_startup_maintenance(conn, dsn="postgresql://demo@host-b:5432/db_b")
 
         self.assertEqual(align_mock.call_count, 8)
+
+
+class ConnectionPoolArchitectureTests(unittest.TestCase):
+    def tearDown(self) -> None:
+        _reset_connection_pools()
+
+    def test_readonly_connection_reuses_pooled_native_connection(self) -> None:
+        connections: list[_PoolConnection] = []
+
+        def _connect(*args, **kwargs):
+            conn = _PoolConnection(f"conn-{len(connections) + 1}")
+            connections.append(conn)
+            return conn
+
+        with (
+            patch("bot.storage.pg.psycopg.connect", side_effect=_connect),
+            patch(
+                "bot.storage.pg._load_dsn",
+                return_value="postgresql://demo@host:5432/db",
+            ),
+            patch("bot.storage.pg._require_runtime_storage_ready"),
+        ):
+            with readonly_connection() as first:
+                first_raw = first
+            with readonly_connection() as second:
+                second_raw = second
+
+        self.assertEqual(len(connections), 1)
+        self.assertIs(first_raw, second_raw)
+
+    def test_postgres_first_transaction_commits_and_rolls_back_explicitly(self) -> None:
+        connections: list[_PoolConnection] = []
+
+        def _connect(*args, **kwargs):
+            conn = _PoolConnection(f"conn-{len(connections) + 1}")
+            connections.append(conn)
+            return conn
+
+        with (
+            patch("bot.storage.pg.psycopg.connect", side_effect=_connect),
+            patch(
+                "bot.storage.pg._load_dsn",
+                return_value="postgresql://demo@host:5432/db",
+            ),
+            patch("bot.storage.pg._require_runtime_storage_ready"),
+        ):
+            with transaction() as conn:
+                conn.execute("SELECT 1")
+
+            with self.assertRaisesRegex(RuntimeError, "boom"):
+                with transaction() as conn:
+                    conn.execute("SELECT 2")
+                    raise RuntimeError("boom")
+
+        self.assertEqual(len(connections), 1)
+        self.assertGreaterEqual(connections[0].commit_calls, 1)
+        self.assertGreaterEqual(connections[0].rollback_calls, 1)
+
+    def test_readonly_connection_uses_postgres_first_prepare_without_legacy_wrapper(
+        self,
+    ) -> None:
+        connections: list[_PoolConnection] = []
+
+        def _connect(*args, **kwargs):
+            conn = _PoolConnection(f"conn-{len(connections) + 1}")
+            connections.append(conn)
+            return conn
+
+        with (
+            patch("bot.storage.pg.psycopg.connect", side_effect=_connect),
+            patch(
+                "bot.storage.pg._load_dsn",
+                return_value="postgresql://demo@host:5432/db",
+            ),
+            patch("bot.storage.pg._require_runtime_storage_ready"),
+        ):
+            with readonly_connection() as conn:
+                self.assertIsInstance(conn, _PoolConnection)
+
+        self.assertEqual(len(connections), 1)
+
+    def test_prepare_runtime_storage_runs_bootstrap_before_runtime_requests(self) -> None:
+        connections: list[_PoolConnection] = []
+
+        def _connect(*args, **kwargs):
+            conn = _PoolConnection(f"conn-{len(connections) + 1}")
+            connections.append(conn)
+            return conn
+
+        with (
+            patch("bot.storage.pg.psycopg.connect", side_effect=_connect),
+            patch(
+                "bot.storage.pg._load_dsn",
+                return_value="postgresql://demo@host:5432/db",
+            ),
+            patch("bot.storage.pg._prepare_postgres_connection") as prepare_mock,
+        ):
+            prepare_runtime_storage()
+
+        self.assertEqual(len(connections), 1)
+        prepare_mock.assert_called_once()
+
+    def test_readonly_connection_requires_explicit_runtime_bootstrap(self) -> None:
+        with patch(
+            "bot.storage.pg._load_dsn",
+            return_value="postgresql://demo@host:5432/db",
+        ):
+            with self.assertRaisesRegex(RuntimeError, "prepare_runtime_storage"):
+                with readonly_connection():
+                    self.fail("readonly_connection should require explicit runtime bootstrap")
 
 
 if __name__ == "__main__":

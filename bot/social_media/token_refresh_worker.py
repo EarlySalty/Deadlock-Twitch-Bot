@@ -22,7 +22,7 @@ try:
 except ModuleNotFoundError:  # pragma: no cover - split runtime fallback
     from ..compat.field_crypto import get_crypto
 
-from ..storage import get_conn
+from ..storage import readonly_connection, transaction
 from .oauth_manager import SocialMediaOAuthManager
 
 log = logging.getLogger("TwitchStreams.TokenRefreshWorker")
@@ -80,7 +80,7 @@ class SocialMediaTokenRefreshWorker(commands.Cog):
         threshold = datetime.now(UTC) + timedelta(hours=self.refresh_threshold_hours)
 
         # Find tokens expiring soon
-        with get_conn() as conn:
+        with readonly_connection() as conn:
             expiring = conn.execute(
                 """
                 SELECT id, platform, streamer_login,
@@ -90,7 +90,7 @@ class SocialMediaTokenRefreshWorker(commands.Cog):
                 WHERE enabled = 1
                   AND refresh_token_enc IS NOT NULL
                   AND token_expires_at IS NOT NULL
-                  AND token_expires_at < ?
+                  AND token_expires_at < %s
                 ORDER BY token_expires_at ASC
                 """,
                 (threshold.isoformat(),),
@@ -196,17 +196,17 @@ class SocialMediaTokenRefreshWorker(commands.Cog):
             )
 
         # Update database
-        with get_conn() as conn:
+        with transaction() as conn:
             if refresh_enc:
                 # Update both access and refresh tokens
                 conn.execute(
                     """
                     UPDATE social_media_platform_auth
-                    SET access_token_enc = ?,
-                        refresh_token_enc = ?,
-                        token_expires_at = ?,
+                    SET access_token_enc = %s,
+                        refresh_token_enc = %s,
+                        token_expires_at = %s,
                         last_refreshed_at = CURRENT_TIMESTAMP
-                    WHERE platform = ? AND (streamer_login = ? OR (streamer_login IS NULL AND ? IS NULL))
+                    WHERE platform = %s AND (streamer_login = %s OR (streamer_login IS NULL AND %s IS NULL))
                     """,
                     (
                         access_enc,
@@ -224,10 +224,10 @@ class SocialMediaTokenRefreshWorker(commands.Cog):
                 conn.execute(
                     """
                     UPDATE social_media_platform_auth
-                    SET access_token_enc = ?,
-                        token_expires_at = ?,
+                    SET access_token_enc = %s,
+                        token_expires_at = %s,
                         last_refreshed_at = CURRENT_TIMESTAMP
-                    WHERE platform = ? AND (streamer_login = ? OR (streamer_login IS NULL AND ? IS NULL))
+                    WHERE platform = %s AND (streamer_login = %s OR (streamer_login IS NULL AND %s IS NULL))
                     """,
                     (
                         access_enc,

@@ -235,7 +235,7 @@ class AffiliateGutschriftService:
                 """
                 SELECT column_name
                 FROM information_schema.columns
-                WHERE table_schema = current_schema() AND table_name = ?
+                WHERE table_schema = current_schema() AND table_name = %s
                 ORDER BY ordinal_position
                 """,
                 (normalized_name,),
@@ -246,17 +246,7 @@ class AffiliateGutschriftService:
             str(cls._row_value(row, "column_name", row[0] if row else "") or "").strip().lower()
             for row in rows
         }
-        if columns:
-            return columns
-
-        try:
-            pragma_rows = conn.execute(f"PRAGMA table_info({normalized_name})").fetchall()
-        except Exception:
-            pragma_rows = []
-        return {
-            str(cls._row_value(row, "name", row[1] if row else "") or "").strip().lower()
-            for row in pragma_rows
-        }
+        return columns
 
     @classmethod
     def ensure_schema(cls, conn: Any) -> None:
@@ -324,7 +314,7 @@ class AffiliateGutschriftService:
             conn.execute(
                 """
                 INSERT INTO affiliate_gutschrift_counter (year_month, last_seq)
-                VALUES (?, 0)
+                VALUES (%s, 0)
                 ON CONFLICT(year_month) DO NOTHING
                 """,
                 (normalized_year_month,),
@@ -333,7 +323,7 @@ class AffiliateGutschriftService:
                 """
                 UPDATE affiliate_gutschrift_counter
                 SET last_seq = last_seq + 1
-                WHERE year_month = ?
+                WHERE year_month = %s
                 RETURNING last_seq
                 """,
                 (normalized_year_month,),
@@ -346,7 +336,7 @@ class AffiliateGutschriftService:
                 conn.execute(
                     """
                     INSERT INTO affiliate_gutschrift_counter (counter_year, last_counter, updated_at)
-                    VALUES (?, 0, ?)
+                    VALUES (%s, 0, %s)
                     ON CONFLICT(counter_year) DO NOTHING
                     """,
                     (legacy_key, now_iso),
@@ -355,8 +345,8 @@ class AffiliateGutschriftService:
                     """
                     UPDATE affiliate_gutschrift_counter
                     SET last_counter = last_counter + 1,
-                        updated_at = ?
-                    WHERE counter_year = ?
+                        updated_at = %s
+                    WHERE counter_year = %s
                     RETURNING last_counter
                     """,
                     (now_iso, legacy_key),
@@ -365,7 +355,7 @@ class AffiliateGutschriftService:
                 conn.execute(
                     """
                     INSERT INTO affiliate_gutschrift_counter (counter_year, last_counter)
-                    VALUES (?, 0)
+                    VALUES (%s, 0)
                     ON CONFLICT(counter_year) DO NOTHING
                     """,
                     (legacy_key,),
@@ -374,7 +364,7 @@ class AffiliateGutschriftService:
                     """
                     UPDATE affiliate_gutschrift_counter
                     SET last_counter = last_counter + 1
-                    WHERE counter_year = ?
+                    WHERE counter_year = %s
                     RETURNING last_counter
                     """,
                     (legacy_key,),
@@ -399,7 +389,7 @@ class AffiliateGutschriftService:
             """
             SELECT affiliate_twitch_login, created_at
             FROM affiliate_commissions
-            WHERE status = ?
+            WHERE status = %s
             """,
             (cls.TRANSFERRED_STATUS,),
         ).fetchall()
@@ -427,7 +417,7 @@ class AffiliateGutschriftService:
             """
             SELECT *
             FROM affiliate_gutschriften
-            WHERE affiliate_twitch_login = ?
+            WHERE affiliate_twitch_login = %s
             ORDER BY period_year DESC, period_month DESC, id DESC
             """,
             (cls._normalize_login(affiliate_login),),
@@ -446,7 +436,7 @@ class AffiliateGutschriftService:
             """
             SELECT *
             FROM affiliate_gutschriften
-            WHERE id = ? AND affiliate_twitch_login = ?
+            WHERE id = %s AND affiliate_twitch_login = %s
             """,
             (int(gutschrift_id), cls._normalize_login(affiliate_login)),
         ).fetchone()
@@ -603,7 +593,7 @@ class AffiliateGutschriftService:
             """
             SELECT *
             FROM affiliate_gutschriften
-            WHERE affiliate_twitch_login = ? AND period_year = ? AND period_month = ?
+            WHERE affiliate_twitch_login = %s AND period_year = %s AND period_month = %s
             """,
             (cls._normalize_login(affiliate_login), int(year), int(month)),
         ).fetchone()
@@ -663,7 +653,7 @@ class AffiliateGutschriftService:
                 email_error,
                 commission_ids,
                 created_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             ON CONFLICT(affiliate_twitch_login, period_year, period_month) DO UPDATE SET
                 gutschrift_number = excluded.gutschrift_number,
                 net_amount_cents = excluded.net_amount_cents,
@@ -755,13 +745,13 @@ class AffiliateGutschriftService:
             conn.execute(
                 """
                 UPDATE affiliate_gutschriften
-                SET email_sent_at = NULL, email_error = ?
-                WHERE id = ?
+                SET email_sent_at = NULL, email_error = %s
+                WHERE id = %s
                 """,
                 (str(exc)[:500], int(cls._row_value(row, "id", 0) or 0)),
             )
             updated_row = conn.execute(
-                "SELECT * FROM affiliate_gutschriften WHERE id = ?",
+                "SELECT * FROM affiliate_gutschriften WHERE id = %s",
                 (int(cls._row_value(row, "id", 0) or 0),),
             ).fetchone()
             return updated_row, cls.STATUS_EMAIL_FAILED
@@ -770,13 +760,13 @@ class AffiliateGutschriftService:
         conn.execute(
             """
             UPDATE affiliate_gutschriften
-            SET email_sent_at = ?, email_error = NULL
-            WHERE id = ?
+            SET email_sent_at = %s, email_error = NULL
+            WHERE id = %s
             """,
             (sent_at, int(cls._row_value(row, "id", 0) or 0)),
         )
         updated_row = conn.execute(
-            "SELECT * FROM affiliate_gutschriften WHERE id = ?",
+            "SELECT * FROM affiliate_gutschriften WHERE id = %s",
             (int(cls._row_value(row, "id", 0) or 0),),
         ).fetchone()
         return updated_row, cls.STATUS_EMAILED
@@ -834,10 +824,10 @@ class AffiliateGutschriftService:
             """
             SELECT id, commission_cents, currency
             FROM affiliate_commissions
-            WHERE affiliate_twitch_login = ?
-              AND status = ?
-              AND created_at >= ?
-              AND created_at < ?
+            WHERE affiliate_twitch_login = %s
+              AND status = %s
+              AND created_at >= %s
+              AND created_at < %s
             ORDER BY id ASC
             """,
             (
@@ -992,9 +982,9 @@ class AffiliateGutschriftService:
             """
             SELECT DISTINCT affiliate_twitch_login
             FROM affiliate_commissions
-            WHERE status = ?
-              AND created_at >= ?
-              AND created_at < ?
+            WHERE status = %s
+              AND created_at >= %s
+              AND created_at < %s
             ORDER BY affiliate_twitch_login ASC
             """,
             (

@@ -16,7 +16,7 @@ from pathlib import Path
 
 from discord.ext import commands
 
-from ..storage import get_conn
+from ..storage import transaction
 from .clip_manager import ClipManager, UPLOAD_PROCESSING_STALE_AFTER
 from .credential_manager import SocialMediaCredentialManager
 from .uploaders import VideoProcessor
@@ -331,12 +331,12 @@ class UploadWorker(commands.Cog):
             raise Exception(f"Downloaded file not found: {output_path}")
 
         # Update DB with local path
-        with get_conn() as conn:
+        with transaction() as conn:
             conn.execute(
                 """
                 UPDATE twitch_clips_social_media
-                   SET local_file_path = ?, downloaded_at = ?
-                 WHERE id = ?
+                   SET local_file_path = %s, downloaded_at = %s
+                 WHERE id = %s
                 """,
                 (str(output_path), datetime.now(UTC).isoformat(), clip_id),
             )

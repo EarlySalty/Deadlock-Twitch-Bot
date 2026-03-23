@@ -2,10 +2,11 @@ import logging
 import secrets
 
 from ..storage import (
-    get_conn,
     load_active_partner,
+    readonly_connection,
     set_partner_raid_bot_enabled,
     set_partner_silent_flags,
+    transaction,
 )
 from .constants import TWITCHIO_AVAILABLE, twitchio_commands
 
@@ -72,9 +73,9 @@ if TWITCHIO_AVAILABLE:
             twitch_login, twitch_user_id, raid_bot_enabled = streamer_data
 
             # Prüfen, ob bereits autorisiert
-            with get_conn() as conn:
+            with readonly_connection() as conn:
                 auth_row = conn.execute(
-                    "SELECT raid_enabled FROM twitch_raid_auth WHERE twitch_user_id = ?",
+                    "SELECT raid_enabled FROM twitch_raid_auth WHERE twitch_user_id = %s",
                     (twitch_user_id,),
                 ).fetchone()
 
@@ -106,13 +107,12 @@ if TWITCHIO_AVAILABLE:
                 return
 
             # Aktivieren
-            with get_conn() as conn:
+            with transaction() as conn:
                 conn.execute(
-                    "UPDATE twitch_raid_auth SET raid_enabled = ? WHERE twitch_user_id = ?",
+                    "UPDATE twitch_raid_auth SET raid_enabled = %s WHERE twitch_user_id = %s",
                     (True, twitch_user_id),
                 )
                 set_partner_raid_bot_enabled(conn, twitch_user_id=twitch_user_id, enabled=True)
-                conn.commit()
 
             await ctx.send(
                 f"@{ctx.author.name} ✅ Auto-Raid aktiviert! "
@@ -144,13 +144,12 @@ if TWITCHIO_AVAILABLE:
 
             twitch_login, twitch_user_id, _ = streamer_data
 
-            with get_conn() as conn:
+            with transaction() as conn:
                 conn.execute(
-                    "UPDATE twitch_raid_auth SET raid_enabled = ? WHERE twitch_user_id = ?",
+                    "UPDATE twitch_raid_auth SET raid_enabled = %s WHERE twitch_user_id = %s",
                     (False, twitch_user_id),
                 )
                 set_partner_raid_bot_enabled(conn, twitch_user_id=twitch_user_id, enabled=False)
-                conn.commit()
 
             await ctx.send(
                 f"@{ctx.author.name} 🛑 Auto-Raid deaktiviert. "
@@ -172,12 +171,12 @@ if TWITCHIO_AVAILABLE:
 
             twitch_login, twitch_user_id, raid_bot_enabled = streamer_data
 
-            with get_conn() as conn:
+            with readonly_connection() as conn:
                 auth_row = conn.execute(
                     """
                     SELECT raid_enabled, authorized_at
                     FROM twitch_raid_auth
-                    WHERE twitch_user_id = ?
+                    WHERE twitch_user_id = %s
                     """,
                     (twitch_user_id,),
                 ).fetchone()
@@ -188,7 +187,7 @@ if TWITCHIO_AVAILABLE:
                     SELECT COUNT(*) as total,
                            SUM(CASE WHEN COALESCE(success, FALSE) IS TRUE THEN 1 ELSE 0 END) as successful
                     FROM twitch_raid_history
-                    WHERE from_broadcaster_id = ?
+                    WHERE from_broadcaster_id = %s
                     """,
                     (twitch_user_id,),
                 ).fetchone()
@@ -199,7 +198,7 @@ if TWITCHIO_AVAILABLE:
                     """
                     SELECT to_broadcaster_login, viewer_count, executed_at, success
                     FROM twitch_raid_history
-                    WHERE from_broadcaster_id = ?
+                    WHERE from_broadcaster_id = %s
                     ORDER BY executed_at DESC
                     LIMIT 1
                     """,
@@ -291,12 +290,12 @@ if TWITCHIO_AVAILABLE:
 
             twitch_login, twitch_user_id, _ = streamer_data
 
-            with get_conn() as conn:
+            with readonly_connection() as conn:
                 raids = conn.execute(
                     """
                     SELECT to_broadcaster_login, viewer_count, executed_at, success
                     FROM twitch_raid_history
-                    WHERE from_broadcaster_id = ?
+                    WHERE from_broadcaster_id = %s
                     ORDER BY executed_at DESC
                     LIMIT 3
                     """,
@@ -492,12 +491,11 @@ if TWITCHIO_AVAILABLE:
                         exc_info=True,
                     )
 
-            with get_conn() as conn:
+            with transaction() as conn:
                 partner_row = load_active_partner(conn, twitch_login=twitch_login)
                 current = int((partner_row["silent_ban"] if partner_row and hasattr(partner_row, "keys") else (partner_row[14] if partner_row else 0)) or 0)
                 new_value = 0 if current else 1
                 set_partner_silent_flags(conn, twitch_login=twitch_login, silent_ban=new_value)
-                conn.commit()
 
             if new_value:
                 await ctx.send(
@@ -549,12 +547,11 @@ if TWITCHIO_AVAILABLE:
                         exc_info=True,
                     )
 
-            with get_conn() as conn:
+            with transaction() as conn:
                 partner_row = load_active_partner(conn, twitch_login=twitch_login)
                 current = int((partner_row["silent_raid"] if partner_row and hasattr(partner_row, "keys") else (partner_row[15] if partner_row else 0)) or 0)
                 new_value = 0 if current else 1
                 set_partner_silent_flags(conn, twitch_login=twitch_login, silent_raid=new_value)
-                conn.commit()
 
             if new_value:
                 await ctx.send(
@@ -618,16 +615,15 @@ if TWITCHIO_AVAILABLE:
                 )
             else:
                 try:
-                    with get_conn() as conn:
+                    with transaction() as conn:
                         conn.execute(
                             """
                             UPDATE streamer_plans
                                SET lurker_tax_enabled = 0
-                             WHERE LOWER(COALESCE(twitch_login, '')) = LOWER(?)
+                             WHERE LOWER(COALESCE(twitch_login, '')) = LOWER(%s)
                             """,
                             (twitch_login,),
                         )
-                        conn.commit()
                     saved = True
                 except Exception:
                     log.debug(

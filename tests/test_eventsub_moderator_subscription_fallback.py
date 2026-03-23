@@ -15,10 +15,16 @@ class _ConnCtx:
         self._conn = conn
 
     def __enter__(self) -> sqlite3.Connection:
-        return self._conn
+        return self
 
     def __exit__(self, exc_type, exc, tb) -> bool:
         return False
+
+    def execute(self, sql: str, params=()):
+        return self._conn.execute(str(sql or "").replace("%s", "?"), params)
+
+    def __getattr__(self, name: str):
+        return getattr(self._conn, name)
 
 
 class _WebhookHandler:
@@ -109,7 +115,7 @@ class EventSubModeratorSubscriptionFallbackTests(unittest.IsolatedAsyncioTestCas
         harness.api.subscribe_eventsub_webhook.side_effect = _subscribe_side_effect
 
         with patch(
-            "bot.monitoring.eventsub_mixin.storage.get_conn",
+            "bot.monitoring.eventsub_mixin.storage.readonly_connection",
             return_value=_ConnCtx(self.conn),
         ):
             await harness._start_eventsub_listener()

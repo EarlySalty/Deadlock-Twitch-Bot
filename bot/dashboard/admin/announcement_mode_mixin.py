@@ -168,7 +168,7 @@ class DashboardAdminAnnouncementMixin:
 
     def _render_admin_announcement_overview_card(self) -> str:
         try:
-            with _storage.get_conn() as conn:
+            with _storage.readonly_connection() as conn:
                 config = load_global_promo_mode(conn)
         except Exception:
             return (
@@ -224,7 +224,7 @@ class DashboardAdminAnnouncementMixin:
         flash_err = str(request.query.get("err") or "").strip()
         csrf_token = self._csrf_generate_token(request)
 
-        with _storage.get_conn() as conn:
+        with _storage.readonly_connection() as conn:
             config = load_global_promo_mode(conn)
         evaluation = evaluate_global_promo_mode(config)
         status_label, status_class, description = self._admin_announcement_status_parts(evaluation)
@@ -357,7 +357,7 @@ class DashboardAdminAnnouncementMixin:
             raise self._admin_announcement_redirect(request, err=issues[0]["message"])
 
         try:
-            with _storage.get_conn() as conn:
+            with _storage.transaction() as conn:
                 save_global_promo_mode(
                     conn,
                     config=normalized_config,

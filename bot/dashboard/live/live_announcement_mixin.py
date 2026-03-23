@@ -544,7 +544,7 @@ class DashboardLiveAnnouncementMixin:
         if not normalized:
             return ""
         try:
-            with _storage.get_conn() as conn:
+            with _storage.readonly_connection() as conn:
                 row = _storage.load_active_partner(conn, twitch_login=normalized)
         except Exception:
             safe_login = normalized.replace("\r", "\\r").replace("\n", "\\n")
@@ -559,7 +559,7 @@ class DashboardLiveAnnouncementMixin:
     def _la_ensure_storage(self) -> None:
         if getattr(self, "_live_announcement_storage_ready", False):
             return
-        with _storage.get_conn() as conn:
+        with _storage.transaction() as conn:
             conn.execute(
                 """
                 CREATE TABLE IF NOT EXISTS twitch_live_announcement_configs (
@@ -579,7 +579,7 @@ class DashboardLiveAnnouncementMixin:
             return [active_login] if active_login else []
         self._la_ensure_storage()
         try:
-            with _storage.get_conn() as conn:
+            with _storage.readonly_connection() as conn:
                 rows = conn.execute(
                     "SELECT twitch_login FROM twitch_streamers_partner_state "
                     "WHERE COALESCE(is_partner_active, 0) = 1 ORDER BY twitch_login"
@@ -597,12 +597,12 @@ class DashboardLiveAnnouncementMixin:
             return fallback
 
         try:
-            with _storage.get_conn() as conn:
+            with _storage.readonly_connection() as conn:
                 row = conn.execute(
                     """
                     SELECT config_json, allowed_editor_role_ids
                       FROM twitch_live_announcement_configs
-                     WHERE LOWER(streamer_login) = LOWER(?)
+                     WHERE LOWER(streamer_login) = LOWER(%s)
                      LIMIT 1
                     """,
                     (login,),
@@ -633,12 +633,12 @@ class DashboardLiveAnnouncementMixin:
         now_iso = datetime.now(tz=UTC).isoformat(timespec="seconds")
         cfg_json = json.dumps(cfg, ensure_ascii=True, separators=(",", ":"))
         roles_json = json.dumps(allowed_editor_role_ids, ensure_ascii=True, separators=(",", ":"))
-        with _storage.get_conn() as conn:
+        with _storage.transaction() as conn:
             conn.execute(
                 """
                 INSERT INTO twitch_live_announcement_configs (
                     streamer_login, config_json, allowed_editor_role_ids, updated_at, updated_by
-                ) VALUES (?, ?, ?, ?, ?)
+                ) VALUES (%s, %s, %s, %s, %s)
                 ON CONFLICT (streamer_login) DO UPDATE SET
                     config_json = EXCLUDED.config_json,
                     allowed_editor_role_ids = EXCLUDED.allowed_editor_role_ids,
@@ -719,7 +719,7 @@ class DashboardLiveAnnouncementMixin:
         if not login:
             return fallback
         try:
-            with _storage.get_conn() as conn:
+            with _storage.readonly_connection() as conn:
                 row = _storage.load_active_partner(conn, twitch_login=login)
         except Exception:
             safe_login = login.replace("\r", "\\r").replace("\n", "\\n")
@@ -751,7 +751,7 @@ class DashboardLiveAnnouncementMixin:
         if not login or role_id <= 0:
             return
         try:
-            with _storage.get_conn() as conn:
+            with _storage.transaction() as conn:
                 _storage.set_partner_live_ping_settings(
                     conn,
                     twitch_login=login,
@@ -947,7 +947,7 @@ class DashboardLiveAnnouncementMixin:
         if not streamer_login:
             return None
         try:
-            with _storage.get_conn() as conn:
+            with _storage.readonly_connection() as conn:
                 row = _storage.load_active_partner(conn, twitch_login=streamer_login)
         except Exception:
             row = None

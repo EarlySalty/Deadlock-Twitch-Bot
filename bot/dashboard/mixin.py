@@ -72,12 +72,12 @@ class TwitchDashboardMixin:
         if not normalized_login:
             return TWITCH_BUTTON_LABEL
         try:
-            with storage.get_conn() as conn:
+            with storage.readonly_connection() as conn:
                 row = conn.execute(
                     """
                     SELECT config_json
                     FROM twitch_live_announcement_configs
-                    WHERE LOWER(streamer_login) = LOWER(?)
+                    WHERE LOWER(streamer_login) = LOWER(%s)
                     LIMIT 1
                     """,
                     (normalized_login,),
@@ -119,7 +119,7 @@ class TwitchDashboardMixin:
         if channel_id <= 0:
             return []
 
-        with storage.get_conn() as conn:
+        with storage.readonly_connection() as conn:
             rows = conn.execute(
                 """
                 SELECT streamer_login, last_discord_message_id, last_tracking_token
@@ -197,7 +197,7 @@ class TwitchDashboardMixin:
         clicked_at = datetime.now(tz=UTC).isoformat(timespec="seconds")
         ref_code = (TWITCH_DISCORD_REF_CODE or "").strip() or None
 
-        with storage.get_conn() as conn:
+        with storage.transaction() as conn:
             conn.execute(
                 """
                 INSERT INTO twitch_link_clicks (
@@ -211,7 +211,7 @@ class TwitchDashboardMixin:
                     message_id,
                     ref_code,
                     source_hint
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 """,
                 (
                     clicked_at,
@@ -236,7 +236,7 @@ class TwitchDashboardMixin:
                 target_game = (
                     os.getenv("TWITCH_TARGET_GAME_NAME") or TWITCH_TARGET_GAME_NAME or ""
                 ).strip()
-                with storage.get_conn() as c:
+                with storage.readonly_connection() as c:
                     rows = c.execute(
                         """
                         SELECT s.twitch_login,
@@ -269,7 +269,7 @@ class TwitchDashboardMixin:
                                SELECT LOWER(streamer_login) AS streamer_login,
                                       MAX(CASE
                                             WHEN had_deadlock_in_session
-                                                 OR LOWER(COALESCE(game_name,'')) = LOWER(?)
+                                                 OR LOWER(COALESCE(game_name,'')) = LOWER(%s)
                                             THEN COALESCE(ended_at, started_at)
                                   END) AS last_deadlock_stream_at
                                  FROM twitch_stream_sessions
@@ -372,7 +372,7 @@ class TwitchDashboardMixin:
             raise RuntimeError("Raid bot not initialized")
 
         try:
-            with storage.get_conn() as conn:
+            with storage.readonly_connection() as conn:
                 row = storage.load_streamer_identity(conn, twitch_login=normalized)
         except Exception as exc:
             raise RuntimeError("Failed to load Discord link") from exc
@@ -707,7 +707,7 @@ class TwitchDashboardMixin:
             }
             cutoff = (datetime.utcnow() - timedelta(days=days)).isoformat()
             try:
-                with storage.get_conn() as c:
+                with storage.readonly_connection() as c:
                     rows = c.execute(
                         """
                         SELECT streamer,
@@ -715,10 +715,10 @@ class TwitchDashboardMixin:
                                MAX(ts_utc) AS last_seen,
                                AVG(viewer_count) AS avg_viewers
                           FROM twitch_stats_category
-                         WHERE ts_utc >= ?
+                         WHERE ts_utc >= %s
                          GROUP BY streamer
                          ORDER BY samples DESC, last_seen DESC
-                         LIMIT ?
+                         LIMIT %s
                         """,
                         (cutoff, limit * 2),
                     ).fetchall()
@@ -756,7 +756,7 @@ class TwitchDashboardMixin:
         if not normalized:
             raise ValueError("Ungültiger Login")
 
-        with storage.get_conn() as conn:
+        with storage.transaction() as conn:
             row = storage.set_streamer_discord_member(
                 conn,
                 twitch_login=normalized,
@@ -788,7 +788,7 @@ class TwitchDashboardMixin:
             desired = "toggle"
 
         now_iso = datetime.utcnow().isoformat(timespec="seconds")
-        with storage.get_conn() as conn:
+        with storage.transaction() as conn:
             active_row = storage.load_active_partner(conn, twitch_login=normalized)
             history_row = storage.load_latest_partner_history(conn, twitch_login=normalized)
             if not active_row and not history_row:
@@ -841,9 +841,9 @@ class TwitchDashboardMixin:
 
         # 1. Versuche aus raid_auth zu laden
         try:
-            with storage.get_conn() as conn:
+            with storage.readonly_connection() as conn:
                 raid_row = conn.execute(
-                    "SELECT twitch_user_id FROM twitch_raid_auth WHERE LOWER(twitch_login)=LOWER(?)",
+                    "SELECT twitch_user_id FROM twitch_raid_auth WHERE LOWER(twitch_login)=LOWER(%s)",
                     (normalized,),
                 ).fetchone()
                 if raid_row:
@@ -875,7 +875,7 @@ class TwitchDashboardMixin:
                 )
 
         try:
-            with storage.get_conn() as conn:
+            with storage.transaction() as conn:
                 storage.save_streamer_discord_profile(
                     conn,
                     twitch_login=normalized,
@@ -911,7 +911,7 @@ class TwitchDashboardMixin:
         bits: dict = {"total": 0, "cheer_events": 0}
         subs: dict = {"total_events": 0, "gifted": 0}
 
-        with storage.get_conn() as c:
+        with storage.readonly_connection() as c:
             # 1a. Ad Break overview
             ad_agg = c.execute(
                 """
@@ -920,7 +920,7 @@ class TwitchDashboardMixin:
                        AVG(duration_seconds) AS avg_duration,
                        COUNT(DISTINCT session_id) AS sessions_with_ads
                   FROM twitch_ad_break_events
-                 WHERE started_at >= ?
+                 WHERE started_at >= %s
                 """,
                 (cutoff_30d,),
             ).fetchone()
@@ -940,7 +940,7 @@ class TwitchDashboardMixin:
                        s.started_at AS session_start
                   FROM twitch_ad_break_events a
                   JOIN twitch_stream_sessions s ON s.id = a.session_id
-                 WHERE a.started_at >= ?
+                 WHERE a.started_at >= %s
                    AND a.session_id IS NOT NULL
                  ORDER BY a.started_at DESC
                  LIMIT 200
@@ -958,7 +958,7 @@ class TwitchDashboardMixin:
                         SELECT session_id, minutes_from_start, viewer_count
                           FROM twitch_session_viewers
                          WHERE session_id IN (
-                            SELECT CAST(value AS INTEGER) FROM json_each(?)
+                            SELECT CAST(value AS INTEGER) FROM json_each(%s)
                          )
                          ORDER BY session_id, minutes_from_start
                         """,
@@ -1024,7 +1024,7 @@ class TwitchDashboardMixin:
                            MAX(level) AS max_level,
                            AVG(duration_seconds) AS avg_duration
                       FROM twitch_hype_train_events
-                     WHERE started_at >= ?
+                     WHERE started_at >= %s
                        AND ended_at IS NOT NULL
                     """,
                     (cutoff_30d,),
@@ -1040,7 +1040,7 @@ class TwitchDashboardMixin:
             # 1d. Bits
             try:
                 bits_row = c.execute(
-                    "SELECT SUM(amount) AS total_bits, COUNT(*) AS cheer_events FROM twitch_bits_events WHERE received_at >= ?",
+                    "SELECT SUM(amount) AS total_bits, COUNT(*) AS cheer_events FROM twitch_bits_events WHERE received_at >= %s",
                     (cutoff_30d,),
                 ).fetchone()
                 if bits_row:
@@ -1056,7 +1056,7 @@ class TwitchDashboardMixin:
                     SELECT COUNT(*) AS total_events,
                            SUM(CASE WHEN is_gift=1 THEN 1 ELSE 0 END) AS gifted
                       FROM twitch_subscription_events
-                     WHERE received_at >= ?
+                     WHERE received_at >= %s
                     """,
                     (cutoff_30d,),
                 ).fetchone()
@@ -1179,7 +1179,7 @@ class TwitchDashboardMixin:
         sum_returning_chatters = 0
         sum_first_chatters = 0
 
-        with storage.get_conn() as conn:
+        with storage.readonly_connection() as conn:
             # 1. Sessions Data
             # ----------------
             session_rows = conn.execute(
@@ -1190,8 +1190,8 @@ class TwitchDashboardMixin:
                        unique_chatters, returning_chatters, first_time_chatters,
                        follower_delta, stream_title, game_name
                   FROM twitch_stream_sessions
-                 WHERE started_at >= ?
-                   AND (streamer_login = ? OR ? = '')
+                 WHERE started_at >= %s
+                   AND (streamer_login = %s OR %s = '')
                  ORDER BY started_at DESC
                 """,
                 (cutoff_iso, login, login),
@@ -1210,7 +1210,7 @@ class TwitchDashboardMixin:
                         """
                         SELECT session_id, COUNT(*) as c
                         FROM twitch_chat_messages
-                        WHERE session_id IN (SELECT CAST(value AS INTEGER) FROM json_each(?))
+                        WHERE session_id IN (SELECT CAST(value AS INTEGER) FROM json_each(%s))
                         GROUP BY session_id
                         """,
                         (ids_json,),
@@ -1283,11 +1283,11 @@ class TwitchDashboardMixin:
             # 2. Raid History (Network)
             # -------------------------
             raids_sent_row = conn.execute(
-                "SELECT COUNT(*) as c, SUM(viewer_count) as v FROM twitch_raid_history WHERE from_broadcaster_login=? AND executed_at >= ?",
+                "SELECT COUNT(*) as c, SUM(viewer_count) as v FROM twitch_raid_history WHERE from_broadcaster_login=%s AND executed_at >= %s",
                 (login, cutoff_iso),
             ).fetchone()
             raids_recv_row = conn.execute(
-                "SELECT COUNT(*) as c, SUM(viewer_count) as v FROM twitch_raid_history WHERE to_broadcaster_login=? AND executed_at >= ?",
+                "SELECT COUNT(*) as c, SUM(viewer_count) as v FROM twitch_raid_history WHERE to_broadcaster_login=%s AND executed_at >= %s",
                 (login, cutoff_iso),
             ).fetchone()
 
@@ -1298,7 +1298,7 @@ class TwitchDashboardMixin:
             # 3. Monetization (Subs)
             # ----------------------
             sub_row = conn.execute(
-                "SELECT total, points FROM twitch_subscriptions_snapshot WHERE twitch_login=? ORDER BY snapshot_at DESC LIMIT 1",
+                "SELECT total, points FROM twitch_subscriptions_snapshot WHERE twitch_login=%s ORDER BY snapshot_at DESC LIMIT 1",
                 (login,),
             ).fetchone()
             curr_subs = sub_row["total"] or 0 if sub_row else 0
@@ -1307,7 +1307,7 @@ class TwitchDashboardMixin:
             # 4. Engagement (Link Clicks)
             # ---------------------------
             clicks_row = conn.execute(
-                "SELECT COUNT(*) as c FROM twitch_link_clicks WHERE streamer_login=? AND clicked_at >= ?",
+                "SELECT COUNT(*) as c FROM twitch_link_clicks WHERE streamer_login=%s AND clicked_at >= %s",
                 (login, cutoff_iso),
             ).fetchone()
             link_clicks = clicks_row["c"] or 0 if clicks_row else 0
@@ -1318,7 +1318,7 @@ class TwitchDashboardMixin:
 
             # Category Avg Viewers Distribution
             pop_cat_rows = conn.execute(
-                "SELECT AVG(viewer_count) as v FROM twitch_stats_category WHERE ts_utc >= ? GROUP BY streamer",
+                "SELECT AVG(viewer_count) as v FROM twitch_stats_category WHERE ts_utc >= %s GROUP BY streamer",
                 (cutoff_iso,),
             ).fetchall()
             pop_avg_viewers = [r["v"] for r in pop_cat_rows if r["v"] is not None]
@@ -1333,7 +1333,7 @@ class TwitchDashboardMixin:
                        SUM(follower_delta) as growth,
                        SUM(unique_chatters) as chat
                   FROM twitch_stream_sessions 
-                 WHERE started_at >= ? 
+                 WHERE started_at >= %s 
                  GROUP BY streamer_login
                 """,
                 (cutoff_iso,),
@@ -1627,10 +1627,10 @@ class TwitchDashboardMixin:
             return {}
 
         data = {"login": login}
-        with storage.get_conn() as c:
+        with storage.readonly_connection() as c:
             # 1. Stammdaten
             row = c.execute(
-                "SELECT * FROM twitch_partners_all_state WHERE LOWER(twitch_login)=LOWER(?) AND status='active'",
+                "SELECT * FROM twitch_partners_all_state WHERE LOWER(twitch_login)=LOWER(%s) AND status='active'",
                 (login,),
             ).fetchone()
             if not row:
@@ -1648,8 +1648,8 @@ class TwitchDashboardMixin:
                        SUM(follower_delta) as total_follower_delta,
                        SUM(unique_chatters) as total_unique_chatters
                   FROM twitch_stream_sessions
-                 WHERE streamer_login=?
-                   AND started_at > ?
+                 WHERE streamer_login=%s
+                   AND started_at > %s
                 """,
                 (login, since_30d),
             ).fetchone()
@@ -1661,7 +1661,7 @@ class TwitchDashboardMixin:
                 SELECT id, stream_id, started_at, duration_seconds, 
                        avg_viewers, peak_viewers, follower_delta, stream_title
                   FROM twitch_stream_sessions
-                 WHERE streamer_login=?
+                 WHERE streamer_login=%s
                  ORDER BY started_at DESC
                  LIMIT 20
                 """,
@@ -1674,10 +1674,10 @@ class TwitchDashboardMixin:
     async def _dashboard_session_detail(self, session_id: int) -> dict:
         """Fetch deep-dive data for a single session."""
         data = {}
-        with storage.get_conn() as c:
+        with storage.readonly_connection() as c:
             # 1. Session Meta
             row = c.execute(
-                "SELECT * FROM twitch_stream_sessions WHERE id=?", (session_id,)
+                "SELECT * FROM twitch_stream_sessions WHERE id=%s", (session_id,)
             ).fetchone()
             if not row:
                 return {}
@@ -1688,7 +1688,7 @@ class TwitchDashboardMixin:
                 """
                 SELECT minutes_from_start, viewer_count 
                   FROM twitch_session_viewers 
-                 WHERE session_id=? 
+                 WHERE session_id=%s 
                  ORDER BY minutes_from_start ASC
                 """,
                 (session_id,),
@@ -1701,7 +1701,7 @@ class TwitchDashboardMixin:
                 """
                 SELECT chatter_login, messages 
                   FROM twitch_session_chatters
-                 WHERE session_id=?
+                 WHERE session_id=%s
                  ORDER BY messages DESC
                  LIMIT 10
                 """,
@@ -1715,13 +1715,13 @@ class TwitchDashboardMixin:
         """Fetch comparative stats: Me vs Category vs Top."""
         data = {}
         since_dt = (datetime.now(UTC) - timedelta(days=days)).isoformat()
-        with storage.get_conn() as c:
+        with storage.readonly_connection() as c:
             # Global Category Stats (Deadlock)
             cat_stats = c.execute(
                 """
                 SELECT AVG(viewer_count) as avg_viewers, MAX(viewer_count) as peak_viewers
                   FROM twitch_stats_category
-                 WHERE ts_utc > ?
+                 WHERE ts_utc > %s
                 """,
                 (since_dt,),
             ).fetchone()
@@ -1732,7 +1732,7 @@ class TwitchDashboardMixin:
                 """
                 SELECT AVG(viewer_count) as avg_viewers, MAX(viewer_count) as peak_viewers
                   FROM twitch_stats_tracked
-                 WHERE ts_utc > ?
+                 WHERE ts_utc > %s
                 """,
                 (since_dt,),
             ).fetchone()
@@ -1743,7 +1743,7 @@ class TwitchDashboardMixin:
                 """
                 SELECT streamer_login, AVG(avg_viewers) as val
                   FROM twitch_stream_sessions
-                 WHERE started_at > ?
+                 WHERE started_at > %s
                  GROUP BY streamer_login
                  ORDER BY val DESC
                  LIMIT 5
@@ -1849,12 +1849,12 @@ class TwitchDashboardMixin:
             row_data = None
             should_notify = False
             copied = 0
-            with storage.get_conn() as c:
+        with storage.transaction() as c:
                 source_row = c.execute(
                     """
                     SELECT twitch_user_id, discord_user_id, discord_display_name, manual_verified_at
                     FROM twitch_streamers
-                    WHERE twitch_login=?
+                    WHERE twitch_login=%s
                     """,
                     (login,),
                 ).fetchone()
@@ -1894,21 +1894,21 @@ class TwitchDashboardMixin:
                 )
                 copied = storage.backfill_tracked_stats_from_category(c, login)
 
-            notes: list[str] = []
-            if copied:
-                notes.append(f"({copied} historische Datenpunkte übernommen)")
-            if should_notify:
-                dm_note = await self._notify_verification_success(login, row_data)
-                if dm_note:
-                    notes.append(dm_note)
-            role_note = await self._ensure_streamer_role(row_data)
-            if role_note:
-                notes.append(role_note)
-            merged = " ".join(notes).strip()
-            return f"{base_msg} {merged}".strip()
+        notes: list[str] = []
+        if copied:
+            notes.append(f"({copied} historische Datenpunkte übernommen)")
+        if should_notify:
+            dm_note = await self._notify_verification_success(login, row_data)
+            if dm_note:
+                notes.append(dm_note)
+        role_note = await self._ensure_streamer_role(row_data)
+        if role_note:
+            notes.append(role_note)
+        merged = " ".join(notes).strip()
+        return f"{base_msg} {merged}".strip()
 
         if mode == "clear":
-            with storage.get_conn() as c:
+            with storage.transaction() as c:
                 result = storage.archive_active_partner(c, twitch_login=login)
                 if not result:
                     return f"{login} ist nicht gespeichert"
@@ -1920,7 +1920,7 @@ class TwitchDashboardMixin:
 
         if mode == "failed":
             row_data = None
-            with storage.get_conn() as c:
+            with storage.transaction() as c:
                 identity_row = storage.load_streamer_identity(c, twitch_login=login)
                 if identity_row:
                     row_data = _row_to_dict(identity_row)

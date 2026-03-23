@@ -9,7 +9,7 @@ import logging
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
-from ..storage import get_conn
+from ..storage import transaction
 
 log = logging.getLogger("TwitchStreams.ClipManager")
 
@@ -53,10 +53,10 @@ class ClipManager:
             Database ID des Clips
         """
         try:
-            with get_conn() as conn:
+            with transaction() as conn:
                 # Prüfe ob Clip bereits existiert
                 existing = conn.execute(
-                    "SELECT id FROM twitch_clips_social_media WHERE clip_id = ?",
+                    "SELECT id FROM twitch_clips_social_media WHERE clip_id = %s",
                     (clip_id,),
                 ).fetchone()
 
@@ -67,7 +67,7 @@ class ClipManager:
                 # Sicherstellen dass Streamer in twitch_streamers existiert (FK-Anforderung).
                 # Race Condition: Scout kann Streamer löschen während ClipFetcher läuft.
                 conn.execute(
-                    "INSERT INTO twitch_streamers (twitch_login, twitch_user_id) VALUES (?, ?) "
+                    "INSERT INTO twitch_streamers (twitch_login, twitch_user_id) VALUES (%s, %s) "
                     "ON CONFLICT (twitch_login) DO NOTHING",
                     (streamer_login, twitch_user_id),
                 )
@@ -79,7 +79,7 @@ class ClipManager:
                         (clip_id, clip_url, clip_title, clip_thumbnail_url,
                          streamer_login, twitch_user_id, created_at, duration_seconds,
                          view_count, game_name, status)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending')
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'pending')
                     RETURNING id
                     """,
                     (
@@ -223,7 +223,7 @@ class ClipManager:
             Liste von Clip-Dicts
         """
         try:
-            with get_conn() as conn:
+            with transaction() as conn:
                 query = """
                     SELECT c.*,
                            COALESCE(
@@ -237,14 +237,14 @@ class ClipManager:
                 params = []
 
                 if streamer_login:
-                    query += " AND LOWER(c.streamer_login) = LOWER(?)"
+                    query += " AND LOWER(c.streamer_login) = LOWER(%s)"
                     params.append(streamer_login)
 
                 if status:
-                    query += " AND c.status = ?"
+                    query += " AND c.status = %s"
                     params.append(status)
 
-                query += " ORDER BY c.created_at DESC LIMIT ?"
+                query += " ORDER BY c.created_at DESC LIMIT %s"
                 params.append(limit)
 
                 rows = conn.execute(query, params).fetchall()
@@ -283,12 +283,12 @@ class ClipManager:
             raise ValueError(f"Invalid platform: {platform}")
 
         try:
-            with get_conn() as conn:
+            with transaction() as conn:
                 # Pending jobs are always reused.
                 pending = conn.execute(
                     """
                     SELECT id FROM twitch_clips_upload_queue
-                     WHERE clip_id = ? AND platform = ? AND status = 'pending'
+                     WHERE clip_id = %s AND platform = %s AND status = 'pending'
                      ORDER BY priority DESC, created_at ASC, id ASC
                      LIMIT 1
                     """,
@@ -309,7 +309,7 @@ class ClipManager:
                     """
                     SELECT id, COALESCE(last_attempt_at, created_at) AS last_seen_at
                       FROM twitch_clips_upload_queue
-                     WHERE clip_id = ? AND platform = ? AND status = 'processing'
+                     WHERE clip_id = %s AND platform = %s AND status = 'processing'
                      ORDER BY COALESCE(last_attempt_at, created_at) DESC, id DESC
                      LIMIT 1
                     """,
@@ -332,15 +332,15 @@ class ClipManager:
                         """
                         UPDATE twitch_clips_upload_queue
                            SET status = 'pending',
-                               title = ?,
-                               description = ?,
-                               hashtags = ?,
-                               scheduled_at = ?,
-                               priority = ?,
+                               title = %s,
+                               description = %s,
+                               hashtags = %s,
+                               scheduled_at = %s,
+                               priority = %s,
                                last_error = NULL,
                                last_attempt_at = NULL,
                                completed_at = NULL
-                         WHERE id = ?
+                         WHERE id = %s
                         """,
                         (
                             title,
@@ -365,7 +365,7 @@ class ClipManager:
                     INSERT INTO twitch_clips_upload_queue
                         (clip_id, platform, title, description, hashtags,
                          scheduled_at, priority, status, created_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, 'pending', %s)
                     RETURNING id
                     """,
                     (
@@ -416,7 +416,7 @@ class ClipManager:
             Liste von Queue-Items mit Clip-Daten
         """
         try:
-            with get_conn() as conn:
+            with transaction() as conn:
                 if status == "pending" and reclaim_stale_processing_before:
                     conn.execute(
                         """
@@ -424,7 +424,7 @@ class ClipManager:
                            SET status = 'pending',
                                last_error = NULL
                          WHERE status = 'processing'
-                           AND COALESCE(last_attempt_at, created_at) < ?
+                           AND COALESCE(last_attempt_at, created_at) < %s
                         """,
                         (reclaim_stale_processing_before,),
                     )
@@ -434,15 +434,15 @@ class ClipManager:
                            c.local_file_path, c.converted_file_path
                       FROM twitch_clips_upload_queue q
                       JOIN twitch_clips_social_media c ON c.id = q.clip_id
-                     WHERE q.status = ?
+                     WHERE q.status = %s
                 """
                 params = [status]
 
                 if platform:
-                    query += " AND q.platform = ?"
+                    query += " AND q.platform = %s"
                     params.append(platform)
 
-                query += " ORDER BY q.priority DESC, q.created_at ASC LIMIT ?"
+                query += " ORDER BY q.priority DESC, q.created_at ASC LIMIT %s"
                 params.append(limit)
 
                 rows = conn.execute(query, params).fetchall()
@@ -469,7 +469,7 @@ class ClipManager:
             error: Error message (bei failure)
         """
         try:
-            with get_conn() as conn:
+            with transaction() as conn:
                 now = datetime.now(UTC).isoformat()
 
                 if status == "completed":
@@ -478,15 +478,15 @@ class ClipManager:
                         """
                         UPDATE twitch_clips_upload_queue
                            SET status = 'completed',
-                               completed_at = ?
-                         WHERE id = ?
+                               completed_at = %s
+                         WHERE id = %s
                         """,
                         (now, queue_id),
                     )
 
                     # Update Clip-Tabelle
                     queue_item = conn.execute(
-                        "SELECT clip_id, platform FROM twitch_clips_upload_queue WHERE id = ?",
+                        "SELECT clip_id, platform FROM twitch_clips_upload_queue WHERE id = %s",
                         (queue_id,),
                     ).fetchone()
 
@@ -498,9 +498,9 @@ class ClipManager:
                                 """
                                 UPDATE twitch_clips_social_media
                                    SET uploaded_tiktok = 1,
-                                       tiktok_video_id = ?,
-                                       tiktok_uploaded_at = ?
-                                 WHERE id = ?
+                                       tiktok_video_id = %s,
+                                       tiktok_uploaded_at = %s
+                                 WHERE id = %s
                                 """,
                                 (external_video_id, now, clip_id),
                             )
@@ -509,9 +509,9 @@ class ClipManager:
                                 """
                                 UPDATE twitch_clips_social_media
                                    SET uploaded_youtube = 1,
-                                       youtube_video_id = ?,
-                                       youtube_uploaded_at = ?
-                                 WHERE id = ?
+                                       youtube_video_id = %s,
+                                       youtube_uploaded_at = %s
+                                 WHERE id = %s
                                 """,
                                 (external_video_id, now, clip_id),
                             )
@@ -520,9 +520,9 @@ class ClipManager:
                                 """
                                 UPDATE twitch_clips_social_media
                                    SET uploaded_instagram = 1,
-                                       instagram_media_id = ?,
-                                       instagram_uploaded_at = ?
-                                 WHERE id = ?
+                                       instagram_media_id = %s,
+                                       instagram_uploaded_at = %s
+                                 WHERE id = %s
                                 """,
                                 (external_video_id, now, clip_id),
                             )
@@ -535,9 +535,9 @@ class ClipManager:
                         UPDATE twitch_clips_upload_queue
                            SET status = 'failed',
                                attempts = attempts + 1,
-                               last_error = ?,
-                               last_attempt_at = ?
-                         WHERE id = ?
+                               last_error = %s,
+                               last_attempt_at = %s
+                         WHERE id = %s
                         """,
                         (error, now, queue_id),
                     )
@@ -548,9 +548,9 @@ class ClipManager:
                     conn.execute(
                         """
                         UPDATE twitch_clips_upload_queue
-                           SET status = ?,
-                               last_attempt_at = ?
-                         WHERE id = ?
+                           SET status = %s,
+                               last_attempt_at = %s
+                         WHERE id = %s
                         """,
                         (status, now, queue_id),
                     )
@@ -567,7 +567,7 @@ class ClipManager:
             Dict mit Metriken
         """
         try:
-            with get_conn() as conn:
+            with transaction() as conn:
                 if streamer_login:
                     params = (streamer_login,)
 
@@ -579,7 +579,7 @@ class ClipManager:
                                SUM(CASE WHEN uploaded_youtube = 1 THEN 1 ELSE 0 END) as youtube_uploads,
                                SUM(CASE WHEN uploaded_instagram = 1 THEN 1 ELSE 0 END) as instagram_uploads
                           FROM twitch_clips_social_media c
-                         WHERE c.streamer_login = ?
+                         WHERE c.streamer_login = %s
                         """,
                         params,
                     ).fetchone()
@@ -591,7 +591,7 @@ class ClipManager:
                           FROM twitch_clips_upload_queue q
                           JOIN twitch_clips_social_media c ON c.id = q.clip_id
                          WHERE q.status = 'pending'
-                           AND c.streamer_login = ?
+                           AND c.streamer_login = %s
                          GROUP BY q.platform
                         """,
                         params,
@@ -608,8 +608,8 @@ class ClipManager:
                                SUM(a.shares) as total_shares
                           FROM twitch_clips_social_analytics a
                           JOIN twitch_clips_social_media c ON c.id = a.clip_id
-                         WHERE a.synced_at > datetime('now', '-30 days')
-                           AND c.streamer_login = ?
+                         WHERE a.synced_at > NOW() - INTERVAL '30 days'
+                           AND c.streamer_login = %s
                          GROUP BY a.platform
                         """,
                         params,
@@ -648,7 +648,7 @@ class ClipManager:
                                SUM(a.shares) as total_shares
                           FROM twitch_clips_social_analytics a
                           JOIN twitch_clips_social_media c ON c.id = a.clip_id
-                         WHERE a.synced_at > datetime('now', '-30 days')
+                         WHERE a.synced_at > NOW() - INTERVAL '30 days'
                          GROUP BY a.platform
                         """
                     ).fetchall()
@@ -696,12 +696,12 @@ class ClipManager:
             Template ID
         """
         try:
-            with get_conn() as conn:
+            with transaction() as conn:
                 cursor = conn.execute(
                     """
                     INSERT INTO clip_templates_global
                         (template_name, description_template, hashtags, category, created_by)
-                    VALUES (?, ?, ?, ?, ?)
+                    VALUES (%s, %s, %s, %s, %s)
                     RETURNING id
                     """,
                     (
@@ -732,14 +732,14 @@ class ClipManager:
             Liste von Template-Dicts
         """
         try:
-            with get_conn() as conn:
+            with transaction() as conn:
                 if category:
                     rows = conn.execute(
                         """
                         SELECT id, template_name, description_template, hashtags,
                                category, usage_count, created_at, created_by
                           FROM clip_templates_global
-                         WHERE category = ?
+                         WHERE category = %s
                          ORDER BY usage_count DESC, template_name ASC
                         """,
                         (category,),
@@ -788,7 +788,7 @@ class ClipManager:
             Template ID
         """
         try:
-            with get_conn() as conn:
+            with transaction() as conn:
                 now = datetime.now(UTC).isoformat()
 
                 # If is_default, unset other default templates for this streamer
@@ -797,7 +797,7 @@ class ClipManager:
                         """
                         UPDATE clip_templates_streamer
                            SET is_default = 0
-                         WHERE streamer_login = ?
+                         WHERE streamer_login = %s
                         """,
                         (streamer_login,),
                     )
@@ -806,7 +806,7 @@ class ClipManager:
                 existing = conn.execute(
                     """
                     SELECT id FROM clip_templates_streamer
-                     WHERE streamer_login = ? AND template_name = ?
+                     WHERE streamer_login = %s AND template_name = %s
                     """,
                     (streamer_login, template_name),
                 ).fetchone()
@@ -816,11 +816,11 @@ class ClipManager:
                     conn.execute(
                         """
                         UPDATE clip_templates_streamer
-                           SET description_template = ?,
-                               hashtags = ?,
-                               is_default = ?,
-                               updated_at = ?
-                         WHERE id = ?
+                           SET description_template = %s,
+                               hashtags = %s,
+                               is_default = %s,
+                               updated_at = %s
+                         WHERE id = %s
                         """,
                         (
                             description_template,
@@ -843,7 +843,7 @@ class ClipManager:
                         """
                         INSERT INTO clip_templates_streamer
                             (streamer_login, template_name, description_template, hashtags, is_default)
-                        VALUES (?, ?, ?, ?, ?)
+                        VALUES (%s, %s, %s, %s, %s)
                         RETURNING id
                         """,
                         (
@@ -881,13 +881,13 @@ class ClipManager:
             Liste von Template-Dicts
         """
         try:
-            with get_conn() as conn:
+            with transaction() as conn:
                 rows = conn.execute(
                     """
                     SELECT id, streamer_login, template_name, description_template,
                            hashtags, is_default, created_at, updated_at
                       FROM clip_templates_streamer
-                     WHERE streamer_login = ?
+                     WHERE streamer_login = %s
                      ORDER BY is_default DESC, template_name ASC
                     """,
                     (streamer_login,),
@@ -923,13 +923,13 @@ class ClipManager:
             True wenn erfolgreich
         """
         try:
-            with get_conn() as conn:
+            with transaction() as conn:
                 # Get clip data
                 clip = conn.execute(
                     """
                     SELECT clip_title, streamer_login, game_name
                       FROM twitch_clips_social_media
-                     WHERE id = ?
+                     WHERE id = %s
                     """,
                     (clip_id,),
                 ).fetchone()
@@ -944,14 +944,14 @@ class ClipManager:
                         """
                         SELECT description_template, hashtags
                           FROM clip_templates_global
-                         WHERE id = ?
+                         WHERE id = %s
                         """,
                         (template_id,),
                     ).fetchone()
 
                     # Increment usage count
                     conn.execute(
-                        "UPDATE clip_templates_global SET usage_count = usage_count + 1 WHERE id = ?",
+                        "UPDATE clip_templates_global SET usage_count = usage_count + 1 WHERE id = %s",
                         (template_id,),
                     )
                 else:
@@ -959,7 +959,7 @@ class ClipManager:
                         """
                         SELECT description_template, hashtags
                           FROM clip_templates_streamer
-                         WHERE id = ?
+                         WHERE id = %s
                         """,
                         (template_id,),
                     ).fetchone()
@@ -989,9 +989,9 @@ class ClipManager:
                 conn.execute(
                     """
                     UPDATE twitch_clips_social_media
-                       SET custom_description = ?,
-                           hashtags = ?
-                     WHERE id = ?
+                       SET custom_description = %s,
+                           hashtags = %s
+                     WHERE id = %s
                     """,
                     (description, json.dumps(hashtags), clip_id),
                 )
@@ -1012,12 +1012,12 @@ class ClipManager:
             hashtags: Liste von Hashtags
         """
         try:
-            with get_conn() as conn:
+            with transaction() as conn:
                 now = datetime.now(UTC).isoformat()
                 conn.execute(
                     """
                     INSERT INTO clip_last_hashtags (streamer_login, hashtags, last_used_at)
-                    VALUES (?, ?, ?)
+                    VALUES (%s, %s, %s)
                     ON CONFLICT(streamer_login) DO UPDATE SET
                         hashtags = excluded.hashtags,
                         last_used_at = excluded.last_used_at
@@ -1037,9 +1037,9 @@ class ClipManager:
             Liste von Hashtags (leer wenn keine vorhanden)
         """
         try:
-            with get_conn() as conn:
+            with transaction() as conn:
                 row = conn.execute(
-                    "SELECT hashtags FROM clip_last_hashtags WHERE streamer_login = ?",
+                    "SELECT hashtags FROM clip_last_hashtags WHERE streamer_login = %s",
                     (streamer_login,),
                 ).fetchone()
 
@@ -1073,7 +1073,7 @@ class ClipManager:
         stats = {"queued": 0, "skipped": 0, "errors": 0}
 
         try:
-            with get_conn() as conn:
+            with transaction() as conn:
                 # Get default template if requested
                 default_template = None
                 if apply_default_template:
@@ -1081,7 +1081,7 @@ class ClipManager:
                         """
                         SELECT id, description_template, hashtags
                           FROM clip_templates_streamer
-                         WHERE streamer_login = ? AND is_default = 1
+                         WHERE streamer_login = %s AND is_default = 1
                         """,
                         (streamer_login,),
                     ).fetchone()
@@ -1098,7 +1098,7 @@ class ClipManager:
                             SELECT id, clip_id, clip_title, streamer_login, game_name,
                                    custom_description, hashtags
                               FROM twitch_clips_social_media
-                             WHERE streamer_login = ? AND uploaded_tiktok = 0
+                             WHERE streamer_login = %s AND uploaded_tiktok = 0
                              ORDER BY created_at DESC
                             """,
                             (streamer_login,),
@@ -1109,7 +1109,7 @@ class ClipManager:
                             SELECT id, clip_id, clip_title, streamer_login, game_name,
                                    custom_description, hashtags
                               FROM twitch_clips_social_media
-                             WHERE streamer_login = ? AND uploaded_youtube = 0
+                             WHERE streamer_login = %s AND uploaded_youtube = 0
                              ORDER BY created_at DESC
                             """,
                             (streamer_login,),
@@ -1120,7 +1120,7 @@ class ClipManager:
                             SELECT id, clip_id, clip_title, streamer_login, game_name,
                                    custom_description, hashtags
                               FROM twitch_clips_social_media
-                             WHERE streamer_login = ? AND uploaded_instagram = 0
+                             WHERE streamer_login = %s AND uploaded_instagram = 0
                              ORDER BY created_at DESC
                             """,
                             (streamer_login,),
@@ -1218,7 +1218,7 @@ class ClipManager:
             True wenn erfolgreich
         """
         try:
-            with get_conn() as conn:
+            with transaction() as conn:
                 now = datetime.now(UTC).isoformat()
 
                 for platform in platforms:
@@ -1227,8 +1227,8 @@ class ClipManager:
                             """
                             UPDATE twitch_clips_social_media
                                SET uploaded_tiktok = 1,
-                                   tiktok_uploaded_at = ?
-                             WHERE id = ?
+                                   tiktok_uploaded_at = %s
+                             WHERE id = %s
                             """,
                             (now, clip_id),
                         )
@@ -1237,8 +1237,8 @@ class ClipManager:
                             """
                             UPDATE twitch_clips_social_media
                                SET uploaded_youtube = 1,
-                                   youtube_uploaded_at = ?
-                             WHERE id = ?
+                                   youtube_uploaded_at = %s
+                             WHERE id = %s
                             """,
                             (now, clip_id),
                         )
@@ -1247,8 +1247,8 @@ class ClipManager:
                             """
                             UPDATE twitch_clips_social_media
                                SET uploaded_instagram = 1,
-                                   instagram_uploaded_at = ?
-                             WHERE id = ?
+                                   instagram_uploaded_at = %s
+                             WHERE id = %s
                             """,
                             (now, clip_id),
                         )

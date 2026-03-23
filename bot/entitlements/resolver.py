@@ -1,8 +1,6 @@
 """Resolve effective plan and entitlements from persisted billing state."""
 
 from __future__ import annotations
-
-import sqlite3
 from datetime import UTC, datetime
 from typing import Any
 
@@ -20,17 +18,16 @@ _ACTIVE_BILLING_STATUSES = ("active", "trialing", "past_due")
 
 
 def _is_missing_current_period_end_error(exc: Exception) -> bool:
-    if not isinstance(exc, sqlite3.OperationalError):
-        return False
     message = str(exc).strip().lower()
-    return "current_period_end" in message and "no such column" in message
+    return (
+        "current_period_end" in message
+        and ("no such column" in message or "does not exist" in message)
+    )
 
 
 def _is_missing_manual_override_metadata_error(exc: Exception) -> bool:
-    if not isinstance(exc, sqlite3.OperationalError):
-        return False
     message = str(exc).strip().lower()
-    if "no such column" not in message:
+    if "no such column" not in message and "does not exist" not in message:
         return False
     return "manual_plan_notes" in message or "manual_plan_updated_at" in message
 
@@ -111,10 +108,10 @@ def _load_manual_override(conn: Any, refs: list[str]) -> dict[str, Any] | None:
                     manual_plan_notes,
                     manual_plan_updated_at
                 FROM streamer_plans
-                WHERE TRIM(COALESCE(twitch_user_id, '')) = ?
-                   OR LOWER(COALESCE(twitch_login, '')) = LOWER(?)
+                WHERE TRIM(COALESCE(twitch_user_id, '')) = %s
+                   OR LOWER(COALESCE(twitch_login, '')) = LOWER(%s)
                 ORDER BY
-                    CASE WHEN TRIM(COALESCE(twitch_user_id, '')) = ? THEN 0 ELSE 1 END,
+                    CASE WHEN TRIM(COALESCE(twitch_user_id, '')) = %s THEN 0 ELSE 1 END,
                     manual_plan_updated_at DESC
                 LIMIT 1
                 """,
@@ -133,10 +130,10 @@ def _load_manual_override(conn: Any, refs: list[str]) -> dict[str, Any] | None:
                     '' AS manual_plan_notes,
                     NULL AS manual_plan_updated_at
                 FROM streamer_plans
-                WHERE TRIM(COALESCE(twitch_user_id, '')) = ?
-                   OR LOWER(COALESCE(twitch_login, '')) = LOWER(?)
+                WHERE TRIM(COALESCE(twitch_user_id, '')) = %s
+                   OR LOWER(COALESCE(twitch_login, '')) = LOWER(%s)
                 ORDER BY
-                    CASE WHEN TRIM(COALESCE(twitch_user_id, '')) = ? THEN 0 ELSE 1 END
+                    CASE WHEN TRIM(COALESCE(twitch_user_id, '')) = %s THEN 0 ELSE 1 END
                 LIMIT 1
                 """,
                 (ref, ref, ref),
@@ -154,8 +151,8 @@ def _load_billing_subscription(conn: Any, refs: list[str]) -> dict[str, Any] | N
                 """
                 SELECT customer_reference, plan_id, status, current_period_end, updated_at
                 FROM twitch_billing_subscriptions
-                WHERE LOWER(customer_reference) = LOWER(?)
-                  AND status IN (?, ?, ?)
+                WHERE LOWER(customer_reference) = LOWER(%s)
+                  AND status IN (%s, %s, %s)
                 ORDER BY updated_at DESC
                 LIMIT 1
                 """,
@@ -170,8 +167,8 @@ def _load_billing_subscription(conn: Any, refs: list[str]) -> dict[str, Any] | N
                 """
                 SELECT customer_reference, plan_id, status, updated_at
                 FROM twitch_billing_subscriptions
-                WHERE LOWER(customer_reference) = LOWER(?)
-                  AND status IN (?, ?, ?)
+                WHERE LOWER(customer_reference) = LOWER(%s)
+                  AND status IN (%s, %s, %s)
                 ORDER BY updated_at DESC
                 LIMIT 1
                 """,
@@ -264,7 +261,7 @@ def resolve_plan_snapshot_for_refs(
             fallback_ref=fallback_ref or normalized_refs[0],
         )
 
-    with storage.get_conn() as local_conn:
+    with storage.readonly_connection() as local_conn:
         manual_override = _load_manual_override(local_conn, normalized_refs)
         billing_subscription = _load_billing_subscription(local_conn, normalized_refs)
     return _build_plan_snapshot(

@@ -71,10 +71,10 @@ def _load_streamer_row(
             live_ping_role_id,
             COALESCE(live_ping_enabled, 1) AS live_ping_enabled
         FROM twitch_streamers
-        WHERE (? <> '' AND twitch_user_id = ?)
-           OR (? <> '' AND LOWER(twitch_login) = ?)
+        WHERE (%s <> '' AND twitch_user_id = %s)
+           OR (%s <> '' AND LOWER(twitch_login) = %s)
         ORDER BY
-            CASE WHEN ? <> '' AND twitch_user_id = ? THEN 0 ELSE 1 END,
+            CASE WHEN %s <> '' AND twitch_user_id = %s THEN 0 ELSE 1 END,
             LOWER(twitch_login)
         LIMIT 1
         """,
@@ -102,7 +102,7 @@ def _load_partner_row(
     if not normalized_login and not normalized_user_id:
         return None
     where = [
-        "((? <> '' AND p.twitch_user_id = ?) OR (? <> '' AND LOWER(p.twitch_login) = ?))"
+        "((%s <> '' AND p.twitch_user_id = %s) OR (%s <> '' AND LOWER(p.twitch_login) = %s))"
     ]
     params: list[Any] = [
         normalized_user_id,
@@ -111,7 +111,7 @@ def _load_partner_row(
         normalized_login,
     ]
     if status:
-        where.append("p.status = ?")
+        where.append("p.status = %s")
         params.append(status)
     order_clause = (
         "ORDER BY COALESCE(p.departnered_at, p.partnered_at, '') DESC, p.id DESC"
@@ -215,8 +215,8 @@ def load_partner_by_discord_user_id(conn: Any, discord_user_id: str | None) -> A
             FROM twitch_partners p
             JOIN twitch_streamer_identities i
               ON i.twitch_user_id = p.twitch_user_id
-            WHERE p.status = ?
-              AND i.discord_user_id = ?
+            WHERE p.status = %s
+              AND i.discord_user_id = %s
             LIMIT 1
             """,
             (PARTNER_STATUS_ACTIVE, normalized_discord_user_id),
@@ -248,12 +248,12 @@ def load_partner_by_discord_user_id(conn: Any, discord_user_id: str | None) -> A
                 1 AS live_ping_enabled,
                 NULL AS partnered_at,
                 NULL AS departnered_at,
-                ? AS status,
+                %s AS status,
                 s.discord_user_id,
                 NULL AS discord_display_name,
                 1 AS is_on_discord
             FROM twitch_streamers s
-            WHERE s.discord_user_id = ?
+            WHERE s.discord_user_id = %s
             LIMIT 1
             """,
             (PARTNER_STATUS_ACTIVE, normalized_discord_user_id),
@@ -272,7 +272,11 @@ def load_streamer_identity(
     normalized_login = _normalize_login(twitch_login)
     normalized_user_id = _normalize_user_id(twitch_user_id)
     normalized_discord_user_id = str(discord_user_id or "").strip()
-    if not normalized_login and not normalized_user_id and not normalized_discord_user_id:
+    if (
+        not normalized_login
+        and not normalized_user_id
+        and not normalized_discord_user_id
+    ):
         return None
     return conn.execute(
         """
@@ -285,9 +289,9 @@ def load_streamer_identity(
             created_at,
             updated_at
         FROM twitch_streamer_identities
-        WHERE (? <> '' AND twitch_user_id = ?)
-           OR (? <> '' AND LOWER(twitch_login) = ?)
-           OR (? <> '' AND discord_user_id = ?)
+        WHERE (%s <> '' AND twitch_user_id = %s)
+           OR (%s <> '' AND LOWER(twitch_login) = %s)
+           OR (%s <> '' AND discord_user_id = %s)
         ORDER BY updated_at DESC
         LIMIT 1
         """,
@@ -330,8 +334,8 @@ def upsert_streamer_identity(
                 discord_display_name = NULL,
                 is_on_discord = 0,
                 updated_at = CURRENT_TIMESTAMP
-            WHERE discord_user_id = ?
-              AND twitch_user_id <> ?
+            WHERE discord_user_id = %s
+              AND twitch_user_id <> %s
             """,
             (
                 normalized_discord_user_id,
@@ -348,7 +352,7 @@ def upsert_streamer_identity(
             is_on_discord,
             created_at,
             updated_at
-        ) VALUES (?, ?, ?, ?, COALESCE(?, 0), CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+        ) VALUES (%s, %s, %s, %s, COALESCE(%s, 0), CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
         ON CONFLICT (twitch_user_id) DO UPDATE SET
             twitch_login = EXCLUDED.twitch_login,
             discord_user_id = COALESCE(EXCLUDED.discord_user_id, twitch_streamer_identities.discord_user_id),
@@ -400,9 +404,9 @@ def upsert_non_partner_streamer(
         conn.execute(
             """
             UPDATE twitch_streamers
-            SET twitch_login = ?
-            WHERE twitch_user_id = ?
-               OR LOWER(twitch_login) = LOWER(?)
+            SET twitch_login = %s
+            WHERE twitch_user_id = %s
+               OR LOWER(twitch_login) = LOWER(%s)
             """,
             (
                 normalized_login,
@@ -442,7 +446,9 @@ def upsert_non_partner_streamer(
             else is_on_discord,
             default=0,
         ),
-        "created_at": _row_value(existing, "created_at", 7, None) or created_at or _now_iso(),
+        "created_at": _row_value(existing, "created_at", 7, None)
+        or created_at
+        or _now_iso(),
         "archived_at": _row_value(existing, "archived_at", 8, None)
         if archived_at is _UNSET
         else archived_at,
@@ -453,11 +459,15 @@ def upsert_non_partner_streamer(
             default=0,
         ),
         "silent_ban": _bool_int(
-            _row_value(existing, "silent_ban", 10, 0) if silent_ban is _UNSET else silent_ban,
+            _row_value(existing, "silent_ban", 10, 0)
+            if silent_ban is _UNSET
+            else silent_ban,
             default=0,
         ),
         "silent_raid": _bool_int(
-            _row_value(existing, "silent_raid", 11, 0) if silent_raid is _UNSET else silent_raid,
+            _row_value(existing, "silent_raid", 11, 0)
+            if silent_raid is _UNSET
+            else silent_raid,
             default=0,
         ),
         "is_monitored_only": _bool_int(
@@ -495,7 +505,7 @@ def upsert_non_partner_streamer(
             is_monitored_only,
             live_ping_role_id,
             live_ping_enabled
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         ON CONFLICT (twitch_login) DO UPDATE SET
             twitch_user_id = COALESCE(EXCLUDED.twitch_user_id, twitch_streamers.twitch_user_id),
             require_discord_link = EXCLUDED.require_discord_link,
@@ -553,39 +563,39 @@ def _normalize_related_tables(
         (
             """
             UPDATE twitch_raid_auth
-            SET twitch_login = ?,
-                twitch_user_id = COALESCE(NULLIF(twitch_user_id, ''), ?)
-            WHERE twitch_user_id = ?
-               OR LOWER(twitch_login) = LOWER(?)
+            SET twitch_login = %s,
+                twitch_user_id = COALESCE(NULLIF(twitch_user_id, ''), %s)
+            WHERE twitch_user_id = %s
+               OR LOWER(twitch_login) = LOWER(%s)
             """,
             (twitch_login, twitch_user_id, twitch_user_id, twitch_login),
         ),
         (
             """
             UPDATE streamer_plans
-            SET twitch_login = ?,
-                twitch_user_id = COALESCE(NULLIF(twitch_user_id, ''), ?)
-            WHERE twitch_user_id = ?
-               OR LOWER(COALESCE(twitch_login, '')) = LOWER(?)
+            SET twitch_login = %s,
+                twitch_user_id = COALESCE(NULLIF(twitch_user_id, ''), %s)
+            WHERE twitch_user_id = %s
+               OR LOWER(COALESCE(twitch_login, '')) = LOWER(%s)
             """,
             (twitch_login, twitch_user_id, twitch_user_id, twitch_login),
         ),
         (
             """
             UPDATE twitch_partner_raid_scores
-            SET twitch_login = ?,
-                twitch_user_id = COALESCE(NULLIF(twitch_user_id, ''), ?)
-            WHERE twitch_user_id = ?
-               OR LOWER(COALESCE(twitch_login, '')) = LOWER(?)
+            SET twitch_login = %s,
+                twitch_user_id = COALESCE(NULLIF(twitch_user_id, ''), %s)
+            WHERE twitch_user_id = %s
+               OR LOWER(COALESCE(twitch_login, '')) = LOWER(%s)
             """,
             (twitch_login, twitch_user_id, twitch_user_id, twitch_login),
         ),
         (
             """
             UPDATE twitch_live_state
-            SET streamer_login = ?
-            WHERE twitch_user_id = ?
-               OR LOWER(streamer_login) = LOWER(?)
+            SET streamer_login = %s
+            WHERE twitch_user_id = %s
+               OR LOWER(streamer_login) = LOWER(%s)
             """,
             (twitch_login, twitch_user_id, twitch_login),
         ),
@@ -644,7 +654,9 @@ def promote_streamer_to_partner(
             _row_value(source_row, "require_discord_link", 2, 0)
             if require_discord_link is _UNSET
             else require_discord_link,
-            default=_bool_int(_row_value(active_row, "require_discord_link", 3, 0), default=0),
+            default=_bool_int(
+                _row_value(active_row, "require_discord_link", 3, 0), default=0
+            ),
         ),
         "last_description": _row_value(active_row, "last_description", 4, None)
         if last_description is _UNSET
@@ -652,7 +664,9 @@ def promote_streamer_to_partner(
         "last_link_ok": _row_value(active_row, "last_link_ok", 5, None)
         if last_link_ok is _UNSET
         else _bool_int(last_link_ok, default=0),
-        "added_by": _row_value(active_row, "added_by", 6, None) if added_by is _UNSET else added_by,
+        "added_by": _row_value(active_row, "added_by", 6, None)
+        if added_by is _UNSET
+        else added_by,
         "last_link_checked_at": _row_value(active_row, "last_link_checked_at", 7, None)
         if last_link_checked_at is _UNSET
         else last_link_checked_at,
@@ -665,7 +679,9 @@ def promote_streamer_to_partner(
             else manual_verified_permanent,
             default=0,
         ),
-        "manual_verified_until": _row_value(active_row, "manual_verified_until", 10, None)
+        "manual_verified_until": _row_value(
+            active_row, "manual_verified_until", 10, None
+        )
         if manual_verified_until is _UNSET
         else manual_verified_until,
         "manual_verified_at": _row_value(active_row, "manual_verified_at", 11, None)
@@ -681,10 +697,14 @@ def promote_streamer_to_partner(
             _row_value(source_row, "raid_bot_enabled", 9, 0)
             if raid_bot_enabled is _UNSET
             else raid_bot_enabled,
-            default=_bool_int(_row_value(active_row, "raid_bot_enabled", 13, 0), default=0),
+            default=_bool_int(
+                _row_value(active_row, "raid_bot_enabled", 13, 0), default=0
+            ),
         ),
         "silent_ban": _bool_int(
-            _row_value(source_row, "silent_ban", 10, 0) if silent_ban is _UNSET else silent_ban,
+            _row_value(source_row, "silent_ban", 10, 0)
+            if silent_ban is _UNSET
+            else silent_ban,
             default=_bool_int(_row_value(active_row, "silent_ban", 14, 0), default=0),
         ),
         "silent_raid": _bool_int(
@@ -700,7 +720,9 @@ def promote_streamer_to_partner(
             _row_value(source_row, "live_ping_enabled", 14, 1)
             if live_ping_enabled is _UNSET
             else live_ping_enabled,
-            default=_bool_int(_row_value(active_row, "live_ping_enabled", 17, 1), default=1),
+            default=_bool_int(
+                _row_value(active_row, "live_ping_enabled", 17, 1), default=1
+            ),
         ),
     }
 
@@ -724,7 +746,9 @@ def promote_streamer_to_partner(
         else _bool_int(is_on_discord, default=0)
     )
     if identity_is_on_discord is None and source_row is not None:
-        identity_is_on_discord = _bool_int(_row_value(source_row, "is_on_discord", 6, 0), default=0)
+        identity_is_on_discord = _bool_int(
+            _row_value(source_row, "is_on_discord", 6, 0), default=0
+        )
 
     upsert_streamer_identity(
         conn,
@@ -746,26 +770,26 @@ def promote_streamer_to_partner(
         conn.execute(
             """
             UPDATE twitch_partners
-            SET twitch_login = ?,
-                require_discord_link = ?,
-                last_description = ?,
-                last_link_ok = ?,
-                added_by = ?,
-                last_link_checked_at = ?,
-                next_link_check_at = ?,
-                manual_verified_permanent = ?,
-                manual_verified_until = ?,
-                manual_verified_at = ?,
-                manual_partner_opt_out = ?,
-                raid_bot_enabled = ?,
-                silent_ban = ?,
-                silent_raid = ?,
-                live_ping_role_id = ?,
-                live_ping_enabled = ?,
-                partnered_at = ?,
+            SET twitch_login = %s,
+                require_discord_link = %s,
+                last_description = %s,
+                last_link_ok = %s,
+                added_by = %s,
+                last_link_checked_at = %s,
+                next_link_check_at = %s,
+                manual_verified_permanent = %s,
+                manual_verified_until = %s,
+                manual_verified_at = %s,
+                manual_partner_opt_out = %s,
+                raid_bot_enabled = %s,
+                silent_ban = %s,
+                silent_raid = %s,
+                live_ping_role_id = %s,
+                live_ping_enabled = %s,
+                partnered_at = %s,
                 departnered_at = NULL,
-                status = ?
-            WHERE id = ?
+                status = %s
+            WHERE id = %s
             """,
             (
                 normalized_login,
@@ -813,7 +837,7 @@ def promote_streamer_to_partner(
                 partnered_at,
                 departnered_at,
                 status
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?)
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NULL, %s)
             """,
             (
                 normalized_user_id,
@@ -847,8 +871,8 @@ def promote_streamer_to_partner(
         conn.execute(
             """
             DELETE FROM twitch_streamers
-            WHERE twitch_user_id = ?
-               OR LOWER(twitch_login) = LOWER(?)
+            WHERE twitch_user_id = %s
+               OR LOWER(twitch_login) = LOWER(%s)
             """,
             (normalized_user_id, normalized_login),
         )
@@ -878,14 +902,19 @@ def archive_active_partner(
     if not active_row:
         return None
 
-    normalized_login = _normalize_login(_row_value(active_row, "twitch_login", 2, twitch_login))
+    normalized_login = _normalize_login(
+        _row_value(active_row, "twitch_login", 2, twitch_login)
+    )
     normalized_user_id = _normalize_user_id(
         _row_value(active_row, "twitch_user_id", 1, twitch_user_id)
     )
     departnered_at = _now_iso()
-    discord_user_id = str(_row_value(active_row, "discord_user_id", 21, "") or "").strip() or None
+    discord_user_id = (
+        str(_row_value(active_row, "discord_user_id", 21, "") or "").strip() or None
+    )
     discord_display_name = (
-        str(_row_value(active_row, "discord_display_name", 22, "") or "").strip() or None
+        str(_row_value(active_row, "discord_display_name", 22, "") or "").strip()
+        or None
     )
     is_on_discord = _bool_int(_row_value(active_row, "is_on_discord", 23, 0), default=0)
 
@@ -901,11 +930,11 @@ def archive_active_partner(
     conn.execute(
         """
         UPDATE twitch_partners
-        SET status = ?,
-            departnered_at = ?,
-            twitch_login = ?,
-            twitch_user_id = ?
-        WHERE id = ?
+        SET status = %s,
+            departnered_at = %s,
+            twitch_login = %s,
+            twitch_user_id = %s
+        WHERE id = %s
         """,
         (
             PARTNER_STATUS_ARCHIVED,
@@ -941,8 +970,8 @@ def archive_active_partner(
                 manual_verified_until = NULL,
                 manual_verified_at = NULL,
                 manual_partner_opt_out = 0
-            WHERE twitch_user_id = ?
-               OR LOWER(twitch_login) = LOWER(?)
+            WHERE twitch_user_id = %s
+               OR LOWER(twitch_login) = LOWER(%s)
             """,
             (normalized_user_id, normalized_login),
         )
@@ -952,9 +981,9 @@ def archive_active_partner(
             """
             UPDATE twitch_raid_auth
             SET raid_enabled = FALSE,
-                twitch_login = ?
-            WHERE twitch_user_id = ?
-               OR LOWER(twitch_login) = LOWER(?)
+                twitch_login = %s
+            WHERE twitch_user_id = %s
+               OR LOWER(twitch_login) = LOWER(%s)
             """,
             (normalized_login, normalized_user_id, normalized_login),
         )
@@ -988,7 +1017,9 @@ def reactivate_partner(
     if active_row:
         return {
             "twitch_login": _normalize_login(_row_value(active_row, "twitch_login", 2)),
-            "twitch_user_id": _normalize_user_id(_row_value(active_row, "twitch_user_id", 1)),
+            "twitch_user_id": _normalize_user_id(
+                _row_value(active_row, "twitch_user_id", 1)
+            ),
         }
 
     archived_row = _load_partner_row(
@@ -1011,9 +1042,15 @@ def reactivate_partner(
         added_by=_row_value(archived_row, "added_by", 6, None),
         last_link_checked_at=_row_value(archived_row, "last_link_checked_at", 7, None),
         next_link_check_at=_row_value(archived_row, "next_link_check_at", 8, None),
-        manual_verified_permanent=_row_value(archived_row, "manual_verified_permanent", 9, 0),
-        manual_verified_until=_row_value(archived_row, "manual_verified_until", 10, None),
-        manual_verified_at=_row_value(archived_row, "manual_verified_at", 11, _now_iso()),
+        manual_verified_permanent=_row_value(
+            archived_row, "manual_verified_permanent", 9, 0
+        ),
+        manual_verified_until=_row_value(
+            archived_row, "manual_verified_until", 10, None
+        ),
+        manual_verified_at=_row_value(
+            archived_row, "manual_verified_at", 11, _now_iso()
+        ),
         manual_partner_opt_out=0,
         raid_bot_enabled=_row_value(archived_row, "raid_bot_enabled", 13, 0),
         silent_ban=_row_value(archived_row, "silent_ban", 14, 0),
@@ -1079,8 +1116,8 @@ def save_streamer_discord_profile(
         conn.execute(
             """
             UPDATE twitch_partners
-            SET twitch_login = ?
-            WHERE id = ?
+            SET twitch_login = %s
+            WHERE id = %s
             """,
             (normalized_login, _row_value(active_row, "id", 0)),
         )
@@ -1128,7 +1165,9 @@ def set_streamer_discord_member(
                 twitch_user_id=user_id,
                 twitch_login=normalized_login,
                 discord_user_id=_row_value(active_row, "discord_user_id", 21, None),
-                discord_display_name=_row_value(active_row, "discord_display_name", 22, None),
+                discord_display_name=_row_value(
+                    active_row, "discord_display_name", 22, None
+                ),
                 is_on_discord=1 if is_on_discord else 0,
             )
         return {
@@ -1172,16 +1211,16 @@ def set_partner_raid_bot_enabled(
     conn.execute(
         """
         UPDATE twitch_partners
-        SET raid_bot_enabled = ?
-        WHERE id = ?
+        SET raid_bot_enabled = %s
+        WHERE id = %s
         """,
         (_bool_int(enabled, default=0), _row_value(active_row, "id", 0)),
     )
     conn.execute(
         """
         UPDATE twitch_raid_auth
-        SET twitch_login = ?
-        WHERE twitch_user_id = ?
+        SET twitch_login = %s
+        WHERE twitch_user_id = %s
         """,
         (normalized_login, normalized_user_id),
     )
@@ -1204,19 +1243,23 @@ def set_partner_silent_flags(
     if not active_row:
         return False
     new_silent_ban = _bool_int(
-        _row_value(active_row, "silent_ban", 14, 0) if silent_ban is _UNSET else silent_ban,
+        _row_value(active_row, "silent_ban", 14, 0)
+        if silent_ban is _UNSET
+        else silent_ban,
         default=0,
     )
     new_silent_raid = _bool_int(
-        _row_value(active_row, "silent_raid", 15, 0) if silent_raid is _UNSET else silent_raid,
+        _row_value(active_row, "silent_raid", 15, 0)
+        if silent_raid is _UNSET
+        else silent_raid,
         default=0,
     )
     conn.execute(
         """
         UPDATE twitch_partners
-        SET silent_ban = ?,
-            silent_raid = ?
-        WHERE id = ?
+        SET silent_ban = %s,
+            silent_raid = %s
+        WHERE id = %s
         """,
         (new_silent_ban, new_silent_raid, _row_value(active_row, "id", 0)),
     )
@@ -1252,9 +1295,9 @@ def set_partner_live_ping_settings(
     conn.execute(
         """
         UPDATE twitch_partners
-        SET live_ping_role_id = ?,
-            live_ping_enabled = ?
-        WHERE id = ?
+        SET live_ping_role_id = %s,
+            live_ping_enabled = %s
+        WHERE id = %s
         """,
         (new_live_ping_role_id, new_live_ping_enabled, _row_value(active_row, "id", 0)),
     )
@@ -1270,10 +1313,12 @@ def bulk_update_partner_flags(
     silent_ban: Any = _UNSET,
     silent_raid: Any = _UNSET,
 ) -> int:
-    normalized_scope = str(scope or PARTNER_STATUS_ACTIVE).strip().lower() or PARTNER_STATUS_ACTIVE
+    normalized_scope = (
+        str(scope or PARTNER_STATUS_ACTIVE).strip().lower() or PARTNER_STATUS_ACTIVE
+    )
     if normalized_scope != PARTNER_STATUS_ACTIVE:
         normalized_scope = PARTNER_STATUS_ACTIVE
-    status_filter = "WHERE status = ?"
+    status_filter = "WHERE status = %s"
     params: list[Any] = [PARTNER_STATUS_ACTIVE]
 
     row = conn.execute(
@@ -1284,16 +1329,16 @@ def bulk_update_partner_flags(
     assignments: list[str] = []
     update_params: list[Any] = []
     if raid_bot_enabled is not _UNSET:
-        assignments.append("raid_bot_enabled = ?")
+        assignments.append("raid_bot_enabled = %s")
         update_params.append(_bool_int(raid_bot_enabled, default=0))
     if live_ping_enabled is not _UNSET:
-        assignments.append("live_ping_enabled = ?")
+        assignments.append("live_ping_enabled = %s")
         update_params.append(_bool_int(live_ping_enabled, default=1))
     if silent_ban is not _UNSET:
-        assignments.append("silent_ban = ?")
+        assignments.append("silent_ban = %s")
         update_params.append(_bool_int(silent_ban, default=0))
     if silent_raid is not _UNSET:
-        assignments.append("silent_raid = ?")
+        assignments.append("silent_raid = %s")
         update_params.append(_bool_int(silent_raid, default=0))
     if not assignments:
         return total
@@ -1395,7 +1440,9 @@ def migrate_legacy_partner_registry(conn: Any) -> dict[str, int]:
             default=0,
         )
         archived_at = _row_value(row, "archived_at", 12, None)
-        is_monitored_only = _bool_int(_row_value(row, "is_monitored_only", 16, 0), default=0)
+        is_monitored_only = _bool_int(
+            _row_value(row, "is_monitored_only", 16, 0), default=0
+        )
 
         has_partner_history = bool(
             manual_verified_permanent or manual_verified_until or manual_verified_at
@@ -1440,7 +1487,7 @@ def migrate_legacy_partner_registry(conn: Any) -> dict[str, int]:
                     partnered_at,
                     departnered_at,
                     status
-                ) VALUES (?, ?, ?, NULL, NULL, NULL, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (%s, %s, %s, NULL, NULL, NULL, NULL, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 """,
                 (
                     user_id,
@@ -1456,7 +1503,9 @@ def migrate_legacy_partner_registry(conn: Any) -> dict[str, int]:
                     _bool_int(_row_value(row, "silent_raid", 15, 0), default=0),
                     _row_value(row, "live_ping_role_id", 17, None),
                     _bool_int(_row_value(row, "live_ping_enabled", 18, 1), default=1),
-                    _row_value(row, "created_at", 11, None) or manual_verified_at or _now_iso(),
+                    _row_value(row, "created_at", 11, None)
+                    or manual_verified_at
+                    or _now_iso(),
                     None if is_active else (archived_at or _now_iso()),
                     PARTNER_STATUS_ACTIVE if is_active else PARTNER_STATUS_ARCHIVED,
                 ),
@@ -1470,8 +1519,8 @@ def migrate_legacy_partner_registry(conn: Any) -> dict[str, int]:
             cur = conn.execute(
                 """
                 DELETE FROM twitch_streamers
-                WHERE twitch_user_id = ?
-                   OR LOWER(twitch_login) = LOWER(?)
+                WHERE twitch_user_id = %s
+                   OR LOWER(twitch_login) = LOWER(%s)
                 """,
                 (user_id, login),
             )
@@ -1492,8 +1541,8 @@ def migrate_legacy_partner_registry(conn: Any) -> dict[str, int]:
                 manual_verified_at = NULL,
                 manual_partner_opt_out = 0,
                 raid_bot_enabled = 0
-            WHERE twitch_user_id = ?
-               OR LOWER(twitch_login) = LOWER(?)
+            WHERE twitch_user_id = %s
+               OR LOWER(twitch_login) = LOWER(%s)
             """,
             (user_id, login),
         )
@@ -1514,7 +1563,9 @@ def verification_payload(mode: str) -> dict[str, Any]:
     if normalized_mode == "temp":
         return {
             "manual_verified_permanent": 0,
-            "manual_verified_until": (datetime.now(UTC) + timedelta(days=30)).isoformat(),
+            "manual_verified_until": (
+                datetime.now(UTC) + timedelta(days=30)
+            ).isoformat(),
             "manual_verified_at": now_iso,
             "manual_partner_opt_out": 0,
         }
