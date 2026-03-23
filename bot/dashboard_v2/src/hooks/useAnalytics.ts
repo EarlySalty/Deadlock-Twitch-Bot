@@ -14,6 +14,7 @@ import {
   fetchTitlePerformance,
   fetchRankings,
   fetchSessionDetail,
+  fetchSessionEvents,
   fetchStreamerList,
   fetchCategoryComparison,
   fetchAuthStatus,
@@ -138,6 +139,15 @@ export function useSessionDetail(sessionId: number | null) {
   return useQuery({
     queryKey: ['session', sessionId],
     queryFn: () => fetchSessionDetail(sessionId!),
+    staleTime: STALE_TIME,
+    enabled: !!sessionId,
+  });
+}
+
+export function useSessionEvents(sessionId: number | null) {
+  return useQuery({
+    queryKey: ['session-events', sessionId],
+    queryFn: () => fetchSessionEvents(sessionId!),
     staleTime: STALE_TIME,
     enabled: !!sessionId,
   });

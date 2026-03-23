@@ -101,6 +101,25 @@ export interface ViewerWindowMetadata {
   messageGapNote?: string | null;
 }
 
+export interface SessionEvent {
+  channel_updates: Array<{
+    at: string;
+    title: string | null;
+    game: string | null;
+    language: string | null;
+  }>;
+  raids: Array<{
+    at: string;
+    channel: string;
+    viewers: number;
+    direction: 'incoming' | 'outgoing';
+  }>;
+  follows_per_minute: Array<{
+    minute: string;
+    count: number;
+  }>;
+}
+
 export interface ChatAnalytics {
   totalMessages: number;
   totalChatterSessions: number;

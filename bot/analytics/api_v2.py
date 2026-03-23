@@ -2324,6 +2324,140 @@ class AnalyticsV2Mixin(
                 code="session_detail_load_failed",
             )
 
+    async def _api_v2_session_events(self, request: web.Request) -> web.Response:
+        """GET /twitch/api/v2/session/{id}/events — channel updates, raids, follows during a session."""
+        self._require_v2_auth(request)
+
+        from ..storage import pg as storage
+
+        session_id = request.match_info.get("id", "")
+        try:
+            session_id = int(session_id)
+        except ValueError:
+            return web.json_response({"error": "Invalid session ID"}, status=400)
+
+        try:
+            with storage.readonly_connection() as conn:
+                # 1) Get session metadata
+                sess = conn.execute(
+                    """
+                    SELECT s.streamer_login, s.started_at, s.ended_at
+                    FROM twitch_stream_sessions s
+                    WHERE s.id = %s
+                    """,
+                    (session_id,),
+                ).fetchone()
+
+                if not sess:
+                    return web.json_response({"error": "Session not found"}, status=404)
+
+                streamer_login = str(sess[0] or "").strip().lower()
+                started_at = sess[1]
+                ended_at = sess[2]
+
+                # 2) Resolve twitch_user_id from twitch_streamers
+                uid_row = conn.execute(
+                    "SELECT twitch_user_id FROM twitch_streamers WHERE LOWER(twitch_login) = %s LIMIT 1",
+                    (streamer_login,),
+                ).fetchone()
+                twitch_user_id = str(uid_row[0]) if uid_row and uid_row[0] else None
+
+                # 3) Channel updates (title/game changes)
+                channel_updates = []
+                if twitch_user_id:
+                    cu_rows = conn.execute(
+                        """
+                        SELECT cu.recorded_at, cu.title, cu.game_name, cu.language
+                        FROM twitch_channel_updates cu
+                        WHERE cu.twitch_user_id = %s
+                          AND cu.recorded_at::timestamptz BETWEEN %s AND COALESCE(%s, NOW())
+                        ORDER BY cu.recorded_at
+                        """,
+                        (twitch_user_id, started_at, ended_at),
+                    ).fetchall()
+                    for r in cu_rows:
+                        at_val = r[0]
+                        if hasattr(at_val, "isoformat"):
+                            at_val = at_val.isoformat()
+                        channel_updates.append({
+                            "at": str(at_val),
+                            "title": r[1],
+                            "game": r[2],
+                            "language": r[3],
+                        })
+
+                # 4) Raids (incoming + outgoing)
+                raid_rows = conn.execute(
+                    """
+                    SELECT detected_at AS at, from_broadcaster_login AS channel,
+                           viewer_count, 'incoming' AS direction
+                    FROM twitch_raid_arrival_tracking
+                    WHERE LOWER(to_broadcaster_login) = %s
+                      AND detected_at BETWEEN %s AND COALESCE(%s, NOW())
+
+                    UNION ALL
+
+                    SELECT executed_at AS at, to_broadcaster_login AS channel,
+                           viewer_count, 'outgoing' AS direction
+                    FROM twitch_raid_history
+                    WHERE LOWER(from_broadcaster_login) = %s
+                      AND executed_at BETWEEN %s AND COALESCE(%s, NOW())
+
+                    ORDER BY 1
+                    """,
+                    (
+                        streamer_login, started_at, ended_at,
+                        streamer_login, started_at, ended_at,
+                    ),
+                ).fetchall()
+                raids = []
+                for r in raid_rows:
+                    at_val = r[0]
+                    if hasattr(at_val, "isoformat"):
+                        at_val = at_val.isoformat()
+                    raids.append({
+                        "at": str(at_val),
+                        "channel": r[1] or "",
+                        "viewers": int(r[2] or 0),
+                        "direction": r[3],
+                    })
+
+                # 5) Follows per minute
+                follows_per_minute = []
+                fe_rows = conn.execute(
+                    """
+                    SELECT DATE_TRUNC('minute', followed_at::timestamptz) AS minute,
+                           COUNT(*) AS cnt
+                    FROM twitch_follow_events
+                    WHERE LOWER(streamer_login) = %s
+                      AND followed_at::timestamptz BETWEEN %s AND COALESCE(%s, NOW())
+                    GROUP BY 1
+                    ORDER BY 1
+                    """,
+                    (streamer_login, started_at, ended_at),
+                ).fetchall()
+                for r in fe_rows:
+                    at_val = r[0]
+                    if hasattr(at_val, "isoformat"):
+                        at_val = at_val.isoformat()
+                    follows_per_minute.append({
+                        "minute": str(at_val),
+                        "count": int(r[1] or 0),
+                    })
+
+                return web.json_response({
+                    "channel_updates": channel_updates,
+                    "raids": raids,
+                    "follows_per_minute": follows_per_minute,
+                })
+
+        except Exception:
+            log.exception("Error in session events API for session %s", session_id)
+            return analytics_internal_error_response(
+                error="Session-Events konnten nicht geladen werden.",
+                code="session_events_load_failed",
+            )
+
     async def _api_v2_billing_catalog(self, request: web.Request) -> web.Response:
         """GET /twitch/api/v2/billing/catalog — plan catalog with tier info."""
         auth_level = self._get_auth_level(request)

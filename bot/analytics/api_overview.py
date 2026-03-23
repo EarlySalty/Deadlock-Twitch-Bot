@@ -57,6 +57,7 @@ class _AnalyticsOverviewMixin:
         router.add_get("/twitch/api/v2/category-comparison", self._api_v2_category_comparison)
         router.add_get("/twitch/api/v2/streamers", self._api_v2_streamers)
         router.add_get("/twitch/api/v2/session/{id}", self._api_v2_session_detail)
+        router.add_get("/twitch/api/v2/session/{id}/events", self._api_v2_session_events)
         router.add_get("/twitch/api/v2/auth-status", self._api_v2_auth_status)
         router.add_get("/twitch/api/v2/internal-home", self._api_v2_internal_home)
         router.add_post(

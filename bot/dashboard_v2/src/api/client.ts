@@ -17,6 +17,7 @@ import type {
   TagPerformanceExtended,
   TitlePerformance,
   RankingEntry,
+  SessionEvent,
   StreamSession,
   TimeRange,
   CategoryComparison,
@@ -301,6 +302,12 @@ export async function fetchSessionDetail(
   sessionId: number
 ): Promise<StreamSession & { timeline: { minute: number; viewers: number }[]; chatters: { login: string; messages: number }[] }> {
   return fetchApi(`/session/${sessionId}`);
+}
+
+export async function fetchSessionEvents(
+  sessionId: number
+): Promise<SessionEvent> {
+  return fetchApi<SessionEvent>(`/session/${sessionId}/events`);
 }
 
 export async function fetchStreamerList(): Promise<{ login: string; isPartner: boolean }[]> {

@@ -15,6 +15,7 @@ import { Category } from '@/pages/Category';
 import { Viewers } from '@/pages/Viewers';
 import { Experimental } from '@/pages/Experimental';
 import { AIAnalysis } from '@/pages/AIAnalysis';
+import { SessionDetail } from '@/pages/SessionDetail';
 import { InternalHomeLanding } from '@/pages/InternalHomeLanding';
 import { VerwaltungPage } from '@/pages/Verwaltung';
 import { PlanProvider } from '@/context/PlanContext';
@@ -99,7 +100,8 @@ function InternalHome() {
 function AnalyticsDashboard() {
   const [streamer, setStreamer] = useState<string | null>(null);
   const [days, setDays] = useState<TimeRange>(30);
-  const [activeTab, setActiveTab] = useState<TabId>('overview');
+  const [activeTab, setActiveTab] = useState<TabId | 'session-detail'>('overview');
+  const [selectedSessionId, setSelectedSessionId] = useState<number | null>(null);
 
   const { data: streamers = [], isLoading: loadingStreamers } = useStreamerList();
   const { data: authStatus, isLoading: loadingAuth, isError: authError } = useAuthStatus();
@@ -165,8 +167,8 @@ function AnalyticsDashboard() {
   }, [streamer, days]);
 
   const handleSessionClick = (sessionId: number) => {
-    // TODO: Navigate to session detail view
-    console.log('Session clicked:', sessionId);
+    setSelectedSessionId(sessionId);
+    setActiveTab('session-detail');
   };
 
   // Auth badge component
@@ -255,7 +257,9 @@ function AnalyticsDashboard() {
             </div>
           )}
 
-          <TabNavigation activeTab={activeTab} onTabChange={setActiveTab} />
+          {activeTab !== 'session-detail' && (
+            <TabNavigation activeTab={activeTab as TabId} onTabChange={setActiveTab} />
+          )}
 
           {/* Tab Content */}
           {activeTab === 'overview' && (
@@ -317,6 +321,17 @@ function AnalyticsDashboard() {
 
           {activeTab === 'ai' && (
             <AIAnalysis streamer={streamer} days={days} />
+          )}
+
+          {activeTab === 'session-detail' && selectedSessionId && (
+            <SessionDetail
+              sessionId={selectedSessionId}
+              streamer={streamer || ''}
+              onBack={() => {
+                setSelectedSessionId(null);
+                setActiveTab('streams');
+              }}
+            />
           )}
         </PlanProvider>
 
