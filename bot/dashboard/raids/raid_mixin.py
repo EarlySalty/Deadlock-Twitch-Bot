@@ -2,22 +2,20 @@
 
 from __future__ import annotations
 
-import asyncio
 import html
 import os
 from typing import Any
 from urllib.parse import urlsplit, urlunsplit
 
-import aiohttp
 import discord
 from aiohttp import web
 
 from ... import storage
 from ...core.constants import log
-from ...raid.scope_profiles import BASE_SCOPE_PROFILE, normalize_scope_profile, scopes_for_profile
+from ...raid.scope_profiles import BASE_SCOPE_PROFILE, normalize_scope_profile
 from ...raid.views import RaidAuthGenerateView, build_raid_requirements_embed
+from .oauth_callback import build_raid_oauth_callback_payload
 
-TWITCH_HELIX_USERS_URL = "https://api.twitch.tv/helix/users"
 DEFAULT_RAID_OAUTH_SUCCESS_REDIRECT_URL = "https://twitch.earlysalty.com/twitch/dashboard"
 PUBLIC_STREAMER_ONBOARDING_URL = "https://twitch.earlysalty.com/twitch/onboarding"
 PUBLIC_STREAMER_ONBOARDING_LOGIN = "public:website_onboarding"
@@ -812,224 +810,34 @@ new Chart(ctx, {{
                     content_type="text/html",
                 )
 
-        if error:
-            expected_uri = (getattr(auth_manager, "redirect_uri", "") or "").strip()
-            expected_html = (
-                f"<p><code>{html.escape(expected_uri, quote=True)}</code></p>"
-                if expected_uri
-                else ""
-            )
-            if error == "redirect_mismatch":
-                message = (
-                    "<p>Twitch hat die Redirect-URI abgelehnt (redirect_mismatch).</p>"
-                    "<p>Bitte trage diese URL exakt in der Twitch Application unter "
-                    "<strong>OAuth Redirect URLs</strong> ein und starte die Autorisierung neu:</p>"
-                    f"{expected_html}"
-                )
-            else:
-                message = (
-                    "<p>OAuth-Fehler beim Autorisieren.</p>"
-                    "<p>Bitte die Autorisierung erneut starten.</p>"
-                )
-            return web.Response(
-                text=self._render_oauth_page("Autorisierung fehlgeschlagen", message),
-                status=400,
-                content_type="text/html",
-            )
-
-        if not code or not state:
-            return web.Response(
-                text=self._render_oauth_page(
-                    "Ungültige Anfrage",
-                    "<p>Fehlender OAuth Code oder State.</p>",
-                ),
-                status=400,
-                content_type="text/html",
-            )
-
-        if not raid_bot or not auth_manager:
-            return web.Response(
-                text=self._render_oauth_page(
-                    "Raid-Bot nicht verfügbar",
-                    "<p>Der Raid-Bot ist aktuell nicht initialisiert. Bitte später erneut versuchen.</p>",
-                ),
-                status=503,
-                content_type="text/html",
-            )
-
-        state_info = auth_manager.consume_state_details(state)
-        if not state_info:
-            return web.Response(
-                text=self._render_oauth_page(
-                    "Ungültiger State",
-                    "<p>Der OAuth-State ist ungültig oder abgelaufen. Bitte den Link neu erzeugen.</p>",
-                ),
-                status=400,
-                content_type="text/html",
-            )
-        login = state_info.requested_login
-        state_discord_user_id = state_info.discord_user_id
-
-        session = getattr(raid_bot, "session", None)
-        owns_session = False
-        if session is None:
-            session = aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=20))
-            owns_session = True
-
+        payload = await build_raid_oauth_callback_payload(
+            code=code,
+            state=state,
+            error=error,
+            raid_bot=raid_bot,
+            auth_manager=auth_manager,
+            success_redirect_url=self._raid_oauth_success_redirect_url(),
+            failure_title="Fehler bei der Autorisierung",
+            failure_body_html=(
+                "<p>Beim Speichern der Twitch-Autorisierung ist ein interner Fehler aufgetreten.</p>"
+                "<p>Bitte den Vorgang erneut starten.</p>"
+            ),
+            schedule_background=getattr(self, "_spawn_bg_task", None),
+        )
+        title = str(payload.get("title") or "Autorisierung")
+        body_html = str(payload.get("body_html") or "<p>Unbekannte Antwort.</p>")
         try:
-            token_data = await auth_manager.exchange_code_for_token(code, session)
-
-            access_token = str(token_data.get("access_token") or "").strip()
-            refresh_token = str(token_data.get("refresh_token") or "").strip()
-            if not access_token:
-                raise RuntimeError("Missing access_token in Twitch OAuth response")
-            if not refresh_token:
-                raise RuntimeError("Missing refresh_token in Twitch OAuth response")
-
-            headers = {
-                "Client-ID": str(auth_manager.client_id),
-                "Authorization": f"Bearer {access_token}",
-            }
-            async with session.get(TWITCH_HELIX_USERS_URL, headers=headers) as user_resp:
-                if user_resp.status != 200:
-                    body = await user_resp.text()
-                    raise RuntimeError(
-                        f"Failed to fetch Twitch user info ({user_resp.status}): {body[:300]}"
-                    )
-                user_payload = await user_resp.json()
-
-            users = user_payload.get("data") if isinstance(user_payload, dict) else None
-            if not isinstance(users, list) or not users:
-                raise RuntimeError("Missing Twitch user data in OAuth callback")
-            user_info = users[0] or {}
-
-            twitch_user_id = str(user_info.get("id") or "").strip()
-            twitch_login = str(user_info.get("login") or "").strip().lower()
-            if not twitch_user_id or not twitch_login:
-                raise RuntimeError("Invalid Twitch user payload in OAuth callback")
-
-            expected_twitch_user_id = str(state_info.expected_twitch_user_id or "").strip()
-            if expected_twitch_user_id and twitch_user_id != expected_twitch_user_id:
-                log.warning(
-                    "Raid OAuth callback user mismatch: expected=%s actual=%s state=%s",
-                    expected_twitch_user_id,
-                    twitch_user_id,
-                    login,
-                )
-                return web.Response(
-                    text=self._render_oauth_page(
-                        "Falscher Twitch-Account",
-                        "<p>Die Autorisierung wurde mit dem falschen Twitch-Account abgeschlossen.</p>"
-                        "<p>Bitte den Link erneut öffnen und dich mit dem vorgesehenen Kanal anmelden.</p>",
-                    ),
-                    status=403,
-                    content_type="text/html",
-                )
-
-            expected_twitch_login = str(state_info.expected_twitch_login or "").strip().lower()
-            if not expected_twitch_login:
-                requested_login = str(state_info.requested_login or "").strip().lower()
-                if requested_login and not (
-                    requested_login.startswith("discord:")
-                    or requested_login == PUBLIC_STREAMER_ONBOARDING_LOGIN
-                ):
-                    expected_twitch_login = requested_login
-            if not expected_twitch_user_id and expected_twitch_login and twitch_login != expected_twitch_login:
-                log.warning(
-                    "Raid OAuth callback login mismatch: expected=%s actual=%s state=%s",
-                    expected_twitch_login,
-                    twitch_login,
-                    login,
-                )
-                return web.Response(
-                    text=self._render_oauth_page(
-                        "Falscher Twitch-Account",
-                        "<p>Die Autorisierung wurde mit dem falschen Twitch-Account abgeschlossen.</p>"
-                        "<p>Bitte den Link erneut öffnen und dich mit dem vorgesehenen Kanal anmelden.</p>",
-                    ),
-                    status=403,
-                    content_type="text/html",
-                )
-
-            scopes_raw = token_data.get("scope", [])
-            if isinstance(scopes_raw, str):
-                scopes = [scope for scope in scopes_raw.split() if scope]
-            elif isinstance(scopes_raw, list):
-                scopes = [str(scope).strip() for scope in scopes_raw if str(scope).strip()]
-            else:
-                scopes = []
-            allowed_scopes = set(scopes_for_profile(state_info.scope_profile))
-            unexpected_scopes = sorted({scope for scope in scopes if scope not in allowed_scopes})
-            if unexpected_scopes:
-                log.warning(
-                    "Raid OAuth callback returned scopes outside expected profile for %s: %s",
-                    twitch_login,
-                    ", ".join(unexpected_scopes),
-                )
-                return web.Response(
-                    text=self._render_oauth_page(
-                        "Ungültige Berechtigungen",
-                        "<p>Die Autorisierung wurde mit unerwarteten Berechtigungen abgeschlossen.</p>"
-                        "<p>Bitte den Vorgang neu starten.</p>",
-                    ),
-                    status=400,
-                    content_type="text/html",
-                )
-
-            had_existing_auth = auth_manager.has_saved_auth_record(
-                twitch_user_id=twitch_user_id,
-                twitch_login=twitch_login,
+            status_code = int(payload.get("status", 200))
+        except (TypeError, ValueError):
+            status_code = 200
+        status_code = max(200, min(status_code, 599))
+        redirect_candidate = str(payload.get("redirect_url") or "").strip()
+        if redirect_candidate and status_code < 400:
+            raise web.HTTPFound(
+                location=self._raid_oauth_success_redirect_url(redirect_candidate)
             )
-
-            auth_manager.save_auth(
-                twitch_user_id=twitch_user_id,
-                twitch_login=twitch_login,
-                access_token=access_token,
-                refresh_token=refresh_token,
-                expires_in=int(token_data.get("expires_in", 3600) or 3600),
-                scopes=scopes,
-                scope_profile=state_info.scope_profile,
-                activate_raid_features=not had_existing_auth,
-            )
-
-            post_setup = getattr(raid_bot, "complete_setup_for_streamer", None)
-            sync_partner_state = getattr(raid_bot, "_sync_partner_state_after_auth", None)
-            if callable(post_setup) and not had_existing_auth:
-                asyncio.create_task(
-                    post_setup(
-                        twitch_user_id,
-                        twitch_login,
-                        state_discord_user_id=state_discord_user_id,
-                        activate_partner_features=not had_existing_auth,
-                    ),
-                    name="twitch.raid.complete_setup",
-                )
-            elif callable(sync_partner_state) and state_discord_user_id:
-                asyncio.create_task(
-                    sync_partner_state(
-                        twitch_user_id,
-                        twitch_login,
-                        state_discord_user_id=state_discord_user_id,
-                        activate_partner_features=False,
-                    ),
-                    name="twitch.raid.sync_partner_state_after_auth",
-                )
-
-            log.info("Raid auth successful for %s", twitch_login)
-            raise web.HTTPFound(location=self._raid_oauth_success_redirect_url())
-        except web.HTTPException:
-            raise
-        except Exception:
-            log.exception("Raid OAuth callback failed for state login=%s", login)
-            return web.Response(
-                text=self._render_oauth_page(
-                    "Fehler bei der Autorisierung",
-                    "<p>Beim Speichern der Twitch-Autorisierung ist ein interner Fehler aufgetreten.</p>"
-                    "<p>Bitte den Vorgang erneut starten.</p>",
-                ),
-                status=500,
-                content_type="text/html",
-            )
-        finally:
-            if owns_session:
-                await session.close()
+        return web.Response(
+            text=self._render_oauth_page(title, body_html),
+            status=status_code,
+            content_type="text/html",
+        )

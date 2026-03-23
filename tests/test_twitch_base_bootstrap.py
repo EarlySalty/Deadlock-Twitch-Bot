@@ -1,6 +1,7 @@
 import asyncio
 import unittest
-from unittest.mock import patch
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, patch
 
 from bot.base import TwitchBaseCog
 from bot.runtime_bootstrap import TwitchRuntimeBootstrap
@@ -59,6 +60,9 @@ class _LifecycleHarness(TwitchBaseCog):
     async def _register_views_after_ready(self) -> None:
         return None
 
+    async def _periodic_channel_join(self) -> None:
+        return None
+
 
 class TwitchBaseBootstrapLifecycleTests(unittest.IsolatedAsyncioTestCase):
     async def test_cog_load_starts_runtime_once(self) -> None:
@@ -92,7 +96,7 @@ class TwitchBaseBootstrapLifecycleTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(harness.poll_streams.start_calls, 1)
         self.assertEqual(harness.sync_calls, [(True, True)])
         prepare_storage.assert_called_once()
-        self.assertEqual(
+        self.assertCountEqual(
             harness.spawned_names,
             [
                 "twitch.db_warmup",
@@ -170,6 +174,117 @@ class TwitchBaseBootstrapLifecycleTests(unittest.IsolatedAsyncioTestCase):
         await asyncio.sleep(0)
 
         self.assertEqual(len(harness._managed_bg_tasks), 0)
+
+    async def test_periodic_channel_join_task_is_spawned_through_manager(self) -> None:
+        harness = _LifecycleHarness()
+        harness._managed_bg_tasks = set()
+        spawned: list[str] = []
+
+        class _FakeTask:
+            def __init__(self) -> None:
+                self._done = False
+
+            def done(self) -> bool:
+                return self._done
+
+            def cancel(self) -> None:
+                self._done = True
+
+        fake_task = _FakeTask()
+
+        def _spawn_bg_task(coro, name: str):
+            spawned.append(name)
+            coro.close()
+            return fake_task
+
+        harness._spawn_bg_task = _spawn_bg_task
+        task = TwitchBaseCog._ensure_periodic_channel_join_task(harness)
+
+        self.assertIs(task, fake_task)
+        self.assertEqual(spawned, ["twitch.chat_bot.join_channels"])
+        self.assertIs(harness._periodic_channel_join_task, fake_task)
+
+    async def test_init_twitch_chat_bot_schedules_managed_start_task(self) -> None:
+        harness = _LifecycleHarness()
+        harness.bot = SimpleNamespace(wait_until_ready=AsyncMock(return_value=None))
+        harness._raid_bot = object()
+        harness._twitch_bot_token = "oauth:test"
+        harness._twitch_bot_refresh_token = None
+        harness._twitch_bot_client_id = ""
+        harness._twitch_bot_secret = ""
+        harness._raid_redirect_uri = "https://raid.example/twitch/raid/callback"
+        harness._notify_channel_id = 0
+        harness._bot_token_manager = None
+        harness._managed_bg_tasks = set()
+        spawned: list[str] = []
+
+        def _spawn_bg_task(coro, name: str):
+            spawned.append(name)
+            coro.close()
+            return None
+
+        class _FakeChatBot:
+            def configure_managed_start(self, **_kwargs) -> None:
+                return None
+
+            def set_discord_bot(self, *_args, **_kwargs) -> None:
+                return None
+
+            async def start(self, **_kwargs) -> None:
+                return None
+
+        harness._spawn_bg_task = _spawn_bg_task
+        harness._should_start_chat_adapter = AsyncMock(return_value=False)
+        harness._log_chat_bot_lifecycle_event = lambda **kwargs: None
+
+        with (
+            patch("bot.base.TWITCHIO_AVAILABLE", True),
+            patch("bot.base.create_twitch_chat_bot", AsyncMock(return_value=_FakeChatBot())),
+        ):
+            await TwitchBaseCog._init_twitch_chat_bot(harness)
+
+        self.assertCountEqual(
+            spawned,
+            ["twitch.chat_bot.start", "twitch.chat_bot.join_channels"],
+        )
+
+    async def test_init_twitch_chat_bot_ignores_placeholder_raid_bot_without_link_method(self) -> None:
+        harness = _LifecycleHarness()
+        harness.bot = SimpleNamespace(wait_until_ready=AsyncMock(return_value=None))
+        harness._raid_bot = object()
+        harness._twitch_bot_token = "oauth:test"
+        harness._twitch_bot_refresh_token = None
+        harness._twitch_bot_client_id = ""
+        harness._twitch_bot_secret = ""
+        harness._raid_redirect_uri = "https://raid.example/twitch/raid/callback"
+        harness._notify_channel_id = 0
+        harness._bot_token_manager = None
+        harness._managed_bg_tasks = set()
+        harness._spawn_bg_task = lambda coro, name: (coro.close(), None)[1]
+        harness._should_start_chat_adapter = AsyncMock(return_value=False)
+        lifecycle_events: list[str] = []
+        harness._log_chat_bot_lifecycle_event = lambda **kwargs: lifecycle_events.append(
+            kwargs["event"]
+        )
+
+        class _FakeChatBot:
+            def configure_managed_start(self, **_kwargs) -> None:
+                return None
+
+            def set_discord_bot(self, *_args, **_kwargs) -> None:
+                return None
+
+            async def start(self, **_kwargs) -> None:
+                return None
+
+        with (
+            patch("bot.base.TWITCHIO_AVAILABLE", True),
+            patch("bot.base.create_twitch_chat_bot", AsyncMock(return_value=_FakeChatBot())),
+        ):
+            await TwitchBaseCog._init_twitch_chat_bot(harness)
+
+        self.assertNotIn("chat_bot_start_failed", lifecycle_events)
+        self.assertIn("chat_bot_start_scheduled", lifecycle_events)
 
 
 if __name__ == "__main__":

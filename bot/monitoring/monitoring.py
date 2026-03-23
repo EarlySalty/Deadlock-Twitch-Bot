@@ -1339,10 +1339,15 @@ class TwitchMonitoringMixin(_EventSubMixin, _ExpSessionsMixin, _SessionsMixin, _
                         )
                         if raid_enabled:
                             # Asynchron aufrufen (fire-and-forget, blockiert nicht den Tick)
-                            asyncio.create_task(
-                                handler(twitch_user_id, login_lower),
-                                name=f"golive.{login_lower}",
-                            )
+                            spawner = getattr(self, "_spawn_bg_task", None)
+                            task_name = f"golive.{login_lower}"
+                            if callable(spawner):
+                                spawner(handler(twitch_user_id, login_lower), task_name)
+                            else:
+                                asyncio.create_task(
+                                    handler(twitch_user_id, login_lower),
+                                    name=task_name,
+                                )
                     except Exception:
                         log.debug(
                             "Go-Live: Konnte raid_enabled Status nicht checken für %s",

@@ -1,6 +1,7 @@
 import asyncio
 import contextlib
 import unittest
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 from bot.analytics.mixin import TwitchAnalyticsMixin
@@ -66,6 +67,29 @@ class _MonitoringHarness(TwitchMonitoringMixin):
                 "immediate": immediate,
             }
         )
+
+
+class _GoLiveHarness(TwitchMonitoringMixin):
+    def __init__(self) -> None:
+        self.spawned: list[str] = []
+        self.bot = SimpleNamespace(get_channel=lambda _channel_id: None)
+        self._category_id = None
+        self._category_sample_limit = 0
+        self._tick_count = 0
+        self._log_every_n = 1
+        self._twitch_chat_bot = None
+
+    def _spawn_bg_task(self, coro, name: str):
+        self.spawned.append(name)
+        coro.close()
+        return SimpleNamespace(done=lambda: True)
+
+    async def _ensure_stream_session(self, **_kwargs):
+        return None
+
+
+class _StopProcessing(Exception):
+    pass
 
 
 class _MonitoringDispatchHarness(TwitchMonitoringMixin):
@@ -404,6 +428,44 @@ class PartnerRaidScoreRefreshTriggerTests(unittest.IsolatedAsyncioTestCase):
         live_state_updates = [sql for sql, _ in conn.executed if "UPDATE twitch_live_state" in sql]
         self.assertTrue(live_state_updates)
         self.assertIn("active_session_id = NULL", live_state_updates[0])
+
+    async def test_process_postings_uses_managed_spawn_for_go_live_handler(self) -> None:
+        harness = _GoLiveHarness()
+        tracked = [
+            {
+                "login": "partner_one",
+                "twitch_user_id": "1234",
+                "require_link": False,
+                "is_verified": True,
+                "is_archived": False,
+            }
+        ]
+        streams_by_login = {
+            "partner_one": {
+                "id": "stream-1",
+                "user_login": "partner_one",
+                "game_name": "Deadlock",
+            }
+        }
+        conn = _RecordingConnection()
+        handler = AsyncMock()
+        harness._handle_stream_went_live = handler
+        harness._persist_live_state_rows = AsyncMock(side_effect=_StopProcessing)
+
+        with (
+            patch("bot.monitoring.monitoring.storage.readonly_connection", side_effect=lambda: contextlib.nullcontext(conn)),
+            patch("bot.monitoring.monitoring.storage.load_active_partner", return_value={"raid_bot_enabled": 1}),
+            patch("bot.monitoring.monitoring.storage.transaction", side_effect=lambda: contextlib.nullcontext(conn)),
+            patch(
+                "bot.monitoring.monitoring.asyncio.create_task",
+                side_effect=AssertionError("raw create_task should not be used"),
+            ),
+        ):
+            with self.assertRaises(_StopProcessing):
+                await harness._process_postings(tracked, streams_by_login)
+
+        self.assertEqual(harness.spawned, ["golive.partner_one"])
+        handler.assert_not_awaited()
 
 
 if __name__ == "__main__":

@@ -4,6 +4,7 @@ Analytics API v2 - Backend endpoints for the new React TypeScript dashboard.
 
 from __future__ import annotations
 
+import asyncio
 import ipaddress
 import inspect
 import json
@@ -427,6 +428,57 @@ class AnalyticsV2Mixin(
     _AnalyticsRoadmapMixin,
 ):
     """Mixin providing v2 analytics API endpoints for the dashboard."""
+
+    def _load_api_v2_streamers_data(self) -> list[dict[str, Any]]:
+        """Load streamer dropdown data from PostgreSQL.
+
+        This stays synchronous so the async handler can offload the blocking
+        database work with ``asyncio.to_thread``.
+        """
+        partner_logins: set[str] = set()
+        recent_logins: set[str] = set()
+
+        with storage.readonly_connection() as conn:
+            has_partner_table = True
+            try:
+                conn.execute("SELECT 1 FROM twitch_streamers_partner_state LIMIT 1")
+            except Exception:
+                has_partner_table = False
+
+            if has_partner_table:
+                rows = conn.execute(
+                    """
+                    SELECT twitch_login
+                    FROM twitch_streamers_partner_state
+                    WHERE is_partner_active = 1
+                    ORDER BY twitch_login
+                    """
+                ).fetchall()
+                partner_logins = {
+                    str(row[0] or "").strip().lower()
+                    for row in rows
+                    if str(row[0] or "").strip()
+                }
+
+            recent_rows = conn.execute(
+                """
+                SELECT DISTINCT LOWER(streamer_login) AS login
+                FROM twitch_stream_sessions
+                WHERE started_at >= NOW() - INTERVAL '90 days'
+                ORDER BY login
+                """
+            ).fetchall()
+            recent_logins = {
+                str(row[0] or "").strip().lower()
+                for row in recent_rows
+                if str(row[0] or "").strip()
+            }
+
+        all_logins = partner_logins | recent_logins
+        return [
+            {"login": login, "isPartner": login in partner_logins}
+            for login in sorted(all_logins)
+        ]
 
     def _register_v2_routes(self, router: web.UrlDispatcher) -> None:
         super()._register_v2_routes(router)
@@ -2120,47 +2172,10 @@ class AnalyticsV2Mixin(
     async def _api_v2_streamers(self, request: web.Request) -> web.Response:
         """Get list of streamers for dropdown."""
         self._require_v2_auth(request)
-
-        from ..storage import pg as storage
-
         try:
-            with storage.readonly_connection() as conn:
-                # Detect optional partner table
-                has_partner_table = True
-                try:
-                    conn.execute("SELECT 1 FROM twitch_streamers_partner_state LIMIT 1")
-                except Exception:
-                    has_partner_table = False
-
-                # Partners (verified) - only if table exists
-                partner_logins: set[str] = set()
-                if has_partner_table:
-                    rows = conn.execute("""
-                        SELECT twitch_login
-                        FROM twitch_streamers_partner_state
-                        WHERE is_partner_active = 1
-                        ORDER BY twitch_login
-                    """).fetchall()
-                    partner_logins = {r[0].lower() for r in rows}
-
-                # Always include streamers who were live in the last 90 days so
-                # recently-added or re-verified streamers are never invisible.
-                recent_rows = conn.execute("""
-                    SELECT DISTINCT LOWER(streamer_login) AS login
-                    FROM twitch_stream_sessions
-                    WHERE started_at >= NOW() - INTERVAL '90 days'
-                    ORDER BY login
-                """).fetchall()
-                recent_logins: set[str] = {r[0] for r in recent_rows}
-
-                all_logins = partner_logins | recent_logins
-                data = [
-                    {"login": login, "isPartner": login in partner_logins}
-                    for login in sorted(all_logins)
-                ]
-
-                return web.json_response(data)
-        except Exception as exc:
+            data = await asyncio.to_thread(self._load_api_v2_streamers_data)
+            return web.json_response(data)
+        except Exception:
             log.exception("Error in streamers API")
             return analytics_internal_error_response(
                 error="Streamer konnten nicht geladen werden.",

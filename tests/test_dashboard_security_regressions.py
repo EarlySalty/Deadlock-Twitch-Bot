@@ -541,6 +541,27 @@ class DashboardSecurityRegressionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(payload["error"], "Streamer konnten nicht geladen werden.")
         self.assertNotIn("db password leaked", response.text)
 
+    async def test_v2_streamers_db_lookup_is_offloaded_to_thread(self) -> None:
+        api = _DummyV2Errors()
+        expected = [{"login": "alpha", "isPartner": True}]
+
+        with patch.object(
+            api,
+            "_load_api_v2_streamers_data",
+            return_value=expected,
+        ) as mocked_loader, patch(
+            "bot.analytics.api_v2.asyncio.to_thread",
+            new=AsyncMock(side_effect=lambda func: func()),
+        ) as mocked_to_thread:
+            response = await api._api_v2_streamers(SimpleNamespace())
+
+        payload = json.loads(response.text)
+        self.assertEqual(response.status, 200)
+        self.assertEqual(payload, expected)
+        mocked_loader.assert_called_once_with()
+        mocked_to_thread.assert_awaited_once()
+        self.assertIs(mocked_to_thread.await_args.args[0], mocked_loader)
+
     def test_internal_home_rate_limit_type_error_fails_closed(self) -> None:
         api = _DummyInternalHomeRateLimit()
 

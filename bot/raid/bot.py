@@ -122,9 +122,70 @@ class RaidBot:
         # Unterdrückt den nächsten Offline-Auto-Raid, wenn kurz zuvor ein manueller/externer Raid erkannt wurde.
         self._manual_raid_suppression: dict[str, float] = {}
         self._user_scope_fallback_warned: set[tuple[str, str]] = set()
+        self._managed_bg_tasks: set[asyncio.Task[Any]] = set()
 
         # Cleanup-Task starten
-        self._cleanup_task = asyncio.create_task(self._periodic_cleanup())
+        self._cleanup_task = self._spawn_bg_task(
+            self._periodic_cleanup(),
+            "raid.bot.periodic_cleanup",
+        )
+
+    def _managed_bg_task_registry(self) -> set[asyncio.Task[Any]]:
+        tasks = getattr(self, "_managed_bg_tasks", None)
+        if not isinstance(tasks, set):
+            tasks = set()
+            self._managed_bg_tasks = tasks
+        return tasks
+
+    def _track_bg_task(self, task: asyncio.Task[Any]) -> asyncio.Task[Any]:
+        registry = self._managed_bg_task_registry()
+        registry.add(task)
+
+        def _discard(completed: asyncio.Task[Any]) -> None:
+            registry.discard(completed)
+
+        task.add_done_callback(_discard)
+        return task
+
+    def _spawn_bg_task(
+        self,
+        coro: Any,
+        name: str,
+    ) -> asyncio.Task[Any] | None:
+        try:
+            task = asyncio.create_task(coro, name=name)
+        except RuntimeError as exc:
+            log.error("Cannot start RaidBot background task %s (no running loop yet): %s", name, exc)
+            coro.close()
+            return None
+        except Exception:
+            log.exception("Failed to start RaidBot background task %s", name)
+            coro.close()
+            return None
+        return self._track_bg_task(task)
+
+    async def _cancel_managed_bg_tasks(self) -> None:
+        registry = list(self._managed_bg_task_registry())
+        if not registry:
+            return
+        self._managed_bg_tasks = set()
+        for task in registry:
+            if task.done():
+                continue
+            task.cancel()
+        for task in registry:
+            if task.done():
+                continue
+            try:
+                await task
+            except asyncio.CancelledError:
+                log.debug("RaidBot managed background task cancelled: %s", task.get_name())
+            except Exception:
+                log.debug(
+                    "RaidBot managed background task failed during shutdown: %s",
+                    task.get_name(),
+                    exc_info=True,
+                )
 
     @property
     def session(self) -> aiohttp.ClientSession | None:
@@ -157,12 +218,7 @@ class RaidBot:
 
     async def cleanup(self):
         """Stoppt Hintergrund-Tasks."""
-        if self._cleanup_task and not self._cleanup_task.done():
-            self._cleanup_task.cancel()
-            try:
-                await self._cleanup_task
-            except asyncio.CancelledError:
-                log.debug("Cleanup task cancelled")
+        await self._cancel_managed_bg_tasks()
 
     async def _periodic_cleanup(self):
         """

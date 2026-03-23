@@ -8,7 +8,6 @@ import os
 from datetime import UTC, datetime, timedelta
 from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
-import aiohttp
 import discord
 from aiohttp import web
 
@@ -20,12 +19,11 @@ from ..core.constants import (
     log,
 )
 from ..discord_role_sync import normalize_discord_user_id, sync_streamer_role
-from ..raid.scope_profiles import scopes_for_profile
 from ..raid.integration_state import RaidIntegrationStateResolver
 from ..storage import pg as storage
 from ..raid.views import RaidAuthGenerateView, build_raid_requirements_embed
+from .raids.oauth_callback import build_raid_oauth_callback_payload
 from .server_v2 import build_v2_app
-TWITCH_HELIX_USERS_URL = "https://api.twitch.tv/helix/users"
 RAID_OAUTH_SUCCESS_REDIRECT_URL = "https://twitch.earlysalty.com/twitch/dashboard"
 PUBLIC_WEBSITE_ONBOARDING_LOGIN = "public:website_onboarding"
 
@@ -426,240 +424,24 @@ class TwitchDashboardMixin:
         state: str,
         error: str,
     ) -> dict:
-        raid_bot = self._raid_bot
-        auth_manager = getattr(raid_bot, "auth_manager", None) if raid_bot else None
-        code_clean = str(code or "").strip()
-        state_clean = str(state or "").strip()
-        error_clean = str(error or "").strip()
-
-        if error_clean:
-            expected_uri = (getattr(auth_manager, "redirect_uri", "") or "").strip()
-            expected_html = (
-                f"<p><code>{expected_uri}</code></p>"
-                if expected_uri
-                else ""
-            )
-            if error_clean == "redirect_mismatch":
-                message = (
-                    "<p>Twitch hat die Redirect-URI abgelehnt (redirect_mismatch).</p>"
-                    "<p>Bitte trage diese URL exakt in der Twitch Application unter "
-                    "<strong>OAuth Redirect URLs</strong> ein und starte die Autorisierung neu:</p>"
-                    f"{expected_html}"
-                )
-            else:
-                message = (
-                    "<p>OAuth-Fehler beim Autorisieren.</p>"
-                    "<p>Bitte die Autorisierung erneut starten.</p>"
-                )
-            return {
-                "status": 400,
-                "title": "Autorisierung fehlgeschlagen",
-                "body_html": message,
-            }
-
-        if not code_clean or not state_clean:
-            return {
-                "status": 400,
-                "title": "Ungültige Anfrage",
-                "body_html": "<p>Fehlender OAuth Code oder State.</p>",
-            }
-
-        if not raid_bot or not auth_manager:
-            return {
-                "status": 503,
-                "title": "Raid-Bot nicht verfügbar",
-                "body_html": (
-                    "<p>Der Raid-Bot ist aktuell nicht initialisiert. "
-                    "Bitte später erneut versuchen.</p>"
-                ),
-            }
-
-        state_info = auth_manager.consume_state_details(state_clean)
-        if not state_info:
-            return {
-                "status": 400,
-                "title": "Ungültiger State",
-                "body_html": (
-                    "<p>Der OAuth-State ist ungültig oder abgelaufen. "
-                    "Bitte den Link neu erzeugen.</p>"
-                ),
-            }
-
-        login = state_info.requested_login
-        state_discord_user_id = state_info.discord_user_id
-
-        session = getattr(raid_bot, "session", None)
-        owns_session = False
-        if session is None:
-            session = aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=20))
-            owns_session = True
-
-        try:
-            token_data = await auth_manager.exchange_code_for_token(code_clean, session)
-
-            access_token = str(token_data.get("access_token") or "").strip()
-            refresh_token = str(token_data.get("refresh_token") or "").strip()
-            if not access_token:
-                raise RuntimeError("Missing access_token in Twitch OAuth response")
-            if not refresh_token:
-                raise RuntimeError("Missing refresh_token in Twitch OAuth response")
-
-            headers = {
-                "Client-ID": str(auth_manager.client_id),
-                "Authorization": f"Bearer {access_token}",
-            }
-            async with session.get(TWITCH_HELIX_USERS_URL, headers=headers) as user_resp:
-                if user_resp.status != 200:
-                    body = await user_resp.text()
-                    raise RuntimeError(
-                        f"Failed to fetch Twitch user info ({user_resp.status}): {body[:300]}"
-                    )
-                user_payload = await user_resp.json()
-
-            users = user_payload.get("data") if isinstance(user_payload, dict) else None
-            if not isinstance(users, list) or not users:
-                raise RuntimeError("Missing Twitch user data in OAuth callback")
-            user_info = users[0] or {}
-
-            twitch_user_id = str(user_info.get("id") or "").strip()
-            twitch_login = str(user_info.get("login") or "").strip().lower()
-            if not twitch_user_id or not twitch_login:
-                raise RuntimeError("Invalid Twitch user payload in OAuth callback")
-
-            expected_twitch_user_id = str(state_info.expected_twitch_user_id or "").strip()
-            if expected_twitch_user_id and twitch_user_id != expected_twitch_user_id:
-                log.warning(
-                    "Raid OAuth callback user mismatch: expected=%s actual=%s state=%s",
-                    expected_twitch_user_id,
-                    twitch_user_id,
-                    login,
-                )
-                return {
-                    "status": 403,
-                    "title": "Falscher Twitch-Account",
-                    "body_html": (
-                        "<p>Die Autorisierung wurde mit dem falschen Twitch-Account abgeschlossen.</p>"
-                        "<p>Bitte den Link erneut öffnen und dich mit dem vorgesehenen Kanal anmelden.</p>"
-                    ),
-                }
-
-            expected_twitch_login = str(state_info.expected_twitch_login or "").strip().lower()
-            if not expected_twitch_login:
-                requested_login = str(state_info.requested_login or "").strip().lower()
-                if requested_login and not (
-                    requested_login.startswith("discord:")
-                    or requested_login == PUBLIC_WEBSITE_ONBOARDING_LOGIN
-                ):
-                    expected_twitch_login = requested_login
-            if not expected_twitch_user_id and expected_twitch_login and twitch_login != expected_twitch_login:
-                log.warning(
-                    "Raid OAuth callback login mismatch: expected=%s actual=%s state=%s",
-                    expected_twitch_login,
-                    twitch_login,
-                    login,
-                )
-                return {
-                    "status": 403,
-                    "title": "Falscher Twitch-Account",
-                    "body_html": (
-                        "<p>Die Autorisierung wurde mit dem falschen Twitch-Account abgeschlossen.</p>"
-                        "<p>Bitte den Link erneut öffnen und dich mit dem vorgesehenen Kanal anmelden.</p>"
-                    ),
-                }
-
-            scopes_raw = token_data.get("scope", [])
-            if isinstance(scopes_raw, str):
-                scopes = [scope for scope in scopes_raw.split() if scope]
-            elif isinstance(scopes_raw, list):
-                scopes = [str(scope).strip() for scope in scopes_raw if str(scope).strip()]
-            else:
-                scopes = []
-            allowed_scopes = set(scopes_for_profile(state_info.scope_profile))
-            unexpected_scopes = sorted({scope for scope in scopes if scope not in allowed_scopes})
-            if unexpected_scopes:
-                log.warning(
-                    "Raid OAuth callback returned scopes outside expected profile for %s: %s",
-                    twitch_login,
-                    ", ".join(unexpected_scopes),
-                )
-                return {
-                    "status": 400,
-                    "title": "Ungültige Berechtigungen",
-                    "body_html": (
-                        "<p>Die Autorisierung wurde mit unerwarteten Berechtigungen abgeschlossen.</p>"
-                        "<p>Bitte den Vorgang neu starten.</p>"
-                    ),
-                }
-
-            had_existing_auth = auth_manager.has_saved_auth_record(
-                twitch_user_id=twitch_user_id,
-                twitch_login=twitch_login,
-            )
-
-            auth_manager.save_auth(
-                twitch_user_id=twitch_user_id,
-                twitch_login=twitch_login,
-                access_token=access_token,
-                refresh_token=refresh_token,
-                expires_in=int(token_data.get("expires_in", 3600) or 3600),
-                scopes=scopes,
-                scope_profile=state_info.scope_profile,
-                activate_raid_features=not had_existing_auth,
-            )
-
-            post_setup = getattr(raid_bot, "complete_setup_for_streamer", None)
-            sync_partner_state = getattr(raid_bot, "_sync_partner_state_after_auth", None)
-            if callable(post_setup) and not had_existing_auth:
-                asyncio.create_task(
-                    post_setup(
-                        twitch_user_id,
-                        twitch_login,
-                        state_discord_user_id=state_discord_user_id,
-                        activate_partner_features=not had_existing_auth,
-                    ),
-                    name="twitch.raid.complete_setup",
-                )
-            elif callable(sync_partner_state) and state_discord_user_id:
-                asyncio.create_task(
-                    sync_partner_state(
-                        twitch_user_id,
-                        twitch_login,
-                        state_discord_user_id=state_discord_user_id,
-                        activate_partner_features=False,
-                    ),
-                    name="twitch.raid.sync_partner_state_after_auth",
-                )
-
-            log.info("Raid auth successful for %s", twitch_login)
-            redirect_url = (
-                (os.getenv("TWITCH_RAID_SUCCESS_REDIRECT_URL") or "").strip()
-                or RAID_OAUTH_SUCCESS_REDIRECT_URL
-            )
-            return {
-                "status": 200,
-                "title": "Autorisierung erfolgreich",
-                "body_html": (
-                    "<p>Der Raid-Bot wurde erfolgreich autorisiert.</p>"
-                    "<p>Du kannst dieses Fenster jetzt schließen.</p>"
-                ),
-                "redirect_url": redirect_url,
-            }
-        except Exception:
-            log.exception("Raid OAuth callback failed for state login=%s", login)
-            return {
-                "status": 500,
-                "title": "Autorisierung fehlgeschlagen",
-                "body_html": (
-                    "<p>Autorisierung fehlgeschlagen.</p>"
-                    "<p>Bitte erneut versuchen oder Admin kontaktieren.</p>"
-                ),
-            }
-        finally:
-            if owns_session:
-                try:
-                    await session.close()
-                except Exception:
-                    log.debug("Could not close temporary OAuth callback session", exc_info=True)
+        redirect_url = (
+            (os.getenv("TWITCH_RAID_SUCCESS_REDIRECT_URL") or "").strip()
+            or RAID_OAUTH_SUCCESS_REDIRECT_URL
+        )
+        return await build_raid_oauth_callback_payload(
+            code=code,
+            state=state,
+            error=error,
+            raid_bot=getattr(self, "_raid_bot", None),
+            auth_manager=getattr(getattr(self, "_raid_bot", None), "auth_manager", None),
+            success_redirect_url=redirect_url,
+            failure_title="Autorisierung fehlgeschlagen",
+            failure_body_html=(
+                "<p>Autorisierung fehlgeschlagen.</p>"
+                "<p>Bitte erneut versuchen oder Admin kontaktieren.</p>"
+            ),
+            schedule_background=getattr(self, "_spawn_bg_task", None),
+        )
 
     def _raid_integration_state_resolver(self) -> RaidIntegrationStateResolver:
         raid_bot = getattr(self, "_raid_bot", None)

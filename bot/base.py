@@ -1099,19 +1099,11 @@ class TwitchBaseCog(commands.Cog):
         existing = getattr(self, "_periodic_channel_join_task", None)
         if existing is not None and not existing.done():
             return existing
-        try:
-            task = asyncio.create_task(
-                self._periodic_channel_join(), name="twitch.chat_bot.join_channels"
-            )
-        except RuntimeError as exc:
-            log.error(
-                "Cannot start background task %s (no running loop yet): %s",
-                "twitch.chat_bot.join_channels",
-                exc,
-            )
-            return None
-        except Exception:
-            log.exception("Failed to start background task %s", "twitch.chat_bot.join_channels")
+        task = self._spawn_bg_task(
+            self._periodic_channel_join(),
+            "twitch.chat_bot.join_channels",
+        )
+        if task is None:
             return None
         self._periodic_channel_join_task = task
         return task
@@ -1661,7 +1653,7 @@ class TwitchBaseCog(commands.Cog):
                     load_tokens=False,  # vermeidet kaputte .tio.tokens.json ohne scope
                     save_tokens=False,
                 )
-                asyncio.create_task(start_coro, name="twitch.chat_bot.start")
+                self._spawn_bg_task(start_coro, "twitch.chat_bot.start")
                 self._log_chat_bot_lifecycle_event(
                     flow_id=flow_id,
                     event="chat_bot_start_scheduled",
@@ -1673,8 +1665,10 @@ class TwitchBaseCog(commands.Cog):
                 )
 
                 # Verknüpfe Chat-Bot mit Raid-Bot für Recruitment-Messages
-                if self._raid_bot:
-                    self._raid_bot.set_chat_bot(self._twitch_chat_bot)
+                raid_bot = getattr(self, "_raid_bot", None)
+                link_chat_bot = getattr(raid_bot, "set_chat_bot", None)
+                if callable(link_chat_bot):
+                    link_chat_bot(self._twitch_chat_bot)
                     log.debug("Chat-Bot mit Raid-Bot verknüpft für Recruitment-Messages")
 
                 # Periodisch neue Partner-Channels joinen

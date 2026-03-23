@@ -98,6 +98,11 @@ class _DummyDashboardMixin(TwitchDashboardMixin):
             auth_manager=auth_manager or _FakeAuthManager(),
             session=_FakeSession(payload={"data": [{"id": "1001", "login": user_login}]}),
         )
+        self.spawned_tasks: list[tuple[str, object]] = []
+
+    def _spawn_bg_task(self, coro, name: str):
+        self.spawned_tasks.append((name, coro))
+        return None
 
 
 class DashboardMixinRaidCallbackRedirectTests(unittest.IsolatedAsyncioTestCase):
@@ -200,13 +205,10 @@ class DashboardMixinRaidCallbackRedirectTests(unittest.IsolatedAsyncioTestCase):
         )
         handler = _DummyDashboardMixin()
         handler._raid_bot = raid_bot
-        created_coroutines = []
-
-        def _capture_task(coro, *, name=None):
-            created_coroutines.append((name, coro))
-            return None
-
-        with patch("bot.dashboard.mixin.asyncio.create_task", side_effect=_capture_task):
+        with patch(
+            "bot.dashboard.raids.oauth_callback.asyncio.create_task",
+            side_effect=AssertionError("raw create_task should not be used"),
+        ):
             payload = await handler._dashboard_raid_oauth_callback(
                 code="oauth-code",
                 state="valid-state",
@@ -215,9 +217,11 @@ class DashboardMixinRaidCallbackRedirectTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(payload.get("status"), 200)
         raid_bot.complete_setup_for_streamer.assert_not_called()
-        self.assertEqual(len(created_coroutines), 1)
-        self.assertEqual(created_coroutines[0][0], "twitch.raid.sync_partner_state_after_auth")
-        await created_coroutines[0][1]
+        self.assertEqual(len(handler.spawned_tasks), 1)
+        self.assertEqual(
+            handler.spawned_tasks[0][0], "twitch.raid.sync_partner_state_after_auth"
+        )
+        await handler.spawned_tasks[0][1]
         raid_bot._sync_partner_state_after_auth.assert_awaited_once_with(
             "1001",
             "partner_one",
