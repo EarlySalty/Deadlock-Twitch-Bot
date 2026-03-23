@@ -276,10 +276,187 @@ class _AnalyticsRaidsMixin:
                         }
                     )
 
+                # ── Incoming Raids (from twitch_raid_arrival_tracking) ──
+                incoming_raid_rows = c.execute(
+                    """
+                    SELECT
+                        rat.detected_at,
+                        rat.from_broadcaster_login,
+                        rat.viewer_count,
+                        rat.classification,
+                        rat.confirmation_signals,
+                        rat.unraid_seen
+                    FROM twitch_raid_arrival_tracking rat
+                    WHERE LOWER(rat.to_broadcaster_login) = %s
+                      AND rat.detected_at >= %s
+                    ORDER BY rat.detected_at DESC
+                    LIMIT 50
+                    """,
+                    [streamer, cutoff],
+                ).fetchall()
+
+                incoming_raids: list[dict[str, Any]] = []
+                boost_values: list[float] = []
+                retention_15m_values: list[float] = []
+
+                for raid_row in incoming_raid_rows:
+                    detected_at = raid_row["detected_at"]
+                    from_channel = raid_row["from_broadcaster_login"] or "unknown"
+                    viewers_sent = int(raid_row["viewer_count"] or 0)
+
+                    # Find the session running at raid time
+                    session_row = c.execute(
+                        """
+                        SELECT ss.id, ss.started_at
+                        FROM twitch_stream_sessions ss
+                        WHERE LOWER(ss.streamer_login) = %s
+                          AND ss.started_at <= %s
+                          AND (ss.ended_at IS NULL OR ss.ended_at >= %s)
+                        LIMIT 1
+                        """,
+                        [streamer, detected_at, detected_at],
+                    ).fetchone()
+
+                    impact: dict[str, Any] = {
+                        "viewers_before": None,
+                        "viewers_peak_after": None,
+                        "boost_pct": None,
+                        "retention_5m_pct": None,
+                        "retention_15m_pct": None,
+                        "retention_30m_pct": None,
+                        "follows_after_raid": 0,
+                    }
+
+                    if session_row:
+                        session_id = int(session_row["id"])
+                        session_started_at = session_row["started_at"]
+
+                        # Calculate raid minute offset
+                        if hasattr(detected_at, 'timestamp') and hasattr(session_started_at, 'timestamp'):
+                            raid_minute = int((detected_at.timestamp() - session_started_at.timestamp()) / 60)
+                        else:
+                            from datetime import datetime as dt_cls
+                            det = detected_at if isinstance(detected_at, datetime) else dt_cls.fromisoformat(str(detected_at))
+                            ses = session_started_at if isinstance(session_started_at, datetime) else dt_cls.fromisoformat(str(session_started_at))
+                            raid_minute = int((det.timestamp() - ses.timestamp()) / 60)
+
+                        # Get viewer timeline for this session
+                        timeline_rows = c.execute(
+                            """
+                            SELECT minutes_from_start, viewer_count
+                            FROM twitch_session_viewers
+                            WHERE session_id = %s
+                            ORDER BY minutes_from_start
+                            """,
+                            [session_id],
+                        ).fetchall()
+
+                        if timeline_rows:
+                            timeline = {int(r["minutes_from_start"]): int(r["viewer_count"]) for r in timeline_rows}
+
+                            # viewers_before: average in [raid_minute - 3, raid_minute)
+                            before_vals = [
+                                v for m, v in timeline.items()
+                                if (raid_minute - 3) <= m < raid_minute
+                            ]
+                            avg_before = sum(before_vals) / len(before_vals) if before_vals else None
+
+                            # viewers_peak_after: max in [raid_minute, raid_minute + 5]
+                            after_vals = [
+                                v for m, v in timeline.items()
+                                if raid_minute <= m <= (raid_minute + 5)
+                            ]
+                            peak_after = max(after_vals) if after_vals else None
+
+                            if avg_before is not None and avg_before > 0 and peak_after is not None:
+                                impact["viewers_before"] = round(avg_before, 1)
+                                impact["viewers_peak_after"] = peak_after
+                                impact["boost_pct"] = round(((peak_after - avg_before) / avg_before) * 100, 1)
+                                boost_values.append(impact["boost_pct"])
+
+                            # Retention: find closest minute in timeline
+                            def _closest_viewer(target_min: int) -> int | None:
+                                if not timeline:
+                                    return None
+                                closest = min(timeline.keys(), key=lambda m: abs(m - target_min))
+                                if abs(closest - target_min) <= 2:
+                                    return timeline[closest]
+                                return None
+
+                            if peak_after and peak_after > 0:
+                                for offset_min, key in [(5, "retention_5m_pct"), (15, "retention_15m_pct"), (30, "retention_30m_pct")]:
+                                    v = _closest_viewer(raid_minute + offset_min)
+                                    if v is not None:
+                                        impact[key] = round((v / peak_after) * 100, 1)
+
+                                if impact["retention_15m_pct"] is not None:
+                                    retention_15m_values.append(impact["retention_15m_pct"])
+
+                        # Follower impact: follows within 30 minutes after raid
+                        follow_count_row = c.execute(
+                            """
+                            SELECT COUNT(*) as follows
+                            FROM twitch_follow_events
+                            WHERE LOWER(streamer_login) = %s
+                              AND followed_at BETWEEN %s AND %s + interval '30 minutes'
+                            """,
+                            [streamer, detected_at, detected_at],
+                        ).fetchone()
+                        if follow_count_row:
+                            impact["follows_after_raid"] = int(follow_count_row["follows"] or 0)
+
+                    incoming_raids.append({
+                        "from_channel": from_channel,
+                        "detected_at": detected_at.isoformat() if hasattr(detected_at, 'isoformat') else str(detected_at),
+                        "viewers_sent": viewers_sent,
+                        "classification": raid_row["classification"] or "unknown",
+                        "unraid_seen": bool(raid_row["unraid_seen"]),
+                        "impact": impact,
+                    })
+
+                # Incoming summary
+                incoming_summary: dict[str, Any] | None = None
+                if incoming_raids:
+                    avg_viewers_received = sum(r["viewers_sent"] for r in incoming_raids) / len(incoming_raids)
+                    avg_boost = (
+                        round(sum(boost_values) / len(boost_values), 1)
+                        if boost_values else None
+                    )
+                    avg_ret_15m = (
+                        round(sum(retention_15m_values) / len(retention_15m_values), 1)
+                        if retention_15m_values else None
+                    )
+
+                    # Best raider by avg boost
+                    raider_boosts: dict[str, list[float]] = {}
+                    for r in incoming_raids:
+                        if r["impact"]["boost_pct"] is not None:
+                            raider_boosts.setdefault(r["from_channel"], []).append(r["impact"]["boost_pct"])
+                    best_raider = None
+                    if raider_boosts:
+                        best_raider = max(
+                            raider_boosts.keys(),
+                            key=lambda k: sum(raider_boosts[k]) / len(raider_boosts[k]),
+                        )
+
+                    incoming_summary = {
+                        "total_raids_received": len(incoming_raids),
+                        "avg_viewers_received": round(avg_viewers_received, 1),
+                        "avg_boost_pct": avg_boost,
+                        "avg_retention_15m": avg_ret_15m,
+                        "best_raider": best_raider,
+                        "raid_balance": {
+                            "sent": sum(s["raids_received"] for s in per_source),
+                            "received": len(incoming_raids),
+                        },
+                    }
+
                 return web.json_response({
                     "per_source": per_source,
                     "follow_attribution": follow_attribution,
                     "retention_curves": retention_curves,
+                    "incoming_raids": incoming_raids,
+                    "incoming_summary": incoming_summary,
                     "window_days": days,
                     "dataQuality": {
                         "botFilterApplied": True,

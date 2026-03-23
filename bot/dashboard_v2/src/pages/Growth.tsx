@@ -1,14 +1,16 @@
 import { useMemo } from 'react';
 import { motion } from 'framer-motion';
-import { TrendingUp, Calendar, Clock, AlertCircle, Loader2, Crown, Users, Play } from 'lucide-react';
+import { TrendingUp, Calendar, Clock, AlertCircle, Loader2, Crown, Users, Play, ArrowDownLeft, ArrowUpRight, UserPlus, Star } from 'lucide-react';
 import { useQuery } from '@tanstack/react-query';
-import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend } from 'recharts';
+import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend, BarChart, Bar, Cell } from 'recharts';
 import { fetchMonthlyStats, fetchWeekdayStats } from '@/api/client';
-import { useTagAnalysisExtended, useTitlePerformance, useRaidRetention } from '@/hooks/useAnalytics';
+import { useTagAnalysisExtended, useTitlePerformance, useRaidRetention, useRaidAnalytics } from '@/hooks/useAnalytics';
 import { TagPerformanceChart } from '@/components/charts/TagPerformance';
 import { RaidRetention } from '@/components/charts/RaidRetention';
 import { PlanGateCard } from '@/components/cards/PlanGateCard';
-import type { MonthlyStats, WeekdayStats, TimeRange } from '@/types/analytics';
+import { NoDataCard } from '@/components/cards/NoDataCard';
+import { formatNumber, formatPercent, formatDate } from '@/utils/formatters';
+import type { MonthlyStats, WeekdayStats, TimeRange, IncomingRaid } from '@/types/analytics';
 
 interface GrowthProps {
   streamer: string;
@@ -31,6 +33,7 @@ export function Growth({ streamer, days }: GrowthProps) {
   const { data: tagData } = useTagAnalysisExtended(streamer, days);
   const { data: titleData } = useTitlePerformance(streamer, days);
   const { data: raidRetentionData } = useRaidRetention(streamer, days);
+  const { data: raidAnalyticsData } = useRaidAnalytics(streamer, days);
 
   const chartData = useMemo(() => {
     if (!monthlyData) return [];
@@ -223,6 +226,9 @@ export function Growth({ streamer, days }: GrowthProps) {
           <RaidRetention data={raidRetentionData} />
         </div>
       </PlanGateCard>
+
+      {/* ── Incoming Raids Section ── */}
+      <IncomingRaidsSection raidAnalyticsData={raidAnalyticsData} />
     </div>
   );
 }
@@ -384,6 +390,271 @@ function generateScheduleInsights(data: WeekdayStats[]) {
   }
 
   return insights;
+}
+
+// ── Incoming Raids Section ──
+
+function boostColor(pct: number | null): string {
+  if (pct === null) return 'text-text-secondary';
+  if (pct > 0) return 'text-success';
+  if (pct < 0) return 'text-error';
+  return 'text-text-secondary';
+}
+
+function retentionColorIncoming(pct: number | null): string {
+  if (pct === null) return 'text-text-secondary';
+  if (pct >= 50) return 'text-success';
+  if (pct >= 30) return 'text-warning';
+  return 'text-error';
+}
+
+interface TopRaider {
+  from_channel: string;
+  raid_count: number;
+  avg_viewers: number;
+  avg_boost: number | null;
+}
+
+function computeTopRaiders(raids: IncomingRaid[]): TopRaider[] {
+  const grouped: Record<string, { displayName: string; count: number; totalViewers: number; boosts: number[]; }> = {};
+  for (const r of raids) {
+    const key = r.from_channel.toLowerCase();
+    if (!grouped[key]) {
+      grouped[key] = { displayName: r.from_channel, count: 0, totalViewers: 0, boosts: [] };
+    }
+    grouped[key].count += 1;
+    grouped[key].totalViewers += r.viewers_sent;
+    if (r.impact.boost_pct !== null) {
+      grouped[key].boosts.push(r.impact.boost_pct);
+    }
+  }
+  return Object.values(grouped)
+    .map((v) => ({
+      from_channel: v.displayName,
+      raid_count: v.count,
+      avg_viewers: Math.round(v.totalViewers / v.count),
+      avg_boost: v.boosts.length > 0 ? Math.round((v.boosts.reduce((a, b) => a + b, 0) / v.boosts.length) * 10) / 10 : null,
+    }))
+    .sort((a, b) => b.raid_count - a.raid_count || (b.avg_boost ?? 0) - (a.avg_boost ?? 0))
+    .slice(0, 5);
+}
+
+interface IncomingRaidsSectionProps {
+  raidAnalyticsData: import('@/types/analytics').RaidAnalytics | undefined;
+}
+
+function IncomingRaidsSection({ raidAnalyticsData }: IncomingRaidsSectionProps) {
+  const incomingRaids = raidAnalyticsData?.incoming_raids ?? [];
+  const summary = raidAnalyticsData?.incoming_summary;
+
+  if (!raidAnalyticsData) {
+    return null; // Still loading or no data
+  }
+
+  if (incomingRaids.length === 0) {
+    return (
+      <motion.div
+        initial={{ opacity: 0, y: 20 }}
+        animate={{ opacity: 1, y: 0 }}
+      >
+        <NoDataCard
+          message="Keine eingehenden Raids"
+          submessage="Es wurden noch keine Raids zu deinem Kanal erkannt."
+          icon={ArrowDownLeft}
+        />
+      </motion.div>
+    );
+  }
+
+  const topRaiders = computeTopRaiders(incomingRaids);
+  const balanceData = summary ? [
+    { name: 'Gesendet', value: summary.raid_balance.sent, fill: 'var(--color-primary)' },
+    { name: 'Empfangen', value: summary.raid_balance.received, fill: '#10b981' },
+  ] : [];
+
+  return (
+    <>
+      {/* 1. Raid-Bilanz */}
+      {summary && (
+        <motion.div
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          className="bg-card rounded-xl border border-border p-5"
+        >
+          <div className="flex items-center gap-3 mb-4">
+            <ArrowDownLeft className="w-5 h-5 text-success" />
+            <h3 className="text-lg font-bold text-white">Raid-Bilanz</h3>
+          </div>
+          <div className="h-[200px]">
+            <ResponsiveContainer width="100%" height="100%">
+              <BarChart data={balanceData} layout="vertical" margin={{ left: 20, right: 40 }}>
+                <CartesianGrid strokeDasharray="3 3" stroke="rgba(194, 221, 240, 0.15)" />
+                <XAxis type="number" stroke="#9ca3af" fontSize={12} />
+                <YAxis type="category" dataKey="name" stroke="#9ca3af" fontSize={13} width={90} />
+                <Tooltip
+                  contentStyle={{
+                    backgroundColor: '#1f2937',
+                    border: '1px solid rgba(194, 221, 240, 0.25)',
+                    borderRadius: '8px',
+                  }}
+                  labelStyle={{ color: '#fff' }}
+                  formatter={(value) => [formatNumber(value as number), 'Raids']}
+                />
+                <Bar dataKey="value" radius={[0, 6, 6, 0]} barSize={32}>
+                  {balanceData.map((entry, index) => (
+                    <Cell key={index} fill={entry.fill} />
+                  ))}
+                </Bar>
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
+          <div className="flex justify-center gap-6 mt-2 text-sm">
+            <span className="flex items-center gap-2">
+              <ArrowUpRight className="w-4 h-4 text-primary" />
+              <span className="text-text-secondary">Gesendet:</span>
+              <span className="text-white font-medium">{formatNumber(summary.raid_balance.sent)}</span>
+            </span>
+            <span className="flex items-center gap-2">
+              <ArrowDownLeft className="w-4 h-4 text-success" />
+              <span className="text-text-secondary">Empfangen:</span>
+              <span className="text-white font-medium">{formatNumber(summary.raid_balance.received)}</span>
+            </span>
+          </div>
+        </motion.div>
+      )}
+
+      {/* 2. Raid-Impact Zusammenfassung (KPI cards) */}
+      {summary && (
+        <motion.div
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4"
+        >
+          <div className="bg-card rounded-xl border border-border p-4">
+            <div className="w-10 h-10 rounded-lg bg-primary/10 text-primary flex items-center justify-center mb-3">
+              <Users className="w-5 h-5" />
+            </div>
+            <div className="text-sm text-text-secondary mb-1">Ø Viewer empfangen</div>
+            <div className="text-xl font-bold text-white">{formatNumber(summary.avg_viewers_received, 1)}</div>
+          </div>
+          <div className="bg-card rounded-xl border border-border p-4">
+            <div className="w-10 h-10 rounded-lg bg-success/10 text-success flex items-center justify-center mb-3">
+              <TrendingUp className="w-5 h-5" />
+            </div>
+            <div className="text-sm text-text-secondary mb-1">Ø Boost</div>
+            <div className={`text-xl font-bold ${boostColor(summary.avg_boost_pct)}`}>
+              {summary.avg_boost_pct !== null ? formatPercent(summary.avg_boost_pct) : '-'}
+            </div>
+          </div>
+          <div className="bg-card rounded-xl border border-border p-4">
+            <div className="w-10 h-10 rounded-lg bg-accent/10 text-accent flex items-center justify-center mb-3">
+              <Clock className="w-5 h-5" />
+            </div>
+            <div className="text-sm text-text-secondary mb-1">Ø 15m Retention</div>
+            <div className={`text-xl font-bold ${retentionColorIncoming(summary.avg_retention_15m)}`}>
+              {summary.avg_retention_15m !== null ? formatPercent(summary.avg_retention_15m) : '-'}
+            </div>
+          </div>
+          <div className="bg-card rounded-xl border border-border p-4">
+            <div className="w-10 h-10 rounded-lg bg-warning/10 text-warning flex items-center justify-center mb-3">
+              <Star className="w-5 h-5" />
+            </div>
+            <div className="text-sm text-text-secondary mb-1">Bester Raider</div>
+            <div className="text-xl font-bold text-white truncate">
+              {summary.best_raider ?? '-'}
+            </div>
+          </div>
+        </motion.div>
+      )}
+
+      {/* 3. Incoming Raids Tabelle */}
+      <motion.div
+        initial={{ opacity: 0, y: 20 }}
+        animate={{ opacity: 1, y: 0 }}
+        className="bg-card rounded-xl border border-border p-5"
+      >
+        <div className="flex items-center gap-3 mb-4">
+          <ArrowDownLeft className="w-5 h-5 text-success" />
+          <h3 className="text-lg font-bold text-white">Eingehende Raids</h3>
+          <span className="text-sm text-text-secondary ml-auto">{incomingRaids.length} Raids</span>
+        </div>
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="border-b border-border">
+                <th className="text-left py-2 text-text-secondary font-medium">Von</th>
+                <th className="text-left py-2 text-text-secondary font-medium">Datum</th>
+                <th className="text-right py-2 text-text-secondary font-medium">Viewer</th>
+                <th className="text-right py-2 text-text-secondary font-medium">Boost %</th>
+                <th className="text-right py-2 text-text-secondary font-medium">15m Ret.</th>
+                <th className="text-right py-2 text-text-secondary font-medium">Follows</th>
+              </tr>
+            </thead>
+            <tbody>
+              {incomingRaids.slice(0, 20).map((raid, i) => (
+                <tr key={`${raid.from_channel}-${raid.detected_at}-${i}`} className="border-b border-border/50 hover:bg-background/50">
+                  <td className="py-2 text-white font-medium">{raid.from_channel}</td>
+                  <td className="py-2 text-text-secondary">{formatDate(raid.detected_at)}</td>
+                  <td className="py-2 text-right text-text-secondary">{formatNumber(raid.viewers_sent)}</td>
+                  <td className={`py-2 text-right font-medium ${boostColor(raid.impact.boost_pct)}`}>
+                    {raid.impact.boost_pct !== null ? `${raid.impact.boost_pct > 0 ? '+' : ''}${formatPercent(raid.impact.boost_pct)}` : '-'}
+                  </td>
+                  <td className={`py-2 text-right font-medium ${retentionColorIncoming(raid.impact.retention_15m_pct)}`}>
+                    {raid.impact.retention_15m_pct !== null ? formatPercent(raid.impact.retention_15m_pct) : '-'}
+                  </td>
+                  <td className="py-2 text-right text-text-secondary">
+                    {raid.impact.follows_after_raid > 0 ? (
+                      <span className="text-success flex items-center justify-end gap-1">
+                        <UserPlus className="w-3 h-3" />
+                        {raid.impact.follows_after_raid}
+                      </span>
+                    ) : '-'}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </motion.div>
+
+      {/* 4. Top Raiders */}
+      {topRaiders.length > 0 && (
+        <motion.div
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          className="bg-card rounded-xl border border-border p-5"
+        >
+          <div className="flex items-center gap-3 mb-4">
+            <Crown className="w-5 h-5 text-warning" />
+            <h3 className="text-lg font-bold text-white">Top Raiders</h3>
+          </div>
+          <div className="space-y-3">
+            {topRaiders.map((raider, i) => (
+              <div key={raider.from_channel} className="flex items-center gap-3 p-3 bg-background/50 rounded-lg">
+                <div className={`w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold ${
+                  i === 0 ? 'bg-warning/20 text-warning' : 'bg-border text-text-secondary'
+                }`}>
+                  {i + 1}
+                </div>
+                <div className="flex-1 min-w-0">
+                  <div className="text-white font-medium truncate">{raider.from_channel}</div>
+                  <div className="text-xs text-text-secondary">
+                    {raider.raid_count} Raid{raider.raid_count !== 1 ? 's' : ''} · Ø {formatNumber(raider.avg_viewers)} Viewer
+                  </div>
+                </div>
+                <div className="text-right">
+                  <div className={`text-sm font-medium ${boostColor(raider.avg_boost)}`}>
+                    {raider.avg_boost !== null ? `${raider.avg_boost > 0 ? '+' : ''}${formatPercent(raider.avg_boost)}` : '-'}
+                  </div>
+                  <div className="text-xs text-text-secondary">Ø Boost</div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </motion.div>
+      )}
+    </>
+  );
 }
 
 export default Growth;
