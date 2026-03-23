@@ -271,7 +271,7 @@ function AnalyticsDashboard() {
           )}
 
           {activeTab === 'streams' && (
-            <Sessions streamer={streamer || ''} days={days} />
+            <Sessions streamer={streamer || ''} days={days} onSessionClick={handleSessionClick} />
           )}
 
           {activeTab === 'chat' && (

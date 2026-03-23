@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Play, Clock, Users, TrendingUp, ChevronDown, ChevronUp, MessageCircle, AlertCircle, Loader2 } from 'lucide-react';
+import { Play, Clock, Users, TrendingUp, ChevronDown, ChevronUp, MessageCircle, AlertCircle, Loader2, ExternalLink } from 'lucide-react';
 import { useQuery } from '@tanstack/react-query';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 import { fetchOverview, fetchSessionDetail } from '@/api/client';
@@ -10,9 +10,10 @@ import type { DashboardOverview, StreamSession, TimeRange } from '@/types/analyt
 interface SessionsProps {
   streamer: string;
   days: TimeRange;
+  onSessionClick?: (sessionId: number) => void;
 }
 
-export function Sessions({ streamer, days }: SessionsProps) {
+export function Sessions({ streamer, days, onSessionClick }: SessionsProps) {
   const [expandedId, setExpandedId] = useState<number | null>(null);
 
   const { data, isLoading } = useQuery<DashboardOverview>({
@@ -81,6 +82,7 @@ export function Sessions({ streamer, days }: SessionsProps) {
             index={i}
             isExpanded={expandedId === session.id}
             onToggle={() => setExpandedId(expandedId === session.id ? null : session.id)}
+            onSessionClick={onSessionClick}
           />
         ))}
       </motion.div>
@@ -123,9 +125,10 @@ interface SessionCardProps {
   index: number;
   isExpanded: boolean;
   onToggle: () => void;
+  onSessionClick?: (sessionId: number) => void;
 }
 
-function SessionCard({ session, index, isExpanded, onToggle }: SessionCardProps) {
+function SessionCard({ session, index, isExpanded, onToggle, onSessionClick }: SessionCardProps) {
   const durationHours = (session.duration / 3600).toFixed(1);
   const retentionColor = session.retention10m >= 60 ? 'text-success' : session.retention10m >= 40 ? 'text-warning' : 'text-error';
 
@@ -178,6 +181,15 @@ function SessionCard({ session, index, isExpanded, onToggle }: SessionCardProps)
               </div>
               <div className="text-xs text-text-secondary">10m Retention</div>
             </div>
+            {onSessionClick && (
+              <button
+                onClick={(e) => { e.stopPropagation(); onSessionClick(session.id); }}
+                className="text-xs text-primary hover:text-primary/80 flex items-center gap-1 transition-colors"
+              >
+                <ExternalLink className="w-3 h-3" />
+                Details
+              </button>
+            )}
             {isExpanded ? (
               <ChevronUp className="w-5 h-5 text-text-secondary" />
             ) : (

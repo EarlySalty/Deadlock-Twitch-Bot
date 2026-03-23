@@ -53,11 +53,21 @@ export function Comparison({ streamer, days }: ComparisonProps) {
   return (
     <div className="space-y-6">
       {/* Peer Group Comparison Section */}
-      {comparison?.peerGroup && (
+      {comparison?.peerGroup ? (
         <PeerGroupSection
           peerGroup={comparison.peerGroup}
           yourStats={comparison.yourStats}
         />
+      ) : comparison && (
+        <div className="bg-card rounded-xl border border-border p-6">
+          <div className="flex items-center gap-3 mb-2">
+            <Award className="w-6 h-6 text-accent" />
+            <h2 className="text-xl font-bold text-white">Peer-Group Vergleich</h2>
+          </div>
+          <p className="text-text-secondary text-sm">
+            Nicht genug Daten für einen Peer-Group-Vergleich. Streame weiter, damit eine Zuordnung erfolgen kann.
+          </p>
+        </div>
       )}
 
       {/* Category Comparison Section */}
