@@ -15,7 +15,9 @@ import type {
   ViewerOverlap,
   TagPerformance,
   TagPerformanceExtended,
+  TagAnalysisResponse,
   TitlePerformance,
+  TitlePerformanceResponse,
   RankingEntry,
   SessionEvent,
   StreamSession,
@@ -903,12 +905,17 @@ export async function fetchTagAnalysisExtended(
   streamer: string | null,
   days: TimeRange,
   limit: number = 20
-): Promise<TagPerformanceExtended[]> {
-  return fetchApi<TagPerformanceExtended[]>('/tag-analysis-extended', {
+): Promise<TagAnalysisResponse> {
+  const raw = await fetchApi<TagAnalysisResponse | TagPerformanceExtended[]>('/tag-analysis-extended', {
     streamer: streamer || '',
     days,
     limit,
   });
+  // Handle both old (array) and new (object with tags/peerBenchmark) response formats
+  if (Array.isArray(raw)) {
+    return { tags: raw, peerBenchmark: null };
+  }
+  return raw;
 }
 
 // Title Performance Analysis
@@ -916,12 +923,17 @@ export async function fetchTitlePerformance(
   streamer: string | null,
   days: TimeRange,
   limit: number = 20
-): Promise<TitlePerformance[]> {
-  return fetchApi<TitlePerformance[]>('/title-performance', {
+): Promise<TitlePerformanceResponse> {
+  const raw = await fetchApi<TitlePerformanceResponse | TitlePerformance[]>('/title-performance', {
     streamer: streamer || '',
     days,
     limit,
   });
+  // Handle both old (array) and new (object with titles/peerBenchmark) response formats
+  if (Array.isArray(raw)) {
+    return { titles: raw, peerBenchmark: null };
+  }
+  return raw;
 }
 
 // Combined Audience Insights (all in one call)
@@ -1184,7 +1196,8 @@ export async function fetchCategoryLeaderboard(
   days: number,
   limit: number = 25,
   sort: 'avg' | 'peak' = 'avg',
-  excludeExternal = false
+  excludeExternal = false,
+  tier?: string | null
 ): Promise<CategoryLeaderboard> {
   return fetchApi<CategoryLeaderboard>('/category-leaderboard', {
     streamer: streamer || '',
@@ -1192,6 +1205,7 @@ export async function fetchCategoryLeaderboard(
     limit,
     sort,
     ...(excludeExternal && { exclude_external: '1' }),
+    ...(tier && { tier }),
   });
 }
 

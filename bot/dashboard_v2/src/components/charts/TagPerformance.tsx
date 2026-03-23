@@ -1,20 +1,21 @@
 import { useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Tag, TrendingUp, TrendingDown, Minus, Users, Clock, UserPlus, ChevronDown, ChevronUp, Trophy, Target } from 'lucide-react';
-import type { TagPerformanceExtended, TitlePerformance } from '@/types/analytics';
+import type { TagPerformanceExtended, TitlePerformance, PeerBenchmark } from '@/types/analytics';
 
 interface TagPerformanceProps {
   tagData: TagPerformanceExtended[];
-  titleData?: TitlePerformance[];
+  titleData?: TitlePerformance[] | null;
+  peerBenchmark?: PeerBenchmark | null;
 }
 
-export function TagPerformanceChart({ tagData, titleData }: TagPerformanceProps) {
+export function TagPerformanceChart({ tagData, titleData, peerBenchmark }: TagPerformanceProps) {
   const [activeTab, setActiveTab] = useState<'tags' | 'titles'>('tags');
   const [expandedTag, setExpandedTag] = useState<string | null>(null);
 
   // Sort by avgViewers
   const sortedTags = [...tagData].sort((a, b) => b.avgViewers - a.avgViewers);
-  const sortedTitles = titleData ? [...titleData].sort((a, b) => b.avgViewers - a.avgViewers) : [];
+  const sortedTitles = titleData && titleData.length > 0 ? [...titleData].sort((a, b) => b.avgViewers - a.avgViewers) : [];
   const strongestGrowingTag = sortedTags.find(t => t.trend === 'up' && (t.trendValue ?? 0) > 10);
 
   const maxViewers = Math.max(...sortedTags.map(t => t.avgViewers), 1);
@@ -85,6 +86,20 @@ export function TagPerformanceChart({ tagData, titleData }: TagPerformanceProps)
               </div>
             )}
 
+            {/* Peer Benchmark Legend */}
+            {peerBenchmark && (
+              <div className="flex items-center gap-3 mb-3 text-xs text-text-secondary">
+                <span className="flex items-center gap-1">
+                  <span className="w-2 h-2 rounded-full bg-success inline-block" />
+                  \u00dcber Peer-Median ({peerBenchmark.avgViewers.toFixed(0)} \u00d8)
+                </span>
+                <span className="flex items-center gap-1">
+                  <span className="w-2 h-2 rounded-full bg-error inline-block" />
+                  Unter Peer-Median
+                </span>
+              </div>
+            )}
+
             {/* Full List */}
             <div className="space-y-2 max-h-[400px] overflow-y-auto pr-2">
               {sortedTags.map((tag, i) => (
@@ -95,6 +110,7 @@ export function TagPerformanceChart({ tagData, titleData }: TagPerformanceProps)
                   maxViewers={maxViewers}
                   isExpanded={expandedTag === tag.tagName}
                   onToggle={() => setExpandedTag(expandedTag === tag.tagName ? null : tag.tagName)}
+                  peerBenchmark={peerBenchmark}
                 />
               ))}
             </div>
@@ -193,12 +209,14 @@ interface TagRowProps {
   maxViewers: number;
   isExpanded: boolean;
   onToggle: () => void;
+  peerBenchmark?: PeerBenchmark | null;
 }
 
-function TagRow({ tag, index, maxViewers, isExpanded, onToggle }: TagRowProps) {
+function TagRow({ tag, index, maxViewers, isExpanded, onToggle, peerBenchmark }: TagRowProps) {
   const barWidth = (tag.avgViewers / maxViewers) * 100;
   const TrendIcon = tag.trend === 'up' ? TrendingUp : tag.trend === 'down' ? TrendingDown : Minus;
   const trendColor = tag.trend === 'up' ? 'text-success' : tag.trend === 'down' ? 'text-error' : 'text-text-secondary';
+  const abovePeerMedian = peerBenchmark ? tag.avgViewers >= peerBenchmark.avgViewers : null;
 
   return (
     <motion.div
@@ -238,15 +256,23 @@ function TagRow({ tag, index, maxViewers, isExpanded, onToggle }: TagRowProps) {
             initial={{ width: 0 }}
             animate={{ width: `${barWidth}%` }}
             transition={{ delay: 0.2, duration: 0.4 }}
-            className="h-full bg-gradient-to-r from-accent to-primary rounded-full"
+            className={`h-full rounded-full ${
+              abovePeerMedian === null
+                ? 'bg-gradient-to-r from-accent to-primary'
+                : abovePeerMedian
+                  ? 'bg-success'
+                  : 'bg-error'
+            }`}
           />
         </div>
 
         {/* Quick Stats */}
         <div className="flex items-center gap-4 mt-2 text-xs text-text-secondary">
-          <span className="flex items-center gap-1">
+          <span className={`flex items-center gap-1 ${
+            abovePeerMedian === true ? 'text-success' : abovePeerMedian === false ? 'text-error' : ''
+          }`}>
             <Users className="w-3 h-3" />
-            Ø {tag.avgViewers.toFixed(0)}
+            \u00d8 {tag.avgViewers.toFixed(0)}
           </span>
           <span className="flex items-center gap-1">
             <Target className="w-3 h-3" />

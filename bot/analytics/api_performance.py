@@ -30,6 +30,143 @@ EXTERNAL_REACH_AVG_THRESHOLD = 100.0
 class _AnalyticsPerformanceMixin:
     """Mixin providing performance metrics endpoints."""
 
+    def _get_peer_group_stats(self, conn, streamer_login: str, since_date: str) -> dict | None:
+        """Calculate peer group stats for a streamer.
+
+        Peer-Group Tiers:
+        - starter: 0\u201315 avg viewers
+        - rising: 15\u201350 avg viewers
+        - established: 50\u2013150 avg viewers
+        - featured: 150\u2013500 avg viewers
+        - top: 500+ avg viewers
+        """
+        import statistics as _stats
+
+        # 1. Get all streamer averages in the category
+        all_avgs = conn.execute(
+            """
+            SELECT streamer, AVG(viewer_count) AS avg_vc
+            FROM twitch_stats_category
+            WHERE ts_utc >= %s
+            GROUP BY streamer
+            """,
+            (since_date,),
+        ).fetchall()
+
+        if not all_avgs:
+            return None
+
+        # 2. Build dict of streamer -> avg_vc
+        streamer_avgs: dict[str, float] = {
+            str(r[0]).lower(): float(r[1]) for r in all_avgs if r[1] is not None
+        }
+
+        # 3. Determine this streamer's average
+        my_avg = streamer_avgs.get(streamer_login.lower())
+        if my_avg is None:
+            # Streamer not in category data, try from sessions
+            sess_row = conn.execute(
+                """
+                SELECT AVG(avg_viewers) as avg_vc
+                FROM twitch_stream_sessions
+                WHERE LOWER(streamer_login) = %s AND started_at >= %s AND ended_at IS NOT NULL
+                """,
+                (streamer_login.lower(), since_date),
+            ).fetchone()
+            if sess_row and sess_row[0]:
+                my_avg = float(sess_row[0])
+            else:
+                return None
+
+        # 4. Classify into tier
+        def _get_tier(avg: float) -> tuple[str, str]:
+            if avg < 15:
+                return ("starter", "Starter (0\u201315 \u00d8)")
+            if avg < 50:
+                return ("rising", "Rising (15\u201350 \u00d8)")
+            if avg < 150:
+                return ("established", "Established (50\u2013150 \u00d8)")
+            if avg < 500:
+                return ("featured", "Featured (150\u2013500 \u00d8)")
+            return ("top", "Top (500+ \u00d8)")
+
+        my_tier, my_tier_label = _get_tier(my_avg)
+
+        # 5. Get all streamers in same tier
+        peer_logins = [s for s, avg in streamer_avgs.items() if _get_tier(avg)[0] == my_tier]
+
+        if not peer_logins:
+            return None
+
+        # 6. Get session-level metrics for peer streamers
+        peer_metrics = conn.execute(
+            """
+            SELECT
+                LOWER(s.streamer_login) as login,
+                AVG(s.avg_viewers) as avg_viewers,
+                MAX(s.peak_viewers) as peak_viewers,
+                AVG(s.retention_10m) as retention_10m,
+                AVG(CASE WHEN s.avg_viewers > 0
+                    THEN s.unique_chatters * 100.0 / s.avg_viewers ELSE 0 END) as chat_health
+            FROM twitch_stream_sessions s
+            WHERE LOWER(s.streamer_login) = ANY(%s)
+              AND s.started_at >= %s AND s.ended_at IS NOT NULL
+            GROUP BY LOWER(s.streamer_login)
+            """,
+            (peer_logins, since_date),
+        ).fetchall()
+
+        # 7. Calculate median and percentile for each metric
+        def _safe_median(values: list[float]) -> float | None:
+            return _stats.median(values) if values else None
+
+        def _peer_percentile(sorted_vals: list[float], value: float | None) -> float | None:
+            if not sorted_vals or value is None:
+                return None
+            count_below = sum(1 for v in sorted_vals if v < value)
+            return round(count_below / len(sorted_vals) * 100, 1)
+
+        avg_viewers_list = sorted([float(r[1]) for r in peer_metrics if r[1] is not None])
+        peak_viewers_list = sorted([float(r[2]) for r in peer_metrics if r[2] is not None])
+        retention_list = sorted([float(r[3]) for r in peer_metrics if r[3] is not None])
+        chat_health_list = sorted([float(r[4]) for r in peer_metrics if r[4] is not None])
+
+        # Get this streamer's metrics from the peer query
+        my_row = next(
+            (r for r in peer_metrics if str(r[0]).lower() == streamer_login.lower()),
+            None,
+        )
+
+        return {
+            "tier": my_tier,
+            "tierLabel": my_tier_label,
+            "tierSize": len(peer_logins),
+            "peerAvg": {
+                "avgViewers": round(_safe_median(avg_viewers_list) or 0, 1),
+                "peakViewers": round(_safe_median(peak_viewers_list) or 0),
+                "retention10m": round((_safe_median(retention_list) or 0) * 100, 1),
+                "chatHealth": round(_safe_median(chat_health_list) or 0, 1),
+            },
+            "peerPercentiles": {
+                "avgViewers": _peer_percentile(
+                    avg_viewers_list,
+                    float(my_row[1]) if my_row and my_row[1] else my_avg,
+                ),
+                "peakViewers": _peer_percentile(
+                    peak_viewers_list,
+                    float(my_row[2]) if my_row and my_row[2] else None,
+                ),
+                "retention10m": _peer_percentile(
+                    retention_list,
+                    float(my_row[3]) if my_row and my_row[3] else None,
+                ),
+                "chatHealth": _peer_percentile(
+                    chat_health_list,
+                    float(my_row[4]) if my_row and my_row[4] else None,
+                ),
+            },
+        }
+
     async def _api_v2_hourly_heatmap(self, request: web.Request) -> web.Response:
         """Get hourly heatmap data."""
         self._require_v2_auth(request)
@@ -371,7 +508,20 @@ class _AnalyticsPerformanceMixin:
                         }
                     )
 
-                return web.json_response(result)
+                # Peer group benchmark for tag comparison
+                peer_benchmark = None
+                if streamer_login:
+                    peer_group = self._get_peer_group_stats(conn, streamer_login, since_date)
+                    if peer_group:
+                        peer_benchmark = {
+                            "avgViewers": peer_group["peerAvg"]["avgViewers"],
+                            "retention10m": peer_group["peerAvg"]["retention10m"],
+                        }
+
+                return web.json_response({
+                    "tags": result,
+                    "peerBenchmark": peer_benchmark,
+                })
         except Exception as exc:
             log.exception("Error in tag analysis extended API")
             return analytics_internal_error_response()
@@ -452,7 +602,19 @@ class _AnalyticsPerformanceMixin:
                     for row in rows
                 ]
 
-                return web.json_response(result)
+                # Peer group benchmark for title comparison
+                peer_group = self._get_peer_group_stats(conn, streamer, since_date)
+                peer_benchmark = None
+                if peer_group:
+                    peer_benchmark = {
+                        "avgViewers": peer_group["peerAvg"]["avgViewers"],
+                        "retention10m": peer_group["peerAvg"]["retention10m"],
+                    }
+
+                return web.json_response({
+                    "titles": result,
+                    "peerBenchmark": peer_benchmark,
+                })
         except Exception as exc:
             log.exception("Error in title performance API")
             return analytics_internal_error_response()
@@ -736,6 +898,9 @@ class _AnalyticsPerformanceMixin:
                     else 0
                 )
 
+                # Peer group comparison
+                peer_group = self._get_peer_group_stats(conn, streamer, since_date)
+
                 return web.json_response(
                     {
                         "yourStats": {
@@ -758,6 +923,7 @@ class _AnalyticsPerformanceMixin:
                         },
                         "categoryRank": category_rank,
                         "categoryTotal": category_total,
+                        "peerGroup": peer_group,
                     }
                 )
         except Exception as exc:
@@ -882,10 +1048,20 @@ class _AnalyticsPerformanceMixin:
         limit = min(max(limit, 5), 100)
         sort_mode = request.query.get("sort", "avg")  # avg or peak
         exclude_external = request.query.get("exclude_external", "0") == "1"
+        tier_filter = request.query.get("tier", "").strip().lower() or None  # starter/rising/established/featured/top
         threshold: float | None = EXTERNAL_REACH_AVG_THRESHOLD if exclude_external else None
 
         # HAVING clause appended when external-reach filter is active
         lb_having = "HAVING AVG(c.viewer_count) <= %s" if threshold is not None else ""
+
+        # Tier boundaries for filtering
+        _tier_ranges: dict[str, tuple[float, float]] = {
+            "starter": (0, 15),
+            "rising": (15, 50),
+            "established": (50, 150),
+            "featured": (150, 500),
+            "top": (500, float("inf")),
+        }
 
         try:
             with storage.readonly_connection() as conn:
@@ -923,7 +1099,22 @@ class _AnalyticsPerformanceMixin:
 
                 rows = conn.execute(leaderboard_sql, tuple(lb_params)).fetchall()
 
+                # Apply tier filter if requested
+                if tier_filter and tier_filter in _tier_ranges:
+                    t_min, t_max = _tier_ranges[tier_filter]
+                    rows = [
+                        r for r in rows
+                        if r[1] is not None and t_min <= float(r[1]) < t_max
+                    ]
+
                 total_streamers = len(rows)
+
+                # Determine the requesting streamer's tier
+                your_tier = None
+                if streamer:
+                    peer_group = self._get_peer_group_stats(conn, streamer, since_date)
+                    if peer_group:
+                        your_tier = peer_group["tier"]
 
                 # Build ranked list
                 leaderboard = []
@@ -956,6 +1147,7 @@ class _AnalyticsPerformanceMixin:
                         "leaderboard": leaderboard,
                         "totalStreamers": total_streamers,
                         "yourRank": your_rank,
+                        "yourTier": your_tier,
                     }
                 )
         except Exception as exc:

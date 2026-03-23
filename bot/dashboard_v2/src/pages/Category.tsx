@@ -21,12 +21,14 @@ interface CategoryProps {
 type SortKey = 'rank' | 'avgViewers' | 'peakViewers';
 type SortDir = 'asc' | 'desc';
 type PartnerFilter = 'all' | 'partner' | 'community';
+type TierFilter = 'all' | 'peer';
 
 const ITEMS_PER_PAGE = 50;
 
 export function Category({ streamer, days, onStreamerSelect, onNavigate }: CategoryProps) {
   const [search, setSearch] = useState('');
   const [partnerFilter, setPartnerFilter] = useState<PartnerFilter>('all');
+  const [tierFilter, setTierFilter] = useState<TierFilter>('all');
   const [sortKey, setSortKey] = useState<SortKey>('rank');
   const [sortDir, setSortDir] = useState<SortDir>('asc');
   const [page, setPage] = useState(0);
@@ -36,15 +38,39 @@ export function Category({ streamer, days, onStreamerSelect, onNavigate }: Categ
 
   const { data: activitySeries } = useCategoryActivitySeries(days);
 
+  // Fetch streamer's tier for peer-group filtering
+  const { data: streamerLeaderboard } = useQuery({
+    queryKey: ['category-leaderboard-streamer-tier', streamer, days],
+    queryFn: () => fetchCategoryLeaderboard(streamer, days, 5, 'avg', false),
+    staleTime: 5 * 60 * 1000,
+    enabled: !!streamer,
+  });
+
+  const yourTier = streamerLeaderboard?.yourTier ?? null;
+
   const { data: catLeaderboard, isLoading: loadingCat } = useQuery({
-    queryKey: ['category-leaderboard-all', days, excludeExternal],
-    queryFn: () => fetchCategoryLeaderboard(null, days, 300, 'avg', excludeExternal),
+    queryKey: ['category-leaderboard-all', days, excludeExternal, tierFilter, yourTier],
+    queryFn: () => fetchCategoryLeaderboard(
+      streamer,
+      days,
+      300,
+      'avg',
+      excludeExternal,
+      tierFilter === 'peer' && yourTier ? yourTier : undefined
+    ),
     staleTime: 5 * 60 * 1000,
   });
 
   const { data: trackedLeaderboard, isLoading: loadingTracked } = useQuery({
-    queryKey: ['tracked-leaderboard-all', days, excludeExternal],
-    queryFn: () => fetchCategoryLeaderboard(null, days, 300, 'avg', excludeExternal),
+    queryKey: ['tracked-leaderboard-all', days, excludeExternal, tierFilter, yourTier],
+    queryFn: () => fetchCategoryLeaderboard(
+      streamer,
+      days,
+      300,
+      'avg',
+      excludeExternal,
+      tierFilter === 'peer' && yourTier ? yourTier : undefined
+    ),
     staleTime: 5 * 60 * 1000,
   });
 
@@ -224,6 +250,25 @@ export function Category({ streamer, days, onStreamerSelect, onNavigate }: Categ
             ))}
           </div>
 
+          {/* Tier filter (peer group) */}
+          {streamer && yourTier && (
+            <div className="flex items-center gap-1 bg-background border border-border rounded-lg p-1">
+              {([['all', 'Alle Streamer'], ['peer', 'Meine Peer-Group']] as const).map(([key, label]) => (
+                <button
+                  key={key}
+                  onClick={() => { setTierFilter(key); setPage(0); }}
+                  className={`px-3 py-1 rounded-md text-xs font-medium transition-colors ${
+                    tierFilter === key
+                      ? 'bg-accent text-white'
+                      : 'text-text-secondary hover:text-white'
+                  }`}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+          )}
+
           {/* External-reach filter */}
           <button
             onClick={() => { setExcludeExternal(e => !e); setPage(0); }}
@@ -242,6 +287,7 @@ export function Category({ streamer, days, onStreamerSelect, onNavigate }: Categ
         {/* Result count */}
         <div className="text-xs text-text-secondary">
           {filtered.length} von {rawEntries.length} Streamern
+          {tierFilter === 'peer' && yourTier && ` (Peer-Group: ${yourTier})`}
           {search && ` – Filter: "${search}"`}
         </div>
       </div>

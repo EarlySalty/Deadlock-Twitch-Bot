@@ -196,6 +196,29 @@ export interface ViewerOverlap {
   jaccard?: number;
 }
 
+export interface PeerGroup {
+  tier: string;
+  tierLabel: string;
+  tierSize: number;
+  peerAvg: {
+    avgViewers: number;
+    peakViewers: number;
+    retention10m: number;
+    chatHealth: number;
+  };
+  peerPercentiles: {
+    avgViewers: number | null;
+    peakViewers: number | null;
+    retention10m: number | null;
+    chatHealth: number | null;
+  };
+}
+
+export interface PeerBenchmark {
+  avgViewers: number;
+  retention10m: number;
+}
+
 export interface CategoryComparison {
   yourStats: {
     avgViewers: number;
@@ -217,6 +240,7 @@ export interface CategoryComparison {
   };
   categoryRank?: number;
   categoryTotal?: number;
+  peerGroup: PeerGroup | null;
 }
 
 export interface TagPerformance {
@@ -407,6 +431,18 @@ export interface TitlePerformance {
   keywords: string[];           // Extrahierte Keywords
 }
 
+// API Response wrapper for title performance (includes peer benchmark)
+export interface TitlePerformanceResponse {
+  titles: TitlePerformance[];
+  peerBenchmark: PeerBenchmark | null;
+}
+
+// API Response wrapper for tag analysis (includes peer benchmark)
+export interface TagAnalysisResponse {
+  tags: TagPerformanceExtended[];
+  peerBenchmark: PeerBenchmark | null;
+}
+
 // Kombinierte Funnel & Distribution Daten
 export interface AudienceInsights {
   watchTimeDistribution: WatchTimeDistribution;
@@ -454,6 +490,7 @@ export interface CategoryLeaderboard {
   leaderboard: LeaderboardEntry[];
   totalStreamers: number;
   yourRank: number | null;
+  yourTier?: string | null;
 }
 
 // Coaching Types

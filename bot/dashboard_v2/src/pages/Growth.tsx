@@ -30,8 +30,14 @@ export function Growth({ streamer, days }: GrowthProps) {
     enabled: true,
   });
 
-  const { data: tagData } = useTagAnalysisExtended(streamer, days);
-  const { data: titleData } = useTitlePerformance(streamer, days);
+  const { data: tagResponse } = useTagAnalysisExtended(streamer, days);
+  const { data: titleResponse } = useTitlePerformance(streamer, days);
+
+  // Extract tags/titles and peer benchmarks from response wrappers
+  const tagData = tagResponse?.tags ?? null;
+  const titleData = titleResponse?.titles ?? null;
+  const tagPeerBenchmark = tagResponse?.peerBenchmark ?? null;
+  const titlePeerBenchmark = titleResponse?.peerBenchmark ?? null;
   const { data: raidRetentionData } = useRaidRetention(streamer, days);
   const { data: raidAnalyticsData } = useRaidAnalytics(streamer, days);
 
@@ -207,6 +213,7 @@ export function Growth({ streamer, days }: GrowthProps) {
           <TagPerformanceChart
             tagData={tagData || mockTagData}
             titleData={titleData}
+            peerBenchmark={tagPeerBenchmark || titlePeerBenchmark}
           />
         )}
 

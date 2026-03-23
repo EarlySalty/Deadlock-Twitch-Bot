@@ -82,8 +82,8 @@ export function Audience({ streamer, days }: AudienceProps) {
 
   const watchTimeData = watchTime ?? null;
   const funnelData = funnel ?? null;
-  const tagData = tags ?? null;
-  const titleData = titles ?? null;
+  const tagData = tags?.tags ?? null;
+  const titleData = titles?.titles ?? null;
   const demographicsData = demographics ?? null;
   const hasReliableWatchTime = watchTimeData?.dataQuality?.method === 'real_samples';
   const noData =

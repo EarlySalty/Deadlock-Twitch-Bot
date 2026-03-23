@@ -1,12 +1,12 @@
 import { useState } from 'react';
 import { motion } from 'framer-motion';
-import { Scale, Users, TrendingUp, Target, AlertCircle, Loader2, Filter } from 'lucide-react';
+import { Scale, Users, TrendingUp, Target, AlertCircle, Loader2, Filter, Award } from 'lucide-react';
 import { useQuery } from '@tanstack/react-query';
 import { fetchCategoryComparison, fetchViewerOverlap } from '@/api/client';
 import { useAudienceSharing } from '@/hooks/useAnalytics';
 import { AudienceSharing } from '@/components/charts/AudienceSharing';
 import { PlanGateCard } from '@/components/cards/PlanGateCard';
-import type { CategoryComparison, ViewerOverlap } from '@/types/analytics';
+import type { CategoryComparison, ViewerOverlap, PeerGroup } from '@/types/analytics';
 
 import type { TimeRange } from '@/types/analytics';
 
@@ -52,6 +52,14 @@ export function Comparison({ streamer, days }: ComparisonProps) {
 
   return (
     <div className="space-y-6">
+      {/* Peer Group Comparison Section */}
+      {comparison?.peerGroup && (
+        <PeerGroupSection
+          peerGroup={comparison.peerGroup}
+          yourStats={comparison.yourStats}
+        />
+      )}
+
       {/* Category Comparison Section */}
       <motion.div
         initial={{ opacity: 0, y: 20 }}
@@ -61,7 +69,7 @@ export function Comparison({ streamer, days }: ComparisonProps) {
         <div className="flex items-center justify-between mb-6 flex-wrap gap-3">
           <div className="flex items-center gap-3">
             <Scale className="w-6 h-6 text-primary" />
-            <h2 className="text-xl font-bold text-white">Deadlock Kategorie-Vergleich</h2>
+            <h2 className="text-xl font-bold text-white">Gesamt-Kategorie (alle {comparison?.categoryTotal ?? '~280'} Streamer)</h2>
           </div>
           <button
             onClick={() => setExcludeExternal(e => !e)}
@@ -314,6 +322,182 @@ function OverlapBar({ rank, streamer, sharedChatters, percentage }: OverlapBarPr
 
       <div className="w-16 text-right">
         <span className="text-sm font-medium text-white">{pct.toFixed(1)}%</span>
+      </div>
+    </motion.div>
+  );
+}
+
+// ── Peer Group Section ──
+
+interface PeerGroupSectionProps {
+  peerGroup: PeerGroup;
+  yourStats: CategoryComparison['yourStats'];
+}
+
+function PeerGroupSection({ peerGroup, yourStats }: PeerGroupSectionProps) {
+  const metrics = [
+    {
+      label: 'Ø Viewer',
+      yours: yourStats.avgViewers,
+      peerMedian: peerGroup.peerAvg.avgViewers,
+      percentile: peerGroup.peerPercentiles.avgViewers,
+      format: 'number' as const,
+    },
+    {
+      label: 'Peak Viewer',
+      yours: yourStats.peakViewers,
+      peerMedian: peerGroup.peerAvg.peakViewers,
+      percentile: peerGroup.peerPercentiles.peakViewers,
+      format: 'number' as const,
+    },
+    {
+      label: '10-Min Retention',
+      yours: yourStats.retention10m,
+      peerMedian: peerGroup.peerAvg.retention10m,
+      percentile: peerGroup.peerPercentiles.retention10m,
+      format: 'percent' as const,
+    },
+    {
+      label: 'Chat Health',
+      yours: yourStats.chatHealth,
+      peerMedian: peerGroup.peerAvg.chatHealth,
+      percentile: peerGroup.peerPercentiles.chatHealth,
+      format: 'decimal' as const,
+    },
+  ];
+
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: 20 }}
+      animate={{ opacity: 1, y: 0 }}
+      className="bg-card rounded-xl border border-border p-6"
+    >
+      {/* Header with Tier Badge */}
+      <div className="flex items-center justify-between mb-6 flex-wrap gap-3">
+        <div className="flex items-center gap-3">
+          <Award className="w-6 h-6 text-accent" />
+          <h2 className="text-xl font-bold text-white">Peer-Group Vergleich</h2>
+        </div>
+        <div className="flex items-center gap-2">
+          <span className="px-3 py-1.5 rounded-lg text-sm font-medium bg-accent/15 text-accent border border-accent/30">
+            {peerGroup.tierLabel}
+          </span>
+          <span className="text-sm text-text-secondary">
+            {peerGroup.tierSize} Streamer
+          </span>
+        </div>
+      </div>
+
+      {/* Peer Comparison Bars */}
+      <div className="space-y-4">
+        {metrics.map((m, i) => (
+          <PeerMetricBar
+            key={m.label}
+            label={m.label}
+            yours={m.yours}
+            peerMedian={m.peerMedian}
+            percentile={m.percentile}
+            format={m.format}
+            delay={i * 0.1}
+          />
+        ))}
+      </div>
+    </motion.div>
+  );
+}
+
+interface PeerMetricBarProps {
+  label: string;
+  yours: number;
+  peerMedian: number;
+  percentile: number | null;
+  format: 'number' | 'percent' | 'decimal';
+  delay: number;
+}
+
+function PeerMetricBar({ label, yours, peerMedian, percentile, format, delay }: PeerMetricBarProps) {
+  const formatValue = (val: number) => {
+    if (format === 'percent') return `${val.toFixed(1)}%`;
+    if (format === 'decimal') return val.toFixed(1);
+    return val.toLocaleString('de-DE', { maximumFractionDigits: 0 });
+  };
+
+  const isAbove = yours >= peerMedian;
+  const maxVal = Math.max(yours, peerMedian, 1);
+  const yourPct = (yours / maxVal) * 100;
+  const peerPct = (peerMedian / maxVal) * 100;
+
+  // Percentile color
+  const pctColor = percentile === null
+    ? 'text-text-secondary'
+    : percentile >= 70
+      ? 'text-success'
+      : percentile >= 40
+        ? 'text-warning'
+        : 'text-error';
+
+  const pctBgColor = percentile === null
+    ? 'bg-border'
+    : percentile >= 70
+      ? 'bg-success/20'
+      : percentile >= 40
+        ? 'bg-warning/20'
+        : 'bg-error/20';
+
+  return (
+    <motion.div
+      initial={{ opacity: 0, x: -10 }}
+      animate={{ opacity: 1, x: 0 }}
+      transition={{ delay }}
+      className="p-4 bg-background rounded-lg"
+    >
+      <div className="flex items-center justify-between mb-2">
+        <span className="text-sm text-text-secondary">{label}</span>
+        {percentile !== null && (
+          <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${pctColor} ${pctBgColor}`}>
+            Top {Math.round(100 - percentile)}% in deiner Gruppe
+          </span>
+        )}
+      </div>
+
+      {/* Values */}
+      <div className="flex items-end justify-between mb-3">
+        <div>
+          <div className={`text-xl font-bold ${isAbove ? 'text-success' : 'text-error'}`}>
+            {formatValue(yours)}
+          </div>
+          <div className="text-xs text-text-secondary">Dein Wert</div>
+        </div>
+        <div className="text-right">
+          <div className="text-lg text-text-secondary">{formatValue(peerMedian)}</div>
+          <div className="text-xs text-text-secondary">Peer Median</div>
+        </div>
+      </div>
+
+      {/* Dual Bar Visualization */}
+      <div className="space-y-1">
+        <div className="flex items-center gap-2">
+          <span className="text-xs text-text-secondary w-8">Du</span>
+          <div className="flex-1 h-2.5 bg-border rounded-full overflow-hidden">
+            <motion.div
+              initial={{ width: 0 }}
+              animate={{ width: `${Math.min(100, yourPct)}%` }}
+              transition={{ delay: delay + 0.2, duration: 0.5 }}
+              className={`h-full rounded-full ${isAbove ? 'bg-success' : 'bg-error'}`}
+            />
+          </div>
+        </div>
+        <div className="flex items-center gap-2">
+          <span className="text-xs text-text-secondary w-8">Peer</span>
+          <div className="flex-1 h-2.5 bg-border rounded-full overflow-hidden">
+            <motion.div
+              initial={{ width: 0 }}
+              animate={{ width: `${Math.min(100, peerPct)}%` }}
+              transition={{ delay: delay + 0.3, duration: 0.5 }}
+              className="h-full rounded-full bg-primary/60"
+            />
+          </div>
+        </div>
       </div>
     </motion.div>
   );
