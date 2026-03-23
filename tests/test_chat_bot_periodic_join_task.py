@@ -9,6 +9,7 @@ class _FakeTask:
     def __init__(self, *, done: bool = False) -> None:
         self._done = done
         self.cancel_called = False
+        self.done_callbacks = []
 
     def done(self) -> bool:
         return self._done
@@ -16,6 +17,13 @@ class _FakeTask:
     def cancel(self) -> None:
         self.cancel_called = True
         self._done = True
+        for callback in list(self.done_callbacks):
+            callback(self)
+
+    def add_done_callback(self, callback) -> None:
+        self.done_callbacks.append(callback)
+        if self._done:
+            callback(self)
 
     def __await__(self):
         async def _wait():
@@ -42,12 +50,12 @@ class ChatBotPeriodicJoinTaskTests(unittest.IsolatedAsyncioTestCase):
         created_names: list[str | None] = []
         fake_task = _FakeTask()
 
-        def _fake_create_task(coro, *, name=None):
+        def _fake_spawn_bg_task(coro, name: str):
             created_names.append(name)
             coro.close()
             return fake_task
 
-        with patch("bot.base.asyncio.create_task", side_effect=_fake_create_task):
+        with patch.object(harness, "_spawn_bg_task", side_effect=_fake_spawn_bg_task):
             first = harness._ensure_periodic_channel_join_task()
             second = harness._ensure_periodic_channel_join_task()
 
@@ -65,4 +73,3 @@ class ChatBotPeriodicJoinTaskTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertTrue(fake_task.cancel_called)
         self.assertIsNone(harness._periodic_channel_join_task)
-

@@ -49,7 +49,7 @@ async def build_raid_oauth_callback_payload(
     state_clean = str(state or "").strip()
     error_clean = str(error or "").strip()
 
-    requested_login = state_clean
+    requested_login = ""
     session = getattr(raid_bot, "session", None) if raid_bot is not None else None
     owns_session = False
 
@@ -226,7 +226,9 @@ async def build_raid_oauth_callback_payload(
                 activate_partner_features=not had_existing_auth,
             )
             if callable(schedule_background):
-                schedule_background(followup, "twitch.raid.complete_setup")
+                scheduled = schedule_background(followup, "twitch.raid.complete_setup")
+                if scheduled is None:
+                    raise RuntimeError("failed to schedule twitch.raid.complete_setup")
             else:
                 asyncio.create_task(
                     followup,
@@ -240,7 +242,13 @@ async def build_raid_oauth_callback_payload(
                 activate_partner_features=False,
             )
             if callable(schedule_background):
-                schedule_background(followup, "twitch.raid.sync_partner_state_after_auth")
+                scheduled = schedule_background(
+                    followup, "twitch.raid.sync_partner_state_after_auth"
+                )
+                if scheduled is None:
+                    raise RuntimeError(
+                        "failed to schedule twitch.raid.sync_partner_state_after_auth"
+                    )
             else:
                 asyncio.create_task(
                     followup,
@@ -258,7 +266,10 @@ async def build_raid_oauth_callback_payload(
             "redirect_url": success_redirect_url,
         }
     except Exception:
-        log.exception("Raid OAuth callback failed for state login=%s", requested_login or state_clean)
+        log.exception(
+            "Raid OAuth callback failed for state login=%s",
+            requested_login or "<unknown>",
+        )
         return _oauth_error_payload(
             status=500,
             title=failure_title,

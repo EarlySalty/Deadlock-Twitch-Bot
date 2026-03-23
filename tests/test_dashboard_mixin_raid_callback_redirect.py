@@ -102,7 +102,7 @@ class _DummyDashboardMixin(TwitchDashboardMixin):
 
     def _spawn_bg_task(self, coro, name: str):
         self.spawned_tasks.append((name, coro))
-        return None
+        return SimpleNamespace(done=lambda: False)
 
 
 class DashboardMixinRaidCallbackRedirectTests(unittest.IsolatedAsyncioTestCase):
@@ -228,6 +228,42 @@ class DashboardMixinRaidCallbackRedirectTests(unittest.IsolatedAsyncioTestCase):
             state_discord_user_id="123456789",
             activate_partner_features=False,
         )
+
+    async def test_dashboard_callback_returns_500_when_followup_task_cannot_be_scheduled(self) -> None:
+        raid_bot = SimpleNamespace(
+            auth_manager=_FakeAuthManager(),
+            session=_FakeSession(payload={"data": [{"id": "1001", "login": "partner_one"}]}),
+            complete_setup_for_streamer=AsyncMock(),
+            _sync_partner_state_after_auth=AsyncMock(),
+        )
+        handler = _DummyDashboardMixin()
+        handler._raid_bot = raid_bot
+        handler._spawn_bg_task = lambda coro, name: (coro.close(), None)[1]
+
+        payload = await handler._dashboard_raid_oauth_callback(
+            code="oauth-code",
+            state="valid-state",
+            error="",
+        )
+
+        self.assertEqual(payload.get("status"), 500)
+        self.assertEqual(payload.get("title"), "Autorisierung fehlgeschlagen")
+
+    async def test_dashboard_callback_does_not_log_raw_state_on_early_failure(self) -> None:
+        auth_manager = _FakeAuthManager()
+        auth_manager.consume_state_details = lambda _state: (_ for _ in ()).throw(RuntimeError("boom"))
+        handler = _DummyDashboardMixin(auth_manager=auth_manager)
+
+        with patch("bot.dashboard.raids.oauth_callback.log.exception") as mocked_log_exception:
+            payload = await handler._dashboard_raid_oauth_callback(
+                code="oauth-code",
+                state="sensitive-state-token",
+                error="",
+            )
+
+        self.assertEqual(payload.get("status"), 500)
+        logged_args = mocked_log_exception.call_args.args
+        self.assertEqual(logged_args[1], "<unknown>")
 
 
 if __name__ == "__main__":
