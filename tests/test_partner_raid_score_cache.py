@@ -333,6 +333,49 @@ class PartnerRaidScoreCacheTests(unittest.TestCase):
         self.assertGreater(float(row["final_score"]), float(row["base_score"]))
         conn.close()
 
+    def test_refresh_partner_score_treats_active_manual_bundle_override_as_raid_boost(self) -> None:
+        conn = self._make_conn()
+        service = self._make_service(conn)
+        now = datetime(2026, 3, 8, 18, 0, tzinfo=UTC)
+
+        self._insert_partner(conn, "foxtrot", "6006")
+        conn.execute(
+            """
+            INSERT INTO twitch_live_state (twitch_user_id, streamer_login, is_live, last_started_at)
+            VALUES (?, ?, 1, ?)
+            """,
+            ("6006", "foxtrot", _iso_utc(now - timedelta(minutes=25))),
+        )
+        conn.execute(
+            """
+            INSERT INTO streamer_plans (
+                twitch_user_id, twitch_login, plan_name, manual_plan_id, manual_plan_expires_at
+            ) VALUES (?, ?, ?, ?, ?)
+            """,
+            (
+                "6006",
+                "foxtrot",
+                "free",
+                "bundle_analysis_raid_boost",
+                _iso_utc(now + timedelta(days=2)),
+            ),
+        )
+        matching_bucket = datetime(2026, 3, 1, 20, 0, tzinfo=BERLIN_TZ).astimezone(UTC)
+        for weeks_ago in (0, 1, 2):
+            self._insert_session(
+                conn,
+                login="foxtrot",
+                started_at=matching_bucket - timedelta(days=7 * weeks_ago),
+                duration_seconds=3600,
+            )
+
+        row = service.refresh_partner_score("6006", now=now)
+
+        self.assertIsNotNone(row)
+        assert row is not None
+        self.assertAlmostEqual(row["raid_boost_multiplier"], 1.5, places=6)
+        conn.close()
+
 
 if __name__ == "__main__":
     unittest.main()

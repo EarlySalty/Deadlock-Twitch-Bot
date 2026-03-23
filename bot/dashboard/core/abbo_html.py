@@ -15,7 +15,7 @@ def render_abbo_page(
     plans_html: str,
     csrf_token: str = "",
     lurker_tax_card_html: str = "",
-    is_bundle: bool = False,
+    has_promo_disable_control: bool = False,
     promo_disabled: bool = False,
     promo_message: str = "",
     promo_error: str = "",
@@ -23,13 +23,13 @@ def render_abbo_page(
     is_authenticated: bool = False,
 ) -> str:
     """Return the complete HTML for the Abonnement-Pläne page."""
-    # --- Bundle feature toggle card ---
+    # --- Promo toggle card ---
     bundle_toggle_html = ""
-    if is_bundle:
+    if has_promo_disable_control:
         checked = " checked" if promo_disabled else ""
         bundle_toggle_html = (
             "<section class='card'>"
-            "<strong style='font-size:14px;color:#e2e8f0;'>Bundle-Features</strong>"
+            "<strong style='font-size:14px;color:#e2e8f0;'>Chat-Promos</strong>"
             f"<form method='post' action='/twitch/abbo/promo-settings'>"
             f"<input type='hidden' name='csrf_token' value='{_html.escape(csrf_token, quote=True)}'>"
             "<label class='toggle-label'>"

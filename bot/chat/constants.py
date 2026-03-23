@@ -96,10 +96,36 @@ SPAM_MIN_MATCHES = 3
 # ---------------------------------------------------------------------------
 # Periodische Chat-Promos
 # ---------------------------------------------------------------------------
+PROMO_MESSAGES_CATEGORIZED: dict[str, list[str]] = {
+    "generic": [
+        "heyo! Falls ihr bock habt auf Deadlock und noch eine deutsche Community sucht – schau gerne mal vorbei: {invite}",
+        "Hey! Noch eine deutsche Deadlock-Community am suchen? Wir sind hier: {invite} 🎮",
+        "Falls du noch eine deutsche Deadlock-Community sucht – schau doch mal vorbei: {invite}",
+    ],
+    "competitive": [
+        "Kein Bock mehr auf Solo-Queue-Grief? Such dir feste Mates in unserer Community! {invite} 🔫",
+        "Schon den neuesten Meta-Build ausprobiert? Tausch dich mit anderen Pros aus: {invite}",
+        "MMR-Grind ist hart, aber im Team macht's mehr Spaß. Hier findest du die deutsche Deadlock-Community: {invite}",
+        "Du willst deine Lane-Phase verbessern? Tipps & Tricks gibt's bei uns auf Discord: {invite}",
+    ],
+    "community": [
+        "Bock auf Inhouses oder kleine Turniere? Wir organisieren regelmäßig Events! Schau doch mal vorbei: {invite} 🏆",
+        "Noch auf der suche nach Mates für die nächste Runde Deadlock? In unserer Community wirst du fündig! {invite}",
+        "Dein suchen hat ein Ende, falls du nach dem Stream noch Mates zum Zocken suchst, schau bei uns vorbei: {invite}",
+    ],
+    "growth": [
+        "Deadlock ist komplex – wir helfen dir beim Einstieg! Guides und mehr bei uns auf dem Discord: {invite}",
+        "Neu in Deadlock? Keine Sorge, unsere Community hat die besten Tipps für Einsteiger: {invite} 📚",
+    ],
+    "hype": [
+        "Willkommen an alle neuen Gesichter! 🎮 Wenn ihr Bock auf Deadlock habt, schaut gerne bei unserer Community vorbei: {invite}",
+
+    ]
+}
+
+# Flache Liste für Abwärtskompatibilität (wird von secrets.choice verwendet, wenn kein Grund angegeben ist)
 PROMO_MESSAGES: list[str] = [
-    "heyo! Falls ihr bock habt auf Deadlock und noch eine deutsche Community sucht – schau gerne mal vorbei: {invite}",
-    "Hey! Noch eine deutsche Deadlock-Community am suchen? Wir sind hier: {invite} 🎮",
-    "Falls du noch eine deutsche Deadlock-Community sucht – schau doch mal vorbei: {invite}",
+    msg for category in PROMO_MESSAGES_CATEGORIZED.values() for msg in category
 ]
 
 PROMO_DISCORD_INVITE: str = "https://discord.gg/z5TfVHuQq2"

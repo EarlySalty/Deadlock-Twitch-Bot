@@ -1,5 +1,11 @@
 // Plan tier levels
 export type PlanTier = 'free' | 'basic' | 'extended';
+export type EntitlementId =
+  | 'analytics.basic'
+  | 'analytics.extended'
+  | 'chat.lurker_tax'
+  | 'chat.promos.disable'
+  | 'raid.priority';
 
 // Dashboard view mode (what the user is currently viewing)
 export type DashboardView = 'basic' | 'extended';
@@ -12,6 +18,7 @@ export interface PlanStatus {
   isExtended: boolean;
   expiresAt: string | null;
   source: string | null;
+  entitlements: EntitlementId[];
 }
 
 // Tab IDs matching the analytics dashboard tabs
@@ -31,24 +38,25 @@ export type TabId =
   | 'experimental'
   | 'ai';
 
-// Tab visibility configuration per tier
-export const TAB_TIERS: Record<TabId, PlanTier> = {
-  // Free (4 tabs)
-  'overview': 'free',
-  'streams': 'free',
-  'schedule': 'free',
-  'category': 'free',
-  // Basic (+ 4 tabs = 8 total)
-  'chat': 'basic',
-  'growth': 'basic',
-  'audience': 'basic',
-  'compare': 'basic',
-  // Extended (+ 5 tabs = 13 total)
-  'viewers': 'extended',
-  'coaching': 'extended',
-  'monetization': 'extended',
-  'experimental': 'extended',
-  'ai': 'extended',
+export const ALL_ENTITLEMENTS: EntitlementId[] = [
+  'analytics.basic',
+  'analytics.extended',
+  'chat.lurker_tax',
+  'chat.promos.disable',
+  'raid.priority',
+];
+
+// Tab visibility configuration per entitlement
+export const TAB_ENTITLEMENTS: Partial<Record<TabId, EntitlementId>> = {
+  'chat': 'analytics.basic',
+  'growth': 'analytics.basic',
+  'audience': 'analytics.basic',
+  'compare': 'analytics.basic',
+  'viewers': 'analytics.extended',
+  'coaching': 'analytics.extended',
+  'monetization': 'analytics.extended',
+  'experimental': 'analytics.extended',
+  'ai': 'analytics.extended',
 };
 
 // Feature IDs for card-level gating within tabs
@@ -70,25 +78,24 @@ export type FeatureId =
   | 'category_activity_series'
   | 'rankings_extended';
 
-// Feature tier requirements (cards within tabs that need higher tier)
-export const FEATURE_TIERS: Record<FeatureId, PlanTier> = {
-  // Extended-only features within Basic tabs
-  'health_scores': 'extended',
-  'calendar_heatmap': 'extended',
-  'insights_panel': 'extended',
-  'stream_timeline_detail': 'extended',
-  'chatter_list': 'extended',
-  'hype_timeline': 'extended',
-  'chat_content_analysis': 'extended',
-  'chat_social_graph': 'extended',
-  'title_performance': 'extended',
-  'raid_retention': 'extended',
-  'lurker_analysis': 'extended',
-  'audience_sharing': 'extended',
-  'viewer_overlap': 'extended',
-  'category_timings': 'extended',
-  'category_activity_series': 'extended',
-  'rankings_extended': 'extended',
+// Feature requirements (cards within tabs that need higher entitlement)
+export const FEATURE_ENTITLEMENTS: Record<FeatureId, EntitlementId> = {
+  'health_scores': 'analytics.extended',
+  'calendar_heatmap': 'analytics.extended',
+  'insights_panel': 'analytics.extended',
+  'stream_timeline_detail': 'analytics.extended',
+  'chatter_list': 'analytics.extended',
+  'hype_timeline': 'analytics.extended',
+  'chat_content_analysis': 'analytics.extended',
+  'chat_social_graph': 'analytics.extended',
+  'title_performance': 'analytics.extended',
+  'raid_retention': 'analytics.extended',
+  'lurker_analysis': 'analytics.extended',
+  'audience_sharing': 'analytics.extended',
+  'viewer_overlap': 'analytics.extended',
+  'category_timings': 'analytics.extended',
+  'category_activity_series': 'analytics.extended',
+  'rankings_extended': 'analytics.extended',
 };
 
 // Tier hierarchy for comparison
@@ -118,6 +125,7 @@ export interface CatalogPlan {
   name: string;
   tier: PlanTier;
   price_monthly: number;
+  entitlements?: EntitlementId[];
   features: string[];
   is_current: boolean;
 }

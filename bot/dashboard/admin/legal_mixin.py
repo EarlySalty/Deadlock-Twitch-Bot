@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from aiohttp import web
 
+NOINDEX_HEADERS = {"X-Robots-Tag": "noindex, nofollow"}
+
 
 class _DashboardLegalMixin:
     """Handlers for /twitch/impressum and /twitch/datenschutz — no auth required."""
@@ -13,6 +15,7 @@ class _DashboardLegalMixin:
         page = (
             "<!doctype html><html lang='de'><head><meta charset='utf-8'>"
             "<meta name='viewport' content='width=device-width,initial-scale=1'>"
+            "<meta name='robots' content='noindex, nofollow'>"
             "<title>Impressum · EarlySalty</title>"
             "<style>"
             "body{margin:0;background:#f8fafc;color:#0f172a;"
@@ -49,7 +52,7 @@ class _DashboardLegalMixin:
             "</div>"
             "</div></body></html>"
         )
-        return web.Response(text=page, content_type="text/html")
+        return web.Response(text=page, content_type="text/html", headers=NOINDEX_HEADERS)
 
     async def abbo_agb(self, request: web.Request) -> web.StreamResponse:  # noqa: ARG002
         """GET /twitch/agb — AGB für digitale Abo-Dienste. Kein Auth nötig."""
@@ -159,6 +162,7 @@ class _DashboardLegalMixin:
         page = (
             "<!doctype html><html lang='de'><head><meta charset='utf-8'>"
             "<meta name='viewport' content='width=device-width,initial-scale=1'>"
+            "<meta name='robots' content='noindex, nofollow'>"
             "<title>Datenschutz · EarlySalty</title>"
             "<style>"
             "body{margin:0;background:#f8fafc;color:#0f172a;"
@@ -231,4 +235,4 @@ class _DashboardLegalMixin:
             "</div>"
             "</div></body></html>"
         )
-        return web.Response(text=page, content_type="text/html")
+        return web.Response(text=page, content_type="text/html", headers=NOINDEX_HEADERS)

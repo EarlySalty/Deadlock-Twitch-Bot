@@ -488,13 +488,18 @@ class RaidAuthManager:
         resolved_profile = self._resolve_scope_profile(requested_login, scope_profile)
         normalized_expected_login = _normalize_twitch_login(expected_twitch_login)
         normalized_expected_user_id = str(expected_twitch_user_id or "").strip() or None
+        normalized_discord_user_id = _normalize_state_discord_user_id(discord_user_id)
         if not normalized_expected_login:
             if requested_login.startswith("discord:"):
+                if not normalized_discord_user_id:
+                    normalized_discord_user_id = _normalize_state_discord_user_id(
+                        requested_login.split(":", 1)[1].strip()
+                    )
                 (
                     normalized_expected_login,
                     linked_expected_user_id,
                 ) = self._linked_twitch_identity_for_discord_user(
-                    requested_login.split(":", 1)[1].strip()
+                    normalized_discord_user_id
                 )
                 if not normalized_expected_user_id:
                     normalized_expected_user_id = linked_expected_user_id
@@ -507,7 +512,7 @@ class RaidAuthManager:
             scope_profile=resolved_profile,
             expected_twitch_login=normalized_expected_login,
             expected_twitch_user_id=normalized_expected_user_id,
-            discord_user_id=_normalize_state_discord_user_id(discord_user_id),
+            discord_user_id=normalized_discord_user_id,
         )
 
     def _build_authorize_url(self, *, state: str, scope_profile: str) -> str:
@@ -1622,3 +1627,4 @@ class RaidAuthManager:
         except Exception:
             log.debug("get_scopes failed for %s", twitch_user_id, exc_info=True)
             return []
+

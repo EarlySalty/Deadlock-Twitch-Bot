@@ -1,0 +1,107 @@
+"""Canonical plan metadata and derived entitlements."""
+
+from __future__ import annotations
+
+from typing import Final
+
+KNOWN_PLAN_IDS: Final[frozenset[str]] = frozenset(
+    {
+        "raid_free",
+        "raid_boost",
+        "analysis_dashboard",
+        "bundle_analysis_raid_boost",
+    }
+)
+
+LEGACY_PLAN_NAME_TO_ID_MAP: Final[dict[str, str]] = {
+    "free": "raid_free",
+    "raid_free": "raid_free",
+    "raid_boost": "raid_boost",
+    "analysis": "analysis_dashboard",
+    "analysis_dashboard": "analysis_dashboard",
+    "bundle": "bundle_analysis_raid_boost",
+    "bundle_analysis_raid_boost": "bundle_analysis_raid_boost",
+}
+
+PLAN_TIER_MAP: Final[dict[str, str]] = {
+    "raid_free": "free",
+    "raid_boost": "basic",
+    "analysis_dashboard": "extended",
+    "bundle_analysis_raid_boost": "extended",
+}
+
+PLAN_DISPLAY_NAME_MAP: Final[dict[str, str]] = {
+    "raid_free": "Free",
+    "raid_boost": "Basic",
+    "analysis_dashboard": "Erweitert",
+    "bundle_analysis_raid_boost": "Erweitert (Bundle)",
+}
+
+PLAN_ENTITLEMENTS_MAP: Final[dict[str, frozenset[str]]] = {
+    "raid_free": frozenset(),
+    "raid_boost": frozenset(
+        {
+            "analytics.basic",
+            "chat.lurker_tax",
+            "raid.priority",
+        }
+    ),
+    "analysis_dashboard": frozenset(
+        {
+            "analytics.basic",
+            "analytics.extended",
+            "chat.lurker_tax",
+        }
+    ),
+    "bundle_analysis_raid_boost": frozenset(
+        {
+            "analytics.basic",
+            "analytics.extended",
+            "chat.lurker_tax",
+            "chat.promos.disable",
+            "raid.priority",
+        }
+    ),
+}
+
+
+def normalize_plan_id(raw_plan_id: str | None) -> str:
+    plan_id = str(raw_plan_id or "").strip()
+    return plan_id if plan_id in KNOWN_PLAN_IDS else "raid_free"
+
+
+def plan_tier(plan_id: str | None) -> str:
+    normalized = normalize_plan_id(plan_id)
+    return PLAN_TIER_MAP.get(normalized, "free")
+
+
+def normalize_plan_id_from_legacy_name(raw_plan_name: str | None) -> str:
+    plan_name = str(raw_plan_name or "").strip().lower()
+    return normalize_plan_id(LEGACY_PLAN_NAME_TO_ID_MAP.get(plan_name))
+
+
+def plan_display_name(plan_id: str | None) -> str:
+    normalized = normalize_plan_id(plan_id)
+    return PLAN_DISPLAY_NAME_MAP.get(normalized, "Free")
+
+
+def plan_entitlements(plan_id: str | None) -> tuple[str, ...]:
+    normalized = normalize_plan_id(plan_id)
+    return tuple(sorted(PLAN_ENTITLEMENTS_MAP.get(normalized, frozenset())))
+
+
+def plan_has_entitlement(plan_id: str | None, entitlement: str | None) -> bool:
+    required = str(entitlement or "").strip()
+    if not required:
+        return True
+    normalized = normalize_plan_id(plan_id)
+    return required in PLAN_ENTITLEMENTS_MAP.get(normalized, frozenset())
+
+
+def legacy_plan_name_has_entitlement(raw_plan_name: str | None, entitlement: str | None) -> bool:
+    return plan_has_entitlement(normalize_plan_id_from_legacy_name(raw_plan_name), entitlement)
+
+
+def plan_is_extended(plan_id: str | None) -> bool:
+    normalized = normalize_plan_id(plan_id)
+    return plan_has_entitlement(normalized, "analytics.extended")

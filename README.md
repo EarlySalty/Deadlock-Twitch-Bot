@@ -27,3 +27,17 @@ Twitch bot, dashboard service, analytics, raid automation, and streamer tooling 
 - [`docs/ADMIN.md`](docs/ADMIN.md)
 - [`docs/STREAMER.md`](docs/STREAMER.md)
 - [`docs/BOT_TOKEN_SCOPES.md`](docs/BOT_TOKEN_SCOPES.md)
+
+## Local Legal Preview
+
+- Quick preview server for `/twitch/impressum`, `/twitch/datenschutz`, and `/twitch/agb`:
+  `python scripts/preview_legal_pages.py`
+- Windows shortcut with optional browser launch:
+  `powershell -ExecutionPolicy Bypass -File .\scripts\preview_legal_pages.ps1 -OpenBrowser`
+- No-server export as plain HTML files:
+  `python scripts/export_legal_preview.py`
+- Windows shortcut for static export and opening `index.html`:
+  `powershell -ExecutionPolicy Bypass -File .\scripts\export_legal_preview.ps1 -OpenIndex`
+- IIS-ready: the export also writes a `web.config`, so you can point an IIS site or virtual directory directly at the exported folder.
+- Full IIS setup with a dedicated local site:
+  `powershell -ExecutionPolicy Bypass -File .\scripts\setup_legal_preview_iis.ps1 -OpenBrowser`

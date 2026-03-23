@@ -18,6 +18,17 @@ from urllib.parse import urlencode, urlsplit
 
 from aiohttp import web
 
+from ..dashboard.billing.billing_plans import BILLING_PLANS as _BILLING_PLANS
+from ..entitlements.catalog import (
+    KNOWN_PLAN_IDS as _KNOWN_BILLING_PLAN_IDS,
+    plan_display_name as _plan_display_name,
+    plan_entitlements as _plan_entitlements,
+    plan_has_entitlement as _plan_has_entitlement,
+    plan_tier as _plan_tier,
+)
+from ..entitlements.resolver import (
+    resolve_plan_snapshot_for_login as _resolve_plan_snapshot_for_login,
+)
 from ..core.chat_bots import build_known_chat_bot_not_in_clause
 from ..core.constants import TWITCH_DISCORD_REF_CODE
 from ..logging_setup import log_path
@@ -38,51 +49,19 @@ from ..storage import pg as storage
 
 log = logging.getLogger("TwitchStreams.AnalyticsV2")
 
-# ---------------------------------------------------------------------------
-# Plan-gating for extended analytics endpoints
-# ---------------------------------------------------------------------------
-EXTENDED_PLANS = {"analysis_dashboard", "bundle_analysis_raid_boost"}
-_KNOWN_BILLING_PLAN_IDS = {
-    "raid_free",
-    "raid_boost",
-    "analysis_dashboard",
-    "bundle_analysis_raid_boost",
-}
 _AFFILIATE_REVENUE_STATUSES: tuple[str, ...] = ("pending", "transferred")
 _AFFILIATE_REVENUE_STATUS_PLACEHOLDERS = ", ".join(
     ["?"] * len(_AFFILIATE_REVENUE_STATUSES)
 )
-
-# ---------------------------------------------------------------------------
-# Plan-tier mapping (Phase 3B)
-# ---------------------------------------------------------------------------
-PLAN_TIER_MAP = {
-    "raid_free": "free",
-    "raid_boost": "basic",
-    "analysis_dashboard": "extended",
-    "bundle_analysis_raid_boost": "extended",
-}
-
-_PLAN_NAME_MAP = {
-    "raid_free": "Free",
-    "raid_boost": "Basic",
-    "analysis_dashboard": "Erweitert",
-    "bundle_analysis_raid_boost": "Erweitert (Bundle)",
-}
+_ANALYTICS_EXTENDED_ENTITLEMENT = "analytics.extended"
 
 
 def _get_plan_tier(plan_id: str | None) -> str:
-    """Map plan_id to tier: free, basic, or extended."""
-    if not plan_id:
-        return "free"
-    return PLAN_TIER_MAP.get(plan_id, "free")
+    return _plan_tier(plan_id)
 
 
 def _get_plan_name(plan_id: str | None) -> str:
-    """Map plan_id to a human-readable name."""
-    if not plan_id:
-        return "Free"
-    return _PLAN_NAME_MAP.get(plan_id, "Free")
+    return _plan_display_name(plan_id)
 
 
 def _build_affiliate_referral_url(login: str) -> str:
@@ -183,86 +162,23 @@ def _manual_override_plan_for_login(conn: Any, login: str) -> str:
 
 
 def _get_plan_for_login(login: str) -> str:
-    """Return the plan_id for *login*, falling back to ``'raid_free'``."""
-    with storage.get_conn() as conn:
-        try:
-            manual_plan_id = _manual_override_plan_for_login(conn, login)
-        except Exception:
-            manual_plan_id = ""
-        if manual_plan_id:
-            return manual_plan_id
-        row = conn.execute(
-            """
-            SELECT plan_id FROM twitch_billing_subscriptions
-            WHERE LOWER(customer_reference) = LOWER(?)
-              AND status IN ('active', 'trialing', 'past_due')
-            ORDER BY updated_at DESC LIMIT 1
-            """,
-            (login,),
-        ).fetchone()
-    return str(_row_get_value(row, "plan_id", 0, "raid_free") or "raid_free")
+    """Return the effective plan_id for *login*."""
+    snapshot = _resolve_plan_snapshot_for_login(login)
+    return str(snapshot.get("plan_id") or "raid_free")
 
 
 def _get_plan_details_for_login(login: str) -> dict[str, Any]:
     """Return detailed plan info for *login* (plan_id, expires_at, source)."""
-    plan_id = "raid_free"
-    expires_at: str | None = None
-    source = "default"
-
-    with storage.get_conn() as conn:
-        # 1. Check manual override
-        try:
-            manual_row = conn.execute(
-                """
-                SELECT manual_plan_id, manual_plan_expires_at
-                FROM streamer_plans
-                WHERE LOWER(twitch_login) = LOWER(?)
-                LIMIT 1
-                """,
-                (login,),
-            ).fetchone()
-            if manual_row:
-                mid = str(_row_get_value(manual_row, "manual_plan_id", 0, "") or "").strip()
-                raw_exp = _row_get_value(manual_row, "manual_plan_expires_at", 1, None)
-                exp_dt = _parse_plan_override_datetime(raw_exp)
-                if mid in _KNOWN_BILLING_PLAN_IDS and (not exp_dt or exp_dt >= datetime.now(UTC)):
-                    plan_id = mid
-                    expires_at = exp_dt.isoformat() if exp_dt else None
-                    source = "manual_override"
-        except Exception:
-            pass
-
-        # 2. Check billing subscription if no manual override matched
-        if source == "default":
-            try:
-                sub_row = conn.execute(
-                    """
-                    SELECT plan_id, current_period_end
-                    FROM twitch_billing_subscriptions
-                    WHERE LOWER(customer_reference) = LOWER(?)
-                      AND status IN ('active', 'trialing', 'past_due')
-                    ORDER BY updated_at DESC LIMIT 1
-                    """,
-                    (login,),
-                ).fetchone()
-                if sub_row:
-                    sid = str(_row_get_value(sub_row, "plan_id", 0, "") or "").strip()
-                    if sid:
-                        plan_id = sid
-                        source = "billing"
-                        raw_end = _row_get_value(sub_row, "current_period_end", 1, None)
-                        end_dt = _parse_plan_override_datetime(raw_end)
-                        expires_at = end_dt.isoformat() if end_dt else None
-            except Exception:
-                pass
-
+    snapshot = _resolve_plan_snapshot_for_login(login)
+    plan_id = str(snapshot.get("plan_id") or "raid_free")
     return {
         "planId": plan_id,
         "planName": _get_plan_name(plan_id),
         "tier": _get_plan_tier(plan_id),
-        "isExtended": plan_id in EXTENDED_PLANS,
-        "expiresAt": expires_at,
-        "source": source,
+        "isExtended": bool(snapshot.get("is_extended")),
+        "expiresAt": snapshot.get("expires_at"),
+        "source": snapshot.get("source"),
+        "entitlements": list(snapshot.get("entitlements") or []),
     }
 
 
@@ -534,11 +450,17 @@ class AnalyticsV2Mixin(
         # Admins / localhost bypass plan checks
         if self._get_auth_level(request) in ("localhost", "admin"):
             return
-        if _get_plan_for_login(streamer) not in EXTENDED_PLANS:
+        snapshot = _resolve_plan_snapshot_for_login(streamer)
+        if not _plan_has_entitlement(snapshot.get("plan_id"), _ANALYTICS_EXTENDED_ENTITLEMENT):
             raise web.HTTPForbidden(
                 text=json.dumps({
                     "error": "plan_required",
-                    "required_plans": sorted(EXTENDED_PLANS),
+                    "required_entitlements": [_ANALYTICS_EXTENDED_ENTITLEMENT],
+                    "required_plans": sorted(
+                        plan_id
+                        for plan_id in _KNOWN_BILLING_PLAN_IDS
+                        if _plan_has_entitlement(plan_id, _ANALYTICS_EXTENDED_ENTITLEMENT)
+                    ),
                 }),
                 content_type="application/json",
             )
@@ -2394,49 +2316,33 @@ class AnalyticsV2Mixin(
         except Exception:
             current_plan = "raid_free"
 
-        plans = [
-            {
-                "id": "raid_free",
-                "name": "Free",
-                "tier": "free",
-                "price_monthly": 0,
-                "features": [
-                    "4 Analytics Tabs",
-                    "Kern-KPIs",
-                    "Stream-Übersicht",
-                    "Schedule Heatmap",
-                ],
-                "is_current": current_plan == "raid_free",
-            },
-            {
-                "id": "raid_boost",
-                "name": "Basic",
-                "tier": "basic",
-                "price_monthly": 7.99,
-                "features": [
-                    "8 Analytics Tabs",
-                    "Chat-Analytics",
-                    "Growth-Tracking",
-                    "Audience-Insights",
-                    "Kategorie-Vergleich",
-                ],
-                "is_current": current_plan == "raid_boost",
-            },
-            {
-                "id": "analysis_dashboard",
-                "name": "Erweitert",
-                "tier": "extended",
-                "price_monthly": 16.99,
-                "features": [
-                    "Alle 13 Tabs",
-                    "AI-Analyse",
-                    "Viewer-Profile",
-                    "Coaching",
-                    "Monetization-Insights",
-                ],
-                "is_current": current_plan in ("analysis_dashboard", "bundle_analysis_raid_boost"),
-            },
-        ]
+        plan_ids = ("raid_free", "raid_boost", "analysis_dashboard")
+        plan_lookup = {
+            str(plan.get("id") or "").strip(): plan
+            for plan in _BILLING_PLANS
+        }
+        plans = []
+        for plan_id in plan_ids:
+            blueprint = dict(plan_lookup.get(plan_id) or {})
+            if not blueprint:
+                continue
+            plans.append(
+                {
+                    "id": plan_id,
+                    "name": _get_plan_name(plan_id),
+                    "tier": _get_plan_tier(plan_id),
+                    "price_monthly": round(int(blueprint.get("monthly_net_cents") or 0) / 100.0, 2),
+                    "features": list(blueprint.get("features") or []),
+                    "entitlements": list(_plan_entitlements(plan_id)),
+                    "is_current": (
+                        current_plan == plan_id
+                        or (
+                            plan_id == "analysis_dashboard"
+                            and current_plan == "bundle_analysis_raid_boost"
+                        )
+                    ),
+                }
+            )
 
         return web.json_response({"plans": plans})
 
@@ -2489,46 +2395,10 @@ class AnalyticsV2Mixin(
             return value or login
 
         def _lookup_plan_name(conn: Any, login: str) -> str | None:
-            try:
-                manual_row = conn.execute(
-                    """
-                    SELECT manual_plan_id, manual_plan_expires_at
-                    FROM streamer_plans
-                    WHERE LOWER(twitch_login) = LOWER(?)
-                    LIMIT 1
-                    """,
-                    (login,),
-                ).fetchone()
-            except Exception:
-                manual_row = None
-
-            manual_plan_id = str(_row_get_value(manual_row, "manual_plan_id", 0, "") or "").strip()
-            manual_expires_at = _parse_plan_override_datetime(
-                _row_get_value(manual_row, "manual_plan_expires_at", 1, None)
-            )
-            if manual_plan_id in _KNOWN_BILLING_PLAN_IDS and (
-                manual_expires_at is None or manual_expires_at >= datetime.now(UTC)
-            ):
-                return _get_plan_name(manual_plan_id)
-
-            try:
-                billing_row = conn.execute(
-                    """
-                    SELECT plan_id
-                    FROM twitch_billing_subscriptions
-                    WHERE LOWER(customer_reference) = LOWER(?)
-                      AND status IN ('active', 'trialing', 'past_due')
-                    ORDER BY updated_at DESC
-                    LIMIT 1
-                    """,
-                    (login,),
-                ).fetchone()
-            except Exception:
-                billing_row = None
-
-            billing_plan_id = str(_row_get_value(billing_row, "plan_id", 0, "") or "").strip()
-            if billing_plan_id in _KNOWN_BILLING_PLAN_IDS:
-                return _get_plan_name(billing_plan_id)
+            snapshot = _resolve_plan_snapshot_for_login(login, conn=conn)
+            plan_id = str(snapshot.get("plan_id") or "").strip()
+            if plan_id in _KNOWN_BILLING_PLAN_IDS:
+                return _get_plan_name(plan_id)
             return None
 
         try:
@@ -2717,6 +2587,7 @@ class AnalyticsV2Mixin(
                 "isExtended": True,
                 "expiresAt": None,
                 "source": "admin",
+                "entitlements": list(_plan_entitlements("bundle_analysis_raid_boost")),
             }
 
         return web.json_response(

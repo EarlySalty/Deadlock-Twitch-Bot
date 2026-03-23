@@ -4,7 +4,7 @@ from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from bot.analytics.api_v2 import _get_plan_for_login
+from bot.analytics.api_v2 import _get_plan_details_for_login, _get_plan_for_login
 from bot.dashboard.billing_mixin import _DashboardBillingMixin
 
 
@@ -115,7 +115,7 @@ class ManualPlanOverrideTests(unittest.TestCase):
 
     def _patch_api_v2_conn(self):
         return patch(
-            "bot.analytics.api_v2.storage.get_conn",
+            "bot.entitlements.resolver.storage.get_conn",
             return_value=_ConnContext(self.conn),
         )
 
@@ -313,6 +313,40 @@ class ManualPlanOverrideTests(unittest.TestCase):
             plan_id = _get_plan_for_login("legacy_login")
 
         self.assertEqual(plan_id, "bundle_analysis_raid_boost")
+
+    def test_get_plan_details_include_entitlements_and_source(self) -> None:
+        now_iso = datetime.now(UTC).isoformat()
+        self.conn.execute(
+            """
+            INSERT INTO twitch_billing_subscriptions (
+                stripe_subscription_id,
+                customer_reference,
+                status,
+                plan_id,
+                updated_at
+            ) VALUES (?, ?, ?, ?, ?)
+            """,
+            ("sub_777", "legacy_login", "active", "bundle_analysis_raid_boost", now_iso),
+        )
+        self.conn.commit()
+
+        with self._patch_api_v2_conn():
+            details = _get_plan_details_for_login("legacy_login")
+
+        self.assertEqual(details["planId"], "bundle_analysis_raid_boost")
+        self.assertEqual(details["tier"], "extended")
+        self.assertTrue(details["isExtended"])
+        self.assertEqual(
+            details["entitlements"],
+            [
+                "analytics.basic",
+                "analytics.extended",
+                "chat.lurker_tax",
+                "chat.promos.disable",
+                "raid.priority",
+            ],
+        )
+        self.assertEqual(details["source"], "billing_subscription")
 
 
 if __name__ == "__main__":

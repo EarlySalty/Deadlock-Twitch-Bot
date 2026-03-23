@@ -33,6 +33,10 @@ class _DummyStreamerPromoHandler(_DashboardRoutesMixin):
         del request
         return True
 
+    def _csrf_verify_token(self, request, token: str) -> bool:
+        del request
+        return token == "csrf-ok"
+
     def _get_dashboard_auth_session(self, request):
         del request
         return {"twitch_login": "partner_one"}
@@ -68,7 +72,10 @@ class DashboardStreamerPromoMessageTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_save_accepts_valid_multiline_message_with_invite(self) -> None:
         request = _FakeRequest(
-            {"promo_message": "Zeile eins\nZeile zwei {invite}"}
+            {
+                "promo_message": "Zeile eins\nZeile zwei {invite}",
+                "csrf_token": "csrf-ok",
+            }
         )
 
         with self._conn_patch():
@@ -83,7 +90,9 @@ class DashboardStreamerPromoMessageTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(saved["promo_message"], "Zeile eins\nZeile zwei {invite}")
 
     async def test_save_rejects_message_without_invite(self) -> None:
-        request = _FakeRequest({"promo_message": "Nur Text ohne Invite"})
+        request = _FakeRequest(
+            {"promo_message": "Nur Text ohne Invite", "csrf_token": "csrf-ok"}
+        )
 
         with self._conn_patch():
             with self.assertRaises(web.HTTPFound) as ctx:
@@ -92,13 +101,31 @@ class DashboardStreamerPromoMessageTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(ctx.exception.location, "/twitch/abbo?promo_error=missing_invite")
 
     async def test_save_rejects_message_over_500_characters(self) -> None:
-        request = _FakeRequest({"promo_message": ("x" * 493) + "{invite}"})
+        request = _FakeRequest(
+            {"promo_message": ("x" * 493) + "{invite}", "csrf_token": "csrf-ok"}
+        )
 
         with self._conn_patch():
             with self.assertRaises(web.HTTPFound) as ctx:
                 await self.handler.abbo_promo_message(request)
 
         self.assertEqual(ctx.exception.location, "/twitch/abbo?promo_error=too_long")
+
+    async def test_save_rejects_invalid_csrf(self) -> None:
+        request = _FakeRequest(
+            {"promo_message": "Zeile eins {invite}", "csrf_token": "bad-token"}
+        )
+
+        with self._conn_patch():
+            response = await self.handler.abbo_promo_message(request)
+
+        saved = self.conn.execute(
+            "SELECT promo_message FROM streamer_plans WHERE twitch_login = ?",
+            ("partner_one",),
+        ).fetchone()
+        self.assertEqual(response.status, 403)
+        self.assertEqual(response.text, '{"error": "csrf_token_invalid"}')
+        self.assertIsNone(saved["promo_message"])
 
 
 if __name__ == "__main__":

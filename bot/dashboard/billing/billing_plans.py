@@ -5,6 +5,13 @@ from __future__ import annotations
 import json
 from typing import Any
 
+from ...entitlements.catalog import (
+    plan_display_name,
+    plan_entitlements,
+    plan_has_entitlement,
+    plan_tier,
+)
+
 BILLING_STRIPE_QUICKSTART_URL = "https://docs.stripe.com/billing/quickstart"
 
 BILLING_CYCLE_DISCOUNTS: dict[int, int] = {1: 0, 6: 10, 12: 20}
@@ -13,10 +20,12 @@ BILLING_PLANS: tuple[dict[str, Any], ...] = (
     {
         "id": "raid_free",
         "name": "Raid Free",
+        "tier": plan_tier("raid_free"),
         "badge": "free",
         "description": "Starte kostenlos mit automatischen Raids in die Community.",
         "monthly_net_cents": 0,
         "recommended": False,
+        "entitlements": list(plan_entitlements("raid_free")),
         "features": [
             "Auto-Raid Grundfunktion bleibt aktiv",
             "Keine monatlichen Kosten für Basis-Raids",
@@ -26,10 +35,12 @@ BILLING_PLANS: tuple[dict[str, Any], ...] = (
     {
         "id": "raid_boost",
         "name": "Raid Boost",
+        "tier": plan_tier("raid_boost"),
         "badge": "raids",
         "description": "Dein Kanal wird bevorzugt als Raid-Ziel vorgeschlagen \u2014 mehr eingehende Zuschauer.",
         "monthly_net_cents": 799,
         "recommended": False,
+        "entitlements": list(plan_entitlements("raid_boost")),
         "features": [
             "Bevorzugte Platzierung im Raid-Netzwerk",
             "Sichtbarkeit auch bei deiner Inaktivit\u00e4t",
@@ -40,10 +51,12 @@ BILLING_PLANS: tuple[dict[str, Any], ...] = (
     {
         "id": "analysis_dashboard",
         "name": "Analyse Dashboard",
+        "tier": plan_tier("analysis_dashboard"),
         "badge": "analytics",
         "description": "Vollst\u00e4ndiges Analytics-Dashboard mit Stream-Statistiken, Viewer-Kurven und Wachstumsvergleichen.",
         "monthly_net_cents": 1699,
         "recommended": True,
+        "entitlements": list(plan_entitlements("analysis_dashboard")),
         "features": [
             "Viewer-Verlauf & Peak-Analyse pro Stream",
             "Zeitraumvergleiche und Wachstumstrends",
@@ -54,10 +67,12 @@ BILLING_PLANS: tuple[dict[str, Any], ...] = (
     {
         "id": "bundle_analysis_raid_boost",
         "name": "Bundle: Analyse + Raid Boost",
+        "tier": plan_tier("bundle_analysis_raid_boost"),
         "badge": "bundle",
         "description": "Analyse Dashboard + Raid Boost im Paket \u2014 g\u00fcnstiger als einzeln.",
         "monthly_net_cents": 2299,
         "recommended": False,
+        "entitlements": list(plan_entitlements("bundle_analysis_raid_boost")),
         "features": [
             "Alle Analytics-Features inklusive",
             "Bevorzugte Raid-Platzierung aktiv",
@@ -117,10 +132,12 @@ def build_billing_catalog(cycle_months: int | str | None) -> dict[str, Any]:
             {
                 "id": blueprint["id"],
                 "name": blueprint["name"],
+                "tier": blueprint["tier"],
                 "badge": blueprint["badge"],
                 "description": blueprint["description"],
                 "recommended": bool(blueprint.get("recommended")),
                 "monthly_net_cents": monthly_net_cents,
+                "entitlements": list(blueprint.get("entitlements", [])),
                 "features": list(blueprint.get("features", [])),
                 "price": {
                     "cycle_months": cycle,
@@ -272,6 +289,26 @@ def billing_is_paid_plan(plan: dict[str, Any] | str | None) -> bool:
     return billing_is_paid_plan_id(str(plan or "").strip())
 
 
+def billing_plan_tier(plan_id: str | None) -> str:
+    return plan_tier(plan_id)
+
+
+def billing_plan_entitlements(plan_id: str | None) -> tuple[str, ...]:
+    return plan_entitlements(plan_id)
+
+
+def billing_plan_has_entitlement(plan_id: str | None, entitlement: str | None) -> bool:
+    return plan_has_entitlement(plan_id, entitlement)
+
+
+def billing_plan_display_name(plan_id: str | None) -> str:
+    normalized_plan_id = str(plan_id or "").strip()
+    for blueprint in BILLING_PLANS:
+        if str(blueprint.get("id") or "").strip() == normalized_plan_id:
+            return str(blueprint.get("name") or "").strip() or plan_display_name(normalized_plan_id)
+    return plan_display_name(normalized_plan_id)
+
+
 # ---------------------------------------------------------------------------
 # Back-compat aliases — old underscore names still importable during migration
 # ---------------------------------------------------------------------------
@@ -290,3 +327,7 @@ _billing_dump_price_id_mapping = billing_dump_price_id_mapping
 _billing_dump_product_id_mapping = billing_dump_product_id_mapping
 _billing_is_paid_plan_id = billing_is_paid_plan_id
 _billing_is_paid_plan = billing_is_paid_plan
+_billing_plan_tier = billing_plan_tier
+_billing_plan_entitlements = billing_plan_entitlements
+_billing_plan_has_entitlement = billing_plan_has_entitlement
+_billing_plan_display_name = billing_plan_display_name

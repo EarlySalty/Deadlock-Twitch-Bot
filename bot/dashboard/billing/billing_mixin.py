@@ -12,6 +12,14 @@ from uuid import uuid4
 
 from ... import storage
 from ...core.constants import log
+from ...entitlements.catalog import (
+    plan_entitlements as _plan_entitlements,
+    plan_is_extended as _plan_is_extended,
+    plan_tier as _plan_tier,
+)
+from ...entitlements.resolver import (
+    resolve_plan_snapshot_for_refs as _resolve_plan_snapshot_for_refs,
+)
 try:
     from ...raid.partner_scores import (
         refresh_partner_raid_score,
@@ -310,7 +318,7 @@ class _DashboardBillingMixin:
             "billing_subscription": billing_subscription,
         }
         if manual_override and bool(manual_override.get("is_active")):
-            return {
+            payload = {
                 "plan_id": str(manual_override.get("plan_id") or "raid_free").strip() or "raid_free",
                 "status": "active",
                 "source": "manual_override",
@@ -323,8 +331,8 @@ class _DashboardBillingMixin:
                 "manual_override": manual_override,
                 "billing_subscription": billing_subscription,
             }
-        if billing_subscription:
-            return {
+        elif billing_subscription:
+            payload = {
                 "plan_id": str(billing_subscription.get("plan_id") or "raid_free").strip() or "raid_free",
                 "status": str(billing_subscription.get("status") or "active").strip() or "active",
                 "source": "billing_subscription",
@@ -334,7 +342,12 @@ class _DashboardBillingMixin:
                 "manual_override": manual_override,
                 "billing_subscription": billing_subscription,
             }
-        return fallback
+        else:
+            payload = fallback
+        payload["tier"] = _plan_tier(payload.get("plan_id"))
+        payload["is_extended"] = _plan_is_extended(payload.get("plan_id"))
+        payload["entitlements"] = list(_plan_entitlements(payload.get("plan_id")))
+        return payload
 
     def _billing_refresh_runtime_secrets(self) -> None:
         loader = getattr(self, "_load_secret_value", None)
@@ -1289,14 +1302,9 @@ class _DashboardBillingMixin:
             with storage.get_conn() as conn:
                 self._billing_ensure_storage_tables(conn)
                 self._billing_ensure_streamer_plan_columns(conn)
-                manual_override = self._billing_manual_override_for_refs(conn, candidate_refs)
-                billing_subscription = self._billing_active_subscription_for_refs(
-                    conn,
+                return _resolve_plan_snapshot_for_refs(
                     candidate_refs,
-                )
-                return self._billing_effective_plan_payload(
-                    manual_override=manual_override,
-                    billing_subscription=billing_subscription,
+                    conn=conn,
                     fallback_ref=candidate_refs[0],
                 )
         except Exception:
@@ -1341,28 +1349,9 @@ class _DashboardBillingMixin:
                     twitch_login = str(self._billing_row_value(row, "twitch_login", 0, "") or "").strip()
                     twitch_user_id = str(self._billing_row_value(row, "twitch_user_id", 1, "") or "").strip()
                     refs = [value for value in (twitch_user_id, twitch_login) if value]
-                    manual_override = self._billing_manual_override_from_row(
-                        {
-                            "twitch_user_id": twitch_user_id,
-                            "twitch_login": twitch_login,
-                            "manual_plan_id": self._billing_row_value(row, "manual_plan_id", 6, ""),
-                            "manual_plan_expires_at": self._billing_row_value(
-                                row,
-                                "manual_plan_expires_at",
-                                7,
-                            ),
-                            "manual_plan_notes": self._billing_row_value(row, "manual_plan_notes", 8, ""),
-                            "manual_plan_updated_at": self._billing_row_value(
-                                row,
-                                "manual_plan_updated_at",
-                                9,
-                            ),
-                        }
-                    )
-                    billing_subscription = self._billing_active_subscription_for_refs(conn, refs)
-                    effective_plan = self._billing_effective_plan_payload(
-                        manual_override=manual_override,
-                        billing_subscription=billing_subscription,
+                    effective_plan = _resolve_plan_snapshot_for_refs(
+                        refs,
+                        conn=conn,
                         fallback_ref=twitch_login or twitch_user_id,
                     )
                     rows_payload.append(
@@ -1381,8 +1370,8 @@ class _DashboardBillingMixin:
                                 self._billing_row_value(row, "plan_name", 5, "free") or "free"
                             ).strip()
                             or "free",
-                            "manual_override": manual_override,
-                            "billing_subscription": billing_subscription,
+                            "manual_override": effective_plan.get("manual_override"),
+                            "billing_subscription": effective_plan.get("billing_subscription"),
                             "effective_plan": effective_plan,
                             "effective_plan_id": str(effective_plan.get("plan_id") or "raid_free"),
                             "effective_plan_source": str(

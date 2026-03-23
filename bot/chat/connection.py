@@ -4,6 +4,7 @@ import json
 import logging
 import time
 from datetime import UTC, datetime, timedelta
+from types import MethodType
 
 from ..core.partner_utils import is_partner_channel_for_chat_tracking
 from ..storage import get_conn, insert_observability_event
@@ -26,6 +27,66 @@ _CHAT_REQUIRED_BROADCASTER_GRANTS: frozenset[str] = frozenset({"channel:bot"})
 
 
 class ConnectionMixin:
+    @staticmethod
+    def _normalize_managed_twitch_token(token_value: str | None) -> str:
+        token = str(token_value or "").strip()
+        if token.lower().startswith("oauth:"):
+            token = token.split(":", 1)[1].strip()
+        return token
+
+    @staticmethod
+    def _normalize_optional_refresh_token(refresh_token: str | None) -> str | None:
+        token = ConnectionMixin._normalize_managed_twitch_token(refresh_token)
+        return token or None
+
+    @staticmethod
+    def _ensure_non_refreshable_twitchio_request_support(http: object) -> dict[str, str] | None:
+        if http is None:
+            return None
+
+        existing = getattr(http, "_codex_non_refreshable_user_tokens", None)
+        if isinstance(existing, dict):
+            return existing
+
+        store: dict[str, str] = {}
+        setattr(http, "_codex_non_refreshable_user_tokens", store)
+
+        original_request = getattr(http, "request", None)
+        if not callable(original_request):
+            return store
+
+        async def _request_with_non_refreshable_token_support(self_http, route):
+            token_for = str(getattr(route, "token_for", "") or "").strip()
+            headers = getattr(route, "headers", None)
+            static_tokens = getattr(self_http, "_codex_non_refreshable_user_tokens", None)
+            if (
+                token_for
+                and isinstance(headers, dict)
+                and "Authorization" not in headers
+                and isinstance(static_tokens, dict)
+            ):
+                static_token = str(static_tokens.get(token_for) or "").strip()
+                if static_token:
+                    route.update_headers({"Authorization": f"Bearer {static_token}"})
+                    try:
+                        return await super(type(self_http), self_http).request(route)
+                    except Exception as exc:
+                        status = getattr(exc, "status", None)
+                        extra = getattr(exc, "extra", None)
+                        message = ""
+                        if isinstance(extra, dict):
+                            message = str(extra.get("message") or "").strip().lower()
+                        if status == 401 and message in {"invalid access token", "invalid oauth token"}:
+                            static_tokens.pop(token_for, None)
+                            raise RuntimeError(
+                                f'Token for "{token_for}" expired or is invalid and cannot be auto-refreshed because no refresh token is available.'
+                            ) from exc
+                        raise
+            return await original_request(route)
+
+        setattr(http, "request", MethodType(_request_with_non_refreshable_token_support, http))
+        return store
+
     def _next_chat_observability_flow_id(self, *, prefix: str) -> str:
         sequence = int(getattr(self, "_chat_observability_sequence", 0) or 0) + 1
         self._chat_observability_sequence = sequence
@@ -924,20 +985,102 @@ class ConnectionMixin:
             log.exception("_ensure_bot_is_mod: Exception für %s", broadcaster_login)
             return False
 
-    async def _ensure_bot_token_registered(self) -> None:
+    async def _ensure_bot_token_registered(self) -> bool:
         """
         TwitchIO nutzt intern den Token, der über add_token()
         registriert wurde.  Falls setup_hook() noch nicht fertig war oder der
         Token zwischenzeitlich refreshed wurde, kann dieser fehlen.  Wir
         registrieren ihn hier nochmal, um die Fehlerquelle zu eliminieren.
         """
-        api_token = (self._bot_token or "").replace("oauth:", "").strip()
-        if not api_token:
-            return
         try:
-            await self.add_token(api_token, self._bot_refresh_token)
+            return bool(await self._register_bot_token_with_twitchio())
         except Exception:
             log.debug("_ensure_bot_token_registered: add_token fehlgeschlagen", exc_info=True)
+            return False
+
+    async def _register_bot_token_with_twitchio(
+        self,
+        *,
+        access_token: str | None = None,
+        refresh_token: str | None = None,
+    ) -> bool:
+        api_token = ConnectionMixin._normalize_managed_twitch_token(
+            access_token or getattr(self, "_bot_token", None)
+        )
+        if not api_token:
+            return False
+
+        normalized_refresh = ConnectionMixin._normalize_optional_refresh_token(
+            refresh_token if refresh_token is not None else getattr(self, "_bot_refresh_token", None)
+        )
+        http = getattr(self, "_http", None)
+        static_token_store = ConnectionMixin._ensure_non_refreshable_twitchio_request_support(http)
+        if normalized_refresh:
+            payload = await self.add_token(api_token, normalized_refresh)
+            user_id = str(getattr(payload, "user_id", "") or "").strip()
+            if isinstance(static_token_store, dict) and user_id:
+                static_token_store.pop(user_id, None)
+            return True
+
+        validate_token = getattr(http, "validate_token", None)
+        token_store = getattr(http, "_tokens", None)
+        if not callable(validate_token) or not isinstance(token_store, dict):
+            log.warning(
+                "Bot auth could not be registered in TwitchIO without refresh token; "
+                "managed token store is unavailable."
+            )
+            return False
+
+        payload = await validate_token(api_token)
+        user_id = str(getattr(payload, "user_id", "") or "").strip()
+        if not user_id:
+            log.warning(
+                "Bot auth could not be registered in TwitchIO without refresh token; token is not a user token."
+            )
+            return False
+
+        expected_bot_id = str(getattr(self, "bot_id", "") or "").strip()
+        if expected_bot_id and user_id != expected_bot_id:
+            log.warning(
+                "Bot auth could not be registered in TwitchIO without refresh token; token belongs to unexpected user_id=%s.",
+                user_id,
+            )
+            return False
+
+        existing_mapping = token_store.get(user_id)
+        if isinstance(existing_mapping, dict) and str(existing_mapping.get("refresh") or "").strip():
+            existing_mapping["token"] = api_token
+            existing_mapping["last_validated"] = datetime.now().isoformat()
+            if isinstance(static_token_store, dict):
+                static_token_store.pop(user_id, None)
+            log.info(
+                "Bot auth updated in TwitchIO using existing refresh-capable token mapping (expires_in=%s).",
+                int(getattr(payload, "expires_in", 0) or 0) or "unknown",
+            )
+            return True
+
+        if not isinstance(static_token_store, dict):
+            log.warning(
+                "Bot auth could not be registered in TwitchIO without refresh token; "
+                "static token support is unavailable."
+            )
+            return False
+
+        token_store.pop(user_id, None)
+        static_token_store[user_id] = api_token
+
+        expires_in = int(getattr(payload, "expires_in", 0) or 0)
+        if expires_in and expires_in <= 3600:
+            log.warning(
+                "Bot auth registered in TwitchIO without refresh token; token expires in %ss and cannot be auto-refreshed.",
+                expires_in,
+            )
+        else:
+            log.info(
+                "Bot auth registered in TwitchIO without refresh token (expires_in=%s).",
+                expires_in or "unknown",
+            )
+        return True
 
     async def join(self, channel_login: str, channel_id: str | None = None):
         """Joint einen Channel via EventSub (TwitchIO 3.x)."""
@@ -999,7 +1142,12 @@ class ConnectionMixin:
             # Token vor dem Subscribe sicherstellen – verhindert
             # "invalid transport and auth combination" wenn setup_hook()
             # noch nicht vollständig abgeschlossen war.
-            await self._ensure_bot_token_registered()
+            token_registered = await self._ensure_bot_token_registered()
+            if not token_registered:
+                log.warning(
+                    "join(): Bot-Token konnte für %s nicht sicher in TwitchIO registriert werden; Subscribe-Versuch läuft trotzdem weiter.",
+                    channel_login,
+                )
             if await self._subscribe_missing_chat_subscriptions(
                 channel_login=normalized_login,
                 channel_id=str(channel_id),
@@ -1083,7 +1231,12 @@ class ConnectionMixin:
                         detail="invalid transport and auth combination",
                     )
                 await asyncio.sleep(1)
-                await self._ensure_bot_token_registered()
+                retry_registered = await self._ensure_bot_token_registered()
+                if not retry_registered:
+                    log.warning(
+                        "join(): Retry für %s läuft ohne bestätigte TwitchIO-Token-Registrierung weiter.",
+                        channel_login,
+                    )
                 try:
                         if await self._subscribe_missing_chat_subscriptions(
                             channel_login=normalized_login,

@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { Activity, ChevronDown, Search, SlidersHorizontal, Sparkles } from 'lucide-react';
+import { usePlan } from '@/context/PlanContext';
 import type { TimeRange } from '@/types/analytics';
 
 interface HeaderProps {
@@ -23,6 +24,7 @@ export function Header({
   canViewAllStreamers = false,
   isDemoMode = false,
 }: HeaderProps) {
+  const { view, setView, hasFullAccess, hasEntitlement } = usePlan();
   const [dropdownOpen, setDropdownOpen] = useState(false);
   const [search, setSearch] = useState('');
 
@@ -36,6 +38,7 @@ export function Header({
   const partners = streamers.filter(s => s.isPartner && (!q || s.login.includes(q)));
   const others = streamers.filter(s => !s.isPartner && (!q || s.login.includes(q)));
   const allLabel = isDemoMode ? 'Demo-Profil' : canViewAllStreamers ? 'Alle Streamer' : 'Alle Partner';
+  const canPreviewExtended = !hasFullAccess && !hasEntitlement('analytics.extended');
 
   // In Beta: Partner koennen vorerst alle Streamer sehen.
   const visiblePartners = partners;
@@ -66,6 +69,33 @@ export function Header({
 
         {/* Controls */}
         <div className="flex flex-col sm:flex-row sm:items-center gap-3">
+          {canPreviewExtended && (
+            <div className="flex items-center bg-background/70 rounded-xl border border-border p-1.5">
+              <button
+                type="button"
+                onClick={() => setView('basic')}
+                className={`px-3 py-1.5 rounded-lg text-sm font-semibold transition-all ${
+                  view === 'basic'
+                    ? 'bg-gradient-to-r from-primary to-accent text-white shadow-lg shadow-primary/20'
+                    : 'text-text-secondary hover:text-white'
+                }`}
+              >
+                Basis
+              </button>
+              <button
+                type="button"
+                onClick={() => setView('extended')}
+                className={`px-3 py-1.5 rounded-lg text-sm font-semibold transition-all ${
+                  view === 'extended'
+                    ? 'bg-gradient-to-r from-primary to-accent text-white shadow-lg shadow-primary/20'
+                    : 'text-text-secondary hover:text-white'
+                }`}
+              >
+                Preview
+              </button>
+            </div>
+          )}
+
           {/* Streamer Dropdown */}
           <div className="relative">
             <button

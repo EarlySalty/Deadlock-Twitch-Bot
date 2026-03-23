@@ -330,6 +330,7 @@ export interface AuthStatus {
     isExtended: boolean;
     expiresAt: string | null;
     source: string | null;
+    entitlements: import('../types/billing').EntitlementId[];
   } | null;
 }
 

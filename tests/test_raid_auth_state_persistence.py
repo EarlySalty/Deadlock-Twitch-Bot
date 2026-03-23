@@ -95,6 +95,34 @@ class RaidAuthStatePersistenceTests(unittest.TestCase):
         self.assertEqual(meta["scope_profile"], "base")
         self.assertNotIn("expected_twitch_login", meta)
 
+    def test_generate_discord_button_url_derives_discord_user_id_from_login(self) -> None:
+        fake_conn = _FakeConn()
+
+        manager = RaidAuthManager(
+            client_id="cid",
+            client_secret="secret",
+            redirect_uri="https://raid.earlysalty.com/twitch/raid/callback",
+        )
+
+        with (
+            patch("bot.raid.auth.secrets.token_urlsafe", return_value="state-discord"),
+            patch("bot.raid.auth.time.time", return_value=1700000000.0),
+            patch(
+                "bot.raid.auth.get_conn",
+                side_effect=lambda: contextlib.nullcontext(fake_conn),
+            ),
+        ):
+            auth_url = manager.generate_discord_button_url("discord:123456789")
+
+        self.assertIn("state=state-discord", auth_url)
+        insert_calls = [call for call in fake_conn.calls if "INSERT INTO oauth_state_tokens" in call[0]]
+        self.assertEqual(len(insert_calls), 1)
+        _, params = insert_calls[0]
+        self.assertEqual(params[2], "discord:123456789")
+        meta = json.loads(params[4])
+        self.assertEqual(meta["scope_profile"], "base")
+        self.assertEqual(meta["discord_user_id"], "123456789")
+
     def test_get_pending_auth_url_rebuilds_from_persisted_state(self) -> None:
         fake_conn = _FakeConn(
             rows_by_fragment={
@@ -222,3 +250,4 @@ class RaidAuthReauthFlagTests(unittest.IsolatedAsyncioTestCase):
 
 if __name__ == "__main__":
     unittest.main()
+

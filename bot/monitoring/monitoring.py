@@ -305,10 +305,11 @@ class TwitchMonitoringMixin(_EventSubMixin, _ExpSessionsMixin, _SessionsMixin, _
         path: str,
         payload: dict[str, object],
         idempotency_key: str,
-    ) -> dict[str, object] | None:
+        include_error_code: bool = False,
+    ) -> dict[str, object] | tuple[dict[str, object] | None, str | None] | None:
         token = self._master_broker_token()
         if not token:
-            return None
+            return (None, None) if include_error_code else None
 
         base_url = self._master_broker_base_url()
         url = f"{base_url}{path}"
@@ -332,6 +333,7 @@ class TwitchMonitoringMixin(_EventSubMixin, _ExpSessionsMixin, _SessionsMixin, _
                     except Exception:
                         parsed = {}
                     if response.status >= 400:
+                        error_code = self._extract_master_broker_error_code(parsed)
                         log.warning(
                             "Master broker request failed (%s %s): status=%s body=%s",
                             path,
@@ -339,13 +341,13 @@ class TwitchMonitoringMixin(_EventSubMixin, _ExpSessionsMixin, _SessionsMixin, _
                             response.status,
                             raw_text[:500],
                         )
-                        return None
+                        return (None, error_code) if include_error_code else None
         except asyncio.TimeoutError:
             log.warning("Master broker request timed out for %s", path)
-            return None
+            return (None, None) if include_error_code else None
         except Exception:
             log.exception("Master broker request failed for %s", path)
-            return None
+            return (None, None) if include_error_code else None
 
         if not isinstance(parsed, dict) or not parsed.get("ok"):
             log.warning(
@@ -353,10 +355,48 @@ class TwitchMonitoringMixin(_EventSubMixin, _ExpSessionsMixin, _SessionsMixin, _
                 path,
                 parsed,
             )
-            return None
+            error_code = self._extract_master_broker_error_code(parsed)
+            return (None, error_code) if include_error_code else None
 
         result = parsed.get("result")
-        return result if isinstance(result, dict) else {}
+        normalized_result = result if isinstance(result, dict) else {}
+        return (normalized_result, None) if include_error_code else normalized_result
+
+    @staticmethod
+    def _extract_master_broker_error_code(response_payload: object) -> str | None:
+        if not isinstance(response_payload, dict):
+            return None
+        error_payload = response_payload.get("error")
+        if not isinstance(error_payload, dict):
+            return None
+        error_code = str(error_payload.get("code") or "").strip()
+        return error_code or None
+
+    @staticmethod
+    def _normalize_master_broker_post_response(
+        response: dict[str, object] | tuple[dict[str, object] | None, str | None] | None,
+    ) -> tuple[dict[str, object] | None, str | None]:
+        if isinstance(response, tuple) and len(response) == 2:
+            result, error_code = response
+        else:
+            result, error_code = response, None
+        normalized_result = result if isinstance(result, dict) else None
+        normalized_error = str(error_code or "").strip() or None
+        return normalized_result, normalized_error
+
+    def _build_live_announcement_broker_fallback_view_spec(
+        self,
+        view_spec: dict[str, str] | None,
+    ) -> dict[str, str] | None:
+        if not isinstance(view_spec, dict):
+            return None
+        if str(view_spec.get("type") or "").strip() != "twitch_live_tracking":
+            return None
+        referral_url = str(view_spec.get("referral_url") or "").strip()
+        button_label = str(view_spec.get("button_label") or "").strip()
+        if not referral_url:
+            return None
+        return self._build_link_button_view_spec(referral_url, label=button_label)
 
     async def _send_live_announcement_via_broker(
         self,
@@ -369,21 +409,45 @@ class TwitchMonitoringMixin(_EventSubMixin, _ExpSessionsMixin, _SessionsMixin, _
         allowed_role_ids: list[int],
         view_spec: dict[str, str] | None,
     ) -> str | None:
-        result = await self._post_master_broker_json(
-            path="/internal/master/v1/discord/send-rich-message",
-            payload={
-                "channel_id": int(channel_id),
-                "content": content or None,
-                "embed": embed.to_dict(),
-                "allowed_role_ids": allowed_role_ids,
-                "view_spec": view_spec,
-            },
-            idempotency_key=self._build_announcement_idempotency_key(
-                action="live-send",
-                login=login,
-                discriminator=str(stream_id or content or ""),
-            ),
+        payload = {
+            "channel_id": int(channel_id),
+            "content": content or None,
+            "embed": embed.to_dict(),
+            "allowed_role_ids": allowed_role_ids,
+            "view_spec": view_spec,
+        }
+        base_idempotency_key = self._build_announcement_idempotency_key(
+            action="live-send",
+            login=login,
+            discriminator=str(stream_id or content or ""),
         )
+        response = await self._post_master_broker_json(
+            path="/internal/master/v1/discord/send-rich-message",
+            payload=payload,
+            idempotency_key=base_idempotency_key,
+            include_error_code=True,
+        )
+        result, error_code = self._normalize_master_broker_post_response(response)
+        if not result and error_code == "view_resolver_unavailable":
+            fallback_view_spec = self._build_live_announcement_broker_fallback_view_spec(view_spec)
+            if fallback_view_spec is not None:
+                log.warning(
+                    "Master broker tracking view unavailable; retrying live announcement with link button fallback for %s",
+                    login,
+                )
+                fallback_response = await self._post_master_broker_json(
+                    path="/internal/master/v1/discord/send-rich-message",
+                    payload={**payload, "view_spec": fallback_view_spec},
+                    idempotency_key=self._build_announcement_idempotency_key(
+                        action="live-send-fallback",
+                        login=login,
+                        discriminator=str(stream_id or content or ""),
+                    ),
+                    include_error_code=True,
+                )
+                result, _fallback_error = self._normalize_master_broker_post_response(
+                    fallback_response
+                )
         if not result:
             return None
 
@@ -401,7 +465,7 @@ class TwitchMonitoringMixin(_EventSubMixin, _ExpSessionsMixin, _SessionsMixin, _
         embed: discord.Embed,
         view_spec: dict[str, str] | None,
     ) -> bool:
-        result = await self._post_master_broker_json(
+        response = await self._post_master_broker_json(
             path="/internal/master/v1/discord/edit-rich-message",
             payload={
                 "channel_id": int(channel_id),
@@ -415,7 +479,9 @@ class TwitchMonitoringMixin(_EventSubMixin, _ExpSessionsMixin, _SessionsMixin, _
                 login=login,
                 discriminator=str(message_id),
             ),
+            include_error_code=True,
         )
+        result, _error_code = self._normalize_master_broker_post_response(response)
         return result is not None
 
     def _partner_raid_score_refresh_interval_seconds(self) -> float:

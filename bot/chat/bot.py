@@ -60,6 +60,35 @@ log = logging.getLogger("TwitchStreams.ChatBot")
 
 
 if TWITCHIO_AVAILABLE:
+    from twitchio.authentication.scopes import Scopes, _scope_property
+    from twitchio.eventsub.websockets import Websocket
+
+    def _install_twitchio_scope_compat() -> tuple[str, ...]:
+        """
+        Add missing scope descriptors for newer Twitch scopes on older TwitchIO builds.
+
+        Twitch occasionally adds scopes before the installed TwitchIO version knows about
+        them. In that case `Scopes([...])` raises `AttributeError` during token registration
+        or refresh handling even though the token itself is valid.
+        """
+        added: list[str] = []
+        for scope_name in (
+            "moderator_manage_suspicious_users",
+        ):
+            if scope_name in vars(Scopes):
+                continue
+            descriptor = _scope_property()
+            descriptor.__set_name__(Scopes, scope_name)
+            type.__setattr__(Scopes, scope_name, descriptor)
+            added.append(scope_name)
+        return tuple(added)
+
+    _TWITCHIO_SCOPE_COMPAT = _install_twitchio_scope_compat()
+    if _TWITCHIO_SCOPE_COMPAT:
+        log.warning(
+            "Installed TwitchIO scope compatibility shim for: %s",
+            ", ".join(scope.replace("_", ":", 2) for scope in _TWITCHIO_SCOPE_COMPAT),
+        )
 
     class RaidChatBot(
         TokenPersistenceMixin,
@@ -161,6 +190,10 @@ if TWITCHIO_AVAILABLE:
             self._restart_task: asyncio.Task | None = None
             self._restart_cooldown_until: float = 0.0
             self._restart_cooldown_seconds: float = 30.0
+            self._restart_transport_ready_attempts: int = 3
+            self._restart_transport_ready_backoff_seconds: float = 2.0
+            self._restart_rejoin_retry_attempts: int = 2
+            self._restart_rejoin_retry_backoff_seconds: float = 5.0
             self._skip_initial_join_once: bool = False
             self._managed_start_with_adapter: bool | None = None
             self._managed_load_tokens: bool = False
@@ -199,6 +232,18 @@ if TWITCHIO_AVAILABLE:
             return sorted(dict.fromkeys(normalized))[:limit]
 
         def _snapshot_chat_runtime_state(self) -> dict[str, object]:
+            websocket_objects = self._iter_eventsub_websockets()
+            websocket_sessions = [
+                str(getattr(websocket, "session_id", "") or "").strip()
+                for websocket in websocket_objects
+                if str(getattr(websocket, "session_id", "") or "").strip()
+            ]
+            websocket_connected_count = sum(
+                1
+                for websocket in websocket_objects
+                if bool(getattr(websocket, "connected", False))
+                and str(getattr(websocket, "session_id", "") or "").strip()
+            )
             return {
                 "monitored_count": len(getattr(self, "_monitored_streamers", set()) or ()),
                 "subscription_entry_count": len(
@@ -212,6 +257,8 @@ if TWITCHIO_AVAILABLE:
                 "monitored_only_count": len(
                     getattr(self, "_monitored_only_channels", set()) or ()
                 ),
+                "websocket_transport_count": len(websocket_objects),
+                "websocket_connected_count": websocket_connected_count,
                 "monitored_sample": self._bounded_runtime_sample(
                     getattr(self, "_monitored_streamers", set())
                 ),
@@ -225,7 +272,34 @@ if TWITCHIO_AVAILABLE:
                 "monitored_only_sample": self._bounded_runtime_sample(
                     getattr(self, "_monitored_only_channels", set())
                 ),
+                "websocket_session_sample": self._bounded_runtime_sample(websocket_sessions),
             }
+
+        def _iter_eventsub_websockets(self, *, token_for: str | None = None) -> list[object]:
+            websockets = getattr(self, "_websockets", None)
+            if not isinstance(websockets, dict):
+                return []
+
+            pairs: list[dict[str, object]] = []
+            if token_for:
+                candidate = websockets.get(token_for)
+                if isinstance(candidate, dict):
+                    pairs.append(candidate)
+            else:
+                pairs.extend(pair for pair in websockets.values() if isinstance(pair, dict))
+
+            collected: list[object] = []
+            for pair in pairs:
+                collected.extend(pair.values())
+            return collected
+
+        def _find_connected_eventsub_websocket(self, *, token_for: str) -> object | None:
+            for websocket in self._iter_eventsub_websockets(token_for=token_for):
+                if bool(getattr(websocket, "connected", False)) and str(
+                    getattr(websocket, "session_id", "") or ""
+                ).strip():
+                    return websocket
+            return None
 
         def get_observability_snapshot(self) -> dict[str, object]:
             restart_task = getattr(self, "_restart_task", None)
@@ -285,6 +359,113 @@ if TWITCHIO_AVAILABLE:
             self._managed_start_with_adapter = bool(with_adapter)
             self._managed_load_tokens = bool(load_tokens)
             self._managed_save_tokens = bool(save_tokens)
+
+        def _reset_managed_transport_restart_state(self) -> None:
+            """
+            Reset TwitchIO client internals before reusing the same bot instance.
+
+            TwitchIO clients are not designed around repeated start/close cycles on the
+            same object. After a managed restart we must drop cached EventSub websocket
+            state and reopen the client lifecycle flags, otherwise subscribe_websocket()
+            may reuse stale transport sessions from the previous run.
+            """
+            websockets = getattr(self, "_websockets", None)
+            if isinstance(websockets, dict):
+                websockets.clear()
+
+            if hasattr(self, "_login_called"):
+                self._login_called = False
+            if hasattr(self, "_has_closed"):
+                self._has_closed = False
+            ready_event = getattr(self, "_ready_event", None)
+            if ready_event is not None and hasattr(ready_event, "clear"):
+                ready_event.clear()
+
+        async def _ensure_eventsub_transport_ready(
+            self,
+            *,
+            flow_id: str,
+            reason: str,
+            channel_list: list[str],
+        ) -> bool:
+            token_for = str(getattr(self, "bot_id", "") or "").strip()
+            if not token_for:
+                return True
+
+            websockets = getattr(self, "_websockets", None)
+            if not isinstance(websockets, dict):
+                return True
+
+            attempts = max(1, int(getattr(self, "_restart_transport_ready_attempts", 3) or 3))
+            base_backoff = max(
+                0.25,
+                float(getattr(self, "_restart_transport_ready_backoff_seconds", 2.0) or 2.0),
+            )
+            last_error: Exception | None = None
+
+            for attempt in range(1, attempts + 1):
+                existing = self._find_connected_eventsub_websocket(token_for=token_for)
+                if existing is not None:
+                    self._log_chat_runtime_snapshot(
+                        flow_id=flow_id,
+                        phase="restart_transport_ready",
+                        reason=reason,
+                        channel_list=channel_list,
+                        level=logging.INFO,
+                        transport_attempt=attempt,
+                    )
+                    return True
+
+                pair = websockets.get(token_for)
+                if not isinstance(pair, dict):
+                    pair = {}
+                    websockets[token_for] = pair
+
+                stale_ids = [
+                    socket_id
+                    for socket_id, websocket in list(pair.items())
+                    if not bool(getattr(websocket, "connected", False))
+                    or not str(getattr(websocket, "session_id", "") or "").strip()
+                ]
+                for socket_id in stale_ids:
+                    pair.pop(socket_id, None)
+
+                try:
+                    websocket = Websocket(client=self, token_for=token_for, http=self._http)
+                    await websocket.connect(fail_once=True)
+                    session_id = str(getattr(websocket, "session_id", "") or "").strip()
+                    if not session_id:
+                        raise RuntimeError("eventsub websocket connected without session_id")
+                    pair[session_id] = websocket
+                    self._log_chat_runtime_snapshot(
+                        flow_id=flow_id,
+                        phase="restart_transport_connected",
+                        reason=reason,
+                        channel_list=channel_list,
+                        level=logging.INFO,
+                        transport_attempt=attempt,
+                    )
+                    return True
+                except Exception as exc:
+                    last_error = exc
+                    self._log_chat_runtime_snapshot(
+                        flow_id=flow_id,
+                        phase="restart_transport_connect_retry",
+                        reason=reason,
+                        channel_list=channel_list,
+                        level=logging.WARNING if attempt == attempts else logging.INFO,
+                        transport_attempt=attempt,
+                        transport_error=str(exc)[:200],
+                    )
+                    if attempt < attempts:
+                        await asyncio.sleep(base_backoff * attempt)
+
+            log.warning(
+                "Chat transport restart: EventSub websocket not ready after %d attempt(s); skipping rejoin batch.",
+                attempts,
+                exc_info=last_error,
+            )
+            return False
 
         async def request_transport_restart(
             self,
@@ -415,6 +596,7 @@ if TWITCHIO_AVAILABLE:
                     with_adapter = getattr(self, "adapter", None) is not None
 
                 try:
+                    self._reset_managed_transport_restart_state()
                     self._skip_initial_join_once = True
                     asyncio.create_task(
                         self.start(
@@ -453,6 +635,7 @@ if TWITCHIO_AVAILABLE:
             *,
             flow_id: str,
             reason: str,
+            transport_retry: int = 0,
         ) -> None:
             try:
                 await self.wait_until_ready()
@@ -485,6 +668,39 @@ if TWITCHIO_AVAILABLE:
                     level=logging.INFO,
                     rejoin_candidates=0,
                 )
+                return
+
+            transport_ready = await self._ensure_eventsub_transport_ready(
+                flow_id=flow_id,
+                reason=reason,
+                channel_list=normalized,
+            )
+            if not transport_ready:
+                self._log_chat_runtime_snapshot(
+                    flow_id=flow_id,
+                    phase="restart_rejoin_deferred",
+                    reason=reason,
+                    channel_list=normalized,
+                    level=logging.WARNING,
+                    rejoin_candidates=len(normalized),
+                    transport_retry=transport_retry,
+                )
+                retry_attempts = max(
+                    0,
+                    int(getattr(self, "_restart_rejoin_retry_attempts", 2) or 0),
+                )
+                if transport_retry < retry_attempts:
+                    delay = max(
+                        0.25,
+                        float(getattr(self, "_restart_rejoin_retry_backoff_seconds", 5.0) or 5.0),
+                    ) * (transport_retry + 1)
+                    await asyncio.sleep(delay)
+                    await self._rejoin_channels_after_restart(
+                        normalized,
+                        flow_id=flow_id,
+                        reason=reason,
+                        transport_retry=transport_retry + 1,
+                    )
                 return
 
             try:
@@ -546,6 +762,15 @@ if TWITCHIO_AVAILABLE:
                 return False
             store[key] = now
             return True
+
+        @staticmethod
+        def _is_twitchio_scope_compat_error(exc: Exception) -> bool:
+            msg = str(exc or "")
+            return (
+                "Scopes" in msg
+                and "has no attribute" in msg
+                and "suspicious_users" in msg
+            )
 
         @staticmethod
         def _looks_like_bot_question(text: str) -> bool:
@@ -894,11 +1119,20 @@ if TWITCHIO_AVAILABLE:
                 if api_token:
                     # Wir fügen den Token hinzu. Refresh-Token ist bei TMI-Tokens meist nicht vorhanden (None).
                     # ABER: Wenn wir einen haben (aus ENV/Tresor), übergeben wir ihn, damit TwitchIO refreshen kann.
-                    await self.add_token(api_token, self._bot_refresh_token)
-                    log.info(
-                        "Bot auth added (refresh available: %s).",
-                        "yes" if self._bot_refresh_token else "no",
-                    )  # nosemgrep: python.lang.security.audit.logging.logger-credential-leak.python-logger-credential-disclosure
+                    registered = await self._register_bot_token_with_twitchio(
+                        access_token=api_token,
+                        refresh_token=self._bot_refresh_token,
+                    )
+                    if registered:
+                        log.info(
+                            "Bot auth added (refresh available: %s).",
+                            "yes" if self._bot_refresh_token else "no",
+                        )  # nosemgrep: python.lang.security.audit.logging.logger-credential-leak.python-logger-credential-disclosure
+                    else:
+                        log.warning(
+                            "Bot auth is present but could not be registered in TwitchIO (refresh available: %s).",
+                            "yes" if self._bot_refresh_token else "no",
+                        )
                     await self._persist_bot_tokens(
                         access_token=self._bot_token,
                         refresh_token=self._bot_refresh_token,
@@ -909,12 +1143,19 @@ if TWITCHIO_AVAILABLE:
                 else:
                     log.warning("Kein gültiger TWITCH_BOT_TOKEN gefunden.")
             except Exception as e:
-                log.error(
-                    "Der TWITCH_BOT_TOKEN ist ungültig oder abgelaufen. "
-                    "Bitte führe den OAuth-Flow für den Bot aus (Client-ID/Secret + Redirect), "
-                    "um Access- und Refresh-Token zu erhalten. Fehler: %s",
-                    e,
-                )
+                if self._is_twitchio_scope_compat_error(e):
+                    log.error(
+                        "Bot-Token konnte wegen inkompatibler TwitchIO-Scope-Mappings nicht in TwitchIO registriert werden. "
+                        "Das ist kein sicherer Hinweis auf einen ungültigen oder abgelaufenen Token. Fehler: %s",
+                        e,
+                    )
+                else:
+                    log.error(
+                        "Der TWITCH_BOT_TOKEN ist ungültig oder abgelaufen. "
+                        "Bitte führe den OAuth-Flow für den Bot aus (Client-ID/Secret + Redirect), "
+                        "um Access- und Refresh-Token zu erhalten. Fehler: %s",
+                        e,
+                    )
                 # Wir machen weiter, damit der Bot zumindest "ready" wird und andere Cogs nicht blockiert
 
             # Initial channels werden NICHT hier gejoined –
@@ -1037,12 +1278,25 @@ if TWITCHIO_AVAILABLE:
             if not api_token:
                 return
             try:
-                await self.add_token(api_token, refresh_token)
-            except Exception:
-                log.debug(
-                    "Konnte refreshed Bot-Token nicht in TwitchIO registrieren",
-                    exc_info=True,
+                registered = await self._register_bot_token_with_twitchio(
+                    access_token=api_token,
+                    refresh_token=refresh_token,
                 )
+                if not registered:
+                    log.warning(
+                        "Refreshed Bot-Token ist vorhanden, konnte aber nicht in TwitchIO registriert werden."
+                    )
+            except Exception as exc:
+                if self._is_twitchio_scope_compat_error(exc):
+                    log.warning(
+                        "Refreshed Bot-Token konnte wegen inkompatibler TwitchIO-Scope-Mappings nicht in TwitchIO registriert werden: %s",
+                        exc,
+                    )
+                else:
+                    log.debug(
+                        "Konnte refreshed Bot-Token nicht in TwitchIO registrieren",
+                        exc_info=True,
+                    )
 
         async def event_message(self, message):
             """Wird bei jeder Chat-Nachricht aufgerufen."""

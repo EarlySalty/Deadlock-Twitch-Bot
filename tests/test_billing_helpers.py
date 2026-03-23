@@ -1,8 +1,14 @@
 import unittest
 
+from bot.entitlements.catalog import (
+    legacy_plan_name_has_entitlement,
+    normalize_plan_id_from_legacy_name,
+)
 from bot.dashboard.billing_plans import (
     _billing_dump_price_id_mapping,
     _billing_dump_product_id_mapping,
+    _billing_plan_entitlements,
+    _billing_plan_tier,
     _billing_is_paid_plan_id,
     _billing_parse_price_id_mapping,
     _billing_parse_product_id_mapping,
@@ -57,6 +63,34 @@ class BillingHelperTests(unittest.TestCase):
         self.assertTrue(_billing_is_paid_plan_id("raid_boost"))
         self.assertTrue(_billing_is_paid_plan_id("analysis_dashboard"))
         self.assertTrue(_billing_is_paid_plan_id("bundle_analysis_raid_boost"))
+
+    def test_plan_helpers_expose_canonical_tier_and_entitlements(self) -> None:
+        self.assertEqual(_billing_plan_tier("raid_free"), "free")
+        self.assertEqual(_billing_plan_tier("raid_boost"), "basic")
+        self.assertEqual(_billing_plan_tier("analysis_dashboard"), "extended")
+        self.assertEqual(
+            _billing_plan_entitlements("raid_boost"),
+            ("analytics.basic", "chat.lurker_tax", "raid.priority"),
+        )
+        self.assertEqual(
+            _billing_plan_entitlements("bundle_analysis_raid_boost"),
+            (
+                "analytics.basic",
+                "analytics.extended",
+                "chat.lurker_tax",
+                "chat.promos.disable",
+                "raid.priority",
+            ),
+        )
+
+    def test_legacy_plan_name_helpers_resolve_bundle_entitlements(self) -> None:
+        self.assertEqual(
+            normalize_plan_id_from_legacy_name("bundle"),
+            "bundle_analysis_raid_boost",
+        )
+        self.assertTrue(legacy_plan_name_has_entitlement("bundle", "raid.priority"))
+        self.assertTrue(legacy_plan_name_has_entitlement("bundle", "chat.promos.disable"))
+        self.assertFalse(legacy_plan_name_has_entitlement("analysis", "raid.priority"))
 
 
 if __name__ == "__main__":

@@ -121,6 +121,54 @@ class LiveAnnouncementTransportTests(unittest.IsolatedAsyncioTestCase):
             },
         )
 
+    async def test_send_live_announcement_via_broker_falls_back_to_link_button(self) -> None:
+        dummy = _DummyMonitoring()
+        calls: list[dict[str, object]] = []
+
+        async def _fake_post_master_broker_json(**kwargs):
+            calls.append(dict(kwargs))
+            if len(calls) == 1:
+                return None, "view_resolver_unavailable"
+            return {"message_id": 9898}, None
+
+        dummy._post_master_broker_json = _fake_post_master_broker_json  # type: ignore[method-assign]
+        embed = discord.Embed(title="Live", description="Beschreibung")
+
+        message_id = await dummy._send_live_announcement_via_broker(
+            channel_id=123456,
+            login="Tester",
+            stream_id="stream-1",
+            content="Testcontent",
+            embed=embed,
+            allowed_role_ids=[111],
+            view_spec={
+                "type": "twitch_live_tracking",
+                "streamer_login": "tester",
+                "tracking_token": "track-1",
+                "referral_url": "https://www.twitch.tv/tester?ref=deadlock",
+                "button_label": "Jetzt ansehen",
+            },
+        )
+
+        self.assertEqual(message_id, "9898")
+        self.assertEqual(len(calls), 2)
+        self.assertTrue(str(calls[0]["idempotency_key"]).startswith("twitch-live-send-"))
+        self.assertTrue(str(calls[1]["idempotency_key"]).startswith("twitch-live-send-fallback-"))
+        self.assertEqual(
+            calls[1]["payload"],
+            {
+                "channel_id": 123456,
+                "content": "Testcontent",
+                "embed": embed.to_dict(),
+                "allowed_role_ids": [111],
+                "view_spec": {
+                    "type": "link_button",
+                    "label": "Jetzt ansehen",
+                    "url": "https://www.twitch.tv/tester?ref=deadlock",
+                },
+            },
+        )
+
     async def test_edit_live_announcement_via_broker_uses_edit_endpoint(self) -> None:
         dummy = _DummyMonitoring()
         captured: dict[str, object] = {}

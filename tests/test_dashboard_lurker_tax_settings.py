@@ -168,6 +168,17 @@ class DashboardLurkerTaxTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("/twitch/abbo/lurker-tax-settings", html)
         self.assertIn("moderator:read:chatters", html)
         self.assertIn("checked", html)
+        self.assertNotIn("/twitch/abbo/promo-settings", html)
+
+    async def test_abbo_entry_shows_promo_toggle_only_for_bundle_entitlement(self) -> None:
+        handler = _AbboHarness(plan_id="bundle_analysis_raid_boost")
+
+        with self._conn_patch():
+            response = await handler.abbo_entry(SimpleNamespace(query={}))
+
+        html = response.text
+        self.assertIn("/twitch/abbo/promo-settings", html)
+        self.assertIn("Chat-Promos", html)
 
     async def test_abbo_entry_keeps_warning_when_bot_scope_is_unknown(self) -> None:
         handler = _AbboHarness(plan_id="raid_boost")
@@ -300,6 +311,59 @@ class DashboardLurkerTaxTests(unittest.IsolatedAsyncioTestCase):
         ).fetchone()
         self.assertEqual(ctx.exception.location, "/twitch/abbo?lurker_tax=error")
         self.assertEqual(saved["lurker_tax_enabled"], 0)
+
+    async def test_post_promo_settings_saves_flag_for_bundle_plan(self) -> None:
+        handler = _AbboHarness(plan_id="bundle_analysis_raid_boost")
+        request = _PostRequest(
+            MultiDict(
+                [
+                    ("promo_disabled", "0"),
+                    ("promo_disabled", "1"),
+                    ("csrf_token", "csrf-ok"),
+                ]
+            )
+        )
+
+        with self._conn_patch():
+            with self.assertRaises(web.HTTPFound) as ctx:
+                await handler.abbo_promo_settings(request)
+
+        saved = self.conn.execute(
+            "SELECT promo_disabled FROM streamer_plans WHERE twitch_user_id = ?",
+            ("12345",),
+        ).fetchone()
+        self.assertEqual(ctx.exception.location, "/twitch/abbo?profile=saved")
+        self.assertEqual(saved["promo_disabled"], 1)
+
+    async def test_post_promo_settings_ignores_non_bundle_plan(self) -> None:
+        handler = _AbboHarness(plan_id="analysis_dashboard")
+        request = _PostRequest({"promo_disabled": "1", "csrf_token": "csrf-ok"})
+
+        with self._conn_patch():
+            with self.assertRaises(web.HTTPFound) as ctx:
+                await handler.abbo_promo_settings(request)
+
+        saved = self.conn.execute(
+            "SELECT promo_disabled FROM streamer_plans WHERE twitch_user_id = ?",
+            ("12345",),
+        ).fetchone()
+        self.assertEqual(ctx.exception.location, "/twitch/abbo")
+        self.assertEqual(saved["promo_disabled"], 0)
+
+    async def test_post_promo_settings_rejects_invalid_csrf(self) -> None:
+        handler = _AbboHarness(plan_id="bundle_analysis_raid_boost")
+        request = _PostRequest({"promo_disabled": "1", "csrf_token": "bad-token"})
+
+        with self._conn_patch():
+            response = await handler.abbo_promo_settings(request)
+
+        saved = self.conn.execute(
+            "SELECT promo_disabled FROM streamer_plans WHERE twitch_user_id = ?",
+            ("12345",),
+        ).fetchone()
+        self.assertEqual(response.status, 403)
+        self.assertEqual(response.text, '{"error": "csrf_token_invalid"}')
+        self.assertEqual(saved["promo_disabled"], 0)
 
     async def test_post_lurker_tax_settings_returns_error_when_login_only_row_is_missing(self) -> None:
         handler = _AbboHarness(

@@ -10,6 +10,7 @@ from datetime import UTC, date, datetime, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
+from ..entitlements.catalog import legacy_plan_name_has_entitlement, plan_has_entitlement
 from ..storage import get_conn
 
 log = logging.getLogger("TwitchStreams.PartnerRaidScores")
@@ -21,8 +22,6 @@ NEW_PARTNER_MAX_MULTIPLIER = 1.25
 NEW_PARTNER_RAID_THRESHOLD = 10
 RAID_BOOST_MULTIPLIER = 1.5
 DEFAULT_RAID_BOOST_MULTIPLIER = 1.0
-RAID_BOOST_PLAN_NAMES = {"raid_boost", "bundle_analysis_raid_boost", "bundle"}
-
 try:
     BERLIN_TZ = ZoneInfo("Europe/Berlin")
 except ZoneInfoNotFoundError:  # pragma: no cover - environment dependent fallback
@@ -404,8 +403,11 @@ class PartnerRaidScoreService:
             )
             flags[twitch_user_id] = bool(
                 raid_boost_enabled
-                or plan_name in RAID_BOOST_PLAN_NAMES
-                or (manual_override_active and manual_plan_id in RAID_BOOST_PLAN_NAMES)
+                or legacy_plan_name_has_entitlement(plan_name, "raid.priority")
+                or (
+                    manual_override_active
+                    and plan_has_entitlement(manual_plan_id, "raid.priority")
+                )
             )
         return flags
 

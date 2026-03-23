@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import os
 import time
 
 import aiohttp
@@ -59,9 +60,21 @@ class TwitchAPI:
             self._session = aiohttp.ClientSession(
                 timeout=timeout,
                 connector=connector,
-                trust_env=True,
+                trust_env=self._trust_env_enabled(),
             )
             self._own_session = True
+
+    @staticmethod
+    def _trust_env_enabled() -> bool:
+        raw = (os.getenv("TWITCH_API_TRUST_ENV") or "").strip().lower()
+        return raw in {"1", "true", "yes", "on"}
+
+    @staticmethod
+    def _format_exception_summary(exc: BaseException) -> str:
+        message = str(exc).strip()
+        if message:
+            return f"{exc.__class__.__name__}: {message}"
+        return exc.__class__.__name__
 
     @staticmethod
     def _is_closed_session_error(exc: BaseException) -> bool:
@@ -330,7 +343,11 @@ class TwitchAPI:
                     )
                     await asyncio.sleep(delay)
                     continue
-                self._log.error("POST %s failed after retries: %s", path, exc)
+                self._log.error(
+                    "POST %s failed after retries: %s",
+                    path,
+                    self._format_exception_summary(exc),
+                )
                 raise last_exc
         # Defensive guard to avoid an implicit None on unexpected fallthrough
         raise last_exc or RuntimeError(f"POST {path} failed without raising")

@@ -87,6 +87,53 @@ class _AnalyticsHarness(TwitchAnalyticsMixin):
 
 
 class ChattersBotFallbackTests(unittest.IsolatedAsyncioTestCase):
+    async def test_subscriptions_success_logs_at_debug(self) -> None:
+        harness = _AnalyticsHarness()
+
+        with (
+            patch("bot.analytics.mixin.storage.insert_observability_event"),
+            patch("bot.analytics.mixin.log.log") as log_mock,
+        ):
+            harness._log_analytics_decision(
+                flow_id="subscriptions-1",
+                flow="subscriptions",
+                login="partner_one",
+                decision="success",
+                reason="subscriptions_collected",
+                request_attempted=True,
+                request_result="success",
+                http_status=200,
+                scope_state={"streamer": "present"},
+                runtime_state=harness._build_analytics_runtime_state("partner_one"),
+                snapshot_total=5,
+                snapshot_points=5,
+            )
+
+        self.assertEqual(log_mock.call_args.args[0], logging.DEBUG)
+
+    async def test_ads_success_logs_at_debug(self) -> None:
+        harness = _AnalyticsHarness()
+
+        with (
+            patch("bot.analytics.mixin.storage.insert_observability_event"),
+            patch("bot.analytics.mixin.log.log") as log_mock,
+        ):
+            harness._log_analytics_decision(
+                flow_id="ads-1",
+                flow="ads",
+                login="partner_one",
+                decision="success",
+                reason="ads_collected",
+                request_attempted=True,
+                request_result="success",
+                http_status=200,
+                scope_state={"streamer": "present"},
+                runtime_state=harness._build_analytics_runtime_state("partner_one"),
+                next_ad_at="2026-03-21T02:39:49+00:00",
+            )
+
+        self.assertEqual(log_mock.call_args.args[0], logging.DEBUG)
+
     async def test_chat_bot_unavailable_failure_logs_at_debug(self) -> None:
         harness = _AnalyticsHarness()
 

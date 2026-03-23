@@ -490,6 +490,15 @@ class TwitchAnalyticsMixin:
             )
         ):
             return logging.DEBUG
+        if (
+            level == logging.INFO
+            and decision_key == "success"
+            and (
+                (flow_key == "subscriptions" and reason_key == "subscriptions_collected")
+                or (flow_key == "ads" and reason_key == "ads_collected")
+            )
+        ):
+            return logging.DEBUG
         return level
 
     def _log_analytics_decision(
@@ -571,7 +580,7 @@ class TwitchAnalyticsMixin:
         except Exception:
             return
 
-        log.info("Starting analytics collection (Subs + Ads)...")
+        log.debug("Starting analytics collection (Subs + Ads)...")
 
         # Get authorized users with raid_enabled=1 (assuming they granted scopes)
         # Note: We should actually check if they have the specific scope,
@@ -633,7 +642,7 @@ class TwitchAnalyticsMixin:
                     login,
                 )
 
-        log.info(
+        log.debug(
             "Analytics collection finished. users=%d, subs_snapshots=%d, ads_snapshots=%d",
             users_processed,
             subs_snapshots,

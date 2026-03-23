@@ -6,7 +6,8 @@ from collections import deque
 from datetime import UTC, datetime, timedelta
 
 from ..core.chat_bots import build_known_chat_bot_not_in_clause
-from ..dashboard.billing.billing_plans import billing_is_paid_plan_id
+from ..dashboard.billing.billing_plans import billing_plan_has_entitlement
+from ..entitlements.resolver import resolve_plan_snapshot_for_refs
 from ..promo_mode import (
     evaluate_global_promo_mode,
     load_global_promo_mode,
@@ -30,6 +31,7 @@ from .constants import (
     PROMO_IGNORE_COMMANDS,
     PROMO_LOOP_INTERVAL_SEC,
     PROMO_MESSAGES,
+    PROMO_MESSAGES_CATEGORIZED,
     PROMO_OVERALL_COOLDOWN_MIN,
     PROMO_VIEWER_SPIKE_COOLDOWN_MIN,
     PROMO_VIEWER_SPIKE_ENABLED,
@@ -182,7 +184,7 @@ class PromoMixin:
                 else:
                     settings_row = conn.execute(
                         """
-                        SELECT twitch_user_id, twitch_login, lurker_tax_enabled, manual_plan_id, manual_plan_expires_at
+                        SELECT twitch_user_id, twitch_login, lurker_tax_enabled
                           FROM streamer_plans
                          WHERE LOWER(COALESCE(twitch_login, '')) = LOWER(?)
                          LIMIT 1
@@ -190,8 +192,6 @@ class PromoMixin:
                         (canonical_login,),
                     ).fetchone()
 
-                plan_id = "raid_free"
-                has_active_manual_override = False
                 enabled = False
                 if settings_row:
                     enabled = bool(
@@ -202,53 +202,12 @@ class PromoMixin:
                         )
                         or 0
                     )
-                    manual_plan_id = str(
-                        (
-                            settings_row["manual_plan_id"]
-                            if hasattr(settings_row, "keys")
-                            else settings_row[3]
-                        )
-                        or ""
-                    ).strip()
-                    if manual_plan_id == "free":
-                        manual_plan_id = "raid_free"
-                    manual_expires_at = self._parse_lurker_tax_datetime(
-                        settings_row["manual_plan_expires_at"]
-                        if hasattr(settings_row, "keys")
-                        else settings_row[4]
-                    )
-                    if manual_plan_id:
-                        if not manual_expires_at or manual_expires_at >= datetime.now(UTC):
-                            plan_id = manual_plan_id
-                            has_active_manual_override = True
-
-                if plan_id == "raid_free" and not has_active_manual_override:
-                    refs = [value for value in (twitch_user_id, canonical_login, normalized_login) if value]
-                    for ref in refs:
-                        sub_row = conn.execute(
-                            """
-                            SELECT plan_id
-                              FROM twitch_billing_subscriptions
-                             WHERE LOWER(customer_reference) = LOWER(?)
-                               AND status IN ('active', 'trialing', 'past_due')
-                             ORDER BY updated_at DESC
-                             LIMIT 1
-                            """,
-                            (ref,),
-                        ).fetchone()
-                        if not sub_row:
-                            continue
-                        candidate_plan_id = str(
-                            (
-                                sub_row["plan_id"]
-                                if hasattr(sub_row, "keys")
-                                else sub_row[0]
-                            )
-                            or ""
-                        ).strip()
-                        if candidate_plan_id:
-                            plan_id = candidate_plan_id
-                            break
+                snapshot = resolve_plan_snapshot_for_refs(
+                    [value for value in (twitch_user_id, canonical_login, normalized_login) if value],
+                    conn=conn,
+                    fallback_ref=canonical_login,
+                )
+                plan_id = str(snapshot.get("plan_id") or "raid_free").strip() or "raid_free"
 
                 if twitch_user_id:
                     auth_row = conn.execute(
@@ -332,7 +291,7 @@ class PromoMixin:
             "login": canonical_login.lower(),
             "twitch_user_id": twitch_user_id,
             "plan_id": plan_id,
-            "is_paid_plan": billing_is_paid_plan_id(plan_id),
+            "is_paid_plan": billing_plan_has_entitlement(plan_id, "chat.lurker_tax"),
             "enabled": enabled,
             # Migration: Lurker-Tax wird bot-zentriert ueber den zentralen Bot-Token ermoeglicht.
             "has_moderator_read_chatters": has_chatters_scope,
@@ -867,7 +826,7 @@ class PromoMixin:
         if restored:
             log.info("Restored %d promo cooldown(s) from DB", restored)
 
-    def _build_promo_text(self, login: str, invite: str) -> str | None:
+    def _build_promo_text(self, login: str, invite: str, reason: str = "promo") -> str | None:
         global_message = self._load_global_promo_message()
         if global_message:
             return self._format_promo_template(global_message, invite)
@@ -876,9 +835,24 @@ class PromoMixin:
         if custom_message:
             return self._format_promo_template(custom_message, invite)
 
-        if not PROMO_MESSAGES:
+        # Kategorisierte Nachrichten auswählen
+        messages = PROMO_MESSAGES
+        if PROMO_MESSAGES_CATEGORIZED:
+            if reason == "viewer_spike":
+                messages = PROMO_MESSAGES_CATEGORIZED.get("hype") or PROMO_MESSAGES
+            elif reason == "chat_activity":
+                # Mix aus Competitive, Community und Growth für aktive Chat-Phasen
+                pool = []
+                for cat in ("competitive", "community", "growth"):
+                    pool.extend(PROMO_MESSAGES_CATEGORIZED.get(cat) or [])
+                messages = pool if pool else PROMO_MESSAGES
+            elif reason == "promo":
+                # Bei periodischen Promos alles erlauben für maximale Varianz
+                messages = PROMO_MESSAGES
+
+        if not messages:
             return None
-        return self._format_promo_template(secrets.choice(PROMO_MESSAGES), invite)
+        return self._format_promo_template(secrets.choice(messages), invite)
 
     async def _send_promo_message(
         self, login: str, channel_id: str, now: float, *, reason: str
@@ -887,7 +861,7 @@ class PromoMixin:
         if not invite:
             return False
 
-        msg = self._build_promo_text(login, invite)
+        msg = self._build_promo_text(login, invite, reason=reason)
         if not msg:
             return False
         ok = await self._send_announcement(

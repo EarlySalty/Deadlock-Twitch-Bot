@@ -1,4 +1,5 @@
 import contextlib
+import asyncio
 import unittest
 from unittest.mock import patch
 
@@ -44,6 +45,20 @@ class _RecordingSession:
         if not self._responses:
             raise AssertionError("No fake response configured")
         return self._responses.pop(0)
+
+
+class _CreatedSession:
+    def __init__(self) -> None:
+        self.closed = False
+
+
+class _ExplodingSession:
+    def __init__(self, exc: BaseException) -> None:
+        self.closed = False
+        self._exc = exc
+
+    def post(self, *args, **kwargs):
+        raise self._exc
 
 
 class _FakeCursor:
@@ -94,6 +109,61 @@ class TwitchApiAuthGuardTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(len(session.calls), 1)
         self.assertTrue(api.is_auth_blocked())
+
+    def test_http_session_ignores_proxy_env_by_default(self) -> None:
+        captured: dict[str, object] = {}
+
+        def _fake_client_session(**kwargs):
+            captured.update(kwargs)
+            return _CreatedSession()
+
+        with (
+            patch.dict("os.environ", {"TWITCH_API_TRUST_ENV": ""}, clear=False),
+            patch("bot.api.twitch_api.build_resilient_connector", return_value=object()),
+            patch("bot.api.twitch_api.aiohttp.ClientSession", side_effect=_fake_client_session),
+        ):
+            api = TwitchAPI("client-id", "client-secret")
+            api._ensure_session()
+
+        self.assertFalse(bool(captured["trust_env"]))
+
+    def test_http_session_allows_proxy_env_when_explicitly_enabled(self) -> None:
+        captured: dict[str, object] = {}
+
+        def _fake_client_session(**kwargs):
+            captured.update(kwargs)
+            return _CreatedSession()
+
+        with (
+            patch.dict("os.environ", {"TWITCH_API_TRUST_ENV": "1"}, clear=False),
+            patch("bot.api.twitch_api.build_resilient_connector", return_value=object()),
+            patch("bot.api.twitch_api.aiohttp.ClientSession", side_effect=_fake_client_session),
+        ):
+            api = TwitchAPI("client-id", "client-secret")
+            api._ensure_session()
+
+        self.assertTrue(bool(captured["trust_env"]))
+
+    def test_format_exception_summary_uses_class_name_for_empty_message(self) -> None:
+        self.assertEqual(
+            TwitchAPI._format_exception_summary(asyncio.TimeoutError()),
+            "TimeoutError",
+        )
+
+    async def test_post_logs_final_timeout_after_retries(self) -> None:
+        api = TwitchAPI("client-id", "client-secret", session=_ExplodingSession(TimeoutError()))
+
+        with patch.object(api._log, "error") as error_mock:
+            with self.assertRaises(TimeoutError):
+                await api._post(
+                    "/helix/test",
+                    json={"ok": True},
+                    oauth_token="oauth:test-token",
+                    max_attempts=1,
+                )
+
+        error_mock.assert_called_once()
+        self.assertIn("failed after retries", error_mock.call_args.args[0])
 
 
 class RaidAuthManagerAuthGuardTests(unittest.IsolatedAsyncioTestCase):
