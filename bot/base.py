@@ -450,6 +450,10 @@ class TwitchBaseCog(commands.Cog):
                 }
                 scout_summary["current_deadlock_logins_count"] = len(current_deadlock_logins)
                 new_logins = []
+                absent_cycle_counts = getattr(self, "_scout_monitored_only_absent_cycles", None)
+                if not isinstance(absent_cycle_counts, dict):
+                    absent_cycle_counts = {}
+                    setattr(self, "_scout_monitored_only_absent_cycles", absent_cycle_counts)
                 now = datetime.now(UTC).isoformat(timespec="seconds")
 
                 with storage.transaction() as conn:
@@ -495,9 +499,19 @@ class TwitchBaseCog(commands.Cog):
                 # This covers: Offline, Switched Game, Removed 'de' tag.
                 to_remove = []
                 for login in existing_monitored:
-                    if login not in current_deadlock_logins:
+                    if login in current_deadlock_logins:
+                        absent_cycle_counts.pop(login, None)
+                        continue
+                    missed_cycles = int(absent_cycle_counts.get(login, 0) or 0) + 1
+                    absent_cycle_counts[login] = missed_cycles
+                    if missed_cycles >= 2:
                         to_remove.append(login)
+                        absent_cycle_counts.pop(login, None)
                 scout_summary["to_remove"] = list(to_remove)
+
+                for login in list(absent_cycle_counts):
+                    if login not in existing_monitored:
+                        absent_cycle_counts.pop(login, None)
 
                 if to_remove:
                     with storage.transaction() as conn:
