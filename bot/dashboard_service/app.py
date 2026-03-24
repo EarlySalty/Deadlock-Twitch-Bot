@@ -30,6 +30,7 @@ from ..runtime_mode import (
     INTERNAL_API_PORT as RUNTIME_INTERNAL_API_PORT,
     enforce_dashboard_service_runtime,
 )
+from ..runtime_security import require_noauth_loopback_guard
 from ..secret_store import load_secret_value
 from ..storage import analytics_db_fingerprint_details
 from .client import BotApiClient, BotApiClientError
@@ -77,6 +78,11 @@ def _parse_env_float(name: str, default: float) -> float:
         return default
 
 
+def _dashboard_host_setting() -> str:
+    return (
+        os.getenv("TWITCH_DASHBOARD_HOST") or TWITCH_DASHBOARD_HOST or "127.0.0.1"
+    ).strip()
+
 def _default_internal_api_base_url() -> str:
     explicit = (os.getenv("TWITCH_INTERNAL_API_BASE_URL") or "").strip()
     if explicit:
@@ -114,6 +120,7 @@ def build_dashboard_service_app(
         else _parse_env_bool("TWITCH_DASHBOARD_NOAUTH", bool(TWITCH_DASHBOARD_NOAUTH))
     )
     _require_noauth_opt_in_if_enabled(enabled=resolved_noauth)
+    require_noauth_loopback_guard(enabled=resolved_noauth, host=_dashboard_host_setting())
 
     resolved_internal_base = (
         internal_api_base_url or _default_internal_api_base_url()
@@ -477,6 +484,9 @@ async def run_dashboard_service(
         or TWITCH_DASHBOARD_HOST
         or "127.0.0.1"
     ).strip()
+    resolved_noauth = _parse_env_bool("TWITCH_DASHBOARD_NOAUTH", bool(TWITCH_DASHBOARD_NOAUTH))
+    _require_noauth_opt_in_if_enabled(enabled=resolved_noauth)
+    require_noauth_loopback_guard(enabled=resolved_noauth, host=resolved_host)
     resolved_port = int(
         port
         if port is not None
@@ -484,7 +494,7 @@ async def run_dashboard_service(
     )
     enforce_dashboard_service_runtime(port=resolved_port)
     with runtime_pid_lock("dashboard_service", port=resolved_port):
-        dashboard_app = app or build_dashboard_service_app()
+        dashboard_app = app or build_dashboard_service_app(noauth=resolved_noauth)
         runner = web.AppRunner(dashboard_app)
         await runner.setup()
         site = web.TCPSite(runner, host=resolved_host, port=resolved_port)

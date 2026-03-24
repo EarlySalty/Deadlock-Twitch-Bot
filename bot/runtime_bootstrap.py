@@ -32,10 +32,11 @@ from .core.constants import (
     TWITCH_TARGET_GAME_NAME,
     log,
 )
-from .internal_api import InternalApiRunner
+from .internal_api import InternalApiCallbacks, InternalApiRunner
 from .raid import partner_scores as partner_raid_scores
 from .raid.manager import RaidBot
 from .reload_manager import LoopSpec, SubsystemDef, TwitchReloadManager
+from .runtime_security import require_noauth_loopback_guard
 from .secret_store import load_secret_value
 from .storage import pg as storage_pg
 
@@ -150,6 +151,10 @@ class TwitchRuntimeBootstrap:
         cog._dashboard_port = _parse_env_int("TWITCH_DASHBOARD_PORT", int(TWITCH_DASHBOARD_PORT))
         embedded_env = (os.getenv("TWITCH_DASHBOARD_EMBEDDED", "") or "").strip().lower()
         cog._dashboard_embedded = embedded_env not in {"0", "false", "no", "off"}
+        require_noauth_loopback_guard(
+            enabled=cog._dashboard_noauth,
+            host=cog._dashboard_host,
+        )
         if not cog._dashboard_embedded:
             log.info(
                 "TWITCH_DASHBOARD_EMBEDDED disabled - assuming external reverse proxy serves the dashboard"
@@ -225,35 +230,37 @@ class TwitchRuntimeBootstrap:
             host=cog._internal_api_host,
             port=cog._internal_api_port,
             token=cog._internal_api_token,
-            add_cb=getattr(cog, "_dashboard_add", None),
-            remove_cb=getattr(cog, "_dashboard_remove", None),
-            list_cb=getattr(cog, "_dashboard_list", None),
-            stats_cb=getattr(cog, "_dashboard_stats", None),
-            verify_cb=getattr(cog, "_dashboard_verify", None),
-            archive_cb=getattr(cog, "_dashboard_archive", None),
-            discord_flag_cb=getattr(cog, "_dashboard_set_discord_flag", None),
-            discord_profile_cb=getattr(cog, "_dashboard_save_discord_profile", None),
-            streamer_analytics_cb=getattr(cog, "_dashboard_streamer_analytics_data", None),
-            comparison_cb=getattr(cog, "_dashboard_comparison_stats", None),
-            session_cb=getattr(cog, "_dashboard_session_detail", None),
-            raid_auth_url_cb=getattr(cog, "_dashboard_raid_auth_url", None),
-            raid_auth_state_cb=getattr(cog, "_integration_raid_auth_state", None),
-            raid_block_state_cb=getattr(cog, "_integration_raid_block_state", None),
-            raid_go_url_cb=getattr(cog, "_dashboard_raid_go_url", None),
-            raid_requirements_cb=getattr(cog, "_dashboard_raid_requirements", None),
-            raid_oauth_callback_cb=getattr(cog, "_dashboard_raid_oauth_callback", None),
-            live_active_announcements_cb=getattr(
-                cog,
-                "_dashboard_live_active_announcements",
-                None,
+            callbacks=InternalApiCallbacks(
+                add=getattr(cog, "_dashboard_add", None),
+                remove=getattr(cog, "_dashboard_remove", None),
+                streamers=getattr(cog, "_dashboard_list", None),
+                stats=getattr(cog, "_dashboard_stats", None),
+                verify=getattr(cog, "_dashboard_verify", None),
+                archive=getattr(cog, "_dashboard_archive", None),
+                discord_flag=getattr(cog, "_dashboard_set_discord_flag", None),
+                discord_profile=getattr(cog, "_dashboard_save_discord_profile", None),
+                streamer_analytics=getattr(cog, "_dashboard_streamer_analytics_data", None),
+                comparison=getattr(cog, "_dashboard_comparison_stats", None),
+                session=getattr(cog, "_dashboard_session_detail", None),
+                raid_auth_url=getattr(cog, "_dashboard_raid_auth_url", None),
+                raid_auth_state=getattr(cog, "_integration_raid_auth_state", None),
+                raid_block_state=getattr(cog, "_integration_raid_block_state", None),
+                raid_go_url=getattr(cog, "_dashboard_raid_go_url", None),
+                raid_requirements=getattr(cog, "_dashboard_raid_requirements", None),
+                raid_oauth_callback=getattr(cog, "_dashboard_raid_oauth_callback", None),
+                live_active_announcements=getattr(
+                    cog,
+                    "_dashboard_live_active_announcements",
+                    None,
+                ),
+                live_link_click=getattr(cog, "_dashboard_live_link_click", None),
+                observability_snapshot=getattr(
+                    cog,
+                    "_internal_observability_snapshot",
+                    None,
+                ),
+                chatters_debug=getattr(cog, "_internal_chatters_debug", None),
             ),
-            live_link_click_cb=getattr(cog, "_dashboard_live_link_click", None),
-            observability_snapshot_cb=getattr(
-                cog,
-                "_internal_observability_snapshot",
-                None,
-            ),
-            chatters_debug_cb=getattr(cog, "_internal_chatters_debug", None),
         )
 
         webhook_secret = load_secret_value("TWITCH_WEBHOOK_SECRET")

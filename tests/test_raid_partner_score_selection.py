@@ -55,7 +55,7 @@ class _OfflineAutoRaidHarness(TwitchRaidMixin):
 
 class RaidPartnerScoreSelectionTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self) -> None:
-        self.conn = sqlite3.connect(":memory:")
+        self.conn = sqlite3.connect(":memory:", check_same_thread=False)
         self.conn.row_factory = sqlite3.Row
         ensure_sqlite_twitch_schema(self.conn)
         self.session = aiohttp.ClientSession()
@@ -443,10 +443,38 @@ class RaidPartnerScoreSelectionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(ensure_ready_mock.await_count, 1)
         start_mock.assert_awaited_once()
 
+    async def test_execute_raid_pipeline_blocks_when_raid_blacklist_unavailable(self) -> None:
+        with (
+            patch.object(
+                self.raid_bot,
+                "_load_raid_blacklist",
+                side_effect=RuntimeError("database unavailable"),
+            ),
+            patch(
+                "bot.raid.bot.asyncio.to_thread",
+                new=AsyncMock(side_effect=lambda func, *args, **kwargs: func(*args, **kwargs)),
+            ) as mocked_to_thread,
+        ):
+            result = await self.raid_bot._execute_raid_pipeline(
+                broadcaster_id="1001",
+                broadcaster_login="source_login",
+                viewer_count=7,
+                stream_duration_sec=600,
+                online_partners=[],
+                api=None,
+                category_id=None,
+                offline_trigger_ts=None,
+                reason="auto_raid_on_offline",
+            )
+
+        self.assertEqual(result["status"], "blocked")
+        self.assertEqual(result["error"], "blacklist_unavailable")
+        mocked_to_thread.assert_awaited_once()
+
 
 class ManualRaidFlowTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self) -> None:
-        self.conn = sqlite3.connect(":memory:")
+        self.conn = sqlite3.connect(":memory:", check_same_thread=False)
         self.conn.row_factory = sqlite3.Row
         ensure_sqlite_twitch_schema(self.conn)
         self.session = aiohttp.ClientSession()

@@ -82,6 +82,9 @@ KEYRING_SERVICE = "DeadlockBot"
 ENV_DSN = "TWITCH_ANALYTICS_DSN"
 _DB_FINGERPRINT_SALT = b"deadlock.analytics-db-fingerprint.v1"
 _DB_FINGERPRINT_ITERATIONS = 100_000
+_RUNTIME_SCHEMA_COMPONENT = "storage_pg"
+_RUNTIME_SCHEMA_VERSION = 1
+_RUNTIME_SCHEMA_BOOTSTRAP_ENV = "TWITCH_ALLOW_RUNTIME_SCHEMA_BOOTSTRAP"
 
 
 def _env_int(name: str, default: int, *, minimum: int) -> int:
@@ -580,6 +583,114 @@ def _mark_runtime_storage_ready(cache_key: str) -> None:
     _require_runtime_storage_ready._ready_for = ready_for
 
 
+def _runtime_schema_bootstrap_allowed() -> bool:
+    raw = str(os.getenv(_RUNTIME_SCHEMA_BOOTSTRAP_ENV) or "").strip().lower()
+    return raw in {"1", "true", "yes", "on"}
+
+
+def _schema_version_table_exists(conn: psycopg.Connection) -> bool:
+    row = conn.execute(
+        """
+        SELECT 1
+          FROM information_schema.tables
+         WHERE table_schema = 'public'
+           AND table_name = 'schema_version'
+        """
+    ).fetchone()
+    return bool(row)
+
+
+def _schema_version_columns(conn: psycopg.Connection) -> set[str]:
+    rows = conn.execute(
+        """
+        SELECT column_name
+          FROM information_schema.columns
+         WHERE table_schema = 'public'
+           AND table_name = 'schema_version'
+        """
+    ).fetchall()
+    columns: set[str] = set()
+    for row in rows or []:
+        if hasattr(row, "get"):
+            value = row.get("column_name")
+        else:
+            value = row[0] if row else None
+        column_name = str(value or "").strip().lower()
+        if column_name:
+            columns.add(column_name)
+    return columns
+
+
+def _load_runtime_schema_version(conn: psycopg.Connection) -> int | None:
+    if not _schema_version_table_exists(conn):
+        return None
+
+    columns = _schema_version_columns(conn)
+    if not {"component", "version"}.issubset(columns):
+        log.info(
+            "schema_version table is externally managed; missing runtime columns %s",
+            sorted({"component", "version"} - columns),
+        )
+        return _RUNTIME_SCHEMA_VERSION
+
+    row = conn.execute(
+        """
+        SELECT version
+          FROM schema_version
+         WHERE component = %s
+         LIMIT 1
+        """,
+        (_RUNTIME_SCHEMA_COMPONENT,),
+    ).fetchone()
+
+    if not row:
+        return 0
+    try:
+        return int(row[0])
+    except (TypeError, ValueError, IndexError):
+        log.warning("Invalid schema_version row for %s: %r", _RUNTIME_SCHEMA_COMPONENT, row)
+        return 0
+
+
+def _record_runtime_schema_version(conn: psycopg.Connection, version: int) -> None:
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS schema_version (
+            component TEXT PRIMARY KEY,
+            version INTEGER NOT NULL,
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+        )
+        """
+    )
+    conn.execute(
+        """
+        INSERT INTO schema_version (component, version, updated_at)
+        VALUES (%s, %s, now())
+        ON CONFLICT (component)
+        DO UPDATE SET
+            version = EXCLUDED.version,
+            updated_at = now()
+        """,
+        (_RUNTIME_SCHEMA_COMPONENT, int(version)),
+    )
+
+
+def _apply_runtime_schema_migrations(
+    conn: psycopg.Connection, *, current_version: int | None
+) -> int:
+    version = int(current_version or 0)
+    if version < 1:
+        if not _runtime_schema_bootstrap_allowed():
+            raise RuntimeError(
+                "Runtime schema bootstrap is disabled. Apply the PostgreSQL migrations before startup "
+                f"or set {_RUNTIME_SCHEMA_BOOTSTRAP_ENV}=1 only for controlled local bootstrap."
+            )
+        ensure_schema(conn)
+        _record_runtime_schema_version(conn, 1)
+        version = 1
+    return version
+
+
 def _require_runtime_storage_ready(dsn: str) -> None:
     cache_key = _db_cache_key(dsn)
     ready_for = set(getattr(_require_runtime_storage_ready, "_ready_for", set()))
@@ -597,26 +708,13 @@ def _ensure_storage_bootstrap(conn: psycopg.Connection, *, dsn: str) -> None:
     if cache_key in schema_ok_for:
         return
 
-    schema_version_exists = False
-    try:
-        row = conn.execute(
-            """
-            SELECT 1
-              FROM information_schema.tables
-             WHERE table_schema = 'public'
-               AND table_name = 'schema_version'
-            """
-        ).fetchone()
-        schema_version_exists = bool(row)
-    except Exception as exc:  # pragma: no cover - lightweight check only
-        log.debug("schema_version existence check failed: %s", exc)
-
-    if schema_version_exists:
+    current_version = _load_runtime_schema_version(conn)
+    if current_version is not None and current_version >= _RUNTIME_SCHEMA_VERSION:
         _mark_schema_ready(cache_key)
         return
 
     try:
-        ensure_schema(conn)
+        _apply_runtime_schema_migrations(conn, current_version=current_version)
         _mark_schema_ready(cache_key)
     except Exception as exc:  # pragma: no cover - best effort
         log.warning("Schema initialization failed: %s", exc, exc_info=True)
@@ -729,28 +827,22 @@ def _ensure_observability_schema(
     if cache_key in schema_ok_for:
         return
 
-    schema_version_exists = False
     try:
-        row = conn.execute(
-            """
-            SELECT 1
-              FROM information_schema.tables
-             WHERE table_schema = 'public'
-               AND table_name = 'schema_version'
-            """
-        ).fetchone()
-        schema_version_exists = bool(row)
-    except Exception as exc:  # pragma: no cover - lightweight check only
-        log.debug(
-            "schema_version existence check failed for observability writer: %s", exc
+        current_version = _load_runtime_schema_version(conn)
+    except Exception as exc:  # pragma: no cover - writer should not mask bootstrap problems
+        log.warning(
+            "schema_version lookup failed for observability writer: %s",
+            exc,
+            exc_info=True,
         )
+        return
 
-    if schema_version_exists:
+    if current_version is not None and current_version >= _RUNTIME_SCHEMA_VERSION:
         _mark_schema_ready(cache_key)
         return
 
     try:
-        ensure_schema(conn)
+        _apply_runtime_schema_migrations(conn, current_version=current_version)
         _mark_schema_ready(cache_key)
     except Exception as exc:  # pragma: no cover - best effort
         log.warning(

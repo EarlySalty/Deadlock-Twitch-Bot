@@ -6,6 +6,7 @@ Route setup, overview data, sessions, health scores, network stats, correlations
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from datetime import UTC, datetime, timedelta
@@ -785,11 +786,14 @@ class _AnalyticsOverviewMixin:
         try:
             data = await self._get_overview_data(streamer, days)
             return web.json_response(data)
-        except Exception as exc:
+        except Exception:
             log.exception("Error in overview API")
             return analytics_internal_error_response()
 
     async def _get_overview_data(self, streamer: str | None, days: int) -> dict[str, Any]:
+        return await asyncio.to_thread(self._get_overview_data_sync, streamer, days)
+
+    def _get_overview_data_sync(self, streamer: str | None, days: int) -> dict[str, Any]:
         """Get comprehensive overview data for the dashboard."""
         with storage.readonly_connection() as conn:
             since_date = (datetime.now(UTC) - timedelta(days=days)).isoformat()
@@ -1556,173 +1560,12 @@ class _AnalyticsOverviewMixin:
 
         since_date = (datetime.now(UTC) - timedelta(days=days)).isoformat()
         try:
-            with storage.readonly_connection() as conn:
-                session_bot_clause, session_bot_params = build_known_chat_bot_not_in_clause(
-                    column_expr="sc.chatter_login",
-                    placeholder="%s",
-                )
-                agg_row = conn.execute(
-                    f"""
-                    WITH sessions AS (
-                        SELECT id
-                        FROM twitch_stream_sessions
-                        WHERE started_at >= %s
-                          AND ended_at IS NOT NULL
-                          AND LOWER(streamer_login) = %s
-                    ),
-                    chatter AS (
-                        SELECT
-                            COALESCE(NULLIF(sc.chatter_login, ''), sc.chatter_id) AS viewer_id,
-                            COUNT(DISTINCT sc.session_id) AS session_count,
-                            SUM(COALESCE(sc.messages, 0)) AS msg_sum,
-                            SUM(
-                                CASE
-                                    WHEN sc.messages = 0 AND COALESCE(sc.seen_via_chatters_api, FALSE) IS TRUE
-                                    THEN 1 ELSE 0
-                                END
-                            ) AS lurk_samples,
-                            SUM(CASE WHEN sc.messages > 0 THEN 1 ELSE 0 END) AS active_samples,
-                            MAX(
-                                CASE
-                                    WHEN COALESCE(sc.seen_via_chatters_api, FALSE) IS TRUE
-                                    THEN 1 ELSE 0
-                                END
-                            ) AS seen_via_api,
-                            MIN(
-                                CASE
-                                    WHEN sc.messages = 0 AND COALESCE(sc.seen_via_chatters_api, FALSE) IS TRUE
-                                    THEN COALESCE(sc.first_message_at, sc.last_seen_at)
-                                    ELSE NULL
-                                END
-                            ) AS first_lurk_seen,
-                            MIN(
-                                CASE
-                                    WHEN sc.messages > 0
-                                    THEN COALESCE(sc.first_message_at, sc.last_seen_at)
-                                    ELSE NULL
-                                END
-                            ) AS first_active_seen,
-                            MIN(sc.first_message_at) AS first_seen,
-                            MAX(sc.last_seen_at) AS last_seen
-                        FROM twitch_session_chatters sc
-                        JOIN sessions s ON s.id = sc.session_id
-                        WHERE {session_bot_clause}
-                        GROUP BY 1
-                    )
-                    SELECT
-                        COUNT(*) AS total_viewers,
-                        COUNT(*) FILTER (WHERE seen_via_api = 1) AS seen_sample_viewers,
-                        COUNT(*) FILTER (WHERE seen_via_api = 1 AND msg_sum = 0) AS lurker_count,
-                        AVG(session_count) FILTER (WHERE seen_via_api = 1 AND msg_sum = 0) AS avg_sessions_lurkers,
-                        COUNT(*) FILTER (
-                            WHERE seen_via_api = 1
-                              AND lurk_samples > 0
-                        ) AS eligible_lurkers,
-                        COUNT(*) FILTER (
-                            WHERE seen_via_api = 1
-                              AND lurk_samples > 0
-                              AND active_samples > 0
-                              AND first_active_seen IS NOT NULL
-                              AND first_lurk_seen IS NOT NULL
-                              AND first_active_seen > first_lurk_seen
-                        ) AS converted_lurkers
-                    FROM chatter
-                    """,
-                    [since_date, streamer.lower(), *session_bot_params],
-                ).fetchone()
-
-                total_viewers = int(agg_row[0]) if agg_row and agg_row[0] else 0
-                seen_sample_viewers = int(agg_row[1]) if agg_row and agg_row[1] else 0
-                lurker_count = int(agg_row[2]) if agg_row and agg_row[2] else 0
-                avg_sessions_lurkers = float(agg_row[3]) if agg_row and agg_row[3] else 0.0
-                eligible_lurkers = int(agg_row[4]) if agg_row and agg_row[4] else 0
-                converted_lurkers = int(agg_row[5]) if agg_row and agg_row[5] else 0
-
-                if total_viewers == 0:
-                    return web.json_response(
-                        {"dataAvailable": False, "message": "Keine Daten für den Zeitraum"},
-                        status=200,
-                    )
-                if seen_sample_viewers == 0:
-                    return web.json_response(
-                        {
-                            "dataAvailable": False,
-                            "message": "Zu wenig Chatter-API/Lurker-Daten im Zeitraum",
-                        },
-                        status=200,
-                    )
-
-                top_rows = conn.execute(
-                    f"""
-                    WITH sessions AS (
-                        SELECT id
-                        FROM twitch_stream_sessions
-                        WHERE started_at >= %s
-                          AND ended_at IS NOT NULL
-                          AND LOWER(streamer_login) = %s
-                    ),
-                    chatter AS (
-                        SELECT
-                            COALESCE(NULLIF(sc.chatter_login, ''), sc.chatter_id) AS viewer_id,
-                            COUNT(DISTINCT sc.session_id) AS session_count,
-                            SUM(COALESCE(sc.messages, 0)) AS msg_sum,
-                            MAX(
-                                CASE
-                                    WHEN COALESCE(sc.seen_via_chatters_api, FALSE) IS TRUE
-                                    THEN 1 ELSE 0
-                                END
-                            ) AS seen_via_api,
-                            MIN(sc.first_message_at) AS first_seen,
-                            MAX(sc.last_seen_at) AS last_seen
-                        FROM twitch_session_chatters sc
-                        JOIN sessions s ON s.id = sc.session_id
-                        WHERE {session_bot_clause}
-                        GROUP BY 1
-                    )
-                    SELECT viewer_id, session_count, first_seen, last_seen
-                    FROM chatter
-                    WHERE msg_sum = 0
-                      AND seen_via_api = 1
-                    ORDER BY session_count DESC
-                    LIMIT 25
-                    """,
-                    [since_date, streamer.lower(), *session_bot_params],
-                ).fetchall()
-
-                def _iso(val):
-                    if not val:
-                        return None
-                    return val.isoformat() if hasattr(val, "isoformat") else str(val)
-
-                regular_lurkers = [
-                    {
-                        "login": r[0] or "",
-                        "lurkSessions": int(r[1]) if r[1] else 0,
-                        "firstSeen": _iso(r[2]),
-                        "lastSeen": _iso(r[3]),
-                    }
-                    for r in top_rows
-                ]
-
-                return web.json_response(
-                    {
-                        "dataAvailable": True,
-                        "regularLurkers": regular_lurkers,
-                        "lurkerStats": {
-                            "ratio": lurker_count / seen_sample_viewers if seen_sample_viewers else 0.0,
-                            "avgSessions": avg_sessions_lurkers,
-                            "totalLurkers": lurker_count,
-                            "totalViewers": seen_sample_viewers,
-                        },
-                        "conversionStats": {
-                            "rate": converted_lurkers / eligible_lurkers
-                            if eligible_lurkers
-                            else 0.0,
-                            "eligible": eligible_lurkers,
-                            "converted": converted_lurkers,
-                        },
-                    }
-                )
+            payload = await asyncio.to_thread(
+                self._load_lurker_analysis,
+                streamer.lower(),
+                since_date,
+            )
+            return web.json_response(payload, status=200)
         except Exception:
             log.exception("Error in lurker analysis API")
             from .demo_data import get_lurker_analysis
@@ -1730,6 +1573,165 @@ class _AnalyticsOverviewMixin:
             demo = get_lurker_analysis()
             demo["message"] = "Fallback: Demo-Daten wegen Fehler"
             return web.json_response(demo, status=200)
+
+    def _load_lurker_analysis(self, streamer: str, since_date: str) -> dict[str, Any]:
+        with storage.readonly_connection() as conn:
+            session_bot_clause, session_bot_params = build_known_chat_bot_not_in_clause(
+                column_expr="sc.chatter_login",
+                placeholder="%s",
+            )
+            agg_row = conn.execute(
+                f"""
+                WITH sessions AS (
+                    SELECT id
+                    FROM twitch_stream_sessions
+                    WHERE started_at >= %s
+                      AND ended_at IS NOT NULL
+                      AND LOWER(streamer_login) = %s
+                ),
+                chatter AS (
+                    SELECT
+                        COALESCE(NULLIF(sc.chatter_login, ''), sc.chatter_id) AS viewer_id,
+                        COUNT(DISTINCT sc.session_id) AS session_count,
+                        SUM(COALESCE(sc.messages, 0)) AS msg_sum,
+                        SUM(
+                            CASE
+                                WHEN sc.messages = 0 AND COALESCE(sc.seen_via_chatters_api, FALSE) IS TRUE
+                                THEN 1 ELSE 0
+                            END
+                        ) AS lurk_samples,
+                        SUM(CASE WHEN sc.messages > 0 THEN 1 ELSE 0 END) AS active_samples,
+                        MAX(
+                            CASE
+                                WHEN COALESCE(sc.seen_via_chatters_api, FALSE) IS TRUE
+                                THEN 1 ELSE 0
+                            END
+                        ) AS seen_via_api,
+                        MIN(
+                            CASE
+                                WHEN sc.messages = 0 AND COALESCE(sc.seen_via_chatters_api, FALSE) IS TRUE
+                                THEN COALESCE(sc.first_message_at, sc.last_seen_at)
+                                ELSE NULL
+                            END
+                        ) AS first_lurk_seen,
+                        MIN(
+                            CASE
+                                WHEN sc.messages > 0
+                                THEN COALESCE(sc.first_message_at, sc.last_seen_at)
+                                ELSE NULL
+                            END
+                        ) AS first_active_seen,
+                        MIN(sc.first_message_at) AS first_seen,
+                        MAX(sc.last_seen_at) AS last_seen
+                    FROM twitch_session_chatters sc
+                    JOIN sessions s ON s.id = sc.session_id
+                    WHERE {session_bot_clause}
+                    GROUP BY 1
+                )
+                SELECT
+                    COUNT(*) AS total_viewers,
+                    COUNT(*) FILTER (WHERE seen_via_api = 1) AS seen_sample_viewers,
+                    COUNT(*) FILTER (WHERE seen_via_api = 1 AND msg_sum = 0) AS lurker_count,
+                    AVG(session_count) FILTER (WHERE seen_via_api = 1 AND msg_sum = 0) AS avg_sessions_lurkers,
+                    COUNT(*) FILTER (
+                        WHERE seen_via_api = 1
+                          AND lurk_samples > 0
+                    ) AS eligible_lurkers,
+                    COUNT(*) FILTER (
+                        WHERE seen_via_api = 1
+                          AND lurk_samples > 0
+                          AND active_samples > 0
+                          AND first_active_seen IS NOT NULL
+                          AND first_lurk_seen IS NOT NULL
+                          AND first_active_seen > first_lurk_seen
+                    ) AS converted_lurkers
+                FROM chatter
+                """,
+                [since_date, streamer, *session_bot_params],
+            ).fetchone()
+
+            total_viewers = int(agg_row[0]) if agg_row and agg_row[0] else 0
+            seen_sample_viewers = int(agg_row[1]) if agg_row and agg_row[1] else 0
+            lurker_count = int(agg_row[2]) if agg_row and agg_row[2] else 0
+            avg_sessions_lurkers = float(agg_row[3]) if agg_row and agg_row[3] else 0.0
+            eligible_lurkers = int(agg_row[4]) if agg_row and agg_row[4] else 0
+            converted_lurkers = int(agg_row[5]) if agg_row and agg_row[5] else 0
+
+            if total_viewers == 0:
+                return {"dataAvailable": False, "message": "Keine Daten für den Zeitraum"}
+            if seen_sample_viewers == 0:
+                return {
+                    "dataAvailable": False,
+                    "message": "Zu wenig Chatter-API/Lurker-Daten im Zeitraum",
+                }
+
+            top_rows = conn.execute(
+                f"""
+                WITH sessions AS (
+                    SELECT id
+                    FROM twitch_stream_sessions
+                    WHERE started_at >= %s
+                      AND ended_at IS NOT NULL
+                      AND LOWER(streamer_login) = %s
+                ),
+                chatter AS (
+                    SELECT
+                        COALESCE(NULLIF(sc.chatter_login, ''), sc.chatter_id) AS viewer_id,
+                        COUNT(DISTINCT sc.session_id) AS session_count,
+                        SUM(COALESCE(sc.messages, 0)) AS msg_sum,
+                        MAX(
+                            CASE
+                                WHEN COALESCE(sc.seen_via_chatters_api, FALSE) IS TRUE
+                                THEN 1 ELSE 0
+                            END
+                        ) AS seen_via_api,
+                        MIN(sc.first_message_at) AS first_seen,
+                        MAX(sc.last_seen_at) AS last_seen
+                    FROM twitch_session_chatters sc
+                    JOIN sessions s ON s.id = sc.session_id
+                    WHERE {session_bot_clause}
+                    GROUP BY 1
+                )
+                SELECT viewer_id, session_count, first_seen, last_seen
+                FROM chatter
+                WHERE msg_sum = 0
+                  AND seen_via_api = 1
+                ORDER BY session_count DESC
+                LIMIT 25
+                """,
+                [since_date, streamer, *session_bot_params],
+            ).fetchall()
+
+            def _iso(val: Any) -> str | None:
+                if not val:
+                    return None
+                return val.isoformat() if hasattr(val, "isoformat") else str(val)
+
+            regular_lurkers = [
+                {
+                    "login": r[0] or "",
+                    "lurkSessions": int(r[1]) if r[1] else 0,
+                    "firstSeen": _iso(r[2]),
+                    "lastSeen": _iso(r[3]),
+                }
+                for r in top_rows
+            ]
+
+            return {
+                "dataAvailable": True,
+                "regularLurkers": regular_lurkers,
+                "lurkerStats": {
+                    "ratio": lurker_count / seen_sample_viewers if seen_sample_viewers else 0.0,
+                    "avgSessions": avg_sessions_lurkers,
+                    "totalLurkers": lurker_count,
+                    "totalViewers": seen_sample_viewers,
+                },
+                "conversionStats": {
+                    "rate": converted_lurkers / eligible_lurkers if eligible_lurkers else 0.0,
+                    "eligible": eligible_lurkers,
+                    "converted": converted_lurkers,
+                },
+            }
 
     async def _api_v2_raid_retention(self, request: web.Request) -> web.Response:
         """Return retention stats for outgoing raids for a streamer."""
@@ -1746,163 +1748,17 @@ class _AnalyticsOverviewMixin:
 
         since_date = (datetime.now(UTC) - timedelta(days=days)).isoformat()
         try:
-            with storage.readonly_connection() as conn:
-                base_rows = conn.execute(
-                    """
-                    SELECT
-                        raid_id,
-                        from_broadcaster_login,
-                        to_broadcaster_login,
-                        viewer_count_sent,
-                        executed_at,
-                        target_session_id,
-                        chatters_at_plus5m,
-                        chatters_at_plus15m,
-                        chatters_at_plus30m,
-                        new_chatters,
-                        known_from_raider
-                    FROM twitch_raid_retention
-                    WHERE executed_at >= %s
-                      AND LOWER(from_broadcaster_login) = %s
-                    ORDER BY executed_at DESC
-                    LIMIT 100
-                    """,
-                    [since_date, streamer],
-                ).fetchall()
-
-                def _as_int(value: Any) -> int:
-                    try:
-                        return int(value or 0)
-                    except Exception:
-                        return 0
-
-                def _row_value(row_obj: Any, idx: int) -> Any:
-                    try:
-                        return row_obj[idx]
-                    except Exception:
-                        return None
-
-                base_raids: list[dict[str, Any]] = []
-                raid_inputs: list[dict[str, Any]] = []
-                for row in base_rows:
-                    try:
-                        raid_id = int(_row_value(row, 0))
-                    except Exception:
-                        continue
-                    base_raid = {
-                        "raid_id": raid_id,
-                        "from_login": str(_row_value(row, 1) or "").lower(),
-                        "to_login": str(_row_value(row, 2) or "").lower(),
-                        "to_broadcaster": _row_value(row, 2),
-                        "viewers_sent": _as_int(_row_value(row, 3)),
-                        "executed_at": _row_value(row, 4),
-                        "stored_plus5m": _as_int(_row_value(row, 6)),
-                        "stored_plus15m": _as_int(_row_value(row, 7)),
-                        "stored_plus30m": _as_int(_row_value(row, 8)),
-                        "stored_new_chatters": _as_int(_row_value(row, 9)),
-                        "stored_known_from_raider": _as_int(_row_value(row, 10)),
-                    }
-                    base_raids.append(base_raid)
-                    try:
-                        target_session_id = int(_row_value(row, 5))
-                    except Exception:
-                        continue
-                    raid_inputs.append({
-                        "raid_id": raid_id,
-                        "from_login": base_raid["from_login"],
-                        "to_login": base_raid["to_login"],
-                        "to_broadcaster": base_raid["to_broadcaster"],
-                        "viewers_sent": base_raid["viewers_sent"],
-                        "executed_at": base_raid["executed_at"],
-                        "target_session_id": target_session_id,
-                    })
-                raid_metrics = recalculate_raid_chat_metrics(conn, raid_inputs)
-                raids = []
-                retention_values: list[float] = []
-                conversion_values: list[float] = []
-                total_new_chatters = 0
-                recalculated_raid_count = 0
-                stored_fallback_raid_count = 0
-
-                for raid in base_raids:
-                    viewers_sent = int(raid["viewers_sent"] or 0)
-
-                    raid_id = int(raid["raid_id"])
-                    executed_at = raid["executed_at"]
-                    raid_key = raid_identity_key(raid_id, executed_at)
-                    metric = raid_metrics.get(raid_key) if raid_key is not None else None
-                    if metric is not None:
-                        chatters_5m = int(metric.get("plus5m", 0) or 0)
-                        chatters_15m = int(metric.get("plus15m", 0) or 0)
-                        chatters_30m = int(metric.get("plus30m", 0) or 0)
-                        known_from_raider = int(metric.get("known_from_raider", 0) or 0)
-                        new_chatters = int(metric.get("new_chatters", 0) or 0)
-                        recalculated_raid_count += 1
-                    else:
-                        chatters_5m = int(raid["stored_plus5m"] or 0)
-                        chatters_15m = int(raid["stored_plus15m"] or 0)
-                        chatters_30m = int(raid["stored_plus30m"] or 0)
-                        known_from_raider = int(raid["stored_known_from_raider"] or 0)
-                        new_chatters = int(raid["stored_new_chatters"] or 0)
-                        stored_fallback_raid_count += 1
-
-                    ret_pct = (float(chatters_30m) / viewers_sent * 100) if viewers_sent > 0 else 0.0
-                    conv_pct = (float(new_chatters) / viewers_sent * 100) if viewers_sent > 0 else 0.0
-
-                    retention_values.append(ret_pct)
-                    conversion_values.append(conv_pct)
-                    total_new_chatters += new_chatters
-
-                    raids.append(
-                        {
-                            "raidId": raid_id,
-                            "toBroadcaster": raid["to_broadcaster"],
-                            "viewersSent": viewers_sent,
-                            "executedAt": executed_at.isoformat() if hasattr(executed_at, "isoformat") else str(executed_at),
-                            "chattersAt5m": chatters_5m,
-                            "chattersAt15m": chatters_15m,
-                            "chattersAt30m": chatters_30m,
-                            "retention30mPct": round(ret_pct, 1),
-                            "newChatters": new_chatters,
-                            "chatterConversionPct": round(conv_pct, 1),
-                            "knownFromRaider": known_from_raider,
-                        }
-                    )
-
-            if not raids:
-                return web.json_response(
-                    {"dataAvailable": False, "message": "Keine Raids im Zeitraum"}, status=200
-                )
-
-            def _avg(values: list[float]) -> float:
-                return round(sum(values) / len(values), 1) if values else 0.0
-
-            summary = {
-                "avgRetentionPct": _avg(retention_values),
-                "avgConversionPct": _avg(conversion_values),
-                "totalNewChatters": total_new_chatters,
-                "raidCount": len(raids),
-            }
-            if stored_fallback_raid_count == 0:
-                raid_metric_source = "recalculated"
-            elif recalculated_raid_count == 0:
-                raid_metric_source = "stored"
-            else:
-                raid_metric_source = "mixed"
-
-            return web.json_response(
-                {
-                    "dataAvailable": True,
-                    "summary": summary,
-                    "raids": raids,
-                    "dataQuality": {
-                        "botFilterApplied": raid_metric_source == "recalculated",
-                        "raidMetricSource": raid_metric_source,
-                        "recalculatedRaidCount": recalculated_raid_count,
-                        "storedFallbackRaidCount": stored_fallback_raid_count,
-                    },
-                }
+            payload = await asyncio.to_thread(
+                self._load_raid_retention,
+                streamer,
+                since_date,
             )
+            if not payload["dataAvailable"]:
+                return web.json_response(
+                    payload,
+                    status=200,
+                )
+            return web.json_response(payload)
         except Exception:
             log.exception("Error in raid retention API")
             from .demo_data import get_raid_retention
@@ -1910,6 +1766,163 @@ class _AnalyticsOverviewMixin:
             demo = get_raid_retention()
             demo["message"] = "Fallback: Demo-Daten wegen Fehler"
             return web.json_response(demo, status=200)
+
+    def _load_raid_retention(self, streamer: str, since_date: str) -> dict[str, Any]:
+        with storage.readonly_connection() as conn:
+            base_rows = conn.execute(
+                """
+                SELECT
+                    raid_id,
+                    from_broadcaster_login,
+                    to_broadcaster_login,
+                    viewer_count_sent,
+                    executed_at,
+                    target_session_id,
+                    chatters_at_plus5m,
+                    chatters_at_plus15m,
+                    chatters_at_plus30m,
+                    new_chatters,
+                    known_from_raider
+                FROM twitch_raid_retention
+                WHERE executed_at >= %s
+                  AND LOWER(from_broadcaster_login) = %s
+                ORDER BY executed_at DESC
+                LIMIT 100
+                """,
+                [since_date, streamer],
+            ).fetchall()
+
+            def _as_int(value: Any) -> int:
+                try:
+                    return int(value or 0)
+                except Exception:
+                    return 0
+
+            def _row_value(row_obj: Any, idx: int) -> Any:
+                try:
+                    return row_obj[idx]
+                except Exception:
+                    return None
+
+            base_raids: list[dict[str, Any]] = []
+            raid_inputs: list[dict[str, Any]] = []
+            for row in base_rows:
+                try:
+                    raid_id = int(_row_value(row, 0))
+                except Exception:
+                    continue
+                base_raid = {
+                    "raid_id": raid_id,
+                    "from_login": str(_row_value(row, 1) or "").lower(),
+                    "to_login": str(_row_value(row, 2) or "").lower(),
+                    "to_broadcaster": _row_value(row, 2),
+                    "viewers_sent": _as_int(_row_value(row, 3)),
+                    "executed_at": _row_value(row, 4),
+                    "stored_plus5m": _as_int(_row_value(row, 6)),
+                    "stored_plus15m": _as_int(_row_value(row, 7)),
+                    "stored_plus30m": _as_int(_row_value(row, 8)),
+                    "stored_new_chatters": _as_int(_row_value(row, 9)),
+                    "stored_known_from_raider": _as_int(_row_value(row, 10)),
+                }
+                base_raids.append(base_raid)
+                try:
+                    target_session_id = int(_row_value(row, 5))
+                except Exception:
+                    continue
+                raid_inputs.append(
+                    {
+                        "raid_id": raid_id,
+                        "from_login": base_raid["from_login"],
+                        "to_login": base_raid["to_login"],
+                        "to_broadcaster": base_raid["to_broadcaster"],
+                        "viewers_sent": base_raid["viewers_sent"],
+                        "executed_at": base_raid["executed_at"],
+                        "target_session_id": target_session_id,
+                    }
+                )
+            raid_metrics = recalculate_raid_chat_metrics(conn, raid_inputs)
+            raids = []
+            retention_values: list[float] = []
+            conversion_values: list[float] = []
+            total_new_chatters = 0
+            recalculated_raid_count = 0
+            stored_fallback_raid_count = 0
+
+            for raid in base_raids:
+                viewers_sent = int(raid["viewers_sent"] or 0)
+
+                raid_id = int(raid["raid_id"])
+                executed_at = raid["executed_at"]
+                raid_key = raid_identity_key(raid_id, executed_at)
+                metric = raid_metrics.get(raid_key) if raid_key is not None else None
+                if metric is not None:
+                    chatters_5m = int(metric.get("plus5m", 0) or 0)
+                    chatters_15m = int(metric.get("plus15m", 0) or 0)
+                    chatters_30m = int(metric.get("plus30m", 0) or 0)
+                    known_from_raider = int(metric.get("known_from_raider", 0) or 0)
+                    new_chatters = int(metric.get("new_chatters", 0) or 0)
+                    recalculated_raid_count += 1
+                else:
+                    chatters_5m = int(raid["stored_plus5m"] or 0)
+                    chatters_15m = int(raid["stored_plus15m"] or 0)
+                    chatters_30m = int(raid["stored_plus30m"] or 0)
+                    known_from_raider = int(raid["stored_known_from_raider"] or 0)
+                    new_chatters = int(raid["stored_new_chatters"] or 0)
+                    stored_fallback_raid_count += 1
+
+                ret_pct = (float(chatters_30m) / viewers_sent * 100) if viewers_sent > 0 else 0.0
+                conv_pct = (float(new_chatters) / viewers_sent * 100) if viewers_sent > 0 else 0.0
+
+                retention_values.append(ret_pct)
+                conversion_values.append(conv_pct)
+                total_new_chatters += new_chatters
+
+                raids.append(
+                    {
+                        "raidId": raid_id,
+                        "toBroadcaster": raid["to_broadcaster"],
+                        "viewersSent": viewers_sent,
+                        "executedAt": executed_at.isoformat() if hasattr(executed_at, "isoformat") else str(executed_at),
+                        "chattersAt5m": chatters_5m,
+                        "chattersAt15m": chatters_15m,
+                        "chattersAt30m": chatters_30m,
+                        "retention30mPct": round(ret_pct, 1),
+                        "newChatters": new_chatters,
+                        "chatterConversionPct": round(conv_pct, 1),
+                        "knownFromRaider": known_from_raider,
+                    }
+                )
+
+        if not raids:
+            return {"dataAvailable": False, "message": "Keine Raids im Zeitraum"}
+
+        def _avg(values: list[float]) -> float:
+            return round(sum(values) / len(values), 1) if values else 0.0
+
+        summary = {
+            "avgRetentionPct": _avg(retention_values),
+            "avgConversionPct": _avg(conversion_values),
+            "totalNewChatters": total_new_chatters,
+            "raidCount": len(raids),
+        }
+        if stored_fallback_raid_count == 0:
+            raid_metric_source = "recalculated"
+        elif recalculated_raid_count == 0:
+            raid_metric_source = "stored"
+        else:
+            raid_metric_source = "mixed"
+
+        return {
+            "dataAvailable": True,
+            "summary": summary,
+            "raids": raids,
+            "dataQuality": {
+                "botFilterApplied": raid_metric_source == "recalculated",
+                "raidMetricSource": raid_metric_source,
+                "recalculatedRaidCount": recalculated_raid_count,
+                "storedFallbackRaidCount": stored_fallback_raid_count,
+            },
+        }
 
     async def _api_v2_viewer_profiles(self, request: web.Request) -> web.Response:
         """Viewer behavioral profiles based on cross-streamer exclusivity."""
@@ -1928,85 +1941,90 @@ class _AnalyticsOverviewMixin:
         }
 
         try:
-            with storage.readonly_connection() as conn:
-                rollup_bot_clause, rollup_bot_params = build_known_chat_bot_not_in_clause(
-                    column_expr="chatter_login",
-                    placeholder="%s",
-                )
-                rollup_bot_clause_cr, rollup_bot_params_cr = build_known_chat_bot_not_in_clause(
-                    column_expr="cr.chatter_login",
-                    placeholder="%s",
-                )
-                dist_rows = conn.execute(
-                    f"""
-                    WITH per_viewer AS (
-                        SELECT cr.chatter_login,
-                               COUNT(DISTINCT cr.streamer_login) AS streamer_count,
-                               SUM(cr.total_messages) AS total_messages
-                        FROM twitch_chatter_rollup cr
-                        WHERE cr.chatter_login IN (
-                            SELECT DISTINCT chatter_login
-                            FROM twitch_chatter_rollup
-                            WHERE LOWER(streamer_login) = %s
-                              AND {rollup_bot_clause}
-                        )
-                          AND {rollup_bot_clause_cr}
-                        GROUP BY cr.chatter_login
-                    )
-                    SELECT streamer_count, COUNT(*) AS viewer_count
-                    FROM per_viewer
-                    GROUP BY streamer_count
-                    ORDER BY streamer_count
-                    """,
-                    (streamer, *rollup_bot_params, *rollup_bot_params_cr),
-                ).fetchall()
-
-                passive_row = conn.execute(
-                    f"""
-                    SELECT COUNT(*) AS passive
-                    FROM twitch_chatter_rollup
-                    WHERE LOWER(streamer_login) = %s
-                      AND total_sessions >= 3
-                      AND total_messages = 0
-                      AND {rollup_bot_clause}
-                    """,
-                    (streamer, *rollup_bot_params),
-                ).fetchone()
-
-            if not dist_rows:
-                return web.json_response(_empty)
-
-            dist = {r[0]: r[1] for r in dist_rows}
-            total_viewers = sum(r[1] for r in dist_rows)
-
-            # Viewer classification: exclusive=1 streamer, loyalMulti=2-3, explorer=8+, passive=silent ≥3 sessions
-            exclusive_count = dist.get(1, 0)
-            loyal_multi_count = sum(dist.get(i, 0) for i in range(2, 4))
-            explorer_count = sum(v for k, v in dist.items() if k >= 8)
-            passive_count = int(passive_row[0]) if passive_row and passive_row[0] else 0
-            casual_count = max(0, total_viewers - exclusive_count - loyal_multi_count - explorer_count - passive_count)
-
-            return web.json_response({
-                "dataAvailable": True,
-                "profiles": {
-                    "exclusive": exclusive_count,
-                    "loyalMulti": loyal_multi_count,
-                    "casual": casual_count,
-                    "explorer": explorer_count,
-                    "passive": passive_count,
-                    "total": total_viewers,
-                },
-                "exclusivityDistribution": [
-                    {"streamerCount": int(r[0]), "viewerCount": int(r[1])}
-                    for r in dist_rows
-                ],
-            })
+            payload = await asyncio.to_thread(self._load_viewer_profiles, streamer, _empty)
+            return web.json_response(payload)
         except Exception:
             log.exception("Error in viewer profiles API")
             from .demo_data import get_viewer_profiles
             demo = get_viewer_profiles()
             demo["message"] = "Fallback: Demo-Daten wegen Fehler"
             return web.json_response(demo, status=200)
+
+    def _load_viewer_profiles(self, streamer: str, empty_payload: dict[str, Any]) -> dict[str, Any]:
+        with storage.readonly_connection() as conn:
+            rollup_bot_clause, rollup_bot_params = build_known_chat_bot_not_in_clause(
+                column_expr="chatter_login",
+                placeholder="%s",
+            )
+            rollup_bot_clause_cr, rollup_bot_params_cr = build_known_chat_bot_not_in_clause(
+                column_expr="cr.chatter_login",
+                placeholder="%s",
+            )
+            dist_rows = conn.execute(
+                f"""
+                WITH per_viewer AS (
+                    SELECT cr.chatter_login,
+                           COUNT(DISTINCT cr.streamer_login) AS streamer_count,
+                           SUM(cr.total_messages) AS total_messages
+                    FROM twitch_chatter_rollup cr
+                    WHERE cr.chatter_login IN (
+                        SELECT DISTINCT chatter_login
+                        FROM twitch_chatter_rollup
+                        WHERE LOWER(streamer_login) = %s
+                          AND {rollup_bot_clause}
+                    )
+                      AND {rollup_bot_clause_cr}
+                    GROUP BY cr.chatter_login
+                )
+                SELECT streamer_count, COUNT(*) AS viewer_count
+                FROM per_viewer
+                GROUP BY streamer_count
+                ORDER BY streamer_count
+                """,
+                (streamer, *rollup_bot_params, *rollup_bot_params_cr),
+            ).fetchall()
+
+            passive_row = conn.execute(
+                f"""
+                SELECT COUNT(*) AS passive
+                FROM twitch_chatter_rollup
+                WHERE LOWER(streamer_login) = %s
+                  AND total_sessions >= 3
+                  AND total_messages = 0
+                  AND {rollup_bot_clause}
+                """,
+                (streamer, *rollup_bot_params),
+            ).fetchone()
+
+        if not dist_rows:
+            return empty_payload
+
+        dist = {r[0]: r[1] for r in dist_rows}
+        total_viewers = sum(r[1] for r in dist_rows)
+        exclusive_count = dist.get(1, 0)
+        loyal_multi_count = sum(dist.get(i, 0) for i in range(2, 4))
+        explorer_count = sum(v for k, v in dist.items() if k >= 8)
+        passive_count = int(passive_row[0]) if passive_row and passive_row[0] else 0
+        casual_count = max(
+            0,
+            total_viewers - exclusive_count - loyal_multi_count - explorer_count - passive_count,
+        )
+
+        return {
+            "dataAvailable": True,
+            "profiles": {
+                "exclusive": exclusive_count,
+                "loyalMulti": loyal_multi_count,
+                "casual": casual_count,
+                "explorer": explorer_count,
+                "passive": passive_count,
+                "total": total_viewers,
+            },
+            "exclusivityDistribution": [
+                {"streamerCount": int(r[0]), "viewerCount": int(r[1])}
+                for r in dist_rows
+            ],
+        }
 
     async def _api_v2_audience_sharing(self, request: web.Request) -> web.Response:
         """Cross-streamer audience overlap with inflow/outflow and Jaccard similarity."""
@@ -2020,143 +2038,155 @@ class _AnalyticsOverviewMixin:
 
         since_date = (datetime.now(UTC) - timedelta(days=days)).isoformat()
         try:
-            with storage.readonly_connection() as conn:
-                rollup_bot_clause, rollup_bot_params = build_known_chat_bot_not_in_clause(
-                    column_expr="chatter_login",
-                    placeholder="%s",
-                )
-                rollup_bot_clause_cr1, rollup_bot_params_cr1 = build_known_chat_bot_not_in_clause(
-                    column_expr="cr1.chatter_login",
-                    placeholder="%s",
-                )
-                rollup_bot_clause_cr2, rollup_bot_params_cr2 = build_known_chat_bot_not_in_clause(
-                    column_expr="cr2.chatter_login",
-                    placeholder="%s",
-                )
-                my_total_row = conn.execute(
-                    f"""
-                    SELECT COUNT(DISTINCT chatter_login) AS total
-                    FROM twitch_chatter_rollup
-                    WHERE LOWER(streamer_login) = %s
-                      AND {rollup_bot_clause}
-                    """,
-                    (streamer, *rollup_bot_params),
-                ).fetchone()
-                my_total = int(my_total_row[0]) if my_total_row and my_total_row[0] else 0
-
-                shared_rows = conn.execute(
-                    f"""
-                    SELECT
-                        cr2.streamer_login                                                    AS other_streamer,
-                        COUNT(DISTINCT cr1.chatter_login)                                    AS shared_viewers,
-                        COUNT(DISTINCT CASE WHEN cr2.first_seen_at >= %s THEN cr1.chatter_login END) AS inflow,
-                        COUNT(DISTINCT CASE WHEN cr2.last_seen_at < %s THEN cr1.chatter_login END)   AS outflow,
-                        COUNT(DISTINCT cr2.chatter_login)                                    AS other_total
-                    FROM twitch_chatter_rollup cr1
-                    JOIN twitch_chatter_rollup cr2
-                        ON cr1.chatter_login = cr2.chatter_login
-                       AND LOWER(cr2.streamer_login) != LOWER(cr1.streamer_login)
-                    WHERE LOWER(cr1.streamer_login) = %s
-                      AND {rollup_bot_clause_cr1}
-                      AND {rollup_bot_clause_cr2}
-                    GROUP BY cr2.streamer_login
-                    HAVING COUNT(DISTINCT cr1.chatter_login) >= 3
-                    ORDER BY shared_viewers DESC
-                    LIMIT 20
-                    """,
-                    (
-                        since_date,
-                        since_date,
-                        streamer,
-                        *rollup_bot_params_cr1,
-                        *rollup_bot_params_cr2,
-                    ),
-                ).fetchall()
-
-                if not shared_rows:
-                    return web.json_response({
-                        "dataAvailable": False,
-                        "message": "Keine Daten vorhanden",
-                        "current": [],
-                        "timeline": [],
-                        "totalUniqueViewers": my_total,
-                        "dataQuality": {"months": 0, "minSharedFilter": 3},
-                    })
-
-                top_streamers = [str(r[0]).lower() for r in shared_rows[:5] if r[0]]
-                if top_streamers:
-                    top_placeholders = ",".join(["%s"] * len(top_streamers))
-                    timeline_rows = conn.execute(
-                        f"""
-                        SELECT
-                            TO_CHAR(
-                                date_trunc(
-                                    'month',
-                                    CASE
-                                        WHEN cr1.first_seen_at > cr2.first_seen_at THEN cr1.first_seen_at
-                                        ELSE cr2.first_seen_at
-                                    END
-                                ),
-                                'YYYY-MM'
-                            ) AS month,
-                            cr2.streamer_login AS other_streamer,
-                            COUNT(DISTINCT cr1.chatter_login) AS shared_viewers_that_month
-                        FROM twitch_chatter_rollup cr1
-                        JOIN twitch_chatter_rollup cr2
-                            ON cr1.chatter_login = cr2.chatter_login
-                           AND LOWER(cr2.streamer_login) IN ({top_placeholders})
-                           AND LOWER(cr2.streamer_login) != LOWER(cr1.streamer_login)
-                        WHERE LOWER(cr1.streamer_login) = %s
-                          AND {rollup_bot_clause_cr1}
-                          AND {rollup_bot_clause_cr2}
-                        GROUP BY month, cr2.streamer_login
-                        ORDER BY month
-                        """,
-                        (
-                            *top_streamers,
-                            streamer,
-                            *rollup_bot_params_cr1,
-                            *rollup_bot_params_cr2,
-                        ),
-                    ).fetchall()
-                else:
-                    timeline_rows = []
-
-            current_data = []
-            months_set: set[str] = set()
-            for r in shared_rows:
-                shared_count = int(r[1])
-                other_total = int(r[4]) if r[4] else 0
-                union_total = my_total + other_total - shared_count
-                jaccard = round(shared_count / union_total, 3) if union_total > 0 else 0
-                current_data.append({
-                    "streamer": r[0],
-                    "sharedViewers": shared_count,
-                    "inflow": int(r[2]) if r[2] else 0,
-                    "outflow": int(r[3]) if r[3] else 0,
-                    "jaccardSimilarity": jaccard,
-                })
-
-            timeline_data = []
-            for r in timeline_rows:
-                if r[0]:
-                    months_set.add(r[0])
-                timeline_data.append({
-                    "month": r[0] or "",
-                    "streamer": r[1],
-                    "sharedViewers": int(r[2]) if r[2] else 0,
-                })
-
-            return web.json_response({
-                "dataAvailable": True,
-                "current": current_data,
-                "timeline": timeline_data,
-                "totalUniqueViewers": my_total,
-                "dataQuality": {"months": len(months_set), "minSharedFilter": 3},
-            })
+            payload = await asyncio.to_thread(
+                self._load_audience_sharing,
+                streamer,
+                since_date,
+            )
+            return web.json_response(payload)
         except Exception:
             log.exception("Error in audience sharing API")
             from .demo_data import get_audience_sharing
             demo = get_audience_sharing()
             demo["message"] = "Fallback: Demo-Daten wegen Fehler"
             return web.json_response(demo, status=200)
+
+    def _load_audience_sharing(self, streamer: str, since_date: str) -> dict[str, Any]:
+        with storage.readonly_connection() as conn:
+            rollup_bot_clause, rollup_bot_params = build_known_chat_bot_not_in_clause(
+                column_expr="chatter_login",
+                placeholder="%s",
+            )
+            rollup_bot_clause_cr1, rollup_bot_params_cr1 = build_known_chat_bot_not_in_clause(
+                column_expr="cr1.chatter_login",
+                placeholder="%s",
+            )
+            rollup_bot_clause_cr2, rollup_bot_params_cr2 = build_known_chat_bot_not_in_clause(
+                column_expr="cr2.chatter_login",
+                placeholder="%s",
+            )
+            my_total_row = conn.execute(
+                f"""
+                SELECT COUNT(DISTINCT chatter_login) AS total
+                FROM twitch_chatter_rollup
+                WHERE LOWER(streamer_login) = %s
+                  AND {rollup_bot_clause}
+                """,
+                (streamer, *rollup_bot_params),
+            ).fetchone()
+            my_total = int(my_total_row[0]) if my_total_row and my_total_row[0] else 0
+
+            shared_rows = conn.execute(
+                f"""
+                SELECT
+                    cr2.streamer_login AS other_streamer,
+                    COUNT(DISTINCT cr1.chatter_login) AS shared_viewers,
+                    COUNT(DISTINCT CASE WHEN cr2.first_seen_at >= %s THEN cr1.chatter_login END) AS inflow,
+                    COUNT(DISTINCT CASE WHEN cr2.last_seen_at < %s THEN cr1.chatter_login END) AS outflow,
+                    COUNT(DISTINCT cr2.chatter_login) AS other_total
+                FROM twitch_chatter_rollup cr1
+                JOIN twitch_chatter_rollup cr2
+                    ON cr1.chatter_login = cr2.chatter_login
+                   AND LOWER(cr2.streamer_login) != LOWER(cr1.streamer_login)
+                WHERE LOWER(cr1.streamer_login) = %s
+                  AND {rollup_bot_clause_cr1}
+                  AND {rollup_bot_clause_cr2}
+                GROUP BY cr2.streamer_login
+                HAVING COUNT(DISTINCT cr1.chatter_login) >= 3
+                ORDER BY shared_viewers DESC
+                LIMIT 20
+                """,
+                (
+                    since_date,
+                    since_date,
+                    streamer,
+                    *rollup_bot_params_cr1,
+                    *rollup_bot_params_cr2,
+                ),
+            ).fetchall()
+
+            if not shared_rows:
+                return {
+                    "dataAvailable": False,
+                    "message": "Keine Daten vorhanden",
+                    "current": [],
+                    "timeline": [],
+                    "totalUniqueViewers": my_total,
+                    "dataQuality": {"months": 0, "minSharedFilter": 3},
+                }
+
+            top_streamers = [str(r[0]).lower() for r in shared_rows[:5] if r[0]]
+            if top_streamers:
+                top_placeholders = ",".join(["%s"] * len(top_streamers))
+                timeline_rows = conn.execute(
+                    f"""
+                    SELECT
+                        TO_CHAR(
+                            date_trunc(
+                                'month',
+                                CASE
+                                    WHEN cr1.first_seen_at > cr2.first_seen_at THEN cr1.first_seen_at
+                                    ELSE cr2.first_seen_at
+                                END
+                            ),
+                            'YYYY-MM'
+                        ) AS month,
+                        cr2.streamer_login AS other_streamer,
+                        COUNT(DISTINCT cr1.chatter_login) AS shared_viewers_that_month
+                    FROM twitch_chatter_rollup cr1
+                    JOIN twitch_chatter_rollup cr2
+                        ON cr1.chatter_login = cr2.chatter_login
+                       AND LOWER(cr2.streamer_login) IN ({top_placeholders})
+                       AND LOWER(cr2.streamer_login) != LOWER(cr1.streamer_login)
+                    WHERE LOWER(cr1.streamer_login) = %s
+                      AND {rollup_bot_clause_cr1}
+                      AND {rollup_bot_clause_cr2}
+                    GROUP BY month, cr2.streamer_login
+                    ORDER BY month
+                    """,
+                    (
+                        *top_streamers,
+                        streamer,
+                        *rollup_bot_params_cr1,
+                        *rollup_bot_params_cr2,
+                    ),
+                ).fetchall()
+            else:
+                timeline_rows = []
+
+        current_data = []
+        months_set: set[str] = set()
+        for r in shared_rows:
+            shared_count = int(r[1])
+            other_total = int(r[4]) if r[4] else 0
+            union_total = my_total + other_total - shared_count
+            jaccard = round(shared_count / union_total, 3) if union_total > 0 else 0
+            current_data.append(
+                {
+                    "streamer": r[0],
+                    "sharedViewers": shared_count,
+                    "inflow": int(r[2]) if r[2] else 0,
+                    "outflow": int(r[3]) if r[3] else 0,
+                    "jaccardSimilarity": jaccard,
+                }
+            )
+
+        timeline_data = []
+        for r in timeline_rows:
+            if r[0]:
+                months_set.add(r[0])
+            timeline_data.append(
+                {
+                    "month": r[0] or "",
+                    "streamer": r[1],
+                    "sharedViewers": int(r[2]) if r[2] else 0,
+                }
+            )
+
+        return {
+            "dataAvailable": True,
+            "current": current_data,
+            "timeline": timeline_data,
+            "totalUniqueViewers": my_total,
+            "dataQuality": {"months": len(months_set), "minSharedFilter": 3},
+        }

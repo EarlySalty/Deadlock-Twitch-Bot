@@ -378,6 +378,7 @@ class BotApiClientErrorMappingTests(unittest.IsolatedAsyncioTestCase):
             {
                 "TWITCH_DASHBOARD_NOAUTH": "1",
                 "TWITCH_ALLOW_DASHBOARD_NOAUTH": "0",
+                "TWITCH_DASHBOARD_HOST": "127.0.0.1",
                 "TWITCH_INTERNAL_API_TOKEN": "secret",
                 "TWITCH_INTERNAL_API_BASE_URL": "http://127.0.0.1:8766",
             },
@@ -393,6 +394,7 @@ class BotApiClientErrorMappingTests(unittest.IsolatedAsyncioTestCase):
             {
                 "TWITCH_DASHBOARD_NOAUTH": "1",
                 "TWITCH_ALLOW_DASHBOARD_NOAUTH": "1",
+                "TWITCH_DASHBOARD_HOST": "127.0.0.1",
                 "TWITCH_INTERNAL_API_TOKEN": "secret",
                 "TWITCH_INTERNAL_API_BASE_URL": "http://127.0.0.1:8766",
             },
@@ -401,6 +403,23 @@ class BotApiClientErrorMappingTests(unittest.IsolatedAsyncioTestCase):
             app = build_dashboard_service_app()
         self.assertIsNotNone(app)
 
+    def test_dashboard_service_rejects_noauth_on_non_loopback_host(self) -> None:
+        with patch.dict(
+            "os.environ",
+            {
+                "TWITCH_DASHBOARD_NOAUTH": "1",
+                "TWITCH_ALLOW_DASHBOARD_NOAUTH": "1",
+                "TWITCH_DASHBOARD_HOST": "0.0.0.0",
+                "TWITCH_INTERNAL_API_TOKEN": "secret",
+                "TWITCH_INTERNAL_API_BASE_URL": "http://127.0.0.1:8766",
+            },
+            clear=False,
+        ):
+            with self.assertRaises(RuntimeError) as ctx:
+                build_dashboard_service_app(noauth=True)
+
+        self.assertIn("loopback", str(ctx.exception).lower())
+
     def test_dashboard_service_starts_in_degraded_mode_when_internal_token_missing(
         self,
     ) -> None:
@@ -408,6 +427,7 @@ class BotApiClientErrorMappingTests(unittest.IsolatedAsyncioTestCase):
             "os.environ",
             {
                 "TWITCH_DASHBOARD_NOAUTH": "0",
+                "TWITCH_DASHBOARD_HOST": "127.0.0.1",
                 "TWITCH_INTERNAL_API_TOKEN": "",
                 "TWITCH_INTERNAL_API_BASE_URL": "http://127.0.0.1:8776",
             },
@@ -434,6 +454,7 @@ class BotApiClientErrorMappingTests(unittest.IsolatedAsyncioTestCase):
             "os.environ",
             {
                 "TWITCH_DASHBOARD_NOAUTH": "0",
+                "TWITCH_DASHBOARD_HOST": "127.0.0.1",
                 "TWITCH_INTERNAL_API_TOKEN": "secret",
                 "TWITCH_INTERNAL_API_BASE_URL": "http://127.0.0.1:8776",
                 "TWITCH_CLIENT_ID": "",

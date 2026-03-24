@@ -1,7 +1,10 @@
 # Datenbank-Dokumentation
 
 Alle Tabellen in PostgreSQL (DSN via ENV `TWITCH_ANALYTICS_DSN` oder Windows Keyring `DeadlockBot`).
-Schema wird automatisch in `bot/storage/pg.py` → `ensure_schema()` angelegt.
+Runtime-Bootstrap läuft über `bot/storage/pg.py` → `prepare_runtime_storage()`.
+Beim Erststart wird das Schema darüber initialisiert; danach wird der Stand in `schema_version`
+für die Runtime-Komponente `storage_pg` markiert, damit Folgestarts nicht erneut den kompletten
+DDL-Pfad durchlaufen. Ein extern verwaltetes `schema_version`-Schema bleibt kompatibel.
 
 ## Kern-Tabellen
 

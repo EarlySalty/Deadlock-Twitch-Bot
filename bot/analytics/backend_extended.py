@@ -5,6 +5,7 @@ Provides comprehensive data aggregation and insights generation
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -19,6 +20,16 @@ class AnalyticsBackendExtended:
 
     @staticmethod
     async def get_comprehensive_analytics(
+        streamer_login: str | None = None, days: int = 30
+    ) -> dict[str, Any]:
+        return await asyncio.to_thread(
+            AnalyticsBackendExtended._get_comprehensive_analytics_sync,
+            streamer_login,
+            days,
+        )
+
+    @staticmethod
+    def _get_comprehensive_analytics_sync(
         streamer_login: str | None = None, days: int = 30
     ) -> dict[str, Any]:
         """

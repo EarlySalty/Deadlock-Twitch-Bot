@@ -18,6 +18,7 @@ from bot.analytics.api_v2 import AnalyticsV2Mixin
 from bot.dashboard.auth_mixin import _DashboardAuthMixin
 from bot.dashboard.billing_mixin import _DashboardBillingMixin
 from bot.dashboard.live import DashboardLiveMixin
+from bot.dashboard.mixin import TwitchDashboardMixin
 from bot.dashboard.raid_mixin import PUBLIC_STREAMER_ONBOARDING_URL, _DashboardRaidMixin
 from bot.dashboard.routes_mixin import _DashboardRoutesMixin
 from bot.dashboard.server_v2 import DashboardV2Server
@@ -186,6 +187,79 @@ class _DummyInternalHomeApi(AnalyticsV2Mixin):
 class _DummyV2Errors(AnalyticsV2Mixin):
     def _check_v2_auth(self, request):
         return True
+
+
+class _DummyV2DetailOffload(AnalyticsV2Mixin):
+    def _check_v2_auth(self, request):
+        return True
+
+    def _load_session_detail(self, session_id: int):
+        return {"id": session_id}
+
+    def _load_session_events(self, session_id: int):
+        return {"sessionId": session_id, "events": []}
+
+
+class _DummyOverviewOffload(_AnalyticsOverviewMixin):
+    def _require_v2_auth(self, request):
+        return None
+
+    def _get_overview_data_sync(self, streamer: str | None, days: int):
+        return {"streamer": streamer, "days": days, "ok": True}
+
+    def _require_extended_plan(self, request):
+        return None
+
+    def _load_lurker_analysis(self, streamer: str, since_date: str):
+        return {"dataAvailable": True, "streamer": streamer, "sinceDate": since_date}
+
+    def _load_raid_retention(self, streamer: str, since_date: str):
+        return {"dataAvailable": True, "streamer": streamer, "sinceDate": since_date, "raids": []}
+
+    def _load_viewer_profiles(self, streamer: str, empty_payload: dict):
+        payload = dict(empty_payload)
+        payload["dataAvailable"] = True
+        payload["streamer"] = streamer
+        return payload
+
+    def _load_audience_sharing(self, streamer: str, since_date: str):
+        return {"dataAvailable": True, "streamer": streamer, "sinceDate": since_date}
+
+
+class _DummyDashboardListOffload(TwitchDashboardMixin):
+    def _dashboard_list_sync(self):
+        return [{"login": "alpha"}]
+
+
+class _DummyDashboardDataOffload(TwitchDashboardMixin):
+    def _normalize_login(self, login: str) -> str:
+        return str(login or "").strip().lower()
+
+    def _dashboard_streamer_overview_sync(self, login: str):
+        return {"login": login, "meta": {"ok": True}}
+
+    def _dashboard_session_detail_sync(self, session_id: int):
+        return {"session": {"id": session_id}}
+
+    def _dashboard_comparison_stats_sync(self, days: int = 30):
+        return {"days": days, "category": {"avg": 10}}
+
+    def _dashboard_verify_storage_step(self, login: str, mode: str):
+        return {
+            "kind": "verified",
+            "base_msg": f"{login}:{mode}",
+            "copied": 0,
+            "should_notify": False,
+            "row_data": {"discord_user_id": "123"},
+        }
+
+    async def _notify_verification_success(self, login: str, row_data: dict | None) -> str:
+        del login, row_data
+        return ""
+
+    async def _ensure_streamer_role(self, row_data: dict | None) -> str:
+        del row_data
+        return ""
 
 
 class _DummyInternalHomeRateLimit(AnalyticsV2Mixin):
@@ -559,6 +633,170 @@ class DashboardSecurityRegressionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.status, 200)
         self.assertEqual(payload, expected)
         mocked_loader.assert_called_once_with()
+        mocked_to_thread.assert_awaited_once()
+        self.assertIs(mocked_to_thread.await_args.args[0], mocked_loader)
+
+    async def test_overview_db_lookup_is_offloaded_to_thread(self) -> None:
+        handler = _DummyOverviewOffload()
+        expected = {"streamer": "streamer_one", "days": 30, "ok": True}
+
+        with patch.object(
+            handler,
+            "_get_overview_data_sync",
+            return_value=expected,
+        ) as mocked_loader, patch(
+            "bot.analytics.api_overview.asyncio.to_thread",
+            new=AsyncMock(side_effect=lambda func, *args, **kwargs: func(*args, **kwargs)),
+        ) as mocked_to_thread:
+            payload = await handler._get_overview_data("streamer_one", 30)
+
+        self.assertEqual(payload, expected)
+        mocked_loader.assert_called_once_with("streamer_one", 30)
+        mocked_to_thread.assert_awaited_once()
+        self.assertIs(mocked_to_thread.await_args.args[0], mocked_loader)
+
+    async def test_v2_session_detail_db_lookup_is_offloaded_to_thread(self) -> None:
+        api = _DummyV2DetailOffload()
+
+        with patch.object(
+            api,
+            "_load_session_detail",
+            return_value={"id": 7},
+        ) as mocked_loader, patch(
+            "bot.analytics.api_v2.asyncio.to_thread",
+            new=AsyncMock(side_effect=lambda func, *args, **kwargs: func(*args, **kwargs)),
+        ) as mocked_to_thread:
+            response = await api._api_v2_session_detail(SimpleNamespace(match_info={"id": "7"}))
+
+        payload = json.loads(response.text)
+        self.assertEqual(response.status, 200)
+        self.assertEqual(payload, {"id": 7})
+        mocked_loader.assert_called_once_with(7)
+        mocked_to_thread.assert_awaited_once()
+        self.assertIs(mocked_to_thread.await_args.args[0], mocked_loader)
+
+    async def test_v2_session_events_db_lookup_is_offloaded_to_thread(self) -> None:
+        api = _DummyV2DetailOffload()
+
+        with patch.object(
+            api,
+            "_load_session_events",
+            return_value={"sessionId": 7, "events": []},
+        ) as mocked_loader, patch(
+            "bot.analytics.api_v2.asyncio.to_thread",
+            new=AsyncMock(side_effect=lambda func, *args, **kwargs: func(*args, **kwargs)),
+        ) as mocked_to_thread:
+            response = await api._api_v2_session_events(SimpleNamespace(match_info={"id": "7"}))
+
+        payload = json.loads(response.text)
+        self.assertEqual(response.status, 200)
+        self.assertEqual(payload, {"sessionId": 7, "events": []})
+        mocked_loader.assert_called_once_with(7)
+        mocked_to_thread.assert_awaited_once()
+        self.assertIs(mocked_to_thread.await_args.args[0], mocked_loader)
+
+    async def test_dashboard_list_db_lookup_is_offloaded_to_thread(self) -> None:
+        handler = _DummyDashboardListOffload()
+        expected = [{"login": "alpha"}]
+
+        with patch.object(
+            handler,
+            "_dashboard_list_sync",
+            return_value=expected,
+        ) as mocked_loader, patch(
+            "bot.dashboard.mixin.asyncio.to_thread",
+            new=AsyncMock(side_effect=lambda func, *args, **kwargs: func(*args, **kwargs)),
+        ) as mocked_to_thread:
+            payload = await handler._dashboard_list()
+
+        self.assertEqual(payload, expected)
+        mocked_loader.assert_called_once_with()
+        mocked_to_thread.assert_awaited_once()
+        self.assertIs(mocked_to_thread.await_args.args[0], mocked_loader)
+
+    async def test_lurker_analysis_db_lookup_is_offloaded_to_thread(self) -> None:
+        handler = _DummyOverviewOffload()
+
+        with patch.object(
+            handler,
+            "_load_lurker_analysis",
+            return_value={"dataAvailable": True, "streamer": "alpha"},
+        ) as mocked_loader, patch(
+            "bot.analytics.api_overview.asyncio.to_thread",
+            new=AsyncMock(side_effect=lambda func, *args, **kwargs: func(*args, **kwargs)),
+        ) as mocked_to_thread:
+            response = await handler._api_v2_lurker_analysis(
+                SimpleNamespace(query={"streamer": "Alpha", "days": "30"})
+            )
+
+        payload = json.loads(response.text)
+        self.assertEqual(response.status, 200)
+        self.assertEqual(payload["streamer"], "alpha")
+        mocked_loader.assert_called_once()
+        mocked_to_thread.assert_awaited_once()
+        self.assertIs(mocked_to_thread.await_args.args[0], mocked_loader)
+
+    async def test_raid_retention_db_lookup_is_offloaded_to_thread(self) -> None:
+        handler = _DummyOverviewOffload()
+
+        with patch.object(
+            handler,
+            "_load_raid_retention",
+            return_value={"dataAvailable": True, "raids": [], "summary": {}},
+        ) as mocked_loader, patch(
+            "bot.analytics.api_overview.asyncio.to_thread",
+            new=AsyncMock(side_effect=lambda func, *args, **kwargs: func(*args, **kwargs)),
+        ) as mocked_to_thread:
+            response = await handler._api_v2_raid_retention(
+                SimpleNamespace(query={"streamer": "Alpha", "days": "90"})
+            )
+
+        payload = json.loads(response.text)
+        self.assertEqual(response.status, 200)
+        self.assertTrue(payload["dataAvailable"])
+        mocked_loader.assert_called_once()
+        mocked_to_thread.assert_awaited_once()
+        self.assertIs(mocked_to_thread.await_args.args[0], mocked_loader)
+
+    async def test_dashboard_streamer_overview_db_lookup_is_offloaded_to_thread(self) -> None:
+        handler = _DummyDashboardDataOffload()
+
+        with patch.object(
+            handler,
+            "_dashboard_streamer_overview_sync",
+            return_value={"login": "alpha", "meta": {"ok": True}},
+        ) as mocked_loader, patch(
+            "bot.dashboard.mixin.asyncio.to_thread",
+            new=AsyncMock(side_effect=lambda func, *args, **kwargs: func(*args, **kwargs)),
+        ) as mocked_to_thread:
+            payload = await handler._dashboard_streamer_overview("Alpha")
+
+        self.assertEqual(payload["login"], "alpha")
+        mocked_loader.assert_called_once_with("alpha")
+        mocked_to_thread.assert_awaited_once()
+        self.assertIs(mocked_to_thread.await_args.args[0], mocked_loader)
+
+    async def test_dashboard_verify_storage_step_is_offloaded_to_thread(self) -> None:
+        handler = _DummyDashboardDataOffload()
+
+        with patch.object(
+            handler,
+            "_dashboard_verify_storage_step",
+            return_value={
+                "kind": "verified",
+                "base_msg": "alpha:permanent",
+                "copied": 0,
+                "should_notify": False,
+                "row_data": {"discord_user_id": "123"},
+            },
+        ) as mocked_loader, patch(
+            "bot.dashboard.mixin.asyncio.to_thread",
+            new=AsyncMock(side_effect=lambda func, *args, **kwargs: func(*args, **kwargs)),
+        ) as mocked_to_thread:
+            result = await handler._dashboard_verify("Alpha", "permanent")
+
+        self.assertEqual(result, "alpha:permanent")
+        mocked_loader.assert_called_once_with("alpha", "permanent")
         mocked_to_thread.assert_awaited_once()
         self.assertIs(mocked_to_thread.await_args.args[0], mocked_loader)
 

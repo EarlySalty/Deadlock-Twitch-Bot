@@ -37,7 +37,7 @@ Twitch-Monitoring, Analytics, Auto-Raids, Dashboard und Social-Media-Automatisie
 - **Bot laden**: `twitch_cog.py` (Shim) → `bot/__init__.py` → `setup()`
 - **Cog-Klasse**: `bot/cog.py` → `TwitchStreamCog`
 - **Konstanten**: `bot/core/constants.py`
-- **DB-Schema**: `bot/storage/pg.py` → `ensure_schema()`
+- **DB-Bootstrap**: `bot/storage/pg.py` → `prepare_runtime_storage()` (nutzt versionierten Runtime-Schema-Status)
 - **Dashboard-Service standalone**: `bot/dashboard_service/app.py`
 
 ## 2 unabhaengige Services

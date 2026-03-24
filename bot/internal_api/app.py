@@ -30,6 +30,133 @@ IDEMPOTENCY_KEY_HEADER = "Idempotency-Key"
 _LOGIN_RE = re.compile(r"^[a-z0-9_]{3,25}$")
 PUBLIC_WEBSITE_ONBOARDING_LOGIN = "public:website_onboarding"
 
+AddStreamerCallback = Callable[[str, bool], Awaitable[str]]
+RemoveStreamerCallback = Callable[[str], Awaitable[str]]
+StreamersCallback = Callable[[], Awaitable[list[dict[str, Any]]]]
+StatsCallback = Callable[..., Awaitable[dict[str, Any]]]
+VerifyStreamerCallback = Callable[[str, str], Awaitable[str]]
+ArchiveStreamerCallback = Callable[[str, str], Awaitable[str]]
+DiscordFlagCallback = Callable[[str, bool], Awaitable[str]]
+DiscordProfileCallback = Callable[..., Awaitable[str]]
+StreamerAnalyticsCallback = Callable[[str, int], Awaitable[dict[str, Any]]]
+ComparisonCallback = Callable[[int], Awaitable[dict[str, Any]]]
+SessionCallback = Callable[[int], Awaitable[dict[str, Any]]]
+RaidAuthUrlCallback = Callable[..., Awaitable[str]]
+RaidAuthStateCallback = Callable[[str], Awaitable[dict[str, Any]]]
+RaidBlockStateCallback = Callable[..., Awaitable[dict[str, Any]]]
+RaidGoUrlCallback = Callable[[str], Awaitable[str | None]]
+RaidRequirementsCallback = Callable[[str], Awaitable[str]]
+RaidOauthCallback = Callable[..., Awaitable[dict[str, Any]]]
+LiveActiveAnnouncementsCallback = Callable[[], Awaitable[list[dict[str, Any]]]]
+LiveLinkClickCallback = Callable[..., Awaitable[dict[str, Any] | None]]
+ObservabilitySnapshotCallback = Callable[[], Awaitable[dict[str, Any]]]
+ChattersDebugCallback = Callable[[str], Awaitable[dict[str, Any]]]
+
+
+@dataclass(slots=True, frozen=True)
+class InternalApiCallbacks:
+    """Typed callback bundle for the internal API surface."""
+
+    add: AddStreamerCallback | None = None
+    remove: RemoveStreamerCallback | None = None
+    streamers: StreamersCallback | None = None
+    stats: StatsCallback | None = None
+    verify: VerifyStreamerCallback | None = None
+    archive: ArchiveStreamerCallback | None = None
+    discord_flag: DiscordFlagCallback | None = None
+    discord_profile: DiscordProfileCallback | None = None
+    streamer_analytics: StreamerAnalyticsCallback | None = None
+    comparison: ComparisonCallback | None = None
+    session: SessionCallback | None = None
+    raid_auth_url: RaidAuthUrlCallback | None = None
+    raid_auth_state: RaidAuthStateCallback | None = None
+    raid_block_state: RaidBlockStateCallback | None = None
+    raid_go_url: RaidGoUrlCallback | None = None
+    raid_requirements: RaidRequirementsCallback | None = None
+    raid_oauth_callback: RaidOauthCallback | None = None
+    live_active_announcements: LiveActiveAnnouncementsCallback | None = None
+    live_link_click: LiveLinkClickCallback | None = None
+    observability_snapshot: ObservabilitySnapshotCallback | None = None
+    chatters_debug: ChattersDebugCallback | None = None
+
+    @classmethod
+    def coalesce(
+        cls,
+        callbacks: "InternalApiCallbacks | None" = None,
+        *,
+        add_cb: AddStreamerCallback | None = None,
+        remove_cb: RemoveStreamerCallback | None = None,
+        list_cb: StreamersCallback | None = None,
+        stats_cb: StatsCallback | None = None,
+        verify_cb: VerifyStreamerCallback | None = None,
+        archive_cb: ArchiveStreamerCallback | None = None,
+        discord_flag_cb: DiscordFlagCallback | None = None,
+        discord_profile_cb: DiscordProfileCallback | None = None,
+        streamer_analytics_cb: StreamerAnalyticsCallback | None = None,
+        comparison_cb: ComparisonCallback | None = None,
+        session_cb: SessionCallback | None = None,
+        raid_auth_url_cb: RaidAuthUrlCallback | None = None,
+        raid_auth_state_cb: RaidAuthStateCallback | None = None,
+        raid_block_state_cb: RaidBlockStateCallback | None = None,
+        raid_go_url_cb: RaidGoUrlCallback | None = None,
+        raid_requirements_cb: RaidRequirementsCallback | None = None,
+        raid_oauth_callback_cb: RaidOauthCallback | None = None,
+        live_active_announcements_cb: LiveActiveAnnouncementsCallback | None = None,
+        live_link_click_cb: LiveLinkClickCallback | None = None,
+        observability_snapshot_cb: ObservabilitySnapshotCallback | None = None,
+        chatters_debug_cb: ChattersDebugCallback | None = None,
+    ) -> "InternalApiCallbacks":
+        base = callbacks or cls()
+        return cls(
+            add=add_cb if add_cb is not None else base.add,
+            remove=remove_cb if remove_cb is not None else base.remove,
+            streamers=list_cb if list_cb is not None else base.streamers,
+            stats=stats_cb if stats_cb is not None else base.stats,
+            verify=verify_cb if verify_cb is not None else base.verify,
+            archive=archive_cb if archive_cb is not None else base.archive,
+            discord_flag=discord_flag_cb if discord_flag_cb is not None else base.discord_flag,
+            discord_profile=(
+                discord_profile_cb if discord_profile_cb is not None else base.discord_profile
+            ),
+            streamer_analytics=(
+                streamer_analytics_cb
+                if streamer_analytics_cb is not None
+                else base.streamer_analytics
+            ),
+            comparison=comparison_cb if comparison_cb is not None else base.comparison,
+            session=session_cb if session_cb is not None else base.session,
+            raid_auth_url=raid_auth_url_cb if raid_auth_url_cb is not None else base.raid_auth_url,
+            raid_auth_state=(
+                raid_auth_state_cb if raid_auth_state_cb is not None else base.raid_auth_state
+            ),
+            raid_block_state=(
+                raid_block_state_cb if raid_block_state_cb is not None else base.raid_block_state
+            ),
+            raid_go_url=raid_go_url_cb if raid_go_url_cb is not None else base.raid_go_url,
+            raid_requirements=(
+                raid_requirements_cb if raid_requirements_cb is not None else base.raid_requirements
+            ),
+            raid_oauth_callback=(
+                raid_oauth_callback_cb
+                if raid_oauth_callback_cb is not None
+                else base.raid_oauth_callback
+            ),
+            live_active_announcements=(
+                live_active_announcements_cb
+                if live_active_announcements_cb is not None
+                else base.live_active_announcements
+            ),
+            live_link_click=(
+                live_link_click_cb if live_link_click_cb is not None else base.live_link_click
+            ),
+            observability_snapshot=(
+                observability_snapshot_cb
+                if observability_snapshot_cb is not None
+                else base.observability_snapshot
+            ),
+            chatters_debug=chatters_debug_cb if chatters_debug_cb is not None else base.chatters_debug,
+        )
+
 
 @dataclass(slots=True)
 class _IdempotencyInFlight:
@@ -58,27 +185,28 @@ class InternalApiServer:
         *,
         token: str | None,
         base_path: str = INTERNAL_API_BASE_PATH,
-        add_cb: Callable[[str, bool], Awaitable[str]] | None = None,
-        remove_cb: Callable[[str], Awaitable[str]] | None = None,
-        list_cb: Callable[[], Awaitable[list[dict[str, Any]]]] | None = None,
-        stats_cb: Callable[..., Awaitable[dict[str, Any]]] | None = None,
-        verify_cb: Callable[[str, str], Awaitable[str]] | None = None,
-        archive_cb: Callable[[str, str], Awaitable[str]] | None = None,
-        discord_flag_cb: Callable[[str, bool], Awaitable[str]] | None = None,
-        discord_profile_cb: Callable[..., Awaitable[str]] | None = None,
-        streamer_analytics_cb: Callable[[str, int], Awaitable[dict[str, Any]]] | None = None,
-        comparison_cb: Callable[[int], Awaitable[dict[str, Any]]] | None = None,
-        session_cb: Callable[[int], Awaitable[dict[str, Any]]] | None = None,
-        raid_auth_url_cb: Callable[..., Awaitable[str]] | None = None,
-        raid_auth_state_cb: Callable[[str], Awaitable[dict[str, Any]]] | None = None,
-        raid_block_state_cb: Callable[..., Awaitable[dict[str, Any]]] | None = None,
-        raid_go_url_cb: Callable[[str], Awaitable[str | None]] | None = None,
-        raid_requirements_cb: Callable[[str], Awaitable[str]] | None = None,
-        raid_oauth_callback_cb: Callable[..., Awaitable[dict[str, Any]]] | None = None,
-        live_active_announcements_cb: Callable[[], Awaitable[list[dict[str, Any]]]] | None = None,
-        live_link_click_cb: Callable[..., Awaitable[dict[str, Any] | None]] | None = None,
-        observability_snapshot_cb: Callable[[], Awaitable[dict[str, Any]]] | None = None,
-        chatters_debug_cb: Callable[[str], Awaitable[dict[str, Any]]] | None = None,
+        callbacks: InternalApiCallbacks | None = None,
+        add_cb: AddStreamerCallback | None = None,
+        remove_cb: RemoveStreamerCallback | None = None,
+        list_cb: StreamersCallback | None = None,
+        stats_cb: StatsCallback | None = None,
+        verify_cb: VerifyStreamerCallback | None = None,
+        archive_cb: ArchiveStreamerCallback | None = None,
+        discord_flag_cb: DiscordFlagCallback | None = None,
+        discord_profile_cb: DiscordProfileCallback | None = None,
+        streamer_analytics_cb: StreamerAnalyticsCallback | None = None,
+        comparison_cb: ComparisonCallback | None = None,
+        session_cb: SessionCallback | None = None,
+        raid_auth_url_cb: RaidAuthUrlCallback | None = None,
+        raid_auth_state_cb: RaidAuthStateCallback | None = None,
+        raid_block_state_cb: RaidBlockStateCallback | None = None,
+        raid_go_url_cb: RaidGoUrlCallback | None = None,
+        raid_requirements_cb: RaidRequirementsCallback | None = None,
+        raid_oauth_callback_cb: RaidOauthCallback | None = None,
+        live_active_announcements_cb: LiveActiveAnnouncementsCallback | None = None,
+        live_link_click_cb: LiveLinkClickCallback | None = None,
+        observability_snapshot_cb: ObservabilitySnapshotCallback | None = None,
+        chatters_debug_cb: ChattersDebugCallback | None = None,
     ) -> None:
         self._token = (token or "").strip()
         base = (base_path or INTERNAL_API_BASE_PATH).strip()
@@ -88,64 +216,95 @@ class InternalApiServer:
             base = f"/{base}"
         self._base_path = base.rstrip("/")
 
-        self._add = add_cb if callable(add_cb) else self._empty_add
-        self._remove = remove_cb if callable(remove_cb) else self._empty_remove
-        self._list = list_cb if callable(list_cb) else self._empty_list
-        self._stats = stats_cb if callable(stats_cb) else self._empty_stats
-        self._verify = verify_cb if callable(verify_cb) else self._empty_verify
-        self._archive = archive_cb if callable(archive_cb) else self._empty_archive
+        callbacks = InternalApiCallbacks.coalesce(
+            callbacks,
+            add_cb=add_cb,
+            remove_cb=remove_cb,
+            list_cb=list_cb,
+            stats_cb=stats_cb,
+            verify_cb=verify_cb,
+            archive_cb=archive_cb,
+            discord_flag_cb=discord_flag_cb,
+            discord_profile_cb=discord_profile_cb,
+            streamer_analytics_cb=streamer_analytics_cb,
+            comparison_cb=comparison_cb,
+            session_cb=session_cb,
+            raid_auth_url_cb=raid_auth_url_cb,
+            raid_auth_state_cb=raid_auth_state_cb,
+            raid_block_state_cb=raid_block_state_cb,
+            raid_go_url_cb=raid_go_url_cb,
+            raid_requirements_cb=raid_requirements_cb,
+            raid_oauth_callback_cb=raid_oauth_callback_cb,
+            live_active_announcements_cb=live_active_announcements_cb,
+            live_link_click_cb=live_link_click_cb,
+            observability_snapshot_cb=observability_snapshot_cb,
+            chatters_debug_cb=chatters_debug_cb,
+        )
+
+        self._add = callbacks.add if callable(callbacks.add) else self._empty_add
+        self._remove = callbacks.remove if callable(callbacks.remove) else self._empty_remove
+        self._list = callbacks.streamers if callable(callbacks.streamers) else self._empty_list
+        self._stats = callbacks.stats if callable(callbacks.stats) else self._empty_stats
+        self._verify = callbacks.verify if callable(callbacks.verify) else self._empty_verify
+        self._archive = callbacks.archive if callable(callbacks.archive) else self._empty_archive
         self._discord_flag = (
-            discord_flag_cb if callable(discord_flag_cb) else self._empty_discord_flag
+            callbacks.discord_flag if callable(callbacks.discord_flag) else self._empty_discord_flag
         )
         self._discord_profile = (
-            discord_profile_cb if callable(discord_profile_cb) else self._empty_discord_profile
+            callbacks.discord_profile
+            if callable(callbacks.discord_profile)
+            else self._empty_discord_profile
         )
         self._streamer_analytics = (
-            streamer_analytics_cb
-            if callable(streamer_analytics_cb)
+            callbacks.streamer_analytics
+            if callable(callbacks.streamer_analytics)
             else self._empty_streamer_analytics
         )
-        self._comparison = comparison_cb if callable(comparison_cb) else self._empty_comparison
-        self._session = session_cb if callable(session_cb) else self._empty_session
+        self._comparison = (
+            callbacks.comparison if callable(callbacks.comparison) else self._empty_comparison
+        )
+        self._session = callbacks.session if callable(callbacks.session) else self._empty_session
         self._raid_auth_url = (
-            raid_auth_url_cb if callable(raid_auth_url_cb) else self._empty_raid_auth_url
+            callbacks.raid_auth_url if callable(callbacks.raid_auth_url) else self._empty_raid_auth_url
         )
         self._raid_auth_state = (
-            raid_auth_state_cb
-            if callable(raid_auth_state_cb)
+            callbacks.raid_auth_state
+            if callable(callbacks.raid_auth_state)
             else self._empty_raid_auth_state
         )
         self._raid_block_state = (
-            raid_block_state_cb
-            if callable(raid_block_state_cb)
+            callbacks.raid_block_state
+            if callable(callbacks.raid_block_state)
             else self._empty_raid_block_state
         )
-        self._raid_go_url = raid_go_url_cb if callable(raid_go_url_cb) else self._empty_raid_go_url
+        self._raid_go_url = (
+            callbacks.raid_go_url if callable(callbacks.raid_go_url) else self._empty_raid_go_url
+        )
         self._raid_requirements = (
-            raid_requirements_cb
-            if callable(raid_requirements_cb)
+            callbacks.raid_requirements
+            if callable(callbacks.raid_requirements)
             else self._empty_raid_requirements
         )
         self._raid_oauth_callback = (
-            raid_oauth_callback_cb
-            if callable(raid_oauth_callback_cb)
+            callbacks.raid_oauth_callback
+            if callable(callbacks.raid_oauth_callback)
             else self._empty_raid_oauth_callback
         )
         self._live_active_announcements = (
-            live_active_announcements_cb
-            if callable(live_active_announcements_cb)
+            callbacks.live_active_announcements
+            if callable(callbacks.live_active_announcements)
             else self._empty_live_active_announcements
         )
         self._live_link_click = (
-            live_link_click_cb if callable(live_link_click_cb) else self._empty_live_link_click
+            callbacks.live_link_click if callable(callbacks.live_link_click) else self._empty_live_link_click
         )
         self._observability_snapshot = (
-            observability_snapshot_cb
-            if callable(observability_snapshot_cb)
+            callbacks.observability_snapshot
+            if callable(callbacks.observability_snapshot)
             else self._empty_observability_snapshot
         )
         self._chatters_debug = (
-            chatters_debug_cb if callable(chatters_debug_cb) else self._empty_chatters_debug
+            callbacks.chatters_debug if callable(callbacks.chatters_debug) else self._empty_chatters_debug
         )
         self._idempotency_cache: dict[str, dict[str, Any]] = {}
         self._idempotency_inflight: dict[str, _IdempotencyInFlight] = {}
@@ -2028,31 +2187,33 @@ def build_internal_api_app(
     *,
     token: str | None,
     base_path: str = INTERNAL_API_BASE_PATH,
-    add_cb: Callable[[str, bool], Awaitable[str]] | None = None,
-    remove_cb: Callable[[str], Awaitable[str]] | None = None,
-    list_cb: Callable[[], Awaitable[list[dict[str, Any]]]] | None = None,
-    stats_cb: Callable[..., Awaitable[dict[str, Any]]] | None = None,
-    verify_cb: Callable[[str, str], Awaitable[str]] | None = None,
-    archive_cb: Callable[[str, str], Awaitable[str]] | None = None,
-    discord_flag_cb: Callable[[str, bool], Awaitable[str]] | None = None,
-    discord_profile_cb: Callable[..., Awaitable[str]] | None = None,
-    streamer_analytics_cb: Callable[[str, int], Awaitable[dict[str, Any]]] | None = None,
-    comparison_cb: Callable[[int], Awaitable[dict[str, Any]]] | None = None,
-    session_cb: Callable[[int], Awaitable[dict[str, Any]]] | None = None,
-    raid_auth_url_cb: Callable[..., Awaitable[str]] | None = None,
-    raid_auth_state_cb: Callable[[str], Awaitable[dict[str, Any]]] | None = None,
-    raid_block_state_cb: Callable[..., Awaitable[dict[str, Any]]] | None = None,
-    raid_go_url_cb: Callable[[str], Awaitable[str | None]] | None = None,
-    raid_requirements_cb: Callable[[str], Awaitable[str]] | None = None,
-    raid_oauth_callback_cb: Callable[..., Awaitable[dict[str, Any]]] | None = None,
-    live_active_announcements_cb: Callable[[], Awaitable[list[dict[str, Any]]]] | None = None,
-    live_link_click_cb: Callable[..., Awaitable[dict[str, Any] | None]] | None = None,
-    observability_snapshot_cb: Callable[[], Awaitable[dict[str, Any]]] | None = None,
-    chatters_debug_cb: Callable[[str], Awaitable[dict[str, Any]]] | None = None,
+    callbacks: InternalApiCallbacks | None = None,
+    add_cb: AddStreamerCallback | None = None,
+    remove_cb: RemoveStreamerCallback | None = None,
+    list_cb: StreamersCallback | None = None,
+    stats_cb: StatsCallback | None = None,
+    verify_cb: VerifyStreamerCallback | None = None,
+    archive_cb: ArchiveStreamerCallback | None = None,
+    discord_flag_cb: DiscordFlagCallback | None = None,
+    discord_profile_cb: DiscordProfileCallback | None = None,
+    streamer_analytics_cb: StreamerAnalyticsCallback | None = None,
+    comparison_cb: ComparisonCallback | None = None,
+    session_cb: SessionCallback | None = None,
+    raid_auth_url_cb: RaidAuthUrlCallback | None = None,
+    raid_auth_state_cb: RaidAuthStateCallback | None = None,
+    raid_block_state_cb: RaidBlockStateCallback | None = None,
+    raid_go_url_cb: RaidGoUrlCallback | None = None,
+    raid_requirements_cb: RaidRequirementsCallback | None = None,
+    raid_oauth_callback_cb: RaidOauthCallback | None = None,
+    live_active_announcements_cb: LiveActiveAnnouncementsCallback | None = None,
+    live_link_click_cb: LiveLinkClickCallback | None = None,
+    observability_snapshot_cb: ObservabilitySnapshotCallback | None = None,
+    chatters_debug_cb: ChattersDebugCallback | None = None,
 ) -> web.Application:
     server = InternalApiServer(
         token=token,
         base_path=base_path,
+        callbacks=callbacks,
         add_cb=add_cb,
         remove_cb=remove_cb,
         list_cb=list_cb,
@@ -2115,6 +2276,7 @@ __all__ = [
     "INTERNAL_API_BASE_PATH",
     "IDEMPOTENCY_KEY_HEADER",
     "INTERNAL_TOKEN_HEADER",
+    "InternalApiCallbacks",
     "InternalApiServer",
     "build_internal_api_app",
 ]

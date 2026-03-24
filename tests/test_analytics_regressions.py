@@ -1470,7 +1470,7 @@ class SessionDetailRegressionTests(unittest.IsolatedAsyncioTestCase):
         )
 
     async def test_session_detail_falls_back_to_legacy_counts_without_chatter_rows(self) -> None:
-        conn = sqlite3.connect(":memory:")
+        conn = sqlite3.connect(":memory:", check_same_thread=False)
         self._setup_tables(conn)
         conn.execute(
             """
@@ -1518,7 +1518,7 @@ class SessionDetailRegressionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(payload["returningChatters"], 5)
 
     async def test_session_detail_bot_only_rows_return_zero_not_legacy(self) -> None:
-        conn = sqlite3.connect(":memory:")
+        conn = sqlite3.connect(":memory:", check_same_thread=False)
         self._setup_tables(conn)
         conn.execute(
             """

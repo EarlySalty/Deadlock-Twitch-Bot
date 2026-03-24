@@ -4,6 +4,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 from bot.base import TwitchBaseCog
+from bot.internal_api import InternalApiCallbacks
 from bot.runtime_bootstrap import TwitchRuntimeBootstrap
 
 
@@ -64,7 +65,54 @@ class _LifecycleHarness(TwitchBaseCog):
         return None
 
 
+class _BootstrapHarness(TwitchBaseCog):
+    def __init__(self) -> None:
+        pass
+
+    async def _dashboard_add(self, login: str, require_link: bool) -> str:
+        del login, require_link
+        return "added"
+
+    async def _dashboard_list(self) -> list[dict[str, object]]:
+        return []
+
+    async def _internal_observability_snapshot(self) -> dict[str, object]:
+        return {"ok": True}
+
+
 class TwitchBaseBootstrapLifecycleTests(unittest.IsolatedAsyncioTestCase):
+    def test_wire_runtime_dependencies_uses_internal_api_callbacks_bundle(self) -> None:
+        harness = _BootstrapHarness()
+        harness.bot = SimpleNamespace()
+        captured_kwargs: dict[str, object] = {}
+
+        class _FakeInternalApiRunner:
+            def __init__(self, **kwargs) -> None:
+                captured_kwargs.update(kwargs)
+
+        bootstrap = TwitchRuntimeBootstrap(harness)
+
+        with (
+            patch.dict("os.environ", {}, clear=True),
+            patch("bot.runtime_bootstrap.load_secret_value", return_value=""),
+            patch("bot.runtime_bootstrap.load_bot_tokens", return_value=(None, None, None)),
+            patch("bot.runtime_bootstrap.storage_pg.prepare_runtime_storage"),
+            patch.object(TwitchRuntimeBootstrap, "_ensure_social_media_workers", lambda self: None),
+            patch.object(TwitchRuntimeBootstrap, "_register_reload_manager", lambda self: None),
+            patch("bot.runtime_bootstrap.InternalApiRunner", _FakeInternalApiRunner),
+        ):
+            bootstrap.configure_runtime()
+            bootstrap.wire_runtime_dependencies()
+
+        self.assertIn("callbacks", captured_kwargs)
+        self.assertIsInstance(captured_kwargs["callbacks"], InternalApiCallbacks)
+        callbacks = captured_kwargs["callbacks"]
+        self.assertIs(callbacks.add.__self__, harness)
+        self.assertIs(callbacks.streamers.__self__, harness)
+        self.assertIs(callbacks.observability_snapshot.__self__, harness)
+        self.assertNotIn("add_cb", captured_kwargs)
+        self.assertNotIn("observability_snapshot_cb", captured_kwargs)
+
     async def test_cog_load_starts_runtime_once(self) -> None:
         harness = _LifecycleHarness()
         harness._runtime_started = False
@@ -113,6 +161,34 @@ class TwitchBaseBootstrapLifecycleTests(unittest.IsolatedAsyncioTestCase):
                 "twitch.views_warmup",
             ],
         )
+
+    def test_configure_runtime_rejects_noauth_on_non_loopback_dashboard_host(self) -> None:
+        harness = _LifecycleHarness()
+
+        def _fake_load_secret_value(key: str, **_kwargs):
+            return {
+                "TWITCH_CLIENT_ID": "client-id",
+                "TWITCH_CLIENT_SECRET": "client-secret",
+                "TWITCH_BOT_CLIENT_ID": "client-id",
+                "TWITCH_BOT_CLIENT_SECRET": "bot-secret",
+                "TWITCH_DASHBOARD_TOKEN": "dashboard-token",
+                "TWITCH_PARTNER_TOKEN": "partner-token",
+                "TWITCH_INTERNAL_API_TOKEN": "internal-token",
+            }.get(key, "")
+
+        with patch.dict(
+            "os.environ",
+            {
+                "TWITCH_DASHBOARD_NOAUTH": "1",
+                "TWITCH_ALLOW_DASHBOARD_NOAUTH": "1",
+                "TWITCH_DASHBOARD_HOST": "0.0.0.0",
+            },
+            clear=False,
+        ), patch("bot.runtime_bootstrap.load_secret_value", side_effect=_fake_load_secret_value):
+            with self.assertRaises(RuntimeError) as ctx:
+                TwitchRuntimeBootstrap(harness).configure_runtime()
+
+        self.assertIn("loopback", str(ctx.exception).lower())
 
     async def test_cog_load_retries_runtime_start_after_partial_failure(self) -> None:
         harness = _LifecycleHarness()

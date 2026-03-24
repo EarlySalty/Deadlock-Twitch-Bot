@@ -228,64 +228,56 @@ class TwitchDashboardMixin:
         return {"ok": True}
 
     async def _dashboard_list(self):
-        # kleine Retry-Logik gegen gelegentliche "database is locked" Antworten
-        for attempt in range(3):
-            try:
-                target_game = (
-                    os.getenv("TWITCH_TARGET_GAME_NAME") or TWITCH_TARGET_GAME_NAME or ""
-                ).strip()
-                with storage.readonly_connection() as c:
-                    rows = c.execute(
-                        """
-                        SELECT s.twitch_login,
-                               COALESCE(NULLIF(s.twitch_user_id, ''), NULLIF(a.twitch_user_id, '')) AS twitch_user_id,
-                               s.manual_verified_permanent,
-                               s.manual_verified_until,
-                               s.manual_verified_at,
-                               s.manual_partner_opt_out,
-                               s.archived_at,
-                               s.is_on_discord,
-                               s.discord_user_id,
-                               s.discord_display_name,
-                               s.raid_bot_enabled,
-                               a.raid_enabled AS raid_auth_enabled,
-                               a.needs_reauth AS raid_needs_reauth,
-                               a.authorized_at AS raid_authorized_at,
-                               a.token_expires_at AS raid_token_expires_at,
-                               sess.last_deadlock_stream_at
-                          FROM twitch_partners_all_state s
-                          LEFT JOIN twitch_raid_auth a
-                            ON (
-                                 s.twitch_user_id IS NOT NULL
-                                 AND s.twitch_user_id = a.twitch_user_id
-                               )
-                            OR (
-                                 s.twitch_user_id IS NULL
-                                 AND LOWER(s.twitch_login) = LOWER(a.twitch_login)
-                               )
-                          LEFT JOIN (
-                               SELECT LOWER(streamer_login) AS streamer_login,
-                                      MAX(CASE
-                                            WHEN had_deadlock_in_session
-                                                 OR LOWER(COALESCE(game_name,'')) = LOWER(%s)
-                                            THEN COALESCE(ended_at, started_at)
-                                  END) AS last_deadlock_stream_at
-                                 FROM twitch_stream_sessions
-                                GROUP BY LOWER(streamer_login)
-                          ) AS sess
-                            ON sess.streamer_login = LOWER(s.twitch_login)
-                         WHERE s.status = 'active'
-                          ORDER BY s.twitch_login
-                        """,
-                        (target_game,),
-                    ).fetchall()
-                return [_row_to_dict(row) for row in rows]
-            except Exception as exc:
-                # Legacy retry for transient DB errors; retain small backoff.
-                if "locked" not in str(exc).lower() or attempt == 2:
-                    raise
-                await asyncio.sleep(0.3 * (attempt + 1))
-        return []
+        return await asyncio.to_thread(self._dashboard_list_sync)
+
+    def _dashboard_list_sync(self):
+        target_game = (os.getenv("TWITCH_TARGET_GAME_NAME") or TWITCH_TARGET_GAME_NAME or "").strip()
+        with storage.readonly_connection() as c:
+            rows = c.execute(
+                """
+                SELECT s.twitch_login,
+                       COALESCE(NULLIF(s.twitch_user_id, ''), NULLIF(a.twitch_user_id, '')) AS twitch_user_id,
+                       s.manual_verified_permanent,
+                       s.manual_verified_until,
+                       s.manual_verified_at,
+                       s.manual_partner_opt_out,
+                       s.archived_at,
+                       s.is_on_discord,
+                       s.discord_user_id,
+                       s.discord_display_name,
+                       s.raid_bot_enabled,
+                       a.raid_enabled AS raid_auth_enabled,
+                       a.needs_reauth AS raid_needs_reauth,
+                       a.authorized_at AS raid_authorized_at,
+                       a.token_expires_at AS raid_token_expires_at,
+                       sess.last_deadlock_stream_at
+                  FROM twitch_partners_all_state s
+                  LEFT JOIN twitch_raid_auth a
+                    ON (
+                         s.twitch_user_id IS NOT NULL
+                         AND s.twitch_user_id = a.twitch_user_id
+                       )
+                    OR (
+                         s.twitch_user_id IS NULL
+                         AND LOWER(s.twitch_login) = LOWER(a.twitch_login)
+                       )
+                  LEFT JOIN (
+                       SELECT LOWER(streamer_login) AS streamer_login,
+                              MAX(CASE
+                                    WHEN had_deadlock_in_session
+                                         OR LOWER(COALESCE(game_name,'')) = LOWER(%s)
+                                    THEN COALESCE(ended_at, started_at)
+                              END) AS last_deadlock_stream_at
+                         FROM twitch_stream_sessions
+                        GROUP BY LOWER(streamer_login)
+                  ) AS sess
+                    ON sess.streamer_login = LOWER(s.twitch_login)
+                 WHERE s.status = 'active'
+                  ORDER BY s.twitch_login
+                """,
+                (target_game,),
+            ).fetchall()
+        return [_row_to_dict(row) for row in rows]
 
     async def _dashboard_raid_auth_url(
         self,
@@ -905,494 +897,6 @@ class TwitchDashboardMixin:
 
         return stats
 
-    async def _dashboard_streamer_analytics_data_old(
-        self, streamer_login: str, days: int = 30
-    ) -> dict:
-        """
-        Comprehensive Analytics Data Aggregation.
-        Calculates Channel Health Score and benchmarks against Deadlock category.
-        """
-        import math
-        from datetime import datetime, timedelta
-
-        def _pct(val: float | None) -> float:
-            if val is None:
-                return 0.0
-            # Heuristic: if <= 1.0 assume ratio, else percent
-            if 0 <= val <= 1:
-                return float(val) * 100.0
-            return float(val)
-
-        def _percentile_rank(val: float, population: list[float]) -> float:
-            if not population:
-                return 50.0
-            population.sort()
-            import bisect
-
-            idx = bisect.bisect_left(population, val)
-            return (idx / len(population)) * 100.0
-
-        def _norm(val: float, target: float) -> float:
-            if target <= 0:
-                return 0.0
-            return min(100.0, (val / target) * 100.0)
-
-        login = self._normalize_login(streamer_login) if streamer_login else ""
-        now = datetime.utcnow()
-        cutoff = now - timedelta(days=days)
-        cutoff_iso = cutoff.isoformat()
-
-        # --- Data Containers ---
-        sessions_data: list[dict] = []
-        drops: list[dict] = []
-
-        # --- Accumulators ---
-        total_sessions = 0
-        total_duration_h = 0.0
-        total_watch_time_h = 0.0
-
-        sum_avg_viewers = 0.0
-        sum_peak_viewers = 0.0
-        sum_ret10 = 0.0
-        sum_dropoff = 0.0
-        sum_unique_chatters = 0
-        sum_chat_msgs = 0
-        sum_followers = 0
-        sum_returning_chatters = 0
-        sum_first_chatters = 0
-
-        with storage.readonly_connection() as conn:
-            # 1. Sessions Data
-            # ----------------
-            session_rows = conn.execute(
-                """
-                SELECT id, streamer_login, started_at, duration_seconds, 
-                       avg_viewers, peak_viewers, 
-                       retention_10m, dropoff_pct, dropoff_label,
-                       unique_chatters, returning_chatters, first_time_chatters,
-                       follower_delta, stream_title, game_name
-                  FROM twitch_stream_sessions
-                 WHERE started_at >= %s
-                   AND (streamer_login = %s OR %s = '')
-                 ORDER BY started_at DESC
-                """,
-                (cutoff_iso, login, login),
-            ).fetchall()
-
-            # Chat Messages Map (Session ID -> Count)
-            # Optimization: Pre-fetch counts
-            msg_counts = {}
-            if session_rows:
-                ids = [str(r["id"]) for r in session_rows]
-                # Note: This might be heavy if >1000 sessions, but for 30d single streamer it's fine.
-                # If global view, limit strictly.
-                if len(ids) < 900:
-                    ids_json = json.dumps([int(session_id) for session_id in ids])
-                    mc_rows = conn.execute(
-                        """
-                        SELECT session_id, COUNT(*) as c
-                        FROM twitch_chat_messages
-                        WHERE session_id IN (SELECT CAST(value AS INTEGER) FROM json_each(%s))
-                        GROUP BY session_id
-                        """,
-                        (ids_json,),
-                    ).fetchall()
-                    msg_counts = {r["session_id"]: r["c"] for r in mc_rows}
-
-            for s in session_rows:
-                dur_sec = s["duration_seconds"] or 0
-                dur_h = dur_sec / 3600.0
-
-                avg_v = float(s["avg_viewers"] or 0)
-                peak_v = int(s["peak_viewers"] or 0)
-                ret10 = _pct(s["retention_10m"])
-                drop_pct = _pct(s["dropoff_pct"])
-
-                u_chat = s["unique_chatters"] or 0
-                r_chat = s["returning_chatters"] or 0
-                f_chat = s["first_time_chatters"] or 0
-
-                msgs = msg_counts.get(s["id"], 0)
-                # Fallback estimate if msg table empty but stats exist
-                if msgs == 0 and u_chat > 0:
-                    msgs = u_chat * 5  # Approximation
-
-                f_delta = s["follower_delta"] or 0
-
-                # Entry
-                sess = {
-                    "id": s["id"],
-                    "date": s["started_at"][:10],
-                    "startTime": s["started_at"][11:16],
-                    "duration": dur_sec,
-                    "avgViewers": avg_v,
-                    "peakViewers": peak_v,
-                    "retention10m": ret10,
-                    "dropoff": drop_pct,
-                    "chatters": u_chat,
-                    "messages": msgs,
-                    "followers": f_delta,
-                    "title": s["stream_title"] or "",
-                    "rpm": round(msgs / (dur_sec / 60), 1) if dur_sec > 0 else 0,
-                }
-                sessions_data.append(sess)
-
-                # Drops for Insights
-                if drop_pct > 15:
-                    drops.append(
-                        {
-                            "date": sess["date"],
-                            "pct": drop_pct,
-                            "label": s["dropoff_label"] or "?",
-                        }
-                    )
-
-                # Aggregates
-                total_sessions += 1
-                total_duration_h += dur_h
-                total_watch_time_h += avg_v * dur_h
-
-                sum_avg_viewers += avg_v
-                sum_peak_viewers += peak_v
-                sum_ret10 += ret10
-                sum_dropoff += drop_pct
-                sum_unique_chatters += u_chat
-                sum_chat_msgs += msgs
-                sum_followers += f_delta
-                sum_returning_chatters += r_chat
-                sum_first_chatters += f_chat
-
-            # 2. Raid History (Network)
-            # -------------------------
-            raids_sent_row = conn.execute(
-                "SELECT COUNT(*) as c, SUM(viewer_count) as v FROM twitch_raid_history WHERE from_broadcaster_login=%s AND executed_at >= %s",
-                (login, cutoff_iso),
-            ).fetchone()
-            raids_recv_row = conn.execute(
-                "SELECT COUNT(*) as c, SUM(viewer_count) as v FROM twitch_raid_history WHERE to_broadcaster_login=%s AND executed_at >= %s",
-                (login, cutoff_iso),
-            ).fetchone()
-
-            raids_sent = raids_sent_row["c"] or 0
-            raids_sent_viewers = raids_sent_row["v"] or 0
-            raids_recv = raids_recv_row["c"] or 0
-
-            # 3. Monetization (Subs)
-            # ----------------------
-            sub_row = conn.execute(
-                "SELECT total, points FROM twitch_subscriptions_snapshot WHERE twitch_login=%s ORDER BY snapshot_at DESC LIMIT 1",
-                (login,),
-            ).fetchone()
-            curr_subs = sub_row["total"] or 0 if sub_row else 0
-            curr_points = sub_row["points"] or 0 if sub_row else 0
-
-            # 4. Engagement (Link Clicks)
-            # ---------------------------
-            clicks_row = conn.execute(
-                "SELECT COUNT(*) as c FROM twitch_link_clicks WHERE streamer_login=%s AND clicked_at >= %s",
-                (login, cutoff_iso),
-            ).fetchone()
-            link_clicks = clicks_row["c"] or 0 if clicks_row else 0
-
-            # 5. Benchmarking / Population Data
-            # ---------------------------------
-            # We need population distributions for percentiles
-
-            # Category Avg Viewers Distribution
-            pop_cat_rows = conn.execute(
-                "SELECT AVG(viewer_count) as v FROM twitch_stats_category WHERE ts_utc >= %s GROUP BY streamer",
-                (cutoff_iso,),
-            ).fetchall()
-            pop_avg_viewers = [r["v"] for r in pop_cat_rows if r["v"] is not None]
-
-            # Internal Cohort (Partners/Tracked) for deeper stats
-            # We use 'twitch_stream_sessions' aggregations for other metrics
-            cohort_rows = conn.execute(
-                """
-                SELECT AVG(avg_viewers) as avg_v,
-                       AVG(retention_10m) as r10, 
-                       AVG(dropoff_pct) as avg_drop, 
-                       SUM(follower_delta) as growth,
-                       SUM(unique_chatters) as chat
-                  FROM twitch_stream_sessions 
-                 WHERE started_at >= %s 
-                 GROUP BY streamer_login
-                """,
-                (cutoff_iso,),
-            ).fetchall()
-
-            cohort_avg = [float(r["avg_v"] or 0) for r in cohort_rows]
-            cohort_ret10 = [_pct(r["r10"]) for r in cohort_rows]
-            cohort_growth = [int(r["growth"] or 0) for r in cohort_rows]
-            cohort_chat = [int(r["chat"] or 0) for r in cohort_rows]
-
-        # --- Metric Calculations ---
-
-        # Averages
-        avg_v = sum_avg_viewers / max(total_sessions, 1)
-        peak_v = sum_peak_viewers / max(total_sessions, 1)  # Avg Peak
-        avg_ret10 = sum_ret10 / max(total_sessions, 1)
-        avg_drop = sum_dropoff / max(total_sessions, 1)
-
-        # Rates
-        chat_rate = (
-            (sum_unique_chatters / max(total_sessions, 1)) / max(avg_v, 1) * 100
-        )  # Chatters per 100 viewers
-        returning_rate = (sum_returning_chatters / max(sum_unique_chatters, 1)) * 100
-        conversion_rate = (
-            sum_followers / max(sum_unique_chatters, 1)
-        ) * 100  # Follows per unique chatter (proxy for unique viewer)
-
-        monetization_efficiency = curr_points / max(avg_v, 1)  # Points per Viewer
-
-        network_ratio = raids_sent / max(total_sessions, 1)  # Raids sent per session
-
-        # --- SCORING ENGINE (Improved) ---
-
-        # Logarithmic scale for Reach to be fair to small streamers
-        def _score_log(val):
-            if val <= 1:
-                return 0
-            return min(100, math.log10(val) * 33)  # 10->33, 100->66, 1000->99
-
-        # 1. Reach (25%)
-        # Mix of Percentile (vs Peers) and Absolute Log Scale (Progress)
-        s_reach_avg = _percentile_rank(avg_v, cohort_avg if cohort_avg else pop_avg_viewers)
-        s_reach_abs = _score_log(avg_v)
-        score_reach = (s_reach_avg * 0.5) + (s_reach_abs * 0.5)
-
-        # 2. Retention (25%)
-        # Benchmarks: 30% is low, 70% is high
-        s_ret_raw = _norm(avg_ret10 - 20, 50)  # 20% -> 0, 70% -> 100
-        s_ret_cohort = _percentile_rank(avg_ret10, cohort_ret10)
-        s_drop = _norm(50 - avg_drop, 40)  # 50% drop -> 0, 10% drop -> 100
-        score_retention = (s_ret_raw * 0.4) + (s_ret_cohort * 0.3) + (s_drop * 0.3)
-
-        # 3. Engagement (20%)
-        # Benchmarks: 5 chatters/100v is low, 25 is high
-        s_chat_density = _norm(chat_rate, 25)
-        s_returning = _norm(returning_rate, 60)  # 60% returning is very loyal
-        s_clicks = _norm(link_clicks / max(total_duration_h, 1), 0.5)
-        s_chat_cohort = _percentile_rank(sum_unique_chatters / max(total_sessions, 1), cohort_chat)
-        score_engagement = (
-            (s_chat_density * 0.4) + (s_returning * 0.2) + (s_clicks * 0.2) + (s_chat_cohort * 0.2)
-        )
-
-        # 4. Growth (15%)
-        s_growth_cohort = _percentile_rank(sum_followers, cohort_growth)
-        s_conversion = _norm(conversion_rate, 5)  # 5% conversion is good
-        score_growth = (s_growth_cohort * 0.6) + (s_conversion * 0.4)
-
-        # 5. Monetization (10%)
-        # Target: 2 points per viewer
-        score_money = _norm(monetization_efficiency, 2.5)
-
-        # 6. Network (5%)
-        s_raid_sent = _norm(network_ratio, 0.5)
-        s_raid_recv = _norm(raids_recv, 5)  # 5 incoming raids in period
-        score_network = (s_raid_sent * 0.6) + (s_raid_recv * 0.4)
-
-        # Total
-        total_score = (
-            score_reach * 0.25
-            + score_retention * 0.25
-            + score_engagement * 0.20
-            + score_growth * 0.15
-            + score_money * 0.10
-            + score_network * 0.05
-        )
-
-        # --- Deep Insights & Correlations ---
-
-        findings = []
-        actions = []
-
-        # Correlation Helper
-        def _correlate(list_a, list_b):
-            if len(list_a) != len(list_b) or len(list_a) < 3:
-                return 0
-            avg_a = sum(list_a) / len(list_a)
-            avg_b = sum(list_b) / len(list_b)
-            num = sum((a - avg_a) * (b - avg_b) for a, b in zip(list_a, list_b, strict=False))
-            den = math.sqrt(
-                sum((a - avg_a) ** 2 for a in list_a) * sum((b - avg_b) ** 2 for b in list_b)
-            )
-            return num / den if den != 0 else 0
-
-        # Extract vectors for correlation
-        vec_dur = [s["duration"] for s in sessions_data]
-        vec_viewers = [s["avgViewers"] for s in sessions_data]
-        vec_chat = [s["messages"] for s in sessions_data]
-        vec_ret = [s["retention10m"] for s in sessions_data]
-
-        corr_dur_view = _correlate(vec_dur, vec_viewers)
-        corr_chat_ret = _correlate(vec_chat, vec_ret)
-
-        # 1. Retention Analysis
-        if avg_ret10 < 35:
-            findings.append(
-                {
-                    "type": "neg",
-                    "title": "Kritischer Viewer-Verlust",
-                    "text": f"Nur {avg_ret10:.1f}% deiner Zuschauer bleiben länger als 10 Minuten. Dies ist der Hauptgrund für stagnierendes Wachstum.",
-                }
-            )
-            actions.append(
-                {
-                    "tag": "Content",
-                    "text": "Strukturiere deine ersten 15 Minuten neu: Kein 'Warten auf Zuschauer', starte sofort mit Content/Gameplay.",
-                }
-            )
-        elif avg_ret10 > 60:
-            findings.append(
-                {
-                    "type": "pos",
-                    "title": "Starke Bindung",
-                    "text": "Deine Zuschauer bleiben überdurchschnittlich lange (Top-Tier Retention). Das Fundament für Wachstum steht.",
-                }
-            )
-
-        # 2. Chat & Community
-        if chat_rate < 5:
-            findings.append(
-                {
-                    "type": "neg",
-                    "title": "Stiller Chat",
-                    "text": "Weniger als 5% deiner Zuschauer chatten. Das schadet der Discovery und Bindung.",
-                }
-            )
-            actions.append(
-                {
-                    "tag": "Engagement",
-                    "text": "Nutze 'Call-to-Action': Stelle alle 15 Minuten eine offene Frage an den Chat oder nutze Predictions.",
-                }
-            )
-        elif corr_chat_ret > 0.4:
-            findings.append(
-                {
-                    "type": "pos",
-                    "title": "Chat treibt Retention",
-                    "text": "Daten zeigen: Wenn dein Chat aktiv ist, bleiben die Leute deutlich länger. Interaktion ist dein Schlüssel zum Erfolg.",
-                }
-            )
-
-        # 3. Schedule & Duration
-        if corr_dur_view < -0.3:
-            findings.append(
-                {
-                    "type": "warn",
-                    "title": "Zu lange Streams?",
-                    "text": "Deine Zuschauerzahlen sinken bei längeren Streams deutlich. Deine Audience ermüdet.",
-                }
-            )
-            actions.append(
-                {
-                    "tag": "Schedule",
-                    "text": "Versuche, deine Streams um 30-60 Minuten zu kürzen und die Energie zu komprimieren.",
-                }
-            )
-
-        # 4. Networking
-        if network_ratio < 0.1:
-            findings.append(
-                {
-                    "type": "neg",
-                    "title": "Isolierte Insel",
-                    "text": "Du raidest fast nie. Twitch ist ein Geben und Nehmen.",
-                }
-            )
-            actions.append(
-                {
-                    "tag": "Network",
-                    "text": "Suche dir 2-3 Deadlock-Partner ähnlicher Größe und raide sie konsequent nach jedem Stream.",
-                }
-            )
-        elif raids_recv > 5:
-            findings.append(
-                {
-                    "type": "pos",
-                    "title": "Guter Netzwerk-Hub",
-                    "text": "Du wirst oft geraidet. Deine Networking-Strategie funktioniert.",
-                }
-            )
-
-        # 5. Growth
-        if conversion_rate < 1.0 and avg_v > 10:
-            findings.append(
-                {
-                    "type": "neg",
-                    "title": "Niedrige Conversion",
-                    "text": "Zuschauer schauen zu, folgen aber nicht. Der 'Reason to Follow' fehlt.",
-                }
-            )
-            actions.append(
-                {
-                    "tag": "Growth",
-                    "text": "Erinnere an Follows in High-Hype-Momenten (nicht am Anfang). Definiere ein Follow-Goal im Overlay.",
-                }
-            )
-
-        # --- Benchmark Comparison ---
-        avg_pop_viewers = sum(pop_avg_viewers) / len(pop_avg_viewers) if pop_avg_viewers else 0
-        avg_pop_ret = sum(cohort_ret10) / len(cohort_ret10) if cohort_ret10 else 0
-
-        benchmarks = {
-            "avgViewers": {
-                "you": round(avg_v, 1),
-                "avg": round(avg_pop_viewers, 1),
-                "top10": round(_percentile_rank(90, pop_avg_viewers), 1),
-            },
-            "retention": {"you": round(avg_ret10, 1), "avg": round(avg_pop_ret, 1)},
-        }
-
-        scores = {
-            "total": round(total_score),
-            "reach": round(score_reach),
-            "retention": round(score_retention),
-            "engagement": round(score_engagement),
-            "growth": round(score_growth),
-            "monetization": round(score_money),
-            "network": round(score_network),
-        }
-
-        summary = {
-            "avgViewers": round(avg_v, 1),
-            "peakViewers": peak_v,
-            "hoursStreamed": round(total_duration_h, 1),
-            "hoursWatched": round(total_watch_time_h, 0),
-            "followersDelta": sum_followers,
-            "subsTotal": curr_subs,
-            "subPoints": curr_points,
-            "raidsSent": raids_sent,
-            "raidsRecv": raids_recv,
-            "linkClicks": link_clicks,
-            "uniqueChatters": sum_unique_chatters,
-        }
-
-        return {
-            "meta": {"streamer": login, "days": days, "generated": now.isoformat()},
-            "scores": scores,
-            "summary": summary,
-            "benchmarks": benchmarks,
-            "sessions": sessions_data,
-            "findings": findings,
-            "actions": actions,
-            "correlations": {
-                "durationVsViewers": round(corr_dur_view, 2),
-                "chatVsRetention": round(corr_chat_ret, 2),
-            },
-            "retention": {
-                "avg10m": round(avg_ret10, 1),
-                "avgDrop": round(avg_drop, 1),
-                "drops": drops,
-            },
-            "network": {
-                "sent": raids_sent,
-                "received": raids_recv,
-                "sentViewers": raids_sent_viewers,
-            },
-        }
-
     async def _dashboard_streamer_analytics_data(self, streamer_login: str, days: int = 30) -> dict:
         """
         New comprehensive analytics using AnalyticsBackendExtended.
@@ -1407,7 +911,9 @@ class TwitchDashboardMixin:
         login = self._normalize_login(login)
         if not login:
             return {}
+        return await asyncio.to_thread(self._dashboard_streamer_overview_sync, login)
 
+    def _dashboard_streamer_overview_sync(self, login: str) -> dict:
         data = {"login": login}
         with storage.readonly_connection() as c:
             # 1. Stammdaten
@@ -1455,6 +961,9 @@ class TwitchDashboardMixin:
 
     async def _dashboard_session_detail(self, session_id: int) -> dict:
         """Fetch deep-dive data for a single session."""
+        return await asyncio.to_thread(self._dashboard_session_detail_sync, session_id)
+
+    def _dashboard_session_detail_sync(self, session_id: int) -> dict:
         data = {}
         with storage.readonly_connection() as c:
             # 1. Session Meta
@@ -1495,6 +1004,9 @@ class TwitchDashboardMixin:
 
     async def _dashboard_comparison_stats(self, days: int = 30) -> dict:
         """Fetch comparative stats: Me vs Category vs Top."""
+        return await asyncio.to_thread(self._dashboard_comparison_stats_sync, days)
+
+    def _dashboard_comparison_stats_sync(self, days: int = 30) -> dict:
         data = {}
         since_dt = (datetime.now(UTC) - timedelta(days=days)).isoformat()
         with storage.readonly_connection() as c:
@@ -1535,6 +1047,89 @@ class TwitchDashboardMixin:
             data["top_streamers"] = [_row_to_dict(r) for r in top_streamers]
 
         return data
+
+    def _dashboard_verify_storage_step(self, login: str, mode: str) -> dict[str, object]:
+        if mode in {"permanent", "temp"}:
+            row_data = None
+            should_notify = False
+            copied = 0
+            with storage.transaction() as c:
+                source_row = c.execute(
+                    """
+                    SELECT twitch_user_id, discord_user_id, discord_display_name, manual_verified_at
+                    FROM twitch_streamers
+                    WHERE twitch_login=%s
+                    """,
+                    (login,),
+                ).fetchone()
+                partner_row = storage.load_active_partner(c, twitch_login=login)
+                twitch_user_id = ""
+                if source_row:
+                    row_data = _row_to_dict(source_row)
+                    twitch_user_id = str(row_data.get("twitch_user_id") or "").strip()
+                    should_notify = row_data.get("manual_verified_at") is None
+                elif partner_row:
+                    row_data = {
+                        "twitch_user_id": partner_row["twitch_user_id"] if hasattr(partner_row, "keys") else partner_row[1],
+                        "discord_user_id": partner_row["discord_user_id"] if hasattr(partner_row, "keys") else partner_row[21],
+                        "discord_display_name": partner_row["discord_display_name"] if hasattr(partner_row, "keys") else partner_row[22],
+                        "manual_verified_at": partner_row["manual_verified_at"] if hasattr(partner_row, "keys") else partner_row[11],
+                    }
+                    twitch_user_id = str(row_data.get("twitch_user_id") or "").strip()
+                    should_notify = row_data.get("manual_verified_at") is None
+
+                if not twitch_user_id:
+                    return {"kind": "message", "message": f"{login} ist nicht gespeichert"}
+
+                verification = storage.verification_payload(mode)
+                storage.promote_streamer_to_partner(
+                    c,
+                    twitch_login=login,
+                    twitch_user_id=twitch_user_id,
+                    discord_user_id=row_data.get("discord_user_id") if row_data else None,
+                    discord_display_name=row_data.get("discord_display_name") if row_data else None,
+                    is_on_discord=1 if row_data and row_data.get("discord_user_id") else 0,
+                    **verification,
+                )
+                copied = storage.backfill_tracked_stats_from_category(c, login)
+
+            base_msg = (
+                f"{login} dauerhaft verifiziert"
+                if mode == "permanent"
+                else f"{login} für 30 Tage verifiziert"
+            )
+            return {
+                "kind": "verified",
+                "base_msg": base_msg,
+                "copied": copied,
+                "should_notify": should_notify,
+                "row_data": row_data,
+            }
+
+        if mode == "clear":
+            with storage.transaction() as c:
+                result = storage.archive_active_partner(c, twitch_login=login)
+                if not result:
+                    return {"kind": "message", "message": f"{login} ist nicht gespeichert"}
+            return {
+                "kind": "message",
+                "message": f"Verifizierung für {login} zurückgesetzt (keine DM versendet)",
+            }
+
+        if mode == "failed":
+            row_data = None
+            with storage.transaction() as c:
+                identity_row = storage.load_streamer_identity(c, twitch_login=login)
+                if identity_row:
+                    row_data = _row_to_dict(identity_row)
+                archived = storage.archive_active_partner(c, twitch_login=login)
+                if archived and row_data is None:
+                    row_data = archived
+            if not row_data:
+                return {"kind": "message", "message": f"{login} ist nicht gespeichert"}
+            return {"kind": "failed", "row_data": row_data}
+
+        return {"kind": "message", "message": "Unbekannter Modus"}
 
     async def _ensure_streamer_role(self, row_data: dict | None) -> str:
         """Assign the streamer role when available; return a short status hint."""
@@ -1627,143 +1222,84 @@ class TwitchDashboardMixin:
         if not login:
             return "Ungültiger Login"
 
-        if mode in {"permanent", "temp"}:
-            row_data = None
-            should_notify = False
-            copied = 0
-        with storage.transaction() as c:
-                source_row = c.execute(
-                    """
-                    SELECT twitch_user_id, discord_user_id, discord_display_name, manual_verified_at
-                    FROM twitch_streamers
-                    WHERE twitch_login=%s
-                    """,
-                    (login,),
-                ).fetchone()
-                partner_row = storage.load_active_partner(c, twitch_login=login)
-                twitch_user_id = ""
-                if source_row:
-                    row_data = _row_to_dict(source_row)
-                    twitch_user_id = str(row_data.get("twitch_user_id") or "").strip()
-                    should_notify = row_data.get("manual_verified_at") is None
-                elif partner_row:
-                    row_data = {
-                        "twitch_user_id": partner_row["twitch_user_id"] if hasattr(partner_row, "keys") else partner_row[1],
-                        "discord_user_id": partner_row["discord_user_id"] if hasattr(partner_row, "keys") else partner_row[21],
-                        "discord_display_name": partner_row["discord_display_name"] if hasattr(partner_row, "keys") else partner_row[22],
-                        "manual_verified_at": partner_row["manual_verified_at"] if hasattr(partner_row, "keys") else partner_row[11],
-                    }
-                    twitch_user_id = str(row_data.get("twitch_user_id") or "").strip()
-                    should_notify = row_data.get("manual_verified_at") is None
+        storage_result = await asyncio.to_thread(self._dashboard_verify_storage_step, login, mode)
+        result_kind = str(storage_result.get("kind") or "")
+        if result_kind == "message":
+            return str(storage_result.get("message") or "Unbekannter Modus")
+        if result_kind == "verified":
+            row_data = storage_result.get("row_data")
+            should_notify = bool(storage_result.get("should_notify"))
+            copied = int(storage_result.get("copied") or 0)
+            base_msg = str(storage_result.get("base_msg") or "").strip()
 
-                if not twitch_user_id:
-                    return f"{login} ist nicht gespeichert"
+            notes: list[str] = []
+            if copied:
+                notes.append(f"({copied} historische Datenpunkte übernommen)")
+            if should_notify:
+                dm_note = await self._notify_verification_success(login, row_data)
+                if dm_note:
+                    notes.append(dm_note)
+            role_note = await self._ensure_streamer_role(row_data)
+            if role_note:
+                notes.append(role_note)
+            merged = " ".join(notes).strip()
+            return f"{base_msg} {merged}".strip()
+        if result_kind != "failed":
+            return "Unbekannter Modus"
 
-                verification = storage.verification_payload(mode)
-                storage.promote_streamer_to_partner(
-                    c,
-                    twitch_login=login,
-                    twitch_user_id=twitch_user_id,
-                    discord_user_id=row_data.get("discord_user_id") if row_data else None,
-                    discord_display_name=row_data.get("discord_display_name") if row_data else None,
-                    is_on_discord=1 if row_data and row_data.get("discord_user_id") else 0,
-                    **verification,
-                )
-                base_msg = (
-                    f"{login} dauerhaft verifiziert"
-                    if mode == "permanent"
-                    else f"{login} für 30 Tage verifiziert"
-                )
-                copied = storage.backfill_tracked_stats_from_category(c, login)
+        row_data = storage_result.get("row_data")
+        if not isinstance(row_data, dict):
+            return f"{login} ist nicht gespeichert"
+        user_id_raw = row_data.get("discord_user_id")
+        if not user_id_raw:
+            return f"Keine Discord-ID für {login} hinterlegt"
 
-        notes: list[str] = []
-        if copied:
-            notes.append(f"({copied} historische Datenpunkte übernommen)")
-        if should_notify:
-            dm_note = await self._notify_verification_success(login, row_data)
-            if dm_note:
-                notes.append(dm_note)
-        role_note = await self._ensure_streamer_role(row_data)
-        if role_note:
-            notes.append(role_note)
-        merged = " ".join(notes).strip()
-        return f"{base_msg} {merged}".strip()
+        try:
+            user_id_int = int(str(user_id_raw))
+        except (TypeError, ValueError):
+            return f"Ungültige Discord-ID für {login}"
 
-        if mode == "clear":
-            with storage.transaction() as c:
-                result = storage.archive_active_partner(c, twitch_login=login)
-                if not result:
-                    return f"{login} ist nicht gespeichert"
-
-            # "Kein Partner" ist eine rein interne Markierung – es sollen hierbei keine DMs
-            # ausgelöst werden. Wir geben daher eine entsprechend klare Rückmeldung aus,
-            # damit Dashboard-Nutzer:innen wissen, dass keine Nachricht verschickt wurde.
-            return f"Verifizierung für {login} zurückgesetzt (keine DM versendet)"
-
-        if mode == "failed":
-            row_data = None
-            with storage.transaction() as c:
-                identity_row = storage.load_streamer_identity(c, twitch_login=login)
-                if identity_row:
-                    row_data = _row_to_dict(identity_row)
-                archived = storage.archive_active_partner(c, twitch_login=login)
-                if archived and row_data is None:
-                    row_data = archived
-
-            if not row_data:
-                return f"{login} ist nicht gespeichert"
-
-            user_id_raw = row_data.get("discord_user_id")
-            if not user_id_raw:
-                return f"Keine Discord-ID für {login} hinterlegt"
-
+        user = self.bot.get_user(user_id_int)
+        if user is None:
             try:
-                user_id_int = int(str(user_id_raw))
-            except (TypeError, ValueError):
-                return f"Ungültige Discord-ID für {login}"
-
-            user = self.bot.get_user(user_id_int)
-            if user is None:
-                try:
-                    user = await self.bot.fetch_user(user_id_int)
-                except discord.NotFound:
-                    user = None
-                except discord.HTTPException:
-                    log.exception("Konnte Discord-User %s nicht abrufen", user_id_int)
-                    user = None
-
-            if user is None:
-                return f"Discord-User {user_id_int} konnte nicht gefunden werden"
-
-            message = (
-                "Hey! Deine Deadlock-Streamer-Verifizierung konnte leider nicht abgeschlossen werden. "
-                "Du erfüllst aktuell nicht alle Voraussetzungen. Bitte prüfe die Anforderungen erneut "
-                "und starte die Verifizierung anschließend mit /streamer noch einmal."
-            )
-
-            try:
-                await user.send(message)
-            except discord.Forbidden:
-                log.warning(
-                    "DM an %s (%s) wegen fehlgeschlagener Verifizierung blockiert",
-                    user_id_int,
-                    login,
-                )
-                return f"Konnte {row_data.get('discord_display_name') or user.name} nicht per DM erreichen."
+                user = await self.bot.fetch_user(user_id_int)
+            except discord.NotFound:
+                user = None
             except discord.HTTPException:
-                log.exception(
-                    "Konnte Verifizierungsfehler-Nachricht nicht senden an %s",
-                    user_id_int,
-                )
-                return "Nachricht konnte nicht gesendet werden"
+                log.exception("Konnte Discord-User %s nicht abrufen", user_id_int)
+                user = None
 
-            log.info(
-                "Verifizierungsfehler-Benachrichtigung an %s (%s) gesendet",
+        if user is None:
+            return f"Discord-User {user_id_int} konnte nicht gefunden werden"
+
+        message = (
+            "Hey! Deine Deadlock-Streamer-Verifizierung konnte leider nicht abgeschlossen werden. "
+            "Du erfüllst aktuell nicht alle Voraussetzungen. Bitte prüfe die Anforderungen erneut "
+            "und starte die Verifizierung anschließend mit /streamer noch einmal."
+        )
+
+        try:
+            await user.send(message)
+        except discord.Forbidden:
+            log.warning(
+                "DM an %s (%s) wegen fehlgeschlagener Verifizierung blockiert",
                 user_id_int,
                 login,
             )
-            return f"{login}: Discord-User wurde über die fehlgeschlagene Verifizierung informiert"
-        return "Unbekannter Modus"
+            return f"Konnte {row_data.get('discord_display_name') or user.name} nicht per DM erreichen."
+        except discord.HTTPException:
+            log.exception(
+                "Konnte Verifizierungsfehler-Nachricht nicht senden an %s",
+                user_id_int,
+            )
+            return "Nachricht konnte nicht gesendet werden"
+
+        log.info(
+            "Verifizierungsfehler-Benachrichtigung an %s (%s) gesendet",
+            user_id_int,
+            login,
+        )
+        return f"{login}: Discord-User wurde über die fehlgeschlagene Verifizierung informiert"
 
     async def _reload_twitch_cog(self) -> str:
         """Hot reload the entire Twitch cog.

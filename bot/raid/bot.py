@@ -4384,6 +4384,18 @@ class RaidBot:
             log.error("Error checking blacklist", exc_info=True)
             return False
 
+    def _load_raid_blacklist(self) -> tuple[set[str], set[str]]:
+        blacklisted_ids: set[str] = set()
+        blacklisted_logins: set[str] = set()
+        with readonly_connection() as conn:
+            for bl_row in conn.execute(
+                "SELECT target_id, lower(target_login) FROM twitch_raid_blacklist"
+            ).fetchall():
+                if bl_row[0]:
+                    blacklisted_ids.add(str(bl_row[0]))
+                blacklisted_logins.add(str(bl_row[1]))
+        return blacklisted_ids, blacklisted_logins
+
     def _add_to_blacklist(self, target_id: str, target_login: str, reason: str):
         """Fügt ein Ziel zur Blacklist hinzu."""
         try:
@@ -4453,18 +4465,13 @@ class RaidBot:
         exclude_ids = {broadcaster_id}
         cached_de_streams = None
 
-        blacklisted_ids: set[str] = set()
-        blacklisted_logins: set[str] = set()
         try:
-            with readonly_connection() as conn:
-                for bl_row in conn.execute(
-                    "SELECT target_id, lower(target_login) FROM twitch_raid_blacklist"
-                ).fetchall():
-                    if bl_row[0]:
-                        blacklisted_ids.add(str(bl_row[0]))
-                    blacklisted_logins.add(str(bl_row[1]))
+            blacklisted_ids, blacklisted_logins = await asyncio.to_thread(
+                self._load_raid_blacklist
+            )
         except Exception:
-            log.error("Error loading blacklist", exc_info=True)
+            log.exception("Raid pipeline blocked because blacklist load failed")
+            return {"status": "blocked", "error": "blacklist_unavailable"}
 
         for attempt in range(max_attempts):
             attempt_start_ts = time.monotonic()

@@ -1,0 +1,56 @@
+﻿<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Datenschutzhinweis – Deutsche Deadlock Community Bot</title>
+<style>
+  body { font-family: sans-serif; max-width: 800px; margin: 60px auto; padding: 0 24px; color: #222; line-height: 1.7; }
+  h1 { font-size: 1.8rem; margin-bottom: 4px; }
+  h2 { font-size: 1.2rem; margin-top: 32px; }
+  p, li { font-size: 0.97rem; }
+  footer { margin-top: 48px; font-size: 0.85rem; color: #666; }
+</style>
+</head>
+<body>
+<h1>Datenschutzhinweis</h1>
+<p><strong>Deutsche Deadlock Community Bot</strong> – zuletzt aktualisiert: Februar 2026</p>
+
+<h2>1. Verantwortliche Stelle</h2>
+<p>Betrieben wird der Bot durch die Deutsche Deadlock Community (Discord-Server).
+Kontakt über den Discord-Server.</p>
+
+<h2>2. Erhobene Daten</h2>
+<p>Der Bot verarbeitet ausschließlich öffentlich verfügbare Daten von der Twitch-API:</p>
+<ul>
+  <li>Twitch-Benutzernamen und -IDs der Community-Streamer</li>
+  <li>Öffentliche Clip-Metadaten (Titel, URL, Vorschaubild, Spieldauer, Zuschauerzahl)</li>
+  <li>OAuth-Zugangsdaten für verbundene Social-Media-Konten (verschlüsselt gespeichert)</li>
+</ul>
+<p>Es werden keine personenbezogenen Daten von Zuschauern oder Dritten gespeichert.</p>
+
+<h2>3. Zweck der Verarbeitung</h2>
+<p>Die Daten werden ausschließlich zur automatischen Veröffentlichung von
+Community-Clips auf TikTok, YouTube und Instagram verwendet.</p>
+
+<h2>4. Speicherung & Sicherheit</h2>
+<p>Clip-Metadaten und OAuth-Tokens werden in der gemeinsamen PostgreSQL-Datenbank gespeichert.
+Zugangsdaten werden mit AES-256-GCM verschlüsselt. Ein Zugriff von außen auf die
+Datenbank besteht nicht.</p>
+
+<h2>5. Weitergabe an Dritte</h2>
+<p>Daten werden nicht an Dritte weitergegeben. Für den Upload wird die jeweilige
+Plattform-API (TikTok, YouTube, Instagram) verwendet; dabei gelten deren
+Datenschutzbestimmungen.</p>
+
+<h2>6. Dauer der Speicherung</h2>
+<p>Clip-Einträge werden intern gespeichert bis sie manuell gelöscht werden.
+OAuth-Tokens werden bei Widerruf der App-Berechtigung sofort deaktiviert.</p>
+
+<h2>7. Betroffenenrechte</h2>
+<p>Autorisierte Streamer können jederzeit die Löschung ihrer Daten per Discord-Nachricht
+anfordern.</p>
+
+<footer>Deutsche Deadlock Community · <a href="/terms">Nutzungsbedingungen</a></footer>
+</body>
+</html>

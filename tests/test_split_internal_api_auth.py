@@ -6,7 +6,12 @@ from unittest.mock import patch
 
 from aiohttp.test_utils import TestClient, TestServer
 
-from bot.internal_api import INTERNAL_API_BASE_PATH, INTERNAL_TOKEN_HEADER, build_internal_api_app
+from bot.internal_api import (
+    INTERNAL_API_BASE_PATH,
+    INTERNAL_TOKEN_HEADER,
+    InternalApiCallbacks,
+    build_internal_api_app,
+)
 from bot.internal_api.app import IDEMPOTENCY_KEY_HEADER, InternalApiServer
 
 
@@ -96,6 +101,32 @@ class InternalApiAuthTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(payload.get("ok"))
         self.assertEqual(payload.get("observability", {}).get("chat", {}).get("joinAttempts"), 4)
         self.assertEqual(payload.get("observability", {}).get("raid", {}).get("pendingCount"), 2)
+
+    async def test_observability_debug_accepts_callbacks_bundle(self) -> None:
+        async def _observability_snapshot_cb() -> dict[str, object]:
+            return {
+                "chat": {"joinAttempts": 6},
+                "raid": {"pendingCount": 3},
+            }
+
+        app = build_internal_api_app(
+            token="secret-token",
+            callbacks=InternalApiCallbacks(
+                observability_snapshot=_observability_snapshot_cb,
+            ),
+        )
+        async with TestServer(app) as server:
+            async with TestClient(server) as client:
+                response = await client.get(
+                    f"{INTERNAL_API_BASE_PATH}/debug/observability",
+                    headers={INTERNAL_TOKEN_HEADER: "secret-token"},
+                )
+                payload = await response.json()
+
+        self.assertEqual(response.status, 200)
+        self.assertTrue(payload.get("ok"))
+        self.assertEqual(payload.get("observability", {}).get("chat", {}).get("joinAttempts"), 6)
+        self.assertEqual(payload.get("observability", {}).get("raid", {}).get("pendingCount"), 3)
 
     async def test_healthz_rejects_non_loopback_host_header(self) -> None:
         app = build_internal_api_app(token="secret-token")

@@ -142,6 +142,36 @@ class _PoolConnection:
         return _PoolCursor()
 
 
+class _RuntimeSchemaVersionConnection(_PoolConnection):
+    def __init__(
+        self,
+        name: str,
+        *,
+        schema_version_exists: bool,
+        schema_version_columns: tuple[str, ...] = ("component", "version"),
+        version_row=None,
+        version_lookup_error: Exception | None = None,
+    ) -> None:
+        super().__init__(name)
+        self.schema_version_exists = schema_version_exists
+        self.schema_version_columns = schema_version_columns
+        self.version_row = version_row
+        self.version_lookup_error = version_lookup_error
+
+    def execute(self, sql: str, params=(), *args, **kwargs):
+        self.executed.append((sql, tuple(params or ())))
+        sql_text = str(sql)
+        if "FROM information_schema.tables" in sql_text and "schema_version" in sql_text:
+            return _SchemaCursor((1,) if self.schema_version_exists else None)
+        if "FROM information_schema.columns" in sql_text and "schema_version" in sql_text:
+            return _SchemaCursor(rows=[(column,) for column in self.schema_version_columns])
+        if "SELECT version" in sql_text and "FROM schema_version" in sql_text:
+            if self.version_lookup_error is not None:
+                raise self.version_lookup_error
+            return _SchemaCursor(self.version_row)
+        return _SchemaCursor()
+
+
 def _clear_storage_bootstrap_state() -> None:
     with contextlib.suppress(Exception):
         _reset_connection_pools()
@@ -448,6 +478,88 @@ class ConnectionPoolArchitectureTests(unittest.TestCase):
         self.assertEqual(len(connections), 1)
         prepare_mock.assert_called_once()
 
+    def test_prepare_runtime_storage_records_runtime_schema_version(self) -> None:
+        conn = _RuntimeSchemaVersionConnection(
+            "conn-versioned",
+            schema_version_exists=False,
+        )
+
+        with (
+            patch.dict("os.environ", {"TWITCH_ALLOW_RUNTIME_SCHEMA_BOOTSTRAP": "1"}, clear=False),
+            patch("bot.storage.pg.psycopg.connect", return_value=conn),
+            patch(
+                "bot.storage.pg._load_dsn",
+                return_value="postgresql://demo@host:5432/db",
+            ),
+            patch("bot.storage.pg.ensure_schema") as ensure_mock,
+        ):
+            prepare_runtime_storage()
+
+        ensure_mock.assert_called_once_with(conn)
+        self.assertTrue(
+            any("CREATE TABLE IF NOT EXISTS schema_version" in sql for sql, _ in conn.executed)
+        )
+        self.assertTrue(
+            any(
+                "INSERT INTO schema_version" in sql and params == ("storage_pg", 1)
+                for sql, params in conn.executed
+            )
+        )
+
+    def test_prepare_runtime_storage_respects_external_schema_version_table(self) -> None:
+        conn = _RuntimeSchemaVersionConnection(
+            "conn-external-schema",
+            schema_version_exists=True,
+            schema_version_columns=("name", "applied_at"),
+        )
+
+        with (
+            patch("bot.storage.pg.psycopg.connect", return_value=conn),
+            patch(
+                "bot.storage.pg._load_dsn",
+                return_value="postgresql://demo@host:5432/db",
+            ),
+            patch("bot.storage.pg.ensure_schema") as ensure_mock,
+        ):
+            prepare_runtime_storage()
+
+        ensure_mock.assert_not_called()
+        self.assertFalse(any("INSERT INTO schema_version" in sql for sql, _ in conn.executed))
+
+    def test_prepare_runtime_storage_fails_closed_on_schema_version_query_errors(self) -> None:
+        conn = _RuntimeSchemaVersionConnection(
+            "conn-schema-error",
+            schema_version_exists=True,
+            version_lookup_error=RuntimeError("permission denied"),
+        )
+
+        with (
+            patch("bot.storage.pg.psycopg.connect", return_value=conn),
+            patch(
+                "bot.storage.pg._load_dsn",
+                return_value="postgresql://demo@host:5432/db",
+            ),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "permission denied"):
+                prepare_runtime_storage()
+
+    def test_prepare_runtime_storage_requires_explicit_runtime_bootstrap_opt_in(self) -> None:
+        conn = _RuntimeSchemaVersionConnection(
+            "conn-bootstrap-required",
+            schema_version_exists=False,
+        )
+
+        with (
+            patch.dict("os.environ", {"TWITCH_ALLOW_RUNTIME_SCHEMA_BOOTSTRAP": "0"}, clear=False),
+            patch("bot.storage.pg.psycopg.connect", return_value=conn),
+            patch(
+                "bot.storage.pg._load_dsn",
+                return_value="postgresql://demo@host:5432/db",
+            ),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "TWITCH_ALLOW_RUNTIME_SCHEMA_BOOTSTRAP=1"):
+                prepare_runtime_storage()
+
     def test_prepare_runtime_storage_propagates_schema_bootstrap_failures(self) -> None:
         connections: list[_PoolConnection] = []
 
@@ -457,6 +569,7 @@ class ConnectionPoolArchitectureTests(unittest.TestCase):
             return conn
 
         with (
+            patch.dict("os.environ", {"TWITCH_ALLOW_RUNTIME_SCHEMA_BOOTSTRAP": "1"}, clear=False),
             patch("bot.storage.pg.psycopg.connect", side_effect=_connect),
             patch(
                 "bot.storage.pg._load_dsn",

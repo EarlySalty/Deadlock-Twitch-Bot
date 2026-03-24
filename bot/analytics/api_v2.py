@@ -2216,8 +2216,6 @@ class AnalyticsV2Mixin(
         """Get detailed session data."""
         self._require_v2_auth(request)
 
-        from ..storage import pg as storage
-
         session_id = request.match_info.get("id", "")
         try:
             session_id = int(session_id)
@@ -2225,141 +2223,141 @@ class AnalyticsV2Mixin(
             return web.json_response({"error": "Invalid session ID"}, status=400)
 
         try:
-            with storage.readonly_connection() as conn:
-                # Session data
-                row = conn.execute(
-                    """
-                    SELECT
-                        s.id, s.streamer_login, s.started_at, s.ended_at,
-                        s.duration_seconds, s.start_viewers, s.peak_viewers, s.end_viewers,
-                        s.avg_viewers, s.retention_5m, s.retention_10m, s.retention_20m,
-                        s.dropoff_pct, s.unique_chatters, s.first_time_chatters,
-                        s.returning_chatters, s.stream_title
-                    FROM twitch_stream_sessions s
-                    WHERE s.id = %s
-                """,
-                    (session_id,),
-                ).fetchone()
-
-                if not row:
-                    return web.json_response({"error": "Session not found"}, status=404)
-
-                session_bot_clause, session_bot_params = build_known_chat_bot_not_in_clause(
-                    column_expr="sc.chatter_login",
-                    placeholder="%s",
-                )
-
-                chatter_presence = conn.execute(
-                    """
-                    SELECT 1
-                    FROM twitch_session_chatters
-                    WHERE session_id = %s
-                    LIMIT 1
-                    """,
-                    (session_id,),
-                ).fetchone()
-
-                chatter_stats = conn.execute(
-                    f"""
-                    SELECT
-                        COUNT(
-                            DISTINCT CASE
-                                WHEN sc.messages > 0
-                                THEN COALESCE(NULLIF(sc.chatter_login, ''), sc.chatter_id)
-                                ELSE NULL
-                            END
-                        ) AS unique_chatters,
-                        COUNT(
-                            DISTINCT CASE
-                                WHEN sc.messages > 0
-                                     AND LOWER(COALESCE(CAST(sc.is_first_time_streamer AS TEXT), '0')) IN ('1', 't', 'true')
-                                THEN COALESCE(NULLIF(sc.chatter_login, ''), sc.chatter_id)
-                                ELSE NULL
-                            END
-                        ) AS first_time_chatters,
-                        COUNT(
-                            DISTINCT CASE
-                                WHEN sc.messages > 0
-                                     AND LOWER(COALESCE(CAST(sc.is_first_time_streamer AS TEXT), '0')) NOT IN ('1', 't', 'true')
-                                THEN COALESCE(NULLIF(sc.chatter_login, ''), sc.chatter_id)
-                                ELSE NULL
-                            END
-                        ) AS returning_chatters
-                    FROM twitch_session_chatters sc
-                    WHERE sc.session_id = %s
-                      AND {session_bot_clause}
-                    """,
-                    (session_id, *session_bot_params),
-                ).fetchone()
-
-                if chatter_presence:
-                    unique_chatters = int(chatter_stats[0]) if chatter_stats else 0
-                    first_time_chatters = int(chatter_stats[1]) if chatter_stats else 0
-                    returning_chatters = int(chatter_stats[2]) if chatter_stats else 0
-                else:
-                    unique_chatters = int(row[13] or 0)
-                    first_time_chatters = int(row[14] or 0)
-                    returning_chatters = int(row[15] or 0)
-
-                # Timeline
-                timeline = conn.execute(
-                    """
-                    SELECT minutes_from_start, viewer_count
-                    FROM twitch_session_viewers
-                    WHERE session_id = %s
-                    ORDER BY minutes_from_start
-                """,
-                    (session_id,),
-                ).fetchall()
-
-                # Top chatters
-                chatters = conn.execute(
-                    f"""
-                    SELECT chatter_login, messages
-                    FROM twitch_session_chatters sc
-                    WHERE sc.session_id = %s
-                      AND {session_bot_clause}
-                    ORDER BY messages DESC
-                    LIMIT 20
-                """,
-                    (session_id, *session_bot_params),
-                ).fetchall()
-
-                return web.json_response(
-                    {
-                        "id": row[0],
-                        "streamerLogin": row[1],
-                        "startedAt": row[2].isoformat() if hasattr(row[2], "isoformat") else row[2],
-                        "endedAt": row[3].isoformat() if hasattr(row[3], "isoformat") else row[3],
-                        "duration": row[4] or 0,
-                        "startViewers": row[5] or 0,
-                        "peakViewers": row[6] or 0,
-                        "endViewers": row[7] or 0,
-                        "avgViewers": float(row[8]) if row[8] else 0,
-                        "retention5m": float(row[9]) * 100 if row[9] else 0,
-                        "retention10m": float(row[10]) * 100 if row[10] else 0,
-                        "retention20m": float(row[11]) * 100 if row[11] else 0,
-                        "dropoffPct": float(row[12]) * 100 if row[12] else 0,
-                        "uniqueChatters": unique_chatters,
-                        "firstTimeChatters": first_time_chatters,
-                        "returningChatters": returning_chatters,
-                        "title": row[16] or "",
-                        "timeline": [{"minute": t[0], "viewers": t[1]} for t in timeline],
-                        "chatters": [{"login": c[0], "messages": c[1]} for c in chatters],
-                    }
-                )
-        except Exception as exc:
+            payload = await asyncio.to_thread(self._load_session_detail, session_id)
+            if payload is None:
+                return web.json_response({"error": "Session not found"}, status=404)
+            return web.json_response(payload)
+        except Exception:
             log.exception("Error in session detail API")
             return analytics_internal_error_response(
                 error="Session-Details konnten nicht geladen werden.",
                 code="session_detail_load_failed",
             )
 
+    def _load_session_detail(self, session_id: int) -> dict[str, Any] | None:
+        """Load detailed session data synchronously."""
+        with storage.readonly_connection() as conn:
+            row = conn.execute(
+                """
+                SELECT
+                    s.id, s.streamer_login, s.started_at, s.ended_at,
+                    s.duration_seconds, s.start_viewers, s.peak_viewers, s.end_viewers,
+                    s.avg_viewers, s.retention_5m, s.retention_10m, s.retention_20m,
+                    s.dropoff_pct, s.unique_chatters, s.first_time_chatters,
+                    s.returning_chatters, s.stream_title
+                FROM twitch_stream_sessions s
+                WHERE s.id = %s
+            """,
+                (session_id,),
+            ).fetchone()
+
+            if not row:
+                return None
+
+            session_bot_clause, session_bot_params = build_known_chat_bot_not_in_clause(
+                column_expr="sc.chatter_login",
+                placeholder="%s",
+            )
+
+            chatter_presence = conn.execute(
+                """
+                SELECT 1
+                FROM twitch_session_chatters
+                WHERE session_id = %s
+                LIMIT 1
+                """,
+                (session_id,),
+            ).fetchone()
+
+            chatter_stats = conn.execute(
+                f"""
+                SELECT
+                    COUNT(
+                        DISTINCT CASE
+                            WHEN sc.messages > 0
+                            THEN COALESCE(NULLIF(sc.chatter_login, ''), sc.chatter_id)
+                            ELSE NULL
+                        END
+                    ) AS unique_chatters,
+                    COUNT(
+                        DISTINCT CASE
+                            WHEN sc.messages > 0
+                                 AND LOWER(COALESCE(CAST(sc.is_first_time_streamer AS TEXT), '0')) IN ('1', 't', 'true')
+                            THEN COALESCE(NULLIF(sc.chatter_login, ''), sc.chatter_id)
+                            ELSE NULL
+                        END
+                    ) AS first_time_chatters,
+                    COUNT(
+                        DISTINCT CASE
+                            WHEN sc.messages > 0
+                                 AND LOWER(COALESCE(CAST(sc.is_first_time_streamer AS TEXT), '0')) NOT IN ('1', 't', 'true')
+                            THEN COALESCE(NULLIF(sc.chatter_login, ''), sc.chatter_id)
+                            ELSE NULL
+                        END
+                    ) AS returning_chatters
+                FROM twitch_session_chatters sc
+                WHERE sc.session_id = %s
+                  AND {session_bot_clause}
+                """,
+                (session_id, *session_bot_params),
+            ).fetchone()
+
+            if chatter_presence:
+                unique_chatters = int(chatter_stats[0]) if chatter_stats else 0
+                first_time_chatters = int(chatter_stats[1]) if chatter_stats else 0
+                returning_chatters = int(chatter_stats[2]) if chatter_stats else 0
+            else:
+                unique_chatters = int(row[13] or 0)
+                first_time_chatters = int(row[14] or 0)
+                returning_chatters = int(row[15] or 0)
+
+            timeline = conn.execute(
+                """
+                SELECT minutes_from_start, viewer_count
+                FROM twitch_session_viewers
+                WHERE session_id = %s
+                ORDER BY minutes_from_start
+            """,
+                (session_id,),
+            ).fetchall()
+
+            chatters = conn.execute(
+                f"""
+                SELECT chatter_login, messages
+                FROM twitch_session_chatters sc
+                WHERE sc.session_id = %s
+                  AND {session_bot_clause}
+                ORDER BY messages DESC
+                LIMIT 20
+            """,
+                (session_id, *session_bot_params),
+            ).fetchall()
+
+            return {
+                "id": row[0],
+                "streamerLogin": row[1],
+                "startedAt": row[2].isoformat() if hasattr(row[2], "isoformat") else row[2],
+                "endedAt": row[3].isoformat() if hasattr(row[3], "isoformat") else row[3],
+                "duration": row[4] or 0,
+                "startViewers": row[5] or 0,
+                "peakViewers": row[6] or 0,
+                "endViewers": row[7] or 0,
+                "avgViewers": float(row[8]) if row[8] else 0,
+                "retention5m": float(row[9]) * 100 if row[9] else 0,
+                "retention10m": float(row[10]) * 100 if row[10] else 0,
+                "retention20m": float(row[11]) * 100 if row[11] else 0,
+                "dropoffPct": float(row[12]) * 100 if row[12] else 0,
+                "uniqueChatters": unique_chatters,
+                "firstTimeChatters": first_time_chatters,
+                "returningChatters": returning_chatters,
+                "title": row[16] or "",
+                "timeline": [{"minute": t[0], "viewers": t[1]} for t in timeline],
+                "chatters": [{"login": c[0], "messages": c[1]} for c in chatters],
+            }
+
     async def _api_v2_session_events(self, request: web.Request) -> web.Response:
         """GET /twitch/api/v2/session/{id}/events — channel updates, raids, follows during a session."""
         self._require_v2_auth(request)
-
-        from ..storage import pg as storage
 
         session_id = request.match_info.get("id", "")
         try:
@@ -2368,126 +2366,137 @@ class AnalyticsV2Mixin(
             return web.json_response({"error": "Invalid session ID"}, status=400)
 
         try:
-            with storage.readonly_connection() as conn:
-                # 1) Get session metadata
-                sess = conn.execute(
-                    """
-                    SELECT s.streamer_login, s.started_at, s.ended_at
-                    FROM twitch_stream_sessions s
-                    WHERE s.id = %s
-                    """,
-                    (session_id,),
-                ).fetchone()
-
-                if not sess:
-                    return web.json_response({"error": "Session not found"}, status=404)
-
-                streamer_login = str(sess[0] or "").strip().lower()
-                started_at = sess[1]
-                ended_at = sess[2]
-
-                # 2) Resolve twitch_user_id from twitch_streamers
-                uid_row = conn.execute(
-                    "SELECT twitch_user_id FROM twitch_streamers WHERE LOWER(twitch_login) = %s LIMIT 1",
-                    (streamer_login,),
-                ).fetchone()
-                twitch_user_id = str(uid_row[0]) if uid_row and uid_row[0] else None
-
-                # 3) Channel updates (title/game changes)
-                channel_updates = []
-                if twitch_user_id:
-                    cu_rows = conn.execute(
-                        """
-                        SELECT cu.recorded_at, cu.title, cu.game_name, cu.language
-                        FROM twitch_channel_updates cu
-                        WHERE cu.twitch_user_id = %s
-                          AND cu.recorded_at::timestamptz BETWEEN %s AND COALESCE(%s, NOW())
-                        ORDER BY cu.recorded_at
-                        """,
-                        (twitch_user_id, started_at, ended_at),
-                    ).fetchall()
-                    for r in cu_rows:
-                        at_val = r[0]
-                        if hasattr(at_val, "isoformat"):
-                            at_val = at_val.isoformat()
-                        channel_updates.append({
-                            "at": str(at_val),
-                            "title": r[1],
-                            "game": r[2],
-                            "language": r[3],
-                        })
-
-                # 4) Raids (incoming + outgoing)
-                raid_rows = conn.execute(
-                    """
-                    SELECT detected_at AS at, from_broadcaster_login AS channel,
-                           viewer_count, 'incoming' AS direction
-                    FROM twitch_raid_arrival_tracking
-                    WHERE LOWER(to_broadcaster_login) = %s
-                      AND detected_at BETWEEN %s AND COALESCE(%s, NOW())
-
-                    UNION ALL
-
-                    SELECT executed_at AS at, to_broadcaster_login AS channel,
-                           viewer_count, 'outgoing' AS direction
-                    FROM twitch_raid_history
-                    WHERE LOWER(from_broadcaster_login) = %s
-                      AND executed_at BETWEEN %s AND COALESCE(%s, NOW())
-
-                    ORDER BY 1
-                    """,
-                    (
-                        streamer_login, started_at, ended_at,
-                        streamer_login, started_at, ended_at,
-                    ),
-                ).fetchall()
-                raids = []
-                for r in raid_rows:
-                    at_val = r[0]
-                    if hasattr(at_val, "isoformat"):
-                        at_val = at_val.isoformat()
-                    raids.append({
-                        "at": str(at_val),
-                        "channel": r[1] or "",
-                        "viewers": int(r[2] or 0),
-                        "direction": r[3],
-                    })
-
-                # 5) Follows per minute
-                follows_per_minute = []
-                fe_rows = conn.execute(
-                    """
-                    SELECT DATE_TRUNC('minute', followed_at::timestamptz) AS minute,
-                           COUNT(*) AS cnt
-                    FROM twitch_follow_events
-                    WHERE LOWER(streamer_login) = %s
-                      AND followed_at::timestamptz BETWEEN %s AND COALESCE(%s, NOW())
-                    GROUP BY 1
-                    ORDER BY 1
-                    """,
-                    (streamer_login, started_at, ended_at),
-                ).fetchall()
-                for r in fe_rows:
-                    at_val = r[0]
-                    if hasattr(at_val, "isoformat"):
-                        at_val = at_val.isoformat()
-                    follows_per_minute.append({
-                        "minute": str(at_val),
-                        "count": int(r[1] or 0),
-                    })
-
-                return web.json_response({
-                    "channel_updates": channel_updates,
-                    "raids": raids,
-                    "follows_per_minute": follows_per_minute,
-                })
-
+            payload = await asyncio.to_thread(self._load_session_events, session_id)
+            if payload is None:
+                return web.json_response({"error": "Session not found"}, status=404)
+            return web.json_response(payload)
         except Exception:
             log.exception("Error in session events API for session %s", session_id)
             return analytics_internal_error_response(
                 error="Session-Events konnten nicht geladen werden.",
                 code="session_events_load_failed",
             )
+
+    def _load_session_events(self, session_id: int) -> dict[str, Any] | None:
+        """Load the session events payload synchronously."""
+        with storage.readonly_connection() as conn:
+            sess = conn.execute(
+                """
+                SELECT s.streamer_login, s.started_at, s.ended_at
+                FROM twitch_stream_sessions s
+                WHERE s.id = %s
+                """,
+                (session_id,),
+            ).fetchone()
+
+            if not sess:
+                return None
+
+            streamer_login = str(sess[0] or "").strip().lower()
+            started_at = sess[1]
+            ended_at = sess[2]
+
+            uid_row = conn.execute(
+                "SELECT twitch_user_id FROM twitch_streamers WHERE LOWER(twitch_login) = %s LIMIT 1",
+                (streamer_login,),
+            ).fetchone()
+            twitch_user_id = str(uid_row[0]) if uid_row and uid_row[0] else None
+
+            channel_updates = []
+            if twitch_user_id:
+                cu_rows = conn.execute(
+                    """
+                    SELECT cu.recorded_at, cu.title, cu.game_name, cu.language
+                    FROM twitch_channel_updates cu
+                    WHERE cu.twitch_user_id = %s
+                      AND cu.recorded_at::timestamptz BETWEEN %s AND COALESCE(%s, NOW())
+                    ORDER BY cu.recorded_at
+                    """,
+                    (twitch_user_id, started_at, ended_at),
+                ).fetchall()
+                for r in cu_rows:
+                    at_val = r[0]
+                    if hasattr(at_val, "isoformat"):
+                        at_val = at_val.isoformat()
+                    channel_updates.append(
+                        {
+                            "at": str(at_val),
+                            "title": r[1],
+                            "game": r[2],
+                            "language": r[3],
+                        }
+                    )
+
+            raid_rows = conn.execute(
+                """
+                SELECT detected_at AS at, from_broadcaster_login AS channel,
+                       viewer_count, 'incoming' AS direction
+                FROM twitch_raid_arrival_tracking
+                WHERE LOWER(to_broadcaster_login) = %s
+                  AND detected_at BETWEEN %s AND COALESCE(%s, NOW())
+
+                UNION ALL
+
+                SELECT executed_at AS at, to_broadcaster_login AS channel,
+                       viewer_count, 'outgoing' AS direction
+                FROM twitch_raid_history
+                WHERE LOWER(from_broadcaster_login) = %s
+                  AND executed_at BETWEEN %s AND COALESCE(%s, NOW())
+
+                ORDER BY 1
+                """,
+                (
+                    streamer_login,
+                    started_at,
+                    ended_at,
+                    streamer_login,
+                    started_at,
+                    ended_at,
+                ),
+            ).fetchall()
+            raids = []
+            for r in raid_rows:
+                at_val = r[0]
+                if hasattr(at_val, "isoformat"):
+                    at_val = at_val.isoformat()
+                raids.append(
+                    {
+                        "at": str(at_val),
+                        "channel": r[1] or "",
+                        "viewers": int(r[2] or 0),
+                        "direction": r[3],
+                    }
+                )
+
+            follows_per_minute = []
+            fe_rows = conn.execute(
+                """
+                SELECT DATE_TRUNC('minute', followed_at::timestamptz) AS minute,
+                       COUNT(*) AS cnt
+                FROM twitch_follow_events
+                WHERE LOWER(streamer_login) = %s
+                  AND followed_at::timestamptz BETWEEN %s AND COALESCE(%s, NOW())
+                GROUP BY 1
+                ORDER BY 1
+                """,
+                (streamer_login, started_at, ended_at),
+            ).fetchall()
+            for r in fe_rows:
+                at_val = r[0]
+                if hasattr(at_val, "isoformat"):
+                    at_val = at_val.isoformat()
+                follows_per_minute.append(
+                    {
+                        "minute": str(at_val),
+                        "count": int(r[1] or 0),
+                    }
+                )
+
+            return {
+                "channel_updates": channel_updates,
+                "raids": raids,
+                "follows_per_minute": follows_per_minute,
+            }
 
     async def _api_v2_billing_catalog(self, request: web.Request) -> web.Response:
         """GET /twitch/api/v2/billing/catalog — plan catalog with tier info."""
