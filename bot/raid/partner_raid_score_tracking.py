@@ -73,6 +73,8 @@ def _score_payload(score_snapshot: dict | None) -> dict[str, object]:
         "base_score": _safe_float(snapshot.get("base_score"), 0.0),
         "duration_score": _safe_float(snapshot.get("duration_score"), 0.5),
         "time_pattern_score": _safe_float(snapshot.get("time_pattern_score"), 0.5),
+        "readiness_score": _safe_float(snapshot.get("readiness_score"), 0.5),
+        "fairness_score": _safe_float(snapshot.get("fairness_score"), 0.5),
         "new_partner_multiplier": _safe_float(snapshot.get("new_partner_multiplier"), 1.0),
         "raid_boost_multiplier": _safe_float(snapshot.get("raid_boost_multiplier"), 1.0),
         "today_received_raids": _safe_int(snapshot.get("today_received_raids"), 0),
@@ -110,8 +112,8 @@ def _load_cached_score_snapshot(conn, twitch_user_id: str) -> dict[str, object]:
     row = conn.execute(
         """
         SELECT final_score, base_score, duration_score, time_pattern_score,
-               new_partner_multiplier, raid_boost_multiplier,
-               today_received_raids, last_computed_at
+               readiness_score, fairness_score, new_partner_multiplier,
+               raid_boost_multiplier, today_received_raids, last_computed_at
         FROM twitch_partner_raid_scores
         WHERE twitch_user_id = %s
         """,
@@ -124,10 +126,12 @@ def _load_cached_score_snapshot(conn, twitch_user_id: str) -> dict[str, object]:
         "base_score": _safe_float(_row_value(row, "base_score", 1), 0.0),
         "duration_score": _safe_float(_row_value(row, "duration_score", 2), 0.5),
         "time_pattern_score": _safe_float(_row_value(row, "time_pattern_score", 3), 0.5),
-        "new_partner_multiplier": _safe_float(_row_value(row, "new_partner_multiplier", 4), 1.0),
-        "raid_boost_multiplier": _safe_float(_row_value(row, "raid_boost_multiplier", 5), 1.0),
-        "today_received_raids": _safe_int(_row_value(row, "today_received_raids", 6), 0),
-        "last_computed_at": str(_row_value(row, "last_computed_at", 7) or "").strip() or None,
+        "readiness_score": _safe_float(_row_value(row, "readiness_score", 4), 0.5),
+        "fairness_score": _safe_float(_row_value(row, "fairness_score", 5), 0.5),
+        "new_partner_multiplier": _safe_float(_row_value(row, "new_partner_multiplier", 6), 1.0),
+        "raid_boost_multiplier": _safe_float(_row_value(row, "raid_boost_multiplier", 7), 1.0),
+        "today_received_raids": _safe_int(_row_value(row, "today_received_raids", 8), 0),
+        "last_computed_at": str(_row_value(row, "last_computed_at", 9) or "").strip() or None,
     }
 
 
@@ -360,6 +364,8 @@ def track_confirmed_partner_raid(
                     base_score,
                     duration_score,
                     time_pattern_score,
+                    readiness_score,
+                    fairness_score,
                     new_partner_multiplier,
                     raid_boost_multiplier,
                     today_received_raids,
@@ -368,7 +374,7 @@ def track_confirmed_partner_raid(
                     deadlock_continued_sec,
                     resolved_at,
                     resolution_reason
-                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 """,
                 (
                     raid_history_id,
@@ -386,6 +392,8 @@ def track_confirmed_partner_raid(
                     score_payload.get("base_score"),
                     score_payload.get("duration_score"),
                     score_payload.get("time_pattern_score"),
+                    score_payload.get("readiness_score"),
+                    score_payload.get("fairness_score"),
                     score_payload.get("new_partner_multiplier"),
                     score_payload.get("raid_boost_multiplier"),
                     score_payload.get("today_received_raids"),

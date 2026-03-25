@@ -21,8 +21,14 @@ MIN_RELIABLE_SESSIONS = 3
 NEUTRAL_SCORE = 0.5
 NEW_PARTNER_MAX_MULTIPLIER = 1.25
 NEW_PARTNER_RAID_THRESHOLD = 10
-RAID_BOOST_MULTIPLIER = 1.5
+RAID_BOOST_MULTIPLIER = 1.25
 DEFAULT_RAID_BOOST_MULTIPLIER = 1.0
+READINESS_DURATION_WEIGHT = 0.6
+READINESS_TIME_WEIGHT = 0.4
+FINAL_READINESS_WEIGHT = 0.65
+FINAL_FAIRNESS_WEIGHT = 0.35
+FAIRNESS_BALANCE_DIVISOR = 20.0
+FAIRNESS_RECEIVED_7D_THRESHOLD = 5.0
 try:
     BERLIN_TZ = ZoneInfo("Europe/Berlin")
 except ZoneInfoNotFoundError:  # pragma: no cover - environment dependent fallback
@@ -60,8 +66,13 @@ class _PreparedScore:
     current_uptime_sec: int
     duration_score: float
     time_pattern_score: float
+    readiness_score: float
+    fairness_score: float
     base_score: float
     final_score: float
+    internal_sent_raids_30d: int
+    internal_received_raids_30d: int
+    internal_received_raids_7d: int
     today_received_raids: int
     last_computed_at: str
 
@@ -80,8 +91,13 @@ class _PreparedScore:
             self.current_uptime_sec,
             self.duration_score,
             self.time_pattern_score,
+            self.readiness_score,
+            self.fairness_score,
             self.base_score,
             self.final_score,
+            self.internal_sent_raids_30d,
+            self.internal_received_raids_30d,
+            self.internal_received_raids_7d,
             self.today_received_raids,
             self.last_computed_at,
         )
@@ -101,8 +117,13 @@ class _PreparedScore:
             "current_uptime_sec": self.current_uptime_sec,
             "duration_score": self.duration_score,
             "time_pattern_score": self.time_pattern_score,
+            "readiness_score": self.readiness_score,
+            "fairness_score": self.fairness_score,
             "base_score": self.base_score,
             "final_score": self.final_score,
+            "internal_sent_raids_30d": self.internal_sent_raids_30d,
+            "internal_received_raids_30d": self.internal_received_raids_30d,
+            "internal_received_raids_7d": self.internal_received_raids_7d,
             "today_received_raids": self.today_received_raids,
             "last_computed_at": self.last_computed_at,
         }
@@ -201,6 +222,41 @@ def _new_partner_multiplier(received_successful_raids_total: int) -> float:
     return _round_score(max(1.0, NEW_PARTNER_MAX_MULTIPLIER - (step * capped)))
 
 
+def _readiness_score(duration_score: float, time_pattern_score: float) -> float:
+    return _round_score(
+        (duration_score * READINESS_DURATION_WEIGHT)
+        + (time_pattern_score * READINESS_TIME_WEIGHT)
+    )
+
+
+def _fairness_score(
+    *,
+    sent_30d: int,
+    received_30d: int,
+    received_7d: int,
+    today_received_raids: int,
+) -> float:
+    balance_30d = _clamp(
+        0.5 + ((int(sent_30d or 0) - int(received_30d or 0)) / FAIRNESS_BALANCE_DIVISOR)
+    )
+    received_7d_penalty = _clamp(
+        1.0 - (int(received_7d or 0) / FAIRNESS_RECEIVED_7D_THRESHOLD)
+    )
+    today_penalty = 1.0 / (1.0 + max(0, int(today_received_raids or 0)))
+    return _round_score(
+        (balance_30d * 0.5)
+        + (received_7d_penalty * 0.3)
+        + (today_penalty * 0.2)
+    )
+
+
+def _combine_preboost_score(readiness_score: float, fairness_score: float) -> float:
+    return _round_score(
+        (readiness_score * FINAL_READINESS_WEIGHT)
+        + (fairness_score * FINAL_FAIRNESS_WEIGHT)
+    )
+
+
 class PartnerRaidScoreService:
     """Computes and loads prepared partner raid scores."""
 
@@ -267,6 +323,11 @@ class PartnerRaidScoreService:
             live_state_by_id = self._load_live_state(conn, partner_ids)
             sessions_by_login = self._load_sessions(conn, partner_logins)
             raid_timestamps_by_id = self._load_raid_timestamps(conn, partner_ids)
+            internal_raid_metrics = self._load_internal_raid_metrics(
+                conn,
+                partner_ids,
+                now_utc=now_utc,
+            )
             boost_flags = self._load_boost_flags(conn, partner_ids, now_utc=now_utc)
             existing_cache = self._load_cached_rows_by_id(conn, partner_ids)
 
@@ -276,6 +337,10 @@ class PartnerRaidScoreService:
                     live_state=live_state_by_id.get(partner.twitch_user_id),
                     session_rows=sessions_by_login.get(partner.twitch_login, ()),
                     raid_timestamps=raid_timestamps_by_id.get(partner.twitch_user_id, ()),
+                    internal_raid_metrics=internal_raid_metrics.get(
+                        partner.twitch_user_id,
+                        (0, 0, 0),
+                    ),
                     raid_boost_enabled=boost_flags.get(partner.twitch_user_id, False),
                     existing_cache=existing_cache.get(partner.twitch_user_id),
                     now_utc=now_utc,
@@ -380,6 +445,75 @@ class PartnerRaidScoreService:
             raid_timestamps.setdefault(user_id, []).append(executed_at)
         return raid_timestamps
 
+    def _load_internal_raid_metrics(
+        self,
+        conn,
+        user_ids: Sequence[str],
+        *,
+        now_utc: datetime,
+    ) -> dict[str, tuple[int, int, int]]:
+        if not user_ids:
+            return {}
+
+        metrics: dict[str, list[int]] = {user_id: [0, 0, 0] for user_id in user_ids}
+        partner_placeholders = _placeholders(user_ids)
+        partner_params = list(user_ids)
+        cutoff_30d = _iso_utc(now_utc - timedelta(days=30))
+        cutoff_7d = _iso_utc(now_utc - timedelta(days=7))
+
+        sent_rows = conn.execute(
+            "SELECT from_broadcaster_id, COUNT(*) AS sent_count "
+            "FROM twitch_raid_history "
+            "WHERE COALESCE(success, FALSE) IS TRUE "
+            f"AND from_broadcaster_id IN ({partner_placeholders}) "
+            f"AND to_broadcaster_id IN ({partner_placeholders}) "
+            "AND executed_at >= %s "
+            "GROUP BY from_broadcaster_id",
+            [*partner_params, *partner_params, cutoff_30d],
+        ).fetchall()
+        for row in sent_rows:
+            user_id = str(_row_value(row, "from_broadcaster_id", "")).strip()
+            if user_id in metrics:
+                metrics[user_id][0] = _safe_int(_row_value(row, "sent_count", 0), 0)
+
+        received_30d_rows = conn.execute(
+            "SELECT to_broadcaster_id, COUNT(*) AS received_count "
+            "FROM twitch_raid_history "
+            "WHERE COALESCE(success, FALSE) IS TRUE "
+            f"AND from_broadcaster_id IN ({partner_placeholders}) "
+            f"AND to_broadcaster_id IN ({partner_placeholders}) "
+            "AND executed_at >= %s "
+            "GROUP BY to_broadcaster_id",
+            [*partner_params, *partner_params, cutoff_30d],
+        ).fetchall()
+        for row in received_30d_rows:
+            user_id = str(_row_value(row, "to_broadcaster_id", "")).strip()
+            if user_id in metrics:
+                metrics[user_id][1] = _safe_int(
+                    _row_value(row, "received_count", 0),
+                    0,
+                )
+
+        received_7d_rows = conn.execute(
+            "SELECT to_broadcaster_id, COUNT(*) AS received_count "
+            "FROM twitch_raid_history "
+            "WHERE COALESCE(success, FALSE) IS TRUE "
+            f"AND from_broadcaster_id IN ({partner_placeholders}) "
+            f"AND to_broadcaster_id IN ({partner_placeholders}) "
+            "AND executed_at >= %s "
+            "GROUP BY to_broadcaster_id",
+            [*partner_params, *partner_params, cutoff_7d],
+        ).fetchall()
+        for row in received_7d_rows:
+            user_id = str(_row_value(row, "to_broadcaster_id", "")).strip()
+            if user_id in metrics:
+                metrics[user_id][2] = _safe_int(
+                    _row_value(row, "received_count", 0),
+                    0,
+                )
+
+        return {user_id: tuple(values) for user_id, values in metrics.items()}
+
     def _load_boost_flags(
         self,
         conn,
@@ -440,7 +574,9 @@ class PartnerRaidScoreService:
             "SELECT twitch_user_id, twitch_login, avg_duration_sec, time_pattern_score_base, "
             "received_successful_raids_total, is_new_partner_preferred, new_partner_multiplier, "
             "raid_boost_multiplier, is_live, current_started_at, current_uptime_sec, "
-            "duration_score, time_pattern_score, base_score, final_score, "
+            "duration_score, time_pattern_score, readiness_score, fairness_score, "
+            "base_score, final_score, internal_sent_raids_30d, "
+            "internal_received_raids_30d, internal_received_raids_7d, "
             "today_received_raids, last_computed_at "
             "FROM twitch_partner_raid_scores "
             f"WHERE {' AND '.join(where)}"
@@ -454,6 +590,7 @@ class PartnerRaidScoreService:
         live_state: Any,
         session_rows: Sequence[Any],
         raid_timestamps: Sequence[datetime],
+        internal_raid_metrics: tuple[int, int, int],
         raid_boost_enabled: bool,
         existing_cache: Any,
         now_utc: datetime,
@@ -497,6 +634,7 @@ class PartnerRaidScoreService:
             for executed_at in raid_timestamps
             if executed_at.astimezone(BERLIN_TZ).date() == _today_in_berlin(now_utc)
         )
+        sent_30d, received_30d, received_7d = internal_raid_metrics
         is_new_partner_preferred = raid_total < NEW_PARTNER_RAID_THRESHOLD
         new_partner_multiplier = _new_partner_multiplier(raid_total)
         raid_boost_multiplier = (
@@ -516,7 +654,14 @@ class PartnerRaidScoreService:
             else:
                 duration_score = NEUTRAL_SCORE
             time_pattern_score = time_pattern_score_base if time_pattern_reliable else NEUTRAL_SCORE
-            base_score = _round_score((duration_score * 0.5) + (time_pattern_score * 0.5))
+            readiness_score = _readiness_score(duration_score, time_pattern_score)
+            fairness_score = _fairness_score(
+                sent_30d=sent_30d,
+                received_30d=received_30d,
+                received_7d=received_7d,
+                today_received_raids=today_received_raids,
+            )
+            base_score = _combine_preboost_score(readiness_score, fairness_score)
             final_score = _round_score(
                 base_score * new_partner_multiplier * raid_boost_multiplier
             )
@@ -529,6 +674,12 @@ class PartnerRaidScoreService:
             time_pattern_score = _round_score(
                 _safe_float(_row_value(existing_cache, "time_pattern_score"), NEUTRAL_SCORE)
             )
+            readiness_score = _round_score(
+                _safe_float(_row_value(existing_cache, "readiness_score"), NEUTRAL_SCORE)
+            )
+            fairness_score = _round_score(
+                _safe_float(_row_value(existing_cache, "fairness_score"), NEUTRAL_SCORE)
+            )
             base_score = _round_score(_safe_float(_row_value(existing_cache, "base_score"), NEUTRAL_SCORE))
             final_score = _round_score(
                 _safe_float(_row_value(existing_cache, "final_score"), base_score)
@@ -538,7 +689,14 @@ class PartnerRaidScoreService:
             current_uptime_sec = 0
             duration_score = NEUTRAL_SCORE
             time_pattern_score = time_pattern_score_base if time_pattern_reliable else NEUTRAL_SCORE
-            base_score = _round_score((duration_score * 0.5) + (time_pattern_score * 0.5))
+            readiness_score = _readiness_score(duration_score, time_pattern_score)
+            fairness_score = _fairness_score(
+                sent_30d=sent_30d,
+                received_30d=received_30d,
+                received_7d=received_7d,
+                today_received_raids=today_received_raids,
+            )
+            base_score = _combine_preboost_score(readiness_score, fairness_score)
             final_score = _round_score(
                 base_score * new_partner_multiplier * raid_boost_multiplier
             )
@@ -557,8 +715,13 @@ class PartnerRaidScoreService:
             current_uptime_sec=current_uptime_sec,
             duration_score=_round_score(duration_score),
             time_pattern_score=_round_score(time_pattern_score),
+            readiness_score=_round_score(readiness_score),
+            fairness_score=_round_score(fairness_score),
             base_score=_round_score(base_score),
             final_score=_round_score(final_score),
+            internal_sent_raids_30d=int(sent_30d or 0),
+            internal_received_raids_30d=int(received_30d or 0),
+            internal_received_raids_7d=int(received_7d or 0),
             today_received_raids=today_received_raids,
             last_computed_at=_iso_utc(now_utc),
         )
@@ -583,11 +746,16 @@ class PartnerRaidScoreService:
                 current_uptime_sec,
                 duration_score,
                 time_pattern_score,
+                readiness_score,
+                fairness_score,
                 base_score,
                 final_score,
+                internal_sent_raids_30d,
+                internal_received_raids_30d,
+                internal_received_raids_7d,
                 today_received_raids,
                 last_computed_at
-            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             ON CONFLICT (twitch_user_id) DO UPDATE SET
                 twitch_login = EXCLUDED.twitch_login,
                 avg_duration_sec = EXCLUDED.avg_duration_sec,
@@ -601,8 +769,13 @@ class PartnerRaidScoreService:
                 current_uptime_sec = EXCLUDED.current_uptime_sec,
                 duration_score = EXCLUDED.duration_score,
                 time_pattern_score = EXCLUDED.time_pattern_score,
+                readiness_score = EXCLUDED.readiness_score,
+                fairness_score = EXCLUDED.fairness_score,
                 base_score = EXCLUDED.base_score,
                 final_score = EXCLUDED.final_score,
+                internal_sent_raids_30d = EXCLUDED.internal_sent_raids_30d,
+                internal_received_raids_30d = EXCLUDED.internal_received_raids_30d,
+                internal_received_raids_7d = EXCLUDED.internal_received_raids_7d,
                 today_received_raids = EXCLUDED.today_received_raids,
                 last_computed_at = EXCLUDED.last_computed_at
             """,

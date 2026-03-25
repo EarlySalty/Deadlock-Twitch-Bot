@@ -190,10 +190,15 @@ class PartnerRaidScoreCacheTests(unittest.TestCase):
         self.assertEqual(row["avg_duration_sec"], 7200)
         self.assertAlmostEqual(row["duration_score"], 0.5, places=6)
         self.assertAlmostEqual(row["time_pattern_score"], 0.75, places=6)
-        self.assertAlmostEqual(row["base_score"], 0.625, places=6)
+        self.assertAlmostEqual(row["readiness_score"], 0.6, places=6)
+        self.assertAlmostEqual(row["fairness_score"], 0.65, places=6)
+        self.assertAlmostEqual(row["base_score"], 0.6175, places=6)
         self.assertAlmostEqual(row["new_partner_multiplier"], 1.2, places=6)
-        self.assertAlmostEqual(row["raid_boost_multiplier"], 1.5, places=6)
-        self.assertAlmostEqual(row["final_score"], 1.125, places=6)
+        self.assertAlmostEqual(row["raid_boost_multiplier"], 1.25, places=6)
+        self.assertAlmostEqual(row["final_score"], 0.92625, places=6)
+        self.assertEqual(row["internal_sent_raids_30d"], 0)
+        self.assertEqual(row["internal_received_raids_30d"], 0)
+        self.assertEqual(row["internal_received_raids_7d"], 0)
         self.assertEqual(row["received_successful_raids_total"], 2)
         self.assertEqual(row["today_received_raids"], 1)
         self.assertTrue(row["is_new_partner_preferred"])
@@ -203,7 +208,7 @@ class PartnerRaidScoreCacheTests(unittest.TestCase):
             ("1001",),
         ).fetchone()
         self.assertIsNotNone(cached)
-        self.assertAlmostEqual(float(cached["final_score"]), 1.125, places=6)
+        self.assertAlmostEqual(float(cached["final_score"]), 0.92625, places=6)
         self.assertEqual(int(cached["is_live"]), 1)
         conn.close()
 
@@ -309,7 +314,9 @@ class PartnerRaidScoreCacheTests(unittest.TestCase):
         self.assertAlmostEqual(refreshed["4004"]["duration_score"], 0.5, places=6)
         self.assertAlmostEqual(refreshed["4004"]["time_pattern_score"], 0.5, places=6)
         self.assertAlmostEqual(refreshed["4004"]["new_partner_multiplier"], 1.25, places=6)
-        self.assertAlmostEqual(refreshed["4004"]["final_score"], 0.625, places=6)
+        self.assertAlmostEqual(refreshed["4004"]["readiness_score"], 0.5, places=6)
+        self.assertAlmostEqual(refreshed["4004"]["fairness_score"], 0.75, places=6)
+        self.assertAlmostEqual(refreshed["4004"]["final_score"], 0.734375, places=6)
 
         loaded_live_only = service.load_scores(["3003", "4004"], live_only=True)
         self.assertEqual(set(loaded_live_only), {"3003"})
@@ -348,7 +355,7 @@ class PartnerRaidScoreCacheTests(unittest.TestCase):
 
         self.assertIsNotNone(row)
         assert row is not None
-        self.assertAlmostEqual(row["raid_boost_multiplier"], 1.5, places=6)
+        self.assertAlmostEqual(row["raid_boost_multiplier"], 1.25, places=6)
         self.assertGreater(float(row["final_score"]), float(row["base_score"]))
         conn.close()
 
@@ -392,7 +399,7 @@ class PartnerRaidScoreCacheTests(unittest.TestCase):
 
         self.assertIsNotNone(row)
         assert row is not None
-        self.assertAlmostEqual(row["raid_boost_multiplier"], 1.5, places=6)
+        self.assertAlmostEqual(row["raid_boost_multiplier"], 1.25, places=6)
         conn.close()
 
 

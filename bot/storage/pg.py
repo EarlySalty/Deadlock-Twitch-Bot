@@ -3185,12 +3185,38 @@ def ensure_schema(conn) -> None:
             current_uptime_sec              INTEGER NOT NULL DEFAULT 0,
             duration_score                  DOUBLE PRECISION NOT NULL DEFAULT 0.5,
             time_pattern_score              DOUBLE PRECISION NOT NULL DEFAULT 0.5,
+            readiness_score                 DOUBLE PRECISION NOT NULL DEFAULT 0.5,
+            fairness_score                  DOUBLE PRECISION NOT NULL DEFAULT 0.5,
             base_score                      DOUBLE PRECISION NOT NULL DEFAULT 0.5,
             final_score                     DOUBLE PRECISION NOT NULL DEFAULT 0.5,
+            internal_sent_raids_30d         INTEGER NOT NULL DEFAULT 0,
+            internal_received_raids_30d     INTEGER NOT NULL DEFAULT 0,
+            internal_received_raids_7d      INTEGER NOT NULL DEFAULT 0,
             today_received_raids            INTEGER NOT NULL DEFAULT 0,
             last_computed_at                TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
         )
         """
+    )
+    _pg_add_col_if_missing(
+        conn, "twitch_partner_raid_scores", "readiness_score", "DOUBLE PRECISION NOT NULL DEFAULT 0.5"
+    )
+    _pg_add_col_if_missing(
+        conn, "twitch_partner_raid_scores", "fairness_score", "DOUBLE PRECISION NOT NULL DEFAULT 0.5"
+    )
+    _pg_add_col_if_missing(
+        conn, "twitch_partner_raid_scores", "internal_sent_raids_30d", "INTEGER NOT NULL DEFAULT 0"
+    )
+    _pg_add_col_if_missing(
+        conn,
+        "twitch_partner_raid_scores",
+        "internal_received_raids_30d",
+        "INTEGER NOT NULL DEFAULT 0",
+    )
+    _pg_add_col_if_missing(
+        conn,
+        "twitch_partner_raid_scores",
+        "internal_received_raids_7d",
+        "INTEGER NOT NULL DEFAULT 0",
     )
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_partner_raid_scores_live_score "
@@ -3225,6 +3251,8 @@ def ensure_schema(conn) -> None:
             base_score                DOUBLE PRECISION,
             duration_score            DOUBLE PRECISION,
             time_pattern_score        DOUBLE PRECISION,
+            readiness_score           DOUBLE PRECISION,
+            fairness_score            DOUBLE PRECISION,
             new_partner_multiplier    DOUBLE PRECISION,
             raid_boost_multiplier     DOUBLE PRECISION,
             today_received_raids      INTEGER NOT NULL DEFAULT 0,
@@ -3240,6 +3268,18 @@ def ensure_schema(conn) -> None:
         """
         ALTER TABLE twitch_partner_raid_score_tracking
         ADD COLUMN IF NOT EXISTS raid_history_executed_at TIMESTAMPTZ
+        """
+    )
+    conn.execute(
+        """
+        ALTER TABLE twitch_partner_raid_score_tracking
+        ADD COLUMN IF NOT EXISTS readiness_score DOUBLE PRECISION
+        """
+    )
+    conn.execute(
+        """
+        ALTER TABLE twitch_partner_raid_score_tracking
+        ADD COLUMN IF NOT EXISTS fairness_score DOUBLE PRECISION
         """
     )
     conn.execute(

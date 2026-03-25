@@ -4079,8 +4079,8 @@ class RaidBot:
 
         sql = (
             "SELECT twitch_user_id, twitch_login, is_live, final_score, today_received_raids, "
-            "duration_score, time_pattern_score, base_score, new_partner_multiplier, "
-            "raid_boost_multiplier, last_computed_at "
+            "duration_score, time_pattern_score, readiness_score, fairness_score, "
+            "base_score, new_partner_multiplier, raid_boost_multiplier, last_computed_at "
             "FROM twitch_partner_raid_scores "
             f"WHERE twitch_user_id IN ({','.join('%s' for _ in requested)})"
         )
@@ -4134,19 +4134,27 @@ class RaidBot:
                     row["time_pattern_score"] if hasattr(row, "keys") else row[6],
                     0.5,
                 ),
+                "readiness_score": _safe_float(
+                    row["readiness_score"] if hasattr(row, "keys") else row[7],
+                    0.5,
+                ),
+                "fairness_score": _safe_float(
+                    row["fairness_score"] if hasattr(row, "keys") else row[8],
+                    0.5,
+                ),
                 "base_score": _safe_float(
-                    row["base_score"] if hasattr(row, "keys") else row[7],
+                    row["base_score"] if hasattr(row, "keys") else row[9],
                     0.5,
                 ),
                 "new_partner_multiplier": _safe_float(
-                    row["new_partner_multiplier"] if hasattr(row, "keys") else row[8],
+                    row["new_partner_multiplier"] if hasattr(row, "keys") else row[10],
                     1.0,
                 ),
                 "raid_boost_multiplier": _safe_float(
-                    row["raid_boost_multiplier"] if hasattr(row, "keys") else row[9],
+                    row["raid_boost_multiplier"] if hasattr(row, "keys") else row[11],
                     1.0,
                 ),
-                "last_computed_at": row["last_computed_at"] if hasattr(row, "keys") else row[10],
+                "last_computed_at": row["last_computed_at"] if hasattr(row, "keys") else row[12],
             }
         return out
 

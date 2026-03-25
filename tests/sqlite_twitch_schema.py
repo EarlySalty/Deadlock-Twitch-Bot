@@ -267,8 +267,13 @@ def ensure_sqlite_twitch_schema(conn: sqlite3.Connection) -> None:
             current_uptime_sec INTEGER DEFAULT 0,
             duration_score REAL DEFAULT 0.5,
             time_pattern_score REAL DEFAULT 0.5,
+            readiness_score REAL DEFAULT 0.5,
+            fairness_score REAL DEFAULT 0.5,
             base_score REAL DEFAULT 0.5,
             final_score REAL DEFAULT 0.5,
+            internal_sent_raids_30d INTEGER DEFAULT 0,
+            internal_received_raids_30d INTEGER DEFAULT 0,
+            internal_received_raids_7d INTEGER DEFAULT 0,
             today_received_raids INTEGER DEFAULT 0,
             last_computed_at TEXT DEFAULT CURRENT_TIMESTAMP
         )
@@ -293,6 +298,8 @@ def ensure_sqlite_twitch_schema(conn: sqlite3.Connection) -> None:
             base_score REAL DEFAULT 0.0,
             duration_score REAL DEFAULT 0.5,
             time_pattern_score REAL DEFAULT 0.5,
+            readiness_score REAL DEFAULT 0.5,
+            fairness_score REAL DEFAULT 0.5,
             new_partner_multiplier REAL DEFAULT 1.0,
             raid_boost_multiplier REAL DEFAULT 1.0,
             today_received_raids INTEGER DEFAULT 0,
