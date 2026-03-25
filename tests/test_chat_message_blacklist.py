@@ -180,6 +180,63 @@ class ChatMessageBlacklistTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("recruitment_bot_banned", reason)
         self.assertIn("banned_phone_alias", reason)
 
+    async def test_archived_partner_channel_does_not_skip_blacklist(self) -> None:
+        handler = _DummyModerationChat()
+        channel = _DummyChannel("archived_partner", "494921554")
+        response = _DummyResponse(
+            200,
+            (
+                '{"data":[{"is_sent":false,"drop_reason":{"code":"banned_phone_alias",'
+                '"message":"Your message was not sent because your phone number is banned from this channel."}}]}'
+            ),
+        )
+
+        with patch.object(handler, "_is_partner_channel_for_blacklist_skip", return_value=False):
+            with patch("aiohttp.ClientSession", return_value=_DummyClientSession(response)):
+                ok = await handler._send_chat_message(channel, "hello", source="partner_raid")
+
+        self.assertFalse(ok)
+        self.assertEqual(len(handler._raid_bot.blacklist_calls), 1)
+        self.assertEqual(handler._raid_bot.blacklist_calls[0][1], "archived_partner")
+
+    def test_blacklist_skip_requires_operational_partner(self) -> None:
+        handler = _DummyModerationChat()
+
+        archived_row = {
+            "status": "active",
+            "manual_partner_opt_out": 0,
+            "admin_archived_at": "2026-03-25T21:52:27+00:00",
+        }
+        active_row = {
+            "status": "active",
+            "manual_partner_opt_out": 0,
+            "admin_archived_at": None,
+        }
+        opted_out_row = {
+            "status": "active",
+            "manual_partner_opt_out": 1,
+            "admin_archived_at": None,
+        }
+
+        with patch("bot.chat.moderation.is_operational_partner_channel", return_value=True):
+            self.assertTrue(handler._is_partner_channel_for_blacklist_skip("live_partner"))
+        with patch("bot.chat.moderation.is_operational_partner_channel", return_value=False):
+            self.assertFalse(handler._is_partner_channel_for_blacklist_skip("archived_partner"))
+
+        with patch("bot.core.partner_utils.readonly_connection") as readonly_mock, patch(
+            "bot.core.partner_utils.load_active_partner",
+            side_effect=[archived_row, active_row, opted_out_row, None],
+        ):
+            readonly_mock.return_value.__enter__.return_value = object()
+            readonly_mock.return_value.__exit__.return_value = False
+
+            from bot.core.partner_utils import is_operational_partner_channel
+
+            self.assertFalse(is_operational_partner_channel("archived_partner"))
+            self.assertTrue(is_operational_partner_channel("live_partner"))
+            self.assertFalse(is_operational_partner_channel("opted_out_partner"))
+            self.assertFalse(is_operational_partner_channel("missing_partner"))
+
     async def test_channel_settings_drop_records_outbound_chat_suppression(self) -> None:
         handler = _DummyModerationChat()
         channel = _DummyChannel("realclassik", "471205134")

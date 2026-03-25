@@ -5,6 +5,7 @@ import time
 from datetime import UTC, datetime, timedelta
 
 from ..core.chat_bots import is_known_chat_bot
+from ..core.partner_utils import is_operational_partner_channel
 from ..storage import load_active_partner, readonly_connection, transaction
 from .constants import (
     _INVITE_QUESTION_CHANNEL_COOLDOWN_SEC,
@@ -876,9 +877,9 @@ class ModerationMixin:
         if not login:
             return
         try:
-            if self._is_partner_channel_for_chat_tracking(login):
+            if self._is_partner_channel_for_blacklist_skip(login):
                 log.info(
-                    "Blacklist übersprungen für Partner-Channel %s (source=%s)",
+                    "Blacklist übersprungen für aktiven Partner-Channel %s (source=%s)",
                     login,
                     source_tag,
                 )
@@ -927,6 +928,10 @@ class ModerationMixin:
             source_tag,
             login,
         )
+
+    @staticmethod
+    def _is_partner_channel_for_blacklist_skip(login: str) -> bool:
+        return is_operational_partner_channel(login)
 
     def _blacklist_streamer_for_promo(self, channel, status: int | None, text: str) -> None:
         """Backward-compatible wrapper for promo ban blacklisting."""

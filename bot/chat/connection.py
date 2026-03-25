@@ -6,7 +6,10 @@ import time
 from datetime import UTC, datetime, timedelta
 from types import MethodType
 
-from ..core.partner_utils import is_partner_channel_for_chat_tracking
+from ..core.partner_utils import (
+    is_operational_partner_channel,
+    is_partner_channel_for_chat_tracking,
+)
 from ..storage import insert_observability_event, readonly_connection, transaction
 from .constants import CHAT_JOIN_OFFLINE, eventsub
 from .lurker_policy import (
@@ -844,6 +847,10 @@ class ConnectionMixin:
         """Check if channel is a partner (wrapper for partner_utils)."""
         return is_partner_channel_for_chat_tracking(login)
 
+    @staticmethod
+    def _is_partner_channel_for_blacklist_skip(login: str) -> bool:
+        return is_operational_partner_channel(login)
+
     def _blacklist_streamer_for_bot_ban(
         self,
         broadcaster_id: str | None,
@@ -855,9 +862,9 @@ class ConnectionMixin:
         if not login:
             return
         try:
-            if self._is_partner_channel_for_chat_tracking(login):
+            if self._is_partner_channel_for_blacklist_skip(login):
                 log.info(
-                    "Blacklist übersprungen für Partner-Channel %s (_ensure_bot_is_mod)",
+                    "Blacklist übersprungen für aktiven Partner-Channel %s (_ensure_bot_is_mod)",
                     login,
                 )
                 return
