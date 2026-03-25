@@ -545,7 +545,7 @@ class TwitchDashboardMixin:
 
     async def _dashboard_archive(self, login: str, mode: str) -> str:
         """
-        Archiviert oder ent-archiviert einen Streamer.
+        Setzt oder entfernt das Admin-Archiv-Flag eines Streamers.
 
         mode: 'archive'/'on' -> setzt archived_at=now, 'unarchive'/'off' -> NULL, 'toggle' -> flip.
         """
@@ -561,34 +561,50 @@ class TwitchDashboardMixin:
         else:
             desired = "toggle"
 
-        now_iso = datetime.utcnow().isoformat(timespec="seconds")
         with storage.transaction() as conn:
             active_row = storage.load_active_partner(conn, twitch_login=normalized)
             history_row = storage.load_latest_partner_history(conn, twitch_login=normalized)
             if not active_row and not history_row:
                 raise ValueError(f"{normalized} ist nicht gespeichert")
-            current = None if active_row else (
-                history_row["archived_at"] if history_row and hasattr(history_row, "keys") else (history_row[19] if history_row else None)
-            )
+            if not active_row and history_row:
+                current_status = str(
+                    (
+                        history_row.get("status")
+                        if hasattr(history_row, "keys")
+                        else history_row[20]
+                    )
+                    or ""
+                ).strip().lower()
+                if current_status and current_status != "active":
+                    raise ValueError(f"{normalized} ist departnered und nicht nur archiviert")
+                raise ValueError(f"{normalized} ist kein aktiver Partner")
+
+            current = None
+            if active_row:
+                current = (
+                    active_row.get("admin_archived_at")
+                    if hasattr(active_row, "keys")
+                    else None
+                )
 
             if desired == "archive":
-                if not active_row:
+                if current:
                     return f"{normalized} ist bereits archiviert (seit {current})"
-                storage.archive_active_partner(conn, twitch_login=normalized)
+                storage.set_streamer_archive_state(conn, twitch_login=normalized, archived=True)
                 return f"{normalized} archiviert"
 
             if desired == "unarchive":
-                if active_row:
+                if not current:
                     return f"{normalized} ist nicht archiviert"
-                storage.reactivate_partner(conn, twitch_login=normalized)
+                storage.set_streamer_archive_state(conn, twitch_login=normalized, archived=False)
                 return f"{normalized} ent-archiviert"
 
             # toggle
-            if active_row:
-                storage.archive_active_partner(conn, twitch_login=normalized)
-                return f"{normalized} archiviert"
-            storage.reactivate_partner(conn, twitch_login=normalized)
-            return f"{normalized} reaktiviert"
+            if current:
+                storage.set_streamer_archive_state(conn, twitch_login=normalized, archived=False)
+                return f"{normalized} reaktiviert"
+            storage.set_streamer_archive_state(conn, twitch_login=normalized, archived=True)
+            return f"{normalized} archiviert"
 
     async def _dashboard_save_discord_profile(
         self,
@@ -1108,12 +1124,17 @@ class TwitchDashboardMixin:
 
         if mode == "clear":
             with storage.transaction() as c:
-                result = storage.archive_active_partner(c, twitch_login=login)
+                result = storage.departner_active_partner(
+                    c,
+                    twitch_login=login,
+                    clear_verification=True,
+                )
                 if not result:
                     return {"kind": "message", "message": f"{login} ist nicht gespeichert"}
             return {
-                "kind": "message",
+                "kind": "cleared",
                 "message": f"Verifizierung für {login} zurückgesetzt (keine DM versendet)",
+                "row_data": result,
             }
 
         if mode == "failed":
@@ -1122,7 +1143,11 @@ class TwitchDashboardMixin:
                 identity_row = storage.load_streamer_identity(c, twitch_login=login)
                 if identity_row:
                     row_data = _row_to_dict(identity_row)
-                archived = storage.archive_active_partner(c, twitch_login=login)
+                archived = storage.departner_active_partner(
+                    c,
+                    twitch_login=login,
+                    clear_verification=True,
+                )
                 if archived and row_data is None:
                     row_data = archived
             if not row_data:
@@ -1157,6 +1182,33 @@ class TwitchDashboardMixin:
             logger=log,
         )
         return "(Streamer-Rolle vergeben)" if changed else ""
+
+    async def _remove_streamer_role(self, row_data: dict | None, *, reason: str) -> str:
+        """Remove the streamer role when partner access is revoked."""
+        if not row_data:
+            return ""
+
+        user_id_raw = row_data.get("discord_user_id")
+        if not user_id_raw:
+            log.info(
+                "Streamer role removal skipped for %s because no Discord ID is stored",
+                row_data.get("discord_display_name"),
+            )
+            return ""
+
+        normalized_id = normalize_discord_user_id(str(user_id_raw))
+        if not normalized_id:
+            log.warning("Streamer role removal skipped due to invalid Discord ID %r", user_id_raw)
+            return "(Streamer-Rolle konnte nicht entfernt werden – ungültige Discord-ID)"
+
+        changed = await sync_streamer_role(
+            self.bot,
+            normalized_id,
+            should_have_role=False,
+            reason=reason,
+            logger=log,
+        )
+        return "(Streamer-Rolle entfernt)" if changed else ""
 
     async def _notify_verification_success(self, login: str, row_data: dict | None) -> str:
         if not row_data:
@@ -1244,20 +1296,34 @@ class TwitchDashboardMixin:
                 notes.append(role_note)
             merged = " ".join(notes).strip()
             return f"{base_msg} {merged}".strip()
+        if result_kind == "cleared":
+            message = str(
+                storage_result.get("message")
+                or f"Verifizierung für {login} zurückgesetzt"
+            )
+            role_note = await self._remove_streamer_role(
+                storage_result.get("row_data"),
+                reason="Streamer-Verifizierung über Dashboard entfernt",
+            )
+            return f"{message} {role_note}".strip()
         if result_kind != "failed":
             return "Unbekannter Modus"
 
         row_data = storage_result.get("row_data")
         if not isinstance(row_data, dict):
             return f"{login} ist nicht gespeichert"
+        role_note = await self._remove_streamer_role(
+            row_data,
+            reason="Streamer-Verifizierung über Dashboard fehlgeschlagen",
+        )
         user_id_raw = row_data.get("discord_user_id")
         if not user_id_raw:
-            return f"Keine Discord-ID für {login} hinterlegt"
+            return f"Keine Discord-ID für {login} hinterlegt {role_note}".strip()
 
         try:
             user_id_int = int(str(user_id_raw))
         except (TypeError, ValueError):
-            return f"Ungültige Discord-ID für {login}"
+            return f"Ungültige Discord-ID für {login} {role_note}".strip()
 
         user = self.bot.get_user(user_id_int)
         if user is None:
@@ -1270,7 +1336,7 @@ class TwitchDashboardMixin:
                 user = None
 
         if user is None:
-            return f"Discord-User {user_id_int} konnte nicht gefunden werden"
+            return f"Discord-User {user_id_int} konnte nicht gefunden werden {role_note}".strip()
 
         message = (
             "Hey! Deine Deadlock-Streamer-Verifizierung konnte leider nicht abgeschlossen werden. "
@@ -1286,20 +1352,26 @@ class TwitchDashboardMixin:
                 user_id_int,
                 login,
             )
-            return f"Konnte {row_data.get('discord_display_name') or user.name} nicht per DM erreichen."
+            return (
+                f"Konnte {row_data.get('discord_display_name') or user.name} nicht per DM erreichen. "
+                f"{role_note}"
+            ).strip()
         except discord.HTTPException:
             log.exception(
                 "Konnte Verifizierungsfehler-Nachricht nicht senden an %s",
                 user_id_int,
             )
-            return "Nachricht konnte nicht gesendet werden"
+            return f"Nachricht konnte nicht gesendet werden {role_note}".strip()
 
         log.info(
             "Verifizierungsfehler-Benachrichtigung an %s (%s) gesendet",
             user_id_int,
             login,
         )
-        return f"{login}: Discord-User wurde über die fehlgeschlagene Verifizierung informiert"
+        return (
+            f"{login}: Discord-User wurde über die fehlgeschlagene Verifizierung informiert "
+            f"{role_note}"
+        ).strip()
 
     async def _reload_twitch_cog(self) -> str:
         """Hot reload the entire Twitch cog.

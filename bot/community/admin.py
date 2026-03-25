@@ -10,6 +10,7 @@ import discord
 
 from .. import storage
 from ..core.constants import log
+from ..discord_role_sync import normalize_discord_user_id, sync_streamer_role
 
 
 class TwitchAdminMixin:
@@ -254,9 +255,10 @@ class TwitchAdminMixin:
             return "Ungültiger Twitch-Login"
 
         deleted = 0
+        archived = None
         try:
             with storage.transaction() as c:
-                archived = storage.archive_active_partner(c, twitch_login=normalized)
+                archived = storage.departner_active_partner(c, twitch_login=normalized)
                 deleted = 1 if archived else storage.delete_streamer(c, normalized)
                 c.execute(
                     "DELETE FROM twitch_live_state WHERE streamer_login=%s",
@@ -266,6 +268,20 @@ class TwitchAdminMixin:
             log.exception("DB-Fehler beim Entfernen von %s", normalized)
             return "Datenbankfehler beim Entfernen."
 
+        if archived:
+            role_note = ""
+            normalized_discord_id = normalize_discord_user_id(archived.get("discord_user_id"))
+            if normalized_discord_id:
+                changed = await sync_streamer_role(
+                    self.bot,
+                    normalized_discord_id,
+                    should_have_role=False,
+                    reason="Streamer als Partner deaktiviert",
+                    logger=log,
+                )
+                if changed:
+                    role_note = " (Streamer-Rolle entfernt)"
+            return f"{normalized} operativ deaktiviert{role_note}"
         if deleted:
             return f"{normalized} entfernt"
         return f"{normalized} war nicht gespeichert"

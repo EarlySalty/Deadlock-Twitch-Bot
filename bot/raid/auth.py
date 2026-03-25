@@ -1237,15 +1237,16 @@ class RaidAuthManager:
                     twitch_login,
                 ),
             ).fetchone()
-            raid_enabled_value = (
+            existing_raid_enabled = (
                 bool(
                     existing_row["raid_enabled"]
                     if hasattr(existing_row, "keys")
                     else existing_row[0]
                 )
                 if existing_row
-                else bool(activate_raid_features)
+                else False
             )
+            raid_enabled_value = bool(activate_raid_features) or existing_raid_enabled
             conn.execute(
                 """
                 INSERT INTO twitch_raid_auth

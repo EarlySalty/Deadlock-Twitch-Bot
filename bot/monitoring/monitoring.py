@@ -1132,7 +1132,7 @@ class TwitchMonitoringMixin(_EventSubMixin, _ExpSessionsMixin, _SessionsMixin, _
                     }
                 )
                 login_lower = login.lower()
-                if login_lower and is_verified and not is_archived:
+                if login_lower and is_verified:
                     partner_logins.add(login_lower)
         except Exception:
             log.exception("Konnte tracked Streamer nicht aus DB lesen")
@@ -1355,14 +1355,6 @@ class TwitchMonitoringMixin(_EventSubMixin, _ExpSessionsMixin, _SessionsMixin, _
                             exc_info=True,
                         )
 
-            # Auto-Entarchivierung sobald jemand wieder streamt
-            if is_live and is_archived:
-                try:
-                    await self._dashboard_archive(login, "unarchive")
-                    is_archived = False
-                    entry["is_archived"] = False
-                except Exception:
-                    log.debug("Auto-Unarchive fehlgeschlagen für %s", login, exc_info=True)
             previous_game = (previous_state.get("last_game") or "").strip()
             previous_game_lower = previous_game.lower()
             was_deadlock = previous_game_lower == target_game_lower
@@ -1408,7 +1400,7 @@ class TwitchMonitoringMixin(_EventSubMixin, _ExpSessionsMixin, _SessionsMixin, _
                 had_deadlock_prev = False
             elif stream_restarted:
                 had_deadlock_prev = False
-                if twitch_user_id and is_verified and not is_archived:
+                if twitch_user_id and is_verified:
                     partner_score_refreshes.append(
                         (twitch_user_id, login_lower, "poll_stream_restarted")
                     )
@@ -1429,6 +1421,13 @@ class TwitchMonitoringMixin(_EventSubMixin, _ExpSessionsMixin, _SessionsMixin, _
             is_deadlock = (
                 is_live and bool(target_game_lower) and game_name_lower == target_game_lower
             )
+            if is_live and is_archived and is_deadlock:
+                try:
+                    await self._dashboard_archive(login, "unarchive")
+                    is_archived = False
+                    entry["is_archived"] = False
+                except Exception:
+                    log.debug("Auto-Unarchive fehlgeschlagen für %s", login, exc_info=True)
             had_deadlock_in_session = had_deadlock_prev or is_deadlock
 
             # --- Experimental hook: game transition ---
@@ -1479,7 +1478,6 @@ class TwitchMonitoringMixin(_EventSubMixin, _ExpSessionsMixin, _SessionsMixin, _
                 and is_deadlock
                 and (not was_live or not was_deadlock or not message_id_previous)
                 and is_verified
-                and not is_archived
             )
 
             if should_post:
@@ -1740,7 +1738,7 @@ class TwitchMonitoringMixin(_EventSubMixin, _ExpSessionsMixin, _SessionsMixin, _
                 )
             )
 
-            if twitch_user_id and is_verified and not is_archived:
+            if twitch_user_id and is_verified:
                 if not was_live and is_live:
                     partner_score_refreshes.append((twitch_user_id, login_lower, "poll_stream_online"))
                 elif was_live and not is_live:

@@ -24,8 +24,8 @@ from psycopg.conninfo import conninfo_to_dict
 from ._pool import ConnectionPoolRegistry
 from ._rows import storage_row_factory
 from .partner_registry import (
-    archive_active_partner,
     bulk_update_partner_flags,
+    departner_active_partner,
     load_active_partner,
     load_latest_partner_history,
     load_partner_by_discord_user_id,
@@ -37,6 +37,7 @@ from .partner_registry import (
     set_partner_live_ping_settings,
     set_partner_raid_bot_enabled,
     set_partner_silent_flags,
+    set_streamer_archive_state,
     set_streamer_discord_member,
     upsert_non_partner_streamer,
     upsert_streamer_identity,
@@ -57,8 +58,8 @@ __all__ = [
     "backfill_tracked_stats_from_category",
     "insert_observability_event",
     "delete_streamer",
-    "archive_active_partner",
     "bulk_update_partner_flags",
+    "departner_active_partner",
     "load_active_partner",
     "load_latest_partner_history",
     "load_partner_by_discord_user_id",
@@ -69,6 +70,7 @@ __all__ = [
     "set_partner_live_ping_settings",
     "set_partner_raid_bot_enabled",
     "set_partner_silent_flags",
+    "set_streamer_archive_state",
     "set_streamer_discord_member",
     "upsert_non_partner_streamer",
     "upsert_streamer_identity",
@@ -83,7 +85,7 @@ ENV_DSN = "TWITCH_ANALYTICS_DSN"
 _DB_FINGERPRINT_SALT = b"deadlock.analytics-db-fingerprint.v1"
 _DB_FINGERPRINT_ITERATIONS = 100_000
 _RUNTIME_SCHEMA_COMPONENT = "storage_pg"
-_RUNTIME_SCHEMA_VERSION = 1
+_RUNTIME_SCHEMA_VERSION = 2
 _RUNTIME_SCHEMA_BOOTSTRAP_ENV = "TWITCH_ALLOW_RUNTIME_SCHEMA_BOOTSTRAP"
 
 
@@ -688,6 +690,15 @@ def _apply_runtime_schema_migrations(
         ensure_schema(conn)
         _record_runtime_schema_version(conn, 1)
         version = 1
+    if version < 2:
+        if not _runtime_schema_bootstrap_allowed():
+            raise RuntimeError(
+                "Runtime schema bootstrap is disabled. Apply the PostgreSQL migrations before startup "
+                f"or set {_RUNTIME_SCHEMA_BOOTSTRAP_ENV}=1 only for controlled local bootstrap."
+            )
+        ensure_schema(conn)
+        _record_runtime_schema_version(conn, 2)
+        version = 2
     return version
 
 
@@ -1837,9 +1848,18 @@ def ensure_schema(conn) -> None:
             live_ping_role_id         BIGINT,
             live_ping_enabled         INTEGER DEFAULT 1,
             partnered_at              TEXT DEFAULT CURRENT_TIMESTAMP,
+            admin_archived_at         TEXT,
             departnered_at            TEXT,
             status                    TEXT NOT NULL DEFAULT 'active'
         )
+        """
+    )
+    _pg_add_col_if_missing(conn, "twitch_partners", "admin_archived_at", "TEXT")
+    conn.execute(
+        """
+        UPDATE twitch_partners
+        SET admin_archived_at = COALESCE(admin_archived_at, departnered_at, CURRENT_TIMESTAMP::text)
+        WHERE status = 'archived'
         """
     )
     conn.execute(
@@ -1870,7 +1890,10 @@ def ensure_schema(conn) -> None:
             p.manual_verified_at,
             p.manual_partner_opt_out,
             p.partnered_at AS created_at,
-            CASE WHEN p.status = 'active' THEN NULL ELSE p.departnered_at END AS archived_at,
+            COALESCE(
+                p.admin_archived_at,
+                CASE WHEN p.status = 'archived' THEN p.departnered_at ELSE NULL END
+            ) AS archived_at,
             p.raid_bot_enabled,
             p.silent_ban,
             p.silent_raid,

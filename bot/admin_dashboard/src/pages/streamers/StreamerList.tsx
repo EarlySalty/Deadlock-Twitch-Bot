@@ -21,8 +21,9 @@ const viewOptions: Array<{
   label: string;
   description: string;
 }> = [
-  { value: 'active', label: 'Aktiv', description: 'aktuell verwaltete Partner' },
-  { value: 'archived', label: 'Archiv', description: 'archivierte oder departnerte Streamer' },
+  { value: 'active', label: 'Aktiv', description: 'operative Partner ohne Admin-Archiv' },
+  { value: 'archived', label: 'Archiv', description: 'im Admin ausgeblendete Partner' },
+  { value: 'departnered', label: 'De-Partnered', description: 'operativ deaktivierte Ex-Partner' },
   { value: 'non_partner', label: 'Kein Partner', description: 'intern ausgeschlossene Logins' },
   { value: 'all', label: 'Alle', description: 'gesamter Partnerbestand' },
 ];
@@ -120,6 +121,7 @@ export function StreamerList() {
   const counts = {
     active: allRows.filter((row) => row.partnerStatus === 'active').length,
     archived: allRows.filter((row) => row.partnerStatus === 'archived').length,
+    departnered: allRows.filter((row) => row.partnerStatus === 'departnered').length,
     non_partner: allRows.filter((row) => row.partnerStatus === 'non_partner').length,
     all: allRows.length,
   };
@@ -180,6 +182,8 @@ export function StreamerList() {
           </div>
           {row.partnerStatus === 'archived' ? (
             <div className="text-xs text-text-secondary">Archiviert {formatDateTime(row.archivedAt)}</div>
+          ) : row.partnerStatus === 'departnered' ? (
+            <div className="text-xs text-text-secondary">Operativ deaktiviert</div>
           ) : null}
         </div>
       ),
@@ -194,16 +198,18 @@ export function StreamerList() {
             <Eye className="h-4 w-4" />
             Verwalten
           </Link>
-          {row.partnerStatus !== 'non_partner' ? (
+          {row.partnerStatus !== 'non_partner' && row.partnerStatus !== 'departnered' ? (
             <button onClick={() => setPendingAction({ type: 'archive', row })} className="admin-button admin-button-secondary !px-3 !py-2">
               {row.partnerStatus === 'archived' ? <ArchiveRestore className="h-4 w-4" /> : <FolderArchive className="h-4 w-4" />}
               {row.partnerStatus === 'archived' ? 'Reaktivieren' : 'Archivieren'}
             </button>
           ) : null}
-          <button onClick={() => setPendingAction({ type: 'remove', row })} className="admin-button admin-button-danger !px-3 !py-2">
-            <Trash2 className="h-4 w-4" />
-            Entfernen
-          </button>
+          {row.partnerStatus !== 'departnered' ? (
+            <button onClick={() => setPendingAction({ type: 'remove', row })} className="admin-button admin-button-danger !px-3 !py-2">
+              <Trash2 className="h-4 w-4" />
+              {row.partnerStatus === 'non_partner' ? 'Entfernen' : 'Partner deaktivieren'}
+            </button>
+          ) : null}
           <a href={buildRaidAuthUrl(row.login)} target="_blank" rel="noreferrer" className="admin-button admin-button-secondary !px-3 !py-2">
             OAuth
           </a>
@@ -432,10 +438,18 @@ export function StreamerList() {
 
       <ConfirmDialog
         open={Boolean(pendingAction)}
-        title={pendingAction?.type === 'remove' ? 'Streamer entfernen?' : 'Archivstatus ändern?'}
+        title={
+          pendingAction?.type === 'remove'
+            ? pendingAction?.row.partnerStatus === 'non_partner'
+              ? 'Streamer entfernen?'
+              : 'Partner operativ deaktivieren?'
+            : 'Archivstatus ändern?'
+        }
         description={
           pendingAction?.type === 'remove'
-            ? `Der Streamer ${pendingAction?.row.login} wird aus dem Monitoring und der Partnerverwaltung entfernt.`
+            ? pendingAction?.row.partnerStatus === 'non_partner'
+              ? `Der Streamer ${pendingAction?.row.login} wird vollständig aus dem verwalteten Bestand entfernt.`
+              : `Der Streamer ${pendingAction?.row.login} bleibt im System, verliert aber operative Partnerfunktionen wie Auto-Raid und Raid-Targeting.`
             : pendingAction?.row.partnerStatus === 'archived'
               ? `Der Streamer ${pendingAction?.row.login} wird wieder als aktiver Partner geführt.`
               : `Der Streamer ${pendingAction?.row.login} wird archiviert.`

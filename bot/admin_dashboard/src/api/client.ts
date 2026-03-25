@@ -200,9 +200,9 @@ function readScope(record: Record<string, unknown>, ...keys: string[]): AdminCon
 function readPartnerStatus(
   record: Record<string, unknown>,
   ...keys: string[]
-): 'active' | 'archived' | 'non_partner' | undefined {
+): 'active' | 'archived' | 'departnered' | 'non_partner' | undefined {
   const candidate = readString(record, ...keys).trim().toLowerCase();
-  if (candidate === 'active' || candidate === 'archived' || candidate === 'non_partner') {
+  if (candidate === 'active' || candidate === 'archived' || candidate === 'departnered' || candidate === 'non_partner') {
     return candidate;
   }
   return undefined;

@@ -211,6 +211,39 @@ class DashboardLiveMixin:
             log.debug("Could not resolve twitch_user_id from DB for %s", safe_login, exc_info=True)
             return ""
 
+    def _is_partner_chat_action_allowed(self, login: str) -> bool:
+        normalized_login = str(login or "").strip().lower()
+        if not normalized_login:
+            return False
+        try:
+            with _storage.readonly_connection() as conn:
+                active_partner = _storage.load_active_partner(
+                    conn, twitch_login=normalized_login
+                )
+                if active_partner:
+                    return True
+
+                latest_partner = _storage.load_latest_partner_history(
+                    conn, twitch_login=normalized_login
+                )
+        except Exception:
+            log.debug(
+                "Could not resolve partner chat-action eligibility for %s",
+                normalized_login,
+                exc_info=True,
+            )
+            return False
+
+        if not latest_partner:
+            return False
+
+        status = (
+            latest_partner.get("status")
+            if hasattr(latest_partner, "keys")
+            else latest_partner[20]
+        )
+        return str(status or "").strip().lower() == "active"
+
     async def _resolve_streamer_user_id_from_twitch(self, chat_bot: Any, login: str) -> str:
         fetch_user = getattr(chat_bot, "fetch_user", None)
         if not callable(fetch_user):
@@ -513,6 +546,11 @@ class DashboardLiveMixin:
         total_count = sum(
             1
             for st in items
+            if not bool(st.get("manual_partner_opt_out"))
+        )
+        main_table_total_count = sum(
+            1
+            for st in items
             if not bool(st.get("manual_partner_opt_out")) and not bool(st.get("archived_at"))
         )
         raid_bot_available = bool(getattr(self, "_raid_bot", None))
@@ -578,7 +616,7 @@ class DashboardLiveMixin:
             )
             raid_auto_active = (not raid_needs_reauth) and bool(raid_auth_enabled) and raid_bot_enabled
 
-            if not partner_opt_out and not is_archived:
+            if not partner_opt_out:
                 if raid_is_authorized:
                     raid_authorized_count += 1
                 else:
@@ -856,7 +894,7 @@ class DashboardLiveMixin:
                 "      <form method='post' action='/twitch/remove' class='inline'>"
                 f"        {csrf_input_html}"
                 f"        <input type='hidden' name='login' value='{escaped_login}'>"
-                "        <button class='btn btn-small btn-danger'>Streamer entfernen</button>"
+                "        <button class='btn btn-small btn-danger'>Partner deaktivieren</button>"
                 "      </form>"
                 "    </div>"
                 "  </td>"
@@ -1084,7 +1122,7 @@ class DashboardLiveMixin:
                     "    <form method='post' action='/twitch/remove' class='inline'>"
                     f"      {csrf_input_html}"
                     f"      <input type='hidden' name='login' value='{entry['escaped_login']}'>"
-                    "      <button class='btn btn-small btn-danger'>Streamer entfernen</button>"
+                    "      <button class='btn btn-small btn-danger'>Partner deaktivieren</button>"
                     "    </form>"
                     "  </div>"
                     "</li>"
@@ -1104,7 +1142,7 @@ class DashboardLiveMixin:
         archived_card_html = (
             "<div class='card non-partner-card archived-card'>"
             "  <h2>Archivierte Streamer</h2>"
-            "  <p>Automatisch nach 10+ Tagen Inaktivität. Bei neuem Stream werden sie automatisch reaktiviert.</p>"
+            "  <p>Automatisch nach 10+ Tagen Inaktivität. Bei einem neuen Deadlock-Stream werden sie automatisch reaktiviert.</p>"
             f"  <ul class='non-partner-list'>{archived_list_html}</ul>"
             "</div>"
         )
@@ -1118,7 +1156,7 @@ class DashboardLiveMixin:
             '    <button class="btn btn-small btn-secondary">Filter anwenden</button>'
             '    <a class="btn btn-small btn-secondary" href="/twitch">Zurücksetzen</a>'
             "  </form>"
-            f'  <div class="status-meta">Treffer: {filtered_count} / {total_count}</div>'
+            f'  <div class="status-meta">Treffer Hauptliste: {filtered_count} / {main_table_total_count}</div>'
             "</div>"
         )
 
@@ -1193,7 +1231,7 @@ class DashboardLiveMixin:
         chat_action_notice = (
             "<div class='status-meta'>Nur der freigeschaltete Discord-Owner kann diese Aktion nutzen.</div>"
             if not can_use_owner_chat_actions
-            else "<div class='status-meta'>Nur Partner-Streamer sind erlaubt (nicht archiviert, nicht als Kein Partner markiert).</div>"
+            else "<div class='status-meta'>Nur aktive Partner-Streamer sind erlaubt. Admin-Archiv bleibt erlaubt, Kein Partner und departnered sind ausgeschlossen.</div>"
         )
         chat_action_card_html = (
             "<div class='card raid-auth-card'>"
@@ -1816,10 +1854,10 @@ class DashboardLiveMixin:
             )
             raise web.HTTPFound(location=location)
 
-        if bool(target.get("manual_partner_opt_out")) or bool(target.get("archived_at")):
+        if bool(target.get("manual_partner_opt_out")) or not self._is_partner_chat_action_allowed(login):
             location = self._redirect_location(
                 request,
-                err="Chat-Aktion ist nur für aktive Partner-Streamer erlaubt",
+                err="Chat-Aktion ist nur für aktive oder admin-archivierte Partner-Streamer erlaubt",
                 default_path="/twitch/admin",
             )
             raise web.HTTPFound(location=location)

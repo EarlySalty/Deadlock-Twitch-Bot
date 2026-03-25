@@ -17,6 +17,7 @@ from ..discord_role_sync import (
 )
 from ..storage import pg as storage_pg
 from ..storage import (
+    load_active_partner,
     load_streamer_identity,
     readonly_connection,
     set_partner_raid_bot_enabled,
@@ -172,6 +173,37 @@ class TokenErrorHandler:
                 except Exception:
                     log.debug(
                         "Could not mirror raid_bot_enabled into partner registry for user_id=%s",
+                        _mask_log_identifier(twitch_user_id),
+                        exc_info=True,
+                    )
+                try:
+                    active_partner = load_active_partner(
+                        conn,
+                        twitch_user_id=twitch_user_id,
+                        twitch_login=login_hint,
+                    )
+                    if active_partner:
+                        partner_id = (
+                            active_partner["id"]
+                            if hasattr(active_partner, "keys")
+                            else active_partner[0]
+                        )
+                        conn.execute(
+                            """
+                            UPDATE twitch_partners
+                            SET manual_partner_opt_out = 1,
+                                raid_bot_enabled = 0,
+                                twitch_login = COALESCE(NULLIF(%s, ''), twitch_login)
+                            WHERE id = %s
+                            """,
+                            (
+                                login_hint,
+                                partner_id,
+                            ),
+                        )
+                except Exception:
+                    log.debug(
+                        "Could not mirror temporary opt-out partner state for user_id=%s",
                         _mask_log_identifier(twitch_user_id),
                         exc_info=True,
                     )
@@ -480,77 +512,98 @@ class TokenErrorHandler:
 
         try:
             channel = self.discord_bot.get_channel(TOKEN_ERROR_CHANNEL_ID)
+            if channel is None and hasattr(self.discord_bot, "fetch_channel"):
+                try:
+                    channel = await self.discord_bot.fetch_channel(TOKEN_ERROR_CHANNEL_ID)
+                except discord.NotFound:
+                    channel = None
+                except discord.Forbidden:
+                    channel = None
+                except discord.HTTPException:
+                    log.warning(
+                        "Auth error notification channel %s could not be fetched",
+                        TOKEN_ERROR_CHANNEL_ID,
+                        exc_info=True,
+                    )
+                    channel = None
+
+            admin_notification_sent = False
             if not channel:
                 log.warning(
                     "Auth error notification channel %s not found",
                     TOKEN_ERROR_CHANNEL_ID,
                 )
-                return
-
-            # Erstelle Discord Embed
-            embed = discord.Embed(
-                title="⚠️ Twitch Token Error",
-                description=f"Der Refresh-Token für **{twitch_login}** ist ungültig.",
-                color=discord.Color.red(),
-                timestamp=datetime.now(UTC),
-            )
-
-            embed.add_field(
-                name="Streamer",
-                value=f"[{twitch_login}](https://twitch.tv/{twitch_login})",
-                inline=True,
-            )
-
-            embed.add_field(
-                name="User ID",
-                value=f"`{twitch_user_id}`",
-                inline=True,
-            )
-
-            embed.add_field(
-                name="Fehler",
-                value=f"```{error_message[:200]}```",
-                inline=False,
-            )
-
-            embed.add_field(
-                name="Aktion erforderlich",
-                value=(
-                    "Der Streamer muss den Bot **neu für seinen Kanal aktivieren**, damit Auto-Raid und Twitch-Integrationen wieder funktionieren.\n"
-                    "➡️ Bitte im Dashboard neu verbinden oder alternativ `/traid` verwenden."
-                ),
-                inline=False,
-            )
-
-            embed.add_field(
-                name="Status",
-                value="❌ Auto-Raid **deaktiviert** bis zur Re-Autorisierung",
-                inline=False,
-            )
-
-            embed.set_footer(text="Twitch Raid Bot • Token Error Handler")
-
-            await channel.send(embed=embed)
-
-            # User-DM senden
-            await self._send_user_dm_token_error(twitch_user_id, twitch_login, error_message)
-            self._mark_reauth_required(twitch_user_id, twitch_login, mark_notified=True)
-
-            # Markiere als benachrichtigt
-            with transaction() as conn:
-                conn.execute(
-                    """
-                    UPDATE twitch_token_blacklist
-                    SET notified = 1
-                    WHERE twitch_user_id = %s
-                    """,
-                    (twitch_user_id,),
+            else:
+                # Erstelle Discord Embed
+                embed = discord.Embed(
+                    title="⚠️ Twitch Token Error",
+                    description=f"Der Refresh-Token für **{twitch_login}** ist ungültig.",
+                    color=discord.Color.red(),
+                    timestamp=datetime.now(UTC),
                 )
 
-            log.info(
-                "Sent auth error notification for %s to channel %s",
+                embed.add_field(
+                    name="Streamer",
+                    value=f"[{twitch_login}](https://twitch.tv/{twitch_login})",
+                    inline=True,
+                )
+
+                embed.add_field(
+                    name="User ID",
+                    value=f"`{twitch_user_id}`",
+                    inline=True,
+                )
+
+                embed.add_field(
+                    name="Fehler",
+                    value=f"```{error_message[:200]}```",
+                    inline=False,
+                )
+
+                embed.add_field(
+                    name="Aktion erforderlich",
+                    value=(
+                        "Der Streamer muss den Bot **neu für seinen Kanal aktivieren**, damit Auto-Raid und Twitch-Integrationen wieder funktionieren.\n"
+                        "➡️ Bitte im Dashboard neu verbinden oder alternativ `/traid` verwenden."
+                    ),
+                    inline=False,
+                )
+
+                embed.add_field(
+                    name="Status",
+                    value="❌ Auto-Raid **deaktiviert** bis zur Re-Autorisierung",
+                    inline=False,
+                )
+
+                embed.set_footer(text="Twitch Raid Bot • Token Error Handler")
+
+                await channel.send(embed=embed)
+                admin_notification_sent = True
+
+            user_dm_sent = await self._send_user_dm_token_error(
+                twitch_user_id,
                 twitch_login,
-                TOKEN_ERROR_CHANNEL_ID,
+                error_message,
+            )
+            if admin_notification_sent or user_dm_sent:
+                self._mark_reauth_required(twitch_user_id, twitch_login, mark_notified=True)
+
+                # Markiere als benachrichtigt
+                with transaction() as conn:
+                    conn.execute(
+                        """
+                        UPDATE twitch_token_blacklist
+                        SET notified = 1
+                        WHERE twitch_user_id = %s
+                        """,
+                        (twitch_user_id,),
+                    )
+
+            log.info(
+                "Processed auth error notification for %s (admin_channel=%s, user_dm=%s)",
+                twitch_login,
+                "yes" if admin_notification_sent else "no",
+                "yes" if user_dm_sent else "no",
             )
 
         except Exception:
@@ -602,9 +655,10 @@ class TokenErrorHandler:
             embed.add_field(
                 name="Lösung",
                 value=(
-                    "Klicke auf den Button unten, um einen neuen Link für deinen Kanal zu erhalten.\n"
-                    "Melde dich dazu im Dashboard an und verbinde Twitch erneut.\n\n"
-                    "Alternativ kannst du `/traid` auf dem Discord-Server nutzen."
+                    "Wenn du weiter Partner bleiben und die Twitch-Funktionen wieder aktivieren möchtest, "
+                    "klicke auf den Button unten und verbinde Twitch erneut.\n\n"
+                    "Wenn du die Verbindung bewusst entfernt hast und aktuell kein Partner mehr sein möchtest, "
+                    "kannst du diese Nachricht ignorieren."
                 ),
                 inline=False,
             )
@@ -643,9 +697,11 @@ class TokenErrorHandler:
             embed.add_field(
                 name="Lösung",
                 value=(
-                    "Klicke auf den Button unten, um einen neuen Link für deinen Kanal zu erhalten.\n"
-                    "Melde dich dazu im Dashboard an und verbinde Twitch erneut.\n"
-                    "Nach erfolgreicher Verbindung wird der Bot automatisch wieder aktiviert.\n\n"
+                    "Wenn du weiter Partner bleiben möchtest, klicke auf den Button unten. "
+                    "Er erzeugt jedes Mal einen frischen Reconnect-Link für deinen Kanal.\n"
+                    "Nach erfolgreicher Verbindung werden Partner-Status, Bot und Tokens automatisch wieder aktiviert.\n\n"
+                    "Wenn du die Twitch-Verbindung bewusst entfernt hast und kein Partner mehr sein möchtest, "
+                    "kannst du diese Nachricht ignorieren.\n\n"
                 ),
                 inline=False,
             )

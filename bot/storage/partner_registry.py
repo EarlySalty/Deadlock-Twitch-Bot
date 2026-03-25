@@ -4,7 +4,8 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 PARTNER_STATUS_ACTIVE = "active"
-PARTNER_STATUS_ARCHIVED = "archived"
+PARTNER_STATUS_DEPARTNERED = "departnered"
+_LEGACY_PARTNER_STATUS_ARCHIVED = "archived"
 _UNSET = object()
 
 
@@ -40,6 +41,11 @@ def _bool_int(value: Any, default: int = 0) -> int:
         return 1 if int(value) else 0
     except (TypeError, ValueError):
         return int(default)
+
+
+def _is_departnered_status(value: Any) -> bool:
+    normalized = str(value or "").strip().lower()
+    return normalized in {PARTNER_STATUS_DEPARTNERED, _LEGACY_PARTNER_STATUS_ARCHIVED}
 
 
 def _load_streamer_row(
@@ -145,7 +151,8 @@ def _load_partner_row(
             i.discord_display_name,
             i.is_on_discord,
             i.created_at AS identity_created_at,
-            i.updated_at AS identity_updated_at
+            i.updated_at AS identity_updated_at,
+            p.admin_archived_at
         FROM twitch_partners p
         LEFT JOIN twitch_streamer_identities i
           ON i.twitch_user_id = p.twitch_user_id
@@ -787,6 +794,7 @@ def promote_streamer_to_partner(
                 live_ping_role_id = %s,
                 live_ping_enabled = %s,
                 partnered_at = %s,
+                admin_archived_at = NULL,
                 departnered_at = NULL,
                 status = %s
             WHERE id = %s
@@ -835,9 +843,10 @@ def promote_streamer_to_partner(
                 live_ping_role_id,
                 live_ping_enabled,
                 partnered_at,
+                admin_archived_at,
                 departnered_at,
                 status
-            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NULL, %s)
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NULL, NULL, %s)
             """,
             (
                 normalized_user_id,
@@ -886,13 +895,14 @@ def promote_streamer_to_partner(
     }
 
 
-def archive_active_partner(
+def departner_active_partner(
     conn: Any,
     *,
     twitch_login: str | None = None,
     twitch_user_id: str | None = None,
     restore_non_partner: bool = False,
     disable_raid_auth: bool = True,
+    clear_verification: bool = False,
 ) -> dict[str, Any] | None:
     active_row = load_active_partner(
         conn,
@@ -932,13 +942,20 @@ def archive_active_partner(
         UPDATE twitch_partners
         SET status = %s,
             departnered_at = %s,
+            admin_archived_at = NULL,
+            manual_verified_permanent = %s,
+            manual_verified_until = %s,
+            manual_verified_at = %s,
             twitch_login = %s,
             twitch_user_id = %s
         WHERE id = %s
         """,
         (
-            PARTNER_STATUS_ARCHIVED,
+            PARTNER_STATUS_DEPARTNERED,
             departnered_at,
+            0 if clear_verification else _row_value(active_row, "manual_verified_permanent", 9, 0),
+            None if clear_verification else _row_value(active_row, "manual_verified_until", 10, None),
+            None if clear_verification else _row_value(active_row, "manual_verified_at", 11, None),
             normalized_login,
             normalized_user_id,
             _row_value(active_row, "id", 0),
@@ -1026,10 +1043,11 @@ def reactivate_partner(
         conn,
         twitch_login=twitch_login,
         twitch_user_id=twitch_user_id,
-        status=PARTNER_STATUS_ARCHIVED,
         latest=True,
     )
-    if not archived_row:
+    if not archived_row or not _is_departnered_status(
+        _row_value(archived_row, "status", 20, None)
+    ):
         return None
 
     return promote_streamer_to_partner(
@@ -1063,6 +1081,93 @@ def reactivate_partner(
         partnered_at=_now_iso(),
         clear_source=True,
     )
+
+
+def set_streamer_archive_state(
+    conn: Any,
+    *,
+    twitch_login: str | None = None,
+    twitch_user_id: str | None = None,
+    archived: bool,
+) -> dict[str, Any] | None:
+    normalized_login = _normalize_login(twitch_login)
+    normalized_user_id = _normalize_user_id(twitch_user_id)
+    archive_value = _now_iso() if archived else None
+
+    active_row = load_active_partner(
+        conn,
+        twitch_login=normalized_login,
+        twitch_user_id=normalized_user_id,
+    )
+    if active_row:
+        resolved_login = _normalize_login(
+            _row_value(active_row, "twitch_login", 2, normalized_login)
+        )
+        resolved_user_id = _normalize_user_id(
+            _row_value(active_row, "twitch_user_id", 1, normalized_user_id)
+        )
+        conn.execute(
+            """
+            UPDATE twitch_partners
+            SET twitch_login = %s,
+                twitch_user_id = %s,
+                admin_archived_at = %s
+            WHERE id = %s
+            """,
+            (
+                resolved_login,
+                resolved_user_id,
+                archive_value,
+                _row_value(active_row, "id", 0),
+            ),
+        )
+        _normalize_related_tables(
+            conn,
+            twitch_user_id=resolved_user_id,
+            twitch_login=resolved_login,
+        )
+        return {
+            "twitch_login": resolved_login,
+            "twitch_user_id": resolved_user_id,
+            "archived_at": archive_value,
+            "scope": "partner",
+        }
+
+    streamer_row = _load_streamer_row(
+        conn,
+        twitch_login=normalized_login,
+        twitch_user_id=normalized_user_id,
+    )
+    if streamer_row is None:
+        return None
+
+    resolved_login = _normalize_login(
+        _row_value(streamer_row, "twitch_login", 0, normalized_login)
+    )
+    resolved_user_id = _normalize_user_id(
+        _row_value(streamer_row, "twitch_user_id", 1, normalized_user_id)
+    )
+    conn.execute(
+        """
+        UPDATE twitch_streamers
+        SET archived_at = %s
+        WHERE (%s <> '' AND twitch_user_id = %s)
+           OR (%s <> '' AND LOWER(twitch_login) = LOWER(%s))
+        """,
+        (
+            archive_value,
+            resolved_user_id,
+            resolved_user_id,
+            resolved_login,
+            resolved_login,
+        ),
+    )
+    return {
+        "twitch_login": resolved_login,
+        "twitch_user_id": resolved_user_id or None,
+        "archived_at": archive_value,
+        "scope": "streamer",
+    }
 
 
 def save_streamer_discord_profile(
@@ -1449,18 +1554,15 @@ def migrate_legacy_partner_registry(conn: Any) -> dict[str, int]:
         )
         if not has_partner_history:
             continue
+        if manual_partner_opt_out or is_monitored_only:
+            continue
 
-        is_active = bool(
-            has_partner_history
-            and not manual_partner_opt_out
-            and not is_monitored_only
-            and not archived_at
-        )
+        is_active = True
         existing = _load_partner_row(
             conn,
             twitch_login=login,
             twitch_user_id=user_id,
-            status=PARTNER_STATUS_ACTIVE if is_active else PARTNER_STATUS_ARCHIVED,
+            status=PARTNER_STATUS_ACTIVE,
             latest=True,
         )
         if not existing:
@@ -1485,9 +1587,10 @@ def migrate_legacy_partner_registry(conn: Any) -> dict[str, int]:
                     live_ping_role_id,
                     live_ping_enabled,
                     partnered_at,
+                    admin_archived_at,
                     departnered_at,
                     status
-                ) VALUES (%s, %s, %s, NULL, NULL, NULL, NULL, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                ) VALUES (%s, %s, %s, NULL, NULL, NULL, NULL, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NULL, %s)
                 """,
                 (
                     user_id,
@@ -1506,11 +1609,11 @@ def migrate_legacy_partner_registry(conn: Any) -> dict[str, int]:
                     _row_value(row, "created_at", 11, None)
                     or manual_verified_at
                     or _now_iso(),
-                    None if is_active else (archived_at or _now_iso()),
-                    PARTNER_STATUS_ACTIVE if is_active else PARTNER_STATUS_ARCHIVED,
+                    archived_at,
+                    PARTNER_STATUS_ACTIVE,
                 ),
             )
-            if is_active:
+            if is_active and not archived_at:
                 stats["partner_promotions"] += 1
             else:
                 stats["partner_archives"] += 1

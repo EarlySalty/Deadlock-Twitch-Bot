@@ -213,7 +213,7 @@ async def build_raid_oauth_callback_payload(
             expires_in=int(token_data.get("expires_in", 3600) or 3600),
             scopes=scopes,
             scope_profile=getattr(state_info, "scope_profile", None),
-            activate_raid_features=not had_existing_auth,
+            activate_raid_features=True,
         )
 
         post_setup = getattr(raid_bot, "complete_setup_for_streamer", None)
@@ -223,7 +223,7 @@ async def build_raid_oauth_callback_payload(
                 twitch_user_id,
                 twitch_login,
                 state_discord_user_id=state_discord_user_id,
-                activate_partner_features=not had_existing_auth,
+                activate_partner_features=True,
             )
             if callable(schedule_background):
                 scheduled = schedule_background(followup, "twitch.raid.complete_setup")
@@ -239,7 +239,7 @@ async def build_raid_oauth_callback_payload(
                 twitch_user_id,
                 twitch_login,
                 state_discord_user_id=state_discord_user_id,
-                activate_partner_features=False,
+                activate_partner_features=True,
             )
             if callable(schedule_background):
                 scheduled = schedule_background(

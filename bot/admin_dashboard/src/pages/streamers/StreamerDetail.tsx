@@ -110,7 +110,8 @@ export function StreamerDetailPage() {
   const oauthConnected = readBoolean(settings, 'oauthConnected', 'oauth_connected');
   const oauthNeedsReauth = readBoolean(settings, 'oauthNeedsReauth', 'oauth_needs_reauth');
   const persistedMemberFlag = readBoolean(settings, 'isOnDiscord', 'is_on_discord');
-  const canUseChatAction = detail?.partnerStatus === 'active';
+  const canUseChatAction =
+    detail?.partnerStatus === 'active' || detail?.partnerStatus === 'archived';
 
   const verifyMutation = useVerifyStreamer();
   const archiveMutation = useArchiveStreamer();
@@ -283,7 +284,7 @@ export function StreamerDetailPage() {
                 <Save className="h-4 w-4" />
                 Verifizierung anwenden
               </button>
-              {detail.partnerStatus !== 'non_partner' ? (
+              {detail.partnerStatus !== 'non_partner' && detail.partnerStatus !== 'departnered' ? (
                 <button
                   className="admin-button admin-button-secondary"
                   disabled={archiveMutation.isPending}
@@ -302,16 +303,19 @@ export function StreamerDetailPage() {
                   {detail.partnerStatus === 'archived' ? 'Reaktivieren' : 'Archivieren'}
                 </button>
               ) : null}
-              <button className="admin-button admin-button-danger" onClick={() => setConfirmRemove(true)}>
-                <Trash2 className="h-4 w-4" />
-                Streamer entfernen
-              </button>
+              {detail.partnerStatus !== 'departnered' ? (
+                <button className="admin-button admin-button-danger" onClick={() => setConfirmRemove(true)}>
+                  <Trash2 className="h-4 w-4" />
+                  {detail.partnerStatus === 'non_partner' ? 'Streamer entfernen' : 'Partner deaktivieren'}
+                </button>
+              ) : null}
             </div>
           </div>
           <div className="mt-4 flex flex-wrap gap-2">
             <StatusBadge status={persistedMemberFlag ? 'active' : 'inactive'} />
             <StatusBadge status={detail.partnerStatus || 'active'} />
             {detail.archivedAt ? <span className="stat-pill">Archiviert {formatDateTime(detail.archivedAt)}</span> : null}
+            {detail.partnerStatus === 'departnered' ? <span className="stat-pill">Operativ deaktiviert</span> : null}
           </div>
         </article>
 
@@ -552,7 +556,7 @@ export function StreamerDetailPage() {
             <p className="text-sm text-text-secondary">
               {canUseChatAction
                 ? 'Server prüft zusätzlich, ob dein Admin-Account Owner-Rechte für manuelle Chat-Aktionen hat.'
-                : 'Chat-Aktionen sind nur für aktive Partner-Streamer erlaubt.'}
+                : 'Chat-Aktionen sind nur für aktive oder admin-archivierte Partner-Streamer erlaubt.'}
             </p>
           </div>
         </article>
@@ -574,8 +578,12 @@ export function StreamerDetailPage() {
 
       <ConfirmDialog
         open={confirmRemove}
-        title="Streamer endgültig entfernen?"
-        description={`Der Streamer ${detail.login} wird vollständig entfernt. Diese Aktion sollte nur genutzt werden, wenn der Datensatz wirklich raus soll.`}
+        title={detail.partnerStatus === 'non_partner' ? 'Streamer endgültig entfernen?' : 'Partner operativ deaktivieren?'}
+        description={
+          detail.partnerStatus === 'non_partner'
+            ? `Der Streamer ${detail.login} wird vollständig entfernt. Diese Aktion sollte nur genutzt werden, wenn der Datensatz wirklich raus soll.`
+            : `Der Streamer ${detail.login} bleibt im System, verliert aber operative Partnerfunktionen wie Auto-Raid und Raid-Targeting.`
+        }
         tone="danger"
         busy={removeMutation.isPending}
         onCancel={() => setConfirmRemove(false)}

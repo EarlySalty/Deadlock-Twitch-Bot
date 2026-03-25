@@ -7,6 +7,7 @@ const STATUS_STYLES: Record<string, string> = {
   active: 'border-emerald-400/35 bg-emerald-500/15 text-emerald-100',
   verified: 'border-sky-400/35 bg-sky-500/15 text-sky-100',
   archived: 'border-slate-400/35 bg-slate-500/15 text-slate-100',
+  departnered: 'border-rose-400/35 bg-rose-500/15 text-rose-100',
   non_partner: 'border-amber-400/35 bg-amber-500/15 text-amber-100',
   offline: 'border-slate-500/40 bg-slate-700/30 text-slate-200',
   inactive: 'border-slate-500/40 bg-slate-800/45 text-slate-200',

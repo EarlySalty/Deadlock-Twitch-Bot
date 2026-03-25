@@ -4,6 +4,7 @@ import unittest
 from unittest.mock import patch
 
 from bot.raid.auth import RaidAuthManager
+from bot.raid.scope_profiles import BASE_STREAMER_SCOPES
 
 
 class _FakeCursor:
@@ -265,6 +266,44 @@ class RaidAuthReauthFlagTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("needs_reauth IS NOT TRUE", update_sql)
         self.assertIn("authorized_at IS NOT NULL", update_sql)
         self.assertNotIn("access_token <> 'ENC'", update_sql)
+
+
+class RaidAuthSaveAuthTests(unittest.TestCase):
+    @contextlib.contextmanager
+    def _patch_transaction(self, conn):
+        with patch("bot.raid.auth.transaction", return_value=contextlib.nullcontext(conn)):
+            yield
+
+    def test_save_auth_reactivates_existing_disabled_grant_when_requested(self) -> None:
+        fake_conn = _FakeConn(rows_by_fragment={"SELECT raid_enabled": {"raid_enabled": 0}})
+        manager = RaidAuthManager(
+            client_id="cid",
+            client_secret="secret",
+            redirect_uri="https://raid.earlysalty.com/twitch/raid/callback",
+        )
+
+        with (
+            self._patch_transaction(fake_conn),
+            patch.object(manager, "_try_encrypt", return_value=b"enc"),
+            patch("bot.raid.auth.backfill_tracked_stats_from_category", return_value=0),
+            patch.object(manager.token_error_handler, "remove_from_blacklist"),
+        ):
+            manager.save_auth(
+                twitch_user_id="1001",
+                twitch_login="partner_one",
+                access_token="access-token",
+                refresh_token="refresh-token",
+                expires_in=3600,
+                scopes=list(BASE_STREAMER_SCOPES),
+                activate_raid_features=True,
+            )
+
+        insert_calls = [
+            call for call in fake_conn.calls if "INSERT INTO twitch_raid_auth" in call[0]
+        ]
+        self.assertEqual(len(insert_calls), 1)
+        _sql, params = insert_calls[0]
+        self.assertTrue(bool(params[-1]))
 
 
 if __name__ == "__main__":

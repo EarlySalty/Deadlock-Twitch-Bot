@@ -226,7 +226,7 @@ class DashboardMixinRaidCallbackRedirectTests(unittest.IsolatedAsyncioTestCase):
             "1001",
             "partner_one",
             state_discord_user_id="123456789",
-            activate_partner_features=False,
+            activate_partner_features=True,
         )
 
     async def test_dashboard_callback_returns_500_when_followup_task_cannot_be_scheduled(self) -> None:

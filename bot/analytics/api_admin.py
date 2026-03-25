@@ -46,12 +46,14 @@ _ADMIN_MANAGED_SCOPE_ALL = "all"
 _ADMIN_MANAGED_SCOPES = frozenset({_ADMIN_MANAGED_SCOPE_ACTIVE, _ADMIN_MANAGED_SCOPE_ALL})
 _ADMIN_STREAMER_VIEW_ACTIVE = "active"
 _ADMIN_STREAMER_VIEW_ARCHIVED = "archived"
+_ADMIN_STREAMER_VIEW_DEPARTNERED = "departnered"
 _ADMIN_STREAMER_VIEW_NON_PARTNER = "non_partner"
 _ADMIN_STREAMER_VIEW_ALL = "all"
 _ADMIN_STREAMER_VIEWS = frozenset(
     {
         _ADMIN_STREAMER_VIEW_ACTIVE,
         _ADMIN_STREAMER_VIEW_ARCHIVED,
+        _ADMIN_STREAMER_VIEW_DEPARTNERED,
         _ADMIN_STREAMER_VIEW_NON_PARTNER,
         _ADMIN_STREAMER_VIEW_ALL,
     }
@@ -721,14 +723,23 @@ class _AnalyticsAdminMixin:
         if view == _ADMIN_STREAMER_VIEW_ARCHIVED:
             return (
                 "COALESCE(s.manual_partner_opt_out, 0) = 0 "
-                "AND COALESCE(s.status, 'archived') <> 'active'"
+                "AND ("
+                "    (COALESCE(s.status, 'departnered') = 'active' AND s.archived_at IS NOT NULL) "
+                "    OR COALESCE(s.status, '') = 'archived'"
+                ")"
+            )
+        if view == _ADMIN_STREAMER_VIEW_DEPARTNERED:
+            return (
+                "COALESCE(s.manual_partner_opt_out, 0) = 0 "
+                "AND COALESCE(s.status, 'departnered') = 'departnered'"
             )
         if view == _ADMIN_STREAMER_VIEW_NON_PARTNER:
             return "COALESCE(s.manual_partner_opt_out, 0) = 1"
         if view == _ADMIN_STREAMER_VIEW_ALL:
             return "1=1"
         return (
-            "COALESCE(s.status, 'archived') = 'active' "
+            "COALESCE(s.status, 'departnered') = 'active' "
+            "AND s.archived_at IS NULL "
             "AND COALESCE(s.manual_partner_opt_out, 0) = 0"
         )
 
@@ -772,7 +783,10 @@ class _AnalyticsAdminMixin:
     ) -> str:
         if bool(manual_partner_opt_out):
             return "non_partner"
-        if bool(archived_at) or str(status or "").strip().lower() != "active":
+        normalized_status = str(status or "").strip().lower()
+        if normalized_status == "departnered":
+            return "departnered"
+        if normalized_status == "archived" or bool(archived_at):
             return "archived"
         return "active"
 
@@ -1041,9 +1055,10 @@ class _AnalyticsAdminMixin:
                     WHERE {where_clause}
                     ORDER BY
                         CASE
-                            WHEN COALESCE(s.manual_partner_opt_out, 0) = 1 THEN 2
-                            WHEN COALESCE(s.status, 'archived') = 'active' THEN 0
-                            ELSE 1
+                            WHEN COALESCE(s.manual_partner_opt_out, 0) = 1 THEN 3
+                            WHEN COALESCE(s.status, 'departnered') = 'active' AND s.archived_at IS NULL THEN 0
+                            WHEN COALESCE(s.status, 'departnered') IN ('active', 'archived') THEN 1
+                            ELSE 2
                         END,
                         CASE WHEN COALESCE(pls.is_live, 0) = 1 THEN 0 ELSE 1 END,
                         LOWER(s.twitch_login) ASC
@@ -1072,8 +1087,10 @@ class _AnalyticsAdminMixin:
             status = (
                 "non_partner"
                 if partner_status == "non_partner"
+                else "departnered"
+                if partner_status == "departnered"
                 else "archived"
-                if archived
+                if partner_status == "archived"
                 else "live"
                 if is_live
                 else "verified"
@@ -1419,9 +1436,10 @@ class _AnalyticsAdminMixin:
                                         ELSE 2
                                     END,
                                     CASE
-                                        WHEN COALESCE(s.manual_partner_opt_out, 0) = 1 THEN 2
-                                        WHEN COALESCE(s.status, 'archived') = 'active' THEN 0
-                                        ELSE 1
+                                        WHEN COALESCE(s.manual_partner_opt_out, 0) = 1 THEN 3
+                                        WHEN COALESCE(s.status, 'departnered') = 'active' AND s.archived_at IS NULL THEN 0
+                                        WHEN COALESCE(s.status, 'departnered') IN ('active', 'archived') THEN 1
+                                        ELSE 2
                                     END,
                                     CASE
                                         WHEN s.created_at IS NULL AND s.archived_at IS NULL THEN 1

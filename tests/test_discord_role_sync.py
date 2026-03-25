@@ -1,6 +1,7 @@
 import unittest
-from unittest.mock import patch
+from unittest.mock import ANY, AsyncMock, patch
 
+from bot.community.admin import TwitchAdminMixin
 from bot.discord_role_sync import sync_streamer_role
 
 
@@ -49,6 +50,14 @@ class _FakeDiscordBot:
 
     def get_guild(self, guild_id: int) -> _FakeGuild | None:
         return self._guilds_by_id.get(guild_id)
+
+
+class _DummyAdmin(TwitchAdminMixin):
+    def __init__(self) -> None:
+        self.bot = object()
+
+    def _normalize_login(self, login: str) -> str:
+        return str(login or "").strip().lower()
 
 
 class DiscordRoleSyncTests(unittest.IsolatedAsyncioTestCase):
@@ -104,6 +113,39 @@ class DiscordRoleSyncTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(member.add_calls, [])
         self.assertEqual(member.remove_calls, [])
         self.assertEqual(member.roles, [])
+
+    async def test_admin_remove_departnered_streamer_removes_role(self) -> None:
+        handler = _DummyAdmin()
+
+        class _Txn:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                del exc_type, exc, tb
+                return False
+
+            def execute(self, query, params):
+                del query, params
+                return None
+
+        with patch("bot.community.admin.storage.transaction", return_value=_Txn()), patch(
+            "bot.community.admin.storage.departner_active_partner",
+            return_value={"discord_user_id": "123"},
+        ), patch(
+            "bot.community.admin.sync_streamer_role",
+            new=AsyncMock(return_value=True),
+        ) as mocked_sync:
+            result = await handler._cmd_remove("Alpha")
+
+        self.assertEqual(result, "alpha operativ deaktiviert (Streamer-Rolle entfernt)")
+        mocked_sync.assert_awaited_once_with(
+            handler.bot,
+            "123",
+            should_have_role=False,
+            reason="Streamer als Partner deaktiviert",
+            logger=ANY,
+        )
 
 
 if __name__ == "__main__":

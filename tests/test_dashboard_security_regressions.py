@@ -800,6 +800,37 @@ class DashboardSecurityRegressionTests(unittest.IsolatedAsyncioTestCase):
         mocked_to_thread.assert_awaited_once()
         self.assertIs(mocked_to_thread.await_args.args[0], mocked_loader)
 
+    async def test_dashboard_verify_clear_removes_streamer_role(self) -> None:
+        handler = _DummyDashboardDataOffload()
+
+        with patch.object(
+            handler,
+            "_dashboard_verify_storage_step",
+            return_value={
+                "kind": "cleared",
+                "message": "Verifizierung für alpha zurückgesetzt (keine DM versendet)",
+                "row_data": {"discord_user_id": "123"},
+            },
+        ) as mocked_loader, patch.object(
+            handler,
+            "_remove_streamer_role",
+            new=AsyncMock(return_value="(Streamer-Rolle entfernt)"),
+        ) as mocked_remove_role, patch(
+            "bot.dashboard.mixin.asyncio.to_thread",
+            new=AsyncMock(side_effect=lambda func, *args, **kwargs: func(*args, **kwargs)),
+        ):
+            result = await handler._dashboard_verify("Alpha", "clear")
+
+        self.assertEqual(
+            result,
+            "Verifizierung für alpha zurückgesetzt (keine DM versendet) (Streamer-Rolle entfernt)",
+        )
+        mocked_loader.assert_called_once_with("alpha", "clear")
+        mocked_remove_role.assert_awaited_once_with(
+            {"discord_user_id": "123"},
+            reason="Streamer-Verifizierung über Dashboard entfernt",
+        )
+
     def test_internal_home_rate_limit_type_error_fails_closed(self) -> None:
         api = _DummyInternalHomeRateLimit()
 
