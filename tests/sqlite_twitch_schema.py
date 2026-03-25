@@ -102,7 +102,11 @@ def ensure_sqlite_twitch_schema(conn: sqlite3.Connection) -> None:
                 ) THEN 1 ELSE 0
             END AS is_verified,
             1 AS is_partner,
-            CASE WHEN p.status = 'active' THEN 1 ELSE 0 END AS is_partner_active,
+            CASE
+                WHEN p.status = 'active'
+                     AND COALESCE(p.manual_partner_opt_out, 0) = 0
+                THEN 1 ELSE 0
+            END AS is_partner_active,
             p.live_ping_role_id,
             COALESCE(p.live_ping_enabled, 1) AS live_ping_enabled
         FROM twitch_partners p

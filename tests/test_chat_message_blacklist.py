@@ -1,5 +1,5 @@
 import unittest
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 from bot.chat.moderation import ModerationMixin
 
@@ -131,6 +131,33 @@ class _DummyMessage:
 
 
 class ChatMessageBlacklistTests(unittest.IsolatedAsyncioTestCase):
+    async def test_opted_out_streamer_skips_announcement_without_fallback(self) -> None:
+        handler = _DummyModerationChat()
+        channel = _DummyChannel("jekoz42", "22482316")
+
+        with patch.object(handler, "_is_manual_partner_opt_out_for_chat", return_value=True), patch.object(
+            handler,
+            "_send_chat_message",
+            new=AsyncMock(return_value=True),
+        ) as fallback_mock, patch("aiohttp.ClientSession") as client_session_mock:
+            ok = await handler._send_announcement(channel, "hello", source="promo")
+
+        self.assertFalse(ok)
+        fallback_mock.assert_not_awaited()
+        client_session_mock.assert_not_called()
+
+    async def test_opted_out_streamer_skips_chat_message_http_send(self) -> None:
+        handler = _DummyModerationChat()
+        channel = _DummyChannel("jekoz42", "22482316")
+
+        with patch.object(handler, "_is_manual_partner_opt_out_for_chat", return_value=True), patch(
+            "aiohttp.ClientSession"
+        ) as client_session_mock:
+            ok = await handler._send_chat_message(channel, "hello", source="promo")
+
+        self.assertFalse(ok)
+        client_session_mock.assert_not_called()
+
     async def test_dropped_recruitment_message_blacklists_banned_phone_alias(self) -> None:
         handler = _DummyModerationChat()
         channel = _DummyChannel("cemo_336", "494921554")

@@ -932,6 +932,30 @@ class ModerationMixin:
         """Backward-compatible wrapper for promo ban blacklisting."""
         self._blacklist_streamer_for_source(channel, status, text, source="promo")
 
+    def _is_manual_partner_opt_out_for_chat(self, channel) -> bool:
+        login = self._normalize_channel_login_safe(channel)
+        if not login:
+            return False
+        try:
+            with readonly_connection() as conn:
+                row = load_active_partner(conn, twitch_login=login)
+        except Exception:
+            log.debug(
+                "Konnte manual_partner_opt_out fuer Outbound-Chat nicht pruefen (%s)",
+                login,
+                exc_info=True,
+            )
+            return False
+
+        if not row:
+            return False
+        if hasattr(row, "keys"):
+            return bool(row.get("manual_partner_opt_out"))
+        try:
+            return bool(row[12])
+        except Exception:
+            return False
+
     def _maybe_blacklist_for_drop_reason(
         self,
         channel,
@@ -961,6 +985,13 @@ class ModerationMixin:
         Erfordert ``moderator:manage:announcements`` Scope.
         Fallback: normale Chat-Nachricht, falls Announcement fehlschlägt.
         """
+        if self._is_manual_partner_opt_out_for_chat(channel):
+            log.info(
+                "Outbound-Announcement fuer %s uebersprungen, weil der Streamer Partner-Opt-out gesetzt hat",
+                self._normalize_channel_login_safe(channel) or "-",
+            )
+            return False
+
         suppression = self._get_outbound_chat_suppression(channel, source)
         if suppression is not None:
             self._log_outbound_chat_suppression_skip(channel, source, suppression)
@@ -1045,6 +1076,13 @@ class ModerationMixin:
     async def _send_chat_message(self, channel, text: str, source: str | None = None) -> bool:
         """Best-effort Chat-Nachricht senden (EventSub-kompatibel)."""
         try:
+            if self._is_manual_partner_opt_out_for_chat(channel):
+                log.info(
+                    "Outbound-Chat fuer %s uebersprungen, weil der Streamer Partner-Opt-out gesetzt hat",
+                    self._normalize_channel_login_safe(channel) or "-",
+                )
+                return False
+
             suppression = self._get_outbound_chat_suppression(channel, source)
             if suppression is not None:
                 self._log_outbound_chat_suppression_skip(channel, source, suppression)
