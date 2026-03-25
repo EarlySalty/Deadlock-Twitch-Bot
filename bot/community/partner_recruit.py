@@ -29,10 +29,10 @@ RECRUIT_DISCORD_INVITE = "discord.gg/z5TfVHuQq2"
 
 # Twitch-Chat-Limit: 500 Zeichen. Nachricht bleibt bei ~300 Zeichen.
 _OUTREACH_MSG = (
-    "Hey @{login}! Wir haben gesehen, du streamst Deadlock regelmäßiger. "
-    "Da wir immer auf der Suche nach Talenten sind, "
-    "würden wir dich gerne zu unserem Streamer-Partner-Programm einladen. "
-    "Schau dazu gerne mal hier mal hier earlysalty.de vorbei und join der Deadlock Community auf Discord {invite} <3"
+    "Hey @{login}! Cooler Deadlock-Stream. 🎮 Wir bauen gerade das größte deutsche Deadlock-Netzwerk auf "
+    "und unterstützen Streamer mit ihren Streams, indem wir dir eine Platform schenken. "
+    "Wenn du wissen willst, was wir für Streamer daraus machen, schau mal in unsere Bio vorbei! ✨ "
+    "Viel Erfolg dir noch! <3"
 )
 
 
