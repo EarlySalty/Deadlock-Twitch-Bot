@@ -4079,8 +4079,8 @@ class RaidBot:
 
         sql = (
             "SELECT twitch_user_id, twitch_login, is_live, final_score, today_received_raids, "
-            "duration_score, time_pattern_score, readiness_score, fairness_score, "
-            "base_score, new_partner_multiplier, raid_boost_multiplier, last_computed_at "
+            "duration_score, time_pattern_score, base_score, "
+            "new_partner_multiplier, raid_boost_multiplier, last_computed_at "
             "FROM twitch_partner_raid_scores "
             f"WHERE twitch_user_id IN ({','.join('%s' for _ in requested)})"
         )
@@ -4107,11 +4107,28 @@ class RaidBot:
             except (TypeError, ValueError):
                 return default
 
+        def _clamp(value: float, minimum: float = 0.0, maximum: float = 1.0) -> float:
+            return max(minimum, min(maximum, value))
+
         out: dict[str, dict[str, object]] = {}
         for row in rows:
             twitch_user_id = str(row["twitch_user_id"] if hasattr(row, "keys") else row[0] or "").strip()
             if not twitch_user_id:
                 continue
+            duration_score = _safe_float(
+                row["duration_score"] if hasattr(row, "keys") else row[5],
+                0.5,
+            )
+            time_pattern_score = _safe_float(
+                row["time_pattern_score"] if hasattr(row, "keys") else row[6],
+                0.5,
+            )
+            base_score = _safe_float(
+                row["base_score"] if hasattr(row, "keys") else row[7],
+                0.5,
+            )
+            readiness_score = _clamp((duration_score * 0.6) + (time_pattern_score * 0.4))
+            fairness_score = _clamp((base_score - (readiness_score * 0.65)) / 0.35)
             out[twitch_user_id] = {
                 "twitch_user_id": twitch_user_id,
                 "twitch_login": str(
@@ -4126,35 +4143,20 @@ class RaidBot:
                     row["today_received_raids"] if hasattr(row, "keys") else row[4],
                     0,
                 ),
-                "duration_score": _safe_float(
-                    row["duration_score"] if hasattr(row, "keys") else row[5],
-                    0.5,
-                ),
-                "time_pattern_score": _safe_float(
-                    row["time_pattern_score"] if hasattr(row, "keys") else row[6],
-                    0.5,
-                ),
-                "readiness_score": _safe_float(
-                    row["readiness_score"] if hasattr(row, "keys") else row[7],
-                    0.5,
-                ),
-                "fairness_score": _safe_float(
-                    row["fairness_score"] if hasattr(row, "keys") else row[8],
-                    0.5,
-                ),
-                "base_score": _safe_float(
-                    row["base_score"] if hasattr(row, "keys") else row[9],
-                    0.5,
-                ),
+                "duration_score": duration_score,
+                "time_pattern_score": time_pattern_score,
+                "readiness_score": readiness_score,
+                "fairness_score": fairness_score,
+                "base_score": base_score,
                 "new_partner_multiplier": _safe_float(
-                    row["new_partner_multiplier"] if hasattr(row, "keys") else row[10],
+                    row["new_partner_multiplier"] if hasattr(row, "keys") else row[8],
                     1.0,
                 ),
                 "raid_boost_multiplier": _safe_float(
-                    row["raid_boost_multiplier"] if hasattr(row, "keys") else row[11],
+                    row["raid_boost_multiplier"] if hasattr(row, "keys") else row[9],
                     1.0,
                 ),
-                "last_computed_at": row["last_computed_at"] if hasattr(row, "keys") else row[12],
+                "last_computed_at": row["last_computed_at"] if hasattr(row, "keys") else row[10],
             }
         return out
 

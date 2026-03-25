@@ -10,6 +10,10 @@ from ..core.constants import TWITCH_TARGET_GAME_NAME
 from ..storage import transaction
 
 log = logging.getLogger("TwitchStreams.PartnerRaidScoreTracking")
+READINESS_DURATION_WEIGHT = 0.6
+READINESS_TIME_WEIGHT = 0.4
+FINAL_READINESS_WEIGHT = 0.65
+FINAL_FAIRNESS_WEIGHT = 0.35
 
 
 def _parse_dt(value: object) -> datetime | None:
@@ -62,6 +66,55 @@ def _safe_float(value: object, default: float = 0.0) -> float:
         return default
 
 
+def _clamp(value: float, minimum: float = 0.0, maximum: float = 1.0) -> float:
+    return max(minimum, min(maximum, value))
+
+
+def _column_exists(conn, table: str, column: str) -> bool:
+    try:
+        row = conn.execute(
+            """
+            SELECT 1
+            FROM information_schema.columns
+            WHERE table_schema = current_schema()
+              AND table_name = %s
+              AND column_name = %s
+            """,
+            (table, column),
+        ).fetchone()
+        return bool(row)
+    except Exception:
+        try:
+            rows = conn.execute(f"PRAGMA table_info({table})").fetchall()
+        except Exception:
+            return False
+        for row in rows or ():
+            name = ""
+            if hasattr(row, "keys"):
+                name = str(row["name"] or "").strip()
+            elif len(row) > 1:
+                name = str(row[1] or "").strip()
+            if name == column:
+                return True
+        return False
+
+
+def _derive_readiness_score(duration_score: float, time_pattern_score: float) -> float:
+    return _clamp(
+        (float(duration_score) * READINESS_DURATION_WEIGHT)
+        + (float(time_pattern_score) * READINESS_TIME_WEIGHT)
+    )
+
+
+def _derive_fairness_score(base_score: float, readiness_score: float) -> float:
+    if FINAL_FAIRNESS_WEIGHT <= 0:
+        return 0.5
+    return _clamp(
+        (float(base_score) - (float(readiness_score) * FINAL_READINESS_WEIGHT))
+        / FINAL_FAIRNESS_WEIGHT
+    )
+
+
 def _target_game_lower() -> str:
     return (TWITCH_TARGET_GAME_NAME or "").strip().lower()
 
@@ -108,12 +161,31 @@ def _lookup_open_session_id(
     return _safe_int(_row_value(row, "id", 0), 0) or None
 
 
+def _ensure_tracking_schema(conn) -> None:
+    required_columns = (
+        ("raid_history_executed_at", "TIMESTAMPTZ"),
+        ("readiness_score", "DOUBLE PRECISION"),
+        ("fairness_score", "DOUBLE PRECISION"),
+    )
+    for column, column_type in required_columns:
+        if _column_exists(conn, "twitch_partner_raid_score_tracking", column):
+            continue
+        conn.execute(
+            f"ALTER TABLE twitch_partner_raid_score_tracking ADD COLUMN {column} {column_type}"
+        )
+        log.info(
+            "Partner raid score tracking runtime schema guard added column %s.%s",
+            "twitch_partner_raid_score_tracking",
+            column,
+        )
+
+
 def _load_cached_score_snapshot(conn, twitch_user_id: str) -> dict[str, object]:
     row = conn.execute(
         """
         SELECT final_score, base_score, duration_score, time_pattern_score,
-               readiness_score, fairness_score, new_partner_multiplier,
-               raid_boost_multiplier, today_received_raids, last_computed_at
+               new_partner_multiplier, raid_boost_multiplier,
+               today_received_raids, last_computed_at
         FROM twitch_partner_raid_scores
         WHERE twitch_user_id = %s
         """,
@@ -121,17 +193,21 @@ def _load_cached_score_snapshot(conn, twitch_user_id: str) -> dict[str, object]:
     ).fetchone()
     if row is None:
         return {}
+    duration_score = _safe_float(_row_value(row, "duration_score", 2), 0.5)
+    time_pattern_score = _safe_float(_row_value(row, "time_pattern_score", 3), 0.5)
+    base_score = _safe_float(_row_value(row, "base_score", 1), 0.0)
+    readiness_score = _derive_readiness_score(duration_score, time_pattern_score)
     return {
         "final_score": _safe_float(_row_value(row, "final_score", 0), 0.0),
-        "base_score": _safe_float(_row_value(row, "base_score", 1), 0.0),
-        "duration_score": _safe_float(_row_value(row, "duration_score", 2), 0.5),
-        "time_pattern_score": _safe_float(_row_value(row, "time_pattern_score", 3), 0.5),
-        "readiness_score": _safe_float(_row_value(row, "readiness_score", 4), 0.5),
-        "fairness_score": _safe_float(_row_value(row, "fairness_score", 5), 0.5),
-        "new_partner_multiplier": _safe_float(_row_value(row, "new_partner_multiplier", 6), 1.0),
-        "raid_boost_multiplier": _safe_float(_row_value(row, "raid_boost_multiplier", 7), 1.0),
-        "today_received_raids": _safe_int(_row_value(row, "today_received_raids", 8), 0),
-        "last_computed_at": str(_row_value(row, "last_computed_at", 9) or "").strip() or None,
+        "base_score": base_score,
+        "duration_score": duration_score,
+        "time_pattern_score": time_pattern_score,
+        "readiness_score": readiness_score,
+        "fairness_score": _derive_fairness_score(base_score, readiness_score),
+        "new_partner_multiplier": _safe_float(_row_value(row, "new_partner_multiplier", 4), 1.0),
+        "raid_boost_multiplier": _safe_float(_row_value(row, "raid_boost_multiplier", 5), 1.0),
+        "today_received_raids": _safe_int(_row_value(row, "today_received_raids", 6), 0),
+        "last_computed_at": str(_row_value(row, "last_computed_at", 7) or "").strip() or None,
     }
 
 
@@ -302,6 +378,7 @@ def track_confirmed_partner_raid(
 
     try:
         with transaction() as conn:
+            _ensure_tracking_schema(conn)
             live_state = conn.execute(
                 """
                 SELECT active_session_id, last_started_at, last_game, streamer_login

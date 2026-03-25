@@ -208,6 +208,35 @@ def _round_score(value: float) -> float:
     return round(float(value), 6)
 
 
+def _column_exists(conn, table: str, column: str) -> bool:
+    try:
+        row = conn.execute(
+            """
+            SELECT 1
+            FROM information_schema.columns
+            WHERE table_schema = current_schema()
+              AND table_name = %s
+              AND column_name = %s
+            """,
+            (table, column),
+        ).fetchone()
+        return bool(row)
+    except Exception:
+        try:
+            rows = conn.execute(f"PRAGMA table_info({table})").fetchall()
+        except Exception:
+            return False
+        for row in rows or ():
+            name = ""
+            if hasattr(row, "keys"):
+                name = str(row["name"] or "").strip()
+            elif len(row) > 1:
+                name = str(row[1] or "").strip()
+            if name == column:
+                return True
+        return False
+
+
 def _placeholders(values: Sequence[object]) -> str:
     return ",".join("%s" for _ in values)
 
@@ -262,6 +291,7 @@ class PartnerRaidScoreService:
 
     def __init__(self, conn_factory=transaction):
         self._conn_factory = conn_factory
+        self._runtime_schema_ready = False
 
     def refresh_partner_score(
         self,
@@ -295,6 +325,7 @@ class PartnerRaidScoreService:
         if not user_ids:
             return {}
         with self._conn_factory() as conn:
+            self._ensure_runtime_schema(conn)
             rows = self._load_cached_rows(conn, user_ids, live_only=live_only)
         return {
             str(_row_value(row, "twitch_user_id", "")).strip(): _row_dict(row)
@@ -313,6 +344,7 @@ class PartnerRaidScoreService:
         lookback_cutoff = now_utc - timedelta(days=LOOKBACK_DAYS)
 
         with self._conn_factory() as conn:
+            self._ensure_runtime_schema(conn)
             partners = self._load_partners(conn, user_ids, active_only=active_only)
             if not partners:
                 return []
@@ -352,6 +384,44 @@ class PartnerRaidScoreService:
             self._upsert_scores(conn, prepared_rows)
 
         return prepared_rows
+
+    def _ensure_runtime_schema(self, conn) -> None:
+        if self._runtime_schema_ready:
+            return
+        required_columns = (
+            (
+                "readiness_score",
+                "DOUBLE PRECISION NOT NULL DEFAULT 0.5",
+            ),
+            (
+                "fairness_score",
+                "DOUBLE PRECISION NOT NULL DEFAULT 0.5",
+            ),
+            (
+                "internal_sent_raids_30d",
+                "INTEGER NOT NULL DEFAULT 0",
+            ),
+            (
+                "internal_received_raids_30d",
+                "INTEGER NOT NULL DEFAULT 0",
+            ),
+            (
+                "internal_received_raids_7d",
+                "INTEGER NOT NULL DEFAULT 0",
+            ),
+        )
+        for column, column_type in required_columns:
+            if _column_exists(conn, "twitch_partner_raid_scores", column):
+                continue
+            conn.execute(
+                f"ALTER TABLE twitch_partner_raid_scores ADD COLUMN {column} {column_type}"
+            )
+            log.info(
+                "Partner raid score runtime schema guard added column %s.%s",
+                "twitch_partner_raid_scores",
+                column,
+            )
+        self._runtime_schema_ready = True
 
     def _load_partners(
         self,
