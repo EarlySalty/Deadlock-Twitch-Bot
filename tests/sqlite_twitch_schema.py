@@ -65,6 +65,7 @@ def ensure_sqlite_twitch_schema(conn: sqlite3.Connection) -> None:
             live_ping_enabled INTEGER DEFAULT 1,
             partnered_at TEXT DEFAULT CURRENT_TIMESTAMP,
             departnered_at TEXT,
+            admin_archived_at TEXT,
             status TEXT NOT NULL DEFAULT 'active'
         )
         """

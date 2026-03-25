@@ -630,6 +630,54 @@ class ChatNotificationRaidCorrelationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(row["confirmation_signals"], "channel.chat.notification")
         self.assertEqual(row["primary_signal"], "channel.chat.notification")
 
+    async def test_partner_pending_raid_skips_partner_follow_up_when_target_is_not_partner(self) -> None:
+        raid_bot = self._build_raid_bot()
+        raid_bot._store_pending_raid(
+            raid_bot._build_pending_raid_record(
+                from_broadcaster_login="source_login",
+                to_broadcaster_id="9009",
+                target_stream_data={"_partner_score": {"final_score": 1.15}},
+                is_partner_raid=True,
+                viewer_count=42,
+                offline_trigger_ts=None,
+                raid_flow_id="raid-flow-non-partner-target",
+                channel_raid_ready=True,
+                channel_raid_ready_detail=None,
+                chat_notification_state="subscribed",
+                chat_notification_detail=None,
+            )
+        )
+
+        with patch.object(
+            raid_bot,
+            "_classify_partner_raid_arrival",
+            return_value=(None, "non_partner_target"),
+        ), patch.object(
+            raid_bot,
+            "_load_recent_raid_history_reference",
+            return_value=(None, None),
+        ), patch.object(
+            raid_bot,
+            "_lookup_silent_raid_enabled",
+            return_value=False,
+        ), patch(
+            "bot.raid.bot.track_confirmed_partner_raid",
+            return_value=321,
+        ) as track_mock:
+            await raid_bot._confirm_pending_raid_arrival(
+                signal_type="channel.chat.notification",
+                to_broadcaster_id="9009",
+                to_broadcaster_login="targetlogin",
+                from_broadcaster_login="source_login",
+                from_broadcaster_id="1001",
+                viewer_count=42,
+            )
+
+        raid_bot._refresh_partner_score_cache_if_available.assert_not_awaited()
+        raid_bot._send_partner_raid_message.assert_not_awaited()
+        raid_bot._send_recruitment_message_now.assert_not_awaited()
+        track_mock.assert_not_called()
+
     async def test_ensure_raid_arrival_subscription_ready_does_not_trust_local_tracking_only(self) -> None:
         raid_bot = self._build_raid_bot()
         ensure_ready = AsyncMock(return_value=(False, "status:missing"))

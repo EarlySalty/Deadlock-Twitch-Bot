@@ -2841,6 +2841,7 @@ class RaidBot:
             to_broadcaster_id=to_broadcaster_id,
             to_broadcaster_login=to_broadcaster_login,
         )
+        partner_target_confirmed = classification is not None
         raid_history_id = None
         raid_history_executed_at = None
         if is_partner_raid:
@@ -2862,7 +2863,7 @@ class RaidBot:
         )
 
         arrival_tracking_id = None
-        if classification is not None:
+        if partner_target_confirmed:
             arrival_tracking_id = self._store_partner_raid_arrival(
                 from_broadcaster_id=from_broadcaster_id,
                 from_broadcaster_login=from_broadcaster_login,
@@ -2907,7 +2908,16 @@ class RaidBot:
             },
         )
 
-        if is_partner_raid:
+        if is_partner_raid and not partner_target_confirmed:
+            log.warning(
+                "Partner raid follow-up suppressed because target is no longer classified as partner: %s -> %s (signal=%s, source_resolution=%s)",
+                from_broadcaster_login,
+                to_broadcaster_login,
+                signal_type,
+                source_resolution,
+            )
+
+        if is_partner_raid and partner_target_confirmed:
             await self._refresh_partner_score_cache_if_available(
                 to_broadcaster_id,
                 reason="incoming_partner_raid_confirmed",
@@ -2934,14 +2944,14 @@ class RaidBot:
             )
             return
 
-        if is_partner_raid:
+        if is_partner_raid and partner_target_confirmed:
             await self._send_partner_raid_message(
                 from_broadcaster_login=from_broadcaster_login,
                 to_broadcaster_login=to_broadcaster_login,
                 to_broadcaster_id=to_broadcaster_id,
                 viewer_count=effective_viewer_count,
             )
-        else:
+        elif not is_partner_raid:
             await self._send_recruitment_message_now(
                 from_broadcaster_login=from_broadcaster_login,
                 to_broadcaster_login=to_broadcaster_login,
