@@ -154,6 +154,14 @@ class _DiscordBotWithoutChannel:
         return None
 
 
+class _DiscordBotMissingUser:
+    def get_user(self, _user_id: int):
+        return None
+
+    async def fetch_user(self, _user_id: int):
+        return None
+
+
 class TokenErrorHandlerNotificationTests(unittest.IsolatedAsyncioTestCase):
     async def test_notify_token_error_still_sends_user_dm_when_admin_channel_missing(self) -> None:
         conn = _make_conn()
@@ -206,6 +214,19 @@ class TokenErrorHandlerNotificationTests(unittest.IsolatedAsyncioTestCase):
         ).fetchone()
         self.assertIsNotNone(row)
         self.assertEqual(int(row["notified"]), 1)
+
+    async def test_send_user_dm_token_error_returns_false_when_user_cannot_be_resolved(self) -> None:
+        with patch.object(TokenErrorHandler, "_migrate_db", return_value=None):
+            handler = TokenErrorHandler(discord_bot=_DiscordBotMissingUser())
+
+        with patch.object(handler, "_get_discord_user_id", return_value="137246526119477248"):
+            sent = await handler._send_user_dm_token_error(
+                "87111803",
+                "snaqeu",
+                'HTTP 400: {"status":400,"message":"Invalid refresh token"}',
+            )
+
+        self.assertFalse(sent)
 
 
 if __name__ == "__main__":
