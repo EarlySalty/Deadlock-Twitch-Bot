@@ -76,6 +76,9 @@ _RECENT_RAID_ARRIVAL_TTL_SECONDS = 600.0
 _ORPHAN_CHAT_NOTIFICATION_RETENTION_SECONDS = 900.0
 _RAID_READINESS_TTL_SECONDS = 900.0
 _RAID_READINESS_MAX_ENTRIES = 512
+_EXTERNAL_RECRUITMENT_RAID_LIMIT = 4
+_EXTERNAL_BAN_CHECK_DELAY_SECONDS = 3600.0
+_EXTERNAL_RECRUITMENT_BLACKLIST_GRACE_SECONDS = 48 * 3600.0
 
 
 def _mask_log_identifier(value: object, *, visible_prefix: int = 3, visible_suffix: int = 2) -> str:
@@ -232,6 +235,8 @@ class RaidBot:
         blacklist_cleanup_interval = 7 * 1800.0
         pending_raid_cleanup_interval = 120.0
         grace_period_check_interval = 3600.0  # stündlich
+        external_limit_pending_interval = 600.0
+        external_bot_ban_check_interval = 300.0
 
         last_state_cleanup = 0.0
         # Startup-Delay: erster Token-Refresh erst nach 5 Minuten (nicht sofort nach 60s).
@@ -241,6 +246,8 @@ class RaidBot:
         last_blacklist_cleanup = 0.0
         last_raid_cleanup = 0.0
         last_grace_period_check = 0.0
+        last_external_limit_pending_check = 0.0
+        last_external_bot_ban_check = 0.0
         while True:
             await asyncio.sleep(60)  # Loop-Tick (Wartungs-Tasks laufen in eigenen Intervallen)
             try:
@@ -279,6 +286,14 @@ class RaidBot:
                 if now - last_grace_period_check >= grace_period_check_interval:
                     await self.auth_manager.token_error_handler.check_grace_periods()
                     last_grace_period_check = now
+
+                if now - last_external_limit_pending_check >= external_limit_pending_interval:
+                    await asyncio.to_thread(self._process_due_external_recruitment_blacklist_pending)
+                    last_external_limit_pending_check = now
+
+                if now - last_external_bot_ban_check >= external_bot_ban_check_interval:
+                    await self._process_due_external_target_ban_checks()
+                    last_external_bot_ban_check = now
 
                 # 3. Pending Raids Cleanup (alle 2min)
                 if now - last_raid_cleanup >= pending_raid_cleanup_interval:
@@ -2842,9 +2857,15 @@ class RaidBot:
             to_broadcaster_login=to_broadcaster_login,
         )
         partner_target_confirmed = classification is not None
+        current_target_is_partner = partner_target_confirmed
+        if current_target_is_partner:
+            await asyncio.to_thread(
+                self._delete_external_recruitment_blacklist_pending,
+                to_broadcaster_id,
+            )
         raid_history_id = None
         raid_history_executed_at = None
-        if is_partner_raid:
+        if is_partner_raid or classification == "ours_to_partner":
             raid_history_id, raid_history_executed_at = self._load_recent_raid_history_reference(
                 from_broadcaster_login=from_broadcaster_login,
                 to_broadcaster_id=to_broadcaster_id,
@@ -2908,6 +2929,34 @@ class RaidBot:
             },
         )
 
+        confirmed_external_raid_count = None
+        if not current_target_is_partner:
+            confirmed_external_raid_count = await asyncio.to_thread(
+                self._record_confirmed_external_recruitment_raid,
+                raid_flow_id=raid_flow_id,
+                from_broadcaster_id=from_broadcaster_id,
+                from_broadcaster_login=from_broadcaster_login,
+                to_broadcaster_id=to_broadcaster_id,
+                to_broadcaster_login=to_broadcaster_login,
+                viewer_count=effective_viewer_count,
+                confirmation_signal=signal_type,
+            )
+            if confirmed_external_raid_count is None:
+                log.warning(
+                    "Confirmed external recruitment raid could not be persisted for %s (%s); skipping external follow-up",
+                    to_broadcaster_login,
+                    to_broadcaster_id,
+                )
+                return
+            if confirmed_external_raid_count > 0:
+                await asyncio.to_thread(
+                    self._schedule_external_recruitment_blacklist_pending,
+                    target_id=to_broadcaster_id,
+                    target_login=to_broadcaster_login,
+                    confirmed_raid_count=confirmed_external_raid_count,
+                    raid_flow_id=raid_flow_id,
+                )
+
         if is_partner_raid and not partner_target_confirmed:
             log.warning(
                 "Partner raid follow-up suppressed because target is no longer classified as partner: %s -> %s (signal=%s, source_resolution=%s)",
@@ -2917,7 +2966,7 @@ class RaidBot:
                 source_resolution,
             )
 
-        if is_partner_raid and partner_target_confirmed:
+        if classification == "ours_to_partner":
             await self._refresh_partner_score_cache_if_available(
                 to_broadcaster_id,
                 reason="incoming_partner_raid_confirmed",
@@ -2944,18 +2993,19 @@ class RaidBot:
             )
             return
 
-        if is_partner_raid and partner_target_confirmed:
+        if classification == "ours_to_partner":
             await self._send_partner_raid_message(
                 from_broadcaster_login=from_broadcaster_login,
                 to_broadcaster_login=to_broadcaster_login,
                 to_broadcaster_id=to_broadcaster_id,
                 viewer_count=effective_viewer_count,
             )
-        elif not is_partner_raid:
+        elif not current_target_is_partner:
             await self._send_recruitment_message_now(
                 from_broadcaster_login=from_broadcaster_login,
                 to_broadcaster_login=to_broadcaster_login,
                 target_stream_data=target_stream_data,
+                confirmed_external_raid_count=confirmed_external_raid_count,
             )
 
     async def on_raid_arrival(
@@ -3364,6 +3414,422 @@ class RaidBot:
             )
             return 0
 
+    def _get_confirmed_external_recruitment_raid_count(self, to_broadcaster_id: str) -> int:
+        target_id = str(to_broadcaster_id or "").strip()
+        if not target_id:
+            return 0
+
+        try:
+            with readonly_connection() as conn:
+                row = conn.execute(
+                    """
+                    SELECT COUNT(*)
+                    FROM twitch_confirmed_external_recruitment_raids
+                    WHERE to_broadcaster_id = %s
+                    """,
+                    (target_id,),
+                ).fetchone()
+            return int(row[0]) if row and row[0] is not None else 0
+        except Exception:
+            log.debug(
+                "Could not count confirmed external recruitment raids for %s",
+                target_id,
+                exc_info=True,
+            )
+            return 0
+
+    def _record_confirmed_external_recruitment_raid(
+        self,
+        *,
+        raid_flow_id: str | None,
+        from_broadcaster_id: str | None,
+        from_broadcaster_login: str,
+        to_broadcaster_id: str,
+        to_broadcaster_login: str,
+        viewer_count: int,
+        confirmation_signal: str,
+    ) -> int | None:
+        target_id = str(to_broadcaster_id or "").strip()
+        target_login = self._normalize_broadcaster_login(to_broadcaster_login)
+        if not target_id or not target_login:
+            return None
+
+        normalized_flow_id = (
+            str(raid_flow_id or "").strip()
+            or self._next_raid_observability_flow_id(prefix="external-confirmed")
+        )
+        try:
+            with transaction() as conn:
+                conn.execute(
+                    """
+                    INSERT INTO twitch_confirmed_external_recruitment_raids (
+                        raid_flow_id,
+                        from_broadcaster_id,
+                        from_broadcaster_login,
+                        to_broadcaster_id,
+                        to_broadcaster_login,
+                        viewer_count,
+                        confirmation_signal
+                    )
+                    VALUES (%s, %s, %s, %s, %s, %s, %s)
+                    ON CONFLICT (raid_flow_id) DO NOTHING
+                    """,
+                    (
+                        normalized_flow_id,
+                        str(from_broadcaster_id or "").strip() or None,
+                        self._normalize_broadcaster_login(from_broadcaster_login),
+                        target_id,
+                        target_login,
+                        int(viewer_count or 0),
+                        str(confirmation_signal or "").strip() or None,
+                    ),
+                )
+
+                row = conn.execute(
+                    """
+                    SELECT COUNT(*)
+                    FROM twitch_confirmed_external_recruitment_raids
+                    WHERE to_broadcaster_id = %s
+                    """,
+                    (target_id,),
+                ).fetchone()
+            return int(row[0]) if row and row[0] is not None else 0
+        except Exception:
+            log.exception(
+                "Failed to persist confirmed external recruitment raid for %s (%s)",
+                target_login,
+                target_id,
+            )
+            try:
+                return self._get_confirmed_external_recruitment_raid_count(target_id)
+            except Exception:
+                return None
+
+    def _is_target_currently_partner(
+        self,
+        *,
+        target_id: str,
+        target_login: str,
+    ) -> bool:
+        normalized_id = str(target_id or "").strip()
+        normalized_login = self._normalize_broadcaster_login(target_login)
+        if not normalized_id or not normalized_login:
+            return False
+        try:
+            return self._is_partner_target_channel(
+                broadcaster_id=normalized_id,
+                broadcaster_login=normalized_login,
+            )
+        except Exception:
+            log.debug(
+                "Partner lookup failed for %s (%s)",
+                normalized_login,
+                normalized_id,
+                exc_info=True,
+            )
+            return False
+
+    def _schedule_external_recruitment_blacklist_pending(
+        self,
+        *,
+        target_id: str,
+        target_login: str,
+        confirmed_raid_count: int,
+        raid_flow_id: str | None,
+    ) -> None:
+        normalized_id = str(target_id or "").strip()
+        normalized_login = self._normalize_broadcaster_login(target_login)
+        if not normalized_id or not normalized_login:
+            return
+        if confirmed_raid_count < _EXTERNAL_RECRUITMENT_RAID_LIMIT:
+            return
+        if self._is_target_currently_partner(
+            target_id=normalized_id,
+            target_login=normalized_login,
+        ):
+            self._delete_external_recruitment_blacklist_pending(normalized_id)
+            return
+
+        try:
+            with transaction() as conn:
+                conn.execute(
+                    """
+                    INSERT INTO twitch_external_recruitment_blacklist_pending (
+                        target_id,
+                        target_login,
+                        confirmed_raid_count,
+                        threshold_reached_at,
+                        blacklist_after,
+                        last_raid_flow_id,
+                        updated_at
+                    )
+                    VALUES (
+                        %s,
+                        %s,
+                        %s,
+                        CURRENT_TIMESTAMP,
+                        CURRENT_TIMESTAMP + (%s * INTERVAL '1 second'),
+                        %s,
+                        CURRENT_TIMESTAMP
+                    )
+                    ON CONFLICT (target_id) DO UPDATE SET
+                        target_login = EXCLUDED.target_login,
+                        confirmed_raid_count = GREATEST(
+                            twitch_external_recruitment_blacklist_pending.confirmed_raid_count,
+                            EXCLUDED.confirmed_raid_count
+                        ),
+                        last_raid_flow_id = EXCLUDED.last_raid_flow_id,
+                        updated_at = CURRENT_TIMESTAMP
+                    """,
+                    (
+                        normalized_id,
+                        normalized_login,
+                        int(confirmed_raid_count),
+                        int(_EXTERNAL_RECRUITMENT_BLACKLIST_GRACE_SECONDS),
+                        str(raid_flow_id or "").strip() or None,
+                    ),
+                )
+        except Exception:
+            log.exception(
+                "Failed to schedule delayed external recruitment blacklist for %s (%s)",
+                normalized_login,
+                normalized_id,
+            )
+
+    def _delete_external_recruitment_blacklist_pending(self, target_id: str) -> None:
+        normalized_id = str(target_id or "").strip()
+        if not normalized_id:
+            return
+        try:
+            with transaction() as conn:
+                conn.execute(
+                    """
+                    DELETE FROM twitch_external_recruitment_blacklist_pending
+                    WHERE target_id = %s
+                    """,
+                    (normalized_id,),
+                )
+        except Exception:
+            log.debug(
+                "Failed to delete delayed external recruitment blacklist for %s",
+                normalized_id,
+                exc_info=True,
+            )
+
+    def _process_due_external_recruitment_blacklist_pending(self) -> None:
+        try:
+            with readonly_connection() as conn:
+                rows = conn.execute(
+                    """
+                    SELECT target_id, target_login, confirmed_raid_count, threshold_reached_at
+                    FROM twitch_external_recruitment_blacklist_pending
+                    WHERE blacklist_after <= NOW()
+                    ORDER BY blacklist_after ASC
+                    LIMIT 50
+                    """
+                ).fetchall()
+        except Exception:
+            log.debug("Failed to load due delayed external recruitment blacklists", exc_info=True)
+            return
+
+        for row in rows:
+            target_id = str(row[0] or "").strip()
+            target_login = self._normalize_broadcaster_login(row[1])
+            confirmed_raid_count = int(row[2] or 0)
+            threshold_reached_at = str(row[3] or "").strip()
+            if not target_id or not target_login:
+                continue
+
+            if self._is_blacklisted(target_id, target_login):
+                self._delete_external_recruitment_blacklist_pending(target_id)
+                continue
+
+            if self._is_target_currently_partner(target_id=target_id, target_login=target_login):
+                self._delete_external_recruitment_blacklist_pending(target_id)
+                continue
+
+            reason = (
+                "confirmed_external_recruitment_limit_grace_expired:"
+                f" count={confirmed_raid_count}"
+                f" limit={_EXTERNAL_RECRUITMENT_RAID_LIMIT}"
+                f" threshold_reached_at={threshold_reached_at or '-'}"
+            )
+            self._add_to_blacklist(target_id, target_login, reason)
+            self._delete_external_recruitment_blacklist_pending(target_id)
+
+    def _schedule_external_target_ban_check(
+        self,
+        *,
+        target_id: str | None,
+        target_login: str,
+        source: str,
+    ) -> None:
+        normalized_id = str(target_id or "").strip()
+        normalized_login = self._normalize_broadcaster_login(target_login)
+        normalized_source = str(source or "").strip().lower()
+        if not normalized_id or not normalized_login or not normalized_source:
+            return
+        try:
+            with transaction() as conn:
+                conn.execute(
+                    """
+                    INSERT INTO twitch_external_bot_ban_check_pending (
+                        target_id,
+                        target_login,
+                        source,
+                        run_after,
+                        updated_at
+                    )
+                    VALUES (
+                        %s,
+                        %s,
+                        %s,
+                        CURRENT_TIMESTAMP + (%s * INTERVAL '1 second'),
+                        CURRENT_TIMESTAMP
+                    )
+                    ON CONFLICT (target_id) DO UPDATE SET
+                        target_login = EXCLUDED.target_login,
+                        source = EXCLUDED.source,
+                        run_after = EXCLUDED.run_after,
+                        updated_at = CURRENT_TIMESTAMP
+                    """,
+                    (
+                        normalized_id,
+                        normalized_login,
+                        normalized_source,
+                        int(_EXTERNAL_BAN_CHECK_DELAY_SECONDS),
+                    ),
+                )
+        except Exception:
+            log.exception(
+                "Failed to schedule delayed external bot ban check for %s (%s)",
+                normalized_login,
+                normalized_id,
+            )
+
+    def _delete_external_target_ban_check_pending(self, target_id: str) -> None:
+        normalized_id = str(target_id or "").strip()
+        if not normalized_id:
+            return
+        try:
+            with transaction() as conn:
+                conn.execute(
+                    """
+                    DELETE FROM twitch_external_bot_ban_check_pending
+                    WHERE target_id = %s
+                    """,
+                    (normalized_id,),
+                )
+        except Exception:
+            log.debug(
+                "Failed to delete delayed external bot ban check for %s",
+                normalized_id,
+                exc_info=True,
+            )
+
+    def _reschedule_external_target_ban_check_pending(self, target_id: str, delay_seconds: int = 900) -> None:
+        normalized_id = str(target_id or "").strip()
+        if not normalized_id:
+            return
+        try:
+            with transaction() as conn:
+                conn.execute(
+                    """
+                    UPDATE twitch_external_bot_ban_check_pending
+                    SET run_after = CURRENT_TIMESTAMP + (%s * INTERVAL '1 second'),
+                        updated_at = CURRENT_TIMESTAMP
+                    WHERE target_id = %s
+                    """,
+                    (int(max(60, delay_seconds)), normalized_id),
+                )
+        except Exception:
+            log.debug(
+                "Failed to reschedule delayed external bot ban check for %s",
+                normalized_id,
+                exc_info=True,
+            )
+
+    async def _process_due_external_target_ban_checks(self) -> None:
+        try:
+            with readonly_connection() as conn:
+                rows = conn.execute(
+                    """
+                    SELECT target_id, target_login, source
+                    FROM twitch_external_bot_ban_check_pending
+                    WHERE run_after <= NOW()
+                    ORDER BY run_after ASC
+                    LIMIT 25
+                    """
+                ).fetchall()
+        except Exception:
+            log.debug("Failed to load due external bot ban checks", exc_info=True)
+            return
+
+        for row in rows:
+            target_id = str(row[0] or "").strip()
+            target_login = self._normalize_broadcaster_login(row[1])
+            source = str(row[2] or "").strip().lower() or "recruitment"
+            if not target_id or not target_login:
+                continue
+
+            if self._is_blacklisted(target_id, target_login):
+                self._delete_external_target_ban_check_pending(target_id)
+                continue
+
+            if self._is_target_currently_partner(target_id=target_id, target_login=target_login):
+                self._delete_external_target_ban_check_pending(target_id)
+                continue
+
+            chat_bot = self.chat_bot
+            if not chat_bot:
+                log.debug(
+                    "Skipping due external bot ban check for %s: chat bot unavailable",
+                    target_login,
+                )
+                self._reschedule_external_target_ban_check_pending(target_id)
+                continue
+
+            part_channels = getattr(chat_bot, "part_channels", None)
+            if callable(part_channels):
+                try:
+                    await part_channels([target_login])
+                except Exception:
+                    log.debug(
+                        "External bot ban check could not part %s before rejoin probe",
+                        target_login,
+                        exc_info=True,
+                    )
+
+            try:
+                joined = await chat_bot.join(target_login, channel_id=target_id)
+            except Exception:
+                log.debug(
+                    "External bot ban check failed for %s (source=%s)",
+                    target_login,
+                    source,
+                    exc_info=True,
+                )
+                self._reschedule_external_target_ban_check_pending(target_id)
+                continue
+
+            if joined:
+                log.info(
+                    "External bot ban check completed for %s (source=%s)",
+                    target_login,
+                    source,
+                )
+                self._delete_external_target_ban_check_pending(target_id)
+            else:
+                log.warning(
+                    "External bot ban check could not confirm chat access for %s (source=%s)",
+                    target_login,
+                    source,
+                )
+                if self._is_blacklisted(target_id, target_login):
+                    self._delete_external_target_ban_check_pending(target_id)
+                else:
+                    self._reschedule_external_target_ban_check_pending(target_id)
+
     @staticmethod
     def _parse_nonnegative_int(value: object) -> int | None:
         try:
@@ -3584,6 +4050,7 @@ class RaidBot:
         from_broadcaster_login: str,
         to_broadcaster_login: str,
         target_stream_data: dict | None = None,
+        confirmed_external_raid_count: int | None = None,
     ):
         """
         Sendet eine Einladungs-Nachricht im Chat des geraideten Nicht-Partners.
@@ -3671,7 +4138,14 @@ class RaidBot:
                 return
 
             # 3. Bestimme die Anzahl der bisherigen Netzwerk-Raids für diesen Streamer
-            total_raids = self._get_received_network_raid_count(target_id)
+            total_raids = (
+                int(confirmed_external_raid_count)
+                if confirmed_external_raid_count is not None
+                else await asyncio.to_thread(
+                    self._get_confirmed_external_recruitment_raid_count,
+                    str(target_id),
+                )
+            )
 
             # 4. Nachricht vorbereiten (mit Stats Teaser)
             followers_total = await self._resolve_recruitment_followers_total(
@@ -3710,37 +4184,36 @@ class RaidBot:
             except Exception:
                 log.debug("Could not fetch stats for %s", to_broadcaster_login, exc_info=True)
 
-            # Nachrichtenauswahl basierend auf Raid-Anzahl
+            # Nachrichtenauswahl basierend auf Raid-Anzahl (FOMO / Insider-Club Strategie)
             if total_raids <= 1:
                 message = (
-                    f"Hey @{to_broadcaster_login}! Ich bin der Bot der deutschen Deadlock Community . "
-                    f"Ich manage hier die Raids bei Twitch Deadlock.. "
-                    f"Du wurdest gerade von @{from_broadcaster_login} geraidet, einem unserer Partner! <3 "
-                    f"Falls du bock hast kannst auch Teil der Community werden und Support erhalten – "
-                    f"schau gerne mal auf unserem Discord vorbei: {discord_invite} "
-                    f"Dir noch einen wunderschönen Stream <3"
+                    f"Was für ein Match! 🔥 @{from_broadcaster_login} bringt dir gerade Unterstützung aus unserem "
+                    f"Deadlock-Streamer-Netzwerk vorbei. Wir suchen gerade Streamer für unsere deutsche Deadlock Community noch aktive Streamer. "
+                    f"Und wenn du in der Kategorie nicht untergehen willst, sondern endlich Impact haben möchtest, Check mal die Bio ab! ❤️"
                 )
             elif total_raids == 2:
                 message = (
-                    f"Hey @{to_broadcaster_login}! Na, schon der 2. Raid von uns! ❤️ "
-                    f"@{from_broadcaster_login} bringt dir gerade Verstärkung aus dem Netzwerk vorbei. "
-                    f"{stats_teaser}"
-                    f"Unser Partner-Netzwerk wächst ständig und wir würden freuen uns über ein neues Gesicht freuen :). "
-                    f"Schau mal rein: {discord_invite} 🎮"
+                    f"Schon der 2. Raid von UNS für DICH! ❤️ Das ist kein Zufall mehr. "
+                    f"Wir vernetzen die Deutschen Deadlock-Streamer mit der Community, damit du nicht mehr einer von vielen bleibst. "
+                    f"Mehr infos in der Bio! 🚀"
                 )
             elif total_raids == 3:
                 message = (
-                    f"Hey @{to_broadcaster_login}! Aller guten Dinge sind 3! Das ist schon der 3. Raid aus der Community für dich. ❤️ "
-                    f"Hast du schon über eine Partnerschaft nachgedacht? Gemeinsam wachsen wir viel schneller! "
-                    f"Join uns: {discord_invite} 🎮"
+                    f"Hattrick! 🎯 Aller guten Dinge sind 3, @{to_broadcaster_login}. Wir liefern dir die Viewer und "
+                    f"die Positionierung, die du alleine niemals schaffst. Willst du weiter unsichtbar bleiben oder Teil der Elite werden? "
+                    f"Grow or Fade Away – Dein Platz wartet in der Bio! 🕯️"
                 )
-            else:  # 4. Raid und mehr
+            elif total_raids == 4:
                 message = (
-                    f"Hey @{to_broadcaster_login}! So langsam wird es Zeit für eine Partnerschaft, oder? 😉 "
-                    f"Das ist schon der {total_raids}. Raid von uns (diesmal von @{from_broadcaster_login})! "
-                    f"{stats_teaser}"
-                    f"Komm in unser Netzwerk und profitiere von gegenseitigen Raids, Zugang zu der größten deutschen Deadlock Community und viel mehr. Schau doch gerne mal vorbei: {discord_invite} 🎮"
+                    f"Dauersupport für @{to_broadcaster_login}! 💎 {total_raids}. Raid von uns. "
+                    f"Werde Teil des Deadlock-Partner-Netzwerks und dominiere die Kategorie mit uns. Wir regeln die Raids, du den Content. "
+                    f"Zum Onboarding geht´s in der Bio! 🔥"
                 )
+            else:
+                # Ab dem 5. Raid senden wir keine Recruitment-Nachricht mehr (Anti-Spam / Blockliste)
+                log.info("Max recruitment messages (4) reached for %s, skipping.", to_broadcaster_login)
+                return
+
 
             # 5. Sende Nachricht via Bot
             # TwitchIO 3.x: Nutze _send_chat_message helper (MockChannel)
@@ -3758,6 +4231,11 @@ class RaidBot:
                             "Sent recruitment message in %s's chat (raided by %s)",
                             to_broadcaster_login,
                             from_broadcaster_login,
+                        )
+                        self._schedule_external_target_ban_check(
+                            target_id=str(target_id),
+                            target_login=to_broadcaster_login,
+                            source="recruitment",
                         )
                     else:
                         log.warning(
@@ -4413,28 +4891,44 @@ class RaidBot:
             ).fetchall():
                 if bl_row[0]:
                     blacklisted_ids.add(str(bl_row[0]))
-                blacklisted_logins.add(str(bl_row[1]))
+                if bl_row[1]:
+                    blacklisted_logins.add(str(bl_row[1]))
+
         return blacklisted_ids, blacklisted_logins
 
     def _add_to_blacklist(self, target_id: str, target_login: str, reason: str):
         """Fügt ein Ziel zur Blacklist hinzu."""
+        normalized_id = str(target_id or "").strip() or None
+        normalized_login = self._normalize_broadcaster_login(target_login)
+        if not normalized_login:
+            return
         try:
             with transaction() as conn:
+                if normalized_id:
+                    conn.execute(
+                        """
+                        DELETE FROM twitch_raid_blacklist
+                        WHERE target_id = %s
+                          AND lower(target_login) <> lower(%s)
+                        """,
+                        (normalized_id, normalized_login),
+                    )
                 conn.execute(
                     """
                     INSERT INTO twitch_raid_blacklist (target_id, target_login, reason)
                     VALUES (%s, %s, %s)
                     ON CONFLICT (target_login) DO UPDATE SET
-                        target_id = EXCLUDED.target_id,
-                        reason = EXCLUDED.reason
+                        target_id = COALESCE(EXCLUDED.target_id, twitch_raid_blacklist.target_id),
+                        reason = EXCLUDED.reason,
+                        added_at = CURRENT_TIMESTAMP
                     """,
-                    (target_id, target_login, reason),
+                    (normalized_id, normalized_login, reason),
                 )
                 # autocommit – no explicit commit needed
             log.info(
                 "Added %s (ID: %s) to raid blacklist. Reason: %s",
-                target_login,
-                target_id,
+                normalized_login,
+                normalized_id,
                 reason,
             )
         except Exception:

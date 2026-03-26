@@ -201,6 +201,13 @@ class TwitchPartnerRecruitMixin:
         self._record_outreach(login, user_id, success)
 
         if success:
+            raid_bot = getattr(chat_bot, "_raid_bot", None)
+            if raid_bot and hasattr(raid_bot, "_schedule_external_target_ban_check"):
+                raid_bot._schedule_external_target_ban_check(
+                    target_id=user_id,
+                    target_login=login,
+                    source="recruitment",
+                )
             log.info(
                 "PartnerRecruit: Outreach gesendet an %s (%d Tage aktiv)",
                 login,
