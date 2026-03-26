@@ -627,9 +627,23 @@ class TokenErrorHandler:
             return False
 
         try:
-            user = await self.discord_bot.fetch_user(int(discord_user_id))
+            user_id_int = int(discord_user_id)
+        except (TypeError, ValueError):
+            log.debug("Invalid discord_user_id %r for %s, cannot send DM", discord_user_id, twitch_login)
+            return False
+
+        user = None
+        try:
+            getter = getattr(self.discord_bot, "get_user", None)
+            if callable(getter):
+                user = getter(user_id_int)
+            if user is None:
+                user = await self.discord_bot.fetch_user(user_id_int)
         except Exception:
             log.debug("Could not fetch Discord user %s for DM", discord_user_id)
+            return False
+        if user is None:
+            log.debug("Discord user %s not found for %s, cannot send DM", discord_user_id, twitch_login)
             return False
 
         grace_dt = datetime.now(UTC) + timedelta(days=GRACE_PERIOD_DAYS)
