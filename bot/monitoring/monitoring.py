@@ -59,6 +59,138 @@ class TwitchMonitoringMixin(_EventSubMixin, _ExpSessionsMixin, _SessionsMixin, _
             return int(default)
         return parsed if parsed > 0 else int(default)
 
+    @staticmethod
+    def _storage_error_details(exc: BaseException) -> tuple[set[str], str]:
+        sqlstates: set[str] = set()
+        messages: list[str] = []
+        pending: list[BaseException] = [exc]
+        seen: set[int] = set()
+
+        while pending:
+            current = pending.pop()
+            marker = id(current)
+            if marker in seen:
+                continue
+            seen.add(marker)
+
+            sqlstate = str(getattr(current, "sqlstate", "") or "").strip().upper()
+            if sqlstate:
+                sqlstates.add(sqlstate)
+
+            message = str(current).strip()
+            if message:
+                messages.append(message.lower())
+
+            cause = getattr(current, "__cause__", None)
+            if cause is not None:
+                pending.append(cause)
+            context = getattr(current, "__context__", None)
+            if context is not None:
+                pending.append(context)
+
+        return sqlstates, "\n".join(messages)
+
+    @classmethod
+    def _is_retryable_storage_error(cls, exc: BaseException) -> bool:
+        sqlstates, message = cls._storage_error_details(exc)
+        if sqlstates & {
+            "08000",
+            "08001",
+            "08003",
+            "08004",
+            "08006",
+            "57P01",
+            "57P02",
+            "57P03",
+            "53300",
+        }:
+            return True
+
+        return any(
+            token in message
+            for token in (
+                "locked",
+                "shutting down",
+                "starting up",
+                "cannot connect now",
+                "connection refused",
+                "connection timed out",
+                "could not connect to server",
+                "fährt herunter",
+                "fahrt herunter",
+                "fhrt herunter",
+                "remaining connection slots are reserved",
+                "server closed the connection unexpectedly",
+                "terminating connection due to administrator command",
+                "the database system is in recovery mode",
+                "timeout expired",
+                "timed out waiting for a postgresql connection",
+                "too many clients already",
+            )
+        )
+
+    @classmethod
+    def _summarize_storage_error(cls, exc: BaseException) -> str:
+        pending: list[BaseException] = [exc]
+        seen: set[int] = set()
+        while pending:
+            current = pending.pop()
+            marker = id(current)
+            if marker in seen:
+                continue
+            seen.add(marker)
+
+            message = str(current).strip()
+            if message:
+                first_line = next(
+                    (line.strip() for line in message.splitlines() if line.strip()),
+                    "",
+                )
+                if first_line:
+                    return first_line
+
+            cause = getattr(current, "__cause__", None)
+            if cause is not None:
+                pending.append(cause)
+            context = getattr(current, "__context__", None)
+            if context is not None:
+                pending.append(context)
+        return exc.__class__.__name__
+
+    @classmethod
+    def _log_storage_write_failure(cls, message: str, exc: BaseException) -> None:
+        if cls._is_retryable_storage_error(exc):
+            log.warning(
+                "%s: PostgreSQL voruebergehend nicht verfuegbar (%s)",
+                message,
+                cls._summarize_storage_error(exc),
+            )
+            return
+        log.exception(message)
+
+    async def _run_storage_write_with_retry(
+        self,
+        writer,
+        *,
+        failure_message: str,
+        max_attempts: int = 3,
+        retry_delay: float = 0.5,
+    ) -> bool:
+        delay = float(retry_delay)
+        attempts = max(1, int(max_attempts))
+        for attempt in range(attempts):
+            try:
+                with storage.transaction() as c:
+                    writer(c)
+                return True
+            except Exception as exc:
+                if attempt >= attempts - 1 or not self._is_retryable_storage_error(exc):
+                    self._log_storage_write_failure(failure_message, exc)
+                    return False
+                await asyncio.sleep(delay)
+                delay *= 2
+        return False
+
     def _master_broker_token(self) -> str | None:
         for key in (
             "MASTER_BROKER_TOKEN",
@@ -1778,60 +1910,51 @@ class TwitchMonitoringMixin(_EventSubMixin, _ExpSessionsMixin, _SessionsMixin, _
         if not rows:
             return
 
-        retry_delay = 0.5
-        for attempt in range(3):
-            try:
-                with storage.transaction() as c:
-                    conflict_cleanup_rows = sorted(
-                        {
-                            (str(streamer_login or "").strip(), str(twitch_user_id or "").strip())
-                            for twitch_user_id, streamer_login, *_ in rows
-                            if str(twitch_user_id or "").strip()
-                            and str(streamer_login or "").strip()
-                        }
-                    )
-                    if conflict_cleanup_rows:
-                        self._executemany(
-                            c,
-                            "DELETE FROM twitch_live_state "
-                            "WHERE LOWER(streamer_login) = LOWER(%s) "
-                            "AND LOWER(COALESCE(twitch_user_id, '')) <> LOWER(%s)",
-                            conflict_cleanup_rows,
-                        )
-                    self._executemany(
-                        c,
-                        "INSERT INTO twitch_live_state ("
-                        "twitch_user_id, streamer_login, is_live, last_seen_at, last_title, last_game, "
-                        "last_viewer_count, last_discord_message_id, last_tracking_token, last_stream_id, "
-                        "last_started_at, had_deadlock_in_session, active_session_id, last_deadlock_seen_at"
-                        ") VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) "
-                        "ON CONFLICT (twitch_user_id) DO UPDATE SET "
-                        "streamer_login = EXCLUDED.streamer_login, "
-                        "is_live = EXCLUDED.is_live, "
-                        "last_seen_at = EXCLUDED.last_seen_at, "
-                        "last_title = EXCLUDED.last_title, "
-                        "last_game = EXCLUDED.last_game, "
-                        "last_viewer_count = EXCLUDED.last_viewer_count, "
-                        "last_discord_message_id = EXCLUDED.last_discord_message_id, "
-                        "last_tracking_token = EXCLUDED.last_tracking_token, "
-                        "last_stream_id = EXCLUDED.last_stream_id, "
-                        "last_started_at = EXCLUDED.last_started_at, "
-                        "had_deadlock_in_session = EXCLUDED.had_deadlock_in_session, "
-                        "active_session_id = EXCLUDED.active_session_id, "
-                        "last_deadlock_seen_at = EXCLUDED.last_deadlock_seen_at",
-                        rows,
-                    )
-                return
-            except Exception as exc:
-                locked = "locked" in str(exc).lower()
-                if not locked or attempt == 2:
-                    log.exception(
-                        "Konnte Live-State-Updates nicht speichern (%s Eintraege)",
-                        len(rows),
-                    )
-                    return
-                await asyncio.sleep(retry_delay)
-                retry_delay *= 2
+        def _write_live_state(c) -> None:
+            conflict_cleanup_rows = sorted(
+                {
+                    (str(streamer_login or "").strip(), str(twitch_user_id or "").strip())
+                    for twitch_user_id, streamer_login, *_ in rows
+                    if str(twitch_user_id or "").strip()
+                    and str(streamer_login or "").strip()
+                }
+            )
+            if conflict_cleanup_rows:
+                self._executemany(
+                    c,
+                    "DELETE FROM twitch_live_state "
+                    "WHERE LOWER(streamer_login) = LOWER(%s) "
+                    "AND LOWER(COALESCE(twitch_user_id, '')) <> LOWER(%s)",
+                    conflict_cleanup_rows,
+                )
+            self._executemany(
+                c,
+                "INSERT INTO twitch_live_state ("
+                "twitch_user_id, streamer_login, is_live, last_seen_at, last_title, last_game, "
+                "last_viewer_count, last_discord_message_id, last_tracking_token, last_stream_id, "
+                "last_started_at, had_deadlock_in_session, active_session_id, last_deadlock_seen_at"
+                ") VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) "
+                "ON CONFLICT (twitch_user_id) DO UPDATE SET "
+                "streamer_login = EXCLUDED.streamer_login, "
+                "is_live = EXCLUDED.is_live, "
+                "last_seen_at = EXCLUDED.last_seen_at, "
+                "last_title = EXCLUDED.last_title, "
+                "last_game = EXCLUDED.last_game, "
+                "last_viewer_count = EXCLUDED.last_viewer_count, "
+                "last_discord_message_id = EXCLUDED.last_discord_message_id, "
+                "last_tracking_token = EXCLUDED.last_tracking_token, "
+                "last_stream_id = EXCLUDED.last_stream_id, "
+                "last_started_at = EXCLUDED.last_started_at, "
+                "had_deadlock_in_session = EXCLUDED.had_deadlock_in_session, "
+                "active_session_id = EXCLUDED.active_session_id, "
+                "last_deadlock_seen_at = EXCLUDED.last_deadlock_seen_at",
+                rows,
+            )
+
+        await self._run_storage_write_with_retry(
+            _write_live_state,
+            failure_message=f"Konnte Live-State-Updates nicht speichern ({len(rows)} Eintraege)",
+        )
 
     async def _auto_archive_inactive_streamers(self, *, days: int = 10) -> None:
         """
@@ -1955,8 +2078,8 @@ class TwitchMonitoringMixin(_EventSubMixin, _ExpSessionsMixin, _SessionsMixin, _
                 rows.append((now_utc, login, viewers, is_partner, game_name, stream_title, tags))
 
             if rows:
-                with storage.transaction() as c:
-                    self._executemany(
+                await self._run_storage_write_with_retry(
+                    lambda c: self._executemany(
                         c,
                         """
                         INSERT INTO twitch_stats_tracked (
@@ -1964,7 +2087,9 @@ class TwitchMonitoringMixin(_EventSubMixin, _ExpSessionsMixin, _SessionsMixin, _
                         ) VALUES (%s, %s, %s, %s, %s, %s, %s)
                         """,
                         rows,
-                    )
+                    ),
+                    failure_message="Konnte tracked-Stats nicht loggen",
+                )
         except Exception:
             log.exception("Konnte tracked-Stats nicht loggen")
 
@@ -1995,8 +2120,8 @@ class TwitchMonitoringMixin(_EventSubMixin, _ExpSessionsMixin, _SessionsMixin, _
                 rows.append((now_utc, login, viewers, is_partner, game_name, stream_title, tags))
 
             if rows:
-                with storage.transaction() as c:
-                    self._executemany(
+                await self._run_storage_write_with_retry(
+                    lambda c: self._executemany(
                         c,
                         """
                         INSERT INTO twitch_stats_category (
@@ -2004,7 +2129,9 @@ class TwitchMonitoringMixin(_EventSubMixin, _ExpSessionsMixin, _SessionsMixin, _
                         ) VALUES (%s, %s, %s, %s, %s, %s, %s)
                         """,
                         rows,
-                    )
+                    ),
+                    failure_message="Konnte category-Stats nicht loggen",
+                )
         except Exception:
             log.exception("Konnte category-Stats nicht loggen")
 
