@@ -1,6 +1,6 @@
 import contextlib
 import unittest
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 from bot.core.constants import TWITCH_LOG_EVERY_N_TICKS
 from bot.monitoring.monitoring import TwitchMonitoringMixin
@@ -23,6 +23,14 @@ class _TrackedStreamerConnection:
 
     def fetchall(self):
         return list(self._rows)
+
+
+class _WriteConnection:
+    def __init__(self) -> None:
+        self.executemany_calls: list[tuple[str, list[tuple]]] = []
+
+    def executemany(self, sql: str, params_seq) -> None:
+        self.executemany_calls.append((sql, list(params_seq)))
 
 
 class _ApiStub:
@@ -62,6 +70,11 @@ class _MonitoringHarness(TwitchMonitoringMixin):
         self.log_stats_calls += 1
 
     async def _run_partner_recruit(self, category_streams: list[dict]) -> None:
+        return None
+
+
+class _StorageRetryHarness(TwitchMonitoringMixin):
+    def _record_session_sample(self, login: str, stream: dict | None) -> None:
         return None
 
 
@@ -152,6 +165,83 @@ class MonitoringStatsLoggingIntervalTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(harness.log_stats_calls, 1)
         self.assertEqual(harness._tick_count, 3)
+
+    async def test_persist_live_state_retries_when_database_is_shutting_down(self) -> None:
+        harness = _MonitoringHarness()
+        conn = _WriteConnection()
+        rows = [
+            (
+                "789",
+                "gamma",
+                0,
+                "2026-03-15T15:39:01+00:00",
+                "Gamma Title",
+                "Deadlock",
+                8,
+                None,
+                None,
+                "stream-789",
+                "2026-03-15T12:04:59+00:00",
+                1,
+                None,
+                "2026-03-15T15:39:01+00:00",
+            )
+        ]
+        attempts = {"count": 0}
+
+        def _transaction():
+            attempts["count"] += 1
+            if attempts["count"] == 1:
+                raise RuntimeError("FATAL: das Datenbanksystem fährt herunter")
+            return contextlib.nullcontext(conn)
+
+        sleep_mock = AsyncMock()
+        with patch(
+            "bot.monitoring.monitoring.storage.transaction",
+            side_effect=_transaction,
+        ), patch("bot.monitoring.monitoring.asyncio.sleep", sleep_mock):
+            await harness._persist_live_state_rows(rows)
+
+        self.assertEqual(attempts["count"], 2)
+        sleep_mock.assert_awaited_once_with(0.5)
+        self.assertEqual(len(conn.executemany_calls), 2)
+        self.assertIn("INSERT INTO twitch_live_state", conn.executemany_calls[1][0])
+
+    async def test_log_stats_retries_tracked_write_when_database_is_shutting_down(self) -> None:
+        harness = _StorageRetryHarness()
+        conn = _WriteConnection()
+        attempts = {"count": 0}
+
+        def _transaction():
+            attempts["count"] += 1
+            if attempts["count"] == 1:
+                raise RuntimeError("FATAL: the database system is shutting down")
+            return contextlib.nullcontext(conn)
+
+        sleep_mock = AsyncMock()
+        with patch(
+            "bot.monitoring.monitoring.storage.transaction",
+            side_effect=_transaction,
+        ), patch("bot.monitoring.monitoring.asyncio.sleep", sleep_mock):
+            await harness._log_stats(
+                {
+                    "partner_one": {
+                        "user_login": "partner_one",
+                        "viewer_count": 42,
+                        "is_partner": True,
+                        "game_name": "Deadlock",
+                        "title": "Deadlock ranked",
+                        "tags": ["ranked"],
+                    }
+                },
+                [],
+            )
+
+        self.assertEqual(attempts["count"], 2)
+        sleep_mock.assert_awaited_once_with(0.5)
+        self.assertEqual(len(conn.executemany_calls), 1)
+        self.assertIn("INSERT INTO twitch_stats_tracked", conn.executemany_calls[0][0])
+        self.assertEqual(len(conn.executemany_calls[0][1]), 1)
 
 
 if __name__ == "__main__":
