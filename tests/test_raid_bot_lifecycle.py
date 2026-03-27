@@ -29,19 +29,12 @@ class _FakeTask:
 
 
 class RaidBotLifecycleTests(unittest.IsolatedAsyncioTestCase):
-    async def test_init_spawns_cleanup_task_through_helper(self) -> None:
-        spawned: list[str] = []
+    async def test_start_delegates_cleanup_task_creation_to_lifecycle(self) -> None:
         cleanup_task = _FakeTask()
-
-        def _spawn_bg_task(self, coro, name: str):
-            spawned.append(name)
-            coro.close()
-            return cleanup_task
 
         with (
             patch("bot.raid.bot.RaidAuthManager", autospec=True),
             patch("bot.raid.bot.RaidExecutor", autospec=True),
-            patch.object(RaidBot, "_spawn_bg_task", new=_spawn_bg_task),
         ):
             bot = RaidBot(
                 "client-id",
@@ -49,8 +42,12 @@ class RaidBotLifecycleTests(unittest.IsolatedAsyncioTestCase):
                 "https://raid.example/twitch/raid/callback",
                 SimpleNamespace(closed=False),
             )
+        self.assertIsNone(bot._cleanup_task)
 
-        self.assertEqual(spawned, ["raid.bot.periodic_cleanup"])
+        with patch.object(bot._lifecycle, "start", return_value=cleanup_task) as start_mock:
+            bot.start()
+
+        start_mock.assert_called_once_with()
         self.assertIs(bot._cleanup_task, cleanup_task)
 
     async def test_cleanup_cancels_managed_background_tasks(self) -> None:

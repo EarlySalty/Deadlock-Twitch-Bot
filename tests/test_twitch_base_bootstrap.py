@@ -113,6 +113,65 @@ class TwitchBaseBootstrapLifecycleTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("add_cb", captured_kwargs)
         self.assertNotIn("observability_snapshot_cb", captured_kwargs)
 
+    def test_wire_runtime_dependencies_discards_raid_bot_when_lifecycle_start_fails(self) -> None:
+        harness = _BootstrapHarness()
+        harness.bot = SimpleNamespace()
+
+        def _fake_load_secret_value(key: str, **_kwargs):
+            return {
+                "TWITCH_CLIENT_ID": "client-id",
+                "TWITCH_CLIENT_SECRET": "client-secret",
+                "TWITCH_BOT_CLIENT_ID": "client-id",
+                "TWITCH_BOT_CLIENT_SECRET": "bot-secret",
+                "TWITCH_DASHBOARD_TOKEN": "dashboard-token",
+                "TWITCH_PARTNER_TOKEN": "partner-token",
+                "TWITCH_INTERNAL_API_TOKEN": "internal-token",
+            }.get(key, "")
+
+        class _FakeInternalApiRunner:
+            def __init__(self, **_kwargs) -> None:
+                return None
+
+        class _FakeTwitchApi:
+            def __init__(self, *_args, **_kwargs) -> None:
+                return None
+
+            def get_http_session(self):
+                return SimpleNamespace(closed=False)
+
+        class _FailingRaidBot:
+            def __init__(self, *_args, **_kwargs) -> None:
+                self.partner_raid_score_service = None
+
+            def set_discord_bot(self, _bot) -> None:
+                return None
+
+            def set_cog(self, _cog) -> None:
+                return None
+
+            def start(self):
+                return None
+
+        bootstrap = TwitchRuntimeBootstrap(harness)
+
+        with (
+            patch.dict("os.environ", {}, clear=True),
+            patch("bot.runtime_bootstrap.load_secret_value", side_effect=_fake_load_secret_value),
+            patch("bot.runtime_bootstrap.load_bot_tokens", return_value=(None, None, None)),
+            patch("bot.runtime_bootstrap.storage_pg.prepare_runtime_storage"),
+            patch.object(TwitchRuntimeBootstrap, "_ensure_social_media_workers", lambda self: None),
+            patch.object(TwitchRuntimeBootstrap, "_register_reload_manager", lambda self: None),
+            patch("bot.runtime_bootstrap.InternalApiRunner", _FakeInternalApiRunner),
+            patch("bot.runtime_bootstrap.TwitchAPI", _FakeTwitchApi),
+            patch("bot.runtime_bootstrap.RaidBot", _FailingRaidBot),
+            patch("bot.runtime_bootstrap.log.exception") as exception_mock,
+        ):
+            bootstrap.configure_runtime()
+            bootstrap.wire_runtime_dependencies()
+
+        self.assertIsNone(harness._raid_bot)
+        exception_mock.assert_called_once()
+
     async def test_cog_load_starts_runtime_once(self) -> None:
         harness = _LifecycleHarness()
         harness._runtime_started = False

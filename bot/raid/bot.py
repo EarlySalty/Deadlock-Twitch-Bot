@@ -9,14 +9,12 @@ Verwaltet:
 """
 
 import asyncio
-import json
 import logging
 import os
-import secrets
 import time
+from collections.abc import Mapping
 from datetime import UTC, datetime
 from typing import Any
-from urllib.parse import urlencode
 
 import aiohttp
 import discord
@@ -24,10 +22,31 @@ import discord
 from ..core.constants import TWITCH_TARGET_GAME_NAME
 from ..discord_role_sync import normalize_discord_user_id, sync_streamer_role
 from .scope_profiles import BASE_STREAMER_SCOPES
+from .arrival_confirmation import ArrivalConfirmationService
+from .raid_arrival_runtime import RaidArrivalRuntime, RaidArrivalRuntimeDependencies
+from .candidate_selection import CandidateSelectionService
+from .chat_targets import lookup_outbound_chat_suppression, make_chat_target
+from .external_recruitment import ExternalRecruitmentService
+from .followers import FollowerAuthContext, FollowerTotalEnricher
+from .lifecycle import RaidBotLifecycle
+from .observability import RaidObservabilityEvent, RaidObservabilityService
+from .partner_resolution import classify_partner_raid_arrival
+from .partner_raid_delivery import PartnerRaidDeliveryConfig, PartnerRaidDeliveryPlanner, PartnerRaidDeliveryRequest
+from .pending_raids import PendingRaid, PendingRaidStore
+from .raid_blacklist import RaidBlacklistConfig, RaidBlacklistDependencies, RaidBlacklistService
+from .raid_pipeline import RaidPipelineDependencies, RaidPipelineRequest, RaidPipelineService, is_retryable_raid_error
+from .raid_tracking_runtime import (
+    RaidTrackingRuntimeDependencies,
+    RaidTrackingRuntimeService,
+    RaidTrackingRuntimeState,
+)
+from .recruitment_messaging import RecruitmentMessagingDependencies, RecruitmentMessagingService
+from .signal_correlation import RaidSignalCorrelationService
 from ..storage import (
     backfill_tracked_stats_from_category,
     insert_observability_event,
     load_active_partner,
+    load_offline_auto_raid_eligibility,
     load_streamer_identity,
     promote_streamer_to_partner,
     readonly_connection,
@@ -119,21 +138,25 @@ class RaidBot:
 
         # Pending Raids werden bis zur Ziel-Bestaetigung per channel.raid und/oder
         # channel.chat.notification gehalten.
-        self._pending_raids: dict[tuple[str, str], dict[str, Any] | tuple[Any, ...]] = {}
+        self._pending_raids: dict[tuple[str, str], PendingRaid] = {}
         self._recent_raid_arrivals: dict[tuple[str, str], dict[str, Any]] = {}
         self._orphan_chat_raid_notifications: dict[tuple[str, str], dict[str, Any]] = {}
         # Unterdrückt den nächsten Offline-Auto-Raid, wenn kurz zuvor ein manueller/externer Raid erkannt wurde.
         self._manual_raid_suppression: dict[str, float] = {}
         self._user_scope_fallback_warned: set[tuple[str, str]] = set()
-        self._managed_bg_tasks: set[asyncio.Task[Any]] = set()
-
-        # Cleanup-Task starten
-        self._cleanup_task = self._spawn_bg_task(
-            self._periodic_cleanup(),
-            "raid.bot.periodic_cleanup",
+        self._lifecycle = RaidBotLifecycle(
+            self._periodic_cleanup,
+            logger=log,
         )
+        self._managed_bg_tasks: set[asyncio.Task[Any]] = self._lifecycle._managed_tasks
+        self._cleanup_task: asyncio.Task[Any] | None = None
 
     def _managed_bg_task_registry(self) -> set[asyncio.Task[Any]]:
+        lifecycle = getattr(self, "_lifecycle", None)
+        lifecycle_tasks = getattr(lifecycle, "_managed_tasks", None)
+        if isinstance(lifecycle_tasks, set):
+            self._managed_bg_tasks = lifecycle_tasks
+            return lifecycle_tasks
         tasks = getattr(self, "_managed_bg_tasks", None)
         if not isinstance(tasks, set):
             tasks = set()
@@ -155,6 +178,11 @@ class RaidBot:
         coro: Any,
         name: str,
     ) -> asyncio.Task[Any] | None:
+        lifecycle = getattr(self, "_lifecycle", None)
+        if lifecycle is not None:
+            task = lifecycle.spawn_background_task(coro, name=name)
+            self._cleanup_task = lifecycle.cleanup_task
+            return task
         try:
             task = asyncio.create_task(coro, name=name)
         except RuntimeError as exc:
@@ -168,6 +196,12 @@ class RaidBot:
         return self._track_bg_task(task)
 
     async def _cancel_managed_bg_tasks(self) -> None:
+        lifecycle = getattr(self, "_lifecycle", None)
+        if lifecycle is not None:
+            await lifecycle.stop()
+            self._cleanup_task = lifecycle.cleanup_task
+            self._managed_bg_tasks = lifecycle._managed_tasks
+            return
         registry = list(self._managed_bg_task_registry())
         if not registry:
             return
@@ -222,6 +256,19 @@ class RaidBot:
     async def cleanup(self):
         """Stoppt Hintergrund-Tasks."""
         await self._cancel_managed_bg_tasks()
+
+    def start(self) -> asyncio.Task[Any] | None:
+        """Start explicit RaidBot background work after construction."""
+        lifecycle = getattr(self, "_lifecycle", None)
+        if lifecycle is None:
+            self._cleanup_task = self._spawn_bg_task(
+                self._periodic_cleanup(),
+                "raid.bot.periodic_cleanup",
+            )
+            return self._cleanup_task
+        self._cleanup_task = lifecycle.start()
+        self._managed_bg_tasks = lifecycle._managed_tasks
+        return self._cleanup_task
 
     async def _periodic_cleanup(self):
         """
@@ -429,9 +476,11 @@ class RaidBot:
         return ",".join(sorted({str(signal).strip() for signal in signals if str(signal).strip()}))
 
     def _next_raid_observability_flow_id(self, *, prefix: str) -> str:
-        sequence = int(getattr(self, "_raid_observability_sequence", 0) or 0) + 1
-        self._raid_observability_sequence = sequence
-        return f"{str(prefix or 'raid').strip().lower()}-{int(time.time() * 1000)}-{sequence}"
+        service = self._make_raid_observability_service()
+        flow_id = service.next_flow_id(prefix=prefix)
+        self._raid_observability_sequence = service.sequence
+        self._raid_observability_counter_store = service.counter_store
+        return flow_id
 
     def _raid_observability_counters(self) -> dict[str, int]:
         counters = getattr(self, "_raid_observability_counter_store", None)
@@ -440,48 +489,581 @@ class RaidBot:
             self._raid_observability_counter_store = counters
         return counters
 
+    def _make_raid_observability_service(self) -> RaidObservabilityService:
+        def _sink(event: RaidObservabilityEvent) -> None:
+            storage_payload = event.as_storage_payload()
+            insert_observability_event(
+                flow_type=str(storage_payload.get("flow_type") or "raid"),
+                flow_id=str(storage_payload.get("flow_id") or ""),
+                entity_login=str(storage_payload.get("entity_login") or ""),
+                entity_id=str(storage_payload.get("entity_id") or ""),
+                step=str(storage_payload.get("step") or "event"),
+                decision=str(storage_payload.get("decision") or "unknown"),
+                details=event.as_log_fields(),
+            )
+
+        service = RaidObservabilityService(
+            event_sink=_sink,
+            counter_store=self._raid_observability_counters(),
+        )
+        service.sequence = int(getattr(self, "_raid_observability_sequence", 0) or 0)
+        return service
+
+    @staticmethod
+    def _partner_raid_delivery_planner() -> PartnerRaidDeliveryPlanner:
+        return PartnerRaidDeliveryPlanner(
+            PartnerRaidDeliveryConfig(
+                delay_seconds=5.0,
+            )
+        )
+
+    def _external_recruitment_service(self) -> ExternalRecruitmentService:
+        return ExternalRecruitmentService(
+            persist_confirmed_raid=self._record_confirmed_external_recruitment_raid,
+            count_confirmed_raids=self._get_confirmed_external_recruitment_raid_count,
+            schedule_pending_blacklist=self._schedule_external_recruitment_blacklist_pending,
+            delete_pending_blacklist=self._delete_external_recruitment_blacklist_pending,
+            is_target_partner=self._is_target_currently_partner,
+        )
+
+    def _arrival_confirmation_service(self) -> ArrivalConfirmationService:
+        return ArrivalConfirmationService(
+            partner_lookup=lambda **lookup_kwargs: self._lookup_partner_target_channel(
+                broadcaster_id=str(lookup_kwargs.get("twitch_user_id") or ""),
+                broadcaster_login=str(lookup_kwargs.get("twitch_login") or ""),
+            ),
+            known_streamer_lookup=lambda **lookup_kwargs: self._resolve_known_streamer_identity(
+                broadcaster_login=str(lookup_kwargs.get("broadcaster_login") or ""),
+                broadcaster_id=str(lookup_kwargs.get("broadcaster_id") or "") or None,
+            ),
+        )
+
+    def _candidate_selection_service(self) -> CandidateSelectionService:
+        return CandidateSelectionService(
+            load_partner_raid_score_map=load_partner_raid_score_map,
+            refresh_partner_raid_score_async=refresh_partner_raid_score_async,
+            recent_raid_targets_loader=self._get_recent_raid_targets,
+            attach_followers_totals=self._attach_followers_totals,
+            readonly_connection_factory=readonly_connection,
+            logger=log,
+            recent_raid_cooldown_days=RAID_TARGET_COOLDOWN_DAYS,
+        )
+
+    def _raid_blacklist_service(self) -> RaidBlacklistService:
+        def _load_blacklist_rows():
+            with readonly_connection() as conn:
+                return conn.execute(
+                    "SELECT target_id, lower(target_login) AS target_login FROM twitch_raid_blacklist"
+                ).fetchall()
+
+        def _store_blacklist_entry(*, target_id: str | None, target_login: str, reason: str) -> None:
+            with transaction() as conn:
+                if target_id:
+                    conn.execute(
+                        """
+                        DELETE FROM twitch_raid_blacklist
+                        WHERE target_id = %s
+                          AND lower(target_login) <> lower(%s)
+                        """,
+                        (target_id, target_login),
+                    )
+                conn.execute(
+                    """
+                    INSERT INTO twitch_raid_blacklist (target_id, target_login, reason)
+                    VALUES (%s, %s, %s)
+                    ON CONFLICT (target_login) DO UPDATE SET
+                        target_id = COALESCE(EXCLUDED.target_id, twitch_raid_blacklist.target_id),
+                        reason = EXCLUDED.reason,
+                        added_at = CURRENT_TIMESTAMP
+                    """,
+                    (target_id, target_login, reason),
+                )
+
+        def _is_blacklisted(*, target_id: str, target_login: str) -> bool:
+            with readonly_connection() as conn:
+                row = conn.execute(
+                    """
+                    SELECT 1 FROM twitch_raid_blacklist
+                    WHERE (target_id IS NOT NULL AND target_id = %s)
+                       OR lower(target_login) = lower(%s)
+                    """,
+                    (target_id, target_login),
+                ).fetchone()
+            return bool(row)
+
+        def _load_due_external_recruitment_blacklist_pending():
+            with readonly_connection() as conn:
+                return conn.execute(
+                    """
+                    SELECT target_id, target_login, confirmed_raid_count, threshold_reached_at
+                    FROM twitch_external_recruitment_blacklist_pending
+                    WHERE blacklist_after <= NOW()
+                    ORDER BY blacklist_after ASC
+                    LIMIT 50
+                    """
+                ).fetchall()
+
+        def _schedule_external_recruitment_blacklist_pending(
+            *,
+            target_id: str,
+            target_login: str,
+            confirmed_raid_count: int,
+            raid_flow_id: str | None,
+            grace_seconds: int,
+        ) -> None:
+            with transaction() as conn:
+                conn.execute(
+                    """
+                    INSERT INTO twitch_external_recruitment_blacklist_pending (
+                        target_id,
+                        target_login,
+                        confirmed_raid_count,
+                        threshold_reached_at,
+                        blacklist_after,
+                        last_raid_flow_id,
+                        updated_at
+                    )
+                    VALUES (
+                        %s,
+                        %s,
+                        %s,
+                        CURRENT_TIMESTAMP,
+                        CURRENT_TIMESTAMP + (%s * INTERVAL '1 second'),
+                        %s,
+                        CURRENT_TIMESTAMP
+                    )
+                    ON CONFLICT (target_id) DO UPDATE SET
+                        target_login = EXCLUDED.target_login,
+                        confirmed_raid_count = GREATEST(
+                            twitch_external_recruitment_blacklist_pending.confirmed_raid_count,
+                            EXCLUDED.confirmed_raid_count
+                        ),
+                        last_raid_flow_id = EXCLUDED.last_raid_flow_id,
+                        updated_at = CURRENT_TIMESTAMP
+                    """,
+                    (
+                        target_id,
+                        target_login,
+                        int(confirmed_raid_count),
+                        int(grace_seconds),
+                        str(raid_flow_id or "").strip() or None,
+                    ),
+                )
+
+        def _delete_external_recruitment_blacklist_pending(target_id: str) -> None:
+            with transaction() as conn:
+                conn.execute(
+                    """
+                    DELETE FROM twitch_external_recruitment_blacklist_pending
+                    WHERE target_id = %s
+                    """,
+                    (target_id,),
+                )
+
+        def _load_due_external_target_ban_checks():
+            with readonly_connection() as conn:
+                return conn.execute(
+                    """
+                    SELECT target_id, target_login, source
+                    FROM twitch_external_bot_ban_check_pending
+                    WHERE run_after <= NOW()
+                    ORDER BY run_after ASC
+                    LIMIT 25
+                    """
+                ).fetchall()
+
+        def _schedule_external_target_ban_check(
+            *,
+            target_id: str | None,
+            target_login: str,
+            source: str,
+            delay_seconds: int,
+        ) -> None:
+            with transaction() as conn:
+                conn.execute(
+                    """
+                    INSERT INTO twitch_external_bot_ban_check_pending (
+                        target_id,
+                        target_login,
+                        source,
+                        run_after,
+                        updated_at
+                    )
+                    VALUES (
+                        %s,
+                        %s,
+                        %s,
+                        CURRENT_TIMESTAMP + (%s * INTERVAL '1 second'),
+                        CURRENT_TIMESTAMP
+                    )
+                    ON CONFLICT (target_id) DO UPDATE SET
+                        target_login = EXCLUDED.target_login,
+                        source = EXCLUDED.source,
+                        run_after = EXCLUDED.run_after,
+                        updated_at = CURRENT_TIMESTAMP
+                    """,
+                    (target_id, target_login, source, int(delay_seconds)),
+                )
+
+        def _delete_external_target_ban_check_pending(target_id: str) -> None:
+            with transaction() as conn:
+                conn.execute(
+                    """
+                    DELETE FROM twitch_external_bot_ban_check_pending
+                    WHERE target_id = %s
+                    """,
+                    (target_id,),
+                )
+
+        def _reschedule_external_target_ban_check_pending(target_id: str, delay_seconds: int) -> None:
+            with transaction() as conn:
+                conn.execute(
+                    """
+                    UPDATE twitch_external_bot_ban_check_pending
+                    SET run_after = CURRENT_TIMESTAMP + (%s * INTERVAL '1 second'),
+                        updated_at = CURRENT_TIMESTAMP
+                    WHERE target_id = %s
+                    """,
+                    (int(max(60, delay_seconds)), target_id),
+                )
+
+        async def _join_chat_channel(chat_bot, channel_login: str, channel_id: str | None) -> bool:
+            return bool(await chat_bot.join(channel_login, channel_id=channel_id))
+
+        async def _part_chat_channels(chat_bot, channels: list[str]) -> None:
+            part_channels = getattr(chat_bot, "part_channels", None)
+            if callable(part_channels):
+                await part_channels(channels)
+
+        return RaidBlacklistService(
+            RaidBlacklistDependencies(
+                load_blacklist_rows=_load_blacklist_rows,
+                is_blacklisted=_is_blacklisted,
+                store_blacklist_entry=_store_blacklist_entry,
+                load_due_external_recruitment_blacklist_pending=_load_due_external_recruitment_blacklist_pending,
+                schedule_external_recruitment_blacklist_pending=_schedule_external_recruitment_blacklist_pending,
+                delete_external_recruitment_blacklist_pending=_delete_external_recruitment_blacklist_pending,
+                is_target_partner=self._is_target_currently_partner,
+                load_due_external_target_ban_checks=_load_due_external_target_ban_checks,
+                schedule_external_target_ban_check=_schedule_external_target_ban_check,
+                delete_external_target_ban_check_pending=_delete_external_target_ban_check_pending,
+                reschedule_external_target_ban_check_pending=_reschedule_external_target_ban_check_pending,
+                get_chat_bot=lambda: self.chat_bot,
+                join_chat_channel=_join_chat_channel,
+                part_chat_channels=_part_chat_channels,
+            ),
+            config=RaidBlacklistConfig(
+                external_recruitment_raid_limit=_EXTERNAL_RECRUITMENT_RAID_LIMIT,
+                external_recruitment_blacklist_grace_seconds=int(
+                    _EXTERNAL_RECRUITMENT_BLACKLIST_GRACE_SECONDS
+                ),
+                external_target_ban_check_delay_seconds=int(
+                    _EXTERNAL_BAN_CHECK_DELAY_SECONDS
+                ),
+            ),
+        )
+
+    def _raid_pipeline_service(self) -> RaidPipelineService:
+        def _log_event(**payload: object) -> None:
+            level = payload.get("level", logging.INFO)
+            if isinstance(level, str):
+                level = getattr(logging, level.upper(), logging.INFO)
+            self._log_raid_observability_event(
+                raid_flow_id=str(payload.get("flow_id") or ""),
+                step=str(payload.get("step") or "event"),
+                decision=str(payload.get("decision") or "unknown"),
+                level=level,
+                from_broadcaster_login=payload.get("from_broadcaster_login"),
+                from_broadcaster_id=payload.get("from_broadcaster_id"),
+                to_broadcaster_login=payload.get("to_broadcaster_login"),
+                to_broadcaster_id=payload.get("to_broadcaster_id"),
+                details=payload.get("details"),
+            )
+
+        return RaidPipelineService(
+            RaidPipelineDependencies(
+                load_raid_blacklist=self._load_raid_blacklist,
+                add_to_blacklist=self._add_to_blacklist,
+                select_partner_candidate_by_score=self._select_partner_candidate_by_score,
+                select_fairest_candidate=self._select_fairest_candidate,
+                ensure_raid_arrival_subscription_ready=lambda target_id, target_login, raid_flow_id: self._ensure_raid_arrival_subscription_ready(
+                    to_broadcaster_id=target_id,
+                    to_broadcaster_login=target_login,
+                    raid_flow_id=raid_flow_id,
+                ),
+                start_raid=self.raid_executor.start_raid,
+                register_pending_raid=self._register_pending_raid,
+                mark_manual_raid_started=lambda broadcaster_id, ttl_seconds: self.mark_manual_raid_started(
+                    broadcaster_id=broadcaster_id,
+                    ttl_seconds=ttl_seconds,
+                ),
+                logger=log,
+                next_raid_observability_flow_id=lambda prefix: self._next_raid_observability_flow_id(
+                    prefix=prefix
+                ),
+                increment_raid_observability_counter=self._increment_raid_observability_counter,
+                log_raid_observability_event=_log_event,
+                to_thread=asyncio.to_thread,
+            )
+        )
+
+    def _raid_tracking_runtime_service(self) -> RaidTrackingRuntimeService:
+        self._ensure_runtime_raid_tracking_state()
+
+        def _eventsub_has_sub(cog, sub_type: str, broadcaster_user_id: str) -> bool:
+            checker = getattr(cog, "_eventsub_has_sub", None)
+            return bool(checker(sub_type, broadcaster_user_id)) if callable(checker) else False
+
+        async def _ensure_raid_target_dynamic_ready(
+            cog,
+            broadcaster_user_id: str,
+            broadcaster_login: str,
+            raid_flow_id: str | None,
+        ):
+            ensure_ready = getattr(cog, "ensure_raid_target_dynamic_ready", None)
+            if not callable(ensure_ready):
+                return False, None
+            return await ensure_ready(
+                broadcaster_user_id,
+                broadcaster_login,
+                raid_flow_id=raid_flow_id,
+            )
+
+        async def _subscribe_raid_target_dynamic(
+            cog,
+            broadcaster_user_id: str,
+            broadcaster_login: str,
+        ) -> bool:
+            subscribe = getattr(cog, "subscribe_raid_target_dynamic", None)
+            if not callable(subscribe):
+                return False
+            return bool(await subscribe(broadcaster_user_id, broadcaster_login))
+
+        return RaidTrackingRuntimeService(
+            RaidTrackingRuntimeDependencies(
+                state=RaidTrackingRuntimeState(
+                    pending_store=self._pending_raid_store(),
+                    recent_raid_arrivals=self._recent_raid_arrivals,
+                    orphan_chat_raid_notifications=self._orphan_chat_raid_notifications,
+                    readiness_states=self._raid_readiness_by_flow_id,
+                ),
+                snapshot_chat_notification_subscription=self._snapshot_chat_notification_subscription,
+                get_cog=lambda: self._cog,
+                eventsub_has_sub=_eventsub_has_sub,
+                ensure_raid_target_dynamic_ready=_ensure_raid_target_dynamic_ready,
+                subscribe_raid_target_dynamic=_subscribe_raid_target_dynamic,
+                orphan_chat_raid_notification_handler=lambda payload: self.on_chat_raid_notification(
+                    to_broadcaster_id=str(payload.get("to_broadcaster_id") or ""),
+                    to_broadcaster_login=str(payload.get("to_broadcaster_login") or ""),
+                    from_broadcaster_login=str(payload.get("from_broadcaster_login") or ""),
+                    viewer_count=int(payload.get("viewer_count") or 0),
+                    from_broadcaster_id=str(payload.get("from_broadcaster_id") or "") or None,
+                    message_id=str(payload.get("message_id") or "") or None,
+                    event_timestamp=str(payload.get("event_timestamp") or "") or None,
+                ),
+                next_raid_observability_flow_id=lambda prefix: self._next_raid_observability_flow_id(
+                    prefix=prefix
+                ),
+                increment_raid_observability_counter=self._increment_raid_observability_counter,
+                log_raid_observability_event=self._log_raid_observability_event,
+            )
+        )
+
+    def _raid_arrival_runtime(self) -> RaidArrivalRuntime:
+        external_recruitment = self._external_recruitment_service()
+        arrival_confirmation = self._arrival_confirmation_service()
+
+        def _confirm_pending_raid_arrival_with_overrides(
+            *,
+            pending_raid: PendingRaid,
+            signal_type: str,
+            to_broadcaster_id: str,
+            to_broadcaster_login: str,
+            from_broadcaster_login: str,
+            viewer_count: int,
+            from_broadcaster_id: str | None = None,
+        ):
+            classification, source_resolution = self._classify_partner_raid_arrival(
+                from_broadcaster_login=from_broadcaster_login,
+                from_broadcaster_id=from_broadcaster_id,
+                to_broadcaster_id=to_broadcaster_id,
+                to_broadcaster_login=to_broadcaster_login,
+                expected_partner=bool(pending_raid.is_partner_raid),
+            )
+            return arrival_confirmation.confirm_pending_raid_arrival(
+                pending_raid=pending_raid,
+                signal_type=signal_type,
+                to_broadcaster_id=to_broadcaster_id,
+                to_broadcaster_login=to_broadcaster_login,
+                from_broadcaster_login=from_broadcaster_login,
+                from_broadcaster_id=from_broadcaster_id,
+                viewer_count=viewer_count,
+                classification_override=classification,
+                source_resolution_override=source_resolution,
+                target_is_partner_override=classification is not None,
+            )
+
+        return RaidArrivalRuntime(
+            RaidArrivalRuntimeDependencies(
+                arrival_confirmation_service=type(
+                    "_ArrivalConfirmationProxy",
+                    (),
+                    {"confirm_pending_raid_arrival": staticmethod(_confirm_pending_raid_arrival_with_overrides)},
+                )(),
+                signal_correlation_service=self._signal_correlation_service(),
+                get_pending_raid=lambda to_broadcaster_id, from_broadcaster_login: self._get_pending_raid(
+                    to_broadcaster_id=to_broadcaster_id,
+                    from_broadcaster_login=from_broadcaster_login,
+                ),
+                store_pending_raid=self._store_pending_raid,
+                pop_pending_raid=lambda to_broadcaster_id, from_broadcaster_login: self._pop_pending_raid(
+                    to_broadcaster_id=to_broadcaster_id,
+                    from_broadcaster_login=from_broadcaster_login,
+                ),
+                record_pending_signal_observation=lambda pending, signal_type, status, reason, detail: self._record_pending_signal_observation(
+                    pending,
+                    signal_type=signal_type,
+                    status=status,
+                    reason=reason,
+                    detail=detail,
+                ),
+                store_orphan_chat_raid_notification=self._store_orphan_chat_raid_notification,
+                lookup_recent_raid_arrival=lambda to_broadcaster_id, from_broadcaster_login: self._lookup_recent_raid_arrival(
+                    to_broadcaster_id=to_broadcaster_id,
+                    from_broadcaster_login=from_broadcaster_login,
+                ),
+                remember_recent_raid_arrival=self._remember_recent_raid_arrival,
+                update_partner_raid_arrival=lambda arrival_tracking_id, confirmation_signals, unraid_seen: self._update_partner_raid_arrival(
+                    arrival_tracking_id=arrival_tracking_id,
+                    confirmation_signals=confirmation_signals,
+                    unraid_seen=unraid_seen,
+                ),
+                store_partner_raid_arrival=self._store_partner_raid_arrival,
+                load_recent_raid_history_reference=self._load_recent_raid_history_reference,
+                process_independent_partner_raid_arrival=self._process_independent_partner_raid_arrival,
+                cancel_pending_raids_for_source_unraid=self._cancel_pending_raids_for_source_unraid,
+                resolve_streamer_id_by_login=self._resolve_streamer_id_by_login,
+                mark_manual_raid_started=lambda broadcaster_id, ttl_seconds: self.mark_manual_raid_started(
+                    broadcaster_id,
+                    ttl_seconds=ttl_seconds,
+                ),
+                lookup_silent_raid_enabled=self._lookup_silent_raid_enabled,
+                refresh_partner_score_cache_if_available=lambda twitch_user_id, reason: self._refresh_partner_score_cache_if_available(
+                    twitch_user_id,
+                    reason=reason,
+                ),
+                track_confirmed_partner_raid=track_confirmed_partner_raid,
+                delete_external_recruitment_blacklist_pending=self._delete_external_recruitment_blacklist_pending,
+                record_confirmed_external_recruitment_raid=lambda **kwargs: external_recruitment.record_confirmed_raid(
+                    **kwargs
+                ).persisted_count,
+                maybe_schedule_external_recruitment_blacklist_pending=external_recruitment.maybe_schedule_blacklist,
+                send_partner_raid_message=self._send_partner_raid_message,
+                send_recruitment_message=self._send_recruitment_message_now,
+                increment_raid_observability_counter=self._increment_raid_observability_counter,
+                log_raid_observability_event=self._log_raid_observability_event,
+                next_raid_observability_flow_id=lambda prefix: self._next_raid_observability_flow_id(
+                    prefix=prefix
+                ),
+            )
+        )
+
+    def _recruitment_messaging_service(self) -> RecruitmentMessagingService:
+        def _create_twitch_api(session):
+            from ..api.twitch_api import TwitchAPI
+
+            return TwitchAPI(
+                self.auth_manager.client_id,
+                self.auth_manager.client_secret,
+                session=session,
+            )
+
+        def _count_recent_raids(to_broadcaster_id: str) -> int:
+            with readonly_connection() as conn:
+                row = conn.execute(
+                    """
+                    SELECT COUNT(*) FROM twitch_raid_history
+                    WHERE to_broadcaster_id = %s
+                      AND COALESCE(success, FALSE) IS TRUE
+                      AND executed_at > NOW() - INTERVAL '1 day'
+                    """,
+                    (to_broadcaster_id,),
+                ).fetchone()
+            return int(row[0]) if row and row[0] is not None else 0
+
+        def _load_deadlock_stats(to_broadcaster_login: str):
+            with readonly_connection() as conn:
+                return conn.execute(
+                    """
+                    SELECT
+                        ROUND(AVG(viewer_count)) as avg_viewers,
+                        MAX(viewer_count) as peak_viewers
+                    FROM twitch_stats_category
+                    WHERE streamer = %s
+                      AND viewer_count > 0
+                    """,
+                    (to_broadcaster_login,),
+                ).fetchone()
+
+        return RecruitmentMessagingService(
+            RecruitmentMessagingDependencies(
+                create_twitch_api=_create_twitch_api,
+                resolve_bot_oauth_context=lambda _session: self._resolve_bot_oauth_context(),
+                resolve_valid_token=lambda twitch_user_id, session: self.auth_manager.get_valid_token(
+                    twitch_user_id,
+                    session,
+                ),
+                get_followers_total_result=lambda api, twitch_user_id, user_token: self._get_followers_total_result_with_legacy_fallback(
+                    api,
+                    twitch_user_id,
+                    user_token=user_token,
+                ),
+                build_followers_runtime_state=self._build_analytics_followers_runtime_state,
+                increment_counter=self._increment_raid_observability_counter,
+                log_followers_decision=self._log_analytics_followers_decision,
+                next_flow_id=lambda prefix: self._next_raid_observability_flow_id(prefix=prefix),
+                warn_user_scope_fallback_once=self._warn_user_scope_fallback_once,
+                clear_user_scope_fallback_warning=self._clear_user_scope_fallback_warning,
+                get_chat_bot=lambda: self.chat_bot,
+                fetch_users=lambda chat_bot, logins: chat_bot.fetch_users(logins=logins),
+                lookup_outbound_chat_suppression=lookup_outbound_chat_suppression,
+                join_chat_channel=lambda chat_bot, channel_login, channel_id: chat_bot.join(
+                    channel_login,
+                    channel_id=channel_id,
+                ),
+                follow_channel=lambda chat_bot, target_id: chat_bot.follow_channel(target_id),
+                send_chat_message=lambda chat_bot, channel, message, source: chat_bot._send_chat_message(
+                    channel,
+                    message,
+                    source=source,
+                )
+                if hasattr(chat_bot, "_send_chat_message")
+                else False,
+                count_recent_raids=_count_recent_raids,
+                count_confirmed_external_recruitment_raids=self._get_confirmed_external_recruitment_raid_count,
+                schedule_external_target_ban_check=self._schedule_external_target_ban_check,
+                load_deadlock_stats=_load_deadlock_stats,
+                sleep=asyncio.sleep,
+            )
+        )
+
+    @staticmethod
+    def _signal_correlation_service() -> RaidSignalCorrelationService:
+        return RaidSignalCorrelationService()
+
     def _increment_raid_observability_counter(self, name: str, amount: int = 1) -> int:
-        counter_name = str(name or "").strip()
-        if not counter_name:
-            return 0
-        counters = self._raid_observability_counters()
-        counters[counter_name] = int(counters.get(counter_name, 0) or 0) + int(amount)
-        return counters[counter_name]
+        service = self._make_raid_observability_service()
+        value = service.increment_counter(name, amount)
+        self._raid_observability_sequence = service.sequence
+        self._raid_observability_counter_store = service.counter_store
+        return value
 
     @staticmethod
     def _raid_observability_value(value: object, *, limit: int = 240) -> str:
-        def _convert(obj: object) -> object:
-            if obj is None:
-                return None
-            if isinstance(obj, datetime):
-                return obj.isoformat()
-            if isinstance(obj, set):
-                return sorted(str(item) for item in obj)
-            if isinstance(obj, (list, tuple)):
-                return [_convert(item) for item in obj]
-            if isinstance(obj, dict):
-                return {str(key): _convert(val) for key, val in obj.items()}
-            if isinstance(obj, (str, int, float, bool)):
-                return obj
-            return str(obj)
-
-        normalized = _convert(value)
-        if isinstance(normalized, str):
-            text = normalized.replace("\r", " ").replace("\n", " ").strip()
-        else:
-            text = json.dumps(normalized, sort_keys=True, ensure_ascii=True, separators=(",", ":"))
-        if len(text) > limit:
-            return f"{text[:limit]}..."
-        return text
+        return RaidObservabilityService.normalize_value(value, limit=limit)
 
     def _format_raid_observability_fields(self, **fields: object) -> str:
-        parts = []
-        for key in sorted(fields):
-            value = fields[key]
-            if value is None:
-                continue
-            parts.append(f"{str(key).strip()}={self._raid_observability_value(value)}")
-        return " ".join(parts)
+        return self._make_raid_observability_service().format_fields(**fields)
 
     def _log_raid_observability_event(
         self,
@@ -496,27 +1078,23 @@ class RaidBot:
         to_broadcaster_id: str | None = None,
         details: dict[str, object] | None = None,
     ) -> None:
-        payload = {
-            "raid_flow_id": str(raid_flow_id or "").strip() or None,
-            "step": str(step or "").strip() or None,
-            "decision": str(decision or "").strip() or None,
-            "from_broadcaster_login": self._normalize_broadcaster_login(from_broadcaster_login),
-            "from_broadcaster_id": str(from_broadcaster_id or "").strip() or None,
-            "to_broadcaster_login": self._normalize_broadcaster_login(to_broadcaster_login),
-            "to_broadcaster_id": str(to_broadcaster_id or "").strip() or None,
-            "details": details or {},
-        }
-        self._last_raid_observability_event = payload
-        log.log(level, "raid_flow %s", self._format_raid_observability_fields(**payload))
-        insert_observability_event(
+        service = self._make_raid_observability_service()
+        event = service.emit_event(
             flow_type="raid",
-            flow_id=str(payload.get("raid_flow_id") or ""),
-            entity_login=str(payload.get("to_broadcaster_login") or payload.get("from_broadcaster_login") or ""),
-            entity_id=str(payload.get("to_broadcaster_id") or payload.get("from_broadcaster_id") or ""),
-            step=str(payload.get("step") or "event"),
-            decision=str(payload.get("decision") or "unknown"),
-            details=payload,
+            flow_id=str(raid_flow_id or "").strip(),
+            step=step,
+            decision=decision,
+            from_broadcaster_login=from_broadcaster_login,
+            from_broadcaster_id=from_broadcaster_id,
+            to_broadcaster_login=to_broadcaster_login,
+            to_broadcaster_id=to_broadcaster_id,
+            details=details or {},
         )
+        payload = event.as_log_fields()
+        self._last_raid_observability_event = payload
+        self._raid_observability_sequence = service.sequence
+        self._raid_observability_counter_store = service.counter_store
+        log.log(level, "raid_flow %s", service.format_fields(**payload))
 
     def get_observability_snapshot(self) -> dict[str, Any]:
         self._ensure_runtime_raid_tracking_state()
@@ -606,30 +1184,6 @@ class RaidBot:
         if not isinstance(readiness_by_flow, dict):
             self._raid_readiness_by_flow_id = {}
 
-    def _remember_raid_readiness_state(
-        self,
-        *,
-        flow_id: str,
-        ready: bool,
-        detail: str | None,
-        locally_tracked: bool,
-    ) -> None:
-        self._ensure_runtime_raid_tracking_state()
-        self._raid_readiness_by_flow_id[str(flow_id or "").strip()] = {
-            "ready": bool(ready),
-            "detail": str(detail or "").strip() or None,
-            "local_tracking": bool(locally_tracked),
-            "checked_ts": time.time(),
-        }
-        self._cleanup_stale_raid_readiness_states()
-
-    def _pop_raid_readiness_state(self, flow_id: str | None) -> dict[str, Any]:
-        self._ensure_runtime_raid_tracking_state()
-        self._cleanup_stale_raid_readiness_states()
-        return dict(
-            self._raid_readiness_by_flow_id.pop(str(flow_id or "").strip(), None) or {}
-        )
-
     def _cleanup_stale_raid_readiness_states(self) -> None:
         self._ensure_runtime_raid_tracking_state()
         now = time.time()
@@ -670,48 +1224,17 @@ class RaidBot:
             self._normalize_broadcaster_login(from_broadcaster_login),
         )
 
-    def _iterate_pending_raid_entries(
-        self,
-    ) -> list[tuple[object, tuple[str, str], dict[str, Any]]]:
+    def _pending_raid_store(self) -> PendingRaidStore:
         self._ensure_runtime_raid_tracking_state()
-        entries: list[tuple[object, tuple[str, str], dict[str, Any]]] = []
-        for raw_key, pending in list(self._pending_raids.items()):
-            if isinstance(raw_key, tuple) and len(raw_key) >= 2:
-                target_id = str(raw_key[0] or "").strip()
-                keyed_from_login = self._normalize_broadcaster_login(raw_key[1])
-            else:
-                target_id = str(raw_key or "").strip()
-                keyed_from_login = ""
-            record = self._coerce_pending_raid_record(
-                pending,
-                to_broadcaster_id=target_id,
-            )
-            if record is None:
-                continue
-            normalized_key = self._build_pending_raid_storage_key(
-                to_broadcaster_id=str(record.get("to_broadcaster_id") or target_id),
-                from_broadcaster_login=str(
-                    record.get("from_broadcaster_login") or keyed_from_login
-                ),
-            )
-            entries.append((raw_key, normalized_key, record))
-        return entries
+        return PendingRaidStore(self._pending_raids)
 
     def _store_pending_raid(
         self,
-        pending_record: dict[str, Any],
-    ) -> dict[str, Any] | None:
-        normalized = self._coerce_pending_raid_record(
+        pending_record: PendingRaid | Mapping[str, Any] | tuple[Any, ...],
+    ) -> PendingRaid | None:
+        normalized = self._pending_raid_store().store(
             pending_record,
-            to_broadcaster_id=str(pending_record.get("to_broadcaster_id") or "").strip(),
         )
-        if normalized is None:
-            return None
-        key = self._build_pending_raid_storage_key(
-            to_broadcaster_id=str(normalized.get("to_broadcaster_id") or ""),
-            from_broadcaster_login=str(normalized.get("from_broadcaster_login") or ""),
-        )
-        self._pending_raids[key] = normalized
         return normalized
 
     def _get_pending_raid(
@@ -719,116 +1242,33 @@ class RaidBot:
         *,
         to_broadcaster_id: str,
         from_broadcaster_login: str | None = None,
-    ) -> dict[str, Any] | None:
-        target_id = str(to_broadcaster_id or "").strip()
-        normalized_from = self._normalize_broadcaster_login(from_broadcaster_login)
-        if not target_id:
-            return None
-
-        if normalized_from:
-            exact_key = self._build_pending_raid_storage_key(
-                to_broadcaster_id=target_id,
-                from_broadcaster_login=normalized_from,
-            )
-            exact = self._coerce_pending_raid_record(
-                self._pending_raids.get(exact_key),
-                to_broadcaster_id=target_id,
-            )
-            if exact is not None:
-                return exact
-
-        matches = [
-            (raw_key, normalized_key, record)
-            for raw_key, normalized_key, record in self._iterate_pending_raid_entries()
-            if normalized_key[0] == target_id
-            and (not normalized_from or normalized_key[1] == normalized_from)
-        ]
-        if len(matches) != 1:
-            return None
-
-        raw_key, normalized_key, record = matches[0]
-        if raw_key != normalized_key:
-            self._pending_raids.pop(raw_key, None)
-            self._pending_raids[normalized_key] = dict(record)
-        return record
+    ) -> PendingRaid | None:
+        return self._pending_raid_store().get(
+            to_broadcaster_id=to_broadcaster_id,
+            from_broadcaster_login=from_broadcaster_login,
+        )
 
     def _pop_pending_raid(
         self,
         *,
         to_broadcaster_id: str,
         from_broadcaster_login: str | None = None,
-    ) -> dict[str, Any] | None:
-        target_id = str(to_broadcaster_id or "").strip()
-        normalized_from = self._normalize_broadcaster_login(from_broadcaster_login)
-        if not target_id:
-            return None
-
-        if normalized_from:
-            exact_key = self._build_pending_raid_storage_key(
-                to_broadcaster_id=target_id,
-                from_broadcaster_login=normalized_from,
-            )
-            exact = self._coerce_pending_raid_record(
-                self._pending_raids.pop(exact_key, None),
-                to_broadcaster_id=target_id,
-            )
-            if exact is not None:
-                return exact
-
-        matches = [
-            (raw_key, record)
-            for raw_key, normalized_key, record in self._iterate_pending_raid_entries()
-            if normalized_key[0] == target_id
-            and (not normalized_from or normalized_key[1] == normalized_from)
-        ]
-        if len(matches) != 1:
-            return None
-
-        raw_key, record = matches[0]
-        self._pending_raids.pop(raw_key, None)
-        return record
+    ) -> PendingRaid | None:
+        return self._pending_raid_store().pop(
+            to_broadcaster_id=to_broadcaster_id,
+            from_broadcaster_login=from_broadcaster_login,
+        )
 
     def _coerce_pending_raid_record(
         self,
-        pending: dict[str, Any] | tuple[Any, ...] | None,
+        pending: PendingRaid | Mapping[str, Any] | tuple[Any, ...] | None,
         *,
         to_broadcaster_id: str | None = None,
-    ) -> dict[str, Any] | None:
-        if pending is None:
-            return None
-        if isinstance(pending, dict):
-            record = dict(pending)
-        else:
-            record = {
-                "from_broadcaster_login": pending[0] if len(pending) > 0 else "",
-                "target_stream_data": pending[1] if len(pending) > 1 else None,
-                "registered_ts": pending[2] if len(pending) > 2 else time.time(),
-                "is_partner_raid": pending[3] if len(pending) > 3 else False,
-                "registered_viewer_count": pending[4] if len(pending) > 4 else 0,
-                "offline_trigger_ts": pending[5] if len(pending) > 5 else None,
-            }
-        record["to_broadcaster_id"] = str(
-            record.get("to_broadcaster_id") or to_broadcaster_id or ""
-        ).strip()
-        record["from_broadcaster_login"] = self._normalize_broadcaster_login(
-            record.get("from_broadcaster_login")
+    ) -> PendingRaid | None:
+        return PendingRaid.from_payload(
+            pending,
+            to_broadcaster_id=to_broadcaster_id,
         )
-        record["registered_ts"] = float(record.get("registered_ts") or time.time())
-        record["is_partner_raid"] = bool(record.get("is_partner_raid"))
-        record["registered_viewer_count"] = int(record.get("registered_viewer_count") or 0)
-        record["raid_flow_id"] = str(record.get("raid_flow_id") or "").strip() or None
-        record["channel_raid_ready_detail"] = (
-            str(record.get("channel_raid_ready_detail") or "").strip() or None
-        )
-        offline_trigger_ts = record.get("offline_trigger_ts")
-        record["offline_trigger_ts"] = (
-            float(offline_trigger_ts) if offline_trigger_ts is not None else None
-        )
-        signal_observations = record.get("signal_observations")
-        record["signal_observations"] = (
-            dict(signal_observations) if isinstance(signal_observations, dict) else {}
-        )
-        return record
 
     def _build_pending_raid_record(
         self,
@@ -844,42 +1284,36 @@ class RaidBot:
         channel_raid_ready_detail: str | None = None,
         chat_notification_state: str | None = None,
         chat_notification_detail: str | None = None,
-    ) -> dict[str, Any]:
-        return {
-            "from_broadcaster_login": self._normalize_broadcaster_login(from_broadcaster_login),
-            "to_broadcaster_id": str(to_broadcaster_id or "").strip(),
-            "target_stream_data": target_stream_data,
-            "registered_ts": time.time(),
-            "is_partner_raid": bool(is_partner_raid),
-            "registered_viewer_count": int(viewer_count or 0),
-            "offline_trigger_ts": float(offline_trigger_ts) if offline_trigger_ts else None,
-            "raid_flow_id": str(raid_flow_id or "").strip() or None,
-            "channel_raid_ready": channel_raid_ready,
-            "channel_raid_ready_detail": str(channel_raid_ready_detail or "").strip() or None,
-            "chat_notification_state": str(chat_notification_state or "").strip() or None,
-            "chat_notification_detail": str(chat_notification_detail or "").strip() or None,
-            "signal_observations": {},
-        }
+    ) -> PendingRaid:
+        return self._raid_tracking_runtime_service()._build_pending_raid_record(
+            from_broadcaster_login=from_broadcaster_login,
+            to_broadcaster_id=to_broadcaster_id,
+            target_stream_data=target_stream_data,
+            is_partner_raid=is_partner_raid,
+            viewer_count=viewer_count,
+            offline_trigger_ts=offline_trigger_ts,
+            raid_flow_id=raid_flow_id,
+            channel_raid_ready=channel_raid_ready,
+            channel_raid_ready_detail=channel_raid_ready_detail,
+            chat_notification_state=chat_notification_state,
+            chat_notification_detail=chat_notification_detail,
+        )
 
     @staticmethod
     def _record_pending_signal_observation(
-        pending_record: dict[str, Any],
+        pending_record: PendingRaid,
         *,
         signal_type: str,
         status: str,
         reason: str | None = None,
         detail: str | None = None,
     ) -> None:
-        signal_observations = pending_record.get("signal_observations")
-        if not isinstance(signal_observations, dict):
-            signal_observations = {}
-            pending_record["signal_observations"] = signal_observations
-        observation = {"status": str(status or "").strip()}
-        if reason:
-            observation["reason"] = str(reason).strip()
-        if detail:
-            observation["detail"] = str(detail).strip()
-        signal_observations[str(signal_type)] = observation
+        pending_record.record_signal_observation(
+            signal_type=signal_type,
+            status=status,
+            reason=reason,
+            detail=detail,
+        )
 
     def _snapshot_chat_notification_subscription(
         self,
@@ -985,13 +1419,7 @@ class RaidBot:
 
     def _store_orphan_chat_raid_notification(self, payload: dict[str, Any]) -> None:
         self._ensure_runtime_raid_tracking_state()
-        key = self._build_raid_arrival_cache_key(
-            to_broadcaster_id=str(payload.get("to_broadcaster_id") or "").strip(),
-            from_broadcaster_login=str(payload.get("from_broadcaster_login") or "").strip(),
-        )
-        payload_copy = dict(payload)
-        payload_copy["observed_ts"] = float(payload_copy.get("observed_ts") or time.time())
-        self._orphan_chat_raid_notifications[key] = payload_copy
+        self._raid_tracking_runtime_service().store_orphan_chat_raid_notification(payload)
 
     def _pop_orphan_chat_raid_notification(
         self,
@@ -1000,11 +1428,10 @@ class RaidBot:
         from_broadcaster_login: str,
     ) -> dict[str, Any] | None:
         self._ensure_runtime_raid_tracking_state()
-        key = self._build_raid_arrival_cache_key(
+        return self._raid_tracking_runtime_service().pop_orphan_chat_raid_notification(
             to_broadcaster_id=to_broadcaster_id,
             from_broadcaster_login=from_broadcaster_login,
         )
-        return self._orphan_chat_raid_notifications.pop(key, None)
 
     def _promote_stale_orphan_chat_raid_notifications(self) -> None:
         self._ensure_runtime_raid_tracking_state()
@@ -1087,17 +1514,32 @@ class RaidBot:
         *,
         broadcaster_id: str,
         broadcaster_login: str,
+        expected_partner: bool = False,
     ) -> bool:
+        if expected_partner:
+            return True
+        return bool(
+            self._lookup_partner_target_channel(
+                broadcaster_id=broadcaster_id,
+                broadcaster_login=broadcaster_login,
+            )
+        )
+
+    def _lookup_partner_target_channel(
+        self,
+        *,
+        broadcaster_id: str,
+        broadcaster_login: str,
+    ) -> Any:
         broadcaster_key = str(broadcaster_id or "").strip()
         login_key = self._normalize_broadcaster_login(broadcaster_login)
         try:
             with readonly_connection() as conn:
-                row = load_active_partner(
+                return load_active_partner(
                     conn,
                     twitch_user_id=broadcaster_key or None,
                     twitch_login=login_key or None,
                 )
-            return bool(row)
         except Exception:
             log.debug(
                 "Partner target lookup failed for %s (%s)",
@@ -1105,7 +1547,7 @@ class RaidBot:
                 broadcaster_key,
                 exc_info=True,
             )
-            return False
+            return None
 
     def _classify_partner_raid_arrival(
         self,
@@ -1114,28 +1556,36 @@ class RaidBot:
         from_broadcaster_id: str | None,
         to_broadcaster_id: str,
         to_broadcaster_login: str,
+        expected_partner: bool = False,
     ) -> tuple[str | None, str]:
-        if not self._is_partner_target_channel(
+        partner_row = self._lookup_partner_target_channel(
             broadcaster_id=to_broadcaster_id,
             broadcaster_login=to_broadcaster_login,
-        ):
-            return None, "non_partner_target"
-
-        known_source = self._resolve_known_streamer_identity(
-            broadcaster_login=from_broadcaster_login,
-            broadcaster_id=from_broadcaster_id,
         )
-        if known_source:
-            if known_source.get("twitch_user_id"):
-                return "ours_to_partner", "known_streamer_id"
-            return "ours_to_partner", "known_streamer_login"
-
-        if not self._normalize_broadcaster_login(from_broadcaster_login) and not str(
-            from_broadcaster_id or ""
-        ).strip():
-            return "unknown_source_to_partner", "missing_source_identity"
-
-        return "external_to_partner", "unmatched_source"
+        result = classify_partner_raid_arrival(
+            from_broadcaster_login=from_broadcaster_login,
+            from_broadcaster_id=from_broadcaster_id,
+            to_broadcaster_id=to_broadcaster_id,
+            to_broadcaster_login=to_broadcaster_login,
+            partner_lookup=lambda **_kwargs: partner_row,
+            known_streamer_lookup=lambda **lookup_kwargs: self._resolve_known_streamer_identity(
+                broadcaster_login=str(lookup_kwargs.get("broadcaster_login") or ""),
+                broadcaster_id=str(lookup_kwargs.get("broadcaster_id") or "") or None,
+            ),
+        )
+        if result.classification is None and expected_partner:
+            result = classify_partner_raid_arrival(
+                from_broadcaster_login=from_broadcaster_login,
+                from_broadcaster_id=from_broadcaster_id,
+                to_broadcaster_id=to_broadcaster_id,
+                to_broadcaster_login=to_broadcaster_login,
+                partner_lookup=lambda **_kwargs: {"source": "pending_partner_override"},
+                known_streamer_lookup=lambda **lookup_kwargs: self._resolve_known_streamer_identity(
+                    broadcaster_login=str(lookup_kwargs.get("broadcaster_login") or ""),
+                    broadcaster_id=str(lookup_kwargs.get("broadcaster_id") or "") or None,
+                ),
+            )
+        return result.as_tuple()
 
     def _load_recent_raid_history_reference(
         self,
@@ -2278,49 +2728,7 @@ class RaidBot:
                 log.exception("Error sending auth success message to %s", twitch_login)
 
     def _cleanup_stale_pending_raids(self):
-        """
-        Entfernt pending raids, die älter als 5 Minuten sind (wahrscheinlich fehlgeschlagen).
-        """
-        now = time.time()
-        timeout = 300  # 5 Minuten
-        stale = [
-            (raw_key, normalized_key, pending)
-            for raw_key, normalized_key, pending in self._iterate_pending_raid_entries()
-            if now - float(pending.get("registered_ts") or 0.0) > timeout
-        ]
-        for raw_key, normalized_key, pending in stale:
-            self._pending_raids.pop(raw_key, None)
-            if pending is None:
-                continue
-            to_id = normalized_key[0]
-            from_login = str(pending.get("from_broadcaster_login") or "<unknown>")
-            registered_ts = float(pending.get("registered_ts") or 0.0)
-            offline_ts = pending.get("offline_trigger_ts")
-            age = now - registered_ts
-            offline_pending_s = (time.monotonic() - offline_ts) if offline_ts else -1.0
-            raid_flow_id = str(pending.get("raid_flow_id") or "").strip() or self._next_raid_observability_flow_id(prefix="raid-timeout")
-            self._increment_raid_observability_counter("raid_pending_timeout_total")
-            log.warning(
-                "Pending raid timed out after %.0fs: %s -> (ID: %s). %s offline->pending=%.0fs",
-                age,
-                from_login,
-                to_id,
-                self._build_pending_timeout_detail(pending),
-                offline_pending_s,
-            )
-            self._log_raid_observability_event(
-                raid_flow_id=raid_flow_id,
-                step="pending_timeout",
-                decision="timeout",
-                level=logging.WARNING,
-                from_broadcaster_login=from_login,
-                to_broadcaster_id=to_id,
-                details={
-                    "age_seconds": round(age, 1),
-                    "offline_to_pending_seconds": round(offline_pending_s, 1),
-                    "timeout_detail": self._build_pending_timeout_detail(pending),
-                },
-            )
+        self._raid_tracking_runtime_service().cleanup_stale_pending_raids()
 
     def _clear_superseded_pending_raids(
         self,
@@ -2328,46 +2736,10 @@ class RaidBot:
         from_broadcaster_login: str,
         current_target_id: str,
     ) -> None:
-        normalized_from = str(from_broadcaster_login or "").strip().lower()
-        if not normalized_from:
-            return
-
-        current_target_key = str(current_target_id or "").strip()
-        superseded: list[tuple[object, str, dict[str, Any]]] = []
-        for raw_key, normalized_key, pending_record in self._iterate_pending_raid_entries():
-            to_id = normalized_key[0]
-            if to_id == current_target_key:
-                continue
-            pending_from = str(pending_record.get("from_broadcaster_login") or "").strip().lower()
-            if pending_from != normalized_from:
-                continue
-            superseded.append((raw_key, str(to_id), pending_record))
-
-        for raw_key, to_id, pending_record in superseded:
-            removed = self._pending_raids.pop(raw_key, None)
-            if removed is None:
-                continue
-            target_stream_data = pending_record.get("target_stream_data")
-            old_target_login = ""
-            if isinstance(target_stream_data, dict):
-                old_target_login = str(target_stream_data.get("user_login") or "").strip().lower()
-            raid_flow_id = str(pending_record.get("raid_flow_id") or "").strip() or self._next_raid_observability_flow_id(prefix="raid-supersede")
-            log.info(
-                "Pending raid superseded before arrival: %s old_target=%s%s replaced_by=%s",
-                from_broadcaster_login,
-                to_id,
-                f' ({old_target_login})' if old_target_login else "",
-                current_target_key,
-            )
-            self._log_raid_observability_event(
-                raid_flow_id=raid_flow_id,
-                step="pending_superseded",
-                decision="superseded",
-                from_broadcaster_login=from_broadcaster_login,
-                to_broadcaster_login=old_target_login or None,
-                to_broadcaster_id=to_id,
-                details={"replaced_by": current_target_key},
-            )
+        self._raid_tracking_runtime_service().clear_superseded_pending_raids(
+            from_broadcaster_login=from_broadcaster_login,
+            current_target_id=current_target_id,
+        )
 
     def _cancel_pending_raids_for_source_unraid(
         self,
@@ -2377,61 +2749,12 @@ class RaidBot:
         message_id: str | None = None,
         event_timestamp: str | None = None,
     ) -> int:
-        normalized_from = self._normalize_broadcaster_login(from_broadcaster_login)
-        if not normalized_from:
-            return 0
-
-        canceled = 0
-        for raw_key, normalized_key, pending_record in self._iterate_pending_raid_entries():
-            to_id = normalized_key[0]
-            pending_from = self._normalize_broadcaster_login(
-                pending_record.get("from_broadcaster_login")
-            )
-            if pending_from != normalized_from:
-                continue
-
-            self._record_pending_signal_observation(
-                pending_record,
-                signal_type="channel.chat.notification.unraid_source",
-                status="canceled",
-                reason="source_self_unraid",
-                detail=str(event_timestamp or message_id or "").strip() or None,
-            )
-            removed = self._pending_raids.pop(raw_key, None)
-            if removed is None:
-                continue
-
-            target_stream_data = pending_record.get("target_stream_data")
-            target_login = ""
-            if isinstance(target_stream_data, dict):
-                target_login = self._normalize_broadcaster_login(
-                    target_stream_data.get("user_login")
-                )
-            target_login = target_login or str(to_id)
-            raid_flow_id = (
-                str(pending_record.get("raid_flow_id") or "").strip()
-                or self._next_raid_observability_flow_id(prefix="raid-source-unraid")
-            )
-            self._increment_raid_observability_counter("raid_pending_canceled_source_unraid_total")
-            log.info(
-                "Pending raid canceled by source unraid: %s -> %s (message_id=%s)",
-                normalized_from,
-                target_login,
-                message_id or "n/a",
-            )
-            self._log_raid_observability_event(
-                raid_flow_id=raid_flow_id,
-                step="pending_canceled_source_unraid",
-                decision="canceled",
-                from_broadcaster_login=normalized_from,
-                from_broadcaster_id=from_broadcaster_id,
-                to_broadcaster_login=target_login if target_login != str(to_id) else None,
-                to_broadcaster_id=str(to_id),
-                details={"message_id": message_id, "event_timestamp": event_timestamp},
-            )
-            canceled += 1
-
-        return canceled
+        return self._raid_tracking_runtime_service().cancel_pending_raids_for_source_unraid(
+            from_broadcaster_login=from_broadcaster_login,
+            from_broadcaster_id=from_broadcaster_id,
+            message_id=message_id,
+            event_timestamp=event_timestamp,
+        )
 
     async def _ensure_raid_arrival_subscription_ready(
         self,
@@ -2441,110 +2764,11 @@ class RaidBot:
         raid_flow_id: str | None = None,
     ) -> bool:
         self._ensure_runtime_raid_tracking_state()
-        cog = self._cog
-        flow_id = str(raid_flow_id or "").strip() or self._next_raid_observability_flow_id(prefix="raid-ready")
-        if cog is None:
-            self._log_raid_observability_event(
-                raid_flow_id=flow_id,
-                step="readiness_check",
-                decision="no_cog_best_effort",
-                to_broadcaster_login=to_broadcaster_login,
-                to_broadcaster_id=to_broadcaster_id,
-            )
-            return True
-
-        has_sub = getattr(cog, "_eventsub_has_sub", None)
-        locally_tracked = False
-        if callable(has_sub):
-            try:
-                locally_tracked = bool(has_sub("channel.raid", str(to_broadcaster_id)))
-            except Exception:
-                log.debug(
-                    "EventSub channel.raid local tracking lookup failed for %s",
-                    to_broadcaster_login,
-                    exc_info=True,
-                )
-
-        ensure_ready = getattr(cog, "ensure_raid_target_dynamic_ready", None)
-        if callable(ensure_ready):
-            try:
-                ready, detail = await ensure_ready(
-                    str(to_broadcaster_id),
-                    to_broadcaster_login,
-                    raid_flow_id=flow_id,
-                )
-            except Exception:
-                self._increment_raid_observability_counter("raid_eventsub_ready_check_failed_total")
-                self._log_raid_observability_event(
-                    raid_flow_id=flow_id,
-                    step="readiness_check",
-                    decision="exception",
-                    level=logging.ERROR,
-                    to_broadcaster_login=to_broadcaster_login,
-                    to_broadcaster_id=to_broadcaster_id,
-                    details={"local_tracking": locally_tracked},
-                )
-                log.exception(
-                    "EventSub channel.raid readiness check failed for %s",
-                    to_broadcaster_login,
-                )
-                return False
-
-            self._remember_raid_readiness_state(
-                flow_id=flow_id,
-                ready=bool(ready),
-                detail=str(detail or "").strip() or None,
-                locally_tracked=bool(locally_tracked),
-            )
-
-            if ready:
-                self._increment_raid_observability_counter("raid_eventsub_ready_true_total")
-                log.info(
-                    "EventSub channel.raid ready before raid start for %s (%s)",
-                    to_broadcaster_login,
-                    detail,
-                )
-            else:
-                self._increment_raid_observability_counter("raid_eventsub_ready_false_total")
-                if locally_tracked:
-                    self._increment_raid_observability_counter("raid_eventsub_ready_false_local_true_total")
-                    detail = f"{detail}; local_tracking_only"
-                log.warning(
-                    "EventSub channel.raid not confirmed enabled for %s before raid start (%s). Proceeding best-effort.",
-                    to_broadcaster_login,
-                    detail,
-                )
-            self._log_raid_observability_event(
-                raid_flow_id=flow_id,
-                step="readiness_check",
-                decision="ready" if ready else "not_ready",
-                level=logging.INFO if ready else logging.WARNING,
-                to_broadcaster_login=to_broadcaster_login,
-                to_broadcaster_id=to_broadcaster_id,
-                details={"local_tracking": locally_tracked, "detail": detail},
-            )
-            return ready
-
-        if locally_tracked:
-            log.debug(
-                "EventSub channel.raid for %s is only locally tracked; remote readiness check unavailable.",
-                to_broadcaster_login,
-            )
-        self._remember_raid_readiness_state(
-            flow_id=flow_id,
-            ready=True,
-            detail="local_tracking_only" if locally_tracked else "best_effort",
-            locally_tracked=bool(locally_tracked),
-        )
-        self._log_raid_observability_event(
-            raid_flow_id=flow_id,
-            step="readiness_check",
-            decision="best_effort",
-            to_broadcaster_login=to_broadcaster_login,
+        return await self._raid_tracking_runtime_service().ensure_raid_arrival_subscription_ready(
             to_broadcaster_id=to_broadcaster_id,
-            details={"local_tracking": locally_tracked},
+            to_broadcaster_login=to_broadcaster_login,
+            raid_flow_id=raid_flow_id,
         )
-        return True
 
     async def _register_pending_raid(
         self,
@@ -2558,194 +2782,23 @@ class RaidBot:
         raid_flow_id: str | None = None,
         channel_raid_ready: bool | None = None,
     ):
-        """
-        Registriert einen Raid, der auf EventSub Bestätigung wartet.
-
-        Wird aufgerufen nach erfolgreichem API-Call, bevor der Raid tatsächlich beim Ziel ankommt.
-        Erstellt dynamisch eine channel.raid EventSub subscription für das Ziel.
-
-        Args:
-            from_broadcaster_login: Login des Raiding-Streamers
-            to_broadcaster_id: User-ID des Raid-Ziels
-            to_broadcaster_login: Login des Raid-Ziels
-            target_stream_data: Stream-Daten des Ziels (optional)
-            is_partner_raid: True wenn es ein Partner-Raid ist (für Partner-Message)
-            viewer_count: Viewer-Count beim Raid-Start (für Partner-Message)
-        """
         self._ensure_runtime_raid_tracking_state()
-        chat_notification_state, chat_notification_detail = (
-            self._snapshot_chat_notification_subscription(to_broadcaster_login)
-        )
-        flow_id = str(raid_flow_id or "").strip() or self._next_raid_observability_flow_id(prefix="raid-pending")
-        readiness_state = self._pop_raid_readiness_state(flow_id)
-        self._clear_superseded_pending_raids(
-            from_broadcaster_login=from_broadcaster_login,
-            current_target_id=to_broadcaster_id,
-        )
-        pending_record = self._build_pending_raid_record(
+        await self._raid_tracking_runtime_service().register_pending_raid(
             from_broadcaster_login=from_broadcaster_login,
             to_broadcaster_id=to_broadcaster_id,
+            to_broadcaster_login=to_broadcaster_login,
             target_stream_data=target_stream_data,
             is_partner_raid=is_partner_raid,
             viewer_count=viewer_count,
             offline_trigger_ts=offline_trigger_ts,
-            raid_flow_id=flow_id,
+            raid_flow_id=raid_flow_id,
             channel_raid_ready=channel_raid_ready,
-            channel_raid_ready_detail=str(readiness_state.get("detail") or "").strip() or None,
-            chat_notification_state=chat_notification_state,
-            chat_notification_detail=chat_notification_detail,
-        )
-        self._store_pending_raid(pending_record)
-        self._increment_raid_observability_counter("raid_pending_registered_total")
-        offline_to_pending_ms = (
-            (time.monotonic() - offline_trigger_ts) * 1000 if offline_trigger_ts else None
-        )
-        log.info(
-            "Pending raid registered: %s -> %s (ID: %s). Creating EventSub subscription... offline->pending=%s, chat_notification=%s",
-            from_broadcaster_login,
-            to_broadcaster_login,
-            to_broadcaster_id,
-            f"{offline_to_pending_ms:.0f}ms" if offline_to_pending_ms is not None else "n/a",
-            chat_notification_state or "unknown",
-        )
-        self._log_raid_observability_event(
-            raid_flow_id=flow_id,
-            step="pending_registered",
-            decision="registered",
-            from_broadcaster_login=from_broadcaster_login,
-            to_broadcaster_login=to_broadcaster_login,
-            to_broadcaster_id=to_broadcaster_id,
-            details={
-                "viewer_count": viewer_count,
-                "offline_to_pending_ms": int(offline_to_pending_ms) if offline_to_pending_ms is not None else None,
-                "channel_raid_ready": channel_raid_ready,
-                "channel_raid_ready_detail": readiness_state.get("detail"),
-                "chat_notification_state": chat_notification_state,
-                "chat_notification_detail": chat_notification_detail,
-            },
         )
 
-        success = bool(channel_raid_ready)
-        if success:
-            log.debug(
-                "EventSub channel.raid readiness already confirmed for %s - skipping duplicate create",
-                to_broadcaster_login,
-            )
-
-        # Dynamische EventSub subscription erstellen
-        if not success and self._cog and hasattr(self._cog, "subscribe_raid_target_dynamic"):
-            try:
-                self._increment_raid_observability_counter("raid_eventsub_subscribe_attempt_total")
-                success = await self._cog.subscribe_raid_target_dynamic(
-                    to_broadcaster_id, to_broadcaster_login
-                )
-                if success:
-                    self._increment_raid_observability_counter("raid_eventsub_subscribe_success_total")
-                    log.info(
-                        "EventSub channel.raid subscription created for %s",
-                        to_broadcaster_login,
-                    )
-                else:
-                    self._increment_raid_observability_counter("raid_eventsub_subscribe_failed_total")
-                    log.warning(
-                        "Failed to create EventSub subscription for %s - raid message may not be sent",
-                        to_broadcaster_login,
-                    )
-            except Exception:
-                self._increment_raid_observability_counter("raid_eventsub_subscribe_failed_total")
-                log.exception(
-                    "Error creating dynamic EventSub subscription for %s",
-                    to_broadcaster_login,
-                )
-        else:
-            if not success:
-                log.warning(
-                    "Cog reference not set - cannot create dynamic EventSub subscription for %s",
-                    to_broadcaster_login,
-                )
-        self._log_raid_observability_event(
-            raid_flow_id=flow_id,
-            step="pending_subscription_create",
-            decision="created" if success else "best_effort_only",
-            level=logging.INFO if success else logging.WARNING,
-            from_broadcaster_login=from_broadcaster_login,
-            to_broadcaster_login=to_broadcaster_login,
-            to_broadcaster_id=to_broadcaster_id,
-            details={"channel_raid_ready": channel_raid_ready},
+    def _build_pending_timeout_detail(self, pending_record: PendingRaid) -> str:
+        return self._raid_tracking_runtime_service().build_pending_timeout_detail(
+            pending_record
         )
-
-        orphan_notification = self._pop_orphan_chat_raid_notification(
-            to_broadcaster_id=to_broadcaster_id,
-            from_broadcaster_login=from_broadcaster_login,
-        )
-        if orphan_notification:
-            self._increment_raid_observability_counter("raid_orphan_chat_notification_total")
-            log.info(
-                "Pending raid %s -> %s matched earlier channel.chat.notification raid signal.",
-                from_broadcaster_login,
-                to_broadcaster_login,
-            )
-            self._log_raid_observability_event(
-                raid_flow_id=flow_id,
-                step="pending_orphan_notification_match",
-                decision="matched",
-                from_broadcaster_login=from_broadcaster_login,
-                to_broadcaster_login=to_broadcaster_login,
-                to_broadcaster_id=to_broadcaster_id,
-                details={"message_id": orphan_notification.get("message_id")},
-            )
-            await self.on_chat_raid_notification(
-                to_broadcaster_id=str(orphan_notification.get("to_broadcaster_id") or to_broadcaster_id),
-                to_broadcaster_login=str(
-                    orphan_notification.get("to_broadcaster_login") or to_broadcaster_login
-                ),
-                from_broadcaster_login=str(
-                    orphan_notification.get("from_broadcaster_login") or from_broadcaster_login
-                ),
-                viewer_count=int(orphan_notification.get("viewer_count") or viewer_count),
-                from_broadcaster_id=str(orphan_notification.get("from_broadcaster_id") or "") or None,
-                message_id=str(orphan_notification.get("message_id") or "") or None,
-                event_timestamp=str(orphan_notification.get("event_timestamp") or "") or None,
-            )
-
-    def _build_pending_timeout_detail(self, pending_record: dict[str, Any]) -> str:
-        observations = pending_record.get("signal_observations")
-        observation_parts: list[str] = []
-        if isinstance(observations, dict):
-            for signal_type in ("channel.raid", "channel.chat.notification"):
-                observation = observations.get(signal_type)
-                if not isinstance(observation, dict):
-                    continue
-                status = str(observation.get("status") or "").strip()
-                reason = str(observation.get("reason") or "").strip()
-                detail = str(observation.get("detail") or "").strip()
-                text = f"{signal_type}:{status}" if status else signal_type
-                if reason:
-                    text += f" ({reason})"
-                if detail:
-                    text += f" [{detail}]"
-                observation_parts.append(text)
-
-        if not observation_parts:
-            channel_raid_ready = pending_record.get("channel_raid_ready")
-            channel_raid_detail = (
-                "ready" if channel_raid_ready is not False else "subscription_not_ready"
-            )
-            chat_state = str(pending_record.get("chat_notification_state") or "").strip()
-            chat_detail = str(pending_record.get("chat_notification_detail") or "").strip()
-            if not chat_state:
-                chat_state = "missing"
-            chat_text = f"channel.chat.notification:{chat_state}"
-            if chat_detail:
-                chat_text += f" [{chat_detail}]"
-            observation_parts.extend(
-                [
-                    f"channel.raid:{channel_raid_detail}",
-                    chat_text,
-                ]
-            )
-
-        return "Timeout detail: " + "; ".join(observation_parts)
 
     def _lookup_silent_raid_enabled(self, broadcaster_login: str) -> bool:
         try:
@@ -2782,48 +2835,17 @@ class RaidBot:
         viewer_count: int,
         unraid_seen: bool = False,
     ) -> bool:
-        recent_arrival = self._lookup_recent_raid_arrival(
+        return self._raid_arrival_runtime()._handle_secondary_confirmed_signal(
+            signal_type=signal_type,
             to_broadcaster_id=to_broadcaster_id,
-            from_broadcaster_login=from_broadcaster_login,
-        )
-        if not recent_arrival:
-            return False
-
-        confirmation_signals = set(recent_arrival.get("confirmation_signals") or set())
-        confirmation_signals.add(signal_type)
-        recent_arrival["confirmation_signals"] = confirmation_signals
-        recent_arrival["confirmed_ts"] = time.time()
-        recent_arrival["viewer_count"] = max(
-            int(recent_arrival.get("viewer_count") or 0),
-            int(viewer_count or 0),
-        )
-        arrival_tracking_id = int(recent_arrival.get("arrival_tracking_id") or 0) or None
-        if arrival_tracking_id is not None:
-            self._update_partner_raid_arrival(
-                arrival_tracking_id=arrival_tracking_id,
-                confirmation_signals=confirmation_signals,
-                unraid_seen=unraid_seen,
-            )
-
-        raid_flow_id = str(recent_arrival.get("raid_flow_id") or "").strip() or self._next_raid_observability_flow_id(prefix="raid-secondary")
-        self._log_raid_observability_event(
-            raid_flow_id=raid_flow_id,
-            step="secondary_signal",
-            decision=signal_type,
-            from_broadcaster_login=from_broadcaster_login,
             to_broadcaster_login=to_broadcaster_login,
-            to_broadcaster_id=to_broadcaster_id,
-            details={"confirmation_signals": sorted(confirmation_signals), "unraid_seen": unraid_seen},
+            from_broadcaster_login=from_broadcaster_login,
+            viewer_count=viewer_count,
+            unraid_seen=unraid_seen,
         )
 
-        log.info(
-            "Raid arrival secondary signal recorded: %s -> %s via %s (signals=%s)",
-            from_broadcaster_login,
-            to_broadcaster_login,
-            signal_type,
-            self._serialize_confirmation_signals(confirmation_signals),
-        )
-        return True
+    async def _execute_signal_plan_actions(self, actions: tuple[object, ...]) -> None:
+        await self._raid_arrival_runtime()._execute_signal_plan_actions(actions)
 
     async def _confirm_pending_raid_arrival(
         self,
@@ -2835,178 +2857,14 @@ class RaidBot:
         viewer_count: int,
         from_broadcaster_id: str | None = None,
     ) -> None:
-        pending = self._pop_pending_raid(
-            to_broadcaster_id=to_broadcaster_id,
-            from_broadcaster_login=from_broadcaster_login,
-        )
-        if pending is None:
-            return
-        raid_flow_id = str(pending.get("raid_flow_id") or "").strip() or self._next_raid_observability_flow_id(prefix="raid-arrival")
-
-        target_stream_data = pending.get("target_stream_data")
-        registered_ts = float(pending.get("registered_ts") or time.time())
-        is_partner_raid = bool(pending.get("is_partner_raid"))
-        registered_viewer_count = int(pending.get("registered_viewer_count") or viewer_count)
-        offline_trigger_ts = pending.get("offline_trigger_ts")
-        effective_viewer_count = int(viewer_count or registered_viewer_count or 0)
-
-        classification, source_resolution = self._classify_partner_raid_arrival(
-            from_broadcaster_login=from_broadcaster_login,
-            from_broadcaster_id=from_broadcaster_id,
+        await self._raid_arrival_runtime().confirm_pending_raid_arrival(
+            signal_type=signal_type,
             to_broadcaster_id=to_broadcaster_id,
             to_broadcaster_login=to_broadcaster_login,
-        )
-        partner_target_confirmed = classification is not None
-        current_target_is_partner = partner_target_confirmed
-        if current_target_is_partner:
-            await asyncio.to_thread(
-                self._delete_external_recruitment_blacklist_pending,
-                to_broadcaster_id,
-            )
-        raid_history_id = None
-        raid_history_executed_at = None
-        if is_partner_raid or classification == "ours_to_partner":
-            raid_history_id, raid_history_executed_at = self._load_recent_raid_history_reference(
-                from_broadcaster_login=from_broadcaster_login,
-                to_broadcaster_id=to_broadcaster_id,
-            )
-
-        log.info(
-            "Raid arrival confirmed via %s: %s -> %s (%d viewers, partner_raid=%s, classification=%s, api->arrival=%.0fs, offline->arrival=%.0fs)",
-            signal_type,
-            from_broadcaster_login,
-            to_broadcaster_login,
-            effective_viewer_count,
-            is_partner_raid,
-            classification or "non_partner_target",
-            time.time() - registered_ts,
-            (time.monotonic() - offline_trigger_ts) if offline_trigger_ts else -1.0,
-        )
-
-        arrival_tracking_id = None
-        if partner_target_confirmed:
-            arrival_tracking_id = self._store_partner_raid_arrival(
-                from_broadcaster_id=from_broadcaster_id,
-                from_broadcaster_login=from_broadcaster_login,
-                to_broadcaster_id=to_broadcaster_id,
-                to_broadcaster_login=to_broadcaster_login,
-                viewer_count=effective_viewer_count,
-                classification=classification,
-                confirmation_signals={signal_type},
-                primary_signal=signal_type,
-                correlation_status="matched_pending",
-                correlation_detail=None,
-                source_resolution=source_resolution,
-                raid_history_id=raid_history_id,
-                raid_history_executed_at=raid_history_executed_at,
-            )
-
-        self._remember_recent_raid_arrival(
-            to_broadcaster_id=to_broadcaster_id,
             from_broadcaster_login=from_broadcaster_login,
+            viewer_count=viewer_count,
             from_broadcaster_id=from_broadcaster_id,
-            to_broadcaster_login=to_broadcaster_login,
-            viewer_count=effective_viewer_count,
-            classification=classification,
-            confirmation_signals={signal_type},
-            arrival_tracking_id=arrival_tracking_id,
-            raid_flow_id=raid_flow_id,
         )
-        self._increment_raid_observability_counter(f"raid_arrival_confirmed_{signal_type.replace('.', '_')}_total")
-        self._log_raid_observability_event(
-            raid_flow_id=raid_flow_id,
-            step="arrival_confirmed",
-            decision=signal_type,
-            from_broadcaster_login=from_broadcaster_login,
-            from_broadcaster_id=from_broadcaster_id,
-            to_broadcaster_login=to_broadcaster_login,
-            to_broadcaster_id=to_broadcaster_id,
-            details={
-                "classification": classification,
-                "source_resolution": source_resolution,
-                "viewer_count": effective_viewer_count,
-                "api_to_arrival_seconds": round(time.time() - registered_ts, 2),
-            },
-        )
-
-        confirmed_external_raid_count = None
-        if not current_target_is_partner:
-            confirmed_external_raid_count = await asyncio.to_thread(
-                self._record_confirmed_external_recruitment_raid,
-                raid_flow_id=raid_flow_id,
-                from_broadcaster_id=from_broadcaster_id,
-                from_broadcaster_login=from_broadcaster_login,
-                to_broadcaster_id=to_broadcaster_id,
-                to_broadcaster_login=to_broadcaster_login,
-                viewer_count=effective_viewer_count,
-                confirmation_signal=signal_type,
-            )
-            if confirmed_external_raid_count is None:
-                log.warning(
-                    "Confirmed external recruitment raid could not be persisted for %s (%s); skipping external follow-up",
-                    to_broadcaster_login,
-                    to_broadcaster_id,
-                )
-                return
-            if confirmed_external_raid_count > 0:
-                await asyncio.to_thread(
-                    self._schedule_external_recruitment_blacklist_pending,
-                    target_id=to_broadcaster_id,
-                    target_login=to_broadcaster_login,
-                    confirmed_raid_count=confirmed_external_raid_count,
-                    raid_flow_id=raid_flow_id,
-                )
-
-        if is_partner_raid and not partner_target_confirmed:
-            log.warning(
-                "Partner raid follow-up suppressed because target is no longer classified as partner: %s -> %s (signal=%s, source_resolution=%s)",
-                from_broadcaster_login,
-                to_broadcaster_login,
-                signal_type,
-                source_resolution,
-            )
-
-        if classification == "ours_to_partner":
-            await self._refresh_partner_score_cache_if_available(
-                to_broadcaster_id,
-                reason="incoming_partner_raid_confirmed",
-            )
-            if callable(track_confirmed_partner_raid):
-                track_confirmed_partner_raid(
-                    to_broadcaster_id=to_broadcaster_id,
-                    to_broadcaster_login=to_broadcaster_login,
-                    from_broadcaster_login=from_broadcaster_login,
-                    from_broadcaster_id=from_broadcaster_id,
-                    viewer_count=effective_viewer_count,
-                    score_snapshot=(
-                        target_stream_data.get("_partner_score")
-                        if isinstance(target_stream_data, dict)
-                        else None
-                    ),
-                )
-
-        if self._lookup_silent_raid_enabled(to_broadcaster_login):
-            log.info(
-                "Raid message suppressed (silent_raid): %s -> %s",
-                from_broadcaster_login,
-                to_broadcaster_login,
-            )
-            return
-
-        if classification == "ours_to_partner":
-            await self._send_partner_raid_message(
-                from_broadcaster_login=from_broadcaster_login,
-                to_broadcaster_login=to_broadcaster_login,
-                to_broadcaster_id=to_broadcaster_id,
-                viewer_count=effective_viewer_count,
-            )
-        elif not current_target_is_partner:
-            await self._send_recruitment_message_now(
-                from_broadcaster_login=from_broadcaster_login,
-                to_broadcaster_login=to_broadcaster_login,
-                target_stream_data=target_stream_data,
-                confirmed_external_raid_count=confirmed_external_raid_count,
-            )
 
     async def on_raid_arrival(
         self,
@@ -3016,106 +2874,10 @@ class RaidBot:
         viewer_count: int,
         from_broadcaster_id: str | None = None,
     ):
-        """
-        Wird aufgerufen, wenn ein channel.raid EventSub Event eintrifft.
-
-        Sendet entweder:
-        - Partner-Message (bei Partner-Raids)
-        - Recruitment-Message (bei Non-Partner-Raids)
-        """
-        normalized_from_login = self._normalize_broadcaster_login(from_broadcaster_login)
-        pending = self._get_pending_raid(
-            to_broadcaster_id=to_broadcaster_id,
-            from_broadcaster_login=normalized_from_login,
-        )
-
-        if self._handle_secondary_confirmed_signal(
-            signal_type="channel.raid",
+        await self._raid_arrival_runtime().on_raid_arrival(
             to_broadcaster_id=to_broadcaster_id,
             to_broadcaster_login=to_broadcaster_login,
-            from_broadcaster_login=normalized_from_login,
-            viewer_count=viewer_count,
-        ):
-            return
-
-        if not pending:
-            if self._process_independent_partner_raid_arrival(
-                to_broadcaster_id=to_broadcaster_id,
-                to_broadcaster_login=to_broadcaster_login,
-                from_broadcaster_login=normalized_from_login,
-                from_broadcaster_id=from_broadcaster_id,
-                viewer_count=viewer_count,
-                signal_type="channel.raid",
-                correlation_status="independent_channel_raid",
-                correlation_detail=None,
-            ):
-                return
-            from_broadcaster_key = str(from_broadcaster_id or "").strip()
-            if not from_broadcaster_key:
-                from_broadcaster_key = self._resolve_streamer_id_by_login(normalized_from_login) or ""
-            if from_broadcaster_key:
-                self.mark_manual_raid_started(from_broadcaster_key, ttl_seconds=180.0)
-                log.info(
-                    "External/manual raid detected via EventSub: %s -> %s. "
-                    "Suppressing next offline auto-raid for broadcaster_id=%s (ttl=180s/3min)",
-                    normalized_from_login,
-                    to_broadcaster_login,
-                    from_broadcaster_key,
-                )
-            log.debug(
-                "Raid arrival ignored (not pending): %s -> %s",
-                normalized_from_login,
-                to_broadcaster_login,
-            )
-            self._log_raid_observability_event(
-                raid_flow_id=self._next_raid_observability_flow_id(prefix="raid-independent"),
-                step="arrival_no_pending",
-                decision="ignored_or_independent",
-                from_broadcaster_login=normalized_from_login,
-                from_broadcaster_id=from_broadcaster_id,
-                to_broadcaster_login=to_broadcaster_login,
-                to_broadcaster_id=to_broadcaster_id,
-            )
-            return
-
-        expected_from = str(pending.get("from_broadcaster_login") or normalized_from_login)
-        if expected_from != normalized_from_login:
-            self._record_pending_signal_observation(
-                pending,
-                signal_type="channel.raid",
-                status="ignored",
-                reason="source_target_mismatch",
-                detail=f"expected={expected_from} actual={normalized_from_login}",
-            )
-            self._store_pending_raid(pending)
-            log.warning(
-                "Raid arrival mismatch: expected from %s, got from %s",
-                expected_from,
-                normalized_from_login,
-            )
-            self._log_raid_observability_event(
-                raid_flow_id=str(pending.get("raid_flow_id") or "") or self._next_raid_observability_flow_id(prefix="raid-mismatch"),
-                step="arrival_mismatch",
-                decision="ignored",
-                level=logging.WARNING,
-                from_broadcaster_login=normalized_from_login,
-                to_broadcaster_login=to_broadcaster_login,
-                to_broadcaster_id=to_broadcaster_id,
-                details={"expected_from": expected_from},
-            )
-            return
-
-        self._record_pending_signal_observation(
-            pending,
-            signal_type="channel.raid",
-            status="matched_pending",
-        )
-        self._store_pending_raid(pending)
-        await self._confirm_pending_raid_arrival(
-            signal_type="channel.raid",
-            to_broadcaster_id=to_broadcaster_id,
-            to_broadcaster_login=to_broadcaster_login,
-            from_broadcaster_login=normalized_from_login,
+            from_broadcaster_login=from_broadcaster_login,
             viewer_count=viewer_count,
             from_broadcaster_id=from_broadcaster_id,
         )
@@ -3131,98 +2893,14 @@ class RaidBot:
         message_id: str | None = None,
         event_timestamp: str | None = None,
     ) -> None:
-        normalized_from_login = self._normalize_broadcaster_login(from_broadcaster_login)
-        pending = self._get_pending_raid(
-            to_broadcaster_id=to_broadcaster_id,
-            from_broadcaster_login=normalized_from_login,
-        )
-
-        if self._handle_secondary_confirmed_signal(
-            signal_type="channel.chat.notification",
+        await self._raid_arrival_runtime().on_chat_raid_notification(
             to_broadcaster_id=to_broadcaster_id,
             to_broadcaster_login=to_broadcaster_login,
-            from_broadcaster_login=normalized_from_login,
-            viewer_count=viewer_count,
-        ):
-            return
-
-        if not pending:
-            self._store_orphan_chat_raid_notification(
-                {
-                    "to_broadcaster_id": str(to_broadcaster_id or "").strip(),
-                    "to_broadcaster_login": self._normalize_broadcaster_login(
-                        to_broadcaster_login
-                    ),
-                    "from_broadcaster_id": str(from_broadcaster_id or "").strip() or None,
-                    "from_broadcaster_login": normalized_from_login,
-                    "viewer_count": int(viewer_count or 0),
-                    "message_id": str(message_id or "").strip() or None,
-                    "event_timestamp": str(event_timestamp or "").strip() or None,
-                    "observed_ts": time.time(),
-                }
-            )
-            self._increment_raid_observability_counter("raid_orphan_chat_notification_total")
-            log.info(
-                "Orphan channel.chat.notification raid observed: %s -> %s (viewer_count=%d, grace=%.0fs, message_id=%s)",
-                normalized_from_login,
-                to_broadcaster_login,
-                viewer_count,
-                _PENDING_CHAT_NOTIFICATION_GRACE_SECONDS,
-                message_id or "n/a",
-            )
-            self._log_raid_observability_event(
-                raid_flow_id=self._next_raid_observability_flow_id(prefix="raid-orphan"),
-                step="chat_notification_orphaned",
-                decision="stored",
-                from_broadcaster_login=normalized_from_login,
-                from_broadcaster_id=from_broadcaster_id,
-                to_broadcaster_login=to_broadcaster_login,
-                to_broadcaster_id=to_broadcaster_id,
-                details={"viewer_count": viewer_count, "message_id": message_id},
-            )
-            return
-
-        expected_from = str(pending.get("from_broadcaster_login") or normalized_from_login)
-        if expected_from != normalized_from_login:
-            self._record_pending_signal_observation(
-                pending,
-                signal_type="channel.chat.notification",
-                status="ignored",
-                reason="source_target_mismatch",
-                detail=f"expected={expected_from} actual={normalized_from_login}",
-            )
-            self._store_pending_raid(pending)
-            log.warning(
-                "Raid chat notification mismatch: expected from %s, got from %s",
-                expected_from,
-                normalized_from_login,
-            )
-            self._log_raid_observability_event(
-                raid_flow_id=str(pending.get("raid_flow_id") or "") or self._next_raid_observability_flow_id(prefix="raid-chat-mismatch"),
-                step="chat_notification_mismatch",
-                decision="ignored",
-                level=logging.WARNING,
-                from_broadcaster_login=normalized_from_login,
-                to_broadcaster_login=to_broadcaster_login,
-                to_broadcaster_id=to_broadcaster_id,
-                details={"expected_from": expected_from, "message_id": message_id},
-            )
-            return
-
-        self._record_pending_signal_observation(
-            pending,
-            signal_type="channel.chat.notification",
-            status="matched_pending",
-            detail=str(message_id or "").strip() or None,
-        )
-        self._store_pending_raid(pending)
-        await self._confirm_pending_raid_arrival(
-            signal_type="channel.chat.notification",
-            to_broadcaster_id=to_broadcaster_id,
-            to_broadcaster_login=to_broadcaster_login,
-            from_broadcaster_login=normalized_from_login,
+            from_broadcaster_login=from_broadcaster_login,
             viewer_count=viewer_count,
             from_broadcaster_id=from_broadcaster_id,
+            message_id=message_id,
+            event_timestamp=event_timestamp,
         )
 
     async def on_chat_unraid_notification(
@@ -3234,41 +2912,12 @@ class RaidBot:
         from_broadcaster_id: str | None = None,
         event_timestamp: str | None = None,
     ) -> None:
-        normalized_from_login = self._normalize_broadcaster_login(from_broadcaster_login)
-        pending = self._get_pending_raid(
-            to_broadcaster_id=to_broadcaster_id,
-            from_broadcaster_login=normalized_from_login,
-        )
-        if pending is not None:
-            self._record_pending_signal_observation(
-                pending,
-                signal_type="channel.chat.notification.unraid",
-                status="diagnostic_only",
-                reason="unraid_does_not_confirm",
-                detail=str(event_timestamp or "").strip() or None,
-            )
-            self._store_pending_raid(pending)
-
-        secondary_handled = self._handle_secondary_confirmed_signal(
-            signal_type="channel.chat.notification.unraid",
+        await self._raid_arrival_runtime().on_chat_unraid_notification(
             to_broadcaster_id=to_broadcaster_id,
             to_broadcaster_login=to_broadcaster_login,
-            from_broadcaster_login=normalized_from_login,
-            viewer_count=0,
-            unraid_seen=True,
-        )
-        if secondary_handled:
-            log.info(
-                "channel.chat.notification unraid observed after confirmed raid: %s -> %s",
-                normalized_from_login,
-                to_broadcaster_login,
-            )
-            return
-
-        log.info(
-            "channel.chat.notification unraid observed without confirmed raid correlation: %s -> %s",
-            normalized_from_login,
-            to_broadcaster_login,
+            from_broadcaster_login=from_broadcaster_login,
+            from_broadcaster_id=from_broadcaster_id,
+            event_timestamp=event_timestamp,
         )
 
     async def on_source_self_unraid_notification(
@@ -3279,19 +2928,11 @@ class RaidBot:
         message_id: str | None = None,
         event_timestamp: str | None = None,
     ) -> None:
-        canceled = self._cancel_pending_raids_for_source_unraid(
-            from_broadcaster_login=broadcaster_login,
-            from_broadcaster_id=broadcaster_id,
+        await self._raid_arrival_runtime().on_source_self_unraid_notification(
+            broadcaster_id=broadcaster_id,
+            broadcaster_login=broadcaster_login,
             message_id=message_id,
             event_timestamp=event_timestamp,
-        )
-        if canceled > 0:
-            return
-
-        log.info(
-            "Source self-unraid observed without pending auto-raid: %s (message_id=%s)",
-            self._normalize_broadcaster_login(broadcaster_login),
-            message_id or "n/a",
         )
 
     async def _send_partner_raid_message(
@@ -3335,26 +2976,36 @@ class RaidBot:
             if received_raid_count <= 0:
                 received_raid_count = 1
 
-            viewer_word = "Viewer" if viewer_count == 1 else "Viewern"
+            plan = self._partner_raid_delivery_planner().plan(
+                PartnerRaidDeliveryRequest(
+                    from_broadcaster_login=from_broadcaster_login,
+                    to_broadcaster_login=to_broadcaster_login,
+                    to_broadcaster_id=to_broadcaster_id,
+                    viewer_count=viewer_count,
+                    received_raid_count=received_raid_count,
+                    chat_bot_available=bool(self.chat_bot),
+                    outbound_chat_suppressed=False,
+                )
+            )
+            if not plan.should_deliver or not plan.message:
+                log.info(
+                    "Skipping partner raid message to %s (%s)",
+                    to_broadcaster_login,
+                    plan.reason or "blocked",
+                )
+                return
 
             # 1. Channel beitreten (falls noch nicht joined)
             await self.chat_bot.join(to_broadcaster_login, channel_id=to_broadcaster_id)
 
             # 2. Kurze Verzögerung, damit der Bot bereit ist und der Raid-Alert durch ist
-            await asyncio.sleep(5.0)
-
-            # 3. Nachricht vorbereiten
-            message = (
-                f"Hey @{to_broadcaster_login}! 🎮 "
-                f"@{from_broadcaster_login} hat dich gerade mit {viewer_count} {viewer_word} geraidet. "
-                f"Das ist dein Raid Nr. {received_raid_count} aus dem Deadlock Streamer-Netzwerk. ❤️"
-            )
+            await asyncio.sleep(plan.delay_seconds)
 
             # 4. Nachricht senden
             if hasattr(self.chat_bot, "_send_chat_message"):
                 success = await self.chat_bot._send_chat_message(
                     target_channel,
-                    message,
+                    plan.message,
                     source="partner_raid",
                 )
 
@@ -3537,125 +3188,20 @@ class RaidBot:
         confirmed_raid_count: int,
         raid_flow_id: str | None,
     ) -> None:
-        normalized_id = str(target_id or "").strip()
-        normalized_login = self._normalize_broadcaster_login(target_login)
-        if not normalized_id or not normalized_login:
-            return
-        if confirmed_raid_count < _EXTERNAL_RECRUITMENT_RAID_LIMIT:
-            return
-        if self._is_target_currently_partner(
-            target_id=normalized_id,
-            target_login=normalized_login,
-        ):
-            self._delete_external_recruitment_blacklist_pending(normalized_id)
-            return
-
-        try:
-            with transaction() as conn:
-                conn.execute(
-                    """
-                    INSERT INTO twitch_external_recruitment_blacklist_pending (
-                        target_id,
-                        target_login,
-                        confirmed_raid_count,
-                        threshold_reached_at,
-                        blacklist_after,
-                        last_raid_flow_id,
-                        updated_at
-                    )
-                    VALUES (
-                        %s,
-                        %s,
-                        %s,
-                        CURRENT_TIMESTAMP,
-                        CURRENT_TIMESTAMP + (%s * INTERVAL '1 second'),
-                        %s,
-                        CURRENT_TIMESTAMP
-                    )
-                    ON CONFLICT (target_id) DO UPDATE SET
-                        target_login = EXCLUDED.target_login,
-                        confirmed_raid_count = GREATEST(
-                            twitch_external_recruitment_blacklist_pending.confirmed_raid_count,
-                            EXCLUDED.confirmed_raid_count
-                        ),
-                        last_raid_flow_id = EXCLUDED.last_raid_flow_id,
-                        updated_at = CURRENT_TIMESTAMP
-                    """,
-                    (
-                        normalized_id,
-                        normalized_login,
-                        int(confirmed_raid_count),
-                        int(_EXTERNAL_RECRUITMENT_BLACKLIST_GRACE_SECONDS),
-                        str(raid_flow_id or "").strip() or None,
-                    ),
-                )
-        except Exception:
-            log.exception(
-                "Failed to schedule delayed external recruitment blacklist for %s (%s)",
-                normalized_login,
-                normalized_id,
-            )
+        self._raid_blacklist_service().schedule_external_recruitment_blacklist_pending(
+            target_id=target_id,
+            target_login=target_login,
+            confirmed_raid_count=confirmed_raid_count,
+            raid_flow_id=raid_flow_id,
+        )
 
     def _delete_external_recruitment_blacklist_pending(self, target_id: str) -> None:
-        normalized_id = str(target_id or "").strip()
-        if not normalized_id:
-            return
-        try:
-            with transaction() as conn:
-                conn.execute(
-                    """
-                    DELETE FROM twitch_external_recruitment_blacklist_pending
-                    WHERE target_id = %s
-                    """,
-                    (normalized_id,),
-                )
-        except Exception:
-            log.debug(
-                "Failed to delete delayed external recruitment blacklist for %s",
-                normalized_id,
-                exc_info=True,
-            )
+        self._raid_blacklist_service().delete_external_recruitment_blacklist_pending(
+            target_id
+        )
 
     def _process_due_external_recruitment_blacklist_pending(self) -> None:
-        try:
-            with readonly_connection() as conn:
-                rows = conn.execute(
-                    """
-                    SELECT target_id, target_login, confirmed_raid_count, threshold_reached_at
-                    FROM twitch_external_recruitment_blacklist_pending
-                    WHERE blacklist_after <= NOW()
-                    ORDER BY blacklist_after ASC
-                    LIMIT 50
-                    """
-                ).fetchall()
-        except Exception:
-            log.debug("Failed to load due delayed external recruitment blacklists", exc_info=True)
-            return
-
-        for row in rows:
-            target_id = str(row[0] or "").strip()
-            target_login = self._normalize_broadcaster_login(row[1])
-            confirmed_raid_count = int(row[2] or 0)
-            threshold_reached_at = str(row[3] or "").strip()
-            if not target_id or not target_login:
-                continue
-
-            if self._is_blacklisted(target_id, target_login):
-                self._delete_external_recruitment_blacklist_pending(target_id)
-                continue
-
-            if self._is_target_currently_partner(target_id=target_id, target_login=target_login):
-                self._delete_external_recruitment_blacklist_pending(target_id)
-                continue
-
-            reason = (
-                "confirmed_external_recruitment_limit_grace_expired:"
-                f" count={confirmed_raid_count}"
-                f" limit={_EXTERNAL_RECRUITMENT_RAID_LIMIT}"
-                f" threshold_reached_at={threshold_reached_at or '-'}"
-            )
-            self._add_to_blacklist(target_id, target_login, reason)
-            self._delete_external_recruitment_blacklist_pending(target_id)
+        self._raid_blacklist_service().process_due_external_recruitment_blacklist_pending()
 
     def _schedule_external_target_ban_check(
         self,
@@ -3664,181 +3210,27 @@ class RaidBot:
         target_login: str,
         source: str,
     ) -> None:
-        normalized_id = str(target_id or "").strip()
-        normalized_login = self._normalize_broadcaster_login(target_login)
-        normalized_source = str(source or "").strip().lower()
-        if not normalized_id or not normalized_login or not normalized_source:
-            return
-        try:
-            with transaction() as conn:
-                conn.execute(
-                    """
-                    INSERT INTO twitch_external_bot_ban_check_pending (
-                        target_id,
-                        target_login,
-                        source,
-                        run_after,
-                        updated_at
-                    )
-                    VALUES (
-                        %s,
-                        %s,
-                        %s,
-                        CURRENT_TIMESTAMP + (%s * INTERVAL '1 second'),
-                        CURRENT_TIMESTAMP
-                    )
-                    ON CONFLICT (target_id) DO UPDATE SET
-                        target_login = EXCLUDED.target_login,
-                        source = EXCLUDED.source,
-                        run_after = EXCLUDED.run_after,
-                        updated_at = CURRENT_TIMESTAMP
-                    """,
-                    (
-                        normalized_id,
-                        normalized_login,
-                        normalized_source,
-                        int(_EXTERNAL_BAN_CHECK_DELAY_SECONDS),
-                    ),
-                )
-        except Exception:
-            log.exception(
-                "Failed to schedule delayed external bot ban check for %s (%s)",
-                normalized_login,
-                normalized_id,
-            )
+        self._raid_blacklist_service().schedule_external_target_ban_check(
+            target_id=target_id,
+            target_login=target_login,
+            source=source,
+        )
 
     def _delete_external_target_ban_check_pending(self, target_id: str) -> None:
-        normalized_id = str(target_id or "").strip()
-        if not normalized_id:
-            return
-        try:
-            with transaction() as conn:
-                conn.execute(
-                    """
-                    DELETE FROM twitch_external_bot_ban_check_pending
-                    WHERE target_id = %s
-                    """,
-                    (normalized_id,),
-                )
-        except Exception:
-            log.debug(
-                "Failed to delete delayed external bot ban check for %s",
-                normalized_id,
-                exc_info=True,
-            )
+        self._raid_blacklist_service().delete_external_target_ban_check_pending(target_id)
 
     def _reschedule_external_target_ban_check_pending(self, target_id: str, delay_seconds: int = 900) -> None:
-        normalized_id = str(target_id or "").strip()
-        if not normalized_id:
-            return
-        try:
-            with transaction() as conn:
-                conn.execute(
-                    """
-                    UPDATE twitch_external_bot_ban_check_pending
-                    SET run_after = CURRENT_TIMESTAMP + (%s * INTERVAL '1 second'),
-                        updated_at = CURRENT_TIMESTAMP
-                    WHERE target_id = %s
-                    """,
-                    (int(max(60, delay_seconds)), normalized_id),
-                )
-        except Exception:
-            log.debug(
-                "Failed to reschedule delayed external bot ban check for %s",
-                normalized_id,
-                exc_info=True,
-            )
+        self._raid_blacklist_service().reschedule_external_target_ban_check_pending(
+            target_id,
+            delay_seconds=delay_seconds,
+        )
 
     async def _process_due_external_target_ban_checks(self) -> None:
-        try:
-            with readonly_connection() as conn:
-                rows = conn.execute(
-                    """
-                    SELECT target_id, target_login, source
-                    FROM twitch_external_bot_ban_check_pending
-                    WHERE run_after <= NOW()
-                    ORDER BY run_after ASC
-                    LIMIT 25
-                    """
-                ).fetchall()
-        except Exception:
-            log.debug("Failed to load due external bot ban checks", exc_info=True)
-            return
-
-        for row in rows:
-            target_id = str(row[0] or "").strip()
-            target_login = self._normalize_broadcaster_login(row[1])
-            source = str(row[2] or "").strip().lower() or "recruitment"
-            if not target_id or not target_login:
-                continue
-
-            if self._is_blacklisted(target_id, target_login):
-                self._delete_external_target_ban_check_pending(target_id)
-                continue
-
-            if self._is_target_currently_partner(target_id=target_id, target_login=target_login):
-                self._delete_external_target_ban_check_pending(target_id)
-                continue
-
-            chat_bot = self.chat_bot
-            if not chat_bot:
-                log.debug(
-                    "Skipping due external bot ban check for %s: chat bot unavailable",
-                    target_login,
-                )
-                self._reschedule_external_target_ban_check_pending(target_id)
-                continue
-
-            part_channels = getattr(chat_bot, "part_channels", None)
-            if callable(part_channels):
-                try:
-                    await part_channels([target_login])
-                except Exception:
-                    log.debug(
-                        "External bot ban check could not part %s before rejoin probe",
-                        target_login,
-                        exc_info=True,
-                    )
-
-            try:
-                joined = await chat_bot.join(target_login, channel_id=target_id)
-            except Exception:
-                log.debug(
-                    "External bot ban check failed for %s (source=%s)",
-                    target_login,
-                    source,
-                    exc_info=True,
-                )
-                self._reschedule_external_target_ban_check_pending(target_id)
-                continue
-
-            if joined:
-                log.info(
-                    "External bot ban check completed for %s (source=%s)",
-                    target_login,
-                    source,
-                )
-                self._delete_external_target_ban_check_pending(target_id)
-            else:
-                log.warning(
-                    "External bot ban check could not confirm chat access for %s (source=%s)",
-                    target_login,
-                    source,
-                )
-                if self._is_blacklisted(target_id, target_login):
-                    self._delete_external_target_ban_check_pending(target_id)
-                else:
-                    self._reschedule_external_target_ban_check_pending(target_id)
+        await self._raid_blacklist_service().process_due_external_target_ban_checks()
 
     @staticmethod
     def _parse_nonnegative_int(value: object) -> int | None:
-        try:
-            if value is None:
-                return None
-            parsed = int(value)
-            return parsed if parsed >= 0 else None
-        except (TypeError, ValueError):
-            return None
+        return RecruitmentMessagingService.parse_nonnegative_int(value)
 
     async def _resolve_recruitment_followers_total(
         self,
@@ -3847,203 +3239,12 @@ class RaidBot:
         target_id: str | None,
         target_stream_data: dict | None,
     ) -> int | None:
-        cached_total = self._parse_nonnegative_int(
-            (target_stream_data or {}).get("followers_total")
+        return await self._recruitment_messaging_service().resolve_recruitment_followers_total(
+            login=login,
+            target_id=target_id,
+            target_stream_data=target_stream_data,
+            session=self.session,
         )
-        if cached_total is not None:
-            return cached_total
-
-        flow_id = self._next_raid_observability_flow_id(prefix="followers-recruitment")
-        resolved_target_id = str(target_id or "").strip()
-        runtime_state = self._build_analytics_followers_runtime_state()
-        if not resolved_target_id or not self.session:
-            self._increment_raid_observability_counter(
-                "followers_recruitment_reason_missing_target_id_total"
-            )
-            self._log_analytics_followers_decision(
-                flow_id=flow_id,
-                flow="followers_recruitment",
-                login=login,
-                target_id=resolved_target_id,
-                decision="failed",
-                reason="missing_target_id" if not resolved_target_id else "raid_session_unavailable",
-                request_attempted="none",
-                request_result="not_attempted",
-                http_status=None,
-                scope_state={"bot": "unknown", "streamer": "absent"},
-                runtime_state=runtime_state,
-            )
-            return None
-
-        try:
-            from ..api.twitch_api import TwitchAPI
-        except Exception:
-            return None
-
-        try:
-            api = TwitchAPI(
-                self.auth_manager.client_id,
-                self.auth_manager.client_secret,
-                session=self.session,
-            )
-            # Prefer the central bot token for moderator-scoped reads; fall back to broadcaster grants.
-            followers_total = None
-            bot_token, _bot_id, bot_scopes = await self._resolve_bot_oauth_context()
-            bot_scope_state = (
-                "present"
-                if bot_token and "moderator:read:followers" in bot_scopes
-                else ("unknown" if bot_token and not bot_scopes else ("absent" if not bot_token else "missing"))
-            )
-            bot_http_status: int | None = None
-            streamer_http_status: int | None = None
-            if bot_token and (not bot_scopes or "moderator:read:followers" in bot_scopes):
-                self._increment_raid_observability_counter(
-                    "followers_recruitment_bot_path_attempt_total"
-                )
-                bot_result = await self._get_followers_total_result_with_legacy_fallback(
-                    api,
-                    resolved_target_id,
-                    user_token=bot_token,
-                )
-                bot_http_status = (
-                    int(bot_result.get("http_status"))
-                    if bot_result.get("http_status") is not None
-                    else None
-                )
-                if bot_result.get("ok") and bot_result.get("data") is not None:
-                    followers_total = bot_result.get("data")
-                    self._clear_user_scope_fallback_warning(
-                        area="recruitment follower lookup",
-                        subject=login or resolved_target_id,
-                    )
-                    self._increment_raid_observability_counter(
-                        "followers_recruitment_bot_path_success_total"
-                    )
-                    self._log_analytics_followers_decision(
-                        flow_id=flow_id,
-                        flow="followers_recruitment",
-                        login=login,
-                        target_id=resolved_target_id,
-                        decision="success",
-                        reason="bot_path_success",
-                        request_attempted="bot",
-                        request_result="success",
-                        http_status=bot_http_status or 200,
-                        scope_state={"bot": bot_scope_state, "streamer": "absent"},
-                        runtime_state=runtime_state,
-                        bot_request_attempted=True,
-                        bot_request_success=True,
-                        bot_http_status=bot_http_status,
-                    )
-                else:
-                    self._increment_raid_observability_counter(
-                        "followers_recruitment_bot_path_failure_total"
-                    )
-            if followers_total is None:
-                user_token: str | None = None
-                try:
-                    user_token = await self.auth_manager.get_valid_token(
-                        resolved_target_id,
-                        self.session,
-                    )
-                except Exception:
-                    user_token = None
-                streamer_scope_state = "absent" if not user_token else "unknown"
-                if user_token:
-                    self._warn_user_scope_fallback_once(
-                        area="recruitment follower lookup",
-                        subject=login or resolved_target_id,
-                    )
-                    streamer_result = await self._get_followers_total_result_with_legacy_fallback(
-                        api,
-                        resolved_target_id,
-                        user_token=user_token,
-                    )
-                    streamer_http_status = (
-                        int(streamer_result.get("http_status"))
-                        if streamer_result.get("http_status") is not None
-                        else None
-                    )
-                    if streamer_result.get("ok") and streamer_result.get("data") is not None:
-                        followers_total = streamer_result.get("data")
-                        self._increment_raid_observability_counter(
-                            "followers_recruitment_reason_fallback_to_streamer_token_total"
-                        )
-                        self._log_analytics_followers_decision(
-                            flow_id=flow_id,
-                            flow="followers_recruitment",
-                            login=login,
-                            target_id=resolved_target_id,
-                            decision="success",
-                            reason="fallback_to_streamer_token",
-                            request_attempted="bot,streamer" if bot_token else "streamer",
-                            request_result="success",
-                            http_status=streamer_http_status or 200,
-                            scope_state={"bot": bot_scope_state, "streamer": streamer_scope_state},
-                            runtime_state=runtime_state,
-                            bot_request_attempted=bool(bot_token),
-                            bot_request_success=False,
-                            bot_http_status=bot_http_status,
-                            streamer_http_status=streamer_http_status,
-                        )
-                    else:
-                        final_reason = str(
-                            streamer_result.get("error_code")
-                            or "helix_followers_failed"
-                        )
-                        self._increment_raid_observability_counter(
-                            f"followers_recruitment_reason_{final_reason}_total"
-                        )
-                        self._log_analytics_followers_decision(
-                            flow_id=flow_id,
-                            flow="followers_recruitment",
-                            login=login,
-                            target_id=resolved_target_id,
-                            decision="failed",
-                            reason=final_reason,
-                            request_attempted="bot,streamer" if bot_token else "streamer",
-                            request_result="failed",
-                            http_status=streamer_http_status,
-                            scope_state={"bot": bot_scope_state, "streamer": streamer_scope_state},
-                            runtime_state=runtime_state,
-                            bot_request_attempted=bool(bot_token),
-                            bot_request_success=False,
-                            bot_http_status=bot_http_status,
-                            streamer_http_status=streamer_http_status,
-                        )
-                else:
-                    final_reason = (
-                        "bot_scope_missing"
-                        if bot_scope_state == "missing"
-                        else ("bot_token_missing" if not bot_token else "bot_path_unavailable")
-                    )
-                    self._increment_raid_observability_counter(
-                        f"followers_recruitment_reason_{final_reason}_total"
-                    )
-                    self._log_analytics_followers_decision(
-                        flow_id=flow_id,
-                        flow="followers_recruitment",
-                        login=login,
-                        target_id=resolved_target_id,
-                        decision="failed",
-                        reason=final_reason,
-                        request_attempted="bot" if bot_token else "none",
-                        request_result="failed" if bot_token else "not_attempted",
-                        http_status=bot_http_status,
-                        scope_state={"bot": bot_scope_state, "streamer": "absent"},
-                        runtime_state=runtime_state,
-                        bot_request_attempted=bool(bot_token),
-                        bot_request_success=False,
-                        bot_http_status=bot_http_status,
-                    )
-        except Exception:
-            log.debug("Follower-Check fehlgeschlagen fuer %s", login, exc_info=True)
-            return None
-
-        parsed_total = self._parse_nonnegative_int(followers_total)
-        if parsed_total is not None and isinstance(target_stream_data, dict):
-            target_stream_data["followers_total"] = parsed_total
-        return parsed_total
 
     async def _send_recruitment_message_now(
         self,
@@ -4052,225 +3253,18 @@ class RaidBot:
         target_stream_data: dict | None = None,
         confirmed_external_raid_count: int | None = None,
     ):
-        """
-        Sendet eine Einladungs-Nachricht im Chat des geraideten Nicht-Partners.
-
-        Diese Nachricht wird nur gesendet, wenn ein deutscher Deadlock-Streamer
-        (kein Partner) geraidet wird, um ihn zur Community einzuladen.
-
-        Zeigt dem Streamer minimale Stats als Teaser (Avg Viewer, Peak).
-        """
-        if not self.chat_bot:
-            log.debug("Chat bot not available for recruitment message")
-            return
-
-        # 1. Sofort beitreten, damit wir bereit sind
-        try:
-            target_id = None
-            if target_stream_data:
-                target_id = target_stream_data.get("user_id")
-
-            if not target_id:
-                # Fallback: ID über Login-Namen auflösen
-                users = await self.chat_bot.fetch_users(logins=[to_broadcaster_login])
-                if users:
-                    target_id = str(users[0].id)
-
-            if not target_id:
-                log.warning(
-                    "Could not resolve user ID for recruitment message to %s",
-                    to_broadcaster_login,
-                )
-                return
-
-            target_channel = self._make_chat_target(to_broadcaster_login, target_id)
-            suppression = self._lookup_outbound_chat_suppression(
-                to_broadcaster_login,
-                target_id,
-                source="recruitment",
-            )
-            if suppression is not None:
-                log.info(
-                    "Skipping recruitment message to %s due stored chat suppression (code=%s, until=%s)",
-                    to_broadcaster_login,
-                    suppression.get("reason_code") or "unknown",
-                    suppression.get("suppressed_until") or "-",
-                )
-                return
-
-            await self.chat_bot.join(to_broadcaster_login, channel_id=target_id)
-        except Exception:
-            log.debug("Konnte Channel %s nicht vorab beitreten", to_broadcaster_login)
-            target_channel = self._make_chat_target(to_broadcaster_login, target_id or "")
-
-        # Follow-Status prüfen (Auto-Follow per API ist bei Twitch nicht mehr möglich).
-        if target_id and hasattr(self.chat_bot, "follow_channel"):
-            await self.chat_bot.follow_channel(target_id)
-
-        # 2. 15 Sekunden warten, damit der Streamer den Raid-Alert verarbeiten kann
-        log.info(
-            "Warte 15s vor Senden der Recruitment-Message an %s...",
-            to_broadcaster_login,
+        await self._recruitment_messaging_service().send_recruitment_message_now(
+            from_broadcaster_login=from_broadcaster_login,
+            to_broadcaster_login=to_broadcaster_login,
+            target_stream_data=target_stream_data,
+            confirmed_external_raid_count=confirmed_external_raid_count,
+            session=getattr(self, "_session", None),
+            chat_bot=self.chat_bot,
         )
-        await asyncio.sleep(15.0)
-
-        try:
-            # 2. Anti-Spam Check: Haben wir diesen Streamer schon "kürzlich" geraidet?
-            # Wir prüfen, ob es mehr als 1 erfolgreichen Raid in den letzten 24 Stunden gab.
-            with readonly_connection() as conn:
-                raid_check = conn.execute(
-                    """
-                    SELECT COUNT(*) FROM twitch_raid_history
-                    WHERE to_broadcaster_id = %s
-                      AND COALESCE(success, FALSE) IS TRUE
-                      AND executed_at > NOW() - INTERVAL '1 day'
-                    """,
-                    (target_id,),
-                ).fetchone()
-                recent_raids = raid_check[0] if raid_check else 0
-
-            if recent_raids > 2:
-                log.info(
-                    "Skipping recruitment message to %s (Anti-Spam: %d raids in last 24 hours)",
-                    to_broadcaster_login,
-                    recent_raids,
-                )
-                return
-
-            # 3. Bestimme die Anzahl der bisherigen Netzwerk-Raids für diesen Streamer
-            total_raids = (
-                int(confirmed_external_raid_count)
-                if confirmed_external_raid_count is not None
-                else await asyncio.to_thread(
-                    self._get_confirmed_external_recruitment_raid_count,
-                    str(target_id),
-                )
-            )
-
-            # 4. Nachricht vorbereiten (mit Stats Teaser)
-            followers_total = await self._resolve_recruitment_followers_total(
-                login=to_broadcaster_login,
-                target_id=target_id,
-                target_stream_data=target_stream_data,
-            )
-            use_direct_invite = (
-                followers_total is not None
-                and followers_total <= RECRUIT_DIRECT_INVITE_MAX_FOLLOWERS
-            )
-            discord_invite = (
-                RECRUIT_DISCORD_INVITE_DIRECT if use_direct_invite else RECRUIT_DISCORD_INVITE
-            )
-
-            stats_teaser = ""
-            try:
-                with readonly_connection() as conn:
-                    stats = conn.execute(
-                        """
-                        SELECT
-                            ROUND(AVG(viewer_count)) as avg_viewers,
-                            MAX(viewer_count) as peak_viewers
-                        FROM twitch_stats_category
-                        WHERE streamer = %s
-                          AND viewer_count > 0
-                        """,
-                        (to_broadcaster_login.lower(),),
-                    ).fetchone()
-
-                if stats and stats[0]:
-                    avg_viewers = int(stats[0])
-                    peak_viewers = int(stats[1]) if stats[1] else 0
-                    if peak_viewers > 0:
-                        stats_teaser = f"Übrigens: Du hattest im Schnitt {avg_viewers} Viewer bei Deadlock, dein Peak war {peak_viewers}. "
-            except Exception:
-                log.debug("Could not fetch stats for %s", to_broadcaster_login, exc_info=True)
-
-            # Nachrichtenauswahl basierend auf Raid-Anzahl (FOMO / Insider-Club Strategie)
-            if total_raids <= 1:
-                message = (
-                    f"Was für ein Match! 🔥 @{from_broadcaster_login} bringt dir gerade Unterstützung aus unserem "
-                    f"Deadlock-Streamer-Netzwerk vorbei. Wir suchen gerade Streamer für unsere deutsche Deadlock Community noch aktive Streamer. "
-                    f"Und wenn du in der Kategorie nicht untergehen willst, sondern endlich Impact haben möchtest, Check mal die Bio ab! ❤️"
-                )
-            elif total_raids == 2:
-                message = (
-                    f"Schon der 2. Raid von UNS für DICH! ❤️ Das ist kein Zufall mehr. "
-                    f"Wir vernetzen die Deutschen Deadlock-Streamer mit der Community, damit du nicht mehr einer von vielen bleibst. "
-                    f"Mehr infos in der Bio! 🚀"
-                )
-            elif total_raids == 3:
-                message = (
-                    f"Hattrick! 🎯 Aller guten Dinge sind 3, @{to_broadcaster_login}. Wir liefern dir die Viewer und "
-                    f"die Positionierung, die du alleine niemals schaffst. Willst du weiter unsichtbar bleiben oder Teil der Elite werden? "
-                    f"Grow or Fade Away – Dein Platz wartet in der Bio! 🕯️"
-                )
-            elif total_raids == 4:
-                message = (
-                    f"Dauersupport für @{to_broadcaster_login}! 💎 {total_raids}. Raid von uns. "
-                    f"Werde Teil des Deadlock-Partner-Netzwerks und dominiere die Kategorie mit uns. Wir regeln die Raids, du den Content. "
-                    f"Zum Onboarding geht´s in der Bio! 🔥"
-                )
-            else:
-                # Ab dem 5. Raid senden wir keine Recruitment-Nachricht mehr (Anti-Spam / Blockliste)
-                log.info("Max recruitment messages (4) reached for %s, skipping.", to_broadcaster_login)
-                return
-
-
-            # 5. Sende Nachricht via Bot
-            # TwitchIO 3.x: Nutze _send_chat_message helper (MockChannel)
-            # Diese Methode existiert im chat_bot und funktioniert mit EventSub
-            try:
-                if hasattr(self.chat_bot, "_send_chat_message"):
-                    success = await self.chat_bot._send_chat_message(
-                        target_channel,
-                        message,
-                        source="recruitment",
-                    )
-
-                    if success:
-                        log.info(
-                            "Sent recruitment message in %s's chat (raided by %s)",
-                            to_broadcaster_login,
-                            from_broadcaster_login,
-                        )
-                        self._schedule_external_target_ban_check(
-                            target_id=str(target_id),
-                            target_login=to_broadcaster_login,
-                            source="recruitment",
-                        )
-                    else:
-                        log.warning(
-                            "Failed to send recruitment message to %s (returned False)",
-                            to_broadcaster_login,
-                        )
-                else:
-                    log.debug(
-                        "Chat bot does not have _send_chat_message method, skipping recruitment message to %s",
-                        to_broadcaster_login,
-                    )
-            except Exception:
-                log.exception(
-                    "Failed to send recruitment message to %s (raided by %s)",
-                    to_broadcaster_login,
-                    from_broadcaster_login,
-                )
-
-        except Exception:
-            log.exception(
-                "Failed to send recruitment message to %s (raided by %s)",
-                to_broadcaster_login,
-                from_broadcaster_login,
-            )
 
     @staticmethod
     def _make_chat_target(login: str, user_id: str):
-        class _MockChannel:
-            __slots__ = ("name", "id")
-
-            def __init__(self, name: str, channel_id: str) -> None:
-                self.name = name
-                self.id = channel_id
-
-        return _MockChannel(login, user_id)
+        return make_chat_target(login, user_id)
 
     def _lookup_outbound_chat_suppression(
         self,
@@ -4279,27 +3273,12 @@ class RaidBot:
         *,
         source: str,
     ) -> dict | None:
-        chat_bot = self.chat_bot
-        if not chat_bot or not hasattr(chat_bot, "_get_outbound_chat_suppression"):
-            return None
-
-        resolved_target_id = str(target_id or "").strip()
-        if not resolved_target_id:
-            return None
-
-        try:
-            return chat_bot._get_outbound_chat_suppression(
-                self._make_chat_target(target_login, resolved_target_id),
-                source,
-            )
-        except Exception:
-            log.debug(
-                "Could not load outbound chat suppression for %s (source=%s)",
-                target_login,
-                source,
-                exc_info=True,
-            )
-            return None
+        return lookup_outbound_chat_suppression(
+            self.chat_bot,
+            target_login=target_login,
+            target_id=target_id,
+            source=source,
+        )
 
     def _get_recent_raid_targets(self, from_broadcaster_id: str, days: int) -> set[str]:
         if not from_broadcaster_id or days <= 0:
@@ -4333,320 +3312,115 @@ class RaidBot:
             from ..api.twitch_api import TwitchAPI
         except Exception:
             return
-
-        # 1. Candidates that still need a follower count
-        needs_total = [
-            c for c in candidates if c.get("followers_total") is None
-        ]
-        if not needs_total:
-            return
-
-        # 2. Bulk-query PG stream_sessions cache for known logins
-        logins_needed = [
-            (c.get("user_login") or "").lower() for c in needs_total
-            if (c.get("user_login") or "").strip()
-        ]
-        if logins_needed:
-            try:
-                _ph = ",".join("%s" for _ in logins_needed)
-                with readonly_connection() as conn:
-                    _db_rows = conn.execute(
-                        f"""
-                        SELECT streamer_login, COALESCE(followers_end, followers_start) AS follower_total
-                          FROM twitch_stream_sessions
-                         WHERE streamer_login IN ({_ph})
-                           AND COALESCE(followers_end, followers_start) IS NOT NULL
-                         ORDER BY COALESCE(ended_at, started_at) DESC
-                        """,
-                        logins_needed,
-                    ).fetchall()
-                # Keep only most recent hit per login
-                _db_map: dict[str, int] = {}
-                for _r in _db_rows:
-                    _login = str(_r[0]).lower()
-                    if _login not in _db_map and _r[1] is not None:
-                        _db_map[_login] = int(_r[1])
-                # Write DB values into candidates
-                for c in needs_total:
-                    _clogin = (c.get("user_login") or "").lower()
-                    if _clogin in _db_map:
-                        c["followers_total"] = _db_map[_clogin]
-            except Exception:
-                log.debug("followers_totals: DB cache query failed", exc_info=True)
-
-        # 3. Parallel API fallback for remaining candidates (no DB hit)
-        api_needed = [
-            c for c in needs_total if c.get("followers_total") is None
-            and str(c.get("user_id") or "").strip()
-        ]
-        if not api_needed:
-            return
-
         api = TwitchAPI(
             self.auth_manager.client_id,
             self.auth_manager.client_secret,
             session=self.session,
         )
         bot_token, _bot_id, bot_scopes = await self._resolve_bot_oauth_context()
-        bot_can_read_followers = bool(
-            bot_token and (not bot_scopes or "moderator:read:followers" in bot_scopes)
-        )
+        bot_scope_set = set(bot_scopes or set())
+        candidate_labels = {
+            str(candidate.get("user_id") or "").strip(): str(candidate.get("user_login") or "").strip().lower()
+            for candidate in candidates
+            if str(candidate.get("user_id") or "").strip()
+        }
 
-        async def _fetch_one(candidate: dict) -> None:
-            user_id = str(candidate.get("user_id") or "").strip()
-            if not user_id:
-                return
-            login = str(candidate.get("user_login") or user_id).strip().lower()
-            flow_id = self._next_raid_observability_flow_id(prefix="followers-candidate")
-            runtime_state = self._build_analytics_followers_runtime_state()
-            bot_scope_state = (
-                "present"
-                if bot_token and "moderator:read:followers" in bot_scopes
-                else ("unknown" if bot_token and not bot_scopes else ("absent" if not bot_token else "missing"))
-            )
-            bot_http_status: int | None = None
-            streamer_http_status: int | None = None
+        async def _load_cached_totals(logins: tuple[str, ...]) -> dict[str, int]:
+            if not logins:
+                return {}
+            try:
+                placeholders = ",".join("%s" for _ in logins)
+                with readonly_connection() as conn:
+                    rows = conn.execute(
+                        f"""
+                        SELECT streamer_login, COALESCE(followers_end, followers_start) AS follower_total
+                          FROM twitch_stream_sessions
+                         WHERE streamer_login IN ({placeholders})
+                           AND COALESCE(followers_end, followers_start) IS NOT NULL
+                         ORDER BY COALESCE(ended_at, started_at) DESC
+                        """,
+                        logins,
+                    ).fetchall()
+            except Exception:
+                log.debug("followers_totals: DB cache query failed", exc_info=True)
+                return {}
 
-            # Prefer bot token; fall back to broadcaster token for edge cases.
-            followers = None
-            if bot_can_read_followers and bot_token:
+            db_map: dict[str, int] = {}
+            for row in rows:
+                login = str(row[0] or "").strip().lower()
+                if not login or login in db_map or row[1] is None:
+                    continue
+                db_map[login] = int(row[1])
+            return db_map
+
+        async def _resolve_user_token(user_id: str) -> str | None:
+            try:
+                return await self.auth_manager.get_valid_token(user_id, self.session)
+            except Exception:
+                return None
+
+        async def _fetch_followers_total(user_id: str, user_token: str | None) -> int | None:
+            label = candidate_labels.get(user_id) or user_id
+            is_bot_path = bool(bot_token and user_token and user_token == bot_token)
+            if is_bot_path:
                 self._increment_raid_observability_counter(
                     "followers_candidate_bot_path_attempt_total"
                 )
-                bot_result = await self._get_followers_total_result_with_legacy_fallback(
-                    api,
-                    user_id,
-                    user_token=bot_token,
+            else:
+                self._warn_user_scope_fallback_once(
+                    area="raid candidate follower lookup",
+                    subject=label,
                 )
-                bot_http_status = (
-                    int(bot_result.get("http_status"))
-                    if bot_result.get("http_status") is not None
-                    else None
-                )
-                if bot_result.get("ok") and bot_result.get("data") is not None:
-                    followers = bot_result.get("data")
+
+            result = await self._get_followers_total_result_with_legacy_fallback(
+                api,
+                user_id,
+                user_token=user_token,
+            )
+            if result.get("ok") and result.get("data") is not None:
+                if is_bot_path:
                     self._clear_user_scope_fallback_warning(
                         area="raid candidate follower lookup",
-                        subject=str(candidate.get("user_login") or user_id),
+                        subject=label,
                     )
                     self._increment_raid_observability_counter(
                         "followers_candidate_bot_path_success_total"
                     )
-                    self._log_analytics_followers_decision(
-                        flow_id=flow_id,
-                        flow="followers_candidate",
-                        login=login,
-                        target_id=user_id,
-                        decision="success",
-                        reason="bot_path_success",
-                        request_attempted="bot",
-                        request_result="success",
-                        http_status=bot_http_status or 200,
-                        scope_state={"bot": bot_scope_state, "streamer": "absent"},
-                        runtime_state=runtime_state,
-                        bot_request_attempted=True,
-                        bot_request_success=True,
-                        bot_http_status=bot_http_status,
-                    )
                 else:
                     self._increment_raid_observability_counter(
-                        "followers_candidate_bot_path_failure_total"
+                        "followers_candidate_reason_fallback_to_streamer_token_total"
                     )
+                return int(result["data"])
 
-            if followers is None:
-                try:
-                    token = await self.auth_manager.get_valid_token(user_id, self.session)
-                except Exception:
-                    token = None
-                if token:
-                    self._warn_user_scope_fallback_once(
-                        area="raid candidate follower lookup",
-                        subject=str(candidate.get("user_login") or user_id),
-                    )
-                    streamer_result = await self._get_followers_total_result_with_legacy_fallback(
-                        api,
-                        user_id,
-                        user_token=token,
-                    )
-                    streamer_http_status = (
-                        int(streamer_result.get("http_status"))
-                        if streamer_result.get("http_status") is not None
-                        else None
-                    )
-                    if streamer_result.get("ok") and streamer_result.get("data") is not None:
-                        followers = streamer_result.get("data")
-                        self._increment_raid_observability_counter(
-                            "followers_candidate_reason_fallback_to_streamer_token_total"
-                        )
-                        self._log_analytics_followers_decision(
-                            flow_id=flow_id,
-                            flow="followers_candidate",
-                            login=login,
-                            target_id=user_id,
-                            decision="success",
-                            reason="fallback_to_streamer_token",
-                            request_attempted="bot,streamer" if bot_can_read_followers and bot_token else "streamer",
-                            request_result="success",
-                            http_status=streamer_http_status or 200,
-                            scope_state={"bot": bot_scope_state, "streamer": "unknown"},
-                            runtime_state=runtime_state,
-                            bot_request_attempted=bool(bot_can_read_followers and bot_token),
-                            bot_request_success=False,
-                            bot_http_status=bot_http_status,
-                            streamer_http_status=streamer_http_status,
-                        )
-                    else:
-                        final_reason = str(
-                            streamer_result.get("error_code")
-                            or "helix_followers_failed"
-                        )
-                        self._increment_raid_observability_counter(
-                            f"followers_candidate_reason_{final_reason}_total"
-                        )
-                        self._log_analytics_followers_decision(
-                            flow_id=flow_id,
-                            flow="followers_candidate",
-                            login=login,
-                            target_id=user_id,
-                            decision="failed",
-                            reason=final_reason,
-                            request_attempted="bot,streamer" if bot_can_read_followers and bot_token else "streamer",
-                            request_result="failed",
-                            http_status=streamer_http_status,
-                            scope_state={"bot": bot_scope_state, "streamer": "unknown"},
-                            runtime_state=runtime_state,
-                            bot_request_attempted=bool(bot_can_read_followers and bot_token),
-                            bot_request_success=False,
-                            bot_http_status=bot_http_status,
-                            streamer_http_status=streamer_http_status,
-                        )
-                elif followers is None:
-                    final_reason = (
-                        str(bot_result.get("error_code") or "helix_followers_failed")
-                        if bot_can_read_followers and bot_token
-                        else ("bot_scope_missing" if bot_scope_state == "missing" else "bot_token_missing")
-                    )
-                    self._increment_raid_observability_counter(
-                        f"followers_candidate_reason_{final_reason}_total"
-                    )
-                    self._log_analytics_followers_decision(
-                        flow_id=flow_id,
-                        flow="followers_candidate",
-                        login=login,
-                        target_id=user_id,
-                        decision="failed",
-                        reason=final_reason,
-                        request_attempted="bot" if bot_can_read_followers and bot_token else "none",
-                        request_result="failed" if bot_can_read_followers and bot_token else "not_attempted",
-                        http_status=bot_http_status,
-                        scope_state={"bot": bot_scope_state, "streamer": "absent"},
-                        runtime_state=runtime_state,
-                        bot_request_attempted=bool(bot_can_read_followers and bot_token),
-                        bot_request_success=False,
-                        bot_http_status=bot_http_status,
-                    )
+            error_code = str(result.get("error_code") or "helix_followers_failed")
+            if is_bot_path:
+                self._increment_raid_observability_counter(
+                    "followers_candidate_bot_path_failure_total"
+                )
+            else:
+                self._increment_raid_observability_counter(
+                    f"followers_candidate_reason_{error_code}_total"
+                )
+            return None
 
-            if followers is not None:
-                candidate["followers_total"] = int(followers)
-
-        await asyncio.gather(*(_fetch_one(c) for c in api_needed), return_exceptions=True)
+        await FollowerTotalEnricher(max_concurrency=8).enrich_candidates(
+            candidates,
+            load_cached_totals=_load_cached_totals,
+            fetch_followers_total=_fetch_followers_total,
+            resolve_user_token=_resolve_user_token,
+            auth_context=FollowerAuthContext(
+                bot_token=bot_token,
+                bot_scopes=bot_scope_set,
+            ),
+        )
 
     def _load_prepared_partner_scores(
         self,
         twitch_user_ids: list[str],
     ) -> dict[str, dict[str, object]]:
-        requested = [str(user_id or "").strip() for user_id in twitch_user_ids if str(user_id or "").strip()]
-        if not requested:
-            return {}
-
-        if callable(load_partner_raid_score_map):
-            try:
-                return load_partner_raid_score_map(requested)
-            except Exception:
-                log.debug("Prepared partner score helper failed", exc_info=True)
-
-        sql = (
-            "SELECT twitch_user_id, twitch_login, is_live, final_score, today_received_raids, "
-            "duration_score, time_pattern_score, base_score, "
-            "new_partner_multiplier, raid_boost_multiplier, last_computed_at "
-            "FROM twitch_partner_raid_scores "
-            f"WHERE twitch_user_id IN ({','.join('%s' for _ in requested)})"
+        return self._candidate_selection_service().load_prepared_partner_scores(
+            twitch_user_ids
         )
-        try:
-            with readonly_connection() as conn:
-                rows = conn.execute(sql, tuple(requested)).fetchall()
-        except Exception:
-            log.debug("Prepared partner score DB query failed", exc_info=True)
-            return {}
-
-        def _safe_int(value: object, default: int = 0) -> int:
-            try:
-                if value is None:
-                    return default
-                return int(value)
-            except (TypeError, ValueError):
-                return default
-
-        def _safe_float(value: object, default: float = 0.0) -> float:
-            try:
-                if value is None:
-                    return default
-                return float(value)
-            except (TypeError, ValueError):
-                return default
-
-        def _clamp(value: float, minimum: float = 0.0, maximum: float = 1.0) -> float:
-            return max(minimum, min(maximum, value))
-
-        out: dict[str, dict[str, object]] = {}
-        for row in rows:
-            twitch_user_id = str(row["twitch_user_id"] if hasattr(row, "keys") else row[0] or "").strip()
-            if not twitch_user_id:
-                continue
-            duration_score = _safe_float(
-                row["duration_score"] if hasattr(row, "keys") else row[5],
-                0.5,
-            )
-            time_pattern_score = _safe_float(
-                row["time_pattern_score"] if hasattr(row, "keys") else row[6],
-                0.5,
-            )
-            base_score = _safe_float(
-                row["base_score"] if hasattr(row, "keys") else row[7],
-                0.5,
-            )
-            readiness_score = _clamp((duration_score * 0.6) + (time_pattern_score * 0.4))
-            fairness_score = _clamp((base_score - (readiness_score * 0.65)) / 0.35)
-            out[twitch_user_id] = {
-                "twitch_user_id": twitch_user_id,
-                "twitch_login": str(
-                    row["twitch_login"] if hasattr(row, "keys") else row[1] or ""
-                ).strip().lower(),
-                "is_live": bool(_safe_int(row["is_live"] if hasattr(row, "keys") else row[2], 0)),
-                "final_score": _safe_float(
-                    row["final_score"] if hasattr(row, "keys") else row[3],
-                    0.0,
-                ),
-                "today_received_raids": _safe_int(
-                    row["today_received_raids"] if hasattr(row, "keys") else row[4],
-                    0,
-                ),
-                "duration_score": duration_score,
-                "time_pattern_score": time_pattern_score,
-                "readiness_score": readiness_score,
-                "fairness_score": fairness_score,
-                "base_score": base_score,
-                "new_partner_multiplier": _safe_float(
-                    row["new_partner_multiplier"] if hasattr(row, "keys") else row[8],
-                    1.0,
-                ),
-                "raid_boost_multiplier": _safe_float(
-                    row["raid_boost_multiplier"] if hasattr(row, "keys") else row[9],
-                    1.0,
-                ),
-                "last_computed_at": row["last_computed_at"] if hasattr(row, "keys") else row[10],
-            }
-        return out
 
     async def _refresh_partner_score_cache_if_available(
         self,
@@ -4654,302 +3428,40 @@ class RaidBot:
         *,
         reason: str,
     ) -> None:
-        twitch_user_key = str(twitch_user_id or "").strip()
-        if not twitch_user_key or not callable(refresh_partner_raid_score_async):
-            return
-        try:
-            await refresh_partner_raid_score_async(twitch_user_key)
-            log.info(
-                "Prepared partner raid score cache refreshed for %s (%s)",
-                twitch_user_key,
-                reason,
-            )
-        except Exception:
-            log.debug(
-                "Prepared partner raid score cache refresh failed for %s (%s)",
-                twitch_user_key,
-                reason,
-                exc_info=True,
-            )
+        await self._candidate_selection_service().refresh_partner_score_cache_if_available(
+            twitch_user_id,
+            reason=reason,
+        )
 
     async def _select_partner_candidate_by_score(
         self,
         candidates: list[dict],
         from_broadcaster_id: str,
     ) -> dict | None:
-        """
-        Wählt unter Partnern nur noch vorberechnete Cache-Scores aus.
-
-        Primär: höchster final_score.
-        Bei engem Score (<= 0.05): weniger today_received_raids.
-        Danach: bestehender deterministischer Fallback viewer_count/followers_total/started_at.
-
-        Wichtig: Der 7-Tage-Target-Cooldown gilt hier bewusst NICHT.
-        Partner-Raids sollen innerhalb des Partner-Pools rein nach Score priorisiert werden.
-        Der Cooldown bleibt nur für den Non-Partner-Fallback aktiv.
-        """
-        if not candidates:
-            return None
-
-        pool = list(candidates)
-
-        score_map = self._load_prepared_partner_scores(
-            [str(candidate.get("user_id") or "").strip() for candidate in pool]
+        return await self._candidate_selection_service().select_partner_candidate_by_score(
+            candidates,
+            from_broadcaster_id,
         )
-
-        scored_candidates: list[dict] = []
-        cache_misses = 0
-        stale_not_live = 0
-        for candidate in pool:
-            twitch_user_id = str(candidate.get("user_id") or "").strip()
-            candidate_login = str(candidate.get("user_login") or "").strip().lower()
-            if not twitch_user_id:
-                cache_misses += 1
-                log.info(
-                    "Prepared partner score skipped for %s: missing twitch_user_id",
-                    candidate_login or "<unknown>",
-                )
-                continue
-            score_row = score_map.get(twitch_user_id)
-            if not score_row:
-                cache_misses += 1
-                log.info(
-                    "Prepared partner score cache miss for %s (%s)",
-                    candidate_login or twitch_user_id,
-                    twitch_user_id,
-                )
-                continue
-            if not bool(score_row.get("is_live")):
-                stale_not_live += 1
-                log.info(
-                    "Prepared partner score ignored for %s (%s): cache row is not live",
-                    candidate_login or twitch_user_id,
-                    twitch_user_id,
-                )
-                continue
-            enriched = dict(candidate)
-            enriched["_partner_score"] = score_row
-            scored_candidates.append(enriched)
-
-        if not scored_candidates:
-            log.info(
-                "No prepared partner score candidate available for broadcaster_id=%s "
-                "(input=%d, cache_misses=%d, stale_not_live=%d)",
-                from_broadcaster_id,
-                len(candidates),
-                cache_misses,
-                stale_not_live,
-            )
-            return None
-
-        def _safe_int(value: object, default: int) -> int:
-            try:
-                if value is None:
-                    return default
-                return int(value)
-            except (TypeError, ValueError):
-                return default
-
-        def _safe_float(value: object, default: float = 0.0) -> float:
-            try:
-                if value is None:
-                    return default
-                return float(value)
-            except (TypeError, ValueError):
-                return default
-
-        def _score(candidate: dict) -> float:
-            score_row = candidate.get("_partner_score") or {}
-            return _safe_float(score_row.get("final_score"), 0.0)
-
-        def _today_received(candidate: dict) -> int:
-            score_row = candidate.get("_partner_score") or {}
-            return _safe_int(score_row.get("today_received_raids"), 10**9)
-
-        def _fallback_sort_key(candidate: dict) -> tuple[int, int, str]:
-            viewers = _safe_int(candidate.get("viewer_count"), 10**9)
-            followers = _safe_int(candidate.get("followers_total"), 10**9)
-            started_at = candidate.get("started_at") or "9999-99-99"
-            return (viewers, followers, started_at)
-
-        best_final_score = max(_score(candidate) for candidate in scored_candidates)
-        close_candidates = [
-            candidate
-            for candidate in scored_candidates
-            if abs(best_final_score - _score(candidate)) <= 0.05
-        ]
-
-        selection_reason = "highest_final_score"
-        selected: dict
-        if len(close_candidates) == 1:
-            selected = close_candidates[0]
-        else:
-            lowest_today_received = min(_today_received(candidate) for candidate in close_candidates)
-            tie_candidates = [
-                candidate
-                for candidate in close_candidates
-                if _today_received(candidate) == lowest_today_received
-            ]
-            if len(tie_candidates) == 1:
-                selection_reason = "today_received_raids"
-                selected = tie_candidates[0]
-            else:
-                await self._attach_followers_totals(tie_candidates)
-                tie_candidates.sort(key=_fallback_sort_key)
-                selection_reason = "viewer_count_followers_started_at"
-                selected = tie_candidates[0]
-
-        selected_score = selected.get("_partner_score") or {}
-        log.info(
-            "Partner raid target selection (prepared score): %s final=%.3f today=%s "
-            "reason=%s cache_misses=%d stale_not_live=%d from %d candidates",
-            selected.get("user_login"),
-            _safe_float(selected_score.get("final_score"), 0.0),
-            _safe_int(selected_score.get("today_received_raids"), 0),
-            selection_reason,
-            cache_misses,
-            stale_not_live,
-            len(candidates),
-        )
-
-        return selected
 
     async def _select_fairest_candidate(
         self, candidates: list[dict], from_broadcaster_id: str
     ) -> dict | None:
-        """
-        Wählt den Raid-Kandidaten mit den wenigsten Viewern.
-        Bei Gleichstand: Wenigste Follower (wenn verfügbar), danach kürzeste Stream-Zeit.
-        Ziele der letzten Tage werden vermieden, sofern Alternativen existieren.
-        """
-        if not candidates:
-            return None
-
-        recent_targets = self._get_recent_raid_targets(
-            from_broadcaster_id, RAID_TARGET_COOLDOWN_DAYS
+        return await self._candidate_selection_service().select_fairest_candidate(
+            candidates,
+            from_broadcaster_id,
         )
-        if recent_targets:
-            filtered = [c for c in candidates if str(c.get("user_id") or "") not in recent_targets]
-        else:
-            filtered = []
-
-        pool = filtered or candidates
-
-        await self._attach_followers_totals(pool)
-
-        def _safe_int(value: object, default: int) -> int:
-            try:
-                if value is None:
-                    return default
-                return int(value)
-            except (TypeError, ValueError):
-                return default
-
-        def _sort_key(candidate: dict) -> tuple[int, int, str]:
-            viewers = _safe_int(candidate.get("viewer_count"), 10**9)
-            followers = _safe_int(candidate.get("followers_total"), 10**9)
-            started_at = candidate.get("started_at") or "9999-99-99"
-            return (viewers, followers, started_at)
-
-        pool.sort(key=_sort_key)
-
-        selected = pool[0]
-        log.info(
-            "Raid target selection (min viewers): %s (viewers=%s, followers=%s, recent_filtered=%d) from %d candidates",
-            selected.get("user_login"),
-            selected.get("viewer_count"),
-            selected.get("followers_total"),
-            max(0, len(candidates) - len(pool)),
-            len(candidates),
-        )
-
-        return selected
 
     def _is_blacklisted(self, target_id: str, target_login: str) -> bool:
-        """Prüft, ob ein Ziel auf der Blacklist steht."""
-        try:
-            with readonly_connection() as conn:
-                row = conn.execute(
-                    """
-                    SELECT 1 FROM twitch_raid_blacklist
-                    WHERE (target_id IS NOT NULL AND target_id = %s)
-                       OR lower(target_login) = lower(%s)
-                    """,
-                    (target_id, target_login),
-                ).fetchone()
-                return bool(row)
-        except Exception:
-            log.error("Error checking blacklist", exc_info=True)
-            return False
+        return self._raid_blacklist_service().is_blacklisted(target_id, target_login)
 
     def _load_raid_blacklist(self) -> tuple[set[str], set[str]]:
-        blacklisted_ids: set[str] = set()
-        blacklisted_logins: set[str] = set()
-        with readonly_connection() as conn:
-            for bl_row in conn.execute(
-                "SELECT target_id, lower(target_login) FROM twitch_raid_blacklist"
-            ).fetchall():
-                if bl_row[0]:
-                    blacklisted_ids.add(str(bl_row[0]))
-                if bl_row[1]:
-                    blacklisted_logins.add(str(bl_row[1]))
-
-        return blacklisted_ids, blacklisted_logins
+        return self._raid_blacklist_service().load_raid_blacklist()
 
     def _add_to_blacklist(self, target_id: str, target_login: str, reason: str):
-        """Fügt ein Ziel zur Blacklist hinzu."""
-        normalized_id = str(target_id or "").strip() or None
-        normalized_login = self._normalize_broadcaster_login(target_login)
-        if not normalized_login:
-            return
-        try:
-            with transaction() as conn:
-                if normalized_id:
-                    conn.execute(
-                        """
-                        DELETE FROM twitch_raid_blacklist
-                        WHERE target_id = %s
-                          AND lower(target_login) <> lower(%s)
-                        """,
-                        (normalized_id, normalized_login),
-                    )
-                conn.execute(
-                    """
-                    INSERT INTO twitch_raid_blacklist (target_id, target_login, reason)
-                    VALUES (%s, %s, %s)
-                    ON CONFLICT (target_login) DO UPDATE SET
-                        target_id = COALESCE(EXCLUDED.target_id, twitch_raid_blacklist.target_id),
-                        reason = EXCLUDED.reason,
-                        added_at = CURRENT_TIMESTAMP
-                    """,
-                    (normalized_id, normalized_login, reason),
-                )
-                # autocommit – no explicit commit needed
-            log.info(
-                "Added %s (ID: %s) to raid blacklist. Reason: %s",
-                normalized_login,
-                normalized_id,
-                reason,
-            )
-        except Exception:
-            log.error("Error adding to blacklist", exc_info=True)
+        self._raid_blacklist_service().add_to_blacklist(target_id, target_login, reason)
 
     def _is_retryable_raid_error(self, error: str | None) -> bool:
-        """Return True for raid target errors where we should try another target."""
-        if not error:
-            return False
-        msg = error.lower()
-        retryable_markers = (
-            "cannot be raided",
-            "does not allow you to raid",
-            "do not allow you to raid",
-            "not allow you to raid",
-            "settings do not allow you to raid",
-            "not accepting raids",
-            "does not allow raids",
-            "raids are disabled",
-        )
-        return any(marker in msg for marker in retryable_markers)
+        return is_retryable_raid_error(error)
 
     async def _execute_raid_pipeline(
         self,
@@ -4965,210 +3477,21 @@ class RaidBot:
         reason: str,
         set_manual_suppression: bool = False,
     ) -> dict[str, object]:
-        flow_start_ts = offline_trigger_ts if offline_trigger_ts is not None else time.monotonic()
-        offline_trigger_ts = flow_start_ts
-        active_session = self.session
-        if active_session is None:
-            log.warning(
-                "Raid pipeline unavailable for %s: no active HTTP session",
-                broadcaster_login,
-            )
-            return {"status": "unavailable", "error": "no_active_session"}
-
-        max_attempts = 3
-        exclude_ids = {broadcaster_id}
-        cached_de_streams = None
-
-        try:
-            blacklisted_ids, blacklisted_logins = await asyncio.to_thread(
-                self._load_raid_blacklist
-            )
-        except Exception:
-            log.exception("Raid pipeline blocked because blacklist load failed")
-            return {"status": "blocked", "error": "blacklist_unavailable"}
-
-        for attempt in range(max_attempts):
-            attempt_start_ts = time.monotonic()
-            target = None
-            is_partner_raid = False
-            candidates_count = 0
-
-            partner_candidates = [
-                stream_data
-                for stream_data in online_partners
-                if stream_data.get("user_id") not in exclude_ids
-                and bool(stream_data.get("raid_enabled", True))
-                and str(stream_data.get("user_id") or "") not in blacklisted_ids
-                and (stream_data.get("user_login") or "").lower() not in blacklisted_logins
-            ]
-
-            if partner_candidates:
-                is_partner_raid = True
-                target = await self._select_partner_candidate_by_score(
-                    partner_candidates,
-                    broadcaster_id,
-                )
-                candidates_count = len(partner_candidates)
-
-            if not target and api and category_id:
-                if cached_de_streams is None:
-                    try:
-                        log.info(
-                            "No partners online for %s, fetching Deadlock-DE fallback",
-                            broadcaster_login,
-                        )
-                        cached_de_streams = await api.get_streams_by_category(
-                            category_id, language="de", limit=50
-                        )
-                    except Exception:
-                        log.exception("Failed to get Deadlock-DE streams for fallback raid")
-                        cached_de_streams = []
-
-                fallback_candidates = [
-                    stream_data
-                    for stream_data in cached_de_streams
-                    if stream_data.get("user_id") not in exclude_ids
-                    and str(stream_data.get("user_id") or "") not in blacklisted_ids
-                    and (stream_data.get("user_login") or "").lower() not in blacklisted_logins
-                ]
-
-                if fallback_candidates:
-                    target = await self._select_fairest_candidate(
-                        fallback_candidates,
-                        broadcaster_id,
-                    )
-                    candidates_count = len(fallback_candidates)
-
-            if not target:
-                log.info(
-                    "No valid raid target found for %s (Attempt %d/%d, total_elapsed=%.0fms, reason=%s)",
-                    broadcaster_login,
-                    attempt + 1,
-                    max_attempts,
-                    (time.monotonic() - flow_start_ts) * 1000.0,
-                    reason,
-                )
-                return {"status": "no_target"}
-
-            target_id = str(target.get("user_id") or "").strip()
-            target_login = str(target.get("user_login") or "").strip().lower()
-            target_started_at = target.get("started_at", "")
-
-            selection_ms = (time.monotonic() - attempt_start_ts) * 1000.0
-            raid_flow_id = self._next_raid_observability_flow_id(prefix="raid")
-            self._increment_raid_observability_counter("raid_flow_started_total")
-            self._log_raid_observability_event(
-                raid_flow_id=raid_flow_id,
-                step="attempt_selected",
-                decision="candidate_selected",
-                from_broadcaster_login=broadcaster_login,
-                from_broadcaster_id=broadcaster_id,
-                to_broadcaster_login=target_login,
-                to_broadcaster_id=target_id,
-                details={
-                    "attempt": attempt + 1,
-                    "max_attempts": max_attempts,
-                    "selection_ms": int(selection_ms),
-                    "candidates_count": candidates_count,
-                    "reason": reason,
-                },
-            )
-            log.info(
-                "Executing raid attempt %d/%d: %s -> %s (selection %.0fms, candidates=%d, reason=%s)",
-                attempt + 1,
-                max_attempts,
-                broadcaster_login,
-                target_login,
-                selection_ms,
-                candidates_count,
-                reason,
-            )
-
-            channel_raid_ready = await self._ensure_raid_arrival_subscription_ready(
-                to_broadcaster_id=target_id,
-                to_broadcaster_login=target_login,
-                raid_flow_id=raid_flow_id,
-            )
-
-            api_call_start = time.monotonic()
-            success, error = await self.raid_executor.start_raid(
-                from_broadcaster_id=broadcaster_id,
-                from_broadcaster_login=broadcaster_login,
-                to_broadcaster_id=target_id,
-                to_broadcaster_login=target_login,
+        return await self._raid_pipeline_service().execute(
+            RaidPipelineRequest(
+                broadcaster_id=broadcaster_id,
+                broadcaster_login=broadcaster_login,
                 viewer_count=viewer_count,
                 stream_duration_sec=stream_duration_sec,
-                target_stream_started_at=target_started_at,
-                candidates_count=candidates_count,
-                session=active_session,
+                online_partners=online_partners,
+                session=self.session,
+                api=api,
+                category_id=category_id,
+                offline_trigger_ts=offline_trigger_ts,
                 reason=reason,
+                set_manual_suppression=set_manual_suppression,
             )
-            api_call_ms = (time.monotonic() - api_call_start) * 1000.0
-            total_ms = (time.monotonic() - flow_start_ts) * 1000.0
-
-            if success:
-                await self._register_pending_raid(
-                    from_broadcaster_login=broadcaster_login,
-                    to_broadcaster_id=target_id,
-                    to_broadcaster_login=target_login,
-                    target_stream_data=target,
-                    is_partner_raid=is_partner_raid,
-                    viewer_count=viewer_count,
-                    offline_trigger_ts=offline_trigger_ts,
-                    raid_flow_id=raid_flow_id,
-                    channel_raid_ready=channel_raid_ready,
-                )
-                if set_manual_suppression:
-                    self.mark_manual_raid_started(
-                        broadcaster_id=str(broadcaster_id),
-                        ttl_seconds=180.0,
-                    )
-                log.info(
-                    "Raid attempt %d/%d succeeded (%s -> %s) api=%.0fms, total_elapsed=%.0fms, reason=%s",
-                    attempt + 1,
-                    max_attempts,
-                    broadcaster_login,
-                    target_login,
-                    api_call_ms,
-                    total_ms,
-                    reason,
-                )
-                return {
-                    "status": "started",
-                    "target_login": target_login,
-                    "target": target,
-                    "is_partner_raid": is_partner_raid,
-                    "viewer_count": viewer_count,
-                }
-
-            exclude_ids.add(target_id)
-
-            if self._is_retryable_raid_error(error):
-                if is_partner_raid:
-                    log.warning(
-                        "Raid failed: Partner target %s does not allow raids. Skipping without blacklist.",
-                        target_login,
-                    )
-                else:
-                    log.warning(
-                        "Raid failed: Target %s does not allow raids. Blacklisting and retrying.",
-                        target_login,
-                    )
-                    self._add_to_blacklist(target_id, target_login, error)
-                continue
-
-            log.error(
-                "Raid failed with non-retriable error after %.0fms (api=%.0fms, attempt=%d/%d, reason=%s): %s",
-                total_ms,
-                api_call_ms,
-                attempt + 1,
-                max_attempts,
-                reason,
-                error,
-            )
-            return {"status": "raid_failed", "error": error or "unknown_error"}
-
-        return {"status": "raid_failed", "error": "no_valid_target_after_retries"}
+        )
 
     async def start_manual_raid(
         self,
@@ -5294,26 +3617,23 @@ class RaidBot:
 
         # Prüfen, ob Streamer Auto-Raid aktiviert hat
         with readonly_connection() as conn:
-            _s_row = load_active_partner(conn, twitch_user_id=broadcaster_id)
-        with readonly_connection() as conn:
-            _a_row = conn.execute(
-                "SELECT raid_enabled FROM twitch_raid_auth WHERE twitch_user_id = %s",
-                (broadcaster_id,),
-            ).fetchone()
-        row = (
-            ((_s_row["raid_bot_enabled"] if hasattr(_s_row, "keys") else _s_row[13]) if _s_row else None),
-            (_a_row[0] if _a_row else None),
-        ) if (_s_row is not None or _a_row is not None) else None
+            eligibility = load_offline_auto_raid_eligibility(
+                conn,
+                twitch_user_id=broadcaster_id,
+            )
 
-        if not row:
+        if not eligibility.active_partner and not eligibility.auth_row_found:
             log.debug("Streamer %s not found in DB", broadcaster_login)
             return None
 
-        raid_bot_enabled, raid_auth_enabled = row
-        if not raid_bot_enabled:
+        if not eligibility.active_partner:
+            log.debug("Raid bot disabled for %s (not active partner)", broadcaster_login)
+            return None
+
+        if not eligibility.raid_bot_enabled:
             log.debug("Raid bot disabled for %s (setting)", broadcaster_login)
             return None
-        if not raid_auth_enabled:
+        if not eligibility.raid_auth_enabled:
             log.debug("Raid bot disabled for %s (no auth)", broadcaster_login)
             return None
 
@@ -5338,6 +3658,4 @@ class RaidBot:
         )
         if str(result.get("status") or "") == "started":
             return str(result.get("target_login") or "") or None
-        return None
-
         return None

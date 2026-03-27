@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -46,6 +47,21 @@ def _bool_int(value: Any, default: int = 0) -> int:
 def _is_departnered_status(value: Any) -> bool:
     normalized = str(value or "").strip().lower()
     return normalized in {PARTNER_STATUS_DEPARTNERED, _LEGACY_PARTNER_STATUS_ARCHIVED}
+
+
+def _is_missing_schema_error(exc: Exception, *object_names: str) -> bool:
+    message = str(exc).lower()
+    if not any(name.lower() in message for name in object_names):
+        return False
+    missing_markers = (
+        "does not exist",
+        "undefined table",
+        "undefined column",
+        "no such table",
+        "no such column",
+        "unknown column",
+    )
+    return any(marker in message for marker in missing_markers)
 
 
 def _load_streamer_row(
@@ -160,7 +176,14 @@ def _load_partner_row(
         {order_clause}
         LIMIT 1
     """
-    return conn.execute(sql, tuple(params)).fetchone()
+    try:
+        return conn.execute(sql, tuple(params)).fetchone()
+    except Exception as exc:
+        msg = str(exc).lower()
+        if "admin_archived_at" not in msg:
+            raise
+    compat_sql = sql.replace("p.admin_archived_at", "NULL AS admin_archived_at")
+    return conn.execute(compat_sql, tuple(params)).fetchone()
 
 
 def load_active_partner(
@@ -175,6 +198,143 @@ def load_active_partner(
         twitch_user_id=twitch_user_id,
         status=PARTNER_STATUS_ACTIVE,
     )
+
+
+@dataclass(slots=True, frozen=True)
+class OfflineAutoRaidEligibility:
+    twitch_user_id: str
+    twitch_login: str | None
+    active_partner: bool
+    auth_row_found: bool
+    raid_bot_enabled: bool
+    raid_auth_enabled: bool
+
+    @property
+    def can_auto_raid(self) -> bool:
+        return bool(
+            self.active_partner and self.raid_bot_enabled and self.raid_auth_enabled
+        )
+
+
+def load_offline_auto_raid_eligibility(
+    conn: Any,
+    *,
+    twitch_user_id: str | None,
+) -> OfflineAutoRaidEligibility:
+    normalized_user_id = _normalize_user_id(twitch_user_id)
+    if not normalized_user_id:
+        return OfflineAutoRaidEligibility(
+            twitch_user_id="",
+            twitch_login=None,
+            active_partner=False,
+            auth_row_found=False,
+            raid_bot_enabled=False,
+            raid_auth_enabled=False,
+        )
+
+    active_row = None
+    try:
+        active_row = load_active_partner(conn, twitch_user_id=normalized_user_id)
+    except Exception as exc:
+        if not _is_missing_schema_error(
+            exc,
+            "twitch_partners",
+            "twitch_streamer_identities",
+        ):
+            raise
+
+    raid_auth_row = None
+    try:
+        raid_auth_row = conn.execute(
+            """
+            SELECT twitch_user_id, twitch_login, raid_enabled
+            FROM twitch_raid_auth
+            WHERE twitch_user_id = %s
+            LIMIT 1
+            """,
+            (normalized_user_id,),
+        ).fetchone()
+    except Exception as exc:
+        if not _is_missing_schema_error(exc, "twitch_raid_auth"):
+            raise
+
+    active_partner = bool(active_row)
+    auth_row_found = bool(raid_auth_row)
+    raid_bot_enabled = bool(
+        _bool_int(
+            _row_value(active_row, "raid_bot_enabled", 13, 0),
+            default=0,
+        )
+    )
+    raid_auth_enabled = bool(
+        _bool_int(
+            _row_value(raid_auth_row, "raid_enabled", 2, 0),
+            default=0,
+        )
+    )
+    twitch_login = (
+        _normalize_login(
+            _row_value(active_row, "twitch_login", 2, None)
+            or _row_value(raid_auth_row, "twitch_login", 1, None)
+        )
+        or None
+    )
+    return OfflineAutoRaidEligibility(
+        twitch_user_id=normalized_user_id,
+        twitch_login=twitch_login,
+        active_partner=active_partner,
+        auth_row_found=auth_row_found,
+        raid_bot_enabled=raid_bot_enabled,
+        raid_auth_enabled=raid_auth_enabled,
+    )
+
+
+def archive_active_partner(
+    conn: Any,
+    *,
+    twitch_login: str | None = None,
+    twitch_user_id: str | None = None,
+) -> dict[str, Any] | None:
+    archived = departner_active_partner(
+        conn,
+        twitch_login=twitch_login,
+        twitch_user_id=twitch_user_id,
+        restore_non_partner=False,
+        disable_raid_auth=True,
+        clear_verification=False,
+    )
+    if not archived:
+        return None
+
+    normalized_login = _normalize_login(archived.get("twitch_login"))
+    normalized_user_id = _normalize_user_id(archived.get("twitch_user_id"))
+    partner_row_id = archived.get("partner_row_id")
+    if partner_row_id is not None:
+        conn.execute(
+            """
+            UPDATE twitch_partners
+            SET status = %s
+            WHERE id = %s
+            """,
+            (_LEGACY_PARTNER_STATUS_ARCHIVED, partner_row_id),
+        )
+    else:
+        conn.execute(
+            """
+            UPDATE twitch_partners
+            SET status = %s
+            WHERE (%s <> '' AND twitch_user_id = %s)
+               OR (%s <> '' AND LOWER(twitch_login) = LOWER(%s))
+            """,
+            (
+                _LEGACY_PARTNER_STATUS_ARCHIVED,
+                normalized_user_id,
+                normalized_user_id,
+                normalized_login,
+                normalized_login,
+            ),
+        )
+    return archived
 
 
 def load_latest_partner_history(
@@ -774,102 +934,165 @@ def promote_streamer_to_partner(
     )
 
     if active_row:
-        conn.execute(
-            """
-            UPDATE twitch_partners
-            SET twitch_login = %s,
-                require_discord_link = %s,
-                last_description = %s,
-                last_link_ok = %s,
-                added_by = %s,
-                last_link_checked_at = %s,
-                next_link_check_at = %s,
-                manual_verified_permanent = %s,
-                manual_verified_until = %s,
-                manual_verified_at = %s,
-                manual_partner_opt_out = %s,
-                raid_bot_enabled = %s,
-                silent_ban = %s,
-                silent_raid = %s,
-                live_ping_role_id = %s,
-                live_ping_enabled = %s,
-                partnered_at = %s,
-                admin_archived_at = NULL,
-                departnered_at = NULL,
-                status = %s
-            WHERE id = %s
-            """,
-            (
-                normalized_login,
-                partner_values["require_discord_link"],
-                partner_values["last_description"],
-                partner_values["last_link_ok"],
-                partner_values["added_by"],
-                partner_values["last_link_checked_at"],
-                partner_values["next_link_check_at"],
-                partner_values["manual_verified_permanent"],
-                partner_values["manual_verified_until"],
-                partner_values["manual_verified_at"],
-                partner_values["manual_partner_opt_out"],
-                partner_values["raid_bot_enabled"],
-                partner_values["silent_ban"],
-                partner_values["silent_raid"],
-                partner_values["live_ping_role_id"],
-                partner_values["live_ping_enabled"],
-                effective_partnered_at,
-                PARTNER_STATUS_ACTIVE,
-                _row_value(active_row, "id", 0),
-            ),
+        update_params = (
+            normalized_login,
+            partner_values["require_discord_link"],
+            partner_values["last_description"],
+            partner_values["last_link_ok"],
+            partner_values["added_by"],
+            partner_values["last_link_checked_at"],
+            partner_values["next_link_check_at"],
+            partner_values["manual_verified_permanent"],
+            partner_values["manual_verified_until"],
+            partner_values["manual_verified_at"],
+            partner_values["manual_partner_opt_out"],
+            partner_values["raid_bot_enabled"],
+            partner_values["silent_ban"],
+            partner_values["silent_raid"],
+            partner_values["live_ping_role_id"],
+            partner_values["live_ping_enabled"],
+            effective_partnered_at,
+            PARTNER_STATUS_ACTIVE,
+            _row_value(active_row, "id", 0),
         )
+        try:
+            conn.execute(
+                """
+                UPDATE twitch_partners
+                SET twitch_login = %s,
+                    require_discord_link = %s,
+                    last_description = %s,
+                    last_link_ok = %s,
+                    added_by = %s,
+                    last_link_checked_at = %s,
+                    next_link_check_at = %s,
+                    manual_verified_permanent = %s,
+                    manual_verified_until = %s,
+                    manual_verified_at = %s,
+                    manual_partner_opt_out = %s,
+                    raid_bot_enabled = %s,
+                    silent_ban = %s,
+                    silent_raid = %s,
+                    live_ping_role_id = %s,
+                    live_ping_enabled = %s,
+                    partnered_at = %s,
+                    admin_archived_at = NULL,
+                    departnered_at = NULL,
+                    status = %s
+                WHERE id = %s
+                """,
+                update_params,
+            )
+        except Exception as exc:
+            if "admin_archived_at" not in str(exc).lower():
+                raise
+            conn.execute(
+                """
+                UPDATE twitch_partners
+                SET twitch_login = %s,
+                    require_discord_link = %s,
+                    last_description = %s,
+                    last_link_ok = %s,
+                    added_by = %s,
+                    last_link_checked_at = %s,
+                    next_link_check_at = %s,
+                    manual_verified_permanent = %s,
+                    manual_verified_until = %s,
+                    manual_verified_at = %s,
+                    manual_partner_opt_out = %s,
+                    raid_bot_enabled = %s,
+                    silent_ban = %s,
+                    silent_raid = %s,
+                    live_ping_role_id = %s,
+                    live_ping_enabled = %s,
+                    partnered_at = %s,
+                    departnered_at = NULL,
+                    status = %s
+                WHERE id = %s
+                """,
+                update_params,
+            )
     else:
-        conn.execute(
-            """
-            INSERT INTO twitch_partners (
-                twitch_user_id,
-                twitch_login,
-                require_discord_link,
-                last_description,
-                last_link_ok,
-                added_by,
-                last_link_checked_at,
-                next_link_check_at,
-                manual_verified_permanent,
-                manual_verified_until,
-                manual_verified_at,
-                manual_partner_opt_out,
-                raid_bot_enabled,
-                silent_ban,
-                silent_raid,
-                live_ping_role_id,
-                live_ping_enabled,
-                partnered_at,
-                admin_archived_at,
-                departnered_at,
-                status
-            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NULL, NULL, %s)
-            """,
-            (
-                normalized_user_id,
-                normalized_login,
-                partner_values["require_discord_link"],
-                partner_values["last_description"],
-                partner_values["last_link_ok"],
-                partner_values["added_by"],
-                partner_values["last_link_checked_at"],
-                partner_values["next_link_check_at"],
-                partner_values["manual_verified_permanent"],
-                partner_values["manual_verified_until"],
-                partner_values["manual_verified_at"],
-                partner_values["manual_partner_opt_out"],
-                partner_values["raid_bot_enabled"],
-                partner_values["silent_ban"],
-                partner_values["silent_raid"],
-                partner_values["live_ping_role_id"],
-                partner_values["live_ping_enabled"],
-                effective_partnered_at,
-                PARTNER_STATUS_ACTIVE,
-            ),
+        insert_params = (
+            normalized_user_id,
+            normalized_login,
+            partner_values["require_discord_link"],
+            partner_values["last_description"],
+            partner_values["last_link_ok"],
+            partner_values["added_by"],
+            partner_values["last_link_checked_at"],
+            partner_values["next_link_check_at"],
+            partner_values["manual_verified_permanent"],
+            partner_values["manual_verified_until"],
+            partner_values["manual_verified_at"],
+            partner_values["manual_partner_opt_out"],
+            partner_values["raid_bot_enabled"],
+            partner_values["silent_ban"],
+            partner_values["silent_raid"],
+            partner_values["live_ping_role_id"],
+            partner_values["live_ping_enabled"],
+            effective_partnered_at,
+            PARTNER_STATUS_ACTIVE,
         )
+        try:
+            conn.execute(
+                """
+                INSERT INTO twitch_partners (
+                    twitch_user_id,
+                    twitch_login,
+                    require_discord_link,
+                    last_description,
+                    last_link_ok,
+                    added_by,
+                    last_link_checked_at,
+                    next_link_check_at,
+                    manual_verified_permanent,
+                    manual_verified_until,
+                    manual_verified_at,
+                    manual_partner_opt_out,
+                    raid_bot_enabled,
+                    silent_ban,
+                    silent_raid,
+                    live_ping_role_id,
+                    live_ping_enabled,
+                    partnered_at,
+                    admin_archived_at,
+                    departnered_at,
+                    status
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NULL, NULL, %s)
+                """,
+                insert_params,
+            )
+        except Exception as exc:
+            if "admin_archived_at" not in str(exc).lower():
+                raise
+            conn.execute(
+                """
+                INSERT INTO twitch_partners (
+                    twitch_user_id,
+                    twitch_login,
+                    require_discord_link,
+                    last_description,
+                    last_link_ok,
+                    added_by,
+                    last_link_checked_at,
+                    next_link_check_at,
+                    manual_verified_permanent,
+                    manual_verified_until,
+                    manual_verified_at,
+                    manual_partner_opt_out,
+                    raid_bot_enabled,
+                    silent_ban,
+                    silent_raid,
+                    live_ping_role_id,
+                    live_ping_enabled,
+                    partnered_at,
+                    departnered_at,
+                    status
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NULL, %s)
+                """,
+                insert_params,
+            )
 
     _normalize_related_tables(
         conn,
@@ -937,30 +1160,49 @@ def departner_active_partner(
         is_on_discord=is_on_discord,
     )
 
-    conn.execute(
-        """
-        UPDATE twitch_partners
-        SET status = %s,
-            departnered_at = %s,
-            admin_archived_at = NULL,
-            manual_verified_permanent = %s,
-            manual_verified_until = %s,
-            manual_verified_at = %s,
-            twitch_login = %s,
-            twitch_user_id = %s
-        WHERE id = %s
-        """,
-        (
-            PARTNER_STATUS_DEPARTNERED,
-            departnered_at,
-            0 if clear_verification else _row_value(active_row, "manual_verified_permanent", 9, 0),
-            None if clear_verification else _row_value(active_row, "manual_verified_until", 10, None),
-            None if clear_verification else _row_value(active_row, "manual_verified_at", 11, None),
-            normalized_login,
-            normalized_user_id,
-            _row_value(active_row, "id", 0),
-        ),
+    departner_params = (
+        PARTNER_STATUS_DEPARTNERED,
+        departnered_at,
+        0 if clear_verification else _row_value(active_row, "manual_verified_permanent", 9, 0),
+        None if clear_verification else _row_value(active_row, "manual_verified_until", 10, None),
+        None if clear_verification else _row_value(active_row, "manual_verified_at", 11, None),
+        normalized_login,
+        normalized_user_id,
+        _row_value(active_row, "id", 0),
     )
+    try:
+        conn.execute(
+            """
+            UPDATE twitch_partners
+            SET status = %s,
+                departnered_at = %s,
+                admin_archived_at = NULL,
+                manual_verified_permanent = %s,
+                manual_verified_until = %s,
+                manual_verified_at = %s,
+                twitch_login = %s,
+                twitch_user_id = %s
+            WHERE id = %s
+            """,
+            departner_params,
+        )
+    except Exception as exc:
+        if "admin_archived_at" not in str(exc).lower():
+            raise
+        conn.execute(
+            """
+            UPDATE twitch_partners
+            SET status = %s,
+                departnered_at = %s,
+                manual_verified_permanent = %s,
+                manual_verified_until = %s,
+                manual_verified_at = %s,
+                twitch_login = %s,
+                twitch_user_id = %s
+            WHERE id = %s
+            """,
+            departner_params,
+        )
 
     if restore_non_partner:
         upsert_non_partner_streamer(
@@ -1017,6 +1259,7 @@ def departner_active_partner(
         "discord_user_id": discord_user_id,
         "discord_display_name": discord_display_name,
         "departnered_at": departnered_at,
+        "partner_row_id": _row_value(active_row, "id", 0),
     }
 
 
@@ -1106,21 +1349,39 @@ def set_streamer_archive_state(
         resolved_user_id = _normalize_user_id(
             _row_value(active_row, "twitch_user_id", 1, normalized_user_id)
         )
-        conn.execute(
-            """
-            UPDATE twitch_partners
-            SET twitch_login = %s,
-                twitch_user_id = %s,
-                admin_archived_at = %s
-            WHERE id = %s
-            """,
-            (
-                resolved_login,
-                resolved_user_id,
-                archive_value,
-                _row_value(active_row, "id", 0),
-            ),
+        archive_params = (
+            resolved_login,
+            resolved_user_id,
+            archive_value,
+            _row_value(active_row, "id", 0),
         )
+        try:
+            conn.execute(
+                """
+                UPDATE twitch_partners
+                SET twitch_login = %s,
+                    twitch_user_id = %s,
+                    admin_archived_at = %s
+                WHERE id = %s
+                """,
+                archive_params,
+            )
+        except Exception as exc:
+            if "admin_archived_at" not in str(exc).lower():
+                raise
+            conn.execute(
+                """
+                UPDATE twitch_partners
+                SET twitch_login = %s,
+                    twitch_user_id = %s
+                WHERE id = %s
+                """,
+                (
+                    resolved_login,
+                    resolved_user_id,
+                    _row_value(active_row, "id", 0),
+                ),
+            )
         _normalize_related_tables(
             conn,
             twitch_user_id=resolved_user_id,
@@ -1129,7 +1390,7 @@ def set_streamer_archive_state(
         return {
             "twitch_login": resolved_login,
             "twitch_user_id": resolved_user_id,
-            "archived_at": archive_value,
+            "archived_at": archive_value if archive_value is None else None,
             "scope": "partner",
         }
 
@@ -1566,53 +1827,85 @@ def migrate_legacy_partner_registry(conn: Any) -> dict[str, int]:
             latest=True,
         )
         if not existing:
-            conn.execute(
-                """
-                INSERT INTO twitch_partners (
-                    twitch_user_id,
-                    twitch_login,
-                    require_discord_link,
-                    last_description,
-                    last_link_ok,
-                    added_by,
-                    last_link_checked_at,
-                    next_link_check_at,
-                    manual_verified_permanent,
-                    manual_verified_until,
-                    manual_verified_at,
-                    manual_partner_opt_out,
-                    raid_bot_enabled,
-                    silent_ban,
-                    silent_raid,
-                    live_ping_role_id,
-                    live_ping_enabled,
-                    partnered_at,
-                    admin_archived_at,
-                    departnered_at,
-                    status
-                ) VALUES (%s, %s, %s, NULL, NULL, NULL, NULL, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NULL, %s)
-                """,
-                (
-                    user_id,
-                    login,
-                    _bool_int(_row_value(row, "require_discord_link", 2, 0), default=0),
-                    _row_value(row, "next_link_check_at", 3, None),
-                    manual_verified_permanent,
-                    manual_verified_until,
-                    manual_verified_at,
-                    manual_partner_opt_out,
-                    _bool_int(_row_value(row, "raid_bot_enabled", 13, 0), default=0),
-                    _bool_int(_row_value(row, "silent_ban", 14, 0), default=0),
-                    _bool_int(_row_value(row, "silent_raid", 15, 0), default=0),
-                    _row_value(row, "live_ping_role_id", 17, None),
-                    _bool_int(_row_value(row, "live_ping_enabled", 18, 1), default=1),
-                    _row_value(row, "created_at", 11, None)
-                    or manual_verified_at
-                    or _now_iso(),
-                    archived_at,
-                    PARTNER_STATUS_ACTIVE,
-                ),
+            insert_partner_params = (
+                user_id,
+                login,
+                _bool_int(_row_value(row, "require_discord_link", 2, 0), default=0),
+                _row_value(row, "next_link_check_at", 3, None),
+                manual_verified_permanent,
+                manual_verified_until,
+                manual_verified_at,
+                manual_partner_opt_out,
+                _bool_int(_row_value(row, "raid_bot_enabled", 13, 0), default=0),
+                _bool_int(_row_value(row, "silent_ban", 14, 0), default=0),
+                _bool_int(_row_value(row, "silent_raid", 15, 0), default=0),
+                _row_value(row, "live_ping_role_id", 17, None),
+                _bool_int(_row_value(row, "live_ping_enabled", 18, 1), default=1),
+                _row_value(row, "created_at", 11, None)
+                or manual_verified_at
+                or _now_iso(),
+                archived_at,
+                PARTNER_STATUS_ACTIVE,
             )
+            try:
+                conn.execute(
+                    """
+                    INSERT INTO twitch_partners (
+                        twitch_user_id,
+                        twitch_login,
+                        require_discord_link,
+                        last_description,
+                        last_link_ok,
+                        added_by,
+                        last_link_checked_at,
+                        next_link_check_at,
+                        manual_verified_permanent,
+                        manual_verified_until,
+                        manual_verified_at,
+                        manual_partner_opt_out,
+                        raid_bot_enabled,
+                        silent_ban,
+                        silent_raid,
+                        live_ping_role_id,
+                        live_ping_enabled,
+                        partnered_at,
+                        admin_archived_at,
+                        departnered_at,
+                        status
+                    ) VALUES (%s, %s, %s, NULL, NULL, NULL, NULL, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NULL, %s)
+                    """,
+                    insert_partner_params,
+                )
+            except Exception as exc:
+                if "admin_archived_at" not in str(exc).lower():
+                    raise
+                conn.execute(
+                    """
+                    INSERT INTO twitch_partners (
+                        twitch_user_id,
+                        twitch_login,
+                        require_discord_link,
+                        last_description,
+                        last_link_ok,
+                        added_by,
+                        last_link_checked_at,
+                        next_link_check_at,
+                        manual_verified_permanent,
+                        manual_verified_until,
+                        manual_verified_at,
+                        manual_partner_opt_out,
+                        raid_bot_enabled,
+                        silent_ban,
+                        silent_raid,
+                        live_ping_role_id,
+                        live_ping_enabled,
+                        partnered_at,
+                        departnered_at,
+                        status
+                    ) VALUES (%s, %s, %s, NULL, NULL, NULL, NULL, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NULL, %s)
+                    """,
+                    insert_partner_params[:-2] + insert_partner_params[-1:],
+                )
             if is_active and not archived_at:
                 stats["partner_promotions"] += 1
             else:

@@ -13,7 +13,6 @@ from urllib.parse import urlparse
 from .api.token_manager import TwitchBotTokenManager
 from .api.twitch_api import TwitchAPI
 from .chat.bot import load_bot_tokens
-from .chat.irc_lurker_tracker import IRCLurkerTracker
 from .core.constants import (
     POLL_INTERVAL_SECONDS,
     TWITCH_ALERT_CHANNEL_ID,
@@ -345,6 +344,9 @@ class TwitchRuntimeBootstrap:
                 cog._raid_bot.partner_raid_score_service = partner_raid_scores
                 cog._raid_bot.set_discord_bot(cog.bot)
                 cog._raid_bot.set_cog(cog)
+                cleanup_task = cog._raid_bot.start()
+                if cleanup_task is None:
+                    raise RuntimeError("RaidBot lifecycle start failed")
                 log.debug("Raid-Bot initialisiert (redirect_uri: %s)", cog._raid_redirect_uri)
             except Exception:
                 log.exception("Fehler beim Initialisieren des Raid-Bots")
