@@ -3,7 +3,7 @@ from __future__ import annotations
 import unittest
 from unittest.mock import AsyncMock, Mock
 
-from bot.raid.partner_raid_delivery import (
+from bot.raid.services.partner_raid_delivery import (
     PartnerRaidDeliveryConfig,
     PartnerRaidDeliveryDependencies,
     PartnerRaidDeliveryService,

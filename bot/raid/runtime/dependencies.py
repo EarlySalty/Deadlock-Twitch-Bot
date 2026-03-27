@@ -4,10 +4,10 @@ import importlib
 from dataclasses import dataclass
 from typing import Any, Callable
 
-from .. import storage as _storage
+from ... import storage as _storage
 
 try:
-    from .partner_scores import (
+    from ..partner_scores import (
         load_partner_raid_score_map,
         refresh_partner_raid_score_async,
     )
@@ -16,7 +16,7 @@ except Exception:  # pragma: no cover - best effort if helper is unavailable dur
     refresh_partner_raid_score_async = None  # type: ignore[assignment]
 
 try:
-    from .partner_raid_score_tracking import track_confirmed_partner_raid
+    from ..partner_raid_score_tracking import track_confirmed_partner_raid
 except Exception:  # pragma: no cover - best effort if helper is unavailable during partial deploys
     track_confirmed_partner_raid = None  # type: ignore[assignment]
 

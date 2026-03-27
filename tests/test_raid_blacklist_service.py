@@ -3,7 +3,7 @@ from __future__ import annotations
 from types import SimpleNamespace
 import unittest
 
-from bot.raid.raid_blacklist import RaidBlacklistCallbacks, RaidBlacklistConfig, RaidBlacklistService
+from bot.raid.services.raid_blacklist import RaidBlacklistCallbacks, RaidBlacklistConfig, RaidBlacklistService
 
 
 class _BlacklistHarness:

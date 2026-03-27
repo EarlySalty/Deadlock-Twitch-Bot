@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import unittest
 
-from bot.raid.external_recruitment import (
+from bot.raid.services.external_recruitment import (
     ExternalRecruitmentPolicy,
     ExternalRecruitmentService,
 )

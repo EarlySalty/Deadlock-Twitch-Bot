@@ -18,16 +18,16 @@ from typing import Any
 import aiohttp
 
 from ..core.constants import TWITCH_TARGET_GAME_NAME
-from . import raid_dependencies as _raid_dependencies
-from .raid_dependencies import RaidRuntimeDeps, build_default_raid_runtime_deps
+from .runtime import dependencies as _raid_dependencies
+from .facades.data_setup import RaidDataSetupFacadeMixin
+from .facades.delivery_selection import RaidDeliverySelectionFacadeMixin
+from .facades.runtime_core import RaidRuntimeCoreFacadeMixin
+from .facades.tracking_arrival import RaidTrackingArrivalFacadeMixin
+from .runtime.dependencies import RaidRuntimeDeps, build_default_raid_runtime_deps
 from .scope_profiles import BASE_STREAMER_SCOPES
-from .data_setup_facade import RaidDataSetupFacadeMixin
-from .delivery_selection_facade import RaidDeliverySelectionFacadeMixin
 from .lifecycle import RaidBotLifecycle
 from .pending_raids import PendingRaid
 from .runtime_support import create_twitch_api
-from .runtime_core_facade import RaidRuntimeCoreFacadeMixin
-from .tracking_arrival_facade import RaidTrackingArrivalFacadeMixin
 
 # Legacy compatibility exports for patch-based tests during the dependency-container migration.
 readonly_connection = _raid_dependencies.readonly_connection

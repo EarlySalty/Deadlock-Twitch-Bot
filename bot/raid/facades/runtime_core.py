@@ -5,26 +5,25 @@ import os
 from datetime import datetime
 from typing import Any
 
-from .arrival_confirmation import ArrivalConfirmationService
-from .candidate_selection import CandidateSelectionService
-from .external_recruitment import ExternalRecruitmentService
-from .followers import CandidateFollowersService
-from .manual_raid_suppression import ManualRaidSuppressionService
-from .observability import RaidObservabilityService
-from .offline_raid_orchestrator import OfflineRaidOrchestrator
-from .partner_arrival_tracking import PartnerArrivalTrackingService
-from .partner_raid_delivery import PartnerRaidDeliveryPlanner, PartnerRaidDeliveryService
-from .partner_setup_service import PartnerSetupService
-from .raid_arrival_runtime import RaidArrivalRuntime
-from .raid_blacklist import RaidBlacklistService
-from .raid_dependencies import build_default_raid_runtime_deps
-from .raid_data_sources import RaidDataSourceService
-from .raid_metrics_store import RaidMetricsStore
-from .raid_pipeline import RaidPipelineService
-from .raid_state_store import RaidStateStore, RaidStateStoreConfig
-from .raid_tracking_runtime import RaidTrackingRuntimeService
-from .recruitment_messaging import RecruitmentMessagingService
-from .runtime_factories import (
+from ..arrival_confirmation import ArrivalConfirmationService
+from ..services.candidate_selection import CandidateSelectionService
+from ..services.external_recruitment import ExternalRecruitmentService
+from ..services.followers import CandidateFollowersService
+from ..services.manual_raid_suppression import ManualRaidSuppressionService
+from ..observability import RaidObservabilityService
+from ..services.offline_raid_orchestrator import OfflineRaidOrchestrator
+from ..services.partner_arrival_tracking import PartnerArrivalTrackingService
+from ..services.partner_raid_delivery import PartnerRaidDeliveryPlanner, PartnerRaidDeliveryService
+from ..services.partner_setup_service import PartnerSetupService
+from ..raid_arrival_runtime import RaidArrivalRuntime
+from ..services.raid_blacklist import RaidBlacklistService
+from ..services.raid_data_sources import RaidDataSourceService
+from ..raid_metrics_store import RaidMetricsStore
+from ..raid_pipeline import RaidPipelineService
+from ..raid_state_store import RaidStateStore, RaidStateStoreConfig
+from ..raid_tracking_runtime import RaidTrackingRuntimeService
+from ..services.recruitment_messaging import RecruitmentMessagingService
+from ..runtime_factories import (
     make_arrival_confirmation_service,
     make_candidate_followers_service,
     make_candidate_selection_service,
@@ -47,7 +46,7 @@ from .runtime_factories import (
     make_recruitment_messaging_service,
     make_signal_correlation_service,
 )
-from .runtime_support import (
+from ..runtime_support import (
     build_analytics_followers_runtime_state,
     clear_user_scope_fallback_warning,
     get_followers_total_result_with_legacy_fallback,
@@ -58,7 +57,8 @@ from .runtime_support import (
     safe_int,
     warn_user_scope_fallback_once,
 )
-from .signal_correlation import RaidSignalCorrelationService
+from ..signal_correlation import RaidSignalCorrelationService
+from ..runtime.dependencies import build_default_raid_runtime_deps
 
 log = logging.getLogger("TwitchStreams.RaidManager")
 

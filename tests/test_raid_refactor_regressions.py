@@ -6,12 +6,12 @@ from dataclasses import replace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from bot.raid.bot import RaidBot
-from bot.raid.partner_arrival_tracking import (
+from bot.raid.services.partner_arrival_tracking import (
     PartnerArrivalTrackingDependencies,
     PartnerArrivalTrackingService,
 )
 from bot.raid.pending_raids import PendingRaid
-from bot.raid.raid_dependencies import build_default_raid_runtime_deps
+from bot.raid.runtime.dependencies import build_default_raid_runtime_deps
 
 
 class PartnerArrivalTrackingServiceRegressionTests(unittest.TestCase):

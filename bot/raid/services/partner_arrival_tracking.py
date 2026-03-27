@@ -5,8 +5,8 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any, Callable
 
-from .partner_resolution import classify_partner_raid_arrival
-from .pending_raids import normalize_broadcaster_login
+from ..partner_resolution import classify_partner_raid_arrival
+from ..pending_raids import normalize_broadcaster_login
 
 
 log = logging.getLogger("TwitchStreams.RaidManager")

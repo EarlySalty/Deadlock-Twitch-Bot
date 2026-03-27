@@ -4,9 +4,8 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
-from bot.raid.recruitment_messaging import (
+from bot.raid.services.recruitment_messaging import (
     RecruitmentMessagingDependencies,
-    RecruitmentMessagingPlanner,
     RecruitmentMessagingService,
 )
 

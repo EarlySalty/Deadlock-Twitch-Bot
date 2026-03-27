@@ -4,7 +4,7 @@ import contextlib
 import unittest
 from types import SimpleNamespace
 
-from bot.raid.manual_raid_suppression import (
+from bot.raid.services.manual_raid_suppression import (
     ManualRaidSuppressionDependencies,
     ManualRaidSuppressionService,
 )

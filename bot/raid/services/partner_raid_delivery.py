@@ -6,7 +6,7 @@ import logging
 from dataclasses import dataclass
 from typing import Any, Awaitable, Literal, Protocol
 
-from .chat_targets import make_chat_target
+from ..chat_targets import make_chat_target
 
 
 log = logging.getLogger("TwitchStreams.RaidManager")

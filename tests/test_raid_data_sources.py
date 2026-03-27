@@ -5,7 +5,7 @@ import unittest
 from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
 
-from bot.raid.raid_data_sources import RaidDataSourceService
+from bot.raid.services.raid_data_sources import RaidDataSourceService
 
 
 class _Cursor:

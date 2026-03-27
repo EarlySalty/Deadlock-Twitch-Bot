@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-from .chat_targets import lookup_outbound_chat_suppression, make_chat_target
-from .raid_pipeline import RaidPipelineRequest, is_retryable_raid_error
-from .recruitment_messaging import RecruitmentMessagingService
+from ..chat_targets import lookup_outbound_chat_suppression, make_chat_target
+from ..raid_pipeline import RaidPipelineRequest, is_retryable_raid_error
+from ..services.recruitment_messaging import RecruitmentMessagingService
 
 
 class RaidDeliverySelectionFacadeMixin:

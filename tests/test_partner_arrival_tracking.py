@@ -4,7 +4,7 @@ import contextlib
 import unittest
 from unittest.mock import MagicMock
 
-from bot.raid.partner_arrival_tracking import (
+from bot.raid.services.partner_arrival_tracking import (
     PartnerArrivalTrackingDependencies,
     PartnerArrivalTrackingService,
 )

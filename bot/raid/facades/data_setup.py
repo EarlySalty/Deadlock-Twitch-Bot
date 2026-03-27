@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 from datetime import datetime
-from ..core.constants import TWITCH_TARGET_GAME_NAME
-from .partner_setup_service import PartnerSetupService
-from .runtime_support import create_twitch_api
+from ...core.constants import TWITCH_TARGET_GAME_NAME
+from ..services.partner_setup_service import PartnerSetupService
+from ..runtime_support import create_twitch_api
 
 
 class RaidDataSetupFacadeMixin:

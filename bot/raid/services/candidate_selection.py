@@ -7,7 +7,7 @@ from typing import Any, Awaitable, Callable, ContextManager
 from bot.storage import readonly_connection
 
 try:
-    from .partner_scores import (
+    from ..partner_scores import (
         load_partner_raid_score_map as default_load_partner_raid_score_map,
         refresh_partner_raid_score_async as default_refresh_partner_raid_score_async,
     )

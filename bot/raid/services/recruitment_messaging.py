@@ -6,8 +6,8 @@ from contextlib import AbstractContextManager
 from dataclasses import dataclass
 from typing import Any, Awaitable, Literal, Protocol
 
-from .chat_targets import lookup_outbound_chat_suppression, make_chat_target
-from .recruitment_delivery import (
+from ..chat_targets import lookup_outbound_chat_suppression, make_chat_target
+from ..recruitment_delivery import (
     RecruitmentDeliveryConfig,
     RecruitmentDeliveryPlan,
     RecruitmentDeliveryPlanner,

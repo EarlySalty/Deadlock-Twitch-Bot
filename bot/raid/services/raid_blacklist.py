@@ -6,7 +6,7 @@ from contextlib import AbstractContextManager
 from dataclasses import dataclass
 from typing import Any, Awaitable, Protocol, Sequence
 
-from .partner_resolution import normalize_broadcaster_login
+from ..partner_resolution import normalize_broadcaster_login
 
 
 log = logging.getLogger("TwitchStreams.RaidManager")

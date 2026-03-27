@@ -3,10 +3,9 @@ from __future__ import annotations
 import contextlib
 import sqlite3
 import unittest
-from datetime import UTC, datetime
 from unittest.mock import AsyncMock
 
-from bot.raid.candidate_selection import CandidateSelectionService
+from bot.raid.services.candidate_selection import CandidateSelectionService
 
 from tests.sqlite_twitch_schema import ensure_sqlite_twitch_schema
 

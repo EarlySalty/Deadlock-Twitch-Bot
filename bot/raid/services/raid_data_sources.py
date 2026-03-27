@@ -9,7 +9,7 @@ from typing import Any
 
 from bot.storage import readonly_connection
 
-from ..core.constants import TWITCH_TARGET_GAME_NAME
+from ...core.constants import TWITCH_TARGET_GAME_NAME
 
 
 log = logging.getLogger("TwitchStreams.RaidManager")
@@ -400,7 +400,7 @@ class RaidDataSourceService:
         if session is None:
             return None
         try:
-            from ..api.twitch_api import TwitchAPI
+            from ...api.twitch_api import TwitchAPI
         except Exception:
             return None
         return TwitchAPI(

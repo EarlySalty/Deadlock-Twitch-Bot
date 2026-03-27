@@ -11,8 +11,8 @@ from typing import Any
 
 import discord
 
-from ..discord_role_sync import normalize_discord_user_id, sync_streamer_role
-from ..storage import (
+from ...discord_role_sync import normalize_discord_user_id, sync_streamer_role
+from ...storage import (
     backfill_tracked_stats_from_category,
     load_streamer_identity,
     promote_streamer_to_partner,

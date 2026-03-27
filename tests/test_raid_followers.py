@@ -1,7 +1,7 @@
 import asyncio
 import unittest
 
-from bot.raid.followers import (
+from bot.raid.services.followers import (
     CandidateFollowersDependencies,
     CandidateFollowersService,
     FollowerAuthContext,

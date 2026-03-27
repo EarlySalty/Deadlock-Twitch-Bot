@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Literal, Protocol
 
-from .partner_resolution import normalize_broadcaster_login
+from ..partner_resolution import normalize_broadcaster_login
 
 
 class PersistConfirmedExternalRecruitmentRaid(Protocol):

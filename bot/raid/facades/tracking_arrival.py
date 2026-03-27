@@ -4,8 +4,8 @@ import logging
 from collections.abc import Mapping
 from typing import Any
 
-from .pending_raids import PendingRaid, PendingRaidStore
-from .raid_state_store import RaidStateStore
+from ..pending_raids import PendingRaid, PendingRaidStore
+from ..raid_state_store import RaidStateStore
 
 
 log = logging.getLogger("TwitchStreams.RaidManager")
