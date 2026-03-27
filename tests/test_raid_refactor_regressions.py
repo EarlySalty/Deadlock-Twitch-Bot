@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import unittest
+from dataclasses import replace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from bot.raid.bot import RaidBot
@@ -10,6 +11,7 @@ from bot.raid.partner_arrival_tracking import (
     PartnerArrivalTrackingService,
 )
 from bot.raid.pending_raids import PendingRaid
+from bot.raid.raid_dependencies import build_default_raid_runtime_deps
 
 
 class PartnerArrivalTrackingServiceRegressionTests(unittest.TestCase):
@@ -117,6 +119,26 @@ class RaidBotRuntimeWiringRegressionTests(unittest.IsolatedAsyncioTestCase):
             from_broadcaster_login="source_login",
             to_broadcaster_id="9009",
         )
+
+    def test_runtime_deps_override_state_store_config(self) -> None:
+        deps = replace(
+            build_default_raid_runtime_deps(),
+            recent_raid_arrival_ttl_seconds=123.0,
+            raid_readiness_max_entries=9,
+        )
+        raid_bot = RaidBot(
+            client_id="client",
+            client_secret="secret",
+            redirect_uri="https://example.test/callback",
+            session=None,
+            deps=deps,
+        )
+
+        config = raid_bot._raid_state_store_config()
+
+        self.assertIs(raid_bot._runtime_deps(), deps)
+        self.assertEqual(config.recent_raid_arrival_ttl_seconds, 123.0)
+        self.assertEqual(config.raid_readiness_max_entries, 9)
 
 
 if __name__ == "__main__":

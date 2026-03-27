@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import importlib
 import logging
 import os
 from datetime import datetime
@@ -18,6 +17,7 @@ from .partner_raid_delivery import PartnerRaidDeliveryPlanner, PartnerRaidDelive
 from .partner_setup_service import PartnerSetupService
 from .raid_arrival_runtime import RaidArrivalRuntime
 from .raid_blacklist import RaidBlacklistService
+from .raid_dependencies import build_default_raid_runtime_deps
 from .raid_data_sources import RaidDataSourceService
 from .raid_metrics_store import RaidMetricsStore
 from .raid_pipeline import RaidPipelineService
@@ -63,11 +63,14 @@ from .signal_correlation import RaidSignalCorrelationService
 log = logging.getLogger("TwitchStreams.RaidManager")
 
 
-def _bot_module():
-    return importlib.import_module("bot.raid.bot")
-
-
 class RaidRuntimeCoreFacadeMixin:
+    def _runtime_deps(self):
+        deps = getattr(self, "_deps", None)
+        if deps is None:
+            deps = build_default_raid_runtime_deps()
+            self._deps = deps
+        return deps
+
     def _next_raid_observability_flow_id(self, *, prefix: str) -> str:
         service = self._make_raid_observability_service()
         flow_id = service.next_flow_id(prefix=prefix)
@@ -83,10 +86,10 @@ class RaidRuntimeCoreFacadeMixin:
         return counters
 
     def _make_raid_observability_service(self) -> RaidObservabilityService:
-        bot_module = _bot_module()
+        deps = self._runtime_deps()
         return make_raid_observability_service(
             self,
-            insert_observability_event_fn=bot_module.insert_observability_event,
+            insert_observability_event_fn=deps.insert_observability_event_fn,
         )
 
     @staticmethod
@@ -105,64 +108,64 @@ class RaidRuntimeCoreFacadeMixin:
     def _arrival_confirmation_service(self) -> ArrivalConfirmationService:
         return make_arrival_confirmation_service(self)
 
-    @staticmethod
-    def _raid_state_store_config() -> RaidStateStoreConfig:
+    def _raid_state_store_config(self) -> RaidStateStoreConfig:
+        deps = self._runtime_deps()
         return make_raid_state_store_config(
-            recent_raid_arrival_ttl_seconds=600.0,
-            orphan_chat_notification_grace_seconds=15.0,
-            orphan_chat_notification_retention_seconds=900.0,
-            raid_readiness_ttl_seconds=900.0,
-            raid_readiness_max_entries=512,
+            recent_raid_arrival_ttl_seconds=deps.recent_raid_arrival_ttl_seconds,
+            orphan_chat_notification_grace_seconds=deps.pending_chat_notification_grace_seconds,
+            orphan_chat_notification_retention_seconds=deps.orphan_chat_notification_retention_seconds,
+            raid_readiness_ttl_seconds=deps.raid_readiness_ttl_seconds,
+            raid_readiness_max_entries=deps.raid_readiness_max_entries,
         )
 
     def _raid_state_store(self) -> RaidStateStore:
         return make_raid_state_store(self, config=self._raid_state_store_config())
 
     def _manual_raid_suppression_service(self) -> ManualRaidSuppressionService:
-        bot_module = _bot_module()
+        deps = self._runtime_deps()
         return make_manual_raid_suppression_service(
             self,
-            readonly_connection_factory=bot_module.readonly_connection,
-            load_active_partner_fn=bot_module.load_active_partner,
+            readonly_connection_factory=deps.readonly_connection_factory,
+            load_active_partner_fn=deps.load_active_partner_fn,
         )
 
     def _partner_arrival_tracking_service(self) -> PartnerArrivalTrackingService:
-        bot_module = _bot_module()
+        deps = self._runtime_deps()
         return make_partner_arrival_tracking_service(
             self,
-            readonly_connection_factory=bot_module.readonly_connection,
-            transaction_factory=bot_module.transaction,
-            load_active_partner_fn=bot_module.load_active_partner,
-            load_streamer_identity_fn=bot_module.load_streamer_identity,
+            readonly_connection_factory=deps.readonly_connection_factory,
+            transaction_factory=deps.transaction_factory,
+            load_active_partner_fn=deps.load_active_partner_fn,
+            load_streamer_identity_fn=deps.load_streamer_identity_fn,
         )
 
     def _raid_data_source_service(self) -> RaidDataSourceService:
-        bot_module = _bot_module()
+        deps = self._runtime_deps()
         return make_raid_data_source_service(
             self,
-            readonly_connection_factory=bot_module.readonly_connection,
-            utcnow=lambda: bot_module.datetime.now(bot_module.UTC),
+            readonly_connection_factory=deps.readonly_connection_factory,
+            utcnow=deps.utcnow,
         )
 
     def _partner_setup_service(self) -> PartnerSetupService:
-        bot_module = _bot_module()
+        deps = self._runtime_deps()
         return make_partner_setup_service(
             self,
-            moderator_url_base=bot_module.TWITCH_API_BASE,
-            mask_log_identifier=bot_module._mask_log_identifier,
-            readonly_connection_factory=bot_module.readonly_connection,
-            transaction_factory=bot_module.transaction,
+            moderator_url_base=deps.twitch_api_base,
+            mask_log_identifier=deps.mask_log_identifier,
+            readonly_connection_factory=deps.readonly_connection_factory,
+            transaction_factory=deps.transaction_factory,
         )
 
     def _offline_raid_orchestrator(self) -> OfflineRaidOrchestrator:
         return make_offline_raid_orchestrator(self)
 
     def _raid_metrics_store(self) -> RaidMetricsStore:
-        bot_module = _bot_module()
+        deps = self._runtime_deps()
         return make_raid_metrics_store(
             self,
-            readonly_connection_factory=bot_module.readonly_connection,
-            transaction_factory=bot_module.transaction,
+            readonly_connection_factory=deps.readonly_connection_factory,
+            transaction_factory=deps.transaction_factory,
         )
 
     def _candidate_followers_service(self) -> CandidateFollowersService:
@@ -189,36 +192,32 @@ class RaidRuntimeCoreFacadeMixin:
         return os.getenv("TWITCH_BOT_USER_ID", "").strip() or None
 
     def _load_offline_auto_raid_eligibility(self, broadcaster_id: str) -> Any:
-        bot_module = _bot_module()
-        with bot_module.readonly_connection() as conn:
-            return bot_module.load_offline_auto_raid_eligibility(
+        deps = self._runtime_deps()
+        with deps.readonly_connection_factory() as conn:
+            return deps.load_offline_auto_raid_eligibility_fn(
                 conn,
                 twitch_user_id=broadcaster_id,
             )
 
     def _candidate_selection_service(self) -> CandidateSelectionService:
-        bot_module = _bot_module()
+        deps = self._runtime_deps()
         return make_candidate_selection_service(
             self,
-            recent_raid_cooldown_days=bot_module.RAID_TARGET_COOLDOWN_DAYS,
-            load_partner_raid_score_map_fn=bot_module.load_partner_raid_score_map,
-            refresh_partner_raid_score_async_fn=bot_module.refresh_partner_raid_score_async,
-            readonly_connection_factory=bot_module.readonly_connection,
+            recent_raid_cooldown_days=deps.raid_target_cooldown_days,
+            load_partner_raid_score_map_fn=deps.load_partner_raid_score_map_fn,
+            refresh_partner_raid_score_async_fn=deps.refresh_partner_raid_score_async_fn,
+            readonly_connection_factory=deps.readonly_connection_factory,
         )
 
     def _raid_blacklist_service(self) -> RaidBlacklistService:
-        bot_module = _bot_module()
+        deps = self._runtime_deps()
         return make_raid_blacklist_service(
             self,
-            external_recruitment_raid_limit=bot_module._EXTERNAL_RECRUITMENT_RAID_LIMIT,
-            external_recruitment_blacklist_grace_seconds=int(
-                bot_module._EXTERNAL_RECRUITMENT_BLACKLIST_GRACE_SECONDS
-            ),
-            external_target_ban_check_delay_seconds=int(
-                bot_module._EXTERNAL_BAN_CHECK_DELAY_SECONDS
-            ),
-            readonly_connection_factory=bot_module.readonly_connection,
-            transaction_factory=bot_module.transaction,
+            external_recruitment_raid_limit=deps.external_recruitment_raid_limit,
+            external_recruitment_blacklist_grace_seconds=deps.external_recruitment_blacklist_grace_seconds,
+            external_target_ban_check_delay_seconds=deps.external_target_ban_check_delay_seconds,
+            readonly_connection_factory=deps.readonly_connection_factory,
+            transaction_factory=deps.transaction_factory,
         )
 
     def _raid_pipeline_service(self) -> RaidPipelineService:
@@ -228,17 +227,17 @@ class RaidRuntimeCoreFacadeMixin:
         return make_raid_tracking_runtime_service(self)
 
     def _raid_arrival_runtime(self) -> RaidArrivalRuntime:
-        bot_module = _bot_module()
+        deps = self._runtime_deps()
         return make_raid_arrival_runtime(
             self,
-            track_confirmed_partner_raid_fn=bot_module.track_confirmed_partner_raid,
+            track_confirmed_partner_raid_fn=deps.track_confirmed_partner_raid_fn,
         )
 
     def _recruitment_messaging_service(self) -> RecruitmentMessagingService:
-        bot_module = _bot_module()
+        deps = self._runtime_deps()
         return make_recruitment_messaging_service(
             self,
-            readonly_connection_factory=bot_module.readonly_connection,
+            readonly_connection_factory=deps.readonly_connection_factory,
         )
 
     @staticmethod
@@ -336,7 +335,7 @@ class RaidRuntimeCoreFacadeMixin:
         level: int = logging.INFO,
         **extra_fields: object,
     ) -> None:
-        bot_module = _bot_module()
+        deps = self._runtime_deps()
         log_analytics_followers_decision(
             self,
             flow_id=flow_id,
@@ -351,7 +350,7 @@ class RaidRuntimeCoreFacadeMixin:
             scope_state=scope_state,
             runtime_state=runtime_state,
             level=level,
-            insert_observability_event_fn=bot_module.insert_observability_event,
+            insert_observability_event_fn=deps.insert_observability_event_fn,
             **extra_fields,
         )
 
@@ -401,9 +400,9 @@ class RaidRuntimeCoreFacadeMixin:
 
     def _lookup_silent_raid_enabled(self, broadcaster_login: str) -> bool:
         try:
-            bot_module = _bot_module()
-            with bot_module.readonly_connection() as conn:
-                partner_row = bot_module.load_active_partner(
+            deps = self._runtime_deps()
+            with deps.readonly_connection_factory() as conn:
+                partner_row = deps.load_active_partner_fn(
                     conn,
                     twitch_login=self._normalize_broadcaster_login(broadcaster_login),
                 )

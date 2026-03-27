@@ -18,6 +18,8 @@ from typing import Any
 import aiohttp
 
 from ..core.constants import TWITCH_TARGET_GAME_NAME
+from . import raid_dependencies as _raid_dependencies
+from .raid_dependencies import RaidRuntimeDeps, build_default_raid_runtime_deps
 from .scope_profiles import BASE_STREAMER_SCOPES
 from .data_setup_facade import RaidDataSetupFacadeMixin
 from .delivery_selection_facade import RaidDeliverySelectionFacadeMixin
@@ -26,26 +28,13 @@ from .pending_raids import PendingRaid
 from .runtime_support import create_twitch_api
 from .runtime_core_facade import RaidRuntimeCoreFacadeMixin
 from .tracking_arrival_facade import RaidTrackingArrivalFacadeMixin
-from ..storage import (
-    insert_observability_event,  # noqa: F401
-    load_active_partner,  # noqa: F401
-    load_offline_auto_raid_eligibility,  # noqa: F401
-    load_streamer_identity,  # noqa: F401
-    readonly_connection,  # noqa: F401
-    transaction,  # noqa: F401
-)
-try:
-    from .partner_scores import (
-        load_partner_raid_score_map,
-        refresh_partner_raid_score_async,
-    )
-except Exception:  # pragma: no cover - best effort if helper is unavailable during partial deploys
-    load_partner_raid_score_map = None  # type: ignore[assignment]
-    refresh_partner_raid_score_async = None  # type: ignore[assignment]
-try:
-    from .partner_raid_score_tracking import track_confirmed_partner_raid
-except Exception:  # pragma: no cover - best effort if helper is unavailable during partial deploys
-    track_confirmed_partner_raid = None  # type: ignore[assignment]
+
+# Legacy compatibility exports for patch-based tests during the dependency-container migration.
+readonly_connection = _raid_dependencies.readonly_connection
+transaction = _raid_dependencies.transaction
+load_partner_raid_score_map = _raid_dependencies.load_partner_raid_score_map
+refresh_partner_raid_score_async = _raid_dependencies.refresh_partner_raid_score_async
+track_confirmed_partner_raid = _raid_dependencies.track_confirmed_partner_raid
 
 TWITCH_TOKEN_URL = "https://id.twitch.tv/oauth2/token"  # noqa: S105
 TWITCH_AUTHORIZE_URL = "https://id.twitch.tv/oauth2/authorize"
@@ -115,10 +104,12 @@ class RaidBot(
         client_secret: str,
         redirect_uri: str,
         session: aiohttp.ClientSession,
+        deps: RaidRuntimeDeps | None = None,
     ):
         self.auth_manager = RaidAuthManager(client_id, client_secret, redirect_uri)
         self.raid_executor = RaidExecutor(client_id, self.auth_manager)
         self._session = session
+        self._deps = deps or build_default_raid_runtime_deps()
         self.chat_bot = None  # Wird später gesetzt
         self._bot_id = None  # Wird bei set_chat_bot gesetzt als Fallback
         self._cog = None  # Referenz zum TwitchStreamCog für EventSub subscriptions
