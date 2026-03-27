@@ -72,10 +72,14 @@ except Exception:  # pragma: no cover - best effort if helper is unavailable dur
 log = logging.getLogger("TwitchStreams.RaidManager")
 
 
-def make_raid_observability_service(bot: Any) -> RaidObservabilityService:
+def make_raid_observability_service(
+    bot: Any,
+    *,
+    insert_observability_event_fn=insert_observability_event,
+) -> RaidObservabilityService:
     def _sink(event: RaidObservabilityEvent) -> None:
         storage_payload = event.as_storage_payload()
-        insert_observability_event(
+        insert_observability_event_fn(
             flow_type=str(storage_payload.get("flow_type") or "raid"),
             flow_id=str(storage_payload.get("flow_id") or ""),
             entity_login=str(storage_payload.get("entity_login") or ""),
@@ -101,7 +105,11 @@ def make_partner_raid_delivery_planner() -> PartnerRaidDeliveryPlanner:
     )
 
 
-def make_partner_raid_delivery_service(bot: Any) -> PartnerRaidDeliveryService:
+def make_partner_raid_delivery_service(
+    bot: Any,
+    *,
+    planner: PartnerRaidDeliveryPlanner | None = None,
+) -> PartnerRaidDeliveryService:
     return PartnerRaidDeliveryService(
         PartnerRaidDeliveryDependencies(
             get_chat_bot=lambda: bot.chat_bot,
@@ -126,7 +134,7 @@ def make_partner_raid_delivery_service(bot: Any) -> PartnerRaidDeliveryService:
             ),
             logger=log,
         ),
-        planner=make_partner_raid_delivery_planner(),
+        planner=planner or make_partner_raid_delivery_planner(),
     )
 
 
@@ -178,26 +186,38 @@ def make_raid_state_store(bot: Any, *, config: RaidStateStoreConfig) -> RaidStat
     )
 
 
-def make_manual_raid_suppression_service(bot: Any) -> ManualRaidSuppressionService:
+def make_manual_raid_suppression_service(
+    bot: Any,
+    *,
+    readonly_connection_factory=readonly_connection,
+    load_active_partner_fn=load_active_partner,
+) -> ManualRaidSuppressionService:
     return ManualRaidSuppressionService(
         bot,
         ManualRaidSuppressionDependencies(
-            readonly_connection=readonly_connection,
-            load_active_partner=load_active_partner,
+            readonly_connection=readonly_connection_factory,
+            load_active_partner=load_active_partner_fn,
             logger=log,
         ),
     )
 
 
-def make_partner_arrival_tracking_service(bot: Any) -> PartnerArrivalTrackingService:
+def make_partner_arrival_tracking_service(
+    bot: Any,
+    *,
+    readonly_connection_factory=readonly_connection,
+    transaction_factory=transaction,
+    load_active_partner_fn=load_active_partner,
+    load_streamer_identity_fn=load_streamer_identity,
+) -> PartnerArrivalTrackingService:
     manual_suppression = bot._manual_raid_suppression_service()
     state_store = bot._raid_state_store()
     return PartnerArrivalTrackingService(
         PartnerArrivalTrackingDependencies(
-            readonly_connection=readonly_connection,
-            transaction=transaction,
-            load_active_partner=load_active_partner,
-            load_streamer_identity=load_streamer_identity,
+            readonly_connection=readonly_connection_factory,
+            transaction=transaction_factory,
+            load_active_partner=load_active_partner_fn,
+            load_streamer_identity=load_streamer_identity_fn,
             resolve_streamer_id_by_login=manual_suppression.resolve_streamer_id_by_login,
             mark_manual_raid_started=manual_suppression.mark_manual_raid_started,
             remember_recent_raid_arrival=state_store.remember_recent_raid_arrival,
@@ -206,7 +226,12 @@ def make_partner_arrival_tracking_service(bot: Any) -> PartnerArrivalTrackingSer
     )
 
 
-def make_raid_data_source_service(bot: Any) -> RaidDataSourceService:
+def make_raid_data_source_service(
+    bot: Any,
+    *,
+    readonly_connection_factory=readonly_connection,
+    utcnow=lambda: datetime.now(UTC),
+) -> RaidDataSourceService:
     return RaidDataSourceService(
         client_id=bot.auth_manager.client_id,
         client_secret=bot.auth_manager.client_secret,
@@ -232,8 +257,8 @@ def make_raid_data_source_service(bot: Any) -> RaidDataSourceService:
         cached_category_id_getter=lambda: getattr(bot._cog, "_category_id", None)
         if getattr(bot, "_cog", None) is not None
         else None,
-        readonly_connection_factory=readonly_connection,
-        utcnow=lambda: datetime.now(UTC),
+        readonly_connection_factory=readonly_connection_factory,
+        utcnow=utcnow,
         logger=log,
     )
 
@@ -243,14 +268,16 @@ def make_partner_setup_service(
     *,
     moderator_url_base: str,
     mask_log_identifier: Any,
+    readonly_connection_factory=readonly_connection,
+    transaction_factory=transaction,
 ) -> PartnerSetupService:
     return PartnerSetupService(
         auth_manager=bot.auth_manager,
         session_getter=lambda: bot.session,
         chat_bot_getter=lambda: bot.chat_bot,
         bot_id_getter=bot._resolve_bot_id_for_setup,
-        readonly_connection_factory=readonly_connection,
-        transaction_factory=transaction,
+        readonly_connection_factory=readonly_connection_factory,
+        transaction_factory=transaction_factory,
         moderator_url_base=moderator_url_base,
         mask_log_identifier=mask_log_identifier,
         logger=log,
@@ -276,10 +303,15 @@ def make_offline_raid_orchestrator(bot: Any) -> OfflineRaidOrchestrator:
     )
 
 
-def make_raid_metrics_store(bot: Any) -> RaidMetricsStore:
+def make_raid_metrics_store(
+    bot: Any,
+    *,
+    readonly_connection_factory=readonly_connection,
+    transaction_factory=transaction,
+) -> RaidMetricsStore:
     return RaidMetricsStore(
-        readonly_connection=readonly_connection,
-        transaction=transaction,
+        readonly_connection=readonly_connection_factory,
+        transaction=transaction_factory,
         normalize_broadcaster_login=bot._normalize_broadcaster_login,
         is_partner_target_channel=bot._is_partner_target_channel,
         next_raid_observability_flow_id=bot._next_raid_observability_flow_id,
@@ -314,13 +346,16 @@ def make_candidate_selection_service(
     bot: Any,
     *,
     recent_raid_cooldown_days: int,
+    load_partner_raid_score_map_fn=load_partner_raid_score_map,
+    refresh_partner_raid_score_async_fn=refresh_partner_raid_score_async,
+    readonly_connection_factory=readonly_connection,
 ) -> CandidateSelectionService:
     return CandidateSelectionService(
-        load_partner_raid_score_map=load_partner_raid_score_map,
-        refresh_partner_raid_score_async=refresh_partner_raid_score_async,
+        load_partner_raid_score_map=load_partner_raid_score_map_fn,
+        refresh_partner_raid_score_async=refresh_partner_raid_score_async_fn,
         recent_raid_targets_loader=bot._get_recent_raid_targets,
         attach_followers_totals=bot._attach_followers_totals,
-        readonly_connection_factory=readonly_connection,
+        readonly_connection_factory=readonly_connection_factory,
         logger=log,
         recent_raid_cooldown_days=recent_raid_cooldown_days,
     )
@@ -332,10 +367,12 @@ def make_raid_blacklist_service(
     external_recruitment_raid_limit: int,
     external_recruitment_blacklist_grace_seconds: int,
     external_target_ban_check_delay_seconds: int,
+    readonly_connection_factory=readonly_connection,
+    transaction_factory=transaction,
 ) -> RaidBlacklistService:
     return build_runtime_raid_blacklist_service(
-        readonly_connection_factory=readonly_connection,
-        transaction_factory=transaction,
+        readonly_connection_factory=readonly_connection_factory,
+        transaction_factory=transaction_factory,
         is_target_partner=bot._is_target_currently_partner,
         get_chat_bot=lambda: bot.chat_bot,
         config=RaidBlacklistConfig(
@@ -455,9 +492,13 @@ def make_raid_tracking_runtime_service(bot: Any) -> RaidTrackingRuntimeService:
     )
 
 
-def make_raid_arrival_runtime(bot: Any) -> RaidArrivalRuntime:
-    external_recruitment = make_external_recruitment_service(bot)
-    arrival_confirmation = make_arrival_confirmation_service(bot)
+def make_raid_arrival_runtime(
+    bot: Any,
+    *,
+    track_confirmed_partner_raid_fn=track_confirmed_partner_raid,
+) -> RaidArrivalRuntime:
+    external_recruitment = bot._external_recruitment_service()
+    arrival_confirmation = bot._arrival_confirmation_service()
 
     def _confirm_pending_raid_arrival_with_overrides(
         *,
@@ -496,7 +537,7 @@ def make_raid_arrival_runtime(bot: Any) -> RaidArrivalRuntime:
                 (),
                 {"confirm_pending_raid_arrival": staticmethod(_confirm_pending_raid_arrival_with_overrides)},
             )(),
-            signal_correlation_service=make_signal_correlation_service(),
+            signal_correlation_service=bot._signal_correlation_service(),
             get_pending_raid=lambda to_broadcaster_id, from_broadcaster_login: bot._get_pending_raid(
                 to_broadcaster_id=to_broadcaster_id,
                 from_broadcaster_login=from_broadcaster_login,
@@ -541,7 +582,7 @@ def make_raid_arrival_runtime(bot: Any) -> RaidArrivalRuntime:
                 twitch_user_id,
                 reason=reason,
             ),
-            track_confirmed_partner_raid=track_confirmed_partner_raid,
+            track_confirmed_partner_raid=track_confirmed_partner_raid_fn,
             delete_external_recruitment_blacklist_pending=bot._delete_external_recruitment_blacklist_pending,
             record_confirmed_external_recruitment_raid=lambda **kwargs: external_recruitment.record_confirmed_raid(
                 **kwargs
@@ -558,10 +599,14 @@ def make_raid_arrival_runtime(bot: Any) -> RaidArrivalRuntime:
     )
 
 
-def make_recruitment_messaging_service(bot: Any) -> RecruitmentMessagingService:
+def make_recruitment_messaging_service(
+    bot: Any,
+    *,
+    readonly_connection_factory=readonly_connection,
+) -> RecruitmentMessagingService:
     return build_runtime_recruitment_messaging_service(
         create_twitch_api=lambda session: bot._create_twitch_api(session=session),
-        readonly_connection_factory=readonly_connection,
+        readonly_connection_factory=readonly_connection_factory,
         resolve_bot_oauth_context=bot._resolve_bot_oauth_context,
         resolve_valid_token=lambda twitch_user_id, session: bot.auth_manager.get_valid_token(
             twitch_user_id,

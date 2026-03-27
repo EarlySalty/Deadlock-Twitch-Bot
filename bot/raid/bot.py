@@ -13,7 +13,7 @@ import logging
 import os
 import time
 from collections.abc import Mapping
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any
 
 import aiohttp
@@ -78,10 +78,25 @@ from .runtime_support import (
 )
 from .signal_correlation import RaidSignalCorrelationService
 from ..storage import (
+    insert_observability_event,
     load_active_partner,
     load_offline_auto_raid_eligibility,
+    load_streamer_identity,
     readonly_connection,
+    transaction,
 )
+try:
+    from .partner_scores import (
+        load_partner_raid_score_map,
+        refresh_partner_raid_score_async,
+    )
+except Exception:  # pragma: no cover - best effort if helper is unavailable during partial deploys
+    load_partner_raid_score_map = None  # type: ignore[assignment]
+    refresh_partner_raid_score_async = None  # type: ignore[assignment]
+try:
+    from .partner_raid_score_tracking import track_confirmed_partner_raid
+except Exception:  # pragma: no cover - best effort if helper is unavailable during partial deploys
+    track_confirmed_partner_raid = None  # type: ignore[assignment]
 
 TWITCH_TOKEN_URL = "https://id.twitch.tv/oauth2/token"  # noqa: S105
 TWITCH_AUTHORIZE_URL = "https://id.twitch.tv/oauth2/authorize"
@@ -508,14 +523,20 @@ class RaidBot:
         return counters
 
     def _make_raid_observability_service(self) -> RaidObservabilityService:
-        return make_raid_observability_service(self)
+        return make_raid_observability_service(
+            self,
+            insert_observability_event_fn=insert_observability_event,
+        )
 
     @staticmethod
     def _partner_raid_delivery_planner() -> PartnerRaidDeliveryPlanner:
         return make_partner_raid_delivery_planner()
 
     def _partner_raid_delivery_service(self) -> PartnerRaidDeliveryService:
-        return make_partner_raid_delivery_service(self)
+        return make_partner_raid_delivery_service(
+            self,
+            planner=self._partner_raid_delivery_planner(),
+        )
 
     def _external_recruitment_service(self) -> ExternalRecruitmentService:
         return make_external_recruitment_service(self)
@@ -537,26 +558,46 @@ class RaidBot:
         return make_raid_state_store(self, config=self._raid_state_store_config())
 
     def _manual_raid_suppression_service(self) -> ManualRaidSuppressionService:
-        return make_manual_raid_suppression_service(self)
+        return make_manual_raid_suppression_service(
+            self,
+            readonly_connection_factory=readonly_connection,
+            load_active_partner_fn=load_active_partner,
+        )
 
     def _partner_arrival_tracking_service(self) -> PartnerArrivalTrackingService:
-        return make_partner_arrival_tracking_service(self)
+        return make_partner_arrival_tracking_service(
+            self,
+            readonly_connection_factory=readonly_connection,
+            transaction_factory=transaction,
+            load_active_partner_fn=load_active_partner,
+            load_streamer_identity_fn=load_streamer_identity,
+        )
 
     def _raid_data_source_service(self) -> RaidDataSourceService:
-        return make_raid_data_source_service(self)
+        return make_raid_data_source_service(
+            self,
+            readonly_connection_factory=readonly_connection,
+            utcnow=lambda: datetime.now(UTC),
+        )
 
     def _partner_setup_service(self) -> PartnerSetupService:
         return make_partner_setup_service(
             self,
             moderator_url_base=TWITCH_API_BASE,
             mask_log_identifier=_mask_log_identifier,
+            readonly_connection_factory=readonly_connection,
+            transaction_factory=transaction,
         )
 
     def _offline_raid_orchestrator(self) -> OfflineRaidOrchestrator:
         return make_offline_raid_orchestrator(self)
 
     def _raid_metrics_store(self) -> RaidMetricsStore:
-        return make_raid_metrics_store(self)
+        return make_raid_metrics_store(
+            self,
+            readonly_connection_factory=readonly_connection,
+            transaction_factory=transaction,
+        )
 
     def _candidate_followers_service(self) -> CandidateFollowersService:
         return make_candidate_followers_service(self)
@@ -592,6 +633,9 @@ class RaidBot:
         return make_candidate_selection_service(
             self,
             recent_raid_cooldown_days=RAID_TARGET_COOLDOWN_DAYS,
+            load_partner_raid_score_map_fn=load_partner_raid_score_map,
+            refresh_partner_raid_score_async_fn=refresh_partner_raid_score_async,
+            readonly_connection_factory=readonly_connection,
         )
 
     def _raid_blacklist_service(self) -> RaidBlacklistService:
@@ -604,6 +648,8 @@ class RaidBot:
             external_target_ban_check_delay_seconds=int(
                 _EXTERNAL_BAN_CHECK_DELAY_SECONDS
             ),
+            readonly_connection_factory=readonly_connection,
+            transaction_factory=transaction,
         )
 
     def _raid_pipeline_service(self) -> RaidPipelineService:
@@ -613,10 +659,16 @@ class RaidBot:
         return make_raid_tracking_runtime_service(self)
 
     def _raid_arrival_runtime(self) -> RaidArrivalRuntime:
-        return make_raid_arrival_runtime(self)
+        return make_raid_arrival_runtime(
+            self,
+            track_confirmed_partner_raid_fn=track_confirmed_partner_raid,
+        )
 
     def _recruitment_messaging_service(self) -> RecruitmentMessagingService:
-        return make_recruitment_messaging_service(self)
+        return make_recruitment_messaging_service(
+            self,
+            readonly_connection_factory=readonly_connection,
+        )
 
     @staticmethod
     def _signal_correlation_service() -> RaidSignalCorrelationService:
@@ -727,6 +779,7 @@ class RaidBot:
             scope_state=scope_state,
             runtime_state=runtime_state,
             level=level,
+            insert_observability_event_fn=insert_observability_event,
             **extra_fields,
         )
 

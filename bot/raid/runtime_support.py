@@ -35,6 +35,7 @@ def log_analytics_followers_decision(
     scope_state: dict[str, object],
     runtime_state: dict[str, object],
     level: int = logging.INFO,
+    insert_observability_event_fn=insert_observability_event,
     **extra_fields: object,
 ) -> None:
     payload = {
@@ -53,7 +54,7 @@ def log_analytics_followers_decision(
     }
     bot._last_analytics_followers_diagnostic = payload
     log.log(level, "analytics_decision %s", bot._format_raid_observability_fields(**payload))
-    insert_observability_event(
+    insert_observability_event_fn(
         flow_type="analytics",
         flow_id=str(payload.get("flow_id") or ""),
         entity_login=str(payload.get("login") or ""),
