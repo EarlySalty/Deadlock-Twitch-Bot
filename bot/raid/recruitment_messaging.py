@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
+from contextlib import AbstractContextManager
 from dataclasses import dataclass
 from typing import Any, Awaitable, Literal, Protocol
 
-from .chat_targets import make_chat_target
+from .chat_targets import lookup_outbound_chat_suppression, make_chat_target
 from .recruitment_delivery import (
     RecruitmentDeliveryConfig,
     RecruitmentDeliveryPlan,
@@ -15,6 +17,8 @@ from .recruitment_delivery import (
 )
 
 log = logging.getLogger("TwitchStreams.RaidManager")
+
+ReadonlyConnectionFactory = Callable[[], AbstractContextManager[Any]]
 
 
 class CreateTwitchApi(Protocol):
@@ -759,6 +763,87 @@ async def _maybe_await(value: object) -> object:
     return value
 
 
+def build_runtime_recruitment_messaging_service(
+    *,
+    create_twitch_api: CreateTwitchApi,
+    readonly_connection_factory: ReadonlyConnectionFactory,
+    resolve_bot_oauth_context: Callable[[], Awaitable[tuple[str | None, str | None, set[str]]] | tuple[str | None, str | None, set[str]]],
+    resolve_valid_token: ResolveValidToken,
+    get_followers_total_result: GetFollowersTotalResult,
+    build_followers_runtime_state: BuildFollowersRuntimeState,
+    increment_counter: IncrementCounter,
+    log_followers_decision: LogFollowersDecision,
+    next_flow_id: NextFlowId,
+    warn_user_scope_fallback_once: ScopeFallbackWarning,
+    clear_user_scope_fallback_warning: ScopeFallbackWarning,
+    get_chat_bot: GetChatBot,
+    count_confirmed_external_recruitment_raids: CountConfirmedExternalRecruitmentRaids,
+    schedule_external_target_ban_check: ScheduleExternalTargetBanCheck,
+    sleep: SleepFn,
+) -> RecruitmentMessagingService:
+    def _count_recent_raids(to_broadcaster_id: str) -> int:
+        with readonly_connection_factory() as conn:
+            row = conn.execute(
+                """
+                SELECT COUNT(*) FROM twitch_raid_history
+                WHERE to_broadcaster_id = %s
+                  AND COALESCE(success, FALSE) IS TRUE
+                  AND executed_at > NOW() - INTERVAL '1 day'
+                """,
+                (to_broadcaster_id,),
+            ).fetchone()
+        return int(row[0]) if row and row[0] is not None else 0
+
+    def _load_deadlock_stats(to_broadcaster_login: str):
+        with readonly_connection_factory() as conn:
+            return conn.execute(
+                """
+                SELECT
+                    ROUND(AVG(viewer_count)) as avg_viewers,
+                    MAX(viewer_count) as peak_viewers
+                FROM twitch_stats_category
+                WHERE streamer = %s
+                  AND viewer_count > 0
+                """,
+                (to_broadcaster_login,),
+            ).fetchone()
+
+    return RecruitmentMessagingService(
+        RecruitmentMessagingDependencies(
+            create_twitch_api=create_twitch_api,
+            resolve_bot_oauth_context=lambda _session: resolve_bot_oauth_context(),
+            resolve_valid_token=resolve_valid_token,
+            get_followers_total_result=get_followers_total_result,
+            build_followers_runtime_state=build_followers_runtime_state,
+            increment_counter=increment_counter,
+            log_followers_decision=log_followers_decision,
+            next_flow_id=next_flow_id,
+            warn_user_scope_fallback_once=warn_user_scope_fallback_once,
+            clear_user_scope_fallback_warning=clear_user_scope_fallback_warning,
+            get_chat_bot=get_chat_bot,
+            fetch_users=lambda chat_bot, logins: chat_bot.fetch_users(logins=logins),
+            lookup_outbound_chat_suppression=lookup_outbound_chat_suppression,
+            join_chat_channel=lambda chat_bot, channel_login, channel_id: chat_bot.join(
+                channel_login,
+                channel_id=channel_id,
+            ),
+            follow_channel=lambda chat_bot, target_id: chat_bot.follow_channel(target_id),
+            send_chat_message=lambda chat_bot, channel, message, source: chat_bot._send_chat_message(
+                channel,
+                message,
+                source=source,
+            )
+            if hasattr(chat_bot, "_send_chat_message")
+            else False,
+            count_recent_raids=_count_recent_raids,
+            count_confirmed_external_recruitment_raids=count_confirmed_external_recruitment_raids,
+            schedule_external_target_ban_check=schedule_external_target_ban_check,
+            load_deadlock_stats=_load_deadlock_stats,
+            sleep=sleep,
+        )
+    )
+
+
 __all__ = [
     "BuildFollowersRuntimeState",
     "CountConfirmedExternalRecruitmentRaids",
@@ -781,8 +866,10 @@ __all__ = [
     "RecruitmentMessagingService",
     "ResolveBotOauthContext",
     "ResolveValidToken",
+    "ReadonlyConnectionFactory",
     "ScheduleExternalTargetBanCheck",
     "ScopeFallbackWarning",
     "SendChatMessage",
     "SleepFn",
+    "build_runtime_recruitment_messaging_service",
 ]

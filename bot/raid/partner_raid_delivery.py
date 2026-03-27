@@ -1,7 +1,15 @@
 from __future__ import annotations
 
+import asyncio
+import inspect
+import logging
 from dataclasses import dataclass
-from typing import Literal
+from typing import Any, Awaitable, Literal, Protocol
+
+from .chat_targets import make_chat_target
+
+
+log = logging.getLogger("TwitchStreams.RaidManager")
 
 
 PartnerRaidDeliveryStatus = Literal["ready", "blocked"]
@@ -41,6 +49,58 @@ class PartnerRaidDeliveryPlan:
     @property
     def should_deliver(self) -> bool:
         return self.status == "ready"
+
+
+class GetChatBot(Protocol):
+    def __call__(self) -> Any | None: ...
+
+
+class CountReceivedNetworkRaids(Protocol):
+    def __call__(self, to_broadcaster_id: str) -> int: ...
+
+
+class LookupOutboundChatSuppression(Protocol):
+    def __call__(
+        self,
+        *,
+        target_login: str,
+        target_id: str | None,
+        source: str,
+    ) -> dict[str, Any] | None: ...
+
+
+class JoinChatChannel(Protocol):
+    def __call__(
+        self,
+        chat_bot: Any,
+        channel_login: str,
+        channel_id: str | None,
+    ) -> Awaitable[Any] | Any: ...
+
+
+class SendChatMessage(Protocol):
+    def __call__(
+        self,
+        chat_bot: Any,
+        channel: Any,
+        message: str,
+        source: str,
+    ) -> Awaitable[bool | None] | bool | None: ...
+
+
+class SleepFn(Protocol):
+    def __call__(self, seconds: float) -> Awaitable[None]: ...
+
+
+@dataclass(slots=True, frozen=True)
+class PartnerRaidDeliveryDependencies:
+    get_chat_bot: GetChatBot
+    count_received_network_raids: CountReceivedNetworkRaids
+    lookup_outbound_chat_suppression: LookupOutboundChatSuppression
+    join_chat_channel: JoinChatChannel
+    send_chat_message: SendChatMessage
+    sleep: SleepFn = asyncio.sleep
+    logger: logging.Logger = log
 
 
 class PartnerRaidDeliveryPlanner:
@@ -146,6 +206,136 @@ class PartnerRaidDeliveryPlanner:
         return "Viewer" if int(viewer_count or 0) == 1 else "Viewern"
 
 
+async def _maybe_await(value: object) -> object:
+    if inspect.isawaitable(value):
+        return await value
+    return value
+
+
+class PartnerRaidDeliveryService:
+    def __init__(
+        self,
+        dependencies: PartnerRaidDeliveryDependencies,
+        planner: PartnerRaidDeliveryPlanner | None = None,
+    ) -> None:
+        self._deps = dependencies
+        self._planner = planner or PartnerRaidDeliveryPlanner()
+
+    async def send_partner_raid_message(
+        self,
+        *,
+        from_broadcaster_login: str,
+        to_broadcaster_login: str,
+        to_broadcaster_id: str,
+        viewer_count: int,
+    ) -> None:
+        join_chat_bot = self._deps.get_chat_bot()
+        if not join_chat_bot:
+            self._deps.logger.debug("Chat bot not available for partner raid message")
+            return
+
+        try:
+            suppression = self._deps.lookup_outbound_chat_suppression(
+                target_login=to_broadcaster_login,
+                target_id=to_broadcaster_id,
+                source="partner_raid",
+            )
+            if suppression is not None:
+                self._deps.logger.info(
+                    "Skipping partner raid message to %s due stored chat suppression (code=%s, until=%s)",
+                    to_broadcaster_login,
+                    suppression.get("reason_code") or "unknown",
+                    suppression.get("suppressed_until") or "-",
+                )
+                return
+
+            received_raid_count = self._deps.count_received_network_raids(to_broadcaster_id)
+            if received_raid_count <= 0:
+                received_raid_count = 1
+
+            plan = self._planner.plan(
+                PartnerRaidDeliveryRequest(
+                    from_broadcaster_login=from_broadcaster_login,
+                    to_broadcaster_login=to_broadcaster_login,
+                    to_broadcaster_id=to_broadcaster_id,
+                    viewer_count=viewer_count,
+                    received_raid_count=received_raid_count,
+                    chat_bot_available=True,
+                    outbound_chat_suppressed=False,
+                )
+            )
+            if not plan.should_deliver or not plan.message:
+                self._deps.logger.info(
+                    "Skipping partner raid message to %s (%s)",
+                    to_broadcaster_login,
+                    plan.reason or "blocked",
+                )
+                return
+
+            target_channel = make_chat_target(to_broadcaster_login, to_broadcaster_id)
+            await _maybe_await(
+                self._deps.join_chat_channel(
+                    join_chat_bot,
+                    to_broadcaster_login,
+                    to_broadcaster_id,
+                )
+            )
+            await self._deps.sleep(plan.delay_seconds)
+
+            send_chat_bot = self._deps.get_chat_bot()
+            if not send_chat_bot:
+                self._deps.logger.debug(
+                    "Chat bot not available anymore for partner raid message to %s",
+                    to_broadcaster_login,
+                )
+                return
+
+            if send_chat_bot is not join_chat_bot:
+                await _maybe_await(
+                    self._deps.join_chat_channel(
+                        send_chat_bot,
+                        to_broadcaster_login,
+                        to_broadcaster_id,
+                    )
+                )
+
+            success = await _maybe_await(
+                self._deps.send_chat_message(
+                    send_chat_bot,
+                    target_channel,
+                    plan.message,
+                    "partner_raid",
+                )
+            )
+
+            if success is None:
+                self._deps.logger.debug(
+                    "Chat bot does not have _send_chat_message method, skipping partner raid message to %s",
+                    to_broadcaster_login,
+                )
+                return
+
+            if success:
+                self._deps.logger.info(
+                    "✅ Sent partner raid message to %s (raided by %s with %d viewers, network_raid_no=%d)",
+                    to_broadcaster_login,
+                    from_broadcaster_login,
+                    viewer_count,
+                    received_raid_count,
+                )
+            else:
+                self._deps.logger.warning(
+                    "Failed to send partner raid message to %s",
+                    to_broadcaster_login,
+                )
+        except Exception:
+            self._deps.logger.exception(
+                "Failed to send partner raid message to %s (raided by %s)",
+                to_broadcaster_login,
+                from_broadcaster_login,
+            )
+
+
 def plan_partner_raid_delivery(
     request: PartnerRaidDeliveryRequest,
     *,
@@ -157,6 +347,8 @@ def plan_partner_raid_delivery(
 __all__ = [
     "PartnerRaidDeliveryConfig",
     "PartnerRaidDeliveryPlan",
+    "PartnerRaidDeliveryDependencies",
+    "PartnerRaidDeliveryService",
     "PartnerRaidDeliveryPlanner",
     "PartnerRaidDeliveryRequest",
     "PartnerRaidDeliveryStatus",

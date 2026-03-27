@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 from dataclasses import dataclass
 from collections.abc import Mapping
 from typing import Any, Awaitable, Callable, MutableMapping, Sequence
@@ -9,6 +10,12 @@ FollowerCandidate = MutableMapping[str, Any]
 LoadCachedTotals = Callable[[Sequence[str]], Mapping[str, int] | Awaitable[Mapping[str, int]]]
 ResolveUserToken = Callable[[str], str | None | Awaitable[str | None]]
 FetchFollowersTotal = Callable[[str, str | None], int | None | Awaitable[int | None]]
+CreateTwitchApi = Callable[[Any], Any]
+ResolveBotOauthContext = Callable[[], Awaitable[tuple[str | None, str | None, set[str]]] | tuple[str | None, str | None, set[str]]]
+IncrementCounter = Callable[[str, int], int]
+ScopeFallbackWarning = Callable[..., None]
+GetFollowersTotalResult = Callable[[Any, str, str | None], Awaitable[dict[str, object]] | dict[str, object]]
+ResolveValidToken = Callable[[str, Any], Awaitable[str | None] | str | None]
 
 
 @dataclass(slots=True)
@@ -43,9 +50,149 @@ def _safe_int(value: object) -> int | None:
 
 
 async def _maybe_await(value: object) -> object:
-    if asyncio.iscoroutine(value) or isinstance(value, asyncio.Future):
+    if inspect.isawaitable(value):
         return await value
     return value
+
+
+@dataclass(slots=True)
+class CandidateFollowersDependencies:
+    create_twitch_api: CreateTwitchApi
+    resolve_bot_oauth_context: ResolveBotOauthContext
+    get_followers_total_result: GetFollowersTotalResult
+    resolve_valid_token: ResolveValidToken
+    increment_counter: IncrementCounter
+    warn_user_scope_fallback_once: ScopeFallbackWarning
+    clear_user_scope_fallback_warning: ScopeFallbackWarning
+    logger: Any
+
+
+class CandidateFollowersService:
+    def __init__(
+        self,
+        dependencies: CandidateFollowersDependencies,
+        *,
+        max_concurrency: int = 8,
+    ) -> None:
+        self._deps = dependencies
+        self._max_concurrency = max(1, int(max_concurrency or 1))
+
+    async def attach_followers_totals(
+        self,
+        candidates: list[FollowerCandidate],
+        *,
+        session: Any,
+        auth_subject_label_by_id: Mapping[str, str] | None = None,
+    ) -> None:
+        if not candidates or not session:
+            return
+
+        api = self._deps.create_twitch_api(session)
+        bot_token, _bot_id, bot_scopes = await _maybe_await(
+            self._deps.resolve_bot_oauth_context()
+        )
+        bot_scope_set = set(bot_scopes or set())
+        candidate_labels = {
+            str(candidate.get("user_id") or "").strip(): str(candidate.get("user_login") or "").strip().lower()
+            for candidate in candidates
+            if str(candidate.get("user_id") or "").strip()
+        }
+        if auth_subject_label_by_id:
+            candidate_labels.update(
+                {
+                    str(user_id or "").strip(): str(label or "").strip().lower()
+                    for user_id, label in auth_subject_label_by_id.items()
+                    if str(user_id or "").strip()
+                }
+            )
+
+        async def _load_cached_totals(logins: tuple[str, ...]) -> dict[str, int]:
+            if not logins:
+                return {}
+            try:
+                from bot.storage import readonly_connection
+
+                placeholders = ",".join("%s" for _ in logins)
+                with readonly_connection() as conn:
+                    rows = conn.execute(
+                        f"""
+                        SELECT streamer_login, COALESCE(followers_end, followers_start) AS follower_total
+                          FROM twitch_stream_sessions
+                         WHERE streamer_login IN ({placeholders})
+                           AND COALESCE(followers_end, followers_start) IS NOT NULL
+                         ORDER BY COALESCE(ended_at, started_at) DESC
+                        """,
+                        logins,
+                    ).fetchall()
+            except Exception:
+                self._deps.logger.debug("followers_totals: DB cache query failed", exc_info=True)
+                return {}
+
+            db_map: dict[str, int] = {}
+            for row in rows:
+                login = str(row[0] or "").strip().lower()
+                if not login or login in db_map or row[1] is None:
+                    continue
+                db_map[login] = int(row[1])
+            return db_map
+
+        async def _resolve_user_token(user_id: str) -> str | None:
+            try:
+                return await _maybe_await(self._deps.resolve_valid_token(user_id, session))
+            except Exception:
+                return None
+
+        async def _fetch_followers_total(user_id: str, user_token: str | None) -> int | None:
+            label = candidate_labels.get(user_id) or user_id
+            is_bot_path = bool(bot_token and user_token and user_token == bot_token)
+            if is_bot_path:
+                self._deps.increment_counter("followers_candidate_bot_path_attempt_total", 1)
+            else:
+                self._deps.warn_user_scope_fallback_once(
+                    area="raid candidate follower lookup",
+                    subject=label,
+                )
+
+            result = await _maybe_await(
+                self._deps.get_followers_total_result(api, user_id, user_token)
+            )
+            if result.get("ok") and result.get("data") is not None:
+                if is_bot_path:
+                    self._deps.clear_user_scope_fallback_warning(
+                        area="raid candidate follower lookup",
+                        subject=label,
+                    )
+                    self._deps.increment_counter(
+                        "followers_candidate_bot_path_success_total",
+                        1,
+                    )
+                else:
+                    self._deps.increment_counter(
+                        "followers_candidate_reason_fallback_to_streamer_token_total",
+                        1,
+                    )
+                return int(result["data"])
+
+            error_code = str(result.get("error_code") or "helix_followers_failed")
+            if is_bot_path:
+                self._deps.increment_counter("followers_candidate_bot_path_failure_total", 1)
+            else:
+                self._deps.increment_counter(
+                    f"followers_candidate_reason_{error_code}_total",
+                    1,
+                )
+            return None
+
+        await FollowerTotalEnricher(max_concurrency=self._max_concurrency).enrich_candidates(
+            candidates,
+            load_cached_totals=_load_cached_totals,
+            fetch_followers_total=_fetch_followers_total,
+            resolve_user_token=_resolve_user_token,
+            auth_context=FollowerAuthContext(
+                bot_token=bot_token,
+                bot_scopes=bot_scope_set,
+            ),
+        )
 
 
 class FollowerTotalEnricher:

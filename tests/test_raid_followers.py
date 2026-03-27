@@ -1,7 +1,12 @@
 import asyncio
 import unittest
 
-from bot.raid.followers import FollowerAuthContext, FollowerTotalEnricher
+from bot.raid.followers import (
+    CandidateFollowersDependencies,
+    CandidateFollowersService,
+    FollowerAuthContext,
+    FollowerTotalEnricher,
+)
 
 
 class RaidFollowerEnricherTests(unittest.IsolatedAsyncioTestCase):
@@ -90,6 +95,72 @@ class RaidFollowerEnricherTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(calls, [("2002", "bot-token")])
         self.assertEqual([candidate["followers_total"] for candidate in candidates], [987, 987, 987])
+
+
+class CandidateFollowersServiceTests(unittest.IsolatedAsyncioTestCase):
+    class _CustomAwaitable:
+        def __init__(self, value) -> None:
+            self._value = value
+
+        def __await__(self):
+            async def _inner():
+                return self._value
+
+            return _inner().__await__()
+
+    async def test_resolve_bot_oauth_context_is_called_without_session_argument(self) -> None:
+        calls: list[str] = []
+
+        async def resolve_bot_oauth_context():
+            calls.append("called")
+            return "bot-token", "9999", {"moderator:read:followers"}
+
+        async def get_followers_total_result(_api, user_id: str, user_token: str | None):
+            self.assertEqual(user_id, "1001")
+            self.assertEqual(user_token, "bot-token")
+            return {"ok": True, "data": 123}
+
+        service = CandidateFollowersService(
+            CandidateFollowersDependencies(
+                create_twitch_api=lambda _session: object(),
+                resolve_bot_oauth_context=resolve_bot_oauth_context,
+                get_followers_total_result=get_followers_total_result,
+                resolve_valid_token=lambda _user_id, _session: None,
+                increment_counter=lambda _name, _delta: 0,
+                warn_user_scope_fallback_once=lambda **_kwargs: None,
+                clear_user_scope_fallback_warning=lambda **_kwargs: None,
+                logger=type("Logger", (), {"debug": lambda *args, **kwargs: None})(),
+            )
+        )
+
+        candidates = [{"user_id": "1001", "user_login": "alpha", "followers_total": None}]
+        await service.attach_followers_totals(candidates, session=object())
+
+        self.assertEqual(calls, ["called"])
+        self.assertEqual(candidates[0]["followers_total"], 123)
+
+    async def test_accepts_custom_awaitable_from_resolve_bot_oauth_context(self) -> None:
+        service = CandidateFollowersService(
+            CandidateFollowersDependencies(
+                create_twitch_api=lambda _session: object(),
+                resolve_bot_oauth_context=lambda: self._CustomAwaitable(
+                    ("bot-token", "9999", {"moderator:read:followers"})
+                ),
+                get_followers_total_result=lambda _api, _user_id, _user_token: self._CustomAwaitable(
+                    {"ok": True, "data": 456}
+                ),
+                resolve_valid_token=lambda _user_id, _session: None,
+                increment_counter=lambda _name, _delta: 0,
+                warn_user_scope_fallback_once=lambda **_kwargs: None,
+                clear_user_scope_fallback_warning=lambda **_kwargs: None,
+                logger=type("Logger", (), {"debug": lambda *args, **kwargs: None})(),
+            )
+        )
+
+        candidates = [{"user_id": "1001", "user_login": "alpha", "followers_total": None}]
+        await service.attach_followers_totals(candidates, session=object())
+
+        self.assertEqual(candidates[0]["followers_total"], 456)
 
 
 if __name__ == "__main__":

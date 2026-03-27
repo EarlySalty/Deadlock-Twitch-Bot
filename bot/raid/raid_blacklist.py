@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
+from contextlib import AbstractContextManager
 from dataclasses import dataclass
 from typing import Any, Awaitable, Protocol, Sequence
 
@@ -8,6 +10,9 @@ from .partner_resolution import normalize_broadcaster_login
 
 
 log = logging.getLogger("TwitchStreams.RaidManager")
+
+ReadonlyConnectionFactory = Callable[[], AbstractContextManager[Any]]
+TransactionFactory = Callable[[], AbstractContextManager[Any]]
 
 
 class LoadBlacklistRows(Protocol):
@@ -456,6 +461,220 @@ def build_raid_blacklist_service(
     return RaidBlacklistService(dependencies, config=config)
 
 
+def build_runtime_raid_blacklist_service(
+    *,
+    readonly_connection_factory: ReadonlyConnectionFactory,
+    transaction_factory: TransactionFactory,
+    is_target_partner: IsTargetPartner,
+    get_chat_bot: GetChatBot,
+    config: RaidBlacklistConfig | None = None,
+) -> RaidBlacklistService:
+    def _load_blacklist_rows():
+        with readonly_connection_factory() as conn:
+            return conn.execute(
+                "SELECT target_id, lower(target_login) AS target_login FROM twitch_raid_blacklist"
+            ).fetchall()
+
+    def _store_blacklist_entry(*, target_id: str | None, target_login: str, reason: str) -> None:
+        with transaction_factory() as conn:
+            if target_id:
+                conn.execute(
+                    """
+                    DELETE FROM twitch_raid_blacklist
+                    WHERE target_id = %s
+                      AND lower(target_login) <> lower(%s)
+                    """,
+                    (target_id, target_login),
+                )
+            conn.execute(
+                """
+                INSERT INTO twitch_raid_blacklist (target_id, target_login, reason)
+                VALUES (%s, %s, %s)
+                ON CONFLICT (target_login) DO UPDATE SET
+                    target_id = COALESCE(EXCLUDED.target_id, twitch_raid_blacklist.target_id),
+                    reason = EXCLUDED.reason,
+                    added_at = CURRENT_TIMESTAMP
+                """,
+                (target_id, target_login, reason),
+            )
+
+    def _is_blacklisted(*, target_id: str, target_login: str) -> bool:
+        with readonly_connection_factory() as conn:
+            row = conn.execute(
+                """
+                SELECT 1 FROM twitch_raid_blacklist
+                WHERE (target_id IS NOT NULL AND target_id = %s)
+                   OR lower(target_login) = lower(%s)
+                """,
+                (target_id, target_login),
+            ).fetchone()
+        return bool(row)
+
+    def _load_due_external_recruitment_blacklist_pending():
+        with readonly_connection_factory() as conn:
+            return conn.execute(
+                """
+                SELECT target_id, target_login, confirmed_raid_count, threshold_reached_at
+                FROM twitch_external_recruitment_blacklist_pending
+                WHERE blacklist_after <= NOW()
+                ORDER BY blacklist_after ASC
+                LIMIT 50
+                """
+            ).fetchall()
+
+    def _schedule_external_recruitment_blacklist_pending(
+        *,
+        target_id: str,
+        target_login: str,
+        confirmed_raid_count: int,
+        raid_flow_id: str | None,
+        grace_seconds: int,
+    ) -> None:
+        with transaction_factory() as conn:
+            conn.execute(
+                """
+                INSERT INTO twitch_external_recruitment_blacklist_pending (
+                    target_id,
+                    target_login,
+                    confirmed_raid_count,
+                    threshold_reached_at,
+                    blacklist_after,
+                    last_raid_flow_id,
+                    updated_at
+                )
+                VALUES (
+                    %s,
+                    %s,
+                    %s,
+                    CURRENT_TIMESTAMP,
+                    CURRENT_TIMESTAMP + (%s * INTERVAL '1 second'),
+                    %s,
+                    CURRENT_TIMESTAMP
+                )
+                ON CONFLICT (target_id) DO UPDATE SET
+                    target_login = EXCLUDED.target_login,
+                    confirmed_raid_count = GREATEST(
+                        twitch_external_recruitment_blacklist_pending.confirmed_raid_count,
+                        EXCLUDED.confirmed_raid_count
+                    ),
+                    last_raid_flow_id = EXCLUDED.last_raid_flow_id,
+                    updated_at = CURRENT_TIMESTAMP
+                """,
+                (
+                    target_id,
+                    target_login,
+                    int(confirmed_raid_count),
+                    int(grace_seconds),
+                    str(raid_flow_id or "").strip() or None,
+                ),
+            )
+
+    def _delete_external_recruitment_blacklist_pending(target_id: str) -> None:
+        with transaction_factory() as conn:
+            conn.execute(
+                """
+                DELETE FROM twitch_external_recruitment_blacklist_pending
+                WHERE target_id = %s
+                """,
+                (target_id,),
+            )
+
+    def _load_due_external_target_ban_checks():
+        with readonly_connection_factory() as conn:
+            return conn.execute(
+                """
+                SELECT target_id, target_login, source
+                FROM twitch_external_bot_ban_check_pending
+                WHERE run_after <= NOW()
+                ORDER BY run_after ASC
+                LIMIT 25
+                """
+            ).fetchall()
+
+    def _schedule_external_target_ban_check(
+        *,
+        target_id: str | None,
+        target_login: str,
+        source: str,
+        delay_seconds: int,
+    ) -> None:
+        with transaction_factory() as conn:
+            conn.execute(
+                """
+                INSERT INTO twitch_external_bot_ban_check_pending (
+                    target_id,
+                    target_login,
+                    source,
+                    run_after,
+                    updated_at
+                )
+                VALUES (
+                    %s,
+                    %s,
+                    %s,
+                    CURRENT_TIMESTAMP + (%s * INTERVAL '1 second'),
+                    CURRENT_TIMESTAMP
+                )
+                ON CONFLICT (target_id) DO UPDATE SET
+                    target_login = EXCLUDED.target_login,
+                    source = EXCLUDED.source,
+                    run_after = EXCLUDED.run_after,
+                    updated_at = CURRENT_TIMESTAMP
+                """,
+                (target_id, target_login, source, int(delay_seconds)),
+            )
+
+    def _delete_external_target_ban_check_pending(target_id: str) -> None:
+        with transaction_factory() as conn:
+            conn.execute(
+                """
+                DELETE FROM twitch_external_bot_ban_check_pending
+                WHERE target_id = %s
+                """,
+                (target_id,),
+            )
+
+    def _reschedule_external_target_ban_check_pending(target_id: str, delay_seconds: int) -> None:
+        with transaction_factory() as conn:
+            conn.execute(
+                """
+                UPDATE twitch_external_bot_ban_check_pending
+                SET run_after = CURRENT_TIMESTAMP + (%s * INTERVAL '1 second'),
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE target_id = %s
+                """,
+                (int(max(60, delay_seconds)), target_id),
+            )
+
+    async def _join_chat_channel(chat_bot: Any, channel_login: str, channel_id: str | None) -> bool:
+        return bool(await chat_bot.join(channel_login, channel_id=channel_id))
+
+    async def _part_chat_channels(chat_bot: Any, channels: Sequence[str]) -> None:
+        part_channels = getattr(chat_bot, "part_channels", None)
+        if callable(part_channels):
+            await part_channels(channels)
+
+    return build_raid_blacklist_service(
+        RaidBlacklistDependencies(
+            load_blacklist_rows=_load_blacklist_rows,
+            is_blacklisted=_is_blacklisted,
+            store_blacklist_entry=_store_blacklist_entry,
+            load_due_external_recruitment_blacklist_pending=_load_due_external_recruitment_blacklist_pending,
+            schedule_external_recruitment_blacklist_pending=_schedule_external_recruitment_blacklist_pending,
+            delete_external_recruitment_blacklist_pending=_delete_external_recruitment_blacklist_pending,
+            is_target_partner=is_target_partner,
+            load_due_external_target_ban_checks=_load_due_external_target_ban_checks,
+            schedule_external_target_ban_check=_schedule_external_target_ban_check,
+            delete_external_target_ban_check_pending=_delete_external_target_ban_check_pending,
+            reschedule_external_target_ban_check_pending=_reschedule_external_target_ban_check_pending,
+            get_chat_bot=get_chat_bot,
+            join_chat_channel=_join_chat_channel,
+            part_chat_channels=_part_chat_channels,
+        ),
+        config=config,
+    )
+
+
 __all__ = [
     "DeleteExternalRecruitmentBlacklistPending",
     "DeleteExternalTargetBanCheckPending",
@@ -471,9 +690,12 @@ __all__ = [
     "RaidBlacklistCallbacks",
     "RaidBlacklistDependencies",
     "RaidBlacklistService",
+    "ReadonlyConnectionFactory",
     "RescheduleExternalTargetBanCheckPending",
     "ScheduleExternalRecruitmentBlacklistPending",
     "ScheduleExternalTargetBanCheck",
     "StoreBlacklistEntry",
+    "TransactionFactory",
     "build_raid_blacklist_service",
+    "build_runtime_raid_blacklist_service",
 ]

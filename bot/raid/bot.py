@@ -25,7 +25,7 @@ from .raid_arrival_runtime import RaidArrivalRuntime, RaidArrivalRuntimeDependen
 from .candidate_selection import CandidateSelectionService
 from .chat_targets import lookup_outbound_chat_suppression, make_chat_target
 from .external_recruitment import ExternalRecruitmentService
-from .followers import FollowerAuthContext, FollowerTotalEnricher
+from .followers import CandidateFollowersDependencies, CandidateFollowersService
 from .lifecycle import RaidBotLifecycle
 from .manual_raid_suppression import (
     ManualRaidSuppressionDependencies,
@@ -38,10 +38,16 @@ from .partner_arrival_tracking import (
     PartnerArrivalTrackingService,
 )
 from .partner_setup_service import PartnerSetupService
-from .partner_raid_delivery import PartnerRaidDeliveryConfig, PartnerRaidDeliveryPlanner, PartnerRaidDeliveryRequest
+from .partner_raid_delivery import (
+    PartnerRaidDeliveryConfig,
+    PartnerRaidDeliveryDependencies,
+    PartnerRaidDeliveryPlanner,
+    PartnerRaidDeliveryService,
+)
 from .pending_raids import PendingRaid, PendingRaidStore
-from .raid_blacklist import RaidBlacklistConfig, RaidBlacklistDependencies, RaidBlacklistService
+from .raid_blacklist import RaidBlacklistConfig, RaidBlacklistService, build_runtime_raid_blacklist_service
 from .raid_data_sources import RaidDataSourceService
+from .raid_metrics_store import RaidMetricsStore
 from .raid_pipeline import RaidPipelineDependencies, RaidPipelineRequest, RaidPipelineService, is_retryable_raid_error
 from .raid_state_store import RaidStateStore, RaidStateStoreConfig
 from .raid_tracking_runtime import (
@@ -49,7 +55,7 @@ from .raid_tracking_runtime import (
     RaidTrackingRuntimeService,
     RaidTrackingRuntimeState,
 )
-from .recruitment_messaging import RecruitmentMessagingDependencies, RecruitmentMessagingService
+from .recruitment_messaging import RecruitmentMessagingService, build_runtime_recruitment_messaging_service
 from .signal_correlation import RaidSignalCorrelationService
 from ..storage import (
     insert_observability_event,
@@ -524,6 +530,34 @@ class RaidBot:
             )
         )
 
+    def _partner_raid_delivery_service(self) -> PartnerRaidDeliveryService:
+        return PartnerRaidDeliveryService(
+            PartnerRaidDeliveryDependencies(
+                get_chat_bot=lambda: self.chat_bot,
+                count_received_network_raids=self._get_received_network_raid_count,
+                lookup_outbound_chat_suppression=lambda **kwargs: self._lookup_outbound_chat_suppression(
+                    str(kwargs.get("target_login") or ""),
+                    str(kwargs.get("target_id") or "") or None,
+                    source=str(kwargs.get("source") or ""),
+                ),
+                join_chat_channel=lambda chat_bot, channel_login, channel_id: chat_bot.join(
+                    channel_login,
+                    channel_id=channel_id,
+                ),
+                send_chat_message=lambda chat_bot, channel, message, source: (
+                    chat_bot._send_chat_message(
+                        channel,
+                        message,
+                        source=source,
+                    )
+                    if hasattr(chat_bot, "_send_chat_message")
+                    else None
+                ),
+                logger=log,
+            ),
+            planner=self._partner_raid_delivery_planner(),
+        )
+
     def _external_recruitment_service(self) -> ExternalRecruitmentService:
         return ExternalRecruitmentService(
             persist_confirmed_raid=self._record_confirmed_external_recruitment_raid,
@@ -650,6 +684,38 @@ class RaidBot:
             logger=log,
         )
 
+    def _raid_metrics_store(self) -> RaidMetricsStore:
+        return RaidMetricsStore(
+            readonly_connection=readonly_connection,
+            transaction=transaction,
+            normalize_broadcaster_login=self._normalize_broadcaster_login,
+            is_partner_target_channel=self._is_partner_target_channel,
+            next_raid_observability_flow_id=self._next_raid_observability_flow_id,
+            logger=log,
+        )
+
+    def _candidate_followers_service(self) -> CandidateFollowersService:
+        return CandidateFollowersService(
+            CandidateFollowersDependencies(
+                create_twitch_api=lambda session: self._create_twitch_api(session=session),
+                resolve_bot_oauth_context=self._resolve_bot_oauth_context,
+                get_followers_total_result=lambda api, user_id, user_token: self._get_followers_total_result_with_legacy_fallback(
+                    api,
+                    user_id,
+                    user_token=user_token,
+                ),
+                resolve_valid_token=lambda user_id, session: self.auth_manager.get_valid_token(
+                    user_id,
+                    session,
+                ),
+                increment_counter=self._increment_raid_observability_counter,
+                warn_user_scope_fallback_once=self._warn_user_scope_fallback_once,
+                clear_user_scope_fallback_warning=self._clear_user_scope_fallback_warning,
+                logger=log,
+            ),
+            max_concurrency=8,
+        )
+
     def _resolve_bot_id_for_setup(self) -> str | None:
         chat_bot = self.chat_bot
         if chat_bot is not None:
@@ -689,208 +755,11 @@ class RaidBot:
         )
 
     def _raid_blacklist_service(self) -> RaidBlacklistService:
-        def _load_blacklist_rows():
-            with readonly_connection() as conn:
-                return conn.execute(
-                    "SELECT target_id, lower(target_login) AS target_login FROM twitch_raid_blacklist"
-                ).fetchall()
-
-        def _store_blacklist_entry(*, target_id: str | None, target_login: str, reason: str) -> None:
-            with transaction() as conn:
-                if target_id:
-                    conn.execute(
-                        """
-                        DELETE FROM twitch_raid_blacklist
-                        WHERE target_id = %s
-                          AND lower(target_login) <> lower(%s)
-                        """,
-                        (target_id, target_login),
-                    )
-                conn.execute(
-                    """
-                    INSERT INTO twitch_raid_blacklist (target_id, target_login, reason)
-                    VALUES (%s, %s, %s)
-                    ON CONFLICT (target_login) DO UPDATE SET
-                        target_id = COALESCE(EXCLUDED.target_id, twitch_raid_blacklist.target_id),
-                        reason = EXCLUDED.reason,
-                        added_at = CURRENT_TIMESTAMP
-                    """,
-                    (target_id, target_login, reason),
-                )
-
-        def _is_blacklisted(*, target_id: str, target_login: str) -> bool:
-            with readonly_connection() as conn:
-                row = conn.execute(
-                    """
-                    SELECT 1 FROM twitch_raid_blacklist
-                    WHERE (target_id IS NOT NULL AND target_id = %s)
-                       OR lower(target_login) = lower(%s)
-                    """,
-                    (target_id, target_login),
-                ).fetchone()
-            return bool(row)
-
-        def _load_due_external_recruitment_blacklist_pending():
-            with readonly_connection() as conn:
-                return conn.execute(
-                    """
-                    SELECT target_id, target_login, confirmed_raid_count, threshold_reached_at
-                    FROM twitch_external_recruitment_blacklist_pending
-                    WHERE blacklist_after <= NOW()
-                    ORDER BY blacklist_after ASC
-                    LIMIT 50
-                    """
-                ).fetchall()
-
-        def _schedule_external_recruitment_blacklist_pending(
-            *,
-            target_id: str,
-            target_login: str,
-            confirmed_raid_count: int,
-            raid_flow_id: str | None,
-            grace_seconds: int,
-        ) -> None:
-            with transaction() as conn:
-                conn.execute(
-                    """
-                    INSERT INTO twitch_external_recruitment_blacklist_pending (
-                        target_id,
-                        target_login,
-                        confirmed_raid_count,
-                        threshold_reached_at,
-                        blacklist_after,
-                        last_raid_flow_id,
-                        updated_at
-                    )
-                    VALUES (
-                        %s,
-                        %s,
-                        %s,
-                        CURRENT_TIMESTAMP,
-                        CURRENT_TIMESTAMP + (%s * INTERVAL '1 second'),
-                        %s,
-                        CURRENT_TIMESTAMP
-                    )
-                    ON CONFLICT (target_id) DO UPDATE SET
-                        target_login = EXCLUDED.target_login,
-                        confirmed_raid_count = GREATEST(
-                            twitch_external_recruitment_blacklist_pending.confirmed_raid_count,
-                            EXCLUDED.confirmed_raid_count
-                        ),
-                        last_raid_flow_id = EXCLUDED.last_raid_flow_id,
-                        updated_at = CURRENT_TIMESTAMP
-                    """,
-                    (
-                        target_id,
-                        target_login,
-                        int(confirmed_raid_count),
-                        int(grace_seconds),
-                        str(raid_flow_id or "").strip() or None,
-                    ),
-                )
-
-        def _delete_external_recruitment_blacklist_pending(target_id: str) -> None:
-            with transaction() as conn:
-                conn.execute(
-                    """
-                    DELETE FROM twitch_external_recruitment_blacklist_pending
-                    WHERE target_id = %s
-                    """,
-                    (target_id,),
-                )
-
-        def _load_due_external_target_ban_checks():
-            with readonly_connection() as conn:
-                return conn.execute(
-                    """
-                    SELECT target_id, target_login, source
-                    FROM twitch_external_bot_ban_check_pending
-                    WHERE run_after <= NOW()
-                    ORDER BY run_after ASC
-                    LIMIT 25
-                    """
-                ).fetchall()
-
-        def _schedule_external_target_ban_check(
-            *,
-            target_id: str | None,
-            target_login: str,
-            source: str,
-            delay_seconds: int,
-        ) -> None:
-            with transaction() as conn:
-                conn.execute(
-                    """
-                    INSERT INTO twitch_external_bot_ban_check_pending (
-                        target_id,
-                        target_login,
-                        source,
-                        run_after,
-                        updated_at
-                    )
-                    VALUES (
-                        %s,
-                        %s,
-                        %s,
-                        CURRENT_TIMESTAMP + (%s * INTERVAL '1 second'),
-                        CURRENT_TIMESTAMP
-                    )
-                    ON CONFLICT (target_id) DO UPDATE SET
-                        target_login = EXCLUDED.target_login,
-                        source = EXCLUDED.source,
-                        run_after = EXCLUDED.run_after,
-                        updated_at = CURRENT_TIMESTAMP
-                    """,
-                    (target_id, target_login, source, int(delay_seconds)),
-                )
-
-        def _delete_external_target_ban_check_pending(target_id: str) -> None:
-            with transaction() as conn:
-                conn.execute(
-                    """
-                    DELETE FROM twitch_external_bot_ban_check_pending
-                    WHERE target_id = %s
-                    """,
-                    (target_id,),
-                )
-
-        def _reschedule_external_target_ban_check_pending(target_id: str, delay_seconds: int) -> None:
-            with transaction() as conn:
-                conn.execute(
-                    """
-                    UPDATE twitch_external_bot_ban_check_pending
-                    SET run_after = CURRENT_TIMESTAMP + (%s * INTERVAL '1 second'),
-                        updated_at = CURRENT_TIMESTAMP
-                    WHERE target_id = %s
-                    """,
-                    (int(max(60, delay_seconds)), target_id),
-                )
-
-        async def _join_chat_channel(chat_bot, channel_login: str, channel_id: str | None) -> bool:
-            return bool(await chat_bot.join(channel_login, channel_id=channel_id))
-
-        async def _part_chat_channels(chat_bot, channels: list[str]) -> None:
-            part_channels = getattr(chat_bot, "part_channels", None)
-            if callable(part_channels):
-                await part_channels(channels)
-
-        return RaidBlacklistService(
-            RaidBlacklistDependencies(
-                load_blacklist_rows=_load_blacklist_rows,
-                is_blacklisted=_is_blacklisted,
-                store_blacklist_entry=_store_blacklist_entry,
-                load_due_external_recruitment_blacklist_pending=_load_due_external_recruitment_blacklist_pending,
-                schedule_external_recruitment_blacklist_pending=_schedule_external_recruitment_blacklist_pending,
-                delete_external_recruitment_blacklist_pending=_delete_external_recruitment_blacklist_pending,
-                is_target_partner=self._is_target_currently_partner,
-                load_due_external_target_ban_checks=_load_due_external_target_ban_checks,
-                schedule_external_target_ban_check=_schedule_external_target_ban_check,
-                delete_external_target_ban_check_pending=_delete_external_target_ban_check_pending,
-                reschedule_external_target_ban_check_pending=_reschedule_external_target_ban_check_pending,
-                get_chat_bot=lambda: self.chat_bot,
-                join_chat_channel=_join_chat_channel,
-                part_chat_channels=_part_chat_channels,
-            ),
+        return build_runtime_raid_blacklist_service(
+            readonly_connection_factory=readonly_connection,
+            transaction_factory=transaction,
+            is_target_partner=self._is_target_currently_partner,
+            get_chat_bot=lambda: self.chat_bot,
             config=RaidBlacklistConfig(
                 external_recruitment_raid_limit=_EXTERNAL_RECRUITMENT_RAID_LIMIT,
                 external_recruitment_blacklist_grace_seconds=int(
@@ -1112,82 +981,29 @@ class RaidBot:
         )
 
     def _recruitment_messaging_service(self) -> RecruitmentMessagingService:
-        def _create_twitch_api(session):
-            from ..api.twitch_api import TwitchAPI
-
-            return TwitchAPI(
-                self.auth_manager.client_id,
-                self.auth_manager.client_secret,
-                session=session,
-            )
-
-        def _count_recent_raids(to_broadcaster_id: str) -> int:
-            with readonly_connection() as conn:
-                row = conn.execute(
-                    """
-                    SELECT COUNT(*) FROM twitch_raid_history
-                    WHERE to_broadcaster_id = %s
-                      AND COALESCE(success, FALSE) IS TRUE
-                      AND executed_at > NOW() - INTERVAL '1 day'
-                    """,
-                    (to_broadcaster_id,),
-                ).fetchone()
-            return int(row[0]) if row and row[0] is not None else 0
-
-        def _load_deadlock_stats(to_broadcaster_login: str):
-            with readonly_connection() as conn:
-                return conn.execute(
-                    """
-                    SELECT
-                        ROUND(AVG(viewer_count)) as avg_viewers,
-                        MAX(viewer_count) as peak_viewers
-                    FROM twitch_stats_category
-                    WHERE streamer = %s
-                      AND viewer_count > 0
-                    """,
-                    (to_broadcaster_login,),
-                ).fetchone()
-
-        return RecruitmentMessagingService(
-            RecruitmentMessagingDependencies(
-                create_twitch_api=_create_twitch_api,
-                resolve_bot_oauth_context=lambda _session: self._resolve_bot_oauth_context(),
-                resolve_valid_token=lambda twitch_user_id, session: self.auth_manager.get_valid_token(
-                    twitch_user_id,
-                    session,
-                ),
-                get_followers_total_result=lambda api, twitch_user_id, user_token: self._get_followers_total_result_with_legacy_fallback(
-                    api,
-                    twitch_user_id,
-                    user_token=user_token,
-                ),
-                build_followers_runtime_state=self._build_analytics_followers_runtime_state,
-                increment_counter=self._increment_raid_observability_counter,
-                log_followers_decision=self._log_analytics_followers_decision,
-                next_flow_id=lambda prefix: self._next_raid_observability_flow_id(prefix=prefix),
-                warn_user_scope_fallback_once=self._warn_user_scope_fallback_once,
-                clear_user_scope_fallback_warning=self._clear_user_scope_fallback_warning,
-                get_chat_bot=lambda: self.chat_bot,
-                fetch_users=lambda chat_bot, logins: chat_bot.fetch_users(logins=logins),
-                lookup_outbound_chat_suppression=lookup_outbound_chat_suppression,
-                join_chat_channel=lambda chat_bot, channel_login, channel_id: chat_bot.join(
-                    channel_login,
-                    channel_id=channel_id,
-                ),
-                follow_channel=lambda chat_bot, target_id: chat_bot.follow_channel(target_id),
-                send_chat_message=lambda chat_bot, channel, message, source: chat_bot._send_chat_message(
-                    channel,
-                    message,
-                    source=source,
-                )
-                if hasattr(chat_bot, "_send_chat_message")
-                else False,
-                count_recent_raids=_count_recent_raids,
-                count_confirmed_external_recruitment_raids=self._get_confirmed_external_recruitment_raid_count,
-                schedule_external_target_ban_check=self._schedule_external_target_ban_check,
-                load_deadlock_stats=_load_deadlock_stats,
-                sleep=asyncio.sleep,
-            )
+        return build_runtime_recruitment_messaging_service(
+            create_twitch_api=lambda session: self._create_twitch_api(session=session),
+            readonly_connection_factory=readonly_connection,
+            resolve_bot_oauth_context=self._resolve_bot_oauth_context,
+            resolve_valid_token=lambda twitch_user_id, session: self.auth_manager.get_valid_token(
+                twitch_user_id,
+                session,
+            ),
+            get_followers_total_result=lambda api, twitch_user_id, user_token: self._get_followers_total_result_with_legacy_fallback(
+                api,
+                twitch_user_id,
+                user_token=user_token,
+            ),
+            build_followers_runtime_state=self._build_analytics_followers_runtime_state,
+            increment_counter=self._increment_raid_observability_counter,
+            log_followers_decision=self._log_analytics_followers_decision,
+            next_flow_id=lambda prefix: self._next_raid_observability_flow_id(prefix=prefix),
+            warn_user_scope_fallback_once=self._warn_user_scope_fallback_once,
+            clear_user_scope_fallback_warning=self._clear_user_scope_fallback_warning,
+            get_chat_bot=lambda: self.chat_bot,
+            count_confirmed_external_recruitment_raids=self._get_confirmed_external_recruitment_raid_count,
+            schedule_external_target_ban_check=self._schedule_external_target_ban_check,
+            sleep=asyncio.sleep,
         )
 
     @staticmethod
@@ -1873,8 +1689,8 @@ class RaidBot:
     def _raid_language_filters(self) -> list[str | None]:
         return self._raid_data_source_service().raid_language_filters()
 
-    def _create_twitch_api(self):
-        session = self.session
+    def _create_twitch_api(self, *, session=None):
+        session = session or self.session
         if session is None:
             return None
         try:
@@ -2213,152 +2029,20 @@ class RaidBot:
         to_broadcaster_id: str,
         viewer_count: int,
     ):
-        """
-        Sendet eine Bestätigungs-Nachricht im Chat des geraideten Partners.
-
-        Diese Nachricht zeigt dem Partner-Streamer, dass der Raid durch
-        das Deadlock Streamer-Netzwerk kam, um den Mehrwert zu verdeutlichen.
-
-        Wird aufgerufen NACH dem EventSub channel.raid Event, d.h. der Raid
-        ist bereits beim Ziel angekommen.
-        """
-        if not self.chat_bot:
-            log.debug("Chat bot not available for partner raid message")
-            return
-
-        try:
-            target_channel = self._make_chat_target(to_broadcaster_login, to_broadcaster_id)
-            suppression = self._lookup_outbound_chat_suppression(
-                to_broadcaster_login,
-                to_broadcaster_id,
-                source="partner_raid",
-            )
-            if suppression is not None:
-                log.info(
-                    "Skipping partner raid message to %s due stored chat suppression (code=%s, until=%s)",
-                    to_broadcaster_login,
-                    suppression.get("reason_code") or "unknown",
-                    suppression.get("suppressed_until") or "-",
-                )
-                return
-
-            # Erfolgreiche Netzwerk-Raids für dieses Ziel zählen (inkl. aktuellem Raid)
-            received_raid_count = self._get_received_network_raid_count(to_broadcaster_id)
-            if received_raid_count <= 0:
-                received_raid_count = 1
-
-            plan = self._partner_raid_delivery_planner().plan(
-                PartnerRaidDeliveryRequest(
-                    from_broadcaster_login=from_broadcaster_login,
-                    to_broadcaster_login=to_broadcaster_login,
-                    to_broadcaster_id=to_broadcaster_id,
-                    viewer_count=viewer_count,
-                    received_raid_count=received_raid_count,
-                    chat_bot_available=bool(self.chat_bot),
-                    outbound_chat_suppressed=False,
-                )
-            )
-            if not plan.should_deliver or not plan.message:
-                log.info(
-                    "Skipping partner raid message to %s (%s)",
-                    to_broadcaster_login,
-                    plan.reason or "blocked",
-                )
-                return
-
-            # 1. Channel beitreten (falls noch nicht joined)
-            await self.chat_bot.join(to_broadcaster_login, channel_id=to_broadcaster_id)
-
-            # 2. Kurze Verzögerung, damit der Bot bereit ist und der Raid-Alert durch ist
-            await asyncio.sleep(plan.delay_seconds)
-
-            # 4. Nachricht senden
-            if hasattr(self.chat_bot, "_send_chat_message"):
-                success = await self.chat_bot._send_chat_message(
-                    target_channel,
-                    plan.message,
-                    source="partner_raid",
-                )
-
-                if success:
-                    log.info(
-                        "✅ Sent partner raid message to %s (raided by %s with %d viewers, network_raid_no=%d)",
-                        to_broadcaster_login,
-                        from_broadcaster_login,
-                        viewer_count,
-                        received_raid_count,
-                    )
-                else:
-                    log.warning(
-                        "Failed to send partner raid message to %s",
-                        to_broadcaster_login,
-                    )
-            else:
-                log.debug(
-                    "Chat bot does not have _send_chat_message method, skipping partner raid message to %s",
-                    to_broadcaster_login,
-                )
-        except Exception:
-            log.exception(
-                "Failed to send partner raid message to %s (raided by %s)",
-                to_broadcaster_login,
-                from_broadcaster_login,
-            )
+        await self._partner_raid_delivery_service().send_partner_raid_message(
+            from_broadcaster_login=from_broadcaster_login,
+            to_broadcaster_login=to_broadcaster_login,
+            to_broadcaster_id=to_broadcaster_id,
+            viewer_count=viewer_count,
+        )
 
     def _get_received_network_raid_count(self, to_broadcaster_id: str) -> int:
-        """
-        Anzahl erfolgreicher, vom Raid-Bot geloggter Raids auf dieses Ziel.
-
-        Die History enthält nur Raids, die von unseren Streamern über den Bot
-        ausgeführt wurden; damit entspricht der Wert den erhaltenen Netzwerk-Raids.
-        """
-        target_id = str(to_broadcaster_id or "").strip()
-        if not target_id:
-            return 0
-
-        try:
-            with readonly_connection() as conn:
-                row = conn.execute(
-                    """
-                    SELECT COUNT(*)
-                    FROM twitch_raid_history
-                    WHERE to_broadcaster_id = %s
-                      AND COALESCE(success, FALSE) IS TRUE
-                    """,
-                    (target_id,),
-                ).fetchone()
-            return int(row[0]) if row and row[0] is not None else 0
-        except Exception:
-            log.debug(
-                "Could not count received network raids for %s",
-                target_id,
-                exc_info=True,
-            )
-            return 0
+        return self._raid_metrics_store().get_received_network_raid_count(to_broadcaster_id)
 
     def _get_confirmed_external_recruitment_raid_count(self, to_broadcaster_id: str) -> int:
-        target_id = str(to_broadcaster_id or "").strip()
-        if not target_id:
-            return 0
-
-        try:
-            with readonly_connection() as conn:
-                row = conn.execute(
-                    """
-                    SELECT COUNT(*)
-                    FROM twitch_confirmed_external_recruitment_raids
-                    WHERE to_broadcaster_id = %s
-                    """,
-                    (target_id,),
-                ).fetchone()
-            return int(row[0]) if row and row[0] is not None else 0
-        except Exception:
-            log.debug(
-                "Could not count confirmed external recruitment raids for %s",
-                target_id,
-                exc_info=True,
-            )
-            return 0
+        return self._raid_metrics_store().get_confirmed_external_recruitment_raid_count(
+            to_broadcaster_id
+        )
 
     def _record_confirmed_external_recruitment_raid(
         self,
@@ -2371,61 +2055,15 @@ class RaidBot:
         viewer_count: int,
         confirmation_signal: str,
     ) -> int | None:
-        target_id = str(to_broadcaster_id or "").strip()
-        target_login = self._normalize_broadcaster_login(to_broadcaster_login)
-        if not target_id or not target_login:
-            return None
-
-        normalized_flow_id = (
-            str(raid_flow_id or "").strip()
-            or self._next_raid_observability_flow_id(prefix="external-confirmed")
+        return self._raid_metrics_store().record_confirmed_external_recruitment_raid(
+            raid_flow_id=raid_flow_id,
+            from_broadcaster_id=from_broadcaster_id,
+            from_broadcaster_login=from_broadcaster_login,
+            to_broadcaster_id=to_broadcaster_id,
+            to_broadcaster_login=to_broadcaster_login,
+            viewer_count=viewer_count,
+            confirmation_signal=confirmation_signal,
         )
-        try:
-            with transaction() as conn:
-                conn.execute(
-                    """
-                    INSERT INTO twitch_confirmed_external_recruitment_raids (
-                        raid_flow_id,
-                        from_broadcaster_id,
-                        from_broadcaster_login,
-                        to_broadcaster_id,
-                        to_broadcaster_login,
-                        viewer_count,
-                        confirmation_signal
-                    )
-                    VALUES (%s, %s, %s, %s, %s, %s, %s)
-                    ON CONFLICT (raid_flow_id) DO NOTHING
-                    """,
-                    (
-                        normalized_flow_id,
-                        str(from_broadcaster_id or "").strip() or None,
-                        self._normalize_broadcaster_login(from_broadcaster_login),
-                        target_id,
-                        target_login,
-                        int(viewer_count or 0),
-                        str(confirmation_signal or "").strip() or None,
-                    ),
-                )
-
-                row = conn.execute(
-                    """
-                    SELECT COUNT(*)
-                    FROM twitch_confirmed_external_recruitment_raids
-                    WHERE to_broadcaster_id = %s
-                    """,
-                    (target_id,),
-                ).fetchone()
-            return int(row[0]) if row and row[0] is not None else 0
-        except Exception:
-            log.exception(
-                "Failed to persist confirmed external recruitment raid for %s (%s)",
-                target_login,
-                target_id,
-            )
-            try:
-                return self._get_confirmed_external_recruitment_raid_count(target_id)
-            except Exception:
-                return None
 
     def _is_target_currently_partner(
         self,
@@ -2433,23 +2071,10 @@ class RaidBot:
         target_id: str,
         target_login: str,
     ) -> bool:
-        normalized_id = str(target_id or "").strip()
-        normalized_login = self._normalize_broadcaster_login(target_login)
-        if not normalized_id or not normalized_login:
-            return False
-        try:
-            return self._is_partner_target_channel(
-                broadcaster_id=normalized_id,
-                broadcaster_login=normalized_login,
-            )
-        except Exception:
-            log.debug(
-                "Partner lookup failed for %s (%s)",
-                normalized_login,
-                normalized_id,
-                exc_info=True,
-            )
-            return False
+        return self._raid_metrics_store().is_target_currently_partner(
+            target_id=target_id,
+            target_login=target_login,
+        )
 
     def _schedule_external_recruitment_blacklist_pending(
         self,
@@ -2552,137 +2177,18 @@ class RaidBot:
         )
 
     def _get_recent_raid_targets(self, from_broadcaster_id: str, days: int) -> set[str]:
-        if not from_broadcaster_id or days <= 0:
-            return set()
-        cutoff = f"{int(days)} days"
-        try:
-            with readonly_connection() as conn:
-                rows = conn.execute(
-                    """
-                    SELECT DISTINCT to_broadcaster_id
-                    FROM twitch_raid_history
-                    WHERE from_broadcaster_id = %s
-                      AND COALESCE(success, FALSE) IS TRUE
-                      AND executed_at >= NOW() - (%s::interval)
-                    """,
-                    (from_broadcaster_id, cutoff),
-                ).fetchall()
-            return {str(row[0]) for row in rows if row and row[0]}
-        except Exception:
-            log.debug(
-                "Failed to load recent raid targets for %s",
-                from_broadcaster_id,
-                exc_info=True,
-            )
-            return set()
+        return self._raid_metrics_store().get_recent_raid_targets(
+            from_broadcaster_id,
+            days,
+        )
 
     async def _attach_followers_totals(self, candidates: list[dict]) -> None:
-        if not candidates or not self.session:
+        session = self.session
+        if not candidates or session is None:
             return
-        try:
-            from ..api.twitch_api import TwitchAPI
-        except Exception:
-            return
-        api = TwitchAPI(
-            self.auth_manager.client_id,
-            self.auth_manager.client_secret,
-            session=self.session,
-        )
-        bot_token, _bot_id, bot_scopes = await self._resolve_bot_oauth_context()
-        bot_scope_set = set(bot_scopes or set())
-        candidate_labels = {
-            str(candidate.get("user_id") or "").strip(): str(candidate.get("user_login") or "").strip().lower()
-            for candidate in candidates
-            if str(candidate.get("user_id") or "").strip()
-        }
-
-        async def _load_cached_totals(logins: tuple[str, ...]) -> dict[str, int]:
-            if not logins:
-                return {}
-            try:
-                placeholders = ",".join("%s" for _ in logins)
-                with readonly_connection() as conn:
-                    rows = conn.execute(
-                        f"""
-                        SELECT streamer_login, COALESCE(followers_end, followers_start) AS follower_total
-                          FROM twitch_stream_sessions
-                         WHERE streamer_login IN ({placeholders})
-                           AND COALESCE(followers_end, followers_start) IS NOT NULL
-                         ORDER BY COALESCE(ended_at, started_at) DESC
-                        """,
-                        logins,
-                    ).fetchall()
-            except Exception:
-                log.debug("followers_totals: DB cache query failed", exc_info=True)
-                return {}
-
-            db_map: dict[str, int] = {}
-            for row in rows:
-                login = str(row[0] or "").strip().lower()
-                if not login or login in db_map or row[1] is None:
-                    continue
-                db_map[login] = int(row[1])
-            return db_map
-
-        async def _resolve_user_token(user_id: str) -> str | None:
-            try:
-                return await self.auth_manager.get_valid_token(user_id, self.session)
-            except Exception:
-                return None
-
-        async def _fetch_followers_total(user_id: str, user_token: str | None) -> int | None:
-            label = candidate_labels.get(user_id) or user_id
-            is_bot_path = bool(bot_token and user_token and user_token == bot_token)
-            if is_bot_path:
-                self._increment_raid_observability_counter(
-                    "followers_candidate_bot_path_attempt_total"
-                )
-            else:
-                self._warn_user_scope_fallback_once(
-                    area="raid candidate follower lookup",
-                    subject=label,
-                )
-
-            result = await self._get_followers_total_result_with_legacy_fallback(
-                api,
-                user_id,
-                user_token=user_token,
-            )
-            if result.get("ok") and result.get("data") is not None:
-                if is_bot_path:
-                    self._clear_user_scope_fallback_warning(
-                        area="raid candidate follower lookup",
-                        subject=label,
-                    )
-                    self._increment_raid_observability_counter(
-                        "followers_candidate_bot_path_success_total"
-                    )
-                else:
-                    self._increment_raid_observability_counter(
-                        "followers_candidate_reason_fallback_to_streamer_token_total"
-                    )
-                return int(result["data"])
-
-            error_code = str(result.get("error_code") or "helix_followers_failed")
-            if is_bot_path:
-                self._increment_raid_observability_counter(
-                    "followers_candidate_bot_path_failure_total"
-                )
-            else:
-                self._increment_raid_observability_counter(
-                    f"followers_candidate_reason_{error_code}_total"
-                )
-            return None
-
-        await FollowerTotalEnricher(max_concurrency=8).enrich_candidates(
+        await self._candidate_followers_service().attach_followers_totals(
             candidates,
-            load_cached_totals=_load_cached_totals,
-            fetch_followers_total=_fetch_followers_total,
-            resolve_user_token=_resolve_user_token,
-            auth_context=FollowerAuthContext(
-                bot_token=bot_token,
-                bot_scopes=bot_scope_set,
-            ),
+            session=session,
         )
 
     def _load_prepared_partner_scores(
