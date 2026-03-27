@@ -13,7 +13,7 @@ import logging
 import os
 import time
 from collections.abc import Mapping
-from datetime import UTC, datetime
+from datetime import datetime
 from typing import Any
 
 import aiohttp
@@ -21,62 +21,67 @@ import aiohttp
 from ..core.constants import TWITCH_TARGET_GAME_NAME
 from .scope_profiles import BASE_STREAMER_SCOPES
 from .arrival_confirmation import ArrivalConfirmationService
-from .raid_arrival_runtime import RaidArrivalRuntime, RaidArrivalRuntimeDependencies
+from .raid_arrival_runtime import RaidArrivalRuntime
 from .candidate_selection import CandidateSelectionService
 from .chat_targets import lookup_outbound_chat_suppression, make_chat_target
 from .external_recruitment import ExternalRecruitmentService
-from .followers import CandidateFollowersDependencies, CandidateFollowersService
+from .followers import CandidateFollowersService
 from .lifecycle import RaidBotLifecycle
-from .manual_raid_suppression import (
-    ManualRaidSuppressionDependencies,
-    ManualRaidSuppressionService,
-)
+from .manual_raid_suppression import ManualRaidSuppressionService
 from .offline_raid_orchestrator import OfflineRaidOrchestrator
-from .observability import RaidObservabilityEvent, RaidObservabilityService
-from .partner_arrival_tracking import (
-    PartnerArrivalTrackingDependencies,
-    PartnerArrivalTrackingService,
-)
+from .observability import RaidObservabilityService
+from .partner_arrival_tracking import PartnerArrivalTrackingService
 from .partner_setup_service import PartnerSetupService
-from .partner_raid_delivery import (
-    PartnerRaidDeliveryConfig,
-    PartnerRaidDeliveryDependencies,
-    PartnerRaidDeliveryPlanner,
-    PartnerRaidDeliveryService,
-)
+from .partner_raid_delivery import PartnerRaidDeliveryPlanner, PartnerRaidDeliveryService
 from .pending_raids import PendingRaid, PendingRaidStore
-from .raid_blacklist import RaidBlacklistConfig, RaidBlacklistService, build_runtime_raid_blacklist_service
+from .raid_blacklist import RaidBlacklistService
 from .raid_data_sources import RaidDataSourceService
 from .raid_metrics_store import RaidMetricsStore
-from .raid_pipeline import RaidPipelineDependencies, RaidPipelineRequest, RaidPipelineService, is_retryable_raid_error
+from .raid_pipeline import RaidPipelineRequest, RaidPipelineService, is_retryable_raid_error
 from .raid_state_store import RaidStateStore, RaidStateStoreConfig
-from .raid_tracking_runtime import (
-    RaidTrackingRuntimeDependencies,
-    RaidTrackingRuntimeService,
-    RaidTrackingRuntimeState,
+from .raid_tracking_runtime import RaidTrackingRuntimeService
+from .recruitment_messaging import RecruitmentMessagingService
+from .runtime_factories import (
+    make_arrival_confirmation_service,
+    make_candidate_followers_service,
+    make_candidate_selection_service,
+    make_external_recruitment_service,
+    make_manual_raid_suppression_service,
+    make_offline_raid_orchestrator,
+    make_partner_arrival_tracking_service,
+    make_partner_raid_delivery_planner,
+    make_partner_raid_delivery_service,
+    make_partner_setup_service,
+    make_raid_arrival_runtime,
+    make_raid_blacklist_service,
+    make_raid_data_source_service,
+    make_raid_metrics_store,
+    make_raid_observability_service,
+    make_raid_pipeline_service,
+    make_raid_state_store,
+    make_raid_state_store_config,
+    make_raid_tracking_runtime_service,
+    make_recruitment_messaging_service,
+    make_signal_correlation_service,
 )
-from .recruitment_messaging import RecruitmentMessagingService, build_runtime_recruitment_messaging_service
+from .runtime_support import (
+    build_analytics_followers_runtime_state,
+    clear_user_scope_fallback_warning,
+    create_twitch_api,
+    get_followers_total_result_with_legacy_fallback,
+    log_analytics_followers_decision,
+    parse_datetime,
+    resolve_bot_oauth_context,
+    row_value,
+    safe_int,
+    warn_user_scope_fallback_once,
+)
 from .signal_correlation import RaidSignalCorrelationService
 from ..storage import (
-    insert_observability_event,
     load_active_partner,
     load_offline_auto_raid_eligibility,
-    load_streamer_identity,
     readonly_connection,
-    transaction,
 )
-try:
-    from .partner_scores import (
-        load_partner_raid_score_map,
-        refresh_partner_raid_score_async,
-    )
-except Exception:  # pragma: no cover - best effort if helper is unavailable during partial deploys
-    load_partner_raid_score_map = None  # type: ignore[assignment]
-    refresh_partner_raid_score_async = None  # type: ignore[assignment]
-try:
-    from .partner_raid_score_tracking import track_confirmed_partner_raid
-except Exception:  # pragma: no cover - best effort if helper is unavailable during partial deploys
-    track_confirmed_partner_raid = None  # type: ignore[assignment]
 
 TWITCH_TOKEN_URL = "https://id.twitch.tv/oauth2/token"  # noqa: S105
 TWITCH_AUTHORIZE_URL = "https://id.twitch.tv/oauth2/authorize"
@@ -503,85 +508,24 @@ class RaidBot:
         return counters
 
     def _make_raid_observability_service(self) -> RaidObservabilityService:
-        def _sink(event: RaidObservabilityEvent) -> None:
-            storage_payload = event.as_storage_payload()
-            insert_observability_event(
-                flow_type=str(storage_payload.get("flow_type") or "raid"),
-                flow_id=str(storage_payload.get("flow_id") or ""),
-                entity_login=str(storage_payload.get("entity_login") or ""),
-                entity_id=str(storage_payload.get("entity_id") or ""),
-                step=str(storage_payload.get("step") or "event"),
-                decision=str(storage_payload.get("decision") or "unknown"),
-                details=event.as_log_fields(),
-            )
-
-        service = RaidObservabilityService(
-            event_sink=_sink,
-            counter_store=self._raid_observability_counters(),
-        )
-        service.sequence = int(getattr(self, "_raid_observability_sequence", 0) or 0)
-        return service
+        return make_raid_observability_service(self)
 
     @staticmethod
     def _partner_raid_delivery_planner() -> PartnerRaidDeliveryPlanner:
-        return PartnerRaidDeliveryPlanner(
-            PartnerRaidDeliveryConfig(
-                delay_seconds=5.0,
-            )
-        )
+        return make_partner_raid_delivery_planner()
 
     def _partner_raid_delivery_service(self) -> PartnerRaidDeliveryService:
-        return PartnerRaidDeliveryService(
-            PartnerRaidDeliveryDependencies(
-                get_chat_bot=lambda: self.chat_bot,
-                count_received_network_raids=self._get_received_network_raid_count,
-                lookup_outbound_chat_suppression=lambda **kwargs: self._lookup_outbound_chat_suppression(
-                    str(kwargs.get("target_login") or ""),
-                    str(kwargs.get("target_id") or "") or None,
-                    source=str(kwargs.get("source") or ""),
-                ),
-                join_chat_channel=lambda chat_bot, channel_login, channel_id: chat_bot.join(
-                    channel_login,
-                    channel_id=channel_id,
-                ),
-                send_chat_message=lambda chat_bot, channel, message, source: (
-                    chat_bot._send_chat_message(
-                        channel,
-                        message,
-                        source=source,
-                    )
-                    if hasattr(chat_bot, "_send_chat_message")
-                    else None
-                ),
-                logger=log,
-            ),
-            planner=self._partner_raid_delivery_planner(),
-        )
+        return make_partner_raid_delivery_service(self)
 
     def _external_recruitment_service(self) -> ExternalRecruitmentService:
-        return ExternalRecruitmentService(
-            persist_confirmed_raid=self._record_confirmed_external_recruitment_raid,
-            count_confirmed_raids=self._get_confirmed_external_recruitment_raid_count,
-            schedule_pending_blacklist=self._schedule_external_recruitment_blacklist_pending,
-            delete_pending_blacklist=self._delete_external_recruitment_blacklist_pending,
-            is_target_partner=self._is_target_currently_partner,
-        )
+        return make_external_recruitment_service(self)
 
     def _arrival_confirmation_service(self) -> ArrivalConfirmationService:
-        return ArrivalConfirmationService(
-            partner_lookup=lambda **lookup_kwargs: self._lookup_partner_target_channel(
-                broadcaster_id=str(lookup_kwargs.get("twitch_user_id") or ""),
-                broadcaster_login=str(lookup_kwargs.get("twitch_login") or ""),
-            ),
-            known_streamer_lookup=lambda **lookup_kwargs: self._resolve_known_streamer_identity(
-                broadcaster_login=str(lookup_kwargs.get("broadcaster_login") or ""),
-                broadcaster_id=str(lookup_kwargs.get("broadcaster_id") or "") or None,
-            ),
-        )
+        return make_arrival_confirmation_service(self)
 
     @staticmethod
     def _raid_state_store_config() -> RaidStateStoreConfig:
-        return RaidStateStoreConfig(
+        return make_raid_state_store_config(
             recent_raid_arrival_ttl_seconds=_RECENT_RAID_ARRIVAL_TTL_SECONDS,
             orphan_chat_notification_grace_seconds=_PENDING_CHAT_NOTIFICATION_GRACE_SECONDS,
             orphan_chat_notification_retention_seconds=_ORPHAN_CHAT_NOTIFICATION_RETENTION_SECONDS,
@@ -590,131 +534,32 @@ class RaidBot:
         )
 
     def _raid_state_store(self) -> RaidStateStore:
-        return RaidStateStore(
-            self,
-            config=self._raid_state_store_config(),
-            logger=log,
-        )
+        return make_raid_state_store(self, config=self._raid_state_store_config())
 
     def _manual_raid_suppression_service(self) -> ManualRaidSuppressionService:
-        return ManualRaidSuppressionService(
-            self,
-            ManualRaidSuppressionDependencies(
-                readonly_connection=readonly_connection,
-                load_active_partner=load_active_partner,
-                logger=log,
-            ),
-        )
+        return make_manual_raid_suppression_service(self)
 
     def _partner_arrival_tracking_service(self) -> PartnerArrivalTrackingService:
-        manual_suppression = self._manual_raid_suppression_service()
-        state_store = self._raid_state_store()
-        return PartnerArrivalTrackingService(
-            PartnerArrivalTrackingDependencies(
-                readonly_connection=readonly_connection,
-                transaction=transaction,
-                load_active_partner=load_active_partner,
-                load_streamer_identity=load_streamer_identity,
-                resolve_streamer_id_by_login=manual_suppression.resolve_streamer_id_by_login,
-                mark_manual_raid_started=manual_suppression.mark_manual_raid_started,
-                remember_recent_raid_arrival=state_store.remember_recent_raid_arrival,
-                logger=log,
-            )
-        )
+        return make_partner_arrival_tracking_service(self)
 
     def _raid_data_source_service(self) -> RaidDataSourceService:
-        return RaidDataSourceService(
-            client_id=self.auth_manager.client_id,
-            client_secret=self.auth_manager.client_secret,
-            session_getter=lambda: self.session,
-            target_game_lower_getter=lambda: (
-                str(getattr(self._cog, "_get_target_game_lower")() or "").strip().lower()
-                if getattr(self, "_cog", None) is not None
-                and callable(getattr(self._cog, "_get_target_game_lower", None))
-                else None
-            ),
-            language_filter_getter=lambda: (
-                list(getattr(self._cog, "_language_filter_values")())
-                if getattr(self, "_cog", None) is not None
-                and callable(getattr(self._cog, "_language_filter_values", None))
-                else []
-            ),
-            shared_stream_fetch=(
-                getattr(self._cog, "_fetch_streams_by_logins_quick")
-                if getattr(self, "_cog", None) is not None
-                and callable(getattr(self._cog, "_fetch_streams_by_logins_quick", None))
-                else None
-            ),
-            cached_category_id_getter=lambda: getattr(self._cog, "_category_id", None)
-            if getattr(self, "_cog", None) is not None
-            else None,
-            readonly_connection_factory=readonly_connection,
-            utcnow=lambda: datetime.now(UTC),
-            logger=log,
-        )
+        return make_raid_data_source_service(self)
 
     def _partner_setup_service(self) -> PartnerSetupService:
-        return PartnerSetupService(
-            auth_manager=self.auth_manager,
-            session_getter=lambda: self.session,
-            chat_bot_getter=lambda: self.chat_bot,
-            bot_id_getter=self._resolve_bot_id_for_setup,
-            readonly_connection_factory=readonly_connection,
-            transaction_factory=transaction,
+        return make_partner_setup_service(
+            self,
             moderator_url_base=TWITCH_API_BASE,
             mask_log_identifier=_mask_log_identifier,
-            logger=log,
         )
 
     def _offline_raid_orchestrator(self) -> OfflineRaidOrchestrator:
-        return OfflineRaidOrchestrator(
-            create_twitch_api=self._create_twitch_api,
-            resolve_manual_raid_source_state=self._resolve_manual_raid_source_state,
-            evaluate_deadlock_raid_source=self._evaluate_deadlock_raid_source,
-            safe_int=self._safe_int,
-            calculate_stream_duration_sec=self._calculate_stream_duration_sec,
-            load_partner_roster_for_raid=self._load_partner_roster_for_raid,
-            fetch_streams_by_logins_for_raid=self._fetch_streams_by_logins_for_raid,
-            build_online_partner_candidates=self._build_online_partner_candidates,
-            filter_deadlock_eligible_partner_candidates=self._filter_deadlock_eligible_partner_candidates,
-            resolve_target_category_id=self._resolve_target_category_id,
-            execute_raid_pipeline=self._execute_raid_pipeline,
-            is_offline_auto_raid_suppressed=self.is_offline_auto_raid_suppressed,
-            load_offline_auto_raid_eligibility=self._load_offline_auto_raid_eligibility,
-            logger=log,
-        )
+        return make_offline_raid_orchestrator(self)
 
     def _raid_metrics_store(self) -> RaidMetricsStore:
-        return RaidMetricsStore(
-            readonly_connection=readonly_connection,
-            transaction=transaction,
-            normalize_broadcaster_login=self._normalize_broadcaster_login,
-            is_partner_target_channel=self._is_partner_target_channel,
-            next_raid_observability_flow_id=self._next_raid_observability_flow_id,
-            logger=log,
-        )
+        return make_raid_metrics_store(self)
 
     def _candidate_followers_service(self) -> CandidateFollowersService:
-        return CandidateFollowersService(
-            CandidateFollowersDependencies(
-                create_twitch_api=lambda session: self._create_twitch_api(session=session),
-                resolve_bot_oauth_context=self._resolve_bot_oauth_context,
-                get_followers_total_result=lambda api, user_id, user_token: self._get_followers_total_result_with_legacy_fallback(
-                    api,
-                    user_id,
-                    user_token=user_token,
-                ),
-                resolve_valid_token=lambda user_id, session: self.auth_manager.get_valid_token(
-                    user_id,
-                    session,
-                ),
-                increment_counter=self._increment_raid_observability_counter,
-                warn_user_scope_fallback_once=self._warn_user_scope_fallback_once,
-                clear_user_scope_fallback_warning=self._clear_user_scope_fallback_warning,
-                logger=log,
-            ),
-            max_concurrency=8,
-        )
+        return make_candidate_followers_service(self)
 
     def _resolve_bot_id_for_setup(self) -> str | None:
         chat_bot = self.chat_bot
@@ -744,271 +589,38 @@ class RaidBot:
             )
 
     def _candidate_selection_service(self) -> CandidateSelectionService:
-        return CandidateSelectionService(
-            load_partner_raid_score_map=load_partner_raid_score_map,
-            refresh_partner_raid_score_async=refresh_partner_raid_score_async,
-            recent_raid_targets_loader=self._get_recent_raid_targets,
-            attach_followers_totals=self._attach_followers_totals,
-            readonly_connection_factory=readonly_connection,
-            logger=log,
+        return make_candidate_selection_service(
+            self,
             recent_raid_cooldown_days=RAID_TARGET_COOLDOWN_DAYS,
         )
 
     def _raid_blacklist_service(self) -> RaidBlacklistService:
-        return build_runtime_raid_blacklist_service(
-            readonly_connection_factory=readonly_connection,
-            transaction_factory=transaction,
-            is_target_partner=self._is_target_currently_partner,
-            get_chat_bot=lambda: self.chat_bot,
-            config=RaidBlacklistConfig(
-                external_recruitment_raid_limit=_EXTERNAL_RECRUITMENT_RAID_LIMIT,
-                external_recruitment_blacklist_grace_seconds=int(
-                    _EXTERNAL_RECRUITMENT_BLACKLIST_GRACE_SECONDS
-                ),
-                external_target_ban_check_delay_seconds=int(
-                    _EXTERNAL_BAN_CHECK_DELAY_SECONDS
-                ),
+        return make_raid_blacklist_service(
+            self,
+            external_recruitment_raid_limit=_EXTERNAL_RECRUITMENT_RAID_LIMIT,
+            external_recruitment_blacklist_grace_seconds=int(
+                _EXTERNAL_RECRUITMENT_BLACKLIST_GRACE_SECONDS
+            ),
+            external_target_ban_check_delay_seconds=int(
+                _EXTERNAL_BAN_CHECK_DELAY_SECONDS
             ),
         )
 
     def _raid_pipeline_service(self) -> RaidPipelineService:
-        def _log_event(**payload: object) -> None:
-            level = payload.get("level", logging.INFO)
-            if isinstance(level, str):
-                level = getattr(logging, level.upper(), logging.INFO)
-            self._log_raid_observability_event(
-                raid_flow_id=str(payload.get("flow_id") or ""),
-                step=str(payload.get("step") or "event"),
-                decision=str(payload.get("decision") or "unknown"),
-                level=level,
-                from_broadcaster_login=payload.get("from_broadcaster_login"),
-                from_broadcaster_id=payload.get("from_broadcaster_id"),
-                to_broadcaster_login=payload.get("to_broadcaster_login"),
-                to_broadcaster_id=payload.get("to_broadcaster_id"),
-                details=payload.get("details"),
-            )
-
-        return RaidPipelineService(
-            RaidPipelineDependencies(
-                load_raid_blacklist=self._load_raid_blacklist,
-                add_to_blacklist=self._add_to_blacklist,
-                select_partner_candidate_by_score=self._select_partner_candidate_by_score,
-                select_fairest_candidate=self._select_fairest_candidate,
-                ensure_raid_arrival_subscription_ready=lambda target_id, target_login, raid_flow_id: self._ensure_raid_arrival_subscription_ready(
-                    to_broadcaster_id=target_id,
-                    to_broadcaster_login=target_login,
-                    raid_flow_id=raid_flow_id,
-                ),
-                start_raid=self.raid_executor.start_raid,
-                register_pending_raid=self._register_pending_raid,
-                mark_manual_raid_started=lambda broadcaster_id, ttl_seconds: self.mark_manual_raid_started(
-                    broadcaster_id=broadcaster_id,
-                    ttl_seconds=ttl_seconds,
-                ),
-                logger=log,
-                next_raid_observability_flow_id=lambda prefix: self._next_raid_observability_flow_id(
-                    prefix=prefix
-                ),
-                increment_raid_observability_counter=self._increment_raid_observability_counter,
-                log_raid_observability_event=_log_event,
-                to_thread=asyncio.to_thread,
-            )
-        )
+        return make_raid_pipeline_service(self)
 
     def _raid_tracking_runtime_service(self) -> RaidTrackingRuntimeService:
-        state_store = self._raid_state_store()
-        state_store.ensure_runtime_raid_tracking_state()
-
-        def _eventsub_has_sub(cog, sub_type: str, broadcaster_user_id: str) -> bool:
-            checker = getattr(cog, "_eventsub_has_sub", None)
-            return bool(checker(sub_type, broadcaster_user_id)) if callable(checker) else False
-
-        async def _ensure_raid_target_dynamic_ready(
-            cog,
-            broadcaster_user_id: str,
-            broadcaster_login: str,
-            raid_flow_id: str | None,
-        ):
-            ensure_ready = getattr(cog, "ensure_raid_target_dynamic_ready", None)
-            if not callable(ensure_ready):
-                return False, None
-            return await ensure_ready(
-                broadcaster_user_id,
-                broadcaster_login,
-                raid_flow_id=raid_flow_id,
-            )
-
-        async def _subscribe_raid_target_dynamic(
-            cog,
-            broadcaster_user_id: str,
-            broadcaster_login: str,
-        ) -> bool:
-            subscribe = getattr(cog, "subscribe_raid_target_dynamic", None)
-            if not callable(subscribe):
-                return False
-            return bool(await subscribe(broadcaster_user_id, broadcaster_login))
-
-        return RaidTrackingRuntimeService(
-            RaidTrackingRuntimeDependencies(
-                state=RaidTrackingRuntimeState(
-                    pending_store=state_store.pending_raid_store(),
-                    recent_raid_arrivals=getattr(self, "_recent_raid_arrivals", {}),
-                    orphan_chat_raid_notifications=getattr(self, "_orphan_chat_raid_notifications", {}),
-                    readiness_states=getattr(self, "_raid_readiness_by_flow_id", {}),
-                ),
-                snapshot_chat_notification_subscription=self._snapshot_chat_notification_subscription,
-                get_cog=lambda: self._cog,
-                eventsub_has_sub=_eventsub_has_sub,
-                ensure_raid_target_dynamic_ready=_ensure_raid_target_dynamic_ready,
-                subscribe_raid_target_dynamic=_subscribe_raid_target_dynamic,
-                orphan_chat_raid_notification_handler=lambda payload: self.on_chat_raid_notification(
-                    to_broadcaster_id=str(payload.get("to_broadcaster_id") or ""),
-                    to_broadcaster_login=str(payload.get("to_broadcaster_login") or ""),
-                    from_broadcaster_login=str(payload.get("from_broadcaster_login") or ""),
-                    viewer_count=int(payload.get("viewer_count") or 0),
-                    from_broadcaster_id=str(payload.get("from_broadcaster_id") or "") or None,
-                    message_id=str(payload.get("message_id") or "") or None,
-                    event_timestamp=str(payload.get("event_timestamp") or "") or None,
-                ),
-                next_raid_observability_flow_id=lambda prefix: self._next_raid_observability_flow_id(
-                    prefix=prefix
-                ),
-                increment_raid_observability_counter=self._increment_raid_observability_counter,
-                log_raid_observability_event=self._log_raid_observability_event,
-            )
-        )
+        return make_raid_tracking_runtime_service(self)
 
     def _raid_arrival_runtime(self) -> RaidArrivalRuntime:
-        external_recruitment = self._external_recruitment_service()
-        arrival_confirmation = self._arrival_confirmation_service()
-
-        def _confirm_pending_raid_arrival_with_overrides(
-            *,
-            pending_raid: PendingRaid,
-            signal_type: str,
-            to_broadcaster_id: str,
-            to_broadcaster_login: str,
-            from_broadcaster_login: str,
-            viewer_count: int,
-            from_broadcaster_id: str | None = None,
-        ):
-            classification, source_resolution = self._classify_partner_raid_arrival(
-                from_broadcaster_login=from_broadcaster_login,
-                from_broadcaster_id=from_broadcaster_id,
-                to_broadcaster_id=to_broadcaster_id,
-                to_broadcaster_login=to_broadcaster_login,
-                expected_partner=bool(pending_raid.is_partner_raid),
-            )
-            return arrival_confirmation.confirm_pending_raid_arrival(
-                pending_raid=pending_raid,
-                signal_type=signal_type,
-                to_broadcaster_id=to_broadcaster_id,
-                to_broadcaster_login=to_broadcaster_login,
-                from_broadcaster_login=from_broadcaster_login,
-                from_broadcaster_id=from_broadcaster_id,
-                viewer_count=viewer_count,
-                classification_override=classification,
-                source_resolution_override=source_resolution,
-                target_is_partner_override=classification is not None,
-            )
-
-        return RaidArrivalRuntime(
-            RaidArrivalRuntimeDependencies(
-                arrival_confirmation_service=type(
-                    "_ArrivalConfirmationProxy",
-                    (),
-                    {"confirm_pending_raid_arrival": staticmethod(_confirm_pending_raid_arrival_with_overrides)},
-                )(),
-                signal_correlation_service=self._signal_correlation_service(),
-                get_pending_raid=lambda to_broadcaster_id, from_broadcaster_login: self._get_pending_raid(
-                    to_broadcaster_id=to_broadcaster_id,
-                    from_broadcaster_login=from_broadcaster_login,
-                ),
-                store_pending_raid=self._store_pending_raid,
-                pop_pending_raid=lambda to_broadcaster_id, from_broadcaster_login: self._pop_pending_raid(
-                    to_broadcaster_id=to_broadcaster_id,
-                    from_broadcaster_login=from_broadcaster_login,
-                ),
-                record_pending_signal_observation=lambda pending, signal_type, status, reason, detail: self._record_pending_signal_observation(
-                    pending,
-                    signal_type=signal_type,
-                    status=status,
-                    reason=reason,
-                    detail=detail,
-                ),
-                store_orphan_chat_raid_notification=self._store_orphan_chat_raid_notification,
-                lookup_recent_raid_arrival=lambda to_broadcaster_id, from_broadcaster_login: self._lookup_recent_raid_arrival(
-                    to_broadcaster_id=to_broadcaster_id,
-                    from_broadcaster_login=from_broadcaster_login,
-                ),
-                remember_recent_raid_arrival=self._remember_recent_raid_arrival,
-                update_partner_raid_arrival=lambda arrival_tracking_id, confirmation_signals, unraid_seen: self._update_partner_raid_arrival(
-                    arrival_tracking_id=arrival_tracking_id,
-                    confirmation_signals=confirmation_signals,
-                    unraid_seen=unraid_seen,
-                ),
-                store_partner_raid_arrival=self._store_partner_raid_arrival,
-                load_recent_raid_history_reference=lambda from_broadcaster_login, to_broadcaster_id: self._load_recent_raid_history_reference(
-                    from_broadcaster_login=from_broadcaster_login,
-                    to_broadcaster_id=to_broadcaster_id,
-                ),
-                process_independent_partner_raid_arrival=self._process_independent_partner_raid_arrival,
-                cancel_pending_raids_for_source_unraid=self._cancel_pending_raids_for_source_unraid,
-                resolve_streamer_id_by_login=self._resolve_streamer_id_by_login,
-                mark_manual_raid_started=lambda broadcaster_id, ttl_seconds: self.mark_manual_raid_started(
-                    broadcaster_id=broadcaster_id,
-                    ttl_seconds=ttl_seconds,
-                ),
-                lookup_silent_raid_enabled=self._lookup_silent_raid_enabled,
-                refresh_partner_score_cache_if_available=lambda twitch_user_id, reason: self._refresh_partner_score_cache_if_available(
-                    twitch_user_id,
-                    reason=reason,
-                ),
-                track_confirmed_partner_raid=track_confirmed_partner_raid,
-                delete_external_recruitment_blacklist_pending=self._delete_external_recruitment_blacklist_pending,
-                record_confirmed_external_recruitment_raid=lambda **kwargs: external_recruitment.record_confirmed_raid(
-                    **kwargs
-                ).persisted_count,
-                maybe_schedule_external_recruitment_blacklist_pending=external_recruitment.maybe_schedule_blacklist,
-                send_partner_raid_message=self._send_partner_raid_message,
-                send_recruitment_message=self._send_recruitment_message_now,
-                increment_raid_observability_counter=self._increment_raid_observability_counter,
-                log_raid_observability_event=self._log_raid_observability_event,
-                next_raid_observability_flow_id=lambda prefix: self._next_raid_observability_flow_id(
-                    prefix=prefix
-                ),
-            )
-        )
+        return make_raid_arrival_runtime(self)
 
     def _recruitment_messaging_service(self) -> RecruitmentMessagingService:
-        return build_runtime_recruitment_messaging_service(
-            create_twitch_api=lambda session: self._create_twitch_api(session=session),
-            readonly_connection_factory=readonly_connection,
-            resolve_bot_oauth_context=self._resolve_bot_oauth_context,
-            resolve_valid_token=lambda twitch_user_id, session: self.auth_manager.get_valid_token(
-                twitch_user_id,
-                session,
-            ),
-            get_followers_total_result=lambda api, twitch_user_id, user_token: self._get_followers_total_result_with_legacy_fallback(
-                api,
-                twitch_user_id,
-                user_token=user_token,
-            ),
-            build_followers_runtime_state=self._build_analytics_followers_runtime_state,
-            increment_counter=self._increment_raid_observability_counter,
-            log_followers_decision=self._log_analytics_followers_decision,
-            next_flow_id=lambda prefix: self._next_raid_observability_flow_id(prefix=prefix),
-            warn_user_scope_fallback_once=self._warn_user_scope_fallback_once,
-            clear_user_scope_fallback_warning=self._clear_user_scope_fallback_warning,
-            get_chat_bot=lambda: self.chat_bot,
-            count_confirmed_external_recruitment_raids=self._get_confirmed_external_recruitment_raid_count,
-            schedule_external_target_ban_check=self._schedule_external_target_ban_check,
-            sleep=asyncio.sleep,
-        )
+        return make_recruitment_messaging_service(self)
 
     @staticmethod
     def _signal_correlation_service() -> RaidSignalCorrelationService:
-        return RaidSignalCorrelationService()
+        return make_signal_correlation_service()
 
     def _increment_raid_observability_counter(self, name: str, amount: int = 1) -> int:
         service = self._make_raid_observability_service()
@@ -1082,13 +694,7 @@ class RaidBot:
         }
 
     def _build_analytics_followers_runtime_state(self) -> dict[str, object]:
-        chat_bot = getattr(self, "chat_bot", None)
-        token_mgr = getattr(chat_bot, "_token_manager", None) if chat_bot is not None else None
-        return {
-            "chat_bot_available": bool(chat_bot),
-            "bot_token_manager_available": bool(token_mgr),
-            "raid_session_available": bool(self.session),
-        }
+        return build_analytics_followers_runtime_state(self)
 
     def _log_analytics_followers_decision(
         self,
@@ -1107,30 +713,21 @@ class RaidBot:
         level: int = logging.INFO,
         **extra_fields: object,
     ) -> None:
-        payload = {
-            "flow_id": str(flow_id or "").strip() or None,
-            "flow": str(flow or "").strip().lower() or "followers",
-            "login": str(login or "").strip().lower() or None,
-            "target_id": str(target_id or "").strip() or None,
-            "decision": str(decision or "").strip() or "unknown",
-            "reason": str(reason or "").strip() or "unknown",
-            "request_attempted": request_attempted,
-            "request_result": str(request_result or "").strip() or "unknown",
-            "http_status": int(http_status) if http_status is not None else None,
-            "scope_state": scope_state,
-            "runtime_state": runtime_state,
+        log_analytics_followers_decision(
+            self,
+            flow_id=flow_id,
+            flow=flow,
+            login=login,
+            target_id=target_id,
+            decision=decision,
+            reason=reason,
+            request_attempted=request_attempted,
+            request_result=request_result,
+            http_status=http_status,
+            scope_state=scope_state,
+            runtime_state=runtime_state,
+            level=level,
             **extra_fields,
-        }
-        self._last_analytics_followers_diagnostic = payload
-        log.log(level, "analytics_decision %s", self._format_raid_observability_fields(**payload))
-        insert_observability_event(
-            flow_type="analytics",
-            flow_id=str(payload.get("flow_id") or ""),
-            entity_login=str(payload.get("login") or ""),
-            entity_id=str(payload.get("target_id") or ""),
-            step="terminal_decision",
-            decision=str(payload.get("decision") or "unknown"),
-            details=payload,
         )
 
     def _ensure_runtime_raid_tracking_state(self) -> None:
@@ -1483,36 +1080,7 @@ class RaidBot:
         return result.processed
 
     async def _resolve_bot_oauth_context(self) -> tuple[str | None, str | None, set[str]]:
-        """Resolve bot OAuth token + bot id + scopes (best-effort).
-
-        This enables moderator-scoped reads/actions to be executed via the central bot token,
-        while keeping broadcaster tokens as a fallback during migration.
-        """
-        token_mgr = None
-        chat_bot = getattr(self, "chat_bot", None)
-        if chat_bot is not None:
-            token_mgr = getattr(chat_bot, "_token_manager", None)
-        if token_mgr is None:
-            cog = getattr(self, "_cog", None)
-            token_mgr = getattr(cog, "_bot_token_manager", None) if cog is not None else None
-        if token_mgr is None:
-            return None, None, set()
-
-        try:
-            token, bot_id = await token_mgr.get_valid_token()
-        except Exception:
-            return None, None, set()
-
-        token = str(token or "").strip()
-        if token.lower().startswith("oauth:"):
-            token = token[6:]
-        resolved_bot_id = str(bot_id or getattr(token_mgr, "bot_id", "") or "").strip() or None
-        scopes = {
-            str(scope).strip().lower()
-            for scope in (getattr(token_mgr, "scopes", None) or set())
-            if str(scope).strip()
-        }
-        return token or None, resolved_bot_id, scopes
+        return await resolve_bot_oauth_context(self)
 
     def _warn_user_scope_fallback_once(
         self,
@@ -1520,17 +1088,7 @@ class RaidBot:
         area: str,
         subject: str,
     ) -> None:
-        subject_key = str(subject or "").strip().lower() or "<unknown>"
-        key = (str(area or "").strip().lower(), subject_key)
-        if key in self._user_scope_fallback_warned:
-            return
-        self._user_scope_fallback_warned.add(key)
-        log.warning(
-            "RaidBot: nutze Legacy-Broadcaster-Token fuer %s (%s). "
-            "Der Bot-Token sollte diesen Pfad uebernehmen.",
-            area,
-            subject or "<unknown>",
-        )
+        warn_user_scope_fallback_once(self, area=area, subject=subject)
 
     def _clear_user_scope_fallback_warning(
         self,
@@ -1538,9 +1096,7 @@ class RaidBot:
         area: str,
         subject: str,
     ) -> None:
-        subject_key = str(subject or "").strip().lower() or "<unknown>"
-        key = (str(area or "").strip().lower(), subject_key)
-        self._user_scope_fallback_warned.discard(key)
+        clear_user_scope_fallback_warning(self, area=area, subject=subject)
 
     @staticmethod
     async def _get_followers_total_result_with_legacy_fallback(
@@ -1549,52 +1105,23 @@ class RaidBot:
         *,
         user_token: str | None = None,
     ) -> dict[str, object]:
-        result_getter = getattr(api, "get_followers_total_result", None)
-        if callable(result_getter):
-            return await result_getter(user_id, user_token=user_token)
-        legacy_total = await api.get_followers_total(user_id, user_token=user_token)
-        return {
-            "ok": legacy_total is not None,
-            "data": legacy_total,
-            "http_status": 200 if legacy_total is not None else None,
-            "error_code": None if legacy_total is not None else "legacy_none_result",
-            "request_attempted": True,
-        }
+        return await get_followers_total_result_with_legacy_fallback(
+            api,
+            user_id,
+            user_token=user_token,
+        )
 
     @staticmethod
     def _row_value(row, key: str, index: int, default=None):
-        if row is None:
-            return default
-        try:
-            if hasattr(row, "keys"):
-                return row[key]
-            return row[index]
-        except Exception:
-            return default
+        return row_value(row, key, index, default)
 
     @staticmethod
     def _safe_int(value: object, default: int = 0) -> int:
-        try:
-            if value is None:
-                return default
-            return int(value)
-        except (TypeError, ValueError):
-            return default
+        return safe_int(value, default)
 
     @staticmethod
     def _parse_datetime(value: object) -> datetime | None:
-        if value is None:
-            return None
-        text = str(value).strip()
-        if not text:
-            return None
-        try:
-            parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
-        except Exception:
-            return None
-        if parsed.tzinfo is None:
-            parsed = parsed.replace(tzinfo=UTC)
-        return parsed.astimezone(UTC)
+        return parse_datetime(value)
 
     def _get_target_game_lower(self) -> str:
         return str(TWITCH_TARGET_GAME_NAME or "").strip().lower()
@@ -1690,18 +1217,7 @@ class RaidBot:
         return self._raid_data_source_service().raid_language_filters()
 
     def _create_twitch_api(self, *, session=None):
-        session = session or self.session
-        if session is None:
-            return None
-        try:
-            from ..api.twitch_api import TwitchAPI
-        except Exception:
-            return None
-        return TwitchAPI(
-            self.auth_manager.client_id,
-            self.auth_manager.client_secret,
-            session=session,
-        )
+        return create_twitch_api(self, session=session)
 
     async def _fetch_streams_by_logins_for_raid(
         self,
