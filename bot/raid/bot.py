@@ -12,79 +12,27 @@ import asyncio
 import logging
 import os
 import time
-from datetime import UTC, datetime
+from datetime import UTC, datetime  # noqa: F401
 from typing import Any
 
 import aiohttp
 
 from ..core.constants import TWITCH_TARGET_GAME_NAME
 from .scope_profiles import BASE_STREAMER_SCOPES
-from .arrival_confirmation import ArrivalConfirmationService
-from .raid_arrival_runtime import RaidArrivalRuntime
-from .candidate_selection import CandidateSelectionService
 from .data_setup_facade import RaidDataSetupFacadeMixin
 from .delivery_selection_facade import RaidDeliverySelectionFacadeMixin
-from .external_recruitment import ExternalRecruitmentService
-from .followers import CandidateFollowersService
 from .lifecycle import RaidBotLifecycle
-from .manual_raid_suppression import ManualRaidSuppressionService
-from .offline_raid_orchestrator import OfflineRaidOrchestrator
-from .observability import RaidObservabilityService
-from .partner_arrival_tracking import PartnerArrivalTrackingService
-from .partner_setup_service import PartnerSetupService
-from .partner_raid_delivery import PartnerRaidDeliveryPlanner, PartnerRaidDeliveryService
 from .pending_raids import PendingRaid
-from .raid_blacklist import RaidBlacklistService
-from .raid_data_sources import RaidDataSourceService
-from .raid_metrics_store import RaidMetricsStore
-from .raid_pipeline import RaidPipelineService
-from .raid_state_store import RaidStateStore, RaidStateStoreConfig
-from .raid_tracking_runtime import RaidTrackingRuntimeService
-from .recruitment_messaging import RecruitmentMessagingService
-from .runtime_factories import (
-    make_arrival_confirmation_service,
-    make_candidate_followers_service,
-    make_candidate_selection_service,
-    make_external_recruitment_service,
-    make_manual_raid_suppression_service,
-    make_offline_raid_orchestrator,
-    make_partner_arrival_tracking_service,
-    make_partner_raid_delivery_planner,
-    make_partner_raid_delivery_service,
-    make_partner_setup_service,
-    make_raid_arrival_runtime,
-    make_raid_blacklist_service,
-    make_raid_data_source_service,
-    make_raid_metrics_store,
-    make_raid_observability_service,
-    make_raid_pipeline_service,
-    make_raid_state_store,
-    make_raid_state_store_config,
-    make_raid_tracking_runtime_service,
-    make_recruitment_messaging_service,
-    make_signal_correlation_service,
-)
-from .runtime_support import (
-    build_analytics_followers_runtime_state,
-    clear_user_scope_fallback_warning,
-    create_twitch_api,
-    get_followers_total_result_with_legacy_fallback,
-    log_analytics_followers_decision,
-    parse_datetime,
-    resolve_bot_oauth_context,
-    row_value,
-    safe_int,
-    warn_user_scope_fallback_once,
-)
-from .signal_correlation import RaidSignalCorrelationService
+from .runtime_support import create_twitch_api
+from .runtime_core_facade import RaidRuntimeCoreFacadeMixin
 from .tracking_arrival_facade import RaidTrackingArrivalFacadeMixin
 from ..storage import (
-    insert_observability_event,
-    load_active_partner,
-    load_offline_auto_raid_eligibility,
-    load_streamer_identity,
-    readonly_connection,
-    transaction,
+    insert_observability_event,  # noqa: F401
+    load_active_partner,  # noqa: F401
+    load_offline_auto_raid_eligibility,  # noqa: F401
+    load_streamer_identity,  # noqa: F401
+    readonly_connection,  # noqa: F401
+    transaction,  # noqa: F401
 )
 try:
     from .partner_scores import (
@@ -151,6 +99,7 @@ class RaidBot(
     RaidTrackingArrivalFacadeMixin,
     RaidDeliverySelectionFacadeMixin,
     RaidDataSetupFacadeMixin,
+    RaidRuntimeCoreFacadeMixin,
 ):
     """
     Hauptklasse für automatische Raid-Verwaltung.
@@ -513,353 +462,10 @@ class RaidBot(
     def _serialize_confirmation_signals(signals: set[str] | list[str] | tuple[str, ...]) -> str:
         return ",".join(sorted({str(signal).strip() for signal in signals if str(signal).strip()}))
 
-    def _next_raid_observability_flow_id(self, *, prefix: str) -> str:
-        service = self._make_raid_observability_service()
-        flow_id = service.next_flow_id(prefix=prefix)
-        self._raid_observability_sequence = service.sequence
-        self._raid_observability_counter_store = service.counter_store
-        return flow_id
-
-    def _raid_observability_counters(self) -> dict[str, int]:
-        counters = getattr(self, "_raid_observability_counter_store", None)
-        if not isinstance(counters, dict):
-            counters = {}
-            self._raid_observability_counter_store = counters
-        return counters
-
-    def _make_raid_observability_service(self) -> RaidObservabilityService:
-        return make_raid_observability_service(
-            self,
-            insert_observability_event_fn=insert_observability_event,
-        )
-
-    @staticmethod
-    def _partner_raid_delivery_planner() -> PartnerRaidDeliveryPlanner:
-        return make_partner_raid_delivery_planner()
-
-    def _partner_raid_delivery_service(self) -> PartnerRaidDeliveryService:
-        return make_partner_raid_delivery_service(
-            self,
-            planner=self._partner_raid_delivery_planner(),
-        )
-
-    def _external_recruitment_service(self) -> ExternalRecruitmentService:
-        return make_external_recruitment_service(self)
-
-    def _arrival_confirmation_service(self) -> ArrivalConfirmationService:
-        return make_arrival_confirmation_service(self)
-
-    @staticmethod
-    def _raid_state_store_config() -> RaidStateStoreConfig:
-        return make_raid_state_store_config(
-            recent_raid_arrival_ttl_seconds=_RECENT_RAID_ARRIVAL_TTL_SECONDS,
-            orphan_chat_notification_grace_seconds=_PENDING_CHAT_NOTIFICATION_GRACE_SECONDS,
-            orphan_chat_notification_retention_seconds=_ORPHAN_CHAT_NOTIFICATION_RETENTION_SECONDS,
-            raid_readiness_ttl_seconds=_RAID_READINESS_TTL_SECONDS,
-            raid_readiness_max_entries=_RAID_READINESS_MAX_ENTRIES,
-        )
-
-    def _raid_state_store(self) -> RaidStateStore:
-        return make_raid_state_store(self, config=self._raid_state_store_config())
-
-    def _manual_raid_suppression_service(self) -> ManualRaidSuppressionService:
-        return make_manual_raid_suppression_service(
-            self,
-            readonly_connection_factory=readonly_connection,
-            load_active_partner_fn=load_active_partner,
-        )
-
-    def _partner_arrival_tracking_service(self) -> PartnerArrivalTrackingService:
-        return make_partner_arrival_tracking_service(
-            self,
-            readonly_connection_factory=readonly_connection,
-            transaction_factory=transaction,
-            load_active_partner_fn=load_active_partner,
-            load_streamer_identity_fn=load_streamer_identity,
-        )
-
-    def _raid_data_source_service(self) -> RaidDataSourceService:
-        return make_raid_data_source_service(
-            self,
-            readonly_connection_factory=readonly_connection,
-            utcnow=lambda: datetime.now(UTC),
-        )
-
-    def _partner_setup_service(self) -> PartnerSetupService:
-        return make_partner_setup_service(
-            self,
-            moderator_url_base=TWITCH_API_BASE,
-            mask_log_identifier=_mask_log_identifier,
-            readonly_connection_factory=readonly_connection,
-            transaction_factory=transaction,
-        )
-
-    def _offline_raid_orchestrator(self) -> OfflineRaidOrchestrator:
-        return make_offline_raid_orchestrator(self)
-
-    def _raid_metrics_store(self) -> RaidMetricsStore:
-        return make_raid_metrics_store(
-            self,
-            readonly_connection_factory=readonly_connection,
-            transaction_factory=transaction,
-        )
-
-    def _candidate_followers_service(self) -> CandidateFollowersService:
-        return make_candidate_followers_service(self)
-
-    def _resolve_bot_id_for_setup(self) -> str | None:
-        chat_bot = self.chat_bot
-        if chat_bot is not None:
-            bot_id = getattr(chat_bot, "bot_id_safe", None)
-            if bot_id is None:
-                bot_id_raw = getattr(chat_bot, "bot_id", None)
-                bot_id = (
-                    str(bot_id_raw).strip()
-                    if bot_id_raw and str(bot_id_raw).strip()
-                    else None
-                )
-            if bot_id:
-                return str(bot_id)
-
-        fallback_bot_id = getattr(self, "_bot_id", None)
-        if fallback_bot_id:
-            return str(fallback_bot_id).strip() or None
-
-        return os.getenv("TWITCH_BOT_USER_ID", "").strip() or None
-
-    def _load_offline_auto_raid_eligibility(self, broadcaster_id: str) -> Any:
-        with readonly_connection() as conn:
-            return load_offline_auto_raid_eligibility(
-                conn,
-                twitch_user_id=broadcaster_id,
-            )
-
-    def _candidate_selection_service(self) -> CandidateSelectionService:
-        return make_candidate_selection_service(
-            self,
-            recent_raid_cooldown_days=RAID_TARGET_COOLDOWN_DAYS,
-            load_partner_raid_score_map_fn=load_partner_raid_score_map,
-            refresh_partner_raid_score_async_fn=refresh_partner_raid_score_async,
-            readonly_connection_factory=readonly_connection,
-        )
-
-    def _raid_blacklist_service(self) -> RaidBlacklistService:
-        return make_raid_blacklist_service(
-            self,
-            external_recruitment_raid_limit=_EXTERNAL_RECRUITMENT_RAID_LIMIT,
-            external_recruitment_blacklist_grace_seconds=int(
-                _EXTERNAL_RECRUITMENT_BLACKLIST_GRACE_SECONDS
-            ),
-            external_target_ban_check_delay_seconds=int(
-                _EXTERNAL_BAN_CHECK_DELAY_SECONDS
-            ),
-            readonly_connection_factory=readonly_connection,
-            transaction_factory=transaction,
-        )
-
-    def _raid_pipeline_service(self) -> RaidPipelineService:
-        return make_raid_pipeline_service(self)
-
-    def _raid_tracking_runtime_service(self) -> RaidTrackingRuntimeService:
-        return make_raid_tracking_runtime_service(self)
-
-    def _raid_arrival_runtime(self) -> RaidArrivalRuntime:
-        return make_raid_arrival_runtime(
-            self,
-            track_confirmed_partner_raid_fn=track_confirmed_partner_raid,
-        )
-
-    def _recruitment_messaging_service(self) -> RecruitmentMessagingService:
-        return make_recruitment_messaging_service(
-            self,
-            readonly_connection_factory=readonly_connection,
-        )
-
-    @staticmethod
-    def _signal_correlation_service() -> RaidSignalCorrelationService:
-        return make_signal_correlation_service()
-
-    def _increment_raid_observability_counter(self, name: str, amount: int = 1) -> int:
-        service = self._make_raid_observability_service()
-        value = service.increment_counter(name, amount)
-        self._raid_observability_sequence = service.sequence
-        self._raid_observability_counter_store = service.counter_store
-        return value
-
-    @staticmethod
-    def _raid_observability_value(value: object, *, limit: int = 240) -> str:
-        return RaidObservabilityService.normalize_value(value, limit=limit)
-
-    def _format_raid_observability_fields(self, **fields: object) -> str:
-        return self._make_raid_observability_service().format_fields(**fields)
-
-    def _log_raid_observability_event(
-        self,
-        *,
-        raid_flow_id: str,
-        step: str,
-        decision: str,
-        level: int = logging.INFO,
-        from_broadcaster_login: str | None = None,
-        from_broadcaster_id: str | None = None,
-        to_broadcaster_login: str | None = None,
-        to_broadcaster_id: str | None = None,
-        details: dict[str, object] | None = None,
-    ) -> None:
-        service = self._make_raid_observability_service()
-        event = service.emit_event(
-            flow_type="raid",
-            flow_id=str(raid_flow_id or "").strip(),
-            step=step,
-            decision=decision,
-            from_broadcaster_login=from_broadcaster_login,
-            from_broadcaster_id=from_broadcaster_id,
-            to_broadcaster_login=to_broadcaster_login,
-            to_broadcaster_id=to_broadcaster_id,
-            details=details or {},
-        )
-        payload = event.as_log_fields()
-        self._last_raid_observability_event = payload
-        self._raid_observability_sequence = service.sequence
-        self._raid_observability_counter_store = service.counter_store
-        log.log(level, "raid_flow %s", service.format_fields(**payload))
-
-    def get_observability_snapshot(self) -> dict[str, Any]:
-        state_store = self._raid_state_store()
-        state_store.ensure_runtime_raid_tracking_state()
-        state_store.cleanup_stale_raid_readiness_states()
-        pending_raids = getattr(self, "_pending_raids", {}) or {}
-        recent_arrivals = getattr(self, "_recent_raid_arrivals", {}) or {}
-        orphan_notifications = getattr(self, "_orphan_chat_raid_notifications", {}) or {}
-        readiness_by_flow = getattr(self, "_raid_readiness_by_flow_id", {}) or {}
-        return {
-            "pendingCount": len(pending_raids),
-            "pendingTargets": sorted(
-                self._format_pending_raid_key_for_log(key)
-                for key in list(pending_raids.keys())[:10]
-            ),
-            "recentArrivalCount": len(recent_arrivals),
-            "orphanChatNotificationCount": len(orphan_notifications),
-            "readinessFlowCount": len(readiness_by_flow),
-            "counters": dict(self._raid_observability_counters()),
-            "lastEvent": getattr(self, "_last_raid_observability_event", None),
-            "lastAnalyticsFollowersDiagnostic": getattr(
-                self,
-                "_last_analytics_followers_diagnostic",
-                None,
-            ),
-        }
-
-    def _build_analytics_followers_runtime_state(self) -> dict[str, object]:
-        return build_analytics_followers_runtime_state(self)
-
-    def _log_analytics_followers_decision(
-        self,
-        *,
-        flow_id: str,
-        flow: str,
-        login: str,
-        target_id: str | None,
-        decision: str,
-        reason: str,
-        request_attempted: object,
-        request_result: str,
-        http_status: int | None,
-        scope_state: dict[str, object],
-        runtime_state: dict[str, object],
-        level: int = logging.INFO,
-        **extra_fields: object,
-    ) -> None:
-        log_analytics_followers_decision(
-            self,
-            flow_id=flow_id,
-            flow=flow,
-            login=login,
-            target_id=target_id,
-            decision=decision,
-            reason=reason,
-            request_attempted=request_attempted,
-            request_result=request_result,
-            http_status=http_status,
-            scope_state=scope_state,
-            runtime_state=runtime_state,
-            level=level,
-            insert_observability_event_fn=insert_observability_event,
-            **extra_fields,
-        )
-
-    async def _resolve_bot_oauth_context(self) -> tuple[str | None, str | None, set[str]]:
-        return await resolve_bot_oauth_context(self)
-
-    def _warn_user_scope_fallback_once(
-        self,
-        *,
-        area: str,
-        subject: str,
-    ) -> None:
-        warn_user_scope_fallback_once(self, area=area, subject=subject)
-
-    def _clear_user_scope_fallback_warning(
-        self,
-        *,
-        area: str,
-        subject: str,
-    ) -> None:
-        clear_user_scope_fallback_warning(self, area=area, subject=subject)
-
-    @staticmethod
-    async def _get_followers_total_result_with_legacy_fallback(
-        api,
-        user_id: str,
-        *,
-        user_token: str | None = None,
-    ) -> dict[str, object]:
-        return await get_followers_total_result_with_legacy_fallback(
-            api,
-            user_id,
-            user_token=user_token,
-        )
-
-    @staticmethod
-    def _row_value(row, key: str, index: int, default=None):
-        return row_value(row, key, index, default)
-
-    @staticmethod
-    def _safe_int(value: object, default: int = 0) -> int:
-        return safe_int(value, default)
-
-    @staticmethod
-    def _parse_datetime(value: object) -> datetime | None:
-        return parse_datetime(value)
-
     def _get_target_game_lower(self) -> str:
         return str(TWITCH_TARGET_GAME_NAME or "").strip().lower()
 
     def _create_twitch_api(self, *, session=None):
         return create_twitch_api(self, session=session)
 
-    def _lookup_silent_raid_enabled(self, broadcaster_login: str) -> bool:
-        try:
-            with readonly_connection() as conn:
-                partner_row = load_active_partner(
-                    conn,
-                    twitch_login=self._normalize_broadcaster_login(broadcaster_login),
-                )
-                return bool(
-                    int(
-                        (
-                            partner_row["silent_raid"]
-                            if partner_row and hasattr(partner_row, "keys")
-                            else (partner_row[15] if partner_row else 0)
-                        )
-                        or 0
-                    )
-                )
-        except Exception:
-            log.debug(
-                "Raid arrival: silent_raid lookup failed for %s",
-                broadcaster_login,
-                exc_info=True,
-            )
-            return False
 
