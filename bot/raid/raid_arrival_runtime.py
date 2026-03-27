@@ -29,13 +29,13 @@ class RaidArrivalRuntimeDependencies:
     remember_recent_raid_arrival: Callable[..., Any]
     update_partner_raid_arrival: Callable[[int, set[str], bool], Any]
     store_partner_raid_arrival: Callable[..., int | None]
-    load_recent_raid_history_reference: Callable[[str, str], tuple[int | None, str | None]]
-    process_independent_partner_raid_arrival: Callable[..., bool]
+    load_recent_raid_history_reference: Callable[..., tuple[int | None, str | None]]
+    process_independent_partner_raid_arrival: Callable[..., Any]
     cancel_pending_raids_for_source_unraid: Callable[..., int]
     resolve_streamer_id_by_login: Callable[[str], str | None]
     mark_manual_raid_started: Callable[[str, float], Any]
     lookup_silent_raid_enabled: Callable[[str], bool]
-    refresh_partner_score_cache_if_available: Callable[[str], Awaitable[Any]]
+    refresh_partner_score_cache_if_available: Callable[..., Awaitable[Any]]
     track_confirmed_partner_raid: Callable[..., Any] | None
     delete_external_recruitment_blacklist_pending: Callable[[str], Any]
     record_confirmed_external_recruitment_raid: Callable[..., int | None]
@@ -444,15 +444,17 @@ class RaidArrivalRuntime:
 
         independent_manual_detected = False
         if pending is None:
-            independent_manual_detected = self._deps.process_independent_partner_raid_arrival(
-                to_broadcaster_id=to_broadcaster_id,
-                to_broadcaster_login=to_broadcaster_login,
-                from_broadcaster_login=normalized_from_login,
-                from_broadcaster_id=from_broadcaster_id,
-                viewer_count=viewer_count,
-                signal_type="channel.raid",
-                correlation_status="independent_channel_raid",
-                correlation_detail=None,
+            independent_manual_detected = bool(
+                self._deps.process_independent_partner_raid_arrival(
+                    to_broadcaster_id=to_broadcaster_id,
+                    to_broadcaster_login=to_broadcaster_login,
+                    from_broadcaster_login=normalized_from_login,
+                    from_broadcaster_id=from_broadcaster_id,
+                    viewer_count=viewer_count,
+                    signal_type="channel.raid",
+                    correlation_status="independent_channel_raid",
+                    correlation_detail=None,
+                )
             )
 
         plan = self._deps.signal_correlation_service.plan_raid_arrival(
