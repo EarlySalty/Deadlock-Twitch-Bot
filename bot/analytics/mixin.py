@@ -14,6 +14,7 @@ from typing import Any
 from discord.ext import tasks
 
 from ..core.chat_bots import build_known_chat_bot_not_in_clause, is_known_chat_bot
+from ..core.partner_utils import is_operational_partner_channel
 from ..logging_setup import log_path
 from .. import storage as storage_runtime
 from ..storage import pg as storage
@@ -107,6 +108,20 @@ class TwitchAnalyticsMixin:
             str(required_scope or "").strip().lower(),
         )
 
+    def _is_moderator_self_heal_target(self, login: str) -> bool:
+        normalized_login = str(login or "").strip().lower().lstrip("#")
+        if not normalized_login:
+            return False
+        try:
+            return bool(is_operational_partner_channel(normalized_login))
+        except Exception:
+            log.debug(
+                "Analytics self-heal: partner target check failed for %s",
+                normalized_login,
+                exc_info=True,
+            )
+            return False
+
     async def _attempt_bot_moderator_self_heal(
         self,
         *,
@@ -120,6 +135,8 @@ class TwitchAnalyticsMixin:
         cooldowns = self._moderator_self_heal_cooldowns()
         cooldown_until = float(cooldowns.get(key, 0.0) or 0.0)
         if cooldown_until > now:
+            return False
+        if not self._is_moderator_self_heal_target(login):
             return False
 
         chat_bot = getattr(self, "_twitch_chat_bot", None)

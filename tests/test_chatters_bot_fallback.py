@@ -104,6 +104,9 @@ class _AnalyticsHarness(TwitchAnalyticsMixin):
         self._chatters_startup_grace_started_at = time.monotonic()
         self._chatters_startup_deferral_logged = False
 
+    def _is_moderator_self_heal_target(self, login: str) -> bool:
+        return str(login or "").strip().lower().lstrip("#") == "partner_one"
+
 
 class ChattersBotFallbackTests(unittest.IsolatedAsyncioTestCase):
     async def test_subscriptions_success_logs_at_debug(self) -> None:
@@ -497,6 +500,32 @@ class ChattersBotFallbackTests(unittest.IsolatedAsyncioTestCase):
             "1001",
             "partner_one",
         )
+
+    async def test_poll_chatters_does_not_attempt_auto_remod_for_non_partner_targets(self) -> None:
+        harness = _AnalyticsHarness(
+            bot_scopes={"moderator:read:chatters"},
+        )
+        harness.api.get_chatters_result = AsyncMock(
+            return_value={
+                "ok": False,
+                "data": None,
+                "http_status": 403,
+                "error_code": "helix_403_not_moderator",
+                "message": '{"error":"Forbidden","status":403,"message":"not moderator"}',
+                "request_attempted": True,
+            }
+        )
+
+        result = await harness._poll_chatters_single(
+            "2002",
+            "external_channel",
+            102,
+            "2026-03-28T01:19:00+00:00",
+            token="streamer-token",
+        )
+
+        self.assertIsNone(result)
+        harness._twitch_chat_bot._ensure_bot_is_mod.assert_not_awaited()
 
     async def test_poll_chatters_restores_bot_ban_opt_out_after_bot_path_success(self) -> None:
         harness = _AnalyticsHarness(
