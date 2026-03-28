@@ -485,7 +485,7 @@ class ConnectionPoolArchitectureTests(unittest.TestCase):
         )
 
         with (
-            patch.dict("os.environ", {"TWITCH_ALLOW_RUNTIME_SCHEMA_BOOTSTRAP": "1"}, clear=False),
+            patch.dict("os.environ", {}, clear=False),
             patch("bot.storage.pg.psycopg.connect", return_value=conn),
             patch(
                 "bot.storage.pg._load_dsn",
@@ -521,7 +521,7 @@ class ConnectionPoolArchitectureTests(unittest.TestCase):
         )
 
         with (
-            patch.dict("os.environ", {"TWITCH_ALLOW_RUNTIME_SCHEMA_BOOTSTRAP": "1"}, clear=False),
+            patch.dict("os.environ", {}, clear=False),
             patch("bot.storage.pg.psycopg.connect", return_value=conn),
             patch(
                 "bot.storage.pg._load_dsn",
@@ -576,7 +576,7 @@ class ConnectionPoolArchitectureTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "permission denied"):
                 prepare_runtime_storage()
 
-    def test_prepare_runtime_storage_requires_explicit_runtime_bootstrap_opt_in(self) -> None:
+    def test_prepare_runtime_storage_allows_explicit_runtime_bootstrap_opt_out(self) -> None:
         conn = _RuntimeSchemaVersionConnection(
             "conn-bootstrap-required",
             schema_version_exists=False,
@@ -602,7 +602,7 @@ class ConnectionPoolArchitectureTests(unittest.TestCase):
             return conn
 
         with (
-            patch.dict("os.environ", {"TWITCH_ALLOW_RUNTIME_SCHEMA_BOOTSTRAP": "1"}, clear=False),
+            patch.dict("os.environ", {}, clear=False),
             patch("bot.storage.pg.psycopg.connect", side_effect=_connect),
             patch(
                 "bot.storage.pg._load_dsn",

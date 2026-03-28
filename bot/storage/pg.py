@@ -593,7 +593,9 @@ def _mark_runtime_storage_ready(cache_key: str) -> None:
 
 def _runtime_schema_bootstrap_allowed() -> bool:
     raw = str(os.getenv(_RUNTIME_SCHEMA_BOOTSTRAP_ENV) or "").strip().lower()
-    return raw in {"1", "true", "yes", "on"}
+    if not raw:
+        return True
+    return raw not in {"0", "false", "no", "off"}
 
 
 def _schema_version_table_exists(conn: psycopg.Connection) -> bool:
