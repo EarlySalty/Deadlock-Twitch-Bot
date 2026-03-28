@@ -1,3 +1,4 @@
+import asyncio
 import json
 import logging
 import re
@@ -876,21 +877,6 @@ class ModerationMixin:
         login = self._normalize_channel_login_safe(channel)
         if not login:
             return
-        try:
-            if self._is_partner_channel_for_blacklist_skip(login):
-                log.info(
-                    "Blacklist übersprungen für aktiven Partner-Channel %s (source=%s)",
-                    login,
-                    source_tag,
-                )
-                return
-        except Exception:
-            log.debug(
-                "Partner-Check vor Blacklist fehlgeschlagen fuer %s",
-                login,
-                exc_info=True,
-            )
-
         raw_id = str(getattr(channel, "id", "") or "").strip()
         target_id = raw_id if raw_id else None
         snippet = (text or "").replace("\n", " ").strip()[:180]
@@ -899,6 +885,29 @@ class ModerationMixin:
             reason += f" (HTTP {status})"
         if snippet:
             reason += f": {snippet}"
+        already_flagged = False
+        try:
+            with readonly_connection() as conn:
+                row = conn.execute(
+                    """
+                    SELECT reason
+                    FROM twitch_raid_blacklist
+                    WHERE LOWER(target_login) = LOWER(%s)
+                    LIMIT 1
+                    """,
+                    (login,),
+                ).fetchone()
+                if row is not None:
+                    existing_reason = str(
+                        row[0] if not hasattr(row, "keys") else row["reason"] or ""
+                    ).strip()
+                    already_flagged = "bot_banned" in existing_reason.lower()
+        except Exception:
+            log.debug(
+                "Konnte vorhandenen Bot-Ban-Status fuer %s nicht lesen",
+                login,
+                exc_info=True,
+            )
 
         raid_bot = getattr(self, "_raid_bot", None)
         if raid_bot and hasattr(raid_bot, "_add_to_blacklist"):
@@ -919,6 +928,31 @@ class ModerationMixin:
             except Exception:
                 log.debug(
                     "Konnte Bot-Ban-Blacklist nicht schreiben fuer %s",
+                    login,
+                    exc_info=True,
+                )
+
+        auth_manager = getattr(raid_bot, "auth_manager", None) if raid_bot else None
+        token_error_handler = (
+            getattr(auth_manager, "token_error_handler", None) if auth_manager else None
+        )
+        if (
+            not already_flagged
+            and target_id
+            and token_error_handler is not None
+            and hasattr(token_error_handler, "handle_bot_banned_channel")
+        ):
+            try:
+                asyncio.get_running_loop().create_task(
+                    token_error_handler.handle_bot_banned_channel(
+                        twitch_user_id=str(target_id),
+                        twitch_login=login,
+                        error_message=reason,
+                    )
+                )
+            except RuntimeError:
+                log.debug(
+                    "Kein laufender Event-Loop fuer Bot-Ban Opt-out/DM (%s)",
                     login,
                     exc_info=True,
                 )

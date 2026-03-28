@@ -74,6 +74,7 @@ class TwitchAnalyticsMixin:
         self._irc_lurker_experiment_session_stats: dict[int, dict[str, object]] = {}
         self._chatters_startup_grace_started_at = time.monotonic()
         self._chatters_startup_deferral_logged = False
+        self._moderator_self_heal_cooldown_until: dict[tuple[str, str], float] = {}
         _ensure_irc_experiment_logger()
         self._analytics_task = self.collect_analytics_data.start()
         self._chatters_task = self.collect_chatters_data.start()
@@ -91,6 +92,94 @@ class TwitchAnalyticsMixin:
             counters = {}
             self._analytics_observability_counter_store = counters
         return counters
+
+    def _moderator_self_heal_cooldowns(self) -> dict[tuple[str, str], float]:
+        cooldowns = getattr(self, "_moderator_self_heal_cooldown_until", None)
+        if not isinstance(cooldowns, dict):
+            cooldowns = {}
+            self._moderator_self_heal_cooldown_until = cooldowns
+        return cooldowns
+
+    @staticmethod
+    def _moderator_self_heal_key(login: str, required_scope: str) -> tuple[str, str]:
+        return (
+            str(login or "").strip().lower().lstrip("#"),
+            str(required_scope or "").strip().lower(),
+        )
+
+    async def _attempt_bot_moderator_self_heal(
+        self,
+        *,
+        broadcaster_id: str,
+        login: str,
+        required_scope: str,
+        flow: str,
+    ) -> bool:
+        key = self._moderator_self_heal_key(login, required_scope)
+        now = time.monotonic()
+        cooldowns = self._moderator_self_heal_cooldowns()
+        cooldown_until = float(cooldowns.get(key, 0.0) or 0.0)
+        if cooldown_until > now:
+            return False
+
+        chat_bot = getattr(self, "_twitch_chat_bot", None)
+        ensure_bot_is_mod = getattr(chat_bot, "_ensure_bot_is_mod", None)
+        if not callable(ensure_bot_is_mod):
+            return False
+
+        try:
+            mod_restored = bool(await ensure_bot_is_mod(str(broadcaster_id), str(login)))
+        except Exception:
+            log.debug(
+                "Analytics self-heal: auto-re-mod failed for %s (%s)",
+                login,
+                flow,
+                exc_info=True,
+            )
+            mod_restored = False
+
+        if mod_restored:
+            cooldowns.pop(key, None)
+            self._increment_analytics_observability_counter(
+                f"{flow}_moderator_self_heal_success_total"
+            )
+            return True
+
+        cooldowns[key] = now + 600.0
+        self._increment_analytics_observability_counter(
+            f"{flow}_moderator_self_heal_failure_total"
+        )
+        return False
+
+    def _restore_bot_ban_opt_out_if_healthy(
+        self,
+        *,
+        twitch_user_id: str,
+        login: str,
+        flow: str,
+    ) -> None:
+        raid_bot = getattr(self, "_raid_bot", None)
+        auth_manager = getattr(raid_bot, "auth_manager", None) if raid_bot else None
+        token_error_handler = (
+            getattr(auth_manager, "token_error_handler", None) if auth_manager else None
+        )
+        restore = getattr(token_error_handler, "restore_bot_banned_channel", None)
+        if not callable(restore):
+            return
+        try:
+            restored = bool(restore(str(twitch_user_id), str(login)))
+        except Exception:
+            log.debug(
+                "Analytics self-heal: could not restore technical bot-ban opt-out for %s (%s)",
+                login,
+                flow,
+                exc_info=True,
+            )
+            return
+        if restored:
+            self._increment_analytics_observability_counter(
+                f"{flow}_bot_ban_opt_out_restore_total"
+            )
 
     @staticmethod
     def _analytics_login_sample(values: set[str], *, limit: int = 12) -> list[str]:
@@ -977,6 +1066,37 @@ class TwitchAnalyticsMixin:
                 bot_diagnostics["error"] = bot_result.get("message")
                 bot_diagnostics["bot_request_success"] = False
                 self._increment_analytics_observability_counter("chatters_bot_path_failure_total")
+                if (
+                    bot_error_code == "helix_403_not_moderator"
+                    and await self._attempt_bot_moderator_self_heal(
+                        broadcaster_id=user_id,
+                        login=login,
+                        required_scope="moderator:read:chatters",
+                        flow="chatters",
+                    )
+                ):
+                    retry_result = await self._get_chatters_result_with_legacy_fallback(
+                        broadcaster_id=user_id,
+                        moderator_id=bot_id,
+                        user_token=bot_token,
+                    )
+                    bot_request_result, bot_http_status, bot_error_code = self._structured_result_meta(
+                        retry_result
+                    )
+                    if retry_result.get("ok"):
+                        retry_chatters = retry_result.get("data")
+                        if isinstance(retry_chatters, list):
+                            chatters = retry_chatters
+                            bot_request_succeeded = True
+                            bot_diagnostics["reason"] = "bot_path_success"
+                            bot_diagnostics["bot_request_success"] = True
+                            self._increment_analytics_observability_counter(
+                                "chatters_bot_path_success_total"
+                            )
+                            log.debug(
+                                "Chatters-Poller: auto-re-mod repaired moderator access for %s",
+                                login,
+                            )
         elif bot_token and bot_id:
             bot_diagnostics["reason"] = "bot_scope_missing"
         else:
@@ -1089,6 +1209,11 @@ class TwitchAnalyticsMixin:
             self._chatters_scope_warned.discard(key)
         if bot_request_succeeded:
             self._clear_chatters_user_fallback_warning(user_id=user_id, session_id=session_id)
+            self._restore_bot_ban_opt_out_if_healthy(
+                twitch_user_id=user_id,
+                login=login,
+                flow="chatters",
+            )
         try:
             self._record_irc_lurker_experiment_sample(
                 login=login,

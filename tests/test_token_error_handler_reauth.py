@@ -43,6 +43,14 @@ def _make_conn() -> sqlite3.Connection:
         )
         """
     )
+    conn.execute(
+        """
+        CREATE TABLE twitch_raid_blacklist (
+            target_login TEXT PRIMARY KEY,
+            reason TEXT
+        )
+        """
+    )
     return conn
 
 
@@ -148,6 +156,127 @@ class TokenErrorHandlerReauthTests(unittest.TestCase):
         self.assertEqual(int(partner_row["raid_bot_enabled"]), 0)
         set_partner_flag.assert_called_once_with(ANY, twitch_user_id="1001", enabled=False)
 
+    def test_mark_partner_opt_out_only_keeps_needs_reauth_false(self) -> None:
+        conn = _make_conn()
+        conn.execute(
+            """
+            INSERT INTO twitch_raid_auth (twitch_user_id, twitch_login, raid_enabled, needs_reauth)
+            VALUES (?, ?, 1, 0)
+            """,
+            ("2002", "bravo"),
+        )
+        conn.execute(
+            """
+            INSERT INTO twitch_partners (twitch_user_id, twitch_login, manual_partner_opt_out, raid_bot_enabled, status)
+            VALUES (?, ?, 0, 1, 'active')
+            """,
+            ("2002", "bravo"),
+        )
+
+        with (
+            patch(
+                "bot.api.token_error_handler.transaction",
+                side_effect=lambda: contextlib.nullcontext(_CompatConn(conn)),
+            ),
+            patch(
+                "bot.api.token_error_handler.load_active_partner",
+                return_value={"id": 1},
+            ),
+            patch("bot.api.token_error_handler.set_partner_raid_bot_enabled") as set_partner_flag,
+            patch.object(TokenErrorHandler, "_migrate_db", return_value=None),
+        ):
+            handler = TokenErrorHandler()
+            handler._mark_partner_opt_out_only("2002", "bravo")
+
+        row = conn.execute(
+            """
+            SELECT raid_enabled, needs_reauth
+            FROM twitch_raid_auth
+            WHERE twitch_user_id = ?
+            """,
+            ("2002",),
+        ).fetchone()
+        self.assertEqual(int(row["raid_enabled"]), 0)
+        self.assertEqual(int(row["needs_reauth"]), 0)
+        partner_row = conn.execute(
+            """
+            SELECT manual_partner_opt_out, raid_bot_enabled
+            FROM twitch_partners
+            WHERE twitch_user_id = ?
+            """,
+            ("2002",),
+        ).fetchone()
+        self.assertEqual(int(partner_row["manual_partner_opt_out"]), 1)
+        self.assertEqual(int(partner_row["raid_bot_enabled"]), 0)
+        set_partner_flag.assert_called_once_with(ANY, twitch_user_id="2002", enabled=False)
+
+    def test_restore_bot_banned_channel_reenables_partner_after_health_recovers(self) -> None:
+        conn = _make_conn()
+        conn.execute(
+            """
+            INSERT INTO twitch_raid_auth (twitch_user_id, twitch_login, raid_enabled, needs_reauth)
+            VALUES (?, ?, 0, 0)
+            """,
+            ("3003", "charlie"),
+        )
+        conn.execute(
+            """
+            INSERT INTO twitch_partners (id, twitch_user_id, twitch_login, manual_partner_opt_out, raid_bot_enabled, status)
+            VALUES (?, ?, ?, 1, 0, 'active')
+            """,
+            (1, "3003", "charlie"),
+        )
+        conn.execute(
+            """
+            INSERT INTO twitch_raid_blacklist (target_login, reason)
+            VALUES (?, ?)
+            """,
+            ("charlie", "chat_bot_banned_in_channel"),
+        )
+
+        with (
+            patch(
+                "bot.api.token_error_handler.transaction",
+                side_effect=lambda: contextlib.nullcontext(_CompatConn(conn)),
+            ),
+            patch(
+                "bot.api.token_error_handler.load_active_partner",
+                return_value={"id": 1, "manual_partner_opt_out": 1},
+            ),
+            patch("bot.api.token_error_handler.set_partner_raid_bot_enabled") as set_partner_flag,
+            patch.object(TokenErrorHandler, "_migrate_db", return_value=None),
+        ):
+            handler = TokenErrorHandler()
+            restored = handler.restore_bot_banned_channel("3003", "charlie")
+
+        self.assertTrue(restored)
+        row = conn.execute(
+            """
+            SELECT raid_enabled, needs_reauth
+            FROM twitch_raid_auth
+            WHERE twitch_user_id = ?
+            """,
+            ("3003",),
+        ).fetchone()
+        self.assertEqual(int(row["raid_enabled"]), 1)
+        self.assertEqual(int(row["needs_reauth"]), 0)
+        partner_row = conn.execute(
+            """
+            SELECT manual_partner_opt_out, raid_bot_enabled
+            FROM twitch_partners
+            WHERE twitch_user_id = ?
+            """,
+            ("3003",),
+        ).fetchone()
+        self.assertEqual(int(partner_row["manual_partner_opt_out"]), 0)
+        self.assertEqual(int(partner_row["raid_bot_enabled"]), 1)
+        blacklist_row = conn.execute(
+            "SELECT 1 FROM twitch_raid_blacklist WHERE target_login = ?",
+            ("charlie",),
+        ).fetchone()
+        self.assertIsNone(blacklist_row)
+        set_partner_flag.assert_called_once_with(ANY, twitch_user_id="3003", enabled=True)
+
 
 class _DiscordBotWithoutChannel:
     def get_channel(self, _channel_id: int):
@@ -224,6 +353,19 @@ class TokenErrorHandlerNotificationTests(unittest.IsolatedAsyncioTestCase):
                 "87111803",
                 "snaqeu",
                 'HTTP 400: {"status":400,"message":"Invalid refresh token"}',
+            )
+
+        self.assertFalse(sent)
+
+    async def test_send_user_dm_bot_banned_returns_false_when_user_cannot_be_resolved(self) -> None:
+        with patch.object(TokenErrorHandler, "_migrate_db", return_value=None):
+            handler = TokenErrorHandler(discord_bot=_DiscordBotMissingUser())
+
+        with patch.object(handler, "_get_discord_user_id", return_value="137246526119477248"):
+            sent = await handler._send_user_dm_bot_banned(
+                "87111803",
+                "snaqeu",
+                "chat_bot_banned_in_channel",
             )
 
         self.assertFalse(sent)

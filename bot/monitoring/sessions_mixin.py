@@ -869,6 +869,11 @@ class _SessionsMixin:
             if bot_result.get("ok") and bot_result.get("data") is not None:
                 bot_request_success = True
                 self._clear_session_followers_user_fallback_warning(login)
+                self._restore_bot_ban_opt_out_if_healthy(
+                    twitch_user_id=str(user_id),
+                    login=login,
+                    flow="followers_session",
+                )
                 self._increment_analytics_observability_counter("followers_session_bot_path_success_total")
                 self._log_analytics_decision(
                     flow_id=flow_id,
@@ -896,6 +901,65 @@ class _SessionsMixin:
                 return int(bot_result["data"])
             self._increment_analytics_observability_counter("followers_session_bot_path_failure_total")
             final_reason = bot_error_code or "helix_followers_failed"
+            if (
+                bot_error_code == "helix_403_not_moderator"
+                and await self._attempt_bot_moderator_self_heal(
+                    broadcaster_id=str(user_id),
+                    login=login,
+                    required_scope="moderator:read:followers",
+                    flow="followers_session",
+                )
+            ):
+                if callable(followers_result_getter):
+                    bot_result = await followers_result_getter(str(user_id), user_token=bot_token)
+                else:
+                    legacy_total = await self.api.get_followers_total(str(user_id), user_token=bot_token)
+                    bot_result = {
+                        "ok": legacy_total is not None,
+                        "data": legacy_total,
+                        "http_status": 200 if legacy_total is not None else None,
+                        "error_code": None if legacy_total is not None else "legacy_none_result",
+                        "request_attempted": True,
+                    }
+                final_request_result, bot_http_status, bot_error_code = self._structured_result_meta(
+                    bot_result
+                )
+                if bot_result.get("ok") and bot_result.get("data") is not None:
+                    bot_request_success = True
+                    self._clear_session_followers_user_fallback_warning(login)
+                    self._restore_bot_ban_opt_out_if_healthy(
+                        twitch_user_id=str(user_id),
+                        login=login,
+                        flow="followers_session",
+                    )
+                    self._increment_analytics_observability_counter(
+                        "followers_session_bot_path_success_total"
+                    )
+                    self._log_analytics_decision(
+                        flow_id=flow_id,
+                        flow="followers_session",
+                        login=login,
+                        decision="success",
+                        reason="bot_path_success",
+                        request_attempted=final_request_attempted,
+                        request_result=final_request_result,
+                        http_status=bot_http_status or 200,
+                        scope_state={
+                            "bot": bot_scope_present,
+                            "streamer": streamer_scope_present,
+                        },
+                        runtime_state=runtime_state,
+                        chat_bot_available=runtime_state.get("chat_bot_available"),
+                        bot_token_manager_available=bot_token_manager_available,
+                        bot_token_present=bot_token_present,
+                        bot_scope_present=bot_scope_present,
+                        streamer_scope_present=streamer_scope_present,
+                        bot_request_attempted=bot_request_attempted,
+                        bot_request_success=bot_request_success,
+                        bot_http_status=bot_http_status,
+                    )
+                    return int(bot_result["data"])
+                final_reason = bot_error_code or "helix_followers_failed"
 
         user_token: str | None = None
         auth_user_id: str | None = None

@@ -214,6 +214,349 @@ class TokenErrorHandler:
                 exc_info=True,
             )
 
+    def _mark_partner_opt_out_only(
+        self,
+        twitch_user_id: str,
+        twitch_login: str,
+    ) -> None:
+        """Disable partner bot features without forcing a Twitch reauth."""
+        login_hint = str(twitch_login or "").strip().lower()
+        try:
+            with transaction() as conn:
+                conn.execute(
+                    """
+                    UPDATE twitch_raid_auth
+                    SET raid_enabled = FALSE,
+                        twitch_login = COALESCE(NULLIF(%s, ''), twitch_login)
+                    WHERE twitch_user_id = %s
+                    """,
+                    (
+                        login_hint,
+                        twitch_user_id,
+                    ),
+                )
+                try:
+                    set_partner_raid_bot_enabled(
+                        conn,
+                        twitch_user_id=twitch_user_id,
+                        enabled=False,
+                    )
+                except Exception:
+                    log.debug(
+                        "Could not mirror bot-ban opt-out into partner registry for user_id=%s",
+                        _mask_log_identifier(twitch_user_id),
+                        exc_info=True,
+                    )
+                try:
+                    active_partner = load_active_partner(
+                        conn,
+                        twitch_user_id=twitch_user_id,
+                        twitch_login=login_hint,
+                    )
+                    if active_partner:
+                        partner_id = (
+                            active_partner["id"]
+                            if hasattr(active_partner, "keys")
+                            else active_partner[0]
+                        )
+                        conn.execute(
+                            """
+                            UPDATE twitch_partners
+                            SET manual_partner_opt_out = 1,
+                                raid_bot_enabled = 0,
+                                twitch_login = COALESCE(NULLIF(%s, ''), twitch_login)
+                            WHERE id = %s
+                            """,
+                            (
+                                login_hint,
+                                partner_id,
+                            ),
+                        )
+                except Exception:
+                    log.debug(
+                        "Could not mirror bot-ban opt-out partner state for user_id=%s",
+                        _mask_log_identifier(twitch_user_id),
+                        exc_info=True,
+                    )
+        except Exception:
+            log.warning(
+                "Could not apply bot-ban opt-out for user_id=%s",
+                _mask_log_identifier(twitch_user_id),
+                exc_info=True,
+            )
+
+    async def handle_bot_banned_channel(
+        self,
+        twitch_user_id: str,
+        twitch_login: str,
+        error_message: str,
+    ) -> None:
+        """Treat a channel-side bot ban like a temporary opt-out and notify the streamer."""
+        self._mark_partner_opt_out_only(twitch_user_id, twitch_login)
+        user_dm_sent = await self._send_user_dm_bot_banned(
+            twitch_user_id,
+            twitch_login,
+            error_message,
+        )
+        log.info(
+            "Processed bot-ban opt-out for %s (user_dm=%s)",
+            _mask_log_identifier(twitch_login),
+            "yes" if user_dm_sent else "no",
+        )
+
+    async def _send_user_dm_bot_banned(
+        self,
+        twitch_user_id: str,
+        twitch_login: str,
+        error_message: str,
+    ) -> bool:
+        """Send the streamer concrete recovery steps when the bot is banned in their channel."""
+        if not self.discord_bot:
+            return False
+
+        discord_user_id = self._get_discord_user_id(twitch_user_id, twitch_login)
+        if not discord_user_id:
+            log.debug("No discord_user_id found for %s, cannot send bot-ban DM", twitch_login)
+            return False
+
+        try:
+            user_id_int = int(discord_user_id)
+        except (TypeError, ValueError):
+            log.debug(
+                "Invalid discord_user_id %r for %s, cannot send bot-ban DM",
+                discord_user_id,
+                twitch_login,
+            )
+            return False
+
+        user = None
+        try:
+            getter = getattr(self.discord_bot, "get_user", None)
+            if callable(getter):
+                user = getter(user_id_int)
+            if user is None:
+                user = await self.discord_bot.fetch_user(user_id_int)
+        except Exception:
+            log.debug("Could not fetch Discord user %s for bot-ban DM", discord_user_id)
+            return False
+        if user is None:
+            log.debug(
+                "Discord user %s not found for %s, cannot send bot-ban DM",
+                discord_user_id,
+                twitch_login,
+            )
+            return False
+
+        details = str(error_message or "").replace("\n", " ").strip()
+        if len(details) > 220:
+            details = details[:220] + "..."
+
+        embed = discord.Embed(
+            title="⚠️ Twitch Bot – im Channel blockiert",
+            description=(
+                f"Der Twitch Bot wurde in **{twitch_login}** blockiert oder gebannt. "
+                "Bis das behoben ist, bleiben die Bot-Funktionen fuer deinen Kanal deaktiviert."
+            ),
+            color=discord.Color.orange(),
+            timestamp=datetime.now(UTC),
+        )
+        embed.add_field(
+            name="Streamer",
+            value=f"[{twitch_login}](https://twitch.tv/{twitch_login})",
+            inline=True,
+        )
+        embed.add_field(
+            name="Was du jetzt tun musst",
+            value=(
+                "1. Entbanne den Bot im Twitch-Chat:\n"
+                "`/unban deutschedeadlockcommunity`\n\n"
+                "2. Gib dem Bot danach wieder Mod-Rechte:\n"
+                "`/mod deutschedeadlockcommunity`"
+            ),
+            inline=False,
+        )
+        embed.add_field(
+            name="Status",
+            value=(
+                "Der Kanal bleibt solange als deaktiviert behandelt, "
+                "bis der Bot wieder voll funktionsfaehig ist "
+                "(gueltige Tokens, gueltiger Mod-Status, funktionierende Bot-Pfade)."
+            ),
+            inline=False,
+        )
+        if details:
+            embed.add_field(
+                name="Erkannter Fehler",
+                value=f"```{details}```",
+                inline=False,
+            )
+        embed.add_field(
+            name="Hinweis",
+            value=(
+                "Sobald der Bot wieder normal arbeiten kann, wird der technische Opt-out-Zustand "
+                "automatisch aufgehoben."
+            ),
+            inline=False,
+        )
+        embed.set_footer(text="Twitch Raid Bot • Channel Ban Recovery")
+
+        try:
+            await user.send(embed=embed)
+            log.info(
+                "Sent bot-ban recovery DM to Discord user=%s (broadcaster=%s)",
+                _mask_log_identifier(discord_user_id),
+                _mask_log_identifier(twitch_login),
+            )
+            return True
+        except discord.Forbidden:
+            log.info("Cannot DM Discord user %s (DMs closed), skipping bot-ban DM", discord_user_id)
+            return False
+        except Exception:
+            log.warning(
+                "Failed to send bot-ban recovery DM to Discord user=%s",
+                _mask_log_identifier(discord_user_id),
+                exc_info=True,
+            )
+            return False
+
+    def restore_bot_banned_channel(
+        self,
+        twitch_user_id: str,
+        twitch_login: str,
+    ) -> bool:
+        """Clear the temporary bot-ban opt-out after bot health has been restored."""
+        login_hint = str(twitch_login or "").strip().lower()
+        restored = False
+        try:
+            with transaction() as conn:
+                auth_row = conn.execute(
+                    """
+                    SELECT raid_enabled, needs_reauth
+                    FROM twitch_raid_auth
+                    WHERE twitch_user_id = %s
+                    LIMIT 1
+                    """,
+                    (twitch_user_id,),
+                ).fetchone()
+                if auth_row is None:
+                    return False
+
+                raid_enabled = bool(
+                    auth_row[0] if not hasattr(auth_row, "keys") else auth_row["raid_enabled"]
+                )
+                needs_reauth = bool(
+                    auth_row[1] if not hasattr(auth_row, "keys") else auth_row["needs_reauth"]
+                )
+                if needs_reauth:
+                    return False
+
+                blacklist_row = conn.execute(
+                    """
+                    SELECT 1
+                    FROM twitch_raid_blacklist
+                    WHERE LOWER(target_login) = LOWER(%s)
+                      AND LOWER(COALESCE(reason, '')) LIKE %s
+                    LIMIT 1
+                    """,
+                    (
+                        login_hint,
+                        "%bot_banned%",
+                    ),
+                ).fetchone()
+
+                active_partner = load_active_partner(
+                    conn,
+                    twitch_user_id=twitch_user_id,
+                    twitch_login=login_hint,
+                )
+                manual_partner_opt_out = False
+                if active_partner:
+                    if hasattr(active_partner, "keys"):
+                        manual_partner_opt_out = bool(
+                            active_partner["manual_partner_opt_out"]
+                        )
+                    else:
+                        try:
+                            manual_partner_opt_out = bool(active_partner[12])
+                        except Exception:
+                            manual_partner_opt_out = False
+
+                technical_bot_ban_state = bool(blacklist_row) or (
+                    (not raid_enabled) and manual_partner_opt_out
+                )
+                if not technical_bot_ban_state:
+                    return False
+
+                conn.execute(
+                    """
+                    DELETE FROM twitch_raid_blacklist
+                    WHERE LOWER(target_login) = LOWER(%s)
+                      AND LOWER(COALESCE(reason, '')) LIKE %s
+                    """,
+                    (
+                        login_hint,
+                        "%bot_banned%",
+                    ),
+                )
+                conn.execute(
+                    """
+                    UPDATE twitch_raid_auth
+                    SET raid_enabled = TRUE,
+                        twitch_login = COALESCE(NULLIF(%s, ''), twitch_login)
+                    WHERE twitch_user_id = %s
+                    """,
+                    (
+                        login_hint,
+                        twitch_user_id,
+                    ),
+                )
+                try:
+                    set_partner_raid_bot_enabled(
+                        conn,
+                        twitch_user_id=twitch_user_id,
+                        enabled=True,
+                    )
+                except Exception:
+                    log.debug(
+                        "Could not re-enable partner registry bot state for user_id=%s",
+                        _mask_log_identifier(twitch_user_id),
+                        exc_info=True,
+                    )
+                if active_partner:
+                    partner_id = (
+                        active_partner["id"]
+                        if hasattr(active_partner, "keys")
+                        else active_partner[0]
+                    )
+                    conn.execute(
+                        """
+                        UPDATE twitch_partners
+                        SET manual_partner_opt_out = 0,
+                            raid_bot_enabled = 1,
+                            twitch_login = COALESCE(NULLIF(%s, ''), twitch_login)
+                        WHERE id = %s
+                        """,
+                        (
+                            login_hint,
+                            partner_id,
+                        ),
+                    )
+                restored = True
+        except Exception:
+            log.warning(
+                "Could not restore bot-ban opt-out for user_id=%s",
+                _mask_log_identifier(twitch_user_id),
+                exc_info=True,
+            )
+            return False
+
+        if restored:
+            log.info(
+                "Restored technical bot-ban opt-out for broadcaster=%s",
+                _mask_log_identifier(twitch_login),
+            )
+        return restored
+
     def is_token_blacklisted(self, twitch_user_id: str) -> bool:
         """
         Prüft, ob ein Token endgültig gesperrt ist (>= BLACKLIST_DISABLE_THRESHOLD Fehler).

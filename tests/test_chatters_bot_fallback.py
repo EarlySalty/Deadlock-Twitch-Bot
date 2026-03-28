@@ -52,6 +52,7 @@ class _ChatBot:
         self._monitored_only_channels = set(monitored_only or set())
         self._channel_ids = dict(channel_ids or {})
         self._channel_subscription_types = dict(subscription_types or {})
+        self._ensure_bot_is_mod = AsyncMock(return_value=False)
 
     @property
     def bot_id_safe(self) -> str:
@@ -79,7 +80,14 @@ class _AnalyticsHarness(TwitchAnalyticsMixin):
         bot_manager_hydrated: bool = True,
     ) -> None:
         self.api = SimpleNamespace(get_chatters=AsyncMock())
-        self._raid_bot = SimpleNamespace(auth_manager=_AuthManager(streamer_scopes))
+        self._raid_bot = SimpleNamespace(
+            auth_manager=SimpleNamespace(
+                get_scopes=_AuthManager(streamer_scopes).get_scopes,
+                token_error_handler=SimpleNamespace(
+                    restore_bot_banned_channel=lambda *_args, **_kwargs: False
+                ),
+            )
+        )
         self._bot_token_manager = _BotTokenManager(
             scopes=bot_scopes,
             hydrated=bot_manager_hydrated,
@@ -446,3 +454,80 @@ class ChattersBotFallbackTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(result)
         harness.api.get_chatters.assert_not_awaited()
         self.assertEqual(harness._chatters_scope_warned, {("1001", 99)})
+
+    async def test_poll_chatters_retries_once_after_auto_remod_restores_moderator_access(self) -> None:
+        harness = _AnalyticsHarness(
+            bot_scopes={"moderator:read:chatters"},
+        )
+        harness.api.get_chatters_result = AsyncMock(
+            side_effect=[
+                {
+                    "ok": False,
+                    "data": None,
+                    "http_status": 403,
+                    "error_code": "helix_403_not_moderator",
+                    "message": '{"error":"Forbidden","status":403,"message":"not moderator"}',
+                    "request_attempted": True,
+                },
+                {
+                    "ok": True,
+                    "data": [{"user_login": "lurker_fix", "user_id": "501"}],
+                    "http_status": 200,
+                    "error_code": None,
+                    "request_attempted": True,
+                },
+            ]
+        )
+        harness._twitch_chat_bot._ensure_bot_is_mod = AsyncMock(return_value=True)
+
+        result = await harness._poll_chatters_single(
+            "1001",
+            "partner_one",
+            100,
+            "2026-03-28T00:55:00+00:00",
+            token="streamer-token",
+        )
+
+        self.assertEqual(
+            result,
+            (100, "partner_one", [{"user_login": "lurker_fix", "user_id": "501"}]),
+        )
+        self.assertEqual(harness.api.get_chatters_result.await_count, 2)
+        harness._twitch_chat_bot._ensure_bot_is_mod.assert_awaited_once_with(
+            "1001",
+            "partner_one",
+        )
+
+    async def test_poll_chatters_restores_bot_ban_opt_out_after_bot_path_success(self) -> None:
+        harness = _AnalyticsHarness(
+            bot_scopes={"moderator:read:chatters"},
+        )
+        restore_sync_mock = patch.object(
+            harness._raid_bot.auth_manager.token_error_handler,
+            "restore_bot_banned_channel",
+            return_value=True,
+        )
+        harness.api.get_chatters_result = AsyncMock(
+            return_value={
+                "ok": True,
+                "data": [{"user_login": "lurker_ok", "user_id": "99"}],
+                "http_status": 200,
+                "error_code": None,
+                "request_attempted": True,
+            }
+        )
+
+        with restore_sync_mock as restore_method:
+            result = await harness._poll_chatters_single(
+                "1001",
+                "partner_one",
+                101,
+                "2026-03-28T00:56:00+00:00",
+                token="streamer-token",
+            )
+
+        self.assertEqual(
+            result,
+            (101, "partner_one", [{"user_login": "lurker_ok", "user_id": "99"}]),
+        )
+        restore_method.assert_called_once_with("1001", "partner_one")

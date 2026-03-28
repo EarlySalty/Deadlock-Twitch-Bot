@@ -843,6 +843,23 @@ class ConnectionMixin:
         return False
 
     @staticmethod
+    def _looks_like_invalid_streamer_token_error(status: int | None, text: str) -> bool:
+        lowered = str(text or "").lower()
+        if status != 401:
+            return False
+        return any(
+            marker in lowered
+            for marker in (
+                "invalid access token",
+                "invalid oauth token",
+                "oauth token is missing",
+                "missing required authentication",
+                "unauthorized",
+                "token",
+            )
+        )
+
+    @staticmethod
     def _is_partner_channel_for_chat_tracking(login: str) -> bool:
         """Check if channel is a partner (wrapper for partner_utils)."""
         return is_partner_channel_for_chat_tracking(login)
@@ -851,7 +868,7 @@ class ConnectionMixin:
     def _is_partner_channel_for_blacklist_skip(login: str) -> bool:
         return is_operational_partner_channel(login)
 
-    def _blacklist_streamer_for_bot_ban(
+    async def _blacklist_streamer_for_bot_ban(
         self,
         broadcaster_id: str | None,
         broadcaster_login: str,
@@ -861,19 +878,6 @@ class ConnectionMixin:
         login = str(broadcaster_login or "").strip().lower().lstrip("#")
         if not login:
             return
-        try:
-            if self._is_partner_channel_for_blacklist_skip(login):
-                log.info(
-                    "Blacklist übersprungen für aktiven Partner-Channel %s (_ensure_bot_is_mod)",
-                    login,
-                )
-                return
-        except Exception:
-            log.debug(
-                "Partner-Check in _ensure_bot_is_mod fehlgeschlagen fuer %s",
-                login,
-                exc_info=True,
-            )
 
         target_id = str(broadcaster_id or "").strip() or None
         snippet = (text or "").replace("\n", " ").strip()[:180]
@@ -882,6 +886,29 @@ class ConnectionMixin:
             reason += f" (HTTP {status})"
         if snippet:
             reason += f": {snippet}"
+        already_flagged = False
+        try:
+            with readonly_connection() as conn:
+                row = conn.execute(
+                    """
+                    SELECT reason
+                    FROM twitch_raid_blacklist
+                    WHERE LOWER(target_login) = LOWER(%s)
+                    LIMIT 1
+                    """,
+                    (login,),
+                ).fetchone()
+                if row is not None:
+                    existing_reason = str(
+                        row[0] if not hasattr(row, "keys") else row["reason"] or ""
+                    ).strip()
+                    already_flagged = "bot_banned" in existing_reason.lower()
+        except Exception:
+            log.debug(
+                "Konnte vorhandenen Bot-Ban-Status nicht lesen fuer %s",
+                login,
+                exc_info=True,
+            )
 
         raid_bot = getattr(self, "_raid_bot", None)
         if raid_bot and hasattr(raid_bot, "_add_to_blacklist"):
@@ -902,6 +929,29 @@ class ConnectionMixin:
             except Exception:
                 log.debug(
                     "Konnte Bot-Ban Blacklist nicht schreiben fuer %s",
+                    login,
+                    exc_info=True,
+                )
+
+        auth_manager = getattr(raid_bot, "auth_manager", None) if raid_bot else None
+        token_error_handler = (
+            getattr(auth_manager, "token_error_handler", None) if auth_manager else None
+        )
+        if (
+            not already_flagged
+            and target_id
+            and token_error_handler is not None
+            and hasattr(token_error_handler, "handle_bot_banned_channel")
+        ):
+            try:
+                await token_error_handler.handle_bot_banned_channel(
+                    twitch_user_id=str(target_id),
+                    twitch_login=login,
+                    error_message=reason,
+                )
+            except Exception:
+                log.debug(
+                    "Bot-Ban Opt-out/DM fehlgeschlagen fuer %s",
                     login,
                     exc_info=True,
                 )
@@ -977,12 +1027,41 @@ class ConnectionMixin:
                         return True
                     txt = await r.text()
                     if self._looks_like_bot_banned_error(r.status, txt):
-                        self._blacklist_streamer_for_bot_ban(
+                        await self._blacklist_streamer_for_bot_ban(
                             broadcaster_id=str(broadcaster_id),
                             broadcaster_login=broadcaster_login,
                             status=r.status,
                             text=txt,
                         )
+                    elif self._looks_like_invalid_streamer_token_error(r.status, txt):
+                        token_error_handler = getattr(
+                            getattr(raid_bot, "auth_manager", None),
+                            "token_error_handler",
+                            None,
+                        )
+                        if token_error_handler is not None:
+                            try:
+                                error_message = (
+                                    f"HTTP {r.status}: "
+                                    f"{txt[:300].replace(chr(10), ' ').strip()}"
+                                )
+                                token_error_handler.add_to_blacklist(
+                                    twitch_user_id=str(broadcaster_id),
+                                    twitch_login=broadcaster_login,
+                                    error_message=error_message,
+                                )
+                                if getattr(token_error_handler, "discord_bot", None):
+                                    await token_error_handler.notify_token_error(
+                                        twitch_user_id=str(broadcaster_id),
+                                        twitch_login=broadcaster_login,
+                                        error_message=error_message,
+                                    )
+                            except Exception:
+                                log.debug(
+                                    "_ensure_bot_is_mod: invalid-token handling failed for %s",
+                                    broadcaster_login,
+                                    exc_info=True,
+                                )
                     # 400 "user is banned" → Bot wurde im Channel gebannt,
                     # Mod-Status kann nicht gesetzt werden bis der Ban aufgehoben wurde
                     log.warning(
