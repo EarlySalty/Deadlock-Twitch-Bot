@@ -12,12 +12,30 @@ from bot import logging_setup
 
 
 class LoggingSetupTests(unittest.TestCase):
+    def test_looks_like_test_runtime_detects_unittest_module_target(self) -> None:
+        with patch.object(
+            logging_setup.sys,
+            "argv",
+            ["C:/Python311/Lib/unittest/__main__.py", "tests.test_logging_setup"],
+        ):
+            with patch.dict(logging_setup.sys.modules, {"unittest": object()}, clear=False):
+                self.assertTrue(logging_setup._looks_like_test_runtime())
+
     def test_log_path_uses_project_logs_dir_and_strips_nested_input(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             with patch.object(logging_setup, "_LOGS_DIR", Path(tmpdir)):
-                resolved = logging_setup.log_path("nested/twitch_autobans.log")
+                with patch.object(logging_setup, "_looks_like_test_runtime", return_value=False):
+                    resolved = logging_setup.log_path("nested/twitch_autobans.log")
 
         self.assertEqual(resolved, Path(tmpdir) / "twitch_autobans.log")
+
+    def test_log_path_uses_separate_test_logs_dir_during_test_runtime(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with patch.object(logging_setup, "_LOGS_DIR", Path(tmpdir)):
+                with patch.object(logging_setup, "_looks_like_test_runtime", return_value=True):
+                    resolved = logging_setup.log_path("nested/twitch_autobans.log")
+
+        self.assertEqual(resolved, Path(tmpdir) / "test" / "twitch_autobans.log")
 
     def test_ensure_twitch_logger_file_handler_is_idempotent(self) -> None:
         logger_name = "TwitchStreams.TestLoggingSetup"
@@ -38,8 +56,9 @@ class LoggingSetupTests(unittest.TestCase):
 
             with patch.object(logging_setup, "_LOGS_DIR", Path(tmpdir)):
                 with patch.object(logging_setup, "_TWITCH_LOGGER_NAME", logger_name):
-                    logging_setup.ensure_twitch_logger_file_handler()
-                    logging_setup.ensure_twitch_logger_file_handler()
+                    with patch.object(logging_setup, "_looks_like_test_runtime", return_value=False):
+                        logging_setup.ensure_twitch_logger_file_handler()
+                        logging_setup.ensure_twitch_logger_file_handler()
 
                     handlers = [
                         handler
@@ -76,8 +95,9 @@ class LoggingSetupTests(unittest.TestCase):
 
             with patch.object(logging_setup, "_LOGS_DIR", Path(tmpdir)):
                 with patch.object(logging_setup, "_TWITCH_LOGGER_NAME", logger_name):
-                    with patch.dict(os.environ, {"TWITCH_SPLIT_RUNTIME_ROLE": "dashboard"}, clear=False):
-                        logging_setup.ensure_twitch_logger_file_handler()
+                    with patch.object(logging_setup, "_looks_like_test_runtime", return_value=False):
+                        with patch.dict(os.environ, {"TWITCH_SPLIT_RUNTIME_ROLE": "dashboard"}, clear=False):
+                            logging_setup.ensure_twitch_logger_file_handler()
 
                     handlers = [
                         handler

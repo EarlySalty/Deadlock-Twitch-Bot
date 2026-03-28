@@ -3,10 +3,12 @@ from __future__ import annotations
 import logging
 import logging.handlers
 import os
+import sys
 from pathlib import Path
 
 _PROJECT_ROOT = Path(__file__).resolve().parents[1]
 _LOGS_DIR = _PROJECT_ROOT / "logs"
+_TEST_LOGS_SUBDIR = "test"
 _TWITCH_LOGGER_NAME = "TwitchStreams"
 _DEFAULT_TWITCH_LOG_FILENAME = "twitch_bot.log"
 _DASHBOARD_TWITCH_LOG_FILENAME = "twitch_dashboard.log"
@@ -23,9 +25,37 @@ def project_root() -> Path:
     return _PROJECT_ROOT
 
 
+def _looks_like_test_runtime() -> bool:
+    argv = [str(arg or "") for arg in sys.argv]
+    argv_lower = [arg.strip().lower() for arg in argv]
+    argv_normalized = [arg.replace("\\", "/").strip().lower() for arg in argv]
+    entrypoint = Path(argv[0]).as_posix().lower() if argv else ""
+
+    if any(name == "pytest" or name.startswith("pytest.") for name in sys.modules):
+        return True
+    if any("pytest" in arg for arg in argv_lower):
+        return True
+    if "/tests/" in entrypoint or entrypoint.endswith("/tests") or Path(entrypoint).name.startswith("test_"):
+        return True
+    if "unittest" in sys.modules:
+        if "discover" in argv_lower:
+            return True
+        if any(
+            arg == "tests"
+            or arg.startswith("tests.")
+            or "/tests/" in arg
+            or arg.endswith("/tests")
+            or Path(arg).name.startswith("test_")
+            for arg in argv_normalized
+        ):
+            return True
+    return False
+
+
 def logs_dir() -> Path:
-    _LOGS_DIR.mkdir(parents=True, exist_ok=True)
-    return _LOGS_DIR
+    target_dir = _LOGS_DIR / _TEST_LOGS_SUBDIR if _looks_like_test_runtime() else _LOGS_DIR
+    target_dir.mkdir(parents=True, exist_ok=True)
+    return target_dir
 
 
 def log_path(filename: str) -> Path:
