@@ -488,6 +488,43 @@ CREATE INDEX IF NOT EXISTS idx_twitch_raid_arrival_tracking_source
 CREATE INDEX IF NOT EXISTS idx_twitch_raid_arrival_tracking_history_ref
     ON twitch_raid_arrival_tracking(raid_history_id, raid_history_executed_at);
 
+CREATE TABLE IF NOT EXISTS twitch_confirmed_external_recruitment_raids (
+    id                     BIGSERIAL PRIMARY KEY,
+    raid_flow_id           TEXT UNIQUE,
+    from_broadcaster_id    TEXT,
+    from_broadcaster_login TEXT NOT NULL,
+    to_broadcaster_id      TEXT NOT NULL,
+    to_broadcaster_login   TEXT NOT NULL,
+    viewer_count           INTEGER DEFAULT 0,
+    confirmation_signal    TEXT,
+    confirmed_at           TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_confirmed_external_recruitment_raids_target
+    ON twitch_confirmed_external_recruitment_raids(to_broadcaster_id);
+
+CREATE TABLE IF NOT EXISTS twitch_external_recruitment_blacklist_pending (
+    target_id            TEXT PRIMARY KEY,
+    target_login         TEXT NOT NULL,
+    confirmed_raid_count INTEGER NOT NULL,
+    threshold_reached_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    blacklist_after      TIMESTAMPTZ NOT NULL,
+    last_raid_flow_id    TEXT,
+    updated_at           TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_external_recruitment_blacklist_pending_due
+    ON twitch_external_recruitment_blacklist_pending(blacklist_after);
+
+CREATE TABLE IF NOT EXISTS twitch_external_bot_ban_check_pending (
+    target_id    TEXT PRIMARY KEY,
+    target_login TEXT NOT NULL,
+    source       TEXT NOT NULL,
+    run_after    TIMESTAMPTZ NOT NULL,
+    scheduled_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_external_bot_ban_check_pending_due
+    ON twitch_external_bot_ban_check_pending(run_after);
+
 -- ========= Snapshots =========
 CREATE TABLE IF NOT EXISTS twitch_subscriptions_snapshot (
     id             BIGSERIAL PRIMARY KEY,

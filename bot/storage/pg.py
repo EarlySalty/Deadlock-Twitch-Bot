@@ -91,7 +91,7 @@ ENV_DSN = "TWITCH_ANALYTICS_DSN"
 _DB_FINGERPRINT_SALT = b"deadlock.analytics-db-fingerprint.v1"
 _DB_FINGERPRINT_ITERATIONS = 100_000
 _RUNTIME_SCHEMA_COMPONENT = "storage_pg"
-_RUNTIME_SCHEMA_VERSION = 2
+_RUNTIME_SCHEMA_VERSION = 3
 _RUNTIME_SCHEMA_BOOTSTRAP_ENV = "TWITCH_ALLOW_RUNTIME_SCHEMA_BOOTSTRAP"
 
 
@@ -705,6 +705,15 @@ def _apply_runtime_schema_migrations(
         ensure_schema(conn)
         _record_runtime_schema_version(conn, 2)
         version = 2
+    if version < 3:
+        if not _runtime_schema_bootstrap_allowed():
+            raise RuntimeError(
+                "Runtime schema bootstrap is disabled. Apply the PostgreSQL migrations before startup "
+                f"or set {_RUNTIME_SCHEMA_BOOTSTRAP_ENV}=1 only for controlled local bootstrap."
+            )
+        ensure_schema(conn)
+        _record_runtime_schema_version(conn, 3)
+        version = 3
     return version
 
 

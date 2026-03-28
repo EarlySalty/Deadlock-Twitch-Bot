@@ -495,13 +495,46 @@ class ConnectionPoolArchitectureTests(unittest.TestCase):
         ):
             prepare_runtime_storage()
 
-        ensure_mock.assert_called_once_with(conn)
+        self.assertGreaterEqual(ensure_mock.call_count, 1)
+        ensure_mock.assert_called_with(conn)
         self.assertTrue(
             any("CREATE TABLE IF NOT EXISTS schema_version" in sql for sql, _ in conn.executed)
         )
         self.assertTrue(
             any(
                 "INSERT INTO schema_version" in sql and params == ("storage_pg", 1)
+                for sql, params in conn.executed
+            )
+        )
+        self.assertTrue(
+            any(
+                "INSERT INTO schema_version" in sql and params == ("storage_pg", 3)
+                for sql, params in conn.executed
+            )
+        )
+
+    def test_prepare_runtime_storage_upgrades_existing_runtime_schema_v2_to_v3(self) -> None:
+        conn = _RuntimeSchemaVersionConnection(
+            "conn-version-upgrade",
+            schema_version_exists=True,
+            version_row=(2,),
+        )
+
+        with (
+            patch.dict("os.environ", {"TWITCH_ALLOW_RUNTIME_SCHEMA_BOOTSTRAP": "1"}, clear=False),
+            patch("bot.storage.pg.psycopg.connect", return_value=conn),
+            patch(
+                "bot.storage.pg._load_dsn",
+                return_value="postgresql://demo@host:5432/db",
+            ),
+            patch("bot.storage.pg.ensure_schema") as ensure_mock,
+        ):
+            prepare_runtime_storage()
+
+        ensure_mock.assert_called_once_with(conn)
+        self.assertTrue(
+            any(
+                "INSERT INTO schema_version" in sql and params == ("storage_pg", 3)
                 for sql, params in conn.executed
             )
         )
