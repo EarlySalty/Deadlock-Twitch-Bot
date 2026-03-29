@@ -25,7 +25,7 @@ from ..core.constants import (
     log,
 )
 from ..dashboard.server_v2 import build_v2_app
-from ..dashboard.runtime import DashboardRuntimeServices
+from ..runtime.dashboard_runtime import DashboardRuntimeServices
 from ..runtime_lock import runtime_pid_lock
 from ..runtime_mode import (
     INTERNAL_API_PORT as RUNTIME_INTERNAL_API_PORT,
@@ -234,12 +234,31 @@ def build_dashboard_service_app(
             exc,
         )
 
-    def _upstream_unavailable_error() -> BotApiClientError:
+    def _upstream_unavailable_error(
+        context: str,
+        exc: BotApiClientError | None = None,
+    ) -> BotApiClientError:
+        if exc is not None:
+            _warn_upstream_once(context, exc)
+        elif client is None:
+            _warn_upstream_once(
+                context,
+                BotApiClientError(
+                    status=503,
+                    code="upstream_unavailable",
+                    message="Bot internal API is unavailable.",
+                ),
+            )
         return BotApiClientError(
             status=503,
             code="upstream_unavailable",
             message="Bot internal API is unavailable.",
         )
+
+    def _is_upstream_failure(exc: BotApiClientError) -> bool:
+        status = int(getattr(exc, "status", 0) or 0)
+        code = str(getattr(exc, "code", "") or "").strip().lower()
+        return status >= 500 or code.startswith("upstream_")
 
     def _upstream_service_unavailable(
         context: str,
@@ -260,21 +279,23 @@ def build_dashboard_service_app(
 
     async def _add_cb(login: str, require_link: bool) -> str:
         if client is None:
-            return "Bot internal API unavailable; action not applied."
+            raise _upstream_unavailable_error("streamer_add")
         try:
             return await client.add_streamer(login, require_link=require_link)
         except BotApiClientError as exc:
-            _warn_upstream_once("streamer_add", exc)
-            return "Bot internal API unavailable; action not applied."
+            if not _is_upstream_failure(exc):
+                raise
+            raise _upstream_unavailable_error("streamer_add", exc) from exc
 
     async def _remove_cb(login: str) -> str:
         if client is None:
-            return "Bot internal API unavailable; action not applied."
+            raise _upstream_unavailable_error("streamer_remove")
         try:
             return await client.remove_streamer(login)
         except BotApiClientError as exc:
-            _warn_upstream_once("streamer_remove", exc)
-            return "Bot internal API unavailable; action not applied."
+            if not _is_upstream_failure(exc):
+                raise
+            raise _upstream_unavailable_error("streamer_remove", exc) from exc
 
     async def _list_cb() -> list[dict[str, Any]]:
         if client is None:
@@ -298,30 +319,33 @@ def build_dashboard_service_app(
 
     async def _verify_cb(login: str, mode: str) -> str:
         if client is None:
-            return "Bot internal API unavailable; action not applied."
+            raise _upstream_unavailable_error("streamer_verify")
         try:
             return await client.verify_streamer(login, mode=mode)
         except BotApiClientError as exc:
-            _warn_upstream_once("streamer_verify", exc)
-            return "Bot internal API unavailable; action not applied."
+            if not _is_upstream_failure(exc):
+                raise
+            raise _upstream_unavailable_error("streamer_verify", exc) from exc
 
     async def _archive_cb(login: str, mode: str) -> str:
         if client is None:
-            return "Bot internal API unavailable; action not applied."
+            raise _upstream_unavailable_error("streamer_archive")
         try:
             return await client.archive_streamer(login, mode=mode)
         except BotApiClientError as exc:
-            _warn_upstream_once("streamer_archive", exc)
-            return "Bot internal API unavailable; action not applied."
+            if not _is_upstream_failure(exc):
+                raise
+            raise _upstream_unavailable_error("streamer_archive", exc) from exc
 
     async def _discord_flag_cb(login: str, is_on_discord: bool) -> str:
         if client is None:
-            return "Bot internal API unavailable; action not applied."
+            raise _upstream_unavailable_error("discord_flag")
         try:
             return await client.set_discord_flag(login, is_on_discord=is_on_discord)
         except BotApiClientError as exc:
-            _warn_upstream_once("discord_flag", exc)
-            return "Bot internal API unavailable; action not applied."
+            if not _is_upstream_failure(exc):
+                raise
+            raise _upstream_unavailable_error("discord_flag", exc) from exc
 
     async def _discord_profile_cb(
         login: str,
@@ -330,7 +354,7 @@ def build_dashboard_service_app(
         mark_member: bool,
     ) -> str:
         if client is None:
-            return "Bot internal API unavailable; action not applied."
+            raise _upstream_unavailable_error("discord_profile")
         try:
             return await client.save_discord_profile(
                 login,
@@ -339,8 +363,9 @@ def build_dashboard_service_app(
                 mark_member=mark_member,
             )
         except BotApiClientError as exc:
-            _warn_upstream_once("discord_profile", exc)
-            return "Bot internal API unavailable; action not applied."
+            if not _is_upstream_failure(exc):
+                raise
+            raise _upstream_unavailable_error("discord_profile", exc) from exc
 
     async def _raid_auth_url_cb(
         login: str,
@@ -432,7 +457,6 @@ def build_dashboard_service_app(
         discord_flag_cb=_discord_flag_cb,
         discord_profile_cb=_discord_profile_cb,
         raid_history_cb=None,
-        raid_bot=None,
         raid_auth_url_cb=_raid_auth_url_cb,
         raid_go_url_cb=_raid_go_url_cb,
         raid_requirements_cb=_raid_requirements_cb,

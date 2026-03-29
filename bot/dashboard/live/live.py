@@ -14,6 +14,7 @@ from ... import storage as _storage
 from ...core.constants import log
 from ...raid.scope_profiles import BASE_CRITICAL_STREAMER_SCOPES, BASE_STREAMER_SCOPES
 from ..billing.billing_plans import BILLING_PLANS as _BILLING_PLANS
+from ..upstream_errors import is_upstream_service_error
 
 # Alle Broadcaster-Scopes, die ein vollständig autorisierter Streamer haben sollte.
 _REQUIRED_SCOPES: list[str] = list(BASE_STREAMER_SCOPES)
@@ -1692,6 +1693,8 @@ class DashboardLiveMixin:
         except web.HTTPException:
             raise
         except Exception as e:
+            if is_upstream_service_error(e):
+                raise web.HTTPFound(location="/twitch?err=" + quote_plus("could not add (twitch api)"))
             log.exception("dashboard add_any failed: %s", e)
             raise web.HTTPFound(location="/twitch?err=" + quote_plus("could not add (twitch api)"))
 
@@ -1706,6 +1709,8 @@ class DashboardLiveMixin:
         except web.HTTPException:
             raise
         except Exception as e:
+            if is_upstream_service_error(e):
+                raise web.HTTPFound(location="/twitch?err=" + quote_plus("could not add (twitch api)"))
             log.exception("dashboard add_url failed: %s", e)
             raise web.HTTPFound(location="/twitch?err=" + quote_plus("could not add (twitch api)"))
 
@@ -1720,6 +1725,8 @@ class DashboardLiveMixin:
         except web.HTTPException:
             raise
         except Exception as e:
+            if is_upstream_service_error(e):
+                raise web.HTTPFound(location="/twitch?err=" + quote_plus("could not add (twitch api)"))
             log.exception("dashboard add_login failed: %s", e)
             raise web.HTTPFound(location="/twitch?err=" + quote_plus("could not add (twitch api)"))
 
@@ -1743,6 +1750,12 @@ class DashboardLiveMixin:
             location = self._redirect_location(request, err=err_text)
             raise web.HTTPFound(location=location)
         except Exception as exc:
+            if is_upstream_service_error(exc):
+                location = self._redirect_location(
+                    request,
+                    err="Twitch-Streamer konnte nicht hinzugefügt werden",
+                )
+                raise web.HTTPFound(location=location)
             log.exception("dashboard add_streamer failed: %s", exc)
             location = self._redirect_location(
                 request, err="Twitch-Streamer konnte nicht hinzugefügt werden"
@@ -1763,6 +1776,11 @@ class DashboardLiveMixin:
                 location = self._redirect_location(request, err=str(exc))
                 raise web.HTTPFound(location=location)
             except Exception as exc:
+                if is_upstream_service_error(exc):
+                    location = self._redirect_location(
+                        request, err="Discord-Daten konnten nicht gespeichert werden"
+                    )
+                    raise web.HTTPFound(location=location)
                 log.exception("dashboard add_streamer discord save failed: %s", exc)
                 location = self._redirect_location(
                     request, err="Discord-Daten konnten nicht gespeichert werden"
@@ -1952,6 +1970,11 @@ class DashboardLiveMixin:
         except ValueError as exc:
             location = self._redirect_location(request, err=str(exc))
         except Exception as exc:
+            if is_upstream_service_error(exc):
+                location = self._redirect_location(
+                    request, err="Discord-Markierung konnte nicht aktualisiert werden"
+                )
+                raise web.HTTPFound(location=location)
             log.exception("dashboard discord_flag failed: %s", exc)
             location = self._redirect_location(
                 request, err="Discord-Markierung konnte nicht aktualisiert werden"
@@ -1978,6 +2001,11 @@ class DashboardLiveMixin:
         except ValueError as exc:
             location = self._redirect_location(request, err=str(exc))
         except Exception as exc:
+            if is_upstream_service_error(exc):
+                location = self._redirect_location(
+                    request, err="Discord-Daten konnten nicht gespeichert werden"
+                )
+                raise web.HTTPFound(location=location)
             log.exception("dashboard discord_link failed: %s", exc)
             location = self._redirect_location(
                 request, err="Discord-Daten konnten nicht gespeichert werden"
@@ -1996,9 +2024,12 @@ class DashboardLiveMixin:
         except web.HTTPException:
             raise
         except Exception as e:
+            if is_upstream_service_error(e):
+                location = self._redirect_location(request, err="could not remove")
+                raise web.HTTPFound(location=location)
             log.exception("dashboard remove failed: %s", e)
             location = self._redirect_location(request, err="could not remove")
-            raise web.HTTPFound(location=location)
+        raise web.HTTPFound(location=location)
 
     async def verify(self, request: web.Request):
         self._require_token(request)
@@ -2013,9 +2044,12 @@ class DashboardLiveMixin:
         except web.HTTPException:
             raise
         except Exception as e:
+            if is_upstream_service_error(e):
+                location = self._redirect_location(request, err="Verifizierung fehlgeschlagen")
+                raise web.HTTPFound(location=location)
             log.exception("dashboard verify failed: %s", e)
             location = self._redirect_location(request, err="Verifizierung fehlgeschlagen")
-            raise web.HTTPFound(location=location)
+        raise web.HTTPFound(location=location)
 
     async def archive(self, request: web.Request):
         self._require_token(request)
@@ -2028,6 +2062,9 @@ class DashboardLiveMixin:
         except ValueError as exc:
             location = self._redirect_location(request, err=str(exc))
         except Exception as exc:
+            if is_upstream_service_error(exc):
+                location = self._redirect_location(request, err="Archivierung fehlgeschlagen")
+                raise web.HTTPFound(location=location)
             log.exception("dashboard archive failed: %s", exc)
             location = self._redirect_location(request, err="Archivierung fehlgeschlagen")
         raise web.HTTPFound(location=location)

@@ -115,9 +115,19 @@ wired die Dashboard-App nur ueber Clients/Callbacks.
 
 ## Internal API
 
-`bot/internal_api/app.py` definiert die bot-interne HTTP-Schnittstelle. Diese Schicht ist die
-bevorzugte Bruecke zwischen DashboardRuntime und BotRuntime, wenn Dashboard-Funktionalitaet
-Bot-Zustand benoetigt.
+`bot/internal_api/` ist jetzt nach Verantwortung aufgeteilt:
+
+- `app.py` baut die `aiohttp`-App zusammen und verdrahtet Middleware, Server und Route-Gruppen.
+- `contracts.py` enthaelt Header, Pfade, Callback-Typen und das `InternalApiCallbacks`-Bundle.
+- `policy.py` enthaelt Normalisierung, Host-/Token-Pruefungen, JSON-Helfer und Fehleraufbereitung.
+- `routes/telemetry.py` enthaelt Health-, Observability-, Chatters- und Live-Route-Handler.
+- `routes/streamers.py` registriert Streamer-, Statistik- und Session-Routen.
+- `routes/raid.py` registriert Raid-Auth- und Raid-OAuth-Routen.
+
+Die Schicht bleibt die bevorzugte Bruecke zwischen DashboardRuntime und BotRuntime, wenn
+Dashboard-Funktionalitaet Bot-Zustand benoetigt. Die Regel ist: `app.py` assembliert nur noch,
+die fachliche Route-Logik lebt in den Route-Modulen, und gemeinsame Contracts liegen in
+`contracts.py` bzw. `policy.py`.
 
 ## Kompatibilitaet
 

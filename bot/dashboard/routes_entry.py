@@ -9,6 +9,7 @@ from aiohttp import web
 from .live.live import DashboardLiveMixin
 from .pages import build_roadmap_body, build_scope_panel, build_stats_entry_page
 from .route_deps import EntryRouteDeps
+from .upstream_errors import is_upstream_service_error
 
 
 ROADMAP_BODY = build_roadmap_body()
@@ -244,7 +245,13 @@ async def discord_link(
         location = server._redirect_location(request, ok=message)
     except ValueError as exc:
         location = server._redirect_location(request, err=str(exc))
-    except Exception:
+    except Exception as exc:
+        if is_upstream_service_error(exc):
+            location = server._redirect_location(
+                request, err="Discord-Daten konnten nicht gespeichert werden"
+            )
+            safe_location = server._safe_internal_redirect(location, fallback="/twitch/stats")
+            raise web.HTTPFound(location=safe_location)
         log.exception("dashboard discord_link failed")
         location = server._redirect_location(
             request, err="Discord-Daten konnten nicht gespeichert werden"

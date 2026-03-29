@@ -147,6 +147,16 @@ class InternalApiClientTests(unittest.IsolatedAsyncioTestCase):
             },
         )
 
+    def test_rejects_non_loopback_http_base_url_even_with_override_enabled(self) -> None:
+        with self.assertRaises(ValueError) as ctx:
+            InternalApiClient(
+                base_url="http://10.0.0.20:8776",
+                token="secret",
+                allow_non_loopback=True,
+            )
+
+        self.assertIn("https", str(ctx.exception).lower())
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -404,14 +404,17 @@ class BotApiClientErrorMappingTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertIn("loopback", str(ctx.exception).lower())
 
-    def test_allows_non_loopback_base_url_when_override_enabled(self) -> None:
-        client = BotApiClient(
-            base_url="http://10.0.0.20:8766",
-            token="secret",
-            allow_non_loopback=True,
-        )
+    def test_requires_https_for_non_loopback_base_url_even_with_override_enabled(
+        self,
+    ) -> None:
+        with self.assertRaises(ValueError) as ctx:
+            BotApiClient(
+                base_url="http://10.0.0.20:8766",
+                token="secret",
+                allow_non_loopback=True,
+            )
 
-        self.assertEqual(client._base_url, "http://10.0.0.20:8766")
+        self.assertIn("https", str(ctx.exception).lower())
 
     def test_dashboard_service_fails_fast_when_noauth_without_allow_override(
         self,

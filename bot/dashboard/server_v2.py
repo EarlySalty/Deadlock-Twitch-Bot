@@ -15,8 +15,9 @@ from aiohttp import web
 from ..analytics.api_v2 import AnalyticsV2Mixin
 from ..core.constants import log
 from ..core.twitch_login import normalize_twitch_login
+from ..runtime.contracts import DashboardBotService
+from ..runtime.dashboard_runtime import DashboardRuntimeServices
 from ..storage import pg as storage_pg
-from .runtime import DashboardBotService, DashboardRuntimeServices
 from .admin.legal_mixin import _DashboardLegalMixin
 from .affiliate.affiliate_mixin import _DashboardAffiliateMixin
 from .auth.auth_mixin import _DashboardAuthMixin
@@ -121,7 +122,6 @@ class DashboardV2Server(
         discord_profile_cb: Callable[[str, str | None, str | None, bool], Awaitable[str]]
         | None = None,
         raid_history_cb: Callable[..., Awaitable[list[dict]]] | None = None,
-        raid_bot: Any | None = None,
         raid_auth_url_cb: Callable[[str], Awaitable[str]] | None = None,
         raid_go_url_cb: Callable[[str], Awaitable[str | None]] | None = None,
         raid_requirements_cb: Callable[[str], Awaitable[str]] | None = None,
@@ -131,20 +131,9 @@ class DashboardV2Server(
         social_media_twitch_api: Any | None = None,
     ) -> None:
         services = dashboard_services or DashboardRuntimeServices()
-        bot_service = services.bot_service
-        if raid_bot is not None and bot_service.raid_bot is None:
-            bot_service.raid_bot = raid_bot
-        if social_media_clip_manager is not None and bot_service.clip_manager is None:
-            bot_service.clip_manager = social_media_clip_manager
-        if social_media_twitch_api is not None and bot_service.twitch_api is None:
-            bot_service.twitch_api = social_media_twitch_api
-        if eventsub_webhook_handler := services.eventsub_webhook_handler:
-            if bot_service.eventsub_webhook_handler is None:
-                bot_service.eventsub_webhook_handler = eventsub_webhook_handler
-        if callable(reload_cb) and bot_service.reload_cb is None:
-            bot_service.reload_cb = reload_cb
+        bot_service = services.bot_service or DashboardBotService()
         self._dashboard_services = services
-        self._dashboard_bot_service = bot_service
+        self._dashboard_bot_service_view = bot_service
         self._token = app_token
         self._noauth = noauth
         self._partner_token = partner_token
@@ -193,7 +182,7 @@ class DashboardV2Server(
             if callable(reload_cb)
             else services.reload_cb
             if callable(services.reload_cb)
-            else bot_service.reload_cb
+            else bot_service.reload_cb()
         )
         self._session_cookie_name = "twitch_dash_session"
         self._oauth_states: dict[str, dict[str, Any]] = {}
@@ -240,16 +229,14 @@ class DashboardV2Server(
         self._social_media_clip_manager = (
             social_media_clip_manager
             or services.social_media_clip_manager
-            or bot_service.clip_manager
+            or bot_service.clip_manager()
         )
         self._social_media_twitch_api = (
             social_media_twitch_api
             or services.social_media_twitch_api
-            or bot_service.twitch_api
+            or bot_service.twitch_api()
         )
-        self._redirect_uri = str(
-            getattr(self._dashboard_auth_manager(), "redirect_uri", "") or ""
-        ).strip()
+        self._redirect_uri = str(getattr(self._dashboard_auth_manager(), "redirect_uri", "") or "").strip()
         self._master_dashboard_href = "/twitch/admin"
         keyring_client_id = self._load_secret_value("DISCORD_OAUTH_CLIENT_ID")
         discord_bot = self._dashboard_discord_bot()
@@ -298,7 +285,7 @@ class DashboardV2Server(
             )
 
     def _dashboard_bot_runtime(self) -> DashboardBotService:
-        return getattr(self, "_dashboard_bot_service", DashboardBotService())
+        return getattr(self, "_dashboard_bot_service_view", DashboardBotService())
 
     def _dashboard_auth_manager(self) -> Any | None:
         return self._dashboard_bot_runtime().auth_manager()
@@ -316,22 +303,22 @@ class DashboardV2Server(
         twitch_api = getattr(self, "_social_media_twitch_api", None)
         if twitch_api is not None:
             return twitch_api
-        return self._dashboard_bot_runtime().twitch_api
+        return self._dashboard_bot_runtime().twitch_api()
 
     def _dashboard_clip_manager(self) -> Any | None:
         clip_manager = getattr(self, "_social_media_clip_manager", None)
         if clip_manager is not None:
             return clip_manager
-        return self._dashboard_bot_runtime().clip_manager
+        return self._dashboard_bot_runtime().clip_manager()
 
     def _dashboard_eventsub_webhook_handler(self) -> Any | None:
         handler = getattr(self._dashboard_services, "eventsub_webhook_handler", None)
         if handler is not None:
             return handler
-        return self._dashboard_bot_runtime().eventsub_webhook_handler
+        return self._dashboard_bot_runtime().eventsub_webhook_handler()
 
     def _dashboard_schedule_background(self, coro: Awaitable[Any], name: str) -> Any | None:
-        scheduler = self._dashboard_bot_runtime().schedule_background
+        scheduler = self._dashboard_bot_runtime().schedule_background()
         if not callable(scheduler):
             return None
         return scheduler(coro, name)
@@ -736,9 +723,9 @@ class DashboardV2Server(
         admin_header = request.headers.get("X-Admin-Token")
 
         if self._partner_token:
-            if partner_header == self._partner_token:
+            if secrets.compare_digest(str(partner_header or ""), str(self._partner_token)):
                 return
-            if admin_header == self._token:
+            if secrets.compare_digest(str(admin_header or ""), str(self._token)):
                 return
             raise web.HTTPUnauthorized(text="missing or invalid partner token")
         raise web.HTTPUnauthorized(text="missing or invalid partner token")
@@ -886,7 +873,6 @@ def build_v2_app(
     discord_flag_cb: Callable[[str, bool], Awaitable[str]] | None = None,
     discord_profile_cb: Callable[[str, str | None, str | None, bool], Awaitable[str]] | None = None,
     raid_history_cb: Callable[..., Awaitable[list[dict]]] | None = None,
-    raid_bot: Any | None = None,
     raid_auth_url_cb: Callable[[str], Awaitable[str]] | None = None,
     raid_go_url_cb: Callable[[str], Awaitable[str | None]] | None = None,
     raid_requirements_cb: Callable[[str], Awaitable[str]] | None = None,
@@ -917,7 +903,6 @@ def build_v2_app(
         discord_flag_cb=discord_flag_cb,
         discord_profile_cb=discord_profile_cb,
         raid_history_cb=raid_history_cb,
-        raid_bot=raid_bot,
         raid_auth_url_cb=raid_auth_url_cb,
         raid_go_url_cb=raid_go_url_cb,
         raid_requirements_cb=raid_requirements_cb,

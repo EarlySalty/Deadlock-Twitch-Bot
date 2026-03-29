@@ -1127,6 +1127,43 @@ class OfflineRaidSourceLoggingTests(unittest.IsolatedAsyncioTestCase):
             side_effect=lambda: contextlib.nullcontext(self.conn),
         )
 
+    async def test_handle_auto_raid_partner_lookup_uses_to_thread(self) -> None:
+        self.conn.execute(
+            """
+            INSERT INTO twitch_streamers (twitch_login, twitch_user_id, raid_bot_enabled)
+            VALUES (?, ?, 1)
+            """,
+            ("source_login", "1001"),
+        )
+
+        seen_calls: list[tuple[object, tuple[object, ...]]] = []
+
+        async def _fake_to_thread(func, *args, **kwargs):
+            del kwargs
+            seen_calls.append((func, args))
+            return func(*args)
+
+        with (
+            self._conn_patch(),
+            patch("bot.raid.mixin.asyncio.to_thread", side_effect=_fake_to_thread),
+        ):
+            await self.harness._handle_auto_raid_on_offline(
+                login="source_login",
+                twitch_user_id="1001",
+                previous_state={
+                    "last_game": "Deadlock",
+                    "had_deadlock_in_session": 1,
+                    "last_deadlock_seen_at": "2026-03-10T19:59:00+00:00",
+                    "last_started_at": "2026-03-10T19:00:00+00:00",
+                    "last_viewer_count": 12,
+                },
+                streams_by_login={},
+            )
+
+        self.assertGreaterEqual(len(seen_calls), 1)
+        self.assertIs(seen_calls[0][0], self.harness._load_auto_raid_partner_sync)
+        self.assertEqual(seen_calls[0][1], ("1001",))
+
     async def test_handle_auto_raid_logs_stale_deadlock_recency_reason(self) -> None:
         self.conn.execute(
             """

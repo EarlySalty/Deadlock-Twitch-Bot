@@ -19,11 +19,13 @@ from ..core.constants import (
     log,
 )
 from ..discord_role_sync import normalize_discord_user_id, sync_streamer_role
+from ..runtime.contracts import DashboardBotService
+from ..runtime.dashboard_runtime import DashboardRuntimeServices
+from ..runtime_security import require_noauth_loopback_guard
 from ..raid.integration_state import RaidIntegrationStateResolver
 from ..storage import pg as storage
 from ..raid.views import RaidAuthGenerateView, build_raid_requirements_embed
 from .raids.oauth_callback import build_raid_oauth_callback_payload
-from .runtime import DashboardBotService, DashboardRuntimeServices
 from .server_v2 import build_v2_app
 RAID_OAUTH_SUCCESS_REDIRECT_URL = "https://twitch.earlysalty.com/twitch/dashboard"
 PUBLIC_WEBSITE_ONBOARDING_LOGIN = "public:website_onboarding"
@@ -34,6 +36,28 @@ VERIFICATION_SUCCESS_DM_MESSAGE = (
     "Streamer-Teams. Wir melden uns, falls wir noch Fragen haben – ansonsten schauen wir uns deine Angaben kurz an. "
     "Bei Fragen kannst du dich gerne hier melden: https://discord.com/channels/1289721245281292288/1428062025145385111"
 )
+
+
+def _parse_env_bool(name: str, default: bool) -> bool:
+    raw = (os.getenv(name) or "").strip().lower()
+    if not raw:
+        return default
+    if raw in {"1", "true", "yes", "on"}:
+        return True
+    if raw in {"0", "false", "no", "off"}:
+        return False
+    return default
+
+
+def _require_embedded_dashboard_noauth_opt_in(*, enabled: bool) -> None:
+    if not enabled:
+        return
+    if _parse_env_bool("TWITCH_ALLOW_DASHBOARD_NOAUTH", False):
+        return
+    raise RuntimeError(
+        "Refusing to start embedded dashboard with no-auth enabled. "
+        "Set TWITCH_ALLOW_DASHBOARD_NOAUTH=1 only for controlled local debugging."
+    )
 
 
 def _row_to_dict(row) -> dict:
@@ -51,7 +75,31 @@ class TwitchDashboardMixin:
     """Expose the aiohttp dashboard endpoints."""
 
     def _dashboard_bot_service(self) -> DashboardBotService:
-        return DashboardBotService.from_cog(self)
+        services = getattr(self, "_dashboard_services", None)
+        bot_service = getattr(services, "bot_service", None)
+        if isinstance(bot_service, DashboardBotService):
+            return bot_service
+
+        raid_bot = getattr(self, "_raid_bot", None)
+        if raid_bot is None:
+            return DashboardBotService()
+
+        return DashboardBotService(
+            _auth_manager=getattr(raid_bot, "auth_manager", None),
+            _discord_bot=getattr(self, "bot", None),
+            _chat_bot=(
+                getattr(self, "_twitch_chat_bot", None)
+                or getattr(raid_bot, "chat_bot", None)
+            ),
+            _token_manager=getattr(self, "_bot_token_manager", None),
+            _clip_manager=getattr(self, "clip_manager", None),
+            _twitch_api=getattr(self, "api", None),
+            _eventsub_webhook_handler=getattr(self, "_eventsub_webhook_handler", None),
+            _raid_complete_setup_cb=getattr(raid_bot, "complete_setup_for_streamer", None),
+            _raid_sync_partner_state_cb=getattr(raid_bot, "_sync_partner_state_after_auth", None),
+            _reload_cb=getattr(self, "_reload_twitch_cog", None),
+            _schedule_background=getattr(self, "_spawn_bg_task", None),
+        )
 
     @staticmethod
     def _dashboard_build_referral_url(login: str) -> str:
@@ -440,6 +488,7 @@ class TwitchDashboardMixin:
         state: str,
         error: str,
     ) -> dict:
+        raid_bot = getattr(self, "_raid_bot", None)
         redirect_url = (
             (os.getenv("TWITCH_RAID_SUCCESS_REDIRECT_URL") or "").strip()
             or RAID_OAUTH_SUCCESS_REDIRECT_URL
@@ -448,20 +497,21 @@ class TwitchDashboardMixin:
             code=code,
             state=state,
             error=error,
-            raid_bot=self._dashboard_bot_service().raid_bot,
             auth_manager=self._dashboard_bot_service().auth_manager(),
+            session=getattr(raid_bot, "session", None),
             success_redirect_url=redirect_url,
             failure_title="Autorisierung fehlgeschlagen",
             failure_body_html=(
                 "<p>Autorisierung fehlgeschlagen.</p>"
                 "<p>Bitte erneut versuchen oder Admin kontaktieren.</p>"
             ),
-            schedule_background=getattr(self, "_spawn_bg_task", None),
+            complete_setup_cb=self._dashboard_bot_service().raid_complete_setup_cb(),
+            sync_partner_state_cb=self._dashboard_bot_service().raid_sync_partner_state_cb(),
+            schedule_background=self._dashboard_bot_service().schedule_background(),
         )
 
     def _raid_integration_state_resolver(self) -> RaidIntegrationStateResolver:
-        raid_bot = self._dashboard_bot_service().raid_bot
-        auth_manager = getattr(raid_bot, "auth_manager", None) if raid_bot else None
+        auth_manager = self._dashboard_bot_service().auth_manager()
         token_error_handler = (
             getattr(auth_manager, "token_error_handler", None) if auth_manager else None
         )
@@ -694,7 +744,7 @@ class TwitchDashboardMixin:
             )
 
         # 2. Falls nicht in raid_auth: API-Call
-        twitch_api = self._dashboard_bot_service().twitch_api
+        twitch_api = self._dashboard_bot_service().twitch_api()
         if not twitch_user_id and twitch_api:
             try:
                 users = await twitch_api.get_users([normalized])
@@ -1460,12 +1510,20 @@ class TwitchDashboardMixin:
         if not getattr(self, "_dashboard_embedded", True):
             log.debug("Twitch dashboard embedded server disabled; skipping _start_dashboard")
             return
+        _require_embedded_dashboard_noauth_opt_in(
+            enabled=bool(getattr(self, "_dashboard_noauth", False))
+        )
+        require_noauth_loopback_guard(
+            enabled=bool(getattr(self, "_dashboard_noauth", False)),
+            host=str(getattr(self, "_dashboard_host", "127.0.0.1") or "127.0.0.1"),
+        )
 
         # Retry logic for port availability during reloads
         max_retries = 5
         retry_delay = 0.5
         app = None
         runner = None
+        bot_service = self._dashboard_bot_service()
         dashboard_services = DashboardRuntimeServices(
             add_cb=self._dashboard_add,
             remove_cb=self._dashboard_remove,
@@ -1484,11 +1542,9 @@ class TwitchDashboardMixin:
             eventsub_webhook_handler=getattr(self, "_eventsub_webhook_handler", None),
             social_media_clip_manager=getattr(self, "clip_manager", None),
             social_media_twitch_api=getattr(self, "api", None),
-            bot_service=DashboardBotService.from_cog(
-                self,
-                reload_cb=self._reload_twitch_cog,
-            ),
+            bot_service=bot_service,
         )
+        self._dashboard_services = dashboard_services
 
         for attempt in range(max_retries):
             try:
@@ -1516,10 +1572,10 @@ class TwitchDashboardMixin:
                     raid_requirements_cb=self._dashboard_raid_requirements,
                     raid_oauth_callback_cb=self._dashboard_raid_oauth_callback,
                     reload_cb=self._reload_twitch_cog,
-                    social_media_clip_manager=getattr(self, "clip_manager", None),
-                    social_media_twitch_api=getattr(self, "api", None),
-                    eventsub_webhook_handler=getattr(self, "_eventsub_webhook_handler", None),
-                )
+            social_media_clip_manager=getattr(self, "clip_manager", None),
+            social_media_twitch_api=getattr(self, "api", None),
+            eventsub_webhook_handler=getattr(self, "_eventsub_webhook_handler", None),
+        )
                 runner = web.AppRunner(app)
                 await runner.setup()
                 site = web.TCPSite(runner, host=self._dashboard_host, port=self._dashboard_port)

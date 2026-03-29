@@ -102,10 +102,13 @@ class BotApiClient:
         host = (parsed.hostname or "").strip()
         if not host:
             raise ValueError("base_url is invalid")
-        if not allow_non_loopback and not cls._is_loopback_host(host):
+        is_loopback = cls._is_loopback_host(host)
+        if not allow_non_loopback and not is_loopback:
             raise ValueError(
                 "base_url host must resolve to loopback unless allow_non_loopback=True"
             )
+        if not is_loopback and scheme != "https":
+            raise ValueError("base_url must use https for non-loopback hosts")
         try:
             port = parsed.port
         except ValueError as exc:

@@ -15,6 +15,11 @@ class TwitchRaidMixin:
     """Integration der Raid-Bot-Logik in die Stream-Überwachung."""
 
     @staticmethod
+    def _load_auto_raid_partner_sync(twitch_user_id: str):
+        with readonly_connection() as conn:
+            return load_active_partner(conn, twitch_user_id=twitch_user_id)
+
+    @staticmethod
     def _dashboard_raid_history_sync(limit: int = 50, from_broadcaster: str = "") -> list[dict]:
         with readonly_connection() as conn:
             if from_broadcaster:
@@ -77,8 +82,10 @@ class TwitchRaidMixin:
 
         # Nur wenn Streamer Auto-Raid explizit aktiviert und autorisiert hat
         try:
-            with readonly_connection() as conn:
-                row = load_active_partner(conn, twitch_user_id=twitch_user_id)
+            row = await asyncio.to_thread(
+                self._load_auto_raid_partner_sync,
+                twitch_user_id,
+            )
 
             # Falls er nicht in twitch_streamers steht (noch kein Partner),
             # gehen wir davon aus, dass er den Bot via OAuth aktiviert hat.

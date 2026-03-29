@@ -106,6 +106,14 @@ class _DummyDashboardMixin(TwitchDashboardMixin):
 
 
 class DashboardMixinRaidCallbackRedirectTests(unittest.IsolatedAsyncioTestCase):
+    def test_dashboard_bot_service_bridge_uses_raid_runtime(self) -> None:
+        handler = _DummyDashboardMixin()
+
+        bot_service = handler._dashboard_bot_service()
+
+        self.assertIs(bot_service.auth_manager(), handler._raid_bot.auth_manager)
+        self.assertTrue(callable(bot_service.schedule_background()))
+
     async def test_dashboard_callback_payload_contains_redirect_url(self) -> None:
         handler = _DummyDashboardMixin()
 

@@ -197,7 +197,7 @@ class SplitRuntimeWiringTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertIsInstance(app, web.Application)
         self.assertIs(app[BOT_API_CLIENT_KEY], fake_client)
-        self.assertIsNone(captured_kwargs["raid_bot"])
+        self.assertNotIn("raid_bot", captured_kwargs)
         self.assertIsNone(captured_kwargs["reload_cb"])
         self.assertIsNone(captured_kwargs["eventsub_webhook_handler"])
 

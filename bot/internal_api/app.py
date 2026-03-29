@@ -9,7 +9,6 @@ import os
 import secrets
 import time as time_module
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass
 from datetime import date, datetime, time
 from decimal import Decimal
 from ipaddress import ip_address
@@ -23,157 +22,62 @@ from ..app_keys import ANALYTICS_DB_FINGERPRINT_DETAILS_KEY, ANALYTICS_DB_FINGER
 from ..core.constants import log
 from ..core.twitch_login import normalize_twitch_login
 from ..storage import analytics_db_fingerprint_details
-
-INTERNAL_API_BASE_PATH = "/internal/twitch/v1"
-INTERNAL_TOKEN_HEADER = "X-Internal-Token"
-IDEMPOTENCY_KEY_HEADER = "Idempotency-Key"
-PUBLIC_WEBSITE_ONBOARDING_LOGIN = "public:website_onboarding"
-
-AddStreamerCallback = Callable[[str, bool], Awaitable[str]]
-RemoveStreamerCallback = Callable[[str], Awaitable[str]]
-StreamersCallback = Callable[[], Awaitable[list[dict[str, Any]]]]
-StatsCallback = Callable[..., Awaitable[dict[str, Any]]]
-VerifyStreamerCallback = Callable[[str, str], Awaitable[str]]
-ArchiveStreamerCallback = Callable[[str, str], Awaitable[str]]
-DiscordFlagCallback = Callable[[str, bool], Awaitable[str]]
-DiscordProfileCallback = Callable[..., Awaitable[str]]
-StreamerAnalyticsCallback = Callable[[str, int], Awaitable[dict[str, Any]]]
-ComparisonCallback = Callable[[int], Awaitable[dict[str, Any]]]
-SessionCallback = Callable[[int], Awaitable[dict[str, Any]]]
-RaidAuthUrlCallback = Callable[..., Awaitable[str]]
-RaidAuthStateCallback = Callable[[str], Awaitable[dict[str, Any]]]
-RaidBlockStateCallback = Callable[..., Awaitable[dict[str, Any]]]
-RaidGoUrlCallback = Callable[[str], Awaitable[str | None]]
-RaidRequirementsCallback = Callable[[str], Awaitable[str]]
-RaidOauthCallback = Callable[..., Awaitable[dict[str, Any]]]
-LiveActiveAnnouncementsCallback = Callable[[], Awaitable[list[dict[str, Any]]]]
-LiveLinkClickCallback = Callable[..., Awaitable[dict[str, Any] | None]]
-ObservabilitySnapshotCallback = Callable[[], Awaitable[dict[str, Any]]]
-ChattersDebugCallback = Callable[[str], Awaitable[dict[str, Any]]]
-
-
-@dataclass(slots=True, frozen=True)
-class InternalApiCallbacks:
-    """Typed callback bundle for the internal API surface."""
-
-    add: AddStreamerCallback | None = None
-    remove: RemoveStreamerCallback | None = None
-    streamers: StreamersCallback | None = None
-    stats: StatsCallback | None = None
-    verify: VerifyStreamerCallback | None = None
-    archive: ArchiveStreamerCallback | None = None
-    discord_flag: DiscordFlagCallback | None = None
-    discord_profile: DiscordProfileCallback | None = None
-    streamer_analytics: StreamerAnalyticsCallback | None = None
-    comparison: ComparisonCallback | None = None
-    session: SessionCallback | None = None
-    raid_auth_url: RaidAuthUrlCallback | None = None
-    raid_auth_state: RaidAuthStateCallback | None = None
-    raid_block_state: RaidBlockStateCallback | None = None
-    raid_go_url: RaidGoUrlCallback | None = None
-    raid_requirements: RaidRequirementsCallback | None = None
-    raid_oauth_callback: RaidOauthCallback | None = None
-    live_active_announcements: LiveActiveAnnouncementsCallback | None = None
-    live_link_click: LiveLinkClickCallback | None = None
-    observability_snapshot: ObservabilitySnapshotCallback | None = None
-    chatters_debug: ChattersDebugCallback | None = None
-
-    @classmethod
-    def coalesce(
-        cls,
-        callbacks: "InternalApiCallbacks | None" = None,
-        *,
-        add_cb: AddStreamerCallback | None = None,
-        remove_cb: RemoveStreamerCallback | None = None,
-        list_cb: StreamersCallback | None = None,
-        stats_cb: StatsCallback | None = None,
-        verify_cb: VerifyStreamerCallback | None = None,
-        archive_cb: ArchiveStreamerCallback | None = None,
-        discord_flag_cb: DiscordFlagCallback | None = None,
-        discord_profile_cb: DiscordProfileCallback | None = None,
-        streamer_analytics_cb: StreamerAnalyticsCallback | None = None,
-        comparison_cb: ComparisonCallback | None = None,
-        session_cb: SessionCallback | None = None,
-        raid_auth_url_cb: RaidAuthUrlCallback | None = None,
-        raid_auth_state_cb: RaidAuthStateCallback | None = None,
-        raid_block_state_cb: RaidBlockStateCallback | None = None,
-        raid_go_url_cb: RaidGoUrlCallback | None = None,
-        raid_requirements_cb: RaidRequirementsCallback | None = None,
-        raid_oauth_callback_cb: RaidOauthCallback | None = None,
-        live_active_announcements_cb: LiveActiveAnnouncementsCallback | None = None,
-        live_link_click_cb: LiveLinkClickCallback | None = None,
-        observability_snapshot_cb: ObservabilitySnapshotCallback | None = None,
-        chatters_debug_cb: ChattersDebugCallback | None = None,
-    ) -> "InternalApiCallbacks":
-        base = callbacks or cls()
-        return cls(
-            add=add_cb if add_cb is not None else base.add,
-            remove=remove_cb if remove_cb is not None else base.remove,
-            streamers=list_cb if list_cb is not None else base.streamers,
-            stats=stats_cb if stats_cb is not None else base.stats,
-            verify=verify_cb if verify_cb is not None else base.verify,
-            archive=archive_cb if archive_cb is not None else base.archive,
-            discord_flag=discord_flag_cb if discord_flag_cb is not None else base.discord_flag,
-            discord_profile=(
-                discord_profile_cb if discord_profile_cb is not None else base.discord_profile
-            ),
-            streamer_analytics=(
-                streamer_analytics_cb
-                if streamer_analytics_cb is not None
-                else base.streamer_analytics
-            ),
-            comparison=comparison_cb if comparison_cb is not None else base.comparison,
-            session=session_cb if session_cb is not None else base.session,
-            raid_auth_url=raid_auth_url_cb if raid_auth_url_cb is not None else base.raid_auth_url,
-            raid_auth_state=(
-                raid_auth_state_cb if raid_auth_state_cb is not None else base.raid_auth_state
-            ),
-            raid_block_state=(
-                raid_block_state_cb if raid_block_state_cb is not None else base.raid_block_state
-            ),
-            raid_go_url=raid_go_url_cb if raid_go_url_cb is not None else base.raid_go_url,
-            raid_requirements=(
-                raid_requirements_cb if raid_requirements_cb is not None else base.raid_requirements
-            ),
-            raid_oauth_callback=(
-                raid_oauth_callback_cb
-                if raid_oauth_callback_cb is not None
-                else base.raid_oauth_callback
-            ),
-            live_active_announcements=(
-                live_active_announcements_cb
-                if live_active_announcements_cb is not None
-                else base.live_active_announcements
-            ),
-            live_link_click=(
-                live_link_click_cb if live_link_click_cb is not None else base.live_link_click
-            ),
-            observability_snapshot=(
-                observability_snapshot_cb
-                if observability_snapshot_cb is not None
-                else base.observability_snapshot
-            ),
-            chatters_debug=chatters_debug_cb if chatters_debug_cb is not None else base.chatters_debug,
-        )
-
-
-@dataclass(slots=True)
-class _IdempotencyInFlight:
-    fingerprint: str
-    future: asyncio.Future[tuple[int, Any]]
-    created_at: float
-
-
-def _json_default(value: Any) -> Any:
-    if isinstance(value, (datetime, date, time)):
-        return value.isoformat()
-    if isinstance(value, Decimal):
-        return float(value)
-    if isinstance(value, UUID):
-        return str(value)
-    if isinstance(value, set):
-        return list(value)
-    raise TypeError(f"Object of type {value.__class__.__name__} is not JSON serializable")
+from .contracts import (
+    AddStreamerCallback,
+    ArchiveStreamerCallback,
+    ChattersDebugCallback,
+    ComparisonCallback,
+    DiscordFlagCallback,
+    DiscordProfileCallback,
+    IDEMPOTENCY_KEY_HEADER,
+    INTERNAL_API_BASE_PATH,
+    INTERNAL_TOKEN_HEADER,
+    IdempotencyInFlight,
+    InternalApiCallbacks,
+    LiveActiveAnnouncementsCallback,
+    LiveLinkClickCallback,
+    ObservabilitySnapshotCallback,
+    PUBLIC_WEBSITE_ONBOARDING_LOGIN,
+    RaidAuthStateCallback,
+    RaidAuthUrlCallback,
+    RaidBlockStateCallback,
+    RaidGoUrlCallback,
+    RaidOauthCallback,
+    RaidRequirementsCallback,
+    RemoveStreamerCallback,
+    SessionCallback,
+    StatsCallback,
+    StreamerAnalyticsCallback,
+    StreamersCallback,
+    VerifyStreamerCallback,
+)
+from .policy import (
+    coerce_optional_positive_int as _coerce_optional_positive_int,
+    compare_internal_token as _compare_internal_token,
+    effective_client_host as _effective_client_host,
+    forwarded_client_host as _forwarded_client_host,
+    host_without_port as _host_without_port,
+    is_loopback_host as _is_loopback_host_impl,
+    is_loopback_request as _is_loopback_request_impl,
+    is_secure_request as _is_secure_request_impl,
+    is_trusted_proxy_host as _is_trusted_proxy_host_impl,
+    json_default as _json_default,
+    normalize_discord_user_id as _normalize_discord_user_id_impl,
+    normalize_live_announcement_item as _normalize_live_announcement_item_impl,
+    normalize_login as _normalize_login_impl,
+    normalize_raid_auth_target as _normalize_raid_auth_target_impl,
+    normalize_raid_state_payload as _normalize_raid_state_payload_impl,
+    normalize_text_field as _normalize_text_field_impl,
+    normalize_tracking_token as _normalize_tracking_token_impl,
+    parse_allowlist_ids as _parse_allowlist_ids_impl,
+    parse_bool as _parse_bool_impl,
+    parse_optional_int as _parse_optional_int_impl,
+    sanitize_log_value as _sanitize_log_value_impl,
+    safe_bad_request_detail as _safe_bad_request_detail_impl,
+)
+from .routes import attach_raid_routes, attach_streamer_routes
+from .routes.telemetry import attach_telemetry_routes
+from .routes import telemetry as _telemetry_routes
 
 
 class InternalApiServer:
@@ -306,7 +210,7 @@ class InternalApiServer:
             callbacks.chatters_debug if callable(callbacks.chatters_debug) else self._empty_chatters_debug
         )
         self._idempotency_cache: dict[str, dict[str, Any]] = {}
-        self._idempotency_inflight: dict[str, _IdempotencyInFlight] = {}
+        self._idempotency_inflight: dict[str, IdempotencyInFlight] = {}
         self._idempotency_ttl_seconds = 15 * 60
         self._idempotency_max_entries = 2000
         self._allowed_guild_ids = self._parse_allowlist_ids(
@@ -513,10 +417,6 @@ class InternalApiServer:
         return ""
 
     def _is_loopback_request(self, request: web.Request) -> bool:
-        host_header = request.headers.get("Host") or request.host or ""
-        if not self._is_loopback_host(host_header):
-            return False
-
         if not self._is_loopback_origin(request.headers.get("Origin")):
             return False
 
@@ -721,7 +621,7 @@ class InternalApiServer:
             return "", "", None, inflight.future, False
 
         future: asyncio.Future[tuple[int, Any]] = asyncio.get_running_loop().create_future()
-        self._idempotency_inflight[scope_key] = _IdempotencyInFlight(
+        self._idempotency_inflight[scope_key] = IdempotencyInFlight(
             fingerprint=fingerprint,
             future=future,
             created_at=time_module.time(),
@@ -1172,104 +1072,16 @@ class InternalApiServer:
         return body
 
     async def healthz(self, request: web.Request) -> web.Response:
-        analytics_db = request.app.get(ANALYTICS_DB_FINGERPRINT_DETAILS_KEY) or {}
-        return self._json_response(
-            {
-                "ok": True,
-                "service": "twitch-internal-api",
-                "analyticsDbFingerprint": analytics_db.get("fingerprint"),
-                "analyticsDb": analytics_db,
-            }
-        )
+        return await _telemetry_routes.healthz(self, request)
 
     async def observability_debug(self, request: web.Request) -> web.Response:
-        analytics_db = request.app.get(ANALYTICS_DB_FINGERPRINT_DETAILS_KEY) or {}
-        try:
-            payload = await self._observability_snapshot()
-            if not isinstance(payload, dict):
-                payload = {"value": payload}
-            return self._json_response(
-                {
-                    "ok": True,
-                    "service": "twitch-internal-api",
-                    "analyticsDbFingerprint": analytics_db.get("fingerprint"),
-                    "observability": payload,
-                }
-            )
-        except ValueError as exc:
-            return self._safe_exception_error(
-                context="observability snapshot",
-                exc=exc,
-                error="internal_error",
-                status=500,
-                message="failed to build observability snapshot",
-            )
-        except Exception:
-            log.exception("internal api observability snapshot failed")
-            return self._json_error(
-                "internal_error",
-                500,
-                "failed to build observability snapshot",
-            )
+        return await _telemetry_routes.observability_debug(self, request)
 
     async def chatters_debug(self, request: web.Request) -> web.Response:
-        raw_login = request.match_info.get("login")
-        login = self._normalize_login(raw_login or "")
-        if not login:
-            return self._json_error("invalid_login", 400, "invalid twitch login")
-
-        analytics_db = request.app.get(ANALYTICS_DB_FINGERPRINT_DETAILS_KEY) or {}
-        try:
-            payload = await self._chatters_debug(login)
-            if not isinstance(payload, dict):
-                payload = {"value": payload}
-            return self._json_response(
-                {
-                    "ok": True,
-                    "service": "twitch-internal-api",
-                    "analyticsDbFingerprint": analytics_db.get("fingerprint"),
-                    "chattersDebug": payload,
-                }
-            )
-        except ValueError as exc:
-            return self._safe_exception_error(
-                context="chatters debug",
-                exc=exc,
-                error="internal_error",
-                status=500,
-                message="failed to build chatters debug payload",
-            )
-        except Exception:
-            log.exception("internal api chatters debug failed")
-            return self._json_error(
-                "internal_error",
-                500,
-                "failed to build chatters debug payload",
-            )
+        return await _telemetry_routes.chatters_debug(self, request)
 
     async def live_active_announcements(self, request: web.Request) -> web.Response:
-        del request
-        try:
-            items = await self._live_active_announcements()
-            if not isinstance(items, list):
-                items = list(items) if items else []
-            normalized = [self._normalize_live_announcement_item(item) for item in items]
-            return self._json_response(normalized)
-        except ValueError as exc:
-            return self._safe_exception_error(
-                context="live active announcements",
-                exc=exc,
-                error="internal_error",
-                status=500,
-                message="failed to list active live announcements",
-            )
-        except Exception:
-            log.exception("internal api live active announcements failed")
-            return self._json_error(
-                "internal_error",
-                500,
-                "failed to list active live announcements",
-            )
+        return await _telemetry_routes.live_active_announcements(self, request)
 
     async def streamers(self, request: web.Request) -> web.Response:
         del request
@@ -2021,147 +1833,12 @@ class InternalApiServer:
             )
 
     async def live_link_click(self, request: web.Request) -> web.Response:
-        owner_key = ""
-        owner_fingerprint = ""
-        owner_response: web.Response | None = None
-        owner_cacheable = False
-        try:
-            body = await self._json_body(request)
-            (
-                idempotency_key,
-                idempotency_fingerprint,
-                replay,
-                wait_future,
-                is_owner,
-            ) = self._prepare_idempotency(
-                request=request,
-                payload=body,
-            )
-            if replay is not None:
-                return replay
-            if wait_future is not None:
-                return await self._wait_idempotency_result(future=wait_future)
-            if is_owner:
-                owner_key = idempotency_key
-                owner_fingerprint = idempotency_fingerprint
-
-            self._enforce_discord_action_scope(body)
-
-            streamer_login = self._normalize_login(str(body.get("streamer_login") or ""))
-            if not streamer_login:
-                raise ValueError("invalid streamer_login")
-
-            tracking_token = self._normalize_tracking_token(
-                body.get("tracking_token"),
-                required=True,
-            )
-            discord_user_id = self._normalize_discord_user_id_param(
-                body.get("discord_user_id"),
-                required=True,
-            )
-            discord_username = self._normalize_text_field(
-                body.get("discord_username"),
-                field_name="discord_username",
-                required=True,
-                max_length=200,
-            )
-            guild_id = self._coerce_optional_positive_int(body.get("guild_id"), key="guild_id")
-            channel_id = self._coerce_optional_positive_int(body.get("channel_id"), key="channel_id")
-            if channel_id is None:
-                raise ValueError("invalid channel_id")
-            message_id = self._coerce_optional_positive_int(body.get("message_id"), key="message_id")
-            if message_id is None:
-                raise ValueError("invalid message_id")
-            source_hint = self._normalize_text_field(
-                body.get("source_hint"),
-                field_name="source_hint",
-                required=True,
-                max_length=100,
-            )
-
-            await self._live_link_click(
-                streamer_login=streamer_login,
-                tracking_token=tracking_token,
-                discord_user_id=discord_user_id,
-                discord_username=discord_username,
-                guild_id=str(guild_id) if guild_id is not None else None,
-                channel_id=str(channel_id),
-                message_id=str(message_id),
-                source_hint=source_hint,
-            )
-
-            owner_cacheable = True
-            owner_response = self._json_response({"ok": True})
-            return owner_response
-        except ValueError as exc:
-            owner_response = self._safe_bad_request(
-                context="live link click",
-                exc=exc,
-                message="invalid request body",
-            )
-            return owner_response
-        except PermissionError as exc:
-            owner_response = self._safe_exception_error(
-                context="live link click forbidden",
-                exc=exc,
-                error="forbidden",
-                status=403,
-                message="action outside configured scope",
-            )
-            return owner_response
-        except Exception:
-            log.exception("internal api live link click failed")
-            owner_response = self._json_error(
-                "internal_error",
-                500,
-                "failed to persist live link click",
-            )
-            return owner_response
-        finally:
-            self._release_idempotency_owner(
-                key=owner_key,
-                fingerprint=owner_fingerprint,
-                response=owner_response,
-                cacheable=owner_cacheable,
-            )
+        return await _telemetry_routes.live_link_click(self, request)
 
     def attach(self, app: web.Application) -> None:
-        base = self._base_path
-        app.add_routes(
-            [
-                web.get(f"{base}/healthz", self.healthz),
-                web.get(f"{base}/debug/observability", self.observability_debug),
-                web.get(f"{base}/debug/chatters/{{login}}", self.chatters_debug),
-                web.get(
-                    f"{base}/live/active-announcements",
-                    self.live_active_announcements,
-                ),
-                web.post(f"{base}/live/link-click", self.live_link_click),
-                web.get(f"{base}/streamers", self.streamers),
-                web.post(f"{base}/streamers", self.streamer_add),
-                web.delete(f"{base}/streamers/{{login}}", self.streamer_remove),
-                web.post(f"{base}/streamers/{{login}}/verify", self.streamer_verify),
-                web.post(f"{base}/streamers/{{login}}/archive", self.streamer_archive),
-                web.post(f"{base}/streamers/{{login}}/discord-flag", self.streamer_discord_flag),
-                web.post(
-                    f"{base}/streamers/{{login}}/discord-profile",
-                    self.streamer_discord_profile,
-                ),
-                web.get(f"{base}/stats", self.stats),
-                web.get(
-                    f"{base}/analytics/streamer/{{login}}",
-                    self.streamer_analytics,
-                ),
-                web.get(f"{base}/analytics/comparison", self.analytics_comparison),
-                web.get(f"{base}/sessions/{{session_id}}", self.session_detail),
-                web.get(f"{base}/raid/auth-url", self.raid_auth_url),
-                web.get(f"{base}/raid/auth-state", self.raid_auth_state),
-                web.get(f"{base}/raid/block-state", self.raid_block_state),
-                web.get(f"{base}/raid/go-url", self.raid_go_url),
-                web.post(f"{base}/raid/requirements", self.raid_requirements),
-                web.post(f"{base}/raid/oauth-callback", self.raid_oauth_callback),
-            ]
-        )
+        attach_telemetry_routes(app, self)
+        attach_streamer_routes(app, self)
+        attach_raid_routes(app, self)
 
 
 def build_internal_api_app(

@@ -2,7 +2,9 @@ from __future__ import annotations
 
 from bot.runtime.contracts import (
     BotRuntimeContainer,
+    DashboardBotService,
     DashboardRuntimeContainer,
+    DashboardRuntimeServices,
     RUNTIME_STATE_FIELDS,
     ensure_bot_runtime_container,
 )
@@ -35,7 +37,6 @@ def test_bot_bootstrap_keeps_dashboard_values_as_compat_attrs(monkeypatch) -> No
             "TWITCH_WEBHOOK_SECRET": None,
         }.get(key),
     )
-    monkeypatch.setattr("bot.runtime_bootstrap.require_noauth_loopback_guard", lambda **_: None)
 
     cog = _DummyCog()
     bootstrap = BotRuntimeBootstrap(cog)
@@ -47,3 +48,22 @@ def test_bot_bootstrap_keeps_dashboard_values_as_compat_attrs(monkeypatch) -> No
     assert getattr(cog, "_dashboard_host") == "127.0.0.1"
     assert getattr(cog, "_dashboard_token") == "dashboard-token"
     assert getattr(cog, "_partner_dashboard_token") == "partner-token"
+
+
+def test_dashboard_runtime_resolves_only_valid_bot_service_adapter() -> None:
+    services = DashboardRuntimeServices()
+    runtime = DashboardRuntimeContainer(services=services)
+
+    assert services.resolve_bot_service() is None
+    assert runtime.resolve_bot_service() is None
+
+    adapter = DashboardBotService(_auth_manager=object())
+    services.bot_service = adapter
+
+    assert services.resolve_bot_service() is adapter
+    assert runtime.resolve_bot_service() is adapter
+
+    setattr(services, "bot_service", object())
+
+    assert services.resolve_bot_service() is None
+    assert runtime.resolve_bot_service() is None

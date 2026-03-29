@@ -8,21 +8,8 @@ from bot.dashboard.routes_mixin import _DashboardRoutesMixin
 
 class _DummyDashboardRoutes(_DashboardRoutesMixin):
     def __init__(self, clip_manager) -> None:
-        self._social_media_clip_manager = None
-        self._raid_bot = type(
-            "RaidBotStub",
-            (),
-            {
-                "_cog": type(
-                    "CogStub",
-                    (),
-                    {
-                        "clip_manager": clip_manager,
-                        "api": getattr(clip_manager, "twitch_api", None),
-                    },
-                )()
-            },
-        )()
+        self._social_media_clip_manager = clip_manager
+        self._social_media_twitch_api = getattr(clip_manager, "twitch_api", None)
 
     def _check_v2_auth(self, request):
         del request

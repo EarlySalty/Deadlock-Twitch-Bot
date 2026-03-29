@@ -212,7 +212,6 @@ class TwitchBaseBootstrapLifecycleTests(unittest.IsolatedAsyncioTestCase):
                 "twitch.ensure_category_id",
                 "twitch.load_invites",
                 "twitch.start_internal_api",
-                "twitch.start_dashboard",
                 "twitch.refresh_all_invites",
                 "twitch.eventsub",
                 "twitch.sync_user_ids",
@@ -221,7 +220,7 @@ class TwitchBaseBootstrapLifecycleTests(unittest.IsolatedAsyncioTestCase):
             ],
         )
 
-    def test_configure_runtime_rejects_noauth_on_non_loopback_dashboard_host(self) -> None:
+    def test_configure_runtime_keeps_dashboard_noauth_as_dashboard_only_config(self) -> None:
         harness = _LifecycleHarness()
 
         def _fake_load_secret_value(key: str, **_kwargs):
@@ -244,10 +243,10 @@ class TwitchBaseBootstrapLifecycleTests(unittest.IsolatedAsyncioTestCase):
             },
             clear=False,
         ), patch("bot.runtime_bootstrap.load_secret_value", side_effect=_fake_load_secret_value):
-            with self.assertRaises(RuntimeError) as ctx:
-                TwitchRuntimeBootstrap(harness).configure_runtime()
+            TwitchRuntimeBootstrap(harness).configure_runtime()
 
-        self.assertIn("loopback", str(ctx.exception).lower())
+        self.assertTrue(getattr(harness, "_dashboard_noauth", False))
+        self.assertEqual(getattr(harness, "_dashboard_host", ""), "0.0.0.0")
 
     async def test_cog_load_retries_runtime_start_after_partial_failure(self) -> None:
         harness = _LifecycleHarness()

@@ -39,7 +39,6 @@ from .runtime.dashboard_runtime import (
     DashboardRuntimeContainer,
 )
 from .runtime.contracts import ensure_bot_runtime_container
-from .runtime_security import require_noauth_loopback_guard
 from .secret_store import load_secret_value
 from .storage import pg as storage_pg
 
@@ -137,53 +136,7 @@ class BotRuntimeBootstrap:
         state.runtime_start_lock = asyncio.Lock()
         state.runtime_stop_lock = state.runtime_start_lock
 
-        setattr(cog, "_dashboard_token", load_secret_value("TWITCH_DASHBOARD_TOKEN") or None)
-        setattr(
-            cog,
-            "_dashboard_noauth",
-            _parse_env_bool(
-                "TWITCH_DASHBOARD_NOAUTH",
-                bool(TWITCH_DASHBOARD_NOAUTH),
-            ),
-        )
-        env_dashboard_host = (os.getenv("TWITCH_DASHBOARD_HOST") or "").strip()
-        default_dashboard_host = TWITCH_DASHBOARD_HOST or "127.0.0.1"
-        setattr(cog, "_dashboard_host", env_dashboard_host or default_dashboard_host)
-        try:
-            if ipaddress.ip_address(getattr(cog, "_dashboard_host")).is_unspecified:
-                log.warning(
-                    "TWITCH_DASHBOARD_HOST resolves to an unspecified address; keep this behind auth/reverse proxy."
-                )
-        except ValueError:
-            log.warning(
-                "TWITCH_DASHBOARD_HOST is not a valid IP; using it as-is: %s",
-                getattr(cog, "_dashboard_host"),
-            )
-        setattr(cog, "_dashboard_port", _parse_env_int("TWITCH_DASHBOARD_PORT", int(TWITCH_DASHBOARD_PORT)))
-        embedded_env = (os.getenv("TWITCH_DASHBOARD_EMBEDDED", "") or "").strip().lower()
-        setattr(cog, "_dashboard_embedded", embedded_env not in {"0", "false", "no", "off"})
-        require_noauth_loopback_guard(
-            enabled=bool(getattr(cog, "_dashboard_noauth", False)),
-            host=str(getattr(cog, "_dashboard_host", default_dashboard_host)),
-        )
-        if not bool(getattr(cog, "_dashboard_embedded", True)):
-            log.info(
-                "TWITCH_DASHBOARD_EMBEDDED disabled - assuming external reverse proxy serves the dashboard"
-            )
-        setattr(cog, "_partner_dashboard_token", load_secret_value("TWITCH_PARTNER_TOKEN") or None)
-        setattr(
-            cog,
-            "_dashboard_auth_redirect_uri",
-            (os.getenv("TWITCH_DASHBOARD_AUTH_REDIRECT_URI") or "").strip()
-            or "https://twitch.earlysalty.com/twitch/auth/callback",
-        )
-        setattr(
-            cog,
-            "_dashboard_session_ttl",
-            max(6 * 3600, _parse_env_int("TWITCH_DASHBOARD_SESSION_TTL_SEC", 6 * 3600)),
-        )
-        setattr(cog, "_legacy_stats_url", (os.getenv("TWITCH_LEGACY_STATS_URL") or "").strip() or None)
-        setattr(cog, "_required_marker_default", TWITCH_REQUIRED_DISCORD_MARKER or None)
+        self._configure_dashboard_compat_attrs()
         config.experimental_irc_lurker_channels = set(
             _parse_env_csv(
                 "TWITCH_EXPERIMENTAL_IRC_LURKER_CHANNELS",
@@ -377,6 +330,62 @@ class BotRuntimeBootstrap:
         self._ensure_social_media_workers()
 
         self._register_reload_manager()
+
+    def _configure_dashboard_compat_attrs(self) -> None:
+        """Populate legacy dashboard attributes until callers finish migrating."""
+
+        cog = self._cog
+        setattr(cog, "_dashboard_token", load_secret_value("TWITCH_DASHBOARD_TOKEN") or None)
+        setattr(
+            cog,
+            "_dashboard_noauth",
+            _parse_env_bool(
+                "TWITCH_DASHBOARD_NOAUTH",
+                bool(TWITCH_DASHBOARD_NOAUTH),
+            ),
+        )
+        env_dashboard_host = (os.getenv("TWITCH_DASHBOARD_HOST") or "").strip()
+        default_dashboard_host = TWITCH_DASHBOARD_HOST or "127.0.0.1"
+        setattr(cog, "_dashboard_host", env_dashboard_host or default_dashboard_host)
+        try:
+            if ipaddress.ip_address(getattr(cog, "_dashboard_host")).is_unspecified:
+                log.warning(
+                    "TWITCH_DASHBOARD_HOST resolves to an unspecified address; keep this behind auth/reverse proxy."
+                )
+        except ValueError:
+            log.warning(
+                "TWITCH_DASHBOARD_HOST is not a valid IP; using it as-is: %s",
+                getattr(cog, "_dashboard_host"),
+            )
+        setattr(
+            cog,
+            "_dashboard_port",
+            _parse_env_int("TWITCH_DASHBOARD_PORT", int(TWITCH_DASHBOARD_PORT)),
+        )
+        embedded_env = (os.getenv("TWITCH_DASHBOARD_EMBEDDED", "") or "").strip().lower()
+        setattr(cog, "_dashboard_embedded", embedded_env not in {"0", "false", "no", "off"})
+        if not bool(getattr(cog, "_dashboard_embedded", True)):
+            log.info(
+                "TWITCH_DASHBOARD_EMBEDDED disabled - assuming external reverse proxy serves the dashboard"
+            )
+        setattr(cog, "_partner_dashboard_token", load_secret_value("TWITCH_PARTNER_TOKEN") or None)
+        setattr(
+            cog,
+            "_dashboard_auth_redirect_uri",
+            (os.getenv("TWITCH_DASHBOARD_AUTH_REDIRECT_URI") or "").strip()
+            or "https://twitch.earlysalty.com/twitch/auth/callback",
+        )
+        setattr(
+            cog,
+            "_dashboard_session_ttl",
+            max(6 * 3600, _parse_env_int("TWITCH_DASHBOARD_SESSION_TTL_SEC", 6 * 3600)),
+        )
+        setattr(
+            cog,
+            "_legacy_stats_url",
+            (os.getenv("TWITCH_LEGACY_STATS_URL") or "").strip() or None,
+        )
+        setattr(cog, "_required_marker_default", TWITCH_REQUIRED_DISCORD_MARKER or None)
 
     def _ensure_social_media_workers(self) -> None:
         cog = self._cog

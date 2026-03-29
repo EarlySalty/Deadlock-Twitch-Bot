@@ -128,7 +128,7 @@ class InternalApiAuthTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(payload.get("observability", {}).get("chat", {}).get("joinAttempts"), 6)
         self.assertEqual(payload.get("observability", {}).get("raid", {}).get("pendingCount"), 3)
 
-    async def test_healthz_rejects_non_loopback_host_header(self) -> None:
+    async def test_healthz_allows_non_loopback_host_header_when_peer_is_loopback(self) -> None:
         app = build_internal_api_app(token="secret-token")
         async with TestServer(app) as server:
             async with TestClient(server) as client:
@@ -141,8 +141,8 @@ class InternalApiAuthTests(unittest.IsolatedAsyncioTestCase):
                 )
                 payload = await response.json()
 
-        self.assertEqual(response.status, 403)
-        self.assertEqual(payload.get("error"), "forbidden")
+        self.assertEqual(response.status, 200)
+        self.assertTrue(payload.get("ok"))
 
     async def test_healthz_rejects_non_loopback_origin_header(self) -> None:
         app = build_internal_api_app(token="secret-token")
@@ -920,6 +920,28 @@ class InternalApiAuthTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(InternalApiServer._is_loopback_host("::1"))
         self.assertTrue(InternalApiServer._is_loopback_host("[::1]:8777"))
         self.assertTrue(InternalApiServer._is_loopback_host("0:0:0:0:0:0:0:1"))
+
+    def test_loopback_request_policy_ignores_host_header(self) -> None:
+        server = InternalApiServer(token="secret-token")
+        loopback_request = SimpleNamespace(
+            headers={
+                "Origin": "https://127.0.0.1:8777",
+                "Host": "evil.example:443",
+            },
+            remote="127.0.0.1",
+            transport=None,
+        )
+        non_loopback_request = SimpleNamespace(
+            headers={
+                "Origin": "https://127.0.0.1:8777",
+                "Host": "127.0.0.1:8777",
+            },
+            remote="10.0.0.20",
+            transport=None,
+        )
+
+        self.assertTrue(server._is_loopback_request(loopback_request))
+        self.assertFalse(server._is_loopback_request(non_loopback_request))
 
     async def test_healthz_allows_ipv6_loopback_host_variants(self) -> None:
         app = build_internal_api_app(token="secret-token")

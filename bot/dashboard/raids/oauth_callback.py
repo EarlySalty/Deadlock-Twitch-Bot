@@ -38,11 +38,13 @@ async def build_raid_oauth_callback_payload(
     code: str,
     state: str,
     error: str,
-    raid_bot: Any | None,
     auth_manager: Any | None,
+    session: Any | None = None,
     success_redirect_url: str,
     failure_title: str,
     failure_body_html: str,
+    complete_setup_cb: Callable[..., Any] | None = None,
+    sync_partner_state_cb: Callable[..., Any] | None = None,
     schedule_background: Callable[[Any, str], Any] | None = None,
 ) -> dict[str, Any]:
     code_clean = str(code or "").strip()
@@ -50,7 +52,6 @@ async def build_raid_oauth_callback_payload(
     error_clean = str(error or "").strip()
 
     requested_login = ""
-    session = getattr(raid_bot, "session", None) if raid_bot is not None else None
     owns_session = False
 
     try:
@@ -82,7 +83,7 @@ async def build_raid_oauth_callback_payload(
                 body_html="<p>Fehlender OAuth Code oder State.</p>",
             )
 
-        if not raid_bot or not auth_manager:
+        if not auth_manager:
             return _oauth_error_payload(
                 status=503,
                 title="Raid-Bot nicht verfügbar",
@@ -216,10 +217,8 @@ async def build_raid_oauth_callback_payload(
             activate_raid_features=True,
         )
 
-        post_setup = getattr(raid_bot, "complete_setup_for_streamer", None)
-        sync_partner_state = getattr(raid_bot, "_sync_partner_state_after_auth", None)
-        if callable(post_setup) and not had_existing_auth:
-            followup = post_setup(
+        if callable(complete_setup_cb) and not had_existing_auth:
+            followup = complete_setup_cb(
                 twitch_user_id,
                 twitch_login,
                 state_discord_user_id=state_discord_user_id,
@@ -228,14 +227,15 @@ async def build_raid_oauth_callback_payload(
             if callable(schedule_background):
                 scheduled = schedule_background(followup, "twitch.raid.complete_setup")
                 if scheduled is None:
+                    followup.close()
                     raise RuntimeError("failed to schedule twitch.raid.complete_setup")
             else:
                 asyncio.create_task(
                     followup,
                     name="twitch.raid.complete_setup",
                 )
-        elif callable(sync_partner_state) and state_discord_user_id:
-            followup = sync_partner_state(
+        elif callable(sync_partner_state_cb) and state_discord_user_id:
+            followup = sync_partner_state_cb(
                 twitch_user_id,
                 twitch_login,
                 state_discord_user_id=state_discord_user_id,
@@ -246,6 +246,7 @@ async def build_raid_oauth_callback_payload(
                     followup, "twitch.raid.sync_partner_state_after_auth"
                 )
                 if scheduled is None:
+                    followup.close()
                     raise RuntimeError(
                         "failed to schedule twitch.raid.sync_partner_state_after_auth"
                     )
