@@ -30,6 +30,16 @@ PUBLIC_STREAMER_ONBOARDING_LOGIN = "public:website_onboarding"
 class _DashboardRaidMixin:
     """Raid authorization, history, analytics and OAuth callback routes."""
 
+    def _resolve_dashboard_auth_manager(self) -> Any | None:
+        resolver = getattr(self, "_dashboard_auth_manager", None)
+        if callable(resolver):
+            try:
+                return resolver()
+            except Exception:
+                log.debug("Could not resolve dashboard auth manager", exc_info=True)
+        raid_bot = getattr(self, "_raid_bot", None)
+        return getattr(raid_bot, "auth_manager", None)
+
     # ------------------------------------------------------------------ #
     # HTML builders                                                        #
     # ------------------------------------------------------------------ #
@@ -172,7 +182,7 @@ class _DashboardRaidMixin:
         if not login:
             return web.Response(text="Missing login parameter", status=400)
 
-        auth_manager = self._dashboard_auth_manager()
+        auth_manager = self._resolve_dashboard_auth_manager()
         if auth_manager:
             client_id = str(getattr(auth_manager, "client_id", "") or "").strip()
             redirect_uri = str(getattr(auth_manager, "redirect_uri", "") or "").strip()
@@ -214,7 +224,7 @@ class _DashboardRaidMixin:
         if not state:
             return web.Response(text="Missing state parameter", status=400)
 
-        auth_manager = self._dashboard_auth_manager()
+        auth_manager = self._resolve_dashboard_auth_manager()
         if auth_manager:
             full_url = auth_manager.get_pending_auth_url(state)
         else:
@@ -275,7 +285,7 @@ class _DashboardRaidMixin:
             if login != session_partner_login:
                 return web.Response(text="Forbidden streamer scope", status=403)
 
-        auth_manager = self._dashboard_auth_manager()
+        auth_manager = self._resolve_dashboard_auth_manager()
         if not auth_manager:
             raid_requirements_cb = getattr(self, "_raid_requirements_cb", None)
             if not callable(raid_requirements_cb):
@@ -468,15 +478,13 @@ class _DashboardRaidMixin:
 
     async def raid_oauth_callback(self, request: web.Request) -> web.StreamResponse:
         """Handle Twitch OAuth callback for raid authorization."""
-        bot_service = self._dashboard_bot_runtime()
-        raid_bot = bot_service.raid_bot
-        auth_manager = self._dashboard_auth_manager()
+        auth_manager = self._resolve_dashboard_auth_manager()
 
         code = (request.query.get("code") or "").strip()
         state = (request.query.get("state") or "").strip()
         error = (request.query.get("error") or "").strip()
 
-        if not raid_bot or not auth_manager:
+        if not auth_manager:
             raid_oauth_callback_cb = getattr(self, "_raid_oauth_callback_cb", None)
             if callable(raid_oauth_callback_cb):
                 try:
@@ -517,7 +525,6 @@ class _DashboardRaidMixin:
             code=code,
             state=state,
             error=error,
-            raid_bot=raid_bot,
             auth_manager=auth_manager,
             success_redirect_url=self._raid_oauth_success_redirect_url(),
             failure_title="Fehler bei der Autorisierung",
@@ -525,6 +532,8 @@ class _DashboardRaidMixin:
                 "<p>Beim Speichern der Twitch-Autorisierung ist ein interner Fehler aufgetreten.</p>"
                 "<p>Bitte den Vorgang erneut starten.</p>"
             ),
+            complete_setup_cb=self._dashboard_bot_runtime().raid_complete_setup_cb(),
+            sync_partner_state_cb=self._dashboard_bot_runtime().raid_sync_partner_state_cb(),
             schedule_background=getattr(self, "_dashboard_schedule_background", None),
         )
         title = str(payload.get("title") or "Autorisierung")

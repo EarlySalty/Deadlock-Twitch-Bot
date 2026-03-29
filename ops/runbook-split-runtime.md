@@ -110,7 +110,7 @@ powershell -NoProfile -ExecutionPolicy $ExecutionPolicy -File C:/nssm/healthchec
 ```powershell
 Invoke-WebRequest -UseBasicParsing http://127.0.0.1:8765/twitch | Select-Object StatusCode
 Invoke-WebRequest -UseBasicParsing -Headers @{ 'X-Internal-Token' = $env:TWITCH_INTERNAL_API_TOKEN } http://127.0.0.1:8776/internal/twitch/v1/healthz | Select-Object StatusCode
-Invoke-WebRequest -UseBasicParsing -Method Post http://127.0.0.1:8768/twitch/eventsub/callback -Body '{}' -ContentType 'application/json' -ErrorAction SilentlyContinue | Select-Object StatusCode
+Invoke-WebRequest -UseBasicParsing -Method Get http://127.0.0.1:8768/twitch/eventsub/callback -ErrorAction SilentlyContinue | Select-Object StatusCode
 ```
 3. Caddy validation/reload (if included by main `C:/caddy/Caddyfile`):
 ```powershell

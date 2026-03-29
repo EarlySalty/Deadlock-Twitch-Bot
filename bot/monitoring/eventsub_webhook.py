@@ -110,6 +110,25 @@ class EventSubWebhookHandler:
         heapq.heappush(self._seen_expiry_heap, (expiry, message_id))
         return True
 
+    @staticmethod
+    def _missing_required_headers(
+        *,
+        message_id: str,
+        timestamp: str,
+        signature: str,
+        message_type: str,
+    ) -> list[str]:
+        missing: list[str] = []
+        if not message_id:
+            missing.append("Twitch-Eventsub-Message-Id")
+        if not timestamp:
+            missing.append("Twitch-Eventsub-Message-Timestamp")
+        if not signature:
+            missing.append("Twitch-Eventsub-Message-Signature")
+        if not message_type:
+            missing.append("Twitch-Eventsub-Message-Type")
+        return missing
+
     async def handle_request(self, request: web.Request) -> web.Response:
         """
         Haupt-Handler für eingehende EventSub Webhook Requests.
@@ -132,6 +151,20 @@ class EventSubWebhookHandler:
         signature = request.headers.get("Twitch-Eventsub-Message-Signature", "")
         message_type = request.headers.get("Twitch-Eventsub-Message-Type", "")
         sub_type = request.headers.get("Twitch-Eventsub-Subscription-Type", "")
+
+        missing_headers = self._missing_required_headers(
+            message_id=message_id,
+            timestamp=timestamp,
+            signature=signature,
+            message_type=message_type,
+        )
+        if missing_headers:
+            self.log.info(
+                "EventSub Webhook: Ungueltige Anfrage ohne erforderliche Twitch-Header "
+                "(missing=%s)",
+                ",".join(missing_headers),
+            )
+            return web.Response(status=400)
 
         # --- 3. Signatur verifizieren ---
         if not self._verify_signature(message_id, timestamp, raw_body, signature):

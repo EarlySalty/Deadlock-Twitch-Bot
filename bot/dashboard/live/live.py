@@ -89,8 +89,15 @@ class DashboardLiveMixin:
     def _resolve_dashboard_chat_bot(self) -> Any | None:
         resolver = getattr(self, "_dashboard_chat_bot", None)
         if callable(resolver):
-            return resolver()
-        return None
+            try:
+                chat_bot = resolver()
+            except Exception:
+                log.debug("Could not resolve dashboard chat bot", exc_info=True)
+            else:
+                if chat_bot is not None:
+                    return chat_bot
+        raid_bot = getattr(self, "_raid_bot", None)
+        return getattr(raid_bot, "chat_bot", None)
 
     def _resolve_dashboard_bot_scope_state(self) -> dict[str, Any]:
         token_mgr = None
@@ -1840,7 +1847,9 @@ class DashboardLiveMixin:
             )
             raise web.HTTPFound(location=location)
 
-        if bool(target.get("manual_partner_opt_out")) or not self._is_partner_chat_action_allowed(login):
+        is_archived_target = bool(target.get("archived_at"))
+        partner_allowed = not is_archived_target or self._is_partner_chat_action_allowed(login)
+        if bool(target.get("manual_partner_opt_out")) or not partner_allowed:
             location = self._redirect_location(
                 request,
                 err="Chat-Aktion ist nur für aktive oder admin-archivierte Partner-Streamer erlaubt",
