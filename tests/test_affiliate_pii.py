@@ -78,7 +78,7 @@ class _AffiliateProfileHarness(_DashboardAffiliateMixin):
 
 class AffiliatePIITests(unittest.IsolatedAsyncioTestCase):
     def setUp(self) -> None:
-        self.conn = sqlite3.connect(":memory:")
+        self.conn = sqlite3.connect(":memory:", check_same_thread=False)
         self.conn.row_factory = sqlite3.Row
         self.compat_conn = _CompatSqliteConn(self.conn)
         self.conn.executescript(
@@ -270,6 +270,45 @@ class AffiliatePIITests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(payload["address_country"], "DE")
         self.assertEqual(payload["tax_id"], "DE123")
         self.assertEqual(payload["ust_status"], "kleinunternehmer")
+
+    async def test_affiliate_api_me_offloads_db_lookup_to_thread(self) -> None:
+        crypto = _FakeCrypto()
+        handler = _AffiliateProfileHarness()
+        handler._affiliate_ensure_tables = lambda _conn: None  # type: ignore[method-assign]
+        async def _to_thread(func, /, *args, **kwargs):
+            return func(*args, **kwargs)
+
+        with patch("bot.dashboard.affiliate.affiliate_pii.get_crypto", return_value=crypto):
+            AffiliatePII.save_pii(
+                self.compat_conn,
+                "affiliate_one",
+                {
+                    "full_name": "Affiliate One",
+                    "email": "partner@example.com",
+                    "address_line1": "Main Street 1",
+                    "address_city": "Berlin",
+                    "address_zip": "10115",
+                    "address_country": "DE",
+                    "tax_id": "DE123",
+                    "ust_status": "kleinunternehmer",
+                },
+            )
+            self.conn.commit()
+
+            with patch(
+                "bot.dashboard.affiliate_mixin.asyncio.to_thread",
+                side_effect=_to_thread,
+            ) as to_thread:
+                with patch(
+                    "bot.dashboard.affiliate_mixin.storage.readonly_connection",
+                    return_value=_ConnContext(self.compat_conn),
+                ):
+                    response = await handler._affiliate_api_me(SimpleNamespace())
+
+        payload = json.loads(response.body.decode("utf-8"))
+        self.assertEqual(response.status, 200)
+        self.assertTrue(to_thread.called)
+        self.assertEqual(payload["email"], "partner@example.com")
 
     async def test_affiliate_profile_put_writes_only_encrypted_pii(self) -> None:
         crypto = _FakeCrypto()

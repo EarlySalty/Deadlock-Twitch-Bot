@@ -11,6 +11,7 @@ from aiohttp import web
 
 from bot.app_keys import BOT_API_CLIENT_KEY
 from bot.dashboard_service.app import build_dashboard_service_app
+from bot.runtime.dashboard_runtime import DashboardRuntimeServices
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -198,13 +199,14 @@ class SplitRuntimeWiringTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsInstance(app, web.Application)
         self.assertIs(app[BOT_API_CLIENT_KEY], fake_client)
         self.assertNotIn("raid_bot", captured_kwargs)
-        self.assertIsNone(captured_kwargs["reload_cb"])
-        self.assertIsNone(captured_kwargs["eventsub_webhook_handler"])
 
-        add_cb = captured_kwargs["add_cb"]
-        remove_cb = captured_kwargs["remove_cb"]
-        raid_auth_url_cb = captured_kwargs["raid_auth_url_cb"]
-        raid_oauth_callback_cb = captured_kwargs["raid_oauth_callback_cb"]
+        services = captured_kwargs["dashboard_services"]
+        self.assertIsInstance(services, DashboardRuntimeServices)
+
+        add_cb = services.add_cb
+        remove_cb = services.remove_cb
+        raid_auth_url_cb = services.raid_auth_url_cb
+        raid_oauth_callback_cb = services.raid_oauth_callback_cb
         self.assertTrue(callable(add_cb))
         self.assertTrue(callable(remove_cb))
         self.assertTrue(callable(raid_auth_url_cb))

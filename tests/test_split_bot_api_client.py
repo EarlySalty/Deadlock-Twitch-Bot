@@ -12,6 +12,7 @@ from bot.app_keys import (
 )
 from bot.dashboard_service.app import build_dashboard_service_app
 from bot.dashboard.server_v2 import build_v2_app
+from bot.runtime.dashboard_runtime import DashboardRuntimeServices
 from bot.dashboard_service.client import BotApiClient, BotApiClientError
 from bot.internal_api import INTERNAL_API_BASE_PATH
 
@@ -386,7 +387,9 @@ class BotApiClientErrorMappingTests(unittest.IsolatedAsyncioTestCase):
             )
 
         self.assertIsInstance(app, web.Application)
-        stats_cb = captured_build_kwargs.get("stats_cb")
+        services = captured_build_kwargs.get("dashboard_services")
+        self.assertIsInstance(services, DashboardRuntimeServices)
+        stats_cb = services.stats_cb
         self.assertTrue(callable(stats_cb))
 
         with self.assertRaises(web.HTTPServiceUnavailable) as ctx:

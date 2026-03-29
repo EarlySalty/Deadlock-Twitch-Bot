@@ -18,6 +18,7 @@ from aiohttp import web
 
 from ... import storage
 from ...core.constants import log
+from ..auth.state_store import DashboardAuthStateRepository
 from ...storage import sessions_db
 from .affiliate_email import AffiliateEmailSender
 from .affiliate_pii import AffiliatePII
@@ -31,6 +32,9 @@ STRIPE_CONNECT_TOKEN_URL = "https://connect.stripe.com/oauth/token"  # noqa: S10
 
 _LOGIN_RE = re.compile(r"^[A-Za-z0-9_]{3,25}$")
 _AFFILIATE_SESSION_TTL = 7 * 24 * 3600  # 7 days
+_AFFILIATE_OAUTH_STATE_TTL = 600
+_AFFILIATE_CONNECT_STATE_TTL = 600
+_AFFILIATE_STATE_CACHE_LIMIT = 250
 _AFFILIATE_COOKIE = "twitch_affiliate_session"
 _COMMISSION_RATE = 0.30
 _MAX_PENDING_COMMISSION_CENTS = 5000
@@ -58,6 +62,396 @@ class _DashboardAffiliateMixin:
         _DashboardAffiliateMixin._affiliate_execute_schema(conn, sql)
         AffiliateGutschriftService.ensure_schema(conn)
         AffiliatePII.migrate_from_plaintext(conn)
+
+    def _affiliate_state_repo(self) -> Any:
+        repo = getattr(self, "_affiliate_state_repo_cache", None)
+        if repo is not None:
+            return repo
+
+        repo = None
+        repo_getter = getattr(self, "_dashboard_auth_state_repo", None)
+        if callable(repo_getter):
+            try:
+                repo = repo_getter()
+            except Exception as exc:
+                log.debug("Could not resolve dashboard auth state repository for affiliate flow: %s", exc)
+
+        if repo is None:
+            repo = DashboardAuthStateRepository()
+        self._affiliate_state_repo_cache = repo
+        return repo
+
+    @staticmethod
+    def _affiliate_state_cache(owner: Any, attr_name: str) -> dict[str, dict[str, Any]]:
+        cache = getattr(owner, attr_name, None)
+        if isinstance(cache, dict):
+            return cache
+        cache = {}
+        setattr(owner, attr_name, cache)
+        return cache
+
+    def _affiliate_prune_state_cache(
+        self,
+        cache: dict[str, dict[str, Any]],
+        *,
+        ttl_seconds: int,
+        now: float | None = None,
+    ) -> None:
+        current = time.time() if now is None else float(now)
+        expired = [
+            key
+            for key, row in cache.items()
+            if current - float(row.get("created_at", 0.0) or 0.0) > float(ttl_seconds)
+        ]
+        for key in expired:
+            cache.pop(key, None)
+
+        if len(cache) > _AFFILIATE_STATE_CACHE_LIMIT:
+            oldest = sorted(
+                cache.items(),
+                key=lambda item: float(item[1].get("created_at", 0.0) or 0.0),
+            )
+            for key, _ in oldest[: len(cache) - _AFFILIATE_STATE_CACHE_LIMIT]:
+                cache.pop(key, None)
+
+    def _affiliate_store_state(
+        self,
+        *,
+        state_type: str,
+        cache_attr: str,
+        state: str,
+        payload: dict[str, Any],
+        ttl_seconds: int,
+    ) -> bool:
+        cache = self._affiliate_state_cache(self, cache_attr)
+        now = time.time()
+        record = dict(payload)
+        record.setdefault("created_at", now)
+
+        try:
+            repo = self._affiliate_state_repo()
+            saver = getattr(repo, f"save_{state_type}")
+            saver(state=state, payload=record, ttl_seconds=ttl_seconds, now=now)
+        except Exception as exc:
+            log.warning("Could not persist affiliate %s state %s: %s", state_type, state, exc)
+            cache.pop(state, None)
+            return False
+
+        cache[state] = record
+        self._affiliate_prune_state_cache(cache, ttl_seconds=ttl_seconds, now=now)
+        return True
+
+    def _affiliate_consume_state(
+        self,
+        *,
+        state_type: str,
+        cache_attr: str,
+        state: str,
+        ttl_seconds: int,
+    ) -> dict[str, Any] | None:
+        cache = self._affiliate_state_cache(self, cache_attr)
+        now = time.time()
+        state_data: dict[str, Any] | None = None
+
+        try:
+            repo = self._affiliate_state_repo()
+            consumer = getattr(repo, f"consume_{state_type}")
+            state_data = consumer(state, now=now)
+        except Exception as exc:
+            log.debug("Could not consume affiliate %s state %s from DB: %s", state_type, state, exc)
+
+        if state_data is None:
+            state_data = cache.pop(state, None)
+        else:
+            cache.pop(state, None)
+
+        if not state_data:
+            return None
+
+        if now - float(state_data.get("created_at", 0.0) or 0.0) > float(ttl_seconds):
+            return None
+        return state_data
+
+    def _affiliate_save_oauth_state(self, state: str, payload: dict[str, Any]) -> bool:
+        return self._affiliate_store_state(
+            state_type="affiliate_oauth_state",
+            cache_attr="_affiliate_oauth_states",
+            state=state,
+            payload=payload,
+            ttl_seconds=_AFFILIATE_OAUTH_STATE_TTL,
+        )
+
+    def _affiliate_consume_oauth_state(self, state: str) -> dict[str, Any] | None:
+        return self._affiliate_consume_state(
+            state_type="affiliate_oauth_state",
+            cache_attr="_affiliate_oauth_states",
+            state=state,
+            ttl_seconds=_AFFILIATE_OAUTH_STATE_TTL,
+        )
+
+    def _affiliate_save_connect_state(self, state: str, payload: dict[str, Any]) -> bool:
+        return self._affiliate_store_state(
+            state_type="affiliate_connect_state",
+            cache_attr="_affiliate_connect_states",
+            state=state,
+            payload=payload,
+            ttl_seconds=_AFFILIATE_CONNECT_STATE_TTL,
+        )
+
+    def _affiliate_consume_connect_state(self, state: str) -> dict[str, Any] | None:
+        return self._affiliate_consume_state(
+            state_type="affiliate_connect_state",
+            cache_attr="_affiliate_connect_states",
+            state=state,
+            ttl_seconds=_AFFILIATE_CONNECT_STATE_TTL,
+        )
+
+    def _affiliate_upsert_account_and_pii_sync(
+        self,
+        *,
+        twitch_login: str,
+        twitch_user_id: str,
+        display_name: str,
+        email: str,
+    ) -> None:
+        now = datetime.now(UTC).isoformat()
+        with storage.transaction() as conn:
+            self._affiliate_ensure_tables(conn)
+            result = conn.execute(
+                "SELECT twitch_login FROM affiliate_accounts WHERE twitch_login = %s",
+                (twitch_login,),
+            )
+            row = result.fetchone() if result else None
+            if not row:
+                try:
+                    conn.execute(
+                        """INSERT INTO affiliate_accounts
+                           (twitch_login, twitch_user_id, display_name, email, full_name,
+                            address_line1, address_city, address_zip, address_country,
+                            created_at, updated_at)
+                           VALUES (%s, %s, %s, %s, %s, %s, %s, %s, 'DE', %s, %s)""",
+                        (
+                            twitch_login,
+                            twitch_user_id,
+                            display_name,
+                            "",
+                            "",
+                            "",
+                            "",
+                            "",
+                            now,
+                            now,
+                        ),
+                    )
+                    AffiliatePII.save_pii(conn, twitch_login, {"email": email})
+                except Exception as _dup_exc:
+                    if "unique" not in str(_dup_exc).lower() and "duplicate" not in str(_dup_exc).lower():
+                        raise
+            elif email:
+                AffiliatePII.save_pii(conn, twitch_login, {"email": email})
+
+    def _affiliate_connect_stripe_sync(
+        self,
+        *,
+        twitch_login: str,
+        stripe_user_id: str,
+        stripe_secret_key: str,
+    ) -> None:
+        now = datetime.now(UTC).isoformat()
+        with storage.transaction() as conn:
+            self._affiliate_ensure_tables(conn)
+            with self._affiliate_commission_lock(conn, twitch_login):
+                conn.execute(
+                    """UPDATE affiliate_accounts
+                       SET stripe_account_id = %s, stripe_connected_at = %s,
+                           stripe_connect_status = 'connected', updated_at = %s
+                       WHERE twitch_login = %s""",
+                    (stripe_user_id, now, now, twitch_login),
+                )
+
+                stripe, stripe_import_error = self._affiliate_import_stripe()
+                if stripe is not None:
+                    stripe.api_key = stripe_secret_key
+
+                self._affiliate_replay_pending_commissions(
+                    conn,
+                    stripe=stripe,
+                    stripe_account_id=stripe_user_id,
+                    affiliate_login=twitch_login,
+                    error_message=stripe_import_error or None,
+                    commit=False,
+                )
+
+    def _affiliate_claim_streamer_sync(self, twitch_login: str, streamer_login: str) -> str:
+        now = datetime.now(UTC).isoformat()
+        with storage.transaction() as conn:
+            self._affiliate_ensure_tables(conn)
+            partner_row = conn.execute(
+                """SELECT twitch_login
+                   FROM twitch_streamers_partner_state
+                   WHERE LOWER(twitch_login) = LOWER(%s) AND is_partner_active = 1""",
+                (streamer_login,),
+            ).fetchone()
+            if partner_row:
+                return "streamer_already_registered"
+            row = conn.execute(
+                "SELECT affiliate_twitch_login FROM affiliate_streamer_claims WHERE claimed_streamer_login = %s",
+                (streamer_login,),
+            ).fetchone()
+            if row:
+                return "streamer_already_registered"
+
+            try:
+                conn.execute(
+                    """INSERT INTO affiliate_streamer_claims
+                       (affiliate_twitch_login, claimed_streamer_login, claimed_at)
+                       VALUES (%s, %s, %s)""",
+                    (twitch_login, streamer_login, now),
+                )
+            except Exception as _dup_exc:
+                if "unique" in str(_dup_exc).lower() or "duplicate" in str(_dup_exc).lower():
+                    return "already_claimed"
+                raise
+        return "ok"
+
+    def _affiliate_load_profile_sync(
+        self,
+        twitch_login: str,
+    ) -> tuple[Any | None, dict[str, Any] | None]:
+        with storage.readonly_connection() as conn:
+            self._affiliate_ensure_tables(conn)
+            row = conn.execute(
+                "SELECT * FROM affiliate_accounts WHERE twitch_login = %s",
+                (twitch_login,),
+            ).fetchone()
+            pii = AffiliatePII.load_pii(conn, twitch_login) if row else None
+        return row, pii
+
+    def _affiliate_update_profile_sync(
+        self,
+        *,
+        twitch_login: str,
+        payload: dict[str, Any],
+    ) -> tuple[Any | None, dict[str, Any] | None]:
+        now = datetime.now(UTC).isoformat()
+        with storage.transaction() as conn:
+            self._affiliate_ensure_tables(conn)
+            row = conn.execute(
+                "SELECT * FROM affiliate_accounts WHERE twitch_login = %s",
+                (twitch_login,),
+            ).fetchone()
+            if not row:
+                return None, None
+
+            AffiliatePII.save_pii(conn, twitch_login, payload)
+            conn.execute(
+                "UPDATE affiliate_accounts SET updated_at = %s WHERE twitch_login = %s",
+                (now, twitch_login),
+            )
+            updated_row = conn.execute(
+                "SELECT * FROM affiliate_accounts WHERE twitch_login = %s",
+                (twitch_login,),
+            ).fetchone()
+            pii = AffiliatePII.load_pii(conn, twitch_login)
+        return updated_row, pii
+
+    def _affiliate_load_claims_sync(self, twitch_login: str) -> list[dict[str, Any]]:
+        with storage.readonly_connection() as conn:
+            self._affiliate_ensure_tables(conn)
+            rows = conn.execute(
+                """SELECT c.claimed_streamer_login, c.claimed_at,
+                          COUNT(co.id) AS commission_count,
+                          COALESCE(SUM(co.commission_cents), 0) AS total_commission_cents
+                   FROM affiliate_streamer_claims c
+                   LEFT JOIN affiliate_commissions co
+                       ON co.affiliate_twitch_login = c.affiliate_twitch_login
+                       AND co.streamer_login = c.claimed_streamer_login
+                   WHERE c.affiliate_twitch_login = %s
+                   GROUP BY c.claimed_streamer_login, c.claimed_at""",
+                (twitch_login,),
+            ).fetchall()
+
+        return [
+            {
+                "streamer_login": row["claimed_streamer_login"],
+                "claimed_at": row["claimed_at"],
+                "commission_count": row["commission_count"],
+                "total_commission_cents": row["total_commission_cents"],
+            }
+            for row in rows
+        ]
+
+    def _affiliate_load_commissions_sync(
+        self,
+        *,
+        twitch_login: str,
+        page_size: int,
+        offset: int,
+    ) -> tuple[int, list[dict[str, Any]]]:
+        with storage.readonly_connection() as conn:
+            self._affiliate_ensure_tables(conn)
+            total_row = conn.execute(
+                "SELECT COUNT(*) AS cnt FROM affiliate_commissions WHERE affiliate_twitch_login = %s",
+                (twitch_login,),
+            ).fetchone()
+            total = int(total_row["cnt"] if total_row else 0)
+
+            rows = conn.execute(
+                """SELECT id, streamer_login, brutto_cents, commission_cents, currency,
+                          status, period_start, period_end, created_at, transferred_at
+                   FROM affiliate_commissions
+                   WHERE affiliate_twitch_login = %s
+                   ORDER BY created_at DESC
+                   LIMIT %s OFFSET %s""",
+                (twitch_login, page_size, offset),
+            ).fetchall()
+
+        return total, [
+            {
+                "id": row["id"],
+                "streamer_login": row["streamer_login"],
+                "brutto_cents": row["brutto_cents"],
+                "commission_cents": row["commission_cents"],
+                "currency": row["currency"],
+                "status": row["status"],
+                "period_start": row["period_start"],
+                "period_end": row["period_end"],
+                "created_at": row["created_at"],
+                "transferred_at": row["transferred_at"],
+            }
+            for row in rows
+        ]
+
+    def _affiliate_load_gutschriften_sync(
+        self,
+        twitch_login: str,
+    ) -> tuple[Any | None, dict[str, Any] | None, list[dict[str, Any]]]:
+        with storage.readonly_connection() as conn:
+            self._affiliate_ensure_tables(conn)
+            account_row = conn.execute(
+                "SELECT * FROM affiliate_accounts WHERE twitch_login = %s",
+                (twitch_login,),
+            ).fetchone()
+            if not account_row:
+                return None, None, []
+            pii = AffiliatePII.load_pii(conn, twitch_login)
+            documents = AffiliateGutschriftService.list_for_affiliate(conn, twitch_login)
+        return account_row, pii, documents
+
+    def _affiliate_load_gutschrift_pdf_sync(
+        self,
+        *,
+        twitch_login: str,
+        gutschrift_id: int,
+    ) -> tuple[dict[str, Any], bytes] | None:
+        with storage.readonly_connection() as conn:
+            self._affiliate_ensure_tables(conn)
+            resolved = AffiliateGutschriftService.get_pdf(
+                conn,
+                affiliate_login=twitch_login,
+                gutschrift_id=gutschrift_id,
+            )
+        return resolved
 
     @staticmethod
     def _affiliate_profile_payload(
@@ -455,15 +849,19 @@ class _DashboardAffiliateMixin:
         if existing:
             raise web.HTTPFound("/twitch/affiliate/portal")
 
-        if not hasattr(self, "_affiliate_oauth_states"):
-            self._affiliate_oauth_states = {}
-
         redirect_uri = self._affiliate_build_redirect_uri()
         state = secrets.token_urlsafe(24)
-        self._affiliate_oauth_states[state] = {
-            "created_at": time.time(),
-            "redirect_uri": redirect_uri,
-        }
+        if not self._affiliate_save_oauth_state(
+            state,
+            {
+                "created_at": time.time(),
+                "redirect_uri": redirect_uri,
+            },
+        ):
+            return web.Response(
+                text="OAuth-Status konnte nicht sicher gespeichert werden. Bitte erneut versuchen.",
+                status=503,
+            )
         params = urlencode({
             "client_id": self._oauth_client_id,
             "redirect_uri": redirect_uri,
@@ -486,11 +884,10 @@ class _DashboardAffiliateMixin:
         if not state or not code:
             return web.Response(text="Fehlender OAuth state/code.", status=400)
 
-        states = getattr(self, "_affiliate_oauth_states", {})
-        state_data = states.pop(state, None)
+        state_data = self._affiliate_consume_oauth_state(state)
         if not state_data:
             return web.Response(text="OAuth state ungueltig oder abgelaufen.", status=400)
-        if time.time() - float(state_data.get("created_at", 0)) > 600:
+        if time.time() - float(state_data.get("created_at", 0)) > _AFFILIATE_OAUTH_STATE_TTL:
             return web.Response(text="OAuth state abgelaufen.", status=400)
 
         redirect_uri = str(state_data.get("redirect_uri") or "")
@@ -509,43 +906,13 @@ class _DashboardAffiliateMixin:
             display_name=display_name,
             email=email,
         )
-
-        now = datetime.now(UTC).isoformat()
-        with storage.transaction() as conn:
-            self._affiliate_ensure_tables(conn)
-            result = conn.execute(
-                "SELECT twitch_login FROM affiliate_accounts WHERE twitch_login = %s",
-                (twitch_login,),
-            )
-            row = result.fetchone() if result else None
-            if not row:
-                try:
-                    conn.execute(
-                        """INSERT INTO affiliate_accounts
-                           (twitch_login, twitch_user_id, display_name, email, full_name,
-                            address_line1, address_city, address_zip, address_country,
-                            created_at, updated_at)
-                           VALUES (%s, %s, %s, %s, %s, %s, %s, %s, 'DE', %s, %s)""",
-                        (
-                            twitch_login,
-                            twitch_user_id,
-                            display_name,
-                            "",
-                            "",
-                            "",
-                            "",
-                            "",
-                            now,
-                            now,
-                        ),
-                    )
-                    AffiliatePII.save_pii(conn, twitch_login, {"email": email})
-                except Exception as _dup_exc:
-                    if "unique" not in str(_dup_exc).lower() and "duplicate" not in str(_dup_exc).lower():
-                        raise
-            else:
-                if email:
-                    AffiliatePII.save_pii(conn, twitch_login, {"email": email})
+        await asyncio.to_thread(
+            self._affiliate_upsert_account_and_pii_sync,
+            twitch_login=twitch_login,
+            twitch_user_id=twitch_user_id,
+            display_name=display_name,
+            email=email,
+        )
 
         destination = "/twitch/affiliate/portal"
 
@@ -628,16 +995,20 @@ class _DashboardAffiliateMixin:
         if not stripe_connect_client_id:
             return web.Response(text="Stripe Connect ist nicht konfiguriert.", status=503)
 
-        if not hasattr(self, "_affiliate_connect_states"):
-            self._affiliate_connect_states = {}
-
         state = secrets.token_urlsafe(24)
         redirect_uri = self._affiliate_build_stripe_connect_redirect_uri()
-        self._affiliate_connect_states[state] = {
-            "created_at": time.time(),
-            "redirect_uri": redirect_uri,
-            "twitch_login": session.get("twitch_login", ""),
-        }
+        if not self._affiliate_save_connect_state(
+            state,
+            {
+                "created_at": time.time(),
+                "redirect_uri": redirect_uri,
+                "twitch_login": session.get("twitch_login", ""),
+            },
+        ):
+            return web.Response(
+                text="State konnte nicht sicher gespeichert werden. Bitte erneut versuchen.",
+                status=503,
+            )
 
         params = urlencode({
             "response_type": "code",
@@ -658,11 +1029,10 @@ class _DashboardAffiliateMixin:
         if not state or not code:
             return web.Response(text="Fehlender state/code.", status=400)
 
-        states = getattr(self, "_affiliate_connect_states", {})
-        state_data = states.pop(state, None)
+        state_data = self._affiliate_consume_connect_state(state)
         if not state_data:
             return web.Response(text="State ungueltig oder abgelaufen.", status=400)
-        if time.time() - float(state_data.get("created_at", 0)) > 600:
+        if time.time() - float(state_data.get("created_at", 0)) > _AFFILIATE_CONNECT_STATE_TTL:
             return web.Response(text="State abgelaufen.", status=400)
         session_login = str(session.get("twitch_login") or "").strip().lower()
         state_login = str(state_data.get("twitch_login") or "").strip().lower()
@@ -700,31 +1070,12 @@ class _DashboardAffiliateMixin:
             return web.Response(text="Keine Stripe Account ID erhalten.", status=502)
 
         twitch_login = session_login
-        now = datetime.now(UTC).isoformat()
-
-        with storage.transaction() as conn:
-            self._affiliate_ensure_tables(conn)
-            with self._affiliate_commission_lock(conn, twitch_login):
-                conn.execute(
-                    """UPDATE affiliate_accounts
-                       SET stripe_account_id = %s, stripe_connected_at = %s,
-                           stripe_connect_status = 'connected', updated_at = %s
-                       WHERE twitch_login = %s""",
-                    (stripe_user_id, now, now, twitch_login),
-                )
-
-                stripe, stripe_import_error = self._affiliate_import_stripe()
-                if stripe is not None:
-                    stripe.api_key = stripe_secret_key
-
-                self._affiliate_replay_pending_commissions(
-                    conn,
-                    stripe=stripe,
-                    stripe_account_id=stripe_user_id,
-                    affiliate_login=twitch_login,
-                    error_message=stripe_import_error or None,
-                    commit=False,
-                )
+        await asyncio.to_thread(
+            self._affiliate_connect_stripe_sync,
+            twitch_login=twitch_login,
+            stripe_user_id=stripe_user_id,
+            stripe_secret_key=stripe_secret_key,
+        )
 
         raise web.HTTPFound("/twitch/affiliate/portal")
 
@@ -742,35 +1093,23 @@ class _DashboardAffiliateMixin:
         except Exception:
             return web.json_response({"error": "invalid_json"}, status=400)
 
+        if not isinstance(body, dict):
+            return web.json_response({"error": "invalid_payload"}, status=400)
+
         streamer_login = str(body.get("streamer_login") or "").strip().lower()
         if not _LOGIN_RE.match(streamer_login):
             return web.json_response({"error": "invalid_login"}, status=400)
 
-        twitch_login = session.get("twitch_login", "")
-        now = datetime.now(UTC).isoformat()
-
-        with storage.transaction() as conn:
-            self._affiliate_ensure_tables(conn)
-
-            # Check if streamer is already a registered partner
-            row = conn.execute(
-                "SELECT twitch_login FROM twitch_streamers_partner_state WHERE LOWER(twitch_login) = LOWER(%s) AND is_partner_active = 1",
-                (streamer_login,),
-            ).fetchone()
-            if row:
-                return web.json_response({"error": "streamer_already_registered"}, status=409)
-
-            try:
-                conn.execute(
-                    """INSERT INTO affiliate_streamer_claims
-                       (affiliate_twitch_login, claimed_streamer_login, claimed_at)
-                       VALUES (%s, %s, %s)""",
-                    (twitch_login, streamer_login, now),
-                )
-            except Exception as _dup_exc:
-                if "unique" in str(_dup_exc).lower() or "duplicate" in str(_dup_exc).lower():
-                    return web.json_response({"error": "already_claimed"}, status=409)
-                raise
+        twitch_login = str(session.get("twitch_login") or "").strip().lower()
+        claim_status = await asyncio.to_thread(
+            self._affiliate_claim_streamer_sync,
+            twitch_login,
+            streamer_login,
+        )
+        if claim_status == "streamer_already_registered":
+            return web.json_response({"error": "streamer_already_registered"}, status=409)
+        if claim_status == "already_claimed":
+            return web.json_response({"error": "already_claimed"}, status=409)
 
         return web.json_response({"ok": True, "claimed": streamer_login})
 
@@ -784,14 +1123,7 @@ class _DashboardAffiliateMixin:
             return web.json_response({"error": "unauthorized"}, status=401)
 
         twitch_login = session.get("twitch_login", "")
-
-        with storage.readonly_connection() as conn:
-            self._affiliate_ensure_tables(conn)
-            row = conn.execute(
-                "SELECT * FROM affiliate_accounts WHERE twitch_login = %s",
-                (twitch_login,),
-            ).fetchone()
-            pii = AffiliatePII.load_pii(conn, twitch_login) if row else None
+        row, pii = await asyncio.to_thread(self._affiliate_load_profile_sync, twitch_login)
 
         if not row:
             return web.json_response({"error": "not_found"}, status=404)
@@ -830,27 +1162,13 @@ class _DashboardAffiliateMixin:
             "vat_id": body.get("vat_id"),
             "ust_status": ust_status or "unknown",
         }
-        now = datetime.now(UTC).isoformat()
-
-        with storage.transaction() as conn:
-            self._affiliate_ensure_tables(conn)
-            row = conn.execute(
-                "SELECT * FROM affiliate_accounts WHERE twitch_login = %s",
-                (twitch_login,),
-            ).fetchone()
-            if not row:
-                return web.json_response({"error": "not_found"}, status=404)
-
-            AffiliatePII.save_pii(conn, twitch_login, payload)
-            conn.execute(
-                "UPDATE affiliate_accounts SET updated_at = %s WHERE twitch_login = %s",
-                (now, twitch_login),
-            )
-            updated_row = conn.execute(
-                "SELECT * FROM affiliate_accounts WHERE twitch_login = %s",
-                (twitch_login,),
-            ).fetchone()
-            pii = AffiliatePII.load_pii(conn, twitch_login)
+        updated_row, pii = await asyncio.to_thread(
+            self._affiliate_update_profile_sync,
+            twitch_login=twitch_login,
+            payload=payload,
+        )
+        if not updated_row:
+            return web.json_response({"error": "not_found"}, status=404)
 
         readiness = AffiliateGutschriftService.build_readiness(pii)
         return web.json_response(
@@ -870,31 +1188,7 @@ class _DashboardAffiliateMixin:
             return web.json_response({"error": "unauthorized"}, status=401)
 
         twitch_login = session.get("twitch_login", "")
-
-        with storage.readonly_connection() as conn:
-            self._affiliate_ensure_tables(conn)
-            rows = conn.execute(
-                """SELECT c.claimed_streamer_login, c.claimed_at,
-                          COUNT(co.id) AS commission_count,
-                          COALESCE(SUM(co.commission_cents), 0) AS total_commission_cents
-                   FROM affiliate_streamer_claims c
-                   LEFT JOIN affiliate_commissions co
-                       ON co.affiliate_twitch_login = c.affiliate_twitch_login
-                       AND co.streamer_login = c.claimed_streamer_login
-                   WHERE c.affiliate_twitch_login = %s
-                   GROUP BY c.claimed_streamer_login, c.claimed_at""",
-                (twitch_login,),
-            ).fetchall()
-
-        claims = [
-            {
-                "streamer_login": r["claimed_streamer_login"],
-                "claimed_at": r["claimed_at"],
-                "commission_count": r["commission_count"],
-                "total_commission_cents": r["total_commission_cents"],
-            }
-            for r in rows
-        ]
+        claims = await asyncio.to_thread(self._affiliate_load_claims_sync, twitch_login)
         return web.json_response({"claims": claims})
 
     async def _affiliate_api_commissions(self, request: web.Request) -> web.StreamResponse:
@@ -909,40 +1203,12 @@ class _DashboardAffiliateMixin:
         except (ValueError, TypeError):
             page, page_size = 1, 25
         offset = (page - 1) * page_size
-
-        with storage.readonly_connection() as conn:
-            self._affiliate_ensure_tables(conn)
-            total_row = conn.execute(
-                "SELECT COUNT(*) AS cnt FROM affiliate_commissions WHERE affiliate_twitch_login = %s",
-                (twitch_login,),
-            ).fetchone()
-            total = total_row["cnt"] if total_row else 0
-
-            rows = conn.execute(
-                """SELECT id, streamer_login, brutto_cents, commission_cents, currency,
-                          status, period_start, period_end, created_at, transferred_at
-                   FROM affiliate_commissions
-                   WHERE affiliate_twitch_login = %s
-                   ORDER BY created_at DESC
-                   LIMIT %s OFFSET %s""",
-                (twitch_login, page_size, offset),
-            ).fetchall()
-
-        commissions = [
-            {
-                "id": r["id"],
-                "streamer_login": r["streamer_login"],
-                "brutto_cents": r["brutto_cents"],
-                "commission_cents": r["commission_cents"],
-                "currency": r["currency"],
-                "status": r["status"],
-                "period_start": r["period_start"],
-                "period_end": r["period_end"],
-                "created_at": r["created_at"],
-                "transferred_at": r["transferred_at"],
-            }
-            for r in rows
-        ]
+        total, commissions = await asyncio.to_thread(
+            self._affiliate_load_commissions_sync,
+            twitch_login=twitch_login,
+            page_size=page_size,
+            offset=offset,
+        )
         return web.json_response({
             "commissions": commissions,
             "page": page,
@@ -956,16 +1222,12 @@ class _DashboardAffiliateMixin:
             return web.json_response({"error": "unauthorized"}, status=401)
 
         twitch_login = str(session.get("twitch_login") or "").strip().lower()
-        with storage.readonly_connection() as conn:
-            self._affiliate_ensure_tables(conn)
-            account_row = conn.execute(
-                "SELECT * FROM affiliate_accounts WHERE twitch_login = %s",
-                (twitch_login,),
-            ).fetchone()
-            if not account_row:
-                return web.json_response({"error": "not_found"}, status=404)
-            pii = AffiliatePII.load_pii(conn, twitch_login)
-            documents = AffiliateGutschriftService.list_for_affiliate(conn, twitch_login)
+        account_row, pii, documents = await asyncio.to_thread(
+            self._affiliate_load_gutschriften_sync,
+            twitch_login,
+        )
+        if not account_row:
+            return web.json_response({"error": "not_found"}, status=404)
 
         readiness = AffiliateGutschriftService.build_readiness(pii)
         return web.json_response(
@@ -993,13 +1255,11 @@ class _DashboardAffiliateMixin:
             return web.json_response({"error": "invalid_gutschrift_id"}, status=400)
 
         twitch_login = str(session.get("twitch_login") or "").strip().lower()
-        with storage.readonly_connection() as conn:
-            self._affiliate_ensure_tables(conn)
-            resolved = AffiliateGutschriftService.get_pdf(
-                conn,
-                affiliate_login=twitch_login,
-                gutschrift_id=gutschrift_id,
-            )
+        resolved = await asyncio.to_thread(
+            self._affiliate_load_gutschrift_pdf_sync,
+            twitch_login=twitch_login,
+            gutschrift_id=gutschrift_id,
+        )
         if resolved is None:
             return web.json_response({"error": "not_found"}, status=404)
 

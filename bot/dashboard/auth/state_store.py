@@ -11,6 +11,8 @@ from ...storage import sessions_db
 
 _TWITCH_OAUTH_STATE_TYPE = "oauth_state:twitch"
 _DISCORD_ADMIN_OAUTH_STATE_TYPE = "oauth_state:discord_admin"
+_AFFILIATE_OAUTH_STATE_TYPE = "oauth_state:affiliate"
+_AFFILIATE_CONNECT_STATE_TYPE = "oauth_state:affiliate_connect"
 _TWITCH_SESSION_TYPE = "twitch"
 _DISCORD_ADMIN_SESSION_TYPE = "discord_admin"
 _RATE_LIMIT_SESSION_TYPE = "rate_limit:dashboard_auth"
@@ -74,6 +76,54 @@ class DashboardAuthStateRepository:
         now: float | None = None,
     ) -> dict[str, Any] | None:
         return self._consume_state(_DISCORD_ADMIN_OAUTH_STATE_TYPE, state, now=now)
+
+    def save_affiliate_oauth_state(
+        self,
+        *,
+        state: str,
+        payload: dict[str, Any],
+        ttl_seconds: float,
+        now: float | None = None,
+    ) -> None:
+        self._save_state(
+            state_type=_AFFILIATE_OAUTH_STATE_TYPE,
+            state=state,
+            payload=payload,
+            ttl_seconds=ttl_seconds,
+            now=now,
+        )
+
+    def consume_affiliate_oauth_state(
+        self,
+        state: str,
+        *,
+        now: float | None = None,
+    ) -> dict[str, Any] | None:
+        return self._consume_state(_AFFILIATE_OAUTH_STATE_TYPE, state, now=now)
+
+    def save_affiliate_connect_state(
+        self,
+        *,
+        state: str,
+        payload: dict[str, Any],
+        ttl_seconds: float,
+        now: float | None = None,
+    ) -> None:
+        self._save_state(
+            state_type=_AFFILIATE_CONNECT_STATE_TYPE,
+            state=state,
+            payload=payload,
+            ttl_seconds=ttl_seconds,
+            now=now,
+        )
+
+    def consume_affiliate_connect_state(
+        self,
+        state: str,
+        *,
+        now: float | None = None,
+    ) -> dict[str, Any] | None:
+        return self._consume_state(_AFFILIATE_CONNECT_STATE_TYPE, state, now=now)
 
     def load_dashboard_session(self, session_id: str, *, now: float | None = None) -> dict[str, Any] | None:
         return self._load_session(_TWITCH_SESSION_TYPE, session_id, now=now)

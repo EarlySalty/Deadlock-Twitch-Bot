@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import secrets
 import time
 from typing import Any
@@ -554,6 +555,15 @@ class _DashboardAuthMixin:
             "twitch_user_id": str(row[1] or ""),
         }
 
+    async def _is_partner_allowed_async(
+        self, *, twitch_login: str, twitch_user_id: str
+    ) -> dict[str, Any] | None:
+        return await asyncio.to_thread(
+            self._is_partner_allowed,
+            twitch_login=twitch_login,
+            twitch_user_id=twitch_user_id,
+        )
+
     async def _exchange_code_for_user(self, code: str, redirect_uri: str) -> dict[str, str] | None:
         if not self._is_oauth_configured():
             return None
@@ -958,7 +968,7 @@ class _DashboardAuthMixin:
                 status=401,
             )
 
-        partner = self._is_partner_allowed(
+        partner = await self._is_partner_allowed_async(
             twitch_login=user.get("twitch_login") or "",
             twitch_user_id=user.get("twitch_user_id") or "",
         )

@@ -69,6 +69,32 @@ class _RecordingClientSession:
         return self._response
 
 
+class _InMemoryAffiliateStateRepo:
+    def __init__(self) -> None:
+        self.oauth_states: dict[str, dict] = {}
+        self.connect_states: dict[str, dict] = {}
+
+    def save_affiliate_oauth_state(
+        self, *, state: str, payload: dict, ttl_seconds: float, now=None
+    ) -> None:
+        del ttl_seconds, now
+        self.oauth_states[state] = dict(payload)
+
+    def consume_affiliate_oauth_state(self, state: str, *, now=None) -> dict | None:
+        del now
+        return self.oauth_states.pop(state, None)
+
+    def save_affiliate_connect_state(
+        self, *, state: str, payload: dict, ttl_seconds: float, now=None
+    ) -> None:
+        del ttl_seconds, now
+        self.connect_states[state] = dict(payload)
+
+    def consume_affiliate_connect_state(self, state: str, *, now=None) -> dict | None:
+        del now
+        return self.connect_states.pop(state, None)
+
+
 class _AffiliateStripeHarness(_DashboardAffiliateMixin):
     def __init__(
         self,
@@ -81,6 +107,7 @@ class _AffiliateStripeHarness(_DashboardAffiliateMixin):
         self._affiliate_connect_states = {}
         self._public_url = public_url
         self._loader_value = loader_value
+        self._state_repo = _InMemoryAffiliateStateRepo()
         self.loader_calls: list[tuple[str, ...]] = []
 
     def _get_affiliate_session(self, _request):
@@ -93,6 +120,9 @@ class _AffiliateStripeHarness(_DashboardAffiliateMixin):
     def _load_secret_value(self, *keys: str) -> str:
         self.loader_calls.append(tuple(keys))
         return self._loader_value
+
+    def _dashboard_auth_state_repo(self):
+        return self._state_repo
 
 
 class _AffiliateStripeCallbackHarness(_DashboardAffiliateMixin):
@@ -111,6 +141,8 @@ class _AffiliateStripeCallbackHarness(_DashboardAffiliateMixin):
             }
         }
         self._session_login = session_login
+        self._state_repo = _InMemoryAffiliateStateRepo()
+        self._state_repo.connect_states["state-123"] = dict(self._affiliate_connect_states["state-123"])
         self.loader_calls: list[tuple[str, ...]] = []
 
     def _get_affiliate_session(self, _request):
@@ -125,6 +157,9 @@ class _AffiliateStripeCallbackHarness(_DashboardAffiliateMixin):
         if keys == ("STRIPE_SECRET_KEY", "TWITCH_BILLING_STRIPE_SECRET_KEY"):
             return "sk_test_123"
         return ""
+
+    def _dashboard_auth_state_repo(self):
+        return self._state_repo
 
 
 class AffiliateStripeConnectTests(unittest.IsolatedAsyncioTestCase):

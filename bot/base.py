@@ -29,6 +29,7 @@ except Exception:  # pragma: no cover - fallback if master package not in path
         return
 
 from . import storage
+from .api.token_manager import TwitchBotTokenManager
 from .chat.bot import TWITCHIO_AVAILABLE, create_twitch_chat_bot, load_bot_tokens
 from .chat.constants import CHAT_JOIN_OFFLINE
 from .chat.irc_lurker_tracker import IRCLurkerTracker
@@ -442,6 +443,34 @@ class _RuntimeStateBridge:
         raise AttributeError(name)
 
 
+class _RuntimeManagedField:
+    __slots__ = ("alias_name",)
+
+    def __init__(self, alias_name: str) -> None:
+        self.alias_name = str(alias_name or "").strip()
+
+    def __get__(self, instance: commands.Cog | None, owner: type[commands.Cog]) -> Any:
+        del owner
+        if instance is None:
+            return self
+        getter = getattr(instance, "_runtime_get_managed_value", None)
+        if not callable(getter):
+            raise AttributeError(self.alias_name)
+        return getter(self.alias_name)
+
+    def __set__(self, instance: commands.Cog, value: Any) -> None:
+        setter = getattr(instance, "_runtime_set_managed_value", None)
+        if not callable(setter):
+            raise AttributeError(self.alias_name)
+        setter(self.alias_name, value)
+
+    def __delete__(self, instance: commands.Cog) -> None:
+        deleter = getattr(instance, "_runtime_del_managed_value", None)
+        if not callable(deleter):
+            raise AttributeError(self.alias_name)
+        deleter(self.alias_name)
+
+
 class TwitchBaseCog(commands.Cog):
     """Handle shared initialisation, shutdown and utility helpers."""
 
@@ -482,12 +511,36 @@ class TwitchBaseCog(commands.Cog):
             object.__setattr__(self, "_runtime_state", state)
         return state
 
+    def _runtime_get_managed_value(self, name: str) -> Any:
+        bridge = self.__dict__.get("_runtime_state_bridge")
+        if bridge is None:
+            bridge = self._get_runtime_state_bridge()
+        if not bridge.is_managed(name):
+            raise AttributeError(name)
+        return bridge.get_value(self._get_runtime_state_container(), name)
+
+    def _runtime_set_managed_value(self, name: str, value: Any) -> None:
+        bridge = self.__dict__.get("_runtime_state_bridge")
+        if bridge is None:
+            bridge = self._get_runtime_state_bridge()
+        if not bridge.is_managed(name):
+            raise AttributeError(name)
+        bridge.set_value(self._get_runtime_state_container(), name, value)
+
+    def _runtime_del_managed_value(self, name: str) -> None:
+        bridge = self.__dict__.get("_runtime_state_bridge")
+        if bridge is None:
+            bridge = self._get_runtime_state_bridge()
+        if not bridge.is_managed(name):
+            raise AttributeError(name)
+        bridge.del_value(self._get_runtime_state_container(), name)
+
     def __getattr__(self, name: str) -> Any:
         bridge = self.__dict__.get("_runtime_state_bridge")
         if bridge is None:
             bridge = self._get_runtime_state_bridge()
         if bridge.is_managed(name):
-            return bridge.get_value(self._get_runtime_state_container(), name)
+            return self._runtime_get_managed_value(name)
         raise AttributeError(name)
 
     def __setattr__(self, name: str, value: Any) -> None:
@@ -497,20 +550,28 @@ class TwitchBaseCog(commands.Cog):
         if name in _RUNTIME_STATE_SURFACE_NAMES:
             object.__setattr__(self, "_runtime_state", value)
             return
+        descriptor = inspect.getattr_static(type(self), name, None)
+        if hasattr(descriptor, "__set__"):
+            object.__setattr__(self, name, value)
+            return
         bridge = self.__dict__.get("_runtime_state_bridge")
         if bridge is None:
             bridge = self._get_runtime_state_bridge()
         if bridge.is_managed(name):
-            bridge.set_value(self._get_runtime_state_container(), name, value)
+            self._runtime_set_managed_value(name, value)
             return
         object.__setattr__(self, name, value)
 
     def __delattr__(self, name: str) -> None:
+        descriptor = inspect.getattr_static(type(self), name, None)
+        if hasattr(descriptor, "__delete__"):
+            object.__delattr__(self, name)
+            return
         bridge = self.__dict__.get("_runtime_state_bridge")
         if bridge is None:
             bridge = self._get_runtime_state_bridge()
         if bridge.is_managed(name):
-            bridge.del_value(self._get_runtime_state_container(), name)
+            self._runtime_del_managed_value(name)
             return
         object.__delattr__(self, name)
 
@@ -2266,3 +2327,17 @@ class TwitchBaseCog(commands.Cog):
             if tok not in seen:
                 seen.append(tok)
         return seen or None
+
+
+def _install_runtime_managed_fields(owner: type[TwitchBaseCog]) -> None:
+    runtime_state_module = _load_runtime_state_module()
+    managed_names, _ = _normalize_runtime_state_alias_map(runtime_state_module)
+    for name in sorted(managed_names):
+        if not name or name in _RUNTIME_STATE_INTERNAL_NAMES:
+            continue
+        if name in owner.__dict__:
+            continue
+        setattr(owner, name, _RuntimeManagedField(name))
+
+
+_install_runtime_managed_fields(TwitchBaseCog)

@@ -177,6 +177,11 @@ class DashboardV2Server(
         self._affiliate_sessions: dict = {}
         self._session_ttl_seconds = max(6 * 3600, int(session_ttl_seconds or 6 * 3600))
         self._legacy_stats_url = (legacy_stats_url or "").strip() or None
+        self._session_cookie_name = "twitch_dash_session"
+        self._oauth_states: dict[str, dict[str, Any]] = {}
+        self._auth_sessions: dict[str, dict[str, Any]] = {}
+        self._sessions_db_loaded: bool = False
+        self._oauth_state_ttl_seconds = 600
         self._reload_cb = (
             reload_cb
             if callable(reload_cb)
@@ -184,17 +189,48 @@ class DashboardV2Server(
             if callable(services.reload_cb)
             else bot_service.reload_cb()
         )
-        self._session_cookie_name = "twitch_dash_session"
-        self._oauth_states: dict[str, dict[str, Any]] = {}
-        self._auth_sessions: dict[str, dict[str, Any]] = {}
-        self._sessions_db_loaded: bool = False
-        self._oauth_state_ttl_seconds = 600
-        self._add = add_cb if callable(add_cb) else services.add_cb if callable(services.add_cb) else self._empty_add
-        self._remove = remove_cb if callable(remove_cb) else services.remove_cb if callable(services.remove_cb) else self._empty_remove
-        self._list = list_cb if callable(list_cb) else services.list_cb if callable(services.list_cb) else self._empty_list
-        self._stats = stats_cb if callable(stats_cb) else services.stats_cb if callable(services.stats_cb) else self._empty_stats
-        self._verify = verify_cb if callable(verify_cb) else services.verify_cb if callable(services.verify_cb) else self._empty_verify
-        self._archive = archive_cb if callable(archive_cb) else services.archive_cb if callable(services.archive_cb) else self._empty_archive
+        self._add = (
+            add_cb
+            if callable(add_cb)
+            else services.add_cb
+            if callable(services.add_cb)
+            else self._empty_add
+        )
+        self._remove = (
+            remove_cb
+            if callable(remove_cb)
+            else services.remove_cb
+            if callable(services.remove_cb)
+            else self._empty_remove
+        )
+        self._list = (
+            list_cb
+            if callable(list_cb)
+            else services.list_cb
+            if callable(services.list_cb)
+            else self._empty_list
+        )
+        self._stats = (
+            stats_cb
+            if callable(stats_cb)
+            else services.stats_cb
+            if callable(services.stats_cb)
+            else self._empty_stats
+        )
+        self._verify = (
+            verify_cb
+            if callable(verify_cb)
+            else services.verify_cb
+            if callable(services.verify_cb)
+            else self._empty_verify
+        )
+        self._archive = (
+            archive_cb
+            if callable(archive_cb)
+            else services.archive_cb
+            if callable(services.archive_cb)
+            else self._empty_archive
+        )
         self._discord_flag = (
             discord_flag_cb
             if callable(discord_flag_cb)
@@ -203,7 +239,11 @@ class DashboardV2Server(
             else self._empty_discord_flag
         )
         self._discord_profile = (
-            discord_profile_cb if callable(discord_profile_cb) else services.discord_profile_cb
+            discord_profile_cb
+            if callable(discord_profile_cb)
+            else services.discord_profile_cb
+            if callable(services.discord_profile_cb)
+            else None
         )
         self._raid_history_cb = (
             raid_history_cb
@@ -213,18 +253,32 @@ class DashboardV2Server(
             else self._empty_raid_history
         )
         self._raid_auth_url_cb = (
-            raid_auth_url_cb if callable(raid_auth_url_cb) else services.raid_auth_url_cb
+            raid_auth_url_cb
+            if callable(raid_auth_url_cb)
+            else services.raid_auth_url_cb
+            if callable(services.raid_auth_url_cb)
+            else None
         )
-        self._raid_go_url_cb = raid_go_url_cb if callable(raid_go_url_cb) else services.raid_go_url_cb
+        self._raid_go_url_cb = (
+            raid_go_url_cb
+            if callable(raid_go_url_cb)
+            else services.raid_go_url_cb
+            if callable(services.raid_go_url_cb)
+            else None
+        )
         self._raid_requirements_cb = (
             raid_requirements_cb
             if callable(raid_requirements_cb)
             else services.raid_requirements_cb
+            if callable(services.raid_requirements_cb)
+            else None
         )
         self._raid_oauth_callback_cb = (
             raid_oauth_callback_cb
             if callable(raid_oauth_callback_cb)
             else services.raid_oauth_callback_cb
+            if callable(services.raid_oauth_callback_cb)
+            else None
         )
         self._social_media_clip_manager = (
             social_media_clip_manager
@@ -915,9 +969,7 @@ def build_v2_app(
     async def _bootstrap_and_register_routes(_: web.Application) -> None:
         await asyncio.to_thread(storage_pg.prepare_runtime_storage)
         server.attach(app)
-        resolved_eventsub_handler = (
-            eventsub_webhook_handler or server._dashboard_eventsub_webhook_handler()
-        )
+        resolved_eventsub_handler = eventsub_webhook_handler or server._dashboard_eventsub_webhook_handler()
         if resolved_eventsub_handler is not None:
             app.router.add_post(
                 "/twitch/eventsub/callback",

@@ -1558,24 +1558,7 @@ class TwitchDashboardMixin:
                     session_ttl_seconds=getattr(self, "_dashboard_session_ttl", 6 * 3600),
                     legacy_stats_url=getattr(self, "_legacy_stats_url", None),
                     dashboard_services=dashboard_services,
-                    add_cb=self._dashboard_add,
-                    remove_cb=self._dashboard_remove,
-                    list_cb=self._dashboard_list,
-                    stats_cb=self._dashboard_stats,
-                    verify_cb=self._dashboard_verify,
-                    archive_cb=self._dashboard_archive,
-                    discord_flag_cb=self._dashboard_set_discord_flag,
-                    discord_profile_cb=self._dashboard_save_discord_profile,
-                    raid_history_cb=getattr(self, "_dashboard_raid_history", None),
-                    raid_auth_url_cb=self._dashboard_raid_auth_url,
-                    raid_go_url_cb=self._dashboard_raid_go_url,
-                    raid_requirements_cb=self._dashboard_raid_requirements,
-                    raid_oauth_callback_cb=self._dashboard_raid_oauth_callback,
-                    reload_cb=self._reload_twitch_cog,
-            social_media_clip_manager=getattr(self, "clip_manager", None),
-            social_media_twitch_api=getattr(self, "api", None),
-            eventsub_webhook_handler=getattr(self, "_eventsub_webhook_handler", None),
-        )
+                )
                 runner = web.AppRunner(app)
                 await runner.setup()
                 site = web.TCPSite(runner, host=self._dashboard_host, port=self._dashboard_port)

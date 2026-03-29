@@ -1,9 +1,10 @@
 import asyncio
+import inspect
 import unittest
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
-from bot.base import TwitchBaseCog
+from bot.base import TwitchBaseCog, _RuntimeManagedField, _RuntimeStateBridge, _load_runtime_state_module
 from bot.internal_api import InternalApiCallbacks
 from bot.runtime_bootstrap import TwitchRuntimeBootstrap
 
@@ -81,6 +82,40 @@ class _BootstrapHarness(TwitchBaseCog):
 
 
 class TwitchBaseBootstrapLifecycleTests(unittest.IsolatedAsyncioTestCase):
+    def test_runtime_managed_fields_are_explicit_descriptors(self) -> None:
+        chat_bot_field = inspect.getattr_static(TwitchBaseCog, "_twitch_chat_bot")
+        token_manager_field = inspect.getattr_static(TwitchBaseCog, "_bot_token_manager")
+        client_id_field = inspect.getattr_static(TwitchBaseCog, "client_id")
+
+        self.assertIsInstance(chat_bot_field, _RuntimeManagedField)
+        self.assertIsInstance(token_manager_field, _RuntimeManagedField)
+        self.assertIsInstance(client_id_field, _RuntimeManagedField)
+
+    def test_runtime_managed_descriptor_roundtrip_uses_runtime_container(self) -> None:
+        harness = _LifecycleHarness()
+        bridge = _RuntimeStateBridge.from_module(_load_runtime_state_module())
+        harness._runtime_state_bridge = bridge
+        harness._runtime_state = bridge.create_state(harness)
+
+        chat_bot = object()
+        token_manager = object()
+
+        harness._twitch_chat_bot = chat_bot
+        harness._bot_token_manager = token_manager
+
+        self.assertNotIn("_twitch_chat_bot", harness.__dict__)
+        self.assertNotIn("_bot_token_manager", harness.__dict__)
+        self.assertIs(harness.runtime.services.twitch_chat_bot, chat_bot)
+        self.assertIs(harness.runtime.services.bot_token_manager, token_manager)
+        self.assertIs(harness._twitch_chat_bot, chat_bot)
+        self.assertIs(harness._bot_token_manager, token_manager)
+
+        del harness._twitch_chat_bot
+        del harness._bot_token_manager
+
+        self.assertIsNone(harness.runtime.services.twitch_chat_bot)
+        self.assertIsNone(harness.runtime.services.bot_token_manager)
+
     def test_wire_runtime_dependencies_uses_internal_api_callbacks_bundle(self) -> None:
         harness = _BootstrapHarness()
         harness.bot = SimpleNamespace()

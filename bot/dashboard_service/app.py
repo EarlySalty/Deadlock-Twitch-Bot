@@ -463,6 +463,8 @@ def build_dashboard_service_app(
         raid_oauth_callback_cb=_raid_oauth_callback_cb,
         reload_cb=None,
         eventsub_webhook_handler=None,
+        social_media_clip_manager=None,
+        social_media_twitch_api=None,
     )
 
     async def _close_client(_: web.Application) -> None:

@@ -10,6 +10,8 @@ from typing import Any
 from urllib.parse import urlsplit
 from uuid import uuid4
 
+from aiohttp import web
+
 from ... import storage
 from ...core.constants import log
 from ...entitlements.catalog import (
@@ -31,7 +33,6 @@ except Exception:  # pragma: no cover - partial deploy safety
 from .billing_plans import (
     BILLING_CYCLE_DISCOUNTS as _BILLING_CYCLE_DISCOUNTS,
     BILLING_PLANS as _BILLING_PLANS,
-    build_billing_catalog as _build_billing_catalog,
     billing_cycle_label as _billing_cycle_label,
     billing_dump_price_id_mapping as _billing_dump_price_id_mapping,
     billing_dump_product_id_mapping as _billing_dump_product_id_mapping,
