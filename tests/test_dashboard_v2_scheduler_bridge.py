@@ -3,9 +3,24 @@ from types import SimpleNamespace
 
 from bot.dashboard.server_v2 import DashboardV2Server
 from bot.runtime.contracts import DashboardBotService
+from bot.runtime.dashboard_runtime import DashboardRuntimeServices
 
 
 class DashboardV2SchedulerBridgeTests(unittest.TestCase):
+    def test_dashboard_server_ignores_invalid_bot_service_adapter(self) -> None:
+        server = DashboardV2Server(
+            app_token=None,
+            noauth=False,
+            partner_token=None,
+            dashboard_services=DashboardRuntimeServices(bot_service=object()),
+        )
+
+        self.assertIsInstance(server._dashboard_bot_runtime(), DashboardBotService)
+        self.assertIsNone(server._dashboard_bot_runtime().auth_manager())
+        coro = _noop()
+        self.assertIsNone(server._dashboard_schedule_background(coro, "noop"))
+        coro.close()
+
     def test_dashboard_schedule_background_uses_resolved_scheduler(self) -> None:
         handler = DashboardV2Server.__new__(DashboardV2Server)
         scheduled: list[tuple[object, str]] = []
@@ -33,6 +48,10 @@ class DashboardV2SchedulerBridgeTests(unittest.TestCase):
         self.assertEqual(len(scheduled), 1)
         self.assertEqual(scheduled[0][1], "twitch.raid.complete_setup")
         self.assertIs(scheduled[0][0], coro)
+
+
+async def _noop():
+    return None
 
 
 if __name__ == "__main__":

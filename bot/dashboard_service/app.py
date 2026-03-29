@@ -386,21 +386,21 @@ def build_dashboard_service_app(
 
     async def _raid_go_url_cb(state: str) -> str | None:
         if client is None:
-            raise _upstream_unavailable_error()
+            raise _upstream_unavailable_error("raid_go_url")
         try:
             return await client.get_raid_go_url(state)
         except BotApiClientError as exc:
             _warn_upstream_once("raid_go_url", exc)
-            raise _upstream_unavailable_error() from exc
+            raise _upstream_unavailable_error("raid_go_url", exc) from exc
 
     async def _raid_requirements_cb(login: str) -> str:
         if client is None:
-            raise _upstream_unavailable_error()
+            raise _upstream_unavailable_error("raid_requirements")
         try:
             return await client.send_raid_requirements(login)
         except BotApiClientError as exc:
             _warn_upstream_once("raid_requirements", exc)
-            raise _upstream_unavailable_error() from exc
+            raise _upstream_unavailable_error("raid_requirements", exc) from exc
 
     async def _raid_oauth_callback_cb(
         *, code: str, state: str, error: str

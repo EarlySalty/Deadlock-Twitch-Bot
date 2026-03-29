@@ -17,40 +17,41 @@ def _bind(server: Any, method_name: str) -> Callable[[web.Request], Any]:
 
 
 def build_streamer_route_defs(server: Any) -> list[web.RouteDef]:
+    base = str(getattr(server, "_base_path", INTERNAL_API_BASE_PATH) or INTERNAL_API_BASE_PATH).rstrip("/")
     return [
-        web.get(f"{INTERNAL_API_BASE_PATH}/streamers", _bind(server, "streamers")),
-        web.post(f"{INTERNAL_API_BASE_PATH}/streamers", _bind(server, "streamer_add")),
+        web.get(f"{base}/streamers", _bind(server, "streamers")),
+        web.post(f"{base}/streamers", _bind(server, "streamer_add")),
         web.delete(
-            f"{INTERNAL_API_BASE_PATH}/streamers/{{login}}",
+            f"{base}/streamers/{{login}}",
             _bind(server, "streamer_remove"),
         ),
         web.post(
-            f"{INTERNAL_API_BASE_PATH}/streamers/{{login}}/verify",
+            f"{base}/streamers/{{login}}/verify",
             _bind(server, "streamer_verify"),
         ),
         web.post(
-            f"{INTERNAL_API_BASE_PATH}/streamers/{{login}}/archive",
+            f"{base}/streamers/{{login}}/archive",
             _bind(server, "streamer_archive"),
         ),
         web.post(
-            f"{INTERNAL_API_BASE_PATH}/streamers/{{login}}/discord-flag",
+            f"{base}/streamers/{{login}}/discord-flag",
             _bind(server, "streamer_discord_flag"),
         ),
         web.post(
-            f"{INTERNAL_API_BASE_PATH}/streamers/{{login}}/discord-profile",
+            f"{base}/streamers/{{login}}/discord-profile",
             _bind(server, "streamer_discord_profile"),
         ),
-        web.get(f"{INTERNAL_API_BASE_PATH}/stats", _bind(server, "stats")),
+        web.get(f"{base}/stats", _bind(server, "stats")),
         web.get(
-            f"{INTERNAL_API_BASE_PATH}/analytics/streamer/{{login}}",
+            f"{base}/analytics/streamer/{{login}}",
             _bind(server, "streamer_analytics"),
         ),
         web.get(
-            f"{INTERNAL_API_BASE_PATH}/analytics/comparison",
+            f"{base}/analytics/comparison",
             _bind(server, "analytics_comparison"),
         ),
         web.get(
-            f"{INTERNAL_API_BASE_PATH}/sessions/{{session_id}}",
+            f"{base}/sessions/{{session_id}}",
             _bind(server, "session_detail"),
         ),
     ]

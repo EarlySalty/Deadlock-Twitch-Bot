@@ -17,17 +17,18 @@ def _bind(server: Any, method_name: str) -> Callable[[web.Request], Any]:
 
 
 def build_raid_route_defs(server: Any) -> list[web.RouteDef]:
+    base = str(getattr(server, "_base_path", INTERNAL_API_BASE_PATH) or INTERNAL_API_BASE_PATH).rstrip("/")
     return [
-        web.get(f"{INTERNAL_API_BASE_PATH}/raid/auth-url", _bind(server, "raid_auth_url")),
-        web.get(f"{INTERNAL_API_BASE_PATH}/raid/auth-state", _bind(server, "raid_auth_state")),
-        web.get(f"{INTERNAL_API_BASE_PATH}/raid/block-state", _bind(server, "raid_block_state")),
-        web.get(f"{INTERNAL_API_BASE_PATH}/raid/go-url", _bind(server, "raid_go_url")),
+        web.get(f"{base}/raid/auth-url", _bind(server, "raid_auth_url")),
+        web.get(f"{base}/raid/auth-state", _bind(server, "raid_auth_state")),
+        web.get(f"{base}/raid/block-state", _bind(server, "raid_block_state")),
+        web.get(f"{base}/raid/go-url", _bind(server, "raid_go_url")),
         web.post(
-            f"{INTERNAL_API_BASE_PATH}/raid/requirements",
+            f"{base}/raid/requirements",
             _bind(server, "raid_requirements"),
         ),
         web.post(
-            f"{INTERNAL_API_BASE_PATH}/raid/oauth-callback",
+            f"{base}/raid/oauth-callback",
             _bind(server, "raid_oauth_callback"),
         ),
     ]

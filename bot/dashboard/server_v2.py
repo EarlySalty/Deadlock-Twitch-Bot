@@ -131,7 +131,7 @@ class DashboardV2Server(
         social_media_twitch_api: Any | None = None,
     ) -> None:
         services = dashboard_services or DashboardRuntimeServices()
-        bot_service = services.bot_service or DashboardBotService()
+        bot_service = services.resolve_bot_service() or DashboardBotService()
         self._dashboard_services = services
         self._dashboard_bot_service_view = bot_service
         self._token = app_token

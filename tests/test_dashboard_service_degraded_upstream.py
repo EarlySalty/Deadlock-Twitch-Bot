@@ -139,6 +139,30 @@ class _FakeDashboardApp:
         return self.store[key]
 
 
+class _UpstreamFailingBotApiClient:
+    def __init__(self, **_kwargs) -> None:
+        pass
+
+    async def get_raid_go_url(self, state: str) -> str | None:
+        del state
+        raise BotApiClientError(
+            status=503,
+            code="upstream_unavailable",
+            message="Bot internal API is unavailable.",
+        )
+
+    async def send_raid_requirements(self, login: str) -> str:
+        del login
+        raise BotApiClientError(
+            status=503,
+            code="upstream_unavailable",
+            message="Bot internal API is unavailable.",
+        )
+
+    async def close(self) -> None:
+        return None
+
+
 class DashboardServiceDegradedUpstreamTests(unittest.IsolatedAsyncioTestCase):
     async def test_write_callbacks_raise_bot_api_error_when_internal_api_is_missing(self) -> None:
         captured: dict[str, object] = {}
@@ -173,6 +197,89 @@ class DashboardServiceDegradedUpstreamTests(unittest.IsolatedAsyncioTestCase):
             (services.archive_cb, ("partner_one", "toggle")),
             (services.discord_flag_cb, ("partner_one", True)),
             (services.discord_profile_cb, ("partner_one", "123", "Partner One", True)),
+        ]
+        for callback, args in expectations:
+            with self.subTest(callback=getattr(callback, "__name__", repr(callback))):
+                with self.assertRaises(BotApiClientError) as ctx:
+                    await callback(*args)
+                self.assertEqual(ctx.exception.status, 503)
+                self.assertEqual(ctx.exception.code, "upstream_unavailable")
+
+    async def test_raid_callbacks_raise_bot_api_error_when_internal_api_is_missing(self) -> None:
+        captured: dict[str, object] = {}
+
+        def _fake_build_v2_app(**kwargs):
+            captured.update(kwargs)
+            return _FakeDashboardApp()
+
+        with patch(
+            "bot.dashboard_service.app.analytics_db_fingerprint_details",
+            return_value={"fingerprint": "local", "hostHash": "h", "databaseHash": "d", "portHash": "p"},
+        ), patch("bot.dashboard_service.app.build_v2_app", side_effect=_fake_build_v2_app):
+            build_dashboard_service_app(
+                internal_api_base_url="http://127.0.0.1:1234",
+                internal_api_token="",
+                internal_api_allow_non_loopback=False,
+                internal_api_timeout_seconds=1.0,
+                dashboard_token="dash-token",
+                partner_token="partner-token",
+                noauth=False,
+                oauth_client_id="client-id",
+                oauth_client_secret="client-secret",
+                oauth_redirect_uri="https://example.com/callback",
+                session_ttl_seconds=3600,
+                legacy_stats_url="https://example.com/stats",
+            )
+
+        services = captured["dashboard_services"]
+        assert services is not None
+
+        expectations = [
+            (services.raid_go_url_cb, ("state-token",)),
+            (services.raid_requirements_cb, ("partner_one",)),
+        ]
+        for callback, args in expectations:
+            with self.subTest(callback=getattr(callback, "__name__", repr(callback))):
+                with self.assertRaises(BotApiClientError) as ctx:
+                    await callback(*args)
+                self.assertEqual(ctx.exception.status, 503)
+                self.assertEqual(ctx.exception.code, "upstream_unavailable")
+
+    async def test_raid_callbacks_raise_bot_api_error_when_upstream_client_fails(self) -> None:
+        captured: dict[str, object] = {}
+
+        def _fake_build_v2_app(**kwargs):
+            captured.update(kwargs)
+            return _FakeDashboardApp()
+
+        with patch(
+            "bot.dashboard_service.app.analytics_db_fingerprint_details",
+            return_value={"fingerprint": "local", "hostHash": "h", "databaseHash": "d", "portHash": "p"},
+        ), patch("bot.dashboard_service.app.build_v2_app", side_effect=_fake_build_v2_app), patch(
+            "bot.dashboard_service.app.BotApiClient",
+            _UpstreamFailingBotApiClient,
+        ):
+            build_dashboard_service_app(
+                internal_api_base_url="http://127.0.0.1:1234",
+                internal_api_token="internal-token",
+                internal_api_allow_non_loopback=False,
+                internal_api_timeout_seconds=1.0,
+                dashboard_token="dash-token",
+                partner_token="partner-token",
+                noauth=False,
+                oauth_client_id="client-id",
+                oauth_client_secret="client-secret",
+                oauth_redirect_uri="https://example.com/callback",
+                session_ttl_seconds=3600,
+                legacy_stats_url="https://example.com/stats",
+            )
+
+        services = captured["dashboard_services"]
+        assert services is not None
+
+        expectations = [
+            (services.raid_go_url_cb, ("state-token",)),
+            (services.raid_requirements_cb, ("partner_one",)),
         ]
         for callback, args in expectations:
             with self.subTest(callback=getattr(callback, "__name__", repr(callback))):
