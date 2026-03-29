@@ -11,6 +11,7 @@ from bot.app_keys import (
     INTERNAL_API_ANALYTICS_DB_FINGERPRINT_KEY,
 )
 from bot.dashboard_service.app import build_dashboard_service_app
+from bot.dashboard.server_v2 import build_v2_app
 from bot.dashboard_service.client import BotApiClient, BotApiClientError
 from bot.internal_api import INTERNAL_API_BASE_PATH
 
@@ -313,6 +314,48 @@ class BotApiClientErrorMappingTests(unittest.IsolatedAsyncioTestCase):
 
         for callback in app.on_cleanup:
             await callback(app)
+
+    async def test_build_v2_app_defers_storage_bootstrap_to_startup(self) -> None:
+        call_order: list[str] = []
+
+        def _prepare_side_effect() -> None:
+            call_order.append("prepare")
+
+        def _attach_side_effect(_server, _app) -> None:
+            call_order.append("attach")
+
+        with (
+            patch(
+                "bot.dashboard.server_v2.storage_pg.prepare_runtime_storage",
+            ) as prepare_storage,
+            patch(
+                "bot.dashboard.server_v2.DashboardV2Server.attach",
+                autospec=True,
+            ) as attach,
+        ):
+            app = build_v2_app(noauth=True, token="secret")
+
+        prepare_storage.assert_not_called()
+        attach.assert_not_called()
+        self.assertGreaterEqual(len(app.on_startup), 2)
+        self.assertEqual(app.on_startup[-1].__name__, "_bootstrap_and_register_routes")
+
+        with (
+            patch(
+                "bot.dashboard.server_v2.storage_pg.prepare_runtime_storage",
+                side_effect=_prepare_side_effect,
+            ) as prepare_storage_startup,
+            patch(
+                "bot.dashboard.server_v2.DashboardV2Server.attach",
+                autospec=True,
+                side_effect=_attach_side_effect,
+            ) as attach_startup,
+        ):
+            await app.on_startup[-1](app)
+
+        prepare_storage_startup.assert_called_once()
+        attach_startup.assert_called_once()
+        self.assertEqual(call_order, ["prepare", "attach"])
 
     async def test_dashboard_service_stats_callback_raises_503_when_upstream_is_unavailable(
         self,

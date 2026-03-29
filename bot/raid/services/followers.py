@@ -6,6 +6,8 @@ from dataclasses import dataclass
 from collections.abc import Mapping
 from typing import Any, Awaitable, Callable, MutableMapping, Sequence
 
+from ...core.twitch_login import normalize_twitch_login
+
 FollowerCandidate = MutableMapping[str, Any]
 LoadCachedTotals = Callable[[Sequence[str]], Mapping[str, int] | Awaitable[Mapping[str, int]]]
 ResolveUserToken = Callable[[str], str | None | Awaitable[str | None]]
@@ -32,7 +34,7 @@ class _CandidateRef:
 
 
 def _normalize_login(value: object) -> str:
-    return str(value or "").strip().lower()
+    return normalize_twitch_login(value) or ""
 
 
 def _normalize_user_id(value: object) -> str:

@@ -10,8 +10,10 @@ interface NavLink {
 }
 
 const NAV_LINKS: NavLink[] = [
-  { label: 'Features', id: 'features' },
+  { label: 'Raids', id: 'raid' },
+  { label: 'Moderation', id: 'moderation' },
   { label: 'Dashboard', id: 'dashboard' },
+  { label: 'Features', id: 'features' },
   { label: 'Community', id: 'community' },
   { label: 'Vertriebler', href: AFFILIATE_PROGRAM_PATH },
 ];

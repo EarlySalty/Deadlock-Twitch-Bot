@@ -5,6 +5,7 @@ from typing import Any
 
 from ..api.token_error_handler import TokenErrorHandler
 from ..core.constants import log
+from ..core.twitch_login import normalize_twitch_login
 from ..discord_role_sync import normalize_discord_user_id
 from ..storage import readonly_connection
 
@@ -19,8 +20,7 @@ def _normalize_bool(value: object) -> bool:
 
 
 def _normalize_login(value: object) -> str | None:
-    text = str(value or "").strip().lower()
-    return text or None
+    return normalize_twitch_login(value)
 
 
 def _row_value(row: Any, key: str, index: int) -> Any:

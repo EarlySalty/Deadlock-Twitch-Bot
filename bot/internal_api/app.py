@@ -6,7 +6,6 @@ import asyncio
 import inspect
 import json
 import os
-import re
 import secrets
 import time as time_module
 from collections.abc import Awaitable, Callable
@@ -22,12 +21,12 @@ from aiohttp import web
 
 from ..app_keys import ANALYTICS_DB_FINGERPRINT_DETAILS_KEY, ANALYTICS_DB_FINGERPRINT_KEY
 from ..core.constants import log
+from ..core.twitch_login import normalize_twitch_login
 from ..storage import analytics_db_fingerprint_details
 
 INTERNAL_API_BASE_PATH = "/internal/twitch/v1"
 INTERNAL_TOKEN_HEADER = "X-Internal-Token"
 IDEMPOTENCY_KEY_HEADER = "Idempotency-Key"
-_LOGIN_RE = re.compile(r"^[a-z0-9_]{3,25}$")
 PUBLIC_WEBSITE_ONBOARDING_LOGIN = "public:website_onboarding"
 
 AddStreamerCallback = Callable[[str, bool], Awaitable[str]]
@@ -1005,25 +1004,7 @@ class InternalApiServer:
 
     @staticmethod
     def _normalize_login(raw: str) -> str | None:
-        value = unquote(str(raw or "")).strip()
-        if not value:
-            return None
-        if value.startswith("@"):
-            value = value[1:].strip()
-        if "://" in value or "twitch.tv" in value or "/" in value:
-            candidate = value if "://" in value else f"https://{value}"
-            try:
-                parts = urlsplit(candidate)
-            except Exception:
-                return None
-            segs = [seg for seg in (parts.path or "").split("/") if seg]
-            if not segs:
-                return None
-            value = segs[0]
-        value = value.lower().strip()
-        if not _LOGIN_RE.fullmatch(value):
-            return None
-        return value
+        return normalize_twitch_login(raw)
 
     @classmethod
     def _normalize_raid_auth_target(cls, raw: str) -> str | None:

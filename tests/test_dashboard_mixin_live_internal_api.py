@@ -22,23 +22,14 @@ class _FakeConn:
 
     def execute(self, sql: str, params=()):
         self.executed.append((sql, tuple(params)))
-        if "FROM twitch_live_state" in sql:
+        if "FROM twitch_live_state ls" in sql:
             return _FakeCursor(
                 [
                     {
                         "streamer_login": "partner_one",
                         "last_discord_message_id": "123",
                         "last_tracking_token": "deadbeef1234",
-                    }
-                ]
-            )
-        if "FROM twitch_live_announcement_configs" in sql:
-            return _FakeCursor(
-                [
-                    {
-                        "config_json": json.dumps(
-                            {"button": {"label": "Jetzt reinsehen"}}
-                        )
+                        "config_json": json.dumps({"button": {"label": "Jetzt reinsehen"}}),
                     }
                 ]
             )
@@ -87,6 +78,8 @@ class DashboardMixinLiveInternalApiTests(unittest.IsolatedAsyncioTestCase):
                 }
             ],
         )
+        self.assertEqual(len(fake_conn.executed), 1)
+        self.assertIn("LEFT JOIN twitch_live_announcement_configs", fake_conn.executed[0][0])
 
     async def test_dashboard_live_link_click_persists_expected_columns(self) -> None:
         handler = _DummyDashboardMixin()

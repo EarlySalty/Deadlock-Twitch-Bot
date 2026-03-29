@@ -4,6 +4,7 @@ import json
 from datetime import UTC, datetime
 from typing import Any
 
+from ...core.twitch_login import normalize_twitch_login
 from ...compat.field_crypto import get_crypto
 
 
@@ -53,7 +54,7 @@ class AffiliatePII:
 
     @classmethod
     def _normalize_login(cls, twitch_login: str) -> str:
-        normalized = str(twitch_login or "").strip().lower()
+        normalized = normalize_twitch_login(twitch_login)
         if not normalized:
             raise ValueError("twitch_login is required")
         return normalized

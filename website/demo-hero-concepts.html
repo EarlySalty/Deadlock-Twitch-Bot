@@ -1,0 +1,965 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Auto-Raid System — Live Demo</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap" rel="stylesheet">
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+:root{
+  --bg:#07151d;
+  --card:rgba(16,38,53,0.7);
+  --border:rgba(255,255,255,0.06);
+  --primary:#ff7a18;
+  --accent:#10b7ad;
+  --text:#e9f1f7;
+  --text2:#9bb3c5;
+  --green:#22c55e;
+  --red:#ef4444;
+  --ease:cubic-bezier(0.4,0,0.2,1);
+}
+html{scroll-behavior:smooth}
+body{
+  font-family:'Inter',system-ui,sans-serif;
+  background:var(--bg);
+  color:var(--text);
+  min-height:100vh;
+  overflow-x:hidden;
+  position:relative;
+}
+
+/* Background glow orbs */
+.bg-orb{
+  position:fixed;border-radius:50%;filter:blur(100px);opacity:0.04;pointer-events:none;z-index:0;
+}
+.bg-orb-1{
+  width:600px;height:600px;background:var(--primary);top:-200px;left:-100px;
+  animation:orbFloat1 20s ease-in-out infinite;
+}
+.bg-orb-2{
+  width:500px;height:500px;background:var(--accent);bottom:-150px;right:-100px;
+  animation:orbFloat2 25s ease-in-out infinite;
+}
+@keyframes orbFloat1{0%,100%{transform:translate(0,0)}50%{transform:translate(60px,40px)}}
+@keyframes orbFloat2{0%,100%{transform:translate(0,0)}50%{transform:translate(-50px,-30px)}}
+
+/* Noise overlay */
+body::before{
+  content:'';position:fixed;inset:0;z-index:1;pointer-events:none;opacity:0.02;
+  background-image:url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='1'/%3E%3C/svg%3E");
+  background-repeat:repeat;background-size:256px 256px;
+}
+
+.container{
+  position:relative;z-index:2;max-width:1200px;margin:0 auto;padding:60px 24px 80px;
+}
+
+/* Title section */
+.title-section{text-align:center;margin-bottom:48px;}
+.badge{
+  display:inline-block;padding:6px 16px;border:1px solid var(--accent);border-radius:100px;
+  font-size:11px;font-weight:700;letter-spacing:0.12em;text-transform:uppercase;
+  color:var(--accent);margin-bottom:16px;background:rgba(16,183,173,0.08);
+}
+.headline{
+  font-size:clamp(28px,5vw,38px);font-weight:800;line-height:1.15;margin-bottom:14px;
+  background:linear-gradient(135deg,var(--primary),var(--accent));
+  -webkit-background-clip:text;-webkit-text-fill-color:transparent;
+  background-clip:text;
+}
+.subtitle{
+  font-size:16px;color:var(--text2);max-width:600px;margin:0 auto;line-height:1.6;
+}
+
+/* Embed area — full width, embeds positioned independently */
+.demo-area{position:relative;margin-bottom:32px;width:100vw;margin-left:calc(-50vw + 50%);padding:0 3vw;}
+.embeds-row{
+  display:flex;justify-content:center;gap:22vw;align-items:flex-start;
+  position:relative;
+}
+@media(max-width:860px){
+  .embeds-row{flex-direction:column;align-items:center;gap:40px;}
+  .embed-source,.embed-target{width:100%!important;max-width:520px!important;}
+}
+.embed-source{width:34vw;max-width:540px;min-width:300px;flex-shrink:0;}
+.embed-target{width:34vw;max-width:540px;min-width:300px;flex-shrink:0;}
+
+/* Twitch embed frame */
+.twitch-embed{
+  border-radius:8px;
+  box-shadow:0 8px 32px rgba(0,0,0,0.4);
+  border:1px solid var(--border);
+  overflow:hidden;
+  transition:opacity 0.5s var(--ease), box-shadow 0.4s var(--ease);
+  position:relative;
+}
+
+/* Video player area */
+.player{
+  position:relative;width:100%;aspect-ratio:16/9;overflow:hidden;
+  background:#000;border-radius:8px 8px 0 0;
+}
+.player video{
+  position:absolute;inset:0;width:100%;height:100%;object-fit:cover;
+  border-radius:8px 8px 0 0;
+}
+
+/* Overlay: top-left badges */
+.player-overlays{
+  position:absolute;inset:0;pointer-events:none;z-index:3;
+  border-radius:8px 8px 0 0;
+}
+.overlay-top{
+  position:absolute;top:10px;left:10px;display:flex;flex-direction:column;gap:4px;
+}
+.live-badge{
+  display:inline-flex;align-items:center;gap:5px;
+  background:var(--red);color:#fff;font-size:11px;font-weight:700;
+  text-transform:uppercase;padding:3px 8px;border-radius:4px;
+  letter-spacing:0.03em;transition:background 0.4s var(--ease);
+  width:fit-content;
+}
+.live-badge.offline{background:#6b7280;}
+.live-dot{
+  width:6px;height:6px;border-radius:50%;background:#fff;
+  animation:livePulse 1.5s ease-in-out infinite;
+}
+.live-badge.offline .live-dot{animation:none;opacity:0.5;}
+@keyframes livePulse{0%,100%{opacity:1;transform:scale(1)}50%{opacity:0.4;transform:scale(0.7)}}
+.duration-pill{
+  display:inline-flex;padding:3px 8px;border-radius:4px;
+  background:rgba(0,0,0,0.6);color:#fff;font-size:12px;font-weight:500;
+  font-variant-numeric:tabular-nums;width:fit-content;
+}
+
+/* Overlay: bottom gradient */
+.overlay-bottom{
+  position:absolute;bottom:0;left:0;right:0;
+  background:linear-gradient(transparent,rgba(0,0,0,0.85));
+  padding:40px 14px 12px;
+}
+.overlay-streamer{font-size:16px;font-weight:700;color:#fff;margin-bottom:2px;}
+.overlay-category{font-size:13px;color:var(--text2);margin-bottom:3px;}
+.overlay-viewers{
+  font-size:12px;color:var(--text2);display:flex;align-items:center;gap:4px;
+}
+.overlay-viewers svg{opacity:0.7;}
+
+/* Offline overlay */
+.offline-overlay{
+  position:absolute;inset:0;z-index:4;
+  background:rgba(0,0,0,0);
+  display:flex;flex-direction:column;align-items:center;justify-content:center;
+  opacity:0;transition:opacity 0.8s var(--ease), background 1.5s var(--ease);pointer-events:none;
+  border-radius:8px 8px 0 0;
+}
+.offline-overlay.visible{opacity:1;background:rgba(0,0,0,0.8);}
+.offline-overlay svg{margin-bottom:12px;opacity:0;transform:scale(0.5);transition:opacity 0.6s ease 0.3s, transform 0.6s ease 0.3s;}
+.offline-overlay.visible svg{opacity:0.9;transform:scale(1);}
+.offline-text{font-size:22px;font-weight:700;color:#fff;opacity:0;transform:translateY(10px);transition:opacity 0.5s ease 0.6s, transform 0.5s ease 0.6s;}
+.offline-overlay.visible .offline-text{opacity:1;transform:translateY(0);}
+.offline-subtext{font-size:13px;color:var(--text2);margin-top:6px;opacity:0;transition:opacity 0.5s ease 0.9s;}
+.offline-overlay.visible .offline-subtext{opacity:0.7;}
+
+/* Static noise effect on offline */
+.offline-overlay::before{
+  content:'';position:absolute;inset:0;
+  background-image:url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.8' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+  background-size:128px 128px;
+  opacity:0;transition:opacity 1.2s ease 0.2s;
+  mix-blend-mode:overlay;border-radius:8px 8px 0 0;
+}
+.offline-overlay.visible::before{opacity:0.15;}
+
+/* Video goes grayscale + dark when offline */
+.player.going-offline video{
+  filter:grayscale(1) brightness(0.3);
+  transition:filter 1.5s var(--ease);
+}
+.player.going-offline .overlay-bottom{
+  opacity:0.4;transition:opacity 1s var(--ease);
+}
+
+/* Info bar below video */
+.info-bar{
+  background:var(--card);border-radius:0 0 8px 8px;
+  padding:14px 18px;display:flex;align-items:center;justify-content:space-between;
+}
+.info-left{display:flex;align-items:center;gap:10px;}
+.avatar{
+  width:36px;height:36px;border-radius:50%;
+  display:flex;align-items:center;justify-content:center;
+  font-size:14px;font-weight:700;color:#fff;flex-shrink:0;
+}
+.avatar.orange{background:linear-gradient(135deg,var(--primary),#ff9a44);}
+.avatar.teal{background:linear-gradient(135deg,var(--accent),#14d4c8);}
+.info-name{font-size:14px;font-weight:700;color:var(--text);}
+.info-game{font-size:12px;color:var(--text2);}
+.watch-btn{
+  font-size:12px;color:var(--accent);border:1px solid var(--accent);
+  background:transparent;border-radius:6px;padding:5px 12px;cursor:pointer;
+  transition:background 0.2s;font-weight:600;
+}
+.watch-btn:hover{background:rgba(16,183,173,0.1);}
+
+/* Middle area (between embeds) */
+.middle-area{
+  position:absolute;top:0;left:0;right:0;bottom:0;
+  pointer-events:none;z-index:10;
+  display:flex;align-items:center;justify-content:center;
+}
+
+/* Shared middle text base */
+.middle-text{
+  position:absolute;left:50%;transform:translate(-50%,-50%);
+  text-align:center;opacity:0;transition:opacity 0.6s var(--ease), transform 0.6s var(--ease);
+  z-index:12;white-space:nowrap;
+}
+.middle-text.visible{opacity:1;}
+
+/* Step label — small uppercase badge above main text */
+.step-badge{
+  position:absolute;top:28%;left:50%;transform:translate(-50%,-50%);
+  text-align:center;opacity:0;transition:opacity 0.5s var(--ease);
+  z-index:12;
+  font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.15em;
+  color:var(--accent);
+  padding:5px 14px;border-radius:100px;
+  border:1px solid rgba(16,183,173,0.25);
+  background:rgba(16,183,173,0.08);
+  backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);
+  white-space:nowrap;
+}
+.step-badge.visible{opacity:1;}
+
+/* Main status text — gradient style like website */
+.search-text{
+  top:50%;
+  font-size:18px;font-weight:700;
+  background:linear-gradient(135deg,var(--primary),var(--accent));
+  -webkit-background-clip:text;-webkit-text-fill-color:transparent;
+  background-clip:text;
+}
+
+/* Raid counter */
+.raid-counter{
+  position:absolute;top:42%;left:50%;transform:translate(-50%,-50%);
+  text-align:center;opacity:0;transition:opacity 0.5s var(--ease);
+  z-index:12;
+}
+.raid-counter.visible{opacity:1;}
+.raid-count-num{
+  font-size:80px;font-weight:900;line-height:1;
+  background:linear-gradient(135deg,var(--primary),var(--accent));
+  -webkit-background-clip:text;-webkit-text-fill-color:transparent;
+  background-clip:text;
+  filter:drop-shadow(0 0 30px rgba(255,122,24,0.25));
+}
+.raid-count-label{
+  font-size:13px;text-transform:uppercase;color:var(--text2);
+  letter-spacing:0.12em;margin-top:6px;font-weight:600;
+}
+
+/* Final text */
+.final-text{
+  top:50%;
+  font-size:24px;font-weight:800;
+  background:linear-gradient(135deg,var(--accent),#2dd4c8);
+  -webkit-background-clip:text;-webkit-text-fill-color:transparent;
+  background-clip:text;
+  filter:drop-shadow(0 0 20px rgba(16,183,173,0.3));
+}
+.final-text.pop{transform:translate(-50%,-50%) scale(1.06);}
+
+/* Sub-info under main text */
+.search-sub{
+  position:absolute;top:58%;left:50%;transform:translate(-50%,-50%);
+  text-align:center;opacity:0;transition:opacity 0.5s var(--ease);
+  z-index:12;
+  font-size:13px;color:var(--text2);font-weight:500;white-space:nowrap;
+}
+.search-sub.visible{opacity:1;}
+
+/* Hidden elements from old design */
+.middle-flow-line{display:none;}
+
+/* Status bar */
+.status-bar{
+  display:flex;gap:0;justify-content:center;align-items:center;
+  padding:12px 20px;border-radius:12px;
+  background:rgba(16,38,53,0.5);backdrop-filter:blur(12px);
+  -webkit-backdrop-filter:blur(12px);
+  margin-bottom:16px;flex-wrap:wrap;
+}
+.pill{
+  padding:12px 24px;border-radius:8px;font-size:14px;font-weight:500;
+  color:var(--text2);background:rgba(255,255,255,0.04);
+  transition:background 0.4s ease, color 0.3s ease, font-weight 0.2s ease, box-shadow 0.4s ease;
+  white-space:nowrap;
+}
+.pill.active{
+  background:linear-gradient(135deg,var(--primary),var(--accent));
+  color:#fff;font-weight:700;
+  animation:pillGlow 2s ease-in-out infinite;
+}
+@keyframes pillGlow{
+  0%,100%{box-shadow:0 2px 12px rgba(255,122,24,0.2), 0 0 8px rgba(255,122,24,0.1);}
+  50%{box-shadow:0 2px 20px rgba(255,122,24,0.4), 0 0 16px rgba(16,183,173,0.2);}
+}
+.pill.done{
+  background:rgba(16,183,173,0.12);
+  color:var(--accent);
+  font-weight:700;
+  box-shadow:0 0 12px rgba(16,183,173,0.1);
+  position:relative;
+}
+.pill.active-raid{
+  background:linear-gradient(135deg,rgba(255,122,24,0.9),rgba(16,183,173,0.9));
+  color:#fff;font-weight:700;
+  animation:raidPulse 0.8s ease-in-out infinite;
+  box-shadow:0 2px 20px rgba(255,122,24,0.4), 0 0 16px rgba(16,183,173,0.3);
+}
+@keyframes raidPulse{
+  0%,100%{box-shadow:0 2px 12px rgba(255,122,24,0.3), 0 0 8px rgba(16,183,173,0.2);transform:scale(1);}
+  50%{box-shadow:0 2px 24px rgba(255,122,24,0.5), 0 0 20px rgba(16,183,173,0.4);transform:scale(1.05);}
+}
+.pill.active-success{
+  background:linear-gradient(135deg,rgba(16,183,173,0.9),rgba(45,212,200,0.9));
+  color:#fff;font-weight:700;
+  animation:successPulse 1s ease-in-out infinite;
+}
+@keyframes successPulse{
+  0%,100%{box-shadow:0 2px 12px rgba(16,183,173,0.3);transform:scale(1);}
+  50%{box-shadow:0 2px 24px rgba(16,183,173,0.5), 0 0 16px rgba(45,212,200,0.3);transform:scale(1.03);}
+}
+.pill-arrow{
+  color:var(--text2);opacity:0.3;font-size:14px;padding:0 8px;flex-shrink:0;
+}
+.pill-arrow.lit{
+  opacity:1;
+  color:var(--accent);
+  transition:opacity 0.4s ease, color 0.4s ease;
+}
+
+/* Raid counter display */
+.raid-display{
+  text-align:center;font-size:14px;color:var(--text2);
+}
+.raid-display span{color:var(--primary);font-weight:700;}
+
+/* Teal glow on target — pulsing */
+@keyframes targetPulse{
+  0%,100%{box-shadow:0 4px 24px rgba(0,0,0,0.3), 0 0 20px rgba(16,183,173,0.2);}
+  50%{box-shadow:0 4px 24px rgba(0,0,0,0.3), 0 0 40px rgba(16,183,173,0.4);}
+}
+.twitch-embed.glow-target{
+  animation:targetPulse 2s ease-in-out infinite;
+  border-color:var(--accent);
+}
+
+/* Particle */
+.particle{
+  position:absolute;border-radius:50%;pointer-events:none;z-index:11;
+  will-change:transform,opacity;
+}
+
+/* Energy beam */
+.energy-beam{
+  position:absolute;
+  height:3px;
+  background:linear-gradient(90deg, rgba(255,122,24,0.6), rgba(16,183,173,0.8));
+  border-radius:2px;
+  pointer-events:none;
+  z-index:10;
+  opacity:0;
+  transition:opacity 0.4s ease;
+  box-shadow:0 0 12px rgba(255,122,24,0.3), 0 0 24px rgba(16,183,173,0.2);
+  animation:beamPulse 1s ease-in-out infinite;
+}
+.energy-beam.visible{opacity:1;}
+@keyframes beamPulse{
+  0%,100%{opacity:0.6;height:3px;box-shadow:0 0 12px rgba(255,122,24,0.3), 0 0 24px rgba(16,183,173,0.2);}
+  50%{opacity:1;height:4px;box-shadow:0 0 20px rgba(255,122,24,0.5), 0 0 36px rgba(16,183,173,0.4);}
+}
+
+/* Confetti */
+.confetti{
+  position:absolute;pointer-events:none;z-index:11;
+  will-change:transform,opacity;
+}
+</style>
+</head>
+<body>
+<div class="bg-orb bg-orb-1"></div>
+<div class="bg-orb bg-orb-2"></div>
+
+<div class="container">
+  <div class="title-section">
+    <div class="badge">AUTO-RAID SYSTEM</div>
+    <h1 class="headline">Kein Stream endet im Leeren.</h1>
+    <p class="subtitle">Unser Auto-Raid-System erkennt, wenn ein Partner-Stream endet, findet den besten Live-Partner und leitet die Community automatisch weiter.</p>
+  </div>
+
+  <div class="demo-area">
+    <div class="embeds-row" id="embedsRow">
+      <!-- Source Embed -->
+      <div class="twitch-embed embed-source" id="sourceEmbed">
+        <div class="player">
+          <video id="sourceVideo" muted autoplay loop playsinline></video>
+          <div class="player-overlays">
+            <div class="overlay-top">
+              <div class="live-badge" id="sourceLiveBadge"><div class="live-dot"></div><span id="sourceLiveText">LIVE</span></div>
+              <div class="duration-pill" id="sourceDuration">0:00:00</div>
+            </div>
+            <div class="overlay-bottom">
+              <div class="overlay-streamer" id="sourceStreamer">EarlySalty</div>
+              <div class="overlay-category">Deadlock</div>
+              <div class="overlay-viewers"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg><span id="sourceViewers">247 Zuschauer</span></div>
+            </div>
+          </div>
+          <div class="offline-overlay" id="offlineOverlay">
+            <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round"><path d="M18.36 6.64A9 9 0 0 1 20.77 15"/><path d="M6.16 6.16a9 9 0 1 0 12.68 12.68"/><line x1="2" y1="2" x2="22" y2="22"/><path d="M12 9v4"/><circle cx="12" cy="17" r="1"/></svg>
+            <div class="offline-text">Stream Offline</div>
+            <div class="offline-subtext">Der Stream ist beendet</div>
+          </div>
+        </div>
+        <div class="info-bar">
+          <div class="info-left">
+            <div class="avatar orange" id="sourceAvatar">E</div>
+            <div>
+              <div class="info-name" id="sourceInfoName">EarlySalty</div>
+              <div class="info-game">Spielt Deadlock</div>
+            </div>
+          </div>
+          <button class="watch-btn">Zuschauen</button>
+        </div>
+      </div>
+
+      <!-- Target Embed -->
+      <div class="twitch-embed embed-target" id="targetEmbed">
+        <div class="player">
+          <video id="targetVideo" muted autoplay loop playsinline></video>
+          <div class="player-overlays">
+            <div class="overlay-top">
+              <div class="live-badge" id="targetLiveBadge"><div class="live-dot"></div><span>LIVE</span></div>
+              <div class="duration-pill" id="targetDuration">0:00:00</div>
+            </div>
+            <div class="overlay-bottom">
+              <div class="overlay-streamer" id="targetStreamer">DarkMage_DE</div>
+              <div class="overlay-category">Deadlock</div>
+              <div class="overlay-viewers"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg><span id="targetViewers">89 Zuschauer</span></div>
+            </div>
+          </div>
+        </div>
+        <div class="info-bar">
+          <div class="info-left">
+            <div class="avatar teal" id="targetAvatar">D</div>
+            <div>
+              <div class="info-name" id="targetInfoName">DarkMage_DE</div>
+              <div class="info-game">Spielt Deadlock</div>
+            </div>
+          </div>
+          <button class="watch-btn">Zuschauen</button>
+        </div>
+      </div>
+
+      <!-- Middle overlay area for particles, text, counter -->
+      <div class="middle-area" id="middleArea">
+        <div class="step-badge" id="stepBadge"></div>
+        <div class="middle-text search-text" id="searchText"></div>
+        <div class="search-sub" id="searchSub"></div>
+        <div class="raid-counter" id="raidCounter">
+          <div class="raid-count-num" id="raidCountNum">0</div>
+          <div class="raid-count-label">Viewer</div>
+        </div>
+        <div class="middle-text final-text" id="finalText"></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="status-bar" id="statusBar">
+    <div class="pill" id="pill0">① Stream endet</div>
+    <span class="pill-arrow">→</span>
+    <div class="pill" id="pill1">② Partner suchen</div>
+    <span class="pill-arrow">→</span>
+    <div class="pill" id="pill2">③ Raid ausführen</div>
+    <span class="pill-arrow">→</span>
+    <div class="pill" id="pill3">④ Angekommen</div>
+  </div>
+  <div class="raid-display">Raid <span id="raidIndex">1</span>/3</div>
+</div>
+
+<script>
+(function(){
+  // === SCENARIOS ===
+  const scenarios = [
+    {
+      source: { name:'EarlySalty', viewers:247, duration:[3,42,15], video:'public/clips/loop1.webm', initial:'E', avatarClass:'orange' },
+      target: { name:'DarkMage_DE', viewers:89, duration:[1,12,33], video:'public/clips/loop2.webm', initial:'D', avatarClass:'teal' }
+    },
+    {
+      source: { name:'PixelStorm', viewers:183, duration:[5,15,42], video:'public/clips/loop2.webm', initial:'P', avatarClass:'orange' },
+      target: { name:'NightOwl_TV', viewers:52, duration:[0,45,18], video:'public/clips/loop3.webm', initial:'N', avatarClass:'teal' }
+    },
+    {
+      source: { name:'CrystalBlade', viewers:312, duration:[2,30,7], video:'public/clips/loop3.webm', initial:'C', avatarClass:'orange' },
+      target: { name:'FrostBite99', viewers:127, duration:[1,58,51], video:'public/clips/loop1.webm', initial:'F', avatarClass:'teal' }
+    }
+  ];
+
+  // === DOM REFS ===
+  const $ = id => document.getElementById(id);
+  const sourceVideo = $('sourceVideo');
+  const targetVideo = $('targetVideo');
+  const sourceLiveBadge = $('sourceLiveBadge');
+  const sourceLiveText = $('sourceLiveText');
+  const sourceDuration = $('sourceDuration');
+  const sourceStreamer = $('sourceStreamer');
+  const sourceViewers = $('sourceViewers');
+  const sourceInfoName = $('sourceInfoName');
+  const sourceAvatar = $('sourceAvatar');
+  const targetLiveBadge = $('targetLiveBadge');
+  const targetDuration = $('targetDuration');
+  const targetStreamer = $('targetStreamer');
+  const targetViewers = $('targetViewers');
+  const targetInfoName = $('targetInfoName');
+  const targetAvatar = $('targetAvatar');
+  const offlineOverlay = $('offlineOverlay');
+  const sourceEmbed = $('sourceEmbed');
+  const targetEmbed = $('targetEmbed');
+  const embedsRow = $('embedsRow');
+  const middleArea = $('middleArea');
+  const searchText = $('searchText');
+  const raidCounter = $('raidCounter');
+  const raidCountNum = $('raidCountNum');
+  const finalText = $('finalText');
+  const stepBadge = $('stepBadge');
+  const searchSub = $('searchSub');
+  const raidIndex = $('raidIndex');
+  const pills = [0,1,2,3].map(i => $('pill'+i));
+
+  let currentScenario = 0;
+  let sourceSecs = 0, targetSecs = 0;
+  let durationInterval = null;
+  let animFrame = null;
+  let running = true;
+
+  // === HELPERS ===
+  function fmtDuration(totalSecs){
+    const h = Math.floor(totalSecs/3600);
+    const m = Math.floor((totalSecs%3600)/60);
+    const s = totalSecs%60;
+    return `${h}:${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`;
+  }
+
+  function durationToSecs([h,m,s]){ return h*3600+m*60+s; }
+
+  function sleep(ms){ return new Promise(r=>setTimeout(r,ms)); }
+
+  function typewriter(el, text, speed=40){
+    return new Promise(resolve=>{
+      el.textContent='';
+      let i=0;
+      function tick(){
+        if(i<text.length){el.textContent+=text[i];i++;setTimeout(tick,speed);}
+        else resolve();
+      }
+      tick();
+    });
+  }
+
+  function easeOutCubic(t){ return 1-Math.pow(1-t,3); }
+
+  function lerp(a,b,t){ return a+(b-a)*t; }
+
+  function lerpColor(r1,g1,b1,r2,g2,b2,t){
+    return `rgb(${Math.round(lerp(r1,r2,t))},${Math.round(lerp(g1,g2,t))},${Math.round(lerp(b1,b2,t))})`;
+  }
+
+  // === DURATION TIMER ===
+  function startDurations(){
+    clearInterval(durationInterval);
+    durationInterval = setInterval(()=>{
+      sourceSecs++;targetSecs++;
+      sourceDuration.textContent=fmtDuration(sourceSecs);
+      targetDuration.textContent=fmtDuration(targetSecs);
+    },1000);
+  }
+  function stopSourceDuration(){
+    // We keep interval running for target only; source just won't update
+  }
+
+  // === PILLS ===
+  function resetPills(){
+    pills.forEach(p=>{p.className='pill';p.textContent=p.dataset.label||p.textContent;});
+    // Store labels
+    pills.forEach(p=>{if(!p.dataset.label)p.dataset.label=p.textContent;});
+  }
+  function setPillActive(i){
+    pills[i].className='pill active';
+  }
+  function setPillDone(i){
+    pills[i].className='pill done';
+    pills[i].textContent='✓ '+pills[i].dataset.label.replace(/^[①②③④]\s*/,'');
+  }
+
+  // === PARTICLES ===
+  function spawnParticles(count, sourceRect, targetRect, containerRect, duration){
+    const particles=[];
+    const startX=sourceRect.right-containerRect.left;
+    const endX=targetRect.left-containerRect.left;
+    const midY=(sourceRect.top+sourceRect.height/2)-containerRect.top;
+    const startY=midY;
+    const endY=midY;
+
+    for(let i=0;i<count;i++){
+      const el=document.createElement('div');
+      el.className='particle';
+      const size=4+Math.random()*3;
+      el.style.width=size+'px';el.style.height=size+'px';
+      middleArea.appendChild(el);
+
+      // Create trail particles
+      const trails=[];
+      for(let t=0;t<2;t++){
+        const tr=document.createElement('div');
+        tr.className='particle';
+        const ts=size*(0.7-t*0.25);
+        tr.style.width=ts+'px';tr.style.height=ts+'px';
+        tr.style.opacity=0.5-t*0.2;
+        middleArea.appendChild(tr);
+        trails.push({el:tr,delay:(t+1)*40});
+      }
+
+      const curveDir=(Math.random()-0.5)*60;
+      particles.push({
+        el, trails, delay:i*150, size,
+        sx:startX, sy:startY+((Math.random()-0.5)*30),
+        ex:endX, ey:endY+((Math.random()-0.5)*30),
+        curveY:curveDir, startTime:null
+      });
+    }
+
+    const totalDur=duration;
+    return new Promise(resolve=>{
+      let allDone=false;
+      function frame(ts){
+        if(allDone)return;
+        let doneCount=0;
+        particles.forEach(p=>{
+          if(!p.startTime)p.startTime=ts;
+          const elapsed=ts-p.startTime-p.delay;
+          if(elapsed<0){p.el.style.opacity='0';p.trails.forEach(t=>t.el.style.opacity='0');return;}
+          const prog=Math.min(elapsed/(totalDur-p.delay*0.5),1);
+          const easedProg=easeOutCubic(prog);
+
+          const x=lerp(p.sx,p.ex,easedProg);
+          const yBase=lerp(p.sy,p.ey,easedProg);
+          const yOffset=p.curveY*Math.sin(easedProg*Math.PI);
+          const y=yBase+yOffset;
+
+          // Color: orange->teal
+          const color=lerpColor(255,122,24,16,183,173,easedProg);
+          p.el.style.transform=`translate(${x}px,${y}px)`;
+          p.el.style.background=color;
+          p.el.style.boxShadow=`0 0 8px ${color}`;
+          p.el.style.opacity=prog<0.9?'1':String(1-(prog-0.9)*10);
+
+          // Trails follow with delay
+          p.trails.forEach((tr,ti)=>{
+            const tElapsed=elapsed-tr.delay;
+            if(tElapsed<0){tr.el.style.opacity='0';return;}
+            const tProg=Math.min(tElapsed/(totalDur-p.delay*0.5),1);
+            const tEased=easeOutCubic(tProg);
+            const tx=lerp(p.sx,p.ex,tEased);
+            const tyBase=lerp(p.sy,p.ey,tEased);
+            const tyOff=p.curveY*Math.sin(tEased*Math.PI);
+            const tColor=lerpColor(255,122,24,16,183,173,tEased);
+            tr.el.style.transform=`translate(${tx}px,${tyBase+tyOff}px)`;
+            tr.el.style.background=tColor;
+            tr.el.style.boxShadow=`0 0 6px ${tColor}`;
+            tr.el.style.opacity=tProg<0.9?String(0.5-ti*0.2):String((0.5-ti*0.2)*(1-(tProg-0.9)*10));
+          });
+
+          if(prog>=1)doneCount++;
+        });
+        if(doneCount>=particles.length){
+          allDone=true;
+          // Cleanup
+          particles.forEach(p=>{
+            p.el.remove();p.trails.forEach(t=>t.el.remove());
+          });
+          resolve();
+        } else {
+          animFrame=requestAnimationFrame(frame);
+        }
+      }
+      animFrame=requestAnimationFrame(frame);
+    });
+  }
+
+  // === CONFETTI ===
+  function spawnConfetti(originX, originY, count){
+    const pieces=[];
+    for(let i=0;i<count;i++){
+      const el=document.createElement('div');
+      el.className='confetti';
+      const size=4+Math.random()*4;
+      const isRound=Math.random()>0.5;
+      el.style.width=size+'px';
+      el.style.height=isRound?size+'px':size*2+'px';
+      el.style.borderRadius=isRound?'50%':'2px';
+      el.style.background=Math.random()>0.5?'var(--accent)':'var(--primary)';
+      middleArea.appendChild(el);
+      const angle=Math.random()*Math.PI*2;
+      const speed=2+Math.random()*4;
+      pieces.push({
+        el, x:originX, y:originY,
+        vx:Math.cos(angle)*speed, vy:Math.sin(angle)*speed-3,
+        life:0, maxLife:800+Math.random()*400
+      });
+    }
+    let start=null;
+    function frame(ts){
+      if(!start)start=ts;
+      const dt=16;// ~60fps
+      let alive=0;
+      pieces.forEach(p=>{
+        p.life+=dt;
+        if(p.life>p.maxLife){p.el.style.opacity='0';return;}
+        p.vy+=0.3;
+        p.x+=p.vx;p.y+=p.vy;
+        p.el.style.transform=`translate(${p.x}px,${p.y}px) rotate(${p.life*0.3}deg)`;
+        p.el.style.opacity=String(1-p.life/p.maxLife);
+        alive++;
+      });
+      if(alive>0){
+        requestAnimationFrame(frame);
+      } else {
+        pieces.forEach(p=>p.el.remove());
+      }
+    }
+    requestAnimationFrame(frame);
+  }
+
+  // === VIEWER COUNTER ANIMATION ===
+  function animateCounter(from, to, duration, el){
+    return new Promise(resolve=>{
+      const startTime=performance.now();
+      function tick(now){
+        const elapsed=now-startTime;
+        const prog=Math.min(elapsed/duration,1);
+        const eased=easeOutCubic(prog);
+        const val=Math.round(lerp(from,to,eased));
+        el.textContent=val;
+        if(prog<1)requestAnimationFrame(tick);
+        else resolve();
+      }
+      requestAnimationFrame(tick);
+    });
+  }
+
+  // === SETUP SCENARIO ===
+  function setupScenario(idx){
+    const s=scenarios[idx];
+    // Source
+    sourceVideo.src=s.source.video;
+    sourceVideo.play().catch(()=>{});
+    sourceStreamer.textContent=s.source.name;
+    sourceInfoName.textContent=s.source.name;
+    sourceViewers.textContent=s.source.viewers+' Zuschauer';
+    sourceAvatar.textContent=s.source.initial;
+    sourceAvatar.className='avatar '+s.source.avatarClass;
+    sourceSecs=durationToSecs(s.source.duration);
+    sourceDuration.textContent=fmtDuration(sourceSecs);
+    sourceLiveBadge.className='live-badge';
+    sourceLiveText.textContent='LIVE';
+    sourceEmbed.style.opacity='1';
+    offlineOverlay.classList.remove('visible');
+    sourceEmbed.querySelector('.player').classList.remove('going-offline');
+
+    // Target
+    targetVideo.src=s.target.video;
+    targetVideo.play().catch(()=>{});
+    targetStreamer.textContent=s.target.name;
+    targetInfoName.textContent=s.target.name;
+    targetViewers.textContent=s.target.viewers+' Zuschauer';
+    targetAvatar.textContent=s.target.initial;
+    targetAvatar.className='avatar '+s.target.avatarClass;
+    targetSecs=durationToSecs(s.target.duration);
+    targetDuration.textContent=fmtDuration(targetSecs);
+    targetEmbed.className='twitch-embed embed-target';
+
+    // Status
+    raidIndex.textContent=String(idx+1);
+    resetPills();
+
+    // Clear middle texts
+    searchText.className='middle-text search-text';searchText.textContent='';
+    raidCounter.className='raid-counter';raidCountNum.textContent='0';
+    finalText.className='middle-text final-text';finalText.textContent='';
+    stepBadge.className='step-badge';stepBadge.textContent='';
+    searchSub.className='search-sub';searchSub.textContent='';
+  }
+
+  // === MAIN ANIMATION LOOP ===
+  async function runRaid(idx){
+    if(!running)return;
+    const s=scenarios[idx];
+    setupScenario(idx);
+    startDurations();
+
+    // Phase 0: Initial — both live (4s)
+    await sleep(4000);
+    if(!running)return;
+
+    // Phase 1: Stream ends — dramatic multi-step offline
+    setPillActive(0);
+    await sleep(500);
+    // Step A: Video starts going grayscale/dark (but keeps playing briefly)
+    sourceEmbed.querySelector('.player').classList.add('going-offline');
+    await sleep(1000);
+    // Step B: Video freezes
+    sourceVideo.pause();
+    await sleep(300);
+    // Step C: LIVE badge switches to OFFLINE
+    sourceLiveBadge.classList.add('offline');
+    sourceLiveText.textContent='OFFLINE';
+    await sleep(400);
+    // Step D: Full offline overlay appears (with staggered icon + text animations via CSS)
+    offlineOverlay.classList.add('visible');
+    sourceEmbed.style.opacity='0.85';
+
+    // Show step badge in middle
+    stepBadge.textContent='Stream endet';
+    stepBadge.classList.add('visible');
+
+    // Stop counting source duration (target keeps going)
+    let sourceFreeze=sourceSecs;
+    clearInterval(durationInterval);
+    durationInterval=setInterval(()=>{
+      targetSecs++;
+      targetDuration.textContent=fmtDuration(targetSecs);
+      sourceDuration.textContent=fmtDuration(sourceFreeze);
+    },1000);
+
+    await sleep(3500);
+    if(!running)return;
+    setPillDone(0);
+    stepBadge.classList.remove('visible');
+    await sleep(500);
+
+    // Phase 2: Partner search
+    setPillActive(1);
+    targetEmbed.classList.add('glow-target');
+
+    // Badge + gradient text
+    stepBadge.textContent='Partner suchen';
+    stepBadge.classList.add('visible');
+
+    searchText.classList.add('visible');
+    await typewriter(searchText,'Besten Partner finden...',40);
+    searchSub.textContent='Netzwerk wird analysiert';
+    searchSub.classList.add('visible');
+
+    await sleep(1200);
+    if(!running)return;
+
+    // Found
+    searchText.textContent='';
+    await typewriter(searchText,s.target.name,35);
+    searchSub.textContent='Best Match gefunden';
+    stepBadge.textContent='✓ Gefunden';
+
+    await sleep(1500);
+    if(!running)return;
+    searchText.classList.remove('visible');
+    searchSub.classList.remove('visible');
+    stepBadge.classList.remove('visible');
+    setPillDone(1);
+    await sleep(500);
+
+    // Phase 3: Raid executing
+    setPillActive(2);
+    raidCounter.classList.add('visible');
+
+    // Get positions for particles
+    const srcRect=sourceEmbed.getBoundingClientRect();
+    const tgtRect=targetEmbed.getBoundingClientRect();
+    const containerRect=middleArea.getBoundingClientRect();
+
+    // Spawn particles and animate counter in parallel
+    const particleProm=spawnParticles(15, srcRect, tgtRect, containerRect, 3500);
+    const counterProm=animateCounter(0, s.source.viewers, 3500, raidCountNum);
+    await Promise.all([particleProm, counterProm]);
+    await sleep(1000);
+    if(!running)return;
+    raidCounter.classList.remove('visible');
+    setPillDone(2);
+    await sleep(500);
+
+    // Phase 4: Viewers arrived
+    setPillActive(3);
+    // Flash glow
+    targetEmbed.style.boxShadow='0 4px 24px rgba(0,0,0,0.3), 0 0 50px rgba(16,183,173,0.5)';
+    setTimeout(()=>{
+      targetEmbed.style.boxShadow='';
+    },600);
+
+    // Update viewer count
+    const newViewers=s.target.viewers+s.source.viewers;
+    targetViewers.innerHTML='';
+    const viewerSpan=document.createElement('span');
+    viewerSpan.textContent=newViewers+' Zuschauer';
+    viewerSpan.style.color='var(--accent)';
+    viewerSpan.style.transition='color 1s ease';
+    targetViewers.appendChild(viewerSpan);
+    setTimeout(()=>{viewerSpan.style.color='';},1500);
+
+    // Show checkmark icon in middle
+    stepBadge.textContent='✓ Raid erfolgreich';
+    stepBadge.classList.add('visible');
+
+    // Final text with scale pop
+    finalText.textContent=s.source.viewers+' Viewer weitergeleitet!';
+    finalText.classList.add('visible');
+    setTimeout(()=>{finalText.classList.add('pop');},50);
+    setTimeout(()=>{finalText.classList.remove('pop');},400);
+
+    // Confetti from left edge of target
+    const cX=tgtRect.left-containerRect.left;
+    const cY=(tgtRect.top+tgtRect.height/2)-containerRect.top;
+    spawnConfetti(cX,cY,12);
+
+    setPillDone(3);
+
+    await sleep(3000);
+    if(!running)return;
+
+    // Reset (2.5s fade)
+    finalText.classList.remove('visible');
+    stepBadge.classList.remove('visible');
+    stepBadge.textContent='';
+    targetEmbed.classList.remove('glow-target');
+    clearInterval(durationInterval);
+
+    await sleep(2500);
+    if(!running)return;
+
+    // Next scenario
+    currentScenario=(currentScenario+1)%scenarios.length;
+    runRaid(currentScenario);
+  }
+
+  // Store pill labels on init
+  pills.forEach(p=>{p.dataset.label=p.textContent;});
+
+  // Start
+  runRaid(0);
+})();
+</script>
+</body>
+</html>

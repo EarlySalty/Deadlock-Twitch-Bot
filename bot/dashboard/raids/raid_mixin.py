@@ -172,7 +172,7 @@ class _DashboardRaidMixin:
         if not login:
             return web.Response(text="Missing login parameter", status=400)
 
-        auth_manager = getattr(getattr(self, "_raid_bot", None), "auth_manager", None)
+        auth_manager = self._dashboard_auth_manager()
         if auth_manager:
             client_id = str(getattr(auth_manager, "client_id", "") or "").strip()
             redirect_uri = str(getattr(auth_manager, "redirect_uri", "") or "").strip()
@@ -214,7 +214,7 @@ class _DashboardRaidMixin:
         if not state:
             return web.Response(text="Missing state parameter", status=400)
 
-        auth_manager = getattr(getattr(self, "_raid_bot", None), "auth_manager", None)
+        auth_manager = self._dashboard_auth_manager()
         if auth_manager:
             full_url = auth_manager.get_pending_auth_url(state)
         else:
@@ -275,7 +275,7 @@ class _DashboardRaidMixin:
             if login != session_partner_login:
                 return web.Response(text="Forbidden streamer scope", status=403)
 
-        auth_manager = getattr(getattr(self, "_raid_bot", None), "auth_manager", None)
+        auth_manager = self._dashboard_auth_manager()
         if not auth_manager:
             raid_requirements_cb = getattr(self, "_raid_requirements_cb", None)
             if not callable(raid_requirements_cb):
@@ -304,7 +304,7 @@ class _DashboardRaidMixin:
         except (TypeError, ValueError):
             return web.Response(text="Invalid Discord user id", status=400)
 
-        discord_bot = getattr(auth_manager, "_discord_bot", None)
+        discord_bot = self._dashboard_discord_bot()
         if not discord_bot:
             return web.Response(text="Discord bot not available", status=503)
 
@@ -468,8 +468,9 @@ class _DashboardRaidMixin:
 
     async def raid_oauth_callback(self, request: web.Request) -> web.StreamResponse:
         """Handle Twitch OAuth callback for raid authorization."""
-        raid_bot = self._raid_bot
-        auth_manager = getattr(raid_bot, "auth_manager", None) if raid_bot else None
+        bot_service = self._dashboard_bot_runtime()
+        raid_bot = bot_service.raid_bot
+        auth_manager = self._dashboard_auth_manager()
 
         code = (request.query.get("code") or "").strip()
         state = (request.query.get("state") or "").strip()
@@ -524,7 +525,7 @@ class _DashboardRaidMixin:
                 "<p>Beim Speichern der Twitch-Autorisierung ist ein interner Fehler aufgetreten.</p>"
                 "<p>Bitte den Vorgang erneut starten.</p>"
             ),
-            schedule_background=getattr(self, "_spawn_bg_task", None),
+            schedule_background=getattr(self, "_dashboard_schedule_background", None),
         )
         title = str(payload.get("title") or "Autorisierung")
         body_html = str(payload.get("body_html") or "<p>Unbekannte Antwort.</p>")

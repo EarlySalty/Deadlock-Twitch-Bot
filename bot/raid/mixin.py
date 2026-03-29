@@ -1,6 +1,7 @@
 # cogs/twitch/raid_mixin.py
 """Mixin für Auto-Raid-Integration in TwitchStreamCog."""
 
+import asyncio
 import logging
 import time
 from datetime import UTC, datetime
@@ -12,6 +13,41 @@ log = logging.getLogger("TwitchStreams.RaidMixin")
 
 class TwitchRaidMixin:
     """Integration der Raid-Bot-Logik in die Stream-Überwachung."""
+
+    @staticmethod
+    def _dashboard_raid_history_sync(limit: int = 50, from_broadcaster: str = "") -> list[dict]:
+        with readonly_connection() as conn:
+            if from_broadcaster:
+                rows = conn.execute(
+                    """
+                    SELECT from_broadcaster_id, from_broadcaster_login,
+                           to_broadcaster_id, to_broadcaster_login,
+                           viewer_count, stream_duration_sec, executed_at,
+                           success, error_message, target_stream_started_at,
+                           candidates_count
+                    FROM twitch_raid_history
+                    WHERE from_broadcaster_login = %s
+                    ORDER BY executed_at DESC
+                    LIMIT %s
+                    """,
+                    (from_broadcaster.lower(), limit),
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    """
+                    SELECT from_broadcaster_id, from_broadcaster_login,
+                           to_broadcaster_id, to_broadcaster_login,
+                           viewer_count, stream_duration_sec, executed_at,
+                           success, error_message, target_stream_started_at,
+                           candidates_count
+                    FROM twitch_raid_history
+                    ORDER BY executed_at DESC
+                    LIMIT %s
+                    """,
+                    (limit,),
+                ).fetchall()
+
+        return [dict(row) for row in rows]
 
     async def _handle_auto_raid_on_offline(
         self,
@@ -216,35 +252,8 @@ class TwitchRaidMixin:
         self, limit: int = 50, from_broadcaster: str = ""
     ) -> list[dict]:
         """Callback für Dashboard: Raid-History abrufen."""
-        with readonly_connection() as conn:
-            if from_broadcaster:
-                rows = conn.execute(
-                    """
-                    SELECT from_broadcaster_id, from_broadcaster_login,
-                           to_broadcaster_id, to_broadcaster_login,
-                           viewer_count, stream_duration_sec, executed_at,
-                           success, error_message, target_stream_started_at,
-                           candidates_count
-                    FROM twitch_raid_history
-                    WHERE from_broadcaster_login = %s
-                    ORDER BY executed_at DESC
-                    LIMIT %s
-                    """,
-                    (from_broadcaster.lower(), limit),
-                ).fetchall()
-            else:
-                rows = conn.execute(
-                    """
-                    SELECT from_broadcaster_id, from_broadcaster_login,
-                           to_broadcaster_id, to_broadcaster_login,
-                           viewer_count, stream_duration_sec, executed_at,
-                           success, error_message, target_stream_started_at,
-                           candidates_count
-                    FROM twitch_raid_history
-                    ORDER BY executed_at DESC
-                    LIMIT %s
-                    """,
-                    (limit,),
-                ).fetchall()
-
-        return [dict(row) for row in rows]
+        return await asyncio.to_thread(
+            self._dashboard_raid_history_sync,
+            limit,
+            from_broadcaster,
+        )

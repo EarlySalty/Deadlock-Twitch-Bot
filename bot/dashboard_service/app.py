@@ -25,6 +25,7 @@ from ..core.constants import (
     log,
 )
 from ..dashboard.server_v2 import build_v2_app
+from ..dashboard.runtime import DashboardRuntimeServices
 from ..runtime_lock import runtime_pid_lock
 from ..runtime_mode import (
     INTERNAL_API_PORT as RUNTIME_INTERNAL_API_PORT,
@@ -397,6 +398,21 @@ def build_dashboard_service_app(
                 "body_html": "<p>Der interne Bot-Service ist aktuell nicht verfügbar.</p>",
             }
 
+    dashboard_services = DashboardRuntimeServices(
+        add_cb=_add_cb,
+        remove_cb=_remove_cb,
+        list_cb=_list_cb,
+        stats_cb=_stats_cb,
+        verify_cb=_verify_cb,
+        archive_cb=_archive_cb,
+        discord_flag_cb=_discord_flag_cb,
+        discord_profile_cb=_discord_profile_cb,
+        raid_auth_url_cb=_raid_auth_url_cb,
+        raid_go_url_cb=_raid_go_url_cb,
+        raid_requirements_cb=_raid_requirements_cb,
+        raid_oauth_callback_cb=_raid_oauth_callback_cb,
+    )
+
     app = build_v2_app(
         noauth=resolved_noauth,
         token=resolved_dashboard_token,
@@ -406,6 +422,7 @@ def build_dashboard_service_app(
         oauth_redirect_uri=resolved_oauth_redirect_uri,
         session_ttl_seconds=resolved_session_ttl,
         legacy_stats_url=resolved_legacy_stats_url,
+        dashboard_services=dashboard_services,
         add_cb=_add_cb,
         remove_cb=_remove_cb,
         list_cb=_list_cb,

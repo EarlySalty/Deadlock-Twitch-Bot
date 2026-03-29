@@ -526,13 +526,32 @@ class _DashboardRoutesMixin:
         try:
             from ..social_media import ClipManager, create_social_media_app
 
-            # Reuse the primary Twitch API instance so manual clip fetch works.
-            twitch_api = None
-            raid_bot = getattr(self, "_raid_bot", None)
-            cog = getattr(raid_bot, "_cog", None) if raid_bot is not None else None
-            if cog is not None:
-                twitch_api = getattr(cog, "api", None)
-            clip_manager = ClipManager(twitch_api=twitch_api)
+            clip_manager = getattr(self, "_social_media_clip_manager", None)
+            if clip_manager is None:
+                resolver = getattr(self, "_dashboard_clip_manager", None)
+                if callable(resolver):
+                    clip_manager = resolver()
+            if clip_manager is None:
+                raid_bot = getattr(self, "_raid_bot", None)
+                legacy_cog = getattr(raid_bot, "_cog", None) if raid_bot is not None else None
+                clip_manager = getattr(legacy_cog, "clip_manager", None) if legacy_cog is not None else None
+            twitch_api = getattr(clip_manager, "twitch_api", None)
+            if twitch_api is None:
+                resolver = getattr(self, "_dashboard_twitch_api", None)
+                if callable(resolver):
+                    twitch_api = resolver()
+            if twitch_api is None and clip_manager is not None:
+                twitch_api = getattr(clip_manager, "api", None)
+            if twitch_api is None:
+                twitch_api = getattr(self, "_social_media_twitch_api", None)
+            if twitch_api is None:
+                raid_bot = getattr(self, "_raid_bot", None)
+                legacy_cog = getattr(raid_bot, "_cog", None) if raid_bot is not None else None
+                twitch_api = getattr(legacy_cog, "api", None) if legacy_cog is not None else None
+
+            if clip_manager is None:
+                clip_manager = ClipManager(twitch_api=twitch_api)
+            self._social_media_clip_manager = clip_manager
             if twitch_api is None:
                 log.warning(
                     "Social Media Dashboard registered without Twitch API instance. "

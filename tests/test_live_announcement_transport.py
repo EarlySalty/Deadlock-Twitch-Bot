@@ -103,23 +103,54 @@ class LiveAnnouncementTransportTests(unittest.IsolatedAsyncioTestCase):
             captured["path"],
             "/internal/master/v1/discord/send-rich-message",
         )
-        self.assertTrue(str(captured["idempotency_key"]).startswith("twitch-live-send-"))
+        expected_payload = {
+            "channel_id": 123456,
+            "content": "Testcontent",
+            "embed": embed.to_dict(),
+            "allowed_role_ids": [111, 222],
+            "view_spec": {
+                "type": "twitch_live_tracking",
+                "streamer_login": "tester",
+                "tracking_token": "track-1",
+                "referral_url": "https://www.twitch.tv/tester?ref=deadlock",
+                "button_label": "Jetzt ansehen",
+            },
+        }
+        self.assertEqual(
+            captured["idempotency_key"],
+            dummy._build_announcement_payload_idempotency_key(
+                action="live-send",
+                login="Tester",
+                payload=expected_payload,
+            ),
+        )
         self.assertEqual(
             captured["payload"],
-            {
-                "channel_id": 123456,
-                "content": "Testcontent",
-                "embed": embed.to_dict(),
-                "allowed_role_ids": [111, 222],
-                "view_spec": {
-                    "type": "twitch_live_tracking",
-                    "streamer_login": "tester",
-                    "tracking_token": "track-1",
-                    "referral_url": "https://www.twitch.tv/tester?ref=deadlock",
-                    "button_label": "Jetzt ansehen",
-                },
-            },
+            expected_payload,
         )
+
+    def test_live_send_idempotency_key_changes_with_payload(self) -> None:
+        dummy = _DummyMonitoring()
+        base_payload = {
+            "channel_id": 123456,
+            "content": "Testcontent",
+            "embed": {"title": "Live"},
+            "allowed_role_ids": [111],
+            "view_spec": None,
+        }
+
+        first_key = dummy._build_announcement_payload_idempotency_key(
+            action="live-send",
+            login="Tester",
+            payload=base_payload,
+        )
+        second_key = dummy._build_announcement_payload_idempotency_key(
+            action="live-send",
+            login="Tester",
+            payload={**base_payload, "content": "Geaenderter Content"},
+        )
+
+        self.assertNotEqual(first_key, second_key)
 
     async def test_send_live_announcement_via_broker_falls_back_to_link_button(self) -> None:
         dummy = _DummyMonitoring()
@@ -152,22 +183,47 @@ class LiveAnnouncementTransportTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(message_id, "9898")
         self.assertEqual(len(calls), 2)
-        self.assertTrue(str(calls[0]["idempotency_key"]).startswith("twitch-live-send-"))
-        self.assertTrue(str(calls[1]["idempotency_key"]).startswith("twitch-live-send-fallback-"))
-        self.assertEqual(
-            calls[1]["payload"],
-            {
-                "channel_id": 123456,
-                "content": "Testcontent",
-                "embed": embed.to_dict(),
-                "allowed_role_ids": [111],
-                "view_spec": {
-                    "type": "link_button",
-                    "label": "Jetzt ansehen",
-                    "url": "https://www.twitch.tv/tester?ref=deadlock",
-                },
+        first_payload = {
+            "channel_id": 123456,
+            "content": "Testcontent",
+            "embed": embed.to_dict(),
+            "allowed_role_ids": [111],
+            "view_spec": {
+                "type": "twitch_live_tracking",
+                "streamer_login": "tester",
+                "tracking_token": "track-1",
+                "referral_url": "https://www.twitch.tv/tester?ref=deadlock",
+                "button_label": "Jetzt ansehen",
             },
+        }
+        second_payload = {
+            "channel_id": 123456,
+            "content": "Testcontent",
+            "embed": embed.to_dict(),
+            "allowed_role_ids": [111],
+            "view_spec": {
+                "type": "link_button",
+                "label": "Jetzt ansehen",
+                "url": "https://www.twitch.tv/tester?ref=deadlock",
+            },
+        }
+        self.assertEqual(
+            calls[0]["idempotency_key"],
+            dummy._build_announcement_payload_idempotency_key(
+                action="live-send",
+                login="Tester",
+                payload=first_payload,
+            ),
         )
+        self.assertEqual(
+            calls[1]["idempotency_key"],
+            dummy._build_announcement_payload_idempotency_key(
+                action="live-send-fallback",
+                login="Tester",
+                payload=second_payload,
+            ),
+        )
+        self.assertEqual(calls[1]["payload"], second_payload)
 
     async def test_edit_live_announcement_via_broker_uses_edit_endpoint(self) -> None:
         dummy = _DummyMonitoring()
@@ -198,20 +254,28 @@ class LiveAnnouncementTransportTests(unittest.IsolatedAsyncioTestCase):
             captured["path"],
             "/internal/master/v1/discord/edit-rich-message",
         )
-        self.assertTrue(str(captured["idempotency_key"]).startswith("twitch-live-edit-"))
+        expected_payload = {
+            "channel_id": 123456,
+            "message_id": "4242",
+            "content": "Offline",
+            "embed": embed.to_dict(),
+            "view_spec": {
+                "type": "link_button",
+                "label": "VOD ansehen",
+                "url": "https://www.twitch.tv/videos/1",
+            },
+        }
+        self.assertEqual(
+            captured["idempotency_key"],
+            dummy._build_announcement_payload_idempotency_key(
+                action="live-edit",
+                login="Tester",
+                payload=expected_payload,
+            ),
+        )
         self.assertEqual(
             captured["payload"],
-            {
-                "channel_id": 123456,
-                "message_id": "4242",
-                "content": "Offline",
-                "embed": embed.to_dict(),
-                "view_spec": {
-                    "type": "link_button",
-                    "label": "VOD ansehen",
-                    "url": "https://www.twitch.tv/videos/1",
-                },
-            },
+            expected_payload,
         )
 
     def test_broker_token_fallback_uses_main_bot_internal_token(self) -> None:

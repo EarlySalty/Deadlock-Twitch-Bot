@@ -2,19 +2,21 @@
 
 from __future__ import annotations
 
+import asyncio
 import ipaddress
 import os
-import re
 import secrets
 from collections.abc import Awaitable, Callable
 from typing import Any
-from urllib.parse import parse_qsl, unquote, urlencode, urlparse, urlsplit, urlunsplit
+from urllib.parse import parse_qsl, urlencode, urlparse, urlsplit, urlunsplit
 
 from aiohttp import web
 
 from ..analytics.api_v2 import AnalyticsV2Mixin
 from ..core.constants import log
+from ..core.twitch_login import normalize_twitch_login
 from ..storage import pg as storage_pg
+from .runtime import DashboardBotService, DashboardRuntimeServices
 from .admin.legal_mixin import _DashboardLegalMixin
 from .affiliate.affiliate_mixin import _DashboardAffiliateMixin
 from .auth.auth_mixin import _DashboardAuthMixin
@@ -34,7 +36,6 @@ DISCORD_API_BASE_URL = "https://discord.com/api/v10"
 TWITCH_DASHBOARDS_LOGIN_URL = "/twitch/auth/login?next=%2Ftwitch%2Fdashboards"
 TWITCH_DASHBOARD_V2_LOGIN_URL = "/twitch/auth/login?next=%2Ftwitch%2Fdashboard-v2"
 TWITCH_DASHBOARDS_DISCORD_LOGIN_URL = "/twitch/auth/discord/login?next=%2Ftwitch%2Fdashboards"
-LOGIN_RE = re.compile(r"^[A-Za-z0-9_]{3,25}$")
 DEFAULT_DASHBOARD_MODERATOR_ROLE_ID = 1337518124647579661
 KEYRING_SERVICE_NAME = "DeadlockBot"
 # Public Stripe Connect OAuth client ID (`ca_...`). Safe to commit directly.
@@ -109,6 +110,7 @@ class DashboardV2Server(
         oauth_redirect_uri: str | None = None,
         session_ttl_seconds: int = 6 * 3600,
         legacy_stats_url: str | None = None,
+        dashboard_services: DashboardRuntimeServices | None = None,
         add_cb: Callable[[str, bool], Awaitable[str]] | None = None,
         remove_cb: Callable[[str], Awaitable[str]] | None = None,
         list_cb: Callable[[], Awaitable[list[dict]]] | None = None,
@@ -125,7 +127,24 @@ class DashboardV2Server(
         raid_requirements_cb: Callable[[str], Awaitable[str]] | None = None,
         raid_oauth_callback_cb: Callable[..., Awaitable[dict]] | None = None,
         reload_cb: Callable[[], Awaitable[str]] | None = None,
+        social_media_clip_manager: Any | None = None,
+        social_media_twitch_api: Any | None = None,
     ) -> None:
+        services = dashboard_services or DashboardRuntimeServices()
+        bot_service = services.bot_service
+        if raid_bot is not None and bot_service.raid_bot is None:
+            bot_service.raid_bot = raid_bot
+        if social_media_clip_manager is not None and bot_service.clip_manager is None:
+            bot_service.clip_manager = social_media_clip_manager
+        if social_media_twitch_api is not None and bot_service.twitch_api is None:
+            bot_service.twitch_api = social_media_twitch_api
+        if eventsub_webhook_handler := services.eventsub_webhook_handler:
+            if bot_service.eventsub_webhook_handler is None:
+                bot_service.eventsub_webhook_handler = eventsub_webhook_handler
+        if callable(reload_cb) and bot_service.reload_cb is None:
+            bot_service.reload_cb = reload_cb
+        self._dashboard_services = services
+        self._dashboard_bot_service = bot_service
         self._token = app_token
         self._noauth = noauth
         self._partner_token = partner_token
@@ -169,45 +188,71 @@ class DashboardV2Server(
         self._affiliate_sessions: dict = {}
         self._session_ttl_seconds = max(6 * 3600, int(session_ttl_seconds or 6 * 3600))
         self._legacy_stats_url = (legacy_stats_url or "").strip() or None
-        self._reload_cb = reload_cb
+        self._reload_cb = (
+            reload_cb
+            if callable(reload_cb)
+            else services.reload_cb
+            if callable(services.reload_cb)
+            else bot_service.reload_cb
+        )
         self._session_cookie_name = "twitch_dash_session"
         self._oauth_states: dict[str, dict[str, Any]] = {}
         self._auth_sessions: dict[str, dict[str, Any]] = {}
         self._sessions_db_loaded: bool = False
         self._oauth_state_ttl_seconds = 600
-        self._add = add_cb if callable(add_cb) else self._empty_add
-        self._remove = remove_cb if callable(remove_cb) else self._empty_remove
-        self._list = list_cb if callable(list_cb) else self._empty_list
-        self._stats = stats_cb if callable(stats_cb) else self._empty_stats
-        self._verify = verify_cb if callable(verify_cb) else self._empty_verify
-        self._archive = archive_cb if callable(archive_cb) else self._empty_archive
+        self._add = add_cb if callable(add_cb) else services.add_cb if callable(services.add_cb) else self._empty_add
+        self._remove = remove_cb if callable(remove_cb) else services.remove_cb if callable(services.remove_cb) else self._empty_remove
+        self._list = list_cb if callable(list_cb) else services.list_cb if callable(services.list_cb) else self._empty_list
+        self._stats = stats_cb if callable(stats_cb) else services.stats_cb if callable(services.stats_cb) else self._empty_stats
+        self._verify = verify_cb if callable(verify_cb) else services.verify_cb if callable(services.verify_cb) else self._empty_verify
+        self._archive = archive_cb if callable(archive_cb) else services.archive_cb if callable(services.archive_cb) else self._empty_archive
         self._discord_flag = (
-            discord_flag_cb if callable(discord_flag_cb) else self._empty_discord_flag
+            discord_flag_cb
+            if callable(discord_flag_cb)
+            else services.discord_flag_cb
+            if callable(services.discord_flag_cb)
+            else self._empty_discord_flag
         )
-        self._discord_profile = discord_profile_cb
+        self._discord_profile = (
+            discord_profile_cb if callable(discord_profile_cb) else services.discord_profile_cb
+        )
         self._raid_history_cb = (
-            raid_history_cb if callable(raid_history_cb) else self._empty_raid_history
+            raid_history_cb
+            if callable(raid_history_cb)
+            else services.raid_history_cb
+            if callable(services.raid_history_cb)
+            else self._empty_raid_history
         )
-        self._raid_bot = raid_bot
-        self._raid_auth_url_cb = raid_auth_url_cb if callable(raid_auth_url_cb) else None
-        self._raid_go_url_cb = raid_go_url_cb if callable(raid_go_url_cb) else None
+        self._raid_auth_url_cb = (
+            raid_auth_url_cb if callable(raid_auth_url_cb) else services.raid_auth_url_cb
+        )
+        self._raid_go_url_cb = raid_go_url_cb if callable(raid_go_url_cb) else services.raid_go_url_cb
         self._raid_requirements_cb = (
-            raid_requirements_cb if callable(raid_requirements_cb) else None
+            raid_requirements_cb
+            if callable(raid_requirements_cb)
+            else services.raid_requirements_cb
         )
         self._raid_oauth_callback_cb = (
-            raid_oauth_callback_cb if callable(raid_oauth_callback_cb) else None
+            raid_oauth_callback_cb
+            if callable(raid_oauth_callback_cb)
+            else services.raid_oauth_callback_cb
+        )
+        self._social_media_clip_manager = (
+            social_media_clip_manager
+            or services.social_media_clip_manager
+            or bot_service.clip_manager
+        )
+        self._social_media_twitch_api = (
+            social_media_twitch_api
+            or services.social_media_twitch_api
+            or bot_service.twitch_api
         )
         self._redirect_uri = str(
-            getattr(getattr(raid_bot, "auth_manager", None), "redirect_uri", "") or ""
+            getattr(self._dashboard_auth_manager(), "redirect_uri", "") or ""
         ).strip()
         self._master_dashboard_href = "/twitch/admin"
         keyring_client_id = self._load_secret_value("DISCORD_OAUTH_CLIENT_ID")
-        discord_bot = None
-        auth_manager = getattr(raid_bot, "auth_manager", None) if raid_bot else None
-        if auth_manager is not None:
-            discord_bot = getattr(auth_manager, "_discord_bot", None)
-        if discord_bot is None and raid_bot is not None:
-            discord_bot = getattr(raid_bot, "_discord_bot", None)
+        discord_bot = self._dashboard_discord_bot()
         app_client_id = str(getattr(discord_bot, "application_id", "") or "").strip()
         self._discord_admin_client_id = (keyring_client_id or app_client_id).strip()
         self._discord_admin_client_secret = self._load_secret_value(
@@ -251,6 +296,45 @@ class DashboardV2Server(
                 "Twitch Admin Discord OAuth ist unvollständig (Client ID/Secret/Redirect fehlen). "
                 "Admin-Zugriff bleibt deaktiviert, bis die Konfiguration vollständig ist."
             )
+
+    def _dashboard_bot_runtime(self) -> DashboardBotService:
+        return getattr(self, "_dashboard_bot_service", DashboardBotService())
+
+    def _dashboard_auth_manager(self) -> Any | None:
+        return self._dashboard_bot_runtime().auth_manager()
+
+    def _dashboard_discord_bot(self) -> Any | None:
+        return self._dashboard_bot_runtime().discord_bot()
+
+    def _dashboard_chat_bot(self) -> Any | None:
+        return self._dashboard_bot_runtime().chat_bot()
+
+    def _dashboard_token_manager(self) -> Any | None:
+        return self._dashboard_bot_runtime().token_manager()
+
+    def _dashboard_twitch_api(self) -> Any | None:
+        twitch_api = getattr(self, "_social_media_twitch_api", None)
+        if twitch_api is not None:
+            return twitch_api
+        return self._dashboard_bot_runtime().twitch_api
+
+    def _dashboard_clip_manager(self) -> Any | None:
+        clip_manager = getattr(self, "_social_media_clip_manager", None)
+        if clip_manager is not None:
+            return clip_manager
+        return self._dashboard_bot_runtime().clip_manager
+
+    def _dashboard_eventsub_webhook_handler(self) -> Any | None:
+        handler = getattr(self._dashboard_services, "eventsub_webhook_handler", None)
+        if handler is not None:
+            return handler
+        return self._dashboard_bot_runtime().eventsub_webhook_handler
+
+    def _dashboard_schedule_background(self, coro: Awaitable[Any], name: str) -> Any | None:
+        scheduler = self._dashboard_bot_runtime().schedule_background
+        if not callable(scheduler):
+            return None
+        return scheduler(coro, name)
 
     async def _empty_add(self, _: str, __: bool) -> str:
         return "Add-Funktion ist aktuell nicht verfügbar"
@@ -481,27 +565,7 @@ class DashboardV2Server(
 
     @staticmethod
     def _normalize_login(value: str) -> str | None:
-        if not value:
-            return None
-        s = unquote(value).strip()
-        if not s:
-            return None
-        if s.startswith("@"):
-            s = s[1:].strip()
-        if "twitch.tv" in s or "://" in s or "/" in s:
-            if "://" not in s:
-                s = f"https://{s}"
-            try:
-                parts = urlsplit(s)
-                segs = [p for p in (parts.path or "").split("/") if p]
-                if segs:
-                    s = segs[0]
-            except Exception:
-                return None
-        s = s.strip().lower()
-        if LOGIN_RE.match(s):
-            return s
-        return None
+        return normalize_twitch_login(value)
 
     @staticmethod
     def _sanitize_log_value(value: Any) -> str:
@@ -812,6 +876,7 @@ def build_v2_app(
     oauth_redirect_uri: str | None = None,
     session_ttl_seconds: int = 6 * 3600,
     legacy_stats_url: str | None = None,
+    dashboard_services: DashboardRuntimeServices | None = None,
     add_cb: Callable[[str, bool], Awaitable[str]] | None = None,
     remove_cb: Callable[[str], Awaitable[str]] | None = None,
     list_cb: Callable[[], Awaitable[list[dict]]] | None = None,
@@ -828,10 +893,12 @@ def build_v2_app(
     raid_oauth_callback_cb: Callable[..., Awaitable[dict]] | None = None,
     reload_cb: Callable[[], Awaitable[str]] | None = None,
     eventsub_webhook_handler: Any | None = None,
+    social_media_clip_manager: Any | None = None,
+    social_media_twitch_api: Any | None = None,
 ) -> web.Application:
     app = web.Application(middlewares=[_security_headers_middleware])
-    storage_pg.prepare_runtime_storage()
-    DashboardV2Server(
+
+    server = DashboardV2Server(
         app_token=token,
         noauth=noauth,
         partner_token=partner_token,
@@ -840,6 +907,7 @@ def build_v2_app(
         oauth_redirect_uri=oauth_redirect_uri,
         session_ttl_seconds=session_ttl_seconds,
         legacy_stats_url=legacy_stats_url,
+        dashboard_services=dashboard_services,
         add_cb=add_cb,
         remove_cb=remove_cb,
         list_cb=list_cb,
@@ -855,12 +923,23 @@ def build_v2_app(
         raid_requirements_cb=raid_requirements_cb,
         raid_oauth_callback_cb=raid_oauth_callback_cb,
         reload_cb=reload_cb,
-    ).attach(app)
-    if eventsub_webhook_handler is not None:
-        app.router.add_post(
-            "/twitch/eventsub/callback",
-            eventsub_webhook_handler.handle_request,
+        social_media_clip_manager=social_media_clip_manager,
+        social_media_twitch_api=social_media_twitch_api,
+    )
+
+    async def _bootstrap_and_register_routes(_: web.Application) -> None:
+        await asyncio.to_thread(storage_pg.prepare_runtime_storage)
+        server.attach(app)
+        resolved_eventsub_handler = (
+            eventsub_webhook_handler or server._dashboard_eventsub_webhook_handler()
         )
+        if resolved_eventsub_handler is not None:
+            app.router.add_post(
+                "/twitch/eventsub/callback",
+                resolved_eventsub_handler.handle_request,
+            )
+
+    app.on_startup.append(_bootstrap_and_register_routes)
     return app
 
 

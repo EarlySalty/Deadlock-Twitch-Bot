@@ -6,6 +6,8 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Callable, Mapping
 
+from ..core.twitch_login import normalize_twitch_login
+
 
 @dataclass(slots=True, frozen=True)
 class RaidObservabilityEvent:
@@ -116,7 +118,7 @@ class RaidObservabilityService:
 
     @staticmethod
     def _normalize_login(raw_value: str | None) -> str:
-        return str(raw_value or "").strip().lower()
+        return normalize_twitch_login(raw_value) or ""
 
     @staticmethod
     def _normalize_identifier(raw_value: str | None) -> str | None:

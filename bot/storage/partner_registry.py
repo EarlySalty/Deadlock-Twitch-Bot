@@ -4,6 +4,8 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
+from ..core.twitch_login import normalize_twitch_login
+
 PARTNER_STATUS_ACTIVE = "active"
 PARTNER_STATUS_DEPARTNERED = "departnered"
 _LEGACY_PARTNER_STATUS_ARCHIVED = "archived"
@@ -15,7 +17,7 @@ def _now_iso() -> str:
 
 
 def _normalize_login(login: str | None) -> str:
-    return str(login or "").strip().lower()
+    return normalize_twitch_login(login) or ""
 
 
 def _normalize_user_id(twitch_user_id: str | None) -> str:

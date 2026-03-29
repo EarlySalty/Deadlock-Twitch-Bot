@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import sqlite3
 import unittest
+from datetime import UTC, datetime
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -436,6 +437,70 @@ class AffiliateGutschriftTests(unittest.IsolatedAsyncioTestCase):
 
         numbers = sorted(result["document"]["gutschrift_number"] for result in results if result["ok"])
         self.assertEqual(numbers, ["GS-202602-0001", "GS-202602-0002"])
+
+    def test_due_periods_skips_invalid_legacy_login_rows(self) -> None:
+        self._insert_commission(
+            affiliate_login="affiliate_one",
+            stripe_event_id="evt_valid_due",
+            commission_cents=1000,
+            created_at="2026-02-05T12:00:00+00:00",
+        )
+        self._insert_commission(
+            affiliate_login="https://example.com/not-twitch",
+            stripe_event_id="evt_invalid_due",
+            commission_cents=900,
+            created_at="2026-02-06T12:00:00+00:00",
+        )
+
+        periods = AffiliateGutschriftService.due_periods(
+            self.compat_conn,
+            as_of=datetime(2026, 3, 10, tzinfo=UTC),
+        )
+
+        self.assertEqual(periods, [("affiliate_one", 2026, 2)])
+
+    def test_generate_monthly_gutschriften_skips_invalid_legacy_login_rows(self) -> None:
+        self._insert_commission(
+            affiliate_login="affiliate_one",
+            stripe_event_id="evt_valid_monthly",
+            commission_cents=1000,
+            created_at="2026-02-05T12:00:00+00:00",
+        )
+        self._insert_commission(
+            affiliate_login="https://example.com/not-twitch",
+            stripe_event_id="evt_invalid_monthly",
+            commission_cents=900,
+            created_at="2026-02-06T12:00:00+00:00",
+        )
+        self._save_profile(
+            "affiliate_one",
+            {
+                "full_name": "Affiliate One",
+                "email": "affiliate@example.com",
+                "address_line1": "Musterstr. 1",
+                "address_city": "Berlin",
+                "address_zip": "10115",
+                "address_country": "DE",
+                "tax_id": "12/345/67890",
+                "ust_status": "kleinunternehmer",
+            },
+        )
+
+        with patch("bot.dashboard.affiliate.affiliate_pii.get_crypto", return_value=_FakeCrypto()):
+            with patch.object(
+                AffiliateGutschriftService,
+                "generate_gutschrift_pdf",
+                return_value=b"%PDF-skip-invalid",
+            ):
+                results = AffiliateGutschriftService.generate_monthly_gutschriften(
+                    self.compat_conn,
+                    2026,
+                    2,
+                    seller=self._seller(),
+                )
+
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0]["document"]["gutschrift_number"], "GS-202602-0001")
 
     def test_generate_for_period_applies_19_percent_vat_and_sends_email(self) -> None:
         self._insert_commission(

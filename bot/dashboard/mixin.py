@@ -23,6 +23,7 @@ from ..raid.integration_state import RaidIntegrationStateResolver
 from ..storage import pg as storage
 from ..raid.views import RaidAuthGenerateView, build_raid_requirements_embed
 from .raids.oauth_callback import build_raid_oauth_callback_payload
+from .runtime import DashboardBotService, DashboardRuntimeServices
 from .server_v2 import build_v2_app
 RAID_OAUTH_SUCCESS_REDIRECT_URL = "https://twitch.earlysalty.com/twitch/dashboard"
 PUBLIC_WEBSITE_ONBOARDING_LOGIN = "public:website_onboarding"
@@ -49,6 +50,9 @@ def _row_to_dict(row) -> dict:
 class TwitchDashboardMixin:
     """Expose the aiohttp dashboard endpoints."""
 
+    def _dashboard_bot_service(self) -> DashboardBotService:
+        return DashboardBotService.from_cog(self)
+
     @staticmethod
     def _dashboard_build_referral_url(login: str) -> str:
         normalized_login = str(login or "").strip()
@@ -64,6 +68,22 @@ class TwitchDashboardMixin:
         query = dict(parse_qsl(parsed.query, keep_blank_values=True))
         query["ref"] = ref_code
         return urlunparse(parsed._replace(query=urlencode(query)))
+
+    @staticmethod
+    def _dashboard_live_button_label_from_config(raw_json: object) -> str:
+        text = str(raw_json or "").strip()
+        if not text:
+            return TWITCH_BUTTON_LABEL
+        try:
+            parsed = json.loads(text)
+        except Exception:
+            return TWITCH_BUTTON_LABEL
+        if not isinstance(parsed, dict):
+            return TWITCH_BUTTON_LABEL
+
+        button_cfg = parsed.get("button") if isinstance(parsed.get("button"), dict) else {}
+        label = str(button_cfg.get("label") or button_cfg.get("label_template") or "").strip()
+        return label[:80] if label else TWITCH_BUTTON_LABEL
 
     def _dashboard_live_button_label(self, login: str) -> str:
         normalized_login = self._normalize_login(login)
@@ -92,19 +112,7 @@ class TwitchDashboardMixin:
             return TWITCH_BUTTON_LABEL
 
         raw_json = row[0] if not hasattr(row, "keys") else row["config_json"]
-        text = str(raw_json or "").strip()
-        if not text:
-            return TWITCH_BUTTON_LABEL
-        try:
-            parsed = json.loads(text)
-        except Exception:
-            return TWITCH_BUTTON_LABEL
-        if not isinstance(parsed, dict):
-            return TWITCH_BUTTON_LABEL
-
-        button_cfg = parsed.get("button") if isinstance(parsed.get("button"), dict) else {}
-        label = str(button_cfg.get("label") or button_cfg.get("label_template") or "").strip()
-        return label[:80] if label else TWITCH_BUTTON_LABEL
+        return self._dashboard_live_button_label_from_config(raw_json)
 
     async def _dashboard_add(self, login: str, require_link: bool) -> str:
         return await self._cmd_add(login, require_link)
@@ -117,16 +125,24 @@ class TwitchDashboardMixin:
         if channel_id <= 0:
             return []
 
-        with storage.readonly_connection() as conn:
-            rows = conn.execute(
-                """
-                SELECT streamer_login, last_discord_message_id, last_tracking_token
-                FROM twitch_live_state
-                WHERE last_discord_message_id IS NOT NULL
-                  AND last_tracking_token IS NOT NULL
-                ORDER BY LOWER(streamer_login)
-                """
-            ).fetchall()
+        def _load_rows():
+            with storage.readonly_connection() as conn:
+                return conn.execute(
+                    """
+                    SELECT ls.streamer_login,
+                           ls.last_discord_message_id,
+                           ls.last_tracking_token,
+                           cfg.config_json
+                    FROM twitch_live_state ls
+                    LEFT JOIN twitch_live_announcement_configs cfg
+                      ON LOWER(cfg.streamer_login) = LOWER(ls.streamer_login)
+                    WHERE ls.last_discord_message_id IS NOT NULL
+                      AND ls.last_tracking_token IS NOT NULL
+                    ORDER BY LOWER(ls.streamer_login)
+                    """
+                ).fetchall()
+
+        rows = await asyncio.to_thread(_load_rows)
 
         announcements: list[dict[str, object]] = []
         for row in rows:
@@ -135,6 +151,7 @@ class TwitchDashboardMixin:
             )
             message_id_raw = row["last_discord_message_id"] if hasattr(row, "keys") else row[1]
             tracking_token_raw = row["last_tracking_token"] if hasattr(row, "keys") else row[2]
+            config_json_raw = row["config_json"] if hasattr(row, "keys") else row[3]
             if not streamer_login:
                 continue
             tracking_token = str(tracking_token_raw or "").strip()
@@ -152,7 +169,7 @@ class TwitchDashboardMixin:
                     "message_id": message_id,
                     "tracking_token": tracking_token,
                     "referral_url": self._dashboard_build_referral_url(streamer_login),
-                    "button_label": self._dashboard_live_button_label(streamer_login),
+                    "button_label": self._dashboard_live_button_label_from_config(config_json_raw),
                     "channel_id": channel_id,
                 }
             )
@@ -195,35 +212,38 @@ class TwitchDashboardMixin:
         clicked_at = datetime.now(tz=UTC).isoformat(timespec="seconds")
         ref_code = (TWITCH_DISCORD_REF_CODE or "").strip() or None
 
-        with storage.transaction() as conn:
-            conn.execute(
-                """
-                INSERT INTO twitch_link_clicks (
-                    clicked_at,
-                    streamer_login,
-                    tracking_token,
-                    discord_user_id,
-                    discord_username,
-                    guild_id,
-                    channel_id,
-                    message_id,
-                    ref_code,
-                    source_hint
-                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                """,
-                (
-                    clicked_at,
-                    normalized_login,
-                    tracking_token_value,
-                    discord_user_id_value,
-                    str(discord_username or "").strip(),
-                    guild_id_value,
-                    channel_id_value,
-                    message_id_value,
-                    ref_code,
-                    str(source_hint or "").strip(),
-                ),
-            )
+        def _persist_click() -> None:
+            with storage.transaction() as conn:
+                conn.execute(
+                    """
+                    INSERT INTO twitch_link_clicks (
+                        clicked_at,
+                        streamer_login,
+                        tracking_token,
+                        discord_user_id,
+                        discord_username,
+                        guild_id,
+                        channel_id,
+                        message_id,
+                        ref_code,
+                        source_hint
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    """,
+                    (
+                        clicked_at,
+                        normalized_login,
+                        tracking_token_value,
+                        discord_user_id_value,
+                        str(discord_username or "").strip(),
+                        guild_id_value,
+                        channel_id_value,
+                        message_id_value,
+                        ref_code,
+                        str(source_hint or "").strip(),
+                    ),
+                )
+
+        await asyncio.to_thread(_persist_click)
 
         return {"ok": True}
 
@@ -309,7 +329,7 @@ class TwitchDashboardMixin:
             if not normalized:
                 raise ValueError("invalid or missing login")
 
-        auth_manager = getattr(getattr(self, "_raid_bot", None), "auth_manager", None)
+        auth_manager = self._dashboard_bot_service().auth_manager()
         if not auth_manager:
             raise RuntimeError("Raid bot not initialized")
 
@@ -345,25 +365,29 @@ class TwitchDashboardMixin:
         if not state_clean:
             raise ValueError("missing state parameter")
 
-        auth_manager = getattr(getattr(self, "_raid_bot", None), "auth_manager", None)
+        auth_manager = self._dashboard_bot_service().auth_manager()
         if not auth_manager:
             raise RuntimeError("Raid bot not initialized")
 
         full_url = auth_manager.get_pending_auth_url(state_clean)
         return str(full_url).strip() if full_url else None
 
+    @staticmethod
+    def _dashboard_load_streamer_identity_sync(normalized_login: str):
+        with storage.readonly_connection() as conn:
+            return storage.load_streamer_identity(conn, twitch_login=normalized_login)
+
     async def _dashboard_raid_requirements(self, login: str) -> str:
         normalized = self._normalize_login(login)
         if not normalized:
             raise ValueError("Missing login parameter")
 
-        auth_manager = getattr(getattr(self, "_raid_bot", None), "auth_manager", None)
+        auth_manager = self._dashboard_bot_service().auth_manager()
         if not auth_manager:
             raise RuntimeError("Raid bot not initialized")
 
         try:
-            with storage.readonly_connection() as conn:
-                row = storage.load_streamer_identity(conn, twitch_login=normalized)
+            row = await asyncio.to_thread(self._dashboard_load_streamer_identity_sync, normalized)
         except Exception as exc:
             raise RuntimeError("Failed to load Discord link") from exc
 
@@ -381,7 +405,7 @@ class TwitchDashboardMixin:
         except (TypeError, ValueError) as exc:
             raise ValueError("Invalid Discord user id") from exc
 
-        discord_bot = getattr(auth_manager, "_discord_bot", None)
+        discord_bot = self._dashboard_bot_service().discord_bot()
         if not discord_bot:
             raise RuntimeError("Discord bot not available")
 
@@ -424,8 +448,8 @@ class TwitchDashboardMixin:
             code=code,
             state=state,
             error=error,
-            raid_bot=getattr(self, "_raid_bot", None),
-            auth_manager=getattr(getattr(self, "_raid_bot", None), "auth_manager", None),
+            raid_bot=self._dashboard_bot_service().raid_bot,
+            auth_manager=self._dashboard_bot_service().auth_manager(),
             success_redirect_url=redirect_url,
             failure_title="Autorisierung fehlgeschlagen",
             failure_body_html=(
@@ -436,7 +460,7 @@ class TwitchDashboardMixin:
         )
 
     def _raid_integration_state_resolver(self) -> RaidIntegrationStateResolver:
-        raid_bot = getattr(self, "_raid_bot", None)
+        raid_bot = self._dashboard_bot_service().raid_bot
         auth_manager = getattr(raid_bot, "auth_manager", None) if raid_bot else None
         token_error_handler = (
             getattr(auth_manager, "token_error_handler", None) if auth_manager else None
@@ -462,6 +486,49 @@ class TwitchDashboardMixin:
         )
         return state.to_payload()
 
+    @staticmethod
+    def _dashboard_load_analytics_suggestions_sync(
+        cutoff: str,
+        limit: int,
+        partner_logins: set[str],
+    ) -> list[dict[str, object]]:
+        extras: list[dict[str, object]] = []
+        with storage.readonly_connection() as c:
+            rows = c.execute(
+                """
+                SELECT streamer,
+                       COUNT(*) AS samples,
+                       MAX(ts_utc) AS last_seen,
+                       AVG(viewer_count) AS avg_viewers
+                  FROM twitch_stats_category
+                 WHERE ts_utc >= %s
+                 GROUP BY streamer
+                 ORDER BY samples DESC, last_seen DESC
+                 LIMIT %s
+                """,
+                (cutoff, limit * 2),
+            ).fetchall()
+        for row in rows:
+            login = str(row["streamer"] if hasattr(row, "keys") else row[0] or "").strip()
+            if not login:
+                continue
+            lower = login.lower()
+            if lower in partner_logins:
+                continue
+            extras.append(
+                {
+                    "twitch_login": login,
+                    "avg_viewers": float(
+                        row["avg_viewers"] if hasattr(row, "keys") else row[3] or 0.0
+                    ),
+                    "samples": int(row["samples"] if hasattr(row, "keys") else row[1] or 0),
+                    "last_seen": str(row["last_seen"] if hasattr(row, "keys") else row[2] or ""),
+                }
+            )
+            if len(extras) >= limit:
+                break
+        return extras
+
     async def _dashboard_analytics_suggestions(
         self,
         include_non_partners: bool = True,
@@ -479,44 +546,14 @@ class TwitchDashboardMixin:
                 for row in partners
                 if isinstance(row, dict)
             }
-            cutoff = (datetime.utcnow() - timedelta(days=days)).isoformat()
+            cutoff = (datetime.now(UTC) - timedelta(days=days)).isoformat()
             try:
-                with storage.readonly_connection() as c:
-                    rows = c.execute(
-                        """
-                        SELECT streamer,
-                               COUNT(*) AS samples,
-                               MAX(ts_utc) AS last_seen,
-                               AVG(viewer_count) AS avg_viewers
-                          FROM twitch_stats_category
-                         WHERE ts_utc >= %s
-                         GROUP BY streamer
-                         ORDER BY samples DESC, last_seen DESC
-                         LIMIT %s
-                        """,
-                        (cutoff, limit * 2),
-                    ).fetchall()
-                for row in rows:
-                    login = str(row["streamer"] if hasattr(row, "keys") else row[0] or "").strip()
-                    if not login:
-                        continue
-                    lower = login.lower()
-                    if lower in partner_logins:
-                        continue
-                    extras.append(
-                        {
-                            "twitch_login": login,
-                            "avg_viewers": float(
-                                row["avg_viewers"] if hasattr(row, "keys") else row[3] or 0.0
-                            ),
-                            "samples": int(row["samples"] if hasattr(row, "keys") else row[1] or 0),
-                            "last_seen": str(
-                                row["last_seen"] if hasattr(row, "keys") else row[2] or ""
-                            ),
-                        }
-                    )
-                    if len(extras) >= limit:
-                        break
+                extras = await asyncio.to_thread(
+                    self._dashboard_load_analytics_suggestions_sync,
+                    cutoff,
+                    limit,
+                    partner_logins,
+                )
             except Exception:
                 log.debug(
                     "Konnte Non-Partner-Suggestions für Analytics nicht laden",
@@ -525,11 +562,8 @@ class TwitchDashboardMixin:
 
         return {"partners": partners, "extras": extras}
 
-    async def _dashboard_set_discord_flag(self, login: str, is_on_discord: bool) -> str:
-        normalized = self._normalize_login(login)
-        if not normalized:
-            raise ValueError("Ungültiger Login")
-
+    @staticmethod
+    def _dashboard_set_discord_flag_sync(normalized: str, is_on_discord: bool) -> None:
         with storage.transaction() as conn:
             row = storage.set_streamer_discord_member(
                 conn,
@@ -539,28 +573,23 @@ class TwitchDashboardMixin:
             if not row:
                 raise ValueError(f"{normalized} ist nicht gespeichert")
 
-        if is_on_discord:
-            return f"{normalized} als Discord-Mitglied markiert"
-        return f"Discord-Markierung für {normalized} entfernt"
-
-    async def _dashboard_archive(self, login: str, mode: str) -> str:
-        """
-        Setzt oder entfernt das Admin-Archiv-Flag eines Streamers.
-
-        mode: 'archive'/'on' -> setzt archived_at=now, 'unarchive'/'off' -> NULL, 'toggle' -> flip.
-        """
+    async def _dashboard_set_discord_flag(self, login: str, is_on_discord: bool) -> str:
         normalized = self._normalize_login(login)
         if not normalized:
             raise ValueError("Ungültiger Login")
 
-        mode_clean = (mode or "").strip().lower()
-        if mode_clean in {"archive", "on", "set"}:
-            desired = "archive"
-        elif mode_clean in {"unarchive", "off", "unset", "restore"}:
-            desired = "unarchive"
-        else:
-            desired = "toggle"
+        await asyncio.to_thread(
+            self._dashboard_set_discord_flag_sync,
+            normalized,
+            is_on_discord,
+        )
 
+        if is_on_discord:
+            return f"{normalized} als Discord-Mitglied markiert"
+        return f"Discord-Markierung für {normalized} entfernt"
+
+    @staticmethod
+    def _dashboard_archive_sync(normalized: str, desired: str) -> str:
         with storage.transaction() as conn:
             active_row = storage.load_active_partner(conn, twitch_login=normalized)
             history_row = storage.load_latest_partner_history(conn, twitch_login=normalized)
@@ -599,12 +628,31 @@ class TwitchDashboardMixin:
                 storage.set_streamer_archive_state(conn, twitch_login=normalized, archived=False)
                 return f"{normalized} ent-archiviert"
 
-            # toggle
             if current:
                 storage.set_streamer_archive_state(conn, twitch_login=normalized, archived=False)
                 return f"{normalized} reaktiviert"
             storage.set_streamer_archive_state(conn, twitch_login=normalized, archived=True)
             return f"{normalized} archiviert"
+
+    async def _dashboard_archive(self, login: str, mode: str) -> str:
+        """
+        Setzt oder entfernt das Admin-Archiv-Flag eines Streamers.
+
+        mode: 'archive'/'on' -> setzt archived_at=now, 'unarchive'/'off' -> NULL, 'toggle' -> flip.
+        """
+        normalized = self._normalize_login(login)
+        if not normalized:
+            raise ValueError("Ungültiger Login")
+
+        mode_clean = (mode or "").strip().lower()
+        if mode_clean in {"archive", "on", "set"}:
+            desired = "archive"
+        elif mode_clean in {"unarchive", "off", "unset", "restore"}:
+            desired = "unarchive"
+        else:
+            desired = "toggle"
+
+        return await asyncio.to_thread(self._dashboard_archive_sync, normalized, desired)
 
     async def _dashboard_save_discord_profile(
         self,
@@ -646,9 +694,10 @@ class TwitchDashboardMixin:
             )
 
         # 2. Falls nicht in raid_auth: API-Call
-        if not twitch_user_id and self.api:
+        twitch_api = self._dashboard_bot_service().twitch_api
+        if not twitch_user_id and twitch_api:
             try:
-                users = await self.api.get_users([normalized])
+                users = await twitch_api.get_users([normalized])
                 user = users.get(normalized)
                 if user:
                     twitch_user_id = user.get("id")
@@ -1417,6 +1466,29 @@ class TwitchDashboardMixin:
         retry_delay = 0.5
         app = None
         runner = None
+        dashboard_services = DashboardRuntimeServices(
+            add_cb=self._dashboard_add,
+            remove_cb=self._dashboard_remove,
+            list_cb=self._dashboard_list,
+            stats_cb=self._dashboard_stats,
+            verify_cb=self._dashboard_verify,
+            archive_cb=self._dashboard_archive,
+            discord_flag_cb=self._dashboard_set_discord_flag,
+            discord_profile_cb=self._dashboard_save_discord_profile,
+            raid_history_cb=getattr(self, "_dashboard_raid_history", None),
+            raid_auth_url_cb=self._dashboard_raid_auth_url,
+            raid_go_url_cb=self._dashboard_raid_go_url,
+            raid_requirements_cb=self._dashboard_raid_requirements,
+            raid_oauth_callback_cb=self._dashboard_raid_oauth_callback,
+            reload_cb=self._reload_twitch_cog,
+            eventsub_webhook_handler=getattr(self, "_eventsub_webhook_handler", None),
+            social_media_clip_manager=getattr(self, "clip_manager", None),
+            social_media_twitch_api=getattr(self, "api", None),
+            bot_service=DashboardBotService.from_cog(
+                self,
+                reload_cb=self._reload_twitch_cog,
+            ),
+        )
 
         for attempt in range(max_retries):
             try:
@@ -1429,6 +1501,7 @@ class TwitchDashboardMixin:
                     oauth_redirect_uri=getattr(self, "_dashboard_auth_redirect_uri", None),
                     session_ttl_seconds=getattr(self, "_dashboard_session_ttl", 6 * 3600),
                     legacy_stats_url=getattr(self, "_legacy_stats_url", None),
+                    dashboard_services=dashboard_services,
                     add_cb=self._dashboard_add,
                     remove_cb=self._dashboard_remove,
                     list_cb=self._dashboard_list,
@@ -1438,8 +1511,13 @@ class TwitchDashboardMixin:
                     discord_flag_cb=self._dashboard_set_discord_flag,
                     discord_profile_cb=self._dashboard_save_discord_profile,
                     raid_history_cb=getattr(self, "_dashboard_raid_history", None),
-                    raid_bot=getattr(self, "_raid_bot", None),
+                    raid_auth_url_cb=self._dashboard_raid_auth_url,
+                    raid_go_url_cb=self._dashboard_raid_go_url,
+                    raid_requirements_cb=self._dashboard_raid_requirements,
+                    raid_oauth_callback_cb=self._dashboard_raid_oauth_callback,
                     reload_cb=self._reload_twitch_cog,
+                    social_media_clip_manager=getattr(self, "clip_manager", None),
+                    social_media_twitch_api=getattr(self, "api", None),
                     eventsub_webhook_handler=getattr(self, "_eventsub_webhook_handler", None),
                 )
                 runner = web.AppRunner(app)

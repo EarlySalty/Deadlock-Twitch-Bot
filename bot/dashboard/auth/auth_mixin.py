@@ -792,13 +792,8 @@ class _DashboardAuthMixin:
         if not user_id:
             return False, "invalid_user_id"
 
-        discord_bot = None
-        raid_bot = getattr(self, "_raid_bot", None)
-        if raid_bot is not None:
-            auth_manager = getattr(raid_bot, "auth_manager", None)
-            discord_bot = getattr(auth_manager, "_discord_bot", None) if auth_manager else None
-            if discord_bot is None:
-                discord_bot = getattr(raid_bot, "_discord_bot", None)
+        resolver = getattr(self, "_dashboard_discord_bot", None)
+        discord_bot = resolver() if callable(resolver) else None
 
         guilds: list[Any] = []
         seen: set[int] = set()

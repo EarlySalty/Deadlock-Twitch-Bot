@@ -4,7 +4,8 @@ import { GlowOrb } from '@/components/effects/GlowOrb'
 import { Hero } from '@/components/sections/Hero'
 import { Stats } from '@/components/sections/Stats'
 import { Features } from '@/components/sections/Features'
-import { RaidSystem } from '@/components/sections/RaidSystem'
+import { RaidExplainer } from '@/components/sections/RaidExplainer'
+import { BanFeed } from '@/components/sections/BanFeed'
 import { Dashboard } from '@/components/sections/Dashboard'
 import { ClipManager } from '@/components/sections/ClipManager'
 import { Community } from '@/components/sections/Community'
@@ -17,10 +18,11 @@ export default function App() {
       <Navbar />
       <main>
         <Hero />
+        <RaidExplainer />
+        <BanFeed />
         <Stats />
-        <Features />
-        <RaidSystem />
         <Dashboard />
+        <Features />
         <ClipManager />
         <Community />
         <CTA />

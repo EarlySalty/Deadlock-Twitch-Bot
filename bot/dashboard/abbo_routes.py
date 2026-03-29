@@ -136,16 +136,9 @@ def _abbo_scope_state(
     bot_scopes_loaded = False
     token_mgr = None
     try:
-        raid_bot = getattr(handler, "_raid_bot", None)
-        chat_bot = getattr(raid_bot, "chat_bot", None) if raid_bot else None
-        if chat_bot is None and raid_bot is not None:
-            cog = getattr(raid_bot, "_cog", None)
-            chat_bot = getattr(cog, "_twitch_chat_bot", None) if cog is not None else None
-        if chat_bot is not None:
-            token_mgr = getattr(chat_bot, "_token_manager", None)
-        if token_mgr is None and raid_bot is not None:
-            cog = getattr(raid_bot, "_cog", None)
-            token_mgr = getattr(cog, "_bot_token_manager", None) if cog is not None else None
+        resolver = getattr(handler, "_dashboard_token_manager", None)
+        if callable(resolver):
+            token_mgr = resolver()
         if token_mgr is not None:
             bot_scopes = {
                 str(scope).strip().lower()

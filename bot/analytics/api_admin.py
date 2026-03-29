@@ -21,6 +21,7 @@ from ..app_keys import (
     ANALYTICS_DB_FINGERPRINT_MISMATCH_KEY,
     INTERNAL_API_ANALYTICS_DB_FINGERPRINT_KEY,
 )
+from ..core.twitch_login import normalize_twitch_login
 from ..dashboard.affiliate.affiliate_pii import AffiliatePII
 from ..dashboard.affiliate.gutschrift import AffiliateGutschriftService
 from ..dashboard.live.live import (
@@ -37,7 +38,6 @@ from ..promo_mode import (
 )
 from ..storage import pg as storage
 
-LOGIN_RE = re.compile(r"^[A-Za-z0-9_]{3,25}$")
 _ERROR_LOG_MAX_SCAN_LINES = 4000
 _ERROR_LOG_MAX_RETURNED = 200
 _RAW_CHAT_LAG_WARNING_SECONDS = 900
@@ -117,10 +117,7 @@ def _safe_int(value: Any, default: int = 0) -> int:
 
 
 def _normalize_login(raw_value: str) -> str | None:
-    login = str(raw_value or "").strip().lower()
-    if not LOGIN_RE.fullmatch(login):
-        return None
-    return login
+    return normalize_twitch_login(raw_value)
 
 
 def _coerce_utc_datetime(value: Any) -> datetime | None:

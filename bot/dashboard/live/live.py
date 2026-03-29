@@ -87,30 +87,16 @@ class DashboardLiveMixin:
         return str(session.get("user_id") or "").strip()
 
     def _resolve_dashboard_chat_bot(self) -> Any | None:
-        raid_bot = getattr(self, "_raid_bot", None)
-        if raid_bot is None:
-            return None
-
-        chat_bot = getattr(raid_bot, "chat_bot", None)
-        if chat_bot is not None:
-            return chat_bot
-
-        cog = getattr(raid_bot, "_cog", None)
-        if cog is None:
-            return None
-        return getattr(cog, "_twitch_chat_bot", None)
+        resolver = getattr(self, "_dashboard_chat_bot", None)
+        if callable(resolver):
+            return resolver()
+        return None
 
     def _resolve_dashboard_bot_scope_state(self) -> dict[str, Any]:
         token_mgr = None
-        chat_bot = self._resolve_dashboard_chat_bot()
-        if chat_bot is not None:
-            token_mgr = getattr(chat_bot, "_token_manager", None)
-
-        if token_mgr is None:
-            raid_bot = getattr(self, "_raid_bot", None)
-            cog = getattr(raid_bot, "_cog", None) if raid_bot is not None else None
-            if cog is not None:
-                token_mgr = getattr(cog, "_bot_token_manager", None)
+        resolver = getattr(self, "_dashboard_token_manager", None)
+        if callable(resolver):
+            token_mgr = resolver()
 
         if token_mgr is None:
             return {"available": False, "loaded": False, "scopes": set()}
@@ -553,7 +539,7 @@ class DashboardLiveMixin:
             for st in items
             if not bool(st.get("manual_partner_opt_out")) and not bool(st.get("archived_at"))
         )
-        raid_bot_available = bool(getattr(self, "_raid_bot", None))
+        raid_bot_available = bool(self._resolve_dashboard_chat_bot())
         if not raid_bot_available:
             # Split-runtime dashboard has no in-process raid bot object.
             # In this mode, a wired non-empty list callback means the bot runtime is reachable.

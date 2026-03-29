@@ -297,6 +297,23 @@ class TwitchMonitoringMixin(_EventSubMixin, _ExpSessionsMixin, _SessionsMixin, _
         return f"twitch-{action}-{digest}"
 
     @staticmethod
+    def _build_announcement_payload_idempotency_key(
+        *,
+        action: str,
+        login: str,
+        payload: dict[str, object],
+    ) -> str:
+        try:
+            payload_raw = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+        except (TypeError, ValueError):
+            payload_raw = repr(payload)
+        return TwitchMonitoringMixin._build_announcement_idempotency_key(
+            action=action,
+            login=login,
+            discriminator=payload_raw,
+        )
+
+    @staticmethod
     def _build_live_announcement_tracking_token(
         *,
         login: str,
@@ -558,10 +575,10 @@ class TwitchMonitoringMixin(_EventSubMixin, _ExpSessionsMixin, _SessionsMixin, _
             "allowed_role_ids": allowed_role_ids,
             "view_spec": view_spec,
         }
-        base_idempotency_key = self._build_announcement_idempotency_key(
+        base_idempotency_key = self._build_announcement_payload_idempotency_key(
             action="live-send",
             login=login,
-            discriminator=str(stream_id or content or ""),
+            payload=payload,
         )
         response = await self._post_master_broker_json(
             path="/internal/master/v1/discord/send-rich-message",
@@ -580,10 +597,10 @@ class TwitchMonitoringMixin(_EventSubMixin, _ExpSessionsMixin, _SessionsMixin, _
                 fallback_response = await self._post_master_broker_json(
                     path="/internal/master/v1/discord/send-rich-message",
                     payload={**payload, "view_spec": fallback_view_spec},
-                    idempotency_key=self._build_announcement_idempotency_key(
+                    idempotency_key=self._build_announcement_payload_idempotency_key(
                         action="live-send-fallback",
                         login=login,
-                        discriminator=str(stream_id or content or ""),
+                        payload={**payload, "view_spec": fallback_view_spec},
                     ),
                     include_error_code=True,
                 )
@@ -607,19 +624,20 @@ class TwitchMonitoringMixin(_EventSubMixin, _ExpSessionsMixin, _SessionsMixin, _
         embed: discord.Embed,
         view_spec: dict[str, str] | None,
     ) -> bool:
+        payload = {
+            "channel_id": int(channel_id),
+            "message_id": str(message_id),
+            "content": content or None,
+            "embed": embed.to_dict(),
+            "view_spec": view_spec,
+        }
         response = await self._post_master_broker_json(
             path="/internal/master/v1/discord/edit-rich-message",
-            payload={
-                "channel_id": int(channel_id),
-                "message_id": str(message_id),
-                "content": content or None,
-                "embed": embed.to_dict(),
-                "view_spec": view_spec,
-            },
-            idempotency_key=self._build_announcement_idempotency_key(
+            payload=payload,
+            idempotency_key=self._build_announcement_payload_idempotency_key(
                 action="live-edit",
                 login=login,
-                discriminator=str(message_id),
+                payload=payload,
             ),
             include_error_code=True,
         )
@@ -1003,6 +1021,33 @@ class TwitchMonitoringMixin(_EventSubMixin, _ExpSessionsMixin, _SessionsMixin, _
             reason = "fallback_default"
         return self._apply_poll_interval_seconds(target_seconds, reason=reason)
 
+    async def _sync_poll_interval_from_storage_async(
+        self,
+        *,
+        force: bool = False,
+        startup: bool = False,
+    ) -> int:
+        now = time.monotonic()
+        resync_interval = float(
+            getattr(self, "_poll_interval_resync_interval_seconds", 60.0) or 60.0
+        )
+        last_sync = float(getattr(self, "_poll_interval_last_sync_monotonic", 0.0) or 0.0)
+        if not force and last_sync and (now - last_sync) < max(15.0, resync_interval):
+            current_seconds = self._normalize_poll_interval_seconds(
+                getattr(self, "_poll_interval_seconds", self._default_poll_interval_seconds())
+            )
+            return current_seconds if current_seconds is not None else self._default_poll_interval_seconds()
+
+        self._poll_interval_last_sync_monotonic = now
+        persisted_seconds = await asyncio.to_thread(self._read_persisted_poll_interval_seconds)
+        target_seconds = (
+            persisted_seconds if persisted_seconds is not None else self._default_poll_interval_seconds()
+        )
+        reason = "startup" if startup else "storage_resync"
+        if persisted_seconds is None and target_seconds == self._default_poll_interval_seconds():
+            reason = "fallback_default"
+        return self._apply_poll_interval_seconds(target_seconds, reason=reason)
+
     @staticmethod
     def _reauth_chat_reminder_text() -> str:
         return (
@@ -1152,7 +1197,7 @@ class TwitchMonitoringMixin(_EventSubMixin, _ExpSessionsMixin, _SessionsMixin, _
     @tasks.loop(seconds=POLL_INTERVAL_SECONDS)
     async def poll_streams(self):
         try:
-            self._sync_poll_interval_from_storage()
+            await self._sync_poll_interval_from_storage_async()
         except Exception:
             self._poll_interval_debug(
                 "Polling-Intervall: Runtime-Resync fehlgeschlagen",
@@ -1171,7 +1216,7 @@ class TwitchMonitoringMixin(_EventSubMixin, _ExpSessionsMixin, _SessionsMixin, _
     async def _before_poll(self):
         await self.bot.wait_until_ready()
         try:
-            self._sync_poll_interval_from_storage(force=True, startup=True)
+            await self._sync_poll_interval_from_storage_async(force=True, startup=True)
         except Exception:
             self._poll_interval_debug(
                 "Polling-Intervall: Start-Resync fehlgeschlagen",
@@ -1272,6 +1317,9 @@ class TwitchMonitoringMixin(_EventSubMixin, _ExpSessionsMixin, _SessionsMixin, _
             partner_logins = set()
         return tracked, partner_logins
 
+    async def _load_tracked_streamers_async(self) -> tuple[list[dict[str, object]], set[str]]:
+        return await asyncio.to_thread(self._load_tracked_streamers)
+
     async def _tick(self):
         """Ein Tick: tracked Streamer + Kategorie-Streams prüfen, Postings/DB aktualisieren, Stats loggen."""
         if self.api is None:
@@ -1284,7 +1332,7 @@ class TwitchMonitoringMixin(_EventSubMixin, _ExpSessionsMixin, _SessionsMixin, _
             if self.api.is_auth_blocked():
                 return
 
-        tracked, partner_logins = self._load_tracked_streamers()
+        tracked, partner_logins = await self._load_tracked_streamers_async()
 
         logins = [str(entry.get("login") or "") for entry in tracked if entry.get("login")]
         language_filters = self._language_filter_values()
@@ -1421,15 +1469,7 @@ class TwitchMonitoringMixin(_EventSubMixin, _ExpSessionsMixin, _SessionsMixin, _
         ] = []
         partner_score_refreshes: list[tuple[str, str | None, str]] = []
 
-        with storage.readonly_connection() as c:
-            live_state_rows = c.execute("SELECT * FROM twitch_live_state").fetchall()
-
-        live_state: dict[str, dict] = {}
-        for row in live_state_rows:
-            row_dict = dict(row)
-            key = str(row_dict.get("streamer_login") or "").lower()
-            if key:
-                live_state[key] = row_dict
+        live_state = await self._load_live_state_snapshot(tracked)
 
         target_game_lower = self._get_target_game_lower()
 
@@ -1454,21 +1494,8 @@ class TwitchMonitoringMixin(_EventSubMixin, _ExpSessionsMixin, _SessionsMixin, _
                 # Stream ist gerade live gegangen!
                 handler = getattr(self, "_handle_stream_went_live", None)
                 if handler:
-                    # Checke ob der Streamer raid_bot_enabled hat
                     try:
-                        with storage.readonly_connection() as c:
-                            partner_row = storage.load_active_partner(
-                                c,
-                                twitch_user_id=twitch_user_id,
-                            )
-                        raid_enabled = bool(
-                            (
-                                partner_row["raid_bot_enabled"]
-                                if partner_row and hasattr(partner_row, "keys")
-                                else (partner_row[13] if partner_row else 0)
-                            )
-                            or 0
-                        )
+                        raid_enabled = bool(previous_state.get("partner_raid_bot_enabled", 0))
                         if raid_enabled:
                             # Asynchron aufrufen (fire-and-forget, blockiert nicht den Tick)
                             spawner = getattr(self, "_spawn_bg_task", None)
@@ -1886,6 +1913,106 @@ class TwitchMonitoringMixin(_EventSubMixin, _ExpSessionsMixin, _SessionsMixin, _
         except Exception:
             log.debug("Partner raid score refresh scheduling failed", exc_info=True)
         await self._auto_archive_inactive_streamers()
+
+    @staticmethod
+    def _normalize_tracking_login(value: object) -> str:
+        return str(value or "").strip().lower()
+
+    @staticmethod
+    def _chunk_values(values: list[str], *, chunk_size: int = 200) -> list[list[str]]:
+        if not values:
+            return []
+        return [values[index : index + chunk_size] for index in range(0, len(values), chunk_size)]
+
+    async def _load_live_state_snapshot(self, tracked: list[dict[str, object]]) -> dict[str, dict]:
+        logins: list[str] = []
+        seen_logins: set[str] = set()
+        tracked_login_to_user_id: dict[str, str] = {}
+        for entry in tracked:
+            login = self._normalize_tracking_login(entry.get("login"))
+            if not login or login in seen_logins:
+                continue
+            seen_logins.add(login)
+            logins.append(login)
+            user_id = str(entry.get("twitch_user_id") or "").strip()
+            if user_id:
+                tracked_login_to_user_id[login] = user_id
+
+        if not logins:
+            return {}
+
+        def _load() -> dict[str, dict]:
+            snapshot: dict[str, dict] = {}
+            partner_flags_by_user_id: dict[str, int] = {}
+            with storage.readonly_connection() as conn:
+                for batch in self._chunk_values(logins):
+                    placeholders = ", ".join(["%s"] * len(batch))
+                    rows = conn.execute(
+                        f"""
+                        SELECT ls.*,
+                               COALESCE(p.raid_bot_enabled, 0) AS partner_raid_bot_enabled
+                        FROM twitch_live_state ls
+                        LEFT JOIN LATERAL (
+                            SELECT p.raid_bot_enabled
+                            FROM twitch_partners p
+                            WHERE p.status = 'active'
+                              AND p.twitch_user_id = ls.twitch_user_id
+                            ORDER BY p.id DESC
+                            LIMIT 1
+                        ) p ON TRUE
+                        WHERE LOWER(ls.streamer_login) IN ({placeholders})
+                        ORDER BY LOWER(ls.streamer_login)
+                        """,
+                        tuple(batch),
+                    ).fetchall()
+                    for row in rows:
+                        row_dict = dict(row)
+                        key = self._normalize_tracking_login(row_dict.get("streamer_login"))
+                        if key:
+                            snapshot[key] = row_dict
+
+                missing_user_ids = sorted(
+                    {
+                        user_id
+                        for login, user_id in tracked_login_to_user_id.items()
+                        if login not in snapshot
+                    }
+                )
+                for batch in self._chunk_values(missing_user_ids):
+                    placeholders = ", ".join(["%s"] * len(batch))
+                    rows = conn.execute(
+                        f"""
+                        SELECT DISTINCT ON (p.twitch_user_id)
+                               p.twitch_user_id,
+                               COALESCE(p.raid_bot_enabled, 0) AS partner_raid_bot_enabled
+                        FROM twitch_partners p
+                        WHERE p.status = 'active'
+                          AND p.twitch_user_id IN ({placeholders})
+                        ORDER BY p.twitch_user_id, p.id DESC
+                        """,
+                        tuple(batch),
+                    ).fetchall()
+                    for row in rows:
+                        row_dict = dict(row)
+                        user_id = str(row_dict.get("twitch_user_id") or "").strip()
+                        if user_id:
+                            partner_flags_by_user_id[user_id] = int(
+                                row_dict.get("partner_raid_bot_enabled") or 0
+                            )
+
+            for login, user_id in tracked_login_to_user_id.items():
+                if login in snapshot:
+                    continue
+                if user_id not in partner_flags_by_user_id:
+                    continue
+                snapshot[login] = {
+                    "streamer_login": login,
+                    "twitch_user_id": user_id,
+                    "partner_raid_bot_enabled": partner_flags_by_user_id[user_id],
+                }
+            return snapshot
+
+        return await asyncio.to_thread(_load)
 
     async def _persist_live_state_rows(
         self,

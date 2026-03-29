@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import importlib
 import inspect
 import json
 import logging
@@ -11,9 +12,12 @@ import re
 import socket
 import time
 from collections.abc import Coroutine
+from collections.abc import Mapping
+from dataclasses import fields as dataclass_fields
+from dataclasses import is_dataclass
 from datetime import UTC, datetime
+from types import SimpleNamespace
 from typing import Any
-from urllib.parse import urlparse
 
 from discord import Forbidden, Guild, HTTPException
 from discord.ext import commands
@@ -32,7 +36,8 @@ from .chat.lurker_policy import should_attempt_runtime_heal
 from .core.constants import (
     log,
 )
-from .runtime_bootstrap import TwitchRuntimeBootstrap
+from .core.twitch_login import normalize_twitch_login
+from .runtime_bootstrap import BotRuntimeBootstrap
 
 
 def _observability_flow_id(prefix: str) -> str:
@@ -89,15 +94,425 @@ def _observability_fields(**fields: object) -> str:
     return " ".join(parts)
 
 
+_RUNTIME_STATE_SURFACE_NAMES = frozenset({"runtime", "runtime_state"})
+_RUNTIME_STATE_INTERNAL_NAMES = frozenset(
+    {
+        "_runtime_bootstrap",
+        "_runtime_state",
+        "_runtime_state_bridge",
+        "_runtime_state_factory",
+    }
+)
+_RUNTIME_STATE_FALLBACK_FIELDS = (
+    "client_id",
+    "client_secret",
+    "_twitch_bot_client_id",
+    "_twitch_bot_secret",
+    "api",
+    "_category_id",
+    "_language_filters",
+    "_tick_count",
+    "_log_every_n",
+    "_category_sample_limit",
+    "_poll_interval_seconds",
+    "_poll_interval_resync_interval_seconds",
+    "_poll_interval_last_sync_monotonic",
+    "_poll_interval_last_error_log_at",
+    "_poll_interval_last_invalid_value",
+    "_poll_interval_settings_table",
+    "_poll_interval_settings_key",
+    "_admin_polling_interval_seconds",
+    "_active_sessions",
+    "_notify_channel_id",
+    "_alert_channel_id",
+    "_alert_mention",
+    "_invite_codes",
+    "_twl_command",
+    "_target_game_name",
+    "_target_game_lower",
+    "partner_raid_score_service",
+    "_managed_bg_tasks",
+    "_runtime_started",
+    "_runtime_start_lock",
+    "_runtime_stop_lock",
+    "_internal_api_runner",
+    "_experimental_irc_lurker_channels",
+    "_experimental_irc_lurker_enabled",
+    "_irc_lurker_tracker",
+    "_internal_api_token",
+    "_internal_api_host",
+    "_internal_api_port",
+    "_raid_bot",
+    "_twitch_chat_bot",
+    "_periodic_channel_join_task",
+    "_twitch_bot_token",
+    "_twitch_bot_refresh_token",
+    "_bot_token_manager",
+    "_raid_redirect_uri",
+    "clip_manager",
+    "clip_fetcher",
+    "upload_worker",
+    "_reload_manager",
+    "_eventsub_webhook_handler",
+    "_webhook_base_url",
+    "_webhook_secret",
+)
+
+
+def _load_runtime_state_module() -> Any | None:
+    for module_name in (".runtime.contracts", ".runtime_state"):
+        try:
+            return importlib.import_module(module_name, __package__)
+        except Exception:
+            continue
+    return None
+
+
+def _flatten_runtime_state_field_candidate(candidate: object) -> list[str]:
+    if candidate is None:
+        return []
+    if isinstance(candidate, Mapping):
+        return [str(key).strip() for key in candidate.keys() if str(key).strip()]
+    if isinstance(candidate, (set, frozenset, list, tuple)):
+        return [str(item).strip() for item in candidate if str(item).strip()]
+    if is_dataclass(candidate):
+        return [field.name for field in dataclass_fields(candidate)]
+    if is_dataclass(type(candidate)):
+        return [field.name for field in dataclass_fields(type(candidate))]
+
+    for attr_name in ("fields", "field_names", "managed_fields", "runtime_fields"):
+        nested = getattr(candidate, attr_name, None)
+        nested_fields = _flatten_runtime_state_field_candidate(nested)
+        if nested_fields:
+            return nested_fields
+
+    annotations = getattr(candidate, "__annotations__", None)
+    if isinstance(annotations, Mapping):
+        return [str(key).strip() for key in annotations.keys() if str(key).strip()]
+
+    return []
+
+
+def _flatten_runtime_state_aliases(candidate: object) -> dict[str, str]:
+    aliases: dict[str, str] = {}
+    if candidate is None:
+        return aliases
+    if isinstance(candidate, Mapping):
+        iterable = candidate.items()
+    elif isinstance(candidate, (set, frozenset, list, tuple)):
+        iterable = candidate
+    else:
+        iterable = None
+
+    if iterable is not None:
+        for item in iterable:
+            if isinstance(item, tuple) and len(item) == 2:
+                alias, canonical = item
+            else:
+                alias, canonical = item, item
+            alias_text = str(alias or "").strip()
+            canonical_text = str(canonical or "").strip()
+            if alias_text and canonical_text:
+                aliases[alias_text] = canonical_text
+        return aliases
+
+    for attr_name in ("aliases", "alias_map", "legacy_aliases", "field_aliases"):
+        nested = getattr(candidate, attr_name, None)
+        nested_aliases = _flatten_runtime_state_aliases(nested)
+        if nested_aliases:
+            return nested_aliases
+
+    return aliases
+
+
+def _extract_runtime_state_fields(runtime_state_module: Any | None) -> list[str]:
+    if runtime_state_module is None:
+        return list(_RUNTIME_STATE_FALLBACK_FIELDS)
+
+    for attr_name in (
+        "RUNTIME_STATE_FIELDS",
+        "RUNTIME_FIELDS",
+        "RUNTIME_STATE_FIELD_NAMES",
+        "runtime_state_fields",
+        "runtime_fields",
+        "fields",
+        "RuntimeState",
+        "TwitchRuntimeState",
+        "RUNTIME_STATE_SCHEMA",
+    ):
+        candidate = getattr(runtime_state_module, attr_name, None)
+        field_names = _flatten_runtime_state_field_candidate(candidate)
+        if field_names:
+            return field_names
+
+    return list(_RUNTIME_STATE_FALLBACK_FIELDS)
+
+
+def _extract_runtime_state_aliases(runtime_state_module: Any | None) -> dict[str, str]:
+    aliases: dict[str, str] = {}
+    if runtime_state_module is None:
+        return aliases
+
+    for attr_name in (
+        "RUNTIME_STATE_ALIASES",
+        "RUNTIME_STATE_FIELD_ALIASES",
+        "RUNTIME_ALIASES",
+        "runtime_state_aliases",
+        "runtime_aliases",
+        "legacy_aliases",
+    ):
+        candidate = getattr(runtime_state_module, attr_name, None)
+        aliases = _flatten_runtime_state_aliases(candidate)
+        if aliases:
+            break
+
+    return aliases
+
+
+def _derive_runtime_state_aliases(field_names: list[str]) -> dict[str, str]:
+    aliases: dict[str, str] = {}
+    for field_name in field_names:
+        canonical = str(field_name or "").strip()
+        if not canonical or canonical in _RUNTIME_STATE_SURFACE_NAMES:
+            continue
+        aliases.setdefault(canonical, canonical)
+        if canonical.startswith("_"):
+            stripped = canonical.lstrip("_")
+            if stripped and stripped not in _RUNTIME_STATE_SURFACE_NAMES:
+                aliases.setdefault(stripped, canonical)
+        else:
+            aliases.setdefault(f"_{canonical}", canonical)
+    return aliases
+
+
+def _normalize_runtime_state_alias_map(runtime_state_module: Any | None) -> tuple[frozenset[str], dict[str, str]]:
+    field_names = _extract_runtime_state_fields(runtime_state_module)
+    aliases = _extract_runtime_state_aliases(runtime_state_module)
+    if not aliases:
+        aliases = _derive_runtime_state_aliases(field_names)
+    for field_name in field_names:
+        canonical = str(field_name or "").strip()
+        if canonical and canonical not in _RUNTIME_STATE_SURFACE_NAMES:
+            aliases.setdefault(canonical, canonical)
+    managed_names = frozenset(name for name in aliases if name not in _RUNTIME_STATE_SURFACE_NAMES)
+    return managed_names, aliases
+
+
+def _build_runtime_state_factory(runtime_state_module: Any | None):
+    if runtime_state_module is None:
+        return None
+
+    for attr_name in (
+        "build_runtime_state",
+        "create_runtime_state",
+        "make_runtime_state",
+        "runtime_state_factory",
+        "RUNTIME_STATE_FACTORY",
+    ):
+        factory = getattr(runtime_state_module, attr_name, None)
+        if callable(factory):
+            return factory
+
+    state_cls = getattr(runtime_state_module, "RuntimeState", None)
+    if callable(state_cls):
+        return state_cls
+    state_cls = getattr(runtime_state_module, "TwitchRuntimeState", None)
+    if callable(state_cls):
+        return state_cls
+    state_cls = getattr(runtime_state_module, "RUNTIME_STATE_CLASS", None)
+    if callable(state_cls):
+        return state_cls
+    return None
+
+
+def _invoke_runtime_state_factory(factory: Any | None, cog: commands.Cog) -> Any:
+    if factory is None:
+        state = SimpleNamespace()
+        for field_name in _RUNTIME_STATE_FALLBACK_FIELDS:
+            setattr(state, field_name, None)
+        return state
+
+    try:
+        signature = inspect.signature(factory)
+    except (TypeError, ValueError):
+        signature = None
+
+    if signature is not None:
+        parameters = list(signature.parameters.values())
+        accepts_cog = any(
+            parameter.kind in {
+                inspect.Parameter.POSITIONAL_ONLY,
+                inspect.Parameter.POSITIONAL_OR_KEYWORD,
+                inspect.Parameter.VAR_POSITIONAL,
+            }
+            for parameter in parameters
+        )
+        if accepts_cog:
+            try:
+                return factory(cog)
+            except TypeError:
+                pass
+        if not parameters:
+            return factory()
+
+    try:
+        return factory(cog)
+    except TypeError:
+        return factory()
+
+
+class _RuntimeStateBridge:
+    __slots__ = ("aliases", "managed_names", "factory")
+
+    def __init__(
+        self,
+        *,
+        managed_names: frozenset[str],
+        aliases: dict[str, str],
+        factory: Any | None,
+    ) -> None:
+        self.managed_names = managed_names
+        self.aliases = aliases
+        self.factory = factory
+
+    @classmethod
+    def from_module(cls, runtime_state_module: Any | None) -> "_RuntimeStateBridge":
+        managed_names, aliases = _normalize_runtime_state_alias_map(runtime_state_module)
+        factory = _build_runtime_state_factory(runtime_state_module)
+        return cls(managed_names=managed_names, aliases=aliases, factory=factory)
+
+    def is_managed(self, name: str) -> bool:
+        return name in self.managed_names
+
+    def canonical_name(self, name: str) -> str | None:
+        return self.aliases.get(name)
+
+    def create_state(self, cog: commands.Cog) -> Any:
+        return _invoke_runtime_state_factory(self.factory, cog)
+
+    def get_value(self, state: Any, name: str) -> Any:
+        canonical = self.canonical_name(name)
+        if canonical is None:
+            raise AttributeError(name)
+        getter = getattr(state, "get", None)
+        if callable(getter):
+            try:
+                return getter(canonical)
+            except KeyError as exc:
+                raise AttributeError(name) from exc
+        if isinstance(state, Mapping):
+            return state.get(canonical)
+        return getattr(state, canonical, None)
+
+    def set_value(self, state: Any, name: str, value: Any) -> None:
+        canonical = self.canonical_name(name)
+        if canonical is None:
+            raise AttributeError(name)
+        assign = getattr(state, "assign", None)
+        if callable(assign):
+            try:
+                assign(**{canonical: value})
+                return
+            except KeyError as exc:
+                raise AttributeError(name) from exc
+        if isinstance(state, dict):
+            state[canonical] = value
+            return
+        setattr(state, canonical, value)
+
+    def del_value(self, state: Any, name: str) -> None:
+        canonical = self.canonical_name(name)
+        if canonical is None:
+            raise AttributeError(name)
+        delete = getattr(state, "delete", None)
+        if callable(delete):
+            try:
+                delete(canonical)
+                return
+            except KeyError as exc:
+                raise AttributeError(name) from exc
+        if isinstance(state, dict):
+            if canonical in state:
+                del state[canonical]
+                return
+            raise AttributeError(name)
+        if hasattr(state, canonical):
+            delattr(state, canonical)
+            return
+        raise AttributeError(name)
+
+
 class TwitchBaseCog(commands.Cog):
     """Handle shared initialisation, shutdown and utility helpers."""
 
     def __init__(self, bot: commands.Bot):
         super().__init__()
+        runtime_state_module = _load_runtime_state_module()
+        runtime_state_bridge = _RuntimeStateBridge.from_module(runtime_state_module)
+        object.__setattr__(self, "_runtime_state_bridge", runtime_state_bridge)
+        object.__setattr__(
+            self,
+            "_runtime_state",
+            runtime_state_bridge.create_state(self),
+        )
         self.bot = bot
-        self._runtime_bootstrap = TwitchRuntimeBootstrap(self)
+        self._runtime_bootstrap = BotRuntimeBootstrap(self)
         self._runtime_bootstrap.configure_runtime()
         self._runtime_bootstrap.wire_runtime_dependencies()
+
+    @property
+    def runtime_state(self) -> Any:
+        return self._get_runtime_state_container()
+
+    @property
+    def runtime(self) -> Any:
+        return self._get_runtime_state_container()
+
+    def _get_runtime_state_bridge(self) -> _RuntimeStateBridge:
+        bridge = self.__dict__.get("_runtime_state_bridge")
+        if bridge is None:
+            bridge = _RuntimeStateBridge.from_module(_load_runtime_state_module())
+            object.__setattr__(self, "_runtime_state_bridge", bridge)
+        return bridge
+
+    def _get_runtime_state_container(self) -> Any:
+        state = self.__dict__.get("_runtime_state")
+        if state is None and "_runtime_state" not in self.__dict__:
+            state = self._get_runtime_state_bridge().create_state(self)
+            object.__setattr__(self, "_runtime_state", state)
+        return state
+
+    def __getattr__(self, name: str) -> Any:
+        bridge = self.__dict__.get("_runtime_state_bridge")
+        if bridge is None:
+            bridge = self._get_runtime_state_bridge()
+        if bridge.is_managed(name):
+            return bridge.get_value(self._get_runtime_state_container(), name)
+        raise AttributeError(name)
+
+    def __setattr__(self, name: str, value: Any) -> None:
+        if name in _RUNTIME_STATE_INTERNAL_NAMES:
+            object.__setattr__(self, name, value)
+            return
+        if name in _RUNTIME_STATE_SURFACE_NAMES:
+            object.__setattr__(self, "_runtime_state", value)
+            return
+        bridge = self.__dict__.get("_runtime_state_bridge")
+        if bridge is None:
+            bridge = self._get_runtime_state_bridge()
+        if bridge.is_managed(name):
+            bridge.set_value(self._get_runtime_state_container(), name, value)
+            return
+        object.__setattr__(self, name, value)
+
+    def __delattr__(self, name: str) -> None:
+        bridge = self.__dict__.get("_runtime_state_bridge")
+        if bridge is None:
+            bridge = self._get_runtime_state_bridge()
+        if bridge.is_managed(name):
+            bridge.del_value(self._get_runtime_state_container(), name)
+            return
+        object.__delattr__(self, name)
 
     @staticmethod
     def _sample_observability_items(values: object, *, limit: int = 10) -> list[str]:
@@ -112,6 +527,30 @@ class TwitchBaseCog(commands.Cog):
             if len(sampled) >= limit:
                 break
         return sampled
+
+    @staticmethod
+    def _load_internal_chatters_live_state_sync(normalized_login: str) -> tuple[str | None, int | None, bool]:
+        current_user_id: str | None = None
+        current_session_id: int | None = None
+        is_live = False
+        with storage.readonly_connection() as conn:
+            row = conn.execute(
+                """
+                SELECT twitch_user_id, active_session_id, is_live
+                FROM twitch_live_state
+                WHERE LOWER(streamer_login) = %s
+                LIMIT 1
+                """,
+                (normalized_login,),
+            ).fetchone()
+        if row is not None:
+            current_user_id = str(
+                row["twitch_user_id"] if hasattr(row, "keys") else row[0] or ""
+            ).strip() or None
+            session_value = row["active_session_id"] if hasattr(row, "keys") else row[1]
+            current_session_id = int(session_value) if session_value is not None else None
+            is_live = bool(row["is_live"] if hasattr(row, "keys") else row[2])
+        return current_user_id, current_session_id, is_live
 
     def _log_chat_bot_lifecycle_event(
         self,
@@ -243,24 +682,10 @@ class TwitchBaseCog(commands.Cog):
         current_user_id: str | None = None
         is_live = False
         try:
-            with storage.readonly_connection() as conn:
-                row = conn.execute(
-                    """
-                    SELECT twitch_user_id, active_session_id, is_live
-                    FROM twitch_live_state
-                    WHERE LOWER(streamer_login) = %s
-                    LIMIT 1
-                    """,
-                    (normalized_login,),
-                ).fetchone()
-            if row is not None:
-                current_user_id = str(
-                    row["twitch_user_id"] if hasattr(row, "keys") else row[0] or ""
-                ).strip() or None
-                current_session_id = int(
-                    row["active_session_id"] if hasattr(row, "keys") else row[1]
-                ) if (row["active_session_id"] if hasattr(row, "keys") else row[1]) is not None else None
-                is_live = bool(row["is_live"] if hasattr(row, "keys") else row[2])
+            current_user_id, current_session_id, is_live = await asyncio.to_thread(
+                self._load_internal_chatters_live_state_sync,
+                normalized_login,
+            )
         except Exception:
             log.debug("Chatters debug: live state lookup failed for %s", normalized_login, exc_info=True)
 
@@ -1823,26 +2248,7 @@ class TwitchBaseCog(commands.Cog):
     # -------------------------------------------------------
     @staticmethod
     def _normalize_login(raw: str) -> str:
-        login = (raw or "").strip()
-        if not login:
-            return ""
-        login = login.split("?")[0].split("#")[0].strip()
-        lowered = login.lower()
-        if "twitch.tv" in lowered:
-            if "//" not in login:
-                login = f"https://{login}"
-            try:
-                parsed = urlparse(login)
-            except Exception:
-                return ""
-            path = (parsed.path or "").strip("/")
-            if path:
-                login = path.split("/")[0]
-            else:
-                return ""
-        login = login.strip().lstrip("@")
-        login = re.sub(r"[^a-z0-9_]", "", login.lower())
-        return login
+        return normalize_twitch_login(raw) or ""
 
     @staticmethod
     def _parse_language_filters(raw: str | None) -> list[str] | None:

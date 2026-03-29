@@ -5,6 +5,7 @@ from datetime import UTC, date, datetime
 from decimal import Decimal, ROUND_HALF_UP
 from typing import Any
 
+from ...core.twitch_login import normalize_twitch_login
 from .affiliate_email import AffiliateEmailSender
 from .affiliate_pii import AffiliatePII
 
@@ -46,7 +47,10 @@ class AffiliateGutschriftService:
 
     @classmethod
     def _normalize_login(cls, value: Any) -> str:
-        return str(value or "").strip().lower()
+        normalized = normalize_twitch_login(value)
+        if not normalized:
+            raise ValueError("affiliate_login is required")
+        return normalized
 
     @classmethod
     def _normalize_year_month(cls, year: int, month: int) -> tuple[int, int]:
@@ -395,7 +399,10 @@ class AffiliateGutschriftService:
         ).fetchall()
         periods: set[tuple[str, int, int]] = set()
         for row in rows:
-            login = cls._normalize_login(cls._row_value(row, "affiliate_twitch_login", ""))
+            try:
+                login = cls._normalize_login(cls._row_value(row, "affiliate_twitch_login", ""))
+            except ValueError:
+                continue
             created_at_raw = str(cls._row_value(row, "created_at", "") or "").strip()
             if not login or not created_at_raw:
                 continue
@@ -995,7 +1002,10 @@ class AffiliateGutschriftService:
         ).fetchall()
         results: list[dict[str, Any]] = []
         for row in affiliate_rows:
-            login = cls._normalize_login(cls._row_value(row, "affiliate_twitch_login", ""))
+            try:
+                login = cls._normalize_login(cls._row_value(row, "affiliate_twitch_login", ""))
+            except ValueError:
+                continue
             if not login:
                 continue
             results.append(

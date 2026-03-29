@@ -11,8 +11,17 @@ from bot.monitoring.monitoring import TwitchMonitoringMixin
 
 
 class _RecordingConnection:
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        *,
+        fetchall_rows: list[dict[str, object]] | None = None,
+        fetchall_rows_by_sql: dict[str, list[dict[str, object]]] | None = None,
+    ) -> None:
         self.executed: list[tuple[str, tuple[object, ...]]] = []
+        self.fetchall_rows = list(fetchall_rows or [])
+        self.fetchall_rows_by_sql = {
+            pattern: list(rows) for pattern, rows in (fetchall_rows_by_sql or {}).items()
+        }
 
     def execute(self, sql: str, params=(), *args, **kwargs):
         self.executed.append((sql, tuple(params or ())))
@@ -22,7 +31,12 @@ class _RecordingConnection:
         return None
 
     def fetchall(self):
-        return []
+        if self.executed and self.fetchall_rows_by_sql:
+            last_sql = self.executed[-1][0]
+            for pattern, rows in self.fetchall_rows_by_sql.items():
+                if pattern in last_sql:
+                    return list(rows)
+        return list(self.fetchall_rows)
 
 
 class _AnalyticsHarness(TwitchAnalyticsMixin, TwitchMonitoringMixin):
@@ -447,14 +461,24 @@ class PartnerRaidScoreRefreshTriggerTests(unittest.IsolatedAsyncioTestCase):
                 "game_name": "Deadlock",
             }
         }
-        conn = _RecordingConnection()
+        conn = _RecordingConnection(
+            fetchall_rows=[
+                {
+                    "streamer_login": "partner_one",
+                    "twitch_user_id": "1234",
+                    "is_live": 0,
+                    "last_game": None,
+                    "had_deadlock_in_session": 0,
+                    "partner_raid_bot_enabled": 1,
+                }
+            ]
+        )
         handler = AsyncMock()
         harness._handle_stream_went_live = handler
         harness._persist_live_state_rows = AsyncMock(side_effect=_StopProcessing)
 
         with (
             patch("bot.monitoring.monitoring.storage.readonly_connection", side_effect=lambda: contextlib.nullcontext(conn)),
-            patch("bot.monitoring.monitoring.storage.load_active_partner", return_value={"raid_bot_enabled": 1}),
             patch("bot.monitoring.monitoring.storage.transaction", side_effect=lambda: contextlib.nullcontext(conn)),
             patch(
                 "bot.monitoring.monitoring.asyncio.create_task",
@@ -466,6 +490,58 @@ class PartnerRaidScoreRefreshTriggerTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(harness.spawned, ["golive.partner_one"])
         handler.assert_not_awaited()
+        self.assertEqual(len(conn.executed), 1)
+        self.assertIn("LEFT JOIN LATERAL", conn.executed[0][0])
+
+    async def test_process_postings_falls_back_to_partner_lookup_when_live_state_row_is_missing(self) -> None:
+        harness = _GoLiveHarness()
+        tracked = [
+            {
+                "login": "partner_one",
+                "twitch_user_id": "1234",
+                "require_link": False,
+                "is_verified": True,
+                "is_archived": False,
+            }
+        ]
+        streams_by_login = {
+            "partner_one": {
+                "id": "stream-1",
+                "user_login": "partner_one",
+                "game_name": "Deadlock",
+            }
+        }
+        conn = _RecordingConnection(
+            fetchall_rows_by_sql={
+                "FROM twitch_live_state ls": [],
+                "FROM twitch_partners p": [
+                    {
+                        "twitch_user_id": "1234",
+                        "partner_raid_bot_enabled": 1,
+                    }
+                ],
+            }
+        )
+        handler = AsyncMock()
+        harness._handle_stream_went_live = handler
+        harness._persist_live_state_rows = AsyncMock(side_effect=_StopProcessing)
+
+        with (
+            patch("bot.monitoring.monitoring.storage.readonly_connection", side_effect=lambda: contextlib.nullcontext(conn)),
+            patch("bot.monitoring.monitoring.storage.transaction", side_effect=lambda: contextlib.nullcontext(conn)),
+            patch(
+                "bot.monitoring.monitoring.asyncio.create_task",
+                side_effect=AssertionError("raw create_task should not be used"),
+            ),
+        ):
+            with self.assertRaises(_StopProcessing):
+                await harness._process_postings(tracked, streams_by_login)
+
+        self.assertEqual(harness.spawned, ["golive.partner_one"])
+        handler.assert_not_awaited()
+        self.assertEqual(len(conn.executed), 2)
+        self.assertIn("FROM twitch_live_state ls", conn.executed[0][0])
+        self.assertIn("SELECT DISTINCT ON (p.twitch_user_id)", conn.executed[1][0])
 
 
 if __name__ == "__main__":

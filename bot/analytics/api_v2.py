@@ -42,6 +42,7 @@ from .api_insights import _AnalyticsInsightsMixin
 from .api_overview import _AnalyticsOverviewMixin
 from .api_performance import _AnalyticsPerformanceMixin
 from .api_chat_deep import _AnalyticsChatDeepMixin
+from .api_public import _AnalyticsPublicMixin
 from .api_raids import _AnalyticsRaidsMixin
 from .api_viewers import _AnalyticsViewersMixin
 from .api_roadmap import _AnalyticsRoadmapMixin
@@ -456,6 +457,7 @@ class AnalyticsV2Mixin(
     _AnalyticsExperimentalMixin,
     _AnalyticsAIMixin,
     _AnalyticsRoadmapMixin,
+    _AnalyticsPublicMixin,
 ):
     """Mixin providing v2 analytics API endpoints for the dashboard."""
 
@@ -515,6 +517,9 @@ class AnalyticsV2Mixin(
         register_admin_routes = getattr(self, "_register_v2_admin_api_routes", None)
         if callable(register_admin_routes):
             register_admin_routes(router)
+        register_public_routes = getattr(self, "_register_v2_public_routes", None)
+        if callable(register_public_routes):
+            register_public_routes(router)
 
     # ------------------------------------------------------------------
     # Plan-gating helper for extended analytics

@@ -35,6 +35,10 @@ from .internal_api import InternalApiCallbacks, InternalApiRunner
 from .raid import partner_scores as partner_raid_scores
 from .raid.manager import RaidBot
 from .reload_manager import LoopSpec, SubsystemDef, TwitchReloadManager
+from .runtime.dashboard_runtime import (
+    DashboardRuntimeContainer,
+)
+from .runtime.contracts import ensure_bot_runtime_container
 from .runtime_security import require_noauth_loopback_guard
 from .secret_store import load_secret_value
 from .storage import pg as storage_pg
@@ -75,110 +79,121 @@ def _parse_env_csv(name: str, default: tuple[str, ...] = ()) -> tuple[str, ...]:
     return tuple(normalized)
 
 
-class TwitchRuntimeBootstrap:
-    """Own the cog's runtime setup stages explicitly."""
+class BotRuntimeBootstrap:
+    """Own the bot runtime setup stages explicitly."""
 
     def __init__(self, cog: Any) -> None:
         self._cog = cog
 
     def configure_runtime(self) -> None:
         cog = self._cog
+        runtime = ensure_bot_runtime_container(cog)
+        config = runtime.config
+        state = runtime.state
+        services = runtime.services
 
         twitch_keys = [key for key in os.environ.keys() if key.startswith("TWITCH_")]
         log.debug("Detected Twitch Keys in ENV: %s", ", ".join(twitch_keys))
 
-        cog.client_id = load_secret_value("TWITCH_CLIENT_ID")
-        cog.client_secret = load_secret_value("TWITCH_CLIENT_SECRET")
-        cog._twitch_bot_client_id = load_secret_value("TWITCH_BOT_CLIENT_ID") or cog.client_id
+        config.client_id = load_secret_value("TWITCH_CLIENT_ID")
+        config.client_secret = load_secret_value("TWITCH_CLIENT_SECRET")
+        config.twitch_bot_client_id = (
+            load_secret_value("TWITCH_BOT_CLIENT_ID") or config.client_id
+        )
 
         bot_secret_env = load_secret_value("TWITCH_BOT_CLIENT_SECRET")
         if bot_secret_env:
-            cog._twitch_bot_secret = bot_secret_env
-        elif cog._twitch_bot_client_id == cog.client_id:
-            cog._twitch_bot_secret = cog.client_secret
+            config.twitch_bot_secret = bot_secret_env
+        elif config.twitch_bot_client_id == config.client_id:
+            config.twitch_bot_secret = config.client_secret
         else:
-            cog._twitch_bot_secret = ""
+            config.twitch_bot_secret = ""
 
-        cog.api = None
-        cog._web = None
-        cog._web_app = None
-        cog._category_id = None
-        cog._language_filters = cog._parse_language_filters(TWITCH_LANGUAGE)
-        cog._tick_count = 0
-        cog._log_every_n = max(1, int(TWITCH_LOG_EVERY_N_TICKS or 1))
-        cog._category_sample_limit = max(50, int(TWITCH_CATEGORY_SAMPLE_LIMIT or 400))
-        cog._poll_interval_seconds = max(5, min(3600, int(POLL_INTERVAL_SECONDS or 15)))
-        cog._poll_interval_resync_interval_seconds = 60.0
-        cog._poll_interval_last_sync_monotonic = 0.0
-        cog._poll_interval_last_error_log_at = 0.0
-        cog._poll_interval_last_invalid_value = None
-        cog._poll_interval_settings_table = "twitch_global_settings"
-        cog._poll_interval_settings_key = "poll_interval_seconds"
-        cog._admin_polling_interval_seconds = cog._poll_interval_seconds
-        cog._active_sessions = {}
-        cog._notify_channel_id = int(TWITCH_NOTIFY_CHANNEL_ID or 0)
-        cog._alert_channel_id = int(TWITCH_ALERT_CHANNEL_ID or 0)
-        cog._alert_mention = TWITCH_ALERT_MENTION or ""
-        cog._invite_codes = {}
-        cog._twl_command = None
-        cog._target_game_name = (TWITCH_TARGET_GAME_NAME or "").strip()
-        cog._target_game_lower = cog._target_game_name.lower()
-        cog.partner_raid_score_service = partner_raid_scores
-        cog._managed_bg_tasks = set()
-        cog._runtime_started = False
-        cog._runtime_start_lock = asyncio.Lock()
-        cog._runtime_stop_lock = cog._runtime_start_lock
+        services.api = None
+        state.category_id = None
+        config.language_filters = cog._parse_language_filters(TWITCH_LANGUAGE)
+        state.tick_count = 0
+        config.log_every_n = max(1, int(TWITCH_LOG_EVERY_N_TICKS or 1))
+        config.category_sample_limit = max(50, int(TWITCH_CATEGORY_SAMPLE_LIMIT or 400))
+        config.poll_interval_seconds = max(5, min(3600, int(POLL_INTERVAL_SECONDS or 15)))
+        config.poll_interval_resync_interval_seconds = 60.0
+        state.poll_interval_last_sync_monotonic = 0.0
+        state.poll_interval_last_error_log_at = 0.0
+        state.poll_interval_last_invalid_value = None
+        config.poll_interval_settings_table = "twitch_global_settings"
+        config.poll_interval_settings_key = "poll_interval_seconds"
+        state.admin_polling_interval_seconds = config.poll_interval_seconds
+        state.active_sessions = {}
+        config.notify_channel_id = int(TWITCH_NOTIFY_CHANNEL_ID or 0)
+        config.alert_channel_id = int(TWITCH_ALERT_CHANNEL_ID or 0)
+        config.alert_mention = TWITCH_ALERT_MENTION or ""
+        state.invite_codes = {}
+        services.twl_command = None
+        config.target_game_name = (TWITCH_TARGET_GAME_NAME or "").strip()
+        config.target_game_lower = config.target_game_name.lower()
+        services.partner_raid_score_service = partner_raid_scores
+        state.managed_bg_tasks = set()
+        state.runtime_started = False
+        state.runtime_start_lock = asyncio.Lock()
+        state.runtime_stop_lock = state.runtime_start_lock
 
-        cog._dashboard_token = load_secret_value("TWITCH_DASHBOARD_TOKEN") or None
-        cog._dashboard_noauth = _parse_env_bool(
-            "TWITCH_DASHBOARD_NOAUTH",
-            bool(TWITCH_DASHBOARD_NOAUTH),
+        setattr(cog, "_dashboard_token", load_secret_value("TWITCH_DASHBOARD_TOKEN") or None)
+        setattr(
+            cog,
+            "_dashboard_noauth",
+            _parse_env_bool(
+                "TWITCH_DASHBOARD_NOAUTH",
+                bool(TWITCH_DASHBOARD_NOAUTH),
+            ),
         )
         env_dashboard_host = (os.getenv("TWITCH_DASHBOARD_HOST") or "").strip()
         default_dashboard_host = TWITCH_DASHBOARD_HOST or "127.0.0.1"
-        cog._dashboard_host = env_dashboard_host or default_dashboard_host
+        setattr(cog, "_dashboard_host", env_dashboard_host or default_dashboard_host)
         try:
-            if ipaddress.ip_address(cog._dashboard_host).is_unspecified:
+            if ipaddress.ip_address(getattr(cog, "_dashboard_host")).is_unspecified:
                 log.warning(
                     "TWITCH_DASHBOARD_HOST resolves to an unspecified address; keep this behind auth/reverse proxy."
                 )
         except ValueError:
             log.warning(
                 "TWITCH_DASHBOARD_HOST is not a valid IP; using it as-is: %s",
-                cog._dashboard_host,
+                getattr(cog, "_dashboard_host"),
             )
-        cog._dashboard_port = _parse_env_int("TWITCH_DASHBOARD_PORT", int(TWITCH_DASHBOARD_PORT))
+        setattr(cog, "_dashboard_port", _parse_env_int("TWITCH_DASHBOARD_PORT", int(TWITCH_DASHBOARD_PORT)))
         embedded_env = (os.getenv("TWITCH_DASHBOARD_EMBEDDED", "") or "").strip().lower()
-        cog._dashboard_embedded = embedded_env not in {"0", "false", "no", "off"}
+        setattr(cog, "_dashboard_embedded", embedded_env not in {"0", "false", "no", "off"})
         require_noauth_loopback_guard(
-            enabled=cog._dashboard_noauth,
-            host=cog._dashboard_host,
+            enabled=bool(getattr(cog, "_dashboard_noauth", False)),
+            host=str(getattr(cog, "_dashboard_host", default_dashboard_host)),
         )
-        if not cog._dashboard_embedded:
+        if not bool(getattr(cog, "_dashboard_embedded", True)):
             log.info(
                 "TWITCH_DASHBOARD_EMBEDDED disabled - assuming external reverse proxy serves the dashboard"
             )
-        cog._partner_dashboard_token = load_secret_value("TWITCH_PARTNER_TOKEN") or None
-        cog._dashboard_auth_redirect_uri = (
-            os.getenv("TWITCH_DASHBOARD_AUTH_REDIRECT_URI") or ""
-        ).strip() or "https://twitch.earlysalty.com/twitch/auth/callback"
-        cog._dashboard_session_ttl = max(
-            6 * 3600,
-            _parse_env_int("TWITCH_DASHBOARD_SESSION_TTL_SEC", 6 * 3600),
+        setattr(cog, "_partner_dashboard_token", load_secret_value("TWITCH_PARTNER_TOKEN") or None)
+        setattr(
+            cog,
+            "_dashboard_auth_redirect_uri",
+            (os.getenv("TWITCH_DASHBOARD_AUTH_REDIRECT_URI") or "").strip()
+            or "https://twitch.earlysalty.com/twitch/auth/callback",
         )
-        cog._legacy_stats_url = (os.getenv("TWITCH_LEGACY_STATS_URL") or "").strip() or None
-        cog._required_marker_default = TWITCH_REQUIRED_DISCORD_MARKER or None
-        cog._internal_api_runner = None
-        cog._experimental_irc_lurker_channels = set(
+        setattr(
+            cog,
+            "_dashboard_session_ttl",
+            max(6 * 3600, _parse_env_int("TWITCH_DASHBOARD_SESSION_TTL_SEC", 6 * 3600)),
+        )
+        setattr(cog, "_legacy_stats_url", (os.getenv("TWITCH_LEGACY_STATS_URL") or "").strip() or None)
+        setattr(cog, "_required_marker_default", TWITCH_REQUIRED_DISCORD_MARKER or None)
+        config.experimental_irc_lurker_channels = set(
             _parse_env_csv(
                 "TWITCH_EXPERIMENTAL_IRC_LURKER_CHANNELS",
                 default=("earlysalty",),
             )
         )
-        cog._experimental_irc_lurker_enabled = False
-        cog._irc_lurker_tracker = None
+        state.experimental_irc_lurker_enabled = False
+        state.irc_lurker_tracker = None
 
-        cog._internal_api_token = (
+        config.internal_api_token = (
             load_secret_value(
                 "TWITCH_INTERNAL_API_TOKEN",
                 prefer_env=True,
@@ -188,47 +203,50 @@ class TwitchRuntimeBootstrap:
         )
         env_internal_host = (os.getenv("TWITCH_INTERNAL_API_HOST") or "").strip()
         default_internal_host = TWITCH_INTERNAL_API_HOST or "127.0.0.1"
-        cog._internal_api_host = env_internal_host or default_internal_host
+        config.internal_api_host = env_internal_host or default_internal_host
         try:
-            if ipaddress.ip_address(cog._internal_api_host).is_unspecified:
+            if ipaddress.ip_address(config.internal_api_host).is_unspecified:
                 log.warning(
                     "TWITCH_INTERNAL_API_HOST resolves to an unspecified address; keep it private."
                 )
         except ValueError:
             log.warning(
                 "TWITCH_INTERNAL_API_HOST is not a valid IP; using it as-is: %s",
-                cog._internal_api_host,
+                config.internal_api_host,
             )
-        cog._internal_api_port = _parse_env_int(
+        config.internal_api_port = _parse_env_int(
             "TWITCH_INTERNAL_API_PORT",
             int(TWITCH_INTERNAL_API_PORT),
         )
 
-        cog._raid_bot = None
-        cog._twitch_chat_bot = None
-        cog._periodic_channel_join_task = None
-        cog._twitch_bot_token = None
-        cog._twitch_bot_refresh_token = None
-        cog._bot_token_manager = None
-        cog._raid_redirect_uri = ""
+        services.raid_bot = None
+        services.twitch_chat_bot = None
+        state.periodic_channel_join_task = None
+        services.twitch_bot_token = None
+        services.twitch_bot_refresh_token = None
+        services.bot_token_manager = None
+        config.raid_redirect_uri = ""
 
-        cog.clip_manager = None
-        cog.clip_fetcher = None
-        cog.upload_worker = None
-        cog._reload_manager = None
+        services.clip_manager = None
+        services.clip_fetcher = None
+        services.upload_worker = None
+        services.reload_manager = None
 
     def wire_runtime_dependencies(self) -> None:
         cog = self._cog
+        runtime = ensure_bot_runtime_container(cog)
+        config = runtime.config
+        services = runtime.services
 
         # Runtime dependencies such as raid auth, token handling and social-media
         # workers touch PostgreSQL during construction, so storage must be ready
         # before we instantiate them.
         storage_pg.prepare_runtime_storage()
 
-        cog._internal_api_runner = InternalApiRunner(
-            host=cog._internal_api_host,
-            port=cog._internal_api_port,
-            token=cog._internal_api_token,
+        services.internal_api_runner = InternalApiRunner(
+            host=config.internal_api_host,
+            port=config.internal_api_port,
+            token=config.internal_api_token,
             callbacks=InternalApiCallbacks(
                 add=getattr(cog, "_dashboard_add", None),
                 remove=getattr(cog, "_dashboard_remove", None),
@@ -267,90 +285,92 @@ class TwitchRuntimeBootstrap:
             try:
                 from .monitoring.eventsub_webhook import EventSubWebhookHandler
 
-                cog._eventsub_webhook_handler = EventSubWebhookHandler(
+                services.eventsub_webhook_handler = EventSubWebhookHandler(
                     secret=webhook_secret,
                     logger=log,
                 )
-                parsed_redirect = urlparse(cog._dashboard_auth_redirect_uri)
-                cog._webhook_base_url = (
+                parsed_redirect = urlparse(
+                    str(getattr(cog, "_dashboard_auth_redirect_uri", "") or "")
+                )
+                services.webhook_base_url = (
                     f"{parsed_redirect.scheme}://{parsed_redirect.netloc}"
                     if parsed_redirect.netloc
                     else None
                 )
-                cog._webhook_secret = webhook_secret
+                services.webhook_secret = webhook_secret
                 log.debug(
                     "EventSub Webhook Handler initialisiert (base_url=%s)",
-                    cog._webhook_base_url,
+                    services.webhook_base_url,
                 )
             except Exception:
                 log.exception("EventSub Webhook Handler konnte nicht initialisiert werden")
-                cog._eventsub_webhook_handler = None
-                cog._webhook_base_url = None
-                cog._webhook_secret = None
+                services.eventsub_webhook_handler = None
+                services.webhook_base_url = None
+                services.webhook_secret = None
         else:
             log.info(
                 "TWITCH_WEBHOOK_SECRET nicht gesetzt – EventSub Webhook deaktiviert, "
                 "WebSocket-Fallback wird verwendet."
             )
-            cog._eventsub_webhook_handler = None
-            cog._webhook_base_url = None
-            cog._webhook_secret = None
+            services.eventsub_webhook_handler = None
+            services.webhook_base_url = None
+            services.webhook_secret = None
 
-        if not cog.client_id:
+        if not config.client_id:
             log.error(
                 "TWITCH_CLIENT_ID not configured; Twitch features will be limited or disabled."
             )
-            cog.api = None
-        elif not cog.client_secret:
+            services.api = None
+        elif not config.client_secret:
             log.warning(
                 "TWITCH_CLIENT_SECRET missing. API calls and Raids will fail, but Chat Bot might work."
             )
-            cog.api = None
+            services.api = None
         else:
-            cog.api = TwitchAPI(cog.client_id, cog.client_secret)
+            services.api = TwitchAPI(config.client_id, config.client_secret)
 
         bot_token, bot_refresh_token, _ = load_bot_tokens(log_missing=False)
-        cog._twitch_bot_token = bot_token
-        cog._twitch_bot_refresh_token = bot_refresh_token
+        services.twitch_bot_token = bot_token
+        services.twitch_bot_refresh_token = bot_refresh_token
         env_bot_client_id = os.getenv("TWITCH_BOT_CLIENT_ID", "").strip()
-        cog._twitch_bot_client_id = env_bot_client_id or cog._twitch_bot_client_id or cog.client_id
-        if not cog._twitch_bot_secret:
+        config.twitch_bot_client_id = env_bot_client_id or config.twitch_bot_client_id or config.client_id
+        if not config.twitch_bot_secret:
             env_bot_secret = os.getenv("TWITCH_BOT_CLIENT_SECRET", "").strip()
             if env_bot_secret:
-                cog._twitch_bot_secret = env_bot_secret
-            elif cog._twitch_bot_client_id == cog.client_id:
-                cog._twitch_bot_secret = cog.client_secret
+                config.twitch_bot_secret = env_bot_secret
+            elif config.twitch_bot_client_id == config.client_id:
+                config.twitch_bot_secret = config.client_secret
             else:
-                cog._twitch_bot_secret = None
-        if cog._twitch_bot_client_id:
-            cog._bot_token_manager = TwitchBotTokenManager(
-                cog._twitch_bot_client_id,
-                (cog._twitch_bot_secret or cog.client_secret or ""),
+                config.twitch_bot_secret = None
+        if config.twitch_bot_client_id:
+            services.bot_token_manager = TwitchBotTokenManager(
+                config.twitch_bot_client_id,
+                (config.twitch_bot_secret or config.client_secret or ""),
             )
 
-        cog._raid_redirect_uri = (
+        config.raid_redirect_uri = (
             os.getenv("TWITCH_RAID_REDIRECT_URI", "").strip() or TWITCH_RAID_REDIRECT_URI
         )
 
-        if cog.api:
+        if services.api:
             try:
-                session = cog.api.get_http_session()
-                cog._raid_bot = RaidBot(
-                    client_id=cog.client_id,
-                    client_secret=cog.client_secret,
-                    redirect_uri=cog._raid_redirect_uri,
+                session = services.api.get_http_session()
+                services.raid_bot = RaidBot(
+                    client_id=config.client_id,
+                    client_secret=config.client_secret,
+                    redirect_uri=config.raid_redirect_uri,
                     session=session,
                 )
-                cog._raid_bot.partner_raid_score_service = partner_raid_scores
-                cog._raid_bot.set_discord_bot(cog.bot)
-                cog._raid_bot.set_cog(cog)
-                cleanup_task = cog._raid_bot.start()
+                services.raid_bot.partner_raid_score_service = partner_raid_scores
+                services.raid_bot.set_discord_bot(cog.bot)
+                services.raid_bot.set_cog(cog)
+                cleanup_task = services.raid_bot.start()
                 if cleanup_task is None:
                     raise RuntimeError("RaidBot lifecycle start failed")
-                log.debug("Raid-Bot initialisiert (redirect_uri: %s)", cog._raid_redirect_uri)
+                log.debug("Raid-Bot initialisiert (redirect_uri: %s)", config.raid_redirect_uri)
             except Exception:
                 log.exception("Fehler beim Initialisieren des Raid-Bots")
-                cog._raid_bot = None
+                services.raid_bot = None
         else:
             log.warning("Raid-Bot und Chat-Bot deaktiviert, da TWITCH_CLIENT_ID/SECRET fehlen.")
 
@@ -360,12 +380,13 @@ class TwitchRuntimeBootstrap:
 
     def _ensure_social_media_workers(self) -> None:
         cog = self._cog
-        if not cog.api:
+        services = ensure_bot_runtime_container(cog).services
+        if not services.api:
             return
         if (
-            getattr(cog, "clip_manager", None) is not None
-            and getattr(cog, "clip_fetcher", None) is not None
-            and getattr(cog, "upload_worker", None) is not None
+            services.clip_manager is not None
+            and services.clip_fetcher is not None
+            and services.upload_worker is not None
         ):
             return
 
@@ -373,40 +394,42 @@ class TwitchRuntimeBootstrap:
         from .social_media.clip_manager import ClipManager
         from .social_media.upload_worker import UploadWorker
 
-        cog.clip_manager = ClipManager(twitch_api=cog.api)
-        cog.clip_fetcher = ClipFetcher(cog.bot, cog.api, cog.clip_manager)
-        cog.upload_worker = UploadWorker(cog.bot, cog.clip_manager)
+        services.clip_manager = ClipManager(twitch_api=services.api)
+        services.clip_fetcher = ClipFetcher(cog.bot, services.api, services.clip_manager)
+        services.upload_worker = UploadWorker(cog.bot, services.clip_manager)
         log.info(
             "Social Media Clip Management initialized (ClipManager + ClipFetcher + UploadWorker)"
         )
 
     def _stop_social_media_workers(self) -> None:
         cog = self._cog
+        services = ensure_bot_runtime_container(cog).services
 
-        if cog.clip_fetcher:
+        if services.clip_fetcher:
             try:
-                cog.clip_fetcher.cog_unload()
+                services.clip_fetcher.cog_unload()
                 log.debug("ClipFetcher gecancelt")
             except Exception:
                 log.exception("Konnte ClipFetcher nicht canceln")
             finally:
-                cog.clip_fetcher = None
+                services.clip_fetcher = None
 
-        if cog.upload_worker:
+        if services.upload_worker:
             try:
-                cog.upload_worker.cog_unload()
+                services.upload_worker.cog_unload()
                 log.debug("UploadWorker gecancelt")
             except Exception:
                 log.exception("Konnte UploadWorker nicht canceln")
             finally:
-                cog.upload_worker = None
+                services.upload_worker = None
 
-        cog.clip_manager = None
+        services.clip_manager = None
 
     def _register_reload_manager(self) -> None:
         cog = self._cog
-        cog._reload_manager = TwitchReloadManager(cog)
-        cog._reload_manager.register(
+        services = ensure_bot_runtime_container(cog).services
+        services.reload_manager = TwitchReloadManager(cog)
+        services.reload_manager.register(
             SubsystemDef(
                 name="analytics",
                 display_name="Analytics",
@@ -419,7 +442,7 @@ class TwitchRuntimeBootstrap:
                 hot_reloadable=True,
             )
         )
-        cog._reload_manager.register(
+        services.reload_manager.register(
             SubsystemDef(
                 name="community",
                 display_name="Community",
@@ -432,7 +455,7 @@ class TwitchRuntimeBootstrap:
                 hot_reloadable=True,
             )
         )
-        cog._reload_manager.register(
+        services.reload_manager.register(
             SubsystemDef(
                 name="social",
                 display_name="Social Media",
@@ -447,7 +470,7 @@ class TwitchRuntimeBootstrap:
                 startup_hook="_reload_social_startup",
             )
         )
-        cog._reload_manager.register(
+        services.reload_manager.register(
             SubsystemDef(
                 name="monitoring",
                 display_name="Monitoring",
@@ -464,7 +487,7 @@ class TwitchRuntimeBootstrap:
                 hot_reloadable=False,
             )
         )
-        cog._reload_manager.register(
+        services.reload_manager.register(
             SubsystemDef(
                 name="chat",
                 display_name="Chat Bot",
@@ -473,7 +496,7 @@ class TwitchRuntimeBootstrap:
                 hot_reloadable=False,
             )
         )
-        cog._reload_manager.register(
+        services.reload_manager.register(
             SubsystemDef(
                 name="dashboard",
                 display_name="Dashboard",
@@ -482,7 +505,7 @@ class TwitchRuntimeBootstrap:
                 hot_reloadable=False,
             )
         )
-        cog._reload_manager.register(
+        services.reload_manager.register(
             SubsystemDef(
                 name="raid",
                 display_name="Raid",
@@ -493,18 +516,19 @@ class TwitchRuntimeBootstrap:
         )
         log.debug(
             "Subsystem reload manager ready (%d subsystems)",
-            len(cog._reload_manager.get_all_names()),
+            len(services.reload_manager.get_all_names()),
         )
 
     def _runtime_lifecycle_lock(self) -> asyncio.Lock:
         cog = self._cog
-        lock = getattr(cog, "_runtime_start_lock", None)
+        state = ensure_bot_runtime_container(cog).state
+        lock = state.runtime_start_lock
         if lock is None:
-            lock = getattr(cog, "_runtime_stop_lock", None)
+            lock = state.runtime_stop_lock
         if lock is None:
             lock = asyncio.Lock()
-        cog._runtime_start_lock = lock
-        cog._runtime_stop_lock = lock
+        state.runtime_start_lock = lock
+        state.runtime_stop_lock = lock
         return lock
 
     async def _can_bind_port_async(self, host: str, port: int) -> tuple[bool, str | None]:
@@ -659,7 +683,7 @@ class TwitchRuntimeBootstrap:
             finally:
                 cog._bot_token_manager = None
 
-        if cog._web:
+        if getattr(cog, "_web", None):
             log.info("Stoppe Twitch Dashboard...")
             try:
                 await cog._stop_dashboard()
@@ -765,10 +789,6 @@ class TwitchRuntimeBootstrap:
                 cog._spawn_bg_task(cog._ensure_category_id(), "twitch.ensure_category_id")
                 cog._spawn_bg_task(cog._load_invite_codes_from_db(), "twitch.load_invites")
                 cog._spawn_bg_task(cog._start_internal_api(), "twitch.start_internal_api")
-                if cog._dashboard_embedded:
-                    cog._spawn_bg_task(cog._start_dashboard(), "twitch.start_dashboard")
-                else:
-                    log.info("Skipping internal Twitch dashboard server startup")
                 cog._spawn_bg_task(cog._refresh_all_invites(), "twitch.refresh_all_invites")
                 cog._spawn_bg_task(cog._start_eventsub_listener(), "twitch.eventsub")
                 if cog.api:
@@ -794,3 +814,33 @@ class TwitchRuntimeBootstrap:
             )
             await asyncio.sleep(0.5)
             log.info("Twitch Cog Unload abgeschlossen")
+
+
+class DashboardRuntimeBootstrap:
+    """Own the dashboard runtime setup stages explicitly."""
+
+    def __init__(self, dashboard: Any) -> None:
+        self._dashboard = dashboard
+
+    def configure_runtime(self) -> None:
+        dashboard = self._dashboard
+        runtime = getattr(dashboard, "_runtime_state", None)
+        if runtime is None:
+            runtime = DashboardRuntimeContainer()
+            if isinstance(dashboard, dict):
+                dashboard["_runtime_state"] = runtime
+            else:
+                setattr(dashboard, "_runtime_state", runtime)
+            return
+        if not isinstance(runtime, DashboardRuntimeContainer):
+            raise TypeError("owner.runtime_state must be a DashboardRuntimeContainer")
+
+
+TwitchRuntimeBootstrap = BotRuntimeBootstrap
+
+
+__all__ = [
+    "BotRuntimeBootstrap",
+    "DashboardRuntimeBootstrap",
+    "TwitchRuntimeBootstrap",
+]

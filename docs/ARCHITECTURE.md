@@ -1,109 +1,126 @@
 # Architektur-Uebersicht
 
-## Mixin-Komposition
+## Zielbild
 
-`TwitchStreamCog` (bot/cog.py) setzt sich aus diesen Mixins zusammen (MRO-Reihenfolge):
-
-```
-TwitchStreamCog
-  LegacyTokenAnalyticsMixin   bot/analytics/legacy_token.py
-  TwitchAnalyticsMixin        bot/analytics/mixin.py
-  TwitchRaidMixin             bot/raid/mixin.py
-  RaidCommandsMixin           bot/raid/commands.py
-  TwitchPartnerRecruitMixin   bot/community/partner_recruit.py
-  TwitchDashboardMixin        bot/dashboard/mixin.py
-  TwitchLeaderboardMixin      bot/community/leaderboard.py
-  TwitchAdminMixin            bot/community/admin.py
-  TwitchMonitoringMixin       bot/monitoring/monitoring.py
-  TwitchReloadMixin           bot/reload_mixin.py
-  TwitchBaseCog               bot/base.py
-```
-
-`TwitchDashboardMixin` selbst fasst weitere Dashboard-Mixins zusammen:
+Das System laeuft als Split-Runtime aus zwei logisch getrennten Diensten:
 
 ```
-TwitchDashboardMixin (bot/dashboard/mixin.py)
-  _DashboardAuthMixin         bot/dashboard/auth/auth_mixin.py
-  _DashboardRaidMixin         bot/dashboard/raids/raid_mixin.py
-  _DashboardAffiliateMixin    bot/dashboard/affiliate/affiliate_mixin.py
-  _DashboardBillingMixin      bot/dashboard/billing/billing_mixin.py
-  DashboardLiveMixin          bot/dashboard/live/live.py
-  DashboardLiveAnnouncementMixin  bot/dashboard/live/live_announcement_mixin.py
-  DashboardAdminAnnouncementMixin bot/dashboard/live/announcement_mode_mixin.py
-  _DashboardAdminLegalMixin   bot/dashboard/admin/legal_mixin.py
-  _DashboardRoutesMixin       bot/dashboard/routes_mixin.py
+BotRuntime
+  Twitch API, Chat, Raid, Monitoring, EventSub, Social/Clip-Worker
+
+DashboardRuntime
+  aiohttp-App, Auth, Templates, Public API, Bot/Internal API-Clients
 ```
 
-## Boot-Flow
+Wichtige Regeln:
+
+- Keine geteilten In-Memory-Runtime-Objekte zwischen Bot und Dashboard.
+- Kommunikation nur ueber PostgreSQL, Internal API und explizite Clients.
+- Dashboard darf keine `TwitchStreamCog`-Referenz mehr benoetigen.
+- Bot bootstrapped kein Dashboard.
+- Shared Config ist erlaubt, aber nur als Konfiguration, nicht als gemeinsam besessene Runtime.
+
+## Aktueller Code-Stand
+
+Der Uebergang wird im Repo noch ueber `bot/runtime_state.py` abgefangen. Dort liegt derzeit ein
+transitionaler Container mit `config`, `state` und `services`. Das ist keine gemeinsame
+Systemzentrale mehr, sondern eine Kompatibilitaets-Schicht fuer die Bot-Seite.
+
+Bot-only-Beispiele:
+
+- `api`
+- `_raid_bot`
+- `_twitch_chat_bot`
+- `_bot_token_manager`
+- `clip_manager`
+- `clip_fetcher`
+- `upload_worker`
+- `_internal_api_runner`
+- `_reload_manager`
+- `_eventsub_webhook_handler`
+
+Dashboard-only-Beispiele:
+
+- Host, Port, Token und No-Auth-Schalter fuer den Dashboard-Service
+- Auth- und Session-Handling
+- Template-/HTML-Wiring
+- Bot/Internal API Clients
+- Dashboard-Startpfad und Routenregistrierung
+
+## Startpfade
+
+Bot service:
 
 ```
-Discord Bot start
-  twitch_cog.py (Shim)
-    bot/__init__.py  setup()
-      TwitchStreamCog.__init__()
-        TwitchBaseCog.__init__()   DB-Verbindung, aiohttp-App aufbauen
-        TwitchMonitoringMixin      EventSub registrieren
-        TwitchDashboardMixin       Routes registrieren, aiohttp starten
-        TwitchRaidMixin            Raid-Manager initialisieren
+bot/bot_service/__main__.py
+  -> bot/bot_service/app.py
+  -> run_bot_service()
 ```
 
-Dashboard-Service standalone:
+Dashboard service:
+
 ```
 bot/dashboard_service/__main__.py
-  bot/dashboard_service/app.py
-    aiohttp-App mit Analytics + Dashboard-Routes
+  -> bot/dashboard_service/app.py
+  -> run_dashboard_service()
 ```
 
-## Polling-Loops
+Das ist der relevante Split:
 
-| Loop | Intervall | Datei | Zweck |
-|------|-----------|-------|-------|
-| Haupt-Tick | 15s (`POLL_INTERVAL_SECONDS`) | bot/monitoring/monitoring.py | Live-Status, Viewer, Stats |
-| Stats-Log | jeder Tick (Default 15s) | bot/monitoring/monitoring.py | Schreibt in twitch_stats_tracked |
-| Kategorie-Sample | jeder Tick (Default 15s) | bot/monitoring/monitoring.py | Schreibt in twitch_stats_category |
-| EventSub WS | persistent | bot/monitoring/eventsub_ws.py | Bits, Follows, Raids, Subs, etc. |
-| EventSub Webhook | pro Event | bot/monitoring/eventsub_webhook.py | Empfaengt Twitch-Events |
-| Analytics-Hintergrund | varies | bot/analytics/mixin.py | Engagement-Metriken aufbauen |
+- `run_bot_service()` startet den Bot-/Worker-Pfad und bleibt dashboard-frei.
+- `run_dashboard_service()` startet den Dashboard-Pfad und bindet den Bot nur ueber
+  `BotApiClient`/Internal API an.
 
-## Caddy Reverse Proxy
+## Architekturvertrag
 
-```
-twitch.earlysalty.com   -> 127.0.0.1:8765  (Dashboard-Service, Whitelist)
-raid.earlysalty.com     -> 127.0.0.1:8765  (Raid-Callback)
-admin.earlysalty.de     -> 127.0.0.1:8765  (Admin-Panel, separates Zertifikat)
-```
+BotRuntime besitzt:
 
-Config: `C:\caddy\Caddyfile`
-Binary: `C:\ProgramData\chocolatey\bin\caddy.exe`
+- Twitch API und Token-Handling
+- Chat- und Raid-Logik
+- Monitoring, EventSub und Polling
+- Clip-/Social-Media-Worker
+- Internal API Host/Runner fuer bot-interne Rueckkopplung
 
-Whitelist-Architektur: `twitch.earlysalty.com` erlaubt nur explizit gelistete Pfade in `@public_twitch`. Neue Routes muessen dort eingetragen werden.
+DashboardRuntime besitzt:
 
-## Verschluesselung / Secrets
+- `aiohttp`-App und Route-Registrierung
+- Auth und Session-Management
+- Templates und Render-Helpers
+- Public API / Service-Clients
+- Bot-API-Client und Internal-API-Client
 
-| Bereich | Storage | Verschluesselung |
-|---------|---------|------------------|
-| Web-Sessions | PostgreSQL `dashboard_sessions` | Fernet (AES-128) |
-| Social Media Tokens | PostgreSQL | AES-256-GCM |
-| Raid OAuth Tokens | PostgreSQL | AES-256-GCM |
-| OAuth State Tokens | PostgreSQL | Klartext (10min TTL, ephemaer) |
-| Stripe Keys | Windows Credential Manager / ENV | - |
-| DB-DSN | Windows Credential Manager / ENV | - |
+Geteilt sein duerfen nur:
 
-DSN-Lookup: ENV `TWITCH_ANALYTICS_DSN` → Windows Keyring (`DeadlockBot`)
+- Konfigurationswerte aus ENV/Secrets
+- Daten in PostgreSQL
+- explizite API-Contracts und Response-Modelle
 
-## dashboard/ Ordnerstruktur
+## Dashboard-Struktur
 
-```
-bot/dashboard/
-  auth/           OAuth, Sessions, Token-Management
-  live/           Go-Live, Embeds, Discord-Announcements
-  raids/          Raid-Dashboard, Raid-History
-  affiliate/      Affiliate-Links, Tracking
-  billing/        Stripe, Abo-Plaene, Payment-Events
-  admin/          Admin-Panel, AGB/ToS
-  core/           Templates, HTML-Helpers, Stats-Endpunkte
-  mixin.py        Haupt-Assembler (importiert alle Sub-Mixins)
-  routes_mixin.py Route-Registrierung (~159KB, alle Hauptroutes)
-  server_v2.py    aiohttp App-Factory
-  *.py (root)     Compat-Shims fuer Legacy-Imports (thin wrappers)
-```
+`bot/dashboard/` bleibt die serverseitige Dashboard-Funktionssammlung. Das Verzeichnis ist
+feature-orientiert aufgebaut:
+
+- `auth/` OAuth und Session-Handling
+- `live/` Go-Live, Embeds und Discord-Announcements
+- `raids/` Raid-Dashboard, History und OAuth-Callback-Flows
+- `affiliate/` Affiliate-Tracking und PII-bezogene Hilfen
+- `billing/` Stripe und Plan-Gating
+- `admin/` Admin-Panel und rechtliche Seiten
+- `core/` Templates, HTML- und Infrastruktur-Helpers
+- `server_v2.py` Dashboard-App-Factory
+- `mixin.py` Kompatibilitaets-Assembler fuer die Bot-Seite
+
+`bot/dashboard_service/app.py` ist der Standalone-Einstieg fuer den Dashboard-Service und
+wired die Dashboard-App nur ueber Clients/Callbacks.
+
+## Internal API
+
+`bot/internal_api/app.py` definiert die bot-interne HTTP-Schnittstelle. Diese Schicht ist die
+bevorzugte Bruecke zwischen DashboardRuntime und BotRuntime, wenn Dashboard-Funktionalitaet
+Bot-Zustand benoetigt.
+
+## Kompatibilitaet
+
+Die Bot-Seite darf temporaer Legacy-Aliasse auf den Runtime-Container behalten. Die Dashboard-Seite
+soll diese Compatibility-Schicht nicht mehr direkt benoetigen. Ziel ist, die alte Cog-zentrierte
+Verdrahtung schrittweise zu entfernen, ohne einen Big-Bang-Refactor zu erzwingen.
