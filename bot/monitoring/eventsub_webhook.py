@@ -49,6 +49,52 @@ class EventSubWebhookHandler:
         self._callbacks[sub_type] = callback
         self.log.debug("EventSub Webhook: Callback gesetzt für '%s'", sub_type)
 
+    @staticmethod
+    def _log_level_for_notification(sub_type: str) -> int:
+        important_types = {
+            "stream.online",
+            "stream.offline",
+            "channel.update",
+            "channel.raid",
+        }
+        return logging.INFO if sub_type in important_types else logging.DEBUG
+
+    @staticmethod
+    def _extract_notification_context(
+        data: dict,
+        fallback_sub_type: str = "",
+    ) -> tuple[str, str, str]:
+        payload = data.get("payload")
+        if isinstance(payload, dict) and ("event" in payload or "subscription" in payload):
+            envelope = payload
+        else:
+            envelope = data
+
+        subscription = envelope.get("subscription") or data.get("subscription") or {}
+        actual_sub_type = str(subscription.get("type") or fallback_sub_type or "").strip()
+        event = envelope.get("event") or data.get("event") or {}
+        condition = subscription.get("condition") or {}
+
+        broadcaster_id = str(
+            event.get("broadcaster_user_id")
+            or event.get("to_broadcaster_user_id")
+            or event.get("user_id")
+            or condition.get("broadcaster_user_id")
+            or condition.get("to_broadcaster_user_id")
+            or ""
+        ).strip()
+        broadcaster_login = (
+            str(
+                event.get("broadcaster_user_login")
+                or event.get("to_broadcaster_user_login")
+                or event.get("user_login")
+                or ""
+            )
+            .strip()
+            .lower()
+        )
+        return actual_sub_type, broadcaster_id, broadcaster_login
+
     def _verify_signature(
         self, message_id: str, timestamp: str, raw_body: bytes, signature: str
     ) -> bool:
@@ -239,65 +285,89 @@ class EventSubWebhookHandler:
             return web.Response(status=503)
 
         # --- 8. Notification dispatchen ---
+        actual_sub_type, broadcaster_id, broadcaster_login = self._extract_notification_context(
+            data,
+            sub_type,
+        )
+        log_level = self._log_level_for_notification(actual_sub_type)
+        self.log.log(
+            log_level,
+            "EventSub Webhook: Notification accepted type=%r broadcaster=%r id=%r msg_id=%r",
+            actual_sub_type or sub_type,
+            broadcaster_login or broadcaster_id,
+            broadcaster_id or None,
+            message_id,
+        )
         asyncio.create_task(
-            self._dispatch_notification(data, sub_type),
+            self._dispatch_notification(data, sub_type, message_id=message_id),
             name="eventsub.webhook.dispatch",
         )
         return web.Response(status=204)
 
-    async def _dispatch_notification(self, data: dict, sub_type: str) -> None:
+    async def _dispatch_notification(
+        self,
+        data: dict,
+        sub_type: str,
+        *,
+        message_id: str = "",
+    ) -> None:
         """Verarbeitet eine Notification und ruft den passenden Callback auf."""
-        # Webhook notifications come as top-level {"subscription": ..., "event": ...}
-        # while EventSub WebSocket messages use {"payload": {"subscription": ..., "event": ...}}.
+        actual_sub_type, broadcaster_id, broadcaster_login = self._extract_notification_context(
+            data,
+            sub_type,
+        )
+        log_level = self._log_level_for_notification(actual_sub_type)
+
+        callback = self._callbacks.get(actual_sub_type)
+        if not callback:
+            self.log.log(
+                logging.WARNING if log_level == logging.INFO else logging.DEBUG,
+                "EventSub Webhook: Kein Callback für type=%r broadcaster=%r id=%r msg_id=%r",
+                actual_sub_type,
+                broadcaster_login or broadcaster_id,
+                broadcaster_id or None,
+                message_id or None,
+            )
+            return
+
         payload = data.get("payload")
         if isinstance(payload, dict) and ("event" in payload or "subscription" in payload):
             envelope = payload
         else:
             envelope = data
-
-        subscription = envelope.get("subscription") or data.get("subscription") or {}
-        actual_sub_type = subscription.get("type") or sub_type
-
-        callback = self._callbacks.get(actual_sub_type)
-        if not callback:
-            self.log.debug("EventSub Webhook: Kein Callback für type=%r", actual_sub_type)
-            return
-
         event = envelope.get("event") or data.get("event") or {}
-        condition = subscription.get("condition") or {}
-
-        # Broadcaster-ID und Login aus dem Event extrahieren (je nach Sub-Type)
-        broadcaster_id = str(
-            event.get("broadcaster_user_id")
-            or event.get("to_broadcaster_user_id")
-            or event.get("user_id")
-            or condition.get("broadcaster_user_id")
-            or condition.get("to_broadcaster_user_id")
-            or ""
-        ).strip()
-        broadcaster_login = (
-            str(
-                event.get("broadcaster_user_login")
-                or event.get("to_broadcaster_user_login")
-                or event.get("user_login")
-                or ""
-            )
-            .strip()
-            .lower()
-        )
 
         if not broadcaster_id:
             self.log.debug(
-                "EventSub Webhook: Notification für type=%r ohne broadcaster_id – ignoriert",
+                "EventSub Webhook: Notification für type=%r ohne broadcaster_id – ignoriert (msg_id=%r)",
                 actual_sub_type,
+                message_id or None,
             )
             return
 
+        self.log.log(
+            log_level,
+            "EventSub Webhook: Dispatch start type=%r broadcaster=%r id=%r msg_id=%r",
+            actual_sub_type,
+            broadcaster_login or broadcaster_id,
+            broadcaster_id,
+            message_id or None,
+        )
         try:
             await callback(broadcaster_id, broadcaster_login, event)
         except Exception:
             self.log.exception(
-                "EventSub Webhook: Callback fehlgeschlagen für type=%r broadcaster=%r",
+                "EventSub Webhook: Callback fehlgeschlagen für type=%r broadcaster=%r msg_id=%r",
                 actual_sub_type,
                 broadcaster_login or broadcaster_id,
+                message_id or None,
+            )
+        else:
+            self.log.log(
+                log_level,
+                "EventSub Webhook: Dispatch completed type=%r broadcaster=%r id=%r msg_id=%r",
+                actual_sub_type,
+                broadcaster_login or broadcaster_id,
+                broadcaster_id,
+                message_id or None,
             )

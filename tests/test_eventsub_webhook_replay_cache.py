@@ -1,4 +1,9 @@
+import asyncio
+import hashlib
+import hmac
+import json
 import unittest
+from datetime import UTC, datetime
 from unittest.mock import patch
 from types import SimpleNamespace
 
@@ -78,12 +83,89 @@ class EventSubWebhookRequestValidationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.status, 403)
         self.assertTrue(any("Signatur-Verifizierung fehlgeschlagen" in entry for entry in captured.output))
 
+    async def test_stream_offline_notification_logs_accept_and_dispatch_lifecycle(self) -> None:
+        handler = EventSubWebhookHandler(secret="test-secret")
+        callback_calls: list[tuple[str, str, dict]] = []
+
+        async def _offline_callback(broadcaster_id: str, broadcaster_login: str, event: dict) -> None:
+            callback_calls.append((broadcaster_id, broadcaster_login, event))
+
+        handler.set_callback("stream.offline", _offline_callback)
+
+        body = {
+            "subscription": {
+                "type": "stream.offline",
+                "condition": {"broadcaster_user_id": "457002490"},
+            },
+            "event": {
+                "broadcaster_user_id": "457002490",
+                "broadcaster_user_login": "tolgiziusx3",
+            },
+        }
+        request = self._signed_request(
+            secret="test-secret",
+            body=body,
+            message_id="msg-stream-offline-1",
+        )
+
+        with self.assertLogs("TwitchStreams.EventSubWebhook", level="INFO") as captured:
+            response = await handler.handle_request(request)
+            await asyncio.sleep(0)
+
+        self.assertEqual(response.status, 204)
+        self.assertEqual(len(callback_calls), 1)
+        self.assertTrue(any("Notification accepted type='stream.offline'" in entry for entry in captured.output))
+        self.assertTrue(any("Dispatch start type='stream.offline'" in entry for entry in captured.output))
+        self.assertTrue(any("Dispatch completed type='stream.offline'" in entry for entry in captured.output))
+
+    async def test_stream_offline_without_callback_logs_warning(self) -> None:
+        handler = EventSubWebhookHandler(secret="test-secret")
+        body = {
+            "subscription": {
+                "type": "stream.offline",
+                "condition": {"broadcaster_user_id": "457002490"},
+            },
+            "event": {
+                "broadcaster_user_id": "457002490",
+                "broadcaster_user_login": "tolgiziusx3",
+            },
+        }
+
+        with self.assertLogs("TwitchStreams.EventSubWebhook", level="WARNING") as captured:
+            await handler._dispatch_notification(
+                body,
+                "stream.offline",
+                message_id="msg-stream-offline-missing-callback",
+            )
+
+        self.assertTrue(any("Kein Callback für type='stream.offline'" in entry for entry in captured.output))
+
     @staticmethod
     def _async_return(value):
         async def _reader():
             return value
 
         return _reader
+
+    @staticmethod
+    def _signed_request(*, secret: str, body: dict, message_id: str) -> SimpleNamespace:
+        raw_body = json.dumps(body).encode("utf-8")
+        timestamp = datetime.now(UTC).isoformat().replace("+00:00", "Z")
+        signature = hmac.new(
+            secret.encode("utf-8"),
+            message_id.encode("utf-8") + timestamp.encode("utf-8") + raw_body,
+            hashlib.sha256,
+        ).hexdigest()
+        return SimpleNamespace(
+            headers={
+                "Twitch-Eventsub-Message-Id": message_id,
+                "Twitch-Eventsub-Message-Timestamp": timestamp,
+                "Twitch-Eventsub-Message-Signature": f"sha256={signature}",
+                "Twitch-Eventsub-Message-Type": "notification",
+                "Twitch-Eventsub-Subscription-Type": "stream.offline",
+            },
+            read=EventSubWebhookRequestValidationTests._async_return(raw_body),
+        )
 
 
 if __name__ == "__main__":
