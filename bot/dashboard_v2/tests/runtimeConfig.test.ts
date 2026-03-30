@@ -57,7 +57,7 @@ test('does not treat demoMode alone as a valid demo runtime', () => {
   );
 });
 
-test('cookie-based dashboard requests avoid URL bootstrap side effects and stay same-origin', async () => {
+test('cookie-based dashboard requests stay same-origin without token bootstrapping', async () => {
   const previousWindow = globalThis.window;
   const previousFetch = globalThis.fetch;
   const location = new URL(
@@ -88,7 +88,7 @@ test('cookie-based dashboard requests avoid URL bootstrap side effects and stay 
 
   const history = {
     replaceState(_: unknown, __: string, nextUrl?: string | URL | null) {
-      throw new Error(`history.replaceState must not be called for partner_token cleanup: ${String(nextUrl ?? '')}`);
+      throw new Error(`history.replaceState must not be called during bootstrap: ${String(nextUrl ?? '')}`);
     },
   };
 

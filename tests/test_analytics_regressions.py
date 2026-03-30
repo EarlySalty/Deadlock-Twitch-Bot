@@ -13,6 +13,7 @@ from bot.analytics.api_chat_deep import _AnalyticsChatDeepMixin
 from bot.analytics.api_insights import _AnalyticsInsightsMixin
 from bot.analytics.api_overview import _AnalyticsOverviewMixin
 from bot.analytics.api_performance import _AnalyticsPerformanceMixin
+from bot.analytics.chat_social_graph_loader import _MENTION_RE
 from bot.analytics.api_raids import _AnalyticsRaidsMixin
 from bot.analytics.coaching_engine import _schedule_optimizer
 from bot.analytics.demo_data import get_audience_insights, get_overview
@@ -2354,6 +2355,20 @@ class RaidMetricsSqlRegressionTests(unittest.TestCase):
         self.assertEqual(metrics[newer_key]["plus30m"], 2)
         self.assertEqual(metrics[older_key]["plus5m"], 1)
         self.assertEqual(metrics[newer_key]["plus5m"], 1)
+
+
+class ChatSocialGraphMentionRegexRegressionTests(unittest.TestCase):
+    def test_mentions_require_a_real_boundary_and_full_handle(self) -> None:
+        valid_handle = "a" * 25
+        too_long_handle = "b" * 26
+        content = (
+            f"mail foo@bar.com prefix@embedded @{valid_handle} "
+            f"@{too_long_handle} and @ok_name"
+        )
+
+        matches = _MENTION_RE.findall(content)
+
+        self.assertEqual(matches, [valid_handle, "ok_name"])
 
 
 if __name__ == "__main__":

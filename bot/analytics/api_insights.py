@@ -20,9 +20,10 @@ from aiohttp import web
 from ..core.chat_bots import build_known_chat_bot_not_in_clause
 from ..storage import pg as storage
 from .error_utils import analytics_internal_error_response
-from .raw_chat_status import build_raw_chat_status
-from .coaching_engine import CoachingEngine
 from .engagement_metrics import EngagementInputs, calculate_engagement
+from .coaching_engine import CoachingEngine
+from .insights_monetization_loader import load_monetization_payload
+from .raw_chat_status import build_raw_chat_status
 
 log = logging.getLogger("TwitchStreams.AnalyticsV2")
 
@@ -32,6 +33,22 @@ RETENTION_LOW = 40.0   # % – below this → warn/act
 RETENTION_HIGH = 65.0  # % – above this → positive feedback
 CHAT_LOW = 5.0         # chatters/100 viewers – below this → warn/act
 CHAT_HIGH = 30.0       # chatters/100 viewers – above this → positive feedback
+
+
+def _parse_bounded_query_int(
+    request: web.Request,
+    *,
+    name: str,
+    default: int,
+    minimum: int,
+    maximum: int,
+) -> int:
+    raw_value = (request.query.get(name, str(default)) or str(default)).strip()
+    try:
+        parsed = int(raw_value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{name} must be an integer") from exc
+    return min(max(parsed, minimum), maximum)
 
 
 class _AnalyticsInsightsMixin:
@@ -587,7 +604,16 @@ class _AnalyticsInsightsMixin:
         self._require_v2_auth(request)
 
         streamer = request.query.get("streamer", "").strip() or None
-        days = min(max(int(request.query.get("days", "30")), 7), 365)
+        try:
+            days = _parse_bounded_query_int(
+                request,
+                name="days",
+                default=30,
+                minimum=7,
+                maximum=365,
+            )
+        except ValueError as exc:
+            return web.json_response({"error": str(exc)}, status=400)
         tz_requested = request.query.get("timezone", "UTC")
         target_tz, timezone_name = self._resolve_target_timezone(tz_requested)
 
@@ -940,7 +966,16 @@ class _AnalyticsInsightsMixin:
         self._require_extended_plan(request)
 
         streamer = request.query.get("streamer", "").strip()
-        days = min(max(int(request.query.get("days", "30")), 7), 365)
+        try:
+            days = _parse_bounded_query_int(
+                request,
+                name="days",
+                default=30,
+                minimum=7,
+                maximum=365,
+            )
+        except ValueError as exc:
+            return web.json_response({"error": str(exc)}, status=400)
 
         if not streamer:
             return web.json_response({"error": "Streamer required"}, status=400)
@@ -957,351 +992,27 @@ class _AnalyticsInsightsMixin:
         self._require_v2_auth(request)
         self._require_extended_plan(request)
         streamer = request.query.get("streamer", "").strip().lower()
-        days = min(max(int(request.query.get("days", "30")), 7), 90)
-
-        from datetime import datetime, timedelta
-
-        cutoff = (datetime.now(UTC) - timedelta(days=days)).isoformat()
-
-        ads: dict = {
-            "total": 0,
-            "auto": 0,
-            "manual": 0,
-            "sessions_with_ads": 0,
-            "avg_duration_s": 0.0,
-            "avg_viewer_drop_pct": None,
-            "worst_ads": [],
-        }
-        hype_train: dict = {
-            "total": 0,
-            "avg_level": 0.0,
-            "max_level": 0,
-            "avg_duration_s": 0.0,
-        }
-        bits: dict = {"total": 0, "cheer_events": 0}
-        subs: dict = {"total_events": 0, "gifted": 0}
+        try:
+            days = _parse_bounded_query_int(
+                request,
+                name="days",
+                default=30,
+                minimum=7,
+                maximum=90,
+            )
+        except ValueError as exc:
+            return web.json_response({"error": str(exc)}, status=400)
 
         try:
-            with storage.readonly_connection() as c:
-                # --- Ad Break overview ---
-                ad_agg = c.execute(
-                    """
-                    SELECT COUNT(*) AS total_ads,
-                           SUM(CASE WHEN a.is_automatic IS TRUE THEN 1 ELSE 0 END) AS auto_ads,
-                           AVG(a.duration_seconds) AS avg_duration,
-                      COUNT(DISTINCT a.session_id) AS sessions_with_ads
-                      FROM twitch_ad_break_events a
-                      LEFT JOIN twitch_stream_sessions s ON s.id = a.session_id
-                     WHERE a.started_at >= %s
-                       AND (%s = '' OR LOWER(s.streamer_login) = %s)
-                    """,
-                    (cutoff, streamer, streamer),
-                ).fetchone()
-                if ad_agg:
-                    total = int(ad_agg["total_ads"] or 0)
-                    auto = int(ad_agg["auto_ads"] or 0)
-                    ads["total"] = total
-                    ads["auto"] = auto
-                    ads["manual"] = total - auto
-                    ads["sessions_with_ads"] = int(ad_agg["sessions_with_ads"] or 0)
-                    ads["avg_duration_s"] = round(float(ad_agg["avg_duration"] or 0.0), 1)
-
-                # --- Viewer impact ---
-                ad_rows = c.execute(
-                    """
-                    SELECT a.id, a.session_id, a.started_at, a.duration_seconds, a.is_automatic,
-                           s.started_at AS session_start
-                      FROM twitch_ad_break_events a
-                      JOIN twitch_stream_sessions s ON s.id = a.session_id
-                     WHERE a.started_at >= %s
-                       AND a.session_id IS NOT NULL
-                       AND (%s = '' OR LOWER(s.streamer_login) = %s)
-                     ORDER BY a.started_at DESC
-                     LIMIT 200
-                    """,
-                    (cutoff, streamer, streamer),
-                ).fetchall()
-
-                timeline_map: dict = {}
-                if ad_rows:
-                    session_ids = list({int(r["session_id"]) for r in ad_rows if r["session_id"]})
-                    if session_ids:
-                        vrows = c.execute(
-                            """
-                            SELECT session_id, minutes_from_start, viewer_count
-                              FROM twitch_session_viewers
-                             WHERE session_id = ANY(%s)
-                             ORDER BY session_id, minutes_from_start
-                            """,
-                            (session_ids,),
-                        ).fetchall()
-                        for vr in vrows:
-                            sid = int(vr["session_id"])
-                            timeline_map.setdefault(sid, []).append(
-                                (
-                                    float(vr["minutes_from_start"] or 0),
-                                    int(vr["viewer_count"] or 0),
-                                )
-                            )
-
-                drop_pcts: list = []
-                worst_ads: list = []
-                position_buckets: dict[str, list] = {
-                    "early_0_30m": [], "mid_30_60m": [], "late_60_90m": [], "endgame_90m": []
-                }
-                duration_buckets: dict[str, list] = {
-                    "30s": [], "60s": [], "90s": [], "120s_plus": []
-                }
-                auto_drops: list = []
-                manual_drops: list = []
-                recovery_times: list = []
-                duration_recovery: dict[str, list] = {
-                    "30s": [], "60s": [], "90s": [], "120s_plus": []
-                }
-
-                for ad in ad_rows:
-                    sid = int(ad["session_id"] or 0)
-                    dur_s = float(ad["duration_seconds"] or 30)
-                    try:
-                        ad_dt = datetime.fromisoformat(str(ad["started_at"]).replace("Z", "+00:00"))
-                        sess_dt = datetime.fromisoformat(
-                            str(ad["session_start"]).replace("Z", "+00:00")
-                        )
-                        min_into = (ad_dt - sess_dt).total_seconds() / 60.0
-                    except Exception:
-                        continue
-                    tl = timeline_map.get(sid, [])
-                    if not tl:
-                        continue
-                    dur_min = dur_s / 60.0
-                    pre = [v for m, v in tl if (min_into - 3) <= m < min_into]
-                    post_start = min_into + dur_min
-                    post = [v for m, v in tl if post_start <= m < (post_start + 2)]
-                    if not pre or not post:
-                        continue
-                    pre_avg = sum(pre) / len(pre)
-                    if pre_avg <= 0:
-                        continue
-                    drop = (pre_avg - sum(post) / len(post)) / pre_avg * 100.0
-                    drop_pcts.append(drop)
-
-                    # Recovery time: how many minutes until viewer count returns to pre-ad level
-                    recovery_min = None
-                    for m, v in sorted(tl, key=lambda x: x[0]):
-                        if m > post_start and v >= pre_avg * 0.95:
-                            recovery_min = round(m - post_start, 1)
-                            break
-                    if recovery_min is not None:
-                        recovery_times.append(recovery_min)
-                        # Also bucket by duration
-                        dur_key = "30s" if dur_s <= 35 else "60s" if dur_s <= 65 else "90s" if dur_s <= 100 else "120s_plus"
-                        duration_recovery[dur_key].append(recovery_min)
-
-                    worst_ads.append(
-                        {
-                            "started_at": str(ad["started_at"] or "")[:16],
-                            "duration_s": int(dur_s),
-                            "drop_pct": round(drop, 1),
-                            "is_automatic": bool(ad["is_automatic"]),
-                            "min_into_stream": round(min_into, 1),
-                            "recovery_min": recovery_min,
-                        }
-                    )
-
-                    # Position bucketing
-                    if min_into < 30:
-                        position_buckets["early_0_30m"].append(drop)
-                    elif min_into < 60:
-                        position_buckets["mid_30_60m"].append(drop)
-                    elif min_into < 90:
-                        position_buckets["late_60_90m"].append(drop)
-                    else:
-                        position_buckets["endgame_90m"].append(drop)
-
-                    # Duration bucketing
-                    if dur_s <= 35:
-                        duration_buckets["30s"].append(drop)
-                    elif dur_s <= 65:
-                        duration_buckets["60s"].append(drop)
-                    elif dur_s <= 100:
-                        duration_buckets["90s"].append(drop)
-                    else:
-                        duration_buckets["120s_plus"].append(drop)
-
-                    # Auto vs manual
-                    if ad["is_automatic"]:
-                        auto_drops.append(drop)
-                    else:
-                        manual_drops.append(drop)
-
-                def _avg(lst: list) -> float | None:
-                    return round(sum(lst) / len(lst), 1) if lst else None
-
-                if drop_pcts:
-                    ads["avg_viewer_drop_pct"] = round(sum(drop_pcts) / len(drop_pcts), 1)
-                worst_ads.sort(key=lambda x: x["drop_pct"], reverse=True)
-                ads["worst_ads"] = worst_ads[:5]
-
-                # Position impact
-                ads["position_impact"] = {
-                    bucket: {"avg_drop": _avg(drops), "count": len(drops)}
-                    for bucket, drops in position_buckets.items()
-                }
-
-                # Duration impact
-                ads["duration_impact"] = {
-                    bucket: {"avg_drop": _avg(drops), "count": len(drops)}
-                    for bucket, drops in duration_buckets.items()
-                }
-
-                # Auto vs manual comparison
-                ads["auto_vs_manual"] = {
-                    "auto_avg_drop": _avg(auto_drops),
-                    "manual_avg_drop": _avg(manual_drops),
-                    "auto_count": len(auto_drops),
-                    "manual_count": len(manual_drops),
-                }
-
-                # Best ad time recommendation
-                position_avgs = {
-                    k: sum(v) / len(v) for k, v in position_buckets.items() if v
-                }
-                if position_avgs:
-                    best_bucket = min(position_avgs, key=position_avgs.get)
-                    bucket_labels = {
-                        "early_0_30m": "ersten 30 Min",
-                        "mid_30_60m": "Min 30-60",
-                        "late_60_90m": "Min 60-90",
-                        "endgame_90m": "nach Min 90",
-                    }
-                    worst_bucket = max(position_avgs, key=position_avgs.get)
-                    ads["best_ad_time"] = (
-                        f"Nach {bucket_labels.get(best_bucket, best_bucket)} "
-                        f"(Ø -{position_avgs[best_bucket]:.1f}% statt "
-                        f"-{position_avgs[worst_bucket]:.1f}% {bucket_labels.get(worst_bucket, worst_bucket)})"
-                    )
-                else:
-                    ads["best_ad_time"] = None
-
-                # Recovery time stats
-                ads["avg_recovery_min"] = round(sum(recovery_times) / len(recovery_times), 1) if recovery_times else None
-                ads["recovery_by_duration"] = {
-                    bucket: {"avg_recovery_min": round(sum(r) / len(r), 1) if r else None, "count": len(r)}
-                    for bucket, r in duration_recovery.items()
-                }
-
-                # Generate ad strategy recommendation
-                recommendations: list[str] = []
-                # Duration recommendation
-                dur_avgs = {k: sum(v) / len(v) for k, v in duration_buckets.items() if v}
-                if dur_avgs:
-                    best_dur = min(dur_avgs, key=dur_avgs.get)
-                    dur_labels = {"30s": "30s", "60s": "60s", "90s": "90s", "120s_plus": "120s+"}
-                    recommendations.append(
-                        f"{dur_labels[best_dur]}-Ads verursachen den geringsten Drop (Ø {dur_avgs[best_dur]:.1f}%)"
-                    )
-                # Auto vs manual
-                if auto_drops and manual_drops:
-                    auto_avg = sum(auto_drops) / len(auto_drops)
-                    manual_avg = sum(manual_drops) / len(manual_drops)
-                    if manual_avg < auto_avg * 0.7:
-                        recommendations.append(
-                            f"Manuelle Ads verlieren {((auto_avg - manual_avg) / auto_avg * 100):.0f}% weniger Viewer als automatische"
-                        )
-                # Timing recommendation
-                if position_avgs:
-                    best_pos = min(position_avgs, key=position_avgs.get)
-                    pos_labels = {
-                        "early_0_30m": "in den ersten 30 Min",
-                        "mid_30_60m": "zwischen Min 30-60",
-                        "late_60_90m": "zwischen Min 60-90",
-                        "endgame_90m": "nach Min 90",
-                    }
-                    recommendations.append(
-                        f"Beste Ad-Zeit: {pos_labels.get(best_pos, best_pos)} (Ø {position_avgs[best_pos]:.1f}% Drop)"
-                    )
-                # Recovery insight
-                if recovery_times:
-                    avg_rec = sum(recovery_times) / len(recovery_times)
-                    recommendations.append(f"Ø Recovery-Zeit: {avg_rec:.1f} Minuten nach Ad-Ende")
-                ads["recommendations"] = recommendations
-
-                # --- Hype Train ---
-                try:
-                    ht = c.execute(
-                        """
-                        SELECT COUNT(*) AS total, AVG(h.level) AS avg_level,
-                               MAX(h.level) AS max_level, AVG(h.duration_seconds) AS avg_dur
-                          FROM twitch_hype_train_events h
-                          LEFT JOIN twitch_stream_sessions s ON s.id = h.session_id
-                         WHERE h.started_at >= %s
-                           AND h.ended_at IS NOT NULL
-                           AND (%s = '' OR LOWER(s.streamer_login) = %s)
-                        """,
-                        (cutoff, streamer, streamer),
-                    ).fetchone()
-                    if ht:
-                        hype_train = {
-                            "total": int(ht["total"] or 0),
-                            "avg_level": round(float(ht["avg_level"] or 0), 1),
-                            "max_level": int(ht["max_level"] or 0),
-                            "avg_duration_s": round(float(ht["avg_dur"] or 0), 0),
-                        }
-                except Exception:
-                    log.debug("Hype train query failed", exc_info=True)
-
-                # --- Bits ---
-                try:
-                    br = c.execute(
-                        """
-                        SELECT SUM(amount) AS total, COUNT(*) AS events
-                          FROM twitch_bits_events
-                         WHERE received_at >= %s
-                           AND (%s = '' OR LOWER(streamer_login) = %s)
-                        """,
-                        (cutoff, streamer, streamer),
-                    ).fetchone()
-                    if br:
-                        bits = {
-                            "total": int(br["total"] or 0),
-                            "cheer_events": int(br["events"] or 0),
-                        }
-                except Exception:
-                    log.debug("Bits query failed", exc_info=True)
-
-                # --- Subs ---
-                try:
-                    sr = c.execute(
-                        """
-                        SELECT COUNT(*) AS total,
-                               SUM(CASE WHEN is_gift=1 THEN 1 ELSE 0 END) AS gifted
-                          FROM twitch_subscription_events
-                         WHERE received_at >= %s
-                           AND (%s = '' OR LOWER(streamer_login) = %s)
-                        """,
-                        (cutoff, streamer, streamer),
-                    ).fetchone()
-                    if sr:
-                        subs = {
-                            "total_events": int(sr["total"] or 0),
-                            "gifted": int(sr["gifted"] or 0),
-                        }
-                except Exception:
-                    log.debug("Subs query failed", exc_info=True)
-
+            payload = await asyncio.to_thread(
+                load_monetization_payload,
+                streamer=streamer,
+                days=days,
+            )
+            return web.json_response(payload)
         except Exception as exc:
             log.exception("Error in monetization API")
             return analytics_internal_error_response()
-
-        return web.json_response(
-            {
-                "ads": ads,
-                "hype_train": hype_train,
-                "bits": bits,
-                "subs": subs,
-                "window_days": days,
-            }
-        )
 
     async def _api_v2_ads_schedule(self, request: web.Request) -> web.Response:
         """Ad schedule snapshot data (from twitch_ads_schedule_snapshot)."""

@@ -1,10 +1,14 @@
 from __future__ import annotations
 
+import json
 import unittest
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 from bot.analytics.api_admin import _AnalyticsAdminMixin
+from bot.analytics.api_chat_deep import _AnalyticsChatDeepMixin
+from bot.analytics.api_insights import _AnalyticsInsightsMixin
+from bot.analytics.api_performance import _AnalyticsPerformanceMixin
 from bot.base import TwitchBaseCog
 from bot.dashboard.mixin import TwitchDashboardMixin
 from bot.monitoring.monitoring import TwitchMonitoringMixin
@@ -68,6 +72,43 @@ class _DummyAdminOffload(_AnalyticsAdminMixin):
 
     def _get_discord_admin_session(self, _request):
         return {"discord_user_id": "42"}
+
+
+class _DummyAnalyticsRequest(SimpleNamespace):
+    def __init__(self, query: dict[str, str]) -> None:
+        super().__init__(
+            query=query,
+            headers={},
+            path="/twitch/api/v2/test",
+            host="dashboard.example",
+            remote="203.0.113.10",
+            transport=None,
+            rel_url=SimpleNamespace(path_qs="/twitch/api/v2/test"),
+        )
+
+
+class _DummyPerformanceOffload(_AnalyticsPerformanceMixin):
+    def _require_v2_auth(self, _request):
+        return None
+
+    def _require_extended_plan(self, _request):
+        return None
+
+
+class _DummyInsightsOffload(_AnalyticsInsightsMixin):
+    def _require_v2_auth(self, _request):
+        return None
+
+    def _require_extended_plan(self, _request):
+        return None
+
+
+class _DummyChatDeepOffload(_AnalyticsChatDeepMixin):
+    def _require_v2_auth(self, _request):
+        return None
+
+    def _require_extended_plan(self, _request):
+        return None
 
 
 class AsyncDbOffloadingRegressionTests(unittest.IsolatedAsyncioTestCase):
@@ -331,6 +372,126 @@ class AsyncDbOffloadingRegressionTests(unittest.IsolatedAsyncioTestCase):
         mocked_loader.assert_called_once_with("alpha")
         mocked_to_thread.assert_awaited_once()
         self.assertIs(mocked_to_thread.await_args.args[0], mocked_loader)
+
+    async def test_performance_analytics_db_endpoints_are_offloaded_to_thread(self) -> None:
+        handler = _DummyPerformanceOffload()
+        cases = [
+            ("_api_v2_title_performance", "_load_title_performance_payload_sync", {"streamer": "Alpha", "days": "30", "limit": "20"}, {"titles": []}),
+            ("_api_v2_rankings", "_load_rankings_payload_sync", {"metric": "viewers", "days": "30", "limit": "20"}, []),
+            ("_api_v2_category_comparison", "_load_category_comparison_payload_sync", {"streamer": "Alpha", "days": "30"}, {"yourStats": {}}),
+            ("_api_v2_viewer_timeline", "_load_viewer_timeline_payload_sync", {"streamer": "Alpha", "days": "7"}, []),
+            ("_api_v2_category_leaderboard", "_load_category_leaderboard_payload_sync", {"streamer": "Alpha", "days": "30", "limit": "25"}, {"leaderboard": []}),
+            ("_api_v2_category_timings", "_load_category_timings_payload_sync", {"days": "30", "source": "category"}, {"hourly": [], "weekly": []}),
+            ("_api_v2_category_activity_series", "_load_category_activity_series_payload_sync", {"days": "30"}, {"hourly": [], "weekly": []}),
+            ("_api_v2_retention_curve", "_load_retention_curve_payload_sync", {"streamer": "Alpha", "days": "30"}, {"retention_curve": [], "drop_events": [], "sessions_used": 0}),
+        ]
+
+        async def _to_thread(func, /, *args, **kwargs):
+            return func(*args, **kwargs)
+
+        for endpoint_name, loader_name, query, payload in cases:
+            request = _DummyAnalyticsRequest(query)
+            with self.subTest(endpoint=endpoint_name), patch.object(
+                handler,
+                loader_name,
+                return_value=payload,
+            ) as mocked_loader, patch(
+                "bot.analytics.api_performance.asyncio.to_thread",
+                new=AsyncMock(side_effect=_to_thread),
+            ) as mocked_to_thread:
+                response = await getattr(handler, endpoint_name)(request)
+
+            self.assertEqual(response.status, 200)
+            mocked_loader.assert_called_once()
+            mocked_to_thread.assert_awaited_once()
+            self.assertIs(mocked_to_thread.await_args.args[0], mocked_loader)
+
+    async def test_insights_monetization_db_endpoint_is_offloaded_to_thread(self) -> None:
+        handler = _DummyInsightsOffload()
+        request = _DummyAnalyticsRequest({"streamer": "alpha", "days": "30"})
+        payload = {"ads": {}, "hype_train": {}, "bits": {}, "subs": {}, "window_days": 30}
+
+        with patch(
+            "bot.analytics.api_insights.load_monetization_payload",
+            return_value=payload,
+        ) as mocked_loader, patch(
+            "bot.analytics.api_insights.asyncio.to_thread",
+            new=AsyncMock(side_effect=lambda func, *args, **kwargs: func(*args, **kwargs)),
+        ) as mocked_to_thread:
+            response = await handler._api_v2_monetization(request)
+
+        self.assertEqual(response.status, 200)
+        mocked_loader.assert_called_once_with(streamer="alpha", days=30)
+        mocked_to_thread.assert_awaited_once()
+        self.assertIs(mocked_to_thread.await_args.args[0], mocked_loader)
+
+    async def test_chat_social_graph_db_endpoint_is_offloaded_to_thread(self) -> None:
+        handler = _DummyChatDeepOffload()
+        request = _DummyAnalyticsRequest({"streamer": "alpha", "days": "30"})
+        payload = {"totalMentions": 0, "uniqueMentioners": 0, "uniqueMentioned": 0, "hubs": [], "topPairs": [], "mentionDistribution": {}, "rawChatStatus": {}}
+
+        with patch(
+            "bot.analytics.api_chat_deep.load_chat_social_graph_payload",
+            return_value=payload,
+        ) as mocked_loader, patch(
+            "bot.analytics.api_chat_deep.asyncio.to_thread",
+            new=AsyncMock(side_effect=lambda func, *args, **kwargs: func(*args, **kwargs)),
+        ) as mocked_to_thread:
+            response = await handler._api_v2_chat_social_graph(request)
+
+        self.assertEqual(response.status, 200)
+        mocked_loader.assert_called_once_with(streamer="alpha", days=30)
+        mocked_to_thread.assert_awaited_once()
+        self.assertIs(mocked_to_thread.await_args.args[0], mocked_loader)
+
+    async def test_performance_endpoints_reject_invalid_integer_query_params(self) -> None:
+        handler = _DummyPerformanceOffload()
+        cases = [
+            ("_api_v2_tag_analysis_extended", {"streamer": "Alpha", "days": "abc"}),
+            ("_api_v2_tag_analysis_extended", {"streamer": "Alpha", "limit": "abc"}),
+            ("_api_v2_title_performance", {"streamer": "Alpha", "days": "abc"}),
+            ("_api_v2_title_performance", {"streamer": "Alpha", "limit": "abc"}),
+            ("_api_v2_rankings", {"metric": "viewers", "days": "abc"}),
+            ("_api_v2_rankings", {"metric": "viewers", "limit": "abc"}),
+            ("_api_v2_category_comparison", {"streamer": "Alpha", "days": "abc"}),
+            ("_api_v2_category_timings", {"days": "abc"}),
+            ("_api_v2_category_activity_series", {"days": "abc"}),
+            ("_api_v2_retention_curve", {"streamer": "Alpha", "days": "abc"}),
+        ]
+
+        for endpoint_name, query in cases:
+            request = _DummyAnalyticsRequest(query)
+            with self.subTest(endpoint=endpoint_name, query=query), patch(
+                "bot.analytics.api_performance.asyncio.to_thread",
+                new=AsyncMock(),
+            ) as mocked_to_thread:
+                response = await getattr(handler, endpoint_name)(request)
+
+            self.assertEqual(response.status, 400)
+            payload = json.loads(response.body.decode("utf-8"))
+            self.assertIn("must be an integer", payload["error"])
+            mocked_to_thread.assert_not_awaited()
+
+    async def test_insights_endpoints_reject_invalid_integer_query_params(self) -> None:
+        handler = _DummyInsightsOffload()
+        cases = [
+            ("_api_v2_chat_analytics", {"streamer": "alpha", "days": "abc"}),
+            ("_api_v2_coaching", {"streamer": "alpha", "days": "abc"}),
+            ("_api_v2_monetization", {"streamer": "alpha", "days": "abc"}),
+        ]
+
+        for endpoint_name, query in cases:
+            request = _DummyAnalyticsRequest(query)
+            with self.subTest(endpoint=endpoint_name, query=query), patch(
+                "bot.analytics.api_insights.asyncio.to_thread",
+                new=AsyncMock(),
+            ) as mocked_to_thread:
+                response = await getattr(handler, endpoint_name)(request)
+
+            self.assertEqual(response.status, 400)
+            payload = json.loads(response.body.decode("utf-8"))
+            self.assertEqual(payload["error"], "days must be an integer")
+            mocked_to_thread.assert_not_awaited()
 
 
 if __name__ == "__main__":

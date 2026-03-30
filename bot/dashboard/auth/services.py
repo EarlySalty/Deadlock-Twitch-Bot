@@ -383,7 +383,6 @@ class PartnerLoginTokenService:
         if not state_id or issued_at <= 0 or expires_at <= current or expires_at <= issued_at:
             return None
 
-        cached_state = state_cache.pop(state_id, None)
         try:
             persisted_state = self._owner._dashboard_auth_state_repo().consume_partner_login_state(
                 state_id,
@@ -391,8 +390,9 @@ class PartnerLoginTokenService:
             )
         except Exception as exc:
             log.warning("Could not load persisted partner login state %s: %s", state_id, exc)
-            persisted_state = None
-        state_data = persisted_state if isinstance(persisted_state, dict) else cached_state
+            return None
+        state_cache.pop(state_id, None)
+        state_data = persisted_state if isinstance(persisted_state, dict) else None
         if not isinstance(state_data, dict):
             return None
 
@@ -408,32 +408,15 @@ class PartnerLoginTokenService:
             "expires_at": expires_at,
         }
 
-    def is_issue_request_authorized(self, request: web.Request) -> bool:
+    def issue_request_authorization_mode(self, request: web.Request) -> str | None:
         if bool(getattr(self._owner, "_noauth", False)):
-            return True
-
-        auth_level_getter = getattr(self._owner, "_get_auth_level", None)
-        if callable(auth_level_getter):
-            try:
-                auth_level = str(auth_level_getter(request) or "").strip().lower()
-            except Exception:
-                auth_level = ""
-            if auth_level in {"admin", "localhost"}:
-                return True
+            return "noauth"
 
         is_local_request = getattr(self._owner, "_is_local_request", None)
         if callable(is_local_request):
             try:
                 if bool(is_local_request(request)):
-                    return True
-            except Exception:
-                pass
-
-        is_discord_admin_request = getattr(self._owner, "_is_discord_admin_request", None)
-        if callable(is_discord_admin_request):
-            try:
-                if bool(is_discord_admin_request(request)):
-                    return True
+                    return "localhost"
             except Exception:
                 pass
 
@@ -443,10 +426,32 @@ class PartnerLoginTokenService:
         if configured_admin_token and admin_header:
             try:
                 if secrets.compare_digest(admin_header, configured_admin_token):
-                    return True
+                    return "admin_header"
             except Exception:
                 pass
-        return False
+
+        is_discord_admin_request = getattr(self._owner, "_is_discord_admin_request", None)
+        if callable(is_discord_admin_request):
+            try:
+                if bool(is_discord_admin_request(request)):
+                    return "admin_session"
+            except Exception:
+                pass
+
+        auth_level_getter = getattr(self._owner, "_get_auth_level", None)
+        if callable(auth_level_getter):
+            try:
+                auth_level = str(auth_level_getter(request) or "").strip().lower()
+            except Exception:
+                auth_level = ""
+            if auth_level == "localhost":
+                return "localhost"
+            if auth_level == "admin":
+                return "admin_session"
+        return None
+
+    def is_issue_request_authorized(self, request: web.Request) -> bool:
+        return self.issue_request_authorization_mode(request) is not None
 
     def _state_cache(self) -> Any:
         return self._owner._dashboard_auth_state_cache("_partner_login_states")

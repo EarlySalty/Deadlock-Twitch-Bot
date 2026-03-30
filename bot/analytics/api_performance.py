@@ -45,6 +45,22 @@ _MONTH_LABELS = [
 _WEEKDAY_LABELS = ["So", "Mo", "Di", "Mi", "Do", "Fr", "Sa"]
 
 
+def _parse_bounded_query_int(
+    request: web.Request,
+    *,
+    name: str,
+    default: int,
+    minimum: int,
+    maximum: int,
+) -> int:
+    raw_value = (request.query.get(name, str(default)) or str(default)).strip()
+    try:
+        parsed = int(raw_value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{name} must be an integer") from exc
+    return min(max(parsed, minimum), maximum)
+
+
 def _load_hourly_heatmap_payload(*, streamer: str | None, days: int) -> list[dict[str, Any]]:
     since_date = (datetime.now(UTC) - timedelta(days=days)).isoformat()
     streamer_login = streamer.lower() if streamer else None
@@ -333,7 +349,16 @@ class _AnalyticsPerformanceMixin:
         self._require_v2_auth(request)
 
         streamer = request.query.get("streamer", "").strip() or None
-        days = min(max(int(request.query.get("days", "30")), 7), 365)
+        try:
+            days = _parse_bounded_query_int(
+                request,
+                name="days",
+                default=30,
+                minimum=7,
+                maximum=365,
+            )
+        except ValueError as exc:
+            return web.json_response({"error": str(exc)}, status=400)
 
         try:
             data = await asyncio.to_thread(
@@ -351,7 +376,16 @@ class _AnalyticsPerformanceMixin:
         self._require_v2_auth(request)
 
         streamer = request.query.get("streamer", "").strip() or None
-        days = min(max(int(request.query.get("days", "365")), 30), 365)
+        try:
+            days = _parse_bounded_query_int(
+                request,
+                name="days",
+                default=365,
+                minimum=30,
+                maximum=365,
+            )
+        except ValueError as exc:
+            return web.json_response({"error": str(exc)}, status=400)
 
         try:
             data = await asyncio.to_thread(
@@ -369,7 +403,16 @@ class _AnalyticsPerformanceMixin:
         self._require_v2_auth(request)
 
         streamer = request.query.get("streamer", "").strip() or None
-        months = min(max(int(request.query.get("months", "12")), 1), 24)
+        try:
+            months = _parse_bounded_query_int(
+                request,
+                name="months",
+                default=12,
+                minimum=1,
+                maximum=24,
+            )
+        except ValueError as exc:
+            return web.json_response({"error": str(exc)}, status=400)
 
         try:
             data = await asyncio.to_thread(
@@ -387,7 +430,16 @@ class _AnalyticsPerformanceMixin:
         self._require_v2_auth(request)
 
         streamer = request.query.get("streamer", "").strip() or None
-        days = min(max(int(request.query.get("days", "30")), 7), 365)
+        try:
+            days = _parse_bounded_query_int(
+                request,
+                name="days",
+                default=30,
+                minimum=7,
+                maximum=365,
+            )
+        except ValueError as exc:
+            return web.json_response({"error": str(exc)}, status=400)
 
         try:
             data = await asyncio.to_thread(
@@ -546,8 +598,23 @@ class _AnalyticsPerformanceMixin:
         self._require_extended_plan(request)
 
         streamer = request.query.get("streamer", "").strip() or None
-        days = min(max(int(request.query.get("days", "30")), 7), 365)
-        limit = min(max(int(request.query.get("limit", "20")), 5), 50)
+        try:
+            days = _parse_bounded_query_int(
+                request,
+                name="days",
+                default=30,
+                minimum=7,
+                maximum=365,
+            )
+            limit = _parse_bounded_query_int(
+                request,
+                name="limit",
+                default=20,
+                minimum=5,
+                maximum=50,
+            )
+        except ValueError as exc:
+            return web.json_response({"error": str(exc)}, status=400)
 
         try:
             data = await asyncio.to_thread(
@@ -561,186 +628,433 @@ class _AnalyticsPerformanceMixin:
             log.exception("Error in tag analysis extended API")
             return analytics_internal_error_response()
 
+    @staticmethod
+    def _extract_title_keywords(title: str) -> list[str]:
+        """Extract a small set of meaningful keywords from a stream title."""
+        import re
+
+        stop_words = {
+            "der",
+            "die",
+            "das",
+            "und",
+            "oder",
+            "mit",
+            "fur",
+            "the",
+            "and",
+            "or",
+            "with",
+            "for",
+            "to",
+            "a",
+            "an",
+        }
+        words = re.findall(r"\b\w{3,}\b", title.lower())
+        keywords = [word.capitalize() for word in words if word not in stop_words]
+        return keywords[:5]
+
+    def _load_title_performance_payload_sync(
+        self,
+        *,
+        streamer: str,
+        days: int,
+        limit: int,
+    ) -> dict[str, Any]:
+        since_date = (datetime.now(UTC) - timedelta(days=days)).isoformat()
+        streamer_login = streamer.lower()
+        with storage.readonly_connection() as conn:
+            rows = conn.execute(
+                """
+                SELECT
+                    s.stream_title,
+                    COUNT(*) as usage_count,
+                    AVG(s.avg_viewers) as avg_viewers,
+                    AVG(s.retention_10m) as avg_retention,
+                    AVG(CASE WHEN s.follower_delta IS NOT NULL
+                         AND NOT (s.followers_end = 0 AND s.followers_start > 0)
+                         THEN s.follower_delta ELSE NULL END) as avg_followers,
+                    MAX(s.peak_viewers) as peak_viewers
+                FROM twitch_stream_sessions s
+                WHERE s.started_at >= %s AND LOWER(s.streamer_login) = %s
+                  AND s.ended_at IS NOT NULL AND s.stream_title IS NOT NULL AND s.stream_title != ''
+                GROUP BY s.stream_title
+                ORDER BY avg_viewers DESC
+                LIMIT %s
+            """,
+                (since_date, streamer_login, limit),
+            ).fetchall()
+
+            result = [
+                {
+                    "title": row[0] or "",
+                    "usageCount": row[1],
+                    "avgViewers": round(float(row[2]), 1) if row[2] else 0,
+                    "avgRetention10m": round(float(row[3]) * 100, 1) if row[3] else 0,
+                    "avgFollowerGain": round(float(row[4]), 1) if row[4] else 0,
+                    "peakViewers": int(row[5]) if row[5] else 0,
+                    "keywords": self._extract_title_keywords(row[0] or ""),
+                }
+                for row in rows
+            ]
+
+            peer_group = self._get_peer_group_stats(conn, streamer_login, since_date)
+            peer_benchmark = None
+            if peer_group:
+                peer_benchmark = {
+                    "avgViewers": peer_group["peerAvg"]["avgViewers"],
+                    "retention10m": peer_group["peerAvg"]["retention10m"],
+                }
+
+        return {
+            "titles": result,
+            "peerBenchmark": peer_benchmark,
+        }
+
     async def _api_v2_title_performance(self, request: web.Request) -> web.Response:
         """Get stream title performance analysis."""
         self._require_v2_auth(request)
         self._require_extended_plan(request)
 
         streamer = request.query.get("streamer", "").strip() or None
-        days = min(max(int(request.query.get("days", "30")), 7), 365)
-        limit = min(max(int(request.query.get("limit", "20")), 5), 50)
+        try:
+            days = _parse_bounded_query_int(
+                request,
+                name="days",
+                default=30,
+                minimum=7,
+                maximum=365,
+            )
+            limit = _parse_bounded_query_int(
+                request,
+                name="limit",
+                default=20,
+                minimum=5,
+                maximum=50,
+            )
+        except ValueError as exc:
+            return web.json_response({"error": str(exc)}, status=400)
 
         if not streamer:
             return web.json_response({"error": "Streamer required"}, status=400)
 
         try:
-            with storage.readonly_connection() as conn:
-                since_date = (datetime.now(UTC) - timedelta(days=days)).isoformat()
-
-                rows = conn.execute(
-                    """
-                    SELECT
-                        s.stream_title,
-                        COUNT(*) as usage_count,
-                        AVG(s.avg_viewers) as avg_viewers,
-                        AVG(s.retention_10m) as avg_retention,
-                        AVG(CASE WHEN s.follower_delta IS NOT NULL
-                             AND NOT (s.followers_end = 0 AND s.followers_start > 0)
-                             THEN s.follower_delta ELSE NULL END) as avg_followers,
-                        MAX(s.peak_viewers) as peak_viewers
-                    FROM twitch_stream_sessions s
-                    WHERE s.started_at >= %s AND LOWER(s.streamer_login) = %s
-                      AND s.ended_at IS NOT NULL AND s.stream_title IS NOT NULL AND s.stream_title != ''
-                    GROUP BY s.stream_title
-                    ORDER BY avg_viewers DESC
-                    LIMIT %s
-                """,
-                    (since_date, streamer.lower(), limit),
-                ).fetchall()
-
-                def extract_keywords(title: str) -> list[str]:
-                    """Extract meaningful keywords from title."""
-                    import re
-
-                    # Remove common words and punctuation
-                    stop_words = {
-                        "der",
-                        "die",
-                        "das",
-                        "und",
-                        "oder",
-                        "mit",
-                        "fur",
-                        "the",
-                        "and",
-                        "or",
-                        "with",
-                        "for",
-                        "to",
-                        "a",
-                        "an",
-                    }
-                    words = re.findall(r"\b\w{3,}\b", title.lower())
-                    keywords = [w.capitalize() for w in words if w not in stop_words]
-                    return keywords[:5]  # Max 5 keywords
-
-                result = [
-                    {
-                        "title": row[0] or "",
-                        "usageCount": row[1],
-                        "avgViewers": round(float(row[2]), 1) if row[2] else 0,
-                        "avgRetention10m": round(float(row[3]) * 100, 1) if row[3] else 0,
-                        "avgFollowerGain": round(float(row[4]), 1) if row[4] else 0,
-                        "peakViewers": int(row[5]) if row[5] else 0,
-                        "keywords": extract_keywords(row[0] or ""),
-                    }
-                    for row in rows
-                ]
-
-                # Peer group benchmark for title comparison
-                peer_group = self._get_peer_group_stats(conn, streamer, since_date)
-                peer_benchmark = None
-                if peer_group:
-                    peer_benchmark = {
-                        "avgViewers": peer_group["peerAvg"]["avgViewers"],
-                        "retention10m": peer_group["peerAvg"]["retention10m"],
-                    }
-
-                return web.json_response({
-                    "titles": result,
-                    "peerBenchmark": peer_benchmark,
-                })
+            payload = await asyncio.to_thread(
+                self._load_title_performance_payload_sync,
+                streamer=streamer,
+                days=days,
+                limit=limit,
+            )
+            return web.json_response(payload)
         except Exception as exc:
             log.exception("Error in title performance API")
             return analytics_internal_error_response()
+
+    def _load_rankings_payload_sync(
+        self,
+        *,
+        metric: str,
+        days: int,
+        limit: int,
+        threshold: float | None,
+    ) -> list[dict[str, Any]]:
+        having_ext = " AND AVG(s.avg_viewers) <= %s" if threshold is not None else ""
+        since_date = (datetime.now(UTC) - timedelta(days=days)).isoformat()
+        with storage.readonly_connection() as conn:
+            if metric == "retention":
+                ranking_sql = f"""
+                SELECT
+                    s.streamer_login,
+                    AVG(s.retention_10m) as value
+                FROM twitch_stream_sessions s
+                WHERE s.started_at >= %s AND s.ended_at IS NOT NULL
+                GROUP BY s.streamer_login
+                HAVING COUNT(*) >= 3{having_ext}
+                ORDER BY value DESC
+                LIMIT %s
+                """
+            elif metric == "growth":
+                ranking_sql = f"""
+                SELECT
+                    s.streamer_login,
+                    SUM(CASE WHEN s.follower_delta IS NOT NULL
+                         AND NOT (s.followers_end = 0 AND s.followers_start > 0)
+                         THEN s.follower_delta ELSE 0 END) as value
+                FROM twitch_stream_sessions s
+                WHERE s.started_at >= %s AND s.ended_at IS NOT NULL
+                GROUP BY s.streamer_login
+                HAVING COUNT(*) >= 3{having_ext}
+                ORDER BY value DESC
+                LIMIT %s
+                """
+            else:
+                metric = "viewers"
+                ranking_sql = f"""
+                SELECT
+                    s.streamer_login,
+                    AVG(s.avg_viewers) as value
+                FROM twitch_stream_sessions s
+                WHERE s.started_at >= %s AND s.ended_at IS NOT NULL
+                GROUP BY s.streamer_login
+                HAVING COUNT(*) >= 3{having_ext}
+                ORDER BY value DESC
+                LIMIT %s
+                """
+
+            params: list[Any] = [since_date]
+            if threshold is not None:
+                params.append(threshold)
+            params.append(limit)
+            rows = conn.execute(ranking_sql, tuple(params)).fetchall()
+
+        return [
+            {
+                "rank": index + 1,
+                "login": row[0],
+                "value": (float(row[1]) * 100 if metric == "retention" else float(row[1]))
+                if row[1]
+                else 0,
+                "trend": "same",
+                "trendValue": 0,
+            }
+            for index, row in enumerate(rows)
+        ]
 
     async def _api_v2_rankings(self, request: web.Request) -> web.Response:
         """Get streamer rankings."""
         self._require_v2_auth(request)
 
         metric = request.query.get("metric", "viewers")
-        days = min(max(int(request.query.get("days", "30")), 7), 365)
-        limit = min(max(int(request.query.get("limit", "20")), 5), 50)
+        try:
+            days = _parse_bounded_query_int(
+                request,
+                name="days",
+                default=30,
+                minimum=7,
+                maximum=365,
+            )
+            limit = _parse_bounded_query_int(
+                request,
+                name="limit",
+                default=20,
+                minimum=5,
+                maximum=50,
+            )
+        except ValueError as exc:
+            return web.json_response({"error": str(exc)}, status=400)
         exclude_external = request.query.get("exclude_external", "0") == "1"
         threshold = EXTERNAL_REACH_AVG_THRESHOLD if exclude_external else None
 
-        # Optionally append a second HAVING condition to filter external-reach streamers.
-        having_ext = " AND AVG(s.avg_viewers) <= %s" if threshold is not None else ""
-
         try:
-            with storage.readonly_connection() as conn:
-                since_date = (datetime.now(UTC) - timedelta(days=days)).isoformat()
-
-                if metric == "retention":
-                    ranking_sql = f"""
-                    SELECT
-                        s.streamer_login,
-                        AVG(s.retention_10m) as value
-                    FROM twitch_stream_sessions s
-                    WHERE s.started_at >= %s AND s.ended_at IS NOT NULL
-                    GROUP BY s.streamer_login
-                    HAVING COUNT(*) >= 3{having_ext}
-                    ORDER BY value DESC
-                    LIMIT %s
-                    """
-                elif metric == "growth":
-                    ranking_sql = f"""
-                    SELECT
-                        s.streamer_login,
-                        SUM(CASE WHEN s.follower_delta IS NOT NULL
-                             AND NOT (s.followers_end = 0 AND s.followers_start > 0)
-                             THEN s.follower_delta ELSE 0 END) as value
-                    FROM twitch_stream_sessions s
-                    WHERE s.started_at >= %s AND s.ended_at IS NOT NULL
-                    GROUP BY s.streamer_login
-                    HAVING COUNT(*) >= 3{having_ext}
-                    ORDER BY value DESC
-                    LIMIT %s
-                    """
-                else:
-                    metric = "viewers"
-                    ranking_sql = f"""
-                    SELECT
-                        s.streamer_login,
-                        AVG(s.avg_viewers) as value
-                    FROM twitch_stream_sessions s
-                    WHERE s.started_at >= %s AND s.ended_at IS NOT NULL
-                    GROUP BY s.streamer_login
-                    HAVING COUNT(*) >= 3{having_ext}
-                    ORDER BY value DESC
-                    LIMIT %s
-                    """
-
-                params: list[Any] = [since_date]
-                if threshold is not None:
-                    params.append(threshold)
-                params.append(limit)
-                rows = conn.execute(ranking_sql, tuple(params)).fetchall()
-
-                data = [
-                    {
-                        "rank": i + 1,
-                        "login": r[0],
-                        "value": (float(r[1]) * 100 if metric == "retention" else float(r[1]))
-                        if r[1]
-                        else 0,
-                        "trend": "same",
-                        "trendValue": 0,
-                    }
-                    for i, r in enumerate(rows)
-                ]
-
-                return web.json_response(data)
+            payload = await asyncio.to_thread(
+                self._load_rankings_payload_sync,
+                metric=metric,
+                days=days,
+                limit=limit,
+                threshold=threshold,
+            )
+            return web.json_response(payload)
         except Exception as exc:
             log.exception("Error in rankings API")
             return analytics_internal_error_response()
+
+    def _load_category_comparison_payload_sync(
+        self,
+        *,
+        streamer: str,
+        days: int,
+        threshold: float | None,
+    ) -> dict[str, Any]:
+        since_date = (datetime.now(UTC) - timedelta(days=days)).isoformat()
+        streamer_login = streamer.lower()
+        with storage.readonly_connection() as conn:
+            your_tracked = conn.execute(
+                """
+                SELECT AVG(viewer_count), MAX(viewer_count)
+                FROM twitch_stats_tracked
+                WHERE ts_utc >= %s AND LOWER(streamer) = %s
+            """,
+                (since_date, streamer_login),
+            ).fetchone()
+
+            your_session = conn.execute(
+                """
+                SELECT
+                    AVG(s.avg_viewers) as avg_viewers,
+                    MAX(s.peak_viewers) as peak_viewers,
+                    AVG(s.retention_10m) as retention10m,
+                    AVG(CASE WHEN s.avg_viewers > 0 THEN s.unique_chatters * 100.0 / s.avg_viewers ELSE 0 END) as chat_health
+                FROM twitch_stream_sessions s
+                WHERE s.started_at >= %s AND LOWER(s.streamer_login) = %s AND s.ended_at IS NOT NULL
+            """,
+                (since_date, streamer_login),
+            ).fetchone()
+
+            your_avg = (
+                float(your_tracked[0])
+                if your_tracked and your_tracked[0]
+                else (float(your_session[0]) if your_session and your_session[0] else 0)
+            )
+            your_peak = (
+                int(your_tracked[1])
+                if your_tracked and your_tracked[1]
+                else (int(your_session[1]) if your_session and your_session[1] else 0)
+            )
+            your_ret = float(your_session[2]) * 100 if your_session and your_session[2] else 0
+            your_chat = float(your_session[3]) if your_session and your_session[3] else 0
+
+            cat_data = self._get_category_percentiles(conn, since_date, threshold)
+            sorted_avgs = cat_data["sorted_avgs"]
+            category_total = cat_data["total"]
+            cat_avg_viewers = sum(sorted_avgs) / len(sorted_avgs) if sorted_avgs else 0
+
+            cat_peak_having = "HAVING AVG(viewer_count) <= %s" if threshold is not None else ""
+            cat_peak_params: list[Any] = [since_date]
+            if threshold is not None:
+                cat_peak_params.append(threshold)
+            cat_peak = conn.execute(
+                f"""
+                SELECT AVG(max_vc) FROM (
+                    SELECT MAX(viewer_count) as max_vc
+                    FROM twitch_stats_category
+                    WHERE ts_utc >= %s
+                    GROUP BY streamer
+                    {cat_peak_having}
+                )
+            """,
+                tuple(cat_peak_params),
+            ).fetchone()
+            cat_avg_peak = float(cat_peak[0]) if cat_peak and cat_peak[0] else 0
+
+            if threshold is not None:
+                cat_session_avgs = conn.execute(
+                    """
+                    SELECT
+                        AVG(s.retention_10m) as avg_ret,
+                        AVG(CASE WHEN s.avg_viewers > 0 THEN s.unique_chatters * 100.0 / s.avg_viewers ELSE 0 END) as avg_chat
+                    FROM twitch_stream_sessions s
+                    WHERE s.started_at >= %s AND s.ended_at IS NOT NULL
+                      AND LOWER(s.streamer_login) NOT IN (
+                          SELECT LOWER(streamer_login) FROM twitch_stream_sessions
+                          WHERE started_at >= %s AND ended_at IS NOT NULL
+                          GROUP BY LOWER(streamer_login)
+                          HAVING AVG(avg_viewers) > %s
+                      )
+                """,
+                    (since_date, since_date, threshold),
+                ).fetchone()
+            else:
+                cat_session_avgs = conn.execute(
+                    """
+                    SELECT
+                        AVG(s.retention_10m) as avg_ret,
+                        AVG(CASE WHEN s.avg_viewers > 0 THEN s.unique_chatters * 100.0 / s.avg_viewers ELSE 0 END) as avg_chat
+                    FROM twitch_stream_sessions s
+                    WHERE s.started_at >= %s AND s.ended_at IS NOT NULL
+                """,
+                    (since_date,),
+                ).fetchone()
+            cat_avg_ret = float(cat_session_avgs[0]) * 100 if cat_session_avgs and cat_session_avgs[0] else 0
+            cat_avg_chat = float(cat_session_avgs[1]) if cat_session_avgs and cat_session_avgs[1] else 0
+
+            per_ret_having = "HAVING AVG(s.avg_viewers) <= %s" if threshold is not None else ""
+            per_ret_params: list[Any] = [since_date]
+            if threshold is not None:
+                per_ret_params.append(threshold)
+            per_streamer_ret = conn.execute(
+                f"""
+                SELECT AVG(s.retention_10m) as ret
+                FROM twitch_stream_sessions s
+                WHERE s.started_at >= %s AND s.ended_at IS NOT NULL
+                GROUP BY LOWER(s.streamer_login)
+                {per_ret_having}
+                ORDER BY ret
+            """,
+                tuple(per_ret_params),
+            ).fetchall()
+            ret_sorted = [float(row[0]) * 100 for row in per_streamer_ret if row[0] is not None]
+
+            per_chat_having = "HAVING AVG(s.avg_viewers) <= %s" if threshold is not None else ""
+            per_chat_params: list[Any] = [since_date]
+            if threshold is not None:
+                per_chat_params.append(threshold)
+            per_streamer_chat = conn.execute(
+                f"""
+                SELECT AVG(CASE WHEN s.avg_viewers > 0 THEN s.unique_chatters * 100.0 / s.avg_viewers ELSE 0 END) as ch
+                FROM twitch_stream_sessions s
+                WHERE s.started_at >= %s AND s.ended_at IS NOT NULL
+                GROUP BY LOWER(s.streamer_login)
+                {per_chat_having}
+                ORDER BY ch
+            """,
+                tuple(per_chat_params),
+            ).fetchall()
+            chat_sorted = [float(row[0]) for row in per_streamer_chat if row[0] is not None]
+
+            avg_percentile = int(self._percentile_of(sorted_avgs, your_avg) * 100) if sorted_avgs else 0
+
+            peak_having = "HAVING AVG(viewer_count) <= %s" if threshold is not None else ""
+            peak_params: list[Any] = [since_date]
+            if threshold is not None:
+                peak_params.append(threshold)
+            peak_avgs = conn.execute(
+                f"""
+                SELECT MAX(viewer_count) as peak
+                FROM twitch_stats_category
+                WHERE ts_utc >= %s
+                GROUP BY streamer
+                {peak_having}
+                ORDER BY peak
+            """,
+                tuple(peak_params),
+            ).fetchall()
+            peak_sorted = [float(row[0]) for row in peak_avgs] if peak_avgs else []
+            peak_percentile = int(self._percentile_of(peak_sorted, your_peak) * 100) if peak_sorted else 50
+
+            ret_percentile = int(self._percentile_of(ret_sorted, your_ret) * 100) if ret_sorted else 50
+            chat_percentile = int(self._percentile_of(chat_sorted, your_chat) * 100) if chat_sorted else 50
+            category_rank = category_total - int(avg_percentile / 100 * category_total) if category_total else 0
+            peer_group = self._get_peer_group_stats(conn, streamer_login, since_date)
+
+        return {
+            "yourStats": {
+                "avgViewers": round(your_avg, 1),
+                "peakViewers": your_peak,
+                "retention10m": round(your_ret, 1),
+                "chatHealth": round(your_chat, 1),
+            },
+            "categoryAvg": {
+                "avgViewers": round(cat_avg_viewers, 1),
+                "peakViewers": round(cat_avg_peak, 0),
+                "retention10m": round(cat_avg_ret, 1),
+                "chatHealth": round(cat_avg_chat, 1),
+            },
+            "percentiles": {
+                "avgViewers": avg_percentile,
+                "peakViewers": peak_percentile,
+                "retention10m": ret_percentile,
+                "chatHealth": chat_percentile,
+            },
+            "categoryRank": category_rank,
+            "categoryTotal": category_total,
+            "peerGroup": peer_group,
+        }
 
     async def _api_v2_category_comparison(self, request: web.Request) -> web.Response:
         """Compare streamer to category averages."""
         self._require_v2_auth(request)
 
         streamer = request.query.get("streamer", "").strip()
-        days = min(max(int(request.query.get("days", "30")), 7), 365)
+        try:
+            days = _parse_bounded_query_int(
+                request,
+                name="days",
+                default=30,
+                minimum=7,
+                maximum=365,
+            )
+        except ValueError as exc:
+            return web.json_response({"error": str(exc)}, status=400)
         exclude_external = request.query.get("exclude_external", "0") == "1"
         threshold: float | None = EXTERNAL_REACH_AVG_THRESHOLD if exclude_external else None
 
@@ -748,222 +1062,89 @@ class _AnalyticsPerformanceMixin:
             return web.json_response({"error": "Streamer required"}, status=400)
 
         try:
-            with storage.readonly_connection() as conn:
-                since_date = (datetime.now(UTC) - timedelta(days=days)).isoformat()
-
-                # Your stats from stats_tracked (higher accuracy for tracked streamers)
-                your_tracked = conn.execute(
-                    """
-                    SELECT AVG(viewer_count), MAX(viewer_count)
-                    FROM twitch_stats_tracked
-                    WHERE ts_utc >= %s AND LOWER(streamer) = %s
-                """,
-                    (since_date, streamer.lower()),
-                ).fetchone()
-
-                # Fallback to session data
-                your_session = conn.execute(
-                    """
-                    SELECT
-                        AVG(s.avg_viewers) as avg_viewers,
-                        MAX(s.peak_viewers) as peak_viewers,
-                        AVG(s.retention_10m) as retention10m,
-                        AVG(CASE WHEN s.avg_viewers > 0 THEN s.unique_chatters * 100.0 / s.avg_viewers ELSE 0 END) as chat_health
-                    FROM twitch_stream_sessions s
-                    WHERE s.started_at >= %s AND LOWER(s.streamer_login) = %s AND s.ended_at IS NOT NULL
-                """,
-                    (since_date, streamer.lower()),
-                ).fetchone()
-
-                # Use tracked data if available, else session data
-                your_avg = (
-                    float(your_tracked[0])
-                    if your_tracked and your_tracked[0]
-                    else (float(your_session[0]) if your_session and your_session[0] else 0)
-                )
-                your_peak = (
-                    int(your_tracked[1])
-                    if your_tracked and your_tracked[1]
-                    else (int(your_session[1]) if your_session and your_session[1] else 0)
-                )
-                your_ret = float(your_session[2]) * 100 if your_session and your_session[2] else 0
-                your_chat = float(your_session[3]) if your_session and your_session[3] else 0
-
-                # Category stats from stats_category (per-streamer aggregates).
-                # When exclude_external=1, streamers above EXTERNAL_REACH_AVG_THRESHOLD are
-                # excluded so that percentiles and averages reflect the organic community.
-                cat_data = self._get_category_percentiles(conn, since_date, threshold)
-                sorted_avgs = cat_data["sorted_avgs"]
-                category_total = cat_data["total"]
-
-                # Category averages
-                cat_avg_viewers = sum(sorted_avgs) / len(sorted_avgs) if sorted_avgs else 0
-
-                # Peak viewers per streamer from category (with optional threshold filter)
-                cat_peak_having = "HAVING AVG(viewer_count) <= %s" if threshold is not None else ""
-                cat_peak_params: list[Any] = [since_date]
-                if threshold is not None:
-                    cat_peak_params.append(threshold)
-                cat_peak = conn.execute(
-                    f"""
-                    SELECT AVG(max_vc) FROM (
-                        SELECT MAX(viewer_count) as max_vc
-                        FROM twitch_stats_category
-                        WHERE ts_utc >= %s
-                        GROUP BY streamer
-                        {cat_peak_having}
-                    )
-                """,
-                    tuple(cat_peak_params),
-                ).fetchone()
-                cat_avg_peak = float(cat_peak[0]) if cat_peak and cat_peak[0] else 0
-
-                # Category-wide retention and chat health from session data.
-                # When filtering, exclude high-avg-viewer streamers via NOT IN subquery.
-                if threshold is not None:
-                    cat_session_avgs = conn.execute(
-                        """
-                        SELECT
-                            AVG(s.retention_10m) as avg_ret,
-                            AVG(CASE WHEN s.avg_viewers > 0 THEN s.unique_chatters * 100.0 / s.avg_viewers ELSE 0 END) as avg_chat
-                        FROM twitch_stream_sessions s
-                        WHERE s.started_at >= %s AND s.ended_at IS NOT NULL
-                          AND LOWER(s.streamer_login) NOT IN (
-                              SELECT LOWER(streamer_login) FROM twitch_stream_sessions
-                              WHERE started_at >= %s AND ended_at IS NOT NULL
-                              GROUP BY LOWER(streamer_login)
-                              HAVING AVG(avg_viewers) > %s
-                          )
-                    """,
-                        (since_date, since_date, threshold),
-                    ).fetchone()
-                else:
-                    cat_session_avgs = conn.execute(
-                        """
-                        SELECT
-                            AVG(s.retention_10m) as avg_ret,
-                            AVG(CASE WHEN s.avg_viewers > 0 THEN s.unique_chatters * 100.0 / s.avg_viewers ELSE 0 END) as avg_chat
-                        FROM twitch_stream_sessions s
-                        WHERE s.started_at >= %s AND s.ended_at IS NOT NULL
-                    """,
-                        (since_date,),
-                    ).fetchone()
-                cat_avg_ret = (
-                    float(cat_session_avgs[0]) * 100
-                    if cat_session_avgs and cat_session_avgs[0]
-                    else 0
-                )
-                cat_avg_chat = (
-                    float(cat_session_avgs[1]) if cat_session_avgs and cat_session_avgs[1] else 0
-                )
-
-                # Per-streamer retention and chat for percentile ranking
-                per_ret_having = "HAVING AVG(s.avg_viewers) <= %s" if threshold is not None else ""
-                per_ret_params: list[Any] = [since_date]
-                if threshold is not None:
-                    per_ret_params.append(threshold)
-                per_streamer_ret = conn.execute(
-                    f"""
-                    SELECT AVG(s.retention_10m) as ret
-                    FROM twitch_stream_sessions s
-                    WHERE s.started_at >= %s AND s.ended_at IS NOT NULL
-                    GROUP BY LOWER(s.streamer_login)
-                    {per_ret_having}
-                    ORDER BY ret
-                """,
-                    tuple(per_ret_params),
-                ).fetchall()
-                ret_sorted = [float(r[0]) * 100 for r in per_streamer_ret if r[0] is not None]
-
-                per_chat_having = "HAVING AVG(s.avg_viewers) <= %s" if threshold is not None else ""
-                per_chat_params: list[Any] = [since_date]
-                if threshold is not None:
-                    per_chat_params.append(threshold)
-                per_streamer_chat = conn.execute(
-                    f"""
-                    SELECT AVG(CASE WHEN s.avg_viewers > 0 THEN s.unique_chatters * 100.0 / s.avg_viewers ELSE 0 END) as ch
-                    FROM twitch_stream_sessions s
-                    WHERE s.started_at >= %s AND s.ended_at IS NOT NULL
-                    GROUP BY LOWER(s.streamer_login)
-                    {per_chat_having}
-                    ORDER BY ch
-                """,
-                    tuple(per_chat_params),
-                ).fetchall()
-                chat_sorted = [float(r[0]) for r in per_streamer_chat if r[0] is not None]
-
-                # Percentiles for avgViewers
-                avg_percentile = (
-                    int(self._percentile_of(sorted_avgs, your_avg) * 100) if sorted_avgs else 0
-                )
-
-                # Percentile for peakViewers
-                peak_having = "HAVING AVG(viewer_count) <= %s" if threshold is not None else ""
-                peak_params: list[Any] = [since_date]
-                if threshold is not None:
-                    peak_params.append(threshold)
-                peak_avgs = conn.execute(
-                    f"""
-                    SELECT MAX(viewer_count) as peak
-                    FROM twitch_stats_category
-                    WHERE ts_utc >= %s
-                    GROUP BY streamer
-                    {peak_having}
-                    ORDER BY peak
-                """,
-                    tuple(peak_params),
-                ).fetchall()
-                peak_sorted = [float(r[0]) for r in peak_avgs] if peak_avgs else []
-                peak_percentile = (
-                    int(self._percentile_of(peak_sorted, your_peak) * 100) if peak_sorted else 50
-                )
-
-                # Percentiles for retention and chat
-                ret_percentile = (
-                    int(self._percentile_of(ret_sorted, your_ret) * 100) if ret_sorted else 50
-                )
-                chat_percentile = (
-                    int(self._percentile_of(chat_sorted, your_chat) * 100) if chat_sorted else 50
-                )
-
-                # Category rank (1 = best)
-                category_rank = (
-                    category_total - int(avg_percentile / 100 * category_total)
-                    if category_total
-                    else 0
-                )
-
-                # Peer group comparison
-                peer_group = self._get_peer_group_stats(conn, streamer, since_date)
-
-                return web.json_response(
-                    {
-                        "yourStats": {
-                            "avgViewers": round(your_avg, 1),
-                            "peakViewers": your_peak,
-                            "retention10m": round(your_ret, 1),
-                            "chatHealth": round(your_chat, 1),
-                        },
-                        "categoryAvg": {
-                            "avgViewers": round(cat_avg_viewers, 1),
-                            "peakViewers": round(cat_avg_peak, 0),
-                            "retention10m": round(cat_avg_ret, 1),
-                            "chatHealth": round(cat_avg_chat, 1),
-                        },
-                        "percentiles": {
-                            "avgViewers": avg_percentile,
-                            "peakViewers": peak_percentile,
-                            "retention10m": ret_percentile,
-                            "chatHealth": chat_percentile,
-                        },
-                        "categoryRank": category_rank,
-                        "categoryTotal": category_total,
-                        "peerGroup": peer_group,
-                    }
-                )
+            payload = await asyncio.to_thread(
+                self._load_category_comparison_payload_sync,
+                streamer=streamer,
+                days=days,
+                threshold=threshold,
+            )
+            return web.json_response(payload)
         except Exception as exc:
             log.exception("Error in category comparison API")
             return analytics_internal_error_response()
+
+    def _load_viewer_timeline_payload_sync(
+        self,
+        *,
+        streamer: str,
+        days: int,
+    ) -> list[dict[str, Any]]:
+        since_date = (datetime.now(UTC) - timedelta(days=days)).isoformat()
+        streamer_login = streamer.lower()
+        if days <= 7:
+            timeline_sql = """
+            SELECT
+                TO_CHAR(
+                    DATE_TRUNC('hour', ts_utc)
+                    + FLOOR(EXTRACT(MINUTE FROM ts_utc) / 5) * INTERVAL '5 minutes',
+                    'YYYY-MM-DD HH24:MI'
+                ) as bucket,
+                AVG(viewer_count) as avg_vc,
+                MAX(viewer_count) as peak_vc,
+                MIN(viewer_count) as min_vc,
+                COUNT(*) as samples
+            FROM twitch_stats_tracked
+            WHERE ts_utc >= %s AND LOWER(streamer) = %s
+            GROUP BY 1
+            ORDER BY 1
+            """
+        elif days <= 30:
+            timeline_sql = """
+            SELECT
+                TO_CHAR(
+                    DATE_TRUNC('hour', ts_utc)
+                    + CASE
+                        WHEN EXTRACT(MINUTE FROM ts_utc) < 30 THEN INTERVAL '0 minutes'
+                        ELSE INTERVAL '30 minutes'
+                    END,
+                    'YYYY-MM-DD HH24:MI'
+                ) as bucket,
+                AVG(viewer_count) as avg_vc,
+                MAX(viewer_count) as peak_vc,
+                MIN(viewer_count) as min_vc,
+                COUNT(*) as samples
+            FROM twitch_stats_tracked
+            WHERE ts_utc >= %s AND LOWER(streamer) = %s
+            GROUP BY 1
+            ORDER BY 1
+            """
+        else:
+            timeline_sql = """
+            SELECT
+                TO_CHAR(DATE_TRUNC('hour', ts_utc), 'YYYY-MM-DD HH24:MI') as bucket,
+                AVG(viewer_count) as avg_vc,
+                MAX(viewer_count) as peak_vc,
+                MIN(viewer_count) as min_vc,
+                COUNT(*) as samples
+            FROM twitch_stats_tracked
+            WHERE ts_utc >= %s AND LOWER(streamer) = %s
+            GROUP BY 1
+            ORDER BY 1
+            """
+
+        with storage.readonly_connection() as conn:
+            rows = conn.execute(timeline_sql, (since_date, streamer_login)).fetchall()
+
+        return [
+            {
+                "timestamp": row[0],
+                "avgViewers": round(float(row[1]), 1) if row[1] else 0,
+                "peakViewers": int(row[2]) if row[2] else 0,
+                "minViewers": int(row[3]) if row[3] else 0,
+                "samples": row[4] or 0,
+            }
+            for row in rows
+        ]
 
     async def _api_v2_viewer_timeline(self, request: web.Request) -> web.Response:
         """Return bucketed viewer data from twitch_stats_tracked."""
@@ -982,86 +1163,112 @@ class _AnalyticsPerformanceMixin:
             return web.json_response({"error": "Streamer required"}, status=400)
 
         try:
-            with storage.readonly_connection() as conn:
-                since_date = (datetime.now(UTC) - timedelta(days=days)).isoformat()
-
-                # Determine bucket size based on range
-                if days <= 7:
-                    bucket_minutes = 5
-                elif days <= 30:
-                    bucket_minutes = 30
-                else:
-                    bucket_minutes = 60
-
-                # Use static SQL variants per bucket size to avoid dynamic query construction.
-                if bucket_minutes == 5:
-                    timeline_sql = """
-                    SELECT
-                        TO_CHAR(
-                            DATE_TRUNC('hour', ts_utc)
-                            + FLOOR(EXTRACT(MINUTE FROM ts_utc) / 5) * INTERVAL '5 minutes',
-                            'YYYY-MM-DD HH24:MI'
-                        ) as bucket,
-                        AVG(viewer_count) as avg_vc,
-                        MAX(viewer_count) as peak_vc,
-                        MIN(viewer_count) as min_vc,
-                        COUNT(*) as samples
-                    FROM twitch_stats_tracked
-                    WHERE ts_utc >= %s AND LOWER(streamer) = %s
-                    GROUP BY 1
-                    ORDER BY 1
-                    """
-                elif bucket_minutes == 30:
-                    timeline_sql = """
-                    SELECT
-                        TO_CHAR(
-                            DATE_TRUNC('hour', ts_utc)
-                            + CASE
-                                WHEN EXTRACT(MINUTE FROM ts_utc) < 30 THEN INTERVAL '0 minutes'
-                                ELSE INTERVAL '30 minutes'
-                            END,
-                            'YYYY-MM-DD HH24:MI'
-                        ) as bucket,
-                        AVG(viewer_count) as avg_vc,
-                        MAX(viewer_count) as peak_vc,
-                        MIN(viewer_count) as min_vc,
-                        COUNT(*) as samples
-                    FROM twitch_stats_tracked
-                    WHERE ts_utc >= %s AND LOWER(streamer) = %s
-                    GROUP BY 1
-                    ORDER BY 1
-                    """
-                else:
-                    timeline_sql = """
-                    SELECT
-                        TO_CHAR(DATE_TRUNC('hour', ts_utc), 'YYYY-MM-DD HH24:MI') as bucket,
-                        AVG(viewer_count) as avg_vc,
-                        MAX(viewer_count) as peak_vc,
-                        MIN(viewer_count) as min_vc,
-                        COUNT(*) as samples
-                    FROM twitch_stats_tracked
-                    WHERE ts_utc >= %s AND LOWER(streamer) = %s
-                    GROUP BY 1
-                    ORDER BY 1
-                    """
-
-                rows = conn.execute(timeline_sql, (since_date, streamer.lower())).fetchall()
-
-                data = [
-                    {
-                        "timestamp": r[0],
-                        "avgViewers": round(float(r[1]), 1) if r[1] else 0,
-                        "peakViewers": int(r[2]) if r[2] else 0,
-                        "minViewers": int(r[3]) if r[3] else 0,
-                        "samples": r[4] or 0,
-                    }
-                    for r in rows
-                ]
-
-                return web.json_response(data)
+            payload = await asyncio.to_thread(
+                self._load_viewer_timeline_payload_sync,
+                streamer=streamer,
+                days=days,
+            )
+            return web.json_response(payload)
         except Exception as exc:
             log.exception("Error in viewer timeline API")
             return analytics_internal_error_response()
+
+    def _load_category_leaderboard_payload_sync(
+        self,
+        *,
+        streamer: str,
+        days: int,
+        limit: int,
+        sort_mode: str,
+        tier_filter: str | None,
+        threshold: float | None,
+    ) -> dict[str, Any]:
+        lb_having = "HAVING AVG(c.viewer_count) <= %s" if threshold is not None else ""
+        tier_ranges: dict[str, tuple[float, float]] = {
+            "starter": (0, 15),
+            "rising": (15, 50),
+            "established": (50, 150),
+            "featured": (150, 500),
+            "top": (500, float("inf")),
+        }
+        since_date = (datetime.now(UTC) - timedelta(days=days)).isoformat()
+        with storage.readonly_connection() as conn:
+            lb_params: list[Any] = [since_date]
+            if threshold is not None:
+                lb_params.append(threshold)
+
+            if sort_mode == "peak":
+                leaderboard_sql = f"""
+                SELECT
+                    c.streamer,
+                    AVG(c.viewer_count) as avg_vc,
+                    MAX(c.viewer_count) as peak_vc,
+                    BOOL_OR(c.is_partner) as is_partner
+                FROM twitch_stats_category c
+                WHERE c.ts_utc >= %s
+                GROUP BY c.streamer
+                {lb_having}
+                ORDER BY peak_vc DESC
+                """
+            else:
+                leaderboard_sql = f"""
+                SELECT
+                    c.streamer,
+                    AVG(c.viewer_count) as avg_vc,
+                    MAX(c.viewer_count) as peak_vc,
+                    BOOL_OR(c.is_partner) as is_partner
+                FROM twitch_stats_category c
+                WHERE c.ts_utc >= %s
+                GROUP BY c.streamer
+                {lb_having}
+                ORDER BY avg_vc DESC
+                """
+
+            rows = conn.execute(leaderboard_sql, tuple(lb_params)).fetchall()
+            if tier_filter and tier_filter in tier_ranges:
+                tier_min, tier_max = tier_ranges[tier_filter]
+                rows = [
+                    row for row in rows
+                    if row[1] is not None and tier_min <= float(row[1]) < tier_max
+                ]
+
+            total_streamers = len(rows)
+            your_tier = None
+            if streamer:
+                peer_group = self._get_peer_group_stats(conn, streamer, since_date)
+                if peer_group:
+                    your_tier = peer_group["tier"]
+
+        leaderboard: list[dict[str, Any]] = []
+        your_rank = None
+        streamer_lower = streamer.lower() if streamer else ""
+        your_entry = None
+
+        for index, row in enumerate(rows):
+            rank = index + 1
+            entry = {
+                "rank": rank,
+                "streamer": row[0],
+                "avgViewers": round(float(row[1]), 1) if row[1] else 0,
+                "peakViewers": int(row[2]) if row[2] else 0,
+                "isPartner": bool(row[3]),
+                "isYou": row[0].lower() == streamer_lower,
+            }
+            if row[0].lower() == streamer_lower:
+                your_rank = rank
+                your_entry = entry
+            if rank <= limit:
+                leaderboard.append(entry)
+
+        if your_entry and your_rank and your_rank > limit:
+            leaderboard.append(your_entry)
+
+        return {
+            "leaderboard": leaderboard,
+            "totalStreamers": total_streamers,
+            "yourRank": your_rank,
+            "yourTier": your_tier,
+        }
 
     async def _api_v2_category_leaderboard(self, request: web.Request) -> web.Response:
         """Top-N streamers from twitch_stats_category."""
@@ -1086,108 +1293,134 @@ class _AnalyticsPerformanceMixin:
         tier_filter = request.query.get("tier", "").strip().lower() or None  # starter/rising/established/featured/top
         threshold: float | None = EXTERNAL_REACH_AVG_THRESHOLD if exclude_external else None
 
-        # HAVING clause appended when external-reach filter is active
-        lb_having = "HAVING AVG(c.viewer_count) <= %s" if threshold is not None else ""
-
-        # Tier boundaries for filtering
-        _tier_ranges: dict[str, tuple[float, float]] = {
-            "starter": (0, 15),
-            "rising": (15, 50),
-            "established": (50, 150),
-            "featured": (150, 500),
-            "top": (500, float("inf")),
-        }
-
         try:
-            with storage.readonly_connection() as conn:
-                since_date = (datetime.now(UTC) - timedelta(days=days)).isoformat()
-                lb_params: list[Any] = [since_date]
-                if threshold is not None:
-                    lb_params.append(threshold)
-
-                if sort_mode == "peak":
-                    leaderboard_sql = f"""
-                    SELECT
-                        c.streamer,
-                        AVG(c.viewer_count) as avg_vc,
-                        MAX(c.viewer_count) as peak_vc,
-                        BOOL_OR(c.is_partner) as is_partner
-                    FROM twitch_stats_category c
-                    WHERE c.ts_utc >= %s
-                    GROUP BY c.streamer
-                    {lb_having}
-                    ORDER BY peak_vc DESC
-                    """
-                else:
-                    leaderboard_sql = f"""
-                    SELECT
-                        c.streamer,
-                        AVG(c.viewer_count) as avg_vc,
-                        MAX(c.viewer_count) as peak_vc,
-                        BOOL_OR(c.is_partner) as is_partner
-                    FROM twitch_stats_category c
-                    WHERE c.ts_utc >= %s
-                    GROUP BY c.streamer
-                    {lb_having}
-                    ORDER BY avg_vc DESC
-                    """
-
-                rows = conn.execute(leaderboard_sql, tuple(lb_params)).fetchall()
-
-                # Apply tier filter if requested
-                if tier_filter and tier_filter in _tier_ranges:
-                    t_min, t_max = _tier_ranges[tier_filter]
-                    rows = [
-                        r for r in rows
-                        if r[1] is not None and t_min <= float(r[1]) < t_max
-                    ]
-
-                total_streamers = len(rows)
-
-                # Determine the requesting streamer's tier
-                your_tier = None
-                if streamer:
-                    peer_group = self._get_peer_group_stats(conn, streamer, since_date)
-                    if peer_group:
-                        your_tier = peer_group["tier"]
-
-                # Build ranked list
-                leaderboard = []
-                your_rank = None
-                streamer_lower = streamer.lower() if streamer else ""
-                your_entry = None
-
-                for i, r in enumerate(rows):
-                    rank = i + 1
-                    entry = {
-                        "rank": rank,
-                        "streamer": r[0],
-                        "avgViewers": round(float(r[1]), 1) if r[1] else 0,
-                        "peakViewers": int(r[2]) if r[2] else 0,
-                        "isPartner": bool(r[3]),
-                        "isYou": r[0].lower() == streamer_lower,
-                    }
-                    if r[0].lower() == streamer_lower:
-                        your_rank = rank
-                        your_entry = entry
-                    if rank <= limit:
-                        leaderboard.append(entry)
-
-                # If streamer is not in top-N, append them
-                if your_entry and your_rank and your_rank > limit:
-                    leaderboard.append(your_entry)
-
-                return web.json_response(
-                    {
-                        "leaderboard": leaderboard,
-                        "totalStreamers": total_streamers,
-                        "yourRank": your_rank,
-                        "yourTier": your_tier,
-                    }
-                )
+            payload = await asyncio.to_thread(
+                self._load_category_leaderboard_payload_sync,
+                streamer=streamer,
+                days=days,
+                limit=limit,
+                sort_mode=sort_mode,
+                tier_filter=tier_filter,
+                threshold=threshold,
+            )
+            return web.json_response(payload)
         except Exception as exc:
             log.exception("Error in category leaderboard API")
             return analytics_internal_error_response()
+
+    def _load_category_timings_payload_sync(
+        self,
+        *,
+        days: int,
+        source: str,
+    ) -> dict[str, Any]:
+        from statistics import median, quantiles
+
+        cutoff = (datetime.now(UTC) - timedelta(days=days)).isoformat()
+        with storage.readonly_connection() as conn:
+            if source == "tracked":
+                rows = conn.execute(
+                    """
+                    SELECT streamer,
+                           EXTRACT(HOUR FROM ts_utc)::integer AS hour,
+                           EXTRACT(DOW FROM ts_utc)::integer AS weekday,
+                           viewer_count
+                      FROM twitch_stats_tracked
+                     WHERE ts_utc >= %s
+                       AND viewer_count IS NOT NULL
+                       AND viewer_count > 0
+                    """,
+                    (cutoff,),
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    """
+                    SELECT streamer,
+                           EXTRACT(HOUR FROM ts_utc)::integer AS hour,
+                           EXTRACT(DOW FROM ts_utc)::integer AS weekday,
+                           viewer_count
+                      FROM twitch_stats_category
+                     WHERE ts_utc >= %s
+                       AND viewer_count IS NOT NULL
+                       AND viewer_count > 0
+                    """,
+                    (cutoff,),
+                ).fetchall()
+
+        hour_data: dict[int, dict[str, list[float]]] = collections.defaultdict(
+            lambda: collections.defaultdict(list)
+        )
+        weekday_data: dict[int, dict[str, list[float]]] = collections.defaultdict(
+            lambda: collections.defaultdict(list)
+        )
+
+        for row in rows:
+            streamer = row[0]
+            hour = int(row[1])
+            weekday = int(row[2])
+            viewer_count = float(row[3])
+            hour_data[hour][streamer].append(viewer_count)
+            weekday_data[weekday][streamer].append(viewer_count)
+
+        def _robust_stats(slot_data: dict[str, list[float]]) -> dict[str, Any]:
+            if not slot_data:
+                return {
+                    "median": None,
+                    "p25": None,
+                    "p75": None,
+                    "streamer_count": 0,
+                    "sample_count": 0,
+                }
+            per_streamer = [median(values) for values in slot_data.values() if values]
+            per_streamer.sort()
+            count = len(per_streamer)
+            sample_count = sum(len(values) for values in slot_data.values())
+            if count == 0:
+                return {
+                    "median": None,
+                    "p25": None,
+                    "p75": None,
+                    "streamer_count": 0,
+                    "sample_count": 0,
+                }
+            med = median(per_streamer)
+            if count >= 4:
+                quartiles = quantiles(per_streamer, n=4)
+                p25, p75 = quartiles[0], quartiles[2]
+            elif count >= 2:
+                p25 = per_streamer[0]
+                p75 = per_streamer[-1]
+            else:
+                p25 = p75 = per_streamer[0]
+            return {
+                "median": round(med, 1),
+                "p25": round(p25, 1),
+                "p75": round(p75, 1),
+                "streamer_count": count,
+                "sample_count": sample_count,
+            }
+
+        weekday_names = ["So", "Mo", "Di", "Mi", "Do", "Fr", "Sa"]
+        hourly = []
+        for hour in range(24):
+            slot = _robust_stats(hour_data.get(hour, {}))
+            slot["hour"] = hour
+            hourly.append(slot)
+
+        weekly = []
+        for weekday in [1, 2, 3, 4, 5, 6, 0]:
+            slot = _robust_stats(weekday_data.get(weekday, {}))
+            slot["weekday"] = weekday
+            slot["label"] = weekday_names[weekday]
+            weekly.append(slot)
+
+        return {
+            "hourly": hourly,
+            "weekly": weekly,
+            "total_streamers": len({row[0] for row in rows}),
+            "window_days": days,
+            "method": "median_of_medians",
+        }
 
     async def _api_v2_category_timings(self, request: web.Request) -> web.Response:
         """
@@ -1197,237 +1430,117 @@ class _AnalyticsPerformanceMixin:
         """
         self._require_v2_auth(request)
         self._require_extended_plan(request)
-        days = min(max(int(request.query.get("days", "30")), 7), 90)
+        try:
+            days = _parse_bounded_query_int(
+                request,
+                name="days",
+                default=30,
+                minimum=7,
+                maximum=90,
+            )
+        except ValueError as exc:
+            return web.json_response({"error": str(exc)}, status=400)
         source = request.query.get("source", "category")  # 'category' | 'tracked'
 
-        from datetime import datetime, timedelta
-        from statistics import median, quantiles
-
-        cutoff = (datetime.now(UTC) - timedelta(days=days)).isoformat()
         try:
-            with storage.readonly_connection() as c:
-                if source == "tracked":
-                    rows = c.execute(
-                        """
-                        SELECT streamer,
-                               EXTRACT(HOUR FROM ts_utc)::integer AS hour,
-                               EXTRACT(DOW FROM ts_utc)::integer AS weekday,
-                               viewer_count
-                          FROM twitch_stats_tracked
-                         WHERE ts_utc >= %s
-                           AND viewer_count IS NOT NULL
-                           AND viewer_count > 0
-                        """,
-                        (cutoff,),
-                    ).fetchall()
-                else:
-                    rows = c.execute(
-                        """
-                        SELECT streamer,
-                               EXTRACT(HOUR FROM ts_utc)::integer AS hour,
-                               EXTRACT(DOW FROM ts_utc)::integer AS weekday,
-                               viewer_count
-                          FROM twitch_stats_category
-                         WHERE ts_utc >= %s
-                           AND viewer_count IS NOT NULL
-                           AND viewer_count > 0
-                        """,
-                        (cutoff,),
-                    ).fetchall()
-        except Exception as exc:
+            payload = await asyncio.to_thread(
+                self._load_category_timings_payload_sync,
+                days=days,
+                source=source,
+            )
+            return web.json_response(payload)
+        except Exception:
             log.exception("category-timings query failed")
             return analytics_internal_error_response()
 
-        # --- Stunde: Streamer -> Stunde -> Liste Viewerzahlen ---
-        # hour_data[hour][streamer] = [viewer_counts...]
-        hour_data: dict = collections.defaultdict(lambda: collections.defaultdict(list))
-        weekday_data: dict = collections.defaultdict(lambda: collections.defaultdict(list))
-
-        for row in rows:
-            streamer = row[0]
-            hour = int(row[1])
-            wd = int(row[2])
-            vc = float(row[3])
-            hour_data[hour][streamer].append(vc)
-            weekday_data[wd][streamer].append(vc)
-
-        def _robust_stats(slot_data: dict) -> dict:
-            """Fur einen Slot (Stunde/Wochentag): Median der Streamer-Mediane + P25/P75."""
-            if not slot_data:
-                return {
-                    "median": None,
-                    "p25": None,
-                    "p75": None,
-                    "streamer_count": 0,
-                    "sample_count": 0,
-                }
-            # Schritt 1: pro Streamer einen Median berechnen
-            per_streamer = [median(vals) for vals in slot_data.values() if vals]
-            per_streamer.sort()
-            n = len(per_streamer)
-            sample_count = sum(len(v) for v in slot_data.values())
-            if n == 0:
-                return {
-                    "median": None,
-                    "p25": None,
-                    "p75": None,
-                    "streamer_count": 0,
-                    "sample_count": 0,
-                }
-            # Schritt 2: Median der Mediane
-            med = median(per_streamer)
-            # P25 / P75
-            if n >= 4:
-                qs = quantiles(per_streamer, n=4)
-                p25, p75 = qs[0], qs[2]
-            elif n >= 2:
-                p25 = per_streamer[0]
-                p75 = per_streamer[-1]
-            else:
-                p25 = p75 = per_streamer[0]
-            return {
-                "median": round(med, 1),
-                "p25": round(p25, 1),
-                "p75": round(p75, 1),
-                "streamer_count": n,
-                "sample_count": sample_count,
-            }
-
-        weekday_names = ["So", "Mo", "Di", "Mi", "Do", "Fr", "Sa"]
-
-        hourly = []
-        for h in range(24):
-            s = _robust_stats(hour_data.get(h, {}))
-            s["hour"] = h
-            hourly.append(s)
-
-        weekday_order = [1, 2, 3, 4, 5, 6, 0]  # Mo-So
-        weekly = []
-        for wd in weekday_order:
-            s = _robust_stats(weekday_data.get(wd, {}))
-            s["weekday"] = wd
-            s["label"] = weekday_names[wd]
-            weekly.append(s)
-
-        total_streamers = len({row[0] for row in rows})
-
-        return web.json_response(
-            {
-                "hourly": hourly,
-                "weekly": weekly,
-                "total_streamers": total_streamers,
-                "window_days": days,
-                "method": "median_of_medians",
-            }
-        )
-
-    async def _api_v2_category_activity_series(self, request: web.Request) -> web.Response:
-        """
-        Legacy stats-style comparison series for category vs tracked.
-        Provides hourly and weekday rows with average and peak values.
-        """
-        self._require_v2_auth(request)
-        self._require_extended_plan(request)
-        days = min(max(int(request.query.get("days", "30")), 7), 365)
-        cutoff = (datetime.now(UTC) - timedelta(days=days)).isoformat()
-
-        hourly_rows: list[Any] = []
-        weekday_rows: list[Any] = []
-
+    @staticmethod
+    def _float_or_none(value: Any, *, digits: int = 1) -> float | None:
+        if value is None:
+            return None
         try:
-            with storage.readonly_connection() as conn:
-                hourly_rows = conn.execute(
-                    """
-                    WITH source_rows AS (
-                        SELECT 'tracked' AS source_key, viewer_count, ts_utc
-                          FROM twitch_stats_tracked
-                        UNION ALL
-                        SELECT 'category' AS source_key, viewer_count, ts_utc
-                          FROM twitch_stats_category
-                    )
-                    SELECT source_key,
-                           EXTRACT(HOUR FROM ts_utc)::integer AS hour,
-                           AVG(viewer_count) AS avg_viewers,
-                           MAX(viewer_count) AS max_viewers,
-                           COUNT(*) AS samples
-                      FROM source_rows
-                     WHERE ts_utc >= %s
-                     GROUP BY 1, 2
-                     ORDER BY 1, 2
-                    """,
-                    (cutoff,),
-                ).fetchall()
+            return round(float(value), digits)
+        except (TypeError, ValueError):
+            return None
 
-                weekday_rows = conn.execute(
-                    """
-                    WITH source_rows AS (
-                        SELECT 'tracked' AS source_key, viewer_count, ts_utc
-                          FROM twitch_stats_tracked
-                        UNION ALL
-                        SELECT 'category' AS source_key, viewer_count, ts_utc
-                          FROM twitch_stats_category
-                    )
-                    SELECT source_key,
-                           EXTRACT(DOW FROM ts_utc)::integer AS weekday,
-                           AVG(viewer_count) AS avg_viewers,
-                           MAX(viewer_count) AS max_viewers,
-                           COUNT(*) AS samples
-                      FROM source_rows
-                     WHERE ts_utc >= %s
-                     GROUP BY 1, 2
-                     ORDER BY 1, 2
-                    """,
-                    (cutoff,),
-                ).fetchall()
-        except Exception as exc:
-            log.exception("category-activity-series query failed")
-            return analytics_internal_error_response()
+    @staticmethod
+    def _int_or_none(value: Any) -> int | None:
+        if value is None:
+            return None
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return None
 
-        def _float_or_none(value: Any, *, digits: int = 1) -> float | None:
-            if value is None:
-                return None
-            try:
-                return round(float(value), digits)
-            except (TypeError, ValueError):
-                return None
+    def _load_category_activity_series_payload_sync(self, *, days: int) -> dict[str, Any]:
+        cutoff = (datetime.now(UTC) - timedelta(days=days)).isoformat()
+        with storage.readonly_connection() as conn:
+            hourly_rows = conn.execute(
+                """
+                WITH source_rows AS (
+                    SELECT 'tracked' AS source_key, viewer_count, ts_utc
+                      FROM twitch_stats_tracked
+                    UNION ALL
+                    SELECT 'category' AS source_key, viewer_count, ts_utc
+                      FROM twitch_stats_category
+                )
+                SELECT source_key,
+                       EXTRACT(HOUR FROM ts_utc)::integer AS hour,
+                       AVG(viewer_count) AS avg_viewers,
+                       MAX(viewer_count) AS max_viewers,
+                       COUNT(*) AS samples
+                  FROM source_rows
+                 WHERE ts_utc >= %s
+                 GROUP BY 1, 2
+                 ORDER BY 1, 2
+                """,
+                (cutoff,),
+            ).fetchall()
 
-        def _int_or_none(value: Any) -> int | None:
-            if value is None:
-                return None
-            try:
-                return int(value)
-            except (TypeError, ValueError):
-                return None
+            weekday_rows = conn.execute(
+                """
+                WITH source_rows AS (
+                    SELECT 'tracked' AS source_key, viewer_count, ts_utc
+                      FROM twitch_stats_tracked
+                    UNION ALL
+                    SELECT 'category' AS source_key, viewer_count, ts_utc
+                      FROM twitch_stats_category
+                )
+                SELECT source_key,
+                       EXTRACT(DOW FROM ts_utc)::integer AS weekday,
+                       AVG(viewer_count) AS avg_viewers,
+                       MAX(viewer_count) AS max_viewers,
+                       COUNT(*) AS samples
+                  FROM source_rows
+                 WHERE ts_utc >= %s
+                 GROUP BY 1, 2
+                 ORDER BY 1, 2
+                """,
+                (cutoff,),
+            ).fetchall()
 
-        hourly_map: dict[str, dict[int, dict[str, Any]]] = {
-            "category": {},
-            "tracked": {},
-        }
-        weekday_map: dict[str, dict[int, dict[str, Any]]] = {
-            "category": {},
-            "tracked": {},
-        }
+        hourly_map: dict[str, dict[int, dict[str, Any]]] = {"category": {}, "tracked": {}}
+        weekday_map: dict[str, dict[int, dict[str, Any]]] = {"category": {}, "tracked": {}}
 
         for row in hourly_rows:
             source_key = str(row[0] or "").strip().lower()
-            hour = _int_or_none(row[1])
+            hour = self._int_or_none(row[1])
             if source_key not in hourly_map or hour is None:
                 continue
             hourly_map[source_key][hour] = {
-                "avg": _float_or_none(row[2]),
-                "peak": _int_or_none(row[3]),
-                "samples": _int_or_none(row[4]) or 0,
+                "avg": self._float_or_none(row[2]),
+                "peak": self._int_or_none(row[3]),
+                "samples": self._int_or_none(row[4]) or 0,
             }
 
         for row in weekday_rows:
             source_key = str(row[0] or "").strip().lower()
-            weekday = _int_or_none(row[1])
+            weekday = self._int_or_none(row[1])
             if source_key not in weekday_map or weekday is None:
                 continue
             weekday_map[source_key][weekday] = {
-                "avg": _float_or_none(row[2]),
-                "peak": _int_or_none(row[3]),
-                "samples": _int_or_none(row[4]) or 0,
+                "avg": self._float_or_none(row[2]),
+                "peak": self._int_or_none(row[3]),
+                "samples": self._int_or_none(row[4]) or 0,
             }
 
         hourly: list[dict[str, Any]] = []
@@ -1456,10 +1569,8 @@ class _AnalyticsPerformanceMixin:
             5: "Freitag",
             6: "Samstag",
         }
-        weekday_order = [1, 2, 3, 4, 5, 6, 0]  # Mo-So
-
         weekly: list[dict[str, Any]] = []
-        for weekday in weekday_order:
+        for weekday in [1, 2, 3, 4, 5, 6, 0]:
             category_point = weekday_map["category"].get(weekday, {})
             tracked_point = weekday_map["tracked"].get(weekday, {})
             weekly.append(
@@ -1475,14 +1586,164 @@ class _AnalyticsPerformanceMixin:
                 }
             )
 
-        return web.json_response(
-            {
-                "hourly": hourly,
-                "weekly": weekly,
-                "windowDays": days,
-                "source": "legacy_stats_chart",
-            }
-        )
+        return {
+            "hourly": hourly,
+            "weekly": weekly,
+            "windowDays": days,
+            "source": "legacy_stats_chart",
+        }
+
+    async def _api_v2_category_activity_series(self, request: web.Request) -> web.Response:
+        """
+        Legacy stats-style comparison series for category vs tracked.
+        Provides hourly and weekday rows with average and peak values.
+        """
+        self._require_v2_auth(request)
+        self._require_extended_plan(request)
+        try:
+            days = _parse_bounded_query_int(
+                request,
+                name="days",
+                default=30,
+                minimum=7,
+                maximum=365,
+            )
+        except ValueError as exc:
+            return web.json_response({"error": str(exc)}, status=400)
+        try:
+            payload = await asyncio.to_thread(
+                self._load_category_activity_series_payload_sync,
+                days=days,
+            )
+            return web.json_response(payload)
+        except Exception:
+            log.exception("category-activity-series query failed")
+            return analytics_internal_error_response()
+
+    def _load_retention_curve_payload_sync(
+        self,
+        *,
+        streamer: str,
+        days: int,
+    ) -> dict[str, Any]:
+        since_date = (datetime.now(UTC) - timedelta(days=days)).isoformat()
+        with storage.readonly_connection() as conn:
+            session_rows = conn.execute(
+                """
+                SELECT id, peak_viewers
+                FROM twitch_stream_sessions
+                WHERE LOWER(streamer_login) = %s AND started_at >= %s AND ended_at IS NOT NULL
+                ORDER BY started_at DESC
+                LIMIT 50
+                """,
+                (streamer, since_date),
+            ).fetchall()
+
+            if not session_rows:
+                return {"retention_curve": [], "drop_events": [], "sessions_used": 0}
+
+            session_ids = [int(row[0]) for row in session_rows]
+            peak_by_session = {int(row[0]): int(row[1] or 1) for row in session_rows}
+            placeholders = ",".join(["%s"] * len(session_ids))
+            viewer_rows = conn.execute(
+                f"""
+                SELECT session_id, minutes_from_start, viewer_count
+                FROM twitch_session_viewers
+                WHERE session_id IN ({placeholders})
+                ORDER BY session_id, minutes_from_start
+                """,
+                tuple(session_ids),
+            ).fetchall()
+
+            minute_data: dict[int, list[float]] = collections.defaultdict(list)
+            for viewer_row in viewer_rows:
+                session_id = int(viewer_row[0])
+                minute = int(viewer_row[1] or 0)
+                count = int(viewer_row[2] or 0)
+                peak = peak_by_session.get(session_id, 1)
+                if peak > 0:
+                    minute_data[minute].append(count / peak)
+
+            if not minute_data:
+                return {"retention_curve": [], "drop_events": [], "sessions_used": 0}
+
+            def _percentile(values: list[float], pct: float) -> float:
+                if not values:
+                    return 0.0
+                sorted_values = sorted(values)
+                index = (len(sorted_values) - 1) * pct
+                lower = int(index)
+                upper = min(lower + 1, len(sorted_values) - 1)
+                return sorted_values[lower] + (sorted_values[upper] - sorted_values[lower]) * (index - lower)
+
+            max_minute = min(max(minute_data.keys()), 180)
+            curve = []
+            for minute in sorted(candidate for candidate in minute_data if candidate <= max_minute):
+                values = minute_data[minute]
+                if not values:
+                    continue
+                median_retention = _percentile(values, 0.5)
+                curve.append(
+                    {
+                        "minute": minute,
+                        "median_retention": round(median_retention, 3),
+                        "p25": round(_percentile(values, 0.25), 3),
+                        "p75": round(_percentile(values, 0.75), 3),
+                        "sample_count": len(values),
+                    }
+                )
+
+            ad_times: set[int] = set()
+            try:
+                ad_rows = conn.execute(
+                    f"""
+                    SELECT a.started_at, s.started_at AS session_start
+                    FROM twitch_ad_break_events a
+                    JOIN twitch_stream_sessions s ON s.id = a.session_id
+                    WHERE a.session_id IN ({placeholders})
+                    """,
+                    tuple(session_ids),
+                ).fetchall()
+                for ad_row in ad_rows:
+                    try:
+                        ad_dt = datetime.fromisoformat(str(ad_row[0]).replace("Z", "+00:00"))
+                        session_dt = datetime.fromisoformat(str(ad_row[1]).replace("Z", "+00:00"))
+                        ad_times.add(int((ad_dt - session_dt).total_seconds() / 60.0))
+                    except Exception:
+                        pass
+            except Exception:
+                pass
+
+        drop_events = []
+        for index in range(1, len(curve)):
+            previous_retention = curve[index - 1]["median_retention"]
+            current_retention = curve[index]["median_retention"]
+            if previous_retention <= 0:
+                continue
+            delta = (current_retention - previous_retention) / previous_retention
+            if delta < -0.10:
+                minute = curve[index]["minute"]
+                drop_events.append(
+                    {
+                        "minute": minute,
+                        "drop_pct": round(abs(delta) * 100, 1),
+                        "type": "ad_break" if minute in ad_times else "unknown",
+                    }
+                )
+
+        avg_watch = None
+        for point in curve:
+            if point["median_retention"] < 0.5:
+                avg_watch = point["minute"]
+                break
+
+        return {
+            "retention_curve": curve,
+            "drop_events": drop_events,
+            "avg_watch_duration_min": avg_watch,
+            "sessions_used": len(session_ids),
+            "window_days": days,
+        }
 
     async def _api_v2_retention_curve(self, request: web.Request) -> web.Response:
         """Aggregated viewer retention curve from twitch_session_viewers."""
@@ -1490,135 +1751,27 @@ class _AnalyticsPerformanceMixin:
         self._require_extended_plan(request)
 
         streamer = request.query.get("streamer", "").strip().lower()
-        days = min(max(int(request.query.get("days", "30")), 7), 365)
+        try:
+            days = _parse_bounded_query_int(
+                request,
+                name="days",
+                default=30,
+                minimum=7,
+                maximum=365,
+            )
+        except ValueError as exc:
+            return web.json_response({"error": str(exc)}, status=400)
 
         if not streamer:
             return web.json_response({"error": "Streamer required"}, status=400)
 
         try:
-            with storage.readonly_connection() as conn:
-                since_date = (datetime.now(UTC) - timedelta(days=days)).isoformat()
-
-                # Get all session IDs for this streamer in range
-                session_rows = conn.execute(
-                    """
-                    SELECT id, peak_viewers
-                    FROM twitch_stream_sessions
-                    WHERE LOWER(streamer_login) = %s AND started_at >= %s AND ended_at IS NOT NULL
-                    ORDER BY started_at DESC
-                    LIMIT 50
-                    """,
-                    (streamer, since_date),
-                ).fetchall()
-
-                if not session_rows:
-                    return web.json_response({"retention_curve": [], "drop_events": [], "sessions_used": 0})
-
-                session_ids = [int(r[0]) for r in session_rows]
-                peak_by_session = {int(r[0]): int(r[1] or 1) for r in session_rows}
-
-                # Fetch all viewer timeline data for these sessions
-                placeholders = ",".join(["%s"] * len(session_ids))
-                viewer_rows = conn.execute(
-                    f"""
-                    SELECT session_id, minutes_from_start, viewer_count
-                    FROM twitch_session_viewers
-                    WHERE session_id IN ({placeholders})
-                    ORDER BY session_id, minutes_from_start
-                    """,
-                    tuple(session_ids),
-                ).fetchall()
-
-                # Group by minute, collect retention values across sessions
-                from collections import defaultdict
-                minute_data: dict[int, list[float]] = defaultdict(list)
-                for vr in viewer_rows:
-                    sid = int(vr[0])
-                    minute = int(vr[1] or 0)
-                    count = int(vr[2] or 0)
-                    peak = peak_by_session.get(sid, 1)
-                    if peak > 0:
-                        minute_data[minute].append(count / peak)
-
-                if not minute_data:
-                    return web.json_response({"retention_curve": [], "drop_events": [], "sessions_used": 0})
-
-                # Build curve: median retention + P25/P75 per minute
-                def _percentile(values: list, pct: float) -> float:
-                    if not values:
-                        return 0.0
-                    s = sorted(values)
-                    idx = (len(s) - 1) * pct
-                    lo, hi = int(idx), min(int(idx) + 1, len(s) - 1)
-                    return s[lo] + (s[hi] - s[lo]) * (idx - lo)
-
-                max_minute = min(max(minute_data.keys()), 180)  # cap at 3h
-                curve = []
-                for minute in sorted(m for m in minute_data if m <= max_minute):
-                    vals = minute_data[minute]
-                    if len(vals) < 1:
-                        continue
-                    median_ret = _percentile(vals, 0.5)
-                    curve.append({
-                        "minute": minute,
-                        "median_retention": round(median_ret, 3),
-                        "p25": round(_percentile(vals, 0.25), 3),
-                        "p75": round(_percentile(vals, 0.75), 3),
-                        "sample_count": len(vals),
-                    })
-
-                # Detect drop events: >10% relative drop between consecutive minutes
-                # Annotate with ad_break type if possible
-                ad_times: set[int] = set()
-                try:
-                    ad_rows_q = conn.execute(
-                        f"""
-                        SELECT a.started_at, s.started_at AS session_start
-                        FROM twitch_ad_break_events a
-                        JOIN twitch_stream_sessions s ON s.id = a.session_id
-                        WHERE a.session_id IN ({placeholders})
-                        """,
-                        tuple(session_ids),
-                    ).fetchall()
-                    for ar in ad_rows_q:
-                        try:
-                            ad_dt = datetime.fromisoformat(str(ar[0]).replace("Z", "+00:00"))
-                            sess_dt = datetime.fromisoformat(str(ar[1]).replace("Z", "+00:00"))
-                            min_into = int((ad_dt - sess_dt).total_seconds() / 60.0)
-                            ad_times.add(min_into)
-                        except Exception:
-                            pass
-                except Exception:
-                    pass
-
-                drop_events = []
-                for i in range(1, len(curve)):
-                    prev_ret = curve[i - 1]["median_retention"]
-                    curr_ret = curve[i]["median_retention"]
-                    if prev_ret > 0:
-                        delta = (curr_ret - prev_ret) / prev_ret
-                        if delta < -0.10:
-                            minute = curve[i]["minute"]
-                            drop_events.append({
-                                "minute": minute,
-                                "drop_pct": round(abs(delta) * 100, 1),
-                                "type": "ad_break" if minute in ad_times else "unknown",
-                            })
-
-                # Average watch duration estimate (minute where median drops below 0.5)
-                avg_watch = None
-                for pt in curve:
-                    if pt["median_retention"] < 0.5:
-                        avg_watch = pt["minute"]
-                        break
-
-                return web.json_response({
-                    "retention_curve": curve,
-                    "drop_events": drop_events,
-                    "avg_watch_duration_min": avg_watch,
-                    "sessions_used": len(session_ids),
-                    "window_days": days,
-                })
+            payload = await asyncio.to_thread(
+                self._load_retention_curve_payload_sync,
+                streamer=streamer,
+                days=days,
+            )
+            return web.json_response(payload)
         except Exception as exc:
             log.exception("Error in retention curve API")
             return analytics_internal_error_response()

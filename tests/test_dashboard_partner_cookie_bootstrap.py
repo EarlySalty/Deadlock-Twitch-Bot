@@ -104,12 +104,13 @@ class DashboardPartnerCookieBootstrapTests(unittest.IsolatedAsyncioTestCase):
         server: DashboardV2Server,
         *,
         next_path: str = "/twitch/dashboard-v2",
+        headers: dict[str, str] | None = None,
     ) -> dict[str, object]:
         self._install_partner_login_state_repo(server)
         request = _make_request(
             path="/twitch/auth/partner/link",
             query={"next": next_path},
-            headers={"X-Admin-Token": "admin-secret"},
+            headers={"X-Admin-Token": "admin-secret", **(headers or {})},
         )
         response = await server.auth_partner_link(request)
         self.assertEqual(response.status, 200)
@@ -250,6 +251,36 @@ class DashboardPartnerCookieBootstrapTests(unittest.IsolatedAsyncioTestCase):
         response = await server.auth_partner_link(request)
         self.assertEqual(response.status, 503)
 
+    async def test_partner_login_fails_closed_when_persisted_consume_errors(self) -> None:
+        server = self._make_server()
+        self._install_partner_login_state_repo(server)
+        issued_link = await self._issue_partner_login_link(server)
+        token = str(issued_link["login_token"])
+
+        repo = server._dashboard_auth_state_repo()
+        original_consume = repo.consume_partner_login_state
+
+        def _consume_partner_login_state_fail(*args, **kwargs):
+            raise RuntimeError("db-read-failed")
+
+        repo.consume_partner_login_state = _consume_partner_login_state_fail  # type: ignore[method-assign]
+        failed_response = await server.auth_partner_login(
+            _make_request(
+                path="/twitch/auth/partner/login",
+                post_data={"token": token},
+            )
+        )
+        self.assertEqual(failed_response.status, 401)
+
+        repo.consume_partner_login_state = original_consume  # type: ignore[method-assign]
+        with self.assertRaises(web.HTTPSeeOther):
+            await server.auth_partner_login(
+                _make_request(
+                    path="/twitch/auth/partner/login",
+                    post_data={"token": token},
+                )
+            )
+
     async def test_partner_login_consumes_persisted_state_without_in_memory_cache(self) -> None:
         server = self._make_server()
         self._install_partner_login_state_repo(server)
@@ -286,6 +317,35 @@ class DashboardPartnerCookieBootstrapTests(unittest.IsolatedAsyncioTestCase):
             )
         )
         self.assertEqual(login_response.status, 429)
+
+    async def test_partner_link_requires_same_origin_for_admin_session_issuance(self) -> None:
+        server = self._make_server()
+        self._install_partner_login_state_repo(server)
+        server._get_auth_level = lambda _request: "admin"  # type: ignore[method-assign]
+        server._is_discord_admin_request = lambda _request: False  # type: ignore[method-assign]
+
+        with self.assertRaises(web.HTTPForbidden):
+            await server.auth_partner_link(
+                _make_request(
+                    path="/twitch/auth/partner/link",
+                    query={"next": "/twitch/dashboard-v2"},
+                )
+            )
+
+    async def test_partner_link_accepts_same_origin_for_admin_session_issuance(self) -> None:
+        server = self._make_server()
+        self._install_partner_login_state_repo(server)
+        server._get_auth_level = lambda _request: "admin"  # type: ignore[method-assign]
+        server._is_discord_admin_request = lambda _request: False  # type: ignore[method-assign]
+
+        response = await server.auth_partner_link(
+            _make_request(
+                path="/twitch/auth/partner/link",
+                query={"next": "/twitch/dashboard-v2"},
+                headers={"Origin": "https://dashboard.example"},
+            )
+        )
+        self.assertEqual(response.status, 200)
 
     async def test_partner_cookie_session_is_bound_to_request_fingerprint(self) -> None:
         server = self._make_server()

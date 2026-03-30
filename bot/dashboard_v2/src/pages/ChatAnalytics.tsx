@@ -2,7 +2,7 @@ import { AlertCircle, Loader2, MessageCircle } from 'lucide-react';
 
 import type { TimeRange } from '@/types/analytics';
 
-import { ChatAnalyticsContent } from './chatAnalyticsSections';
+import { ChatAnalyticsContent } from './chatAnalyticsContent';
 import { useChatAnalyticsPage } from './useChatAnalyticsPage';
 import { buildChatAnalyticsViewModel } from './chatAnalyticsViewModel';
 

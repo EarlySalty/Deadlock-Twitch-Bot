@@ -21,6 +21,7 @@ from ..storage import pg as storage_pg
 from .admin.legal_mixin import _DashboardLegalMixin
 from .affiliate.affiliate_mixin import _DashboardAffiliateMixin
 from .auth.auth_mixin import _DashboardAuthMixin
+from .auth.partner_auth_mixin import _DashboardPartnerAuthMixin
 from .billing.billing_mixin import _DashboardBillingMixin
 from .core.stats import DashboardStatsMixin
 from .core.templates import DashboardTemplateMixin
@@ -85,6 +86,7 @@ _DEFAULT_TRUSTED_PROXY_CIDRS: tuple[str, ...] = (
 
 
 class DashboardV2Server(
+    _DashboardPartnerAuthMixin,
     _DashboardAuthMixin,
     _DashboardAffiliateMixin,
     _DashboardRaidMixin,
@@ -773,16 +775,7 @@ class DashboardV2Server(
             return
         if self._noauth:
             return
-        partner_header = request.headers.get("X-Partner-Token")
-        admin_header = request.headers.get("X-Admin-Token")
-
-        if self._partner_token:
-            if secrets.compare_digest(str(partner_header or ""), str(self._partner_token)):
-                return
-            if secrets.compare_digest(str(admin_header or ""), str(self._token)):
-                return
-            raise web.HTTPUnauthorized(text="missing or invalid partner token")
-        raise web.HTTPUnauthorized(text="missing or invalid partner token")
+        raise web.HTTPUnauthorized(text="missing or invalid partner authentication")
 
     def _redirect_location(
         self,

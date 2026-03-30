@@ -144,45 +144,45 @@ class _InMemoryAuthStateRepo:
 
     def save_twitch_oauth_state(self, *, state: str, payload: dict, ttl_seconds: float, now=None) -> None:
         del ttl_seconds, now
-        self.owner._oauth_states[state] = dict(payload)
+        self.owner._dashboard_auth_state_cache("_oauth_states").put(state, payload)
 
     def consume_twitch_oauth_state(self, state: str, *, now=None) -> dict | None:
         del now
-        return self.owner._oauth_states.pop(state, None)
+        return self.owner._dashboard_auth_state_cache("_oauth_states").pop(state, None)
 
     def save_discord_admin_oauth_state(
         self, *, state: str, payload: dict, ttl_seconds: float, now=None
     ) -> None:
         del ttl_seconds, now
-        self.owner._discord_admin_oauth_states[state] = dict(payload)
+        self.owner._dashboard_auth_state_cache("_discord_admin_oauth_states").put(state, payload)
 
     def consume_discord_admin_oauth_state(self, state: str, *, now=None) -> dict | None:
         del now
-        return self.owner._discord_admin_oauth_states.pop(state, None)
+        return self.owner._dashboard_auth_state_cache("_discord_admin_oauth_states").pop(state, None)
 
     def load_dashboard_session(self, session_id: str, *, now=None) -> dict | None:
         del now
-        return self.owner._auth_sessions.get(session_id)
+        return self.owner._dashboard_auth_state_cache("_auth_sessions").get(session_id)
 
     def save_dashboard_session(
         self, *, session_id: str, payload: dict, created_at: float, expires_at: float
     ) -> None:
         del created_at, expires_at
-        self.owner._auth_sessions[session_id] = dict(payload)
+        self.owner._dashboard_auth_state_cache("_auth_sessions").put(session_id, payload)
 
     def load_discord_admin_session(self, session_id: str, *, now=None) -> dict | None:
         del now
-        return self.owner._discord_admin_sessions.get(session_id)
+        return self.owner._dashboard_auth_state_cache("_discord_admin_sessions").get(session_id)
 
     def save_discord_admin_session(
         self, *, session_id: str, payload: dict, created_at: float, expires_at: float
     ) -> None:
         del created_at, expires_at
-        self.owner._discord_admin_sessions[session_id] = dict(payload)
+        self.owner._dashboard_auth_state_cache("_discord_admin_sessions").put(session_id, payload)
 
     def delete_session(self, session_id: str) -> None:
-        self.owner._auth_sessions.pop(session_id, None)
-        self.owner._discord_admin_sessions.pop(session_id, None)
+        self.owner._dashboard_auth_state_cache("_auth_sessions").pop(session_id, None)
+        self.owner._dashboard_auth_state_cache("_discord_admin_sessions").pop(session_id, None)
 
     def delete_expired(self, now: float | None = None) -> None:
         del now
@@ -219,9 +219,10 @@ class DashboardOAuthStateBindingTests(unittest.IsolatedAsyncioTestCase):
                 await handler.auth_login(request)
 
         self.assertIn(f"state={state}", ctx.exception.location)
-        self.assertIn(state, handler._oauth_states)
-        self.assertEqual(handler._oauth_states[state].get("context_token"), context_token)
-        self.assertEqual(handler._oauth_states[state].get("next_path"), "/twitch/dashboard")
+        oauth_cache = handler._dashboard_auth_state_cache("_oauth_states")
+        self.assertIn(state, oauth_cache.data())
+        self.assertEqual(oauth_cache.get(state).get("context_token"), context_token)
+        self.assertEqual(oauth_cache.get(state).get("next_path"), "/twitch/dashboard")
         cookie = ctx.exception.cookies.get(handler._oauth_context_cookie_name())
         self.assertEqual(cookie.value, context_token)
         self._assert_cookie_security_flags(
@@ -246,36 +247,39 @@ class DashboardOAuthStateBindingTests(unittest.IsolatedAsyncioTestCase):
                     with self.assertRaises(web.HTTPFound):
                         await handler.auth_login(request)
 
-                self.assertEqual(handler._oauth_states[state].get("next_path"), "/twitch/dashboard")
+                self.assertEqual(
+                    handler._dashboard_auth_state_cache("_oauth_states").get(state).get("next_path"),
+                    "/twitch/dashboard",
+                )
 
     async def test_auth_callback_rejects_missing_context_cookie_and_consumes_state(self) -> None:
         handler = _AuthHarness()
         state = "state_token_missing_cookie_123"
-        handler._oauth_states[state] = {
+        handler._dashboard_auth_state_cache("_oauth_states").put(state, {
             "created_at": time.time(),
             "next_path": "/twitch/dashboard",
             "redirect_uri": "https://dashboard.example/twitch/auth/callback",
             "context_token": "ctx_token_abcdefghijklmnop",
-        }
+        })
         request = _make_request(query={"state": state, "code": "oauth-code"}, cookies={})
 
         response = await handler.auth_callback(request)
 
         self.assertEqual(response.status, 400)
         self.assertIn("OAuth state ungültig oder abgelaufen.", response.text)
-        self.assertNotIn(state, handler._oauth_states)
+        self.assertNotIn(state, handler._dashboard_auth_state_cache("_oauth_states").data())
         self.assertEqual(handler.exchange_calls, [])
 
     async def test_auth_callback_requires_bound_cookie_and_state_is_one_time(self) -> None:
         handler = _AuthHarness()
         context_token = "ctx_token_abcdefghijklmnop"
         state = "state_token_abcdefghijklmnop"
-        handler._oauth_states[state] = {
+        handler._dashboard_auth_state_cache("_oauth_states").put(state, {
             "created_at": time.time(),
             "next_path": "/twitch/dashboard",
             "redirect_uri": "https://dashboard.example/twitch/auth/callback",
             "context_token": context_token,
-        }
+        })
         request = _make_request(
             query={"state": state, "code": "oauth-code"},
             cookies={handler._oauth_context_cookie_name(): context_token},
@@ -327,13 +331,14 @@ class DashboardOAuthStateBindingTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertIn("/oauth2/authorize?", ctx.exception.location)
         self.assertIn(f"state={state}", ctx.exception.location)
-        self.assertIn(state, handler._discord_admin_oauth_states)
+        discord_oauth_cache = handler._dashboard_auth_state_cache("_discord_admin_oauth_states")
+        self.assertIn(state, discord_oauth_cache.data())
         self.assertEqual(
-            handler._discord_admin_oauth_states[state].get("context_token"),
+            discord_oauth_cache.get(state).get("context_token"),
             context_token,
         )
         self.assertEqual(
-            handler._discord_admin_oauth_states[state].get("next_path"),
+            discord_oauth_cache.get(state).get("next_path"),
             "/twitch/admin/announcements?tab=mod",
         )
         cookie = ctx.exception.cookies.get(handler._discord_oauth_context_cookie_name())
@@ -361,7 +366,9 @@ class DashboardOAuthStateBindingTests(unittest.IsolatedAsyncioTestCase):
                         await handler.discord_auth_login(request)
 
                 self.assertEqual(
-                    handler._discord_admin_oauth_states[state].get("next_path"),
+                    handler._dashboard_auth_state_cache("_discord_admin_oauth_states")
+                    .get(state)
+                    .get("next_path"),
                     "/twitch/admin",
                 )
 
@@ -369,12 +376,12 @@ class DashboardOAuthStateBindingTests(unittest.IsolatedAsyncioTestCase):
         handler = _AuthHarness()
         context_token = "discord_ctx_abcdefghijklmnop"
         state = "discord_state_abcdefghijklmnop"
-        handler._discord_admin_oauth_states[state] = {
+        handler._dashboard_auth_state_cache("_discord_admin_oauth_states").put(state, {
             "created_at": time.time(),
             "next_path": "/twitch/admin",
             "redirect_uri": "https://dashboard.example/twitch/auth/discord/callback",
             "context_token": context_token,
-        }
+        })
         request = _make_request(
             query={"state": state, "code": "discord-oauth-code"},
             cookies={handler._discord_oauth_context_cookie_name(): context_token},
@@ -409,9 +416,10 @@ class DashboardOAuthStateBindingTests(unittest.IsolatedAsyncioTestCase):
             path="/twitch/auth/discord/callback",
             max_age="0",
         )
-        self.assertIn("discord-session-123", handler._discord_admin_sessions)
+        discord_session_cache = handler._dashboard_auth_state_cache("_discord_admin_sessions")
+        self.assertIn("discord-session-123", discord_session_cache.data())
         self.assertEqual(
-            handler._discord_admin_sessions["discord-session-123"].get("auth_type"),
+            discord_session_cache.get("discord-session-123").get("auth_type"),
             "discord_admin",
         )
 
