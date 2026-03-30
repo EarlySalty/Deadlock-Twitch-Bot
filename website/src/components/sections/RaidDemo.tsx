@@ -6,21 +6,17 @@ interface Streamer {
   avatar: string
   color: string
   viewers: number
-  video: string
+  clipId: string
 }
 
 // ─── Streamer-Pool ───────────────────────────────────────────────────────────
 const streamerPool: Streamer[] = [
-  { name: 'EarlySalty',  avatar: 'E',  color: '#ff7a18', viewers: 247, video: '/clips/loop1.webm' },
-  { name: 'Paradox',     avatar: 'P',  color: '#10b7ad', viewers: 183, video: '/clips/loop2.webm' },
-  { name: 'NovaSpark',   avatar: 'N',  color: '#8b5cf6', viewers: 312, video: '/clips/loop3.webm' },
-  { name: 'FrostByte',   avatar: 'F',  color: '#3b82f6', viewers: 95,  video: '/clips/loop1.webm' },
-  { name: 'CrimsonAce',  avatar: 'C',  color: '#ef4444', viewers: 421, video: '/clips/loop2.webm' },
-  { name: 'ZenithPlay',  avatar: 'Z',  color: '#f59e0b', viewers: 158, video: '/clips/loop3.webm' },
-  { name: 'VoidWalker',  avatar: 'V',  color: '#ec4899', viewers: 76,  video: '/clips/loop1.webm' },
-  { name: 'IronStrike',  avatar: 'I',  color: '#06b6d4', viewers: 534, video: '/clips/loop2.webm' },
-  { name: 'LunaBlaze',   avatar: 'L',  color: '#84cc16', viewers: 229, video: '/clips/loop3.webm' },
-  { name: 'PhantomRush', avatar: 'Ph', color: '#a78bfa', viewers: 367, video: '/clips/loop1.webm' },
+  { name: 'miracleghost9',  avatar: 'M',  color: '#ff7a18', viewers: 247, clipId: 'GloriousAnnoyingManateeSuperVinlin-rqMNWSvzZ_8urT-c' },
+  { name: 'whysolowkey',    avatar: 'W',  color: '#10b7ad', viewers: 183, clipId: 'NaiveIntelligentFlyCoolStoryBro-tLjVkwzVQahDhtS0' },
+  { name: 'kdenos',         avatar: 'K',  color: '#8b5cf6', viewers: 312, clipId: 'FurtiveInnocentCookiePogChamp-PL69Xswt33B0i20v' },
+  { name: 'johnnyblazedx',  avatar: 'J',  color: '#3b82f6', viewers: 421, clipId: 'MiniatureBoldLorisJonCarnage-kqH490J8QrvDtBpL' },
+  { name: 'derechtecoolys', avatar: 'D',  color: '#f59e0b', viewers: 158, clipId: 'EasyInexpensivePheasantLitFam-XPNi43FGxf1-R_m9' },
+  { name: 'duzzel',         avatar: 'Du', color: '#ec4899', viewers: 534, clipId: 'VibrantShakingKleeYee-ou2oZBpKHO4HRmKV' },
 ]
 
 let lastPair: [number, number] = [-1, -1]
@@ -92,8 +88,8 @@ export function RaidDemo() {
   const raidCountNumRef    = useRef<HTMLDivElement>(null)
   const finalTextRef       = useRef<HTMLDivElement>(null)
   const energyBeamRef      = useRef<HTMLDivElement>(null)
-  const sourceVideoRef     = useRef<HTMLVideoElement>(null)
-  const targetVideoRef     = useRef<HTMLVideoElement>(null)
+  const sourceIframeRef    = useRef<HTMLIFrameElement>(null)
+  const targetIframeRef    = useRef<HTMLIFrameElement>(null)
   const sourceLiveBadgeRef = useRef<HTMLDivElement>(null)
   const sourceLiveTextRef  = useRef<HTMLSpanElement>(null)
   const sourceDurationRef  = useRef<HTMLDivElement>(null)
@@ -242,8 +238,14 @@ export function RaidDemo() {
     }
 
     // ─── Setup Scenario ─────────────────────────────────────────────────
+    const parent = window.location.hostname || 'earlysalty.de'
+
+    function twitchClipUrl(clipId: string, autoplay = true): string {
+      return `https://clips.twitch.tv/embed?clip=${clipId}&parent=${parent}&autoplay=${autoplay}&muted=true`
+    }
+
     function setupScenario(src: Streamer, tgt: Streamer) {
-      if (sourceVideoRef.current) sourceVideoRef.current.src = src.video
+      if (sourceIframeRef.current) sourceIframeRef.current.src = twitchClipUrl(src.clipId)
       if (sourceStreamerRef.current) sourceStreamerRef.current.textContent = src.name
       if (sourceViewersRef.current) sourceViewersRef.current.textContent = `${src.viewers} Zuschauer`
       if (sourceAvatarRef.current) {
@@ -261,7 +263,7 @@ export function RaidDemo() {
         sourceEmbedRef.current.style.transform = 'scale(1)'
       }
 
-      if (targetVideoRef.current) targetVideoRef.current.src = tgt.video
+      if (targetIframeRef.current) targetIframeRef.current.src = twitchClipUrl(tgt.clipId)
       if (targetStreamerRef.current) targetStreamerRef.current.textContent = tgt.name
       if (targetViewersRef.current) targetViewersRef.current.textContent = `${tgt.viewers} Zuschauer`
       if (targetAvatarRef.current) {
@@ -467,8 +469,15 @@ export function RaidDemo() {
           background: #0a0a0a;
           overflow: hidden;
         }
-        .rd-player video {
-          width: 100%; height: 100%; object-fit: cover; display: block;
+        .rd-clip-iframe {
+          position: absolute;
+          inset: 0;
+          width: 100%;
+          height: calc(100% + 48px);
+          top: -4px;
+          border: none;
+          border-radius: 8px 8px 0 0;
+          pointer-events: none;
         }
         .rd-player-overlays {
           position: absolute; inset: 0;
@@ -688,7 +697,15 @@ export function RaidDemo() {
           {/* Source Embed */}
           <div className="rd-twitch-embed rd-embed-source" ref={sourceEmbedRef}>
             <div className="rd-player">
-              <video ref={sourceVideoRef} muted autoPlay loop playsInline />
+              <iframe
+                ref={sourceIframeRef}
+                src=""
+                className="rd-clip-iframe"
+                allow="autoplay; fullscreen"
+                allowFullScreen
+                title="Source stream"
+                scrolling="no"
+              />
               <div className="rd-player-overlays">
                 <div className="rd-overlay-top">
                   <div className="rd-live-badge" ref={sourceLiveBadgeRef}>
@@ -755,7 +772,15 @@ export function RaidDemo() {
             style={{ opacity: 0.4, transform: 'scale(0.97)' }}
           >
             <div className="rd-player">
-              <video ref={targetVideoRef} muted autoPlay loop playsInline />
+              <iframe
+                ref={targetIframeRef}
+                src=""
+                className="rd-clip-iframe"
+                allow="autoplay; fullscreen"
+                allowFullScreen
+                title="Target stream"
+                scrolling="no"
+              />
               <div className="rd-player-overlays">
                 <div className="rd-overlay-top">
                   <div className="rd-live-badge" ref={targetLiveBadgeRef}>
