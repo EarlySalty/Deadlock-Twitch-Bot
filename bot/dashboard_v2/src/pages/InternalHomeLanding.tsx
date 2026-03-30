@@ -2,11 +2,11 @@ import { useEffect, useMemo, useState } from 'react';
 import { motion } from 'framer-motion';
 import { useQuery } from '@tanstack/react-query';
 import {
-  fetchApi,
   fetchInternalHome,
   type InternalHomeActionEntry,
   type InternalHomeChangelogEntry,
-} from '@/api/client';
+} from '@/api/home';
+import { fetchApi } from '@/api/core';
 import { useStreamerList, useAuthStatus } from '@/hooks/useAnalytics';
 import { formatNumber, formatDuration } from '@/utils/formatters';
 import {

@@ -1,7 +1,7 @@
 import { motion } from 'framer-motion';
 import { CheckCircle2, Circle, Loader2, Map, Zap } from 'lucide-react';
 import { useRoadmap } from '@/hooks/useAnalytics';
-import type { RoadmapItem } from '@/api/client';
+import type { RoadmapItem } from '@/api';
 
 const STATUS_CONFIG = {
   planned: {

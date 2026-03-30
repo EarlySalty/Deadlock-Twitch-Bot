@@ -2,7 +2,7 @@ import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { ToggleLeft, ToggleRight, ChevronRight } from 'lucide-react';
 import { useState } from 'react';
 import { AffiliateDetailPanel } from '../components/cards/AffiliateDetailPanel';
-import { toggleAffiliate } from '../api/client';
+import { toggleAffiliate } from '../api/admin';
 import { useAdminAffiliates, useAdminAffiliateStats, useAuthStatus } from '../hooks/useAnalytics';
 
 export default function AdminAffiliates() {

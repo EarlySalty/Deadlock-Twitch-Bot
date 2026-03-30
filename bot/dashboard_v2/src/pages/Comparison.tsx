@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { motion } from 'framer-motion';
 import { Scale, Users, TrendingUp, Target, AlertCircle, Loader2, Filter, Award } from 'lucide-react';
 import { useQuery } from '@tanstack/react-query';
-import { fetchCategoryComparison, fetchViewerOverlap } from '@/api/client';
+import { fetchCategoryComparison, fetchViewerOverlap } from '@/api/analytics';
 import { useAudienceSharing } from '@/hooks/useAnalytics';
 import { AudienceSharing } from '@/components/charts/AudienceSharing';
 import { PlanGateCard } from '@/components/cards/PlanGateCard';

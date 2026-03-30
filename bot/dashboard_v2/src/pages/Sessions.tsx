@@ -3,7 +3,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { Play, Clock, Users, TrendingUp, ChevronDown, ChevronUp, MessageCircle, AlertCircle, Loader2, ExternalLink } from 'lucide-react';
 import { useQuery } from '@tanstack/react-query';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
-import { fetchOverview, fetchSessionDetail } from '@/api/client';
+import { fetchOverview, fetchSessionDetail } from '@/api/analytics';
 import { PlanGateCard } from '@/components/cards/PlanGateCard';
 import type { DashboardOverview, StreamSession, TimeRange } from '@/types/analytics';
 

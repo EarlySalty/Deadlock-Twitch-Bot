@@ -5,7 +5,7 @@ import {
   ArrowUpDown, ChevronUp, ChevronDown, ExternalLink, Loader2,
 } from 'lucide-react';
 import { useQuery } from '@tanstack/react-query';
-import { fetchCategoryLeaderboard } from '@/api/client';
+import { fetchCategoryLeaderboard } from '@/api/analytics';
 import { useCategoryActivitySeries } from '@/hooks/useAnalytics';
 import { CategoryTimingsChart } from '@/components/charts/CategoryTimingsChart';
 import { PlanGateCard } from '@/components/cards/PlanGateCard';

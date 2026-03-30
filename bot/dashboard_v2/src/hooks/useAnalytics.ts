@@ -17,7 +17,6 @@ import {
   fetchSessionEvents,
   fetchStreamerList,
   fetchCategoryComparison,
-  fetchAuthStatus,
   fetchWatchTimeDistribution,
   fetchFollowerFunnel,
   fetchAudienceInsights,
@@ -44,13 +43,16 @@ import {
   fetchExpGameTransitions,
   fetchExpGrowthCurves,
   fetchRoadmap,
-  fetchBillingCatalog,
+  fetchAdsSchedule,
+} from '@/api/analytics';
+import { fetchAuthStatus } from '@/api/auth';
+import { fetchBillingCatalog } from '@/api/billing';
+import {
   fetchAdminAffiliates,
   fetchAdminAffiliateStats,
   fetchAdminAffiliateDetail,
-  fetchAffiliatePortal,
-  fetchAdsSchedule,
-} from '@/api/client';
+} from '@/api/admin';
+import { fetchAffiliatePortal } from '@/api/affiliate';
 import type { TimeRange, ViewerSortField, ViewerFilterType } from '@/types/analytics';
 
 // Stale time: 5 minutes

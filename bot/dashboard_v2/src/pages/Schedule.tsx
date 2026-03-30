@@ -2,7 +2,7 @@ import { useMemo } from 'react';
 import { motion } from 'framer-motion';
 import { Clock, Calendar, Zap, TrendingUp, AlertCircle, Loader2, Star } from 'lucide-react';
 import { useQuery } from '@tanstack/react-query';
-import { fetchHourlyHeatmap, fetchWeekdayStats } from '@/api/client';
+import { fetchHourlyHeatmap, fetchWeekdayStats } from '@/api/analytics';
 import type { HourlyHeatmapData, WeekdayStats, TimeRange } from '@/types/analytics';
 
 interface ScheduleProps {

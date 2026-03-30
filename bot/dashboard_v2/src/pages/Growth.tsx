@@ -3,7 +3,7 @@ import { motion } from 'framer-motion';
 import { TrendingUp, Calendar, Clock, AlertCircle, Loader2, Crown, Users, Play, ArrowDownLeft, ArrowUpRight, UserPlus, Star } from 'lucide-react';
 import { useQuery } from '@tanstack/react-query';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend, BarChart, Bar, Cell } from 'recharts';
-import { fetchMonthlyStats, fetchWeekdayStats } from '@/api/client';
+import { fetchMonthlyStats, fetchWeekdayStats } from '@/api/analytics';
 import { useTagAnalysisExtended, useTitlePerformance, useRaidRetention, useRaidAnalytics } from '@/hooks/useAnalytics';
 import { TagPerformanceChart } from '@/components/charts/TagPerformance';
 import { RaidRetention } from '@/components/charts/RaidRetention';

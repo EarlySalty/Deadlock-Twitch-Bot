@@ -20,7 +20,7 @@ import {
 } from 'lucide-react';
 import { useQuery } from '@tanstack/react-query';
 import { useAuthStatus } from '@/hooks/useAnalytics';
-import { fetchAIAnalysis, fetchAIHistory } from '@/api/client';
+import { fetchAIAnalysis, fetchAIHistory } from '@/api/ai';
 import type { AIAnalysisResult, AIAnalysisPoint, AIHistoryEntry, TimeRange } from '@/types/analytics';
 import { dashboardRuntimeConfig, resolveEffectiveDemoMode } from '@/runtimeConfig';
 

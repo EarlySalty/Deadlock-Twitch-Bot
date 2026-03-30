@@ -182,19 +182,13 @@ async def auth_logout(
 
     session_id = (request.cookies.get(server._session_cookie_name) or "").strip()
     if session_id:
-        session = server._auth_sessions.pop(session_id, None)
+        session = server._delete_dashboard_auth_session(session_id)
         twitch_login = (session or {}).get("twitch_login", "unknown") if session else "unknown"
         log.info(
             "AUDIT dashboard logout: twitch=%s peer=%s",
             server._sanitize_log_value(twitch_login),
             server._sanitize_log_value(server._peer_host(request)),
         )
-        try:
-            from ..storage import sessions_db
-
-            sessions_db.delete_session(session_id)
-        except Exception as exc:
-            log.debug("Could not delete dashboard session from DB: %s", exc)
 
     response = server._dashboard_auth_redirect_or_unavailable(
         request,
@@ -202,6 +196,10 @@ async def auth_logout(
         fallback_login_url=dashboard_v2_login_url,
     )
     server._clear_session_cookie(response, request)
+    partner_session_id = (request.cookies.get(server._partner_access_cookie_name()) or "").strip()
+    if partner_session_id:
+        server._delete_partner_access_session(partner_session_id)
+    server._clear_partner_access_cookie(response, request)
     if isinstance(response, web.HTTPException):
         raise response
     return response
