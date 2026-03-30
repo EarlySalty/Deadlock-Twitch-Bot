@@ -766,13 +766,49 @@ class DashboardSecurityRegressionTests(unittest.IsolatedAsyncioTestCase):
             "_dashboard_streamer_overview_sync",
             return_value={"login": "alpha", "meta": {"ok": True}},
         ) as mocked_loader, patch(
-            "bot.dashboard.mixin.asyncio.to_thread",
+            "bot.dashboard.dashboard_metrics_mixin.asyncio.to_thread",
             new=AsyncMock(side_effect=lambda func, *args, **kwargs: func(*args, **kwargs)),
         ) as mocked_to_thread:
             payload = await handler._dashboard_streamer_overview("Alpha")
 
         self.assertEqual(payload["login"], "alpha")
         mocked_loader.assert_called_once_with("alpha")
+        mocked_to_thread.assert_awaited_once()
+        self.assertIs(mocked_to_thread.await_args.args[0], mocked_loader)
+
+    async def test_dashboard_session_detail_db_lookup_is_offloaded_to_thread(self) -> None:
+        handler = _DummyDashboardDataOffload()
+
+        with patch.object(
+            handler,
+            "_dashboard_session_detail_sync",
+            return_value={"session": {"id": 7}},
+        ) as mocked_loader, patch(
+            "bot.dashboard.dashboard_metrics_mixin.asyncio.to_thread",
+            new=AsyncMock(side_effect=lambda func, *args, **kwargs: func(*args, **kwargs)),
+        ) as mocked_to_thread:
+            payload = await handler._dashboard_session_detail(7)
+
+        self.assertEqual(payload["session"]["id"], 7)
+        mocked_loader.assert_called_once_with(7)
+        mocked_to_thread.assert_awaited_once()
+        self.assertIs(mocked_to_thread.await_args.args[0], mocked_loader)
+
+    async def test_dashboard_comparison_stats_db_lookup_is_offloaded_to_thread(self) -> None:
+        handler = _DummyDashboardDataOffload()
+
+        with patch.object(
+            handler,
+            "_dashboard_comparison_stats_sync",
+            return_value={"days": 60, "category": {"avg": 10}},
+        ) as mocked_loader, patch(
+            "bot.dashboard.dashboard_metrics_mixin.asyncio.to_thread",
+            new=AsyncMock(side_effect=lambda func, *args, **kwargs: func(*args, **kwargs)),
+        ) as mocked_to_thread:
+            payload = await handler._dashboard_comparison_stats(60)
+
+        self.assertEqual(payload["days"], 60)
+        mocked_loader.assert_called_once_with(60)
         mocked_to_thread.assert_awaited_once()
         self.assertIs(mocked_to_thread.await_args.args[0], mocked_loader)
 
@@ -790,7 +826,7 @@ class DashboardSecurityRegressionTests(unittest.IsolatedAsyncioTestCase):
                 "row_data": {"discord_user_id": "123"},
             },
         ) as mocked_loader, patch(
-            "bot.dashboard.mixin.asyncio.to_thread",
+            "bot.dashboard.streamer_admin_mixin.asyncio.to_thread",
             new=AsyncMock(side_effect=lambda func, *args, **kwargs: func(*args, **kwargs)),
         ) as mocked_to_thread:
             result = await handler._dashboard_verify("Alpha", "permanent")
@@ -816,7 +852,7 @@ class DashboardSecurityRegressionTests(unittest.IsolatedAsyncioTestCase):
             "_remove_streamer_role",
             new=AsyncMock(return_value="(Streamer-Rolle entfernt)"),
         ) as mocked_remove_role, patch(
-            "bot.dashboard.mixin.asyncio.to_thread",
+            "bot.dashboard.streamer_admin_mixin.asyncio.to_thread",
             new=AsyncMock(side_effect=lambda func, *args, **kwargs: func(*args, **kwargs)),
         ):
             result = await handler._dashboard_verify("Alpha", "clear")

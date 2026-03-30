@@ -283,8 +283,16 @@ class AdminStreamersDedupTests(unittest.IsolatedAsyncioTestCase):
     async def test_admin_streamer_list_deduplicates_legacy_live_state_rows(self) -> None:
         harness = _AdminHarness()
         request = SimpleNamespace(headers={}, match_info={}, query={})
+        async def _to_thread(func, /, *args, **kwargs):
+            return func(*args, **kwargs)
 
-        with patch("bot.analytics.api_admin.storage.transaction", return_value=_ConnCtx(self.conn)):
+        with (
+            patch("bot.analytics.api_admin.asyncio.to_thread", side_effect=_to_thread),
+            patch(
+                "bot.analytics.admin_streamer_queries.storage.readonly_connection",
+                return_value=_ConnCtx(self.conn),
+            ),
+        ):
             response = await harness._api_admin_streamers(request)
 
         payload = json.loads(response.text)
@@ -299,8 +307,16 @@ class AdminStreamersDedupTests(unittest.IsolatedAsyncioTestCase):
     async def test_admin_streamer_detail_prefers_real_twitch_user_id_row(self) -> None:
         harness = _AdminHarness()
         request = SimpleNamespace(headers={}, match_info={"login": "alpha"})
+        async def _to_thread(func, /, *args, **kwargs):
+            return func(*args, **kwargs)
 
-        with patch("bot.analytics.api_admin.storage.transaction", return_value=_ConnCtx(self.conn)):
+        with (
+            patch("bot.analytics.api_admin.asyncio.to_thread", side_effect=_to_thread),
+            patch(
+                "bot.analytics.admin_streamer_queries.storage.readonly_connection",
+                return_value=_ConnCtx(self.conn),
+            ),
+        ):
             response = await harness._api_admin_streamer_detail(request)
 
         payload = json.loads(response.text)
@@ -311,11 +327,169 @@ class AdminStreamersDedupTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(payload["settings"]["oauthConnected"])
         self.assertFalse(payload["settings"]["oauthNeedsReauth"])
 
-    async def test_admin_streamer_list_can_include_archived_rows(self) -> None:
+    async def test_admin_streamer_list_offloads_query_to_thread(self) -> None:
         harness = _AdminHarness()
         request = SimpleNamespace(headers={}, match_info={}, query={"view": "all"})
 
-        with patch("bot.analytics.api_admin.storage.transaction", return_value=_ConnCtx(self.conn)):
+        async def _to_thread(func, /, *args, **kwargs):
+            return func(*args, **kwargs)
+
+        with (
+            patch("bot.analytics.api_admin.asyncio.to_thread", side_effect=_to_thread) as to_thread,
+            patch(
+                "bot.analytics.api_admin.load_admin_streamers",
+                return_value={"items": [], "count": 0, "view": "all"},
+            ) as loader,
+        ):
+            response = await harness._api_admin_streamers(request)
+
+        payload = json.loads(response.text)
+        self.assertEqual(payload, {"items": [], "count": 0, "view": "all"})
+        self.assertEqual(to_thread.call_count, 1)
+        self.assertIs(to_thread.call_args.args[0], loader)
+        self.assertEqual(to_thread.call_args.args[1], "all")
+
+    async def test_admin_streamer_detail_offloads_query_to_thread(self) -> None:
+        harness = _AdminHarness()
+        request = SimpleNamespace(headers={}, match_info={"login": "alpha"})
+
+        async def _to_thread(func, /, *args, **kwargs):
+            return func(*args, **kwargs)
+
+        with (
+            patch("bot.analytics.api_admin.asyncio.to_thread", side_effect=_to_thread) as to_thread,
+            patch(
+                "bot.analytics.api_admin.load_admin_streamer_detail",
+                return_value={"login": "alpha"},
+            ) as loader,
+        ):
+            response = await harness._api_admin_streamer_detail(request)
+
+        payload = json.loads(response.text)
+        self.assertEqual(payload, {"login": "alpha"})
+        self.assertEqual(to_thread.call_count, 1)
+        self.assertIs(to_thread.call_args.args[0], loader)
+        self.assertEqual(to_thread.call_args.args[1], "alpha")
+
+    async def test_admin_system_database_offloads_query_to_thread(self) -> None:
+        harness = _AdminHarness()
+        request = SimpleNamespace(headers={}, match_info={}, query={})
+
+        async def _to_thread(func, /, *args, **kwargs):
+            return func(*args, **kwargs)
+
+        expected_payload = {"databaseSizeBytes": 123, "tables": [{"table": "dashboard_sessions"}]}
+        with (
+            patch("bot.analytics.api_admin.asyncio.to_thread", side_effect=_to_thread) as to_thread,
+            patch(
+                "bot.analytics.api_admin.load_admin_database_overview",
+                return_value=expected_payload,
+            ) as loader,
+        ):
+            response = await harness._api_admin_system_database(request)
+
+        payload = json.loads(response.text)
+        self.assertEqual(payload, expected_payload)
+        self.assertEqual(to_thread.call_count, 1)
+        self.assertIs(to_thread.call_args.args[0], loader)
+        self.assertEqual(to_thread.call_args.args[1], (
+            "twitch_streamers",
+            "twitch_live_state",
+            "twitch_stream_sessions",
+            "twitch_stats_tracked",
+            "twitch_stats_category",
+            "streamer_plans",
+            "twitch_billing_subscriptions",
+            "affiliate_accounts",
+            "twitch_eventsub_capacity_snapshot",
+            "dashboard_sessions",
+        ))
+
+    async def test_admin_oauth_scopes_offloads_query_to_thread(self) -> None:
+        harness = _AdminHarness()
+        request = SimpleNamespace(headers={}, match_info={}, query={})
+
+        async def _to_thread(func, /, *args, **kwargs):
+            return func(*args, **kwargs)
+
+        with (
+            patch("bot.analytics.api_admin.asyncio.to_thread", side_effect=_to_thread) as to_thread,
+            patch(
+                "bot.analytics.api_admin._load_admin_oauth_scope_rows",
+                return_value=[],
+            ) as loader,
+        ):
+            response = await harness._api_admin_system_oauth_scopes(request)
+
+        payload = json.loads(response.text)
+        self.assertEqual(payload["summary"]["totalAuthorized"], 0)
+        self.assertEqual(to_thread.call_count, 1)
+        self.assertIs(to_thread.call_args.args[0], loader)
+
+    async def test_admin_system_health_offloads_db_snapshot_to_thread(self) -> None:
+        harness = _AdminHarness()
+        request = SimpleNamespace(headers={}, match_info={}, query={}, app={})
+
+        async def _to_thread(func, /, *args, **kwargs):
+            return func(*args, **kwargs)
+
+        with (
+            patch("bot.analytics.api_admin.asyncio.to_thread", side_effect=_to_thread) as to_thread,
+            patch(
+                "bot.analytics.api_admin._load_admin_system_health_snapshot",
+                return_value={
+                    "last_tick_at": "2026-03-15T10:00:00+00:00",
+                    "raw_chat_snapshot": {},
+                },
+            ) as loader,
+        ):
+            response = await harness._api_admin_system_health(request)
+
+        payload = json.loads(response.text)
+        self.assertEqual(response.status, 200)
+        self.assertEqual(payload["lastTickAt"], "2026-03-15T10:00:00+00:00")
+        self.assertEqual(to_thread.call_count, 1)
+        self.assertIs(to_thread.call_args.args[0], loader)
+
+    async def test_admin_config_overview_offloads_snapshot_to_thread(self) -> None:
+        harness = _AdminHarness()
+        request = SimpleNamespace(headers={}, match_info={}, query={"scope": "active"})
+
+        async def _to_thread(func, /, *args, **kwargs):
+            return func(*args, **kwargs)
+
+        with (
+            patch("bot.analytics.api_admin.asyncio.to_thread", side_effect=_to_thread) as to_thread,
+            patch(
+                "bot.analytics.api_admin._load_admin_config_overview_snapshot",
+                return_value={
+                    "promo": {"config": {"enabled": True}},
+                    "raids": {"managed": 1},
+                    "chat": {"managed": 2},
+                },
+            ) as loader,
+        ):
+            response = await harness._api_admin_config_overview(request)
+
+        payload = json.loads(response.text)
+        self.assertEqual(payload["promo"]["config"]["enabled"], True)
+        self.assertEqual(payload["raids"]["managed"], 1)
+        self.assertEqual(to_thread.call_count, 1)
+        self.assertIs(to_thread.call_args.args[0], loader)
+
+    async def test_admin_streamer_list_can_include_archived_rows(self) -> None:
+        harness = _AdminHarness()
+        request = SimpleNamespace(headers={}, match_info={}, query={"view": "all"})
+        async def _to_thread(func, /, *args, **kwargs):
+            return func(*args, **kwargs)
+
+        with (
+            patch("bot.analytics.api_admin.asyncio.to_thread", side_effect=_to_thread),
+            patch(
+                "bot.analytics.admin_streamer_queries.storage.readonly_connection",
+                return_value=_ConnCtx(self.conn),
+            ),
+        ):
             response = await harness._api_admin_streamers(request)
 
         payload = json.loads(response.text)
@@ -327,8 +501,13 @@ class AdminStreamersDedupTests(unittest.IsolatedAsyncioTestCase):
     async def test_admin_oauth_scope_status_counts_all_authorized_rows(self) -> None:
         harness = _AdminHarness()
         request = SimpleNamespace(headers={}, match_info={})
+        async def _to_thread(func, /, *args, **kwargs):
+            return func(*args, **kwargs)
 
-        with patch("bot.analytics.api_admin.storage.transaction", return_value=_ConnCtx(self.conn)):
+        with (
+            patch("bot.analytics.api_admin.asyncio.to_thread", side_effect=_to_thread),
+            patch("bot.analytics.api_admin.storage.readonly_connection", return_value=_ConnCtx(self.conn)),
+        ):
             response = await harness._api_admin_system_oauth_scopes(request)
 
         payload = json.loads(response.text)
@@ -420,8 +599,16 @@ class AdminStreamersDedupTests(unittest.IsolatedAsyncioTestCase):
 
         harness = _AdminHarness()
         request = SimpleNamespace(headers={}, match_info={}, query={"view": "all"})
+        async def _to_thread(func, /, *args, **kwargs):
+            return func(*args, **kwargs)
 
-        with patch("bot.analytics.api_admin.storage.transaction", return_value=_ConnCtx(self.conn)):
+        with (
+            patch("bot.analytics.api_admin.asyncio.to_thread", side_effect=_to_thread),
+            patch(
+                "bot.analytics.admin_streamer_queries.storage.readonly_connection",
+                return_value=_ConnCtx(self.conn),
+            ),
+        ):
             response = await harness._api_admin_streamers(request)
 
         payload = json.loads(response.text)
@@ -497,8 +684,13 @@ class AdminStreamersDedupTests(unittest.IsolatedAsyncioTestCase):
 
         harness = _AdminHarness()
         request = SimpleNamespace(headers={}, match_info={})
+        async def _to_thread(func, /, *args, **kwargs):
+            return func(*args, **kwargs)
 
-        with patch("bot.analytics.api_admin.storage.transaction", return_value=_ConnCtx(self.conn)):
+        with (
+            patch("bot.analytics.api_admin.asyncio.to_thread", side_effect=_to_thread),
+            patch("bot.analytics.api_admin.storage.readonly_connection", return_value=_ConnCtx(self.conn)),
+        ):
             response = await harness._api_admin_system_oauth_scopes(request)
 
         payload = json.loads(response.text)
@@ -551,8 +743,13 @@ class AdminStreamersDedupTests(unittest.IsolatedAsyncioTestCase):
 
         harness = _AdminHarness()
         request = SimpleNamespace(headers={}, match_info={})
+        async def _to_thread(func, /, *args, **kwargs):
+            return func(*args, **kwargs)
 
-        with patch("bot.analytics.api_admin.storage.transaction", return_value=_ConnCtx(self.conn)):
+        with (
+            patch("bot.analytics.api_admin.asyncio.to_thread", side_effect=_to_thread),
+            patch("bot.analytics.api_admin.storage.readonly_connection", return_value=_ConnCtx(self.conn)),
+        ):
             response = await harness._api_admin_system_oauth_scopes(request)
 
         payload = json.loads(response.text)

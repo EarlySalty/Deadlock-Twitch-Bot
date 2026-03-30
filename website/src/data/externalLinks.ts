@@ -1,5 +1,5 @@
 export const DISCORD_INVITE_URL = "https://dc.earlysalty.com";
-export const EARLYSALTY_WEBSITE_URL = "https://earlysalty.de/website/";
+export const EARLYSALTY_WEBSITE_URL = "https://earlysalty.de/streamer/";
 export const TWITCH_PUBLIC_ORIGIN = "https://twitch.earlysalty.com";
 export const TWITCH_ONBOARDING_URL = `${TWITCH_PUBLIC_ORIGIN}/twitch/onboarding`;
 export const TWITCH_FAQ_URL = `${TWITCH_PUBLIC_ORIGIN}/twitch/faq`;

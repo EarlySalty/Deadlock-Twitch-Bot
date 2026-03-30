@@ -54,7 +54,7 @@ body::before{
 }
 
 .container{
-  position:relative;z-index:2;max-width:1200px;margin:0 auto;padding:60px 24px 80px;
+  position:relative;z-index:2;max-width:clamp(900px,80vw,1800px);margin:0 auto;padding:60px 24px 80px;
 }
 
 /* Title section */
@@ -252,14 +252,14 @@ body::before{
 }
 .raid-counter.visible{opacity:1;}
 .raid-count-num{
-  font-size:80px;font-weight:900;line-height:1;
+  font-size:clamp(48px,5.5vw,120px);font-weight:900;line-height:1;
   background:linear-gradient(135deg,var(--primary),var(--accent));
   -webkit-background-clip:text;-webkit-text-fill-color:transparent;
   background-clip:text;
   filter:drop-shadow(0 0 30px rgba(255,122,24,0.25));
 }
 .raid-count-label{
-  font-size:13px;text-transform:uppercase;color:var(--text2);
+  font-size:clamp(11px,0.9vw,16px);text-transform:uppercase;color:var(--text2);
   letter-spacing:0.12em;margin-top:6px;font-weight:600;
 }
 
@@ -368,7 +368,7 @@ body::before{
 .particle-num{
   position:absolute;left:0;top:0;pointer-events:none;z-index:11;
   will-change:transform,opacity;
-  font-size:13px;font-weight:700;
+  font-size:clamp(11px,1vw,18px);font-weight:700;
   font-family:'Inter',system-ui,sans-serif;
   white-space:nowrap;
   text-shadow:0 0 8px currentColor;
@@ -377,22 +377,22 @@ body::before{
 /* Energy beam */
 .energy-beam{
   position:absolute;
-  height:3px;
+  height:clamp(2px,0.25vw,6px);
   background:linear-gradient(90deg, rgba(255,122,24,0.6), rgba(16,183,173,0.8));
   border-radius:2px;
   pointer-events:none;
   z-index:10;
   opacity:0;
   transition:opacity 0.4s ease;
-  box-shadow:0 0 12px rgba(255,122,24,0.3), 0 0 24px rgba(16,183,173,0.2);
+  box-shadow:0 0 clamp(8px,1vw,18px) rgba(255,122,24,0.3), 0 0 clamp(16px,2vw,36px) rgba(16,183,173,0.2);
 }
 .energy-beam.visible{
   opacity:1;
   animation:beamPulse 1s ease-in-out infinite;
 }
 @keyframes beamPulse{
-  0%,100%{height:3px;box-shadow:0 0 12px rgba(255,122,24,0.3), 0 0 24px rgba(16,183,173,0.2);}
-  50%{height:5px;box-shadow:0 0 20px rgba(255,122,24,0.5), 0 0 36px rgba(16,183,173,0.4);}
+  0%,100%{height:clamp(2px,0.25vw,6px);box-shadow:0 0 clamp(8px,1vw,18px) rgba(255,122,24,0.3), 0 0 clamp(16px,2vw,36px) rgba(16,183,173,0.2);}
+  50%{height:clamp(3px,0.4vw,8px);box-shadow:0 0 clamp(14px,1.5vw,28px) rgba(255,122,24,0.5), 0 0 clamp(24px,3vw,48px) rgba(16,183,173,0.4);}
 }
 
 /* Confetti */
@@ -500,26 +500,35 @@ body::before{
     <span class="pill-arrow">→</span>
     <div class="pill" id="pill3">④ Angekommen</div>
   </div>
-  <div class="raid-display">Raid <span id="raidIndex">1</span>/3</div>
+  <div class="raid-display">Raid #<span id="raidIndex">1</span></div>
 </div>
 
 <script>
 (function(){
-  // === SCENARIOS ===
-  const scenarios = [
-    {
-      source: { name:'EarlySalty', viewers:247, duration:[3,42,15], video:'public/clips/loop1.webm', initial:'E', avatarClass:'orange' },
-      target: { name:'DarkMage_DE', viewers:89, duration:[1,12,33], video:'public/clips/loop2.webm', initial:'D', avatarClass:'teal' }
-    },
-    {
-      source: { name:'PixelStorm', viewers:183, duration:[5,15,42], video:'public/clips/loop2.webm', initial:'P', avatarClass:'orange' },
-      target: { name:'NightOwl_TV', viewers:52, duration:[0,45,18], video:'public/clips/loop3.webm', initial:'N', avatarClass:'teal' }
-    },
-    {
-      source: { name:'CrystalBlade', viewers:312, duration:[2,30,7], video:'public/clips/loop3.webm', initial:'C', avatarClass:'orange' },
-      target: { name:'FrostBite99', viewers:127, duration:[1,58,51], video:'public/clips/loop1.webm', initial:'F', avatarClass:'teal' }
-    }
+  // === STREAMER POOL ===
+  const streamerPool = [
+    { name:'ShadowVex', viewers:247, avatarClass:'orange' },
+    { name:'DarkMage_DE', viewers:89, avatarClass:'teal' },
+    { name:'PixelStorm', viewers:183, avatarClass:'orange' },
+    { name:'NightOwl_TV', viewers:52, avatarClass:'teal' },
+    { name:'CrystalBlade', viewers:312, avatarClass:'orange' },
+    { name:'FrostBite99', viewers:127, avatarClass:'teal' },
+    { name:'ToxicNova', viewers:165, avatarClass:'orange' },
+    { name:'GhostLane_', viewers:74, avatarClass:'teal' },
+    { name:'IronWraith', viewers:420, avatarClass:'orange' },
+    { name:'LunaStrike', viewers:98, avatarClass:'teal' },
   ];
+  const videos = ['public/clips/loop1.webm','public/clips/loop2.webm','public/clips/loop3.webm'];
+
+  function pickTwo(){
+    const shuffled=[...streamerPool].sort(()=>Math.random()-0.5);
+    const src=shuffled[0], tgt=shuffled[1];
+    const rndDur=()=>{const t=900+Math.floor(Math.random()*19800);return[Math.floor(t/3600),Math.floor((t%3600)/60),t%60];};
+    return {
+      source:{...src, initial:src.name[0], duration:rndDur(), video:videos[Math.floor(Math.random()*3)]},
+      target:{...tgt, initial:tgt.name[0], duration:rndDur(), video:videos[Math.floor(Math.random()*3)]}
+    };
+  }
 
   // === DOM REFS ===
   const $ = id => document.getElementById(id);
@@ -554,7 +563,7 @@ body::before{
   const pillArrows = document.querySelectorAll('.pill-arrow');
   const pills = [0,1,2,3].map(i => $('pill'+i));
 
-  let currentScenario = 0;
+  let currentScenario = 1;
   let sourceSecs = 0, targetSecs = 0;
   let durationInterval = null;
   let animFrame = null;
@@ -636,31 +645,33 @@ body::before{
     const startY=midY;
     const endY=midY;
 
+    // Scale factor based on viewport width (1920=1x baseline)
+    const vScale=Math.max(0.7, window.innerWidth/1920);
+    const baseSize=Math.max(4, 4*vScale);
+    const curveRange=(sourceRect.height||300)*0.15;
+
     // Mix: ~80% number particles, ~20% dot particles
     for(let i=0;i<count;i++){
-      const isNum=i%5!==0; // every 5th is a dot for variety
+      const isNum=i%5!==0;
       const el=document.createElement('div');
 
       if(isNum){
-        // Number particle: small viewer count like "+12", "+5"
         el.className='particle-num';
         const num=Math.floor(Math.random()*30)+1;
         el.textContent='+'+num;
       } else {
-        // Classic dot particle
         el.className='particle';
-        const size=4+Math.random()*3;
+        const size=baseSize+Math.random()*baseSize*0.75;
         el.style.width=size+'px';el.style.height=size+'px';
       }
       middleArea.appendChild(el);
 
-      // Trails only for dot particles
       const trails=[];
       if(!isNum){
         for(let t=0;t<2;t++){
           const tr=document.createElement('div');
           tr.className='particle';
-          const ts=4*(0.7-t*0.25);
+          const ts=baseSize*(0.7-t*0.25);
           tr.style.width=ts+'px';tr.style.height=ts+'px';
           tr.style.opacity=0.5-t*0.2;
           middleArea.appendChild(tr);
@@ -668,11 +679,11 @@ body::before{
         }
       }
 
-      const curveDir=(Math.random()-0.5)*60;
+      const curveDir=(Math.random()-0.5)*curveRange;
       particles.push({
         el, trails, isNum, delay:i*100,
-        sx:startX, sy:startY+((Math.random()-0.5)*40),
-        ex:endX, ey:endY+((Math.random()-0.5)*40),
+        sx:startX, sy:startY+((Math.random()-0.5)*curveRange*0.8),
+        ex:endX, ey:endY+((Math.random()-0.5)*curveRange*0.8),
         curveY:curveDir, startTime:null
       });
     }
@@ -742,10 +753,11 @@ body::before{
   // === CONFETTI ===
   function spawnConfetti(originX, originY, count){
     const pieces=[];
+    const cScale=Math.max(0.7, window.innerWidth/1920);
     for(let i=0;i<count;i++){
       const el=document.createElement('div');
       el.className='confetti';
-      const size=4+Math.random()*4;
+      const size=(4+Math.random()*4)*cScale;
       const isRound=Math.random()>0.5;
       el.style.width=size+'px';
       el.style.height=isRound?size+'px':size*2+'px';
@@ -753,10 +765,10 @@ body::before{
       el.style.background=Math.random()>0.5?'var(--accent)':'var(--primary)';
       middleArea.appendChild(el);
       const angle=Math.random()*Math.PI*2;
-      const speed=2+Math.random()*4;
+      const speed=(2+Math.random()*4)*cScale;
       pieces.push({
         el, x:originX, y:originY,
-        vx:Math.cos(angle)*speed, vy:Math.sin(angle)*speed-3,
+        vx:Math.cos(angle)*speed, vy:Math.sin(angle)*speed-3*cScale,
         life:0, maxLife:800+Math.random()*400
       });
     }
@@ -801,8 +813,7 @@ body::before{
   }
 
   // === SETUP SCENARIO ===
-  function setupScenario(idx){
-    const s=scenarios[idx];
+  function setupScenario(s){
     // Source
     sourceVideo.src=s.source.video;
     sourceVideo.play().catch(()=>{});
@@ -832,7 +843,7 @@ body::before{
     targetEmbed.className='twitch-embed embed-target';
 
     // Status
-    raidIndex.textContent=String(idx+1);
+    raidIndex.textContent=String(currentScenario);
     resetPills();
 
     // Clear middle texts
@@ -845,10 +856,10 @@ body::before{
   }
 
   // === MAIN ANIMATION LOOP ===
-  async function runRaid(idx){
+  async function runRaid(raidNum){
     if(!running)return;
-    const s=scenarios[idx];
-    setupScenario(idx);
+    const s=pickTwo();
+    setupScenario(s);
     startDurations();
 
     // Phase 0: Initial — both live (3s)
@@ -984,18 +995,19 @@ body::before{
     spawnConfetti(cX,cY,12);
 
     // Extra particle burst at target
+    const bScale=Math.max(0.7, window.innerWidth/1920);
     const burstCount=8;
     for(let b=0;b<burstCount;b++){
       const el=document.createElement('div');
       el.className='particle';
-      const size=3+Math.random()*4;
+      const size=(3+Math.random()*4)*bScale;
       el.style.width=size+'px';el.style.height=size+'px';
       el.style.background='var(--accent)';
       el.style.boxShadow='0 0 8px var(--accent)';
       el.style.borderRadius='50%';
       middleArea.appendChild(el);
       const angle=(Math.PI*2/burstCount)*b + (Math.random()-0.5)*0.5;
-      const speed=2+Math.random()*3;
+      const speed=(2+Math.random()*3)*bScale;
       const startX=cX;
       const startY=cY;
       let bx=startX, by=startY, vx=Math.cos(angle)*speed, vy=Math.sin(angle)*speed;
@@ -1028,7 +1040,7 @@ body::before{
     if(!running)return;
 
     // Next scenario
-    currentScenario=(currentScenario+1)%scenarios.length;
+    currentScenario++;
     runRaid(currentScenario);
   }
 
@@ -1036,7 +1048,8 @@ body::before{
   pills.forEach(p=>{p.dataset.label=p.textContent;});
 
   // Start
-  runRaid(0);
+  currentScenario=1;
+  runRaid(currentScenario);
 })();
 </script>
 </body>

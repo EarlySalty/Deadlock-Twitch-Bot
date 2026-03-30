@@ -39,6 +39,8 @@ WEBSITE_DIST_ROOT_PATH = Path(__file__).resolve().parents[2] / "website" / "dist
 AFFILIATE_PORTAL_INDEX_PATH = (
     WEBSITE_DIST_ROOT_PATH / "affiliate-portal" / "index.html"
 )
+PUBLIC_WEBSITE_BASE_PATH = "/streamer"
+LEGACY_WEBSITE_BASE_PATH = "/website"
 
 
 class _AnalyticsOverviewMixin:
@@ -125,7 +127,10 @@ class _AnalyticsOverviewMixin:
         router.add_get("/twitch/verwaltung", self._serve_verwaltung)
         router.add_get("/twitch/pricing", self._serve_pricing)
         router.add_get("/twitch/affiliate/portal", self._serve_affiliate_portal)
-        router.add_get("/website/{path:.*}", self._serve_website_dist_asset)
+        router.add_get(PUBLIC_WEBSITE_BASE_PATH, self._redirect_public_website_root)
+        router.add_get(f"{PUBLIC_WEBSITE_BASE_PATH}/{{path:.*}}", self._serve_website_dist_asset)
+        router.add_get(LEGACY_WEBSITE_BASE_PATH, self._redirect_legacy_website_path)
+        router.add_get(f"{LEGACY_WEBSITE_BASE_PATH}/{{path:.*}}", self._redirect_legacy_website_path)
         router.add_get("/twitch/admin/", self._serve_admin_dashboard)
         router.add_get("/twitch/admin/assets/{path:.*}", self._serve_admin_dashboard_assets)
         router.add_get("/twitch/admin/{path:.*}", self._serve_admin_dashboard_path)
@@ -641,6 +646,21 @@ class _AnalyticsOverviewMixin:
             return gate_response
         return self._resolve_website_dist_asset_response(request.match_info.get("path", ""))
 
+    async def _redirect_public_website_root(self, request: web.Request) -> web.StreamResponse:
+        """Redirect /streamer to the canonical trailing-slash root."""
+        raise web.HTTPMovedPermanently(
+            location=self._build_public_website_redirect_location("", request.query_string)
+        )
+
+    async def _redirect_legacy_website_path(self, request: web.Request) -> web.StreamResponse:
+        """Redirect legacy /website paths to the canonical /streamer base."""
+        raise web.HTTPMovedPermanently(
+            location=self._build_public_website_redirect_location(
+                request.match_info.get("path", ""),
+                request.query_string,
+            )
+        )
+
     async def _serve_dashboard_v2_assets(self, request: web.Request) -> web.Response:
         """Serve static assets for the dashboard."""
         gate_response = self._admin_dashboard_host_page_gate(request)
@@ -712,15 +732,28 @@ class _AnalyticsOverviewMixin:
             return web.FileResponse(candidate)
         return web.Response(text="Not found", status=404)
 
+    def _build_public_website_redirect_location(
+        self, raw_path: str, query_string: str = ""
+    ) -> str:
+        """Build the canonical /streamer location for legacy public website paths."""
+        normalized_path = str(raw_path or "").lstrip("/")
+        location = (
+            f"{PUBLIC_WEBSITE_BASE_PATH}/{normalized_path}"
+            if normalized_path
+            else f"{PUBLIC_WEBSITE_BASE_PATH}/"
+        )
+        if query_string:
+            return f"{location}?{query_string}"
+        return location
+
     def _resolve_website_dist_asset_response(self, raw_path: str) -> web.StreamResponse:
         """Resolve website/dist files with strict path validation."""
-        if not raw_path:
-            return web.Response(text="Not found", status=404)
+        normalized_path = str(raw_path or "").strip("/")
 
         dist_root = WEBSITE_DIST_ROOT_PATH.resolve()
         candidate = dist_root
 
-        for segment in raw_path.split("/"):
+        for segment in normalized_path.split("/") if normalized_path else []:
             if not segment or segment in {".", ".."} or "\\" in segment:
                 return web.Response(text="Not found", status=404)
             if not candidate.is_dir():
@@ -740,6 +773,10 @@ class _AnalyticsOverviewMixin:
         except ValueError:
             return web.Response(text="Not found", status=404)
 
+        if candidate.is_dir():
+            candidate = candidate / "index.html"
+            if not candidate.is_file():
+                return web.Response(text="Not found", status=404)
         if candidate.is_file():
             return web.FileResponse(candidate)
         return web.Response(text="Not found", status=404)

@@ -10,7 +10,7 @@ export default defineConfig({
       '@': path.resolve(__dirname, './src'),
     },
   },
-  base: '/website/',
+  base: '/streamer/',
   build: {
     outDir: 'dist',
     emptyOutDir: true,

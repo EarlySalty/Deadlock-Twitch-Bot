@@ -93,7 +93,7 @@ class _AffiliatePortalHarness(AnalyticsV2Mixin):
 
 class AffiliateApiFixTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self) -> None:
-        self.conn = sqlite3.connect(":memory:")
+        self.conn = sqlite3.connect(":memory:", check_same_thread=False)
         self.conn.row_factory = sqlite3.Row
         self.conn.execute(
             """

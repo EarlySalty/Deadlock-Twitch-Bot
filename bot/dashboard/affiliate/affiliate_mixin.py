@@ -618,30 +618,34 @@ class _DashboardAffiliateMixin:
     # ------------------------------------------------------------------ #
 
     def _get_affiliate_session(self, request: web.Request) -> dict[str, Any] | None:
-        if not hasattr(self, "_affiliate_sessions_loaded"):
-            self._affiliate_sessions_loaded = True
-            try:
-                for sid, data in sessions_db.load_valid_sessions("affiliate", time.time()):
-                    if not hasattr(self, "_affiliate_sessions"):
-                        self._affiliate_sessions = {}
-                    self._affiliate_sessions[sid] = data
-            except Exception as exc:
-                log.debug("Could not load affiliate sessions from DB: %s", exc)
-
-        sessions = getattr(self, "_affiliate_sessions", {})
         session_id = (request.cookies.get(_AFFILIATE_COOKIE) or "").strip()
         if not session_id:
             return None
+
+        sessions = getattr(self, "_affiliate_sessions", None)
+        if not isinstance(sessions, dict):
+            sessions = {}
+            self._affiliate_sessions = sessions
+
         session = sessions.get(session_id)
-        if not session:
-            return None
         now = time.time()
+
+        if session is None:
+            try:
+                session = sessions_db.load_session(session_id, "affiliate", now)
+            except Exception as exc:
+                log.debug("Could not load affiliate session %s from DB: %s", session_id, exc)
+                session = None
+            if session is None:
+                return None
+            sessions[session_id] = session
+
         if float(session.get("expires_at", 0.0)) <= now:
             sessions.pop(session_id, None)
             try:
                 sessions_db.delete_session(session_id)
-            except Exception:
-                pass
+            except Exception as exc:
+                log.debug("Could not delete expired affiliate session %s: %s", session_id, exc)
             return None
         return session
 

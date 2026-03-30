@@ -21,6 +21,28 @@ from ..app_keys import (
     ANALYTICS_DB_FINGERPRINT_MISMATCH_KEY,
     INTERNAL_API_ANALYTICS_DB_FINGERPRINT_KEY,
 )
+from .admin_affiliate_queries import (
+    AdminAffiliateNotFoundError,
+    load_admin_affiliate_detail,
+    load_admin_affiliate_gutschrift_pdf,
+    load_admin_affiliate_gutschriften,
+    load_admin_affiliate_gutschriften_for_login,
+    load_admin_affiliate_stats,
+    load_admin_affiliates_list,
+    toggle_admin_affiliate,
+)
+from .admin_config_queries import (
+    load_admin_billing_affiliates,
+    load_admin_billing_subscriptions,
+    save_admin_promo_config,
+    update_admin_chat_config,
+    update_admin_raid_config,
+)
+from .admin_streamer_queries import (
+    load_admin_database_overview,
+    load_admin_streamer_detail,
+    load_admin_streamers,
+)
 from ..core.twitch_login import normalize_twitch_login
 from ..dashboard.affiliate.affiliate_pii import AffiliatePII
 from ..dashboard.affiliate.gutschrift import AffiliateGutschriftService
@@ -31,9 +53,7 @@ from ..dashboard.live.live import (
 )
 from ..logging_setup import log_path, logs_dir
 from ..promo_mode import (
-    evaluate_global_promo_mode,
     load_global_promo_mode,
-    save_global_promo_mode,
     validate_global_promo_mode_config,
 )
 from ..storage import pg as storage
@@ -325,6 +345,139 @@ def _admin_last_stream_session_cte_sql() -> str:
                         GROUP BY LOWER(streamer_login)
                     )
     """
+
+
+def _load_admin_oauth_scope_rows() -> list[Any]:
+    with storage.readonly_connection() as conn:
+        return conn.execute(
+            f"""
+            WITH auth_rows AS (
+                SELECT
+                    ROW_NUMBER() OVER (
+                        ORDER BY
+                            CASE WHEN authorized_at IS NULL THEN 1 ELSE 0 END,
+                            authorized_at DESC,
+                            LOWER(COALESCE(NULLIF(TRIM(twitch_login), ''), '')),
+                            LOWER(COALESCE(NULLIF(TRIM(twitch_user_id), ''), ''))
+                    ) AS auth_row_id,
+                    twitch_login,
+                    twitch_user_id,
+                    scopes,
+                    needs_reauth,
+                    authorized_at
+                FROM twitch_raid_auth
+            )
+            {_admin_partner_state_cte_sql()}
+            , ranked_auth_matches AS (
+                SELECT
+                    a.auth_row_id,
+                    a.twitch_login,
+                    a.twitch_user_id,
+                    a.scopes,
+                    a.needs_reauth,
+                    a.authorized_at,
+                    s.twitch_login AS partner_login,
+                    s.discord_display_name,
+                    s.archived_at,
+                    s.manual_partner_opt_out,
+                    s.status,
+                    ROW_NUMBER() OVER (
+                        PARTITION BY a.auth_row_id
+                        ORDER BY
+                            CASE
+                                WHEN NULLIF(TRIM(COALESCE(a.twitch_user_id, '')), '') IS NOT NULL
+                                     AND NULLIF(TRIM(COALESCE(s.twitch_user_id, '')), '') IS NOT NULL
+                                     AND LOWER(TRIM(a.twitch_user_id)) = LOWER(TRIM(s.twitch_user_id))
+                                THEN 0
+                                WHEN LOWER(COALESCE(a.twitch_login, '')) = LOWER(s.twitch_login)
+                                THEN 1
+                                ELSE 2
+                            END,
+                            CASE
+                                WHEN COALESCE(s.manual_partner_opt_out, 0) = 1 THEN 3
+                                WHEN COALESCE(s.status, 'departnered') = 'active' AND s.archived_at IS NULL THEN 0
+                                WHEN COALESCE(s.status, 'departnered') IN ('active', 'archived') THEN 1
+                                ELSE 2
+                            END,
+                            CASE
+                                WHEN s.created_at IS NULL AND s.archived_at IS NULL THEN 1
+                                ELSE 0
+                            END,
+                            CASE
+                                WHEN s.created_at IS NOT NULL THEN s.created_at
+                                ELSE s.archived_at
+                            END DESC,
+                            LOWER(COALESCE(s.twitch_login, '')) ASC
+                    ) AS rn
+                FROM auth_rows a
+                LEFT JOIN partner_state s
+                    ON (
+                        NULLIF(TRIM(COALESCE(a.twitch_user_id, '')), '') IS NOT NULL
+                        AND NULLIF(TRIM(COALESCE(s.twitch_user_id, '')), '') IS NOT NULL
+                        AND LOWER(TRIM(a.twitch_user_id)) = LOWER(TRIM(s.twitch_user_id))
+                    )
+                    OR LOWER(COALESCE(a.twitch_login, '')) = LOWER(s.twitch_login)
+            )
+            SELECT
+                auth_row_id,
+                COALESCE(
+                    NULLIF(TRIM(partner_login), ''),
+                    NULLIF(TRIM(twitch_login), ''),
+                    NULLIF(TRIM(twitch_user_id), '')
+                ) AS effective_login,
+                twitch_login,
+                twitch_user_id,
+                scopes,
+                needs_reauth,
+                authorized_at,
+                partner_login,
+                discord_display_name,
+                archived_at,
+                manual_partner_opt_out,
+                status
+            FROM ranked_auth_matches
+            WHERE rn = 1
+            ORDER BY
+                LOWER(
+                    COALESCE(
+                        NULLIF(TRIM(partner_login), ''),
+                        NULLIF(TRIM(twitch_login), ''),
+                        NULLIF(TRIM(twitch_user_id), '')
+                    )
+                ) ASC,
+                auth_row_id ASC
+            """
+        ).fetchall()
+
+
+def _load_admin_system_health_snapshot() -> dict[str, Any]:
+    with storage.readonly_connection() as conn:
+        row = conn.execute(
+            """
+            SELECT MAX(COALESCE(last_seen_at, last_started_at)) AS last_tick_at
+            FROM twitch_live_state
+            """
+        ).fetchone()
+        last_tick_at = _row_get_value(row, "last_tick_at", 0, None) if row else None
+        raw_chat_snapshot = _fetch_raw_chat_health_snapshot(conn)
+    return {
+        "last_tick_at": last_tick_at,
+        "raw_chat_snapshot": raw_chat_snapshot,
+    }
+
+
+def _load_admin_config_overview_snapshot(scope: str) -> dict[str, Any]:
+    with storage.readonly_connection() as conn:
+        promo_config = evaluate_global_promo_mode(load_global_promo_mode(conn))
+        raid_snapshot, chat_snapshot = _AnalyticsAdminMixin._admin_load_streamer_config_snapshots(
+            conn,
+            scope=scope,
+        )
+    return {
+        "promo": promo_config,
+        "raids": raid_snapshot,
+        "chat": chat_snapshot,
+    }
 
 
 def _fetch_raw_chat_health_snapshot(conn: Any) -> dict[str, Any]:
@@ -937,38 +1090,6 @@ class _AnalyticsAdminMixin:
                         return entries
         return entries
 
-    @staticmethod
-    def _admin_database_row_count(conn: Any, table_name: str) -> int | None:
-        try:
-            row = conn.execute(f"SELECT COUNT(*) AS total FROM {table_name}").fetchone()
-        except Exception:
-            return None
-        if row is None:
-            return None
-        return _safe_int(_row_get_value(row, "total", 0, None), default=0)
-
-    @staticmethod
-    def _admin_database_table_size_bytes(conn: Any, table_name: str) -> int | None:
-        try:
-            row = conn.execute(
-                f"SELECT pg_total_relation_size('{table_name}') AS size_bytes"
-            ).fetchone()
-        except Exception:
-            return None
-        if row is None:
-            return None
-        return _safe_int(_row_get_value(row, "size_bytes", 0, None), default=0)
-
-    @staticmethod
-    def _admin_database_size_bytes(conn: Any) -> int | None:
-        try:
-            row = conn.execute("SELECT pg_database_size(current_database()) AS size_bytes").fetchone()
-        except Exception:
-            return None
-        if row is None:
-            return None
-        return _safe_int(_row_get_value(row, "size_bytes", 0, None), default=0)
-
     async def _api_admin_streamers(self, request: web.Request) -> web.Response:
         auth_error = self._admin_auth_error(request, getattr(self, "_require_v2_admin_api", None))
         if auth_error is not None:
@@ -980,173 +1101,11 @@ class _AnalyticsAdminMixin:
                 {"error": "invalid_view", "supported": sorted(_ADMIN_STREAMER_VIEWS)},
                 status=400,
             )
-        where_clause = self._admin_streamer_view_filter_sql(view)
-
         try:
-            with storage.transaction() as conn:
-                rows = conn.execute(
-                    f"""
-                    WITH latest_billing AS (
-                        SELECT
-                            customer_reference,
-                            plan_id,
-                            status,
-                            updated_at,
-                            ROW_NUMBER() OVER (
-                                PARTITION BY LOWER(customer_reference)
-                                ORDER BY updated_at DESC
-                            ) AS rn
-                        FROM twitch_billing_subscriptions
-                    )
-                    {_admin_partner_state_cte_sql()}
-                    {_admin_partner_live_state_cte_sql(source_table="partner_state", active_only=False)}
-                    {_admin_partner_oauth_cte_sql(source_table="partner_state")}
-                    {_admin_last_stream_session_cte_sql()}
-                    SELECT
-                        s.twitch_login,
-                        s.twitch_user_id,
-                        s.discord_user_id,
-                        s.discord_display_name,
-                        s.created_at,
-                        s.archived_at,
-                        s.require_discord_link,
-                        s.is_on_discord,
-                        s.manual_partner_opt_out,
-                        s.status,
-                        s.raid_bot_enabled,
-                        s.silent_ban,
-                        s.silent_raid,
-                        s.is_monitored_only,
-                        COALESCE(s.is_verified, 0) AS is_verified,
-                        COALESCE(s.is_partner_active, 0) AS is_partner_active,
-                        COALESCE(pls.is_live, 0) AS is_live,
-                        pls.last_seen_at,
-                        pls.last_viewer_count,
-                        pls.active_session_id,
-                        pls.last_game,
-                        lss.last_stream_at,
-                        po.scopes,
-                        po.needs_reauth,
-                        po.authorized_at,
-                        sp.promo_disabled,
-                        sp.promo_message,
-                        sp.raid_boost_enabled,
-                        sp.manual_plan_id,
-                        sp.manual_plan_expires_at,
-                        sp.manual_plan_notes,
-                        lb.plan_id AS billing_plan_id,
-                        lb.status AS billing_status,
-                        lb.updated_at AS billing_updated_at
-                    FROM partner_state s
-                    LEFT JOIN partner_live_state pls
-                        ON LOWER(pls.partner_login) = LOWER(s.twitch_login)
-                    LEFT JOIN partner_oauth po
-                        ON LOWER(po.partner_login) = LOWER(s.twitch_login)
-                    LEFT JOIN last_stream_session lss
-                        ON lss.streamer_login = LOWER(s.twitch_login)
-                    LEFT JOIN streamer_plans sp
-                        ON LOWER(sp.twitch_login) = LOWER(s.twitch_login)
-                    LEFT JOIN latest_billing lb
-                        ON LOWER(lb.customer_reference) = LOWER(s.twitch_login)
-                       AND lb.rn = 1
-                    WHERE {where_clause}
-                    ORDER BY
-                        CASE
-                            WHEN COALESCE(s.manual_partner_opt_out, 0) = 1 THEN 3
-                            WHEN COALESCE(s.status, 'departnered') = 'active' AND s.archived_at IS NULL THEN 0
-                            WHEN COALESCE(s.status, 'departnered') IN ('active', 'archived') THEN 1
-                            ELSE 2
-                        END,
-                        CASE WHEN COALESCE(pls.is_live, 0) = 1 THEN 0 ELSE 1 END,
-                        LOWER(s.twitch_login) ASC
-                    """
-                ).fetchall()
+            payload = await asyncio.to_thread(load_admin_streamers, view)
         except Exception as exc:
             return _admin_500(exc)
-
-        payload = []
-        for row in rows:
-            login = str(_row_get_value(row, "twitch_login", 0, "") or "").strip().lower()
-            archived_at = _row_get_value(row, "archived_at", 5, None)
-            archived = bool(archived_at)
-            is_live = bool(_row_get_value(row, "is_live", 16, 0))
-            verified = bool(_row_get_value(row, "is_verified", 14, 0))
-            manual_partner_opt_out = bool(_row_get_value(row, "manual_partner_opt_out", 8, 0))
-            partner_status = self._admin_partner_status(
-                status=_row_get_value(row, "status", 9, None),
-                archived_at=archived_at,
-                manual_partner_opt_out=manual_partner_opt_out,
-            )
-            scope_snapshot = self._admin_scope_snapshot(
-                _row_get_value(row, "scopes", 22, ""),
-                _row_get_value(row, "needs_reauth", 23, 0),
-            )
-            status = (
-                "non_partner"
-                if partner_status == "non_partner"
-                else "departnered"
-                if partner_status == "departnered"
-                else "archived"
-                if partner_status == "archived"
-                else "live"
-                if is_live
-                else "verified"
-                if verified
-                else "offline"
-            )
-            payload.append(
-                {
-                    "login": login,
-                    "displayName": str(
-                        _row_get_value(row, "discord_display_name", 3, "") or login
-                    ).strip()
-                    or login,
-                    "twitchUserId": str(_row_get_value(row, "twitch_user_id", 1, "") or "").strip()
-                    or None,
-                    "discordUserId": str(_row_get_value(row, "discord_user_id", 2, "") or "").strip()
-                    or None,
-                    "discordDisplayName": str(
-                        _row_get_value(row, "discord_display_name", 3, "") or ""
-                    ).strip()
-                    or None,
-                    "verified": verified,
-                    "archived": archived,
-                    "archivedAt": _json_safe_datetime(archived_at),
-                    "createdAt": _json_safe_datetime(_row_get_value(row, "created_at", 4, None)),
-                    "isLive": is_live,
-                    "isOnDiscord": bool(_row_get_value(row, "is_on_discord", 7, 0)),
-                    "manualPartnerOptOut": manual_partner_opt_out,
-                    "partnerStatus": partner_status,
-                    "viewerCount": _safe_int(_row_get_value(row, "last_viewer_count", 18, 0), default=0),
-                    "activeSessionId": _row_get_value(row, "active_session_id", 19, None),
-                    "lastSeenAt": _json_safe_datetime(_row_get_value(row, "last_seen_at", 17, None)),
-                    "lastGame": _row_get_value(row, "last_game", 20, None),
-                    "lastStreamAt": _json_safe_datetime(
-                        _row_get_value(row, "last_stream_at", 21, None)
-                    ),
-                    "planId": str(
-                        _row_get_value(row, "manual_plan_id", 28, "")
-                        or _row_get_value(row, "billing_plan_id", 31, "")
-                        or ""
-                    ).strip()
-                    or None,
-                    "billingStatus": str(_row_get_value(row, "billing_status", 32, "") or "").strip()
-                    or None,
-                    "oauthConnected": bool(scope_snapshot["connected"]),
-                    "oauthNeedsReauth": bool(scope_snapshot["needsReauth"]),
-                    "oauthStatus": str(scope_snapshot["status"]),
-                    "grantedScopes": list(scope_snapshot["grantedScopes"]),
-                    "missingScopes": list(scope_snapshot["missingScopes"]),
-                    "oauthAuthorizedAt": _json_safe_datetime(
-                        _row_get_value(row, "authorized_at", 24, None)
-                    ),
-                    "promoDisabled": bool(_row_get_value(row, "promo_disabled", 25, 0)),
-                    "notes": str(_row_get_value(row, "manual_plan_notes", 30, "") or "").strip()
-                    or None,
-                    "status": status,
-                }
-            )
-        return web.json_response({"items": payload, "count": len(payload), "view": view})
+        return web.json_response(payload)
 
     async def _api_admin_streamer_detail(self, request: web.Request) -> web.Response:
         auth_error = self._admin_auth_error(request, getattr(self, "_require_v2_admin_api", None))
@@ -1158,227 +1117,11 @@ class _AnalyticsAdminMixin:
             return web.json_response({"error": "invalid_login"}, status=400)
 
         try:
-            with storage.transaction() as conn:
-                row = conn.execute(
-                    f"""
-                    WITH latest_billing AS (
-                        SELECT
-                            customer_reference,
-                            plan_id,
-                            status,
-                            updated_at,
-                            ROW_NUMBER() OVER (
-                                PARTITION BY LOWER(customer_reference)
-                                ORDER BY updated_at DESC
-                            ) AS rn
-                        FROM twitch_billing_subscriptions
-                    )
-                    {_admin_partner_state_cte_sql()}
-                    {_admin_partner_live_state_cte_sql(source_table="partner_state", active_only=False)}
-                    {_admin_partner_oauth_cte_sql(source_table="partner_state")}
-                    SELECT
-                        s.twitch_login,
-                        s.twitch_user_id,
-                        s.discord_user_id,
-                        s.discord_display_name,
-                        s.created_at,
-                        s.archived_at,
-                        s.require_discord_link,
-                        s.is_on_discord,
-                        s.manual_partner_opt_out,
-                        s.raid_bot_enabled,
-                        s.silent_ban,
-                        s.silent_raid,
-                        s.is_monitored_only,
-                        COALESCE(s.is_verified, 0) AS is_verified,
-                        COALESCE(s.is_partner_active, 0) AS is_partner_active,
-                        COALESCE(s.live_ping_enabled, 1) AS live_ping_enabled,
-                        s.status,
-                        COALESCE(pls.is_live, 0) AS is_live,
-                        pls.last_seen_at,
-                        pls.last_viewer_count,
-                        pls.active_session_id,
-                        pls.last_started_at,
-                        pls.last_game,
-                        po.scopes,
-                        po.needs_reauth,
-                        po.raid_enabled AS oauth_raid_enabled,
-                        po.authorized_at,
-                        sp.plan_name,
-                        sp.promo_disabled,
-                        sp.promo_message,
-                        sp.raid_boost_enabled,
-                        sp.notes,
-                        sp.manual_plan_id,
-                        sp.manual_plan_expires_at,
-                        sp.manual_plan_notes,
-                        lb.plan_id AS billing_plan_id,
-                        lb.status AS billing_status,
-                        lb.updated_at AS billing_updated_at
-                    FROM partner_state s
-                    LEFT JOIN partner_live_state pls
-                        ON LOWER(pls.partner_login) = LOWER(s.twitch_login)
-                    LEFT JOIN partner_oauth po
-                        ON LOWER(po.partner_login) = LOWER(s.twitch_login)
-                    LEFT JOIN streamer_plans sp
-                        ON LOWER(sp.twitch_login) = LOWER(s.twitch_login)
-                    LEFT JOIN latest_billing lb
-                        ON LOWER(lb.customer_reference) = LOWER(s.twitch_login)
-                       AND lb.rn = 1
-                    WHERE LOWER(s.twitch_login) = LOWER(%s)
-                    LIMIT 1
-                    """,
-                    (login,),
-                ).fetchone()
-                if row is None:
-                    return web.json_response({"error": "not_found"}, status=404)
-
-                stats_row = conn.execute(
-                    """
-                    SELECT
-                        COUNT(*) AS total_sessions,
-                        COALESCE(SUM(duration_seconds), 0) AS total_duration_seconds,
-                        COALESCE(AVG(avg_viewers), 0) AS avg_viewers,
-                        COALESCE(MAX(peak_viewers), 0) AS peak_viewers,
-                        COALESCE(SUM(follower_delta), 0) AS follower_delta
-                    FROM twitch_stream_sessions
-                    WHERE LOWER(streamer_login) = LOWER(%s)
-                    """,
-                    (login,),
-                ).fetchone()
-                sessions = conn.execute(
-                    """
-                    SELECT
-                        id,
-                        started_at,
-                        ended_at,
-                        stream_title,
-                        game_name,
-                        avg_viewers,
-                        peak_viewers,
-                        duration_seconds,
-                        follower_delta
-                    FROM twitch_stream_sessions
-                    WHERE LOWER(streamer_login) = LOWER(%s)
-                    ORDER BY started_at DESC
-                    LIMIT 10
-                    """,
-                    (login,),
-                ).fetchall()
+            payload = await asyncio.to_thread(load_admin_streamer_detail, login)
         except Exception as exc:
             return _admin_500(exc)
-
-        session_payload = []
-        for session in sessions:
-            duration_seconds = _safe_int(_row_get_value(session, "duration_seconds", 7, 0), default=0)
-            session_payload.append(
-                {
-                    "sessionId": _row_get_value(session, "id", 0, None),
-                    "startedAt": _json_safe_datetime(_row_get_value(session, "started_at", 1, None)),
-                    "endedAt": _json_safe_datetime(_row_get_value(session, "ended_at", 2, None)),
-                    "title": _row_get_value(session, "stream_title", 3, None),
-                    "category": _row_get_value(session, "game_name", 4, None),
-                    "averageViewers": _row_get_value(session, "avg_viewers", 5, None),
-                    "peakViewers": _row_get_value(session, "peak_viewers", 6, None),
-                    "watchTimeHours": round(duration_seconds / 3600.0, 2),
-                    "followerDelta": _row_get_value(session, "follower_delta", 8, None),
-                }
-            )
-
-        total_duration_seconds = _safe_int(
-            _row_get_value(stats_row, "total_duration_seconds", 1, 0) if stats_row else 0,
-            default=0,
-        )
-        archived_at = _row_get_value(row, "archived_at", 5, None)
-        manual_partner_opt_out = bool(_row_get_value(row, "manual_partner_opt_out", 8, 0))
-        scope_snapshot = self._admin_scope_snapshot(
-            _row_get_value(row, "scopes", 23, ""),
-            _row_get_value(row, "needs_reauth", 24, 0),
-        )
-        partner_status = self._admin_partner_status(
-            status=_row_get_value(row, "status", 16, None),
-            archived_at=archived_at,
-            manual_partner_opt_out=manual_partner_opt_out,
-        )
-        payload = {
-            "login": login,
-            "displayName": str(_row_get_value(row, "discord_display_name", 3, "") or login).strip()
-            or login,
-            "twitchUserId": str(_row_get_value(row, "twitch_user_id", 1, "") or "").strip() or None,
-            "verified": bool(_row_get_value(row, "is_verified", 13, 0)),
-            "archived": bool(archived_at),
-            "archivedAt": _json_safe_datetime(archived_at),
-            "createdAt": _json_safe_datetime(_row_get_value(row, "created_at", 4, None)),
-            "isLive": bool(_row_get_value(row, "is_live", 17, 0)),
-            "partnerStatus": partner_status,
-            "planId": str(
-                _row_get_value(row, "manual_plan_id", 32, "")
-                or _row_get_value(row, "billing_plan_id", 35, "")
-                or _row_get_value(row, "plan_name", 27, "")
-                or ""
-            ).strip()
-            or None,
-            "stats": {
-                "totalSessions": _safe_int(_row_get_value(stats_row, "total_sessions", 0, 0), default=0)
-                if stats_row
-                else 0,
-                "totalWatchHours": round(total_duration_seconds / 3600.0, 2),
-                "averageViewers": round(float(_row_get_value(stats_row, "avg_viewers", 2, 0.0) or 0.0), 2)
-                if stats_row
-                else 0.0,
-                "peakViewers": _safe_int(_row_get_value(stats_row, "peak_viewers", 3, 0), default=0)
-                if stats_row
-                else 0,
-                "followerDelta": _safe_int(_row_get_value(stats_row, "follower_delta", 4, 0), default=0)
-                if stats_row
-                else 0,
-                "viewerCount": _safe_int(_row_get_value(row, "last_viewer_count", 19, 0), default=0),
-                "lastSeenAt": _json_safe_datetime(_row_get_value(row, "last_seen_at", 18, None)),
-                "lastStartedAt": _json_safe_datetime(
-                    _row_get_value(row, "last_started_at", 21, None)
-                ),
-                "lastGame": _row_get_value(row, "last_game", 22, None),
-            },
-            "settings": {
-                "requireDiscordLink": bool(_row_get_value(row, "require_discord_link", 6, 0)),
-                "isOnDiscord": bool(_row_get_value(row, "is_on_discord", 7, 0)),
-                "discordUserId": str(_row_get_value(row, "discord_user_id", 2, "") or "").strip() or None,
-                "discordDisplayName": str(
-                    _row_get_value(row, "discord_display_name", 3, "") or ""
-                ).strip()
-                or None,
-                "manualPartnerOptOut": manual_partner_opt_out,
-                "raidBotEnabled": bool(_row_get_value(row, "raid_bot_enabled", 9, 0)),
-                "silentBan": bool(_row_get_value(row, "silent_ban", 10, 0)),
-                "silentRaid": bool(_row_get_value(row, "silent_raid", 11, 0)),
-                "isMonitoredOnly": bool(_row_get_value(row, "is_monitored_only", 12, 0)),
-                "livePingEnabled": bool(_row_get_value(row, "live_ping_enabled", 15, 1)),
-                "oauthConnected": bool(scope_snapshot["connected"]),
-                "oauthStatus": str(scope_snapshot["status"]),
-                "oauthNeedsReauth": bool(scope_snapshot["needsReauth"]),
-                "oauthRaidEnabled": bool(_row_get_value(row, "oauth_raid_enabled", 25, 0)),
-                "oauthAuthorizedAt": _json_safe_datetime(
-                    _row_get_value(row, "authorized_at", 26, None)
-                ),
-                "grantedScopes": list(scope_snapshot["grantedScopes"]),
-                "missingScopes": list(scope_snapshot["missingScopes"]),
-                "promoDisabled": bool(_row_get_value(row, "promo_disabled", 28, 0)),
-                "promoMessage": _row_get_value(row, "promo_message", 29, None),
-                "raidBoostEnabled": bool(_row_get_value(row, "raid_boost_enabled", 30, 0)),
-                "notes": _row_get_value(row, "notes", 31, None),
-                "manualPlanId": _row_get_value(row, "manual_plan_id", 32, None),
-                "manualPlanExpiresAt": _json_safe_datetime(
-                    _row_get_value(row, "manual_plan_expires_at", 33, None)
-                ),
-                "manualPlanNotes": _row_get_value(row, "manual_plan_notes", 34, None),
-                "billingStatus": _row_get_value(row, "billing_status", 36, None),
-                "billingUpdatedAt": _json_safe_datetime(
-                    _row_get_value(row, "billing_updated_at", 37, None)
-                ),
-            },
-            "sessions": session_payload,
-            "recentActivity": session_payload[:5],
-        }
+        if payload is None:
+            return web.json_response({"error": "not_found"}, status=404)
         return web.json_response(payload)
 
     async def _api_admin_system_oauth_scopes(self, request: web.Request) -> web.Response:
@@ -1387,106 +1130,7 @@ class _AnalyticsAdminMixin:
             return auth_error
 
         try:
-            with storage.transaction() as conn:
-                rows = conn.execute(
-                    f"""
-                    WITH auth_rows AS (
-                        SELECT
-                            ROW_NUMBER() OVER (
-                                ORDER BY
-                                    CASE WHEN authorized_at IS NULL THEN 1 ELSE 0 END,
-                                    authorized_at DESC,
-                                    LOWER(COALESCE(NULLIF(TRIM(twitch_login), ''), '')),
-                                    LOWER(COALESCE(NULLIF(TRIM(twitch_user_id), ''), ''))
-                            ) AS auth_row_id,
-                            twitch_login,
-                            twitch_user_id,
-                            scopes,
-                            needs_reauth,
-                            authorized_at
-                        FROM twitch_raid_auth
-                    )
-                    {_admin_partner_state_cte_sql()}
-                    , ranked_auth_matches AS (
-                        SELECT
-                            a.auth_row_id,
-                            a.twitch_login,
-                            a.twitch_user_id,
-                            a.scopes,
-                            a.needs_reauth,
-                            a.authorized_at,
-                            s.twitch_login AS partner_login,
-                            s.discord_display_name,
-                            s.archived_at,
-                            s.manual_partner_opt_out,
-                            s.status,
-                            ROW_NUMBER() OVER (
-                                PARTITION BY a.auth_row_id
-                                ORDER BY
-                                    CASE
-                                        WHEN NULLIF(TRIM(COALESCE(a.twitch_user_id, '')), '') IS NOT NULL
-                                             AND NULLIF(TRIM(COALESCE(s.twitch_user_id, '')), '') IS NOT NULL
-                                             AND LOWER(TRIM(a.twitch_user_id)) = LOWER(TRIM(s.twitch_user_id))
-                                        THEN 0
-                                        WHEN LOWER(COALESCE(a.twitch_login, '')) = LOWER(s.twitch_login)
-                                        THEN 1
-                                        ELSE 2
-                                    END,
-                                    CASE
-                                        WHEN COALESCE(s.manual_partner_opt_out, 0) = 1 THEN 3
-                                        WHEN COALESCE(s.status, 'departnered') = 'active' AND s.archived_at IS NULL THEN 0
-                                        WHEN COALESCE(s.status, 'departnered') IN ('active', 'archived') THEN 1
-                                        ELSE 2
-                                    END,
-                                    CASE
-                                        WHEN s.created_at IS NULL AND s.archived_at IS NULL THEN 1
-                                        ELSE 0
-                                    END,
-                                    CASE
-                                        WHEN s.created_at IS NOT NULL THEN s.created_at
-                                        ELSE s.archived_at
-                                    END DESC,
-                                    LOWER(COALESCE(s.twitch_login, '')) ASC
-                            ) AS rn
-                        FROM auth_rows a
-                        LEFT JOIN partner_state s
-                            ON (
-                                NULLIF(TRIM(COALESCE(a.twitch_user_id, '')), '') IS NOT NULL
-                                AND NULLIF(TRIM(COALESCE(s.twitch_user_id, '')), '') IS NOT NULL
-                                AND LOWER(TRIM(a.twitch_user_id)) = LOWER(TRIM(s.twitch_user_id))
-                            )
-                            OR LOWER(COALESCE(a.twitch_login, '')) = LOWER(s.twitch_login)
-                    )
-                    SELECT
-                        auth_row_id,
-                        COALESCE(
-                            NULLIF(TRIM(partner_login), ''),
-                            NULLIF(TRIM(twitch_login), ''),
-                            NULLIF(TRIM(twitch_user_id), '')
-                        ) AS effective_login,
-                        twitch_login,
-                        twitch_user_id,
-                        scopes,
-                        needs_reauth,
-                        authorized_at,
-                        partner_login,
-                        discord_display_name,
-                        archived_at,
-                        manual_partner_opt_out,
-                        status
-                    FROM ranked_auth_matches
-                    WHERE rn = 1
-                    ORDER BY
-                        LOWER(
-                            COALESCE(
-                                NULLIF(TRIM(partner_login), ''),
-                                NULLIF(TRIM(twitch_login), ''),
-                                NULLIF(TRIM(twitch_user_id), '')
-                            )
-                        ) ASC,
-                        auth_row_id ASC
-                    """
-                ).fetchall()
+            rows = await asyncio.to_thread(_load_admin_oauth_scope_rows)
         except Exception as exc:
             if self._admin_is_missing_schema_error(exc):
                 return web.json_response(
@@ -1591,26 +1235,9 @@ class _AnalyticsAdminMixin:
             "isLiveScope": False,
         }
         try:
-            with storage.transaction() as conn:
-                row = conn.execute(
-                    """
-                    SELECT MAX(COALESCE(last_seen_at, last_started_at)) AS last_tick_at
-                    FROM twitch_live_state
-                    """
-                ).fetchone()
-                last_tick_at = _row_get_value(row, "last_tick_at", 0, None) if row else None
-                try:
-                    raw_chat_snapshot = _fetch_raw_chat_health_snapshot(conn)
-                except Exception:
-                    raw_chat_snapshot = {
-                        "streamerLogin": None,
-                        "lastMessageAt": None,
-                        "lastInsertOkAt": None,
-                        "lastInsertErrorAt": None,
-                        "lastError": None,
-                        "rawChatLagSeconds": None,
-                        "isLiveScope": False,
-                    }
+            health_snapshot = await asyncio.to_thread(_load_admin_system_health_snapshot)
+            last_tick_at = health_snapshot.get("last_tick_at")
+            raw_chat_snapshot = dict(health_snapshot.get("raw_chat_snapshot") or raw_chat_snapshot)
         except Exception:
             last_tick_at = None
 
@@ -1770,31 +1397,14 @@ class _AnalyticsAdminMixin:
         if auth_error is not None:
             return auth_error
 
-        tables: list[dict[str, Any]] = []
-        database_size_bytes = None
         try:
-            with storage.transaction() as conn:
-                database_size_bytes = self._admin_database_size_bytes(conn)
-                for table_name in _DATABASE_STATS_TABLES:
-                    row_count = self._admin_database_row_count(conn, table_name)
-                    if row_count is None:
-                        continue
-                    tables.append(
-                        {
-                            "table": table_name,
-                            "rowCount": row_count,
-                            "sizeBytes": self._admin_database_table_size_bytes(conn, table_name),
-                        }
-                    )
+            payload = await asyncio.to_thread(
+                load_admin_database_overview,
+                _DATABASE_STATS_TABLES,
+            )
         except Exception as exc:
             return _admin_500(exc)
-
-        return web.json_response(
-            {
-                "databaseSizeBytes": database_size_bytes,
-                "tables": tables,
-            }
-        )
+        return web.json_response(payload)
 
     async def _api_admin_system_errors(self, request: web.Request) -> web.Response:
         auth_error = self._admin_auth_error(request, getattr(self, "_require_v2_admin_api", None))
@@ -1856,12 +1466,10 @@ class _AnalyticsAdminMixin:
                 status=400,
             )
         try:
-            with storage.transaction() as conn:
-                promo_config = evaluate_global_promo_mode(load_global_promo_mode(conn))
-                raid_snapshot, chat_snapshot = self._admin_load_streamer_config_snapshots(
-                    conn,
-                    scope=scope,
-                )
+            config_snapshot = await asyncio.to_thread(_load_admin_config_overview_snapshot, scope)
+            promo_config = dict(config_snapshot.get("promo") or {})
+            raid_snapshot = dict(config_snapshot.get("raids") or {})
+            chat_snapshot = dict(config_snapshot.get("chat") or {})
         except Exception as exc:
             return _admin_500(exc)
 
@@ -1897,15 +1505,16 @@ class _AnalyticsAdminMixin:
 
         actor_label = self._admin_actor_label(request, getattr(self, "_get_discord_admin_session", None))
         try:
-            with storage.transaction() as conn:
-                saved = save_global_promo_mode(conn, config=normalized, updated_by=actor_label)
-                evaluation = evaluate_global_promo_mode(saved)
+            payload = await asyncio.to_thread(
+                save_admin_promo_config,
+                config=normalized,
+                updated_by=actor_label,
+            )
         except ValueError as exc:
             return web.json_response({"error": str(exc)}, status=400)
         except Exception as exc:
             return _admin_500(exc)
-
-        return web.json_response({"ok": True, "config": saved, "evaluation": evaluation})
+        return web.json_response(payload)
 
     async def _api_admin_config_raids(self, request: web.Request) -> web.Response:
         auth_error = self._admin_auth_error(request, getattr(self, "_require_v2_admin_api", None))
@@ -1945,42 +1554,19 @@ class _AnalyticsAdminMixin:
                 },
                 status=400,
             )
-        where_clause = self._admin_scope_filter_sql(scope)
         actor_label = self._admin_actor_label(request, getattr(self, "_get_discord_admin_session", None))
-        updated_at = datetime.now(UTC).isoformat()
-
         try:
-            with storage.transaction() as conn:
-                target_count = storage.bulk_update_partner_flags(
-                    conn,
-                    scope=scope,
-                    raid_bot_enabled=raid_bot_enabled,
-                    live_ping_enabled=live_ping_enabled,
-                )
-                updated_count = target_count
-                raid_snapshot, chat_snapshot = self._admin_load_streamer_config_snapshots(
-                    conn,
-                    scope=scope,
-                )
+            payload = await asyncio.to_thread(
+                update_admin_raid_config,
+                scope=scope,
+                raid_bot_enabled=raid_bot_enabled,
+                live_ping_enabled=live_ping_enabled,
+                updated_by=actor_label,
+                load_streamer_config_snapshots=self._admin_load_streamer_config_snapshots,
+            )
         except Exception as exc:
             return _admin_500(exc)
-
-        return web.json_response(
-            {
-                "ok": True,
-                "scope": scope,
-                "updatedAt": updated_at,
-                "updatedBy": actor_label,
-                "targetCount": target_count,
-                "updatedCount": updated_count,
-                "raids": {
-                    **raid_snapshot,
-                    "raidBotEnabled": raid_bot_enabled,
-                    "livePingEnabled": live_ping_enabled,
-                },
-                "chat": chat_snapshot,
-            }
-        )
+        return web.json_response(payload)
 
     async def _api_admin_config_chat(self, request: web.Request) -> web.Response:
         auth_error = self._admin_auth_error(request, getattr(self, "_require_v2_admin_api", None))
@@ -2020,42 +1606,19 @@ class _AnalyticsAdminMixin:
                 },
                 status=400,
             )
-        where_clause = self._admin_scope_filter_sql(scope)
         actor_label = self._admin_actor_label(request, getattr(self, "_get_discord_admin_session", None))
-        updated_at = datetime.now(UTC).isoformat()
-
         try:
-            with storage.transaction() as conn:
-                target_count = storage.bulk_update_partner_flags(
-                    conn,
-                    scope=scope,
-                    silent_ban=silent_ban,
-                    silent_raid=silent_raid,
-                )
-                updated_count = target_count
-                raid_snapshot, chat_snapshot = self._admin_load_streamer_config_snapshots(
-                    conn,
-                    scope=scope,
-                )
+            payload = await asyncio.to_thread(
+                update_admin_chat_config,
+                scope=scope,
+                silent_ban=silent_ban,
+                silent_raid=silent_raid,
+                updated_by=actor_label,
+                load_streamer_config_snapshots=self._admin_load_streamer_config_snapshots,
+            )
         except Exception as exc:
             return _admin_500(exc)
-
-        return web.json_response(
-            {
-                "ok": True,
-                "scope": scope,
-                "updatedAt": updated_at,
-                "updatedBy": actor_label,
-                "targetCount": target_count,
-                "updatedCount": updated_count,
-                "raids": raid_snapshot,
-                "chat": {
-                    **chat_snapshot,
-                    "silentBan": silent_ban,
-                    "silentRaid": silent_raid,
-                },
-            }
-        )
+        return web.json_response(payload)
 
     async def _api_admin_billing_subscriptions(self, request: web.Request) -> web.Response:
         auth_error = self._admin_auth_error(request, getattr(self, "_require_v2_admin_api", None))
@@ -2063,45 +1626,10 @@ class _AnalyticsAdminMixin:
             return auth_error
 
         try:
-            with storage.transaction() as conn:
-                rows = conn.execute(
-                    """
-                    SELECT
-                        b.customer_reference,
-                        b.plan_id,
-                        b.status,
-                        b.current_period_start,
-                        b.current_period_end,
-                        b.updated_at,
-                        b.canceled_at,
-                        b.ended_at,
-                        sp.manual_plan_id,
-                        sp.manual_plan_expires_at
-                    FROM twitch_billing_subscriptions b
-                    LEFT JOIN streamer_plans sp
-                        ON LOWER(sp.twitch_login) = LOWER(b.customer_reference)
-                    ORDER BY b.updated_at DESC
-                    """
-                ).fetchall()
+            payload = await asyncio.to_thread(load_admin_billing_subscriptions)
         except Exception as exc:
             return _admin_500(exc)
-
-        payload = [
-            {
-                "login": str(_row_get_value(row, "customer_reference", 0, "") or "").strip().lower()
-                or None,
-                "customerReference": _row_get_value(row, "customer_reference", 0, None),
-                "planId": _row_get_value(row, "plan_id", 1, None),
-                "status": _row_get_value(row, "status", 2, None),
-                "trialEndsAt": None,
-                "currentPeriodEnd": _row_get_value(row, "current_period_end", 4, None),
-                "updatedAt": _row_get_value(row, "updated_at", 5, None),
-                "manualPlanId": _row_get_value(row, "manual_plan_id", 8, None),
-                "manualPlanExpiresAt": _row_get_value(row, "manual_plan_expires_at", 9, None),
-            }
-            for row in rows
-        ]
-        return web.json_response({"items": payload, "count": len(payload)})
+        return web.json_response(payload)
 
     async def _api_admin_billing_affiliates(self, request: web.Request) -> web.Response:
         auth_error = self._admin_auth_error(request, getattr(self, "_require_v2_admin_api", None))
@@ -2109,38 +1637,10 @@ class _AnalyticsAdminMixin:
             return auth_error
 
         try:
-            with storage.transaction() as conn:
-                rows = conn.execute(
-                    """
-                    SELECT
-                        twitch_login,
-                        email,
-                        stripe_account_id,
-                        stripe_connect_status,
-                        commission_rate,
-                        updated_at,
-                        created_at
-                    FROM affiliate_accounts
-                    ORDER BY COALESCE(updated_at, created_at) DESC
-                    """
-                ).fetchall()
+            payload = await asyncio.to_thread(load_admin_billing_affiliates)
         except Exception as exc:
             return _admin_500(exc)
-
-        payload = []
-        for row in rows:
-            payload.append(
-                {
-                    "twitchLogin": _row_get_value(row, "twitch_login", 0, None),
-                    "stripeAccountId": _row_get_value(row, "stripe_account_id", 2, None),
-                    "status": _row_get_value(row, "stripe_connect_status", 3, None),
-                    "payoutEmail": _row_get_value(row, "email", 1, None),
-                    "commissionRate": _row_get_value(row, "commission_rate", 4, None),
-                    "updatedAt": _row_get_value(row, "updated_at", 5, None)
-                    or _row_get_value(row, "created_at", 6, None),
-                }
-            )
-        return web.json_response({"items": payload, "count": len(payload)})
+        return web.json_response(payload)
 
     # ------------------------------------------------------------------ #
     # Affiliate management endpoints                                      #
@@ -2153,123 +1653,14 @@ class _AnalyticsAdminMixin:
             return auth_error
 
         try:
-            with storage.transaction() as conn:
-                self._admin_affiliate_prepare_conn(conn)
-                try:
-                    rows = conn.execute(
-                        f"""
-                        SELECT
-                            a.twitch_login,
-                            a.display_name,
-                            a.is_active,
-                            a.created_at,
-                            COALESCE(claim_stats.total_claims, 0)       AS total_claims,
-                            COALESCE(comm_stats.total_provision, 0)     AS total_provision,
-                            claim_stats.last_claim_at,
-                            COALESCE(pii.ust_status, 'unknown')         AS ust_status,
-                            CASE WHEN pii.twitch_login IS NOT NULL THEN 1 ELSE 0 END AS has_pii
-                        FROM affiliate_accounts a
-                        LEFT JOIN affiliate_pii pii
-                          ON pii.twitch_login = a.twitch_login
-                        LEFT JOIN (
-                            SELECT
-                                affiliate_twitch_login,
-                                COUNT(*) AS total_claims,
-                                MAX(claimed_at) AS last_claim_at
-                            FROM affiliate_streamer_claims
-                            GROUP BY affiliate_twitch_login
-                        ) claim_stats ON claim_stats.affiliate_twitch_login = a.twitch_login
-                        LEFT JOIN (
-                            SELECT
-                                affiliate_twitch_login,
-                                SUM(
-                                    CASE
-                                        WHEN status IN ({_AFFILIATE_REVENUE_STATUS_PLACEHOLDERS})
-                                        THEN commission_cents
-                                        ELSE 0
-                                    END
-                                ) AS total_provision
-                            FROM affiliate_commissions
-                            GROUP BY affiliate_twitch_login
-                        ) comm_stats ON comm_stats.affiliate_twitch_login = a.twitch_login
-                        ORDER BY a.created_at DESC
-                        """,
-                        [*_AFFILIATE_REVENUE_STATUSES],
-                    ).fetchall()
-                except Exception as exc:
-                    if not self._admin_is_missing_schema_error(exc):
-                        raise
-                    rows = conn.execute(
-                        f"""
-                        SELECT
-                            a.twitch_login,
-                            a.display_name,
-                            a.is_active,
-                            a.created_at,
-                            COALESCE(claim_stats.total_claims, 0)       AS total_claims,
-                            COALESCE(comm_stats.total_provision, 0)     AS total_provision,
-                            claim_stats.last_claim_at,
-                            'unknown'                                   AS ust_status,
-                            0                                           AS has_pii
-                        FROM affiliate_accounts a
-                        LEFT JOIN (
-                            SELECT
-                                affiliate_twitch_login,
-                                COUNT(*) AS total_claims,
-                                MAX(claimed_at) AS last_claim_at
-                            FROM affiliate_streamer_claims
-                            GROUP BY affiliate_twitch_login
-                        ) claim_stats ON claim_stats.affiliate_twitch_login = a.twitch_login
-                        LEFT JOIN (
-                            SELECT
-                                affiliate_twitch_login,
-                                SUM(
-                                    CASE
-                                        WHEN status IN ({_AFFILIATE_REVENUE_STATUS_PLACEHOLDERS})
-                                        THEN commission_cents
-                                        ELSE 0
-                                    END
-                                ) AS total_provision
-                            FROM affiliate_commissions
-                            GROUP BY affiliate_twitch_login
-                        ) comm_stats ON comm_stats.affiliate_twitch_login = a.twitch_login
-                        ORDER BY a.created_at DESC
-                        """,
-                        [*_AFFILIATE_REVENUE_STATUSES],
-                    ).fetchall()
+            payload = await asyncio.to_thread(
+                load_admin_affiliates_list,
+                prepare_conn=self._admin_affiliate_prepare_conn,
+                is_missing_schema_error=self._admin_is_missing_schema_error,
+            )
         except Exception as exc:
-            if self._admin_is_missing_schema_error(exc):
-                return web.json_response({"affiliates": []})
             return _admin_500(exc)
-
-        affiliates = []
-        for row in rows:
-            total_provision_cents = _safe_int(
-                _row_get_value(row, "total_provision", 5, 0), default=0
-            )
-            affiliates.append(
-                {
-                    "login": str(
-                        _row_get_value(row, "twitch_login", 0, "") or ""
-                    ).strip(),
-                    "display_name": _row_get_value(row, "display_name", 1, None),
-                    "active": bool(
-                        _safe_int(_row_get_value(row, "is_active", 2, 1), default=1)
-                    ),
-                    "total_claims": _safe_int(
-                        _row_get_value(row, "total_claims", 4, 0), default=0
-                    ),
-                    "total_provision": round(total_provision_cents / 100.0, 2),
-                    "created_at": _row_get_value(row, "created_at", 3, None),
-                    "last_claim_at": _row_get_value(row, "last_claim_at", 6, None),
-                    "ust_status": str(
-                        _row_get_value(row, "ust_status", 7, "unknown") or "unknown"
-                    ).strip()
-                    or "unknown",
-                    "has_pii": bool(_safe_int(_row_get_value(row, "has_pii", 8, 0), default=0)),
-                }
-            )
-        return web.json_response({"affiliates": affiliates})
+        return web.json_response(payload)
 
     async def _api_admin_affiliate_gutschriften(self, request: web.Request) -> web.Response:
         """List all affiliate gutschriften for admins."""
@@ -2278,91 +1669,15 @@ class _AnalyticsAdminMixin:
             return auth_error
 
         try:
-            with storage.transaction() as conn:
-                self._admin_affiliate_prepare_conn(conn)
-                try:
-                    rows = conn.execute(
-                        """
-                        SELECT
-                            g.id,
-                            g.affiliate_twitch_login,
-                            g.period_year,
-                            g.period_month,
-                            g.gutschrift_number,
-                            g.net_amount_cents,
-                            g.vat_amount_cents,
-                            g.gross_amount_cents,
-                            g.commission_ids,
-                            g.affiliate_ust_status,
-                            g.email_error,
-                            g.pdf_generated_at,
-                            g.email_sent_at,
-                            g.created_at,
-                            CASE WHEN g.pdf_blob IS NOT NULL THEN 1 ELSE NULL END AS pdf_blob,
-                            a.display_name,
-                            a.is_active,
-                            COALESCE(pii.ust_status, 'unknown') AS ust_status,
-                            CASE WHEN pii.twitch_login IS NOT NULL THEN 1 ELSE 0 END AS has_pii
-                        FROM affiliate_gutschriften g
-                        JOIN affiliate_accounts a
-                          ON a.twitch_login = g.affiliate_twitch_login
-                        LEFT JOIN affiliate_pii pii
-                          ON pii.twitch_login = g.affiliate_twitch_login
-                        ORDER BY g.period_year DESC, g.period_month DESC, g.id DESC
-                        """
-                    ).fetchall()
-                except Exception as exc:
-                    if not self._admin_is_missing_schema_error(exc):
-                        raise
-                    rows = conn.execute(
-                        """
-                        SELECT
-                            g.id,
-                            g.affiliate_twitch_login,
-                            g.period_year,
-                            g.period_month,
-                            g.gutschrift_number,
-                            g.net_amount_cents,
-                            g.vat_amount_cents,
-                            g.gross_amount_cents,
-                            g.commission_ids,
-                            g.affiliate_ust_status,
-                            g.email_error,
-                            g.pdf_generated_at,
-                            g.email_sent_at,
-                            g.created_at,
-                            CASE WHEN g.pdf_blob IS NOT NULL THEN 1 ELSE NULL END AS pdf_blob,
-                            a.display_name,
-                            a.is_active,
-                            'unknown' AS ust_status,
-                            0 AS has_pii
-                        FROM affiliate_gutschriften g
-                        JOIN affiliate_accounts a
-                          ON a.twitch_login = g.affiliate_twitch_login
-                        ORDER BY g.period_year DESC, g.period_month DESC, g.id DESC
-                        """
-                    ).fetchall()
+            payload = await asyncio.to_thread(
+                load_admin_affiliate_gutschriften,
+                prepare_conn=self._admin_affiliate_prepare_conn,
+                is_missing_schema_error=self._admin_is_missing_schema_error,
+                build_download_path=self._admin_affiliate_gutschrift_download_path,
+            )
         except Exception as exc:
-            if self._admin_is_missing_schema_error(exc):
-                return web.json_response({"gutschriften": [], "count": 0})
             return _admin_500(exc)
-
-        documents = []
-        for row in rows:
-            payload = dict(AffiliateGutschriftService._row_to_metadata(row))
-            row_id = _safe_int(payload.get("id"), default=0)
-            payload["download_path"] = self._admin_affiliate_gutschrift_download_path(row_id)
-            payload["affiliate_login"] = str(
-                _row_get_value(row, "affiliate_twitch_login", 1, "") or ""
-            ).strip()
-            payload["display_name"] = _row_get_value(row, "display_name", 15, None)
-            payload["active"] = bool(_safe_int(_row_get_value(row, "is_active", 16, 1), default=1))
-            payload["ust_status"] = str(
-                _row_get_value(row, "ust_status", 17, "unknown") or "unknown"
-            ).strip() or "unknown"
-            payload["has_pii"] = bool(_safe_int(_row_get_value(row, "has_pii", 18, 0), default=0))
-            documents.append(payload)
-        return web.json_response({"gutschriften": documents, "count": len(documents)})
+        return web.json_response(payload)
 
     async def _api_admin_affiliate_gutschriften_for_login(
         self,
@@ -2378,59 +1693,20 @@ class _AnalyticsAdminMixin:
             return web.json_response({"error": "invalid_login"}, status=400)
 
         try:
-            with storage.transaction() as conn:
-                self._admin_affiliate_prepare_conn(conn)
-                account_row = conn.execute(
-                    """
-                    SELECT twitch_login, display_name, is_active, created_at, updated_at
-                    FROM affiliate_accounts
-                    WHERE twitch_login = %s
-                    """,
-                    (login,),
-                ).fetchone()
-                if not account_row:
-                    return web.json_response({"error": "not_found"}, status=404)
-
-                pii = self._admin_affiliate_load_pii(conn, login)
-                readiness = AffiliateGutschriftService.build_readiness(pii)
-                summary = self._admin_affiliate_gutschriften_summary(
-                    conn,
-                    affiliate_login=login,
-                )
-                try:
-                    documents = AffiliateGutschriftService.list_for_affiliate(conn, login)
-                except Exception as exc:
-                    if not self._admin_is_missing_schema_error(exc):
-                        raise
-                    documents = []
+            payload = await asyncio.to_thread(
+                load_admin_affiliate_gutschriften_for_login,
+                login,
+                prepare_conn=self._admin_affiliate_prepare_conn,
+                is_missing_schema_error=self._admin_is_missing_schema_error,
+                load_pii=self._admin_affiliate_load_pii,
+                build_summary=self._admin_affiliate_gutschriften_summary,
+                build_download_path=self._admin_affiliate_gutschrift_download_path,
+            )
+        except AdminAffiliateNotFoundError:
+            return web.json_response({"error": "not_found"}, status=404)
         except Exception as exc:
-            if self._admin_is_missing_schema_error(exc):
-                return web.json_response({"error": "not_found"}, status=404)
             return _admin_500(exc)
-
-        items = []
-        for document in documents:
-            payload = dict(document)
-            row_id = _safe_int(payload.get("id"), default=0)
-            payload["download_path"] = self._admin_affiliate_gutschrift_download_path(row_id)
-            items.append(payload)
-
-        affiliate = {
-            "login": str(_row_get_value(account_row, "twitch_login", 0, "") or "").strip(),
-            "display_name": _row_get_value(account_row, "display_name", 1, None),
-            "active": bool(_safe_int(_row_get_value(account_row, "is_active", 2, 1), default=1)),
-            "created_at": _row_get_value(account_row, "created_at", 3, None),
-            "updated_at": _row_get_value(account_row, "updated_at", 4, None),
-        }
-        return web.json_response(
-            {
-                "affiliate": affiliate,
-                "ust_status": str(pii.get("ust_status") or "unknown"),
-                "readiness": readiness,
-                "gutschriften_summary": summary,
-                "gutschriften": items,
-            }
-        )
+        return web.json_response(payload)
 
     async def _api_admin_affiliate_gutschrift_pdf(self, request: web.Request) -> web.Response:
         """Download a stored affiliate gutschrift PDF without ownership checks."""
@@ -2446,33 +1722,13 @@ class _AnalyticsAdminMixin:
             return web.json_response({"error": "invalid_gutschrift_id"}, status=400)
 
         try:
-            with storage.transaction() as conn:
-                self._admin_affiliate_prepare_conn(conn)
-                row = conn.execute(
-                    """
-                    SELECT affiliate_twitch_login
-                    FROM affiliate_gutschriften
-                    WHERE id = %s
-                    """,
-                    (gutschrift_id,),
-                ).fetchone()
-                if not row:
-                    return web.json_response({"error": "not_found"}, status=404)
-
-                affiliate_login = _normalize_login(
-                    _row_get_value(row, "affiliate_twitch_login", 0, "")
-                )
-                if not affiliate_login:
-                    return web.json_response({"error": "not_found"}, status=404)
-
-                resolved = AffiliateGutschriftService.get_pdf(
-                    conn,
-                    affiliate_login=affiliate_login,
-                    gutschrift_id=gutschrift_id,
-                )
+            resolved = await asyncio.to_thread(
+                load_admin_affiliate_gutschrift_pdf,
+                gutschrift_id,
+                prepare_conn=self._admin_affiliate_prepare_conn,
+                is_missing_schema_error=self._admin_is_missing_schema_error,
+            )
         except Exception as exc:
-            if self._admin_is_missing_schema_error(exc):
-                return web.json_response({"error": "not_found"}, status=404)
             return _admin_500(exc)
 
         if resolved is None:
@@ -2566,140 +1822,19 @@ class _AnalyticsAdminMixin:
             return web.json_response({"error": "invalid_login"}, status=400)
 
         try:
-            with storage.transaction() as conn:
-                self._admin_affiliate_prepare_conn(conn)
-                # Fetch affiliate account
-                acct_row = conn.execute(
-                    """
-                    SELECT
-                        twitch_login, display_name, is_active, created_at,
-                        email, stripe_connect_status, stripe_account_id, updated_at
-                    FROM affiliate_accounts
-                    WHERE twitch_login = %s
-                    """,
-                    (login,),
-                ).fetchone()
-
-                if not acct_row:
-                    return web.json_response({"error": "not_found"}, status=404)
-
-                # Fetch claims with commission aggregates
-                claim_rows = conn.execute(
-                    f"""
-                    SELECT
-                        c.id,
-                        c.claimed_streamer_login,
-                        c.claimed_at,
-                        COALESCE(SUM(co.commission_cents), 0) AS commission_cents,
-                        COUNT(co.id) AS commission_count
-                    FROM affiliate_streamer_claims c
-                    LEFT JOIN affiliate_commissions co
-                        ON co.affiliate_twitch_login = c.affiliate_twitch_login
-                        AND co.streamer_login = c.claimed_streamer_login
-                        AND co.status IN ({_AFFILIATE_REVENUE_STATUS_PLACEHOLDERS})
-                    WHERE c.affiliate_twitch_login = %s
-                    GROUP BY c.id, c.claimed_streamer_login, c.claimed_at
-                    ORDER BY c.claimed_at DESC
-                    """,
-                    (*_AFFILIATE_REVENUE_STATUSES, login),
-                ).fetchall()
-
-                claim_stats_row = conn.execute(
-                    """
-                    SELECT
-                        COUNT(*) AS total_claims
-                    FROM affiliate_streamer_claims
-                    WHERE affiliate_twitch_login = %s
-                    """,
-                    (login,),
-                ).fetchone()
-
-                commission_stats_row = conn.execute(
-                    f"""
-                    SELECT
-                        COALESCE(SUM(commission_cents), 0) AS total_provision,
-                        COUNT(DISTINCT streamer_login) AS active_customers
-                    FROM affiliate_commissions
-                    WHERE affiliate_twitch_login = %s
-                      AND status IN ({_AFFILIATE_REVENUE_STATUS_PLACEHOLDERS})
-                    """,
-                    (login, *_AFFILIATE_REVENUE_STATUSES),
-                ).fetchone()
-
-                pii = self._admin_affiliate_load_pii(conn, login)
-                readiness = AffiliateGutschriftService.build_readiness(pii)
-                gutschriften_summary = self._admin_affiliate_gutschriften_summary(
-                    conn,
-                    affiliate_login=login,
-                )
+            payload = await asyncio.to_thread(
+                load_admin_affiliate_detail,
+                login,
+                prepare_conn=self._admin_affiliate_prepare_conn,
+                is_missing_schema_error=self._admin_is_missing_schema_error,
+                load_pii=self._admin_affiliate_load_pii,
+                build_summary=self._admin_affiliate_gutschriften_summary,
+            )
+        except AdminAffiliateNotFoundError:
+            return web.json_response({"error": "not_found"}, status=404)
         except Exception as exc:
-            if self._admin_is_missing_schema_error(exc):
-                return web.json_response({"error": "not_found"}, status=404)
             return _admin_500(exc)
-
-        stripe_id = str(_row_get_value(acct_row, "stripe_account_id", 6, "") or "")
-        masked_stripe = (
-            f"{stripe_id[:8]}...{stripe_id[-4:]}" if len(stripe_id) > 12 else stripe_id
-        )
-
-        affiliate = {
-            "login": str(_row_get_value(acct_row, "twitch_login", 0, "") or "").strip(),
-            "display_name": _row_get_value(acct_row, "display_name", 1, None),
-            "active": bool(
-                _safe_int(_row_get_value(acct_row, "is_active", 2, 1), default=1)
-            ),
-            "created_at": _row_get_value(acct_row, "created_at", 3, None),
-            "email": _row_get_value(acct_row, "email", 4, None),
-            "stripe_connect_status": _row_get_value(acct_row, "stripe_connect_status", 5, None),
-            "stripe_account_id": masked_stripe or None,
-            "updated_at": _row_get_value(acct_row, "updated_at", 7, None),
-        }
-
-        claims = [
-            {
-                "id": _safe_int(_row_get_value(r, "id", 0, 0), default=0),
-                "customer_login": str(
-                    _row_get_value(r, "claimed_streamer_login", 1, "") or ""
-                ).strip(),
-                "claimed_at": _row_get_value(r, "claimed_at", 2, None),
-                "commission_cents": _safe_int(
-                    _row_get_value(r, "commission_cents", 3, 0), default=0
-                ),
-                "commission_count": _safe_int(
-                    _row_get_value(r, "commission_count", 4, 0), default=0
-                ),
-            }
-            for r in claim_rows
-        ]
-
-        total_claims = _safe_int(
-            _row_get_value(claim_stats_row, "total_claims", 0, 0), default=0
-        )
-        total_provision_cents = _safe_int(
-            _row_get_value(commission_stats_row, "total_provision", 0, 0), default=0
-        )
-        stats = {
-            "total_claims": total_claims,
-            "total_provision": round(total_provision_cents / 100.0, 2),
-            "avg_provision": round((total_provision_cents / max(total_claims, 1)) / 100.0, 2)
-            if total_claims > 0
-            else 0.0,
-            "active_customers": _safe_int(
-                _row_get_value(commission_stats_row, "active_customers", 1, 0), default=0
-            ),
-        }
-
-        return web.json_response({
-            "affiliate": affiliate,
-            "claims": claims,
-            "stats": stats,
-            "ust_status": str(pii.get("ust_status") or "unknown"),
-            "pii_readiness": readiness,
-            "gutschriften_summary": {
-                "count": gutschriften_summary["total_gutschriften"],
-                "total_gross_cents": gutschriften_summary["total_gutschrift_amount_cents"],
-            },
-        })
+        return web.json_response(payload)
 
     async def _api_admin_affiliate_toggle(self, request: web.Request) -> web.Response:
         """Toggle affiliate active status."""
@@ -2716,36 +1851,12 @@ class _AnalyticsAdminMixin:
             return web.json_response({"error": "invalid_login"}, status=400)
 
         try:
-            revenue_status_placeholders = ", ".join(
-                ["%s"] * len(_AFFILIATE_REVENUE_STATUSES)
-            )
-            with storage.transaction() as conn:
-                row = conn.execute(
-                    "SELECT is_active FROM affiliate_accounts WHERE twitch_login = %s",
-                    (login,),
-                ).fetchone()
-                if not row:
-                    return web.json_response({"error": "not_found"}, status=404)
-
-                current = _safe_int(_row_get_value(row, "is_active", 0, 1), default=1)
-                new_status = 0 if current else 1
-                now = datetime.now(UTC).isoformat()
-
-                conn.execute(
-                    """
-                    UPDATE affiliate_accounts
-                    SET is_active = %s, updated_at = %s
-                    WHERE twitch_login = %s
-                    """,
-                    (new_status, now, login),
-                )
+            payload = await asyncio.to_thread(toggle_admin_affiliate, login)
+        except AdminAffiliateNotFoundError:
+            return web.json_response({"error": "not_found"}, status=404)
         except Exception as exc:
-            normalized = str(exc).strip().lower()
-            if any(m in normalized for m in ("does not exist", "no such table", "undefined table")):
-                return web.json_response({"error": "not_found"}, status=404)
             return _admin_500(exc)
-
-        return web.json_response({"login": login, "active": bool(new_status)})
+        return web.json_response(payload)
 
     async def _api_admin_affiliate_stats(self, request: web.Request) -> web.Response:
         """Aggregated affiliate program stats."""
@@ -2759,93 +1870,16 @@ class _AnalyticsAdminMixin:
             .isoformat()
         )
         try:
-            with storage.transaction() as conn:
-                self._admin_affiliate_prepare_conn(conn)
-                acct_row = conn.execute(
-                    """
-                    SELECT
-                        COUNT(*)                                    AS total_affiliates,
-                        COALESCE(
-                            SUM(CASE WHEN is_active = 1 THEN 1 ELSE 0 END),
-                            0
-                        ) AS active_affiliates
-                    FROM affiliate_accounts
-                    """
-                ).fetchone()
-
-                claim_row = conn.execute(
-                    """
-                    SELECT
-                        COUNT(*) AS total_claims,
-                        COALESCE(SUM(CASE WHEN claimed_at >= %s THEN 1 ELSE 0 END), 0)
-                            AS this_month_claims
-                    FROM affiliate_streamer_claims
-                    """,
-                    (month_start_iso,),
-                ).fetchone()
-
-                comm_row = conn.execute(
-                    f"""
-                    SELECT
-                        COALESCE(SUM(commission_cents), 0) AS total_provision,
-                        COALESCE(
-                            SUM(
-                                CASE
-                                    WHEN created_at >= %s
-                                     AND status IN ({_AFFILIATE_REVENUE_STATUS_PLACEHOLDERS})
-                                    THEN commission_cents
-                                    ELSE 0
-                                END
-                            ),
-                            0
-                        ) AS this_month_provision
-                    FROM affiliate_commissions
-                    WHERE status IN ({_AFFILIATE_REVENUE_STATUS_PLACEHOLDERS})
-                    """,
-                    (month_start_iso, *_AFFILIATE_REVENUE_STATUSES, *_AFFILIATE_REVENUE_STATUSES),
-                ).fetchone()
-                gutschrift_summary = self._admin_affiliate_gutschriften_summary(conn)
+            payload = await asyncio.to_thread(
+                load_admin_affiliate_stats,
+                month_start_iso=month_start_iso,
+                prepare_conn=self._admin_affiliate_prepare_conn,
+                is_missing_schema_error=self._admin_is_missing_schema_error,
+                build_summary=self._admin_affiliate_gutschriften_summary,
+            )
         except Exception as exc:
-            if self._admin_is_missing_schema_error(exc):
-                return web.json_response({
-                    "total_affiliates": 0,
-                    "active_affiliates": 0,
-                    "total_claims": 0,
-                    "total_provision": 0.0,
-                    "this_month_claims": 0,
-                    "this_month_provision": 0.0,
-                    "total_gutschriften": 0,
-                    "total_gutschrift_amount": 0.0,
-                    "pending_email_gutschriften": 0,
-                })
             return _admin_500(exc)
-
-        total_provision_cents = _safe_int(
-            _row_get_value(comm_row, "total_provision", 0, 0), default=0
-        )
-        this_month_provision_cents = _safe_int(
-            _row_get_value(comm_row, "this_month_provision", 1, 0), default=0
-        )
-
-        return web.json_response({
-            "total_affiliates": _safe_int(
-                _row_get_value(acct_row, "total_affiliates", 0, 0), default=0
-            ),
-            "active_affiliates": _safe_int(
-                _row_get_value(acct_row, "active_affiliates", 1, 0), default=0
-            ),
-            "total_claims": _safe_int(
-                _row_get_value(claim_row, "total_claims", 0, 0), default=0
-            ),
-            "total_provision": round(total_provision_cents / 100.0, 2),
-            "this_month_claims": _safe_int(
-                _row_get_value(claim_row, "this_month_claims", 1, 0), default=0
-            ),
-            "this_month_provision": round(this_month_provision_cents / 100.0, 2),
-            "total_gutschriften": gutschrift_summary["total_gutschriften"],
-            "total_gutschrift_amount": gutschrift_summary["total_gutschrift_amount"],
-            "pending_email_gutschriften": gutschrift_summary["pending_email_gutschriften"],
-        })
+        return web.json_response(payload)
 
 
 __all__ = ["_AnalyticsAdminMixin"]
