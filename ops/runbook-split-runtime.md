@@ -5,10 +5,10 @@ This runbook installs and operates split runtime services:
 - `twitch-bot-service`: bot runtime, internal API (`127.0.0.1:8776`), private EventSub callback listener (`127.0.0.1:8768`)
 - `twitch-dashboard-service`: standalone dashboard module (`python -m bot.dashboard_service`) on `127.0.0.1:8765`
 
-Public routing is handled by `C:/caddy/Caddyfile.deadlock-twitch-bot`.
+Public routing is handled by `C:/caddy/Caddyfile`.
 
 ## File Locations
-- Caddy config: `C:/caddy/Caddyfile.deadlock-twitch-bot`
+- Caddy config: `C:/caddy/Caddyfile`
 - NSSM install script: `C:/nssm/install-deadlock-twitch-bot-services.ps1`
 - NSSM update script: `C:/nssm/update-deadlock-twitch-bot-services.ps1`
 - Restart dashboard only: `C:/nssm/restart-dashboard-only.ps1`
@@ -81,6 +81,33 @@ powershell -NoProfile -ExecutionPolicy $ExecutionPolicy -File C:/nssm/restart-da
 powershell -NoProfile -ExecutionPolicy $ExecutionPolicy -File C:/nssm/restart-bot-only.ps1
 ```
 
+## Legal Access Gate
+
+Die Legal-Seiten `/twitch/impressum` und `/twitch/datenschutz` laufen ueber ein Human-Gate mit Cloudflare Turnstile.
+
+Pfadfluss:
+
+- `GET /twitch/impressum` oder `GET /twitch/datenschutz`
+- Redirect nach `GET /twitch/legal/access?next=...`
+- Formular-Submit nach `POST /twitch/legal/verify`
+
+Der Dashboard-Service auf `127.0.0.1:8765` muss diese Pfade registriert haben, und Caddy muss sie oeffentlich explizit durchlassen.
+
+Erforderliche Secrets:
+
+- `TWITCH_LEGAL_TURNSTILE_SITE_KEY`
+- `TWITCH_LEGAL_TURNSTILE_SECRET_KEY`
+- `TWITCH_LEGAL_GATE_COOKIE_SECRET`
+
+Zusetzlich muss die CSP auf `twitch.earlysalty.com` Turnstile erlauben:
+
+- `script-src ... https://challenges.cloudflare.com`
+- `frame-src https://challenges.cloudflare.com`
+
+Ohne diese CSP-Freigaben erscheint spaeter serverseitig nur `Turnstile verification failed.`
+
+Die Detaildoku steht in [`docs/LEGAL_ACCESS_GATE.md`](../docs/LEGAL_ACCESS_GATE.md).
+
 ## EventSub Routing Decision
 - Public `/twitch*` traffic is routed to `twitch-dashboard-service` on `127.0.0.1:8765`.
 - Exact path `/twitch/eventsub/callback` is routed to `twitch-bot-service` on `127.0.0.1:8768`.
@@ -109,6 +136,7 @@ powershell -NoProfile -ExecutionPolicy $ExecutionPolicy -File C:/nssm/healthchec
 2. Direct local checks:
 ```powershell
 Invoke-WebRequest -UseBasicParsing http://127.0.0.1:8765/twitch | Select-Object StatusCode
+Invoke-WebRequest -UseBasicParsing http://127.0.0.1:8765/twitch/legal/access?next=/twitch/impressum | Select-Object StatusCode
 Invoke-WebRequest -UseBasicParsing -Headers @{ 'X-Internal-Token' = $env:TWITCH_INTERNAL_API_TOKEN } http://127.0.0.1:8776/internal/twitch/v1/healthz | Select-Object StatusCode
 Invoke-WebRequest -UseBasicParsing -Method Get http://127.0.0.1:8768/twitch/eventsub/callback -ErrorAction SilentlyContinue | Select-Object StatusCode
 ```
@@ -118,6 +146,17 @@ C:/caddy/caddy.exe validate --config C:/caddy/Caddyfile
 C:/caddy/caddy.exe reload --config C:/caddy/Caddyfile
 ```
 
+4. Public legal gate checks:
+```powershell
+curl.exe -i "https://twitch.earlysalty.com/twitch/impressum"
+curl.exe -i "https://twitch.earlysalty.com/twitch/legal/access?next=/twitch/impressum"
+```
+
+Erwartung:
+
+- `/twitch/impressum` -> `302 Found` nach `/twitch/legal/access?...`
+- `/twitch/legal/access?...` -> `200 OK`
+
 ## Exception (Break-Glass Only)
 Only if operations are blocked and there is no signed/remotesigned path available:
 ```powershell
@@ -126,9 +165,9 @@ powershell -NoProfile -ExecutionPolicy Bypass -File C:/nssm/<script>.ps1
 Risk: `Bypass` disables script trust enforcement and increases the chance of running tampered code. Require explicit approval, short-lived use, and post-incident review.
 
 ## Rollback
-1. Restore previous Caddy include file:
+1. Restore previous Caddy config:
 ```powershell
-Copy-Item C:/caddy/Caddyfile.deadlock-twitch-bot.bak C:/caddy/Caddyfile.deadlock-twitch-bot -Force
+Copy-Item C:/caddy/Caddyfile.bak C:/caddy/Caddyfile -Force
 ```
 2. Restore previous NSSM script revisions if you keep backups.
 3. Restart services:

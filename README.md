@@ -25,10 +25,13 @@ Twitch bot, dashboard service, analytics, raid automation, and streamer tooling 
 - [`docs/API.md`](docs/API.md)
 - [`docs/DATABASE.md`](docs/DATABASE.md)
 - [`docs/ADMIN.md`](docs/ADMIN.md)
+- [`docs/LEGAL_ACCESS_GATE.md`](docs/LEGAL_ACCESS_GATE.md)
 - [`docs/STREAMER.md`](docs/STREAMER.md)
 - [`docs/BOT_TOKEN_SCOPES.md`](docs/BOT_TOKEN_SCOPES.md)
 
 ## Local Legal Preview
+
+Produktiver Public-Flow, Secrets, Caddy-Routing und Troubleshooting sind in [`docs/LEGAL_ACCESS_GATE.md`](docs/LEGAL_ACCESS_GATE.md) beschrieben.
 
 - Quick preview server for `/twitch/impressum`, `/twitch/datenschutz`, and `/twitch/agb`:
   `python scripts/preview_legal_pages.py`

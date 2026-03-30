@@ -119,11 +119,20 @@ Moderations-Aktionen per Chat fuer Partner-Streamer:
 
 | URL | Inhalt | Datei |
 |-----|--------|-------|
+| `/twitch/legal/access` | Human-Gate mit Cloudflare Turnstile | admin/legal_mixin.py |
+| `/twitch/legal/verify` | Validiert Turnstile und setzt Gate-Cookie | admin/legal_mixin.py |
 | `/twitch/impressum` | Impressum | admin/legal_mixin.py |
 | `/twitch/datenschutz` | Datenschutzerklaerung | admin/legal_mixin.py |
 | `/twitch/agb` | AGB / ToS | admin/legal_mixin.py |
 
-Inhalte koennen nur von Admins im Panel bearbeitet werden, sind aber oeffentlich sichtbar.
+`/twitch/impressum` und `/twitch/datenschutz` werden ueber ein Human-Gate vor Bots und KI-Crawlern geschuetzt. `/twitch/agb` ist aktuell oeffentlich ohne Gate.
+
+Fuer den produktiven Betrieb sind drei Secrets noetig:
+- `TWITCH_LEGAL_TURNSTILE_SITE_KEY`
+- `TWITCH_LEGAL_TURNSTILE_SECRET_KEY`
+- `TWITCH_LEGAL_GATE_COOKIE_SECRET`
+
+Die vollstaendige Betriebsdoku mit Routing-, CSP- und Troubleshooting-Hinweisen steht in [`docs/LEGAL_ACCESS_GATE.md`](LEGAL_ACCESS_GATE.md).
 
 ---
 
