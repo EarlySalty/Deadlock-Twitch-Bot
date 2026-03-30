@@ -1,16 +1,10 @@
 import { motion } from "framer-motion";
 import { ExternalLink } from "lucide-react";
 import { GradientText } from "@/components/ui/GradientText";
-import { RaidNetwork } from "@/components/ui/RaidNetwork";
-import { RaidTicker } from "@/components/ui/RaidTicker";
-import { useNetworkData } from "@/hooks/useNetworkData";
-import { useRaidEvents } from "@/hooks/useRaidEvents";
+import { RaidDemo } from "@/components/sections/RaidDemo";
 import { TWITCH_ONBOARDING_URL } from "@/data/externalLinks";
 
 export function Hero() {
-  const { nodes, edges } = useNetworkData();
-  const { raids } = useRaidEvents();
-
   return (
     <section
       id="hero"
@@ -76,26 +70,9 @@ export function Hero() {
           </motion.div>
         </div>
 
-        {/* Netzwerk-Visualisierung */}
-        <div className="relative mt-16 mx-auto w-full max-w-[1200px]">
-          <motion.div
-            initial={{ opacity: 0, y: 40 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: 0.8, delay: 0.4 }}
-          >
-            <RaidNetwork nodes={nodes} edges={edges} />
-          </motion.div>
-        </div>
-
-        {/* Live-Ticker */}
-        <div className="mt-8 mx-auto max-w-4xl">
-          <motion.div
-            initial={{ opacity: 0, y: 20 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: 0.6, delay: 0.6 }}
-          >
-            <RaidTicker raids={raids} />
-          </motion.div>
+        {/* Raid-Demo */}
+        <div className="mt-16 mx-auto w-full max-w-[1400px]">
+          <RaidDemo />
         </div>
       </div>
     </section>
