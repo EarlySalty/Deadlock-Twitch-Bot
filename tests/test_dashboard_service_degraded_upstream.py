@@ -164,6 +164,55 @@ class _UpstreamFailingBotApiClient:
 
 
 class DashboardServiceDegradedUpstreamTests(unittest.IsolatedAsyncioTestCase):
+    def test_dashboard_service_wires_eventsub_webhook_handler_when_secret_present(
+        self,
+    ) -> None:
+        captured: dict[str, object] = {}
+        sentinel_handler = object()
+
+        def _fake_build_v2_app(**kwargs):
+            captured.update(kwargs)
+            return _FakeDashboardApp()
+
+        def _fake_secret(name: str, *args, **kwargs) -> str:
+            del args, kwargs
+            if name == "TWITCH_WEBHOOK_SECRET":
+                return "webhook-secret"
+            return ""
+
+        with (
+            patch(
+                "bot.dashboard_service.app.analytics_db_fingerprint_details",
+                return_value={"fingerprint": "local", "hostHash": "h", "databaseHash": "d", "portHash": "p"},
+            ),
+            patch("bot.dashboard_service.app.build_v2_app", side_effect=_fake_build_v2_app),
+            patch("bot.dashboard_service.app.load_secret_value", side_effect=_fake_secret),
+            patch(
+                "bot.monitoring.eventsub_webhook.EventSubWebhookHandler",
+                return_value=sentinel_handler,
+            ) as handler_cls,
+        ):
+            build_dashboard_service_app(
+                internal_api_base_url="http://127.0.0.1:1234",
+                internal_api_token="",
+                internal_api_allow_non_loopback=False,
+                internal_api_timeout_seconds=1.0,
+                dashboard_token="dash-token",
+                partner_token="partner-token",
+                noauth=False,
+                oauth_client_id="client-id",
+                oauth_client_secret="client-secret",
+                oauth_redirect_uri="https://example.com/callback",
+                session_ttl_seconds=3600,
+                legacy_stats_url="https://example.com/stats",
+            )
+
+        handler_cls.assert_called_once_with(secret="webhook-secret", logger=log)
+        services = captured["dashboard_services"]
+        assert services is not None
+        self.assertIs(services.eventsub_webhook_handler, sentinel_handler)
+        self.assertIs(captured["eventsub_webhook_handler"], sentinel_handler)
+
     async def test_write_callbacks_raise_bot_api_error_when_internal_api_is_missing(self) -> None:
         captured: dict[str, object] = {}
 

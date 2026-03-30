@@ -27,6 +27,9 @@ export default defineConfig({
     },
   },
   server: {
+    host: 'localhost',
+    strictPort: true,
+    allowedHosts: ['localhost', '.localhost'],
     proxy: {
       '/twitch/api': {
         target: 'http://localhost:8765',
@@ -34,5 +37,10 @@ export default defineConfig({
         secure: false,
       },
     },
+  },
+  preview: {
+    host: 'localhost',
+    strictPort: true,
+    allowedHosts: ['localhost', '.localhost'],
   },
 })

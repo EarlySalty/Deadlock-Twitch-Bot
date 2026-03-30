@@ -182,6 +182,26 @@ def build_dashboard_service_app(
         if legacy_stats_url is not None
         else (os.getenv("TWITCH_LEGACY_STATS_URL") or "").strip() or None
     )
+    eventsub_webhook_handler = None
+    webhook_secret = load_secret_value("TWITCH_WEBHOOK_SECRET") or None
+    if webhook_secret:
+        try:
+            from ..monitoring.eventsub_webhook import EventSubWebhookHandler
+
+            eventsub_webhook_handler = EventSubWebhookHandler(
+                secret=webhook_secret,
+                logger=log,
+            )
+        except Exception as exc:
+            log.warning(
+                "Dashboard service could not initialize EventSub webhook handler: %s",
+                exc,
+            )
+    else:
+        log.warning(
+            "Dashboard service degraded startup: TWITCH_WEBHOOK_SECRET missing; "
+            "EventSub webhook callback will be unavailable."
+        )
     local_analytics_db = analytics_db_fingerprint_details()
     local_analytics_fingerprint = str(local_analytics_db.get("fingerprint") or "").strip() or None
     log.info(
@@ -436,6 +456,7 @@ def build_dashboard_service_app(
         raid_go_url_cb=_raid_go_url_cb,
         raid_requirements_cb=_raid_requirements_cb,
         raid_oauth_callback_cb=_raid_oauth_callback_cb,
+        eventsub_webhook_handler=eventsub_webhook_handler,
     )
 
     app = build_v2_app(
@@ -462,7 +483,7 @@ def build_dashboard_service_app(
         raid_requirements_cb=_raid_requirements_cb,
         raid_oauth_callback_cb=_raid_oauth_callback_cb,
         reload_cb=None,
-        eventsub_webhook_handler=None,
+        eventsub_webhook_handler=eventsub_webhook_handler,
         social_media_clip_manager=None,
         social_media_twitch_api=None,
     )
