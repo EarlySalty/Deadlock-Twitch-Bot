@@ -196,11 +196,12 @@ export function Dashboard() {
         <ScrollReveal delay={0.1}>
           <div className="mt-12">
             <BrowserMockup url="demo.earlysalty.com/twitch/demo">
-              <div className="relative aspect-video overflow-hidden rounded bg-gradient-to-br from-[var(--color-card)] to-[var(--color-bg)]">
+              <div className="relative overflow-hidden rounded bg-gradient-to-br from-[var(--color-card)] to-[var(--color-bg)]" style={{ paddingBottom: '47.8125%', height: 0 }}>
                 <iframe
                   src={demoTabUrl(activeTab)}
                   title="Twitch Analyse Demo Live View"
-                  className="absolute inset-0 w-full h-full border-0"
+                  className="absolute top-0 left-0 border-0"
+                  style={{ width: '117.65%', height: '117.65%', transform: 'scale(0.85)', transformOrigin: 'top left' }}
                   loading="lazy"
                   referrerPolicy="no-referrer"
                 />
