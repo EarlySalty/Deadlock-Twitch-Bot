@@ -115,6 +115,14 @@ export function RaidDemo() {
     let running = true
     let durationInterval: ReturnType<typeof setInterval> | null = null
 
+    // Iframes sofort vorladen damit der Browser Autoplay-Permission beim Seitenload erteilt
+    const parent = window.location.hostname || 'earlysalty.de'
+    function twitchClipUrl(clipId: string): string {
+      return `https://clips.twitch.tv/embed?clip=${clipId}&parent=${parent}&autoplay=true&muted=true`
+    }
+    if (sourceIframeRef.current) sourceIframeRef.current.src = twitchClipUrl(streamerPool[0].clipId)
+    if (targetIframeRef.current) targetIframeRef.current.src = twitchClipUrl(streamerPool[1].clipId)
+
     // ─── Durations ─────────────────────────────────────────────────────
     function startDurations(srcSecs: number, tgtSecs: number) {
       if (durationInterval) clearInterval(durationInterval)
@@ -238,12 +246,6 @@ export function RaidDemo() {
     }
 
     // ─── Setup Scenario ─────────────────────────────────────────────────
-    const parent = window.location.hostname || 'earlysalty.de'
-
-    function twitchClipUrl(clipId: string, autoplay = true): string {
-      return `https://clips.twitch.tv/embed?clip=${clipId}&parent=${parent}&autoplay=${autoplay}&muted=true`
-    }
-
     function setupScenario(src: Streamer, tgt: Streamer) {
       if (sourceIframeRef.current) sourceIframeRef.current.src = twitchClipUrl(src.clipId)
       if (sourceStreamerRef.current) sourceStreamerRef.current.textContent = src.name
