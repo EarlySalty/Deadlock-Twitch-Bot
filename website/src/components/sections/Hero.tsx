@@ -47,33 +47,34 @@ export function Hero() {
             passenden Partner.
           </motion.p>
 
-          {/* CTA Buttons */}
-          <motion.div
-            initial={{ opacity: 0, y: 20 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: 0.6, delay: 0.3 }}
-            className="mt-10 flex gap-4 justify-center flex-wrap"
-          >
-            <a
-              href={TWITCH_ONBOARDING_URL}
-              className="gradient-accent rounded-xl px-7 py-3.5 font-semibold text-white inline-flex items-center gap-2 transition-all duration-200 hover:brightness-110 hover:shadow-[0_0_24px_4px_rgba(255,122,24,0.3)]"
-            >
-              <ExternalLink size={18} />
-              Partner werden
-            </a>
-            <a
-              href="#dashboard"
-              className="rounded-xl px-7 py-3.5 font-semibold text-[var(--color-text-primary)] border border-[var(--color-border)] inline-flex items-center gap-2 transition-all duration-200 hover:border-[var(--color-accent)] hover:text-[var(--color-accent)]"
-            >
-              Demo ansehen
-            </a>
-          </motion.div>
         </div>
 
         {/* Raid-Demo */}
         <div className="mt-16 mx-auto w-full max-w-[1400px]">
           <RaidDemo />
         </div>
+
+        {/* CTA Buttons */}
+        <motion.div
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.6, delay: 0.5 }}
+          className="mt-10 flex gap-4 justify-center flex-wrap"
+        >
+          <a
+            href={TWITCH_ONBOARDING_URL}
+            className="gradient-accent rounded-xl px-7 py-3.5 font-semibold text-white inline-flex items-center gap-2 transition-all duration-200 hover:brightness-110 hover:shadow-[0_0_24px_4px_rgba(255,122,24,0.3)]"
+          >
+            <ExternalLink size={18} />
+            Partner werden
+          </a>
+          <a
+            href="#raid"
+            className="rounded-xl px-7 py-3.5 font-semibold text-[var(--color-text-primary)] border border-[var(--color-border)] inline-flex items-center gap-2 transition-all duration-200 hover:border-[var(--color-accent)] hover:text-[var(--color-accent)]"
+          >
+            Mehr erfahren
+          </a>
+        </motion.div>
       </div>
     </section>
   );
