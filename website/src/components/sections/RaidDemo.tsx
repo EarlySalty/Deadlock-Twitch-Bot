@@ -6,17 +6,17 @@ interface Streamer {
   avatar: string
   color: string
   viewers: number
-  clipId: string
+  video: string
 }
 
 // ─── Streamer-Pool ───────────────────────────────────────────────────────────
 const streamerPool: Streamer[] = [
-  { name: 'miracleghost9',  avatar: 'M',  color: '#ff7a18', viewers: 247, clipId: 'GloriousAnnoyingManateeSuperVinlin-rqMNWSvzZ_8urT-c' },
-  { name: 'whysolowkey',    avatar: 'W',  color: '#10b7ad', viewers: 183, clipId: 'NaiveIntelligentFlyCoolStoryBro-tLjVkwzVQahDhtS0' },
-  { name: 'kdenos',         avatar: 'K',  color: '#8b5cf6', viewers: 312, clipId: 'FurtiveInnocentCookiePogChamp-PL69Xswt33B0i20v' },
-  { name: 'johnnyblazedx',  avatar: 'J',  color: '#3b82f6', viewers: 421, clipId: 'MiniatureBoldLorisJonCarnage-kqH490J8QrvDtBpL' },
-  { name: 'derechtecoolys', avatar: 'D',  color: '#f59e0b', viewers: 158, clipId: 'EasyInexpensivePheasantLitFam-XPNi43FGxf1-R_m9' },
-  { name: 'duzzel',         avatar: 'Du', color: '#ec4899', viewers: 534, clipId: 'VibrantShakingKleeYee-ou2oZBpKHO4HRmKV' },
+  { name: 'miracleghost9',  avatar: 'M',  color: '#ff7a18', viewers: 247, video: '/clips/miracleghost9.mp4' },
+  { name: 'whysolowkey',    avatar: 'W',  color: '#10b7ad', viewers: 183, video: '/clips/whysolowkey.mp4' },
+  { name: 'kdenos',         avatar: 'K',  color: '#8b5cf6', viewers: 312, video: '/clips/kdenos.mp4' },
+  { name: 'johnnyblazedx',  avatar: 'J',  color: '#3b82f6', viewers: 421, video: '/clips/johnnyblazedx.mp4' },
+  { name: 'derechtecoolys', avatar: 'D',  color: '#f59e0b', viewers: 158, video: '/clips/derechtecoolys.mp4' },
+  { name: 'duzzel',         avatar: 'Du', color: '#ec4899', viewers: 534, video: '/clips/duzzel.mp4' },
 ]
 
 let lastPair: [number, number] = [-1, -1]
@@ -88,15 +88,15 @@ export function RaidDemo() {
   const raidCountNumRef    = useRef<HTMLDivElement>(null)
   const finalTextRef       = useRef<HTMLDivElement>(null)
   const energyBeamRef      = useRef<HTMLDivElement>(null)
-  const sourceIframeRef    = useRef<HTMLIFrameElement>(null)
-  const targetIframeRef    = useRef<HTMLIFrameElement>(null)
+  const sourceIframeRef    = useRef<HTMLVideoElement>(null)
+  const targetIframeRef    = useRef<HTMLVideoElement>(null)
   const sourceLiveBadgeRef = useRef<HTMLDivElement>(null)
   const sourceLiveTextRef  = useRef<HTMLSpanElement>(null)
   const sourceDurationRef  = useRef<HTMLDivElement>(null)
   const sourceStreamerRef  = useRef<HTMLDivElement>(null)
   const sourceViewersRef   = useRef<HTMLSpanElement>(null)
   const sourceAvatarRef    = useRef<HTMLDivElement>(null)
-  const sourceInfoNameRef  = useRef<HTMLDivElement>(null)
+  const sourceInfoNameRef  = useRef<HTMLAnchorElement>(null)
   const offlineOverlayRef  = useRef<HTMLDivElement>(null)
   const targetLiveBadgeRef = useRef<HTMLDivElement>(null)
   const targetLiveTextRef  = useRef<HTMLSpanElement>(null)
@@ -104,7 +104,7 @@ export function RaidDemo() {
   const targetStreamerRef  = useRef<HTMLDivElement>(null)
   const targetViewersRef   = useRef<HTMLSpanElement>(null)
   const targetAvatarRef    = useRef<HTMLDivElement>(null)
-  const targetInfoNameRef  = useRef<HTMLDivElement>(null)
+  const targetInfoNameRef  = useRef<HTMLAnchorElement>(null)
   const pill0Ref           = useRef<HTMLDivElement>(null)
   const pill1Ref           = useRef<HTMLDivElement>(null)
   const pill2Ref           = useRef<HTMLDivElement>(null)
@@ -115,13 +115,9 @@ export function RaidDemo() {
     let running = true
     let durationInterval: ReturnType<typeof setInterval> | null = null
 
-    // Iframes sofort vorladen damit der Browser Autoplay-Permission beim Seitenload erteilt
-    const parent = window.location.hostname || 'earlysalty.de'
-    function twitchClipUrl(clipId: string): string {
-      return `https://clips.twitch.tv/embed?clip=${clipId}&parent=${parent}&autoplay=true&muted=true`
-    }
-    if (sourceIframeRef.current) sourceIframeRef.current.src = twitchClipUrl(streamerPool[0].clipId)
-    if (targetIframeRef.current) targetIframeRef.current.src = twitchClipUrl(streamerPool[1].clipId)
+    // Videos sofort starten
+    if (sourceIframeRef.current) { sourceIframeRef.current.src = streamerPool[0].video; sourceIframeRef.current.play().catch(() => {}) }
+    if (targetIframeRef.current) { targetIframeRef.current.src = streamerPool[1].video; targetIframeRef.current.play().catch(() => {}) }
 
     // ─── Durations ─────────────────────────────────────────────────────
     function startDurations(srcSecs: number, tgtSecs: number) {
@@ -247,14 +243,14 @@ export function RaidDemo() {
 
     // ─── Setup Scenario ─────────────────────────────────────────────────
     function setupScenario(src: Streamer, tgt: Streamer) {
-      if (sourceIframeRef.current) sourceIframeRef.current.src = twitchClipUrl(src.clipId)
+      if (sourceIframeRef.current) { sourceIframeRef.current.src = src.video; sourceIframeRef.current.play().catch(() => {}) }
       if (sourceStreamerRef.current) sourceStreamerRef.current.textContent = src.name
       if (sourceViewersRef.current) sourceViewersRef.current.textContent = `${src.viewers} Zuschauer`
       if (sourceAvatarRef.current) {
         sourceAvatarRef.current.textContent = src.avatar
         sourceAvatarRef.current.style.background = src.color
       }
-      if (sourceInfoNameRef.current) sourceInfoNameRef.current.textContent = src.name
+      if (sourceInfoNameRef.current) { sourceInfoNameRef.current.textContent = src.name; sourceInfoNameRef.current.href = `https://twitch.tv/${src.name}` }
       if (sourceLiveTextRef.current) sourceLiveTextRef.current.textContent = 'LIVE'
       if (sourceLiveBadgeRef.current) sourceLiveBadgeRef.current.style.opacity = '1'
       if (sourceDurationRef.current)
@@ -265,14 +261,14 @@ export function RaidDemo() {
         sourceEmbedRef.current.style.transform = 'scale(1)'
       }
 
-      if (targetIframeRef.current) targetIframeRef.current.src = twitchClipUrl(tgt.clipId)
+      if (targetIframeRef.current) { targetIframeRef.current.src = tgt.video; targetIframeRef.current.play().catch(() => {}) }
       if (targetStreamerRef.current) targetStreamerRef.current.textContent = tgt.name
       if (targetViewersRef.current) targetViewersRef.current.textContent = `${tgt.viewers} Zuschauer`
       if (targetAvatarRef.current) {
         targetAvatarRef.current.textContent = tgt.avatar
         targetAvatarRef.current.style.background = tgt.color
       }
-      if (targetInfoNameRef.current) targetInfoNameRef.current.textContent = tgt.name
+      if (targetInfoNameRef.current) { targetInfoNameRef.current.textContent = tgt.name; targetInfoNameRef.current.href = `https://twitch.tv/${tgt.name}` }
       if (targetLiveTextRef.current) targetLiveTextRef.current.textContent = 'LIVE'
       if (targetLiveBadgeRef.current) targetLiveBadgeRef.current.style.opacity = '1'
       if (targetDurationRef.current)
@@ -475,9 +471,8 @@ export function RaidDemo() {
           position: absolute;
           inset: 0;
           width: 100%;
-          height: calc(100% + 48px);
-          top: -4px;
-          border: none;
+          height: 100%;
+          object-fit: cover;
           border-radius: 8px 8px 0 0;
           pointer-events: none;
         }
@@ -562,18 +557,15 @@ export function RaidDemo() {
           font-weight: 700; font-size: 13px;
           color: var(--color-text-primary);
         }
+        .rd-info-link {
+          text-decoration: none;
+          transition: color 0.2s;
+          pointer-events: auto;
+        }
+        .rd-info-link:hover { color: var(--color-accent); }
         .rd-info-game {
           font-size: 11px; color: var(--color-text-secondary);
         }
-        .rd-watch-btn {
-          background: var(--color-primary);
-          color: #fff; border: none; cursor: pointer;
-          padding: 6px 14px; border-radius: 6px;
-          font-size: 12px; font-weight: 700;
-          font-family: inherit;
-          transition: opacity 0.2s;
-        }
-        .rd-watch-btn:hover { opacity: 0.85; }
 
         /* ── Middle Area ─────────────────────────────────────────────── */
         .rd-middle-area {
@@ -699,14 +691,13 @@ export function RaidDemo() {
           {/* Source Embed */}
           <div className="rd-twitch-embed rd-embed-source" ref={sourceEmbedRef}>
             <div className="rd-player">
-              <iframe
+              <video
                 ref={sourceIframeRef}
-                src=""
                 className="rd-clip-iframe"
-                allow="autoplay; fullscreen"
-                allowFullScreen
-                title="Source stream"
-                scrolling="no"
+                muted
+                autoPlay
+                loop
+                playsInline
               />
               <div className="rd-player-overlays">
                 <div className="rd-overlay-top">
@@ -746,11 +737,10 @@ export function RaidDemo() {
               <div className="rd-info-left">
                 <div className="rd-avatar" ref={sourceAvatarRef} style={{ background: '#ff7a18' }}>E</div>
                 <div>
-                  <div className="rd-info-name" ref={sourceInfoNameRef}>EarlySalty</div>
+                  <a className="rd-info-name rd-info-link" ref={sourceInfoNameRef} href="https://twitch.tv/miracleghost9" target="_blank" rel="noopener noreferrer">miracleghost9</a>
                   <div className="rd-info-game">Spielt Deadlock</div>
                 </div>
               </div>
-              <button className="rd-watch-btn">Zuschauen</button>
             </div>
           </div>
 
@@ -774,14 +764,13 @@ export function RaidDemo() {
             style={{ opacity: 0.4, transform: 'scale(0.97)' }}
           >
             <div className="rd-player">
-              <iframe
+              <video
                 ref={targetIframeRef}
-                src=""
                 className="rd-clip-iframe"
-                allow="autoplay; fullscreen"
-                allowFullScreen
-                title="Target stream"
-                scrolling="no"
+                muted
+                autoPlay
+                loop
+                playsInline
               />
               <div className="rd-player-overlays">
                 <div className="rd-overlay-top">
@@ -808,11 +797,10 @@ export function RaidDemo() {
               <div className="rd-info-left">
                 <div className="rd-avatar" ref={targetAvatarRef} style={{ background: '#10b7ad' }}>P</div>
                 <div>
-                  <div className="rd-info-name" ref={targetInfoNameRef}>Paradox</div>
+                  <a className="rd-info-name rd-info-link" ref={targetInfoNameRef} href="https://twitch.tv/whysolowkey" target="_blank" rel="noopener noreferrer">whysolowkey</a>
                   <div className="rd-info-game">Spielt Deadlock</div>
                 </div>
               </div>
-              <button className="rd-watch-btn">Zuschauen</button>
             </div>
           </div>
 
