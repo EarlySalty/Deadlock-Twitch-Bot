@@ -138,6 +138,13 @@ function AnalyticsDashboard() {
       const d = parseInt(urlDays, 10);
       if (d === 7 || d === 30 || d === 90) setDays(d);
     }
+    const urlTab = params.get('tab');
+    if (urlTab) {
+      const validTabs: Array<TabId | 'session-detail'> = ['overview', 'chat', 'growth', 'audience', 'viewers', 'coaching', 'compare', 'schedule', 'monetization', 'category', 'experimental', 'ai'];
+      if (validTabs.includes(urlTab as TabId)) {
+        setActiveTab(urlTab as TabId);
+      }
+    }
   }, [isDemoShell]);
 
   // Auto-set streamer to logged-in Twitch user on first auth load

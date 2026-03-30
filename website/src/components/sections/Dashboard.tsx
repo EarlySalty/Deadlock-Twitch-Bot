@@ -171,6 +171,10 @@ const callouts = [
   },
 ];
 
+function demoTabUrl(tabId: string): string {
+  return `${TWITCH_DEMO_DASHBOARD_URL}?tab=${tabId}`;
+}
+
 export function Dashboard() {
   const [activeTab, setActiveTab] = useState<DemoTabId>("chat");
   const activeDemo = TABS.find((tab) => tab.id === activeTab) ?? TABS[0];
@@ -194,7 +198,7 @@ export function Dashboard() {
             <BrowserMockup url="demo.earlysalty.com/twitch/demo">
               <div className="relative aspect-video overflow-hidden rounded bg-gradient-to-br from-[var(--color-card)] to-[var(--color-bg)]">
                 <iframe
-                  src={TWITCH_DEMO_DASHBOARD_URL}
+                  src={demoTabUrl(activeTab)}
                   title="Twitch Analyse Demo Live View"
                   className="absolute inset-0 w-full h-full border-0"
                   loading="lazy"
@@ -207,7 +211,7 @@ export function Dashboard() {
             </BrowserMockup>
             <div className="mt-4 text-center">
               <a
-                href={TWITCH_DEMO_DASHBOARD_URL}
+                href={demoTabUrl(activeTab)}
                 target="_blank"
                 rel="noopener noreferrer"
                 className="text-[var(--color-primary)] hover:text-[var(--color-primary-hover)] font-semibold transition text-sm"

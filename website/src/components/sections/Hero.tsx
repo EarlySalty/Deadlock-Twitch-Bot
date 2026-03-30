@@ -2,7 +2,7 @@ import { motion } from "framer-motion";
 import { ExternalLink } from "lucide-react";
 import { GradientText } from "@/components/ui/GradientText";
 import { RaidDemo } from "@/components/sections/RaidDemo";
-import { TWITCH_ONBOARDING_URL } from "@/data/externalLinks";
+import { buildTwitchBotAuthUrl } from "@/data/externalLinks";
 
 export function Hero() {
   return (
@@ -62,7 +62,7 @@ export function Hero() {
           className="mt-10 flex gap-4 justify-center flex-wrap"
         >
           <a
-            href={TWITCH_ONBOARDING_URL}
+            href={buildTwitchBotAuthUrl()}
             className="gradient-accent rounded-xl px-7 py-3.5 font-semibold text-white inline-flex items-center gap-2 transition-all duration-200 hover:brightness-110 hover:shadow-[0_0_24px_4px_rgba(255,122,24,0.3)]"
           >
             <ExternalLink size={18} />
