@@ -15,6 +15,7 @@ from .route_deps import BillingRouteDeps
 def build_route_defs(server: Any) -> list[web.RouteDef]:
     """Return route definitions for billing and legal routes."""
     return [
+        web.get("/robots.txt", server.robots_txt),
         web.get("/twitch/abo", server.abbo_entry),
         web.get("/twitch/abbo", server.abbo_entry),
         web.get("/twitch/abos", server.abbo_entry),

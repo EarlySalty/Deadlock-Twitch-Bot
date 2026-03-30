@@ -4,14 +4,69 @@ from __future__ import annotations
 
 from aiohttp import web
 
-NOINDEX_HEADERS = {"X-Robots-Tag": "noindex, nofollow"}
+LEGAL_PAGE_HEADERS = {
+    "X-Robots-Tag": "noindex, nofollow, noarchive, nosnippet, noimageindex"
+}
+BLOCKED_LEGAL_PAGE_USER_AGENT_TOKENS: tuple[str, ...] = (
+    "gptbot",
+    "chatgpt-user",
+    "oai-searchbot",
+    "claudebot",
+    "anthropic-ai",
+    "perplexitybot",
+    "perplexity-user",
+    "google-extended",
+    "ccbot",
+    "bytespider",
+    "facebookbot",
+    "meta-externalagent",
+    "applebot",
+    "amazonbot",
+    "petalbot",
+    "yandexbot",
+    "duckassistbot",
+    "crawler",
+    "spider",
+    "slurp",
+    "bot/",
+)
+
+
+def _is_blocked_legal_page_user_agent(user_agent: str) -> bool:
+    normalized = str(user_agent or "").strip().lower()
+    if not normalized:
+        return False
+    return any(token in normalized for token in BLOCKED_LEGAL_PAGE_USER_AGENT_TOKENS)
+
+
+def _build_blocked_legal_page_response() -> web.Response:
+    return web.Response(
+        text="Forbidden",
+        status=403,
+        content_type="text/plain",
+        headers=LEGAL_PAGE_HEADERS,
+    )
 
 
 class _DashboardLegalMixin:
     """Handlers for /twitch/impressum and /twitch/datenschutz — no auth required."""
 
-    async def abbo_impressum(self, request: web.Request) -> web.StreamResponse:  # noqa: ARG002
+    @staticmethod
+    def _legal_page_request_is_blocked(request: web.Request) -> bool:
+        return _is_blocked_legal_page_user_agent(request.headers.get("User-Agent"))
+
+    async def robots_txt(self, request: web.Request) -> web.StreamResponse:  # noqa: ARG002
+        robots = (
+            "User-agent: *\n"
+            "Disallow: /twitch/impressum\n"
+            "Disallow: /twitch/datenschutz\n"
+        )
+        return web.Response(text=robots, content_type="text/plain")
+
+    async def abbo_impressum(self, request: web.Request) -> web.StreamResponse:
         """GET /twitch/impressum — §5 TMG. Must be accessible without login."""
+        if self._legal_page_request_is_blocked(request):
+            return _build_blocked_legal_page_response()
         page = (
             "<!doctype html><html lang='de'><head><meta charset='utf-8'>"
             "<meta name='viewport' content='width=device-width,initial-scale=1'>"
@@ -52,7 +107,7 @@ class _DashboardLegalMixin:
             "</div>"
             "</div></body></html>"
         )
-        return web.Response(text=page, content_type="text/html", headers=NOINDEX_HEADERS)
+        return web.Response(text=page, content_type="text/html", headers=LEGAL_PAGE_HEADERS)
 
     async def abbo_agb(self, request: web.Request) -> web.StreamResponse:  # noqa: ARG002
         """GET /twitch/agb — AGB für digitale Abo-Dienste. Kein Auth nötig."""
@@ -157,8 +212,10 @@ class _DashboardLegalMixin:
         )
         return web.Response(text=page, content_type="text/html")
 
-    async def abbo_datenschutz(self, request: web.Request) -> web.StreamResponse:  # noqa: ARG002
+    async def abbo_datenschutz(self, request: web.Request) -> web.StreamResponse:
         """GET /twitch/datenschutz — DSGVO Art. 13/14. Must be accessible without login."""
+        if self._legal_page_request_is_blocked(request):
+            return _build_blocked_legal_page_response()
         page = (
             "<!doctype html><html lang='de'><head><meta charset='utf-8'>"
             "<meta name='viewport' content='width=device-width,initial-scale=1'>"
@@ -235,4 +292,4 @@ class _DashboardLegalMixin:
             "</div>"
             "</div></body></html>"
         )
-        return web.Response(text=page, content_type="text/html", headers=NOINDEX_HEADERS)
+        return web.Response(text=page, content_type="text/html", headers=LEGAL_PAGE_HEADERS)
