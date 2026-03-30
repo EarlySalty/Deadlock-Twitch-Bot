@@ -10,6 +10,18 @@ from bot.dashboard.admin.legal_mixin import _DashboardLegalMixin
 
 
 class _LegalPreviewApp(_DashboardLegalMixin):
+    """Local-only legal preview that bypasses the production human gate."""
+
+    @staticmethod
+    def _legal_page_request_is_blocked(_request: web.Request) -> bool:
+        return False
+
+    def _legal_gate_is_enabled(self) -> bool:
+        return True
+
+    def _legal_gate_cookie_is_valid(self, _request: web.Request) -> bool:
+        return True
+
     async def landing(self, request: web.Request) -> web.StreamResponse:  # noqa: ARG002
         page = (
             "<!doctype html><html lang='de'><head><meta charset='utf-8'>"

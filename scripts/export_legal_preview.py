@@ -10,7 +10,17 @@ from bot.dashboard.admin.legal_mixin import _DashboardLegalMixin
 
 
 class _ExportPreviewApp(_DashboardLegalMixin):
-    pass
+    """Static export helper that bypasses the production human gate."""
+
+    @staticmethod
+    def _legal_page_request_is_blocked(_request) -> bool:
+        return False
+
+    def _legal_gate_is_enabled(self) -> bool:
+        return True
+
+    def _legal_gate_cookie_is_valid(self, _request) -> bool:
+        return True
 
 
 def _iis_web_config() -> str:
