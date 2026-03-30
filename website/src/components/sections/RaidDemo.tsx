@@ -10,13 +10,15 @@ interface Streamer {
 }
 
 // ─── Streamer-Pool ───────────────────────────────────────────────────────────
+const BASE = import.meta.env.BASE_URL.replace(/\/$/, '')
+
 const streamerPool: Streamer[] = [
-  { name: 'miracleghost9',  avatar: 'M',  color: '#ff7a18', viewers: 247, video: '/clips/miracleghost9.mp4' },
-  { name: 'whysolowkey',    avatar: 'W',  color: '#10b7ad', viewers: 183, video: '/clips/whysolowkey.mp4' },
-  { name: 'kdenos',         avatar: 'K',  color: '#8b5cf6', viewers: 312, video: '/clips/kdenos.mp4' },
-  { name: 'johnnyblazedx',  avatar: 'J',  color: '#3b82f6', viewers: 421, video: '/clips/johnnyblazedx.mp4' },
-  { name: 'derechtecoolys', avatar: 'D',  color: '#f59e0b', viewers: 158, video: '/clips/derechtecoolys.mp4' },
-  { name: 'duzzel',         avatar: 'Du', color: '#ec4899', viewers: 534, video: '/clips/duzzel.mp4' },
+  { name: 'miracleghost9',  avatar: 'M',  color: '#ff7a18', viewers: 247, video: `${BASE}/clips/miracleghost9.mp4` },
+  { name: 'whysolowkey',    avatar: 'W',  color: '#10b7ad', viewers: 183, video: `${BASE}/clips/whysolowkey.mp4` },
+  { name: 'kdenos',         avatar: 'K',  color: '#8b5cf6', viewers: 312, video: `${BASE}/clips/kdenos.mp4` },
+  { name: 'johnnyblazedx',  avatar: 'J',  color: '#3b82f6', viewers: 421, video: `${BASE}/clips/johnnyblazedx.mp4` },
+  { name: 'derechtecoolys', avatar: 'D',  color: '#f59e0b', viewers: 158, video: `${BASE}/clips/derechtecoolys.mp4` },
+  { name: 'duzzel',         avatar: 'Du', color: '#ec4899', viewers: 534, video: `${BASE}/clips/duzzel.mp4` },
 ]
 
 let lastPair: [number, number] = [-1, -1]
@@ -701,10 +703,6 @@ export function RaidDemo() {
               />
               <div className="rd-player-overlays">
                 <div className="rd-overlay-top">
-                  <div className="rd-live-badge" ref={sourceLiveBadgeRef}>
-                    <div className="rd-live-dot" />
-                    <span ref={sourceLiveTextRef}>LIVE</span>
-                  </div>
                   <div className="rd-duration-pill" ref={sourceDurationRef}>0:00:00</div>
                 </div>
                 <div className="rd-overlay-bottom">
@@ -774,10 +772,6 @@ export function RaidDemo() {
               />
               <div className="rd-player-overlays">
                 <div className="rd-overlay-top">
-                  <div className="rd-live-badge" ref={targetLiveBadgeRef}>
-                    <div className="rd-live-dot" />
-                    <span ref={targetLiveTextRef}>LIVE</span>
-                  </div>
                   <div className="rd-duration-pill" ref={targetDurationRef}>0:00:00</div>
                 </div>
                 <div className="rd-overlay-bottom">
