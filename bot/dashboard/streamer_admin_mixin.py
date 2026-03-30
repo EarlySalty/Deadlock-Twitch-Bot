@@ -70,6 +70,26 @@ def _dashboard_archive_sync(normalized: str, desired: str) -> str:
                 )
                 or ""
             ).strip().lower()
+            if current_status == "archived":
+                if desired == "archive":
+                    archived_since = (
+                        history_row.get("admin_archived_at")
+                        if hasattr(history_row, "keys")
+                        else None
+                    ) or (
+                        history_row.get("departnered_at")
+                        if hasattr(history_row, "keys")
+                        else history_row[19]
+                    )
+                    if archived_since:
+                        return f"{normalized} ist bereits archiviert (seit {archived_since})"
+                    return f"{normalized} ist bereits archiviert"
+                restored = storage.reactivate_partner(conn, twitch_login=normalized)
+                if not restored:
+                    raise ValueError(f"{normalized} konnte nicht reaktiviert werden")
+                if desired == "unarchive":
+                    return f"{normalized} ent-archiviert"
+                return f"{normalized} reaktiviert"
             if current_status and current_status != "active":
                 raise ValueError(f"{normalized} ist departnered und nicht nur archiviert")
             raise ValueError(f"{normalized} ist kein aktiver Partner")

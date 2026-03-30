@@ -7,6 +7,7 @@ from bot.storage.partner_registry import (
     archive_active_partner,
     bulk_update_partner_flags,
     migrate_legacy_partner_registry,
+    reactivate_partner,
     set_streamer_archive_state,
     upsert_streamer_identity,
 )
@@ -327,6 +328,130 @@ class PartnerRegistrySemanticsTests(unittest.TestCase):
 
         self.assertIsNotNone(result)
         self.assertIsNone(result["archived_at"])
+
+    def test_set_streamer_archive_state_unarchive_reenables_raid_auth(self) -> None:
+        conn = _make_conn()
+        compat_conn = _SqlitePgCompatConnection(conn)
+        conn.execute("ALTER TABLE twitch_partners ADD COLUMN admin_archived_at TEXT")
+        conn.execute(
+            """
+            INSERT INTO twitch_partners (
+                twitch_user_id, twitch_login, partnered_at, admin_archived_at, status
+            ) VALUES (?, ?, ?, ?, 'active')
+            """,
+            (
+                "1001",
+                "alpha",
+                "2026-03-01T10:00:00+00:00",
+                "2026-03-20T10:00:00+00:00",
+            ),
+        )
+        conn.execute(
+            """
+            INSERT INTO twitch_raid_auth (twitch_user_id, twitch_login, raid_enabled, needs_reauth)
+            VALUES (?, ?, 0, 0)
+            """,
+            ("1001", "alpha"),
+        )
+
+        result = set_streamer_archive_state(
+            compat_conn,
+            twitch_login="alpha",
+            archived=False,
+        )
+
+        self.assertIsNotNone(result)
+        partner_row = conn.execute(
+            "SELECT admin_archived_at FROM twitch_partners WHERE twitch_user_id = ?",
+            ("1001",),
+        ).fetchone()
+        self.assertIsNone(partner_row["admin_archived_at"])
+        auth_row = conn.execute(
+            "SELECT raid_enabled FROM twitch_raid_auth WHERE twitch_user_id = ?",
+            ("1001",),
+        ).fetchone()
+        self.assertEqual(int(auth_row["raid_enabled"]), 1)
+
+    def test_reactivate_partner_reenables_raid_auth_for_legacy_archived_rows(self) -> None:
+        conn = _make_conn()
+        compat_conn = _SqlitePgCompatConnection(conn)
+        conn.execute(
+            """
+            INSERT INTO twitch_partners (
+                twitch_user_id, twitch_login, raid_bot_enabled, partnered_at, departnered_at, status
+            ) VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "1001",
+                "alpha",
+                1,
+                "2026-03-01T10:00:00+00:00",
+                "2026-03-20T10:00:00+00:00",
+                "archived",
+            ),
+        )
+        conn.execute(
+            """
+            INSERT INTO twitch_raid_auth (twitch_user_id, twitch_login, raid_enabled, needs_reauth)
+            VALUES (?, ?, 0, 0)
+            """,
+            ("1001", "alpha"),
+        )
+
+        result = reactivate_partner(compat_conn, twitch_login="alpha")
+
+        self.assertIsNotNone(result)
+        active_row = conn.execute(
+            """
+            SELECT twitch_user_id, status
+            FROM twitch_partners
+            WHERE twitch_user_id = ? AND status = 'active'
+            ORDER BY id DESC
+            LIMIT 1
+            """,
+            ("1001",),
+        ).fetchone()
+        self.assertIsNotNone(active_row)
+        auth_row = conn.execute(
+            "SELECT raid_enabled FROM twitch_raid_auth WHERE twitch_user_id = ?",
+            ("1001",),
+        ).fetchone()
+        self.assertEqual(int(auth_row["raid_enabled"]), 1)
+
+    def test_reactivate_partner_keeps_raid_auth_disabled_for_departnered_rows(self) -> None:
+        conn = _make_conn()
+        compat_conn = _SqlitePgCompatConnection(conn)
+        conn.execute(
+            """
+            INSERT INTO twitch_partners (
+                twitch_user_id, twitch_login, raid_bot_enabled, partnered_at, departnered_at, status
+            ) VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "1001",
+                "alpha",
+                1,
+                "2026-03-01T10:00:00+00:00",
+                "2026-03-20T10:00:00+00:00",
+                "departnered",
+            ),
+        )
+        conn.execute(
+            """
+            INSERT INTO twitch_raid_auth (twitch_user_id, twitch_login, raid_enabled, needs_reauth)
+            VALUES (?, ?, 0, 0)
+            """,
+            ("1001", "alpha"),
+        )
+
+        result = reactivate_partner(compat_conn, twitch_login="alpha")
+
+        self.assertIsNotNone(result)
+        auth_row = conn.execute(
+            "SELECT raid_enabled FROM twitch_raid_auth WHERE twitch_user_id = ?",
+            ("1001",),
+        ).fetchone()
+        self.assertEqual(int(auth_row["raid_enabled"]), 0)
 
     def test_bulk_update_scope_all_only_mutates_active_rows(self) -> None:
         conn = _make_conn()

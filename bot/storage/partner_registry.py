@@ -48,7 +48,68 @@ def _bool_int(value: Any, default: int = 0) -> int:
 
 def _is_departnered_status(value: Any) -> bool:
     normalized = str(value or "").strip().lower()
-    return normalized in {PARTNER_STATUS_DEPARTNERED, _LEGACY_PARTNER_STATUS_ARCHIVED}
+    return normalized == PARTNER_STATUS_DEPARTNERED
+
+
+def _is_archived_status(value: Any) -> bool:
+    normalized = str(value or "").strip().lower()
+    return normalized == _LEGACY_PARTNER_STATUS_ARCHIVED
+
+
+def _is_inactive_partner_status(value: Any) -> bool:
+    return _is_departnered_status(value) or _is_archived_status(value)
+
+
+def _restore_raid_auth_for_reactivated_partner(
+    conn: Any,
+    *,
+    twitch_login: str | None = None,
+    twitch_user_id: str | None = None,
+) -> bool:
+    normalized_login = _normalize_login(twitch_login)
+    normalized_user_id = _normalize_user_id(twitch_user_id)
+    if not normalized_login and not normalized_user_id:
+        return False
+
+    auth_row = conn.execute(
+        """
+        SELECT needs_reauth
+        FROM twitch_raid_auth
+        WHERE (%s <> '' AND twitch_user_id = %s)
+           OR (%s <> '' AND LOWER(twitch_login) = LOWER(%s))
+        LIMIT 1
+        """,
+        (
+            normalized_user_id,
+            normalized_user_id,
+            normalized_login,
+            normalized_login,
+        ),
+    ).fetchone()
+    if not auth_row:
+        return False
+
+    needs_reauth = bool(_bool_int(_row_value(auth_row, "needs_reauth", 0, 0), default=0))
+    if needs_reauth:
+        return False
+
+    conn.execute(
+        """
+        UPDATE twitch_raid_auth
+        SET raid_enabled = TRUE,
+            twitch_login = COALESCE(NULLIF(%s, ''), twitch_login)
+        WHERE (%s <> '' AND twitch_user_id = %s)
+           OR (%s <> '' AND LOWER(twitch_login) = LOWER(%s))
+        """,
+        (
+            normalized_login,
+            normalized_user_id,
+            normalized_user_id,
+            normalized_login,
+            normalized_login,
+        ),
+    )
+    return True
 
 
 def _is_missing_schema_error(exc: Exception, *object_names: str) -> bool:
@@ -1290,12 +1351,11 @@ def reactivate_partner(
         twitch_user_id=twitch_user_id,
         latest=True,
     )
-    if not archived_row or not _is_departnered_status(
-        _row_value(archived_row, "status", 20, None)
-    ):
+    archived_status = _row_value(archived_row, "status", 20, None)
+    if not archived_row or not _is_inactive_partner_status(archived_status):
         return None
 
-    return promote_streamer_to_partner(
+    result = promote_streamer_to_partner(
         conn,
         twitch_login=_row_value(archived_row, "twitch_login", 2),
         twitch_user_id=_row_value(archived_row, "twitch_user_id", 1),
@@ -1326,6 +1386,13 @@ def reactivate_partner(
         partnered_at=_now_iso(),
         clear_source=True,
     )
+    if result and not _is_departnered_status(archived_status):
+        _restore_raid_auth_for_reactivated_partner(
+            conn,
+            twitch_login=result.get("twitch_login"),
+            twitch_user_id=result.get("twitch_user_id"),
+        )
+    return result
 
 
 def set_streamer_archive_state(
@@ -1383,6 +1450,12 @@ def set_streamer_archive_state(
                     resolved_user_id,
                     _row_value(active_row, "id", 0),
                 ),
+            )
+        if not archived:
+            _restore_raid_auth_for_reactivated_partner(
+                conn,
+                twitch_login=resolved_login,
+                twitch_user_id=resolved_user_id,
             )
         _normalize_related_tables(
             conn,
