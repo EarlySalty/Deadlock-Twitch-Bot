@@ -57,42 +57,38 @@ test('does not treat demoMode alone as a valid demo runtime', () => {
   );
 });
 
-test('partner token is captured once, scrubbed from the URL, and sent as a header', async () => {
+test('cookie-based dashboard requests avoid URL bootstrap side effects and stay same-origin', async () => {
   const previousWindow = globalThis.window;
   const previousFetch = globalThis.fetch;
-  const sessionState = new Map<string, string>();
   const location = new URL(
     'https://dashboard.example/twitch/dashboard?partner_token=abc123&streamer=midcore_live'
   );
+  const initialHref = location.href;
 
   const sessionStorage = {
-    getItem(key: string) {
-      return sessionState.get(key) ?? null;
+    getItem() {
+      throw new Error('sessionStorage must not be used for dashboard auth bootstrap');
     },
-    setItem(key: string, value: string) {
-      sessionState.set(key, String(value));
+    setItem() {
+      throw new Error('sessionStorage must not be used for dashboard auth bootstrap');
     },
-    removeItem(key: string) {
-      sessionState.delete(key);
+    removeItem() {
+      throw new Error('sessionStorage must not be used for dashboard auth bootstrap');
     },
     clear() {
-      sessionState.clear();
+      throw new Error('sessionStorage must not be used for dashboard auth bootstrap');
     },
-    key(index: number) {
-      return Array.from(sessionState.keys())[index] ?? null;
+    key() {
+      throw new Error('sessionStorage must not be used for dashboard auth bootstrap');
     },
     get length() {
-      return sessionState.size;
+      return 0;
     },
   };
 
   const history = {
     replaceState(_: unknown, __: string, nextUrl?: string | URL | null) {
-      const resolved = new URL(String(nextUrl ?? location.href), location.origin);
-      location.href = resolved.href;
-      location.pathname = resolved.pathname;
-      location.search = resolved.search;
-      location.hash = resolved.hash;
+      throw new Error(`history.replaceState must not be called for partner_token cleanup: ${String(nextUrl ?? '')}`);
     },
   };
 
@@ -108,12 +104,13 @@ test('partner token is captured once, scrubbed from the URL, and sent as a heade
     sessionStorage,
   } as typeof globalThis.window;
 
-  const requests: Array<{ url: string; headers: Headers; method: string }> = [];
+  const requests: Array<{ url: string; headers: Headers; method: string; credentials?: RequestCredentials }> = [];
   globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     requests.push({
       url: typeof input === 'string' ? input : input.toString(),
       headers: new Headers(init?.headers),
       method: String(init?.method || 'GET').toUpperCase(),
+      credentials: init?.credentials,
     });
     return {
       ok: true,
@@ -125,9 +122,7 @@ test('partner token is captured once, scrubbed from the URL, and sent as a heade
   try {
     const clientModule = await import('../src/api/client');
 
-    assert.equal(clientModule.getPartnerToken(), 'abc123');
-    assert.equal(sessionStorage.getItem('partner_token'), 'abc123');
-    assert.equal(location.search.includes('partner_token='), false);
+    assert.equal(location.href, initialHref);
 
     const builtUrl = clientModule.buildApiUrl('/internal-home', { streamer: 'midcore_live' });
     assert.equal(builtUrl.includes('partner_token='), false);
@@ -135,20 +130,23 @@ test('partner token is captured once, scrubbed from the URL, and sent as a heade
     await clientModule.fetchApi('/internal-home', { streamer: 'midcore_live' });
     const apiRequest = requests.at(-1);
     assert.equal(apiRequest?.url.includes('partner_token='), false);
-    assert.equal(apiRequest?.headers.get('X-Partner-Token'), 'abc123');
+    assert.equal(apiRequest?.headers.get('X-Partner-Token'), null);
+    assert.equal(apiRequest?.credentials, 'same-origin');
 
     await clientModule.fetchAdminAffiliates();
     const adminRequest = requests.at(-1);
     assert.equal(adminRequest?.url.includes('partner_token='), false);
-    assert.equal(adminRequest?.headers.get('X-Partner-Token'), 'abc123');
+    assert.equal(adminRequest?.headers.get('X-Partner-Token'), null);
     assert.equal(adminRequest?.method, 'GET');
+    assert.equal(adminRequest?.credentials, 'same-origin');
 
     await clientModule.toggleAffiliate('midcore_live', 'csrf-123');
     const toggleRequest = requests.at(-1);
     assert.equal(toggleRequest?.url.includes('partner_token='), false);
-    assert.equal(toggleRequest?.headers.get('X-Partner-Token'), 'abc123');
+    assert.equal(toggleRequest?.headers.get('X-Partner-Token'), null);
     assert.equal(toggleRequest?.headers.get('X-CSRF-Token'), 'csrf-123');
     assert.equal(toggleRequest?.method, 'POST');
+    assert.equal(toggleRequest?.credentials, 'same-origin');
   } finally {
     globalThis.fetch = previousFetch;
     globalThis.window = previousWindow;

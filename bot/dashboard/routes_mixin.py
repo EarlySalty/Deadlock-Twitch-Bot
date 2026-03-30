@@ -598,6 +598,8 @@ class _DashboardRoutesMixin:
                 web.get("/twitch/raid/analytics", self.raid_analytics),
                 web.get("/twitch/auth/login", self.auth_login),
                 web.get("/twitch/auth/callback", self.auth_callback),
+                web.post("/twitch/auth/partner/link", self.auth_partner_link),
+                web.post("/twitch/auth/partner/login", self.auth_partner_login),
                 web.get("/twitch/auth/discord/login", self.discord_auth_login),
                 web.get("/twitch/auth/discord/callback", self.discord_auth_callback),
                 web.get("/twitch/auth/discord/logout", self.discord_auth_logout),

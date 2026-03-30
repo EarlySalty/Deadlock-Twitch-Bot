@@ -1,12 +1,15 @@
-"""Dashboard auth services for session lifecycle, cookies, and partner bootstrap."""
+"""Dashboard auth services for session lifecycle, cookies, and partner login flows."""
 
 from __future__ import annotations
 
+import base64
+import hashlib
+import hmac
+import json
 import re
 import secrets
 import time
 from typing import Any
-from urllib.parse import urlencode
 
 from aiohttp import web
 
@@ -239,7 +242,7 @@ class DashboardSessionService:
 
 
 class PartnerAccessBinding:
-    """Create a coarse, less fragile request fingerprint for partner bootstrap sessions."""
+    """Create a coarse, less fragile request fingerprint for partner dashboard sessions."""
 
     _USER_AGENT_FAMILY_RE = re.compile(r"([A-Za-z][A-Za-z0-9_-]{1,31})")
 
@@ -300,8 +303,224 @@ class PartnerAccessBinding:
         return ""
 
 
+class PartnerLoginTokenService:
+    """Issue and consume one-time signed login tokens for partner dashboard access."""
+
+    _TOKEN_VERSION = 1
+
+    def __init__(self, owner: Any) -> None:
+        self._owner = owner
+
+    def issue(
+        self,
+        *,
+        next_path: str | None = None,
+        now: float | None = None,
+    ) -> dict[str, Any]:
+        secret = self._signing_secret()
+        if not secret:
+            raise RuntimeError("Partner login signing secret is not configured.")
+
+        current = time.time() if now is None else float(now)
+        ttl_seconds = self._token_ttl_seconds()
+        expires_at = current + ttl_seconds
+        state_id = secrets.token_urlsafe(24)
+        normalized_next_path = self._normalize_next_path(next_path)
+        state_cache = self._state_cache()
+        state_cache.prune_by_expires_at(now=current, max_items=512)
+        payload = {
+            "v": self._TOKEN_VERSION,
+            "sid": state_id,
+            "next": normalized_next_path,
+            "iat": int(current),
+            "exp": int(expires_at),
+        }
+        state_payload = {
+            "created_at": current,
+            "expires_at": expires_at,
+            "next_path": normalized_next_path,
+        }
+        state_cache.put(state_id, state_payload)
+        try:
+            self._owner._dashboard_auth_state_repo().save_partner_login_state(
+                state=state_id,
+                payload=state_payload,
+                ttl_seconds=ttl_seconds,
+                now=current,
+            )
+        except Exception as exc:
+            state_cache.pop(state_id, None)
+            raise RuntimeError("Could not persist partner login token state.") from exc
+
+        return {
+            "token": self._serialize_token(payload, secret=secret),
+            "next_path": normalized_next_path,
+            "expires_at": expires_at,
+            "expires_in": ttl_seconds,
+        }
+
+    def consume(
+        self,
+        token: str,
+        *,
+        now: float | None = None,
+    ) -> dict[str, Any] | None:
+        secret = self._signing_secret()
+        if not secret:
+            return None
+
+        current = time.time() if now is None else float(now)
+        state_cache = self._state_cache()
+        state_cache.prune_by_expires_at(now=current, max_items=512)
+        payload = self._deserialize_token(token, secret=secret)
+        if not payload:
+            return None
+
+        state_id = str(payload.get("sid") or "").strip()
+        next_path = self._normalize_next_path(payload.get("next"))
+        issued_at = int(payload.get("iat") or 0)
+        expires_at = int(payload.get("exp") or 0)
+        if not state_id or issued_at <= 0 or expires_at <= current or expires_at <= issued_at:
+            return None
+
+        cached_state = state_cache.pop(state_id, None)
+        try:
+            persisted_state = self._owner._dashboard_auth_state_repo().consume_partner_login_state(
+                state_id,
+                now=current,
+            )
+        except Exception as exc:
+            log.warning("Could not load persisted partner login state %s: %s", state_id, exc)
+            persisted_state = None
+        state_data = persisted_state if isinstance(persisted_state, dict) else cached_state
+        if not isinstance(state_data, dict):
+            return None
+
+        if self._normalize_next_path(state_data.get("next_path")) != next_path:
+            return None
+        stored_expires_at = float(state_data.get("expires_at", 0.0) or 0.0)
+        if stored_expires_at <= current:
+            return None
+
+        return {
+            "next_path": next_path,
+            "issued_at": issued_at,
+            "expires_at": expires_at,
+        }
+
+    def is_issue_request_authorized(self, request: web.Request) -> bool:
+        if bool(getattr(self._owner, "_noauth", False)):
+            return True
+
+        auth_level_getter = getattr(self._owner, "_get_auth_level", None)
+        if callable(auth_level_getter):
+            try:
+                auth_level = str(auth_level_getter(request) or "").strip().lower()
+            except Exception:
+                auth_level = ""
+            if auth_level in {"admin", "localhost"}:
+                return True
+
+        is_local_request = getattr(self._owner, "_is_local_request", None)
+        if callable(is_local_request):
+            try:
+                if bool(is_local_request(request)):
+                    return True
+            except Exception:
+                pass
+
+        is_discord_admin_request = getattr(self._owner, "_is_discord_admin_request", None)
+        if callable(is_discord_admin_request):
+            try:
+                if bool(is_discord_admin_request(request)):
+                    return True
+            except Exception:
+                pass
+
+        headers = getattr(request, "headers", {}) or {}
+        admin_header = str(headers.get("X-Admin-Token") or "").strip()
+        configured_admin_token = str(getattr(self._owner, "_token", "") or "").strip()
+        if configured_admin_token and admin_header:
+            try:
+                if secrets.compare_digest(admin_header, configured_admin_token):
+                    return True
+            except Exception:
+                pass
+        return False
+
+    def _state_cache(self) -> Any:
+        return self._owner._dashboard_auth_state_cache("_partner_login_states")
+
+    def _token_ttl_seconds(self) -> int:
+        configured = int(getattr(self._owner, "_partner_login_token_ttl_seconds", 180) or 180)
+        return min(max(30, configured), 600)
+
+    def _signing_secret(self) -> str:
+        return str(getattr(self._owner, "_partner_token", "") or "").strip()
+
+    def _normalize_next_path(self, raw_next_path: Any) -> str:
+        normalizer = getattr(self._owner, "_normalize_next_path", None)
+        fallback = "/twitch/dashboard-v2"
+        if callable(normalizer):
+            candidate = normalizer(raw_next_path)
+        else:
+            candidate = str(raw_next_path or "").strip() or fallback
+        return self._owner._safe_internal_redirect(candidate, fallback=fallback)
+
+    @staticmethod
+    def _encode_component(raw_bytes: bytes) -> str:
+        return base64.urlsafe_b64encode(raw_bytes).rstrip(b"=").decode("ascii")
+
+    @staticmethod
+    def _decode_component(component: str) -> bytes:
+        normalized = str(component or "").strip()
+        if not normalized:
+            raise ValueError("Token component is empty.")
+        padding = "=" * (-len(normalized) % 4)
+        return base64.urlsafe_b64decode(f"{normalized}{padding}".encode("ascii"))
+
+    def _serialize_token(self, payload: dict[str, Any], *, secret: str) -> str:
+        payload_bytes = json.dumps(
+            payload,
+            separators=(",", ":"),
+            sort_keys=True,
+        ).encode("utf-8")
+        payload_segment = self._encode_component(payload_bytes)
+        signature = hmac.new(
+            secret.encode("utf-8"),
+            payload_segment.encode("ascii"),
+            hashlib.sha256,
+        ).digest()
+        signature_segment = self._encode_component(signature)
+        return f"{payload_segment}.{signature_segment}"
+
+    def _deserialize_token(self, token: str, *, secret: str) -> dict[str, Any] | None:
+        parts = str(token or "").strip().split(".", 1)
+        if len(parts) != 2:
+            return None
+        payload_segment, signature_segment = parts
+        try:
+            expected_signature = hmac.new(
+                secret.encode("utf-8"),
+                payload_segment.encode("ascii"),
+                hashlib.sha256,
+            ).digest()
+            presented_signature = self._decode_component(signature_segment)
+            if not hmac.compare_digest(expected_signature, presented_signature):
+                return None
+            payload_bytes = self._decode_component(payload_segment)
+            payload = json.loads(payload_bytes.decode("utf-8"))
+        except Exception:
+            return None
+        if not isinstance(payload, dict):
+            return None
+        if int(payload.get("v") or 0) != self._TOKEN_VERSION:
+            return None
+        return payload
+
+
 class PartnerAccessService:
-    """Handle partner cookie bootstrap and its durable session lifecycle."""
+    """Handle durable partner dashboard sessions after login exchange."""
 
     def __init__(self, owner: Any) -> None:
         self._owner = owner
@@ -392,40 +611,3 @@ class PartnerAccessService:
             self._owner._dashboard_auth_state_repo().delete_session(normalized_session_id)
         except Exception as exc:
             log.debug("Could not delete partner access session from DB: %s", exc)
-
-    def bootstrap_redirect_location(self, request: web.Request) -> str:
-        path = str(getattr(request, "path", "") or "").strip() or "/twitch/dashboard-v2"
-        query = getattr(request, "query", {}) or {}
-        query_items = [
-            (str(key), str(value))
-            for key, value in query.items()
-            if str(key) != "partner_token"
-        ]
-        candidate = path
-        if query_items:
-            candidate = f"{candidate}?{urlencode(query_items)}"
-        return self._owner._safe_internal_redirect(candidate, fallback=path)
-
-    def consume_bootstrap(self, request: web.Request) -> web.StreamResponse | None:
-        if self._owner._get_dashboard_auth_session(request) or self._owner._get_discord_admin_session(
-            request
-        ):
-            return None
-        if self.load(request):
-            return None
-
-        configured_partner_token = str(getattr(self._owner, "_partner_token", "") or "").strip()
-        query = getattr(request, "query", {}) or {}
-        presented_partner_token = str(query.get("partner_token") or "").strip()
-        if not configured_partner_token or not presented_partner_token:
-            return None
-        try:
-            if not secrets.compare_digest(presented_partner_token, configured_partner_token):
-                return None
-        except Exception:
-            return None
-
-        session_id = self.create(request)
-        response = web.HTTPFound(self.bootstrap_redirect_location(request))
-        self._owner._set_partner_access_cookie(response, request, session_id)
-        return response

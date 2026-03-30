@@ -7,6 +7,7 @@ social graph (@mentions, conversation hubs), and viewer personality profiles.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import math
 import re
@@ -440,6 +441,228 @@ def _interpret_r(r: float) -> str:
     return "none"
 
 
+def _load_chat_hype_timeline_payload(
+    *,
+    streamer: str,
+    session_id_raw: str,
+) -> tuple[int, dict[str, object] | None, int]:
+    with storage.readonly_connection() as conn:
+        bot_clause, bot_params = build_known_chat_bot_not_in_clause(
+            column_expr="m.chatter_login",
+            placeholder="%s",
+        )
+
+        if session_id_raw:
+            try:
+                session_id = int(session_id_raw)
+            except ValueError:
+                return 400, {"error": "Invalid session_id"}, 0
+        else:
+            row = conn.execute(
+                """
+            SELECT id FROM twitch_stream_sessions
+                WHERE LOWER(streamer_login) = %s
+                ORDER BY started_at DESC LIMIT 1
+            """,
+                (streamer,),
+            ).fetchone()
+            if not row:
+                return 404, {"error": "No sessions found"}, 0
+            session_id = row[0]
+
+        sess = conn.execute(
+            """
+            SELECT id, streamer_login, started_at, duration_seconds, stream_title
+            FROM twitch_stream_sessions WHERE id = %s
+            """,
+            (session_id,),
+        ).fetchone()
+        if not sess:
+            return 404, {"error": "Session not found"}, 0
+
+        session_start = sess[2]
+        duration = sess[3] or 0
+        title = sess[4] or ""
+
+        mpm_rows = conn.execute(
+            f"""
+            SELECT
+                time_bucket('1 minute', m.message_ts) AS bucket,
+                COUNT(*) AS messages,
+                COUNT(DISTINCT m.chatter_login) AS unique_chatters
+            FROM twitch_chat_messages m
+            WHERE m.session_id = %s
+              AND m.chatter_login IS NOT NULL
+              AND {bot_clause}
+            GROUP BY bucket
+            ORDER BY bucket
+            """,
+            (session_id, *bot_params),
+        ).fetchall()
+
+        viewer_rows = conn.execute(
+            """
+            SELECT minutes_from_start, viewer_count
+            FROM twitch_session_viewers
+            WHERE session_id = %s
+            ORDER BY minutes_from_start
+            """,
+            (session_id,),
+        ).fetchall()
+        viewer_map: dict[int, int] = {}
+        for viewer_row in viewer_rows:
+            minute_raw = viewer_row[0]
+            viewers_raw = viewer_row[1]
+            if minute_raw is None or viewers_raw is None:
+                continue
+            try:
+                minute = int(minute_raw)
+                viewers = max(0, int(viewers_raw))
+            except (TypeError, ValueError):
+                continue
+            if minute < 0:
+                continue
+            viewer_map[minute] = viewers
+
+        timeline: list[dict[str, object]] = []
+        msg_counts: list[int] = []
+
+        for row in mpm_rows:
+            bucket_ts = row[0]
+            msgs = int(row[1])
+            chatters = int(row[2])
+            if hasattr(bucket_ts, "timestamp") and hasattr(session_start, "timestamp"):
+                minute = int((bucket_ts.timestamp() - session_start.timestamp()) / 60)
+            else:
+                minute = len(timeline)
+
+            viewers = viewer_map.get(minute, 0)
+            if viewers == 0:
+                for offset in range(-2, 3):
+                    nearby_viewers = viewer_map.get(minute + offset, 0)
+                    if nearby_viewers > 0:
+                        viewers = nearby_viewers
+                        break
+
+            timeline.append(
+                {
+                    "minute": minute,
+                    "messages": msgs,
+                    "chatters": chatters,
+                    "viewers": viewers,
+                    "isSpike": False,
+                }
+            )
+            msg_counts.append(msgs)
+
+        avg_mpm = sum(msg_counts) / len(msg_counts) if msg_counts else 0
+        peak_mpm = max(msg_counts) if msg_counts else 0
+        spikes: list[dict[str, object]] = []
+
+        threshold = max(avg_mpm * 2, 3)
+        for entry in timeline:
+            if int(entry["messages"]) >= threshold:
+                entry["isSpike"] = True
+                multiplier = round(int(entry["messages"]) / avg_mpm, 1) if avg_mpm > 0 else 0
+                spikes.append(
+                    {
+                        "minute": entry["minute"],
+                        "messages": entry["messages"],
+                        "multiplier": multiplier,
+                    }
+                )
+
+        spikes.sort(key=lambda spike: int(spike["messages"]), reverse=True)
+
+        paired_minutes: list[tuple[float, float]] = []
+        for entry in timeline:
+            if int(entry["viewers"]) > 0:
+                paired_minutes.append((float(entry["messages"]), float(entry["viewers"])))
+
+        chat_vals = [pair[0] for pair in paired_minutes]
+        viewer_vals = [pair[1] for pair in paired_minutes]
+        r_val = _pearson_r(chat_vals, viewer_vals)
+
+        chat_leads = False
+        lag_minutes = 0
+        if len(timeline) >= 10:
+            best_lag_r = abs(r_val)
+            for lag in range(1, 11):
+                lagged_chat = chat_vals[:-lag] if lag < len(chat_vals) else []
+                lagged_view = viewer_vals[lag:] if lag < len(viewer_vals) else []
+                if len(lagged_chat) >= 5:
+                    lagged_r = abs(_pearson_r(lagged_chat, lagged_view))
+                    if lagged_r > best_lag_r + 0.05:
+                        best_lag_r = lagged_r
+                        lag_minutes = lag
+                        chat_leads = True
+
+        recent_rows = conn.execute(
+            """
+            SELECT s.id, DATE(s.started_at), s.stream_title
+            FROM twitch_stream_sessions s
+            WHERE LOWER(s.streamer_login) = %s
+              AND s.id != %s
+            ORDER BY s.started_at DESC
+            LIMIT 10
+            """,
+            (streamer, session_id),
+        ).fetchall()
+
+        recent_sessions: list[dict[str, object]] = []
+        for recent_row in recent_rows:
+            recent_mpm = conn.execute(
+                f"""
+                SELECT COUNT(*) AS total,
+                       COUNT(*) * 1.0 / GREATEST(1,
+                           EXTRACT(EPOCH FROM MAX(m.message_ts) - MIN(m.message_ts)) / 60
+                       ) AS avg_mpm
+                FROM twitch_chat_messages m
+                WHERE m.session_id = %s
+                  AND {bot_clause}
+                """,
+                (recent_row[0], *bot_params),
+            ).fetchone()
+            recent_sessions.append(
+                {
+                    "id": recent_row[0],
+                    "date": str(recent_row[1]),
+                    "title": recent_row[2] or "",
+                    "avgMPM": round(float(recent_mpm[1]) if recent_mpm and recent_mpm[1] else 0, 1),
+                    "peakMPM": 0,
+                }
+            )
+
+        raw_chat_status = build_raw_chat_status(
+            conn,
+            streamer,
+            session_ids=[int(session_id)],
+        )
+
+    return (
+        200,
+        {
+            "sessionId": session_id,
+            "sessionTitle": title,
+            "startedAt": session_start.isoformat() if hasattr(session_start, "isoformat") else str(session_start),
+            "duration": duration,
+            "avgMPM": round(avg_mpm, 1),
+            "peakMPM": peak_mpm,
+            "timeline": timeline,
+            "spikes": spikes[:20],
+            "correlation": {
+                "chatViewerR": round(r_val, 2),
+                "interpretation": _interpret_r(r_val),
+                "chatLeadsViewers": chat_leads,
+                "lagMinutes": lag_minutes,
+            },
+            "recentSessions": recent_sessions,
+            "rawChatStatus": raw_chat_status,
+        },
+        session_id,
+    )
+
+
 class _AnalyticsChatDeepMixin:
     """Mixin providing chat deep-analysis endpoints."""
 
@@ -459,233 +682,260 @@ class _AnalyticsChatDeepMixin:
         session_id_raw = request.query.get("session_id", "").strip()
 
         try:
-            with storage.readonly_connection() as conn:
-                bot_clause, bot_params = build_known_chat_bot_not_in_clause(
-                    column_expr="m.chatter_login",
-                    placeholder="%s",
-                )
-
-                # Resolve session
-                if session_id_raw:
-                    try:
-                        session_id = int(session_id_raw)
-                    except ValueError:
-                        return web.json_response({"error": "Invalid session_id"}, status=400)
-                else:
-                    row = conn.execute(
-                        """
-                    SELECT id FROM twitch_stream_sessions
-                        WHERE LOWER(streamer_login) = %s
-                        ORDER BY started_at DESC LIMIT 1
-                    """,
-                        (streamer,),
-                    ).fetchone()
-                    if not row:
-                        return web.json_response({"error": "No sessions found"}, status=404)
-                    session_id = row[0]
-
-                # Session metadata
-                sess = conn.execute(
-                    """
-                    SELECT id, streamer_login, started_at, duration_seconds, stream_title
-                    FROM twitch_stream_sessions WHERE id = %s
-                    """,
-                    (session_id,),
-                ).fetchone()
-                if not sess:
-                    return web.json_response({"error": "Session not found"}, status=404)
-
-                session_start = sess[2]
-                duration = sess[3] or 0
-                title = sess[4] or ""
-
-                # Messages per minute (time_bucket)
-                mpm_rows = conn.execute(
-                    f"""
-                    SELECT
-                        time_bucket('1 minute', m.message_ts) AS bucket,
-                        COUNT(*) AS messages,
-                        COUNT(DISTINCT m.chatter_login) AS unique_chatters
-                    FROM twitch_chat_messages m
-                    WHERE m.session_id = %s
-                      AND m.chatter_login IS NOT NULL
-                      AND {bot_clause}
-                    GROUP BY bucket
-                    ORDER BY bucket
-                    """,
-                    (session_id, *bot_params),
-                ).fetchall()
-
-                # Viewer timeline
-                viewer_rows = conn.execute(
-                    """
-                    SELECT minutes_from_start, viewer_count
-                    FROM twitch_session_viewers
-                    WHERE session_id = %s
-                    ORDER BY minutes_from_start
-                    """,
-                    (session_id,),
-                ).fetchall()
-                viewer_map: dict[int, int] = {}
-                for viewer_row in viewer_rows:
-                    minute_raw = viewer_row[0]
-                    viewers_raw = viewer_row[1]
-                    if minute_raw is None or viewers_raw is None:
-                        continue
-                    try:
-                        minute = int(minute_raw)
-                        viewers = max(0, int(viewers_raw))
-                    except (TypeError, ValueError):
-                        continue
-                    if minute < 0:
-                        continue
-                    viewer_map[minute] = viewers
-
-                # Build timeline
-                timeline: list[dict] = []
-                msg_counts: list[int] = []
-
-                for row in mpm_rows:
-                    bucket_ts = row[0]
-                    msgs = int(row[1])
-                    chatters = int(row[2])
-                    # Calculate minute offset
-                    if hasattr(bucket_ts, "timestamp") and hasattr(session_start, "timestamp"):
-                        minute = int((bucket_ts.timestamp() - session_start.timestamp()) / 60)
-                    else:
-                        minute = len(timeline)
-
-                    viewers = viewer_map.get(minute, 0)
-                    # Check nearby minutes for viewer data
-                    if viewers == 0:
-                        for offset in range(-2, 3):
-                            v = viewer_map.get(minute + offset, 0)
-                            if v > 0:
-                                viewers = v
-                                break
-
-                    timeline.append({
-                        "minute": minute,
-                        "messages": msgs,
-                        "chatters": chatters,
-                        "viewers": viewers,
-                        "isSpike": False,
-                    })
-                    msg_counts.append(msgs)
-
-                # Spike detection
-                avg_mpm = sum(msg_counts) / len(msg_counts) if msg_counts else 0
-                peak_mpm = max(msg_counts) if msg_counts else 0
-                spikes: list[dict] = []
-
-                threshold = max(avg_mpm * 2, 3)  # At least 3 msgs to be a spike
-                for entry in timeline:
-                    if entry["messages"] >= threshold:
-                        entry["isSpike"] = True
-                        multiplier = round(entry["messages"] / avg_mpm, 1) if avg_mpm > 0 else 0
-                        spikes.append({
-                            "minute": entry["minute"],
-                            "messages": entry["messages"],
-                            "multiplier": multiplier,
-                        })
-
-                spikes.sort(key=lambda s: s["messages"], reverse=True)
-
-                # Chat-Viewer correlation
-                paired_minutes: list[tuple[float, float]] = []
-                for entry in timeline:
-                    if entry["viewers"] > 0:
-                        paired_minutes.append((float(entry["messages"]), float(entry["viewers"])))
-
-                chat_vals = [p[0] for p in paired_minutes]
-                viewer_vals = [p[1] for p in paired_minutes]
-                r_val = _pearson_r(chat_vals, viewer_vals)
-
-                # Lag detection: does chat lead viewers?
-                chat_leads = False
-                lag_minutes = 0
-                if len(timeline) >= 10:
-                    best_lag_r = abs(r_val)
-                    for lag in range(1, 11):
-                        lagged_chat = chat_vals[:-lag] if lag < len(chat_vals) else []
-                        lagged_view = viewer_vals[lag:] if lag < len(viewer_vals) else []
-                        if len(lagged_chat) >= 5:
-                            lr = abs(_pearson_r(lagged_chat, lagged_view))
-                            if lr > best_lag_r + 0.05:
-                                best_lag_r = lr
-                                lag_minutes = lag
-                                chat_leads = True
-
-                # Recent sessions for comparison
-                recent_rows = conn.execute(
-                    f"""
-                    SELECT s.id, DATE(s.started_at), s.stream_title
-                    FROM twitch_stream_sessions s
-                    WHERE LOWER(s.streamer_login) = %s
-                      AND s.id != %s
-                    ORDER BY s.started_at DESC
-                    LIMIT 10
-                    """,
-                    (streamer, session_id),
-                ).fetchall()
-
-                recent_sessions: list[dict] = []
-                for rs in recent_rows:
-                    rs_mpm = conn.execute(
-                        f"""
-                        SELECT COUNT(*) AS total,
-                               COUNT(*) * 1.0 / GREATEST(1,
-                                   EXTRACT(EPOCH FROM MAX(m.message_ts) - MIN(m.message_ts)) / 60
-                               ) AS avg_mpm
-                        FROM twitch_chat_messages m
-                        WHERE m.session_id = %s
-                          AND {bot_clause}
-                        """,
-                        (rs[0], *bot_params),
-                    ).fetchone()
-                    total_msgs = int(rs_mpm[0]) if rs_mpm else 0
-                    rs_avg = float(rs_mpm[1]) if rs_mpm and rs_mpm[1] else 0
-                    recent_sessions.append({
-                        "id": rs[0],
-                        "date": str(rs[1]),
-                        "title": rs[2] or "",
-                        "avgMPM": round(rs_avg, 1),
-                        "peakMPM": 0,  # Would need full scan, skip for perf
-                    })
-                raw_chat_status = build_raw_chat_status(
-                    conn,
-                    streamer,
-                    session_ids=[int(session_id)],
-                )
-
-                return web.json_response({
-                    "sessionId": session_id,
-                    "sessionTitle": title,
-                    "startedAt": session_start.isoformat() if hasattr(session_start, "isoformat") else str(session_start),
-                    "duration": duration,
-                    "avgMPM": round(avg_mpm, 1),
-                    "peakMPM": peak_mpm,
-                    "timeline": timeline,
-                    "spikes": spikes[:20],
-                    "correlation": {
-                        "chatViewerR": round(r_val, 2),
-                        "interpretation": _interpret_r(r_val),
-                        "chatLeadsViewers": chat_leads,
-                        "lagMinutes": lag_minutes,
-                    },
-                    "recentSessions": recent_sessions,
-                    "rawChatStatus": raw_chat_status,
-                })
+            status, payload, _session_id = await asyncio.to_thread(
+                _load_chat_hype_timeline_payload,
+                streamer=streamer,
+                session_id_raw=session_id_raw,
+            )
+            return web.json_response(payload, status=status)
 
         except web.HTTPException:
             raise
-        except Exception as exc:
+        except Exception:
             log.exception("Error in chat-hype-timeline API")
             return analytics_internal_error_response()
 
     # ─────────────────────────────────────────────────────────────────────
     # Endpoint 2: /twitch/api/v2/chat-content-analysis
     # ─────────────────────────────────────────────────────────────────────
+
+    def _load_chat_content_analysis_payload_sync(
+        self,
+        *,
+        streamer: str,
+        days: int,
+    ) -> dict[str, object]:
+        cutoff = (datetime.now(UTC) - timedelta(days=days)).isoformat()
+        with storage.readonly_connection() as conn:
+            bot_clause, bot_params = build_known_chat_bot_not_in_clause(
+                column_expr="m.chatter_login",
+                placeholder="%s",
+            )
+
+            rows = conn.execute(
+                f"""
+                SELECT
+                    m.message_ts,
+                    m.content,
+                    m.chatter_login
+                FROM twitch_chat_messages m
+                JOIN twitch_stream_sessions s ON s.id = m.session_id
+                WHERE LOWER(s.streamer_login) = %s
+                  AND m.message_ts >= %s
+                  AND m.content IS NOT NULL
+                  AND m.content != ''
+                  AND {bot_clause}
+                ORDER BY m.message_ts
+                """,
+                (streamer, cutoff, *bot_params),
+            ).fetchall()
+
+            hero_counts: dict[str, int] = {}
+            topic_counts = {
+                "heroes": 0,
+                "builds": 0,
+                "ranked": 0,
+                "meta": 0,
+                "gameplay": 0,
+                "backseat": 0,
+                "commands": 0,
+                "social": 0,
+                "smalltalk": 0,
+                "greeting": 0,
+                "community": 0,
+                "reaction": 0,
+                "other": 0,
+            }
+            sentiment_buckets: dict[str, dict[str, int]] = {}
+            total_positive = 0
+            total_negative = 0
+            backseat_count = 0
+            backseat_examples: list[str] = []
+            depth_reaction = 0
+            depth_short = 0
+            depth_discussion = 0
+
+            for row in rows:
+                ts = row[0]
+                content = row[1]
+                content_lower = content.lower()
+
+                heroes = _detect_heroes(content_lower)
+                for hero in heroes:
+                    hero_counts[hero] = hero_counts.get(hero, 0) + 1
+
+                topics = _detect_topics(content_lower)
+                matched_any = False
+                if heroes:
+                    topic_counts["heroes"] += 1
+                    matched_any = True
+                for topic in topics:
+                    topic_counts[topic] = topic_counts.get(topic, 0) + 1
+                    matched_any = True
+
+                is_backseat = any(phrase in content_lower for phrase in BACKSEAT_PHRASES)
+                if is_backseat:
+                    topic_counts["backseat"] += 1
+                    matched_any = True
+                    backseat_count += 1
+                    if len(backseat_examples) < 10:
+                        example = content[:80] + ("..." if len(content) > 80 else "")
+                        backseat_examples.append(example)
+
+                if not matched_any:
+                    tokens = _tokenize_words(content_lower)
+                    if _is_reaction_message(content_lower, tokens):
+                        topic_counts["reaction"] += 1
+                        matched_any = True
+                    elif _is_greeting_message(content_lower, tokens):
+                        topic_counts["greeting"] += 1
+                        matched_any = True
+                    elif _is_command_message(content_lower):
+                        topic_counts["commands"] += 1
+                        matched_any = True
+                    elif _is_social_message(content_lower):
+                        topic_counts["social"] += 1
+                        matched_any = True
+                    elif _is_smalltalk_message(content_lower, tokens):
+                        topic_counts["smalltalk"] += 1
+                        matched_any = True
+                    elif _looks_like_community_message(content_lower, tokens):
+                        topic_counts["community"] += 1
+                        matched_any = True
+
+                if not matched_any:
+                    topic_counts["other"] += 1
+
+                word_count = len(content.split())
+                if word_count <= 3:
+                    depth_reaction += 1
+                elif word_count <= 10:
+                    depth_short += 1
+                else:
+                    depth_discussion += 1
+
+                score = _score_sentiment(content_lower)
+                if hasattr(ts, "strftime"):
+                    minute = ts.minute - (ts.minute % 15)
+                    bucket_key = ts.strftime(f"%Y-%m-%dT%H:{minute:02d}")
+                else:
+                    bucket_key = "unknown"
+
+                if bucket_key not in sentiment_buckets:
+                    sentiment_buckets[bucket_key] = {"positive": 0, "negative": 0, "neutral": 0}
+                if score > 0:
+                    sentiment_buckets[bucket_key]["positive"] += 1
+                    total_positive += 1
+                elif score < 0:
+                    sentiment_buckets[bucket_key]["negative"] += 1
+                    total_negative += 1
+                else:
+                    sentiment_buckets[bucket_key]["neutral"] += 1
+
+            total_hero_mentions = sum(hero_counts.values())
+            hero_mentions = sorted(
+                [
+                    {
+                        "hero": hero,
+                        "count": count,
+                        "pct": round(count / total_hero_mentions * 100, 1)
+                        if total_hero_mentions
+                        else 0,
+                    }
+                    for hero, count in hero_counts.items()
+                ],
+                key=lambda hero: hero["count"],
+                reverse=True,
+            )
+
+            sentiment_timeline = sorted(
+                [
+                    {
+                        "bucket": bucket,
+                        "positive": vals["positive"],
+                        "negative": vals["negative"],
+                        "score": round(
+                            (vals["positive"] - vals["negative"])
+                            / max(1, vals["positive"] + vals["negative"]),
+                            2,
+                        ),
+                    }
+                    for bucket, vals in sentiment_buckets.items()
+                ],
+                key=lambda sample: sample["bucket"],
+            )
+
+            total_analyzed = len(rows)
+            scored_total = total_positive + total_negative
+            overall_score = (
+                round((total_positive - total_negative) / max(1, scored_total), 2)
+                if scored_total > 0
+                else 0
+            )
+
+            if len(sentiment_timeline) >= 4:
+                mid = len(sentiment_timeline) // 2
+                first_scores = [sample["score"] for sample in sentiment_timeline[:mid]]
+                second_scores = [sample["score"] for sample in sentiment_timeline[mid:]]
+                first_avg = sum(first_scores) / len(first_scores) if first_scores else 0
+                second_avg = sum(second_scores) / len(second_scores) if second_scores else 0
+                if second_avg > first_avg + 0.1:
+                    trend = "rising"
+                elif first_avg > second_avg + 0.1:
+                    trend = "falling"
+                else:
+                    trend = "stable"
+            else:
+                trend = "insufficient_data"
+
+            label = (
+                "positiv"
+                if overall_score > 0.2
+                else "negativ"
+                if overall_score < -0.2
+                else "neutral"
+            )
+            depth_total = depth_reaction + depth_short + depth_discussion
+
+            def _depth_pct(value: int) -> float:
+                return round(value / max(1, depth_total) * 100, 1)
+
+            backseat_pct = round(backseat_count / max(1, total_analyzed) * 100, 1)
+            raw_chat_status = build_raw_chat_status(
+                conn,
+                streamer,
+                since_date=cutoff,
+            )
+
+        return {
+            "heroMentions": hero_mentions[:25],
+            "topicBreakdown": topic_counts,
+            "sentimentTimeline": sentiment_timeline,
+            "overallSentiment": {
+                "score": overall_score,
+                "label": label,
+                "trend": trend,
+                "totalAnalyzed": total_analyzed,
+                "positiveCount": total_positive,
+                "negativeCount": total_negative,
+            },
+            "backseat": {
+                "count": backseat_count,
+                "pct": backseat_pct,
+                "examples": backseat_examples,
+            },
+            "engagementDepth": {
+                "reaction": depth_reaction,
+                "reactionPct": _depth_pct(depth_reaction),
+                "short": depth_short,
+                "shortPct": _depth_pct(depth_short),
+                "discussion": depth_discussion,
+                "discussionPct": _depth_pct(depth_discussion),
+                "total": depth_total,
+                "avgWordCount": round(sum(len(row[1].split()) for row in rows) / max(1, len(rows)), 1),
+            },
+            "rawChatStatus": raw_chat_status,
+        }
 
     async def _api_v2_chat_content_analysis(self, request: web.Request) -> web.Response:
         """Hero mentions, topic breakdown, sentiment trend over time period."""
@@ -702,251 +952,13 @@ class _AnalyticsChatDeepMixin:
             days = 30
         days = min(365, max(1, days))
 
-        cutoff = (datetime.now(UTC) - timedelta(days=days)).isoformat()
-
         try:
-            with storage.readonly_connection() as conn:
-                bot_clause, bot_params = build_known_chat_bot_not_in_clause(
-                    column_expr="m.chatter_login",
-                    placeholder="%s",
-                )
-
-                rows = conn.execute(
-                    f"""
-                    SELECT
-                        m.message_ts,
-                        m.content,
-                        m.chatter_login
-                    FROM twitch_chat_messages m
-                    JOIN twitch_stream_sessions s ON s.id = m.session_id
-                    WHERE LOWER(s.streamer_login) = %s
-                      AND m.message_ts >= %s
-                      AND m.content IS NOT NULL
-                      AND m.content != ''
-                      AND {bot_clause}
-                    ORDER BY m.message_ts
-                    """,
-                    (streamer, cutoff, *bot_params),
-                ).fetchall()
-
-                # Hero mentions
-                hero_counts: dict[str, int] = {}
-                # Topic counters
-                topic_counts = {
-                    "heroes": 0,
-                    "builds": 0,
-                    "ranked": 0,
-                    "meta": 0,
-                    "gameplay": 0,
-                    "backseat": 0,
-                    "commands": 0,
-                    "social": 0,
-                    "smalltalk": 0,
-                    "greeting": 0,
-                    "community": 0,
-                    "reaction": 0,
-                    "other": 0,
-                }
-                # Sentiment per 15-min bucket
-                sentiment_buckets: dict[str, dict[str, int]] = {}
-                total_positive = 0
-                total_negative = 0
-                # Backseat tracking
-                backseat_count = 0
-                backseat_examples: list[str] = []
-                # Chat engagement depth
-                depth_reaction = 0   # 1-3 words
-                depth_short = 0      # 4-10 words
-                depth_discussion = 0  # 11+ words
-
-                for row in rows:
-                    ts = row[0]
-                    content = row[1]
-                    content_lower = content.lower()
-
-                    # Hero detection
-                    heroes = _detect_heroes(content_lower)
-                    for hero in heroes:
-                        hero_counts[hero] = hero_counts.get(hero, 0) + 1
-
-                    # Topic detection — a message can match MULTIPLE categories
-                    topics = _detect_topics(content_lower)
-                    matched_any = False
-                    if heroes:
-                        topic_counts["heroes"] += 1
-                        matched_any = True
-                    for t in topics:
-                        topic_counts[t] = topic_counts.get(t, 0) + 1
-                        matched_any = True
-
-                    # Backseat detection (phrase-based) — also counts as topic
-                    is_backseat = any(phrase in content_lower for phrase in BACKSEAT_PHRASES)
-                    if is_backseat:
-                        topic_counts["backseat"] += 1
-                        matched_any = True
-                        backseat_count += 1
-                        if len(backseat_examples) < 10:
-                            example = content[:80] + ("..." if len(content) > 80 else "")
-                            backseat_examples.append(example)
-
-                    # Fallback topic classification to reduce generic "other" share.
-                    if not matched_any:
-                        tokens = _tokenize_words(content_lower)
-                        if _is_reaction_message(content_lower, tokens):
-                            topic_counts["reaction"] += 1
-                            matched_any = True
-                        elif _is_greeting_message(content_lower, tokens):
-                            topic_counts["greeting"] += 1
-                            matched_any = True
-                        elif _is_command_message(content_lower):
-                            topic_counts["commands"] += 1
-                            matched_any = True
-                        elif _is_social_message(content_lower):
-                            topic_counts["social"] += 1
-                            matched_any = True
-                        elif _is_smalltalk_message(content_lower, tokens):
-                            topic_counts["smalltalk"] += 1
-                            matched_any = True
-                        elif _looks_like_community_message(content_lower, tokens):
-                            topic_counts["community"] += 1
-                            matched_any = True
-
-                    if not matched_any:
-                        topic_counts["other"] += 1
-
-                    # Chat engagement depth
-                    word_count = len(content.split())
-                    if word_count <= 3:
-                        depth_reaction += 1
-                    elif word_count <= 10:
-                        depth_short += 1
-                    else:
-                        depth_discussion += 1
-
-                    # Sentiment scoring
-                    score = _score_sentiment(content_lower)
-
-                    # Bucket by 15 minutes
-                    if hasattr(ts, "strftime"):
-                        minute = ts.minute - (ts.minute % 15)
-                        bucket_key = ts.strftime(f"%Y-%m-%dT%H:{minute:02d}")
-                    else:
-                        bucket_key = "unknown"
-
-                    if bucket_key not in sentiment_buckets:
-                        sentiment_buckets[bucket_key] = {"positive": 0, "negative": 0, "neutral": 0}
-                    if score > 0:
-                        sentiment_buckets[bucket_key]["positive"] += 1
-                        total_positive += 1
-                    elif score < 0:
-                        sentiment_buckets[bucket_key]["negative"] += 1
-                        total_negative += 1
-                    else:
-                        sentiment_buckets[bucket_key]["neutral"] += 1
-
-                # Build hero mentions response
-                total_hero_mentions = sum(hero_counts.values())
-                hero_mentions = sorted(
-                    [
-                        {
-                            "hero": hero,
-                            "count": count,
-                            "pct": round(count / total_hero_mentions * 100, 1) if total_hero_mentions else 0,
-                        }
-                        for hero, count in hero_counts.items()
-                    ],
-                    key=lambda h: h["count"],
-                    reverse=True,
-                )
-
-                # Sentiment timeline
-                sentiment_timeline = sorted(
-                    [
-                        {
-                            "bucket": bucket,
-                            "positive": vals["positive"],
-                            "negative": vals["negative"],
-                            "score": round(
-                                (vals["positive"] - vals["negative"])
-                                / max(1, vals["positive"] + vals["negative"]),
-                                2,
-                            ),
-                        }
-                        for bucket, vals in sentiment_buckets.items()
-                    ],
-                    key=lambda s: s["bucket"],
-                )
-
-                # Overall sentiment
-                total_analyzed = len(rows)
-                scored_total = total_positive + total_negative
-                overall_score = (
-                    round((total_positive - total_negative) / max(1, scored_total), 2)
-                    if scored_total > 0
-                    else 0
-                )
-
-                # Trend: compare first half vs second half
-                if len(sentiment_timeline) >= 4:
-                    mid = len(sentiment_timeline) // 2
-                    first_scores = [s["score"] for s in sentiment_timeline[:mid]]
-                    second_scores = [s["score"] for s in sentiment_timeline[mid:]]
-                    first_avg = sum(first_scores) / len(first_scores) if first_scores else 0
-                    second_avg = sum(second_scores) / len(second_scores) if second_scores else 0
-                    if second_avg > first_avg + 0.1:
-                        trend = "rising"
-                    elif first_avg > second_avg + 0.1:
-                        trend = "falling"
-                    else:
-                        trend = "stable"
-                else:
-                    trend = "insufficient_data"
-
-                label = "positiv" if overall_score > 0.2 else "negativ" if overall_score < -0.2 else "neutral"
-
-                # Chat engagement depth stats
-                depth_total = depth_reaction + depth_short + depth_discussion
-                depth_pct = lambda v: round(v / max(1, depth_total) * 100, 1)
-
-                # Backseat percentage
-                backseat_pct = round(backseat_count / max(1, total_analyzed) * 100, 1)
-                raw_chat_status = build_raw_chat_status(
-                    conn,
-                    streamer,
-                    since_date=cutoff,
-                )
-
-                return web.json_response({
-                    "heroMentions": hero_mentions[:25],
-                    "topicBreakdown": topic_counts,
-                    "sentimentTimeline": sentiment_timeline,
-                    "overallSentiment": {
-                        "score": overall_score,
-                        "label": label,
-                        "trend": trend,
-                        "totalAnalyzed": total_analyzed,
-                        "positiveCount": total_positive,
-                        "negativeCount": total_negative,
-                    },
-                    "backseat": {
-                        "count": backseat_count,
-                        "pct": backseat_pct,
-                        "examples": backseat_examples,
-                    },
-                    "engagementDepth": {
-                        "reaction": depth_reaction,
-                        "reactionPct": depth_pct(depth_reaction),
-                        "short": depth_short,
-                        "shortPct": depth_pct(depth_short),
-                        "discussion": depth_discussion,
-                        "discussionPct": depth_pct(depth_discussion),
-                        "total": depth_total,
-                        "avgWordCount": round(
-                            sum(len(r[1].split()) for r in rows) / max(1, len(rows)), 1
-                        ),
-                    },
-                    "rawChatStatus": raw_chat_status,
-                })
+            payload = await asyncio.to_thread(
+                self._load_chat_content_analysis_payload_sync,
+                streamer=streamer,
+                days=days,
+            )
+            return web.json_response(payload)
 
         except web.HTTPException:
             raise

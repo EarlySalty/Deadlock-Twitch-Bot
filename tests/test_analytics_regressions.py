@@ -9,8 +9,10 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from bot.analytics.api_audience import _AnalyticsAudienceMixin
+from bot.analytics.api_chat_deep import _AnalyticsChatDeepMixin
 from bot.analytics.api_insights import _AnalyticsInsightsMixin
 from bot.analytics.api_overview import _AnalyticsOverviewMixin
+from bot.analytics.api_performance import _AnalyticsPerformanceMixin
 from bot.analytics.api_raids import _AnalyticsRaidsMixin
 from bot.analytics.coaching_engine import _schedule_optimizer
 from bot.analytics.demo_data import get_audience_insights, get_overview
@@ -245,6 +247,22 @@ class _DummyAudience(_AnalyticsAudienceMixin):
 
 
 class _DummyInsights(_AnalyticsInsightsMixin):
+    def _require_v2_auth(self, request):
+        return None
+
+    def _require_extended_plan(self, request):
+        return None
+
+
+class _DummyPerformance(_AnalyticsPerformanceMixin):
+    def _require_v2_auth(self, request):
+        return None
+
+    def _require_extended_plan(self, request):
+        return None
+
+
+class _DummyChatDeep(_AnalyticsChatDeepMixin):
     def _require_v2_auth(self, request):
         return None
 
@@ -826,6 +844,115 @@ class InsightsSqlRegressionTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(payload["dataQuality"]["botFilterApplied"])
 
 
+class AnalyticsOffloadingRegressionTests(unittest.IsolatedAsyncioTestCase):
+    async def test_tag_analysis_extended_offloads_db_loader(self) -> None:
+        handler = _DummyPerformance()
+        request = SimpleNamespace(query={"streamer": "target", "days": "30", "limit": "20"})
+        to_thread_calls = []
+
+        async def _fake_to_thread(func, /, *args, **kwargs):
+            to_thread_calls.append((func, args, kwargs))
+            return func(*args, **kwargs)
+
+        with (
+            patch.object(
+                handler,
+                "_load_tag_analysis_extended_payload_sync",
+                return_value={"tags": [], "peerBenchmark": None},
+            ) as loader,
+            patch("bot.analytics.api_performance.asyncio.to_thread", side_effect=_fake_to_thread),
+        ):
+            response = await handler._api_v2_tag_analysis_extended(request)
+
+        self.assertEqual(response.status, 200)
+        loader.assert_called_once_with(streamer="target", days=30, limit=20)
+        self.assertEqual(len(to_thread_calls), 1)
+
+    async def test_chat_analytics_offloads_db_snapshot_loader(self) -> None:
+        handler = _DummyInsights()
+        request = SimpleNamespace(query={"streamer": "target", "days": "30", "timezone": "UTC"})
+        snapshot = {
+            "session_stats": (1, 3600, 12.0, 720.0),
+            "viewer_sample_row": (0, 0),
+            "session_benchmark_rows": [],
+            "all_messages": [],
+            "chatter_rows": [],
+            "sessions_with_chat_row": (0,),
+            "top_chatters": [],
+            "raw_chat_status": {
+                "available": False,
+                "lastMessageAt": None,
+                "gapStart": None,
+                "suspectedIngestionIssue": False,
+                "backfillState": "not_needed",
+                "note": None,
+            },
+        }
+        to_thread_calls = []
+
+        async def _fake_to_thread(func, /, *args, **kwargs):
+            to_thread_calls.append((func, args, kwargs))
+            return func(*args, **kwargs)
+
+        with (
+            patch.object(handler, "_load_chat_analytics_snapshot_sync", return_value=snapshot) as loader,
+            patch("bot.analytics.api_insights.asyncio.to_thread", side_effect=_fake_to_thread),
+        ):
+            response = await handler._api_v2_chat_analytics(request)
+
+        self.assertEqual(response.status, 200)
+        loader.assert_called_once()
+        self.assertEqual(loader.call_args.kwargs["streamer_login"], "target")
+        self.assertEqual(len(to_thread_calls), 1)
+
+    async def test_chat_content_analysis_offloads_db_loader(self) -> None:
+        handler = _DummyChatDeep()
+        request = SimpleNamespace(query={"streamer": "target", "days": "30"})
+        to_thread_calls = []
+
+        async def _fake_to_thread(func, /, *args, **kwargs):
+            to_thread_calls.append((func, args, kwargs))
+            return func(*args, **kwargs)
+
+        with (
+            patch.object(
+                handler,
+                "_load_chat_content_analysis_payload_sync",
+                return_value={
+                    "heroMentions": [],
+                    "topicBreakdown": {},
+                    "sentimentTimeline": [],
+                    "overallSentiment": {
+                        "score": 0,
+                        "label": "neutral",
+                        "trend": "insufficient_data",
+                        "totalAnalyzed": 0,
+                        "positiveCount": 0,
+                        "negativeCount": 0,
+                    },
+                    "backseat": {"count": 0, "pct": 0, "examples": []},
+                    "engagementDepth": {
+                        "reaction": 0,
+                        "reactionPct": 0,
+                        "short": 0,
+                        "shortPct": 0,
+                        "discussion": 0,
+                        "discussionPct": 0,
+                        "total": 0,
+                        "avgWordCount": 0,
+                    },
+                    "rawChatStatus": None,
+                },
+            ) as loader,
+            patch("bot.analytics.api_chat_deep.asyncio.to_thread", side_effect=_fake_to_thread),
+        ):
+            response = await handler._api_v2_chat_content_analysis(request)
+
+        self.assertEqual(response.status, 200)
+        loader.assert_called_once_with(streamer="target", days=30)
+        self.assertEqual(len(to_thread_calls), 1)
+
+
 class ViewerDirectoryGapRegressionTests(unittest.IsolatedAsyncioTestCase):
     @staticmethod
     def _setup_tables(conn: sqlite3.Connection) -> None:
@@ -885,8 +1012,10 @@ class ViewerDirectoryGapRegressionTests(unittest.IsolatedAsyncioTestCase):
         )
 
     async def test_viewer_directory_flags_presence_only_gap_with_raw_chat_status(self) -> None:
-        conn = sqlite3.connect(":memory:")
+        conn = sqlite3.connect(":memory:", check_same_thread=False)
         self._setup_tables(conn)
+        recent_started = datetime.now(UTC) - timedelta(days=5)
+        recent_ended = recent_started + timedelta(hours=2)
         conn.execute(
             """
             INSERT INTO twitch_stream_sessions (id, streamer_login, started_at, ended_at)
@@ -895,8 +1024,8 @@ class ViewerDirectoryGapRegressionTests(unittest.IsolatedAsyncioTestCase):
             (
                 1,
                 "target",
-                "2026-02-25T20:00:00+00:00",
-                "2026-02-25T22:00:00+00:00",
+                recent_started.isoformat(),
+                recent_ended.isoformat(),
             ),
         )
         conn.execute(
@@ -918,8 +1047,8 @@ class ViewerDirectoryGapRegressionTests(unittest.IsolatedAsyncioTestCase):
                 "purebacon_",
                 1,
                 0,
-                "2026-02-25T20:00:00+00:00",
-                "2026-02-25T20:00:00+00:00",
+                recent_started.isoformat(),
+                recent_started.isoformat(),
             ),
         )
         conn.execute(
@@ -931,9 +1060,9 @@ class ViewerDirectoryGapRegressionTests(unittest.IsolatedAsyncioTestCase):
             """,
             (
                 "target",
-                "2026-02-25T20:05:00+00:00",
+                (recent_started + timedelta(minutes=5)).isoformat(),
                 None,
-                "2026-02-25T20:05:00+00:00",
+                (recent_started + timedelta(minutes=5)).isoformat(),
                 "insert timeout",
             ),
         )
@@ -956,16 +1085,20 @@ class ViewerDirectoryGapRegressionTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(payload["viewers"][0]["messageGapNote"])
 
     async def test_viewer_directory_uses_selected_window_for_core_counts(self) -> None:
-        conn = sqlite3.connect(":memory:")
+        conn = sqlite3.connect(":memory:", check_same_thread=False)
         self._setup_tables(conn)
+        recent_started = datetime.now(UTC) - timedelta(days=5)
+        recent_ended = recent_started + timedelta(hours=2)
+        old_started = datetime.now(UTC) - timedelta(days=120)
+        old_ended = old_started + timedelta(hours=2)
         conn.executemany(
             """
             INSERT INTO twitch_stream_sessions (id, streamer_login, started_at, ended_at)
             VALUES (?, ?, ?, ?)
             """,
             [
-                (1, "target", "2026-02-25T20:00:00+00:00", "2026-02-25T22:00:00+00:00"),
-                (2, "target", "2025-12-15T20:00:00+00:00", "2025-12-15T22:00:00+00:00"),
+                (1, "target", recent_started.isoformat(), recent_ended.isoformat()),
+                (2, "target", old_started.isoformat(), old_ended.isoformat()),
             ],
         )
         conn.executemany(
@@ -990,8 +1123,8 @@ class ViewerDirectoryGapRegressionTests(unittest.IsolatedAsyncioTestCase):
                 "window_user",
                 99,
                 999,
-                "2026-02-25T20:00:00+00:00",
-                "2026-02-25T22:00:00+00:00",
+                recent_started.isoformat(),
+                recent_ended.isoformat(),
             ),
         )
         conn.commit()
@@ -1012,7 +1145,7 @@ class ViewerDirectoryGapRegressionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(payload["viewers"][0]["totalMessages"], 3)
 
     async def test_viewer_segments_respects_selected_window(self) -> None:
-        conn = sqlite3.connect(":memory:")
+        conn = sqlite3.connect(":memory:", check_same_thread=False)
         self._setup_tables(conn)
         now = datetime.now(UTC)
         recent_started = now - timedelta(days=5)
@@ -1068,14 +1201,16 @@ class ViewerDirectoryGapRegressionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(total_segment_viewers, 1)
 
     async def test_viewer_tab_excludes_streamer_and_runtime_bot_identities(self) -> None:
-        conn = sqlite3.connect(":memory:")
+        conn = sqlite3.connect(":memory:", check_same_thread=False)
         self._setup_tables(conn)
+        recent_started = datetime.now(UTC) - timedelta(days=5)
+        recent_ended = recent_started + timedelta(hours=2)
         conn.execute(
             """
             INSERT INTO twitch_stream_sessions (id, streamer_login, started_at, ended_at)
             VALUES (?, ?, ?, ?)
             """,
-            (1, "target", "2026-02-25T20:00:00+00:00", "2026-02-25T22:00:00+00:00"),
+            (1, "target", recent_started.isoformat(), recent_ended.isoformat()),
         )
         conn.executemany(
             """
@@ -1098,24 +1233,24 @@ class ViewerDirectoryGapRegressionTests(unittest.IsolatedAsyncioTestCase):
             ) VALUES (?, ?, ?, ?, ?, ?)
             """,
             [
-                ("target", "target", 1, 2, "2026-02-25T20:00:00+00:00", "2026-02-25T22:00:00+00:00"),
-                ("target", "deadlockbot", 1, 4, "2026-02-25T20:00:00+00:00", "2026-02-25T22:00:00+00:00"),
+                ("target", "target", 1, 2, recent_started.isoformat(), recent_ended.isoformat()),
+                ("target", "deadlockbot", 1, 4, recent_started.isoformat(), recent_ended.isoformat()),
                 (
                     "target",
                     "deutschedeadlockcommunity",
                     1,
                     1,
-                    "2026-02-25T20:00:00+00:00",
-                    "2026-02-25T22:00:00+00:00",
+                    recent_started.isoformat(),
+                    recent_ended.isoformat(),
                 ),
-                ("target", "real_viewer", 1, 3, "2026-02-25T20:00:00+00:00", "2026-02-25T22:00:00+00:00"),
+                ("target", "real_viewer", 1, 3, recent_started.isoformat(), recent_ended.isoformat()),
                 (
                     "deutschedeadlockcommunity",
                     "real_viewer",
                     1,
                     2,
-                    "2026-02-25T20:00:00+00:00",
-                    "2026-02-25T22:00:00+00:00",
+                    recent_started.isoformat(),
+                    recent_ended.isoformat(),
                 ),
             ],
         )
@@ -1155,17 +1290,19 @@ class ViewerDirectoryGapRegressionTests(unittest.IsolatedAsyncioTestCase):
         )
 
     async def test_viewer_segments_shared_channel_direction_is_not_hardcoded(self) -> None:
-        conn = sqlite3.connect(":memory:")
+        conn = sqlite3.connect(":memory:", check_same_thread=False)
         self._setup_tables(conn)
+        recent_started = datetime.now(UTC) - timedelta(days=5)
+        recent_ended = recent_started + timedelta(hours=2)
         conn.executemany(
             """
             INSERT INTO twitch_stream_sessions (id, streamer_login, started_at, ended_at)
             VALUES (?, ?, ?, ?)
             """,
             [
-                (1, "target", "2026-02-25T20:00:00+00:00", "2026-02-25T22:00:00+00:00"),
-                (2, "other_in", "2026-02-25T20:00:00+00:00", "2026-02-25T22:00:00+00:00"),
-                (3, "other_out", "2026-02-25T20:00:00+00:00", "2026-02-25T22:00:00+00:00"),
+                (1, "target", recent_started.isoformat(), recent_ended.isoformat()),
+                (2, "other_in", recent_started.isoformat(), recent_ended.isoformat()),
+                (3, "other_out", recent_started.isoformat(), recent_ended.isoformat()),
             ],
         )
         conn.executemany(
@@ -1191,13 +1328,13 @@ class ViewerDirectoryGapRegressionTests(unittest.IsolatedAsyncioTestCase):
             ) VALUES (?, ?, ?, ?, ?, ?)
             """,
             [
-                ("target", "viewer_a", 2, 2, "2026-02-10T20:00:00+00:00", "2026-02-25T22:00:00+00:00"),
-                ("target", "viewer_b", 3, 3, "2026-02-10T20:00:00+00:00", "2026-02-25T22:00:00+00:00"),
-                ("target", "viewer_c", 1, 1, "2026-02-10T20:00:00+00:00", "2026-02-25T22:00:00+00:00"),
-                ("other_in", "viewer_a", 4, 4, "2026-02-01T20:00:00+00:00", "2026-02-25T22:00:00+00:00"),
-                ("other_in", "viewer_b", 5, 5, "2026-02-02T20:00:00+00:00", "2026-02-25T22:00:00+00:00"),
-                ("other_out", "viewer_b", 2, 2, "2026-02-20T20:00:00+00:00", "2026-02-25T22:00:00+00:00"),
-                ("other_out", "viewer_c", 2, 2, "2026-02-21T20:00:00+00:00", "2026-02-25T22:00:00+00:00"),
+                ("target", "viewer_a", 2, 2, (recent_started - timedelta(days=15)).isoformat(), recent_ended.isoformat()),
+                ("target", "viewer_b", 3, 3, (recent_started - timedelta(days=15)).isoformat(), recent_ended.isoformat()),
+                ("target", "viewer_c", 1, 1, (recent_started - timedelta(days=15)).isoformat(), recent_ended.isoformat()),
+                ("other_in", "viewer_a", 4, 4, (recent_started - timedelta(days=24)).isoformat(), recent_ended.isoformat()),
+                ("other_in", "viewer_b", 5, 5, (recent_started - timedelta(days=23)).isoformat(), recent_ended.isoformat()),
+                ("other_out", "viewer_b", 2, 2, (recent_started - timedelta(days=5)).isoformat(), recent_ended.isoformat()),
+                ("other_out", "viewer_c", 2, 2, (recent_started - timedelta(days=4)).isoformat(), recent_ended.isoformat()),
             ],
         )
         conn.commit()
@@ -1223,16 +1360,18 @@ class ViewerDirectoryGapRegressionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(direction_map["other_out"], "outgoing")
 
     async def test_viewer_segments_uses_unknown_when_direction_cannot_be_inferred(self) -> None:
-        conn = sqlite3.connect(":memory:")
+        conn = sqlite3.connect(":memory:", check_same_thread=False)
         self._setup_tables(conn)
+        recent_started = datetime.now(UTC) - timedelta(days=5)
+        recent_ended = recent_started + timedelta(hours=2)
         conn.executemany(
             """
             INSERT INTO twitch_stream_sessions (id, streamer_login, started_at, ended_at)
             VALUES (?, ?, ?, ?)
             """,
             [
-                (1, "target", "2026-02-25T20:00:00+00:00", "2026-02-25T22:00:00+00:00"),
-                (2, "other_unknown", "2026-02-25T20:00:00+00:00", "2026-02-25T22:00:00+00:00"),
+                (1, "target", recent_started.isoformat(), recent_ended.isoformat()),
+                (2, "other_unknown", recent_started.isoformat(), recent_ended.isoformat()),
             ],
         )
         conn.executemany(

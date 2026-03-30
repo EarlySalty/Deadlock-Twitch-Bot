@@ -160,7 +160,7 @@ class DashboardAuthPersistenceTests(unittest.IsolatedAsyncioTestCase):
             session = handler._get_dashboard_auth_session(request)
 
         self.assertEqual(session, stored_session)
-        self.assertIn("session-abc", handler._auth_sessions)
+        self.assertIn("session-abc", handler._dashboard_auth_state_cache("_auth_sessions").data())
         load_session.assert_called_once()
 
     def test_rate_limit_store_counts_persisted_hits(self) -> None:

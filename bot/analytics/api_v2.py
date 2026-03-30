@@ -787,7 +787,7 @@ class AnalyticsV2Mixin(
         - Request is from localhost (no auth needed)
         - noauth mode is enabled
         - Valid Twitch OAuth partner session exists
-        - Valid partner_token or admin token is provided
+        - Valid admin token is provided
         """
         auth_level = self._get_auth_level(request)
         if self._is_admin_dashboard_host_request(request):
@@ -829,7 +829,7 @@ class AnalyticsV2Mixin(
                     )
                 raise web.HTTPForbidden(text=payload["message"])
             payload = {
-                "error": "Authentication required. Use Twitch login, partner_token, or access from localhost.",
+                "error": "Authentication required. Use Twitch login, an admin token, or access from localhost.",
                 "loginUrl": login_url,
             }
             if request.path.startswith("/twitch/api/"):
@@ -891,25 +891,23 @@ class AnalyticsV2Mixin(
                 return "admin"
             return "partner"
 
-        admin_token = getattr(self, "_token", None)
-        partner_token = getattr(self, "_partner_token", None)
+        partner_session_getter = getattr(self, "_get_partner_access_session", None)
+        if callable(partner_session_getter):
+            try:
+                partner_session = partner_session_getter(request)
+            except Exception:
+                partner_session = None
+            if isinstance(partner_session, dict):
+                return "partner"
 
+        admin_token = getattr(self, "_token", None)
         admin_header = request.headers.get("X-Admin-Token")
-        partner_header = request.headers.get("X-Partner-Token")
 
         # Admin token = full access
         if admin_token and admin_header:
             try:
                 if secrets.compare_digest(str(admin_header), str(admin_token)):
                     return "admin"
-            except Exception:
-                pass
-
-        # Partner token
-        if partner_token and partner_header:
-            try:
-                if secrets.compare_digest(str(partner_header), str(partner_token)):
-                    return "partner"
             except Exception:
                 pass
 

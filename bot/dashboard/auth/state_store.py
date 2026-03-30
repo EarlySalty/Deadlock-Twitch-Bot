@@ -13,7 +13,9 @@ _TWITCH_OAUTH_STATE_TYPE = "oauth_state:twitch"
 _DISCORD_ADMIN_OAUTH_STATE_TYPE = "oauth_state:discord_admin"
 _AFFILIATE_OAUTH_STATE_TYPE = "oauth_state:affiliate"
 _AFFILIATE_CONNECT_STATE_TYPE = "oauth_state:affiliate_connect"
+_PARTNER_LOGIN_STATE_TYPE = "oauth_state:partner_login"
 _TWITCH_SESSION_TYPE = "twitch"
+_PARTNER_ACCESS_SESSION_TYPE = "partner_access"
 _DISCORD_ADMIN_SESSION_TYPE = "discord_admin"
 _RATE_LIMIT_SESSION_TYPE = "rate_limit:dashboard_auth"
 
@@ -24,6 +26,90 @@ def _now() -> float:
 
 class DashboardAuthRateLimitStoreUnavailable(RuntimeError):
     """Raised when the durable auth rate-limit store cannot be reached."""
+
+
+class DashboardAuthStateCache:
+    """Mutable in-process cache for one dashboard auth namespace.
+
+    The cache stays intentionally small and is always paired with the durable
+    repository. This keeps the call sites focused on auth flow logic instead of
+    repeating getattr/setattr boilerplate.
+    """
+
+    def __init__(self, owner: Any, attr_name: str) -> None:
+        self._owner = owner
+        self._attr_name = str(attr_name or "").strip()
+
+    def data(self) -> dict[str, dict[str, Any]]:
+        cache = getattr(self._owner, self._attr_name, None)
+        if isinstance(cache, dict):
+            return cache
+        cache = {}
+        setattr(self._owner, self._attr_name, cache)
+        return cache
+
+    def get(self, key: str, default: Any = None) -> Any:
+        return self.data().get(key, default)
+
+    def pop(self, key: str, default: Any = None) -> Any:
+        return self.data().pop(key, default)
+
+    def put(self, key: str, payload: dict[str, Any]) -> dict[str, Any]:
+        record = dict(payload)
+        self.data()[key] = record
+        return record
+
+    def clear(self) -> None:
+        self.data().clear()
+
+    def prune_by_created_at(
+        self,
+        *,
+        ttl_seconds: float,
+        now: float | None = None,
+        max_items: int | None = None,
+    ) -> None:
+        current = _now() if now is None else float(now)
+        cache = self.data()
+        expired = [
+            key
+            for key, row in cache.items()
+            if current - float(row.get("created_at", 0.0) or 0.0) > float(ttl_seconds)
+        ]
+        for key in expired:
+            cache.pop(key, None)
+
+        if max_items is not None and max_items >= 0 and len(cache) > max_items:
+            oldest = sorted(
+                cache.items(),
+                key=lambda item: float(item[1].get("created_at", 0.0) or 0.0),
+            )
+            for key, _ in oldest[: len(cache) - max_items]:
+                cache.pop(key, None)
+
+    def prune_by_expires_at(
+        self,
+        *,
+        now: float | None = None,
+        max_items: int | None = None,
+    ) -> None:
+        current = _now() if now is None else float(now)
+        cache = self.data()
+        expired = [
+            key
+            for key, row in cache.items()
+            if float(row.get("expires_at", 0.0) or 0.0) <= current
+        ]
+        for key in expired:
+            cache.pop(key, None)
+
+        if max_items is not None and max_items >= 0 and len(cache) > max_items:
+            oldest = sorted(
+                cache.items(),
+                key=lambda item: float(item[1].get("created_at", 0.0) or 0.0),
+            )
+            for key, _ in oldest[: len(cache) - max_items]:
+                cache.pop(key, None)
 
 
 class DashboardAuthStateRepository:
@@ -125,6 +211,30 @@ class DashboardAuthStateRepository:
     ) -> dict[str, Any] | None:
         return self._consume_state(_AFFILIATE_CONNECT_STATE_TYPE, state, now=now)
 
+    def save_partner_login_state(
+        self,
+        *,
+        state: str,
+        payload: dict[str, Any],
+        ttl_seconds: float,
+        now: float | None = None,
+    ) -> None:
+        self._save_state(
+            state_type=_PARTNER_LOGIN_STATE_TYPE,
+            state=state,
+            payload=payload,
+            ttl_seconds=ttl_seconds,
+            now=now,
+        )
+
+    def consume_partner_login_state(
+        self,
+        state: str,
+        *,
+        now: float | None = None,
+    ) -> dict[str, Any] | None:
+        return self._consume_state(_PARTNER_LOGIN_STATE_TYPE, state, now=now)
+
     def load_dashboard_session(self, session_id: str, *, now: float | None = None) -> dict[str, Any] | None:
         return self._load_session(_TWITCH_SESSION_TYPE, session_id, now=now)
 
@@ -157,6 +267,30 @@ class DashboardAuthStateRepository:
         sessions_db.upsert_session(
             session_id,
             _DISCORD_ADMIN_SESSION_TYPE,
+            payload,
+            created_at,
+            expires_at,
+        )
+
+    def load_partner_access_session(
+        self,
+        session_id: str,
+        *,
+        now: float | None = None,
+    ) -> dict[str, Any] | None:
+        return self._load_session(_PARTNER_ACCESS_SESSION_TYPE, session_id, now=now)
+
+    def save_partner_access_session(
+        self,
+        *,
+        session_id: str,
+        payload: dict[str, Any],
+        created_at: float,
+        expires_at: float,
+    ) -> None:
+        sessions_db.upsert_session(
+            session_id,
+            _PARTNER_ACCESS_SESSION_TYPE,
             payload,
             created_at,
             expires_at,

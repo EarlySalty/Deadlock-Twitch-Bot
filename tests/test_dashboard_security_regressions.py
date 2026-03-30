@@ -1519,8 +1519,8 @@ class DashboardSecurityRegressionTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertFalse(handler._check_v2_auth(request_query_only))
         self.assertEqual(handler._get_auth_level(request_query_only), "none")
-        self.assertTrue(handler._check_v2_auth(request_partner_header))
-        self.assertEqual(handler._get_auth_level(request_partner_header), "partner")
+        self.assertFalse(handler._check_v2_auth(request_partner_header))
+        self.assertEqual(handler._get_auth_level(request_partner_header), "none")
         self.assertTrue(handler._check_v2_auth(request_admin_header))
         self.assertEqual(handler._get_auth_level(request_admin_header), "admin")
 
@@ -1546,11 +1546,10 @@ class DashboardSecurityRegressionTests(unittest.IsolatedAsyncioTestCase):
         )
 
         self.assertFalse(handler._check_v2_auth(request_partner_admin_host))
-        with self.assertRaises(web.HTTPForbidden) as partner_ctx:
+        with self.assertRaises(web.HTTPUnauthorized) as partner_ctx:
             handler._require_v2_auth(request_partner_admin_host)
         partner_payload = json.loads(partner_ctx.exception.text)
-        self.assertEqual(partner_payload.get("error"), "admin_required")
-        self.assertEqual(partner_payload.get("required"), "admin")
+        self.assertIn("Authentication required", partner_payload.get("error", ""))
 
         self.assertTrue(handler._check_v2_auth(request_admin_admin_host))
 

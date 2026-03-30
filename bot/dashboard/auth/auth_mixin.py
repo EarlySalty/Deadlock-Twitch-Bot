@@ -13,9 +13,17 @@ from aiohttp import web
 
 from ... import storage
 from ...core.constants import log
+from .services import (
+    DashboardAuthCookieService,
+    DashboardSessionService,
+    PartnerAccessBinding,
+    PartnerAccessService,
+    PartnerLoginTokenService,
+)
 from .state_store import (
     DashboardAuthRateLimitStore,
     DashboardAuthRateLimitStoreUnavailable,
+    DashboardAuthStateCache,
     DashboardAuthStateRepository,
 )
 
@@ -254,6 +262,41 @@ class _DashboardAuthMixin:
         self._dashboard_auth_state_repo_cache = repo
         return repo
 
+    def _dashboard_auth_state_cache(self, attr_name: str) -> DashboardAuthStateCache:
+        return DashboardAuthStateCache(self, attr_name)
+
+    def _cookie_service(self) -> DashboardAuthCookieService:
+        service = getattr(self, "_dashboard_auth_cookie_service_cache", None)
+        if isinstance(service, DashboardAuthCookieService):
+            return service
+        service = DashboardAuthCookieService(self)
+        self._dashboard_auth_cookie_service_cache = service
+        return service
+
+    def _dashboard_session_service(self) -> DashboardSessionService:
+        service = getattr(self, "_dashboard_session_service_cache", None)
+        if isinstance(service, DashboardSessionService):
+            return service
+        service = DashboardSessionService(self)
+        self._dashboard_session_service_cache = service
+        return service
+
+    def _partner_access_service(self) -> PartnerAccessService:
+        service = getattr(self, "_partner_access_service_cache", None)
+        if isinstance(service, PartnerAccessService):
+            return service
+        service = PartnerAccessService(self)
+        self._partner_access_service_cache = service
+        return service
+
+    def _partner_login_token_service(self) -> PartnerLoginTokenService:
+        service = getattr(self, "_partner_login_token_service_cache", None)
+        if isinstance(service, PartnerLoginTokenService):
+            return service
+        service = PartnerLoginTokenService(self)
+        self._partner_login_token_service_cache = service
+        return service
+
     def _dashboard_auth_rate_limit_store(self) -> DashboardAuthRateLimitStore:
         store = getattr(self, "_dashboard_auth_rate_limit_store_cache", None)
         if isinstance(store, DashboardAuthRateLimitStore):
@@ -262,14 +305,13 @@ class _DashboardAuthMixin:
         self._dashboard_auth_rate_limit_store_cache = store
         return store
 
-    @staticmethod
-    def _compat_state_cache(owner: Any, attr_name: str) -> dict[str, dict[str, Any]]:
-        cache = getattr(owner, attr_name, None)
-        if isinstance(cache, dict):
-            return cache
-        cache = {}
-        setattr(owner, attr_name, cache)
-        return cache
+    def _mark_dashboard_sessions_db_loaded(self) -> None:
+        if hasattr(self, "_sessions_db_loaded"):
+            self._sessions_db_loaded = True
+
+    def _mark_discord_sessions_db_loaded(self) -> None:
+        if hasattr(self, "_discord_sessions_db_loaded"):
+            self._discord_sessions_db_loaded = True
 
     def _check_rate_limit(
         self,
@@ -316,106 +358,15 @@ class _DashboardAuthMixin:
     # ------------------------------------------------------------------ #
 
     def _cleanup_auth_state(self) -> None:
-        now = time.time()
-        oauth_states = self._compat_state_cache(self, "_oauth_states")
-        auth_sessions = self._compat_state_cache(self, "_auth_sessions")
-        expired_states = [
-            key
-            for key, row in oauth_states.items()
-            if now - float(row.get("created_at", 0.0)) > self._oauth_state_ttl_seconds
-        ]
-        for key in expired_states:
-            oauth_states.pop(key, None)
-
-        expired_sessions = [
-            sid
-            for sid, row in auth_sessions.items()
-            if float(row.get("expires_at", 0.0)) <= now
-        ]
-        for sid in expired_sessions:
-            auth_sessions.pop(sid, None)
-
-        try:
-            self._dashboard_auth_state_repo().delete_expired(now)
-        except Exception as _exc:
-            log.debug("Could not purge expired dashboard auth state from DB: %s", _exc)
-
-        # Hard cap to prevent unbounded growth under heavy abuse
-        _MAX_STATES = 500
-        if len(oauth_states) > _MAX_STATES:
-            oldest = sorted(
-                oauth_states.items(),
-                key=lambda kv: float(kv[1].get("created_at", 0)),
-            )
-            for k, _ in oldest[: len(oauth_states) - _MAX_STATES]:
-                oauth_states.pop(k, None)
-
-        _MAX_SESSIONS = 2000
-        if len(auth_sessions) > _MAX_SESSIONS:
-            oldest_s = sorted(
-                auth_sessions.items(),
-                key=lambda kv: float(kv[1].get("created_at", 0)),
-            )
-            for k, _ in oldest_s[: len(auth_sessions) - _MAX_SESSIONS]:
-                auth_sessions.pop(k, None)
+        self._dashboard_session_service().cleanup()
 
     def _get_dashboard_auth_session(self, request: web.Request) -> dict[str, Any] | None:
-        self._cleanup_auth_state()
-        self._sessions_db_loaded = True
-        auth_sessions = self._compat_state_cache(self, "_auth_sessions")
-        session_id = (request.cookies.get(self._session_cookie_name) or "").strip()
-        if not session_id:
-            return None
-        session = auth_sessions.get(session_id)
-        if not session:
-            try:
-                session = self._dashboard_auth_state_repo().load_dashboard_session(
-                    session_id,
-                    now=time.time(),
-                )
-            except Exception as _exc:
-                log.debug("Could not load dashboard session from DB: %s", _exc)
-                session = None
-            if not session:
-                return None
-            auth_sessions[session_id] = session
-
-        now = time.time()
-        expires_at = float(session.get("expires_at", 0.0))
-        if expires_at <= now:
-            auth_sessions.pop(session_id, None)
-            try:
-                self._dashboard_auth_state_repo().delete_session(session_id)
-            except Exception as _exc:
-                log.debug("Could not delete expired session from DB: %s", _exc)
-            return None
-
-        old_expires = expires_at
-        session["expires_at"] = now + self._session_ttl_seconds
-        if session["expires_at"] - old_expires > 1800:
-            try:
-                self._dashboard_auth_state_repo().save_dashboard_session(
-                    session_id=session_id,
-                    payload=session,
-                    created_at=float(session.get("created_at", now)),
-                    expires_at=session["expires_at"],
-                )
-            except Exception as _exc:
-                log.debug("Could not refresh dashboard session in DB: %s", _exc)
-        return session
+        return self._dashboard_session_service().load(request)
 
     def _set_session_cookie(
         self, response: web.StreamResponse, request: web.Request, session_id: str
     ) -> None:
-        response.set_cookie(
-            self._session_cookie_name,
-            session_id,
-            max_age=self._session_ttl_seconds,
-            httponly=True,
-            secure=self._is_secure_request(request),
-            samesite="Lax",
-            path="/",
-        )
+        self._cookie_service().set_session_cookie(response, request, session_id)
 
     @staticmethod
     def _is_valid_oauth_context_token(token: str) -> bool:
@@ -425,99 +376,81 @@ class _DashboardAuthMixin:
         return all(ch.isalnum() or ch in {"-", "_"} for ch in candidate)
 
     def _oauth_context_cookie_name(self) -> str:
-        base_name = str(getattr(self, "_session_cookie_name", "") or "").strip()
-        if not base_name:
-            base_name = "twitch_dash_session"
-        return f"{base_name}_oauth_ctx"
+        return self._cookie_service().oauth_context_cookie_name()
 
     def _set_oauth_context_cookie(
         self, response: web.StreamResponse, request: web.Request, token: str
     ) -> None:
-        response.set_cookie(
-            self._oauth_context_cookie_name(),
-            token,
-            max_age=self._oauth_state_ttl_seconds,
-            httponly=True,
-            secure=self._is_secure_request(request),
-            samesite="Lax",
-            path="/twitch/auth/callback",
-        )
+        self._cookie_service().set_oauth_context_cookie(response, request, token)
 
     def _clear_oauth_context_cookie(
         self, response: web.StreamResponse, request: web.Request
     ) -> None:
-        response.del_cookie(
-            self._oauth_context_cookie_name(),
-            path="/twitch/auth/callback",
-            httponly=True,
-            samesite="Lax",
-            secure=self._is_secure_request(request),
-        )
+        self._cookie_service().clear_oauth_context_cookie(response, request)
 
     def _discord_oauth_context_cookie_name(self) -> str:
-        base_name = str(getattr(self, "_session_cookie_name", "") or "").strip()
-        if not base_name:
-            base_name = "twitch_dash_session"
-        return f"{base_name}_discord_oauth_ctx"
+        return self._cookie_service().discord_oauth_context_cookie_name()
 
     def _set_discord_oauth_context_cookie(
         self, response: web.StreamResponse, request: web.Request, token: str
     ) -> None:
-        response.set_cookie(
-            self._discord_oauth_context_cookie_name(),
-            token,
-            max_age=self._oauth_state_ttl_seconds,
-            httponly=True,
-            secure=self._is_secure_request(request),
-            samesite="Lax",
-            path="/twitch/auth/discord/callback",
-        )
+        self._cookie_service().set_discord_oauth_context_cookie(response, request, token)
 
     def _clear_discord_oauth_context_cookie(
         self, response: web.StreamResponse, request: web.Request
     ) -> None:
-        response.del_cookie(
-            self._discord_oauth_context_cookie_name(),
-            path="/twitch/auth/discord/callback",
-            httponly=True,
-            samesite="Lax",
-            secure=self._is_secure_request(request),
-        )
+        self._cookie_service().clear_discord_oauth_context_cookie(response, request)
 
     def _clear_session_cookie(self, response: web.StreamResponse, request: web.Request) -> None:
-        response.del_cookie(
-            self._session_cookie_name,
-            path="/",
-            httponly=True,
-            samesite="Lax",
-            secure=self._is_secure_request(request),
-        )
+        self._cookie_service().clear_session_cookie(response, request)
+
+    def _delete_dashboard_auth_session(self, session_id: str) -> dict[str, Any] | None:
+        return self._dashboard_session_service().delete(session_id)
+
+    def _partner_access_cookie_name(self) -> str:
+        return self._cookie_service().partner_access_cookie_name()
+
+    def _partner_access_session_ttl(self) -> int:
+        configured_ttl = max(300, int(getattr(self, "_session_ttl_seconds", 6 * 3600) or 6 * 3600))
+        return min(configured_ttl, 1800)
+
+    def _partner_access_request_context(self, request: web.Request) -> dict[str, str]:
+        return PartnerAccessBinding.capture(request)
+
+    @staticmethod
+    def _partner_access_binding_matches(
+        session: dict[str, Any],
+        request_context: dict[str, str],
+    ) -> bool:
+        return PartnerAccessBinding.matches(session, request_context)
+
+    def _get_partner_access_session(self, request: web.Request) -> dict[str, Any] | None:
+        return self._partner_access_service().load(request)
+
+    def _create_partner_access_session(self, request: web.Request) -> str:
+        return self._partner_access_service().create(request)
+
+    def _delete_partner_access_session(self, session_id: str) -> None:
+        self._partner_access_service().delete(session_id)
+
+    def _set_partner_access_cookie(
+        self, response: web.StreamResponse, request: web.Request, session_id: str
+    ) -> None:
+        self._cookie_service().set_partner_access_cookie(response, request, session_id)
+
+    def _clear_partner_access_cookie(
+        self, response: web.StreamResponse, request: web.Request
+    ) -> None:
+        self._cookie_service().clear_partner_access_cookie(response, request)
 
     def _create_dashboard_session(
         self, *, twitch_login: str, twitch_user_id: str, display_name: str
     ) -> str:
-        self._cleanup_auth_state()
-        session_id = secrets.token_urlsafe(32)
-        now = time.time()
-        session_data = {
-            "twitch_login": twitch_login,
-            "twitch_user_id": twitch_user_id,
-            "display_name": display_name or twitch_login,
-            "is_partner": True,
-            "created_at": now,
-            "expires_at": now + self._session_ttl_seconds,
-        }
-        self._compat_state_cache(self, "_auth_sessions")[session_id] = session_data
-        try:
-            self._dashboard_auth_state_repo().save_dashboard_session(
-                session_id=session_id,
-                payload=session_data,
-                created_at=now,
-                expires_at=now + self._session_ttl_seconds,
-            )
-        except Exception as _exc:
-            log.debug("Could not persist dashboard session to DB: %s", _exc)
-        return session_id
+        return self._dashboard_session_service().create(
+            twitch_login=twitch_login,
+            twitch_user_id=twitch_user_id,
+            display_name=display_name,
+        )
 
     def _is_partner_allowed(
         self, *, twitch_login: str, twitch_user_id: str
@@ -623,46 +556,19 @@ class _DashboardAuthMixin:
 
     def _cleanup_discord_admin_state(self) -> None:
         now = time.time()
-        oauth_states = self._compat_state_cache(self, "_discord_admin_oauth_states")
-        admin_sessions = self._compat_state_cache(self, "_discord_admin_sessions")
-        expired_states = [
-            key
-            for key, row in oauth_states.items()
-            if now - float(row.get("created_at", 0.0)) > self._discord_admin_state_ttl
-        ]
-        for key in expired_states:
-            oauth_states.pop(key, None)
-
-        expired_sessions = [
-            key
-            for key, row in admin_sessions.items()
-            if float(row.get("expires_at", 0.0)) <= now
-        ]
-        for key in expired_sessions:
-            admin_sessions.pop(key, None)
+        oauth_states = self._dashboard_auth_state_cache("_discord_admin_oauth_states")
+        admin_sessions = self._dashboard_auth_state_cache("_discord_admin_sessions")
+        oauth_states.prune_by_created_at(
+            ttl_seconds=self._discord_admin_state_ttl,
+            now=now,
+            max_items=1000,
+        )
+        admin_sessions.prune_by_expires_at(now=now, max_items=5000)
 
         try:
             self._dashboard_auth_state_repo().delete_expired(now)
         except Exception as _exc:
             log.debug("Could not purge expired discord auth state from DB: %s", _exc)
-
-        max_states = 1000
-        if len(oauth_states) > max_states:
-            oldest_states = sorted(
-                oauth_states.items(),
-                key=lambda item: float(item[1].get("created_at", 0.0)),
-            )
-            for key, _ in oldest_states[: len(oauth_states) - max_states]:
-                oauth_states.pop(key, None)
-
-        max_sessions = 5000
-        if len(admin_sessions) > max_sessions:
-            oldest_sessions = sorted(
-                admin_sessions.items(),
-                key=lambda item: float(item[1].get("created_at", 0.0)),
-            )
-            for key, _ in oldest_sessions[: len(admin_sessions) - max_sessions]:
-                admin_sessions.pop(key, None)
 
     def _set_discord_admin_cookie(
         self,
@@ -696,9 +602,10 @@ class _DashboardAuthMixin:
             return None
 
         self._cleanup_discord_admin_state()
-        self._discord_sessions_db_loaded = True
-        admin_sessions = self._compat_state_cache(self, "_discord_admin_sessions")
-        session_id = (request.cookies.get(self._discord_admin_cookie_name) or "").strip()
+        self._mark_discord_sessions_db_loaded()
+        admin_sessions = self._dashboard_auth_state_cache("_discord_admin_sessions")
+        cookies = getattr(request, "cookies", {}) or {}
+        session_id = (cookies.get(self._discord_admin_cookie_name) or "").strip()
         if not session_id:
             return None
         session = admin_sessions.get(session_id)
@@ -713,7 +620,7 @@ class _DashboardAuthMixin:
                 session = None
             if not session:
                 return None
-            admin_sessions[session_id] = session
+            admin_sessions.put(session_id, session)
         now = time.time()
         if float(session.get("expires_at", 0.0)) <= now:
             admin_sessions.pop(session_id, None)
@@ -838,6 +745,111 @@ class _DashboardAuthMixin:
         return False, "missing_admin_or_moderator_role"
 
     # ------------------------------------------------------------------ #
+    # Partner login exchange routes                                       #
+    # ------------------------------------------------------------------ #
+
+    async def auth_partner_link(self, request: web.Request) -> web.StreamResponse:
+        """Issue a short-lived one-time partner login token for browser bootstrap."""
+        if not self._check_rate_limit(request, max_requests=10, window_seconds=60.0):
+            return web.Response(text="Zu viele Anfragen. Bitte warte kurz.", status=429)
+        if not self._partner_login_token_service().is_issue_request_authorized(request):
+            raise web.HTTPUnauthorized(text="missing or invalid partner link credentials")
+
+        next_path = None
+        query = getattr(request, "query", {}) or {}
+        if hasattr(query, "get"):
+            next_path = query.get("next")
+
+        if not next_path:
+            json_reader = getattr(request, "json", None)
+            if callable(json_reader):
+                try:
+                    payload = await json_reader()
+                except Exception:
+                    payload = None
+                if isinstance(payload, dict):
+                    next_path = payload.get("next")
+
+        try:
+            issued_token = self._partner_login_token_service().issue(next_path=next_path)
+        except RuntimeError as exc:
+            log.warning("Could not issue partner login link: %s", exc)
+            return web.Response(
+                text="Partner-Login-Link konnte nicht sicher erstellt werden.",
+                status=503,
+            )
+
+        return web.json_response(
+            {
+                "login_path": "/twitch/auth/partner/login",
+                "login_method": "POST",
+                "login_token": issued_token["token"],
+                "next_path": issued_token["next_path"],
+                "expires_in": issued_token["expires_in"],
+            },
+            headers={
+                "Cache-Control": "no-store, max-age=0",
+                "Pragma": "no-cache",
+            },
+        )
+
+    async def auth_partner_login(self, request: web.Request) -> web.StreamResponse:
+        """Consume a one-time partner login token and create the partner access cookie."""
+        if not self._check_rate_limit(request, max_requests=20, window_seconds=60.0):
+            return web.Response(text="Zu viele Anfragen. Bitte warte kurz.", status=429)
+
+        token = ""
+        post_reader = getattr(request, "post", None)
+        if callable(post_reader):
+            try:
+                form_data = await post_reader()
+            except Exception:
+                form_data = None
+            if hasattr(form_data, "get"):
+                token = str(form_data.get("token") or "").strip()
+
+        if not token:
+            json_reader = getattr(request, "json", None)
+            if callable(json_reader):
+                try:
+                    payload = await json_reader()
+                except Exception:
+                    payload = None
+                if isinstance(payload, dict):
+                    token = str(payload.get("token") or "").strip()
+
+        if not token:
+            return web.Response(text="Fehlendes Partner-Login-Token.", status=400)
+
+        login_state = self._partner_login_token_service().consume(token)
+        if not isinstance(login_state, dict):
+            return web.Response(
+                text="Partner-Login-Token ungültig oder abgelaufen.",
+                status=401,
+            )
+
+        destination = self._safe_internal_redirect(
+            login_state.get("next_path"),
+            fallback="/twitch/dashboard-v2",
+        )
+        if (
+            self._get_dashboard_auth_session(request)
+            or self._get_discord_admin_session(request)
+            or self._get_partner_access_session(request)
+        ):
+            response = web.HTTPSeeOther(destination)
+            response.headers["Cache-Control"] = "no-store, max-age=0"
+            response.headers["Pragma"] = "no-cache"
+            raise response
+
+        session_id = self._create_partner_access_session(request)
+        response = web.HTTPSeeOther(destination)
+        self._set_partner_access_cookie(response, request, session_id)
+        response.headers["Cache-Control"] = "no-store, max-age=0"
+        response.headers["Pragma"] = "no-cache"
+        raise response
+
+    # ------------------------------------------------------------------ #
     # Twitch OAuth routes                                                  #
     # ------------------------------------------------------------------ #
 
@@ -884,7 +896,7 @@ class _DashboardAuthMixin:
             "redirect_uri": redirect_uri,
             "context_token": context_token,
         }
-        self._compat_state_cache(self, "_oauth_states")[state] = dict(state_payload)
+        self._dashboard_auth_state_cache("_oauth_states").put(state, state_payload)
         try:
             self._dashboard_auth_state_repo().save_twitch_oauth_state(
                 state=state,
@@ -893,7 +905,7 @@ class _DashboardAuthMixin:
             )
         except Exception as exc:
             log.warning("Could not persist Twitch OAuth state %s: %s", state, exc)
-            self._compat_state_cache(self, "_oauth_states").pop(state, None)
+            self._dashboard_auth_state_cache("_oauth_states").pop(state, None)
             return web.Response(
                 text="OAuth-Status konnte nicht sicher gespeichert werden. Bitte erneut versuchen.",
                 status=503,
@@ -927,7 +939,7 @@ class _DashboardAuthMixin:
         if not state or not code:
             return web.Response(text="Fehlender OAuth state/code.", status=400)
 
-        cached_state_data = self._compat_state_cache(self, "_oauth_states").pop(state, None)
+        cached_state_data = self._dashboard_auth_state_cache("_oauth_states").pop(state, None)
         try:
             state_data = self._dashboard_auth_state_repo().consume_twitch_oauth_state(
                 state,
@@ -1054,7 +1066,7 @@ class _DashboardAuthMixin:
             "redirect_uri": redirect_uri,
             "context_token": context_token,
         }
-        self._compat_state_cache(self, "_discord_admin_oauth_states")[state] = dict(state_payload)
+        self._dashboard_auth_state_cache("_discord_admin_oauth_states").put(state, state_payload)
         try:
             self._dashboard_auth_state_repo().save_discord_admin_oauth_state(
                 state=state,
@@ -1063,7 +1075,7 @@ class _DashboardAuthMixin:
             )
         except Exception as exc:
             log.warning("Could not persist Discord admin OAuth state %s: %s", state, exc)
-            self._compat_state_cache(self, "_discord_admin_oauth_states").pop(state, None)
+            self._dashboard_auth_state_cache("_discord_admin_oauth_states").pop(state, None)
             return web.Response(
                 text="Discord OAuth Status konnte nicht sicher gespeichert werden.",
                 status=503,
@@ -1107,7 +1119,7 @@ class _DashboardAuthMixin:
             return web.Response(text="Fehlender OAuth state/code.", status=400)
 
         self._cleanup_discord_admin_state()
-        cached_state_data = self._compat_state_cache(self, "_discord_admin_oauth_states").pop(
+        cached_state_data = self._dashboard_auth_state_cache("_discord_admin_oauth_states").pop(
             state,
             None,
         )
@@ -1192,7 +1204,10 @@ class _DashboardAuthMixin:
             "last_seen_at": now,
             "expires_at": now + self._discord_admin_session_ttl,
         }
-        self._compat_state_cache(self, "_discord_admin_sessions")[session_id] = discord_session_data
+        self._dashboard_auth_state_cache("_discord_admin_sessions").put(
+            session_id,
+            discord_session_data,
+        )
         try:
             self._dashboard_auth_state_repo().save_discord_admin_session(
                 session_id=session_id,
@@ -1219,7 +1234,7 @@ class _DashboardAuthMixin:
     async def discord_auth_logout(self, request: web.Request) -> web.StreamResponse:
         session_id = (request.cookies.get(self._discord_admin_cookie_name) or "").strip()
         if session_id:
-            self._compat_state_cache(self, "_discord_admin_sessions").pop(session_id, None)
+            self._dashboard_auth_state_cache("_discord_admin_sessions").pop(session_id, None)
             try:
                 self._dashboard_auth_state_repo().delete_session(session_id)
             except Exception as _exc:
