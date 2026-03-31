@@ -214,7 +214,7 @@ class DashboardMixinRaidCallbackRedirectTests(unittest.IsolatedAsyncioTestCase):
         handler = _DummyDashboardMixin()
         handler._raid_bot = raid_bot
         with patch(
-            "bot.dashboard.raids.oauth_callback.asyncio.create_task",
+            "asyncio.create_task",
             side_effect=AssertionError("raw create_task should not be used"),
         ):
             payload = await handler._dashboard_raid_oauth_callback(

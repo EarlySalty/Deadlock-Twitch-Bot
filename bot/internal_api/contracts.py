@@ -33,6 +33,9 @@ LiveActiveAnnouncementsCallback = Callable[[], Awaitable[list[dict[str, Any]]]]
 LiveLinkClickCallback = Callable[..., Awaitable[dict[str, Any] | None]]
 ObservabilitySnapshotCallback = Callable[[], Awaitable[dict[str, Any]]]
 ChattersDebugCallback = Callable[[str], Awaitable[dict[str, Any]]]
+EventsubDispatchCallback = Callable[..., Awaitable[dict[str, Any]]]
+EventsubProcessingDebugCallback = Callable[..., Awaitable[dict[str, Any]]]
+EventsubProcessingRequeueCallback = Callable[[str], Awaitable[dict[str, Any]]]
 
 
 @dataclass(slots=True, frozen=True)
@@ -60,6 +63,9 @@ class InternalApiCallbacks:
     live_link_click: LiveLinkClickCallback | None = None
     observability_snapshot: ObservabilitySnapshotCallback | None = None
     chatters_debug: ChattersDebugCallback | None = None
+    eventsub_dispatch: EventsubDispatchCallback | None = None
+    eventsub_processing_debug: EventsubProcessingDebugCallback | None = None
+    eventsub_processing_requeue: EventsubProcessingRequeueCallback | None = None
 
     @classmethod
     def coalesce(
@@ -87,6 +93,9 @@ class InternalApiCallbacks:
         live_link_click_cb: LiveLinkClickCallback | None = None,
         observability_snapshot_cb: ObservabilitySnapshotCallback | None = None,
         chatters_debug_cb: ChattersDebugCallback | None = None,
+        eventsub_dispatch_cb: EventsubDispatchCallback | None = None,
+        eventsub_processing_debug_cb: EventsubProcessingDebugCallback | None = None,
+        eventsub_processing_requeue_cb: EventsubProcessingRequeueCallback | None = None,
     ) -> "InternalApiCallbacks":
         base = callbacks or cls()
         return cls(
@@ -137,6 +146,21 @@ class InternalApiCallbacks:
                 else base.observability_snapshot
             ),
             chatters_debug=chatters_debug_cb if chatters_debug_cb is not None else base.chatters_debug,
+            eventsub_dispatch=(
+                eventsub_dispatch_cb
+                if eventsub_dispatch_cb is not None
+                else base.eventsub_dispatch
+            ),
+            eventsub_processing_debug=(
+                eventsub_processing_debug_cb
+                if eventsub_processing_debug_cb is not None
+                else base.eventsub_processing_debug
+            ),
+            eventsub_processing_requeue=(
+                eventsub_processing_requeue_cb
+                if eventsub_processing_requeue_cb is not None
+                else base.eventsub_processing_requeue
+            ),
         )
 
 
@@ -154,6 +178,9 @@ __all__ = [
     "ComparisonCallback",
     "DiscordFlagCallback",
     "DiscordProfileCallback",
+    "EventsubDispatchCallback",
+    "EventsubProcessingDebugCallback",
+    "EventsubProcessingRequeueCallback",
     "IDEMPOTENCY_KEY_HEADER",
     "INTERNAL_API_BASE_PATH",
     "INTERNAL_TOKEN_HEADER",

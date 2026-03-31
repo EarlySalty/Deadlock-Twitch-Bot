@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import html
 from collections.abc import Callable
 from typing import Any
@@ -230,10 +229,7 @@ async def build_raid_oauth_callback_payload(
                     followup.close()
                     raise RuntimeError("failed to schedule twitch.raid.complete_setup")
             else:
-                asyncio.create_task(
-                    followup,
-                    name="twitch.raid.complete_setup",
-                )
+                await followup
         elif callable(sync_partner_state_cb) and state_discord_user_id:
             followup = sync_partner_state_cb(
                 twitch_user_id,
@@ -251,10 +247,7 @@ async def build_raid_oauth_callback_payload(
                         "failed to schedule twitch.raid.sync_partner_state_after_auth"
                     )
             else:
-                asyncio.create_task(
-                    followup,
-                    name="twitch.raid.sync_partner_state_after_auth",
-                )
+                await followup
 
         log.info("Raid auth successful for %s", twitch_login)
         return {

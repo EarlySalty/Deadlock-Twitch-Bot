@@ -223,14 +223,115 @@ async def live_link_click(server: Any, request: web.Request) -> web.Response:
         )
 
 
+async def eventsub_dispatch(server: Any, request: web.Request) -> web.Response:
+    try:
+        body = await server._json_body(request)
+        sub_type = str(body.get("sub_type") or "").strip()
+        if not sub_type:
+            raise ValueError("invalid or missing sub_type")
+        raw_message_id = body.get("message_id")
+        message_id = str(raw_message_id).strip() if raw_message_id is not None else None
+        payload = body.get("payload")
+        if not isinstance(payload, dict):
+            raise ValueError("invalid payload")
+        result = await server._eventsub_dispatch(
+            sub_type=sub_type,
+            message_id=message_id,
+            payload=payload,
+        )
+        if not isinstance(result, dict):
+            result = {"ok": True}
+        if result.get("ok") is False:
+            return server._json_error(
+                "upstream_unavailable",
+                503,
+                str(result.get("message") or "eventsub dispatch unavailable"),
+            )
+        return server._json_response(result)
+    except ValueError as exc:
+        return server._safe_bad_request(
+            context="eventsub dispatch",
+            exc=exc,
+            message="invalid request body",
+        )
+    except RuntimeError as exc:
+        return server._safe_exception_error(
+            context="eventsub dispatch runtime",
+            exc=exc,
+            error="upstream_unavailable",
+            status=503,
+            message="upstream unavailable",
+        )
+    except Exception:
+        log.exception("internal api eventsub dispatch failed")
+        return server._json_error(
+            "internal_error",
+            500,
+            "failed to dispatch eventsub notification",
+        )
+
+
+async def eventsub_processing_debug(server: Any, request: web.Request) -> web.Response:
+    try:
+        raw_limit = request.query.get("limit")
+        limit = int(str(raw_limit or "20").strip() or "20")
+        if limit < 1 or limit > 200:
+            raise ValueError("invalid limit")
+        payload = await server._eventsub_processing_debug(limit=limit)
+        if not isinstance(payload, dict):
+            payload = {"value": payload}
+        return server._json_response({"ok": True, "eventsubProcessing": payload})
+    except ValueError as exc:
+        return server._safe_bad_request(
+            context="eventsub processing debug",
+            exc=exc,
+            message="invalid request",
+        )
+    except Exception:
+        log.exception("internal api eventsub processing debug failed")
+        return server._json_error(
+            "internal_error",
+            500,
+            "failed to build eventsub processing payload",
+        )
+
+
+async def eventsub_processing_requeue(server: Any, request: web.Request) -> web.Response:
+    try:
+        body = await server._json_body(request)
+        work_id = str(body.get("work_id") or "").strip()
+        if not work_id:
+            raise ValueError("invalid or missing work_id")
+        payload = await server._eventsub_processing_requeue(work_id)
+        if not isinstance(payload, dict):
+            payload = {"ok": True, "workId": work_id, "requeued": True}
+        return server._json_response(payload)
+    except ValueError as exc:
+        return server._safe_bad_request(
+            context="eventsub processing requeue",
+            exc=exc,
+            message="invalid request body",
+        )
+    except Exception:
+        log.exception("internal api eventsub processing requeue failed")
+        return server._json_error(
+            "internal_error",
+            500,
+            "failed to requeue eventsub processing entry",
+        )
+
+
 def build_telemetry_route_defs(server: Any) -> list[web.RouteDef]:
     base = str(getattr(server, "_base_path", INTERNAL_API_BASE_PATH) or INTERNAL_API_BASE_PATH).rstrip("/")
     return [
         web.get(f"{base}/healthz", partial(healthz, server)),
         web.get(f"{base}/debug/observability", partial(observability_debug, server)),
+        web.get(f"{base}/debug/eventsub-processing", partial(eventsub_processing_debug, server)),
         web.get(f"{base}/debug/chatters/{{login}}", partial(chatters_debug, server)),
         web.get(f"{base}/live/active-announcements", partial(live_active_announcements, server)),
         web.post(f"{base}/live/link-click", partial(live_link_click, server)),
+        web.post(f"{base}/eventsub/dispatch", partial(eventsub_dispatch, server)),
+        web.post(f"{base}/eventsub/processing/requeue", partial(eventsub_processing_requeue, server)),
     ]
 
 
@@ -242,6 +343,9 @@ __all__ = [
     "attach_telemetry_routes",
     "build_telemetry_route_defs",
     "chatters_debug",
+    "eventsub_dispatch",
+    "eventsub_processing_debug",
+    "eventsub_processing_requeue",
     "healthz",
     "live_active_announcements",
     "live_link_click",

@@ -914,6 +914,70 @@ class InternalApiAuthTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(payload.get("error"), "bad_request")
         self.assertEqual(payload.get("message"), "invalid request body")
 
+    async def test_eventsub_dispatch_accepts_direct_callback_argument(self) -> None:
+        seen: list[dict[str, object]] = []
+
+        async def _eventsub_dispatch_cb(
+            *,
+            sub_type: str,
+            message_id: str | None,
+            payload: dict[str, object],
+        ) -> dict[str, object]:
+            seen.append(
+                {
+                    "sub_type": sub_type,
+                    "message_id": message_id,
+                    "payload": payload,
+                }
+            )
+            return {"ok": True, "sub_type": sub_type}
+
+        app = build_internal_api_app(
+            token="secret-token",
+            eventsub_dispatch_cb=_eventsub_dispatch_cb,
+        )
+        async with TestServer(app) as server:
+            async with TestClient(server) as client:
+                response = await client.post(
+                    f"{INTERNAL_API_BASE_PATH}/eventsub/dispatch",
+                    headers={INTERNAL_TOKEN_HEADER: "secret-token"},
+                    json={
+                        "sub_type": "stream.offline",
+                        "message_id": "msg-bridge-1",
+                        "payload": {
+                            "subscription": {"type": "stream.offline"},
+                            "event": {"broadcaster_user_id": "42"},
+                        },
+                    },
+                )
+                payload = await response.json()
+
+        self.assertEqual(response.status, 200)
+        self.assertTrue(payload.get("ok"))
+        self.assertEqual(len(seen), 1)
+        self.assertEqual(seen[0]["message_id"], "msg-bridge-1")
+
+    async def test_eventsub_dispatch_returns_503_when_callback_is_unavailable(self) -> None:
+        app = build_internal_api_app(token="secret-token")
+        async with TestServer(app) as server:
+            async with TestClient(server) as client:
+                response = await client.post(
+                    f"{INTERNAL_API_BASE_PATH}/eventsub/dispatch",
+                    headers={INTERNAL_TOKEN_HEADER: "secret-token"},
+                    json={
+                        "sub_type": "stream.offline",
+                        "message_id": "msg-bridge-2",
+                        "payload": {
+                            "subscription": {"type": "stream.offline"},
+                            "event": {"broadcaster_user_id": "42"},
+                        },
+                    },
+                )
+                payload = await response.json()
+
+        self.assertEqual(response.status, 503)
+        self.assertEqual(payload.get("error"), "upstream_unavailable")
+
     def test_loopback_host_parser_accepts_ipv6_literals(self) -> None:
         self.assertEqual(InternalApiServer._host_without_port("::1"), "::1")
         self.assertEqual(InternalApiServer._host_without_port("0:0:0:0:0:0:0:1"), "0:0:0:0:0:0:0:1")

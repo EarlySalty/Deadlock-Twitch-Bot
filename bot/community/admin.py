@@ -246,6 +246,10 @@ class TwitchAdminMixin:
             log.exception("DB-Fehler beim Hinzufügen von %s", normalized)
             return "Datenbankfehler beim Hinzufügen."
 
+        ensure_eventsub = getattr(self, "_ensure_eventsub_supervisor_running", None)
+        if callable(ensure_eventsub):
+            ensure_eventsub("partner_added")
+
         suffix = f" ({copied} historische Datenpunkte übernommen)" if copied else ""
         return f"{user['display_name']} hinzugefügt{suffix}"
 
@@ -267,6 +271,10 @@ class TwitchAdminMixin:
         except Exception:
             log.exception("DB-Fehler beim Entfernen von %s", normalized)
             return "Datenbankfehler beim Entfernen."
+
+        ensure_eventsub = getattr(self, "_ensure_eventsub_supervisor_running", None)
+        if callable(ensure_eventsub):
+            ensure_eventsub("partner_removed")
 
         if archived:
             role_note = ""

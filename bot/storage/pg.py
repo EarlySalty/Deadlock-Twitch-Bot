@@ -2699,6 +2699,98 @@ def ensure_schema(conn) -> None:
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_twitch_eventsub_capacity_reason ON twitch_eventsub_capacity_snapshot(trigger_reason, ts_utc)"
     )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS eventsub_guard_state (
+            kind       TEXT NOT NULL,
+            guard_key  TEXT NOT NULL,
+            expires_at DOUBLE PRECISION NOT NULL,
+            updated_at DOUBLE PRECISION NOT NULL,
+            PRIMARY KEY (kind, guard_key)
+        )
+        """
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_eventsub_guard_state_expiry ON eventsub_guard_state(expires_at)"
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS twitch_eventsub_bridge_outbox (
+            message_id      TEXT PRIMARY KEY,
+            sub_type        TEXT NOT NULL,
+            payload_json    TEXT NOT NULL,
+            queued_at       DOUBLE PRECISION NOT NULL,
+            next_attempt_at DOUBLE PRECISION NOT NULL,
+            attempt_count   INTEGER NOT NULL DEFAULT 0,
+            last_error      TEXT
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_twitch_eventsub_bridge_outbox_due
+        ON twitch_eventsub_bridge_outbox(next_attempt_at, queued_at)
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS twitch_eventsub_bridge_dead_letter (
+            message_id        TEXT PRIMARY KEY,
+            sub_type          TEXT NOT NULL,
+            payload_json      TEXT NOT NULL,
+            queued_at         DOUBLE PRECISION NOT NULL,
+            dead_lettered_at  DOUBLE PRECISION NOT NULL,
+            attempt_count     INTEGER NOT NULL,
+            last_error        TEXT
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_twitch_eventsub_bridge_dead_lettered_at
+        ON twitch_eventsub_bridge_dead_letter(dead_lettered_at)
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS twitch_eventsub_processing_inbox (
+            work_id          TEXT PRIMARY KEY,
+            work_type        TEXT NOT NULL,
+            message_id       TEXT,
+            payload_json     TEXT NOT NULL,
+            queued_at        DOUBLE PRECISION NOT NULL,
+            next_attempt_at  DOUBLE PRECISION NOT NULL,
+            attempt_count    INTEGER NOT NULL DEFAULT 0,
+            last_error       TEXT
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_twitch_eventsub_processing_inbox_due
+        ON twitch_eventsub_processing_inbox(next_attempt_at, queued_at)
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS twitch_eventsub_processing_dead_letter (
+            work_id           TEXT PRIMARY KEY,
+            work_type         TEXT NOT NULL,
+            message_id        TEXT,
+            payload_json      TEXT NOT NULL,
+            queued_at         DOUBLE PRECISION NOT NULL,
+            dead_lettered_at  DOUBLE PRECISION NOT NULL,
+            attempt_count     INTEGER NOT NULL,
+            last_error        TEXT
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_twitch_eventsub_processing_dead_lettered_at
+        ON twitch_eventsub_processing_dead_letter(dead_lettered_at)
+        """
+    )
 
     conn.execute(
         """
@@ -3449,4 +3541,3 @@ def ensure_schema(conn) -> None:
     )
 
     migrate_legacy_partner_registry(conn)
-

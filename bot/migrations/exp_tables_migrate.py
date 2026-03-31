@@ -56,6 +56,8 @@ CREATE TABLE IF NOT EXISTS exp_snapshots (
   minutes_from_start REAL
 );
 CREATE INDEX IF NOT EXISTS idx_exp_snapshots_session ON exp_snapshots(exp_session_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_exp_snapshots_session_ts
+  ON exp_snapshots(exp_session_id, ts_utc);
 
 CREATE TABLE IF NOT EXISTS exp_game_transitions (
   id              BIGSERIAL PRIMARY KEY,

@@ -52,6 +52,37 @@ class _AnalyticsHarness(TwitchAnalyticsMixin, TwitchMonitoringMixin):
         return True
 
 
+class _AnalyticsScheduledHarness(TwitchAnalyticsMixin, TwitchMonitoringMixin):
+    def __init__(self) -> None:
+        self.scheduled_refreshes: list[dict[str, object]] = []
+
+    def _spawn_bg_task(self, coro, name: str):
+        asyncio.create_task(coro, name=name)
+        return object()
+
+    def _schedule_partner_raid_score_refresh(self, **kwargs):
+        self.scheduled_refreshes.append(dict(kwargs))
+        return True
+
+
+class _AnalyticsDeferredFollowupHarness(TwitchAnalyticsMixin, TwitchMonitoringMixin):
+    def __init__(self) -> None:
+        self.live_events: list[tuple[str, str]] = []
+        self.refresh_events: list[dict[str, object]] = []
+        self.enqueued_followups: list[dict[str, object]] = []
+        self._eventsub_defer_stream_online_followups = True
+
+    async def _handle_stream_went_live(self, broadcaster_user_id: str, broadcaster_login: str) -> None:
+        self.live_events.append((broadcaster_user_id, broadcaster_login))
+
+    async def _request_partner_raid_score_refresh(self, **kwargs):
+        self.refresh_events.append(dict(kwargs))
+        return True
+
+    async def _enqueue_eventsub_stream_online_followups_processing(self, **kwargs):
+        self.enqueued_followups.append(dict(kwargs))
+
+
 class _MonitoringHarness(TwitchMonitoringMixin):
     def __init__(self) -> None:
         self.calls: list[dict[str, object]] = []
@@ -174,6 +205,7 @@ class _EventSubHarness(_EventSubMixin):
     def __init__(self) -> None:
         self.offline_calls: list[dict[str, object]] = []
         self.refresh_events: list[dict[str, object]] = []
+        self.finalize_calls: list[dict[str, object]] = []
 
     def _load_live_state_row(self, login_lower: str) -> dict:
         return {
@@ -194,6 +226,10 @@ class _EventSubHarness(_EventSubMixin):
 
     async def _request_partner_raid_score_refresh(self, **kwargs):
         self.refresh_events.append(dict(kwargs))
+        return True
+
+    async def _finalize_stream_session(self, **kwargs):
+        self.finalize_calls.append(dict(kwargs))
         return True
 
 
@@ -258,6 +294,59 @@ class PartnerRaidScoreRefreshTriggerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(conn.executed), 2)
         self.assertIn("INSERT INTO twitch_channel_updates", conn.executed[0][0])
         self.assertIn("UPDATE twitch_live_state", conn.executed[1][0])
+
+    async def test_channel_update_prefers_scheduled_refresh_when_bg_spawn_available(self) -> None:
+        harness = _AnalyticsScheduledHarness()
+        conn = _RecordingConnection()
+
+        with patch(
+            "bot.analytics.mixin.storage.transaction",
+            side_effect=lambda: contextlib.nullcontext(conn),
+        ):
+            await harness._handle_channel_update(
+                "3333",
+                {
+                    "title": "Fresh title",
+                    "category_name": "Deadlock",
+                },
+            )
+
+        self.assertEqual(
+            harness.scheduled_refreshes,
+            [
+                {
+                    "twitch_user_id": "3333",
+                    "trigger": "eventsub_channel_update",
+                }
+            ],
+        )
+
+    async def test_stream_online_defers_followups_into_eventsub_inbox(self) -> None:
+        harness = _AnalyticsDeferredFollowupHarness()
+        conn = _RecordingConnection()
+
+        with patch(
+            "bot.analytics.mixin.storage.transaction",
+            side_effect=lambda: contextlib.nullcontext(conn),
+        ):
+            await harness._handle_stream_online(
+                "4444",
+                "partner_four",
+                {"id": "stream-4", "started_at": "2026-03-08T12:00:00+00:00"},
+            )
+
+        self.assertEqual(harness.live_events, [])
+        self.assertEqual(harness.refresh_events, [])
+        self.assertEqual(
+            harness.enqueued_followups,
+            [
+                {
+                    "broadcaster_user_id": "4444",
+                    "broadcaster_login": "partner_four",
+                    "login_value": "partner_four",
+                }
+            ],
+        )
 
     async def test_request_partner_raid_score_refresh_uses_available_service(self) -> None:
         harness = _MonitoringHarness()
@@ -429,6 +518,10 @@ class PartnerRaidScoreRefreshTriggerTests(unittest.IsolatedAsyncioTestCase):
             await harness._on_eventsub_stream_offline("1234", "partner_one")
 
         self.assertEqual(len(harness.offline_calls), 1)
+        self.assertEqual(
+            harness.finalize_calls,
+            [{"login": "partner_one", "reason": "offline"}],
+        )
         self.assertEqual(
             harness.refresh_events,
             [

@@ -1425,7 +1425,7 @@ class TwitchMonitoringMixin(_EventSubMixin, _ExpSessionsMixin, _SessionsMixin, _
 
         if self._tick_count % 10 == 0:
             try:
-                closed = self._cleanup_orphaned_sessions()
+                closed = await self._cleanup_orphaned_sessions()
                 if closed:
                     log.info("Orphaned sessions bereinigt: %d geschlossen", closed)
             except Exception:

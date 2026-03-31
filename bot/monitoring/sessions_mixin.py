@@ -206,12 +206,13 @@ class _SessionsMixin:
             tags=tags_str,
         )
         # --- Experimental hook: session start ---
-        try:
-            exp_on_start = getattr(self, "_exp_on_session_start", None)
-            if callable(exp_on_start):
-                exp_on_start(login=login_lower, stream=stream, started_at_iso=started_at_iso)
-        except Exception:
-            log.debug("exp: _exp_on_session_start fehlgeschlagen für %s", login_lower, exc_info=True)
+        if session_id is not None:
+            try:
+                exp_on_start = getattr(self, "_exp_on_session_start", None)
+                if callable(exp_on_start):
+                    exp_on_start(login=login_lower, stream=stream, started_at_iso=started_at_iso)
+            except Exception:
+                log.debug("exp: _exp_on_session_start fehlgeschlagen für %s", login_lower, exc_info=True)
         return session_id
 
     def _start_stream_session(
@@ -367,25 +368,38 @@ class _SessionsMixin:
             except Exception:
                 log.debug("exp: _exp_on_session_sample fehlgeschlagen für %s", login, exc_info=True)
 
-    async def _finalize_stream_session(self, *, login: str, reason: str = "done") -> None:
+    async def _finalize_stream_session(
+        self,
+        *,
+        login: str,
+        reason: str = "done",
+        session_id: int | None = None,
+        ended_at: datetime | None = None,
+    ) -> bool:
         login_lower = login.lower()
         cache = self._get_active_sessions_cache()
-        session_id = cache.pop(login_lower, None) or self._lookup_open_session_id(login_lower)
-        if session_id is None:
-            return
+        resolved_session_id = session_id or cache.get(login_lower) or self._lookup_open_session_id(login_lower)
+        if resolved_session_id is None:
+            return False
 
-        now_dt = datetime.now(UTC)
+        now_dt = ended_at or datetime.now(UTC)
+        if now_dt.tzinfo is None:
+            now_dt = now_dt.replace(tzinfo=UTC)
+        else:
+            now_dt = now_dt.astimezone(UTC)
         try:
             with storage.readonly_connection() as c:
                 session_row = c.execute(
                     "SELECT * FROM twitch_stream_sessions WHERE id = %s",
-                    (session_id,),
+                    (resolved_session_id,),
                 ).fetchone()
         except Exception:
             log.debug("Konnte Session nicht laden fuer Abschluss: %s", login, exc_info=True)
-            return
+            return False
         if not session_row:
-            return
+            if cache.get(login_lower) == resolved_session_id:
+                cache.pop(login_lower, None)
+            return False
 
         def _row_val(row, key, idx, default=None):
             if hasattr(row, "keys"):
@@ -406,7 +420,7 @@ class _SessionsMixin:
             with storage.readonly_connection() as c:
                 viewer_rows = c.execute(
                     "SELECT minutes_from_start, viewer_count FROM twitch_session_viewers WHERE session_id = %s ORDER BY ts_utc",
-                    (session_id,),
+                    (resolved_session_id,),
                 ).fetchall()
         except Exception:
             viewer_rows = []
@@ -447,7 +461,7 @@ class _SessionsMixin:
             if raw_retention > 1.0:
                 log.warning(
                     "Retention capped above 100%% for session %s at %sm: current=%s baseline=%s raw=%.3f",
-                    session_id,
+                    resolved_session_id,
                     minutes,
                     best[1],
                     peak_before,
@@ -501,10 +515,10 @@ class _SessionsMixin:
                     """
                     SELECT COUNT(*) AS uniq,
                            SUM(is_first_time_streamer) AS firsts
-                      FROM twitch_session_chatters
+                     FROM twitch_session_chatters
                      WHERE session_id = %s
                     """,
-                    (session_id,),
+                    (resolved_session_id,),
                 ).fetchone()
         except Exception:
             chatter_row = None
@@ -601,7 +615,7 @@ class _SessionsMixin:
                         reason,
                         bool(had_deadlock_session),
                         last_game_value,
-                        session_id,
+                        resolved_session_id,
                     ),
                 )
                 c.execute(
@@ -614,23 +628,25 @@ class _SessionsMixin:
                 login_lower,
                 exc_info=True,
             )
-        finally:
+            return False
+
+        if cache.get(login_lower) == resolved_session_id:
             cache.pop(login_lower, None)
-            self._clear_session_followers_user_fallback_warning(login_lower)
+        self._clear_session_followers_user_fallback_warning(login_lower)
 
         if callable(resolve_partner_raid_tracking_for_session):
             try:
                 resolve_partner_raid_tracking_for_session(
                     twitch_user_id=twitch_user_id,
                     streamer_login=login_lower,
-                    session_id=session_id,
+                    session_id=resolved_session_id,
                     session_ended_at=now_dt,
                 )
             except Exception:
                 log.debug(
                     "Partner raid score tracking resolve failed for %s session=%s",
                     login_lower,
-                    session_id,
+                    resolved_session_id,
                     exc_info=True,
                 )
 
@@ -655,7 +671,7 @@ class _SessionsMixin:
             if callable(irc_finalize):
                 irc_finalize(
                     login=login_lower,
-                    session_id=session_id,
+                    session_id=resolved_session_id,
                     reason=reason,
                     ended_at=now_dt,
                 )
@@ -663,9 +679,10 @@ class _SessionsMixin:
             log.debug(
                 "IRC experiment: session finalize failed for %s session=%s",
                 login_lower,
-                session_id,
+                resolved_session_id,
                 exc_info=True,
             )
+        return True
 
     def _adopt_incomplete_session(self, session_id: int, stream: dict) -> None:
         """Update a session that was created with incomplete data (e.g. by scout).
@@ -704,7 +721,7 @@ class _SessionsMixin:
         except Exception:
             log.debug("Konnte unvollstaendige Session nicht adoptieren: %s", session_id, exc_info=True)
 
-    def _cleanup_orphaned_sessions(self) -> int:
+    async def _cleanup_orphaned_sessions(self) -> int:
         """Close stale open sessions that are no longer actively tracked.
 
         Handles two cases:
@@ -713,89 +730,113 @@ class _SessionsMixin:
            went offline but session was never finalized — typically category
            streamers not in the partner view)
         """
-        total_closed = 0
-        closed_sessions: list[tuple[int, str]] = []
+        zero_sample_rows: list[object] = []
+        stale_rows: list[object] = []
+
+        def _normalize_finalized_at(value: object) -> datetime | None:
+            if isinstance(value, datetime):
+                if value.tzinfo is None:
+                    return value.replace(tzinfo=UTC)
+                return value.astimezone(UTC)
+            raw = str(value or "").strip()
+            if not raw:
+                return None
+            try:
+                parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+            except Exception:
+                return None
+            if parsed.tzinfo is None:
+                return parsed.replace(tzinfo=UTC)
+            return parsed.astimezone(UTC)
+
         try:
             with storage.readonly_connection() as c:
-                # Case 1: zero-sample orphans older than 24h
-                cur = c.execute(
+                zero_sample_rows = c.execute(
                     """
-                    UPDATE twitch_stream_sessions
-                    SET ended_at = COALESCE(started_at, NOW()),
-                        duration_seconds = 0,
-                        notes = 'auto-closed: orphaned session (no samples, open > 24h)'
+                    SELECT id,
+                           streamer_login,
+                           COALESCE(started_at, NOW()) AS finalized_at
+                    FROM twitch_stream_sessions
                     WHERE ended_at IS NULL
                       AND samples = 0
                       AND started_at < NOW() - INTERVAL '24 hours'
-                    RETURNING id, streamer_login
                     """
-                )
-                closed_sessions.extend(
-                    [
-                        (
-                            int(row["id"] if hasattr(row, "keys") else row[0]),
-                            str(
-                                row["streamer_login"] if hasattr(row, "keys") else row[1] or ""
-                            ).strip().lower(),
-                        )
-                        for row in cur.fetchall()
-                    ]
-                )
+                ).fetchall()
 
-                # Case 2: sessions with data but stale (last viewer entry > 1h ago)
-                cur = c.execute(
+                stale_rows = c.execute(
                     """
-                    UPDATE twitch_stream_sessions s
-                    SET ended_at = sub.last_ts,
-                        duration_seconds = EXTRACT(EPOCH FROM (sub.last_ts - s.started_at))::int,
-                        notes = 'auto-closed: stale session (last viewer data > 1h ago)'
-                    FROM (
-                        SELECT sv.session_id, MAX(sv.ts_utc) AS last_ts
-                        FROM twitch_session_viewers sv
-                        JOIN twitch_stream_sessions ss ON ss.id = sv.session_id
-                        WHERE ss.ended_at IS NULL
-                          AND ss.samples > 0
-                        GROUP BY sv.session_id
-                        HAVING MAX(sv.ts_utc) < NOW() - INTERVAL '1 hour'
-                    ) sub
-                    WHERE s.id = sub.session_id
-                      AND s.ended_at IS NULL
-                    RETURNING s.id, s.streamer_login
+                    SELECT ss.id,
+                           ss.streamer_login,
+                           MAX(sv.ts_utc) AS finalized_at
+                    FROM twitch_session_viewers sv
+                    JOIN twitch_stream_sessions ss ON ss.id = sv.session_id
+                    WHERE ss.ended_at IS NULL
+                      AND ss.samples > 0
+                    GROUP BY ss.id, ss.streamer_login
+                    HAVING MAX(sv.ts_utc) < NOW() - INTERVAL '1 hour'
                     """
-                )
-                closed_sessions.extend(
-                    [
-                        (
-                            int(row["id"] if hasattr(row, "keys") else row[0]),
-                            str(
-                                row["streamer_login"] if hasattr(row, "keys") else row[1] or ""
-                            ).strip().lower(),
-                        )
-                        for row in cur.fetchall()
-                    ]
-                )
-
-                closed_session_ids = [session_id for session_id, _ in closed_sessions]
-                if closed_session_ids:
-                    c.execute(
-                        """
-                        UPDATE twitch_live_state
-                           SET active_session_id = NULL,
-                               is_live = 0
-                         WHERE active_session_id = ANY(%s)
-                        """,
-                        (closed_session_ids,),
-                    )
+                ).fetchall()
         except Exception:
             log.debug("Orphaned session cleanup fehlgeschlagen", exc_info=True)
-            return total_closed
+            return 0
 
-        total_closed = len(closed_sessions)
-        if closed_sessions:
-            cache = self._get_active_sessions_cache()
-            for session_id, login in closed_sessions:
-                if login and cache.get(login) == session_id:
-                    cache.pop(login, None)
+        candidates: list[tuple[int, str, datetime, str]] = []
+        for row in zero_sample_rows:
+            session_id = int(row["id"] if hasattr(row, "keys") else row[0])
+            login = str(row["streamer_login"] if hasattr(row, "keys") else row[1] or "").strip().lower()
+            finalized_at = _normalize_finalized_at(
+                row["finalized_at"] if hasattr(row, "keys") else row[2]
+            )
+            if login and finalized_at is not None:
+                candidates.append(
+                    (
+                        session_id,
+                        login,
+                        finalized_at,
+                        "auto-closed: orphaned session (no samples, open > 24h)",
+                    )
+                )
+
+        for row in stale_rows:
+            session_id = int(row["id"] if hasattr(row, "keys") else row[0])
+            login = str(row["streamer_login"] if hasattr(row, "keys") else row[1] or "").strip().lower()
+            finalized_at = _normalize_finalized_at(
+                row["finalized_at"] if hasattr(row, "keys") else row[2]
+            )
+            if login and finalized_at is not None:
+                candidates.append(
+                    (
+                        session_id,
+                        login,
+                        finalized_at,
+                        "auto-closed: stale session (last viewer data > 1h ago)",
+                    )
+                )
+
+        total_closed = 0
+        seen_session_ids: set[int] = set()
+        for orphan_session_id, login, finalized_at, cleanup_reason in candidates:
+            if orphan_session_id in seen_session_ids:
+                continue
+            seen_session_ids.add(orphan_session_id)
+            try:
+                closed = await self._finalize_stream_session(
+                    login=login,
+                    reason=cleanup_reason,
+                    session_id=orphan_session_id,
+                    ended_at=finalized_at,
+                )
+            except Exception:
+                log.debug(
+                    "Orphaned session finalize failed for %s session=%s",
+                    login,
+                    orphan_session_id,
+                    exc_info=True,
+                )
+                continue
+            if closed:
+                total_closed += 1
+
         return total_closed
 
     async def _fetch_followers_total_safe(
@@ -869,11 +910,13 @@ class _SessionsMixin:
             if bot_result.get("ok") and bot_result.get("data") is not None:
                 bot_request_success = True
                 self._clear_session_followers_user_fallback_warning(login)
-                self._restore_bot_ban_opt_out_if_healthy(
-                    twitch_user_id=str(user_id),
-                    login=login,
-                    flow="followers_session",
-                )
+                restore_bot_ban_opt_out = getattr(self, "_restore_bot_ban_opt_out_if_healthy", None)
+                if callable(restore_bot_ban_opt_out):
+                    restore_bot_ban_opt_out(
+                        twitch_user_id=str(user_id),
+                        login=login,
+                        flow="followers_session",
+                    )
                 self._increment_analytics_observability_counter("followers_session_bot_path_success_total")
                 self._log_analytics_decision(
                     flow_id=flow_id,
@@ -927,11 +970,13 @@ class _SessionsMixin:
                 if bot_result.get("ok") and bot_result.get("data") is not None:
                     bot_request_success = True
                     self._clear_session_followers_user_fallback_warning(login)
-                    self._restore_bot_ban_opt_out_if_healthy(
-                        twitch_user_id=str(user_id),
-                        login=login,
-                        flow="followers_session",
-                    )
+                    restore_bot_ban_opt_out = getattr(self, "_restore_bot_ban_opt_out_if_healthy", None)
+                    if callable(restore_bot_ban_opt_out):
+                        restore_bot_ban_opt_out(
+                            twitch_user_id=str(user_id),
+                            login=login,
+                            flow="followers_session",
+                        )
                     self._increment_analytics_observability_counter(
                         "followers_session_bot_path_success_total"
                     )

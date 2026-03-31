@@ -193,6 +193,31 @@ def _compute_health_score(login: str, conn: Any) -> dict[str, Any] | None:
     """Compute channel health score 0-100 with sub-scores."""
     try:
         now = datetime.now(UTC)
+        try:
+            anchor_row = conn.execute(
+                """
+                SELECT MAX(observed_ts)
+                FROM (
+                    SELECT MAX(ts_utc) AS observed_ts
+                    FROM twitch_stats_tracked
+                    WHERE LOWER(streamer) = LOWER(%s)
+                    UNION ALL
+                    SELECT MAX(started_at) AS observed_ts
+                    FROM twitch_stream_sessions
+                    WHERE LOWER(streamer_login) = LOWER(%s)
+                ) observed
+                """,
+                (login, login),
+            ).fetchone()
+            raw_anchor = anchor_row[0] if anchor_row else None
+            if raw_anchor:
+                parsed_anchor = datetime.fromisoformat(str(raw_anchor).replace("Z", "+00:00"))
+                if parsed_anchor.tzinfo is None:
+                    parsed_anchor = parsed_anchor.replace(tzinfo=UTC)
+                if parsed_anchor < now:
+                    now = parsed_anchor
+        except Exception:
+            pass
         week_ago = now - timedelta(days=7)
         two_weeks_ago = now - timedelta(days=14)
 

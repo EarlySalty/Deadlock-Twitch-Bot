@@ -1,7 +1,8 @@
+import asyncio
 import os
 import unittest
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 from aiohttp import web
 
@@ -9,6 +10,7 @@ from bot.dashboard.raid_mixin import (
     DEFAULT_RAID_OAUTH_SUCCESS_REDIRECT_URL,
     _DashboardRaidMixin,
 )
+from bot.dashboard.raids.oauth_callback import build_raid_oauth_callback_payload
 from bot.raid.scope_profiles import BASE_SCOPE_PROFILE, BASE_STREAMER_SCOPES
 
 
@@ -165,6 +167,35 @@ class RaidOAuthSuccessRedirectTests(unittest.IsolatedAsyncioTestCase):
             await handler.raid_oauth_callback(request)
 
         self.assertEqual(ctx.exception.location, DEFAULT_RAID_OAUTH_SUCCESS_REDIRECT_URL)
+
+    async def test_oauth_callback_awaits_followup_inline_without_scheduler(self) -> None:
+        auth_manager = _FakeAuthManager()
+        complete_setup_cb = AsyncMock()
+
+        with patch(
+            "asyncio.create_task",
+            side_effect=AssertionError("raw create_task should not be used"),
+        ):
+            payload = await build_raid_oauth_callback_payload(
+                code="oauth-code",
+                state="valid-state",
+                error="",
+                auth_manager=auth_manager,
+                session=_FakeSession(payload={"data": [{"id": "1001", "login": "partner_one"}]}),
+                success_redirect_url=DEFAULT_RAID_OAUTH_SUCCESS_REDIRECT_URL,
+                failure_title="Autorisierung fehlgeschlagen",
+                failure_body_html="<p>fehlgeschlagen</p>",
+                complete_setup_cb=complete_setup_cb,
+                schedule_background=None,
+            )
+
+        self.assertEqual(payload.get("status"), 200)
+        complete_setup_cb.assert_awaited_once_with(
+            "1001",
+            "partner_one",
+            state_discord_user_id="123456789",
+            activate_partner_features=True,
+        )
 
 
 if __name__ == "__main__":

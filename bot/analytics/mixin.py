@@ -1657,6 +1657,54 @@ class TwitchAnalyticsMixin:
         await self.bot.wait_until_ready()
 
     # ------------------------------------------------------------------
+    async def _run_stream_online_followups(
+        self,
+        *,
+        broadcaster_user_id: str,
+        broadcaster_login: str,
+        login_value: str,
+        defer_refresh: bool,
+    ) -> None:
+        handler = getattr(self, "_handle_stream_went_live", None)
+        if callable(handler):
+            log.info(
+                "EventSub stream.online: %s (%s) ist live – triggere Go-Live-Handler",
+                broadcaster_login or broadcaster_user_id,
+                broadcaster_user_id,
+            )
+            await handler(broadcaster_user_id, broadcaster_login)
+
+        schedule_refresh = getattr(self, "_schedule_partner_raid_score_refresh", None)
+        if defer_refresh and callable(schedule_refresh):
+            try:
+                schedule_refresh(
+                    twitch_user_id=broadcaster_user_id,
+                    login=login_value or broadcaster_login,
+                    trigger="eventsub_stream_online",
+                )
+            except Exception:
+                log.debug(
+                    "_handle_stream_online: Partner raid score refresh scheduling failed for %s",
+                    broadcaster_user_id,
+                    exc_info=True,
+                )
+            return
+
+        refresh = getattr(self, "_request_partner_raid_score_refresh", None)
+        if callable(refresh):
+            try:
+                await refresh(
+                    twitch_user_id=broadcaster_user_id,
+                    login=login_value or broadcaster_login,
+                    trigger="eventsub_stream_online",
+                )
+            except Exception:
+                log.debug(
+                    "_handle_stream_online: Partner raid score refresh failed for %s",
+                    broadcaster_user_id,
+                    exc_info=True,
+                )
+
     async def _handle_stream_online(
         self, broadcaster_user_id: str, broadcaster_login: str, event: dict
     ) -> None:
@@ -1704,35 +1752,36 @@ class TwitchAnalyticsMixin:
                 broadcaster_user_id,
                 exc_info=True,
             )
-
-        handler = getattr(self, "_handle_stream_went_live", None)
-        if callable(handler):
-            log.info(
-                "EventSub stream.online: %s (%s) ist live – triggere Go-Live-Handler",
-                broadcaster_login or broadcaster_user_id,
-                broadcaster_user_id,
+        should_defer_followups = bool(
+            getattr(self, "_eventsub_defer_stream_online_followups", False)
+        )
+        enqueue_followups = getattr(self, "_enqueue_eventsub_stream_online_followups_processing", None)
+        if should_defer_followups and callable(enqueue_followups):
+            await enqueue_followups(
+                broadcaster_user_id=broadcaster_user_id,
+                broadcaster_login=broadcaster_login,
+                login_value=login_value,
             )
-            await handler(broadcaster_user_id, broadcaster_login)
-        refresh = getattr(self, "_request_partner_raid_score_refresh", None)
-        if callable(refresh):
-            try:
-                await refresh(
-                    twitch_user_id=broadcaster_user_id,
-                    login=login_value or broadcaster_login,
-                    trigger="eventsub_stream_online",
-                )
-            except Exception:
-                log.debug(
-                    "_handle_stream_online: Partner raid score refresh failed for %s",
-                    broadcaster_user_id,
-                    exc_info=True,
-                )
+            return
+        await self._run_stream_online_followups(
+            broadcaster_user_id=broadcaster_user_id,
+            broadcaster_login=broadcaster_login,
+            login_value=login_value,
+            defer_refresh=should_defer_followups,
+        )
 
-    async def _handle_channel_update(self, broadcaster_user_id: str, event: dict) -> None:
+    async def _handle_channel_update(
+        self,
+        broadcaster_user_id: str,
+        event: dict,
+        *,
+        allow_background_refresh: bool = True,
+    ) -> None:
         """Speichert eine channel.update Notification (Titel/Game-Änderung) in der DB."""
         title = (event.get("title") or "").strip() or None
         game_name = (event.get("category_name") or event.get("game_name") or "").strip() or None
         language = (event.get("broadcaster_language") or "").strip() or None
+        spawn_bg_task = getattr(self, "_spawn_bg_task", None)
         try:
             with storage.transaction() as c:
                 c.execute(
@@ -1758,12 +1807,19 @@ class TwitchAnalyticsMixin:
                     """,
                     (title, game_name, broadcaster_user_id),
                 )
-            refresh = getattr(self, "_request_partner_raid_score_refresh", None)
-            if callable(refresh):
-                await refresh(
+            schedule_refresh = getattr(self, "_schedule_partner_raid_score_refresh", None)
+            if allow_background_refresh and callable(schedule_refresh) and callable(spawn_bg_task):
+                schedule_refresh(
                     twitch_user_id=broadcaster_user_id,
                     trigger="eventsub_channel_update",
                 )
+            else:
+                refresh = getattr(self, "_request_partner_raid_score_refresh", None)
+                if callable(refresh):
+                    await refresh(
+                        twitch_user_id=broadcaster_user_id,
+                        trigger="eventsub_channel_update",
+                    )
         except Exception:
             log.exception("_handle_channel_update: Fehler für %s", broadcaster_user_id)
 

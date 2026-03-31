@@ -35,6 +35,12 @@ from ..runtime_security import require_noauth_loopback_guard
 from ..secret_store import load_secret_value
 from ..storage import analytics_db_fingerprint_details
 from .client import BotApiClient, BotApiClientError
+from .eventsub_bridge import DashboardEventSubBridgeRuntime
+
+DASHBOARD_EVENTSUB_BRIDGE_KEY = web.AppKey(
+    "dashboard_eventsub_bridge",
+    DashboardEventSubBridgeRuntime,
+)
 
 
 def _parse_env_bool(name: str, default: bool) -> bool:
@@ -187,10 +193,13 @@ def build_dashboard_service_app(
     if webhook_secret:
         try:
             from ..monitoring.eventsub_webhook import EventSubWebhookHandler
+            from ..monitoring.eventsub_state_store import EventSubStateStore
 
             eventsub_webhook_handler = EventSubWebhookHandler(
                 secret=webhook_secret,
                 logger=log,
+                synchronous_notifications=True,
+                state_store=EventSubStateStore(logger=log),
             )
         except Exception as exc:
             log.warning(
@@ -443,6 +452,177 @@ def build_dashboard_service_app(
                 "body_html": "<p>Der interne Bot-Service ist aktuell nicht verfügbar.</p>",
             }
 
+    eventsub_bridge: DashboardEventSubBridgeRuntime | None = None
+    if eventsub_webhook_handler is not None:
+        if client is not None:
+            eventsub_bridge = DashboardEventSubBridgeRuntime(
+                client=client,
+                logger=log,
+            )
+        bridged_eventsub_types = (
+            "stream.online",
+            "stream.offline",
+            "channel.follow",
+            "channel.raid",
+            "channel.update",
+            "channel.subscribe",
+            "channel.subscription.gift",
+            "channel.subscription.message",
+            "channel.ad_break.begin",
+            "channel.cheer",
+            "channel.hype_train.begin",
+            "channel.hype_train.end",
+            "channel.hype_train.progress",
+            "channel.subscription.end",
+            "channel.ban",
+            "channel.unban",
+            "channel.bits.use",
+            "channel.shoutout.create",
+            "channel.shoutout.receive",
+            "channel.channel_points_automatic_reward_redemption.add",
+            "channel.channel_points_custom_reward_redemption.add",
+        )
+
+        def _build_forwarded_eventsub_condition(
+            sub_type: str,
+            *,
+            subscription: dict | None,
+            event: dict,
+            broadcaster_id: str,
+        ) -> dict[str, str]:
+            subscription_map = subscription if isinstance(subscription, dict) else {}
+            raw_condition = (
+                subscription_map.get("condition")
+                if isinstance(subscription_map.get("condition"), dict)
+                else {}
+            )
+            normalized_condition = {
+                str(key): str(value)
+                for key, value in raw_condition.items()
+                if str(key).strip() and str(value).strip()
+            }
+            if normalized_condition:
+                return normalized_condition
+
+            if sub_type == "channel.raid":
+                to_broadcaster_id = str(
+                    event.get("to_broadcaster_user_id") or broadcaster_id or ""
+                ).strip()
+                if to_broadcaster_id:
+                    return {"to_broadcaster_user_id": to_broadcaster_id}
+
+            fallback_keys = (
+                "broadcaster_user_id",
+                "to_broadcaster_user_id",
+                "moderator_user_id",
+                "user_id",
+            )
+            for key in fallback_keys:
+                value = str(event.get(key) or "").strip()
+                if value:
+                    normalized_condition[key] = value
+
+            if not normalized_condition and broadcaster_id:
+                normalized_condition["broadcaster_user_id"] = broadcaster_id
+            return normalized_condition
+
+        async def _forward_eventsub_notification(
+            sub_type: str,
+            broadcaster_id: str,
+            broadcaster_login: str,
+            event: dict,
+            *,
+            message_id: str | None = None,
+            subscription: dict | None = None,
+        ) -> None:
+            if client is None or eventsub_bridge is None:
+                error_message = (
+                    "Dashboard service EventSub bridge unavailable for "
+                    f"{sub_type} broadcaster={broadcaster_login or broadcaster_id}"
+                )
+                log.warning("%s", error_message)
+                raise RuntimeError(error_message)
+
+            normalized_event = dict(event or {})
+            normalized_broadcaster_id = str(broadcaster_id or "").strip()
+            normalized_broadcaster_login = str(broadcaster_login or "").strip().lower()
+            normalized_message_id = str(message_id or "").strip() or None
+            if normalized_broadcaster_id and not any(
+                str(normalized_event.get(key) or "").strip()
+                for key in (
+                    "broadcaster_user_id",
+                    "to_broadcaster_user_id",
+                    "user_id",
+                )
+            ):
+                normalized_event["broadcaster_user_id"] = normalized_broadcaster_id
+            if normalized_broadcaster_login and not any(
+                str(normalized_event.get(key) or "").strip()
+                for key in (
+                    "broadcaster_user_login",
+                    "to_broadcaster_user_login",
+                    "user_login",
+                )
+            ):
+                normalized_event["broadcaster_user_login"] = normalized_broadcaster_login
+
+            envelope = {
+                "subscription": {
+                    "type": sub_type,
+                    "condition": _build_forwarded_eventsub_condition(
+                        sub_type,
+                        subscription=subscription,
+                        event=normalized_event,
+                        broadcaster_id=normalized_broadcaster_id,
+                    ),
+                },
+                "event": normalized_event,
+            }
+            try:
+                await eventsub_bridge.dispatch_or_enqueue(
+                    sub_type=sub_type,
+                    payload=envelope,
+                    message_id=normalized_message_id,
+                )
+            except Exception:
+                log.exception(
+                    "Dashboard service EventSub bridge failed for %s broadcaster=%s msg_id=%s",
+                    sub_type,
+                    normalized_broadcaster_login or normalized_broadcaster_id,
+                    normalized_message_id or "n/a",
+                )
+                raise
+
+        for bridged_sub_type in bridged_eventsub_types:
+            async def _bridge_callback(
+                bid: str,
+                login: str,
+                event: dict,
+                *,
+                _sub_type: str = bridged_sub_type,
+                message_id: str | None = None,
+                subscription: dict | None = None,
+            ) -> None:
+                await _forward_eventsub_notification(
+                    _sub_type,
+                    bid,
+                    login,
+                    event,
+                    message_id=message_id,
+                    subscription=subscription,
+                )
+
+            eventsub_webhook_handler.set_callback(bridged_sub_type, _bridge_callback)
+
+        activate_dispatch = getattr(eventsub_webhook_handler, "activate_notification_dispatch", None)
+        if callable(activate_dispatch):
+            activate_dispatch()
+
+        log.info(
+            "Dashboard service EventSub bridge enabled for %d subscription types",
+            len(bridged_eventsub_types),
+        )
+
     dashboard_services = DashboardRuntimeServices(
         add_cb=_add_cb,
         remove_cb=_remove_cb,
@@ -489,6 +669,8 @@ def build_dashboard_service_app(
     )
 
     async def _close_client(_: web.Application) -> None:
+        if eventsub_bridge is not None:
+            await eventsub_bridge.stop()
         if client is None:
             return
         await client.close()
@@ -523,12 +705,20 @@ def build_dashboard_service_app(
                 upstream_fingerprint,
             )
 
+    async def _start_eventsub_bridge(_: web.Application) -> None:
+        if eventsub_bridge is None:
+            return
+        await eventsub_bridge.start()
+
     app[BOT_API_CLIENT_KEY] = client
     app[ANALYTICS_DB_FINGERPRINT_KEY] = local_analytics_fingerprint
     app[ANALYTICS_DB_FINGERPRINT_DETAILS_KEY] = local_analytics_db
     app[INTERNAL_API_ANALYTICS_DB_FINGERPRINT_KEY] = None
     app[ANALYTICS_DB_FINGERPRINT_MISMATCH_KEY] = False
     app[ANALYTICS_DB_FINGERPRINT_ERROR_KEY] = None
+    if eventsub_bridge is not None:
+        app[DASHBOARD_EVENTSUB_BRIDGE_KEY] = eventsub_bridge
+        app.on_startup.append(_start_eventsub_bridge)
     app.on_startup.append(_verify_internal_analytics_fingerprint)
     app.on_cleanup.append(_close_client)
     return app

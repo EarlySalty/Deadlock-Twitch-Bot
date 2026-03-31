@@ -16,6 +16,9 @@ from .app import (
     ComparisonCallback,
     DiscordFlagCallback,
     DiscordProfileCallback,
+    EventsubDispatchCallback,
+    EventsubProcessingDebugCallback,
+    EventsubProcessingRequeueCallback,
     InternalApiCallbacks,
     LiveActiveAnnouncementsCallback,
     LiveLinkClickCallback,
@@ -69,6 +72,9 @@ class InternalApiRunner:
         live_link_click_cb: LiveLinkClickCallback | None = None,
         observability_snapshot_cb: ObservabilitySnapshotCallback | None = None,
         chatters_debug_cb: ChattersDebugCallback | None = None,
+        eventsub_dispatch_cb: EventsubDispatchCallback | None = None,
+        eventsub_processing_debug_cb: EventsubProcessingDebugCallback | None = None,
+        eventsub_processing_requeue_cb: EventsubProcessingRequeueCallback | None = None,
     ) -> None:
         self.host = host
         self.port = int(port)
@@ -97,6 +103,9 @@ class InternalApiRunner:
             live_link_click_cb=live_link_click_cb,
             observability_snapshot_cb=observability_snapshot_cb,
             chatters_debug_cb=chatters_debug_cb,
+            eventsub_dispatch_cb=eventsub_dispatch_cb,
+            eventsub_processing_debug_cb=eventsub_processing_debug_cb,
+            eventsub_processing_requeue_cb=eventsub_processing_requeue_cb,
         )
 
         self._runner: web.AppRunner | None = None

@@ -230,6 +230,17 @@ class BotRuntimeBootstrap:
                     None,
                 ),
                 chatters_debug=getattr(cog, "_internal_chatters_debug", None),
+                eventsub_dispatch=getattr(cog, "_internal_eventsub_dispatch", None),
+                eventsub_processing_debug=getattr(
+                    cog,
+                    "_internal_eventsub_processing_debug",
+                    None,
+                ),
+                eventsub_processing_requeue=getattr(
+                    cog,
+                    "_internal_eventsub_processing_requeue",
+                    None,
+                ),
             ),
         )
 
@@ -237,10 +248,13 @@ class BotRuntimeBootstrap:
         if webhook_secret:
             try:
                 from .monitoring.eventsub_webhook import EventSubWebhookHandler
+                from .monitoring.eventsub_state_store import EventSubStateStore
 
                 services.eventsub_webhook_handler = EventSubWebhookHandler(
                     secret=webhook_secret,
                     logger=log,
+                    synchronous_notifications=True,
+                    state_store=EventSubStateStore(logger=log),
                 )
                 parsed_redirect = urlparse(
                     str(getattr(cog, "_dashboard_auth_redirect_uri", "") or "")
@@ -799,7 +813,13 @@ class BotRuntimeBootstrap:
                 cog._spawn_bg_task(cog._load_invite_codes_from_db(), "twitch.load_invites")
                 cog._spawn_bg_task(cog._start_internal_api(), "twitch.start_internal_api")
                 cog._spawn_bg_task(cog._refresh_all_invites(), "twitch.refresh_all_invites")
-                cog._spawn_bg_task(cog._start_eventsub_listener(), "twitch.eventsub")
+                eventsub_runner = getattr(cog, "_run_eventsub_listener_supervisor", None)
+                if callable(eventsub_runner):
+                    eventsub_task = cog._spawn_bg_task(eventsub_runner(), "twitch.eventsub")
+                    if eventsub_task is not None:
+                        cog._eventsub_supervisor_task = eventsub_task
+                else:
+                    cog._spawn_bg_task(cog._start_eventsub_listener(), "twitch.eventsub")
                 if cog.api:
                     cog._spawn_bg_task(cog._sync_missing_user_ids(), "twitch.sync_user_ids")
                     cog._spawn_bg_task(cog._scout_deadlock_channels(), "twitch.scout_deadlock")

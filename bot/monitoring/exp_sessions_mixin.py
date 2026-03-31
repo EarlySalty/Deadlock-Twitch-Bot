@@ -17,6 +17,10 @@ from datetime import UTC, datetime
 
 from .. import storage
 from ..core.constants import log
+try:
+    import psycopg
+except Exception:  # pragma: no cover - optional during partial deploys/tests
+    psycopg = None  # type: ignore[assignment]
 
 
 class _ExpSessionsMixin:
@@ -95,8 +99,28 @@ class _ExpSessionsMixin:
             exp_id = int(row[0])
             self._set_exp_session_id(login_lower, exp_id)
             return exp_id
-        except Exception:
-            log.debug("exp: Konnte exp_session nicht anlegen für %s", login, exc_info=True)
+        except Exception as exc:
+            unique_violation_type = None
+            if psycopg is not None:
+                unique_violation_type = getattr(getattr(psycopg, "errors", None), "UniqueViolation", None)
+            if stream_id and unique_violation_type and isinstance(exc, unique_violation_type):
+                try:
+                    with storage.readonly_connection() as c:
+                        row = c.execute(
+                            "SELECT id FROM exp_sessions WHERE stream_id = %s AND ended_at IS NULL LIMIT 1",
+                            (stream_id,),
+                        ).fetchone()
+                    if row:
+                        exp_id = int(row[0])
+                        self._set_exp_session_id(login_lower, exp_id)
+                        return exp_id
+                except Exception:
+                    log.debug(
+                        "exp: Konnte exp_session nach UniqueViolation nicht erneut laden für %s",
+                        login,
+                        exc_info=True,
+                    )
+            log.debug("exp: Konnte exp_session nicht anlegen für %s", login, exc_info=exc)
             return None
 
     # ------------------------------------------------------------------ #
@@ -116,7 +140,7 @@ class _ExpSessionsMixin:
         login_lower = login.lower()
 
         try:
-            with storage.readonly_connection() as c:
+            with storage.transaction() as c:
                 session_row = c.execute(
                     "SELECT started_at, samples, avg_viewers, peak_viewers "
                     "FROM exp_sessions WHERE id = %s",
@@ -134,11 +158,12 @@ class _ExpSessionsMixin:
                     start_dt = now_dt
                 minutes_from_start = max(0.0, (now_dt - start_dt).total_seconds() / 60.0)
 
-                c.execute(
+                inserted = c.execute(
                     """
                     INSERT INTO exp_snapshots (exp_session_id, ts_utc, viewer_count, minutes_from_start)
                     VALUES (%s, %s, %s, %s)
-                    ON CONFLICT DO NOTHING
+                    ON CONFLICT (exp_session_id, ts_utc) DO NOTHING
+                    RETURNING id
                     """,
                     (
                         exp_session_id,
@@ -146,7 +171,9 @@ class _ExpSessionsMixin:
                         viewer_count,
                         round(minutes_from_start, 2),
                     ),
-                )
+                ).fetchone()
+                if not inserted:
+                    return
 
                 old_samples = int(session_row[1] or 0)
                 old_avg = float(session_row[2] or 0.0)
@@ -225,7 +252,7 @@ class _ExpSessionsMixin:
         now_iso = now_dt.isoformat(timespec="seconds")
 
         try:
-            with storage.readonly_connection() as c:
+            with storage.transaction() as c:
                 session_row = c.execute(
                     "SELECT started_at FROM exp_sessions WHERE id = %s",
                     (exp_session_id,),

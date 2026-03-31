@@ -644,6 +644,7 @@ class TwitchBaseCog(commands.Cog):
         raid_bot = getattr(self, "_raid_bot", None)
         analytics_snapshot = None
         irc_lurker_snapshot = None
+        eventsub_processing_snapshot = None
 
         chat_snapshot = None
         if chat_bot and hasattr(chat_bot, "get_observability_snapshot"):
@@ -689,6 +690,20 @@ class TwitchBaseCog(commands.Cog):
             except Exception:
                 log.debug("Observability snapshot: IRC lurker snapshot failed", exc_info=True)
 
+        eventsub_processing_getter = getattr(self, "_internal_eventsub_processing_debug", None)
+        if callable(eventsub_processing_getter):
+            try:
+                maybe_eventsub_processing_snapshot = eventsub_processing_getter(limit=20)
+                if inspect.isawaitable(maybe_eventsub_processing_snapshot):
+                    maybe_eventsub_processing_snapshot = await maybe_eventsub_processing_snapshot
+                if isinstance(maybe_eventsub_processing_snapshot, dict):
+                    eventsub_processing_snapshot = maybe_eventsub_processing_snapshot
+            except Exception:
+                log.debug(
+                    "Observability snapshot: EventSub processing snapshot failed",
+                    exc_info=True,
+                )
+
         last_followers_diagnostic = None
         if isinstance(analytics_snapshot, dict):
             last_followers_diagnostic = analytics_snapshot.get("lastFollowersDiagnostic")
@@ -732,6 +747,7 @@ class TwitchBaseCog(commands.Cog):
             "raid": raid_snapshot,
             "analytics": analytics_snapshot,
             "ircLurker": irc_lurker_snapshot,
+            "eventsubProcessing": eventsub_processing_snapshot,
         }
 
     async def _internal_chatters_debug(self, login: str) -> dict[str, Any]:
@@ -847,6 +863,45 @@ class TwitchBaseCog(commands.Cog):
                 ),
             },
         }
+
+    async def _internal_eventsub_dispatch(
+        self,
+        *,
+        sub_type: str,
+        message_id: str | None,
+        payload: dict[str, Any],
+    ) -> dict[str, Any]:
+        normalized_sub_type = str(sub_type or "").strip()
+        if not normalized_sub_type:
+            raise ValueError("sub_type is required")
+        if not isinstance(payload, dict):
+            raise ValueError("payload must be a JSON object")
+
+        handler = getattr(self, "_eventsub_webhook_handler", None)
+        if handler is None:
+            raise RuntimeError("eventsub webhook handler unavailable")
+        dispatch_async = getattr(handler, "dispatch_notification_internal_async", None)
+        if callable(dispatch_async):
+            result = await dispatch_async(
+                payload,
+                normalized_sub_type,
+                message_id=str(message_id or "").strip(),
+            )
+            if not isinstance(result, dict):
+                result = {"ok": True, "sub_type": normalized_sub_type}
+            return result
+        dispatch = getattr(handler, "dispatch_notification_internal", None)
+        if not callable(dispatch):
+            raise RuntimeError("eventsub webhook dispatch unavailable")
+
+        result = dispatch(
+            payload,
+            normalized_sub_type,
+            message_id=str(message_id or "").strip(),
+        )
+        if not isinstance(result, dict):
+            result = {"ok": True, "sub_type": normalized_sub_type}
+        return result
 
     async def _reload_social_teardown(self) -> None:
         """Stop ClipFetcher and UploadWorker before hot-reloading social modules."""
@@ -1363,6 +1418,17 @@ class TwitchBaseCog(commands.Cog):
         registry.add(task)
 
         def _discard(completed: asyncio.Task[Any]) -> None:
+            try:
+                exc = completed.exception()
+            except asyncio.CancelledError:
+                log.debug("Managed background task cancelled: %s", completed.get_name())
+            else:
+                if exc is not None:
+                    log.error(
+                        "Managed background task failed: %s",
+                        completed.get_name(),
+                        exc_info=(type(exc), exc, exc.__traceback__),
+                    )
             registry.discard(completed)
 
         task.add_done_callback(_discard)

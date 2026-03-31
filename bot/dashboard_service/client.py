@@ -571,5 +571,38 @@ class BotApiClient:
             )
         return payload
 
+    async def dispatch_eventsub_notification(
+        self,
+        *,
+        sub_type: str,
+        payload: dict[str, Any],
+        message_id: str | None = None,
+    ) -> dict[str, Any]:
+        response = await self._request_json(
+            "POST",
+            f"{INTERNAL_API_BASE_PATH}/eventsub/dispatch",
+            payload={
+                "sub_type": str(sub_type or "").strip(),
+                "message_id": str(message_id or "").strip() or None,
+                "payload": payload,
+            },
+        )
+        if not isinstance(response, dict):
+            raise BotApiClientError(
+                status=502,
+                code="upstream_invalid_shape",
+                message="Bot internal API returned an invalid EventSub dispatch payload.",
+            )
+        if response.get("ok") is False:
+            raise BotApiClientError(
+                status=503,
+                code="upstream_unavailable",
+                message=self._sanitize_message(
+                    self._extract_error_text(response),
+                    fallback="Bot internal API could not dispatch the EventSub notification.",
+                ),
+            )
+        return response
+
 
 __all__ = ["BotApiClient", "BotApiClientError"]

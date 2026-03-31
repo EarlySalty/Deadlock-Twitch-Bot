@@ -134,7 +134,11 @@ async def _dashboard_archive(self, login: str, mode: str) -> str:
     else:
         desired = "toggle"
 
-    return await asyncio.to_thread(self._dashboard_archive_sync, normalized, desired)
+    result = await asyncio.to_thread(self._dashboard_archive_sync, normalized, desired)
+    ensure_eventsub = getattr(self, "_ensure_eventsub_supervisor_running", None)
+    if callable(ensure_eventsub):
+        ensure_eventsub("partner_archive_state_changed")
+    return result
 
 
 def _dashboard_load_twitch_user_id_from_raid_auth_sync(normalized: str) -> str | None:

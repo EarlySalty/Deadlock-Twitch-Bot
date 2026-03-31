@@ -40,6 +40,49 @@ class _DashboardRaidMixin:
         raid_bot = getattr(self, "_raid_bot", None)
         return getattr(raid_bot, "auth_manager", None)
 
+    def _resolve_dashboard_runtime_callback(self, attr_name: str) -> Any | None:
+        runtime_getter = getattr(self, "_dashboard_bot_runtime", None)
+        if not callable(runtime_getter):
+            return None
+        try:
+            runtime = runtime_getter()
+        except Exception:
+            log.debug("Could not resolve dashboard bot runtime", exc_info=True)
+            return None
+        callback_getter = getattr(runtime, attr_name, None)
+        if not callable(callback_getter):
+            return None
+        try:
+            return callback_getter()
+        except Exception:
+            log.debug("Could not resolve dashboard runtime callback %s", attr_name, exc_info=True)
+            return None
+
+    def _resolve_dashboard_raid_session(self) -> Any | None:
+        raid_bot = getattr(self, "_raid_bot", None)
+        session = getattr(raid_bot, "session", None)
+        if session is not None:
+            return session
+
+        runtime_getter = getattr(self, "_dashboard_bot_runtime", None)
+        if not callable(runtime_getter):
+            return None
+        try:
+            runtime = runtime_getter()
+        except Exception:
+            log.debug("Could not resolve dashboard bot runtime for raid session", exc_info=True)
+            return None
+        auth_manager_getter = getattr(runtime, "auth_manager", None)
+        if callable(auth_manager_getter):
+            try:
+                auth_manager = auth_manager_getter()
+                session = getattr(auth_manager, "session", None)
+                if session is not None:
+                    return session
+            except Exception:
+                log.debug("Could not resolve auth manager session", exc_info=True)
+        return None
+
     # ------------------------------------------------------------------ #
     # HTML builders                                                        #
     # ------------------------------------------------------------------ #
@@ -526,14 +569,15 @@ class _DashboardRaidMixin:
             state=state,
             error=error,
             auth_manager=auth_manager,
+            session=self._resolve_dashboard_raid_session(),
             success_redirect_url=self._raid_oauth_success_redirect_url(),
             failure_title="Fehler bei der Autorisierung",
             failure_body_html=(
                 "<p>Beim Speichern der Twitch-Autorisierung ist ein interner Fehler aufgetreten.</p>"
                 "<p>Bitte den Vorgang erneut starten.</p>"
             ),
-            complete_setup_cb=self._dashboard_bot_runtime().raid_complete_setup_cb(),
-            sync_partner_state_cb=self._dashboard_bot_runtime().raid_sync_partner_state_cb(),
+            complete_setup_cb=self._resolve_dashboard_runtime_callback("raid_complete_setup_cb"),
+            sync_partner_state_cb=self._resolve_dashboard_runtime_callback("raid_sync_partner_state_cb"),
             schedule_background=getattr(self, "_dashboard_schedule_background", None),
         )
         title = str(payload.get("title") or "Autorisierung")

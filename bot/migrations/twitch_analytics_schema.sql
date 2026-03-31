@@ -559,6 +559,69 @@ SELECT create_hypertable('twitch_eventsub_capacity_snapshot', 'ts_utc', if_not_e
 ALTER TABLE twitch_eventsub_capacity_snapshot SET (timescaledb.compress, timescaledb.compress_segmentby = 'trigger_reason', timescaledb.compress_orderby = 'ts_utc DESC');
 SELECT add_compression_policy('twitch_eventsub_capacity_snapshot', INTERVAL '7 days', if_not_exists => TRUE);
 
+CREATE TABLE IF NOT EXISTS eventsub_guard_state (
+    kind       TEXT NOT NULL,
+    guard_key  TEXT NOT NULL,
+    expires_at DOUBLE PRECISION NOT NULL,
+    updated_at DOUBLE PRECISION NOT NULL,
+    PRIMARY KEY (kind, guard_key)
+);
+CREATE INDEX IF NOT EXISTS idx_eventsub_guard_state_expiry
+    ON eventsub_guard_state(expires_at);
+
+CREATE TABLE IF NOT EXISTS twitch_eventsub_bridge_outbox (
+    message_id      TEXT PRIMARY KEY,
+    sub_type        TEXT NOT NULL,
+    payload_json    TEXT NOT NULL,
+    queued_at       DOUBLE PRECISION NOT NULL,
+    next_attempt_at DOUBLE PRECISION NOT NULL,
+    attempt_count   INTEGER NOT NULL DEFAULT 0,
+    last_error      TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_twitch_eventsub_bridge_outbox_due
+    ON twitch_eventsub_bridge_outbox(next_attempt_at, queued_at);
+
+CREATE TABLE IF NOT EXISTS twitch_eventsub_bridge_dead_letter (
+    message_id        TEXT PRIMARY KEY,
+    sub_type          TEXT NOT NULL,
+    payload_json      TEXT NOT NULL,
+    queued_at         DOUBLE PRECISION NOT NULL,
+    dead_lettered_at  DOUBLE PRECISION NOT NULL,
+    attempt_count     INTEGER NOT NULL,
+    last_error        TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_twitch_eventsub_bridge_dead_lettered_at
+    ON twitch_eventsub_bridge_dead_letter(dead_lettered_at);
+
+CREATE TABLE IF NOT EXISTS twitch_eventsub_processing_inbox (
+    work_id          TEXT PRIMARY KEY,
+    work_type        TEXT NOT NULL,
+    message_id       TEXT,
+    payload_json     TEXT NOT NULL,
+    queued_at        DOUBLE PRECISION NOT NULL,
+    next_attempt_at  DOUBLE PRECISION NOT NULL,
+    attempt_count    INTEGER NOT NULL DEFAULT 0,
+    last_error       TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_twitch_eventsub_processing_inbox_due
+    ON twitch_eventsub_processing_inbox(next_attempt_at, queued_at);
+
+CREATE TABLE IF NOT EXISTS twitch_eventsub_processing_dead_letter (
+    work_id           TEXT PRIMARY KEY,
+    work_type         TEXT NOT NULL,
+    message_id        TEXT,
+    payload_json      TEXT NOT NULL,
+    queued_at         DOUBLE PRECISION NOT NULL,
+    dead_lettered_at  DOUBLE PRECISION NOT NULL,
+    attempt_count     INTEGER NOT NULL,
+    last_error        TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_twitch_eventsub_processing_dead_lettered_at
+    ON twitch_eventsub_processing_dead_letter(dead_lettered_at);
+
 CREATE TABLE IF NOT EXISTS twitch_ads_schedule_snapshot (
     id                BIGSERIAL PRIMARY KEY,
     twitch_user_id    TEXT NOT NULL,

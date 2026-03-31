@@ -29,6 +29,9 @@ from .contracts import (
     ComparisonCallback,
     DiscordFlagCallback,
     DiscordProfileCallback,
+    EventsubDispatchCallback,
+    EventsubProcessingDebugCallback,
+    EventsubProcessingRequeueCallback,
     IDEMPOTENCY_KEY_HEADER,
     INTERNAL_API_BASE_PATH,
     INTERNAL_TOKEN_HEADER,
@@ -112,6 +115,9 @@ class InternalApiServer:
         live_link_click_cb: LiveLinkClickCallback | None = None,
         observability_snapshot_cb: ObservabilitySnapshotCallback | None = None,
         chatters_debug_cb: ChattersDebugCallback | None = None,
+        eventsub_dispatch_cb: EventsubDispatchCallback | None = None,
+        eventsub_processing_debug_cb: EventsubProcessingDebugCallback | None = None,
+        eventsub_processing_requeue_cb: EventsubProcessingRequeueCallback | None = None,
     ) -> None:
         self._token = (token or "").strip()
         base = (base_path or INTERNAL_API_BASE_PATH).strip()
@@ -144,6 +150,9 @@ class InternalApiServer:
             live_link_click_cb=live_link_click_cb,
             observability_snapshot_cb=observability_snapshot_cb,
             chatters_debug_cb=chatters_debug_cb,
+            eventsub_dispatch_cb=eventsub_dispatch_cb,
+            eventsub_processing_debug_cb=eventsub_processing_debug_cb,
+            eventsub_processing_requeue_cb=eventsub_processing_requeue_cb,
         )
 
         self._add = callbacks.add if callable(callbacks.add) else self._empty_add
@@ -211,6 +220,21 @@ class InternalApiServer:
         self._chatters_debug = (
             callbacks.chatters_debug if callable(callbacks.chatters_debug) else self._empty_chatters_debug
         )
+        self._eventsub_dispatch = (
+            callbacks.eventsub_dispatch
+            if callable(callbacks.eventsub_dispatch)
+            else self._empty_eventsub_dispatch
+        )
+        self._eventsub_processing_debug = (
+            callbacks.eventsub_processing_debug
+            if callable(callbacks.eventsub_processing_debug)
+            else self._empty_eventsub_processing_debug
+        )
+        self._eventsub_processing_requeue = (
+            callbacks.eventsub_processing_requeue
+            if callable(callbacks.eventsub_processing_requeue)
+            else self._empty_eventsub_processing_requeue
+        )
         self._idempotency_cache: dict[str, dict[str, Any]] = {}
         self._idempotency_inflight: dict[str, IdempotencyInFlight] = {}
         self._idempotency_ttl_seconds = 15 * 60
@@ -242,6 +266,24 @@ class InternalApiServer:
 
     async def _empty_chatters_debug(self, _: str) -> dict[str, Any]:
         return {}
+
+    async def _empty_eventsub_dispatch(
+        self,
+        *,
+        sub_type: str,
+        message_id: str | None,
+        payload: dict[str, Any],
+    ) -> dict[str, Any]:
+        del sub_type, message_id, payload
+        return {"ok": False, "message": "EventSub dispatch unavailable"}
+
+    async def _empty_eventsub_processing_debug(self, *, limit: int = 20) -> dict[str, Any]:
+        del limit
+        return {"pendingCount": 0, "deadLetterCount": 0, "pending": [], "deadLetters": []}
+
+    async def _empty_eventsub_processing_requeue(self, work_id: str) -> dict[str, Any]:
+        del work_id
+        raise ValueError("eventsub processing requeue unavailable")
 
     async def _empty_stats(self, **_: Any) -> dict[str, Any]:
         return {}
@@ -1171,6 +1213,9 @@ def build_internal_api_app(
     live_link_click_cb: LiveLinkClickCallback | None = None,
     observability_snapshot_cb: ObservabilitySnapshotCallback | None = None,
     chatters_debug_cb: ChattersDebugCallback | None = None,
+    eventsub_dispatch_cb: EventsubDispatchCallback | None = None,
+    eventsub_processing_debug_cb: EventsubProcessingDebugCallback | None = None,
+    eventsub_processing_requeue_cb: EventsubProcessingRequeueCallback | None = None,
 ) -> web.Application:
     server = InternalApiServer(
         token=token,
@@ -1197,6 +1242,9 @@ def build_internal_api_app(
         live_link_click_cb=live_link_click_cb,
         observability_snapshot_cb=observability_snapshot_cb,
         chatters_debug_cb=chatters_debug_cb,
+        eventsub_dispatch_cb=eventsub_dispatch_cb,
+        eventsub_processing_debug_cb=eventsub_processing_debug_cb,
+        eventsub_processing_requeue_cb=eventsub_processing_requeue_cb,
     )
 
     @web.middleware

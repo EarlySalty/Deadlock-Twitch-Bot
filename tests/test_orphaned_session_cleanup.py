@@ -1,6 +1,5 @@
 import contextlib
 import unittest
-from unittest.mock import patch
 
 from bot.monitoring.sessions_mixin import _SessionsMixin
 
@@ -19,15 +18,22 @@ class _RecordingConn:
         self._responses = [
             _FakeCursor(
                 rows=[
-                    {"id": 101, "streamer_login": "partner_one"},
+                    {
+                        "id": 101,
+                        "streamer_login": "partner_one",
+                        "finalized_at": "2026-03-29T10:00:00+00:00",
+                    },
                 ]
             ),
             _FakeCursor(
                 rows=[
-                    {"id": 202, "streamer_login": "partner_two"},
+                    {
+                        "id": 202,
+                        "streamer_login": "partner_two",
+                        "finalized_at": "2026-03-29T11:00:00+00:00",
+                    },
                 ]
             ),
-            _FakeCursor(),
         ]
 
     def execute(self, sql: str, params=()):
@@ -39,30 +45,45 @@ class _RecordingConn:
 
 class _SessionsHarness(_SessionsMixin):
     def __init__(self) -> None:
-        self._active_sessions = {
-            "partner_one": 101,
-            "partner_two": 202,
-            "partner_three": 303,
-        }
+        self.finalize_calls: list[dict[str, object]] = []
+
+    async def _finalize_stream_session(self, **kwargs) -> bool:
+        self.finalize_calls.append(dict(kwargs))
+        return True
 
 
-class OrphanedSessionCleanupTests(unittest.TestCase):
-    def test_cleanup_clears_live_state_active_session_ids_and_runtime_cache(self) -> None:
+class OrphanedSessionCleanupTests(unittest.IsolatedAsyncioTestCase):
+    async def test_cleanup_uses_regular_finalize_flow_for_detected_orphans(self) -> None:
         harness = _SessionsHarness()
         conn = _RecordingConn()
 
-        with patch(
+        with unittest.mock.patch(
             "bot.monitoring.sessions_mixin.storage.readonly_connection",
             side_effect=lambda: contextlib.nullcontext(conn),
         ):
-            closed = harness._cleanup_orphaned_sessions()
+            closed = await harness._cleanup_orphaned_sessions()
 
         self.assertEqual(closed, 2)
-        self.assertEqual(harness._active_sessions, {"partner_three": 303})
-        self.assertEqual(len(conn.calls), 3)
-        self.assertIn("UPDATE twitch_live_state", conn.calls[2][0])
-        self.assertIn("is_live = 0", conn.calls[2][0])
-        self.assertEqual(conn.calls[2][1], ([101, 202],))
+        self.assertEqual(len(conn.calls), 2)
+        self.assertIn("SELECT id,", conn.calls[0][0])
+        self.assertIn("MAX(sv.ts_utc)", conn.calls[1][0])
+        self.assertEqual(
+            harness.finalize_calls,
+            [
+                {
+                    "login": "partner_one",
+                    "reason": "auto-closed: orphaned session (no samples, open > 24h)",
+                    "session_id": 101,
+                    "ended_at": unittest.mock.ANY,
+                },
+                {
+                    "login": "partner_two",
+                    "reason": "auto-closed: stale session (last viewer data > 1h ago)",
+                    "session_id": 202,
+                    "ended_at": unittest.mock.ANY,
+                },
+            ],
+        )
 
 
 if __name__ == "__main__":

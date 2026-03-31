@@ -207,6 +207,70 @@ class TwitchBaseBootstrapLifecycleTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(harness._raid_bot)
         exception_mock.assert_called_once()
 
+    def test_wire_runtime_dependencies_builds_webhook_handler_in_sync_mode(self) -> None:
+        harness = _BootstrapHarness()
+        harness.bot = SimpleNamespace()
+
+        def _fake_load_secret_value(key: str, **_kwargs):
+            return {
+                "TWITCH_CLIENT_ID": "client-id",
+                "TWITCH_CLIENT_SECRET": "client-secret",
+                "TWITCH_BOT_CLIENT_ID": "client-id",
+                "TWITCH_BOT_CLIENT_SECRET": "bot-secret",
+                "TWITCH_DASHBOARD_TOKEN": "dashboard-token",
+                "TWITCH_PARTNER_TOKEN": "partner-token",
+                "TWITCH_INTERNAL_API_TOKEN": "internal-token",
+                "TWITCH_WEBHOOK_SECRET": "webhook-secret",
+            }.get(key, "")
+
+        class _FakeInternalApiRunner:
+            def __init__(self, **_kwargs) -> None:
+                return None
+
+        class _FakeTwitchApi:
+            def __init__(self, *_args, **_kwargs) -> None:
+                return None
+
+            def get_http_session(self):
+                return SimpleNamespace(closed=False)
+
+        class _FakeRaidBot:
+            def __init__(self, *_args, **_kwargs) -> None:
+                self.partner_raid_score_service = None
+
+            def set_discord_bot(self, _bot) -> None:
+                return None
+
+            def set_cog(self, _cog) -> None:
+                return None
+
+            def start(self):
+                return None
+
+        bootstrap = TwitchRuntimeBootstrap(harness)
+
+        with (
+            patch.dict("os.environ", {}, clear=True),
+            patch("bot.runtime_bootstrap.load_secret_value", side_effect=_fake_load_secret_value),
+            patch("bot.runtime_bootstrap.load_bot_tokens", return_value=(None, None, None)),
+            patch("bot.runtime_bootstrap.storage_pg.prepare_runtime_storage"),
+            patch.object(TwitchRuntimeBootstrap, "_ensure_social_media_workers", lambda self: None),
+            patch.object(TwitchRuntimeBootstrap, "_register_reload_manager", lambda self: None),
+            patch("bot.runtime_bootstrap.InternalApiRunner", _FakeInternalApiRunner),
+            patch("bot.runtime_bootstrap.TwitchAPI", _FakeTwitchApi),
+            patch("bot.runtime_bootstrap.RaidBot", _FakeRaidBot),
+            patch("bot.monitoring.eventsub_webhook.EventSubWebhookHandler") as handler_cls,
+        ):
+            bootstrap.configure_runtime()
+            bootstrap.wire_runtime_dependencies()
+
+        handler_cls.assert_called_once_with(
+            secret="webhook-secret",
+            logger=unittest.mock.ANY,
+            synchronous_notifications=True,
+            state_store=unittest.mock.ANY,
+        )
+
     async def test_cog_load_starts_runtime_once(self) -> None:
         harness = _LifecycleHarness()
         harness._runtime_started = False
@@ -457,6 +521,36 @@ class TwitchBaseBootstrapLifecycleTests(unittest.IsolatedAsyncioTestCase):
         await asyncio.sleep(0)
 
         self.assertEqual(len(harness._managed_bg_tasks), 0)
+
+    async def test_spawn_bg_task_drains_failures_and_discards_completed_tasks(self) -> None:
+        harness = _LifecycleHarness()
+        harness._managed_bg_tasks = set()
+        loop = asyncio.get_running_loop()
+        loop_errors: list[dict[str, object]] = []
+        previous_handler = loop.get_exception_handler()
+
+        def _capture_exception(loop_ref, context) -> None:
+            del loop_ref
+            loop_errors.append(dict(context))
+
+        async def _job() -> None:
+            raise RuntimeError("boom")
+
+        loop.set_exception_handler(_capture_exception)
+        try:
+            with self.assertLogs("TwitchStreams", level="ERROR") as captured:
+                task = TwitchBaseCog._spawn_bg_task(harness, _job(), "bootstrap.fail")
+                self.assertIsNotNone(task)
+                await asyncio.sleep(0)
+                await asyncio.sleep(0)
+        finally:
+            loop.set_exception_handler(previous_handler)
+
+        self.assertEqual(len(harness._managed_bg_tasks), 0)
+        self.assertEqual(loop_errors, [])
+        self.assertTrue(
+            any("Managed background task failed: bootstrap.fail" in entry for entry in captured.output)
+        )
 
     async def test_periodic_channel_join_task_is_spawned_through_manager(self) -> None:
         harness = _LifecycleHarness()

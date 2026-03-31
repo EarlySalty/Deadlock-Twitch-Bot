@@ -1,14 +1,23 @@
 from __future__ import annotations
 
 import asyncio
+import heapq
 import json
 import logging
+import inspect
 from collections.abc import Awaitable, Callable
+from datetime import UTC, datetime
 from typing import Any
 
 import aiohttp
+from .eventsub_state_store import (
+    EVENTSUB_STATE_KIND_WS_MESSAGE_ID,
+    EventSubStateStore,
+)
 
-EventCallback = Callable[[str, str, dict], Awaitable[None]]
+EventCallback = Callable[..., Awaitable[None]]
+MAX_SUBSCRIPTIONS_PER_TRANSPORT = 10
+_MAX_MESSAGE_AGE_SECONDS = 600
 
 
 class EventSubReconnect(Exception):
@@ -35,6 +44,8 @@ class EventSubWSListener:
         api,
         logger: logging.Logger | None = None,
         token_resolver: Callable[[str], Awaitable[str | None]] | None = None,
+        *,
+        state_store: EventSubStateStore | None = None,
     ):
         self.api = api
         self.log = logger or logging.getLogger("TwitchStreams.EventSubWS")
@@ -45,8 +56,84 @@ class EventSubWSListener:
         self._subscriptions: list[
             tuple[str, str, dict]
         ] = []  # (sub_type, broadcaster_id, condition)
+        self._registered_subscriptions: list[tuple[str, str, dict]] = []
         self._callbacks: dict[str, EventCallback] = {}  # sub_type -> callback
         self._session_id: str | None = None  # Stored for dynamic subscriptions
+        self._initial_registration_complete = asyncio.Event()
+        self._seen_message_ids: dict[str, float] = {}
+        self._seen_expiry_heap: list[tuple[float, str]] = []
+        self._state_store = state_store
+
+    @staticmethod
+    def _callback_accepts_message_id(callback: EventCallback) -> bool:
+        try:
+            parameters = inspect.signature(callback).parameters.values()
+        except (TypeError, ValueError):
+            return False
+        for parameter in parameters:
+            if parameter.kind is inspect.Parameter.VAR_KEYWORD:
+                return True
+            if parameter.name == "message_id":
+                return True
+        return False
+
+    @staticmethod
+    def _now_timestamp() -> float:
+        return datetime.now(UTC).timestamp()
+
+    def _cleanup_expired_message_ids(self, now: float | None = None) -> None:
+        if now is None:
+            now = self._now_timestamp()
+        while self._seen_expiry_heap and self._seen_expiry_heap[0][0] <= now:
+            expiry, message_id = heapq.heappop(self._seen_expiry_heap)
+            current_expiry = self._seen_message_ids.get(message_id)
+            if current_expiry == expiry:
+                self._seen_message_ids.pop(message_id, None)
+
+    def _is_duplicate_message_id(self, message_id: str) -> bool:
+        normalized = str(message_id or "").strip()
+        if not normalized:
+            return False
+        now = self._now_timestamp()
+        self._cleanup_expired_message_ids(now)
+        expiry = self._seen_message_ids.get(normalized)
+        if expiry is not None and expiry > now:
+            return True
+        if self._state_store is None:
+            return False
+        if self._state_store.is_active(EVENTSUB_STATE_KIND_WS_MESSAGE_ID, normalized):
+            expiry = now + _MAX_MESSAGE_AGE_SECONDS
+            self._seen_message_ids[normalized] = expiry
+            heapq.heappush(self._seen_expiry_heap, (expiry, normalized))
+            return True
+        return False
+
+    def _track_message_id(self, message_id: str) -> bool:
+        normalized = str(message_id or "").strip()
+        if not normalized:
+            return False
+        now = self._now_timestamp()
+        self._cleanup_expired_message_ids(now)
+        if self._state_store is not None:
+            claimed = self._state_store.claim(
+                EVENTSUB_STATE_KIND_WS_MESSAGE_ID,
+                normalized,
+                ttl_seconds=_MAX_MESSAGE_AGE_SECONDS,
+            )
+            if not claimed:
+                return False
+        expiry = now + _MAX_MESSAGE_AGE_SECONDS
+        self._seen_message_ids[normalized] = expiry
+        heapq.heappush(self._seen_expiry_heap, (expiry, normalized))
+        return True
+
+    def _forget_message_id(self, message_id: str) -> None:
+        normalized = str(message_id or "").strip()
+        if not normalized:
+            return
+        self._seen_message_ids.pop(normalized, None)
+        if self._state_store is not None:
+            self._state_store.release(EVENTSUB_STATE_KIND_WS_MESSAGE_ID, normalized)
 
     @staticmethod
     def _condition_key(condition: dict | None) -> tuple[tuple[str, str], ...]:
@@ -94,6 +181,51 @@ class EventSubWSListener:
         self._subscriptions.append((sub_type, bid, cond))
         return True
 
+    def _track_registered_subscription(
+        self,
+        sub_type: str,
+        broadcaster_id: str,
+        condition: dict | None,
+    ) -> bool:
+        bid = str(broadcaster_id)
+        cond = condition or {"broadcaster_user_id": bid}
+        cond_key = self._condition_key(cond)
+        for existing_type, existing_bid, existing_cond in self._registered_subscriptions:
+            if existing_type != sub_type or existing_bid != bid:
+                continue
+            if self._condition_key(existing_cond) == cond_key:
+                return False
+        self._registered_subscriptions.append((sub_type, bid, cond))
+        return True
+
+    def has_registered_subscription(
+        self,
+        sub_type: str,
+        broadcaster_id: str,
+        condition: dict | None = None,
+    ) -> bool:
+        bid = str(broadcaster_id)
+        cond = condition or {"broadcaster_user_id": bid}
+        cond_key = self._condition_key(cond)
+        for existing_type, existing_bid, existing_cond in self._registered_subscriptions:
+            if existing_type != sub_type or existing_bid != bid:
+                continue
+            if self._condition_key(existing_cond) == cond_key:
+                return True
+        return False
+
+    def is_subscription_ready(
+        self,
+        sub_type: str,
+        broadcaster_id: str,
+        condition: dict | None = None,
+    ) -> bool:
+        return self.is_ready and self.has_registered_subscription(
+            sub_type,
+            broadcaster_id,
+            condition,
+        )
+
     @property
     def cost(self) -> int:
         """
@@ -111,10 +243,15 @@ class EventSubWSListener:
         """Number of tracked subscriptions assigned to this listener."""
         return len(self._subscriptions)
 
+    @property
+    def registered_subscription_count(self) -> int:
+        """Number of subscriptions confirmed against Twitch for this transport."""
+        return len(self._registered_subscriptions)
+
     def get_tracked_subscriptions(self) -> list[dict[str, Any]]:
         """Return a copy of tracked subscriptions for diagnostics/dashboard views."""
         rows: list[dict[str, Any]] = []
-        for sub_type, broadcaster_id, condition in self._subscriptions:
+        for sub_type, broadcaster_id, condition in self._registered_subscriptions:
             safe_condition: dict[str, str] = {}
             if isinstance(condition, dict):
                 safe_condition = {
@@ -132,7 +269,7 @@ class EventSubWSListener:
     @property
     def has_capacity(self) -> bool:
         """Check if this listener can accept more subscriptions (max 10 per transport)"""
-        return self.cost < 10 and not self._failed
+        return self.cost < MAX_SUBSCRIPTIONS_PER_TRANSPORT and not self._failed
 
     @property
     def is_failed(self) -> bool:
@@ -142,6 +279,10 @@ class EventSubWSListener:
     def is_ready(self) -> bool:
         """True once Twitch assigned a session_id for dynamic subscriptions."""
         return bool(self._session_id) and not self._failed
+
+    @property
+    def initial_registration_complete(self) -> bool:
+        return self._initial_registration_complete.is_set()
 
     async def wait_until_ready(self, timeout: float = 8.0, poll_interval: float = 0.1) -> bool:
         """
@@ -159,6 +300,21 @@ class EventSubWSListener:
                 return False
             await asyncio.sleep(max(0.01, poll_interval))
         return self.is_ready
+
+    async def wait_until_initial_registration(
+        self,
+        timeout: float = 8.0,
+        poll_interval: float = 0.1,
+    ) -> bool:
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + max(0.0, timeout)
+        while loop.time() < deadline:
+            if self.initial_registration_complete:
+                return True
+            if self._failed or self._stop:
+                return False
+            await asyncio.sleep(max(0.01, poll_interval))
+        return self.initial_registration_complete
 
     def stop(self) -> None:
         """Signal the listener to stop."""
@@ -201,7 +357,7 @@ class EventSubWSListener:
             )
             return True
 
-        if self.cost >= 10:
+        if self.cost >= MAX_SUBSCRIPTIONS_PER_TRANSPORT:
             self.log.error(
                 "EventSub WS: Listener ist voll (10/10), kann %s für %s nicht hinzufügen",
                 sub_type,
@@ -226,17 +382,19 @@ class EventSubWSListener:
             )
             # Add to tracking list
             self._track_subscription(sub_type, str(broadcaster_id), cond)
+            self._track_registered_subscription(sub_type, str(broadcaster_id), cond)
             self.log.info(
                 "EventSub WS: Dynamische Subscription hinzugefügt: %s für %s (%d/%d)",
                 sub_type,
                 broadcaster_id,
                 self.cost,
-                10,
+                MAX_SUBSCRIPTIONS_PER_TRANSPORT,
             )
             return True
         except Exception as e:
             if self._is_already_exists_error(e):
                 self._track_subscription(sub_type, str(broadcaster_id), cond)
+                self._track_registered_subscription(sub_type, str(broadcaster_id), cond)
                 self.log.info(
                     "EventSub WS: Dynamic subscription already exists (409): %s for %s",
                     sub_type,
@@ -283,14 +441,19 @@ class EventSubWSListener:
                 is_reconnect = True
                 continue
             except EventSubTransportSessionInvalid as exc:
-                self.log.warning("%s. Reconnecting in 1s", exc)
-                await asyncio.sleep(1)
-                self._ws_url = "wss://eventsub.wss.twitch.tv/ws"
-                is_reconnect = False
-                continue
+                self.log.warning("%s. Transport wird beendet.", exc)
+                raise
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
+                if self._failed:
+                    self.log.warning(
+                        "EventSub WS: Fataler Listener-Fehler ohne lokale Recovery (failed=%s, url=%s): %s",
+                        self._failed,
+                        self._ws_url,
+                        exc,
+                    )
+                    raise
                 if "No session_id received" in str(exc):
                     self.log.warning(
                         "EventSub WS: No session_id on connect/reconnect (url=%s). Retrying fresh endpoint in 1s.",
@@ -305,6 +468,8 @@ class EventSubWSListener:
 
     async def _run_once(self, is_reconnect: bool = False) -> None:
         self._session_id = None
+        if not is_reconnect:
+            self._initial_registration_complete.clear()
         session = self.api.get_http_session()
         ws_url = self._ws_url
         try:
@@ -315,10 +480,12 @@ class EventSubWSListener:
 
                 if not is_reconnect:
                     await self._register_all_subscriptions(session_id)
+                    self._initial_registration_complete.set()
                 else:
                     self.log.info(
                         "EventSub WS: Reconnect successful - Subscriptions are migrated by Twitch."
                     )
+                    self._initial_registration_complete.set()
 
                 async for msg in ws:
                     if msg.type == aiohttp.WSMsgType.TEXT:
@@ -405,14 +572,15 @@ class EventSubWSListener:
         token = await self._resolve_token()
         if not token:
             self.log.error("EventSub WS: No user token available. Subscriptions will fail.")
-            return
+            self._failed = True
+            raise RuntimeError("EventSub WS: No user token available for subscription registration")
 
         # Twitch limits:
         # - Max 3 concurrent WebSocket connections (transports) per Client ID
         # - Max 10 subscriptions per transport (websocket transport subscriptions total cost)
         # - Max 100 subscriptions total per Client ID
 
-        max_subs_per_transport = 10
+        max_subs_per_transport = MAX_SUBSCRIPTIONS_PER_TRANSPORT
         if len(self._subscriptions) > max_subs_per_transport:
             self.log.error(
                 "EventSub WS: Versuche %d Subscriptions zu registrieren, aber Limit ist %d pro Transport! "
@@ -427,6 +595,7 @@ class EventSubWSListener:
 
         # Batch subscriptions to avoid hitting API rate limits too hard
         successful_count = 0
+        registration_failures = 0
         for i, (sub_type, bid, condition) in enumerate(self._subscriptions):
             try:
                 await self.api.subscribe_eventsub_websocket(
@@ -435,6 +604,7 @@ class EventSubWSListener:
                     condition=condition,
                     oauth_token=token,
                 )
+                self._track_registered_subscription(sub_type, bid, condition)
                 successful_count += 1
                 self.log.debug(
                     "EventSub WS: Subscribed %s for %s (%d/%d)",
@@ -450,6 +620,7 @@ class EventSubWSListener:
 
             except Exception as e:
                 if self._is_already_exists_error(e):
+                    self._track_registered_subscription(sub_type, bid, condition)
                     successful_count += 1
                     self.log.info(
                         "EventSub WS: Subscription already exists (409): %s for %s",
@@ -507,6 +678,7 @@ class EventSubWSListener:
                             condition=condition,
                             oauth_token=token,
                         )
+                        self._track_registered_subscription(sub_type, bid, condition)
                         successful_count += 1
                         self.log.info(
                             "EventSub WS: Retry nach 429 erfolgreich: %s for %s",
@@ -537,7 +709,9 @@ class EventSubWSListener:
                             sub_type,
                             retry_err,
                         )
+                        registration_failures += 1
                     continue
+                registration_failures += 1
                 self.log.error("EventSub WS: Subscription failed for %s (%s): %s", bid, sub_type, e)
 
         self.log.info(
@@ -545,10 +719,15 @@ class EventSubWSListener:
             successful_count,
             len(self._subscriptions),
         )
+        if registration_failures and not self._failed:
+            raise RuntimeError(
+                f"EventSub WS: {registration_failures} subscriptions failed during registration"
+            )
 
     async def _handle_message(self, data: dict) -> None:
         meta = data.get("metadata") or {}
         mtype = meta.get("message_type")
+        message_id = str(meta.get("message_id") or "").strip()
         if mtype == "session_keepalive":
             return
         if mtype == "session_reconnect":
@@ -587,8 +766,42 @@ class EventSubWSListener:
 
         if not broadcaster_id:
             return
+        if message_id and self._is_duplicate_message_id(message_id):
+            self.log.debug(
+                "EventSub WS: Duplicate notification ignored (msg_id=%r, type=%r)",
+                message_id,
+                sub_type,
+            )
+            return
+        if message_id and not self._track_message_id(message_id):
+            self.log.debug(
+                "EventSub WS: Duplicate notification ignored after persistent claim miss "
+                "(msg_id=%r, type=%r)",
+                message_id,
+                sub_type,
+            )
+            return
 
         try:
-            await callback(broadcaster_id, broadcaster_login, event)
+            if self._callback_accepts_message_id(callback):
+                await callback(
+                    broadcaster_id,
+                    broadcaster_login,
+                    event,
+                    message_id=message_id or None,
+                )
+            else:
+                await callback(broadcaster_id, broadcaster_login, event)
         except Exception:
-            self.log.exception("EventSub WS: Callback failed for %s (%s)", broadcaster_id, sub_type)
+            self._forget_message_id(message_id)
+            self._failed = True
+            self._initial_registration_complete.clear()
+            self.log.exception(
+                "EventSub WS: Callback failed for %s (%s, msg_id=%r)",
+                broadcaster_id,
+                sub_type,
+                message_id or None,
+            )
+            raise EventSubTransportSessionInvalid(
+                f"EventSub WS: Callback failed for {sub_type or 'unknown'}"
+            )
