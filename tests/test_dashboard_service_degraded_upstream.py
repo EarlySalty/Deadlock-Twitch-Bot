@@ -19,7 +19,7 @@ from bot.dashboard.route_deps import EntryRouteDeps
 from bot.dashboard.routes_entry import discord_link as entry_discord_link
 from bot.dashboard_service.app import DASHBOARD_EVENTSUB_BRIDGE_KEY, build_dashboard_service_app
 from bot.dashboard_service.client import BotApiClientError
-from bot.dashboard_service.eventsub_bridge import DashboardEventSubBridgeRuntime
+from bot.dashboard_service.eventsub_bridge import DashboardEventSubBridgeRuntime, DashboardEventSubBridgeStore
 from bot.monitoring.eventsub_state_store import EventSubStateStore
 from tests.eventsub_state_store_test_helpers import InMemoryEventSubStateRepository
 
@@ -198,6 +198,60 @@ class _MissingCallbackBotApiClient:
             return_value={"ok": False, "message": "EventSub dispatch unavailable"}
         )
         self.healthz = AsyncMock(return_value={})
+
+    async def close(self) -> None:
+        return None
+
+
+class _RecordingForwardingBotApiClient:
+    def __init__(self, **_kwargs) -> None:
+        self.calls: list[dict[str, object]] = []
+
+    async def dispatch_eventsub_notification(
+        self,
+        *,
+        sub_type: str,
+        payload: dict[str, object],
+        message_id: str | None = None,
+    ) -> dict[str, object]:
+        self.calls.append(
+            {
+                "sub_type": sub_type,
+                "payload": payload,
+                "message_id": message_id,
+            }
+        )
+        return {"ok": True}
+
+    async def healthz(self) -> dict[str, object]:
+        return {}
+
+    async def close(self) -> None:
+        return None
+
+
+class _RecordingUnavailableBotApiClient:
+    def __init__(self, **_kwargs) -> None:
+        self.calls: list[dict[str, object]] = []
+
+    async def dispatch_eventsub_notification(
+        self,
+        *,
+        sub_type: str,
+        payload: dict[str, object],
+        message_id: str | None = None,
+    ) -> dict[str, object]:
+        self.calls.append(
+            {
+                "sub_type": sub_type,
+                "payload": payload,
+                "message_id": message_id,
+            }
+        )
+        return {"ok": False, "message": "EventSub dispatch unavailable"}
+
+    async def healthz(self) -> dict[str, object]:
+        return {}
 
     async def close(self) -> None:
         return None
@@ -854,10 +908,189 @@ class DashboardServiceDegradedUpstreamTests(unittest.IsolatedAsyncioTestCase):
         finally:
             await runtime.stop()
 
+    def test_dashboard_eventsub_bridge_store_persists_sql_semantics(self) -> None:
+        backend = {
+            "outbox": {},
+            "dead_letters": {},
+            "executed": [],
+        }
+
+        class _Cursor:
+            def __init__(self, *, row=None, rows=None) -> None:
+                self._row = row
+                self._rows = list(rows or [])
+                self.rowcount = len(self._rows) if self._rows else (1 if row is not None else 0)
+
+            def fetchone(self):
+                return self._row
+
+            def fetchall(self):
+                return list(self._rows)
+
+        class _Connection:
+            def execute(self, sql: str, params=(), *args, **kwargs):
+                del args, kwargs
+                sql_text = " ".join(str(sql).split())
+                params_tuple = tuple(params or ())
+                backend["executed"].append((sql_text, params_tuple))
+
+                if "CREATE TABLE IF NOT EXISTS twitch_eventsub_bridge_outbox" in sql_text:
+                    return _Cursor()
+                if "CREATE INDEX IF NOT EXISTS idx_twitch_eventsub_bridge_outbox_due" in sql_text:
+                    return _Cursor()
+                if "CREATE TABLE IF NOT EXISTS twitch_eventsub_bridge_dead_letter" in sql_text:
+                    return _Cursor()
+                if "CREATE INDEX IF NOT EXISTS idx_twitch_eventsub_bridge_dead_lettered_at" in sql_text:
+                    return _Cursor()
+                if "INSERT INTO twitch_eventsub_bridge_outbox" in sql_text:
+                    message_id, sub_type, payload_json, queued_at, next_attempt_at = params_tuple
+                    if message_id in backend["outbox"] or message_id in backend["dead_letters"]:
+                        return _Cursor(row=None)
+                    backend["outbox"][message_id] = {
+                        "message_id": message_id,
+                        "sub_type": sub_type,
+                        "payload_json": payload_json,
+                        "queued_at": float(queued_at),
+                        "next_attempt_at": float(next_attempt_at),
+                        "attempt_count": 0,
+                        "last_error": None,
+                    }
+                    return _Cursor(row={"message_id": message_id})
+                if "WITH due AS" in sql_text:
+                    now, limit, lease_until = params_tuple
+                    due_rows = [
+                        row
+                        for row in backend["outbox"].values()
+                        if float(row["next_attempt_at"]) <= float(now)
+                    ]
+                    due_rows.sort(key=lambda row: float(row["queued_at"]))
+                    selected = due_rows[: max(1, int(limit))]
+                    result_rows = []
+                    for row in selected:
+                        row["next_attempt_at"] = float(lease_until)
+                        result_rows.append(
+                            {
+                                "message_id": row["message_id"],
+                                "sub_type": row["sub_type"],
+                                "payload_json": row["payload_json"],
+                                "queued_at": row["queued_at"],
+                                "attempt_count": row["attempt_count"],
+                            }
+                        )
+                    return _Cursor(rows=result_rows)
+                if "SET attempt_count = %s" in sql_text:
+                    attempt_count, next_attempt_at, error_message, message_id = params_tuple
+                    row = backend["outbox"].get(message_id)
+                    if row is not None:
+                        row["attempt_count"] = int(attempt_count)
+                        row["next_attempt_at"] = float(next_attempt_at)
+                        row["last_error"] = error_message
+                    return _Cursor()
+                if "SET next_attempt_at = %s" in sql_text:
+                    next_attempt_at, error_message, message_id = params_tuple
+                    row = backend["outbox"].get(message_id)
+                    if row is not None:
+                        row["next_attempt_at"] = float(next_attempt_at)
+                        row["last_error"] = error_message
+                    return _Cursor()
+                if sql_text.startswith("DELETE FROM twitch_eventsub_bridge_outbox"):
+                    message_id = str(params_tuple[0])
+                    backend["outbox"].pop(message_id, None)
+                    return _Cursor()
+                if "INSERT INTO twitch_eventsub_bridge_dead_letter" in sql_text:
+                    (
+                        message_id,
+                        sub_type,
+                        payload_json,
+                        queued_at,
+                        dead_lettered_at,
+                        attempt_count,
+                        error_message,
+                    ) = params_tuple
+                    backend["dead_letters"][message_id] = {
+                        "message_id": message_id,
+                        "sub_type": sub_type,
+                        "payload_json": payload_json,
+                        "queued_at": float(queued_at),
+                        "dead_lettered_at": float(dead_lettered_at),
+                        "attempt_count": int(attempt_count),
+                        "last_error": error_message,
+                    }
+                    backend["outbox"].pop(message_id, None)
+                    return _Cursor()
+                raise AssertionError(f"unexpected SQL: {sql_text}")
+
+        class _Transaction:
+            def __enter__(self):
+                return _Connection()
+
+            def __exit__(self, exc_type, exc, tb):
+                del exc_type, exc, tb
+                return False
+
+        store = DashboardEventSubBridgeStore()
+        with patch("bot.dashboard_service.eventsub_bridge.storage.transaction", return_value=_Transaction()):
+            self.assertTrue(
+                store.enqueue(
+                    message_id="msg-store-1",
+                    sub_type="stream.offline",
+                    payload={"subscription": {"type": "stream.offline"}},
+                    now=100.0,
+                )
+            )
+            self.assertFalse(
+                store.enqueue(
+                    message_id="msg-store-1",
+                    sub_type="stream.offline",
+                    payload={"subscription": {"type": "stream.offline"}},
+                    now=100.0,
+                )
+            )
+
+            leased = store.lease_due(now=100.0, lease_seconds=30.0, limit=10)
+            self.assertEqual(len(leased), 1)
+            self.assertEqual(leased[0]["message_id"], "msg-store-1")
+            self.assertEqual(backend["outbox"]["msg-store-1"]["next_attempt_at"], 130.0)
+
+            store.mark_retry(
+                message_id="msg-store-1",
+                attempt_count=2,
+                error_message="temporary bridge failure",
+                next_attempt_at=150.0,
+            )
+            self.assertEqual(backend["outbox"]["msg-store-1"]["attempt_count"], 2)
+            self.assertEqual(backend["outbox"]["msg-store-1"]["last_error"], "temporary bridge failure")
+
+            store.mark_deferred(
+                message_id="msg-store-1",
+                error_message="eventsub notification dispatch inactive",
+                next_attempt_at=200.0,
+            )
+            self.assertEqual(backend["outbox"]["msg-store-1"]["attempt_count"], 2)
+            self.assertEqual(
+                backend["outbox"]["msg-store-1"]["last_error"],
+                "eventsub notification dispatch inactive",
+            )
+            self.assertEqual(backend["outbox"]["msg-store-1"]["next_attempt_at"], 200.0)
+
+            store.mark_dead_letter(
+                message_id="msg-store-1",
+                sub_type="stream.offline",
+                payload_json='{"subscription":{"type":"stream.offline"}}',
+                queued_at=100.0,
+                attempt_count=3,
+                error_message="permanent bridge failure",
+                dead_lettered_at=250.0,
+            )
+            self.assertNotIn("msg-store-1", backend["outbox"])
+            self.assertIn("msg-store-1", backend["dead_letters"])
+            self.assertEqual(backend["dead_letters"]["msg-store-1"]["attempt_count"], 3)
+            self.assertEqual(backend["dead_letters"]["msg-store-1"]["last_error"], "permanent bridge failure")
+
     async def test_dashboard_service_eventsub_callback_route_forwards_signed_request_and_deduplicates_replays(
         self,
     ) -> None:
-        fake_client = _ForwardingBotApiClient()
+        fake_client = _RecordingForwardingBotApiClient()
 
         def _fake_secret(name: str, *args, **kwargs) -> str:
             del args, kwargs
@@ -909,30 +1142,27 @@ class DashboardServiceDegradedUpstreamTests(unittest.IsolatedAsyncioTestCase):
             async with TestClient(server) as client:
                 first = await client.post("/twitch/eventsub/callback", json=body, headers=headers)
                 second = await client.post("/twitch/eventsub/callback", json=body, headers=headers)
-                await self._wait_for_async_mock_awaits(
-                    fake_client.dispatch_eventsub_notification,
-                    minimum=1,
-                )
+                await asyncio.sleep(0.05)
 
         self.assertEqual(first.status, 204)
         self.assertEqual(second.status, 204)
-        self.assertEqual(fake_client.dispatch_eventsub_notification.await_count, 1)
-        only_call = fake_client.dispatch_eventsub_notification.await_args_list[0]
-        self.assertEqual(only_call.kwargs["sub_type"], "stream.offline")
-        self.assertEqual(only_call.kwargs["message_id"], "msg-route-offline-1")
+        self.assertEqual(len(fake_client.calls), 1)
+        only_call = fake_client.calls[0]
+        self.assertEqual(only_call["sub_type"], "stream.offline")
+        self.assertEqual(only_call["message_id"], "msg-route-offline-1")
         self.assertEqual(
-            only_call.kwargs["payload"]["subscription"]["condition"]["broadcaster_user_id"],
+            only_call["payload"]["subscription"]["condition"]["broadcaster_user_id"],
             "520300019",
         )
         self.assertEqual(
-            only_call.kwargs["payload"]["event"]["broadcaster_user_login"],
+            only_call["payload"]["event"]["broadcaster_user_login"],
             "derechtecoolys",
         )
 
     async def test_dashboard_service_eventsub_callback_route_persists_retry_after_bridge_failure(
         self,
     ) -> None:
-        fake_client = _MissingCallbackBotApiClient()
+        fake_client = _RecordingUnavailableBotApiClient()
 
         def _fake_secret(name: str, *args, **kwargs) -> str:
             del args, kwargs
@@ -988,23 +1218,19 @@ class DashboardServiceDegradedUpstreamTests(unittest.IsolatedAsyncioTestCase):
             async with TestClient(server) as client:
                 first = await client.post("/twitch/eventsub/callback", json=body, headers=headers)
                 second = await client.post("/twitch/eventsub/callback", json=body, headers=headers)
-                await self._wait_for_async_mock_awaits(
-                    fake_client.dispatch_eventsub_notification,
-                    minimum=1,
-                )
+                await asyncio.sleep(0.05)
 
         self.assertEqual(first.status, 204)
         self.assertEqual(second.status, 204)
-        self.assertEqual(fake_client.dispatch_eventsub_notification.await_count, 1)
+        self.assertEqual(len(fake_client.calls), 1)
         runtime = app[DASHBOARD_EVENTSUB_BRIDGE_KEY]
         self.assertIn("msg-route-raid-failure-1", runtime._store.rows)
         self.assertEqual(
             runtime._store.rows["msg-route-raid-failure-1"]["attempt_count"],
             1,
         )
-        for call in fake_client.dispatch_eventsub_notification.await_args_list:
-            self.assertEqual(call.kwargs["sub_type"], "channel.raid")
-            self.assertEqual(call.kwargs["message_id"], "msg-route-raid-failure-1")
+        self.assertEqual(fake_client.calls[0]["sub_type"], "channel.raid")
+        self.assertEqual(fake_client.calls[0]["message_id"], "msg-route-raid-failure-1")
 
     async def test_write_callbacks_raise_bot_api_error_when_internal_api_is_missing(self) -> None:
         captured: dict[str, object] = {}
