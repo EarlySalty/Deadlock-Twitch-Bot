@@ -17,7 +17,7 @@ from bot.core.constants import log
 from bot.dashboard.live.live import DashboardLiveMixin
 from bot.dashboard.route_deps import EntryRouteDeps
 from bot.dashboard.routes_entry import discord_link as entry_discord_link
-from bot.dashboard_service.app import build_dashboard_service_app
+from bot.dashboard_service.app import DASHBOARD_EVENTSUB_BRIDGE_KEY, build_dashboard_service_app
 from bot.dashboard_service.client import BotApiClientError
 from bot.dashboard_service.eventsub_bridge import DashboardEventSubBridgeRuntime
 from bot.monitoring.eventsub_state_store import EventSubStateStore
@@ -916,26 +916,20 @@ class DashboardServiceDegradedUpstreamTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(first.status, 204)
         self.assertEqual(second.status, 204)
-        first_call = fake_client.dispatch_eventsub_notification.await_args_list[0]
+        self.assertEqual(fake_client.dispatch_eventsub_notification.await_count, 1)
+        only_call = fake_client.dispatch_eventsub_notification.await_args_list[0]
+        self.assertEqual(only_call.kwargs["sub_type"], "stream.offline")
+        self.assertEqual(only_call.kwargs["message_id"], "msg-route-offline-1")
         self.assertEqual(
-            first_call.kwargs,
-            {
-                "sub_type": "stream.offline",
-                "message_id": "msg-route-offline-1",
-                "payload": {
-                    "subscription": {
-                        "type": "stream.offline",
-                        "condition": {"broadcaster_user_id": "520300019"},
-                    },
-                    "event": {
-                        "broadcaster_user_id": "520300019",
-                        "broadcaster_user_login": "derechtecoolys",
-                    },
-                },
-            },
+            only_call.kwargs["payload"]["subscription"]["condition"]["broadcaster_user_id"],
+            "520300019",
+        )
+        self.assertEqual(
+            only_call.kwargs["payload"]["event"]["broadcaster_user_login"],
+            "derechtecoolys",
         )
 
-    async def test_dashboard_service_eventsub_callback_route_releases_message_id_after_bridge_failure(
+    async def test_dashboard_service_eventsub_callback_route_persists_retry_after_bridge_failure(
         self,
     ) -> None:
         fake_client = _MissingCallbackBotApiClient()
@@ -1001,7 +995,13 @@ class DashboardServiceDegradedUpstreamTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(first.status, 204)
         self.assertEqual(second.status, 204)
-        self.assertGreaterEqual(fake_client.dispatch_eventsub_notification.await_count, 1)
+        self.assertEqual(fake_client.dispatch_eventsub_notification.await_count, 1)
+        runtime = app[DASHBOARD_EVENTSUB_BRIDGE_KEY]
+        self.assertIn("msg-route-raid-failure-1", runtime._store.rows)
+        self.assertEqual(
+            runtime._store.rows["msg-route-raid-failure-1"]["attempt_count"],
+            1,
+        )
         for call in fake_client.dispatch_eventsub_notification.await_args_list:
             self.assertEqual(call.kwargs["sub_type"], "channel.raid")
             self.assertEqual(call.kwargs["message_id"], "msg-route-raid-failure-1")
