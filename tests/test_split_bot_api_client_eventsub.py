@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import asyncio
 import unittest
+
+import aiohttp
 
 from bot.dashboard_service.client import BotApiClient, BotApiClientError
 
@@ -111,7 +114,7 @@ class BotApiClientEventSubDispatchTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertTrue(session.response.released)
 
-    async def test_dispatch_eventsub_notification_rejects_non_object_response_shape(self) -> None:
+    async def test_dispatch_eventsub_notification_disables_redirects_for_invalid_shape_response(self) -> None:
         session = _FakeSession(response=_FakeResponse(status=200, text="[]"))
         client = BotApiClient(
             base_url="http://127.0.0.1:8766",
@@ -134,3 +137,41 @@ class BotApiClientEventSubDispatchTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(session.calls[0]["kwargs"]["allow_redirects"], False)
         self.assertTrue(session.response.released)
+
+    async def test_dispatch_eventsub_notification_maps_request_timeout(self) -> None:
+        session = _FakeSession(exc=asyncio.TimeoutError())
+        client = BotApiClient(
+            base_url="http://127.0.0.1:8766",
+            token="secret",
+            session=session,
+        )
+
+        with self.assertRaises(BotApiClientError) as ctx:
+            await client.dispatch_eventsub_notification(
+                sub_type="stream.offline",
+                message_id="msg-timeout-1",
+                payload={"event": {"broadcaster_user_id": "42"}},
+            )
+
+        self.assertEqual(ctx.exception.status, 504)
+        self.assertEqual(ctx.exception.code, "upstream_timeout")
+        self.assertEqual(ctx.exception.message, "Bot internal API request timed out.")
+
+    async def test_dispatch_eventsub_notification_maps_connection_errors(self) -> None:
+        session = _FakeSession(exc=aiohttp.ClientConnectionError("boom"))
+        client = BotApiClient(
+            base_url="http://127.0.0.1:8766",
+            token="secret",
+            session=session,
+        )
+
+        with self.assertRaises(BotApiClientError) as ctx:
+            await client.dispatch_eventsub_notification(
+                sub_type="stream.offline",
+                message_id="msg-conn-1",
+                payload={"event": {"broadcaster_user_id": "42"}},
+            )
+
+        self.assertEqual(ctx.exception.status, 502)
+        self.assertEqual(ctx.exception.code, "upstream_connection_failed")
+        self.assertEqual(ctx.exception.message, "Bot internal API is unreachable.")
