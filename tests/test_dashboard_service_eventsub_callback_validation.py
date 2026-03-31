@@ -22,11 +22,12 @@ def _signed_eventsub_headers(
     secret: str,
     body: dict[str, object],
     message_id: str,
+    timestamp: str | None = None,
     message_type: str = "notification",
     subscription_type: str = "stream.offline",
 ) -> dict[str, str]:
     raw_body = json.dumps(body).encode("utf-8")
-    timestamp = datetime.now(UTC).isoformat(timespec="seconds").replace("+00:00", "Z")
+    timestamp = timestamp or datetime.now(UTC).isoformat(timespec="seconds").replace("+00:00", "Z")
     digest = hmac.new(
         secret.encode("utf-8"),
         message_id.encode("utf-8") + timestamp.encode("utf-8") + raw_body,
@@ -223,6 +224,110 @@ class DashboardServiceEventSubCallbackValidationTests(unittest.IsolatedAsyncioTe
             message_id="msg-invalid-signature-1",
         )
         headers["Twitch-Eventsub-Message-Signature"] = "sha256=deadbeef"
+
+        try:
+            async with TestClient(dashboard_server) as client:
+                response = await client.post(
+                    "/twitch/eventsub/callback",
+                    json=body,
+                    headers=headers,
+                )
+        finally:
+            await dashboard_server.close()
+            await internal_server.close()
+
+        self.assertEqual(response.status, 403)
+        self.assertEqual(seen, [])
+        self.assertEqual(bridge_runtime.dispatch_calls, [])
+
+    async def test_replayed_valid_message_id_is_not_forwarded_again(self) -> None:
+        async def _eventsub_dispatch_cb(
+            *,
+            sub_type: str,
+            message_id: str | None,
+            payload: dict[str, object],
+        ) -> dict[str, object]:
+            del sub_type, message_id, payload
+            return {"ok": True}
+
+        internal_server, dashboard_server, bridge_runtime = await self._build_app_pair(
+            eventsub_dispatch_cb=_eventsub_dispatch_cb,
+        )
+        body = {
+            "subscription": {
+                "type": "stream.offline",
+                "condition": {"broadcaster_user_id": "520300019"},
+            },
+            "event": {
+                "broadcaster_user_id": "520300019",
+                "broadcaster_user_login": "derechtecoolys",
+            },
+        }
+        headers = _signed_eventsub_headers(
+            secret="webhook-secret",
+            body=body,
+            message_id="msg-replay-1",
+        )
+
+        try:
+            async with TestClient(dashboard_server) as client:
+                first = await client.post(
+                    "/twitch/eventsub/callback",
+                    json=body,
+                    headers=headers,
+                )
+                second = await client.post(
+                    "/twitch/eventsub/callback",
+                    json=body,
+                    headers=headers,
+                )
+        finally:
+            await dashboard_server.close()
+            await internal_server.close()
+
+        self.assertEqual(first.status, 204)
+        self.assertEqual(second.status, 204)
+        self.assertEqual(len(bridge_runtime.dispatch_calls), 1)
+        self.assertEqual(bridge_runtime.dispatch_calls[0]["message_id"], "msg-replay-1")
+        self.assertEqual(bridge_runtime.dispatch_calls[0]["sub_type"], "stream.offline")
+
+    async def test_future_timestamp_is_rejected_without_forwarding(self) -> None:
+        seen: list[dict[str, object]] = []
+
+        async def _eventsub_dispatch_cb(
+            *,
+            sub_type: str,
+            message_id: str | None,
+            payload: dict[str, object],
+        ) -> dict[str, object]:
+            seen.append(
+                {
+                    "sub_type": sub_type,
+                    "message_id": message_id,
+                    "payload": payload,
+                }
+            )
+            return {"ok": True}
+
+        internal_server, dashboard_server, bridge_runtime = await self._build_app_pair(
+            eventsub_dispatch_cb=_eventsub_dispatch_cb,
+        )
+        body = {
+            "subscription": {
+                "type": "stream.offline",
+                "condition": {"broadcaster_user_id": "520300019"},
+            },
+            "event": {
+                "broadcaster_user_id": "520300019",
+                "broadcaster_user_login": "derechtecoolys",
+            },
+        }
+        headers = _signed_eventsub_headers(
+            secret="webhook-secret",
+            body=body,
+            message_id="msg-future-ts-1",
+            timestamp="2100-01-01T00:00:00Z",
+        )
 
         try:
             async with TestClient(dashboard_server) as client:
