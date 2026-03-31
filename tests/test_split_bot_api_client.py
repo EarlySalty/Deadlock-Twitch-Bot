@@ -114,6 +114,32 @@ class BotApiClientErrorMappingTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(ctx.exception.code, "bad_request")
         self.assertNotIn("\n", ctx.exception.message)
 
+    async def test_maps_5xx_error_code_and_message_from_internal_api_payload(self) -> None:
+        session = _FakeSession(
+            response=_FakeResponse(
+                status=503,
+                text=(
+                    '{"error":"eventsub_dispatch_inactive",'
+                    '"message":"eventsub notification dispatch inactive"}'
+                ),
+            )
+        )
+        client = BotApiClient(
+            base_url="http://127.0.0.1:8766",
+            token="secret",
+            session=session,
+        )
+
+        with self.assertRaises(BotApiClientError) as ctx:
+            await client.healthz()
+
+        self.assertEqual(ctx.exception.status, 502)
+        self.assertEqual(ctx.exception.code, "eventsub_dispatch_inactive")
+        self.assertEqual(
+            ctx.exception.message,
+            "eventsub notification dispatch inactive",
+        )
+
     async def test_base_url_with_internal_prefix_is_not_duplicated(self) -> None:
         session = _FakeSession(response=_FakeResponse(status=200, text="[]"))
         client = BotApiClient(

@@ -251,6 +251,19 @@ class _InMemoryBridgeStore:
         row["last_error"] = error_message
         row["next_attempt_at"] = float(next_attempt_at)
 
+    def mark_deferred(
+        self,
+        *,
+        message_id: str,
+        error_message: str,
+        next_attempt_at: float,
+    ) -> None:
+        row = self.rows.get(message_id)
+        if not row:
+            return
+        row["last_error"] = error_message
+        row["next_attempt_at"] = float(next_attempt_at)
+
     def mark_dead_letter(
         self,
         *,
@@ -697,6 +710,149 @@ class DashboardServiceDegradedUpstreamTests(unittest.IsolatedAsyncioTestCase):
             "EventSub dispatch unavailable",
             str(store.dead_letters["dead-letter-msg-1"]["last_error"]),
         )
+
+    async def test_dashboard_eventsub_bridge_does_not_spend_attempts_while_bot_dispatch_is_inactive(
+        self,
+    ) -> None:
+        fake_client = _ForwardingBotApiClient()
+        fake_client.dispatch_eventsub_notification = AsyncMock(
+            side_effect=BotApiClientError(
+                status=503,
+                code="upstream_unavailable",
+                message="eventsub notification dispatch inactive",
+            )
+        )
+        store = _InMemoryBridgeStore()
+        current_time = {"now": 1000.0}
+        runtime = DashboardEventSubBridgeRuntime(
+            client=fake_client,
+            logger=log,
+            store=store,
+            now=lambda: current_time["now"],
+        )
+        await runtime.start()
+        try:
+            await runtime.dispatch_or_enqueue(
+                sub_type="stream.offline",
+                message_id="startup-msg-1",
+                payload={
+                    "subscription": {"type": "stream.offline"},
+                    "event": {"broadcaster_user_id": "42"},
+                },
+            )
+            self.assertIn("startup-msg-1", store.rows)
+            self.assertEqual(store.rows["startup-msg-1"]["attempt_count"], 0)
+
+            await runtime._process_due_batch()
+            self.assertEqual(fake_client.dispatch_eventsub_notification.await_count, 1)
+            self.assertEqual(store.rows["startup-msg-1"]["attempt_count"], 0)
+            self.assertNotIn("startup-msg-1", store.dead_letters)
+
+            current_time["now"] = float(store.rows["startup-msg-1"]["next_attempt_at"])
+            await runtime._process_due_batch()
+            self.assertEqual(fake_client.dispatch_eventsub_notification.await_count, 2)
+            self.assertEqual(store.rows["startup-msg-1"]["attempt_count"], 0)
+            self.assertNotIn("startup-msg-1", store.dead_letters)
+            self.assertEqual(
+                store.rows["startup-msg-1"]["last_error"],
+                "eventsub notification dispatch inactive",
+            )
+        finally:
+            await runtime.stop()
+
+    async def test_dashboard_eventsub_bridge_treats_structured_inactive_response_as_startup_pending(
+        self,
+    ) -> None:
+        fake_client = _ForwardingBotApiClient()
+        fake_client.dispatch_eventsub_notification = AsyncMock(
+            return_value={
+                "ok": False,
+                "message": "eventsub notification dispatch inactive",
+            }
+        )
+        store = _InMemoryBridgeStore()
+        current_time = {"now": 1000.0}
+        runtime = DashboardEventSubBridgeRuntime(
+            client=fake_client,
+            logger=log,
+            store=store,
+            now=lambda: current_time["now"],
+        )
+        await runtime.start()
+        try:
+            await runtime.dispatch_or_enqueue(
+                sub_type="stream.offline",
+                message_id="startup-msg-structured-1",
+                payload={
+                    "subscription": {"type": "stream.offline"},
+                    "event": {"broadcaster_user_id": "42"},
+                },
+            )
+            self.assertIn("startup-msg-structured-1", store.rows)
+            self.assertEqual(store.rows["startup-msg-structured-1"]["attempt_count"], 0)
+
+            await runtime._process_due_batch()
+            self.assertEqual(fake_client.dispatch_eventsub_notification.await_count, 1)
+            self.assertEqual(store.rows["startup-msg-structured-1"]["attempt_count"], 0)
+            self.assertNotIn("startup-msg-structured-1", store.dead_letters)
+            self.assertEqual(
+                store.rows["startup-msg-structured-1"]["last_error"],
+                "eventsub notification dispatch inactive",
+            )
+
+            current_time["now"] = float(store.rows["startup-msg-structured-1"]["next_attempt_at"])
+            await runtime._process_due_batch()
+            self.assertEqual(fake_client.dispatch_eventsub_notification.await_count, 2)
+            self.assertEqual(store.rows["startup-msg-structured-1"]["attempt_count"], 0)
+            self.assertNotIn("startup-msg-structured-1", store.dead_letters)
+        finally:
+            await runtime.stop()
+
+    async def test_dashboard_eventsub_bridge_counts_missing_webhook_handler_as_real_failure(
+        self,
+    ) -> None:
+        fake_client = _ForwardingBotApiClient()
+        fake_client.dispatch_eventsub_notification = AsyncMock(
+            side_effect=BotApiClientError(
+                status=503,
+                code="upstream_unavailable",
+                message="eventsub webhook handler unavailable",
+            )
+        )
+        store = _InMemoryBridgeStore()
+        current_time = {"now": 1000.0}
+        runtime = DashboardEventSubBridgeRuntime(
+            client=fake_client,
+            logger=log,
+            store=store,
+            now=lambda: current_time["now"],
+        )
+        await runtime.start()
+        try:
+            await runtime.dispatch_or_enqueue(
+                sub_type="stream.offline",
+                message_id="missing-handler-msg-1",
+                payload={
+                    "subscription": {"type": "stream.offline"},
+                    "event": {"broadcaster_user_id": "42"},
+                },
+            )
+            self.assertIn("missing-handler-msg-1", store.rows)
+
+            await runtime._process_due_batch()
+            self.assertEqual(fake_client.dispatch_eventsub_notification.await_count, 1)
+            self.assertEqual(store.rows["missing-handler-msg-1"]["attempt_count"], 1)
+            self.assertNotIn("missing-handler-msg-1", store.dead_letters)
+            self.assertEqual(
+                store.rows["missing-handler-msg-1"]["last_error"],
+                "eventsub webhook handler unavailable",
+            )
+            self.assertGreater(
+                float(store.rows["missing-handler-msg-1"]["next_attempt_at"]),
+                current_time["now"],
+            )
+        finally:
+            await runtime.stop()
 
     async def test_dashboard_service_eventsub_callback_route_forwards_signed_request_and_deduplicates_replays(
         self,

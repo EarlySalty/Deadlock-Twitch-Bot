@@ -17,6 +17,11 @@ _OUTBOX_IDLE_WAIT_SECONDS = 5.0
 _OUTBOX_RETRY_BASE_SECONDS = 1.0
 _OUTBOX_RETRY_MAX_SECONDS = 60.0
 _OUTBOX_MAX_ATTEMPTS = 5
+_OUTBOX_STARTUP_WAIT_SECONDS = 5.0
+
+
+class _DashboardEventSubBridgeStartupPending(RuntimeError):
+    """Raised when the bot is alive but has not activated EventSub dispatch yet."""
 
 
 class DashboardEventSubBridgeStore:
@@ -189,6 +194,29 @@ class DashboardEventSubBridgeStore:
                 ),
             )
 
+    def mark_deferred(
+        self,
+        *,
+        message_id: str,
+        error_message: str,
+        next_attempt_at: float,
+    ) -> None:
+        self.ensure_initialized()
+        with storage.transaction() as conn:
+            conn.execute(
+                """
+                UPDATE twitch_eventsub_bridge_outbox
+                   SET next_attempt_at = %s,
+                       last_error = %s
+                 WHERE message_id = %s
+                """,
+                (
+                    float(next_attempt_at),
+                    str(error_message or "").strip()[:500] or None,
+                    message_id,
+                ),
+            )
+
     def mark_dead_letter(
         self,
         *,
@@ -347,6 +375,21 @@ class DashboardEventSubBridgeRuntime:
                     payload=payload,
                     message_id=message_id,
                 )
+            except _DashboardEventSubBridgeStartupPending as exc:
+                next_attempt = float(self._now()) + _OUTBOX_STARTUP_WAIT_SECONDS
+                await asyncio.to_thread(
+                    self._store.mark_deferred,
+                    message_id=message_id,
+                    error_message=str(exc),
+                    next_attempt_at=next_attempt,
+                )
+                self._log.info(
+                    "Dashboard EventSub bridge waiting for bot EventSub readiness for %s msg_id=%s: %s",
+                    sub_type or "unknown",
+                    message_id or "n/a",
+                    exc,
+                )
+                continue
             except Exception as exc:
                 next_attempt_count = attempt_count + 1
                 if next_attempt_count >= _OUTBOX_MAX_ATTEMPTS:
@@ -406,11 +449,27 @@ class DashboardEventSubBridgeRuntime:
                 message_id=message_id,
             )
         except BotApiClientError as exc:
-            raise RuntimeError("dashboard eventsub bridge upstream unavailable") from exc
+            if self._is_startup_pending_error(exc):
+                raise _DashboardEventSubBridgeStartupPending(str(exc)) from exc
+            raise RuntimeError(str(exc) or "dashboard eventsub bridge upstream unavailable") from exc
         if isinstance(response, dict) and response.get("ok") is False:
-            raise RuntimeError(
-                str(response.get("message") or "dashboard eventsub bridge dispatch failed")
-            )
+            response_message = str(response.get("message") or "").strip()
+            if self._is_startup_pending_message(response_message):
+                raise _DashboardEventSubBridgeStartupPending(response_message)
+            raise RuntimeError(response_message or "dashboard eventsub bridge dispatch failed")
+
+    @staticmethod
+    def _is_startup_pending_error(exc: BotApiClientError) -> bool:
+        if not isinstance(exc, BotApiClientError):
+            return False
+        return DashboardEventSubBridgeRuntime._is_startup_pending_message(str(exc.message or exc))
+
+    @staticmethod
+    def _is_startup_pending_message(message: str) -> bool:
+        normalized_message = str(message or "").strip().lower()
+        return normalized_message in {
+            "eventsub notification dispatch inactive",
+        }
 
     def _retry_delay_seconds(self, attempts: int) -> float:
         scaled = _OUTBOX_RETRY_BASE_SECONDS * (2 ** max(0, int(attempts) - 1))

@@ -255,12 +255,13 @@ async def eventsub_dispatch(server: Any, request: web.Request) -> web.Response:
             message="invalid request body",
         )
     except RuntimeError as exc:
+        detail = server._safe_bad_request_detail(exc)
         return server._safe_exception_error(
             context="eventsub dispatch runtime",
             exc=exc,
             error="upstream_unavailable",
             status=503,
-            message="upstream unavailable",
+            message=detail or "upstream unavailable",
         )
     except Exception:
         log.exception("internal api eventsub dispatch failed")

@@ -155,6 +155,9 @@ class BotApiClient:
 
     def _map_http_error(self, status: int, payload: Any) -> BotApiClientError:
         upstream_message = self._extract_error_text(payload)
+        upstream_code = ""
+        if isinstance(payload, dict):
+            upstream_code = str(payload.get("error") or "").strip()
         if status in {400, 404}:
             code = "bad_request" if status == 400 else "not_found"
             fallback = (
@@ -182,8 +185,11 @@ class BotApiClient:
         if status >= 500:
             return BotApiClientError(
                 status=502,
-                code="upstream_unavailable",
-                message="Bot internal API is currently unavailable.",
+                code=upstream_code or "upstream_unavailable",
+                message=self._sanitize_message(
+                    upstream_message,
+                    fallback="Bot internal API is currently unavailable.",
+                ),
             )
         return BotApiClientError(
             status=502,

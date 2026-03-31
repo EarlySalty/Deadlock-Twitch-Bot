@@ -977,6 +977,81 @@ class InternalApiAuthTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(response.status, 503)
         self.assertEqual(payload.get("error"), "upstream_unavailable")
+        self.assertEqual(payload.get("message"), "EventSub dispatch unavailable")
+
+    async def test_eventsub_dispatch_surfaces_safe_runtime_detail_for_inactive_dispatch(self) -> None:
+        async def _eventsub_dispatch_cb(
+            *,
+            sub_type: str,
+            message_id: str | None,
+            payload: dict[str, object],
+        ) -> dict[str, object]:
+            del sub_type, message_id, payload
+            raise RuntimeError("eventsub notification dispatch inactive")
+
+        app = build_internal_api_app(
+            token="secret-token",
+            eventsub_dispatch_cb=_eventsub_dispatch_cb,
+        )
+        with self.assertLogs("TwitchStreams", level="WARNING") as captured:
+            async with TestServer(app) as server:
+                async with TestClient(server) as client:
+                    response = await client.post(
+                        f"{INTERNAL_API_BASE_PATH}/eventsub/dispatch",
+                        headers={INTERNAL_TOKEN_HEADER: "secret-token"},
+                        json={
+                            "sub_type": "stream.offline",
+                            "message_id": "msg-bridge-inactive-1",
+                            "payload": {
+                                "subscription": {"type": "stream.offline"},
+                                "event": {"broadcaster_user_id": "42"},
+                            },
+                        },
+                    )
+                    payload = await response.json()
+
+        self.assertEqual(response.status, 503)
+        self.assertEqual(payload.get("error"), "upstream_unavailable")
+        self.assertEqual(payload.get("message"), "eventsub notification dispatch inactive")
+        self.assertTrue(any("eventsub dispatch runtime failed (RuntimeError)" in line for line in captured.output))
+
+    async def test_eventsub_dispatch_runtime_detail_does_not_leak_sensitive_values(self) -> None:
+        async def _eventsub_dispatch_cb(
+            *,
+            sub_type: str,
+            message_id: str | None,
+            payload: dict[str, object],
+        ) -> dict[str, object]:
+            del sub_type, message_id, payload
+            raise RuntimeError("eventsub dispatch token=super-secret")
+
+        app = build_internal_api_app(
+            token="secret-token",
+            eventsub_dispatch_cb=_eventsub_dispatch_cb,
+        )
+        with self.assertLogs("TwitchStreams", level="WARNING") as captured:
+            async with TestServer(app) as server:
+                async with TestClient(server) as client:
+                    response = await client.post(
+                        f"{INTERNAL_API_BASE_PATH}/eventsub/dispatch",
+                        headers={INTERNAL_TOKEN_HEADER: "secret-token"},
+                        json={
+                            "sub_type": "stream.offline",
+                            "message_id": "msg-bridge-secret-1",
+                            "payload": {
+                                "subscription": {"type": "stream.offline"},
+                                "event": {"broadcaster_user_id": "42"},
+                            },
+                        },
+                    )
+                    payload = await response.json()
+
+        self.assertEqual(response.status, 503)
+        self.assertEqual(payload.get("error"), "upstream_unavailable")
+        self.assertEqual(payload.get("message"), "upstream unavailable")
+        self.assertNotIn("super-secret", payload.get("message", ""))
+        self.assertTrue(any("eventsub dispatch runtime failed (RuntimeError)" in line for line in captured.output))
+        self.assertTrue(all("super-secret" not in line for line in captured.output))
 
     def test_loopback_host_parser_accepts_ipv6_literals(self) -> None:
         self.assertEqual(InternalApiServer._host_without_port("::1"), "::1")
