@@ -4,6 +4,7 @@ import asyncio
 import json
 import unittest
 from typing import Any
+from unittest.mock import MagicMock
 
 from bot.monitoring.eventsub_processing_inbox import EventSubProcessingInboxRuntime
 
@@ -159,3 +160,45 @@ class EventSubProcessingInboxRuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(attempts), 5)
         self.assertNotIn(work_id, store.rows)
         self.assertEqual(store.dead_letters[work_id]["attempt_count"], 5)
+
+    async def test_processing_inbox_logs_and_reports_dead_letters(self) -> None:
+        store = _InMemoryProcessingStore()
+        logger = MagicMock()
+        dead_letters: list[dict[str, Any]] = []
+
+        async def _handler(work_type: str, payload: dict[str, Any]) -> None:
+            del work_type, payload
+            raise RuntimeError("persistent failure")
+
+        async def _on_dead_letter(payload: dict[str, Any]) -> None:
+            dead_letters.append(dict(payload))
+
+        runtime = EventSubProcessingInboxRuntime(
+            handler=_handler,
+            on_dead_letter=_on_dead_letter,
+            logger=logger,
+            store=store,
+            now=lambda: 1000.0,
+        )
+        runtime._retry_delay_seconds = lambda _attempts: 0.0  # type: ignore[method-assign]
+
+        work_id = await runtime.enqueue(
+            work_type="channel.raid",
+            message_id="msg-dead-letter-1",
+            payload={"foo": "bar"},
+        )
+        await runtime.start()
+        try:
+            deadline = asyncio.get_running_loop().time() + 1.0
+            while work_id not in store.dead_letters:
+                if asyncio.get_running_loop().time() >= deadline:
+                    raise AssertionError("expected processing inbox row to be dead-lettered")
+                await asyncio.sleep(0.02)
+        finally:
+            await runtime.stop()
+
+        self.assertEqual(len(dead_letters), 1)
+        self.assertEqual(dead_letters[0]["work_id"], work_id)
+        self.assertEqual(dead_letters[0]["work_type"], "channel.raid")
+        self.assertEqual(dead_letters[0]["message_id"], "msg-dead-letter-1")
+        logger.error.assert_called()

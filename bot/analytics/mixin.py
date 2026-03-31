@@ -1664,15 +1664,48 @@ class TwitchAnalyticsMixin:
         broadcaster_login: str,
         login_value: str,
         defer_refresh: bool,
+        message_id: str | None = None,
     ) -> None:
         handler = getattr(self, "_handle_stream_went_live", None)
         if callable(handler):
-            log.info(
-                "EventSub stream.online: %s (%s) ist live – triggere Go-Live-Handler",
-                broadcaster_login or broadcaster_user_id,
-                broadcaster_user_id,
-            )
-            await handler(broadcaster_user_id, broadcaster_login)
+            executed = True
+            run_once = getattr(self, "_run_eventsub_business_effect_once", None)
+            if callable(run_once):
+                executed = await run_once(
+                    message_id=message_id,
+                    effect_name="stream_online_went_live",
+                    coro_factory=lambda: handler(broadcaster_user_id, broadcaster_login),
+                )
+            else:
+                await handler(broadcaster_user_id, broadcaster_login)
+            if executed:
+                log.info(
+                    "EventSub stream.online: %s (%s) ist live – triggere Go-Live-Handler",
+                    broadcaster_login or broadcaster_user_id,
+                    broadcaster_user_id,
+                )
+            else:
+                log.debug(
+                    "EventSub stream.online: Go-Live-Handler bereits verarbeitet fuer %s msg_id=%s",
+                    broadcaster_user_id,
+                    message_id or "n/a",
+                )
+
+        async def _refresh_once() -> None:
+            refresh = getattr(self, "_request_partner_raid_score_refresh", None)
+            if callable(refresh):
+                try:
+                    await refresh(
+                        twitch_user_id=broadcaster_user_id,
+                        login=login_value or broadcaster_login,
+                        trigger="eventsub_stream_online",
+                    )
+                except Exception:
+                    log.debug(
+                        "_handle_stream_online: Partner raid score refresh failed for %s",
+                        broadcaster_user_id,
+                        exc_info=True,
+                    )
 
         schedule_refresh = getattr(self, "_schedule_partner_raid_score_refresh", None)
         if defer_refresh and callable(schedule_refresh):
@@ -1690,23 +1723,23 @@ class TwitchAnalyticsMixin:
                 )
             return
 
-        refresh = getattr(self, "_request_partner_raid_score_refresh", None)
-        if callable(refresh):
-            try:
-                await refresh(
-                    twitch_user_id=broadcaster_user_id,
-                    login=login_value or broadcaster_login,
-                    trigger="eventsub_stream_online",
-                )
-            except Exception:
-                log.debug(
-                    "_handle_stream_online: Partner raid score refresh failed for %s",
-                    broadcaster_user_id,
-                    exc_info=True,
-                )
+        run_once = getattr(self, "_run_eventsub_business_effect_once", None)
+        if callable(run_once):
+            await run_once(
+                message_id=message_id,
+                effect_name="stream_online_refresh",
+                coro_factory=_refresh_once,
+            )
+            return
+        await _refresh_once()
 
     async def _handle_stream_online(
-        self, broadcaster_user_id: str, broadcaster_login: str, event: dict
+        self,
+        broadcaster_user_id: str,
+        broadcaster_login: str,
+        event: dict,
+        *,
+        message_id: str | None = None,
     ) -> None:
         """Wird von stream.online EventSub aufgerufen – triggert sofort den Go-Live-Handler."""
         started_at = (event.get("started_at") or "").strip() or None
@@ -1761,6 +1794,7 @@ class TwitchAnalyticsMixin:
                 broadcaster_user_id=broadcaster_user_id,
                 broadcaster_login=broadcaster_login,
                 login_value=login_value,
+                message_id=message_id,
             )
             return
         await self._run_stream_online_followups(
@@ -1768,6 +1802,7 @@ class TwitchAnalyticsMixin:
             broadcaster_login=broadcaster_login,
             login_value=login_value,
             defer_refresh=should_defer_followups,
+            message_id=message_id,
         )
 
     async def _handle_channel_update(
@@ -1775,6 +1810,7 @@ class TwitchAnalyticsMixin:
         broadcaster_user_id: str,
         event: dict,
         *,
+        message_id: str | None = None,
         allow_background_refresh: bool = True,
     ) -> None:
         """Speichert eine channel.update Notification (Titel/Game-Änderung) in der DB."""
@@ -1782,7 +1818,7 @@ class TwitchAnalyticsMixin:
         game_name = (event.get("category_name") or event.get("game_name") or "").strip() or None
         language = (event.get("broadcaster_language") or "").strip() or None
         spawn_bg_task = getattr(self, "_spawn_bg_task", None)
-        try:
+        async def _persist_update() -> None:
             with storage.transaction() as c:
                 c.execute(
                     """
@@ -1797,7 +1833,6 @@ class TwitchAnalyticsMixin:
                         datetime.now(UTC).isoformat(timespec="seconds"),
                     ),
                 )
-                # Auch twitch_live_state aktualisieren, falls Stream gerade läuft
                 c.execute(
                     """
                     UPDATE twitch_live_state
@@ -1807,6 +1842,17 @@ class TwitchAnalyticsMixin:
                     """,
                     (title, game_name, broadcaster_user_id),
                 )
+
+        try:
+            run_once = getattr(self, "_run_eventsub_business_effect_once", None)
+            if callable(run_once):
+                await run_once(
+                    message_id=message_id,
+                    effect_name="channel_update_db",
+                    coro_factory=_persist_update,
+                )
+            else:
+                await _persist_update()
             schedule_refresh = getattr(self, "_schedule_partner_raid_score_refresh", None)
             if allow_background_refresh and callable(schedule_refresh) and callable(spawn_bg_task):
                 schedule_refresh(
@@ -1816,10 +1862,20 @@ class TwitchAnalyticsMixin:
             else:
                 refresh = getattr(self, "_request_partner_raid_score_refresh", None)
                 if callable(refresh):
-                    await refresh(
-                        twitch_user_id=broadcaster_user_id,
-                        trigger="eventsub_channel_update",
-                    )
+                    if callable(run_once):
+                        await run_once(
+                            message_id=message_id,
+                            effect_name="channel_update_refresh",
+                            coro_factory=lambda: refresh(
+                                twitch_user_id=broadcaster_user_id,
+                                trigger="eventsub_channel_update",
+                            ),
+                        )
+                    else:
+                        await refresh(
+                            twitch_user_id=broadcaster_user_id,
+                            trigger="eventsub_channel_update",
+                        )
         except Exception:
             log.exception("_handle_channel_update: Fehler für %s", broadcaster_user_id)
 

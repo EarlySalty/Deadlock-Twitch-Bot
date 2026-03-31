@@ -7,7 +7,9 @@ from unittest.mock import AsyncMock, patch
 from bot.analytics.mixin import TwitchAnalyticsMixin
 from bot.dashboard.billing.billing_mixin import _DashboardBillingMixin
 from bot.monitoring.eventsub_mixin import _EventSubMixin
+from bot.monitoring.eventsub_state_store import EventSubStateStore
 from bot.monitoring.monitoring import TwitchMonitoringMixin
+from tests.eventsub_state_store_test_helpers import InMemoryEventSubStateRepository
 
 
 class _RecordingConnection:
@@ -81,6 +83,108 @@ class _AnalyticsDeferredFollowupHarness(TwitchAnalyticsMixin, TwitchMonitoringMi
 
     async def _enqueue_eventsub_stream_online_followups_processing(self, **kwargs):
         self.enqueued_followups.append(dict(kwargs))
+
+
+class _IdempotentAnalyticsHarness(TwitchAnalyticsMixin, TwitchMonitoringMixin):
+    def __init__(self) -> None:
+        self.live_events: list[tuple[str, str]] = []
+        self.refresh_events: list[dict[str, object]] = []
+        self._eventsub_state_store = EventSubStateStore(
+            repository=InMemoryEventSubStateRepository(),
+        )
+
+    def _get_eventsub_state_store(self) -> EventSubStateStore:
+        return self._eventsub_state_store
+
+    async def _run_eventsub_business_effect_once(
+        self,
+        *,
+        message_id: str | None,
+        effect_name: str,
+        coro_factory,
+        ttl_seconds: float = 7 * 24 * 3600.0,
+    ) -> bool:
+        normalized_message_id = str(message_id or "").strip()
+        normalized_effect_name = str(effect_name or "").strip().lower()
+        if not normalized_message_id:
+            await coro_factory()
+            return True
+        guard_key = f"{normalized_effect_name}:{normalized_message_id}"
+        claimed = self._get_eventsub_state_store().claim(
+            "business_effect",
+            guard_key,
+            ttl_seconds=ttl_seconds,
+        )
+        if not claimed:
+            return False
+        try:
+            await coro_factory()
+        except Exception:
+            self._get_eventsub_state_store().release("business_effect", guard_key)
+            raise
+        return True
+
+    async def _handle_stream_went_live(self, broadcaster_user_id: str, broadcaster_login: str) -> None:
+        self.live_events.append((broadcaster_user_id, broadcaster_login))
+
+    async def _request_partner_raid_score_refresh(self, **kwargs):
+        self.refresh_events.append(dict(kwargs))
+        return True
+
+
+class _IdempotentOfflineHarness(_EventSubMixin):
+    def __init__(self) -> None:
+        self.offline_calls: list[dict[str, object]] = []
+        self.refresh_events: list[dict[str, object]] = []
+        self.finalize_calls: list[dict[str, object]] = []
+        self._eventsub_state_store = EventSubStateStore(
+            repository=InMemoryEventSubStateRepository(),
+        )
+
+    def _load_live_state_row(self, login_lower: str) -> dict:
+        return {
+            "is_live": 1,
+            "last_game": "Deadlock",
+            "had_deadlock_in_session": 1,
+            "last_started_at": "2026-03-08T12:00:00+00:00",
+            "login_lower": login_lower,
+        }
+
+    def _get_tracked_logins_for_eventsub(self) -> list[str]:
+        return []
+
+    async def _fetch_streams_by_logins_quick(self, tracked_logins: list[str]) -> dict:
+        del tracked_logins
+        return {}
+
+    async def _handle_auto_raid_on_offline(self, **kwargs) -> None:
+        self.offline_calls.append(dict(kwargs))
+
+    async def _request_partner_raid_score_refresh(self, **kwargs):
+        self.refresh_events.append(dict(kwargs))
+        return True
+
+    async def _finalize_eventsub_offline_session(self, **kwargs):
+        self.finalize_calls.append(dict(kwargs))
+        return True
+
+
+class _RaidArrivalHarness(_EventSubMixin):
+    def __init__(self) -> None:
+        self.arrivals: list[dict[str, object]] = []
+        self._eventsub_state_store = EventSubStateStore(
+            repository=InMemoryEventSubStateRepository(),
+        )
+        self._raid_bot = SimpleNamespace(on_raid_arrival=self._on_raid_arrival)
+
+    async def _on_raid_arrival(self, **kwargs) -> None:
+        self.arrivals.append(dict(kwargs))
+
+
+class _DeadLetterHarness(_EventSubMixin):
+    def __init__(self) -> None:
+        self._eventsub_supervisor_wakeup = asyncio.Event()
+        self._eventsub_retry_reason = None
 
 
 class _MonitoringHarness(TwitchMonitoringMixin):
@@ -344,9 +448,198 @@ class PartnerRaidScoreRefreshTriggerTests(unittest.IsolatedAsyncioTestCase):
                     "broadcaster_user_id": "4444",
                     "broadcaster_login": "partner_four",
                     "login_value": "partner_four",
+                    "message_id": None,
                 }
             ],
         )
+
+    async def test_stream_online_business_effects_are_idempotent_per_message_id(self) -> None:
+        harness = _IdempotentAnalyticsHarness()
+        conn = _RecordingConnection()
+
+        with patch(
+            "bot.analytics.mixin.storage.transaction",
+            side_effect=lambda: contextlib.nullcontext(conn),
+        ):
+            await harness._handle_stream_online(
+                "5555",
+                "partner_five",
+                {"id": "stream-5", "started_at": "2026-03-08T12:00:00+00:00"},
+                message_id="msg-stream-online-once-1",
+            )
+            await harness._handle_stream_online(
+                "5555",
+                "partner_five",
+                {"id": "stream-5", "started_at": "2026-03-08T12:00:00+00:00"},
+                message_id="msg-stream-online-once-1",
+            )
+
+        self.assertEqual(harness.live_events, [("5555", "partner_five")])
+        self.assertEqual(
+            harness.refresh_events,
+            [
+                {
+                    "twitch_user_id": "5555",
+                    "login": "partner_five",
+                    "trigger": "eventsub_stream_online",
+                }
+            ],
+        )
+        self.assertEqual(
+            sum(1 for sql, _ in conn.executed if "INSERT INTO twitch_live_state" in sql),
+            2,
+        )
+
+    async def test_channel_update_business_effects_are_idempotent_per_message_id(self) -> None:
+        harness = _IdempotentAnalyticsHarness()
+        conn = _RecordingConnection()
+
+        with patch(
+            "bot.analytics.mixin.storage.transaction",
+            side_effect=lambda: contextlib.nullcontext(conn),
+        ):
+            await harness._handle_channel_update(
+                "6666",
+                {
+                    "title": "Fresh title",
+                    "category_name": "Deadlock",
+                    "broadcaster_language": "de",
+                },
+                message_id="msg-channel-update-once-1",
+            )
+            await harness._handle_channel_update(
+                "6666",
+                {
+                    "title": "Fresh title",
+                    "category_name": "Deadlock",
+                    "broadcaster_language": "de",
+                },
+                message_id="msg-channel-update-once-1",
+            )
+
+        self.assertEqual(
+            harness.refresh_events,
+            [
+                {
+                    "twitch_user_id": "6666",
+                    "trigger": "eventsub_channel_update",
+                }
+            ],
+        )
+        self.assertEqual(len(conn.executed), 2)
+        self.assertIn("INSERT INTO twitch_channel_updates", conn.executed[0][0])
+        self.assertIn("UPDATE twitch_live_state", conn.executed[1][0])
+
+    async def test_stream_offline_business_effects_are_idempotent_per_message_id(self) -> None:
+        harness = _IdempotentOfflineHarness()
+        conn = _RecordingConnection()
+
+        with patch(
+            "bot.monitoring.eventsub_mixin.storage.transaction",
+            side_effect=lambda: contextlib.nullcontext(conn),
+        ):
+            await harness._on_eventsub_stream_offline(
+                "7777",
+                "partner_seven",
+                message_id="msg-stream-offline-once-1",
+                allow_scheduled_refresh=False,
+            )
+            harness._eventsub_offline_throttle = {}
+            await harness._on_eventsub_stream_offline(
+                "7777",
+                "partner_seven",
+                message_id="msg-stream-offline-once-1",
+                allow_scheduled_refresh=False,
+            )
+
+        self.assertEqual(len(harness.finalize_calls), 1)
+        self.assertEqual(
+            harness.refresh_events,
+            [
+                {
+                    "twitch_user_id": "7777",
+                    "login": "partner_seven",
+                    "trigger": "eventsub_stream_offline",
+                }
+            ],
+        )
+        self.assertEqual(len(harness.offline_calls), 1)
+        self.assertEqual(
+            sum(1 for sql, _ in conn.executed if "UPDATE twitch_live_state" in sql),
+            1,
+        )
+
+    async def test_channel_raid_arrival_is_idempotent_per_message_id(self) -> None:
+        harness = _RaidArrivalHarness()
+        payload = {
+            "message_id": "msg-channel-raid-once-1",
+            "to_broadcaster_id": "8888",
+            "to_broadcaster_login": "partner_eight",
+            "event": {
+                "from_broadcaster_user_id": "9999",
+                "from_broadcaster_user_login": "raider_one",
+                "viewers": 42,
+            },
+        }
+
+        await harness._process_eventsub_processing_record("channel.raid", dict(payload))
+        await harness._process_eventsub_processing_record("channel.raid", dict(payload))
+
+        self.assertEqual(
+            harness.arrivals,
+            [
+                {
+                    "to_broadcaster_id": "8888",
+                    "to_broadcaster_login": "partner_eight",
+                    "from_broadcaster_login": "raider_one",
+                    "from_broadcaster_id": "9999",
+                    "viewer_count": 42,
+                }
+            ],
+        )
+
+    async def test_business_effect_guard_releases_claim_after_failure(self) -> None:
+        harness = _IdempotentOfflineHarness()
+        attempts: list[str] = []
+
+        async def _fail_then_succeed() -> None:
+            attempts.append("run")
+            if len(attempts) == 1:
+                raise RuntimeError("transient business failure")
+
+        with self.assertRaisesRegex(RuntimeError, "transient business failure"):
+            await harness._run_eventsub_business_effect_once(
+                message_id="msg-business-effect-retry-1",
+                effect_name="stream_online_went_live",
+                coro_factory=_fail_then_succeed,
+            )
+
+        executed = await harness._run_eventsub_business_effect_once(
+            message_id="msg-business-effect-retry-1",
+            effect_name="stream_online_went_live",
+            coro_factory=_fail_then_succeed,
+        )
+
+        self.assertTrue(executed)
+        self.assertEqual(attempts, ["run", "run"])
+
+    async def test_eventsub_processing_dead_letter_logs_and_wakes_supervisor(self) -> None:
+        harness = _DeadLetterHarness()
+
+        with patch("bot.monitoring.eventsub_mixin.log.critical") as log_critical:
+            await harness._handle_eventsub_processing_dead_letter(
+                {
+                    "work_type": "channel.raid",
+                    "work_id": "dead-1",
+                    "message_id": "msg-dead-1",
+                    "attempt_count": 5,
+                    "last_error": "persistent failure",
+                }
+            )
+
+        self.assertEqual(harness._eventsub_retry_reason, "processing_dead_letter")
+        self.assertTrue(harness._eventsub_supervisor_wakeup.is_set())
+        log_critical.assert_called_once()
 
     async def test_request_partner_raid_score_refresh_uses_available_service(self) -> None:
         harness = _MonitoringHarness()

@@ -16,6 +16,7 @@ from ..core.constants import log
 from .eventsub_core_callbacks import register_core_eventsub_callbacks
 from .eventsub_processing_inbox import EventSubProcessingInboxRuntime
 from .eventsub_state_store import (
+    EVENTSUB_STATE_KIND_BUSINESS_EFFECT,
     EVENTSUB_STATE_KIND_OFFLINE_THROTTLE,
     EventSubStateStore,
 )
@@ -49,6 +50,7 @@ class _EventSubMixin:
             return runtime
         runtime = EventSubProcessingInboxRuntime(
             handler=self._process_eventsub_processing_record,
+            on_dead_letter=self._handle_eventsub_processing_dead_letter,
             logger=log,
         )
         self._eventsub_processing_inbox = runtime
@@ -71,16 +73,35 @@ class _EventSubMixin:
             raise ValueError("unknown work_id")
         return {"ok": True, "workId": normalized_work_id, "requeued": True}
 
+    async def _handle_eventsub_processing_dead_letter(self, payload: dict[str, Any]) -> None:
+        work_type = str(payload.get("work_type") or "").strip().lower()
+        work_id = str(payload.get("work_id") or "").strip() or "n/a"
+        message_id = str(payload.get("message_id") or "").strip() or "n/a"
+        attempt_count = int(payload.get("attempt_count") or 0)
+        last_error = str(payload.get("last_error") or "").strip() or "unknown"
+        log.critical(
+            "EventSub processing dead-lettered work_type=%s work_id=%s msg_id=%s attempts=%d error=%s",
+            work_type or "unknown",
+            work_id,
+            message_id,
+            attempt_count,
+            last_error,
+        )
+        self._eventsub_retry_reason = "processing_dead_letter"
+        self._request_eventsub_supervisor_wakeup("processing_dead_letter")
+
     async def _process_eventsub_processing_record(
         self,
         work_type: str,
         payload: dict[str, Any],
     ) -> None:
         normalized_work_type = str(work_type or "").strip().lower()
+        message_id = str(payload.get("message_id") or "").strip() or None
         if normalized_work_type == "stream.offline":
             await self._on_eventsub_stream_offline(
                 str(payload.get("broadcaster_id") or "").strip(),
                 str(payload.get("broadcaster_login") or "").strip() or None,
+                message_id=message_id,
                 allow_scheduled_refresh=False,
             )
             return
@@ -89,6 +110,7 @@ class _EventSubMixin:
                 str(payload.get("broadcaster_id") or "").strip(),
                 str(payload.get("broadcaster_login") or "").strip(),
                 dict(payload.get("event") or {}),
+                message_id=message_id,
             )
             return
         if normalized_work_type == "stream.online.followups":
@@ -97,12 +119,14 @@ class _EventSubMixin:
                 broadcaster_login=str(payload.get("broadcaster_login") or "").strip(),
                 login_value=str(payload.get("login_value") or "").strip().lower(),
                 defer_refresh=False,
+                message_id=message_id,
             )
             return
         if normalized_work_type == "channel.update":
             await self._handle_channel_update(
                 str(payload.get("broadcaster_id") or "").strip(),
                 dict(payload.get("event") or {}),
+                message_id=message_id,
                 allow_background_refresh=False,
             )
             return
@@ -119,12 +143,16 @@ class _EventSubMixin:
             viewer_count = int(event.get("viewers") or 0)
             if not to_broadcaster_id or not from_login:
                 raise RuntimeError("invalid channel.raid processing payload")
-            await raid_bot.on_raid_arrival(
-                to_broadcaster_id=to_broadcaster_id,
-                to_broadcaster_login=to_broadcaster_login,
-                from_broadcaster_login=from_login,
-                from_broadcaster_id=from_broadcaster_id,
-                viewer_count=viewer_count,
+            await self._run_eventsub_business_effect_once(
+                message_id=message_id,
+                effect_name="channel_raid_arrival",
+                coro_factory=lambda: raid_bot.on_raid_arrival(
+                    to_broadcaster_id=to_broadcaster_id,
+                    to_broadcaster_login=to_broadcaster_login,
+                    from_broadcaster_login=from_login,
+                    from_broadcaster_id=from_broadcaster_id,
+                    viewer_count=viewer_count,
+                ),
             )
             return
         raise RuntimeError(f"unknown eventsub processing work_type: {normalized_work_type}")
@@ -139,6 +167,39 @@ class _EventSubMixin:
 
     def _persistent_eventsub_guards_enabled(self) -> bool:
         return bool(getattr(self, "_eventsub_enable_persistent_guards", False))
+
+    async def _run_eventsub_business_effect_once(
+        self,
+        *,
+        message_id: str | None,
+        effect_name: str,
+        coro_factory: Any,
+        ttl_seconds: float = 7 * 24 * 3600.0,
+    ) -> bool:
+        normalized_message_id = str(message_id or "").strip()
+        normalized_effect_name = str(effect_name or "").strip().lower()
+        if not normalized_effect_name:
+            raise ValueError("effect_name is required")
+        if not normalized_message_id:
+            await coro_factory()
+            return True
+        guard_key = f"{normalized_effect_name}:{normalized_message_id}"
+        claimed = self._get_eventsub_state_store().claim(
+            EVENTSUB_STATE_KIND_BUSINESS_EFFECT,
+            guard_key,
+            ttl_seconds=ttl_seconds,
+        )
+        if not claimed:
+            return False
+        try:
+            await coro_factory()
+        except Exception:
+            self._get_eventsub_state_store().release(
+                EVENTSUB_STATE_KIND_BUSINESS_EFFECT,
+                guard_key,
+            )
+            raise
+        return True
 
     def _eventsub_retry_delay_seconds(self, consecutive_failures: int) -> float:
         failures = max(0, int(consecutive_failures))
@@ -1118,6 +1179,7 @@ class _EventSubMixin:
             work_type="stream.offline",
             message_id=message_id,
             payload={
+                "message_id": str(message_id or "").strip() or None,
                 "broadcaster_id": bid,
                 "broadcaster_login": str(broadcaster_login or "").strip() or None,
             },
@@ -1138,6 +1200,7 @@ class _EventSubMixin:
             work_type="stream.online",
             message_id=message_id,
             payload={
+                "message_id": str(message_id or "").strip() or None,
                 "broadcaster_id": bid,
                 "broadcaster_login": str(broadcaster_login or "").strip(),
                 "event": dict(event or {}),
@@ -1159,6 +1222,7 @@ class _EventSubMixin:
             work_type="channel.update",
             message_id=message_id,
             payload={
+                "message_id": str(message_id or "").strip() or None,
                 "broadcaster_id": bid,
                 "broadcaster_login": str(broadcaster_login or "").strip().lower(),
                 "event": dict(event or {}),
@@ -1171,6 +1235,7 @@ class _EventSubMixin:
         broadcaster_user_id: str,
         broadcaster_login: str,
         login_value: str,
+        message_id: str | None = None,
     ) -> None:
         bid = str(broadcaster_user_id or "").strip()
         if not bid:
@@ -1178,6 +1243,7 @@ class _EventSubMixin:
         await self._get_eventsub_processing_inbox().enqueue(
             work_type="stream.online.followups",
             payload={
+                "message_id": str(message_id or "").strip() or None,
                 "broadcaster_user_id": bid,
                 "broadcaster_login": str(broadcaster_login or "").strip(),
                 "login_value": str(login_value or "").strip().lower(),
@@ -1218,6 +1284,7 @@ class _EventSubMixin:
             work_type="channel.raid",
             message_id=message_id,
             payload={
+                "message_id": str(message_id or "").strip() or None,
                 "to_broadcaster_id": to_bid,
                 "to_broadcaster_login": str(to_broadcaster_login or "").strip(),
                 "event": {
@@ -1745,6 +1812,7 @@ class _EventSubMixin:
         broadcaster_id: str,
         broadcaster_login: str | None,
         *,
+        message_id: str | None = None,
         allow_scheduled_refresh: bool = True,
     ) -> None:
         """Direkter Auto-Raid-Trigger bei stream.offline EventSub."""
@@ -1783,31 +1851,43 @@ class _EventSubMixin:
         throttle[broadcaster_id] = now
 
         previous_state = self._load_live_state_row(login_lower)
-        await self._finalize_eventsub_offline_session(
-            broadcaster_id=broadcaster_id,
-            login_lower=login_lower,
-        )
-        try:
-            with storage.transaction() as c:
-                c.execute(
-                    """
-                    UPDATE twitch_live_state
-                       SET is_live = 0,
-                           last_seen_at = %s,
-                           active_session_id = NULL
-                     WHERE twitch_user_id = %s
-                    """,
-                    (
-                        datetime.now(UTC).isoformat(timespec="seconds"),
-                        broadcaster_id,
-                    ),
-                )
-        except Exception:
-            log.debug(
-                "EventSub: konnte Live-State nicht sofort auf offline setzen fuer %s",
-                broadcaster_id,
-                exc_info=True,
+
+        async def _persist_offline_state() -> None:
+            await self._finalize_eventsub_offline_session(
+                broadcaster_id=broadcaster_id,
+                login_lower=login_lower,
             )
+            try:
+                with storage.transaction() as c:
+                    c.execute(
+                        """
+                        UPDATE twitch_live_state
+                           SET is_live = 0,
+                               last_seen_at = %s,
+                               active_session_id = NULL
+                         WHERE twitch_user_id = %s
+                        """,
+                        (
+                            datetime.now(UTC).isoformat(timespec="seconds"),
+                            broadcaster_id,
+                        ),
+                    )
+            except Exception:
+                log.debug(
+                    "EventSub: konnte Live-State nicht sofort auf offline setzen fuer %s",
+                    broadcaster_id,
+                    exc_info=True,
+                )
+
+        run_once = getattr(self, "_run_eventsub_business_effect_once", None)
+        if callable(run_once):
+            await run_once(
+                message_id=message_id,
+                effect_name="stream_offline_state",
+                coro_factory=_persist_offline_state,
+            )
+        else:
+            await _persist_offline_state()
         schedule_refresh = getattr(self, "_schedule_partner_raid_score_refresh", None)
         if allow_scheduled_refresh and callable(schedule_refresh):
             try:
@@ -1826,11 +1906,22 @@ class _EventSubMixin:
             refresh = getattr(self, "_request_partner_raid_score_refresh", None)
             if callable(refresh):
                 try:
-                    await refresh(
-                        twitch_user_id=broadcaster_id,
-                        login=login_lower or broadcaster_login,
-                        trigger="eventsub_stream_offline",
-                    )
+                    if callable(run_once):
+                        await run_once(
+                            message_id=message_id,
+                            effect_name="stream_offline_refresh",
+                            coro_factory=lambda: refresh(
+                                twitch_user_id=broadcaster_id,
+                                login=login_lower or broadcaster_login,
+                                trigger="eventsub_stream_offline",
+                            ),
+                        )
+                    else:
+                        await refresh(
+                            twitch_user_id=broadcaster_id,
+                            login=login_lower or broadcaster_login,
+                            trigger="eventsub_stream_offline",
+                        )
                 except Exception:
                     log.debug(
                         "EventSub: partner raid score refresh failed for offline %s",
@@ -1849,13 +1940,26 @@ class _EventSubMixin:
         )
 
         try:
-            await self._handle_auto_raid_on_offline(
-                login=login_lower or broadcaster_login or "",
-                twitch_user_id=broadcaster_id,
-                previous_state=previous_state,
-                streams_by_login=streams_by_login,
-                offline_trigger_ts=trigger_ts,
-            )
+            if callable(run_once):
+                await run_once(
+                    message_id=message_id,
+                    effect_name="stream_offline_auto_raid",
+                    coro_factory=lambda: self._handle_auto_raid_on_offline(
+                        login=login_lower or broadcaster_login or "",
+                        twitch_user_id=broadcaster_id,
+                        previous_state=previous_state,
+                        streams_by_login=streams_by_login,
+                        offline_trigger_ts=trigger_ts,
+                    ),
+                )
+            else:
+                await self._handle_auto_raid_on_offline(
+                    login=login_lower or broadcaster_login or "",
+                    twitch_user_id=broadcaster_id,
+                    previous_state=previous_state,
+                    streams_by_login=streams_by_login,
+                    offline_trigger_ts=trigger_ts,
+                )
         except Exception:
             log.exception(
                 "EventSub: Auto-Raid offline handling failed for %s",

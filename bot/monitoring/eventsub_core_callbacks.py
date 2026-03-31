@@ -67,6 +67,7 @@ def register_core_eventsub_callbacks(
             callback = lambda: owner._on_eventsub_stream_offline(
                 broadcaster_id,
                 broadcaster_login,
+                message_id=message_id,
             )
         await _run_callback(
             callback,
@@ -151,7 +152,12 @@ def register_core_eventsub_callbacks(
                 )
                 return
         await _run_callback(
-            lambda: owner._handle_stream_online(broadcaster_id, broadcaster_login, event),
+            lambda: owner._handle_stream_online(
+                broadcaster_id,
+                broadcaster_login,
+                event,
+                message_id=message_id,
+            ),
             "EventSub: stream.online-Callback fehlgeschlagen für %s",
             broadcaster_login or broadcaster_id,
         )
@@ -178,7 +184,11 @@ def register_core_eventsub_callbacks(
                 )
                 return
         await _run_callback(
-            lambda: owner._handle_channel_update(broadcaster_id, event),
+            lambda: owner._handle_channel_update(
+                broadcaster_id,
+                event,
+                message_id=message_id,
+            ),
             "EventSub: channel.update-Callback fehlgeschlagen für %s",
             broadcaster_login or broadcaster_id,
         )

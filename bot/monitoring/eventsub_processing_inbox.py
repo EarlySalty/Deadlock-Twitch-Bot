@@ -19,6 +19,7 @@ _INBOX_RETRY_MAX_SECONDS = 60.0
 _INBOX_MAX_ATTEMPTS = 5
 
 EventSubProcessingHandler = Callable[[str, dict[str, Any]], Awaitable[None]]
+EventSubDeadLetterHandler = Callable[[dict[str, Any]], Awaitable[None] | None]
 
 
 class EventSubProcessingInboxStore:
@@ -381,11 +382,13 @@ class EventSubProcessingInboxRuntime:
         self,
         *,
         handler: EventSubProcessingHandler,
+        on_dead_letter: EventSubDeadLetterHandler | None = None,
         logger: logging.Logger | None = None,
         store: EventSubProcessingInboxStore | None = None,
         now: Callable[[], float] | None = None,
     ) -> None:
         self._handler = handler
+        self._on_dead_letter = on_dead_letter
         self._log = logger or logging.getLogger("TwitchStreams.EventSubProcessingInbox")
         self._store = store or EventSubProcessingInboxStore()
         self._now = now or time.time
@@ -523,6 +526,19 @@ class EventSubProcessingInboxRuntime:
                         next_attempt_count,
                         exc,
                     )
+                    if callable(self._on_dead_letter):
+                        result = self._on_dead_letter(
+                            {
+                                "work_id": work_id,
+                                "work_type": work_type,
+                                "message_id": message_id,
+                                "payload": payload,
+                                "attempt_count": next_attempt_count,
+                                "last_error": str(exc),
+                            }
+                        )
+                        if asyncio.iscoroutine(result):
+                            await result
                     continue
                 next_attempt = float(self._now()) + self._retry_delay_seconds(next_attempt_count)
                 await asyncio.to_thread(

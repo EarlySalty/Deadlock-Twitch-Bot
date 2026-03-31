@@ -235,8 +235,10 @@ class EventSubWebhookRequestValidationTests(unittest.IsolatedAsyncioTestCase):
             broadcaster_id: str,
             broadcaster_login: str,
             event: dict,
+            *,
+            message_id: str | None = None,
         ) -> None:
-            del broadcaster_id, broadcaster_login, event
+            del broadcaster_id, broadcaster_login, event, message_id
             raise RuntimeError("bridge unavailable")
 
         handler.set_callback("stream.offline", _offline_callback)
@@ -272,8 +274,10 @@ class EventSubWebhookRequestValidationTests(unittest.IsolatedAsyncioTestCase):
                 self,
                 broadcaster_id: str,
                 broadcaster_login: str,
+                *,
+                message_id: str | None = None,
             ) -> None:
-                del broadcaster_id, broadcaster_login
+                del broadcaster_id, broadcaster_login, message_id
                 raise RuntimeError("offline persistence failed")
 
             async def _handle_stream_online(
@@ -281,11 +285,19 @@ class EventSubWebhookRequestValidationTests(unittest.IsolatedAsyncioTestCase):
                 broadcaster_id: str,
                 broadcaster_login: str,
                 event: dict,
+                *,
+                message_id: str | None = None,
             ) -> None:
-                del broadcaster_id, broadcaster_login, event
+                del broadcaster_id, broadcaster_login, event, message_id
 
-            async def _handle_channel_update(self, broadcaster_id: str, event: dict) -> None:
-                del broadcaster_id, event
+            async def _handle_channel_update(
+                self,
+                broadcaster_id: str,
+                event: dict,
+                *,
+                message_id: str | None = None,
+            ) -> None:
+                del broadcaster_id, event, message_id
 
         register_core_eventsub_callbacks(
             _FailingOwner(),
@@ -378,6 +390,7 @@ class EventSubWebhookRequestValidationTests(unittest.IsolatedAsyncioTestCase):
                 "id": "stream-1",
                 "type": "live",
             },
+            message_id="msg-stream-online-inline-failure",
         )
         owner._enqueue_eventsub_stream_online_processing.assert_not_awaited()
         self.assertFalse(handler._is_duplicate("msg-stream-online-inline-failure"))

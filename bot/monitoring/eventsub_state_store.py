@@ -11,6 +11,7 @@ from .. import storage
 EVENTSUB_STATE_KIND_MESSAGE_ID = "message_id"
 EVENTSUB_STATE_KIND_WS_MESSAGE_ID = "ws_message_id"
 EVENTSUB_STATE_KIND_OFFLINE_THROTTLE = "offline_throttle"
+EVENTSUB_STATE_KIND_BUSINESS_EFFECT = "business_effect"
 
 
 class EventSubStateRepository(Protocol):
