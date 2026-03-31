@@ -258,6 +258,13 @@ class EventSubWebhookHandler:
             return "rejected"
         return "tracked"
 
+    @staticmethod
+    def _internal_message_replay_key(message_id: str) -> str:
+        normalized = str(message_id or "").strip()
+        if not normalized:
+            return ""
+        return f"internal:{normalized}"
+
     def _assert_dispatch_ready(
         self,
         *,
@@ -297,19 +304,21 @@ class EventSubWebhookHandler:
         task: asyncio.Task[None],
         *,
         message_id: str = "",
+        tracked_message_id: str = "",
         preserve_message_id_on_missing_callback: bool = False,
     ) -> None:
+        replay_key = str(tracked_message_id or message_id or "").strip()
         try:
             exc = task.exception()
         except asyncio.CancelledError:
-            self._forget_message_id(message_id)
+            self._forget_message_id(replay_key)
             self.log.debug("EventSub Webhook: Dispatch-Task wurde abgebrochen")
             return
         if exc is None:
             return
         if preserve_message_id_on_missing_callback and isinstance(exc, EventSubCallbackNotRegistered):
             return
-        self._forget_message_id(message_id)
+        self._forget_message_id(replay_key)
         self.log.error(
             "EventSub Webhook: Dispatch-Task fehlgeschlagen (msg_id=%r)",
             message_id or None,
@@ -322,6 +331,7 @@ class EventSubWebhookHandler:
         sub_type: str,
         *,
         message_id: str = "",
+        tracked_message_id: str = "",
         preserve_message_id_on_missing_callback: bool = False,
     ) -> asyncio.Task[None]:
         dispatch_coro = self._dispatch_notification(data, sub_type, message_id=message_id)
@@ -337,6 +347,7 @@ class EventSubWebhookHandler:
             lambda completed: self._consume_dispatch_task_result(
                 completed,
                 message_id=message_id,
+                tracked_message_id=tracked_message_id,
                 preserve_message_id_on_missing_callback=preserve_message_id_on_missing_callback,
             )
         )
@@ -426,6 +437,7 @@ class EventSubWebhookHandler:
     ) -> dict[str, object]:
         """Dispatch an internal notification and honor synchronous delivery mode."""
         normalized_message_id = str(message_id or "").strip()
+        replay_message_id = self._internal_message_replay_key(normalized_message_id)
         actual_sub_type, broadcaster_id, broadcaster_login = self._extract_notification_context(
             data,
             sub_type,
@@ -438,7 +450,7 @@ class EventSubWebhookHandler:
             message_id=normalized_message_id,
             internal=True,
         )
-        if normalized_message_id and self._is_duplicate(normalized_message_id):
+        if replay_message_id and self._is_duplicate(replay_message_id):
             self.log.debug(
                 "EventSub Webhook: Interne Duplikat-Nachricht ignoriert (id=%r)",
                 normalized_message_id,
@@ -449,7 +461,7 @@ class EventSubWebhookHandler:
                 "queued": False,
                 "sub_type": str(sub_type or "").strip(),
             }
-        if normalized_message_id and not self._track_message_id(normalized_message_id):
+        if replay_message_id and not self._track_message_id(replay_message_id):
             self.log.warning(
                 "EventSub Webhook: Replay-Cache voll (entries=%d) – interne Nachricht abgelehnt",
                 len(self._seen_message_ids),
@@ -472,7 +484,7 @@ class EventSubWebhookHandler:
                     message_id=normalized_message_id,
                 )
             except Exception:
-                self._forget_message_id(normalized_message_id)
+                self._forget_message_id(replay_message_id)
                 raise
             return {
                 "ok": True,
@@ -486,9 +498,10 @@ class EventSubWebhookHandler:
                 data,
                 sub_type,
                 message_id=normalized_message_id,
+                tracked_message_id=replay_message_id,
             )
         except Exception:
-            self._forget_message_id(normalized_message_id)
+            self._forget_message_id(replay_message_id)
             self.log.exception(
                 "EventSub Webhook: Internal dispatch could not be queued (msg_id=%r)",
                 normalized_message_id or None,

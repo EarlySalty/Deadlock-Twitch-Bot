@@ -479,6 +479,79 @@ class EventSubWebhookRequestValidationTests(unittest.IsolatedAsyncioTestCase):
         release.set()
         await asyncio.sleep(0)
 
+    async def test_internal_dispatch_does_not_collide_with_external_replay_state(self) -> None:
+        shared_state_store = EventSubStateStore(
+            repository=InMemoryEventSubStateRepository(),
+        )
+        external_calls: list[str | None] = []
+        internal_calls: list[str | None] = []
+
+        async def _external_callback(
+            broadcaster_id: str,
+            broadcaster_login: str,
+            event: dict,
+            *,
+            message_id: str | None = None,
+        ) -> None:
+            del broadcaster_id, broadcaster_login, event
+            external_calls.append(message_id)
+
+        async def _internal_callback(
+            broadcaster_id: str,
+            broadcaster_login: str,
+            event: dict,
+            *,
+            message_id: str | None = None,
+        ) -> None:
+            del broadcaster_id, broadcaster_login, event
+            internal_calls.append(message_id)
+
+        external_handler = EventSubWebhookHandler(
+            secret="test-secret",
+            synchronous_notifications=True,
+            state_store=shared_state_store,
+        )
+        external_handler.set_callback("stream.offline", _external_callback)
+        external_handler.activate_notification_dispatch()
+
+        internal_handler = EventSubWebhookHandler(
+            secret="test-secret",
+            synchronous_notifications=True,
+            state_store=shared_state_store,
+        )
+        internal_handler.set_callback("stream.offline", _internal_callback)
+        internal_handler.activate_notification_dispatch()
+
+        body = {
+            "subscription": {
+                "type": "stream.offline",
+                "condition": {"broadcaster_user_id": "993954638"},
+            },
+            "event": {
+                "broadcaster_user_id": "993954638",
+                "broadcaster_user_login": "denoshock",
+            },
+        }
+        request = self._signed_request(
+            secret="test-secret",
+            body=body,
+            message_id="msg-shared-state-offline-1",
+        )
+
+        response = await external_handler.handle_request(request)
+        internal_result = await internal_handler.dispatch_notification_internal_async(
+            body,
+            "stream.offline",
+            message_id="msg-shared-state-offline-1",
+        )
+
+        self.assertEqual(response.status, 204)
+        self.assertEqual(external_calls, ["msg-shared-state-offline-1"])
+        self.assertTrue(internal_result.get("ok"))
+        self.assertFalse(internal_result.get("duplicate"))
+        self.assertTrue(internal_result.get("processed"))
+        self.assertEqual(internal_calls, ["msg-shared-state-offline-1"])
+
     async def test_internal_sync_dispatch_is_deprecated(self) -> None:
         handler = EventSubWebhookHandler(secret="test-secret")
         with self.assertRaisesRegex(

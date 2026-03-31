@@ -277,6 +277,104 @@ class DashboardServiceEventSubIntegrationMoreTests(unittest.IsolatedAsyncioTestC
         self.assertEqual(delivered[0]["message_id"], "msg-integration-recovery-duplicate-1")
         self.assertEqual(delivered[0]["sub_type"], "stream.offline")
 
+    async def test_shared_replay_state_does_not_drop_bridged_stream_offline(self) -> None:
+        delivered: list[dict[str, object]] = []
+        shared_repository = InMemoryEventSubStateRepository()
+
+        async def _eventsub_dispatch_cb(
+            *,
+            sub_type: str,
+            message_id: str | None,
+            payload: dict[str, object],
+        ) -> dict[str, object]:
+            delivered.append(
+                {
+                    "sub_type": sub_type,
+                    "message_id": message_id,
+                    "payload": payload,
+                }
+            )
+            return {"ok": True}
+
+        with (
+            patch(
+                "bot.internal_api.app.analytics_db_fingerprint_details",
+                return_value={"fingerprint": "local", "hostHash": "h", "databaseHash": "d", "portHash": "p"},
+            ),
+            patch(
+                "bot.dashboard_service.app.analytics_db_fingerprint_details",
+                return_value={"fingerprint": "local", "hostHash": "h", "databaseHash": "d", "portHash": "p"},
+            ),
+            patch("bot.dashboard_service.app.load_secret_value", return_value="webhook-secret"),
+            patch(
+                "bot.monitoring.eventsub_state_store.EventSubStateStore",
+                side_effect=lambda *args, **kwargs: EventSubStateStore(
+                    repository=shared_repository,
+                    logger=kwargs.get("logger"),
+                ),
+            ),
+            patch(
+                "bot.dashboard_service.app.DashboardEventSubBridgeRuntime",
+                side_effect=self._bridge_runtime_factory,
+            ),
+            patch("bot.dashboard.server_v2.storage_pg.prepare_runtime_storage", return_value=None),
+            patch("bot.dashboard.server_v2.DashboardV2Server.attach", return_value=None),
+            patch("bot.dashboard_service.eventsub_bridge._OUTBOX_IDLE_WAIT_SECONDS", 0.01),
+        ):
+            internal_app = build_internal_api_app(
+                token="secret-token",
+                eventsub_dispatch_cb=_eventsub_dispatch_cb,
+            )
+            async with TestServer(internal_app) as internal_server:
+                dashboard_app = build_dashboard_service_app(
+                    internal_api_base_url=str(internal_server.make_url("/")).rstrip("/"),
+                    internal_api_token="secret-token",
+                    internal_api_allow_non_loopback=False,
+                    internal_api_timeout_seconds=2.0,
+                    dashboard_token="dash-token",
+                    partner_token="partner-token",
+                    noauth=False,
+                    oauth_client_id="client-id",
+                    oauth_client_secret="client-secret",
+                    oauth_redirect_uri="https://example.com/callback",
+                    session_ttl_seconds=3600,
+                    legacy_stats_url="https://example.com/stats",
+                )
+
+                async with TestServer(dashboard_app) as dashboard_server:
+                    async with TestClient(dashboard_server) as client:
+                        body = {
+                            "subscription": {
+                                "type": "stream.offline",
+                                "condition": {"broadcaster_user_id": "993954638"},
+                            },
+                            "event": {
+                                "broadcaster_user_id": "993954638",
+                                "broadcaster_user_login": "denoshock",
+                            },
+                        }
+                        headers = _signed_eventsub_headers(
+                            secret="webhook-secret",
+                            body=body,
+                            message_id="msg-integration-shared-replay-1",
+                        )
+
+                        response = await client.post("/twitch/eventsub/callback", json=body, headers=headers)
+
+                        await self._wait_for(
+                            lambda: len(delivered) == 1,
+                            failure_message="expected bridged stream.offline event to reach bot exactly once",
+                        )
+
+        self.assertEqual(response.status, 204)
+        self.assertEqual(len(delivered), 1)
+        self.assertEqual(delivered[0]["sub_type"], "stream.offline")
+        self.assertEqual(delivered[0]["message_id"], "msg-integration-shared-replay-1")
+        self.assertEqual(
+            delivered[0]["payload"].get("event", {}).get("broadcaster_user_login"),
+            "denoshock",
+        )
+
     async def test_callback_retries_until_dead_letter_over_real_http(self) -> None:
         attempts = {"count": 0}
 
