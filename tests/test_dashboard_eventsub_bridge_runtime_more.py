@@ -254,7 +254,8 @@ class DashboardEventSubBridgeRuntimeMoreTests(unittest.IsolatedAsyncioTestCase):
                 lambda: bool(client1.calls) and "concurrent-msg-1" in store.rows,
             )
 
-            await runtime2._process_due_batch()
+            runtime2._wakeup.set()
+            await asyncio.sleep(0.05)
             self.assertEqual(client2.calls, [])
             self.assertEqual(len(client1.calls), 1)
 

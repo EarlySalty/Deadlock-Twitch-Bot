@@ -364,14 +364,18 @@ class DashboardServiceDegradedUpstreamTests(unittest.IsolatedAsyncioTestCase):
         super().tearDown()
 
     @staticmethod
-    async def _wait_for_async_mock_awaits(mock: AsyncMock, *, minimum: int, timeout: float = 1.0) -> None:
+    async def _wait_for(
+        predicate,
+        *,
+        timeout: float = 1.0,
+        interval: float = 0.02,
+        failure_message: str = "condition was not met in time",
+    ) -> None:
         deadline = asyncio.get_running_loop().time() + timeout
-        while mock.await_count < minimum:
+        while not predicate():
             if asyncio.get_running_loop().time() >= deadline:
-                raise AssertionError(
-                    f"expected async mock to be awaited at least {minimum} times, got {mock.await_count}"
-                )
-            await asyncio.sleep(0.02)
+                raise AssertionError(failure_message)
+            await asyncio.sleep(interval)
 
     def _build_bridge_runtime(self, *args, **kwargs) -> DashboardEventSubBridgeRuntime:
         runtime = DashboardEventSubBridgeRuntime(
@@ -743,19 +747,16 @@ class DashboardServiceDegradedUpstreamTests(unittest.IsolatedAsyncioTestCase):
                     },
                 },
             )
-            await self._wait_for_async_mock_awaits(
-                fake_client.dispatch_eventsub_notification,
-                minimum=5,
+            await self._wait_for(
+                lambda: "dead-letter-msg-1" in store.dead_letters,
+                timeout=1.0,
+                failure_message="expected bridge message to be dead-lettered",
             )
-            deadline = asyncio.get_running_loop().time() + 1.0
-            while "dead-letter-msg-1" not in store.dead_letters:
-                if asyncio.get_running_loop().time() >= deadline:
-                    raise AssertionError("expected bridge message to be dead-lettered")
-                await asyncio.sleep(0.02)
         finally:
             await runtime.stop()
 
         self.assertNotIn("dead-letter-msg-1", store.rows)
+        self.assertEqual(fake_client.dispatch_eventsub_notification.await_count, 5)
         self.assertEqual(
             store.dead_letters["dead-letter-msg-1"]["attempt_count"],
             5,
@@ -797,20 +798,28 @@ class DashboardServiceDegradedUpstreamTests(unittest.IsolatedAsyncioTestCase):
             self.assertIn("startup-msg-1", store.rows)
             self.assertEqual(store.rows["startup-msg-1"]["attempt_count"], 0)
 
-            await runtime._process_due_batch()
-            self.assertEqual(fake_client.dispatch_eventsub_notification.await_count, 1)
+            await self._wait_for(
+                lambda: store.rows.get("startup-msg-1", {}).get("last_error")
+                == "eventsub notification dispatch inactive",
+                failure_message="expected startup-pending dispatch to be deferred",
+            )
+            first_next_attempt = float(store.rows["startup-msg-1"]["next_attempt_at"])
             self.assertEqual(store.rows["startup-msg-1"]["attempt_count"], 0)
             self.assertNotIn("startup-msg-1", store.dead_letters)
 
-            current_time["now"] = float(store.rows["startup-msg-1"]["next_attempt_at"])
-            await runtime._process_due_batch()
-            self.assertEqual(fake_client.dispatch_eventsub_notification.await_count, 2)
+            current_time["now"] = first_next_attempt
+            runtime._wakeup.set()
+            await self._wait_for(
+                lambda: float(store.rows["startup-msg-1"]["next_attempt_at"]) > first_next_attempt,
+                failure_message="expected startup-pending message to be deferred again on retry",
+            )
             self.assertEqual(store.rows["startup-msg-1"]["attempt_count"], 0)
             self.assertNotIn("startup-msg-1", store.dead_letters)
             self.assertEqual(
                 store.rows["startup-msg-1"]["last_error"],
                 "eventsub notification dispatch inactive",
             )
+            self.assertGreaterEqual(fake_client.dispatch_eventsub_notification.await_count, 2)
         finally:
             await runtime.stop()
 
@@ -845,8 +854,12 @@ class DashboardServiceDegradedUpstreamTests(unittest.IsolatedAsyncioTestCase):
             self.assertIn("startup-msg-structured-1", store.rows)
             self.assertEqual(store.rows["startup-msg-structured-1"]["attempt_count"], 0)
 
-            await runtime._process_due_batch()
-            self.assertEqual(fake_client.dispatch_eventsub_notification.await_count, 1)
+            await self._wait_for(
+                lambda: store.rows.get("startup-msg-structured-1", {}).get("last_error")
+                == "eventsub notification dispatch inactive",
+                failure_message="expected structured inactive response to defer runtime delivery",
+            )
+            first_next_attempt = float(store.rows["startup-msg-structured-1"]["next_attempt_at"])
             self.assertEqual(store.rows["startup-msg-structured-1"]["attempt_count"], 0)
             self.assertNotIn("startup-msg-structured-1", store.dead_letters)
             self.assertEqual(
@@ -854,11 +867,15 @@ class DashboardServiceDegradedUpstreamTests(unittest.IsolatedAsyncioTestCase):
                 "eventsub notification dispatch inactive",
             )
 
-            current_time["now"] = float(store.rows["startup-msg-structured-1"]["next_attempt_at"])
-            await runtime._process_due_batch()
-            self.assertEqual(fake_client.dispatch_eventsub_notification.await_count, 2)
+            current_time["now"] = first_next_attempt
+            runtime._wakeup.set()
+            await self._wait_for(
+                lambda: float(store.rows["startup-msg-structured-1"]["next_attempt_at"]) > first_next_attempt,
+                failure_message="expected structured inactive response to defer again on retry",
+            )
             self.assertEqual(store.rows["startup-msg-structured-1"]["attempt_count"], 0)
             self.assertNotIn("startup-msg-structured-1", store.dead_letters)
+            self.assertGreaterEqual(fake_client.dispatch_eventsub_notification.await_count, 2)
         finally:
             await runtime.stop()
 
@@ -893,8 +910,10 @@ class DashboardServiceDegradedUpstreamTests(unittest.IsolatedAsyncioTestCase):
             )
             self.assertIn("missing-handler-msg-1", store.rows)
 
-            await runtime._process_due_batch()
-            self.assertEqual(fake_client.dispatch_eventsub_notification.await_count, 1)
+            await self._wait_for(
+                lambda: store.rows.get("missing-handler-msg-1", {}).get("attempt_count") == 1,
+                failure_message="expected missing webhook handler to count as a real retry",
+            )
             self.assertEqual(store.rows["missing-handler-msg-1"]["attempt_count"], 1)
             self.assertNotIn("missing-handler-msg-1", store.dead_letters)
             self.assertEqual(
@@ -905,6 +924,7 @@ class DashboardServiceDegradedUpstreamTests(unittest.IsolatedAsyncioTestCase):
                 float(store.rows["missing-handler-msg-1"]["next_attempt_at"]),
                 current_time["now"],
             )
+            self.assertGreaterEqual(fake_client.dispatch_eventsub_notification.await_count, 1)
         finally:
             await runtime.stop()
 
