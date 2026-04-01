@@ -422,6 +422,18 @@ class _DashboardRoutesMixin:
     async def legacy_dashboard_redirect(self, request: web.Request) -> web.StreamResponse:
         return await _routes_entry.legacy_dashboard_redirect(self, request)
 
+    async def legacy_admin_redirect(self, request: web.Request) -> web.StreamResponse:
+        return await _routes_entry.legacy_admin_redirect(self, request)
+
+    async def legacy_admin(self, request: web.Request) -> web.StreamResponse:
+        return await _routes_entry.legacy_admin(self, request)
+
+    async def admin_dashboard_redirect(self, request: web.Request) -> web.StreamResponse:
+        return await _routes_entry.admin_dashboard_redirect(self, request)
+
+    async def admin_legacy_redirect(self, request: web.Request) -> web.StreamResponse:
+        return await _routes_entry.admin_legacy_redirect(self, request)
+
     async def admin(self, request: web.Request) -> web.StreamResponse:
         return await _routes_entry.admin(self, request)
 

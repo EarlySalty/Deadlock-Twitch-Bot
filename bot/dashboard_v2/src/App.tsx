@@ -18,6 +18,7 @@ import { AIAnalysis } from '@/pages/AIAnalysis';
 import { SessionDetail } from '@/pages/SessionDetail';
 import { InternalHomeLanding } from '@/pages/InternalHomeLanding';
 import { VerwaltungPage } from '@/pages/Verwaltung';
+import Pricing from '@/pages/Pricing';
 import { PlanProvider } from '@/context/PlanContext';
 import { useStreamerList, useAuthStatus } from '@/hooks/useAnalytics';
 import type { TimeRange } from '@/types/analytics';
@@ -350,13 +351,13 @@ function AnalyticsDashboard() {
 export default function App() {
   const isInternalHomeRoute = normalizePathname(window.location.pathname) === '/twitch/dashboard';
   const isVerwaltungRoute = normalizePathname(window.location.pathname) === '/twitch/verwaltung';
+  const isPricingRoute = normalizePathname(window.location.pathname) === '/twitch/pricing';
 
   return (
     <QueryClientProvider client={queryClient}>
       <ErrorBoundary>
-        {isVerwaltungRoute ? <VerwaltungPage /> : isInternalHomeRoute ? <InternalHome /> : <AnalyticsDashboard />}
+        {isVerwaltungRoute ? <VerwaltungPage /> : isPricingRoute ? <Pricing /> : isInternalHomeRoute ? <InternalHome /> : <AnalyticsDashboard />}
       </ErrorBoundary>
     </QueryClientProvider>
   );
 }
-

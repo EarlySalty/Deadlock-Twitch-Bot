@@ -24,7 +24,10 @@ def build_route_defs(server: Any) -> list[web.RouteDef]:
         web.get("/twitch", server.index),
         web.get("/twitch/", server.index),
         web.get("/twitch/admin", server.admin),
+        web.get("/twitch/admin/legacy", server.legacy_admin),
         web.get("/twitch/admin/announcements", server.admin_announcements_page),
+        web.get("/twitch/dashboard-v2", server.admin_dashboard_redirect),
+        web.get("/twitch/stats", server.admin_legacy_redirect),
         web.post("/twitch/admin/announcements", server.admin_announcements_save),
         web.get("/twitch/admin/roadmap", server.admin_roadmap_page),
         web.get("/twitch/live", server.admin),
@@ -40,7 +43,6 @@ def build_route_defs(server: Any) -> list[web.RouteDef]:
         web.post("/twitch/verify", server.verify),
         web.post("/twitch/archive", server.archive),
         web.post("/twitch/discord_flag", server.discord_flag),
-        web.get("/twitch/stats", server.stats),
         web.get("/twitch/partners", server.partner_stats),
         web.get("/twitch/dashboads", server.legacy_dashboard_redirect),
         web.get("/twitch/dashboards", server.legacy_dashboard_redirect),
@@ -84,6 +86,40 @@ async def legacy_dashboard_redirect(server: Any, request: web.Request) -> web.St
     if request.query_string:
         destination = f"{destination}?{request.query_string}"
     safe_destination = server._safe_internal_redirect(destination, fallback="/twitch/dashboard")
+    raise web.HTTPFound(safe_destination)
+
+
+async def legacy_admin_redirect(server: Any, request: web.Request) -> web.StreamResponse:
+    """Redirect legacy admin aliases to the canonical admin landing."""
+    destination = "/twitch/admin"
+    if request.query_string:
+        destination = f"{destination}?{request.query_string}"
+    safe_destination = server._safe_internal_redirect(destination, fallback="/twitch/admin")
+    raise web.HTTPFound(safe_destination)
+
+
+async def legacy_admin(server: Any, request: web.Request) -> web.StreamResponse:
+    """Serve the legacy admin surface."""
+    return await DashboardLiveMixin.index(server, request)
+
+
+async def admin_dashboard_redirect(server: Any, request: web.Request) -> web.StreamResponse:
+    """Redirect admin-side v2 aliases to the canonical admin dashboard."""
+    destination = "/twitch/admin"
+    if request.query_string:
+        destination = f"{destination}?{request.query_string}"
+    safe_destination = server._safe_internal_redirect(destination, fallback="/twitch/admin")
+    raise web.HTTPFound(safe_destination)
+
+
+async def admin_legacy_redirect(server: Any, request: web.Request) -> web.StreamResponse:
+    """Redirect admin-side stats aliases to the canonical legacy admin surface."""
+    destination = "/twitch/admin/legacy"
+    if request.query_string:
+        destination = f"{destination}?{request.query_string}"
+    safe_destination = server._safe_internal_redirect(
+        destination, fallback="/twitch/admin/legacy"
+    )
     raise web.HTTPFound(safe_destination)
 
 
