@@ -246,5 +246,75 @@ class RaidTrackingRuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("channel.chat.notification:matched_pending", detail)
 
 
+    async def test_register_pending_raid_skips_dynamic_sub_when_channel_raid_already_ready(
+        self,
+    ) -> None:
+        """
+        channel_raid_ready=True bedeutet: Startup-Sub ist bereits aktiv.
+        register_pending_raid darf subscribe_raid_target_dynamic NICHT aufrufen —
+        kein doppelter Sub, kein Race-Condition-Fenster.
+        """
+        subscribe_mock = AsyncMock(return_value=True)
+        service, _, events = self._make_service(subscribe_raid_target_dynamic=subscribe_mock)
+
+        await service.register_pending_raid(
+            from_broadcaster_login="source_login",
+            to_broadcaster_id="9009",
+            to_broadcaster_login="targetlogin",
+            channel_raid_ready=True,
+        )
+
+        subscribe_mock.assert_not_awaited()
+        sub_create_events = [e for e in events if e.get("step") == "pending_subscription_create"]
+        self.assertEqual(len(sub_create_events), 1)
+        self.assertEqual(sub_create_events[0]["decision"], "already_ready")
+
+    async def test_register_pending_raid_creates_dynamic_sub_when_channel_raid_not_ready(
+        self,
+    ) -> None:
+        """
+        channel_raid_ready=False: Startup-Sub konnte nicht erstellt werden
+        (z.B. externer Target-Channel). register_pending_raid muss
+        subscribe_raid_target_dynamic aufrufen als letzten Fallback.
+        """
+        subscribe_mock = AsyncMock(return_value=True)
+        service, _, events = self._make_service(subscribe_raid_target_dynamic=subscribe_mock)
+
+        await service.register_pending_raid(
+            from_broadcaster_login="source_login",
+            to_broadcaster_id="9009",
+            to_broadcaster_login="targetlogin",
+            channel_raid_ready=False,
+        )
+
+        subscribe_mock.assert_awaited_once()
+        sub_create_events = [e for e in events if e.get("step") == "pending_subscription_create"]
+        self.assertEqual(len(sub_create_events), 1)
+        self.assertEqual(sub_create_events[0]["decision"], "created")
+
+    async def test_register_pending_raid_records_best_effort_when_dynamic_sub_fails(
+        self,
+    ) -> None:
+        """
+        Wenn subscribe_raid_target_dynamic fehlschlägt, wird das Raid trotzdem
+        als best_effort registriert — damit der Bot nicht komplett blockiert.
+        Das Observability-Event muss das klar als best_effort_only ausweisen.
+        """
+        subscribe_mock = AsyncMock(return_value=False)
+        service, _, events = self._make_service(subscribe_raid_target_dynamic=subscribe_mock)
+
+        await service.register_pending_raid(
+            from_broadcaster_login="source_login",
+            to_broadcaster_id="9009",
+            to_broadcaster_login="targetlogin",
+            channel_raid_ready=False,
+        )
+
+        subscribe_mock.assert_awaited_once()
+        sub_create_events = [e for e in events if e.get("step") == "pending_subscription_create"]
+        self.assertEqual(len(sub_create_events), 1)
+        self.assertEqual(sub_create_events[0]["decision"], "best_effort_only")
+
+
 if __name__ == "__main__":
     unittest.main()

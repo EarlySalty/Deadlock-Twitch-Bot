@@ -2069,6 +2069,10 @@ class _EventSubMixin:
                 dropped_subscriptions += 1
             if not listener.add_subscription("channel.update", bid, {"broadcaster_user_id": bid}):
                 dropped_subscriptions += 1
+            if not listener.add_subscription("channel.raid", bid, {"to_broadcaster_user_id": bid}):
+                dropped_subscriptions += 1
+            else:
+                self._eventsub_track_sub("channel.raid", bid)
 
         log.info(
             "EventSub WS: Fallback mit %d initialen Subscriptions auf %d Transporten für %d Streamer gestartet",
@@ -2493,6 +2497,28 @@ class _EventSubMixin:
                     )
             except Exception:
                 log.exception("EventSub Webhook: stream.offline fehlgeschlagen für %s", login)
+
+            # channel.raid für ALLE Streamer – so werden eingehende Raids
+            # zuverlässig erkannt ohne auf die dynamische Subscription im
+            # Raid-Moment angewiesen zu sein (eliminiert Race Condition).
+            try:
+                result, already_exists = await self._create_eventsub_webhook_subscription(
+                    sub_type="channel.raid",
+                    condition={"to_broadcaster_user_id": broadcaster_id},
+                    webhook_url=webhook_url,
+                    secret=webhook_secret,
+                    oauth_token=None,
+                )
+                if result:
+                    self._eventsub_track_sub("channel.raid", broadcaster_id)
+                    startup_coverage.setdefault(broadcaster_id, set()).add("channel.raid")
+                    log.debug(
+                        "EventSub Webhook: channel.raid %s für %s",
+                        "bereits vorhanden" if already_exists else "subscribed",
+                        login,
+                    )
+            except Exception:
+                log.exception("EventSub Webhook: channel.raid fehlgeschlagen für %s", login)
 
         log.info(
             "EventSub Webhook: stream.online=%d, channel.update=%d, stream.offline=%d subscribiert",

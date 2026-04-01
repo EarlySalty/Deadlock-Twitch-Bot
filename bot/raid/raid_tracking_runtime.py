@@ -466,7 +466,7 @@ class RaidTrackingRuntimeService:
         self._emit_event(
             raid_flow_id=flow_id,
             step="pending_subscription_create",
-            decision="created" if success else "best_effort_only",
+            decision="already_ready" if channel_raid_ready else ("created" if success else "best_effort_only"),
             level=logging.INFO if success else logging.WARNING,
             from_broadcaster_login=from_broadcaster_login,
             to_broadcaster_login=to_broadcaster_login,
