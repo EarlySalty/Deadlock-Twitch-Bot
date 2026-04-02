@@ -1123,8 +1123,8 @@ class OfflineRaidSourceLoggingTests(unittest.IsolatedAsyncioTestCase):
 
     def _conn_patch(self):
         return patch(
-            "bot.raid.mixin.readonly_connection",
-            side_effect=lambda: contextlib.nullcontext(self.conn),
+            "bot.raid.bot.readonly_connection",
+            side_effect=lambda: contextlib.nullcontext(_CompatConn(self.conn)),
         )
 
     async def test_handle_auto_raid_partner_lookup_uses_to_thread(self) -> None:

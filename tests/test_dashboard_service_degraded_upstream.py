@@ -1118,30 +1118,6 @@ class DashboardServiceDegradedUpstreamTests(unittest.IsolatedAsyncioTestCase):
                 return "webhook-secret"
             return ""
 
-        with (
-            patch(
-                "bot.dashboard_service.app.analytics_db_fingerprint_details",
-                return_value={"fingerprint": "local", "hostHash": "h", "databaseHash": "d", "portHash": "p"},
-            ),
-            patch("bot.dashboard_service.app.load_secret_value", side_effect=_fake_secret),
-            patch("bot.dashboard_service.app.BotApiClient", return_value=fake_client),
-            patch("bot.dashboard.server_v2.storage_pg.prepare_runtime_storage", return_value=None),
-        ):
-            app = build_dashboard_service_app(
-                internal_api_base_url="http://127.0.0.1:1234",
-                internal_api_token="internal-token",
-                internal_api_allow_non_loopback=False,
-                internal_api_timeout_seconds=1.0,
-                dashboard_token="dash-token",
-                partner_token="partner-token",
-                noauth=False,
-                oauth_client_id="client-id",
-                oauth_client_secret="client-secret",
-                oauth_redirect_uri="https://example.com/callback",
-                session_ttl_seconds=3600,
-                legacy_stats_url="https://example.com/stats",
-            )
-
         body = {
             "subscription": {
                 "type": "stream.offline",
@@ -1158,11 +1134,38 @@ class DashboardServiceDegradedUpstreamTests(unittest.IsolatedAsyncioTestCase):
             message_id="msg-route-offline-1",
         )
 
-        async with TestServer(app) as server:
-            async with TestClient(server) as client:
-                first = await client.post("/twitch/eventsub/callback", json=body, headers=headers)
-                second = await client.post("/twitch/eventsub/callback", json=body, headers=headers)
-                await asyncio.sleep(0.05)
+        with (
+            patch(
+                "bot.dashboard_service.app.analytics_db_fingerprint_details",
+                return_value={"fingerprint": "local", "hostHash": "h", "databaseHash": "d", "portHash": "p"},
+            ),
+            patch("bot.dashboard_service.app.load_secret_value", side_effect=_fake_secret),
+            patch("bot.dashboard_service.app.BotApiClient", return_value=fake_client),
+            patch("bot.dashboard.server_v2.storage_pg.prepare_runtime_storage", return_value=None),
+            patch(
+                "bot.dashboard_service.eventsub_bridge.DashboardEventSubBridgeStore",
+                return_value=_InMemoryBridgeStore(),
+            ),
+        ):
+            app = build_dashboard_service_app(
+                internal_api_base_url="http://127.0.0.1:1234",
+                internal_api_token="internal-token",
+                internal_api_allow_non_loopback=False,
+                internal_api_timeout_seconds=1.0,
+                dashboard_token="dash-token",
+                partner_token="partner-token",
+                noauth=False,
+                oauth_client_id="client-id",
+                oauth_client_secret="client-secret",
+                oauth_redirect_uri="https://example.com/callback",
+                session_ttl_seconds=3600,
+                legacy_stats_url="https://example.com/stats",
+            )
+            async with TestServer(app) as server:
+                async with TestClient(server) as client:
+                    first = await client.post("/twitch/eventsub/callback", json=body, headers=headers)
+                    second = await client.post("/twitch/eventsub/callback", json=body, headers=headers)
+                    await asyncio.sleep(0.05)
 
         self.assertEqual(first.status, 204)
         self.assertEqual(second.status, 204)
@@ -1190,30 +1193,6 @@ class DashboardServiceDegradedUpstreamTests(unittest.IsolatedAsyncioTestCase):
                 return "webhook-secret"
             return ""
 
-        with (
-            patch(
-                "bot.dashboard_service.app.analytics_db_fingerprint_details",
-                return_value={"fingerprint": "local", "hostHash": "h", "databaseHash": "d", "portHash": "p"},
-            ),
-            patch("bot.dashboard_service.app.load_secret_value", side_effect=_fake_secret),
-            patch("bot.dashboard_service.app.BotApiClient", return_value=fake_client),
-            patch("bot.dashboard.server_v2.storage_pg.prepare_runtime_storage", return_value=None),
-        ):
-            app = build_dashboard_service_app(
-                internal_api_base_url="http://127.0.0.1:1234",
-                internal_api_token="internal-token",
-                internal_api_allow_non_loopback=False,
-                internal_api_timeout_seconds=1.0,
-                dashboard_token="dash-token",
-                partner_token="partner-token",
-                noauth=False,
-                oauth_client_id="client-id",
-                oauth_client_secret="client-secret",
-                oauth_redirect_uri="https://example.com/callback",
-                session_ttl_seconds=3600,
-                legacy_stats_url="https://example.com/stats",
-            )
-
         body = {
             "subscription": {
                 "type": "channel.raid",
@@ -1234,11 +1213,38 @@ class DashboardServiceDegradedUpstreamTests(unittest.IsolatedAsyncioTestCase):
             subscription_type="channel.raid",
         )
 
-        async with TestServer(app) as server:
-            async with TestClient(server) as client:
-                first = await client.post("/twitch/eventsub/callback", json=body, headers=headers)
-                second = await client.post("/twitch/eventsub/callback", json=body, headers=headers)
-                await asyncio.sleep(0.05)
+        with (
+            patch(
+                "bot.dashboard_service.app.analytics_db_fingerprint_details",
+                return_value={"fingerprint": "local", "hostHash": "h", "databaseHash": "d", "portHash": "p"},
+            ),
+            patch("bot.dashboard_service.app.load_secret_value", side_effect=_fake_secret),
+            patch("bot.dashboard_service.app.BotApiClient", return_value=fake_client),
+            patch("bot.dashboard.server_v2.storage_pg.prepare_runtime_storage", return_value=None),
+            patch(
+                "bot.dashboard_service.eventsub_bridge.DashboardEventSubBridgeStore",
+                return_value=_InMemoryBridgeStore(),
+            ),
+        ):
+            app = build_dashboard_service_app(
+                internal_api_base_url="http://127.0.0.1:1234",
+                internal_api_token="internal-token",
+                internal_api_allow_non_loopback=False,
+                internal_api_timeout_seconds=1.0,
+                dashboard_token="dash-token",
+                partner_token="partner-token",
+                noauth=False,
+                oauth_client_id="client-id",
+                oauth_client_secret="client-secret",
+                oauth_redirect_uri="https://example.com/callback",
+                session_ttl_seconds=3600,
+                legacy_stats_url="https://example.com/stats",
+            )
+            async with TestServer(app) as server:
+                async with TestClient(server) as client:
+                    first = await client.post("/twitch/eventsub/callback", json=body, headers=headers)
+                    second = await client.post("/twitch/eventsub/callback", json=body, headers=headers)
+                    await asyncio.sleep(0.05)
 
         self.assertEqual(first.status, 204)
         self.assertEqual(second.status, 204)

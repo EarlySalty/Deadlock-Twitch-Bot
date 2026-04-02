@@ -321,13 +321,19 @@ class BotApiClientErrorMappingTests(unittest.IsolatedAsyncioTestCase):
         client = app[BOT_API_CLIENT_KEY]
         self.assertIsNotNone(client)
 
-        with patch.object(
-            client,
-            "healthz",
-            return_value={
-                "ok": True,
-                "analyticsDbFingerprint": "pg:remote654321",
-            },
+        with (
+            patch.object(
+                client,
+                "healthz",
+                return_value={
+                    "ok": True,
+                    "analyticsDbFingerprint": "pg:remote654321",
+                },
+            ),
+            patch(
+                "bot.dashboard.server_v2.storage_pg.prepare_runtime_storage",
+                return_value=None,
+            ),
         ):
             for callback in app.on_startup:
                 await callback(app)
