@@ -12,7 +12,7 @@ Please do not open public issues for suspected vulnerabilities.
 Use one of the following channels:
 
 - GitHub Security Advisories: open a private advisory in this repository
-- Email: `security@nani-der-echte.dev`
+- Email: `mail@earlysalty.com`
 
 Include:
 
