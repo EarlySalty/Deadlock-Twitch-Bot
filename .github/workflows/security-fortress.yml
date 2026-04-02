@@ -159,12 +159,43 @@ jobs:
         if: steps.detect_py.outputs.has_python == 'true'
         run: |
           set -euo pipefail
+          found=0
           if find . -maxdepth 3 -type f -name "requirements*.txt" | grep -q .; then
             while IFS= read -r req; do
+              found=1
               echo "Auditing dependencies in $req"
               pip-audit --strict --desc -r "$req"
             done < <(find . -maxdepth 3 -type f -name "requirements*.txt" | sort)
-          else
+          fi
+
+          if find . -maxdepth 3 -type f -name "pyproject.toml" | grep -q .; then
+            while IFS= read -r pyproject_file; do
+              found=1
+              req_file="$(mktemp)"
+              python - "$pyproject_file" "$req_file" <<'PY'
+              import sys
+              import tomllib
+              from pathlib import Path
+
+              pyproject_path = Path(sys.argv[1])
+              req_path = Path(sys.argv[2])
+              data = tomllib.loads(pyproject_path.read_text(encoding="utf-8"))
+              project = data.get("project", {})
+              dependencies = project.get("dependencies", []) or []
+              req_path.write_text("".join(f"{dep}\n" for dep in dependencies), encoding="utf-8")
+              PY
+              if [ ! -s "$req_file" ]; then
+                echo "No direct dependencies declared in $pyproject_file"
+                rm -f "$req_file"
+                continue
+              fi
+              echo "Auditing pyproject dependencies in $pyproject_file"
+              pip-audit --strict --desc -r "$req_file"
+              rm -f "$req_file"
+            done < <(find . -maxdepth 3 -type f -name "pyproject.toml" | sort)
+          fi
+
+          if [ "$found" -eq 0 ]; then
             echo "No requirements*.txt files found for pip-audit."
           fi
 
@@ -187,7 +218,6 @@ jobs:
         run: |
           lockfiles=$(find . -type f \( -name "package-lock.json" -o -name "npm-shrinkwrap.json" \) \
             -not -path "*/node_modules/*" \
-            -not -path "./.github/eslint-security/*" \
             -not -path "*/.git/*" | sort)
           if [ -z "$lockfiles" ]; then
             echo "has_node=false" >> "$GITHUB_OUTPUT"
@@ -207,7 +237,9 @@ jobs:
           node-version: "22"
           cache: "npm"
           cache-dependency-path: |
+            .github/eslint-security/package-lock.json
             website/package-lock.json
+            bot/admin_dashboard/package-lock.json
             bot/dashboard_v2/package-lock.json
 
       - name: Run npm audit for each lockfile

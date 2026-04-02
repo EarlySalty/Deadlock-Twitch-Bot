@@ -73,7 +73,6 @@ jobs:
             fi
           done < <(find . -type f \( -name "package-lock.json" -o -name "npm-shrinkwrap.json" \) \
             -not -path "*/node_modules/*" \
-            -not -path "./.github/eslint-security/*" \
             -not -path "*/.git/*" | sort)
 
           if [ "$found" -eq 0 ]; then
@@ -129,8 +128,52 @@ jobs:
       - name: Python pyproject audit (recursive)
         if: hashFiles('**/pyproject.toml') != ''
         run: |
-          echo "Skipping pyproject install-based pip-audit to keep dependency resolution deterministic."
-          echo "requirements*.txt audits remain enabled."
+          mkdir -p dependency-reports/python
+          found=0
+          audit_fail=0
+
+          while IFS= read -r pyproject_file; do
+            found=1
+            rel_path="${pyproject_file#./}"
+            safe_name="$(echo "$rel_path" | sed 's#[^A-Za-z0-9._-]#_#g')"
+            req_file="dependency-reports/python/${safe_name}.requirements.txt"
+
+            python - "$pyproject_file" "$req_file" <<'PY'
+            import sys
+            import tomllib
+            from pathlib import Path
+
+            pyproject_path = Path(sys.argv[1])
+            req_path = Path(sys.argv[2])
+            data = tomllib.loads(pyproject_path.read_text(encoding="utf-8"))
+            project = data.get("project", {})
+            dependencies = project.get("dependencies", []) or []
+            req_path.write_text("".join(f"{dep}\n" for dep in dependencies), encoding="utf-8")
+            PY
+
+            if [ ! -s "$req_file" ]; then
+              echo "No direct dependencies declared in $pyproject_file"
+              continue
+            fi
+
+            echo "Auditing Python project dependencies in: $pyproject_file"
+            if ! pip-audit -r "$req_file" --format json --output "dependency-reports/python/${safe_name}.pip-audit.json"; then
+              audit_fail=1
+            fi
+          done < <(find . -type f -name "pyproject.toml" \
+            -not -path "*/.venv/*" \
+            -not -path "*/venv/*" \
+            -not -path "*/node_modules/*" \
+            -not -path "*/.git/*" | sort)
+
+          if [ "$found" -eq 0 ]; then
+            echo "No pyproject.toml files found for Python audit."
+          fi
+
+          if [ "$audit_fail" -ne 0 ]; then
+            echo "Python pyproject audit found vulnerabilities."
+            exit 1
+          fi
 
       - name: Record additional Python lockfiles
         if: hashFiles('**/Pipfile.lock', '**/poetry.lock', '**/pyproject.toml') != ''

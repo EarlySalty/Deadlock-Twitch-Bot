@@ -55,6 +55,8 @@ jobs:
   pytest:
     name: "✅ Pytest"
     runs-on: ubuntu-latest
+    env:
+      COVERAGE_FAIL_UNDER: "40"
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
@@ -68,5 +70,72 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install ".[test]"
 
-      - name: Run regression suite
-        run: pytest -q
+      - name: Run regression suite with coverage gate
+        run: |
+          pytest -q \
+            --cov=bot \
+            --cov=twitch_cog \
+            --cov-branch \
+            --cov-report=term-missing:skip-covered \
+            --cov-report=xml \
+            --cov-report=html \
+            --cov-fail-under="${COVERAGE_FAIL_UNDER}"
+
+      - name: Upload coverage artifacts
+        if: always()
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: pytest-coverage
+          path: |
+            coverage.xml
+            htmlcov/
+          if-no-files-found: ignore
+
+  frontend-ci:
+    name: "🧪 Frontend CI (${{ matrix.project.name }})"
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        project:
+          - name: website
+            path: website
+          - name: admin_dashboard
+            path: bot/admin_dashboard
+          - name: dashboard_v2
+            path: bot/dashboard_v2
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Set up Node.js
+        uses: actions/setup-node@6044e13b5dc448c55e2357c09f80417699197238 # v6.2.0
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: ${{ matrix.project.path }}/package-lock.json
+
+      - name: Install dependencies
+        working-directory: ${{ matrix.project.path }}
+        run: npm ci
+
+      - name: Run optional lint script
+        working-directory: ${{ matrix.project.path }}
+        run: |
+          if node -e "const pkg=JSON.parse(require('fs').readFileSync('package.json','utf8')); process.exit(pkg.scripts && pkg.scripts.lint ? 0 : 1)"; then
+            npm run lint
+          else
+            echo "No lint script defined for ${{ matrix.project.name }}."
+          fi
+
+      - name: Run optional test script
+        working-directory: ${{ matrix.project.path }}
+        run: |
+          if node -e "const pkg=JSON.parse(require('fs').readFileSync('package.json','utf8')); process.exit(pkg.scripts && pkg.scripts.test ? 0 : 1)"; then
+            npm test
+          else
+            echo "No test script defined for ${{ matrix.project.name }}."
+          fi
+
+      - name: Build frontend project
+        working-directory: ${{ matrix.project.path }}
+        run: npm run build

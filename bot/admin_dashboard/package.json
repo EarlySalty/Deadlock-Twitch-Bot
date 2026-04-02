@@ -31,6 +31,7 @@
   "overrides": {
     "ajv": "^8.18.0",
     "minimatch": "^10.2.3",
+    "picomatch": "^4.0.4",
     "rollup": "^4.59.0"
   }
 }

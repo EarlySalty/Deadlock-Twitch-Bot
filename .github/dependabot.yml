@@ -24,6 +24,37 @@ updates:
         versions:
           - ">=10"
 
+  - package-ecosystem: "npm"
+    directory: "/bot/admin_dashboard"
+    schedule:
+      interval: "daily"
+    labels:
+      - "dependencies"
+      - "javascript"
+    commit-message:
+      prefix: "deps"
+
+  - package-ecosystem: "npm"
+    directory: "/website"
+    schedule:
+      interval: "daily"
+    labels:
+      - "dependencies"
+      - "javascript"
+    commit-message:
+      prefix: "deps"
+
+  - package-ecosystem: "npm"
+    directory: "/.github/eslint-security"
+    schedule:
+      interval: "daily"
+    labels:
+      - "dependencies"
+      - "github-actions"
+      - "javascript"
+    commit-message:
+      prefix: "deps"
+
   - package-ecosystem: "pip"
     directory: "/"
     schedule:
