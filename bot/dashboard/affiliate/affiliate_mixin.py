@@ -38,6 +38,12 @@ _AFFILIATE_STATE_CACHE_LIMIT = 250
 _AFFILIATE_COOKIE = "twitch_affiliate_session"
 _COMMISSION_RATE = 0.30
 _MAX_PENDING_COMMISSION_CENTS = 5000
+
+
+def _sanitize_log_value(value: object | None) -> str:
+    if value is None:
+        return "<none>"
+    return str(value).replace("\r", "\\r").replace("\n", "\\n")
 _AFFILIATE_COMMISSION_LOCK_NAMESPACE = 1_103_151_689
 _AFFILIATE_GUTSCHRIFT_LOOP_INTERVAL_SECONDS = 6 * 3600
 
@@ -158,7 +164,12 @@ class _DashboardAffiliateMixin:
             consumer = getattr(repo, f"consume_{state_type}")
             state_data = consumer(state, now=now)
         except Exception as exc:
-            log.debug("Could not consume affiliate %s state %s from DB: %s", state_type, state, exc)
+            log.debug(
+                "Could not consume affiliate %s state %s from DB: %s",
+                _sanitize_log_value(state_type),
+                _sanitize_log_value(state),
+                _sanitize_log_value(exc),
+            )
 
         if state_data is None:
             state_data = cache.pop(state, None)
@@ -634,7 +645,11 @@ class _DashboardAffiliateMixin:
             try:
                 session = sessions_db.load_session(session_id, "affiliate", now)
             except Exception as exc:
-                log.debug("Could not load affiliate session %s from DB: %s", session_id, exc)
+                log.debug(
+                    "Could not load affiliate session %s from DB: %s",
+                    _sanitize_log_value(session_id),
+                    _sanitize_log_value(exc),
+                )
                 session = None
             if session is None:
                 return None
@@ -645,7 +660,11 @@ class _DashboardAffiliateMixin:
             try:
                 sessions_db.delete_session(session_id)
             except Exception as exc:
-                log.debug("Could not delete expired affiliate session %s: %s", session_id, exc)
+                log.debug(
+                    "Could not delete expired affiliate session %s: %s",
+                    _sanitize_log_value(session_id),
+                    _sanitize_log_value(exc),
+                )
             return None
         return session
 

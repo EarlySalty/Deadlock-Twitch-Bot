@@ -223,7 +223,7 @@ class DashboardLiveMixin:
         except Exception:
             log.debug(
                 "Could not resolve partner chat-action eligibility for %s",
-                normalized_login,
+                str(normalized_login or "").replace("\r", "\\r").replace("\n", "\\n"),
                 exc_info=True,
             )
             return False

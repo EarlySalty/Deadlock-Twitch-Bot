@@ -37,12 +37,25 @@ class DashboardAuthCookieService:
         base_name = self.session_cookie_name() or "twitch_dash_session"
         return f"{base_name}_partner"
 
+    @staticmethod
+    def _sanitize_cookie_value(value: str) -> str:
+        text = str(value or "").strip()
+        if not text:
+            return ""
+        return re.sub(r"[^A-Za-z0-9._~=-]", "", text)
+
+    @staticmethod
+    def _sanitize_log_value(value: object | None) -> str:
+        if value is None:
+            return "<none>"
+        return str(value).replace("\r", "\\r").replace("\n", "\\n")
+
     def set_session_cookie(
         self, response: web.StreamResponse, request: web.Request, session_id: str
     ) -> None:
         response.set_cookie(
             self.session_cookie_name(),
-            session_id,
+            self._sanitize_cookie_value(session_id),
             max_age=int(getattr(self._owner, "_session_ttl_seconds", 6 * 3600) or 6 * 3600),
             httponly=True,
             secure=self._owner._is_secure_request(request),
@@ -64,7 +77,7 @@ class DashboardAuthCookieService:
     ) -> None:
         response.set_cookie(
             self.oauth_context_cookie_name(),
-            token,
+            self._sanitize_cookie_value(token),
             max_age=int(getattr(self._owner, "_oauth_state_ttl_seconds", 600) or 600),
             httponly=True,
             secure=self._owner._is_secure_request(request),
@@ -88,7 +101,7 @@ class DashboardAuthCookieService:
     ) -> None:
         response.set_cookie(
             self.discord_oauth_context_cookie_name(),
-            token,
+            self._sanitize_cookie_value(token),
             max_age=int(getattr(self._owner, "_oauth_state_ttl_seconds", 600) or 600),
             httponly=True,
             secure=self._owner._is_secure_request(request),
@@ -112,7 +125,7 @@ class DashboardAuthCookieService:
     ) -> None:
         response.set_cookie(
             self.partner_access_cookie_name(),
-            session_id,
+            self._sanitize_cookie_value(session_id),
             max_age=self._owner._partner_access_session_ttl(),
             httponly=True,
             secure=self._owner._is_secure_request(request),
@@ -389,7 +402,11 @@ class PartnerLoginTokenService:
                 now=current,
             )
         except Exception as exc:
-            log.warning("Could not load persisted partner login state %s: %s", state_id, exc)
+            log.warning(
+                "Could not load persisted partner login state %s: %s",
+                self._sanitize_cookie_value(state_id),
+                self._sanitize_log_value(exc),
+            )
             return None
         state_cache.pop(state_id, None)
         state_data = persisted_state if isinstance(persisted_state, dict) else None

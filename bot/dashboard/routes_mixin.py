@@ -374,7 +374,12 @@ class _DashboardRoutesMixin:
                     "Could not build dashboard auth challenge; fallback to login redirect",
                     exc_info=True,
                 )
-        return web.HTTPFound(fallback_login_url)
+        safe_login_url = (
+            self._safe_internal_redirect(fallback_login_url, fallback="/twitch/auth/login")
+            if hasattr(self, "_safe_internal_redirect")
+            else "/twitch/auth/login"
+        )
+        return web.HTTPFound(safe_login_url)
 
     def _entry_route_deps(self) -> EntryRouteDeps:
         return EntryRouteDeps(

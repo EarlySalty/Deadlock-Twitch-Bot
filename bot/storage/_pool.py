@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import contextlib
-import hashlib
 import queue
 import threading
 import time
@@ -68,8 +67,11 @@ def _dsn_registry_key(dsn: str) -> tuple[tuple[str, str], ...]:
         if url_items or query_items:
             return tuple(sorted(url_items + query_items))
 
-    digest = hashlib.sha256(raw_dsn.encode("utf-8", errors="ignore")).hexdigest()
-    return (("dsn_hash", digest),)
+    sanitized = raw_dsn.replace("\r", "").replace("\n", "")
+    sanitized = sanitized.replace("\\", "")
+    if "@" in sanitized:
+        sanitized = sanitized.split("@", 1)[-1]
+    return (("dsn_opaque", sanitized[:256]),)
 
 
 class PostgresConnectionPool:

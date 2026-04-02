@@ -124,13 +124,7 @@ jobs:
 
       - name: Install scanner dependencies
         if: steps.detect_py.outputs.has_python == 'true'
-        run: |
-          set -euo pipefail
-          python -m pip install --upgrade pip
-          python -m pip install "bandit[toml]" pip-audit
-          if [ -f pyproject.toml ]; then
-            python -m pip install .
-          fi
+        run: ./.github/scripts/install-locked-python-deps.sh .github/requirements-tools-locked.txt
 
       - name: Run Bandit
         if: steps.detect_py.outputs.has_python == 'true'

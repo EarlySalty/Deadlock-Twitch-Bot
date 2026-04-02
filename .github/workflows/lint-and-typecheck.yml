@@ -22,7 +22,7 @@ jobs:
           python-version: "3.13"
 
       - name: Install lint tooling
-        run: python -m pip install --require-hashes -r .github/requirements-tools-locked.txt
+        run: ./.github/scripts/install-locked-python-deps.sh .github/requirements-tools-locked.txt
 
       - name: Run Ruff on curated targets
         run: |
@@ -66,9 +66,7 @@ jobs:
           python-version: "3.13"
 
       - name: Install test dependencies
-        run: |
-          python -m pip install --upgrade pip
-          python -m pip install ".[test]"
+        run: ./.github/scripts/install-locked-python-deps.sh .github/requirements-test-ci-locked.txt
 
       - name: Run regression suite with coverage gate
         run: |

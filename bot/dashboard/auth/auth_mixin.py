@@ -752,7 +752,11 @@ class _DashboardAuthMixin:
                 ttl_seconds=self._oauth_state_ttl_seconds,
             )
         except Exception as exc:
-            log.warning("Could not persist Twitch OAuth state %s: %s", state, exc)
+            log.warning(
+                "Could not persist Twitch OAuth state %s: %s",
+                self._sanitize_log_value(state),
+                self._sanitize_log_value(exc),
+            )
             self._dashboard_auth_state_cache("_oauth_states").pop(state, None)
             return web.Response(
                 text="OAuth-Status konnte nicht sicher gespeichert werden. Bitte erneut versuchen.",
@@ -799,7 +803,11 @@ class _DashboardAuthMixin:
                 now=time.time(),
             )
         except Exception as exc:
-            log.warning("Could not load persisted Twitch OAuth state %s: %s", state, exc)
+            log.warning(
+                "Could not load persisted Twitch OAuth state %s: %s",
+                self._sanitize_log_value(state),
+                self._sanitize_log_value(exc),
+            )
             state_data = None
         if state_data is None:
             state_data = cached_state_data
@@ -901,7 +909,10 @@ class _DashboardAuthMixin:
         existing = self._get_discord_admin_session(request)
         next_path = self._normalize_discord_admin_next_path(request.query.get("next"))
         if existing:
-            destination = self._canonical_discord_admin_post_login_path(next_path)
+            destination = self._safe_internal_redirect(
+                self._canonical_discord_admin_post_login_path(next_path),
+                fallback="/twitch/admin",
+            )
             raise web.HTTPFound(destination)
 
         redirect_uri = self._normalized_discord_admin_redirect_uri()
@@ -935,7 +946,11 @@ class _DashboardAuthMixin:
                 ttl_seconds=self._discord_admin_state_ttl,
             )
         except Exception as exc:
-            log.warning("Could not persist Discord admin OAuth state %s: %s", state, exc)
+            log.warning(
+                "Could not persist Discord admin OAuth state %s: %s",
+                self._sanitize_log_value(state),
+                self._sanitize_log_value(exc),
+            )
             self._dashboard_auth_state_cache("_discord_admin_oauth_states").pop(state, None)
             return web.Response(
                 text="Discord OAuth Status konnte nicht sicher gespeichert werden.",
@@ -950,7 +965,10 @@ class _DashboardAuthMixin:
                 "state": state,
             }
         )
-        response = web.HTTPFound(f"{DISCORD_API_BASE_URL}/oauth2/authorize?{query}")
+        safe_auth_url = self._safe_discord_admin_login_redirect(
+            f"{DISCORD_API_BASE_URL}/oauth2/authorize?{query}"
+        )
+        response = web.HTTPFound(safe_auth_url)
         self._set_discord_oauth_context_cookie(response, request, context_token)
         self._set_no_store_headers(response)
         raise response
@@ -995,7 +1013,11 @@ class _DashboardAuthMixin:
                 now=time.time(),
             )
         except Exception as exc:
-            log.warning("Could not load persisted Discord OAuth state %s: %s", state, exc)
+            log.warning(
+                "Could not load persisted Discord OAuth state %s: %s",
+                self._sanitize_log_value(state),
+                self._sanitize_log_value(exc),
+            )
             state_data = None
         if state_data is None:
             state_data = cached_state_data
@@ -1102,7 +1124,10 @@ class _DashboardAuthMixin:
             self._sanitize_log_value(self._peer_host(request)),
         )
 
-        destination = self._canonical_discord_admin_post_login_path(state_data.get("next_path"))
+        destination = self._safe_internal_redirect(
+            self._canonical_discord_admin_post_login_path(state_data.get("next_path")),
+            fallback="/twitch/admin",
+        )
         response = web.HTTPFound(destination)
         self._set_discord_admin_cookie(response, request, session_id)
         self._clear_discord_oauth_context_cookie(response, request)
@@ -1120,7 +1145,9 @@ class _DashboardAuthMixin:
         login_url = (
             TWITCH_ADMIN_DISCORD_LOGIN_URL if self._discord_admin_required else "/twitch/dashboard"
         )
-        response = web.HTTPFound(login_url)
+        response = web.HTTPFound(
+            self._safe_internal_redirect(login_url, fallback="/twitch/dashboard")
+        )
         self._clear_discord_admin_cookie(response, request)
         self._set_no_store_headers(response)
         raise response

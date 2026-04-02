@@ -79,7 +79,10 @@ class DashboardAdminAnnouncementMixin:
 
         if request.method in {"GET", "HEAD"}:
             path_qs = request.rel_url.path_qs if request.rel_url else request.path
-            raise web.HTTPFound(f"{self._admin_announcement_public_origin()}{path_qs}")
+            safe_path = str(path_qs or "").strip()
+            if not safe_path.startswith("/"):
+                safe_path = "/twitch/admin/announcements"
+            raise web.HTTPFound(f"{self._admin_announcement_public_origin()}{safe_path}")
 
         raise web.HTTPForbidden(
             text="This admin page is only available on the admin dashboard host."
@@ -120,7 +123,12 @@ class DashboardAdminAnnouncementMixin:
                 params.append(f"err={err}")
             suffix = f"?{'&'.join(params)}" if params else ""
             location = f"/twitch/admin/announcements{suffix}"
-        return web.HTTPFound(location=location)
+        safe_location = (
+            self._safe_internal_redirect(location, fallback="/twitch/admin/announcements")
+            if hasattr(self, "_safe_internal_redirect")
+            else "/twitch/admin/announcements"
+        )
+        return web.HTTPFound(location=safe_location)
 
     @staticmethod
     def _admin_announcement_status_parts(evaluation: dict[str, Any]) -> tuple[str, str, str]:

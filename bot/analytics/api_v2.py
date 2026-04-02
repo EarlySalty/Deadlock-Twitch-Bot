@@ -1490,9 +1490,16 @@ class AnalyticsV2Mixin(
         return f"{parts.scheme.lower()}://{parts.netloc.lower()}"
 
     def _request_origin(self, request: web.Request) -> str:
-        host = str(request.headers.get("Host") or request.host or "").strip()
-        if not host:
+        raw_host = str(request.headers.get("Host") or request.host or "").strip()
+        if not raw_host:
             return ""
+        parsed_host = urlsplit(f"//{raw_host}")
+        hostname = str(parsed_host.hostname or "").strip().lower()
+        if not hostname:
+            return ""
+        host = hostname
+        if parsed_host.port is not None:
+            host = f"{host}:{parsed_host.port}"
 
         is_secure = bool(getattr(request, "secure", False))
         secure_getter = getattr(self, "_is_secure_request", None)
@@ -1503,7 +1510,7 @@ class AnalyticsV2Mixin(
                 log.debug("Could not resolve request security state", exc_info=True)
 
         scheme = "https" if is_secure else "http"
-        return f"{scheme}://{host.lower()}"
+        return f"{scheme}://{host}"
 
     def _has_dashboard_bound_session(self, request: web.Request) -> bool:
         try:

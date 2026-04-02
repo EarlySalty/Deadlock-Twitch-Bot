@@ -1127,7 +1127,7 @@ class PromoMixin:
         log.info(
             "Lurker-Steuer Reminder gesendet (channel_id=%s, session=%s, mention_count=%d)",
             safe_channel_id,
-            session_id,
+            _sanitize_log_value(session_id),
             len(selected_logins),
         )
         return True

@@ -16,6 +16,10 @@ DEFAULT_RAID_OAUTH_SUCCESS_REDIRECT_URL = "https://twitch.earlysalty.com/twitch/
 PUBLIC_STREAMER_ONBOARDING_LOGIN = "public:website_onboarding"
 
 
+def _sanitize_log_value(value: Any) -> str:
+    return str(value or "").replace("\r", "\\r").replace("\n", "\\n")
+
+
 def _oauth_error_payload(*, status: int, title: str, body_html: str) -> dict[str, Any]:
     return {
         "status": status,
@@ -145,9 +149,9 @@ async def build_raid_oauth_callback_payload(
         if expected_twitch_user_id and twitch_user_id != expected_twitch_user_id:
             log.warning(
                 "Raid OAuth callback user mismatch: expected=%s actual=%s state=%s",
-                expected_twitch_user_id,
-                twitch_user_id,
-                requested_login or state_clean,
+                _sanitize_log_value(expected_twitch_user_id),
+                _sanitize_log_value(twitch_user_id),
+                _sanitize_log_value(requested_login or state_clean),
             )
             return _oauth_error_payload(
                 status=403,
@@ -169,9 +173,9 @@ async def build_raid_oauth_callback_payload(
         if not expected_twitch_user_id and expected_twitch_login and twitch_login != expected_twitch_login:
             log.warning(
                 "Raid OAuth callback login mismatch: expected=%s actual=%s state=%s",
-                expected_twitch_login,
-                twitch_login,
-                requested_login or state_clean,
+                _sanitize_log_value(expected_twitch_login),
+                _sanitize_log_value(twitch_login),
+                _sanitize_log_value(requested_login or state_clean),
             )
             return _oauth_error_payload(
                 status=403,
@@ -188,8 +192,8 @@ async def build_raid_oauth_callback_payload(
         if unexpected_scopes:
             log.warning(
                 "Raid OAuth callback returned scopes outside expected profile for %s: %s",
-                twitch_login,
-                ", ".join(unexpected_scopes),
+                _sanitize_log_value(twitch_login),
+                _sanitize_log_value(", ".join(unexpected_scopes)),
             )
             return _oauth_error_payload(
                 status=400,

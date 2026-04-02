@@ -171,9 +171,13 @@ class _DashboardLegalMixin:
 
     def _legal_gate_redirect(self, request: web.Request) -> web.HTTPFound:
         next_path = self._normalize_legal_gate_next_path(request.path)
-        return web.HTTPFound(
-            f"/twitch/legal/access?{urlencode({'next': next_path})}"
+        location = f"/twitch/legal/access?{urlencode({'next': next_path})}"
+        safe_location = (
+            self._safe_internal_redirect(location, fallback="/twitch/legal/access")
+            if hasattr(self, "_safe_internal_redirect")
+            else "/twitch/legal/access"
         )
+        return web.HTTPFound(safe_location)
 
     @staticmethod
     def _legal_request_host(request: web.Request) -> str:
@@ -306,7 +310,12 @@ class _DashboardLegalMixin:
         if not self._legal_gate_is_enabled():
             return self._legal_gate_configuration_error_response()
         if self._legal_gate_cookie_is_valid(request):
-            raise web.HTTPFound(next_path)
+            safe_next_path = (
+                self._safe_internal_redirect(next_path, fallback="/twitch/impressum")
+                if hasattr(self, "_safe_internal_redirect")
+                else "/twitch/impressum"
+            )
+            raise web.HTTPFound(safe_next_path)
         page = self._render_legal_gate_page(
             next_path=next_path,
             site_key=self._legal_turnstile_site_key(),
@@ -328,7 +337,12 @@ class _DashboardLegalMixin:
                 content_type="text/plain",
                 headers=LEGAL_PAGE_HEADERS,
             )
-        response = web.HTTPFound(next_path)
+        safe_next_path = (
+            self._safe_internal_redirect(next_path, fallback="/twitch/impressum")
+            if hasattr(self, "_safe_internal_redirect")
+            else "/twitch/impressum"
+        )
+        response = web.HTTPFound(safe_next_path)
         self._legal_gate_set_cookie(response, request)
         raise response
 

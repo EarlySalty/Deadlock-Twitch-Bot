@@ -4,6 +4,7 @@ on:
   push:
     paths:
       - '.github/workflows/requirements-tools.txt'
+      - '.github/workflows/requirements-test-ci.txt'
   workflow_dispatch:
 
 permissions:
@@ -54,12 +55,18 @@ jobs:
             --no-header \
             --output-file .github/requirements-tools-locked.txt \
             --quiet
+          uv pip compile \
+            .github/workflows/requirements-test-ci.txt \
+            --generate-hashes \
+            --no-header \
+            --output-file .github/requirements-test-ci-locked.txt \
+            --quiet
 
       - name: Commit if changed
         run: |
-          git add .github/requirements-tools-locked.txt
+          git add .github/requirements-tools-locked.txt .github/requirements-test-ci-locked.txt
           if git diff --cached --quiet; then
-            echo "No changes to requirements-tools-locked.txt"
+            echo "No changes to hash-locked requirements"
             exit 0
           fi
           git config user.name "github-actions[bot]"

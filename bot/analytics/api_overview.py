@@ -12,6 +12,7 @@ import logging
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
+from urllib.parse import parse_qsl, urlencode
 
 from aiohttp import web
 
@@ -323,7 +324,12 @@ class _AnalyticsOverviewMixin:
                     return response
             except Exception:
                 log.debug("Could not build dashboard auth challenge; fallback to login redirect", exc_info=True)
-        return web.HTTPFound(fallback_login_url)
+        safe_login_url = (
+            self._safe_internal_redirect(fallback_login_url, fallback="/twitch/auth/login")
+            if hasattr(self, "_safe_internal_redirect")
+            else "/twitch/auth/login"
+        )
+        return web.HTTPFound(safe_login_url)
 
     def _admin_dashboard_host_page_gate(
         self, request: web.Request
@@ -388,7 +394,10 @@ class _AnalyticsOverviewMixin:
         if not (is_local_request or is_admin_host):
             if request.method in {"GET", "HEAD"}:
                 path_qs = request.rel_url.path_qs if request.rel_url else request.path
-                return web.HTTPFound(f"{self._admin_dashboard_public_origin()}{path_qs}")
+                safe_path = str(path_qs or "").strip()
+                if not safe_path.startswith("/"):
+                    safe_path = "/twitch/admin"
+                return web.HTTPFound(f"{self._admin_dashboard_public_origin()}{safe_path}")
             return web.HTTPForbidden(
                 text="This admin dashboard is only available on the admin dashboard host."
             )
@@ -743,7 +752,9 @@ class _AnalyticsOverviewMixin:
             else f"{PUBLIC_WEBSITE_BASE_PATH}/"
         )
         if query_string:
-            return f"{location}?{query_string}"
+            normalized_query = urlencode(parse_qsl(str(query_string), keep_blank_values=True))
+            if normalized_query:
+                return f"{location}?{normalized_query}"
         return location
 
     def _resolve_website_dist_asset_response(self, raw_path: str) -> web.StreamResponse:

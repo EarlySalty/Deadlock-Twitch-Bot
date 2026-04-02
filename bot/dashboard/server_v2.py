@@ -506,7 +506,10 @@ class DashboardV2Server(
             try:
                 network = ipaddress.ip_network(candidate, strict=False)
             except ValueError:
-                log.warning("Ignoring invalid trusted proxy CIDR: %s", candidate)
+                log.warning(
+                    "Ignoring invalid trusted proxy CIDR: %s",
+                    self._sanitize_log_value(candidate),
+                )
                 continue
             seen.add(candidate)
             networks.append(network)

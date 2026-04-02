@@ -1007,9 +1007,12 @@
             const urlParams = new URLSearchParams(window.location.search);
             const success = urlParams.get('oauth_success');
             const error = urlParams.get('oauth_error');
+            const allowedProviders = new Set(['youtube', 'instagram', 'tiktok']);
+            const normalizedSuccess = typeof success === 'string' ? success.trim().toLowerCase() : '';
+            const normalizedError = typeof error === 'string' ? error.trim().toLowerCase() : '';
 
-            if (success) {
-                renderOAuthMessage(`Erfolgreich mit ${success.toUpperCase()} verbunden!`, false);
+            if (allowedProviders.has(normalizedSuccess)) {
+                renderOAuthMessage(`Erfolgreich mit ${normalizedSuccess.toUpperCase()} verbunden!`, false);
 
                 // Remove URL params after showing message
                 setTimeout(() => {
@@ -1017,14 +1020,14 @@
                     const container = document.getElementById('oauth-messages');
                     if (container) container.textContent = '';
                 }, 5000);
-            } else if (error) {
+            } else if (normalizedError) {
                 const errorMap = {
                     provider_error: 'OAuth-Anbieter hat den Zugriff abgelehnt.',
                     invalid_callback: 'OAuth-Antwort ist ungültig oder abgelaufen.',
                     callback_failed: 'OAuth-Verarbeitung fehlgeschlagen. Bitte erneut versuchen.',
                     oauth_start_failed: 'OAuth-Start fehlgeschlagen. Bitte erneut versuchen.'
                 };
-                renderOAuthMessage(errorMap[error] || 'OAuth-Verbindung fehlgeschlagen.', true);
+                renderOAuthMessage(errorMap[normalizedError] || 'OAuth-Verbindung fehlgeschlagen.', true);
 
                 setTimeout(() => {
                     window.history.replaceState({}, document.title, '/social-media');
