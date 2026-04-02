@@ -114,7 +114,9 @@ class BotApiClientErrorMappingTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(ctx.exception.code, "bad_request")
         self.assertNotIn("\n", ctx.exception.message)
 
-    async def test_maps_5xx_error_code_and_message_from_internal_api_payload(self) -> None:
+    async def test_maps_5xx_error_code_and_message_from_internal_api_payload(
+        self,
+    ) -> None:
         session = _FakeSession(
             response=_FakeResponse(
                 status=503,
@@ -410,7 +412,9 @@ class BotApiClientErrorMappingTests(unittest.IsolatedAsyncioTestCase):
                 },
                 clear=False,
             ),
-            patch("bot.dashboard_service.app.build_v2_app", side_effect=_fake_build_v2_app),
+            patch(
+                "bot.dashboard_service.app.build_v2_app", side_effect=_fake_build_v2_app
+            ),
         ):
             app = build_dashboard_service_app(
                 noauth=True,

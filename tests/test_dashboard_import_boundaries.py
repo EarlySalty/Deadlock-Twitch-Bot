@@ -103,8 +103,12 @@ class DashboardImportBoundaryTests(unittest.TestCase):
         )
 
         self.assertIn("bot.dashboard.live.announcement_mode_mixin", loaded["dashboard"])
-        self.assertIn("bot.dashboard.admin.announcement_mode_mixin", loaded["dashboard"])
-        self.assertNotIn("bot.dashboard.live.live_announcement_mixin", loaded["dashboard"])
+        self.assertIn(
+            "bot.dashboard.admin.announcement_mode_mixin", loaded["dashboard"]
+        )
+        self.assertNotIn(
+            "bot.dashboard.live.live_announcement_mixin", loaded["dashboard"]
+        )
         self.assertNotIn("bot.dashboard.billing.billing_mixin", loaded["dashboard"])
 
 

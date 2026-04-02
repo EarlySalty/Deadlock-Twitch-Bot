@@ -90,6 +90,7 @@ def _dashboard_host_setting() -> str:
         os.getenv("TWITCH_DASHBOARD_HOST") or TWITCH_DASHBOARD_HOST or "127.0.0.1"
     ).strip()
 
+
 def _default_internal_api_base_url() -> str:
     explicit = (os.getenv("TWITCH_INTERNAL_API_BASE_URL") or "").strip()
     if explicit:
@@ -127,7 +128,9 @@ def build_dashboard_service_app(
         else _parse_env_bool("TWITCH_DASHBOARD_NOAUTH", bool(TWITCH_DASHBOARD_NOAUTH))
     )
     _require_noauth_opt_in_if_enabled(enabled=resolved_noauth)
-    require_noauth_loopback_guard(enabled=resolved_noauth, host=_dashboard_host_setting())
+    require_noauth_loopback_guard(
+        enabled=resolved_noauth, host=_dashboard_host_setting()
+    )
 
     resolved_internal_base = (
         internal_api_base_url or _default_internal_api_base_url()
@@ -212,7 +215,9 @@ def build_dashboard_service_app(
             "EventSub webhook callback will be unavailable."
         )
     local_analytics_db = analytics_db_fingerprint_details()
-    local_analytics_fingerprint = str(local_analytics_db.get("fingerprint") or "").strip() or None
+    local_analytics_fingerprint = (
+        str(local_analytics_db.get("fingerprint") or "").strip() or None
+    )
     log.info(
         "Dashboard service analytics DB fingerprint=%s host_hash=%s db_hash=%s port_hash=%s",
         local_analytics_db.get("fingerprint"),
@@ -564,7 +569,9 @@ def build_dashboard_service_app(
                     "user_login",
                 )
             ):
-                normalized_event["broadcaster_user_login"] = normalized_broadcaster_login
+                normalized_event["broadcaster_user_login"] = (
+                    normalized_broadcaster_login
+                )
 
             envelope = {
                 "subscription": {
@@ -594,6 +601,7 @@ def build_dashboard_service_app(
                 raise
 
         for bridged_sub_type in bridged_eventsub_types:
+
             async def _bridge_callback(
                 bid: str,
                 login: str,
@@ -614,7 +622,9 @@ def build_dashboard_service_app(
 
             eventsub_webhook_handler.set_callback(bridged_sub_type, _bridge_callback)
 
-        activate_dispatch = getattr(eventsub_webhook_handler, "activate_notification_dispatch", None)
+        activate_dispatch = getattr(
+            eventsub_webhook_handler, "activate_notification_dispatch", None
+        )
         if callable(activate_dispatch):
             activate_dispatch()
 
@@ -685,10 +695,14 @@ def build_dashboard_service_app(
             payload = await client.healthz()
         except BotApiClientError as exc:
             app[ANALYTICS_DB_FINGERPRINT_ERROR_KEY] = str(exc)
-            log.warning("Dashboard fingerprint check against internal API failed: %s", exc)
+            log.warning(
+                "Dashboard fingerprint check against internal API failed: %s", exc
+            )
             return
 
-        upstream_fingerprint = str(payload.get("analyticsDbFingerprint") or "").strip() or None
+        upstream_fingerprint = (
+            str(payload.get("analyticsDbFingerprint") or "").strip() or None
+        )
         app[INTERNAL_API_ANALYTICS_DB_FINGERPRINT_KEY] = upstream_fingerprint
         if (
             local_analytics_fingerprint
@@ -738,7 +752,9 @@ async def run_dashboard_service(
         or TWITCH_DASHBOARD_HOST
         or "127.0.0.1"
     ).strip()
-    resolved_noauth = _parse_env_bool("TWITCH_DASHBOARD_NOAUTH", bool(TWITCH_DASHBOARD_NOAUTH))
+    resolved_noauth = _parse_env_bool(
+        "TWITCH_DASHBOARD_NOAUTH", bool(TWITCH_DASHBOARD_NOAUTH)
+    )
     _require_noauth_opt_in_if_enabled(enabled=resolved_noauth)
     require_noauth_loopback_guard(enabled=resolved_noauth, host=resolved_host)
     resolved_port = int(

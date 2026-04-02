@@ -6,6 +6,8 @@ from unittest.mock import patch
 
 import pytest
 
+from bot.storage import pg as _storage_pg
+
 _ANALYTICS_DSN_AVAILABLE = bool(os.getenv("TWITCH_ANALYTICS_DSN"))
 _KEYRING_PROBE_SERVICE_NAME = "keyring-availability-check"
 _KEYRING_PROBE_USERNAME = "backend-check"
@@ -24,6 +26,20 @@ _STUB_FINGERPRINT = {
     "portHash": "ci-p",
     "engine": "postgres",
 }
+_REAL_ANALYTICS_DB_FINGERPRINT = _storage_pg.analytics_db_fingerprint
+_REAL_ANALYTICS_DB_FINGERPRINT_DETAILS = _storage_pg.analytics_db_fingerprint_details
+
+
+def _stubbed_analytics_db_fingerprint(dsn=None):
+    if dsn is not None:
+        return _REAL_ANALYTICS_DB_FINGERPRINT(dsn)
+    return "ci-stub"
+
+
+def _stubbed_analytics_db_fingerprint_details(dsn=None):
+    if dsn is not None:
+        return _REAL_ANALYTICS_DB_FINGERPRINT_DETAILS(dsn)
+    return dict(_STUB_FINGERPRINT)
 
 
 @pytest.fixture(autouse=True)
@@ -51,11 +67,11 @@ def _ci_environment_stubs():
             ),
             patch(
                 "bot.storage.pg.analytics_db_fingerprint",
-                return_value="ci-stub",
+                side_effect=_stubbed_analytics_db_fingerprint,
             ),
             patch(
                 "bot.storage.pg.analytics_db_fingerprint_details",
-                return_value=_STUB_FINGERPRINT,
+                side_effect=_stubbed_analytics_db_fingerprint_details,
             ),
             # _affiliate_register_routes calls storage.transaction() at app-build
             # time to run schema migrations.  Without a DSN, stub the whole

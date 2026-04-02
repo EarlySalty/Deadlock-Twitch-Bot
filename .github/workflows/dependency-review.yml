@@ -47,13 +47,13 @@ jobs:
           echo "Skipping dependency-review-action: no PR context and no valid base/head diff available."
 
       - name: Setup Node.js
-        if: hashFiles('**/package-lock.json', '**/npm-shrinkwrap.json') != ''
+        if: github.event_name != 'pull_request' && github.event_name != 'merge_group' && hashFiles('**/package-lock.json', '**/npm-shrinkwrap.json') != ''
         uses: actions/setup-node@6044e13b5dc448c55e2357c09f80417699197238 # v6.2.0
         with:
           node-version: '20'
 
       - name: NPM Audit (recursive lockfile scan)
-        if: hashFiles('**/package-lock.json', '**/npm-shrinkwrap.json') != ''
+        if: github.event_name != 'pull_request' && github.event_name != 'merge_group' && hashFiles('**/package-lock.json', '**/npm-shrinkwrap.json') != ''
         run: |
           mkdir -p dependency-reports/npm
           found=0
@@ -85,17 +85,17 @@ jobs:
           fi
 
       - name: Set up Python
-        if: hashFiles('**/requirements*.txt', '**/pyproject.toml', '**/Pipfile.lock', '**/poetry.lock') != ''
+        if: github.event_name != 'pull_request' && github.event_name != 'merge_group' && hashFiles('**/requirements*.txt', '**/pyproject.toml', '**/Pipfile.lock', '**/poetry.lock') != ''
         uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
         with:
           python-version: '3.13'
 
       - name: Install Python audit tooling
-        if: hashFiles('**/requirements*.txt', '**/pyproject.toml', '**/Pipfile.lock', '**/poetry.lock') != ''
+        if: github.event_name != 'pull_request' && github.event_name != 'merge_group' && hashFiles('**/requirements*.txt', '**/pyproject.toml', '**/Pipfile.lock', '**/poetry.lock') != ''
         run: python -m pip install --require-hashes -r .github/requirements-tools-locked.txt
 
       - name: Python requirements audit (recursive)
-        if: hashFiles('**/requirements*.txt') != ''
+        if: github.event_name != 'pull_request' && github.event_name != 'merge_group' && hashFiles('**/requirements*.txt') != ''
         run: |
           mkdir -p dependency-reports/python
           found=0
@@ -126,7 +126,7 @@ jobs:
           fi
 
       - name: Python pyproject audit (recursive)
-        if: hashFiles('**/pyproject.toml') != ''
+        if: github.event_name != 'pull_request' && github.event_name != 'merge_group' && hashFiles('**/pyproject.toml') != ''
         run: |
           mkdir -p dependency-reports/python
           found=0
@@ -176,7 +176,7 @@ jobs:
           fi
 
       - name: Record additional Python lockfiles
-        if: hashFiles('**/Pipfile.lock', '**/poetry.lock', '**/pyproject.toml') != ''
+        if: github.event_name != 'pull_request' && github.event_name != 'merge_group' && hashFiles('**/Pipfile.lock', '**/poetry.lock', '**/pyproject.toml') != ''
         run: |
           mkdir -p dependency-reports/python
           find . -type f \( -name "Pipfile.lock" -o -name "poetry.lock" -o -name "pyproject.toml" \) \

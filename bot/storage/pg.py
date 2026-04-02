@@ -262,13 +262,15 @@ def _align_serial_sequence(conn: psycopg.Connection, table: str, column: str) ->
     Prevents duplicate key errors after migrations or manual imports.
     """
     try:
-        row = conn.execute(
+        row = _execute_with_savepoint(
+            conn,
             "SELECT pg_get_serial_sequence(%s, %s)", (table, column)
         ).fetchone()
         seq_name = row[0] if row else None
         if not seq_name:
             return
-        conn.execute(
+        _execute_with_savepoint(
+            conn,
             f"SELECT setval(%s, COALESCE((SELECT MAX({column}) FROM {table}), 0), true)",
             (seq_name,),
         )
@@ -288,7 +290,8 @@ def _coerce_column_to_boolean(
     Safe to call repeatedly on startup.
     """
     try:
-        row = conn.execute(
+        row = _execute_with_savepoint(
+            conn,
             "SELECT data_type FROM information_schema.columns "
             "WHERE table_schema = current_schema() AND table_name = %s AND column_name = %s",
             (table, column),
@@ -307,7 +310,8 @@ def _coerce_column_to_boolean(
 
     if normalized != "boolean":
         try:
-            conn.execute(
+            _execute_with_savepoint(
+                conn,
                 f"""
                 ALTER TABLE {table}
                 ALTER COLUMN {column} TYPE BOOLEAN
@@ -329,7 +333,8 @@ def _coerce_column_to_boolean(
             return
 
     try:
-        conn.execute(
+        _execute_with_savepoint(
+            conn,
             f"ALTER TABLE {table} ALTER COLUMN {column} SET DEFAULT {'TRUE' if default else 'FALSE'}"
         )
     except Exception as exc:  # pragma: no cover - best effort guard
@@ -339,7 +344,8 @@ def _coerce_column_to_boolean(
 def _table_exists(conn: psycopg.Connection, table: str) -> bool:
     """Return True when the table exists in the current schema."""
     try:
-        row = conn.execute(
+        row = _execute_with_savepoint(
+            conn,
             """
             SELECT 1
             FROM information_schema.tables
@@ -357,7 +363,8 @@ def _table_exists(conn: psycopg.Connection, table: str) -> bool:
 def _index_definition(conn: psycopg.Connection, index_name: str) -> str | None:
     """Return the CREATE INDEX statement for an index in the current schema."""
     try:
-        row = conn.execute(
+        row = _execute_with_savepoint(
+            conn,
             """
             SELECT indexdef
             FROM pg_indexes
@@ -429,14 +436,16 @@ def _ensure_social_media_auth_indexes(conn: psycopg.Connection) -> None:
         return
 
     _cleanup_duplicate_global_social_media_auth_rows(conn)
-    conn.execute(
+    _execute_with_savepoint(
+        conn,
         """
         CREATE UNIQUE INDEX IF NOT EXISTS idx_social_platform_auth_streamer_unique
             ON social_media_platform_auth(platform, streamer_login)
          WHERE streamer_login IS NOT NULL
         """
     )
-    conn.execute(
+    _execute_with_savepoint(
+        conn,
         """
         CREATE UNIQUE INDEX IF NOT EXISTS idx_social_platform_auth_global_unique
             ON social_media_platform_auth(platform)
@@ -455,10 +464,11 @@ def _ensure_twitch_raid_auth_login_index(conn: psycopg.Connection) -> None:
         return
 
     if indexdef:
-        conn.execute("DROP INDEX IF EXISTS idx_twitch_raid_auth_login")
+        _execute_with_savepoint(conn, "DROP INDEX IF EXISTS idx_twitch_raid_auth_login")
 
     try:
-        conn.execute(
+        _execute_with_savepoint(
+            conn,
             """
             CREATE UNIQUE INDEX IF NOT EXISTS idx_twitch_raid_auth_login
                 ON twitch_raid_auth (LOWER(twitch_login))
@@ -486,34 +496,84 @@ def _run_startup_maintenance(
     if cache_key in done_for:
         return
 
+    def _run_best_effort(step_name: str, func, *args, **kwargs) -> None:
+        if not hasattr(conn, "execute"):
+            func(conn, *args, **kwargs)
+            return
+        savepoint = f"maintenance_guard_{time.monotonic_ns()}"
+        conn.execute(f"SAVEPOINT {savepoint}")
+        try:
+            func(conn, *args, **kwargs)
+        except Exception as exc:  # pragma: no cover - best effort guard
+            with contextlib.suppress(Exception):
+                conn.execute(f"ROLLBACK TO SAVEPOINT {savepoint}")
+            log.debug("Skipping %s: %s", step_name, exc)
+        finally:
+            with contextlib.suppress(Exception):
+                conn.execute(f"RELEASE SAVEPOINT {savepoint}")
+
     # Keep this list focused on tables where stale sequences have caused issues.
-    _align_serial_sequence(conn, "twitch_stream_sessions", "id")
-    _align_serial_sequence(conn, "twitch_raid_history", "id")
-    _align_serial_sequence(conn, "clip_fetch_history", "id")
-    _align_serial_sequence(conn, "twitch_clips_social_media", "id")
-    _coerce_column_to_boolean(
-        conn, "twitch_session_chatters", "is_first_time_streamer", default=False
+    _run_best_effort(
+        "twitch_stream_sessions serial alignment",
+        _align_serial_sequence,
+        "twitch_stream_sessions",
+        "id",
     )
-    _coerce_column_to_boolean(
-        conn, "twitch_session_chatters", "seen_via_chatters_api", default=False
+    _run_best_effort(
+        "twitch_raid_history serial alignment",
+        _align_serial_sequence,
+        "twitch_raid_history",
+        "id",
     )
-    _coerce_column_to_boolean(conn, "twitch_chat_messages", "is_command", default=False)
-    try:
-        _cleanup_duplicate_live_state_rows(conn)
-    except Exception as exc:  # pragma: no cover - best effort guard
-        log.debug("Skipping twitch_live_state duplicate cleanup: %s", exc)
-    try:
-        _ensure_unique_live_state_login_index(conn)
-    except Exception as exc:  # pragma: no cover - best effort guard
-        log.debug("Skipping twitch_live_state login uniqueness index: %s", exc)
-    try:
-        _ensure_twitch_raid_auth_login_index(conn)
-    except Exception as exc:  # pragma: no cover - best effort guard
-        log.debug("Skipping twitch_raid_auth login index maintenance: %s", exc)
-    try:
-        _ensure_social_media_auth_indexes(conn)
-    except Exception as exc:  # pragma: no cover - best effort guard
-        log.debug("Skipping social_media_platform_auth index maintenance: %s", exc)
+    _run_best_effort(
+        "clip_fetch_history serial alignment",
+        _align_serial_sequence,
+        "clip_fetch_history",
+        "id",
+    )
+    _run_best_effort(
+        "twitch_clips_social_media serial alignment",
+        _align_serial_sequence,
+        "twitch_clips_social_media",
+        "id",
+    )
+    _run_best_effort(
+        "twitch_session_chatters.is_first_time_streamer boolean coercion",
+        _coerce_column_to_boolean,
+        "twitch_session_chatters",
+        "is_first_time_streamer",
+        default=False,
+    )
+    _run_best_effort(
+        "twitch_session_chatters.seen_via_chatters_api boolean coercion",
+        _coerce_column_to_boolean,
+        "twitch_session_chatters",
+        "seen_via_chatters_api",
+        default=False,
+    )
+    _run_best_effort(
+        "twitch_chat_messages.is_command boolean coercion",
+        _coerce_column_to_boolean,
+        "twitch_chat_messages",
+        "is_command",
+        default=False,
+    )
+    _run_best_effort(
+        "twitch_live_state duplicate cleanup",
+        _cleanup_duplicate_live_state_rows,
+    )
+    _run_best_effort(
+        "twitch_live_state login uniqueness index",
+        _ensure_unique_live_state_login_index,
+    )
+    _run_best_effort(
+        "twitch_raid_auth login index maintenance",
+        _ensure_twitch_raid_auth_login_index,
+    )
+    _run_best_effort(
+        "social_media_platform_auth index maintenance",
+        _ensure_social_media_auth_indexes,
+    )
 
     done_for.add(cache_key)
     _run_startup_maintenance._done_for = done_for

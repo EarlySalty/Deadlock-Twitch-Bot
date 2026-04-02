@@ -94,7 +94,9 @@ class LiveAnnouncementIntegrationTests(unittest.IsolatedAsyncioTestCase):
         button = view.children[0]
         self.assertEqual(getattr(button, "label", ""), "Auf Twitch ansehen")
 
-    async def test_build_live_announcement_message_reuses_supplied_tracking_token(self) -> None:
+    async def test_build_live_announcement_message_reuses_supplied_tracking_token(
+        self,
+    ) -> None:
         dummy = _DummyEmbeds()
         dummy._payload_override = None
 

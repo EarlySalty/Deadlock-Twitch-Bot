@@ -82,9 +82,9 @@ def _split_internal_api_auth_url(
     endpoint = f"{normalized_base.rstrip('/')}{internal_base}/raid/auth-url"
     query = urlencode(
         {
-                "login": twitch_login,
-                "discord_user_id": str(discord_user_id),
-            }
+            "login": twitch_login,
+            "discord_user_id": str(discord_user_id),
+        }
     )
     headers = {INTERNAL_TOKEN_HEADER: token}
     return f"{endpoint}?{query}", headers
@@ -96,7 +96,9 @@ def _prefer_split_internal_raid_auth_api() -> bool:
     return _split_runtime_enforced_role() != "bot"
 
 
-async def _fetch_split_raid_auth_url(twitch_login: str, discord_user_id: int) -> str | None:
+async def _fetch_split_raid_auth_url(
+    twitch_login: str, discord_user_id: int
+) -> str | None:
     request_data = _split_internal_api_auth_url(twitch_login, discord_user_id)
     if request_data is None:
         return None
@@ -201,7 +203,8 @@ class _RaidAuthGenerateButton(discord.ui.Button):
             button_url = ""
             if _prefer_split_internal_raid_auth_api():
                 button_url = str(
-                    await _fetch_split_raid_auth_url(login, int(interaction.user.id)) or ""
+                    await _fetch_split_raid_auth_url(login, int(interaction.user.id))
+                    or ""
                 ).strip()
 
             if not button_url:
@@ -222,7 +225,9 @@ class _RaidAuthGenerateButton(discord.ui.Button):
                 elif not _prefer_split_internal_raid_auth_api():
                     # Legacy fallback: if split mode is not preferred, try internal API if configured.
                     button_url = str(
-                        await _fetch_split_raid_auth_url(login, int(interaction.user.id))
+                        await _fetch_split_raid_auth_url(
+                            login, int(interaction.user.id)
+                        )
                         or ""
                     ).strip()
 

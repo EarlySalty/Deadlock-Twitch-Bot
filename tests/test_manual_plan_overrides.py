@@ -226,6 +226,7 @@ class ManualPlanOverrideTests(unittest.TestCase):
 
     def test_admin_set_and_clear_manual_override_round_trips_effective_plan(self) -> None:
         now_iso = datetime.now(UTC).isoformat()
+        future_override_date = (datetime.now(UTC) + timedelta(days=30)).date().isoformat()
         self.conn.execute(
             """
             INSERT INTO twitch_billing_subscriptions (
@@ -244,7 +245,7 @@ class ManualPlanOverrideTests(unittest.TestCase):
             saved_row = self.handler._billing_admin_set_manual_plan(
                 twitch_login="legacy_login",
                 plan_id="bundle_analysis_raid_boost",
-                expires_at="2026-04-01",
+                expires_at=future_override_date,
                 notes="VIP grant",
             )
 
@@ -260,7 +261,9 @@ class ManualPlanOverrideTests(unittest.TestCase):
         self.assertEqual(saved_row["effective_plan_source"], "manual_override")
         self.assertEqual(db_row["manual_plan_id"], "bundle_analysis_raid_boost")
         self.assertEqual(db_row["manual_plan_notes"], "VIP grant")
-        self.assertTrue(str(db_row["manual_plan_expires_at"]).startswith("2026-04-01T23:59:59"))
+        self.assertTrue(
+            str(db_row["manual_plan_expires_at"]).startswith(f"{future_override_date}T23:59:59")
+        )
 
         with self._patch_billing_conn():
             cleared_row = self.handler._billing_admin_clear_manual_plan(
