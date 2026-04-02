@@ -7,10 +7,12 @@ from unittest.mock import patch
 import pytest
 
 _ANALYTICS_DSN_AVAILABLE = bool(os.getenv("TWITCH_ANALYTICS_DSN"))
+_KEYRING_PROBE_SERVICE_NAME = "keyring-availability-check"
+_KEYRING_PROBE_USERNAME = "backend-check"
 
 try:
     import keyring as _keyring_mod
-    _keyring_mod.get_password("__probe__", "__probe__")
+    _keyring_mod.get_password(_KEYRING_PROBE_SERVICE_NAME, _KEYRING_PROBE_USERNAME)
     _KEYRING_AVAILABLE = True
 except Exception:
     _KEYRING_AVAILABLE = False

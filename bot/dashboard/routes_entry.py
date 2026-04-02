@@ -236,6 +236,8 @@ async def auth_logout(
     if partner_session_id:
         server._delete_partner_access_session(partner_session_id)
     server._clear_partner_access_cookie(response, request)
+    response.headers["Cache-Control"] = "no-store, max-age=0"
+    response.headers["Pragma"] = "no-cache"
     if isinstance(response, web.HTTPException):
         raise response
     return response

@@ -214,6 +214,12 @@ class _DashboardAuthMixin:
             status=503,
         )
 
+    @staticmethod
+    def _set_no_store_headers(response: web.StreamResponse) -> web.StreamResponse:
+        response.headers["Cache-Control"] = "no-store, max-age=0"
+        response.headers["Pragma"] = "no-cache"
+        return response
+
     def _dashboard_auth_challenge(
         self,
         request: web.Request,
@@ -756,6 +762,7 @@ class _DashboardAuthMixin:
         safe_auth_url = self._safe_oauth_authorize_redirect(auth_url)
         response = web.HTTPFound(safe_auth_url)
         self._set_oauth_context_cookie(response, request, context_token)
+        self._set_no_store_headers(response)
         raise response
 
     async def auth_callback(self, request: web.Request) -> web.StreamResponse:
@@ -771,15 +778,19 @@ class _DashboardAuthMixin:
         error = (request.query.get("error") or "").strip()[:64]
         if error:
             safe_error = "".join(c for c in error if c.isalnum() or c in "_-")
-            return web.Response(
+            response = web.Response(
                 text=f"OAuth-Fehler: {safe_error}. Bitte Login erneut starten.",
                 status=401,
             )
+            self._set_no_store_headers(response)
+            return response
 
         state = (request.query.get("state") or "").strip()
         code = (request.query.get("code") or "").strip()
         if not state or not code:
-            return web.Response(text="Fehlender OAuth state/code.", status=400)
+            response = web.Response(text="Fehlender OAuth state/code.", status=400)
+            self._set_no_store_headers(response)
+            return response
 
         cached_state_data = self._dashboard_auth_state_cache("_oauth_states").pop(state, None)
         try:
@@ -793,7 +804,9 @@ class _DashboardAuthMixin:
         if state_data is None:
             state_data = cached_state_data
         if not state_data:
-            return web.Response(text="OAuth state ungültig oder abgelaufen.", status=400)
+            response = web.Response(text="OAuth state ungültig oder abgelaufen.", status=400)
+            self._set_no_store_headers(response)
+            return response
         created_at = float(state_data.get("created_at", 0.0) or 0.0)
         if created_at <= 0.0 or time.time() - created_at > self._oauth_state_ttl_seconds:
             response = web.Response(text="OAuth state ungültig oder abgelaufen.", status=400)
@@ -813,14 +826,17 @@ class _DashboardAuthMixin:
         ):
             response = web.Response(text="OAuth state ungültig oder abgelaufen.", status=400)
             self._clear_oauth_context_cookie(response, request)
+            self._set_no_store_headers(response)
             return response
 
         user = await self._exchange_code_for_user(code, str(state_data.get("redirect_uri") or ""))
         if not user:
-            return web.Response(
+            response = web.Response(
                 text="OAuth-Austausch fehlgeschlagen. Bitte erneut versuchen.",
                 status=401,
             )
+            self._set_no_store_headers(response)
+            return response
 
         partner = await self._is_partner_allowed_async(
             twitch_login=user.get("twitch_login") or "",
@@ -832,13 +848,15 @@ class _DashboardAuthMixin:
                 self._sanitize_log_value(user.get("twitch_login")),
                 self._sanitize_log_value(self._peer_host(request)),
             )
-            return web.Response(
+            response = web.Response(
                 text=(
                     f"Kein Zugriff: Twitch-Account '{user.get('display_name') or user.get('twitch_login')}' "
                     "ist nicht als Streamer-Partner freigegeben."
                 ),
                 status=403,
             )
+            self._set_no_store_headers(response)
+            return response
 
         session_id = self._create_dashboard_session(
             twitch_login=partner.get("twitch_login") or user.get("twitch_login") or "",
@@ -859,6 +877,7 @@ class _DashboardAuthMixin:
         response = web.HTTPFound(destination)
         self._set_session_cookie(response, request, session_id)
         self._clear_oauth_context_cookie(response, request)
+        self._set_no_store_headers(response)
         raise response
 
     # ------------------------------------------------------------------ #
@@ -933,6 +952,7 @@ class _DashboardAuthMixin:
         )
         response = web.HTTPFound(f"{DISCORD_API_BASE_URL}/oauth2/authorize?{query}")
         self._set_discord_oauth_context_cookie(response, request, context_token)
+        self._set_no_store_headers(response)
         raise response
 
     async def discord_auth_callback(self, request: web.Request) -> web.StreamResponse:
@@ -953,12 +973,16 @@ class _DashboardAuthMixin:
         error = (request.query.get("error") or "").strip()[:64]
         if error:
             safe_error = "".join(c for c in error if c.isalnum() or c in "_-")
-            return web.Response(text=f"Discord OAuth Fehler: {safe_error}", status=401)
+            response = web.Response(text=f"Discord OAuth Fehler: {safe_error}", status=401)
+            self._set_no_store_headers(response)
+            return response
 
         state = (request.query.get("state") or "").strip()
         code = (request.query.get("code") or "").strip()
         if not state or not code:
-            return web.Response(text="Fehlender OAuth state/code.", status=400)
+            response = web.Response(text="Fehlender OAuth state/code.", status=400)
+            self._set_no_store_headers(response)
+            return response
 
         self._cleanup_discord_admin_state()
         cached_state_data = self._dashboard_auth_state_cache("_discord_admin_oauth_states").pop(
@@ -976,7 +1000,9 @@ class _DashboardAuthMixin:
         if state_data is None:
             state_data = cached_state_data
         if not state_data:
-            return web.Response(text="OAuth state ungültig oder abgelaufen.", status=400)
+            response = web.Response(text="OAuth state ungültig oder abgelaufen.", status=400)
+            self._set_no_store_headers(response)
+            return response
 
         expected_context_token = str(state_data.get("context_token") or "").strip()
         request_cookies = getattr(request, "cookies", {}) or {}
@@ -991,6 +1017,7 @@ class _DashboardAuthMixin:
         ):
             response = web.Response(text="OAuth state ungültig oder abgelaufen.", status=400)
             self._clear_discord_oauth_context_cookie(response, request)
+            self._set_no_store_headers(response)
             return response
 
         token_data = await self._exchange_discord_admin_code(
@@ -999,15 +1026,21 @@ class _DashboardAuthMixin:
         )
         access_token = str((token_data or {}).get("access_token") or "").strip()
         if not access_token:
-            return web.Response(text="OAuth Austausch fehlgeschlagen.", status=401)
+            response = web.Response(text="OAuth Austausch fehlgeschlagen.", status=401)
+            self._set_no_store_headers(response)
+            return response
 
         user = await self._fetch_discord_admin_user(access_token)
         if not user:
-            return web.Response(text="Discord User konnte nicht geladen werden.", status=401)
+            response = web.Response(text="Discord User konnte nicht geladen werden.", status=401)
+            self._set_no_store_headers(response)
+            return response
 
         user_id_raw = str(user.get("id") or "").strip()
         if not user_id_raw.isdigit():
-            return web.Response(text="Ungültige Discord User-ID.", status=401)
+            response = web.Response(text="Ungültige Discord User-ID.", status=401)
+            self._set_no_store_headers(response)
+            return response
         user_id = int(user_id_raw)
         allowed, reason = await self._check_discord_admin_membership(user_id)
         if not allowed:
@@ -1017,12 +1050,14 @@ class _DashboardAuthMixin:
                 self._sanitize_log_value(reason),
                 self._sanitize_log_value(self._peer_host(request)),
             )
-            return web.Response(
+            response = web.Response(
                 text=(
                     "Kein Zugriff. Es wird Administrator-Recht oder die Moderator-Rolle benötigt."
                 ),
                 status=403,
             )
+            self._set_no_store_headers(response)
+            return response
 
         username = str(user.get("username") or "").strip()
         global_name = str(user.get("global_name") or "").strip()
@@ -1071,6 +1106,7 @@ class _DashboardAuthMixin:
         response = web.HTTPFound(destination)
         self._set_discord_admin_cookie(response, request, session_id)
         self._clear_discord_oauth_context_cookie(response, request)
+        self._set_no_store_headers(response)
         raise response
 
     async def discord_auth_logout(self, request: web.Request) -> web.StreamResponse:
@@ -1086,4 +1122,5 @@ class _DashboardAuthMixin:
         )
         response = web.HTTPFound(login_url)
         self._clear_discord_admin_cookie(response, request)
+        self._set_no_store_headers(response)
         raise response

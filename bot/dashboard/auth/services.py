@@ -116,7 +116,7 @@ class DashboardAuthCookieService:
             max_age=self._owner._partner_access_session_ttl(),
             httponly=True,
             secure=self._owner._is_secure_request(request),
-            samesite="Lax",
+            samesite="Strict",
             path="/",
         )
 
@@ -127,7 +127,7 @@ class DashboardAuthCookieService:
             self.partner_access_cookie_name(),
             path="/",
             httponly=True,
-            samesite="Lax",
+            samesite="Strict",
             secure=self._owner._is_secure_request(request),
         )
 

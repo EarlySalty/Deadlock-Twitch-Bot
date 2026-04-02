@@ -182,6 +182,7 @@ class DashboardPartnerCookieBootstrapTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNotNone(cookie)
         self.assertTrue(bool(cookie.value))
         self.assertTrue(cookie["httponly"])
+        self.assertEqual(cookie["samesite"], "Strict")
 
     async def test_partner_login_token_is_one_time(self) -> None:
         server = self._make_server()
@@ -397,9 +398,13 @@ class DashboardPartnerCookieBootstrapTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(web.HTTPFound) as ctx:
             await server.auth_logout(logout_request)
 
-        cleared_cookie = ctx.exception.cookies.get(server._partner_access_cookie_name())
+        response = ctx.exception
+        self.assertEqual(response.headers.get("Cache-Control"), "no-store, max-age=0")
+        self.assertEqual(response.headers.get("Pragma"), "no-cache")
+        cleared_cookie = response.cookies.get(server._partner_access_cookie_name())
         self.assertIsNotNone(cleared_cookie)
         self.assertEqual(cleared_cookie.value, "")
+        self.assertEqual(cleared_cookie["samesite"], "Strict")
 
 
 if __name__ == "__main__":
