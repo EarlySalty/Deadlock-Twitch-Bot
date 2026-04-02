@@ -179,6 +179,8 @@ class _DashboardAuthMixin:
             "/twitch/stats",
             "/twitch/dashboard",
             "/twitch/dashboard-v2",
+            "/twitch/verwaltung",
+            "/twitch/pricing",
             "/twitch/raid/auth",
             "/twitch/live-announcement",
         }:

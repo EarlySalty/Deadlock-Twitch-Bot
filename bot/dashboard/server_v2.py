@@ -685,6 +685,8 @@ class DashboardV2Server(
             return "/twitch/dashboard"
         if normalized_path == "/twitch/admin/announcements":
             return f"/twitch/admin/announcements{query_suffix}"
+        if normalized_path == "/twitch/admin/legacy":
+            return f"/twitch/admin/legacy{query_suffix}"
         return "/twitch/admin"
 
     @staticmethod

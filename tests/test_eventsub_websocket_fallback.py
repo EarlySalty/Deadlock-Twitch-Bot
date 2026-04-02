@@ -43,6 +43,7 @@ class _FakeWSPool:
         self.wait_initial_calls = 0
         self.wait_initial_result = True
         self.fail_stream_offline_add = False
+        self.fail_channel_raid_add = False
 
     def set_callback(self, sub_type: str, callback) -> None:
         self.callbacks[sub_type] = callback
@@ -55,6 +56,8 @@ class _FakeWSPool:
     ) -> bool:
         self.subscriptions.append((sub_type, str(broadcaster_id), dict(condition or {})))
         if self.fail_stream_offline_add and sub_type == "stream.offline":
+            return False
+        if self.fail_channel_raid_add and sub_type == "channel.raid":
             return False
         return True
 
@@ -209,14 +212,14 @@ class EventSubWebsocketFallbackTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(listener.wait_initial_calls, 1)
         self.assertCountEqual(
             [sub_type for sub_type, _, _ in listener.subscriptions],
-            ["stream.online", "stream.offline", "channel.update"],
+            ["stream.online", "stream.offline", "channel.update", "channel.raid"],
         )
         self.assertIn("stream.online", listener.callbacks)
         self.assertIn("stream.offline", listener.callbacks)
         self.assertIn("channel.raid", listener.callbacks)
         self.assertIn("channel.update", listener.callbacks)
         self.assertIn("startup_distribution", harness.snapshot_reasons)
-        self.assertEqual(harness._eventsub_webhook_tracked, set())
+        self.assertIn(("channel.raid", "123"), harness._eventsub_webhook_tracked)
         self.assertTrue(callable(getattr(harness, "_handle_stream_went_live", None)))
 
     async def test_websocket_fallback_installs_go_live_handler_that_resets_offline_throttle(self) -> None:
@@ -631,6 +634,101 @@ class EventSubWebsocketFallbackTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(first.auto_raid_calls, ["123"])
         self.assertEqual(second.finalized, [])
         self.assertEqual(second.auto_raid_calls, [])
+
+
+    async def test_raid_readiness_returns_ws_already_tracked_when_startup_sub_confirmed(
+        self,
+    ) -> None:
+        """
+        Happy path nach unserem Fix: Startup-Sub wurde registriert und lokal
+        getracked, der WS-Listener bestätigt die Subscription → sofort
+        ws_already_tracked zurück, kein dynamischer Sub-Aufruf, kein API-Call.
+        """
+        harness = _WsFallbackHarness()
+        harness._eventsub_webhook_tracked.add(("channel.raid", "123"))
+        pool = _FakeRaidReadinessPool(harness.api)
+        pool.subscription_ready = True  # WS-Listener bestätigt die Sub
+        harness._get_eventsub_ws_listener = lambda: pool  # type: ignore[method-assign]
+
+        ready, detail = await harness.ensure_raid_target_dynamic_ready("123", "targetlogin")
+
+        self.assertTrue(ready)
+        self.assertEqual(detail, "ws_already_tracked")
+        # Kein API-Aufruf — kein dynamischer Sub wurde erstellt
+        self.assertEqual(harness.api.calls, [])
+        # wait_until_ready wurde nicht aufgerufen — wir kamen schon beim
+        # ersten is_subscription_ready-Check raus
+        self.assertEqual(pool.wait_until_ready_calls, 0)
+
+    async def test_ws_startup_channel_raid_condition_uses_to_broadcaster_user_id(
+        self,
+    ) -> None:
+        """
+        channel.raid braucht to_broadcaster_user_id (nicht broadcaster_user_id).
+        Falscher Key → Sub wird von Twitch ignoriert und Raids kommen nie an.
+        """
+        harness = _WsFallbackHarness()
+        created: list[_FakeWSPool] = []
+
+        def _factory(*, api, logger, token_resolver, state_store=None):
+            listener = _FakeWSPool(
+                api=api,
+                logger=logger,
+                token_resolver=token_resolver,
+                state_store=state_store,
+            )
+            created.append(listener)
+            return listener
+
+        with patch(
+            "bot.monitoring.eventsub_mixin.EventSubWSListenerPool",
+            side_effect=_factory,
+        ):
+            await harness._start_eventsub_listener()
+
+        listener = created[0]
+        raid_subs = [
+            (st, bid, cond)
+            for st, bid, cond in listener.subscriptions
+            if st == "channel.raid"
+        ]
+        self.assertEqual(len(raid_subs), 1)
+        _, bid, cond = raid_subs[0]
+        self.assertEqual(bid, "123")
+        self.assertEqual(cond, {"to_broadcaster_user_id": "123"})
+        self.assertNotIn("broadcaster_user_id", cond)
+
+    async def test_ws_startup_channel_raid_not_tracked_when_add_subscription_fails(
+        self,
+    ) -> None:
+        """
+        Wenn der WS-Listener die channel.raid-Sub ablehnt (Kapazität voll),
+        darf _eventsub_track_sub NICHT aufgerufen werden — sonst denkt
+        ensure_raid_target_dynamic_ready die Sub sei aktiv und überspringt
+        fälschlicherweise den dynamic-Subscription-Pfad.
+        """
+        harness = _WsFallbackHarness()
+        created: list[_FakeWSPool] = []
+
+        def _factory(*, api, logger, token_resolver, state_store=None):
+            listener = _FakeWSPool(
+                api=api,
+                logger=logger,
+                token_resolver=token_resolver,
+                state_store=state_store,
+            )
+            listener.fail_channel_raid_add = True
+            created.append(listener)
+            return listener
+
+        with patch(
+            "bot.monitoring.eventsub_mixin.EventSubWSListenerPool",
+            side_effect=_factory,
+        ):
+            # Startup schlägt wegen dropped_subscriptions fehl — das ist OK
+            await harness._start_eventsub_listener()
+
+        self.assertNotIn(("channel.raid", "123"), harness._eventsub_webhook_tracked)
 
 
 if __name__ == "__main__":
