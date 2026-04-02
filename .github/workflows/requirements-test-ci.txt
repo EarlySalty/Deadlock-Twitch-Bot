@@ -1,6 +1,6 @@
 # Hash-locked dependencies for pytest CI.
 # Keep this list aligned with pyproject.toml direct runtime and test dependencies.
-aiohttp>=3.9
+aiohttp>=3.13.5
 anthropic>=0.40
 coverage[toml]>=7.0
 discord.py>=2.3

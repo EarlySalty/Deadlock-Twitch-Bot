@@ -3,7 +3,7 @@ name = "twitch-cog"
 version = "0.1.0"
 requires-python = ">=3.11"
 dependencies = [
-    "aiohttp>=3.9",
+    "aiohttp>=3.13.5",
     "anthropic>=0.40",
     "discord.py>=2.3",
     "fpdf2>=2.8",
