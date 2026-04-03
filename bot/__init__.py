@@ -26,7 +26,7 @@ def _command_payload_hash(bot: commands.Bot, guild: discord.Object) -> str:
     payload = [cmd.to_dict(bot.tree) for cmd in bot.tree.get_commands(guild=guild)]
     # Sort by name so ordering differences don't cause false cache misses.
     payload.sort(key=lambda c: c.get("name", ""))
-    return hashlib.md5(json.dumps(payload, sort_keys=True).encode()).hexdigest()
+    return hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()
 
 log = logging.getLogger("TwitchStreams")
 

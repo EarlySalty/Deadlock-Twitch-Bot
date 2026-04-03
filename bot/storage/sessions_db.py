@@ -29,6 +29,11 @@ _KEYRING_KEY_NAME = "SESSIONS_ENCRYPTION_KEY"
 _fernet: _FernetT | None = None
 
 
+def _escape_like(value: str) -> str:
+    """Escape LIKE special characters to prevent prefix-match edge cases."""
+    return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
 # ---------------------------------------------------------------------------
 # Key management
 # ---------------------------------------------------------------------------
@@ -217,7 +222,7 @@ def count_valid_sessions(
     params: list[object] = [session_type, min_expires_at]
     if session_id_prefix:
         sql += " AND session_id LIKE %s"
-        params.append(f"{session_id_prefix}%")
+        params.append(f"{_escape_like(session_id_prefix)}%")
 
     with readonly_connection() as conn:
         row = conn.execute(sql, tuple(params)).fetchone()
@@ -251,7 +256,7 @@ def reserve_rate_limit_slot(
 
     enc = _encrypt(payload)
     lock_a, lock_b = _advisory_lock_pair(f"{session_type}:{bucket_key}")
-    session_prefix = f"{bucket_key}%"
+    session_prefix = f"{_escape_like(bucket_key)}%"
 
     with transaction() as conn:
         conn.execute("SELECT pg_advisory_xact_lock(%s, %s)", (lock_a, lock_b))

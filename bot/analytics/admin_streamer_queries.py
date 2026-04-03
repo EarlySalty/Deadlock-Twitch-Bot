@@ -693,7 +693,29 @@ def load_admin_streamer_detail(login: str) -> dict[str, Any] | None:
     return _admin_streamer_detail_payload(row, stats_row, list(sessions), normalized_login)
 
 
+_ALLOWED_TABLE_NAMES: frozenset[str] = frozenset({
+    "twitch_streamers",
+    "twitch_live_state",
+    "twitch_stream_sessions",
+    "twitch_stats_tracked",
+    "twitch_stats_category",
+    "streamer_plans",
+    "twitch_billing_subscriptions",
+    "affiliate_accounts",
+    "twitch_eventsub_capacity_snapshot",
+    "dashboard_sessions",
+})
+
+def _is_valid_table_name(name: str) -> bool:
+    """Check against allowlist to prevent SQL injection via table names."""
+    if not _ALLOWED_TABLE_NAMES:
+        return True  # Allow all if no allowlist defined (backwards compat)
+    return name in _ALLOWED_TABLE_NAMES
+
+
 def _admin_database_row_count(conn: Any, table_name: str) -> int | None:
+    if not _is_valid_table_name(table_name):
+        return None
     try:
         row = conn.execute(f"SELECT COUNT(*) AS total FROM {table_name}").fetchone()
     except Exception:
@@ -704,6 +726,8 @@ def _admin_database_row_count(conn: Any, table_name: str) -> int | None:
 
 
 def _admin_database_table_size_bytes(conn: Any, table_name: str) -> int | None:
+    if not _is_valid_table_name(table_name):
+        return None
     try:
         row = conn.execute(
             f"SELECT pg_total_relation_size('{table_name}') AS size_bytes"

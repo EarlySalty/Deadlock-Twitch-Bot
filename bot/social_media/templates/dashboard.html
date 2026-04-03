@@ -450,6 +450,14 @@
     </div>
 
     <script>
+        // ========== HTML Escaping ==========
+        const escapeHtml = (str) => String(str ?? '')
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;')
+            .replace(/'/g, '&#39;');
+
         // Global State
         let currentStreamer = document.body.dataset.authStreamer || new URLSearchParams(window.location.search).get('streamer') || '';
         let currentStatus = '';
@@ -568,12 +576,12 @@
 
             grid.innerHTML = filteredClips.map(clip => `
                 <div class="clip-card">
-                    <img src="${clip.clip_thumbnail_url}" class="clip-thumbnail" alt="${clip.clip_title}">
+                    <img src="${escapeHtml(clip.clip_thumbnail_url)}" class="clip-thumbnail" alt="${escapeHtml(clip.clip_title)}">
                     <div class="clip-info">
-                        <div class="clip-title">${clip.clip_title}</div>
+                        <div class="clip-title">${escapeHtml(clip.clip_title)}</div>
                         <div class="clip-meta">
                             👁 ${clip.view_count} • ⏱ ${Math.round(clip.duration_seconds)}s
-                            ${clip.game_name ? `• 🎮 ${clip.game_name}` : ''}
+                            ${clip.game_name ? `• 🎮 ${escapeHtml(clip.game_name)}` : ''}
                         </div>
 
                         <div class="platform-badges">
@@ -589,7 +597,7 @@
                             <button class="btn btn-secondary btn-small" onclick="markAsUploaded(${clip.id})">
                                 ✓ Mark
                             </button>
-                            <a href="${clip.clip_url}" target="_blank" class="btn btn-secondary btn-small">
+                            <a href="${escapeHtml(clip.clip_url)}" target="_blank" class="btn btn-secondary btn-small">
                                 🔗 View
                             </a>
                         </div>
@@ -615,11 +623,11 @@
 
                 grid.innerHTML = clips.map(clip => `
                     <div class="clip-card">
-                        <img src="${clip.clip_thumbnail_url}" class="clip-thumbnail">
+                        <img src="${escapeHtml(clip.clip_thumbnail_url)}" class="clip-thumbnail">
                         <div class="clip-info">
-                            <div class="clip-title">${clip.clip_title}</div>
+                            <div class="clip-title">${escapeHtml(clip.clip_title)}</div>
                             <div class="clip-meta">
-                                ${clip.streamer_login} • ${clip.view_count} views
+                                ${escapeHtml(clip.streamer_login)} • ${clip.view_count} views
                             </div>
                             <div class="platform-badges">
                                 ${clip.uploaded_tiktok ? '<span class="badge badge-tiktok">TT ✓</span>' : ''}
@@ -784,9 +792,9 @@
                 } else {
                     grid.innerHTML = data.templates.map(tpl => `
                         <div class="template-card">
-                            <div class="template-name">${tpl.template_name}</div>
-                            <div class="template-desc">${tpl.description_template}</div>
-                            <div class="template-hashtags">${tpl.hashtags.join(', ')}</div>
+                            <div class="template-name">${escapeHtml(tpl.template_name)}</div>
+                            <div class="template-desc">${escapeHtml(tpl.description_template)}</div>
+                            <div class="template-hashtags">${escapeHtml(tpl.hashtags.join(', '))}</div>
                             <div style="margin-top: 10px; font-size: 11px; color: #adadb8;">
                                 Verwendet: ${tpl.usage_count}x
                             </div>
@@ -811,11 +819,11 @@
                         grid.innerHTML = data.templates.map(tpl => `
                             <div class="template-card ${tpl.is_default ? 'default' : ''}">
                                 <div class="template-name">
-                                    ${tpl.template_name}
+                                    ${escapeHtml(tpl.template_name)}
                                     ${tpl.is_default ? '<span style="color: #00c853;">⭐ Default</span>' : ''}
                                 </div>
-                                <div class="template-desc">${tpl.description_template}</div>
-                                <div class="template-hashtags">${tpl.hashtags.join(', ')}</div>
+                                <div class="template-desc">${escapeHtml(tpl.description_template)}</div>
+                                <div class="template-hashtags">${escapeHtml(tpl.hashtags.join(', '))}</div>
                             </div>
                         `).join('');
                     }
@@ -914,10 +922,10 @@
                                 ${config.logo}
                             </div>
                             <div class="platform-info">
-                                <div class="platform-name">${config.name}</div>
+                                <div class="platform-name">${escapeHtml(config.name)}</div>
                                 <div class="platform-status ${isConnected ? 'connected' : ''}">
                                     ${isConnected
-                                        ? `✅ ${p.uses_global_fallback ? 'Shared-Konto verknüpft' : 'Konto verknüpft'}${p.username ? ` (${p.username})` : ''}`
+                                        ? `✅ ${p.uses_global_fallback ? 'Shared-Konto verknüpft' : 'Konto verknüpft'}${p.username ? ` (${escapeHtml(p.username)})` : ''}`
                                         : '○ Konto nicht verbunden'
                                     }
                                 </div>
@@ -925,16 +933,16 @@
                             <div class="platform-actions">
                                 ${isConnected
                                     ? `
-                                        <button class="btn btn-connect" onclick="reconnectPlatform('${p.platform}')">
+                                        <button class="btn btn-connect" onclick="reconnectPlatform('${escapeHtml(p.platform)}')">
                                             Erneut verbinden
                                         </button>
-                                        <button class="btn btn-connect btn-disconnect" onclick="disconnectPlatform('${p.platform}')">
+                                        <button class="btn btn-connect btn-disconnect" onclick="disconnectPlatform('${escapeHtml(p.platform)}')">
                                             Trennen
                                         </button>
                                     `
                                     : `
-                                        <button class="btn btn-connect" onclick="connectPlatform('${p.platform}')">
-                                            Mit ${config.name} verbinden
+                                        <button class="btn btn-connect" onclick="connectPlatform('${escapeHtml(p.platform)}')">
+                                            Mit ${escapeHtml(config.name)} verbinden
                                         </button>
                                     `
                                 }
