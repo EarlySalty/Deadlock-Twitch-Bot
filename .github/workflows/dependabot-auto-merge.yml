@@ -105,47 +105,48 @@ jobs:
               body: "Auto-approved trusted Dependabot update after policy checks.",
             });
 
-      - name: Enable auto-merge
+      - name: Merge PR
         if: steps.gate.outputs.should_merge == 'true' && github.event.pull_request.draft == false
         uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8.0.0
         with:
           script: |
-            const pullRequestId = context.payload.pull_request.node_id;
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            const pull_number = context.payload.pull_request.number;
             const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
             for (let attempt = 1; attempt <= 12; attempt += 1) {
               try {
-                await github.graphql(
-                  `
-                    mutation EnableAutoMerge($pullRequestId: ID!) {
-                      enablePullRequestAutoMerge(
-                        input: { pullRequestId: $pullRequestId, mergeMethod: SQUASH }
-                      ) {
-                        pullRequest {
-                          number
-                        }
-                      }
-                    }
+                const { data: pr } = await github.rest.pulls.get({ owner, repo, pull_number });
+                if (pr.mergeable === null) {
+                  if (attempt < 12) {
+                    core.notice(`PR #${pull_number} mergeability not yet computed; retrying in 10s (attempt ${attempt}/12).`);
+                    await sleep(10_000);
+                    continue;
                   }
-                  `,
-                  { pullRequestId },
-                );
-                core.notice(
-                  `Auto-merge enabled for PR #${context.payload.pull_request.number} on attempt ${attempt}.`,
-                );
+                  core.warning(`PR #${pull_number} mergeability still unknown after ${attempt} attempts.`);
+                  return;
+                }
+                if (!pr.mergeable) {
+                  core.warning(`PR #${pull_number} is not mergeable (conflicts or other issues).`);
+                  return;
+                }
+                await github.rest.pulls.merge({
+                  owner,
+                  repo,
+                  pull_number,
+                  merge_method: "squash",
+                });
+                core.notice(`PR #${pull_number} merged successfully on attempt ${attempt}.`);
                 return;
               } catch (error) {
                 const message = String(error?.message || error);
-                const unstable = message.includes("Pull request is in unstable status");
-                if (unstable && attempt < 12) {
-                  core.notice(
-                    `PR #${context.payload.pull_request.number} is still unstable; retrying auto-merge enable in 10s (attempt ${attempt}/12).`,
-                  );
+                if (attempt < 12) {
+                  core.notice(`Could not merge PR #${pull_number}; retrying in 10s (attempt ${attempt}/12): ${message}`);
                   await sleep(10_000);
                   continue;
                 }
-                core.warning(`Could not enable auto-merge: ${message}`);
-                return;
+                core.warning(`Could not merge PR #${pull_number}: ${message}`);
               }
             }
 
@@ -205,41 +206,30 @@ jobs:
                 });
               }
 
-              if (pull.auto_merge !== null) {
-                core.notice(`PR #${pull.number} already has auto-merge enabled.`);
+              const { data: prDetails } = await github.rest.pulls.get({
+                owner,
+                repo,
+                pull_number: pull.number,
+              });
+
+              if (prDetails.mergeable === null) {
+                core.notice(`PR #${pull.number} mergeability not yet computed, skipping this run.`);
+                continue;
+              }
+              if (!prDetails.mergeable) {
+                core.notice(`PR #${pull.number} is not mergeable (conflicts), skipping.`);
                 continue;
               }
 
-              for (let attempt = 1; attempt <= 6; attempt += 1) {
-                try {
-                  await github.graphql(
-                    `
-                      mutation EnableAutoMerge($pullRequestId: ID!) {
-                        enablePullRequestAutoMerge(
-                          input: { pullRequestId: $pullRequestId, mergeMethod: SQUASH }
-                        ) {
-                          pullRequest {
-                            number
-                          }
-                        }
-                      }
-                    `,
-                    { pullRequestId: pull.node_id },
-                  );
-                  core.notice(`Auto-merge enabled for PR #${pull.number}.`);
-                  break;
-                } catch (error) {
-                  const message = String(error?.message || error);
-                  const unstable = message.includes("Pull request is in unstable status");
-                  if (unstable && attempt < 6) {
-                    core.notice(
-                      `PR #${pull.number} is unstable; retrying in 10s (attempt ${attempt}/6).`,
-                    );
-                    await sleep(10_000);
-                    continue;
-                  }
-                  core.warning(`Could not enable auto-merge for PR #${pull.number}: ${message}`);
-                  break;
-                }
+              try {
+                await github.rest.pulls.merge({
+                  owner,
+                  repo,
+                  pull_number: pull.number,
+                  merge_method: "squash",
+                });
+                core.notice(`PR #${pull.number} merged successfully.`);
+              } catch (error) {
+                core.warning(`Could not merge PR #${pull.number}: ${String(error?.message || error)}`);
               }
             }
