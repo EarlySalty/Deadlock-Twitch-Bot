@@ -22,6 +22,7 @@ import {
   Users,
   type LucideIcon,
 } from 'lucide-react';
+import { WelcomeTour } from '@/components/onboarding/WelcomeTour';
 
 // ---------------------------------------------------------------------------
 // Types for the new backend fields (health_score, last_stream_summary, week_comparison)
@@ -489,6 +490,9 @@ export function InternalHomeLanding() {
 
   return (
     <div className="internal-home-vibe min-h-screen relative px-3 py-4 md:px-7 md:py-8">
+      {/* Welcome Tour - shown once on first visit */}
+      <WelcomeTour />
+
       <div className="pointer-events-none absolute inset-0 overflow-hidden">
         <div className="absolute -top-32 right-[-8rem] h-[28rem] w-[28rem] rounded-full bg-primary/22 blur-3xl" />
         <div className="absolute top-[24%] -left-28 h-[22rem] w-[22rem] rounded-full bg-accent/24 blur-3xl" />
