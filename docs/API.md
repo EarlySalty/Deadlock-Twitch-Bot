@@ -150,6 +150,8 @@ Registriert in `bot/analytics/api_overview.py`.
 | GET | `/twitch/api/v2/audience-sharing` | api_overview.py |
 | GET | `/twitch/api/v2/follower-funnel` | api_overview.py |
 | GET | `/twitch/api/v2/lurker-analysis` | api_overview.py |
+| GET | `/twitch/api/v2/{streamer}/viewer-timeline` | api_viewer_timeline.py |
+| GET | `/twitch/api/v2/{streamer}/viewer-timeline/profile` | api_viewer_timeline.py |
 
 ### Chat-Analyse
 | Methode | Pfad | Datei |

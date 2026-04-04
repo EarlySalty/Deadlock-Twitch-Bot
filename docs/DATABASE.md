@@ -124,6 +124,20 @@ Aggregierte Session-Daten (1 Zeile pro Stream-Session).
 ### twitch_session_viewers / twitch_session_chatters
 Viewer/Chatter pro Session (wird aus EventSub-Daten befuellt).
 
+### twitch_viewer_presence_ticks
+Granulares Presence-Tracking: ein Row pro Viewer pro Poll-Zyklus (alle 30 Sek). Basis fuer die Viewer-Timeline im Dashboard. TimescaleDB-Hypertable, Kompression nach 3 Tagen.
+
+| Spalte | Typ | Beschreibung |
+|--------|-----|--------------|
+| `session_id` | BIGINT PK/FK | Referenz auf `twitch_stream_sessions.id` |
+| `streamer_login` | TEXT | Twitch-Login des Streamers |
+| `viewer_login` | TEXT | Twitch-Login des Viewers |
+| `tick_at` | TIMESTAMPTZ PK | Zeitstempel des Chatters-Polls |
+
+Aus den Ticks werden zur Abfragezeit per Window Function zusammenhaengende Anwesenheits-Spans berechnet (Gap-Schwelle: >2 min). Siehe [docs/VIEWER_PRESENCE_TIMELINE.md](VIEWER_PRESENCE_TIMELINE.md).
+
+**Schreibt:** `bot/analytics/mixin.py` → `collect_chatters_data()`
+
 ### twitch_chatter_rollup
 Aggregierte Chatter-Statistiken (Aktivitaet, Loyalty-Metriken).
 
