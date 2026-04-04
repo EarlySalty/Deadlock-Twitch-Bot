@@ -3606,4 +3606,40 @@ def ensure_schema(conn) -> None:
         "CREATE INDEX IF NOT EXISTS idx_twitch_promo_cooldowns_wall_ts ON twitch_promo_cooldowns(wall_ts)"
     )
 
+    # 22) First-Message-Events (channel.chat.user_first_message EventSub)
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS twitch_first_message_events (
+            id             BIGSERIAL PRIMARY KEY,
+            streamer_login TEXT NOT NULL,
+            broadcaster_id TEXT NOT NULL,
+            chatter_login  TEXT NOT NULL,
+            chatter_id     TEXT,
+            message_id     TEXT,
+            message_text   TEXT,
+            event_ts       TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )
+        """
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_twitch_first_message_events_streamer "
+        "ON twitch_first_message_events(streamer_login, event_ts DESC)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_twitch_first_message_events_chatter "
+        "ON twitch_first_message_events(chatter_login)"
+    )
+    try:
+        _pg_add_col_if_missing(
+            conn,
+            "twitch_session_chatters",
+            "confirmed_first_ever",
+            "BOOLEAN DEFAULT FALSE",
+        )
+    except Exception as exc:
+        log.debug(
+            "DB migration: confirmed_first_ever konnte nicht zu twitch_session_chatters hinzugefügt werden: %s",
+            exc,
+        )
+
     migrate_legacy_partner_registry(conn)

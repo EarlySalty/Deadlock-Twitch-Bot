@@ -2331,6 +2331,61 @@ class _EventSubMixin:
             except Exception:
                 log.exception("EventSub: _follow_cb – DB-Insert fehlgeschlagen für %s", login)
 
+        async def _first_message_cb(bid: str, login: str, event: dict):
+            chatter_login = (
+                event.get("chatter_user_login") or event.get("user_login") or ""
+            ).strip().lower()
+            chatter_id = str(
+                event.get("chatter_user_id") or event.get("user_id") or ""
+            ).strip() or None
+            message_id = str(event.get("message_id") or "").strip() or None
+            message_text = str(
+                (event.get("message") or {}).get("text") or ""
+            ).strip() or None
+            ts_iso = datetime.now(UTC).isoformat(timespec="seconds")
+            log.debug(
+                "EventSub: channel.chat.user_first_message – %s in %s", chatter_login, login
+            )
+            if not chatter_login:
+                return
+            try:
+                with storage.transaction() as c:
+                    session_row = c.execute(
+                        """
+                        SELECT id FROM twitch_stream_sessions
+                         WHERE streamer_login = %s AND ended_at IS NULL
+                         ORDER BY started_at DESC LIMIT 1
+                        """,
+                        (login,),
+                    ).fetchone()
+                    session_id = int(session_row[0]) if session_row else None
+
+                    c.execute(
+                        """
+                        INSERT INTO twitch_first_message_events
+                            (streamer_login, broadcaster_id, chatter_login, chatter_id,
+                             message_id, message_text, event_ts)
+                        VALUES (%s, %s, %s, %s, %s, %s, %s)
+                        """,
+                        (login, bid, chatter_login, chatter_id, message_id, message_text, ts_iso),
+                    )
+
+                    if session_id:
+                        c.execute(
+                            """
+                            UPDATE twitch_session_chatters
+                               SET confirmed_first_ever = TRUE
+                             WHERE session_id = %s AND chatter_login = %s
+                            """,
+                            (session_id, chatter_login),
+                        )
+            except Exception:
+                log.exception(
+                    "EventSub: _first_message_cb – DB-Insert fehlgeschlagen für %s in %s",
+                    chatter_login,
+                    login,
+                )
+
         async def _points_auto_cb(bid: str, login: str, event: dict):
             try:
                 await self._store_channel_points_event(bid, event)
@@ -2370,6 +2425,7 @@ class _EventSubMixin:
         webhook_handler.set_callback(
             "channel.channel_points_custom_reward_redemption.add", _points_custom_cb
         )
+        webhook_handler.set_callback("channel.chat.user_first_message", _first_message_cb)
         self._set_eventsub_webhook_revocation_callback()
         self._install_stream_went_live_handler(
             webhook_url=webhook_url,
@@ -2413,6 +2469,17 @@ class _EventSubMixin:
             log.exception(
                 "EventSub Webhook: Konnte Live-Status nicht abrufen, "
                 "subscribe keine stream.offline beim Start"
+            )
+
+        # 3b. Bot-Auth für channel.chat.user_first_message auflösen
+        _bot_token_fm: str | None = None
+        _bot_id_fm: str | None = None
+        try:
+            _bot_token_fm, _bot_id_fm, _ = await self._resolve_eventsub_bot_auth()
+        except Exception:
+            log.debug(
+                "EventSub Webhook: Bot-Auth für channel.chat.user_first_message nicht verfügbar",
+                exc_info=True,
             )
 
         # 4. stream.online + stream.offline + channel.update für alle/live Streamer
@@ -2519,6 +2586,33 @@ class _EventSubMixin:
                     )
             except Exception:
                 log.exception("EventSub Webhook: channel.raid fehlgeschlagen für %s", login)
+
+            # channel.chat.user_first_message – erstes Mal überhaupt im Channel schreiben
+            if _bot_token_fm and _bot_id_fm:
+                try:
+                    result, already_exists = await self._create_eventsub_webhook_subscription(
+                        sub_type="channel.chat.user_first_message",
+                        condition={
+                            "broadcaster_user_id": broadcaster_id,
+                            "user_id": str(_bot_id_fm),
+                        },
+                        webhook_url=webhook_url,
+                        secret=webhook_secret,
+                        oauth_token=_bot_token_fm,
+                    )
+                    if result:
+                        self._eventsub_track_sub("channel.chat.user_first_message", broadcaster_id)
+                        log.debug(
+                            "EventSub Webhook: channel.chat.user_first_message %s für %s",
+                            "bereits vorhanden" if already_exists else "subscribed",
+                            login,
+                        )
+                except Exception:
+                    log.debug(
+                        "EventSub Webhook: channel.chat.user_first_message fehlgeschlagen für %s",
+                        login,
+                        exc_info=True,
+                    )
 
         log.info(
             "EventSub Webhook: stream.online=%d, channel.update=%d, stream.offline=%d subscribiert",
