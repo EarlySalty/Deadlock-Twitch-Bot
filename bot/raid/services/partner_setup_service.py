@@ -6,12 +6,13 @@ import os
 from collections.abc import Callable
 from contextlib import AbstractContextManager
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import discord
 
 from ...discord_role_sync import normalize_discord_user_id, sync_streamer_role
+from ...entitlements.catalog import ANALYTICS_TRIAL_PLAN_ID, TRIAL_DURATION_DAYS
 from ...storage import (
     backfill_tracked_stats_from_category,
     load_streamer_identity,
@@ -29,6 +30,28 @@ ChatBotGetter = Callable[[], Any | None]
 SessionGetter = Callable[[], Any | None]
 BotIdGetter = Callable[[], str | None]
 MaskIdentifierFn = Callable[[object], str]
+
+
+def _parse_datetime_value(raw_value: Any) -> datetime | None:
+    """Parse a datetime value from DB (isoformat string or datetime)."""
+    if raw_value is None:
+        return None
+    if isinstance(raw_value, datetime):
+        parsed = raw_value
+    else:
+        text = str(raw_value).strip()
+        if not text:
+            return None
+        if len(text) == 10 and text[4] == "-" and text[7] == "-":
+            text = f"{text}T23:59:59+00:00"
+        normalized = text.replace("Z", "+00:00")
+        try:
+            parsed = datetime.fromisoformat(normalized)
+        except ValueError:
+            return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=UTC)
+    return parsed.astimezone(UTC)
 
 
 @dataclass(slots=True)
@@ -182,6 +205,186 @@ class PartnerSetupService:
             )
         return final_discord_id
 
+    async def _record_first_login(
+        self,
+        twitch_user_id: str,
+        twitch_login: str,
+    ) -> None:
+        """Record first_login_at timestamp if not already set. Called on OAuth completion."""
+        def _do_record(conn: Any) -> None:
+            now = datetime.now(tz=UTC).isoformat()
+            conn.execute(
+                """
+                INSERT INTO streamer_plans (twitch_user_id, twitch_login, first_login_at)
+                VALUES (%s, %s, %s)
+                ON CONFLICT (twitch_user_id) DO UPDATE SET
+                    first_login_at = COALESCE(streamer_plans.first_login_at, EXCLUDED.first_login_at)
+                """,
+                (twitch_user_id, twitch_login, now),
+            )
+
+        connection_factory = self.transaction_factory or transaction
+        try:
+            with connection_factory() as conn:
+                _do_record(conn)
+                self.logger.info("Recorded first_login_at for %s (%s)", twitch_login, twitch_user_id)
+        except Exception:
+            self.logger.exception("Failed to record first_login_at for %s (%s)", twitch_login, twitch_user_id)
+
+    async def check_and_grant_trial_eligibility(
+        self,
+        twitch_user_id: str,
+        twitch_login: str,
+    ) -> bool:
+        """Check if user is eligible for 45-day Analytics Trial and grant if eligible.
+
+        Eligibility requires:
+        - first_login_at was more than 24 hours ago
+        - trial_ever_granted is not already set
+        - User has no paid plan (billing or manual)
+
+        Returns True if trial was granted, False otherwise.
+        """
+        paid_plan_ids = {"raid_boost", "analysis_dashboard", "bundle_analysis_raid_boost"}
+        grace_period_hours = 24
+
+        def _check_and_grant(conn: Any) -> bool:
+            # Check if trial was already granted (immutable flag)
+            trial_row = conn.execute(
+                """
+                SELECT trial_ever_granted FROM streamer_plans
+                WHERE TRIM(COALESCE(twitch_user_id, '')) = %s
+                   OR LOWER(COALESCE(twitch_login, '')) = LOWER(%s)
+                LIMIT 1
+                """,
+                (twitch_user_id, twitch_login),
+            ).fetchone()
+
+            if trial_row and int(trial_row[0] or 0) == 1:
+                self.logger.info(
+                    "User %s (%s) already has trial_ever_granted=1, skipping",
+                    twitch_login,
+                    twitch_user_id,
+                )
+                return False
+
+            # Check if first_login_at is more than 24 hours ago
+            first_login_row = conn.execute(
+                """
+                SELECT first_login_at FROM streamer_plans
+                WHERE TRIM(COALESCE(twitch_user_id, '')) = %s
+                   OR LOWER(COALESCE(twitch_login, '')) = LOWER(%s)
+                LIMIT 1
+                """,
+                (twitch_user_id, twitch_login),
+            ).fetchone()
+
+            if not first_login_row or not first_login_row[0]:
+                self.logger.info(
+                    "User %s (%s) has no first_login_at yet, cannot grant trial",
+                    twitch_login,
+                    twitch_user_id,
+                )
+                return False
+
+            first_login_at = _parse_datetime_value(first_login_row[0])
+            if first_login_at is None:
+                self.logger.warning(
+                    "User %s (%s) has invalid first_login_at, cannot grant trial",
+                    twitch_login,
+                    twitch_user_id,
+                )
+                return False
+
+            hours_since_login = (datetime.now(tz=UTC) - first_login_at).total_seconds() / 3600
+            if hours_since_login < grace_period_hours:
+                self.logger.info(
+                    "User %s (%s) first_login_at is only %.1f hours ago (need %d hours), cannot grant trial yet",
+                    twitch_login,
+                    twitch_user_id,
+                    hours_since_login,
+                    grace_period_hours,
+                )
+                return False
+
+            # Check if user already has a paid billing subscription
+            billing_row = conn.execute(
+                """
+                SELECT plan_id FROM twitch_billing_subscriptions
+                WHERE LOWER(customer_reference) = LOWER(%s)
+                  AND status IN ('active', 'trialing')
+                LIMIT 1
+                """,
+                (twitch_user_id,),
+            ).fetchone()
+
+            if billing_row:
+                existing_plan = str(billing_row[0] or "").strip()
+                if existing_plan in paid_plan_ids:
+                    self.logger.info(
+                        "User %s (%s) already has paid plan %s, skipping trial",
+                        twitch_login,
+                        twitch_user_id,
+                        existing_plan,
+                    )
+                    return False
+
+            # Check if user already has a manual paid plan set
+            manual_row = conn.execute(
+                """
+                SELECT manual_plan_id FROM streamer_plans
+                WHERE TRIM(COALESCE(twitch_user_id, '')) = %s
+                   OR LOWER(COALESCE(twitch_login, '')) = LOWER(%s)
+                LIMIT 1
+                """,
+                (twitch_user_id, twitch_login),
+            ).fetchone()
+
+            if manual_row:
+                existing_manual_plan = str(manual_row[0] or "").strip()
+                if existing_manual_plan and existing_manual_plan != "raid_free":
+                    self.logger.info(
+                        "User %s (%s) already has manual plan %s, skipping trial",
+                        twitch_login,
+                        twitch_user_id,
+                        existing_manual_plan,
+                    )
+                    return False
+
+            # Grant the trial and set immutable flag
+            trial_expires_at = (datetime.now(tz=UTC) + timedelta(days=TRIAL_DURATION_DAYS)).isoformat()
+            now = datetime.now(tz=UTC).isoformat()
+            conn.execute(
+                """
+                INSERT INTO streamer_plans (twitch_user_id, twitch_login, manual_plan_id, manual_plan_expires_at, trial_ever_granted, manual_plan_notes, manual_plan_updated_at)
+                VALUES (%s, %s, %s, %s, 1, 'Trial granted after 24h grace period', %s)
+                ON CONFLICT (twitch_user_id) DO UPDATE SET
+                    manual_plan_id = EXCLUDED.manual_plan_id,
+                    manual_plan_expires_at = EXCLUDED.manual_plan_expires_at,
+                    trial_ever_granted = 1,
+                    manual_plan_notes = EXCLUDED.manual_plan_notes,
+                    manual_plan_updated_at = EXCLUDED.manual_plan_updated_at
+                """,
+                (twitch_user_id, twitch_login, ANALYTICS_TRIAL_PLAN_ID, trial_expires_at, now),
+            )
+            self.logger.info(
+                "Granted %d-day Analytics Trial to %s (%s) after %d-hour grace period, expires at %s",
+                TRIAL_DURATION_DAYS,
+                twitch_login,
+                twitch_user_id,
+                grace_period_hours,
+                trial_expires_at,
+            )
+            return True
+
+        connection_factory = self.transaction_factory or transaction
+        try:
+            with connection_factory() as conn:
+                return _check_and_grant(conn)
+        except Exception:
+            self.logger.exception("Failed to check/grant trial eligibility for %s (%s)", twitch_login, twitch_user_id)
+            return False
+
     async def complete_setup_for_streamer(
         self,
         twitch_user_id: str,
@@ -204,6 +407,9 @@ class PartnerSetupService:
                 twitch_login,
                 twitch_user_id,
             )
+
+        # Record first login timestamp for delayed trial grant (24h grace period)
+        await self._record_first_login(twitch_user_id, twitch_login)
 
         session = self._session()
         if session is None:

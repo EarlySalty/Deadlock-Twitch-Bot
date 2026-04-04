@@ -3399,6 +3399,12 @@ def ensure_schema(conn) -> None:
     conn.execute(
         "ALTER TABLE streamer_plans ADD COLUMN IF NOT EXISTS manual_plan_updated_at TEXT"
     )
+    conn.execute(
+        "ALTER TABLE streamer_plans ADD COLUMN IF NOT EXISTS trial_ever_granted INTEGER NOT NULL DEFAULT 0"
+    )
+    conn.execute(
+        "ALTER TABLE streamer_plans ADD COLUMN IF NOT EXISTS first_login_at TEXT"
+    )
 
     # 18) Vorgecachte Partner-Raid-Scores
     conn.execute(

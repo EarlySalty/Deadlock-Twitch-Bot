@@ -4,12 +4,17 @@ from __future__ import annotations
 
 from typing import Final
 
+# Trial Plan
+ANALYTICS_TRIAL_PLAN_ID = "analytics_trial"
+TRIAL_DURATION_DAYS = 45
+
 KNOWN_PLAN_IDS: Final[frozenset[str]] = frozenset(
     {
         "raid_free",
         "raid_boost",
         "analysis_dashboard",
         "bundle_analysis_raid_boost",
+        ANALYTICS_TRIAL_PLAN_ID,  # 45-day free trial for new users
     }
 )
 
@@ -28,6 +33,7 @@ PLAN_TIER_MAP: Final[dict[str, str]] = {
     "raid_boost": "basic",
     "analysis_dashboard": "extended",
     "bundle_analysis_raid_boost": "extended",
+    ANALYTICS_TRIAL_PLAN_ID: "extended",  # Trial gives extended access
 }
 
 PLAN_DISPLAY_NAME_MAP: Final[dict[str, str]] = {
@@ -35,6 +41,7 @@ PLAN_DISPLAY_NAME_MAP: Final[dict[str, str]] = {
     "raid_boost": "Basic",
     "analysis_dashboard": "Erweitert",
     "bundle_analysis_raid_boost": "Erweitert (Bundle)",
+    ANALYTICS_TRIAL_PLAN_ID: "Trial",
 }
 
 PLAN_ENTITLEMENTS_MAP: Final[dict[str, frozenset[str]]] = {
@@ -60,6 +67,13 @@ PLAN_ENTITLEMENTS_MAP: Final[dict[str, frozenset[str]]] = {
             "chat.lurker_tax",
             "chat.promos.disable",
             "raid.priority",
+        }
+    ),
+    ANALYTICS_TRIAL_PLAN_ID: frozenset(
+        {
+            "analytics.basic",
+            "analytics.extended",
+            "chat.lurker_tax",
         }
     ),
 }
