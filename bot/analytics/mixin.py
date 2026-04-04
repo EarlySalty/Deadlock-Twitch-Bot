@@ -1643,6 +1643,20 @@ class TwitchAnalyticsMixin:
                             ],
                         )
 
+                        # Presence-Tick für jeden Chatter dieses Polls eintragen
+                        cur.executemany(
+                            """
+                            INSERT INTO twitch_viewer_presence_ticks
+                                (session_id, streamer_login, viewer_login, tick_at)
+                            VALUES (%s, %s, %s, %s)
+                            ON CONFLICT (session_id, viewer_login, tick_at) DO NOTHING
+                            """,
+                            [
+                                (session_id, login, c_login, now_iso)
+                                for c_login, _ in chatter_entries
+                            ],
+                        )
+
                     log.debug(
                         "Chatters-Poller: %d Chatter für %s (session %s) gespeichert (%d erstmalig, %d Bots gefiltert)",
                         len(chatter_entries), login, session_id,

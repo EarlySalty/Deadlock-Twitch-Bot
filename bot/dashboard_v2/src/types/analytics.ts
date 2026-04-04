@@ -478,6 +478,41 @@ export interface ViewerTimelinePoint {
   samples: number;
 }
 
+export interface ViewerPresenceSpan {
+  start_min: number;
+  end_min: number;
+}
+
+export interface ViewerTimelineEntry {
+  login: string;
+  segment: 'dedicated' | 'regular' | 'casual' | 'lurker' | 'new' | null;
+  spans: ViewerPresenceSpan[];
+  total_present_min: number;
+  chat_messages: number;
+}
+
+export interface ViewerTimelineSessionResponse {
+  session_id: number;
+  session_start: string;
+  session_duration_min: number;
+  viewers: ViewerTimelineEntry[];
+  total_unique_tracked: number;
+}
+
+export interface ViewerTimelineProfileSession {
+  session_id: number;
+  started_at: string | null;
+  total_present_min: number;
+  chat_messages: number;
+}
+
+export interface ViewerTimelineProfileResponse {
+  streamer: string;
+  login: string;
+  sessions: ViewerTimelineProfileSession[];
+  total_sessions: number;
+}
+
 // Category Leaderboard (from twitch_stats_category)
 export interface LeaderboardEntry {
   rank: number;

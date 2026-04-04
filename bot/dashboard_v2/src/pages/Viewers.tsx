@@ -43,7 +43,7 @@ interface ViewersProps {
   days: TimeRange;
 }
 
-const SEGMENT_CONFIG: Record<string, { label: string; color: string; bgClass: string }> = {
+export const SEGMENT_CONFIG: Record<string, { label: string; color: string; bgClass: string }> = {
   dedicated: { label: 'Dedicated', color: '#22c55e', bgClass: 'bg-success/10 text-success border-success/20' },
   regular: { label: 'Regular', color: '#3b82f6', bgClass: 'bg-primary/10 text-primary border-primary/20' },
   casual: { label: 'Casual', color: '#f59e0b', bgClass: 'bg-warning/10 text-warning border-warning/20' },

@@ -22,6 +22,8 @@ import {
   fetchAudienceInsights,
   fetchAudienceDemographics,
   fetchViewerTimeline,
+  fetchViewerPresenceTimeline,
+  fetchViewerTimelineProfile,
   fetchCategoryLeaderboard,
   fetchCoaching,
   fetchMonetization,
@@ -246,12 +248,39 @@ export function useAudienceDemographics(streamer: string | null, days: TimeRange
 }
 
 // Viewer Timeline Hook (stats_tracked bucketed data)
-export function useViewerTimeline(streamer: string | null, days: number) {
+export function useViewerCountTimeline(streamer: string | null, days: number) {
   return useQuery({
     queryKey: ['viewer-timeline', streamer, days],
     queryFn: () => fetchViewerTimeline(streamer, days),
     staleTime: STALE_TIME,
     enabled: !!streamer,
+  });
+}
+
+export function useViewerTimeline(
+  streamer: string | null,
+  sessionId: number | null,
+  options: {
+    minPresentMin?: number;
+    segment?: string;
+    search?: string;
+    limit?: number;
+  } = {}
+) {
+  return useQuery({
+    queryKey: ['viewer-presence-timeline', streamer, sessionId, options],
+    queryFn: () => fetchViewerPresenceTimeline(streamer, sessionId!, options),
+    staleTime: STALE_TIME,
+    enabled: !!streamer && !!sessionId,
+  });
+}
+
+export function useViewerTimelineProfile(streamer: string | null, login: string | null) {
+  return useQuery({
+    queryKey: ['viewer-timeline-profile', streamer, login],
+    queryFn: () => fetchViewerTimelineProfile(streamer, login!),
+    staleTime: STALE_TIME,
+    enabled: !!streamer && !!login,
   });
 }
 

@@ -1,5 +1,5 @@
 import { Users, TrendingUp, Clock, MessageSquare, Target } from 'lucide-react';
-import { useOverview, useHourlyHeatmap, useCalendarHeatmap, useViewerTimeline } from '@/hooks/useAnalytics';
+import { useOverview, useHourlyHeatmap, useCalendarHeatmap, useViewerCountTimeline } from '@/hooks/useAnalytics';
 import { KpiCard } from '@/components/cards/KpiCard';
 import { HealthScoreCard } from '@/components/cards/HealthScoreCard';
 import { ScoreGauge } from '@/components/cards/ScoreGauge';
@@ -25,7 +25,7 @@ export function Overview({ streamer, days, onSessionClick }: OverviewProps) {
   const { data: overview, isLoading, error } = useOverview(streamer, days);
   const { data: hourlyData } = useHourlyHeatmap(streamer, days);
   const { data: calendarData } = useCalendarHeatmap(streamer, 365);
-  const { data: timelineData } = useViewerTimeline(streamer, days);
+  const { data: timelineData } = useViewerCountTimeline(streamer, days);
 
   if (isLoading) {
     return (

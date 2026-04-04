@@ -44,6 +44,7 @@ from .api_performance import _AnalyticsPerformanceMixin
 from .api_chat_deep import _AnalyticsChatDeepMixin
 from .api_public import _AnalyticsPublicMixin
 from .api_raids import _AnalyticsRaidsMixin
+from .api_viewer_timeline import _ViewerTimelineMixin
 from .api_viewers import _AnalyticsViewersMixin
 from .api_roadmap import _AnalyticsRoadmapMixin
 
@@ -472,6 +473,7 @@ def _is_localhost(request: web.Request) -> bool:
 
 class AnalyticsV2Mixin(
     _AnalyticsAdminMixin,
+    _ViewerTimelineMixin,
     _AnalyticsOverviewMixin,
     _AnalyticsAudienceMixin,
     _AnalyticsPerformanceMixin,
@@ -552,7 +554,12 @@ class AnalyticsV2Mixin(
 
     def _require_extended_plan(self, request: web.Request) -> None:
         """Raise 403 if the queried streamer lacks an extended-analytics plan."""
-        streamer = (request.query.get("streamer") or request.query.get("login") or "").strip().lower()
+        streamer = (
+            request.query.get("streamer")
+            or request.match_info.get("streamer")
+            or request.query.get("login")
+            or ""
+        ).strip().lower()
         if not streamer:
             session = self._get_dashboard_session(request)
             if session:

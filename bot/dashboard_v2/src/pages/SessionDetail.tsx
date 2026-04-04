@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { motion } from 'framer-motion';
 import {
   ArrowLeft,
@@ -19,6 +20,7 @@ import {
 import { useSessionDetail, useSessionEvents } from '@/hooks/useAnalytics';
 import { SessionEventTimeline } from '@/components/SessionEventTimeline';
 import { NoDataCard } from '@/components/cards/NoDataCard';
+import { ViewerTimeline } from '@/pages/ViewerTimeline';
 import { formatNumber, formatPercent, formatDuration, formatDateFull } from '@/utils/formatters';
 import type { SessionEvent } from '@/types/analytics';
 
@@ -96,6 +98,7 @@ function buildEventMarkers(
 }
 
 export function SessionDetail({ sessionId, streamer: _streamer, onBack }: SessionDetailProps) {
+  const [activeTab, setActiveTab] = useState<'overview' | 'events' | 'viewer-timeline'>('overview');
   const { data: detail, isLoading: loadingDetail, error: detailError } = useSessionDetail(sessionId);
   const { data: events, isLoading: loadingEvents } = useSessionEvents(sessionId);
 
@@ -148,6 +151,7 @@ export function SessionDetail({ sessionId, streamer: _streamer, onBack }: Sessio
   const timeLabel = startDate
     ? startDate.toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' })
     : '';
+  const sessionDurationMin = Math.max(0, Math.round(duration / 60));
 
   const eventMarkers = buildEventMarkers(events, startedAt);
 
@@ -233,120 +237,152 @@ export function SessionDetail({ sessionId, streamer: _streamer, onBack }: Sessio
         />
       </div>
 
-      {/* Viewer Timeline Chart */}
-      <motion.div
-        initial={{ opacity: 0, y: 10 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ delay: 0.1 }}
-        className="bg-card rounded-xl border border-border p-5"
-      >
-        <h3 className="text-white font-semibold mb-4 flex items-center gap-2">
-          <Eye className="w-5 h-5 text-primary" />
-          Viewer-Verlauf
-        </h3>
-        {timeline.length === 0 ? (
-          <NoDataCard message="Keine Timeline-Daten" submessage="" />
-        ) : (
-          <ResponsiveContainer width="100%" height={300}>
-            <LineChart data={timeline}>
-              <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.06)" />
-              <XAxis
-                dataKey="minute"
-                tick={{ fill: '#888', fontSize: 12 }}
-                tickFormatter={(v: number) => `${v}m`}
-              />
-              <YAxis tick={{ fill: '#888', fontSize: 12 }} />
-              <Tooltip
-                contentStyle={{
-                  backgroundColor: '#1e1e2e',
-                  border: '1px solid rgba(255,255,255,0.1)',
-                  borderRadius: '8px',
-                  color: '#fff',
-                }}
-                labelFormatter={(v) => `Minute ${v}`}
-                formatter={(v) => [formatNumber(Number(v)), 'Viewer']}
-              />
-              <Line
-                type="monotone"
-                dataKey="viewers"
-                stroke="#7c3aed"
-                strokeWidth={2}
-                dot={false}
-                activeDot={{ r: 4 }}
-              />
-              {/* Event markers as vertical reference lines */}
-              {eventMarkers.map((m, i) => (
-                <ReferenceLine
-                  key={`ev-${i}`}
-                  x={m.minute}
-                  stroke={m.color}
-                  strokeDasharray="4 4"
-                  strokeWidth={1.5}
-                  label={{
-                    value: m.label,
-                    position: 'top',
-                    fill: m.color,
-                    fontSize: 10,
-                  }}
-                />
-              ))}
-            </LineChart>
-          </ResponsiveContainer>
-        )}
-      </motion.div>
+      <div className="flex flex-wrap gap-2">
+        {[
+          ['overview', 'Overview'],
+          ['events', 'Events & Chat'],
+          ['viewer-timeline', 'Viewer-Timeline'],
+        ].map(([tabId, label]) => {
+          const isActive = activeTab === tabId;
+          return (
+            <button
+              key={tabId}
+              onClick={() => setActiveTab(tabId as 'overview' | 'events' | 'viewer-timeline')}
+              className={`rounded-xl px-4 py-2 text-sm font-medium transition ${
+                isActive
+                  ? 'bg-primary text-white shadow-lg shadow-primary/20'
+                  : 'border border-white/10 bg-card text-text-secondary hover:text-white'
+              }`}
+            >
+              {label}
+            </button>
+          );
+        })}
+      </div>
 
-      {/* Events Timeline + Top Chatters side by side */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        {/* Events */}
-        <SessionEventTimeline
-          events={events}
-          sessionStart={startedAt}
-          loading={loadingEvents}
-        />
-
-        {/* Top Chatters */}
+      {activeTab === 'overview' && (
         <motion.div
           initial={{ opacity: 0, y: 10 }}
           animate={{ opacity: 1, y: 0 }}
-          transition={{ delay: 0.15 }}
+          transition={{ delay: 0.1 }}
           className="bg-card rounded-xl border border-border p-5"
         >
           <h3 className="text-white font-semibold mb-4 flex items-center gap-2">
-            <MessageCircle className="w-5 h-5 text-accent" />
-            Top Chatters
+            <Eye className="w-5 h-5 text-primary" />
+            Viewer-Verlauf
           </h3>
-          {chatters.length === 0 ? (
-            <NoDataCard message="Keine Chatter-Daten" submessage="" />
+          {timeline.length === 0 ? (
+            <NoDataCard message="Keine Timeline-Daten" submessage="" />
           ) : (
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm">
-                <thead>
-                  <tr className="text-text-secondary text-xs uppercase tracking-wider border-b border-border">
-                    <th className="text-left px-3 py-2">Chatter</th>
-                    <th className="text-right px-3 py-2">Nachrichten</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {chatters.map((c, i) => (
-                    <motion.tr
-                      key={c.login}
-                      initial={{ opacity: 0, x: -5 }}
-                      animate={{ opacity: 1, x: 0 }}
-                      transition={{ delay: i * 0.03 }}
-                      className="border-b border-border/50 hover:bg-white/5 transition"
-                    >
-                      <td className="px-3 py-2 text-white">{c.login}</td>
-                      <td className="px-3 py-2 text-right text-text-secondary">
-                        {formatNumber(c.messages)}
-                      </td>
-                    </motion.tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+            <ResponsiveContainer width="100%" height={300}>
+              <LineChart data={timeline}>
+                <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.06)" />
+                <XAxis
+                  dataKey="minute"
+                  tick={{ fill: '#888', fontSize: 12 }}
+                  tickFormatter={(v: number) => `${v}m`}
+                />
+                <YAxis tick={{ fill: '#888', fontSize: 12 }} />
+                <Tooltip
+                  contentStyle={{
+                    backgroundColor: '#1e1e2e',
+                    border: '1px solid rgba(255,255,255,0.1)',
+                    borderRadius: '8px',
+                    color: '#fff',
+                  }}
+                  labelFormatter={(v) => `Minute ${v}`}
+                  formatter={(v) => [formatNumber(Number(v)), 'Viewer']}
+                />
+                <Line
+                  type="monotone"
+                  dataKey="viewers"
+                  stroke="#7c3aed"
+                  strokeWidth={2}
+                  dot={false}
+                  activeDot={{ r: 4 }}
+                />
+                {eventMarkers.map((m, i) => (
+                  <ReferenceLine
+                    key={`ev-${i}`}
+                    x={m.minute}
+                    stroke={m.color}
+                    strokeDasharray="4 4"
+                    strokeWidth={1.5}
+                    label={{
+                      value: m.label,
+                      position: 'top',
+                      fill: m.color,
+                      fontSize: 10,
+                    }}
+                  />
+                ))}
+              </LineChart>
+            </ResponsiveContainer>
           )}
         </motion.div>
-      </div>
+      )}
+
+      {activeTab === 'events' && (
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+          <SessionEventTimeline
+            events={events}
+            sessionStart={startedAt}
+            loading={loadingEvents}
+          />
+
+          <motion.div
+            initial={{ opacity: 0, y: 10 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ delay: 0.15 }}
+            className="bg-card rounded-xl border border-border p-5"
+          >
+            <h3 className="text-white font-semibold mb-4 flex items-center gap-2">
+              <MessageCircle className="w-5 h-5 text-accent" />
+              Top Chatters
+            </h3>
+            {chatters.length === 0 ? (
+              <NoDataCard message="Keine Chatter-Daten" submessage="" />
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="text-text-secondary text-xs uppercase tracking-wider border-b border-border">
+                      <th className="text-left px-3 py-2">Chatter</th>
+                      <th className="text-right px-3 py-2">Nachrichten</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {chatters.map((c, i) => (
+                      <motion.tr
+                        key={c.login}
+                        initial={{ opacity: 0, x: -5 }}
+                        animate={{ opacity: 1, x: 0 }}
+                        transition={{ delay: i * 0.03 }}
+                        className="border-b border-border/50 hover:bg-white/5 transition"
+                      >
+                        <td className="px-3 py-2 text-white">{c.login}</td>
+                        <td className="px-3 py-2 text-right text-text-secondary">
+                          {formatNumber(c.messages)}
+                        </td>
+                      </motion.tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </motion.div>
+        </div>
+      )}
+
+      {activeTab === 'viewer-timeline' && (
+        <ViewerTimeline
+          sessionId={sessionId}
+          streamer={_streamer}
+          sessionStart={startedAt}
+          sessionDurationMin={sessionDurationMin}
+          onBack={onBack}
+        />
+      )}
     </div>
   );
 }

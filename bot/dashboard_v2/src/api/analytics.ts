@@ -37,6 +37,8 @@ import type {
   ViewerDetail,
   ViewerDirectory,
   ViewerFilterType,
+  ViewerTimelineProfileResponse,
+  ViewerTimelineSessionResponse,
   ViewerOverlap,
   ViewerProfiles,
   ViewerSegments,
@@ -289,6 +291,50 @@ export async function fetchViewerTimeline(
     streamer: streamer || '',
     days,
   });
+}
+
+export async function fetchViewerPresenceTimeline(
+  streamer: string | null,
+  sessionId: number,
+  options: {
+    minPresentMin?: number;
+    segment?: string;
+    search?: string;
+    limit?: number;
+  } = {}
+): Promise<ViewerTimelineSessionResponse> {
+  if (!streamer) {
+    throw new Error('Streamer required');
+  }
+
+  return fetchApi<ViewerTimelineSessionResponse>(
+    `/${encodeURIComponent(streamer)}/viewer-timeline`,
+    {
+      streamer,
+      session_id: sessionId,
+      min_present_min: options.minPresentMin ?? 0,
+      ...(options.segment && options.segment !== 'all' && { segment: options.segment }),
+      ...(options.search && { search: options.search }),
+      limit: options.limit ?? 200,
+    }
+  );
+}
+
+export async function fetchViewerTimelineProfile(
+  streamer: string | null,
+  login: string
+): Promise<ViewerTimelineProfileResponse> {
+  if (!streamer) {
+    throw new Error('Streamer required');
+  }
+
+  return fetchApi<ViewerTimelineProfileResponse>(
+    `/${encodeURIComponent(streamer)}/viewer-timeline/profile`,
+    {
+      streamer,
+      login,
+    }
+  );
 }
 
 export async function fetchCoaching(

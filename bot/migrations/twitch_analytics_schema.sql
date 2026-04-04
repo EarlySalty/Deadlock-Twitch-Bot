@@ -828,5 +828,18 @@ CREATE TABLE IF NOT EXISTS twitch_raid_retention (
 CREATE INDEX IF NOT EXISTS idx_twitch_raid_retention_raid_id
     ON twitch_raid_retention(raid_id);
 
+-- Viewer Presence Ticks: one row per viewer per poll cycle
+CREATE TABLE IF NOT EXISTS twitch_viewer_presence_ticks (
+    session_id     BIGINT       NOT NULL REFERENCES twitch_stream_sessions(id) ON DELETE CASCADE,
+    streamer_login TEXT         NOT NULL,
+    viewer_login   TEXT         NOT NULL,
+    tick_at        TIMESTAMPTZ  NOT NULL,
+    PRIMARY KEY (session_id, viewer_login, tick_at)
+);
+SELECT create_hypertable('twitch_viewer_presence_ticks', 'tick_at', if_not_exists => TRUE, migrate_data => TRUE, chunk_time_interval => INTERVAL '1 day');
+ALTER TABLE twitch_viewer_presence_ticks SET (timescaledb.compress, timescaledb.compress_segmentby = 'session_id,streamer_login', timescaledb.compress_orderby = 'tick_at DESC');
+SELECT add_compression_policy('twitch_viewer_presence_ticks', INTERVAL '3 days', if_not_exists => TRUE);
+CREATE INDEX IF NOT EXISTS idx_viewer_presence_ticks_session ON twitch_viewer_presence_ticks(session_id, viewer_login, tick_at);
+
 -- ========= Housekeeping =========
 ANALYZE;
