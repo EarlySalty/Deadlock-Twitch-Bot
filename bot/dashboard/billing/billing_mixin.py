@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import html
 import os
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 from urllib.parse import urlsplit
 from uuid import uuid4
@@ -15,9 +15,12 @@ from aiohttp import web
 from ... import storage
 from ...core.constants import log
 from ...entitlements.catalog import (
+    ANALYTICS_TRIAL_PLAN_ID as _ANALYTICS_TRIAL_PLAN_ID,
+    PLAN_ENTITLEMENTS_MAP as _PLAN_ENTITLEMENTS_MAP,
     plan_entitlements as _plan_entitlements,
     plan_is_extended as _plan_is_extended,
     plan_tier as _plan_tier,
+    TRIAL_DURATION_DAYS as _TRIAL_DURATION_DAYS,
 )
 from ...entitlements.resolver import (
     resolve_plan_snapshot_for_refs as _resolve_plan_snapshot_for_refs,
@@ -1293,11 +1296,156 @@ class _DashboardBillingMixin:
             ),
         )
 
+    def _billing_check_and_grant_trial_eligibility(
+        self,
+        twitch_user_id: str,
+        twitch_login: str,
+    ) -> bool:
+        """Check if user is eligible for Analytics Trial and grant if eligible.
+
+        Returns True if trial was granted, False otherwise.
+        """
+        paid_plan_ids = {"raid_boost", "analysis_dashboard", "bundle_analysis_raid_boost"}
+        grace_period_hours = 24
+
+        def _do_check_and_grant(conn: Any) -> bool:
+            # Check if trial was already granted (immutable flag)
+            trial_row = conn.execute(
+                """
+                SELECT trial_ever_granted FROM streamer_plans
+                WHERE TRIM(COALESCE(twitch_user_id, '')) = %s
+                   OR LOWER(COALESCE(twitch_login, '')) = LOWER(%s)
+                LIMIT 1
+                """,
+                (twitch_user_id, twitch_login),
+            ).fetchone()
+
+            if trial_row and int(trial_row[0] or 0) == 1:
+                return False
+
+            # Check if first_login_at is more than 24 hours ago
+            first_login_row = conn.execute(
+                """
+                SELECT first_login_at FROM streamer_plans
+                WHERE TRIM(COALESCE(twitch_user_id, '')) = %s
+                   OR LOWER(COALESCE(twitch_login, '')) = LOWER(%s)
+                LIMIT 1
+                """,
+                (twitch_user_id, twitch_login),
+            ).fetchone()
+
+            if not first_login_row or not first_login_row[0]:
+                return False
+
+            first_login_at = first_login_row[0]
+            if not first_login_at:
+                return False
+
+            # Parse first_login_at
+            try:
+                if isinstance(first_login_at, str):
+                    if len(first_login_at) == 10 and first_login_at[4] == "-":
+                        first_login_at = f"{first_login_at}T00:00:00+00:00"
+                    parsed = datetime.fromisoformat(first_login_at.replace("Z", "+00:00"))
+                else:
+                    parsed = first_login_at
+                if parsed.tzinfo is None:
+                    parsed = parsed.replace(tzinfo=UTC)
+                else:
+                    parsed = parsed.astimezone(UTC)
+            except Exception:
+                log.debug("Failed to parse first_login_at for trial check: %s", first_login_at)
+                return False
+
+            hours_since_login = (datetime.now(tz=UTC) - parsed).total_seconds() / 3600
+            if hours_since_login < grace_period_hours:
+                return False
+
+            # Check if user already has a paid billing subscription
+            billing_row = conn.execute(
+                """
+                SELECT plan_id FROM twitch_billing_subscriptions
+                WHERE LOWER(customer_reference) = LOWER(%s)
+                  AND status IN ('active', 'trialing')
+                LIMIT 1
+                """,
+                (twitch_user_id,),
+            ).fetchone()
+
+            if billing_row:
+                existing_plan = str(billing_row[0] or "").strip()
+                if existing_plan in paid_plan_ids:
+                    return False
+
+            # Check if user already has a manual paid plan set
+            manual_row = conn.execute(
+                """
+                SELECT manual_plan_id FROM streamer_plans
+                WHERE TRIM(COALESCE(twitch_user_id, '')) = %s
+                   OR LOWER(COALESCE(twitch_login, '')) = LOWER(%s)
+                LIMIT 1
+                """,
+                (twitch_user_id, twitch_login),
+            ).fetchone()
+
+            if manual_row:
+                existing_manual_plan = str(manual_row[0] or "").strip()
+                if existing_manual_plan and existing_manual_plan != "raid_free":
+                    return False
+
+            # Grant the trial and set immutable flag
+            trial_expires_at = (datetime.now(tz=UTC) + timedelta(days=_TRIAL_DURATION_DAYS)).isoformat()
+            now = datetime.now(tz=UTC).isoformat()
+            conn.execute(
+                """
+                INSERT INTO streamer_plans (twitch_user_id, twitch_login, manual_plan_id, manual_plan_expires_at, trial_ever_granted, manual_plan_notes, manual_plan_updated_at)
+                VALUES (%s, %s, %s, %s, 1, 'Trial granted after 24h grace period', %s)
+                ON CONFLICT (twitch_user_id) DO UPDATE SET
+                    manual_plan_id = EXCLUDED.manual_plan_id,
+                    manual_plan_expires_at = EXCLUDED.manual_plan_expires_at,
+                    trial_ever_granted = 1,
+                    manual_plan_notes = EXCLUDED.manual_plan_notes,
+                    manual_plan_updated_at = EXCLUDED.manual_plan_updated_at
+                """,
+                (twitch_user_id, twitch_login, _ANALYTICS_TRIAL_PLAN_ID, trial_expires_at, now),
+            )
+            log.info(
+                "Granted %d-day Analytics Trial to %s (%s) after %d-hour grace period",
+                _TRIAL_DURATION_DAYS,
+                twitch_login,
+                twitch_user_id,
+                grace_period_hours,
+            )
+            return True
+
+        try:
+            with storage.transaction() as conn:
+                return _do_check_and_grant(conn)
+        except Exception:
+            log.exception("Failed to check/grant trial eligibility for %s (%s)", twitch_login, twitch_user_id)
+            return False
+
     def _billing_current_plan_for_request(self, request: Any) -> dict[str, Any]:
         """Resolve current plan for authenticated user; fallback to Basic (raid_free)."""
         candidate_refs = self._billing_candidate_refs_for_request(request)
         if not candidate_refs:
             return self._billing_effective_plan_payload()
+
+        # Extract twitch_user_id and twitch_login for trial check
+        twitch_user_id = ""
+        twitch_login = ""
+        for ref in candidate_refs:
+            if ref and ref.isdigit():
+                twitch_user_id = ref
+            elif ref:
+                twitch_login = ref
+
+        # Check and grant trial eligibility (separate transaction)
+        if twitch_user_id and twitch_login:
+            try:
+                self._billing_check_and_grant_trial_eligibility(twitch_user_id, twitch_login)
+            except Exception:
+                log.debug("Trial eligibility check failed for %s (%s)", twitch_login, twitch_user_id, exc_info=True)
 
         try:
             with storage.readonly_connection() as conn:
