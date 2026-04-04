@@ -118,20 +118,6 @@ jobs:
 
             for (let attempt = 1; attempt <= 12; attempt += 1) {
               try {
-                const { data: pr } = await github.rest.pulls.get({ owner, repo, pull_number });
-                if (pr.mergeable === null) {
-                  if (attempt < 12) {
-                    core.notice(`PR #${pull_number} mergeability not yet computed; retrying in 10s (attempt ${attempt}/12).`);
-                    await sleep(10_000);
-                    continue;
-                  }
-                  core.warning(`PR #${pull_number} mergeability still unknown after ${attempt} attempts.`);
-                  return;
-                }
-                if (!pr.mergeable) {
-                  core.warning(`PR #${pull_number} is not mergeable (conflicts or other issues).`);
-                  return;
-                }
                 await github.rest.pulls.merge({
                   owner,
                   repo,
@@ -142,12 +128,14 @@ jobs:
                 return;
               } catch (error) {
                 const message = String(error?.message || error);
-                if (attempt < 12) {
+                const retryable = message.includes("405") || message.includes("Base branch was modified");
+                if (retryable && attempt < 12) {
                   core.notice(`Could not merge PR #${pull_number}; retrying in 10s (attempt ${attempt}/12): ${message}`);
                   await sleep(10_000);
                   continue;
                 }
                 core.warning(`Could not merge PR #${pull_number}: ${message}`);
+                return;
               }
             }
 
@@ -218,21 +206,6 @@ jobs:
               const touchesWorkflows = files.some((f) => f.filename.startsWith(".github/workflows/"));
               if (touchesWorkflows) {
                 core.notice(`PR #${pull.number} modifies workflow files — requires manual merge (GITHUB_TOKEN lacks workflow scope).`);
-                continue;
-              }
-
-              const { data: prDetails } = await github.rest.pulls.get({
-                owner,
-                repo,
-                pull_number: pull.number,
-              });
-
-              if (prDetails.mergeable === null) {
-                core.notice(`PR #${pull.number} mergeability not yet computed, skipping this run.`);
-                continue;
-              }
-              if (!prDetails.mergeable) {
-                core.notice(`PR #${pull.number} is not mergeable (conflicts), skipping.`);
                 continue;
               }
 
