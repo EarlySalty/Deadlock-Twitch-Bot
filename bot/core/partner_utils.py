@@ -62,10 +62,6 @@ def is_partner(row: dict[str, any], now_utc: datetime | None = None) -> bool:
         if until_dt and until_dt >= now_utc:
             return True
 
-    # Legacy: manual_verified_at vorhanden (alte Partner ohne explizites Ablaufdatum)
-    if row.get("manual_verified_at"):
-        return True
-
     return False
 
 

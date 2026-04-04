@@ -138,6 +138,10 @@ class DashboardV2Server(
         self._dashboard_bot_service_view = bot_service
         self._token = app_token
         self._noauth = noauth
+        if noauth:
+            log.warning(
+                "Dashboard läuft im NOAUTH-Modus – alle Authentifizierungsprüfungen sind deaktiviert!"
+            )
         self._partner_token = partner_token
         self._oauth_client_id = oauth_client_id
         self._oauth_client_secret = oauth_client_secret

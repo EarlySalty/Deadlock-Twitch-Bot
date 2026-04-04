@@ -1262,12 +1262,12 @@ class TwitchMonitoringMixin(_EventSubMixin, _ExpSessionsMixin, _SessionsMixin, _
                 rows = c.execute(
                     """
                     SELECT twitch_login, twitch_user_id, require_discord_link,
-                           archived_at::text AS archived_at, is_partner, discord_user_id,
+                           archived_at::text AS archived_at, is_partner_active, discord_user_id,
                            live_ping_role_id, COALESCE(live_ping_enabled, 1) AS live_ping_enabled
                       FROM twitch_streamers_partner_state
                     UNION ALL
                     SELECT s.twitch_login, s.twitch_user_id, s.require_discord_link,
-                           s.archived_at::text AS archived_at, 0 AS is_partner, s.discord_user_id,
+                           s.archived_at::text AS archived_at, 0 AS is_partner_active, s.discord_user_id,
                            s.live_ping_role_id, COALESCE(s.live_ping_enabled, 1) AS live_ping_enabled
                       FROM twitch_streamers s
                      WHERE COALESCE(s.is_monitored_only, 0) = 1
@@ -1293,7 +1293,7 @@ class TwitchMonitoringMixin(_EventSubMixin, _ExpSessionsMixin, _SessionsMixin, _
                     except Exception:
                         archived_dt = None
                 is_archived = archived_dt is not None
-                is_verified = bool(row_dict.get("is_partner"))
+                is_verified = bool(row_dict.get("is_partner_active"))
 
                 tracked.append(
                     {

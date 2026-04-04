@@ -738,12 +738,14 @@ class DashboardLiveAnnouncementMixin:
                 "live_ping_role_id": row.get("live_ping_role_id") if "live_ping_role_id" in row.keys() else None,
                 "live_ping_enabled": row.get("live_ping_enabled", 1) if "live_ping_enabled" in row.keys() else 1,
             }
-        is_partner_row = len(row) > 20
+        # Fallback: positionale Zugriffe basierend auf der bekannten Query-Struktur
+        # (twitch_login=Index 2, live_ping_role_id=Index 16, live_ping_enabled=Index 17,
+        #  discord_user_id=Index 21)
         return {
-            "twitch_login": str((row[2] if is_partner_row else row[1]) or login).strip().lower(),
-            "discord_user_id": row[21] if is_partner_row and len(row) > 21 else (row[2] if len(row) > 2 else None),
-            "live_ping_role_id": row[16] if is_partner_row and len(row) > 16 else None,
-            "live_ping_enabled": row[17] if is_partner_row and len(row) > 17 else 1,
+            "twitch_login": str(row[2] or login).strip().lower(),
+            "discord_user_id": row[21] if len(row) > 21 else None,
+            "live_ping_role_id": row[16] if len(row) > 16 else None,
+            "live_ping_enabled": row[17] if len(row) > 17 else 1,
         }
 
     def _la_persist_streamer_ping_role_id(self, streamer_login: str, role_id: int) -> None:

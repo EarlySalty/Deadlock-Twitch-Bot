@@ -907,7 +907,7 @@ class _EventSubMixin:
                     SELECT s.twitch_user_id, s.twitch_login, a.scopes
                       FROM twitch_streamers_partner_state s
                       JOIN twitch_raid_auth a ON s.twitch_user_id = a.twitch_user_id
-                     WHERE s.is_partner = 1
+                     WHERE s.is_partner_active = 1
                        AND s.twitch_user_id IS NOT NULL
                        AND s.twitch_login IS NOT NULL
                     """
