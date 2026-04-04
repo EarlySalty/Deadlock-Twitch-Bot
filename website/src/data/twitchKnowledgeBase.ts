@@ -21,19 +21,16 @@ export interface OnboardingHighlight {
   value: string;
 }
 
+export type VisualType = "screenshot" | "animation" | "diagram";
+
 export interface OnboardingStep {
   eyebrow: string;
   title: string;
   description: string;
-  bullets: string[];
-  routeLabel?: string;
-  routeHref?: string;
-}
-
-export interface CapabilityCard {
-  title: string;
-  description: string;
-  bullets: string[];
+  visualType: VisualType;
+  visualSrc?: string;
+  ctaLabel: string;
+  ctaHref?: string;
 }
 
 export interface ChecklistItem {
@@ -60,131 +57,47 @@ export interface FaqSection {
   items: FaqItem[];
 }
 
+// Visual onboarding steps - simplified 4-step structure
+export const ONBOARDING_VISUAL_STEPS: OnboardingStep[] = [
+  {
+    eyebrow: "1. Verbinden",
+    title: "Tritt dem Netzwerk bei",
+    description: "Verbinde deinen Twitch-Kanal in Sekunden. Kein extra Konto - einfach mit Twitch einloggen.",
+    visualType: "animation",
+    ctaLabel: "Bot aktivieren",
+    ctaHref: buildTwitchBotAuthUrl(),
+  },
+  {
+    eyebrow: "2. Auto-Raid",
+    title: "Automatische Raids bei Deadlock",
+    description: "Wenn du offline gehst, leitet der Bot deine Viewer automatisch an aktive Partner weiter.",
+    visualType: "diagram",
+    ctaLabel: "Mehr erfahren",
+    ctaHref: `${TWITCH_FAQ_URL}#raids`,
+  },
+  {
+    eyebrow: "3. Dashboard",
+    title: "Dein Stream-Dashboard",
+    description: "Viewer-Trends, Raid-Verlauf und Netzwerk-Analytics an einem Ort.",
+    visualType: "screenshot",
+    visualSrc: "/images/onboarding/dashboard-preview.png",
+    ctaLabel: "Demo ansehen",
+    ctaHref: TWITCH_DEMO_DASHBOARD_URL,
+  },
+  {
+    eyebrow: "4. Start",
+    title: "Bereit zum Streamen",
+    description: "Checkliste: Kanal verbunden, Auto-Raid aktiv, Dashboard offen.",
+    visualType: "diagram",
+    ctaLabel: "Zum Dashboard",
+    ctaHref: buildTwitchDashboardLoginUrl("/twitch/dashboard-v2"),
+  },
+];
+
 export const ONBOARDING_HIGHLIGHTS: OnboardingHighlight[] = [
   { label: "Partnernetzwerk", value: "30+ Deadlock-Streamer" },
   { label: "Auto-Raid", value: "Nur bei Deadlock aktiv" },
   { label: "Start", value: "Kanal verbinden und loslegen" },
-];
-
-export const ONBOARDING_STEPS: OnboardingStep[] = [
-  {
-    eyebrow: "1. Verbinden",
-    title: "Bot für deinen Kanal aktivieren",
-    description:
-      "Du verbindest deinen Twitch-Kanal mit dem Deadlock-Partnernetzwerk. Danach kann dein Kanal für Auto-Raids und weitere Bot-Funktionen eingerichtet werden.",
-    bullets: [
-      "Kein extra Konto und kein Formular auf der Website.",
-      "Nach der Aktivierung landest du direkt im Dashboard.",
-      "Ab dort kannst du sofort sehen, was für deinen Kanal aktiv ist.",
-    ],
-    routeLabel: "Bot für deinen Kanal aktivieren",
-    routeHref: buildTwitchBotAuthUrl(),
-  },
-  {
-    eyebrow: "2. Auto-Raid",
-    title: "So funktioniert das Deadlock-Raid-Netzwerk",
-    description:
-      "Wenn du Deadlock streamst und offline gehst, kann der Bot deine Viewer automatisch an passende Partner weiterleiten. Umgekehrt kannst du genauso von deren Raids profitieren.",
-    bullets: [
-      "Auto-Raids greifen nur bei Deadlock, nicht bei anderen Spielen.",
-      "Dein normales manuelles Raiden bleibt unverändert.",
-      "Das Netzwerk arbeitet in beide Richtungen und hilft beim gegenseitigen Wachstum.",
-    ],
-    routeLabel: "Mehr zum Auto-Raid in der FAQ",
-    routeHref: `${TWITCH_FAQ_URL}#raids`,
-  },
-  {
-    eyebrow: "3. Dashboard",
-    title: "Behalte dein Netzwerk und deine Zahlen im Blick",
-    description:
-      "Im Dashboard siehst du, was auf deinem Kanal passiert: Raid-Verlauf, Viewer-Daten, Muster über Zeit und weitere Funktionen rund um deinen Stream.",
-    bullets: [
-      "Viewer-Trends, Heatmaps und Session-Details an einem Ort.",
-      "Raid-History und Analytics zeigen dir, wie das Netzwerk für dich arbeitet.",
-      "Weitere Tools kannst du danach in deinem Tempo entdecken.",
-    ],
-    routeLabel: "Demo ansehen",
-    routeHref: TWITCH_DEMO_DASHBOARD_URL,
-  },
-  {
-    eyebrow: "4. Discord",
-    title: "Discord beitreten und sichtbar werden",
-    description:
-      "Nicht Pflicht, aber sehr sinnvoll: Im Discord bekommst du mehr Sichtbarkeit, direkten Austausch und schnellen Support aus der Community.",
-    bullets: [
-      "Go-Live-Posts machen sichtbar, wenn du streamst.",
-      "Es gibt einen Bereich für Streamer und direkten Austausch mit der Community.",
-      "Wer mit anderen Deadlock-Spielern unterwegs ist, baut oft schneller eine feste Zuschauerschaft auf.",
-    ],
-    routeLabel: "Discord beitreten",
-    routeHref: DISCORD_INVITE_URL,
-  },
-  {
-    eyebrow: "5. Mehr",
-    title: "Wenn du willst, geht danach noch mehr",
-    description:
-      "Auto-Raid ist der Einstieg. Danach kannst du weitere Funktionen wie Commands, Leaderboards, Affiliate-Links und Analysen nach und nach freischalten und nutzen.",
-    bullets: [
-      "Commands wie !twl zeigen deinen Viewern weitere live gehende Partner.",
-      "Leaderboards und Analytics helfen dir, deine Community besser zu verstehen.",
-      "Weitere Funktionen warten im Dashboard und in der FAQ auf dich.",
-    ],
-    routeLabel: "Alle Features in der FAQ",
-    routeHref: TWITCH_FAQ_URL,
-  },
-];
-
-export const ONBOARDING_CAPABILITIES: CapabilityCard[] = [
-  {
-    title: "Deadlock-Partnernetzwerk",
-    description:
-      "Das Herzstück des Bots: Streamer unterstützen sich über automatische Raids gegenseitig und bleiben im Deadlock-Netzwerk sichtbar.",
-    bullets: [
-      "Auto-Raids nur bei Deadlock",
-      "Das Netzwerk funktioniert in beide Richtungen",
-      "Manuelles Raiden bleibt wie gewohnt",
-    ],
-  },
-  {
-    title: "Dashboard & Insights",
-    description:
-      "Hier siehst du, wie dein Kanal läuft und was im Netzwerk passiert. Von Raid-Verlauf bis Viewer-Mustern ist alles an einem Ort.",
-    bullets: [
-      "Viewer-Trends und Session-Details",
-      "Heatmaps und Verlauf über Zeit",
-      "Raid-History und Analytics",
-    ],
-  },
-  {
-    title: "Discord-Community",
-    description:
-      "Go-Live-Posts, Community-Sichtbarkeit und direkter Kontakt zu anderen Deadlock-Spielern machen den Discord zum sinnvollen Zusatz für jeden Partner.",
-    bullets: [
-      "Automatische Go-Live-Benachrichtigungen",
-      "Streamer-Bereich und Support",
-      "Community-Events und gemeinsames Spielen",
-    ],
-  },
-  {
-    title: "KI-Coaching",
-    description:
-      "Wenn du tiefer einsteigen willst, bekommst du datenbasierte Hinweise dazu, wann dein Stream gut läuft und was bei deiner Community funktioniert.",
-    bullets: [
-      "Empfehlungen für Wachstum",
-      "Tag- und Titel-Analyse",
-      "Watch-Time und Retention",
-    ],
-  },
-  {
-    title: "Community & Netzwerk",
-    description:
-      "Commands, Leaderboards und weitere Tools helfen dir dabei, deine Zuschauer besser einzubinden und das Netzwerk aktiv zu nutzen.",
-    bullets: [
-      "Viewer-Leaderboard für treue Zuschauer",
-      "Chat-Commands wie !twl",
-      "Weitere Tools direkt im Dashboard",
-    ],
-  },
 ];
 
 export const START_CHECKLIST: ChecklistItem[] = [
@@ -194,13 +107,6 @@ export const START_CHECKLIST: ChecklistItem[] = [
       "Aktiviere den Bot für deinen Kanal und werde Teil des Deadlock-Partnernetzwerks.",
     href: buildTwitchBotAuthUrl(),
     label: "Bot für deinen Kanal aktivieren",
-  },
-  {
-    title: "Auto-Raid verstehen",
-    description:
-      "Wichtigster Punkt für den Start: Der Bot raidet nur dann automatisch, wenn du Deadlock streamst und offline gehst.",
-    href: `${TWITCH_FAQ_URL}#raids`,
-    label: "Auto-Raid erklärt",
   },
   {
     title: "Dashboard erkunden",
@@ -215,18 +121,6 @@ export const START_CHECKLIST: ChecklistItem[] = [
       "Mehr Sichtbarkeit, automatische Go-Live-Posts und schneller Kontakt zur Community.",
     href: DISCORD_INVITE_URL,
     label: "Discord beitreten",
-  },
-  {
-    title: "Mit anderen Streamern connecten",
-    description:
-      "Je stärker du im Netzwerk unterwegs bist, desto mehr lohnt sich das Partnernetzwerk auch für deinen Kanal.",
-  },
-  {
-    title: "Danach tiefer einsteigen",
-    description:
-      "In der FAQ findest du alle weiteren Details zu Auto-Raid, Dashboard, Discord und den restlichen Features.",
-    href: TWITCH_FAQ_URL,
-    label: "FAQ öffnen",
   },
 ];
 
