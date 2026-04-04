@@ -129,3 +129,11 @@ export interface CatalogPlan {
   features: string[];
   is_current: boolean;
 }
+
+// Trial information derived from plan status
+export interface TrialInfo {
+  trialEndsAt: string | null;  // ISO date string
+  isInTrial: boolean;
+  trialDaysRemaining: number;
+  onTrialExpiringSoon: boolean;  // true when < 7 days remaining
+}

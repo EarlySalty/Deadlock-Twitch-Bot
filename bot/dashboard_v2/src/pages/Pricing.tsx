@@ -1,143 +1,123 @@
-import { Check, Sparkles, Star } from 'lucide-react';
+import { useState } from 'react';
+import { motion, AnimatePresence } from 'framer-motion';
+import { ChevronDown, HelpCircle } from 'lucide-react';
 import { useBillingCatalog } from '../hooks/useAnalytics';
+import PricingHero from '../components/pricing/PricingHero';
+import TrialCallout from '../components/pricing/TrialCallout';
+import PlanCardRedesign from '../components/pricing/PlanCardRedesign';
+import FeatureComparisonGrid from '../components/pricing/FeatureComparisonGrid';
 
-// Fetch from /twitch/api/v2/billing/catalog
-// Response: { plans: CatalogPlan[] }
+const faqData = [
+  {
+    question: 'Wie funktioniert die 45-tägige kostenlose Testphase?',
+    answer:
+      'Du meldest dich an, wählst einen Plan aus und kannst ihn 45 Tage lang kostenlos nutzen. Deine Kreditkarte wird erst nach Ablauf der Testphase belastet – vorausgesetzt, du kündigst nicht vorher.',
+  },
+  {
+    question: 'Kann ich meinen Plan jederzeit kündigen?',
+    answer:
+      'Ja, du kannst dein Abonnement jederzeit kündigen. Es gibt keine Mindestlaufzeit. Bis zum Ende des Abrechnungszeitraums behältst du vollen Zugang zu deinen Features.',
+  },
+  {
+    question: 'Was passiert mit meinen Daten nach der Kündigung?',
+    answer:
+      'Deine Analytics-Daten bleiben für 30 Tage nach Kündigung gespeichert. Du kannst sie jederzeit exportieren oder dein Konto reaktivieren, um wieder Zugang zu erhalten.',
+  },
+  {
+    question: 'Welcher Plan ist der richtige für mich?',
+    answer:
+      'Der Basic-Plan ist ideal für Streamer, die ihre Analytics verbessern möchten. Der Extended-Plan enthält zusätzlich KI-gestützte Analysen und Coaching-Features für alle, die professionell wachsen wollen.',
+  },
+];
+
+function FAQItem({ question, answer }: { question: string; answer: string }) {
+  const [isOpen, setIsOpen] = useState(false);
+
+  return (
+    <div className="border-b border-white/5 last:border-0">
+      <button
+        onClick={() => setIsOpen(!isOpen)}
+        className="w-full flex items-center justify-between py-4 text-left hover:text-white/80 transition-colors"
+      >
+        <span className="font-medium text-white/80">{question}</span>
+        <ChevronDown
+          className={`w-5 h-5 text-white/40 transition-transform duration-200 ${
+            isOpen ? 'rotate-180' : ''
+          }`}
+        />
+      </button>
+      <AnimatePresence>
+        {isOpen && (
+          <motion.div
+            initial={{ height: 0, opacity: 0 }}
+            animate={{ height: 'auto', opacity: 1 }}
+            exit={{ height: 0, opacity: 0 }}
+            transition={{ duration: 0.2 }}
+            className="overflow-hidden"
+          >
+            <p className="pb-4 text-white/50 leading-relaxed">{answer}</p>
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </div>
+  );
+}
 
 export default function Pricing() {
   const { data } = useBillingCatalog();
-
   const plans = data?.plans ?? [];
 
   return (
     <div className="max-w-5xl mx-auto px-4 py-8">
-      {/* Hero */}
-      <div className="text-center mb-10">
-        <h1 className="text-3xl font-bold text-white mb-2">
-          Dein Wachstums-Coach für Twitch
-        </h1>
-        <p className="text-white/50 text-lg">
-          So holst du noch mehr aus deinem Kanal raus.
-        </p>
-      </div>
+      {/* Hero Section */}
+      <PricingHero />
 
-      {/* Plan Cards */}
+      {/* Trial Callout Banner */}
+      <TrialCallout />
+
+      {/* Plan Cards Grid */}
       <div className="grid md:grid-cols-3 gap-6 mb-12">
-        {plans.map((plan) => {
-          const isCurrent = plan.is_current;
-          const isPopular = plan.tier === 'basic';
-          const isExtended = plan.tier === 'extended';
-
-          return (
-            <div
-              key={plan.id}
-              className={`relative bg-card rounded-2xl border p-6 flex flex-col ${
-                isPopular
-                  ? 'border-purple-400/40 shadow-lg shadow-purple-500/10'
-                  : 'border-border'
-              }`}
-            >
-              {isPopular && (
-                <div className="absolute -top-3 left-1/2 -translate-x-1/2 px-3 py-1 rounded-full bg-purple-500 text-white text-xs font-medium flex items-center gap-1">
-                  <Star className="w-3 h-3" /> Beliebt
-                </div>
-              )}
-
-              <div className="mb-4">
-                <div className="flex items-center gap-2 mb-1">
-                  {isExtended && <Sparkles className="w-5 h-5 text-purple-400" />}
-                  <h2 className="text-xl font-bold text-white">{plan.name}</h2>
-                </div>
-                <div className="flex items-baseline gap-1">
-                  <span className="text-3xl font-bold text-white">
-                    {plan.price_monthly === 0 ? 'Kostenlos' : `${plan.price_monthly.toFixed(2).replace('.', ',')}€`}
-                  </span>
-                  {plan.price_monthly > 0 && (
-                    <span className="text-white/40 text-sm">/Monat</span>
-                  )}
-                </div>
-              </div>
-
-              <ul className="space-y-3 flex-1 mb-6">
-                {plan.features.map((feature) => (
-                  <li key={feature} className="flex items-start gap-2 text-sm">
-                    <Check className={`w-4 h-4 mt-0.5 flex-shrink-0 ${
-                      isExtended ? 'text-purple-400' : isPopular ? 'text-emerald-400' : 'text-white/30'
-                    }`} />
-                    <span className="text-white/70">{feature}</span>
-                  </li>
-                ))}
-              </ul>
-
-              {isCurrent ? (
-                <div className="text-center py-2.5 rounded-xl bg-white/5 text-white/50 text-sm font-medium">
-                  Aktueller Plan
-                </div>
-              ) : (
-                <a
-                  href="/twitch/abbo"
-                  className={`text-center py-2.5 rounded-xl text-sm font-medium transition-colors ${
-                    isPopular
-                      ? 'bg-purple-500 hover:bg-purple-400 text-white'
-                      : isExtended
-                      ? 'bg-gradient-to-r from-purple-500 to-pink-500 hover:from-purple-400 hover:to-pink-400 text-white'
-                      : 'bg-white/10 hover:bg-white/15 text-white'
-                  }`}
-                >
-                  {plan.price_monthly === 0 ? 'Loslegen' : 'Upgrade'}
-                </a>
-              )}
-            </div>
-          );
-        })}
+        {plans.map((plan, index) => (
+          <PlanCardRedesign key={plan.id} plan={plan} index={index} />
+        ))}
       </div>
 
-      {/* Feature Comparison Matrix */}
-      <div className="bg-card rounded-2xl border border-border p-6">
-        <h2 className="text-lg font-bold text-white mb-4">Feature-Vergleich</h2>
-        <div className="overflow-x-auto">
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="border-b border-white/10">
-                <th className="text-left py-3 text-white/40 font-normal">Feature</th>
-                <th className="text-center py-3 text-white/60 font-medium">Free</th>
-                <th className="text-center py-3 text-purple-400 font-medium">Basic</th>
-                <th className="text-center py-3 text-pink-400 font-medium">Erweitert</th>
-              </tr>
-            </thead>
-            <tbody className="text-white/60">
-              {[
-                ['Analytics Tabs', '4', '8', '13'],
-                ['Viewer-Trend', '✓', '✓', '✓'],
-                ['Stream-Übersicht', '✓', '✓', '✓'],
-                ['Schedule Heatmap', '✓', '✓', '✓'],
-                ['Chat-Analytics', '–', '✓', '✓'],
-                ['Growth-Tracking', '–', '✓', '✓'],
-                ['Audience-Insights', '–', '✓', '✓'],
-                ['Kategorie-Vergleich', '–', '✓', '✓'],
-                ['AI-Analyse', '–', '–', '✓'],
-                ['Viewer-Profile', '–', '–', '✓'],
-                ['Coaching', '–', '–', '✓'],
-                ['Monetization', '–', '–', '✓'],
-              ].map(([feature, free, basic, ext]) => (
-                <tr key={feature} className="border-b border-white/5">
-                  <td className="py-2.5">{feature}</td>
-                  <td className="text-center">{free === '✓' ? <Check className="w-4 h-4 text-white/30 mx-auto" /> : free === '–' ? <span className="text-white/20">–</span> : free}</td>
-                  <td className="text-center">{basic === '✓' ? <Check className="w-4 h-4 text-emerald-400 mx-auto" /> : basic === '–' ? <span className="text-white/20">–</span> : basic}</td>
-                  <td className="text-center">{ext === '✓' ? <Check className="w-4 h-4 text-purple-400 mx-auto" /> : ext === '–' ? <span className="text-white/20">–</span> : ext}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+      {/* Feature Comparison */}
+      <FeatureComparisonGrid />
+
+      {/* FAQ Section */}
+      <motion.div
+        initial={{ opacity: 0, y: 20 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ duration: 0.4, delay: 0.5 }}
+        className="bg-card rounded-2xl border border-border p-6 md:p-8"
+      >
+        <div className="flex items-center gap-3 mb-6">
+          <HelpCircle className="w-5 h-5 text-[#ff7a18]" />
+          <h2 className="text-xl font-bold text-white">Häufige Fragen</h2>
         </div>
-      </div>
+        <div>
+          {faqData.map((faq, index) => (
+            <FAQItem key={index} question={faq.question} answer={faq.answer} />
+          ))}
+        </div>
+      </motion.div>
 
-      {/* Back link */}
-      <div className="text-center mt-8">
-        <a href="/twitch/dashboard" className="text-sm text-white/40 hover:text-white/60 transition-colors">
-          ← Zurück zum Dashboard
+      {/* Bottom CTA */}
+      <motion.div
+        initial={{ opacity: 0 }}
+        animate={{ opacity: 1 }}
+        transition={{ duration: 0.4, delay: 0.6 }}
+        className="text-center mt-12 mb-8"
+      >
+        <p className="text-white/40 mb-4">Noch nicht überzeugt?</p>
+        <a
+          href="/twitch/dashboard"
+          className="inline-flex items-center gap-2 text-[#10b7ad] hover:text-[#1dd4ca] font-medium transition-colors"
+        >
+          Zurück zum Dashboard
         </a>
-      </div>
+      </motion.div>
     </div>
   );
 }

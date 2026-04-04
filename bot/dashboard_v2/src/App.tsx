@@ -20,6 +20,8 @@ import { InternalHomeLanding } from '@/pages/InternalHomeLanding';
 import { VerwaltungPage } from '@/pages/Verwaltung';
 import Pricing from '@/pages/Pricing';
 import { PlanProvider } from '@/context/PlanContext';
+import { TrialBanner } from '@/components/banners/TrialBanner';
+import { TrialExpiryModal } from '@/components/modals/TrialExpiryModal';
 import { useStreamerList, useAuthStatus } from '@/hooks/useAnalytics';
 import type { TimeRange } from '@/types/analytics';
 import { dashboardRuntimeConfig, resolveEffectiveDemoMode } from '@/runtimeConfig';
@@ -248,6 +250,9 @@ function AnalyticsDashboard() {
           isLocalhost={authStatus?.isLocalhost ?? false}
           isDemoMode={isDemoMode}
         >
+          <TrialExpiryModal />
+          <TrialBanner />
+
           <Header
             streamer={streamer}
             streamers={streamers}

@@ -1,5 +1,5 @@
 import { createContext, useContext, useState, useEffect, useMemo, type ReactNode } from 'react';
-import type { EntitlementId, PlanTier, DashboardView, PlanStatus, TabId, FeatureId } from '../types/billing';
+import type { EntitlementId, PlanTier, DashboardView, PlanStatus, TabId, FeatureId, TrialInfo } from '../types/billing';
 import { ALL_ENTITLEMENTS, TAB_ENTITLEMENTS, FEATURE_ENTITLEMENTS } from '../types/billing';
 
 interface PlanContextType {
@@ -15,6 +15,7 @@ interface PlanContextType {
   isTabLocked: (tabId: TabId) => boolean;
   isFeatureLocked: (featureId: FeatureId) => boolean;
   hasFullAccess: boolean;
+  trialInfo: TrialInfo | null;
 }
 
 const PlanContext = createContext<PlanContextType | null>(null);
@@ -47,6 +48,28 @@ export function PlanProvider({ children, plan, isAdmin, isLocalhost, isDemoMode 
 
   const isPreviewMode = view === 'extended' && !hasExtendedAnalytics;
 
+  // Compute trial info from plan snapshot
+  const trialInfo = useMemo<TrialInfo | null>(() => {
+    // Try to get trial_end_at from plan metadata or source field
+    const trialEndsAt = (plan as { trial_end_at?: string } | null)?.trial_end_at ?? null;
+
+    if (!trialEndsAt) return null;
+
+    const now = new Date();
+    const trialEnd = new Date(trialEndsAt);
+    const diffMs = trialEnd.getTime() - now.getTime();
+    const diffDays = Math.ceil(diffMs / (1000 * 60 * 60 * 24));
+
+    if (diffDays < 0) return null; // trial already expired
+
+    return {
+      trialEndsAt,
+      isInTrial: true,
+      trialDaysRemaining: diffDays,
+      onTrialExpiringSoon: diffDays < 7,
+    };
+  }, [plan]);
+
   const value = useMemo<PlanContextType>(() => ({
     tier,
     plan,
@@ -77,7 +100,8 @@ export function PlanProvider({ children, plan, isAdmin, isLocalhost, isDemoMode 
       return !entitlements.includes(requiredEntitlement);
     },
     hasFullAccess,
-  }), [tier, plan, entitlements, view, isDemoMode, isPreviewMode, hasFullAccess]);
+    trialInfo,
+  }), [tier, plan, entitlements, view, isDemoMode, isPreviewMode, hasFullAccess, trialInfo]);
 
   return <PlanContext.Provider value={value}>{children}</PlanContext.Provider>;
 }
