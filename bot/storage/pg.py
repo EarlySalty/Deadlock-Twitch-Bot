@@ -1119,6 +1119,10 @@ def insert_observability_event(
     if not safe_flow_type or not safe_flow_id or not safe_step or not safe_decision:
         return
 
+    # Skip failed events – they are noise for the DB (high volume, low value)
+    if safe_decision == "failed":
+        return
+
     safe_login = _safe_observability_text(entity_login, limit=80)
     safe_entity_id = _safe_observability_text(entity_id, limit=80)
     try:
