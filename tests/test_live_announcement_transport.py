@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import unittest
 from unittest.mock import patch
 
@@ -334,6 +335,105 @@ class LiveAnnouncementTransportTests(unittest.IsolatedAsyncioTestCase):
         ):
             with self.assertRaisesRegex(ValueError, "loopback"):
                 dummy._master_broker_base_url()
+
+    async def test_post_master_broker_json_retries_once_on_timeout(self) -> None:
+        dummy = _DummyMonitoring()
+        session_attempt = 0
+
+        class _FakeResponse:
+            status = 200
+
+            async def text(self):
+                return '{"ok": true, "result": {"message_id": 7777}}'
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *args):
+                pass
+
+        class _FakeClientSession:
+            def __init__(self, *args, **kwargs):
+                nonlocal session_attempt
+                session_attempt += 1
+                self._should_timeout = session_attempt == 1
+
+            def post(self, *args, **kwargs):
+                if self._should_timeout:
+                    raise asyncio.TimeoutError()
+                return _FakeResponse()
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *args):
+                pass
+
+        sleep_calls: list[float] = []
+
+        async def _fake_sleep(secs: float) -> None:
+            sleep_calls.append(secs)
+
+        with (
+            patch("aiohttp.ClientSession", _FakeClientSession),
+            patch("asyncio.sleep", _fake_sleep),
+            patch.dict(
+                "os.environ",
+                {"MASTER_BROKER_TOKEN": "test-token"},
+                clear=False,
+            ),
+        ):
+            result = await dummy._post_master_broker_json(
+                path="/internal/master/v1/discord/send-rich-message",
+                payload={"key": "value"},
+                idempotency_key="idem-key",
+            )
+
+        self.assertIsNotNone(result)
+        self.assertEqual(session_attempt, 2, "should have made exactly 2 attempts")
+        self.assertEqual(sleep_calls, [2], "should have slept once between attempts")
+
+    async def test_post_master_broker_json_gives_up_after_max_retries(self) -> None:
+        dummy = _DummyMonitoring()
+        session_attempt = 0
+
+        class _AlwaysTimeoutSession:
+            def __init__(self, *args, **kwargs):
+                nonlocal session_attempt
+                session_attempt += 1
+
+            def post(self, *args, **kwargs):
+                raise asyncio.TimeoutError()
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *args):
+                pass
+
+        sleep_calls: list[float] = []
+
+        async def _fake_sleep(secs: float) -> None:
+            sleep_calls.append(secs)
+
+        with (
+            patch("aiohttp.ClientSession", _AlwaysTimeoutSession),
+            patch("asyncio.sleep", _fake_sleep),
+            patch.dict(
+                "os.environ",
+                {"MASTER_BROKER_TOKEN": "test-token"},
+                clear=False,
+            ),
+        ):
+            result = await dummy._post_master_broker_json(
+                path="/internal/master/v1/discord/send-rich-message",
+                payload={"key": "value"},
+                idempotency_key="idem-key",
+            )
+
+        self.assertIsNone(result)
+        self.assertEqual(session_attempt, 2, "should stop after 2 attempts")
+        self.assertEqual(len(sleep_calls), 1, "should sleep exactly once between attempts")
 
 
 if __name__ == "__main__":

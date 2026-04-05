@@ -477,36 +477,49 @@ class TwitchMonitoringMixin(_EventSubMixin, _ExpSessionsMixin, _SessionsMixin, _
             "X-Idempotency-Key": idempotency_key,
         }
         timeout = aiohttp.ClientTimeout(total=10)
+        max_attempts = 2
+        parsed: dict[str, object] = {}
 
-        try:
-            async with aiohttp.ClientSession(timeout=timeout) as session:
-                async with session.post(
-                    url,
-                    headers=headers,
-                    json=payload,
-                    allow_redirects=False,
-                ) as response:
-                    raw_text = await response.text()
-                    try:
-                        parsed = json.loads(raw_text) if raw_text.strip() else {}
-                    except Exception:
-                        parsed = {}
-                    if response.status >= 400:
-                        error_code = self._extract_master_broker_error_code(parsed)
-                        log.warning(
-                            "Master broker request failed (%s %s): status=%s body=%s",
-                            path,
-                            idempotency_key,
-                            response.status,
-                            raw_text[:500],
-                        )
-                        return (None, error_code) if include_error_code else None
-        except asyncio.TimeoutError:
-            log.warning("Master broker request timed out for %s", path)
-            return (None, None) if include_error_code else None
-        except Exception:
-            log.exception("Master broker request failed for %s", path)
-            return (None, None) if include_error_code else None
+        for attempt in range(1, max_attempts + 1):
+            try:
+                async with aiohttp.ClientSession(timeout=timeout) as session:
+                    async with session.post(
+                        url,
+                        headers=headers,
+                        json=payload,
+                        allow_redirects=False,
+                    ) as response:
+                        raw_text = await response.text()
+                        try:
+                            parsed = json.loads(raw_text) if raw_text.strip() else {}
+                        except Exception:
+                            parsed = {}
+                        if response.status >= 400:
+                            error_code = self._extract_master_broker_error_code(parsed)
+                            log.warning(
+                                "Master broker request failed (%s %s): status=%s body=%s",
+                                path,
+                                idempotency_key,
+                                response.status,
+                                raw_text[:500],
+                            )
+                            return (None, error_code) if include_error_code else None
+            except asyncio.TimeoutError:
+                if attempt < max_attempts:
+                    log.warning(
+                        "Master broker request timed out for %s (attempt %d/%d), retrying",
+                        path,
+                        attempt,
+                        max_attempts,
+                    )
+                    await asyncio.sleep(2)
+                    continue
+                log.warning("Master broker request timed out for %s", path)
+                return (None, None) if include_error_code else None
+            except Exception:
+                log.exception("Master broker request failed for %s", path)
+                return (None, None) if include_error_code else None
+            break  # request succeeded, exit retry loop
 
         if not isinstance(parsed, dict) or not parsed.get("ok"):
             log.warning(
