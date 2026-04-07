@@ -124,7 +124,7 @@ def _env_float(name: str, default: float, *, minimum: float) -> float:
 
 _CONNECTION_POOL_MAXSIZE = _env_int(
     "TWITCH_ANALYTICS_POOL_MAXSIZE",
-    12,
+    4,
     minimum=1,
 )
 _CONNECTION_POOL_TIMEOUT_SECONDS = _env_float(
