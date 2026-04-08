@@ -1837,13 +1837,14 @@ class _EventSubMixin:
             self._eventsub_offline_throttle = throttle
         now = time.time()
         last_ts = throttle.get(broadcaster_id)
-        if last_ts and now - last_ts < 90:
+        if last_ts and now - last_ts < 120:
+            log.debug("EventSub Offline-Throttle: %s noch in 120s-Fenster, ignoriere", broadcaster_id)
             return
         if self._persistent_eventsub_guards_enabled():
             guard_claimed = self._get_eventsub_state_store().claim(
                 EVENTSUB_STATE_KIND_OFFLINE_THROTTLE,
                 str(broadcaster_id),
-                ttl_seconds=90.0,
+                ttl_seconds=120.0,
             )
             if not guard_claimed:
                 throttle[broadcaster_id] = now
