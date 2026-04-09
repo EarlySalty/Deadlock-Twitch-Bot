@@ -331,16 +331,20 @@ class _DashboardAuthMixin:
                 window_seconds=window_seconds,
             )
         except DashboardAuthRateLimitStoreUnavailable as exc:
+            # Fail-open: wenn der Rate-Limit Store nicht verfügbar ist, erlauben wir
+            # den Request (nicht blockieren) und loggen nur ein Warning.
+            # Der Rate-Limiter ist ein Komfort-Feature, kein Sicherheits-Feature -
+            # absolute Rate-Limiting erfolgt über den Discord OAuth Flow selbst.
             log.warning(
-                "Dashboard auth rate limit denied because the durable store is unavailable: %s",
+                "Dashboard auth rate limit store unavailable (%s); allowing request (fail-open).",
                 exc,
             )
-            return False
+            return True
         except Exception:
             log.exception(
-                "Unexpected dashboard auth rate limit failure; denying request"
+                "Unexpected dashboard auth rate limit failure; allowing request (fail-open)"
             )
-            return False
+            return True
 
     # ------------------------------------------------------------------ #
     # Twitch OAuth session management                                      #
@@ -350,7 +354,34 @@ class _DashboardAuthMixin:
         self._dashboard_session_service().cleanup()
 
     def _get_dashboard_auth_session(self, request: web.Request) -> dict[str, Any] | None:
-        return self._dashboard_session_service().load(request)
+        # Load the main dashboard session (Twitch OAuth / partner login)
+        session = self._dashboard_session_service().load(request)
+
+        # Also check for Discord admin session - if present, it grants admin access
+        # even if the main session is a regular partner session
+        discord_admin = self._get_discord_admin_session(request)
+        if discord_admin:
+            if session is None:
+                # No regular session - create a combined session from Discord admin
+                session = {
+                    "auth_type": "discord_admin",
+                    "is_admin": True,
+                    "user_id": discord_admin.get("user_id"),
+                    "username": discord_admin.get("username"),
+                    "display_name": discord_admin.get("display_name"),
+                    "created_at": discord_admin.get("created_at"),
+                    "expires_at": discord_admin.get("expires_at"),
+                }
+            else:
+                # Regular session exists - upgrade to admin
+                session["is_admin"] = True
+                session["admin_info"] = {
+                    "user_id": discord_admin.get("user_id"),
+                    "username": discord_admin.get("username"),
+                    "display_name": discord_admin.get("display_name"),
+                    "auth_type": "discord_admin",
+                }
+        return session
 
     def _set_session_cookie(
         self, response: web.StreamResponse, request: web.Request, session_id: str

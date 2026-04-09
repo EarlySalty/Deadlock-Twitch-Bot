@@ -327,8 +327,11 @@ class DashboardV2Server(
             "TWITCH_TRUSTED_PROXY_CIDRS",
             "TRUSTED_PROXY_CIDRS",
         )
-        self._discord_admin_cookie_name = "twitch_admin_session"
-        self._discord_admin_session_ttl = self._session_ttl_seconds
+        # Discord Admin nutzt die gleiche Session-Cookie wie Twitch OAuth
+        # für gemeinsame Admin-Session über beide Login-Methoden
+        self._discord_admin_cookie_name = self._session_cookie_name
+        # Admin Discord sessions sind 24h gültig (statt der generischen 6h)
+        self._discord_admin_session_ttl = 24 * 3600
         self._discord_admin_state_ttl = 600
         self._discord_admin_oauth_states: dict[str, dict[str, Any]] = {}
         self._discord_admin_sessions: dict[str, dict[str, Any]] = {}
