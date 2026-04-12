@@ -354,6 +354,17 @@ class DashboardAuthStateRepository:
 class DashboardAuthRateLimitStore:
     """Durable sliding-window limiter backed by shared PostgreSQL session storage."""
 
+    def __init__(self) -> None:
+        self._last_cleanup_at = 0.0
+
+    def _maybe_cleanup_expired(self, *, now: float) -> None:
+        # Rate-limit hits are short-lived; periodic purge keeps the shared session
+        # table from accumulating expired login buckets between normal auth cleanups.
+        if now - self._last_cleanup_at < 30.0:
+            return
+        sessions_db.delete_expired_sessions(now)
+        self._last_cleanup_at = now
+
     def allow_request(
         self,
         *,
@@ -367,6 +378,8 @@ class DashboardAuthRateLimitStore:
             return False
         if window_seconds <= 0:
             return True
+
+        self._maybe_cleanup_expired(now=current)
 
         bucket_prefix = self._bucket_prefix(key=key, window_seconds=window_seconds)
         try:

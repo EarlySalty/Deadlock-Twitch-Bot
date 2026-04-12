@@ -6,6 +6,7 @@ import json
 import os
 import shlex
 import sys
+import socket
 from urllib import error, parse, request
 
 
@@ -22,6 +23,7 @@ def _fetch_secrets() -> list[dict[str, object]]:
     environment = _required("INFISICAL_ENV")
     service_token = _required("INFISICAL_SERVICE_TOKEN")
     secret_path = (os.getenv("INFISICAL_SECRET_PATH") or "/").strip() or "/"
+    timeout = float(os.getenv("INFISICAL_HTTP_TIMEOUT", "10"))
 
     query = parse.urlencode(
         {
@@ -44,11 +46,13 @@ def _fetch_secrets() -> list[dict[str, object]]:
     )
 
     try:
-        with request.urlopen(req) as resp:
+        with request.urlopen(req, timeout=timeout) as resp:
             payload = json.loads(resp.read().decode("utf-8"))
     except error.HTTPError as exc:
         body = exc.read().decode("utf-8", errors="replace")
         raise SystemExit(f"Infisical request failed with HTTP {exc.code}: {body}") from exc
+    except (error.URLError, ConnectionResetError, TimeoutError, socket.timeout, OSError) as exc:
+        raise SystemExit(f"Infisical request failed: {exc}") from exc
 
     secrets = list(payload.get("secrets") or [])
     for imported in payload.get("imports") or []:

@@ -21,6 +21,7 @@ from urllib.parse import urlsplit
 import psycopg
 from psycopg.conninfo import conninfo_to_dict
 
+from ..secret_store import keyring_enabled
 from ._pool import ConnectionPoolRegistry
 from ._rows import storage_row_factory
 from .partner_registry import (
@@ -607,6 +608,8 @@ def _load_dsn() -> str:
     env_dsn = (os.getenv(ENV_DSN) or "").strip()
     if env_dsn:
         return env_dsn
+    if not keyring_enabled():
+        raise RuntimeError(f"{ENV_DSN} not set")
     try:
         import keyring  # type: ignore
 

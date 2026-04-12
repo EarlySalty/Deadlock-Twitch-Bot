@@ -7,10 +7,20 @@ import os
 KEYRING_SERVICE_NAME = "DeadlockBot"
 
 
+def keyring_enabled() -> bool:
+    """Allow keyring on Windows by default, elsewhere only via explicit opt-in."""
+    raw = str(os.getenv("DEADLOCK_ENABLE_KEYRING") or "").strip().lower()
+    if raw:
+        return raw in {"1", "true", "yes", "on"}
+    return os.name == "nt"
+
+
 def read_keyring_secret(key: str) -> str:
     """Return a trimmed secret from Windows Credential Manager when available."""
     secret_key = str(key or "").strip()
     if not secret_key:
+        return ""
+    if not keyring_enabled():
         return ""
 
     try:

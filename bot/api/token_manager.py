@@ -11,6 +11,8 @@ from pathlib import Path
 
 import aiohttp
 
+from ..secret_store import keyring_enabled
+
 log = logging.getLogger("TwitchStreams.TokenManager")
 
 
@@ -321,6 +323,9 @@ class TwitchBotTokenManager:
                     "Configured bot auth file could not be read (%s).", _exc_name(exc)
                 )  # nosemgrep: python.lang.security.audit.logging.logger-credential-leak.python-logger-credential-disclosure
 
+        if not keyring_enabled():
+            return None, None
+
         try:
             import keyring  # type: ignore
 
@@ -351,6 +356,8 @@ class TwitchBotTokenManager:
 
     async def _save_tokens(self):
         """Persist tokens to Windows Credential Manager (if available)."""
+        if not keyring_enabled():
+            return
         try:
             import keyring  # type: ignore
         except Exception as exc:

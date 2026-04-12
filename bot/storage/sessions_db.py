@@ -17,6 +17,7 @@ import json
 from typing import TYPE_CHECKING
 
 from ..core.constants import log
+from ..secret_store import keyring_enabled
 from .pg import readonly_connection, transaction
 
 if TYPE_CHECKING:
@@ -40,31 +41,33 @@ def _escape_like(value: str) -> str:
 
 def _load_or_create_key() -> bytes:
     """Return the Fernet key from keyring, creating and storing it on first use."""
-    try:
-        import keyring  # type: ignore
+    if keyring_enabled():
+        try:
+            import keyring  # type: ignore
 
-        val = keyring.get_password(_KEYRING_SERVICE, _KEYRING_KEY_NAME)
-        if val:
-            return val.encode()
-    except Exception as exc:
-        log.debug("Keyring read for sessions key failed: %s", exc)
+            val = keyring.get_password(_KEYRING_SERVICE, _KEYRING_KEY_NAME)
+            if val:
+                return val.encode()
+        except Exception as exc:
+            log.debug("Keyring read for sessions key failed: %s", exc)
 
     from cryptography.fernet import Fernet
 
     key = Fernet.generate_key()
     log.info("Sessions: generated new encryption key")
-    try:
-        import keyring  # type: ignore
+    if keyring_enabled():
+        try:
+            import keyring  # type: ignore
 
-        keyring.set_password(_KEYRING_SERVICE, _KEYRING_KEY_NAME, key.decode())
-        log.info("Sessions: stored encryption key in Windows Credential Manager")
-    except Exception as exc:
-        log.error(
-            "Sessions: CRITICAL - could not store encryption key in keyring (%s). "
-            "Sessions will not survive restarts until the key is persisted. "
-            "Store manually: keyring.set_password('DeadlockBot', 'SESSIONS_ENCRYPTION_KEY', <key>)",
-            exc,
-        )
+            keyring.set_password(_KEYRING_SERVICE, _KEYRING_KEY_NAME, key.decode())
+            log.info("Sessions: stored encryption key in Windows Credential Manager")
+        except Exception as exc:
+            log.error(
+                "Sessions: CRITICAL - could not store encryption key in keyring (%s). "
+                "Sessions will not survive restarts until the key is persisted. "
+                "Store manually: keyring.set_password('DeadlockBot', 'SESSIONS_ENCRYPTION_KEY', <key>)",
+                exc,
+            )
     return key
 
 

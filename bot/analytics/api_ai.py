@@ -14,6 +14,7 @@ from datetime import UTC, datetime, timedelta
 
 from aiohttp import web
 
+from ..secret_store import keyring_enabled
 from .error_utils import analytics_internal_error_response
 from ..storage import pg as storage
 
@@ -94,15 +95,16 @@ def _get_async_client():
         ) from exc
 
     api_key = ""
-    try:
-        import keyring
-        api_key = (
-            keyring.get_password("ANTHROPIC_API_KEY@DeadlockBot", "ANTHROPIC_API_KEY")
-            or keyring.get_password("DeadlockBot", "ANTHROPIC_API_KEY")
-            or ""
-        )
-    except Exception:
-        pass
+    if keyring_enabled():
+        try:
+            import keyring
+            api_key = (
+                keyring.get_password("ANTHROPIC_API_KEY@DeadlockBot", "ANTHROPIC_API_KEY")
+                or keyring.get_password("DeadlockBot", "ANTHROPIC_API_KEY")
+                or ""
+            )
+        except Exception:
+            pass
 
     if not api_key:
         api_key = os.environ.get("ANTHROPIC_API_KEY", "")

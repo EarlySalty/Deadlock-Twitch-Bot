@@ -17,6 +17,7 @@ from ..core.constants import log
 from ..core.twitch_login import normalize_twitch_login
 from ..runtime.contracts import DashboardBotService
 from ..runtime.dashboard_runtime import DashboardRuntimeServices
+from ..secret_store import keyring_enabled
 from ..storage import pg as storage_pg
 from .admin.legal_mixin import _DashboardLegalMixin
 from .affiliate.affiliate_mixin import _DashboardAffiliateMixin
@@ -441,6 +442,8 @@ class DashboardV2Server(
         secret_key = (key or "").strip()
         if not secret_key:
             return ""
+        if not keyring_enabled():
+            return ""
         try:
             import keyring
         except Exception:
@@ -457,6 +460,8 @@ class DashboardV2Server(
     def _write_keyring_secret(key: str, value: str | None) -> bool:
         secret_key = (key or "").strip()
         if not secret_key:
+            return False
+        if not keyring_enabled():
             return False
         try:
             import keyring
@@ -661,9 +666,18 @@ class DashboardV2Server(
             parsed = urlsplit(candidate)
         except Exception:
             return fallback
-        if parsed.scheme or parsed.netloc:
+        if not parsed.scheme and not parsed.netloc:
+            if not (parsed.path or "").startswith("/twitch/auth/discord/login"):
+                return fallback
+            return candidate
+
+        host = (parsed.netloc or "").split("@")[-1].split(":", 1)[0].strip().lower()
+        path = (parsed.path or "").strip()
+        if parsed.scheme != "https":
             return fallback
-        if not (parsed.path or "").startswith("/twitch/auth/discord/login"):
+        if host not in {"discord.com", "www.discord.com"}:
+            return fallback
+        if path not in {"/oauth2/authorize", "/api/oauth2/authorize", "/api/v10/oauth2/authorize"}:
             return fallback
         return candidate
 

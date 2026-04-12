@@ -4,6 +4,8 @@ import os
 from datetime import datetime, timedelta
 from pathlib import Path
 
+from ..secret_store import keyring_enabled
+
 log = logging.getLogger("TwitchStreams.ChatBot")
 
 _KEYRING_SERVICE = "DeadlockBot"
@@ -11,6 +13,8 @@ _KEYRING_SERVICE = "DeadlockBot"
 
 def _read_keyring_secret(key: str) -> str | None:
     """Read a secret from Windows Credential Manager."""
+    if not keyring_enabled():
+        return None
     try:
         import keyring  # type: ignore
     except Exception:
@@ -28,6 +32,8 @@ def _read_keyring_secret(key: str) -> str | None:
 
 async def _save_bot_tokens_to_keyring(*, access_token: str, refresh_token: str | None) -> None:
     """Persist access/refresh tokens to Windows Credential Manager."""
+    if not keyring_enabled():
+        return
     try:
         import keyring  # type: ignore
     except Exception:
