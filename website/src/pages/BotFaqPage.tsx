@@ -94,7 +94,7 @@ export function BotFaqPage() {
                   <span className="bg-gradient-to-r from-primary to-accent bg-clip-text text-transparent">
                     wichtigsten Fragen
                   </span>{" "}
-                  rund um EarlySalty.
+                  rund um DDC.
                 </h1>
                 <p className="mt-6 max-w-3xl text-lg leading-relaxed text-text-secondary">
                   Hier findest du Antworten zu Einstieg, Analytics, Raids,

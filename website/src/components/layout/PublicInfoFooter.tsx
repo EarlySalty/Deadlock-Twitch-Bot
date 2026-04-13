@@ -29,7 +29,7 @@ export function PublicInfoFooter() {
         <div className="flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
           <div className="max-w-xl">
             <p className="bg-gradient-to-r from-primary to-accent bg-clip-text text-xl font-bold font-display text-transparent">
-              EarlySalty
+              DDC
             </p>
             <p className="mt-3 text-sm leading-relaxed text-text-secondary">
               Öffentliche Produktflächen für neue und bestehende Streamer. Die
@@ -52,7 +52,7 @@ export function PublicInfoFooter() {
         </div>
 
         <div className="mt-8 border-t border-border pt-6 text-sm text-text-secondary">
-          &copy; 2026 EarlySalty. Twitch-Onboarding, FAQ und Partner-Dashboard
+          &copy; 2026 Deutsche Deadlock Community. Twitch-Onboarding, FAQ und Partner-Dashboard
           gehören zusammen.
         </div>
       </div>

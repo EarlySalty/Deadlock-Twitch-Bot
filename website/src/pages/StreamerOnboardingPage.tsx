@@ -230,7 +230,7 @@ export function StreamerOnboardingPage() {
               transition={{ duration: 0.5 }}
               className="inline-flex rounded-full border border-border bg-[rgba(16,38,53,0.76)] px-4 py-1.5 text-sm text-accent"
             >
-              Streamer Onboarding auf twitch.earlysalty.com
+              Streamer Onboarding auf deutsche-deadlock-community.de
             </motion.div>
 
             <motion.h1

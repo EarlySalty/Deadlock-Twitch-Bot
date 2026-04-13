@@ -1,7 +1,7 @@
 import { useEffect, useState, useCallback } from "react";
 
 const API_URL =
-  "https://twitch.earlysalty.com/twitch/api/v2/public/recent-bans";
+  "https://deutsche-deadlock-community.de/twitch/api/v2/public/recent-bans";
 
 export interface BanEntry {
   target_login: string;

@@ -53,7 +53,7 @@ export function Navbar() {
       <div className="max-w-7xl mx-auto px-6 flex justify-between items-center h-16">
         {/* Logo */}
         <span className="font-display font-bold text-xl bg-gradient-to-r from-primary to-accent bg-clip-text text-transparent select-none">
-          EarlySalty
+          DDC
         </span>
 
         {/* Center nav – desktop only */}
@@ -86,7 +86,7 @@ export function Navbar() {
         {/* Right actions – desktop only */}
         <div className="hidden md:flex items-center gap-3">
           <a
-            href="https://demo.earlysalty.com"
+            href="https://deutsche-deadlock-community.de/demo/twitch/demo/"
             target="_blank"
             rel="noopener noreferrer"
             className="border border-border rounded-lg px-4 py-2 text-sm text-text-secondary hover:text-text-primary hover:border-border-hover transition-colors duration-200"
@@ -144,7 +144,7 @@ export function Navbar() {
             )}
             <div className="flex flex-col gap-2 mt-3 pt-3 border-t border-border">
               <a
-                href="https://demo.earlysalty.com"
+                href="https://deutsche-deadlock-community.de/demo/twitch/demo/"
                 target="_blank"
                 rel="noopener noreferrer"
                 className="border border-border rounded-lg px-4 py-2 text-sm text-text-secondary hover:text-text-primary hover:border-border-hover transition-colors duration-200 text-center"

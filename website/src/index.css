@@ -40,10 +40,10 @@
   --color-background: #0b1d28;
   --color-card: #102635;
   --color-card-hover: #173448;
-  --color-primary: #ff7a18;
-  --color-primary-hover: #ff8d39;
-  --color-accent: #10b7ad;
-  --color-accent-hover: #1dd4ca;
+  --color-primary: #06B6D4;
+  --color-primary-hover: #22d3ee;
+  --color-accent: #A855F7;
+  --color-accent-hover: #c084fc;
   --color-success: #2ecc71;
   --color-warning: #f5b642;
   --color-danger: #ff6b5e;
@@ -70,8 +70,8 @@ body {
   -moz-osx-font-smoothing: grayscale;
   min-height: 100vh;
   background:
-    radial-gradient(1200px 520px at 90% -10%, rgba(255, 122, 24, 0.18), transparent 65%),
-    radial-gradient(900px 460px at 12% -20%, rgba(16, 183, 173, 0.24), transparent 60%),
+    radial-gradient(1200px 520px at 90% -10%, rgba(6, 182, 212, 0.16), transparent 65%),
+    radial-gradient(900px 460px at 12% -20%, rgba(168, 85, 247, 0.2), transparent 60%),
     linear-gradient(160deg, #07151d 0%, #081a24 55%, #0a202c 100%);
   color: var(--color-text-primary);
   position: relative;

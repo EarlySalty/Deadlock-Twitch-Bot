@@ -1,12 +1,12 @@
-export const DISCORD_INVITE_URL = "https://dc.earlysalty.com";
-export const EARLYSALTY_WEBSITE_URL = "https://earlysalty.de/streamer/";
-export const TWITCH_PUBLIC_ORIGIN = "https://twitch.earlysalty.com";
+export const DISCORD_INVITE_URL = "https://discord.gg/z5TfVHuQq2";
+export const EARLYSALTY_WEBSITE_URL = "https://deutsche-deadlock-community.de/streamer/";
+export const TWITCH_PUBLIC_ORIGIN = "https://deutsche-deadlock-community.de";
 export const TWITCH_ONBOARDING_URL = `${TWITCH_PUBLIC_ORIGIN}/twitch/onboarding`;
 export const TWITCH_FAQ_URL = `${TWITCH_PUBLIC_ORIGIN}/twitch/faq`;
 export const TWITCH_LOGIN_URL = `${TWITCH_PUBLIC_ORIGIN}/twitch/auth/login`;
 export const TWITCH_DASHBOARD_URL = `${TWITCH_PUBLIC_ORIGIN}/twitch/dashboard`;
 export const TWITCH_DASHBOARD_V2_URL = `${TWITCH_PUBLIC_ORIGIN}/twitch/dashboard-v2`;
-export const TWITCH_DEMO_DASHBOARD_URL = "https://demo.earlysalty.com/twitch/demo/";
+export const TWITCH_DEMO_DASHBOARD_URL = "https://deutsche-deadlock-community.de/demo/twitch/demo/";
 export const TWITCH_LIVE_ANNOUNCEMENT_URL =
   `${TWITCH_PUBLIC_ORIGIN}/twitch/live-announcement`;
 export const TWITCH_ABBO_URL = `${TWITCH_PUBLIC_ORIGIN}/twitch/abbo`;

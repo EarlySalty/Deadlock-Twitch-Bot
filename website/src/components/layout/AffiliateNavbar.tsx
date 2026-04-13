@@ -10,7 +10,7 @@ export function AffiliateNavbar() {
             href={WEBSITE_HOME_PATH}
             className="font-display font-bold text-xl bg-gradient-to-r from-primary to-accent bg-clip-text text-transparent select-none shrink-0"
           >
-            EarlySalty
+            DDC
           </a>
           <a
             href={WEBSITE_HOME_PATH}

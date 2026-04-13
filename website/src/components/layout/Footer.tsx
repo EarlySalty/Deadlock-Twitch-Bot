@@ -21,10 +21,10 @@ const MORE_LINKS: FooterLink[] = [
   { label: 'Streamer Onboarding', href: TWITCH_ONBOARDING_URL, external: true },
   { label: 'Bot FAQ', href: TWITCH_FAQ_URL, external: true },
   { label: 'Affiliate-Programm', href: AFFILIATE_PROGRAM_PATH },
-  { label: 'Demo Dashboard', href: 'https://demo.earlysalty.com', external: true },
+  { label: 'Demo Dashboard', href: 'https://deutsche-deadlock-community.de/demo/twitch/demo/', external: true },
   { label: 'Discord beitreten', href: DISCORD_INVITE_URL, external: true },
-  { label: 'Impressum', href: 'https://twitch.earlysalty.com/twitch/impressum', external: true },
-  { label: 'Datenschutz', href: 'https://twitch.earlysalty.com/twitch/datenschutz', external: true },
+  { label: 'Impressum', href: 'https://deutsche-deadlock-community.de/twitch/impressum', external: true },
+  { label: 'Datenschutz', href: 'https://deutsche-deadlock-community.de/twitch/datenschutz', external: true },
 ];
 
 function FooterLinkItem({ link }: { link: FooterLink }) {
@@ -52,7 +52,7 @@ export function Footer() {
           {/* Column 1 – Brand */}
           <div className="flex flex-col gap-3">
             <span className="font-display font-bold text-xl bg-gradient-to-r from-primary to-accent bg-clip-text text-transparent">
-              EarlySalty
+              DDC
             </span>
             <p className="text-text-secondary text-sm leading-relaxed">
               Erstellt für die Deadlock-Community
@@ -87,7 +87,7 @@ export function Footer() {
         {/* Bottom bar */}
         <div className="border-t border-border mt-8 pt-8 flex flex-col sm:flex-row justify-between items-center gap-3">
           <p className="text-text-secondary text-sm">
-            &copy; 2026 EarlySalty. Alle Rechte vorbehalten.
+            &copy; 2026 Deutsche Deadlock Community. Alle Rechte vorbehalten.
           </p>
         </div>
       </div>

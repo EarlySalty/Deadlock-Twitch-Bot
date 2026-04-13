@@ -395,7 +395,7 @@ export default function AffiliatePortal() {
   if (loading) {
     return (
       <div className="min-h-screen bg-[#07151d] flex items-center justify-center">
-        <div className="w-8 h-8 border-2 border-[#ff7a18] border-t-transparent rounded-full animate-spin" />
+        <div className="w-8 h-8 border-2 border-[#06B6D4] border-t-transparent rounded-full animate-spin" />
       </div>
     );
   }
@@ -461,7 +461,7 @@ export default function AffiliatePortal() {
     <div className="min-h-screen bg-[#07151d] text-[#e9f1f7] font-[Manrope]">
       <nav className="glass sticky top-0 z-50">
         <div className="max-w-7xl mx-auto px-6 flex items-center gap-1 h-14 overflow-x-auto">
-          <span className="text-sm font-bold text-[#ff7a18] mr-4 shrink-0 font-[Sora]">
+          <span className="text-sm font-bold text-[#06B6D4] mr-4 shrink-0 font-[Sora]">
             Affiliate
           </span>
           {TABS.map((entry) => {
@@ -473,7 +473,7 @@ export default function AffiliatePortal() {
                 onClick={() => setTab(entry.id)}
                 className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-colors shrink-0 ${
                   active
-                    ? "bg-[#102635] text-[#ff7a18]"
+                    ? "bg-[#102635] text-[#06B6D4]"
                     : "text-[#9bb3c5] hover:text-[#e9f1f7] hover:bg-[#102635]/50"
                 }`}
               >
@@ -514,7 +514,7 @@ export default function AffiliatePortal() {
                 <div className="mt-4 space-y-3">
                   {claims.length === 0 && (
                     <ActionHint
-                      icon={<Users size={18} className="text-[#ff7a18] mt-0.5 shrink-0" />}
+                      icon={<Users size={18} className="text-[#06B6D4] mt-0.5 shrink-0" />}
                       title="Ersten Streamer beanspruchen"
                       text="Oeffne den Tab Streamer und beanspruche einen Channel per Twitch-Login. Ab dann bekommst du 30% auf jede Zahlung dieses Streamers."
                     />
@@ -524,7 +524,7 @@ export default function AffiliatePortal() {
                       icon={
                         <ArrowRightLeft
                           size={18}
-                          className="text-[#10b7ad] mt-0.5 shrink-0"
+                          className="text-[#A855F7] mt-0.5 shrink-0"
                         />
                       }
                       title="Stripe fuer automatische Auszahlungen verbinden"
@@ -623,7 +623,7 @@ export default function AffiliatePortal() {
                   value={claimInput}
                   onChange={(event) => setClaimInput(event.target.value)}
                   onKeyDown={(event) => event.key === "Enter" && void handleClaim()}
-                  className="flex-1 bg-[#07151d] border border-[rgba(194,221,240,0.14)] rounded-lg px-4 py-2.5 text-sm text-[#e9f1f7] placeholder-[#9bb3c5]/50 focus:outline-none focus:border-[#ff7a18] transition-colors"
+                  className="flex-1 bg-[#07151d] border border-[rgba(194,221,240,0.14)] rounded-lg px-4 py-2.5 text-sm text-[#e9f1f7] placeholder-[#9bb3c5]/50 focus:outline-none focus:border-[#06B6D4] transition-colors"
                 />
                 <button
                   onClick={() => {
@@ -722,7 +722,7 @@ export default function AffiliatePortal() {
                       </td>
                       <td className="px-6 py-3 font-medium">{commission.streamer_login}</td>
                       <td className="px-6 py-3">{formatCents(commission.brutto_cents)}</td>
-                      <td className="px-6 py-3 text-[#10b7ad] font-medium">
+                      <td className="px-6 py-3 text-[#A855F7] font-medium">
                         {formatCents(commission.commission_cents)}
                       </td>
                       <td className="px-6 py-3">
@@ -833,7 +833,7 @@ export default function AffiliatePortal() {
                       <td className="px-6 py-4">
                         {formatCents(document.vat_amount_cents)}
                       </td>
-                      <td className="px-6 py-4 font-medium text-[#10b7ad]">
+                      <td className="px-6 py-4 font-medium text-[#A855F7]">
                         {formatCents(document.gross_amount_cents)}
                       </td>
                       <td className="px-6 py-4">
@@ -957,7 +957,7 @@ export default function AffiliatePortal() {
                         name="ust_status"
                         checked={settingsForm.ust_status === "unknown"}
                         onChange={() => updateForm("ust_status", "unknown")}
-                        className="mt-1 accent-[#ff7a18]"
+                        className="mt-1 accent-[#06B6D4]"
                       />
                       <div>
                         <div className="font-medium">Noch nicht angegeben</div>
@@ -972,7 +972,7 @@ export default function AffiliatePortal() {
                         name="ust_status"
                         checked={settingsForm.ust_status === "kleinunternehmer"}
                         onChange={() => updateForm("ust_status", "kleinunternehmer")}
-                        className="mt-1 accent-[#ff7a18]"
+                        className="mt-1 accent-[#06B6D4]"
                       />
                       <div>
                         <div className="font-medium">Kleinunternehmer</div>
@@ -987,7 +987,7 @@ export default function AffiliatePortal() {
                         name="ust_status"
                         checked={settingsForm.ust_status === "regelbesteuert"}
                         onChange={() => updateForm("ust_status", "regelbesteuert")}
-                        className="mt-1 accent-[#ff7a18]"
+                        className="mt-1 accent-[#06B6D4]"
                       />
                       <div>
                         <div className="font-medium">Regelbesteuert</div>
@@ -1079,7 +1079,7 @@ function StatCard({
     <div className="panel-card rounded-xl p-6">
       <div className="flex items-center justify-between mb-2">
         <span className="text-sm text-[#9bb3c5]">{label}</span>
-        <span className="text-[#ff7a18]">{icon}</span>
+        <span className="text-[#06B6D4]">{icon}</span>
       </div>
       <p className="text-2xl font-bold font-[Sora]">{value}</p>
     </div>
@@ -1261,7 +1261,7 @@ function InputField({
         type={type}
         value={value}
         onChange={(event) => onChange(event.target.value)}
-        className="mt-2 w-full bg-[#07151d] border border-[rgba(194,221,240,0.14)] rounded-lg px-4 py-2.5 text-sm text-[#e9f1f7] placeholder-[#9bb3c5]/50 focus:outline-none focus:border-[#ff7a18] transition-colors"
+        className="mt-2 w-full bg-[#07151d] border border-[rgba(194,221,240,0.14)] rounded-lg px-4 py-2.5 text-sm text-[#e9f1f7] placeholder-[#9bb3c5]/50 focus:outline-none focus:border-[#06B6D4] transition-colors"
       />
     </label>
   );
@@ -1284,7 +1284,7 @@ function SelectField({
       <select
         value={value}
         onChange={(event) => onChange(event.target.value)}
-        className="mt-2 w-full bg-[#07151d] border border-[rgba(194,221,240,0.14)] rounded-lg px-4 py-2.5 text-sm text-[#e9f1f7] focus:outline-none focus:border-[#ff7a18] transition-colors"
+        className="mt-2 w-full bg-[#07151d] border border-[rgba(194,221,240,0.14)] rounded-lg px-4 py-2.5 text-sm text-[#e9f1f7] focus:outline-none focus:border-[#06B6D4] transition-colors"
       >
         {options.map((option) => (
           <option key={option.value} value={option.value}>

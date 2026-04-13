@@ -10,7 +10,7 @@ interface EmbeddedClip {
   embedUrl: string;
 }
 
-const TWITCH_PARENTS = ["earlysalty.de", "www.earlysalty.de"] as const;
+const TWITCH_PARENTS = ["deutsche-deadlock-community.de"] as const;
 
 const CLIPS: EmbeddedClip[] = [
   {

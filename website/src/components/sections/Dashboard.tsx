@@ -195,7 +195,7 @@ export function Dashboard() {
         {/* Live Demo iframe */}
         <ScrollReveal delay={0.1}>
           <div className="mt-12">
-            <BrowserMockup url="demo.earlysalty.com/twitch/demo">
+            <BrowserMockup url="deutsche-deadlock-community.de/demo/twitch/demo">
               <div className="relative overflow-hidden rounded bg-gradient-to-br from-[var(--color-card)] to-[var(--color-bg)]" style={{ paddingBottom: '47.8125%', height: 0 }}>
                 <iframe
                   src={demoTabUrl(activeTab)}

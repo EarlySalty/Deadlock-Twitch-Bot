@@ -204,7 +204,7 @@ export function RaidDemo() {
     function spawnConfetti(originX: number, originY: number, count: number) {
       const container = middleAreaRef.current
       if (!container) return
-      const colors = ['#ff7a18', '#10b7ad', '#f59e0b', '#8b5cf6', '#22c55e', '#ec4899']
+      const colors = ['#06B6D4', '#A855F7', '#f59e0b', '#8b5cf6', '#22c55e', '#ec4899']
       for (let i = 0; i < count; i++) {
         const c = document.createElement('div')
         const color = colors[Math.floor(Math.random() * colors.length)]
@@ -706,7 +706,7 @@ export function RaidDemo() {
                   <div className="rd-duration-pill" ref={sourceDurationRef}>0:00:00</div>
                 </div>
                 <div className="rd-overlay-bottom">
-                  <div className="rd-overlay-streamer" ref={sourceStreamerRef}>EarlySalty</div>
+                  <div className="rd-overlay-streamer" ref={sourceStreamerRef}>DDC</div>
                   <div className="rd-overlay-category">Deadlock</div>
                   <div className="rd-overlay-viewers">
                     <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -733,7 +733,7 @@ export function RaidDemo() {
             </div>
             <div className="rd-info-bar">
               <div className="rd-info-left">
-                <div className="rd-avatar" ref={sourceAvatarRef} style={{ background: '#ff7a18' }}>E</div>
+                <div className="rd-avatar" ref={sourceAvatarRef} style={{ background: '#06B6D4' }}>D</div>
                 <div>
                   <a className="rd-info-name rd-info-link" ref={sourceInfoNameRef} href="https://twitch.tv/miracleghost9" target="_blank" rel="noopener noreferrer">miracleghost9</a>
                   <div className="rd-info-game">Spielt Deadlock</div>
@@ -789,7 +789,7 @@ export function RaidDemo() {
             </div>
             <div className="rd-info-bar">
               <div className="rd-info-left">
-                <div className="rd-avatar" ref={targetAvatarRef} style={{ background: '#10b7ad' }}>P</div>
+                <div className="rd-avatar" ref={targetAvatarRef} style={{ background: '#A855F7' }}>P</div>
                 <div>
                   <a className="rd-info-name rd-info-link" ref={targetInfoNameRef} href="https://twitch.tv/whysolowkey" target="_blank" rel="noopener noreferrer">whysolowkey</a>
                   <div className="rd-info-game">Spielt Deadlock</div>

@@ -135,16 +135,16 @@ FAQ_SECTIONS.push(
       "Alles was du wissen musst, um loszulegen — von der Anmeldung bis zum ersten Blick ins Dashboard.",
     items: [
       {
-        question: "Was ist EarlySalty?",
+        question: "Was ist DDC?",
         answer:
-          "EarlySalty ist eine kostenlose Plattform für Deadlock-Streamer auf Twitch. Du bekommst ein Analytics-Dashboard mit Echtzeit-Daten, ein automatisches Raid-Netzwerk, Discord-Automation und KI-gestütztes Coaching — alles an einem Ort.",
+          "DDC ist eine kostenlose Plattform für Deadlock-Streamer auf Twitch. Du bekommst ein Analytics-Dashboard mit Echtzeit-Daten, ein automatisches Raid-Netzwerk, Discord-Automation und KI-gestütztes Coaching — alles an einem Ort.",
         details: [
           "Über 30 Deadlock-Streamer nutzen das Netzwerk bereits.",
           "Das Dashboard hat 13 Tabs mit detaillierten Auswertungen zu deinem Stream.",
           "Du brauchst nur deinen Twitch-Account — keine zusätzliche Registrierung.",
         ],
         access: "Alle",
-        tags: ["earlysalty", "plattform", "deadlock", "streamer", "überblick"],
+        tags: ["ddc", "plattform", "deadlock", "streamer", "überblick"],
         routes: [
           { label: "Onboarding", href: TWITCH_ONBOARDING_URL },
           { label: "Demo Dashboard", href: TWITCH_DEMO_DASHBOARD_URL },
@@ -166,7 +166,7 @@ FAQ_SECTIONS.push(
         ],
       },
       {
-        question: "Kostet EarlySalty etwas?",
+        question: "Kostet DDC etwas?",
         answer:
           "Nein, du kannst kostenlos loslegen. Alle Kern-Features wie Analytics, Auto-Raid und Discord-Automation sind ohne Abo nutzbar.",
         details: [
@@ -306,7 +306,7 @@ FAQ_SECTIONS.push(
       {
         question: "Was ist der Auto-Raid?",
         answer:
-          "Der Auto-Raid ist ein Kern-Feature von EarlySalty: Wenn dein Stream endet, leitet der Bot deine Zuschauer automatisch an einen passenden Live-Partner im Deadlock-Netzwerk weiter. Das passiert ohne dein Zutun — der Raid ist immer aktiv.",
+          "Der Auto-Raid ist ein Kern-Feature von DDC: Wenn dein Stream endet, leitet der Bot deine Zuschauer automatisch an einen passenden Live-Partner im Deadlock-Netzwerk weiter. Das passiert ohne dein Zutun — der Raid ist immer aktiv.",
         details: [
           "Du musst den Auto-Raid nicht aktivieren oder konfigurieren — er läuft automatisch.",
           "Der Bot wählt intelligent den besten Raid-Partner basierend auf mehreren Kriterien.",
@@ -457,7 +457,7 @@ FAQ_SECTIONS.push({
     {
       question: "Was ist das Vertriebler-Programm?",
       answer:
-        "Du wirbst Deadlock-Streamer für EarlySalty und bekommst dauerhaft automatisch 30% Provision auf jede Zahlung deiner geworbenen Streamer.",
+        "Du wirbst Deadlock-Streamer für DDC und bekommst dauerhaft automatisch 30% Provision auf jede Zahlung deiner geworbenen Streamer.",
       details: [
         "Die Provision läuft dauerhaft weiter, solange dein geworbener Streamer zahlt.",
         "Die Zuordnung erfolgt über das Affiliate-Portal und ist eindeutig pro Streamer.",
@@ -502,9 +502,9 @@ FAQ_SECTIONS.push({
     {
       question: "Wie wirbt man Streamer?",
       answer:
-        "Du findest Deadlock-Streamer auf Twitch, in Discord-Servern oder in Communities, empfiehlst EarlySalty und beanspruchst den Streamer danach im Portal. Sobald er zahlt, bekommst du 30%.",
+        "Du findest Deadlock-Streamer auf Twitch, in Discord-Servern oder in Communities, empfiehlst DDC und beanspruchst den Streamer danach im Portal. Sobald er zahlt, bekommst du 30%.",
       details: [
-        "Geeignet sind Streamer, die noch nicht bei EarlySalty registriert sind.",
+        "Geeignet sind Streamer, die noch nicht bei DDC registriert sind.",
         "Die Zuordnung erfolgt über den Twitch-Login des Streamers im Portal.",
         "Jeder beanspruchte Streamer kann nur einem Vertriebler zugeordnet sein.",
       ],
@@ -559,9 +559,9 @@ FAQ_SECTIONS.push({
     {
       question: "Wie lösche ich meinen Account oder widerrufe den Zugang?",
       answer:
-        "Du kannst den Bot-Zugang jederzeit über deine Twitch-Einstellungen widerrufen. Geh dazu in deine Twitch-Verbindungen und entferne die EarlySalty-Autorisierung. Für eine komplette Datenlöschung kontaktiere uns im Discord.",
+        "Du kannst den Bot-Zugang jederzeit über deine Twitch-Einstellungen widerrufen. Geh dazu in deine Twitch-Verbindungen und entferne die DDC-Autorisierung. Für eine komplette Datenlöschung kontaktiere uns im Discord.",
       details: [
-        "Twitch-Autorisierung widerrufen: Twitch → Einstellungen → Verbindungen → EarlySalty entfernen.",
+        "Twitch-Autorisierung widerrufen: Twitch → Einstellungen → Verbindungen → DDC entfernen.",
         "Nach dem Widerruf hat der Bot keinen Zugriff mehr auf deinen Account.",
         "Für eine vollständige Löschung deiner gespeicherten Daten melde dich im Discord.",
       ],

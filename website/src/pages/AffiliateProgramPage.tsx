@@ -52,10 +52,10 @@ const HOW_IT_WORKS_STEPS = [
     eyebrow: "3. Streamer finden und werben",
     title: "Direkt im Deadlock-Umfeld akquirieren",
     description:
-      "Finde Deadlock-Streamer, die noch nicht bei EarlySalty sind, auf Twitch, in Discord-Servern oder in Deadlock-Communities. Empfiehl EarlySalty direkt oder teile deinen Referral-Link.",
+      "Finde Deadlock-Streamer, die noch nicht bei DDC sind, auf Twitch, in Discord-Servern oder in Deadlock-Communities. Empfiehl DDC direkt oder teile deinen Referral-Link.",
     bullets: [
       "Deadlock-Streamer auf Twitch, Discord und in Communities identifizieren.",
-      "EarlySalty direkt empfehlen oder deinen Referral-Link teilen.",
+      "DDC direkt empfehlen oder deinen Referral-Link teilen.",
       "Nur neue Streamer bringen dir laufende Provisionen.",
     ],
   },
@@ -87,7 +87,7 @@ const AFFILIATE_FAQ = [
   {
     question: "Muss ich selbst Streamer sein?",
     answer:
-      "Nein. Du kannst EarlySalty auch dann empfehlen, wenn du selbst nicht streamst. Entscheidend ist nur, dass du neue Deadlock-Streamer wirbst.",
+      "Nein. Du kannst DDC auch dann empfehlen, wenn du selbst nicht streamst. Entscheidend ist nur, dass du neue Deadlock-Streamer wirbst.",
   },
   {
     question: "Wie funktioniert die Auszahlung?",
@@ -112,7 +112,7 @@ const AFFILIATE_FAQ = [
   {
     question: "Muss ich Steuern zahlen?",
     answer:
-      "Ja, du bist selbst für die Versteuerung deiner Einnahmen verantwortlich. EarlySalty übernimmt keine steuerliche Bewertung für dich.",
+      "Ja, du bist selbst für die Versteuerung deiner Einnahmen verantwortlich. DDC übernimmt keine steuerliche Bewertung für dich.",
   },
 ];
 
@@ -163,7 +163,7 @@ export default function AffiliateProgramPage() {
                 transition={{ duration: 0.6, delay: 0.2 }}
                 className="mt-6 max-w-3xl text-lg leading-relaxed text-text-secondary md:text-xl"
               >
-                Werde EarlySalty-Vertriebler, wirb Deadlock-Streamer und verdiene
+                Werde DDC-Vertriebler, wirb Deadlock-Streamer und verdiene
                 bei jeder Zahlung mit. Anmeldung in 2 Minuten über deinen
                 Twitch-Account.
               </motion.p>

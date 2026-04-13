@@ -10,7 +10,7 @@ export function GradientText({ children, className = "" }: GradientTextProps) {
     <span
       className={`bg-clip-text text-transparent ${className}`}
       style={{
-        backgroundImage: "linear-gradient(135deg, #ff7a18, #10b7ad)",
+        backgroundImage: "linear-gradient(135deg, #06B6D4, #A855F7)",
       }}
     >
       {children}
