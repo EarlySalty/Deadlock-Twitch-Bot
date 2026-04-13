@@ -902,7 +902,7 @@ class _DashboardAuthMixin:
             destination = self._canonical_post_login_destination(next_path)
             raise web.HTTPFound(destination)
 
-        if not self._check_rate_limit(request, max_requests=10, window_seconds=60.0):
+        if not self._check_rate_limit(request, max_requests=30, window_seconds=60.0):
             return web.Response(text="Zu viele Anfragen. Bitte warte kurz.", status=429)
 
         if not self._is_oauth_configured():
@@ -964,7 +964,7 @@ class _DashboardAuthMixin:
 
     async def auth_callback(self, request: web.Request) -> web.StreamResponse:
         """Handle Twitch OAuth callback, verify partner status, and create session."""
-        if not self._check_rate_limit(request, max_requests=10, window_seconds=60.0):
+        if not self._check_rate_limit(request, max_requests=30, window_seconds=60.0):
             return web.Response(text="Zu viele Anfragen. Bitte warte kurz.", status=429)
 
         if not self._is_oauth_configured():
