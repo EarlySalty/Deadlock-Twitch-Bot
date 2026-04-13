@@ -38,7 +38,6 @@ TWITCH_HELIX_USERS_URL = "https://api.twitch.tv/helix/users"
 DISCORD_API_BASE_URL = "https://discord.com/api/v10"
 TWITCH_DASHBOARDS_LOGIN_URL = "/twitch/auth/login?next=%2Ftwitch%2Fdashboards"
 TWITCH_DASHBOARD_V2_LOGIN_URL = "/twitch/auth/login?next=%2Ftwitch%2Fdashboard-v2"
-TWITCH_DASHBOARDS_DISCORD_LOGIN_URL = "/twitch/auth/discord/login?next=%2Ftwitch%2Fdashboards"
 DEFAULT_DASHBOARD_MODERATOR_ROLE_ID = 1337518124647579661
 KEYRING_SERVICE_NAME = "DeadlockBot"
 # Public Stripe Connect OAuth client ID (`ca_...`). Safe to commit directly.
@@ -74,7 +73,7 @@ _DEMO_EMBED_ALLOWED_ANCESTORS: tuple[str, ...] = tuple(
         _normalize_frame_ancestor_origin(item)
         for item in os.getenv(
             "TWITCH_DEMO_EMBED_ORIGINS",
-            "https://twitch.earlysalty.com,https://earlysalty.de,https://www.earlysalty.de",
+            "https://deutsche-deadlock-community.de",
         ).split(",")
     )
     if origin
@@ -299,13 +298,9 @@ class DashboardV2Server(
         )
         self._redirect_uri = str(getattr(self._dashboard_auth_manager(), "redirect_uri", "") or "").strip()
         self._master_dashboard_href = "/twitch/admin"
-        keyring_client_id = self._load_secret_value("DISCORD_OAUTH_CLIENT_ID")
-        discord_bot = self._dashboard_discord_bot()
-        app_client_id = str(getattr(discord_bot, "application_id", "") or "").strip()
-        self._discord_admin_client_id = (keyring_client_id or app_client_id).strip()
-        self._discord_admin_client_secret = self._load_secret_value(
-            "DISCORD_OAUTH_CLIENT_SECRET"
-        ).strip()
+        self._discord_admin_base_url = TWITCH_ADMIN_PUBLIC_URL.rstrip("/")
+        self._discord_admin_client_id = ""
+        self._discord_admin_client_secret = ""
         self._discord_admin_redirect_uri = TWITCH_ADMIN_DISCORD_REDIRECT_URI
         self._discord_admin_enabled = True
         owner_user_id_raw = self._load_secret_value(
@@ -338,13 +333,11 @@ class DashboardV2Server(
         self._discord_admin_sessions: dict[str, dict[str, Any]] = {}
         self._discord_sessions_db_loaded: bool = False
         self._discord_admin_required = self._discord_admin_enabled and bool(
-            self._discord_admin_client_id
-            and self._discord_admin_client_secret
-            and self._discord_admin_redirect_uri
+            self._discord_admin_base_url and self._discord_admin_redirect_uri
         )
         if self._discord_admin_enabled and not self._discord_admin_required:
             log.error(
-                "Twitch Admin Discord OAuth ist unvollständig (Client ID/Secret/Redirect fehlen). "
+                "Twitch Admin Discord OAuth ist unvollständig (Redirect URI/Base URL fehlen). "
                 "Admin-Zugriff bleibt deaktiviert, bis die Konfiguration vollständig ist."
             )
 
@@ -646,19 +639,54 @@ class DashboardV2Server(
             return fallback
         return candidate
 
+    def _build_discord_admin_route_url(
+        self,
+        path: str,
+        *,
+        query: dict[str, str] | None = None,
+        raw_query: str | None = None,
+    ) -> str:
+        base_url = str(getattr(self, "_discord_admin_base_url", "") or TWITCH_ADMIN_PUBLIC_URL).rstrip(
+            "/"
+        )
+        normalized_path = str(path or "").strip() or "/"
+        if not normalized_path.startswith("/"):
+            normalized_path = f"/{normalized_path}"
+        if raw_query is not None:
+            query_string = raw_query.lstrip("?")
+        elif query:
+            query_string = urlencode(query)
+        else:
+            query_string = ""
+        if query_string:
+            return f"{base_url}{normalized_path}?{query_string}"
+        return f"{base_url}{normalized_path}"
+
     def _build_discord_admin_login_url(
-        self, request: web.Request, *, next_path: str | None = None
+        self, request: web.Request | None, *, next_path: str | None = None
     ) -> str:
         if not self._discord_admin_required:
             return "/twitch/dashboard"
         normalized_next = self._normalize_discord_admin_next_path(
-            next_path or (request.rel_url.path_qs if request.rel_url else "/twitch/admin")
+            next_path
+            or (
+                request.rel_url.path_qs
+                if request is not None and request.rel_url
+                else "/twitch/admin"
+            )
         )
-        return f"/twitch/auth/discord/login?{urlencode({'next': normalized_next})}"
+        return self._build_discord_admin_route_url(
+            "/twitch/auth/discord/login",
+            query={"next": normalized_next},
+        )
 
-    @staticmethod
-    def _safe_discord_admin_login_redirect(raw_url: str | None) -> str:
-        fallback = "/twitch/auth/discord/login"
+    def _discord_admin_logout_url(self) -> str:
+        if not self._discord_admin_required:
+            return "/twitch/dashboard"
+        return self._build_discord_admin_route_url("/twitch/auth/discord/logout")
+
+    def _safe_discord_admin_login_redirect(self, raw_url: str | None) -> str:
+        fallback = self._build_discord_admin_route_url("/twitch/auth/discord/login")
         candidate = (raw_url or "").strip()
         if not candidate:
             return fallback
@@ -671,15 +699,19 @@ class DashboardV2Server(
                 return fallback
             return candidate
 
+        admin_host = (
+            urlsplit(
+                str(getattr(self, "_discord_admin_base_url", "") or TWITCH_ADMIN_PUBLIC_URL)
+            ).netloc.split("@")[-1].split(":", 1)[0].strip().lower()
+        )
         host = (parsed.netloc or "").split("@")[-1].split(":", 1)[0].strip().lower()
         path = (parsed.path or "").strip()
-        if parsed.scheme != "https":
-            return fallback
-        if host not in {"discord.com", "www.discord.com"}:
-            return fallback
-        if path not in {"/oauth2/authorize", "/api/oauth2/authorize", "/api/v10/oauth2/authorize"}:
-            return fallback
-        return candidate
+        if parsed.scheme == "https" and host == admin_host and path == "/twitch/auth/discord/login":
+            return candidate
+        if parsed.scheme == "https" and host in {"discord.com", "www.discord.com"}:
+            if path in {"/oauth2/authorize", "/api/oauth2/authorize", "/api/v10/oauth2/authorize"}:
+                return candidate
+        return fallback
 
     @staticmethod
     def _canonical_discord_admin_post_login_path(raw: str | None) -> str:

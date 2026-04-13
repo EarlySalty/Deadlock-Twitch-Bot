@@ -40,9 +40,7 @@ from .live.live import _CRITICAL_SCOPES, _REQUIRED_SCOPES, _SCOPE_COLUMN_LABELS
 
 TWITCH_DASHBOARDS_LOGIN_URL = "/twitch/auth/login?next=%2Ftwitch%2Fdashboard"
 TWITCH_DASHBOARD_V2_LOGIN_URL = "/twitch/auth/login?next=%2Ftwitch%2Fdashboard-v2"
-TWITCH_DASHBOARDS_DISCORD_LOGIN_URL = "/twitch/auth/discord/login?next=%2Ftwitch%2Fdashboard"
 TWITCH_ABBO_LOGIN_URL = "/twitch/auth/login?next=%2Ftwitch%2Fabbo"
-TWITCH_ABBO_DISCORD_LOGIN_URL = "/twitch/auth/discord/login?next=%2Ftwitch%2Fabbo"
 
 
 def _billing_public_error_message(default_code: str, *, http_status: int | None = None) -> str:
@@ -263,13 +261,13 @@ class _DashboardRoutesMixin:
             getattr(self, "_discord_admin_redirect_uri", ""),
             os.getenv("TWITCH_ADMIN_PUBLIC_URL", ""),
             os.getenv("MASTER_DASHBOARD_PUBLIC_URL", ""),
-            "https://admin.earlysalty.de",
+            "https://admin.deutsche-deadlock-community.de",
         )
         for candidate in candidates:
             origin = self._billing_origin_from_url(candidate)
             if origin:
                 return origin
-        return "https://admin.earlysalty.de"
+        return "https://admin.deutsche-deadlock-community.de"
 
     def _billing_base_url_for_request(self, request: web.Request) -> str:
         checker = getattr(self, "_is_local_request", None)
@@ -375,9 +373,13 @@ class _DashboardRoutesMixin:
                     exc_info=True,
                 )
         safe_login_url = (
-            self._safe_internal_redirect(fallback_login_url, fallback="/twitch/auth/login")
-            if hasattr(self, "_safe_internal_redirect")
-            else "/twitch/auth/login"
+            self._safe_discord_admin_login_redirect(fallback_login_url)
+            if "/twitch/auth/discord/login" in str(fallback_login_url or "")
+            else (
+                self._safe_internal_redirect(fallback_login_url, fallback="/twitch/auth/login")
+                if hasattr(self, "_safe_internal_redirect")
+                else "/twitch/auth/login"
+            )
         )
         return web.HTTPFound(safe_login_url)
 
@@ -385,7 +387,10 @@ class _DashboardRoutesMixin:
         return EntryRouteDeps(
             critical_scopes=_CRITICAL_SCOPES,
             dashboard_v2_login_url=TWITCH_DASHBOARD_V2_LOGIN_URL,
-            dashboards_discord_login_url=TWITCH_DASHBOARDS_DISCORD_LOGIN_URL,
+            dashboards_discord_login_url=self._build_discord_admin_login_url(
+                None,
+                next_path="/twitch/dashboard",
+            ),
             dashboards_login_url=TWITCH_DASHBOARDS_LOGIN_URL,
             html=html,
             json=json,
@@ -615,6 +620,7 @@ class _DashboardRoutesMixin:
                 web.get("/twitch/raid/analytics", self.raid_analytics),
                 web.get("/twitch/auth/login", self.auth_login),
                 web.get("/twitch/auth/callback", self.auth_callback),
+                web.get("/callback/twitch", self.auth_callback),
                 web.post("/twitch/auth/partner/link", self.auth_partner_link),
                 web.post("/twitch/auth/partner/login", self.auth_partner_login),
                 web.get("/twitch/auth/discord/login", self.discord_auth_login),

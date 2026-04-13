@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import secrets
 import time
 from typing import Any
-from urllib.parse import urlencode, urlparse, urlsplit, urlunsplit
+from urllib.parse import parse_qsl, urlencode, urlparse, urlsplit, urlunsplit
 
 import aiohttp
 from aiohttp import web
@@ -28,7 +29,12 @@ TWITCH_OAUTH_AUTHORIZE_URL = "https://id.twitch.tv/oauth2/authorize"
 TWITCH_OAUTH_TOKEN_URL = "https://id.twitch.tv/oauth2/token"  # noqa: S105
 TWITCH_HELIX_USERS_URL = "https://api.twitch.tv/helix/users"
 DISCORD_API_BASE_URL = "https://discord.com/api/v10"
-TWITCH_ADMIN_DISCORD_LOGIN_URL = "/twitch/auth/discord/login?next=%2Ftwitch%2Fadmin"
+LEGACY_TWITCH_OAUTH_CALLBACK_PATH = "/twitch/auth/callback"
+SHARED_TWITCH_OAUTH_CALLBACK_PATH = "/callback/twitch"
+DISCORD_OAUTH_INTERNAL_API_BASE_URL = "http://127.0.0.1:8766"
+DISCORD_OAUTH_INTERNAL_TOKEN_HEADER = "X-Internal-Token"
+DISCORD_OAUTH_AUTHORIZE_URL_PATH = "/internal/turnier/v1/discord/authorize-url"
+DISCORD_OAUTH_SESSION_PATH = "/internal/turnier/v1/discord/session"
 
 
 class _DashboardAuthMixin:
@@ -76,11 +82,76 @@ class _DashboardAuthMixin:
                 "TWITCH_DASHBOARD_AUTH_REDIRECT_URI points to raid callback and is not allowed"
             )
             return None
-        if path != "/twitch/auth/callback":
-            log.warning("TWITCH_DASHBOARD_AUTH_REDIRECT_URI must point to /twitch/auth/callback")
+        if path not in {
+            LEGACY_TWITCH_OAUTH_CALLBACK_PATH,
+            SHARED_TWITCH_OAUTH_CALLBACK_PATH,
+        }:
+            log.warning(
+                "TWITCH_DASHBOARD_AUTH_REDIRECT_URI must point to /twitch/auth/callback "
+                "or /callback/twitch"
+            )
             return None
 
-        return urlunsplit((scheme, parsed.netloc, "/twitch/auth/callback", "", ""))
+        return urlunsplit((scheme, parsed.netloc, path, "", ""))
+
+    def _oauth_callback_cookie_path(self) -> str:
+        redirect_uri = self._build_oauth_redirect_uri()
+        if not redirect_uri:
+            return LEGACY_TWITCH_OAUTH_CALLBACK_PATH
+        try:
+            path = (urlsplit(redirect_uri).path or "").rstrip("/")
+        except Exception:
+            return LEGACY_TWITCH_OAUTH_CALLBACK_PATH
+        if path in {
+            LEGACY_TWITCH_OAUTH_CALLBACK_PATH,
+            SHARED_TWITCH_OAUTH_CALLBACK_PATH,
+        }:
+            return path
+        return LEGACY_TWITCH_OAUTH_CALLBACK_PATH
+
+    @staticmethod
+    def _request_path(request: web.Request) -> str:
+        rel_url = getattr(request, "rel_url", None)
+        path = str(getattr(rel_url, "path", "") or "").strip()
+        if path:
+            return path
+        path_qs = str(getattr(rel_url, "path_qs", "") or "").strip()
+        if not path_qs:
+            return ""
+        return urlsplit(path_qs).path or path_qs.split("?", 1)[0]
+
+    def _is_shared_twitch_oauth_callback_request(self, request: web.Request) -> bool:
+        return self._request_path(request) == SHARED_TWITCH_OAUTH_CALLBACK_PATH
+
+    async def _delegate_shared_twitch_oauth_callback(
+        self, request: web.Request
+    ) -> web.StreamResponse | None:
+        if not self._is_shared_twitch_oauth_callback_request(request):
+            return None
+        raid_callback = getattr(self, "raid_oauth_callback", None)
+        if not callable(raid_callback):
+            return None
+        return await raid_callback(request)
+
+    def _load_dashboard_oauth_state(self, state: str) -> dict[str, Any] | None:
+        state_key = str(state or "").strip()
+        if not state_key:
+            return None
+        cached_state = self._dashboard_auth_state_cache("_oauth_states").get(state_key)
+        if cached_state:
+            return cached_state
+        try:
+            return self._dashboard_auth_state_repo().load_twitch_oauth_state(
+                state_key,
+                now=time.time(),
+            )
+        except Exception as exc:
+            log.warning(
+                "Could not load persisted Twitch OAuth state %s: %s",
+                self._sanitize_log_value(state_key),
+                self._sanitize_log_value(exc),
+            )
+            return None
 
     @staticmethod
     def _render_oauth_page(title: str, body_html: str) -> str:
@@ -633,6 +704,97 @@ class _DashboardAuthMixin:
     def _is_discord_admin_request(self, request: web.Request) -> bool:
         return bool(self._get_discord_admin_session(request))
 
+    @staticmethod
+    def _discord_oauth_internal_api_base_url() -> str:
+        return DISCORD_OAUTH_INTERNAL_API_BASE_URL
+
+    def _discord_oauth_internal_api_token(self) -> str:
+        loader = getattr(self, "_load_secret_value", None)
+        if callable(loader):
+            token = str(
+                loader(
+                    "TWITCH_INTERNAL_API_TOKEN",
+                    "MASTER_BROKER_TOKEN",
+                    "MAIN_BOT_INTERNAL_TOKEN",
+                )
+                or ""
+            ).strip()
+            if token:
+                return token
+        for env_name in ("TWITCH_INTERNAL_API_TOKEN", "MASTER_BROKER_TOKEN", "MAIN_BOT_INTERNAL_TOKEN"):
+            token = str(os.getenv(env_name) or "").strip()
+            if token:
+                return token
+        return ""
+
+    async def _post_discord_oauth_internal_api(
+        self,
+        path: str,
+        payload: dict[str, Any],
+    ) -> dict[str, Any] | None:
+        token = self._discord_oauth_internal_api_token()
+        if not token:
+            log.warning("Discord OAuth internal API token is missing.")
+            return None
+        timeout = aiohttp.ClientTimeout(total=20)
+        headers = {
+            DISCORD_OAUTH_INTERNAL_TOKEN_HEADER: token,
+            "Content-Type": "application/json",
+        }
+        url = f"{self._discord_oauth_internal_api_base_url().rstrip('/')}{path}"
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with session.post(url, json=payload, headers=headers) as response:
+                if response.status != 200:
+                    body = await response.text()
+                    log.warning(
+                        "Discord OAuth internal API failed (path=%s status=%s body=%s)",
+                        path,
+                        response.status,
+                        self._sanitize_log_value(body[:200]),
+                    )
+                    return None
+                data = await response.json()
+        return data if isinstance(data, dict) else None
+
+    async def _fetch_delegated_discord_authorize_url(
+        self,
+        *,
+        redirect_uri: str,
+        scope: str,
+        state: str,
+    ) -> str | None:
+        data = await self._post_discord_oauth_internal_api(
+            DISCORD_OAUTH_AUTHORIZE_URL_PATH,
+            {
+                "redirect_uri": redirect_uri,
+                "scope": scope,
+            },
+        )
+        authorize_url = str((data or {}).get("authorize_url") or "").strip()
+        if not authorize_url:
+            return None
+        try:
+            parsed = urlsplit(authorize_url)
+        except Exception:
+            return None
+        query_pairs = [(key, value) for key, value in parse_qsl(parsed.query, keep_blank_values=True) if key != "state"]
+        query_pairs.append(("state", state))
+        return urlunsplit((parsed.scheme, parsed.netloc, parsed.path, urlencode(query_pairs), parsed.fragment))
+
+    async def _fetch_delegated_discord_session(
+        self,
+        *,
+        code: str,
+        redirect_uri: str,
+    ) -> dict[str, Any] | None:
+        return await self._post_discord_oauth_internal_api(
+            DISCORD_OAUTH_SESSION_PATH,
+            {
+                "code": code,
+                "redirect_uri": redirect_uri,
+            },
+        )
+
     async def _exchange_discord_admin_code(
         self,
         code: str,
@@ -755,7 +917,7 @@ class _DashboardAuthMixin:
             return web.Response(
                 text=(
                     "Twitch OAuth Redirect-URI ist nicht konfiguriert oder ungültig. "
-                    "Bitte eine gültige /twitch/auth/callback URL konfigurieren."
+                    "Bitte eine gültige /twitch/auth/callback oder /callback/twitch URL konfigurieren."
                 ),
                 status=503,
             )
@@ -810,8 +972,14 @@ class _DashboardAuthMixin:
 
         self._cleanup_auth_state()
 
+        state = (request.query.get("state") or "").strip()
+        code = (request.query.get("code") or "").strip()
         error = (request.query.get("error") or "").strip()[:64]
         if error:
+            if not self._load_dashboard_oauth_state(state):
+                delegated = await self._delegate_shared_twitch_oauth_callback(request)
+                if delegated is not None:
+                    return delegated
             safe_error = "".join(c for c in error if c.isalnum() or c in "_-")
             response = web.Response(
                 text=f"OAuth-Fehler: {safe_error}. Bitte Login erneut starten.",
@@ -820,8 +988,6 @@ class _DashboardAuthMixin:
             self._set_no_store_headers(response)
             return response
 
-        state = (request.query.get("state") or "").strip()
-        code = (request.query.get("code") or "").strip()
         if not state or not code:
             response = web.Response(text="Fehlender OAuth state/code.", status=400)
             self._set_no_store_headers(response)
@@ -843,6 +1009,9 @@ class _DashboardAuthMixin:
         if state_data is None:
             state_data = cached_state_data
         if not state_data:
+            delegated = await self._delegate_shared_twitch_oauth_callback(request)
+            if delegated is not None:
+                return delegated
             response = web.Response(text="OAuth state ungültig oder abgelaufen.", status=400)
             self._set_no_store_headers(response)
             return response
@@ -933,7 +1102,7 @@ class _DashboardAuthMixin:
             return web.Response(
                 text=(
                     "Discord Admin OAuth ist nicht konfiguriert. "
-                    "Bitte Client ID, Client Secret und Redirect URI setzen."
+                    "Bitte Redirect URI und internen API-Token setzen."
                 ),
                 status=503,
             )
@@ -950,7 +1119,7 @@ class _DashboardAuthMixin:
         if not redirect_uri:
             expected_redirect = (
                 str(self._discord_admin_redirect_uri or "").strip()
-                or "https://admin.earlysalty.de/twitch/auth/discord/callback"
+                or "https://admin.deutsche-deadlock-community.de/twitch/auth/discord/callback"
             )
             return web.Response(
                 text=(
@@ -987,18 +1156,13 @@ class _DashboardAuthMixin:
                 text="Discord OAuth Status konnte nicht sicher gespeichert werden.",
                 status=503,
             )
-        query = urlencode(
-            {
-                "client_id": self._discord_admin_client_id,
-                "redirect_uri": redirect_uri,
-                "response_type": "code",
-                "scope": "identify",
-                "state": state,
-            }
+
+        authorize_url = await self._fetch_delegated_discord_authorize_url(
+            redirect_uri=redirect_uri,
+            scope="identify",
+            state=state,
         )
-        safe_auth_url = self._safe_discord_admin_login_redirect(
-            f"{DISCORD_API_BASE_URL}/oauth2/authorize?{query}"
-        )
+        safe_auth_url = self._safe_discord_admin_login_redirect(authorize_url)
         response = web.HTTPFound(safe_auth_url)
         self._set_discord_oauth_context_cookie(response, request, context_token)
         self._set_no_store_headers(response)
@@ -1014,7 +1178,7 @@ class _DashboardAuthMixin:
             return web.Response(
                 text=(
                     "Discord Admin OAuth ist nicht konfiguriert. "
-                    "Bitte Client ID, Client Secret und Redirect URI setzen."
+                    "Bitte Redirect URI und internen API-Token setzen."
                 ),
                 status=503,
             )
@@ -1073,29 +1237,35 @@ class _DashboardAuthMixin:
             self._set_no_store_headers(response)
             return response
 
-        token_data = await self._exchange_discord_admin_code(
-            code,
-            str(state_data.get("redirect_uri") or ""),
+        session_payload = await self._fetch_delegated_discord_session(
+            code=code,
+            redirect_uri=str(state_data.get("redirect_uri") or ""),
         )
-        access_token = str((token_data or {}).get("access_token") or "").strip()
-        if not access_token:
-            response = web.Response(text="OAuth Austausch fehlgeschlagen.", status=401)
-            self._set_no_store_headers(response)
-            return response
-
-        user = await self._fetch_discord_admin_user(access_token)
-        if not user:
+        discord_id = str((session_payload or {}).get("discord_id") or "").strip()
+        if not discord_id.isdigit():
             response = web.Response(text="Discord User konnte nicht geladen werden.", status=401)
             self._set_no_store_headers(response)
             return response
 
-        user_id_raw = str(user.get("id") or "").strip()
-        if not user_id_raw.isdigit():
-            response = web.Response(text="Ungültige Discord User-ID.", status=401)
-            self._set_no_store_headers(response)
-            return response
-        user_id = int(user_id_raw)
-        allowed, reason = await self._check_discord_admin_membership(user_id)
+        user_id = int(discord_id)
+        returned_role_ids = {
+            str(role).strip()
+            for role in ((session_payload or {}).get("discord_roles") or [])
+            if str(role).strip()
+        }
+
+        allowed = False
+        reason = "missing_admin_or_moderator_role"
+        owner_override_user_id = getattr(self, "_discord_admin_owner_user_id", None)
+        if isinstance(owner_override_user_id, int) and owner_override_user_id > 0 and user_id == owner_override_user_id:
+            allowed = True
+            reason = "owner_override"
+        elif str(getattr(self, "_discord_admin_moderator_role_id", "")).strip() in returned_role_ids:
+            allowed = True
+            reason = "moderator_role:delegated"
+        else:
+            allowed, reason = await self._check_discord_admin_membership(user_id)
+
         if not allowed:
             log.warning(
                 "AUDIT twitch-dashboard discord login denied: user=%s reason=%s peer=%s",
@@ -1112,15 +1282,8 @@ class _DashboardAuthMixin:
             self._set_no_store_headers(response)
             return response
 
-        username = str(user.get("username") or "").strip()
-        global_name = str(user.get("global_name") or "").strip()
-        discriminator = str(user.get("discriminator") or "0").strip()
-        if global_name:
-            display_name = global_name
-        elif discriminator and discriminator != "0":
-            display_name = f"{username}#{discriminator}"
-        else:
-            display_name = username or f"User {user_id}"
+        username = str((session_payload or {}).get("discord_name") or "").strip()
+        display_name = username or f"User {user_id}"
 
         now = time.time()
         session_id = secrets.token_urlsafe(32)
@@ -1173,12 +1336,7 @@ class _DashboardAuthMixin:
                 self._dashboard_auth_state_repo().delete_session(session_id)
             except Exception as _exc:
                 log.debug("Could not delete discord admin session from DB: %s", _exc)
-        login_url = (
-            TWITCH_ADMIN_DISCORD_LOGIN_URL if self._discord_admin_required else "/twitch/dashboard"
-        )
-        response = web.HTTPFound(
-            self._safe_internal_redirect(login_url, fallback="/twitch/dashboard")
-        )
+        response = web.HTTPFound(self._discord_admin_logout_url())
         self._clear_discord_admin_cookie(response, request)
         self._set_no_store_headers(response)
         raise response

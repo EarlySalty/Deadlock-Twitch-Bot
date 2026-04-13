@@ -54,6 +54,7 @@ class _AuthHarness(_DashboardAuthMixin):
         self._sessions_db_loaded = True
         self._discord_admin_enabled = True
         self._discord_admin_required = True
+        self._discord_admin_base_url = "https://dashboard.example"
         self._discord_admin_client_id = "discord-client-id"
         self._discord_admin_client_secret = "discord-client-secret"
         self._discord_admin_redirect_uri = "https://dashboard.example/twitch/auth/discord/callback"
@@ -63,13 +64,33 @@ class _AuthHarness(_DashboardAuthMixin):
         self._discord_admin_oauth_states: dict[str, dict] = {}
         self._discord_admin_sessions: dict[str, dict] = {}
         self._discord_sessions_db_loaded = True
+        self._discord_admin_owner_user_id = None
+        self._discord_admin_moderator_role_id = 1337518124647579661
+        self._discord_admin_guild_ids = ()
         self._rate_limits: dict[str, list[float]] = {}
         self.exchange_calls: list[tuple[str, str]] = []
         self.created_sessions: list[dict[str, str]] = []
-        self.discord_exchange_calls: list[tuple[str, str]] = []
-        self.discord_user_tokens: list[str] = []
+        self.delegated_discord_authorize_calls: list[tuple[str, str, str]] = []
+        self.delegated_discord_session_calls: list[tuple[str, str]] = []
         self.discord_membership_checks: list[int] = []
         self._state_repo = _InMemoryAuthStateRepo(self)
+
+    def _safe_discord_admin_login_redirect(self, raw_url: str | None) -> str:
+        return DashboardV2Server._safe_discord_admin_login_redirect(self, raw_url)
+
+    def _build_discord_admin_route_url(
+        self,
+        path: str,
+        *,
+        query: dict[str, str] | None = None,
+        raw_query: str | None = None,
+    ) -> str:
+        return DashboardV2Server._build_discord_admin_route_url(
+            self,
+            path,
+            query=query,
+            raw_query=raw_query,
+        )
 
     def _check_v2_auth(self, request) -> bool:
         del request
@@ -104,17 +125,31 @@ class _AuthHarness(_DashboardAuthMixin):
             "display_name": "Partner One",
         }
 
-    async def _exchange_discord_admin_code(self, code: str, redirect_uri: str):
-        self.discord_exchange_calls.append((code, redirect_uri))
-        return {"access_token": "discord-access-token"}
+    async def _fetch_delegated_discord_authorize_url(
+        self,
+        *,
+        redirect_uri: str,
+        scope: str,
+        state: str,
+    ) -> str | None:
+        self.delegated_discord_authorize_calls.append((redirect_uri, scope, state))
+        return (
+            "https://discord.com/api/oauth2/authorize?"
+            f"client_id=discord-client-id&redirect_uri={redirect_uri}&response_type=code"
+            f"&scope={scope}&state={state}"
+        )
 
-    async def _fetch_discord_admin_user(self, access_token: str):
-        self.discord_user_tokens.append(access_token)
+    async def _fetch_delegated_discord_session(
+        self,
+        *,
+        code: str,
+        redirect_uri: str,
+    ) -> dict[str, str] | None:
+        self.delegated_discord_session_calls.append((code, redirect_uri))
         return {
-            "id": "42",
-            "username": "mod_user",
-            "global_name": "Moderator User",
-            "discriminator": "0",
+            "discord_id": "42",
+            "discord_name": "Moderator User",
+            "discord_roles": [str(self._discord_admin_moderator_role_id)],
         }
 
     async def _check_discord_admin_membership(self, user_id: int):
@@ -150,6 +185,10 @@ class _InMemoryAuthStateRepo:
         del now
         return self.owner._dashboard_auth_state_cache("_oauth_states").pop(state, None)
 
+    def load_twitch_oauth_state(self, state: str, *, now=None) -> dict | None:
+        del now
+        return self.owner._dashboard_auth_state_cache("_oauth_states").get(state)
+
     def save_discord_admin_oauth_state(
         self, *, state: str, payload: dict, ttl_seconds: float, now=None
     ) -> None:
@@ -159,6 +198,10 @@ class _InMemoryAuthStateRepo:
     def consume_discord_admin_oauth_state(self, state: str, *, now=None) -> dict | None:
         del now
         return self.owner._dashboard_auth_state_cache("_discord_admin_oauth_states").pop(state, None)
+
+    def load_discord_admin_oauth_state(self, state: str, *, now=None) -> dict | None:
+        del now
+        return self.owner._dashboard_auth_state_cache("_discord_admin_oauth_states").get(state)
 
     def load_dashboard_session(self, session_id: str, *, now=None) -> dict | None:
         del now
@@ -252,6 +295,32 @@ class DashboardOAuthStateBindingTests(unittest.IsolatedAsyncioTestCase):
                     "/twitch/dashboard",
                 )
 
+    async def test_auth_login_uses_shared_callback_cookie_path_when_configured(self) -> None:
+        handler = _AuthHarness()
+        handler._oauth_redirect_uri = "https://deutsche-deadlock-community.de/callback/twitch"
+        request = _make_request(query={"next": "/twitch/dashboard"})
+        context_token = "ctx_token_shared_abcdefghijklmnop"
+        state = "state_token_shared_abcdefghijklmnop"
+
+        with patch(
+            "bot.dashboard.auth.auth_mixin.secrets.token_urlsafe",
+            side_effect=[context_token, state],
+        ):
+            with self.assertRaises(web.HTTPFound) as ctx:
+                await handler.auth_login(request)
+
+        self.assertIn(
+            "redirect_uri=https%3A%2F%2Fdeutsche-deadlock-community.de%2Fcallback%2Ftwitch",
+            ctx.exception.location,
+        )
+        cookie = ctx.exception.cookies.get(handler._oauth_context_cookie_name())
+        self.assertEqual(cookie.value, context_token)
+        self._assert_cookie_security_flags(
+            cookie,
+            path="/callback/twitch",
+            max_age=str(handler._oauth_state_ttl_seconds),
+        )
+
     async def test_auth_callback_rejects_missing_context_cookie_and_consumes_state(self) -> None:
         handler = _AuthHarness()
         state = "state_token_missing_cookie_123"
@@ -313,6 +382,23 @@ class DashboardOAuthStateBindingTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(replay.status, 400)
         self.assertIn("OAuth state ungültig oder abgelaufen.", replay.text)
 
+    async def test_shared_callback_delegates_error_flow_to_raid_handler_without_dashboard_state(self) -> None:
+        handler = _AuthHarness()
+        delegated_response = web.Response(text="raid callback", status=418)
+
+        async def _raid_oauth_callback(_request):
+            return delegated_response
+
+        handler.raid_oauth_callback = _raid_oauth_callback
+        request = _make_request(
+            query={"state": "raid-state", "error": "redirect_mismatch"},
+            path_qs="/callback/twitch?state=raid-state&error=redirect_mismatch",
+        )
+
+        response = await handler.auth_callback(request)
+
+        self.assertIs(response, delegated_response)
+
     async def test_discord_auth_login_sets_context_cookie_and_binds_state(self) -> None:
         handler = _AuthHarness()
         request = _make_request(
@@ -331,6 +417,16 @@ class DashboardOAuthStateBindingTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertIn("/oauth2/authorize?", ctx.exception.location)
         self.assertIn(f"state={state}", ctx.exception.location)
+        self.assertEqual(
+            handler.delegated_discord_authorize_calls,
+            [
+                (
+                    "https://dashboard.example/twitch/auth/discord/callback",
+                    "identify",
+                    state,
+                )
+            ],
+        )
         discord_oauth_cache = handler._dashboard_auth_state_cache("_discord_admin_oauth_states")
         self.assertIn(state, discord_oauth_cache.data())
         self.assertEqual(
@@ -397,11 +493,10 @@ class DashboardOAuthStateBindingTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(ctx.exception.location, "/twitch/admin")
         self.assertEqual(
-            handler.discord_exchange_calls,
+            handler.delegated_discord_session_calls,
             [("discord-oauth-code", "https://dashboard.example/twitch/auth/discord/callback")],
         )
-        self.assertEqual(handler.discord_user_tokens, ["discord-access-token"])
-        self.assertEqual(handler.discord_membership_checks, [42])
+        self.assertEqual(handler.discord_membership_checks, [])
         admin_cookie = ctx.exception.cookies.get(handler._discord_admin_cookie_name)
         self.assertEqual(admin_cookie.value, "discord-session-123")
         self._assert_cookie_security_flags(
