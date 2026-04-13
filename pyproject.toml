@@ -15,7 +15,7 @@ dependencies = [
 [project.optional-dependencies]
 test = [
     "coverage[toml]>=7.0",
-    "pytest>=8.0",
+    "pytest>=9.0.3",
     "pytest-cov>=7.0",
     "twitchio>=2.10",
 ]
