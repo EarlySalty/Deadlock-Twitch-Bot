@@ -46,7 +46,7 @@ STATIC_STRIPE_CONNECT_CLIENT_ID = ""
 TWITCH_ADMIN_PUBLIC_URL = (
     os.getenv("TWITCH_ADMIN_PUBLIC_URL")
     or os.getenv("MASTER_DASHBOARD_PUBLIC_URL")
-    or "https://admin.earlysalty.de"
+    or "https://admin.deutsche-deadlock-community.de"
 ).strip()
 TWITCH_ADMIN_DISCORD_REDIRECT_URI = (
     os.getenv("TWITCH_ADMIN_DISCORD_REDIRECT_URI")

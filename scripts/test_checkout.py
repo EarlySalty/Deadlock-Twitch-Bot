@@ -80,12 +80,12 @@ def main() -> None:
     success_url = (
         _load_vault("STRIPE_CHECKOUT_SUCCESS_URL")
         or _load_vault("TWITCH_BILLING_CHECKOUT_SUCCESS_URL")
-        or "https://twitch.earlysalty.com/twitch/abbo?checkout=success&session_id={CHECKOUT_SESSION_ID}"
+        or "https://deutsche-deadlock-community.de/twitch/abbo?checkout=success&session_id={CHECKOUT_SESSION_ID}"
     )
     cancel_url = (
         _load_vault("STRIPE_CHECKOUT_CANCEL_URL")
         or _load_vault("TWITCH_BILLING_CHECKOUT_CANCEL_URL")
-        or "https://twitch.earlysalty.com/twitch/abbo?checkout=cancelled"
+        or "https://deutsche-deadlock-community.de/twitch/abbo?checkout=cancelled"
     )
 
     stripe.api_key = secret_key

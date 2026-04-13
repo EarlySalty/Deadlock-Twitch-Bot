@@ -50,7 +50,7 @@ from .streamer_admin_mixin import (
     _notify_verification_success,
     _remove_streamer_role,
 )
-RAID_OAUTH_SUCCESS_REDIRECT_URL = "https://twitch.earlysalty.com/twitch/dashboard"
+RAID_OAUTH_SUCCESS_REDIRECT_URL = "https://deutsche-deadlock-community.de/twitch/dashboard"
 PUBLIC_WEBSITE_ONBOARDING_LOGIN = "public:website_onboarding"
 
 

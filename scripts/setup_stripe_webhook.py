@@ -4,7 +4,7 @@ import keyring
 import stripe
 
 SERVICE = "DeadlockBot"
-WEBHOOK_URL = "https://twitch.earlysalty.com/twitch/api/billing/stripe/webhook"
+WEBHOOK_URL = "https://deutsche-deadlock-community.de/twitch/api/billing/stripe/webhook"
 EVENTS = [
     "checkout.session.completed",
     "checkout.session.expired",
@@ -40,7 +40,7 @@ def main() -> None:
         url=WEBHOOK_URL,
         enabled_events=EVENTS,
         metadata={
-            "source": "twitch.earlysalty.com",
+            "source": "deutsche-deadlock-community.de",
             "billing": "subscriptions",
             "managed_by": "codex",
         },

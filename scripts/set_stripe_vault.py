@@ -34,11 +34,11 @@ def main() -> None:
     webhook = _prompt("STRIPE_WEBHOOK_SECRET", secret=True)
     success_url = _prompt(
         "STRIPE_CHECKOUT_SUCCESS_URL",
-        default="https://twitch.earlysalty.com/twitch/abbo?checkout=success&session_id={CHECKOUT_SESSION_ID}",
+        default="https://deutsche-deadlock-community.de/twitch/abbo?checkout=success&session_id={CHECKOUT_SESSION_ID}",
     )
     cancel_url = _prompt(
         "STRIPE_CHECKOUT_CANCEL_URL",
-        default="https://twitch.earlysalty.com/twitch/abbo?checkout=cancelled",
+        default="https://deutsche-deadlock-community.de/twitch/abbo?checkout=cancelled",
     )
     price_map_raw = _prompt(
         "STRIPE_PRICE_ID_MAP JSON (optional)",
