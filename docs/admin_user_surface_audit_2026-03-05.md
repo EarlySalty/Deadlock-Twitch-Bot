@@ -2,7 +2,7 @@
 
 ## Scope
 - Repository: `Deadlock-Twitch-Bot`
-- Goal: ensure `admin.earlysalty.de/twitch/dashboard*` is not served as user dashboard and keep admin/user surfaces separated.
+- Goal: ensure `admin.deutsche-deadlock-community.de/twitch/dashboard*` is not served as user dashboard and keep admin/user surfaces separated.
 
 ## Implemented Separation (App Layer)
 - Admin host gate for dashboard pages:
@@ -20,12 +20,12 @@
   - Added explicit admin-domain block for user dashboard paths:
     - `/twitch/dashboard*`, `/twitch/dashboard-v2*`, legacy dashboard aliases.
     - response: `404 Not Found`.
-  - Removed duplicate `twitch.earlysalty.com` site block that previously also proxied `/twitch/*`.
+  - Removed duplicate `twitch.earlysalty.com` site block that previously also proxied `/twitch/*` (now path-based on main domain).
   - Kept `/health` available on public Twitch host in the primary block.
 - Runtime checks:
-  - `https://admin.earlysalty.de/twitch/dashboard` -> `404`
-  - `https://admin.earlysalty.de/twitch/dashboard-v2` -> `404`
-  - `https://admin.earlysalty.de/twitch/admin` stays admin flow (`302` to Discord admin login when unauthenticated).
+  - `https://admin.deutsche-deadlock-community.de/twitch/dashboard` -> `404`
+  - `https://admin.deutsche-deadlock-community.de/twitch/dashboard-v2` -> `404`
+  - `https://admin.deutsche-deadlock-community.de/twitch/admin` stays admin flow (`302` to Discord admin login when unauthenticated).
 
 ## Remaining Admin-Only Registrations (Expected)
 - Admin routes and actions (Discord-admin protected):

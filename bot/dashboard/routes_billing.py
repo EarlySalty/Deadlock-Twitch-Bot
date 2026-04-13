@@ -667,7 +667,7 @@ async def api_billing_stripe_sync_products(
                         stripe.Product.create,
                         name=plan_name,
                         description=plan_description or None,
-                        metadata={"plan_id": plan_id, "source": "twitch.earlysalty.com", "billing": "subscriptions"},
+                        metadata={"plan_id": plan_id, "source": "deutsche-deadlock-community.de", "billing": "subscriptions"},
                     )
                 except Exception as exc:
                     log.warning("stripe product create failed for %s (%s)", plan_id, type(exc).__name__)
@@ -746,7 +746,7 @@ async def api_billing_stripe_sync_products(
                             unit_amount=amount_cents,
                             recurring={"interval": "month", "interval_count": cycle},
                             lookup_key=lookup_key,
-                            metadata={"plan_id": plan_id, "cycle_months": str(cycle), "source": "twitch.earlysalty.com"},
+                            metadata={"plan_id": plan_id, "cycle_months": str(cycle), "source": "deutsche-deadlock-community.de"},
                         )
                     except Exception as exc:
                         log.warning(

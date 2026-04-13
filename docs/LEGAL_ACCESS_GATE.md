@@ -24,7 +24,7 @@ Es gibt zwei getrennte Ebenen:
 1. Anwendungsebene in `bot/dashboard/admin/legal_mixin.py`
 2. Public Routing in `C:/caddy/Caddyfile`
 
-Der Dashboard-Service selbst laeuft lokal auf `127.0.0.1:8765` und liefert die Legal-Gate-Seite aus. Caddy ist fuer die oeffentliche Erreichbarkeit unter `https://twitch.earlysalty.com` zustaendig.
+Der Dashboard-Service selbst laeuft lokal auf `127.0.0.1:8765` und liefert die Legal-Gate-Seite aus. Caddy ist fuer die oeffentliche Erreichbarkeit unter `https://deutsche-deadlock-community.de/twitch` zustaendig.
 
 ## Request-Flow
 
@@ -98,7 +98,7 @@ Wichtig:
 - Turnstile prueft serverseitig gegen Cloudflare
 - die Hostname-Pruefung muss zum Request-Host passen
 
-Mit Produktiv-Keys funktioniert `localhost` oder `127.0.0.1` haeufig nicht sinnvoll, wenn die Turnstile-Site nur fuer `twitch.earlysalty.com` konfiguriert ist.
+Mit Produktiv-Keys funktioniert `localhost` oder `127.0.0.1` haeufig nicht sinnvoll, wenn die Turnstile-Site nur fuer `deutsche-deadlock-community.de/twitch` konfiguriert ist.
 
 ### 2. Nur Legal-Inhalte lokal pruefen
 
@@ -133,7 +133,7 @@ Ursache:
 Pruefen:
 
 ```powershell
-curl.exe -i "https://twitch.earlysalty.com/twitch/legal/access?next=/twitch/impressum"
+curl.exe -i "https://deutsche-deadlock-community.de/twitch/twitch/legal/access?next=/twitch/impressum"
 ```
 
 Wenn derselbe Pfad lokal direkt gegen `127.0.0.1:8765` funktioniert, liegt das Problem im Reverse Proxy.
@@ -144,7 +144,7 @@ Haeufige Ursachen:
 
 - Turnstile-Script oder Frame wird durch CSP blockiert
 - Site Key und Secret Key gehoeren nicht zusammen
-- `twitch.earlysalty.com` ist in Cloudflare Turnstile nicht als erlaubter Host konfiguriert
+- `deutsche-deadlock-community.de/twitch` ist in Cloudflare Turnstile nicht als erlaubter Host konfiguriert
 - leeres oder ungueltiges Formular-Token
 
 Pruefen:
@@ -170,8 +170,8 @@ Erwartung:
 ### Oeffentliche Domain
 
 ```powershell
-curl.exe -i "https://twitch.earlysalty.com/twitch/legal/access?next=/twitch/impressum"
-curl.exe -i "https://twitch.earlysalty.com/twitch/impressum"
+curl.exe -i "https://deutsche-deadlock-community.de/twitch/twitch/legal/access?next=/twitch/impressum"
+curl.exe -i "https://deutsche-deadlock-community.de/twitch/twitch/impressum"
 ```
 
 Erwartung:

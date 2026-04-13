@@ -265,8 +265,6 @@ class _DashboardAuthMixin:
         )
         if self._should_use_discord_admin_login(request):
             return self._build_discord_admin_login_url(request, next_path=next_path)
-        if not self._is_twitch_oauth_ready() and self._discord_admin_required:
-            return self._build_discord_admin_login_url(request, next_path=next_path)
         return f"/twitch/auth/login?{urlencode({'next': next_path})}"
 
     def _is_twitch_oauth_ready(self) -> bool:
@@ -274,6 +272,24 @@ class _DashboardAuthMixin:
         if not self._is_oauth_configured():
             return False
         return bool(self._build_oauth_redirect_uri())
+
+    def _is_public_host_discord_admin_route(self, request: web.Request) -> bool:
+        admin_host_checker = getattr(self, "_is_admin_dashboard_host_request", None)
+        is_local_request = False
+        local_checker = getattr(self, "_is_local_request", None)
+        if callable(local_checker):
+            try:
+                is_local_request = bool(local_checker(request))
+            except Exception:
+                is_local_request = False
+        if is_local_request:
+            return False
+        if not callable(admin_host_checker):
+            return False
+        try:
+            return not bool(admin_host_checker(request))
+        except Exception:
+            return False
 
     @staticmethod
     def _oauth_unavailable_response() -> web.Response:
@@ -321,13 +337,6 @@ class _DashboardAuthMixin:
 
         if self._is_twitch_oauth_ready():
             return web.HTTPFound(f"/twitch/auth/login?{urlencode({'next': normalized_next})}")
-        if allow_discord_admin_login and self._discord_admin_required:
-            discord_login_url = self._build_discord_admin_login_url(
-                request,
-                next_path=normalized_next,
-            )
-            safe_discord_login_url = self._safe_discord_admin_login_redirect(discord_login_url)
-            return web.HTTPFound(safe_discord_login_url)
         return self._oauth_unavailable_response()
 
     def _dashboard_auth_state_repo(self) -> DashboardAuthStateRepository:
@@ -1093,6 +1102,8 @@ class _DashboardAuthMixin:
     # ------------------------------------------------------------------ #
 
     async def discord_auth_login(self, request: web.Request) -> web.StreamResponse:
+        if self._is_public_host_discord_admin_route(request):
+            return web.Response(text="Not Found", status=404)
         if not self._check_rate_limit(request, max_requests=10, window_seconds=60.0):
             raise web.HTTPTooManyRequests(
                 text="Too many login attempts. Please wait a minute and try again.",
@@ -1169,6 +1180,8 @@ class _DashboardAuthMixin:
         raise response
 
     async def discord_auth_callback(self, request: web.Request) -> web.StreamResponse:
+        if self._is_public_host_discord_admin_route(request):
+            return web.Response(text="Not Found", status=404)
         if not self._check_rate_limit(request, max_requests=20, window_seconds=60.0):
             raise web.HTTPTooManyRequests(
                 text="Too many OAuth callback requests. Please wait a minute and try again.",
@@ -1329,6 +1342,8 @@ class _DashboardAuthMixin:
         raise response
 
     async def discord_auth_logout(self, request: web.Request) -> web.StreamResponse:
+        if self._is_public_host_discord_admin_route(request):
+            return web.Response(text="Not Found", status=404)
         session_id = (request.cookies.get(self._discord_admin_cookie_name) or "").strip()
         if session_id:
             self._dashboard_auth_state_cache("_discord_admin_sessions").pop(session_id, None)

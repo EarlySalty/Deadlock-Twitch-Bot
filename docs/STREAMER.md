@@ -15,13 +15,13 @@ Alle Features fuer verifizierte Streamer-Partner. Zugang nach Discord-Link + Adm
 ## Dashboard
 
 ### Dashboard V1
-URL: `https://twitch.earlysalty.com/twitch/dashboard`
+URL: `https://deutsche-deadlock-community.de/twitch/twitch/dashboard`
 - Klassisches Server-Rendered-Dashboard
 - Live-Status, Statistiken, Einstellungen
 - **Datei**: `bot/analytics/api_overview.py` → `_serve_dashboard()`
 
 ### Dashboard V2
-URL: `https://twitch.earlysalty.com/twitch/dashboard-v2`
+URL: `https://deutsche-deadlock-community.de/twitch/twitch/dashboard-v2`
 - React 19 + TypeScript + Vite 7 SPA
 - Alle Analytics in interaktiven Charts (Recharts, Framer Motion)
 - Gebaut aus `bot/dashboard_v2/` → Output in `bot/analytics/dashboard_v2/dist/`
@@ -29,7 +29,7 @@ URL: `https://twitch.earlysalty.com/twitch/dashboard-v2`
 - **Datei**: `bot/analytics/api_overview.py` → `_serve_dashboard_v2()`
 
 ### Demo-Dashboard (Public)
-URL: `https://twitch.earlysalty.com/twitch/demo`
+URL: `https://deutsche-deadlock-community.de/twitch/twitch/demo`
 - Oeffentlich, mit Demo-Daten befuellt (`bot/analytics/demo_data.py`)
 - Identisches UI wie Dashboard V2
 

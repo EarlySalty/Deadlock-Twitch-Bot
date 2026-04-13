@@ -292,15 +292,15 @@ class DashboardLegalAccessTests(unittest.IsolatedAsyncioTestCase):
             {
                 "success": True,
                 "action": "legal_access",
-                "hostname": "twitch.earlysalty.com",
+                "hostname": "deutsche-deadlock-community.de",
             }
         )
         aiohttp_request = type(
             "Req",
             (),
             {
-                "headers": {"Host": "twitch.earlysalty.com"},
-                "host": "twitch.earlysalty.com",
+                "headers": {"Host": "deutsche-deadlock-community.de"},
+                "host": "deutsche-deadlock-community.de",
                 "remote": "127.0.0.1",
             },
         )()
@@ -336,7 +336,7 @@ class DashboardLegalAccessTests(unittest.IsolatedAsyncioTestCase):
         missing_action_session = _FakeTurnstileSession(
             {
                 "success": True,
-                "hostname": "twitch.earlysalty.com",
+                "hostname": "deutsche-deadlock-community.de",
             }
         )
         with patch(

@@ -68,10 +68,9 @@ export function VerwaltungPage() {
   const hasScopeIssue = needsReauth || missingScopeCount > 0 || home.oauth?.status === 'partial' || home.oauth?.status === 'missing';
   const oauthStatus = home.oauth?.status || (home.oauth?.connected ? 'connected' : hasScopeIssue ? 'missing' : 'partial');
   const oauthFallbackUrl = '/twitch/auth/login?next=%2Ftwitch%2Fdashboard';
-  const discordConnectFallbackUrl = '/twitch/auth/discord/login?next=%2Ftwitch%2Fdashboard';
   const reconnectUrl = home.oauth?.reconnectUrl || oauthFallbackUrl;
   const discordConnected = Boolean(home.discord?.connected);
-  const discordConnectUrl = home.discord?.connectUrl || discordConnectFallbackUrl;
+  const discordConnectUrl = home.discord?.connectUrl || null;
   const userId = (authStatus as any)?.userId || (home as any)?.userId || '';
 
   const oauthConnected = oauthStatus === 'connected' && !hasScopeIssue;
@@ -223,13 +222,31 @@ export function VerwaltungPage() {
             </div>
           </div>
 
-          <a
-            href={discordConnectUrl}
-            className="inline-flex items-center gap-2 rounded-lg border border-accent/40 bg-accent/10 px-5 py-2.5 text-sm font-semibold text-accent transition-colors hover:border-accent/60 hover:bg-accent/20"
-          >
-            <MessageSquare className="h-4 w-4" />
-            {discordConnected ? 'Erneut verbinden' : 'Discord verknüpfen'}
-          </a>
+          {discordConnectUrl ? (
+            <a
+              href={discordConnectUrl}
+              className="inline-flex items-center gap-2 rounded-lg border border-accent/40 bg-accent/10 px-5 py-2.5 text-sm font-semibold text-accent transition-colors hover:border-accent/60 hover:bg-accent/20"
+            >
+              <MessageSquare className="h-4 w-4" />
+              {discordConnected ? 'Erneut verbinden' : 'Discord verknüpfen'}
+            </a>
+          ) : (
+            <div className="space-y-2">
+              <button
+                type="button"
+                disabled
+                className="inline-flex cursor-not-allowed items-center gap-2 rounded-lg border border-border bg-background/70 px-5 py-2.5 text-sm font-semibold text-text-secondary"
+              >
+                <MessageSquare className="h-4 w-4" />
+                {discordConnected ? 'Discord verbunden' : 'Discord-Link nicht im Self-Service verfügbar'}
+              </button>
+              {!discordConnected && (
+                <p className="text-xs text-text-secondary">
+                  Discord-Verknüpfungen laufen nicht über den Admin-Login und sind auf dieser Seite aktuell nicht als Self-Service freigeschaltet.
+                </p>
+              )}
+            </div>
+          )}
         </motion.section>
 
         {/* Profile Section */}

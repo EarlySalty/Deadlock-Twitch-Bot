@@ -101,7 +101,7 @@ class _AffiliateStripeHarness(_DashboardAffiliateMixin):
         *,
         stripe_connect_client_id: str = "",
         loader_value: str = "",
-        public_url: str = "https://twitch.earlysalty.com",
+        public_url: str = "https://deutsche-deadlock-community.de",
     ) -> None:
         self._stripe_connect_client_id = stripe_connect_client_id
         self._affiliate_connect_states = {}
@@ -177,13 +177,13 @@ class AffiliateStripeConnectTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(params.get("client_id"), ["ca_code_123"])
         self.assertEqual(
             params.get("redirect_uri"),
-            ["https://twitch.earlysalty.com/twitch/affiliate/connect/stripe/callback"],
+            ["https://deutsche-deadlock-community.de/twitch/affiliate/connect/stripe/callback"],
         )
         self.assertEqual(params.get("state"), ["state-123"])
         self.assertEqual(handler.loader_calls, [])
         self.assertEqual(
             handler._affiliate_connect_states["state-123"]["redirect_uri"],
-            "https://twitch.earlysalty.com/twitch/affiliate/connect/stripe/callback",
+            "https://deutsche-deadlock-community.de/twitch/affiliate/connect/stripe/callback",
         )
 
     async def test_connect_redirect_falls_back_to_secret_loader_when_needed(self) -> None:
@@ -201,7 +201,7 @@ class AffiliateStripeConnectTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(handler.loader_calls, [("STRIPE_CONNECT_CLIENT_ID",)])
 
     async def test_connect_callback_uses_same_redirect_uri_for_token_exchange(self) -> None:
-        redirect_uri = "https://twitch.earlysalty.com/twitch/affiliate/connect/stripe/callback"
+        redirect_uri = "https://deutsche-deadlock-community.de/twitch/affiliate/connect/stripe/callback"
         handler = _AffiliateStripeCallbackHarness(redirect_uri=redirect_uri)
         handler._affiliate_ensure_tables = lambda _conn: None  # type: ignore[method-assign]
         conn = _RecordingConn()
@@ -235,7 +235,7 @@ class AffiliateStripeConnectTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(conn.commits, 1)
 
     async def test_connect_callback_rejects_when_session_login_does_not_match_state(self) -> None:
-        redirect_uri = "https://twitch.earlysalty.com/twitch/affiliate/connect/stripe/callback"
+        redirect_uri = "https://deutsche-deadlock-community.de/twitch/affiliate/connect/stripe/callback"
         handler = _AffiliateStripeCallbackHarness(
             redirect_uri=redirect_uri,
             session_login="partner_two",
@@ -265,7 +265,7 @@ class AffiliateStripeConnectTests(unittest.IsolatedAsyncioTestCase):
                     partner_token=None,
                     oauth_client_id="oauth-client-id",
                     oauth_client_secret="oauth-client-secret",
-                    oauth_redirect_uri="https://twitch.earlysalty.com/twitch/auth/callback",
+                    oauth_redirect_uri="https://deutsche-deadlock-community.de/twitch/auth/callback",
                 )
 
         self.assertEqual(handler._stripe_connect_client_id, "ca_static_789")

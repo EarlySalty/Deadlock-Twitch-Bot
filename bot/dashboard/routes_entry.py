@@ -26,8 +26,7 @@ def build_route_defs(server: Any) -> list[web.RouteDef]:
         web.get("/twitch/admin", server.admin),
         web.get("/twitch/admin/legacy", server.legacy_admin),
         web.get("/twitch/admin/announcements", server.admin_announcements_page),
-        web.get("/twitch/dashboard-v2", server.admin_dashboard_redirect),
-        web.get("/twitch/stats", server.admin_legacy_redirect),
+        web.get("/twitch/stats", server.legacy_dashboard_redirect),
         web.post("/twitch/admin/announcements", server.admin_announcements_save),
         web.get("/twitch/admin/roadmap", server.admin_roadmap_page),
         web.get("/twitch/live", server.admin),
@@ -161,7 +160,7 @@ async def stats_entry(
     legacy_url = server._resolve_legacy_stats_url()
     beta_url = "/twitch/dashboard-v2"
     logout_url = (
-        "/twitch/auth/discord/logout"
+        server._discord_admin_logout_url()
         if server._is_discord_admin_request(request)
         else "/twitch/auth/logout"
     )

@@ -139,6 +139,14 @@ class DashboardAuthStateRepository:
     ) -> dict[str, Any] | None:
         return self._consume_state(_TWITCH_OAUTH_STATE_TYPE, state, now=now)
 
+    def load_twitch_oauth_state(
+        self,
+        state: str,
+        *,
+        now: float | None = None,
+    ) -> dict[str, Any] | None:
+        return self._load_session(_TWITCH_OAUTH_STATE_TYPE, state, now=now)
+
     def save_discord_admin_oauth_state(
         self,
         *,
@@ -162,6 +170,14 @@ class DashboardAuthStateRepository:
         now: float | None = None,
     ) -> dict[str, Any] | None:
         return self._consume_state(_DISCORD_ADMIN_OAUTH_STATE_TYPE, state, now=now)
+
+    def load_discord_admin_oauth_state(
+        self,
+        state: str,
+        *,
+        now: float | None = None,
+    ) -> dict[str, Any] | None:
+        return self._load_session(_DISCORD_ADMIN_OAUTH_STATE_TYPE, state, now=now)
 
     def save_affiliate_oauth_state(
         self,

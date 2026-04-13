@@ -179,7 +179,7 @@ def build_dashboard_service_app(
         oauth_redirect_uri
         if oauth_redirect_uri is not None
         else (os.getenv("TWITCH_DASHBOARD_AUTH_REDIRECT_URI") or "").strip()
-        or "https://twitch.earlysalty.com/twitch/auth/callback"
+        or "https://deutsche-deadlock-community.de/callback/twitch"
     )
     resolved_session_ttl = (
         int(session_ttl_seconds)

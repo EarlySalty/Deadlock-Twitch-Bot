@@ -142,7 +142,7 @@ class RaidOAuthSuccessRedirectTests(unittest.IsolatedAsyncioTestCase):
                 "status": 200,
                 "title": "Autorisierung erfolgreich",
                 "body_html": "<p>ok</p>",
-                "redirect_url": "https://twitch.earlysalty.com/twitch/dashboard",
+                "redirect_url": "https://deutsche-deadlock-community.de/twitch/dashboard",
             }
         )
         request = SimpleNamespace(query={"code": "oauth-code", "state": "valid-state"})

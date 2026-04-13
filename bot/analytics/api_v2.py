@@ -389,7 +389,7 @@ def _compute_week_comparison(login: str, conn: Any) -> dict[str, Any]:
 
 
 INTERNAL_HOME_LOGIN_URL = "/twitch/auth/login?next=%2Ftwitch%2Fdashboard"
-INTERNAL_HOME_DISCORD_CONNECT_URL = "/twitch/auth/discord/login?next=%2Ftwitch%2Fdashboard"
+INTERNAL_HOME_DISCORD_CONNECT_URL = None
 DASHBOARD_V2_LOGIN_URL = "/twitch/auth/login?next=%2Ftwitch%2Fdashboard-v2"
 
 # Twitch logins that receive admin-level access (same as Discord admin / localhost)
@@ -798,13 +798,13 @@ class AnalyticsV2Mixin(
             os.getenv("TWITCH_ADMIN_PUBLIC_URL"),
             os.getenv("MASTER_DASHBOARD_PUBLIC_URL"),
             getattr(self, "_discord_admin_redirect_uri", ""),
-            "https://admin.earlysalty.de",
+            "https://admin.deutsche-deadlock-community.de",
         )
         for candidate in candidates:
             host = self._host_from_origin_like(candidate)
             if host:
                 return host
-        return "admin.earlysalty.de"
+        return "admin.deutsche-deadlock-community.de"
 
     def _is_admin_dashboard_host_request(self, request: web.Request) -> bool:
         request_host = self._normalize_host_header(request.headers.get("Host") or request.host or "")
@@ -837,17 +837,7 @@ class AnalyticsV2Mixin(
                 if callable(should_use_discord) and bool(should_use_discord(request)):
                     login_url = "/twitch/auth/discord/login?next=%2Ftwitch%2Fdashboard-v2"
                 else:
-                    oauth_ready_checker = getattr(self, "_is_twitch_oauth_ready", None)
-                    oauth_ready = True
-                    if callable(oauth_ready_checker):
-                        try:
-                            oauth_ready = bool(oauth_ready_checker())
-                        except Exception:
-                            oauth_ready = True
-                    if not oauth_ready and bool(getattr(self, "_discord_admin_required", False)):
-                        login_url = "/twitch/auth/discord/login?next=%2Ftwitch%2Fdashboard-v2"
-                    else:
-                        login_url = "/twitch/auth/login?next=%2Ftwitch%2Fdashboard-v2"
+                    login_url = "/twitch/auth/login?next=%2Ftwitch%2Fdashboard-v2"
             if on_admin_host and auth_level not in ("none", "localhost", "admin"):
                 payload = {
                     "error": "admin_required",

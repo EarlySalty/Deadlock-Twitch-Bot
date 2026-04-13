@@ -12,7 +12,7 @@ from ...core.constants import log
 from ...raid.scope_profiles import scopes_for_profile
 
 TWITCH_HELIX_USERS_URL = "https://api.twitch.tv/helix/users"
-DEFAULT_RAID_OAUTH_SUCCESS_REDIRECT_URL = "https://twitch.earlysalty.com/twitch/dashboard"
+DEFAULT_RAID_OAUTH_SUCCESS_REDIRECT_URL = "https://deutsche-deadlock-community.de/twitch/dashboard"
 PUBLIC_STREAMER_ONBOARDING_LOGIN = "public:website_onboarding"
 
 

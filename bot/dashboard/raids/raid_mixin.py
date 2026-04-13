@@ -22,8 +22,8 @@ from .pages import (
     build_raid_history_rows,
 )
 
-DEFAULT_RAID_OAUTH_SUCCESS_REDIRECT_URL = "https://twitch.earlysalty.com/twitch/dashboard"
-PUBLIC_STREAMER_ONBOARDING_URL = "https://twitch.earlysalty.com/twitch/onboarding"
+DEFAULT_RAID_OAUTH_SUCCESS_REDIRECT_URL = "https://deutsche-deadlock-community.de/twitch/dashboard"
+PUBLIC_STREAMER_ONBOARDING_URL = "https://deutsche-deadlock-community.de/twitch/onboarding"
 PUBLIC_STREAMER_ONBOARDING_LOGIN = "public:website_onboarding"
 
 

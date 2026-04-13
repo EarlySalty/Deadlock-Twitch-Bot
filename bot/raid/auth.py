@@ -14,7 +14,7 @@ import secrets
 import time
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from urllib.parse import urlencode
+from urllib.parse import urlencode, urlsplit
 
 import aiohttp
 from ..api.twitch_auth import (
@@ -213,9 +213,15 @@ class RaidAuthManager:
         self._client_auth_blocked_until: float = 0.0
         self._client_auth_block_reason: str | None = None
 
-        # Basis-URL für Short-Redirect ableiten (z.B. https://raid.earlysalty.com)
-        _parts = redirect_uri.split("/twitch/", 1)
-        self._base_url: str = _parts[0] if len(_parts) > 1 else ""
+        # Basis-URL für Short-Redirect ableiten (z.B. https://deutsche-deadlock-community.de).
+        try:
+            redirect_parts = urlsplit(redirect_uri)
+        except Exception:
+            redirect_parts = None
+        if redirect_parts and redirect_parts.scheme and redirect_parts.netloc:
+            self._base_url = f"{redirect_parts.scheme}://{redirect_parts.netloc}"
+        else:
+            self._base_url = ""
 
     def is_client_auth_blocked(self) -> bool:
         return time.time() < self._client_auth_blocked_until

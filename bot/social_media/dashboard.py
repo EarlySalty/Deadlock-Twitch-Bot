@@ -190,7 +190,7 @@ class SocialMediaDashboard:
             os.getenv("SOCIAL_MEDIA_PUBLIC_URL")
             or os.getenv("TWITCH_ADMIN_PUBLIC_URL")
             or os.getenv("MASTER_DASHBOARD_PUBLIC_URL")
-            or "https://admin.earlysalty.de"
+            or "https://admin.deutsche-deadlock-community.de"
         )
         if self._is_localhost_request(request):
             try:
@@ -202,7 +202,7 @@ class SocialMediaDashboard:
 
         if env_origin:
             return env_origin
-        return "https://admin.earlysalty.de"
+        return "https://admin.deutsche-deadlock-community.de"
 
     def _resolve_streamer_scope(
         self,

@@ -49,13 +49,13 @@ class DashboardAdminAnnouncementMixin:
             os.getenv("TWITCH_ADMIN_PUBLIC_URL"),
             os.getenv("MASTER_DASHBOARD_PUBLIC_URL"),
             getattr(self, "_discord_admin_redirect_uri", ""),
-            "https://admin.earlysalty.de",
+            "https://admin.deutsche-deadlock-community.de",
         )
         for candidate in candidates:
             origin = self._admin_announcement_origin_from_value(candidate)
             if origin:
                 return origin
-        return "https://admin.earlysalty.de"
+        return "https://admin.deutsche-deadlock-community.de"
 
     def _admin_announcement_enforce_admin_host(self, request: web.Request) -> None:
         local_checker = getattr(self, "_is_local_request", None)

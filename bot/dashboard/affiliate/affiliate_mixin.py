@@ -530,7 +530,7 @@ class _DashboardAffiliateMixin:
             "website": str(
                 self._load_secret_value("AFFILIATE_GUTSCHRIFT_SELLER_WEBSITE")
                 or getattr(self, "_public_url", "")
-                or "https://twitch.earlysalty.com"
+                or "https://deutsche-deadlock-community.de"
             ).strip(),
             "tax_id": str(
                 self._load_secret_value(
@@ -849,13 +849,13 @@ class _DashboardAffiliateMixin:
             return configured
         public_url = getattr(self, "_public_url", "") or ""
         if not public_url:
-            public_url = "https://twitch.earlysalty.com"
+            public_url = "https://deutsche-deadlock-community.de"
         return f"{public_url.rstrip('/')}/twitch/auth/affiliate/callback"
 
     def _affiliate_build_stripe_connect_redirect_uri(self) -> str:
         public_url = getattr(self, "_public_url", "") or ""
         if not public_url:
-            public_url = "https://twitch.earlysalty.com"
+            public_url = "https://deutsche-deadlock-community.de"
         return f"{public_url.rstrip('/')}/twitch/affiliate/connect/stripe/callback"
 
     def _affiliate_stripe_connect_client_id(self) -> str:

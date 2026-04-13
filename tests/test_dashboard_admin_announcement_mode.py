@@ -19,7 +19,7 @@ class _FakeRequest:
         *,
         method: str = "GET",
         path: str = "/twitch/admin/announcements",
-        host: str = "admin.earlysalty.de",
+        host: str = "admin.deutsche-deadlock-community.de",
         query: dict | None = None,
         body: dict | None = None,
     ) -> None:
@@ -45,7 +45,7 @@ class _DummyAnnouncementPage(DashboardAdminAnnouncementMixin, DashboardTemplateM
         return False
 
     def _is_admin_dashboard_host_request(self, request):
-        return str(request.host or "").strip().lower() == "admin.earlysalty.de"
+        return str(request.host or "").strip().lower() == "admin.deutsche-deadlock-community.de"
 
     def _require_token(self, _request):
         if not self.authenticated:
@@ -180,12 +180,12 @@ class DashboardAdminAnnouncementModeTests(unittest.IsolatedAsyncioTestCase):
         with self._storage_patch()[0], self._storage_patch()[1]:
             with self.assertRaises(web.HTTPFound) as ctx:
                 await self.handler.admin_announcements_page(
-                    _FakeRequest(host="twitch.earlysalty.com")
+                    _FakeRequest(host="deutsche-deadlock-community.de")
                 )
 
         self.assertEqual(
             ctx.exception.location,
-            "https://admin.earlysalty.de/twitch/admin/announcements",
+            "https://admin.deutsche-deadlock-community.de/twitch/admin/announcements",
         )
 
     async def test_non_admin_request_is_blocked(self) -> None:

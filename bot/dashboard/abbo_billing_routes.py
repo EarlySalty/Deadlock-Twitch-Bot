@@ -307,7 +307,7 @@ async def abbo_invoices(handler: Any, request: web.Request) -> web.StreamRespons
         )
 
     logout_url = (
-        "/twitch/auth/discord/logout"
+        handler._discord_admin_logout_url()
         if handler._is_discord_admin_request(request)
         else "/twitch/auth/logout"
     )
@@ -377,7 +377,7 @@ async def abbo_stripe_settings(handler: Any, request: web.Request) -> web.Stream
     checks = list(readiness.get("checks") or [])
     missing_count = len([check for check in checks if not bool(check.get("ready"))])
     logout_url = (
-        "/twitch/auth/discord/logout"
+        handler._discord_admin_logout_url()
         if handler._is_discord_admin_request(request)
         else "/twitch/auth/logout"
     )

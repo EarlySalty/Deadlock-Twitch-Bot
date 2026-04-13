@@ -13,7 +13,7 @@ TWITCH_DASHBOARD_HOST = "127.0.0.1"
 TWITCH_DASHBOARD_PORT = 8765
 TWITCH_INTERNAL_API_HOST = "127.0.0.1"
 TWITCH_INTERNAL_API_PORT = 8776
-TWITCH_RAID_REDIRECT_URI = "https://deutsche-deadlock-community.de/raid/twitch/raid/callback"
+TWITCH_RAID_REDIRECT_URI = "https://deutsche-deadlock-community.de/callback/twitch"
 
 TWITCH_LANGUAGE = (
     "de de-de de-at de-ch"  # Mehrere Varianten via Komma/Leerzeichen (z. B. "de de-at de-ch")

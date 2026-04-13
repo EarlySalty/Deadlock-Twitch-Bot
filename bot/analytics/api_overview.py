@@ -355,7 +355,7 @@ class _AnalyticsOverviewMixin:
                 origin = ""
             if origin:
                 return origin.rstrip("/")
-        return "https://admin.earlysalty.de"
+        return "https://admin.deutsche-deadlock-community.de"
 
     def _admin_dashboard_login_url(self, request: web.Request) -> str:
         login_builder = getattr(self, "_build_discord_admin_login_url", None)

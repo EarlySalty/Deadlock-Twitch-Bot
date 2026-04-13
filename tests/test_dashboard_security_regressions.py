@@ -381,7 +381,7 @@ class _DummyRaidAuthRoute(_DashboardRaidMixin):
         self._raid_bot = SimpleNamespace(
             auth_manager=SimpleNamespace(
                 client_id="raid-client-id",
-                redirect_uri="https://twitch.earlysalty.com/twitch/raid/callback",
+                redirect_uri="https://deutsche-deadlock-community.de/twitch/raid/callback",
                 generate_auth_url=_generate_auth_url,
             )
         )
@@ -1461,11 +1461,11 @@ class DashboardSecurityRegressionTests(unittest.IsolatedAsyncioTestCase):
             partner_token=None,
             oauth_client_id=None,
             oauth_client_secret=None,
-            oauth_redirect_uri="https://twitch.earlysalty.com/twitch/auth/callback",
+            oauth_redirect_uri="https://deutsche-deadlock-community.de/twitch/auth/callback",
         )
         request = SimpleNamespace(
             path="/twitch/live",
-            headers={"Referer": "https://admin.earlysalty.de//evil.example?ok=1"},
+            headers={"Referer": "https://admin.deutsche-deadlock-community.de//evil.example?ok=1"},
         )
 
         location = handler._redirect_location(request, err="denied")
@@ -1528,18 +1528,18 @@ class DashboardSecurityRegressionTests(unittest.IsolatedAsyncioTestCase):
         handler = _DummyV2HeaderOnlyAuth()
         request_partner_admin_host = SimpleNamespace(
             path="/twitch/api/v2/overview",
-            headers={"Host": "admin.earlysalty.de", "X-Partner-Token": "partner-secret"},
+            headers={"Host": "admin.deutsche-deadlock-community.de", "X-Partner-Token": "partner-secret"},
             query={},
-            host="admin.earlysalty.de",
+            host="admin.deutsche-deadlock-community.de",
             remote="203.0.113.10",
             transport=None,
             rel_url=SimpleNamespace(path_qs="/twitch/api/v2/overview"),
         )
         request_admin_admin_host = SimpleNamespace(
             path="/twitch/api/v2/overview",
-            headers={"Host": "admin.earlysalty.de", "X-Admin-Token": "admin-secret"},
+            headers={"Host": "admin.deutsche-deadlock-community.de", "X-Admin-Token": "admin-secret"},
             query={},
-            host="admin.earlysalty.de",
+            host="admin.deutsche-deadlock-community.de",
             remote="203.0.113.10",
             transport=None,
             rel_url=SimpleNamespace(path_qs="/twitch/api/v2/overview"),
@@ -2191,12 +2191,12 @@ class DashboardSecurityRegressionTests(unittest.IsolatedAsyncioTestCase):
             partner_token=None,
             oauth_client_id=None,
             oauth_client_secret=None,
-            oauth_redirect_uri="https://twitch.earlysalty.com/twitch/auth/callback",
+            oauth_redirect_uri="https://deutsche-deadlock-community.de/twitch/auth/callback",
         )
         request = SimpleNamespace(
             path="/twitch/dashboard",
-            headers={"Host": "admin.earlysalty.de"},
-            host="admin.earlysalty.de",
+            headers={"Host": "admin.deutsche-deadlock-community.de"},
+            host="admin.deutsche-deadlock-community.de",
             remote="203.0.113.10",
             transport=None,
         )
@@ -2211,7 +2211,7 @@ class DashboardSecurityRegressionTests(unittest.IsolatedAsyncioTestCase):
             partner_token=None,
             oauth_client_id=None,
             oauth_client_secret=None,
-            oauth_redirect_uri="https://twitch.earlysalty.com/twitch/auth/callback",
+            oauth_redirect_uri="https://deutsche-deadlock-community.de/twitch/auth/callback",
         )
         handler._get_dashboard_auth_session = lambda _request: {  # type: ignore[method-assign]
             "twitch_login": "partner_one",
@@ -2220,8 +2220,8 @@ class DashboardSecurityRegressionTests(unittest.IsolatedAsyncioTestCase):
         }
         request = SimpleNamespace(
             path="/twitch/dashboard",
-            headers={"Host": "admin.earlysalty.de"},
-            host="admin.earlysalty.de",
+            headers={"Host": "admin.deutsche-deadlock-community.de"},
+            host="admin.deutsche-deadlock-community.de",
             remote="203.0.113.10",
             transport=None,
         )
@@ -2236,7 +2236,7 @@ class DashboardSecurityRegressionTests(unittest.IsolatedAsyncioTestCase):
             partner_token=None,
             oauth_client_id=None,
             oauth_client_secret=None,
-            oauth_redirect_uri="https://twitch.earlysalty.com/twitch/auth/callback",
+            oauth_redirect_uri="https://deutsche-deadlock-community.de/twitch/auth/callback",
         )
         handler._get_dashboard_auth_session = lambda _request: {  # type: ignore[method-assign]
             "auth_type": "discord_admin",
@@ -2244,8 +2244,8 @@ class DashboardSecurityRegressionTests(unittest.IsolatedAsyncioTestCase):
         }
         request = SimpleNamespace(
             path="/twitch/dashboard",
-            headers={"Host": "admin.earlysalty.de"},
-            host="admin.earlysalty.de",
+            headers={"Host": "admin.deutsche-deadlock-community.de"},
+            host="admin.deutsche-deadlock-community.de",
             remote="203.0.113.10",
             transport=None,
         )
@@ -2260,7 +2260,7 @@ class DashboardSecurityRegressionTests(unittest.IsolatedAsyncioTestCase):
             partner_token=None,
             oauth_client_id=None,
             oauth_client_secret=None,
-            oauth_redirect_uri="https://twitch.earlysalty.com/twitch/auth/callback",
+            oauth_redirect_uri="https://deutsche-deadlock-community.de/twitch/auth/callback",
         )
         handler._discord_admin_required = False
         request = SimpleNamespace(
@@ -2282,7 +2282,7 @@ class DashboardSecurityRegressionTests(unittest.IsolatedAsyncioTestCase):
             partner_token=None,
             oauth_client_id=None,
             oauth_client_secret=None,
-            oauth_redirect_uri="https://twitch.earlysalty.com/twitch/auth/callback",
+            oauth_redirect_uri="https://deutsche-deadlock-community.de/twitch/auth/callback",
         )
         handler._discord_admin_required = False
         request = SimpleNamespace(
@@ -2305,7 +2305,7 @@ class DashboardSecurityRegressionTests(unittest.IsolatedAsyncioTestCase):
             partner_token=None,
             oauth_client_id=None,
             oauth_client_secret=None,
-            oauth_redirect_uri="https://twitch.earlysalty.com/twitch/auth/callback",
+            oauth_redirect_uri="https://deutsche-deadlock-community.de/twitch/auth/callback",
         )
         handler._discord_admin_required = True
         request = SimpleNamespace(
@@ -2316,18 +2316,18 @@ class DashboardSecurityRegressionTests(unittest.IsolatedAsyncioTestCase):
             transport=None,
         )
 
-        with self.assertRaises(web.HTTPFound) as ctx:
-            await handler._serve_dashboard(request)
-        self.assertEqual(ctx.exception.location, "/twitch/auth/discord/login?next=%2Ftwitch%2Fdashboard")
+        response = await handler._serve_dashboard(request)
+        self.assertEqual(response.status, 503)
+        self.assertIn("Twitch OAuth ist aktuell nicht konfiguriert", response.text)
 
-    def test_build_dashboard_login_url_falls_back_to_discord_when_twitch_oauth_missing(self) -> None:
+    def test_build_dashboard_login_url_stays_on_twitch_oauth_when_public_oauth_missing(self) -> None:
         handler = DashboardV2Server(
             app_token=None,
             noauth=False,
             partner_token=None,
             oauth_client_id=None,
             oauth_client_secret=None,
-            oauth_redirect_uri="https://twitch.earlysalty.com/twitch/auth/callback",
+            oauth_redirect_uri="https://deutsche-deadlock-community.de/twitch/auth/callback",
         )
         handler._discord_admin_required = True
         request = SimpleNamespace(
@@ -2337,17 +2337,17 @@ class DashboardSecurityRegressionTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(
             handler._build_dashboard_login_url(request),
-            "/twitch/auth/discord/login?next=%2Ftwitch%2Fdashboard",
+            "/twitch/auth/login?next=%2Ftwitch%2Fdashboard",
         )
 
-    def test_require_v2_auth_uses_discord_login_url_when_twitch_oauth_missing(self) -> None:
+    def test_require_v2_auth_uses_twitch_login_url_when_public_oauth_missing(self) -> None:
         handler = DashboardV2Server(
             app_token=None,
             noauth=False,
             partner_token=None,
             oauth_client_id=None,
             oauth_client_secret=None,
-            oauth_redirect_uri="https://twitch.earlysalty.com/twitch/auth/callback",
+            oauth_redirect_uri="https://deutsche-deadlock-community.de/twitch/auth/callback",
         )
         handler._discord_admin_required = True
         request = SimpleNamespace(
@@ -2364,7 +2364,7 @@ class DashboardSecurityRegressionTests(unittest.IsolatedAsyncioTestCase):
         payload = json.loads(ctx.exception.text)
         self.assertEqual(
             payload.get("loginUrl"),
-            "/twitch/auth/discord/login?next=%2Ftwitch%2Fdashboard-v2",
+            "/twitch/auth/login?next=%2Ftwitch%2Fdashboard-v2",
         )
 
     async def test_stats_entry_returns_503_when_twitch_oauth_missing(self) -> None:
@@ -2374,7 +2374,7 @@ class DashboardSecurityRegressionTests(unittest.IsolatedAsyncioTestCase):
             partner_token=None,
             oauth_client_id=None,
             oauth_client_secret=None,
-            oauth_redirect_uri="https://twitch.earlysalty.com/twitch/auth/callback",
+            oauth_redirect_uri="https://deutsche-deadlock-community.de/twitch/auth/callback",
         )
         handler._discord_admin_required = False
         request = SimpleNamespace(

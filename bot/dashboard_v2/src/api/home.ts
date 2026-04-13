@@ -1,7 +1,6 @@
 import { buildApiUrl, fetchApi, fetchJson, sanitizeInternalRedirectUrl, withCookieCredentials } from './core';
 
 const INTERNAL_HOME_LOGIN_FALLBACK = '/twitch/auth/login?next=%2Ftwitch%2Fdashboard';
-const INTERNAL_HOME_DISCORD_CONNECT_FALLBACK = '/twitch/auth/discord/login?next=%2Ftwitch%2Fdashboard';
 const INTERNAL_HOME_BLOCKED_OAUTH_PATHS = ['/twitch/raid/requirements'] as const;
 
 function sanitizeInternalHomeOauthUrl(
@@ -383,10 +382,10 @@ export async function fetchInternalHome(streamer?: string | null): Promise<Inter
   const discordConnected = Boolean(discord.connected);
   const discordStatusRaw = String(discord.status || '').trim().toLowerCase();
   const discordStatus = discordStatusRaw || (discordConnected ? 'connected' : 'missing');
-  const discordConnectUrl = sanitizeInternalRedirectUrl(
-    discord.connect_url || links.discord_connect || null,
-    INTERNAL_HOME_DISCORD_CONNECT_FALLBACK
-  );
+  const rawDiscordConnectUrl = discord.connect_url || links.discord_connect || null;
+  const discordConnectUrl = rawDiscordConnectUrl
+    ? sanitizeInternalRedirectUrl(rawDiscordConnectUrl, INTERNAL_HOME_LOGIN_FALLBACK)
+    : null;
 
   const impactEvents = (raw.bot_impact?.events || []).map(mapImpactEntry);
   const activityEvents = (raw.bot_activity?.events || []).map(mapImpactEntry);

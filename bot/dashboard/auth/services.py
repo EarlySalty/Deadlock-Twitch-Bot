@@ -75,6 +75,15 @@ class DashboardAuthCookieService:
     def set_oauth_context_cookie(
         self, response: web.StreamResponse, request: web.Request, token: str
     ) -> None:
+        path_getter = getattr(self._owner, "_oauth_callback_cookie_path", None)
+        cookie_path = "/twitch/auth/callback"
+        if callable(path_getter):
+            try:
+                candidate = str(path_getter() or "").strip()
+            except Exception:
+                candidate = ""
+            if candidate.startswith("/"):
+                cookie_path = candidate
         response.set_cookie(
             self.oauth_context_cookie_name(),
             self._sanitize_cookie_value(token),
@@ -82,15 +91,24 @@ class DashboardAuthCookieService:
             httponly=True,
             secure=self._owner._is_secure_request(request),
             samesite="Lax",
-            path="/twitch/auth/callback",
+            path=cookie_path,
         )
 
     def clear_oauth_context_cookie(
         self, response: web.StreamResponse, request: web.Request
     ) -> None:
+        path_getter = getattr(self._owner, "_oauth_callback_cookie_path", None)
+        cookie_path = "/twitch/auth/callback"
+        if callable(path_getter):
+            try:
+                candidate = str(path_getter() or "").strip()
+            except Exception:
+                candidate = ""
+            if candidate.startswith("/"):
+                cookie_path = candidate
         response.del_cookie(
             self.oauth_context_cookie_name(),
-            path="/twitch/auth/callback",
+            path=cookie_path,
             httponly=True,
             samesite="Lax",
             secure=self._owner._is_secure_request(request),

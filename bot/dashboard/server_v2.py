@@ -906,8 +906,8 @@ class DashboardV2Server(
         return bool(request.secure)
 
     def _resolve_legacy_stats_url(self) -> str:
-        # The legacy stats dashboard is now always served locally.
-        return "/twitch/stats"
+        # The public "stats" entry must stay on the user surface and must not jump into admin.
+        return "/twitch/dashboard"
 
     def _should_use_discord_admin_login(self, request: web.Request) -> bool:
         if not self._discord_admin_required:

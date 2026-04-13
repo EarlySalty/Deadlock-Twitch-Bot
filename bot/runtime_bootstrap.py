@@ -387,7 +387,7 @@ class BotRuntimeBootstrap:
             cog,
             "_dashboard_auth_redirect_uri",
             (os.getenv("TWITCH_DASHBOARD_AUTH_REDIRECT_URI") or "").strip()
-            or "https://twitch.earlysalty.com/twitch/auth/callback",
+            or "https://deutsche-deadlock-community.de/callback/twitch",
         )
         setattr(
             cog,

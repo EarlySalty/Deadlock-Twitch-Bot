@@ -1703,8 +1703,8 @@ class _DashboardBillingMixin:
             "seller": {
                 "name": "Deadlock Partner Network",
                 "address": "EarlySalty Operations",
-                "email": "billing@earlysalty.com",
-                "website": "https://twitch.earlysalty.com",
+                "email": "billing@deutsche-deadlock-community.de",
+                "website": "https://deutsche-deadlock-community.de",
             },
             "customer": {
                 "reference": customer_reference,
@@ -1820,7 +1820,7 @@ class _DashboardBillingMixin:
             "<article class='invoice'>"
             "<header class='hero'>"
             "<div><h1>Rechnung</h1>"
-            "<div class='meta'>Deadlock Partner Network<br>billing@earlysalty.com</div></div>"
+            "<div class='meta'>Deadlock Partner Network<br>billing@deutsche-deadlock-community.de</div></div>"
             "<div class='meta'>"
             f"Rechnungsnr: <strong>{invoice_number}</strong><br>"
             f"Ausgestellt: {issued_date}<br>"

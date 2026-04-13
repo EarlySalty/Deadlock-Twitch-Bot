@@ -19,14 +19,13 @@ from .billing.billing_plans import (
 from .core.abbo_html import render_abbo_page
 
 TWITCH_ABBO_LOGIN_URL = "/twitch/auth/login?next=%2Ftwitch%2Fabbo"
-TWITCH_ABBO_DISCORD_LOGIN_URL = "/twitch/auth/discord/login?next=%2Ftwitch%2Fabbo"
 
 
 def _abbo_auth_redirect_or_none(handler: Any, request: web.Request) -> web.StreamResponse | None:
     if handler._check_v2_auth(request):
         return None
     login_url = (
-        TWITCH_ABBO_DISCORD_LOGIN_URL
+        handler._build_discord_admin_login_url(request, next_path="/twitch/abbo")
         if handler._should_use_discord_admin_login(request)
         else TWITCH_ABBO_LOGIN_URL
     )
@@ -240,7 +239,7 @@ async def abbo_entry(handler: Any, request: web.Request) -> web.StreamResponse:
     cycle_raw = (request.query.get("cycle") or "1").strip()
     catalog = _build_billing_catalog(cycle_raw)
     logout_url = (
-        "/twitch/auth/discord/logout"
+        handler._discord_admin_logout_url()
         if handler._is_discord_admin_request(request)
         else "/twitch/auth/logout"
     )

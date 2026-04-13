@@ -68,7 +68,7 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
       <div className={collapsed ? 'hidden' : 'block'}>
         <div className="panel-card rounded-[1.6rem] p-4">
           <p className="text-xs font-semibold uppercase tracking-[0.2em] text-text-secondary">Host</p>
-          <p className="mt-2 text-sm text-white">admin.earlysalty.de</p>
+          <p className="mt-2 text-sm text-white">admin.deutsche-deadlock-community.de</p>
           <p className="mt-2 text-xs leading-5 text-text-secondary">
             Neue React-App unter <code>/twitch/admin</code> mit separater Admin-API.
           </p>
