@@ -40,13 +40,22 @@ function sanitizeProfiles(candidate: unknown): string[] {
 
 function readRuntimeConfig(): DashboardRuntimeConfig {
   const raw = window.__TWITCH_DASHBOARD_RUNTIME__ ?? {};
+
+  // When visited at a demo URL, force demo settings regardless of whether the
+  // injected runtime config was readable. The global Caddy CSP (script-src
+  // 'self') blocks inline scripts, so window.__TWITCH_DASHBOARD_RUNTIME__ may
+  // be undefined even though the backend injected it. Without this fallback the
+  // SPA defaults to the live API base, gets a 401, and redirects to Twitch login.
+  // isDemoDashboardPath is a function declaration and therefore hoisted.
+  const onDemoPath = isDemoDashboardPath(window.location.pathname);
+
   const allowedDemoProfiles = sanitizeProfiles(raw.allowedDemoProfiles);
   const defaultDemoProfileRaw =
     typeof raw.defaultDemoProfile === 'string' ? raw.defaultDemoProfile.trim().toLowerCase() : '';
 
   return {
-    apiBase: sanitizeApiBase(raw.apiBase),
-    demoMode: raw.demoMode === true,
+    apiBase: onDemoPath ? DEMO_API_BASE : sanitizeApiBase(raw.apiBase),
+    demoMode: onDemoPath || raw.demoMode === true,
     allowedDemoProfiles,
     defaultDemoProfile:
       defaultDemoProfileRaw && allowedDemoProfiles.includes(defaultDemoProfileRaw)
