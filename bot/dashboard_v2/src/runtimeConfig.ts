@@ -59,7 +59,12 @@ export const dashboardRuntimeConfig = Object.freeze(readRuntimeConfig());
 
 export function isDemoDashboardPath(pathname: string): boolean {
   const normalized = pathname.replace(/\/+$/, '') || '/';
-  return normalized === '/twitch/demo' || normalized.startsWith('/twitch/demo/');
+  return (
+    normalized === '/twitch/demo' ||
+    normalized.startsWith('/twitch/demo/') ||
+    normalized === '/demo/twitch/demo' ||
+    normalized.startsWith('/demo/twitch/demo/')
+  );
 }
 
 export function hasDemoRuntimeConfig(
