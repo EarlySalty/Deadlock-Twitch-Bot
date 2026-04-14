@@ -124,7 +124,7 @@ class DashboardAuthCookieService:
             httponly=True,
             secure=self._owner._is_secure_request(request),
             samesite="Lax",
-            path="/twitch/auth/discord/callback",
+            path="/twitch/auth/discord/complete",
         )
 
     def clear_discord_oauth_context_cookie(
@@ -132,7 +132,7 @@ class DashboardAuthCookieService:
     ) -> None:
         response.del_cookie(
             self.discord_oauth_context_cookie_name(),
-            path="/twitch/auth/discord/callback",
+            path="/twitch/auth/discord/complete",
             httponly=True,
             samesite="Lax",
             secure=self._owner._is_secure_request(request),

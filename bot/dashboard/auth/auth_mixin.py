@@ -33,8 +33,8 @@ LEGACY_TWITCH_OAUTH_CALLBACK_PATH = "/twitch/auth/callback"
 SHARED_TWITCH_OAUTH_CALLBACK_PATH = "/callback/twitch"
 DISCORD_OAUTH_INTERNAL_API_BASE_URL = "http://127.0.0.1:8766"
 DISCORD_OAUTH_INTERNAL_TOKEN_HEADER = "X-Internal-Token"
-DISCORD_OAUTH_AUTHORIZE_URL_PATH = "/internal/turnier/v1/discord/authorize-url"
-DISCORD_OAUTH_SESSION_PATH = "/internal/turnier/v1/discord/session"
+DISCORD_OAUTH_INITIATE_PATH = "/internal/v1/discord/initiate"
+DISCORD_OAUTH_CONSUME_RESULT_PATH = "/internal/v1/discord/consume-result"
 
 
 class _DashboardAuthMixin:
@@ -768,39 +768,43 @@ class _DashboardAuthMixin:
     async def _fetch_delegated_discord_authorize_url(
         self,
         *,
-        redirect_uri: str,
+        redirect_after: str,
         scope: str,
-        state: str,
-    ) -> str | None:
+        requesting_service: str,
+        metadata: dict[str, Any] | None = None,
+    ) -> tuple[str | None, str | None]:
         data = await self._post_discord_oauth_internal_api(
-            DISCORD_OAUTH_AUTHORIZE_URL_PATH,
+            DISCORD_OAUTH_INITIATE_PATH,
             {
-                "redirect_uri": redirect_uri,
                 "scope": scope,
+                "redirect_after": redirect_after,
+                "requesting_service": requesting_service,
+                "metadata": metadata or {},
             },
         )
         authorize_url = str((data or {}).get("authorize_url") or "").strip()
-        if not authorize_url:
-            return None
+        state_id = str((data or {}).get("state_id") or "").strip()
+        if not authorize_url or not state_id:
+            return None, None
         try:
             parsed = urlsplit(authorize_url)
         except Exception:
-            return None
-        query_pairs = [(key, value) for key, value in parse_qsl(parsed.query, keep_blank_values=True) if key != "state"]
-        query_pairs.append(("state", state))
-        return urlunsplit((parsed.scheme, parsed.netloc, parsed.path, urlencode(query_pairs), parsed.fragment))
+            return None, None
+        query_pairs = list(parse_qsl(parsed.query, keep_blank_values=True))
+        return (
+            urlunsplit((parsed.scheme, parsed.netloc, parsed.path, urlencode(query_pairs), parsed.fragment)),
+            state_id,
+        )
 
     async def _fetch_delegated_discord_session(
         self,
         *,
-        code: str,
-        redirect_uri: str,
+        state_id: str,
     ) -> dict[str, Any] | None:
         return await self._post_discord_oauth_internal_api(
-            DISCORD_OAUTH_SESSION_PATH,
+            DISCORD_OAUTH_CONSUME_RESULT_PATH,
             {
-                "code": code,
-                "redirect_uri": redirect_uri,
+                "state_id": state_id,
             },
         )
 
@@ -1113,7 +1117,7 @@ class _DashboardAuthMixin:
             return web.Response(
                 text=(
                     "Discord Admin OAuth ist nicht konfiguriert. "
-                    "Bitte Redirect URI und internen API-Token setzen."
+                    "Bitte internen API-Token setzen."
                 ),
                 status=503,
             )
@@ -1126,60 +1130,19 @@ class _DashboardAuthMixin:
             )
             raise web.HTTPFound(destination)
 
-        redirect_uri = self._normalized_discord_admin_redirect_uri()
-        if not redirect_uri:
-            expected_redirect = (
-                str(self._discord_admin_redirect_uri or "").strip()
-                or "https://admin.deutsche-deadlock-community.de/twitch/auth/discord/callback"
-            )
-            return web.Response(
-                text=(
-                    "Discord OAuth Redirect URI ist ungültig. "
-                    f"Erwartet wird exakt: {expected_redirect}."
-                ),
-                status=503,
-            )
-
-        self._cleanup_discord_admin_state()
-        state = secrets.token_urlsafe(32)
-        context_token = secrets.token_urlsafe(24)
-        state_payload = {
-            "created_at": time.time(),
-            "next_path": next_path,
-            "redirect_uri": redirect_uri,
-            "context_token": context_token,
-        }
-        self._dashboard_auth_state_cache("_discord_admin_oauth_states").put(state, state_payload)
-        try:
-            self._dashboard_auth_state_repo().save_discord_admin_oauth_state(
-                state=state,
-                payload=state_payload,
-                ttl_seconds=self._discord_admin_state_ttl,
-            )
-        except Exception as exc:
-            log.warning(
-                "Could not persist Discord admin OAuth state %s: %s",
-                self._sanitize_log_value(state),
-                self._sanitize_log_value(exc),
-            )
-            self._dashboard_auth_state_cache("_discord_admin_oauth_states").pop(state, None)
-            return web.Response(
-                text="Discord OAuth Status konnte nicht sicher gespeichert werden.",
-                status=503,
-            )
-
-        authorize_url = await self._fetch_delegated_discord_authorize_url(
-            redirect_uri=redirect_uri,
+        complete_url = self._build_discord_admin_route_url("/twitch/auth/discord/complete")
+        authorize_url, _state_id = await self._fetch_delegated_discord_authorize_url(
+            redirect_after=complete_url,
             scope="identify",
-            state=state,
+            requesting_service="twitch-admin",
+            metadata={"next_path": next_path},
         )
         safe_auth_url = self._safe_discord_admin_login_redirect(authorize_url)
         response = web.HTTPFound(safe_auth_url)
-        self._set_discord_oauth_context_cookie(response, request, context_token)
         self._set_no_store_headers(response)
         raise response
 
-    async def discord_auth_callback(self, request: web.Request) -> web.StreamResponse:
+    async def discord_auth_complete(self, request: web.Request) -> web.StreamResponse:
         if self._is_public_host_discord_admin_route(request):
             return web.Response(text="Not Found", status=404)
         if not self._check_rate_limit(request, max_requests=20, window_seconds=60.0):
@@ -1191,68 +1154,19 @@ class _DashboardAuthMixin:
             return web.Response(
                 text=(
                     "Discord Admin OAuth ist nicht konfiguriert. "
-                    "Bitte Redirect URI und internen API-Token setzen."
+                    "Bitte internen API-Token setzen."
                 ),
                 status=503,
             )
 
-        error = (request.query.get("error") or "").strip()[:64]
-        if error:
-            safe_error = "".join(c for c in error if c.isalnum() or c in "_-")
-            response = web.Response(text=f"Discord OAuth Fehler: {safe_error}", status=401)
-            self._set_no_store_headers(response)
-            return response
-
-        state = (request.query.get("state") or "").strip()
-        code = (request.query.get("code") or "").strip()
-        if not state or not code:
-            response = web.Response(text="Fehlender OAuth state/code.", status=400)
-            self._set_no_store_headers(response)
-            return response
-
-        self._cleanup_discord_admin_state()
-        cached_state_data = self._dashboard_auth_state_cache("_discord_admin_oauth_states").pop(
-            state,
-            None,
-        )
-        try:
-            state_data = self._dashboard_auth_state_repo().consume_discord_admin_oauth_state(
-                state,
-                now=time.time(),
-            )
-        except Exception as exc:
-            log.warning(
-                "Could not load persisted Discord OAuth state %s: %s",
-                self._sanitize_log_value(state),
-                self._sanitize_log_value(exc),
-            )
-            state_data = None
-        if state_data is None:
-            state_data = cached_state_data
-        if not state_data:
-            response = web.Response(text="OAuth state ungültig oder abgelaufen.", status=400)
-            self._set_no_store_headers(response)
-            return response
-
-        expected_context_token = str(state_data.get("context_token") or "").strip()
-        request_cookies = getattr(request, "cookies", {}) or {}
-        presented_context_token = (
-            request_cookies.get(self._discord_oauth_context_cookie_name()) or ""
-        ).strip()
-        if (
-            not expected_context_token
-            or not self._is_valid_oauth_context_token(expected_context_token)
-            or not presented_context_token
-            or not secrets.compare_digest(expected_context_token, presented_context_token)
-        ):
-            response = web.Response(text="OAuth state ungültig oder abgelaufen.", status=400)
-            self._clear_discord_oauth_context_cookie(response, request)
+        state_id = (request.query.get("state_id") or "").strip()
+        if not state_id:
+            response = web.Response(text="Fehlender state_id.", status=400)
             self._set_no_store_headers(response)
             return response
 
         session_payload = await self._fetch_delegated_discord_session(
-            code=code,
-            redirect_uri=str(state_data.get("redirect_uri") or ""),
+            state_id=state_id,
         )
         discord_id = str((session_payload or {}).get("discord_id") or "").strip()
         if not discord_id.isdigit():
@@ -1331,13 +1245,15 @@ class _DashboardAuthMixin:
             self._sanitize_log_value(self._peer_host(request)),
         )
 
+        next_path = str(
+            ((session_payload or {}).get("service_metadata") or {}).get("next_path") or ""
+        ).strip()
         destination = self._safe_internal_redirect(
-            self._canonical_discord_admin_post_login_path(state_data.get("next_path")),
+            self._canonical_discord_admin_post_login_path(next_path),
             fallback="/twitch/admin",
         )
         response = web.HTTPFound(destination)
         self._set_discord_admin_cookie(response, request, session_id)
-        self._clear_discord_oauth_context_cookie(response, request)
         self._set_no_store_headers(response)
         raise response
 

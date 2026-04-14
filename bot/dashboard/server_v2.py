@@ -47,10 +47,6 @@ TWITCH_ADMIN_PUBLIC_URL = (
     or os.getenv("MASTER_DASHBOARD_PUBLIC_URL")
     or "https://admin.deutsche-deadlock-community.de"
 ).strip()
-TWITCH_ADMIN_DISCORD_REDIRECT_URI = (
-    os.getenv("TWITCH_ADMIN_DISCORD_REDIRECT_URI")
-    or f"{TWITCH_ADMIN_PUBLIC_URL.rstrip('/')}/twitch/auth/discord/callback"
-).strip()
 
 
 def _normalize_frame_ancestor_origin(raw_origin: str) -> str | None:
@@ -301,7 +297,6 @@ class DashboardV2Server(
         self._discord_admin_base_url = TWITCH_ADMIN_PUBLIC_URL.rstrip("/")
         self._discord_admin_client_id = ""
         self._discord_admin_client_secret = ""
-        self._discord_admin_redirect_uri = TWITCH_ADMIN_DISCORD_REDIRECT_URI
         self._discord_admin_enabled = True
         owner_user_id_raw = self._load_secret_value(
             "TWITCH_ADMIN_OWNER_USER_ID",
@@ -333,11 +328,11 @@ class DashboardV2Server(
         self._discord_admin_sessions: dict[str, dict[str, Any]] = {}
         self._discord_sessions_db_loaded: bool = False
         self._discord_admin_required = self._discord_admin_enabled and bool(
-            self._discord_admin_base_url and self._discord_admin_redirect_uri
+            self._discord_admin_base_url and self._discord_oauth_internal_api_token()
         )
         if self._discord_admin_enabled and not self._discord_admin_required:
             log.error(
-                "Twitch Admin Discord OAuth ist unvollständig (Redirect URI/Base URL fehlen). "
+                "Twitch Admin Discord OAuth ist unvollständig (Base URL/Internal API Token fehlen). "
                 "Admin-Zugriff bleibt deaktiviert, bis die Konfiguration vollständig ist."
             )
 
@@ -761,25 +756,7 @@ class DashboardV2Server(
         return False
 
     def _normalized_discord_admin_redirect_uri(self) -> str | None:
-        raw = (self._discord_admin_redirect_uri or "").strip()
-        if not raw:
-            return None
-        candidate = raw if "://" in raw else f"https://{raw}"
-        try:
-            parsed = urlparse(candidate)
-        except Exception:
-            return None
-        scheme = (parsed.scheme or "").strip().lower()
-        host = (parsed.hostname or "").strip().lower()
-        if scheme not in {"http", "https"}:
-            return None
-        if scheme == "http" and host not in {"127.0.0.1", "localhost", "::1"}:
-            return None
-        if parsed.username or parsed.password or not parsed.netloc:
-            return None
-        if (parsed.path or "").rstrip("/") != "/twitch/auth/discord/callback":
-            return None
-        return urlunsplit((scheme, parsed.netloc, "/twitch/auth/discord/callback", "", ""))
+        return None
 
     def _require_token(self, request: web.Request) -> None:
         admin_only_prefixes = (
