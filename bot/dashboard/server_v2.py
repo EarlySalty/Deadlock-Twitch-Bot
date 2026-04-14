@@ -423,8 +423,15 @@ class DashboardV2Server(
         stored_ip = str(session.get("client_ip") or "").strip()
         if stored_ip:
             peer_host = self._peer_host(request)
-            current_ip = self._effective_client_host(request, peer_host) or peer_host or ""
-            if current_ip != stored_ip:
+            current_ip = ""
+            if self._is_trusted_proxy_host(peer_host):
+                # Caddy forward_auth does not reliably preserve the original client IP
+                # on the auth subrequest, so only enforce the binding when a forwarded
+                # client address is actually present.
+                current_ip = self._forwarded_client_host(request)
+            else:
+                current_ip = self._host_without_port(peer_host)
+            if current_ip and current_ip != stored_ip:
                 log.warning(
                     "AUDIT admin session IP mismatch: stored=%s current=%s",
                     self._sanitize_log_value(stored_ip),
