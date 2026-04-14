@@ -46,6 +46,9 @@ def build_route_defs(server: Any) -> list[web.RouteDef]:
         web.get("/twitch/dashboads", server.legacy_dashboard_redirect),
         web.get("/twitch/dashboards", server.legacy_dashboard_redirect),
         web.get("/twitch/auth/logout", server.auth_logout),
+        web.get("/twitch/auth/validate", server.validate_admin_session),
+        web.get("/twitch/auth/fingerprint", server.fingerprint_page),
+        web.post("/twitch/auth/fingerprint", server.fingerprint_submit),
         web.post("/twitch/discord_link", server.discord_link),
         web.post("/twitch/reload", server.reload_cog),
     ]

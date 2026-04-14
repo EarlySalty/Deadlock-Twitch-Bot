@@ -1868,6 +1868,18 @@ class DashboardSecurityRegressionTests(unittest.IsolatedAsyncioTestCase):
         key = DashboardV2Server._rate_limit_key(handler, request)
         self.assertEqual(key, "127.0.0.1")
 
+    def test_forwarded_client_host_prefers_last_forwarded_hop(self) -> None:
+        handler = DashboardV2Server.__new__(DashboardV2Server)
+        request = SimpleNamespace(
+            headers={
+                "X-Forwarded-For": "203.0.113.10, 198.51.100.42",
+                "X-Real-IP": "192.0.2.5",
+            }
+        )
+
+        host = DashboardV2Server._forwarded_client_host(handler, request)
+        self.assertEqual(host, "198.51.100.42")
+
     def test_dashboard_server_uses_auth_mixin_rate_limiter(self) -> None:
         self.assertIs(DashboardV2Server._check_rate_limit, _DashboardAuthMixin._check_rate_limit)
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import os
 import secrets
 import time
@@ -35,6 +36,15 @@ DISCORD_OAUTH_INTERNAL_API_BASE_URL = "http://127.0.0.1:8766"
 DISCORD_OAUTH_INTERNAL_TOKEN_HEADER = "X-Internal-Token"
 DISCORD_OAUTH_INITIATE_PATH = "/internal/v1/discord/initiate"
 DISCORD_OAUTH_CONSUME_RESULT_PATH = "/internal/v1/discord/consume-result"
+
+
+def _build_passive_fp(request: web.Request) -> str:
+    """Build a coarse browser fingerprint from stable request headers."""
+    ua = str(request.headers.get("User-Agent") or "").strip()
+    lang = str(request.headers.get("Accept-Language") or "").split(",")[0].strip()
+    platform = str(request.headers.get("Sec-CH-UA-Platform") or "").strip().strip('"')
+    raw = f"{ua}|{lang}|{platform}"
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:32]
 
 
 class _DashboardAuthMixin:
@@ -1214,6 +1224,15 @@ class _DashboardAuthMixin:
 
         now = time.time()
         session_id = secrets.token_urlsafe(32)
+        peer_host = self._peer_host(request)
+        client_ip = self._effective_client_host(request, peer_host) or peer_host or ""
+        next_path = str(
+            ((session_payload or {}).get("service_metadata") or {}).get("next_path") or ""
+        ).strip()
+        destination = self._safe_internal_redirect(
+            self._canonical_discord_admin_post_login_path(next_path),
+            fallback="/twitch/admin",
+        )
         discord_session_data = {
             "auth_type": "discord_admin",
             "user_id": user_id,
@@ -1223,6 +1242,10 @@ class _DashboardAuthMixin:
             "created_at": now,
             "last_seen_at": now,
             "expires_at": now + self._discord_admin_session_ttl,
+            "client_ip": client_ip,
+            "passive_fp": _build_passive_fp(request),
+            "fp_pending": True,
+            "post_fp_destination": destination,
         }
         self._dashboard_auth_state_cache("_discord_admin_sessions").put(
             session_id,
@@ -1244,15 +1267,7 @@ class _DashboardAuthMixin:
             self._sanitize_log_value(reason),
             self._sanitize_log_value(self._peer_host(request)),
         )
-
-        next_path = str(
-            ((session_payload or {}).get("service_metadata") or {}).get("next_path") or ""
-        ).strip()
-        destination = self._safe_internal_redirect(
-            self._canonical_discord_admin_post_login_path(next_path),
-            fallback="/twitch/admin",
-        )
-        response = web.HTTPFound(destination)
+        response = web.HTTPFound("/twitch/auth/fingerprint")
         self._set_discord_admin_cookie(response, request, session_id)
         self._set_no_store_headers(response)
         raise response

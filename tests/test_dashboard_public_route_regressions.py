@@ -73,6 +73,15 @@ class _DummyServer:
     async def auth_logout(self, *_args, **_kwargs):
         return None
 
+    async def validate_admin_session(self, *_args, **_kwargs):
+        return None
+
+    async def fingerprint_page(self, *_args, **_kwargs):
+        return None
+
+    async def fingerprint_submit(self, *_args, **_kwargs):
+        return None
+
     async def discord_link(self, *_args, **_kwargs):
         return None
 

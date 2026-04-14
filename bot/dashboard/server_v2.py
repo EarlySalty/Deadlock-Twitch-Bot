@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import ipaddress
 import os
 import secrets
@@ -407,6 +408,73 @@ class DashboardV2Server(
                 return await serve_admin_dashboard(request)
         return await DashboardLiveMixin.index(self, request)
 
+    async def validate_admin_session(self, request: web.Request) -> web.Response:
+        """Validate shared admin auth for Caddy forward_auth and refresh the cookie."""
+        if self._is_local_request(request):
+            return web.Response(status=200)
+
+        session = self._get_discord_admin_session(request)
+        if not session:
+            dashboard_session = self._get_dashboard_auth_session(request) or {}
+            if not dashboard_session.get("is_admin"):
+                return web.Response(status=401)
+            session = dashboard_session
+
+        stored_ip = str(session.get("client_ip") or "").strip()
+        if stored_ip:
+            peer_host = self._peer_host(request)
+            current_ip = self._effective_client_host(request, peer_host) or peer_host or ""
+            if current_ip != stored_ip:
+                log.warning(
+                    "AUDIT admin session IP mismatch: stored=%s current=%s",
+                    self._sanitize_log_value(stored_ip),
+                    self._sanitize_log_value(current_ip),
+                )
+                return web.Response(status=401)
+
+        stored_passive_fp = str(session.get("passive_fp") or "").strip()
+        if stored_passive_fp:
+            ua = str(request.headers.get("User-Agent") or "").strip()
+            lang = str(request.headers.get("Accept-Language") or "").split(",")[0].strip()
+            platform = str(request.headers.get("Sec-CH-UA-Platform") or "").strip().strip('"')
+            current_passive_fp = hashlib.sha256(
+                f"{ua}|{lang}|{platform}".encode("utf-8")
+            ).hexdigest()[:32]
+            if current_passive_fp != stored_passive_fp:
+                log.warning("AUDIT admin session passive FP mismatch")
+                return web.Response(status=401)
+
+        if session.get("fp_pending") is True:
+            log.warning("AUDIT admin session fp_pending - fingerprint step incomplete")
+            return web.Response(status=401)
+
+        if not str(session.get("js_fp") or "").strip():
+            log.warning("AUDIT admin session missing JS fingerprint")
+            return web.Response(status=401)
+
+        response = web.Response(status=200)
+        cookie_name = (
+            getattr(self, "_discord_admin_cookie_name", None)
+            or getattr(self, "_session_cookie_name", None)
+            or "twitch_dash_session"
+        )
+        session_id = (request.cookies.get(str(cookie_name)) or "").strip()
+        if session_id:
+            self._set_discord_admin_cookie(response, request, session_id)
+        username = str(session.get("username") or session.get("display_name") or "admin").strip() or "admin"
+        response.headers["X-Admin-User"] = username
+        return response
+
+    async def fingerprint_page(self, request: web.Request) -> web.StreamResponse:
+        from .auth.fingerprint_mixin import fingerprint_page as _fingerprint_page
+
+        return await _fingerprint_page(self, request)
+
+    async def fingerprint_submit(self, request: web.Request) -> web.StreamResponse:
+        from .auth.fingerprint_mixin import fingerprint_submit as _fingerprint_submit
+
+        return await _fingerprint_submit(self, request)
+
     @classmethod
     def _load_secret_value(cls, *keys: str) -> str:
         for raw_key in keys:
@@ -527,7 +595,7 @@ class DashboardV2Server(
 
     def _forwarded_client_host(self, request: web.Request) -> str:
         forwarded_for = request.headers.get("X-Forwarded-For") or ""
-        for candidate in forwarded_for.split(","):
+        for candidate in reversed(forwarded_for.split(",")):
             host = self._host_without_port(candidate)
             if host:
                 return host
