@@ -110,6 +110,10 @@ class _AuthHarness(_DashboardAuthMixin):
     def _peer_host(self, request):
         return str(getattr(request, "remote", "") or "")
 
+    def _effective_client_host(self, request, peer_host):
+        del request
+        return peer_host
+
     def _normalized_discord_admin_redirect_uri(self):
         return DashboardV2Server._normalized_discord_admin_redirect_uri(self)
 
@@ -441,6 +445,33 @@ class DashboardOAuthStateBindingTests(unittest.IsolatedAsyncioTestCase):
                     "/twitch/admin",
                 )
 
+    async def test_shared_discord_callback_redirects_to_admin_complete(self) -> None:
+        handler = _AuthHarness()
+        request = _make_request(
+            query={"state": "delegated-state"},
+            path_qs="/callback/discord?state=delegated-state",
+        )
+
+        with self.assertRaises(web.HTTPFound) as ctx:
+            await handler.shared_discord_auth_callback(request)
+
+        self.assertEqual(
+            ctx.exception.location,
+            "https://dashboard.example/twitch/auth/discord/complete?state_id=delegated-state",
+        )
+
+    async def test_shared_discord_callback_rejects_missing_state(self) -> None:
+        handler = _AuthHarness()
+        request = _make_request(
+            query={},
+            path_qs="/callback/discord",
+        )
+
+        response = await handler.shared_discord_auth_callback(request)
+
+        self.assertEqual(response.status, 400)
+        self.assertIn("Fehlender OAuth-State.", response.text)
+
     async def test_discord_auth_complete_sets_admin_cookie(self) -> None:
         handler = _AuthHarness()
         request = _make_request(
@@ -455,7 +486,7 @@ class DashboardOAuthStateBindingTests(unittest.IsolatedAsyncioTestCase):
             with self.assertRaises(web.HTTPFound) as ctx:
                 await handler.discord_auth_complete(request)
 
-        self.assertEqual(ctx.exception.location, "/twitch/admin")
+        self.assertEqual(ctx.exception.location, "/twitch/auth/fingerprint")
         self.assertEqual(
             handler.delegated_discord_session_calls,
             ["delegated-state"],
@@ -473,6 +504,11 @@ class DashboardOAuthStateBindingTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             discord_session_cache.get("discord-session-123").get("auth_type"),
             "discord_admin",
+        )
+        self.assertTrue(discord_session_cache.get("discord-session-123").get("fp_pending"))
+        self.assertEqual(
+            discord_session_cache.get("discord-session-123").get("post_fp_destination"),
+            "/twitch/admin",
         )
 
 

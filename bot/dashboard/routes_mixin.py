@@ -621,6 +621,7 @@ class _DashboardRoutesMixin:
                 web.get("/twitch/auth/login", self.auth_login),
                 web.get("/twitch/auth/callback", self.auth_callback),
                 web.get("/callback/twitch", self.auth_callback),
+                web.get("/callback/discord", self.shared_discord_auth_callback),
                 web.post("/twitch/auth/partner/link", self.auth_partner_link),
                 web.post("/twitch/auth/partner/login", self.auth_partner_login),
                 web.get("/twitch/auth/discord/login", self.discord_auth_login),

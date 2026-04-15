@@ -32,6 +32,7 @@ TWITCH_HELIX_USERS_URL = "https://api.twitch.tv/helix/users"
 DISCORD_API_BASE_URL = "https://discord.com/api/v10"
 LEGACY_TWITCH_OAUTH_CALLBACK_PATH = "/twitch/auth/callback"
 SHARED_TWITCH_OAUTH_CALLBACK_PATH = "/callback/twitch"
+SHARED_DISCORD_OAUTH_CALLBACK_PATH = "/callback/discord"
 DISCORD_OAUTH_INTERNAL_API_BASE_URL = "http://127.0.0.1:8766"
 DISCORD_OAUTH_INTERNAL_TOKEN_HEADER = "X-Internal-Token"
 DISCORD_OAUTH_INITIATE_PATH = "/internal/v1/discord/initiate"
@@ -133,6 +134,9 @@ class _DashboardAuthMixin:
     def _is_shared_twitch_oauth_callback_request(self, request: web.Request) -> bool:
         return self._request_path(request) == SHARED_TWITCH_OAUTH_CALLBACK_PATH
 
+    def _is_shared_discord_oauth_callback_request(self, request: web.Request) -> bool:
+        return self._request_path(request) == SHARED_DISCORD_OAUTH_CALLBACK_PATH
+
     async def _delegate_shared_twitch_oauth_callback(
         self, request: web.Request
     ) -> web.StreamResponse | None:
@@ -142,6 +146,33 @@ class _DashboardAuthMixin:
         if not callable(raid_callback):
             return None
         return await raid_callback(request)
+
+    async def shared_discord_auth_callback(
+        self, request: web.Request
+    ) -> web.StreamResponse:
+        """Resolve the single public Discord callback into the admin completion flow."""
+        if not self._is_shared_discord_oauth_callback_request(request):
+            return web.Response(text="Not Found", status=404)
+
+        state_id = str(request.query.get("state") or request.query.get("state_id") or "").strip()
+        if not state_id:
+            response = web.Response(text="Fehlender OAuth-State.", status=400)
+            self._set_no_store_headers(response)
+            return response
+
+        error = str(request.query.get("error") or "").strip()
+        target = self._build_discord_admin_route_url(
+            "/twitch/auth/discord/complete",
+            query={"state_id": state_id},
+        )
+        if error:
+            target = self._build_discord_admin_route_url(
+                "/twitch/auth/discord/complete",
+                query={"state_id": state_id, "error": error},
+            )
+        response = web.HTTPFound(target)
+        self._set_no_store_headers(response)
+        raise response
 
     def _load_dashboard_oauth_state(self, state: str) -> dict[str, Any] | None:
         state_key = str(state or "").strip()
@@ -1172,6 +1203,14 @@ class _DashboardAuthMixin:
         state_id = (request.query.get("state_id") or "").strip()
         if not state_id:
             response = web.Response(text="Fehlender state_id.", status=400)
+            self._set_no_store_headers(response)
+            return response
+        error = str(request.query.get("error") or "").strip()
+        if error:
+            response = web.Response(
+                text=f"Discord OAuth Fehler: {error}",
+                status=401,
+            )
             self._set_no_store_headers(response)
             return response
 
