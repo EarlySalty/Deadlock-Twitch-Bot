@@ -37,6 +37,11 @@ DISCORD_OAUTH_INTERNAL_API_BASE_URL = "http://127.0.0.1:8766"
 DISCORD_OAUTH_INTERNAL_TOKEN_HEADER = "X-Internal-Token"
 DISCORD_OAUTH_INITIATE_PATH = "/internal/v1/discord/initiate"
 DISCORD_OAUTH_CONSUME_RESULT_PATH = "/internal/v1/discord/consume-result"
+TWITCH_DISCORD_LINK_FALLBACK_PATH = "/twitch/verwaltung"
+TWITCH_PUBLIC_DASHBOARD_BASE_URL = (
+    os.getenv("TWITCH_PUBLIC_DASHBOARD_BASE_URL")
+    or "https://deutsche-deadlock-community.de"
+).strip().rstrip("/")
 
 
 def _build_passive_fp(request: web.Request) -> str:
@@ -226,6 +231,78 @@ class _DashboardAuthMixin:
         if not candidate.startswith("/twitch"):
             return fallback
         return candidate
+
+    def _normalize_discord_link_next_path(self, raw_path: str | None) -> str:
+        canonical_getter = getattr(self, "_canonical_post_login_destination", None)
+        if callable(canonical_getter):
+            try:
+                normalized = str(canonical_getter(raw_path) or "").strip()
+            except Exception:
+                normalized = ""
+            if normalized:
+                return normalized
+        return TWITCH_DISCORD_LINK_FALLBACK_PATH
+
+    def _build_public_dashboard_route_url(
+        self,
+        request: web.Request | None,
+        path: str,
+        *,
+        query: dict[str, str] | None = None,
+        raw_query: str | None = None,
+    ) -> str:
+        normalized_path = str(path or "").strip() or "/"
+        if not normalized_path.startswith("/"):
+            normalized_path = f"/{normalized_path}"
+
+        base_url = TWITCH_PUBLIC_DASHBOARD_BASE_URL
+        checker = getattr(self, "_is_local_request", None)
+        is_local_request = False
+        if callable(checker) and request is not None:
+            try:
+                is_local_request = bool(checker(request))
+            except Exception:
+                is_local_request = False
+        if is_local_request and request is not None:
+            secure_checker = getattr(self, "_is_secure_request", None)
+            is_secure = bool(secure_checker(request)) if callable(secure_checker) else False
+            host = str(getattr(request, "host", "") or "").strip()
+            if host:
+                base_url = f"{'https' if is_secure else 'http'}://{host}".rstrip("/")
+
+        if raw_query is not None:
+            query_string = raw_query.lstrip("?")
+        elif query:
+            query_string = urlencode(query)
+        else:
+            query_string = ""
+        if query_string:
+            return f"{base_url}{normalized_path}?{query_string}"
+        return f"{base_url}{normalized_path}"
+
+    @staticmethod
+    def _append_redirect_status(
+        location: str | None,
+        *,
+        ok: str | None = None,
+        err: str | None = None,
+        fallback: str = TWITCH_DISCORD_LINK_FALLBACK_PATH,
+    ) -> str:
+        try:
+            parts = urlsplit(str(location or "").strip() or fallback)
+        except Exception:
+            parts = urlsplit(fallback)
+        if parts.scheme or parts.netloc or not (parts.path or "").startswith("/"):
+            parts = urlsplit(fallback)
+        params = dict(parse_qsl(parts.query, keep_blank_values=True))
+        params.pop("ok", None)
+        params.pop("err", None)
+        if ok:
+            params["ok"] = ok
+        if err:
+            params["err"] = err
+        query = urlencode(params)
+        return urlunsplit(("", "", parts.path or fallback, query, ""))
 
     @staticmethod
     def _safe_internal_redirect(
@@ -1308,6 +1385,184 @@ class _DashboardAuthMixin:
         )
         response = web.HTTPFound("/twitch/auth/fingerprint")
         self._set_discord_admin_cookie(response, request, session_id)
+        self._set_no_store_headers(response)
+        raise response
+
+    async def discord_link_auth_login(self, request: web.Request) -> web.StreamResponse:
+        if not self._check_rate_limit(request, max_requests=10, window_seconds=60.0):
+            raise web.HTTPTooManyRequests(
+                text="Too many Discord link attempts. Please wait a minute and try again.",
+                headers={"Retry-After": "60"},
+            )
+
+        next_path = self._normalize_discord_link_next_path(request.query.get("next"))
+        if not self._check_v2_auth(request):
+            response = self._dashboard_auth_redirect_or_unavailable(
+                request,
+                next_path=next_path,
+                fallback_login_url=f"/twitch/auth/login?{urlencode({'next': next_path})}",
+            )
+            if isinstance(response, web.HTTPException):
+                raise response
+            return response
+
+        session = self._get_dashboard_auth_session(request) or {}
+        twitch_login = str(session.get("twitch_login") or "").strip().lower()
+        twitch_user_id = str(session.get("twitch_user_id") or "").strip()
+        if not twitch_login:
+            response = web.Response(
+                text="Die Dashboard-Session ist keinem Twitch-Streamer zugeordnet.",
+                status=401,
+            )
+            self._set_no_store_headers(response)
+            return response
+
+        complete_url = self._build_public_dashboard_route_url(
+            request,
+            "/twitch/auth/discord/link/complete",
+        )
+        authorize_url, _state_id = await self._fetch_delegated_discord_authorize_url(
+            redirect_after=complete_url,
+            scope="identify",
+            requesting_service="twitch-dashboard-link",
+            metadata={
+                "next_path": next_path,
+                "twitch_login": twitch_login,
+                "twitch_user_id": twitch_user_id,
+            },
+        )
+        if not authorize_url:
+            response = web.Response(
+                text="Discord-Link ist aktuell nicht verfügbar.",
+                status=503,
+            )
+            self._set_no_store_headers(response)
+            return response
+
+        safe_auth_url = self._safe_discord_admin_login_redirect(authorize_url)
+        response = web.HTTPFound(safe_auth_url)
+        self._set_no_store_headers(response)
+        raise response
+
+    async def discord_link_auth_complete(self, request: web.Request) -> web.StreamResponse:
+        if not self._check_rate_limit(request, max_requests=20, window_seconds=60.0):
+            raise web.HTTPTooManyRequests(
+                text="Too many OAuth callback requests. Please wait a minute and try again.",
+                headers={"Retry-After": "60"},
+            )
+
+        session = self._get_dashboard_auth_session(request) or {}
+        twitch_login = str(session.get("twitch_login") or "").strip().lower()
+        twitch_user_id = str(session.get("twitch_user_id") or "").strip()
+        fallback_location = self._safe_internal_redirect(
+            TWITCH_DISCORD_LINK_FALLBACK_PATH,
+            fallback=TWITCH_DISCORD_LINK_FALLBACK_PATH,
+        )
+        if not twitch_login:
+            response = web.HTTPFound(
+                self._append_redirect_status(
+                    fallback_location,
+                    err="Twitch-Session fehlt. Bitte erneut anmelden.",
+                )
+            )
+            self._set_no_store_headers(response)
+            raise response
+
+        state_id = (request.query.get("state_id") or "").strip()
+        if not state_id:
+            response = web.HTTPFound(
+                self._append_redirect_status(
+                    fallback_location,
+                    err="Fehlender Discord-OAuth-State.",
+                )
+            )
+            self._set_no_store_headers(response)
+            raise response
+
+        error = str(request.query.get("error") or "").strip()
+        if error:
+            response = web.HTTPFound(
+                self._append_redirect_status(
+                    fallback_location,
+                    err=f"Discord OAuth Fehler: {error}",
+                )
+            )
+            self._set_no_store_headers(response)
+            raise response
+
+        session_payload = await self._fetch_delegated_discord_session(state_id=state_id)
+        service_metadata = dict((session_payload or {}).get("service_metadata") or {})
+        next_path = self._normalize_discord_link_next_path(service_metadata.get("next_path"))
+        safe_next_path = self._safe_internal_redirect(
+            next_path,
+            fallback=TWITCH_DISCORD_LINK_FALLBACK_PATH,
+        )
+        expected_login = str(service_metadata.get("twitch_login") or "").strip().lower()
+        expected_user_id = str(service_metadata.get("twitch_user_id") or "").strip()
+        if (expected_login and expected_login != twitch_login) or (
+            expected_user_id and twitch_user_id and expected_user_id != twitch_user_id
+        ):
+            response = web.HTTPFound(
+                self._append_redirect_status(
+                    safe_next_path,
+                    err="Discord-Link passt nicht zur aktiven Twitch-Session.",
+                )
+            )
+            self._set_no_store_headers(response)
+            raise response
+
+        discord_id = str((session_payload or {}).get("discord_id") or "").strip()
+        if not discord_id.isdigit():
+            response = web.HTTPFound(
+                self._append_redirect_status(
+                    safe_next_path,
+                    err="Discord-User konnte nicht geladen werden.",
+                )
+            )
+            self._set_no_store_headers(response)
+            raise response
+
+        discord_name = str((session_payload or {}).get("discord_name") or "").strip()
+        discord_roles = {
+            str(role).strip()
+            for role in ((session_payload or {}).get("discord_roles") or [])
+            if str(role).strip()
+        }
+        profile_saver = getattr(self, "_discord_profile", None)
+        if not callable(profile_saver):
+            response = web.HTTPFound(
+                self._append_redirect_status(
+                    safe_next_path,
+                    err="Discord-Link ist aktuell nicht verfügbar.",
+                )
+            )
+            self._set_no_store_headers(response)
+            raise response
+
+        try:
+            message = await profile_saver(
+                twitch_login,
+                discord_user_id=discord_id,
+                discord_display_name=discord_name or None,
+                mark_member=bool(discord_roles),
+            )
+        except ValueError as exc:
+            message = ""
+            error_message = str(exc)
+        except Exception:
+            log.exception("dashboard discord link completion failed")
+            message = ""
+            error_message = "Discord-Daten konnten nicht gespeichert werden."
+        else:
+            error_message = ""
+
+        response = web.HTTPFound(
+            self._append_redirect_status(
+                safe_next_path,
+                ok=message or None,
+                err=error_message or None,
+            )
+        )
         self._set_no_store_headers(response)
         raise response
 

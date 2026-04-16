@@ -41,6 +41,9 @@ class _AuthHarness(_DashboardAuthMixin):
     _canonical_discord_admin_post_login_path = staticmethod(
         DashboardV2Server._canonical_discord_admin_post_login_path
     )
+    _canonical_post_login_destination = staticmethod(
+        DashboardV2Server._canonical_post_login_destination
+    )
 
     def __init__(self) -> None:
         self._oauth_client_id = "client-id"
@@ -71,7 +74,15 @@ class _AuthHarness(_DashboardAuthMixin):
         self.created_sessions: list[dict[str, str]] = []
         self.delegated_discord_authorize_calls: list[tuple[str, str, str, dict[str, str]]] = []
         self.delegated_discord_session_calls: list[str] = []
+        self.delegated_discord_session_payload: dict[str, object] | None = None
         self.discord_membership_checks: list[int] = []
+        self.v2_auth_ok = False
+        self.dashboard_session = {
+            "twitch_login": "partner_one",
+            "twitch_user_id": "1001",
+            "display_name": "Partner One",
+        }
+        self.saved_discord_profiles: list[dict[str, object]] = []
         self._state_repo = _InMemoryAuthStateRepo(self)
 
     def _safe_discord_admin_login_redirect(self, raw_url: str | None) -> str:
@@ -93,7 +104,11 @@ class _AuthHarness(_DashboardAuthMixin):
 
     def _check_v2_auth(self, request) -> bool:
         del request
-        return False
+        return self.v2_auth_ok
+
+    def _dashboard_auth_redirect_or_unavailable(self, request, *, next_path: str, fallback_login_url: str):
+        del request, next_path
+        raise web.HTTPFound(fallback_login_url)
 
     def _check_rate_limit(
         self, request, *, max_requests: int = 10, window_seconds: float = 60.0
@@ -119,6 +134,13 @@ class _AuthHarness(_DashboardAuthMixin):
 
     def _dashboard_auth_state_repo(self):
         return self._state_repo
+
+    def _safe_internal_redirect(self, location: str | None, *, fallback: str = "/twitch/dashboard-v2") -> str:
+        return DashboardV2Server._safe_internal_redirect(location, fallback=fallback)
+
+    def _get_dashboard_auth_session(self, request):
+        del request
+        return self.dashboard_session
 
     async def _exchange_code_for_user(self, code: str, redirect_uri: str):
         self.exchange_calls.append((code, redirect_uri))
@@ -152,6 +174,8 @@ class _AuthHarness(_DashboardAuthMixin):
         state_id: str,
     ) -> dict[str, str] | None:
         self.delegated_discord_session_calls.append(state_id)
+        if self.delegated_discord_session_payload is not None:
+            return dict(self.delegated_discord_session_payload)
         return {
             "discord_id": "42",
             "discord_name": "Moderator User",
@@ -162,6 +186,24 @@ class _AuthHarness(_DashboardAuthMixin):
     async def _check_discord_admin_membership(self, user_id: int):
         self.discord_membership_checks.append(user_id)
         return True, "moderator_role:1"
+
+    async def _discord_profile(
+        self,
+        login: str,
+        *,
+        discord_user_id: str | None,
+        discord_display_name: str | None,
+        mark_member: bool,
+    ) -> str:
+        self.saved_discord_profiles.append(
+            {
+                "login": login,
+                "discord_user_id": discord_user_id,
+                "discord_display_name": discord_display_name,
+                "mark_member": mark_member,
+            }
+        )
+        return "Discord verknüpft"
 
     def _is_partner_allowed(self, *, twitch_login: str, twitch_user_id: str):
         del twitch_login, twitch_user_id
@@ -471,6 +513,70 @@ class DashboardOAuthStateBindingTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(response.status, 400)
         self.assertIn("Fehlender OAuth-State.", response.text)
+
+    async def test_discord_link_auth_login_uses_delegated_flow_for_verwaltung(self) -> None:
+        handler = _AuthHarness()
+        handler.v2_auth_ok = True
+        request = _make_request(
+            query={"next": "/twitch/verwaltung"},
+            path_qs="/twitch/verwaltung",
+        )
+        request.host = "deutsche-deadlock-community.de"
+
+        with self.assertRaises(web.HTTPFound) as ctx:
+            await handler.discord_link_auth_login(request)
+
+        self.assertIn("/oauth2/authorize?", ctx.exception.location)
+        self.assertEqual(
+            handler.delegated_discord_authorize_calls[-1],
+            (
+                "https://deutsche-deadlock-community.de/twitch/auth/discord/link/complete",
+                "identify",
+                "twitch-dashboard-link",
+                {
+                    "next_path": "/twitch/verwaltung",
+                    "twitch_login": "partner_one",
+                    "twitch_user_id": "1001",
+                },
+            ),
+        )
+
+    async def test_discord_link_auth_complete_saves_profile_and_returns_to_verwaltung(self) -> None:
+        handler = _AuthHarness()
+        handler.v2_auth_ok = True
+        handler.delegated_discord_session_payload = {
+            "discord_id": "4242",
+            "discord_name": "Partner One Discord",
+            "discord_roles": ["123"],
+            "service_metadata": {
+                "next_path": "/twitch/verwaltung",
+                "twitch_login": "partner_one",
+                "twitch_user_id": "1001",
+            },
+        }
+        request = _make_request(
+            query={"state_id": "delegated-state"},
+            path_qs="/twitch/auth/discord/link/complete?state_id=delegated-state",
+        )
+
+        with self.assertRaises(web.HTTPFound) as ctx:
+            await handler.discord_link_auth_complete(request)
+
+        self.assertEqual(
+            handler.saved_discord_profiles,
+            [
+                {
+                    "login": "partner_one",
+                    "discord_user_id": "4242",
+                    "discord_display_name": "Partner One Discord",
+                    "mark_member": True,
+                }
+            ],
+        )
+        self.assertEqual(
+            ctx.exception.location,
+            "/twitch/verwaltung?ok=Discord+verkn%C3%BCpft",
+        )
 
     async def test_discord_auth_complete_sets_admin_cookie(self) -> None:
         handler = _AuthHarness()

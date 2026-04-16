@@ -389,7 +389,7 @@ def _compute_week_comparison(login: str, conn: Any) -> dict[str, Any]:
 
 
 INTERNAL_HOME_LOGIN_URL = "/twitch/auth/login?next=%2Ftwitch%2Fdashboard"
-INTERNAL_HOME_DISCORD_CONNECT_URL = None
+INTERNAL_HOME_DISCORD_CONNECT_URL = "/twitch/auth/discord/link?next=%2Ftwitch%2Fverwaltung"
 DASHBOARD_V2_LOGIN_URL = "/twitch/auth/login?next=%2Ftwitch%2Fdashboard-v2"
 
 # Twitch logins that receive admin-level access (same as Discord admin / localhost)
