@@ -929,6 +929,64 @@ class PartnerRaidScoreRefreshTriggerTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("FROM twitch_live_state ls", conn.executed[0][0])
         self.assertIn("SELECT DISTINCT ON (p.twitch_user_id)", conn.executed[1][0])
 
+    async def test_process_postings_skips_deadlock_end_when_message_id_is_missing(self) -> None:
+        harness = _GoLiveHarness()
+        harness._alert_channel_id = 123456
+        harness._finalize_stream_session = AsyncMock(return_value=True)
+        harness._persist_live_state_rows = AsyncMock(side_effect=_StopProcessing)
+        tracked = [
+            {
+                "login": "partner_one",
+                "twitch_user_id": "1234",
+                "require_link": False,
+                "is_verified": True,
+                "is_archived": False,
+            }
+        ]
+        conn = _RecordingConnection(
+            fetchall_rows=[
+                {
+                    "streamer_login": "partner_one",
+                    "twitch_user_id": "1234",
+                    "is_live": 1,
+                    "last_game": "Deadlock",
+                    "had_deadlock_in_session": 1,
+                    "last_discord_message_id": None,
+                    "last_tracking_token": None,
+                    "last_stream_id": "stream-1",
+                    "last_started_at": "2026-03-15T11:40:00+00:00",
+                    "active_session_id": 99,
+                    "partner_raid_bot_enabled": 1,
+                }
+            ]
+        )
+
+        with (
+            patch("bot.monitoring.monitoring.storage.readonly_connection", side_effect=lambda: contextlib.nullcontext(conn)),
+            patch.dict("os.environ", {"MASTER_BROKER_TOKEN": "test-token"}, clear=False),
+            patch("bot.monitoring.monitoring.log.warning") as warning_mock,
+        ):
+            with self.assertRaises(_StopProcessing):
+                await harness._process_postings(tracked, {})
+
+        harness._finalize_stream_session.assert_awaited_once_with(
+            login="partner_one",
+            reason="offline",
+        )
+        invalid_message_calls = [
+            call
+            for call in warning_mock.call_args_list
+            if call.args and "Ungültige Message-ID für Deadlock-Ende" in str(call.args[0])
+        ]
+        self.assertEqual(invalid_message_calls, [])
+
+        persisted_rows = harness._persist_live_state_rows.await_args.args[0]
+        self.assertEqual(len(persisted_rows), 1)
+        self.assertEqual(persisted_rows[0][0], "1234")
+        self.assertEqual(persisted_rows[0][1], "partner_one")
+        self.assertEqual(persisted_rows[0][2], 0)
+        self.assertIsNone(persisted_rows[0][7])
+
 
 if __name__ == "__main__":
     unittest.main()

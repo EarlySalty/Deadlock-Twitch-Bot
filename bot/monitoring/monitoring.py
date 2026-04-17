@@ -1787,7 +1787,7 @@ class TwitchMonitoringMixin(_EventSubMixin, _ExpSessionsMixin, _SessionsMixin, _
                     channel_id=notify_channel_id,
                     notify_channel=notify_ch,
                 )
-                and (message_id_previous or was_live)
+                and bool(message_id_previous)
                 and (not is_live or not is_deadlock)
             )
             # Auto-Raid per Polling für Partner deaktiviert – EventSub ist Primärpfad
