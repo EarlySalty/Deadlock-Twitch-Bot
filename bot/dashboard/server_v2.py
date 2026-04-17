@@ -319,9 +319,8 @@ class DashboardV2Server(
             "TWITCH_TRUSTED_PROXY_CIDRS",
             "TRUSTED_PROXY_CIDRS",
         )
-        # Discord Admin nutzt die gleiche Session-Cookie wie Twitch OAuth
-        # für gemeinsame Admin-Session über beide Login-Methoden
-        self._discord_admin_cookie_name = self._session_cookie_name
+        # Discord Admin nutzt einen eigenen Cookie, der mit dem Discord Dashboard geteilt wird
+        self._discord_admin_cookie_name = "master_dash_session"
         # Admin Discord sessions sind 24h gültig (statt der generischen 6h)
         self._discord_admin_session_ttl = 24 * 3600
         self._discord_admin_state_ttl = 600
@@ -416,9 +415,17 @@ class DashboardV2Server(
         session = self._get_discord_admin_session(request)
         if not session:
             dashboard_session = self._get_dashboard_auth_session(request) or {}
-            if not dashboard_session.get("is_admin"):
-                return web.Response(status=401)
-            session = dashboard_session
+            if dashboard_session.get("is_admin"):
+                session = dashboard_session
+
+        if not session and getattr(self, "_discord_admin_required", False):
+            cookie_name = getattr(self, "_discord_admin_cookie_name", "master_dash_session")
+            ext_session_id = (request.cookies.get(str(cookie_name)) or "").strip()
+            if ext_session_id:
+                session = await self._fetch_discord_dashboard_session(ext_session_id)
+
+        if not session:
+            return web.Response(status=401)
 
         stored_ip = str(session.get("client_ip") or "").strip()
         if stored_ip:
@@ -455,7 +462,7 @@ class DashboardV2Server(
             log.warning("AUDIT admin session fp_pending - fingerprint step incomplete")
             return web.Response(status=401)
 
-        if not str(session.get("js_fp") or "").strip():
+        if session.get("source") != "discord_dashboard" and not str(session.get("js_fp") or "").strip():
             log.warning("AUDIT admin session missing JS fingerprint")
             return web.Response(status=401)
 
@@ -481,6 +488,53 @@ class DashboardV2Server(
         from .auth.fingerprint_mixin import fingerprint_submit as _fingerprint_submit
 
         return await _fingerprint_submit(self, request)
+
+    async def _fetch_discord_dashboard_session(self, session_id: str) -> "dict[str, Any] | None":
+        """Validates a master_dash_session against Discord Dashboard's internal API.
+
+        Returns a synthetic session dict (source='discord_dashboard') on success, None otherwise.
+        The result is cached in _discord_admin_sessions for up to 5 minutes.
+        """
+        import aiohttp as _aiohttp
+
+        base_url = self._discord_admin_base_url
+        token = self._discord_oauth_internal_api_token()
+        if not base_url or not token:
+            return None
+        url = f"{base_url}/internal/twitch/v1/discord/validate-session"
+        try:
+            async with _aiohttp.ClientSession() as client:
+                async with client.post(
+                    url,
+                    json={"session_id": session_id},
+                    headers={"X-Internal-Token": token},
+                    timeout=_aiohttp.ClientTimeout(total=3.0),
+                ) as resp:
+                    if resp.status != 200:
+                        return None
+                    data = await resp.json()
+        except Exception:
+            return None
+        if not data.get("valid"):
+            return None
+        now = time.time()
+        synth: dict[str, Any] = {
+            "auth_type": "discord_admin",
+            "user_id": str(data.get("user_id") or ""),
+            "username": str(data.get("username") or ""),
+            "display_name": str(data.get("display_name") or ""),
+            "source": "discord_dashboard",
+            "fp_pending": False,
+            "js_fp": "discord_validated",
+            "passive_fp": "",
+            "client_ip": "",
+            "created_at": now,
+            "last_seen_at": now,
+            "expires_at": min(float(data.get("expires_at") or now + 300), now + 300),
+        }
+        cache = self._dashboard_auth_state_cache("_discord_admin_sessions")
+        cache[session_id] = synth
+        return synth
 
     @classmethod
     def _load_secret_value(cls, *keys: str) -> str:

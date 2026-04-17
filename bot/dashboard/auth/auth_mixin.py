@@ -1377,6 +1377,16 @@ class _DashboardAuthMixin:
         except Exception as _exc:
             log.debug("Could not persist discord admin session to DB: %s", _exc)
 
+        asyncio.ensure_future(
+            self._register_session_in_discord_dashboard(
+                session_id=session_id,
+                user_id=user_id,
+                username=username,
+                display_name=display_name,
+                expires_at=now + self._discord_admin_session_ttl,
+            )
+        )
+
         log.info(
             "AUDIT twitch-dashboard discord login success: user=%s reason=%s peer=%s",
             user_id,
@@ -1387,6 +1397,38 @@ class _DashboardAuthMixin:
         self._set_discord_admin_cookie(response, request, session_id)
         self._set_no_store_headers(response)
         raise response
+
+    async def _register_session_in_discord_dashboard(
+        self,
+        *,
+        session_id: str,
+        user_id: int,
+        username: str,
+        display_name: str,
+        expires_at: float,
+    ) -> None:
+        """Best-effort: registriert die Session auch im Discord Dashboard (Gegenrichtung)."""
+        base_url = self._discord_admin_base_url
+        token = self._discord_oauth_internal_api_token()
+        if not base_url or not token:
+            return
+        url = f"{base_url}/internal/twitch/v1/discord/import-session"
+        try:
+            async with aiohttp.ClientSession() as client:
+                await client.post(
+                    url,
+                    json={
+                        "session_id": session_id,
+                        "user_id": str(user_id),
+                        "username": username,
+                        "display_name": display_name,
+                        "expires_at": expires_at,
+                    },
+                    headers={"X-Internal-Token": token},
+                    timeout=aiohttp.ClientTimeout(total=3.0),
+                )
+        except Exception:
+            pass
 
     async def discord_link_auth_login(self, request: web.Request) -> web.StreamResponse:
         if not self._check_rate_limit(request, max_requests=10, window_seconds=60.0):
