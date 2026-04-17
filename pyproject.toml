@@ -17,7 +17,7 @@ test = [
     "coverage[toml]>=7.0",
     "pytest>=8.0",
     "pytest-cov>=7.0",
-    "twitchio>=2.10",
+    "twitchio>=3.2.1",
 ]
 
 [tool.coverage.run]
