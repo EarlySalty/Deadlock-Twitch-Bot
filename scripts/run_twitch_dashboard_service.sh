@@ -45,4 +45,53 @@ export TWITCH_SPLIT_RUNTIME_ROLE=dashboard
 export TWITCH_LOG_FILENAME=twitch_dashboard.log
 
 cd "$ROOT_DIR"
+
+WAIT_FOR_INTERNAL_HEALTH="${TWITCH_INTERNAL_API_WAIT_FOR_HEALTH:-1}"
+WAIT_TIMEOUT_SEC="${TWITCH_INTERNAL_API_WAIT_TIMEOUT_SEC:-60}"
+WAIT_INTERVAL_SEC="${TWITCH_INTERNAL_API_WAIT_INTERVAL_SEC:-2}"
+
+if [[ "$WAIT_FOR_INTERNAL_HEALTH" != "0" && -n "${TWITCH_INTERNAL_API_TOKEN:-}" ]]; then
+  deadline=$((SECONDS + WAIT_TIMEOUT_SEC))
+  while true; do
+    if "$PYTHON_BIN" - <<'PY'
+import os
+import sys
+import urllib.request
+
+from bot.internal_api import INTERNAL_API_BASE_PATH, INTERNAL_TOKEN_HEADER
+
+host = (os.getenv("TWITCH_INTERNAL_API_HOST") or "127.0.0.1").strip()
+port = (os.getenv("TWITCH_INTERNAL_API_PORT") or "8776").strip()
+base_url = (os.getenv("TWITCH_INTERNAL_API_BASE_URL") or f"http://{host}:{port}").rstrip("/")
+token = (os.getenv("TWITCH_INTERNAL_API_TOKEN") or "").strip()
+
+if not token:
+    sys.exit(1)
+
+health_url = (
+    f"{base_url}/healthz"
+    if base_url.endswith(INTERNAL_API_BASE_PATH)
+    else f"{base_url}{INTERNAL_API_BASE_PATH}/healthz"
+)
+request = urllib.request.Request(health_url, headers={INTERNAL_TOKEN_HEADER: token})
+try:
+    with urllib.request.urlopen(request, timeout=5) as response:
+        sys.exit(0 if int(getattr(response, "status", 0) or 0) == 200 else 1)
+except Exception:
+    sys.exit(1)
+PY
+    then
+      break
+    fi
+
+    if (( SECONDS >= deadline )); then
+      echo "Bot internal API was not ready before dashboard startup timeout (${WAIT_TIMEOUT_SEC}s)." >&2
+      exit 1
+    fi
+
+    echo "Waiting for bot internal API readiness before starting dashboard..." >&2
+    sleep "$WAIT_INTERVAL_SEC"
+  done
+fi
+
 exec "$PYTHON_BIN" -m bot.dashboard_service "$@"

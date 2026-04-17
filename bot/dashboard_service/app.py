@@ -678,6 +678,80 @@ def build_dashboard_service_app(
         social_media_twitch_api=None,
     )
 
+    def _oauth_ready() -> bool:
+        return bool(
+            resolved_noauth
+            or (
+                str(resolved_oauth_client_id or "").strip()
+                and str(resolved_oauth_client_secret or "").strip()
+            )
+        )
+
+    async def _dashboard_healthz(request: web.Request) -> web.Response:
+        return web.json_response(
+            {
+                "ok": True,
+                "service": "twitch-dashboard-service",
+                "status": "alive",
+                "internalApiConfigured": client is not None,
+                "oauthConfigured": _oauth_ready(),
+                "analyticsDbFingerprint": local_analytics_fingerprint,
+                "internalApiAnalyticsDbFingerprint": request.app.get(
+                    INTERNAL_API_ANALYTICS_DB_FINGERPRINT_KEY
+                ),
+            }
+        )
+
+    async def _dashboard_readyz(request: web.Request) -> web.Response:
+        reasons: list[str] = []
+        details: dict[str, Any] = {
+            "internalApiConfigured": client is not None,
+            "oauthConfigured": _oauth_ready(),
+            "analyticsDbFingerprint": local_analytics_fingerprint,
+            "internalApiAnalyticsDbFingerprint": request.app.get(
+                INTERNAL_API_ANALYTICS_DB_FINGERPRINT_KEY
+            ),
+            "analyticsDbFingerprintMismatch": bool(
+                request.app.get(ANALYTICS_DB_FINGERPRINT_MISMATCH_KEY, False)
+            ),
+        }
+
+        if client is None:
+            reasons.append("internal_api_not_configured")
+        else:
+            try:
+                upstream_payload = await client.healthz()
+                if isinstance(upstream_payload, dict):
+                    details["internalApiHealth"] = upstream_payload
+            except BotApiClientError as exc:
+                details["internalApiError"] = {
+                    "status": exc.status,
+                    "code": exc.code,
+                    "message": exc.message,
+                }
+                reasons.append(exc.code or "internal_api_unavailable")
+
+        if not _oauth_ready():
+            reasons.append("oauth_not_configured")
+
+        if details["analyticsDbFingerprintMismatch"]:
+            reasons.append("analytics_db_fingerprint_mismatch")
+
+        return web.json_response(
+            {
+                "ok": not reasons,
+                "service": "twitch-dashboard-service",
+                "status": "ready" if not reasons else "degraded",
+                "reasons": reasons,
+                "details": details,
+            },
+            status=200 if not reasons else 503,
+        )
+
+    app.router.add_get("/healthz", _dashboard_healthz)
+    app.router.add_get("/readyz", _dashboard_readyz)
+    app.router.add_get("/health", _dashboard_readyz)
+
     async def _close_client(_: web.Application) -> None:
         if eventsub_bridge is not None:
             await eventsub_bridge.stop()

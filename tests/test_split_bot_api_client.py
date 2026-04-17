@@ -3,6 +3,7 @@ import unittest
 from unittest.mock import patch
 
 from aiohttp import web
+from aiohttp.test_utils import TestClient, TestServer
 
 from bot.app_keys import (
     ANALYTICS_DB_FINGERPRINT_KEY,
@@ -349,6 +350,87 @@ class BotApiClientErrorMappingTests(unittest.IsolatedAsyncioTestCase):
 
         for callback in app.on_cleanup:
             await callback(app)
+
+    async def test_dashboard_service_exposes_healthz_without_startup_bootstrap(self) -> None:
+        with patch(
+            "bot.dashboard_service.app.build_v2_app",
+            return_value=web.Application(),
+        ):
+            app = build_dashboard_service_app(
+                noauth=False,
+                oauth_client_id="client-id",
+                oauth_client_secret="client-secret",
+                internal_api_token="secret-token",
+                internal_api_base_url="http://127.0.0.1:8776",
+            )
+
+        async with TestClient(TestServer(app)) as client:
+            response = await client.get("/healthz")
+            self.assertEqual(response.status, 200)
+            payload = await response.json()
+
+        self.assertTrue(payload["ok"])
+        self.assertEqual(payload["service"], "twitch-dashboard-service")
+        self.assertEqual(payload["status"], "alive")
+        self.assertTrue(payload["internalApiConfigured"])
+        self.assertTrue(payload["oauthConfigured"])
+
+    async def test_dashboard_service_readyz_returns_503_when_internal_api_is_down(self) -> None:
+        with patch(
+            "bot.dashboard_service.app.build_v2_app",
+            return_value=web.Application(),
+        ):
+            app = build_dashboard_service_app(
+                noauth=False,
+                oauth_client_id="client-id",
+                oauth_client_secret="client-secret",
+                internal_api_token="secret-token",
+                internal_api_base_url="http://127.0.0.1:8776",
+            )
+
+        client = app[BOT_API_CLIENT_KEY]
+        self.assertIsNotNone(client)
+
+        with patch.object(
+            client,
+            "healthz",
+            side_effect=BotApiClientError(
+                status=503,
+                code="upstream_unavailable",
+                message="Bot internal API is unavailable.",
+            ),
+        ):
+            async with TestClient(TestServer(app)) as http_client:
+                response = await http_client.get("/readyz")
+                self.assertEqual(response.status, 503)
+                payload = await response.json()
+
+        self.assertFalse(payload["ok"])
+        self.assertIn("upstream_unavailable", payload["reasons"])
+
+    async def test_dashboard_service_readyz_returns_503_when_oauth_is_missing(self) -> None:
+        with patch(
+            "bot.dashboard_service.app.build_v2_app",
+            return_value=web.Application(),
+        ):
+            app = build_dashboard_service_app(
+                noauth=False,
+                oauth_client_id="",
+                oauth_client_secret="",
+                internal_api_token="secret-token",
+                internal_api_base_url="http://127.0.0.1:8776",
+            )
+
+        client = app[BOT_API_CLIENT_KEY]
+        self.assertIsNotNone(client)
+
+        with patch.object(client, "healthz", return_value={"ok": True}):
+            async with TestClient(TestServer(app)) as http_client:
+                response = await http_client.get("/readyz")
+                self.assertEqual(response.status, 503)
+                payload = await response.json()
+
+        self.assertIn("oauth_not_configured", payload["reasons"])
 
     async def test_build_v2_app_defers_storage_bootstrap_to_startup(self) -> None:
         call_order: list[str] = []

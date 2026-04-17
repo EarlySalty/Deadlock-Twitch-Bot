@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import threading
 import unittest
 from collections.abc import Callable
 from typing import Any
+from unittest.mock import patch
 
 from bot.dashboard_service.client import BotApiClientError
 from bot.dashboard_service.eventsub_bridge import DashboardEventSubBridgeRuntime
@@ -271,3 +273,40 @@ class EventSubStateStoreSemanticsTests(unittest.TestCase):
         self.assertFalse(store.is_active("message_id", ""))
         store.release("", "evt-1")
         store.release("message_id", "")
+
+    def test_postgres_state_store_retries_once_after_closed_connection_error(self) -> None:
+        class _RetryingRepository:
+            def __init__(self) -> None:
+                self.calls = 0
+
+            def ensure_initialized(self) -> None:
+                return None
+
+            def is_active(self, kind: str, key: str, *, now: float) -> bool:
+                del kind, key, now
+                self.calls += 1
+                if self.calls == 1:
+                    raise RuntimeError("psycopg.OperationalError: the connection is closed")
+                return True
+
+            def claim(self, kind: str, key: str, *, ttl_seconds: float, now: float) -> bool:
+                del kind, key, ttl_seconds, now
+                return True
+
+            def release(self, kind: str, key: str) -> None:
+                del kind, key
+                return None
+
+        store = EventSubStateStore(
+            logger=logging.getLogger("test.eventsub-state-store"),
+            repository=_RetryingRepository(),
+            now=lambda: 1000.0,
+        )
+
+        with (
+            patch.object(store, "_should_retry_after_storage_error", return_value=True),
+            patch.object(store, "_reset_postgres_pools") as reset_pools,
+        ):
+            self.assertTrue(store.is_active("message_id", "evt-1"))
+
+        reset_pools.assert_called_once()

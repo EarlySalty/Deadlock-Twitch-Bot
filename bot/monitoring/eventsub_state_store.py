@@ -116,16 +116,57 @@ class EventSubStateStore:
     def _normalize(self, kind: str, key: str) -> tuple[str, str]:
         return str(kind or "").strip().lower(), str(key or "").strip()
 
+    def _should_retry_after_storage_error(self, exc: Exception) -> bool:
+        if not isinstance(self._repository, _PostgresEventSubStateRepository):
+            return False
+        text = f"{type(exc).__name__}: {exc}".lower()
+        retry_markers = (
+            "connection is closed",
+            "connection closed",
+            "connection not open",
+            "idlesessiontimeout",
+            "idle-session timeout",
+            "terminating connection",
+            "server closed the connection unexpectedly",
+            "broken pipe",
+        )
+        return any(marker in text for marker in retry_markers)
+
+    def _reset_postgres_pools(self) -> None:
+        from ..storage import pg as storage_pg
+
+        storage_pg._reset_connection_pools()
+
+    def _run_with_storage_retry(self, op_name: str, func: Callable[[], object]) -> object:
+        for attempt in (1, 2):
+            try:
+                self._repository.ensure_initialized()
+                return func()
+            except Exception as exc:
+                if attempt == 1 and self._should_retry_after_storage_error(exc):
+                    self._log.warning(
+                        "EventSub state store %s hit a transient PostgreSQL error; resetting pools and retrying once: %s",
+                        op_name,
+                        exc,
+                    )
+                    self._reset_postgres_pools()
+                    continue
+                raise
+
     def is_active(self, kind: str, key: str) -> bool:
         normalized_kind, normalized_key = self._normalize(kind, key)
         if not normalized_kind or not normalized_key:
             return False
         try:
-            self._repository.ensure_initialized()
-            return self._repository.is_active(
-                normalized_kind,
-                normalized_key,
-                now=float(self._now()),
+            return bool(
+                self._run_with_storage_retry(
+                    "lookup",
+                    lambda: self._repository.is_active(
+                        normalized_kind,
+                        normalized_key,
+                        now=float(self._now()),
+                    ),
+                )
             )
         except Exception:
             self._log.exception(
@@ -141,12 +182,16 @@ class EventSubStateStore:
             return False
         now = float(self._now())
         try:
-            self._repository.ensure_initialized()
-            return self._repository.claim(
-                normalized_kind,
-                normalized_key,
-                ttl_seconds=ttl_seconds,
-                now=now,
+            return bool(
+                self._run_with_storage_retry(
+                    "claim",
+                    lambda: self._repository.claim(
+                        normalized_kind,
+                        normalized_key,
+                        ttl_seconds=ttl_seconds,
+                        now=now,
+                    ),
+                )
             )
         except Exception:
             self._log.exception(
@@ -161,8 +206,10 @@ class EventSubStateStore:
         if not normalized_kind or not normalized_key:
             return
         try:
-            self._repository.ensure_initialized()
-            self._repository.release(normalized_kind, normalized_key)
+            self._run_with_storage_retry(
+                "release",
+                lambda: self._repository.release(normalized_kind, normalized_key),
+            )
         except Exception:
             self._log.exception(
                 "EventSub state store release failed for %s/%s",
