@@ -533,7 +533,7 @@ class DashboardV2Server(
             "expires_at": min(float(data.get("expires_at") or now + 300), now + 300),
         }
         cache = self._dashboard_auth_state_cache("_discord_admin_sessions")
-        cache[session_id] = synth
+        cache.put(session_id, synth)
         return synth
 
     @classmethod
