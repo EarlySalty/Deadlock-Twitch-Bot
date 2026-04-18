@@ -7,6 +7,7 @@ import hashlib
 import ipaddress
 import os
 import secrets
+import time
 from collections.abc import Awaitable, Callable
 from typing import Any
 from urllib.parse import parse_qsl, urlencode, urlparse, urlsplit, urlunsplit
@@ -534,6 +535,16 @@ class DashboardV2Server(
         }
         cache = self._dashboard_auth_state_cache("_discord_admin_sessions")
         cache.put(session_id, synth)
+        db_expires_at = now + getattr(self, "_discord_admin_session_ttl", 86400)
+        try:
+            self._dashboard_auth_state_repo().save_discord_admin_session(
+                session_id=session_id,
+                payload=synth,
+                created_at=now,
+                expires_at=db_expires_at,
+            )
+        except Exception:
+            pass
         return synth
 
     @classmethod
