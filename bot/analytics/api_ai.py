@@ -11,9 +11,11 @@ import json
 import logging
 import os
 from datetime import UTC, datetime, timedelta
+from typing import Any
 
 from aiohttp import web
 
+from ..entitlements.resolver import resolve_plan_snapshot_for_login
 from ..secret_store import keyring_enabled
 from .error_utils import analytics_internal_error_response
 from ..storage import pg as storage
@@ -21,9 +23,22 @@ from ..storage import pg as storage
 log = logging.getLogger("TwitchStreams.AnalyticsV2.AI")
 
 _anthropic_client = None
+_minimax_client = None
 _DOW_NAMES = ["So", "Mo", "Di", "Mi", "Do", "Fr", "Sa"]
 _ai_table_ready = False
 _in_progress_analyses: set[str] = set()  # streamer logins currently being analysed
+_chat_sessions: dict[str, dict[str, Any]] = {}
+_minimax_hourly_counts: dict[str, tuple[int, datetime]] = {}
+
+AI_MODEL_OPUS = "opus"
+AI_MODEL_MINIMAX = "minimax"
+CLAUDE_MODEL = "claude-opus-4-6"
+MINIMAX_MODEL = "MiniMax-M2.7"
+MINIMAX_BASE_URL = "https://api.minimax.io/v1"
+MAX_USER_CONTEXT_CHARS = 2000
+MINIMAX_HOURLY_FOLLOW_UP_LIMIT = 10
+OPUS_SESSION_FOLLOW_UP_LIMIT = 3
+CHAT_SESSION_RETENTION_HOURS = 24
 
 
 def _extract_json_array(text: str) -> str | None:
@@ -119,8 +134,87 @@ def _get_async_client():
     return _anthropic_client
 
 
+def _load_secret(secret_name: str) -> str:
+    value = ""
+    if keyring_enabled():
+        try:
+            import keyring
+
+            value = (
+                keyring.get_password(f"{secret_name}@DeadlockBot", secret_name)
+                or keyring.get_password("DeadlockBot", secret_name)
+                or ""
+            )
+        except Exception:
+            pass
+    if not value:
+        value = os.environ.get(secret_name, "")
+    return value
+
+
+def _get_minimax_client():
+    """Lazy-initialize AsyncOpenAI client configured for MiniMax."""
+    global _minimax_client
+    if _minimax_client is not None:
+        return _minimax_client
+
+    try:
+        from openai import AsyncOpenAI
+    except ImportError as exc:
+        raise RuntimeError(
+            "openai package not installed. Run: pip install openai"
+        ) from exc
+
+    api_key = _load_secret("MINIMAX_API_KEY")
+    if not api_key:
+        raise RuntimeError(
+            "MINIMAX_API_KEY nicht gefunden. Setze via keyring "
+            "(service=DeadlockBot, key=MINIMAX_API_KEY) oder als Umgebungsvariable."
+        )
+
+    _minimax_client = AsyncOpenAI(
+        api_key=api_key,
+        base_url=MINIMAX_BASE_URL,
+        timeout=240.0,
+    )
+    return _minimax_client
+
+
+def _cleanup_ai_chat_state(now: datetime | None = None) -> None:
+    cutoff = (now or datetime.now(UTC)) - timedelta(hours=CHAT_SESSION_RETENTION_HOURS)
+    stale_sessions = [
+        session_key
+        for session_key, session in _chat_sessions.items()
+        if session.get("created_at") is None or session["created_at"] < cutoff
+    ]
+    for session_key in stale_sessions:
+        _chat_sessions.pop(session_key, None)
+
+    stale_counters = [
+        streamer
+        for streamer, (_, window_start) in _minimax_hourly_counts.items()
+        if window_start < (now or datetime.now(UTC)) - timedelta(hours=1)
+    ]
+    for streamer in stale_counters:
+        _minimax_hourly_counts.pop(streamer, None)
+
+
+def _chat_session_key(streamer: str, analysis_id: int | str) -> str:
+    return f"{streamer}_{analysis_id}"
+
+
+def _plan_ai_model(streamer: str) -> str | None:
+    snapshot = resolve_plan_snapshot_for_login(streamer)
+    entitlements = set(snapshot.get("entitlements") or [])
+    if "analytics.ai_full" in entitlements:
+        return AI_MODEL_OPUS
+    if "analytics.ai_mini" in entitlements:
+        return AI_MODEL_MINIMAX
+    return None
+
+
 class _AnalyticsAIMixin:
-    """Admin-only mixin: deep stream analytics via Claude Opus."""
+    """Plan-aware mixin for AI-powered stream analytics and follow-up chat."""
 
     # ------------------------------------------------------------------
     #  GET /twitch/api/v2/ai/analysis
@@ -132,7 +226,9 @@ class _AnalyticsAIMixin:
         """Deep stream analytics analysis via Claude Opus (admin only)."""
         try:
             return await self._api_v2_ai_analysis_inner(request)
-        except Exception as exc:
+        except web.HTTPException:
+            raise
+        except Exception:
             log.exception("Unhandled exception in _api_v2_ai_analysis")
             return analytics_internal_error_response(
                 error="KI-Analyse konnte nicht geladen werden.",
@@ -140,9 +236,8 @@ class _AnalyticsAIMixin:
             )
 
     async def _api_v2_ai_analysis_inner(self, request: web.Request) -> web.Response:
-        err = self._require_v2_admin_api(request)
-        if err is not None:
-            return err
+        self._require_v2_auth(request)
+        _cleanup_ai_chat_state()
 
         streamer = request.query.get("streamer", "").strip().lower() or None
         if not streamer:
@@ -163,16 +258,59 @@ class _AnalyticsAIMixin:
         if game_filter not in ("deadlock", "all"):
             game_filter = "all"
 
+        user_context = str(request.query.get("user_context", "") or "").strip()
+        if len(user_context) > MAX_USER_CONTEXT_CHARS:
+            return web.json_response(
+                {
+                    "error": f"user_context darf maximal {MAX_USER_CONTEXT_CHARS} Zeichen lang sein",
+                },
+                status=400,
+            )
+
+        auth_level = self._get_auth_level(request)
+        if auth_level in ("localhost", "admin"):
+            ai_model = AI_MODEL_OPUS
+        else:
+            ai_model = _plan_ai_model(streamer)
+            if ai_model is None:
+                return web.json_response(
+                    {
+                        "error": "plan_required",
+                        "required_entitlements": ["analytics.ai_mini", "analytics.ai_full"],
+                        "required_plans": [
+                            "analysis_dashboard",
+                            "analytics_trial",
+                            "bundle_analysis_raid_boost",
+                            "raid_boost",
+                        ],
+                    },
+                    status=403,
+                )
+
         since = (datetime.now(UTC) - timedelta(days=days)).isoformat()
 
         _in_progress_analyses.add(streamer)
         try:
-            return await self._run_ai_analysis(streamer, days, since, game_filter)
+            return await self._run_ai_analysis(
+                streamer,
+                days,
+                since,
+                game_filter,
+                ai_model=ai_model,
+                user_context=user_context,
+            )
         finally:
             _in_progress_analyses.discard(streamer)
 
     async def _run_ai_analysis(
-        self, streamer: str, days: int, since: str, game_filter: str
+        self,
+        streamer: str,
+        days: int,
+        since: str,
+        game_filter: str,
+        *,
+        ai_model: str,
+        user_context: str = "",
     ) -> web.Response:
         # Step 1: collect analytics context from DB
         try:
@@ -184,9 +322,16 @@ class _AnalyticsAIMixin:
                 code="ai_context_collection_failed",
             )
 
-        # Step 2: call Claude Opus
+        # Step 2: call configured AI model
         try:
-            points = await self._call_claude_opus(streamer, days, ctx, game_filter)
+            points = await self._call_ai_analysis(
+                ai_model,
+                streamer,
+                days,
+                ctx,
+                game_filter,
+                user_context=user_context,
+            )
         except RuntimeError:
             return analytics_internal_error_response(
                 error="KI-Service ist aktuell nicht verfuegbar.",
@@ -194,7 +339,7 @@ class _AnalyticsAIMixin:
                 status=503,
             )
         except Exception as exc:
-            log.exception("Error calling Claude Opus")
+            log.exception("Error calling AI analysis model %s", ai_model)
             err_str = str(exc)
             if "credit balance is too low" in err_str:
                 return web.json_response(
@@ -222,7 +367,7 @@ class _AnalyticsAIMixin:
                     (
                         streamer,
                         days,
-                        "claude-opus-4-6",
+                        CLAUDE_MODEL if ai_model == AI_MODEL_OPUS else MINIMAX_MODEL,
                         generated_at,
                         json.dumps(ctx.get("summary", {})),
                         json.dumps(points),
@@ -232,6 +377,26 @@ class _AnalyticsAIMixin:
         except Exception:
             log.warning("Failed to persist AI analysis to DB", exc_info=True)
 
+        session_key = None
+        follow_ups_remaining = 0
+        if record_id is not None:
+            session_key = _chat_session_key(streamer, record_id)
+            session = {
+                "model": ai_model,
+                "streamer": streamer,
+                "analysis_id": record_id,
+                "days": days,
+                "game_filter": game_filter,
+                "user_context": user_context,
+                "ctx": ctx,
+                "points": points,
+                "history": [],
+                "follow_up_count": 0,
+                "created_at": generated_at,
+            }
+            _chat_sessions[session_key] = session
+            follow_ups_remaining, _ = self._remaining_follow_ups(streamer, session)
+
         # Build response body
         try:
             return web.json_response({
@@ -239,6 +404,9 @@ class _AnalyticsAIMixin:
                 "streamer": streamer,
                 "days": days,
                 "gameFilter": game_filter,
+                "model": ai_model,
+                "sessionKey": session_key,
+                "followUpsRemaining": follow_ups_remaining,
                 "generatedAt": generated_at.isoformat(),
                 "points": points,
                 "dataSnapshot": ctx.get("summary", {}),
@@ -546,10 +714,15 @@ class _AnalyticsAIMixin:
             ],
         }
 
-    async def _call_claude_opus(
-        self, streamer: str, days: int, ctx: dict, game_filter: str = "all"
-    ) -> list[dict]:
-        """Send analytics context to Claude Opus, return structured 10-point analysis."""
+    def _build_ai_analysis_prompt(
+        self,
+        streamer: str,
+        days: int,
+        ctx: dict,
+        game_filter: str = "all",
+        *,
+        user_context: str = "",
+    ) -> str:
         s = ctx["summary"]
         mode_label = "Nur Deadlock-Sessions" if game_filter == "deadlock" else "Alle gespielten Kategorien"
 
@@ -635,15 +808,43 @@ DATENHINWEIS: Spiele mit "(Viewer-Daten unvollständig)" haben kein Viewer-Sampl
 avg_viewers/peak dort sind Initialwerte bei Stream-Start, nicht repräsentativ.
 Vollständige Viewer-Metriken nur für Einträge ohne diesen Hinweis verwenden."""
 
-        client = _get_async_client()
-        msg = await client.messages.create(
-            model="claude-opus-4-6",
-            max_tokens=60000,
-            messages=[{"role": "user", "content": prompt}],
-        )
+        if user_context:
+            prompt += (
+                "\n\n=== STREAMER-KONTEXT ===\n"
+                f"Der Streamer hat folgende eigene Eindrücke/Fragen mitgegeben: {user_context}"
+            )
+        return prompt
 
+    @staticmethod
+    def _extract_text_response(value: Any) -> str:
+        if value is None:
+            return ""
+        if isinstance(value, str):
+            return value.strip()
+        if isinstance(value, list):
+            parts: list[str] = []
+            for item in value:
+                if isinstance(item, str):
+                    parts.append(item)
+                    continue
+                text = getattr(item, "text", None)
+                if text:
+                    parts.append(str(text))
+                    continue
+                if isinstance(item, dict):
+                    if item.get("type") == "text" and item.get("text"):
+                        parts.append(str(item["text"]))
+                    elif item.get("content"):
+                        parts.append(str(item["content"]))
+            return "\n".join(part for part in parts if part).strip()
+        text = getattr(value, "text", None)
+        if text:
+            return str(text).strip()
+        return str(value).strip()
 
-        raw = (msg.content[0].text or "").strip()
+    def _parse_ai_analysis_points(self, raw: str) -> list[dict]:
+        """Parse and salvage the structured JSON array returned by the model."""
+        raw = raw.strip()
 
         # Strip markdown code fences if present
         if raw.startswith("```"):
@@ -711,24 +912,250 @@ Vollständige Viewer-Metriken nur für Einträge ohne diesen Hinweis verwenden."
                 except json.JSONDecodeError:
                     pass
 
-        log.warning("Claude returned unparseable response (first 300 chars): %s", raw[:300])
+        log.warning("AI model returned unparseable response (first 300 chars): %s", raw[:300])
         return []
+
+    async def _call_ai_analysis(
+        self,
+        ai_model: str,
+        streamer: str,
+        days: int,
+        ctx: dict,
+        game_filter: str = "all",
+        *,
+        user_context: str = "",
+    ) -> list[dict]:
+        prompt = self._build_ai_analysis_prompt(
+            streamer,
+            days,
+            ctx,
+            game_filter,
+            user_context=user_context,
+        )
+
+        if ai_model == AI_MODEL_OPUS:
+            client = _get_async_client()
+            msg = await client.messages.create(
+                model=CLAUDE_MODEL,
+                max_tokens=60000,
+                messages=[{"role": "user", "content": prompt}],
+            )
+            raw = self._extract_text_response(getattr(msg, "content", None))
+            return self._parse_ai_analysis_points(raw)
+
+        if ai_model == AI_MODEL_MINIMAX:
+            client = _get_minimax_client()
+            completion = await client.chat.completions.create(
+                model=MINIMAX_MODEL,
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0.5,
+                max_tokens=60000,
+            )
+            raw = ""
+            choices = getattr(completion, "choices", None) or []
+            if choices:
+                raw = self._extract_text_response(getattr(choices[0].message, "content", ""))
+            return self._parse_ai_analysis_points(raw)
+
+        raise RuntimeError(f"Unsupported AI model: {ai_model}")
+
+    def _build_chat_system_prompt(self, session: dict[str, Any]) -> str:
+        analysis_payload = {
+            "summary": session.get("ctx", {}).get("summary", {}),
+            "recentSessions": session.get("ctx", {}).get("recentSessions", []),
+            "weekdayPerformance": session.get("ctx", {}).get("weekdayPerformance", []),
+            "bestSessions": session.get("ctx", {}).get("bestSessions", []),
+            "worstSessions": session.get("ctx", {}).get("worstSessions", []),
+            "gamePerformance": session.get("ctx", {}).get("gamePerformance", []),
+            "weeklyTrend": session.get("ctx", {}).get("weeklyTrend", []),
+            "deadlockSummary": session.get("ctx", {}).get("deadlockSummary", {}),
+            "gameBreakdown": session.get("ctx", {}).get("gameBreakdown", []),
+            "analysisPoints": session.get("points", []),
+            "userContext": session.get("user_context", ""),
+            "gameFilter": session.get("game_filter", "all"),
+            "days": session.get("days", 30),
+            "streamer": session.get("streamer", ""),
+        }
+        return (
+            "Du beantwortest Rueckfragen zu einer bereits erstellten Twitch-KI-Analyse. "
+            "Nutze nur den folgenden Analysekontext und die bisherige Unterhaltung. "
+            "Antworte praezise, konkret und datenbasiert. Erfinde keine zusaetzlichen Kennzahlen.\n\n"
+            "=== ANALYSEKONTEXT ===\n"
+            f"{json.dumps(analysis_payload, ensure_ascii=False)}"
+        )
+
+    async def _call_ai_chat(self, session: dict[str, Any], message: str) -> str:
+        system_prompt = self._build_chat_system_prompt(session)
+        history = session.get("history", [])
+        messages = [
+            {"role": "system", "content": system_prompt},
+            *[
+                {"role": entry["role"], "content": entry["content"]}
+                for entry in history
+                if entry.get("role") in {"user", "assistant"} and entry.get("content")
+            ],
+            {"role": "user", "content": message},
+        ]
+
+        if session.get("model") == AI_MODEL_OPUS:
+            client = _get_async_client()
+            msg = await client.messages.create(
+                model=CLAUDE_MODEL,
+                max_tokens=4000,
+                system=system_prompt,
+                messages=[
+                    {"role": entry["role"], "content": entry["content"]}
+                    for entry in history
+                    if entry.get("role") in {"user", "assistant"} and entry.get("content")
+                ] + [{"role": "user", "content": message}],
+            )
+            return self._extract_text_response(getattr(msg, "content", None))
+
+        client = _get_minimax_client()
+        completion = await client.chat.completions.create(
+            model=MINIMAX_MODEL,
+            messages=messages,
+            temperature=0.5,
+            max_tokens=4000,
+        )
+        choices = getattr(completion, "choices", None) or []
+        if not choices:
+            return ""
+        return self._extract_text_response(getattr(choices[0].message, "content", ""))
+
+    def _remaining_follow_ups(self, streamer: str, session: dict[str, Any]) -> tuple[int, int | None]:
+        if session.get("model") == AI_MODEL_OPUS:
+            remaining = max(0, OPUS_SESSION_FOLLOW_UP_LIMIT - int(session.get("follow_up_count", 0) or 0))
+            return remaining, None
+
+        now = datetime.now(UTC)
+        count, window_start = _minimax_hourly_counts.get(streamer, (0, now))
+        if now - window_start >= timedelta(hours=1):
+            count = 0
+            window_start = now
+            _minimax_hourly_counts[streamer] = (count, window_start)
+        remaining = max(0, MINIMAX_HOURLY_FOLLOW_UP_LIMIT - int(count))
+        reset_ts = int((window_start + timedelta(hours=1)).timestamp())
+        return remaining, reset_ts
+
+    def _consume_follow_up(self, streamer: str, session: dict[str, Any]) -> tuple[int, int | None]:
+        if session.get("model") == AI_MODEL_OPUS:
+            session["follow_up_count"] = int(session.get("follow_up_count", 0) or 0) + 1
+            return self._remaining_follow_ups(streamer, session)
+
+        now = datetime.now(UTC)
+        count, window_start = _minimax_hourly_counts.get(streamer, (0, now))
+        if now - window_start >= timedelta(hours=1):
+            count = 0
+            window_start = now
+        count += 1
+        _minimax_hourly_counts[streamer] = (count, window_start)
+        return self._remaining_follow_ups(streamer, session)
+
+    async def _api_v2_ai_chat(self, request: web.Request) -> web.Response:
+        try:
+            return await self._api_v2_ai_chat_inner(request)
+        except web.HTTPException:
+            raise
+        except Exception:
+            log.exception("Unhandled exception in _api_v2_ai_chat")
+            return analytics_internal_error_response(
+                error="KI-Chat konnte nicht geladen werden.",
+                code="ai_chat_failed",
+            )
+
+    async def _api_v2_ai_chat_inner(self, request: web.Request) -> web.Response:
+        self._require_v2_auth(request)
+        _cleanup_ai_chat_state()
+
+        try:
+            payload = await request.json()
+        except Exception:
+            return web.json_response({"error": "invalid_json"}, status=400)
+
+        streamer = str(payload.get("streamer") or "").strip().lower()
+        if not streamer:
+            return web.json_response({"error": "streamer required"}, status=400)
+
+        try:
+            analysis_id = int(payload.get("analysis_id"))
+        except (TypeError, ValueError):
+            return web.json_response({"error": "analysis_id required"}, status=400)
+
+        message = str(payload.get("message") or "").strip()
+        if not message:
+            return web.json_response({"error": "message required"}, status=400)
+
+        auth_level = self._get_auth_level(request)
+        if auth_level not in ("localhost", "admin") and _plan_ai_model(streamer) is None:
+            return web.json_response(
+                {
+                    "error": "plan_required",
+                    "required_entitlements": ["analytics.ai_mini", "analytics.ai_full"],
+                },
+                status=403,
+            )
+
+        session_key = _chat_session_key(streamer, analysis_id)
+        session = _chat_sessions.get(session_key)
+        if not session:
+            return web.json_response({"error": "chat_session_not_found"}, status=404)
+
+        remaining_before, reset_ts = self._remaining_follow_ups(streamer, session)
+        if remaining_before <= 0:
+            if session.get("model") == AI_MODEL_MINIMAX:
+                retry_after = max(0, int(reset_ts or 0) - int(datetime.now(UTC).timestamp()))
+                return web.json_response(
+                    {
+                        "error": "follow_up_limit_reached",
+                        "retry_after": retry_after,
+                        "rateLimitReset": reset_ts,
+                    },
+                    status=429,
+                )
+            return web.json_response(
+                {"error": "follow_up_limit_reached", "followUpsRemaining": 0},
+                status=429,
+            )
+
+        reply = await self._call_ai_chat(session, message)
+        now_iso = datetime.now(UTC).isoformat()
+        history = session.setdefault("history", [])
+        history.append({"role": "user", "content": message, "timestamp": now_iso})
+        history.append({"role": "assistant", "content": reply, "timestamp": now_iso})
+        remaining_after, reset_ts = self._consume_follow_up(streamer, session)
+
+        response_payload: dict[str, Any] = {
+            "message": reply,
+            "followUpsRemaining": remaining_after,
+        }
+        if session.get("model") == AI_MODEL_MINIMAX and reset_ts is not None:
+            response_payload["rateLimitReset"] = reset_ts
+        return web.json_response(response_payload)
 
     # ------------------------------------------------------------------
     #  GET /twitch/api/v2/ai/history
     #  Parameter: streamer (required), limit (optional, default 20)
-    #  Auth: admin / localhost (same as analysis endpoint)
     # ------------------------------------------------------------------
 
     async def _api_v2_ai_history(self, request: web.Request) -> web.Response:
         """Return past AI analyses for a streamer (newest first)."""
-        err = self._require_v2_admin_api(request)
-        if err is not None:
-            return err
+        self._require_v2_auth(request)
+        _cleanup_ai_chat_state()
 
         streamer = request.query.get("streamer", "").strip().lower() or None
         if not streamer:
             return web.json_response({"error": "streamer parameter required"}, status=400)
+
+        auth_level = self._get_auth_level(request)
+        if auth_level not in ("localhost", "admin") and _plan_ai_model(streamer) is None:
+            return web.json_response(
+                {
+                    "error": "plan_required",
+                    "required_entitlements": ["analytics.ai_mini", "analytics.ai_full"],
+                },
+                status=403,
+            )
 
         try:
             limit = min(max(int(request.query.get("limit", "20")), 1), 50)
@@ -757,11 +1184,13 @@ Vollständige Viewer-Metriken nur für Einträge ohne diesen Hinweis verwenden."
                 pts = row[6] if isinstance(row[6], list) else json.loads(row[6] or "[]")
                 snap = row[5] if isinstance(row[5], dict) else json.loads(row[5] or "{}")
                 generated_at = row[4]
+                model_name = str(row[3] or "")
+                model_alias = AI_MODEL_OPUS if "claude" in model_name else AI_MODEL_MINIMAX
                 result.append({
                     "id": int(row[0]),
                     "streamer": str(row[1]),
                     "days": int(row[2]),
-                    "model": str(row[3]),
+                    "model": model_alias,
                     "generatedAt": generated_at.isoformat() if hasattr(generated_at, "isoformat") else str(generated_at),
                     "dataSnapshot": snap,
                     "points": pts,

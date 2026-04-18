@@ -35,6 +35,9 @@ export function PlanProvider({ children, plan, isAdmin, isLocalhost, isDemoMode 
     () => (hasFullAccess ? ALL_ENTITLEMENTS : (plan?.entitlements ?? [])),
     [hasFullAccess, plan?.entitlements],
   );
+  const hasAiAccess = hasFullAccess
+    || entitlements.includes('analytics.ai_mini')
+    || entitlements.includes('analytics.ai_full');
   const hasExtendedAnalytics = hasFullAccess || entitlements.includes('analytics.extended');
   const [view, setView] = useState<DashboardView>(
     hasExtendedAnalytics ? 'extended' : 'basic'
@@ -83,12 +86,18 @@ export function PlanProvider({ children, plan, isAdmin, isLocalhost, isDemoMode 
       return entitlements.includes(entitlement);
     },
     canAccessTab: (tabId: TabId) => {
+      if (tabId === 'ai') {
+        return hasAiAccess;
+      }
       const requiredEntitlement = TAB_ENTITLEMENTS[tabId];
       if (!requiredEntitlement) return true;
       if (hasFullAccess) return true;
       return entitlements.includes(requiredEntitlement);
     },
     isTabLocked: (tabId: TabId) => {
+      if (tabId === 'ai') {
+        return !hasAiAccess;
+      }
       const requiredEntitlement = TAB_ENTITLEMENTS[tabId];
       if (!requiredEntitlement) return false;
       if (hasFullAccess) return false;
@@ -101,7 +110,7 @@ export function PlanProvider({ children, plan, isAdmin, isLocalhost, isDemoMode 
     },
     hasFullAccess,
     trialInfo,
-  }), [tier, plan, entitlements, view, isDemoMode, isPreviewMode, hasFullAccess, trialInfo]);
+  }), [tier, plan, entitlements, view, isDemoMode, isPreviewMode, hasFullAccess, hasAiAccess, trialInfo]);
 
   return <PlanContext.Provider value={value}>{children}</PlanContext.Provider>;
 }

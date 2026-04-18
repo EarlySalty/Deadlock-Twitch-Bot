@@ -2,6 +2,8 @@
 export type PlanTier = 'free' | 'basic' | 'extended';
 export type EntitlementId =
   | 'analytics.basic'
+  | 'analytics.ai_mini'
+  | 'analytics.ai_full'
   | 'analytics.extended'
   | 'chat.lurker_tax'
   | 'chat.promos.disable'
@@ -40,6 +42,8 @@ export type TabId =
 
 export const ALL_ENTITLEMENTS: EntitlementId[] = [
   'analytics.basic',
+  'analytics.ai_mini',
+  'analytics.ai_full',
   'analytics.extended',
   'chat.lurker_tax',
   'chat.promos.disable',
@@ -56,7 +60,7 @@ export const TAB_ENTITLEMENTS: Partial<Record<TabId, EntitlementId>> = {
   'coaching': 'analytics.extended',
   'monetization': 'analytics.extended',
   'experimental': 'analytics.extended',
-  'ai': 'analytics.extended',
+  'ai': 'analytics.ai_mini',
 };
 
 // Feature IDs for card-level gating within tabs

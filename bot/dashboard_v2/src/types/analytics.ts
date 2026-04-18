@@ -1340,6 +1340,9 @@ export interface AIAnalysisResult {
   streamer: string;
   days: number;
   gameFilter?: 'deadlock' | 'all';
+  model?: 'minimax' | 'opus';
+  sessionKey?: string;
+  followUpsRemaining?: number;
   generatedAt: string;
   points: AIAnalysisPoint[];
   dataSnapshot: {
@@ -1356,8 +1359,20 @@ export interface AIAnalysisResult {
 
 export interface AIHistoryEntry extends AIAnalysisResult {
   id: number;
-  model: string;
+  model: 'minimax' | 'opus';
   kritischCount: number;
   hochCount: number;
   mittelCount: number;
+}
+
+export interface AIChatMessage {
+  role: 'user' | 'assistant';
+  content: string;
+  timestamp: string;
+}
+
+export interface AIChatResponse {
+  message: string;
+  followUpsRemaining: number;
+  rateLimitReset?: number;
 }

@@ -8,6 +8,7 @@ dependencies = [
     "discord.py>=2.3",
     "fpdf2>=2.8.7",
     "keyring>=25.7.0",
+    "openai>=1.0",
     "psycopg[binary]>=3.1",
     "stripe>=11",
 ]

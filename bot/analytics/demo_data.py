@@ -3560,6 +3560,7 @@ def build_demo_ai_analysis(
         "streamer": spec["login"],
         "days": min(max(days, 7), 365),
         "gameFilter": "deadlock" if game_filter == "deadlock" else "all",
+        "model": "opus",
         "generatedAt": _viewer_timestamp(1 + ALLOWED_DEMO_PROFILES.index(spec["login"]) * 2, hour=11),
         "points": points,
         "dataSnapshot": snapshot,
@@ -3579,7 +3580,7 @@ def build_demo_ai_history(*, streamer: str | None = None, limit: int = 20) -> li
         points = list(entry.get("points", []))
         entry["id"] = 7000 + ALLOWED_DEMO_PROFILES.index(spec["login"]) * 100 + index
         entry["generatedAt"] = _viewer_timestamp(days_ago, hour=hour)
-        entry["model"] = "claude-opus-4-6"
+        entry["model"] = "opus"
         entry["kritischCount"] = sum(1 for point in points if point.get("priority") == "kritisch")
         entry["hochCount"] = sum(1 for point in points if point.get("priority") == "hoch")
         entry["mittelCount"] = sum(1 for point in points if point.get("priority") == "mittel")

@@ -48,6 +48,7 @@ PLAN_ENTITLEMENTS_MAP: Final[dict[str, frozenset[str]]] = {
     "raid_free": frozenset(),
     "raid_boost": frozenset(
         {
+            "analytics.ai_mini",
             "analytics.basic",
             "chat.lurker_tax",
             "raid.priority",
@@ -56,6 +57,7 @@ PLAN_ENTITLEMENTS_MAP: Final[dict[str, frozenset[str]]] = {
     "analysis_dashboard": frozenset(
         {
             "analytics.basic",
+            "analytics.ai_full",
             "analytics.extended",
             "chat.lurker_tax",
         }
@@ -63,6 +65,7 @@ PLAN_ENTITLEMENTS_MAP: Final[dict[str, frozenset[str]]] = {
     "bundle_analysis_raid_boost": frozenset(
         {
             "analytics.basic",
+            "analytics.ai_full",
             "analytics.extended",
             "chat.lurker_tax",
             "chat.promos.disable",
@@ -71,6 +74,7 @@ PLAN_ENTITLEMENTS_MAP: Final[dict[str, frozenset[str]]] = {
     ),
     ANALYTICS_TRIAL_PLAN_ID: frozenset(
         {
+            "analytics.ai_mini",
             "analytics.basic",
             "analytics.extended",
             "chat.lurker_tax",

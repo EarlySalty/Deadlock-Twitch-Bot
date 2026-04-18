@@ -20,8 +20,15 @@ import {
 } from 'lucide-react';
 import { useQuery } from '@tanstack/react-query';
 import { useAuthStatus } from '@/hooks/useAnalytics';
-import { fetchAIAnalysis, fetchAIHistory } from '@/api/ai';
-import type { AIAnalysisResult, AIAnalysisPoint, AIHistoryEntry, TimeRange } from '@/types/analytics';
+import { AIChatRateLimitError, fetchAIAnalysis, fetchAIChat, fetchAIHistory } from '@/api/ai';
+import { usePlan } from '@/context/PlanContext';
+import type {
+  AIAnalysisResult,
+  AIAnalysisPoint,
+  AIChatMessage,
+  AIHistoryEntry,
+  TimeRange,
+} from '@/types/analytics';
 import { dashboardRuntimeConfig, resolveEffectiveDemoMode } from '@/runtimeConfig';
 
 interface AIAnalysisProps {
@@ -67,18 +74,26 @@ type GameFilter = 'deadlock' | 'all';
 
 export function AIAnalysis({ streamer, days }: AIAnalysisProps) {
   const { data: authStatus, isLoading: loadingAuth } = useAuthStatus();
+  const { hasEntitlement } = usePlan();
   const [result, setResult] = useState<AIAnalysisResult | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [expandedPoint, setExpandedPoint] = useState<number | null>(null);
   const [gameFilter, setGameFilter] = useState<GameFilter>('all');
+  const [userContext, setUserContext] = useState('');
+  const [chatMessages, setChatMessages] = useState<AIChatMessage[]>([]);
+  const [chatInput, setChatInput] = useState('');
+  const [chatError, setChatError] = useState<string | null>(null);
+  const [rateLimitReset, setRateLimitReset] = useState<number | null>(null);
+  const [isSendingChat, setIsSendingChat] = useState(false);
 
   const isDemoMode = resolveEffectiveDemoMode({
     pathname: window.location.pathname,
     runtimeConfig: dashboardRuntimeConfig,
   });
   const isAdmin = authStatus?.isAdmin || authStatus?.isLocalhost;
-  const canUseAI = isDemoMode || isAdmin;
+  const hasAiAccess = hasEntitlement('analytics.ai_mini') || hasEntitlement('analytics.ai_full');
+  const canUseAI = isDemoMode || isAdmin || hasAiAccess;
   const analysisInProgress = useRef(false);
 
   const { data: history = [], refetch: refetchHistory } = useQuery<AIHistoryEntry[]>({
@@ -108,9 +123,9 @@ export function AIAnalysis({ streamer, days }: AIAnalysisProps) {
           </div>
         </div>
         <div className="text-center max-w-xs">
-          <p className="text-white font-semibold text-lg mb-1">Coming Soon</p>
+          <p className="text-white font-semibold text-lg mb-1">Plan-Upgrade erforderlich</p>
           <p className="text-text-secondary text-sm leading-relaxed">
-            KI-Tiefenanalyse via Claude Opus ist aktuell nur für Admins verfügbar.
+            KI-Analysen sind in den Basic-, Trial-, Erweitert- und Bundle-Plänen verfügbar.
           </p>
         </div>
       </div>
@@ -123,9 +138,13 @@ export function AIAnalysis({ streamer, days }: AIAnalysisProps) {
     setIsLoading(true);
     setError(null);
     setResult(null);
+    setChatMessages([]);
+    setChatInput('');
+    setChatError(null);
+    setRateLimitReset(null);
     setExpandedPoint(null);
     try {
-      const data = await fetchAIAnalysis(streamer, days, gameFilter);
+      const data = await fetchAIAnalysis(streamer, days, gameFilter, userContext);
       setResult(data);
       setExpandedPoint(1);
       refetchHistory();
@@ -145,6 +164,53 @@ export function AIAnalysis({ streamer, days }: AIAnalysisProps) {
     }
   };
 
+  const handleSendChat = async () => {
+    if (!streamer || !result?.id || !chatInput.trim() || isSendingChat) return;
+
+    const outgoingMessage = chatInput.trim();
+    const userMessage: AIChatMessage = {
+      role: 'user',
+      content: outgoingMessage,
+      timestamp: new Date().toISOString(),
+    };
+
+    setIsSendingChat(true);
+    setChatError(null);
+    setRateLimitReset(null);
+    setChatInput('');
+    setChatMessages(prev => [...prev, userMessage]);
+
+    try {
+      const response = await fetchAIChat(streamer, result.id, outgoingMessage);
+      setResult(prev => prev ? ({ ...prev, followUpsRemaining: response.followUpsRemaining }) : prev);
+      setRateLimitReset(response.rateLimitReset ?? null);
+      setChatMessages(prev => [
+        ...prev,
+        {
+          role: 'assistant',
+          content: response.message,
+          timestamp: new Date().toISOString(),
+        },
+      ]);
+    } catch (e) {
+      setChatMessages(prev => prev.filter(message => message !== userMessage));
+      if (e instanceof AIChatRateLimitError) {
+        setRateLimitReset(e.rateLimitReset ?? null);
+        setChatError(
+          e.rateLimitReset
+            ? `Limit erreicht. Wieder verfügbar in ${Math.max(1, Math.ceil((e.rateLimitReset * 1000 - Date.now()) / 60000))} Minuten.`
+            : 'Keine weiteren Rückfragen für diese Analyse verfügbar.'
+        );
+        setResult(prev => prev ? ({ ...prev, followUpsRemaining: 0 }) : prev);
+      } else {
+        setChatError(e instanceof Error ? e.message : 'Rückfrage fehlgeschlagen');
+      }
+      setChatInput(outgoingMessage);
+    } finally {
+      setIsSendingChat(false);
+    }
+  };
+
   return (
     <div className="space-y-5">
       {/* Header Card */}
@@ -157,7 +223,7 @@ export function AIAnalysis({ streamer, days }: AIAnalysisProps) {
             <div>
               <h2 className="text-xl font-bold text-white">KI Tiefenanalyse</h2>
               <p className="text-text-secondary text-sm mt-0.5">
-                Claude Opus analysiert {days} Tage Streaming-Daten
+                KI analysiert {days} Tage Streaming-Daten
                 {streamer && (
                   <span className="text-primary font-medium"> · {streamer}</span>
                 )}
@@ -219,6 +285,23 @@ export function AIAnalysis({ streamer, days }: AIAnalysisProps) {
           </div>
         )}
 
+        <div className="mt-4">
+          <label className="block text-sm font-medium text-white mb-2">
+            Deine eigenen Eindrücke / Fragen an die KI
+            <span className="text-text-secondary font-normal"> (optional)</span>
+          </label>
+          <textarea
+            value={userContext}
+            onChange={(event) => setUserContext(event.target.value.slice(0, 2000))}
+            disabled={isLoading}
+            placeholder="z.B. Warum performen manche Titel schlechter? Welche Streams sollte ich wiederholen?"
+            className="w-full min-h-[110px] rounded-2xl border border-border bg-background/60 px-4 py-3 text-sm text-white placeholder:text-text-secondary outline-none focus:border-primary/40 focus:ring-2 focus:ring-primary/15 resize-y"
+          />
+          <div className="mt-2 text-xs text-text-secondary text-right">
+            {userContext.length}/2000
+          </div>
+        </div>
+
         {/* Feature pills */}
         {!result && !isLoading && (
           <div className="flex flex-wrap gap-2 mt-4">
@@ -247,7 +330,7 @@ export function AIAnalysis({ streamer, days }: AIAnalysisProps) {
             <Brain className="w-7 h-7 text-primary absolute inset-0 m-auto" />
           </div>
           <div className="text-center">
-            <p className="text-white font-semibold">Claude Opus analysiert...</p>
+            <p className="text-white font-semibold">KI analysiert...</p>
             <p className="text-text-secondary text-sm mt-1 max-w-xs">
               Alle Stream-Daten werden ausgewertet. Das kann 1–3 Minuten dauern.
             </p>
@@ -290,7 +373,7 @@ export function AIAnalysis({ streamer, days }: AIAnalysisProps) {
             <div className="flex items-center gap-2">
               <Brain className="w-3 h-3 text-primary" />
               <span>
-                Claude Opus · generiert am{' '}
+                {result.model === 'opus' ? 'Premium-Analyse' : 'KI-Analyse'} · generiert am{' '}
                 {new Date(result.generatedAt).toLocaleString('de-DE', {
                   day: '2-digit',
                   month: '2-digit',
@@ -302,6 +385,9 @@ export function AIAnalysis({ streamer, days }: AIAnalysisProps) {
             </div>
             <span className="px-2 py-0.5 rounded-full bg-background/60 border border-border font-medium">
               {result.gameFilter === 'deadlock' ? '🎮 Deadlock' : '🌐 Alle Spiele'}
+            </span>
+            <span className="px-2 py-0.5 rounded-full bg-primary/10 border border-primary/20 text-primary font-medium">
+              {result.model === 'opus' ? 'Premium-Analyse' : 'KI-Analyse'}
             </span>
           </div>
 
@@ -332,6 +418,21 @@ export function AIAnalysis({ streamer, days }: AIAnalysisProps) {
               />
             ))}
           </div>
+
+          {result.sessionKey && result.id && (
+            <AIChatPanel
+              analysisId={result.id}
+              model={result.model}
+              followUpsRemaining={result.followUpsRemaining ?? 0}
+              rateLimitReset={rateLimitReset}
+              messages={chatMessages}
+              inputValue={chatInput}
+              error={chatError}
+              isSending={isSendingChat}
+              onInputChange={setChatInput}
+              onSend={handleSendChat}
+            />
+          )}
         </motion.div>
       )}
 
@@ -344,6 +445,10 @@ export function AIAnalysis({ streamer, days }: AIAnalysisProps) {
             setResult(entry);
             setExpandedPoint(1);
             setError(null);
+            setChatMessages([]);
+            setChatInput('');
+            setChatError(null);
+            setRateLimitReset(null);
           }}
         />
       )}
@@ -505,6 +610,113 @@ function DetailSection({ label, content, className = 'text-white' }: DetailSecti
         {label}
       </div>
       <p className={`text-sm leading-relaxed ${className}`}>{content}</p>
+    </div>
+  );
+}
+
+interface AIChatPanelProps {
+  analysisId: number;
+  model?: AIAnalysisResult['model'];
+  followUpsRemaining: number;
+  rateLimitReset: number | null;
+  messages: AIChatMessage[];
+  inputValue: string;
+  error: string | null;
+  isSending: boolean;
+  onInputChange: (value: string) => void;
+  onSend: () => void;
+}
+
+function AIChatPanel({
+  analysisId,
+  model,
+  followUpsRemaining,
+  rateLimitReset,
+  messages,
+  inputValue,
+  error,
+  isSending,
+  onInputChange,
+  onSend,
+}: AIChatPanelProps) {
+  const limitLabel = model === 'opus'
+    ? `Noch ${followUpsRemaining} Rückfragen verfügbar`
+    : `Noch ${followUpsRemaining}/10 Rückfragen in dieser Stunde`;
+
+  const rateLimitLabel = rateLimitReset
+    ? `Limit erreicht. Wieder verfügbar in ${Math.max(1, Math.ceil((rateLimitReset * 1000 - Date.now()) / 60000))} Minuten.`
+    : null;
+
+  return (
+    <div className="panel-card rounded-2xl p-5 space-y-4">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <div className="text-white font-semibold">Rückfragen zur Analyse</div>
+          <div className="text-sm text-text-secondary">
+            Analyse #{analysisId}
+          </div>
+        </div>
+        <div className="text-xs px-3 py-1.5 rounded-full border border-border bg-background/60 text-text-secondary">
+          {limitLabel}
+        </div>
+      </div>
+
+      <div className="space-y-3">
+        {messages.length === 0 ? (
+          <div className="rounded-xl border border-dashed border-border bg-background/40 px-4 py-5 text-sm text-text-secondary">
+            Stelle gezielte Rückfragen zur bestehenden Analyse, z.B. zu Titeln, Wochentagen oder den wichtigsten Hebeln.
+          </div>
+        ) : (
+          messages.map((message, index) => (
+            <div
+              key={`${message.timestamp}-${index}`}
+                className={`rounded-2xl px-4 py-3 text-sm leading-relaxed border ${
+                message.role === 'user'
+                  ? 'ml-auto max-w-[88%] border-primary/25 bg-primary/10 text-white'
+                  : 'mr-auto max-w-[88%] border-border bg-background/50 text-white'
+              }`}
+            >
+              {message.content}
+            </div>
+          ))
+        )}
+      </div>
+
+      {(error || rateLimitLabel) && (
+        <div className="rounded-xl border border-warning/20 bg-warning/5 px-4 py-3 text-sm text-warning">
+          {error || rateLimitLabel}
+        </div>
+      )}
+
+      <div className="flex flex-col gap-3">
+        <textarea
+          value={inputValue}
+          onChange={(event) => onInputChange(event.target.value)}
+          disabled={isSending || followUpsRemaining <= 0}
+          placeholder="Deine Rückfrage zur Analyse..."
+          className="w-full min-h-[96px] rounded-2xl border border-border bg-background/60 px-4 py-3 text-sm text-white placeholder:text-text-secondary outline-none focus:border-primary/40 focus:ring-2 focus:ring-primary/15 resize-y disabled:opacity-60"
+        />
+        <div className="flex justify-end">
+          <button
+            type="button"
+            onClick={onSend}
+            disabled={isSending || !inputValue.trim() || followUpsRemaining <= 0}
+            className="flex items-center gap-2 px-4 py-2.5 bg-primary hover:bg-primary-hover disabled:opacity-40 disabled:cursor-not-allowed text-white rounded-xl font-semibold transition-all text-sm"
+          >
+            {isSending ? (
+              <>
+                <Loader2 className="w-4 h-4 animate-spin" />
+                Sende...
+              </>
+            ) : (
+              <>
+                <MessageCircle className="w-4 h-4" />
+                Rückfrage senden
+              </>
+            )}
+          </button>
+        </div>
+      </div>
     </div>
   );
 }
