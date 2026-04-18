@@ -55,16 +55,11 @@ def build_route_defs(server: Any) -> list[web.RouteDef]:
 
 
 async def index(server: Any, request: web.Request) -> web.StreamResponse:
-    """Entrypoint with local-first admin behavior."""
-    if server._is_local_request(request) or server._is_discord_admin_request(request):
-        destination = "/twitch/admin"
-        fallback = "/twitch/admin"
-    else:
-        destination = "/twitch/dashboard"
-        fallback = "/twitch/dashboard"
+    """Entrypoint — always redirects to public dashboard."""
+    destination = "/twitch/dashboard"
     if request.query_string:
         destination = f"{destination}?{request.query_string}"
-    safe_destination = server._safe_internal_redirect(destination, fallback=fallback)
+    safe_destination = server._safe_internal_redirect(destination, fallback="/twitch/dashboard")
     raise web.HTTPFound(safe_destination)
 
 
