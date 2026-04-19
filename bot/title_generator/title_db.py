@@ -7,25 +7,44 @@ from typing import Any
 from bot.storage import pg as storage
 
 
+def _resolve_streamer_login_for_user_id(
+    conn: Any,
+    streamer_id: str,
+) -> str:
+    row = conn.execute(
+        """
+        SELECT twitch_login
+        FROM twitch_streamers
+        WHERE twitch_user_id = %s
+        LIMIT 1
+        """,
+        (streamer_id,),
+    ).fetchone()
+    return str(row[0] or "").strip().lower() if row and row[0] else ""
+
+
 def get_streamer_title_history(streamer_id: str, limit: int = 30) -> list[dict[str, Any]]:
     """Return recent stream sessions with title + viewer stats for the given streamer."""
     with storage.readonly_connection() as conn:
+        streamer_login = _resolve_streamer_login_for_user_id(conn, streamer_id)
+        if not streamer_login:
+            return []
         rows = conn.execute(
             """
             SELECT
-                s.title,
+                s.stream_title,
                 s.avg_viewers,
                 s.peak_viewers,
                 s.followers_start,
                 s.started_at
             FROM twitch_stream_sessions s
-            WHERE s.twitch_user_id = %s
-              AND s.title IS NOT NULL
-              AND s.title != ''
+            WHERE LOWER(s.streamer_login) = %s
+              AND s.stream_title IS NOT NULL
+              AND s.stream_title != ''
             ORDER BY s.started_at DESC
             LIMIT %s
             """,
-            (streamer_id, limit),
+            (streamer_login, limit),
         ).fetchall()
     return [
         {
@@ -42,13 +61,16 @@ def get_streamer_title_history(streamer_id: str, limit: int = 30) -> list[dict[s
 def get_streamer_avg_viewers(streamer_id: str) -> float:
     """Return the streamer's average viewer count over all sessions."""
     with storage.readonly_connection() as conn:
+        streamer_login = _resolve_streamer_login_for_user_id(conn, streamer_id)
+        if not streamer_login:
+            return 0.0
         row = conn.execute(
             """
             SELECT AVG(avg_viewers)::float
             FROM twitch_stream_sessions
-            WHERE twitch_user_id = %s AND avg_viewers IS NOT NULL
+            WHERE LOWER(streamer_login) = %s AND avg_viewers IS NOT NULL
             """,
-            (streamer_id,),
+            (streamer_login,),
         ).fetchone()
     return float(row[0]) if row and row[0] is not None else 0.0
 
@@ -56,9 +78,12 @@ def get_streamer_avg_viewers(streamer_id: str) -> float:
 def get_streamer_session_count(streamer_id: str) -> int:
     """Return total number of recorded sessions for the given streamer."""
     with storage.readonly_connection() as conn:
+        streamer_login = _resolve_streamer_login_for_user_id(conn, streamer_id)
+        if not streamer_login:
+            return 0
         row = conn.execute(
-            "SELECT COUNT(*) FROM twitch_stream_sessions WHERE twitch_user_id = %s",
-            (streamer_id,),
+            "SELECT COUNT(*) FROM twitch_stream_sessions WHERE LOWER(streamer_login) = %s",
+            (streamer_login,),
         ).fetchone()
     return int(row[0]) if row else 0
 

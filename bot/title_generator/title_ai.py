@@ -52,11 +52,11 @@ def _get_minimax_client() -> Any:
     from bot.analytics.api_ai import _load_secret
     from openai import AsyncOpenAI
 
-    api_key = _load_secret("MINIMAX_API_KEY")
+    api_key = _load_secret("MINIMAX_TOKEN_PLAN_KEY", "MINIMAX_API_KEY", "MINMAX")
     if not api_key:
         raise RuntimeError(
-            "MINIMAX_API_KEY nicht gefunden. Setze via keyring "
-            "(service=DeadlockBot, key=MINIMAX_API_KEY) oder als Umgebungsvariable."
+            "MiniMax-Key nicht gefunden. Setze MINIMAX_TOKEN_PLAN_KEY, "
+            "MINIMAX_API_KEY oder MINMAX via keyring/Umgebung."
         )
 
     return AsyncOpenAI(
@@ -81,6 +81,22 @@ def _format_metric(value: Any, digits: int) -> str:
 
 def _strip_code_fence(raw: str) -> str:
     return re.sub(r"^```(?:json)?\s*|\s*```$", "", raw.strip(), flags=re.MULTILINE)
+
+
+def _extract_json_payload(raw: str) -> str:
+    text = str(raw or "").strip()
+    if not text:
+        return ""
+
+    fenced_match = re.search(r"```json\s*(\{.*?\})\s*```", text, flags=re.DOTALL | re.IGNORECASE)
+    if fenced_match:
+        return fenced_match.group(1).strip()
+
+    object_match = re.search(r"(\{.*\})", text, flags=re.DOTALL)
+    if object_match:
+        return object_match.group(1).strip()
+
+    return _strip_code_fence(text)
 
 
 def build_title_prompt(
@@ -158,7 +174,7 @@ ANTWORT-FORMAT (JSON, kein Markdown drumherum):
 
 def parse_title_response(raw: str) -> dict[str, Any]:
     try:
-        data = json.loads(_strip_code_fence(raw))
+        data = json.loads(_extract_json_payload(raw))
         return {
             "primary": data.get("primary_title", ""),
             "alternatives": data.get("alternatives", [])[:2],

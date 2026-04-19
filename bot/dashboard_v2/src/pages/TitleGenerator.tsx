@@ -68,13 +68,17 @@ export function TitleGenerator({ streamer }: TitleGeneratorProps) {
 
   const { data: insightData } = useQuery({
     queryKey: ['title-insights', streamer],
-    queryFn: fetchTitleInsights,
+    queryFn: () => fetchTitleInsights(streamer),
     enabled: !!streamer,
     staleTime: 1000 * 60 * 60,
   });
 
   const mutation = useMutation({
-    mutationFn: () => fetchTitleSuggestion({ keywords: keywords.trim(), include_live: includeLive }),
+    mutationFn: () => fetchTitleSuggestion({
+      keywords: keywords.trim(),
+      include_live: includeLive,
+      streamer,
+    }),
     onSuccess: (data) => setResult(data),
   });
 

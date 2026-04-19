@@ -3,6 +3,7 @@ import { buildApiUrl, fetchApi, fetchJson, withCookieCredentials } from './core'
 export interface TitleSuggestRequest {
   keywords: string;
   include_live?: boolean;
+  streamer?: string | null;
 }
 
 export interface TitleHistoryEntry {
@@ -39,6 +40,11 @@ export async function fetchTitleSuggestion(
   }));
 }
 
-export async function fetchTitleInsights(): Promise<{ insight: TitleInsight | null }> {
-  return fetchApi<{ insight: TitleInsight | null }>('/title/insights', {});
+export async function fetchTitleInsights(
+  streamer?: string | null
+): Promise<{ insight: TitleInsight | null }> {
+  return fetchApi<{ insight: TitleInsight | null }>(
+    '/title/insights',
+    streamer ? { streamer } : {}
+  );
 }

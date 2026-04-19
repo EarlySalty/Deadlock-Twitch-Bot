@@ -134,22 +134,25 @@ def _get_async_client():
     return _anthropic_client
 
 
-def _load_secret(secret_name: str) -> str:
-    value = ""
-    if keyring_enabled():
-        try:
-            import keyring
+def _load_secret(*secret_names: str) -> str:
+    for secret_name in secret_names:
+        value = ""
+        if keyring_enabled():
+            try:
+                import keyring
 
-            value = (
-                keyring.get_password(f"{secret_name}@DeadlockBot", secret_name)
-                or keyring.get_password("DeadlockBot", secret_name)
-                or ""
-            )
-        except Exception:
-            pass
-    if not value:
-        value = os.environ.get(secret_name, "")
-    return value
+                value = (
+                    keyring.get_password(f"{secret_name}@DeadlockBot", secret_name)
+                    or keyring.get_password("DeadlockBot", secret_name)
+                    or ""
+                )
+            except Exception:
+                pass
+        if not value:
+            value = os.environ.get(secret_name, "")
+        if value:
+            return value
+    return ""
 
 
 def _get_minimax_client():
@@ -165,11 +168,11 @@ def _get_minimax_client():
             "openai package not installed. Run: pip install openai"
         ) from exc
 
-    api_key = _load_secret("MINIMAX_API_KEY")
+    api_key = _load_secret("MINIMAX_TOKEN_PLAN_KEY", "MINIMAX_API_KEY", "MINMAX")
     if not api_key:
         raise RuntimeError(
-            "MINIMAX_API_KEY nicht gefunden. Setze via keyring "
-            "(service=DeadlockBot, key=MINIMAX_API_KEY) oder als Umgebungsvariable."
+            "MiniMax-Key nicht gefunden. Setze MINIMAX_TOKEN_PLAN_KEY, "
+            "MINIMAX_API_KEY oder MINMAX via keyring/Umgebung."
         )
 
     _minimax_client = AsyncOpenAI(

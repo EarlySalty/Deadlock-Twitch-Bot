@@ -25,12 +25,23 @@ def _make_conn(fetchall_result=None, fetchone_result=None):
     return conn
 
 
+def _make_cursor(*, fetchall_result=None, fetchone_result=None):
+    cursor = MagicMock()
+    cursor.fetchall.return_value = fetchall_result or []
+    cursor.fetchone.return_value = fetchone_result
+    return cursor
+
+
 def test_get_streamer_title_history_returns_list(sample_title_history):
     rows = [
         ("Ranked Grind", 180, 250, 1200, None),
         ("gaming today", 80, 120, 1180, None),
     ]
-    conn = _make_conn(fetchall_result=rows)
+    conn = _make_conn()
+    conn.execute.side_effect = [
+        _make_cursor(fetchone_result=("streamer_login",)),
+        _make_cursor(fetchall_result=rows),
+    ]
     with patch("bot.title_generator.title_db.storage.readonly_connection", return_value=conn):
         result = get_streamer_title_history("streamer123", limit=30)
     assert isinstance(result, list)
@@ -40,7 +51,11 @@ def test_get_streamer_title_history_returns_list(sample_title_history):
 
 
 def test_get_streamer_avg_viewers_returns_float():
-    conn = _make_conn(fetchone_result=(160.0,))
+    conn = _make_conn()
+    conn.execute.side_effect = [
+        _make_cursor(fetchone_result=("streamer_login",)),
+        _make_cursor(fetchone_result=(160.0,)),
+    ]
     with patch("bot.title_generator.title_db.storage.readonly_connection", return_value=conn):
         avg = get_streamer_avg_viewers("streamer123")
     assert isinstance(avg, float)
@@ -48,14 +63,22 @@ def test_get_streamer_avg_viewers_returns_float():
 
 
 def test_get_streamer_avg_viewers_returns_zero_when_no_data():
-    conn = _make_conn(fetchone_result=(None,))
+    conn = _make_conn()
+    conn.execute.side_effect = [
+        _make_cursor(fetchone_result=("streamer_login",)),
+        _make_cursor(fetchone_result=(None,)),
+    ]
     with patch("bot.title_generator.title_db.storage.readonly_connection", return_value=conn):
         avg = get_streamer_avg_viewers("new_streamer")
     assert avg == 0.0
 
 
 def test_get_streamer_session_count():
-    conn = _make_conn(fetchone_result=(42,))
+    conn = _make_conn()
+    conn.execute.side_effect = [
+        _make_cursor(fetchone_result=("streamer_login",)),
+        _make_cursor(fetchone_result=(42,)),
+    ]
     with patch("bot.title_generator.title_db.storage.readonly_connection", return_value=conn):
         count = get_streamer_session_count("streamer123")
     assert count == 42

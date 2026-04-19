@@ -5,6 +5,7 @@ from typing import Any
 
 from aiohttp import web
 
+from bot.core.twitch_login import normalize_twitch_login
 from bot.storage import pg as storage
 from bot.title_generator.steam_lookup import (
     get_live_state_for_discord_user,
@@ -33,23 +34,53 @@ def _get_discord_user_id(twitch_user_id: str) -> int | None:
         return None
 
 
-def _resolve_twitch_user_id_from_session(server: Any, request: web.Request) -> str:
+def _resolve_effective_twitch_login(
+    server: Any,
+    request: web.Request,
+    requested_login: object = None,
+) -> str:
     session = server._get_dashboard_session(request)
     if not session:
         return ""
 
-    twitch_user_id = str(session.get("twitch_user_id") or "").strip()
-    if twitch_user_id:
-        return twitch_user_id
-
     twitch_login = str(session.get("twitch_login") or "").strip().lower()
+    auth_level = str(getattr(server, "_get_auth_level", lambda _request: "none")(request) or "").strip().lower()
+    requested = normalize_twitch_login(requested_login)
+
+    if auth_level in {"localhost", "admin"}:
+        return requested or twitch_login
+
     if not twitch_login:
         return ""
+
+    if requested and requested != twitch_login:
+        raise web.HTTPForbidden(text="Du kannst nur auf deinen eigenen Twitch-Account zugreifen.")
+
+    return twitch_login
+
+
+def _resolve_twitch_user_id_from_session(
+    server: Any,
+    request: web.Request,
+    requested_login: object = None,
+) -> str:
+    session = server._get_dashboard_session(request)
+    if not session:
+        return ""
+
+    effective_login = _resolve_effective_twitch_login(server, request, requested_login)
+    if not effective_login:
+        return ""
+
+    session_twitch_login = str(session.get("twitch_login") or "").strip().lower()
+    twitch_user_id = str(session.get("twitch_user_id") or "").strip()
+    if twitch_user_id and effective_login == session_twitch_login:
+        return twitch_user_id
 
     with storage.readonly_connection() as conn:
         row = conn.execute(
             "SELECT twitch_user_id FROM twitch_streamers WHERE LOWER(twitch_login) = %s LIMIT 1",
-            (twitch_login,),
+            (effective_login,),
         ).fetchone()
     return str(row[0]) if row and row[0] else ""
 
@@ -71,22 +102,27 @@ async def title_suggest(server: Any, request: web.Request) -> web.Response:
     if not session:
         return web.json_response({"error": "unauthorized"}, status=401)
 
-    twitch_user_id = _resolve_twitch_user_id_from_session(server, request)
-    if not twitch_user_id:
-        session_twitch_login = str(session.get("twitch_login") or "").strip().lower()
-        if not session_twitch_login:
-            return web.json_response({"error": "unauthorized"}, status=401)
-        return web.json_response({"error": "streamer not found"}, status=404)
-
     try:
         body = await request.json()
     except Exception:
         return web.json_response({"error": "invalid json"}, status=400)
 
+    requested_login = body.get("streamer") or request.query.get("streamer")
     keywords = str(body.get("keywords") or "").strip()
     if not keywords:
         return web.json_response({"error": "keywords required"}, status=400)
     include_live = bool(body.get("include_live", False))
+
+    try:
+        twitch_user_id = _resolve_twitch_user_id_from_session(server, request, requested_login)
+    except web.HTTPForbidden as exc:
+        return web.json_response({"error": str(exc.text or "forbidden")}, status=403)
+
+    if not twitch_user_id:
+        session_twitch_login = _resolve_effective_twitch_login(server, request, requested_login)
+        if not session_twitch_login:
+            return web.json_response({"error": "unauthorized"}, status=401)
+        return web.json_response({"error": "streamer not found"}, status=404)
 
     loop = asyncio.get_running_loop()
     history = await loop.run_in_executor(None, get_streamer_title_history, twitch_user_id, 30)
@@ -129,8 +165,15 @@ async def title_insights(server: Any, request: web.Request) -> web.Response:
     if not session:
         return web.json_response({"error": "unauthorized"}, status=401)
 
-    twitch_user_id = _resolve_twitch_user_id_from_session(server, request)
+    requested_login = request.query.get("streamer")
+    try:
+        twitch_user_id = _resolve_twitch_user_id_from_session(server, request, requested_login)
+    except web.HTTPForbidden as exc:
+        return web.json_response({"error": str(exc.text or "forbidden")}, status=403)
     if not twitch_user_id:
+        session_twitch_login = _resolve_effective_twitch_login(server, request, requested_login)
+        if not session_twitch_login:
+            return web.json_response({"error": "unauthorized"}, status=401)
         return web.json_response({"insight": None})
 
     loop = asyncio.get_running_loop()
