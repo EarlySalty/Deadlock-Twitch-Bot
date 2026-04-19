@@ -13,6 +13,9 @@ jobs:
   ruff:
     name: "⚡ Ruff (CI-critical targets)"
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
@@ -24,33 +27,46 @@ jobs:
       - name: Install lint tooling
         run: ./.github/scripts/install-locked-python-deps.sh .github/requirements-tools-locked.txt
 
-      - name: Run Ruff on curated targets
+      - name: Run Ruff on full codebase
         run: |
-          targets=(
-            bot/secret_store.py
-            bot/raid/views.py
-            bot/dashboard_service/app.py
-            tests/test_raid_views_split_api.py
-            tests/test_split_bot_api_client.py
-            tests/test_dashboard_import_boundaries.py
-            tests/test_live_announcement_integration.py
-            scripts/test_checkout.py
-          )
-          existing=()
-          for target in "${targets[@]}"; do
-            if [ -e "$target" ]; then
-              existing+=("$target")
-            fi
-          done
+          ruff check bot/ twitch_cog/ tests/ scripts/ --output-format=github --target-version=py311
+          ruff format bot/ twitch_cog/ tests/ scripts/ --check --target-version=py311
 
-          if [ ${#existing[@]} -eq 0 ]; then
-            echo "No curated lint targets found."
-            exit 0
-          fi
+      - name: Run Ruff SARIF (for Security tab)
+        if: always()
+        run: |
+          ruff check bot/ twitch_cog/ tests/ scripts/ --output-format=sarif --target-version=py311 -o ruff.sarif || true
 
-          printf 'Ruff targets: %s\n' "${existing[*]}"
-          ruff check "${existing[@]}" --output-format=github --target-version=py311
-          ruff format "${existing[@]}" --check --target-version=py311
+      - name: Upload Ruff SARIF
+        if: always() && hashFiles('ruff.sarif') != ''
+        uses: github/codeql-action/upload-sarif@95e58e9a2cdfd71adc6e0353d5c52f41a045d225 # v4
+        with:
+          sarif_file: ruff.sarif
+          category: ruff
+
+  mypy:
+    name: "🔎 Type Check (mypy)"
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Set up Python
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: "3.13"
+
+      - name: Install lint tooling
+        run: ./.github/scripts/install-locked-python-deps.sh .github/requirements-tools-locked.txt
+
+      - name: Run mypy
+        run: |
+          mypy bot/ twitch_cog/ \
+            --ignore-missing-imports \
+            --no-error-summary \
+            --show-column-numbers \
+            --pretty
 
   pytest:
     name: "✅ Pytest"

@@ -24,3 +24,16 @@
 - 2026-04-16: Worker 2 hat `WelcomeTour.tsx` auf Spotlight-Overlay mit `data-tour-id`-Ankern, animiertem Ring, Popover-Navigation, Resize/Scroll-Repositioning und LocalStorage-Persistenz umgestellt.
 - 2026-04-16: Verifikation Worker 2: gezielter TypeScript-Check für `src/components/onboarding/WelcomeTour.tsx` erfolgreich. Gesamt-`./node_modules/.bin/tsc -b` und `npm run build` derzeit durch fremden Typfehler in `src/pages/InternalHomeLanding.tsx:683` blockiert (`item.active` fehlt auf Teilen des Union-Typs).
 - 2026-04-16: Abschluss Worker 1: `src/pages/InternalHomeLanding.tsx` Typfehler bereinigt; `./node_modules/.bin/tsc -b` und `npm run build` im `bot/dashboard_v2` erfolgreich. Build lief mit bestehender Node/Vite-Hinweismeldung (Node 18.19.1 vs. empfohlen 20.19+), aber ohne Build-Abbruch.
+
+## CI Workflow · Ruff + mypy
+
+- 2026-04-19: `.github/workflows/lint-and-typecheck.yml` angepasst: Ruff von kuratierten Einzeldateien auf `bot/`, `twitch_cog/`, `tests/`, `scripts/` erweitert, SARIF-Export/Upload ergänzt, neuer `mypy`-Job vor `pytest` eingefügt; bestehende SHA-Pins unverändert gelassen.
+
+## Local Check Script
+
+- 2026-04-19: Aufgabe aufgenommen, bestehende `WORKFLOW.md` geprüft und neues lokales Prüfskript für Lint/Format/Typing/SAST/Tests unter `scripts/check-local.sh` angelegt.
+
+## Security Fortress Workflow
+
+- 2026-04-19: Parallel Worker 2 bearbeitet `.github/workflows/security-fortress.yml`.
+- 2026-04-19: Bandit scannt jetzt `twitch_cog/` als Verzeichnis, erzeugt zusätzlich `bandit.sarif` samt SARIF-Upload, und Semgrep lädt `p/default` plus `p/python`. Bestehende SHA-Pins unverändert gelassen.

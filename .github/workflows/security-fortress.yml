@@ -131,7 +131,7 @@ jobs:
         run: |
           set -euo pipefail
           targets=()
-          for target in bot tests scripts twitch_cog.py; do
+          for target in bot tests scripts twitch_cog; do
             if [ -e "$target" ]; then
               targets+=("$target")
             fi
@@ -140,7 +140,8 @@ jobs:
             targets+=(".")
           fi
           printf 'Bandit targets: %s\n' "${targets[*]}"
-          bandit -r "${targets[@]}" -ll -ii -f json -o bandit-report.json
+          bandit -r "${targets[@]}" -ll -ii -f json -o bandit-report.json || true
+          bandit -r "${targets[@]}" -ll -ii -f sarif -o bandit.sarif || true
 
       - name: Upload Bandit report
         if: always() && steps.detect_py.outputs.has_python == 'true'
@@ -149,6 +150,13 @@ jobs:
           name: bandit-report
           path: bandit-report.json
           if-no-files-found: ignore
+
+      - name: Upload Bandit SARIF
+        if: always() && steps.detect_py.outputs.has_python == 'true' && hashFiles('bandit.sarif') != ''
+        uses: github/codeql-action/upload-sarif@95e58e9a2cdfd71adc6e0353d5c52f41a045d225 # v4
+        with:
+          sarif_file: bandit.sarif
+          category: bandit
 
       - name: Run pip-audit
         if: steps.detect_py.outputs.has_python == 'true'
@@ -274,6 +282,7 @@ jobs:
         run: |
           semgrep scan \
             --config p/default \
+            --config p/python \
             --error \
             --exclude node_modules \
             --exclude .venv \
