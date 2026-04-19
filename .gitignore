@@ -42,3 +42,4 @@ logs/
 *.ps1
 /data/runtime/locks
 .superpowers/
+docs/superpowers/

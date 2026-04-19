@@ -179,7 +179,6 @@ if TWITCHIO_AVAILABLE:
             self._last_invite_reply: dict[str, float] = {}
             self._last_invite_reply_user: dict[tuple[str, str], float] = {}
             self._fun_reply_cd: dict[str, float] = {}
-            self._bot_promo_cd: dict[str, float] = {}
             # Kurzantworten auf "Danke" vorerst deaktiviert (kann später wieder aktiviert werden).
             self._fun_thanks_reply_enabled = False
             self._discord_bot: discord.Client | None = None
@@ -772,14 +771,6 @@ if TWITCHIO_AVAILABLE:
                 and "suspicious_users" in msg
             )
 
-        @staticmethod
-        def _looks_like_bot_question(text: str) -> bool:
-            """Heuristik für 'was ist das für ein Bot / wer hat ihn gebaut'."""
-            if not text:
-                return False
-            t = text.lower()
-            return " bot" in t and any(word in t for word in ("wer", "was", "gebaut", "gemacht"))
-
         async def _maybe_fun_responses(self, message, channel_login: str) -> None:
             """Freche Kurz-Antworten (Danke/Bot-Fragen) – nur wenn Deadlock live."""
             content = message.content or ""
@@ -805,14 +796,6 @@ if TWITCHIO_AVAILABLE:
                             ]
                         )
                         await self._send_chat_message(channel, reply)
-
-            # Bot-Promo / Herkunft
-            if self._looks_like_bot_question(low):
-                if self._cooldown_ok(self._bot_promo_cd, channel_login, 300.0):
-                    await self._send_chat_message(
-                        channel,
-                        "Gebaut von EarlySalty; Beschwerden & Liebesbriefe an https://twitch.tv/EarlySalty – follow da!",
-                    )
 
         def _register_inline_commands(self) -> None:
             """Register @command methods on the Bot class (TwitchIO 3.x does not auto-register)."""
