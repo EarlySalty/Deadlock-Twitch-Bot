@@ -738,6 +738,97 @@ if TWITCHIO_AVAILABLE:
             await ctx.send(
                 f"@{ctx.author.name} Raid fehlgeschlagen: {result.get('error') or 'unbekannter Fehler'}"
             )
+
+        @twitchio_commands.command(name="title", aliases=["titel"])
+        async def cmd_title(self, ctx: twitchio_commands.Context) -> None:
+            """`!title <keywords>` — Generiert einen Stream-Titel mit MiniMax."""
+            if not (ctx.author.is_broadcaster or ctx.author.is_mod):
+                return
+
+            raw_args = ctx.message.content.partition(" ")[2].strip()
+            if not raw_args:
+                await ctx.send("Verwendung: !title <keywords>  — z.B.: !title ranked solo grind")
+                return
+
+            include_live = "--live" in raw_args
+            keywords = raw_args.replace("--live", "").strip()
+            if not keywords:
+                await ctx.send("Bitte Keywords angeben, z.B.: !title ranked solo grind")
+                return
+
+            await ctx.send("Generiere deinen Titel, einen Moment...")
+
+            try:
+                from bot.title_generator.title_db import (
+                    get_streamer_avg_viewers,
+                    get_streamer_title_history,
+                    get_top_knowledge_titles,
+                )
+                from bot.title_generator.title_ai import RateLimitExceeded, generate_title
+                from bot.title_generator.steam_lookup import (
+                    get_live_state_for_discord_user,
+                    get_rank_for_discord_user,
+                )
+
+                streamer_twitch_login = ctx.channel.name.lower()
+
+                with readonly_connection() as conn:
+                    row = conn.execute(
+                        "SELECT twitch_user_id, discord_user_id FROM twitch_streamers WHERE LOWER(twitch_login) = %s LIMIT 1",
+                        (streamer_twitch_login,),
+                    ).fetchone()
+
+                if not row:
+                    await ctx.send("Streamer nicht gefunden – bitte Onboarding prüfen.")
+                    return
+
+                streamer_id = str(row[0])
+                discord_user_id_raw = row[1]
+
+                history = get_streamer_title_history(streamer_id, limit=30)
+                own_avg = get_streamer_avg_viewers(streamer_id)
+
+                for item in history:
+                    avg = item.get("avg_viewers") or 0
+                    followers = item.get("followers_start") or 1
+                    item["relative_perf"] = avg / own_avg if own_avg > 0 else 0.0
+                    item["engagement_rate"] = avg / followers
+
+                knowledge = get_top_knowledge_titles(limit=30)
+
+                rank_display = None
+                live_state = None
+                if discord_user_id_raw:
+                    try:
+                        discord_user_id = int(discord_user_id_raw)
+                        rank_info = await get_rank_for_discord_user(discord_user_id)
+                        if rank_info:
+                            rank_display = rank_info["rank_display"]
+                        if include_live:
+                            live_state = await get_live_state_for_discord_user(discord_user_id)
+                    except (ValueError, TypeError):
+                        pass
+
+                result = await generate_title(
+                    streamer_id=streamer_id,
+                    keywords=keywords,
+                    title_history=history,
+                    knowledge_titles=knowledge,
+                    rank_display=rank_display,
+                    live_state=live_state,
+                    source="chat",
+                )
+
+                primary = result.get("primary") or "Kein Titel generiert"
+                alts = result.get("alternatives", [])
+                alt_str = f" | Alternativen: {' | '.join(alts)}" if alts else ""
+                await ctx.send(f"Titel: {primary}{alt_str}")
+
+            except RateLimitExceeded as exc:
+                await ctx.send(f"Bitte warte noch {exc.retry_after} Sekunden vor der nächsten Anfrage.")
+            except Exception:
+                log.exception("cmd_title failed")
+                await ctx.send("Fehler beim Generieren. Bitte später erneut versuchen.")
 else:
 
     class RaidCommandsMixin:
