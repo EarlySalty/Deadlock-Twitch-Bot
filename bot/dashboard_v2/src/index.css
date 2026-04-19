@@ -1,15 +1,24 @@
 @import "tailwindcss";
 
-/* Brand Theme */
+/* Brand Theme — Deutsche Deadlock Community */
 @theme {
   --color-bg: #07151d;
   --color-background: #0b1d28;
   --color-card: #102635;
   --color-card-hover: #173448;
-  --color-primary: #ff7a18;
-  --color-primary-hover: #ff8d39;
-  --color-accent: #10b7ad;
-  --color-accent-hover: #1dd4ca;
+  --color-primary: #06B6D4;
+  --color-primary-hover: #22d3ee;
+  --color-primary-soft: rgba(6, 182, 212, 0.18);
+  --color-indigo: #6D4AE8;
+  --color-indigo-hover: #8266f0;
+  --color-indigo-soft: rgba(109, 74, 232, 0.18);
+  --color-accent: #A855F7;
+  --color-accent-hover: #c084fc;
+  --color-accent-soft: rgba(168, 85, 247, 0.18);
+  --color-orange: #ff7a18;
+  --color-orange-hover: #ff8d39;
+  --color-teal: #10b7ad;
+  --color-teal-hover: #1dd4ca;
   --color-success: #2ecc71;
   --color-warning: #f5b642;
   --color-danger: #ff6b5e;
@@ -22,6 +31,7 @@
   --color-popover: #0e2a3a;
   --font-sans: "Manrope", "Segoe UI", sans-serif;
   --font-display: "Sora", "Manrope", sans-serif;
+  --gradient-brand: linear-gradient(120deg, #06B6D4 10%, #6D4AE8 60%, #A855F7);
 }
 
 /* Base Styles */
@@ -38,9 +48,9 @@ body {
   -moz-osx-font-smoothing: grayscale;
   min-height: 100vh;
   background:
-    radial-gradient(1200px 540px at 92% -10%, rgba(255, 122, 24, 0.24), transparent 65%),
-    radial-gradient(940px 500px at 9% -18%, rgba(16, 183, 173, 0.3), transparent 60%),
-    radial-gradient(1040px 540px at 52% 106%, rgba(46, 204, 113, 0.22), transparent 68%),
+    radial-gradient(1200px 540px at 90% -10%, rgba(6, 182, 212, 0.14), transparent 65%),
+    radial-gradient(940px 500px at 9% -18%, rgba(109, 74, 232, 0.16), transparent 60%),
+    radial-gradient(1040px 540px at 52% 106%, rgba(168, 85, 247, 0.10), transparent 68%),
     linear-gradient(160deg, #07151d 0%, #081a24 55%, #0a202c 100%);
   color: var(--color-text-primary);
   position: relative;
@@ -136,8 +146,19 @@ h4,
 
 .metric-highlight {
   box-shadow:
-    0 0 0 1px rgba(255, 122, 24, 0.24),
-    0 12px 32px rgba(255, 122, 24, 0.16);
+    0 0 0 1px rgba(6, 182, 212, 0.24),
+    0 12px 32px rgba(6, 182, 212, 0.16);
+}
+
+.gradient-brand {
+  background: var(--gradient-brand);
+}
+
+.gradient-text {
+  background: var(--gradient-brand);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
 }
 
 .soft-elevate {
@@ -235,9 +256,9 @@ h4,
   z-index: 0;
   pointer-events: none;
   background:
-    radial-gradient(1520px 780px at 50% 44%, rgba(16, 183, 173, 0.36), transparent 74%),
-    radial-gradient(1240px 620px at 22% 22%, rgba(9, 146, 163, 0.16), transparent 76%),
-    radial-gradient(1120px 560px at 78% 22%, rgba(255, 122, 24, 0.2), transparent 78%),
+    radial-gradient(1520px 780px at 50% 44%, rgba(6, 182, 212, 0.28), transparent 74%),
+    radial-gradient(1240px 620px at 22% 22%, rgba(109, 74, 232, 0.18), transparent 76%),
+    radial-gradient(1120px 560px at 78% 22%, rgba(168, 85, 247, 0.16), transparent 78%),
     radial-gradient(980px 620px at 70% 82%, rgba(46, 204, 113, 0.08), transparent 80%);
   background-repeat: no-repeat;
   background-size:
@@ -257,9 +278,9 @@ h4,
   z-index: 0;
   pointer-events: none;
   background:
-    radial-gradient(920px 450px at 18% 24%, rgba(16, 183, 173, 0.22), transparent 72%),
-    radial-gradient(920px 450px at 82% 22%, rgba(255, 122, 24, 0.22), transparent 72%),
-    radial-gradient(1380px 700px at 50% 50%, rgba(16, 183, 173, 0.24), transparent 76%),
+    radial-gradient(920px 450px at 18% 24%, rgba(6, 182, 212, 0.18), transparent 72%),
+    radial-gradient(920px 450px at 82% 22%, rgba(109, 74, 232, 0.18), transparent 72%),
+    radial-gradient(1380px 700px at 50% 50%, rgba(6, 182, 212, 0.20), transparent 76%),
     radial-gradient(
       155% 145% at 50% 50%,
       rgba(4, 12, 18, 0) 54%,
@@ -357,7 +378,7 @@ h4,
   inset: 0 auto 0 0;
   width: 4px;
   border-radius: 999px;
-  background: linear-gradient(180deg, rgba(16, 183, 173, 0.95), rgba(16, 183, 173, 0.12));
+  background: linear-gradient(180deg, rgba(6, 182, 212, 0.95), rgba(6, 182, 212, 0.12));
   pointer-events: none;
 }
 
