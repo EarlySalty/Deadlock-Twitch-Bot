@@ -823,6 +823,10 @@ class BotRuntimeBootstrap:
                 if cog.api:
                     cog._spawn_bg_task(cog._sync_missing_user_ids(), "twitch.sync_user_ids")
                     cog._spawn_bg_task(cog._scout_deadlock_channels(), "twitch.scout_deadlock")
+                    from bot.title_generator.knowledge_job import schedule_nightly_knowledge_job
+                    from bot.title_generator.insight_job import schedule_weekly_insight_job
+                    cog._spawn_bg_task(schedule_nightly_knowledge_job(start_delay_s=300), "title.knowledge_job")
+                    cog._spawn_bg_task(schedule_weekly_insight_job(start_delay_s=600), "title.insight_job")
                 cog._spawn_bg_task(cog._register_views_after_ready(), "twitch.views_warmup")
             except Exception:
                 with contextlib.suppress(Exception):

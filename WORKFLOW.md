@@ -37,3 +37,27 @@
 
 - 2026-04-19: Parallel Worker 2 bearbeitet `.github/workflows/security-fortress.yml`.
 - 2026-04-19: Bandit scannt jetzt `twitch_cog/` als Verzeichnis, erzeugt zusätzlich `bandit.sarif` samt SARIF-Upload, und Semgrep lädt `p/default` plus `p/python`. Bestehende SHA-Pins unverändert gelassen.
+
+## Stream-Titel-Generator
+
+- Spec: `docs/superpowers/specs/2026-04-19-stream-title-generator-design.md`
+- Plan: `docs/superpowers/plans/2026-04-19-stream-title-generator.md`
+- Arbeitsteilung: Claude = UI (React/TS) + Review; GPT = Backend
+- 2026-04-19: Wave 1 gestartet (parallel): Task 1 DB-Migration, Task 3 steam_lookup, Task 4 title_ai
+- 2026-04-19: Parallel Worker 1: `bot/migrations/title_generator_schema.sql` mit Tabellen `title_generator_knowledge` und `title_generator_insights` angelegt; Migration gegen `TWITCH_ANALYTICS_DSN` erfolgreich angewendet und Tabellenbestand verifiziert (`count=2`). `psql` fehlt lokal, daher Ausführung/Prüfung direkt via `psycopg` gegen denselben DSN.
+- 2026-04-19: Parallel Worker 2: `bot/title_generator/steam_lookup.py` und `tests/title_generator/test_steam_lookup.py` angelegt; gezielter Pytest-Lauf folgt.
+- 2026-04-19: Parallel Worker 2 Verifikation: `tests/title_generator/test_steam_lookup.py` grün (`4 passed`) via `.venv/bin/python -m pytest ...`; `python` fehlte im PATH und `aiosqlite` sowie `pytest-asyncio` mussten lokal in `.venv` installiert werden.
+- 2026-04-19: Parallel Worker 3: `bot/title_generator/title_ai.py` mit MiniMax-Anbindung, Prompt/Response-Parsing und per-Streamer-Rate-Limiting ergänzt; `tests/title_generator/test_title_ai.py` deckt Limits, Prompt und `generate_title()` via Mock ab.
+- 2026-04-19: Parallel Worker 3 Verifikation: `tests/title_generator/test_title_ai.py` grün (`9 passed`) via `.venv/bin/python -m pytest ...`; `python` fehlt lokal im PATH, daher nicht mit bare `python -m pytest` ausführbar.
+- Wave 1 Status: laufend
+- Wave 2: Task 2 title_db.py (nach Wave 1)
+- Wave 3: Tasks 5,6,7,8 (nach Wave 2)
+- Wave 4: Task 9 React-Tab (Claude) + Task 10 Job-Startup (GPT)
+- 2026-04-19: Wave 2 Task 2 gestartet: `bot/title_generator/title_db.py` sowie `tests/title_generator/conftest.py` und `tests/title_generator/test_title_db.py` im bestehenden Postgres-Storage-Muster ergänzt; gezielter Pytest-Lauf folgt.
+- 2026-04-19: Wave 2 Task 2 verifiziert: `.venv/bin/python -m pytest tests/title_generator/test_title_db.py -v` erfolgreich mit `9 passed`; Abweichung zur Erwartung `8 passed`, da die vorgegebene Testdatei tatsächlich 9 Tests enthält.
+- 2026-04-19: Parallel Worker 3 (Dashboard-Routen): `bot/dashboard/routes_title.py` mit `/twitch/api/v2/title/suggest` und `/twitch/api/v2/title/insights` angelegt; `bot/dashboard/routes_mixin.py` registriert die neue Route-Gruppe.
+- 2026-04-19: Parallel Worker 2: `bot/title_generator/insight_job.py` für den wöchentlichen MiniMax-Insight-Job angelegt; Import-Verifikation via `.venv/bin/python -c "from bot.title_generator.insight_job import run_insight_job; print('OK')"` folgt.
+- 2026-04-19: Parallel Worker 2 Verifikation: Import von `run_insight_job` aus `bot/title_generator/insight_job.py` erfolgreich, Ausgabe `OK`.
+- 2026-04-19: Parallel Worker 1 startet Task `knowledge_job.py` für nächtliche Knowledge-Population; Ziel ist ein reiner Import-/Startup-fähiger Async-Job auf Basis von `title_db.py` und Postgres-Storage.
+- 2026-04-19: Parallel Worker 1 abgeschlossen: `bot/title_generator/knowledge_job.py` exakt angelegt; Import-Verifikation via `.venv/bin/python -c "from bot.title_generator.knowledge_job import run_knowledge_job; print('OK')"` erfolgreich (`OK`).
+- 2026-04-19: Parallel Worker 4 ergänzt in `bot/chat/commands.py` den Twitch-Chat-Command `!title`/`!titel` mit lazy Imports aus `bot.title_generator.*`, Streamer-Lookup via `readonly_connection()` und Rate-Limit-/Fehlerbehandlung; Syntax-Check folgt.
