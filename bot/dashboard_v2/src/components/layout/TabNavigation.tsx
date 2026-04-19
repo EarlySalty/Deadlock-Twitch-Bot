@@ -14,6 +14,7 @@ import {
   FlaskConical,
   Brain,
   Lock,
+  Sparkles,
 } from 'lucide-react';
 import { usePlan } from '../../context/PlanContext';
 import type { TabId as BillingTabId } from '../../types/billing';
@@ -31,7 +32,8 @@ export type TabId =
   | 'monetization'
   | 'category'
   | 'experimental'
-  | 'ai';
+  | 'ai'
+  | 'title';
 
 interface Tab {
   id: TabId;
@@ -54,6 +56,7 @@ const tabs: Tab[] = [
   { id: 'category', label: 'Kategorie', icon: Globe },
   { id: 'experimental', label: 'Labor', icon: FlaskConical, beta: true },
   { id: 'ai', label: 'KI Analyse', icon: Brain, beta: true },
+  { id: 'title', label: 'Titel', icon: Sparkles },
 ];
 
 interface TabNavigationProps {

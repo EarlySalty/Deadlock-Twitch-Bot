@@ -15,6 +15,7 @@ import { Category } from '@/pages/Category';
 import { Viewers } from '@/pages/Viewers';
 import { Experimental } from '@/pages/Experimental';
 import { AIAnalysis } from '@/pages/AIAnalysis';
+import { TitleGenerator } from '@/pages/TitleGenerator';
 import { SessionDetail } from '@/pages/SessionDetail';
 import { InternalHomeLanding } from '@/pages/InternalHomeLanding';
 import { VerwaltungPage } from '@/pages/Verwaltung';
@@ -143,7 +144,7 @@ function AnalyticsDashboard() {
     }
     const urlTab = params.get('tab');
     if (urlTab) {
-      const validTabs: Array<TabId | 'session-detail'> = ['overview', 'chat', 'growth', 'audience', 'viewers', 'coaching', 'compare', 'schedule', 'monetization', 'category', 'experimental', 'ai'];
+      const validTabs: Array<TabId | 'session-detail'> = ['overview', 'chat', 'growth', 'audience', 'viewers', 'coaching', 'compare', 'schedule', 'monetization', 'category', 'experimental', 'ai', 'title'];
       if (validTabs.includes(urlTab as TabId)) {
         setActiveTab(urlTab as TabId);
       }
@@ -334,6 +335,10 @@ function AnalyticsDashboard() {
 
           {activeTab === 'ai' && (
             <AIAnalysis streamer={streamer} days={days} />
+          )}
+
+          {activeTab === 'title' && (
+            <TitleGenerator streamer={streamer} />
           )}
 
           {activeTab === 'session-detail' && selectedSessionId && (
