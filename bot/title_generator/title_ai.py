@@ -1,0 +1,260 @@
+from __future__ import annotations
+
+import json
+import re
+import time
+from collections import defaultdict
+from typing import Any
+
+MINIMAX_BASE_URL = "https://api.minimax.io/v1"
+MINIMAX_MODEL = "MiniMax-M2.7"
+EMOJI_PATTERN = re.compile(
+    "[\U00010000-\U0010ffff\U0001F300-\U0001F9FF\u2600-\u26FF\u2700-\u27BF]",
+    flags=re.UNICODE,
+)
+
+
+class RateLimitExceeded(Exception):
+    def __init__(self, retry_after: int):
+        self.retry_after = retry_after
+        super().__init__(f"Rate limit exceeded. Retry in {retry_after}s")
+
+
+class TitleRateLimiter:
+    def __init__(
+        self,
+        max_requests: int = 5,
+        window_seconds: int = 600,
+        dashboard_multiplier: int = 2,
+    ):
+        self._max = max_requests
+        self._window = window_seconds
+        self._dashboard_max = max_requests * dashboard_multiplier
+        self._records: dict[str, list[float]] = defaultdict(list)
+
+    def check_and_record(self, streamer_id: str, source: str) -> bool:
+        now = time.monotonic()
+        key = f"{streamer_id}:{source}"
+        limit = self._dashboard_max if source == "dashboard" else self._max
+        self._records[key] = [t for t in self._records[key] if now - t < self._window]
+        if len(self._records[key]) >= limit:
+            oldest = self._records[key][0]
+            retry_after = int(self._window - (now - oldest)) + 1
+            raise RateLimitExceeded(retry_after)
+        self._records[key].append(now)
+        return True
+
+
+_rate_limiter = TitleRateLimiter(max_requests=5, window_seconds=600, dashboard_multiplier=2)
+
+
+def _get_minimax_client() -> Any:
+    from bot.analytics.api_ai import _load_secret
+    from openai import AsyncOpenAI
+
+    api_key = _load_secret("MINIMAX_API_KEY")
+    if not api_key:
+        raise RuntimeError(
+            "MINIMAX_API_KEY nicht gefunden. Setze via keyring "
+            "(service=DeadlockBot, key=MINIMAX_API_KEY) oder als Umgebungsvariable."
+        )
+
+    return AsyncOpenAI(
+        api_key=api_key,
+        base_url=MINIMAX_BASE_URL,
+        timeout=240.0,
+    )
+
+
+def _emoji_ratio(titles: list[dict]) -> float:
+    if not titles:
+        return 0.0
+    with_emoji = sum(1 for t in titles if EMOJI_PATTERN.search(t.get("title", "")))
+    return with_emoji / len(titles)
+
+
+def _format_metric(value: Any, digits: int) -> str:
+    if isinstance(value, (int, float)):
+        return f"{value:.{digits}f}"
+    return "n/a"
+
+
+def _strip_code_fence(raw: str) -> str:
+    return re.sub(r"^```(?:json)?\s*|\s*```$", "", raw.strip(), flags=re.MULTILINE)
+
+
+def build_title_prompt(
+    keywords: str,
+    title_history: list[dict],
+    knowledge_titles: list[dict],
+    rank_display: str | None,
+    emoji_ratio: float,
+    live_state: dict | None = None,
+) -> str:
+    emoji_rule = (
+        "Verwende maximal einen Emoji und nur dann, wenn der Streamer bereits Emojis in seinen Titeln nutzt."
+        if emoji_ratio >= 0.3
+        else "Verwende KEINE Emojis im Titel."
+    )
+
+    history_lines = "\n".join(
+        (
+            f'  - "{title.get("title", "")}" '
+            f'(relative Perf: {_format_metric(title.get("relative_perf"), 2)}, '
+            f'Engagement: {_format_metric(title.get("engagement_rate"), 3)})'
+        )
+        for title in title_history[:20]
+    ) or "  (keine Daten)"
+
+    benchmark_lines = "\n".join(
+        (
+            f'  - "{title.get("title", "")}" '
+            f'(Score: {_format_metric(title.get("normalized_score"), 2)})'
+        )
+        for title in knowledge_titles[:20]
+    ) or "  (keine Daten)"
+
+    rank_line = f"\nStreamer-Rang: {rank_display}" if rank_display else ""
+    live_line = ""
+    if live_state:
+        live_line = (
+            f'\nAktuelle Live-Daten: Hero={live_state.get("hero", "unbekannt")}, '
+            f'Party={live_state.get("party_hint", "solo")}'
+        )
+
+    return f"""Du bist ein Twitch-Stream-Titel-Experte für das Spiel Deadlock.
+
+AUFGABE:
+1. Analysiere die letzten Stream-Titel des Streamers (mit Performance-Metriken).
+2. Generiere EINEN optimalen Stream-Titel basierend auf den angegebenen Keywords.
+3. Gib zusätzlich 2 Alternativen an.
+4. Bewerte kurz die 3 schlechtesten eigenen Titel (max. 1 Satz je Titel).
+
+KEYWORDS (Intent des Streamers heute): {keywords}{rank_line}{live_line}
+
+EIGENE TITEL-HISTORY (relative_perf = avg_viewers / eigener_durchschnitt):
+{history_lines}
+
+COMMUNITY BENCHMARKS (beste Deadlock-Titel nach normalisiertem Score):
+{benchmark_lines}
+
+REGELN:
+- Der Titel soll vollständig und einladend sein - kein reiner Keyword-Dump.
+- Passe dich stilistisch den guten eigenen Titeln des Streamers an (Sprache, Ton).
+- {emoji_rule}
+- Halte den Titel unter 140 Zeichen.
+- Die Performance-Scores basieren auf Viewer-Zahlen als Proxy (keine echten CTR-Daten).
+
+ANTWORT-FORMAT (JSON, kein Markdown drumherum):
+{{
+  "primary_title": "<optimaler Titel>",
+  "alternatives": ["<Alternative 1>", "<Alternative 2>"],
+  "title_analysis": [
+    {{"title": "<schlechtester eigener Titel>", "score": <1-10>, "feedback": "<1 Satz>"}},
+    ...
+  ]
+}}"""
+
+
+def parse_title_response(raw: str) -> dict[str, Any]:
+    try:
+        data = json.loads(_strip_code_fence(raw))
+        return {
+            "primary": data.get("primary_title", ""),
+            "alternatives": data.get("alternatives", [])[:2],
+            "title_analysis": data.get("title_analysis", []),
+        }
+    except (json.JSONDecodeError, AttributeError, TypeError):
+        return {"primary": "", "alternatives": [], "title_analysis": []}
+
+
+async def generate_title(
+    streamer_id: str,
+    keywords: str,
+    title_history: list[dict],
+    knowledge_titles: list[dict],
+    rank_display: str | None,
+    live_state: dict | None,
+    source: str = "chat",
+) -> dict[str, Any]:
+    """Generate a stream title using MiniMax. Raises RateLimitExceeded if over limit."""
+    _rate_limiter.check_and_record(streamer_id, source=source)
+
+    emoji_ratio = _emoji_ratio(title_history)
+    prompt = build_title_prompt(
+        keywords=keywords,
+        title_history=title_history,
+        knowledge_titles=knowledge_titles,
+        rank_display=rank_display,
+        emoji_ratio=emoji_ratio,
+        live_state=live_state,
+    )
+
+    client = _get_minimax_client()
+    completion = await client.chat.completions.create(
+        model=MINIMAX_MODEL,
+        messages=[{"role": "user", "content": prompt}],
+        temperature=0.7,
+        max_tokens=2000,
+    )
+    raw = completion.choices[0].message.content
+    return parse_title_response(raw)
+
+
+async def generate_insight(title_history: list[dict], period_label: str) -> dict[str, Any]:
+    """Generate a weekly insight analysis for a streamer's title history."""
+    if not title_history:
+        return {}
+
+    history_lines = "\n".join(
+        (
+            f'  - "{title.get("title", "")}" '
+            f'(relative Perf: {_format_metric(title.get("relative_perf", 0), 2)}, '
+            f'Engagement: {_format_metric(title.get("engagement_rate", 0), 3)})'
+        )
+        for title in title_history[:40]
+    )
+
+    prompt = f"""Analysiere die Stream-Titel-Performance dieses Deadlock-Streamers für {period_label}.
+
+TITEL-HISTORY (relative_perf = avg_viewers / eigener_durchschnitt):
+{history_lines}
+
+Identifiziere:
+1. Was läuft gut (Stärken)
+2. Was läuft schlecht (Schwächen)
+3. Erkannte Muster (z.B. "Titles mit Rang performen besser")
+4. Genau 3 konkrete Handlungsempfehlungen
+
+ANTWORT-FORMAT (JSON):
+{{
+  "strengths": "<Freitext>",
+  "weaknesses": "<Freitext>",
+  "patterns": "<Freitext>",
+  "recommendations": ["<Empfehlung 1>", "<Empfehlung 2>", "<Empfehlung 3>"]
+}}"""
+
+    client = _get_minimax_client()
+    completion = await client.chat.completions.create(
+        model=MINIMAX_MODEL,
+        messages=[{"role": "user", "content": prompt}],
+        temperature=0.5,
+        max_tokens=1500,
+    )
+    raw = completion.choices[0].message.content
+    try:
+        data = json.loads(_strip_code_fence(raw))
+        recs = data.get("recommendations", [])
+        if isinstance(recs, list):
+            recs_str = "\n".join(f"• {recommendation}" for recommendation in recs[:3])
+        else:
+            recs_str = str(recs)
+        return {
+            "strengths": data.get("strengths", ""),
+            "weaknesses": data.get("weaknesses", ""),
+            "patterns": data.get("patterns", ""),
+            "recommendations": recs_str,
+            "raw": data,
+        }
+    except (json.JSONDecodeError, AttributeError, TypeError):
+        return {}
