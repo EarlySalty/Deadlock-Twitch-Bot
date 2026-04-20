@@ -5,7 +5,7 @@ requires-python = ">=3.11"
 dependencies = [
     "aiohttp>=3.13.5",
     "anthropic>=0.40",
-    "discord.py>=2.3",
+    "discord.py>=2.7.1",
     "fpdf2>=2.8.7",
     "keyring>=25.7.0",
     "openai>=1.0",
