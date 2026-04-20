@@ -44,15 +44,16 @@ def _fetch_recent_sessions(days: int = 7) -> list[dict[str, Any]]:
         rows = conn.execute(
             """
             SELECT
-                twitch_user_id,
-                title,
+                streamer_login,
+                stream_title,
                 avg_viewers,
                 peak_viewers,
                 followers_start,
                 started_at
             FROM twitch_stream_sessions
             WHERE started_at >= %s
-              AND title IS NOT NULL AND title != ''
+              AND streamer_login IS NOT NULL AND streamer_login != ''
+              AND stream_title IS NOT NULL AND stream_title != ''
               AND avg_viewers IS NOT NULL
               AND followers_start IS NOT NULL AND followers_start > 0
             """,
@@ -60,7 +61,7 @@ def _fetch_recent_sessions(days: int = 7) -> list[dict[str, Any]]:
         ).fetchall()
     return [
         {
-            "twitch_user_id": r[0],
+            "streamer_login": str(r[0]).strip().lower(),
             "title": r[1],
             "avg_viewers": r[2],
             "peak_viewers": r[3],
@@ -78,11 +79,15 @@ async def run_knowledge_job() -> None:
 
     by_streamer: dict[str, list[dict]] = defaultdict(list)
     for s in sessions:
-        by_streamer[s["twitch_user_id"]].append(s)
+        by_streamer[s["streamer_login"]].append(s)
 
     inserted = 0
     loop = asyncio.get_event_loop()
-    for streamer_id, streamer_sessions in by_streamer.items():
+    for streamer_login, streamer_sessions in by_streamer.items():
+        streamer_id = await loop.run_in_executor(None, _resolve_streamer_id_for_login, streamer_login)
+        if not streamer_id:
+            continue
+
         own_avg = await loop.run_in_executor(None, get_streamer_avg_viewers, streamer_id)
         session_count = await loop.run_in_executor(None, get_streamer_session_count, streamer_id)
         history_weight = min(session_count / 20, 1.0)
@@ -120,6 +125,20 @@ async def run_knowledge_job() -> None:
             inserted += 1
 
     log.info("title_generator: nightly job done — inserted/updated %d entries", inserted)
+
+
+def _resolve_streamer_id_for_login(streamer_login: str) -> str:
+    with storage.readonly_connection() as conn:
+        row = conn.execute(
+            """
+            SELECT twitch_user_id
+            FROM twitch_streamers
+            WHERE LOWER(twitch_login) = %s
+            LIMIT 1
+            """,
+            (str(streamer_login).strip().lower(),),
+        ).fetchone()
+    return str(row[0] or "").strip() if row and row[0] else ""
 
 
 async def schedule_nightly_knowledge_job(start_delay_s: float = 0) -> None:

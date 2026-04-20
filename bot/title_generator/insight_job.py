@@ -20,8 +20,9 @@ def _fetch_active_partner_ids() -> list[str]:
     with storage.readonly_connection() as conn:
         rows = conn.execute(
             """
-            SELECT twitch_user_id FROM twitch_partners
-            WHERE archived_at IS NULL
+            SELECT twitch_user_id
+            FROM twitch_streamers_partner_state
+            WHERE is_partner_active = 1
             """,
         ).fetchall()
     return [r[0] for r in rows]

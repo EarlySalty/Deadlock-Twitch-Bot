@@ -42,7 +42,10 @@ def test_rate_limiter_different_streamers_independent():
 def test_build_title_prompt_contains_keywords():
     prompt = build_title_prompt(
         keywords="ranked solo grind",
-        title_history=[{"title": "gaming today", "relative_perf": 0.5, "engagement_rate": 0.05}],
+        title_history=[
+            {"title": "gaming today", "relative_perf": 0.5, "engagement_rate": 0.05},
+            {"title": "Papa DL gibt wieder Coaching", "relative_perf": 1.4, "engagement_rate": 0.06},
+        ],
         knowledge_titles=[{"title": "Grind to Eternus", "normalized_score": 2.1}],
         rank_display="Eternus 2",
         emoji_ratio=0.1,
@@ -50,6 +53,9 @@ def test_build_title_prompt_contains_keywords():
     assert "ranked solo grind" in prompt
     assert "Eternus 2" in prompt
     assert "gaming today" in prompt
+    assert "BESTE EIGENE REFERENZEN" in prompt
+    assert "Papa DL gibt wieder Coaching" in prompt
+    assert '\"Asc 2\" bleibt \"Asc 2\"' in prompt
 
 
 def test_build_title_prompt_no_emoji_when_ratio_low():
@@ -97,3 +103,30 @@ async def test_generate_title_calls_minimax_and_returns_result():
             source="chat",
         )
     assert result["primary"] == "Grind Session"
+
+
+@pytest.mark.asyncio
+async def test_generate_title_sanitizes_invented_rank_expansion_and_generic_filler():
+    mock_response = MagicMock()
+    mock_response.choices = [MagicMock()]
+    mock_response.choices[0].message.content = (
+        '{"primary_title": "Am Juicen für Ascension Rank 2 | Heute ist es endlich soweit", '
+        '"alternatives": ["Ascension Rank 2 Grind - endlich soweit", "Asc 2 grind"], '
+        '"title_analysis": []}'
+    )
+    mock_client = AsyncMock()
+    mock_client.chat.completions.create = AsyncMock(return_value=mock_response)
+
+    with patch("bot.title_generator.title_ai._get_minimax_client", return_value=mock_client):
+        result = await generate_title(
+            streamer_id="s1",
+            keywords="Am Juicen Asc 2",
+            title_history=[],
+            knowledge_titles=[],
+            rank_display=None,
+            live_state=None,
+            source="chat",
+        )
+
+    assert result["primary"] == "Am Juicen für Asc 2"
+    assert result["alternatives"] == ["Asc 2 Grind"]

@@ -742,7 +742,11 @@ if TWITCHIO_AVAILABLE:
         @twitchio_commands.command(name="title", aliases=["titel"])
         async def cmd_title(self, ctx: twitchio_commands.Context) -> None:
             """`!title <keywords>` — Generiert einen Stream-Titel mit MiniMax."""
-            if not (ctx.author.is_broadcaster or ctx.author.is_mod):
+            is_mod = getattr(ctx.author, "is_moderator", getattr(ctx.author, "moderator", False))
+            is_broadcaster = getattr(
+                ctx.author, "is_broadcaster", getattr(ctx.author, "broadcaster", False)
+            )
+            if not (is_broadcaster or is_mod):
                 return
 
             raw_args = ctx.message.content.partition(" ")[2].strip()
