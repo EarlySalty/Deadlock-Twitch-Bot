@@ -149,7 +149,9 @@ export default function PlanCardRedesign({ plan, index }: PlanCardRedesignProps)
           </div>
         ) : (
           <a
-            href="/twitch/abbo"
+            href={plan.price_monthly === 0
+              ? '/twitch/abbo'
+              : `/twitch/abbo/bezahlen?plan_id=${plan.id}&cycle=1&quantity=1`}
             className={`block text-center py-3 rounded-xl text-sm font-semibold transition-all duration-200 ${config.ctaStyle}`}
           >
             {plan.price_monthly === 0 ? 'Kostenlos starten' : '45 Tage kostenlos testen'}
