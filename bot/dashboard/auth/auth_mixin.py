@@ -306,7 +306,7 @@ class _DashboardAuthMixin:
 
     @staticmethod
     def _safe_internal_redirect(
-        location: str | None, *, fallback: str = "/twitch/dashboard-v2"
+        location: str | None, *, fallback: str = "/twitch/analyse"
     ) -> str:
         candidate = (location or "").strip()
         if not candidate:
@@ -367,7 +367,7 @@ class _DashboardAuthMixin:
             "/twitch/abbo/kündigen",
             "/twitch/stats",
             "/twitch/dashboard",
-            "/twitch/dashboard-v2",
+            "/twitch/analyse",
             "/twitch/verwaltung",
             "/twitch/pricing",
             "/twitch/raid/auth",

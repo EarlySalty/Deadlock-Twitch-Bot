@@ -237,13 +237,20 @@ async def abbo_entry(handler: Any, request: web.Request) -> web.StreamResponse:
 
     csrf_token = handler._csrf_generate_token(request)
     cycle_raw = (request.query.get("cycle") or "1").strip()
-    catalog = _build_billing_catalog(cycle_raw)
+    readiness_loader = getattr(handler, "_billing_stripe_readiness_payload", None)
+    readiness = readiness_loader() if callable(readiness_loader) else {}
+    catalog = _build_billing_catalog(cycle_raw, readiness=readiness)
     logout_url = (
         handler._discord_admin_logout_url()
         if handler._is_discord_admin_request(request)
         else "/twitch/auth/logout"
     )
     selected_cycle = int(catalog.get("cycle_months") or 1)
+    payment = dict(catalog.get("payment") or {})
+    checkout_enabled = bool(payment.get("checkout_enabled"))
+    price_map_loader = getattr(handler, "_billing_price_id_map", None)
+    price_lookup = getattr(handler, "_billing_price_id_for_plan", None)
+    price_map = price_map_loader() if callable(price_map_loader) else {}
 
     customer_record = handler._billing_customer_record_for_request(request)
     billing_profile = handler._billing_profile_for_request(request)
@@ -279,6 +286,18 @@ async def abbo_entry(handler: Any, request: web.Request) -> web.StreamResponse:
         elif checkout_reason == "stripe_secret_key_missing":
             notices.append(
                 "<div class='notice notice-error'>Checkout nicht verfügbar: Stripe Secret Key fehlt.</div>"
+            )
+        elif checkout_reason == "checkout_not_ready":
+            notices.append(
+                "<div class='notice notice-error'>Checkout nicht verfuegbar: Publishable Key, Secret Key oder Redirect-URLs fehlen.</div>"
+            )
+        elif checkout_reason == "stripe_price_id_map_missing":
+            notices.append(
+                "<div class='notice notice-error'>Checkout nicht verfuegbar: Stripe Price-ID-Mapping ist unvollstaendig oder fehlt.</div>"
+            )
+        elif checkout_reason == "missing_stripe_price_id":
+            notices.append(
+                "<div class='notice notice-error'>Checkout nicht verfuegbar: fuer diesen Plan/Zyklus ist keine Stripe Price ID hinterlegt.</div>"
             )
         else:
             notices.append(
@@ -347,6 +366,15 @@ async def abbo_entry(handler: Any, request: web.Request) -> web.StreamResponse:
     cycle_switch_html = "".join(cycle_switch)
 
     paid_plans = [plan for plan in list(catalog.get("plans") or []) if _billing_is_paid_plan(plan)]
+    for plan in paid_plans:
+        plan_id = str(plan.get("id") or "").strip()
+        stripe_price_id = (
+            str(price_lookup(plan_id, selected_cycle, price_map=price_map) or "").strip()
+            if callable(price_lookup)
+            else ""
+        )
+        plan["stripe_price_id"] = stripe_price_id or None
+        plan["checkout_available"] = bool(checkout_enabled and stripe_price_id)
     current_plan = handler._billing_current_plan_for_request(request)
     current_plan_id = str(current_plan.get("plan_id") or "raid_free").strip() or "raid_free"
     selected_paid_plan = next(
@@ -366,19 +394,24 @@ async def abbo_entry(handler: Any, request: web.Request) -> web.StreamResponse:
     account_actions: list[str] = []
     if selected_paid_plan is not None:
         pay_plan_id = str(selected_paid_plan.get("id") or "").strip()
-        account_actions.append(
-            f"<form method='get' action='/twitch/abbo/bezahlen' style='margin:0'>"
-            f"<input type='hidden' name='plan_id' value='{html.escape(pay_plan_id, quote=True)}'>"
-            f"<input type='hidden' name='cycle' value='{selected_cycle}'>"
-            "<input type='hidden' name='quantity' value='1'>"
-            "<label class='widerruf-label'>"
-            "<input type='checkbox' name='widerruf_ok' required>"
-            " Ich stimme zu, dass die Leistung sofort nach Buchung startet und mein "
-            "<a href='/twitch/agb#widerruf'>Widerrufsrecht</a> damit erlischt."
-            "</label>"
-            "<button type='submit' class='action-btn action-primary'>Zu Stripe Checkout</button>"
-            "</form>"
-        )
+        if bool(selected_paid_plan.get("checkout_available")):
+            account_actions.append(
+                f"<form method='get' action='/twitch/abbo/bezahlen' style='margin:0'>"
+                f"<input type='hidden' name='plan_id' value='{html.escape(pay_plan_id, quote=True)}'>"
+                f"<input type='hidden' name='cycle' value='{selected_cycle}'>"
+                "<input type='hidden' name='quantity' value='1'>"
+                "<label class='widerruf-label'>"
+                "<input type='checkbox' name='widerruf_ok' required>"
+                " Ich stimme zu, dass die Leistung sofort nach Buchung startet und mein "
+                "<a href='/twitch/agb#widerruf'>Widerrufsrecht</a> damit erlischt."
+                "</label>"
+                "<button type='submit' class='action-btn action-primary'>Zu Stripe Checkout</button>"
+                "</form>"
+            )
+        else:
+            account_actions.append(
+                "<span class='action-btn action-neutral'>Stripe Checkout derzeit nicht bereit</span>"
+            )
     account_actions.append(
         "<a class='action-btn action-neutral' href='/twitch/abbo/rechnungen'>Rechnungen herunterladen (PDF)</a>"
     )
@@ -463,8 +496,10 @@ async def abbo_entry(handler: Any, request: web.Request) -> web.StreamResponse:
             f"/twitch/abbo/bezahlen?plan_id={html.escape(plan_id, quote=True)}"
             f"&cycle={selected_cycle}&quantity=1"
         )
-        if is_paid_plan:
+        if is_paid_plan and bool(plan.get("checkout_available")):
             action_html = f"<a class='btn-plan' href='{pay_href}'>Bezahlen</a>"
+        elif is_paid_plan:
+            action_html = "<span class='pill'>Checkout nicht bereit</span>"
         elif is_current:
             action_html = "<span class='pill pill-active'>Kostenlos aktiv</span>"
         else:

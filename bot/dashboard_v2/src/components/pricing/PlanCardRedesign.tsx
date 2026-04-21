@@ -52,15 +52,25 @@ const planHighlights: Record<string, string[]> = {
     'Viewer-Profile',
     'Coaching & Monetization',
   ],
+  bundle_analysis_raid_boost: [
+    'Alle Analytics-Features',
+    'Bevorzugte Raid-Platzierung',
+    'KI-Analyse inklusive',
+    'Günstiger als Einzeln',
+  ],
 };
 
 export default function PlanCardRedesign({ plan, index }: PlanCardRedesignProps) {
+  const isBundle = plan.id === 'bundle_analysis_raid_boost';
   const config = tierConfig[plan.tier];
   const Icon = config.icon;
   const isCurrent = plan.is_current;
   const highlights = planHighlights[plan.id] || plan.features.slice(0, 4);
   const isPopular = plan.tier === 'basic';
-  const isRecommended = plan.tier === 'extended';
+  const isRecommended = plan.tier === 'extended' && !isBundle;
+  const badge = isBundle
+    ? { text: 'Bundle', icon: Sparkles, className: 'bg-gradient-to-r from-[#10b7ad] to-[#0ea5e9] text-white' }
+    : config.badge;
 
   return (
     <motion.div
@@ -82,14 +92,14 @@ export default function PlanCardRedesign({ plan, index }: PlanCardRedesignProps)
           isCurrent ? 'ring-2 ring-[#10b7ad]/50' : ''
         }`}
       >
-        {/* Popular badge */}
-        {config.badge && (
+        {/* Popular/recommended/bundle badge */}
+        {badge && (
           <div className="absolute -top-3 left-1/2 -translate-x-1/2">
             <div
-              className={`flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold ${config.badge.className}`}
+              className={`flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold ${badge.className}`}
             >
-              <config.badge.icon className="w-3 h-3" />
-              {config.badge.text}
+              <badge.icon className="w-3 h-3" />
+              {badge.text}
             </div>
           </div>
         )}
@@ -109,7 +119,7 @@ export default function PlanCardRedesign({ plan, index }: PlanCardRedesignProps)
                 : `${plan.price_monthly.toFixed(2).replace('.', ',')}€`}
             </span>
             {plan.price_monthly > 0 && (
-              <span className="text-white/40 text-sm">pro Monat</span>
+              <span className="text-white/40 text-sm leading-tight">/ Mo.<br/>inkl. MwSt.</span>
             )}
           </div>
         </div>

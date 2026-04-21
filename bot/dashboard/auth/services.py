@@ -500,7 +500,7 @@ class PartnerLoginTokenService:
 
     def _normalize_next_path(self, raw_next_path: Any) -> str:
         normalizer = getattr(self._owner, "_normalize_next_path", None)
-        fallback = "/twitch/dashboard-v2"
+        fallback = "/twitch/analyse"
         if callable(normalizer):
             candidate = normalizer(raw_next_path)
         else:

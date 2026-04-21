@@ -390,11 +390,11 @@ def _compute_week_comparison(login: str, conn: Any) -> dict[str, Any]:
 
 INTERNAL_HOME_LOGIN_URL = "/twitch/auth/login?next=%2Ftwitch%2Fdashboard"
 INTERNAL_HOME_DISCORD_CONNECT_URL = "/twitch/auth/discord/link?next=%2Ftwitch%2Fverwaltung"
-DASHBOARD_V2_LOGIN_URL = "/twitch/auth/login?next=%2Ftwitch%2Fdashboard-v2"
+DASHBOARD_V2_LOGIN_URL = "/twitch/auth/login?next=%2Ftwitch%2Fanalyse"
 
 # Twitch logins that receive admin-level access (same as Discord admin / localhost)
 _TWITCH_ADMIN_LOGINS: frozenset[str] = frozenset({"earlysalty"})
-DASHBOARD_V2_DISCORD_LOGIN_URL = "/twitch/auth/discord/login?next=%2Ftwitch%2Fdashboard-v2"
+DASHBOARD_V2_DISCORD_LOGIN_URL = "/twitch/auth/discord/login?next=%2Ftwitch%2Fanalyse"
 _INTERNAL_HOME_DEFAULT_DAYS = 30
 _INTERNAL_HOME_BAN_REASON_KEYWORDS: tuple[str, ...] = (
     "bot",
@@ -717,7 +717,7 @@ class AnalyticsV2Mixin(
 
     @staticmethod
     def _normalize_dashboard_next_path(raw_path: str | None) -> str:
-        fallback = "/twitch/dashboard-v2"
+        fallback = "/twitch/analyse"
         candidate = (raw_path or "").strip()
         if not candidate:
             return fallback
@@ -757,7 +757,7 @@ class AnalyticsV2Mixin(
             except Exception:
                 log.debug("Could not build dashboard login URL via host class", exc_info=True)
         next_path = self._normalize_dashboard_next_path(
-            request.rel_url.path_qs if request.rel_url else "/twitch/dashboard-v2"
+            request.rel_url.path_qs if request.rel_url else "/twitch/analyse"
         )
         return self._safe_internal_login_redirect(
             f"/twitch/auth/login?{urlencode({'next': next_path})}"
@@ -835,9 +835,9 @@ class AnalyticsV2Mixin(
             if request.path.startswith("/twitch/api/"):
                 should_use_discord = getattr(self, "_should_use_discord_admin_login", None)
                 if callable(should_use_discord) and bool(should_use_discord(request)):
-                    login_url = "/twitch/auth/discord/login?next=%2Ftwitch%2Fdashboard-v2"
+                    login_url = "/twitch/auth/discord/login?next=%2Ftwitch%2Fanalyse"
                 else:
-                    login_url = "/twitch/auth/login?next=%2Ftwitch%2Fdashboard-v2"
+                    login_url = "/twitch/auth/login?next=%2Ftwitch%2Fanalyse"
             if on_admin_host and auth_level not in ("none", "localhost", "admin"):
                 payload = {
                     "error": "admin_required",
@@ -2047,7 +2047,7 @@ class AnalyticsV2Mixin(
             },
             "links": {
                 "dashboard": "/twitch/dashboard",
-                "dashboard_v2": "/twitch/dashboard-v2",
+                "dashboard_v2": "/twitch/analyse",
                 "raid_history": "/twitch/raid/history",
                 "raid_requirements": "/twitch/raid/requirements",
                 "billing": "/twitch/abbo",

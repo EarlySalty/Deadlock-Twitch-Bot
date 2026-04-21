@@ -58,6 +58,19 @@ class BillingHelperTests(unittest.TestCase):
         self.assertEqual(price.get("discount_cents"), 1019)
         self.assertEqual(price.get("total_net_cents"), 9175)
 
+    def test_catalog_payment_state_uses_readiness_payload(self) -> None:
+        catalog = _build_billing_catalog(
+            1,
+            readiness={
+                "integration_state": "live",
+                "checkout_ready": True,
+                "price_map_ready": True,
+            },
+        )
+        payment = dict(catalog.get("payment") or {})
+        self.assertEqual(payment.get("integration_state"), "live")
+        self.assertTrue(payment.get("checkout_enabled"))
+
     def test_paid_plan_id_helper_distinguishes_paid_from_free(self) -> None:
         self.assertFalse(_billing_is_paid_plan_id("raid_free"))
         self.assertTrue(_billing_is_paid_plan_id("raid_boost"))

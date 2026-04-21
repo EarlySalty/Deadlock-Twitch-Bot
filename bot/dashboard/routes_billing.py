@@ -84,8 +84,8 @@ async def api_billing_catalog(
         return web.json_response({"error": "auth_required"}, status=401)
 
     cycle_raw = (request.query.get("cycle") or "1").strip()
-    payload = build_billing_catalog(cycle_raw)
     readiness = server._billing_stripe_readiness_payload()
+    payload = build_billing_catalog(cycle_raw, readiness=readiness)
     cycle = int(payload.get("cycle_months") or 1)
     price_map = server._billing_price_id_map()
     current_plan = server._billing_current_plan_for_request(request)
@@ -102,10 +102,6 @@ async def api_billing_catalog(
         plan["checkout_available"] = bool(price_id and readiness.get("checkout_ready"))
 
     payment = dict(payload.get("payment") or {})
-    payment["integration_state"] = str(readiness.get("integration_state") or "planned")
-    payment["checkout_enabled"] = bool(
-        readiness.get("checkout_ready") and readiness.get("price_map_ready")
-    )
     payment["invoice_preview_path"] = "/twitch/api/billing/invoice-preview"
     payment["invoice_page_path"] = "/twitch/abbo/rechnung"
     payment["stripe_sync_path"] = "/twitch/api/billing/stripe/sync-products"

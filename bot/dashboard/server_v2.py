@@ -39,7 +39,7 @@ TWITCH_OAUTH_TOKEN_URL = "https://id.twitch.tv/oauth2/token"  # noqa: S105
 TWITCH_HELIX_USERS_URL = "https://api.twitch.tv/helix/users"
 DISCORD_API_BASE_URL = "https://discord.com/api/v10"
 TWITCH_DASHBOARDS_LOGIN_URL = "/twitch/auth/login?next=%2Ftwitch%2Fdashboards"
-TWITCH_DASHBOARD_V2_LOGIN_URL = "/twitch/auth/login?next=%2Ftwitch%2Fdashboard-v2"
+TWITCH_DASHBOARD_V2_LOGIN_URL = "/twitch/auth/login?next=%2Ftwitch%2Fanalyse"
 DEFAULT_DASHBOARD_MODERATOR_ROLE_ID = 1337518124647579661
 KEYRING_SERVICE_NAME = "DeadlockBot"
 # Public Stripe Connect OAuth client ID (`ca_...`). Safe to commit directly.

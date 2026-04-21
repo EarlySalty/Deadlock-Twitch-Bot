@@ -61,3 +61,34 @@
 - 2026-04-19: Parallel Worker 1 startet Task `knowledge_job.py` für nächtliche Knowledge-Population; Ziel ist ein reiner Import-/Startup-fähiger Async-Job auf Basis von `title_db.py` und Postgres-Storage.
 - 2026-04-19: Parallel Worker 1 abgeschlossen: `bot/title_generator/knowledge_job.py` exakt angelegt; Import-Verifikation via `.venv/bin/python -c "from bot.title_generator.knowledge_job import run_knowledge_job; print('OK')"` erfolgreich (`OK`).
 - 2026-04-19: Parallel Worker 4 ergänzt in `bot/chat/commands.py` den Twitch-Chat-Command `!title`/`!titel` mit lazy Imports aus `bot.title_generator.*`, Streamer-Lookup via `readonly_connection()` und Rate-Limit-/Fehlerbehandlung; Syntax-Check folgt.
+
+## Stripe Checkout Diagnose
+
+- Ziel: Stripe Checkout Diagnose
+- Status: In Arbeit
+- 2026-04-21: `bot/dashboard/billing/billing_mixin.py`, `bot/dashboard/abbo_billing_routes.py`, `bot/dashboard/abbo_routes.py`, `bot/dashboard/billing/billing_plans.py` und `bot/dashboard/server_v2.py` gelesen; Stripe-Readiness und Redirect-Pfade nachvollzogen.
+- Gefundene Probleme:
+  - `build_billing_catalog()` setzt `payment.integration_state="planned"` und `payment.checkout_enabled=False` hart kodiert, auch wenn die echte Readiness bereits separat berechnet wird.
+  - `/twitch/abbo` rendert Bezahlen-/Checkout-Aktionen aktuell ohne Bindung an Stripe-Readiness oder Price-Mapping; Nutzer koennen daher in bekannte Fehlerpfade laufen.
+  - `abbo_pay()` redirectet bei `checkout_ready=False`, `price_map_ready=False` oder fehlender `stripe_price_id` aktuell ohne `reason`-Parameter zurueck; dadurch erscheint nur die generische Meldung.
+  - In dieser lokalen Laufzeit sind `STRIPE_SECRET_KEY`, `STRIPE_PUBLISHABLE_KEY`, `STRIPE_WEBHOOK_SECRET`, `STRIPE_CHECKOUT_SUCCESS_URL`, `STRIPE_CHECKOUT_CANCEL_URL`, `STRIPE_PRICE_ID_MAP`, `TWITCH_BILLING_STRIPE_SECRET_KEY` und `TWITCH_BILLING_STRIPE_PUBLISHABLE_KEY` im Env nicht gesetzt; `STRIPE_SECRET_KEY`, `STRIPE_PUBLISHABLE_KEY` und `STRIPE_WEBHOOK_SECRET` sind auch im Keyring-Service `DeadlockBot` nicht gesetzt.
+- Empfohlene Fixes:
+  - `build_billing_catalog()` mit optionalem Readiness-Payload verdrahten und `integration_state`/`checkout_enabled` daraus ableiten.
+  - `/twitch/abbo` serverseitig an Readiness und Price-IDs koppeln, damit nicht-bereite Checkout-Aktionen gar nicht erst angeboten werden.
+  - `abbo_pay()` fuer nicht-bereiten Checkout und fehlende Price-IDs auf explizite `reason`-Codes umstellen, damit die UI differenzierte Hinweise anzeigen kann.
+  - Extern noch noetig: echte Stripe-Credentials und `STRIPE_PRICE_ID_MAP` bzw. Alias-Keys ueber Env oder Keyring hinterlegen.
+- 2026-04-21: Implementiert ohne externe Credentials:
+  - `bot/dashboard/billing/billing_plans.py`: Katalog akzeptiert jetzt optionales Stripe-Readiness-Payload und leitet `payment.integration_state` sowie `payment.checkout_enabled` dynamisch daraus ab.
+  - `bot/dashboard/abbo_routes.py`: `/twitch/abbo` koppelt Pay-Aktionen jetzt an Readiness plus vorhandene Stripe Price IDs; nicht-bereiter Checkout wird als gesperrt angezeigt statt blind verlinkt.
+  - `bot/dashboard/abbo_billing_routes.py`: fruehe Redirects liefern jetzt explizite Ursachen (`checkout_not_ready`, `stripe_price_id_map_missing`, `missing_stripe_price_id`).
+- 2026-04-21: Verifikation:
+  - `python3 -m py_compile bot/dashboard/billing/billing_plans.py bot/dashboard/abbo_billing_routes.py bot/dashboard/abbo_routes.py bot/dashboard/routes_billing.py` erfolgreich.
+  - `python3 -m unittest tests.test_billing_helpers.BillingHelperTests.test_catalog_payment_state_uses_readiness_payload` erfolgreich.
+  - `python3 -m unittest tests.test_dashboard_lurker_tax_settings.DashboardLurkerTaxTests.test_abbo_entry_shows_locked_teaser_for_free_plan tests.test_dashboard_lurker_tax_settings.DashboardLurkerTaxTests.test_abbo_entry_shows_toggle_and_scope_warning_for_paid_plan` erfolgreich.
+  - Voller Lauf `python3 -m unittest tests.test_billing_helpers` bleibt durch bestehende, nicht von diesem Patch verursachte Erwartung bei Entitlements rot (`analytics.ai_mini` zusaetzlich vorhanden).
+- Relevante Dateipfade:
+  - `bot/dashboard/billing/billing_mixin.py`
+  - `bot/dashboard/abbo_billing_routes.py`
+  - `bot/dashboard/abbo_routes.py`
+  - `bot/dashboard/billing/billing_plans.py`
+  - `bot/dashboard/server_v2.py`

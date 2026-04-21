@@ -156,7 +156,7 @@ async def stats_entry(
         return response
 
     legacy_url = server._resolve_legacy_stats_url()
-    beta_url = "/twitch/dashboard-v2"
+    beta_url = "/twitch/analyse"
     logout_url = (
         server._discord_admin_logout_url()
         if server._is_discord_admin_request(request)
@@ -225,7 +225,7 @@ async def auth_logout(
 
     response = server._dashboard_auth_redirect_or_unavailable(
         request,
-        next_path="/twitch/dashboard-v2",
+        next_path="/twitch/analyse",
         fallback_login_url=dashboard_v2_login_url,
     )
     server._clear_session_cookie(response, request)

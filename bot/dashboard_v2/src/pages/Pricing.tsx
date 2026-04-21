@@ -76,7 +76,7 @@ export default function Pricing() {
       <TrialCallout />
 
       {/* Plan Cards Grid */}
-      <div className="grid md:grid-cols-3 gap-6 mb-12">
+      <div className="grid sm:grid-cols-2 xl:grid-cols-4 gap-6 mb-12">
         {plans.map((plan, index) => (
           <PlanCardRedesign key={plan.id} plan={plan} index={index} />
         ))}

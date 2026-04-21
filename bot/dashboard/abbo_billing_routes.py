@@ -29,7 +29,8 @@ async def abbo_pay(handler: Any, request: web.Request) -> web.StreamResponse:
         raise web.HTTPFound("/twitch/abbo")
 
     cycle_months = _normalize_billing_cycle(request.query.get("cycle"))
-    catalog = _build_billing_catalog(cycle_months)
+    readiness = handler._billing_stripe_readiness_payload()
+    catalog = _build_billing_catalog(cycle_months, readiness=readiness)
     selected_plan = next(
         (plan for plan in catalog.get("plans") or [] if str(plan.get("id") or "") == plan_id),
         None,
@@ -47,13 +48,14 @@ async def abbo_pay(handler: Any, request: web.Request) -> web.StreamResponse:
     if unit_net_cents <= 0:
         raise web.HTTPFound("/twitch/abbo")
 
-    readiness = handler._billing_stripe_readiness_payload()
-    if not (bool(readiness.get("checkout_ready")) and bool(readiness.get("price_map_ready"))):
-        raise web.HTTPFound("/twitch/abbo")
+    if not bool(readiness.get("checkout_ready")):
+        raise web.HTTPFound("/twitch/abbo?checkout=unavailable&reason=checkout_not_ready")
+    if not bool(readiness.get("price_map_ready")):
+        raise web.HTTPFound("/twitch/abbo?checkout=unavailable&reason=stripe_price_id_map_missing")
 
     stripe_price_id = handler._billing_price_id_for_plan(plan_id, cycle_months)
     if not stripe_price_id:
-        raise web.HTTPFound("/twitch/abbo")
+        raise web.HTTPFound("/twitch/abbo?checkout=unavailable&reason=missing_stripe_price_id")
 
     stripe_secret_key = str(getattr(handler, "_billing_stripe_secret_key", "") or "").strip()
     if not stripe_secret_key:
@@ -495,7 +497,8 @@ async def abbo_invoice(handler: Any, request: web.Request) -> web.StreamResponse
         return auth_redirect
 
     cycle_months = _normalize_billing_cycle(request.query.get("cycle"))
-    catalog = _build_billing_catalog(cycle_months)
+    readiness = handler._billing_stripe_readiness_payload()
+    catalog = _build_billing_catalog(cycle_months, readiness=readiness)
     plans = list(catalog.get("plans") or [])
     if not plans:
         return web.Response(text="Keine Billing-Plaene verfuegbar.", status=404)

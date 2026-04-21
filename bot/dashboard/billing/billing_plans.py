@@ -110,10 +110,28 @@ def format_eur_cents(cents: int) -> str:
     return f"{euros},{remainder:02d} EUR"
 
 
-def build_billing_catalog(cycle_months: int | str | None) -> dict[str, Any]:
+def billing_payment_state_from_readiness(readiness: dict[str, Any] | None) -> dict[str, Any]:
+    payload = dict(readiness or {})
+    checkout_ready = bool(payload.get("checkout_ready"))
+    price_map_ready = bool(payload.get("price_map_ready"))
+    integration_state = str(payload.get("integration_state") or "").strip()
+    if not integration_state:
+        integration_state = "live" if (checkout_ready and price_map_ready) else "planned"
+    return {
+        "integration_state": integration_state,
+        "checkout_enabled": bool(checkout_ready and price_map_ready),
+    }
+
+
+def build_billing_catalog(
+    cycle_months: int | str | None,
+    *,
+    readiness: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     cycle = normalize_billing_cycle(cycle_months)
     cycle_discount = int(BILLING_CYCLE_DISCOUNTS.get(cycle, 0))
     cycle_label = billing_cycle_label(cycle)
+    payment_state = billing_payment_state_from_readiness(readiness)
     plans: list[dict[str, Any]] = []
     for blueprint in BILLING_PLANS:
         monthly_net_cents = int(blueprint["monthly_net_cents"])
@@ -163,8 +181,8 @@ def build_billing_catalog(cycle_months: int | str | None) -> dict[str, Any]:
         "plans": plans,
         "payment": {
             "provider": "stripe",
-            "integration_state": "planned",
-            "checkout_enabled": False,
+            "integration_state": payment_state["integration_state"],
+            "checkout_enabled": payment_state["checkout_enabled"],
             "checkout_preview_enabled": True,
             "catalog_path": "/twitch/api/billing/catalog",
             "checkout_preview_path": "/twitch/api/billing/checkout-preview",

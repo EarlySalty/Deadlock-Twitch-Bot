@@ -25,8 +25,8 @@ from .error_utils import analytics_internal_error_response
 log = logging.getLogger("TwitchStreams.AnalyticsV2")
 DASHBOARD_LOGIN_URL = "/twitch/auth/login?next=%2Ftwitch%2Fdashboard"
 DASHBOARD_DISCORD_LOGIN_URL = "/twitch/auth/discord/login?next=%2Ftwitch%2Fdashboard"
-DASHBOARD_V2_LOGIN_URL = "/twitch/auth/login?next=%2Ftwitch%2Fdashboard-v2"
-DASHBOARD_V2_DISCORD_LOGIN_URL = "/twitch/auth/discord/login?next=%2Ftwitch%2Fdashboard-v2"
+DASHBOARD_V2_LOGIN_URL = "/twitch/auth/login?next=%2Ftwitch%2Fanalyse"
+DASHBOARD_V2_DISCORD_LOGIN_URL = "/twitch/auth/discord/login?next=%2Ftwitch%2Fanalyse"
 DASHBOARD_VERWALTUNG_LOGIN_URL = "/twitch/auth/login?next=%2Ftwitch%2Fverwaltung"
 DASHBOARD_VERWALTUNG_DISCORD_LOGIN_URL = "/twitch/auth/discord/login?next=%2Ftwitch%2Fverwaltung"
 DASHBOARD_PRICING_LOGIN_URL = "/twitch/auth/login?next=%2Ftwitch%2Fpricing"
@@ -124,7 +124,9 @@ class _AnalyticsOverviewMixin:
         router.add_get("/twitch/api/v2/affiliate/portal", self._api_v2_affiliate_portal)
         # Serve the dashboard
         router.add_get("/twitch/dashboard", self._serve_dashboard)
-        router.add_get("/twitch/dashboard-v2", self._serve_dashboard_v2)
+        router.add_get("/twitch/analyse", self._serve_dashboard_v2)
+        router.add_get("/twitch/analyse/{path:.*}", self._serve_dashboard_v2_assets)
+        router.add_get("/twitch/dashboard-v2", self._redirect_dashboard_v2_to_analyse)
         router.add_get("/twitch/dashboard-v2/{path:.*}", self._serve_dashboard_v2_assets)
         router.add_get("/twitch/verwaltung", self._serve_verwaltung)
         router.add_get("/twitch/pricing", self._serve_pricing)
@@ -489,8 +491,13 @@ class _AnalyticsOverviewMixin:
         )
         return web.Response(text=html, content_type="text/html", charset="utf-8")
 
+    async def _redirect_dashboard_v2_to_analyse(self, request: web.Request) -> web.StreamResponse:
+        """Redirect legacy /twitch/dashboard-v2 to /twitch/analyse."""
+        qs = f"?{request.query_string}" if request.query_string else ""
+        raise web.HTTPMovedPermanently(location=f"/twitch/analyse{qs}")
+
     async def _serve_dashboard_v2(self, request: web.Request) -> web.Response:
-        """Serve the main dashboard HTML."""
+        """Serve the main dashboard HTML at /twitch/analyse."""
         gate_response = self._admin_dashboard_host_page_gate(request)
         if gate_response is not None:
             return gate_response
@@ -502,7 +509,7 @@ class _AnalyticsOverviewMixin:
                 login_url = DASHBOARD_V2_LOGIN_URL
             response = self._dashboard_auth_redirect_or_unavailable(
                 request,
-                next_path="/twitch/dashboard-v2",
+                next_path="/twitch/analyse",
                 fallback_login_url=login_url,
             )
             if isinstance(response, web.HTTPException):
@@ -684,7 +691,7 @@ class _AnalyticsOverviewMixin:
                 login_url = DASHBOARD_V2_LOGIN_URL
             response = self._dashboard_auth_redirect_or_unavailable(
                 request,
-                next_path="/twitch/dashboard-v2",
+                next_path="/twitch/analyse",
                 fallback_login_url=login_url,
             )
             if isinstance(response, web.HTTPException):
