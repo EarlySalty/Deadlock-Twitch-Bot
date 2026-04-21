@@ -63,18 +63,8 @@ async def abbo_pay(handler: Any, request: web.Request) -> web.StreamResponse:
         raise web.HTTPFound("/twitch/abbo?checkout=unavailable&reason=stripe_secret_key_missing")
 
     base_url = handler._billing_base_url_for_request(request)
-    fallback_success_url = (
-        f"{base_url}/twitch/abbo?checkout=success&session_id={{CHECKOUT_SESSION_ID}}"
-    )
-    fallback_cancel_url = f"{base_url}/twitch/abbo?checkout=cancelled"
-    success_url = (
-        str(getattr(handler, "_billing_checkout_success_url", "") or "").strip()
-        or fallback_success_url
-    )
-    cancel_url = (
-        str(getattr(handler, "_billing_checkout_cancel_url", "") or "").strip()
-        or fallback_cancel_url
-    )
+    success_url = f"{base_url}/twitch/abbo?checkout=success&session_id={{CHECKOUT_SESSION_ID}}"
+    cancel_url = f"{base_url}/twitch/abbo?checkout=cancelled"
 
     billing_profile = handler._billing_profile_for_request(request)
     customer_reference = handler._billing_primary_ref_for_request(request)
@@ -97,6 +87,8 @@ async def abbo_pay(handler: Any, request: web.Request) -> web.StreamResponse:
         "tax_id_collection": {"enabled": True},
         "metadata": metadata,
     }
+    if plan_id == "analysis_dashboard":
+        session_payload["subscription_data"] = {"trial_period_days": 45}
     if customer_reference:
         session_payload["client_reference_id"] = customer_reference
     if customer_email:

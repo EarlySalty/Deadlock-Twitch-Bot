@@ -2,63 +2,72 @@ import { motion } from 'framer-motion';
 import { Check, Minus } from 'lucide-react';
 
 interface FeatureRow {
-  category: string;
-  features: {
-    name: string;
-    free: boolean | string;
-    basic: boolean | string;
-    extended: boolean | string;
-  }[];
+  name: string;
+  free: boolean | string;
+  basic: boolean | string;
+  extended: boolean | string;
+  bundle: boolean | string;
 }
 
-const featureData: FeatureRow[] = [
+interface FeatureCategory {
+  category: string;
+  features: FeatureRow[];
+}
+
+const featureData: FeatureCategory[] = [
   {
     category: 'Analytics',
     features: [
-      { name: 'Viewer-Trend', free: true, basic: true, extended: true },
-      { name: 'Stream-Übersicht', free: true, basic: true, extended: true },
-      { name: 'Schedule Heatmap', free: true, basic: true, extended: true },
-      { name: 'Chat-Analytics', free: false, basic: true, extended: true },
-      { name: 'Growth-Tracking', free: false, basic: true, extended: true },
-      { name: 'Audience-Insights', free: false, basic: true, extended: true },
+      { name: 'Viewer-Verlauf & Trends', free: true,  basic: true,  extended: true,  bundle: true  },
+      { name: 'Stream-Übersicht',        free: true,  basic: true,  extended: true,  bundle: true  },
+      { name: 'Schedule Heatmap',        free: true,  basic: true,  extended: true,  bundle: true  },
+      { name: 'Chat-Analytics',          free: false, basic: true,  extended: true,  bundle: true  },
+      { name: 'Growth-Tracking',         free: false, basic: true,  extended: true,  bundle: true  },
+      { name: 'Zeitraumvergleiche',       free: false, basic: true,  extended: true,  bundle: true  },
+      { name: 'Audience-Insights',       free: false, basic: true,  extended: true,  bundle: true  },
+      { name: 'Follower-Übersichten',    free: false, basic: true,  extended: true,  bundle: true  },
+      { name: 'Kategorie-Vergleich',     free: false, basic: false, extended: true,  bundle: true  },
+      { name: 'Viewer-Profile',          free: false, basic: false, extended: true,  bundle: true  },
     ],
   },
   {
-    category: 'Erweiterte Features',
+    category: 'KI-Analyse',
     features: [
-      { name: 'Kategorie-Vergleich', free: false, basic: true, extended: true },
-      { name: 'AI-Analyse', free: false, basic: false, extended: true },
-      { name: 'Viewer-Profile', free: false, basic: false, extended: true },
-      { name: 'Coaching', free: false, basic: false, extended: true },
-      { name: 'Monetization', free: false, basic: false, extended: true },
+      { name: 'KI-Zusammenfassung',      free: false, basic: 'Basis', extended: 'Vollständig', bundle: 'Vollständig' },
+      { name: 'Stream-Coaching',         free: false, basic: false, extended: true,  bundle: true  },
+      { name: 'Monetarisierungs-Tipps',  free: false, basic: false, extended: true,  bundle: true  },
     ],
   },
   {
-    category: 'Community',
+    category: 'Community & Chat',
     features: [
-      { name: 'Lurker-Analyse', free: false, basic: true, extended: true },
-      { name: 'Chat-Social-Graph', free: false, basic: false, extended: true },
-      { name: 'Raid-Retention', free: false, basic: false, extended: true },
+      { name: 'Lurker-Steuer Erinnerungen', free: false, basic: true,  extended: true,  bundle: true  },
+      { name: 'Chat-Social-Graph',          free: false, basic: false, extended: true,  bundle: true  },
+      { name: 'Bot-Werbung deaktivieren',   free: false, basic: false, extended: false, bundle: true  },
+    ],
+  },
+  {
+    category: 'Raid-Netzwerk',
+    features: [
+      { name: 'Auto-Raid Grundfunktion',         free: true,  basic: true,  extended: true,  bundle: true  },
+      { name: 'Bevorzugte Raid-Platzierung',      free: false, basic: true,  extended: false, bundle: true  },
+      { name: 'Raid-Retention-Analyse',           free: false, basic: false, extended: false, bundle: true  },
+      { name: 'Sichtbarkeit bei Inaktivität',     free: false, basic: true,  extended: false, bundle: true  },
+    ],
+  },
+  {
+    category: 'Sonstiges',
+    features: [
+      { name: '45 Tage kostenlose Testphase', free: false, basic: false, extended: true,  bundle: false },
+      { name: 'Priority Support',             free: false, basic: true,  extended: true,  bundle: true  },
     ],
   },
 ];
 
-const FreeIcon = ({ value }: { value: boolean | string }) => {
-  if (value === true) return <Check className="w-4 h-4 text-white/30 mx-auto" />;
+const Cell = ({ value, color }: { value: boolean | string; color: string }) => {
+  if (value === true)  return <Check className={`w-4 h-4 ${color} mx-auto`} />;
   if (value === false) return <Minus className="w-4 h-4 text-white/10 mx-auto" />;
-  return <span className="text-white/30 text-xs">{value}</span>;
-};
-
-const BasicIcon = ({ value }: { value: boolean | string }) => {
-  if (value === true) return <Check className="w-4 h-4 text-[#ff7a18] mx-auto" />;
-  if (value === false) return <Minus className="w-4 h-4 text-white/10 mx-auto" />;
-  return <span className="text-[#ff7a18] text-xs font-medium">{value}</span>;
-};
-
-const ExtendedIcon = ({ value }: { value: boolean | string }) => {
-  if (value === true) return <Check className="w-4 h-4 text-[#10b7ad] mx-auto" />;
-  if (value === false) return <Minus className="w-4 h-4 text-white/10 mx-auto" />;
-  return <span className="text-[#10b7ad] text-xs font-medium">{value}</span>;
+  return <span className={`${color} text-xs font-medium`}>{value}</span>;
 };
 
 export default function FeatureComparisonGrid() {
@@ -75,37 +84,33 @@ export default function FeatureComparisonGrid() {
       </div>
 
       <div className="overflow-x-auto -mx-4 md:mx-0">
-        <table className="w-full min-w-[500px] md:min-w-0 text-sm">
+        <table className="w-full min-w-[620px] md:min-w-0 text-sm">
           <thead>
             <tr className="border-b border-white/10">
               <th className="text-left py-3 text-white/40 font-normal px-4 md:px-0">Feature</th>
-              <th className="text-center py-3 text-white/60 font-medium w-24">Free</th>
-              <th className="text-center py-3 text-[#ff7a18] font-medium w-24">Basic</th>
-              <th className="text-center py-3 text-[#10b7ad] font-medium w-24">Erweitert</th>
+              <th className="text-center py-3 text-white/50 font-medium w-20">Free</th>
+              <th className="text-center py-3 text-[#ff7a18] font-medium w-20">Basic</th>
+              <th className="text-center py-3 text-[#10b7ad] font-medium w-20">Erweitert</th>
+              <th className="text-center py-3 font-medium w-20" style={{ color: '#0ea5e9' }}>Bundle</th>
             </tr>
           </thead>
           <tbody className="text-white/60">
-            {featureData.map((category) => (
+            {featureData.map((cat) => (
               <>
-                <tr key={`cat-${category.category}`} className="border-b border-white/5">
-                  <td colSpan={4} className="py-3">
+                <tr key={`cat-${cat.category}`} className="border-b border-white/5">
+                  <td colSpan={5} className="py-3">
                     <span className="text-xs font-semibold text-white/40 uppercase tracking-wider">
-                      {category.category}
+                      {cat.category}
                     </span>
                   </td>
                 </tr>
-                {category.features.map((feature) => (
-                  <tr key={feature.name} className="border-b border-white/5 hover:bg-white/[0.02] transition-colors">
-                    <td className="py-3 px-4 md:px-0">{feature.name}</td>
-                    <td className="text-center py-3">
-                      <FreeIcon value={feature.free} />
-                    </td>
-                    <td className="text-center py-3">
-                      <BasicIcon value={feature.basic} />
-                    </td>
-                    <td className="text-center py-3">
-                      <ExtendedIcon value={feature.extended} />
-                    </td>
+                {cat.features.map((f) => (
+                  <tr key={f.name} className="border-b border-white/5 hover:bg-white/[0.02] transition-colors">
+                    <td className="py-3 px-4 md:px-0">{f.name}</td>
+                    <td className="text-center py-3"><Cell value={f.free}     color="text-white/30" /></td>
+                    <td className="text-center py-3"><Cell value={f.basic}    color="text-[#ff7a18]" /></td>
+                    <td className="text-center py-3"><Cell value={f.extended} color="text-[#10b7ad]" /></td>
+                    <td className="text-center py-3"><Cell value={f.bundle}   color="text-[#0ea5e9]" /></td>
                   </tr>
                 ))}
               </>
@@ -114,7 +119,6 @@ export default function FeatureComparisonGrid() {
         </table>
       </div>
 
-      {/* Legend */}
       <div className="flex flex-wrap items-center justify-center gap-6 mt-6 pt-6 border-t border-white/5">
         <div className="flex items-center gap-2 text-white/40 text-xs">
           <Check className="w-3.5 h-3.5 text-white/30" />
