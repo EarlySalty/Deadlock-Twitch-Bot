@@ -1,10 +1,11 @@
 import { motion } from 'framer-motion';
 import { Users, AlertCircle, Loader2, TrendingUp, TrendingDown, Target, Clock, UserPlus } from 'lucide-react';
-import { useWatchTimeDistribution, useFollowerFunnel, useAudienceDemographics, useLurkerAnalysis } from '@/hooks/useAnalytics';
+import { useWatchTimeDistribution, useFollowerFunnel, useAudienceDemographics, useLurkerAnalysis, useViewerProfiles } from '@/hooks/useAnalytics';
 import { WatchTimeDistribution } from '@/components/charts/WatchTimeDistribution';
 import { FollowerFunnel } from '@/components/charts/FollowerFunnel';
 import { AudienceDemographics } from '@/components/charts/AudienceDemographics';
 import { LurkerAnalysis } from '@/components/charts/LurkerAnalysis';
+import { ViewerProfiles } from '@/components/charts/ViewerProfiles';
 import { PlanGateCard } from '@/components/cards/PlanGateCard';
 import type { TimeRange } from '@/types/analytics';
 
@@ -35,9 +36,10 @@ export function Audience({ streamer, days }: AudienceProps) {
     error: demographicsErrorDetail,
     refetch: refetchDemographics,
   } = useAudienceDemographics(streamer, days);
-  const { data: lurkerData } = useLurkerAnalysis(streamer, days);
+  const { data: lurkerData, isLoading: loadingLurker } = useLurkerAnalysis(streamer, days);
+  const { data: viewerProfilesData, isLoading: loadingViewerProfiles } = useViewerProfiles(streamer, days);
 
-  const isLoading = loadingWatchTime || loadingFunnel || loadingDemographics;
+  const isLoading = loadingWatchTime || loadingFunnel || loadingDemographics || loadingLurker || loadingViewerProfiles;
   const failedQueries = [
     { label: 'Watch Time', isError: watchTimeError, error: watchTimeErrorDetail, retry: refetchWatchTime },
     { label: 'Follower-Funnel', isError: funnelError, error: funnelErrorDetail, retry: refetchFunnel },
@@ -67,8 +69,14 @@ export function Audience({ streamer, days }: AudienceProps) {
   const funnelData = funnel ?? null;
   const demographicsData = demographics ?? null;
   const hasReliableWatchTime = watchTimeData?.dataQuality?.method === 'real_samples';
+  const lurkerRatio = lurkerData?.dataAvailable ? lurkerData.lurkerStats?.ratio : undefined;
+  const lurkerPct = lurkerRatio !== undefined ? lurkerRatio * 100 : undefined;
+  const hasWatchTimeInsight = Boolean(watchTimeData && hasReliableWatchTime);
+  const hasFunnelInsight = Boolean(funnelData);
+  const hasLurkerInsight = lurkerPct !== undefined;
+  const hasDemographicsInsight = Boolean(demographicsData);
   const noData =
-    !watchTimeData && !funnelData && !demographicsData && failedQueries.length === 0;
+    !watchTimeData && !funnelData && !demographicsData && !lurkerData && !viewerProfilesData && failedQueries.length === 0;
 
   return (
     <div className="space-y-6">
@@ -179,8 +187,21 @@ export function Audience({ streamer, days }: AudienceProps) {
             </div>
           )}
 
+          {viewerProfilesData && (
+            <div className="space-y-4">
+              <h3 className="px-1 text-base font-semibold text-text-secondary">Zuschauer-Segmente</h3>
+              <div className="panel-card rounded-2xl p-6">
+                <div className="mb-6 flex items-center gap-3">
+                  <Users className="h-6 w-6 text-accent" />
+                  <h2 className="text-xl font-bold text-white">Zuschauer-Profile</h2>
+                </div>
+                <ViewerProfiles data={viewerProfilesData} />
+              </div>
+            </div>
+          )}
+
           {/* Audience Insights Summary */}
-          {(watchTimeData || funnelData) && (
+          {(hasWatchTimeInsight || hasFunnelInsight || hasLurkerInsight || hasDemographicsInsight) && (
             <motion.div
               initial={{ opacity: 0, y: 20 }}
               animate={{ opacity: 1, y: 0 }}
@@ -193,8 +214,7 @@ export function Audience({ streamer, days }: AudienceProps) {
               </h3>
 
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                {/* Watch Time Insight */}
-                {watchTimeData && hasReliableWatchTime && (
+                {hasWatchTimeInsight && watchTimeData && (
                   <InsightCard
                     title="Viewer Engagement"
                     description={
@@ -206,8 +226,7 @@ export function Audience({ streamer, days }: AudienceProps) {
                   />
                 )}
 
-                {/* Conversion Insight */}
-                {funnelData && (
+                {hasFunnelInsight && funnelData && (
                   <InsightCard
                     title="Follower Conversion"
                     description={
@@ -216,6 +235,26 @@ export function Audience({ streamer, days }: AudienceProps) {
                         : `Conversion bei ${funnelData.conversionRate.toFixed(2)}% - nutze mehr Call-to-Actions.`
                     }
                     type={funnelData.conversionRate > 5 ? 'success' : 'info'}
+                  />
+                )}
+
+                {hasLurkerInsight && lurkerPct !== undefined && (
+                  <InsightCard
+                    title="Lurker-Anteil"
+                    description={
+                      lurkerPct > 70
+                        ? `${lurkerPct.toFixed(0)}% deiner Zuschauer sind stumme Lurker – teste mehr direkte Interaktion.`
+                        : `Solider Lurker-Anteil von ${lurkerPct.toFixed(0)}%. Ein guter Mix aus aktiven und passiven Zuschauern.`
+                    }
+                    type={lurkerPct > 70 ? 'warning' : 'success'}
+                  />
+                )}
+
+                {hasDemographicsInsight && (
+                  <InsightCard
+                    title="Audience-Zusammensetzung"
+                    description="Deine Audience-Demographiken zeigen die Viewer-Herkunft und -Zusammensetzung im gewählten Zeitraum."
+                    type="info"
                   />
                 )}
               </div>

@@ -1,10 +1,8 @@
-import type { ComponentProps } from 'react';
 import { useId } from 'react';
 import { motion } from 'framer-motion';
 import { Award, Heart, Info, MessageCircle, TrendingUp, Users } from 'lucide-react';
 import { Area, AreaChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 
-import { ViewerProfiles } from '@/components/charts/ViewerProfiles';
 import { PlanGateCard } from '@/components/cards/PlanGateCard';
 import type {
   ChatAnalytics as ChatAnalyticsType,
@@ -37,7 +35,6 @@ export interface ChatAnalyticsContentProps {
   data: ChatAnalyticsType;
   days: TimeRange;
   model: ChatAnalyticsViewModel;
-  viewerProfilesData: ComponentProps<typeof ViewerProfiles>['data'];
   coachingData?: CoachingData;
   selectedSessionId?: number;
   setSelectedSessionId: (id: number | undefined) => void;
@@ -51,7 +48,6 @@ export function ChatAnalyticsContent({
   data,
   days,
   model,
-  viewerProfilesData,
   coachingData,
   selectedSessionId,
   setSelectedSessionId,
@@ -326,14 +322,6 @@ export function ChatAnalyticsContent({
             <p>Keine Chatter-Daten vorhanden</p>
           </div>
         )}
-      </motion.div>
-
-      <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.3 }} className="panel-card rounded-2xl p-6">
-        <div className="mb-6 flex items-center gap-3">
-          <Users className="h-6 w-6 text-accent" />
-          <h2 className="text-xl font-bold text-white">Zuschauer-Profile</h2>
-        </div>
-        <ViewerProfiles data={viewerProfilesData} />
       </motion.div>
 
       <PlanGateCard featureId="hype_timeline" title="Hype-Timeline">

@@ -76,10 +76,20 @@
 
 ## Dashboard: Thematische Neuordnung der Tab-Inhalte
 
-- Ziel: Sektionen innerhalb bestehender Tabs neu ordnen, thematisch zusammengehörige Inhalte zusammenbringen, TagPerformanceChart-Duplikat in Audience entfernen
-- Status: 🔄 In Bearbeitung
-- Betroffene Dateien: `chatAnalyticsContent.tsx`, `Audience.tsx`, `Growth.tsx`
-- Entscheidungen: TagPerformanceChart nur in Growth (hat PeerBenchmark + PlanGate), Community-Treue + ChatConcentration + Chat-Insights werden in Chat gebündelt
+- Ziel: Sektionen innerhalb bestehender Tabs neu ordnen, thematisch zusammengehörige Inhalte zusammenbringen, rohe Bereiche ausbauen
+- Status: 🔄 GPT-Worker gestartet (2026-04-22)
+- Betroffene Dateien: `chatAnalyticsContent.tsx`, `useChatAnalyticsPage.ts`, `ChatAnalytics.tsx`, `Audience.tsx`, `Growth.tsx`, `Schedule.tsx`
+- Entscheidungen:
+  - ViewerProfiles aus Chat → Audience (nach Demographics/Lurker-Sektion)
+  - Wochentags-Analyse + Schedule-Empfehlungen aus Growth → Schedule
+  - Mock-Daten in Growth (TagPerformance) entfernen → NoDataCard
+  - Audience Insights auf 4 Cards ausbauen (Watch Time, Funnel, Lurker, Demographics)
+  - Generische Hardcoded-InsightCards in Schedule durch datengetriebene ersetzen (aus weeklyData via generateScheduleInsights)
+  - ViewerProfiles-Hook: `useViewerProfiles` aus `@/hooks/useAnalytics` (bereits in useChatAnalyticsPage.ts vorhanden)
+- Hook-Infos: `useViewerProfiles(streamer, days)` → viewerProfilesData; `useLurkerAnalysis(streamer, days)` → lurkerData (bereits in Audience)
+- 2026-04-22: Umsetzung gestartet: `ViewerProfiles` aus Chat entfernt, in `Audience.tsx` als eigene Segment-Sektion ergänzt und Audience-Insights anhand des realen Lurker-Typs (`lurkerStats.ratio`) erweitert.
+- 2026-04-22: `Growth.tsx` bereinigt: Wochentags-/Schedule-Blöcke sowie Tag/Title-Mockdaten entfernt; dieselbe WeekdayCards-/Insight-Logik nach `Schedule.tsx` verschoben und dort die Empfehlungen datengetrieben umgebaut.
+- 2026-04-22: Verifikation erfolgreich: `cd bot/dashboard_v2 && ./node_modules/.bin/tsc -b` ohne Fehler; `npm run build` erfolgreich. Hinweis: Vite meldet lokal weiter die bekannte Node-Warnung zu `18.19.1` statt `20.19+`, der Build lief dennoch durch.
 
 ## Stripe Checkout Diagnose
 

@@ -15,7 +15,6 @@ export function ChatAnalytics({ streamer, days }: ChatAnalyticsProps) {
   const {
     data,
     isLoading,
-    viewerProfilesData,
     coachingData,
     selectedSessionId,
     setSelectedSessionId,
@@ -59,7 +58,6 @@ export function ChatAnalytics({ streamer, days }: ChatAnalyticsProps) {
       data={data}
       days={days}
       model={model}
-      viewerProfilesData={viewerProfilesData}
       coachingData={coachingData}
       selectedSessionId={selectedSessionId}
       setSelectedSessionId={setSelectedSessionId}

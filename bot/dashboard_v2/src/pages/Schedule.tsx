@@ -1,6 +1,6 @@
 import { useMemo } from 'react';
 import { motion } from 'framer-motion';
-import { Clock, Calendar, Zap, TrendingUp, AlertCircle, Loader2, Star } from 'lucide-react';
+import { Clock, Calendar, Zap, TrendingUp, AlertCircle, Loader2, Star, Crown, Users, Play } from 'lucide-react';
 import { useQuery } from '@tanstack/react-query';
 import { fetchHourlyHeatmap, fetchWeekdayStats } from '@/api/analytics';
 import type { HourlyHeatmapData, WeekdayStats, TimeRange } from '@/types/analytics';
@@ -110,7 +110,21 @@ export function Schedule({ streamer, days }: ScheduleProps) {
         )}
       </motion.div>
 
-      {/* Schedule Insights */}
+      {weeklyData && weeklyData.length > 0 && (
+        <motion.div
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.15 }}
+          className="bg-card rounded-xl border border-border p-6"
+        >
+          <div className="flex items-center gap-3 mb-6">
+            <Calendar className="w-6 h-6 text-accent" />
+            <h2 className="text-xl font-bold text-white">Wochentags-Analyse</h2>
+          </div>
+          <WeekdayCards data={weeklyData} />
+        </motion.div>
+      )}
+
       <motion.div
         initial={{ opacity: 0, y: 20 }}
         animate={{ opacity: 1, y: 0 }}
@@ -137,16 +151,14 @@ export function Schedule({ streamer, days }: ScheduleProps) {
               text={`${weekdayNames[analysis.worstSlots[0].weekday]} um ${analysis.worstSlots[0].hour}:00 Uhr zeigt weniger Performance (Ø ${Math.round(analysis.worstSlots[0].avgViewers)} Viewer).`}
             />
           )}
-          <InsightCard
-            type="info"
-            title="Konsistenz ist wichtig"
-            text="Regelmäßige Streaming-Zeiten helfen deiner Community, dich zu finden. Wähle 2-3 feste Slots pro Woche."
-          />
-          <InsightCard
-            type="info"
-            title="Prime Time testen"
-            text="18:00-22:00 Uhr sind typischerweise gute Zeiten. Teste verschiedene Slots und vergleiche die Ergebnisse."
-          />
+          {weeklyData && generateScheduleInsights(weeklyData).map((insight, i) => (
+            <InsightCard
+              key={i}
+              type={insight.priority === 'high' ? 'positive' : 'info'}
+              title={insight.title}
+              text={insight.text}
+            />
+          ))}
         </div>
       </motion.div>
 
@@ -344,6 +356,117 @@ function InsightCard({ type, title, text }: InsightCardProps) {
       <p className="text-sm text-text-secondary">{text}</p>
     </div>
   );
+}
+
+function WeekdayCards({ data }: { data: WeekdayStats[] }) {
+  const maxViewers = Math.max(...data.map(d => d.avgViewers), 1);
+  const bestDay = data.reduce((a, b) => a.avgViewers > b.avgViewers ? a : b);
+
+  return (
+    <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-3">
+      {data.map((day, i) => {
+        const viewerPct = (day.avgViewers / maxViewers) * 100;
+        const isBest = day.weekdayLabel === bestDay.weekdayLabel;
+        const hasStreams = day.streamCount > 0;
+
+        return (
+          <motion.div
+            key={day.weekdayLabel}
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ delay: 0.05 * i }}
+            className={`relative p-4 rounded-xl border transition-all ${
+              isBest
+                ? 'bg-gradient-to-b from-accent/20 to-card border-accent/40 ring-1 ring-accent/20'
+                : hasStreams
+                ? 'bg-background border-border hover:border-border-hover'
+                : 'bg-background/50 border-border/50 opacity-60'
+            }`}
+          >
+            {isBest && (
+              <div className="absolute -top-2.5 left-1/2 -translate-x-1/2">
+                <div className="bg-accent/20 border border-accent/30 rounded-full p-1">
+                  <Crown className="w-3 h-3 text-accent" />
+                </div>
+              </div>
+            )}
+            <div className={`text-center text-sm font-semibold mb-3 ${isBest ? 'text-accent' : 'text-text-secondary'}`}>
+              {day.weekdayLabel}
+            </div>
+            <div className="h-24 flex items-end justify-center mb-3">
+              <motion.div
+                initial={{ height: 0 }}
+                animate={{ height: `${Math.max(hasStreams ? 8 : 0, viewerPct)}%` }}
+                transition={{ delay: 0.2 + i * 0.05, duration: 0.5, ease: 'easeOut' }}
+                className={`w-8 rounded-t-lg ${
+                  isBest
+                    ? 'bg-gradient-to-t from-accent/60 to-accent'
+                    : hasStreams
+                    ? 'bg-gradient-to-t from-primary/40 to-primary/70'
+                    : 'bg-border/30'
+                }`}
+              />
+            </div>
+            <div className="text-center">
+              <div className={`text-lg font-bold ${isBest ? 'text-white' : hasStreams ? 'text-white' : 'text-text-secondary'}`}>
+                {hasStreams ? Math.round(day.avgViewers) : '-'}
+              </div>
+              <div className="text-[10px] text-text-secondary uppercase tracking-wider">
+                <Users className="w-3 h-3 inline mr-0.5 -mt-0.5" />
+                Ø Viewer
+              </div>
+            </div>
+            <div className="mt-3 pt-3 border-t border-border/50 space-y-1.5">
+              <div className="flex items-center justify-between text-xs">
+                <span className="text-text-secondary flex items-center gap-1"><Play className="w-3 h-3" />Streams</span>
+                <span className="text-white font-medium">{day.streamCount}</span>
+              </div>
+              <div className="flex items-center justify-between text-xs">
+                <span className="text-text-secondary flex items-center gap-1"><Clock className="w-3 h-3" />Ø Dauer</span>
+                <span className="text-white font-medium">{day.avgHours > 0 ? `${day.avgHours.toFixed(1)}h` : '-'}</span>
+              </div>
+              <div className="flex items-center justify-between text-xs">
+                <span className="text-text-secondary flex items-center gap-1"><TrendingUp className="w-3 h-3" />Peak</span>
+                <span className="text-white font-medium">{day.avgPeak > 0 ? Math.round(day.avgPeak) : '-'}</span>
+              </div>
+            </div>
+          </motion.div>
+        );
+      })}
+    </div>
+  );
+}
+
+function generateScheduleInsights(data: WeekdayStats[]): Array<{ priority: string; title: string; text: string }> {
+  const insights = [];
+  const sorted = [...data].sort((a, b) => b.avgViewers - a.avgViewers);
+  const best = sorted[0];
+  const underperforming = data.filter(d => d.streamCount > 0 && d.avgViewers < sorted[Math.floor(sorted.length / 2)]?.avgViewers);
+
+  insights.push({
+    priority: 'high',
+    title: `Fokus auf ${best.weekdayLabel}`,
+    text: `${best.weekdayLabel} zeigt die besten Viewer-Zahlen (Ø ${Math.round(best.avgViewers)}). Plane wichtige Content-Events an diesem Tag.`,
+  });
+
+  if (underperforming.length > 0) {
+    insights.push({
+      priority: 'medium',
+      title: 'Optimierungspotential',
+      text: `${underperforming.map(d => d.weekdayLabel).join(', ')} haben unterdurchschnittliche Performance. Experimentiere mit anderen Zeiten.`,
+    });
+  }
+
+  const noStreams = data.filter(d => d.streamCount === 0);
+  if (noStreams.length > 0) {
+    insights.push({
+      priority: 'medium',
+      title: 'Ungenutzte Tage',
+      text: `Keine Streams an ${noStreams.map(d => d.weekdayLabel).join(', ')}. Teste diese Slots!`,
+    });
+  }
+
+  return insights;
 }
 
 export default Schedule;

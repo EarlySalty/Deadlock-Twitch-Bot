@@ -3,7 +3,6 @@ import { useQuery } from '@tanstack/react-query';
 
 import { fetchChatAnalytics } from '@/api/analytics';
 import {
-  useViewerProfiles,
   useCoaching,
   useChatHypeTimeline,
   useChatContentAnalysis,
@@ -20,7 +19,6 @@ export function useChatAnalyticsPage(streamer: string, days: TimeRange) {
     enabled: !!streamer,
   });
 
-  const { data: viewerProfilesData } = useViewerProfiles(streamer, days);
   const { data: coachingData } = useCoaching(streamer, days);
   const [selectedSessionId, setSelectedSessionId] = useState<number | undefined>(undefined);
   const { data: hypeData } = useChatHypeTimeline(streamer, selectedSessionId);
@@ -32,7 +30,6 @@ export function useChatAnalyticsPage(streamer: string, days: TimeRange) {
   return {
     data,
     isLoading,
-    viewerProfilesData,
     coachingData,
     selectedSessionId,
     setSelectedSessionId,
