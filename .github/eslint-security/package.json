@@ -4,7 +4,7 @@
   "private": true,
   "license": "MIT",
   "dependencies": {
-    "@typescript-eslint/parser": "8.58.2",
+    "@typescript-eslint/parser": "8.59.0",
     "eslint": "10.2.0",
     "eslint-plugin-security": "4.0.0",
     "eslint-plugin-no-secrets": "2.2.2"
