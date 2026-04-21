@@ -71,7 +71,15 @@
 - Frontend: Typen + FeatureId, `fetchStreamReport`, `useStreamReport`, `PostStreamReportCard.tsx`, Integration in `Overview.tsx`
 - Kritische Dateien: `bot/analytics/api_ai.py`, `bot/monitoring/eventsub_mixin.py:1883-1891`, `bot/analytics/api_v2.py`, `bot/dashboard_v2/src/pages/Overview.tsx`
 - 2026-04-21: Parallel Worker 1 (Backend) umgesetzt: Schema in `bot/migrations/twitch_analytics_schema.sql` erweitert, neues `bot/analytics/api_post_stream.py` fuer KI-Wortgruppen + Report + API-Mixin angelegt, Offline-Trigger in `bot/monitoring/eventsub_mixin.py` eingebaut, v2-Mixin in `bot/analytics/api_v2.py` verdrahtet und Route in `bot/analytics/api_overview.py` registriert.
+- 2026-04-21: Parallel Worker 1 verifiziert: `.venv/bin/python -m py_compile bot/analytics/api_post_stream.py bot/monitoring/eventsub_mixin.py bot/analytics/api_v2.py bot/analytics/api_overview.py` erfolgreich, Import von `trigger_post_stream_analysis` erfolgreich (`OK`), DB-Migration per `psycopg` gegen `TWITCH_ANALYTICS_DSN` ausgefuehrt und Tabellen `twitch_chat_word_groups` sowie `twitch_stream_ai_reports` vorhanden.
 - 2026-04-21: Parallel Worker 2 (Frontend) abgeschlossen: `src/types/billing.ts` um `post_stream_report` erweitert, `src/types/analytics.ts` um `StreamReport`-Typen ergänzt, `src/api/analytics.ts` + `src/hooks/useAnalytics.ts` um Stream-Report-Fetch/Hook erweitert, neue Card `src/components/cards/PostStreamReportCard.tsx` angelegt und in `src/pages/Overview.tsx` eingebunden. Verifikation per `./node_modules/.bin/tsc -b` und `npm run build` folgt.
+
+## Dashboard: Thematische Neuordnung der Tab-Inhalte
+
+- Ziel: Sektionen innerhalb bestehender Tabs neu ordnen, thematisch zusammengehörige Inhalte zusammenbringen, TagPerformanceChart-Duplikat in Audience entfernen
+- Status: 🔄 In Bearbeitung
+- Betroffene Dateien: `chatAnalyticsContent.tsx`, `Audience.tsx`, `Growth.tsx`
+- Entscheidungen: TagPerformanceChart nur in Growth (hat PeerBenchmark + PlanGate), Community-Treue + ChatConcentration + Chat-Insights werden in Chat gebündelt
 
 ## Stripe Checkout Diagnose
 

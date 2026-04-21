@@ -202,8 +202,40 @@ export function ChatAnalyticsContent({
         </div>
       </motion.div>
 
+      {coachingData && !coachingData.empty && <ChatConcentrationSection data={coachingData} />}
+
+      <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.1 }} className="rounded-2xl border border-primary/25 bg-gradient-to-r from-primary/16 via-card to-accent/16 p-6">
+        <h3 className="mb-4 font-bold text-white">Chat-Insights</h3>
+        <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+          {totalChatters > 0 ? (
+            <>
+              <InsightItem
+                type={chatterReturnRate > 30 ? 'positive' : 'warning'}
+                text={
+                  chatterReturnRate > 30
+                    ? `Starke Community! ${chatterReturnRate.toFixed(0)}% deiner Chatter kommen wieder.`
+                    : `${chatterReturnRate.toFixed(0)}% Return Rate - versuche mehr Interaktion!`
+                }
+              />
+              <InsightItem
+                type={coreLoyalViewers > 0 ? 'positive' : 'info'}
+                text={
+                  coreLoyalViewers > 0
+                    ? silentCoreLoyalViewers > 0
+                      ? `${coreLoyalViewers.toLocaleString('de-DE')} Stammzuschauer erkannt, davon ${silentCoreLoyalViewers.toLocaleString('de-DE')} silent.`
+                      : `${coreLoyalViewers.toLocaleString('de-DE')} Stammzuschauer im ${days}-Tage-Fenster erkannt.`
+                    : `${returningTrackedViewers.toLocaleString('de-DE')} wiederkehrende Zuschauer, aber noch niemand mit ${loyaltySessionThreshold}+ Streams im Fenster.`
+                }
+              />
+            </>
+          ) : (
+            <InsightItem type="info" text="Keine aktiven Chatter im Zeitraum: Erst bei echten Chat-Samples werden Treue-Insights angezeigt." />
+          )}
+        </div>
+      </motion.div>
+
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
-        <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.1 }} className="panel-card rounded-2xl p-6">
+        <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.15 }} className="panel-card rounded-2xl p-6">
           <div className="mb-6 flex items-center gap-3">
             <MessageCircle className="h-6 w-6 text-accent" />
             <h2 className="text-xl font-bold text-white">Nachrichtentypen</h2>
@@ -226,7 +258,7 @@ export function ChatAnalyticsContent({
           </div>
         </motion.div>
 
-        <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.15 }} className="panel-card rounded-2xl p-6">
+        <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.2 }} className="panel-card rounded-2xl p-6">
           <div className="mb-6 flex items-start justify-between gap-4">
             <div>
               <div className="flex items-center gap-3">
@@ -277,7 +309,7 @@ export function ChatAnalyticsContent({
         </motion.div>
       </div>
 
-      <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.2 }} className="panel-card rounded-2xl p-6">
+      <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.25 }} className="panel-card rounded-2xl p-6">
         <div className="mb-6 flex items-center gap-3">
           <Award className="h-6 w-6 text-warning" />
           <h2 className="text-xl font-bold text-white">Top Chatter</h2>
@@ -296,44 +328,12 @@ export function ChatAnalyticsContent({
         )}
       </motion.div>
 
-      <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.25 }} className="panel-card rounded-2xl p-6">
+      <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.3 }} className="panel-card rounded-2xl p-6">
         <div className="mb-6 flex items-center gap-3">
           <Users className="h-6 w-6 text-accent" />
           <h2 className="text-xl font-bold text-white">Zuschauer-Profile</h2>
         </div>
         <ViewerProfiles data={viewerProfilesData} />
-      </motion.div>
-
-      {coachingData && !coachingData.empty && <ChatConcentrationSection data={coachingData} />}
-
-      <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.3 }} className="rounded-2xl border border-primary/25 bg-gradient-to-r from-primary/16 via-card to-accent/16 p-6">
-        <h3 className="mb-4 font-bold text-white">Chat-Insights</h3>
-        <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-          {totalChatters > 0 ? (
-            <>
-              <InsightItem
-                type={chatterReturnRate > 30 ? 'positive' : 'warning'}
-                text={
-                  chatterReturnRate > 30
-                    ? `Starke Community! ${chatterReturnRate.toFixed(0)}% deiner Chatter kommen wieder.`
-                    : `${chatterReturnRate.toFixed(0)}% Return Rate - versuche mehr Interaktion!`
-                }
-              />
-              <InsightItem
-                type={coreLoyalViewers > 0 ? 'positive' : 'info'}
-                text={
-                  coreLoyalViewers > 0
-                    ? silentCoreLoyalViewers > 0
-                      ? `${coreLoyalViewers.toLocaleString('de-DE')} Stammzuschauer erkannt, davon ${silentCoreLoyalViewers.toLocaleString('de-DE')} silent.`
-                      : `${coreLoyalViewers.toLocaleString('de-DE')} Stammzuschauer im ${days}-Tage-Fenster erkannt.`
-                    : `${returningTrackedViewers.toLocaleString('de-DE')} wiederkehrende Zuschauer, aber noch niemand mit ${loyaltySessionThreshold}+ Streams im Fenster.`
-                }
-              />
-            </>
-          ) : (
-            <InsightItem type="info" text="Keine aktiven Chatter im Zeitraum: Erst bei echten Chat-Samples werden Treue-Insights angezeigt." />
-          )}
-        </div>
       </motion.div>
 
       <PlanGateCard featureId="hype_timeline" title="Hype-Timeline">

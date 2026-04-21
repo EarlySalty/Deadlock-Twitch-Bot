@@ -158,6 +158,25 @@ export function Growth({ streamer, days }: GrowthProps) {
         </div>
       </motion.div>
 
+      {/* Tag & Title Performance */}
+      <PlanGateCard featureId="title_performance" title="Titel-Performance">
+        {(tagData || titleData) && (
+          <TagPerformanceChart
+            tagData={tagData || mockTagData}
+            titleData={titleData}
+            peerBenchmark={tagPeerBenchmark || titlePeerBenchmark}
+          />
+        )}
+
+        {/* Fallback if no tag data from API */}
+        {!tagData && !titleData && (
+          <TagPerformanceChart
+            tagData={mockTagData}
+            titleData={mockTitleData}
+          />
+        )}
+      </PlanGateCard>
+
       {/* Weekday Analysis */}
       <motion.div
         initial={{ opacity: 0, y: 20 }}
@@ -206,25 +225,6 @@ export function Growth({ streamer, days }: GrowthProps) {
           </div>
         )}
       </motion.div>
-
-      {/* Tag & Title Performance */}
-      <PlanGateCard featureId="title_performance" title="Titel-Performance">
-        {(tagData || titleData) && (
-          <TagPerformanceChart
-            tagData={tagData || mockTagData}
-            titleData={titleData}
-            peerBenchmark={tagPeerBenchmark || titlePeerBenchmark}
-          />
-        )}
-
-        {/* Fallback if no tag data from API */}
-        {!tagData && !titleData && (
-          <TagPerformanceChart
-            tagData={mockTagData}
-            titleData={mockTitleData}
-          />
-        )}
-      </PlanGateCard>
 
       {/* Raid Retention */}
       <PlanGateCard featureId="raid_retention" title="Raid-Retention">

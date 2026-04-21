@@ -1,9 +1,8 @@
 import { motion } from 'framer-motion';
 import { Users, AlertCircle, Loader2, TrendingUp, TrendingDown, Target, Clock, UserPlus } from 'lucide-react';
-import { useWatchTimeDistribution, useFollowerFunnel, useTagAnalysisExtended, useTitlePerformance, useAudienceDemographics, useLurkerAnalysis } from '@/hooks/useAnalytics';
+import { useWatchTimeDistribution, useFollowerFunnel, useAudienceDemographics, useLurkerAnalysis } from '@/hooks/useAnalytics';
 import { WatchTimeDistribution } from '@/components/charts/WatchTimeDistribution';
 import { FollowerFunnel } from '@/components/charts/FollowerFunnel';
-import { TagPerformanceChart } from '@/components/charts/TagPerformance';
 import { AudienceDemographics } from '@/components/charts/AudienceDemographics';
 import { LurkerAnalysis } from '@/components/charts/LurkerAnalysis';
 import { PlanGateCard } from '@/components/cards/PlanGateCard';
@@ -30,20 +29,6 @@ export function Audience({ streamer, days }: AudienceProps) {
     refetch: refetchFunnel,
   } = useFollowerFunnel(streamer, days);
   const {
-    data: tags,
-    isLoading: loadingTags,
-    isError: tagsError,
-    error: tagsErrorDetail,
-    refetch: refetchTags,
-  } = useTagAnalysisExtended(streamer, days);
-  const {
-    data: titles,
-    isLoading: loadingTitles,
-    isError: titlesError,
-    error: titlesErrorDetail,
-    refetch: refetchTitles,
-  } = useTitlePerformance(streamer, days);
-  const {
     data: demographics,
     isLoading: loadingDemographics,
     isError: demographicsError,
@@ -52,12 +37,10 @@ export function Audience({ streamer, days }: AudienceProps) {
   } = useAudienceDemographics(streamer, days);
   const { data: lurkerData } = useLurkerAnalysis(streamer, days);
 
-  const isLoading = loadingWatchTime || loadingFunnel || loadingTags || loadingTitles || loadingDemographics;
+  const isLoading = loadingWatchTime || loadingFunnel || loadingDemographics;
   const failedQueries = [
     { label: 'Watch Time', isError: watchTimeError, error: watchTimeErrorDetail, retry: refetchWatchTime },
     { label: 'Follower-Funnel', isError: funnelError, error: funnelErrorDetail, retry: refetchFunnel },
-    { label: 'Tags', isError: tagsError, error: tagsErrorDetail, retry: refetchTags },
-    { label: 'Titel', isError: titlesError, error: titlesErrorDetail, retry: refetchTitles },
     { label: 'Demographics', isError: demographicsError, error: demographicsErrorDetail, retry: refetchDemographics },
   ].filter(q => q.isError);
   const formatError = (err: unknown) => (err instanceof Error ? err.message : 'Unbekannter Fehler');
@@ -82,12 +65,10 @@ export function Audience({ streamer, days }: AudienceProps) {
 
   const watchTimeData = watchTime ?? null;
   const funnelData = funnel ?? null;
-  const tagData = tags?.tags ?? null;
-  const titleData = titles?.titles ?? null;
   const demographicsData = demographics ?? null;
   const hasReliableWatchTime = watchTimeData?.dataQuality?.method === 'real_samples';
   const noData =
-    !watchTimeData && !funnelData && !tagData && !titleData && !demographicsData && failedQueries.length === 0;
+    !watchTimeData && !funnelData && !demographicsData && failedQueries.length === 0;
 
   return (
     <div className="space-y-6">
@@ -184,22 +165,22 @@ export function Audience({ streamer, days }: AudienceProps) {
             </div>
           )}
 
-          {/* Tag & Title Performance */}
-          {tagData && <TagPerformanceChart tagData={tagData} titleData={titleData || undefined} />}
-
-          {/* Audience Demographics */}
-          {demographicsData && <AudienceDemographics data={demographicsData} />}
-
-          {/* Lurker Analysis */}
-          <PlanGateCard featureId="lurker_analysis" title="Lurker-Analyse">
-            <div>
-              <h2 className="text-lg font-semibold text-white mb-4">Lurker-Analyse</h2>
-              <LurkerAnalysis data={lurkerData} />
+          {/* Audience-Komposition */}
+          {(demographicsData || lurkerData) && (
+            <div className="space-y-4">
+              <h3 className="px-1 text-base font-semibold text-text-secondary">Audience-Komposition</h3>
+              {demographicsData && <AudienceDemographics data={demographicsData} />}
+              <PlanGateCard featureId="lurker_analysis" title="Lurker-Analyse">
+                <div>
+                  <h2 className="text-lg font-semibold text-white mb-4">Lurker-Analyse</h2>
+                  <LurkerAnalysis data={lurkerData} />
+                </div>
+              </PlanGateCard>
             </div>
-          </PlanGateCard>
+          )}
 
           {/* Audience Insights Summary */}
-          {(watchTimeData || funnelData || (tagData && tagData.length > 0)) && (
+          {(watchTimeData || funnelData) && (
             <motion.div
               initial={{ opacity: 0, y: 20 }}
               animate={{ opacity: 1, y: 0 }}
@@ -211,7 +192,7 @@ export function Audience({ streamer, days }: AudienceProps) {
                 Audience Insights Zusammenfassung
               </h3>
 
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 {/* Watch Time Insight */}
                 {watchTimeData && hasReliableWatchTime && (
                   <InsightCard
@@ -235,15 +216,6 @@ export function Audience({ streamer, days }: AudienceProps) {
                         : `Conversion bei ${funnelData.conversionRate.toFixed(2)}% - nutze mehr Call-to-Actions.`
                     }
                     type={funnelData.conversionRate > 5 ? 'success' : 'info'}
-                  />
-                )}
-
-                {/* Tag Insight */}
-                {tagData && tagData.length > 0 && (
-                  <InsightCard
-                    title="Content Strategie"
-                    description={`"${tagData[0].tagName}" performt am besten. Fokussiere dich auf diesen Content-Typ für maximale Reichweite.`}
-                    type="info"
                   />
                 )}
               </div>
