@@ -2543,7 +2543,7 @@ class AnalyticsV2Mixin(
         except Exception:
             current_plan = "raid_free"
 
-        plan_ids = ("raid_free", "raid_boost", "analysis_dashboard")
+        plan_ids = ("raid_free", "raid_boost", "analysis_dashboard", "bundle_analysis_raid_boost")
         plan_lookup = {
             str(plan.get("id") or "").strip(): plan
             for plan in _BILLING_PLANS

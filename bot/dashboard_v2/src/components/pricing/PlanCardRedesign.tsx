@@ -130,7 +130,7 @@ export default function PlanCardRedesign({ plan, index }: PlanCardRedesignProps)
             <li key={i} className="flex items-start gap-2.5 text-sm">
               <Check
                 className={`w-4 h-4 mt-0.5 flex-shrink-0 ${
-                  isRecommended
+                  isRecommended || isBundle
                     ? 'text-[#10b7ad]'
                     : isPopular
                     ? 'text-[#ff7a18]'
