@@ -10,6 +10,7 @@ import { SessionTable } from '@/components/tables/SessionTable';
 import { HourlyHeatmap } from '@/components/heatmaps/HourlyHeatmap';
 import { CalendarHeatmap } from '@/components/heatmaps/CalendarHeatmap';
 import { InsightsPanel } from '@/components/cards/InsightsPanel';
+import { PostStreamReportCard } from '@/components/cards/PostStreamReportCard';
 import { CategoryRankBadge } from '@/components/cards/CategoryRankBadge';
 import { formatNumber, formatPercent, formatHours } from '@/utils/formatters';
 import { PlanGateCard } from '@/components/cards/PlanGateCard';
@@ -182,6 +183,9 @@ export function Overview({ streamer, days, onSessionClick }: OverviewProps) {
         limit={10}
         onSessionClick={onSessionClick}
       />
+
+      {/* Post-Stream KI-Analyse */}
+      <PostStreamReportCard streamer={streamer} />
     </div>
   );
 }

@@ -1376,3 +1376,40 @@ export interface AIChatResponse {
   followUpsRemaining: number;
   rateLimitReset?: number;
 }
+
+export interface StreamReportPoint {
+  punkt: string;
+  begruendung: string;
+}
+
+export interface StreamReportChange {
+  aspekt: string;
+  detail: string;
+}
+
+export interface StreamReportRecommendation {
+  trend: string;
+  empfehlung: string;
+}
+
+export interface StreamReportWordGroup {
+  group_name: string;
+  keywords: string[];
+  message_count: number;
+}
+
+export interface StreamReport {
+  session_id: number | null;
+  model: string;
+  generated_at: string;
+  status: 'pending' | 'done' | 'failed';
+  report: {
+    gut: StreamReportPoint[];
+    schlecht: StreamReportPoint[];
+    veraenderungen: StreamReportChange[];
+    empfehlungen: StreamReportRecommendation[];
+  } | null;
+  word_groups: StreamReportWordGroup[];
+  error?: string | null;
+  empty?: boolean;
+}

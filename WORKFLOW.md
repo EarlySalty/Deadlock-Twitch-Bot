@@ -62,6 +62,17 @@
 - 2026-04-19: Parallel Worker 1 abgeschlossen: `bot/title_generator/knowledge_job.py` exakt angelegt; Import-Verifikation via `.venv/bin/python -c "from bot.title_generator.knowledge_job import run_knowledge_job; print('OK')"` erfolgreich (`OK`).
 - 2026-04-19: Parallel Worker 4 ergänzt in `bot/chat/commands.py` den Twitch-Chat-Command `!title`/`!titel` mit lazy Imports aus `bot.title_generator.*`, Streamer-Lookup via `readonly_connection()` und Rate-Limit-/Fehlerbehandlung; Syntax-Check folgt.
 
+## Minimax Post-Stream Chat-Analyse + Übersicht-Integration
+
+- Ziel: Nach jedem Stream automatisch via Minimax Chat-Wortgruppen kategorisieren, Post-Stream-Report (gut/schlecht/Änderungen/Empfehlungen) erstellen, im Übersicht-Tab anzeigen – nur für Plan-User
+- Status: 🔄 GPT-Worker (Backend + Frontend) gestartet
+- 2026-04-21: Plan erstellt und genehmigt. Parallel-Worker gestartet.
+- Backend: DB-Migration (2 neue Tabellen), `api_post_stream.py`, EventSub-Trigger in `eventsub_mixin.py`, API-Endpunkt in `api_v2.py`
+- Frontend: Typen + FeatureId, `fetchStreamReport`, `useStreamReport`, `PostStreamReportCard.tsx`, Integration in `Overview.tsx`
+- Kritische Dateien: `bot/analytics/api_ai.py`, `bot/monitoring/eventsub_mixin.py:1883-1891`, `bot/analytics/api_v2.py`, `bot/dashboard_v2/src/pages/Overview.tsx`
+- 2026-04-21: Parallel Worker 1 (Backend) umgesetzt: Schema in `bot/migrations/twitch_analytics_schema.sql` erweitert, neues `bot/analytics/api_post_stream.py` fuer KI-Wortgruppen + Report + API-Mixin angelegt, Offline-Trigger in `bot/monitoring/eventsub_mixin.py` eingebaut, v2-Mixin in `bot/analytics/api_v2.py` verdrahtet und Route in `bot/analytics/api_overview.py` registriert.
+- 2026-04-21: Parallel Worker 2 (Frontend) abgeschlossen: `src/types/billing.ts` um `post_stream_report` erweitert, `src/types/analytics.ts` um `StreamReport`-Typen ergänzt, `src/api/analytics.ts` + `src/hooks/useAnalytics.ts` um Stream-Report-Fetch/Hook erweitert, neue Card `src/components/cards/PostStreamReportCard.tsx` angelegt und in `src/pages/Overview.tsx` eingebunden. Verifikation per `./node_modules/.bin/tsc -b` und `npm run build` folgt.
+
 ## Stripe Checkout Diagnose
 
 - Ziel: Stripe Checkout Diagnose

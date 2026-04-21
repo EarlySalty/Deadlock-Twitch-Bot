@@ -27,6 +27,7 @@ import type {
   RankingEntry,
   CalendarHeatmapData,
   SessionEvent,
+  StreamReport,
   StreamSession,
   TagAnalysisResponse,
   TagPerformance,
@@ -566,4 +567,13 @@ export interface RoadmapData {
 
 export async function fetchRoadmap(): Promise<RoadmapData> {
   return fetchApi<RoadmapData>('/roadmap');
+}
+
+export async function fetchStreamReport(
+  streamer: string | null,
+  sessionId?: number
+): Promise<StreamReport> {
+  const params: Record<string, string | number> = { streamer: streamer || '' };
+  if (sessionId != null) params.session_id = sessionId;
+  return fetchApi<StreamReport>('/stream-report', params);
 }

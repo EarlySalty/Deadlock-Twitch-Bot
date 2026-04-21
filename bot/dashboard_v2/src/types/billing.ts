@@ -80,6 +80,7 @@ export type FeatureId =
   | 'viewer_overlap'
   | 'category_timings'
   | 'category_activity_series'
+  | 'post_stream_report'
   | 'rankings_extended';
 
 // Feature requirements (cards within tabs that need higher entitlement)
@@ -99,6 +100,7 @@ export const FEATURE_ENTITLEMENTS: Record<FeatureId, EntitlementId> = {
   'viewer_overlap': 'analytics.extended',
   'category_timings': 'analytics.extended',
   'category_activity_series': 'analytics.extended',
+  'post_stream_report': 'analytics.ai_mini',
   'rankings_extended': 'analytics.extended',
 };
 

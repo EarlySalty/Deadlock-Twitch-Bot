@@ -12,6 +12,7 @@ from typing import Any
 import aiohttp
 
 from .. import storage
+from ..analytics.api_post_stream import trigger_post_stream_analysis
 from ..core.constants import log
 from .eventsub_core_callbacks import register_core_eventsub_callbacks
 from .eventsub_processing_inbox import EventSubProcessingInboxRuntime
@@ -1889,6 +1890,15 @@ class _EventSubMixin:
             )
         else:
             await _persist_offline_state()
+
+        if login_lower:
+            try:
+                asyncio.get_running_loop().create_task(
+                    trigger_post_stream_analysis(login_lower)
+                )
+            except Exception:
+                log.debug("PostStream: create_task fehlgeschlagen", exc_info=True)
+
         schedule_refresh = getattr(self, "_schedule_partner_raid_score_refresh", None)
         if allow_scheduled_refresh and callable(schedule_refresh):
             try:
@@ -3158,4 +3168,3 @@ class _EventSubMixin:
             )
             await self._record_eventsub_capacity_snapshot("raid_subscribe_error", force=True)
             return False
-

@@ -841,5 +841,34 @@ ALTER TABLE twitch_viewer_presence_ticks SET (timescaledb.compress, timescaledb.
 SELECT add_compression_policy('twitch_viewer_presence_ticks', INTERVAL '3 days', if_not_exists => TRUE);
 CREATE INDEX IF NOT EXISTS idx_viewer_presence_ticks_session ON twitch_viewer_presence_ticks(session_id, viewer_login, tick_at);
 
+-- Post-Stream: dynamisch erkannte Wortgruppen via Minimax
+CREATE TABLE IF NOT EXISTS twitch_chat_word_groups (
+    id              BIGSERIAL PRIMARY KEY,
+    session_id      BIGINT NOT NULL REFERENCES twitch_stream_sessions(id),
+    streamer_login  TEXT NOT NULL,
+    group_name      TEXT NOT NULL,
+    keywords        TEXT[] NOT NULL,
+    message_count   INT DEFAULT 0,
+    created_at      TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- Post-Stream: vollständiger KI-Analysebericht
+CREATE TABLE IF NOT EXISTS twitch_stream_ai_reports (
+    id               BIGSERIAL PRIMARY KEY,
+    session_id       BIGINT NOT NULL REFERENCES twitch_stream_sessions(id),
+    streamer_login   TEXT NOT NULL,
+    model            TEXT NOT NULL,
+    generated_at     TIMESTAMPTZ DEFAULT NOW(),
+    status           TEXT DEFAULT 'pending',
+    report_json      JSONB,
+    word_groups_json JSONB,
+    error            TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_stream_ai_reports_streamer
+    ON twitch_stream_ai_reports (streamer_login, generated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_stream_ai_reports_session
+    ON twitch_stream_ai_reports (session_id);
+
 -- ========= Housekeeping =========
 ANALYZE;

@@ -42,6 +42,7 @@ from .api_insights import _AnalyticsInsightsMixin
 from .api_overview import _AnalyticsOverviewMixin
 from .api_performance import _AnalyticsPerformanceMixin
 from .api_chat_deep import _AnalyticsChatDeepMixin
+from .api_post_stream import _AnalyticsPostStreamMixin
 from .api_public import _AnalyticsPublicMixin
 from .api_raids import _AnalyticsRaidsMixin
 from .api_viewer_timeline import _ViewerTimelineMixin
@@ -483,6 +484,7 @@ class AnalyticsV2Mixin(
     _AnalyticsChatDeepMixin,
     _AnalyticsExperimentalMixin,
     _AnalyticsAIMixin,
+    _AnalyticsPostStreamMixin,
     _AnalyticsRoadmapMixin,
     _AnalyticsPublicMixin,
 ):

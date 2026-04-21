@@ -46,6 +46,7 @@ import {
   fetchExpGrowthCurves,
   fetchRoadmap,
   fetchAdsSchedule,
+  fetchStreamReport,
 } from '@/api/analytics';
 import { fetchAuthStatus } from '@/api/auth';
 import { fetchBillingCatalog } from '@/api/billing';
@@ -55,7 +56,7 @@ import {
   fetchAdminAffiliateDetail,
 } from '@/api/admin';
 import { fetchAffiliatePortal } from '@/api/affiliate';
-import type { TimeRange, ViewerSortField, ViewerFilterType } from '@/types/analytics';
+import type { StreamReport, TimeRange, ViewerSortField, ViewerFilterType } from '@/types/analytics';
 
 // Stale time: 5 minutes
 const STALE_TIME = 5 * 60 * 1000;
@@ -547,6 +548,16 @@ export function useAffiliatePortal() {
   return useQuery({
     queryKey: ['affiliate-portal'],
     queryFn: fetchAffiliatePortal,
+    retry: false,
+  });
+}
+
+export function useStreamReport(streamer: string | null, sessionId?: number) {
+  return useQuery<StreamReport>({
+    queryKey: ['stream-report', streamer, sessionId ?? null],
+    queryFn: () => fetchStreamReport(streamer, sessionId),
+    staleTime: 2 * 60 * 1000,
+    enabled: !!streamer,
     retry: false,
   });
 }
