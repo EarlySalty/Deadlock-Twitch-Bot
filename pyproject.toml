@@ -10,7 +10,7 @@ dependencies = [
     "keyring>=25.7.0",
     "openai>=2.32.0",
     "psycopg[binary]>=3.3.3",
-    "stripe>=15.0.1",
+    "stripe>=15.1.0",
 ]
 
 [project.optional-dependencies]
