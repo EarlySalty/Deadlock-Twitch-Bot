@@ -391,11 +391,11 @@ def _compute_week_comparison(login: str, conn: Any) -> dict[str, Any]:
 
 INTERNAL_HOME_LOGIN_URL = "/twitch/auth/login?next=%2Ftwitch%2Fdashboard"
 INTERNAL_HOME_DISCORD_CONNECT_URL = "/twitch/auth/discord/link?next=%2Ftwitch%2Fverwaltung"
-DASHBOARD_V2_LOGIN_URL = "/twitch/auth/login?next=%2Ftwitch%2Fanalyse"
+DASHBOARD_V2_LOGIN_URL = "/twitch/auth/login?next=%2Fanalyse"
 
 # Twitch logins that receive admin-level access (same as Discord admin / localhost)
 _TWITCH_ADMIN_LOGINS: frozenset[str] = frozenset({"earlysalty"})
-DASHBOARD_V2_DISCORD_LOGIN_URL = "/twitch/auth/discord/login?next=%2Ftwitch%2Fanalyse"
+DASHBOARD_V2_DISCORD_LOGIN_URL = "/twitch/auth/discord/login?next=%2Fanalyse"
 _INTERNAL_HOME_DEFAULT_DAYS = 30
 _INTERNAL_HOME_BAN_REASON_KEYWORDS: tuple[str, ...] = (
     "bot",
@@ -719,7 +719,7 @@ class AnalyticsV2Mixin(
 
     @staticmethod
     def _normalize_dashboard_next_path(raw_path: str | None) -> str:
-        fallback = "/twitch/analyse"
+        fallback = "/analyse"
         candidate = (raw_path or "").strip()
         if not candidate:
             return fallback
@@ -729,7 +729,11 @@ class AnalyticsV2Mixin(
             return fallback
         if parts.scheme or parts.netloc:
             return fallback
-        if not candidate.startswith("/") or not candidate.startswith("/twitch"):
+        if not candidate.startswith("/"):
+            return fallback
+        if candidate.startswith("/analyse"):
+            return candidate
+        if not candidate.startswith("/twitch"):
             return fallback
         return candidate
 
@@ -759,7 +763,7 @@ class AnalyticsV2Mixin(
             except Exception:
                 log.debug("Could not build dashboard login URL via host class", exc_info=True)
         next_path = self._normalize_dashboard_next_path(
-            request.rel_url.path_qs if request.rel_url else "/twitch/analyse"
+            request.rel_url.path_qs if request.rel_url else "/analyse"
         )
         return self._safe_internal_login_redirect(
             f"/twitch/auth/login?{urlencode({'next': next_path})}"
@@ -837,9 +841,9 @@ class AnalyticsV2Mixin(
             if request.path.startswith("/twitch/api/"):
                 should_use_discord = getattr(self, "_should_use_discord_admin_login", None)
                 if callable(should_use_discord) and bool(should_use_discord(request)):
-                    login_url = "/twitch/auth/discord/login?next=%2Ftwitch%2Fanalyse"
+                    login_url = "/twitch/auth/discord/login?next=%2Fanalyse"
                 else:
-                    login_url = "/twitch/auth/login?next=%2Ftwitch%2Fanalyse"
+                    login_url = "/twitch/auth/login?next=%2Fanalyse"
             if on_admin_host and auth_level not in ("none", "localhost", "admin"):
                 payload = {
                     "error": "admin_required",
@@ -936,6 +940,34 @@ class AnalyticsV2Mixin(
                 pass
 
         return "none"
+
+    def _get_v2_partner_login(self, request: web.Request) -> str | None:
+        """Return the logged-in partner's twitch_login, or None for admins/localhost.
+
+        Used to enforce per-partner ownership on session endpoints so that a
+        normal partner cannot access another streamer's session data via IDOR.
+        Admins and localhost requests receive None, which skips the ownership check.
+        """
+        auth_level = self._get_auth_level(request)
+        if auth_level in ("localhost", "admin"):
+            return None
+
+        dashboard_session = self._get_dashboard_session(request)
+        if dashboard_session:
+            login = str(dashboard_session.get("twitch_login") or "").strip().lower()
+            return login or None
+
+        partner_session_getter = getattr(self, "_get_partner_access_session", None)
+        if callable(partner_session_getter):
+            try:
+                partner_session = partner_session_getter(request)
+            except Exception:
+                partner_session = None
+            if isinstance(partner_session, dict):
+                login = str(partner_session.get("twitch_login") or "").strip().lower()
+                return login or None
+
+        return None
 
     @staticmethod
     def _internal_home_keyword_clause(column_expr: str) -> tuple[str, list[str]]:
@@ -2049,7 +2081,7 @@ class AnalyticsV2Mixin(
             },
             "links": {
                 "dashboard": "/twitch/dashboard",
-                "dashboard_v2": "/twitch/analyse",
+                "dashboard_v2": "/analyse",
                 "raid_history": "/twitch/raid/history",
                 "raid_requirements": "/twitch/raid/requirements",
                 "billing": "/twitch/abbo",
@@ -2256,8 +2288,10 @@ class AnalyticsV2Mixin(
         except ValueError:
             return web.json_response({"error": "Invalid session ID"}, status=400)
 
+        owner_login = self._get_v2_partner_login(request)
+
         try:
-            payload = await asyncio.to_thread(self._load_session_detail, session_id)
+            payload = await asyncio.to_thread(self._load_session_detail, session_id, owner_login)
             if payload is None:
                 return web.json_response({"error": "Session not found"}, status=404)
             return web.json_response(payload)
@@ -2268,22 +2302,37 @@ class AnalyticsV2Mixin(
                 code="session_detail_load_failed",
             )
 
-    def _load_session_detail(self, session_id: int) -> dict[str, Any] | None:
+    def _load_session_detail(self, session_id: int, owner_login: str | None = None) -> dict[str, Any] | None:
         """Load detailed session data synchronously."""
         with storage.readonly_connection() as conn:
-            row = conn.execute(
-                """
-                SELECT
-                    s.id, s.streamer_login, s.started_at, s.ended_at,
-                    s.duration_seconds, s.start_viewers, s.peak_viewers, s.end_viewers,
-                    s.avg_viewers, s.retention_5m, s.retention_10m, s.retention_20m,
-                    s.dropoff_pct, s.unique_chatters, s.first_time_chatters,
-                    s.returning_chatters, s.stream_title
-                FROM twitch_stream_sessions s
-                WHERE s.id = %s
-            """,
-                (session_id,),
-            ).fetchone()
+            if owner_login:
+                row = conn.execute(
+                    """
+                    SELECT
+                        s.id, s.streamer_login, s.started_at, s.ended_at,
+                        s.duration_seconds, s.start_viewers, s.peak_viewers, s.end_viewers,
+                        s.avg_viewers, s.retention_5m, s.retention_10m, s.retention_20m,
+                        s.dropoff_pct, s.unique_chatters, s.first_time_chatters,
+                        s.returning_chatters, s.stream_title
+                    FROM twitch_stream_sessions s
+                    WHERE s.id = %s AND LOWER(s.streamer_login) = %s
+                """,
+                    (session_id, owner_login),
+                ).fetchone()
+            else:
+                row = conn.execute(
+                    """
+                    SELECT
+                        s.id, s.streamer_login, s.started_at, s.ended_at,
+                        s.duration_seconds, s.start_viewers, s.peak_viewers, s.end_viewers,
+                        s.avg_viewers, s.retention_5m, s.retention_10m, s.retention_20m,
+                        s.dropoff_pct, s.unique_chatters, s.first_time_chatters,
+                        s.returning_chatters, s.stream_title
+                    FROM twitch_stream_sessions s
+                    WHERE s.id = %s
+                """,
+                    (session_id,),
+                ).fetchone()
 
             if not row:
                 return None
@@ -2399,8 +2448,10 @@ class AnalyticsV2Mixin(
         except ValueError:
             return web.json_response({"error": "Invalid session ID"}, status=400)
 
+        owner_login = self._get_v2_partner_login(request)
+
         try:
-            payload = await asyncio.to_thread(self._load_session_events, session_id)
+            payload = await asyncio.to_thread(self._load_session_events, session_id, owner_login)
             if payload is None:
                 return web.json_response({"error": "Session not found"}, status=404)
             return web.json_response(payload)
@@ -2411,17 +2462,27 @@ class AnalyticsV2Mixin(
                 code="session_events_load_failed",
             )
 
-    def _load_session_events(self, session_id: int) -> dict[str, Any] | None:
+    def _load_session_events(self, session_id: int, owner_login: str | None = None) -> dict[str, Any] | None:
         """Load the session events payload synchronously."""
         with storage.readonly_connection() as conn:
-            sess = conn.execute(
-                """
-                SELECT s.streamer_login, s.started_at, s.ended_at
-                FROM twitch_stream_sessions s
-                WHERE s.id = %s
-                """,
-                (session_id,),
-            ).fetchone()
+            if owner_login:
+                sess = conn.execute(
+                    """
+                    SELECT s.streamer_login, s.started_at, s.ended_at
+                    FROM twitch_stream_sessions s
+                    WHERE s.id = %s AND LOWER(s.streamer_login) = %s
+                    """,
+                    (session_id, owner_login),
+                ).fetchone()
+            else:
+                sess = conn.execute(
+                    """
+                    SELECT s.streamer_login, s.started_at, s.ended_at
+                    FROM twitch_stream_sessions s
+                    WHERE s.id = %s
+                    """,
+                    (session_id,),
+                ).fetchone()
 
             if not sess:
                 return None
