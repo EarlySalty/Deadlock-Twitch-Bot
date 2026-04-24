@@ -47,6 +47,10 @@ class LoadDueExternalRecruitmentBlacklistPending(Protocol):
     def __call__(self) -> Sequence[Any] | list[Any] | tuple[Any, ...] | Any: ...
 
 
+class IncrementRaidDisabledStrikes(Protocol):
+    def __call__(self, *, target_id: str, target_login: str, reason: str) -> int: ...
+
+
 class IsTargetPartner(Protocol):
     def __call__(self, *, target_id: str, target_login: str) -> bool: ...
 
@@ -102,6 +106,7 @@ class RaidBlacklistDependencies:
     load_due_external_recruitment_blacklist_pending: LoadDueExternalRecruitmentBlacklistPending
     schedule_external_recruitment_blacklist_pending: ScheduleExternalRecruitmentBlacklistPending
     delete_external_recruitment_blacklist_pending: DeleteExternalRecruitmentBlacklistPending
+    increment_raid_disabled_strikes: IncrementRaidDisabledStrikes
     is_target_partner: IsTargetPartner
     load_due_external_target_ban_checks: LoadDueExternalTargetBanChecks
     schedule_external_target_ban_check: ScheduleExternalTargetBanCheck
@@ -207,6 +212,30 @@ class RaidBlacklistService:
             )
         except Exception:
             log.error("Error adding to blacklist", exc_info=True)
+
+    def increment_raid_disabled_strikes(self, target_id: str, target_login: str, reason: str) -> int:
+        normalized_id = _normalize_target_id(target_id) or None
+        normalized_login = normalize_broadcaster_login(target_login)
+        if not normalized_login:
+            return 2
+        try:
+            count = int(
+                self._deps.increment_raid_disabled_strikes(
+                    target_id=normalized_id or "",
+                    target_login=normalized_login,
+                    reason=str(reason or ""),
+                )
+            )
+            log.info(
+                "Raid disabled strike %d/2 for %s (ID: %s)",
+                count,
+                normalized_login,
+                normalized_id,
+            )
+            return count
+        except Exception:
+            log.error("Error incrementing raid-disabled strikes for %s", normalized_login, exc_info=True)
+            return 2
 
     def schedule_external_recruitment_blacklist_pending(
         self,
@@ -498,6 +527,23 @@ def build_runtime_raid_blacklist_service(
                 (target_id, target_login, reason),
             )
 
+    def _increment_raid_disabled_strikes(*, target_id: str, target_login: str, reason: str) -> int:
+        with transaction_factory() as conn:
+            row = conn.execute(
+                """
+                INSERT INTO twitch_raid_disabled_strikes (target_id, target_login, strike_count, last_seen_at, last_reason)
+                VALUES (%s, %s, 1, CURRENT_TIMESTAMP, %s)
+                ON CONFLICT (target_login) DO UPDATE SET
+                    target_id    = COALESCE(EXCLUDED.target_id, twitch_raid_disabled_strikes.target_id),
+                    strike_count = twitch_raid_disabled_strikes.strike_count + 1,
+                    last_seen_at = CURRENT_TIMESTAMP,
+                    last_reason  = EXCLUDED.last_reason
+                RETURNING strike_count
+                """,
+                (target_id or None, target_login, reason),
+            ).fetchone()
+        return int(row[0]) if row else 2
+
     def _is_blacklisted(*, target_id: str, target_login: str) -> bool:
         with readonly_connection_factory() as conn:
             row = conn.execute(
@@ -662,6 +708,7 @@ def build_runtime_raid_blacklist_service(
             load_due_external_recruitment_blacklist_pending=_load_due_external_recruitment_blacklist_pending,
             schedule_external_recruitment_blacklist_pending=_schedule_external_recruitment_blacklist_pending,
             delete_external_recruitment_blacklist_pending=_delete_external_recruitment_blacklist_pending,
+            increment_raid_disabled_strikes=_increment_raid_disabled_strikes,
             is_target_partner=is_target_partner,
             load_due_external_target_ban_checks=_load_due_external_target_ban_checks,
             schedule_external_target_ban_check=_schedule_external_target_ban_check,
@@ -679,6 +726,7 @@ __all__ = [
     "DeleteExternalRecruitmentBlacklistPending",
     "DeleteExternalTargetBanCheckPending",
     "GetChatBot",
+    "IncrementRaidDisabledStrikes",
     "IsBlacklisted",
     "IsTargetPartner",
     "JoinChatChannel",

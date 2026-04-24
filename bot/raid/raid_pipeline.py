@@ -74,6 +74,7 @@ class RaidPipelineDependencies:
     mark_manual_raid_started: Callable[[str, float], Any]
     logger: logging.Logger = log
     next_raid_observability_flow_id: Callable[[str], str] = lambda prefix: f"{prefix}-{int(time.time() * 1000)}"
+    increment_raid_disabled_strikes: Callable[[str, str, str], int] | None = None
     increment_raid_observability_counter: Callable[[str, int], int] | None = None
     log_raid_observability_event: Callable[..., Any] | None = None
     monotonic: Callable[[], float] = time.monotonic
@@ -328,16 +329,33 @@ class RaidPipelineService:
                         "Raid failed: Partner target %s does not allow raids. Skipping without blacklist.",
                         target_login,
                     )
+                    blacklist_decision = "skip_blacklist"
                 else:
-                    self._deps.logger.warning(
-                        "Raid failed: Target %s does not allow raids. Blacklisting and retrying.",
-                        target_login,
-                    )
-                    self._deps.add_to_blacklist(target_id, target_login, error or "unknown_error")
+                    if self._deps.increment_raid_disabled_strikes is not None:
+                        strikes = self._deps.increment_raid_disabled_strikes(
+                            target_id, target_login, error or "unknown_error"
+                        )
+                    else:
+                        strikes = 2
+                    if strikes >= 2:
+                        self._deps.logger.warning(
+                            "Raid failed: Target %s does not allow raids (strike %d/2). Blacklisting and retrying.",
+                            target_login,
+                            strikes,
+                        )
+                        self._deps.add_to_blacklist(target_id, target_login, error or "unknown_error")
+                        blacklist_decision = "retry"
+                    else:
+                        self._deps.logger.info(
+                            "Raid failed: Target %s does not allow raids (strike %d/2). Not yet blacklisting, retrying.",
+                            target_login,
+                            strikes,
+                        )
+                        blacklist_decision = "retry_no_blacklist"
                 self._emit_observability_event(
                     flow_id=raid_flow_id,
                     step="raid_failed_retryable",
-                    decision="retry" if not is_partner_raid else "skip_blacklist",
+                    decision=blacklist_decision,
                     from_broadcaster_login=request.broadcaster_login,
                     from_broadcaster_id=request.broadcaster_id,
                     to_broadcaster_login=target_login,

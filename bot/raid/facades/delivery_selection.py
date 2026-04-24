@@ -225,6 +225,9 @@ class RaidDeliverySelectionFacadeMixin:
     def _add_to_blacklist(self, target_id: str, target_login: str, reason: str):
         self._raid_blacklist_service().add_to_blacklist(target_id, target_login, reason)
 
+    def _increment_raid_disabled_strikes(self, target_id: str, target_login: str, reason: str) -> int:
+        return self._raid_blacklist_service().increment_raid_disabled_strikes(target_id, target_login, reason)
+
     def _is_retryable_raid_error(self, error: str | None) -> bool:
         return is_retryable_raid_error(error)
 

@@ -2615,6 +2615,17 @@ def ensure_schema(conn) -> None:
     )
     conn.execute(
         """
+        CREATE TABLE IF NOT EXISTS twitch_raid_disabled_strikes (
+            target_id    TEXT,
+            target_login TEXT NOT NULL PRIMARY KEY,
+            strike_count INTEGER NOT NULL DEFAULT 1,
+            last_seen_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            last_reason  TEXT
+        )
+        """
+    )
+    conn.execute(
+        """
         CREATE TABLE IF NOT EXISTS twitch_confirmed_external_recruitment_raids (
             id                     BIGSERIAL PRIMARY KEY,
             raid_flow_id           TEXT UNIQUE,

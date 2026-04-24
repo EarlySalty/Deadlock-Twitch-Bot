@@ -404,6 +404,7 @@ def make_raid_pipeline_service(bot: Any) -> RaidPipelineService:
         RaidPipelineDependencies(
             load_raid_blacklist=bot._load_raid_blacklist,
             add_to_blacklist=bot._add_to_blacklist,
+            increment_raid_disabled_strikes=bot._increment_raid_disabled_strikes,
             select_partner_candidate_by_score=bot._select_partner_candidate_by_score,
             select_fairest_candidate=bot._select_fairest_candidate,
             ensure_raid_arrival_subscription_ready=lambda target_id, target_login, raid_flow_id: bot._ensure_raid_arrival_subscription_ready(
