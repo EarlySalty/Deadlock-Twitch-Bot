@@ -43,3 +43,4 @@ logs/
 /data/runtime/locks
 .superpowers/
 docs/superpowers/
+security-reports/
