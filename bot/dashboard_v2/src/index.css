@@ -256,19 +256,19 @@ h4,
   z-index: 0;
   pointer-events: none;
   background:
-    radial-gradient(1520px 780px at 50% 44%, rgba(6, 182, 212, 0.28), transparent 74%),
-    radial-gradient(1240px 620px at 22% 22%, rgba(109, 74, 232, 0.18), transparent 76%),
-    radial-gradient(1120px 560px at 78% 22%, rgba(168, 85, 247, 0.16), transparent 78%),
-    radial-gradient(980px 620px at 70% 82%, rgba(46, 204, 113, 0.08), transparent 80%);
+    radial-gradient(1520px 780px at 50% 44%, rgba(6, 182, 212, 0.18), transparent 74%),
+    radial-gradient(1240px 620px at 22% 22%, rgba(109, 74, 232, 0.12), transparent 76%),
+    radial-gradient(1120px 560px at 78% 22%, rgba(168, 85, 247, 0.1), transparent 78%),
+    radial-gradient(980px 620px at 70% 82%, rgba(46, 204, 113, 0.06), transparent 80%);
   background-repeat: no-repeat;
   background-size:
     175% 175%,
     165% 165%,
     165% 165%,
     170% 175%;
-  opacity: 0.92;
-  filter: saturate(1.05);
-  animation: internal-home-gradient-flow 24s ease-in-out infinite alternate;
+  opacity: 0.6;
+  filter: saturate(1.02);
+  animation: internal-home-gradient-flow 36s ease-in-out infinite alternate;
 }
 
 .internal-home-vibe::after {
@@ -330,8 +330,11 @@ h4,
 
 .internal-home-kpi:hover {
   transform: translateY(-2px);
-  border-color: var(--color-border-hover);
-  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.24);
+  border-color: color-mix(in srgb, var(--color-primary) 35%, var(--color-border-hover));
+  box-shadow:
+    0 0 0 1px color-mix(in srgb, var(--color-primary) 18%, transparent),
+    0 14px 30px rgba(6, 182, 212, 0.18),
+    0 12px 28px rgba(0, 0, 0, 0.24);
 }
 
 .internal-home-stream {

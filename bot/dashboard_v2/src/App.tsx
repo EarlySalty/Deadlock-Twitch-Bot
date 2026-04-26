@@ -144,7 +144,7 @@ function AnalyticsDashboard() {
     }
     const urlTab = params.get('tab');
     if (urlTab) {
-      const validTabs: Array<TabId | 'session-detail'> = ['overview', 'chat', 'growth', 'audience', 'viewers', 'coaching', 'compare', 'schedule', 'monetization', 'category', 'experimental', 'ai', 'title'];
+      const validTabs: Array<TabId | 'session-detail'> = ['overview', 'streams', 'chat', 'growth', 'audience', 'viewers', 'coaching', 'compare', 'schedule', 'monetization', 'category', 'experimental', 'ai', 'title'];
       if (validTabs.includes(urlTab as TabId)) {
         setActiveTab(urlTab as TabId);
       }

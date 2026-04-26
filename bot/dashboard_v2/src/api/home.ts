@@ -107,6 +107,63 @@ export interface InternalHomeChangelog {
   maxEntries?: number | null;
 }
 
+export interface InternalHomeHealthScore {
+  overall: number;
+  trend: number | null;
+  sub_scores: {
+    growth: number;
+    retention: number;
+    engagement: number;
+    community: number;
+  };
+}
+
+export interface InternalHomeLastStreamSummary {
+  started_at: string | null;
+  ended_at: string | null;
+  duration_seconds: number | null;
+  avg_viewers: number | null;
+  peak_viewers: number | null;
+  follower_delta: number | null;
+  chat_messages: number | null;
+}
+
+export interface InternalHomeWeekComparison {
+  current_week: {
+    avg_viewers: number | null;
+    total_followers: number | null;
+    chat_activity: number | null;
+    stream_hours: number | null;
+  };
+  previous_week: {
+    avg_viewers: number | null;
+    total_followers: number | null;
+    chat_activity: number | null;
+    stream_hours: number | null;
+  };
+  changes: {
+    avg_viewers_pct: number | null;
+    followers_pct: number | null;
+    chat_activity_pct: number | null;
+    stream_hours_pct: number | null;
+  };
+  daily_series?: {
+    avg_viewers?: number[];
+    followers?: number[];
+    chat_activity?: number[];
+    stream_hours?: number[];
+  } | null;
+}
+
+export interface InternalHomeLiveStatus {
+  is_live: boolean;
+  viewer_count: number;
+  started_at: string | null;
+  last_seen_at: string | null;
+  title: string | null;
+  game: string | null;
+}
+
 export interface InternalHomeData {
   greeting?: string | null;
   twitchLogin?: string | null;
@@ -120,6 +177,10 @@ export interface InternalHomeData {
   actionLog?: InternalHomeActionEntry[] | null;
   impactFeed?: InternalHomeImpactEntry[] | null;
   changelog?: InternalHomeChangelog | null;
+  healthScore?: InternalHomeHealthScore | null;
+  lastStreamSummary?: InternalHomeLastStreamSummary | null;
+  weekComparison?: InternalHomeWeekComparison | null;
+  liveStatus?: InternalHomeLiveStatus | null;
   generatedAt?: string | null;
 }
 
@@ -222,6 +283,10 @@ interface InternalHomeRawResponse {
     profile_status?: string | null;
     discord_connect?: string | null;
   } | null;
+  health_score?: InternalHomeHealthScore | null;
+  last_stream_summary?: InternalHomeLastStreamSummary | null;
+  week_comparison?: InternalHomeWeekComparison | null;
+  live_status?: InternalHomeLiveStatus | null;
   generated_at?: string | null;
 }
 
@@ -477,6 +542,10 @@ export async function fetchInternalHome(streamer?: string | null): Promise<Inter
       canWrite: raw.changelog?.can_write !== false,
       maxEntries: toFiniteNumber(raw.changelog?.max_entries),
     },
+    healthScore: raw.health_score ?? null,
+    lastStreamSummary: raw.last_stream_summary ?? null,
+    weekComparison: raw.week_comparison ?? null,
+    liveStatus: raw.live_status ?? null,
     generatedAt: raw.generated_at || null,
   };
 }

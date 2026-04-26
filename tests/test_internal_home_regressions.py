@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import sqlite3
 import unittest
 from unittest.mock import AsyncMock, patch
@@ -62,7 +63,7 @@ class _TokenHarness(TokenPersistenceMixin):
 
 class InternalHomeRegressionTests(unittest.TestCase):
     def setUp(self) -> None:
-        self.conn = sqlite3.connect(":memory:")
+        self.conn = sqlite3.connect(":memory:", check_same_thread=False)
         self.conn.row_factory = sqlite3.Row
         self.conn.execute(
             """
@@ -207,11 +208,13 @@ class InternalHomeRegressionTests(unittest.TestCase):
         handler = _InternalHomeHarness()
 
         with patch("bot.storage.pg.readonly_connection", return_value=_ConnCtx(self.conn)):
-            payload = handler._build_internal_home_payload(
-                twitch_login="new_login",
-                twitch_user_id="1001",
-                display_name="New Login",
-                days=30,
+            payload = asyncio.run(
+                handler._build_internal_home_payload(
+                    twitch_login="new_login",
+                    twitch_user_id="1001",
+                    display_name="New Login",
+                    days=60,
+                )
             )
 
         self.assertEqual(payload["last_stream_summary"]["chat_messages"], 2)
@@ -242,11 +245,13 @@ class InternalHomeRegressionTests(unittest.TestCase):
         handler = _InternalHomeHarness()
 
         with patch("bot.storage.pg.readonly_connection", return_value=_ConnCtx(self.conn)):
-            payload = handler._build_internal_home_payload(
-                twitch_login="new_login",
-                twitch_user_id="1001",
-                display_name="New Login",
-                days=30,
+            payload = asyncio.run(
+                handler._build_internal_home_payload(
+                    twitch_login="new_login",
+                    twitch_user_id="1001",
+                    display_name="New Login",
+                    days=30,
+                )
             )
 
         oauth = payload["status"]["oauth"]
