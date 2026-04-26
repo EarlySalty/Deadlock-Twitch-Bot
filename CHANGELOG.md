@@ -1,5 +1,11 @@
 # Changelog
 
+## #6 — Changelog im Dashboard zeigt jetzt die letzten Updates
+
+- Die Sektion „Was gibt's Neues" auf dem Streamer-Dashboard ist jetzt befüllt
+- Alle bisherigen Verbesserungen (#1–#5) sind dort als Einträge sichtbar
+- Künftige Updates erscheinen automatisch dort, sobald sie veröffentlicht werden
+
 ## #5 — Aktive Tab-Buttons im Analyse-Dashboard ohne kaputten 1px-Halo
 
 - Aktiver Tab (z. B. „Übersicht") hatte einen harten cyan 1px-Strich am Rand, der mit dem Card-Highlight kollidierte und broken aussah
