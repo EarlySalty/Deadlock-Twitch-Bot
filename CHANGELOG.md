@@ -1,5 +1,11 @@
 # Changelog
 
+## #4 — Glow-Tuning und feines Hintergrund-Grid
+
+- Mini-KPI-Karten (Ø Viewer, Follower, Chat-Aktivität, Stream-Stunden) leuchten jetzt dauerhaft in ihrer Trendfarbe und nicht erst beim Hover
+- Health-Score-Karte hat ein deutlich dezenteres Glow, damit es nicht mehr in den Bereich daneben überstrahlt
+- Subtiles Gitternetz-Pattern im Dashboard-Hintergrund — wirkt weniger leblos, aber bleibt im Hintergrund
+
 ## #3 — Build-Toolchain auf aktuelle Node-LTS aktualisiert
 
 - Build-System läuft jetzt auf Node 22 LTS statt der alten Node-18-Version

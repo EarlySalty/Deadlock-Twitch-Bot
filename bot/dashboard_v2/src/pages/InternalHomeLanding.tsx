@@ -105,9 +105,9 @@ function WeekKpi({
   const trendUp = (change ?? 0) >= 0;
   const sparkColor = trendUp ? 'var(--color-success)' : 'var(--color-danger)';
 
-  const glowToneClass = trendUp ? 'card-glow-success' : 'card-glow-danger';
+  const glowToneClass = trendUp ? 'card-glow-success kpi-glow-success' : 'card-glow-danger kpi-glow-danger';
   return (
-    <div className={`panel-card card-glow ${glowToneClass} internal-home-kpi rounded-xl p-4`}>
+    <div className={`panel-card card-glow ${glowToneClass} kpi-glow-always internal-home-kpi rounded-xl p-4`}>
       <div className="mb-3 flex items-center gap-2.5">
         <div
           className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-lg ${
@@ -210,7 +210,7 @@ function DashboardSkeleton() {
             </section>
 
             <section className="grid gap-4 lg:grid-cols-3">
-              <div className="panel-card card-glow card-glow-accent rounded-2xl p-5">
+              <div className="panel-card card-glow card-glow-soft rounded-2xl p-5">
                 <div className="mb-5 flex items-center gap-3">
                   <SkeletonBlock className="h-9 w-9 rounded-xl" />
                   <div className="flex-1 space-y-2">
@@ -971,7 +971,7 @@ export function InternalHomeLanding() {
               {healthScore ? (
                 <div
                   data-tour-id="tour-health"
-                  className="panel-card card-glow card-glow-accent rounded-2xl p-5"
+                  className="panel-card card-glow card-glow-soft rounded-2xl p-5"
                 >
                   <div className="mb-5 flex items-center gap-3">
                     <div className="gradient-accent sidebar-avatar-glow flex h-9 w-9 items-center justify-center rounded-xl">

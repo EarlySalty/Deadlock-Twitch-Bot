@@ -246,6 +246,68 @@ h4,
     0 14px 28px rgba(0, 0, 0, 0.34);
 }
 
+/* Soft variant: deutlich gedaempftes Glow, fuer Cards wo der Glow sonst ueberstrahlt */
+.card-glow-soft {
+  background: linear-gradient(160deg, rgba(16, 38, 53, 0.94) 0%, rgba(10, 30, 42, 0.94) 100%);
+}
+
+.card-glow-soft::before {
+  background: linear-gradient(
+    135deg,
+    color-mix(in srgb, var(--color-primary) 32%, transparent),
+    color-mix(in srgb, var(--color-accent) 18%, transparent) 50%,
+    transparent 70%
+  );
+  opacity: 0.4;
+}
+
+.card-glow-soft:hover {
+  box-shadow:
+    0 0 0 1px color-mix(in srgb, var(--color-primary) 14%, transparent),
+    0 16px 32px -14px color-mix(in srgb, var(--color-primary) 22%, rgba(0, 0, 0, 0.5)),
+    0 10px 22px rgba(0, 0, 0, 0.28);
+}
+
+/* Always-on Glow fuer kleine KPI-Cards (Viewer / Follower / Chat / Stream-Stunden) */
+.kpi-glow-always {
+  box-shadow:
+    0 0 0 1px color-mix(in srgb, var(--color-primary) 18%, transparent),
+    0 14px 30px -14px color-mix(in srgb, var(--color-primary) 32%, rgba(0, 0, 0, 0.55)),
+    0 8px 18px rgba(0, 0, 0, 0.28);
+}
+
+.kpi-glow-always.kpi-glow-success {
+  box-shadow:
+    0 0 0 1px color-mix(in srgb, var(--color-success) 22%, transparent),
+    0 14px 30px -14px color-mix(in srgb, var(--color-success) 38%, rgba(0, 0, 0, 0.55)),
+    0 8px 18px rgba(0, 0, 0, 0.28);
+}
+
+.kpi-glow-always.kpi-glow-danger {
+  box-shadow:
+    0 0 0 1px color-mix(in srgb, var(--color-danger) 24%, transparent),
+    0 14px 30px -14px color-mix(in srgb, var(--color-danger) 38%, rgba(0, 0, 0, 0.55)),
+    0 8px 18px rgba(0, 0, 0, 0.28);
+}
+
+.kpi-glow-always:hover {
+  transform: translateY(-3px);
+}
+
+.kpi-glow-always.kpi-glow-success:hover {
+  box-shadow:
+    0 0 0 1px color-mix(in srgb, var(--color-success) 38%, transparent),
+    0 22px 44px -16px color-mix(in srgb, var(--color-success) 55%, rgba(0, 0, 0, 0.55)),
+    0 12px 24px rgba(0, 0, 0, 0.34);
+}
+
+.kpi-glow-always.kpi-glow-danger:hover {
+  box-shadow:
+    0 0 0 1px color-mix(in srgb, var(--color-danger) 40%, transparent),
+    0 22px 44px -16px color-mix(in srgb, var(--color-danger) 55%, rgba(0, 0, 0, 0.55)),
+    0 12px 24px rgba(0, 0, 0, 0.34);
+}
+
 /* Hero-Aura */
 .hero-aura {
   position: relative;
@@ -486,6 +548,33 @@ h4,
   background-size: 145% 145%, 145% 145%, 165% 165%, 100% 100%, 100% 100%;
   mix-blend-mode: normal;
   opacity: 0.96;
+}
+
+/* Subtiles Gridnetz-Pattern als zusaetzliche Hintergrund-Schicht.
+   Liegt unter den Vibe-Auras, damit die radial-Glows dezent darueber leuchten. */
+.internal-home-vibe::after {
+  background-image:
+    linear-gradient(rgba(255, 255, 255, 0.04) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.04) 1px, transparent 1px),
+    radial-gradient(920px 450px at 18% 24%, rgba(6, 182, 212, 0.18), transparent 72%),
+    radial-gradient(920px 450px at 82% 22%, rgba(109, 74, 232, 0.18), transparent 72%),
+    radial-gradient(1380px 700px at 50% 50%, rgba(6, 182, 212, 0.18), transparent 76%),
+    radial-gradient(
+      155% 145% at 50% 50%,
+      rgba(4, 12, 18, 0) 54%,
+      rgba(4, 12, 18, 0.42) 86%,
+      rgba(2, 6, 10, 0.7) 100%
+    ),
+    linear-gradient(180deg, rgba(3, 10, 15, 0.1) 0%, rgba(3, 10, 15, 0.05) 40%, rgba(3, 10, 15, 0.3) 100%);
+  background-repeat: repeat, repeat, no-repeat, no-repeat, no-repeat, no-repeat, no-repeat;
+  background-size:
+    44px 44px,
+    44px 44px,
+    145% 145%,
+    145% 145%,
+    165% 165%,
+    100% 100%,
+    100% 100%;
 }
 
 .internal-home-vibe > * {
