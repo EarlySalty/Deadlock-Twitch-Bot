@@ -1,5 +1,11 @@
 # Changelog
 
+## #3 — Build-Toolchain auf aktuelle Node-LTS aktualisiert
+
+- Build-System läuft jetzt auf Node 22 LTS statt der alten Node-18-Version
+- Frontend-Build ist etwas schneller und ohne Versionswarnungen
+- Keine Auswirkungen auf die Bot-Funktionalität, rein interne Aufräumung
+
 ## #2 — Streamer-Dashboard mit deutlich mehr Vibe
 
 - Karten haben jetzt einen weichen farbigen Glow am Rand und heben sich beim Hover sichtbar an
