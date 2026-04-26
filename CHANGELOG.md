@@ -1,5 +1,17 @@
 # Changelog
 
+## #2 — Streamer-Dashboard mit deutlich mehr Vibe
+
+- Karten haben jetzt einen weichen farbigen Glow am Rand und heben sich beim Hover sichtbar an
+- Header bekommt eine subtile rotierende Aura im Hintergrund
+- Health-Score-Ring leuchtet farblich passend (grün/gelb/rot) mit Drop-Shadow
+- Wochen-KPIs bekommen pro Karte eine farbige Trend-Aura (grün bei +, rot bei -)
+- Sparkline-Linien glühen leicht in ihrer Trendfarbe
+- Last-Stream-Mini-Stats (Ø Viewer, Peak, Follower, Chat) bekommen Hover-Spotlight und Text-Glow
+- Activity-Items haben jetzt einen vertikalen Akzent-Streifen, farblich nach Typ (Raid grün, Ban rot, Warnung gelb)
+- Letzte Streams Liste hat einen blau-violetten Akzent-Streifen pro Eintrag
+- Live-Indikator pulsiert mit zusätzlichem roten Außenglow
+
 ## #1 — Streamer-Dashboard schneller, schöner und mit funktionierender Navigation
 
 - Dashboard lädt deutlich schneller (Doppelter API-Request entfernt, Backend in mehrere parallele Aggregationen aufgeteilt)

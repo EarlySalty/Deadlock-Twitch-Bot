@@ -144,6 +144,200 @@ h4,
   opacity: 0.4;
 }
 
+/* Card-Glow / Vibe-Lift */
+.card-glow {
+  position: relative;
+}
+
+.card-glow::before {
+  content: "";
+  position: absolute;
+  inset: -1px;
+  border-radius: inherit;
+  padding: 1px;
+  pointer-events: none;
+  background: linear-gradient(
+    135deg,
+    color-mix(in srgb, var(--color-primary) 55%, transparent),
+    color-mix(in srgb, var(--color-accent) 35%, transparent) 45%,
+    transparent 65%
+  );
+  -webkit-mask:
+    linear-gradient(#000 0 0) content-box,
+    linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+          mask-composite: exclude;
+  opacity: 0.55;
+  transition: opacity 280ms ease;
+}
+
+.card-glow:hover::before {
+  opacity: 1;
+}
+
+.card-glow {
+  transition:
+    transform 240ms ease,
+    box-shadow 280ms ease,
+    border-color 240ms ease;
+}
+
+.card-glow:hover {
+  transform: translateY(-3px);
+  box-shadow:
+    0 0 0 1px color-mix(in srgb, var(--color-primary) 22%, transparent),
+    0 22px 44px -16px color-mix(in srgb, var(--color-primary) 38%, rgba(0, 0, 0, 0.5)),
+    0 14px 28px rgba(0, 0, 0, 0.32);
+}
+
+.card-glow-warning::before {
+  background: linear-gradient(
+    135deg,
+    color-mix(in srgb, var(--color-warning) 55%, transparent),
+    color-mix(in srgb, var(--color-orange) 35%, transparent) 45%,
+    transparent 65%
+  );
+  opacity: 0.7;
+}
+
+.card-glow-success::before {
+  background: linear-gradient(
+    135deg,
+    color-mix(in srgb, var(--color-success) 55%, transparent),
+    color-mix(in srgb, var(--color-teal) 35%, transparent) 45%,
+    transparent 65%
+  );
+  opacity: 0.6;
+}
+
+.card-glow-danger::before {
+  background: linear-gradient(
+    135deg,
+    color-mix(in srgb, var(--color-danger) 60%, transparent),
+    color-mix(in srgb, var(--color-orange) 30%, transparent) 45%,
+    transparent 65%
+  );
+  opacity: 0.7;
+}
+
+.card-glow-accent {
+  background: linear-gradient(
+    160deg,
+    rgba(168, 85, 247, 0.18) 0%,
+    rgba(6, 182, 212, 0.12) 45%,
+    rgba(10, 30, 42, 0.94) 100%
+  );
+}
+
+.card-glow-accent::before {
+  background: linear-gradient(
+    135deg,
+    color-mix(in srgb, var(--color-accent) 65%, transparent),
+    color-mix(in srgb, var(--color-primary) 50%, transparent) 50%,
+    transparent 70%
+  );
+  opacity: 0.85;
+}
+
+.card-glow-accent:hover {
+  box-shadow:
+    0 0 0 1px color-mix(in srgb, var(--color-accent) 32%, transparent),
+    0 26px 52px -18px color-mix(in srgb, var(--color-accent) 50%, rgba(0, 0, 0, 0.55)),
+    0 14px 28px rgba(0, 0, 0, 0.34);
+}
+
+/* Hero-Aura */
+.hero-aura {
+  position: relative;
+  isolation: isolate;
+}
+
+@keyframes hero-aura-spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.hero-aura::before {
+  content: "";
+  position: absolute;
+  inset: -45%;
+  z-index: -1;
+  pointer-events: none;
+  background: conic-gradient(
+    from 0deg,
+    rgba(6, 182, 212, 0.18),
+    rgba(168, 85, 247, 0.22),
+    rgba(255, 122, 24, 0.16),
+    rgba(46, 204, 113, 0.16),
+    rgba(6, 182, 212, 0.18)
+  );
+  filter: blur(60px);
+  opacity: 0.45;
+  animation: hero-aura-spin 28s linear infinite;
+}
+
+/* Glow-Pill (live indicator etc.) */
+.glow-pill-live {
+  box-shadow:
+    0 0 0 1px color-mix(in srgb, var(--color-danger) 40%, transparent),
+    0 0 18px color-mix(in srgb, var(--color-danger) 35%, transparent);
+}
+
+/* Sidebar partner-pick lift */
+.sidebar-avatar-glow {
+  box-shadow:
+    0 0 0 2px rgba(255, 255, 255, 0.06),
+    0 8px 22px color-mix(in srgb, var(--color-primary) 32%, transparent),
+    0 0 24px color-mix(in srgb, var(--color-accent) 28%, transparent);
+}
+
+/* Tonal accent bar on the left edge of an item */
+.accent-bar {
+  position: relative;
+}
+
+.accent-bar::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 12%;
+  bottom: 12%;
+  width: 3px;
+  border-radius: 999px;
+  background: linear-gradient(180deg, var(--color-primary), var(--color-accent));
+  opacity: 0.85;
+  box-shadow: 0 0 12px color-mix(in srgb, var(--color-primary) 45%, transparent);
+}
+
+.accent-bar[data-tone="warning"]::before {
+  background: linear-gradient(180deg, var(--color-warning), var(--color-orange));
+  box-shadow: 0 0 12px color-mix(in srgb, var(--color-warning) 50%, transparent);
+}
+
+.accent-bar[data-tone="danger"]::before {
+  background: linear-gradient(180deg, var(--color-danger), var(--color-orange));
+  box-shadow: 0 0 14px color-mix(in srgb, var(--color-danger) 55%, transparent);
+}
+
+.accent-bar[data-tone="success"]::before {
+  background: linear-gradient(180deg, var(--color-success), var(--color-teal));
+  box-shadow: 0 0 12px color-mix(in srgb, var(--color-success) 50%, transparent);
+}
+
+/* KPI value glow */
+.kpi-value-glow {
+  text-shadow: 0 0 22px color-mix(in srgb, var(--color-primary) 35%, transparent);
+}
+
+/* Score ring glow */
+.score-ring-glow {
+  filter: drop-shadow(0 0 14px color-mix(in srgb, currentColor 60%, transparent));
+}
+
 .metric-highlight {
   box-shadow:
     0 0 0 1px rgba(6, 182, 212, 0.24),

@@ -46,15 +46,32 @@ function MiniStat({
     warning: 'bg-warning/15 border-warning/25 text-warning',
   }[accent];
 
+  const glowRgb =
+    accent === 'success'
+      ? '46,204,113'
+      : accent === 'warning'
+        ? '245,182,66'
+        : accent === 'accent'
+          ? '168,85,247'
+          : '6,182,212';
   return (
-    <div className="rounded-xl border border-border bg-background/50 p-3">
+    <div className="group relative overflow-hidden rounded-xl border border-border bg-background/55 p-3 transition-all duration-200 hover:-translate-y-0.5 hover:border-border-hover hover:bg-background/75">
+      <div
+        className="pointer-events-none absolute inset-0 opacity-0 transition-opacity duration-300 group-hover:opacity-100"
+        style={{
+          background: `radial-gradient(120% 80% at 50% 0%, rgba(${glowRgb}, 0.2), transparent 60%)`,
+        }}
+      />
       {Icon ? (
         <div className={`mb-2 flex h-7 w-7 items-center justify-center rounded-lg border ${accentColor}`}>
           <Icon className="h-3.5 w-3.5" />
         </div>
       ) : null}
       <div className="text-[11px] font-semibold uppercase tracking-wider text-text-secondary">{label}</div>
-      <div className="mt-0.5 text-xl font-bold text-white">
+      <div
+        className="mt-0.5 text-xl font-bold text-white"
+        style={{ textShadow: `0 0 18px rgba(${glowRgb}, 0.55)` }}
+      >
         {value != null ? `${prefix}${formatNumber(value)}` : '\u2013'}
       </div>
     </div>
@@ -88,15 +105,22 @@ function WeekKpi({
   const trendUp = (change ?? 0) >= 0;
   const sparkColor = trendUp ? 'var(--color-success)' : 'var(--color-danger)';
 
+  const glowToneClass = trendUp ? 'card-glow-success' : 'card-glow-danger';
   return (
-    <div className="panel-card soft-elevate internal-home-kpi rounded-xl p-4">
+    <div className={`panel-card card-glow ${glowToneClass} internal-home-kpi rounded-xl p-4`}>
       <div className="mb-3 flex items-center gap-2.5">
-        <div className="gradient-accent flex h-8 w-8 shrink-0 items-center justify-center rounded-lg">
+        <div
+          className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-lg ${
+            trendUp
+              ? 'bg-gradient-to-br from-success/40 to-teal/35 shadow-[0_0_18px_rgba(46,204,113,0.4)]'
+              : 'bg-gradient-to-br from-danger/45 to-orange/35 shadow-[0_0_18px_rgba(255,107,94,0.4)]'
+          }`}
+        >
           <Icon className="h-4 w-4 text-white" />
         </div>
         <div className="text-[11px] font-semibold uppercase tracking-wider text-text-secondary">{label}</div>
       </div>
-      <div className="text-2xl font-bold text-white">
+      <div className="text-2xl font-bold text-white kpi-value-glow">
         {current != null ? `${formatNumber(current)}${suffix}` : '\u2013'}
       </div>
       {change != null ? (
@@ -112,9 +136,10 @@ function WeekKpi({
                 type="monotone"
                 dataKey="value"
                 stroke={sparkColor}
-                strokeWidth={2}
+                strokeWidth={2.2}
                 dot={false}
                 isAnimationActive={false}
+                style={{ filter: `drop-shadow(0 0 6px ${sparkColor})` }}
               />
             </LineChart>
           </ResponsiveContainer>
@@ -144,7 +169,7 @@ function DashboardSkeleton() {
       <BackgroundBlobs />
       <div className="relative mx-auto max-w-[1440px]">
         <div className="grid gap-4 md:gap-5 lg:grid-cols-[220px_minmax(0,1fr)]">
-          <aside className="panel-card self-start rounded-2xl p-4">
+          <aside className="panel-card card-glow self-start rounded-2xl p-4">
             <div className="flex items-center gap-3">
               <SkeletonBlock className="h-10 w-10 shrink-0 rounded-full" />
               <div className="min-w-0 flex-1 space-y-2">
@@ -172,7 +197,7 @@ function DashboardSkeleton() {
           </aside>
 
           <main className="space-y-4 md:space-y-5">
-            <section className="panel-card flex flex-col gap-4 rounded-2xl px-5 py-4 md:flex-row md:items-center md:justify-between">
+            <section className="panel-card card-glow card-glow-accent hero-aura flex flex-col gap-4 rounded-2xl px-5 py-4 md:flex-row md:items-center md:justify-between">
               <div className="space-y-2.5">
                 <SkeletonBlock className="h-3 w-40" />
                 <SkeletonBlock className="h-8 w-64" />
@@ -185,7 +210,7 @@ function DashboardSkeleton() {
             </section>
 
             <section className="grid gap-4 lg:grid-cols-3">
-              <div className="panel-card rounded-2xl p-5">
+              <div className="panel-card card-glow card-glow-accent rounded-2xl p-5">
                 <div className="mb-5 flex items-center gap-3">
                   <SkeletonBlock className="h-9 w-9 rounded-xl" />
                   <div className="flex-1 space-y-2">
@@ -209,7 +234,7 @@ function DashboardSkeleton() {
                 </div>
               </div>
 
-              <div className="panel-card rounded-2xl p-5 lg:col-span-2">
+              <div className="panel-card card-glow rounded-2xl p-5 lg:col-span-2">
                 <SkeletonBlock className="h-3 w-28" />
                 <SkeletonBlock className="mt-2 h-6 w-72" />
                 <SkeletonBlock className="mt-2 h-3 w-48" />
@@ -227,7 +252,7 @@ function DashboardSkeleton() {
 
             <section className="grid grid-cols-2 gap-4 md:grid-cols-4">
               {[0, 1, 2, 3].map((i) => (
-                <div key={`week-kpi-${i}`} className="panel-card rounded-xl p-4">
+                <div key={`week-kpi-${i}`} className="panel-card card-glow rounded-xl p-4">
                   <div className="mb-3 flex items-center gap-2.5">
                     <SkeletonBlock className="h-8 w-8 rounded-lg" />
                     <SkeletonBlock className="h-2.5 w-20" />
@@ -240,7 +265,7 @@ function DashboardSkeleton() {
 
             <section className="grid gap-4 lg:grid-cols-2">
               {[0, 1].map((i) => (
-                <div key={`bottom-${i}`} className="panel-card rounded-2xl p-5 md:p-6">
+                <div key={`bottom-${i}`} className="panel-card card-glow rounded-2xl p-5 md:p-6">
                   <SkeletonBlock className="h-3 w-20" />
                   <SkeletonBlock className="mt-2 h-6 w-44" />
                   <div className="mt-4 space-y-2.5">
@@ -773,14 +798,14 @@ export function InternalHomeLanding() {
       <div className="relative mx-auto max-w-[1440px]">
         <div className="grid gap-4 md:gap-5 lg:grid-cols-[220px_minmax(0,1fr)]">
           <motion.aside
-            className="panel-card self-start rounded-2xl p-4 lg:sticky lg:top-4"
+            className="panel-card card-glow self-start rounded-2xl p-4 lg:sticky lg:top-4"
             initial={{ opacity: 0, y: 20 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ duration: 0.32 }}
           >
             <div className="space-y-4">
               <div className="flex items-center gap-3">
-                <div className="gradient-accent flex h-10 w-10 shrink-0 items-center justify-center rounded-full text-sm font-bold text-white shadow-lg shadow-primary/20">
+                <div className="gradient-accent sidebar-avatar-glow flex h-10 w-10 shrink-0 items-center justify-center rounded-full text-sm font-bold text-white">
                   {displayName?.[0]?.toUpperCase() ?? '?'}
                 </div>
                 <div className="min-w-0">
@@ -876,7 +901,7 @@ export function InternalHomeLanding() {
 
           <main className="space-y-4 md:space-y-5">
             <motion.section
-              className="panel-card flex flex-col gap-4 rounded-2xl px-5 py-4 md:flex-row md:items-center md:justify-between"
+              className="panel-card card-glow card-glow-accent hero-aura flex flex-col gap-4 rounded-2xl px-5 py-4 md:flex-row md:items-center md:justify-between"
               initial={{ opacity: 0, y: 20 }}
               animate={{ opacity: 1, y: 0 }}
               transition={{ duration: 0.32, delay: 0.04 }}
@@ -888,7 +913,7 @@ export function InternalHomeLanding() {
                   </div>
                   {liveStatus ? (
                     liveStatus.is_live ? (
-                      <span className="inline-flex items-center gap-1.5 rounded-full border border-danger/40 bg-danger/15 px-2.5 py-0.5 text-[10px] font-bold uppercase tracking-[0.18em] text-danger">
+                      <span className="glow-pill-live inline-flex items-center gap-1.5 rounded-full border border-danger/40 bg-danger/15 px-2.5 py-0.5 text-[10px] font-bold uppercase tracking-[0.18em] text-danger">
                         <span className="relative flex h-2 w-2">
                           <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-danger opacity-75" />
                           <span className="relative inline-flex h-2 w-2 rounded-full bg-danger" />
@@ -946,10 +971,10 @@ export function InternalHomeLanding() {
               {healthScore ? (
                 <div
                   data-tour-id="tour-health"
-                  className="panel-card rounded-2xl p-5"
+                  className="panel-card card-glow card-glow-accent rounded-2xl p-5"
                 >
                   <div className="mb-5 flex items-center gap-3">
-                    <div className="gradient-accent flex h-9 w-9 items-center justify-center rounded-xl">
+                    <div className="gradient-accent sidebar-avatar-glow flex h-9 w-9 items-center justify-center rounded-xl">
                       <Heart className="h-4 w-4 text-white" />
                     </div>
                     <div>
@@ -981,11 +1006,11 @@ export function InternalHomeLanding() {
                           strokeWidth="8"
                           strokeLinecap="round"
                           strokeDasharray={`${(score / 100) * 264} 264`}
-                          className={gaugeStrokeClass}
+                          className={`${gaugeStrokeClass} score-ring-glow`}
                         />
                       </svg>
                       <div className="absolute inset-0 flex flex-col items-center justify-center">
-                        <span className={`text-3xl font-bold ${scoreColorClass}`}>{score}</span>
+                        <span className={`text-3xl font-bold ${scoreColorClass} kpi-value-glow`}>{score}</span>
                         <span className="text-xs text-white/45">/ 100</span>
                       </div>
                     </div>
@@ -1038,7 +1063,7 @@ export function InternalHomeLanding() {
 
               <div
                 data-tour-id="tour-stream"
-                className={`panel-card rounded-2xl p-5 ${healthScore ? 'lg:col-span-2' : 'lg:col-span-3'}`}
+                className={`panel-card card-glow rounded-2xl p-5 ${healthScore ? 'lg:col-span-2' : 'lg:col-span-3'}`}
               >
                 <div className="text-[11px] font-semibold uppercase tracking-[0.22em] text-primary">
                   Letzter Stream
@@ -1127,7 +1152,7 @@ export function InternalHomeLanding() {
 
             {recentStreams.length > 0 ? (
               <motion.section
-                className="panel-card rounded-2xl p-5 md:p-6"
+                className="panel-card card-glow rounded-2xl p-5 md:p-6"
                 initial={{ opacity: 0, y: 16 }}
                 animate={{ opacity: 1, y: 0 }}
                 transition={{ duration: 0.32, delay: 0.14 }}
@@ -1171,7 +1196,7 @@ export function InternalHomeLanding() {
                       >
                         <a
                           href="/analyse?tab=streams"
-                          className="internal-home-stream block rounded-xl border border-border bg-background/55 p-3.5 no-underline"
+                          className="internal-home-stream accent-bar block rounded-xl border border-border bg-background/55 pl-5 pr-3.5 py-3.5 no-underline"
                         >
                           <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
                             <div className="min-w-0 flex-1">
@@ -1237,7 +1262,7 @@ export function InternalHomeLanding() {
               animate={{ opacity: 1, y: 0 }}
               transition={{ duration: 0.32, delay: 0.16 }}
             >
-              <aside id="changelog" className="panel-card rounded-2xl p-5 md:p-6">
+              <aside id="changelog" className="panel-card card-glow rounded-2xl p-5 md:p-6">
                 <div className="mb-4">
                   <p className="mb-1 text-sm font-medium uppercase tracking-wider text-primary">
                     Updates
@@ -1282,7 +1307,7 @@ export function InternalHomeLanding() {
                 )}
               </aside>
 
-              <article className="panel-card rounded-2xl p-5 md:p-6">
+              <article className="panel-card card-glow rounded-2xl p-5 md:p-6">
                 <div className="mb-4 flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
                   <div>
                     <p className="mb-1 text-sm font-medium uppercase tracking-wider text-primary">
@@ -1348,8 +1373,15 @@ export function InternalHomeLanding() {
                         ? 'border-warning/35 bg-warning/10 text-warning'
                         : tone.badgeClass;
                       const cardClass = isPriorityWarning
-                        ? 'internal-home-action-item rounded-xl border border-warning/35 bg-warning/10 p-3.5'
-                        : 'internal-home-action-item rounded-xl border border-border bg-background/55 p-3.5';
+                        ? 'internal-home-action-item accent-bar rounded-xl border border-warning/35 bg-warning/10 pl-5 pr-3.5 py-3.5'
+                        : 'internal-home-action-item accent-bar rounded-xl border border-border bg-background/55 pl-5 pr-3.5 py-3.5';
+                      const accentTone = entryIsBan
+                        ? 'danger'
+                        : isServicePitch
+                          ? 'warning'
+                          : entry.eventType === 'raid' || entry.eventType === 'raid_history'
+                            ? 'success'
+                            : 'primary';
                       const detailLines = isPriorityWarning
                         ? buildPriorityActionDetails(entry, isServicePitch)
                         : [];
@@ -1358,6 +1390,7 @@ export function InternalHomeLanding() {
                         <motion.li
                           key={actionKey(entry, index)}
                           className={cardClass}
+                          data-tone={accentTone}
                           initial={{ opacity: 0, y: 6 }}
                           animate={{ opacity: 1, y: 0 }}
                           transition={{ duration: 0.22, delay: index * 0.04 }}
