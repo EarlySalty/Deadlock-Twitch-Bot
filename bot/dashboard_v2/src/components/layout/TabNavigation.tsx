@@ -103,7 +103,11 @@ export function TabNavigation({ activeTab, onTabChange }: TabNavigationProps) {
               {isActive && (
                 <motion.div
                   layoutId="activeTab"
-                  className="absolute inset-0 rounded-xl border border-primary/30 bg-gradient-to-r from-primary/80 via-primary/75 to-accent/80 shadow-lg shadow-primary/15"
+                  className="absolute inset-0 rounded-xl bg-gradient-to-r from-primary/80 via-primary/75 to-accent/80"
+                  style={{
+                    boxShadow:
+                      'inset 0 0 0 1px rgba(255,255,255,0.08), 0 8px 22px -8px rgba(6,182,212,0.45), 0 4px 12px rgba(0,0,0,0.28)',
+                  }}
                   initial={false}
                   transition={{ type: 'spring', stiffness: 500, damping: 35 }}
                 />

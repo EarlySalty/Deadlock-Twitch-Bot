@@ -1,5 +1,10 @@
 # Changelog
 
+## #5 — Aktive Tab-Buttons im Analyse-Dashboard ohne kaputten 1px-Halo
+
+- Aktiver Tab (z. B. „Übersicht") hatte einen harten cyan 1px-Strich am Rand, der mit dem Card-Highlight kollidierte und broken aussah
+- Border ersetzt durch weichen Inset-Highlight + sanfteren Außen-Glow
+
 ## #4 — Glow-Tuning und feines Hintergrund-Grid
 
 - Mini-KPI-Karten (Ø Viewer, Follower, Chat-Aktivität, Stream-Stunden) leuchten jetzt dauerhaft in ihrer Trendfarbe und nicht erst beim Hover
