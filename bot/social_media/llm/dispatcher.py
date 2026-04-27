@@ -26,6 +26,7 @@ from .base import (
     LLMProviderUnavailable,
     LLMRequest,
     LLMResponse,
+    LLMTextResponse,
     LLMUnavailable,
 )
 
@@ -73,6 +74,25 @@ class LLMDispatcher:
         raise LLMProviderUnavailable(f"Unknown LLM provider: {name!r}")
 
     async def generate(self, request: LLMRequest) -> LLMResponse:
+        return await self._dispatch("generate", request)
+
+    async def generate_text(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        *,
+        max_tokens: int = 1200,
+        temperature: float = 0.2,
+    ) -> LLMTextResponse:
+        return await self._dispatch(
+            "generate_text",
+            system_prompt,
+            user_prompt,
+            max_tokens=max_tokens,
+            temperature=temperature,
+        )
+
+    async def _dispatch(self, method_name: str, *args, **kwargs):
         chosen = self._resolve_provider_name()
         consent = self._resolve_consent()
 
@@ -96,7 +116,8 @@ class LLMDispatcher:
                 last_error = exc
                 continue
             try:
-                response = await provider.generate(request)
+                method = getattr(provider, method_name)
+                response = await method(*args, **kwargs)
                 if attempted[0] != candidate:
                     log.warning(
                         "LLM dispatcher used fallback provider %s after primary %s failed",

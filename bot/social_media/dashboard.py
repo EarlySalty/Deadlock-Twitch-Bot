@@ -23,6 +23,9 @@ from urllib.parse import urlencode, urlsplit, urlunsplit
 from aiohttp import web
 from aiohttp.web_request import FileField
 
+from .analytics import list_clip_analytics, list_reports
+from .analytics.report_writer import SocialMediaReportWriter
+from .approval import ApprovalService, get_approval_record, serialize_approval_record
 from .clip_manager import ClipManager
 from .enrichment import (
     ClipEnrichmentPipeline,
@@ -55,6 +58,7 @@ from .transcription import (
 )
 from .transcription.seed_vocab import seed_vocab as seed_vocab_async
 from .uploaders.video_processor import VideoProcessor
+from .settings import get_auto_approve_settings, set_auto_approve_settings
 from ..storage import readonly_connection, transaction
 
 log = logging.getLogger("TwitchStreams.SocialMediaDashboard")
@@ -112,6 +116,7 @@ class SocialMediaDashboard:
         self.auth_level_getter = auth_level_getter
         self.oauth_ready_checker = oauth_ready_checker
         self.public_base_url = str(public_base_url or "").strip()
+        self.report_writer = SocialMediaReportWriter()
 
     def _require_auth(self, request: web.Request) -> None:
         """Check authentication using parent dashboard's OAuth system."""
@@ -387,6 +392,7 @@ class SocialMediaDashboard:
 
         enrichment_status: str | None = None
         enrichment_summary: dict | None = None
+        approval_payload: dict | None = None
         try:
             enrichment = get_enrichment(int(row["id"]))
         except Exception:
@@ -407,6 +413,11 @@ class SocialMediaDashboard:
                 "top_hashtags": top_hashtags,
                 "provider": enrichment.llm_provider,
             }
+        try:
+            approval_payload = serialize_approval_record(get_approval_record(int(row["id"])))
+        except Exception:
+            log.exception("Failed to load approval state for clip %s", row.get("id"))
+            approval_payload = None
 
         return {
             "clip_db_id": row["id"],
@@ -433,6 +444,7 @@ class SocialMediaDashboard:
             "effective_layout": self._serialize_layout(effective_layout),
             "enrichment_status": enrichment_status,
             "enrichment_summary": enrichment_summary,
+            "approval": approval_payload,
         }
 
     async def _store_uploaded_mp4(self, file_field: FileField, target_path: Path) -> Path:
@@ -559,6 +571,34 @@ class SocialMediaDashboard:
         app.router.add_post(
             "/social-media/api/admin/clips/{clip_db_id}/enrichment/run",
             self.api_admin_clip_enrichment_run,
+        )
+        app.router.add_get(
+            "/social-media/api/admin/approval/{clip_db_id}",
+            self.api_admin_clip_approval_get,
+        )
+        app.router.add_post(
+            "/social-media/api/admin/approval/{clip_db_id}/decision",
+            self.api_admin_clip_approval_decision,
+        )
+        app.router.add_get(
+            "/social-media/api/admin/settings/auto-approve",
+            self.api_admin_auto_approve_get,
+        )
+        app.router.add_put(
+            "/social-media/api/admin/settings/auto-approve",
+            self.api_admin_auto_approve_put,
+        )
+        app.router.add_get(
+            "/social-media/api/admin/analytics/clips/{clip_db_id}",
+            self.api_admin_clip_analytics_get,
+        )
+        app.router.add_get(
+            "/social-media/api/admin/reports",
+            self.api_admin_reports_list,
+        )
+        app.router.add_post(
+            "/social-media/api/admin/reports/run",
+            self.api_admin_reports_run,
         )
 
         # Vocab Management Endpoints
@@ -956,6 +996,22 @@ class SocialMediaDashboard:
             cleaned.append(token)
         return cleaned
 
+    @staticmethod
+    def _normalize_platform_list(value, *, field_name: str = "platforms") -> list[str]:
+        if value is None:
+            return []
+        if not isinstance(value, list):
+            raise web.HTTPBadRequest(text=f"{field_name} must be a list")
+        cleaned: list[str] = []
+        seen: set[str] = set()
+        for entry in value:
+            token = str(entry or "").strip().lower()
+            if token not in {"youtube", "tiktok", "instagram"} or token in seen:
+                continue
+            seen.add(token)
+            cleaned.append(token)
+        return cleaned
+
     async def api_admin_clip_enrichment_get(self, request: web.Request) -> web.Response:
         self._require_admin(request)
         clip_db_id = self._normalize_clip_id(request.match_info.get("clip_db_id"))
@@ -1058,6 +1114,171 @@ class SocialMediaDashboard:
                 "enrichment": self._serialize_enrichment_record(record),
             }
         )
+
+    async def api_admin_clip_approval_get(self, request: web.Request) -> web.Response:
+        self._require_admin(request)
+        clip_db_id = self._normalize_clip_id(request.match_info.get("clip_db_id"))
+        if not clip_db_id:
+            return web.json_response({"error": "invalid_clip_db_id"}, status=400)
+        if not self._load_clip_row(clip_db_id):
+            return web.json_response({"error": "clip_not_found"}, status=404)
+        return web.json_response(
+            {
+                "clip_db_id": clip_db_id,
+                "approval": serialize_approval_record(get_approval_record(clip_db_id)),
+            }
+        )
+
+    async def api_admin_clip_approval_decision(self, request: web.Request) -> web.Response:
+        self._require_admin(request)
+        clip_db_id = self._normalize_clip_id(request.match_info.get("clip_db_id"))
+        if not clip_db_id:
+            return web.json_response({"error": "invalid_clip_db_id"}, status=400)
+        if not self._load_clip_row(clip_db_id):
+            return web.json_response({"error": "clip_not_found"}, status=404)
+
+        try:
+            payload = await request.json()
+        except Exception:
+            return web.json_response({"error": "invalid_json"}, status=400)
+        if not isinstance(payload, dict):
+            return web.json_response({"error": "invalid_payload"}, status=400)
+
+        decision = str(payload.get("decision") or "").strip().lower()
+        platforms = self._normalize_platform_list(payload.get("platforms"))
+        service = ApprovalService(clip_manager=self.clip_manager)
+        try:
+            record = await service.handle_decision(
+                clip_db_id,
+                decision,
+                platforms,
+                self._get_editor_user_id(request),
+            )
+        except ValueError as exc:
+            return web.json_response({"error": "invalid_decision", "message": str(exc)}, status=400)
+        except Exception:
+            log.exception("Approval decision failed for clip %s", clip_db_id)
+            return web.json_response({"error": "approval_decision_failed"}, status=500)
+
+        row = self._load_clip_row(clip_db_id)
+        return web.json_response(
+            {
+                "clip_db_id": clip_db_id,
+                "approval": serialize_approval_record(record),
+                "clip": self._serialize_clip_record(row) if row else None,
+            }
+        )
+
+    async def api_admin_auto_approve_get(self, request: web.Request) -> web.Response:
+        self._require_admin(request)
+        return web.json_response(get_auto_approve_settings())
+
+    async def api_admin_auto_approve_put(self, request: web.Request) -> web.Response:
+        self._require_admin(request)
+        try:
+            payload = await request.json()
+        except Exception:
+            return web.json_response({"error": "invalid_json"}, status=400)
+        if not isinstance(payload, dict):
+            return web.json_response({"error": "invalid_payload"}, status=400)
+        settings_payload = set_auto_approve_settings(
+            payload,
+            updated_by=self._get_editor_user_id(request),
+        )
+        return web.json_response(settings_payload)
+
+    # ========== Phase 3: Analytics + Reports ==========
+
+    @staticmethod
+    def _serialize_clip_analytics_record(record) -> dict:
+        return {
+            "clip_db_id": record.clip_db_id,
+            "platform": record.platform,
+            "bucket": record.bucket,
+            "views": record.views,
+            "likes": record.likes,
+            "comments": record.comments,
+            "shares": record.shares,
+            "watch_time_seconds": record.watch_time_seconds,
+            "ctr_percent": record.ctr_percent,
+            "engagement_rate": record.engagement_rate,
+            "provider": record.provider,
+            "synced_at": record.synced_at,
+            "next_pull_at": record.next_pull_at,
+        }
+
+    @staticmethod
+    def _serialize_report_record(record) -> dict:
+        return {
+            "id": record.id,
+            "kind": record.kind,
+            "streamer_login": record.streamer_login,
+            "period_start": record.period_start,
+            "period_end": record.period_end,
+            "content_md": record.content_md,
+            "model": record.model,
+            "created_at": record.created_at,
+        }
+
+    async def api_admin_clip_analytics_get(self, request: web.Request) -> web.Response:
+        self._require_admin(request)
+        clip_db_id = self._normalize_clip_id(request.match_info.get("clip_db_id"))
+        if not clip_db_id:
+            return web.json_response({"error": "invalid_clip_db_id"}, status=400)
+        if not self._load_clip_row(clip_db_id):
+            return web.json_response({"error": "clip_not_found"}, status=404)
+        records = list_clip_analytics(clip_db_id)
+        return web.json_response(
+            {
+                "clip_db_id": clip_db_id,
+                "items": [self._serialize_clip_analytics_record(record) for record in records],
+            }
+        )
+
+    async def api_admin_reports_list(self, request: web.Request) -> web.Response:
+        self._require_admin(request)
+        kind = str(request.query.get("kind") or "").strip().lower() or None
+        if kind and kind not in {"streamer", "cross", "admin"}:
+            return web.json_response({"error": "invalid_kind"}, status=400)
+        streamer = str(request.query.get("streamer") or "").strip().lower() or None
+        try:
+            limit = min(20, max(1, int(request.query.get("limit", "20"))))
+        except (TypeError, ValueError):
+            return web.json_response({"error": "invalid_limit"}, status=400)
+        records = list_reports(kind=kind, streamer_login=streamer, limit=limit)
+        return web.json_response(
+            {"items": [self._serialize_report_record(record) for record in records]}
+        )
+
+    async def api_admin_reports_run(self, request: web.Request) -> web.Response:
+        self._require_admin(request)
+        try:
+            payload = await request.json()
+        except Exception:
+            return web.json_response({"error": "invalid_json"}, status=400)
+        if not isinstance(payload, dict):
+            return web.json_response({"error": "invalid_payload"}, status=400)
+
+        kind = str(payload.get("kind") or "").strip().lower()
+        streamer = str(payload.get("streamer") or "").strip().lower() or None
+        if kind not in {"streamer", "cross"}:
+            return web.json_response({"error": "invalid_kind"}, status=400)
+        if kind == "streamer" and not streamer:
+            return web.json_response({"error": "streamer_required"}, status=400)
+
+        try:
+            if kind == "streamer":
+                report = await self.report_writer.write_streamer_report(
+                    streamer,
+                    force=True,
+                )
+            else:
+                report = await self.report_writer.write_cross_report(force=True)
+        except Exception:
+            log.exception("Ad-hoc social-media report generation failed")
+            return web.json_response({"error": "report_generation_failed"}, status=500)
+
+        return web.json_response(self._serialize_report_record(report))
 
     # ========== Phase 2: Vocab Admin ==========
 

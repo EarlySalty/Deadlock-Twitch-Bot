@@ -1,10 +1,16 @@
 import { withCookieCredentials } from './core';
 import type {
+  AutoApproveSettings,
+  ClipAnalyticsResponse,
+  ClipApprovalRecord,
   ClipEnrichment,
   ClipListResponse,
   ClipStatus,
   LayoutPayload,
   SocialClip,
+  SocialMediaReport,
+  SocialMediaReportKind,
+  SocialPlatform,
   StreamerLayoutResponse,
   UploadResponse,
   VocabEntry,
@@ -122,6 +128,36 @@ export async function fetchClipEnrichment(clipDbId: number): Promise<ClipEnrichm
   return fetchJson<ClipEnrichment>(`${ADMIN_PREFIX}/clips/${clipDbId}/enrichment`);
 }
 
+export async function fetchClipAnalytics(clipDbId: number): Promise<ClipAnalyticsResponse> {
+  return fetchJson<ClipAnalyticsResponse>(`${ADMIN_PREFIX}/analytics/clips/${clipDbId}`);
+}
+
+export interface ReportListParams {
+  streamer?: string;
+  kind?: SocialMediaReportKind;
+  limit?: number;
+}
+
+export async function fetchReports(params: ReportListParams = {}): Promise<{ items: SocialMediaReport[] }> {
+  const qs = buildQuery({
+    streamer: params.streamer,
+    kind: params.kind,
+    limit: params.limit,
+  });
+  return fetchJson<{ items: SocialMediaReport[] }>(`${ADMIN_PREFIX}/reports${qs}`);
+}
+
+export async function runReport(input: {
+  kind: Extract<SocialMediaReportKind, 'streamer' | 'cross'>;
+  streamer?: string;
+}): Promise<SocialMediaReport> {
+  return fetchJson<SocialMediaReport>(`${ADMIN_PREFIX}/reports/run`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(input),
+  });
+}
+
 export interface EnrichmentEditPayload {
   title_youtube?: string | null;
   title_tiktok?: string | null;
@@ -150,6 +186,46 @@ export async function runClipEnrichment(clipDbId: number, force = false): Promis
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ force }),
+  });
+}
+
+export async function fetchClipApproval(
+  clipDbId: number,
+): Promise<{ clip_db_id: number; approval: ClipApprovalRecord | null }> {
+  return fetchJson<{ clip_db_id: number; approval: ClipApprovalRecord | null }>(
+    `${ADMIN_PREFIX}/approval/${clipDbId}`,
+  );
+}
+
+export async function decideClipApproval(input: {
+  clipDbId: number;
+  decision: 'approve' | 'skip' | 'edit';
+  platforms: SocialPlatform[];
+}): Promise<{ clip_db_id: number; approval: ClipApprovalRecord | null; clip: SocialClip | null }> {
+  return fetchJson<{ clip_db_id: number; approval: ClipApprovalRecord | null; clip: SocialClip | null }>(
+    `${ADMIN_PREFIX}/approval/${input.clipDbId}/decision`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        decision: input.decision,
+        platforms: input.platforms,
+      }),
+    },
+  );
+}
+
+export async function fetchAutoApproveSettings(): Promise<AutoApproveSettings> {
+  return fetchJson<AutoApproveSettings>(`${ADMIN_PREFIX}/settings/auto-approve`);
+}
+
+export async function saveAutoApproveSettings(
+  payload: AutoApproveSettings,
+): Promise<AutoApproveSettings> {
+  return fetchJson<AutoApproveSettings>(`${ADMIN_PREFIX}/settings/auto-approve`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
   });
 }
 

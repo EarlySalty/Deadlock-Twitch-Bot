@@ -256,6 +256,51 @@ class TikTokUploader(PlatformUploader):
             self.log.exception("Failed to get video status")
             return {}
 
+    async def fetch_video_analytics(self, video_id: str, bucket: str) -> dict:
+        """Fetch best-effort statistics for a published TikTok clip."""
+        if not self.access_token:
+            raise Exception("Not authenticated")
+
+        async with aiohttp.ClientSession() as session:
+            async with session.post(
+                f"{self.api_base}/video/query/",
+                headers={"Authorization": f"Bearer {self.access_token}"},
+                json={
+                    "filters": {"video_ids": [video_id]},
+                    "fields": [
+                        "id",
+                        "view_count",
+                        "like_count",
+                        "comment_count",
+                        "share_count",
+                    ],
+                },
+            ) as resp:
+                if resp.status != 200:
+                    error = await resp.text()
+                    raise Exception(f"TikTok analytics failed: {error}")
+                payload = await resp.json()
+
+        item = ((payload.get("data") or {}).get("videos") or [{}])[0]
+        views = int(item.get("view_count") or 0)
+        likes = int(item.get("like_count") or 0)
+        comments = int(item.get("comment_count") or 0)
+        shares = int(item.get("share_count") or 0)
+        engagement_rate = None
+        if views > 0:
+            engagement_rate = ((likes + comments + shares) / views) * 100.0
+        return {
+            "bucket": bucket,
+            "provider": "tiktok_open_api_v2",
+            "views": views,
+            "likes": likes,
+            "comments": comments,
+            "shares": shares,
+            "watch_time_seconds": None,
+            "ctr_percent": None,
+            "engagement_rate": engagement_rate,
+        }
+
     def validate_video(self, video_path: str) -> bool:
         """
         Validate video for TikTok (max 60s, 9:16 aspect ratio).

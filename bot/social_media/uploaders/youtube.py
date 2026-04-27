@@ -181,6 +181,38 @@ class YouTubeUploader(PlatformUploader):
             self.log.exception("Failed to get video status")
             return {}
 
+    async def fetch_video_analytics(self, video_id: str, bucket: str) -> dict:
+        """Fetch best-effort statistics for a published Short."""
+        if not self.youtube:
+            raise Exception("Not authenticated")
+
+        try:
+            stats = await asyncio.get_event_loop().run_in_executor(
+                None, self._get_analytics_sync, video_id
+            )
+        except Exception:
+            self.log.exception("Failed to get YouTube analytics")
+            raise
+
+        views = int(stats.get("views") or 0)
+        likes = int(stats.get("likes") or 0)
+        comments = int(stats.get("comments") or 0)
+        shares = int(stats.get("shares") or 0)
+        engagement_rate = None
+        if views > 0:
+            engagement_rate = ((likes + comments + shares) / views) * 100.0
+        return {
+            "bucket": bucket,
+            "provider": "youtube_data_api_v3",
+            "views": views,
+            "likes": likes,
+            "comments": comments,
+            "shares": shares,
+            "watch_time_seconds": None,
+            "ctr_percent": None,
+            "engagement_rate": engagement_rate,
+        }
+
     def _get_status_sync(self, video_id: str) -> dict:
         """Synchronous status fetch (runs in executor)."""
         request = self.youtube.videos().list(
@@ -194,6 +226,22 @@ class YouTubeUploader(PlatformUploader):
             return {
                 "status": item["status"]["uploadStatus"],
                 "processing_status": item.get("processingDetails", {}).get("processingStatus"),
+            }
+        return {}
+
+    def _get_analytics_sync(self, video_id: str) -> dict:
+        request = self.youtube.videos().list(
+            part="statistics",
+            id=video_id,
+        )
+        response = request.execute()
+        if response.get("items"):
+            stats = response["items"][0].get("statistics", {})
+            return {
+                "views": stats.get("viewCount"),
+                "likes": stats.get("likeCount"),
+                "comments": stats.get("commentCount"),
+                "shares": stats.get("shareCount"),
             }
         return {}
 

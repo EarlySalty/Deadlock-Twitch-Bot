@@ -200,6 +200,55 @@ class InstagramUploader(PlatformUploader):
             self.log.exception("Failed to get video status")
             return {}
 
+    async def fetch_video_analytics(self, media_id: str, bucket: str) -> dict:
+        """Fetch best-effort statistics for a published Reel."""
+        async with aiohttp.ClientSession() as session:
+            async with session.get(
+                f"{self.api_base}/{media_id}",
+                params={
+                    "access_token": self.access_token,
+                    "fields": "like_count,comments_count,video_view_count",
+                },
+            ) as resp:
+                if resp.status != 200:
+                    error = await resp.text()
+                    raise Exception(f"Instagram analytics failed: {error}")
+                media_payload = await resp.json()
+
+            insights_payload = {}
+            async with session.get(
+                f"{self.api_base}/{media_id}/insights",
+                params={
+                    "access_token": self.access_token,
+                    "metric": "saved,shares,total_interactions",
+                },
+            ) as resp:
+                if resp.status == 200:
+                    insights_payload = await resp.json()
+
+        insight_map = {
+            str(item.get("name")): item.get("values", [{}])[0].get("value")
+            for item in (insights_payload.get("data") or [])
+        }
+        views = int(media_payload.get("video_view_count") or 0)
+        likes = int(media_payload.get("like_count") or 0)
+        comments = int(media_payload.get("comments_count") or 0)
+        shares = int(insight_map.get("shares") or 0)
+        engagement_rate = None
+        if views > 0:
+            engagement_rate = ((likes + comments + shares) / views) * 100.0
+        return {
+            "bucket": bucket,
+            "provider": "instagram_graph_api_v21",
+            "views": views,
+            "likes": likes,
+            "comments": comments,
+            "shares": shares,
+            "watch_time_seconds": None,
+            "ctr_percent": None,
+            "engagement_rate": engagement_rate,
+        }
+
     def validate_video(self, video_path: str) -> bool:
         """
         Validate for Instagram Reels (max 90s, 9:16).

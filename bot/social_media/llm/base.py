@@ -57,10 +57,30 @@ class LLMResponse:
     raw_payload: dict[str, Any] | None = None
 
 
+@dataclass(frozen=True)
+class LLMTextResponse:
+    content: str
+    provider: str
+    model: str
+    cost_usd_estimate: float | None = None
+    raw_payload: dict[str, Any] | None = None
+
+
 class LLMProvider(Protocol):
     name: str
     model: str
 
     async def generate(self, request: LLMRequest) -> LLMResponse:
         """Run the LLM and return platform-specific enrichment."""
+        ...
+
+    async def generate_text(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        *,
+        max_tokens: int = 1200,
+        temperature: float = 0.2,
+    ) -> LLMTextResponse:
+        """Run the LLM and return free-form text."""
         ...

@@ -13,7 +13,13 @@ import os
 from typing import Any
 
 from ._parsing import parse_llm_payload
-from .base import LLMProviderError, LLMProviderUnavailable, LLMRequest, LLMResponse
+from .base import (
+    LLMProviderError,
+    LLMProviderUnavailable,
+    LLMRequest,
+    LLMResponse,
+    LLMTextResponse,
+)
 from .prompts import SYSTEM_PROMPT, render_user_prompt
 
 log = logging.getLogger("TwitchStreams.SocialMedia.LLM.MiniMax")
@@ -52,18 +58,41 @@ class MiniMaxProvider:
 
     async def generate(self, request: LLMRequest) -> LLMResponse:
         prompt = render_user_prompt(request)
+        text_response = await self.generate_text(
+            SYSTEM_PROMPT,
+            prompt,
+            max_tokens=600,
+            temperature=self.temperature,
+        )
+        return parse_llm_payload(
+            text_response.content,
+            provider=self.name,
+            model=self.model,
+            cost_usd_estimate=text_response.cost_usd_estimate,
+        )
+
+    async def generate_text(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        *,
+        max_tokens: int = 1200,
+        temperature: float = 0.2,
+    ) -> LLMTextResponse:
+        request_kwargs: dict[str, Any] = {
+            "model": self.model,
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+            "temperature": temperature,
+            "max_tokens": max_tokens,
+        }
+        if "strict json" in system_prompt.lower():
+            request_kwargs["response_format"] = {"type": "json_object"}
         try:
             response: Any = await asyncio.wait_for(
-                self._client.chat.completions.create(
-                    model=self.model,
-                    messages=[
-                        {"role": "system", "content": SYSTEM_PROMPT},
-                        {"role": "user", "content": prompt},
-                    ],
-                    temperature=self.temperature,
-                    response_format={"type": "json_object"},
-                    max_tokens=600,
-                ),
+                self._client.chat.completions.create(**request_kwargs),
                 timeout=GENERATE_TIMEOUT_SECONDS,
             )
         except asyncio.TimeoutError as exc:
@@ -85,10 +114,10 @@ class MiniMaxProvider:
             (prompt_tokens / 1000.0) * _INPUT_USD_PER_1K
             + (completion_tokens / 1000.0) * _OUTPUT_USD_PER_1K
         )
-
-        return parse_llm_payload(
-            text,
+        return LLMTextResponse(
+            content=text,
             provider=self.name,
             model=self.model,
             cost_usd_estimate=round(cost_estimate, 6),
+            raw_payload={"usage": {"prompt_tokens": prompt_tokens, "completion_tokens": completion_tokens}},
         )

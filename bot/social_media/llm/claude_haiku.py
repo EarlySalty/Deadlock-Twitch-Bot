@@ -12,7 +12,13 @@ import os
 from typing import Any
 
 from ._parsing import parse_llm_payload
-from .base import LLMProviderError, LLMProviderUnavailable, LLMRequest, LLMResponse
+from .base import (
+    LLMProviderError,
+    LLMProviderUnavailable,
+    LLMRequest,
+    LLMResponse,
+    LLMTextResponse,
+)
 from .prompts import SYSTEM_PROMPT, render_user_prompt
 
 log = logging.getLogger("TwitchStreams.SocialMedia.LLM.Claude")
@@ -47,14 +53,35 @@ class ClaudeHaikuProvider:
 
     async def generate(self, request: LLMRequest) -> LLMResponse:
         prompt = render_user_prompt(request)
+        text_response = await self.generate_text(
+            SYSTEM_PROMPT,
+            prompt,
+            max_tokens=600,
+            temperature=self.temperature,
+        )
+        return parse_llm_payload(
+            text_response.content,
+            provider=self.name,
+            model=self.model,
+            cost_usd_estimate=text_response.cost_usd_estimate,
+        )
+
+    async def generate_text(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        *,
+        max_tokens: int = 1200,
+        temperature: float = 0.2,
+    ) -> LLMTextResponse:
         try:
             response: Any = await asyncio.wait_for(
                 self._client.messages.create(
                     model=self.model,
-                    max_tokens=600,
-                    temperature=self.temperature,
-                    system=SYSTEM_PROMPT,
-                    messages=[{"role": "user", "content": prompt}],
+                    max_tokens=max_tokens,
+                    temperature=temperature,
+                    system=system_prompt,
+                    messages=[{"role": "user", "content": user_prompt}],
                 ),
                 timeout=GENERATE_TIMEOUT_SECONDS,
             )
@@ -76,10 +103,10 @@ class ClaudeHaikuProvider:
             (prompt_tokens / 1000.0) * _INPUT_USD_PER_1K
             + (completion_tokens / 1000.0) * _OUTPUT_USD_PER_1K
         )
-
-        return parse_llm_payload(
-            text,
+        return LLMTextResponse(
+            content=text,
             provider=self.name,
             model=self.model,
             cost_usd_estimate=round(cost_estimate, 6),
+            raw_payload={"usage": {"input_tokens": prompt_tokens, "output_tokens": completion_tokens}},
         )

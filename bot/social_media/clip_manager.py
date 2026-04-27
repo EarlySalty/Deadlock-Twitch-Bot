@@ -508,7 +508,8 @@ class ClipManager:
                     )
 
                 query = """
-                    SELECT q.*, c.clip_id, c.clip_url, c.clip_title, c.streamer_login,
+                    SELECT q.*, q.clip_id AS clip_db_id, c.clip_id AS twitch_clip_id,
+                           c.clip_url, c.clip_title, c.streamer_login,
                            c.local_file_path, c.converted_file_path
                       FROM twitch_clips_upload_queue q
                       JOIN twitch_clips_social_media c ON c.id = q.clip_id

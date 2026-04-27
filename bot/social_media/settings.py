@@ -17,6 +17,9 @@ from ..storage import readonly_connection, transaction
 log = logging.getLogger("TwitchStreams.SocialMedia.Settings")
 
 KEY_EXTERNAL_LLM_CONSENT = "external_llm_consent"
+KEY_AUTO_APPROVE_YOUTUBE = "auto_approve_youtube"
+KEY_AUTO_APPROVE_TIKTOK = "auto_approve_tiktok"
+KEY_AUTO_APPROVE_INSTAGRAM = "auto_approve_instagram"
 
 
 def _decode_json(raw: Any) -> Any:
@@ -79,6 +82,10 @@ def set_setting(key: str, value: Any, *, updated_by: str | None = None) -> None:
 def external_llm_consent() -> bool:
     """True wenn der Admin explizit `external_llm_consent=true` gesetzt hat."""
     value = get_setting(KEY_EXTERNAL_LLM_CONSENT, default=False)
+    return _coerce_bool(value)
+
+
+def _coerce_bool(value: Any) -> bool:
     if isinstance(value, bool):
         return value
     if isinstance(value, str):
@@ -86,3 +93,27 @@ def external_llm_consent() -> bool:
     if isinstance(value, (int, float)):
         return bool(value)
     return False
+
+
+def get_auto_approve_settings() -> dict[str, bool]:
+    return {
+        "youtube": _coerce_bool(get_setting(KEY_AUTO_APPROVE_YOUTUBE, default=False)),
+        "tiktok": _coerce_bool(get_setting(KEY_AUTO_APPROVE_TIKTOK, default=False)),
+        "instagram": _coerce_bool(get_setting(KEY_AUTO_APPROVE_INSTAGRAM, default=False)),
+    }
+
+
+def set_auto_approve_settings(
+    values: dict[str, Any],
+    *,
+    updated_by: str | None = None,
+) -> dict[str, bool]:
+    normalized = {
+        "youtube": _coerce_bool(values.get("youtube", False)),
+        "tiktok": _coerce_bool(values.get("tiktok", False)),
+        "instagram": _coerce_bool(values.get("instagram", False)),
+    }
+    set_setting(KEY_AUTO_APPROVE_YOUTUBE, normalized["youtube"], updated_by=updated_by)
+    set_setting(KEY_AUTO_APPROVE_TIKTOK, normalized["tiktok"], updated_by=updated_by)
+    set_setting(KEY_AUTO_APPROVE_INSTAGRAM, normalized["instagram"], updated_by=updated_by)
+    return normalized

@@ -183,8 +183,11 @@ class BotRuntimeBootstrap:
         services.clip_manager = None
         services.clip_fetcher = None
         services.upload_worker = None
+        services.social_media_approval_worker = None
         services.social_media_retention_worker = None
         services.social_media_enrichment_worker = None
+        services.social_media_insights_worker = None
+        services.social_media_report_dispatcher = None
         services.reload_manager = None
 
     def wire_runtime_dependencies(self) -> None:
@@ -412,11 +415,17 @@ class BotRuntimeBootstrap:
             services.clip_manager is not None
             and services.clip_fetcher is not None
             and services.upload_worker is not None
+            and services.social_media_approval_worker is not None
             and services.social_media_retention_worker is not None
             and services.social_media_enrichment_worker is not None
+            and services.social_media_insights_worker is not None
+            and services.social_media_report_dispatcher is not None
         ):
             return
 
+        from .social_media.analytics.insights_worker import SocialMediaInsightsWorker
+        from .social_media.analytics.report_dispatcher import SocialMediaReportDispatcher
+        from .social_media.approval_worker import SocialMediaApprovalWorker
         from .social_media.clip_fetcher import ClipFetcher
         from .social_media.clip_manager import ClipManager
         from .social_media.enrichment_worker import SocialMediaEnrichmentWorker
@@ -429,12 +438,23 @@ class BotRuntimeBootstrap:
             services.clip_fetcher = ClipFetcher(cog.bot, services.api, services.clip_manager)
         if services.upload_worker is None:
             services.upload_worker = UploadWorker(cog.bot, services.clip_manager)
+        if services.social_media_approval_worker is None:
+            services.social_media_approval_worker = SocialMediaApprovalWorker(
+                cog.bot,
+                services.clip_manager,
+            )
         if services.social_media_retention_worker is None:
             services.social_media_retention_worker = SocialMediaRetentionWorker(cog.bot)
         if services.social_media_enrichment_worker is None:
             services.social_media_enrichment_worker = SocialMediaEnrichmentWorker(cog.bot)
+        if services.social_media_insights_worker is None:
+            services.social_media_insights_worker = SocialMediaInsightsWorker(cog.bot)
+        if services.social_media_report_dispatcher is None:
+            services.social_media_report_dispatcher = SocialMediaReportDispatcher(cog.bot)
         log.info(
-            "Social Media Clip Management initialized (ClipManager + ClipFetcher + UploadWorker + RetentionWorker + EnrichmentWorker)"
+            "Social Media Clip Management initialized "
+            "(ClipManager + ClipFetcher + UploadWorker + ApprovalWorker + "
+            "RetentionWorker + EnrichmentWorker + InsightsWorker + ReportDispatcher)"
         )
 
     def _stop_social_media_workers(self) -> None:
@@ -459,6 +479,15 @@ class BotRuntimeBootstrap:
             finally:
                 services.upload_worker = None
 
+        if services.social_media_approval_worker:
+            try:
+                services.social_media_approval_worker.cog_unload()
+                log.debug("SocialMediaApprovalWorker gecancelt")
+            except Exception:
+                log.exception("Konnte SocialMediaApprovalWorker nicht canceln")
+            finally:
+                services.social_media_approval_worker = None
+
         if services.social_media_retention_worker:
             try:
                 services.social_media_retention_worker.cog_unload()
@@ -476,6 +505,24 @@ class BotRuntimeBootstrap:
                 log.exception("Konnte SocialMediaEnrichmentWorker nicht canceln")
             finally:
                 services.social_media_enrichment_worker = None
+
+        if services.social_media_insights_worker:
+            try:
+                services.social_media_insights_worker.cog_unload()
+                log.debug("SocialMediaInsightsWorker gecancelt")
+            except Exception:
+                log.exception("Konnte SocialMediaInsightsWorker nicht canceln")
+            finally:
+                services.social_media_insights_worker = None
+
+        if services.social_media_report_dispatcher:
+            try:
+                services.social_media_report_dispatcher.cog_unload()
+                log.debug("SocialMediaReportDispatcher gecancelt")
+            except Exception:
+                log.exception("Konnte SocialMediaReportDispatcher nicht canceln")
+            finally:
+                services.social_media_report_dispatcher = None
 
         services.clip_manager = None
 
@@ -519,6 +566,10 @@ class BotRuntimeBootstrap:
                     "bot.social_media.upload_worker",
                     "bot.social_media.retention_worker",
                     "bot.social_media.enrichment_worker",
+                    "bot.social_media.analytics",
+                    "bot.social_media.analytics.insights_worker",
+                    "bot.social_media.analytics.report_writer",
+                    "bot.social_media.analytics.report_dispatcher",
                     "bot.social_media.enrichment",
                     "bot.social_media.transcription",
                     "bot.social_media.transcription.vocab",

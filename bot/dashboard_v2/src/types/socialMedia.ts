@@ -39,6 +39,8 @@ export type ClipStatus =
   | 'enriched'
   | 'awaiting_approval'
   | 'approved'
+  | 'editing'
+  | 'skipped'
   | 'publishing'
   | 'published_partial'
   | 'published_all'
@@ -72,6 +74,7 @@ export interface SocialClip {
   effective_layout: LayoutPayload;
   enrichment_status?: EnrichmentStatus | null;
   enrichment_summary?: { top_hashtags?: string[]; provider?: string | null } | null;
+  approval?: ClipApprovalRecord | null;
 }
 
 export type EnrichmentStatus =
@@ -84,6 +87,26 @@ export type EnrichmentStatus =
   | 'skipped_no_key';
 
 export type SocialPlatform = 'youtube' | 'tiktok' | 'instagram';
+export type AnalyticsBucket = '24h' | '7d' | '30d';
+export type SocialMediaReportKind = 'streamer' | 'cross' | 'admin';
+export type ApprovalState = 'awaiting_approval' | 'approved' | 'skipped' | 'editing';
+
+export interface ClipApprovalRecord {
+  clip_db_id: number;
+  state: ApprovalState;
+  approved_platforms: SocialPlatform[];
+  approver_user_id: string | null;
+  decided_at: string | null;
+  dm_message_id: string | null;
+  dm_channel_id: string | null;
+  last_sent_at: string | null;
+}
+
+export interface AutoApproveSettings {
+  youtube: boolean;
+  tiktok: boolean;
+  instagram: boolean;
+}
 
 export interface ClipEnrichment {
   clip_db_id: number;
@@ -140,6 +163,42 @@ export interface UploadResponse {
   clip_db_id: number;
   clip_id: string;
   retention_until: string;
+}
+
+export interface ClipAnalytics {
+  clip_db_id: number;
+  platform: SocialPlatform;
+  bucket: AnalyticsBucket;
+  views: number;
+  likes: number;
+  comments: number;
+  shares: number;
+  watch_time_seconds: number | null;
+  ctr_percent: number | null;
+  engagement_rate: number | null;
+  provider: string | null;
+  synced_at: string | null;
+  next_pull_at: string | null;
+}
+
+export interface ClipAnalyticsResponse {
+  clip_db_id: number;
+  items: ClipAnalytics[];
+}
+
+export interface SocialMediaReport {
+  id: number;
+  kind: SocialMediaReportKind;
+  streamer_login: string | null;
+  period_start: string;
+  period_end: string;
+  content_md: string;
+  model: string | null;
+  created_at: string | null;
+}
+
+export interface SocialMediaReportListResponse {
+  items: SocialMediaReport[];
 }
 
 export const DEFAULT_SOURCE_WIDTH = 1920;

@@ -22,6 +22,7 @@ from datetime import UTC, datetime
 from typing import Any, Iterable
 
 from ..storage import readonly_connection, transaction
+from .approval import mark_clip_awaiting_approval
 from .llm import (
     LLMDispatcher,
     LLMRequest,
@@ -621,6 +622,14 @@ class ClipEnrichmentPipeline:
             error_message=None,
             completed_at=_utcnow_iso(),
         )
+        try:
+            mark_clip_awaiting_approval(clip_db_id)
+        except Exception:
+            log.warning(
+                "Could not transition clip %s into approval state; continuing with enrichment result",
+                clip_db_id,
+                exc_info=True,
+            )
         return EnrichmentOutcome(
             clip_db_id=clip_db_id,
             status=STATUS_DONE,

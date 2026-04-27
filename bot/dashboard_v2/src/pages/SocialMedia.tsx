@@ -1,10 +1,12 @@
-import { useMemo, useState, type DragEvent, useRef } from 'react';
+import { useEffect, useMemo, useRef, useState, type DragEvent } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { motion } from 'framer-motion';
 import {
   AlertCircle,
+  BarChart3,
   CheckCircle2,
   Clock,
+  Cog,
   Film,
   HardDrive,
   Loader2,
@@ -19,22 +21,28 @@ import {
   Wand2,
 } from 'lucide-react';
 import { KpiCard } from '@/components/cards/KpiCard';
+import { AnalyticsTab } from '@/components/socialmedia/AnalyticsTab';
 import { LayoutEditor } from '@/components/socialmedia/LayoutEditor';
 import { EnrichmentPanel } from '@/components/socialmedia/EnrichmentPanel';
 import {
+  decideClipApproval,
   SocialMediaForbiddenError,
   discardClip,
+  fetchAutoApproveSettings,
   fetchClips,
   fetchStreamerLayout,
   saveStreamerLayout,
+  saveAutoApproveSettings,
   setClipLayoutOverride,
   uploadClip,
 } from '@/api/socialMedia';
 import {
+  type AutoApproveSettings,
   DEFAULT_LAYOUT,
   type ClipStatus,
   type LayoutPayload,
   type SocialClip,
+  type SocialPlatform,
   type StreamerLayoutResponse,
 } from '@/types/socialMedia';
 
@@ -47,6 +55,8 @@ const STATUS_LABELS: Record<ClipStatus, { label: string; tone: 'orange' | 'teal'
   enriched: { label: 'Aufbereitet', tone: 'teal' },
   awaiting_approval: { label: 'Freigabe', tone: 'orange' },
   approved: { label: 'Freigegeben', tone: 'success' },
+  editing: { label: 'Bearbeitung', tone: 'warning' },
+  skipped: { label: 'Skipped', tone: 'muted' },
   publishing: { label: 'Wird gepostet', tone: 'orange' },
   published_partial: { label: 'Teilveröffentlicht', tone: 'warning' },
   published_all: { label: 'Veröffentlicht', tone: 'success' },
@@ -76,11 +86,13 @@ function formatRetention(retentionUntil: string | null): string {
 }
 
 type EditMode = 'layout' | 'enrichment';
+type SocialMediaView = 'pipeline' | 'analytics';
 
 export function SocialMedia({ streamer }: SocialMediaProps) {
   const queryClient = useQueryClient();
   const [statusFilter, setStatusFilter] = useState<ClipStatus | 'all'>('pending');
   const [editingClip, setEditingClip] = useState<{ id: number; mode: EditMode } | null>(null);
+  const [activeView, setActiveView] = useState<SocialMediaView>('pipeline');
 
   const layoutQuery = useQuery<StreamerLayoutResponse, Error>({
     queryKey: ['social-media', 'streamer-layout', streamer],
@@ -108,9 +120,20 @@ export function SocialMedia({ streamer }: SocialMediaProps) {
     },
   });
 
+  const autoApproveQuery = useQuery<AutoApproveSettings, Error>({
+    queryKey: ['social-media', 'auto-approve-settings'],
+    queryFn: () => fetchAutoApproveSettings(),
+    enabled: !!streamer,
+    retry: (failureCount, err) => {
+      if (err instanceof SocialMediaForbiddenError) return false;
+      return failureCount < 2;
+    },
+  });
+
   const isForbidden =
     layoutQuery.error instanceof SocialMediaForbiddenError ||
-    clipsQuery.error instanceof SocialMediaForbiddenError;
+    clipsQuery.error instanceof SocialMediaForbiddenError ||
+    autoApproveQuery.error instanceof SocialMediaForbiddenError;
 
   // Construct a normalized LayoutPayload (with cam_enabled + mode) from the API response.
   // Backend sometimes returns layout without those fields nested — copy from response level.
@@ -153,6 +176,31 @@ export function SocialMedia({ streamer }: SocialMediaProps) {
       setClipLayoutOverride(clipDbId, layout),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['social-media', 'clips'] });
+    },
+  });
+
+  const autoApproveMutation = useMutation({
+    mutationFn: (payload: AutoApproveSettings) => saveAutoApproveSettings(payload),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['social-media', 'auto-approve-settings'] });
+    },
+  });
+
+  const approvalMutation = useMutation({
+    mutationFn: ({
+      clipDbId,
+      decision,
+      platforms,
+    }: {
+      clipDbId: number;
+      decision: 'approve' | 'skip' | 'edit';
+      platforms: SocialPlatform[];
+    }) => decideClipApproval({ clipDbId, decision, platforms }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['social-media', 'clips'] });
+    },
+    onError: (error) => {
+      window.alert((error as Error).message);
     },
   });
 
@@ -211,125 +259,174 @@ export function SocialMedia({ streamer }: SocialMediaProps) {
     <div className="space-y-6">
       <SocialHero streamer={streamer} isDefaultLayout={layoutQuery.data?.is_default ?? false} />
 
-      {/* KPI Row */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-        <KpiCard
-          title="Clips in Pipeline"
-          value={stats.total}
-          icon={Film}
-          color="purple"
-          subValue={statusFilter === 'all' ? 'alle Stati' : STATUS_LABELS[statusFilter]?.label}
-        />
-        <KpiCard
-          title="Heute veröffentlicht"
-          value={stats.publishedToday}
-          icon={CheckCircle2}
-          color="green"
-          subValue="über alle Plattformen"
-        />
-        <KpiCard
-          title="Manuelle Uploads"
-          value={stats.manualUploads}
-          icon={HardDrive}
-          color="yellow"
-          subValue="MP4-Drops aus dem Editor"
-        />
-        <KpiCard
-          title="Nächste Retention"
-          value={formatRetention(stats.nextRetention)}
-          icon={Clock}
-          color="blue"
-          subValue="14-Tage-Lifecycle"
-        />
+      <div className="inline-flex flex-wrap rounded-2xl border border-border bg-bg/60 p-1.5 gap-1.5">
+        {[
+          { id: 'pipeline' as const, label: 'Pipeline', Icon: Layers3 },
+          { id: 'analytics' as const, label: 'Analytics', Icon: BarChart3 },
+        ].map(({ id, label, Icon }) => {
+          const active = activeView === id;
+          return (
+            <button
+              key={id}
+              type="button"
+              onClick={() => setActiveView(id)}
+              className={`inline-flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-semibold transition ${
+                active
+                  ? 'bg-gradient-to-r from-orange/85 to-teal/70 text-white shadow-[0_6px_24px_-10px_rgba(255,122,24,0.45)]'
+                  : 'text-text-secondary hover:text-white'
+              }`}
+            >
+              <Icon className="w-4 h-4" />
+              {label}
+            </button>
+          );
+        })}
       </div>
 
-      {/* Editor + Upload */}
-      <div className="grid grid-cols-1 xl:grid-cols-[minmax(0,1fr)_360px] gap-6">
-        <div className="space-y-4">
-          {layoutQuery.isLoading ? (
-            <div className="panel-card rounded-2xl p-12 flex items-center justify-center">
-              <Loader2 className="w-6 h-6 text-orange animate-spin" />
-            </div>
-          ) : (
-            <LayoutEditor
-              initialLayout={layoutForEditor}
-              isSaving={saveLayoutMutation.isPending}
-              onSave={(layout) => saveLayoutMutation.mutate(layout)}
-              saveLabel={`Default für ${streamer} speichern`}
+      {activeView === 'analytics' ? (
+        <AnalyticsTab streamer={streamer} clips={clipsQuery.data?.items ?? []} />
+      ) : (
+        <>
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+            <KpiCard
+              title="Clips in Pipeline"
+              value={stats.total}
+              icon={Film}
+              color="purple"
+              subValue={statusFilter === 'all' ? 'alle Stati' : STATUS_LABELS[statusFilter]?.label}
             />
-          )}
-          {saveLayoutMutation.isError && (
-            <div className="text-xs text-danger px-3">
-              Speichern fehlgeschlagen: {(saveLayoutMutation.error as Error).message}
-            </div>
-          )}
-          {saveLayoutMutation.isSuccess && (
-            <div className="text-xs text-success px-3">Layout gespeichert.</div>
-          )}
-        </div>
-
-        <UploadCard
-          streamer={streamer}
-          onUpload={(file) => uploadMutation.mutate(file)}
-          isUploading={uploadMutation.isPending}
-          uploadError={uploadMutation.error as Error | null}
-          uploadSuccess={uploadMutation.isSuccess}
-        />
-      </div>
-
-      {/* Clip list */}
-      <div className="space-y-4">
-        <div className="flex flex-wrap items-center gap-3">
-          <h3 className="text-lg font-bold text-white inline-flex items-center gap-2">
-            <Layers3 className="w-5 h-5 text-orange" /> Pipeline
-          </h3>
-          <StatusFilter value={statusFilter} onChange={setStatusFilter} />
-          <div className="ml-auto text-xs text-text-secondary">
-            {clipsQuery.isFetching ? 'Aktualisiere…' : `${clipsQuery.data?.items.length ?? 0} Treffer`}
+            <KpiCard
+              title="Heute veröffentlicht"
+              value={stats.publishedToday}
+              icon={CheckCircle2}
+              color="green"
+              subValue="über alle Plattformen"
+            />
+            <KpiCard
+              title="Manuelle Uploads"
+              value={stats.manualUploads}
+              icon={HardDrive}
+              color="yellow"
+              subValue="MP4-Drops aus dem Editor"
+            />
+            <KpiCard
+              title="Nächste Retention"
+              value={formatRetention(stats.nextRetention)}
+              icon={Clock}
+              color="blue"
+              subValue="14-Tage-Lifecycle"
+            />
           </div>
-        </div>
 
-        {clipsQuery.isLoading ? (
-          <div className="panel-card rounded-2xl p-12 flex items-center justify-center">
-            <Loader2 className="w-6 h-6 text-orange animate-spin" />
-          </div>
-        ) : (clipsQuery.data?.items ?? []).length === 0 ? (
-          <div className="panel-card rounded-2xl p-12 text-center">
-            <AlertCircle className="w-10 h-10 text-text-secondary mx-auto mb-3" />
-            <p className="text-white font-bold mb-1">Keine Clips für diesen Filter</p>
-            <p className="text-sm text-text-secondary">
-              Sobald neue Twitch-Clips eingehen oder du eine MP4 hochlädst, erscheinen sie hier.
-            </p>
-          </div>
-        ) : (
-          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
-            {(clipsQuery.data?.items ?? []).map((clip) => {
-              const editingMode =
-                editingClip && editingClip.id === clip.clip_db_id ? editingClip.mode : null;
-              return (
-                <ClipCard
-                  key={clip.clip_db_id}
-                  clip={clip}
-                  editingMode={editingMode}
-                  onOpenEditor={(mode) => setEditingClip({ id: clip.clip_db_id, mode })}
-                  onCloseEditor={() => setEditingClip(null)}
-                  onDiscard={() => {
-                    if (window.confirm(`Clip "${clip.title}" verwerfen?`)) {
-                      discardMutation.mutate(clip.clip_db_id);
-                    }
-                  }}
-                  onSaveOverride={(layout) => {
-                    overrideMutation.mutate({ clipDbId: clip.clip_db_id, layout });
-                  }}
-                  onResetOverride={() => {
-                    overrideMutation.mutate({ clipDbId: clip.clip_db_id, layout: null });
-                  }}
+          <AutoApproveCard
+            settings={autoApproveQuery.data ?? { youtube: false, tiktok: false, instagram: false }}
+            isLoading={autoApproveQuery.isLoading}
+            isSaving={autoApproveMutation.isPending}
+            error={autoApproveMutation.error as Error | null}
+            onChange={(nextSettings) => autoApproveMutation.mutate(nextSettings)}
+          />
+
+          <div className="grid grid-cols-1 xl:grid-cols-[minmax(0,1fr)_360px] gap-6">
+            <div className="space-y-4">
+              {layoutQuery.isLoading ? (
+                <div className="panel-card rounded-2xl p-12 flex items-center justify-center">
+                  <Loader2 className="w-6 h-6 text-orange animate-spin" />
+                </div>
+              ) : (
+                <LayoutEditor
+                  initialLayout={layoutForEditor}
+                  isSaving={saveLayoutMutation.isPending}
+                  onSave={(layout) => saveLayoutMutation.mutate(layout)}
+                  saveLabel={`Default für ${streamer} speichern`}
                 />
-              );
-            })}
+              )}
+              {saveLayoutMutation.isError && (
+                <div className="text-xs text-danger px-3">
+                  Speichern fehlgeschlagen: {(saveLayoutMutation.error as Error).message}
+                </div>
+              )}
+              {saveLayoutMutation.isSuccess && (
+                <div className="text-xs text-success px-3">Layout gespeichert.</div>
+              )}
+            </div>
+
+            <UploadCard
+              streamer={streamer}
+              onUpload={(file) => uploadMutation.mutate(file)}
+              isUploading={uploadMutation.isPending}
+              uploadError={uploadMutation.error as Error | null}
+              uploadSuccess={uploadMutation.isSuccess}
+            />
           </div>
-        )}
-      </div>
+
+          <div className="space-y-4">
+            <div className="flex flex-wrap items-center gap-3">
+              <h3 className="text-lg font-bold text-white inline-flex items-center gap-2">
+                <Layers3 className="w-5 h-5 text-orange" /> Pipeline
+              </h3>
+              <StatusFilter value={statusFilter} onChange={setStatusFilter} />
+              <div className="ml-auto text-xs text-text-secondary">
+                {clipsQuery.isFetching ? 'Aktualisiere…' : `${clipsQuery.data?.items.length ?? 0} Treffer`}
+              </div>
+            </div>
+
+            {clipsQuery.isLoading ? (
+              <div className="panel-card rounded-2xl p-12 flex items-center justify-center">
+                <Loader2 className="w-6 h-6 text-orange animate-spin" />
+              </div>
+            ) : (clipsQuery.data?.items ?? []).length === 0 ? (
+              <div className="panel-card rounded-2xl p-12 text-center">
+                <AlertCircle className="w-10 h-10 text-text-secondary mx-auto mb-3" />
+                <p className="text-white font-bold mb-1">Keine Clips für diesen Filter</p>
+                <p className="text-sm text-text-secondary">
+                  Sobald neue Twitch-Clips eingehen oder du eine MP4 hochlädst, erscheinen sie hier.
+                </p>
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+                {(clipsQuery.data?.items ?? []).map((clip) => {
+                  const editingMode =
+                    editingClip && editingClip.id === clip.clip_db_id ? editingClip.mode : null;
+                  return (
+                    <ClipCard
+                      key={clip.clip_db_id}
+                      clip={clip}
+                      editingMode={editingMode}
+                      onOpenEditor={(mode) => setEditingClip({ id: clip.clip_db_id, mode })}
+                      onCloseEditor={() => setEditingClip(null)}
+                      onDiscard={() => {
+                        if (window.confirm(`Clip "${clip.title}" verwerfen?`)) {
+                          discardMutation.mutate(clip.clip_db_id);
+                        }
+                      }}
+                      onSaveOverride={(layout) => {
+                        overrideMutation.mutate({ clipDbId: clip.clip_db_id, layout });
+                      }}
+                      onResetOverride={() => {
+                        overrideMutation.mutate({ clipDbId: clip.clip_db_id, layout: null });
+                      }}
+                      onApprovalDecision={(decision, platforms) => {
+                        approvalMutation.mutate({
+                          clipDbId: clip.clip_db_id,
+                          decision,
+                          platforms,
+                        });
+                        if (decision === 'edit') {
+                          setEditingClip({ id: clip.clip_db_id, mode: 'enrichment' });
+                        }
+                      }}
+                      approvalPending={
+                        approvalMutation.isPending &&
+                        approvalMutation.variables?.clipDbId === clip.clip_db_id
+                      }
+                    />
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        </>
+      )}
     </div>
   );
 }
@@ -365,7 +462,7 @@ function SocialHero({ streamer, isDefaultLayout }: { streamer: string; isDefault
             {isDefaultLayout ? 'Layout: Repo-Default aktiv' : 'Layout: Streamer-Default'}
           </HeroBadge>
           <HeroBadge tone="teal" icon={Calendar}>
-            Phase 2 (Whisper / LLM-Hashtags) folgt
+            Phase 3 · Analytics + LLM-Reports
           </HeroBadge>
         </div>
       </div>
@@ -528,6 +625,65 @@ function UploadCard({ streamer, onUpload, isUploading, uploadError, uploadSucces
   );
 }
 
+function AutoApproveCard({
+  settings,
+  isLoading,
+  isSaving,
+  error,
+  onChange,
+}: {
+  settings: AutoApproveSettings;
+  isLoading: boolean;
+  isSaving: boolean;
+  error: Error | null;
+  onChange: (next: AutoApproveSettings) => void;
+}) {
+  const updateSetting = (platform: keyof AutoApproveSettings, checked: boolean) => {
+    onChange({
+      ...settings,
+      [platform]: checked,
+    });
+  };
+
+  return (
+    <div className="panel-card rounded-2xl p-5 space-y-4">
+      <div className="flex items-center gap-2">
+        <Cog className="w-4 h-4 text-orange" />
+        <h3 className="text-sm font-bold text-white uppercase tracking-[0.14em]">
+          Auto-Approve
+        </h3>
+        {isSaving && <Loader2 className="w-4 h-4 text-orange animate-spin ml-auto" />}
+      </div>
+      <p className="text-sm text-text-secondary">
+        Plattformen mit aktivem Toggle werden nach einer Freigabe automatisch mit in die Queue
+        gelegt, auch wenn im Approval-DM kein Häkchen gesetzt wurde.
+      </p>
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+        {([
+          ['youtube', 'YouTube Shorts'],
+          ['tiktok', 'TikTok'],
+          ['instagram', 'Instagram Reels'],
+        ] as const).map(([platform, label]) => (
+          <label
+            key={platform}
+            className="rounded-xl border border-border bg-bg/40 px-4 py-3 flex items-center justify-between gap-3"
+          >
+            <span className="text-sm font-semibold text-white">{label}</span>
+            <input
+              type="checkbox"
+              checked={settings[platform]}
+              disabled={isLoading || isSaving}
+              onChange={(event) => updateSetting(platform, event.target.checked)}
+              className="h-4 w-4 accent-orange"
+            />
+          </label>
+        ))}
+      </div>
+      {error && <div className="text-xs text-danger">{error.message}</div>}
+    </div>
+  );
+}
+
 interface ClipCardProps {
   clip: SocialClip;
   editingMode: EditMode | null;
@@ -536,13 +692,41 @@ interface ClipCardProps {
   onDiscard: () => void;
   onSaveOverride: (layout: LayoutPayload) => void;
   onResetOverride: () => void;
+  onApprovalDecision: (decision: 'approve' | 'skip' | 'edit', platforms: SocialPlatform[]) => void;
+  approvalPending: boolean;
 }
 
-function ClipCard({ clip, editingMode, onOpenEditor, onCloseEditor, onDiscard, onSaveOverride, onResetOverride }: ClipCardProps) {
+function ClipCard({
+  clip,
+  editingMode,
+  onOpenEditor,
+  onCloseEditor,
+  onDiscard,
+  onSaveOverride,
+  onResetOverride,
+  onApprovalDecision,
+  approvalPending,
+}: ClipCardProps) {
   const status = STATUS_LABELS[clip.status] ?? STATUS_LABELS.pending;
   const sourceLabel = clip.source_kind === 'manual_upload' ? 'Upload' : 'Twitch';
   const enrichmentTopHashtags = clip.enrichment_summary?.top_hashtags ?? [];
   const enrichmentStatus = clip.enrichment_status;
+  const [selectedPlatforms, setSelectedPlatforms] = useState<SocialPlatform[]>(
+    clip.approval?.approved_platforms ?? [],
+  );
+
+  useEffect(() => {
+    setSelectedPlatforms(clip.approval?.approved_platforms ?? []);
+  }, [clip.approval?.approved_platforms, clip.clip_db_id]);
+
+  const togglePlatform = (platform: SocialPlatform, checked: boolean) => {
+    setSelectedPlatforms((current) => {
+      const next = new Set(current);
+      if (checked) next.add(platform);
+      else next.delete(platform);
+      return Array.from(next) as SocialPlatform[];
+    });
+  };
 
   return (
     <motion.div
@@ -600,6 +784,71 @@ function ClipCard({ clip, editingMode, onOpenEditor, onCloseEditor, onDiscard, o
             ))}
           </div>
         )}
+
+        <div className="rounded-xl border border-border bg-bg/30 p-3 space-y-3">
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <p className="text-[11px] uppercase tracking-[0.14em] font-bold text-orange">
+                Approval
+              </p>
+              <p className="text-xs text-text-secondary">
+                {clip.approval?.state
+                  ? `Status: ${clip.approval.state}`
+                  : 'Wird nach abgeschlossenem Enrichment per DM freigegeben.'}
+              </p>
+            </div>
+            {approvalPending && <Loader2 className="w-4 h-4 text-orange animate-spin" />}
+          </div>
+          <div className="grid grid-cols-3 gap-2">
+            {([
+              ['youtube', 'YT'],
+              ['tiktok', 'TT'],
+              ['instagram', 'IG'],
+            ] as const).map(([platform, label]) => (
+              <label
+                key={platform}
+                className="inline-flex items-center justify-center gap-2 rounded-lg border border-border bg-bg/40 px-2 py-2 text-xs font-semibold text-white"
+              >
+                <input
+                  type="checkbox"
+                  checked={selectedPlatforms.includes(platform)}
+                  onChange={(event) => togglePlatform(platform, event.target.checked)}
+                  className="h-3.5 w-3.5 accent-orange"
+                />
+                {label}
+              </label>
+            ))}
+          </div>
+          <div className="grid grid-cols-3 gap-2">
+            <button
+              type="button"
+              onClick={() => onApprovalDecision('approve', selectedPlatforms)}
+              disabled={approvalPending}
+              className="inline-flex items-center justify-center gap-1.5 text-xs font-bold px-3 py-2 rounded-lg bg-success/15 text-success border border-success/30 hover:bg-success/20 disabled:opacity-50"
+            >
+              <CheckCircle2 className="w-3.5 h-3.5" /> Posten
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                onApprovalDecision('edit', selectedPlatforms);
+                onOpenEditor('enrichment');
+              }}
+              disabled={approvalPending}
+              className="inline-flex items-center justify-center gap-1.5 text-xs font-bold px-3 py-2 rounded-lg bg-warning/15 text-warning border border-warning/30 hover:bg-warning/20 disabled:opacity-50"
+            >
+              <Pencil className="w-3.5 h-3.5" /> Bearbeiten
+            </button>
+            <button
+              type="button"
+              onClick={() => onApprovalDecision('skip', selectedPlatforms)}
+              disabled={approvalPending}
+              className="inline-flex items-center justify-center gap-1.5 text-xs font-bold px-3 py-2 rounded-lg bg-danger/12 text-danger border border-danger/30 hover:bg-danger/20 disabled:opacity-50"
+            >
+              <Trash2 className="w-3.5 h-3.5" /> Skip
+            </button>
+          </div>
+        </div>
 
         <div className="flex items-center gap-2 mt-auto pt-2">
           {clip.clip_url && (

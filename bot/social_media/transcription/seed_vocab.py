@@ -253,6 +253,15 @@ def parse_args() -> argparse.Namespace:
 def main() -> int:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
     args = parse_args()
+
+    # Standalone-CLI braucht initialisiertes PG-Storage.
+    try:
+        from ...storage import pg as _storage_pg
+
+        _storage_pg.prepare_runtime_storage()
+    except Exception:
+        log.exception("prepare_runtime_storage fehlgeschlagen; weiter mit best-effort")
+
     result = asyncio.run(
         seed_vocab(
             include_slang=not args.no_slang,

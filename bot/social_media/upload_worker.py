@@ -17,6 +17,7 @@ from pathlib import Path
 from discord.ext import commands
 
 from ..storage import transaction
+from .approval import is_clip_approved_for
 from .clip_manager import ClipManager, UPLOAD_PROCESSING_STALE_AFTER
 from .credential_manager import SocialMediaCredentialManager
 from .uploaders import VideoProcessor
@@ -225,10 +226,24 @@ class UploadWorker(commands.Cog):
             True wenn erfolgreich
         """
         queue_id = queue_item["id"]
-        clip_id = queue_item["clip_id"]
+        clip_db_id = int(queue_item.get("clip_db_id") or queue_item["clip_id"])
         platform = queue_item["platform"]
 
         try:
+            if not is_clip_approved_for(clip_db_id, platform):
+                log.info(
+                    "Skipping upload without approval: clip_db_id=%s platform=%s queue_id=%s",
+                    clip_db_id,
+                    platform,
+                    queue_id,
+                )
+                self.clip_manager.update_upload_status(
+                    queue_id,
+                    "failed",
+                    error="approval_required",
+                )
+                return False
+
             # Mark as processing
             self.clip_manager.update_upload_status(queue_id, "processing")
 
@@ -239,7 +254,7 @@ class UploadWorker(commands.Cog):
 
             # Download clip if not already downloaded
             if not local_path or not Path(local_path).exists():
-                local_path = await self._download_clip(clip_url, clip_id)
+                local_path = await self._download_clip(clip_url, clip_db_id)
                 self.clip_manager.update_upload_status(queue_id, "processing")
 
             # Convert to vertical format (9:16)
@@ -272,11 +287,11 @@ class UploadWorker(commands.Cog):
                 external_video_id=external_id,
             )
 
-            log.info("Upload successful: Clip %s -> %s (%s)", clip_id, platform, external_id)
+            log.info("Upload successful: Clip %s -> %s (%s)", clip_db_id, platform, external_id)
             return True
 
         except Exception as e:
-            log.exception("Upload failed: Clip %s -> %s", clip_id, platform)
+            log.exception("Upload failed: Clip %s -> %s", clip_db_id, platform)
 
             self.clip_manager.update_upload_status(
                 queue_id,

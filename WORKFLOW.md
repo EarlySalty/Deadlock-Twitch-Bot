@@ -156,3 +156,16 @@
 - Status: ✅ Abgeschlossen (2026-04-26)
 - 2026-04-26: Phase-1-Backend umgesetzt in `bot/social_media/` und `bot/migrations/`: Streamer-Layout-Storage mit Clip-Override/Auto-Apply, Admin-API fuer Layouts und Pending-Clips, MP4-Upload fuer manuelle Clips, Retention-Helper/Cog sowie FFmpeg-Komposition aus Layout-JSON.
 - 2026-04-26: Verifikation erfolgreich: `py_compile` fuer die geaenderten Social-Media-Module/Migration, neue Phase-1-Tests (`tests/test_social_media_phase1_backend.py`, `tests/test_social_media_phase1_video.py`) sowie bestehende Social-Media-Regressionssuites (`phase0`, `dashboard_rendering`, `auth_regressions`) gruen; optionaler Real-FFmpeg-Test in `test_social_media_phase1_video.py` lokal nur bei vorhandenem `ffmpeg/ffprobe`.
+
+## Social Media Phase 4 - Approval + Cross-Posting
+
+- 2026-04-27: Aufgabe aufgenommen. `WORKFLOW.md`, `bot/social_media/{storage,clip_manager,enrichment,upload_worker,dashboard,settings}.py`, `bot/runtime_{bootstrap,bot_runtime}.py`, bestehende Upload-Module, Frontend-Dateien unter `bot/dashboard_v2/src/` und relevante Social-Media-Tests gelesen. Phase-3-Konfliktfelder (`analytics`, Report-Routen, Phase-3-Migrationen) bewusst ausgespart.
+- 2026-04-27: Implementiert: Phase-4-Migration `bot/migrations/social_media_phase4_approval.py`, Storage-Helfer `apply_phase4_approval`, Approval-Service + Discord-View/Cog unter `bot/social_media/approval*/`, Upload-Gate per Approval, neue Admin-API fuer Approval/Auto-Approve und Runtime-Verdrahtung fuer den Approval-Worker.
+- 2026-04-27: Frontend `bot/dashboard_v2/src/pages/SocialMedia.tsx` um Approval-Aktionen pro Clip sowie Auto-Approve-Toggles erweitert; API-/Typdefinitionen fuer Approval/Settings nachgezogen.
+- 2026-04-27: Verifikation erfolgreich: `.venv/bin/python -m pytest tests/test_social_media_phase0_stabilization.py tests/test_social_media_phase1_backend.py tests/test_social_media_phase1_video.py tests/test_social_media_phase2_backend.py tests/test_social_media_phase4_backend.py tests/test_social_media_dashboard_rendering.py tests/test_social_media_auth_regressions.py -q` -> `61 passed`; `cd bot/dashboard_v2 && npx tsc --noEmit` erfolgreich; `cd bot/dashboard_v2 && npx vite build` erfolgreich.
+
+## Social Media Phase 3 - Analytics + Reports
+
+- 2026-04-27: Aufgabe aufgenommen. Relevante Phase-2-/Runtime-/Dashboard-/Uploader-Dateien sowie bestehende Worker- und Testmuster gelesen; vorhandene Analytics-Tabelle und Admin-Sperren geprüft.
+- 2026-04-27: Phase 3 umgesetzt: Migration `social_media_phase3_analytics.py`, Analytics-Storage/Worker, LLM-Report-Writer + Admin-DM-Dispatcher, neue Admin-API-Endpunkte und Analytics-Tab im React-Dashboard.
+- 2026-04-27: Verifikation erfolgreich: `.venv/bin/python -m pytest tests/test_social_media_phase3_backend.py -q`, bestehende Social-Media-Regressionen (`phase0`, `phase1_backend`, `phase2_backend`, `dashboard_rendering`, `auth_regressions`) sowie `bot/dashboard_v2` via `npx tsc --noEmit` und `npx vite build` gruen.

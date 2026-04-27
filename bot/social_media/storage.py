@@ -14,6 +14,7 @@ SOCIAL_MEDIA_SEQUENCE_TARGETS: tuple[tuple[str, str], ...] = (
     ("clip_templates_streamer", "id"),
     ("clip_fetch_history", "id"),
     ("social_media_platform_auth", "id"),
+    ("social_media_reports", "id"),
 )
 
 
@@ -36,6 +37,22 @@ def apply_phase2_enrichment(conn: Any) -> None:
     _ensure_deadlock_vocab_table(conn)
     _ensure_clip_enrichment_table(conn)
     _ensure_social_media_settings_table(conn)
+    repair_social_media_sequences(conn)
+
+
+def apply_phase4_approval(conn: Any) -> None:
+    """Apply the Phase 4 DDL for approval workflow and auto-approve settings."""
+    _ensure_social_media_settings_table(conn)
+    _ensure_clip_approval_table(conn)
+    _ensure_auto_approve_settings(conn)
+    repair_social_media_sequences(conn)
+
+
+def apply_phase3_analytics(conn: Any) -> None:
+    """Apply the Phase 3 DDL for analytics tracking and report storage."""
+    _ensure_social_media_settings_table(conn)
+    _ensure_phase3_social_analytics_columns(conn)
+    _ensure_social_media_reports_table(conn)
     repair_social_media_sequences(conn)
 
 
@@ -225,6 +242,56 @@ def _ensure_social_media_settings_table(conn: Any) -> None:
     )
 
 
+def _ensure_phase3_social_analytics_columns(conn: Any) -> None:
+    table = "twitch_clips_social_analytics"
+    _ensure_column(conn, table, "bucket", "TEXT")
+    _ensure_column(conn, table, "watch_time_seconds", "INTEGER")
+    _ensure_column(conn, table, "ctr_percent", "NUMERIC(5,2)")
+    _ensure_column(conn, table, "provider", "TEXT")
+    _ensure_column(conn, table, "next_pull_at", "TIMESTAMPTZ")
+    if _has_column(conn, table, "engagement_rate"):
+        _coerce_phase3_numeric_column(conn, table, "engagement_rate")
+    else:
+        _ensure_column(conn, table, "engagement_rate", "NUMERIC(5,2)")
+    conn.execute(
+        """
+        UPDATE twitch_clips_social_analytics
+           SET bucket = '30d'
+         WHERE bucket IS NULL
+            OR BTRIM(bucket) = ''
+        """
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_twitch_clips_social_analytics_bucket "
+        "ON twitch_clips_social_analytics(clip_id, platform, bucket)"
+    )
+
+
+def _ensure_social_media_reports_table(conn: Any) -> None:
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS social_media_reports (
+            id             SERIAL PRIMARY KEY,
+            kind           TEXT NOT NULL,
+            streamer_login TEXT,
+            period_start   TIMESTAMPTZ NOT NULL,
+            period_end     TIMESTAMPTZ NOT NULL,
+            content_md     TEXT NOT NULL,
+            model          TEXT,
+            created_at     TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+        )
+        """
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_social_media_reports_kind_period "
+        "ON social_media_reports(kind, period_end DESC)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_social_media_reports_streamer_period "
+        "ON social_media_reports(streamer_login, period_end DESC)"
+    )
+
+
 def _ensure_clip_enrichment_table(conn: Any) -> None:
     conn.execute(
         """
@@ -272,13 +339,66 @@ def _ensure_clip_enrichment_table(conn: Any) -> None:
     )
 
 
+def _ensure_clip_approval_table(conn: Any) -> None:
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS social_media_clip_approval (
+            clip_db_id          INTEGER PRIMARY KEY
+                REFERENCES twitch_clips_social_media(id) ON DELETE CASCADE,
+            state               TEXT NOT NULL DEFAULT 'awaiting_approval',
+            approved_platforms  JSONB NOT NULL DEFAULT '[]'::JSONB,
+            approver_user_id    TEXT,
+            decided_at          TIMESTAMPTZ,
+            dm_message_id       TEXT,
+            dm_channel_id       TEXT,
+            last_sent_at        TIMESTAMPTZ,
+            CONSTRAINT social_media_clip_approval_state_chk
+                CHECK (state IN ('awaiting_approval', 'approved', 'skipped', 'editing'))
+        )
+        """
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_social_media_clip_approval_state "
+        "ON social_media_clip_approval(state)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_social_media_clip_approval_last_sent_at "
+        "ON social_media_clip_approval(last_sent_at DESC)"
+    )
+
+
+def _ensure_auto_approve_settings(conn: Any) -> None:
+    for key in (
+        "auto_approve_youtube",
+        "auto_approve_tiktok",
+        "auto_approve_instagram",
+    ):
+        conn.execute(
+            """
+            INSERT INTO social_media_settings (key, value, updated_at, updated_by)
+            VALUES (%s, 'false', CURRENT_TIMESTAMP, 'phase4_migration')
+            ON CONFLICT (key) DO NOTHING
+            """,
+            (key,),
+        )
+
+
 def _repair_sequence(conn: Any, table: str, column: str) -> None:
-    row = conn.execute("SELECT to_regclass(%s)", (table,)).fetchone()
+    try:
+        row = conn.execute("SELECT to_regclass(%s)", (table,)).fetchone()
+    except Exception:
+        return
     regclass_value = row["to_regclass"] if row and hasattr(row, "keys") else (row[0] if row else None)
     if regclass_value is None:
         return
 
-    sequence_row = conn.execute("SELECT pg_get_serial_sequence(%s, %s)", (table, column)).fetchone()
+    try:
+        sequence_row = conn.execute(
+            "SELECT pg_get_serial_sequence(%s, %s)",
+            (table, column),
+        ).fetchone()
+    except Exception:
+        return
     sequence_name = (
         sequence_row["pg_get_serial_sequence"]
         if sequence_row and hasattr(sequence_row, "keys")
@@ -297,3 +417,129 @@ def _repair_sequence(conn: Any, table: str, column: str) -> None:
         """,
         (table, column),
     )
+
+
+def _has_column(conn: Any, table: str, column: str) -> bool:
+    # information_schema-Lookup zuerst (Postgres und sqlite-DSN-Adapter, der
+    # diese View ebenfalls liefert). Den sqlite-PRAGMA-Pfad behalten wir nur
+    # als Fallback fuer reine sqlite-Verbindungen, isoliert per SAVEPOINT,
+    # damit ein Syntax-Fehler die Postgres-Transaktion nicht abortet.
+    try:
+        result = conn.execute(
+            """
+            SELECT 1
+              FROM information_schema.columns
+             WHERE table_name = %s
+               AND column_name = %s
+             LIMIT 1
+            """,
+            (table, column),
+        ).fetchone()
+        if result:
+            return True
+        return False
+    except Exception:
+        # Transaktion koennte nun aborted sein -> SAVEPOINT-Try fuer sqlite
+        pass
+
+    try:
+        savepoint_used = False
+        try:
+            conn.execute("SAVEPOINT _has_column_pragma")
+            savepoint_used = True
+        except Exception:
+            savepoint_used = False
+        try:
+            rows = conn.execute(f"PRAGMA table_info({table})").fetchall()
+        except Exception:
+            rows = []
+        if savepoint_used:
+            try:
+                conn.execute("RELEASE SAVEPOINT _has_column_pragma")
+            except Exception:
+                try:
+                    conn.execute("ROLLBACK TO SAVEPOINT _has_column_pragma")
+                except Exception:
+                    pass
+        for row in rows:
+            name = row["name"] if hasattr(row, "keys") else row[1]
+            if str(name).strip().lower() == column.lower():
+                return True
+    except Exception:
+        return False
+    return False
+
+
+def _ensure_column(conn: Any, table: str, column: str, ddl: str) -> None:
+    if _has_column(conn, table, column):
+        return
+    conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {ddl}")
+
+
+def _coerce_phase3_numeric_column(conn: Any, table: str, column: str) -> None:
+    # Bestehende Spalten koennen bereits ein numerischer Typ
+    # (NUMERIC/DOUBLE PRECISION/REAL/INTEGER) sein. In dem Fall ist nichts zu tun;
+    # ein erzwungener TYPE-Cast wuerde u. a. ueber die Skala hinaus floaten und
+    # die laufende Transaktion abortieren. Wir pruefen den aktuellen Datentyp
+    # und ueberspringen den Cast, wenn die Spalte numerisch ist.
+    try:
+        result = conn.execute(
+            """
+            SELECT data_type
+              FROM information_schema.columns
+             WHERE table_name = %s
+               AND column_name = %s
+             LIMIT 1
+            """,
+            (table, column),
+        ).fetchone()
+    except Exception:
+        return
+    if result is None:
+        return
+    data_type = (
+        result["data_type"] if hasattr(result, "keys") else result[0]
+    )
+    numeric_types = {
+        "numeric",
+        "double precision",
+        "real",
+        "integer",
+        "bigint",
+        "smallint",
+    }
+    if str(data_type or "").strip().lower() in numeric_types:
+        return
+    try:
+        savepoint_used = False
+        try:
+            conn.execute("SAVEPOINT _phase3_coerce")
+            savepoint_used = True
+        except Exception:
+            savepoint_used = False
+        try:
+            conn.execute(
+                f"""
+                ALTER TABLE {table}
+                ALTER COLUMN {column} TYPE NUMERIC(5,2)
+                USING CASE
+                    WHEN {column} IS NULL OR BTRIM({column}::text) = '' THEN NULL
+                    ELSE ROUND(({column})::numeric, 2)
+                END
+                """
+            )
+            if savepoint_used:
+                conn.execute("RELEASE SAVEPOINT _phase3_coerce")
+        except Exception:
+            if savepoint_used:
+                try:
+                    conn.execute("ROLLBACK TO SAVEPOINT _phase3_coerce")
+                except Exception:
+                    pass
+                try:
+                    conn.execute("RELEASE SAVEPOINT _phase3_coerce")
+                except Exception:
+                    pass
+            return
+    except Exception:
+        return
