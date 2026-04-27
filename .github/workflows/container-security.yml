@@ -60,7 +60,7 @@ jobs:
 
       - name: Checkov Dockerfile Scan
         if: needs.detect-container-files.outputs.has_dockerfile == 'true'
-        uses: bridgecrewio/checkov-action@3203f966a7ccd680cd8f6aaa3c3c5b0b3e9afa32 # master
+        uses: bridgecrewio/checkov-action@20fb358293b0af0188f25cf7658b69d49ec12c9a # master
         with:
           directory: .
           framework: dockerfile
@@ -76,7 +76,7 @@ jobs:
           category: checkov-docker
       - name: Checkov Compose Scan
         if: needs.detect-container-files.outputs.has_compose == 'true'
-        uses: bridgecrewio/checkov-action@3203f966a7ccd680cd8f6aaa3c3c5b0b3e9afa32 # master
+        uses: bridgecrewio/checkov-action@20fb358293b0af0188f25cf7658b69d49ec12c9a # master
         with:
           directory: .
           framework: docker_compose
