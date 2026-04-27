@@ -1,0 +1,51 @@
+{
+  "name": "dashboard_preview",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host localhost --port 4174",
+    "build": "tsc -b && vite build",
+    "test": "node --import tsx --test tests/engagementKpi.test.ts tests/runtimeConfig.test.ts",
+    "fuzz:protocol": "node --import tsx --test tests/fuzz.protocol.test.ts",
+    "lint": "eslint .",
+    "preview": "vite preview --host localhost --port 4175"
+  },
+  "dependencies": {
+    "@tailwindcss/vite": "^4.2.2",
+    "@tanstack/react-query": "^5.99.2",
+    "framer-motion": "^12.38.0",
+    "lucide-react": "^1.7.0",
+    "react": "19.2.4",
+    "react-dom": "19.2.4",
+    "recharts": "^3.8.1",
+    "tailwindcss": "^4.2.2"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@tailwindcss/oxide-linux-x64-gnu": "^4.2.2",
+    "@types/node": "^25.6.0",
+    "@types/react": "^19.2.14",
+    "@types/react-dom": "^19.2.3",
+    "@vitejs/plugin-react": "^6.0.1",
+    "eslint": "^9.39.4",
+    "eslint-plugin-react-hooks": "^7.1.1",
+    "eslint-plugin-react-refresh": "^0.5.2",
+    "fast-check": "^4.6.0",
+    "globals": "^17.5.0",
+    "tsx": "^4.21.0",
+    "typescript": "~6.0.2",
+    "typescript-eslint": "^8.58.2",
+    "vite": "^8.0.9"
+  },
+  "overrides": {
+    "brace-expansion": "^5.0.5",
+    "flatted": "^3.4.2",
+    "minimatch": "^10.2.5",
+    "micromatch": {
+      "picomatch": "^2.3.2"
+    },
+    "picomatch": "^4.0.4",
+    "rollup": "^4.59.0"
+  }
+}

@@ -20,7 +20,9 @@ import os
 import secrets
 from base64 import urlsafe_b64encode
 from datetime import UTC, datetime, timedelta
+from typing import Any
 from urllib.parse import urlencode
+from urllib.parse import urlsplit, urlunsplit
 
 import aiohttp
 
@@ -41,12 +43,94 @@ def _sanitize_log_value(value: str | None) -> str:
     return str(value).replace("\r", "\\r").replace("\n", "\\n")
 
 
+def _utcnow() -> datetime:
+    return datetime.now(UTC)
+
+
+def _normalize_redirect_uri(value: str | None) -> str:
+    raw_value = str(value or "").strip()
+    if not raw_value:
+        return ""
+    parsed = urlsplit(raw_value)
+    return urlunsplit(
+        (
+            str(parsed.scheme or "").strip().lower(),
+            str(parsed.netloc or "").strip().lower(),
+            parsed.path or "",
+            "",
+            "",
+        )
+    ).rstrip("/")
+
+
+class OAuthStateValidationError(ValueError):
+    """Raised when a persisted OAuth state cannot be validated."""
+
+
+class OAuthTokenExchangeError(RuntimeError):
+    """Raised when a provider rejects an authorization code exchange."""
+
+
+class OAuthTokenRefreshError(RuntimeError):
+    """Raised when a provider rejects or transiently blocks token refresh."""
+
+    def __init__(
+        self,
+        *,
+        platform: str,
+        error_kind: str,
+        message: str,
+        status: int | None = None,
+        transient: bool,
+        payload: Any | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.platform = platform
+        self.error_kind = error_kind
+        self.status = status
+        self.transient = transient
+        self.payload = payload
+
+
 class SocialMediaOAuthManager:
     """Manages OAuth flows for social media platforms."""
 
     def __init__(self):
         """Initialize OAuth manager with crypto."""
         self.crypto = get_crypto()
+
+    @staticmethod
+    def _raise_refresh_error(platform: str, status: int, data: Any) -> None:
+        error_kind = (
+            str(
+                data.get("error")
+                or data.get("error_code")
+                or data.get("message")
+                or data.get("error_message")
+                or f"http_{status}"
+            )
+            .strip()
+            .lower()
+            .replace(" ", "_")
+        )
+        transient = status in {408, 425, 429, 500, 502, 503, 504} or error_kind in {
+            "temporarily_unavailable",
+            "server_error",
+            "internal_error",
+        }
+        message = f"{platform} token refresh failed: {data}"
+        raise OAuthTokenRefreshError(
+            platform=platform,
+            error_kind=error_kind or f"http_{status}",
+            message=message,
+            status=status,
+            transient=transient,
+            payload=data,
+        )
+
+    @staticmethod
+    def _raise_exchange_error(platform: str, data: Any) -> None:
+        raise OAuthTokenExchangeError(f"{platform} token exchange failed: {data}")
 
     def generate_auth_url(
         self, platform: str, streamer_login: str | None, redirect_uri: str
@@ -68,15 +152,24 @@ class SocialMediaOAuthManager:
         # Generate PKCE verifier (TikTok v2 and YouTube both require PKCE)
         pkce_verifier = secrets.token_urlsafe(64) if platform in ("tiktok", "youtube") else None
 
+        if platform == "tiktok":
+            auth_url = self._tiktok_auth_url(state, redirect_uri, pkce_verifier)
+        elif platform == "youtube":
+            auth_url = self._youtube_auth_url(state, redirect_uri, pkce_verifier)
+        elif platform == "instagram":
+            auth_url = self._instagram_auth_url(state, redirect_uri)
+        else:
+            raise ValueError(f"Unknown platform: {platform}")
+
         # Store state in DB (expires in 10 minutes)
-        expires_at = datetime.now(UTC) + timedelta(minutes=10)
+        expires_at = _utcnow() + timedelta(minutes=10)
 
         with transaction() as conn:
             conn.execute(
                 """
                 INSERT INTO oauth_state_tokens
-                    (state_token, platform, streamer_login, redirect_uri, pkce_verifier, expires_at)
-                VALUES (%s, %s, %s, %s, %s, %s)
+                    (state_token, platform, streamer_login, redirect_uri, pkce_verifier, expires_at, consumed_at)
+                VALUES (%s, %s, %s, %s, %s, %s, NULL)
                 """,
                 (
                     state,
@@ -84,19 +177,11 @@ class SocialMediaOAuthManager:
                     streamer_login,
                     redirect_uri,
                     pkce_verifier,
-                    expires_at.isoformat(),
+                    expires_at,
                 ),
             )
 
-        # Generate platform-specific URL
-        if platform == "tiktok":
-            return self._tiktok_auth_url(state, redirect_uri, pkce_verifier)
-        elif platform == "youtube":
-            return self._youtube_auth_url(state, redirect_uri, pkce_verifier)
-        elif platform == "instagram":
-            return self._instagram_auth_url(state, redirect_uri)
-        else:
-            raise ValueError(f"Unknown platform: {platform}")
+        return auth_url
 
     def _tiktok_auth_url(self, state: str, redirect_uri: str, verifier: str) -> str:
         """Generate TikTok OAuth URL with PKCE (required by TikTok API v2)."""
@@ -176,7 +261,14 @@ class SocialMediaOAuthManager:
 
         return f"https://api.instagram.com/oauth/authorize?{urlencode(params)}"
 
-    async def handle_callback(self, code: str, state: str) -> dict:
+    async def handle_callback(
+        self,
+        code: str,
+        state: str,
+        *,
+        expected_platform: str | None = None,
+        expected_redirect_uri: str | None = None,
+    ) -> dict:
         """
         Handle OAuth callback, exchange code for tokens.
 
@@ -188,22 +280,13 @@ class SocialMediaOAuthManager:
             Dict with platform and streamer_login
 
         Raises:
-            ValueError: If state invalid or expired
+            OAuthStateValidationError: If state invalid, expired or mismatched
         """
-        # Atomically consume state token (single-use, race-safe)
-        with transaction() as conn:
-            state_row = conn.execute(
-                """
-                DELETE FROM oauth_state_tokens
-                WHERE state_token = %s
-                  AND expires_at > %s
-                RETURNING platform, streamer_login, redirect_uri, pkce_verifier
-                """,
-                (state, datetime.now(UTC).isoformat()),
-            ).fetchone()
-
-            if not state_row:
-                raise ValueError("Invalid or expired state token")
+        state_row = self._consume_state_token(
+            state,
+            expected_platform=expected_platform,
+            expected_redirect_uri=expected_redirect_uri,
+        )
 
         platform = state_row["platform"]
         streamer_login = state_row["streamer_login"]
@@ -228,6 +311,43 @@ class SocialMediaOAuthManager:
             "streamer_login": streamer_login,
         }
 
+    def _consume_state_token(
+        self,
+        state: str,
+        *,
+        expected_platform: str | None = None,
+        expected_redirect_uri: str | None = None,
+    ) -> dict[str, Any]:
+        normalized_expected_redirect = _normalize_redirect_uri(expected_redirect_uri)
+        normalized_expected_platform = str(expected_platform or "").strip().lower() or None
+        now = _utcnow()
+
+        with transaction() as conn:
+            params: list[Any] = [now, state, now]
+            sql = """
+                UPDATE oauth_state_tokens
+                SET consumed_at = %s
+                WHERE state_token = %s
+                  AND expires_at > %s
+                  AND consumed_at IS NULL
+            """
+            if normalized_expected_platform:
+                sql += " AND platform = %s"
+                params.append(normalized_expected_platform)
+            sql += " RETURNING platform, streamer_login, redirect_uri, pkce_verifier"
+
+            state_row = conn.execute(sql, tuple(params)).fetchone()
+            if not state_row:
+                raise OAuthStateValidationError("Invalid, expired or already used state token")
+
+            stored_redirect_uri = str(state_row["redirect_uri"] or "").strip()
+            if normalized_expected_redirect and (
+                _normalize_redirect_uri(stored_redirect_uri) != normalized_expected_redirect
+            ):
+                raise OAuthStateValidationError("OAuth redirect URI mismatch")
+
+            return dict(state_row)
+
     async def _tiktok_exchange_code(self, code: str, redirect_uri: str, verifier: str) -> dict:
         """Exchange TikTok authorization code for tokens (with PKCE code_verifier)."""
         client_key = os.environ.get("TIKTOK_CLIENT_KEY", "")
@@ -249,12 +369,12 @@ class SocialMediaOAuthManager:
                 data = await resp.json()
 
                 if resp.status != 200 or "error" in data:
-                    raise ValueError(f"TikTok token exchange failed: {data}")
+                    self._raise_exchange_error("TikTok", data)
 
                 return {
                     "access_token": data["data"]["access_token"],
                     "refresh_token": data["data"]["refresh_token"],
-                    "expires_at": datetime.now(UTC) + timedelta(seconds=data["data"]["expires_in"]),
+                    "expires_at": _utcnow() + timedelta(seconds=data["data"]["expires_in"]),
                     "scopes": data["data"]["scope"],
                     "user_id": data["data"].get("open_id"),
                     "client_id": client_key,
@@ -281,12 +401,12 @@ class SocialMediaOAuthManager:
                 data = await resp.json()
 
                 if resp.status != 200 or "error" in data:
-                    raise ValueError(f"YouTube token exchange failed: {data}")
+                    self._raise_exchange_error("YouTube", data)
 
                 return {
                     "access_token": data["access_token"],
                     "refresh_token": data.get("refresh_token"),  # Only on first auth
-                    "expires_at": datetime.now(UTC) + timedelta(seconds=data["expires_in"]),
+                    "expires_at": _utcnow() + timedelta(seconds=data["expires_in"]),
                     "scopes": data["scope"],
                     "client_id": client_id,
                     "client_secret": client_secret,
@@ -311,12 +431,12 @@ class SocialMediaOAuthManager:
                 data = await resp.json()
 
                 if resp.status != 200 or "error_message" in data:
-                    raise ValueError(f"Instagram token exchange failed: {data}")
+                    self._raise_exchange_error("Instagram", data)
 
                 return {
                     "access_token": data["access_token"],
                     "user_id": data["user_id"],
-                    "expires_at": datetime.now(UTC) + timedelta(days=60),  # Long-lived token
+                    "expires_at": _utcnow() + timedelta(days=60),  # Long-lived token
                     "client_id": client_id,
                     "client_secret": client_secret,
                 }
@@ -490,12 +610,12 @@ class SocialMediaOAuthManager:
                 data = await resp.json()
 
                 if resp.status != 200 or "error" in data:
-                    raise ValueError(f"TikTok token refresh failed: {data}")
+                    self._raise_refresh_error("tiktok", resp.status, data)
 
                 return {
                     "access_token": data["data"]["access_token"],
                     "refresh_token": data["data"]["refresh_token"],
-                    "expires_at": datetime.now(UTC) + timedelta(seconds=data["data"]["expires_in"]),
+                    "expires_at": _utcnow() + timedelta(seconds=data["data"]["expires_in"]),
                 }
 
     async def _refresh_youtube_token(
@@ -515,9 +635,9 @@ class SocialMediaOAuthManager:
                 data = await resp.json()
 
                 if resp.status != 200 or "error" in data:
-                    raise ValueError(f"YouTube token refresh failed: {data}")
+                    self._raise_refresh_error("youtube", resp.status, data)
 
                 return {
                     "access_token": data["access_token"],
-                    "expires_at": datetime.now(UTC) + timedelta(seconds=data["expires_in"]),
+                    "expires_at": _utcnow() + timedelta(seconds=data["expires_in"]),
                 }

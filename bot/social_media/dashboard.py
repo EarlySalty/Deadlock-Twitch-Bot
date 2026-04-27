@@ -9,22 +9,49 @@ Bietet UI für:
 
 import html
 import asyncio
+import json
 import ipaddress
 import logging
 import os
+import re
+import tempfile
+import uuid
+from datetime import UTC, datetime
+from pathlib import Path
 from urllib.parse import urlencode, urlsplit, urlunsplit
 
 from aiohttp import web
+from aiohttp.web_request import FileField
 
 from .clip_manager import ClipManager
+from .layout import DEFAULT_STREAMER_LAYOUT
+from .layout import LayoutValidationError
+from .layout import StreamerLayout
+from .layout import get_clip_effective_layout
+from .layout import get_streamer_layout
+from .layout import set_clip_layout_override
+from .layout import upsert_streamer_layout
+from .retention import mark_clip_discarded
 from .rendering import (
     render_social_media_dashboard,
     render_social_media_privacy,
     render_social_media_terms,
 )
+from .uploaders.video_processor import VideoProcessor
 from ..storage import readonly_connection, transaction
 
 log = logging.getLogger("TwitchStreams.SocialMediaDashboard")
+
+try:
+    import magic as _magic
+except Exception:  # pragma: no cover - optional native dependency
+    _magic = None
+
+
+_UPLOAD_MAX_BYTES = 200 * 1024 * 1024
+_UPLOAD_MAX_DURATION_SECONDS = 300
+_UPLOAD_CHUNK_SIZE = 1024 * 1024
+_SAFE_ID_RE = re.compile(r"^[A-Za-z0-9_-]+$")
 
 
 def _sanitize_log_value(value: str | None) -> str:
@@ -120,6 +147,27 @@ class SocialMediaDashboard:
             return raw_level
         return "unknown"
 
+    def _require_admin(self, request: web.Request) -> None:
+        self._require_auth(request)
+        if self._get_auth_level(request) not in {"admin", "localhost"}:
+            raise web.HTTPForbidden(text="Admin access required")
+
+    def _get_editor_user_id(self, request: web.Request) -> str | None:
+        getter = self.auth_session_getter
+        if not callable(getter):
+            return None
+        try:
+            session = getter(request)
+        except Exception:
+            return None
+        if not isinstance(session, dict):
+            return None
+        for key in ("discord_user_id", "user_id", "twitch_user_id"):
+            value = str(session.get(key) or "").strip()
+            if value:
+                return value
+        return None
+
     @staticmethod
     def _is_loopback_host(raw_host: str | None) -> bool:
         token = str(raw_host or "").strip().lower()
@@ -192,6 +240,10 @@ class SocialMediaDashboard:
             or os.getenv("MASTER_DASHBOARD_PUBLIC_URL")
             or "https://admin.deutsche-deadlock-community.de"
         )
+
+        if env_origin:
+            return env_origin
+
         if self._is_localhost_request(request):
             try:
                 request_origin = self._normalize_public_origin(str(request.url.origin()))
@@ -199,9 +251,6 @@ class SocialMediaDashboard:
                 request_origin = None
             if request_origin:
                 return request_origin
-
-        if env_origin:
-            return env_origin
         return "https://admin.deutsche-deadlock-community.de"
 
     def _resolve_streamer_scope(
@@ -254,6 +303,149 @@ class SocialMediaDashboard:
             return None
         return clip_id if clip_id > 0 else None
 
+    @staticmethod
+    def _normalize_safe_slug(raw_value: str | None, field_name: str) -> str:
+        value = str(raw_value or "").strip()
+        if not value:
+            raise web.HTTPBadRequest(text=f"{field_name} is required")
+        if not _SAFE_ID_RE.fullmatch(value):
+            raise web.HTTPBadRequest(text=f"{field_name} must match [A-Za-z0-9_-]+")
+        return value
+
+    @staticmethod
+    def _serialize_layout(layout: StreamerLayout) -> dict:
+        payload = layout.to_layout_json()
+        payload["cam_enabled"] = layout.cam_enabled
+        payload["mode"] = layout.mode
+        return payload
+
+    def _parse_layout_request(self, payload: dict) -> StreamerLayout:
+        layout_payload = payload.get("layout")
+        if layout_payload is None:
+            raise LayoutValidationError("layout is required")
+        return StreamerLayout.from_mapping(
+            layout_payload,
+            cam_enabled=payload.get("cam_enabled"),
+            mode=payload.get("mode"),
+        )
+
+    def _ensure_streamer_exists(self, streamer_login: str) -> bool:
+        with readonly_connection() as conn:
+            row = conn.execute(
+                """
+                SELECT 1
+                  FROM twitch_streamers
+                 WHERE LOWER(twitch_login) = LOWER(%s)
+                 LIMIT 1
+                """,
+                (streamer_login,),
+            ).fetchone()
+        return bool(row)
+
+    def _load_clip_row(self, clip_db_id: int) -> dict | None:
+        with readonly_connection() as conn:
+            row = conn.execute(
+                """
+                SELECT id, clip_id, clip_url, clip_title, clip_thumbnail_url, streamer_login,
+                       created_at, duration_seconds, view_count, game_name, status,
+                       source_kind, upload_local_path, retention_until, discarded_at,
+                       layout_override_json, uploaded_tiktok, uploaded_youtube, uploaded_instagram
+                  FROM twitch_clips_social_media
+                 WHERE id = %s
+                 LIMIT 1
+                """,
+                (clip_db_id,),
+            ).fetchone()
+        return dict(row) if row else None
+
+    def _serialize_clip_record(self, row: dict) -> dict:
+        layout_override = row.get("layout_override_json")
+        layout_override_payload = None
+        if layout_override:
+            if isinstance(layout_override, dict):
+                layout_override_payload = layout_override
+            else:
+                layout_override_payload = json.loads(layout_override)
+        effective_layout = get_clip_effective_layout(int(row["id"]))
+        return {
+            "clip_db_id": row["id"],
+            "clip_id": row.get("clip_id"),
+            "clip_url": row.get("clip_url"),
+            "title": row.get("clip_title"),
+            "thumbnail_url": row.get("clip_thumbnail_url"),
+            "streamer_login": row.get("streamer_login"),
+            "created_at": row.get("created_at"),
+            "duration_seconds": row.get("duration_seconds"),
+            "view_count": row.get("view_count"),
+            "game_name": row.get("game_name"),
+            "status": row.get("status"),
+            "source_kind": row.get("source_kind", "twitch"),
+            "upload_local_path": row.get("upload_local_path"),
+            "retention_until": row.get("retention_until"),
+            "discarded_at": row.get("discarded_at"),
+            "platform_status": {
+                "tiktok": bool(row.get("uploaded_tiktok")),
+                "youtube": bool(row.get("uploaded_youtube")),
+                "instagram": bool(row.get("uploaded_instagram")),
+            },
+            "layout_override": layout_override_payload,
+            "effective_layout": self._serialize_layout(effective_layout),
+        }
+
+    async def _store_uploaded_mp4(self, file_field: FileField, target_path: Path) -> Path:
+        target_path.parent.mkdir(parents=True, exist_ok=True)
+        fd, tmp_path_raw = tempfile.mkstemp(
+            prefix=f"{target_path.stem}-",
+            suffix=".tmp",
+            dir=str(target_path.parent),
+        )
+        size = 0
+        tmp_path = Path(tmp_path_raw)
+        try:
+            with os.fdopen(fd, "wb") as handle:
+                while True:
+                    chunk = file_field.file.read(_UPLOAD_CHUNK_SIZE)
+                    if not chunk:
+                        break
+                    size += len(chunk)
+                    if size > _UPLOAD_MAX_BYTES:
+                        raise web.HTTPRequestEntityTooLarge(
+                            max_size=_UPLOAD_MAX_BYTES,
+                            actual_size=size,
+                        )
+                    handle.write(chunk)
+            return tmp_path
+        except Exception:
+            tmp_path.unlink(missing_ok=True)
+            raise
+
+    async def _validate_uploaded_mp4(self, temp_path: Path) -> float:
+        mime_type = None
+        if _magic is not None:
+            try:
+                mime_type = _magic.from_file(str(temp_path), mime=True)
+            except Exception:
+                mime_type = None
+        if mime_type and mime_type not in {"video/mp4", "application/mp4"}:
+            raise web.HTTPUnsupportedMediaType(text="Only MP4 uploads are supported")
+
+        with temp_path.open("rb") as handle:
+            header = handle.read(64)
+        if b"ftyp" not in header:
+            raise web.HTTPUnsupportedMediaType(text="Only MP4 uploads are supported")
+
+        processor = VideoProcessor()
+        try:
+            video_info = await processor.get_video_info(str(temp_path))
+        except Exception as exc:
+            raise web.HTTPUnsupportedMediaType(text="Uploaded file is not a valid MP4 video") from exc
+        duration = float(video_info.get("duration") or 0)
+        if duration <= 0:
+            raise web.HTTPBadRequest(text="Uploaded MP4 must have a positive duration")
+        if duration > _UPLOAD_MAX_DURATION_SECONDS:
+            raise web.HTTPBadRequest(text="Uploaded MP4 must be 300 seconds or shorter")
+        return duration
+
     def _clip_owned_by_streamer(self, clip_id: int, streamer_login: str) -> bool:
         with readonly_connection() as conn:
             row = conn.execute(
@@ -292,8 +484,27 @@ class SocialMediaDashboard:
         # API Endpoints
         app.router.add_get("/social-media/api/stats", self.api_stats)
         app.router.add_get("/social-media/api/clips", self.clips_list)
+        app.router.add_post("/social-media/api/clips/upload", self.api_upload_clip)
         app.router.add_post("/social-media/api/upload", self.queue_upload)
         app.router.add_get("/social-media/api/analytics", self.analytics)
+        app.router.add_get(
+            "/social-media/api/admin/streamer-layout",
+            self.api_admin_streamer_layout_get,
+        )
+        app.router.add_put(
+            "/social-media/api/admin/streamer-layout",
+            self.api_admin_streamer_layout_put,
+        )
+        app.router.add_get("/social-media/api/admin/clips", self.api_admin_clips)
+        app.router.add_get("/social-media/api/admin/clips/{clip_db_id}", self.api_admin_clip_detail)
+        app.router.add_put(
+            "/social-media/api/admin/clips/{clip_db_id}/layout",
+            self.api_admin_clip_layout_put,
+        )
+        app.router.add_post(
+            "/social-media/api/admin/clips/{clip_db_id}/discard",
+            self.api_admin_clip_discard,
+        )
 
         # Template Management Endpoints
         app.router.add_get("/social-media/api/templates/global", self.api_templates_global)
@@ -312,6 +523,7 @@ class SocialMediaDashboard:
         # OAuth & Platform Management Endpoints
         app.router.add_get("/social-media/oauth/start/{platform}", self.oauth_start)
         app.router.add_get("/social-media/oauth/callback", self.oauth_callback)
+        app.router.add_get("/social-media/oauth/callback/{platform}", self.oauth_callback)
         app.router.add_post("/social-media/oauth/disconnect/{platform}", self.oauth_disconnect)
         app.router.add_get("/social-media/api/platforms/status", self.api_platforms_status)
 
@@ -445,6 +657,248 @@ class SocialMediaDashboard:
         summary = self.clip_manager.get_analytics_summary(streamer_login=streamer)
 
         return web.json_response(summary)
+
+    async def api_admin_streamer_layout_get(self, request: web.Request) -> web.Response:
+        self._require_admin(request)
+        streamer_login = self._normalize_safe_slug(
+            request.query.get("streamer_login"),
+            "streamer_login",
+        ).lower()
+        if not self._ensure_streamer_exists(streamer_login):
+            return web.json_response({"error": "unknown_streamer"}, status=404)
+        layout = get_streamer_layout(streamer_login) or DEFAULT_STREAMER_LAYOUT
+        stored_layout = get_streamer_layout(streamer_login)
+
+        updated_at = None
+        updated_by = None
+        if stored_layout:
+            with readonly_connection() as conn:
+                row = conn.execute(
+                    """
+                    SELECT updated_at, updated_by
+                      FROM social_media_streamer_layout
+                     WHERE LOWER(streamer_login) = LOWER(%s)
+                     LIMIT 1
+                    """,
+                    (streamer_login,),
+                ).fetchone()
+            if row:
+                updated_at = row["updated_at"] if hasattr(row, "keys") else row[0]
+                updated_by = row["updated_by"] if hasattr(row, "keys") else row[1]
+
+        return web.json_response(
+            {
+                "streamer_login": streamer_login,
+                "layout": self._serialize_layout(layout),
+                "cam_enabled": layout.cam_enabled,
+                "mode": layout.mode,
+                "is_default": stored_layout is None,
+                "updated_at": updated_at,
+                "updated_by": updated_by,
+            }
+        )
+
+    async def api_admin_streamer_layout_put(self, request: web.Request) -> web.Response:
+        self._require_admin(request)
+        try:
+            payload = await request.json()
+            streamer_login = self._normalize_safe_slug(payload.get("streamer_login"), "streamer_login").lower()
+            if not self._ensure_streamer_exists(streamer_login):
+                return web.json_response({"error": "unknown_streamer"}, status=404)
+            layout = self._parse_layout_request(payload)
+            upsert_streamer_layout(
+                streamer_login,
+                layout,
+                updated_by=self._get_editor_user_id(request),
+            )
+            return web.json_response(
+                {
+                    "streamer_login": streamer_login,
+                    "layout": self._serialize_layout(layout),
+                    "cam_enabled": layout.cam_enabled,
+                    "mode": layout.mode,
+                }
+            )
+        except LayoutValidationError as exc:
+            return web.json_response({"error": "invalid_layout", "message": str(exc)}, status=400)
+
+    async def api_admin_clips(self, request: web.Request) -> web.Response:
+        self._require_admin(request)
+        try:
+            page = max(1, int(request.query.get("page", "1")))
+            page_size = min(100, max(1, int(request.query.get("page_size", "20"))))
+        except (TypeError, ValueError):
+            return web.json_response({"error": "invalid_pagination"}, status=400)
+
+        status = str(request.query.get("status") or "").strip().lower() or None
+        streamer = str(request.query.get("streamer") or "").strip().lower() or None
+        offset = (page - 1) * page_size
+
+        where_clauses = ["1=1"]
+        params: list[object] = []
+        if streamer:
+            where_clauses.append("LOWER(streamer_login) = LOWER(%s)")
+            params.append(streamer)
+        if status:
+            if status == "discarded":
+                where_clauses.append("discarded_at IS NOT NULL")
+            else:
+                where_clauses.append("LOWER(status) = LOWER(%s)")
+                params.append(status)
+
+        where_sql = " AND ".join(where_clauses)
+        with readonly_connection() as conn:
+            total_row = conn.execute(
+                f"SELECT COUNT(*) AS total FROM twitch_clips_social_media WHERE {where_sql}",
+                tuple(params),
+            ).fetchone()
+            rows = conn.execute(
+                f"""
+                SELECT id, clip_id, clip_url, clip_title, clip_thumbnail_url, streamer_login,
+                       created_at, duration_seconds, view_count, game_name, status, source_kind,
+                       upload_local_path, retention_until, discarded_at, layout_override_json,
+                       uploaded_tiktok, uploaded_youtube, uploaded_instagram
+                  FROM twitch_clips_social_media
+                 WHERE {where_sql}
+                 ORDER BY created_at DESC, id DESC
+                 LIMIT %s OFFSET %s
+                """,
+                tuple([*params, page_size, offset]),
+            ).fetchall()
+
+        total = total_row["total"] if hasattr(total_row, "keys") else total_row[0]
+        return web.json_response(
+            {
+                "items": [self._serialize_clip_record(dict(row)) for row in rows],
+                "page": page,
+                "page_size": page_size,
+                "total": total,
+            }
+        )
+
+    async def api_admin_clip_detail(self, request: web.Request) -> web.Response:
+        self._require_admin(request)
+        clip_db_id = self._normalize_clip_id(request.match_info.get("clip_db_id"))
+        if not clip_db_id:
+            return web.json_response({"error": "invalid_clip_db_id"}, status=400)
+        row = self._load_clip_row(clip_db_id)
+        if not row:
+            return web.json_response({"error": "clip_not_found"}, status=404)
+        return web.json_response(self._serialize_clip_record(row))
+
+    async def api_admin_clip_layout_put(self, request: web.Request) -> web.Response:
+        self._require_admin(request)
+        clip_db_id = self._normalize_clip_id(request.match_info.get("clip_db_id"))
+        if not clip_db_id:
+            return web.json_response({"error": "invalid_clip_db_id"}, status=400)
+        row = self._load_clip_row(clip_db_id)
+        if not row:
+            return web.json_response({"error": "clip_not_found"}, status=404)
+
+        try:
+            payload = await request.json()
+            layout_payload = payload.get("layout")
+            if layout_payload is None:
+                set_clip_layout_override(clip_db_id, None)
+                effective_layout = get_clip_effective_layout(clip_db_id)
+                return web.json_response(
+                    {
+                        "clip_db_id": clip_db_id,
+                        "layout_override": None,
+                        "effective_layout": self._serialize_layout(effective_layout),
+                    }
+                )
+
+            layout = StreamerLayout.from_mapping(layout_payload)
+            set_clip_layout_override(clip_db_id, layout)
+            return web.json_response(
+                {
+                    "clip_db_id": clip_db_id,
+                    "layout_override": layout.to_override_json(),
+                    "effective_layout": self._serialize_layout(get_clip_effective_layout(clip_db_id)),
+                }
+            )
+        except LayoutValidationError as exc:
+            return web.json_response({"error": "invalid_layout", "message": str(exc)}, status=400)
+
+    async def api_admin_clip_discard(self, request: web.Request) -> web.Response:
+        self._require_admin(request)
+        clip_db_id = self._normalize_clip_id(request.match_info.get("clip_db_id"))
+        if not clip_db_id:
+            return web.json_response({"error": "invalid_clip_db_id"}, status=400)
+        if not mark_clip_discarded(clip_db_id):
+            return web.json_response({"error": "clip_not_found"}, status=404)
+        row = self._load_clip_row(clip_db_id)
+        if not row:
+            return web.json_response({"clip_db_id": clip_db_id, "discarded": True})
+        return web.json_response(self._serialize_clip_record(row))
+
+    async def api_upload_clip(self, request: web.Request) -> web.Response:
+        self._require_admin(request)
+        post_data = await request.post()
+        file_field = post_data.get("file")
+        if not isinstance(file_field, FileField):
+            return web.json_response({"error": "file is required"}, status=400)
+
+        try:
+            streamer_login = self._normalize_safe_slug(
+                post_data.get("streamer_login"),
+                "streamer_login",
+            ).lower()
+        except web.HTTPBadRequest as exc:
+            return web.json_response({"error": "invalid_streamer_login", "message": exc.text}, status=400)
+
+        if not self._ensure_streamer_exists(streamer_login):
+            return web.json_response({"error": "unknown_streamer"}, status=404)
+
+        raw_clip_id = post_data.get("clip_id")
+        clip_id = (
+            self._normalize_safe_slug(raw_clip_id, "clip_id")
+            if raw_clip_id
+            else uuid.uuid4().hex
+        )
+        title = str(post_data.get("title") or "").strip() or None
+        upload_dir = Path("data/clips/uploads") / streamer_login
+        final_path = upload_dir / f"{clip_id}.mp4"
+        if final_path.exists():
+            return web.json_response({"error": "duplicate_clip_id"}, status=409)
+
+        temp_path = await self._store_uploaded_mp4(file_field, final_path)
+        try:
+            duration_seconds = await self._validate_uploaded_mp4(temp_path)
+            os.replace(temp_path, final_path)
+            clip_db_id, retention_until = self.clip_manager.register_manual_upload(
+                clip_id=clip_id,
+                streamer_login=streamer_login,
+                title=title,
+                local_path=str(final_path),
+                duration_seconds=duration_seconds,
+            )
+        except ValueError as exc:
+            temp_path.unlink(missing_ok=True)
+            final_path.unlink(missing_ok=True)
+            return web.json_response({"error": "duplicate_clip_id", "message": str(exc)}, status=409)
+        except LookupError:
+            temp_path.unlink(missing_ok=True)
+            final_path.unlink(missing_ok=True)
+            return web.json_response({"error": "unknown_streamer"}, status=404)
+        except web.HTTPException:
+            temp_path.unlink(missing_ok=True)
+            raise
+        except Exception:
+            temp_path.unlink(missing_ok=True)
+            final_path.unlink(missing_ok=True)
+            log.exception("Failed to store uploaded clip")
+            return web.json_response({"error": "upload_failed"}, status=500)
+
+        return web.json_response(
+            {
+                "clip_db_id": clip_db_id,
+                "clip_id": clip_id,
+                "retention_until": retention_until,
+            },
+            status=201,
+        )
 
     # ========== Template Management API ==========
 
@@ -732,7 +1186,9 @@ class SocialMediaDashboard:
         oauth_mgr = SocialMediaOAuthManager()
 
         try:
-            redirect_uri = f"{self._oauth_public_origin(request)}/social-media/oauth/callback"
+            redirect_uri = (
+                f"{self._oauth_public_origin(request)}/social-media/oauth/callback/{platform}"
+            )
             auth_url = oauth_mgr.generate_auth_url(platform, streamer, redirect_uri)
 
             return web.HTTPFound(auth_url)
@@ -755,11 +1211,24 @@ class SocialMediaDashboard:
             return web.Response(text="Missing code or state", status=400)
 
         from .oauth_manager import SocialMediaOAuthManager
+        from .oauth_manager import OAuthStateValidationError
+        from .oauth_manager import OAuthTokenExchangeError
 
         oauth_mgr = SocialMediaOAuthManager()
+        expected_platform = str(request.match_info.get("platform") or "").strip().lower() or None
+        callback_redirect_uri = (
+            f"{self._oauth_public_origin(request)}{request.path}"
+            if expected_platform
+            else None
+        )
 
         try:
-            result = await oauth_mgr.handle_callback(code, state)
+            result = await oauth_mgr.handle_callback(
+                code,
+                state,
+                expected_platform=expected_platform,
+                expected_redirect_uri=callback_redirect_uri,
+            )
 
             # Redirect back to dashboard with success message
             platform = result.get("platform", "unknown")
@@ -767,9 +1236,12 @@ class SocialMediaDashboard:
                 platform = "unknown"
             return web.HTTPFound(_dashboard_url(oauth_success=platform))
 
-        except ValueError:
+        except OAuthStateValidationError:
             log.warning("OAuth callback validation failed")
             return web.HTTPFound(_dashboard_url(oauth_error="invalid_callback"))
+        except OAuthTokenExchangeError:
+            log.warning("OAuth token exchange failed", exc_info=True)
+            return web.HTTPFound(_dashboard_url(oauth_error="token_exchange_failed"))
         except Exception:
             log.exception("OAuth callback failed")
             return web.HTTPFound(_dashboard_url(oauth_error="callback_failed"))

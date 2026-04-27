@@ -15,6 +15,7 @@ interface PlanContextType {
   isTabLocked: (tabId: TabId) => boolean;
   isFeatureLocked: (featureId: FeatureId) => boolean;
   hasFullAccess: boolean;
+  isAdmin: boolean;
   trialInfo: TrialInfo | null;
 }
 
@@ -109,8 +110,9 @@ export function PlanProvider({ children, plan, isAdmin, isLocalhost, isDemoMode 
       return !entitlements.includes(requiredEntitlement);
     },
     hasFullAccess,
+    isAdmin,
     trialInfo,
-  }), [tier, plan, entitlements, view, isDemoMode, isPreviewMode, hasFullAccess, hasAiAccess, trialInfo]);
+  }), [tier, plan, entitlements, view, isDemoMode, isPreviewMode, hasFullAccess, hasAiAccess, isAdmin, trialInfo]);
 
   return <PlanContext.Provider value={value}>{children}</PlanContext.Provider>;
 }

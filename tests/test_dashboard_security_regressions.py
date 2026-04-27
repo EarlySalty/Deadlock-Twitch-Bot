@@ -1146,7 +1146,7 @@ class DashboardSecurityRegressionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.location, "https://oauth.example/start")
         self.assertEqual(
             captured,
-            [("youtube", None, "https://safe.example/social-media/oauth/callback")],
+            [("youtube", None, "https://safe.example/social-media/oauth/callback/youtube")],
         )
 
     async def test_social_media_oauth_disconnect_allows_global_scope_without_streamer(self) -> None:

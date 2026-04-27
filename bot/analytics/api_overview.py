@@ -25,8 +25,8 @@ from .error_utils import analytics_internal_error_response
 log = logging.getLogger("TwitchStreams.AnalyticsV2")
 DASHBOARD_LOGIN_URL = "/twitch/auth/login?next=%2Ftwitch%2Fdashboard"
 DASHBOARD_DISCORD_LOGIN_URL = "/twitch/auth/discord/login?next=%2Ftwitch%2Fdashboard"
-DASHBOARD_V2_LOGIN_URL = "/twitch/auth/login?next=%2Ftwitch%2Fanalyse"
-DASHBOARD_V2_DISCORD_LOGIN_URL = "/twitch/auth/discord/login?next=%2Ftwitch%2Fanalyse"
+DASHBOARD_V2_LOGIN_URL = "/twitch/auth/login?next=%2Fanalyse"
+DASHBOARD_V2_DISCORD_LOGIN_URL = "/twitch/auth/discord/login?next=%2Fanalyse"
 DASHBOARD_VERWALTUNG_LOGIN_URL = "/twitch/auth/login?next=%2Ftwitch%2Fverwaltung"
 DASHBOARD_VERWALTUNG_DISCORD_LOGIN_URL = "/twitch/auth/discord/login?next=%2Ftwitch%2Fverwaltung"
 DASHBOARD_PRICING_LOGIN_URL = "/twitch/auth/login?next=%2Ftwitch%2Fpricing"
@@ -125,8 +125,10 @@ class _AnalyticsOverviewMixin:
         router.add_get("/twitch/api/v2/affiliate/portal", self._api_v2_affiliate_portal)
         # Serve the dashboard
         router.add_get("/twitch/dashboard", self._serve_dashboard)
-        router.add_get("/twitch/analyse", self._serve_dashboard_v2)
-        router.add_get("/twitch/analyse/{path:.*}", self._serve_dashboard_v2_assets)
+        router.add_get("/analyse", self._serve_dashboard_v2)
+        router.add_get("/analyse/{path:.*}", self._serve_dashboard_v2_assets)
+        router.add_get("/twitch/analyse", self._redirect_legacy_analyse_to_root)
+        router.add_get("/twitch/analyse/{path:.*}", self._redirect_legacy_analyse_to_root)
         router.add_get("/twitch/dashboard-v2", self._redirect_dashboard_v2_to_analyse)
         router.add_get("/twitch/dashboard-v2/{path:.*}", self._serve_dashboard_v2_assets)
         router.add_get("/twitch/verwaltung", self._serve_verwaltung)
@@ -493,12 +495,21 @@ class _AnalyticsOverviewMixin:
         return web.Response(text=html, content_type="text/html", charset="utf-8")
 
     async def _redirect_dashboard_v2_to_analyse(self, request: web.Request) -> web.StreamResponse:
-        """Redirect legacy /twitch/dashboard-v2 to /twitch/analyse."""
-        qs = f"?{request.query_string}" if request.query_string else ""
-        raise web.HTTPMovedPermanently(location=f"/twitch/analyse{qs}")
+        """Redirect legacy /twitch/dashboard-v2 to /analyse."""
+        return self._redirect_legacy_analyse_to_root(request)
+
+    async def _redirect_legacy_analyse_to_root(self, request: web.Request) -> web.StreamResponse:
+        """Redirect legacy analytics routes to the canonical /analyse path."""
+        path = str(request.match_info.get("path", "") or "").strip("/")
+        location = "/analyse"
+        if path:
+            location = f"{location}/{path}"
+        if request.query_string:
+            location = f"{location}?{request.query_string}"
+        raise web.HTTPMovedPermanently(location=location)
 
     async def _serve_dashboard_v2(self, request: web.Request) -> web.Response:
-        """Serve the main dashboard HTML at /twitch/analyse."""
+        """Serve the main dashboard HTML at /analyse."""
         gate_response = self._admin_dashboard_host_page_gate(request)
         if gate_response is not None:
             return gate_response
@@ -510,7 +521,7 @@ class _AnalyticsOverviewMixin:
                 login_url = DASHBOARD_V2_LOGIN_URL
             response = self._dashboard_auth_redirect_or_unavailable(
                 request,
-                next_path="/twitch/analyse",
+                next_path="/analyse",
                 fallback_login_url=login_url,
             )
             if isinstance(response, web.HTTPException):
@@ -520,7 +531,17 @@ class _AnalyticsOverviewMixin:
 
         dist_path = pathlib.Path(__file__).parent / "dashboard_v2" / "dist" / "index.html"
         if dist_path.exists():
-            return web.FileResponse(dist_path)
+            html = dist_path.read_text(encoding="utf-8")
+            html = self._inject_dashboard_runtime_config(
+                html,
+                runtime_config={
+                    "apiBase": "/twitch/api/v2",
+                    "demoMode": False,
+                    "allowedDemoProfiles": [],
+                },
+                asset_prefix="/analyse/",
+            )
+            return web.Response(text=html, content_type="text/html", charset="utf-8")
         return web.Response(
             text="Dashboard not built. Run npm run build in dashboard_v2/", status=404
         )
@@ -692,7 +713,7 @@ class _AnalyticsOverviewMixin:
                 login_url = DASHBOARD_V2_LOGIN_URL
             response = self._dashboard_auth_redirect_or_unavailable(
                 request,
-                next_path="/twitch/analyse",
+                next_path="/analyse",
                 fallback_login_url=login_url,
             )
             if isinstance(response, web.HTTPException):

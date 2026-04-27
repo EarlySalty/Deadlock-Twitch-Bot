@@ -7,6 +7,7 @@ Verwaltet:
 """
 
 import asyncio
+import hashlib
 import json
 import logging
 import os
@@ -104,6 +105,17 @@ def _safe_int(val, default: int = 0) -> int:
         return int(val)
     except Exception:
         return default
+
+
+def _refresh_advisory_lock_pair(user_id: str) -> tuple[int, int]:
+    digest = hashlib.blake2s(
+        f"twitch_raid_auth_refresh:{user_id}".encode("utf-8"),
+        digest_size=8,
+    ).digest()
+    return (
+        int.from_bytes(digest[:4], "big", signed=True),
+        int.from_bytes(digest[4:], "big", signed=True),
+    )
 
 
 def _normalize_twitch_login(value: str | None) -> str | None:
@@ -222,6 +234,11 @@ class RaidAuthManager:
             self._base_url = f"{redirect_parts.scheme}://{redirect_parts.netloc}"
         else:
             self._base_url = ""
+
+    def _acquire_refresh_db_lock(self, conn, user_id: str) -> None:
+        """Serialize refreshes for one broadcaster across worker processes."""
+        lock_a, lock_b = _refresh_advisory_lock_pair(user_id)
+        conn.execute("SELECT pg_advisory_xact_lock(%s, %s)", (lock_a, lock_b))
 
     def is_client_auth_blocked(self) -> bool:
         return time.time() < self._client_auth_blocked_until
@@ -658,7 +675,7 @@ class RaidAuthManager:
         access_token: str,
         refresh_token: str,
         expires_at_iso: str,
-    ) -> None:
+    ) -> bool:
         """
         Schreibt refreshte Tokens verschlüsselt in die DB.
         Klartext-Spalten werden zur Sicherheit nur noch mit 'ENC' überschrieben.
@@ -679,9 +696,9 @@ class RaidAuthManager:
                 "Refresh for user_id=%s: encrypted write failed; tokens NOT updated to avoid lockout.",
                 _mask_log_identifier(user_id),
             )
-            return
+            return False
 
-        conn.execute(
+        result = conn.execute(
             """
             UPDATE twitch_raid_auth
                SET access_token = 'ENC', refresh_token = 'ENC',
@@ -697,6 +714,13 @@ class RaidAuthManager:
                 user_id,
             ),
         )
+        if getattr(result, "rowcount", 1) == 0:
+            log.error(
+                "Refresh for user_id=%s: DB write matched no auth row; tokens NOT updated.",
+                _mask_log_identifier(user_id),
+            )
+            return False
+        return True
 
     # ------------------------------------------------------------------
 
@@ -1049,74 +1073,66 @@ class RaidAuthManager:
                 continue
 
             async with self._lock:
+                log.debug(
+                    "Auto-refreshing OAuth grant for %s (background maintenance)", login
+                )
                 try:
-                    # Double-Check im Lock: Expiry UND Refresh-Token neu lesen.
-                    # Wenn ein anderer Prozess den Token bereits refresht hat, ist
-                    # refresh_token_enc in der DB anders als unser pre-lock refresh_tok.
-                    with readonly_connection() as conn:
+                    with transaction() as conn:
+                        self._acquire_refresh_db_lock(conn, user_id)
+                        # Double-Check im prozess- und DB-Lock: Expiry UND Refresh-Token neu lesen.
+                        # Wenn ein anderer Prozess den Token bereits refresht hat, ist
+                        # refresh_token_enc in der DB anders als unser pre-lock refresh_tok.
                         current = conn.execute(
                             """SELECT token_expires_at, refresh_token_enc, enc_version
                                FROM twitch_raid_auth WHERE twitch_user_id = %s""",
                             (user_id,),
                         ).fetchone()
 
-                    if current:
-                        curr_iso = current[0]
-                        if not curr_iso:
-                            log.warning(
-                                "Missing expiry timestamp in double-check for broadcaster=%s; skipping",
-                                _mask_log_identifier(login),
-                            )
-                            continue
-                        curr_ts = _parse_expiry_ts(curr_iso)
-                        if time.time() < curr_ts - 7200:
-                            continue  # Wurde bereits refresht (Expiry weit genug in der Zukunft)
+                        if current:
+                            curr_iso = current[0]
+                            if not curr_iso:
+                                log.warning(
+                                    "Missing expiry timestamp in double-check for broadcaster=%s; skipping",
+                                    _mask_log_identifier(login),
+                                )
+                                continue
+                            curr_ts = _parse_expiry_ts(curr_iso)
+                            if time.time() < curr_ts - 7200:
+                                continue  # Wurde bereits refresht (Expiry weit genug in der Zukunft)
 
-                        # Refresh-Token geändert? → anderer Prozess hat bereits refresht.
-                        # Frischesten Token aus DB verwenden, nicht den pre-lock-read.
-                        _curr_enc_v = current["enc_version"] or 1
-                        curr_refresh_tok = self._resolve_token(
-                            current["refresh_token_enc"],
-                            f"twitch_raid_auth|refresh_token|{user_id}|{_curr_enc_v}",
-                            "refresh_token.dc2",
-                            str(user_id),
+                            # Refresh-Token geändert? → anderer Prozess hat bereits refresht.
+                            # Frischesten Token aus DB verwenden, nicht den pre-lock-read.
+                            _curr_enc_v = current["enc_version"] or 1
+                            curr_refresh_tok = self._resolve_token(
+                                current["refresh_token_enc"],
+                                f"twitch_raid_auth|refresh_token|{user_id}|{_curr_enc_v}",
+                                "refresh_token.dc2",
+                                str(user_id),
+                            )
+                            if curr_refresh_tok and curr_refresh_tok != refresh_tok:
+                                log.info(
+                                    "Refresh token changed for broadcaster=%s since pre-lock read "
+                                    "(another process refreshed). Using updated token.",
+                                    _mask_log_identifier(login),
+                                )
+                                refresh_tok = curr_refresh_tok
+
+                        token_data = await self.refresh_token(
+                            refresh_tok, session, twitch_user_id=user_id, twitch_login=login
                         )
-                        if curr_refresh_tok and curr_refresh_tok != refresh_tok:
-                            log.info(
-                                "Refresh token changed for broadcaster=%s since pre-lock read "
-                                "(another process refreshed). Using updated token.",
-                                _mask_log_identifier(login),
-                            )
-                            refresh_tok = curr_refresh_tok
-                except Exception as exc:
-                    # Bug Fix: Bei Exception im Double-Check SKIP statt Fallthrough zum Refresh
-                    log.warning(
-                        "Double-check failed for %s, skipping refresh to be safe: %s",
-                        login,
-                        exc,
-                    )
-                    continue
+                        new_access = token_data["access_token"]
+                        new_refresh = token_data.get("refresh_token") or refresh_tok
+                        expires_in = _safe_int(token_data.get("expires_in", 3600), 3600)
 
-                log.debug(
-                    "Auto-refreshing OAuth grant for %s (background maintenance)", login
-                )
-                try:
-                    token_data = await self.refresh_token(
-                        refresh_tok, session, twitch_user_id=user_id, twitch_login=login
-                    )
-                    new_access = token_data["access_token"]
-                    new_refresh = token_data.get("refresh_token") or refresh_tok
-                    expires_in = _safe_int(token_data.get("expires_in", 3600), 3600)
+                        new_expires_at = datetime.now(UTC).timestamp() + expires_in
+                        new_expires_iso = datetime.fromtimestamp(
+                            new_expires_at, UTC
+                        ).isoformat()
 
-                    new_expires_at = datetime.now(UTC).timestamp() + expires_in
-                    new_expires_iso = datetime.fromtimestamp(
-                        new_expires_at, UTC
-                    ).isoformat()
-
-                    with transaction() as conn:
-                        self._write_token_refresh(
+                        if not self._write_token_refresh(
                             conn, user_id, new_access, new_refresh, new_expires_iso
-                        )
+                        ):
+                            raise RuntimeError("token_refresh_write_failed")
                         # autocommit – no explicit commit needed
                     # Erfolgreicher Refresh → eventuelle Fehler-Counter zurücksetzen
                     self.token_error_handler.clear_failure_count(user_id)
@@ -1232,7 +1248,7 @@ class RaidAuthManager:
         with transaction() as conn:
             existing_row = conn.execute(
                 """
-                SELECT raid_enabled
+                SELECT raid_enabled, needs_reauth
                 FROM twitch_raid_auth
                 WHERE twitch_user_id = %s
                    OR LOWER(COALESCE(twitch_login, '')) = LOWER(%s)
@@ -1248,6 +1264,15 @@ class RaidAuthManager:
                     existing_row["raid_enabled"]
                     if hasattr(existing_row, "keys")
                     else existing_row[0]
+                )
+                if existing_row
+                else False
+            )
+            existing_needs_reauth = (
+                bool(
+                    existing_row["needs_reauth"]
+                    if hasattr(existing_row, "keys")
+                    else existing_row[1]
                 )
                 if existing_row
                 else False
@@ -1292,6 +1317,43 @@ class RaidAuthManager:
                 """,
                 (twitch_user_id,),
             )
+            if existing_needs_reauth and activate_raid_features:
+                try:
+                    set_partner_raid_bot_enabled(
+                        conn,
+                        twitch_user_id=twitch_user_id,
+                        enabled=True,
+                    )
+                    active_partner = load_active_partner(
+                        conn,
+                        twitch_user_id=twitch_user_id,
+                        twitch_login=twitch_login,
+                    )
+                    if active_partner:
+                        partner_id = (
+                            active_partner["id"]
+                            if hasattr(active_partner, "keys")
+                            else active_partner[0]
+                        )
+                        conn.execute(
+                            """
+                            UPDATE twitch_partners
+                            SET manual_partner_opt_out = 0,
+                                raid_bot_enabled = 1,
+                                twitch_login = COALESCE(NULLIF(%s, ''), twitch_login)
+                            WHERE id = %s
+                            """,
+                            (
+                                twitch_login,
+                                partner_id,
+                            ),
+                        )
+                except Exception:
+                    log.debug(
+                        "Could not restore partner raid state after successful reauth for user_id=%s",
+                        _mask_log_identifier(twitch_user_id),
+                        exc_info=True,
+                    )
             copied = backfill_tracked_stats_from_category(conn, twitch_login)
             if copied:
                 log.info(
@@ -1380,77 +1442,80 @@ class RaidAuthManager:
 
         # Token abgelaufen -> refresh
         async with self._lock:
-            # Erneuter Check innerhalb des Locks (Double-Check Locking Pattern)
-            with readonly_connection() as conn:
-                row_check = conn.execute(
-                    """SELECT token_expires_at,
-                              access_token_enc,
-                              refresh_token_enc,
-                              enc_version,
-                              needs_reauth
-                       FROM twitch_raid_auth WHERE twitch_user_id = %s""",
-                    (twitch_user_id,),
-                ).fetchone()
-
-            if row_check:
-                if bool(
-                    row_check["needs_reauth"]
-                    if hasattr(row_check, "keys")
-                    else row_check[4]
-                ):
-                    log.info(
-                        "Auth lookup denied for user_id=%s inside refresh lock: dashboard reauth required",
-                        _mask_log_identifier(twitch_user_id),
-                    )
-                    return None
-                _dc_uid = str(twitch_user_id)
-                _dc_v = row_check["enc_version"] or 1
-                curr_expires_iso = row_check["token_expires_at"]
-                curr_access = self._resolve_token(
-                    row_check["access_token_enc"],
-                    f"twitch_raid_auth|access_token|{_dc_uid}|{_dc_v}",
-                    "access_token.dc",
-                    _dc_uid,
-                )
-                curr_refresh = self._resolve_token(
-                    row_check["refresh_token_enc"],
-                    f"twitch_raid_auth|refresh_token|{_dc_uid}|{_dc_v}",
-                    "refresh_token.dc",
-                    _dc_uid,
-                )
-                curr_expires = _parse_expiry_ts(curr_expires_iso)
-                if time.time() < curr_expires - 300 and curr_access and curr_refresh:
-                    return curr_access, curr_refresh
-
-            log.info(
-                "Refreshing OAuth grant for broadcaster=%s (auth lookup)",
-                _mask_log_identifier(twitch_login),
-            )
             try:
-                token_data = await self.refresh_token(
-                    refresh_token,
-                    session,
-                    twitch_user_id=twitch_user_id,
-                    twitch_login=twitch_login,
-                )
-                new_access_token = token_data["access_token"]
-                new_refresh_token = token_data.get("refresh_token") or refresh_token
-                expires_in = _safe_int(token_data.get("expires_in", 3600), 3600)
-
-                # Token in DB aktualisieren
-                new_expires_at = datetime.now(UTC).timestamp() + expires_in
-                new_expires_at_iso = datetime.fromtimestamp(
-                    new_expires_at, UTC
-                ).isoformat()
-
                 with transaction() as conn:
-                    self._write_token_refresh(
+                    self._acquire_refresh_db_lock(conn, twitch_user_id)
+                    # Erneuter Check innerhalb des Prozess- und DB-Locks.
+                    row_check = conn.execute(
+                        """SELECT token_expires_at,
+                                  access_token_enc,
+                                  refresh_token_enc,
+                                  enc_version,
+                                  needs_reauth
+                           FROM twitch_raid_auth WHERE twitch_user_id = %s""",
+                        (twitch_user_id,),
+                    ).fetchone()
+
+                    if row_check:
+                        if bool(
+                            row_check["needs_reauth"]
+                            if hasattr(row_check, "keys")
+                            else row_check[4]
+                        ):
+                            log.info(
+                                "Auth lookup denied for user_id=%s inside refresh lock: dashboard reauth required",
+                                _mask_log_identifier(twitch_user_id),
+                            )
+                            return None
+                        _dc_uid = str(twitch_user_id)
+                        _dc_v = row_check["enc_version"] or 1
+                        curr_expires_iso = row_check["token_expires_at"]
+                        curr_access = self._resolve_token(
+                            row_check["access_token_enc"],
+                            f"twitch_raid_auth|access_token|{_dc_uid}|{_dc_v}",
+                            "access_token.dc",
+                            _dc_uid,
+                        )
+                        curr_refresh = self._resolve_token(
+                            row_check["refresh_token_enc"],
+                            f"twitch_raid_auth|refresh_token|{_dc_uid}|{_dc_v}",
+                            "refresh_token.dc",
+                            _dc_uid,
+                        )
+                        curr_expires = _parse_expiry_ts(curr_expires_iso)
+                        if time.time() < curr_expires - 300 and curr_access and curr_refresh:
+                            return curr_access, curr_refresh
+                        if curr_refresh:
+                            refresh_token = curr_refresh
+
+                    log.info(
+                        "Refreshing OAuth grant for broadcaster=%s (auth lookup)",
+                        _mask_log_identifier(twitch_login),
+                    )
+                    token_data = await self.refresh_token(
+                        refresh_token,
+                        session,
+                        twitch_user_id=twitch_user_id,
+                        twitch_login=twitch_login,
+                    )
+                    new_access_token = token_data["access_token"]
+                    new_refresh_token = token_data.get("refresh_token") or refresh_token
+                    expires_in = _safe_int(token_data.get("expires_in", 3600), 3600)
+
+                    # Token in DB aktualisieren
+                    new_expires_at = datetime.now(UTC).timestamp() + expires_in
+                    new_expires_at_iso = datetime.fromtimestamp(
+                        new_expires_at, UTC
+                    ).isoformat()
+
+                    if not self._write_token_refresh(
                         conn,
                         twitch_user_id,
                         new_access_token,
                         new_refresh_token,
                         new_expires_at_iso,
-                    )
+                    ):
+                        raise RuntimeError("token_refresh_write_failed")
                     # autocommit – no explicit commit needed
 
                 self.token_error_handler.clear_failure_count(twitch_user_id)
@@ -1538,76 +1603,84 @@ class RaidAuthManager:
 
         # SCHRITT 4: Token abgelaufen -> refresh (mit Blacklist-Protection)
         async with self._lock:
-            # Double-Check Locking
-            with readonly_connection() as conn:
-                row_check = conn.execute(
-                    """SELECT token_expires_at,
-                              access_token_enc, enc_version,
-                              raid_enabled, needs_reauth
-                       FROM twitch_raid_auth WHERE twitch_user_id = %s""",
-                    (twitch_user_id,),
-                ).fetchone()
-
-            if row_check:
-                raid_enabled = bool(
-                    row_check["raid_enabled"]
-                    if hasattr(row_check, "keys")
-                    else row_check[3]
-                )
-                needs_reauth = bool(
-                    row_check["needs_reauth"]
-                    if hasattr(row_check, "keys")
-                    else row_check[4]
-                )
-                if not raid_enabled or needs_reauth:
-                    return None
-                _dc_uid = str(twitch_user_id)
-                _dc_v = row_check["enc_version"] or 1
-                curr_expires_iso = row_check["token_expires_at"]
-                curr_access = self._resolve_token(
-                    row_check["access_token_enc"],
-                    f"twitch_raid_auth|access_token|{_dc_uid}|{_dc_v}",
-                    "access_token.dc",
-                    _dc_uid,
-                )
-                curr_expires = _parse_expiry_ts(curr_expires_iso)
-                if time.time() < curr_expires - 300 and curr_access:
-                    return curr_access
-
-            if not refresh_token:
-                log.warning(
-                    "Stored refresh credential unavailable for user_id=%s - cannot refresh",
-                    _mask_log_identifier(twitch_user_id),
-                )
-                return None
-
-            log.info("Refreshing OAuth grant for %s", twitch_login)
             try:
-                # Refresh mit User-Info für Blacklist-Tracking
-                token_data = await self.refresh_token(
-                    refresh_token,
-                    session,
-                    twitch_user_id=twitch_user_id,
-                    twitch_login=twitch_login,
-                )
-                new_access_token = token_data["access_token"]
-                new_refresh_token = token_data.get("refresh_token") or refresh_token
-                expires_in = _safe_int(token_data.get("expires_in", 3600), 3600)
-
-                # Token in DB aktualisieren
-                new_expires_at = datetime.now(UTC).timestamp() + expires_in
-                new_expires_at_iso = datetime.fromtimestamp(
-                    new_expires_at, UTC
-                ).isoformat()
-
                 with transaction() as conn:
-                    self._write_token_refresh(
+                    self._acquire_refresh_db_lock(conn, twitch_user_id)
+                    row_check = conn.execute(
+                        """SELECT token_expires_at,
+                                  access_token_enc, refresh_token_enc, enc_version,
+                                  raid_enabled, needs_reauth
+                           FROM twitch_raid_auth WHERE twitch_user_id = %s""",
+                        (twitch_user_id,),
+                    ).fetchone()
+
+                    if row_check:
+                        raid_enabled = bool(
+                            row_check["raid_enabled"]
+                            if hasattr(row_check, "keys")
+                            else row_check[4]
+                        )
+                        needs_reauth = bool(
+                            row_check["needs_reauth"]
+                            if hasattr(row_check, "keys")
+                            else row_check[5]
+                        )
+                        if not raid_enabled or needs_reauth:
+                            return None
+                        _dc_uid = str(twitch_user_id)
+                        _dc_v = row_check["enc_version"] or 1
+                        curr_expires_iso = row_check["token_expires_at"]
+                        curr_access = self._resolve_token(
+                            row_check["access_token_enc"],
+                            f"twitch_raid_auth|access_token|{_dc_uid}|{_dc_v}",
+                            "access_token.dc",
+                            _dc_uid,
+                        )
+                        curr_refresh = self._resolve_token(
+                            row_check["refresh_token_enc"],
+                            f"twitch_raid_auth|refresh_token|{_dc_uid}|{_dc_v}",
+                            "refresh_token.dc",
+                            _dc_uid,
+                        )
+                        curr_expires = _parse_expiry_ts(curr_expires_iso)
+                        if time.time() < curr_expires - 300 and curr_access:
+                            return curr_access
+                        if curr_refresh:
+                            refresh_token = curr_refresh
+
+                    if not refresh_token:
+                        log.warning(
+                            "Stored refresh credential unavailable for user_id=%s - cannot refresh",
+                            _mask_log_identifier(twitch_user_id),
+                        )
+                        return None
+
+                    log.info("Refreshing OAuth grant for %s", twitch_login)
+                    # Refresh mit User-Info für Blacklist-Tracking
+                    token_data = await self.refresh_token(
+                        refresh_token,
+                        session,
+                        twitch_user_id=twitch_user_id,
+                        twitch_login=twitch_login,
+                    )
+                    new_access_token = token_data["access_token"]
+                    new_refresh_token = token_data.get("refresh_token") or refresh_token
+                    expires_in = _safe_int(token_data.get("expires_in", 3600), 3600)
+
+                    # Token in DB aktualisieren
+                    new_expires_at = datetime.now(UTC).timestamp() + expires_in
+                    new_expires_at_iso = datetime.fromtimestamp(
+                        new_expires_at, UTC
+                    ).isoformat()
+
+                    if not self._write_token_refresh(
                         conn,
                         twitch_user_id,
                         new_access_token,
                         new_refresh_token,
                         new_expires_at_iso,
-                    )
+                    ):
+                        raise RuntimeError("token_refresh_write_failed")
                     # autocommit – no explicit commit needed
 
                 self.token_error_handler.clear_failure_count(twitch_user_id)

@@ -3,7 +3,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { Header } from '@/components/layout/Header';
 import { TabNavigation, type TabId } from '@/components/layout/TabNavigation';
 import { Overview } from '@/pages/Overview';
-import { Sessions } from '@/pages/Sessions';
+import { SocialMedia } from '@/pages/SocialMedia';
 import { ChatAnalytics } from '@/pages/ChatAnalytics';
 import { Growth } from '@/pages/Growth';
 import { Audience } from '@/pages/Audience';
@@ -144,7 +144,7 @@ function AnalyticsDashboard() {
     }
     const urlTab = params.get('tab');
     if (urlTab) {
-      const validTabs: Array<TabId | 'session-detail'> = ['overview', 'streams', 'chat', 'growth', 'audience', 'viewers', 'coaching', 'compare', 'schedule', 'monetization', 'category', 'experimental', 'ai', 'title'];
+      const validTabs: Array<TabId | 'session-detail'> = ['overview', 'social-media', 'chat', 'growth', 'audience', 'viewers', 'coaching', 'compare', 'schedule', 'monetization', 'category', 'experimental', 'ai', 'title'];
       if (validTabs.includes(urlTab as TabId)) {
         setActiveTab(urlTab as TabId);
       }
@@ -284,8 +284,8 @@ function AnalyticsDashboard() {
             />
           )}
 
-          {activeTab === 'streams' && (
-            <Sessions streamer={streamer || ''} days={days} onSessionClick={handleSessionClick} />
+          {activeTab === 'social-media' && (
+            <SocialMedia streamer={streamer || ''} />
           )}
 
           {activeTab === 'chat' && (
@@ -347,7 +347,7 @@ function AnalyticsDashboard() {
               streamer={streamer || ''}
               onBack={() => {
                 setSelectedSessionId(null);
-                setActiveTab('streams');
+                setActiveTab('overview');
               }}
             />
           )}

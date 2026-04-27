@@ -77,7 +77,7 @@
 ## Dashboard: Thematische Neuordnung der Tab-Inhalte
 
 - Ziel: Sektionen innerhalb bestehender Tabs neu ordnen, thematisch zusammengehörige Inhalte zusammenbringen, rohe Bereiche ausbauen
-- Status: 🔄 GPT-Worker gestartet (2026-04-22)
+- Status: ✅ Abgeschlossen (2026-04-22)
 - Betroffene Dateien: `chatAnalyticsContent.tsx`, `useChatAnalyticsPage.ts`, `ChatAnalytics.tsx`, `Audience.tsx`, `Growth.tsx`, `Schedule.tsx`
 - Entscheidungen:
   - ViewerProfiles aus Chat → Audience (nach Demographics/Lurker-Sektion)
@@ -121,3 +121,38 @@
   - `bot/dashboard/abbo_routes.py`
   - `bot/dashboard/billing/billing_plans.py`
   - `bot/dashboard/server_v2.py`
+
+## Security Code Review
+
+- 2026-04-24: Security-Review fuer `bot/dashboard/`, `bot/api/`, `bot/internal_api/`, `bot/runtime_security.py` und `bot/secret_store.py` gestartet; Auth-, Session-, Template-, SQL-, Dateisystem- und subprocess-Pfade gelesen.
+- 2026-04-24: Hochsichere Findings bestaetigt:
+  - IDOR auf `twitch/api/v2/session/{id}` und `twitch/api/v2/session/{id}/events`: nur allgemeine Auth, keine Eigentuemerpruefung gegen die angeforderte Stream-Session.
+  - Breiter Cross-Streamer-Auth-Bypass in mehreren Analytics-v2-Endpunkten mit `streamer`-Parameter: Partner-Session darf fremde Streamer-Daten abfragen; Plan-Gating prueft Ziel-Plan statt Session-Bindung.
+
+## Backend internal-home parallelisieren
+
+- 2026-04-26: Aufgabe aufgenommen. `bot/analytics/api_v2.py` und `bot/storage/pg.py` gelesen; `readonly_connection()` bestaetigt als reentrant ueber Prozess-Pool, aber Repo-Default `TWITCH_ANALYTICS_POOL_MAXSIZE=4` ist fuer Voll-Parallelisierung zu klein.
+- 2026-04-26: `_build_internal_home_payload` auf async umgebaut: Identity-Block laeuft zuerst, danach Fallback-Parallelisierung mit `asyncio.gather()`/`asyncio.to_thread()` fuer Health-Score, Week-Comparison, Autoban-Events, Service-Warnings und Changelog; restliche Core-Aggregate bleiben gebuendelt sequenziell auf einer Readonly-Connection.
+- 2026-04-26: Fehlerpfad gehaertet: Gather-Subblocks loggen Exceptions und fallen auf bestehende Defaults zurueck; API-Caller awaited jetzt den Payload-Build und laedt den Changelog parallel.
+
+## Social Media Phase 0 - Stabilisierung
+
+- 2026-04-26: Aufgabe aufgenommen. `bot/social_media/oauth_manager.py`, `bot/social_media/dashboard.py`, `bot/social_media/credential_manager.py`, `bot/social_media/token_refresh_worker.py`, `bot/storage/pg.py` und bestehende Social-Media-/Storage-Tests gelesen; verbotene Dashboard-Route-Migrationsdateien nicht angeruehrt.
+- 2026-04-26: Diagnose festgezogen:
+  - OAuth-Callback behandelt Provider-Exchange-Fehler aktuell genauso wie State-Fehler (`ValueError`), wodurch Redirect-/PKCE-Probleme als "ungueltiger Callback/State" erscheinen.
+  - Social-Media-OAuth verwendet einen generischen Callback-Pfad ohne Plattform-Bindung; Redirect-URI wird ohne explizite Callback-Pfadbindung gespeichert.
+  - Token-Refresh-Worker loggt harte Refresh-Fehler nur, ohne Discord-DM oder 24h-Drosselung.
+  - Sequence-Drift ist fuer mehrere Social-Media-Tabellen moeglich, nicht nur `twitch_clips_social_media`.
+- 2026-04-26: Umsetzung gestartet:
+  - Neues Helper-Modul `bot/social_media/storage.py` fuer Phase-0-DDL (OAuth-State-Haertung mit `consumed_at`/`TIMESTAMPTZ`, Tabelle `social_media_reauth_notifications`, Sequence-Repair fuer Social-Media-Tabellen).
+  - Neue Migration `bot/migrations/social_media_phase0_stabilization.py`.
+  - `bot/social_media/oauth_manager.py` haertet State-Consume plattform-/redirect-gebunden und trennt State-, Exchange- und Refresh-Fehler per eigenen Exception-Typen.
+  - `bot/social_media/dashboard.py` verwendet plattformspezifische Callback-URIs `/social-media/oauth/callback/{platform}` und priorisiert konfigurierte Public-Origin-Werte vor localhost-Fallback.
+  - `bot/social_media/token_refresh_worker.py` verschickt bei nicht-transienten Refresh-Fehlern eine gedrosselte Admin-DM (24h pro Streamer×Plattform×Fehlerart).
+- 2026-04-26: Verifikation laeuft: Python-Syntaxcheck fuer die geaenderten Social-Media-Dateien und die neue Migration erfolgreich; Postgres-Regressionstests werden als Naechstes ausgefuehrt.
+
+## Social Media Phase 1 - Backend (Layout, Upload, Retention)
+
+- Status: ✅ Abgeschlossen (2026-04-26)
+- 2026-04-26: Phase-1-Backend umgesetzt in `bot/social_media/` und `bot/migrations/`: Streamer-Layout-Storage mit Clip-Override/Auto-Apply, Admin-API fuer Layouts und Pending-Clips, MP4-Upload fuer manuelle Clips, Retention-Helper/Cog sowie FFmpeg-Komposition aus Layout-JSON.
+- 2026-04-26: Verifikation erfolgreich: `py_compile` fuer die geaenderten Social-Media-Module/Migration, neue Phase-1-Tests (`tests/test_social_media_phase1_backend.py`, `tests/test_social_media_phase1_video.py`) sowie bestehende Social-Media-Regressionssuites (`phase0`, `dashboard_rendering`, `auth_regressions`) gruen; optionaler Real-FFmpeg-Test in `test_social_media_phase1_video.py` lokal nur bei vorhandenem `ffmpeg/ffprobe`.

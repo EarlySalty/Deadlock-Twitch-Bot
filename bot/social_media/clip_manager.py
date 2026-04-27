@@ -10,6 +10,8 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from ..storage import transaction
+from .layout import apply_default_layout
+from .retention import refresh_clip_publication_status
 
 log = logging.getLogger("TwitchStreams.ClipManager")
 
@@ -62,6 +64,7 @@ class ClipManager:
 
                 if existing:
                     log.debug("Clip %s bereits registriert (ID: %s)", clip_id, existing[0])
+                    apply_default_layout(existing[0], streamer_login)
                     return existing[0]
 
                 # Sicherstellen dass Streamer in twitch_streamers existiert (FK-Anforderung).
@@ -104,6 +107,8 @@ class ClipManager:
                     clip_db_id,
                     title[:50],
                 )
+                if clip_db_id:
+                    apply_default_layout(clip_db_id, streamer_login)
                 return clip_db_id
 
         except Exception:
@@ -253,6 +258,79 @@ class ClipManager:
         except Exception:
             log.exception("Fehler beim Laden von Clips für Dashboard")
             return []
+
+    def register_manual_upload(
+        self,
+        *,
+        clip_id: str,
+        streamer_login: str,
+        title: str | None,
+        local_path: str,
+        duration_seconds: float,
+    ) -> tuple[int, str]:
+        created_at = datetime.now(UTC).isoformat()
+        with transaction() as conn:
+            existing = conn.execute(
+                "SELECT id FROM twitch_clips_social_media WHERE clip_id = %s",
+                (clip_id,),
+            ).fetchone()
+            if existing:
+                raise ValueError("clip_id already exists")
+
+            streamer_row = conn.execute(
+                """
+                SELECT twitch_user_id
+                  FROM twitch_streamers
+                 WHERE LOWER(twitch_login) = LOWER(%s)
+                 LIMIT 1
+                """,
+                (streamer_login,),
+            ).fetchone()
+            if not streamer_row:
+                raise LookupError("unknown streamer")
+
+            cursor = conn.execute(
+                """
+                INSERT INTO twitch_clips_social_media (
+                    clip_id,
+                    clip_url,
+                    clip_title,
+                    clip_thumbnail_url,
+                    streamer_login,
+                    twitch_user_id,
+                    created_at,
+                    duration_seconds,
+                    view_count,
+                    game_name,
+                    status,
+                    source_kind,
+                    upload_local_path,
+                    local_file_path
+                )
+                VALUES (
+                    %s, %s, %s, NULL, %s, %s, %s, %s, 0, NULL, 'pending',
+                    'manual_upload', %s, %s
+                )
+                RETURNING id, retention_until
+                """,
+                (
+                    clip_id,
+                    local_path,
+                    title,
+                    streamer_login,
+                    streamer_row["twitch_user_id"] if hasattr(streamer_row, "keys") else streamer_row[0],
+                    created_at,
+                    duration_seconds,
+                    local_path,
+                    local_path,
+                ),
+            )
+            row = cursor.fetchone()
+            clip_db_id = row["id"] if hasattr(row, "keys") else row[0]
+            retention_until = row["retention_until"] if hasattr(row, "keys") else row[1]
+
+        apply_default_layout(clip_db_id, streamer_login)
+        return clip_db_id, str(retention_until)
 
     def queue_upload(
         self,
@@ -528,6 +606,8 @@ class ClipManager:
                             )
 
                     log.info("Upload completed: Queue %s -> %s", queue_id, external_video_id)
+                    if queue_item:
+                        refresh_clip_publication_status(clip_id)
 
                 elif status == "failed":
                     conn.execute(
@@ -1259,6 +1339,7 @@ class ClipManager:
                     platforms,
                     manual,
                 )
+                refresh_clip_publication_status(clip_id)
                 return True
 
         except Exception:

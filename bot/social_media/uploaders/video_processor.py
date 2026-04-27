@@ -7,9 +7,100 @@ Konvertiert Videos zu platform-spezifischen Formaten (9:16 für Shorts/Reels).
 import asyncio
 import json
 import logging
+import subprocess
 from pathlib import Path
 
+from ..layout import StreamerLayout
+
 log = logging.getLogger("TwitchStreams.VideoProcessor")
+
+
+def compose_vertical(
+    input_path: str,
+    output_path: str,
+    layout: StreamerLayout,
+    mode: str,
+    cam_enabled: bool,
+    *,
+    ffmpeg_path: str = "ffmpeg",
+) -> None:
+    resolved_mode = str(mode or layout.mode).strip().lower()
+    filter_graph = _build_compose_filter(layout, resolved_mode, cam_enabled)
+    cmd = [
+        ffmpeg_path,
+        "-i",
+        input_path,
+        "-filter_complex",
+        filter_graph,
+        "-map",
+        "[vout]",
+        "-map",
+        "0:a?",
+        "-c:v",
+        "libx264",
+        "-preset",
+        "medium",
+        "-crf",
+        "23",
+        "-c:a",
+        "aac",
+        "-af",
+        "loudnorm",
+        "-movflags",
+        "+faststart",
+        "-y",
+        output_path,
+    ]
+    result = subprocess.run(cmd, capture_output=True, text=True, check=False)
+    if result.returncode != 0:
+        raise RuntimeError(result.stderr.strip() or "ffmpeg composition failed")
+    if not Path(output_path).exists():
+        raise RuntimeError(f"Output file not created: {output_path}")
+
+
+def _build_compose_filter(layout: StreamerLayout, mode: str, cam_enabled: bool) -> str:
+    game_crop = layout.game_crop
+    cam_crop = layout.cam_crop
+    top_height = max(1, min(1919, layout.cam_position.h))
+    game_height = 1920 - top_height
+    base_game = (
+        f"[0:v]crop={game_crop.w}:{game_crop.h}:{game_crop.x}:{game_crop.y},"
+        "scale=1080:1920:force_original_aspect_ratio=increase,"
+        "crop=1080:1920,setsar=1[gamefull]"
+    )
+    if not cam_enabled:
+        return base_game.replace("[gamefull]", "[vout]")
+
+    if mode == "stacked":
+        return ";".join(
+            [
+                (
+                    f"[0:v]crop={cam_crop.w}:{cam_crop.h}:{cam_crop.x}:{cam_crop.y},"
+                    f"scale=1080:{top_height}:force_original_aspect_ratio=increase,"
+                    f"crop=1080:{top_height},setsar=1[cam]"
+                ),
+                (
+                    f"[0:v]crop={game_crop.w}:{game_crop.h}:{game_crop.x}:{game_crop.y},"
+                    f"scale=1080:{game_height}:force_original_aspect_ratio=increase,"
+                    f"crop=1080:{game_height},setsar=1[game]"
+                ),
+                "[cam][game]vstack=inputs=2[vout]",
+            ]
+        )
+
+    pip_size = 320
+    inset = 48
+    return ";".join(
+        [
+            base_game,
+            (
+                f"[0:v]crop={cam_crop.w}:{cam_crop.h}:{cam_crop.x}:{cam_crop.y},"
+                f"scale={pip_size}:{pip_size}:force_original_aspect_ratio=increase,"
+                f"crop={pip_size}:{pip_size},setsar=1[cam]"
+            ),
+            f"[gamefull][cam]overlay=W-w-{inset}:{inset}[vout]",
+        ]
+    )
 
 
 class VideoProcessor:
@@ -79,6 +170,23 @@ class VideoProcessor:
         except Exception:
             log.exception("Failed to get video info for %s", video_path)
             raise
+
+    def compose_vertical(
+        self,
+        input_path: str,
+        output_path: str,
+        layout: StreamerLayout,
+        mode: str,
+        cam_enabled: bool,
+    ) -> None:
+        compose_vertical(
+            input_path,
+            output_path,
+            layout,
+            mode,
+            cam_enabled,
+            ffmpeg_path=self.ffmpeg,
+        )
 
     async def convert_to_vertical(
         self,

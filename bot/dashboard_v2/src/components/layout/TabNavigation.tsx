@@ -1,7 +1,7 @@
 import { motion } from 'framer-motion';
 import {
   LayoutDashboard,
-  TrendingUp,
+  Film,
   MessageSquare,
   BarChart3,
   Users,
@@ -21,7 +21,7 @@ import type { TabId as BillingTabId } from '../../types/billing';
 
 export type TabId =
   | 'overview'
-  | 'streams'
+  | 'social-media'
   | 'chat'
   | 'growth'
   | 'audience'
@@ -40,11 +40,12 @@ interface Tab {
   label: string;
   icon: React.ComponentType<{ className?: string }>;
   beta?: boolean;
+  adminOnly?: boolean;
 }
 
 const tabs: Tab[] = [
   { id: 'overview', label: 'Übersicht', icon: LayoutDashboard },
-  { id: 'streams', label: 'Streams', icon: TrendingUp },
+  { id: 'social-media', label: 'Social Media', icon: Film, adminOnly: true, beta: true },
   { id: 'chat', label: 'Chat', icon: MessageSquare },
   { id: 'growth', label: 'Wachstum', icon: BarChart3 },
   { id: 'audience', label: 'Audience', icon: Target },
@@ -65,13 +66,14 @@ interface TabNavigationProps {
 }
 
 export function TabNavigation({ activeTab, onTabChange }: TabNavigationProps) {
-  const { canAccessTab, isTabLocked, isPreviewMode } = usePlan();
+  const { canAccessTab, isTabLocked, isPreviewMode, isAdmin } = usePlan();
 
   // Filter tabs: show if accessible, or if in preview mode show locked tabs with opacity
+  // Admin-only tabs are hidden completely for non-admins.
   const visibleTabs = tabs.filter(tab => {
+    if (tab.adminOnly && !isAdmin) return false;
     const tabId = tab.id as BillingTabId;
     if (canAccessTab(tabId)) return true;
-    // In preview mode, show locked tabs (with lock icon + reduced opacity)
     if (isPreviewMode) return true;
     return false;
   });

@@ -93,6 +93,9 @@ class SocialMediaDashboardRenderingTests(unittest.IsolatedAsyncioTestCase):
             "bot.social_media.credential_manager.SocialMediaCredentialManager.get_all_platforms_status",
             return_value=expected,
         ) as mocked_loader, patch(
+            "bot.social_media.credential_manager.get_crypto",
+            return_value=None,
+        ), patch(
             "bot.social_media.dashboard.asyncio.to_thread",
             new=AsyncMock(side_effect=lambda func, *args, **kwargs: func(*args, **kwargs)),
         ) as mocked_to_thread:

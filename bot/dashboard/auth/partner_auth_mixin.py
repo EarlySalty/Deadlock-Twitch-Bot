@@ -184,7 +184,7 @@ class _DashboardPartnerAuthMixin:
 
         destination = self._safe_internal_redirect(
             login_state.get("next_path"),
-            fallback="/twitch/analyse",
+            fallback="/analyse",
         )
         if (
             self._get_dashboard_auth_session(request)

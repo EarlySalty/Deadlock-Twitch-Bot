@@ -917,6 +917,12 @@ class TwitchBaseCog(commands.Cog):
                 self.upload_worker = None
             except Exception:
                 log.exception("_reload_social_teardown: UploadWorker stop failed")
+        if getattr(self, "social_media_retention_worker", None):
+            try:
+                self.social_media_retention_worker.cog_unload()
+                self.social_media_retention_worker = None
+            except Exception:
+                log.exception("_reload_social_teardown: RetentionWorker stop failed")
 
     async def _reload_social_startup(self) -> None:
         """Re-create ClipFetcher and UploadWorker after hot-reloading social modules."""
@@ -926,11 +932,13 @@ class TwitchBaseCog(commands.Cog):
         try:
             from .social_media.clip_fetcher import ClipFetcher
             from .social_media.clip_manager import ClipManager
+            from .social_media.retention_worker import SocialMediaRetentionWorker
             from .social_media.upload_worker import UploadWorker
 
             self.clip_manager = ClipManager(twitch_api=self.api)
             self.clip_fetcher = ClipFetcher(self.bot, self.api, self.clip_manager)
             self.upload_worker = UploadWorker(self.bot, self.clip_manager)
+            self.social_media_retention_worker = SocialMediaRetentionWorker(self.bot)
             log.info("_reload_social_startup: social workers restarted")
         except Exception:
             log.exception("_reload_social_startup: failed to restart social workers")

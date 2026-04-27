@@ -27,7 +27,7 @@ export interface PlanStatus {
 // NOTE: These must match TabId from components/layout/TabNavigation.tsx
 export type TabId =
   | 'overview'
-  | 'streams'
+  | 'social-media'
   | 'schedule'
   | 'category'
   | 'chat'

@@ -40,7 +40,7 @@ from .billing.billing_plans import (
 from .live.live import _CRITICAL_SCOPES, _REQUIRED_SCOPES, _SCOPE_COLUMN_LABELS
 
 TWITCH_DASHBOARDS_LOGIN_URL = "/twitch/auth/login?next=%2Ftwitch%2Fdashboard"
-TWITCH_DASHBOARD_V2_LOGIN_URL = "/twitch/auth/login?next=%2Ftwitch%2Fanalyse"
+TWITCH_DASHBOARD_V2_LOGIN_URL = "/twitch/auth/login?next=%2Fanalyse"
 TWITCH_ABBO_LOGIN_URL = "/twitch/auth/login?next=%2Ftwitch%2Fabbo"
 
 

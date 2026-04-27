@@ -13,8 +13,10 @@ Pattern: Similar to TwitchBotTokenManager
 
 import asyncio
 import logging
+import os
 from datetime import UTC, datetime, timedelta
 
+import discord
 from discord.ext import commands
 
 try:
@@ -23,9 +25,12 @@ except ModuleNotFoundError:  # pragma: no cover - split runtime fallback
     from ..compat.field_crypto import get_crypto
 
 from ..storage import readonly_connection, transaction
-from .oauth_manager import SocialMediaOAuthManager
+from .oauth_manager import OAuthTokenRefreshError, SocialMediaOAuthManager
 
 log = logging.getLogger("TwitchStreams.TokenRefreshWorker")
+
+_DEFAULT_ADMIN_DISCORD_USER_ID = "662995601738170389"
+_GLOBAL_STREAMER_SCOPE = "__global__"
 
 
 def _sanitize_log_value(value):
@@ -33,6 +38,10 @@ def _sanitize_log_value(value):
     if value is None:
         return "<none>"
     return str(value).replace("\r", "\\r").replace("\n", "\\n")
+
+
+def _utcnow() -> datetime:
+    return datetime.now(UTC)
 
 
 class SocialMediaTokenRefreshWorker(commands.Cog):
@@ -77,7 +86,7 @@ class SocialMediaTokenRefreshWorker(commands.Cog):
 
     async def _refresh_expiring_tokens(self):
         """Refresh tokens expiring within threshold."""
-        threshold = datetime.now(UTC) + timedelta(hours=self.refresh_threshold_hours)
+        threshold = _utcnow() + timedelta(hours=self.refresh_threshold_hours)
 
         # Find tokens expiring soon
         with readonly_connection() as conn:
@@ -156,13 +165,27 @@ class SocialMediaTokenRefreshWorker(commands.Cog):
                 client_id=row["client_id"],
                 client_secret=client_secret or "",
             )
+        except OAuthTokenRefreshError as exc:
+            log.error(
+                "OAuth auth refresh failed for platform=%s, streamer=%s, error_kind=%s",
+                safe_platform,
+                safe_streamer,
+                _sanitize_log_value(exc.error_kind),
+            )
+            if not exc.transient:
+                await self._notify_admin_reauth_required(
+                    platform=platform,
+                    streamer_login=streamer_login,
+                    error_kind=exc.error_kind,
+                    details=str(exc),
+                )
+            return
         except Exception:
             log.error(
                 "OAuth auth refresh failed for platform=%s, streamer=%s",
                 safe_platform,
                 safe_streamer,
             )
-            # TODO: Send notification to user for re-auth
             return
 
         # Save new tokens (encrypted)
@@ -239,6 +262,182 @@ class SocialMediaTokenRefreshWorker(commands.Cog):
                         streamer_login,
                     ),
                 )
+
+    @staticmethod
+    def _notification_scope(streamer_login: str | None) -> str:
+        normalized = str(streamer_login or "").strip().lower()
+        return normalized or _GLOBAL_STREAMER_SCOPE
+
+    @staticmethod
+    def _admin_discord_user_id() -> str:
+        for env_name in (
+            "SOCIAL_MEDIA_REAUTH_ADMIN_DISCORD_USER_ID",
+            "TWITCH_ADMIN_DISCORD_USER_ID",
+        ):
+            value = str(os.getenv(env_name) or "").strip()
+            if value:
+                return value
+        return _DEFAULT_ADMIN_DISCORD_USER_ID
+
+    def _notification_due(
+        self,
+        *,
+        streamer_login: str | None,
+        platform: str,
+        error_kind: str,
+        now: datetime,
+    ) -> bool:
+        scope = self._notification_scope(streamer_login)
+        with readonly_connection() as conn:
+            row = conn.execute(
+                """
+                SELECT last_sent_at
+                FROM social_media_reauth_notifications
+                WHERE streamer_login = %s
+                  AND platform = %s
+                  AND error_kind = %s
+                """,
+                (
+                    scope,
+                    platform,
+                    error_kind,
+                ),
+            ).fetchone()
+        if not row:
+            return True
+
+        last_sent_at = row["last_sent_at"] if hasattr(row, "keys") else row[0]
+        if last_sent_at is None:
+            return True
+        return last_sent_at <= now - timedelta(hours=24)
+
+    def _record_notification_sent(
+        self,
+        *,
+        streamer_login: str | None,
+        platform: str,
+        error_kind: str,
+        now: datetime,
+    ) -> None:
+        scope = self._notification_scope(streamer_login)
+        with transaction() as conn:
+            conn.execute(
+                """
+                INSERT INTO social_media_reauth_notifications (
+                    streamer_login,
+                    platform,
+                    error_kind,
+                    last_sent_at
+                )
+                VALUES (%s, %s, %s, %s)
+                ON CONFLICT (streamer_login, platform, error_kind) DO UPDATE
+                SET last_sent_at = EXCLUDED.last_sent_at
+                """,
+                (
+                    scope,
+                    platform,
+                    error_kind,
+                    now,
+                ),
+            )
+
+    async def _resolve_admin_user(self) -> discord.abc.User | None:
+        discord_user_id = self._admin_discord_user_id()
+        try:
+            user_id_int = int(discord_user_id)
+        except (TypeError, ValueError):
+            log.warning("Invalid admin Discord user id configured for social-media reauth DM")
+            return None
+
+        user = None
+        getter = getattr(self.bot, "get_user", None)
+        if callable(getter):
+            user = getter(user_id_int)
+        if user is None:
+            try:
+                user = await self.bot.fetch_user(user_id_int)
+            except discord.NotFound:
+                user = None
+            except discord.Forbidden:
+                log.info("Cannot fetch admin Discord user %s for social-media reauth DM", discord_user_id)
+                return None
+            except discord.HTTPException:
+                log.warning(
+                    "Failed to fetch admin Discord user %s for social-media reauth DM",
+                    discord_user_id,
+                    exc_info=True,
+                )
+                return None
+        return user
+
+    async def _notify_admin_reauth_required(
+        self,
+        *,
+        platform: str,
+        streamer_login: str | None,
+        error_kind: str,
+        details: str,
+    ) -> None:
+        now = _utcnow()
+        if not self._notification_due(
+            streamer_login=streamer_login,
+            platform=platform,
+            error_kind=error_kind,
+            now=now,
+        ):
+            return
+
+        admin_user = await self._resolve_admin_user()
+        if admin_user is None:
+            return
+
+        safe_streamer = str(streamer_login or "global").strip() or "global"
+        truncated_details = str(details or "").replace("\n", " ").strip()
+        if len(truncated_details) > 240:
+            truncated_details = truncated_details[:240] + "..."
+
+        embed = discord.Embed(
+            title="Social Media Re-Auth erforderlich",
+            description=(
+                "Ein Social-Media-Refresh ist dauerhaft fehlgeschlagen. "
+                "Bitte die Verbindung im Dashboard neu autorisieren."
+            ),
+            color=discord.Color.orange(),
+            timestamp=now,
+        )
+        embed.add_field(name="Streamer", value=safe_streamer, inline=True)
+        embed.add_field(name="Plattform", value=platform, inline=True)
+        embed.add_field(name="Fehler", value=error_kind, inline=True)
+        embed.add_field(
+            name="Aktion",
+            value=(
+                "Im Social-Media-Dashboard die betroffene Plattform fuer diesen Streamer "
+                "neu verbinden."
+            ),
+            inline=False,
+        )
+        if truncated_details:
+            embed.add_field(name="Details", value=f"```{truncated_details}```", inline=False)
+        embed.set_footer(text="Twitch Streams • Social Media Token Refresh")
+
+        try:
+            await admin_user.send(embed=embed)
+            self._record_notification_sent(
+                streamer_login=streamer_login,
+                platform=platform,
+                error_kind=error_kind,
+                now=now,
+            )
+            log.info(
+                "Sent social-media reauth DM for platform=%s, streamer=%s, error_kind=%s",
+                _sanitize_log_value(platform),
+                _sanitize_log_value(streamer_login),
+                _sanitize_log_value(error_kind),
+            )
+        except discord.Forbidden:
+            log.info("Cannot DM configured admin user for social-media reauth notification")
+        except Exception:
+            log.warning("Failed to send social-media reauth DM", exc_info=True)
 
 
 async def setup(bot):

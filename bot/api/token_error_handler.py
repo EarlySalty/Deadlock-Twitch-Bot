@@ -17,6 +17,7 @@ from ..discord_role_sync import (
 )
 from ..storage import pg as storage_pg
 from ..storage import (
+    departner_active_partner,
     load_active_partner,
     load_streamer_identity,
     readonly_connection,
@@ -173,37 +174,6 @@ class TokenErrorHandler:
                 except Exception:
                     log.debug(
                         "Could not mirror raid_bot_enabled into partner registry for user_id=%s",
-                        _mask_log_identifier(twitch_user_id),
-                        exc_info=True,
-                    )
-                try:
-                    active_partner = load_active_partner(
-                        conn,
-                        twitch_user_id=twitch_user_id,
-                        twitch_login=login_hint,
-                    )
-                    if active_partner:
-                        partner_id = (
-                            active_partner["id"]
-                            if hasattr(active_partner, "keys")
-                            else active_partner[0]
-                        )
-                        conn.execute(
-                            """
-                            UPDATE twitch_partners
-                            SET manual_partner_opt_out = 1,
-                                raid_bot_enabled = 0,
-                                twitch_login = COALESCE(NULLIF(%s, ''), twitch_login)
-                            WHERE id = %s
-                            """,
-                            (
-                                login_hint,
-                                partner_id,
-                            ),
-                        )
-                except Exception:
-                    log.debug(
-                        "Could not mirror temporary opt-out partner state for user_id=%s",
                         _mask_log_identifier(twitch_user_id),
                         exc_info=True,
                     )
@@ -1194,17 +1164,35 @@ class TokenErrorHandler:
                 )
             try:
                 with transaction() as conn:
+                    departnered = departner_active_partner(
+                        conn,
+                        twitch_user_id=uid,
+                        twitch_login=login,
+                        restore_non_partner=False,
+                        disable_raid_auth=True,
+                        clear_verification=True,
+                    )
                     conn.execute(
-                        "UPDATE twitch_token_blacklist SET role_removed = 1 WHERE twitch_user_id = %s",
+                        """
+                        UPDATE twitch_token_blacklist
+                        SET role_removed = 1
+                        WHERE twitch_user_id = %s
+                        """,
                         (uid,),
                     )
             except Exception:
-                log.warning("Could not set role_removed for %s", login, exc_info=True)
+                log.warning(
+                    "Could not mark grace-period expiry/departner for %s",
+                    login,
+                    exc_info=True,
+                )
+                departnered = None
 
             log.info(
-                "Grace period expired for %s (id=%s) – role removed, reminder sent",
+                "Grace period expired for %s (id=%s) – role removed, departnered=%s, reminder sent",
                 login,
                 uid,
+                "yes" if departnered else "no",
             )
 
     async def _notify_admin_grace_expired(

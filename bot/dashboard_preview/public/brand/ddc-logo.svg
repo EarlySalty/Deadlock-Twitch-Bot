@@ -1,0 +1,33 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 300 64" role="img" aria-label="Deutsche Deadlock Community">
+  <defs>
+    <linearGradient id="g" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#06B6D4"></stop>
+      <stop offset="100%" stop-color="#A855F7"></stop>
+    </linearGradient>
+    <linearGradient id="gt" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#06B6D4"></stop>
+      <stop offset="100%" stop-color="#A855F7"></stop>
+    </linearGradient>
+    <linearGradient id="gtxt" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#06B6D4"></stop>
+      <stop offset="55%" stop-color="#8B6FE8"></stop>
+      <stop offset="100%" stop-color="#A855F7"></stop>
+    </linearGradient>
+    <filter id="glow" x="-25%" y="-25%" width="150%" height="150%">
+      <feGaussianBlur stdDeviation="2.5" result="blur"></feGaussianBlur>
+      <feMerge><feMergeNode in="blur"></feMergeNode><feMergeNode in="SourceGraphic"></feMergeNode></feMerge>
+    </filter>
+  </defs>
+
+  
+  <rect x="2" y="2" width="60" height="60" rx="14" fill="rgba(6,182,212,0.10)" stroke="url(#g)" stroke-width="1.8"></rect>
+  <rect x="6" y="6" width="52" height="52" rx="10" fill="none" stroke="rgba(255,255,255,0.07)" stroke-width="1"></rect>
+  <path d="M36,8 L20,34 L30,34 L24,56 L42,28 L32,28 Z" fill="url(#g)" filter="url(#glow)"></path>
+
+  
+  <g transform="translate(74, 8)">
+    <text font-family="&#39;Sora&#39;, &#39;Segoe UI&#39;, system-ui, sans-serif" font-size="21" font-weight="800" letter-spacing="-0.5" fill="url(#gtxt)" y="22">Deutsche Deadlock</text>
+    <rect x="0" y="29" width="220" height="1.5" fill="url(#gt)" rx="1" opacity="0.45"></rect>
+    <text font-family="&#39;Sora&#39;, &#39;Segoe UI&#39;, system-ui, sans-serif" font-size="10.5" font-weight="700" letter-spacing="4.5" fill="url(#gt)" y="46">COMMUNITY</text>
+  </g>
+</svg>

@@ -183,6 +183,7 @@ class BotRuntimeBootstrap:
         services.clip_manager = None
         services.clip_fetcher = None
         services.upload_worker = None
+        services.social_media_retention_worker = None
         services.reload_manager = None
 
     def wire_runtime_dependencies(self) -> None:
@@ -410,18 +411,25 @@ class BotRuntimeBootstrap:
             services.clip_manager is not None
             and services.clip_fetcher is not None
             and services.upload_worker is not None
+            and services.social_media_retention_worker is not None
         ):
             return
 
         from .social_media.clip_fetcher import ClipFetcher
         from .social_media.clip_manager import ClipManager
+        from .social_media.retention_worker import SocialMediaRetentionWorker
         from .social_media.upload_worker import UploadWorker
 
-        services.clip_manager = ClipManager(twitch_api=services.api)
-        services.clip_fetcher = ClipFetcher(cog.bot, services.api, services.clip_manager)
-        services.upload_worker = UploadWorker(cog.bot, services.clip_manager)
+        if services.clip_manager is None:
+            services.clip_manager = ClipManager(twitch_api=services.api)
+        if services.clip_fetcher is None:
+            services.clip_fetcher = ClipFetcher(cog.bot, services.api, services.clip_manager)
+        if services.upload_worker is None:
+            services.upload_worker = UploadWorker(cog.bot, services.clip_manager)
+        if services.social_media_retention_worker is None:
+            services.social_media_retention_worker = SocialMediaRetentionWorker(cog.bot)
         log.info(
-            "Social Media Clip Management initialized (ClipManager + ClipFetcher + UploadWorker)"
+            "Social Media Clip Management initialized (ClipManager + ClipFetcher + UploadWorker + RetentionWorker)"
         )
 
     def _stop_social_media_workers(self) -> None:
@@ -445,6 +453,15 @@ class BotRuntimeBootstrap:
                 log.exception("Konnte UploadWorker nicht canceln")
             finally:
                 services.upload_worker = None
+
+        if services.social_media_retention_worker:
+            try:
+                services.social_media_retention_worker.cog_unload()
+                log.debug("SocialMediaRetentionWorker gecancelt")
+            except Exception:
+                log.exception("Konnte SocialMediaRetentionWorker nicht canceln")
+            finally:
+                services.social_media_retention_worker = None
 
         services.clip_manager = None
 
@@ -486,6 +503,7 @@ class BotRuntimeBootstrap:
                     "bot.social_media.clip_fetcher",
                     "bot.social_media.clip_manager",
                     "bot.social_media.upload_worker",
+                    "bot.social_media.retention_worker",
                 ],
                 loops=[],
                 hot_reloadable=True,

@@ -228,6 +228,8 @@ class _DashboardAuthMixin:
             return fallback
         if not candidate.startswith("/"):
             return fallback
+        if candidate.startswith("/analyse"):
+            return candidate
         if not candidate.startswith("/twitch"):
             return fallback
         return candidate
@@ -306,7 +308,7 @@ class _DashboardAuthMixin:
 
     @staticmethod
     def _safe_internal_redirect(
-        location: str | None, *, fallback: str = "/twitch/analyse"
+        location: str | None, *, fallback: str = "/analyse"
     ) -> str:
         candidate = (location or "").strip()
         if not candidate:
@@ -367,7 +369,7 @@ class _DashboardAuthMixin:
             "/twitch/abbo/kündigen",
             "/twitch/stats",
             "/twitch/dashboard",
-            "/twitch/analyse",
+            "/analyse",
             "/twitch/verwaltung",
             "/twitch/pricing",
             "/twitch/raid/auth",

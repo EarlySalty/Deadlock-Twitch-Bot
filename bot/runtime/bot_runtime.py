@@ -59,6 +59,7 @@ LEGACY_RUNTIME_ATTRIBUTE_TABLE: tuple[LegacyRuntimeFieldSpec, ...] = (
     LegacyRuntimeFieldSpec("clip_manager", "services", "clip_manager"),
     LegacyRuntimeFieldSpec("clip_fetcher", "services", "clip_fetcher"),
     LegacyRuntimeFieldSpec("upload_worker", "services", "upload_worker"),
+    LegacyRuntimeFieldSpec("social_media_retention_worker", "services", "social_media_retention_worker"),
     LegacyRuntimeFieldSpec("_twl_command", "services", "twl_command"),
     LegacyRuntimeFieldSpec("_twitch_bot_token", "services", "twitch_bot_token"),
     LegacyRuntimeFieldSpec("_twitch_bot_refresh_token", "services", "twitch_bot_refresh_token"),
@@ -144,6 +145,7 @@ class BotRuntimeServices:
     clip_manager: Any = None
     clip_fetcher: Any = None
     upload_worker: Any = None
+    social_media_retention_worker: Any = None
     twl_command: Any = None
     twitch_bot_token: str | None = None
     twitch_bot_refresh_token: str | None = None
