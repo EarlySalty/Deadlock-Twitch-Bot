@@ -231,7 +231,8 @@ def _load_partner_row(
             i.is_on_discord,
             i.created_at AS identity_created_at,
             i.updated_at AS identity_updated_at,
-            p.admin_archived_at
+            p.admin_archived_at,
+            p.technical_pause_reason
         FROM twitch_partners p
         LEFT JOIN twitch_streamer_identities i
           ON i.twitch_user_id = p.twitch_user_id
@@ -245,7 +246,10 @@ def _load_partner_row(
         msg = str(exc).lower()
         if "admin_archived_at" not in msg:
             raise
-    compat_sql = sql.replace("p.admin_archived_at", "NULL AS admin_archived_at")
+    compat_sql = sql.replace(
+        "p.admin_archived_at,\n            p.technical_pause_reason",
+        "NULL AS admin_archived_at,\n            NULL AS technical_pause_reason",
+    )
     return conn.execute(compat_sql, tuple(params)).fetchone()
 
 
@@ -1041,6 +1045,7 @@ def promote_streamer_to_partner(
                     partnered_at = %s,
                     admin_archived_at = NULL,
                     departnered_at = NULL,
+                    technical_pause_reason = NULL,
                     status = %s
                 WHERE id = %s
                 """,
@@ -1070,6 +1075,7 @@ def promote_streamer_to_partner(
                     live_ping_enabled = %s,
                     partnered_at = %s,
                     departnered_at = NULL,
+                    technical_pause_reason = NULL,
                     status = %s
                 WHERE id = %s
                 """,
@@ -1121,8 +1127,9 @@ def promote_streamer_to_partner(
                     partnered_at,
                     admin_archived_at,
                     departnered_at,
+                    technical_pause_reason,
                     status
-                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NULL, NULL, %s)
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NULL, NULL, NULL, %s)
                 """,
                 insert_params,
             )
@@ -1151,8 +1158,9 @@ def promote_streamer_to_partner(
                     live_ping_enabled,
                     partnered_at,
                     departnered_at,
+                    technical_pause_reason,
                     status
-                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NULL, %s)
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NULL, NULL, %s)
                 """,
                 insert_params,
             )
@@ -1395,6 +1403,101 @@ def reactivate_partner(
     return result
 
 
+_HARD_PAUSE_REASONS = frozenset({"blocked", "bot_banned"})
+
+
+def reactivate_partner_after_valid_auth(
+    conn: Any,
+    *,
+    twitch_login: str | None = None,
+    twitch_user_id: str | None = None,
+) -> dict[str, Any] | None:
+    """
+    Bei nachweislich gültigem Twitch-OAuth: Partner wieder voll aktivieren.
+
+    - departnered/archived → status='active' (via reactivate_partner)
+    - active mit opt_out=1 / raid_bot_enabled=0 / pause in {token_error*} → resetten
+    - pause in {blocked, bot_banned} → no-op (Hard-Kills, müssen separat gelöst werden)
+    """
+    normalized_login = _normalize_login(twitch_login)
+    normalized_user_id = _normalize_user_id(twitch_user_id)
+    if not normalized_login and not normalized_user_id:
+        return None
+
+    latest_row = _load_partner_row(
+        conn,
+        twitch_login=normalized_login,
+        twitch_user_id=normalized_user_id,
+        latest=True,
+    )
+    if not latest_row:
+        return None
+
+    pause_reason = str(
+        _row_value(latest_row, "technical_pause_reason", 26, "") or ""
+    ).strip().lower()
+    if pause_reason in _HARD_PAUSE_REASONS:
+        return {
+            "twitch_login": _normalize_login(_row_value(latest_row, "twitch_login", 2)),
+            "twitch_user_id": _normalize_user_id(
+                _row_value(latest_row, "twitch_user_id", 1)
+            ),
+            "reactivated": False,
+            "reason": pause_reason,
+        }
+
+    status = str(_row_value(latest_row, "status", 20, "") or "").strip().lower()
+    if _is_inactive_partner_status(status):
+        reactivate_partner(
+            conn,
+            twitch_login=normalized_login,
+            twitch_user_id=normalized_user_id,
+        )
+
+    active_row = load_active_partner(
+        conn,
+        twitch_login=normalized_login,
+        twitch_user_id=normalized_user_id,
+    )
+    if not active_row:
+        return None
+
+    partner_id = _row_value(active_row, "id", 0)
+    resolved_login = _normalize_login(
+        _row_value(active_row, "twitch_login", 2, normalized_login)
+    )
+    resolved_user_id = _normalize_user_id(
+        _row_value(active_row, "twitch_user_id", 1, normalized_user_id)
+    )
+
+    conn.execute(
+        """
+        UPDATE twitch_partners
+        SET manual_partner_opt_out = 0,
+            raid_bot_enabled = 1,
+            technical_pause_reason = NULL,
+            twitch_login = COALESCE(NULLIF(%s, ''), twitch_login)
+        WHERE id = %s
+          AND LOWER(COALESCE(technical_pause_reason, '')) NOT IN ('blocked', 'bot_banned')
+        """,
+        (resolved_login, partner_id),
+    )
+    conn.execute(
+        """
+        UPDATE twitch_raid_auth
+        SET needs_reauth = FALSE,
+            reauth_notified_at = NULL
+        WHERE twitch_user_id = %s
+        """,
+        (resolved_user_id,),
+    )
+    return {
+        "twitch_login": resolved_login,
+        "twitch_user_id": resolved_user_id,
+        "reactivated": True,
+    }
+
+
 def set_streamer_archive_state(
     conn: Any,
     *,
@@ -1503,6 +1606,94 @@ def set_streamer_archive_state(
         "twitch_user_id": resolved_user_id or None,
         "archived_at": archive_value,
         "scope": "streamer",
+    }
+
+
+def set_streamer_block_state(
+    conn: Any,
+    *,
+    twitch_login: str | None = None,
+    twitch_user_id: str | None = None,
+    blocked: bool,
+) -> dict[str, Any] | None:
+    normalized_login = _normalize_login(twitch_login)
+    normalized_user_id = _normalize_user_id(twitch_user_id)
+    active_row = load_active_partner(
+        conn,
+        twitch_login=normalized_login,
+        twitch_user_id=normalized_user_id,
+    )
+    target_row = active_row or _load_partner_row(
+        conn,
+        twitch_login=normalized_login,
+        twitch_user_id=normalized_user_id,
+        latest=True,
+    )
+    if target_row is None:
+        return None
+
+    resolved_login = _normalize_login(
+        _row_value(target_row, "twitch_login", 2, normalized_login)
+    )
+    resolved_user_id = _normalize_user_id(
+        _row_value(target_row, "twitch_user_id", 1, normalized_user_id)
+    )
+    row_id = _row_value(target_row, "id", 0)
+    pause_reason = "blocked" if blocked else None
+    manual_opt_out = 1 if blocked else 0
+    raid_bot_enabled = 0 if blocked else _bool_int(
+        _row_value(target_row, "raid_bot_enabled", 13, 0), default=0
+    )
+
+    conn.execute(
+        """
+        UPDATE twitch_partners
+        SET twitch_login = COALESCE(NULLIF(%s, ''), twitch_login),
+            twitch_user_id = COALESCE(NULLIF(%s, ''), twitch_user_id),
+            manual_partner_opt_out = %s,
+            technical_pause_reason = %s,
+            raid_bot_enabled = %s
+        WHERE id = %s
+        """,
+        (
+            resolved_login,
+            resolved_user_id,
+            manual_opt_out,
+            pause_reason,
+            raid_bot_enabled,
+            row_id,
+        ),
+    )
+    conn.execute(
+        """
+        UPDATE twitch_raid_auth
+        SET raid_enabled = CASE WHEN %s THEN FALSE ELSE raid_enabled END,
+            needs_reauth = CASE WHEN %s THEN needs_reauth ELSE FALSE END,
+            reauth_notified_at = CASE WHEN %s THEN reauth_notified_at ELSE NULL END,
+            twitch_login = COALESCE(NULLIF(%s, ''), twitch_login)
+        WHERE (%s <> '' AND twitch_user_id = %s)
+           OR LOWER(COALESCE(twitch_login, '')) = LOWER(%s)
+        """,
+        (
+            blocked,
+            blocked,
+            blocked,
+            resolved_login,
+            resolved_user_id,
+            resolved_user_id,
+            resolved_login,
+        ),
+    )
+    _normalize_related_tables(
+        conn,
+        twitch_user_id=resolved_user_id,
+        twitch_login=resolved_login,
+    )
+    return {
+        "twitch_login": resolved_login,
+        "twitch_user_id": resolved_user_id or None,
+        "blocked": bool(blocked),
+        "scope": "partner",
     }
 
 

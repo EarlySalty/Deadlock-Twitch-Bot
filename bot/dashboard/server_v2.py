@@ -23,7 +23,7 @@ from ..secret_store import keyring_enabled
 from ..storage import pg as storage_pg
 from .admin.legal_mixin import _DashboardLegalMixin
 from .affiliate.affiliate_mixin import _DashboardAffiliateMixin
-from .auth.auth_mixin import _DashboardAuthMixin
+from .auth.auth_mixin import _DashboardAuthMixin, build_partner_status_gate_middleware
 from .auth.partner_auth_mixin import _DashboardPartnerAuthMixin
 from .billing.billing_mixin import _DashboardBillingMixin
 from .core.stats import DashboardStatsMixin
@@ -1106,8 +1106,6 @@ def build_v2_app(
     social_media_clip_manager: Any | None = None,
     social_media_twitch_api: Any | None = None,
 ) -> web.Application:
-    app = web.Application(middlewares=[_security_headers_middleware])
-
     server = DashboardV2Server(
         app_token=token,
         noauth=noauth,
@@ -1134,6 +1132,13 @@ def build_v2_app(
         reload_cb=reload_cb,
         social_media_clip_manager=social_media_clip_manager,
         social_media_twitch_api=social_media_twitch_api,
+    )
+
+    app = web.Application(
+        middlewares=[
+            _security_headers_middleware,
+            build_partner_status_gate_middleware(server),
+        ]
     )
 
     async def _bootstrap_and_register_routes(_: web.Application) -> None:

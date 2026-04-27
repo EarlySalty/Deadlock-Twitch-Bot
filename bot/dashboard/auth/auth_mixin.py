@@ -43,8 +43,88 @@ TWITCH_PUBLIC_DASHBOARD_BASE_URL = (
     or "https://deutsche-deadlock-community.de"
 ).strip().rstrip("/")
 _DDC_PENTEST_DISABLE_RATE_LIMITS = str(
-    os.getenv("DDC_PENTEST_DISABLE_RATE_LIMITS", "1")
+    os.getenv("DDC_PENTEST_DISABLE_RATE_LIMITS", "0")
 ).strip().lower() not in {"", "0", "false", "no", "off"}
+
+# Pfade die für nicht-aktive Partner (departnered/opt-out/token_error/bot_banned) erlaubt bleiben.
+# "passive" = User darf sich einloggen und Verwaltung/Plan/Affiliate nutzen, aber nicht Analyse/Social/Title.
+# Hard-Kill ist nur technical_pause_reason='blocked' — wer da landet, kommt schon vom Login-Gate nicht durch.
+_PASSIVE_ALLOWED_EXACT_PATHS = frozenset({
+    "/twitch/verwaltung",
+    "/twitch/pricing",
+    "/twitch/abbo",
+    "/twitch/abbo/bezahlen",
+    "/twitch/abbo/kündigen",
+    "/twitch/abbo/lurker-tax-settings",
+    "/twitch/abbo/promo-message",
+    "/twitch/abbo/promo-settings",
+    "/twitch/abbo/rechnung",
+    "/twitch/abbo/rechnungen",
+    "/twitch/abbo/rechnungsdaten",
+    "/twitch/abbo/stripe-settings",
+    "/twitch/dashboard",
+    "/twitch/dashboards",
+    "/twitch/dashboads",
+    "/twitch/affiliate/portal",
+    "/twitch/affiliate/signup",
+    "/twitch/affiliate/signup/complete",
+    "/twitch/affiliate/claim",
+    "/twitch/affiliate/connect/stripe",
+    "/twitch/affiliate/connect/stripe/callback",
+    "/twitch/raid/auth",
+})
+_PASSIVE_ALLOWED_PREFIXES: tuple[str, ...] = (
+    "/twitch/auth/",
+    "/callback/twitch",
+    "/callback/discord",
+    "/twitch/api/v2/internal-home",
+    "/twitch/api/v2/auth-status",
+    "/twitch/api/billing/",
+    "/twitch/api/v2/billing/",
+    "/twitch/api/affiliate/",
+    "/twitch/api/v2/affiliate/",
+    "/twitch/auth/discord/",
+    "/twitch/auth/partner/",
+    "/twitch/agb",
+    "/twitch/datenschutz",
+    "/twitch/impressum",
+    "/twitch/legal/",
+    "/health",
+    "/healthz",
+    "/readyz",
+    "/twitch/raid/auth",
+)
+_PUBLIC_PATH_PREFIXES: tuple[str, ...] = (
+    "/health",
+    "/healthz",
+    "/readyz",
+    "/twitch/auth/",
+    "/twitch/eventsub/",
+    "/twitch/api/billing/stripe/webhook",
+    "/twitch/agb",
+    "/twitch/datenschutz",
+    "/twitch/impressum",
+    "/twitch/legal/",
+    "/twitch/demo",
+    "/twitch/raid/callback",
+    "/callback/twitch",
+    "/callback/discord",
+    "/twitch/api/v2/public/",
+)
+
+
+def _path_matches_passive_allowed(path: str) -> bool:
+    if not path:
+        return False
+    if path in _PASSIVE_ALLOWED_EXACT_PATHS:
+        return True
+    return any(path.startswith(prefix) for prefix in _PASSIVE_ALLOWED_PREFIXES)
+
+
+def _path_is_public(path: str) -> bool:
+    if not path:
+        return False
+    return any(path.startswith(prefix) for prefix in _PUBLIC_PATH_PREFIXES)
 
 
 def _build_passive_fp(request: web.Request) -> str:
@@ -149,6 +229,28 @@ class _DashboardAuthMixin:
         self, request: web.Request
     ) -> web.StreamResponse | None:
         if not self._is_shared_twitch_oauth_callback_request(request):
+            return None
+        state = str(request.query.get("state") or "").strip()
+        if not state:
+            return None
+        auth_manager = None
+        resolver = getattr(self, "_resolve_dashboard_auth_manager", None)
+        if callable(resolver):
+            try:
+                auth_manager = resolver()
+            except Exception:
+                auth_manager = None
+        if auth_manager is None:
+            raid_bot = getattr(self, "_raid_bot", None)
+            auth_manager = getattr(raid_bot, "auth_manager", None)
+        has_state_details = getattr(auth_manager, "has_state_details", None)
+        if not callable(has_state_details):
+            return None
+        try:
+            if not bool(has_state_details(state)):
+                return None
+        except Exception:
+            log.debug("Could not inspect shared Twitch OAuth state for raid callback", exc_info=True)
             return None
         raid_callback = getattr(self, "raid_oauth_callback", None)
         if not callable(raid_callback):
@@ -652,19 +754,24 @@ class _DashboardAuthMixin:
             return None
 
         with storage.readonly_connection() as conn:
-            row = conn.execute(
-                """
-                SELECT twitch_login, twitch_user_id
-                FROM twitch_streamers_partner_state
-                WHERE is_partner = 1
+            sql = """
+                SELECT p.twitch_login, p.twitch_user_id
+                FROM twitch_partners p
+                WHERE LOWER(COALESCE(p.technical_pause_reason, '')) <> 'blocked'
                   AND (
-                      LOWER(twitch_login) = LOWER(%s)
-                      OR (%s != '' AND twitch_user_id = %s)
+                      LOWER(p.twitch_login) = LOWER(%s)
+                      OR (%s <> '' AND p.twitch_user_id = %s)
                   )
+                ORDER BY CASE
+                    WHEN COALESCE(p.status, '') = 'active' THEN 0
+                    WHEN COALESCE(p.status, '') = 'archived' THEN 1
+                    WHEN COALESCE(p.status, '') = 'departnered' THEN 2
+                    ELSE 3
+                END,
+                COALESCE(p.departnered_at, p.admin_archived_at, p.partnered_at) DESC
                 LIMIT 1
-                """,
-                (login, user_id, user_id),
-            ).fetchone()
+            """
+            row = conn.execute(sql, (login, user_id, user_id)).fetchone()
 
         if not row:
             return None
@@ -678,6 +785,71 @@ class _DashboardAuthMixin:
             "twitch_login": str(row[0] or ""),
             "twitch_user_id": str(row[1] or ""),
         }
+
+    def _resolve_partner_active_status(
+        self, *, twitch_login: str, twitch_user_id: str
+    ) -> str:
+        """
+        Liefert "active" wenn Partner is_partner_active=1, sonst "passive".
+        Aufrufer prüfen separat ob die Session überhaupt einen Partner hat.
+        """
+        login = (twitch_login or "").strip().lower()
+        user_id = (twitch_user_id or "").strip()
+        if not login and not user_id:
+            return "passive"
+        try:
+            with storage.readonly_connection() as conn:
+                row = conn.execute(
+                    """
+                    SELECT
+                        CASE
+                            WHEN COALESCE(p.status, '') = 'active'
+                                 AND COALESCE(p.manual_partner_opt_out, 0) = 0
+                                 AND LOWER(COALESCE(p.technical_pause_reason, '')) NOT IN ('blocked', 'bot_banned', 'token_error', 'token_error_expired')
+                            THEN 1 ELSE 0
+                        END AS is_active
+                    FROM twitch_partners p
+                    WHERE LOWER(COALESCE(p.technical_pause_reason, '')) <> 'blocked'
+                      AND (
+                          LOWER(p.twitch_login) = LOWER(%s)
+                          OR (%s <> '' AND p.twitch_user_id = %s)
+                      )
+                    ORDER BY CASE
+                        WHEN COALESCE(p.status, '') = 'active' THEN 0
+                        WHEN COALESCE(p.status, '') = 'archived' THEN 1
+                        WHEN COALESCE(p.status, '') = 'departnered' THEN 2
+                        ELSE 3
+                    END,
+                    COALESCE(p.departnered_at, p.admin_archived_at, p.partnered_at) DESC
+                    LIMIT 1
+                    """,
+                    (login, user_id, user_id),
+                ).fetchone()
+        except Exception:
+            log.debug(
+                "Could not resolve partner active status for %s",
+                self._sanitize_log_value(login or user_id),
+                exc_info=True,
+            )
+            return "passive"
+        if not row:
+            return "passive"
+        is_active = row[0] if not hasattr(row, "keys") else row["is_active"]
+        return "active" if int(is_active or 0) == 1 else "passive"
+
+    def _reactivate_partner_after_valid_auth(
+        self, *, twitch_login: str, twitch_user_id: str
+    ) -> dict[str, Any] | None:
+        login = (twitch_login or "").strip()
+        user_id = (twitch_user_id or "").strip()
+        if not login and not user_id:
+            return None
+        with storage.transaction() as conn:
+            return storage.reactivate_partner_after_valid_auth(
+                conn,
+                twitch_login=login,
+                twitch_user_id=user_id,
+            )
 
     async def _is_partner_allowed_async(
         self, *, twitch_login: str, twitch_user_id: str
@@ -1186,47 +1358,80 @@ class _DashboardAuthMixin:
             self._set_no_store_headers(response)
             return response
 
-        partner = await self._is_partner_allowed_async(
-            twitch_login=user.get("twitch_login") or "",
-            twitch_user_id=user.get("twitch_user_id") or "",
-        )
-        if not partner:
-            log.warning(
-                "AUDIT dashboard login denied: twitch=%s peer=%s",
+        try:
+            partner = await self._is_partner_allowed_async(
+                twitch_login=user.get("twitch_login") or "",
+                twitch_user_id=user.get("twitch_user_id") or "",
+            )
+            if not partner:
+                log.warning(
+                    "AUDIT dashboard login denied: twitch=%s peer=%s",
+                    self._sanitize_log_value(user.get("twitch_login")),
+                    self._sanitize_log_value(self._peer_host(request)),
+                )
+                response = web.Response(
+                    text=(
+                        f"Kein Zugriff: Twitch-Account '{user.get('display_name') or user.get('twitch_login')}' "
+                        "ist nicht als Streamer-Partner freigegeben."
+                    ),
+                    status=403,
+                )
+                self._set_no_store_headers(response)
+                return response
+
+            try:
+                await asyncio.to_thread(
+                    self._reactivate_partner_after_valid_auth,
+                    twitch_login=partner.get("twitch_login")
+                    or user.get("twitch_login")
+                    or "",
+                    twitch_user_id=partner.get("twitch_user_id")
+                    or user.get("twitch_user_id")
+                    or "",
+                )
+            except Exception:
+                log.debug(
+                    "Could not auto-reactivate partner state after dashboard login for twitch=%s",
+                    self._sanitize_log_value(user.get("twitch_login")),
+                    exc_info=True,
+                )
+
+            session_id = self._create_dashboard_session(
+                twitch_login=partner.get("twitch_login") or user.get("twitch_login") or "",
+                twitch_user_id=partner.get("twitch_user_id") or user.get("twitch_user_id") or "",
+                display_name=user.get("display_name") or "",
+            )
+            log.info(
+                "AUDIT dashboard login success: twitch=%s peer=%s",
+                self._sanitize_log_value(partner.get("twitch_login")),
+                self._sanitize_log_value(self._peer_host(request)),
+            )
+            destination = self._safe_internal_redirect(
+                self._canonical_post_login_destination(
+                    self._normalize_next_path(state_data.get("next_path"))
+                ),
+                fallback="/twitch/dashboard",
+            )
+            response = web.HTTPFound(destination)
+            self._set_session_cookie(response, request, session_id)
+            self._clear_oauth_context_cookie(response, request)
+            self._set_no_store_headers(response)
+            raise response
+        except web.HTTPException:
+            raise
+        except Exception:
+            log.exception(
+                "Dashboard OAuth callback failed after Twitch user exchange for state=%s login=%s peer=%s",
+                self._sanitize_log_value(state),
                 self._sanitize_log_value(user.get("twitch_login")),
                 self._sanitize_log_value(self._peer_host(request)),
             )
             response = web.Response(
-                text=(
-                    f"Kein Zugriff: Twitch-Account '{user.get('display_name') or user.get('twitch_login')}' "
-                    "ist nicht als Streamer-Partner freigegeben."
-                ),
-                status=403,
+                text="Dashboard-Login konnte gerade nicht abgeschlossen werden. Bitte erneut versuchen.",
+                status=503,
             )
             self._set_no_store_headers(response)
             return response
-
-        session_id = self._create_dashboard_session(
-            twitch_login=partner.get("twitch_login") or user.get("twitch_login") or "",
-            twitch_user_id=partner.get("twitch_user_id") or user.get("twitch_user_id") or "",
-            display_name=user.get("display_name") or "",
-        )
-        log.info(
-            "AUDIT dashboard login success: twitch=%s peer=%s",
-            self._sanitize_log_value(partner.get("twitch_login")),
-            self._sanitize_log_value(self._peer_host(request)),
-        )
-        destination = self._safe_internal_redirect(
-            self._canonical_post_login_destination(
-                self._normalize_next_path(state_data.get("next_path"))
-            ),
-            fallback="/twitch/dashboard",
-        )
-        response = web.HTTPFound(destination)
-        self._set_session_cookie(response, request, session_id)
-        self._clear_oauth_context_cookie(response, request)
-        self._set_no_store_headers(response)
-        raise response
 
     # ------------------------------------------------------------------ #
     # Discord admin OAuth routes                                           #
@@ -1631,3 +1836,75 @@ class _DashboardAuthMixin:
         self._clear_discord_admin_cookie(response, request)
         self._set_no_store_headers(response)
         raise response
+
+
+def build_partner_status_gate_middleware(server: "_DashboardAuthMixin"):
+    """
+    Aiohttp-Middleware: lehnt Active-Only-Routen für Partner mit Status 'passive' ab.
+    Admin-Sessions und nicht-eingeloggte Requests werden durchgelassen — der individuelle
+    Route-Handler entscheidet weiterhin selbst über Auth.
+    """
+
+    @web.middleware
+    async def _partner_status_gate(request: web.Request, handler: Any) -> web.StreamResponse:
+        path = request.path or ""
+        if request.method == "OPTIONS" or _path_is_public(path):
+            return await handler(request)
+
+        try:
+            session = server._get_dashboard_auth_session(request) or {}
+        except Exception:
+            log.debug("partner_status_gate: could not load session", exc_info=True)
+            return await handler(request)
+
+        if not session:
+            return await handler(request)
+
+        if session.get("is_admin") or session.get("auth_type") == "discord_admin":
+            return await handler(request)
+
+        twitch_login = str(session.get("twitch_login") or "").strip()
+        twitch_user_id = str(session.get("twitch_user_id") or "").strip()
+        if not twitch_login and not twitch_user_id:
+            return await handler(request)
+
+        if _path_matches_passive_allowed(path):
+            return await handler(request)
+
+        try:
+            status = await asyncio.to_thread(
+                server._resolve_partner_active_status,
+                twitch_login=twitch_login,
+                twitch_user_id=twitch_user_id,
+            )
+        except Exception:
+            log.debug("partner_status_gate: status lookup failed", exc_info=True)
+            return await handler(request)
+
+        if status == "active":
+            return await handler(request)
+
+        log.info(
+            "partner_status_gate: denied passive partner twitch=%s path=%s",
+            server._sanitize_log_value(twitch_login),
+            server._sanitize_log_value(path),
+        )
+        wants_json = (
+            "application/json" in (request.headers.get("Accept") or "")
+            or path.startswith("/twitch/api/")
+        )
+        if wants_json:
+            return web.json_response(
+                {
+                    "error": "partner_inactive",
+                    "message": (
+                        "Dein Streamer-Account ist aktuell nicht als aktiver Partner geführt. "
+                        "Bitte authentifiziere dich neu, um diesen Bereich zu nutzen."
+                    ),
+                    "reauth_url": "/twitch/raid/auth",
+                },
+                status=403,
+            )
+        return web.HTTPFound("/twitch/verwaltung?inactive=1")
+
+    return _partner_status_gate

@@ -37,11 +37,13 @@ from .partner_registry import (
     OfflineAutoRaidEligibility,
     promote_streamer_to_partner,
     reactivate_partner,
+    reactivate_partner_after_valid_auth,
     save_streamer_discord_profile,
     set_partner_live_ping_settings,
     set_partner_raid_bot_enabled,
     set_partner_silent_flags,
     set_streamer_archive_state,
+    set_streamer_block_state,
     set_streamer_discord_member,
     upsert_non_partner_streamer,
     upsert_streamer_identity,
@@ -83,6 +85,7 @@ __all__ = [
     "set_partner_raid_bot_enabled",
     "set_partner_silent_flags",
     "set_streamer_archive_state",
+    "set_streamer_block_state",
     "set_streamer_discord_member",
     "upsert_non_partner_streamer",
     "upsert_streamer_identity",
@@ -1939,11 +1942,13 @@ def ensure_schema(conn) -> None:
             partnered_at              TEXT DEFAULT CURRENT_TIMESTAMP,
             admin_archived_at         TEXT,
             departnered_at            TEXT,
+            technical_pause_reason    TEXT,
             status                    TEXT NOT NULL DEFAULT 'active'
         )
         """
     )
     _pg_add_col_if_missing(conn, "twitch_partners", "admin_archived_at", "TEXT")
+    _pg_add_col_if_missing(conn, "twitch_partners", "technical_pause_reason", "TEXT")
     conn.execute(
         """
         UPDATE twitch_partners
@@ -2002,12 +2007,21 @@ def ensure_schema(conn) -> None:
             CASE
                 WHEN p.status = 'active'
                      AND COALESCE(p.manual_partner_opt_out, 0) = 0
+                     AND COALESCE(p.technical_pause_reason, '') = ''
                 THEN 1 ELSE 0
             END AS is_partner_active,
             p.live_ping_role_id,
             COALESCE(p.live_ping_enabled, 1) AS live_ping_enabled,
             p.status,
-            p.departnered_at
+            p.departnered_at,
+            p.technical_pause_reason,
+            CASE
+                WHEN p.status <> 'active' THEN 'inactive'
+                WHEN COALESCE(p.technical_pause_reason, '') = 'blocked' THEN 'blocked'
+                WHEN COALESCE(p.manual_partner_opt_out, 0) = 1 THEN 'admin_non_partner'
+                WHEN COALESCE(p.technical_pause_reason, '') <> '' THEN p.technical_pause_reason
+                ELSE 'active'
+            END AS operational_state
         FROM twitch_partners p
         LEFT JOIN twitch_streamer_identities i
           ON i.twitch_user_id = p.twitch_user_id
@@ -2038,7 +2052,9 @@ def ensure_schema(conn) -> None:
             is_partner,
             is_partner_active,
             live_ping_role_id,
-            live_ping_enabled
+            live_ping_enabled,
+            technical_pause_reason,
+            operational_state
         FROM twitch_partners_all_state
         WHERE status = 'active'
         """

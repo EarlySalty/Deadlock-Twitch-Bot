@@ -83,6 +83,8 @@ export function VerwaltungPage() {
       : missingScopeCount > 1
       ? `${missingScopeCount} Scopes fehlen. Neu autorisieren, um alle Funktionen zu nutzen.`
       : '1 Scope fehlt. Bitte neu autorisieren.';
+  const partnerStatus = String((authStatus as any)?.partnerStatus || '').trim().toLowerCase();
+  const tokenErrorGraceExpiresAt = String((authStatus as any)?.tokenErrorGraceExpiresAt || '').trim();
 
   return (
     <div className="internal-home-vibe min-h-screen relative px-3 py-4 md:px-7 md:py-8">
@@ -92,6 +94,44 @@ export function VerwaltungPage() {
       </div>
 
       <div className="relative max-w-[900px] mx-auto space-y-4 md:space-y-5">
+
+        {partnerStatus && partnerStatus !== 'active' && partnerStatus !== 'blocked' ? (
+          <motion.section
+            className="panel-card rounded-2xl border border-warning/30 bg-warning/10 p-5 md:p-6"
+            initial={{ opacity: 0, y: 14 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.26 }}
+          >
+            <div className="space-y-3">
+              <h2 className="text-lg font-bold text-white">
+                {partnerStatus === 'token_error'
+                  ? 'Twitch OAuth braucht Re-Auth'
+                  : partnerStatus === 'departnered'
+                  ? 'Du bist aktuell kein aktiver Partner'
+                  : partnerStatus === 'archived'
+                  ? 'Dein Account ist im Admin-Archiv'
+                  : 'Partner-Status inaktiv'}
+              </h2>
+              <p className="text-sm text-text-secondary">
+                Verwaltung, Pläne und Affiliate bleiben offen. Analyse, Social Media und
+                Title-Generator sind gesperrt. Eine erfolgreiche Twitch-OAuth setzt den Status
+                automatisch wieder auf aktiv (außer Bot-Bann oder permanenter Block).
+              </p>
+              {tokenErrorGraceExpiresAt ? (
+                <p className="text-xs text-text-secondary">
+                  Grace endet: {tokenErrorGraceExpiresAt}
+                </p>
+              ) : null}
+              <a
+                href={reconnectUrl}
+                className="inline-flex items-center gap-2 rounded-lg border border-primary/40 bg-primary/10 px-4 py-2 text-sm font-semibold text-primary transition-colors hover:border-primary/60 hover:bg-primary/20"
+              >
+                <ShieldCheck className="h-4 w-4" />
+                Jetzt neu autorisieren
+              </a>
+            </div>
+          </motion.section>
+        ) : null}
 
         {/* Hero */}
         <motion.section
