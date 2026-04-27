@@ -1,5 +1,13 @@
 # Changelog
 
+## #11 — Plan-Preise um 50% gesenkt
+
+- Raid Boost: 7,99 € → **3,99 €** pro Monat
+- Analyse Dashboard: 16,99 € → **8,49 €** pro Monat
+- Bundle (Analyse + Raid Boost): 22,99 € → **11,49 €** pro Monat
+- 6-Monats- und 12-Monats-Tarife folgen automatisch (mit den bestehenden 10% / 20% Mehrjahresrabatten)
+- Stripe-Preise synchronisiert; bestehende Abos rechnet Stripe weiter zum bisherigen Betrag ab, neue Buchungen laufen automatisch auf die halbierten Preise
+
 ## #10 — Social-Media-Dashboard ist jetzt eine eigene Seite
 
 - Im Analyse-Dashboard gibt es keinen „Social Media"-Tab mehr; das Tooling sitzt unter der eigenen URL `https://deutsche-deadlock-community.de/social-media-admin`

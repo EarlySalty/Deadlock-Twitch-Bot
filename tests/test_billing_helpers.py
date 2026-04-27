@@ -53,10 +53,11 @@ class BillingHelperTests(unittest.TestCase):
             plan for plan in catalog["plans"] if str(plan.get("id")) == "analysis_dashboard"
         )
         price = dict(analysis_plan.get("price") or {})
-        self.assertEqual(price.get("subtotal_net_cents"), 10194)
+        # 6× 849 ct = 5094 ct subtotal, 10% Rabatt = 509 ct, total = 4585 ct
+        self.assertEqual(price.get("subtotal_net_cents"), 5094)
         self.assertEqual(price.get("discount_percent"), 10)
-        self.assertEqual(price.get("discount_cents"), 1019)
-        self.assertEqual(price.get("total_net_cents"), 9175)
+        self.assertEqual(price.get("discount_cents"), 509)
+        self.assertEqual(price.get("total_net_cents"), 4585)
 
     def test_catalog_payment_state_uses_readiness_payload(self) -> None:
         catalog = _build_billing_catalog(

@@ -38,7 +38,7 @@ BILLING_PLANS: tuple[dict[str, Any], ...] = (
         "tier": plan_tier("raid_boost"),
         "badge": "raids",
         "description": "Dein Kanal wird bevorzugt als Raid-Ziel vorgeschlagen \u2014 mehr eingehende Zuschauer.",
-        "monthly_net_cents": 799,
+        "monthly_net_cents": 399,
         "recommended": False,
         "entitlements": list(plan_entitlements("raid_boost")),
         "features": [
@@ -54,7 +54,7 @@ BILLING_PLANS: tuple[dict[str, Any], ...] = (
         "tier": plan_tier("analysis_dashboard"),
         "badge": "analytics",
         "description": "Vollst\u00e4ndiges Analytics-Dashboard mit Stream-Statistiken, Viewer-Kurven und Wachstumsvergleichen.",
-        "monthly_net_cents": 1699,
+        "monthly_net_cents": 849,
         "recommended": True,
         "entitlements": list(plan_entitlements("analysis_dashboard")),
         "features": [
@@ -70,7 +70,7 @@ BILLING_PLANS: tuple[dict[str, Any], ...] = (
         "tier": plan_tier("bundle_analysis_raid_boost"),
         "badge": "bundle",
         "description": "Analyse Dashboard + Raid Boost im Paket \u2014 g\u00fcnstiger als einzeln.",
-        "monthly_net_cents": 2299,
+        "monthly_net_cents": 1149,
         "recommended": False,
         "entitlements": list(plan_entitlements("bundle_analysis_raid_boost")),
         "features": [

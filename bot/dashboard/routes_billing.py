@@ -699,7 +699,7 @@ async def api_billing_stripe_sync_products(
 
             cycle_map = price_map.setdefault(plan_id, {})
             price_id = str(cycle_map.get(cycle) or "").strip()
-            lookup_key = f"deadlock_{plan_id}_{cycle}m_net_v1"
+            lookup_key = f"deadlock_{plan_id}_{cycle}m_net_v2"
             price_status = "missing"
 
             if price_id and not dry_run:
