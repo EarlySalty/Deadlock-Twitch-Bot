@@ -1,7 +1,6 @@
 import { motion } from 'framer-motion';
 import {
   LayoutDashboard,
-  Film,
   MessageSquare,
   BarChart3,
   Users,
@@ -21,7 +20,6 @@ import type { TabId as BillingTabId } from '../../types/billing';
 
 export type TabId =
   | 'overview'
-  | 'social-media'
   | 'chat'
   | 'growth'
   | 'audience'
@@ -45,7 +43,6 @@ interface Tab {
 
 const tabs: Tab[] = [
   { id: 'overview', label: 'Übersicht', icon: LayoutDashboard },
-  { id: 'social-media', label: 'Social Media', icon: Film, adminOnly: true, beta: true },
   { id: 'chat', label: 'Chat', icon: MessageSquare },
   { id: 'growth', label: 'Wachstum', icon: BarChart3 },
   { id: 'audience', label: 'Audience', icon: Target },

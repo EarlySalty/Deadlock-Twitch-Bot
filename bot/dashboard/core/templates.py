@@ -17,7 +17,7 @@ class DashboardTemplateMixin:
             f"{anchor('/twitch/admin/roadmap', 'Roadmap', 'roadmap')}"
             f"{anchor('/twitch/stats', 'Stats', 'stats')}"
             f"{anchor('/analyse', 'Analyse', 'v2')}"
-            f"{anchor('/social-media', 'Social Media', 'social')}"
+            f"{anchor('/social-media-admin', 'Social Media', 'social')}"
             "</nav>"
         )
 

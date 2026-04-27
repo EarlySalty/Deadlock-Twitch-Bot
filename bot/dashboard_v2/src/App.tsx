@@ -3,7 +3,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { Header } from '@/components/layout/Header';
 import { TabNavigation, type TabId } from '@/components/layout/TabNavigation';
 import { Overview } from '@/pages/Overview';
-import { SocialMedia } from '@/pages/SocialMedia';
+import { SocialMediaAdminDashboard } from '@/pages/SocialMediaAdmin';
 import { ChatAnalytics } from '@/pages/ChatAnalytics';
 import { Growth } from '@/pages/Growth';
 import { Audience } from '@/pages/Audience';
@@ -144,7 +144,7 @@ function AnalyticsDashboard() {
     }
     const urlTab = params.get('tab');
     if (urlTab) {
-      const validTabs: Array<TabId | 'session-detail'> = ['overview', 'social-media', 'chat', 'growth', 'audience', 'viewers', 'coaching', 'compare', 'schedule', 'monetization', 'category', 'experimental', 'ai', 'title'];
+      const validTabs: Array<TabId | 'session-detail'> = ['overview', 'chat', 'growth', 'audience', 'viewers', 'coaching', 'compare', 'schedule', 'monetization', 'category', 'experimental', 'ai', 'title'];
       if (validTabs.includes(urlTab as TabId)) {
         setActiveTab(urlTab as TabId);
       }
@@ -284,10 +284,6 @@ function AnalyticsDashboard() {
             />
           )}
 
-          {activeTab === 'social-media' && (
-            <SocialMedia streamer={streamer || ''} />
-          )}
-
           {activeTab === 'chat' && (
             <ChatAnalytics streamer={streamer || ''} days={days} />
           )}
@@ -359,14 +355,26 @@ function AnalyticsDashboard() {
 }
 
 export default function App() {
-  const isInternalHomeRoute = normalizePathname(window.location.pathname) === '/twitch/dashboard';
-  const isVerwaltungRoute = normalizePathname(window.location.pathname) === '/twitch/verwaltung';
-  const isPricingRoute = normalizePathname(window.location.pathname) === '/twitch/pricing';
+  const path = normalizePathname(window.location.pathname);
+  const isInternalHomeRoute = path === '/twitch/dashboard';
+  const isVerwaltungRoute = path === '/twitch/verwaltung';
+  const isPricingRoute = path === '/twitch/pricing';
+  const isSocialMediaAdminRoute = path === '/social-media-admin';
 
   return (
     <QueryClientProvider client={queryClient}>
       <ErrorBoundary>
-        {isVerwaltungRoute ? <VerwaltungPage /> : isPricingRoute ? <Pricing /> : isInternalHomeRoute ? <InternalHome /> : <AnalyticsDashboard />}
+        {isSocialMediaAdminRoute ? (
+          <SocialMediaAdminDashboard />
+        ) : isVerwaltungRoute ? (
+          <VerwaltungPage />
+        ) : isPricingRoute ? (
+          <Pricing />
+        ) : isInternalHomeRoute ? (
+          <InternalHome />
+        ) : (
+          <AnalyticsDashboard />
+        )}
       </ErrorBoundary>
     </QueryClientProvider>
   );

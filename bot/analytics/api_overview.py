@@ -131,6 +131,8 @@ class _AnalyticsOverviewMixin:
         router.add_get("/twitch/analyse/{path:.*}", self._redirect_legacy_analyse_to_root)
         router.add_get("/twitch/dashboard-v2", self._redirect_dashboard_v2_to_analyse)
         router.add_get("/twitch/dashboard-v2/{path:.*}", self._serve_dashboard_v2_assets)
+        router.add_get("/social-media-admin", self._serve_social_media_admin)
+        router.add_get("/social-media-admin/{path:.*}", self._serve_dashboard_v2_assets)
         router.add_get("/twitch/verwaltung", self._serve_verwaltung)
         router.add_get("/twitch/pricing", self._serve_pricing)
         router.add_get("/twitch/affiliate/portal", self._serve_affiliate_portal)
@@ -540,6 +542,49 @@ class _AnalyticsOverviewMixin:
                     "allowedDemoProfiles": [],
                 },
                 asset_prefix="/analyse/",
+            )
+            return web.Response(text=html, content_type="text/html", charset="utf-8")
+        return web.Response(
+            text="Dashboard not built. Run npm run build in dashboard_v2/", status=404
+        )
+
+    async def _serve_social_media_admin(self, request: web.Request) -> web.Response:
+        """Serve the dedicated Social-Media-Admin SPA at /social-media-admin.
+
+        Reusing the dashboard_v2 bundle: pathname-based routing on the client
+        renders SocialMediaAdminDashboard instead of AnalyticsDashboard when
+        the URL is /social-media-admin.
+        """
+        gate_response = self._admin_dashboard_host_page_gate(request)
+        if gate_response is not None:
+            return gate_response
+        if not self._check_v2_auth(request):
+            should_use_discord = getattr(self, "_should_use_discord_admin_login", None)
+            if callable(should_use_discord) and bool(should_use_discord(request)):
+                login_url = DASHBOARD_V2_DISCORD_LOGIN_URL
+            else:
+                login_url = DASHBOARD_V2_LOGIN_URL
+            response = self._dashboard_auth_redirect_or_unavailable(
+                request,
+                next_path="/social-media-admin",
+                fallback_login_url=login_url,
+            )
+            if isinstance(response, web.HTTPException):
+                raise response
+            return response
+        import pathlib
+
+        dist_path = pathlib.Path(__file__).parent / "dashboard_v2" / "dist" / "index.html"
+        if dist_path.exists():
+            html = dist_path.read_text(encoding="utf-8")
+            html = self._inject_dashboard_runtime_config(
+                html,
+                runtime_config={
+                    "apiBase": "/twitch/api/v2",
+                    "demoMode": False,
+                    "allowedDemoProfiles": [],
+                },
+                asset_prefix="/twitch/dashboard-v2/",
             )
             return web.Response(text=html, content_type="text/html", charset="utf-8")
         return web.Response(
