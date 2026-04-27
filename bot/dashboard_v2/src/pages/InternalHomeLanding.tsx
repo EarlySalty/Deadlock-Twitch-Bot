@@ -750,9 +750,8 @@ export function InternalHomeLanding() {
   const changelogEntries = (home.changelog?.entries ?? []).slice(0, 3);
   const mainNavItems: SidebarNavItem[] = [
     { href: '/twitch/dashboard', label: 'Home', icon: Home, active: true },
-    { href: '/analyse?tab=overview', label: 'Overview', icon: BarChart3 },
-    { href: '/analyse?tab=streams', label: 'Streams', icon: Film },
-    { href: '/analyse?tab=chat', label: 'Chat', icon: MessageSquare },
+    { href: '/analyse?tab=overview', label: 'Analyse', icon: BarChart3 },
+    { href: '/social-media-admin', label: 'Social Media Dashboard', icon: Film },
   ];
   const toolNavItems: SidebarNavItem[] = [
     { href: '/twitch/verwaltung', label: 'Verwaltung', icon: Settings },
