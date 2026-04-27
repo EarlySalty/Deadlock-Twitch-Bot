@@ -24,6 +24,16 @@ from aiohttp import web
 from aiohttp.web_request import FileField
 
 from .clip_manager import ClipManager
+from .enrichment import (
+    ClipEnrichmentPipeline,
+    EnrichmentOutcome,
+    STATUS_DONE,
+    STATUS_FAILED,
+    STATUS_PENDING,
+    ensure_enrichment_row,
+    get_enrichment,
+    update_manual_edit,
+)
 from .layout import DEFAULT_STREAMER_LAYOUT
 from .layout import LayoutValidationError
 from .layout import StreamerLayout
@@ -37,6 +47,13 @@ from .rendering import (
     render_social_media_privacy,
     render_social_media_terms,
 )
+from .transcription import (
+    VocabEntry,
+    delete_vocab_entry,
+    list_vocab,
+    upsert_vocab_entry,
+)
+from .transcription.seed_vocab import seed_vocab as seed_vocab_async
 from .uploaders.video_processor import VideoProcessor
 from ..storage import readonly_connection, transaction
 
@@ -367,6 +384,30 @@ class SocialMediaDashboard:
             else:
                 layout_override_payload = json.loads(layout_override)
         effective_layout = get_clip_effective_layout(int(row["id"]))
+
+        enrichment_status: str | None = None
+        enrichment_summary: dict | None = None
+        try:
+            enrichment = get_enrichment(int(row["id"]))
+        except Exception:
+            log.exception("Failed to load enrichment for clip %s", row.get("id"))
+            enrichment = None
+        if enrichment is not None:
+            enrichment_status = enrichment.status
+            top_hashtags = list(
+                dict.fromkeys(
+                    [
+                        *(enrichment.hashtags_youtube or []),
+                        *(enrichment.hashtags_tiktok or []),
+                        *(enrichment.hashtags_instagram or []),
+                    ]
+                )
+            )[:5]
+            enrichment_summary = {
+                "top_hashtags": top_hashtags,
+                "provider": enrichment.llm_provider,
+            }
+
         return {
             "clip_db_id": row["id"],
             "clip_id": row.get("clip_id"),
@@ -390,6 +431,8 @@ class SocialMediaDashboard:
             },
             "layout_override": layout_override_payload,
             "effective_layout": self._serialize_layout(effective_layout),
+            "enrichment_status": enrichment_status,
+            "enrichment_summary": enrichment_summary,
         }
 
     async def _store_uploaded_mp4(self, file_field: FileField, target_path: Path) -> Path:
@@ -504,6 +547,30 @@ class SocialMediaDashboard:
         app.router.add_post(
             "/social-media/api/admin/clips/{clip_db_id}/discard",
             self.api_admin_clip_discard,
+        )
+        app.router.add_get(
+            "/social-media/api/admin/clips/{clip_db_id}/enrichment",
+            self.api_admin_clip_enrichment_get,
+        )
+        app.router.add_put(
+            "/social-media/api/admin/clips/{clip_db_id}/enrichment",
+            self.api_admin_clip_enrichment_put,
+        )
+        app.router.add_post(
+            "/social-media/api/admin/clips/{clip_db_id}/enrichment/run",
+            self.api_admin_clip_enrichment_run,
+        )
+
+        # Vocab Management Endpoints
+        app.router.add_get("/social-media/api/admin/vocab", self.api_admin_vocab_list)
+        app.router.add_post("/social-media/api/admin/vocab", self.api_admin_vocab_upsert)
+        app.router.add_delete(
+            "/social-media/api/admin/vocab/{term}",
+            self.api_admin_vocab_delete,
+        )
+        app.router.add_post(
+            "/social-media/api/admin/vocab/seed",
+            self.api_admin_vocab_seed,
         )
 
         # Template Management Endpoints
@@ -832,6 +899,271 @@ class SocialMediaDashboard:
         if not row:
             return web.json_response({"clip_db_id": clip_db_id, "discarded": True})
         return web.json_response(self._serialize_clip_record(row))
+
+    # ========== Phase 2: Clip Enrichment ==========
+
+    @staticmethod
+    def _serialize_enrichment_record(record) -> dict:
+        if record is None:
+            return {}
+        return {
+            "clip_db_id": record.clip_db_id,
+            "transcript_raw": record.transcript_raw,
+            "transcript_corrected": record.transcript_corrected,
+            "transcript_segments": record.transcript_segments or [],
+            "transcript_lang": record.transcript_lang,
+            "detected_terms": record.detected_terms or [],
+            "title_youtube": record.title_youtube,
+            "title_tiktok": record.title_tiktok,
+            "title_instagram": record.title_instagram,
+            "description_youtube": record.description_youtube,
+            "description_tiktok": record.description_tiktok,
+            "description_instagram": record.description_instagram,
+            "hashtags_youtube": record.hashtags_youtube or [],
+            "hashtags_tiktok": record.hashtags_tiktok or [],
+            "hashtags_instagram": record.hashtags_instagram or [],
+            "llm_provider": record.llm_provider,
+            "llm_model": record.llm_model,
+            "cost_usd_estimate": (
+                float(record.cost_usd_estimate) if record.cost_usd_estimate is not None else None
+            ),
+            "status": record.status,
+            "error_message": record.error_message,
+            "started_at": record.started_at,
+            "completed_at": record.completed_at,
+            "edited_by": record.edited_by,
+            "updated_at": record.updated_at,
+        }
+
+    @staticmethod
+    def _normalize_hashtag_list(value, *, field_name: str) -> list[str] | None:
+        if value is None:
+            return None
+        if not isinstance(value, list):
+            raise web.HTTPBadRequest(text=f"{field_name} must be a list")
+        cleaned: list[str] = []
+        seen: set[str] = set()
+        for entry in value:
+            token = str(entry or "").strip()
+            if not token:
+                continue
+            if not token.startswith("#"):
+                token = f"#{token.lstrip('#')}"
+            lower = token.lower()
+            if lower in seen:
+                continue
+            seen.add(lower)
+            cleaned.append(token)
+        return cleaned
+
+    async def api_admin_clip_enrichment_get(self, request: web.Request) -> web.Response:
+        self._require_admin(request)
+        clip_db_id = self._normalize_clip_id(request.match_info.get("clip_db_id"))
+        if not clip_db_id:
+            return web.json_response({"error": "invalid_clip_db_id"}, status=400)
+        if not self._load_clip_row(clip_db_id):
+            return web.json_response({"error": "clip_not_found"}, status=404)
+        record = ensure_enrichment_row(clip_db_id)
+        return web.json_response(self._serialize_enrichment_record(record))
+
+    async def api_admin_clip_enrichment_put(self, request: web.Request) -> web.Response:
+        self._require_admin(request)
+        clip_db_id = self._normalize_clip_id(request.match_info.get("clip_db_id"))
+        if not clip_db_id:
+            return web.json_response({"error": "invalid_clip_db_id"}, status=400)
+        if not self._load_clip_row(clip_db_id):
+            return web.json_response({"error": "clip_not_found"}, status=404)
+
+        try:
+            payload = await request.json()
+        except Exception:
+            return web.json_response({"error": "invalid_json"}, status=400)
+        if not isinstance(payload, dict):
+            return web.json_response({"error": "invalid_payload"}, status=400)
+
+        kwargs: dict = {"edited_by": self._get_editor_user_id(request)}
+
+        for field in (
+            "title_youtube",
+            "title_tiktok",
+            "title_instagram",
+            "description_youtube",
+            "description_tiktok",
+            "description_instagram",
+        ):
+            if field in payload:
+                value = payload[field]
+                if value is None:
+                    kwargs[field] = None
+                elif isinstance(value, str):
+                    kwargs[field] = value.strip() or None
+                else:
+                    return web.json_response(
+                        {"error": "invalid_field", "field": field}, status=400
+                    )
+
+        for field in ("hashtags_youtube", "hashtags_tiktok", "hashtags_instagram"):
+            if field in payload:
+                normalized = self._normalize_hashtag_list(payload[field], field_name=field)
+                if normalized is not None:
+                    kwargs[field] = normalized
+
+        try:
+            update_manual_edit(clip_db_id, **kwargs)
+        except web.HTTPException:
+            raise
+        except Exception:
+            log.exception("Failed to save enrichment edits for clip %s", clip_db_id)
+            return web.json_response({"error": "save_failed"}, status=500)
+
+        record = get_enrichment(clip_db_id)
+        return web.json_response(self._serialize_enrichment_record(record))
+
+    async def api_admin_clip_enrichment_run(self, request: web.Request) -> web.Response:
+        self._require_admin(request)
+        clip_db_id = self._normalize_clip_id(request.match_info.get("clip_db_id"))
+        if not clip_db_id:
+            return web.json_response({"error": "invalid_clip_db_id"}, status=400)
+        if not self._load_clip_row(clip_db_id):
+            return web.json_response({"error": "clip_not_found"}, status=404)
+
+        force = False
+        try:
+            if request.body_exists:
+                payload = await request.json()
+                if isinstance(payload, dict):
+                    force = bool(payload.get("force", False))
+        except Exception:
+            force = False
+
+        pipeline = ClipEnrichmentPipeline()
+        try:
+            outcome: EnrichmentOutcome = await pipeline.run(clip_db_id, force=force)
+        except ValueError:
+            return web.json_response({"error": "clip_not_found"}, status=404)
+        except Exception:
+            log.exception("Enrichment run failed for clip %s", clip_db_id)
+            return web.json_response({"error": "enrichment_failed"}, status=500)
+
+        record = get_enrichment(clip_db_id)
+        return web.json_response(
+            {
+                "clip_db_id": clip_db_id,
+                "outcome": {
+                    "status": outcome.status,
+                    "provider": outcome.provider,
+                    "model": outcome.model,
+                    "error_message": outcome.error_message,
+                },
+                "enrichment": self._serialize_enrichment_record(record),
+            }
+        )
+
+    # ========== Phase 2: Vocab Admin ==========
+
+    @staticmethod
+    def _serialize_vocab_entry(entry: VocabEntry) -> dict:
+        return entry.to_dict()
+
+    async def api_admin_vocab_list(self, request: web.Request) -> web.Response:
+        self._require_admin(request)
+        try:
+            page = max(1, int(request.query.get("page", "1")))
+            page_size = min(200, max(1, int(request.query.get("page_size", "50"))))
+        except (TypeError, ValueError):
+            return web.json_response({"error": "invalid_pagination"}, status=400)
+        category = request.query.get("category")
+        query = request.query.get("q")
+        offset = (page - 1) * page_size
+        try:
+            entries, total = list_vocab(
+                category=category if category else None,
+                query=query if query else None,
+                limit=page_size,
+                offset=offset,
+            )
+        except Exception:
+            log.exception("Failed to list vocab")
+            return web.json_response({"error": "vocab_list_failed"}, status=500)
+        return web.json_response(
+            {
+                "items": [self._serialize_vocab_entry(e) for e in entries],
+                "total": total,
+                "page": page,
+                "page_size": page_size,
+            }
+        )
+
+    async def api_admin_vocab_upsert(self, request: web.Request) -> web.Response:
+        self._require_admin(request)
+        try:
+            payload = await request.json()
+        except Exception:
+            return web.json_response({"error": "invalid_json"}, status=400)
+        if not isinstance(payload, dict):
+            return web.json_response({"error": "invalid_payload"}, status=400)
+        try:
+            entry = upsert_vocab_entry(
+                term=str(payload.get("term") or ""),
+                canonical=str(payload.get("canonical") or ""),
+                category=str(payload.get("category") or ""),
+                source=str(payload.get("source") or "manual"),
+                aliases=payload.get("aliases") or [],
+                weight=int(payload.get("weight") or 1),
+            )
+        except ValueError as exc:
+            return web.json_response({"error": "invalid_vocab", "message": str(exc)}, status=400)
+        except Exception:
+            log.exception("Failed to upsert vocab")
+            return web.json_response({"error": "vocab_upsert_failed"}, status=500)
+        return web.json_response(self._serialize_vocab_entry(entry))
+
+    async def api_admin_vocab_delete(self, request: web.Request) -> web.Response:
+        self._require_admin(request)
+        term = str(request.match_info.get("term") or "").strip()
+        if not term:
+            return web.json_response({"error": "term_required"}, status=400)
+        try:
+            removed = delete_vocab_entry(term)
+        except ValueError as exc:
+            return web.json_response({"error": "invalid_term", "message": str(exc)}, status=400)
+        except Exception:
+            log.exception("Failed to delete vocab")
+            return web.json_response({"error": "vocab_delete_failed"}, status=500)
+        if not removed:
+            return web.json_response({"error": "vocab_not_found"}, status=404)
+        return web.Response(status=204)
+
+    async def api_admin_vocab_seed(self, request: web.Request) -> web.Response:
+        self._require_admin(request)
+        include_slang = True
+        include_api = True
+        try:
+            if request.body_exists:
+                payload = await request.json()
+                if isinstance(payload, dict):
+                    include_slang = bool(payload.get("include_slang", True))
+                    include_api = bool(payload.get("include_api", True))
+        except Exception:
+            pass
+        try:
+            stats = await seed_vocab_async(
+                include_slang=include_slang,
+                include_api=include_api,
+            )
+        except Exception:
+            log.exception("Vocab seed failed")
+            return web.json_response({"error": "vocab_seed_failed"}, status=500)
+        # legacy frontend uses {inserted, updated}
+        written = int(stats.get("written") or 0)
+        return web.json_response(
+            {
+                "inserted": written,
+                "updated": written,
+                "written": written,
+                "skipped": int(stats.get("skipped") or 0),
+            }
+        )
 
     async def api_upload_clip(self, request: web.Request) -> web.Response:
         self._require_admin(request)

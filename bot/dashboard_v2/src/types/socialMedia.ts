@@ -90,6 +90,7 @@ export interface ClipEnrichment {
   transcript_raw: string | null;
   transcript_corrected: string | null;
   transcript_segments: Array<{ start: number; end: number; text: string }> | null;
+  transcript_lang?: string | null;
   detected_terms: string[];
   title_youtube: string | null;
   title_tiktok: string | null;

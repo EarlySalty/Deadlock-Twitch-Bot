@@ -31,6 +31,14 @@ def apply_phase1_layout_and_uploads(conn: Any) -> None:
     repair_social_media_sequences(conn)
 
 
+def apply_phase2_enrichment(conn: Any) -> None:
+    """Apply the Phase 2 DDL for vocabulary and clip enrichment."""
+    _ensure_deadlock_vocab_table(conn)
+    _ensure_clip_enrichment_table(conn)
+    _ensure_social_media_settings_table(conn)
+    repair_social_media_sequences(conn)
+
+
 def repair_social_media_sequences(conn: Any) -> None:
     """Repair known social-media SERIAL/IDENTITY sequences idempotently."""
     for table, column in SOCIAL_MEDIA_SEQUENCE_TARGETS:
@@ -172,6 +180,95 @@ def _ensure_clip_layout_and_retention_columns(conn: Any) -> None:
            AND BTRIM(created_at::text) <> ''
            AND retention_until IS NULL
         """
+    )
+
+
+def _ensure_deadlock_vocab_table(conn: Any) -> None:
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS deadlock_vocab (
+            term       TEXT PRIMARY KEY,
+            canonical  TEXT NOT NULL,
+            category   TEXT NOT NULL,
+            source     TEXT NOT NULL DEFAULT 'manual',
+            aliases    JSONB NOT NULL DEFAULT '[]'::JSONB,
+            weight     INTEGER NOT NULL DEFAULT 1,
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            CONSTRAINT deadlock_vocab_category_chk
+                CHECK (category IN ('hero', 'item', 'ability', 'slang')),
+            CONSTRAINT deadlock_vocab_source_chk
+                CHECK (source IN ('deadlock_api', 'manual'))
+        )
+        """
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_deadlock_vocab_category "
+        "ON deadlock_vocab(category)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_deadlock_vocab_canonical "
+        "ON deadlock_vocab(canonical)"
+    )
+
+
+def _ensure_social_media_settings_table(conn: Any) -> None:
+    """Key/value-Settings-Tabelle (z.B. fuer externe-LLM-Consent)."""
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS social_media_settings (
+            key        TEXT PRIMARY KEY,
+            value      JSONB NOT NULL,
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_by TEXT
+        )
+        """
+    )
+
+
+def _ensure_clip_enrichment_table(conn: Any) -> None:
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS social_media_clip_enrichment (
+            clip_db_id            INTEGER PRIMARY KEY
+                REFERENCES twitch_clips_social_media(id) ON DELETE CASCADE,
+            transcript_raw        TEXT,
+            transcript_corrected  TEXT,
+            transcript_segments   JSONB,
+            transcript_lang       TEXT,
+            detected_terms        JSONB NOT NULL DEFAULT '[]'::JSONB,
+            title_youtube         TEXT,
+            title_tiktok          TEXT,
+            title_instagram       TEXT,
+            description_youtube   TEXT,
+            description_tiktok    TEXT,
+            description_instagram TEXT,
+            hashtags_youtube      JSONB NOT NULL DEFAULT '[]'::JSONB,
+            hashtags_tiktok       JSONB NOT NULL DEFAULT '[]'::JSONB,
+            hashtags_instagram    JSONB NOT NULL DEFAULT '[]'::JSONB,
+            llm_provider          TEXT,
+            llm_model             TEXT,
+            cost_usd_estimate     NUMERIC(10, 6),
+            status                TEXT NOT NULL DEFAULT 'pending',
+            error_message         TEXT,
+            started_at            TIMESTAMPTZ,
+            completed_at          TIMESTAMPTZ,
+            edited_by             TEXT,
+            updated_at            TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            CONSTRAINT social_media_clip_enrichment_status_chk
+                CHECK (status IN (
+                    'pending', 'transcribing', 'correcting', 'llm',
+                    'done', 'failed', 'skipped_no_key'
+                ))
+        )
+        """
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_social_media_clip_enrichment_status "
+        "ON social_media_clip_enrichment(status)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_social_media_clip_enrichment_updated_at "
+        "ON social_media_clip_enrichment(updated_at DESC)"
     )
 
 
