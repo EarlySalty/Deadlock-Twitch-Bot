@@ -1,5 +1,10 @@
 # Changelog
 
+## #13 — Bot taucht nicht mehr in Analyse-Daten auf
+
+- Der Bot selbst (`deutschedeadlockcommunity`) wird jetzt überall aus Chat-Statistiken und Analyse-Dashboards herausgefiltert
+- Viewer-Rankings, Publikumsauswertungen und Chat-Tiefenanalysen zeigen keine Bot-Einträge mehr
+
 ## #12 — Dashboard-Login funktioniert wieder + sauberes Partner-Status-Gating
 
 - Dashboard-Login war komplett kaputt: SQL-Query referenzierte nicht-existierende Spalten (`is_partner`, `archived_at`, `created_at`) und brach mit 503 ab. Login funktioniert jetzt wieder zuverlässig.

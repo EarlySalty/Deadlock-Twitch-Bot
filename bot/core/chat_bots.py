@@ -7,6 +7,7 @@ from collections.abc import Iterable
 # Single source of truth for known service/chat bot accounts.
 KNOWN_CHAT_BOTS: tuple[str, ...] = (
     "botrix",
+    "deutschedeadlockcommunity",
     "fossabot",
     "moobot",
     "nightbot",
