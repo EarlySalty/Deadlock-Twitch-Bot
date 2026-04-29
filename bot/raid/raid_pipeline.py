@@ -79,6 +79,8 @@ class RaidPipelineDependencies:
     log_raid_observability_event: Callable[..., Any] | None = None
     monotonic: Callable[[], float] = time.monotonic
     to_thread: Callable[..., Awaitable[Any]] = asyncio.to_thread
+    load_outreach_boost_logins: Callable[[], dict[str, dict[str, Any]]] | None = None
+    mark_outreach_boost_used: Callable[[str], bool] | None = None
 
 
 class RaidPipelineService:
@@ -112,11 +114,64 @@ class RaidPipelineService:
         exclude_ids = {request.broadcaster_id}
         cached_de_streams: list[dict[str, Any]] | None = None
 
+        outreach_boost_logins: dict[str, dict[str, Any]] = {}
+        if callable(self._deps.load_outreach_boost_logins):
+            try:
+                loaded = self._deps.load_outreach_boost_logins()
+                outreach_boost_logins = {
+                    str(login or "").strip().lower(): info or {}
+                    for login, info in (loaded or {}).items()
+                    if str(login or "").strip()
+                }
+            except Exception:
+                self._deps.logger.debug(
+                    "Raid pipeline: Outreach-Boost-Loader fehlgeschlagen",
+                    exc_info=True,
+                )
+                outreach_boost_logins = {}
+
         for attempt in range(max_attempts):
             attempt_start_ts = self._deps.monotonic()
             target: dict[str, Any] | None = None
             is_partner_raid = False
+            is_outreach_boost = False
             candidates_count = 0
+
+            if outreach_boost_logins and request.api and request.category_id:
+                if cached_de_streams is None:
+                    try:
+                        cached_de_streams = await request.api.get_streams_by_category(
+                            request.category_id,
+                            language="de",
+                            limit=50,
+                        )
+                    except Exception:
+                        self._deps.logger.exception(
+                            "Failed to get Deadlock-DE streams for outreach boost"
+                        )
+                        cached_de_streams = []
+
+                boost_matches = [
+                    stream_data
+                    for stream_data in (cached_de_streams or [])
+                    if (stream_data.get("user_login") or "").lower() in outreach_boost_logins
+                    and stream_data.get("user_id") not in exclude_ids
+                    and str(stream_data.get("user_id") or "") not in blacklisted_ids
+                    and (stream_data.get("user_login") or "").lower() not in blacklisted_logins
+                ]
+                if boost_matches:
+                    boost_matches.sort(
+                        key=lambda s: (int(s.get("viewer_count") or 0), str(s.get("started_at") or ""))
+                    )
+                    target = boost_matches[0]
+                    is_outreach_boost = True
+                    candidates_count = len(boost_matches)
+                    self._deps.logger.info(
+                        "Raid pipeline: Outreach-Boost-Ziel gewählt %s -> %s (boost_pool=%d)",
+                        request.broadcaster_login,
+                        target.get("user_login"),
+                        len(boost_matches),
+                    )
 
             partner_candidates = [
                 stream_data
@@ -127,7 +182,7 @@ class RaidPipelineService:
                 and (stream_data.get("user_login") or "").lower() not in blacklisted_logins
             ]
 
-            if partner_candidates:
+            if not target and partner_candidates:
                 target = await _maybe_await(
                     self._deps.select_partner_candidate_by_score(
                         partner_candidates,
@@ -293,6 +348,20 @@ class RaidPipelineService:
                         broadcaster_id=str(request.broadcaster_id),
                         ttl_seconds=180.0,
                     )
+                if is_outreach_boost and callable(self._deps.mark_outreach_boost_used):
+                    try:
+                        marked = self._deps.mark_outreach_boost_used(target_login)
+                        if marked:
+                            self._deps.logger.info(
+                                "Raid pipeline: Outreach-Boost verbraucht für %s",
+                                target_login,
+                            )
+                    except Exception:
+                        self._deps.logger.debug(
+                            "Raid pipeline: Outreach-Boost-Markierung fehlgeschlagen für %s",
+                            target_login,
+                            exc_info=True,
+                        )
                 self._deps.logger.info(
                     "Raid attempt %d/%d succeeded (%s -> %s) api=%.0fms, total_elapsed=%.0fms, reason=%s",
                     attempt + 1,

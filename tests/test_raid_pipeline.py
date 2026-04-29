@@ -270,6 +270,79 @@ class RaidPipelineTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result, {"status": "no_target"})
         deps.start_raid.assert_not_awaited()
 
+    async def test_outreach_boost_overrides_partner_selection(self) -> None:
+        partner = {
+            "user_id": "2002",
+            "user_login": "partner",
+            "started_at": "2026-03-10T18:00:00+00:00",
+            "raid_enabled": True,
+        }
+        boost_target = {
+            "user_id": "9009",
+            "user_login": "boostchannel",
+            "started_at": "2026-03-10T19:30:00+00:00",
+            "viewer_count": 4,
+        }
+        api = SimpleNamespace(
+            get_streams_by_category=AsyncMock(return_value=[boost_target]),
+        )
+        select_partner = AsyncMock(return_value=partner)
+        mark_used = MagicMock(return_value=True)
+        deps = self._make_deps(
+            select_partner_candidate_by_score=select_partner,
+            start_raid=AsyncMock(return_value=(True, None)),
+            load_outreach_boost_logins=lambda: {
+                "boostchannel": {"streamer_user_id": "9009", "contacted_at": "now"}
+            },
+            mark_outreach_boost_used=mark_used,
+        )
+        request = self._make_request(
+            online_partners=[partner],
+            api=api,
+            category_id="deadlock",
+        )
+
+        result = await RaidPipelineService(deps).execute(request)
+
+        self.assertEqual(result["status"], "started")
+        self.assertEqual(result["target_login"], "boostchannel")
+        self.assertFalse(result["is_partner_raid"])
+        select_partner.assert_not_awaited()
+        mark_used.assert_called_once_with("boostchannel")
+        api.get_streams_by_category.assert_awaited_once()
+
+    async def test_outreach_boost_skipped_when_target_not_live_in_de_pool(self) -> None:
+        partner = {
+            "user_id": "2002",
+            "user_login": "partner",
+            "started_at": "2026-03-10T18:00:00+00:00",
+            "raid_enabled": True,
+        }
+        api = SimpleNamespace(
+            get_streams_by_category=AsyncMock(return_value=[]),
+        )
+        mark_used = MagicMock()
+        deps = self._make_deps(
+            select_partner_candidate_by_score=AsyncMock(return_value=partner),
+            start_raid=AsyncMock(return_value=(True, None)),
+            load_outreach_boost_logins=lambda: {
+                "offlineboost": {"streamer_user_id": "8008", "contacted_at": "now"}
+            },
+            mark_outreach_boost_used=mark_used,
+        )
+        request = self._make_request(
+            online_partners=[partner],
+            api=api,
+            category_id="deadlock",
+        )
+
+        result = await RaidPipelineService(deps).execute(request)
+
+        self.assertEqual(result["status"], "started")
+        self.assertEqual(result["target_login"], "partner")
+        self.assertTrue(result["is_partner_raid"])
+        mark_used.assert_not_called()
+
     async def test_execute_raid_pipeline_helper(self) -> None:
         target = {
             "user_id": "2002",

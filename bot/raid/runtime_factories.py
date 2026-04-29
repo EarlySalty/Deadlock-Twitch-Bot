@@ -48,6 +48,10 @@ from .raid_tracking_runtime import (
     RaidTrackingRuntimeService,
     RaidTrackingRuntimeState,
 )
+from .services.outreach_boost_targets import (
+    load_outreach_boost_logins,
+    mark_outreach_boost_used,
+)
 from .services.recruitment_messaging import (
     RecruitmentMessagingService,
     build_runtime_recruitment_messaging_service,
@@ -425,6 +429,8 @@ def make_raid_pipeline_service(bot: Any) -> RaidPipelineService:
             increment_raid_observability_counter=bot._increment_raid_observability_counter,
             log_raid_observability_event=_log_event,
             to_thread=asyncio.to_thread,
+            load_outreach_boost_logins=load_outreach_boost_logins,
+            mark_outreach_boost_used=mark_outreach_boost_used,
         )
     )
 

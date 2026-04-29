@@ -2973,9 +2973,13 @@ def ensure_schema(conn) -> None:
             contacted_at     TEXT,
             status           TEXT DEFAULT 'pending',
             cooldown_until   TEXT,
-            notes            TEXT
+            notes            TEXT,
+            raid_used_at     TEXT
         )
         """
+    )
+    conn.execute(
+        "ALTER TABLE twitch_partner_outreach ADD COLUMN IF NOT EXISTS raid_used_at TEXT"
     )
 
     # 11) Event tables
