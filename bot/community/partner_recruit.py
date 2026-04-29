@@ -25,6 +25,9 @@ RECRUIT_MIN_DAYS = 4  # Mindestanzahl Streaming-Tage im Zeitraum
 RECRUIT_MIN_AVG_SAMPLES_PER_DAY = 480  # ≈ 2h bei 15s-Sample-Intervall
 RECRUIT_COOLDOWN_DAYS = 30  # Pause zwischen Kontaktversuchen
 RECRUIT_CHECK_INTERVAL_SECONDS = 1800  # Prüfzyklus (30 min)
+RECRUIT_MAX_PER_DAY = 8  # Hartes Tageslimit über alle Ticks
+RECRUIT_MAX_PER_TICK = 3  # Maximale Sends pro Prüfzyklus
+RECRUIT_THROTTLE_SECONDS = 60  # Pause zwischen Sends innerhalb eines Ticks
 RECRUIT_DISCORD_INVITE = "discord.gg/z5TfVHuQq2"
 
 # Twitch-Chat-Limit: 500 Zeichen. Nachricht bleibt bei ~300 Zeichen.
@@ -43,10 +46,12 @@ class TwitchPartnerRecruitMixin:
     # Hauptentry-Point (wird aus monitoring._tick() aufgerufen)
     # ------------------------------------------------------------------
     async def _run_partner_recruit(self, category_streams: list[dict]) -> None:
-        """Prüft auf neue Kandidaten und sendet ggf. eine Outreach-Nachricht.
+        """Prüft auf neue Kandidaten und sendet ggf. Outreach-Nachrichten.
 
         Wird jeden Tick aufgerufen, aber intern auf 30 Min rate-limitiert.
-        Sendet pro Durchlauf höchstens eine Nachricht (Rate-Limit-Schutz).
+        Pro Tick höchstens RECRUIT_MAX_PER_TICK Nachrichten, pro Tag insgesamt
+        RECRUIT_MAX_PER_DAY (siehe Modul-Konstanten). Zwischen Sends wird
+        RECRUIT_THROTTLE_SECONDS gewartet, um Twitch-Chat-Limits zu schonen.
         """
         last_run = getattr(self, "_last_recruit_check", 0.0)
         if time.time() - last_run < RECRUIT_CHECK_INTERVAL_SECONDS:
@@ -58,6 +63,16 @@ class TwitchPartnerRecruitMixin:
             log.debug("PartnerRecruit: Keine Kandidaten gefunden")
             return
 
+        sent_today = self._count_outreach_sent_today()
+        remaining_today = max(0, RECRUIT_MAX_PER_DAY - sent_today)
+        if remaining_today <= 0:
+            log.info(
+                "PartnerRecruit: Tageslimit erreicht (%d/%d), kein Outreach in diesem Tick",
+                sent_today,
+                RECRUIT_MAX_PER_DAY,
+            )
+            return
+
         # Wer ist gerade live? (aus dem aktuellen category_streams-Snapshot)
         live_by_login: dict[str, dict] = {}
         for stream in category_streams:
@@ -65,7 +80,11 @@ class TwitchPartnerRecruitMixin:
             if login:
                 live_by_login[login] = stream
 
+        max_sends = min(RECRUIT_MAX_PER_TICK, remaining_today)
+        sends_done = 0
         for candidate in candidates:
+            if sends_done >= max_sends:
+                break
             login = candidate["streamer"]
             if login not in live_by_login:
                 log.debug("PartnerRecruit: %s nicht live, überspringe", login)
@@ -76,9 +95,43 @@ class TwitchPartnerRecruitMixin:
                 log.debug("PartnerRecruit: Kein user_id für %s", login)
                 continue
 
+            if sends_done > 0:
+                await asyncio.sleep(RECRUIT_THROTTLE_SECONDS)
+
             await self._send_partner_outreach(login, str(user_id), candidate["distinct_days"])
-            # Nur eine Nachricht pro Zyklus (Twitch Rate-Limit-Schutz)
-            break
+            sends_done += 1
+
+        if sends_done:
+            log.info(
+                "PartnerRecruit: %d Outreach-Nachricht(en) im Tick gesendet (heute %d/%d)",
+                sends_done,
+                sent_today + sends_done,
+                RECRUIT_MAX_PER_DAY,
+            )
+
+    # ------------------------------------------------------------------
+    # Tageslimit
+    # ------------------------------------------------------------------
+    def _count_outreach_sent_today(self) -> int:
+        """Zählt Outreach-Sends seit Mitternacht UTC, um das Tageslimit zu prüfen."""
+        try:
+            with transaction() as conn:
+                row = conn.execute(
+                    """
+                    SELECT COUNT(*) AS sent
+                      FROM twitch_partner_outreach
+                     WHERE status = 'sent'
+                       AND contacted_at IS NOT NULL
+                       AND contacted_at::timestamptz >= date_trunc('day', NOW())
+                    """
+                ).fetchone()
+            if row is None:
+                return 0
+            value = row["sent"] if hasattr(row, "keys") else row[0]
+            return int(value or 0)
+        except Exception:
+            log.debug("PartnerRecruit: Tageslimit-Query fehlgeschlagen", exc_info=True)
+            return 0
 
     # ------------------------------------------------------------------
     # Erkennung
