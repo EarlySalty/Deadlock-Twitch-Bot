@@ -22,6 +22,7 @@ from datetime import UTC, datetime
 import discord
 
 from ..api.token_manager import TwitchBotTokenManager
+from ..community.voice_reaction import TwitchPartnerVoiceReactionMixin
 from ..core.constants import TWITCH_NOTIFY_CHANNEL_ID, TWITCH_TARGET_GAME_NAME
 from ..logging_setup import ensure_twitch_logger_file_handler, log_path
 from ..storage import insert_observability_event, readonly_connection, transaction
@@ -97,6 +98,7 @@ if TWITCHIO_AVAILABLE:
         PromoMixin,
         ConnectionMixin,
         RaidCommandsMixin,
+        TwitchPartnerVoiceReactionMixin,
         twitchio_commands.Bot,
     ):
         """Twitch IRC Bot für Raid-Commands im Chat."""
@@ -1153,6 +1155,12 @@ if TWITCHIO_AVAILABLE:
             cmds = ", ".join(sorted(self.commands.keys()))
             log.info("Registered Chat Commands: %s", cmds)
 
+            # Voice-Reaction starten (no-op wenn VOICE_REACTION_ENABLED=false)
+            try:
+                await self._ensure_voice_reaction_started()
+            except Exception:
+                log.exception("VoiceReaction: Start in event_ready fehlgeschlagen")
+
             # Initial channels erst hier joinen – WS-Session ist jetzt bereit
             if self._skip_initial_join_once:
                 self._skip_initial_join_once = False
@@ -1340,6 +1348,20 @@ if TWITCHIO_AVAILABLE:
             # Ignoriere Bot-Nachrichten
             if message.echo:
                 return
+
+            # Voice-Reaction: Streamer-Antworten in offenen Outreach-Konversationen
+            try:
+                channel_login_pre = self._normalize_channel_login_safe(
+                    getattr(message, "channel", None)
+                )
+                if channel_login_pre:
+                    await self._voice_reaction_dispatch_message(
+                        channel_login=channel_login_pre,
+                        author=getattr(message, "author", None),
+                        text=getattr(message, "content", "") or "",
+                    )
+            except Exception:
+                log.debug("VoiceReaction: dispatch im event_message warf", exc_info=True)
 
             # Whitelist-Check: Bekannte Bot-Accounts überspringen Spam-Prüfung
             author_name = getattr(message.author, "name", "").lower()

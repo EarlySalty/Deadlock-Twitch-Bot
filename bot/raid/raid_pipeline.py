@@ -81,6 +81,10 @@ class RaidPipelineDependencies:
     to_thread: Callable[..., Awaitable[Any]] = asyncio.to_thread
     load_outreach_boost_logins: Callable[[], dict[str, dict[str, Any]]] | None = None
     mark_outreach_boost_used: Callable[[str], bool] | None = None
+    open_voice_reaction_conversation: Callable[
+        [str, str | None],
+        Awaitable[Any] | Any,
+    ] | None = None
 
 
 class RaidPipelineService:
@@ -359,6 +363,20 @@ class RaidPipelineService:
                     except Exception:
                         self._deps.logger.debug(
                             "Raid pipeline: Outreach-Boost-Markierung fehlgeschlagen für %s",
+                            target_login,
+                            exc_info=True,
+                        )
+                if is_outreach_boost and callable(self._deps.open_voice_reaction_conversation):
+                    try:
+                        result = self._deps.open_voice_reaction_conversation(
+                            target_login,
+                            target_id,
+                        )
+                        if _is_awaitable(result):
+                            await result
+                    except Exception:
+                        self._deps.logger.debug(
+                            "Raid pipeline: Voice-Reaction-Open fehlgeschlagen für %s",
                             target_login,
                             exc_info=True,
                         )

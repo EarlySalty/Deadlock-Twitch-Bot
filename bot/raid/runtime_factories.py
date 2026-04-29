@@ -404,6 +404,24 @@ def make_raid_pipeline_service(bot: Any) -> RaidPipelineService:
             details=payload.get("details"),
         )
 
+    async def _open_voice_reaction_conversation(target_login: str, target_id: str | None) -> Any:
+        chat_bot = getattr(bot, "chat_bot", None)
+        if chat_bot is None or not hasattr(chat_bot, "_open_conversation"):
+            return None
+        try:
+            return await chat_bot._open_conversation(
+                target_login,
+                target_id,
+                source="raid_boost",
+            )
+        except Exception:
+            log.debug(
+                "RaidPipeline: Voice-Reaction-Open via runtime_factories warf für %s",
+                target_login,
+                exc_info=True,
+            )
+            return None
+
     return RaidPipelineService(
         RaidPipelineDependencies(
             load_raid_blacklist=bot._load_raid_blacklist,
@@ -431,6 +449,7 @@ def make_raid_pipeline_service(bot: Any) -> RaidPipelineService:
             to_thread=asyncio.to_thread,
             load_outreach_boost_logins=load_outreach_boost_logins,
             mark_outreach_boost_used=mark_outreach_boost_used,
+            open_voice_reaction_conversation=_open_voice_reaction_conversation,
         )
     )
 

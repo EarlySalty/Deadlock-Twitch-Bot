@@ -266,6 +266,21 @@ class TwitchPartnerRecruitMixin:
                 login,
                 distinct_days,
             )
+            # Voice-Reaction-Konversation öffnen (no-op wenn Feature deaktiviert)
+            if hasattr(chat_bot, "_open_conversation"):
+                try:
+                    await chat_bot._open_conversation(
+                        login,
+                        user_id,
+                        source="outreach",
+                        initial_text=message,
+                    )
+                except Exception:
+                    log.debug(
+                        "PartnerRecruit: Voice-Reaction-Open fehlgeschlagen für %s",
+                        login,
+                        exc_info=True,
+                    )
         else:
             log.warning("PartnerRecruit: Outreach an %s fehlgeschlagen", login)
 
