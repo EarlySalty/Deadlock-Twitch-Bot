@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { ArchiveRestore, Eye, FolderArchive, Plus, Trash2 } from 'lucide-react';
+import { ArchiveRestore, Ban, Eye, FolderArchive, Plus, ShieldCheck, Trash2 } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { buildRaidAuthUrl, buildRaidRequirementsUrl } from '@/api/client';
 import type { ScopeStatusRow, StreamerPartnerStatus, StreamerRow } from '@/api/types';
@@ -8,7 +8,7 @@ import { DataTable, type TableColumn } from '@/components/shared/DataTable';
 import { SearchInput } from '@/components/shared/SearchInput';
 import { StatusBadge } from '@/components/shared/StatusBadge';
 import { Toast } from '@/components/shared/Toast';
-import { useAddStreamer, useArchiveStreamer, useRemoveStreamer, useScopeStatus, useStreamers } from '@/hooks/useAdmin';
+import { useAddStreamer, useArchiveStreamer, useBlockStreamer, useRemoveStreamer, useScopeStatus, useStreamers } from '@/hooks/useAdmin';
 import { formatDateTime, formatNumber, formatRelativeTime } from '@/utils/formatters';
 
 type PendingAction =
@@ -23,8 +23,10 @@ const viewOptions: Array<{
 }> = [
   { value: 'active', label: 'Aktiv', description: 'operative Partner ohne Admin-Archiv' },
   { value: 'archived', label: 'Archiv', description: 'im Admin ausgeblendete Partner' },
+  { value: 'token_error', label: 'Token Error', description: 'OAuth defekt, 7 Tage Grace bis Opt-out' },
   { value: 'departnered', label: 'De-Partnered', description: 'operativ deaktivierte Ex-Partner' },
   { value: 'non_partner', label: 'Kein Partner', description: 'intern ausgeschlossene Logins' },
+  { value: 'blocked', label: 'Blocked', description: 'harter globaler Ausschluss ohne Re-Auth-Rueckweg' },
   { value: 'all', label: 'Alle', description: 'gesamter Partnerbestand' },
 ];
 
@@ -96,6 +98,7 @@ export function StreamerList() {
   const addMutation = useAddStreamer();
   const removeMutation = useRemoveStreamer();
   const archiveMutation = useArchiveStreamer();
+  const blockMutation = useBlockStreamer();
 
   if (streamersQuery.isLoading && !streamersQuery.data) {
     return <div className="panel-card rounded-[1.8rem] p-8 text-white">Streamer werden geladen …</div>;
@@ -121,8 +124,10 @@ export function StreamerList() {
   const counts = {
     active: allRows.filter((row) => row.partnerStatus === 'active').length,
     archived: allRows.filter((row) => row.partnerStatus === 'archived').length,
+    token_error: allRows.filter((row) => row.partnerStatus === 'token_error').length,
     departnered: allRows.filter((row) => row.partnerStatus === 'departnered').length,
     non_partner: allRows.filter((row) => row.partnerStatus === 'non_partner').length,
+    blocked: allRows.filter((row) => row.partnerStatus === 'blocked').length,
     all: allRows.length,
   };
   const rows = filterByView(allRows, view).filter((row) => matchesStreamerSearch(row, search));
@@ -182,6 +187,10 @@ export function StreamerList() {
           </div>
           {row.partnerStatus === 'archived' ? (
             <div className="text-xs text-text-secondary">Archiviert {formatDateTime(row.archivedAt)}</div>
+          ) : row.partnerStatus === 'token_error' ? (
+            <div className="text-xs text-text-secondary">OAuth-Fehler / eingeschraenkter Zugriff</div>
+          ) : row.partnerStatus === 'blocked' ? (
+            <div className="text-xs text-text-secondary">Hart blockiert, kein Dashboard-Zugriff</div>
           ) : row.partnerStatus === 'departnered' ? (
             <div className="text-xs text-text-secondary">Operativ deaktiviert</div>
           ) : null}
@@ -213,6 +222,23 @@ export function StreamerList() {
           <a href={buildRaidAuthUrl(row.login)} target="_blank" rel="noreferrer" className="admin-button admin-button-secondary !px-3 !py-2">
             OAuth
           </a>
+          <button
+            onClick={async () => {
+              try {
+                const result = await blockMutation.mutateAsync({
+                  login: row.login,
+                  mode: row.partnerStatus === 'blocked' ? 'unblock' : 'block',
+                });
+                setToast({ open: true, tone: result.ok ? 'success' : 'error', message: result.message });
+              } catch (error) {
+                setToast({ open: true, tone: 'error', message: error instanceof Error ? error.message : 'Block-Aktion fehlgeschlagen' });
+              }
+            }}
+            className="admin-button admin-button-secondary !px-3 !py-2"
+          >
+            {row.partnerStatus === 'blocked' ? <ShieldCheck className="h-4 w-4" /> : <Ban className="h-4 w-4" />}
+            {row.partnerStatus === 'blocked' ? 'Entsperren' : 'Blockieren'}
+          </button>
           <a href={buildRaidRequirementsUrl(row.login)} className="admin-button admin-button-secondary !px-3 !py-2">
             Anforderungen
           </a>

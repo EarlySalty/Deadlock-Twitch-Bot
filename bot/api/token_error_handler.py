@@ -17,7 +17,6 @@ from ..discord_role_sync import (
 )
 from ..storage import pg as storage_pg
 from ..storage import (
-    departner_active_partner,
     load_active_partner,
     load_streamer_identity,
     readonly_connection,
@@ -77,6 +76,37 @@ class TokenErrorHandler:
                 for col_name, statement in column_add_statements.items():
                     if col_name not in existing:
                         conn.execute(statement)
+                partner_columns = {
+                    row[0]
+                    for row in conn.execute(
+                        """
+                        SELECT column_name
+                        FROM information_schema.columns
+                        WHERE table_name = 'twitch_partners'
+                        """
+                    )
+                }
+                if "technical_pause_reason" not in partner_columns:
+                    conn.execute(
+                        "ALTER TABLE twitch_partners ADD COLUMN technical_pause_reason TEXT"
+                    )
+                try:
+                    conn.execute(
+                        """
+                        UPDATE twitch_partners p
+                        SET technical_pause_reason = 'bot_banned',
+                            manual_partner_opt_out = 0
+                        WHERE COALESCE(p.manual_partner_opt_out, 0) = 1
+                          AND EXISTS (
+                              SELECT 1
+                              FROM twitch_raid_blacklist rb
+                              WHERE LOWER(rb.target_login) = LOWER(p.twitch_login)
+                                AND LOWER(COALESCE(rb.reason, '')) LIKE '%bot_banned%'
+                          )
+                        """
+                    )
+                except Exception:
+                    pass
         try:
             _apply_migration()
         except RuntimeError as exc:
@@ -177,6 +207,41 @@ class TokenErrorHandler:
                         _mask_log_identifier(twitch_user_id),
                         exc_info=True,
                     )
+                try:
+                    active_partner = load_active_partner(
+                        conn,
+                        twitch_user_id=twitch_user_id,
+                        twitch_login=login_hint,
+                    )
+                    if active_partner:
+                        partner_id = (
+                            active_partner["id"]
+                            if hasattr(active_partner, "keys")
+                            else active_partner[0]
+                        )
+                        conn.execute(
+                            """
+                            UPDATE twitch_partners
+                            SET technical_pause_reason = CASE
+                                    WHEN COALESCE(manual_partner_opt_out, 0) = 1 THEN technical_pause_reason
+                                    WHEN LOWER(COALESCE(technical_pause_reason, '')) = 'bot_banned' THEN technical_pause_reason
+                                    ELSE 'token_error'
+                                END,
+                                raid_bot_enabled = 0,
+                                twitch_login = COALESCE(NULLIF(%s, ''), twitch_login)
+                            WHERE id = %s
+                            """,
+                            (
+                                login_hint,
+                                partner_id,
+                            ),
+                        )
+                except Exception:
+                    log.debug(
+                        "Could not mirror token-error pause state for user_id=%s",
+                        _mask_log_identifier(twitch_user_id),
+                        exc_info=True,
+                    )
         except Exception:
             log.warning(
                 "Could not flag dashboard reauth for user_id=%s",
@@ -232,7 +297,7 @@ class TokenErrorHandler:
                         conn.execute(
                             """
                             UPDATE twitch_partners
-                            SET manual_partner_opt_out = 1,
+                            SET technical_pause_reason = 'bot_banned',
                                 raid_bot_enabled = 0,
                                 twitch_login = COALESCE(NULLIF(%s, ''), twitch_login)
                             WHERE id = %s
@@ -440,19 +505,31 @@ class TokenErrorHandler:
                     twitch_login=login_hint,
                 )
                 manual_partner_opt_out = False
+                technical_pause_reason = ""
                 if active_partner:
                     if hasattr(active_partner, "keys"):
                         manual_partner_opt_out = bool(
                             active_partner["manual_partner_opt_out"]
                         )
+                        technical_pause_reason = str(
+                            active_partner.get("technical_pause_reason") or ""
+                        ).strip().lower()
                     else:
                         try:
                             manual_partner_opt_out = bool(active_partner[12])
                         except Exception:
                             manual_partner_opt_out = False
+                        technical_pause_reason = ""
 
+                legacy_manual_opt_out_state = (
+                    not technical_pause_reason
+                    and manual_partner_opt_out
+                    and not raid_enabled
+                )
                 technical_bot_ban_state = bool(blacklist_row) or (
-                    (not raid_enabled) and manual_partner_opt_out
+                    technical_pause_reason == "bot_banned"
+                ) or (
+                    legacy_manual_opt_out_state
                 )
                 if not technical_bot_ban_state:
                     return False
@@ -471,27 +548,29 @@ class TokenErrorHandler:
                 conn.execute(
                     """
                     UPDATE twitch_raid_auth
-                    SET raid_enabled = TRUE,
+                    SET raid_enabled = %s,
                         twitch_login = COALESCE(NULLIF(%s, ''), twitch_login)
                     WHERE twitch_user_id = %s
                     """,
                     (
+                        not manual_partner_opt_out or legacy_manual_opt_out_state,
                         login_hint,
                         twitch_user_id,
                     ),
                 )
-                try:
-                    set_partner_raid_bot_enabled(
-                        conn,
-                        twitch_user_id=twitch_user_id,
-                        enabled=True,
-                    )
-                except Exception:
-                    log.debug(
-                        "Could not re-enable partner registry bot state for user_id=%s",
-                        _mask_log_identifier(twitch_user_id),
-                        exc_info=True,
-                    )
+                if not manual_partner_opt_out or legacy_manual_opt_out_state:
+                    try:
+                        set_partner_raid_bot_enabled(
+                            conn,
+                            twitch_user_id=twitch_user_id,
+                            enabled=True,
+                        )
+                    except Exception:
+                        log.debug(
+                            "Could not re-enable partner registry bot state for user_id=%s",
+                            _mask_log_identifier(twitch_user_id),
+                            exc_info=True,
+                        )
                 if active_partner:
                     partner_id = (
                         active_partner["id"]
@@ -501,12 +580,21 @@ class TokenErrorHandler:
                     conn.execute(
                         """
                         UPDATE twitch_partners
-                        SET manual_partner_opt_out = 0,
-                            raid_bot_enabled = 1,
+                        SET technical_pause_reason = NULL,
+                            manual_partner_opt_out = CASE
+                                WHEN %s THEN 0
+                                ELSE manual_partner_opt_out
+                            END,
+                            raid_bot_enabled = CASE
+                                WHEN %s THEN 1
+                                ELSE raid_bot_enabled
+                            END,
                             twitch_login = COALESCE(NULLIF(%s, ''), twitch_login)
                         WHERE id = %s
                         """,
                         (
+                            legacy_manual_opt_out_state,
+                            not manual_partner_opt_out or legacy_manual_opt_out_state,
                             login_hint,
                             partner_id,
                         ),
@@ -763,6 +851,17 @@ class TokenErrorHandler:
         try:
             with transaction() as conn:
                 conn.execute(
+                    """
+                    UPDATE twitch_partners
+                    SET technical_pause_reason = CASE
+                            WHEN LOWER(COALESCE(technical_pause_reason, '')) = 'token_error' THEN NULL
+                            ELSE technical_pause_reason
+                        END
+                    WHERE twitch_user_id = %s
+                    """,
+                    (twitch_user_id,),
+                )
+                conn.execute(
                     "DELETE FROM twitch_token_blacklist WHERE twitch_user_id = %s",
                     (twitch_user_id,),
                 )
@@ -778,6 +877,17 @@ class TokenErrorHandler:
         """
         try:
             with transaction() as conn:
+                conn.execute(
+                    """
+                    UPDATE twitch_partners
+                    SET technical_pause_reason = CASE
+                            WHEN LOWER(COALESCE(technical_pause_reason, '')) = 'token_error' THEN NULL
+                            ELSE technical_pause_reason
+                        END
+                    WHERE twitch_user_id = %s
+                    """,
+                    (twitch_user_id,),
+                )
                 conn.execute(
                     "DELETE FROM twitch_token_blacklist WHERE twitch_user_id = %s",
                     (twitch_user_id,),
@@ -1155,7 +1265,7 @@ class TokenErrorHandler:
                 except Exception:
                     log.warning("Could not set reminder_sent for %s", login, exc_info=True)
 
-            # 2. Streamer-Rolle entfernen
+            # 2. Streamer-Rolle entfernen und nach Ablauf als manuelles Opt-out markieren.
             if discord_user_id:
                 self.schedule_streamer_role_sync(
                     discord_user_id,
@@ -1164,13 +1274,27 @@ class TokenErrorHandler:
                 )
             try:
                 with transaction() as conn:
-                    departnered = departner_active_partner(
-                        conn,
-                        twitch_user_id=uid,
-                        twitch_login=login,
-                        restore_non_partner=False,
-                        disable_raid_auth=True,
-                        clear_verification=True,
+                    conn.execute(
+                        """
+                        UPDATE twitch_partners
+                        SET manual_partner_opt_out = 1,
+                            technical_pause_reason = 'token_error_expired',
+                            raid_bot_enabled = 0
+                        WHERE twitch_user_id = %s
+                           OR LOWER(twitch_login) = LOWER(%s)
+                        """,
+                        (uid, login),
+                    )
+                    conn.execute(
+                        """
+                        UPDATE twitch_raid_auth
+                        SET raid_enabled = FALSE,
+                            needs_reauth = TRUE,
+                            twitch_login = COALESCE(NULLIF(%s, ''), twitch_login)
+                        WHERE twitch_user_id = %s
+                           OR LOWER(twitch_login) = LOWER(%s)
+                        """,
+                        (login, uid, login),
                     )
                     conn.execute(
                         """
@@ -1182,17 +1306,19 @@ class TokenErrorHandler:
                     )
             except Exception:
                 log.warning(
-                    "Could not mark grace-period expiry/departner for %s",
+                    "Could not mark grace-period expiry/manual-opt-out for %s",
                     login,
                     exc_info=True,
                 )
-                departnered = None
+                marked_opt_out = False
+            else:
+                marked_opt_out = True
 
             log.info(
-                "Grace period expired for %s (id=%s) – role removed, departnered=%s, reminder sent",
+                "Grace period expired for %s (id=%s) – role removed, manual_opt_out=%s, reminder sent",
                 login,
                 uid,
-                "yes" if departnered else "no",
+                "yes" if marked_opt_out else "no",
             )
 
     async def _notify_admin_grace_expired(

@@ -53,6 +53,7 @@ from ..dashboard.live.live import (
 )
 from ..logging_setup import log_path, logs_dir
 from ..promo_mode import (
+    evaluate_global_promo_mode,
     load_global_promo_mode,
     validate_global_promo_mode_config,
 )
@@ -68,6 +69,8 @@ _ADMIN_STREAMER_VIEW_ACTIVE = "active"
 _ADMIN_STREAMER_VIEW_ARCHIVED = "archived"
 _ADMIN_STREAMER_VIEW_DEPARTNERED = "departnered"
 _ADMIN_STREAMER_VIEW_NON_PARTNER = "non_partner"
+_ADMIN_STREAMER_VIEW_TOKEN_ERROR = "token_error"
+_ADMIN_STREAMER_VIEW_BLOCKED = "blocked"
 _ADMIN_STREAMER_VIEW_ALL = "all"
 _ADMIN_STREAMER_VIEWS = frozenset(
     {
@@ -75,6 +78,8 @@ _ADMIN_STREAMER_VIEWS = frozenset(
         _ADMIN_STREAMER_VIEW_ARCHIVED,
         _ADMIN_STREAMER_VIEW_DEPARTNERED,
         _ADMIN_STREAMER_VIEW_NON_PARTNER,
+        _ADMIN_STREAMER_VIEW_TOKEN_ERROR,
+        _ADMIN_STREAMER_VIEW_BLOCKED,
         _ADMIN_STREAMER_VIEW_ALL,
     }
 )
@@ -190,7 +195,8 @@ def _admin_partner_state_cte_sql() -> str:
                             is_verified,
                             is_partner_active,
                             live_ping_enabled,
-                            status
+                            status,
+                            technical_pause_reason
                         FROM (
                             SELECT
                                 s.*,
@@ -381,6 +387,7 @@ def _load_admin_oauth_scope_rows() -> list[Any]:
                     s.archived_at,
                     s.manual_partner_opt_out,
                     s.status,
+                    s.technical_pause_reason,
                     ROW_NUMBER() OVER (
                         PARTITION BY a.auth_row_id
                         ORDER BY
@@ -394,6 +401,7 @@ def _load_admin_oauth_scope_rows() -> list[Any]:
                                 ELSE 2
                             END,
                             CASE
+                                WHEN LOWER(COALESCE(s.technical_pause_reason, '')) = 'blocked' THEN 3
                                 WHEN COALESCE(s.manual_partner_opt_out, 0) = 1 THEN 3
                                 WHEN COALESCE(s.status, 'departnered') = 'active' AND s.archived_at IS NULL THEN 0
                                 WHEN COALESCE(s.status, 'departnered') IN ('active', 'archived') THEN 1
@@ -434,7 +442,8 @@ def _load_admin_oauth_scope_rows() -> list[Any]:
                 discord_display_name,
                 archived_at,
                 manual_partner_opt_out,
-                status
+                status,
+                technical_pause_reason
             FROM ranked_auth_matches
             WHERE rn = 1
             ORDER BY
@@ -883,14 +892,25 @@ class _AnalyticsAdminMixin:
                 "COALESCE(s.manual_partner_opt_out, 0) = 0 "
                 "AND COALESCE(s.status, 'departnered') = 'departnered'"
             )
+        if view == _ADMIN_STREAMER_VIEW_BLOCKED:
+            return "LOWER(COALESCE(s.technical_pause_reason, '')) = 'blocked'"
         if view == _ADMIN_STREAMER_VIEW_NON_PARTNER:
-            return "COALESCE(s.manual_partner_opt_out, 0) = 1"
+            return (
+                "COALESCE(s.manual_partner_opt_out, 0) = 1 "
+                "AND LOWER(COALESCE(s.technical_pause_reason, '')) <> 'blocked'"
+            )
+        if view == _ADMIN_STREAMER_VIEW_TOKEN_ERROR:
+            return (
+                "COALESCE(s.manual_partner_opt_out, 0) = 0 "
+                "AND LOWER(COALESCE(s.technical_pause_reason, '')) = 'token_error'"
+            )
         if view == _ADMIN_STREAMER_VIEW_ALL:
             return "1=1"
         return (
             "COALESCE(s.status, 'departnered') = 'active' "
             "AND s.archived_at IS NULL "
-            "AND COALESCE(s.manual_partner_opt_out, 0) = 0"
+            "AND COALESCE(s.manual_partner_opt_out, 0) = 0 "
+            "AND LOWER(COALESCE(s.technical_pause_reason, '')) <> 'token_error'"
         )
 
     @staticmethod
@@ -930,7 +950,13 @@ class _AnalyticsAdminMixin:
         status: Any,
         archived_at: Any,
         manual_partner_opt_out: Any,
+        technical_pause_reason: Any = None,
     ) -> str:
+        normalized_pause_reason = str(technical_pause_reason or "").strip().lower()
+        if normalized_pause_reason == _ADMIN_STREAMER_VIEW_BLOCKED:
+            return _ADMIN_STREAMER_VIEW_BLOCKED
+        if normalized_pause_reason == _ADMIN_STREAMER_VIEW_TOKEN_ERROR:
+            return _ADMIN_STREAMER_VIEW_TOKEN_ERROR
         if bool(manual_partner_opt_out):
             return "non_partner"
         normalized_status = str(status or "").strip().lower()
@@ -1170,6 +1196,7 @@ class _AnalyticsAdminMixin:
                 status=_row_get_value(row, "status", 11, None),
                 archived_at=_row_get_value(row, "archived_at", 9, None),
                 manual_partner_opt_out=_row_get_value(row, "manual_partner_opt_out", 10, 0),
+                technical_pause_reason=_row_get_value(row, "technical_pause_reason", 12, None),
             )
             payload_rows.append(
                 {

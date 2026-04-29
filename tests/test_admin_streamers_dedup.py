@@ -76,7 +76,9 @@ class AdminStreamersDedupTests(unittest.IsolatedAsyncioTestCase):
                 is_verified INTEGER,
                 is_partner_active INTEGER,
                 live_ping_enabled INTEGER,
-                status TEXT
+                status TEXT,
+                technical_pause_reason TEXT,
+                operational_state TEXT DEFAULT 'active'
             )
             """
         )

@@ -113,6 +113,20 @@ class PostgresConnectionPool:
             self._prepare_fn(conn, self._dsn)
         return conn
 
+    @staticmethod
+    def _ping_connection(conn: psycopg.Connection, *, autocommit: bool) -> None:
+        if autocommit:
+            conn.execute("SELECT 1").fetchone()
+            return
+        original_autocommit = bool(getattr(conn, "autocommit", False))
+        if not original_autocommit:
+            conn.autocommit = True
+        try:
+            conn.execute("SELECT 1").fetchone()
+        finally:
+            if not original_autocommit:
+                conn.autocommit = False
+
     def _acquire_connection(self, *, autocommit: bool) -> psycopg.Connection:
         try:
             conn = self._idle.get_nowait()
@@ -148,6 +162,12 @@ class PostgresConnectionPool:
         try:
             if bool(getattr(conn, "autocommit", False)) != bool(autocommit):
                 conn.autocommit = autocommit
+        except Exception:
+            self._discard(conn)
+            return self._acquire_connection(autocommit=autocommit)
+
+        try:
+            self._ping_connection(conn, autocommit=autocommit)
         except Exception:
             self._discard(conn)
             return self._acquire_connection(autocommit=autocommit)

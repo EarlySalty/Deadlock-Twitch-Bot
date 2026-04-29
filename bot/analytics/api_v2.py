@@ -11,6 +11,7 @@ import json
 import logging
 import os
 import secrets
+import time
 from collections import deque
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
@@ -58,6 +59,27 @@ _AFFILIATE_REVENUE_STATUS_PLACEHOLDERS = ", ".join(
     ["%s"] * len(_AFFILIATE_REVENUE_STATUSES)
 )
 _ANALYTICS_EXTENDED_ENTITLEMENT = "analytics.extended"
+_DDC_PENTEST_DISABLE_RATE_LIMITS = str(
+    os.getenv("DDC_PENTEST_DISABLE_RATE_LIMITS", "0")
+).strip().lower() not in {"", "0", "false", "no", "off"}
+_AUTH_STATUS_UNAUTH_CACHE_SECONDS = 5.0
+_AUTH_STATUS_UNAUTH_RATE_LIMIT_MAX_REQUESTS = 30
+_AUTH_STATUS_UNAUTH_RATE_LIMIT_WINDOW_SECONDS = 5.0
+_AUTH_STATUS_UNAUTH_CACHE_CONTROL = "public, max-age=5, stale-while-revalidate=5"
+_PARTNER_STATUS_ACTIVE = "active"
+_PARTNER_STATUS_ARCHIVED = "archived"
+_PARTNER_STATUS_DEPARTNERED = "departnered"
+_PARTNER_STATUS_NON_PARTNER = "non_partner"
+_PARTNER_STATUS_TOKEN_ERROR = "token_error"
+_PARTNER_STATUS_BLOCKED = "blocked"
+_ANALYTICS_BLOCKED_PARTNER_STATUSES = frozenset(
+    {
+        _PARTNER_STATUS_BLOCKED,
+        _PARTNER_STATUS_DEPARTNERED,
+        _PARTNER_STATUS_NON_PARTNER,
+        _PARTNER_STATUS_TOKEN_ERROR,
+    }
+)
 
 
 def _get_plan_tier(plan_id: str | None) -> str:
@@ -864,6 +886,271 @@ class AnalyticsV2Mixin(
             return False
         return request_host == self._configured_admin_dashboard_host()
 
+    @staticmethod
+    def _parse_access_state_datetime(raw_value: Any) -> datetime | None:
+        if raw_value is None:
+            return None
+        if isinstance(raw_value, datetime):
+            parsed = raw_value
+        else:
+            text = str(raw_value).strip()
+            if not text:
+                return None
+            normalized = text.replace("Z", "+00:00")
+            try:
+                parsed = datetime.fromisoformat(normalized)
+            except ValueError:
+                return None
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=UTC)
+        return parsed.astimezone(UTC)
+
+    def _dashboard_access_state_from_conn(
+        self,
+        conn: Any,
+        *,
+        twitch_login: str,
+        twitch_user_id: str,
+    ) -> dict[str, Any]:
+        normalized_login = str(twitch_login or "").strip().lower()
+        normalized_user_id = str(twitch_user_id or "").strip()
+        partner_row = None
+        if normalized_login or normalized_user_id:
+            partner_columns = {
+                str(row[0] or "").strip().lower()
+                for row in conn.execute(
+                    """
+                    SELECT column_name
+                    FROM information_schema.columns
+                    WHERE table_schema = 'public'
+                      AND table_name = 'twitch_partners'
+                    """
+                ).fetchall()
+            }
+            technical_pause_reason_expr = (
+                "technical_pause_reason"
+                if "technical_pause_reason" in partner_columns
+                else "NULL::text AS technical_pause_reason"
+            )
+            partner_row = conn.execute(
+                f"""
+                SELECT
+                    twitch_login,
+                    twitch_user_id,
+                    status,
+                    COALESCE(
+                        admin_archived_at,
+                        CASE WHEN status = 'archived' THEN departnered_at ELSE NULL END
+                    ) AS archived_at,
+                    manual_partner_opt_out,
+                    {technical_pause_reason_expr},
+                    partnered_at AS created_at,
+                    departnered_at
+                FROM twitch_partners
+                WHERE (COALESCE(%s, '') != '' AND LOWER(twitch_login) = LOWER(%s))
+                   OR (COALESCE(%s, '') != '' AND twitch_user_id = %s)
+                ORDER BY CASE
+                    WHEN COALESCE(status, '') = 'active' THEN 0
+                    WHEN COALESCE(status, '') = 'archived' THEN 1
+                    WHEN COALESCE(status, '') = 'departnered' THEN 2
+                    ELSE 3
+                END,
+                COALESCE(departnered_at, admin_archived_at, partnered_at) DESC
+                LIMIT 1
+                """,
+                (
+                    normalized_login,
+                    normalized_login,
+                    normalized_user_id,
+                    normalized_user_id,
+                ),
+            ).fetchone()
+
+        technical_pause_reason = ""
+        operational_state = ""
+        partner_status = (
+            _PARTNER_STATUS_ACTIVE
+            if not (normalized_login or normalized_user_id)
+            else _PARTNER_STATUS_NON_PARTNER
+        )
+        if partner_row is not None:
+            status_text = str(_row_get_value(partner_row, "status", 2, "") or "").strip().lower()
+            archived_at = _row_get_value(partner_row, "archived_at", 3, None)
+            manual_partner_opt_out = bool(
+                _row_get_value(partner_row, "manual_partner_opt_out", 4, 0)
+            )
+            technical_pause_reason = str(
+                _row_get_value(partner_row, "technical_pause_reason", 5, "") or ""
+            ).strip().lower()
+            if technical_pause_reason == _PARTNER_STATUS_BLOCKED:
+                operational_state = _PARTNER_STATUS_BLOCKED
+            elif status_text != _PARTNER_STATUS_ACTIVE:
+                operational_state = "inactive"
+            elif manual_partner_opt_out:
+                operational_state = "admin_non_partner"
+            elif technical_pause_reason:
+                operational_state = technical_pause_reason
+            else:
+                operational_state = _PARTNER_STATUS_ACTIVE
+            if technical_pause_reason == _PARTNER_STATUS_BLOCKED:
+                partner_status = _PARTNER_STATUS_BLOCKED
+            elif manual_partner_opt_out:
+                partner_status = _PARTNER_STATUS_NON_PARTNER
+            elif technical_pause_reason == _PARTNER_STATUS_TOKEN_ERROR:
+                partner_status = _PARTNER_STATUS_TOKEN_ERROR
+            elif status_text == _PARTNER_STATUS_ARCHIVED or archived_at:
+                partner_status = _PARTNER_STATUS_ARCHIVED
+            elif status_text == _PARTNER_STATUS_DEPARTNERED:
+                partner_status = _PARTNER_STATUS_DEPARTNERED
+            elif status_text != _PARTNER_STATUS_ACTIVE:
+                partner_status = _PARTNER_STATUS_NON_PARTNER
+
+        blacklist_row = None
+        if normalized_login or normalized_user_id:
+            blacklist_row = conn.execute(
+                """
+                SELECT grace_expires_at, error_count, role_removed
+                FROM twitch_token_blacklist
+                WHERE (COALESCE(%s, '') != '' AND twitch_user_id = %s)
+                   OR (COALESCE(%s, '') != '' AND LOWER(twitch_login) = LOWER(%s))
+                ORDER BY last_error_at DESC NULLS LAST, first_error_at DESC NULLS LAST
+                LIMIT 1
+                """,
+                (
+                    normalized_user_id,
+                    normalized_user_id,
+                    normalized_login,
+                    normalized_login,
+                ),
+            ).fetchone()
+
+        grace_expires_at = None
+        token_error_error_count = 0
+        if blacklist_row is not None:
+            grace_expires_at = self._parse_access_state_datetime(
+                _row_get_value(blacklist_row, "grace_expires_at", 0, None)
+            )
+            token_error_error_count = int(_row_get_value(blacklist_row, "error_count", 1, 0) or 0)
+            role_removed = bool(_row_get_value(blacklist_row, "role_removed", 2, 0))
+            grace_active = (
+                grace_expires_at is not None
+                and grace_expires_at > datetime.now(UTC)
+                and not role_removed
+            )
+            if (
+                partner_status
+                not in {
+                    _PARTNER_STATUS_BLOCKED,
+                    _PARTNER_STATUS_NON_PARTNER,
+                    _PARTNER_STATUS_DEPARTNERED,
+                }
+                and grace_active
+                and (
+                    technical_pause_reason == _PARTNER_STATUS_TOKEN_ERROR
+                    or token_error_error_count > 0
+                )
+            ):
+                partner_status = _PARTNER_STATUS_TOKEN_ERROR
+
+        analytics_access_allowed = partner_status not in _ANALYTICS_BLOCKED_PARTNER_STATUSES
+        landing_access_allowed = partner_status != _PARTNER_STATUS_BLOCKED
+        return {
+            "partner_status": partner_status,
+            "technical_pause_reason": technical_pause_reason or None,
+            "operational_state": operational_state or None,
+            "token_error_grace_expires_at": (
+                grace_expires_at.isoformat() if grace_expires_at is not None else None
+            ),
+            "token_error_error_count": token_error_error_count,
+            "analytics_access_allowed": analytics_access_allowed,
+            "landing_access_allowed": landing_access_allowed,
+        }
+
+    def _dashboard_access_state(self, request: web.Request) -> dict[str, Any]:
+        auth_level = self._get_auth_level(request)
+        base_state = {
+            "auth_level": auth_level,
+            "partner_status": _PARTNER_STATUS_ACTIVE,
+            "technical_pause_reason": None,
+            "operational_state": None,
+            "token_error_grace_expires_at": None,
+            "token_error_error_count": 0,
+            "analytics_access_allowed": auth_level != "none",
+            "landing_access_allowed": auth_level != "none",
+        }
+        if auth_level in ("none", "localhost", "admin"):
+            return base_state
+        session = self._get_dashboard_session(request) or {}
+        try:
+            with storage.readonly_connection() as conn:
+                state = self._dashboard_access_state_from_conn(
+                    conn,
+                    twitch_login=str(session.get("twitch_login") or "").strip().lower(),
+                    twitch_user_id=str(session.get("twitch_user_id") or "").strip(),
+                )
+        except Exception:
+            log.warning("Could not resolve dashboard access state", exc_info=True)
+            return base_state
+        state["auth_level"] = auth_level
+        state["landing_access_allowed"] = bool(state.get("landing_access_allowed")) and auth_level != "none"
+        return state
+
+    def _can_access_v2_analytics(self, request: web.Request) -> bool:
+        auth_level = self._get_auth_level(request)
+        if auth_level in ("localhost", "admin"):
+            return True
+        if auth_level == "none":
+            return False
+        state = self._dashboard_access_state(request)
+        return bool(state.get("analytics_access_allowed"))
+
+    def _can_access_dashboard_landing(self, request: web.Request) -> bool:
+        auth_level = self._get_auth_level(request)
+        if auth_level in ("localhost", "admin"):
+            return True
+        if auth_level == "none":
+            return False
+        state = self._dashboard_access_state(request)
+        return bool(state.get("landing_access_allowed"))
+
+    def _analytics_access_denied_payload(self, request: web.Request) -> dict[str, Any]:
+        state = self._dashboard_access_state(request)
+        partner_status = str(state.get("partner_status") or _PARTNER_STATUS_ACTIVE)
+        if partner_status == _PARTNER_STATUS_BLOCKED:
+            return {
+                "error": "account_blocked",
+                "message": "This account is blocked from all dashboard surfaces.",
+                "partnerStatus": partner_status,
+                "redirectUrl": "/",
+                "technicalPauseReason": state.get("technical_pause_reason"),
+                "operationalState": state.get("operational_state"),
+                "tokenErrorGraceExpiresAt": state.get("token_error_grace_expires_at"),
+            }
+        message = (
+            "Analytics dashboard access is temporarily restricted. "
+            "Use /twitch/dashboard or /twitch/verwaltung to manage the account."
+        )
+        return {
+            "error": "dashboard_access_restricted",
+            "message": message,
+            "partnerStatus": partner_status,
+            "redirectUrl": "/twitch/dashboard",
+            "technicalPauseReason": state.get("technical_pause_reason"),
+            "operationalState": state.get("operational_state"),
+            "tokenErrorGraceExpiresAt": state.get("token_error_grace_expires_at"),
+        }
+
+    def _landing_access_denied_payload(self, request: web.Request) -> dict[str, Any]:
+        state = self._dashboard_access_state(request)
+        return {
+            "error": "account_blocked",
+            "message": "This account is blocked from all dashboard surfaces.",
+            "partnerStatus": str(state.get("partner_status") or _PARTNER_STATUS_BLOCKED),
+            "redirectUrl": "/",
+            "technicalPauseReason": state.get("technical_pause_reason"),
+            "operationalState": state.get("operational_state"),
+        }
+
     def _check_v2_auth(self, request: web.Request) -> bool:
         """Check if request is authorized for v2 API.
 
@@ -911,6 +1198,27 @@ class AnalyticsV2Mixin(
                     text=json.dumps(payload), content_type="application/json"
                 )
             raise web.HTTPUnauthorized(text=payload["error"])
+        if (
+            not self._is_admin_dashboard_host_request(request)
+            and not self._can_access_dashboard_landing(request)
+        ):
+            payload = self._landing_access_denied_payload(request)
+            if request.path.startswith("/twitch/api/"):
+                raise web.HTTPForbidden(
+                    text=json.dumps(payload),
+                    content_type="application/json",
+                )
+            raise web.HTTPForbidden(text=payload["message"])
+        if not self._is_admin_dashboard_host_request(request) and not self._can_access_v2_analytics(
+            request
+        ):
+            payload = self._analytics_access_denied_payload(request)
+            if request.path.startswith("/twitch/api/"):
+                raise web.HTTPForbidden(
+                    text=json.dumps(payload),
+                    content_type="application/json",
+                )
+            raise web.HTTPForbidden(text=payload["message"])
 
     def _check_v2_admin_auth(self, request: web.Request) -> bool:
         """Check if request has admin-level API access."""
@@ -1618,6 +1926,8 @@ class AnalyticsV2Mixin(
         max_requests: int,
         window_seconds: float,
     ) -> web.Response | None:
+        if _DDC_PENTEST_DISABLE_RATE_LIMITS:
+            return None
         check_rate_limit = getattr(self, "_check_rate_limit", None)
         if not callable(check_rate_limit):
             return None
@@ -2103,8 +2413,25 @@ class AnalyticsV2Mixin(
         raid_events: list[dict[str, Any]] = []
         bot_events: list[dict[str, Any]] = []
         last_stream: dict[str, Any] | None = None
+        access_state = {
+            "partner_status": _PARTNER_STATUS_ACTIVE,
+            "technical_pause_reason": None,
+            "operational_state": None,
+            "token_error_grace_expires_at": None,
+            "token_error_error_count": 0,
+            "analytics_access_allowed": True,
+        }
 
         with storage.readonly_connection() as conn:
+            try:
+                access_state = self._dashboard_access_state_from_conn(
+                    conn,
+                    twitch_login=resolved_login,
+                    twitch_user_id=resolved_user_id,
+                )
+            except Exception:
+                log.exception("Error loading internal-home access-state block")
+
             if resolved_login:
                 try:
                     oauth_data = self._internal_home_oauth_status_from_conn(
@@ -2183,6 +2510,7 @@ class AnalyticsV2Mixin(
             "raid_events": raid_events,
             "bot_events": bot_events,
             "last_stream": last_stream,
+            "access_state": access_state,
         }
 
     def _internal_home_health_score(
@@ -2383,6 +2711,9 @@ class AnalyticsV2Mixin(
         raid_events = list(core_data["raid_events"] or [])
         bot_events = list(core_data["bot_events"] or [])
         last_stream = core_data["last_stream"] if isinstance(core_data, dict) else None
+        access_state = dict(core_data.get("access_state") or {})
+        partner_status = str(access_state.get("partner_status") or _PARTNER_STATUS_ACTIVE)
+        can_access_analytics = bool(access_state.get("analytics_access_allowed", True))
 
         health_score = self._internal_home_result_or_default(
             health_result,
@@ -2458,6 +2789,21 @@ class AnalyticsV2Mixin(
                     "state": "active",
                     "read_only": True,
                 },
+                "partner": {
+                    "status": partner_status,
+                    "technical_pause_reason": access_state.get("technical_pause_reason"),
+                    "operational_state": access_state.get("operational_state"),
+                    "token_error_grace_expires_at": access_state.get(
+                        "token_error_grace_expires_at"
+                    ),
+                    "token_error_error_count": int(
+                        access_state.get("token_error_error_count") or 0
+                    ),
+                },
+                "access": {
+                    "landing": True,
+                    "analytics": can_access_analytics,
+                },
             },
             "kpis": {
                 "streams_count": streams_count,
@@ -2488,7 +2834,7 @@ class AnalyticsV2Mixin(
             },
             "links": {
                 "dashboard": "/twitch/dashboard",
-                "dashboard_v2": "/analyse",
+                "dashboard_v2": "/analyse" if can_access_analytics else "/twitch/dashboard",
                 "raid_history": "/twitch/raid/history",
                 "raid_requirements": "/twitch/raid/requirements",
                 "billing": "/twitch/abbo",
@@ -3267,8 +3613,67 @@ class AnalyticsV2Mixin(
         """Get current authentication status and permissions."""
         auth_level = self._get_auth_level(request)
         session = self._get_dashboard_session(request) or {}
+        if auth_level == "none":
+            check_rate_limit = getattr(self, "_check_rate_limit", None)
+            if callable(check_rate_limit):
+                try:
+                    check_rate_limit(
+                        request,
+                        max_requests=_AUTH_STATUS_UNAUTH_RATE_LIMIT_MAX_REQUESTS,
+                        window_seconds=_AUTH_STATUS_UNAUTH_RATE_LIMIT_WINDOW_SECONDS,
+                    )
+                except Exception:
+                    log.debug("Could not apply unauth auth-status rate limit", exc_info=True)
+            cached = getattr(self, "_auth_status_unauth_cache", None)
+            now = time.monotonic()
+            payload = None
+            if isinstance(cached, dict):
+                created_at = float(cached.get("created_at", 0.0) or 0.0)
+                if now - created_at < _AUTH_STATUS_UNAUTH_CACHE_SECONDS:
+                    cached_payload = cached.get("payload")
+                    if isinstance(cached_payload, dict):
+                        payload = dict(cached_payload)
+            if payload is None:
+                payload = {
+                    "authenticated": False,
+                    "level": "none",
+                    "authLevel": "none",
+                    "demoMode": False,
+                    "isAdmin": False,
+                    "isLocalhost": False,
+                    "canViewAllStreamers": False,
+                    "twitchLogin": None,
+                    "displayName": None,
+                    "partnerStatus": None,
+                    "technicalPauseReason": None,
+                    "operationalState": None,
+                    "canAccessAnalyticsDashboard": False,
+                    "tokenErrorGraceExpiresAt": None,
+                    "csrfToken": None,
+                    "csrf_token": None,
+                    "plan": None,
+                    "access": {
+                        "landing": False,
+                        "analytics": False,
+                    },
+                    "permissions": {
+                        "viewAllStreamers": False,
+                        "viewComparison": False,
+                        "viewChatAnalytics": False,
+                        "viewOverlap": False,
+                    },
+                }
+                self._auth_status_unauth_cache = {
+                    "created_at": now,
+                    "payload": dict(payload),
+                }
+            response = web.json_response(payload)
+            response.headers["Cache-Control"] = _AUTH_STATUS_UNAUTH_CACHE_CONTROL
+            return response
         is_authenticated = auth_level != "none"
         can_view_all_streamers = auth_level in ("localhost", "admin")
+        access_state = self._dashboard_access_state(request)
+        can_access_analytics = bool(access_state.get("analytics_access_allowed"))
         csrf_token = ""
         csrf_getter = getattr(self, "_csrf_get_token", None)
         csrf_generator = getattr(self, "_csrf_generate_token", None)
@@ -3313,14 +3718,23 @@ class AnalyticsV2Mixin(
                 "canViewAllStreamers": can_view_all_streamers,
                 "twitchLogin": session.get("twitch_login"),
                 "displayName": session.get("display_name"),
+                "partnerStatus": access_state.get("partner_status"),
+                "technicalPauseReason": access_state.get("technical_pause_reason"),
+                "operationalState": access_state.get("operational_state"),
+                "canAccessAnalyticsDashboard": can_access_analytics,
+                "tokenErrorGraceExpiresAt": access_state.get("token_error_grace_expires_at"),
                 "csrfToken": csrf_token or None,
                 "csrf_token": csrf_token or None,
                 "plan": plan_info,
+                "access": {
+                    "landing": bool(access_state.get("landing_access_allowed")),
+                    "analytics": can_access_analytics,
+                },
                 "permissions": {
                     "viewAllStreamers": can_view_all_streamers,
-                    "viewComparison": is_authenticated,
-                    "viewChatAnalytics": is_authenticated,
-                    "viewOverlap": is_authenticated,
+                    "viewComparison": can_access_analytics,
+                    "viewChatAnalytics": can_access_analytics,
+                    "viewOverlap": can_access_analytics,
                 },
             }
         )

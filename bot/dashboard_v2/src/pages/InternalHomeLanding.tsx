@@ -718,6 +718,11 @@ export function InternalHomeLanding() {
   const home = data ?? {};
   const twitchLogin = home.twitchLogin?.trim() || '';
   const displayName = home.displayName?.trim() || twitchLogin || 'Creator';
+  const canAccessAnalyticsDashboard = Boolean(
+    authStatus?.canAccessAnalyticsDashboard ?? authStatus?.access?.analytics ?? true
+  );
+  const restrictedPartnerStatus = String(authStatus?.partnerStatus || '').trim().toLowerCase();
+  const hasRestrictedAnalyticsAccess = !canAccessAnalyticsDashboard;
 
   const healthScore = data?.healthScore ?? null;
   const lastStream = data?.lastStreamSummary ?? null;
@@ -750,7 +755,9 @@ export function InternalHomeLanding() {
   const changelogEntries = (home.changelog?.entries ?? []).slice(0, 3);
   const mainNavItems: SidebarNavItem[] = [
     { href: '/twitch/dashboard', label: 'Home', icon: Home, active: true },
-    { href: '/analyse?tab=overview', label: 'Analyse', icon: BarChart3 },
+    ...(canAccessAnalyticsDashboard
+      ? [{ href: '/analyse?tab=overview', label: 'Analyse', icon: BarChart3 }]
+      : []),
     { href: '/social-media-admin', label: 'Social Media Dashboard', icon: Film },
   ];
   const toolNavItems: SidebarNavItem[] = [
@@ -951,15 +958,37 @@ export function InternalHomeLanding() {
                   )}
                   Neu laden
                 </button>
-                <a
-                  href="/analyse"
-                  className="gradient-accent inline-flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-bold text-white no-underline shadow-lg shadow-primary/20 transition-transform hover:-translate-y-0.5"
-                >
-                  Analyse Dashboard
-                  <ArrowRight className="h-4 w-4" />
-                </a>
+                {canAccessAnalyticsDashboard ? (
+                  <a
+                    href="/analyse"
+                    className="gradient-accent inline-flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-bold text-white no-underline shadow-lg shadow-primary/20 transition-transform hover:-translate-y-0.5"
+                  >
+                    Analyse Dashboard
+                    <ArrowRight className="h-4 w-4" />
+                  </a>
+                ) : null}
               </div>
             </motion.section>
+
+            {hasRestrictedAnalyticsAccess ? (
+              <motion.section
+                className="panel-card rounded-2xl border border-warning/30 bg-warning/10 px-5 py-4"
+                initial={{ opacity: 0, y: 12 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ duration: 0.24, delay: 0.06 }}
+              >
+                <div className="space-y-1">
+                  <div className="text-sm font-semibold text-white">
+                    Analyse-Zugriff aktuell eingeschraenkt
+                  </div>
+                  <p className="text-sm text-text-secondary">
+                    {restrictedPartnerStatus === 'token_error'
+                      ? 'Dein Twitch-OAuth hat aktuell einen Fehler. Home, Verwaltung und Pricing bleiben offen, bis du die Verbindung neu autorisierst.'
+                      : 'Dieser Account hat aktuell keinen Zugriff auf das Analyse-Dashboard. Home, Verwaltung und Pricing bleiben weiterhin erreichbar.'}
+                  </p>
+                </div>
+              </motion.section>
+            ) : null}
 
             <motion.section
               className="grid gap-4 lg:grid-cols-3"

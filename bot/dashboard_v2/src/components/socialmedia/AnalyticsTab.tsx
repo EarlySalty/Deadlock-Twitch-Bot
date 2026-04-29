@@ -29,7 +29,6 @@ import {
 import type {
   ClipAnalytics,
   SocialClip,
-  SocialMediaReport,
   SocialMediaReportKind,
 } from '@/types/socialMedia';
 

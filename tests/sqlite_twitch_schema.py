@@ -66,6 +66,7 @@ def ensure_sqlite_twitch_schema(conn: sqlite3.Connection) -> None:
             partnered_at TEXT DEFAULT CURRENT_TIMESTAMP,
             departnered_at TEXT,
             admin_archived_at TEXT,
+            technical_pause_reason TEXT,
             status TEXT NOT NULL DEFAULT 'active'
         )
         """
@@ -106,10 +107,18 @@ def ensure_sqlite_twitch_schema(conn: sqlite3.Connection) -> None:
             CASE
                 WHEN p.status = 'active'
                      AND COALESCE(p.manual_partner_opt_out, 0) = 0
+                     AND COALESCE(p.technical_pause_reason, '') = ''
                 THEN 1 ELSE 0
             END AS is_partner_active,
             p.live_ping_role_id,
-            COALESCE(p.live_ping_enabled, 1) AS live_ping_enabled
+            COALESCE(p.live_ping_enabled, 1) AS live_ping_enabled,
+            p.technical_pause_reason,
+            CASE
+                WHEN p.status <> 'active' THEN 'inactive'
+                WHEN COALESCE(p.manual_partner_opt_out, 0) = 1 THEN 'admin_non_partner'
+                WHEN COALESCE(p.technical_pause_reason, '') <> '' THEN p.technical_pause_reason
+                ELSE 'active'
+            END AS operational_state
         FROM twitch_partners p
         LEFT JOIN twitch_streamer_identities i
           ON i.twitch_user_id = p.twitch_user_id

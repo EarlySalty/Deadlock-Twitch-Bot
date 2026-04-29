@@ -77,6 +77,7 @@ def _make_conn() -> sqlite3.Connection:
             live_ping_enabled INTEGER DEFAULT 1,
             partnered_at TEXT,
             departnered_at TEXT,
+            technical_pause_reason TEXT,
             status TEXT NOT NULL DEFAULT 'active'
         )
         """

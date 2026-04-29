@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
-import { ArrowLeft, BarChart3, Clock3, Radio, Save, Send, Trash2 } from 'lucide-react';
+import { ArrowLeft, Ban, BarChart3, Clock3, Radio, Save, Send, ShieldCheck, Trash2 } from 'lucide-react';
 import { buildRaidAuthUrl, buildRaidRequirementsUrl } from '@/api/client';
 import { KpiCard } from '@/components/shared/KpiCard';
 import { ConfirmDialog } from '@/components/shared/ConfirmDialog';
@@ -9,6 +9,7 @@ import { StatusBadge } from '@/components/shared/StatusBadge';
 import { Toast } from '@/components/shared/Toast';
 import {
   useArchiveStreamer,
+  useBlockStreamer,
   useClearManualPlanOverride,
   useManualPlanOverride,
   usePartnerChatAction,
@@ -115,6 +116,7 @@ export function StreamerDetailPage() {
 
   const verifyMutation = useVerifyStreamer();
   const archiveMutation = useArchiveStreamer();
+  const blockMutation = useBlockStreamer();
   const removeMutation = useRemoveStreamer();
   const discordProfileMutation = useUpdateStreamerDiscordProfile();
   const discordFlagMutation = useToggleStreamerDiscordFlag();
@@ -309,6 +311,24 @@ export function StreamerDetailPage() {
                   {detail.partnerStatus === 'non_partner' ? 'Streamer entfernen' : 'Partner deaktivieren'}
                 </button>
               ) : null}
+              <button
+                className="admin-button admin-button-secondary"
+                disabled={blockMutation.isPending}
+                onClick={async () => {
+                  try {
+                    const result = await blockMutation.mutateAsync({
+                      login: detail.login,
+                      mode: detail.partnerStatus === 'blocked' ? 'unblock' : 'block',
+                    });
+                    setToast({ open: true, tone: result.ok ? 'success' : 'error', message: result.message });
+                  } catch (error) {
+                    setToast({ open: true, tone: 'error', message: error instanceof Error ? error.message : 'Block-Aktion fehlgeschlagen' });
+                  }
+                }}
+              >
+                {detail.partnerStatus === 'blocked' ? <ShieldCheck className="h-4 w-4" /> : <Ban className="h-4 w-4" />}
+                {detail.partnerStatus === 'blocked' ? 'Entsperren' : 'Blockieren'}
+              </button>
             </div>
           </div>
           <div className="mt-4 flex flex-wrap gap-2">
@@ -316,6 +336,7 @@ export function StreamerDetailPage() {
             <StatusBadge status={detail.partnerStatus || 'active'} />
             {detail.archivedAt ? <span className="stat-pill">Archiviert {formatDateTime(detail.archivedAt)}</span> : null}
             {detail.partnerStatus === 'departnered' ? <span className="stat-pill">Operativ deaktiviert</span> : null}
+            {detail.partnerStatus === 'blocked' ? <span className="stat-pill">Hart blockiert</span> : null}
           </div>
         </article>
 

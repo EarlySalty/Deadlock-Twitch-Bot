@@ -347,6 +347,112 @@ class RaidAuthSaveAuthTests(unittest.TestCase):
         _sql, params = restore_calls[0]
         self.assertEqual(params, ("partner_one", 42))
 
+    def test_save_auth_reactivates_departnered_partner_after_successful_reauth(self) -> None:
+        fake_conn = _FakeConn(
+            rows_by_fragment={
+                "SELECT raid_enabled": {"raid_enabled": 0, "needs_reauth": 1},
+                "SELECT role_removed": {"role_removed": 1},
+            }
+        )
+        manager = RaidAuthManager(
+            client_id="cid",
+            client_secret="secret",
+            redirect_uri="https://raid.earlysalty.com/twitch/raid/callback",
+        )
+
+        with (
+            self._patch_transaction(fake_conn),
+            patch.object(manager, "_try_encrypt", return_value=b"enc"),
+            patch("bot.raid.auth.backfill_tracked_stats_from_category", return_value=0),
+            patch.object(manager.token_error_handler, "remove_from_blacklist"),
+            patch("bot.raid.auth.set_partner_raid_bot_enabled") as set_partner_flag,
+            patch(
+                "bot.raid.auth.load_active_partner",
+                side_effect=[None, {"id": 42}],
+            ),
+            patch(
+                "bot.raid.auth.load_latest_partner_history",
+                return_value={"status": "departnered"},
+            ),
+            patch(
+                "bot.raid.auth.reactivate_partner",
+                return_value={"twitch_user_id": "1001", "twitch_login": "partner_one"},
+            ) as reactivate,
+        ):
+            manager.save_auth(
+                twitch_user_id="1001",
+                twitch_login="partner_one",
+                access_token="access-token",
+                refresh_token="refresh-token",
+                expires_in=3600,
+                scopes=list(BASE_STREAMER_SCOPES),
+                activate_raid_features=True,
+            )
+
+        reactivate.assert_called_once_with(
+            fake_conn,
+            twitch_user_id="1001",
+            twitch_login="partner_one",
+        )
+        set_partner_flag.assert_called_once_with(
+            fake_conn,
+            twitch_user_id="1001",
+            enabled=True,
+        )
+        restore_calls = [
+            call for call in fake_conn.calls if "manual_partner_opt_out = 0" in call[0]
+        ]
+        self.assertEqual(len(restore_calls), 1)
+        _sql, params = restore_calls[0]
+        self.assertEqual(params, ("partner_one", 42))
+
+    def test_save_auth_does_not_reactivate_manually_departnered_partner(self) -> None:
+        fake_conn = _FakeConn(
+            rows_by_fragment={
+                "SELECT raid_enabled": {"raid_enabled": 0, "needs_reauth": 1},
+                "SELECT role_removed": None,
+            }
+        )
+        manager = RaidAuthManager(
+            client_id="cid",
+            client_secret="secret",
+            redirect_uri="https://raid.earlysalty.com/twitch/raid/callback",
+        )
+
+        with (
+            self._patch_transaction(fake_conn),
+            patch.object(manager, "_try_encrypt", return_value=b"enc"),
+            patch("bot.raid.auth.backfill_tracked_stats_from_category", return_value=0),
+            patch.object(manager.token_error_handler, "remove_from_blacklist"),
+            patch("bot.raid.auth.set_partner_raid_bot_enabled") as set_partner_flag,
+            patch("bot.raid.auth.load_active_partner", return_value=None),
+            patch(
+                "bot.raid.auth.load_latest_partner_history",
+                return_value={"status": "departnered"},
+            ),
+            patch("bot.raid.auth.reactivate_partner") as reactivate,
+        ):
+            manager.save_auth(
+                twitch_user_id="1001",
+                twitch_login="partner_one",
+                access_token="access-token",
+                refresh_token="refresh-token",
+                expires_in=3600,
+                scopes=list(BASE_STREAMER_SCOPES),
+                activate_raid_features=True,
+            )
+
+        reactivate.assert_not_called()
+        set_partner_flag.assert_called_once_with(
+            fake_conn,
+            twitch_user_id="1001",
+            enabled=True,
+        )
+        restore_calls = [
+            call for call in fake_conn.calls if "manual_partner_opt_out = 0" in call[0]
+        ]
+        self.assertEqual(restore_calls, [])
+
 
 if __name__ == "__main__":
     unittest.main()

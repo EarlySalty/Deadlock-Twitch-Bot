@@ -18,6 +18,8 @@ _ADMIN_STREAMER_VIEW_ACTIVE = "active"
 _ADMIN_STREAMER_VIEW_ARCHIVED = "archived"
 _ADMIN_STREAMER_VIEW_DEPARTNERED = "departnered"
 _ADMIN_STREAMER_VIEW_NON_PARTNER = "non_partner"
+_ADMIN_STREAMER_VIEW_TOKEN_ERROR = "token_error"
+_ADMIN_STREAMER_VIEW_BLOCKED = "blocked"
 _ADMIN_STREAMER_VIEW_ALL = "all"
 _ADMIN_STREAMER_VIEWS = frozenset(
     {
@@ -25,6 +27,8 @@ _ADMIN_STREAMER_VIEWS = frozenset(
         _ADMIN_STREAMER_VIEW_ARCHIVED,
         _ADMIN_STREAMER_VIEW_DEPARTNERED,
         _ADMIN_STREAMER_VIEW_NON_PARTNER,
+        _ADMIN_STREAMER_VIEW_TOKEN_ERROR,
+        _ADMIN_STREAMER_VIEW_BLOCKED,
         _ADMIN_STREAMER_VIEW_ALL,
     }
 )
@@ -75,8 +79,37 @@ def _json_safe_datetime(value: Any) -> str | None:
     return text or None
 
 
-def _admin_partner_state_cte_sql() -> str:
-    return """
+def _column_exists(conn: Any, table: str, column: str) -> bool:
+    row = conn.execute(
+        """
+            SELECT 1
+              FROM information_schema.columns
+             WHERE table_schema = 'public'
+               AND table_name = %s
+               AND column_name = %s
+             LIMIT 1
+        """,
+        (table, column),
+    ).fetchone()
+    return row is not None
+
+
+def _admin_partner_state_cte_sql(
+    *,
+    include_technical_pause_reason: bool,
+    include_operational_state: bool,
+) -> str:
+    technical_pause_reason_expr = (
+        "technical_pause_reason"
+        if include_technical_pause_reason
+        else "NULL::text AS technical_pause_reason"
+    )
+    operational_state_expr = (
+        "operational_state"
+        if include_operational_state
+        else "NULL::text AS operational_state"
+    )
+    return f"""
                     , partner_state AS (
                         SELECT
                             twitch_login,
@@ -95,7 +128,9 @@ def _admin_partner_state_cte_sql() -> str:
                             is_verified,
                             is_partner_active,
                             live_ping_enabled,
-                            status
+                            status,
+                            {technical_pause_reason_expr},
+                            {operational_state_expr}
                         FROM (
                             SELECT
                                 s.*,
@@ -287,9 +322,15 @@ def _admin_partner_status(
     status: Any,
     archived_at: Any,
     manual_partner_opt_out: bool,
+    technical_pause_reason: Any,
 ) -> str:
+    pause_reason = str(technical_pause_reason or "").strip().lower()
+    if pause_reason == _ADMIN_STREAMER_VIEW_BLOCKED:
+        return _ADMIN_STREAMER_VIEW_BLOCKED
     if manual_partner_opt_out:
         return "non_partner"
+    if pause_reason == _ADMIN_STREAMER_VIEW_TOKEN_ERROR:
+        return _ADMIN_STREAMER_VIEW_TOKEN_ERROR
     status_text = str(status or "").strip().lower()
     if status_text == "archived" or archived_at:
         return "archived"
@@ -308,18 +349,24 @@ def _admin_streamer_list_row(row: Any) -> dict[str, Any]:
         status=_row_get_value(row, "status", 9, None),
         archived_at=archived_at,
         manual_partner_opt_out=manual_partner_opt_out,
+        technical_pause_reason=_row_get_value(row, "technical_pause_reason", 33, None),
     )
     scope_snapshot = _admin_scope_snapshot(
         _row_get_value(row, "scopes", 22, ""),
         _row_get_value(row, "needs_reauth", 23, 0),
     )
     status = (
+        "blocked"
+        if partner_status == "blocked"
+        else
         "non_partner"
         if partner_status == "non_partner"
         else "departnered"
         if partner_status == "departnered"
         else "archived"
         if partner_status == "archived"
+        else _ADMIN_STREAMER_VIEW_TOKEN_ERROR
+        if partner_status == _ADMIN_STREAMER_VIEW_TOKEN_ERROR
         else "live"
         if is_live
         else "verified"
@@ -362,6 +409,14 @@ def _admin_streamer_list_row(row: Any) -> dict[str, Any]:
         "oauthAuthorizedAt": _json_safe_datetime(_row_get_value(row, "authorized_at", 24, None)),
         "promoDisabled": bool(_row_get_value(row, "promo_disabled", 25, 0)),
         "notes": str(_row_get_value(row, "manual_plan_notes", 30, "") or "").strip() or None,
+        "technicalPauseReason": str(
+            _row_get_value(row, "technical_pause_reason", 33, "") or ""
+        ).strip()
+        or None,
+        "operationalState": str(
+            _row_get_value(row, "operational_state", 34, "") or ""
+        ).strip()
+        or None,
         "status": status,
     }
 
@@ -398,6 +453,7 @@ def _admin_streamer_detail_payload(row: Any, stats_row: Any, sessions: list[Any]
         status=_row_get_value(row, "status", 16, None),
         archived_at=archived_at,
         manual_partner_opt_out=manual_partner_opt_out,
+        technical_pause_reason=_row_get_value(row, "technical_pause_reason", 38, None),
     )
     return {
         "login": login,
@@ -457,6 +513,14 @@ def _admin_streamer_detail_payload(row: Any, stats_row: Any, sessions: list[Any]
             ),
             "manualPlanNotes": str(_row_get_value(row, "manual_plan_notes", 34, "") or "").strip()
             or None,
+            "technicalPauseReason": str(
+                _row_get_value(row, "technical_pause_reason", 38, "") or ""
+            ).strip()
+            or None,
+            "operationalState": str(
+                _row_get_value(row, "operational_state", 39, "") or ""
+            ).strip()
+            or None,
         },
         "oauth": {
             "connected": bool(scope_snapshot["connected"]),
@@ -470,14 +534,20 @@ def _admin_streamer_detail_payload(row: Any, stats_row: Any, sessions: list[Any]
     }
 
 
-def _build_streamer_list_query(view: str) -> tuple[str, str]:
+def _build_streamer_list_query(
+    view: str,
+    *,
+    include_technical_pause_reason: bool,
+    include_operational_state: bool,
+) -> tuple[str, str]:
     if view not in _ADMIN_STREAMER_VIEWS:
         raise ValueError(f"unsupported streamer view: {view}")
     where_clause = {
         _ADMIN_STREAMER_VIEW_ACTIVE: (
             "COALESCE(s.status, 'departnered') = 'active' "
             "AND s.archived_at IS NULL "
-            "AND COALESCE(s.manual_partner_opt_out, 0) = 0"
+            "AND COALESCE(s.manual_partner_opt_out, 0) = 0 "
+            "AND LOWER(COALESCE(s.technical_pause_reason, '')) <> 'token_error'"
         ),
         _ADMIN_STREAMER_VIEW_ARCHIVED: (
             "COALESCE(s.manual_partner_opt_out, 0) = 0 "
@@ -490,7 +560,17 @@ def _build_streamer_list_query(view: str) -> tuple[str, str]:
             "COALESCE(s.manual_partner_opt_out, 0) = 0 "
             "AND COALESCE(s.status, 'departnered') = 'departnered'"
         ),
-        _ADMIN_STREAMER_VIEW_NON_PARTNER: "COALESCE(s.manual_partner_opt_out, 0) = 1",
+        _ADMIN_STREAMER_VIEW_BLOCKED: (
+            "LOWER(COALESCE(s.technical_pause_reason, '')) = 'blocked'"
+        ),
+        _ADMIN_STREAMER_VIEW_NON_PARTNER: (
+            "COALESCE(s.manual_partner_opt_out, 0) = 1 "
+            "AND LOWER(COALESCE(s.technical_pause_reason, '')) <> 'blocked'"
+        ),
+        _ADMIN_STREAMER_VIEW_TOKEN_ERROR: (
+            "COALESCE(s.manual_partner_opt_out, 0) = 0 "
+            "AND LOWER(COALESCE(s.technical_pause_reason, '')) = 'token_error'"
+        ),
         _ADMIN_STREAMER_VIEW_ALL: "1 = 1",
     }[view]
     sql = f"""
@@ -506,7 +586,10 @@ def _build_streamer_list_query(view: str) -> tuple[str, str]:
                             ) AS rn
                         FROM twitch_billing_subscriptions
                     )
-                    {_admin_partner_state_cte_sql()}
+                    {_admin_partner_state_cte_sql(
+                        include_technical_pause_reason=include_technical_pause_reason,
+                        include_operational_state=include_operational_state,
+                    )}
                     {_admin_partner_live_state_cte_sql(source_table="partner_state", active_only=False)}
                     {_admin_partner_oauth_cte_sql(source_table="partner_state")}
                     {_admin_last_stream_session_cte_sql()}
@@ -544,7 +627,9 @@ def _build_streamer_list_query(view: str) -> tuple[str, str]:
                         sp.manual_plan_notes,
                         lb.plan_id AS billing_plan_id,
                         lb.status AS billing_status,
-                        lb.updated_at AS billing_updated_at
+                        lb.updated_at AS billing_updated_at,
+                        s.technical_pause_reason,
+                        s.operational_state
                     FROM partner_state s
                     LEFT JOIN partner_live_state pls
                         ON LOWER(pls.partner_login) = LOWER(s.twitch_login)
@@ -558,12 +643,14 @@ def _build_streamer_list_query(view: str) -> tuple[str, str]:
                         ON LOWER(lb.customer_reference) = LOWER(s.twitch_login)
                        AND lb.rn = 1
                     WHERE {where_clause}
-                    ORDER BY
+                        ORDER BY
                         CASE
+                            WHEN LOWER(COALESCE(s.technical_pause_reason, '')) = 'blocked' THEN 2
                             WHEN COALESCE(s.manual_partner_opt_out, 0) = 1 THEN 3
+                            WHEN LOWER(COALESCE(s.technical_pause_reason, '')) = 'token_error' THEN 2
                             WHEN COALESCE(s.status, 'departnered') = 'active' AND s.archived_at IS NULL THEN 0
                             WHEN COALESCE(s.status, 'departnered') IN ('active', 'archived') THEN 1
-                            ELSE 2
+                            ELSE 4
                         END,
                         CASE WHEN COALESCE(pls.is_live, 0) = 1 THEN 0 ELSE 1 END,
                         LOWER(s.twitch_login) ASC
@@ -572,8 +659,18 @@ def _build_streamer_list_query(view: str) -> tuple[str, str]:
 
 
 def load_admin_streamers(view: str) -> dict[str, Any]:
-    sql, _where_clause = _build_streamer_list_query(view)
     with storage.readonly_connection() as conn:
+        include_technical_pause_reason = _column_exists(
+            conn, "twitch_partners_all_state", "technical_pause_reason"
+        )
+        include_operational_state = _column_exists(
+            conn, "twitch_partners_all_state", "operational_state"
+        )
+        sql, _where_clause = _build_streamer_list_query(
+            view,
+            include_technical_pause_reason=include_technical_pause_reason,
+            include_operational_state=include_operational_state,
+        )
         rows = conn.execute(sql).fetchall()
     items = [_admin_streamer_list_row(row) for row in rows]
     return {"items": items, "count": len(items), "view": view}
@@ -584,7 +681,14 @@ def load_admin_streamer_detail(login: str) -> dict[str, Any] | None:
     if not normalized_login:
         return None
 
-    sql = f"""
+    with storage.readonly_connection() as conn:
+        include_technical_pause_reason = _column_exists(
+            conn, "twitch_partners_all_state", "technical_pause_reason"
+        )
+        include_operational_state = _column_exists(
+            conn, "twitch_partners_all_state", "operational_state"
+        )
+        sql = f"""
                     WITH latest_billing AS (
                         SELECT
                             customer_reference,
@@ -597,7 +701,10 @@ def load_admin_streamer_detail(login: str) -> dict[str, Any] | None:
                             ) AS rn
                         FROM twitch_billing_subscriptions
                     )
-                    {_admin_partner_state_cte_sql()}
+                    {_admin_partner_state_cte_sql(
+                        include_technical_pause_reason=include_technical_pause_reason,
+                        include_operational_state=include_operational_state,
+                    )}
                     {_admin_partner_live_state_cte_sql(source_table="partner_state", active_only=False)}
                     {_admin_partner_oauth_cte_sql(source_table="partner_state")}
                     SELECT
@@ -638,7 +745,9 @@ def load_admin_streamer_detail(login: str) -> dict[str, Any] | None:
                         sp.manual_plan_notes,
                         lb.plan_id AS billing_plan_id,
                         lb.status AS billing_status,
-                        lb.updated_at AS billing_updated_at
+                        lb.updated_at AS billing_updated_at,
+                        s.technical_pause_reason,
+                        s.operational_state
                     FROM partner_state s
                     LEFT JOIN partner_live_state pls
                         ON LOWER(pls.partner_login) = LOWER(s.twitch_login)
@@ -652,8 +761,6 @@ def load_admin_streamer_detail(login: str) -> dict[str, Any] | None:
                     WHERE LOWER(s.twitch_login) = LOWER(%s)
                     LIMIT 1
     """
-
-    with storage.readonly_connection() as conn:
         row = conn.execute(sql, (normalized_login,)).fetchone()
         if row is None:
             return None

@@ -47,6 +47,7 @@ def _make_conn() -> sqlite3.Connection:
             twitch_login TEXT,
             manual_partner_opt_out INTEGER DEFAULT 0,
             raid_bot_enabled INTEGER DEFAULT 1,
+            technical_pause_reason TEXT,
             status TEXT DEFAULT 'active'
         )
         """
@@ -224,7 +225,7 @@ class TokenErrorHandlerReauthTests(unittest.TestCase):
         self.assertTrue(blacklist_row["grace_expires_at"])
         set_partner_flag.assert_called_once_with(ANY, twitch_user_id="1001", enabled=False)
 
-    def test_mark_partner_opt_out_only_keeps_needs_reauth_false(self) -> None:
+    def test_mark_partner_opt_out_only_uses_technical_pause_reason(self) -> None:
         conn = _make_conn()
         conn.execute(
             """
@@ -268,14 +269,15 @@ class TokenErrorHandlerReauthTests(unittest.TestCase):
         self.assertEqual(int(row["needs_reauth"]), 0)
         partner_row = conn.execute(
             """
-            SELECT manual_partner_opt_out, raid_bot_enabled
+            SELECT manual_partner_opt_out, raid_bot_enabled, technical_pause_reason
             FROM twitch_partners
             WHERE twitch_user_id = ?
             """,
             ("2002",),
         ).fetchone()
-        self.assertEqual(int(partner_row["manual_partner_opt_out"]), 1)
+        self.assertEqual(int(partner_row["manual_partner_opt_out"]), 0)
         self.assertEqual(int(partner_row["raid_bot_enabled"]), 0)
+        self.assertEqual(partner_row["technical_pause_reason"], "bot_banned")
         set_partner_flag.assert_called_once_with(ANY, twitch_user_id="2002", enabled=False)
 
     def test_restore_bot_banned_channel_reenables_partner_after_health_recovers(self) -> None:
@@ -289,8 +291,10 @@ class TokenErrorHandlerReauthTests(unittest.TestCase):
         )
         conn.execute(
             """
-            INSERT INTO twitch_partners (id, twitch_user_id, twitch_login, manual_partner_opt_out, raid_bot_enabled, status)
-            VALUES (?, ?, ?, 1, 0, 'active')
+            INSERT INTO twitch_partners (
+                id, twitch_user_id, twitch_login, manual_partner_opt_out, raid_bot_enabled, technical_pause_reason, status
+            )
+            VALUES (?, ?, ?, 0, 0, 'bot_banned', 'active')
             """,
             (1, "3003", "charlie"),
         )
@@ -309,7 +313,7 @@ class TokenErrorHandlerReauthTests(unittest.TestCase):
             ),
             patch(
                 "bot.api.token_error_handler.load_active_partner",
-                return_value={"id": 1, "manual_partner_opt_out": 1},
+                return_value={"id": 1, "manual_partner_opt_out": 0, "technical_pause_reason": "bot_banned"},
             ),
             patch("bot.api.token_error_handler.set_partner_raid_bot_enabled") as set_partner_flag,
             patch.object(TokenErrorHandler, "_migrate_db", return_value=None),
@@ -330,7 +334,7 @@ class TokenErrorHandlerReauthTests(unittest.TestCase):
         self.assertEqual(int(row["needs_reauth"]), 0)
         partner_row = conn.execute(
             """
-            SELECT manual_partner_opt_out, raid_bot_enabled
+            SELECT manual_partner_opt_out, raid_bot_enabled, technical_pause_reason
             FROM twitch_partners
             WHERE twitch_user_id = ?
             """,
@@ -338,12 +342,73 @@ class TokenErrorHandlerReauthTests(unittest.TestCase):
         ).fetchone()
         self.assertEqual(int(partner_row["manual_partner_opt_out"]), 0)
         self.assertEqual(int(partner_row["raid_bot_enabled"]), 1)
+        self.assertIsNone(partner_row["technical_pause_reason"])
         blacklist_row = conn.execute(
             "SELECT 1 FROM twitch_raid_blacklist WHERE target_login = ?",
             ("charlie",),
         ).fetchone()
         self.assertIsNone(blacklist_row)
         set_partner_flag.assert_called_once_with(ANY, twitch_user_id="3003", enabled=True)
+
+    def test_restore_bot_banned_channel_keeps_admin_non_partner_flag(self) -> None:
+        conn = _make_conn()
+        conn.execute(
+            """
+            INSERT INTO twitch_raid_auth (twitch_user_id, twitch_login, raid_enabled, needs_reauth)
+            VALUES (?, ?, 0, 0)
+            """,
+            ("3004", "delta"),
+        )
+        conn.execute(
+            """
+            INSERT INTO twitch_partners (
+                id, twitch_user_id, twitch_login, manual_partner_opt_out, raid_bot_enabled, technical_pause_reason, status
+            )
+            VALUES (?, ?, ?, 1, 0, 'bot_banned', 'active')
+            """,
+            (1, "3004", "delta"),
+        )
+        conn.execute(
+            """
+            INSERT INTO twitch_raid_blacklist (target_login, reason)
+            VALUES (?, ?)
+            """,
+            ("delta", "chat_bot_banned_in_channel"),
+        )
+
+        with (
+            patch(
+                "bot.api.token_error_handler.transaction",
+                side_effect=lambda: contextlib.nullcontext(_CompatConn(conn)),
+            ),
+            patch(
+                "bot.api.token_error_handler.load_active_partner",
+                return_value={"id": 1, "manual_partner_opt_out": 1, "technical_pause_reason": "bot_banned"},
+            ),
+            patch("bot.api.token_error_handler.set_partner_raid_bot_enabled") as set_partner_flag,
+            patch.object(TokenErrorHandler, "_migrate_db", return_value=None),
+        ):
+            handler = TokenErrorHandler()
+            restored = handler.restore_bot_banned_channel("3004", "delta")
+
+        self.assertTrue(restored)
+        auth_row = conn.execute(
+            "SELECT raid_enabled FROM twitch_raid_auth WHERE twitch_user_id = ?",
+            ("3004",),
+        ).fetchone()
+        self.assertEqual(int(auth_row["raid_enabled"]), 0)
+        partner_row = conn.execute(
+            """
+            SELECT manual_partner_opt_out, raid_bot_enabled, technical_pause_reason
+            FROM twitch_partners
+            WHERE twitch_user_id = ?
+            """,
+            ("3004",),
+        ).fetchone()
+        self.assertEqual(int(partner_row["manual_partner_opt_out"]), 1)
+        self.assertEqual(int(partner_row["raid_bot_enabled"]), 0)
+        self.assertIsNone(partner_row["technical_pause_reason"])
+        set_partner_flag.assert_not_called()
 
 
 class _DiscordBotWithoutChannel:

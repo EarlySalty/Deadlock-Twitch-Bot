@@ -3,6 +3,7 @@ import type { AdminConfigScope, StreamerView } from '@/api/types';
 import {
   addStreamer,
   archiveStreamer,
+  blockStreamer,
   clearManualPlanOverride,
   fetchScopeStatus,
   fetchAffiliateDetail,
@@ -210,6 +211,22 @@ export function useArchiveStreamer() {
       login: string;
       mode?: 'archive' | 'unarchive' | 'toggle';
     }) => archiveStreamer(login, mode),
+    onSuccess: (_result, variables) => {
+      invalidateStreamerQueries(queryClient, variables.login);
+    },
+  });
+}
+
+export function useBlockStreamer() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({
+      login,
+      mode,
+    }: {
+      login: string;
+      mode?: 'block' | 'unblock' | 'toggle_block';
+    }) => blockStreamer(login, mode),
     onSuccess: (_result, variables) => {
       invalidateStreamerQueries(queryClient, variables.login);
     },

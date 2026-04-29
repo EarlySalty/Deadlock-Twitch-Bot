@@ -498,7 +498,17 @@ class _AnalyticsOverviewMixin:
 
     async def _redirect_dashboard_v2_to_analyse(self, request: web.Request) -> web.StreamResponse:
         """Redirect legacy /twitch/dashboard-v2 to /analyse."""
-        return self._redirect_legacy_analyse_to_root(request)
+        if self._check_v2_auth(request):
+            landing_checker = getattr(self, "_can_access_dashboard_landing", None)
+            if callable(landing_checker) and not bool(landing_checker(request)):
+                payload_builder = getattr(self, "_landing_access_denied_payload", None)
+                message = "This account is blocked from all dashboard surfaces."
+                if callable(payload_builder):
+                    message = str(payload_builder(request).get("message") or message)
+                raise web.HTTPForbidden(text=message)
+        if self._check_v2_auth(request) and not self._can_access_v2_analytics(request):
+            raise web.HTTPFound("/twitch/dashboard")
+        return await self._redirect_legacy_analyse_to_root(request)
 
     async def _redirect_legacy_analyse_to_root(self, request: web.Request) -> web.StreamResponse:
         """Redirect legacy analytics routes to the canonical /analyse path."""
@@ -529,6 +539,11 @@ class _AnalyticsOverviewMixin:
             if isinstance(response, web.HTTPException):
                 raise response
             return response
+        landing_checker = getattr(self, "_can_access_dashboard_landing", None)
+        if callable(landing_checker) and not bool(landing_checker(request)):
+            raise web.HTTPForbidden(text="This account is blocked from all dashboard surfaces.")
+        if not self._can_access_v2_analytics(request):
+            raise web.HTTPFound("/twitch/dashboard")
         import pathlib
 
         dist_path = pathlib.Path(__file__).parent / "dashboard_v2" / "dist" / "index.html"
@@ -572,6 +587,9 @@ class _AnalyticsOverviewMixin:
             if isinstance(response, web.HTTPException):
                 raise response
             return response
+        landing_checker = getattr(self, "_can_access_dashboard_landing", None)
+        if callable(landing_checker) and not bool(landing_checker(request)):
+            raise web.HTTPForbidden(text="This account is blocked from all dashboard surfaces.")
         import pathlib
 
         dist_path = pathlib.Path(__file__).parent / "dashboard_v2" / "dist" / "index.html"
@@ -637,6 +655,9 @@ class _AnalyticsOverviewMixin:
             if isinstance(response, web.HTTPException):
                 raise response
             return response
+        landing_checker = getattr(self, "_can_access_dashboard_landing", None)
+        if callable(landing_checker) and not bool(landing_checker(request)):
+            raise web.HTTPForbidden(text="This account is blocked from all dashboard surfaces.")
         import pathlib
 
         dist_path = pathlib.Path(__file__).parent / "dashboard_v2" / "dist" / "index.html"
@@ -665,6 +686,9 @@ class _AnalyticsOverviewMixin:
             if isinstance(response, web.HTTPException):
                 raise response
             return response
+        landing_checker = getattr(self, "_can_access_dashboard_landing", None)
+        if callable(landing_checker) and not bool(landing_checker(request)):
+            raise web.HTTPForbidden(text="This account is blocked from all dashboard surfaces.")
         import pathlib
 
         dist_path = pathlib.Path(__file__).parent / "dashboard_v2" / "dist" / "index.html"
@@ -764,6 +788,9 @@ class _AnalyticsOverviewMixin:
             if isinstance(response, web.HTTPException):
                 raise response
             return response
+        landing_checker = getattr(self, "_can_access_dashboard_landing", None)
+        if callable(landing_checker) and not bool(landing_checker(request)):
+            raise web.HTTPForbidden(text="This account is blocked from all dashboard surfaces.")
         return self._resolve_dashboard_v2_asset_response(request.match_info.get("path", ""))
 
     async def _serve_admin_dashboard_assets(self, request: web.Request) -> web.Response:

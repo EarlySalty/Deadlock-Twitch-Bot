@@ -3680,4 +3680,75 @@ def ensure_schema(conn) -> None:
             exc,
         )
 
+    # 23) Partner outreach voice-reaction conversations
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS twitch_partner_outreach_conversations (
+            streamer_login          TEXT PRIMARY KEY,
+            streamer_user_id        TEXT,
+            source                  TEXT NOT NULL,
+            state                   TEXT NOT NULL DEFAULT 'open',
+            messages_json           JSONB NOT NULL DEFAULT '[]'::jsonb,
+            last_voice_capture_at   TIMESTAMPTZ,
+            last_brain_call_at      TIMESTAMPTZ,
+            last_bot_message_at     TIMESTAMPTZ,
+            last_streamer_signal_at TIMESTAMPTZ,
+            last_stance             TEXT,
+            last_confidence         REAL,
+            human_notify_sent_at    TIMESTAMPTZ,
+            closed_at               TIMESTAMPTZ,
+            error_kind              TEXT,
+            error_detail            TEXT,
+            created_at              TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            updated_at              TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            FOREIGN KEY (streamer_login)
+                REFERENCES twitch_partner_outreach(streamer_login)
+                ON DELETE CASCADE
+        )
+        """
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_twitch_partner_outreach_conv_state "
+        "ON twitch_partner_outreach_conversations(state) "
+        "WHERE state IN ('open','listening','brain_pending')"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_twitch_partner_outreach_conv_active "
+        "ON twitch_partner_outreach_conversations(last_streamer_signal_at DESC) "
+        "WHERE state IN ('open','listening')"
+    )
+
+    # Audit-Log (append-only, Forensik für Menschen)
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS twitch_partner_outreach_audit (
+            id              BIGSERIAL PRIMARY KEY,
+            streamer_login  TEXT NOT NULL,
+            occurred_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            event_kind      TEXT NOT NULL,
+            payload_json    JSONB NOT NULL DEFAULT '{}'::jsonb,
+            correlation_id  UUID,
+            FOREIGN KEY (streamer_login)
+                REFERENCES twitch_partner_outreach(streamer_login)
+                ON DELETE CASCADE
+        )
+        """
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_twitch_partner_outreach_audit_streamer_time "
+        "ON twitch_partner_outreach_audit(streamer_login, occurred_at DESC)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_twitch_partner_outreach_audit_event_kind "
+        "ON twitch_partner_outreach_audit(event_kind, occurred_at DESC)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_twitch_partner_outreach_audit_correlation "
+        "ON twitch_partner_outreach_audit(correlation_id) WHERE correlation_id IS NOT NULL"
+    )
+    conn.execute(
+        "ALTER TABLE twitch_partner_outreach "
+        "ADD COLUMN IF NOT EXISTS conversation_status TEXT"
+    )
+
     migrate_legacy_partner_registry(conn)

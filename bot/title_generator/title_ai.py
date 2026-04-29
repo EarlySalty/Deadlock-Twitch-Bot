@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import time
 from collections import defaultdict
@@ -31,6 +32,9 @@ _GENERIC_FILLER_PHRASES = (
     "endlich ist es soweit",
     "endlich soweit",
 )
+_DDC_PENTEST_DISABLE_RATE_LIMITS = str(
+    os.getenv("DDC_PENTEST_DISABLE_RATE_LIMITS", "0")
+).strip().lower() not in {"", "0", "false", "no", "off"}
 
 
 class RateLimitExceeded(Exception):
@@ -308,7 +312,8 @@ async def generate_title(
     source: str = "chat",
 ) -> dict[str, Any]:
     """Generate a stream title using MiniMax. Raises RateLimitExceeded if over limit."""
-    _rate_limiter.check_and_record(streamer_id, source=source)
+    if not _DDC_PENTEST_DISABLE_RATE_LIMITS:
+        _rate_limiter.check_and_record(streamer_id, source=source)
 
     emoji_ratio = _emoji_ratio(title_history)
     prompt = build_title_prompt(

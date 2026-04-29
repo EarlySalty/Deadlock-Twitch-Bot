@@ -1,3 +1,10 @@
+## Highlight Clipper Modul
+
+- 2026-04-29: Aufgabe aufgenommen. Runtime-/Cog-Lifecycle, Secret-Loading und bestehende Worker-Muster im Bot geprüft.
+- 2026-04-29: Beta-Modul `bot/highlight_clipper/` implementiert: Deadlock-/Twitch-Clients, Event-Erkennung, JSON-State, Clip-Download per `yt-dlp`+`ffmpeg`, Discord-DM-Versand und Worker-Lifecycle.
+- 2026-04-29: Integration verdrahtet: `bot/cog.py` um `HighlightClipperMixin` erweitert, Runtime-Start/Stop im Bootstrap ergänzt, `yt-dlp` in `.venv` installiert.
+- 2026-04-29: Verifikation erfolgreich: `.venv/bin/python -m py_compile ...` fuer alle neuen/angepassten Highlight-Clipper-Dateien gruen; Import-/Smoke-Check des Pakets ebenfalls erfolgreich.
+
 ## Viewer Presence Tracking
 
 - 2026-04-04: Aufgabe aufgenommen. Relevante Analytics-/Dashboard-Muster geprüft, fehlende `WORKFLOW.md` angelegt.
@@ -128,6 +135,12 @@
 - 2026-04-24: Hochsichere Findings bestaetigt:
   - IDOR auf `twitch/api/v2/session/{id}` und `twitch/api/v2/session/{id}/events`: nur allgemeine Auth, keine Eigentuemerpruefung gegen die angeforderte Stream-Session.
   - Breiter Cross-Streamer-Auth-Bypass in mehreren Analytics-v2-Endpunkten mit `streamer`-Parameter: Partner-Session darf fremde Streamer-Daten abfragen; Plan-Gating prueft Ziel-Plan statt Session-Bindung.
+
+## Voice Reaction Phase 1
+
+- 2026-04-29: Aufgabe aufgenommen. Plan `~/.claude/plans/dazzling-marinating-fox.md`, `bot/storage/pg.py`, `bot/raid/services/outreach_boost_targets.py` und bestehende SQLite-Compat-Tests gelesen; Phase 1 ist auf Schema, State-Store und Audit-Log begrenzt.
+- 2026-04-29: Implementierung gestartet: neues Paket `bot/community/voice_reaction/`, DDL fuer Conversation-/Audit-Tabellen plus `conversation_status`-ALTER in `bot/storage/pg.py`, dazu reine DB-Module `state_store.py` und `audit_log.py` sowie dedizierte SQLite-Compat-Tests.
+- 2026-04-29: Verifikation erfolgreich: `./.venv/bin/python -m pytest tests/test_voice_reaction_state_store.py tests/test_voice_reaction_audit_log.py -v` sowie bestehende Outreach-Regressionen `tests/test_outreach_boost_targets.py` und `tests/test_partner_recruit_daily_limit.py` gruen; Import-Smoke-Check fuer `bot.community.voice_reaction.state_store` und `audit_log` ebenfalls ohne Fehler.
 
 ## Backend internal-home parallelisieren
 

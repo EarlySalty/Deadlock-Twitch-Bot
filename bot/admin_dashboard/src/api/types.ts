@@ -19,8 +19,8 @@ export interface AdminAuthStatus {
 }
 
 export type AdminConfigScope = 'active' | 'all';
-export type StreamerView = 'active' | 'archived' | 'departnered' | 'non_partner' | 'all';
-export type StreamerPartnerStatus = 'active' | 'archived' | 'departnered' | 'non_partner';
+export type StreamerView = 'active' | 'archived' | 'departnered' | 'non_partner' | 'token_error' | 'blocked' | 'all';
+export type StreamerPartnerStatus = 'active' | 'archived' | 'departnered' | 'non_partner' | 'token_error' | 'blocked';
 export type LegacyVerifyMode = 'permanent' | 'temp' | 'failed' | 'clear';
 export type DiscordFlagMode = 'mark' | 'unmark';
 export type PartnerChatActionMode = 'message' | 'action' | 'announcement';

@@ -10,8 +10,17 @@ export interface AuthStatus {
   canViewAllStreamers: boolean;
   twitchLogin?: string | null;
   displayName?: string | null;
+  partnerStatus?: 'active' | 'archived' | 'departnered' | 'non_partner' | 'token_error' | 'blocked' | null;
+  technicalPauseReason?: string | null;
+  operationalState?: string | null;
+  canAccessAnalyticsDashboard?: boolean;
+  tokenErrorGraceExpiresAt?: string | null;
   csrfToken?: string | null;
   csrf_token?: string | null;
+  access?: {
+    landing: boolean;
+    analytics: boolean;
+  };
   permissions: {
     viewAllStreamers: boolean;
     viewComparison: boolean;

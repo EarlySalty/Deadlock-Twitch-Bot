@@ -39,6 +39,9 @@ MAX_USER_CONTEXT_CHARS = 2000
 MINIMAX_HOURLY_FOLLOW_UP_LIMIT = 10
 OPUS_SESSION_FOLLOW_UP_LIMIT = 3
 CHAT_SESSION_RETENTION_HOURS = 24
+_DDC_PENTEST_DISABLE_RATE_LIMITS = str(
+    os.getenv("DDC_PENTEST_DISABLE_RATE_LIMITS", "0")
+).strip().lower() not in {"", "0", "false", "no", "off"}
 
 
 def _extract_json_array(text: str) -> str | None:
@@ -1027,6 +1030,8 @@ Vollständige Viewer-Metriken nur für Einträge ohne diesen Hinweis verwenden."
         return self._extract_text_response(getattr(choices[0].message, "content", ""))
 
     def _remaining_follow_ups(self, streamer: str, session: dict[str, Any]) -> tuple[int, int | None]:
+        if _DDC_PENTEST_DISABLE_RATE_LIMITS:
+            return 10**9, None
         if session.get("model") == AI_MODEL_OPUS:
             remaining = max(0, OPUS_SESSION_FOLLOW_UP_LIMIT - int(session.get("follow_up_count", 0) or 0))
             return remaining, None
@@ -1042,6 +1047,8 @@ Vollständige Viewer-Metriken nur für Einträge ohne diesen Hinweis verwenden."
         return remaining, reset_ts
 
     def _consume_follow_up(self, streamer: str, session: dict[str, Any]) -> tuple[int, int | None]:
+        if _DDC_PENTEST_DISABLE_RATE_LIMITS:
+            return self._remaining_follow_ups(streamer, session)
         if session.get("model") == AI_MODEL_OPUS:
             session["follow_up_count"] = int(session.get("follow_up_count", 0) or 0) + 1
             return self._remaining_follow_ups(streamer, session)

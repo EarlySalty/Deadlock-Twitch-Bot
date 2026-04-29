@@ -61,6 +61,38 @@ def _dashboard_archive_sync(normalized: str, desired: str) -> str:
         history_row = storage.load_latest_partner_history(conn, twitch_login=normalized)
         if not active_row and not history_row:
             raise ValueError(f"{normalized} ist nicht gespeichert")
+        target_row = active_row or history_row
+
+        if desired in {"block", "unblock", "toggle_block"}:
+            current_pause_reason = str(
+                (
+                    target_row.get("technical_pause_reason")
+                    if target_row and hasattr(target_row, "keys")
+                    else (target_row[24] if target_row and len(target_row) > 24 else "")
+                )
+                or ""
+            ).strip().lower()
+            currently_blocked = current_pause_reason == "blocked"
+            should_block = (
+                True
+                if desired == "block"
+                else False
+                if desired == "unblock"
+                else not currently_blocked
+            )
+            changed = storage.set_streamer_block_state(
+                conn,
+                twitch_login=normalized,
+                blocked=should_block,
+            )
+            if not changed:
+                raise ValueError(f"{normalized} ist nicht gespeichert")
+            return (
+                f"{normalized} dauerhaft blockiert"
+                if should_block
+                else f"{normalized} entsperrt"
+            )
+
         if not active_row and history_row:
             current_status = str(
                 (
@@ -131,6 +163,12 @@ async def _dashboard_archive(self, login: str, mode: str) -> str:
         desired = "archive"
     elif mode_clean in {"unarchive", "off", "unset", "restore"}:
         desired = "unarchive"
+    elif mode_clean in {"block", "blocked", "ban"}:
+        desired = "block"
+    elif mode_clean in {"unblock", "allow"}:
+        desired = "unblock"
+    elif mode_clean in {"toggle_block", "block_toggle"}:
+        desired = "toggle_block"
     else:
         desired = "toggle"
 
