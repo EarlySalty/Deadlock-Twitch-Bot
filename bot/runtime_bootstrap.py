@@ -737,6 +737,13 @@ class BotRuntimeBootstrap:
         cog = self._cog
         cog._runtime_started = False
 
+        stop_highlight_clipper = getattr(cog, "_hc_stop", None)
+        if callable(stop_highlight_clipper):
+            try:
+                await stop_highlight_clipper()
+            except Exception:
+                log.exception("Konnte HighlightClipper nicht stoppen")
+
         try:
             await cog._cancel_managed_bg_tasks()
         except Exception:
@@ -924,6 +931,9 @@ class BotRuntimeBootstrap:
                     from bot.title_generator.insight_job import schedule_weekly_insight_job
                     cog._spawn_bg_task(schedule_nightly_knowledge_job(start_delay_s=300), "title.knowledge_job")
                     cog._spawn_bg_task(schedule_weekly_insight_job(start_delay_s=600), "title.insight_job")
+                start_highlight_clipper = getattr(cog, "_hc_start", None)
+                if callable(start_highlight_clipper):
+                    await start_highlight_clipper()
                 cog._spawn_bg_task(cog._register_views_after_ready(), "twitch.views_warmup")
             except Exception:
                 with contextlib.suppress(Exception):

@@ -13,6 +13,7 @@ from .community.leaderboard import (
 )
 from .community.partner_recruit import TwitchPartnerRecruitMixin
 from .dashboard.mixin import TwitchDashboardMixin
+from .highlight_clipper.mixin import HighlightClipperMixin
 from .monitoring.monitoring import TwitchMonitoringMixin
 from .raid.commands import RaidCommandsMixin
 from .raid.mixin import TwitchRaidMixin
@@ -26,6 +27,7 @@ __all__ = [
 
 
 class TwitchStreamCog(
+    HighlightClipperMixin,
     LegacyTokenAnalyticsMixin,
     TwitchAnalyticsMixin,
     TwitchRaidMixin,

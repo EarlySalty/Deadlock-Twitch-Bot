@@ -1,5 +1,12 @@
 # Changelog
 
+## #14 — Beta: Auto-Highlight-Clips per Discord DM (EarlySalty)
+
+- Nach jedem Deadlock-Match werden automatisch Highlights erkannt (Triple Kill, Multi Kill, Team Fights)
+- Clips werden direkt aus dem Twitch-VOD ausgeschnitten und per Discord DM gesendet
+- Erkennt Multi-Kills (≥3 Kills in 10 Sek) und Team-Fights (≥4 Kills in 15 Sek)
+- Prüft alle 10 Minuten auf neue Matches der letzten 24 Stunden
+
 ## #13 — Bot taucht nicht mehr in Analyse-Daten auf
 
 - Der Bot selbst (`deutschedeadlockcommunity`) wird jetzt überall aus Chat-Statistiken und Analyse-Dashboards herausgefiltert
