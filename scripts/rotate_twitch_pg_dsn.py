@@ -6,8 +6,10 @@ import hashlib
 import getpass
 import json
 import os
+import secrets
 import shlex
 import socket
+import string
 import subprocess
 import sys
 import time
@@ -24,6 +26,7 @@ SECRET_NAME = "TWITCH_ANALYTICS_DSN"
 DEFAULT_SECRET_PATH = "/"
 ROOT_DIR = Path(__file__).resolve().parents[1]
 DEFAULT_AUDIT_LOG = ROOT_DIR / "logs/secret_rotation_audit.jsonl"
+DEFAULT_GENERATED_PASSWORD_LENGTH = 48
 
 
 def _redact_dsn(dsn: str) -> str:
@@ -60,6 +63,13 @@ def _replace_dsn_password(dsn: str, new_password: str) -> str:
     return parse.urlunsplit(
         (parsed.scheme, netloc, parsed.path, parsed.query, parsed.fragment)
     )
+
+
+def _generate_password(length: int = DEFAULT_GENERATED_PASSWORD_LENGTH) -> str:
+    if length < 32:
+        raise SystemExit("Generated password length must be at least 32 characters")
+    alphabet = string.ascii_letters + string.digits
+    return "".join(secrets.choice(alphabet) for _ in range(length))
 
 
 def _parse_dsn(dsn: str) -> dict[str, str]:
@@ -560,6 +570,17 @@ def main() -> int:
         ),
     )
     parser.add_argument(
+        "--generate-password",
+        action="store_true",
+        help="Generate a new PostgreSQL password instead of prompting",
+    )
+    parser.add_argument(
+        "--password-length",
+        type=int,
+        default=DEFAULT_GENERATED_PASSWORD_LENGTH,
+        help="Length for --generate-password, minimum 32",
+    )
+    parser.add_argument(
         "--new-dsn",
         help=(
             "Full new postgresql:// DSN. Normally not needed; use --new-password."
@@ -642,10 +663,15 @@ def main() -> int:
         args.new_password or os.getenv("NEW_TWITCH_ANALYTICS_PASSWORD") or ""
     ).strip()
     new_dsn = (args.new_dsn or os.getenv("NEW_TWITCH_ANALYTICS_DSN") or "").strip()
-    if new_dsn and new_password:
-        raise SystemExit("Use either --new-password or --new-dsn, not both.")
+    if new_dsn and (new_password or args.generate_password):
+        raise SystemExit("Use either --new-dsn, --new-password, or --generate-password.")
+    if args.generate_password and new_password:
+        raise SystemExit("Use either --new-password or --generate-password, not both.")
     if not new_dsn:
-        if not new_password:
+        if args.generate_password:
+            new_password = _generate_password(args.password_length)
+            print("Generated new PostgreSQL password.")
+        elif not new_password:
             new_password = getpass.getpass("New PostgreSQL password: ").strip()
         if not new_password:
             raise SystemExit("No new password provided.")

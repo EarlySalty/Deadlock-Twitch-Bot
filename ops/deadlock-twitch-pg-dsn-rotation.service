@@ -1,0 +1,10 @@
+[Unit]
+Description=Rotate Deadlock Twitch PostgreSQL DSN password
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/home/naniadm/Documents/Deadlock-Twitch-Bot
+ExecStart=/home/naniadm/Documents/Deadlock-Twitch-Bot/scripts/rotate_twitch_pg_dsn_scheduled.sh
+

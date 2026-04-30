@@ -1,0 +1,12 @@
+[Unit]
+Description=Monthly Deadlock Twitch PostgreSQL DSN password rotation
+
+[Timer]
+OnCalendar=*-*-01 04:10:00
+Persistent=true
+RandomizedDelaySec=30m
+Unit=deadlock-twitch-pg-dsn-rotation.service
+
+[Install]
+WantedBy=timers.target
+
