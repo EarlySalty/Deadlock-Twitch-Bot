@@ -30,12 +30,13 @@ RECRUIT_MAX_PER_TICK = 3  # Maximale Sends pro Prüfzyklus
 RECRUIT_THROTTLE_SECONDS = 60  # Pause zwischen Sends innerhalb eines Ticks
 RECRUIT_DISCORD_INVITE = "discord.gg/z5TfVHuQq2"
 
-# Twitch-Chat-Limit: 500 Zeichen. Nachricht bleibt bei ~300 Zeichen.
+# Twitch-Chat-Limit: 500 Zeichen. Initial-Message ist KEIN Pitch und KEINE
+# direkte "willst du Infos?"-Frage — sondern Authority-Anker + offene Frage
+# zum Streamer selbst. Der Brain übernimmt das Locken im Follow-up.
 _OUTREACH_MSG = (
-    "Hey @{login}! Cooler Deadlock-Stream. 🎮 Wir bauen gerade das größte deutsche Deadlock-Netzwerk auf "
-    "und unterstützen Streamer mit ihren Streams, indem wir dir eine Platform schenken. "
-    "Wenn du wissen willst, was wir für Streamer daraus machen, schau mal in unsere Bio vorbei! ✨ "
-    "Viel Erfolg dir noch! <3"
+    "Hey @{login}, bin gerade auf deinen Stream gestoßen — "
+    "wir sind die größte und aktivste deutsche Deadlock-Community. "
+    "Wie bist du eigentlich zu Deadlock gekommen?"
 )
 
 
