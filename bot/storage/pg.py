@@ -100,7 +100,7 @@ ENV_DSN = "TWITCH_ANALYTICS_DSN"
 _DB_FINGERPRINT_SALT = b"deadlock.analytics-db-fingerprint.v1"
 _DB_FINGERPRINT_ITERATIONS = 100_000
 _RUNTIME_SCHEMA_COMPONENT = "storage_pg"
-_RUNTIME_SCHEMA_VERSION = 3
+_RUNTIME_SCHEMA_VERSION = 4
 _RUNTIME_SCHEMA_BOOTSTRAP_ENV = "TWITCH_ALLOW_RUNTIME_SCHEMA_BOOTSTRAP"
 
 
@@ -787,6 +787,15 @@ def _apply_runtime_schema_migrations(
         ensure_schema(conn)
         _record_runtime_schema_version(conn, 3)
         version = 3
+    if version < 4:
+        if not _runtime_schema_bootstrap_allowed():
+            raise RuntimeError(
+                "Runtime schema bootstrap is disabled. Apply the PostgreSQL migrations before startup "
+                f"or set {_RUNTIME_SCHEMA_BOOTSTRAP_ENV}=1 only for controlled local bootstrap."
+            )
+        ensure_schema(conn)
+        _record_runtime_schema_version(conn, 4)
+        version = 4
     return version
 
 
@@ -3749,6 +3758,15 @@ def ensure_schema(conn) -> None:
     conn.execute(
         "ALTER TABLE twitch_partner_outreach "
         "ADD COLUMN IF NOT EXISTS conversation_status TEXT"
+    )
+    conn.execute(
+        "ALTER TABLE twitch_partner_outreach_conversations "
+        "ADD COLUMN IF NOT EXISTS human_notify_pending_at TIMESTAMPTZ"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_twitch_partner_outreach_conv_notify_pending "
+        "ON twitch_partner_outreach_conversations(human_notify_pending_at) "
+        "WHERE human_notify_pending_at IS NOT NULL AND human_notify_sent_at IS NULL"
     )
 
     migrate_legacy_partner_registry(conn)

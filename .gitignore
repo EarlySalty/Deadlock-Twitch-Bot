@@ -44,3 +44,4 @@ logs/
 .superpowers/
 docs/superpowers/
 security-reports/
+data/highlight_clipper/state.json

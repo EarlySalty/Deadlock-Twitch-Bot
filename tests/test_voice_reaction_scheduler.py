@@ -43,6 +43,7 @@ class _MemoryConversation:
             "last_stance": None,
             "last_confidence": None,
             "human_notify_sent_at": None,
+            "human_notify_pending_at": None,
             "closed_at": None,
         }
 
@@ -350,6 +351,57 @@ class ChatTriggerTests(unittest.TestCase):
         self.assertEqual(chat_bot.sends, [])
         self.assertNotIn("bot_message_sent", audit.kinds())
         self.assertEqual(store.conversations["streamer2"].row["state"], "listening")
+
+    def test_should_notify_human_sets_pending_marker(self) -> None:
+        store, audit = _patch_state_and_audit(self)
+        chat_bot = _StubChatBot()
+
+        # Patch _mark_human_notify_pending → in-memory
+        from bot.community.voice_reaction import scheduler as sched_mod
+
+        def _stub_mark_pending(self, login):
+            store.conversations[login.lower()].row["human_notify_pending_at"] = "now"
+
+        patch = mock.patch.object(
+            sched_mod.VoiceReactionScheduler,
+            "_mark_human_notify_pending",
+            _stub_mark_pending,
+        )
+        patch.start()
+        self.addCleanup(patch.stop)
+
+        sched, _ = _build_scheduler(
+            decisions=[
+                _decision(
+                    stance="interested",
+                    response_text="cool, schau gerne in mein Profil",
+                    should_notify_human=True,
+                ),
+            ],
+            chat_bot=chat_bot,
+        )
+        store.open_conversation(
+            streamer_login="streamer_notify",
+            streamer_user_id="555",
+            source="outreach",
+        )
+        sched._active_channels.add("streamer_notify")
+
+        async def run() -> None:
+            await sched.enqueue_chat(
+                login="streamer_notify",
+                text="klingt nice, wo finde ich mehr?",
+                author="streamer_notify",
+            )
+            trigger = await sched._queue.get()
+            await sched._handle_trigger(trigger)
+
+        asyncio.run(run())
+
+        self.assertEqual(
+            store.conversations["streamer_notify"].row["human_notify_pending_at"], "now"
+        )
+        self.assertIn("discord_notify_pending", audit.kinds())
 
     def test_decision_close_exhausted_sets_closed_state(self) -> None:
         store, _ = _patch_state_and_audit(self)

@@ -94,9 +94,9 @@ def _build_embed(
         if not text:
             continue
         prefix = {
-            "voice": "🎙️ voice",
-            "streamer_chat": "💬 streamer",
-            "bot_chat": "🤖 bot",
+            "voice": "voice",
+            "streamer_chat": "streamer",
+            "bot_chat": "bot",
         }.get(role, role)
         if len(text) > 220:
             text = text[:217].rstrip() + "…"

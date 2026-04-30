@@ -652,37 +652,23 @@ class VoiceReactionScheduler:
                     },
                 )
 
-        # Discord-Notify
-        if decision.should_notify_human and not conversation.get("human_notify_sent_at"):
-            if self._config.dry_run:
-                audit_log.audit(
-                    login,
-                    "discord_notify_sent",
-                    {"dry_run": True, "stance": decision.stance},
-                    correlation_id=correlation_id,
-                )
-            else:
-                notify_result = await discord_notifier.notify_human(
-                    streamer_login=login,
-                    stance=decision.stance,
-                    confidence=decision.confidence,
-                    reasoning_summary=decision.reasoning_summary,
-                    history_excerpt=history,
-                    extra_fields={"trigger_source": source_trigger},
-                    webhook_url_override=self._webhook_url_override,
-                )
-                audit_log.audit(
-                    login,
-                    "discord_notify_sent",
-                    {
-                        "sent": notify_result.sent,
-                        "status_code": notify_result.status_code,
-                        "reason": notify_result.reason,
-                    },
-                    correlation_id=correlation_id,
-                )
-                if notify_result.sent:
-                    self._mark_human_notify_sent(login)
+        # Discord-Notify: Pending-Marker setzen (Discord-Bot pollt + sendet DM)
+        if (
+            decision.should_notify_human
+            and not conversation.get("human_notify_sent_at")
+            and not conversation.get("human_notify_pending_at")
+        ):
+            self._mark_human_notify_pending(login)
+            audit_log.audit(
+                login,
+                "discord_notify_pending",
+                {
+                    "stance": decision.stance,
+                    "confidence": decision.confidence,
+                    "trigger_source": source_trigger,
+                },
+                correlation_id=correlation_id,
+            )
 
         # State-Übergang
         if decision.should_close:
@@ -802,7 +788,7 @@ class VoiceReactionScheduler:
             self._daily_transcription_count = 0
         self._daily_transcription_count += 1
 
-    def _mark_human_notify_sent(self, login: str) -> None:
+    def _mark_human_notify_pending(self, login: str) -> None:
         try:
             from bot.storage import transaction
 
@@ -810,14 +796,15 @@ class VoiceReactionScheduler:
                 conn.execute(
                     """
                     UPDATE twitch_partner_outreach_conversations
-                       SET human_notify_sent_at = NOW()
+                       SET human_notify_pending_at = NOW()
                      WHERE streamer_login = %s
+                       AND human_notify_pending_at IS NULL
                     """,
                     (login,),
                 )
                 conn.commit()
         except Exception:
-            log.debug("VoiceReaction: human_notify_sent_at-Update fehlgeschlagen", exc_info=True)
+            log.debug("VoiceReaction: human_notify_pending_at-Update fehlgeschlagen", exc_info=True)
 
 
 def _now_iso() -> str:

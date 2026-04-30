@@ -157,6 +157,7 @@ def _make_conn() -> sqlite3.Connection:
             last_stance             TEXT,
             last_confidence         REAL,
             human_notify_sent_at    TEXT,
+            human_notify_pending_at TEXT,
             closed_at               TEXT,
             error_kind              TEXT,
             error_detail            TEXT,
