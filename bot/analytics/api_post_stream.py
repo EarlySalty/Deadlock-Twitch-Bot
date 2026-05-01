@@ -735,6 +735,11 @@ async def backfill_post_stream_reports(*, sessions_per_streamer: int = 3) -> Non
     """
     log.info("PostStream Backfill: Starte (max. %d Sessions pro Streamer)", sessions_per_streamer)
     try:
+        with storage.transaction() as conn:
+            _ensure_report_ab_columns(conn)
+    except Exception:
+        log.warning("PostStream Backfill: Tabellen-Vorbereitung fehlgeschlagen", exc_info=True)
+    try:
         with storage.readonly_connection() as conn:
             rows = conn.execute(
                 """
