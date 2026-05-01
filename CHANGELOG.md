@@ -1,9 +1,11 @@
 # Changelog
 
-## #21 — Discord-Werbung häufiger + zeitbefristete Admin-Überschreibung repariert
+## #22 — Werbung sensibler für neue Zuschauer + Viewer-Trigger auch bei Normalzahlen
 
-- Der Discord-Einladungs-Trigger greift jetzt schon bei 3 statt 5 Nachrichten im Aktivitätsfenster — also früher bei aktiven Chats
-- Viewer-Spike-Trigger greift jetzt wenn der Chat 2 Minuten ruhig ist (statt 5), d. h. er löst bei soliden Zuschauerzahlen verlässlicher aus
+- Discord-Einladung wird jetzt schon bei 3 Chat-Nachrichten im Fenster ausgelöst statt 5
+- Viewer-basierter Trigger greift ab sofort auch wenn die Zuschauerzahl einfach auf normalem Niveau liegt — kein "Spike" mehr nötig
+- Cooldown für den Viewer-Trigger auf 60 Minuten gesenkt (war 90)
+- Neue Bedingung: Promo wird nur gesendet, wenn mindestens 2 Chatter im aktuellen Fenster die letzte Werbung noch nicht gesehen haben — verhindert, dass dieselbe Zuschauerschaft mehrfach dieselbe Meldung bekommt; nach 2 Stunden gilt ein Zuschauer wieder als "neu"
 - Im Admin-Dashboard gibt es jetzt Felder für Start- und Endzeit der globalen Promo-Überschreibung — die zeitbefristete Steuerung funktioniert damit korrekt
 
 ## #20 — Stream-Reports: Rating-System, neues Report-Layout + Auto-Retry

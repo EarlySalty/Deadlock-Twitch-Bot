@@ -37,7 +37,9 @@ from .constants import (
     PROMO_LOOP_INTERVAL_SEC,
     PROMO_MESSAGES,
     PROMO_MESSAGES_CATEGORIZED,
+    PROMO_NEW_CHATTERS_MIN,
     PROMO_OVERALL_COOLDOWN_MIN,
+    PROMO_SEEN_CHATTER_MAX_AGE_SEC,
     PROMO_VIEWER_SPIKE_COOLDOWN_MIN,
     PROMO_VIEWER_SPIKE_ENABLED,
     PROMO_VIEWER_SPIKE_MIN_CHAT_SILENCE_SEC,
@@ -648,6 +650,41 @@ class PromoMixin:
         if not chatter_last:
             dedupe_state.pop(login, None)
 
+    def _get_new_chatters_in_window(self, login: str, now: float) -> int:
+        """Zählt Chatter im aktuellen Aktivitätsfenster, die seit der letzten Promo neu sind."""
+        bucket = self._promo_activity.get(login)
+        if not bucket:
+            return 0
+        self._prune_promo_activity(bucket, now)
+        current_chatters = {c for _, c in bucket}
+        if not current_chatters:
+            return 0
+        seen_map = getattr(self, "_promo_seen_chatters", None)
+        seen: set[str] = seen_map.get(login, set()) if isinstance(seen_map, dict) else set()
+        return len(current_chatters - seen)
+
+    def _update_seen_chatters(self, login: str, now: float) -> None:
+        """Markiert aktive Chatter als 'Promo gesehen' und lässt ältere Einträge verfallen."""
+        seen_map = getattr(self, "_promo_seen_chatters", None)
+        if not isinstance(seen_map, dict):
+            seen_map = {}
+            self._promo_seen_chatters = seen_map
+
+        seen_ts = getattr(self, "_promo_seen_chatters_ts", None)
+        if not isinstance(seen_ts, dict):
+            seen_ts = {}
+            self._promo_seen_chatters_ts = seen_ts
+
+        max_age = float(PROMO_SEEN_CHATTER_MAX_AGE_SEC)
+        last_reset = float(seen_ts.get(login) or 0)
+        if now - last_reset > max_age:
+            seen_map.pop(login, None)
+
+        bucket = self._promo_activity.get(login)
+        current_chatters = {c for _, c in bucket} if bucket else set()
+        seen_map.setdefault(login, set()).update(current_chatters)
+        seen_ts[login] = now
+
     def _record_promo_activity(self, login: str, chatter_login: str, now: float) -> None:
         dedupe_state = getattr(self, "_promo_chatter_dedupe", None)
         if not isinstance(dedupe_state, dict):
@@ -774,6 +811,7 @@ class PromoMixin:
         raw_count_map = getattr(self, "_raw_msg_count_since_promo", None)
         if isinstance(raw_count_map, dict):
             raw_count_map[login] = 0
+        self._update_seen_chatters(login, now)
         if reason == "viewer_spike":
             viewer_spike_map = getattr(self, "_last_promo_viewer_spike", None)
             if not isinstance(viewer_spike_map, dict):
@@ -1016,6 +1054,10 @@ class PromoMixin:
         cooldown_sec = self._promo_cooldown_sec(msgs_per_min)
         if last_sent is not None and now - last_sent < cooldown_sec:
             return False
+
+        if PROMO_NEW_CHATTERS_MIN > 0 and last_sent is not None:
+            if self._get_new_chatters_in_window(login, now) < PROMO_NEW_CHATTERS_MIN:
+                return False
 
         if not self._promo_attempt_allowed(login, now):
             return False
