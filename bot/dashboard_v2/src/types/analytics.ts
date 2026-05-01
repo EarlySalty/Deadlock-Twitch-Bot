@@ -1420,6 +1420,71 @@ export interface StreamReportV2Recommendation {
   reason: string;
 }
 
+export interface StreamReportV3Snapshot {
+  bewertung: 'stark' | 'solide' | 'gemischt' | 'schwach';
+  ein_satz: string;
+  wichtigste_erkenntnis: string;
+}
+
+export interface StreamReportV3Moment {
+  typ: 'peak' | 'einbruch' | 'stabil' | 'volatil';
+  minute: number;
+  beobachtung: string;
+  interpretation: string;
+}
+
+export interface StreamReportV3Audience {
+  chat_rate_prozent: number;
+  chat_rate_einordnung: string;
+  stammchatter_anteil_prozent: number;
+  bindung: string;
+  auffaelligkeit: string;
+}
+
+export interface StreamReportV3ChatDiagnose {
+  top_themen: string[];
+  explosions_momente: string[];
+  verwirrung_oder_fragen: string[];
+  stimmung: string;
+}
+
+export interface StreamReportV3Wachstum {
+  follower_delta: number;
+  follower_vs_schnitt: string;
+  monetarisierung: string;
+  raid_einfluss: string;
+}
+
+export interface StreamReportV3Vergleich {
+  besser_als_sonst: string[];
+  schlechter_als_sonst: string[];
+  trend: string;
+}
+
+export interface StreamReportV3Massnahme {
+  prioritaet: number;
+  was: string;
+  warum: string;
+  erwarteter_effekt: string;
+}
+
+export interface StreamReportV3Body {
+  snapshot: StreamReportV3Snapshot;
+  momente: StreamReportV3Moment[];
+  audience: StreamReportV3Audience;
+  chat_diagnose: StreamReportV3ChatDiagnose;
+  wachstum: StreamReportV3Wachstum;
+  vergleich: StreamReportV3Vergleich;
+  massnahmen: StreamReportV3Massnahme[];
+  admin_notizen: string[];
+}
+
+export interface StreamReportRating {
+  rating: 'gut' | 'schlecht' | 'neutral';
+  comment?: string;
+  updated_at?: string;
+}
+
 export interface StreamReportV2Body {
   schema_version?: string;
   report_variant?: StreamReportVariant | string;
@@ -1460,8 +1525,9 @@ export interface StreamReport {
   schema_version?: string | null;
   report_variant?: StreamReportVariant | string;
   status: 'pending' | 'done' | 'failed';
-  report: LegacyStreamReportBody | StreamReportV2Body | null;
+  report: LegacyStreamReportBody | StreamReportV2Body | StreamReportV3Body | null;
   word_groups: StreamReportWordGroup[];
+  rating?: StreamReportRating | null;
   error?: string | null;
   empty?: boolean;
 }

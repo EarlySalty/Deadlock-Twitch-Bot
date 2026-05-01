@@ -929,10 +929,11 @@ class BotRuntimeBootstrap:
                     cog._spawn_bg_task(cog._scout_deadlock_channels(), "twitch.scout_deadlock")
                     from bot.title_generator.knowledge_job import schedule_nightly_knowledge_job
                     from bot.title_generator.insight_job import schedule_weekly_insight_job
-                    from bot.analytics.api_post_stream import backfill_post_stream_reports
+                    from bot.analytics.api_post_stream import backfill_post_stream_reports, schedule_report_retry_job
                     cog._spawn_bg_task(schedule_nightly_knowledge_job(start_delay_s=300), "title.knowledge_job")
                     cog._spawn_bg_task(schedule_weekly_insight_job(start_delay_s=600), "title.insight_job")
                     cog._spawn_bg_task(backfill_post_stream_reports(sessions_per_streamer=3), "post_stream.backfill")
+                    cog._spawn_bg_task(schedule_report_retry_job(start_delay_s=1800), "post_stream.retry_job")
                 start_highlight_clipper = getattr(cog, "_hc_start", None)
                 if callable(start_highlight_clipper):
                     await start_highlight_clipper()

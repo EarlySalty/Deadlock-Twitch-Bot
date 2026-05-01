@@ -115,6 +115,7 @@ class _AnalyticsOverviewMixin:
         router.add_post("/twitch/api/v2/ai/chat", self._api_v2_ai_chat)
         router.add_get("/twitch/api/v2/ai/history", self._api_v2_ai_history)
         router.add_get("/twitch/api/v2/stream-report", self._api_v2_stream_report)
+        router.add_post("/twitch/api/v2/stream-report/rate", self._api_v2_stream_report_rate)
         # Roadmap (public GET, admin POST/PATCH/DELETE)
         router.add_get("/twitch/api/v2/roadmap", self._api_v2_roadmap_get)
         router.add_post("/twitch/api/v2/roadmap", self._api_v2_roadmap_create)

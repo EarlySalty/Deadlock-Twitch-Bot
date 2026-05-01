@@ -1,5 +1,13 @@
 # Changelog
 
+## #20 — Stream-Reports: Rating-System, neues Report-Layout + Auto-Retry
+
+- Jeder Report hat jetzt Bewertungs-Buttons (Gut / Neutral / Schlecht) mit optionalem Kommentar — direkt unter dem jeweiligen Report sichtbar
+- Reports zeigen jetzt alle Analyse-Abschnitte aus dem neuen Minimax-Schema: Snapshot, Kritische Momente, Audience, Chat-Diagnose, Wachstum, Vergleich und Maßnahmen
+- Keine chinesischen Zeichen mehr in Reports — Minimax bekommt jetzt eine explizite Sprachanweisung
+- Fehlgeschlagene Reports werden jetzt automatisch alle 30 Minuten bis zu 3x erneut versucht
+- Minimax-Anfragen brechen nach 3 Minuten automatisch ab statt ewig zu hängen
+
 ## #19 — Stream-Reports für alle Partner freigegeben
 
 - Stream-Reports sind jetzt für alle aktiven Partner sichtbar — kein kostenpflichtiger KI-Plan mehr nötig
