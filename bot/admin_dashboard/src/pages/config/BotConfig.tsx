@@ -46,21 +46,30 @@ function readConfigBoolean(record: Record<string, unknown>, ...keys: string[]) {
   return undefined;
 }
 
+function isoToDatetimeLocal(iso: string | null | undefined): string {
+  if (!iso) return '';
+  try {
+    return new Date(iso).toISOString().slice(0, 16);
+  } catch {
+    return '';
+  }
+}
+
 function buildPromoSavePayload(
   promo: Record<string, unknown>,
   promoConfig: Record<string, unknown>,
   promoEnabled: boolean,
   promoMessage: string,
+  startsAt: string,
+  endsAt: string,
 ) {
   const existingMode = readConfigString(promoConfig, 'mode') || readConfigString(promo, 'mode');
-  const startsAt = readConfigNullableString(promoConfig, 'starts_at', 'startsAt');
-  const endsAt = readConfigNullableString(promoConfig, 'ends_at', 'endsAt');
 
   return {
     mode: existingMode === 'custom_event' ? existingMode : 'custom_event',
     custom_message: promoMessage,
-    starts_at: startsAt ?? null,
-    ends_at: endsAt ?? null,
+    starts_at: startsAt || null,
+    ends_at: endsAt || null,
     is_enabled: promoEnabled,
   };
 }
@@ -70,6 +79,8 @@ export function BotConfig() {
   const promoMutation = usePromoConfigMutation();
   const [promoEnabled, setPromoEnabled] = useState(true);
   const [promoMessage, setPromoMessage] = useState('');
+  const [promoStartsAt, setPromoStartsAt] = useState('');
+  const [promoEndsAt, setPromoEndsAt] = useState('');
   const [promoDirty, setPromoDirty] = useState(false);
   const [toast, setToast] = useState<{ open: boolean; tone: 'success' | 'error'; message: string }>({
     open: false,
@@ -92,6 +103,12 @@ export function BotConfig() {
     setPromoMessage(
       readConfigString(promoConfig, 'custom_message', 'message', 'promo_message') ||
         readConfigString(promo, 'active_message', 'message', 'promo_message'),
+    );
+    setPromoStartsAt(
+      isoToDatetimeLocal(readConfigNullableString(promoConfig, 'starts_at', 'startsAt') ?? undefined),
+    );
+    setPromoEndsAt(
+      isoToDatetimeLocal(readConfigNullableString(promoConfig, 'ends_at', 'endsAt') ?? undefined),
     );
   }, [configQuery.data, promoDirty, promo, promoConfig]);
 
@@ -127,13 +144,39 @@ export function BotConfig() {
               className="admin-input"
               placeholder={readConfigString(promoConfig, 'custom_message', 'message', 'promo_message') || 'Globalen Promo-Text eingeben'}
             />
+            <div className="grid grid-cols-2 gap-3">
+              <label className="flex flex-col gap-1">
+                <span className="text-xs font-semibold uppercase tracking-widest text-text-secondary">Start (UTC)</span>
+                <input
+                  type="datetime-local"
+                  className="admin-input"
+                  value={promoStartsAt}
+                  onChange={(event) => {
+                    setPromoDirty(true);
+                    setPromoStartsAt(event.target.value);
+                  }}
+                />
+              </label>
+              <label className="flex flex-col gap-1">
+                <span className="text-xs font-semibold uppercase tracking-widest text-text-secondary">Ende (UTC)</span>
+                <input
+                  type="datetime-local"
+                  className="admin-input"
+                  value={promoEndsAt}
+                  onChange={(event) => {
+                    setPromoDirty(true);
+                    setPromoEndsAt(event.target.value);
+                  }}
+                />
+              </label>
+            </div>
             <button
               className="admin-button admin-button-primary"
               disabled={promoMutation.isPending}
               onClick={async () => {
                 try {
                   await promoMutation.mutateAsync(
-                    buildPromoSavePayload(promo, promoConfig, promoEnabled, promoMessage),
+                    buildPromoSavePayload(promo, promoConfig, promoEnabled, promoMessage, promoStartsAt, promoEndsAt),
                   );
                   setPromoDirty(false);
                   setToast({ open: true, tone: 'success', message: 'Promo-Konfiguration gespeichert.' });
