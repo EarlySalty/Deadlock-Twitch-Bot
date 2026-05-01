@@ -1,5 +1,11 @@
 # Changelog
 
+## #17 — Stream-Reports: Backfill beim Start + weitere SQL-Bugfixes
+
+- Beim Bot-Start werden automatisch die letzten 3 Sessions pro Streamer mit einem Minimax-Report nachgefüllt, falls noch keiner existiert
+- Wöchentliche Titel-Insights: zweiter SQL-Bug behoben (Session-Lookup ging an falscher Spalte, Sessions wurden nie geladen)
+- Bisherige Stream-Reports ohne Fehler werden nicht doppelt generiert
+
 ## #16 — Stream-Reports mit Minimax funktionieren jetzt für alle Streamer
 
 - Nach jedem Stream-Ende erstellt Minimax automatisch einen detaillierten Report mit Viewer-Kurve, Chat-Analyse und Vergleich zu früheren Sessions

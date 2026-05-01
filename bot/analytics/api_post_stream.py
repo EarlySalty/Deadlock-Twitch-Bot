@@ -728,6 +728,72 @@ async def trigger_post_stream_analysis(
         log.debug("PostStream: Keine neuen A/B-Reports fuer Session %d erstellt", session_id)
 
 
+async def backfill_post_stream_reports(*, sessions_per_streamer: int = 3) -> None:
+    """Generiere Reports fuer die letzten N abgeschlossenen Sessions ohne Report.
+
+    Wird beim Bot-Start einmalig aufgerufen.
+    """
+    log.info("PostStream Backfill: Starte (max. %d Sessions pro Streamer)", sessions_per_streamer)
+    try:
+        with storage.readonly_connection() as conn:
+            rows = conn.execute(
+                """
+                SELECT DISTINCT s.streamer_login
+                  FROM twitch_stream_sessions s
+                 WHERE s.ended_at IS NOT NULL
+                 ORDER BY s.streamer_login
+                """
+            ).fetchall()
+        streamers = [
+            str(row["streamer_login"] if hasattr(row, "keys") else row[0]).strip().lower()
+            for row in rows
+        ]
+    except Exception:
+        log.warning("PostStream Backfill: Streamer-Liste konnte nicht geladen werden", exc_info=True)
+        return
+
+    total = 0
+    for streamer in streamers:
+        try:
+            with storage.readonly_connection() as conn:
+                session_rows = conn.execute(
+                    """
+                    SELECT s.id
+                      FROM twitch_stream_sessions s
+                     WHERE s.streamer_login = %s
+                       AND s.ended_at IS NOT NULL
+                       AND NOT EXISTS (
+                           SELECT 1 FROM twitch_stream_ai_reports r
+                            WHERE r.session_id = s.id
+                              AND r.status = 'done'
+                       )
+                     ORDER BY s.ended_at DESC
+                     LIMIT %s
+                    """,
+                    (streamer, sessions_per_streamer),
+                ).fetchall()
+            session_ids = [
+                int(row["id"] if hasattr(row, "keys") else row[0])
+                for row in session_rows
+            ]
+        except Exception:
+            log.warning("PostStream Backfill: Session-Lookup fehlgeschlagen fuer %s", streamer, exc_info=True)
+            continue
+
+        for session_id in session_ids:
+            try:
+                await trigger_post_stream_analysis(streamer, session_id=session_id)
+                total += 1
+                await __import__("asyncio").sleep(2)
+            except Exception:
+                log.warning(
+                    "PostStream Backfill: Analyse fehlgeschlagen fuer %s Session %d",
+                    streamer, session_id, exc_info=True,
+                )
+
+    log.info("PostStream Backfill: Abgeschlossen (%d Reports angestossen)", total)
+
+
 def _serialize_report_payload(payload: dict[str, Any]) -> dict[str, Any]:
     report = payload.get("report_json") or {}
     word_groups = payload.get("word_groups_json") or []
