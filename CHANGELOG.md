@@ -1,5 +1,13 @@
 # Changelog
 
+## #16 — Stream-Reports mit Minimax funktionieren jetzt für alle Streamer
+
+- Nach jedem Stream-Ende erstellt Minimax automatisch einen detaillierten Report mit Viewer-Kurve, Chat-Analyse und Vergleich zu früheren Sessions
+- Reports werden für alle Streamer generiert — kein kostenpflichtiger Plan mehr nötig, um die Funktion zu nutzen
+- Admins können alle Reports im Dashboard einsehen, unabhängig vom Streamer-Plan
+- Wöchentliche Titel-Insights waren wegen eines Datenbankfehlers kaputt — dieser ist jetzt behoben
+- Tabellen für KI-Reports werden beim ersten Start automatisch angelegt, falls die Migration noch nicht gelaufen ist
+
 ## #15 — Voice-Reaction: Bot führt jetzt echte Gespräche nach Outreach & Raids
 
 - Nach jedem Outreach und jedem Outreach-Boost-Raid kann der Bot eigenständig im Streamer-Chat antworten — wie ein echter Community-Mensch, nicht wie ein Sales-Bot

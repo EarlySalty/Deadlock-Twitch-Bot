@@ -34,11 +34,11 @@ def _fetch_history_for_period(
     with storage.readonly_connection() as conn:
         rows = conn.execute(
             """
-            SELECT title, avg_viewers, followers_start
+            SELECT stream_title, avg_viewers, followers_start
             FROM twitch_stream_sessions
             WHERE twitch_user_id = %s
               AND started_at BETWEEN %s AND %s
-              AND title IS NOT NULL AND title != ''
+              AND stream_title IS NOT NULL AND stream_title != ''
               AND avg_viewers IS NOT NULL
             ORDER BY started_at DESC
             """,
