@@ -650,21 +650,46 @@ class PromoMixin:
         if not chatter_last:
             dedupe_state.pop(login, None)
 
-    def _get_new_chatters_in_window(self, login: str, now: float) -> int:
-        """Zählt Chatter im aktuellen Aktivitätsfenster, die seit der letzten Promo neu sind."""
+    def _get_current_session_viewers(self, login: str) -> set[str]:
+        """Gibt alle Viewer/Chatter aus der aktiven Session via Twitch-API zurück."""
+        try:
+            rows = _pg_query_all(
+                """
+                SELECT sc.chatter_login
+                  FROM twitch_session_chatters sc
+                  JOIN twitch_live_state ls ON ls.active_session_id = sc.session_id
+                 WHERE LOWER(ls.streamer_login) = LOWER(%s)
+                   AND ls.is_live = 1
+                   AND COALESCE(TRIM(sc.chatter_login), '') <> ''
+                """,
+                (login,),
+            )
+            return {str(row[0] if not hasattr(row, "keys") else row["chatter_login"]).strip().lower() for row in rows if row}
+        except Exception:
+            log.debug("_get_current_session_viewers fehlgeschlagen für %s", login, exc_info=True)
+            return set()
+
+    def _get_current_viewers_combined(self, login: str, now: float) -> set[str]:
+        """Kombiniert aktive Chat-Chatter (8-min-Fenster) mit API-getrackten Viewern."""
+        chatters: set[str] = set()
         bucket = self._promo_activity.get(login)
-        if not bucket:
-            return 0
-        self._prune_promo_activity(bucket, now)
-        current_chatters = {c for _, c in bucket}
-        if not current_chatters:
+        if bucket:
+            self._prune_promo_activity(bucket, now)
+            chatters = {c for _, c in bucket}
+        api_viewers = self._get_current_session_viewers(login)
+        return chatters | api_viewers
+
+    def _get_new_chatters_in_window(self, login: str, now: float) -> int:
+        """Zählt Viewer/Chatter, die seit der letzten Promo neu sind (Chat + API)."""
+        current = self._get_current_viewers_combined(login, now)
+        if not current:
             return 0
         seen_map = getattr(self, "_promo_seen_chatters", None)
         seen: set[str] = seen_map.get(login, set()) if isinstance(seen_map, dict) else set()
-        return len(current_chatters - seen)
+        return len(current - seen)
 
     def _update_seen_chatters(self, login: str, now: float) -> None:
-        """Markiert aktive Chatter als 'Promo gesehen' und lässt ältere Einträge verfallen."""
+        """Markiert alle aktuellen Viewer (Chat + API) als 'Promo gesehen'; lässt alte Einträge verfallen."""
         seen_map = getattr(self, "_promo_seen_chatters", None)
         if not isinstance(seen_map, dict):
             seen_map = {}
@@ -680,9 +705,8 @@ class PromoMixin:
         if now - last_reset > max_age:
             seen_map.pop(login, None)
 
-        bucket = self._promo_activity.get(login)
-        current_chatters = {c for _, c in bucket} if bucket else set()
-        seen_map.setdefault(login, set()).update(current_chatters)
+        current = self._get_current_viewers_combined(login, now)
+        seen_map.setdefault(login, set()).update(current)
         seen_ts[login] = now
 
     def _record_promo_activity(self, login: str, chatter_login: str, now: float) -> None:
