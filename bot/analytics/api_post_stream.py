@@ -743,10 +743,10 @@ async def backfill_post_stream_reports(*, sessions_per_streamer: int = 3) -> Non
         with storage.readonly_connection() as conn:
             rows = conn.execute(
                 """
-                SELECT DISTINCT s.streamer_login
-                  FROM twitch_stream_sessions s
-                 WHERE s.ended_at IS NOT NULL
-                 ORDER BY s.streamer_login
+                SELECT LOWER(t.twitch_login) AS streamer_login
+                  FROM twitch_streamers_partner_state t
+                 WHERE t.is_partner_active = 1
+                 ORDER BY t.twitch_login
                 """
             ).fetchall()
         streamers = [
@@ -754,7 +754,7 @@ async def backfill_post_stream_reports(*, sessions_per_streamer: int = 3) -> Non
             for row in rows
         ]
     except Exception:
-        log.warning("PostStream Backfill: Streamer-Liste konnte nicht geladen werden", exc_info=True)
+        log.warning("PostStream Backfill: Partner-Liste konnte nicht geladen werden", exc_info=True)
         return
 
     total = 0
