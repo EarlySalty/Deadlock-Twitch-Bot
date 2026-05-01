@@ -11,7 +11,6 @@ from typing import Any
 
 from aiohttp import web
 
-from ..entitlements.resolver import resolve_plan_snapshot_for_login
 from ..storage import pg as storage
 from .api_ai import (
     AI_MODEL_MINIMAX,
@@ -907,19 +906,6 @@ class _AnalyticsPostStreamMixin:
         session_login = str(session.get("twitch_login") or "").strip().lower()
         if auth_level not in ("localhost", "admin") and streamer != session_login:
             return web.json_response({"error": "forbidden"}, status=403)
-
-        if auth_level not in ("localhost", "admin"):
-            try:
-                snapshot = resolve_plan_snapshot_for_login(streamer)
-                entitlements = set(snapshot.get("entitlements") or [])
-                if "analytics.ai_full" not in entitlements and "analytics.ai_mini" not in entitlements:
-                    return web.json_response({"error": "plan_required"}, status=403)
-            except Exception:
-                log.exception("PostStream API: Plan-Check fehlgeschlagen fuer %s", streamer)
-                return analytics_internal_error_response(
-                    error="Post-Stream-Report konnte nicht geladen werden.",
-                    code="stream_report_plan_check_failed",
-                )
 
         try:
             with storage.transaction() as conn:

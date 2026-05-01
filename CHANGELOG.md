@@ -1,5 +1,10 @@
 # Changelog
 
+## #19 — Stream-Reports für alle Partner freigegeben
+
+- Stream-Reports sind jetzt für alle aktiven Partner sichtbar — kein kostenpflichtiger KI-Plan mehr nötig
+- Fehlerbehebung: Dashboard-Service wurde nach Code-Änderungen nicht neu gestartet, Reports haben deshalb nicht geladen
+
 ## #18 — Stream-Reports: Neues Analyse-Schema + Minimax komplett aufgedreht
 
 - Report-Prompt komplett neu geschrieben: 5 konkrete Analyse-Aufgaben (Kritische Momente, Audience-Qualität, Chat-Diagnose, Wachstums-Signale, Ehrlicher Vergleich)
