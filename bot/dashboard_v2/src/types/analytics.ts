@@ -1377,6 +1377,8 @@ export interface AIChatResponse {
   rateLimitReset?: number;
 }
 
+export type StreamReportVariant = 'compact' | 'full';
+
 export interface StreamReportPoint {
   punkt: string;
   begruendung: string;
@@ -1398,18 +1400,75 @@ export interface StreamReportWordGroup {
   message_count: number;
 }
 
+export interface LegacyStreamReportBody {
+  gut?: StreamReportPoint[];
+  schlecht?: StreamReportPoint[];
+  veraenderungen?: StreamReportChange[];
+  empfehlungen?: StreamReportRecommendation[];
+}
+
+export interface StreamReportV2Item {
+  title: string;
+  evidence?: string;
+  why_it_matters?: string;
+  impact?: string;
+}
+
+export interface StreamReportV2Recommendation {
+  priority: 'high' | 'medium' | 'low' | string;
+  action: string;
+  reason: string;
+}
+
+export interface StreamReportV2Body {
+  schema_version?: string;
+  report_variant?: StreamReportVariant | string;
+  summary?: {
+    headline?: string;
+    tldr?: string[];
+    overall_rating?: 'stark' | 'solide' | 'gemischt' | 'kritisch' | string;
+  };
+  highlights?: StreamReportV2Item[];
+  problems?: StreamReportV2Item[];
+  chat_analysis?: {
+    main_topics?: string[];
+    hype_moments?: string[];
+    questions_or_confusion?: string[];
+    sentiment?: string;
+  };
+  audience_analysis?: {
+    retention?: string;
+    new_vs_returning?: string;
+    lurker_notes?: string;
+  };
+  comparison?: {
+    better_than_usual?: string[];
+    worse_than_usual?: string[];
+    notable_changes?: string[];
+  };
+  recommendations?: StreamReportV2Recommendation[];
+  admin_notes?: string[];
+}
+
 export interface StreamReport {
   session_id: number | null;
   model: string;
   generated_at: string;
+  started_at?: string;
+  finished_at?: string;
+  prompt_version?: string | null;
+  schema_version?: string | null;
+  report_variant?: StreamReportVariant | string;
   status: 'pending' | 'done' | 'failed';
-  report: {
-    gut: StreamReportPoint[];
-    schlecht: StreamReportPoint[];
-    veraenderungen: StreamReportChange[];
-    empfehlungen: StreamReportRecommendation[];
-  } | null;
+  report: LegacyStreamReportBody | StreamReportV2Body | null;
   word_groups: StreamReportWordGroup[];
   error?: string | null;
+  empty?: boolean;
+}
+
+export interface StreamReportABResponse {
+  streamer: string;
+  variant: 'ab';
+  reports: Partial<Record<StreamReportVariant, StreamReport>>;
   empty?: boolean;
 }

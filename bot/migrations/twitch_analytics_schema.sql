@@ -854,21 +854,45 @@ CREATE TABLE IF NOT EXISTS twitch_chat_word_groups (
 
 -- Post-Stream: vollständiger KI-Analysebericht
 CREATE TABLE IF NOT EXISTS twitch_stream_ai_reports (
-    id               BIGSERIAL PRIMARY KEY,
-    session_id       BIGINT NOT NULL REFERENCES twitch_stream_sessions(id),
-    streamer_login   TEXT NOT NULL,
-    model            TEXT NOT NULL,
-    generated_at     TIMESTAMPTZ DEFAULT NOW(),
-    status           TEXT DEFAULT 'pending',
-    report_json      JSONB,
-    word_groups_json JSONB,
-    error            TEXT
+    id                  BIGSERIAL PRIMARY KEY,
+    session_id          BIGINT NOT NULL REFERENCES twitch_stream_sessions(id),
+    streamer_login      TEXT NOT NULL,
+    model               TEXT NOT NULL,
+    generated_at        TIMESTAMPTZ DEFAULT NOW(),
+    status              TEXT DEFAULT 'pending',
+    schema_version      TEXT DEFAULT 'post_stream_report_v1',
+    report_variant      TEXT DEFAULT 'compact',
+    input_snapshot_json JSONB,
+    prompt_version      TEXT,
+    started_at          TIMESTAMPTZ DEFAULT NOW(),
+    finished_at         TIMESTAMPTZ,
+    retry_count         INTEGER DEFAULT 0,
+    report_json         JSONB,
+    word_groups_json    JSONB,
+    error               TEXT
 );
+
+ALTER TABLE twitch_stream_ai_reports
+    ADD COLUMN IF NOT EXISTS schema_version TEXT DEFAULT 'post_stream_report_v1';
+ALTER TABLE twitch_stream_ai_reports
+    ADD COLUMN IF NOT EXISTS report_variant TEXT DEFAULT 'compact';
+ALTER TABLE twitch_stream_ai_reports
+    ADD COLUMN IF NOT EXISTS input_snapshot_json JSONB;
+ALTER TABLE twitch_stream_ai_reports
+    ADD COLUMN IF NOT EXISTS prompt_version TEXT;
+ALTER TABLE twitch_stream_ai_reports
+    ADD COLUMN IF NOT EXISTS started_at TIMESTAMPTZ DEFAULT NOW();
+ALTER TABLE twitch_stream_ai_reports
+    ADD COLUMN IF NOT EXISTS finished_at TIMESTAMPTZ;
+ALTER TABLE twitch_stream_ai_reports
+    ADD COLUMN IF NOT EXISTS retry_count INTEGER DEFAULT 0;
 
 CREATE INDEX IF NOT EXISTS idx_stream_ai_reports_streamer
     ON twitch_stream_ai_reports (streamer_login, generated_at DESC);
 CREATE INDEX IF NOT EXISTS idx_stream_ai_reports_session
     ON twitch_stream_ai_reports (session_id);
+CREATE INDEX IF NOT EXISTS idx_stream_ai_reports_session_variant
+    ON twitch_stream_ai_reports (session_id, report_variant, generated_at DESC);
 
 -- ========= Housekeeping =========
 ANALYZE;

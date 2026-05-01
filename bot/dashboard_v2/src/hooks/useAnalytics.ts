@@ -47,6 +47,7 @@ import {
   fetchRoadmap,
   fetchAdsSchedule,
   fetchStreamReport,
+  fetchStreamReportAB,
 } from '@/api/analytics';
 import { fetchAuthStatus } from '@/api/auth';
 import { fetchBillingCatalog } from '@/api/billing';
@@ -56,7 +57,7 @@ import {
   fetchAdminAffiliateDetail,
 } from '@/api/admin';
 import { fetchAffiliatePortal } from '@/api/affiliate';
-import type { StreamReport, TimeRange, ViewerSortField, ViewerFilterType } from '@/types/analytics';
+import type { StreamReport, StreamReportABResponse, StreamReportVariant, TimeRange, ViewerSortField, ViewerFilterType } from '@/types/analytics';
 
 // Stale time: 5 minutes
 const STALE_TIME = 5 * 60 * 1000;
@@ -552,10 +553,24 @@ export function useAffiliatePortal() {
   });
 }
 
-export function useStreamReport(streamer: string | null, sessionId?: number) {
+export function useStreamReport(
+  streamer: string | null,
+  sessionId?: number,
+  variant: StreamReportVariant = 'compact'
+) {
   return useQuery<StreamReport>({
-    queryKey: ['stream-report', streamer, sessionId ?? null],
-    queryFn: () => fetchStreamReport(streamer, sessionId),
+    queryKey: ['stream-report', streamer, sessionId ?? null, variant],
+    queryFn: () => fetchStreamReport(streamer, sessionId, variant),
+    staleTime: 2 * 60 * 1000,
+    enabled: !!streamer,
+    retry: false,
+  });
+}
+
+export function useStreamReportAB(streamer: string | null, sessionId?: number) {
+  return useQuery<StreamReportABResponse>({
+    queryKey: ['stream-report-ab', streamer, sessionId ?? null],
+    queryFn: () => fetchStreamReportAB(streamer, sessionId),
     staleTime: 2 * 60 * 1000,
     enabled: !!streamer,
     retry: false,

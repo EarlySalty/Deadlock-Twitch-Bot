@@ -37,7 +37,8 @@ export type TabId =
   | 'coaching'
   | 'monetization'
   | 'experimental'
-  | 'ai';
+  | 'ai'
+  | 'reports';
 
 export const ALL_ENTITLEMENTS: EntitlementId[] = [
   'analytics.basic',
@@ -60,6 +61,7 @@ export const TAB_ENTITLEMENTS: Partial<Record<TabId, EntitlementId>> = {
   'monetization': 'analytics.extended',
   'experimental': 'analytics.extended',
   'ai': 'analytics.ai_mini',
+  'reports': 'analytics.ai_mini',
 };
 
 // Feature IDs for card-level gating within tabs

@@ -15,6 +15,7 @@ import { Category } from '@/pages/Category';
 import { Viewers } from '@/pages/Viewers';
 import { Experimental } from '@/pages/Experimental';
 import { AIAnalysis } from '@/pages/AIAnalysis';
+import { StreamReports } from '@/pages/StreamReports';
 import { TitleGenerator } from '@/pages/TitleGenerator';
 import { SessionDetail } from '@/pages/SessionDetail';
 import { InternalHomeLanding } from '@/pages/InternalHomeLanding';
@@ -144,7 +145,7 @@ function AnalyticsDashboard() {
     }
     const urlTab = params.get('tab');
     if (urlTab) {
-      const validTabs: Array<TabId | 'session-detail'> = ['overview', 'chat', 'growth', 'audience', 'viewers', 'coaching', 'compare', 'schedule', 'monetization', 'category', 'experimental', 'ai', 'title'];
+      const validTabs: Array<TabId | 'session-detail'> = ['overview', 'chat', 'growth', 'audience', 'viewers', 'coaching', 'compare', 'schedule', 'monetization', 'category', 'experimental', 'ai', 'reports', 'title'];
       if (validTabs.includes(urlTab as TabId)) {
         setActiveTab(urlTab as TabId);
       }
@@ -172,10 +173,13 @@ function AnalyticsDashboard() {
       params.delete('streamer');
     }
     params.set('days', String(days));
+    if (activeTab !== 'session-detail') {
+      params.set('tab', activeTab);
+    }
 
     const newUrl = `${window.location.pathname}?${params.toString()}`;
     window.history.replaceState({}, '', newUrl);
-  }, [streamer, days]);
+  }, [streamer, days, activeTab]);
 
   const handleSessionClick = (sessionId: number) => {
     setSelectedSessionId(sessionId);
@@ -331,6 +335,10 @@ function AnalyticsDashboard() {
 
           {activeTab === 'ai' && (
             <AIAnalysis streamer={streamer} days={days} />
+          )}
+
+          {activeTab === 'reports' && (
+            <StreamReports streamer={streamer} days={days} />
           )}
 
           {activeTab === 'title' && (

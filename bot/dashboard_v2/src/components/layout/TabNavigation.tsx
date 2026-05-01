@@ -12,6 +12,7 @@ import {
   UserSearch,
   FlaskConical,
   Brain,
+  FileText,
   Lock,
   Sparkles,
 } from 'lucide-react';
@@ -31,6 +32,7 @@ export type TabId =
   | 'category'
   | 'experimental'
   | 'ai'
+  | 'reports'
   | 'title';
 
 interface Tab {
@@ -54,6 +56,7 @@ const tabs: Tab[] = [
   { id: 'category', label: 'Kategorie', icon: Globe },
   { id: 'experimental', label: 'Labor', icon: FlaskConical, beta: true },
   { id: 'ai', label: 'KI Analyse', icon: Brain, beta: true },
+  { id: 'reports', label: 'Stream Reports', icon: FileText, beta: true },
   { id: 'title', label: 'Titel', icon: Sparkles },
 ];
 

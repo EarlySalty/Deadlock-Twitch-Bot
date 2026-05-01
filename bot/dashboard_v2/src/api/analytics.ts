@@ -28,6 +28,8 @@ import type {
   CalendarHeatmapData,
   SessionEvent,
   StreamReport,
+  StreamReportABResponse,
+  StreamReportVariant,
   StreamSession,
   TagAnalysisResponse,
   TagPerformance,
@@ -571,9 +573,19 @@ export async function fetchRoadmap(): Promise<RoadmapData> {
 
 export async function fetchStreamReport(
   streamer: string | null,
-  sessionId?: number
+  sessionId?: number,
+  variant: StreamReportVariant = 'compact'
 ): Promise<StreamReport> {
-  const params: Record<string, string | number> = { streamer: streamer || '' };
+  const params: Record<string, string | number> = { streamer: streamer || '', variant };
   if (sessionId != null) params.session_id = sessionId;
   return fetchApi<StreamReport>('/stream-report', params);
+}
+
+export async function fetchStreamReportAB(
+  streamer: string | null,
+  sessionId?: number
+): Promise<StreamReportABResponse> {
+  const params: Record<string, string | number> = { streamer: streamer || '', variant: 'ab' };
+  if (sessionId != null) params.session_id = sessionId;
+  return fetchApi<StreamReportABResponse>('/stream-report', params);
 }
