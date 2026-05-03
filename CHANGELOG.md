@@ -1,3 +1,9 @@
+## #25 — Security-Deep-Scan verschlankt, kein Sicherheitsverlust
+
+- Python-Security-, JavaScript-Security- und Semgrep-Scans aus dem Deep-Scan entfernt — diese laufen bereits täglich in der Security-Fortress
+- Deep-Scan fokussiert sich jetzt auf Trivy-Filesystem-Scan und OSSF-Scorecard — beides hat keinen Doppelläufer
+- Weniger doppelte CI-Minuten, gleiche Abdeckung
+
 ## #24 — CI-Laufzeiten optimiert, kein Sicherheitsverlust
 
 - Security-Scans (Container, IaC, Supply-Chain) laufen jetzt wöchentlich statt täglich — Schutz bleibt vollständig durch Push-/PR-Trigger
