@@ -328,6 +328,29 @@ def _ensure_report_ab_columns(conn: Any) -> None:
         )
         """
     )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS twitch_stream_report_ab_votes (
+            id              BIGSERIAL PRIMARY KEY,
+            session_id      BIGINT NOT NULL,
+            streamer_login  TEXT NOT NULL,
+            winner          TEXT NOT NULL CHECK (winner IN ('compact', 'full', 'gleich')),
+            comment         TEXT,
+            voted_by        TEXT NOT NULL,
+            created_at      TIMESTAMPTZ DEFAULT NOW(),
+            updated_at      TIMESTAMPTZ DEFAULT NOW(),
+            UNIQUE (session_id, voted_by)
+        )
+        """
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_ab_votes_session "
+        "ON twitch_stream_report_ab_votes (session_id)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_ab_votes_streamer "
+        "ON twitch_stream_report_ab_votes (streamer_login)"
+    )
 
 
 async def _generate_report_v2(
@@ -1242,3 +1265,99 @@ class _AnalyticsPostStreamMixin:
         except Exception:
             log.exception("PostStream Rating: Speichern fehlgeschlagen")
             return web.json_response({"error": "Bewertung konnte nicht gespeichert werden"}, status=500)
+
+    async def _api_v2_stream_report_ab_vote(self, request: web.Request) -> web.Response:
+        self._require_v2_auth(request)
+
+        if request.method == "GET":
+            streamer = str(request.rel_url.query.get("streamer") or "").strip().lower()
+            session_id_raw = str(request.rel_url.query.get("session_id") or "").strip()
+            if not streamer or not session_id_raw.isdigit():
+                return web.json_response({"error": "streamer und session_id erforderlich"}, status=400)
+            session_id = int(session_id_raw)
+            dashboard_session = self._get_dashboard_session(request) or {}
+            voted_by = str(dashboard_session.get("twitch_login") or "").strip().lower()
+            try:
+                with storage.transaction() as conn:
+                    _ensure_report_ab_columns(conn)
+                with storage.readonly_connection() as conn:
+                    # Eigene Stimme
+                    own_row = None
+                    if voted_by:
+                        own_row = conn.execute(
+                            "SELECT winner, comment, updated_at FROM twitch_stream_report_ab_votes "
+                            "WHERE session_id = %s AND voted_by = %s LIMIT 1",
+                            (session_id, voted_by),
+                        ).fetchone()
+                    # Aggregat
+                    agg_rows = conn.execute(
+                        "SELECT winner, COUNT(*) AS n FROM twitch_stream_report_ab_votes "
+                        "WHERE session_id = %s GROUP BY winner",
+                        (session_id,),
+                    ).fetchall()
+                agg: dict[str, int] = {"compact": 0, "full": 0, "gleich": 0}
+                for r in agg_rows:
+                    key = str(r["winner"] if hasattr(r, "keys") else r[0])
+                    agg[key] = int(r["n"] if hasattr(r, "keys") else r[1])
+                own: dict | None = None
+                if own_row:
+                    own = {
+                        "winner": own_row["winner"] if hasattr(own_row, "keys") else own_row[0],
+                        "comment": own_row["comment"] if hasattr(own_row, "keys") else own_row[1],
+                        "updated_at": str(own_row["updated_at"] if hasattr(own_row, "keys") else own_row[2]),
+                    }
+                return web.json_response({"session_id": session_id, "own_vote": own, "totals": agg})
+            except Exception:
+                log.exception("PostStream AB-Vote GET: Fehlgeschlagen fuer Session %d", session_id)
+                return web.json_response({"error": "Abstimmung konnte nicht geladen werden"}, status=500)
+
+        # POST
+        try:
+            body = await request.json()
+        except Exception:
+            return web.json_response({"error": "invalid JSON"}, status=400)
+
+        session_id_raw = str(body.get("session_id") or "").strip()
+        streamer = str(body.get("streamer") or "").strip().lower()
+        winner = str(body.get("winner") or "").strip().lower()
+        comment = str(body.get("comment") or "").strip()[:500]
+
+        if not session_id_raw.isdigit() or not streamer:
+            return web.json_response({"error": "session_id und streamer erforderlich"}, status=400)
+        if winner not in ("compact", "full", "gleich"):
+            return web.json_response({"error": "winner muss 'compact', 'full' oder 'gleich' sein"}, status=400)
+
+        session_id = int(session_id_raw)
+        dashboard_session = self._get_dashboard_session(request) or {}
+        auth_level = self._get_auth_level(request)
+        voted_by = str(dashboard_session.get("twitch_login") or auth_level or "unknown").strip().lower()
+
+        try:
+            with storage.transaction() as conn:
+                _ensure_report_ab_columns(conn)
+                conn.execute(
+                    """
+                    INSERT INTO twitch_stream_report_ab_votes
+                        (session_id, streamer_login, winner, comment, voted_by, updated_at)
+                    VALUES (%s, %s, %s, %s, %s, NOW())
+                    ON CONFLICT (session_id, voted_by)
+                    DO UPDATE SET winner = EXCLUDED.winner,
+                                  comment = EXCLUDED.comment,
+                                  updated_at = NOW()
+                    """,
+                    (session_id, streamer, winner, comment or None, voted_by),
+                )
+                agg_rows = conn.execute(
+                    "SELECT winner, COUNT(*) AS n FROM twitch_stream_report_ab_votes "
+                    "WHERE session_id = %s GROUP BY winner",
+                    (session_id,),
+                ).fetchall()
+            agg: dict[str, int] = {"compact": 0, "full": 0, "gleich": 0}
+            for r in agg_rows:
+                key = str(r["winner"] if hasattr(r, "keys") else r[0])
+                agg[key] = int(r["n"] if hasattr(r, "keys") else r[1])
+            log.info("PostStream AB-Vote: %s → '%s' fuer Session %d", voted_by, winner, session_id)
+            return web.json_response({"ok": True, "winner": winner, "totals": agg})
+        except Exception:
+            log.exception("PostStream AB-Vote POST: Speichern fehlgeschlagen")
+            return web.json_response({"error": "Abstimmung konnte nicht gespeichert werden"}, status=500)

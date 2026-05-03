@@ -1,6 +1,7 @@
 import * as React from 'react';
 import {
   AlertCircle,
+  BarChart2,
   CheckCircle2,
   FileText,
   Loader2,
@@ -14,7 +15,7 @@ import {
   Zap,
   type LucideIcon,
 } from 'lucide-react';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { fetchOverview } from '@/api/analytics';
 import { buildApiUrl, withCookieCredentials } from '@/api/core';
 import { usePlan } from '@/context/PlanContext';
@@ -34,9 +35,15 @@ interface StreamReportsProps {
   days: TimeRange;
 }
 
+interface ABVote {
+  own_vote: { winner: 'compact' | 'full' | 'gleich'; comment?: string; updated_at?: string } | null;
+  totals: { compact: number; full: number; gleich: number };
+}
+
 type SnapshotRating = StreamReportV3Body['snapshot']['bewertung'];
 type MomentType = StreamReportV3Body['momente'][number]['typ'];
 type RatingValue = StreamReportRating['rating'];
+type ABVoteWinner = NonNullable<ABVote['own_vote']>['winner'];
 
 const SNAPSHOT_TONES: Record<
   SnapshotRating,
@@ -121,6 +128,32 @@ const RATING_OPTIONS: Array<{
   },
 ];
 
+const AB_VOTE_OPTIONS: Array<{
+  value: ABVoteWinner;
+  label: string;
+  activeClass: string;
+  idleClass: string;
+}> = [
+  {
+    value: 'compact',
+    label: '← A ist besser',
+    activeClass: 'border-cyan-400/40 bg-cyan-500/15 text-cyan-200',
+    idleClass: 'border-border bg-white/5 text-text-secondary hover:border-cyan-400/25 hover:text-white',
+  },
+  {
+    value: 'gleich',
+    label: 'Gleich gut',
+    activeClass: 'border-white/20 bg-white/10 text-white',
+    idleClass: 'border-border bg-white/5 text-text-secondary hover:border-white/20 hover:text-white',
+  },
+  {
+    value: 'full',
+    label: 'B ist besser →',
+    activeClass: 'border-orange-400/40 bg-orange-500/15 text-orange-200',
+    idleClass: 'border-border bg-white/5 text-text-secondary hover:border-orange-400/25 hover:text-white',
+  },
+];
+
 function isV3(report: StreamReport['report']): report is StreamReportV3Body {
   return !!report && 'snapshot' in report && 'momente' in report;
 }
@@ -175,6 +208,24 @@ async function readMutationError(response: Response): Promise<string> {
   } catch {
     return `Server-Fehler (HTTP ${response.status})`;
   }
+}
+
+function useABVote(streamer: string | null, sessionId?: number) {
+  return useQuery<ABVote>({
+    queryKey: ['stream-report-ab-vote', streamer, sessionId ?? null],
+    queryFn: async () => {
+      const url = buildApiUrl('/stream-report/ab-vote', {
+        streamer: streamer || '',
+        session_id: sessionId!,
+      });
+      const res = await fetch(url, { credentials: 'same-origin' });
+      if (!res.ok) throw new Error('Abstimmung konnte nicht geladen werden');
+      return res.json();
+    },
+    staleTime: 60 * 1000,
+    enabled: !!streamer && !!sessionId,
+    retry: false,
+  });
 }
 
 function VariantBadge({ variant }: { variant: StreamReportVariant }) {
@@ -779,6 +830,263 @@ function RatingBar({
   );
 }
 
+function ABVoteSection({
+  streamer,
+  sessionId,
+}: {
+  streamer: string | null;
+  sessionId: number;
+}) {
+  const queryClient = useQueryClient();
+  const { data, isLoading, error } = useABVote(streamer, sessionId);
+  const [pendingWinner, setPendingWinner] = React.useState<ABVoteWinner | null>(null);
+  const [pendingComment, setPendingComment] = React.useState('');
+  const [saving, setSaving] = React.useState(false);
+  const [saved, setSaved] = React.useState(false);
+  const [saveError, setSaveError] = React.useState<string | null>(null);
+
+  React.useEffect(() => {
+    setPendingWinner(data?.own_vote?.winner ?? null);
+    setPendingComment(data?.own_vote?.comment ?? '');
+    setSaving(false);
+    setSaved(false);
+    setSaveError(null);
+  }, [sessionId, data?.own_vote?.winner, data?.own_vote?.comment, data?.own_vote?.updated_at]);
+
+  React.useEffect(() => {
+    if (!saved) return undefined;
+    const timeoutId = window.setTimeout(() => setSaved(false), 2000);
+    return () => window.clearTimeout(timeoutId);
+  }, [saved]);
+
+  const currentVote = data?.own_vote;
+  const trimmedComment = pendingComment.trim();
+  const totals = data?.totals ?? { compact: 0, full: 0, gleich: 0 };
+  const totalVotes = totals.compact + totals.full + totals.gleich;
+  const compactPercent = totalVotes > 0 ? (totals.compact / totalVotes) * 100 : 0;
+  const gleichPercent = totalVotes > 0 ? (totals.gleich / totalVotes) * 100 : 0;
+  const fullPercent = totalVotes > 0 ? (totals.full / totalVotes) * 100 : 0;
+  const canSave =
+    !!streamer &&
+    !!sessionId &&
+    !!pendingWinner &&
+    !saving &&
+    (pendingWinner !== currentVote?.winner || trimmedComment !== (currentVote?.comment ?? ''));
+
+  const handleSelect = (winner: ABVoteWinner) => {
+    setPendingWinner(winner);
+    setSaved(false);
+    setSaveError(null);
+  };
+
+  const handleSave = async () => {
+    if (!streamer || !sessionId || !pendingWinner) return;
+
+    const savedAt = new Date().toISOString();
+    setSaving(true);
+    setSaved(false);
+    setSaveError(null);
+
+    try {
+      const response = await fetch(
+        buildApiUrl('/stream-report/ab-vote'),
+        withCookieCredentials({
+          method: 'POST',
+          headers: {
+            Accept: 'application/json',
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            session_id: sessionId,
+            streamer,
+            winner: pendingWinner,
+            comment: trimmedComment || undefined,
+          }),
+        })
+      );
+
+      if (!response.ok) {
+        throw new Error(await readMutationError(response));
+      }
+
+      const payload = (await response.json()) as
+        | {
+            ok?: boolean;
+            winner?: ABVoteWinner;
+            totals?: ABVote['totals'];
+          }
+        | null;
+
+      queryClient.setQueryData<ABVote>(['stream-report-ab-vote', streamer, sessionId], {
+        own_vote: {
+          winner: payload?.winner || pendingWinner,
+          comment: trimmedComment || undefined,
+          updated_at: savedAt,
+        },
+        totals: payload?.totals ?? totals,
+      });
+      void queryClient.invalidateQueries({ queryKey: ['stream-report-ab-vote', streamer, sessionId] });
+      setSaved(true);
+    } catch (saveErr) {
+      setSaveError(saveErr instanceof Error ? saveErr.message : 'Abstimmung konnte nicht gespeichert werden.');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  if (isLoading) {
+    return (
+      <section className="panel-card rounded-2xl p-5">
+        <div className="flex items-start gap-3">
+          <div className="mt-0.5 rounded-xl border border-white/10 bg-white/5 p-2">
+            <BarChart2 className="h-5 w-5 text-text-secondary" />
+          </div>
+          <div className="min-w-0 flex-1">
+            <div className="h-4 w-32 animate-pulse rounded bg-white/10" />
+            <div className="mt-2 h-3 w-full max-w-2xl animate-pulse rounded bg-white/5" />
+          </div>
+        </div>
+        <div className="mt-4 flex items-center gap-2 text-sm text-text-secondary">
+          <Loader2 className="h-4 w-4 animate-spin text-accent" />
+          Lade Abstimmung...
+        </div>
+      </section>
+    );
+  }
+
+  if (error) {
+    return (
+      <section className="panel-card rounded-2xl border border-error/20 bg-error/5 p-5">
+        <div className="flex items-start gap-3">
+          <div className="mt-0.5 rounded-xl border border-error/20 bg-error/10 p-2">
+            <BarChart2 className="h-5 w-5 text-error" />
+          </div>
+          <div>
+            <h2 className="text-lg font-bold text-white">A/B Auswertung</h2>
+            <p className="mt-1 text-sm text-error">Abstimmung konnte nicht geladen werden.</p>
+          </div>
+        </div>
+      </section>
+    );
+  }
+
+  return (
+    <section className="panel-card rounded-2xl p-5">
+      <div className="flex items-start gap-3">
+        <div className="mt-0.5 rounded-xl border border-white/10 bg-white/5 p-2">
+          <BarChart2 className="h-5 w-5 text-cyan-200" />
+        </div>
+        <div>
+          <h2 className="text-lg font-bold text-white">A/B Auswertung</h2>
+          <p className="mt-1 text-sm text-text-secondary">
+            Welcher Report war für diese Session hilfreicher? Deine Stimme bestimmt, welche Variante wir langfristig
+            behalten.
+          </p>
+        </div>
+      </div>
+
+      <div className="mt-4 grid gap-2 md:grid-cols-3">
+        {AB_VOTE_OPTIONS.map((option) => {
+          const isActive = pendingWinner === option.value;
+          return (
+            <button
+              key={option.value}
+              type="button"
+              disabled={saving}
+              onClick={() => handleSelect(option.value)}
+              className={`rounded-xl border px-4 py-3 text-sm font-semibold transition-colors disabled:cursor-not-allowed disabled:opacity-60 ${
+                isActive ? option.activeClass : option.idleClass
+              }`}
+            >
+              {option.label}
+            </button>
+          );
+        })}
+      </div>
+
+      {pendingWinner && (
+        <div className="mt-4 space-y-3">
+          <textarea
+            value={pendingComment}
+            disabled={saving}
+            onChange={(event) => {
+              setPendingComment(event.target.value);
+              setSaved(false);
+              setSaveError(null);
+            }}
+            rows={3}
+            placeholder="Optional: Was hat diesen Report besser gemacht?"
+            className="w-full rounded-xl border border-border bg-white/5 px-3 py-2 text-sm text-white placeholder:text-text-secondary/60 focus:border-primary/50 focus:outline-none disabled:cursor-not-allowed disabled:opacity-60"
+          />
+
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div className="flex items-center gap-3 text-xs">
+              {saved && (
+                <span className="inline-flex items-center gap-1 text-green-300">
+                  <CheckCircle2 className="h-4 w-4" />
+                  Gespeichert
+                </span>
+              )}
+              {currentVote?.updated_at && !saved && (
+                <span className="text-text-secondary">Letzte Stimme: {formatDate(currentVote.updated_at)}</span>
+              )}
+              {saveError && <span className="text-red-300">{saveError}</span>}
+            </div>
+
+            <button
+              type="button"
+              disabled={!canSave}
+              onClick={() => void handleSave()}
+              className="inline-flex items-center gap-2 rounded-xl border border-primary/30 bg-primary/15 px-3 py-2 text-sm font-semibold text-white transition-colors hover:border-primary/50 hover:bg-primary/20 disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
+              Abstimmen
+            </button>
+          </div>
+        </div>
+      )}
+
+      <div className="mt-4 space-y-3 border-t border-border pt-4">
+        {totalVotes === 0 && !currentVote ? (
+          <p className="text-sm text-text-secondary">Noch keine Stimmen</p>
+        ) : (
+          <>
+            <div className="flex flex-wrap items-center gap-2 text-xs">
+              <span className="rounded-full border border-cyan-400/25 bg-cyan-500/10 px-2.5 py-1 text-cyan-100">
+                A: {totals.compact} Stimmen
+              </span>
+              <span className="rounded-full border border-white/15 bg-white/10 px-2.5 py-1 text-white/80">
+                Gleich: {totals.gleich} Stimmen
+              </span>
+              <span className="rounded-full border border-orange-400/25 bg-orange-500/10 px-2.5 py-1 text-orange-100">
+                B: {totals.full} Stimmen
+              </span>
+              <span className="text-text-secondary">Insgesamt {totalVotes}</span>
+            </div>
+
+            {totalVotes > 0 && (
+              <div className="space-y-2">
+                <div className="h-2.5 overflow-hidden rounded-full border border-white/10 bg-white/5">
+                  <div className="flex h-full w-full">
+                    <div className="bg-cyan-400/80" style={{ width: `${compactPercent}%` }} />
+                    <div className="bg-white/40" style={{ width: `${gleichPercent}%` }} />
+                    <div className="bg-orange-400/80" style={{ width: `${fullPercent}%` }} />
+                  </div>
+                </div>
+                <div className="flex flex-wrap items-center gap-3 text-[11px] text-text-secondary">
+                  <span>A {compactPercent.toFixed(0)}%</span>
+                  <span>Gleich {gleichPercent.toFixed(0)}%</span>
+                  <span>B {fullPercent.toFixed(0)}%</span>
+                </div>
+              </div>
+            )}
+          </>
+        )}
+      </div>
+    </section>
+  );
+}
+
 function ReportColumn({
   streamer,
   sessionId,
@@ -943,6 +1251,8 @@ export function StreamReports({ streamer, days }: StreamReportsProps) {
             <ReportColumn streamer={streamer} sessionId={selectedSessionId} variant="compact" />
             <ReportColumn streamer={streamer} sessionId={selectedSessionId} variant="full" />
           </div>
+
+          {selectedSessionId && <ABVoteSection streamer={streamer} sessionId={selectedSessionId} />}
         </>
       )}
     </div>

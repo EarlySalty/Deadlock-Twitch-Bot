@@ -1,3 +1,15 @@
+## StreamReports A/B-Vote UI
+
+- 2026-05-01: Aufgabe aufgenommen. Bestehende `StreamReports.tsx`, Query-/Mutation-Muster und Render-Position unterhalb des A/B-Report-Grids geprüft.
+- 2026-05-01: In `bot/dashboard_v2/src/pages/StreamReports.tsx` A/B-Abstimmungssektion mit Inline-`useABVote`, Vote-POST, lokalem Kommentar-/Save-State, Totals/Pills/Prozentbalken und Query-Invalidation ergänzt.
+- 2026-05-01: Verifikation erfolgreich: `cd bot/dashboard_v2 && npx tsc --noEmit`.
+
+## StreamReports Frontend - neues Schema + Rating-System
+
+- 2026-05-01: Aufgabe aufgenommen. Bestehende Stream-Report-Seite, Analytics-Typen, API-Helpers und Mutation-Patterns geprüft; Ziel auf V3-Schema plus Rating-Bar pro Report-Spalte festgezogen.
+- 2026-05-01: `bot/dashboard_v2/src/types/analytics.ts` um StreamReport-V3-Typen und `rating` erweitert; `bot/dashboard_v2/src/pages/StreamReports.tsx` komplett auf V3-Rendering, Legacy-Fallbacks und lokalen Rating-POST (`/stream-report/rate`) mit Optimistic-Update umgebaut.
+- 2026-05-01: Verifikation erfolgreich: `cd bot/dashboard_v2 && npx tsc --noEmit`.
+
 ## Highlight Clipper Modul
 
 - 2026-04-29: Aufgabe aufgenommen. Runtime-/Cog-Lifecycle, Secret-Loading und bestehende Worker-Muster im Bot geprüft.
