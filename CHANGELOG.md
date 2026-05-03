@@ -1,3 +1,9 @@
+## #24 — CI-Laufzeiten optimiert, kein Sicherheitsverlust
+
+- Security-Scans (Container, IaC, Supply-Chain) laufen jetzt wöchentlich statt täglich — Schutz bleibt vollständig durch Push-/PR-Trigger
+- Security-Incident-Automation läuft jetzt täglich statt alle 6 Stunden — 75 % weniger Runs
+- Dependency-Review hat keinen sinnlosen Tages-Schedule mehr
+
 ## #23 — CI-Artifacts werden nach 30 Tagen automatisch gelöscht
 
 - Alle automatisch erzeugten CI-Berichte (Security-Scans, Dependency-Reports, Logs) werden ab jetzt nach 30 Tagen automatisch von GitHub entfernt

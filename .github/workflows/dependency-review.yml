@@ -6,8 +6,6 @@ on:
     types: [checks_requested]
   push:
     branches: [ main, master, develop ]
-  schedule:
-    - cron: '0 3 * * *'
   workflow_dispatch:
 
 permissions:
