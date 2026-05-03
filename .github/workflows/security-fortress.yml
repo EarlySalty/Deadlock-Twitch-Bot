@@ -150,6 +150,7 @@ jobs:
           name: bandit-report
           path: bandit-report.json
           if-no-files-found: ignore
+          retention-days: 30
 
       - name: Upload Bandit SARIF
         if: always() && steps.detect_py.outputs.has_python == 'true' && hashFiles('bandit.sarif') != ''

@@ -193,3 +193,4 @@ jobs:
           name: dependency-reports
           path: dependency-reports/
           if-no-files-found: ignore
+          retention-days: 30

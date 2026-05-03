@@ -200,6 +200,7 @@ jobs:
             vulture-report.txt
             dodgy-report.txt
           if-no-files-found: ignore
+          retention-days: 30
 
   javascript-security:
     name: 📦 JavaScript/TypeScript Security
@@ -359,6 +360,7 @@ jobs:
             eslint-security.json
             snyk-report.json
           if-no-files-found: ignore
+          retention-days: 30
 
   semgrep-sast:
     name: 🔍 Semgrep OSS SAST
@@ -451,6 +453,7 @@ jobs:
             semgrep.sarif
             semgrep-custom.sarif
           if-no-files-found: ignore
+          retention-days: 30
 
   trivy-scan:
     name: 🛡️ Trivy Security Scan
@@ -486,6 +489,7 @@ jobs:
           name: trivy-report
           path: trivy-fs.sarif
           if-no-files-found: ignore
+          retention-days: 30
 
   security-scorecard:
     name: 🏆 OSSF Security Scorecard
@@ -522,6 +526,7 @@ jobs:
           name: scorecard-report
           path: scorecard-results.sarif
           if-no-files-found: ignore
+          retention-days: 30
 
   generate-summary:
     name: 📋 Generate Summary

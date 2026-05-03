@@ -1,3 +1,8 @@
+## #23 — CI-Artifacts werden nach 30 Tagen automatisch gelöscht
+
+- Alle automatisch erzeugten CI-Berichte (Security-Scans, Dependency-Reports, Logs) werden ab jetzt nach 30 Tagen automatisch von GitHub entfernt
+- Verhindert, dass sich der GitHub-Actions-Speicher dauerhaft volläuft
+
 # Changelog
 
 ## #22 — Werbung sensibler für neue Zuschauer + Viewer-Trigger auch bei Normalzahlen
