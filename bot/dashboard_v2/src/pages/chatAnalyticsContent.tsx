@@ -33,6 +33,7 @@ const CHART_TOOLTIP_STYLE = {
 } as const;
 
 export interface ChatAnalyticsContentProps {
+  streamer: string;
   data: ChatAnalyticsType;
   days: TimeRange;
   model: ChatAnalyticsViewModel;
@@ -46,6 +47,7 @@ export interface ChatAnalyticsContentProps {
 }
 
 export function ChatAnalyticsContent({
+  streamer,
   data,
   days,
   model,
@@ -334,9 +336,9 @@ export function ChatAnalyticsContent({
       </PlanGateCard>
 
       <PlanGateCard featureId="chat_content_analysis" title="KI Chat-Analyse">
-        <ChatMinimaxDeepSection 
-          streamer={data.streamer}
-          sessionId={selectedSessionId || (hypeData && hypeData.sessionId)} 
+        <ChatMinimaxDeepSection
+          streamer={streamer}
+          sessionId={selectedSessionId || (hypeData && hypeData.sessionId)}
         />
       </PlanGateCard>
 

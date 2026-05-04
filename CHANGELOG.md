@@ -1,3 +1,10 @@
+## #26 — KI Chat-Analyse (MiniMax Deep) funktioniert jetzt
+
+- "Analyse starten"-Button im Chat-Analytics-Dashboard war kaputt — der Backend-Endpoint crashte sofort
+- Ursache: fehlendes `import json` im Backend-Modul
+- Zusätzlich: TypeScript-Buildfehler behoben (fehlende `streamer`-Prop und Typcast im Donut-Chart)
+- Dashboard neu gebaut und Bot neu gestartet
+
 ## #25 — Security-Deep-Scan verschlankt, kein Sicherheitsverlust
 
 - Python-Security-, JavaScript-Security- und Semgrep-Scans aus dem Deep-Scan entfernt — diese laufen bereits täglich in der Security-Fortress

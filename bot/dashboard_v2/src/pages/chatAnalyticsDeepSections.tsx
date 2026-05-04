@@ -625,7 +625,7 @@ export function ChatMinimaxDeepSection({
   const topicTotal = topicEntries.reduce((sum, [, v]) => sum + (v as number), 0);
   const donutData = topicEntries.map(([key, value]) => ({
     name: TOPIC_LABELS[key] || key,
-    value,
+    value: value as number,
     color: TOPIC_COLORS[key.toLowerCase()] || '#6b7280',
   }));
 

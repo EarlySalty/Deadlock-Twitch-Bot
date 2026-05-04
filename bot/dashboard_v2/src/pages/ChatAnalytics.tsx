@@ -55,6 +55,7 @@ export function ChatAnalytics({ streamer, days }: ChatAnalyticsProps) {
 
   return (
     <ChatAnalyticsContent
+      streamer={streamer}
       data={data}
       days={days}
       model={model}
