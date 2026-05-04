@@ -230,7 +230,7 @@ class DashboardAdminAnnouncementMixin:
 
         flash_ok = str(request.query.get("ok") or "").strip()
         flash_err = str(request.query.get("err") or "").strip()
-        csrf_token = self._csrf_generate_token(request)
+        csrf_token = self._csrf_ensure_token(request)
 
         with _storage.readonly_connection() as conn:
             config = load_global_promo_mode(conn)

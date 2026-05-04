@@ -670,95 +670,90 @@ class AnalyticsV2Mixin(
         if content.startswith("!"):
             return "Command"
 
+        # Hype / Emotes
         if any(
             w in content_lower
             for w in [
-                "hi",
-                "hello",
-                "hey",
-                "moin",
-                "nabend",
-                "guten",
-                "welcome",
-                "hallo",
+                "pog", "poggers", "pogchamp", "hype", "letsgo", "lets go", "lfg",
+                "omg", "wow", "krass", "geil", "banger", "insane", "crazy",
+                "gg", "wp", "ggs", "ez", "clutch",
+            ]
+        ):
+            return "Hype"
+
+        # Greeting
+        if any(
+            w in content_lower
+            for w in [
+                "hi", "hello", "hey", "moin", "nabend", "guten", "welcome", "hallo",
+                "servus", "moinmoin", "ciao", "bye", "tschüss",
             ]
         ):
             return "Greeting"
 
+        # Question
         if "?" in content or any(
             w in content_lower
             for w in [
-                "was",
-                "wo",
-                "wer",
-                "wie",
-                "wann",
-                "why",
-                "how",
-                "warum",
-                "weshalb",
+                "was", "wo", "wer", "wie", "wann", "why", "how", "warum", "weshalb",
+                "wie geht", "kann man", "darf man",
             ]
         ):
             return "Question"
 
+        # Feedback / Opinion
         if any(
             w in content_lower
             for w in [
-                "lol",
-                "lmao",
-                "haha",
-                "gg",
-                "pog",
-                "lul",
-                "kek",
-                "xd",
-                ":)",
-                ":d",
-                "f",
-                "o7",
-                "wow",
-                "omg",
+                "gut gemacht", "nice play", "stark", "schlecht", "fehler", "bug",
+                "langweilig", "spannend", "lustig", "witzig", "gefällt", "liebe",
+            ]
+        ):
+            return "Feedback"
+
+        # Technical
+        if any(
+            w in content_lower
+            for w in [
+                "lag", "fps", "sound", "audio", "mic", "ton", "bild", "standbild",
+                "leise", "laut", "verzögerung", "delay",
+            ]
+        ):
+            return "Technical"
+
+        # Social / Engagement
+        if any(
+            w in content_lower
+            for w in [
+                "follow", "sub", "prime", "raid", "host", "danke", "thanks", "thx",
+                "discord", "social", "insta", "twitter", "yt", "youtube", "clip",
+            ]
+        ):
+            return "Social"
+
+        # Reaction (Laughter / Short)
+        if any(
+            w in content_lower
+            for w in [
+                "lol", "lmao", "haha", "lul", "kek", "xd", ":)", ":d", "f", "o7",
+                "rofl", "hehe", "huhu",
             ]
         ):
             return "Reaction"
 
+        # Game-Related (Deadlock specific)
         if any(
             w in content_lower
             for w in [
-                "deadlock",
-                "hero",
-                "build",
-                "skill",
-                "rank",
-                "elo",
-                "match",
-                "play",
-                "game",
-                "win",
-                "lose",
-                "mmr",
-                "lane",
-                "ult",
+                "deadlock", "hero", "build", "skill", "rank", "elo", "match", "play",
+                "game", "win", "lose", "mmr", "lane", "ult", "item", "soul", "orb",
+                "patron", "mid boss", "guardian", "walker", "urn", "shrine",
+                "abrams", "bebop", "dynamo", "grey talon", "haze", "infernus", "ivy",
+                "kelvin", "lady geist", "lash", "mcginnis", "mirage", "pocket",
+                "seven", "shiv", "vindicta", "viscous", "warden", "wraith", "yamato",
             ]
         ):
             return "Game-Related"
-
-        if any(
-            w in content_lower
-            for w in [
-                "follow",
-                "sub",
-                "prime",
-                "raid",
-                "host",
-                "danke",
-                "thanks",
-                "thx",
-                "discord",
-                "social",
-            ]
-        ):
-            return "Engagement"
 
         return "Other"
 

@@ -305,7 +305,7 @@ async def abbo_invoices(handler: Any, request: web.Request) -> web.StreamRespons
         if handler._is_discord_admin_request(request)
         else "/twitch/auth/logout"
     )
-    csrf_token = handler._csrf_generate_token(request)
+    csrf_token = handler._csrf_ensure_token(request)
     cancel_form_html = (
         "<form method='post' action='/twitch/abbo/kündigen' style='margin:0;'>"
         f"<input type='hidden' name='csrf_token' value='{html.escape(csrf_token, quote=True)}'>"

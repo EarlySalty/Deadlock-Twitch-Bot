@@ -66,12 +66,26 @@ const PERSONALITY_LABELS: Record<string, string> = {
   'Greeting': 'Willkommener',
   'Question': 'Fragesteller',
   'Reaction': 'Reactor',
+  'Hype': 'Hype-Leader',
   'Game-Related': 'Game-Diskutierer',
-  'Engagement': 'Engagierter',
+  'Feedback': 'Kritiker/Lobender',
+  'Technical': 'Technik-Check',
+  'Social': 'Socializer',
   'Other': 'Allrounder',
 };
 
-const PERSONALITY_COLORS = ['#3b82f6', '#22c55e', '#f59e0b', '#8b5cf6', '#ef4444', '#06b6d4', '#6b7280'];
+const PERSONALITY_COLORS = [
+  '#3b82f6', // Command
+  '#22c55e', // Greeting
+  '#f59e0b', // Question
+  '#8b5cf6', // Reaction
+  '#ec4899', // Hype
+  '#ef4444', // Game-Related
+  '#10b981', // Feedback
+  '#f97316', // Technical
+  '#06b6d4', // Social
+  '#6b7280', // Other
+];
 
 function formatNumber(n: number): string {
   return n.toLocaleString('de-DE');

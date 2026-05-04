@@ -17,9 +17,11 @@ from aiohttp import web
 
 from ..core.chat_bots import build_known_chat_bot_not_in_clause
 from ..storage import pg as storage
+from ..social_media.settings import external_llm_consent
 from .chat_social_graph_loader import load_chat_social_graph_payload
 from .error_utils import analytics_internal_error_response
 from .raw_chat_status import build_raw_chat_status
+from .api_ai import _get_minimax_client, MINIMAX_MODEL, _extract_json_array
 
 log = logging.getLogger("TwitchStreams.AnalyticsV2")
 
@@ -998,3 +1000,99 @@ class _AnalyticsChatDeepMixin:
         except Exception as exc:
             log.exception("Error in chat-social-graph API")
             return analytics_internal_error_response()
+
+    async def _api_v2_chat_minimax_deep(self, request: web.Request) -> web.Response:
+        """Deep chat analysis using MiniMax (LLM) for a specific session."""
+        self._require_v2_auth(request)
+        self._require_extended_plan(request)
+
+        if not external_llm_consent():
+            return web.json_response({"error": "External LLM consent not given"}, status=403)
+
+        streamer = request.query.get("streamer", "").strip().lower()
+        if not streamer:
+            return web.json_response({"error": "Streamer required"}, status=400)
+
+        session_id_raw = request.query.get("session_id", "").strip()
+        if not session_id_raw:
+            return web.json_response({"error": "Session ID required"}, status=400)
+
+        # 1. Fetch messages
+        with storage.readonly_connection() as conn:
+            bot_clause, bot_params = build_known_chat_bot_not_in_clause(
+                column_expr="m.chatter_login",
+                placeholder="%s",
+            )
+            rows = conn.execute(
+                f"""
+                SELECT m.content
+                FROM twitch_chat_messages m
+                WHERE m.session_id = %s
+                  AND m.content IS NOT NULL
+                  AND m.content != ''
+                  AND {bot_clause}
+                ORDER BY m.message_ts
+                LIMIT 1000
+                """,
+                (session_id_raw, *bot_params),
+            ).fetchall()
+
+            if not rows:
+                return web.json_response({"error": "No messages found for this session"}, status=404)
+
+            messages = [r[0] for r in rows]
+
+        # 2. Call MiniMax
+        prompt = f"""Du bist ein Twitch-Analytics-Experte. Analysiere die folgende Liste von Chat-Nachrichten eines Deadlock-Streams.
+
+Deine Aufgabe:
+1. Kategorisiere die Nachrichten in diese Typen (gib Counts zurück):
+   - Greeting (Begrüßung/Abschied)
+   - Question (Fragen zum Spiel/Streamer)
+   - Reaction (Emotes, Lachen, 'lol', 'gg')
+   - Hype (Hype-Momente, Raids, 'pog')
+   - Game-Related (Strategie, Helden, Meta)
+   - Feedback (Lob/Kritik am Stream)
+   - Technical (Ton/Bild-Probleme)
+   - Social (Discord/Social Media)
+   - Other (Rest)
+
+2. Bewerte die "Chat-Tiefe" (Chat Depth) insgesamt (0-100) und gib eine kurze Begründung.
+
+3. Identifiziere die Top 3 Themen.
+
+Antworte NUR als JSON:
+{{
+  "category_counts": {{"Greeting": 0, "Question": 0, "Reaction": 0, "Hype": 0, "Game-Related": 0, "Feedback": 0, "Technical": 0, "Social": 0, "Other": 0}},
+  "chat_depth_score": 0,
+  "chat_depth_explanation": "...",
+  "top_topics": ["...", "...", "..."]
+}}
+
+Hier sind die Nachrichten:
+{json.dumps(messages[:1000], ensure_ascii=False)}
+"""
+
+        client = _get_minimax_client()
+        try:
+            response = await client.chat.completions.create(
+                model=MINIMAX_MODEL,
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0.1,
+            )
+            content = response.choices[0].message.content
+            
+            # Extract JSON object
+            json_str = ""
+            start = content.find("{")
+            end = content.rfind("}")
+            if start != -1 and end != -1:
+                json_str = content[start : end + 1]
+            else:
+                json_str = content
+
+            result = json.loads(json_str)
+            return web.json_response(result)
+        except Exception as exc:
+            log.exception("MiniMax chat analysis failed")
+            return analytics_internal_error_response(error=f"MiniMax Analyse fehlgeschlagen: {exc}")

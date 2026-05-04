@@ -671,16 +671,10 @@ class _DashboardAuthMixin:
         discord_admin = self._get_discord_admin_session(request)
         if discord_admin:
             if session is None:
-                # No regular session - create a combined session from Discord admin
-                session = {
-                    "auth_type": "discord_admin",
-                    "is_admin": True,
-                    "user_id": discord_admin.get("user_id"),
-                    "username": discord_admin.get("username"),
-                    "display_name": discord_admin.get("display_name"),
-                    "created_at": discord_admin.get("created_at"),
-                    "expires_at": discord_admin.get("expires_at"),
-                }
+                # Use the persistent discord_admin session object
+                # for state persistence (like CSRF tokens)
+                session = discord_admin
+                session["is_admin"] = True
             else:
                 # Regular session exists - upgrade to admin
                 session["is_admin"] = True

@@ -876,7 +876,7 @@ class DashboardLiveAnnouncementMixin:
         return {"role_id": role_id, "role_name": role.name if role else None, "created": created, "message": message}
 
     def _la_csrf_generate(self, request: web.Request) -> str:
-        generator = getattr(self, "_csrf_generate_token", None)
+        generator = getattr(self, "_csrf_ensure_token", None)
         if callable(generator):
             try:
                 return str(generator(request) or "")

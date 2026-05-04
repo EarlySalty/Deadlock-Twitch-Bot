@@ -332,6 +332,13 @@ class _DashboardRoutesMixin:
         session["csrf_token"] = token
         return token
 
+    def _csrf_ensure_token(self, request: web.Request) -> str:
+        """Get existing or generate new CSRF token."""
+        token = self._csrf_get_token(request)
+        if not token:
+            token = self._csrf_generate_token(request)
+        return token
+
     def _csrf_get_token(self, request: web.Request) -> str | None:
         """Get stored CSRF token from session."""
         session = self._csrf_session(request)

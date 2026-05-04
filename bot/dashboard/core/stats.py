@@ -21,7 +21,7 @@ class DashboardStatsMixin:
             focus_mode = "time"
 
         show_discord_private = self._is_local_request(request)
-        csrf_token = self._csrf_generate_token(request)
+        csrf_token = self._csrf_ensure_token(request)
         csrf_input_html = (
             f"<input type='hidden' name='csrf_token' value='{html.escape(csrf_token, quote=True)}'>"
         )

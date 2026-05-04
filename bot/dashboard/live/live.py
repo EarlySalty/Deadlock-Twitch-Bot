@@ -516,7 +516,7 @@ class DashboardLiveMixin:
         err = request.query.get("err", "")
         discord_admin_user_id = self._get_discord_admin_user_id(request)
         can_use_owner_chat_actions = discord_admin_user_id == _DASHBOARD_OWNER_DISCORD_ID
-        csrf_token = self._csrf_generate_token(request)
+        csrf_token = self._csrf_ensure_token(request)
         csrf_input_html = (
             f"<input type='hidden' name='csrf_token' value='{html.escape(csrf_token, quote=True)}'>"
         )

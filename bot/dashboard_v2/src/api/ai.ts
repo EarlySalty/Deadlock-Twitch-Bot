@@ -77,3 +77,15 @@ export async function fetchAIChat(
 
   return payload as AIChatResponse;
 }
+
+export async function fetchChatMinimaxDeep(
+  streamer: string,
+  sessionId: number
+): Promise<{
+  category_counts: Record<string, number>;
+  chat_depth_score: number;
+  chat_depth_explanation: string;
+  top_topics: string[];
+}> {
+  return fetchApi('/chat-deep-minimax', { streamer, session_id: sessionId }, 120_000);
+}

@@ -104,6 +104,7 @@ class _AnalyticsOverviewMixin:
         # Chat Deep Analysis
         router.add_get("/twitch/api/v2/chat-hype-timeline", self._api_v2_chat_hype_timeline)
         router.add_get("/twitch/api/v2/chat-content-analysis", self._api_v2_chat_content_analysis)
+        router.add_get("/twitch/api/v2/chat-deep-minimax", self._api_v2_chat_minimax_deep)
         router.add_get("/twitch/api/v2/chat-social-graph", self._api_v2_chat_social_graph)
         # Experimental (Labor) – all-game session analytics
         router.add_get("/twitch/api/v2/exp/overview", self._api_v2_exp_overview)

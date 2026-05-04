@@ -235,7 +235,7 @@ async def abbo_entry(handler: Any, request: web.Request) -> web.StreamResponse:
     if auth_redirect is not None:
         return auth_redirect
 
-    csrf_token = handler._csrf_generate_token(request)
+    csrf_token = handler._csrf_ensure_token(request)
     cycle_raw = (request.query.get("cycle") or "1").strip()
     readiness_loader = getattr(handler, "_billing_stripe_readiness_payload", None)
     readiness = readiness_loader() if callable(readiness_loader) else {}

@@ -19,6 +19,7 @@ import {
   ChatNetzwerkSection,
   HypeMomenteSection,
   StimmungTopicsSection,
+  ChatMinimaxDeepSection,
 } from './chatAnalyticsDeepSections';
 import { RawChatStatusBanner } from './chatAnalyticsShared';
 
@@ -330,6 +331,13 @@ export function ChatAnalyticsContent({
 
       <PlanGateCard featureId="chat_content_analysis" title="Chat-Inhaltsanalyse">
         {contentData && <StimmungTopicsSection data={contentData} />}
+      </PlanGateCard>
+
+      <PlanGateCard featureId="chat_content_analysis" title="KI Chat-Analyse">
+        <ChatMinimaxDeepSection 
+          streamer={data.streamer}
+          sessionId={selectedSessionId || (hypeData && hypeData.sessionId)} 
+        />
       </PlanGateCard>
 
       {chatSocialGraphEnabled && (

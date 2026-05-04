@@ -1,5 +1,6 @@
+import { useState } from 'react';
 import { motion } from 'framer-motion';
-import { AtSign, MessageCircle, Smile, Zap } from 'lucide-react';
+import { AtSign, MessageCircle, Smile, Zap, Brain, Loader2, Sparkles, Target } from 'lucide-react';
 import {
   Area,
   AreaChart,
@@ -23,6 +24,7 @@ import type {
 } from '@/types/analytics';
 
 import { RawChatStatusBanner } from './chatAnalyticsShared';
+import { fetchChatMinimaxDeep } from '@/api/ai';
 
 const CHART_TOOLTIP_STYLE = {
   backgroundColor: 'rgba(9, 12, 22, 0.92)',
@@ -47,11 +49,14 @@ const TOPIC_COLORS: Record<string, string> = {
   gameplay: '#06b6d4',
   backseat: '#f97316',
   commands: '#60a5fa',
-  social: '#34d399',
+  social: '#06b6d4',
   smalltalk: '#facc15',
   greeting: '#22d3ee',
   community: '#10b981',
   reaction: '#ec4899',
+  hype: '#f43f5e',
+  feedback: '#84cc16',
+  technical: '#f97316',
   other: '#6b7280',
 };
 
@@ -68,6 +73,9 @@ const TOPIC_LABELS: Record<string, string> = {
   greeting: 'Begruessung',
   community: 'Community',
   reaction: 'Reaktionen',
+  hype: 'Hype',
+  feedback: 'Feedback',
+  technical: 'Technik',
   other: 'Sonstiges',
 };
 
@@ -585,3 +593,148 @@ export function ChatNetzwerkSection({ data }: { data: ChatSocialGraph }) {
     </motion.div>
   );
 }
+
+export function ChatMinimaxDeepSection({
+  streamer,
+  sessionId,
+}: {
+  streamer: string;
+  sessionId?: number;
+}) {
+  const [data, setData] = useState<any>(null);
+  const [isLoading, setIsLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const handleAnalysis = async () => {
+    if (!sessionId) return;
+    setIsLoading(true);
+    setError(null);
+    try {
+      const res = await fetchChatMinimaxDeep(streamer, sessionId);
+      setData(res);
+    } catch (err: any) {
+      setError(err.message || 'Analyse fehlgeschlagen');
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  if (!sessionId) return null;
+
+  const topicEntries = data ? Object.entries(data.category_counts).filter(([, v]) => (v as number) > 0) : [];
+  const topicTotal = topicEntries.reduce((sum, [, v]) => sum + (v as number), 0);
+  const donutData = topicEntries.map(([key, value]) => ({
+    name: TOPIC_LABELS[key] || key,
+    value,
+    color: TOPIC_COLORS[key.toLowerCase()] || '#6b7280',
+  }));
+
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: 20 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ delay: 0.5 }}
+      className="panel-card rounded-2xl p-6 bg-gradient-to-br from-background via-background to-primary/5"
+    >
+      <div className="mb-6 flex items-center justify-between">
+        <div className="flex items-center gap-3">
+          <Brain className="h-6 w-6 text-primary" />
+          <h2 className="text-xl font-bold text-white">MiniMax Chat-Analyse</h2>
+          <span className="rounded-full bg-primary/10 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider text-primary border border-primary/20">
+            KI-Powered
+          </span>
+        </div>
+        {!data && !isLoading && (
+          <button
+            onClick={handleAnalysis}
+            className="flex items-center gap-2 rounded-xl bg-primary px-4 py-2 text-sm font-bold text-white shadow-lg shadow-primary/20 transition-all hover:scale-105 active:scale-95"
+          >
+            <Sparkles className="h-4 w-4" />
+            Analyse starten
+          </button>
+        )}
+      </div>
+
+      {isLoading && (
+        <div className="flex flex-col items-center justify-center py-12">
+          <Loader2 className="h-12 w-12 animate-spin text-primary opacity-50" />
+          <p className="mt-4 text-sm text-text-secondary">MiniMax analysiert die Nachrichten-Substanz...</p>
+        </div>
+      )}
+
+      {error && (
+        <div className="rounded-xl border border-error/20 bg-error/10 p-4 text-sm text-error">
+          {error}
+        </div>
+      )}
+
+      {data && (
+        <div className="grid grid-cols-1 gap-8 lg:grid-cols-2">
+          <div className="space-y-6">
+            <div>
+              <div className="mb-4 flex items-center justify-between">
+                <h3 className="text-sm font-medium text-text-secondary">Chat-Tiefe (AI Score)</h3>
+                <span className="text-2xl font-bold text-primary">{data.chat_depth_score}%</span>
+              </div>
+              <div className="h-3 w-full overflow-hidden rounded-full bg-background/80 border border-border/50">
+                <motion.div
+                  initial={{ width: 0 }}
+                  animate={{ width: `${data.chat_depth_score}%` }}
+                  className="h-full bg-gradient-to-r from-primary/60 to-primary"
+                />
+              </div>
+              <p className="mt-4 text-sm leading-relaxed text-text-secondary italic">
+                "{data.chat_depth_explanation}"
+              </p>
+            </div>
+
+            <div>
+              <h3 className="mb-3 text-sm font-medium text-text-secondary">Top Themen</h3>
+              <div className="flex flex-wrap gap-2">
+                {data.top_topics.map((topic: string, i: number) => (
+                  <span key={i} className="flex items-center gap-1.5 rounded-lg border border-primary/20 bg-primary/5 px-3 py-1.5 text-xs text-primary-light">
+                    <Target className="h-3 w-3" />
+                    {topic}
+                  </span>
+                ))}
+              </div>
+            </div>
+          </div>
+
+          <div>
+            <h3 className="mb-4 text-sm font-medium text-text-secondary">KI-Kategorisierung</h3>
+            <div className="flex items-center gap-6">
+              <div className="h-[160px] w-[160px]">
+                <ResponsiveContainer width="100%" height="100%">
+                  <PieChart>
+                    <Pie data={donutData} innerRadius={45} outerRadius={65} dataKey="value" stroke="none">
+                      {donutData.map((entry, index) => (
+                        <Cell key={index} fill={entry.color} />
+                      ))}
+                    </Pie>
+                    <Tooltip contentStyle={CHART_TOOLTIP_STYLE} />
+                  </PieChart>
+                </ResponsiveContainer>
+              </div>
+              <div className="grid grid-cols-1 gap-x-4 gap-y-2 text-xs">
+                {donutData.map((entry, index) => (
+                  <span key={index} className="flex items-center gap-2 text-text-secondary">
+                    <span className="h-2.5 w-2.5 rounded-sm" style={{ backgroundColor: entry.color }} />
+                    <span className="font-medium text-white">{entry.name}:</span> {Math.round((entry.value / topicTotal) * 100)}%
+                  </span>
+                ))}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {!data && !isLoading && !error && (
+        <p className="text-center text-sm text-text-secondary opacity-60">
+          Klicke auf "Analyse starten", um eine detaillierte KI-Auswertung der Chat-Substanz für diese Session zu erhalten.
+        </p>
+      )}
+    </motion.div>
+  );
+}
+
