@@ -86,7 +86,7 @@ jobs:
           soft_fail: false
       - name: Upload Checkov SARIF
         continue-on-error: true
-        uses: github/codeql-action/upload-sarif@95e58e9a2cdfd71adc6e0353d5c52f41a045d225 # v4
+        uses: github/codeql-action/upload-sarif@e46ed2cbd01164d986452f91f178727624ae40d7 # v4
         if: always() && hashFiles('checkov-iac.sarif') != ''
         with:
           sarif_file: checkov-iac.sarif
@@ -101,7 +101,7 @@ jobs:
           output_file: tfsec.sarif
       - name: Upload tfsec SARIF
         continue-on-error: true
-        uses: github/codeql-action/upload-sarif@95e58e9a2cdfd71adc6e0353d5c52f41a045d225 # v4
+        uses: github/codeql-action/upload-sarif@e46ed2cbd01164d986452f91f178727624ae40d7 # v4
         if: always() && hashFiles('tfsec.sarif') != ''
         with:
           sarif_file: tfsec.sarif
@@ -115,7 +115,7 @@ jobs:
           output-file: kubelinter.sarif
       - name: Upload KubeLinter SARIF
         continue-on-error: true
-        uses: github/codeql-action/upload-sarif@95e58e9a2cdfd71adc6e0353d5c52f41a045d225 # v4
+        uses: github/codeql-action/upload-sarif@e46ed2cbd01164d986452f91f178727624ae40d7 # v4
         if: always() && hashFiles('kubelinter.sarif') != ''
         with:
           sarif_file: kubelinter.sarif
@@ -129,7 +129,7 @@ jobs:
           fail_on: high
       - name: Upload KICS SARIF
         continue-on-error: true
-        uses: github/codeql-action/upload-sarif@95e58e9a2cdfd71adc6e0353d5c52f41a045d225 # v4
+        uses: github/codeql-action/upload-sarif@e46ed2cbd01164d986452f91f178727624ae40d7 # v4
         if: always() && hashFiles('kics-results/results.sarif') != ''
         with:
           sarif_file: kics-results/results.sarif
@@ -141,7 +141,7 @@ jobs:
           args: "--sarif-file ansible-lint.sarif"
       - name: Upload Ansible Lint SARIF
         continue-on-error: true
-        uses: github/codeql-action/upload-sarif@95e58e9a2cdfd71adc6e0353d5c52f41a045d225 # v4
+        uses: github/codeql-action/upload-sarif@e46ed2cbd01164d986452f91f178727624ae40d7 # v4
         if: always() && hashFiles('ansible-lint.sarif') != ''
         with:
           sarif_file: ansible-lint.sarif
@@ -157,7 +157,7 @@ jobs:
           exit-code: 1
       - name: Upload Trivy Config SARIF
         continue-on-error: true
-        uses: github/codeql-action/upload-sarif@95e58e9a2cdfd71adc6e0353d5c52f41a045d225 # v4
+        uses: github/codeql-action/upload-sarif@e46ed2cbd01164d986452f91f178727624ae40d7 # v4
         if: always() && hashFiles('trivy-config.sarif') != ''
         with:
           sarif_file: trivy-config.sarif
