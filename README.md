@@ -44,3 +44,15 @@ Produktiver Public-Flow, Secrets, Caddy-Routing und Troubleshooting sind in [`do
 - IIS-ready: the export also writes a `web.config`, so you can point an IIS site or virtual directory directly at the exported folder.
 - Full IIS setup with a dedicated local site:
   `powershell -ExecutionPolicy Bypass -File .\scripts\setup_legal_preview_iis.ps1 -OpenBrowser`
+
+<!-- DDC-LINK-START -->
+
+## Deutsche Deadlock Community
+
+Dieser Bot ist Teil der **[Deutschen Deadlock Community](https://deutsche-deadlock-community.de/)** — postet Live-Streamer der Community.
+
+- 🌐 Website: [deutsche-deadlock-community.de](https://deutsche-deadlock-community.de/)
+- 💬 Discord: [discord.gg/PhkP3WgY7w](https://discord.gg/PhkP3WgY7w)
+- 🎮 [Helden-Übersicht auf Deutsch](https://deutsche-deadlock-community.de/helden/) · [Anfänger-Guide](https://deutsche-deadlock-community.de/guides/anfaenger/)
+
+<!-- DDC-LINK-END -->
