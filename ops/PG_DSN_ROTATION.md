@@ -63,7 +63,7 @@ Check results:
 ```bash
 systemctl --user status deadlock-twitch-pg-dsn-rotation.service --no-pager
 tail -n 20 /home/naniadm/Documents/Deadlock-Twitch-Bot/logs/secret_rotation_audit.jsonl
-/home/naniadm/Documents/manage-twitch-services.sh status all
+/home/naniadm/Documents/Admin-Scripts/manage-twitch-services.sh status all
 ```
 
 ## Safety Behavior

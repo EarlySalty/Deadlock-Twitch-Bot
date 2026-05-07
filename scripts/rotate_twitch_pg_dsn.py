@@ -428,7 +428,7 @@ def _verify_connection(dsn: str) -> None:
 
 def _restart_services() -> None:
     subprocess.run(
-        ["/home/naniadm/Documents/manage-twitch-services.sh", "restart", "all"],
+        ["/home/naniadm/Documents/Admin-Scripts/manage-twitch-services.sh", "restart", "all"],
         cwd=str(ROOT_DIR),
         check=True,
     )
