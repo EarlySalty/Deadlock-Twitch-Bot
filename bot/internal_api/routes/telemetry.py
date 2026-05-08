@@ -9,8 +9,7 @@ from aiohttp import web
 
 from ...app_keys import ANALYTICS_DB_FINGERPRINT_DETAILS_KEY
 from ...core.constants import log
-
-INTERNAL_API_BASE_PATH = "/internal/twitch/v1"
+from ..contracts import INTERNAL_API_BASE_PATH
 
 
 async def healthz(server: Any, request: web.Request) -> web.Response:

@@ -8,20 +8,13 @@ now the entrypoint for HTTP-specific control flow.
 
 from __future__ import annotations
 
-from typing import Any, Callable
+from typing import Any
 
 from aiohttp import web
 
 from ...core.constants import log
-
-INTERNAL_API_BASE_PATH = "/internal/twitch/v1"
-
-
-def _bind(server: Any, handler: Callable[[Any, web.Request], Any]) -> Callable[[web.Request], Any]:
-    async def _handler(request: web.Request) -> web.StreamResponse:
-        return await handler(server, request)
-
-    return _handler
+from ..contracts import INTERNAL_API_BASE_PATH
+from ._helpers import bind
 
 
 async def streamers(server: Any, request: web.Request) -> web.Response:
@@ -477,17 +470,17 @@ async def session_detail(server: Any, request: web.Request) -> web.Response:
 def build_streamer_route_defs(server: Any) -> list[web.RouteDef]:
     base = str(getattr(server, "_base_path", INTERNAL_API_BASE_PATH) or INTERNAL_API_BASE_PATH).rstrip("/")
     return [
-        web.get(f"{base}/streamers", _bind(server, streamers)),
-        web.post(f"{base}/streamers", _bind(server, streamer_add)),
-        web.delete(f"{base}/streamers/{{login}}", _bind(server, streamer_remove)),
-        web.post(f"{base}/streamers/{{login}}/verify", _bind(server, streamer_verify)),
-        web.post(f"{base}/streamers/{{login}}/archive", _bind(server, streamer_archive)),
-        web.post(f"{base}/streamers/{{login}}/discord-flag", _bind(server, streamer_discord_flag)),
-        web.post(f"{base}/streamers/{{login}}/discord-profile", _bind(server, streamer_discord_profile)),
-        web.get(f"{base}/stats", _bind(server, stats)),
-        web.get(f"{base}/analytics/streamer/{{login}}", _bind(server, streamer_analytics)),
-        web.get(f"{base}/analytics/comparison", _bind(server, analytics_comparison)),
-        web.get(f"{base}/sessions/{{session_id}}", _bind(server, session_detail)),
+        web.get(f"{base}/streamers", bind(server, streamers)),
+        web.post(f"{base}/streamers", bind(server, streamer_add)),
+        web.delete(f"{base}/streamers/{{login}}", bind(server, streamer_remove)),
+        web.post(f"{base}/streamers/{{login}}/verify", bind(server, streamer_verify)),
+        web.post(f"{base}/streamers/{{login}}/archive", bind(server, streamer_archive)),
+        web.post(f"{base}/streamers/{{login}}/discord-flag", bind(server, streamer_discord_flag)),
+        web.post(f"{base}/streamers/{{login}}/discord-profile", bind(server, streamer_discord_profile)),
+        web.get(f"{base}/stats", bind(server, stats)),
+        web.get(f"{base}/analytics/streamer/{{login}}", bind(server, streamer_analytics)),
+        web.get(f"{base}/analytics/comparison", bind(server, analytics_comparison)),
+        web.get(f"{base}/sessions/{{session_id}}", bind(server, session_detail)),
     ]
 
 

@@ -11,6 +11,11 @@ import logging
 import os
 from typing import Any
 
+from ...core.llm_providers import (
+    LLMSDKUnavailableError,
+    LLMSecretNotFoundError,
+    get_anthropic_client,
+)
 from ._parsing import parse_llm_payload
 from .base import (
     LLMProviderError,
@@ -40,15 +45,13 @@ class ClaudeHaikuProvider:
         api_key: str | None = None,
         temperature: float = 0.4,
     ) -> None:
-        api_key = api_key or os.getenv("ANTHROPIC_API_KEY")
-        if not api_key:
-            raise LLMProviderUnavailable("ANTHROPIC_API_KEY not set")
-        try:
-            from anthropic import AsyncAnthropic  # type: ignore
-        except Exception as exc:
-            raise LLMProviderUnavailable("anthropic SDK not installed") from exc
         self.model = model or os.getenv("ANTHROPIC_HAIKU_MODEL") or DEFAULT_MODEL
-        self._client = AsyncAnthropic(api_key=api_key)
+        try:
+            self._client = get_anthropic_client(api_key=api_key)
+        except LLMSecretNotFoundError as exc:
+            raise LLMProviderUnavailable("ANTHROPIC_API_KEY not set") from exc
+        except LLMSDKUnavailableError as exc:
+            raise LLMProviderUnavailable("anthropic SDK not installed") from exc
         self.temperature = float(temperature)
 
     async def generate(self, request: LLMRequest) -> LLMResponse:

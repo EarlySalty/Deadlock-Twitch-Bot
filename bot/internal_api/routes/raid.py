@@ -2,20 +2,13 @@
 
 from __future__ import annotations
 
-from typing import Any, Callable
+from typing import Any
 
 from aiohttp import web
 
 from ...core.constants import log
-
-INTERNAL_API_BASE_PATH = "/internal/twitch/v1"
-
-
-def _bind(server: Any, handler: Callable[[Any, web.Request], Any]) -> Callable[[web.Request], Any]:
-    async def _handler(request: web.Request) -> web.StreamResponse:
-        return await handler(server, request)
-
-    return _handler
+from ..contracts import INTERNAL_API_BASE_PATH
+from ._helpers import bind
 
 
 async def raid_auth_url(server: Any, request: web.Request) -> web.Response:
@@ -330,12 +323,12 @@ async def raid_oauth_callback(server: Any, request: web.Request) -> web.Response
 def build_raid_route_defs(server: Any) -> list[web.RouteDef]:
     base = str(getattr(server, "_base_path", INTERNAL_API_BASE_PATH) or INTERNAL_API_BASE_PATH).rstrip("/")
     return [
-        web.get(f"{base}/raid/auth-url", _bind(server, raid_auth_url)),
-        web.get(f"{base}/raid/auth-state", _bind(server, raid_auth_state)),
-        web.get(f"{base}/raid/block-state", _bind(server, raid_block_state)),
-        web.get(f"{base}/raid/go-url", _bind(server, raid_go_url)),
-        web.post(f"{base}/raid/requirements", _bind(server, raid_requirements)),
-        web.post(f"{base}/raid/oauth-callback", _bind(server, raid_oauth_callback)),
+        web.get(f"{base}/raid/auth-url", bind(server, raid_auth_url)),
+        web.get(f"{base}/raid/auth-state", bind(server, raid_auth_state)),
+        web.get(f"{base}/raid/block-state", bind(server, raid_block_state)),
+        web.get(f"{base}/raid/go-url", bind(server, raid_go_url)),
+        web.post(f"{base}/raid/requirements", bind(server, raid_requirements)),
+        web.post(f"{base}/raid/oauth-callback", bind(server, raid_oauth_callback)),
     ]
 
 

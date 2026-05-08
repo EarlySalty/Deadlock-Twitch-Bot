@@ -11,6 +11,9 @@ import aiohttp
 
 from .base import PlatformUploader
 
+_API_TIMEOUT = aiohttp.ClientTimeout(connect=10, total=30)
+_UPLOAD_TIMEOUT = aiohttp.ClientTimeout(connect=10, total=120)
+
 
 class TikTokUploader(PlatformUploader):
     """TikTok API uploader."""
@@ -50,7 +53,7 @@ class TikTokUploader(PlatformUploader):
                 self.log.error("TikTok auth: Missing 'code' or 'access_token'")
                 return False
 
-            async with aiohttp.ClientSession() as session:
+            async with aiohttp.ClientSession(timeout=_API_TIMEOUT) as session:
                 async with session.post(
                     f"{self.api_base}/oauth/token/",
                     data={
@@ -138,7 +141,7 @@ class TikTokUploader(PlatformUploader):
 
     async def _init_upload(self) -> str:
         """Initialize upload session."""
-        async with aiohttp.ClientSession() as session:
+        async with aiohttp.ClientSession(timeout=_API_TIMEOUT) as session:
             async with session.post(
                 f"{self.api_base}/post/publish/video/init/",
                 headers={"Authorization": f"Bearer {self.access_token}"},
@@ -168,7 +171,7 @@ class TikTokUploader(PlatformUploader):
                 if not chunk:
                     break
 
-                async with aiohttp.ClientSession() as session:
+                async with aiohttp.ClientSession(timeout=_UPLOAD_TIMEOUT) as session:
                     form = aiohttp.FormData()
                     form.add_field(
                         "video",
@@ -194,7 +197,7 @@ class TikTokUploader(PlatformUploader):
         self, upload_id: str, title: str, caption: str, privacy_level: str
     ) -> str:
         """Publish uploaded video."""
-        async with aiohttp.ClientSession() as session:
+        async with aiohttp.ClientSession(timeout=_API_TIMEOUT) as session:
             async with session.post(
                 f"{self.api_base}/post/publish/",
                 headers={"Authorization": f"Bearer {self.access_token}"},
@@ -239,7 +242,7 @@ class TikTokUploader(PlatformUploader):
             raise Exception("Not authenticated")
 
         try:
-            async with aiohttp.ClientSession() as session:
+            async with aiohttp.ClientSession(timeout=_API_TIMEOUT) as session:
                 async with session.get(
                     f"{self.api_base}/post/publish/status/fetch/",
                     headers={"Authorization": f"Bearer {self.access_token}"},
@@ -261,7 +264,7 @@ class TikTokUploader(PlatformUploader):
         if not self.access_token:
             raise Exception("Not authenticated")
 
-        async with aiohttp.ClientSession() as session:
+        async with aiohttp.ClientSession(timeout=_API_TIMEOUT) as session:
             async with session.post(
                 f"{self.api_base}/video/query/",
                 headers={"Authorization": f"Bearer {self.access_token}"},

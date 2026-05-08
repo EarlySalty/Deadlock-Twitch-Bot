@@ -9,7 +9,6 @@ import inspect
 import json
 import logging
 import os
-from typing import Optional
 
 import discord
 from discord.ext import commands
@@ -187,16 +186,19 @@ async def setup(bot: commands.Bot):
 
 
 async def teardown(bot: commands.Bot):
-    """Purge twitch_cog modules from sys.modules so hot-reload works correctly."""
-    import sys
+    """Clean up when the extension is unloaded.
 
+    We deliberately do NOT purge broad module ranges like ``bot`` or ``bot.*``
+    from sys.modules here.  The previous blanket purge included dozens of
+    shared infrastructure modules (storage, API router, dashboard service, …)
+    that are used by other parts of the master-bot process and must not be
+    invalidated on a simple Cog reload.
+
+    The only module that actually needs a fresh import on the next ``setup()``
+    call is ``bot.cog`` (imported locally inside setup()). Python's extension
+    loader already unloads the extension entry-point; the local import inside
+    setup() picks up a fresh copy automatically because the entry-point module
+    itself is reloaded.  No additional sys.modules manipulation is required.
+    """
     ensure_twitch_logger_file_handler()
-
-    to_remove = [
-        name for name in sys.modules
-        if name == "bot" or name.startswith("bot.")
-        or name == "twitch_cog"
-    ]
-    for name in to_remove:
-        sys.modules.pop(name, None)
-    log.debug("bot: purged %d modules from sys.modules", len(to_remove))
+    log.debug("bot: teardown complete (no sys.modules purge)")

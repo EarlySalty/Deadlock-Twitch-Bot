@@ -927,39 +927,6 @@ def _observability_queue_instance() -> queue.Queue[object]:
     return _observability_event_queue
 
 
-def _ensure_observability_schema(
-    conn: psycopg.Connection, *, dsn: str | None = None
-) -> None:
-    cache_key = _db_cache_key(dsn)
-    schema_ok_for = set(getattr(_ensure_storage_bootstrap, "_schema_ok_for", set()))
-    if cache_key in schema_ok_for:
-        return
-
-    try:
-        current_version = _load_runtime_schema_version(conn)
-    except Exception as exc:  # pragma: no cover - writer should not mask bootstrap problems
-        log.warning(
-            "schema_version lookup failed for observability writer: %s",
-            exc,
-            exc_info=True,
-        )
-        return
-
-    if current_version is not None and current_version >= _RUNTIME_SCHEMA_VERSION:
-        _mark_schema_ready(cache_key)
-        return
-
-    try:
-        _apply_runtime_schema_migrations(conn, current_version=current_version)
-        _mark_schema_ready(cache_key)
-    except Exception as exc:  # pragma: no cover - best effort
-        log.warning(
-            "Schema initialization failed in observability writer: %s",
-            exc,
-            exc_info=True,
-        )
-
-
 def _open_observability_writer_connection() -> psycopg.Connection:
     dsn = _load_dsn()
     _require_runtime_storage_ready(dsn)

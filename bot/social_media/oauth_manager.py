@@ -35,6 +35,8 @@ from ..storage import transaction
 
 log = logging.getLogger("TwitchStreams.OAuthManager")
 
+_OAUTH_TIMEOUT = aiohttp.ClientTimeout(connect=10, total=30)
+
 
 def _sanitize_log_value(value: str | None) -> str:
     """Prevent CRLF log-forging via untrusted values."""
@@ -353,7 +355,7 @@ class SocialMediaOAuthManager:
         client_key = os.environ.get("TIKTOK_CLIENT_KEY", "")
         client_secret = os.environ.get("TIKTOK_CLIENT_SECRET", "")
 
-        async with aiohttp.ClientSession() as session:
+        async with aiohttp.ClientSession(timeout=_OAUTH_TIMEOUT) as session:
             async with session.post(
                 "https://open.tiktokapis.com/v2/oauth/token/",
                 headers={"Content-Type": "application/x-www-form-urlencoded"},
@@ -386,7 +388,7 @@ class SocialMediaOAuthManager:
         client_id = os.environ.get("YOUTUBE_CLIENT_ID", "")
         client_secret = os.environ.get("YOUTUBE_CLIENT_SECRET", "")
 
-        async with aiohttp.ClientSession() as session:
+        async with aiohttp.ClientSession(timeout=_OAUTH_TIMEOUT) as session:
             async with session.post(
                 "https://oauth2.googleapis.com/token",
                 data={
@@ -417,7 +419,7 @@ class SocialMediaOAuthManager:
         client_id = os.environ.get("INSTAGRAM_CLIENT_ID", "")
         client_secret = os.environ.get("INSTAGRAM_CLIENT_SECRET", "")
 
-        async with aiohttp.ClientSession() as session:
+        async with aiohttp.ClientSession(timeout=_OAUTH_TIMEOUT) as session:
             async with session.post(
                 "https://api.instagram.com/oauth/access_token",
                 data={
@@ -597,7 +599,7 @@ class SocialMediaOAuthManager:
         self, refresh_token: str, client_key: str, client_secret: str
     ) -> dict:
         """Refresh TikTok access token."""
-        async with aiohttp.ClientSession() as session:
+        async with aiohttp.ClientSession(timeout=_OAUTH_TIMEOUT) as session:
             async with session.post(
                 "https://open.tiktokapis.com/v2/oauth/token/",
                 json={
@@ -622,7 +624,7 @@ class SocialMediaOAuthManager:
         self, refresh_token: str, client_id: str, client_secret: str
     ) -> dict:
         """Refresh YouTube access token."""
-        async with aiohttp.ClientSession() as session:
+        async with aiohttp.ClientSession(timeout=_OAUTH_TIMEOUT) as session:
             async with session.post(
                 "https://oauth2.googleapis.com/token",
                 data={

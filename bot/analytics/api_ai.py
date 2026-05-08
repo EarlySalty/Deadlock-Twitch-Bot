@@ -15,8 +15,8 @@ from typing import Any
 
 from aiohttp import web
 
+from ..core.llm_providers import get_anthropic_client, get_minimax_client
 from ..entitlements.resolver import resolve_plan_snapshot_for_login
-from ..secret_store import keyring_enabled
 from .error_utils import analytics_internal_error_response
 from ..storage import pg as storage
 
@@ -100,86 +100,22 @@ def _ensure_ai_table(conn) -> None:
 
 
 def _get_async_client():
-    """Lazy-initialize AsyncAnthropic client with API key from keyring or env."""
+    """Lazy-initialize AsyncAnthropic client via shared provider factory."""
     global _anthropic_client
     if _anthropic_client is not None:
         return _anthropic_client
 
-    try:
-        import anthropic as _lib
-    except ImportError as exc:
-        raise RuntimeError(
-            "anthropic package not installed. Run: pip install anthropic"
-        ) from exc
-
-    api_key = ""
-    if keyring_enabled():
-        try:
-            import keyring
-            api_key = (
-                keyring.get_password("ANTHROPIC_API_KEY@DeadlockBot", "ANTHROPIC_API_KEY")
-                or keyring.get_password("DeadlockBot", "ANTHROPIC_API_KEY")
-                or ""
-            )
-        except Exception:
-            pass
-
-    if not api_key:
-        api_key = os.environ.get("ANTHROPIC_API_KEY", "")
-
-    if not api_key:
-        raise RuntimeError(
-            "ANTHROPIC_API_KEY nicht gefunden. Setze via keyring "
-            "(service=DeadlockBot, key=ANTHROPIC_API_KEY) oder als Umgebungsvariable."
-        )
-
-    _anthropic_client = _lib.AsyncAnthropic(api_key=api_key, timeout=240.0)
+    _anthropic_client = get_anthropic_client(timeout=240.0)
     return _anthropic_client
 
 
-def _load_secret(*secret_names: str) -> str:
-    for secret_name in secret_names:
-        value = ""
-        if keyring_enabled():
-            try:
-                import keyring
-
-                value = (
-                    keyring.get_password(f"{secret_name}@DeadlockBot", secret_name)
-                    or keyring.get_password("DeadlockBot", secret_name)
-                    or ""
-                )
-            except Exception:
-                pass
-        if not value:
-            value = os.environ.get(secret_name, "")
-        if value:
-            return value
-    return ""
-
-
 def _get_minimax_client():
-    """Lazy-initialize AsyncOpenAI client configured for MiniMax."""
+    """Lazy-initialize AsyncOpenAI client for MiniMax via shared provider factory."""
     global _minimax_client
     if _minimax_client is not None:
         return _minimax_client
 
-    try:
-        from openai import AsyncOpenAI
-    except ImportError as exc:
-        raise RuntimeError(
-            "openai package not installed. Run: pip install openai"
-        ) from exc
-
-    api_key = _load_secret("MINIMAX_TOKEN_PLAN_KEY", "MINIMAX_API_KEY", "MINMAX")
-    if not api_key:
-        raise RuntimeError(
-            "MiniMax-Key nicht gefunden. Setze MINIMAX_TOKEN_PLAN_KEY, "
-            "MINIMAX_API_KEY oder MINMAX via keyring/Umgebung."
-        )
-
-    _minimax_client = AsyncOpenAI(
-        api_key=api_key,
+    _minimax_client = get_minimax_client(
         base_url=MINIMAX_BASE_URL,
         timeout=240.0,
     )

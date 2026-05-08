@@ -18,6 +18,11 @@ import time
 from dataclasses import dataclass
 from typing import Any, Awaitable, Callable, Mapping, Sequence
 
+from ...core.llm_providers import (
+    LLMSDKUnavailableError,
+    LLMSecretNotFoundError,
+    get_anthropic_client,
+)
 from .prompts import RESPOND_TOOL, SYSTEM_PROMPT, SYSTEM_PROMPT_VERSION, TOOL_NAME, render_user_prompt
 
 log = logging.getLogger("TwitchStreams.VoiceReaction.Brain")
@@ -135,18 +140,15 @@ class ConversationBrain:
             self._client = client
             return
 
-        resolved_key = api_key or os.getenv("ANTHROPIC_API_KEY")
-        if not resolved_key:
-            raise BrainUnavailable("ANTHROPIC_API_KEY not set")
-
-        if client_factory is None:
-            try:
-                from anthropic import AsyncAnthropic  # type: ignore
-            except Exception as exc:
-                raise BrainUnavailable("anthropic SDK not installed") from exc
-            self._client = AsyncAnthropic(api_key=resolved_key)
-        else:
-            self._client = client_factory(resolved_key)
+        try:
+            self._client = get_anthropic_client(
+                api_key=api_key,
+                client_factory=client_factory,
+            )
+        except LLMSecretNotFoundError as exc:
+            raise BrainUnavailable("ANTHROPIC_API_KEY not set") from exc
+        except LLMSDKUnavailableError as exc:
+            raise BrainUnavailable("anthropic SDK not installed") from exc
 
     async def respond(
         self,

@@ -7,6 +7,8 @@ import time
 from collections import defaultdict
 from typing import Any
 
+from ..core.llm_providers import get_minimax_client
+
 MINIMAX_BASE_URL = "https://api.minimax.io/v1"
 MINIMAX_MODEL = "MiniMax-M2.7"
 EMOJI_PATTERN = re.compile(
@@ -72,18 +74,7 @@ _rate_limiter = TitleRateLimiter(max_requests=5, window_seconds=600, dashboard_m
 
 
 def _get_minimax_client() -> Any:
-    from bot.analytics.api_ai import _load_secret
-    from openai import AsyncOpenAI
-
-    api_key = _load_secret("MINIMAX_TOKEN_PLAN_KEY", "MINIMAX_API_KEY", "MINMAX")
-    if not api_key:
-        raise RuntimeError(
-            "MiniMax-Key nicht gefunden. Setze MINIMAX_TOKEN_PLAN_KEY, "
-            "MINIMAX_API_KEY oder MINMAX via keyring/Umgebung."
-        )
-
-    return AsyncOpenAI(
-        api_key=api_key,
+    return get_minimax_client(
         base_url=MINIMAX_BASE_URL,
         timeout=240.0,
     )

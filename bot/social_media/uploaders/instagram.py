@@ -11,6 +11,9 @@ import aiohttp
 
 from .base import PlatformUploader
 
+_API_TIMEOUT = aiohttp.ClientTimeout(connect=10, total=30)
+_UPLOAD_TIMEOUT = aiohttp.ClientTimeout(connect=10, total=120)
+
 
 class InstagramUploader(PlatformUploader):
     """Instagram Reels uploader."""
@@ -37,7 +40,7 @@ class InstagramUploader(PlatformUploader):
             True wenn Token valid
         """
         try:
-            async with aiohttp.ClientSession() as session:
+            async with aiohttp.ClientSession(timeout=_API_TIMEOUT) as session:
                 async with session.get(
                     f"{self.api_base}/me",
                     params={"access_token": self.access_token},
@@ -126,7 +129,7 @@ class InstagramUploader(PlatformUploader):
         self, video_url: str, caption: str, share_to_feed: bool
     ) -> str:
         """Create Reel media container."""
-        async with aiohttp.ClientSession() as session:
+        async with aiohttp.ClientSession(timeout=_UPLOAD_TIMEOUT) as session:
             async with session.post(
                 f"{self.api_base}/{self.business_account_id}/media",
                 params={
@@ -151,7 +154,7 @@ class InstagramUploader(PlatformUploader):
 
     async def _publish_container(self, container_id: str) -> str:
         """Publish media container."""
-        async with aiohttp.ClientSession() as session:
+        async with aiohttp.ClientSession(timeout=_API_TIMEOUT) as session:
             async with session.post(
                 f"{self.api_base}/{self.business_account_id}/media_publish",
                 params={
@@ -182,7 +185,7 @@ class InstagramUploader(PlatformUploader):
             Dict mit Status-Informationen
         """
         try:
-            async with aiohttp.ClientSession() as session:
+            async with aiohttp.ClientSession(timeout=_API_TIMEOUT) as session:
                 async with session.get(
                     f"{self.api_base}/{media_id}",
                     params={
@@ -202,7 +205,7 @@ class InstagramUploader(PlatformUploader):
 
     async def fetch_video_analytics(self, media_id: str, bucket: str) -> dict:
         """Fetch best-effort statistics for a published Reel."""
-        async with aiohttp.ClientSession() as session:
+        async with aiohttp.ClientSession(timeout=_API_TIMEOUT) as session:
             async with session.get(
                 f"{self.api_base}/{media_id}",
                 params={
