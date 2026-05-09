@@ -15,20 +15,27 @@ Alle HTTP-Routes des Systems. Zugriffslevel: **A** = Admin only, **S** = Streame
 | GET | `/twitch/auth/discord/logout` | S | auth/auth_mixin.py |
 
 ### Dashboard / Analytics UI
-| Methode | Pfad | Level | Datei |
-|---------|------|-------|-------|
-| GET | `/twitch/` | P | routes_mixin.py |
-| GET | `/twitch/dashboard` | S | analytics/api_overview.py |
-| GET | `/twitch/dashboard-v2` | S | analytics/api_overview.py |
-| GET | `/twitch/dashboard-v2/{path:.*}` | S | analytics/api_overview.py |
-| GET | `/twitch/verwaltung` | S | analytics/api_overview.py |
-| GET | `/twitch/stats` | A | routes_mixin.py |
-| GET | `/twitch/partners` | A | routes_mixin.py |
-| GET | `/twitch/market` | A | routes_mixin.py |
-| GET | `/twitch/demo` | P | analytics/api_overview.py |
-| GET | `/twitch/demo/dashboard-v2/{path:.*}` | P | analytics/api_overview.py |
-| GET | `/twitch/dashboards` | P | routes_mixin.py (redirect) |
-| GET | `/twitch/dashboads` | P | routes_mixin.py (redirect) |
+| Methode | Pfad | Level | Datei | Bemerkung |
+|---------|------|-------|-------|-----------|
+| GET | `/twitch/` | P | routes_mixin.py | |
+| GET | `/twitch/dashboard` | S | analytics/api_overview.py | Landing, liefert V2-Bundle |
+| GET | `/analyse` | S | analytics/api_overview.py | Kanonische Analytics-SPA |
+| GET | `/analyse/{path:.*}` | S | analytics/api_overview.py | SPA-Asset-Pfade |
+| GET | `/twitch/dashboard-v2` | S | analytics/api_overview.py | Legacy-Alias → 301 auf `/analyse` |
+| GET | `/twitch/dashboard-v2/{path:.*}` | S | analytics/api_overview.py | Asset-Durchleitung (kein Redirect) |
+| GET | `/twitch/analyse` | S | analytics/api_overview.py | Legacy-Alias → 301 auf `/analyse` |
+| GET | `/twitch/analyse/{path:.*}` | S | analytics/api_overview.py | Legacy-Alias → 301 auf `/analyse/{path}` |
+| GET | `/twitch/verwaltung` | S | analytics/api_overview.py | |
+| GET | `/twitch/pricing` | P | analytics/api_overview.py | |
+| GET | `/social-media-admin` | A | analytics/api_overview.py | Eigene SPA |
+| GET | `/social-media-admin/{path:.*}` | A | analytics/api_overview.py | Asset-Durchleitung |
+| GET | `/twitch/stats` | A | routes_mixin.py | |
+| GET | `/twitch/partners` | A | routes_mixin.py | |
+| GET | `/twitch/market` | A | routes_mixin.py | |
+| GET | `/twitch/demo` | P | analytics/api_overview.py | |
+| GET | `/twitch/demo/dashboard-v2/{path:.*}` | P | analytics/api_overview.py | |
+| GET | `/twitch/dashboards` | P | routes_mixin.py | Redirect |
+| GET | `/twitch/dashboads` | P | routes_mixin.py | Redirect (Tippfehler-Compat) |
 
 ### Admin-Panel
 | Methode | Pfad | Level | Datei |
@@ -185,6 +192,14 @@ Registriert in `bot/analytics/api_overview.py`.
 | GET | `/twitch/api/v2/ai/analysis` | api_overview.py |
 | GET | `/twitch/api/v2/ai/history` | api_overview.py |
 
+### Stream-Report
+| Methode | Pfad | Datei |
+|---------|------|-------|
+| GET | `/twitch/api/v2/stream-report` | api_overview.py |
+| POST | `/twitch/api/v2/stream-report/rate` | api_overview.py |
+| GET | `/twitch/api/v2/stream-report/ab-vote` | api_overview.py |
+| POST | `/twitch/api/v2/stream-report/ab-vote` | api_overview.py |
+
 ### Roadmap
 | Methode | Pfad | Datei |
 |---------|------|-------|
@@ -206,6 +221,8 @@ Registriert in `bot/analytics/api_overview.py`.
 |---------|------|-------|-------|
 | GET | `/twitch/api/v2/auth-status` | P | api_overview.py |
 | GET | `/twitch/api/v2/internal-home` | A | api_overview.py |
+| GET | `/twitch/api/v2/billing/catalog` | S | api_overview.py |
+| GET | `/twitch/api/v2/affiliate/portal` | S | api_overview.py |
 | GET | `/twitch/api/market_data` | A | routes_mixin.py |
 
 ### Live-Announcement API

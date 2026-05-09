@@ -118,6 +118,8 @@ class PostgresConnectionPool:
         if autocommit:
             conn.execute("SELECT 1").fetchone()
             return
+        with contextlib.suppress(Exception):
+            conn.rollback()
         original_autocommit = bool(getattr(conn, "autocommit", False))
         if not original_autocommit:
             conn.autocommit = True

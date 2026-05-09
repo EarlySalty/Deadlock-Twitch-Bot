@@ -80,6 +80,36 @@ def is_loopback_host(raw: str | None) -> bool:
         return False
 
 
+def is_loopback_origin(raw_origin: str | None) -> bool:
+    origin = str(raw_origin or "").strip()
+    if not origin:
+        return True
+    try:
+        parsed = urlsplit(origin)
+    except Exception:
+        return False
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        return False
+    if parsed.username or parsed.password:
+        return False
+    return is_loopback_host(parsed.hostname)
+
+
+def request_peer_host(request: Any) -> str:
+    remote = str(getattr(request, "remote", "") or "").strip()
+    if remote:
+        return remote
+    transport = getattr(request, "transport", None)
+    if transport is None:
+        return ""
+    peer = transport.get_extra_info("peername")
+    if isinstance(peer, tuple) and peer:
+        return str(peer[0]).strip()
+    if isinstance(peer, str):
+        return peer.strip()
+    return ""
+
+
 def is_trusted_proxy_host(
     raw: str | None,
     *,
@@ -404,6 +434,7 @@ __all__ = [
     "forwarded_client_host",
     "host_without_port",
     "is_loopback_host",
+    "is_loopback_origin",
     "is_loopback_request",
     "is_secure_request",
     "is_trusted_proxy_host",
@@ -418,6 +449,7 @@ __all__ = [
     "parse_allowlist_ids",
     "parse_bool",
     "parse_optional_int",
+    "request_peer_host",
     "sanitize_log_value",
     "safe_bad_request_detail",
 ]

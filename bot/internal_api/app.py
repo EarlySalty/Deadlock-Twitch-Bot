@@ -6,21 +6,14 @@ import asyncio
 import inspect
 import json
 import os
-import secrets
 import time as time_module
 from collections.abc import Awaitable, Callable
-from datetime import date, datetime, time
-from decimal import Decimal
-from ipaddress import ip_address
 from typing import Any
-from urllib.parse import unquote, urlsplit
-from uuid import UUID
 
 from aiohttp import web
 
 from ..app_keys import ANALYTICS_DB_FINGERPRINT_DETAILS_KEY, ANALYTICS_DB_FINGERPRINT_KEY
 from ..core.constants import log
-from ..core.twitch_login import normalize_twitch_login
 from ..storage import analytics_db_fingerprint_details
 from .contracts import (
     AddStreamerCallback,
@@ -40,7 +33,6 @@ from .contracts import (
     LiveActiveAnnouncementsCallback,
     LiveLinkClickCallback,
     ObservabilitySnapshotCallback,
-    PUBLIC_WEBSITE_ONBOARDING_LOGIN,
     RaidAuthStateCallback,
     RaidAuthUrlCallback,
     RaidBlockStateCallback,
@@ -55,16 +47,12 @@ from .contracts import (
     VerifyStreamerCallback,
 )
 from .policy import (
-    coerce_optional_positive_int as _coerce_optional_positive_int,
-    compare_internal_token as _compare_internal_token,
-    effective_client_host as _effective_client_host,
-    forwarded_client_host as _forwarded_client_host,
-    host_without_port as _host_without_port,
+    coerce_optional_positive_int as _coerce_optional_positive_int_impl,
+    compare_internal_token as _compare_internal_token_impl,
+    host_without_port as _host_without_port_impl,
     is_loopback_host as _is_loopback_host_impl,
-    is_loopback_request as _is_loopback_request_impl,
-    is_secure_request as _is_secure_request_impl,
-    is_trusted_proxy_host as _is_trusted_proxy_host_impl,
-    json_default as _json_default,
+    is_loopback_origin as _is_loopback_origin_impl,
+    json_default as _json_default_impl,
     normalize_discord_user_id as _normalize_discord_user_id_impl,
     normalize_live_announcement_item as _normalize_live_announcement_item_impl,
     normalize_login as _normalize_login_impl,
@@ -75,7 +63,7 @@ from .policy import (
     parse_allowlist_ids as _parse_allowlist_ids_impl,
     parse_bool as _parse_bool_impl,
     parse_optional_int as _parse_optional_int_impl,
-    sanitize_log_value as _sanitize_log_value_impl,
+    request_peer_host as _request_peer_host_impl,
     safe_bad_request_detail as _safe_bad_request_detail_impl,
 )
 from .routes import attach_raid_routes, attach_streamer_routes
@@ -242,14 +230,17 @@ class InternalApiServer:
         self._allowed_guild_ids = self._parse_allowlist_ids(
             os.getenv("TWITCH_INTERNAL_API_ALLOWED_GUILD_IDS"),
             env_name="TWITCH_INTERNAL_API_ALLOWED_GUILD_IDS",
+            logger=log,
         )
         self._allowed_channel_ids = self._parse_allowlist_ids(
             os.getenv("TWITCH_INTERNAL_API_ALLOWED_CHANNEL_IDS"),
             env_name="TWITCH_INTERNAL_API_ALLOWED_CHANNEL_IDS",
+            logger=log,
         )
         self._allowed_role_ids = self._parse_allowlist_ids(
             os.getenv("TWITCH_INTERNAL_API_ALLOWED_ROLE_IDS"),
             env_name="TWITCH_INTERNAL_API_ALLOWED_ROLE_IDS",
+            logger=log,
         )
 
     async def _empty_add(self, _: str, __: bool) -> str:
@@ -377,105 +368,38 @@ class InternalApiServer:
     def base_path(self) -> str:
         return self._base_path
 
+    _host_without_port = staticmethod(_host_without_port_impl)
+    _is_loopback_host = staticmethod(_is_loopback_host_impl)
+    _parse_allowlist_ids = staticmethod(_parse_allowlist_ids_impl)
+    _coerce_optional_positive_int = staticmethod(_coerce_optional_positive_int_impl)
+    _parse_optional_int = staticmethod(_parse_optional_int_impl)
+    _normalize_login = staticmethod(_normalize_login_impl)
+    _normalize_raid_auth_target = staticmethod(_normalize_raid_auth_target_impl)
+    _parse_bool = staticmethod(_parse_bool_impl)
+    _normalize_discord_user_id_param = staticmethod(_normalize_discord_user_id_impl)
+    _normalize_tracking_token = staticmethod(_normalize_tracking_token_impl)
+    _normalize_text_field = staticmethod(_normalize_text_field_impl)
+    _normalize_live_announcement_item = staticmethod(_normalize_live_announcement_item_impl)
+    _normalize_raid_state_payload = staticmethod(_normalize_raid_state_payload_impl)
+    _safe_bad_request_detail = staticmethod(_safe_bad_request_detail_impl)
+
     def _is_authorized(self, request: web.Request) -> bool:
-        presented = str(request.headers.get(INTERNAL_TOKEN_HEADER) or "").strip()
-        if not self._token or not presented:
-            return False
-        try:
-            return secrets.compare_digest(presented, self._token)
-        except Exception:
-            return False
-
-    @staticmethod
-    def _host_without_port(raw: str | None) -> str:
-        value = str(raw or "").strip()
-        if not value:
-            return ""
-        host = value.split(",", 1)[0].strip()
-        if not host:
-            return ""
-        if host.startswith("["):
-            end = host.find("]")
-            if end != -1:
-                host = host[1:end]
-            return host.lower().rstrip(".")
-
-        normalized = host.lower().rstrip(".")
-        if not normalized:
-            return ""
-
-        # Keep raw IPv6 literals intact (e.g. "::1", "0:0:0:0:0:0:0:1").
-        try:
-            ip_address(normalized)
-            return normalized
-        except ValueError:
-            pass
-
-        # host:port for DNS names / IPv4.
-        if normalized.count(":") == 1:
-            host_part, port_part = normalized.rsplit(":", 1)
-            if host_part and port_part.isdigit():
-                return host_part
-        return normalized
-
-    @classmethod
-    def _is_loopback_host(cls, raw: str | None) -> bool:
-        host = cls._host_without_port(raw)
-        if not host:
-            return False
-        if host == "localhost":
-            return True
-        try:
-            return ip_address(host).is_loopback
-        except ValueError:
-            return False
-
-    @classmethod
-    def _is_loopback_origin(cls, raw_origin: str | None) -> bool:
-        origin = str(raw_origin or "").strip()
-        if not origin:
-            return True
-        try:
-            parsed = urlsplit(origin)
-        except Exception:
-            return False
-        if parsed.scheme not in {"http", "https"} or not parsed.netloc:
-            return False
-        if parsed.username or parsed.password:
-            return False
-        return cls._is_loopback_host(parsed.hostname)
-
-    @staticmethod
-    def _peer_host(request: web.Request) -> str:
-        remote = str(getattr(request, "remote", "") or "").strip()
-        if remote:
-            return remote
-        transport = getattr(request, "transport", None)
-        if transport is None:
-            return ""
-        peer = transport.get_extra_info("peername")
-        if isinstance(peer, tuple) and peer:
-            return str(peer[0]).strip()
-        if isinstance(peer, str):
-            return peer.strip()
-        return ""
+        return _compare_internal_token_impl(
+            request.headers.get(INTERNAL_TOKEN_HEADER),
+            self._token,
+        )
 
     def _is_loopback_request(self, request: web.Request) -> bool:
-        if not self._is_loopback_origin(request.headers.get("Origin")):
-            return False
-
-        peer = self._peer_host(request)
-        if not self._is_loopback_host(peer):
-            return False
-
-        return True
+        return _is_loopback_origin_impl(request.headers.get("Origin")) and _is_loopback_host_impl(
+            _request_peer_host_impl(request)
+        )
 
     @staticmethod
     def _canonical_json(value: Any) -> str:
         try:
             return json.dumps(
                 value if value is not None else {},
-                default=_json_default,
+                default=_json_default_impl,
                 ensure_ascii=False,
                 sort_keys=True,
                 separators=(",", ":"),
@@ -778,7 +702,7 @@ class InternalApiServer:
 
     @staticmethod
     def _json_dumps(payload: Any) -> str:
-        return json.dumps(payload, default=_json_default, ensure_ascii=False)
+        return json.dumps(payload, default=_json_default_impl, ensure_ascii=False)
 
     def _json_response(self, payload: Any, *, status: int = 200) -> web.Response:
         return web.json_response(payload, status=status, dumps=self._json_dumps)
@@ -829,80 +753,6 @@ class InternalApiServer:
             log.warning("internal api %s failed: %s", context, exc)
         return self._json_error(error, status, message)
 
-    @staticmethod
-    def _safe_bad_request_detail(exc: Exception) -> str:
-        text = str(exc or "").replace("\r", " ").replace("\n", " ").strip()
-        if not text:
-            return ""
-        if len(text) > 120:
-            return ""
-        lowered = text.lower()
-        if "://" in text:
-            return ""
-        if any(
-            token in lowered
-            for token in (
-                "token",
-                "secret",
-                "password",
-                "authorization",
-                "bearer",
-                "cookie",
-                "session",
-                "dsn",
-            )
-        ):
-            return ""
-        if "=" in text:
-            return ""
-        return text
-
-    @staticmethod
-    def _parse_allowlist_ids(raw: str | None, *, env_name: str) -> set[int] | None:
-        # Env var unset => allowlist not configured (keep existing fail-open behavior).
-        if raw is None:
-            return None
-
-        value = str(raw).strip()
-        allowed: set[int] = set()
-        for token in value.replace(";", ",").split(","):
-            item = token.strip()
-            if not item:
-                continue
-            if not item.isdigit():
-                log.warning("Ignoring invalid %s entry: %r", env_name, item)
-                continue
-            parsed = int(item)
-            if parsed > 0:
-                allowed.add(parsed)
-        if not allowed:
-            log.warning(
-                "%s configured but no valid positive IDs parsed; enabling fail-closed deny-all.",
-                env_name,
-            )
-        return allowed
-
-    @staticmethod
-    def _coerce_optional_positive_int(value: Any, *, key: str) -> int | None:
-        if value is None:
-            return None
-        if isinstance(value, bool):
-            raise ValueError(f"{key} must be a positive integer")
-        if isinstance(value, int):
-            parsed = value
-        elif isinstance(value, str):
-            item = value.strip()
-            if not item:
-                return None
-            if not item.isdigit():
-                raise ValueError(f"{key} must be a positive integer")
-            parsed = int(item)
-        else:
-            raise ValueError(f"{key} must be a positive integer")
-        if parsed <= 0:
-            raise ValueError(f"{key} must be a positive integer")
-        return parsed
-
     def _enforce_scope_allowlist(
         self,
         *,
@@ -932,175 +782,6 @@ class InternalApiServer:
             key="role_id",
             allowed=self._allowed_role_ids,
         )
-
-    @staticmethod
-    def _parse_optional_int(value: str | None, *, minimum: int | None = None) -> int | None:
-        raw = (value or "").strip()
-        if not raw:
-            return None
-        try:
-            parsed = int(raw)
-        except ValueError:
-            raise ValueError("invalid integer parameter")
-        if minimum is not None and parsed < minimum:
-            raise ValueError("integer parameter below minimum")
-        return parsed
-
-    @staticmethod
-    def _normalize_login(raw: str) -> str | None:
-        return normalize_twitch_login(raw)
-
-    @classmethod
-    def _normalize_raid_auth_target(cls, raw: str) -> str | None:
-        value = unquote(str(raw or "")).strip()
-        if not value:
-            return None
-
-        lowered = value.lower()
-        if lowered == PUBLIC_WEBSITE_ONBOARDING_LOGIN:
-            return lowered
-        if lowered.startswith("discord:"):
-            discord_id = lowered.split(":", 1)[1].strip()
-            if discord_id.isdigit():
-                return f"discord:{discord_id}"
-            return None
-
-        return cls._normalize_login(value)
-
-    @staticmethod
-    def _parse_bool(value: Any, *, default: bool = False) -> bool:
-        if value is None:
-            return default
-        if isinstance(value, bool):
-            return value
-        if isinstance(value, (int, float)):
-            return bool(value)
-        lowered = str(value).strip().lower()
-        if not lowered:
-            return default
-        if lowered in {"1", "true", "yes", "on"}:
-            return True
-        if lowered in {"0", "false", "no", "off"}:
-            return False
-        return default
-
-    @staticmethod
-    def _normalize_discord_user_id_param(
-        value: str | None,
-        *,
-        required: bool,
-    ) -> str | None:
-        raw = str(value or "").strip()
-        if not raw:
-            if required:
-                raise ValueError("invalid discord_user_id")
-            return None
-        if not raw.isdigit():
-            raise ValueError("invalid discord_user_id")
-        return raw
-
-    @staticmethod
-    def _normalize_tracking_token(value: Any, *, required: bool) -> str | None:
-        text = str(value or "").strip()
-        if not text:
-            if required:
-                raise ValueError("invalid tracking_token")
-            return None
-        if len(text) > 128:
-            raise ValueError("invalid tracking_token")
-        return text
-
-    @staticmethod
-    def _normalize_text_field(
-        value: Any,
-        *,
-        field_name: str,
-        required: bool,
-        max_length: int,
-    ) -> str | None:
-        text = str(value or "").replace("\r", " ").replace("\n", " ").strip()
-        if not text:
-            if required:
-                raise ValueError(f"invalid {field_name}")
-            return None
-        if len(text) > max_length:
-            raise ValueError(f"invalid {field_name}")
-        return text
-
-    def _normalize_live_announcement_item(self, item: Any) -> dict[str, Any]:
-        if not isinstance(item, dict):
-            raise ValueError("active announcement item must be an object")
-
-        streamer_login = self._normalize_login(str(item.get("streamer_login") or ""))
-        if not streamer_login:
-            raise ValueError("active announcement streamer_login is invalid")
-
-        message_id = self._coerce_optional_positive_int(item.get("message_id"), key="message_id")
-        if message_id is None:
-            raise ValueError("active announcement message_id is invalid")
-
-        channel_id = self._coerce_optional_positive_int(item.get("channel_id"), key="channel_id")
-        if channel_id is None:
-            raise ValueError("active announcement channel_id is invalid")
-
-        tracking_token = self._normalize_tracking_token(
-            item.get("tracking_token"),
-            required=True,
-        )
-        referral_url = self._normalize_text_field(
-            item.get("referral_url"),
-            field_name="referral_url",
-            required=True,
-            max_length=2000,
-        )
-        parsed_url = urlsplit(str(referral_url))
-        if parsed_url.scheme not in {"http", "https"} or not parsed_url.netloc:
-            raise ValueError("active announcement referral_url is invalid")
-
-        button_label = self._normalize_text_field(
-            item.get("button_label"),
-            field_name="button_label",
-            required=True,
-            max_length=80,
-        )
-
-        return {
-            "streamer_login": streamer_login,
-            "message_id": int(message_id),
-            "tracking_token": str(tracking_token),
-            "referral_url": str(referral_url),
-            "button_label": str(button_label),
-            "channel_id": int(channel_id),
-        }
-
-    def _normalize_raid_state_payload(
-        self,
-        payload: Any,
-        *,
-        discord_user_id: str | None,
-        twitch_login: str | None,
-    ) -> dict[str, Any]:
-        source = payload if isinstance(payload, dict) else {}
-        normalized_discord_id = self._normalize_discord_user_id_param(
-            source.get("discord_user_id"),
-            required=False,
-        )
-        normalized_login = self._normalize_login(str(source.get("twitch_login") or ""))
-        normalized_twitch_user_id = str(source.get("twitch_user_id") or "").strip() or None
-        partner_opt_out = self._parse_bool(source.get("partner_opt_out"), default=False)
-        token_blacklisted = self._parse_bool(source.get("token_blacklisted"), default=False)
-        raid_blacklisted = self._parse_bool(source.get("raid_blacklisted"), default=False)
-        blocked_default = partner_opt_out or token_blacklisted or raid_blacklisted
-        return {
-            "discord_user_id": normalized_discord_id or discord_user_id,
-            "twitch_login": normalized_login or twitch_login,
-            "twitch_user_id": normalized_twitch_user_id,
-            "authorized": self._parse_bool(source.get("authorized"), default=False),
-            "partner_opt_out": partner_opt_out,
-            "token_blacklisted": token_blacklisted,
-            "raid_blacklisted": raid_blacklisted,
-            "blocked": self._parse_bool(source.get("blocked"), default=blocked_default),
-        }
 
     async def _json_body(self, request: web.Request) -> dict[str, Any]:
         if not request.can_read_body:

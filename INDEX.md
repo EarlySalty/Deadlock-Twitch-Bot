@@ -25,8 +25,9 @@ Twitch-Monitoring, Analytics, Auto-Raids, Dashboard und Social-Media-Automatisie
 | Streamer hinzufuegen/entfernen | Ja | Nein |
 | Billing / Stripe-Verwaltung | Ja | Teilweise (eigenes Abo) |
 | Promo-Mode | Ja | Nein |
-| Dashboard (`/twitch/dashboard`) | Ja | Ja |
-| Dashboard V2 (`/twitch/dashboard-v2`) | Ja | Ja |
+| Analytics-SPA (`/analyse`) | Ja | Ja |
+| Dashboard-Landing (`/twitch/dashboard`) | Ja | Ja |
+| Dashboard-Legacy-Alias (`/twitch/dashboard-v2`) | — | — (Redirect auf `/analyse`) |
 | Analytics-API (`/twitch/api/v2/*`) | Ja | Ja |
 | Live-Announcements | Ja | Ja (eigene Config) |
 | Raid-System | Ja | Ja (eigene Auth) |

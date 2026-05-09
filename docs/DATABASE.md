@@ -272,4 +272,4 @@ Outreach-Log fuer Partner-Ansprache.
 - `idx_twitch_stats_category_streamer` — twitch_stats_category(streamer)
 - `idx_twitch_stats_category_ts` — twitch_stats_category(ts_utc)
 - `idx_twitch_streamers_user_id` — twitch_streamers(twitch_user_id) UNIQUE
-- `idx_dashboard_sessions_expires` — dashboard_sessions(expires_at) [geplant Phase 3]
+- `idx_dashboard_sessions_expires` — dashboard_sessions(expires_at)

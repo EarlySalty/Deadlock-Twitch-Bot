@@ -19,7 +19,8 @@ from collections.abc import Iterable, Sequence
 from urllib.parse import urlsplit
 
 import psycopg
-from psycopg.conninfo import conninfo_to_dict
+from psycopg import IsolationLevel
+from psycopg.conninfo import conninfo_to_dict, make_conninfo
 
 from ..secret_store import keyring_enabled
 from ._pool import ConnectionPoolRegistry
@@ -61,6 +62,9 @@ __all__ = [
     "prepare_runtime_storage",
     "readonly_connection",
     "transaction",
+    "run_transaction",
+    "repeatable_read_transaction",
+    "serializable_transaction",
     "ensure_schema",
     "query_one",
     "query_all",
@@ -100,7 +104,7 @@ ENV_DSN = "TWITCH_ANALYTICS_DSN"
 _DB_FINGERPRINT_SALT = b"deadlock.analytics-db-fingerprint.v1"
 _DB_FINGERPRINT_ITERATIONS = 100_000
 _RUNTIME_SCHEMA_COMPONENT = "storage_pg"
-_RUNTIME_SCHEMA_VERSION = 4
+_RUNTIME_SCHEMA_VERSION = 5
 _RUNTIME_SCHEMA_BOOTSTRAP_ENV = "TWITCH_ALLOW_RUNTIME_SCHEMA_BOOTSTRAP"
 
 
@@ -128,7 +132,7 @@ def _env_float(name: str, default: float, *, minimum: float) -> float:
 
 _CONNECTION_POOL_MAXSIZE = _env_int(
     "TWITCH_ANALYTICS_POOL_MAXSIZE",
-    4,
+    10,
     minimum=1,
 )
 _CONNECTION_POOL_TIMEOUT_SECONDS = _env_float(
@@ -136,6 +140,35 @@ _CONNECTION_POOL_TIMEOUT_SECONDS = _env_float(
     5.0,
     minimum=0.1,
 )
+_CONNECTION_CONNECT_TIMEOUT_SECONDS = _env_int(
+    "TWITCH_ANALYTICS_CONNECT_TIMEOUT_SECONDS",
+    5,
+    minimum=1,
+)
+_TRANSACTION_RETRY_ATTEMPTS = _env_int(
+    "TWITCH_ANALYTICS_TX_RETRY_ATTEMPTS",
+    3,
+    minimum=1,
+)
+_TRANSACTION_RETRY_BASE_DELAY_SECONDS = _env_float(
+    "TWITCH_ANALYTICS_TX_RETRY_BASE_DELAY_SECONDS",
+    0.10,
+    minimum=0.01,
+)
+_TRANSACTION_RETRY_MAX_DELAY_SECONDS = _env_float(
+    "TWITCH_ANALYTICS_TX_RETRY_MAX_DELAY_SECONDS",
+    0.75,
+    minimum=0.05,
+)
+_DEFAULT_TRANSACTION_ISOLATION = IsolationLevel.READ_COMMITTED
+_RETRYABLE_SQLSTATES = {"40001", "40P01"}
+_ISOLATION_LEVEL_ALIASES = {
+    "read committed": IsolationLevel.READ_COMMITTED,
+    "read_committed": IsolationLevel.READ_COMMITTED,
+    "repeatable read": IsolationLevel.REPEATABLE_READ,
+    "repeatable_read": IsolationLevel.REPEATABLE_READ,
+    "serializable": IsolationLevel.SERIALIZABLE,
+}
 
 
 _OBSERVABILITY_QUEUE_MAXSIZE = _env_int(
@@ -647,7 +680,126 @@ def _execute_with_savepoint(conn, sql: str, params=None):
 
 
 def _connect_raw_connection(dsn: str, autocommit: bool) -> psycopg.Connection:
-    return psycopg.connect(dsn, row_factory=storage_row_factory, autocommit=autocommit)
+    return psycopg.connect(
+        _dsn_with_connect_timeout(dsn),
+        row_factory=storage_row_factory,
+        autocommit=autocommit,
+    )
+
+
+def _dsn_with_connect_timeout(dsn: str) -> str:
+    raw_dsn = str(dsn or "").strip()
+    if not raw_dsn:
+        return raw_dsn
+
+    try:
+        parsed = conninfo_to_dict(raw_dsn)
+    except Exception:
+        parsed = {}
+
+    existing = str(parsed.get("connect_timeout") or "").strip()
+    if existing:
+        return raw_dsn
+
+    try:
+        return make_conninfo(raw_dsn, connect_timeout=_CONNECTION_CONNECT_TIMEOUT_SECONDS)
+    except Exception:
+        return raw_dsn
+
+
+def _normalize_isolation_level(
+    isolation_level: IsolationLevel | int | str | None,
+) -> IsolationLevel:
+    if isolation_level is None:
+        return _DEFAULT_TRANSACTION_ISOLATION
+    if isinstance(isolation_level, IsolationLevel):
+        return isolation_level
+    if isinstance(isolation_level, int):
+        return IsolationLevel(isolation_level)
+
+    normalized = str(isolation_level).strip().lower().replace("-", " ")
+    level = _ISOLATION_LEVEL_ALIASES.get(normalized)
+    if level is None:
+        level = _ISOLATION_LEVEL_ALIASES.get(normalized.replace(" ", "_"))
+    if level is None:
+        raise ValueError(f"Unsupported PostgreSQL isolation level: {isolation_level!r}")
+    return level
+
+
+def _set_connection_isolation_level(
+    conn: psycopg.Connection,
+    isolation_level: IsolationLevel | int | str | None,
+) -> IsolationLevel:
+    normalized = _normalize_isolation_level(isolation_level)
+    current_level = getattr(conn, "isolation_level", None)
+    if current_level == normalized:
+        return normalized
+    setter = getattr(conn, "set_isolation_level", None)
+    if callable(setter):
+        setter(normalized)
+        return normalized
+    with contextlib.suppress(Exception):
+        setattr(conn, "isolation_level", normalized)
+    return normalized
+
+
+def _extract_sqlstate(exc: BaseException) -> str | None:
+    sqlstate = getattr(exc, "sqlstate", None) or getattr(exc, "pgcode", None)
+    if sqlstate:
+        return str(sqlstate).strip().upper()
+    diag = getattr(exc, "diag", None)
+    if diag is not None:
+        diag_sqlstate = getattr(diag, "sqlstate", None)
+        if diag_sqlstate:
+            return str(diag_sqlstate).strip().upper()
+    return None
+
+
+def _is_retryable_transaction_error(exc: BaseException) -> bool:
+    return (_extract_sqlstate(exc) or "") in _RETRYABLE_SQLSTATES
+
+
+def _transaction_retry_sleep(attempt: int) -> None:
+    delay = min(
+        _TRANSACTION_RETRY_MAX_DELAY_SECONDS,
+        _TRANSACTION_RETRY_BASE_DELAY_SECONDS * (2 ** max(0, attempt - 1)),
+    )
+    time.sleep(delay)
+
+
+def _run_transaction_operation(
+    operation,
+    *,
+    isolation_level: IsolationLevel | int | str | None,
+    retries: int | None,
+):
+    dsn = _load_dsn()
+    _require_runtime_storage_ready(dsn)
+    pool = _connection_pool_registry().get_pool(dsn)
+    normalized_isolation = _normalize_isolation_level(isolation_level)
+    max_attempts = max(1, int(retries or _TRANSACTION_RETRY_ATTEMPTS))
+
+    for attempt in range(1, max_attempts + 1):
+        with pool.connection(autocommit=False) as conn:
+            _set_connection_isolation_level(conn, normalized_isolation)
+            try:
+                result = operation(conn)
+                conn.commit()
+                return result
+            except Exception as exc:
+                with contextlib.suppress(Exception):
+                    conn.rollback()
+                if not _is_retryable_transaction_error(exc) or attempt >= max_attempts:
+                    raise
+                log.warning(
+                    "Retrying PostgreSQL transaction after SQLSTATE %s (attempt %s/%s)",
+                    _extract_sqlstate(exc),
+                    attempt + 1,
+                    max_attempts,
+                )
+        _transaction_retry_sleep(attempt)
+
+    raise RuntimeError("unreachable transaction retry state")
 
 
 def _mark_schema_ready(cache_key: str) -> None:
@@ -793,9 +945,18 @@ def _apply_runtime_schema_migrations(
                 "Runtime schema bootstrap is disabled. Apply the PostgreSQL migrations before startup "
                 f"or set {_RUNTIME_SCHEMA_BOOTSTRAP_ENV}=1 only for controlled local bootstrap."
             )
-        ensure_schema(conn)
+        ensure_billing_entitlement_schema(conn)
         _record_runtime_schema_version(conn, 4)
         version = 4
+    if version < 5:
+        if not _runtime_schema_bootstrap_allowed():
+            raise RuntimeError(
+                "Runtime schema bootstrap is disabled. Apply the PostgreSQL migrations before startup "
+                f"or set {_RUNTIME_SCHEMA_BOOTSTRAP_ENV}=1 only for controlled local bootstrap."
+            )
+        ensure_billing_entitlement_schema(conn)
+        _record_runtime_schema_version(conn, 5)
+        version = 5
     return version
 
 
@@ -889,12 +1050,16 @@ def readonly_connection():
 
 
 @contextlib.contextmanager
-def transaction():
+def transaction(
+    *,
+    isolation_level: IsolationLevel | int | str | None = _DEFAULT_TRANSACTION_ISOLATION,
+):
     """Yield a pooled raw PostgreSQL connection and commit or rollback explicitly."""
     dsn = _load_dsn()
     _require_runtime_storage_ready(dsn)
     pool = _connection_pool_registry().get_pool(dsn)
     with pool.connection(autocommit=False) as conn:
+        _set_connection_isolation_level(conn, isolation_level)
         try:
             yield conn
         except Exception:
@@ -903,6 +1068,36 @@ def transaction():
             raise
         else:
             conn.commit()
+
+
+def run_transaction(
+    operation,
+    *,
+    isolation_level: IsolationLevel | int | str | None = _DEFAULT_TRANSACTION_ISOLATION,
+    retries: int | None = None,
+):
+    """Run a write transaction with bounded retries for deadlocks/serialization."""
+    return _run_transaction_operation(
+        operation,
+        isolation_level=isolation_level,
+        retries=retries,
+    )
+
+
+def repeatable_read_transaction(operation, *, retries: int | None = None):
+    return run_transaction(
+        operation,
+        isolation_level=IsolationLevel.REPEATABLE_READ,
+        retries=retries,
+    )
+
+
+def serializable_transaction(operation, *, retries: int | None = None):
+    return run_transaction(
+        operation,
+        isolation_level=IsolationLevel.SERIALIZABLE,
+        retries=retries,
+    )
 
 
 def execute(sql: str, params: Iterable | None = None):
@@ -1201,6 +1396,100 @@ def delete_streamer(conn, login: str) -> int:
 
 def _pg_add_col_if_missing(conn, table: str, column: str, col_type: str) -> None:
     conn.execute(f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS {column} {col_type}")
+
+
+def ensure_billing_entitlement_schema(conn) -> None:
+    """Create/update the shared billing entitlement tables used by dashboard and bot."""
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS streamer_plans (
+            twitch_user_id TEXT PRIMARY KEY,
+            twitch_login TEXT,
+            plan_name TEXT NOT NULL DEFAULT 'free',
+            promo_disabled INTEGER NOT NULL DEFAULT 0,
+            activated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            expires_at TEXT,
+            notes TEXT
+        )
+        """
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_streamer_plans_login ON streamer_plans(twitch_login)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_streamer_plans_login_lower "
+        "ON streamer_plans((LOWER(COALESCE(twitch_login, ''))))"
+    )
+    _pg_add_col_if_missing(
+        conn, "streamer_plans", "raid_boost_enabled", "INTEGER NOT NULL DEFAULT 0"
+    )
+    _pg_add_col_if_missing(
+        conn, "streamer_plans", "lurker_tax_enabled", "INTEGER NOT NULL DEFAULT 0"
+    )
+    _pg_add_col_if_missing(conn, "streamer_plans", "promo_message", "TEXT")
+    _pg_add_col_if_missing(conn, "streamer_plans", "manual_plan_id", "TEXT")
+    _pg_add_col_if_missing(conn, "streamer_plans", "manual_plan_expires_at", "TEXT")
+    _pg_add_col_if_missing(
+        conn, "streamer_plans", "manual_plan_notes", "TEXT NOT NULL DEFAULT ''"
+    )
+    _pg_add_col_if_missing(conn, "streamer_plans", "manual_plan_updated_at", "TEXT")
+    _pg_add_col_if_missing(
+        conn, "streamer_plans", "trial_ever_granted", "INTEGER NOT NULL DEFAULT 0"
+    )
+    _pg_add_col_if_missing(conn, "streamer_plans", "first_login_at", "TEXT")
+
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS twitch_billing_subscriptions (
+            stripe_subscription_id TEXT PRIMARY KEY,
+            stripe_customer_id TEXT,
+            customer_reference TEXT,
+            status TEXT NOT NULL DEFAULT 'unknown',
+            plan_id TEXT,
+            cycle_months INTEGER NOT NULL DEFAULT 1,
+            quantity INTEGER NOT NULL DEFAULT 1,
+            current_period_start TEXT,
+            current_period_end TEXT,
+            cancel_at_period_end INTEGER NOT NULL DEFAULT 0,
+            canceled_at TEXT,
+            ended_at TEXT,
+            last_event_id TEXT,
+            updated_at TEXT NOT NULL
+        )
+        """
+    )
+    _pg_add_col_if_missing(conn, "twitch_billing_subscriptions", "stripe_customer_id", "TEXT")
+    _pg_add_col_if_missing(conn, "twitch_billing_subscriptions", "customer_reference", "TEXT")
+    _pg_add_col_if_missing(
+        conn, "twitch_billing_subscriptions", "status", "TEXT NOT NULL DEFAULT 'unknown'"
+    )
+    _pg_add_col_if_missing(conn, "twitch_billing_subscriptions", "plan_id", "TEXT")
+    _pg_add_col_if_missing(
+        conn, "twitch_billing_subscriptions", "cycle_months", "INTEGER NOT NULL DEFAULT 1"
+    )
+    _pg_add_col_if_missing(
+        conn, "twitch_billing_subscriptions", "quantity", "INTEGER NOT NULL DEFAULT 1"
+    )
+    _pg_add_col_if_missing(conn, "twitch_billing_subscriptions", "current_period_start", "TEXT")
+    _pg_add_col_if_missing(conn, "twitch_billing_subscriptions", "current_period_end", "TEXT")
+    _pg_add_col_if_missing(
+        conn,
+        "twitch_billing_subscriptions",
+        "cancel_at_period_end",
+        "INTEGER NOT NULL DEFAULT 0",
+    )
+    _pg_add_col_if_missing(conn, "twitch_billing_subscriptions", "canceled_at", "TEXT")
+    _pg_add_col_if_missing(conn, "twitch_billing_subscriptions", "ended_at", "TEXT")
+    _pg_add_col_if_missing(conn, "twitch_billing_subscriptions", "last_event_id", "TEXT")
+    _pg_add_col_if_missing(conn, "twitch_billing_subscriptions", "updated_at", "TEXT")
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_twitch_billing_subscriptions_customer_reference "
+        "ON twitch_billing_subscriptions(customer_reference)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_twitch_billing_subscriptions_customer_reference_lower "
+        "ON twitch_billing_subscriptions((LOWER(COALESCE(customer_reference, ''))))"
+    )
 
 
 def _seed_default_templates_pg(conn) -> None:
@@ -3375,50 +3664,8 @@ def ensure_schema(conn) -> None:
         "CREATE INDEX IF NOT EXISTS idx_oauth_state_expires ON oauth_state_tokens(expires_at)"
     )
 
-    # 17) Streamer-Pläne / Abonnements (zukünftiges Feature, noch inaktiv)
-    # Verwaltet kostenpflichtige Bot-Pläne pro Streamer. Prüfung erfolgt nur wenn
-    # SUBSCRIPTION_PLANS_ENABLED=True gesetzt wird. Bis dahin hat diese Tabelle
-    # keinen Einfluss auf das Bot-Verhalten.
-    conn.execute(
-        """
-        CREATE TABLE IF NOT EXISTS streamer_plans (
-            twitch_user_id  TEXT PRIMARY KEY,
-            twitch_login    TEXT,
-            plan_name       TEXT NOT NULL DEFAULT 'free',
-            promo_disabled  INTEGER NOT NULL DEFAULT 0,
-            activated_at    TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-            expires_at      TEXT,
-            notes           TEXT
-        )
-        """
-    )
-    conn.execute(
-        "CREATE INDEX IF NOT EXISTS idx_streamer_plans_login ON streamer_plans(twitch_login)"
-    )
-    conn.execute(
-        "ALTER TABLE streamer_plans ADD COLUMN IF NOT EXISTS raid_boost_enabled INTEGER NOT NULL DEFAULT 0"
-    )
-    conn.execute(
-        "ALTER TABLE streamer_plans ADD COLUMN IF NOT EXISTS promo_message TEXT"
-    )
-    conn.execute(
-        "ALTER TABLE streamer_plans ADD COLUMN IF NOT EXISTS manual_plan_id TEXT"
-    )
-    conn.execute(
-        "ALTER TABLE streamer_plans ADD COLUMN IF NOT EXISTS manual_plan_expires_at TEXT"
-    )
-    conn.execute(
-        "ALTER TABLE streamer_plans ADD COLUMN IF NOT EXISTS manual_plan_notes TEXT NOT NULL DEFAULT ''"
-    )
-    conn.execute(
-        "ALTER TABLE streamer_plans ADD COLUMN IF NOT EXISTS manual_plan_updated_at TEXT"
-    )
-    conn.execute(
-        "ALTER TABLE streamer_plans ADD COLUMN IF NOT EXISTS trial_ever_granted INTEGER NOT NULL DEFAULT 0"
-    )
-    conn.execute(
-        "ALTER TABLE streamer_plans ADD COLUMN IF NOT EXISTS first_login_at TEXT"
-    )
+    # 17) Streamer-Pläne / Billing-Abos
+    ensure_billing_entitlement_schema(conn)
 
     # 18) Vorgecachte Partner-Raid-Scores
     conn.execute(
