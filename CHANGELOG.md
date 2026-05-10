@@ -1,3 +1,7 @@
+## #30 — Sicherheitslücke in Test-Abhängigkeit geschlossen
+
+- pytest in der CI-Test-Pipeline auf Version 9.0.3 angehoben — schließt eine Privilege-Escalation-Lücke über das /tmp-Verzeichnis
+
 ## #29 — Security-Scan: 390 Alerts bereinigt
 
 - Sensible Werte (User-IDs, Streamer-Logins, Dateipfade) werden jetzt überall vor dem Logging bereinigt — verhindert Log-Injection
