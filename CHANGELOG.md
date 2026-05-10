@@ -1,3 +1,9 @@
+## #31 — GitHub Actions Minutenverbrauch deutlich reduziert
+
+- Fünf tägliche Security-Workflows auf reine Event-Trigger umgestellt (kein Schedule mehr)
+- Security-Scans und Secret-Scanning laufen jetzt nur noch bei Push und Pull Request
+- Semgrep bricht den Build nicht mehr bei jedem Fund ab — Ergebnisse werden als Artifact gespeichert
+
 ## #30 — Sicherheitslücke in Test-Abhängigkeit geschlossen
 
 - pytest in der CI-Test-Pipeline auf Version 9.0.3 angehoben — schließt eine Privilege-Escalation-Lücke über das /tmp-Verzeichnis
