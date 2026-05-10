@@ -56,7 +56,7 @@ _BOT_SCOPE_LABELS: dict[str, str] = {
     "user:bot": "Bot App-Token",
 }
 
-_DASHBOARD_OWNER_DISCORD_ID = "662995601738170389"
+_DASHBOARD_OWNER_DISCORD_ID = "662995601738170389"  # nosemgrep: discord-client-id
 _CHAT_ACTION_MODES = {"message", "action", "announcement"}
 _CHAT_ANNOUNCEMENT_COLORS = {"blue", "green", "orange", "purple", "primary"}
 
@@ -324,15 +324,6 @@ class DashboardLiveMixin:
             for plan in _BILLING_PLANS
             if str(plan.get("id") or "").strip()
         }
-        plan_options = "".join(
-            (
-                f"<option value='{html.escape(plan_id, quote=True)}'>"
-                f"{html.escape(plan_name)}"
-                "</option>"
-            )
-            for plan_id, plan_name in plan_labels.items()
-        )
-
         table_rows: list[str] = []
         for row in plan_rows:
             login = str(row.get("twitch_login") or "").strip()

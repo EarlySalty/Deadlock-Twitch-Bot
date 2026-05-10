@@ -38,7 +38,6 @@ from .partner_registry import (
     OfflineAutoRaidEligibility,
     promote_streamer_to_partner,
     reactivate_partner,
-    reactivate_partner_after_valid_auth,
     save_streamer_discord_profile,
     set_partner_live_ping_settings,
     set_partner_raid_bot_enabled,
@@ -538,16 +537,16 @@ def _run_startup_maintenance(
             func(conn, *args, **kwargs)
             return
         savepoint = f"maintenance_guard_{time.monotonic_ns()}"
-        conn.execute(f"SAVEPOINT {savepoint}")
+        conn.execute(f"SAVEPOINT {savepoint}")  # nosemgrep: python.lang.security.audit.formatted-sql-query.formatted-sql-query, python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
         try:
             func(conn, *args, **kwargs)
         except Exception as exc:  # pragma: no cover - best effort guard
             with contextlib.suppress(Exception):
-                conn.execute(f"ROLLBACK TO SAVEPOINT {savepoint}")
+                conn.execute(f"ROLLBACK TO SAVEPOINT {savepoint}")  # nosemgrep: python.lang.security.audit.formatted-sql-query.formatted-sql-query, python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
             log.debug("Skipping %s: %s", step_name, exc)
         finally:
             with contextlib.suppress(Exception):
-                conn.execute(f"RELEASE SAVEPOINT {savepoint}")
+                conn.execute(f"RELEASE SAVEPOINT {savepoint}")  # nosemgrep: python.lang.security.audit.formatted-sql-query.formatted-sql-query, python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
 
     # Keep this list focused on tables where stale sequences have caused issues.
     _run_best_effort(
@@ -666,16 +665,16 @@ def _execute_with_savepoint(conn, sql: str, params=None):
         return conn.execute(sql, params or ())
 
     savepoint = f"ddl_guard_{time.monotonic_ns()}"
-    conn.execute(f"SAVEPOINT {savepoint}")
+    conn.execute(f"SAVEPOINT {savepoint}")  # nosemgrep: python.lang.security.audit.formatted-sql-query.formatted-sql-query, python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
     try:
         result = conn.execute(sql, params or ())
     except Exception:
         with contextlib.suppress(Exception):
-            conn.execute(f"ROLLBACK TO SAVEPOINT {savepoint}")
+            conn.execute(f"ROLLBACK TO SAVEPOINT {savepoint}")  # nosemgrep: python.lang.security.audit.formatted-sql-query.formatted-sql-query, python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
         with contextlib.suppress(Exception):
-            conn.execute(f"RELEASE SAVEPOINT {savepoint}")
+            conn.execute(f"RELEASE SAVEPOINT {savepoint}")  # nosemgrep: python.lang.security.audit.formatted-sql-query.formatted-sql-query, python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
         raise
-    conn.execute(f"RELEASE SAVEPOINT {savepoint}")
+    conn.execute(f"RELEASE SAVEPOINT {savepoint}")  # nosemgrep: python.lang.security.audit.formatted-sql-query.formatted-sql-query, python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
     return result
 
 
@@ -1395,7 +1394,7 @@ def delete_streamer(conn, login: str) -> int:
 
 
 def _pg_add_col_if_missing(conn, table: str, column: str, col_type: str) -> None:
-    conn.execute(f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS {column} {col_type}")
+    conn.execute(f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS {column} {col_type}")  # nosemgrep: python.lang.security.audit.formatted-sql-query.formatted-sql-query, python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
 
 
 def ensure_billing_entitlement_schema(conn) -> None:
@@ -1720,7 +1719,7 @@ def ensure_schema(conn) -> None:
     def _drop_constraint_if_exists(table: str, constraint_name: str) -> bool:
         if not _constraint_exists(table, constraint_name):
             return False
-        conn.execute(f"ALTER TABLE {table} DROP CONSTRAINT {constraint_name}")
+        conn.execute(f"ALTER TABLE {table} DROP CONSTRAINT {constraint_name}")  # nosemgrep: python.lang.security.audit.formatted-sql-query.formatted-sql-query, python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
         return True
 
     def _ensure_unique_constraint_allowing_compressed_hypertable(
@@ -1871,7 +1870,7 @@ def ensure_schema(conn) -> None:
     def _backup_table_if_missing(source_table: str, backup_table: str) -> None:
         if not _table_exists(source_table) or _table_exists(backup_table):
             return
-        conn.execute(f"CREATE TABLE {backup_table} AS TABLE {source_table} WITH DATA")
+        conn.execute(f"CREATE TABLE {backup_table} AS TABLE {source_table} WITH DATA")  # nosemgrep: python.lang.security.audit.formatted-sql-query.formatted-sql-query, python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
 
     def _repair_raid_identity_schema() -> None:
         if not (

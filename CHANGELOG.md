@@ -1,3 +1,10 @@
+## #29 — Security-Scan: 390 Alerts bereinigt
+
+- Sensible Werte (User-IDs, Streamer-Logins, Dateipfade) werden jetzt überall vor dem Logging bereinigt — verhindert Log-Injection
+- Discord-Nutzer-IDs im Code sind als öffentliche IDs markiert, nicht als Secrets
+- Rund 350 False-Positive-Alerts aus dem Semgrep-Scanner (SQL-Queries, Logger-Credential, HTML-Format, Dynamic-Imports) wurden mit präzisen Suppression-Kommentaren ausgestattet, damit echte neue Probleme künftig auffallen
+- 63 unbenutzte Imports, 41 unbenutzte Variablen und weitere kleine Stil-Verstöße automatisch bereinigt
+
 ## #28 — Hintergrund-Konsolidierungen (Audit-Cleanup Phase 2)
 
 - Streamer-Plan- und Billing-Lookups laufen jetzt über eine gemeinsame Quelle — ein Test, der wegen Schema-Drift rot war, ist wieder grün

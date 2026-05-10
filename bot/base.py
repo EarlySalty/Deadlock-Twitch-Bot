@@ -163,7 +163,7 @@ _RUNTIME_STATE_FALLBACK_FIELDS = (
 def _load_runtime_state_module() -> Any | None:
     for module_name in (".runtime.contracts", ".runtime_state"):
         try:
-            return importlib.import_module(module_name, __package__)
+            return importlib.import_module(module_name, __package__)  # nosemgrep: python.lang.security.audit.non-literal-import.non-literal-import
         except Exception:
             continue
     return None
@@ -811,7 +811,7 @@ class TwitchBaseCog(commands.Cog):
                             token_available=streamer_token_present,
                         )
             except Exception:
-                log.debug("Chatters debug: streamer token lookup failed for %s", normalized_login, exc_info=True)
+                log.debug("Chatters debug: streamer token lookup failed for %s", normalized_login, exc_info=True)  # nosemgrep: python.lang.security.audit.logging.logger-credential-leak.python-logger-credential-disclosure
 
         snapshot = await self._internal_observability_snapshot()
         last_chatters_diagnostic = (

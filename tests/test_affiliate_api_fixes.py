@@ -14,8 +14,8 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from bot.analytics.api_admin import _AnalyticsAdminMixin
-from bot.analytics.api_v2 import AnalyticsV2Mixin
+from bot.analytics.api_admin import _AnalyticsAdminMixin  # noqa: E402
+from bot.analytics.api_v2 import AnalyticsV2Mixin  # noqa: E402
 
 
 class _CompatSqliteConn:

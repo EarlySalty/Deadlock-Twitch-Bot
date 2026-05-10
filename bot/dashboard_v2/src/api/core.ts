@@ -1,9 +1,18 @@
 import { dashboardRuntimeConfig } from '../runtimeConfig';
+import { getPreviewApiFixture } from '../preview/fixtures';
+import {
+  PREVIEW_HOME_ROUTE,
+  isPreviewLocalhost,
+  isPreviewModeEnabled,
+} from '../preview/routes';
 
 const API_BASE = dashboardRuntimeConfig.apiBase;
 const INTERNAL_REDIRECT_PREFIX = '/twitch';
+const LIVE_LOGIN_FALLBACK = '/twitch/auth/login?next=%2Ftwitch%2Fdashboard-v2';
 
-export const DASHBOARD_V2_LOGIN_FALLBACK = '/twitch/auth/login?next=%2Ftwitch%2Fdashboard-v2';
+export const DASHBOARD_V2_LOGIN_FALLBACK = isPreviewModeEnabled()
+  ? PREVIEW_HOME_ROUTE
+  : LIVE_LOGIN_FALLBACK;
 const COOKIE_FETCH_CREDENTIALS: RequestCredentials = 'same-origin';
 
 interface ApiErrorPayload {
@@ -22,6 +31,10 @@ function isAllowedInternalRedirectPath(pathname: string): boolean {
 }
 
 export function sanitizeInternalRedirectUrl(rawUrl: string | null | undefined, fallback: string): string {
+  if (isPreviewLocalhost()) {
+    return fallback || PREVIEW_HOME_ROUTE;
+  }
+
   const fallbackCandidate = (fallback || '').trim();
   let safeFallback = DASHBOARD_V2_LOGIN_FALLBACK;
   if (fallbackCandidate && fallbackCandidate.startsWith('/') && !fallbackCandidate.startsWith('//')) {
@@ -134,6 +147,13 @@ export async function fetchApi<T>(
   params: Record<string, string | number | boolean> = {},
   timeoutMs?: number
 ): Promise<T> {
+  if (isPreviewLocalhost()) {
+    const fixture = getPreviewApiFixture(endpoint, params);
+    if (fixture !== undefined) {
+      return structuredClone(fixture) as T;
+    }
+  }
+
   const url = buildApiUrl(endpoint, params);
   const abortCtrl = timeoutMs ? new AbortController() : null;
   const timer = abortCtrl ? setTimeout(() => abortCtrl.abort(), timeoutMs!) : null;

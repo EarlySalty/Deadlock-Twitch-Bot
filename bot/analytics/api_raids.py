@@ -71,7 +71,7 @@ class _AnalyticsRaidsMixin:
                 # A follow is attributed to a raid ONLY if:
                 #   - follower appeared in the session AFTER the raid timestamp
                 #   - follower was NOT known before this session (first_seen_at >= session start)
-                follow_rows = c.execute(
+                follow_rows = c.execute(  # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
                     f"""
                     SELECT
                         fe.follower_login,
@@ -467,6 +467,6 @@ class _AnalyticsRaidsMixin:
                     },
                 })
 
-        except Exception as exc:
+        except Exception:
             log.exception("Error in raid analytics API")
             return analytics_internal_error_response()

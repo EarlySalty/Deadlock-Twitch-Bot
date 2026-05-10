@@ -3,7 +3,6 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
-import threading
 import unittest
 from datetime import UTC, datetime
 from unittest.mock import patch
@@ -11,7 +10,6 @@ from unittest.mock import patch
 from aiohttp.test_utils import TestClient, TestServer
 
 from bot.dashboard_service.app import build_dashboard_service_app
-from bot.dashboard_service.eventsub_bridge import DashboardEventSubBridgeRuntime
 from bot.internal_api import build_internal_api_app
 from bot.monitoring.eventsub_state_store import EventSubStateStore
 from tests.eventsub_state_store_test_helpers import InMemoryEventSubStateRepository

@@ -12,9 +12,9 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from bot.analytics.api_admin import _AnalyticsAdminMixin
-from bot.dashboard.live.live import _REQUIRED_SCOPES
-from bot.monitoring.monitoring import TwitchMonitoringMixin
+from bot.analytics.api_admin import _AnalyticsAdminMixin  # noqa: E402
+from bot.dashboard.live.live import _REQUIRED_SCOPES  # noqa: E402
+from bot.monitoring.monitoring import TwitchMonitoringMixin  # noqa: E402
 
 
 class _CompatSqliteConn:

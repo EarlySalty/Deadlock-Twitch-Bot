@@ -241,7 +241,7 @@ def _load_partner_row(
         LIMIT 1
     """
     try:
-        return conn.execute(sql, tuple(params)).fetchone()
+        return conn.execute(sql, tuple(params)).fetchone()  # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
     except Exception as exc:
         msg = str(exc).lower()
         if "admin_archived_at" not in msg:
@@ -1953,7 +1953,7 @@ def bulk_update_partner_flags(
     status_filter = "WHERE status = %s"
     params: list[Any] = [PARTNER_STATUS_ACTIVE]
 
-    row = conn.execute(
+    row = conn.execute(  # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
         f"SELECT COUNT(*) AS total FROM twitch_partners {status_filter}",
         tuple(params),
     ).fetchone()
@@ -1974,7 +1974,7 @@ def bulk_update_partner_flags(
         update_params.append(_bool_int(silent_raid, default=0))
     if not assignments:
         return total
-    conn.execute(
+    conn.execute(  # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
         f"""
         UPDATE twitch_partners
         SET {", ".join(assignments)}

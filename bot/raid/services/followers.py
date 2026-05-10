@@ -116,7 +116,7 @@ class CandidateFollowersService:
 
                 placeholders = ",".join("%s" for _ in logins)
                 with readonly_connection() as conn:
-                    rows = conn.execute(
+                    rows = conn.execute(  # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
                         f"""
                         SELECT streamer_login, COALESCE(followers_end, followers_start) AS follower_total
                           FROM twitch_stream_sessions

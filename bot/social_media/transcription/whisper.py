@@ -15,12 +15,11 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
-import shutil
 import subprocess
 import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Iterable, Sequence
+from typing import Any
 
 log = logging.getLogger("TwitchStreams.SocialMedia.Whisper")
 

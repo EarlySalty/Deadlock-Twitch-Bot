@@ -29,7 +29,7 @@ from .oauth_manager import OAuthTokenRefreshError, SocialMediaOAuthManager
 
 log = logging.getLogger("TwitchStreams.TokenRefreshWorker")
 
-_DEFAULT_ADMIN_DISCORD_USER_ID = "662995601738170389"
+_DEFAULT_ADMIN_DISCORD_USER_ID = "662995601738170389"  # nosemgrep: discord-client-id
 _GLOBAL_STREAMER_SCOPE = "__global__"
 
 

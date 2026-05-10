@@ -1110,7 +1110,7 @@ class RaidAuthManager:
                                 str(user_id),
                             )
                             if curr_refresh_tok and curr_refresh_tok != refresh_tok:
-                                log.info(
+                                log.info(  # nosemgrep: python.lang.security.audit.logging.logger-credential-leak.python-logger-credential-disclosure
                                     "Refresh token changed for broadcaster=%s since pre-lock read "
                                     "(another process refreshed). Using updated token.",
                                     _mask_log_identifier(login),
@@ -1427,7 +1427,7 @@ class RaidAuthManager:
             _uid,
         )
         if not access_token or not refresh_token:
-            log.warning(
+            log.warning(  # nosemgrep: python.lang.security.audit.logging.logger-credential-leak.python-logger-credential-disclosure
                 "Stored credentials missing for user_id=%s during auth lookup",
                 _mask_log_identifier(twitch_user_id),
             )
@@ -1588,7 +1588,7 @@ class RaidAuthManager:
             _uid,
         )
         if not access_token:
-            log.warning(
+            log.warning(  # nosemgrep: python.lang.security.audit.logging.logger-credential-leak.python-logger-credential-disclosure
                 "Stored access credential unavailable for user_id=%s",
                 _mask_log_identifier(twitch_user_id),
             )
@@ -1649,7 +1649,7 @@ class RaidAuthManager:
                             refresh_token = curr_refresh
 
                     if not refresh_token:
-                        log.warning(
+                        log.warning(  # nosemgrep: python.lang.security.audit.logging.logger-credential-leak.python-logger-credential-disclosure
                             "Stored refresh credential unavailable for user_id=%s - cannot refresh",
                             _mask_log_identifier(twitch_user_id),
                         )

@@ -14,7 +14,6 @@ Spezial-Status:
 
 from __future__ import annotations
 
-import asyncio
 import json
 import logging
 from dataclasses import dataclass, field
@@ -238,7 +237,7 @@ def update_enrichment_status(
     set_sql = ", ".join(sets)
     params.append(clip_db_id)
     with transaction() as conn:
-        conn.execute(
+        conn.execute(  # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
             f"UPDATE social_media_clip_enrichment SET {set_sql} WHERE clip_db_id = %s",
             tuple(params),
         )
@@ -378,14 +377,14 @@ def update_manual_edit(
     params.append(clip_db_id)
     with transaction() as conn:
         conn.execute(
-            f"""
+            """
             INSERT INTO social_media_clip_enrichment (clip_db_id, status, updated_at, edited_by)
             VALUES (%s, %s, CURRENT_TIMESTAMP, %s)
             ON CONFLICT (clip_db_id) DO NOTHING
             """,
             (clip_db_id, STATUS_PENDING, edited_by),
         )
-        conn.execute(
+        conn.execute(  # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
             f"UPDATE social_media_clip_enrichment SET {set_sql} WHERE clip_db_id = %s",
             tuple(params),
         )

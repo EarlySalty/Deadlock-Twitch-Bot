@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { X, Sparkles } from 'lucide-react';
 import { usePlan } from '../../context/PlanContext';
+import { PREVIEW_PRICING_ROUTE } from '../../preview/routes';
 
 const DISMISS_KEY = 'trial-banner-dismissed';
 
@@ -38,7 +39,7 @@ export function TrialBanner() {
   };
 
   const handleUpgrade = () => {
-    window.location.href = '/twitch/pricing';
+    window.location.href = PREVIEW_PRICING_ROUTE;
   };
 
   return (

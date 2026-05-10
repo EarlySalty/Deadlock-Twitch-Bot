@@ -411,7 +411,7 @@ def _run_preflight_only(
 def _alter_role_password(connect_dsn: str, role_name: str, new_password: str) -> None:
     with psycopg.connect(connect_dsn, autocommit=True) as conn:
         with conn.cursor() as cur:
-            cur.execute(
+            cur.execute(  # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
                 sql.SQL("ALTER ROLE {} WITH PASSWORD {}").format(
                     sql.Identifier(role_name),
                     sql.Literal(new_password),

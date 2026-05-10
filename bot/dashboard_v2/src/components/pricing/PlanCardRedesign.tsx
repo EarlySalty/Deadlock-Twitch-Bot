@@ -1,5 +1,6 @@
 import { motion } from 'framer-motion';
 import { Check, Sparkles, Star, Zap, Crown } from 'lucide-react';
+import { getPlanCheckoutHref } from '../../preview/routes';
 import type { CatalogPlan } from '../../types/billing';
 
 interface PlanCardRedesignProps {
@@ -149,9 +150,7 @@ export default function PlanCardRedesign({ plan, index }: PlanCardRedesignProps)
           </div>
         ) : (
           <a
-            href={plan.price_monthly === 0
-              ? '/twitch/abbo'
-              : `/twitch/abbo/bezahlen?plan_id=${plan.id}&cycle=1&quantity=1`}
+            href={getPlanCheckoutHref(plan.id, plan.price_monthly === 0)}
             className={`block text-center py-3 rounded-xl text-sm font-semibold transition-all duration-200 ${config.ctaStyle}`}
           >
             {plan.price_monthly === 0

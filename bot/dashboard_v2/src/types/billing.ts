@@ -27,6 +27,7 @@ export interface PlanStatus {
 // NOTE: These must match TabId from components/layout/TabNavigation.tsx
 export type TabId =
   | 'overview'
+  | 'streams'
   | 'schedule'
   | 'category'
   | 'chat'
@@ -38,7 +39,8 @@ export type TabId =
   | 'monetization'
   | 'experimental'
   | 'ai'
-  | 'reports';
+  | 'reports'
+  | 'title';
 
 export const ALL_ENTITLEMENTS: EntitlementId[] = [
   'analytics.basic',

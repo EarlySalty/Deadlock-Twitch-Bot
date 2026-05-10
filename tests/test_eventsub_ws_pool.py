@@ -145,7 +145,7 @@ class EventSubWSListenerPoolTests(unittest.IsolatedAsyncioTestCase):
             listener_factory=_FakePoolListener,
         )
 
-        first = pool._create_listener()
+        pool._create_listener()
         second = pool._create_listener()
 
         first._registered.append(
@@ -285,7 +285,7 @@ class EventSubWSListenerPoolTests(unittest.IsolatedAsyncioTestCase):
             max_transports=2,
         )
 
-        first = pool._create_listener()
+        pool._create_listener()
         second = pool._create_listener()
         first._ready = True
         second._ready = True
@@ -335,7 +335,7 @@ class EventSubWSListenerPoolTests(unittest.IsolatedAsyncioTestCase):
             max_transports=2,
         )
 
-        first = pool._create_listener()
+        pool._create_listener()
         second = pool._create_listener()
 
         run_task = asyncio.create_task(pool.run())

@@ -46,7 +46,7 @@ def load_admin_affiliates_list(
         with storage.transaction() as conn:
             prepare_conn(conn)
             try:
-                rows = conn.execute(
+                rows = conn.execute(  # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
                     f"""
                     SELECT
                         a.twitch_login,
@@ -89,7 +89,7 @@ def load_admin_affiliates_list(
             except Exception as exc:
                 if not is_missing_schema_error(exc):
                     raise
-                rows = conn.execute(
+                rows = conn.execute(  # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
                     f"""
                     SELECT
                         a.twitch_login,
@@ -363,7 +363,7 @@ def load_admin_affiliate_detail(
             if not account_row:
                 raise AdminAffiliateNotFoundError(login)
 
-            claim_rows = conn.execute(
+            claim_rows = conn.execute(  # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
                 f"""
                 SELECT
                     c.id,
@@ -392,7 +392,7 @@ def load_admin_affiliate_detail(
                 (login,),
             ).fetchone()
 
-            commission_stats_row = conn.execute(
+            commission_stats_row = conn.execute(  # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
                 f"""
                 SELECT
                     COALESCE(SUM(commission_cents), 0) AS total_provision,
@@ -525,7 +525,7 @@ def load_admin_affiliate_stats(
                 (month_start_iso,),
             ).fetchone()
 
-            commission_row = conn.execute(
+            commission_row = conn.execute(  # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
                 f"""
                 SELECT
                     COALESCE(SUM(commission_cents), 0) AS total_provision,

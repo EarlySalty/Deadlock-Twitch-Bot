@@ -1,5 +1,4 @@
 # tests/title_generator/test_title_db.py
-import pytest
 from unittest.mock import MagicMock, patch
 
 from bot.title_generator.title_db import (

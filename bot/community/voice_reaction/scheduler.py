@@ -26,10 +26,8 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from typing import Any, Awaitable, Callable, Mapping, Sequence
 
-from . import audio_capture, audit_log, chat_message_sender, discord_notifier, state_store
+from . import audio_capture, audit_log, chat_message_sender, state_store
 from .conversation_brain import (
-    BrainCallInput,
-    BrainCallOutput,
     BrainError,
     BrainUnavailable,
     ConversationBrain,

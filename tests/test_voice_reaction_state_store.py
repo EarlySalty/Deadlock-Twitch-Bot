@@ -4,7 +4,7 @@ import contextlib
 import json
 import sqlite3
 import unittest
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta
 
 from bot.community.voice_reaction.state_store import (
     append_message,
@@ -205,7 +205,8 @@ class VoiceReactionStateStoreTests(unittest.TestCase):
             ("beta", "200", "sent"),
         )
         conn.commit()
-        factory = lambda: contextlib.nullcontext(_CompatConn(conn))
+        def factory():
+            return contextlib.nullcontext(_CompatConn(conn))
 
         first = open_conversation(
             streamer_login="beta",
@@ -436,15 +437,19 @@ class VoiceReactionStateStoreTests(unittest.TestCase):
         conn = _make_conn()
         self._seed_conversation(conn, "activeone", state="open")
         self._seed_conversation(conn, "inactiveone", state="closed_declined")
-        factory = lambda: contextlib.nullcontext(_CompatConn(conn))
+        def factory():
+            return contextlib.nullcontext(_CompatConn(conn))
 
         self.assertTrue(has_active_conversation("activeone", connection_factory=factory))
         self.assertFalse(has_active_conversation("inactiveone", connection_factory=factory))
 
     def test_db_error_returns_safe_default(self) -> None:
         conn = _make_conn()
-        failing_tx = lambda: contextlib.nullcontext(_CompatConn(conn, fail=True))
-        failing_ro = lambda: contextlib.nullcontext(_CompatConn(conn, fail=True))
+        def failing_tx():
+            return contextlib.nullcontext(_CompatConn(conn, fail=True))
+
+        def failing_ro():
+            return contextlib.nullcontext(_CompatConn(conn, fail=True))
 
         self.assertFalse(
             open_conversation(

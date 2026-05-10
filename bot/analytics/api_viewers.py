@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import math
 from datetime import UTC, datetime, timedelta
 
 from aiohttp import web
@@ -134,7 +133,7 @@ def _fetch_window_viewer_rows(conn, *, streamer: str, since_date: str, excluded_
         column_expr="sc.chatter_login",
         excluded_logins=excluded_logins,
     )
-    return conn.execute(
+    return conn.execute(  # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
         f"""
         SELECT
             LOWER(sc.chatter_login) AS chatter_login,
@@ -158,7 +157,7 @@ def _fetch_window_viewer_row(conn, *, streamer: str, login: str, since_date: str
         column_expr="sc.chatter_login",
         excluded_logins=excluded_logins,
     )
-    return conn.execute(
+    return conn.execute(  # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
         f"""
         SELECT
             COUNT(DISTINCT sc.session_id) AS total_sessions,
@@ -243,7 +242,7 @@ def _load_viewer_directory_payload(
             batch = all_logins[batch_index : batch_index + batch_size]
             placeholders = ",".join("%s" for _ in batch)
 
-            cc_rows = conn.execute(
+            cc_rows = conn.execute(  # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
                 f"""
                 SELECT
                     LOWER(sc.chatter_login) AS chatter_login,
@@ -260,7 +259,7 @@ def _load_viewer_directory_payload(
             for row in cc_rows:
                 cross_channel[row[0].lower()] = row[1]
 
-            tc_rows = conn.execute(
+            tc_rows = conn.execute(  # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
                 f"""
                 SELECT
                     LOWER(sc.chatter_login) AS chatter_login,
@@ -548,7 +547,7 @@ def _load_viewer_detail_payload(
             column_expr="m.chatter_login",
             placeholder="%s",
         )
-        msg_rows = conn.execute(
+        msg_rows = conn.execute(  # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
             f"""
             SELECT m.content
             FROM twitch_chat_messages m
@@ -713,7 +712,7 @@ def _load_viewer_segments_payload(
                 column_expr="streamer_login",
                 excluded_logins=excluded_logins,
             )
-            whereabout_rows = conn.execute(
+            whereabout_rows = conn.execute(  # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
                 f"""
                 SELECT chatter_login, streamer_login, last_seen_at
                 FROM twitch_chatter_rollup
@@ -760,7 +759,7 @@ def _load_viewer_segments_payload(
                 column_expr="sc.streamer_login",
                 excluded_logins=excluded_logins,
             )
-            cc_rows = conn.execute(
+            cc_rows = conn.execute(  # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
                 f"""
                 SELECT
                     LOWER(sc.chatter_login) AS chatter_login,
@@ -797,7 +796,7 @@ def _load_viewer_segments_payload(
             column_expr="sc2.streamer_login",
             excluded_logins=excluded_logins,
         )
-        shared_rows = conn.execute(
+        shared_rows = conn.execute(  # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
             f"""
             SELECT LOWER(sc2.streamer_login) AS streamer_login,
                    COUNT(DISTINCT LOWER(sc2.chatter_login)) AS shared_count
@@ -843,7 +842,7 @@ def _load_viewer_segments_payload(
                     column_expr="other_rollup.streamer_login",
                     excluded_logins=excluded_logins,
                 )
-                direction_rows = conn.execute(
+                direction_rows = conn.execute(  # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
                     f"""
                     SELECT
                         LOWER(other_rollup.streamer_login) AS streamer_login,

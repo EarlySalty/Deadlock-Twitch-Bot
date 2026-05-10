@@ -18,7 +18,6 @@ from typing import Any
 import aiohttp
 
 from ..core.constants import TWITCH_TARGET_GAME_NAME
-from .runtime import dependencies as _raid_dependencies
 from .facades.data_setup import RaidDataSetupFacadeMixin
 from .facades.delivery_selection import RaidDeliverySelectionFacadeMixin
 from .facades.runtime_core import RaidRuntimeCoreFacadeMixin
@@ -28,13 +27,6 @@ from .scope_profiles import BASE_STREAMER_SCOPES
 from .lifecycle import RaidBotLifecycle
 from .pending_raids import PendingRaid
 from .runtime_support import create_twitch_api
-
-# Legacy compatibility exports for patch-based tests during the dependency-container migration.
-readonly_connection = _raid_dependencies.readonly_connection
-transaction = _raid_dependencies.transaction
-load_partner_raid_score_map = _raid_dependencies.load_partner_raid_score_map
-refresh_partner_raid_score_async = _raid_dependencies.refresh_partner_raid_score_async
-track_confirmed_partner_raid = _raid_dependencies.track_confirmed_partner_raid
 
 TWITCH_TOKEN_URL = "https://id.twitch.tv/oauth2/token"  # noqa: S105
 TWITCH_AUTHORIZE_URL = "https://id.twitch.tv/oauth2/authorize"
@@ -458,5 +450,4 @@ class RaidBot(
 
     def _create_twitch_api(self, *, session=None):
         return create_twitch_api(self, session=session)
-
 

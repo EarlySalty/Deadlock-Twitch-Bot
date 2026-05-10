@@ -134,7 +134,7 @@ class _AnalyticsInsightsMixin:
         params: list = [since_date]
         if threshold is not None:
             params.append(threshold)
-        rows = conn.execute(
+        rows = conn.execute(  # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
             f"""
             SELECT streamer, AVG(viewer_count) as avg_vc
             FROM twitch_stats_category
@@ -425,7 +425,7 @@ class _AnalyticsInsightsMixin:
                 [since_date, streamer_login],
             ).fetchone()
 
-            session_benchmark_rows = conn.execute(
+            session_benchmark_rows = conn.execute(  # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
                 f"""
                 WITH session_messages AS (
                     SELECT
@@ -477,7 +477,7 @@ class _AnalyticsInsightsMixin:
                 ],
             ).fetchall()
 
-            all_messages = conn.execute(
+            all_messages = conn.execute(  # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
                 f"""
                 SELECT message_ts, content, is_command, chatter_login, chatter_id
                 FROM twitch_chat_messages
@@ -488,7 +488,7 @@ class _AnalyticsInsightsMixin:
                 [since_date, streamer_login, *msg_bot_params],
             ).fetchall()
 
-            chatter_rows = conn.execute(
+            chatter_rows = conn.execute(  # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
                 f"""
                 WITH per_user AS (
                     SELECT *
@@ -549,7 +549,7 @@ class _AnalyticsInsightsMixin:
                 ],
             ).fetchall()
 
-            sessions_with_chat_row = conn.execute(
+            sessions_with_chat_row = conn.execute(  # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
                 f"""
                 SELECT COUNT(DISTINCT sc.session_id)
                 FROM twitch_session_chatters sc
@@ -562,7 +562,7 @@ class _AnalyticsInsightsMixin:
                 [since_date, streamer_login, *session_bot_params],
             ).fetchone()
 
-            top_chatters = conn.execute(
+            top_chatters = conn.execute(  # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
                 f"""
                 SELECT
                     COALESCE(NULLIF(cm.chatter_login, ''), cm.chatter_id) as chatter_key,
@@ -956,7 +956,7 @@ class _AnalyticsInsightsMixin:
                     "rawChatStatus": raw_chat_status,
                 }
             )
-        except Exception as exc:
+        except Exception:
             log.exception("Error in chat analytics API")
             return analytics_internal_error_response()
 
@@ -983,7 +983,7 @@ class _AnalyticsInsightsMixin:
         try:
             data = await asyncio.to_thread(self._load_coaching_payload, streamer, days)
             return web.json_response(data)
-        except Exception as exc:
+        except Exception:
             log.exception("Error in coaching API")
             return analytics_internal_error_response()
 
@@ -1010,7 +1010,7 @@ class _AnalyticsInsightsMixin:
                 days=days,
             )
             return web.json_response(payload)
-        except Exception as exc:
+        except Exception:
             log.exception("Error in monetization API")
             return analytics_internal_error_response()
 

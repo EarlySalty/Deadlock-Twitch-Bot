@@ -1,5 +1,6 @@
 import { Lock, Sparkles } from 'lucide-react';
 import { usePlan } from '../../context/PlanContext';
+import { PREVIEW_PRICING_ROUTE } from '../../preview/routes';
 import type { FeatureId } from '../../types/billing';
 
 interface PlanGateCardProps {
@@ -28,7 +29,7 @@ export function PlanGateCard({ featureId, title, children }: PlanGateCardProps) 
           <p className="text-xs text-white/40 mt-1">Verfügbar ab Erweitert</p>
           {isPreviewMode && (
             <a
-              href="/twitch/pricing"
+              href={PREVIEW_PRICING_ROUTE}
               className="inline-flex items-center gap-1 mt-3 px-3 py-1.5 rounded-lg bg-purple-500/20 text-purple-300 text-xs font-medium hover:bg-purple-500/30 transition-colors"
             >
               <Sparkles className="w-3 h-3" />

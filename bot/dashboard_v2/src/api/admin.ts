@@ -1,3 +1,5 @@
+import { getPreviewAdminFixture } from '../preview/fixtures';
+import { isPreviewLocalhost } from '../preview/routes';
 import { DASHBOARD_V2_LOGIN_FALLBACK, fetchJson, withCookieCredentials } from './core';
 
 export interface Affiliate {
@@ -32,6 +34,9 @@ export interface AffiliateDetail {
 }
 
 export async function fetchAdminAffiliates(): Promise<{ affiliates: Affiliate[] }> {
+  if (isPreviewLocalhost()) {
+    return getPreviewAdminFixture('/twitch/api/admin/affiliates') as { affiliates: Affiliate[] };
+  }
   return fetchJson<{ affiliates: Affiliate[] }>(
     new URL('/twitch/api/admin/affiliates', window.location.origin),
     withCookieCredentials({ headers: { Accept: 'application/json' } }),
@@ -40,6 +45,9 @@ export async function fetchAdminAffiliates(): Promise<{ affiliates: Affiliate[] 
 }
 
 export async function fetchAdminAffiliateStats(): Promise<AffiliateStats> {
+  if (isPreviewLocalhost()) {
+    return getPreviewAdminFixture('/twitch/api/admin/affiliates/stats') as AffiliateStats;
+  }
   return fetchJson<AffiliateStats>(
     new URL('/twitch/api/admin/affiliates/stats', window.location.origin),
     withCookieCredentials({ headers: { Accept: 'application/json' } }),
@@ -48,6 +56,9 @@ export async function fetchAdminAffiliateStats(): Promise<AffiliateStats> {
 }
 
 export async function fetchAdminAffiliateDetail(login: string): Promise<AffiliateDetail> {
+  if (isPreviewLocalhost()) {
+    return getPreviewAdminFixture(`/twitch/api/admin/affiliates/${login}`) as AffiliateDetail;
+  }
   return fetchJson<AffiliateDetail>(
     new URL(`/twitch/api/admin/affiliates/${login}`, window.location.origin),
     withCookieCredentials({ headers: { Accept: 'application/json' } }),
@@ -61,6 +72,13 @@ export async function toggleAffiliate(
 ): Promise<{ login: string; active: boolean }> {
   if (!csrfToken) {
     throw new Error('Missing CSRF token');
+  }
+
+  if (isPreviewLocalhost()) {
+    return getPreviewAdminFixture(`/twitch/api/admin/affiliates/${login}/toggle`) as {
+      login: string;
+      active: boolean;
+    };
   }
 
   return fetchJson<{ login: string; active: boolean }>(

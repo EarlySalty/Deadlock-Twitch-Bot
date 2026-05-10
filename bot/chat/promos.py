@@ -408,7 +408,7 @@ class PromoMixin:
         rows = []
         try:
             with readonly_connection() as conn:
-                rows = conn.execute(
+                rows = conn.execute(  # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
                     f"""
                     WITH historical_lurks AS (
                         SELECT

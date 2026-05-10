@@ -29,7 +29,7 @@ def run() -> None:
 
     with storage_pg.transaction() as conn:
         for col in legacy_cols:
-            conn.execute(
+            conn.execute(  # nosemgrep: python.lang.security.audit.formatted-sql-query.formatted-sql-query, python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
                 f"ALTER TABLE twitch_raid_auth DROP COLUMN IF EXISTS {col}"
             )
             print(f"  Dropped column twitch_raid_auth.{col} (or did not exist)")

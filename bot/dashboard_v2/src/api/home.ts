@@ -1,6 +1,10 @@
+import { createPreviewChangelogEntry } from '../preview/fixtures';
+import { PREVIEW_HOME_ROUTE, isPreviewLocalhost, isPreviewModeEnabled } from '../preview/routes';
 import { buildApiUrl, fetchApi, fetchJson, sanitizeInternalRedirectUrl, withCookieCredentials } from './core';
 
-const INTERNAL_HOME_LOGIN_FALLBACK = '/twitch/auth/login?next=%2Ftwitch%2Fdashboard';
+const INTERNAL_HOME_LOGIN_FALLBACK = isPreviewModeEnabled()
+  ? PREVIEW_HOME_ROUTE
+  : '/twitch/auth/login?next=%2Ftwitch%2Fdashboard';
 const INTERNAL_HOME_BLOCKED_OAUTH_PATHS = ['/twitch/raid/requirements'] as const;
 
 function sanitizeInternalHomeOauthUrl(
@@ -553,6 +557,10 @@ export async function fetchInternalHome(streamer?: string | null): Promise<Inter
 export async function createInternalHomeChangelogEntry(
   payload: CreateInternalHomeChangelogPayload
 ): Promise<InternalHomeChangelogEntry> {
+  if (isPreviewLocalhost()) {
+    return createPreviewChangelogEntry(payload);
+  }
+
   const url = buildApiUrl('/internal-home/changelog');
   const body = await fetchJson<{
     id?: number | string;

@@ -244,17 +244,16 @@ class _DashboardAuthMixin:
             raid_bot = getattr(self, "_raid_bot", None)
             auth_manager = getattr(raid_bot, "auth_manager", None)
         has_state_details = getattr(auth_manager, "has_state_details", None)
-        if not callable(has_state_details):
-            return None
-        try:
-            if not bool(has_state_details(state)):
-                return None
-        except Exception:
-            log.debug("Could not inspect shared Twitch OAuth state for raid callback", exc_info=True)
-            return None
         raid_callback = getattr(self, "raid_oauth_callback", None)
         if not callable(raid_callback):
             return None
+        if callable(has_state_details):
+            try:
+                if not bool(has_state_details(state)):
+                    return None
+            except Exception:
+                log.debug("Could not inspect shared Twitch OAuth state for raid callback", exc_info=True)
+                return None
         return await raid_callback(request)
 
     async def shared_discord_auth_callback(
@@ -1530,7 +1529,7 @@ class _DashboardAuthMixin:
         if not allowed:
             log.warning(
                 "AUDIT twitch-dashboard discord login denied: user=%s reason=%s peer=%s",
-                user_id,
+                self._sanitize_log_value(str(user_id)),
                 self._sanitize_log_value(reason),
                 self._sanitize_log_value(self._peer_host(request)),
             )
@@ -1597,7 +1596,7 @@ class _DashboardAuthMixin:
 
         log.info(
             "AUDIT twitch-dashboard discord login success: user=%s reason=%s peer=%s",
-            user_id,
+            self._sanitize_log_value(str(user_id)),
             self._sanitize_log_value(reason),
             self._sanitize_log_value(self._peer_host(request)),
         )

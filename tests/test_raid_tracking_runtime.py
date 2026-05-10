@@ -4,7 +4,7 @@ import logging
 import unittest
 from unittest.mock import AsyncMock, MagicMock
 
-from bot.raid.pending_raids import PendingRaid, PendingRaidStore
+from bot.raid.pending_raids import PendingRaid
 from bot.raid.raid_tracking_runtime import (
     RaidTrackingRuntimeDependencies,
     RaidTrackingRuntimeService,

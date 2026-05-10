@@ -58,17 +58,19 @@ def register_core_eventsub_callbacks(
     ) -> None:
         offline_dispatch = getattr(owner, "_enqueue_eventsub_stream_offline_processing", None)
         if delivery_mode == "enqueue" and callable(offline_dispatch):
-            callback = lambda: offline_dispatch(
-                broadcaster_id,
-                broadcaster_login,
-                message_id=message_id,
-            )
+            def callback() -> Any:
+                return offline_dispatch(
+                    broadcaster_id,
+                    broadcaster_login,
+                    message_id=message_id,
+                )
         else:
-            callback = lambda: owner._on_eventsub_stream_offline(
-                broadcaster_id,
-                broadcaster_login,
-                message_id=message_id,
-            )
+            def callback() -> Any:
+                return owner._on_eventsub_stream_offline(
+                    broadcaster_id,
+                    broadcaster_login,
+                    message_id=message_id,
+                )
         await _run_callback(
             callback,
             "EventSub: Offline-Callback fehlgeschlagen für %s",

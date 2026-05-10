@@ -88,7 +88,7 @@ def _load_viewer_timeline_payload(
             column_expr="viewer_login",
             excluded_logins=excluded_logins,
         )
-        span_rows = conn.execute(
+        span_rows = conn.execute(  # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
             f"""
             WITH ticked AS (
                 SELECT
@@ -156,7 +156,7 @@ def _load_viewer_timeline_payload(
             column_expr="chatter_login",
             excluded_logins=excluded_logins,
         )
-        message_rows = conn.execute(
+        message_rows = conn.execute(  # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
             f"""
             SELECT LOWER(chatter_login) AS viewer_login, COALESCE(messages, 0) AS messages
             FROM twitch_session_chatters
@@ -179,7 +179,7 @@ def _load_viewer_timeline_payload(
             column_expr="sc.chatter_login",
             excluded_logins=excluded_logins,
         )
-        profile_rows = conn.execute(
+        profile_rows = conn.execute(  # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
             f"""
             SELECT
                 LOWER(sc.chatter_login) AS viewer_login,

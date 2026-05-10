@@ -45,7 +45,7 @@ def _query_scope_presence_stats(
                 "gapStart": None,
             }
         placeholders = ",".join("%s" for _ in session_ids)
-        presence_row = conn.execute(
+        presence_row = conn.execute(  # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
             f"""
             SELECT
                 COUNT(*) AS presence_rows,
@@ -56,7 +56,7 @@ def _query_scope_presence_stats(
             """,
             (streamer_login, *session_ids),
         ).fetchone()
-        gap_row = conn.execute(
+        gap_row = conn.execute(  # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
             f"""
             SELECT MIN(s.started_at) AS gap_start
             FROM twitch_stream_sessions s
@@ -130,7 +130,7 @@ def _query_scope_raw_stats(
                 "lastMessageAt": None,
             }
         placeholders = ",".join("%s" for _ in session_ids)
-        row = conn.execute(
+        row = conn.execute(  # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
             f"""
             SELECT
                 COUNT(*) AS raw_rows,
@@ -308,7 +308,7 @@ def build_viewer_window_metadata(
 
     placeholders = ",".join("%s" for _ in normalized_logins)
 
-    presence_rows = conn.execute(
+    presence_rows = conn.execute(  # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
         f"""
         SELECT
             LOWER(sc.chatter_login) AS chatter_login,
@@ -324,7 +324,7 @@ def build_viewer_window_metadata(
         (normalized_streamer, since_date, *normalized_logins),
     ).fetchall()
 
-    raw_rows = conn.execute(
+    raw_rows = conn.execute(  # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
         f"""
         SELECT
             LOWER(m.chatter_login) AS chatter_login,

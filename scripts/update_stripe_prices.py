@@ -68,7 +68,7 @@ def _save_price_map(price_map: dict[str, Any]) -> None:
     serialized = json.dumps(price_map, ensure_ascii=True, separators=(",", ":"))
     keyring.set_password(SERVICE, "STRIPE_PRICE_ID_MAP", serialized)
     keyring.set_password(SERVICE, "TWITCH_BILLING_STRIPE_PRICE_ID_MAP", serialized)
-    print(f"  vault updated: STRIPE_PRICE_ID_MAP")
+    print("  vault updated: STRIPE_PRICE_ID_MAP")
 
 
 def main(dry_run: bool = False) -> None:

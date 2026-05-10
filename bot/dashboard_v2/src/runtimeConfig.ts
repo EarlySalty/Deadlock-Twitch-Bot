@@ -1,3 +1,11 @@
+import {
+  PREVIEW_ANALYTICS_ROUTE,
+  PREVIEW_HOME_ROUTE,
+  PREVIEW_PRICING_ROUTE,
+  PREVIEW_VERWALTUNG_ROUTE,
+  isPreviewModeEnabled,
+} from './preview/routes';
+
 export interface DashboardRuntimeConfig {
   apiBase: string;
   demoMode: boolean;
@@ -23,6 +31,13 @@ const DEFAULT_CONFIG: DashboardRuntimeConfig = {
   defaultDemoProfile: null,
 };
 
+const LOCAL_PREVIEW_ALLOWED_PROFILES = ['smallcore_focus', 'midcore_live', 'largecore_peak'];
+const LOCAL_PREVIEW_DEFAULT_PROFILE = 'midcore_live';
+
+function isLocalPreviewRuntime(): boolean {
+  return isPreviewModeEnabled();
+}
+
 function sanitizeApiBase(candidate: unknown): string {
   const value = typeof candidate === 'string' ? candidate.trim() : '';
   if (!ALLOWED_API_BASES.has(value)) {
@@ -39,6 +54,15 @@ function sanitizeProfiles(candidate: unknown): string[] {
 }
 
 function readRuntimeConfig(): DashboardRuntimeConfig {
+  if (isLocalPreviewRuntime()) {
+    return {
+      apiBase: DEMO_API_BASE,
+      demoMode: true,
+      allowedDemoProfiles: LOCAL_PREVIEW_ALLOWED_PROFILES,
+      defaultDemoProfile: LOCAL_PREVIEW_DEFAULT_PROFILE,
+    };
+  }
+
   const raw = window.__TWITCH_DASHBOARD_RUNTIME__ ?? {};
 
   // When visited at a demo URL, force demo settings regardless of whether the
@@ -68,6 +92,14 @@ export const dashboardRuntimeConfig = Object.freeze(readRuntimeConfig());
 
 export function isDemoDashboardPath(pathname: string): boolean {
   const normalized = pathname.replace(/\/+$/, '') || '/';
+  if (isPreviewModeEnabled()) {
+    return (
+      normalized === PREVIEW_ANALYTICS_ROUTE ||
+      normalized === PREVIEW_HOME_ROUTE ||
+      normalized === PREVIEW_VERWALTUNG_ROUTE ||
+      normalized === PREVIEW_PRICING_ROUTE
+    );
+  }
   return (
     normalized === '/twitch/demo' ||
     normalized.startsWith('/twitch/demo/') ||

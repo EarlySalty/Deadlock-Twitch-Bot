@@ -761,7 +761,7 @@ def load_admin_streamer_detail(login: str) -> dict[str, Any] | None:
                     WHERE LOWER(s.twitch_login) = LOWER(%s)
                     LIMIT 1
     """
-        row = conn.execute(sql, (normalized_login,)).fetchone()
+        row = conn.execute(sql, (normalized_login,)).fetchone()  # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
         if row is None:
             return None
         stats_row = conn.execute(
@@ -824,7 +824,7 @@ def _admin_database_row_count(conn: Any, table_name: str) -> int | None:
     if not _is_valid_table_name(table_name):
         return None
     try:
-        row = conn.execute(f"SELECT COUNT(*) AS total FROM {table_name}").fetchone()
+        row = conn.execute(f"SELECT COUNT(*) AS total FROM {table_name}").fetchone()  # nosemgrep: python.lang.security.audit.formatted-sql-query.formatted-sql-query, python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
     except Exception:
         return None
     if row is None:
@@ -836,7 +836,7 @@ def _admin_database_table_size_bytes(conn: Any, table_name: str) -> int | None:
     if not _is_valid_table_name(table_name):
         return None
     try:
-        row = conn.execute(
+        row = conn.execute(  # nosemgrep: python.lang.security.audit.formatted-sql-query.formatted-sql-query, python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
             f"SELECT pg_total_relation_size('{table_name}') AS size_bytes"
         ).fetchone()
     except Exception:

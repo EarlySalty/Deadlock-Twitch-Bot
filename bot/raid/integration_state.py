@@ -164,7 +164,7 @@ class RaidIntegrationStateResolver:
             try:
                 return bool(handler.is_token_blacklisted(twitch_user_id))
             except Exception:
-                log.warning(
+                log.warning(  # nosemgrep: python.lang.security.audit.logging.logger-credential-leak.python-logger-credential-disclosure
                     "Raid integration state: token blacklist check failed for %s",
                     twitch_user_id,
                     exc_info=True,

@@ -191,6 +191,13 @@ class RaidRuntimeCoreFacadeMixin:
 
         return os.getenv("TWITCH_BOT_USER_ID", "").strip() or None
 
+    def has_enabled_auth(self, twitch_user_id: str) -> bool:
+        auth_manager = getattr(self, "auth_manager", None)
+        checker = getattr(auth_manager, "has_enabled_auth", None)
+        if not callable(checker):
+            return False
+        return bool(checker(twitch_user_id))
+
     def _load_offline_auto_raid_eligibility(self, broadcaster_id: str) -> Any:
         deps = self._runtime_deps()
         with deps.readonly_connection_factory() as conn:

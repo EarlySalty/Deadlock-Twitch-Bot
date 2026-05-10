@@ -1,5 +1,6 @@
 import { motion } from 'framer-motion';
 import { Zap, TrendingUp, Users } from 'lucide-react';
+import { PREVIEW_BILLING_ROUTE, isPreviewModeEnabled } from '../../preview/routes';
 
 export default function PricingHero() {
   return (
@@ -55,7 +56,7 @@ export default function PricingHero() {
 
         {/* CTA Button */}
         <a
-          href="/twitch/abbo"
+          href={isPreviewModeEnabled() ? PREVIEW_BILLING_ROUTE : '/twitch/abbo'}
           className="inline-flex items-center gap-2 px-8 py-4 rounded-xl bg-gradient-to-r from-[#ff7a18] to-[#ff8d39] text-white font-semibold text-lg shadow-lg shadow-[#ff7a18]/25 hover:shadow-[#ff7a18]/40 hover:scale-105 transition-all duration-200"
         >
           45 Tage kostenlos starten

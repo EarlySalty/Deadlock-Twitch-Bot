@@ -19,6 +19,7 @@ import {
   type TitleHistoryEntry,
   type TitleSuggestResult,
 } from '@/api/title';
+import { isPreviewLocalhost } from '@/preview/routes';
 
 interface TitleGeneratorProps {
   streamer: string | null;
@@ -84,6 +85,15 @@ export function TitleGenerator({ streamer }: TitleGeneratorProps) {
 
   const handleSetOnTwitch = async (title: string) => {
     setSetTitleStatus('loading');
+    if (isPreviewLocalhost()) {
+      window.setTimeout(() => {
+        console.info('Local preview title update simulated:', title);
+        setSetTitleStatus('done');
+        window.setTimeout(() => setSetTitleStatus('idle'), 3000);
+      }, 350);
+      return;
+    }
+
     try {
       const res = await fetch('/twitch/api/v2/channel/title', {
         method: 'PATCH',

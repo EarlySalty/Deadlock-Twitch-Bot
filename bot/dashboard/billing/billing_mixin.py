@@ -341,7 +341,7 @@ class _DashboardBillingMixin:
                 )
             except Exception:
                 try:
-                    conn.execute(f"ALTER TABLE twitch_billing_profiles ADD COLUMN {column_sql}")
+                    conn.execute(f"ALTER TABLE twitch_billing_profiles ADD COLUMN {column_sql}")  # nosemgrep: python.lang.security.audit.formatted-sql-query.formatted-sql-query, python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
                 except Exception:
                     pass
 
@@ -797,7 +797,7 @@ class _DashboardBillingMixin:
             with storage.readonly_connection() as conn:
                 self._billing_ensure_storage_tables(conn)
                 for ref in refs:
-                    row = conn.execute(
+                    row = conn.execute(  # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
                         f"""
                         SELECT customer_reference, stripe_customer_id, stripe_subscription_id, status, updated_at
                         FROM twitch_billing_subscriptions

@@ -1,5 +1,6 @@
 import { motion } from 'framer-motion';
 import { Sparkles, CreditCard, ArrowRight } from 'lucide-react';
+import { PREVIEW_BILLING_ROUTE, isPreviewModeEnabled } from '../../preview/routes';
 
 export default function TrialCallout() {
   return (
@@ -34,7 +35,7 @@ export default function TrialCallout() {
 
           {/* Right: CTA */}
           <a
-            href="/twitch/abbo"
+            href={isPreviewModeEnabled() ? PREVIEW_BILLING_ROUTE : '/twitch/abbo'}
             className="flex items-center gap-2 px-6 py-3 rounded-xl bg-white/10 hover:bg-white/15 border border-white/20 text-white font-medium transition-all duration-200 hover:gap-3"
           >
             Mehr erfahren

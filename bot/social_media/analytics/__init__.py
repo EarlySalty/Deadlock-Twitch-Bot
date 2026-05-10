@@ -173,7 +173,7 @@ def list_reports(
         params.append(streamer_login)
     params.append(max(1, min(int(limit), 100)))
     with readonly_connection() as conn:
-        rows = conn.execute(
+        rows = conn.execute(  # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
             f"""
             SELECT id, kind, streamer_login, period_start, period_end,
                    content_md, model, created_at

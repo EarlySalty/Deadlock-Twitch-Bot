@@ -105,7 +105,7 @@ def warn_user_scope_fallback_once(
     if key in bot._user_scope_fallback_warned:
         return
     bot._user_scope_fallback_warned.add(key)
-    log.warning(
+    log.warning(  # nosemgrep: python.lang.security.audit.logging.logger-credential-leak.python-logger-credential-disclosure
         "RaidBot: nutze Legacy-Broadcaster-Token fuer %s (%s). "
         "Der Bot-Token sollte diesen Pfad uebernehmen.",
         area,

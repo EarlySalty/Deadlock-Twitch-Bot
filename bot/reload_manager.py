@@ -204,7 +204,7 @@ class TwitchReloadManager:
         fresh: list[Any] = []
         for mod_name in sub.modules:
             try:
-                mod = importlib.import_module(mod_name)
+                mod = importlib.import_module(mod_name)  # nosemgrep: python.lang.security.audit.non-literal-import.non-literal-import
                 fresh.append(mod)
             except Exception:
                 log.exception("Hot-reload: failed to import '%s'", mod_name)

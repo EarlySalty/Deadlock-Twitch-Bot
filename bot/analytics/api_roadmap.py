@@ -231,7 +231,7 @@ class _AnalyticsRoadmapMixin:
         try:
             _ensure_roadmap_table()
             with storage.transaction() as conn:
-                conn.execute(
+                conn.execute(  # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
                     f"UPDATE twitch_roadmap_items SET {', '.join(updates)} WHERE id = %s",
                     params,
                 )

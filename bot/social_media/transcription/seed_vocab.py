@@ -15,7 +15,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import logging
-from typing import Iterable, Sequence
+from typing import Iterable
 
 from .vocab import VocabEntry, bulk_upsert_vocab_entries
 

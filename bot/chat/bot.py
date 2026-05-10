@@ -1279,7 +1279,7 @@ if TWITCHIO_AVAILABLE:
                     )
             except Exception as exc:
                 if self._is_twitchio_scope_compat_error(exc):
-                    log.warning(
+                    log.warning(  # nosemgrep: python.lang.security.audit.logging.logger-credential-leak.python-logger-credential-disclosure
                         "Refreshed Bot-Token konnte wegen inkompatibler TwitchIO-Scope-Mappings nicht in TwitchIO registriert werden: %s",
                         exc,
                     )

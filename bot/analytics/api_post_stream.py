@@ -33,6 +33,12 @@ log = logging.getLogger("TwitchStreams.PostStreamAnalysis")
 REPORT_VARIANTS_AB = (REPORT_VARIANT_COMPACT, REPORT_VARIANT_FULL)
 REPORT_PROMPT_VERSION = "post_stream_report_v3_twitch_2026-05-01"
 
+
+def _sanitize_log_value(value: Any) -> str:
+    if value is None:
+        return "<none>"
+    return str(value).replace("\r", "\\r").replace("\n", "\\n")
+
 _WORD_GROUP_PROMPT_TEMPLATE = """Du analysierst den Twitch-Chat eines Gaming-Streams. Es wurden {n} Chat-Nachrichten erfasst.
 
 Erkenne 5-10 thematische Wortgruppen (z.B. Lob, Kritik, Emote-Spam, Hero-Bezuege, Gameplay-Feedback, Fragen, Negativitaet, Hype-Momente, Community-Inside-Jokes).
@@ -1116,7 +1122,10 @@ class _AnalyticsPostStreamMixin:
                         (streamer, variant),
                     ).fetchone()
         except Exception:
-            log.exception("PostStream API: Report-Lookup fehlgeschlagen fuer %s", streamer)
+            log.exception(
+                "PostStream API: Report-Lookup fehlgeschlagen fuer %s",
+                _sanitize_log_value(streamer),
+            )
             return analytics_internal_error_response(
                 error="Post-Stream-Report konnte nicht geladen werden.",
                 code="stream_report_load_failed",
@@ -1258,8 +1267,11 @@ class _AnalyticsPostStreamMixin:
                     (session_id, streamer, variant, rating, comment or None, rated_by),
                 )
             log.info(
-                "PostStream Rating: %s bewertet Session %d/%s als '%s'",
-                rated_by, session_id, variant, rating,
+                "PostStream Rating: %s bewertet Session %s/%s als '%s'",
+                _sanitize_log_value(rated_by),
+                _sanitize_log_value(session_id),
+                _sanitize_log_value(variant),
+                _sanitize_log_value(rating),
             )
             return web.json_response({"ok": True, "rating": rating, "comment": comment})
         except Exception:

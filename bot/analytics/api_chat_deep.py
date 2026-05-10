@@ -22,7 +22,7 @@ from ..social_media.settings import external_llm_consent
 from .chat_social_graph_loader import load_chat_social_graph_payload
 from .error_utils import analytics_internal_error_response
 from .raw_chat_status import build_raw_chat_status
-from .api_ai import _get_minimax_client, MINIMAX_MODEL, _extract_json_array
+from .api_ai import _get_minimax_client, MINIMAX_MODEL
 
 log = logging.getLogger("TwitchStreams.AnalyticsV2")
 
@@ -487,7 +487,7 @@ def _load_chat_hype_timeline_payload(
         duration = sess[3] or 0
         title = sess[4] or ""
 
-        mpm_rows = conn.execute(
+        mpm_rows = conn.execute(  # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
             f"""
             SELECT
                 time_bucket('1 minute', m.message_ts) AS bucket,
@@ -614,7 +614,7 @@ def _load_chat_hype_timeline_payload(
 
         recent_sessions: list[dict[str, object]] = []
         for recent_row in recent_rows:
-            recent_mpm = conn.execute(
+            recent_mpm = conn.execute(  # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
                 f"""
                 SELECT COUNT(*) AS total,
                        COUNT(*) * 1.0 / GREATEST(1,
@@ -715,7 +715,7 @@ class _AnalyticsChatDeepMixin:
                 placeholder="%s",
             )
 
-            rows = conn.execute(
+            rows = conn.execute(  # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
                 f"""
                 SELECT
                     m.message_ts,
@@ -965,7 +965,7 @@ class _AnalyticsChatDeepMixin:
 
         except web.HTTPException:
             raise
-        except Exception as exc:
+        except Exception:
             log.exception("Error in chat-content-analysis API")
             return analytics_internal_error_response()
 
@@ -998,7 +998,7 @@ class _AnalyticsChatDeepMixin:
 
         except web.HTTPException:
             raise
-        except Exception as exc:
+        except Exception:
             log.exception("Error in chat-social-graph API")
             return analytics_internal_error_response()
 
@@ -1024,7 +1024,7 @@ class _AnalyticsChatDeepMixin:
                 column_expr="m.chatter_login",
                 placeholder="%s",
             )
-            rows = conn.execute(
+            rows = conn.execute(  # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
                 f"""
                 SELECT m.content
                 FROM twitch_chat_messages m

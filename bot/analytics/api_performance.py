@@ -460,7 +460,7 @@ class _AnalyticsPerformanceMixin:
             # Tags are stored as JSON in the tags column
             # This is a simplified version - full implementation would parse JSON
             return web.json_response([])
-        except Exception as exc:
+        except Exception:
             log.exception("Error in tag analysis API")
             return analytics_internal_error_response()
 
@@ -624,7 +624,7 @@ class _AnalyticsPerformanceMixin:
                 limit=limit,
             )
             return web.json_response(data)
-        except Exception as exc:
+        except Exception:
             log.exception("Error in tag analysis extended API")
             return analytics_internal_error_response()
 
@@ -746,7 +746,7 @@ class _AnalyticsPerformanceMixin:
                 limit=limit,
             )
             return web.json_response(payload)
-        except Exception as exc:
+        except Exception:
             log.exception("Error in title performance API")
             return analytics_internal_error_response()
 
@@ -854,7 +854,7 @@ class _AnalyticsPerformanceMixin:
                 threshold=threshold,
             )
             return web.json_response(payload)
-        except Exception as exc:
+        except Exception:
             log.exception("Error in rankings API")
             return analytics_internal_error_response()
 
@@ -912,7 +912,7 @@ class _AnalyticsPerformanceMixin:
             cat_peak_params: list[Any] = [since_date]
             if threshold is not None:
                 cat_peak_params.append(threshold)
-            cat_peak = conn.execute(
+            cat_peak = conn.execute(  # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
                 f"""
                 SELECT AVG(max_vc) FROM (
                     SELECT MAX(viewer_count) as max_vc
@@ -961,7 +961,7 @@ class _AnalyticsPerformanceMixin:
             per_ret_params: list[Any] = [since_date]
             if threshold is not None:
                 per_ret_params.append(threshold)
-            per_streamer_ret = conn.execute(
+            per_streamer_ret = conn.execute(  # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
                 f"""
                 SELECT AVG(s.retention_10m) as ret
                 FROM twitch_stream_sessions s
@@ -978,7 +978,7 @@ class _AnalyticsPerformanceMixin:
             per_chat_params: list[Any] = [since_date]
             if threshold is not None:
                 per_chat_params.append(threshold)
-            per_streamer_chat = conn.execute(
+            per_streamer_chat = conn.execute(  # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
                 f"""
                 SELECT AVG(CASE WHEN s.avg_viewers > 0 THEN s.unique_chatters * 100.0 / s.avg_viewers ELSE 0 END) as ch
                 FROM twitch_stream_sessions s
@@ -997,7 +997,7 @@ class _AnalyticsPerformanceMixin:
             peak_params: list[Any] = [since_date]
             if threshold is not None:
                 peak_params.append(threshold)
-            peak_avgs = conn.execute(
+            peak_avgs = conn.execute(  # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
                 f"""
                 SELECT MAX(viewer_count) as peak
                 FROM twitch_stats_category
@@ -1069,7 +1069,7 @@ class _AnalyticsPerformanceMixin:
                 threshold=threshold,
             )
             return web.json_response(payload)
-        except Exception as exc:
+        except Exception:
             log.exception("Error in category comparison API")
             return analytics_internal_error_response()
 
@@ -1169,7 +1169,7 @@ class _AnalyticsPerformanceMixin:
                 days=days,
             )
             return web.json_response(payload)
-        except Exception as exc:
+        except Exception:
             log.exception("Error in viewer timeline API")
             return analytics_internal_error_response()
 
@@ -1304,7 +1304,7 @@ class _AnalyticsPerformanceMixin:
                 threshold=threshold,
             )
             return web.json_response(payload)
-        except Exception as exc:
+        except Exception:
             log.exception("Error in category leaderboard API")
             return analytics_internal_error_response()
 
@@ -1645,7 +1645,7 @@ class _AnalyticsPerformanceMixin:
             session_ids = [int(row[0]) for row in session_rows]
             peak_by_session = {int(row[0]): int(row[1] or 1) for row in session_rows}
             placeholders = ",".join(["%s"] * len(session_ids))
-            viewer_rows = conn.execute(
+            viewer_rows = conn.execute(  # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
                 f"""
                 SELECT session_id, minutes_from_start, viewer_count
                 FROM twitch_session_viewers
@@ -1695,7 +1695,7 @@ class _AnalyticsPerformanceMixin:
 
             ad_times: set[int] = set()
             try:
-                ad_rows = conn.execute(
+                ad_rows = conn.execute(  # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
                     f"""
                     SELECT a.started_at, s.started_at AS session_start
                     FROM twitch_ad_break_events a
@@ -1772,6 +1772,6 @@ class _AnalyticsPerformanceMixin:
                 days=days,
             )
             return web.json_response(payload)
-        except Exception as exc:
+        except Exception:
             log.exception("Error in retention curve API")
             return analytics_internal_error_response()

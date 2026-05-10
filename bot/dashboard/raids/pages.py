@@ -136,8 +136,8 @@ def build_raid_analytics_page(
 
     if leechers:
         leecher_items = "".join(
-            f"<li><strong>{html.escape(l['login'])}</strong> — {l['received']} Raids empfangen, 0 gesendet</li>"
-            for l in leechers
+            f"<li><strong>{html.escape(leecher['login'])}</strong> — {leecher['received']} Raids empfangen, 0 gesendet</li>"
+            for leecher in leechers
         )
         leecher_html = f"<div class='alert-card'><h2>Keine Raids zurückgegeben <span class='badge badge-err'>{len(leechers)}</span></h2><ul>{leecher_items}</ul></div>"
     else:

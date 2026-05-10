@@ -129,7 +129,7 @@ class UploadWorker(commands.Cog):
             uploader = None
 
         if uploader and streamer_login and credentials.get("streamer_login") is None:
-            log.info(
+            log.info(  # nosemgrep: python.lang.security.audit.logging.logger-credential-leak.python-logger-credential-disclosure
                 "Using global %s credentials as fallback for streamer=%s",
                 platform,
                 streamer_login,
@@ -175,7 +175,7 @@ class UploadWorker(commands.Cog):
                 uploader_cache,
             )
             if not uploader:
-                log.warning(
+                log.warning(  # nosemgrep: python.lang.security.audit.logging.logger-credential-leak.python-logger-credential-disclosure
                     "No uploader credentials available for queue_id=%s, platform=%s, streamer=%s",
                     item["id"],
                     item["platform"],

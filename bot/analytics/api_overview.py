@@ -1118,7 +1118,7 @@ class _AnalyticsOverviewMixin:
             column_expr="sc.chatter_login",
             placeholder="%s",
         )
-        rows = conn.execute(
+        rows = conn.execute(  # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
             f"""
             WITH base_sessions AS (
                 SELECT
@@ -1282,7 +1282,7 @@ class _AnalyticsOverviewMixin:
             placeholder="%s",
         )
 
-        row = conn.execute(
+        row = conn.execute(  # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
             f"""
             WITH filtered_session_chatters AS (
                 SELECT
@@ -1398,7 +1398,7 @@ class _AnalyticsOverviewMixin:
         # True unique chatters from rollup table (not SUM of per-session counts)
         unique_chatters_sum = int(row[9]) if row[9] else 0
         if streamer:
-            true_unique = conn.execute(
+            true_unique = conn.execute(  # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
                 f"""
                 SELECT COUNT(DISTINCT chatter_login)
                 FROM twitch_chatter_rollup
@@ -1437,7 +1437,7 @@ class _AnalyticsOverviewMixin:
         follower_valid_count = int(sample_row[2]) if sample_row else 0
 
         # Active chatters (at least 1 message) for engagement rate calculation
-        active_chatters_row = conn.execute(
+        active_chatters_row = conn.execute(  # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
             f"""
             SELECT COUNT(DISTINCT COALESCE(NULLIF(sc.chatter_login, ''), sc.chatter_id))
             FROM twitch_session_chatters sc
@@ -1455,7 +1455,7 @@ class _AnalyticsOverviewMixin:
         )
 
         # Distinct Zuschauer (Chatters + Chatters-API ohne Nachrichten)
-        distinct_viewers_row = conn.execute(
+        distinct_viewers_row = conn.execute(  # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
             f"""
             SELECT COUNT(DISTINCT COALESCE(NULLIF(sc.chatter_login, ''), sc.chatter_id))
             FROM twitch_session_chatters sc
@@ -1734,7 +1734,7 @@ class _AnalyticsOverviewMixin:
                 column_expr="sc.chatter_login",
                 placeholder="%s",
             )
-            agg_row = conn.execute(
+            agg_row = conn.execute(  # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
                 f"""
                 WITH sessions AS (
                     SELECT id
@@ -1819,7 +1819,7 @@ class _AnalyticsOverviewMixin:
                     "message": "Zu wenig Chatter-API/Lurker-Daten im Zeitraum",
                 }
 
-            top_rows = conn.execute(
+            top_rows = conn.execute(  # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
                 f"""
                 WITH sessions AS (
                     SELECT id
@@ -2114,7 +2114,7 @@ class _AnalyticsOverviewMixin:
                 column_expr="cr.chatter_login",
                 placeholder="%s",
             )
-            dist_rows = conn.execute(
+            dist_rows = conn.execute(  # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
                 f"""
                 WITH per_viewer AS (
                     SELECT cr.chatter_login,
@@ -2138,7 +2138,7 @@ class _AnalyticsOverviewMixin:
                 (streamer, *rollup_bot_params, *rollup_bot_params_cr),
             ).fetchall()
 
-            passive_row = conn.execute(
+            passive_row = conn.execute(  # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
                 f"""
                 SELECT COUNT(*) AS passive
                 FROM twitch_chatter_rollup
@@ -2219,7 +2219,7 @@ class _AnalyticsOverviewMixin:
                 column_expr="cr2.chatter_login",
                 placeholder="%s",
             )
-            my_total_row = conn.execute(
+            my_total_row = conn.execute(  # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
                 f"""
                 SELECT COUNT(DISTINCT chatter_login) AS total
                 FROM twitch_chatter_rollup
@@ -2230,7 +2230,7 @@ class _AnalyticsOverviewMixin:
             ).fetchone()
             my_total = int(my_total_row[0]) if my_total_row and my_total_row[0] else 0
 
-            shared_rows = conn.execute(
+            shared_rows = conn.execute(  # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
                 f"""
                 SELECT
                     cr2.streamer_login AS other_streamer,
@@ -2272,7 +2272,7 @@ class _AnalyticsOverviewMixin:
             top_streamers = [str(r[0]).lower() for r in shared_rows[:5] if r[0]]
             if top_streamers:
                 top_placeholders = ",".join(["%s"] * len(top_streamers))
-                timeline_rows = conn.execute(
+                timeline_rows = conn.execute(  # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
                     f"""
                     SELECT
                         TO_CHAR(

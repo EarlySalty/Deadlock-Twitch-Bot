@@ -127,7 +127,9 @@ class _StorageStubBase(unittest.TestCase):
         self.conn = sqlite3.connect(":memory:")
         self.conn.row_factory = sqlite3.Row
         self.conn.executescript(SCHEMA_SQL)
-        compat = lambda: contextlib.nullcontext(_SqliteCompatConn(self.conn))
+        def compat():
+            return contextlib.nullcontext(_SqliteCompatConn(self.conn))
+
         self.patches = contextlib.ExitStack()
         for module in (
             "bot.social_media.approval.approval_service",

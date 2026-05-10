@@ -75,13 +75,13 @@ class RaidPartnerScoreSelectionTests(unittest.IsolatedAsyncioTestCase):
         stack = contextlib.ExitStack()
         stack.enter_context(
             patch(
-                "bot.raid.bot.readonly_connection",
+                "bot.raid.runtime.dependencies.readonly_connection",
                 side_effect=lambda: contextlib.nullcontext(_CompatConn(self.conn)),
             )
         )
         stack.enter_context(
             patch(
-                "bot.raid.bot.transaction",
+                "bot.raid.runtime.dependencies.transaction",
                 side_effect=lambda: contextlib.nullcontext(_CompatConn(self.conn)),
             )
         )
@@ -119,7 +119,7 @@ class RaidPartnerScoreSelectionTests(unittest.IsolatedAsyncioTestCase):
         with (
             self._conn_patch(),
             patch(
-                "bot.raid.bot.load_partner_raid_score_map",
+                "bot.raid.runtime.dependencies.load_partner_raid_score_map",
                 side_effect=self._score_map(score_rows),
             ),
             patch.object(self.raid_bot, "_attach_followers_totals", new=AsyncMock()) as attach_mock,
@@ -159,7 +159,7 @@ class RaidPartnerScoreSelectionTests(unittest.IsolatedAsyncioTestCase):
         with (
             self._conn_patch(),
             patch(
-                "bot.raid.bot.load_partner_raid_score_map",
+                "bot.raid.runtime.dependencies.load_partner_raid_score_map",
                 side_effect=self._score_map(score_rows),
             ),
             patch.object(self.raid_bot, "_attach_followers_totals", new=AsyncMock()) as attach_mock,
@@ -207,7 +207,7 @@ class RaidPartnerScoreSelectionTests(unittest.IsolatedAsyncioTestCase):
         with (
             self._conn_patch(),
             patch(
-                "bot.raid.bot.load_partner_raid_score_map",
+                "bot.raid.runtime.dependencies.load_partner_raid_score_map",
                 side_effect=self._score_map(score_rows),
             ),
             patch.object(self.raid_bot, "_attach_followers_totals", new=AsyncMock()) as attach_mock,
@@ -254,7 +254,7 @@ class RaidPartnerScoreSelectionTests(unittest.IsolatedAsyncioTestCase):
         with (
             self._conn_patch(),
             patch(
-                "bot.raid.bot.load_partner_raid_score_map",
+                "bot.raid.runtime.dependencies.load_partner_raid_score_map",
                 side_effect=self._score_map(score_rows),
             ),
             patch.object(self.raid_bot, "_get_recent_raid_targets", return_value={"1001"}),
@@ -322,7 +322,7 @@ class RaidPartnerScoreSelectionTests(unittest.IsolatedAsyncioTestCase):
         with (
             self._conn_patch(),
             patch(
-                "bot.raid.bot.refresh_partner_raid_score_async",
+                "bot.raid.runtime.dependencies.refresh_partner_raid_score_async",
                 new=AsyncMock(return_value={"twitch_user_id": "9009"}),
             ) as refresh_mock,
             patch.object(
@@ -494,13 +494,13 @@ class ManualRaidFlowTests(unittest.IsolatedAsyncioTestCase):
         stack = contextlib.ExitStack()
         stack.enter_context(
             patch(
-                "bot.raid.bot.readonly_connection",
+                "bot.raid.runtime.dependencies.readonly_connection",
                 side_effect=lambda: contextlib.nullcontext(_CompatConn(self.conn)),
             )
         )
         stack.enter_context(
             patch(
-                "bot.raid.bot.transaction",
+                "bot.raid.runtime.dependencies.transaction",
                 side_effect=lambda: contextlib.nullcontext(_CompatConn(self.conn)),
             )
         )
@@ -1123,7 +1123,7 @@ class OfflineRaidSourceLoggingTests(unittest.IsolatedAsyncioTestCase):
 
     def _conn_patch(self):
         return patch(
-            "bot.raid.bot.readonly_connection",
+            "bot.raid.runtime.dependencies.readonly_connection",
             side_effect=lambda: contextlib.nullcontext(_CompatConn(self.conn)),
         )
 

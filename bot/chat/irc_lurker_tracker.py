@@ -15,7 +15,7 @@ import re
 from datetime import UTC, datetime
 
 from ..core.chat_bots import is_known_chat_bot
-from ..storage import readonly_connection, transaction
+from ..storage import transaction
 
 log = logging.getLogger("TwitchStreams.IRCLurkerTracker")
 

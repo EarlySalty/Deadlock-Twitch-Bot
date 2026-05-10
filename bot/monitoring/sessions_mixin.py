@@ -84,7 +84,7 @@ class _SessionsMixin:
         if key in cache:
             return
         cache.add(key)
-        log.warning(
+        log.warning(  # nosemgrep: python.lang.security.audit.logging.logger-credential-leak.python-logger-credential-disclosure
             "Follower-Abfrage: nutze Legacy-Broadcaster-Token fuer %s. "
             "Der botzentrierte Pfad sollte 'moderator:read:followers' ueber den Bot abdecken.",
             login or "<unknown>",

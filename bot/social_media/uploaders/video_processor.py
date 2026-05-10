@@ -168,7 +168,10 @@ class VideoProcessor:
             log.error("ffprobe not found in PATH")
             raise
         except Exception:
-            log.exception("Failed to get video info for %s", video_path)
+            log.exception(
+                "Failed to get video info for %s",
+                str(video_path).replace("\r", "\\r").replace("\n", "\\n"),
+            )
             raise
 
     def compose_vertical(

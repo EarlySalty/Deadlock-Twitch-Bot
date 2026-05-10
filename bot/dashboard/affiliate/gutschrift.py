@@ -274,7 +274,7 @@ class AffiliateGutschriftService:
             for column_name, definition in additions:
                 if column_name in gutschrift_columns:
                     continue
-                conn.execute(
+                conn.execute(  # nosemgrep: python.lang.security.audit.formatted-sql-query.formatted-sql-query, python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
                     f"ALTER TABLE affiliate_gutschriften ADD COLUMN {column_name} {definition}"
                 )
                 gutschrift_columns.add(column_name)

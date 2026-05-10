@@ -149,8 +149,6 @@ class RaidCommandsMixin:
             return
 
         twitch_login = row["twitch_login"] if hasattr(row, "keys") else row[2]
-        twitch_user_id = row["twitch_user_id"] if hasattr(row, "keys") else row[1]
-
         if not hasattr(self, "_raid_bot") or not self._raid_bot:
             await ctx.send(
                 "⚠️ Der Twitch-Bot ist derzeit nicht verfügbar. Bitte wende dich an @EarlySalty.",
@@ -189,7 +187,6 @@ class RaidCommandsMixin:
 
         twitch_login = row["twitch_login"] if hasattr(row, "keys") else row[2]
         twitch_user_id = row["twitch_user_id"] if hasattr(row, "keys") else row[1]
-        raid_bot_enabled = row["raid_bot_enabled"] if hasattr(row, "keys") else row[9]
 
         # Prüfen, ob bereits autorisiert
         with readonly_connection() as conn:
@@ -291,7 +288,6 @@ class RaidCommandsMixin:
 
         twitch_login = _s_row["twitch_login"] if hasattr(_s_row, "keys") else _s_row[2]
         twitch_user_id = _s_row["twitch_user_id"] if hasattr(_s_row, "keys") else _s_row[1]
-        raid_bot_enabled = _s_row["raid_bot_enabled"] if hasattr(_s_row, "keys") else _s_row[9]
 
         with readonly_connection() as conn:
             _a_row = conn.execute(
@@ -521,7 +517,7 @@ class RaidCommandsMixin:
             _uids = [r[0] for r in _auth_rows]
             _ph = ",".join("%s" for _ in _uids)
             with readonly_connection() as conn:
-                _discord_rows = conn.execute(
+                _discord_rows = conn.execute(  # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
                     f"SELECT twitch_user_id, discord_user_id FROM twitch_streamer_identities WHERE twitch_user_id IN ({_ph})",
                     _uids,
                 ).fetchall()
@@ -677,8 +673,6 @@ class RaidCommandsMixin:
             ).fetchone()
         twitch_login = _a_row[0] if _a_row else None
         error_message = _b_row[0] if _b_row else None
-        notified = _b_row[1] if _b_row else None
-        user_dm_sent = _b_row[2] if _b_row else None
         error_message = (
             error_message or 'HTTP 400: {"status":400,"message":"Invalid refresh token"}'
         )

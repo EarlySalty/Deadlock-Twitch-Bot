@@ -1057,7 +1057,7 @@ class ConnectionMixin:
                                         error_message=error_message,
                                     )
                             except Exception:
-                                log.debug(
+                                log.debug(  # nosemgrep: python.lang.security.audit.logging.logger-credential-leak.python-logger-credential-disclosure
                                     "_ensure_bot_is_mod: invalid-token handling failed for %s",
                                     broadcaster_login,
                                     exc_info=True,
@@ -1131,7 +1131,7 @@ class ConnectionMixin:
 
         expected_bot_id = str(getattr(self, "bot_id", "") or "").strip()
         if expected_bot_id and user_id != expected_bot_id:
-            log.warning(
+            log.warning(  # nosemgrep: python.lang.security.audit.logging.logger-credential-leak.python-logger-credential-disclosure
                 "Bot auth could not be registered in TwitchIO without refresh token; token belongs to unexpected user_id=%s.",
                 user_id,
             )
@@ -1143,7 +1143,7 @@ class ConnectionMixin:
             existing_mapping["last_validated"] = datetime.now().isoformat()
             if isinstance(static_token_store, dict):
                 static_token_store.pop(user_id, None)
-            log.info(
+            log.info(  # nosemgrep: python.lang.security.audit.logging.logger-credential-leak.python-logger-credential-disclosure
                 "Bot auth updated in TwitchIO using existing refresh-capable token mapping (expires_in=%s).",
                 int(getattr(payload, "expires_in", 0) or 0) or "unknown",
             )
@@ -1161,12 +1161,12 @@ class ConnectionMixin:
 
         expires_in = int(getattr(payload, "expires_in", 0) or 0)
         if expires_in and expires_in <= 3600:
-            log.warning(
+            log.warning(  # nosemgrep: python.lang.security.audit.logging.logger-credential-leak.python-logger-credential-disclosure
                 "Bot auth registered in TwitchIO without refresh token; token expires in %ss and cannot be auto-refreshed.",
                 expires_in,
             )
         else:
-            log.info(
+            log.info(  # nosemgrep: python.lang.security.audit.logging.logger-credential-leak.python-logger-credential-disclosure
                 "Bot auth registered in TwitchIO without refresh token (expires_in=%s).",
                 expires_in or "unknown",
             )
@@ -1253,7 +1253,7 @@ class ConnectionMixin:
             # noch nicht vollständig abgeschlossen war.
             token_registered = await self._ensure_bot_token_registered()
             if not token_registered:
-                log.warning(
+                log.warning(  # nosemgrep: python.lang.security.audit.logging.logger-credential-leak.python-logger-credential-disclosure
                     "join(): Bot-Token konnte für %s nicht sicher in TwitchIO registriert werden; Subscribe-Versuch läuft trotzdem weiter.",
                     channel_login,
                 )

@@ -2,6 +2,7 @@ import { motion } from 'framer-motion';
 import { useQuery } from '@tanstack/react-query';
 import { fetchInternalHome } from '@/api/home';
 import { useAuthStatus } from '@/hooks/useAnalytics';
+import { PREVIEW_HOME_ROUTE, isPreviewModeEnabled } from '@/preview/routes';
 import {
   ArrowLeft,
   ArrowRight,
@@ -67,7 +68,9 @@ export function VerwaltungPage() {
   const missingScopeCount = missingScopes.length;
   const hasScopeIssue = needsReauth || missingScopeCount > 0 || home.oauth?.status === 'partial' || home.oauth?.status === 'missing';
   const oauthStatus = home.oauth?.status || (home.oauth?.connected ? 'connected' : hasScopeIssue ? 'missing' : 'partial');
-  const oauthFallbackUrl = '/twitch/auth/login?next=%2Ftwitch%2Fdashboard';
+  const oauthFallbackUrl = isPreviewModeEnabled()
+    ? PREVIEW_HOME_ROUTE
+    : '/twitch/auth/login?next=%2Ftwitch%2Fdashboard';
   const reconnectUrl = home.oauth?.reconnectUrl || oauthFallbackUrl;
   const discordConnected = Boolean(home.discord?.connected);
   const discordConnectUrl = home.discord?.connectUrl || null;
@@ -158,7 +161,7 @@ export function VerwaltungPage() {
               </p>
             </div>
             <a
-              href="/twitch/dashboard"
+              href={PREVIEW_HOME_ROUTE}
               className="inline-flex items-center gap-2 text-sm text-text-secondary transition-colors hover:text-white"
             >
               <ArrowLeft className="h-4 w-4" />

@@ -20,7 +20,7 @@ def export_lazy(
     def _load() -> ModuleType:
         nonlocal module_cache
         if module_cache is None:
-            module_cache = import_module(target, globals_dict["__package__"])
+            module_cache = import_module(target, globals_dict["__package__"])  # nosemgrep: python.lang.security.audit.non-literal-import.non-literal-import
         return module_cache
 
     def __getattr__(name: str) -> Any:
@@ -52,7 +52,7 @@ def export_name_map(
     def _load(target: str) -> ModuleType:
         module = module_cache.get(target)
         if module is None:
-            module = import_module(target, globals_dict["__package__"])
+            module = import_module(target, globals_dict["__package__"])  # nosemgrep: python.lang.security.audit.non-literal-import.non-literal-import
             module_cache[target] = module
         return module
 

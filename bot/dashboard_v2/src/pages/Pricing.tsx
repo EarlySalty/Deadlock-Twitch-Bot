@@ -6,6 +6,7 @@ import PricingHero from '../components/pricing/PricingHero';
 import TrialCallout from '../components/pricing/TrialCallout';
 import PlanCardRedesign from '../components/pricing/PlanCardRedesign';
 import FeatureComparisonGrid from '../components/pricing/FeatureComparisonGrid';
+import { PREVIEW_HOME_ROUTE } from '../preview/routes';
 
 const faqData = [
   {
@@ -112,7 +113,7 @@ export default function Pricing() {
       >
         <p className="text-white/40 mb-4">Noch nicht überzeugt?</p>
         <a
-          href="/twitch/dashboard"
+          href={PREVIEW_HOME_ROUTE}
           className="inline-flex items-center gap-2 text-[#10b7ad] hover:text-[#1dd4ca] font-medium transition-colors"
         >
           Zurück zum Dashboard

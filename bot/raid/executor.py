@@ -6,20 +6,13 @@ Verwaltet:
 - Raid-Ausführung und Metadaten-Speicherung
 """
 
-import asyncio
-import json
 import logging
 import os
-import secrets
 import time
-from datetime import UTC, datetime
-from urllib.parse import urlencode
 
 import aiohttp
-import discord
 
-from ..api.token_error_handler import TokenErrorHandler
-from ..storage import backfill_tracked_stats_from_category, transaction
+from ..storage import transaction
 from .scope_profiles import BASE_STREAMER_SCOPES
 
 TWITCH_TOKEN_URL = "https://id.twitch.tv/oauth2/token"  # noqa: S105

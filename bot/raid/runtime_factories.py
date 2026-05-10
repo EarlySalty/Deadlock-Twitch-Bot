@@ -303,6 +303,7 @@ def make_offline_raid_orchestrator(bot: Any) -> OfflineRaidOrchestrator:
         execute_raid_pipeline=bot._execute_raid_pipeline,
         is_offline_auto_raid_suppressed=bot.is_offline_auto_raid_suppressed,
         load_offline_auto_raid_eligibility=bot._load_offline_auto_raid_eligibility,
+        get_target_game_lower=bot._get_target_game_lower,
         logger=log,
     )
 

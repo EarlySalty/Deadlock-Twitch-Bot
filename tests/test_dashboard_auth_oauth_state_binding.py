@@ -448,6 +448,23 @@ class DashboardOAuthStateBindingTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertIs(response, delegated_response)
 
+    async def test_shared_callback_delegates_success_flow_to_raid_handler_without_dashboard_state(self) -> None:
+        handler = _AuthHarness()
+        delegated_response = web.Response(text="raid callback", status=202)
+
+        async def _raid_oauth_callback(_request):
+            return delegated_response
+
+        handler.raid_oauth_callback = _raid_oauth_callback
+        request = _make_request(
+            query={"state": "raid-state", "code": "oauth-code"},
+            path_qs="/callback/twitch?state=raid-state&code=oauth-code",
+        )
+
+        response = await handler.auth_callback(request)
+
+        self.assertIs(response, delegated_response)
+
     async def test_discord_auth_login_delegates_to_shared_callback(self) -> None:
         handler = _AuthHarness()
         request = _make_request(

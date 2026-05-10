@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 import contextlib
 import json
 import sqlite3
@@ -23,7 +22,6 @@ from bot.social_media.enrichment import (
     get_enrichment,
     iter_pending_enrichments,
     update_enrichment_status,
-    update_manual_edit,
 )
 from bot.social_media.llm._parsing import parse_llm_payload
 from bot.social_media.llm.base import (
@@ -32,7 +30,6 @@ from bot.social_media.llm.base import (
     LLMResponse,
     LLMUnavailable,
     PlatformEnrichment,
-    StreamerProfile,
 )
 from bot.social_media.llm.dispatcher import LLMDispatcher
 from bot.social_media.transcription.correction import correct_transcript

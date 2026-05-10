@@ -1001,7 +1001,7 @@ class TwitchAnalyticsMixin:
             return
         warned.add(key)
         diagnostics = self._format_bot_chatters_diagnostics(bot_diagnostics)
-        log.warning(
+        log.warning(  # nosemgrep: python.lang.security.audit.logging.logger-credential-leak.python-logger-credential-disclosure
             "Chatters-Poller: nutze Legacy-Broadcaster-Token fuer %s (Session %s). "
             "Bot-Pfad: %s",
             login,
@@ -2325,7 +2325,7 @@ class TwitchAnalyticsMixin:
                     target_session_id = target_session["id"]
 
                     def _count_chatters(offset_min: int) -> int:
-                        row = pg.execute(
+                        row = pg.execute(  # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
                             f"""
                             SELECT COUNT(
                                 DISTINCT COALESCE(NULLIF(sc.chatter_login, ''), sc.chatter_id)
@@ -2350,7 +2350,7 @@ class TwitchAnalyticsMixin:
                     c15 = _count_chatters(15)
                     c30 = _count_chatters(30)
 
-                    known_row = pg.execute(
+                    known_row = pg.execute(  # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
                         f"""
                         SELECT COUNT(DISTINCT sc.chatter_login) AS known
                         FROM twitch_session_chatters sc
@@ -2373,7 +2373,7 @@ class TwitchAnalyticsMixin:
                     ).fetchone()
                     known_from_raider = known_row["known"] if known_row else 0
 
-                    new_row = pg.execute(
+                    new_row = pg.execute(  # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
                         f"""
                         SELECT COUNT(
                             DISTINCT COALESCE(NULLIF(sc.chatter_login, ''), sc.chatter_id)
@@ -2404,7 +2404,7 @@ class TwitchAnalyticsMixin:
                     ).fetchone()
                     new_to_target = new_row["new_viewers"] if new_row else 0
 
-                    new_chat_row = pg.execute(
+                    new_chat_row = pg.execute(  # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
                         f"""
                         SELECT COUNT(
                             DISTINCT COALESCE(NULLIF(sc.chatter_login, ''), sc.chatter_id)

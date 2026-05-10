@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { X, Sparkles, Clock } from 'lucide-react';
 import { usePlan } from '../../context/PlanContext';
+import { PREVIEW_PRICING_ROUTE } from '../../preview/routes';
 
 const MODAL_SHOWN_KEY = 'trial-expiry-modal-shown';
 
@@ -34,7 +35,7 @@ export function TrialExpiryModal() {
 
   const handleUpgrade = () => {
     localStorage.setItem(MODAL_SHOWN_KEY, new Date().toISOString());
-    window.location.href = '/twitch/pricing';
+    window.location.href = PREVIEW_PRICING_ROUTE;
   };
 
   const handleDismiss = () => {

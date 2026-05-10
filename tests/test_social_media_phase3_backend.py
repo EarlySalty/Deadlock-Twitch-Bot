@@ -4,7 +4,7 @@ import contextlib
 import json
 import sqlite3
 import unittest
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from decimal import Decimal
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch

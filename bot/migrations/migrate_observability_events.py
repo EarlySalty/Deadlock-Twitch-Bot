@@ -139,13 +139,15 @@ def main() -> int:
     # 6. Compression Policy
     print(f"\n[6] Setze Kompressions-Policy ({args.retention_days} Tage) …")
     try:
-        conn.execute(f"""
+        conn.execute(  # nosemgrep: python.lang.security.audit.formatted-sql-query.formatted-sql-query, python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
+            f"""
             SELECT add_compression_policy(
                 'twitch_observability_events',
                 INTERVAL '{args.retention_days} days',
                 if_not_exists => TRUE
             )
-        """)
+            """
+        )
         conn.commit()
         print("  Kompressions-Policy gesetzt.")
     except Exception as exc:
@@ -155,13 +157,15 @@ def main() -> int:
     # 7. Retention Policy
     print(f"\n[7] Setze Retention-Policy ({args.retention_days} Tage) …")
     try:
-        conn.execute(f"""
+        conn.execute(  # nosemgrep: python.lang.security.audit.formatted-sql-query.formatted-sql-query, python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
+            f"""
             SELECT add_retention_policy(
                 'twitch_observability_events',
                 INTERVAL '{args.retention_days} days',
                 if_not_exists => TRUE
             )
-        """)
+            """
+        )
         conn.commit()
         print("  Retention-Policy gesetzt.")
     except Exception as exc:

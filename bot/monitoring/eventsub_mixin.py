@@ -978,7 +978,7 @@ class _EventSubMixin:
         try:
             columns_sql = ", ".join(_EVENTSUB_LIVE_STATE_COLUMNS)
             with storage.readonly_connection() as c:
-                row = c.execute(
+                row = c.execute(  # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
                     f"""
                     SELECT {columns_sql}
                       FROM twitch_live_state

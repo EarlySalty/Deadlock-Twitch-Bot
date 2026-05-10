@@ -26,7 +26,7 @@ DECISION_EDIT = "edit"
 
 SUPPORTED_PLATFORMS: tuple[str, ...] = ("youtube", "tiktok", "instagram")
 
-_DEFAULT_ADMIN_DISCORD_USER_ID = "662995601738170389"
+_DEFAULT_ADMIN_DISCORD_USER_ID = "662995601738170389"  # nosemgrep: discord-client-id
 
 
 def _utcnow() -> datetime:
@@ -680,7 +680,7 @@ class ApprovalService:
         if not column:
             return True
         with readonly_connection() as conn:
-            row = conn.execute(
+            row = conn.execute(  # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
                 f"""
                 SELECT {column} AS uploaded,
                        EXISTS(

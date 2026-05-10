@@ -36,6 +36,10 @@ def _lookup_bot_symbol(name: str) -> Any:
     return getattr(_bot_module(), name)
 
 
+def _lookup_runtime_dependency(name: str) -> Any:
+    return globals()[name]
+
+
 class DynamicCallable:
     def __init__(self, symbol_name: str) -> None:
         self._symbol_name = str(symbol_name or "").strip()
@@ -50,6 +54,19 @@ class DynamicCallable:
 class OptionalDynamicCallable(DynamicCallable):
     def __bool__(self) -> bool:
         return callable(_lookup_bot_symbol(self._symbol_name))
+
+
+class RuntimeDependencyCallable(DynamicCallable):
+    def __call__(self, *args: Any, **kwargs: Any) -> Any:
+        target = _lookup_runtime_dependency(self._symbol_name)
+        if not callable(target):
+            raise LookupError(f"bot.raid.runtime.dependencies.{self._symbol_name} is not callable")
+        return target(*args, **kwargs)
+
+
+class OptionalRuntimeDependencyCallable(RuntimeDependencyCallable):
+    def __bool__(self) -> bool:
+        return callable(_lookup_runtime_dependency(self._symbol_name))
 
 
 @dataclass(slots=True, frozen=True)
@@ -79,17 +96,19 @@ class RaidRuntimeDeps:
 
 def build_default_raid_runtime_deps() -> RaidRuntimeDeps:
     return RaidRuntimeDeps(
-        readonly_connection_factory=DynamicCallable("readonly_connection"),
-        transaction_factory=DynamicCallable("transaction"),
+        readonly_connection_factory=RuntimeDependencyCallable("readonly_connection"),
+        transaction_factory=RuntimeDependencyCallable("transaction"),
         load_active_partner_fn=load_active_partner,
         load_offline_auto_raid_eligibility_fn=load_offline_auto_raid_eligibility,
         load_streamer_identity_fn=load_streamer_identity,
         insert_observability_event_fn=insert_observability_event,
-        load_partner_raid_score_map_fn=OptionalDynamicCallable("load_partner_raid_score_map"),
-        refresh_partner_raid_score_async_fn=OptionalDynamicCallable(
+        load_partner_raid_score_map_fn=OptionalRuntimeDependencyCallable(
+            "load_partner_raid_score_map"
+        ),
+        refresh_partner_raid_score_async_fn=OptionalRuntimeDependencyCallable(
             "refresh_partner_raid_score_async"
         ),
-        track_confirmed_partner_raid_fn=OptionalDynamicCallable(
+        track_confirmed_partner_raid_fn=OptionalRuntimeDependencyCallable(
             "track_confirmed_partner_raid"
         ),
         utcnow=lambda: _lookup_bot_symbol("datetime").now(_lookup_bot_symbol("UTC")),

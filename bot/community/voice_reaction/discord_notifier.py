@@ -7,7 +7,6 @@ Schickt einen kompakten Embed an den Sales-Channel, sobald der Brain
 
 from __future__ import annotations
 
-import json
 import logging
 import os
 from dataclasses import dataclass

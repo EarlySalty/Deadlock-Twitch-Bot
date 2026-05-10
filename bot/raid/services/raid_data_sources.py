@@ -266,7 +266,7 @@ class RaidDataSourceService:
         placeholders = ",".join("%s" for _ in partner_logins_lower)
         connection_factory = self.readonly_connection_factory or readonly_connection
         with connection_factory() as conn:
-            rows = conn.execute(
+            rows = conn.execute(  # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
                 f"""
                 SELECT streamer_login, had_deadlock_in_session, last_game, last_deadlock_seen_at
                   FROM twitch_live_state

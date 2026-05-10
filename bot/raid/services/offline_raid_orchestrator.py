@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 import time
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -22,7 +22,20 @@ ResolveTargetCategoryId = Callable[..., Awaitable[str | None]]
 ExecuteRaidPipeline = Callable[..., Awaitable[dict[str, object]]]
 IsOfflineSuppressed = Callable[[str], bool]
 LoadOfflineEligibility = Callable[[str], Any]
+GetTargetGameLower = Callable[[], str]
 MonotonicFn = Callable[[], float]
+
+
+@dataclass(slots=True, frozen=True)
+class OfflineRaidContext:
+    target_game_lower: str
+    last_game: str
+    had_deadlock_session: bool
+    last_deadlock_seen_at: str | None
+    source_evaluation: dict[str, object]
+    online_partners: list[dict[str, Any]]
+    eligible_partners: list[dict[str, Any]]
+    filtered_out: list[str]
 
 
 @dataclass(slots=True)
@@ -40,8 +53,44 @@ class OfflineRaidOrchestrator:
     execute_raid_pipeline: ExecuteRaidPipeline
     is_offline_auto_raid_suppressed: IsOfflineSuppressed
     load_offline_auto_raid_eligibility: LoadOfflineEligibility
+    get_target_game_lower: GetTargetGameLower
     logger: logging.Logger = field(default_factory=lambda: log)
     monotonic: MonotonicFn = time.monotonic
+
+    def prepare_offline_auto_raid_context(
+        self,
+        *,
+        broadcaster_id: str,
+        previous_state: Mapping[str, object],
+        streams_by_login: dict[str, dict[str, Any]],
+    ) -> OfflineRaidContext:
+        last_game = str(previous_state.get("last_game") or "").strip()
+        had_deadlock_session = bool(
+            int(previous_state.get("had_deadlock_in_session", 0) or 0)
+        )
+        last_deadlock_seen_at = (
+            str(previous_state.get("last_deadlock_seen_at") or "").strip() or None
+        )
+        source_evaluation = self.evaluate_deadlock_raid_source(
+            current_game=last_game,
+            had_deadlock_session=had_deadlock_session,
+            last_deadlock_seen_at=last_deadlock_seen_at,
+        )
+        partner_rows = self.load_partner_roster_for_raid(broadcaster_id)
+        online_partners = self.build_online_partner_candidates(partner_rows, streams_by_login)
+        eligible_partners, filtered_out = self.filter_deadlock_eligible_partner_candidates(
+            online_partners
+        )
+        return OfflineRaidContext(
+            target_game_lower=str(self.get_target_game_lower() or "").strip().lower(),
+            last_game=last_game,
+            had_deadlock_session=had_deadlock_session,
+            last_deadlock_seen_at=last_deadlock_seen_at,
+            source_evaluation=source_evaluation,
+            online_partners=online_partners,
+            eligible_partners=eligible_partners,
+            filtered_out=filtered_out,
+        )
 
     async def start_manual_raid(
         self,
@@ -195,4 +244,4 @@ class OfflineRaidOrchestrator:
         return None
 
 
-__all__ = ["OfflineRaidOrchestrator"]
+__all__ = ["OfflineRaidContext", "OfflineRaidOrchestrator"]

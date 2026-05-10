@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from typing import Any
 
 BASE_SCOPE_PROFILE = "base"
 DASHBOARD_REAUTH_SCOPE_PROFILE = "dashboard_reauth"

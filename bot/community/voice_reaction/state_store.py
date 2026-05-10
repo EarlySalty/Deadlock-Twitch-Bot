@@ -89,7 +89,7 @@ def append_message(
     factory = transaction_factory or transaction
     try:
         with factory() as conn:
-            cursor = conn.execute(
+            cursor = conn.execute(  # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
                 f"""
                 UPDATE twitch_partner_outreach_conversations
                    SET {", ".join(assignments)}

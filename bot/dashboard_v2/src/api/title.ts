@@ -1,3 +1,5 @@
+import { getPreviewTitleInsights, getPreviewTitleSuggestion } from '../preview/fixtures';
+import { isPreviewLocalhost } from '../preview/routes';
 import { buildApiUrl, fetchApi, fetchJson, withCookieCredentials } from './core';
 
 export interface TitleSuggestRequest {
@@ -31,6 +33,10 @@ export interface TitleInsight {
 export async function fetchTitleSuggestion(
   body: TitleSuggestRequest
 ): Promise<TitleSuggestResult> {
+  if (isPreviewLocalhost()) {
+    return getPreviewTitleSuggestion() as TitleSuggestResult;
+  }
+
   const url = buildApiUrl('/title/suggest');
   return fetchJson<TitleSuggestResult>(url, withCookieCredentials({
     method: 'POST',
@@ -43,6 +49,10 @@ export async function fetchTitleSuggestion(
 export async function fetchTitleInsights(
   streamer?: string | null
 ): Promise<{ insight: TitleInsight | null }> {
+  if (isPreviewLocalhost()) {
+    return getPreviewTitleInsights() as { insight: TitleInsight | null };
+  }
+
   return fetchApi<{ insight: TitleInsight | null }>(
     '/title/insights',
     streamer ? { streamer } : {}

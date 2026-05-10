@@ -194,7 +194,7 @@ class _AnalyticsExperimentalMixin:
         try:
             payload = await asyncio.to_thread(self._load_exp_overview_payload, streamer, since)
             return web.json_response(payload)
-        except Exception as exc:
+        except Exception:
             log.exception("Error in exp_overview API")
             return analytics_internal_error_response()
 
@@ -226,7 +226,7 @@ class _AnalyticsExperimentalMixin:
                 since,
             )
             return web.json_response(payload)
-        except Exception as exc:
+        except Exception:
             log.exception("Error in exp_game_breakdown API")
             return analytics_internal_error_response()
 
@@ -258,7 +258,7 @@ class _AnalyticsExperimentalMixin:
                 since,
             )
             return web.json_response(payload)
-        except Exception as exc:
+        except Exception:
             log.exception("Error in exp_game_transitions API")
             return analytics_internal_error_response()
 
@@ -290,6 +290,6 @@ class _AnalyticsExperimentalMixin:
                 since,
             )
             return web.json_response(payload)
-        except Exception as exc:
+        except Exception:
             log.exception("Error in exp_growth_curves API")
             return analytics_internal_error_response()

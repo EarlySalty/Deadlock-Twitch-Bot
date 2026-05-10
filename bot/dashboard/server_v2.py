@@ -10,7 +10,7 @@ import secrets
 import time
 from collections.abc import Awaitable, Callable
 from typing import Any
-from urllib.parse import parse_qsl, urlencode, urlparse, urlsplit, urlunsplit
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from aiohttp import web
 

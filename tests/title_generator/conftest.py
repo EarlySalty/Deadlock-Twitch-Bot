@@ -1,6 +1,5 @@
 # tests/title_generator/conftest.py
 import pytest
-from unittest.mock import MagicMock
 
 
 @pytest.fixture

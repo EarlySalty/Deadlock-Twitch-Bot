@@ -246,7 +246,7 @@ def main() -> int:
             total_inserted += batch_inserted
             print(f"  Batch offset={offset - batch_size}: {batch_inserted} Sessions eingefügt")
 
-        print(f"\nFertig!")
+        print("\nFertig!")
         print(f"  exp_sessions eingefügt: {total_inserted}")
         print(f"  exp_snapshots eingefügt: {total_snapshots}")
         if args.dry_run:

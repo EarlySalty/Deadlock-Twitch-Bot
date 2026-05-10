@@ -242,3 +242,16 @@ class RaidDataSetupFacadeMixin:
             category_id=category_id,
             offline_trigger_ts=offline_trigger_ts,
         )
+
+    def prepare_offline_auto_raid_context(
+        self,
+        *,
+        broadcaster_id: str,
+        previous_state: dict[str, object],
+        streams_by_login: dict[str, dict],
+    ):
+        return self._offline_raid_orchestrator().prepare_offline_auto_raid_context(
+            broadcaster_id=broadcaster_id,
+            previous_state=previous_state,
+            streams_by_login=streams_by_login,
+        )

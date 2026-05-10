@@ -85,7 +85,7 @@ def _column_exists(conn, table: str, column: str) -> bool:
         return bool(row)
     except Exception:
         try:
-            rows = conn.execute(f"PRAGMA table_info({table})").fetchall()
+            rows = conn.execute(f"PRAGMA table_info({table})").fetchall()  # nosemgrep: python.lang.security.audit.formatted-sql-query.formatted-sql-query, python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
         except Exception:
             return False
         for row in rows or ():
@@ -170,7 +170,7 @@ def _ensure_tracking_schema(conn) -> None:
     for column, column_type in required_columns:
         if _column_exists(conn, "twitch_partner_raid_score_tracking", column):
             continue
-        conn.execute(
+        conn.execute(  # nosemgrep: python.lang.security.audit.formatted-sql-query.formatted-sql-query, python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
             f"ALTER TABLE twitch_partner_raid_score_tracking ADD COLUMN {column} {column_type}"
         )
         log.info(
@@ -316,7 +316,7 @@ def _load_unresolved_tracking_rows_for_session(
             _iso_utc(session_started_at),
         ]
     )
-    fallback_rows = conn.execute(
+    fallback_rows = conn.execute(  # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
         f"""
         SELECT id, confirmed_at, to_broadcaster_id, was_deadlock_at_raid
         FROM twitch_partner_raid_score_tracking

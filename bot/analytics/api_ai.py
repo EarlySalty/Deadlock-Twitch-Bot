@@ -257,7 +257,7 @@ class _AnalyticsAIMixin:
         # Step 1: collect analytics context from DB
         try:
             ctx = self._collect_ai_context(streamer, days, since, game_filter)
-        except Exception as exc:
+        except Exception:
             log.exception("Error collecting AI context")
             return analytics_internal_error_response(
                 error="Analyse-Daten konnten nicht gesammelt werden.",
@@ -353,7 +353,7 @@ class _AnalyticsAIMixin:
                 "points": points,
                 "dataSnapshot": ctx.get("summary", {}),
             })
-        except Exception as exc:
+        except Exception:
             log.exception("JSON serialization error in _api_v2_ai_analysis")
             return analytics_internal_error_response(
                 error="KI-Analyse konnte nicht serialisiert werden.",
@@ -369,7 +369,7 @@ class _AnalyticsAIMixin:
 
         with storage.readonly_connection() as conn:
             # 1. Overview KPIs
-            ov = conn.execute(
+            ov = conn.execute(  # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
                 f"""
                 SELECT
                     COUNT(*) AS stream_count,
@@ -392,7 +392,7 @@ class _AnalyticsAIMixin:
             ).fetchone()
 
             # 2. Recent sessions (last 20, newest first)
-            sessions_rows = conn.execute(
+            sessions_rows = conn.execute(  # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
                 f"""
                 SELECT
                     started_at::date,
@@ -416,7 +416,7 @@ class _AnalyticsAIMixin:
             ).fetchall()
 
             # 3. Weekday performance (sorted by avg viewers)
-            weekday_rows = conn.execute(
+            weekday_rows = conn.execute(  # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
                 f"""
                 SELECT
                     EXTRACT(DOW FROM started_at)::int AS dow,
@@ -435,7 +435,7 @@ class _AnalyticsAIMixin:
             ).fetchall()
 
             # 4. Best 5 sessions by avg viewers
-            best_rows = conn.execute(
+            best_rows = conn.execute(  # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
                 f"""
                 SELECT
                     COALESCE(stream_title, ''), avg_viewers, peak_viewers,
@@ -452,7 +452,7 @@ class _AnalyticsAIMixin:
             ).fetchall()
 
             # 5. Worst 5 sessions by avg viewers
-            worst_rows = conn.execute(
+            worst_rows = conn.execute(  # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
                 f"""
                 SELECT
                     COALESCE(stream_title, ''), avg_viewers, peak_viewers,
@@ -471,7 +471,7 @@ class _AnalyticsAIMixin:
             # 6. Game/category breakdown from exp_sessions (best-effort)
             game_rows = []
             try:
-                game_rows = conn.execute(
+                game_rows = conn.execute(  # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
                     f"""
                     SELECT
                         COALESCE(game_name, 'Unbekannt') AS game,
@@ -494,7 +494,7 @@ class _AnalyticsAIMixin:
                 pass  # exp_sessions might not be populated yet
 
             # 7. Weekly follower trend
-            trend_rows = conn.execute(
+            trend_rows = conn.execute(  # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
                 f"""
                 SELECT
                     DATE_TRUNC('week', started_at)::date AS week_start,
@@ -1146,7 +1146,7 @@ Vollständige Viewer-Metriken nur für Einträge ohne diesen Hinweis verwenden."
                 })
 
             return web.json_response(result)
-        except Exception as exc:
+        except Exception:
             log.exception("Error in ai_history API")
             return analytics_internal_error_response(
                 error="KI-Analyse-Historie konnte nicht geladen werden.",

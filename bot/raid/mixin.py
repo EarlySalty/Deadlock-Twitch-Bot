@@ -102,8 +102,7 @@ class TwitchRaidMixin:
                 login,
             )
 
-        auth_mgr = getattr(self._raid_bot, "auth_manager", None)
-        if not auth_mgr or not auth_mgr.has_enabled_auth(twitch_user_id):
+        if not self._raid_bot.has_enabled_auth(twitch_user_id):
             log.debug(
                 "Auto-Raid übersprungen für %s: kein aktiver OAuth-Grant (OAuth via /traid oder !raid_enable erforderlich)",
                 login,
@@ -132,18 +131,16 @@ class TwitchRaidMixin:
             )
             return
 
-        target_game_lower = self._raid_bot._get_target_game_lower()
-
-        last_game = (previous_state.get("last_game") or "").strip()
-        had_deadlock_session = bool(int(previous_state.get("had_deadlock_in_session", 0) or 0))
-        last_deadlock_seen_at_str = (
-            previous_state.get("last_deadlock_seen_at") or ""
-        ).strip() or None
-        source_evaluation = self._raid_bot._evaluate_deadlock_raid_source(
-            current_game=last_game,
-            had_deadlock_session=had_deadlock_session,
-            last_deadlock_seen_at=last_deadlock_seen_at_str,
+        raid_context = self._raid_bot.prepare_offline_auto_raid_context(
+            broadcaster_id=twitch_user_id,
+            previous_state=previous_state,
+            streams_by_login=streams_by_login,
         )
+        target_game_lower = raid_context.target_game_lower
+        last_game = raid_context.last_game
+        had_deadlock_session = raid_context.had_deadlock_session
+        last_deadlock_seen_at_str = raid_context.last_deadlock_seen_at
+        source_evaluation = raid_context.source_evaluation
         allow_auto_raid = bool(source_evaluation.get("eligible"))
 
         if allow_auto_raid and target_game_lower:
@@ -209,14 +206,9 @@ class TwitchRaidMixin:
             stream_duration_sec,
         )
 
-        partner_rows = self._raid_bot._load_partner_roster_for_raid(twitch_user_id)
-        online_partners = self._raid_bot._build_online_partner_candidates(
-            partner_rows,
-            streams_by_login,
-        )
-        eligible_partners, filtered_out = self._raid_bot._filter_deadlock_eligible_partner_candidates(
-            online_partners
-        )
+        online_partners = raid_context.online_partners
+        eligible_partners = raid_context.eligible_partners
+        filtered_out = raid_context.filtered_out
 
         log.info(
             "Auto-Raid triggered für %s (offline): %d Online-Partner gefunden (%d eligible), "

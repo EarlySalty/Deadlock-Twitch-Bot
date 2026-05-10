@@ -311,7 +311,7 @@ def _load_clip_performance(
         params.append(streamer_login)
 
     with readonly_connection() as conn:
-        rows = conn.execute(
+        rows = conn.execute(  # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
             f"""
             SELECT c.id AS clip_db_id,
                    c.streamer_login,

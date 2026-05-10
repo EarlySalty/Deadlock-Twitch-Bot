@@ -45,7 +45,6 @@ from .admin_streamer_queries import (
 )
 from ..core.twitch_login import normalize_twitch_login
 from ..dashboard.affiliate.affiliate_pii import AffiliatePII
-from ..dashboard.affiliate.gutschrift import AffiliateGutschriftService
 from ..dashboard.live.live import (
     _CRITICAL_SCOPES as _ADMIN_CRITICAL_SCOPES,
     _REQUIRED_SCOPES as _ADMIN_REQUIRED_SCOPES,
@@ -355,7 +354,7 @@ def _admin_last_stream_session_cte_sql() -> str:
 
 def _load_admin_oauth_scope_rows() -> list[Any]:
     with storage.readonly_connection() as conn:
-        return conn.execute(
+        return conn.execute(  # nosemgrep: python.lang.security.audit.formatted-sql-query.formatted-sql-query, python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
             f"""
             WITH auth_rows AS (
                 SELECT
@@ -749,7 +748,7 @@ class _AnalyticsAdminMixin:
             params.append(affiliate_login)
 
         try:
-            row = conn.execute(
+            row = conn.execute(  # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
                 f"""
                 SELECT
                     COUNT(*) AS total_gutschriften,
@@ -975,7 +974,7 @@ class _AnalyticsAdminMixin:
     ) -> tuple[dict[str, Any], dict[str, Any]]:
         normalized_scope = cls._admin_parse_scope(scope) or _ADMIN_MANAGED_SCOPE_ACTIVE
         where_clause = cls._admin_scope_filter_sql(normalized_scope)
-        row = conn.execute(
+        row = conn.execute(  # nosemgrep: python.lang.security.audit.formatted-sql-query.formatted-sql-query, python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
             f"""
             SELECT
                 COUNT(*) AS total_managed_streamers,

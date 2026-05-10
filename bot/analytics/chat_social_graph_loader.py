@@ -21,7 +21,7 @@ def load_chat_social_graph_payload(*, streamer: str, days: int) -> dict[str, Any
             placeholder="%s",
         )
 
-        rows = conn.execute(
+        rows = conn.execute(  # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
             f"""
             SELECT m.chatter_login, m.content
             FROM twitch_chat_messages m

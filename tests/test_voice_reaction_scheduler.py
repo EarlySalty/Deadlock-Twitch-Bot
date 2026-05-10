@@ -10,7 +10,7 @@ from __future__ import annotations
 import asyncio
 import unittest
 from dataclasses import dataclass, field
-from typing import Any, Awaitable, Callable, Mapping
+from typing import Any
 from unittest import mock
 
 from bot.community.voice_reaction import scheduler as scheduler_module

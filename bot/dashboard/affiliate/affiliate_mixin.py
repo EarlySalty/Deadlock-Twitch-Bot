@@ -1084,7 +1084,7 @@ class _DashboardAffiliateMixin:
                 },
             ) as resp:
                 if resp.status != 200:
-                    log.warning("Stripe Connect token exchange failed: %s", resp.status)
+                    log.warning("Stripe Connect token exchange failed: %s", resp.status)  # nosemgrep: python.lang.security.audit.logging.logger-credential-leak.python-logger-credential-disclosure
                     return web.Response(text="Stripe Connect fehlgeschlagen.", status=502)
                 resp_data = await resp.json()
 

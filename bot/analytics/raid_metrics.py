@@ -70,7 +70,7 @@ def _recalculate_raid_chat_metrics_batch(
         if (key := raid_identity_key(raid.get("raid_id"), raid.get("executed_at_key"))) is not None
     }
 
-    retention_rows = conn.execute(
+    retention_rows = conn.execute(  # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
         f"""
         WITH raid_inputs AS (
             SELECT
@@ -125,7 +125,7 @@ def _recalculate_raid_chat_metrics_batch(
         metrics[key]["plus15m"] = int(_row_get(row, "plus15m", 3) or 0)
         metrics[key]["plus30m"] = int(_row_get(row, "plus30m", 4) or 0)
 
-    known_rows = conn.execute(
+    known_rows = conn.execute(  # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
         f"""
         WITH raid_inputs AS (
             SELECT
@@ -171,7 +171,7 @@ def _recalculate_raid_chat_metrics_batch(
             continue
         metrics[key]["known_from_raider"] = int(_row_get(row, "known", 2) or 0)
 
-    new_rows = conn.execute(
+    new_rows = conn.execute(  # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
         f"""
         WITH raid_inputs AS (
             SELECT

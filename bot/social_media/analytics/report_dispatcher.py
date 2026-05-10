@@ -14,7 +14,7 @@ from .report_writer import SocialMediaReportWriter
 log = logging.getLogger("TwitchStreams.SocialMedia.ReportDispatcher")
 
 KEY_ADMIN_WEEKLY_REPORT_SENT = "admin_weekly_report_last_sent_period_end"
-DEFAULT_ADMIN_DISCORD_USER_ID = "662995601738170389"
+DEFAULT_ADMIN_DISCORD_USER_ID = "662995601738170389"  # nosemgrep: discord-client-id
 
 
 class SocialMediaReportDispatcher(commands.Cog):

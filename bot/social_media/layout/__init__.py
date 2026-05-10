@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 """
 Layout model helpers for Social Media Phase 1.
 
@@ -19,6 +17,8 @@ Validation rules:
 - x + w <= source.width
 - y + h <= source.height
 """
+
+from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Any, Mapping

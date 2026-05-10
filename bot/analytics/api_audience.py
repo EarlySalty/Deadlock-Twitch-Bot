@@ -156,7 +156,7 @@ class _AnalyticsAudienceMixin:
             column_expr="cm.chatter_login",
             placeholder="%s",
         )
-        rows = conn.execute(
+        rows = conn.execute(  # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
             f"""
             SELECT cm.session_id, cm.message_ts
             FROM twitch_chat_messages cm
@@ -219,7 +219,7 @@ class _AnalyticsAudienceMixin:
             column_expr="cm.chatter_login",
             placeholder="%s",
         )
-        rows = conn.execute(
+        rows = conn.execute(  # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
             f"""
             SELECT
                 cm.session_id,
@@ -322,7 +322,7 @@ class _AnalyticsAudienceMixin:
                     column_expr="chatter_login",
                     placeholder="%s",
                 )
-                base_row = conn.execute(
+                base_row = conn.execute(  # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
                     f"""
                     SELECT COUNT(
                         DISTINCT COALESCE(NULLIF(chatter_login, ''), chatter_id)
@@ -339,7 +339,7 @@ class _AnalyticsAudienceMixin:
                 ).fetchone()
                 viewer_base_count = int(base_row[0] or 0) if base_row else 0
 
-                rows = conn.execute(
+                rows = conn.execute(  # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
                     f"""
                     SELECT
                         ROUND(
@@ -534,7 +534,7 @@ class _AnalyticsAudienceMixin:
                         },
                     }
                 )
-        except Exception as exc:
+        except Exception:
             log.exception("Error in watch time distribution API")
             return analytics_internal_error_response()
 
@@ -610,15 +610,12 @@ class _AnalyticsAudienceMixin:
                     )
 
                 total_duration = float(stats[1]) if stats[1] else 0.0
-                avg_viewers = float(stats[2]) if stats[2] else 0.0
-                total_hours_watched = float(stats[3]) if stats[3] else 0.0
-                avg_retention_10m = float(stats[4]) if stats[4] else 0.0  # 0..1
                 net_followers = int(stats[5]) if stats[5] else 0
                 gained_followers = int(stats[6]) if stats[6] else 0
                 follower_valid_samples = int(stats[7]) if stats[7] else 0
 
                 # Distinct chatter cohorts in selected period (less inflation than SUM per session).
-                chatter_stats = conn.execute(
+                chatter_stats = conn.execute(  # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
                     f"""
                     SELECT
                         COUNT(DISTINCT COALESCE(NULLIF(sc.chatter_login, ''), sc.chatter_id)) as unique_chatters,
@@ -745,7 +742,7 @@ class _AnalyticsAudienceMixin:
                         },
                     }
                 )
-        except Exception as exc:
+        except Exception:
             log.exception("Error in follower funnel API")
             return analytics_internal_error_response()
 
@@ -774,7 +771,7 @@ class _AnalyticsAudienceMixin:
                     column_expr="chatter_login",
                     placeholder="%s",
                 )
-                rows = conn.execute(
+                rows = conn.execute(  # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
                     f"""
                     SELECT
                         c2.streamer_login as other_streamer,
@@ -800,7 +797,7 @@ class _AnalyticsAudienceMixin:
 
                 # Totals for A and B
                 total_a = (
-                    conn.execute(
+                    conn.execute(  # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
                         f"""
                         SELECT COUNT(DISTINCT chatter_login)
                         FROM twitch_chatter_rollup
@@ -814,7 +811,7 @@ class _AnalyticsAudienceMixin:
 
                 totals_b = {
                     r[0].lower(): (
-                        conn.execute(
+                        conn.execute(  # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
                             f"""
                         SELECT COUNT(DISTINCT chatter_login)
                         FROM twitch_chatter_rollup
@@ -852,7 +849,7 @@ class _AnalyticsAudienceMixin:
                     )
 
                 return web.json_response(data)
-        except Exception as exc:
+        except Exception:
             log.exception("Error in viewer overlap API")
             return analytics_internal_error_response()
 
@@ -918,7 +915,7 @@ class _AnalyticsAudienceMixin:
                 )
 
                 # Retention trend from session aggregates
-                retention_row = conn.execute(
+                conn.execute(
                     """
                     SELECT
                         AVG(s.retention_10m) as curr_ret,
@@ -932,9 +929,6 @@ class _AnalyticsAudienceMixin:
                     """,
                     [prev_since, since_date, streamer.lower(), since_date, streamer.lower()],
                 ).fetchone()
-
-                curr_retention = float(retention_row[0]) * 100 if retention_row and retention_row[0] else 0
-                prev_retention = float(retention_row[1]) * 100 if retention_row and retention_row[1] else 0
 
                 # True return rate: distinct viewers this period who were known BEFORE the period.
                 # Uses twitch_chatter_rollup.first_seen_at as the "seen before" signal.
@@ -953,7 +947,7 @@ class _AnalyticsAudienceMixin:
                         + [streamer.lower(), *rollup_bot_params, period_start]
                     )
 
-                    row = conn.execute(
+                    row = conn.execute(  # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
                         f"""
                         WITH period_viewers AS (
                             SELECT DISTINCT
@@ -1044,7 +1038,7 @@ class _AnalyticsAudienceMixin:
                         },
                     }
                 )
-        except Exception as exc:
+        except Exception:
             log.exception("Error in audience insights API")
             return analytics_internal_error_response()
 
@@ -1206,12 +1200,6 @@ class _AnalyticsAudienceMixin:
                     if 12 < hour < 17:
                         region_scores["Rest EU"] += score * 0.5
 
-                total_region_score = sum(region_scores.values()) or 1.0
-                regions = [
-                    {"region": name, "percentage": round(score / total_region_score * 100, 1)}
-                    for name, score in region_scores.items()
-                ]
-
                 session_stats = conn.execute(
                     """
                     SELECT
@@ -1260,7 +1248,7 @@ class _AnalyticsAudienceMixin:
                 viewer_minutes_has_real_samples = viewer_sample_count > 0
 
                 # Distinct viewer cohorts with fallback when is_first_time_streamer is missing
-                viewer_rows = conn.execute(
+                viewer_rows = conn.execute(  # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
                     f"""
                     WITH per_user AS (
                         SELECT
@@ -1419,7 +1407,7 @@ class _AnalyticsAudienceMixin:
 
                 active_viewers = sum(1 for v in viewer_entries if v["active"])
                 seen_via_chatters_viewers = sum(1 for v in viewer_entries if v["seen_flag"])
-                total_messages_row = conn.execute(
+                total_messages_row = conn.execute(  # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
                     f"""
                     SELECT COUNT(*)
                     FROM twitch_chat_messages cm
@@ -1431,7 +1419,7 @@ class _AnalyticsAudienceMixin:
                 total_messages = (
                     int(total_messages_row[0]) if total_messages_row and total_messages_row[0] else 0
                 )
-                sessions_with_chat_row = conn.execute(
+                sessions_with_chat_row = conn.execute(  # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
                     f"""
                     SELECT COUNT(DISTINCT sc.session_id)
                     FROM twitch_session_chatters sc
@@ -1581,7 +1569,7 @@ class _AnalyticsAudienceMixin:
                         },
                     }
                 )
-        except Exception as exc:
+        except Exception:
             log.exception("Error in audience demographics API")
             return analytics_internal_error_response()
 
@@ -1600,7 +1588,7 @@ class _AnalyticsAudienceMixin:
                     column_expr="chatter_login",
                     placeholder="%s",
                 )
-                rows = conn.execute(
+                rows = conn.execute(  # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
                     f"""
                     SELECT total_sessions, COUNT(DISTINCT chatter_login) AS chatter_count
                     FROM twitch_chatter_rollup
@@ -1633,6 +1621,6 @@ class _AnalyticsAudienceMixin:
                     "one_time_rate": round(one_time / total * 100, 1) if total > 0 else None,
                     "window": "all_time",
                 })
-        except Exception as exc:
+        except Exception:
             log.exception("Error in loyalty curve API")
             return analytics_internal_error_response()

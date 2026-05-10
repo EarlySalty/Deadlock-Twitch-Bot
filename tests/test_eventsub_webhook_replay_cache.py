@@ -2,7 +2,6 @@ import asyncio
 import hashlib
 import hmac
 import json
-import tempfile
 import unittest
 from datetime import UTC, datetime
 from unittest.mock import patch

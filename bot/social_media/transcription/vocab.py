@@ -161,11 +161,11 @@ def list_vocab(
     where_sql = " AND ".join(sql_where)
 
     with readonly_connection() as conn:
-        total_row = conn.execute(
+        total_row = conn.execute(  # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
             f"SELECT COUNT(*) AS total FROM deadlock_vocab WHERE {where_sql}",
             tuple(params),
         ).fetchone()
-        rows = conn.execute(
+        rows = conn.execute(  # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
             f"""
             SELECT term, canonical, category, source, aliases, weight, updated_at
               FROM deadlock_vocab

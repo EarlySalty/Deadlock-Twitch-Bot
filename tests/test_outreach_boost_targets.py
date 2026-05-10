@@ -3,7 +3,6 @@
 import contextlib
 import sqlite3
 import unittest
-from unittest.mock import patch
 
 from bot.raid.services.outreach_boost_targets import (
     load_outreach_boost_logins,
@@ -112,7 +111,8 @@ class OutreachBoostMarkUsedTests(unittest.TestCase):
         )
         conn.commit()
 
-        factory = lambda: contextlib.nullcontext(_CompatConn(conn))
+        def factory():
+            return contextlib.nullcontext(_CompatConn(conn))
 
         first = mark_outreach_boost_used("oneshot", transaction_factory=factory)
         second = mark_outreach_boost_used("oneshot", transaction_factory=factory)

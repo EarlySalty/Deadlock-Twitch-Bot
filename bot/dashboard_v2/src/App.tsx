@@ -3,6 +3,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { Header } from '@/components/layout/Header';
 import { TabNavigation, type TabId } from '@/components/layout/TabNavigation';
 import { Overview } from '@/pages/Overview';
+import { Sessions } from '@/pages/Sessions';
 import { SocialMediaAdminDashboard } from '@/pages/SocialMediaAdmin';
 import { ChatAnalytics } from '@/pages/ChatAnalytics';
 import { Growth } from '@/pages/Growth';
@@ -26,6 +27,13 @@ import { TrialBanner } from '@/components/banners/TrialBanner';
 import { TrialExpiryModal } from '@/components/modals/TrialExpiryModal';
 import { useStreamerList, useAuthStatus } from '@/hooks/useAnalytics';
 import type { TimeRange } from '@/types/analytics';
+import {
+  PREVIEW_ANALYTICS_ROUTE,
+  PREVIEW_HOME_ROUTE,
+  PREVIEW_PRICING_ROUTE,
+  PREVIEW_VERWALTUNG_ROUTE,
+  isPreviewModeEnabled,
+} from '@/preview/routes';
 import { dashboardRuntimeConfig, resolveEffectiveDemoMode } from '@/runtimeConfig';
 import {
   AlertTriangle,
@@ -107,6 +115,7 @@ function AnalyticsDashboard() {
   const [days, setDays] = useState<TimeRange>(30);
   const [activeTab, setActiveTab] = useState<TabId | 'session-detail'>('overview');
   const [selectedSessionId, setSelectedSessionId] = useState<number | null>(null);
+  const isPreviewBuild = isPreviewModeEnabled();
 
   const { data: streamers = [], isLoading: loadingStreamers } = useStreamerList();
   const { data: authStatus, isLoading: loadingAuth, isError: authError } = useAuthStatus();
@@ -145,12 +154,28 @@ function AnalyticsDashboard() {
     }
     const urlTab = params.get('tab');
     if (urlTab) {
-      const validTabs: Array<TabId | 'session-detail'> = ['overview', 'chat', 'growth', 'audience', 'viewers', 'coaching', 'compare', 'schedule', 'monetization', 'category', 'experimental', 'ai', 'reports', 'title'];
+      const previewModeTab: TabId = isPreviewBuild ? 'streams' : 'reports';
+      const validTabs: TabId[] = [
+        'overview',
+        'chat',
+        'growth',
+        'audience',
+        'viewers',
+        'coaching',
+        'compare',
+        'schedule',
+        'monetization',
+        'category',
+        'experimental',
+        'ai',
+        previewModeTab,
+        'title',
+      ];
       if (validTabs.includes(urlTab as TabId)) {
         setActiveTab(urlTab as TabId);
       }
     }
-  }, [isDemoShell]);
+  }, [isDemoShell, isPreviewBuild]);
 
   // Auto-set streamer to logged-in Twitch user on first auth load
   useEffect(() => {
@@ -288,6 +313,10 @@ function AnalyticsDashboard() {
             />
           )}
 
+          {activeTab === 'streams' && (
+            <Sessions streamer={streamer || ''} days={days} onSessionClick={handleSessionClick} />
+          )}
+
           {activeTab === 'chat' && (
             <ChatAnalytics streamer={streamer || ''} days={days} />
           )}
@@ -351,7 +380,7 @@ function AnalyticsDashboard() {
               streamer={streamer || ''}
               onBack={() => {
                 setSelectedSessionId(null);
-                setActiveTab('overview');
+                setActiveTab(isPreviewBuild ? 'streams' : 'overview');
               }}
             />
           )}
@@ -364,10 +393,15 @@ function AnalyticsDashboard() {
 
 export default function App() {
   const path = normalizePathname(window.location.pathname);
-  const isInternalHomeRoute = path === '/twitch/dashboard';
-  const isVerwaltungRoute = path === '/twitch/verwaltung';
-  const isPricingRoute = path === '/twitch/pricing';
+  const isInternalHomeRoute = path === PREVIEW_HOME_ROUTE;
+  const isVerwaltungRoute = path === PREVIEW_VERWALTUNG_ROUTE;
+  const isPricingRoute = path === PREVIEW_PRICING_ROUTE;
   const isSocialMediaAdminRoute = path === '/social-media-admin';
+  const isAnalyticsRoute =
+    path === PREVIEW_ANALYTICS_ROUTE ||
+    path === '/analyse' ||
+    path === '/dashboard-v2' ||
+    path === '/twitch/dashboard-v2';
 
   return (
     <QueryClientProvider client={queryClient}>
@@ -380,6 +414,8 @@ export default function App() {
           <Pricing />
         ) : isInternalHomeRoute ? (
           <InternalHome />
+        ) : isAnalyticsRoute ? (
+          <AnalyticsDashboard />
         ) : (
           <AnalyticsDashboard />
         )}

@@ -1,3 +1,17 @@
+## Semgrep Suppression Task 3
+
+- 2026-05-10: Aufgabe aufgenommen. Lokalen Stand von `WORKFLOW.md` und die 40 betroffenen Dateien geprüft; für die Regel `python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query` aktuelle Treffer zusätzlich per lokalem `semgrep scan` verifiziert, weil mehrere vorgegebene Zeilennummern im Tree verschoben waren.
+- 2026-05-10: In 40 Dateien insgesamt 137 `# nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query`-Kommentare direkt an die aktuell geflaggten `*.execute(`-Zeilen angehängt; keine weiteren Code-Änderungen.
+
+## dashboard_preview in dashboard_v2 mergen
+
+- 2026-05-10: Worker 1 für gezielte Ruff-Qualitätsrunde aufgenommen; `ruff check --select F401,F841,F541,E731,E402 --fix bot/ tests/ scripts/` ausgeführt und verbleibende manuelle Reststellen für `F841`, `E731`, `E402` sowie `E741` in `bot/dashboard/raids/pages.py` in Bearbeitung.
+- 2026-05-10: Manuelle Ruff-Reste bereinigt in `bot/analytics/api_audience.py`, `bot/monitoring/eventsub_core_callbacks.py`, `bot/monitoring/monitoring.py`, `bot/raid/commands.py`, `bot/social_media/layout/__init__.py`, `bot/dashboard/raids/pages.py` sowie mehreren Tests. Verifikation: `ruff check --select F401,F841,F541,E731,E402,E741 --exclude bot/dashboard/live/live.py bot/ tests/ scripts/` grün; voller Lauf bleibt durch vorhandene Python-3.11-Syntaxstelle in `bot/dashboard/live/live.py` blockiert. `pytest tests/ -x -q` startet mit `.venv/bin/python`, bricht aber bereits in `tests/conftest.py` an bestehendem Importfehler `reactivate_partner_after_valid_auth` aus `bot.storage.pg` ab.
+
+- 2026-05-09: Aufgabe aufgenommen. `dashboard_v2`/`dashboard_preview` Package-, Vite-, App-, API- und Preview-Dateien verglichen; Preview-Unterschiede auf Mode-Routing, localhost-Fixtures und Preview-spezifische CTA-/Home-/Pricing-Pfade reduziert.
+- 2026-05-09: In `bot/dashboard_v2` Preview-Mode per Vite-`--mode preview` integriert: neue `src/preview/{routes,fixtures}.ts`, Runtime-/API-/App-Verzweigung, `streams`-Tab als Preview-Variante, Preview-Ports/Skripte sowie CTA-/Navigation-Pfade auf Preview-Routen umgestellt.
+- 2026-05-09: Alt-App `bot/dashboard_preview/` entfernt. Verifikation erfolgreich: `cd bot/dashboard_v2 && npx tsc -b --noEmit`, `npm run fuzz:protocol`, `find bot/dashboard_preview -type f | wc -l => 0`; keine Referenzen in `ops/`, `scripts/`, `Caddyfile*`, `bot/`, `.github/` oder `docs/`.
+
 ## StreamReports A/B-Vote UI
 
 - 2026-05-01: Aufgabe aufgenommen. Bestehende `StreamReports.tsx`, Query-/Mutation-Muster und Render-Position unterhalb des A/B-Report-Grids geprüft.
@@ -194,3 +208,13 @@
 - 2026-04-27: Aufgabe aufgenommen. Relevante Phase-2-/Runtime-/Dashboard-/Uploader-Dateien sowie bestehende Worker- und Testmuster gelesen; vorhandene Analytics-Tabelle und Admin-Sperren geprüft.
 - 2026-04-27: Phase 3 umgesetzt: Migration `social_media_phase3_analytics.py`, Analytics-Storage/Worker, LLM-Report-Writer + Admin-DM-Dispatcher, neue Admin-API-Endpunkte und Analytics-Tab im React-Dashboard.
 - 2026-04-27: Verifikation erfolgreich: `.venv/bin/python -m pytest tests/test_social_media_phase3_backend.py -q`, bestehende Social-Media-Regressionen (`phase0`, `phase1_backend`, `phase2_backend`, `dashboard_rendering`, `auth_regressions`) sowie `bot/dashboard_v2` via `npx tsc --noEmit` und `npx vite build` gruen.
+
+## Security Fixes - Worker 2
+
+- 2026-05-10: Aufgabe aufgenommen. Zielstellen in `auth_mixin.py`, `api_post_stream.py`, `video_processor.py`, den Discord-ID-Konstanten und `scripts/rotate_twitch_pg_dsn.py` geprüft.
+- 2026-05-10: Log-Injection-Fixes an den benannten Stellen umgesetzt und die vier Discord-ID-Konstanten mit `# nosemgrep: discord-client-id` annotiert.
+- 2026-05-10: `scripts/rotate_twitch_pg_dsn.py` an den geforderten Stellen unverändert gelassen, weil die DSN-Ausgaben bereits `_redact_dsn(...)` nutzen und der Fingerprint schon `sha256` verwendet.
+## Semgrep Suppressions Worker 4
+
+- 2026-05-10: Aufgabe aufgenommen. Betroffene Logger-/HTML-/SQL-/Import-Stellen sowie Zusatzfaelle fuer `urllib` und `range()` im Python-Code und via `security-reports/semgrep.json` gegengeprueft.
+- 2026-05-10: Gezielte `nosemgrep`-Kommentare fuer `logger-credential-leak`, `raw-html-format`, `formatted-sql-query`, `non-literal-import` und die vier verifizierten `dynamic-urllib`-Aufrufe eingefuegt; fuer `py/overly-large-range` aktuell keine Python-Treffer im Repo gefunden.

@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import contextlib
 import sqlite3
-import time
 import unittest
 from types import SimpleNamespace
 from unittest.mock import ANY, AsyncMock, Mock, patch

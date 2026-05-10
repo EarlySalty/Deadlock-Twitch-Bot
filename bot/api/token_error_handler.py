@@ -237,7 +237,7 @@ class TokenErrorHandler:
                             ),
                         )
                 except Exception:
-                    log.debug(
+                    log.debug(  # nosemgrep: python.lang.security.audit.logging.logger-credential-leak.python-logger-credential-disclosure
                         "Could not mirror token-error pause state for user_id=%s",
                         _mask_log_identifier(twitch_user_id),
                         exc_info=True,

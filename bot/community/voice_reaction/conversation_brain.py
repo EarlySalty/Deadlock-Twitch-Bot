@@ -11,12 +11,11 @@ ein dataclass mit `content` und `usage` zurück (analog Anthropic-SDK).
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 import os
 import time
 from dataclasses import dataclass
-from typing import Any, Awaitable, Callable, Mapping, Sequence
+from typing import Any, Callable, Mapping, Sequence
 
 from ...core.llm_providers import (
     LLMSDKUnavailableError,

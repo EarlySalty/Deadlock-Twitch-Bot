@@ -8,6 +8,13 @@ import {
   type InternalHomeChangelogEntry,
 } from '@/api/home';
 import { useStreamerList, useAuthStatus } from '@/hooks/useAnalytics';
+import {
+  PREVIEW_CHANGELOG_ROUTE,
+  PREVIEW_HOME_ROUTE,
+  PREVIEW_PRICING_ROUTE,
+  PREVIEW_VERWALTUNG_ROUTE,
+  analyticsTabHref,
+} from '@/preview/routes';
 import { formatNumber, formatDuration } from '@/utils/formatters';
 import {
   ArrowRight,
@@ -754,16 +761,16 @@ export function InternalHomeLanding() {
   const recentStreams = (home.recentStreams ?? []).slice(0, 5);
   const changelogEntries = (home.changelog?.entries ?? []).slice(0, 3);
   const mainNavItems: SidebarNavItem[] = [
-    { href: '/twitch/dashboard', label: 'Home', icon: Home, active: true },
+    { href: PREVIEW_HOME_ROUTE, label: 'Home', icon: Home, active: true },
     ...(canAccessAnalyticsDashboard
-      ? [{ href: '/analyse?tab=overview', label: 'Analyse', icon: BarChart3 }]
+      ? [{ href: analyticsTabHref('overview'), label: 'Analyse', icon: BarChart3 }]
       : []),
     { href: '/social-media-admin', label: 'Social Media Dashboard', icon: Film },
   ];
   const toolNavItems: SidebarNavItem[] = [
-    { href: '/twitch/verwaltung', label: 'Verwaltung', icon: Settings },
-    { href: '/twitch/pricing', label: `Plan: ${planName}`, icon: Sparkles },
-    { href: '#changelog', label: 'Changelog', icon: FileText },
+    { href: PREVIEW_VERWALTUNG_ROUTE, label: 'Verwaltung', icon: Settings },
+    { href: PREVIEW_PRICING_ROUTE, label: `Plan: ${planName}`, icon: Sparkles },
+    { href: PREVIEW_CHANGELOG_ROUTE, label: 'Changelog', icon: FileText },
   ];
   const scoreColorClass =
     score >= 70 ? 'text-success' : score >= 40 ? 'text-warning' : 'text-danger';
@@ -960,7 +967,7 @@ export function InternalHomeLanding() {
                 </button>
                 {canAccessAnalyticsDashboard ? (
                   <a
-                    href="/analyse"
+                    href={analyticsTabHref('overview')}
                     className="gradient-accent inline-flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-bold text-white no-underline shadow-lg shadow-primary/20 transition-transform hover:-translate-y-0.5"
                   >
                     Analyse Dashboard
@@ -1195,7 +1202,7 @@ export function InternalHomeLanding() {
                     </h2>
                   </div>
                   <a
-                    href="/analyse?tab=streams"
+                    href={analyticsTabHref('streams')}
                     className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-background/70 px-3 py-1.5 text-xs font-semibold text-text-secondary no-underline transition-colors hover:border-border-hover hover:text-white"
                   >
                     Alle Streams
@@ -1223,7 +1230,7 @@ export function InternalHomeLanding() {
                         transition={{ duration: 0.24, delay: index * 0.04 }}
                       >
                         <a
-                          href="/analyse?tab=streams"
+                          href={analyticsTabHref('streams')}
                           className="internal-home-stream accent-bar block rounded-xl border border-border bg-background/55 pl-5 pr-3.5 py-3.5 no-underline"
                         >
                           <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
