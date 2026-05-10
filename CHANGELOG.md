@@ -1,3 +1,8 @@
+## #32 — Bot-Absturz beim Start behoben
+
+- Twitch-Bot und Dashboard starten wieder fehlerfrei
+- Fehler trat auf, weil eine neue Storage-Funktion intern vergessen wurde zu verknüpfen
+
 ## #31 — GitHub Actions Minutenverbrauch deutlich reduziert
 
 - Fünf tägliche Security-Workflows auf reine Event-Trigger umgestellt (kein Schedule mehr)
