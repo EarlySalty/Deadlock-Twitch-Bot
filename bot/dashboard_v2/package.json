@@ -15,7 +15,7 @@
     "preview:preview": "vite preview --mode preview --host localhost --port 4175 --outDir dist-preview"
   },
   "dependencies": {
-    "@tailwindcss/vite": "^4.2.4",
+    "@tailwindcss/vite": "^4.3.0",
     "@tanstack/react-query": "^5.100.9",
     "framer-motion": "^12.38.0",
     "lucide-react": "^1.14.0",
