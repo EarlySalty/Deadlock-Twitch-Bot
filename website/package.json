@@ -9,7 +9,7 @@
     "preview": "vite preview"
   },
   "dependencies": {
-    "@tailwindcss/vite": "^4.2.4",
+    "@tailwindcss/vite": "^4.3.0",
     "framer-motion": "^12.31.0",
     "lucide-react": "^1.14.0",
     "react": "^19.2.4",
