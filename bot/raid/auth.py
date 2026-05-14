@@ -1317,7 +1317,7 @@ class RaidAuthManager:
                 """,
                 (twitch_user_id,),
             )
-            if existing_needs_reauth and activate_raid_features:
+            if activate_raid_features:
                 try:
                     set_partner_raid_bot_enabled(
                         conn,

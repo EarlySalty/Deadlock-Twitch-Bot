@@ -1,3 +1,9 @@
+## #33 — Dashboard zeigt Twitch-Auth nach Erstanmeldung korrekt als aktiv
+
+- AutoRaid-Status wird nach der ersten Twitch-Autorisierung sofort als aktiv angezeigt
+- Bisher blieb das Dashboard auf „inaktiv", obwohl die Auth korrekt gespeichert war und Raids funktionierten
+- Betrifft nur neue Streamer beim allerersten Auth-Vorgang, nicht Re-Auth
+
 ## #32 — Bot-Absturz beim Start behoben
 
 - Twitch-Bot und Dashboard starten wieder fehlerfrei
