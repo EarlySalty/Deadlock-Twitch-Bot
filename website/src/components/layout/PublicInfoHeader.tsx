@@ -74,8 +74,8 @@ export function PublicInfoHeader({
           href="/twitch/onboarding"
           className="bg-gradient-to-r from-primary to-accent bg-clip-text text-xl font-bold font-display text-transparent no-underline"
         >
-          DDC
-        </a>
+          Deutsche Deadlock Community
+</a>
 
         <nav className="hidden items-center gap-6 md:flex">
           {navLinks.map((link) => (

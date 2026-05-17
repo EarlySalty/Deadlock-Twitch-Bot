@@ -52,7 +52,7 @@ export function Footer() {
           {/* Column 1 – Brand */}
           <div className="flex flex-col gap-3">
             <span className="font-display font-bold text-xl bg-gradient-to-r from-primary to-accent bg-clip-text text-transparent">
-              DDC
+              Deutsche Deadlock Community
             </span>
             <p className="text-text-secondary text-sm leading-relaxed">
               Erstellt für die Deadlock-Community

@@ -1,3 +1,11 @@
+## #34 — Branding der öffentlichen Website vereinheitlicht
+
+- Titel und Link-Vorschau zeigen jetzt „Deutsche Deadlock Community" statt „EarlySalty"
+- Kaputte Clips (gelöschte Medal-Links, tote EarlySalty-Clips) durch echte Community-Clips ersetzt
+- Favicon auf allen Seiten einheitlich — EarlySalty-„E" im Bot-Favicon entfernt
+- Logos über alle Projekte auf denselben Stand gebracht
+- „DDC"-Abkürzung im gesamten öffentlichen Website-Text durch ausgeschriebenen Namen ersetzt
+
 ## #33 — Dashboard zeigt Twitch-Auth nach Erstanmeldung korrekt als aktiv
 
 - AutoRaid-Status wird nach der ersten Twitch-Autorisierung sofort als aktiv angezeigt

@@ -706,7 +706,7 @@ export function RaidDemo() {
                   <div className="rd-duration-pill" ref={sourceDurationRef}>0:00:00</div>
                 </div>
                 <div className="rd-overlay-bottom">
-                  <div className="rd-overlay-streamer" ref={sourceStreamerRef}>DDC</div>
+                  <div className="rd-overlay-streamer" ref={sourceStreamerRef}>Deutsche Deadlock Community</div>
                   <div className="rd-overlay-category">Deadlock</div>
                   <div className="rd-overlay-viewers">
                     <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">

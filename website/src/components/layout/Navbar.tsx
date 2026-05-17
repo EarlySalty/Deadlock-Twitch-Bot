@@ -53,7 +53,7 @@ export function Navbar() {
       <div className="max-w-7xl mx-auto px-6 flex justify-between items-center h-16">
         {/* Logo */}
         <span className="font-display font-bold text-xl bg-gradient-to-r from-primary to-accent bg-clip-text text-transparent select-none">
-          DDC
+          Deutsche Deadlock Community
         </span>
 
         {/* Center nav – desktop only */}

@@ -10,8 +10,8 @@ export function AffiliateNavbar() {
             href={WEBSITE_HOME_PATH}
             className="font-display font-bold text-xl bg-gradient-to-r from-primary to-accent bg-clip-text text-transparent select-none shrink-0"
           >
-            DDC
-          </a>
+            Deutsche Deadlock Community
+</a>
           <a
             href={WEBSITE_HOME_PATH}
             className="hidden sm:inline-flex items-center gap-2 text-sm text-text-secondary hover:text-text-primary transition-colors duration-200"

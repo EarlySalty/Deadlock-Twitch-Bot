@@ -14,40 +14,28 @@ const TWITCH_PARENTS = ["deutsche-deadlock-community.de"] as const;
 
 const CLIPS: EmbeddedClip[] = [
   {
-    id: "twitch-main",
+    id: "twitch-1",
     platform: "Twitch",
-    sourceUrl:
-      "https://www.twitch.tv/earlysalty/clip/PlainSleepyBaboonDoritosChip-S5HmbowuRWcgn74-",
-    embedUrl:
-      "https://clips.twitch.tv/embed?clip=PlainSleepyBaboonDoritosChip-S5HmbowuRWcgn74-",
+    sourceUrl: "https://www.twitch.tv/xradoo_/clip/VainCoweringTigerCclamChamp-2U0MMD9D4pbWGgMK",
+    embedUrl: "https://clips.twitch.tv/embed?clip=VainCoweringTigerCclamChamp-2U0MMD9D4pbWGgMK",
   },
   {
-    id: "medal-1",
-    platform: "Medal",
-    sourceUrl:
-      "https://medal.tv/de/games/deadlock/clips/mdXb5pFcYk0B5p9XU?invite=cr-MSx5anMsNDc2NTU1MzY0&v=34",
-    embedUrl: "https://medal.tv/de/games/deadlock/clip/mdXb5pFcYk0B5p9XU",
+    id: "twitch-2",
+    platform: "Twitch",
+    sourceUrl: "https://www.twitch.tv/friduzockt/clip/GlutenFreeExuberantAlmondTwitchRaid-ZGcAGDDQOrrL39JO",
+    embedUrl: "https://clips.twitch.tv/embed?clip=GlutenFreeExuberantAlmondTwitchRaid-ZGcAGDDQOrrL39JO",
   },
   {
-    id: "medal-2",
-    platform: "Medal",
-    sourceUrl:
-      "https://medal.tv/de/games/deadlock/clips/mdXAyLMC391loUOmb?invite=cr-MSxETmIsNDc2NTU1MzY0&v=16",
-    embedUrl: "https://medal.tv/de/games/deadlock/clip/mdXAyLMC391loUOmb",
+    id: "twitch-3",
+    platform: "Twitch",
+    sourceUrl: "https://www.twitch.tv/v4ntr1ko/clip/TubularFrailSwallowHumbleLife-rmmgDiaxVLs9QUjF",
+    embedUrl: "https://clips.twitch.tv/embed?clip=TubularFrailSwallowHumbleLife-rmmgDiaxVLs9QUjF",
   },
   {
-    id: "medal-3",
-    platform: "Medal",
-    sourceUrl:
-      "https://medal.tv/de/games/deadlock/clips/mdXEiosLrxM1B-LKB?invite=cr-MSxWWlQsNDc2NTU1MzY0&v=22",
-    embedUrl: "https://medal.tv/de/games/deadlock/clip/mdXEiosLrxM1B-LKB",
-  },
-  {
-    id: "medal-4",
-    platform: "Medal",
-    sourceUrl:
-      "https://medal.tv/games/deadlock/clips/mdXfCZJXOjdeteVvf?invite=cr-MSxoZGksNDc2NTU1MzY0&v=24",
-    embedUrl: "https://medal.tv/games/deadlock/clip/mdXfCZJXOjdeteVvf",
+    id: "twitch-4",
+    platform: "Twitch",
+    sourceUrl: "https://www.twitch.tv/miracleghost9/clip/WildFilthyWitchFeelsBadMan-drdLDEzqho4rwd_z",
+    embedUrl: "https://clips.twitch.tv/embed?clip=WildFilthyWitchFeelsBadMan-drdLDEzqho4rwd_z",
   },
 ];
 

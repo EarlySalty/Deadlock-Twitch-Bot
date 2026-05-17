@@ -29,8 +29,8 @@ export function PublicInfoFooter() {
         <div className="flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
           <div className="max-w-xl">
             <p className="bg-gradient-to-r from-primary to-accent bg-clip-text text-xl font-bold font-display text-transparent">
-              DDC
-            </p>
+              Deutsche Deadlock Community
+</p>
             <p className="mt-3 text-sm leading-relaxed text-text-secondary">
               Öffentliche Produktflächen für neue und bestehende Streamer. Die
               Seite erklärt den Partner-Flow und die dokumentierten Bot-Funktionen
