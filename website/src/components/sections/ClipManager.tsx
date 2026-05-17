@@ -16,8 +16,8 @@ const CLIPS: EmbeddedClip[] = [
   {
     id: "twitch-1",
     platform: "Twitch",
-    sourceUrl: "https://www.twitch.tv/xradoo_/clip/VainCoweringTigerCclamChamp-2U0MMD9D4pbWGgMK",
-    embedUrl: "https://clips.twitch.tv/embed?clip=VainCoweringTigerCclamChamp-2U0MMD9D4pbWGgMK",
+    sourceUrl: "https://www.twitch.tv/friduzockt/clip/LivelySpeedyPuddingRiPepperonis-LEDojoINvrSJqSaN",
+    embedUrl: "https://clips.twitch.tv/embed?clip=LivelySpeedyPuddingRiPepperonis-LEDojoINvrSJqSaN",
   },
   {
     id: "twitch-2",
@@ -34,8 +34,8 @@ const CLIPS: EmbeddedClip[] = [
   {
     id: "twitch-4",
     platform: "Twitch",
-    sourceUrl: "https://www.twitch.tv/miracleghost9/clip/WildFilthyWitchFeelsBadMan-drdLDEzqho4rwd_z",
-    embedUrl: "https://clips.twitch.tv/embed?clip=WildFilthyWitchFeelsBadMan-drdLDEzqho4rwd_z",
+    sourceUrl: "https://www.twitch.tv/einsbezi/clip/EphemeralOptimisticDonkeyRlyTho-gWwwmuVOBi41L2Fs",
+    embedUrl: "https://clips.twitch.tv/embed?clip=EphemeralOptimisticDonkeyRlyTho-gWwwmuVOBi41L2Fs",
   },
 ];
 

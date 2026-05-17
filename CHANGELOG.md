@@ -1,3 +1,10 @@
+## #35 — Clips ohne Alterswarnung und Twitch-Embeds funktionsfähig
+
+- Clips von xradoo_ und miracleghost9 ersetzt — beide hatten eine Twitch-Alterswarnung, die das Einbetten verhinderte
+- Ersetzt durch Clips von friduzockt und einsbezi aus der Community
+- Caddy-Konfiguration repariert: Twitch-Embeds auf der /streamer/-Seite wurden durch eine zu restriktive Content-Security-Policy geblockt — jetzt erlaubt
+- Demo-Dashboard kann wieder in die Streamer-Website eingebettet werden (gleiches CSP-Problem behoben)
+
 ## #34 — Branding der öffentlichen Website vereinheitlicht
 
 - Titel und Link-Vorschau zeigen jetzt „Deutsche Deadlock Community" statt „EarlySalty"
