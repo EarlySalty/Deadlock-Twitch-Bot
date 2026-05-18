@@ -92,7 +92,7 @@ class DashboardV2EntitlementTests(unittest.IsolatedAsyncioTestCase):
         basic_plan = next(plan for plan in payload["plans"] if plan["id"] == "raid_boost")
         self.assertEqual(
             basic_plan["entitlements"],
-            ["analytics.basic", "chat.lurker_tax", "raid.priority"],
+            ["analytics.ai_mini", "analytics.basic", "chat.lurker_tax", "raid.priority"],
         )
         self.assertTrue(basic_plan["is_current"])
 

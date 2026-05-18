@@ -534,6 +534,257 @@ FAQ_SECTIONS.push({
 });
 
 FAQ_SECTIONS.push({
+  id: "funktionen",
+  badge: "Funktionen",
+  title: "Was macht der Bot eigentlich?",
+  description:
+    "Die wichtigsten Aufgaben des Bots auf einen Blick — was er für dich erledigt und was nicht.",
+  items: [
+    {
+      question: "Welche Hauptaufgaben übernimmt der Bot für mich?",
+      answer:
+        "Der Bot kümmert sich um vier Dinge: Er leitet beim Stream-Ende deine Zuschauer automatisch an einen live Deadlock-Partner weiter (Auto-Raid), trackt deine Stream-Zahlen für dein Dashboard, schickt bei Bedarf eine dezente Discord-Einladung in deinen Chat und bringt optionale Extras wie Lurker-Erinnerungen oder KI-Stream-Reports mit.",
+      details: [
+        "Auto-Raid läuft ohne Setup — der Bot wählt den passenden Partner aus.",
+        "Analytics werden im Hintergrund erfasst, du musst nichts konfigurieren.",
+        "Chat-Werbung kannst du im Dashboard steuern oder mit dem Werbefrei-Plan komplett abschalten.",
+        "Stream-Reports (KI) und Lurker-Tax sind optionale Premium-Features.",
+      ],
+      access: "Alle",
+      tags: ["funktionen", "bot", "überblick", "aufgaben", "features"],
+      routes: [
+        { label: "Dashboard öffnen", href: buildTwitchDashboardLoginUrl("/twitch/dashboard-v2") },
+      ],
+    },
+    {
+      question: "Welche Rechte braucht der Bot in meinem Kanal?",
+      answer:
+        "Der Bot meldet sich per Twitch-Login an und braucht ein paar Standard-Rechte: Chat-Nachrichten lesen und schreiben, Live-Status sehen, Raid auslösen. Für ein paar optionale Features (z. B. Lurker-Tax) bittet er zusätzlich um den Moderator-Lesescope für Chatter — das siehst du beim Login.",
+      details: [
+        "Du autorisierst den Bot über deinen Twitch-Account — kein extra Passwort.",
+        "Der Bot muss zusätzlich als Mod in deinem Chat angekündigt sein, damit Announcements sauber funktionieren.",
+        "Du kannst die Verbindung jederzeit in deinen Twitch-Einstellungen widerrufen.",
+      ],
+      access: "Alle",
+      tags: ["rechte", "scopes", "mod", "berechtigung", "twitch", "login"],
+      routes: [
+        { label: "Bot für deinen Kanal aktivieren", href: buildTwitchBotAuthUrl() },
+      ],
+    },
+    {
+      question: "Was passiert, wenn ich offline bin?",
+      answer:
+        "Der Bot bleibt erreichbar, schickt aber keine Chat-Aktionen mehr — Werbung, Lurker-Erinnerungen und ähnliches greifen nur, wenn dein Stream läuft. Sobald dein Stream endet, prüft der Bot, ob er deine Zuschauer per Auto-Raid weiterleiten kann.",
+      details: [
+        "Während du offline bist, ruhen alle Chat-Trigger.",
+        "Der Auto-Raid wird genau einmal pro Stream-Ende ausgelöst.",
+        "Deine Analytics-Daten werden weiter im Dashboard zugänglich gemacht.",
+      ],
+      access: "Alle",
+      tags: ["offline", "stream-ende", "raid", "ruhend", "auto-raid"],
+    },
+    {
+      question: "Bekomme ich mit, was der Bot in meinem Chat sendet?",
+      answer:
+        "Ja — jede vom Bot gesendete Nachricht steht klar erkennbar in deinem Chat mit dem Bot-Account als Absender. Im Dashboard kannst du außerdem die letzten Aktivitäten einsehen und ggf. Werbung deaktivieren oder den Text anpassen.",
+      details: [
+        "Alle Bot-Nachrichten laufen unter einem dedizierten Bot-Account.",
+        "Im Dashboard siehst du jüngste Aktionen und kannst Einstellungen ändern.",
+        "Mit dem Werbefrei-Plan unterbindest du die Discord-Einladungen komplett.",
+      ],
+      access: "Alle",
+      tags: ["chat", "transparenz", "nachrichten", "bot-account", "logs"],
+      routes: [
+        { label: "Dashboard öffnen", href: buildTwitchDashboardLoginUrl("/twitch/dashboard-v2") },
+      ],
+    },
+  ],
+});
+
+FAQ_SECTIONS.push({
+  id: "plaene",
+  badge: "Pläne & Preise",
+  title: "Pläne, Preise und was sie bringen",
+  description:
+    "Was kostet was, was bekommst du dafür und wann lohnt sich ein Upgrade — alles ohne Marketing-Sprech.",
+  items: [
+    {
+      question: "Was ist kostenlos und was kostet etwas?",
+      answer:
+        "Die komplette Plattform inklusive Auto-Raid, Basis-Dashboard, Discord-Go-Live-Posts und Chat-Commands ist und bleibt kostenlos. Bezahl-Pläne gibt es nur für drei Extras: Chat-Werbung deaktivieren, bevorzugte Raid-Platzierung und das volle Analytics-/KI-Coaching.",
+      details: [
+        "Free reicht für den Großteil dessen, was Streamer aus dem Netzwerk holen.",
+        "Bezahlt wird nur, wenn du gezielt Werbung-aus, mehr Raids oder KI-Analysen willst.",
+        "Es gibt keine versteckten Limits — Free ist ein vollwertiger Plan.",
+      ],
+      access: "Alle",
+      tags: ["kostenlos", "free", "preis", "abo", "kosten", "übersicht"],
+      routes: [
+        { label: "Dashboard öffnen", href: buildTwitchDashboardLoginUrl("/twitch/dashboard-v2") },
+      ],
+    },
+    {
+      question: "Was bringt mir der Werbefrei-Plan (3,99 €/Monat)?",
+      answer:
+        "Werbefrei macht genau eine Sache: Der Bot schickt keine Discord-Einladung mehr in deinen Chat — egal aus welchem Anlass. Sonst bleibt alles wie im Free-Plan. Ideal, wenn du keine Bot-Werbung in deinem Chat willst, aber auf Raid Boost oder Analytics verzichten kannst.",
+      details: [
+        "Discord-Einladung wird dauerhaft nicht mehr gesendet.",
+        "Greift auch, wenn ein Admin gerade einen globalen Aktions-Text aktiviert hat.",
+        "Auto-Raid, Dashboard, Go-Live-Posts laufen ganz normal weiter.",
+        "Monatlich kündbar, kein Vertragsbindung-Quatsch.",
+      ],
+      access: "Alle",
+      tags: ["werbefrei", "werbung", "chat-werbung", "3,99", "abo", "plan", "ruhe"],
+      routes: [
+        { label: "Pläne ansehen", href: buildTwitchDashboardLoginUrl("/twitch/abbo") },
+      ],
+    },
+    {
+      question: "Wann lohnt sich Raid Boost (3,99 €/Monat)?",
+      answer:
+        "Raid Boost lohnt sich, wenn du gezielt mehr eingehende Zuschauer willst. Dein Kanal wird im Raid-Netzwerk bevorzugt als Ziel vorgeschlagen — auch dann, wenn du selbst gerade nicht live bist. Zusätzlich bekommst du Lurker-Tax-Erinnerungen und das KI-Mini-Modell für leichte Stream-Insights.",
+      details: [
+        "Du wirst öfter als Raid-Ziel ausgewählt — mehr eingehende Viewer.",
+        "Lurker-Tax erinnert dich an Zuschauer, die seit langem im Chat hängen ohne zu schreiben.",
+        "Analytics-Basics und KI-Mini-Reports sind enthalten.",
+        "Chat-Werbung bleibt aktiv — wenn du auch Ruhe willst, nimm das Combo.",
+      ],
+      access: "Alle",
+      tags: ["raid boost", "raid", "boost", "3,99", "wachstum", "lurker"],
+      routes: [
+        { label: "Pläne ansehen", href: buildTwitchDashboardLoginUrl("/twitch/abbo") },
+      ],
+    },
+    {
+      question: "Lohnt sich das Combo 'Werbefrei + Raid Boost' (5,99 €)?",
+      answer:
+        "Wenn du beides willst — keine Bot-Werbung und mehr eingehende Raids — ist das Combo der günstigere Weg. Einzeln wären die zwei Pläne 7,98 €, im Combo zahlst du nur 5,99 €. Das spart dir 2 € pro Monat.",
+      details: [
+        "Werbefrei und Raid Boost in einem Plan.",
+        "5,99 € statt 7,98 € — ein Viertel günstiger.",
+        "Wechsel jederzeit im Dashboard möglich.",
+      ],
+      access: "Alle",
+      tags: ["combo", "bundle", "werbefrei", "raid boost", "5,99", "rabatt"],
+      routes: [
+        { label: "Pläne ansehen", href: buildTwitchDashboardLoginUrl("/twitch/abbo") },
+      ],
+    },
+    {
+      question: "Was ist der Unterschied zwischen Erweitert (8,49 €) und dem großen Bundle (11,49 €)?",
+      answer:
+        "Erweitert schaltet dir das volle Analytics-Dashboard mit KI-Coaching frei — Viewer-Profile, Retention-Analyse, Coaching-Empfehlungen. Das große Bundle ist Erweitert plus Raid Boost plus Werbefrei in einem Paket — also das komplette Programm in einer Buchung.",
+      details: [
+        "Erweitert: volles Analytics + KI-Voll-Modell.",
+        "Bundle: Erweitert + Raid Boost + Werbefrei.",
+        "Wenn du nur Analytics brauchst, reicht Erweitert.",
+        "Das Bundle spart, sobald du mehr als zwei der drei Bausteine willst.",
+      ],
+      access: "Alle",
+      tags: ["erweitert", "analyse", "bundle", "11,49", "8,49", "ki", "analytics"],
+      routes: [
+        { label: "Pläne ansehen", href: buildTwitchDashboardLoginUrl("/twitch/abbo") },
+      ],
+    },
+    {
+      question: "Kann ich monatlich kündigen oder zwischen Plänen wechseln?",
+      answer:
+        "Ja, alle Pläne sind monatlich kündbar. Wenn du 6 oder 12 Monate im Voraus zahlst, gibt es einen Rabatt (10 % bzw. 20 %). Plan-Wechsel sind jederzeit möglich — der Rest des aktuellen Zyklus wird verrechnet.",
+      details: [
+        "Monatlich, halbjährlich (10 % Rabatt) oder jährlich (20 % Rabatt) wählbar.",
+        "Kündigung über das Dashboard, keine E-Mail nötig.",
+        "Plan-Wechsel sofort wirksam, Restguthaben wird verrechnet.",
+      ],
+      access: "Alle",
+      tags: ["kündigung", "wechsel", "monatlich", "rabatt", "laufzeit", "upgrade", "downgrade"],
+      routes: [
+        { label: "Pläne ansehen", href: buildTwitchDashboardLoginUrl("/twitch/abbo") },
+      ],
+    },
+  ],
+});
+
+FAQ_SECTIONS.push({
+  id: "werbung",
+  badge: "Chat-Werbung",
+  title: "Chat-Werbung des Bots",
+  description:
+    "Was der Bot in deinen Chat schickt, wann, und wie du das komplett abstellst.",
+  items: [
+    {
+      question: "Welche Werbung schickt der Bot in meinen Chat?",
+      answer:
+        "Der Bot postet eine kurze Discord-Einladung in deinen Chat, damit deine Zuschauer Teil der Deadlock-Community werden können. Es geht ausschließlich um den Community-Discord — keine externen Sponsoren, keine fremden Produkte, kein Spam.",
+      details: [
+        "Inhalt: kurzer Hinweis-Text plus Discord-Einladungslink.",
+        "Keine Werbung für externe Produkte oder Drittanbieter.",
+        "Du kannst den Text im Dashboard durch deinen eigenen ersetzen.",
+      ],
+      access: "Alle",
+      tags: ["werbung", "discord", "promo", "chat", "einladung"],
+      routes: [
+        { label: "Dashboard öffnen", href: buildTwitchDashboardLoginUrl("/twitch/dashboard-v2") },
+      ],
+    },
+    {
+      question: "Wann genau wird die Werbung gepostet?",
+      answer:
+        "Die Werbung greift nur, wenn dein Stream läuft und nur, wenn auch wirklich neue Zuschauer im Chat sind. Es gibt eingebaute Cooldowns und Mindest-Aktivitäts-Schwellen, damit es nicht spammt — typischerweise sehen Zuschauer eine Einladung höchstens alle paar Stunden.",
+      details: [
+        "Triggert nur, wenn neue Chatter im aktuellen Fenster aktiv waren.",
+        "Cooldown verhindert wiederholte Einblendungen für dieselben Zuschauer.",
+        "Bei aktiven Sonder-Events kann der Bot stattdessen einen Aktions-Text einblenden.",
+      ],
+      access: "Alle",
+      tags: ["trigger", "wann", "cooldown", "frequenz", "spam"],
+    },
+    {
+      question: "Wie schalte ich die Chat-Werbung komplett ab?",
+      answer:
+        "Mit dem Werbefrei-Plan (3,99 €/Monat) oder einem der Bundles, die ihn enthalten. Sobald der Plan aktiv ist, sendet der Bot in deinem Chat keinerlei Werbung mehr — auch nicht, wenn andere Trigger eigentlich greifen würden.",
+      details: [
+        "Werbefrei: 3,99 €/Monat, einziger Effekt ist Werbung-aus.",
+        "Werbefrei + Raid Boost (Combo): 5,99 €/Monat.",
+        "Großes Bundle (Erweitert + Raid Boost + Werbefrei): 11,49 €/Monat.",
+        "Plan im Dashboard buchen, Effekt greift sofort.",
+      ],
+      access: "Alle",
+      tags: ["abstellen", "deaktivieren", "ausschalten", "werbefrei", "ruhe", "plan"],
+      routes: [
+        { label: "Pläne ansehen", href: buildTwitchDashboardLoginUrl("/twitch/abbo") },
+      ],
+    },
+    {
+      question: "Gilt 'Werbefrei' auch bei Sonder-Events vom Admin?",
+      answer:
+        "Ja. Wenn ein Admin global einen Aktions-Text aktiviert (z. B. zu einem Community-Event), gilt das ausdrücklich nicht für Streamer mit Werbefrei-Plan. Der Plan überschreibt jeden globalen Werbe-Override — komplett kein Bot-Werbungstext in deinem Chat, ohne Ausnahme.",
+      details: [
+        "Werbefrei-Streamer bekommen auch bei aktivem globalem Sonder-Text nichts gesendet.",
+        "Die Sperre greift in jedem Trigger-Pfad — Chat-Aktivität, Viewer-Anstieg oder Zeitplan.",
+        "Du kannst dich darauf verlassen, dass 'Werbefrei' wirklich werbefrei ist.",
+      ],
+      access: "Alle",
+      tags: ["admin", "override", "event", "global", "werbefrei", "ausnahme"],
+    },
+    {
+      question: "Kann ich nur den Werbe-Text anpassen, ohne Werbefrei zu buchen?",
+      answer:
+        "Ja. Im Dashboard kannst du den Werbe-Text durch einen eigenen ersetzen — dann postet der Bot deinen statt des Default-Texts. Das ist kostenlos und für alle Pläne verfügbar. Den Discord-Link kannst du als Platzhalter einbauen.",
+      details: [
+        "Eigener Werbe-Text im Dashboard hinterlegbar.",
+        "Platzhalter {invite} wird beim Senden durch den Discord-Link ersetzt.",
+        "Wenn ein Admin gerade einen Aktions-Text aktiviert hat, hat dieser kurzzeitig Vorrang vor deinem eigenen.",
+      ],
+      access: "Alle",
+      tags: ["text", "anpassen", "eigener text", "promo-text", "override"],
+      routes: [
+        { label: "Dashboard öffnen", href: buildTwitchDashboardLoginUrl("/twitch/dashboard-v2") },
+      ],
+    },
+  ],
+});
+
+FAQ_SECTIONS.push({
   id: "support",
   badge: "Support",
   title: "Hilfe, Konto & Rechtliches",

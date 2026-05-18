@@ -1,5 +1,5 @@
 import { motion } from 'framer-motion';
-import { Check, Sparkles, Star, Zap, Crown } from 'lucide-react';
+import { BellOff, Check, Sparkles, Star, Zap, Crown } from 'lucide-react';
 import { PREVIEW_BILLING_ROUTE } from '../../preview/routes';
 import type { CatalogPlan } from '../../types/billing';
 
@@ -37,41 +37,56 @@ const tierConfig = {
 
 const planHighlights: Record<string, string[]> = {
   raid_free: [
-    'Basis-Analytics',
-    'Viewer-Trend',
-    'Stream-Übersicht',
+    'Auto-Raid bei Stream-Ende',
+    'Basis-Dashboard',
+    'Discord Go-Live-Posts',
+  ],
+  chat_quiet: [
+    'Chat-Werbung dauerhaft aus',
+    'Greift auch bei Admin-Events',
+    'Sonst alles wie Free',
+    'Monatlich kündbar',
   ],
   raid_boost: [
-    'Erweiterte Analytics',
-    'Chat-Insights',
-    'Growth-Tracking',
-    'Priority Support',
+    'Bevorzugte Raid-Platzierung',
+    'Lurker-Tax-Erinnerungen',
+    'KI-Mini Insights',
+    'Basis-Analytics',
+  ],
+  bundle_chat_quiet_raid_boost: [
+    'Werbung aus + Raid Boost',
+    'Spart 2 € gegenüber Einzelkauf',
+    'Lurker-Tax-Erinnerungen',
+    'Basis-Analytics',
   ],
   analysis_dashboard: [
-    'Alle Basic-Features',
-    'KI-Analyse',
-    'Viewer-Profile',
+    'Volles KI-Coaching',
+    'Viewer-Profile & Retention',
+    'Alle Tabs freigeschaltet',
     'Coaching & Monetization',
   ],
   bundle_analysis_raid_boost: [
     'Alle Analytics-Features',
     'Bevorzugte Raid-Platzierung',
-    'KI-Analyse inklusive',
-    'Günstiger als Einzeln',
+    'Chat-Werbung dauerhaft aus',
+    'Spart gegenüber Einzelkauf',
   ],
 };
 
 export default function PlanCardRedesign({ plan, index }: PlanCardRedesignProps) {
-  const isBundle = plan.id === 'bundle_analysis_raid_boost';
+  const isBundle = plan.id.startsWith('bundle_');
+  const isChatQuiet = plan.id === 'chat_quiet';
   const config = tierConfig[plan.tier];
-  const Icon = config.icon;
+  const Icon = isChatQuiet ? BellOff : config.icon;
   const isCurrent = plan.is_current;
   const highlights = planHighlights[plan.id] || plan.features.slice(0, 4);
-  const isPopular = plan.tier === 'basic';
+  const isPopular = plan.id === 'raid_boost';
   const isRecommended = plan.tier === 'extended' && !isBundle;
   const badge = isBundle
     ? { text: 'Bundle', icon: Sparkles, className: 'bg-gradient-to-r from-[#2b6f6b] to-[#d08a38] text-white' }
-    : config.badge;
+    : isPopular || isRecommended
+    ? config.badge
+    : null;
 
   return (
     <motion.div

@@ -375,6 +375,7 @@ class ManualPlanOverrideTests(unittest.TestCase):
         self.assertEqual(
             details["entitlements"],
             [
+                "analytics.ai_full",
                 "analytics.basic",
                 "analytics.extended",
                 "chat.lurker_tax",

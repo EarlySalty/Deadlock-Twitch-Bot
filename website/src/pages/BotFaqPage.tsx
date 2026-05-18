@@ -17,6 +17,9 @@ const NAV_LINKS = [
   { label: "Raids", href: "#raids" },
   { label: "Community", href: "#community" },
   { label: "Affiliate", href: "#affiliate" },
+  { label: "Funktionen", href: "#funktionen" },
+  { label: "Pläne", href: "#plaene" },
+  { label: "Werbung", href: "#werbung" },
   { label: "Support", href: "#support" },
 ];
 

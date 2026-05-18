@@ -74,21 +74,41 @@ class BillingHelperTests(unittest.TestCase):
 
     def test_paid_plan_id_helper_distinguishes_paid_from_free(self) -> None:
         self.assertFalse(_billing_is_paid_plan_id("raid_free"))
+        self.assertTrue(_billing_is_paid_plan_id("chat_quiet"))
         self.assertTrue(_billing_is_paid_plan_id("raid_boost"))
+        self.assertTrue(_billing_is_paid_plan_id("bundle_chat_quiet_raid_boost"))
         self.assertTrue(_billing_is_paid_plan_id("analysis_dashboard"))
         self.assertTrue(_billing_is_paid_plan_id("bundle_analysis_raid_boost"))
 
     def test_plan_helpers_expose_canonical_tier_and_entitlements(self) -> None:
         self.assertEqual(_billing_plan_tier("raid_free"), "free")
+        self.assertEqual(_billing_plan_tier("chat_quiet"), "basic")
         self.assertEqual(_billing_plan_tier("raid_boost"), "basic")
+        self.assertEqual(_billing_plan_tier("bundle_chat_quiet_raid_boost"), "basic")
         self.assertEqual(_billing_plan_tier("analysis_dashboard"), "extended")
+        self.assertEqual(_billing_plan_tier("bundle_analysis_raid_boost"), "extended")
+        self.assertEqual(
+            _billing_plan_entitlements("chat_quiet"),
+            ("chat.promos.disable",),
+        )
         self.assertEqual(
             _billing_plan_entitlements("raid_boost"),
-            ("analytics.basic", "chat.lurker_tax", "raid.priority"),
+            ("analytics.ai_mini", "analytics.basic", "chat.lurker_tax", "raid.priority"),
+        )
+        self.assertEqual(
+            _billing_plan_entitlements("bundle_chat_quiet_raid_boost"),
+            (
+                "analytics.ai_mini",
+                "analytics.basic",
+                "chat.lurker_tax",
+                "chat.promos.disable",
+                "raid.priority",
+            ),
         )
         self.assertEqual(
             _billing_plan_entitlements("bundle_analysis_raid_boost"),
             (
+                "analytics.ai_full",
                 "analytics.basic",
                 "analytics.extended",
                 "chat.lurker_tax",

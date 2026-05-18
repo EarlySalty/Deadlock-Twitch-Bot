@@ -19,19 +19,21 @@ import { formatNumber, formatDuration } from '@/utils/formatters';
 import {
   ArrowRight,
   BarChart3,
+  BookOpen,
   FileText,
   Film,
   Heart,
   Home,
   Loader2,
   MessageSquare,
+  RotateCcw,
   Settings,
   Sparkles,
   TrendingUp,
   Users,
   type LucideIcon,
 } from 'lucide-react';
-import { WelcomeTour } from '@/components/onboarding/WelcomeTour';
+import { WelcomeTour, resetWelcomeTour } from '@/components/onboarding/WelcomeTour';
 
 function MiniStat({
   label,
@@ -821,7 +823,7 @@ export function InternalHomeLanding() {
                 <div className="gradient-accent sidebar-avatar-glow flex h-10 w-10 shrink-0 items-center justify-center rounded-full text-sm font-bold text-white">
                   {displayName?.[0]?.toUpperCase() ?? '?'}
                 </div>
-                <div className="min-w-0">
+                <div data-tour-id="tour-plan" className="min-w-0">
                   <div className="truncate text-sm font-semibold text-white">{displayName}</div>
                   <div className="mt-1 inline-flex max-w-full items-center rounded-full border border-accent/30 bg-accent/10 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.18em] text-accent">
                     {planName}
@@ -909,11 +911,37 @@ export function InternalHomeLanding() {
                   </div>
                 </>
               ) : null}
+
+              <div className="border-t border-border" />
+              <div data-tour-id="tour-help" className="space-y-2">
+                <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-text-secondary">
+                  Hilfe
+                </div>
+                <a
+                  href="/twitch/faq"
+                  className="flex items-center gap-2 rounded-xl border border-border bg-background/60 px-3 py-2 text-sm font-medium text-text-secondary transition-colors hover:border-border-hover hover:text-white"
+                >
+                  <BookOpen className="h-4 w-4" />
+                  FAQ &amp; Hilfe
+                </a>
+                <button
+                  type="button"
+                  onClick={() => {
+                    resetWelcomeTour();
+                    window.location.reload();
+                  }}
+                  className="flex w-full items-center gap-2 rounded-xl border border-border bg-background/60 px-3 py-2 text-sm font-medium text-text-secondary transition-colors hover:border-border-hover hover:text-white"
+                >
+                  <RotateCcw className="h-4 w-4" />
+                  Tour neu starten
+                </button>
+              </div>
             </div>
           </motion.aside>
 
           <main className="space-y-4 md:space-y-5">
             <motion.section
+              data-tour-id="tour-intro"
               className="panel-card card-glow card-glow-accent hero-aura flex flex-col gap-4 rounded-2xl px-5 py-4 md:flex-row md:items-center md:justify-between"
               initial={{ opacity: 0, y: 20 }}
               animate={{ opacity: 1, y: 0 }}

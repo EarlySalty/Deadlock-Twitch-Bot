@@ -44,6 +44,13 @@ interface PopoverPosition {
 
 const TOUR_STEPS: TourStep[] = [
   {
+    anchor: 'tour-intro',
+    tag: 'Willkommen',
+    title: 'Das macht der Bot für dich',
+    description:
+      'Auto-Raid zu Stream-Ende, Echtzeit-Analytics, optionale Discord-Einladung und Chat-Tools — alles ohne Setup.',
+  },
+  {
     anchor: 'tour-health',
     tag: 'Kanal-Score',
     title: 'Dein Channel-Gesundheitscheck',
@@ -62,10 +69,31 @@ const TOUR_STEPS: TourStep[] = [
     description: 'KPI-Vergleich zur Vorwoche mit Trend-Indikatoren.',
   },
   {
+    anchor: 'tour-plan',
+    tag: 'Dein Plan',
+    title: 'Aktueller Plan & Upgrade-Optionen',
+    description:
+      'Hier siehst du, welcher Plan aktiv ist. Werbefrei (3,99 €) schaltet die Chat-Werbung komplett ab, Raid Boost bringt mehr eingehende Raids.',
+  },
+  {
+    anchor: 'tour-promo-settings',
+    tag: 'Werbung',
+    title: 'Werbung & Chat-Einstellungen',
+    description:
+      'Eigenen Werbe-Text setzen oder mit dem Werbefrei-Plan dauerhaft abschalten — auch bei aktiven Admin-Events.',
+  },
+  {
     anchor: 'tour-nav',
     tag: 'Navigation',
     title: 'Schnellzugriff auf alle Tools',
     description: 'Analyse, Chat, Verwaltung und dein Plan — immer einen Klick entfernt.',
+  },
+  {
+    anchor: 'tour-help',
+    tag: 'Hilfe & FAQ',
+    title: 'Antworten findest du jederzeit in der FAQ',
+    description:
+      'Funktionen, Pläne, Werbung, Support — alles erklärt. Die Tour kannst du hier jederzeit neu starten.',
   },
 ];
 

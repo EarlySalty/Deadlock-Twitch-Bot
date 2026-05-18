@@ -49,6 +49,9 @@ class _DummyPromoChat(PromoMixin):
     def __init__(self) -> None:
         self.announcement_calls: list[dict[str, str]] = []
         self._last_promo_sent: dict[str, float] = {}
+        self._promo_activity: dict = {}
+        self._promo_seen_chatters: dict = {}
+        self._promo_seen_chatters_ts: dict = {}
 
     async def _get_promo_invite(self, login: str):
         del login
@@ -87,7 +90,25 @@ class ChatPromoOverrideTests(unittest.IsolatedAsyncioTestCase):
             """
             CREATE TABLE streamer_plans (
                 twitch_login TEXT PRIMARY KEY,
-                promo_message TEXT
+                twitch_user_id TEXT,
+                promo_message TEXT,
+                promo_disabled INTEGER NOT NULL DEFAULT 0,
+                manual_plan_id TEXT,
+                manual_plan_expires_at TEXT,
+                manual_plan_notes TEXT NOT NULL DEFAULT '',
+                manual_plan_updated_at TEXT
+            )
+            """
+        )
+        self.conn.execute(
+            """
+            CREATE TABLE twitch_billing_subscriptions (
+                stripe_subscription_id TEXT PRIMARY KEY,
+                customer_reference TEXT,
+                status TEXT,
+                plan_id TEXT,
+                current_period_end TEXT,
+                updated_at TEXT
             )
             """
         )
@@ -310,6 +331,69 @@ class ChatPromoOverrideTests(unittest.IsolatedAsyncioTestCase):
             self.handler.announcement_calls[0]["text"],
             "Default Fallback https://discord.gg/example",
         )
+
+    async def test_active_global_event_skips_streamer_with_chat_promos_disable_entitlement(self) -> None:
+        # Werbefrei-Plan blockiert auch bei aktivem globalem Admin-Event jede Bot-Werbung.
+        self.conn.execute(
+            "INSERT INTO streamer_plans (twitch_login, promo_message, manual_plan_id) VALUES (?, ?, ?)",
+            ("partner_one", "Streamer Override {invite}", "chat_quiet"),
+        )
+        save_global_promo_mode(
+            _CompatConn(self.conn),
+            config={
+                "mode": "custom_event",
+                "custom_message": "Global Event {invite}",
+                "is_enabled": True,
+            },
+            updated_by="discord:55",
+        )
+
+        with self._conn_patch(), patch(
+            "bot.chat.promos.PROMO_MESSAGES",
+            ["Default Fallback {invite}"],
+        ), patch(
+            "bot.chat.promos.PROMO_MESSAGES_CATEGORIZED",
+            {},
+        ), patch(
+            "bot.chat.promos.PROMO_CHANNEL_ALLOWLIST",
+            [],
+        ):
+            ok = await self.handler._send_promo_message(
+                "partner_one",
+                "1001",
+                0.0,
+                reason="chat_activity",
+            )
+
+        self.assertFalse(ok)
+        self.assertEqual(self.handler.announcement_calls, [])
+
+    async def test_promo_disabled_flag_blocks_send_independently_of_plan(self) -> None:
+        # Explizit gesetztes promo_disabled-Flag blockiert ebenfalls jede Bot-Werbung.
+        self.conn.execute(
+            "INSERT INTO streamer_plans (twitch_login, promo_message, promo_disabled) VALUES (?, ?, ?)",
+            ("partner_one", "Streamer Override {invite}", 1),
+        )
+
+        with self._conn_patch(), patch(
+            "bot.chat.promos.PROMO_MESSAGES",
+            ["Default Fallback {invite}"],
+        ), patch(
+            "bot.chat.promos.PROMO_MESSAGES_CATEGORIZED",
+            {},
+        ), patch(
+            "bot.chat.promos.PROMO_CHANNEL_ALLOWLIST",
+            [],
+        ):
+            ok = await self.handler._send_promo_message(
+                "partner_one",
+                "1001",
+                0.0,
+                reason="chat_activity",
+            )
+
+        self.assertFalse(ok)
+        self.assertEqual(self.handler.announcement_calls, [])
 
 
 if __name__ == "__main__":

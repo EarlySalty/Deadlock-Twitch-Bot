@@ -918,9 +918,47 @@ class PromoMixin:
             return None
         return self._format_promo_template(secrets.choice(messages), invite)
 
+    def _promo_blocked_by_plan_or_flag(self, login: str) -> bool:
+        """Returns True wenn Bot-Werbung fuer diesen Streamer dauerhaft blockiert ist
+        (promo_disabled=1 oder Plan-Entitlement chat.promos.disable). Greift VOR jeder
+        Override-Auswertung — Werbefrei bedeutet wirklich werbefrei, auch bei aktivem
+        globalem Admin-Event. Bei DB-Fehler fail-open (return False), damit Infra-Issues
+        nicht versehentlich alle Promos blockieren."""
+        normalized = str(login or "").strip().lower()
+        if not normalized:
+            return False
+        try:
+            with readonly_connection() as conn:
+                row = conn.execute(
+                    """
+                    SELECT COALESCE(promo_disabled, 0)
+                      FROM streamer_plans
+                     WHERE LOWER(COALESCE(twitch_login, '')) = %s
+                     LIMIT 1
+                    """,
+                    (normalized,),
+                ).fetchone()
+                if row is not None:
+                    promo_disabled = int(row[0] or 0)
+                    if promo_disabled == 1:
+                        return True
+
+                snapshot = resolve_plan_snapshot_for_refs(
+                    (normalized,), conn=conn, fallback_ref=normalized
+                )
+        except Exception:
+            log.debug("_promo_blocked_by_plan_or_flag lookup failed", exc_info=True)
+            return False
+
+        entitlements = snapshot.get("entitlements") or []
+        return "chat.promos.disable" in entitlements
+
     async def _send_promo_message(
         self, login: str, channel_id: str, now: float, *, reason: str
     ) -> bool:
+        if self._promo_blocked_by_plan_or_flag(login):
+            return False
+
         invite, is_specific = await self._get_promo_invite(login)
         if not invite:
             return False

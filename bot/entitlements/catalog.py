@@ -11,7 +11,9 @@ TRIAL_DURATION_DAYS = 45
 KNOWN_PLAN_IDS: Final[frozenset[str]] = frozenset(
     {
         "raid_free",
+        "chat_quiet",
         "raid_boost",
+        "bundle_chat_quiet_raid_boost",
         "analysis_dashboard",
         "bundle_analysis_raid_boost",
         ANALYTICS_TRIAL_PLAN_ID,  # 45-day free trial for new users
@@ -21,7 +23,12 @@ KNOWN_PLAN_IDS: Final[frozenset[str]] = frozenset(
 LEGACY_PLAN_NAME_TO_ID_MAP: Final[dict[str, str]] = {
     "free": "raid_free",
     "raid_free": "raid_free",
+    "werbefrei": "chat_quiet",
+    "quiet": "chat_quiet",
+    "chat_quiet": "chat_quiet",
     "raid_boost": "raid_boost",
+    "chat_quiet_bundle": "bundle_chat_quiet_raid_boost",
+    "bundle_chat_quiet_raid_boost": "bundle_chat_quiet_raid_boost",
     "analysis": "analysis_dashboard",
     "analysis_dashboard": "analysis_dashboard",
     "bundle": "bundle_analysis_raid_boost",
@@ -30,7 +37,9 @@ LEGACY_PLAN_NAME_TO_ID_MAP: Final[dict[str, str]] = {
 
 PLAN_TIER_MAP: Final[dict[str, str]] = {
     "raid_free": "free",
+    "chat_quiet": "basic",
     "raid_boost": "basic",
+    "bundle_chat_quiet_raid_boost": "basic",
     "analysis_dashboard": "extended",
     "bundle_analysis_raid_boost": "extended",
     ANALYTICS_TRIAL_PLAN_ID: "extended",  # Trial gives extended access
@@ -38,7 +47,9 @@ PLAN_TIER_MAP: Final[dict[str, str]] = {
 
 PLAN_DISPLAY_NAME_MAP: Final[dict[str, str]] = {
     "raid_free": "Free",
+    "chat_quiet": "Werbefrei",
     "raid_boost": "Basic",
+    "bundle_chat_quiet_raid_boost": "Werbefrei + Raid Boost",
     "analysis_dashboard": "Erweitert",
     "bundle_analysis_raid_boost": "Erweitert (Bundle)",
     ANALYTICS_TRIAL_PLAN_ID: "Trial",
@@ -46,11 +57,21 @@ PLAN_DISPLAY_NAME_MAP: Final[dict[str, str]] = {
 
 PLAN_ENTITLEMENTS_MAP: Final[dict[str, frozenset[str]]] = {
     "raid_free": frozenset(),
+    "chat_quiet": frozenset({"chat.promos.disable"}),
     "raid_boost": frozenset(
         {
             "analytics.ai_mini",
             "analytics.basic",
             "chat.lurker_tax",
+            "raid.priority",
+        }
+    ),
+    "bundle_chat_quiet_raid_boost": frozenset(
+        {
+            "analytics.ai_mini",
+            "analytics.basic",
+            "chat.lurker_tax",
+            "chat.promos.disable",
             "raid.priority",
         }
     ),
