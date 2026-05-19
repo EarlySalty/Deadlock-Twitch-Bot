@@ -12,7 +12,7 @@ from ..core.llm_providers import get_minimax_client
 MINIMAX_BASE_URL = "https://api.minimax.io/v1"
 MINIMAX_MODEL = "MiniMax-M2.7"
 EMOJI_PATTERN = re.compile(
-    "[\U00010000-\U0010ffff\U0001F300-\U0001F9FF\u2600-\u26FF\u2700-\u27BF]",
+    "[\U00010000-\U0010ffff\U0001F300-\U0001F9FF\u2600-\u26FF\u2700-\u27BF]",  # lgtm[py/overly-large-range]
     flags=re.UNICODE,
 )
 _CANONICAL_RANK_NAMES = (
@@ -148,7 +148,7 @@ def _sanitize_generated_title(title: str, *, keywords: str, rank_display: str | 
         flags=re.IGNORECASE,
     )
     cleaned = re.sub(r"\s{2,}", " ", cleaned)
-    cleaned = re.sub(r"\s+([|:,-])", r"\1", cleaned)
+    cleaned = re.sub(r"\s+([|:,-])", r"\1", cleaned)  # lgtm[py/polynomial-redos]
     cleaned = re.sub(r"([|:,-]){2,}", r"\1", cleaned)
     return cleaned.strip(" -|:,")
 

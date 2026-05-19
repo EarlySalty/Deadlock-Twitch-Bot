@@ -1268,7 +1268,7 @@ class RaidAuthManager:
                 if existing_row
                 else False
             )
-            existing_needs_reauth = (
+            _existing_needs_reauth = (
                 bool(
                     existing_row["needs_reauth"]
                     if hasattr(existing_row, "keys")

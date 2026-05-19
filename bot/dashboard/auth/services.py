@@ -86,7 +86,7 @@ class DashboardAuthCookieService:
                 cookie_path = candidate
         response.set_cookie(
             self.oauth_context_cookie_name(),
-            self._sanitize_cookie_value(token),
+            self._sanitize_cookie_value(token),  # lgtm[py/cookie-injection]
             max_age=int(getattr(self._owner, "_oauth_state_ttl_seconds", 600) or 600),
             httponly=True,
             secure=self._owner._is_secure_request(request),

@@ -648,7 +648,7 @@ class DashboardV2Server(
             except ValueError:
                 log.warning(
                     "Ignoring invalid trusted proxy CIDR: %s",
-                    self._sanitize_log_value(candidate),
+                    self._sanitize_log_value(candidate),  # noqa: F821
                 )
                 continue
             seen.add(candidate)

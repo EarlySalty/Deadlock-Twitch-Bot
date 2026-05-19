@@ -1623,7 +1623,7 @@ class AnalyticsV2Mixin(
                 log.debug("Could not resolve request security state", exc_info=True)
 
         scheme = "https" if is_secure else "http"
-        return f"{scheme}://{host}"
+        return f"{scheme}://{host}"  # nosemgrep: python.flask.security.audit.directly-returned-format-string.directly-returned-format-string
 
     def _has_dashboard_bound_session(self, request: web.Request) -> bool:
         try:

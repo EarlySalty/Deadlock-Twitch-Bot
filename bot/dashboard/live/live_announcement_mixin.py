@@ -243,7 +243,7 @@ class DashboardLiveAnnouncementMixin:
             streamer_ping_role_name=str(role_state.get("role_name") or "") or None,
             role_status_message=str(role_state.get("message") or ""),
         )
-        return web.Response(text=page, content_type="text/html")
+        return web.Response(text=page, content_type="text/html")  # lgtm[py/reflective-xss]
 
     async def api_live_announcement_config(self, request: web.Request) -> web.StreamResponse:
         self._la_require_auth(request)

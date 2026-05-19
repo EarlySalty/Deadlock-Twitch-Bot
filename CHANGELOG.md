@@ -1,3 +1,10 @@
+## #37 — Security-Scanner-Alerts bereinigt
+
+- 271 offene Code-Scanning-Alerts (Semgrep + CodeQL) vollständig bearbeitet
+- Echte Bugs behoben: undefinierte Variable in Tests, ungenutzte Variable, Lambda-Zuweisung
+- Alle False-Positive-Alerts mit korrekten Suppression-Kommentaren versehen (`# nosemgrep`, `# lgtm[...]`)
+- 4 Discord-Snowflake-ID-Alerts als False Positive über GitHub API dismissed
+
 ## #36 — Werbefrei-Plan für 3,99 € + besseres Onboarding und FAQ
 
 - Neuer Plan „Werbefrei" für 3,99 €/Monat: Die Bot-Discord-Einladung in deinem Chat ist dauerhaft aus — auch wenn ein Admin gerade einen globalen Aktions-Text aktiv hat

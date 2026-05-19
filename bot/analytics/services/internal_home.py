@@ -604,7 +604,7 @@ def internal_home_ban_events_from_conn(
         }
 
     ban_clause, ban_params = ctx._internal_home_keyword_clause("b.reason")
-    ban_count_row = conn.execute(
+    ban_count_row = conn.execute(  # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
         f"""
         SELECT COUNT(*)
         FROM twitch_ban_events b

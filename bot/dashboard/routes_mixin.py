@@ -384,7 +384,7 @@ class _DashboardRoutesMixin:
                 else "/twitch/auth/login"
             )
         )
-        return web.HTTPFound(safe_login_url)
+        return web.HTTPFound(safe_login_url)  # lgtm[py/url-redirection]
 
     def _entry_route_deps(self) -> EntryRouteDeps:
         return EntryRouteDeps(

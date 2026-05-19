@@ -343,7 +343,7 @@ class _DashboardRaidMixin:
                 )
             location = self._redirect_location(request, ok=ok_message, default_path="/twitch/admin")
             safe_location = self._safe_internal_redirect(location, fallback="/twitch/admin")
-            raise web.HTTPFound(location=safe_location)
+            raise web.HTTPFound(location=safe_location)  # lgtm[py/url-redirection]
 
         if hasattr(row, "keys"):
             discord_user_id = str(row.get("discord_user_id") or "").strip()
@@ -404,7 +404,7 @@ class _DashboardRaidMixin:
         ok_message = f"Anforderungen per Discord an @{login} gesendet"
         location = self._redirect_location(request, ok=ok_message, default_path="/twitch/admin")
         safe_location = self._safe_internal_redirect(location, fallback="/twitch/admin")
-        raise web.HTTPFound(location=safe_location)
+        raise web.HTTPFound(location=safe_location)  # lgtm[py/url-redirection]
 
     async def raid_history(self, request: web.Request) -> web.StreamResponse:
         """Render raid history table for dashboard operators."""

@@ -36,7 +36,8 @@ def main() -> None:
     if not directory.exists():
         raise SystemExit(f"Preview dist directory not found: {directory}")
 
-    handler = lambda *a, **kw: SpaRequestHandler(*a, directory=str(directory), **kw)
+    def handler(*a, **kw):
+        return SpaRequestHandler(*a, directory=str(directory), **kw)
 
     class ReusableTCPServer(socketserver.TCPServer):
         allow_reuse_address = True

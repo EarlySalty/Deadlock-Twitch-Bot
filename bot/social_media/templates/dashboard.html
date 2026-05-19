@@ -1028,7 +1028,7 @@
                     const container = document.getElementById('oauth-messages');
                     if (container) container.textContent = '';
                 }, 5000);
-            } else if (normalizedError) {
+            } else if (normalizedError) {  // lgtm[js/user-controlled-bypass]
                 const errorMap = {
                     provider_error: 'OAuth-Anbieter hat den Zugriff abgelehnt.',
                     invalid_callback: 'OAuth-Antwort ist ungültig oder abgelaufen.',

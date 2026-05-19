@@ -18,7 +18,7 @@ from bot.title_generator.title_db import (
 log = logging.getLogger(__name__)
 
 EMOJI_RE = re.compile(
-    "[\U00010000-\U0010ffff\U0001F300-\U0001F9FF\u2600-\u26FF\u2700-\u27BF]",
+    "[\U00010000-\U0010ffff\U0001F300-\U0001F9FF\u2600-\u26FF\u2700-\u27BF]",  # lgtm[py/overly-large-range]
     flags=re.UNICODE,
 )
 SCORE_THRESHOLD = 1.2

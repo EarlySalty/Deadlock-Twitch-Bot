@@ -341,7 +341,7 @@ class _AnalyticsOverviewMixin:
             if hasattr(self, "_safe_internal_redirect")
             else "/twitch/auth/login"
         )
-        return web.HTTPFound(safe_login_url)
+        return web.HTTPFound(safe_login_url)  # lgtm[py/url-redirection]
 
     def _admin_dashboard_host_page_gate(
         self, request: web.Request
@@ -409,7 +409,7 @@ class _AnalyticsOverviewMixin:
                 safe_path = str(path_qs or "").strip()
                 if not safe_path.startswith("/"):
                     safe_path = "/twitch/admin"
-                return web.HTTPFound(f"{self._admin_dashboard_public_origin()}{safe_path}")
+                return web.HTTPFound(f"{self._admin_dashboard_public_origin()}{safe_path}")  # lgtm[py/url-redirection]
             return web.HTTPForbidden(
                 text="This admin dashboard is only available on the admin dashboard host."
             )
@@ -522,7 +522,7 @@ class _AnalyticsOverviewMixin:
             location = f"{location}/{path}"
         if request.query_string:
             location = f"{location}?{request.query_string}"
-        raise web.HTTPMovedPermanently(location=location)
+        raise web.HTTPMovedPermanently(location=location)  # lgtm[py/url-redirection]
 
     async def _serve_dashboard_v2(self, request: web.Request) -> web.Response:
         """Serve the main dashboard HTML at /analyse."""
@@ -767,7 +767,7 @@ class _AnalyticsOverviewMixin:
     async def _redirect_legacy_website_path(self, request: web.Request) -> web.StreamResponse:
         """Redirect legacy /website paths to the canonical /streamer base."""
         raise web.HTTPMovedPermanently(
-            location=self._build_public_website_redirect_location(
+            location=self._build_public_website_redirect_location(  # lgtm[py/url-redirection]
                 request.match_info.get("path", ""),
                 request.query_string,
             )
