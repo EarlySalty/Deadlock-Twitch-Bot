@@ -4,7 +4,7 @@ import { ChevronDown, HelpCircle } from 'lucide-react';
 import { useBillingCatalog } from '../hooks/useAnalytics';
 import PricingHero from '../components/pricing/PricingHero';
 import TrialCallout from '../components/pricing/TrialCallout';
-import PlanCardRedesign from '../components/pricing/PlanCardRedesign';
+import FeaturePicker from '../components/pricing/FeaturePicker';
 import FeatureComparisonGrid from '../components/pricing/FeatureComparisonGrid';
 import { PREVIEW_HOME_ROUTE } from '../preview/routes';
 
@@ -106,12 +106,15 @@ export default function Pricing() {
         </div>
       </div>
 
-      {/* Plan Cards Grid */}
-      <div className="grid sm:grid-cols-2 xl:grid-cols-4 gap-6 mb-12">
-        {plans.map((plan, index) => (
-          <PlanCardRedesign key={plan.id} plan={plan} index={index} cycle={cycle} />
-        ))}
-      </div>
+      {/* Feature Picker */}
+      <motion.div
+        initial={{ opacity: 0, y: 16 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ duration: 0.4, delay: 0.15 }}
+        className="mb-12"
+      >
+        <FeaturePicker plans={plans} cycle={cycle} />
+      </motion.div>
 
       {/* Feature Comparison */}
       <FeatureComparisonGrid />
