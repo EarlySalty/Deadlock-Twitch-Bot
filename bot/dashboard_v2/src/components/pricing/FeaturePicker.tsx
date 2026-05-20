@@ -102,6 +102,12 @@ export default function FeaturePicker({ plans, cycle }: FeaturePickerProps) {
 
   return (
     <div>
+      {/* Section header */}
+      <div className="mb-5">
+        <p className="text-base font-semibold text-white mb-1">Welche Features brauchst du?</p>
+        <p className="text-sm text-white/40">Klicke auf eine oder mehrere Kacheln — der passende Plan wird automatisch ermittelt.</p>
+      </div>
+
       {/* Feature toggle cards */}
       <div className="grid grid-cols-3 gap-4 mb-8">
         {FEATURES.map(f => {
@@ -113,10 +119,10 @@ export default function FeaturePicker({ plans, cycle }: FeaturePickerProps) {
             <div key={f.id} className="relative">
               <button
                 onClick={() => toggle(f.id)}
-                className={`w-full h-full rounded-2xl border p-5 text-left transition-all duration-200 ${
+                className={`w-full h-full rounded-2xl border p-5 text-left transition-all duration-200 cursor-pointer ${
                   isActive
                     ? `${f.borderActive} ${f.bgActive}`
-                    : 'border-white/10 bg-white/3 hover:border-white/20'
+                    : 'border-white/10 bg-white/[0.03] hover:border-white/30 hover:bg-white/[0.06]'
                 }`}
               >
                 {/* Selected checkmark */}
@@ -141,6 +147,9 @@ export default function FeaturePicker({ plans, cycle }: FeaturePickerProps) {
                 <p className={`text-sm font-medium transition-colors ${isActive ? f.color : 'text-white/30'}`}>
                   {price > 0 ? `${price.toFixed(2).replace('.', ',')} €/Mo.` : 'Kostenlos'}
                 </p>
+                {!isActive && (
+                  <p className="text-white/20 text-xs mt-2 font-medium">+ Auswählen</p>
+                )}
               </button>
 
               {/* Info tooltip toggle */}
