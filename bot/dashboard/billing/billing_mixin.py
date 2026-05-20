@@ -1178,6 +1178,66 @@ class _DashboardBillingMixin:
             log.exception("Failed to check/grant trial eligibility for %s (%s)", twitch_login, twitch_user_id)
             return False
 
+    def _billing_start_trial_for_user(self, twitch_user_id: str, twitch_login: str) -> str:
+        """Manually start trial for a user. Returns status: granted | already_used | has_paid_plan | error."""
+        all_paid_plan_ids = {
+            "chat_quiet", "raid_boost", "analysis_dashboard",
+            "bundle_chat_quiet_raid_boost", "bundle_werbefrei_analyse",
+            "bundle_komplett", "bundle_analysis_raid_boost",
+        }
+
+        def _do_grant(conn: Any) -> str:
+            trial_row = conn.execute(
+                "SELECT trial_ever_granted FROM streamer_plans "
+                "WHERE TRIM(COALESCE(twitch_user_id,''))=%s OR LOWER(COALESCE(twitch_login,''))=LOWER(%s) LIMIT 1",
+                (twitch_user_id, twitch_login),
+            ).fetchone()
+            if trial_row and int(trial_row[0] or 0) == 1:
+                return "already_used"
+
+            billing_row = conn.execute(
+                "SELECT plan_id FROM twitch_billing_subscriptions "
+                "WHERE LOWER(customer_reference)=LOWER(%s) AND status IN ('active','trialing') LIMIT 1",
+                (twitch_user_id,),
+            ).fetchone()
+            if billing_row and str(billing_row[0] or "").strip() in all_paid_plan_ids:
+                return "has_paid_plan"
+
+            manual_row = conn.execute(
+                "SELECT manual_plan_id FROM streamer_plans "
+                "WHERE TRIM(COALESCE(twitch_user_id,''))=%s OR LOWER(COALESCE(twitch_login,''))=LOWER(%s) LIMIT 1",
+                (twitch_user_id, twitch_login),
+            ).fetchone()
+            if manual_row and str(manual_row[0] or "").strip() in all_paid_plan_ids:
+                return "has_paid_plan"
+
+            now = datetime.now(tz=UTC).isoformat()
+            trial_expires_at = (datetime.now(tz=UTC) + timedelta(days=_TRIAL_DURATION_DAYS)).isoformat()
+            conn.execute(
+                """
+                INSERT INTO streamer_plans
+                    (twitch_user_id, twitch_login, manual_plan_id, manual_plan_expires_at,
+                     trial_ever_granted, manual_plan_notes, manual_plan_updated_at)
+                VALUES (%s, %s, %s, %s, 1, '30-day trial started by user', %s)
+                ON CONFLICT (twitch_user_id) DO UPDATE SET
+                    manual_plan_id = EXCLUDED.manual_plan_id,
+                    manual_plan_expires_at = EXCLUDED.manual_plan_expires_at,
+                    trial_ever_granted = 1,
+                    manual_plan_notes = EXCLUDED.manual_plan_notes,
+                    manual_plan_updated_at = EXCLUDED.manual_plan_updated_at
+                """,
+                (twitch_user_id, twitch_login, _ANALYTICS_TRIAL_PLAN_ID, trial_expires_at, now),
+            )
+            log.info("Trial started by user %s (%s), expires %s", twitch_login, twitch_user_id, trial_expires_at)
+            return "granted"
+
+        try:
+            with storage.transaction() as conn:
+                return _do_grant(conn)
+        except Exception:
+            log.exception("Trial start failed for %s (%s)", twitch_login, twitch_user_id)
+            return "error"
+
     def _billing_current_plan_for_request(self, request: Any) -> dict[str, Any]:
         """Resolve current plan for authenticated user; fallback to Basic (raid_free)."""
         candidate_refs = self._billing_candidate_refs_for_request(request)

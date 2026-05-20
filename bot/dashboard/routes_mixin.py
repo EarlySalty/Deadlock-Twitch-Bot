@@ -523,6 +523,9 @@ class _DashboardRoutesMixin:
             deps=self._billing_route_deps(),
         )
 
+    async def api_billing_trial_start(self, request: web.Request) -> web.Response:
+        return await _routes_billing.api_billing_trial_start(self, request)
+
     async def auth_logout(self, request: web.Request) -> web.StreamResponse:
         return await _routes_entry.auth_logout(self, request, deps=self._entry_route_deps())
 

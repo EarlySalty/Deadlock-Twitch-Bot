@@ -38,6 +38,7 @@ def build_route_defs(server: Any) -> list[web.RouteDef]:
         web.post("/twitch/api/billing/checkout-session", server.api_billing_checkout_session),
         web.post("/twitch/api/billing/invoice-preview", server.api_billing_invoice_preview),
         web.post("/twitch/api/billing/stripe/sync-products", server.api_billing_stripe_sync_products),
+        web.post("/twitch/api/billing/trial/start", server.api_billing_trial_start),
     ]
 
 
@@ -800,3 +801,29 @@ async def api_billing_stripe_sync_products(
         "readiness": readiness,
     }
     return web.json_response(payload, dumps=lambda data: json_module.dumps(data, ensure_ascii=True))
+
+
+async def api_billing_trial_start(server: Any, request: web.Request) -> web.Response:
+    """POST /twitch/api/billing/trial/start — Start 30-day trial for authenticated user."""
+    dashboard_session, _ = server._billing_auth_sessions_for_request(request)
+    twitch_user_id = str(dashboard_session.get("twitch_user_id") or "").strip()
+    twitch_login = str(dashboard_session.get("twitch_login") or "").strip()
+
+    if not twitch_user_id or not twitch_login:
+        return web.json_response(
+            {"status": "unauthenticated", "login_url": "/twitch/auth/login?next=%2Ftwitch%2Fpricing"},
+            status=401,
+        )
+
+    starter = getattr(server, "_billing_start_trial_for_user", None)
+    if not callable(starter):
+        return web.json_response({"status": "error"}, status=500)
+
+    result = starter(twitch_user_id, twitch_login)
+    status_map = {
+        "granted": 200,
+        "already_used": 409,
+        "has_paid_plan": 409,
+        "error": 500,
+    }
+    return web.json_response({"status": result}, status=status_map.get(result, 500))
