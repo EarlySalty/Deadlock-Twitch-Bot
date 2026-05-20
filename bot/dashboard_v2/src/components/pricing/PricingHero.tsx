@@ -123,7 +123,7 @@ export default function PricingHero() {
             </div>
           </div>
           <a
-            href={isPreviewModeEnabled() ? PREVIEW_BILLING_ROUTE : '/twitch/abbo'}
+            href="#plans"
             className="flex-shrink-0 flex items-center gap-1.5 px-4 py-2 rounded-xl bg-white/6 hover:bg-white/10 border border-white/12 text-white/70 hover:text-white text-sm font-medium transition-all duration-200"
           >
             Mehr erfahren
