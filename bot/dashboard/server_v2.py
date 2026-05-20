@@ -855,11 +855,11 @@ class DashboardV2Server(
         normalized_path = (parts.path or "").rstrip("/") or "/"
         query_suffix = f"?{parts.query}" if parts.query else ""
         if normalized_path == "/twitch/abo":
-            return "/twitch/abbo"
+            return "/twitch/pricing"
         if normalized_path == "/twitch/abbo":
-            return "/twitch/abbo"
+            return "/twitch/pricing"
         if normalized_path == "/twitch/abos":
-            return "/twitch/abbo"
+            return "/twitch/pricing"
         if normalized_path == "/twitch/abbo/stripe-settings":
             return "/twitch/abbo/stripe-settings"
         if normalized_path == "/twitch/abbo/rechnungen":

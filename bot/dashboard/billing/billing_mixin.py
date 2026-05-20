@@ -36,6 +36,8 @@ from .billing_plans import (
     billing_cycle_label as _billing_cycle_label,
     billing_dump_price_id_mapping as _billing_dump_price_id_mapping,
     billing_dump_product_id_mapping as _billing_dump_product_id_mapping,
+    billing_merge_price_id_defaults as _billing_merge_price_id_defaults,
+    billing_merge_product_id_defaults as _billing_merge_product_id_defaults,
     billing_parse_price_id_mapping as _billing_parse_price_id_mapping,
     billing_parse_product_id_mapping as _billing_parse_product_id_mapping,
     billing_value_preview as _billing_value_preview,
@@ -187,14 +189,14 @@ class _DashboardBillingMixin:
 
     def _billing_price_id_map(self) -> dict[str, dict[int, str]]:
         self._billing_refresh_runtime_secrets()
-        return _billing_parse_price_id_mapping(getattr(self, "_billing_stripe_price_map_raw", ""))
+        vault_map = _billing_parse_price_id_mapping(getattr(self, "_billing_stripe_price_map_raw", ""))
+        return _billing_merge_price_id_defaults(vault_map)
 
 
     def _billing_product_id_map(self) -> dict[str, str]:
         self._billing_refresh_runtime_secrets()
-        return _billing_parse_product_id_mapping(
-            getattr(self, "_billing_stripe_product_map_raw", "")
-        )
+        vault_map = _billing_parse_product_id_mapping(getattr(self, "_billing_stripe_product_map_raw", ""))
+        return _billing_merge_product_id_defaults(vault_map)
 
 
     def _billing_set_price_id_map(self, mapping: dict[str, dict[int, str]]) -> bool:

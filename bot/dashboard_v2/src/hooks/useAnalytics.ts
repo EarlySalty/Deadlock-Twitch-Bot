@@ -513,10 +513,10 @@ export function useRoadmap() {
 }
 
 // ── Billing ────────────────────────────────────────
-export function useBillingCatalog() {
+export function useBillingCatalog(cycle: 1 | 12 = 1) {
   return useQuery({
-    queryKey: ['billing-catalog'],
-    queryFn: fetchBillingCatalog,
+    queryKey: ['billing-catalog', cycle],
+    queryFn: () => fetchBillingCatalog(cycle),
     staleTime: STALE_TIME,
   });
 }

@@ -7,7 +7,6 @@ from typing import Any
 
 from aiohttp import web
 
-from . import abbo_routes as _abbo_routes
 from . import abbo_billing_routes as _abbo_billing_routes
 from .route_deps import BillingRouteDeps
 
@@ -18,9 +17,9 @@ def build_route_defs(server: Any) -> list[web.RouteDef]:
         web.get("/robots.txt", server.robots_txt),
         web.get("/twitch/legal/access", server.legal_access_page),
         web.post("/twitch/legal/verify", server.legal_verify),
-        web.get("/twitch/abo", server.abbo_entry),
-        web.get("/twitch/abbo", server.abbo_entry),
-        web.get("/twitch/abos", server.abbo_entry),
+        web.get("/twitch/abo", server.pricing_redirect),
+        web.get("/twitch/abbo", server.pricing_redirect),
+        web.get("/twitch/abos", server.pricing_redirect),
         web.get("/twitch/abbo/bezahlen", server.abbo_pay),
         web.post("/twitch/abbo/rechnungsdaten", server.abbo_profile_save),
         web.get("/twitch/abbo/kündigen", server.abbo_cancel),
@@ -41,8 +40,8 @@ def build_route_defs(server: Any) -> list[web.RouteDef]:
     ]
 
 
-async def abbo_entry(server: Any, request: web.Request) -> web.StreamResponse:
-    return await _abbo_routes.abbo_entry(server, request)
+async def pricing_redirect(_server: Any, _request: web.Request) -> web.StreamResponse:
+    raise web.HTTPMovedPermanently("/twitch/pricing")
 
 
 async def abbo_pay(server: Any, request: web.Request) -> web.StreamResponse:

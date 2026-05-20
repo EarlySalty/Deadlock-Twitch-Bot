@@ -6,6 +6,7 @@ import type { CatalogPlan } from '../../types/billing';
 interface PlanCardRedesignProps {
   plan: CatalogPlan;
   index: number;
+  cycle?: 1 | 12;
 }
 
 const tierConfig = {
@@ -71,9 +72,21 @@ const planHighlights: Record<string, string[]> = {
     'Chat-Werbung dauerhaft aus',
     'Spart gegenüber Einzelkauf',
   ],
+  bundle_werbefrei_analyse: [
+    'Werbefrei + Analytics',
+    'KI-Coaching & Viewer-Profile',
+    'Chat-Werbung dauerhaft aus',
+    'Spart gegenüber Einzelkauf',
+  ],
+  bundle_komplett: [
+    'Alle Features inklusive',
+    'Werbefrei + Raids + Analytics',
+    'Vollständiges KI-Coaching',
+    'Beste Ersparnis im Vergleich',
+  ],
 };
 
-export default function PlanCardRedesign({ plan, index }: PlanCardRedesignProps) {
+export default function PlanCardRedesign({ plan, index, cycle = 1 }: PlanCardRedesignProps) {
   const isBundle = plan.id.startsWith('bundle_');
   const isChatQuiet = plan.id === 'chat_quiet';
   const config = tierConfig[plan.tier];
@@ -138,6 +151,9 @@ export default function PlanCardRedesign({ plan, index }: PlanCardRedesignProps)
               <span className="text-white/40 text-sm leading-tight">/ Mo.<br/>inkl. MwSt.</span>
             )}
           </div>
+          {cycle === 12 && plan.price_monthly > 0 && (
+            <p className="text-white/30 text-xs mt-1">jährlich abgerechnet</p>
+          )}
         </div>
 
         {/* Key benefits (highlights only) */}
@@ -165,7 +181,7 @@ export default function PlanCardRedesign({ plan, index }: PlanCardRedesignProps)
           </div>
         ) : (
           <a
-            href={getPlanCheckoutHref(plan.id, plan.price_monthly === 0)}
+            href={getPlanCheckoutHref(plan.id, plan.price_monthly === 0, cycle)}
             className={`block text-center py-3 rounded-xl text-sm font-semibold transition-all duration-200 ${config.ctaStyle}`}
           >
             {plan.price_monthly === 0

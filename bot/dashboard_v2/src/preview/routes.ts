@@ -25,12 +25,12 @@ export function isPreviewLocalhost(): boolean {
   return PREVIEW_MODE && LOCALHOST_HOSTNAMES.has(window.location.hostname);
 }
 
-export function getPlanCheckoutHref(planId?: string | null, isFreePlan = false): string {
+export function getPlanCheckoutHref(planId?: string | null, isFreePlan = false, cycle: 1 | 12 = 1): string {
   if (PREVIEW_MODE) {
     return PREVIEW_BILLING_ROUTE;
   }
   if (isFreePlan || !planId) {
-    return '/twitch/abbo';
+    return '/twitch/pricing';
   }
-  return `/twitch/abbo/bezahlen?plan_id=${encodeURIComponent(planId)}&cycle=1&quantity=1`;
+  return `/twitch/abbo/bezahlen?plan_id=${encodeURIComponent(planId)}&cycle=${cycle}&quantity=1`;
 }

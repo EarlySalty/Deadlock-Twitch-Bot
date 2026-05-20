@@ -65,7 +65,8 @@ function FAQItem({ question, answer }: { question: string; answer: string }) {
 }
 
 export default function Pricing() {
-  const { data } = useBillingCatalog();
+  const [cycle, setCycle] = useState<1 | 12>(1);
+  const { data } = useBillingCatalog(cycle);
   const plans = data?.plans ?? [];
 
   return (
@@ -76,10 +77,39 @@ export default function Pricing() {
       {/* Trial Callout Banner */}
       <TrialCallout />
 
+      {/* Billing cycle toggle */}
+      <div id="plans" className="flex justify-center mb-8">
+        <div className="inline-flex items-center gap-1 p-1 rounded-xl bg-white/5 border border-white/10">
+          <button
+            onClick={() => setCycle(1)}
+            className={`px-5 py-2 rounded-lg text-sm font-medium transition-all duration-200 ${
+              cycle === 1
+                ? 'bg-white/10 text-white shadow'
+                : 'text-white/50 hover:text-white/70'
+            }`}
+          >
+            Monatlich
+          </button>
+          <button
+            onClick={() => setCycle(12)}
+            className={`relative px-5 py-2 rounded-lg text-sm font-medium transition-all duration-200 ${
+              cycle === 12
+                ? 'bg-white/10 text-white shadow'
+                : 'text-white/50 hover:text-white/70'
+            }`}
+          >
+            Jährlich
+            <span className="ml-2 px-1.5 py-0.5 rounded-md text-xs font-semibold bg-[#10b7ad]/20 text-[#10b7ad]">
+              −20%
+            </span>
+          </button>
+        </div>
+      </div>
+
       {/* Plan Cards Grid */}
       <div className="grid sm:grid-cols-2 xl:grid-cols-4 gap-6 mb-12">
         {plans.map((plan, index) => (
-          <PlanCardRedesign key={plan.id} plan={plan} index={index} />
+          <PlanCardRedesign key={plan.id} plan={plan} index={index} cycle={cycle} />
         ))}
       </div>
 

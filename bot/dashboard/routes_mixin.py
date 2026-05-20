@@ -453,8 +453,8 @@ class _DashboardRoutesMixin:
     async def stats_entry(self, request: web.Request) -> web.StreamResponse:
         return await _routes_entry.stats_entry(self, request, deps=self._entry_route_deps())
 
-    async def abbo_entry(self, request: web.Request) -> web.StreamResponse:
-        return await _routes_billing.abbo_entry(self, request)
+    async def pricing_redirect(self, request: web.Request) -> web.StreamResponse:
+        return await _routes_billing.pricing_redirect(self, request)
 
     async def abbo_pay(self, request: web.Request) -> web.StreamResponse:
         return await _routes_billing.abbo_pay(self, request)

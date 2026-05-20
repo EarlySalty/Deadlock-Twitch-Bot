@@ -26,7 +26,7 @@ async def abbo_pay(handler: Any, request: web.Request) -> web.StreamResponse:
 
     plan_id = str(request.query.get("plan_id") or "").strip()
     if not plan_id:
-        raise web.HTTPFound("/twitch/abbo")
+        raise web.HTTPFound("/twitch/pricing")
 
     cycle_months = _normalize_billing_cycle(request.query.get("cycle"))
     readiness = handler._billing_stripe_readiness_payload()
@@ -36,7 +36,7 @@ async def abbo_pay(handler: Any, request: web.Request) -> web.StreamResponse:
         None,
     )
     if selected_plan is None:
-        raise web.HTTPFound("/twitch/abbo")
+        raise web.HTTPFound("/twitch/pricing")
 
     try:
         quantity = int(request.query.get("quantity") or "1")
@@ -46,25 +46,25 @@ async def abbo_pay(handler: Any, request: web.Request) -> web.StreamResponse:
 
     unit_net_cents = int((selected_plan.get("price") or {}).get("total_net_cents") or 0)
     if unit_net_cents <= 0:
-        raise web.HTTPFound("/twitch/abbo")
+        raise web.HTTPFound("/twitch/pricing")
 
     if not bool(readiness.get("checkout_ready")):
-        raise web.HTTPFound("/twitch/abbo?checkout=unavailable&reason=checkout_not_ready")
+        raise web.HTTPFound("/twitch/pricing?checkout=unavailable&reason=checkout_not_ready")
     if not bool(readiness.get("price_map_ready")):
-        raise web.HTTPFound("/twitch/abbo?checkout=unavailable&reason=stripe_price_id_map_missing")
+        raise web.HTTPFound("/twitch/pricing?checkout=unavailable&reason=stripe_price_id_map_missing")
 
     stripe_price_id = handler._billing_price_id_for_plan(plan_id, cycle_months)
     if not stripe_price_id:
-        raise web.HTTPFound("/twitch/abbo?checkout=unavailable&reason=missing_stripe_price_id")
+        raise web.HTTPFound("/twitch/pricing?checkout=unavailable&reason=missing_stripe_price_id")
 
     stripe_secret_key = str(getattr(handler, "_billing_stripe_secret_key", "") or "").strip()
     if not stripe_secret_key:
         log.warning("billing checkout unavailable: stripe secret key missing")
-        raise web.HTTPFound("/twitch/abbo?checkout=unavailable&reason=stripe_secret_key_missing")
+        raise web.HTTPFound("/twitch/pricing?checkout=unavailable&reason=stripe_secret_key_missing")
 
     base_url = handler._billing_base_url_for_request(request)
-    success_url = f"{base_url}/twitch/abbo?checkout=success&session_id={{CHECKOUT_SESSION_ID}}"
-    cancel_url = f"{base_url}/twitch/abbo?checkout=cancelled"
+    success_url = f"{base_url}/twitch/pricing?checkout=success&session_id={{CHECKOUT_SESSION_ID}}"
+    cancel_url = f"{base_url}/twitch/pricing?checkout=cancelled"
 
     billing_profile = handler._billing_profile_for_request(request)
     customer_reference = handler._billing_primary_ref_for_request(request)
@@ -99,11 +99,11 @@ async def abbo_pay(handler: Any, request: web.Request) -> web.StreamResponse:
     )
     if stripe_session is None:
         log.warning("billing checkout redirect failed: %s", str(checkout_error or "unknown"))
-        raise web.HTTPFound("/twitch/abbo?checkout=unavailable&reason=checkout_create_failed")
+        raise web.HTTPFound("/twitch/pricing?checkout=unavailable&reason=checkout_create_failed")
 
     checkout_url = str(handler._billing_stripe_obj_get(stripe_session, "url", "") or "").strip()
     if not checkout_url:
-        raise web.HTTPFound("/twitch/abbo?checkout=unavailable&reason=checkout_missing_url")
+        raise web.HTTPFound("/twitch/pricing?checkout=unavailable&reason=checkout_missing_url")
     raise web.HTTPFound(checkout_url)
 
 
@@ -137,7 +137,7 @@ async def abbo_profile_save(handler: Any, request: web.Request) -> web.StreamRes
         and city
         and country_code
     ):
-        raise web.HTTPFound(f"/twitch/abbo?cycle={cycle}&profile=invalid")
+        raise web.HTTPFound(f"/twitch/pricing?cycle={cycle}&profile=invalid")
 
     try:
         with storage.transaction() as conn:
@@ -156,9 +156,9 @@ async def abbo_profile_save(handler: Any, request: web.Request) -> web.StreamRes
             )
     except Exception:
         log.exception("billing profile save failed")
-        raise web.HTTPFound(f"/twitch/abbo?cycle={cycle}&profile=error") from None
+        raise web.HTTPFound(f"/twitch/pricing?cycle={cycle}&profile=error") from None
 
-    raise web.HTTPFound(f"/twitch/abbo?cycle={cycle}&profile=saved")
+    raise web.HTTPFound(f"/twitch/pricing?cycle={cycle}&profile=saved")
 
 
 async def abbo_cancel(handler: Any, request: web.Request) -> web.StreamResponse:
@@ -168,24 +168,24 @@ async def abbo_cancel(handler: Any, request: web.Request) -> web.StreamResponse:
         return auth_redirect
 
     if request.method != "POST":
-        raise web.HTTPFound("/twitch/abbo?cancel=post_required")
+        raise web.HTTPFound("/twitch/pricing?cancel=post_required")
     data = await request.post()
     csrf_token = str(data.get("csrf_token") or "").strip()
     if not handler._csrf_verify_token(request, csrf_token):
-        raise web.HTTPFound("/twitch/abbo?cancel=csrf_invalid")
+        raise web.HTTPFound("/twitch/pricing?cancel=csrf_invalid")
 
     customer_record = handler._billing_customer_record_for_request(request)
     stripe_customer_id = str(customer_record.get("stripe_customer_id") or "").strip()
     stripe_subscription_id = str(customer_record.get("stripe_subscription_id") or "").strip()
     if not stripe_customer_id and not stripe_subscription_id:
-        raise web.HTTPFound("/twitch/abbo?cancel=missing")
+        raise web.HTTPFound("/twitch/pricing?cancel=missing")
 
     stripe, _import_error = handler._billing_import_stripe()
     if stripe is None:
-        raise web.HTTPFound("/twitch/abbo?cancel=error")
+        raise web.HTTPFound("/twitch/pricing?cancel=error")
     stripe_secret_key = str(getattr(handler, "_billing_stripe_secret_key", "") or "").strip()
     if not stripe_secret_key:
-        raise web.HTTPFound("/twitch/abbo?cancel=error")
+        raise web.HTTPFound("/twitch/pricing?cancel=error")
     stripe.api_key = stripe_secret_key
 
     base_url = handler._billing_base_url_for_request(request)
@@ -204,7 +204,7 @@ async def abbo_cancel(handler: Any, request: web.Request) -> web.StreamResponse:
         raise web.HTTPFound(portal_url)
 
     if not stripe_subscription_id:
-        raise web.HTTPFound("/twitch/abbo?cancel=missing")
+        raise web.HTTPFound("/twitch/pricing?cancel=missing")
 
     try:
         subscription_obj = await asyncio.to_thread(
@@ -220,8 +220,8 @@ async def abbo_cancel(handler: Any, request: web.Request) -> web.StreamResponse:
                 handler._billing_upsert_subscription_state(conn, **payload)
     except Exception:
         log.exception("billing cancel fallback failed")
-        raise web.HTTPFound("/twitch/abbo?cancel=error") from None
-    raise web.HTTPFound("/twitch/abbo?cancel=scheduled")
+        raise web.HTTPFound("/twitch/pricing?cancel=error") from None
+    raise web.HTTPFound("/twitch/pricing?cancel=scheduled")
 
 
 async def abbo_invoices(handler: Any, request: web.Request) -> web.StreamResponse:
@@ -233,14 +233,14 @@ async def abbo_invoices(handler: Any, request: web.Request) -> web.StreamRespons
     customer_record = handler._billing_customer_record_for_request(request)
     stripe_customer_id = str(customer_record.get("stripe_customer_id") or "").strip()
     if not stripe_customer_id:
-        raise web.HTTPFound("/twitch/abbo?invoice=missing_customer")
+        raise web.HTTPFound("/twitch/pricing?invoice=missing_customer")
 
     stripe, _import_error = handler._billing_import_stripe()
     if stripe is None:
-        raise web.HTTPFound("/twitch/abbo?invoice=error")
+        raise web.HTTPFound("/twitch/pricing?invoice=error")
     stripe_secret_key = str(getattr(handler, "_billing_stripe_secret_key", "") or "").strip()
     if not stripe_secret_key:
-        raise web.HTTPFound("/twitch/abbo?invoice=error")
+        raise web.HTTPFound("/twitch/pricing?invoice=error")
     stripe.api_key = stripe_secret_key
 
     try:
@@ -252,7 +252,7 @@ async def abbo_invoices(handler: Any, request: web.Request) -> web.StreamRespons
         invoice_rows = list(handler._billing_stripe_obj_get(invoice_list, "data", []) or [])
     except Exception:
         log.exception("billing invoice list failed")
-        raise web.HTTPFound("/twitch/abbo?invoice=error") from None
+        raise web.HTTPFound("/twitch/pricing?invoice=error") from None
 
     invoice_rows.sort(
         key=lambda x: int(handler._billing_stripe_obj_get(x, "created", 0) or 0),
@@ -365,7 +365,7 @@ async def abbo_stripe_settings(handler: Any, request: web.Request) -> web.Stream
     if auth_redirect is not None:
         return auth_redirect
     if not handler._check_v2_admin_auth(request):
-        raise web.HTTPFound("/twitch/abbo")
+        raise web.HTTPFound("/twitch/pricing")
 
     readiness = handler._billing_stripe_readiness_payload()
     checks = list(readiness.get("checks") or [])

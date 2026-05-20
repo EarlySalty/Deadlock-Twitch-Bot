@@ -12,6 +12,8 @@ export_name_map(
         "billing_cycle_label": ".billing_plans",
         "billing_dump_price_id_mapping": ".billing_plans",
         "billing_dump_product_id_mapping": ".billing_plans",
+        "billing_merge_price_id_defaults": ".billing_plans",
+        "billing_merge_product_id_defaults": ".billing_plans",
         "billing_is_paid_plan": ".billing_plans",
         "billing_is_paid_plan_id": ".billing_plans",
         "billing_parse_cycle_key": ".billing_plans",

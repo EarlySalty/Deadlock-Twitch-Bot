@@ -56,7 +56,7 @@ export default function PricingHero() {
 
         {/* CTA Button */}
         <a
-          href={isPreviewModeEnabled() ? PREVIEW_BILLING_ROUTE : '/twitch/abbo'}
+          href={isPreviewModeEnabled() ? PREVIEW_BILLING_ROUTE : '/twitch/pricing#plans'}
           className="inline-flex items-center gap-2 px-8 py-4 rounded-xl bg-gradient-to-r from-[#ff7a18] to-[#ff8d39] text-white font-semibold text-lg shadow-lg shadow-[#ff7a18]/25 hover:shadow-[#ff7a18]/40 hover:scale-105 transition-all duration-200"
         >
           45 Tage kostenlos starten

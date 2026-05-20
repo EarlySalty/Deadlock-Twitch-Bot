@@ -1,3 +1,11 @@
+## #38 — Neue Abo-Pläne, Jahrestarif und überarbeitete Pricing-Seite
+
+- Zwei neue Bundle-Pläne: „Werbefrei + Analyse" (11,49 €/Mo.) und „Alles drin" (13,99 €/Mo.)
+- Jahrestarif (12 Monate) mit 20 % Rabatt auf allen bezahlten Plänen wählbar
+- Pricing-Seite vollständig überarbeitet: übersichtliches Toggle Monatlich/Jährlich, keine Informations-Überflutung
+- Alte `/twitch/abbo`-Seite leitet dauerhaft auf `/twitch/pricing` weiter
+- Stripe-Produkte und -Preise für die neuen Bundles automatisch angelegt
+
 ## #37 — Security-Scanner-Alerts bereinigt
 
 - 271 offene Code-Scanning-Alerts (Semgrep + CodeQL) vollständig bearbeitet

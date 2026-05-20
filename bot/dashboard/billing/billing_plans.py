@@ -96,6 +96,38 @@ BILLING_PLANS: tuple[dict[str, Any], ...] = (
         ],
     },
     {
+        "id": "bundle_werbefrei_analyse",
+        "name": "Werbefrei + Analyse",
+        "tier": plan_tier("bundle_werbefrei_analyse"),
+        "badge": "bundle",
+        "description": "Chat-Werbung dauerhaft aus + volles Analytics-Dashboard — günstiger als einzeln.",
+        "monthly_net_cents": 1149,
+        "recommended": False,
+        "entitlements": list(plan_entitlements("bundle_werbefrei_analyse")),
+        "features": [
+            "Chat-Werbung dauerhaft deaktiviert",
+            "Vollständiges Analytics-Dashboard",
+            "KI-Coaching & Viewer-Analyse",
+            "Spart gegenüber Einzelkauf",
+        ],
+    },
+    {
+        "id": "bundle_komplett",
+        "name": "Alles drin",
+        "tier": plan_tier("bundle_komplett"),
+        "badge": "bundle",
+        "description": "Werbefrei + Raid Boost + Analytics — das komplette Paket zum besten Preis.",
+        "monthly_net_cents": 1399,
+        "recommended": False,
+        "entitlements": list(plan_entitlements("bundle_komplett")),
+        "features": [
+            "Alle Features aus allen Plänen",
+            "Bevorzugte Raid-Platzierung aktiv",
+            "Volles Analytics + KI-Coaching",
+            "Beste Ersparnis gegenüber Einzelkauf",
+        ],
+    },
+    {
         "id": "bundle_analysis_raid_boost",
         "name": "Bundle: Analyse + Raid Boost",
         "tier": plan_tier("bundle_analysis_raid_boost"),
@@ -323,6 +355,39 @@ def billing_dump_product_id_mapping(mapping: dict[str, str]) -> str:
         if product_id:
             payload[plan_id] = product_id
     return json.dumps(payload, ensure_ascii=True, separators=(",", ":"))
+
+
+# Known Stripe IDs committed to source — not secrets, safe to push.
+# The vault env vars are merged on top (vault wins on conflict).
+STRIPE_PRICE_ID_DEFAULTS: dict[str, dict[int, str]] = {
+    "bundle_werbefrei_analyse": {1: "price_1TZD6U0yU8I2yGJ0fq8MZaqg", 12: "price_1TZD6V0yU8I2yGJ05Kpagdxs"},
+    "bundle_komplett":          {1: "price_1TZD6W0yU8I2yGJ0JQzboooa", 12: "price_1TZD6W0yU8I2yGJ09z3wbpbB"},
+}
+
+STRIPE_PRODUCT_ID_DEFAULTS: dict[str, str] = {
+    "bundle_werbefrei_analyse": "prod_UYJjXXe90gt8WO",
+    "bundle_komplett":          "prod_UYJjhWpzqyNqr0",
+}
+
+
+def billing_merge_price_id_defaults(mapping: dict[str, dict[int, str]]) -> dict[str, dict[int, str]]:
+    """Return mapping with STRIPE_PRICE_ID_DEFAULTS filled in for any missing slots."""
+    result: dict[str, dict[int, str]] = {}
+    for plan_id, cycle_map in STRIPE_PRICE_ID_DEFAULTS.items():
+        merged = dict(cycle_map)
+        merged.update(mapping.get(plan_id) or {})
+        result[plan_id] = merged
+    for plan_id, cycle_map in mapping.items():
+        if plan_id not in result:
+            result[plan_id] = dict(cycle_map)
+    return result
+
+
+def billing_merge_product_id_defaults(mapping: dict[str, str]) -> dict[str, str]:
+    """Return mapping with STRIPE_PRODUCT_ID_DEFAULTS filled in for any missing entries."""
+    result = dict(STRIPE_PRODUCT_ID_DEFAULTS)
+    result.update(mapping)
+    return result
 
 
 def billing_is_paid_plan_id(plan_id: str | None) -> bool:

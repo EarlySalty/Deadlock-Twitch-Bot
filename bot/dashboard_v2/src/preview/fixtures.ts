@@ -116,6 +116,32 @@ const BILLING_CATALOG_FIXTURE: { plans: CatalogPlan[] } = {
       ],
       is_current: false,
     },
+    {
+      id: 'bundle_werbefrei_analyse',
+      name: 'Werbefrei + Analyse',
+      tier: 'extended',
+      price_monthly: 11.49,
+      features: [
+        'Chat-Werbung dauerhaft deaktiviert',
+        'Vollständiges Analytics-Dashboard',
+        'KI-Coaching & Viewer-Analyse',
+        'Spart gegenüber Einzelkauf',
+      ],
+      is_current: false,
+    },
+    {
+      id: 'bundle_komplett',
+      name: 'Alles drin',
+      tier: 'extended',
+      price_monthly: 13.99,
+      features: [
+        'Alle Features aus allen Plänen',
+        'Bevorzugte Raid-Platzierung aktiv',
+        'Volles Analytics + KI-Coaching',
+        'Beste Ersparnis gegenüber Einzelkauf',
+      ],
+      is_current: false,
+    },
   ],
 };
 

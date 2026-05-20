@@ -16,6 +16,8 @@ KNOWN_PLAN_IDS: Final[frozenset[str]] = frozenset(
         "bundle_chat_quiet_raid_boost",
         "analysis_dashboard",
         "bundle_analysis_raid_boost",
+        "bundle_werbefrei_analyse",
+        "bundle_komplett",
         ANALYTICS_TRIAL_PLAN_ID,  # 45-day free trial for new users
     }
 )
@@ -33,6 +35,8 @@ LEGACY_PLAN_NAME_TO_ID_MAP: Final[dict[str, str]] = {
     "analysis_dashboard": "analysis_dashboard",
     "bundle": "bundle_analysis_raid_boost",
     "bundle_analysis_raid_boost": "bundle_analysis_raid_boost",
+    "bundle_werbefrei_analyse": "bundle_werbefrei_analyse",
+    "bundle_komplett": "bundle_komplett",
 }
 
 PLAN_TIER_MAP: Final[dict[str, str]] = {
@@ -42,6 +46,8 @@ PLAN_TIER_MAP: Final[dict[str, str]] = {
     "bundle_chat_quiet_raid_boost": "basic",
     "analysis_dashboard": "extended",
     "bundle_analysis_raid_boost": "extended",
+    "bundle_werbefrei_analyse": "extended",
+    "bundle_komplett": "extended",
     ANALYTICS_TRIAL_PLAN_ID: "extended",  # Trial gives extended access
 }
 
@@ -52,6 +58,8 @@ PLAN_DISPLAY_NAME_MAP: Final[dict[str, str]] = {
     "bundle_chat_quiet_raid_boost": "Werbefrei + Raid Boost",
     "analysis_dashboard": "Erweitert",
     "bundle_analysis_raid_boost": "Erweitert (Bundle)",
+    "bundle_werbefrei_analyse": "Werbefrei + Analyse",
+    "bundle_komplett": "Alles drin",
     ANALYTICS_TRIAL_PLAN_ID: "Trial",
 }
 
@@ -85,6 +93,26 @@ PLAN_ENTITLEMENTS_MAP: Final[dict[str, frozenset[str]]] = {
     ),
     "bundle_analysis_raid_boost": frozenset(
         {
+            "analytics.basic",
+            "analytics.ai_full",
+            "analytics.extended",
+            "chat.lurker_tax",
+            "chat.promos.disable",
+            "raid.priority",
+        }
+    ),
+    "bundle_werbefrei_analyse": frozenset(
+        {
+            "analytics.basic",
+            "analytics.ai_full",
+            "analytics.extended",
+            "chat.lurker_tax",
+            "chat.promos.disable",
+        }
+    ),
+    "bundle_komplett": frozenset(
+        {
+            "analytics.ai_mini",
             "analytics.basic",
             "analytics.ai_full",
             "analytics.extended",
