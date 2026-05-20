@@ -11,6 +11,7 @@ const FEATURES: {
   planId: string;
   label: string;
   icon: React.ElementType;
+  accentColor: string;
   color: string;
   borderActive: string;
   bgActive: string;
@@ -22,6 +23,7 @@ const FEATURES: {
     planId: 'chat_quiet',
     label: 'Werbefrei',
     icon: BellOff,
+    accentColor: '#ff7a18',
     color: 'text-[#ff7a18]',
     borderActive: 'border-[#ff7a18]/60',
     bgActive: 'bg-[#ff7a18]/8',
@@ -33,6 +35,7 @@ const FEATURES: {
     planId: 'raid_boost',
     label: 'Raid Boost',
     icon: Zap,
+    accentColor: '#10b7ad',
     color: 'text-[#10b7ad]',
     borderActive: 'border-[#10b7ad]/60',
     bgActive: 'bg-[#10b7ad]/8',
@@ -44,6 +47,7 @@ const FEATURES: {
     planId: 'analysis_dashboard',
     label: 'Analyse',
     icon: BarChart2,
+    accentColor: '#a78bfa',
     color: 'text-[#a78bfa]',
     borderActive: 'border-[#a78bfa]/60',
     bgActive: 'bg-[#a78bfa]/8',
@@ -120,10 +124,12 @@ export default function FeaturePicker({ plans, cycle }: FeaturePickerProps) {
               <button
                 onClick={() => toggle(f.id)}
                 className={`w-full h-full rounded-2xl border p-5 text-left transition-all duration-200 cursor-pointer ${
-                  isActive
-                    ? `${f.borderActive} ${f.bgActive}`
-                    : 'border-white/10 bg-white/[0.03] hover:border-white/30 hover:bg-white/[0.06]'
+                  isActive ? `${f.borderActive} ${f.bgActive}` : ''
                 }`}
+                style={!isActive ? {
+                  borderColor: f.accentColor + '35',
+                  backgroundColor: f.accentColor + '0B',
+                } : undefined}
               >
                 {/* Selected checkmark */}
                 <AnimatePresence>
@@ -139,16 +145,19 @@ export default function FeaturePicker({ plans, cycle }: FeaturePickerProps) {
                   )}
                 </AnimatePresence>
 
-                <Icon className={`w-6 h-6 mb-3 ${isActive ? f.color : 'text-white/30'}`} />
-                <p className={`font-semibold mb-1 transition-colors ${isActive ? 'text-white' : 'text-white/60'}`}>
+                <Icon
+                  className="w-6 h-6 mb-3"
+                  style={{ color: f.accentColor, opacity: isActive ? 1 : 0.55 }}
+                />
+                <p className={`font-semibold mb-1 transition-colors ${isActive ? 'text-white' : 'text-white/75'}`}>
                   {f.label}
                 </p>
                 <p className="text-white/40 text-xs leading-snug mb-3">{f.desc}</p>
-                <p className={`text-sm font-medium transition-colors ${isActive ? f.color : 'text-white/30'}`}>
+                <p className="text-sm font-medium transition-colors" style={{ color: f.accentColor, opacity: isActive ? 1 : 0.65 }}>
                   {price > 0 ? `${price.toFixed(2).replace('.', ',')} €/Mo.` : 'Kostenlos'}
                 </p>
                 {!isActive && (
-                  <p className="text-white/20 text-xs mt-2 font-medium">+ Auswählen</p>
+                  <p className="text-xs mt-2 font-semibold" style={{ color: f.accentColor, opacity: 0.55 }}>+ Auswählen</p>
                 )}
               </button>
 
