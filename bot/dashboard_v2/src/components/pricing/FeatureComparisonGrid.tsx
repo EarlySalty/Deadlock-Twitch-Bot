@@ -58,7 +58,7 @@ const featureData: FeatureCategory[] = [
   {
     category: 'Sonstiges',
     features: [
-      { name: '45 Tage kostenlose Testphase', free: false, basic: false, extended: true,  bundle: false },
+      { name: '30 Tage kostenlose Testphase', free: false, basic: false, extended: true,  bundle: false },
       { name: 'Priority Support',             free: false, basic: true,  extended: true,  bundle: true  },
     ],
   },

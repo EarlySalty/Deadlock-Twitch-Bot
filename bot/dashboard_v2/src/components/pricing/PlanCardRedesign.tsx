@@ -187,7 +187,7 @@ export default function PlanCardRedesign({ plan, index, cycle = 1 }: PlanCardRed
             {plan.price_monthly === 0
               ? 'Kostenlos starten'
               : plan.id === 'analysis_dashboard'
-              ? '45 Tage kostenlos testen'
+              ? '30 Tage kostenlos testen'
               : 'Jetzt abonnieren'}
           </a>
         )}

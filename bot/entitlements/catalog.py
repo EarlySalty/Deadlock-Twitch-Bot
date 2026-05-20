@@ -6,7 +6,7 @@ from typing import Final
 
 # Trial Plan
 ANALYTICS_TRIAL_PLAN_ID = "analytics_trial"
-TRIAL_DURATION_DAYS = 45
+TRIAL_DURATION_DAYS = 30
 
 KNOWN_PLAN_IDS: Final[frozenset[str]] = frozenset(
     {

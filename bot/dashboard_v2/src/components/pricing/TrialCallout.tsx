@@ -24,7 +24,7 @@ export default function TrialCallout() {
             </div>
             <div>
               <h3 className="text-xl font-bold text-white mb-1">
-                45 Tage kostenlos testen
+                30 Tage kostenlos testen
               </h3>
               <p className="text-white/60 flex items-center gap-2">
                 <CreditCard className="w-4 h-4" />

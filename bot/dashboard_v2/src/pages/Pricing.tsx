@@ -10,9 +10,9 @@ import { PREVIEW_HOME_ROUTE } from '../preview/routes';
 
 const faqData = [
   {
-    question: 'Wie funktioniert die 45-tägige kostenlose Testphase?',
+    question: 'Wie funktioniert die 30-tägige kostenlose Testphase?',
     answer:
-      'Du meldest dich an, wählst einen Plan aus und kannst ihn 45 Tage lang kostenlos nutzen. Deine Kreditkarte wird erst nach Ablauf der Testphase belastet – vorausgesetzt, du kündigst nicht vorher.',
+      'Du meldest dich an, wählst einen Plan aus und kannst ihn 30 Tage lang kostenlos nutzen. Deine Kreditkarte wird erst nach Ablauf der Testphase belastet – vorausgesetzt, du kündigst nicht vorher.',
   },
   {
     question: 'Kann ich meinen Plan jederzeit kündigen?',
@@ -100,7 +100,7 @@ export default function Pricing() {
           >
             Jährlich
             <span className="ml-2 px-1.5 py-0.5 rounded-md text-xs font-semibold bg-[#10b7ad]/20 text-[#10b7ad]">
-              −20%
+              2 Mo. gratis
             </span>
           </button>
         </div>

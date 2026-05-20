@@ -59,7 +59,7 @@ export default function PricingHero() {
           href={isPreviewModeEnabled() ? PREVIEW_BILLING_ROUTE : '/twitch/pricing#plans'}
           className="inline-flex items-center gap-2 px-8 py-4 rounded-xl bg-gradient-to-r from-[#ff7a18] to-[#ff8d39] text-white font-semibold text-lg shadow-lg shadow-[#ff7a18]/25 hover:shadow-[#ff7a18]/40 hover:scale-105 transition-all duration-200"
         >
-          45 Tage kostenlos starten
+          30 Tage kostenlos starten
         </a>
         <p className="mt-3 text-sm text-white/40">Keine Kreditkarte erforderlich</p>
       </motion.div>
