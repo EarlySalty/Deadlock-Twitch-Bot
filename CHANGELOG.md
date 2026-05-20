@@ -1,3 +1,9 @@
+## #40 — AGB: Name und Links korrigiert
+
+- Name „EarlySalty / Deadlock Partner Network" → „Deutsche Deadlock Community" in AGB und Seitentitel
+- Zurück-Button und Footer-Link auf der AGB-Seite zeigen jetzt korrekt auf `/twitch/pricing`
+- Kündigung in §5 verlinkt jetzt auf das Dashboard statt auf die veraltete Abo-Seite
+
 ## #39 — Jahresplan: Sofortabbuchung, 14 Monate Zugang und Rechtssicherheit
 
 - Jahrestarif wird jetzt direkt beim Kauf abgebucht (kein Trial-Zeitraum mehr)
