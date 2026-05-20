@@ -1,3 +1,9 @@
+## #41 — Bundle-Preise angepasst
+
+- Werbefrei + Raid Boost: 5,99 → 6,99 €/Mo. (geringerer Rabatt, da Raid Boost von anderen Streamern abhängt)
+- Werbefrei + Analyse: 11,49 → 10,49 €/Mo. (2 € Rabatt statt bisher 99 ct)
+- Alles drin und Analyse + Raid Boost bleiben unverändert
+
 ## #40 — AGB: Name und Links korrigiert
 
 - Name „EarlySalty / Deadlock Partner Network" → „Deutsche Deadlock Community" in AGB und Seitentitel
