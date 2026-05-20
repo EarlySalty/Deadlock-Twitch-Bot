@@ -41,8 +41,10 @@ def build_route_defs(server: Any) -> list[web.RouteDef]:
     ]
 
 
-async def pricing_redirect(_server: Any, _request: web.Request) -> web.StreamResponse:
-    raise web.HTTPMovedPermanently("/twitch/pricing")
+async def pricing_redirect(_server: Any, request: web.Request) -> web.StreamResponse:
+    qs = request.query_string
+    target = f"/twitch/pricing?{qs}" if qs else "/twitch/pricing"
+    raise web.HTTPMovedPermanently(target)
 
 
 async def abbo_pay(server: Any, request: web.Request) -> web.StreamResponse:
