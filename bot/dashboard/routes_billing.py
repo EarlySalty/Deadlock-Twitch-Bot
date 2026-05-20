@@ -31,6 +31,7 @@ def build_route_defs(server: Any) -> list[web.RouteDef]:
         web.get("/twitch/datenschutz", server.abbo_datenschutz),
         web.get("/twitch/agb", server.abbo_agb),
         web.get("/twitch/api/billing/catalog", server.api_billing_catalog),
+        web.get("/twitch/api/v2/billing/catalog", server.api_billing_catalog),
         web.get("/twitch/api/billing/readiness", server.api_billing_readiness),
         web.post("/twitch/api/billing/stripe/webhook", server.api_billing_stripe_webhook),
         web.post("/twitch/api/billing/checkout-preview", server.api_billing_checkout_preview),
