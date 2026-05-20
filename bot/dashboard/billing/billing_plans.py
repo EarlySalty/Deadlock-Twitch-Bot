@@ -14,7 +14,7 @@ from ...entitlements.catalog import (
 
 BILLING_STRIPE_QUICKSTART_URL = "https://docs.stripe.com/billing/quickstart"
 
-BILLING_CYCLE_DISCOUNTS: dict[int, int] = {1: 0, 12: 20}
+BILLING_CYCLE_DISCOUNTS: dict[int, int] = {1: 0, 12: 0}
 
 BILLING_PLANS: tuple[dict[str, Any], ...] = (
     {
@@ -360,10 +360,13 @@ def billing_dump_product_id_mapping(mapping: dict[str, str]) -> str:
 # Known Stripe IDs committed to source — not secrets, safe to push.
 # The vault env vars are merged on top (vault wins on conflict).
 STRIPE_PRICE_ID_DEFAULTS: dict[str, dict[int, str]] = {
-    "chat_quiet":                  {1: "price_1TZDfQ0yU8I2yGJ07EtjKXvc", 12: "price_1TZDfQ0yU8I2yGJ0ddYvJ4kn"},
-    "bundle_chat_quiet_raid_boost": {1: "price_1TZDfR0yU8I2yGJ03ribVvev", 12: "price_1TZDfS0yU8I2yGJ09SoLjgnf"},
-    "bundle_werbefrei_analyse":    {1: "price_1TZD6U0yU8I2yGJ0fq8MZaqg", 12: "price_1TZD6V0yU8I2yGJ05Kpagdxs"},
-    "bundle_komplett":             {1: "price_1TZD6W0yU8I2yGJ0JQzboooa", 12: "price_1TZD6W0yU8I2yGJ09z3wbpbB"},
+    "chat_quiet":                   {1: "price_1TZDfQ0yU8I2yGJ07EtjKXvc",  12: "price_1TZDvw0yU8I2yGJ0q6ZrcLB2"},
+    "raid_boost":                   {12: "price_1TZDvx0yU8I2yGJ0E6pN53qe"},
+    "analysis_dashboard":           {12: "price_1TZDvy0yU8I2yGJ0iPJcramq"},
+    "bundle_chat_quiet_raid_boost": {1: "price_1TZDfR0yU8I2yGJ03ribVvev",  12: "price_1TZDvy0yU8I2yGJ0zZcKzob2"},
+    "bundle_werbefrei_analyse":     {1: "price_1TZD6U0yU8I2yGJ0fq8MZaqg",  12: "price_1TZDvz0yU8I2yGJ0wKyC8W9W"},
+    "bundle_komplett":              {1: "price_1TZD6W0yU8I2yGJ0JQzboooa",  12: "price_1TZDw00yU8I2yGJ0lQ1sliPd"},
+    "bundle_analysis_raid_boost":   {12: "price_1TZDw00yU8I2yGJ0yYj926cP"},
 }
 
 STRIPE_PRODUCT_ID_DEFAULTS: dict[str, str] = {

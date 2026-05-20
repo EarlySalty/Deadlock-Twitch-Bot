@@ -1,3 +1,12 @@
+## #39 — Jahresplan: Sofortabbuchung, 14 Monate Zugang und Rechtssicherheit
+
+- Jahrestarif wird jetzt direkt beim Kauf abgebucht (kein Trial-Zeitraum mehr)
+- Käufer eines Jahresabos erhalten automatisch 2 Bonusmonate on top — insgesamt 14 Monate Zugang
+- Widerrufsbelehrung nach § 356 Abs. 5 BGB direkt im Checkout sichtbar und bestätigungspflichtig
+- AGB aktualisiert: neuer Abschnitt zu sofortiger Leistungserbringung, Jahresbonus klar beschrieben, „6-Monats"-Option entfernt
+- „30 Tage kostenlos testen"-Button auf der Pricing-Seite ist jetzt vollständig funktional (einmalig pro Account)
+- Feature-Picker auf der Pricing-Seite ersetzt die alten Plan-Karten
+
 ## #38 — Neue Abo-Pläne, Jahrestarif und überarbeitete Pricing-Seite
 
 - Zwei neue Bundle-Pläne: „Werbefrei + Analyse" (11,49 €/Mo.) und „Alles drin" (13,99 €/Mo.)

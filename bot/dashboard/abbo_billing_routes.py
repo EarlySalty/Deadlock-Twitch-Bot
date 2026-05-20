@@ -87,8 +87,22 @@ async def abbo_pay(handler: Any, request: web.Request) -> web.StreamResponse:
         "tax_id_collection": {"enabled": True},
         "metadata": metadata,
     }
-    if plan_id == "analysis_dashboard":
-        session_payload["subscription_data"] = {"trial_period_days": 45}
+    if plan_id == "analysis_dashboard" and cycle_months == 1:
+        session_payload["subscription_data"] = {"trial_period_days": 30}
+    if cycle_months == 12:
+        # Annual subscribers get 2 extra months of access granted via DB after payment
+        session_payload["subscription_data"] = session_payload.get("subscription_data") or {}
+        session_payload["subscription_data"]["metadata"] = {"bonus_months": "2"}
+    session_payload["consent_collection"] = {"terms_of_service": "required"}
+    session_payload["custom_text"] = {
+        "terms_of_service_acceptance": {
+            "message": (
+                "Ich stimme den [AGB](https://deutsche-deadlock-community.de/twitch/agb) zu. "
+                "Mit Bestätigung der Bestellung erkenne ich an, dass mit der Ausführung des Dienstes "
+                "sofort begonnen wird und ich mein Widerrufsrecht gemäß § 356 Abs. 5 BGB verliere."
+            )
+        }
+    }
     if customer_reference:
         session_payload["client_reference_id"] = customer_reference
     if customer_email:

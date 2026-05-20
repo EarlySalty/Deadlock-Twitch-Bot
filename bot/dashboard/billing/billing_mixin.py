@@ -586,6 +586,49 @@ class _DashboardBillingMixin:
                 reason="billing_subscription_sync",
             )
 
+    def _billing_grant_bonus_access_months(
+        self,
+        conn: Any,
+        *,
+        customer_reference: str,
+        plan_id: str,
+        period_end_iso: str,
+        bonus_months: int,
+    ) -> None:
+        """Extend manual_plan_expires_at by bonus_months beyond the subscription period end."""
+        if not customer_reference or not period_end_iso or bonus_months <= 0:
+            return
+        try:
+            period_end_dt = datetime.fromisoformat(period_end_iso)
+            if period_end_dt.tzinfo is None:
+                period_end_dt = period_end_dt.replace(tzinfo=UTC)
+            bonus_expires_at = period_end_dt + timedelta(days=bonus_months * 31)
+        except Exception:
+            log.debug("billing bonus grant: invalid period_end_iso=%r", period_end_iso, exc_info=True)
+            return
+        notes = f"bonus {bonus_months}mo: annual (auto {datetime.now(UTC).date().isoformat()})"
+        updated_at = datetime.now(UTC).isoformat()
+        try:
+            conn.execute(
+                """
+                UPDATE streamer_plans
+                SET
+                    manual_plan_id = %s,
+                    manual_plan_expires_at = %s,
+                    manual_plan_notes = %s,
+                    manual_plan_updated_at = %s
+                WHERE twitch_user_id = (
+                    SELECT twitch_user_id
+                    FROM twitch_streamers_partner_state
+                    WHERE LOWER(twitch_login) = LOWER(%s)
+                    LIMIT 1
+                )
+                """,
+                (plan_id, bonus_expires_at.isoformat(), notes, updated_at, customer_reference),
+            )
+        except Exception:
+            log.debug("billing grant bonus access failed for %r", customer_reference, exc_info=True)
+
     def _billing_apply_webhook_event(
         self,
         conn: Any,
@@ -644,6 +687,7 @@ class _DashboardBillingMixin:
                 "last_event_id": event_id,
             }
 
+            subscription_bonus_months = 0
             if subscription_id:
                 try:
                     stripe_subscription = stripe.Subscription.retrieve(
@@ -660,6 +704,12 @@ class _DashboardBillingMixin:
                         subscription_payload["customer_reference"] = customer_reference
                     payload.update(subscription_payload)
                     payload["last_event_id"] = event_id
+                    sub_meta_obj = self._billing_stripe_obj_get(stripe_subscription, "metadata", {})
+                    sub_meta = sub_meta_obj if isinstance(sub_meta_obj, dict) else {}
+                    try:
+                        subscription_bonus_months = int(sub_meta.get("bonus_months") or 0)
+                    except (TypeError, ValueError):
+                        subscription_bonus_months = 0
 
             self._billing_upsert_subscription_state(conn, **payload)
             self._billing_sync_plan_to_streamer_plans(
@@ -667,6 +717,14 @@ class _DashboardBillingMixin:
                 plan_id=str(payload.get("plan_id") or ""),
                 status=str(payload.get("status") or ""),
             )
+            if subscription_bonus_months > 0 and str(payload.get("customer_reference") or "").strip():
+                self._billing_grant_bonus_access_months(
+                    conn,
+                    customer_reference=str(payload["customer_reference"]),
+                    plan_id=str(payload.get("plan_id") or ""),
+                    period_end_iso=str(payload.get("current_period_end") or ""),
+                    bonus_months=subscription_bonus_months,
+                )
             return "checkout_subscription_recorded"
 
         if event_name == "invoice.payment_succeeded":
