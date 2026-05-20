@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { motion } from 'framer-motion';
-import { Zap, TrendingUp, Users, Loader2 } from 'lucide-react';
+import { Zap, TrendingUp, Users, Loader2, Sparkles, CreditCard, ArrowRight } from 'lucide-react';
 import { PREVIEW_BILLING_ROUTE, isPreviewModeEnabled } from '../../preview/routes';
 
 type TrialState = 'idle' | 'loading' | 'granted' | 'already_used' | 'has_paid_plan' | 'error';
@@ -107,6 +107,29 @@ export default function PricingHero() {
         {isBlocked && (
           <p className="mt-3 text-sm text-white/40">{MSG[trialState]}</p>
         )}
+
+        {/* Callout — visuell verbunden, kein separates Card */}
+        <div className="mt-8 pt-6 border-t border-white/8 flex flex-col sm:flex-row items-center justify-between gap-4 max-w-xl mx-auto">
+          <div className="flex items-center gap-3 text-left">
+            <div className="flex-shrink-0 w-9 h-9 rounded-xl bg-gradient-to-br from-[#ff7a18]/20 to-[#10b7ad]/20 flex items-center justify-center border border-[#ff7a18]/25">
+              <Sparkles className="w-4 h-4 text-[#ff7a18]" />
+            </div>
+            <div>
+              <p className="text-white/80 text-sm font-medium flex items-center gap-1.5">
+                <CreditCard className="w-3.5 h-3.5 text-white/35 flex-shrink-0" />
+                Keine Kreditkarte erforderlich – risikofrei starten
+              </p>
+              <p className="text-white/35 text-xs mt-0.5">Einmalig pro Account · Jederzeit kündbar</p>
+            </div>
+          </div>
+          <a
+            href={isPreviewModeEnabled() ? PREVIEW_BILLING_ROUTE : '/twitch/abbo'}
+            className="flex-shrink-0 flex items-center gap-1.5 px-4 py-2 rounded-xl bg-white/6 hover:bg-white/10 border border-white/12 text-white/70 hover:text-white text-sm font-medium transition-all duration-200"
+          >
+            Mehr erfahren
+            <ArrowRight className="w-3.5 h-3.5" />
+          </a>
+        </div>
       </motion.div>
     </section>
   );

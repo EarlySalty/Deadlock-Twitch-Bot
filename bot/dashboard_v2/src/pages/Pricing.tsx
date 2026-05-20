@@ -3,7 +3,6 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { ChevronDown, HelpCircle } from 'lucide-react';
 import { useBillingCatalog } from '../hooks/useAnalytics';
 import PricingHero from '../components/pricing/PricingHero';
-import TrialCallout from '../components/pricing/TrialCallout';
 import FeaturePicker from '../components/pricing/FeaturePicker';
 import FeatureComparisonGrid from '../components/pricing/FeatureComparisonGrid';
 import { PREVIEW_HOME_ROUTE } from '../preview/routes';
@@ -73,9 +72,6 @@ export default function Pricing() {
     <div className="max-w-5xl mx-auto px-4 py-8">
       {/* Hero Section */}
       <PricingHero />
-
-      {/* Trial Callout Banner */}
-      <TrialCallout />
 
       {/* Billing cycle toggle */}
       <div id="plans" className="flex justify-center mb-8">
