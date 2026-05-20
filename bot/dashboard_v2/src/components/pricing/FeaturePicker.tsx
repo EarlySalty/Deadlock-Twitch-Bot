@@ -79,6 +79,7 @@ interface FeaturePickerProps {
 export default function FeaturePicker({ plans, cycle }: FeaturePickerProps) {
   const [selected, setSelected] = useState<Set<FeatureId>>(new Set());
   const [tooltip, setTooltip] = useState<FeatureId | null>(null);
+  const [hoveredId, setHoveredId] = useState<FeatureId | null>(null);
 
   const planById = Object.fromEntries(plans.map(p => [p.id, p]));
 
@@ -123,12 +124,14 @@ export default function FeaturePicker({ plans, cycle }: FeaturePickerProps) {
             <div key={f.id} className="relative">
               <button
                 onClick={() => toggle(f.id)}
+                onMouseEnter={() => setHoveredId(f.id)}
+                onMouseLeave={() => setHoveredId(null)}
                 className={`w-full h-full rounded-2xl border p-5 text-left transition-all duration-200 cursor-pointer ${
                   isActive ? `${f.borderActive} ${f.bgActive}` : ''
                 }`}
                 style={!isActive ? {
-                  borderColor: f.accentColor + '35',
-                  backgroundColor: f.accentColor + '0B',
+                  borderColor: f.accentColor + (hoveredId === f.id ? '65' : '35'),
+                  backgroundColor: f.accentColor + (hoveredId === f.id ? '18' : '0B'),
                 } : undefined}
               >
                 {/* Selected checkmark */}
