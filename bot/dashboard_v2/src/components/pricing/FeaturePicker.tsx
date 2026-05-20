@@ -198,9 +198,9 @@ export default function FeaturePicker({ plans, cycle }: FeaturePickerProps) {
         })}
       </div>
 
-      {/* Result panel */}
+      {/* Result panel — nur wenn etwas ausgewählt */}
       <AnimatePresence mode="wait">
-        <motion.div
+        {selected.size > 0 && <motion.div
           key={planId + cycle}
           initial={{ opacity: 0, y: 8 }}
           animate={{ opacity: 1, y: 0 }}
@@ -261,7 +261,7 @@ export default function FeaturePicker({ plans, cycle }: FeaturePickerProps) {
           >
             {isFree ? 'Kostenlos starten' : selected.size > 0 ? 'Jetzt abonnieren' : 'Auswahl treffen'}
           </a>
-        </motion.div>
+        </motion.div>}
       </AnimatePresence>
     </div>
   );
