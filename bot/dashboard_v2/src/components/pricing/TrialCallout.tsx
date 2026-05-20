@@ -23,13 +23,11 @@ export default function TrialCallout() {
               <Sparkles className="w-7 h-7 text-[#ff7a18]" />
             </div>
             <div>
-              <h3 className="text-xl font-bold text-white mb-1">
-                30 Tage kostenlos testen
-              </h3>
-              <p className="text-white/60 flex items-center gap-2">
-                <CreditCard className="w-4 h-4" />
+              <p className="text-white font-semibold text-base flex items-center gap-2">
+                <CreditCard className="w-4 h-4 text-white/50" />
                 Keine Kreditkarte erforderlich – risikofrei starten
               </p>
+              <p className="text-white/45 text-sm mt-0.5">Einmalig pro Account · Jederzeit kündbar</p>
             </div>
           </div>
 

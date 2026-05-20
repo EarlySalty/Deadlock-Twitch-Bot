@@ -104,9 +104,9 @@ export default function PricingHero() {
           {(isBlocked || trialState === 'error') && (MSG[trialState] ?? '30 Tage kostenlos starten')}
         </button>
 
-        <p className="mt-3 text-sm text-white/40">
-          {isBlocked ? MSG[trialState] : 'Keine Kreditkarte erforderlich · Einmalig pro Account'}
-        </p>
+        {isBlocked && (
+          <p className="mt-3 text-sm text-white/40">{MSG[trialState]}</p>
+        )}
       </motion.div>
     </section>
   );
