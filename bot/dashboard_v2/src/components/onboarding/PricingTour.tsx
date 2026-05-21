@@ -45,25 +45,25 @@ interface PopoverPosition {
 
 const TOUR_STEPS: TourStep[] = [
   {
-    anchor: 'tour-pricing-free',
-    tag: 'Free',
-    title: 'Kostenlos starten',
+    anchor: 'tour-pricing-werbefrei',
+    tag: 'Werbefrei',
+    title: 'Chat-Werbung dauerhaft abschalten',
     description:
-      'Auto-Raid bei Stream-Ende und das Basis-Dashboard — ohne Kosten, ohne Kreditkarte. Ideal zum Ausprobieren.',
+      'Mit dem Werbefrei-Plan schaltest du Chat-Werbung permanent aus — auch bei aktiven Admin-Events. Ab 3,99 €/Mo., monatlich kündbar.',
   },
   {
-    anchor: 'tour-pricing-basic',
-    tag: 'Basic',
-    title: 'Mehr Reichweite & weniger Werbung',
+    anchor: 'tour-pricing-raid',
+    tag: 'Raid Boost',
+    title: 'Mehr eingehende Raids',
     description:
-      'Chat-Werbung dauerhaft aus, bevorzugte Raid-Platzierung und KI-Mini-Insights — ab 3,99 €/Mo. Für Streamer, die aktiv wachsen wollen.',
+      'Bevorzugte Platzierung im Raid-System und Lurker-Tax-Erinnerungen für eine aktivere Community.',
   },
   {
-    anchor: 'tour-pricing-extended',
-    tag: 'Extended',
-    title: 'Das volle Analyse-Paket',
+    anchor: 'tour-pricing-analyse',
+    tag: 'Analyse',
+    title: 'KI-Coaching & vollständiges Dashboard',
     description:
-      'KI-Coaching, Viewer-Profile, alle Analytics-Tabs freigeschaltet — für Streamer, die professionell wachsen wollen.',
+      'Viewer-Profile, Retention-Analyse und KI-gestütztes Coaching — alle Analytics-Tabs freigeschaltet. Kombinierbar mit anderen Features.',
   },
 ];
 
@@ -130,12 +130,12 @@ export function PricingTour({ onComplete }: PricingTourProps) {
     return null;
   };
 
-  const dismissTour = () => {
+  const dismissTour = (persist = true) => {
     if (isExiting) return;
     setIsExiting(true);
     if (dismissTimeoutRef.current !== null) window.clearTimeout(dismissTimeoutRef.current);
     dismissTimeoutRef.current = window.setTimeout(() => {
-      localStorage.setItem(STORAGE_KEY, 'true');
+      if (persist) localStorage.setItem(STORAGE_KEY, 'true');
       setTargetRect(null);
       setIsVisible(false);
       setIsExiting(false);
@@ -176,7 +176,7 @@ export function PricingTour({ onComplete }: PricingTourProps) {
   useLayoutEffect(() => {
     if (!isVisible || isExiting) return;
     const nextStep = findAvailableStep(currentStep, 1);
-    if (nextStep === null) { dismissTour(); return; }
+    if (nextStep === null) { dismissTour(false); return; }
     if (nextStep !== currentStep) setCurrentStep(nextStep);
   }, [currentStep, isExiting, isVisible]);
 
@@ -186,7 +186,7 @@ export function PricingTour({ onComplete }: PricingTourProps) {
     const target = getAnchorElement(step.anchor);
     if (!target) {
       const nextStep = findAvailableStep(currentStep + 1, 1);
-      if (nextStep === null) dismissTour();
+      if (nextStep === null) dismissTour(false);
       else setCurrentStep(nextStep);
       return undefined;
     }
@@ -307,7 +307,7 @@ export function PricingTour({ onComplete }: PricingTourProps) {
             <div className="panel-card rounded-[20px] border border-[color:rgba(255,122,24,0.3)] bg-[linear-gradient(160deg,#143048,#0d2232)] p-4 shadow-[0_24px_60px_-24px_rgba(0,0,0,0.78)]">
               <button
                 type="button"
-                onClick={dismissTour}
+                onClick={() => dismissTour()}
                 className="absolute right-3 top-3 inline-flex h-8 w-8 items-center justify-center rounded-xl border border-[color:var(--color-border)] bg-white/5 text-[color:var(--color-text-secondary)] transition-colors hover:text-white"
                 aria-label="Tour überspringen"
               >
@@ -338,7 +338,7 @@ export function PricingTour({ onComplete }: PricingTourProps) {
                   <div className="flex items-center justify-between gap-3">
                     <button
                       type="button"
-                      onClick={dismissTour}
+                      onClick={() => dismissTour()}
                       className="text-sm font-semibold text-[color:var(--color-text-secondary)] transition-colors hover:text-white"
                     >
                       Überspringen

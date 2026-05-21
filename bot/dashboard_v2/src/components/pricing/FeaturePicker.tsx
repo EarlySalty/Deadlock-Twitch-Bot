@@ -121,7 +121,15 @@ export default function FeaturePicker({ plans, cycle }: FeaturePickerProps) {
           const soloPlan = planById[f.planId];
           const price = soloPlan?.price_monthly ?? 0;
           return (
-            <div key={f.id} className="relative">
+            <div
+              key={f.id}
+              className="relative"
+              data-tour-id={
+                f.id === 'werbefrei' ? 'tour-pricing-werbefrei' :
+                f.id === 'raid' ? 'tour-pricing-raid' :
+                'tour-pricing-analyse'
+              }
+            >
               <button
                 onClick={() => toggle(f.id)}
                 onMouseEnter={() => setHoveredId(f.id)}

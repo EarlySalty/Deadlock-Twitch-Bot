@@ -1,3 +1,15 @@
+## #45 — Tour-Robustheit: fehlende Anker überspringen ohne permanente Deaktivierung
+
+- Wenn eine Tour beim Start keine Elemente im DOM findet, wird sie nicht mehr dauerhaft als "gesehen" markiert
+- Bisheriges Verhalten: Tour hat sich selbst deaktiviert, obwohl der Nutzer sie nie gesehen hat
+- Tour wird beim nächsten Seitenaufruf korrekt nochmal angezeigt, sobald die Seite vollständig geladen ist
+
+## #44 — Pricing-Tour Bugfix: richtige Anker im FeaturePicker
+
+- Pricing-Tour wurde sofort übersprungen weil die Anker auf dem falschen Komponent lagen (PlanCardRedesign statt FeaturePicker)
+- Tour-Kacheln zeigen jetzt die drei echten Features: Werbefrei, Raid Boost und Analyse
+- Preview-Version: Tour startet erst wenn Pläne vom Server geladen sind (kein Frühstart mit leerem DOM)
+
 ## #43 — Automatische Onboarding-Tour durch Dashboard, Pläne und Analytics
 
 - Neue Nutzer werden nach der Dashboard-Tour automatisch zur Abo-Seite weitergeleitet

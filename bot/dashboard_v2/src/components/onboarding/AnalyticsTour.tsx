@@ -137,12 +137,12 @@ export function AnalyticsTour({ onComplete }: AnalyticsTourProps) {
     return null;
   };
 
-  const dismissTour = () => {
+  const dismissTour = (persist = true) => {
     if (isExiting) return;
     setIsExiting(true);
     if (dismissTimeoutRef.current !== null) window.clearTimeout(dismissTimeoutRef.current);
     dismissTimeoutRef.current = window.setTimeout(() => {
-      localStorage.setItem(STORAGE_KEY, 'true');
+      if (persist) localStorage.setItem(STORAGE_KEY, 'true');
       setTargetRect(null);
       setIsVisible(false);
       setIsExiting(false);
@@ -183,7 +183,7 @@ export function AnalyticsTour({ onComplete }: AnalyticsTourProps) {
   useLayoutEffect(() => {
     if (!isVisible || isExiting) return;
     const nextStep = findAvailableStep(currentStep, 1);
-    if (nextStep === null) { dismissTour(); return; }
+    if (nextStep === null) { dismissTour(false); return; }
     if (nextStep !== currentStep) setCurrentStep(nextStep);
   }, [currentStep, isExiting, isVisible]);
 
@@ -193,7 +193,7 @@ export function AnalyticsTour({ onComplete }: AnalyticsTourProps) {
     const target = getAnchorElement(step.anchor);
     if (!target) {
       const nextStep = findAvailableStep(currentStep + 1, 1);
-      if (nextStep === null) dismissTour();
+      if (nextStep === null) dismissTour(false);
       else setCurrentStep(nextStep);
       return undefined;
     }
@@ -314,7 +314,7 @@ export function AnalyticsTour({ onComplete }: AnalyticsTourProps) {
             <div className="panel-card rounded-[20px] border border-[color:rgba(255,122,24,0.3)] bg-[linear-gradient(160deg,#143048,#0d2232)] p-4 shadow-[0_24px_60px_-24px_rgba(0,0,0,0.78)]">
               <button
                 type="button"
-                onClick={dismissTour}
+                onClick={() => dismissTour()}
                 className="absolute right-3 top-3 inline-flex h-8 w-8 items-center justify-center rounded-xl border border-[color:var(--color-border)] bg-white/5 text-[color:var(--color-text-secondary)] transition-colors hover:text-white"
                 aria-label="Tour überspringen"
               >
@@ -345,7 +345,7 @@ export function AnalyticsTour({ onComplete }: AnalyticsTourProps) {
                   <div className="flex items-center justify-between gap-3">
                     <button
                       type="button"
-                      onClick={dismissTour}
+                      onClick={() => dismissTour()}
                       className="text-sm font-semibold text-[color:var(--color-text-secondary)] transition-colors hover:text-white"
                     >
                       Überspringen
