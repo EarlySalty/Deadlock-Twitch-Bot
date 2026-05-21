@@ -1,3 +1,9 @@
+## #46 — Onboarding-Tour: Übergabe zur Abo-Seite zuverlässiger + Button-Label korrigiert
+
+- Letzter Button im Dashboard-Onboarding heißt jetzt "Zur Abo-Seite" statt "Fertig"
+- Beim Wechsel zur Abo-Seite wird die alte "Tour gesehen"-Markierung automatisch gelöscht — Tour startet immer korrekt
+- Kein manuelles Löschen von Browserdaten mehr nötig
+
 ## #45 — Tour-Robustheit: fehlende Anker überspringen ohne permanente Deaktivierung
 
 - Wenn eine Tour beim Start keine Elemente im DOM findet, wird sie nicht mehr dauerhaft als "gesehen" markiert

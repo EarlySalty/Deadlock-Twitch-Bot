@@ -22,6 +22,7 @@ interface TourStep {
 
 interface WelcomeTourProps {
   onComplete?: () => void;
+  completionLabel?: string;
 }
 
 interface SpotlightRect {
@@ -143,7 +144,7 @@ function getPopoverPosition(targetRect: SpotlightRect, popoverSize: PopoverSize)
   };
 }
 
-export function WelcomeTour({ onComplete }: WelcomeTourProps) {
+export function WelcomeTour({ onComplete, completionLabel = 'Fertig' }: WelcomeTourProps) {
   const [isVisible, setIsVisible] = useState(false);
   const [currentStep, setCurrentStep] = useState(0);
   const [isExiting, setIsExiting] = useState(false);
@@ -506,7 +507,7 @@ export function WelcomeTour({ onComplete }: WelcomeTourProps) {
                         onClick={handleNext}
                         className="inline-flex items-center gap-2 rounded-xl bg-[linear-gradient(135deg,var(--color-primary),var(--color-accent))] px-4 py-2 text-sm font-bold text-white transition-opacity hover:opacity-90"
                       >
-                        {nextStep === null ? 'Fertig' : 'Weiter'}
+                        {nextStep === null ? completionLabel : 'Weiter'}
                         {nextStep !== null && <ArrowRight className="h-4 w-4" />}
                       </button>
                     </div>
