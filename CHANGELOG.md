@@ -1,3 +1,11 @@
+## #43 — Automatische Onboarding-Tour durch Dashboard, Pläne und Analytics
+
+- Neue Nutzer werden nach der Dashboard-Tour automatisch zur Abo-Seite weitergeleitet
+- Auf der Abo-Seite erklärt eine Spotlight-Tour die drei Plan-Stufen (Free, Basic, Extended) mit je einer kurzen Erklärung
+- Nach der Pricing-Tour geht es direkt weiter zum Analyse-Dashboard mit einer eigenen Tour
+- Die Analytics-Tour zeigt die wichtigsten Tabs: Übersicht, Streams, Wachstum und Chat
+- Alle drei Touren können einzeln übersprungen werden und zeigen sich nur beim ersten Besuch
+
 ## #42 — Pricing-Seite überarbeitet: Vergleich korrigiert & Auswahl klarer
 
 - Feature-Vergleichstabelle zeigt jetzt echte Plan-Spalten: Free / Werbefrei / Raid Boost / Analyse / Alles drin — statt ungenauer Tier-Labels

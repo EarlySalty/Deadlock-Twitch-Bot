@@ -5,7 +5,8 @@ import { useBillingCatalog } from '../hooks/useAnalytics';
 import PricingHero from '../components/pricing/PricingHero';
 import FeaturePicker from '../components/pricing/FeaturePicker';
 import FeatureComparisonGrid from '../components/pricing/FeatureComparisonGrid';
-import { PREVIEW_HOME_ROUTE } from '../preview/routes';
+import { PREVIEW_HOME_ROUTE, PREVIEW_ANALYTICS_ROUTE } from '../preview/routes';
+import { PricingTour } from '../components/onboarding/PricingTour';
 
 const faqData = [
   {
@@ -70,6 +71,11 @@ export default function Pricing() {
 
   return (
     <div className="max-w-5xl mx-auto px-4 py-8">
+      <PricingTour onComplete={() => {
+        localStorage.setItem('analytics-tour-pending', '1');
+        window.location.href = PREVIEW_ANALYTICS_ROUTE;
+      }} />
+
       {/* Hero Section */}
       <PricingHero />
 

@@ -22,6 +22,7 @@ import { SessionDetail } from '@/pages/SessionDetail';
 import { InternalHomeLanding } from '@/pages/InternalHomeLanding';
 import { VerwaltungPage } from '@/pages/Verwaltung';
 import Pricing from '@/pages/Pricing';
+import { AnalyticsTour } from '@/components/onboarding/AnalyticsTour';
 import { PlanProvider } from '@/context/PlanContext';
 import { TrialBanner } from '@/components/banners/TrialBanner';
 import { TrialExpiryModal } from '@/components/modals/TrialExpiryModal';
@@ -280,6 +281,7 @@ function AnalyticsDashboard() {
           isLocalhost={authStatus?.isLocalhost ?? false}
           isDemoMode={isDemoMode}
         >
+          <AnalyticsTour />
           <TrialExpiryModal />
           <TrialBanner />
 

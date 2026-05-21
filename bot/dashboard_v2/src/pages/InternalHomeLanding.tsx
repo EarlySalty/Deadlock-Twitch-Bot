@@ -807,7 +807,10 @@ export function InternalHomeLanding() {
 
   return (
     <div className="internal-home-vibe relative min-h-screen px-3 py-4 md:px-6 md:py-6">
-      <WelcomeTour />
+      <WelcomeTour onComplete={() => {
+        localStorage.setItem('pricing-tour-pending', '1');
+        window.location.href = PREVIEW_PRICING_ROUTE;
+      }} />
       <BackgroundBlobs />
 
       <div className="relative mx-auto max-w-[1440px]">

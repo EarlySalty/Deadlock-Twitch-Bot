@@ -88,12 +88,19 @@ export default function PlanCardRedesign({ plan, index }: PlanCardRedesignProps)
     ? config.badge
     : null;
 
+  const tourId =
+    plan.id === 'raid_free' ? 'tour-pricing-free' :
+    plan.id === 'raid_boost' ? 'tour-pricing-basic' :
+    plan.id === 'analysis_dashboard' ? 'tour-pricing-extended' :
+    undefined;
+
   return (
     <motion.div
       initial={{ opacity: 0, y: 20 }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.4, delay: 0.1 + index * 0.1 }}
       className={`relative group`}
+      data-tour-id={tourId}
     >
       {/* Hover glow effect */}
       <div

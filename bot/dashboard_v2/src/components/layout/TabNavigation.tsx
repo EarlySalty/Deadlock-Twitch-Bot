@@ -107,9 +107,17 @@ export function TabNavigation({ activeTab, onTabChange }: TabNavigationProps) {
           const accessible = canAccessTab(tab.id as BillingTabId);
           const locked = isTabLocked(tab.id as BillingTabId);
 
+          const tourId =
+            tab.id === 'overview' ? 'tour-analytics-overview' :
+            tab.id === 'streams' ? 'tour-analytics-streams' :
+            tab.id === 'growth' ? 'tour-analytics-growth' :
+            tab.id === 'chat' ? 'tour-analytics-chat' :
+            undefined;
+
           return (
             <button
               key={tab.id}
+              data-tour-id={tourId}
               type="button"
               onClick={() => {
                 if (accessible) {

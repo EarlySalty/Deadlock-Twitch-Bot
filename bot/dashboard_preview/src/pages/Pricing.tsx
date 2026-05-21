@@ -2,7 +2,8 @@ import { useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { ChevronDown, HelpCircle } from 'lucide-react';
 import { useBillingCatalog } from '../hooks/useAnalytics';
-import { PREVIEW_HOME_ROUTE } from '../preview/routes';
+import { PREVIEW_HOME_ROUTE, PREVIEW_ANALYTICS_ROUTE } from '../preview/routes';
+import { PricingTour } from '../components/onboarding/PricingTour';
 import PricingHero from '../components/pricing/PricingHero';
 import TrialCallout from '../components/pricing/TrialCallout';
 import PlanCardRedesign from '../components/pricing/PlanCardRedesign';
@@ -70,6 +71,11 @@ export default function Pricing() {
 
   return (
     <div className="max-w-5xl mx-auto px-4 py-8">
+      <PricingTour onComplete={() => {
+        localStorage.setItem('analytics-tour-pending', '1');
+        window.location.href = PREVIEW_ANALYTICS_ROUTE;
+      }} />
+
       {/* Hero Section */}
       <PricingHero />
 
