@@ -61,7 +61,7 @@ export function Overview({ streamer, days, onSessionClick }: OverviewProps) {
   return (
     <div className="space-y-8">
       {/* Top KPIs */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4">
+      <div data-tour-id="tour-analytics-kpis" className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4">
         <PlanGateCard featureId="health_scores" title="Health Scores">
           <HealthScoreCard scores={scores} />
         </PlanGateCard>
@@ -116,11 +116,13 @@ export function Overview({ streamer, days, onSessionClick }: OverviewProps) {
       )}
 
       {/* Insights */}
-      <PlanGateCard featureId="insights_panel" title="Insights">
-        {findings && findings.length > 0 && (
-          <InsightsPanel findings={findings} actions={actions} />
-        )}
-      </PlanGateCard>
+      <div data-tour-id="tour-analytics-insights">
+        <PlanGateCard featureId="insights_panel" title="Insights">
+          {findings && findings.length > 0 && (
+            <InsightsPanel findings={findings} actions={actions} />
+          )}
+        </PlanGateCard>
+      </div>
 
       {/* Charts Row */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">

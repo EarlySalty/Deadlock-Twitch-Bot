@@ -72,6 +72,7 @@ export default function Pricing() {
   return (
     <div className="max-w-5xl mx-auto px-4 py-8">
       <PricingTour onComplete={() => {
+        localStorage.removeItem('analytics-tour-dismissed');
         localStorage.setItem('analytics-tour-pending', '1');
         window.location.href = PREVIEW_ANALYTICS_ROUTE;
       }} />

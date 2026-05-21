@@ -112,6 +112,7 @@ export function TabNavigation({ activeTab, onTabChange }: TabNavigationProps) {
             tab.id === 'streams' ? 'tour-analytics-streams' :
             tab.id === 'growth' ? 'tour-analytics-growth' :
             tab.id === 'chat' ? 'tour-analytics-chat' :
+            tab.id === 'coaching' ? 'tour-analytics-coaching' :
             undefined;
 
           return (

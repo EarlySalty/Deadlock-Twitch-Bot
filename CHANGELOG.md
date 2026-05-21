@@ -1,3 +1,10 @@
+## #47 — Analytics-Tour komplett überarbeitet: 5 Schritte durch echte Dashboard-Features
+
+- Tour zeigt jetzt die KPI-Kacheln direkt (Viewer, Follower, Retention) statt nur Tab-Buttons
+- Neuer Schritt erklärt das KI-Insights-Panel und was der Bot analysiert
+- Wachstum, Chat und Coaching als eigene Schritte mit besseren Erklärungen
+- Tour startet jetzt zuverlässig — alter "gesehen"-Status wird beim Seitenwechsel automatisch zurückgesetzt
+
 ## #46 — Onboarding-Tour: Übergabe zur Abo-Seite zuverlässiger + Button-Label korrigiert
 
 - Letzter Button im Dashboard-Onboarding heißt jetzt "Zur Abo-Seite" statt "Fertig"

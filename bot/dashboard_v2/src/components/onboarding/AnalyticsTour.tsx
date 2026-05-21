@@ -45,32 +45,39 @@ interface PopoverPosition {
 
 const TOUR_STEPS: TourStep[] = [
   {
-    anchor: 'tour-analytics-overview',
-    tag: 'Übersicht',
-    title: 'Dein Stream auf einen Blick',
+    anchor: 'tour-analytics-kpis',
+    tag: 'KPIs',
+    title: 'Deine Stream-Daten auf einen Blick',
     description:
-      'Die wichtigsten KPIs, Wachstumstrends und dein Channel-Score — alles auf der Übersichtsseite.',
+      'Durchschnittliche Viewer, Follower-Gewinne, Retention und Hours Watched — nach jedem Stream automatisch erfasst und hier zusammengefasst.',
   },
   {
-    anchor: 'tour-analytics-streams',
-    tag: 'Sessions',
-    title: 'Jede Session im Detail',
+    anchor: 'tour-analytics-insights',
+    tag: 'Insights',
+    title: 'Was der Bot für dich analysiert',
     description:
-      'Peak-Viewer, Follower-Gewinne und Chat-Aktivität für jeden einzelnen Stream — direkt nach dem Streamen verfügbar.',
+      'Hier erscheinen konkrete KI-Hinweise aus deinen letzten Sessions: was gut läuft, was du verbessern kannst und wann du am effektivsten streamst.',
   },
   {
     anchor: 'tour-analytics-growth',
     tag: 'Wachstum',
-    title: 'Langfristiger Trend',
+    title: 'Dein Langzeittrend',
     description:
-      'Follower- und Viewer-Entwicklung über Wochen und Monate. Erkenne Muster und plane deinen Content gezielter.',
+      'Follower- und Viewer-Entwicklung über Wochen und Monate. Erkenne Muster, vergleiche Zeiträume und plane deinen Content gezielter.',
   },
   {
     anchor: 'tour-analytics-chat',
     tag: 'Chat',
-    title: 'Wer ist aktiv?',
+    title: 'Wer ist wirklich aktiv?',
     description:
-      'Chat-Engagement, Top-Chatter und Aktivitätsmuster — verstehe deine Community und fördere echte Interaktion.',
+      'Top-Chatter, Aktivitätsmuster und Chat-Engagement pro Session. Verstehe welche Inhalte deine Community in Bewegung bringen.',
+  },
+  {
+    anchor: 'tour-analytics-coaching',
+    tag: 'Coaching',
+    title: 'Persönliches KI-Coaching',
+    description:
+      'Individuelle Handlungsempfehlungen auf Basis deiner echten Stream-Daten — nicht generisch, sondern auf deinen Kanal zugeschnitten.',
   },
 ];
 
