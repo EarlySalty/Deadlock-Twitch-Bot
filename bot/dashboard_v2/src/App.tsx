@@ -5,19 +5,12 @@ import { TabNavigation, type TabId } from '@/components/layout/TabNavigation';
 import { Overview } from '@/pages/Overview';
 import { Sessions } from '@/pages/Sessions';
 import { SocialMediaAdminDashboard } from '@/pages/SocialMediaAdmin';
-import { ChatAnalytics } from '@/pages/ChatAnalytics';
-import { Growth } from '@/pages/Growth';
-import { Audience } from '@/pages/Audience';
-import { Comparison } from '@/pages/Comparison';
-import { Schedule } from '@/pages/Schedule';
-import { Coaching } from '@/pages/Coaching';
 import { Monetization } from '@/pages/Monetization';
-import { Category } from '@/pages/Category';
-import { Viewers } from '@/pages/Viewers';
-import { Experimental } from '@/pages/Experimental';
-import { AIAnalysis } from '@/pages/AIAnalysis';
-import { StreamReports } from '@/pages/StreamReports';
-import { TitleGenerator } from '@/pages/TitleGenerator';
+import { Publikum } from '@/pages/Publikum';
+import { Wachstum } from '@/pages/Wachstum';
+import { Planung } from '@/pages/Planung';
+import { WasTun } from '@/pages/WasTun';
+import { resolveTabParam } from '@/tabAliases';
 import { SessionDetail } from '@/pages/SessionDetail';
 import { InternalHomeLanding } from '@/pages/InternalHomeLanding';
 import { VerwaltungPage } from '@/pages/Verwaltung';
@@ -33,7 +26,6 @@ import {
   PREVIEW_HOME_ROUTE,
   PREVIEW_PRICING_ROUTE,
   PREVIEW_VERWALTUNG_ROUTE,
-  isPreviewModeEnabled,
 } from '@/preview/routes';
 import { dashboardRuntimeConfig, resolveEffectiveDemoMode } from '@/runtimeConfig';
 import {
@@ -116,7 +108,8 @@ function AnalyticsDashboard() {
   const [days, setDays] = useState<TimeRange>(30);
   const [activeTab, setActiveTab] = useState<TabId | 'session-detail'>('overview');
   const [selectedSessionId, setSelectedSessionId] = useState<number | null>(null);
-  const isPreviewBuild = isPreviewModeEnabled();
+  const [pendingSub, setPendingSub] = useState<string | null>(null);
+  const [pendingMode, setPendingMode] = useState<string | null>(null);
 
   const { data: streamers = [], isLoading: loadingStreamers } = useStreamerList();
   const { data: authStatus, isLoading: loadingAuth, isError: authError } = useAuthStatus();
@@ -153,30 +146,13 @@ function AnalyticsDashboard() {
       const d = parseInt(urlDays, 10);
       if (d === 7 || d === 30 || d === 90) setDays(d);
     }
-    const urlTab = params.get('tab');
-    if (urlTab) {
-      const previewModeTab: TabId = isPreviewBuild ? 'streams' : 'reports';
-      const validTabs: TabId[] = [
-        'overview',
-        'chat',
-        'growth',
-        'audience',
-        'viewers',
-        'coaching',
-        'compare',
-        'schedule',
-        'monetization',
-        'category',
-        'experimental',
-        'ai',
-        previewModeTab,
-        'title',
-      ];
-      if (validTabs.includes(urlTab as TabId)) {
-        setActiveTab(urlTab as TabId);
-      }
+    const resolved = resolveTabParam(params.get('tab'));
+    if (resolved) {
+      setActiveTab(resolved.tab);
+      setPendingSub(params.get('sub') ?? resolved.sub ?? null);
+      setPendingMode(params.get('mode') ?? resolved.mode ?? null);
     }
-  }, [isDemoShell, isPreviewBuild]);
+  }, [isDemoShell]);
 
   // Auto-set streamer to logged-in Twitch user on first auth load
   useEffect(() => {
@@ -210,6 +186,12 @@ function AnalyticsDashboard() {
   const handleSessionClick = (sessionId: number) => {
     setSelectedSessionId(sessionId);
     setActiveTab('session-detail');
+  };
+
+  const handleTabChange = (tab: TabId) => {
+    setActiveTab(tab);
+    setPendingSub(null);
+    setPendingMode(null);
   };
 
   // Auth badge component
@@ -303,7 +285,7 @@ function AnalyticsDashboard() {
           )}
 
           {activeTab !== 'session-detail' && (
-            <TabNavigation activeTab={activeTab as TabId} onTabChange={setActiveTab} />
+            <TabNavigation activeTab={activeTab as TabId} onTabChange={handleTabChange} />
           )}
 
           {/* Tab Content */}
@@ -319,61 +301,30 @@ function AnalyticsDashboard() {
             <Sessions streamer={streamer || ''} days={days} onSessionClick={handleSessionClick} />
           )}
 
-          {activeTab === 'chat' && (
-            <ChatAnalytics streamer={streamer || ''} days={days} />
+          {activeTab === 'audience' && (
+            <Publikum streamer={streamer} days={days} initialSub={pendingSub ?? undefined} />
           )}
 
           {activeTab === 'growth' && (
-            <Growth streamer={streamer || ''} days={days} />
+            <Wachstum
+              streamer={streamer}
+              days={days}
+              initialSub={pendingSub ?? undefined}
+              onStreamerSelect={setStreamer}
+              onNavigate={handleTabChange}
+            />
           )}
 
-          {activeTab === 'audience' && (
-            <Audience streamer={streamer || ''} days={days} />
-          )}
-
-          {activeTab === 'viewers' && (
-            <Viewers streamer={streamer} days={days} />
-          )}
-
-          {activeTab === 'compare' && (
-            <Comparison streamer={streamer || ''} days={days} />
-          )}
-
-          {activeTab === 'schedule' && (
-            <Schedule streamer={streamer || ''} days={days} />
+          {activeTab === 'planning' && (
+            <Planung streamer={streamer} days={days} initialSub={pendingSub ?? undefined} />
           )}
 
           {activeTab === 'coaching' && (
-            <Coaching streamer={streamer || ''} days={days} />
+            <WasTun streamer={streamer} days={days} initialMode={pendingMode ?? undefined} />
           )}
 
           {activeTab === 'monetization' && (
             <Monetization streamer={streamer} days={days} />
-          )}
-
-          {activeTab === 'category' && (
-            <Category
-              streamer={streamer}
-              days={days}
-              onStreamerSelect={setStreamer}
-              onNavigate={setActiveTab}
-            />
-          )}
-
-          {activeTab === 'experimental' && (
-            <Experimental streamer={streamer} days={days} />
-          )}
-
-          {activeTab === 'ai' && (
-            <AIAnalysis streamer={streamer} days={days} />
-          )}
-
-          {activeTab === 'reports' && (
-            <StreamReports streamer={streamer} days={days} />
-          )}
-
-          {activeTab === 'title' && (
-            <TitleGenerator streamer={streamer} />
           )}
 
           {activeTab === 'session-detail' && selectedSessionId && (
@@ -382,7 +333,7 @@ function AnalyticsDashboard() {
               streamer={streamer || ''}
               onBack={() => {
                 setSelectedSessionId(null);
-                setActiveTab(isPreviewBuild ? 'streams' : 'overview');
+                setActiveTab('streams');
               }}
             />
           )}

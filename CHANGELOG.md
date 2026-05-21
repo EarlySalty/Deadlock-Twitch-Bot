@@ -1,3 +1,11 @@
+## #48 — Analyse-Dashboard aufgeräumt: 14 Tabs werden zu 7
+
+- Statt 14 Tabs gibt es jetzt 7 klar getrennte Bereiche — kein langes Suchen mehr in einer überfüllten Leiste
+- Coaching, KI-Analyse und Stream-Reports sind im neuen Bereich "Was tun?" gebündelt — alle Empfehlungen an einem Ort
+- Audience, Viewer und Chat liegen jetzt zusammen unter "Publikum"
+- Wachstum, Vergleich und die Kategorie-Leaderboards sind unter "Wachstum" zusammengefasst
+- Alte gespeicherte Links zu einzelnen Tabs funktionieren weiterhin
+
 ## #47 — Analytics-Tour komplett überarbeitet: 5 Schritte durch echte Dashboard-Features
 
 - Tour zeigt jetzt die KPI-Kacheln direkt (Viewer, Follower, Retention) statt nur Tab-Buttons

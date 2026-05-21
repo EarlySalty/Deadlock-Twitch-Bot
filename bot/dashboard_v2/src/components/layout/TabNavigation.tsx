@@ -2,41 +2,24 @@ import { motion } from 'framer-motion';
 import {
   LayoutDashboard,
   TrendingUp,
-  MessageSquare,
   BarChart3,
   Users,
   Calendar,
-  Target,
   GraduationCap,
   DollarSign,
-  Globe,
-  UserSearch,
-  FlaskConical,
-  Brain,
-  FileText,
   Lock,
-  Sparkles,
 } from 'lucide-react';
 import { usePlan } from '../../context/PlanContext';
-import { isPreviewModeEnabled } from '../../preview/routes';
 import type { TabId as BillingTabId } from '../../types/billing';
 
 export type TabId =
   | 'overview'
   | 'streams'
-  | 'chat'
-  | 'growth'
   | 'audience'
-  | 'viewers'
-  | 'compare'
-  | 'schedule'
+  | 'growth'
+  | 'planning'
   | 'coaching'
-  | 'monetization'
-  | 'category'
-  | 'experimental'
-  | 'ai'
-  | 'reports'
-  | 'title';
+  | 'monetization';
 
 interface Tab {
   id: TabId;
@@ -46,39 +29,15 @@ interface Tab {
   adminOnly?: boolean;
 }
 
-const tabs: Tab[] = isPreviewModeEnabled()
-  ? [
-      { id: 'overview', label: 'Übersicht', icon: LayoutDashboard },
-      { id: 'streams', label: 'Streams', icon: TrendingUp },
-      { id: 'chat', label: 'Chat', icon: MessageSquare },
-      { id: 'growth', label: 'Wachstum', icon: BarChart3 },
-      { id: 'audience', label: 'Audience', icon: Target },
-      { id: 'viewers', label: 'Viewer', icon: UserSearch },
-      { id: 'compare', label: 'Vergleich', icon: Users },
-      { id: 'schedule', label: 'Zeitplan', icon: Calendar },
-      { id: 'coaching', label: 'Coaching', icon: GraduationCap },
-      { id: 'monetization', label: 'Monetization', icon: DollarSign },
-      { id: 'category', label: 'Kategorie', icon: Globe },
-      { id: 'experimental', label: 'Labor', icon: FlaskConical, beta: true },
-      { id: 'ai', label: 'KI Analyse', icon: Brain, beta: true },
-      { id: 'title', label: 'Titel', icon: Sparkles },
-    ]
-  : [
-      { id: 'overview', label: 'Übersicht', icon: LayoutDashboard },
-      { id: 'chat', label: 'Chat', icon: MessageSquare },
-      { id: 'growth', label: 'Wachstum', icon: BarChart3 },
-      { id: 'audience', label: 'Audience', icon: Target },
-      { id: 'viewers', label: 'Viewer', icon: UserSearch },
-      { id: 'compare', label: 'Vergleich', icon: Users },
-      { id: 'schedule', label: 'Zeitplan', icon: Calendar },
-      { id: 'coaching', label: 'Coaching', icon: GraduationCap },
-      { id: 'monetization', label: 'Monetization', icon: DollarSign },
-      { id: 'category', label: 'Kategorie', icon: Globe },
-      { id: 'experimental', label: 'Labor', icon: FlaskConical, beta: true },
-      { id: 'ai', label: 'KI Analyse', icon: Brain, beta: true },
-      { id: 'reports', label: 'Stream Reports', icon: FileText, beta: true },
-      { id: 'title', label: 'Titel', icon: Sparkles },
-    ];
+const tabs: Tab[] = [
+  { id: 'overview', label: 'Übersicht', icon: LayoutDashboard },
+  { id: 'streams', label: 'Streams', icon: TrendingUp },
+  { id: 'audience', label: 'Publikum', icon: Users },
+  { id: 'growth', label: 'Wachstum', icon: BarChart3 },
+  { id: 'planning', label: 'Planung', icon: Calendar },
+  { id: 'coaching', label: 'Was tun?', icon: GraduationCap },
+  { id: 'monetization', label: 'Monetization', icon: DollarSign },
+];
 
 interface TabNavigationProps {
   activeTab: TabId;
@@ -111,7 +70,7 @@ export function TabNavigation({ activeTab, onTabChange }: TabNavigationProps) {
             tab.id === 'overview' ? 'tour-analytics-overview' :
             tab.id === 'streams' ? 'tour-analytics-streams' :
             tab.id === 'growth' ? 'tour-analytics-growth' :
-            tab.id === 'chat' ? 'tour-analytics-chat' :
+            tab.id === 'audience' ? 'tour-analytics-chat' :
             tab.id === 'coaching' ? 'tour-analytics-coaching' :
             undefined;
 

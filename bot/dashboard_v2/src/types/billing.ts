@@ -28,19 +28,11 @@ export interface PlanStatus {
 export type TabId =
   | 'overview'
   | 'streams'
-  | 'schedule'
-  | 'category'
-  | 'chat'
-  | 'growth'
   | 'audience'
-  | 'compare'
-  | 'viewers'
+  | 'growth'
+  | 'planning'
   | 'coaching'
-  | 'monetization'
-  | 'experimental'
-  | 'ai'
-  | 'reports'
-  | 'title';
+  | 'monetization';
 
 export const ALL_ENTITLEMENTS: EntitlementId[] = [
   'analytics.basic',
@@ -52,18 +44,13 @@ export const ALL_ENTITLEMENTS: EntitlementId[] = [
   'raid.priority',
 ];
 
-// Tab visibility configuration per entitlement
+// Tab visibility configuration per entitlement.
+// Fehlt ein Tab hier, ist er frei zugaenglich. Gemischte Tabs erhalten das
+// niedrigste Tier ihrer Inhalte; hoehere Karten/Sub-Tabs gaten feiner.
 export const TAB_ENTITLEMENTS: Partial<Record<TabId, EntitlementId>> = {
-  'chat': 'analytics.basic',
-  'growth': 'analytics.basic',
   'audience': 'analytics.basic',
-  'compare': 'analytics.basic',
-  'viewers': 'analytics.extended',
   'coaching': 'analytics.extended',
   'monetization': 'analytics.extended',
-  'experimental': 'analytics.extended',
-  'ai': 'analytics.ai_mini',
-  'reports': 'analytics.ai_mini',
 };
 
 // Feature IDs for card-level gating within tabs
