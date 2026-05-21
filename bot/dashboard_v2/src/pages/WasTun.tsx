@@ -11,23 +11,8 @@ interface WasTunProps {
   initialMode?: string;
 }
 
-function GesamtMode({ streamer, days }: { streamer: string | null; days: TimeRange }) {
-  return (
-    <div className="space-y-8">
-      <section className="space-y-4">
-        <h2 className="text-lg font-bold text-white">Sofort-Empfehlungen</h2>
-        <Coaching streamer={streamer ?? ''} days={days} />
-      </section>
-      <section className="space-y-4">
-        <h2 className="text-lg font-bold text-white">KI-Tiefenanalyse</h2>
-        <AIAnalysis streamer={streamer} days={days} />
-      </section>
-    </div>
-  );
-}
-
 export function WasTun({ streamer, days, initialMode }: WasTunProps) {
-  const [mode, setMode] = useState(initialMode ?? 'gesamt');
+  const [mode, setMode] = useState(initialMode ?? 'empfehlungen');
   const tabs: SubTabDef[] = [
     {
       id: 'session',
@@ -35,9 +20,14 @@ export function WasTun({ streamer, days, initialMode }: WasTunProps) {
       render: () => <StreamReports streamer={streamer} days={days} />,
     },
     {
-      id: 'gesamt',
-      label: 'Gesamt',
-      render: () => <GesamtMode streamer={streamer} days={days} />,
+      id: 'empfehlungen',
+      label: 'Empfehlungen',
+      render: () => <Coaching streamer={streamer ?? ''} days={days} />,
+    },
+    {
+      id: 'ki',
+      label: 'KI-Analyse',
+      render: () => <AIAnalysis streamer={streamer} days={days} />,
     },
   ];
   return <SubTabs tabs={tabs} active={mode} onChange={setMode} />;

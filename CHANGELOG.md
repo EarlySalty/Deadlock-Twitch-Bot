@@ -1,3 +1,7 @@
+## #49 — KI-Analyse besser auffindbar im "Was tun?"-Bereich
+
+- Die KI-Analyse ist jetzt ein eigener Reiter neben "Pro Session" und "Empfehlungen" — vorher lag sie ganz unten am Seitenende und war kaum zu finden
+
 ## #48 — Analyse-Dashboard aufgeräumt: 14 Tabs werden zu 7
 
 - Statt 14 Tabs gibt es jetzt 7 klar getrennte Bereiche — kein langes Suchen mehr in einer überfüllten Leiste

@@ -19,8 +19,8 @@ const TAB_ALIASES: Record<string, ResolvedTab> = {
   schedule: { tab: 'planning', sub: 'zeitplan' },
   title: { tab: 'planning', sub: 'titel' },
   planning: { tab: 'planning' },
-  coaching: { tab: 'coaching', mode: 'gesamt' },
-  ai: { tab: 'coaching', mode: 'gesamt' },
+  coaching: { tab: 'coaching', mode: 'empfehlungen' },
+  ai: { tab: 'coaching', mode: 'ki' },
   reports: { tab: 'coaching', mode: 'session' },
   monetization: { tab: 'monetization' },
 };

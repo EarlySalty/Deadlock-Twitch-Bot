@@ -10,7 +10,8 @@ test('alte Tab-ID wird auf neuen Tab + Sub gemappt', () => {
 
 test('alte Ratgeber-Tabs landen im Hub mit passendem Modus', () => {
   assert.deepEqual(resolveTabParam('reports'), { tab: 'coaching', mode: 'session' });
-  assert.deepEqual(resolveTabParam('ai'), { tab: 'coaching', mode: 'gesamt' });
+  assert.deepEqual(resolveTabParam('ai'), { tab: 'coaching', mode: 'ki' });
+  assert.deepEqual(resolveTabParam('coaching'), { tab: 'coaching', mode: 'empfehlungen' });
 });
 
 test('aktuelle Tab-ID loest auf sich selbst auf', () => {
