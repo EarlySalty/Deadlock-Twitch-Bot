@@ -1,3 +1,9 @@
+## Coaching-Tab aufteilen
+
+- 2026-05-21: Aufgabe aufgenommen. `Coaching.tsx`, `WasTun.tsx` und bestehende `pages/Coaching`-Importe geprüft; `Coaching` wurde nur in `WasTun.tsx` genutzt.
+- 2026-05-21: `bot/dashboard_v2/src/pages/Coaching.tsx` auf exportierte Sektionen/`RecommendationCard` reduziert, neue `src/pages/coachingSubPages.tsx` mit drei Coaching-Subpages angelegt und `WasTun.tsx` auf die Tabs `Empfehlungen`, `Format & Auffindbarkeit` und `Community & Konkurrenz` umgestellt.
+- 2026-05-21: Verifikation erfolgreich: `cd bot/dashboard_v2 && npx tsc --noEmit`.
+
 ## Semgrep Suppression Task 3
 
 - 2026-05-10: Aufgabe aufgenommen. Lokalen Stand von `WORKFLOW.md` und die 40 betroffenen Dateien geprüft; für die Regel `python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query` aktuelle Treffer zusätzlich per lokalem `semgrep scan` verifiziert, weil mehrere vorgegebene Zeilennummern im Tree verschoben waren.
@@ -218,3 +224,8 @@
 
 - 2026-05-10: Aufgabe aufgenommen. Betroffene Logger-/HTML-/SQL-/Import-Stellen sowie Zusatzfaelle fuer `urllib` und `range()` im Python-Code und via `security-reports/semgrep.json` gegengeprueft.
 - 2026-05-10: Gezielte `nosemgrep`-Kommentare fuer `logger-credential-leak`, `raw-html-format`, `formatted-sql-query`, `non-literal-import` und die vier verifizierten `dynamic-urllib`-Aufrufe eingefuegt; fuer `py/overly-large-range` aktuell keine Python-Treffer im Repo gefunden.
+
+## Publikum Chat-Subtabs
+
+- 2026-05-21: Aufgabe aufgenommen. `ChatAnalytics.tsx`, `chatAnalyticsContent.tsx`, `Publikum.tsx` und bestehendes `WORKFLOW.md` geprueft; `ChatAnalytics`-Nutzung in `bot/dashboard_v2/src` per `rg` verifiziert und auf `Publikum.tsx` eingegrenzt.
+- 2026-05-21: `chatAnalyticsContent.tsx` in `ChatTreueContent`, `ChatAktivitaetContent` und `ChatTiefeContent` aufgeteilt, neue `chatSubPages.tsx` mit drei Sub-Pages angelegt, `Publikum.tsx` auf drei Chat-Tabs umgestellt und den alten Wrapper `ChatAnalytics.tsx` entfernt.

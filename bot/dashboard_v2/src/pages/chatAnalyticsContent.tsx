@@ -46,18 +46,11 @@ export interface ChatAnalyticsContentProps {
   chatSocialGraphEnabled: boolean;
 }
 
-export function ChatAnalyticsContent({
-  streamer,
+export function ChatTreueContent({
   data,
   days,
   model,
   coachingData,
-  selectedSessionId,
-  setSelectedSessionId,
-  hypeData,
-  contentData,
-  socialData,
-  chatSocialGraphEnabled,
 }: ChatAnalyticsContentProps) {
   const {
     totalChatters,
@@ -74,10 +67,6 @@ export function ChatAnalyticsContent({
     chatterReturnRate,
     interactionRateReliable,
     interactionCoverage,
-    hourlyChartData,
-    hasHourlySamples,
-    hoursWithData,
-    peakHour,
     dataMethod,
     noReturnHistory,
     chattersApiInactive,
@@ -87,7 +76,6 @@ export function ChatAnalyticsContent({
     messagesBenchmarkText,
     messagesBenchmarkFootnote,
     messagesGaugeProgress,
-    hourlyChartGradientId,
     chatAudienceTooltip,
     newViewerShare,
   } = model;
@@ -232,7 +220,24 @@ export function ChatAnalyticsContent({
           )}
         </div>
       </motion.div>
+    </div>
+  );
+}
 
+export function ChatAktivitaetContent({
+  data,
+  model,
+}: ChatAnalyticsContentProps) {
+  const {
+    hourlyChartData,
+    hasHourlySamples,
+    hoursWithData,
+    peakHour,
+    hourlyChartGradientId,
+  } = model;
+
+  return (
+    <div className="space-y-6">
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
         <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.15 }} className="panel-card rounded-2xl p-6">
           <div className="mb-6 flex items-center gap-3">
@@ -326,7 +331,21 @@ export function ChatAnalyticsContent({
           </div>
         )}
       </motion.div>
+    </div>
+  );
+}
 
+export function ChatTiefeContent({
+  streamer,
+  selectedSessionId,
+  setSelectedSessionId,
+  hypeData,
+  contentData,
+  socialData,
+  chatSocialGraphEnabled,
+}: ChatAnalyticsContentProps) {
+  return (
+    <div className="space-y-6">
       <PlanGateCard featureId="hype_timeline" title="Hype-Timeline">
         {hypeData && <HypeMomenteSection data={hypeData} selectedSessionId={selectedSessionId} onSessionChange={setSelectedSessionId} />}
       </PlanGateCard>

@@ -1,21 +1,15 @@
 import { useMemo } from 'react';
 import { motion } from 'framer-motion';
 import {
-  GraduationCap, AlertTriangle, TrendingDown, Clock, Calendar, Tag, Users,
-  Search, Type, UserMinus, Zap, AlertCircle, Loader2, ChevronRight,
-  BarChart3, Target, Timer, ArrowLeftRight, Trophy, Activity,
+  AlertTriangle, TrendingDown, Clock, Calendar, Tag, Users,
+  Search, Type, UserMinus, AlertCircle, ChevronRight,
+  BarChart3, Timer, ArrowLeftRight, Trophy, Activity,
 } from 'lucide-react';
 import {
   BarChart, Bar, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip,
   ResponsiveContainer, Legend, Cell,
 } from 'recharts';
-import { useCoaching } from '@/hooks/useAnalytics';
-import type { TimeRange, CoachingData, CoachingRecommendation } from '@/types/analytics';
-
-interface CoachingProps {
-  streamer: string;
-  days: TimeRange;
-}
+import type { CoachingData, CoachingRecommendation } from '@/types/analytics';
 
 const WEEKDAY_SHORT = ['So', 'Mo', 'Di', 'Mi', 'Do', 'Fr', 'Sa'];
 
@@ -34,125 +28,12 @@ function getRecommendationIcon(iconName: string) {
   return ICON_MAP[iconName] || AlertCircle;
 }
 
-export function Coaching({ streamer, days }: CoachingProps) {
-  const { data, isLoading } = useCoaching(streamer, days);
-
-  const { topRecs, otherRecs } = useMemo(() => {
-    if (!data?.recommendations) return { topRecs: [], otherRecs: [] };
-    const top = data.recommendations.filter(r => r.priority === 'critical' || r.priority === 'high');
-    const other = data.recommendations.filter(r => r.priority === 'medium' || r.priority === 'low');
-    return { topRecs: top, otherRecs: other };
-  }, [data]);
-
-  if (!streamer) {
-    return (
-      <div className="flex flex-col items-center justify-center h-64">
-        <AlertCircle className="w-12 h-12 text-text-secondary mb-4" />
-        <p className="text-text-secondary text-lg">Waehle einen Streamer aus</p>
-      </div>
-    );
-  }
-
-  if (isLoading) {
-    return (
-      <div className="flex items-center justify-center h-64">
-        <Loader2 className="w-8 h-8 animate-spin text-primary" />
-      </div>
-    );
-  }
-
-  if (!data || data.empty) {
-    return (
-      <div className="flex flex-col items-center justify-center h-64">
-        <GraduationCap className="w-12 h-12 text-text-secondary mb-4" />
-        <p className="text-text-secondary text-lg">Keine Daten fuer Coaching-Analyse</p>
-        <p className="text-text-secondary text-sm mt-2">Streame mehr, um personalisierte Empfehlungen zu erhalten!</p>
-      </div>
-    );
-  }
-
-  return (
-    <div className="space-y-6">
-      {/* 1. Top Recommendations (Critical + High) */}
-      {topRecs.length > 0 && (
-        <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }}>
-          <div className="flex items-center gap-3 mb-4">
-            <Zap className="w-6 h-6 text-warning" />
-            <h2 className="text-xl font-bold text-white">Top-Empfehlungen</h2>
-          </div>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            {topRecs.map((rec, i) => (
-              <RecommendationCard key={i} rec={rec} index={i} />
-            ))}
-          </div>
-        </motion.div>
-      )}
-
-      {/* 2. Efficiency Comparison */}
-      <EfficiencySection data={data} />
-
-      {/* 3. Duration Sweetspot */}
-      <DurationSection data={data} />
-
-      {/* 4. Schedule Optimizer */}
-      <ScheduleSection data={data} />
-
-      {/* 5. Title Coach */}
-      <TitleSection data={data} />
-
-      {/* 6. Tag Optimization */}
-      <TagSection data={data} />
-
-      {/* 7. Retention Curves */}
-      <RetentionSection data={data} />
-
-      {/* 8. Cross-Community */}
-      <CommunitySection data={data} />
-
-      {/* 9. Double-Stream Warning (conditional) */}
-      {data.doubleStreamDetection?.detected && (
-        <DoubleStreamSection data={data} />
-      )}
-
-
-
-      {/* 11. Raid-Netzwerk */}
-      <RaidNetworkSection data={data} />
-
-      {/* 12. Peer-Vergleich */}
-      <PeerComparisonSection data={data} />
-
-      {/* 13. Konkurrenz-Dichte */}
-      <CompetitionDensitySection data={data} />
-
-      {/* 14. More Recommendations (Medium + Low) */}
-      {otherRecs.length > 0 && (
-        <motion.div
-          initial={{ opacity: 0, y: 20 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ delay: 0.5 }}
-        >
-          <div className="flex items-center gap-3 mb-4">
-            <Target className="w-6 h-6 text-primary" />
-            <h2 className="text-xl font-bold text-white">Weitere Empfehlungen</h2>
-          </div>
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-            {otherRecs.map((rec, i) => (
-              <RecommendationCard key={i} rec={rec} index={i} />
-            ))}
-          </div>
-        </motion.div>
-      )}
-    </div>
-  );
-}
-
 
 // ---------------------------------------------------------------------------
 // Recommendation Card
 // ---------------------------------------------------------------------------
 
-function RecommendationCard({ rec, index }: { rec: CoachingRecommendation; index: number }) {
+export function RecommendationCard({ rec, index }: { rec: CoachingRecommendation; index: number }) {
   const styles = PRIORITY_STYLES[rec.priority] || PRIORITY_STYLES.low;
   const Icon = getRecommendationIcon(rec.icon);
 
@@ -193,7 +74,7 @@ function RecommendationCard({ rec, index }: { rec: CoachingRecommendation; index
 // 2. Efficiency Section
 // ---------------------------------------------------------------------------
 
-function EfficiencySection({ data }: { data: CoachingData }) {
+export function EfficiencySection({ data }: { data: CoachingData }) {
   const eff = data.efficiency;
   if (!eff) return null;
 
@@ -346,7 +227,7 @@ function EfficiencySection({ data }: { data: CoachingData }) {
 // 3. Duration Section
 // ---------------------------------------------------------------------------
 
-function DurationSection({ data }: { data: CoachingData }) {
+export function DurationSection({ data }: { data: CoachingData }) {
   const dur = data.durationAnalysis;
   if (!dur || !dur.buckets.length) return null;
 
@@ -415,7 +296,7 @@ function DurationSection({ data }: { data: CoachingData }) {
 // 4. Schedule Section (Opportunity Heatmap)
 // ---------------------------------------------------------------------------
 
-function ScheduleSection({ data }: { data: CoachingData }) {
+export function ScheduleSection({ data }: { data: CoachingData }) {
   const sched = data.scheduleOptimizer;
 
   // Build 7x24 grid
@@ -544,7 +425,7 @@ function ScheduleSection({ data }: { data: CoachingData }) {
 // 5. Title Coach
 // ---------------------------------------------------------------------------
 
-function TitleSection({ data }: { data: CoachingData }) {
+export function TitleSection({ data }: { data: CoachingData }) {
   const titles = data.titleAnalysis;
   if (!titles) return null;
 
@@ -647,7 +528,7 @@ function TitleSection({ data }: { data: CoachingData }) {
 // 6. Tag Optimization
 // ---------------------------------------------------------------------------
 
-function TagSection({ data }: { data: CoachingData }) {
+export function TagSection({ data }: { data: CoachingData }) {
   const tags = data.tagOptimization;
   if (!tags) return null;
 
@@ -731,7 +612,7 @@ function TagSection({ data }: { data: CoachingData }) {
 // 7. Retention Curves
 // ---------------------------------------------------------------------------
 
-function RetentionSection({ data }: { data: CoachingData }) {
+export function RetentionSection({ data }: { data: CoachingData }) {
   const ret = data.retentionCoaching;
 
   const chartData = useMemo(() => {
@@ -815,7 +696,7 @@ function RetentionSection({ data }: { data: CoachingData }) {
 // 8. Cross-Community
 // ---------------------------------------------------------------------------
 
-function CommunitySection({ data }: { data: CoachingData }) {
+export function CommunitySection({ data }: { data: CoachingData }) {
   const comm = data.crossCommunity;
   if (!comm || comm.totalUniqueChatters === 0) return null;
 
@@ -882,7 +763,7 @@ function CommunitySection({ data }: { data: CoachingData }) {
 // 9. Double-Stream Warning
 // ---------------------------------------------------------------------------
 
-function DoubleStreamSection({ data }: { data: CoachingData }) {
+export function DoubleStreamSection({ data }: { data: CoachingData }) {
   const ds = data.doubleStreamDetection;
   if (!ds || !ds.detected) return null;
 
@@ -935,7 +816,7 @@ function DoubleStreamSection({ data }: { data: CoachingData }) {
 // 11. Raid-Netzwerk
 // ---------------------------------------------------------------------------
 
-function RaidNetworkSection({ data }: { data: CoachingData }) {
+export function RaidNetworkSection({ data }: { data: CoachingData }) {
   const raids = data.raidNetwork;
   if (!raids || raids.totalPartners === 0) return null;
 
@@ -1053,7 +934,7 @@ const METRIC_LABELS: Record<string, string> = {
   sessions: 'Sessions',
 };
 
-function PeerComparisonSection({ data }: { data: CoachingData }) {
+export function PeerComparisonSection({ data }: { data: CoachingData }) {
   const pc = data.peerComparison;
   if (!pc || !pc.ownData) return null;
   const percentile = Math.round((pc.ownRank / Math.max(pc.totalStreamers, 1)) * 100);
@@ -1172,7 +1053,7 @@ function PeerComparisonSection({ data }: { data: CoachingData }) {
 // 13. Konkurrenz-Dichte
 // ---------------------------------------------------------------------------
 
-function CompetitionDensitySection({ data }: { data: CoachingData }) {
+export function CompetitionDensitySection({ data }: { data: CoachingData }) {
   const comp = data.competitionDensity;
   if (!comp || !comp.hourly.length) return null;
 

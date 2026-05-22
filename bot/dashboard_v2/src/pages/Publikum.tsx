@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { SubTabs, type SubTabDef } from '@/components/layout/SubTabs';
 import { Audience } from '@/pages/Audience';
 import { Viewers } from '@/pages/Viewers';
-import { ChatAnalytics } from '@/pages/ChatAnalytics';
+import { ChatAktivitaet, ChatTiefe, ChatTreue } from '@/pages/chatSubPages';
 import type { TimeRange } from '@/types/analytics';
 
 interface PublikumProps {
@@ -12,7 +12,7 @@ interface PublikumProps {
 }
 
 export function Publikum({ streamer, days, initialSub }: PublikumProps) {
-  const [sub, setSub] = useState(initialSub ?? 'ueberblick');
+  const [sub, setSub] = useState(initialSub === 'chat' ? 'chat-treue' : (initialSub ?? 'ueberblick'));
   const tabs: SubTabDef[] = [
     {
       id: 'ueberblick',
@@ -26,9 +26,19 @@ export function Publikum({ streamer, days, initialSub }: PublikumProps) {
       render: () => <Viewers streamer={streamer} days={days} />,
     },
     {
-      id: 'chat',
-      label: 'Chat',
-      render: () => <ChatAnalytics streamer={streamer ?? ''} days={days} />,
+      id: 'chat-treue',
+      label: 'Chat-Treue',
+      render: () => <ChatTreue streamer={streamer ?? ''} days={days} />,
+    },
+    {
+      id: 'chat-aktivitaet',
+      label: 'Chat-Aktivitaet',
+      render: () => <ChatAktivitaet streamer={streamer ?? ''} days={days} />,
+    },
+    {
+      id: 'chat-tiefe',
+      label: 'Chat-Tiefe',
+      render: () => <ChatTiefe streamer={streamer ?? ''} days={days} />,
     },
   ];
   return <SubTabs tabs={tabs} active={sub} onChange={setSub} />;
