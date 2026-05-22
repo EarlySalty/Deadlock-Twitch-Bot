@@ -4,12 +4,12 @@ version = "0.1.0"
 requires-python = ">=3.11"
 dependencies = [
     "aiohttp>=3.13.5",
-    "anthropic>=0.103.1",
+    "anthropic>=0.104.0",
     "cryptography>=48.0.0",
     "discord.py>=2.7.1",
     "fpdf2>=2.8.7",
     "keyring>=25.7.0",
-    "openai>=2.37.0",
+    "openai>=2.38.0",
     "psycopg[binary]>=3.3.4",
     "stripe>=15.1.0",
 ]
