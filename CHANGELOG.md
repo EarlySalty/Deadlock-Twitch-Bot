@@ -1,3 +1,8 @@
+## #50 — Streamer-Dashboard und Clip-Workflow zentral dokumentiert
+
+- Tarife (Free, Raid Boost, Werbefrei, Analyse Dashboard, Bundles), Free-vs-Paid-Cutoffs, Testphase und Kündigung sind jetzt klar erklärt
+- Auch der Clip-Workflow (Approval, Upload, Retention) und das Affiliate-Portal sind dokumentiert — Streamer- und Viewer-Fragen dazu werden vom FAQ-Bot im Discord direkt beantwortet
+
 ## #49 — KI-Analyse besser auffindbar im "Was tun?"-Bereich
 
 - Die KI-Analyse ist jetzt ein eigener Reiter neben "Pro Session" und "Empfehlungen" — vorher lag sie ganz unten am Seitenende und war kaum zu finden
