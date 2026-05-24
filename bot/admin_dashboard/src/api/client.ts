@@ -12,6 +12,7 @@ import type {
   ConfigOverview,
   DatabaseStatsResponse,
   DiscordFlagMode,
+  EngagementSettings,
   ErrorLogsResponse,
   EventSubStatusResponse,
   GutschriftDocument,
@@ -33,6 +34,7 @@ import type {
 import { coerceArray, coerceRecord } from '@/utils/formatters';
 
 const ADMIN_API_BASE = '/twitch/api/admin';
+const ENGAGEMENT_API_BASE = '/twitch/api/v2/engagement';
 const AUTH_STATUS_URL = '/twitch/api/v2/auth-status';
 const INTERNAL_HOME_URL = '/twitch/api/v2/internal-home';
 const LEGACY_CSRF_PAGE = '/twitch/admin/announcements';
@@ -1030,4 +1032,39 @@ export function sendPartnerChatAction(payload: PartnerChatActionPayload) {
     color: payload.color || 'purple',
     message: payload.message,
   });
+}
+
+export async function fetchEngagementSettings(login: string): Promise<EngagementSettings | null> {
+  const payload = await request<Record<string, unknown>>(
+    `${ENGAGEMENT_API_BASE}/settings?channel=${encodeURIComponent(login)}`,
+  );
+  const record = coerceRecord(payload);
+  const list = Array.isArray(record.settings)
+    ? (record.settings as unknown[])
+    : Array.isArray(payload)
+      ? (payload as unknown[])
+      : [];
+  const first = list[0];
+  if (!first) return null;
+  const row = coerceRecord(first);
+  return {
+    channelLogin: readString(row, 'channelLogin', 'channel_login'),
+    enabled: readBoolean(row, 'enabled') ?? false,
+    enabledAt: readString(row, 'enabledAt', 'enabled_at') || null,
+    enabledBy: readString(row, 'enabledBy', 'enabled_by') || null,
+    updatedAt: readString(row, 'updatedAt', 'updated_at') || null,
+  };
+}
+
+export async function toggleEngagement(login: string, enabled: boolean): Promise<AdminActionResult> {
+  try {
+    await postJson<Record<string, unknown>>(`${ENGAGEMENT_API_BASE}/toggle`, {
+      channelLogin: login,
+      enabled,
+    });
+    return { ok: true, message: `AI-Engagement ${enabled ? 'aktiviert' : 'deaktiviert'}.` };
+  } catch (error) {
+    const message = error instanceof ApiError ? error.message : 'Toggle fehlgeschlagen.';
+    return { ok: false, message };
+  }
 }

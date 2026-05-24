@@ -379,3 +379,11 @@ export interface AdminActionResult {
   message: string;
   redirectUrl?: string;
 }
+
+export interface EngagementSettings {
+  channelLogin: string;
+  enabled: boolean;
+  enabledAt?: string | null;
+  enabledBy?: string | null;
+  updatedAt?: string | null;
+}

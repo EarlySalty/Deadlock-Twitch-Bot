@@ -23,6 +23,8 @@ import {
   sendPartnerChatAction,
   fetchSubscriptions,
   fetchSystemHealth,
+  fetchEngagementSettings,
+  toggleEngagement,
   removeStreamer,
   toggleStreamerDiscordFlag,
   toggleAffiliateActive,
@@ -348,6 +350,28 @@ export function useChatConfigMutation() {
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ['admin-config-overview'] });
       void queryClient.invalidateQueries({ queryKey: ['admin-streamer-detail'] });
+    },
+  });
+}
+
+export function useEngagementSettings(login: string | undefined) {
+  return useQuery({
+    queryKey: ['admin-engagement-settings', login],
+    queryFn: () => fetchEngagementSettings(login!),
+    enabled: Boolean(login),
+    staleTime: 30_000,
+  });
+}
+
+export function useEngagementToggle() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ login, enabled }: { login: string; enabled: boolean }) =>
+      toggleEngagement(login, enabled),
+    onSuccess: (_result, variables) => {
+      void queryClient.invalidateQueries({
+        queryKey: ['admin-engagement-settings', variables.login],
+      });
     },
   });
 }

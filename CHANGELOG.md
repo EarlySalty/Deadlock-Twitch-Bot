@@ -1,3 +1,9 @@
+## #51 — AI-Engagement pro Kanal im Admin-Dashboard steuerbar
+
+- Im Streamer-Detail des Admin-Dashboards gibt es jetzt einen Toggle für den AI-Engagement-Chatter
+- Der Schalter zeigt den aktuellen Status (Aktiv/Inaktiv) und wer ihn zuletzt geändert hat
+- Änderungen greifen sofort — kein Reload nötig
+
 ## #50 — Streamer-Dashboard und Clip-Workflow zentral dokumentiert
 
 - Tarife (Free, Raid Boost, Werbefrei, Analyse Dashboard, Bundles), Free-vs-Paid-Cutoffs, Testphase und Kündigung sind jetzt klar erklärt

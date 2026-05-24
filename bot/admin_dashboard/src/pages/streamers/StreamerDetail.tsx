@@ -11,6 +11,8 @@ import {
   useArchiveStreamer,
   useBlockStreamer,
   useClearManualPlanOverride,
+  useEngagementSettings,
+  useEngagementToggle,
   useManualPlanOverride,
   usePartnerChatAction,
   useRemoveStreamer,
@@ -123,6 +125,8 @@ export function StreamerDetailPage() {
   const manualPlanMutation = useManualPlanOverride();
   const clearManualPlanMutation = useClearManualPlanOverride();
   const partnerChatMutation = usePartnerChatAction();
+  const engagementQuery = useEngagementSettings(login);
+  const engagementToggle = useEngagementToggle();
 
   const [verifyMode, setVerifyMode] = useState<LegacyVerifyMode>('permanent');
   const [discordUserId, setDiscordUserId] = useState('');
@@ -516,6 +520,42 @@ export function StreamerDetailPage() {
           </div>
         </article>
       </section>
+
+      <article className="panel-card rounded-[1.8rem] p-6">
+        <p className="text-xs font-semibold uppercase tracking-[0.2em] text-text-secondary">AI-Engagement (Chatter)</p>
+        <div className="mt-4 flex items-center justify-between gap-4">
+          <div>
+            <p className="text-sm text-white">AI-Stammgast im Chat</p>
+            <p className="mt-1 text-xs text-text-secondary">
+              {engagementQuery.isLoading
+                ? 'Wird geladen …'
+                : engagementQuery.data
+                  ? `${engagementQuery.data.enabled ? 'Aktiv' : 'Inaktiv'}${engagementQuery.data.enabledBy ? ` · zuletzt von ${engagementQuery.data.enabledBy}` : ''}`
+                  : 'Noch nicht konfiguriert — Standard: inaktiv'}
+            </p>
+          </div>
+          <button
+            className={`relative inline-flex h-7 w-12 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 focus:outline-none ${
+              engagementQuery.data?.enabled ? 'bg-emerald-500' : 'bg-white/20'
+            } ${engagementToggle.isPending ? 'opacity-50 cursor-not-allowed' : ''}`}
+            disabled={engagementToggle.isPending}
+            role="switch"
+            aria-checked={engagementQuery.data?.enabled ?? false}
+            onClick={async () => {
+              if (!login) return;
+              const next = !(engagementQuery.data?.enabled ?? false);
+              const result = await engagementToggle.mutateAsync({ login, enabled: next });
+              setToast({ open: true, tone: result.ok ? 'success' : 'error', message: result.message });
+            }}
+          >
+            <span
+              className={`inline-block h-6 w-6 transform rounded-full bg-white shadow transition duration-200 ${
+                engagementQuery.data?.enabled ? 'translate-x-5' : 'translate-x-0'
+              }`}
+            />
+          </button>
+        </div>
+      </article>
 
       <section className="grid gap-5 xl:grid-cols-[1.2fr_0.8fr]">
         <article className="panel-card rounded-[1.8rem] p-6">
