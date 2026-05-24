@@ -27,6 +27,7 @@ from ..core.constants import TWITCH_NOTIFY_CHANNEL_ID, TWITCH_TARGET_GAME_NAME
 from ..logging_setup import ensure_twitch_logger_file_handler, log_path
 from ..storage import insert_observability_event, readonly_connection, transaction
 from .commands import RaidCommandsMixin
+from .engagement_commands import EngagementCommandsMixin
 from .connection import ConnectionMixin
 from .constants import (
     CHAT_JOIN_OFFLINE,
@@ -98,6 +99,7 @@ if TWITCHIO_AVAILABLE:
         PromoMixin,
         ConnectionMixin,
         RaidCommandsMixin,
+        EngagementCommandsMixin,
         TwitchPartnerVoiceReactionMixin,
         twitchio_commands.Bot,
     ):
@@ -1509,6 +1511,33 @@ if TWITCHIO_AVAILABLE:
                 await self._track_chat_health(message)
             except Exception:
                 log.exception("Chat-Health-Tracking fehlgeschlagen")
+
+            try:
+                from bot.engagement import IncomingMessage as _EngagementIncoming
+                from bot.engagement import get_pipeline as _engagement_get_pipeline
+
+                _eng_author = getattr(message, "author", None)
+                _eng_user_id = getattr(_eng_author, "id", None) if _eng_author else None
+                if channel_login and _eng_user_id:
+                    _eng_msg_id = getattr(message, "id", None)
+                    _eng_result = await _engagement_get_pipeline().handle(
+                        _EngagementIncoming(
+                            channel_login=channel_login,
+                            twitch_user_id=str(_eng_user_id),
+                            twitch_login=str(getattr(_eng_author, "name", "") or ""),
+                            content=str(getattr(message, "content", "") or ""),
+                            message_id=str(_eng_msg_id) if _eng_msg_id else None,
+                        )
+                    )
+                    if _eng_result.response_text:
+                        _eng_channel = getattr(message, "channel", None)
+                        if _eng_channel is not None:
+                            try:
+                                await _eng_channel.send(_eng_result.response_text)
+                            except Exception:
+                                log.exception("Engagement: Chat-Send fehlgeschlagen")
+            except Exception:
+                log.exception("Engagement-Pipeline fehlgeschlagen")
 
             sent_invite = False
             if is_deadlock_live:

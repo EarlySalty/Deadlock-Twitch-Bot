@@ -1821,6 +1821,17 @@ class _EventSubMixin:
             return
         trigger_ts = time.monotonic()
         login_lower = self._resolve_eventsub_broadcaster_login(broadcaster_id, broadcaster_login)
+        # Engagement-Layer: bei Stream-Offline automatisch deaktivieren,
+        # damit "Bot mischt sich im Stream-Chat ein" wirklich an Stream-Leben gekoppelt ist.
+        if login_lower:
+            try:
+                from bot.engagement.auto_off import auto_disable_on_offline as _eng_auto_off
+
+                _eng_changed = await _eng_auto_off(login_lower)
+                if _eng_changed:
+                    log.info("Engagement: auto-disabled for %s (stream offline)", login_lower)
+            except Exception:
+                log.exception("Engagement: auto-off bei stream.offline fehlgeschlagen")
         # Fallback-Dedupe-Guard zurücksetzen, damit beim nächsten Streamstart erneut erinnert werden kann.
         try:
             fallback_guard = getattr(self, "_reauth_reminder_last_sent_ts", None)

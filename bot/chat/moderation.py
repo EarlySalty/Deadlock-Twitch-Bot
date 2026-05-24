@@ -3,6 +3,7 @@ import json
 import logging
 import re
 import time
+import unicodedata
 from datetime import UTC, datetime, timedelta
 
 from ..core.chat_bots import is_known_chat_bot
@@ -28,6 +29,13 @@ _OUTBOUND_CHAT_CHANNEL_SETTINGS_SUPPRESSION_SEC = {
     "recruitment": 7 * 24 * 3600,
     "partner_raid": 3 * 24 * 3600,
 }
+_SPAM_HOMOGLYPH_TRANSLATION = str.maketrans(
+    {
+        "ᴄ": "c",
+        "ᴏ": "o",
+        "ᴍ": "m",
+    }
+)
 
 
 class ModerationMixin:
@@ -430,7 +438,7 @@ class ModerationMixin:
             return 0, []
 
         reasons = []
-        raw = content.strip()
+        raw = self._normalize_spam_text(content)
         hits = 0
 
         # Spam-Phrasen haben Priorität (zuverlässiger als Fragmente).
@@ -476,6 +484,11 @@ class ModerationMixin:
             reasons.append("Muster: viewer + name")
 
         return hits, reasons
+
+    @staticmethod
+    def _normalize_spam_text(content: str) -> str:
+        text = unicodedata.normalize("NFKC", str(content or ""))
+        return text.translate(_SPAM_HOMOGLYPH_TRANSLATION).strip()
 
     def _looks_like_deadlock_access_question(self, content: str) -> bool:
         if not content:

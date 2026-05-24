@@ -1,6 +1,7 @@
 import unittest
 from unittest.mock import AsyncMock, patch
 
+from bot.chat.constants import SPAM_MIN_MATCHES
 from bot.chat.moderation import ModerationMixin
 
 
@@ -131,6 +132,16 @@ class _DummyMessage:
 
 
 class ChatMessageBlacklistTests(unittest.IsolatedAsyncioTestCase):
+    def test_spam_score_matches_obfuscated_ai_viewers_streamboo_message(self) -> None:
+        handler = _DummyModerationChat()
+
+        score, reasons = handler._calculate_spam_score(
+            "Ai Viewe𝗿𝘀 𝗌𝗍𝗋ea𝗆𝖻𝗈𝗈 . ᴄᴏᴍ"
+        )
+
+        self.assertGreaterEqual(score, SPAM_MIN_MATCHES)
+        self.assertTrue(any("Ai viewers streamboo" in reason for reason in reasons))
+
     async def test_opted_out_streamer_skips_announcement_without_fallback(self) -> None:
         handler = _DummyModerationChat()
         channel = _DummyChannel("jekoz42", "22482316")

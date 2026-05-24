@@ -139,6 +139,17 @@ class _AnalyticsOverviewMixin:
         router.add_get("/social-media-admin/{path:.*}", self._serve_dashboard_v2_assets)
         router.add_get("/twitch/verwaltung", self._serve_verwaltung)
         router.add_get("/twitch/pricing", self._serve_pricing)
+        # AI-Engagement Verwaltung (JSON-API für React-Dashboard)
+        try:
+            from bot.engagement.dashboard_api import register_engagement_v2_routes
+
+            register_engagement_v2_routes(router, self)
+        except Exception:
+            import logging as _logging
+
+            _logging.getLogger("TwitchStreams.Engagement.DashboardAPI").exception(
+                "Engagement v2 routes konnten nicht registriert werden"
+            )
         router.add_get("/twitch/affiliate/portal", self._serve_affiliate_portal)
         router.add_get(PUBLIC_WEBSITE_BASE_PATH, self._redirect_public_website_root)
         router.add_get(f"{PUBLIC_WEBSITE_BASE_PATH}/{{path:.*}}", self._serve_website_dist_asset)

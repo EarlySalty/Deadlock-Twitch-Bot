@@ -1,3 +1,9 @@
+## FAQ-Bot Doku Initiative · Twitch-Bot User + Internal
+
+- 2026-05-23: Aufgabe aufgenommen. Billing-, Auth-, Raid-, Affiliate-, Admin- und Social-Media-Module sowie bestehende Streamer-/Ops-Doku und die FAQ-Bot-Referenzplanung geprueft.
+- 2026-05-23: Neue User-Doku in `../Deadlock-Bots/docs/` fuer Dashboard sowie Clips/Social erstellt; lokale Internal-Doku unter `docs/internal/` fuer Admin-Panel, Stripe-Webhooks, Social-Media-Pipeline, Ops-Runbooks und Analytics angelegt. `docs/README.md` auf Pointer-README umgestellt.
+- 2026-05-23: Inhaltlich verifiziert gegen `bot/dashboard/billing/billing_plans.py`, `bot/dashboard/billing/billing_mixin.py`, `bot/dashboard/routes_entry.py` und `bot/social_media/*`; Preis-/Trial-Widersprueche als Auffaelligkeiten notiert.
+
 ## Coaching-Tab aufteilen
 
 - 2026-05-21: Aufgabe aufgenommen. `Coaching.tsx`, `WasTun.tsx` und bestehende `pages/Coaching`-Importe geprüft; `Coaching` wurde nur in `WasTun.tsx` genutzt.

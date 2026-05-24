@@ -45,6 +45,8 @@ SPAM_PHRASES = (
     "B̟est viewers",
     "Cheap Viewers",
     "Ch͟eap viewers",
+    "Ai viewers streamboo . com",
+    "Ai viewers streamboo .com",
     "(remove the space)",
     "Cool overlay \N{THUMBS UP SIGN} Honestly, it\N{RIGHT SINGLE QUOTATION MARK}s so hard to get found on the directory lately. I have small tips on beating the algorithm. Mind if I send you an share?",
     "Mind if I send you an share",

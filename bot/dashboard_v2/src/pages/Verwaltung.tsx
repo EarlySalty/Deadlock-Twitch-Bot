@@ -3,6 +3,7 @@ import { useQuery } from '@tanstack/react-query';
 import { fetchInternalHome } from '@/api/home';
 import { useAuthStatus } from '@/hooks/useAnalytics';
 import { PREVIEW_HOME_ROUTE, isPreviewModeEnabled } from '@/preview/routes';
+import { AIEngagementSection } from '@/components/verwaltung/AIEngagementSection';
 import {
   ArrowLeft,
   ArrowRight,
@@ -324,6 +325,8 @@ export function VerwaltungPage() {
             Profiländerungen direkt auf Twitch vornehmen. Daten werden beim nächsten Login synchronisiert.
           </div>
         </motion.section>
+
+        <AIEngagementSection />
 
       </div>
     </div>
