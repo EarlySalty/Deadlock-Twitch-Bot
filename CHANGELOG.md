@@ -1,3 +1,9 @@
+## #53 — Spam-Filter präziser und resistenter gegen Unicode-Tricks
+
+- Spam-Schreibweisen mit verschlüsselten Buchstaben (z. B. `sᴛʀᴇᴀᴍbᴏᴏ`, `𝗩𝗶𝗲𝘄𝗲𝗿𝘀`) werden jetzt korrekt erkannt und gebannt
+- Die KI-Überprüfung startet nur noch bei echten Spam-Signalen (Phrase, Fragment oder Spam-Domain) — harmlose Viewer-Erwähnungen werden nicht mehr unnötig geprüft
+- Von der KI bestätigte Muster fließen sofort als vollwertige Filter-Bedingung in die Spam-Bewertung ein — gleicher Score-Mechanismus wie für manuell gepflegte Einträge
+
 ## #52 — Auto-Ban lernt jetzt selbst neue Spam-Muster dazu
 
 - Nachrichten die verdächtig wirken aber noch nicht gebannt werden, prüft MiniMax M2.7 automatisch im Hintergrund

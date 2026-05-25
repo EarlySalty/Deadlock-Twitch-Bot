@@ -23,6 +23,14 @@ log = logging.getLogger("TwitchStreams.SpamAI")
 _REVIEW_COOLDOWN: dict[tuple[str, str], float] = {}
 _REVIEW_COOLDOWN_SEC = 300.0
 
+# Domain-Pattern: erkenne Viewer-Service-Adressen in verdächtigen Nachrichten.
+# Nur .ru/.online/.xyz/.site — die TLDs die in den Logs ausschließlich für Spam genutzt werden.
+_SPAM_DOMAIN_RE = re.compile(
+    r"\b\S+\.(?:ru|online|xyz|site)\b"         # Spam-typische TLDs
+    r"|(?:\bstreamboo\b|\bsmmbest\b|\bsmmhype\b|\bsmmtop\b|\bprmxy\b|\bprmup\b)",
+    re.IGNORECASE,
+)
+
 # Pattern-Cache (aus DB, TTL=2min)
 _PATTERN_CACHE: list[tuple[str, str]] | None = None
 _PATTERN_CACHE_TS: float = 0.0
@@ -183,14 +191,39 @@ async def _save_pattern(
         log.debug("Spam-AI: Muster konnte nicht gespeichert werden", exc_info=True)
 
 
+def _review_worthwhile(content: str, spam_reasons: list[str]) -> bool:
+    """
+    Prüft ob ein AI-Review sinnvoll ist.
+    Gibt False zurück wenn der Verdacht ausschließlich auf dem sehr breiten
+    'viewer + name'-Muster beruht und kein Domain-Signal vorliegt.
+    """
+    reasons = set(spam_reasons)
+    # Phrase/Fragment/Learned-Treffer → immer prüfen
+    if any(
+        r.startswith("Phrase(") or r.startswith("Fragment(") or r.startswith("Learned-")
+        for r in reasons
+    ):
+        return True
+    # @unknown mention → prüfen
+    if any("mention" in r for r in reasons):
+        return True
+    # viewer + name → nur wenn gleichzeitig Spam-Domain erkennbar
+    if "Muster: viewer + name" in reasons:
+        return bool(_SPAM_DOMAIN_RE.search(content or ""))
+    return False
+
+
 async def run_spam_ai_review(
     *,
     content: str,
     channel: str,
     chatter_login: str,
     spam_score: int,
+    spam_reasons: list[str],
 ) -> None:
     """Fire-and-forget Entrypoint. Als asyncio.create_task() aufrufen."""
+    if not _review_worthwhile(content, spam_reasons):
+        return
     if not _should_review_now(channel, chatter_login):
         return
 

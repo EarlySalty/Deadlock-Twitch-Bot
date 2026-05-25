@@ -29,13 +29,45 @@ _OUTBOUND_CHAT_CHANNEL_SETTINGS_SUPPRESSION_SEC = {
     "recruitment": 7 * 24 * 3600,
     "partner_raid": 3 * 24 * 3600,
 }
-_SPAM_HOMOGLYPH_TRANSLATION = str.maketrans(
-    {
-        "ᴄ": "c",
-        "ᴏ": "o",
-        "ᴍ": "m",
-    }
-)
+def _build_homoglyph_table() -> dict:
+    table: dict[int, int] = {}
+
+    # Bekannte Small Capitals (ᴀ ʙ ᴄ ᴅ ᴇ ꜰ ɢ ʜ ɪ ᴊ ᴋ ʟ ᴍ ɴ ᴏ ᴘ ʀ ꜱ ᴛ ᴜ ᴠ ᴡ ʏ ᴢ)
+    for src, dst in (
+        ("ᴀ", "a"), ("ʙ", "b"), ("ᴄ", "c"), ("ᴅ", "d"),
+        ("ᴇ", "e"), ("ꜰ", "f"), ("ɢ", "g"), ("ʜ", "h"),
+        ("ɪ", "i"), ("ᴊ", "j"), ("ᴋ", "k"), ("ʟ", "l"),
+        ("ᴍ", "m"), ("ɴ", "n"), ("ᴏ", "o"), ("ᴘ", "p"),
+        ("ʀ", "r"), ("ꜱ", "s"), ("ᴛ", "t"), ("ᴜ", "u"),
+        ("ᴠ", "v"), ("ᴡ", "w"), ("ʏ", "y"), ("ᴢ", "z"),
+    ):
+        table[ord(src)] = ord(dst)
+
+    # Mathematical Alphanumeric Symbols (U+1D400–U+1D7FF)
+    # Styles: Bold, Italic, Bold Italic, Script, …, Sans-Serif Bold, etc.
+    # Jeder Style hat: A-Z (26) + a-z (26) + manchmal Ziffern 0-9.
+    # Basis-Offsets der A-Z / a-z Blöcke aus dem Unicode-Standard:
+    az_upper_starts = [
+        0x1D400, 0x1D434, 0x1D468, 0x1D49C, 0x1D4D0, 0x1D504, 0x1D538,
+        0x1D56C, 0x1D5A0, 0x1D5D4, 0x1D608, 0x1D63C, 0x1D670, 0x1D6A8,
+        0x1D6E2, 0x1D71C, 0x1D756, 0x1D790,
+    ]
+    az_lower_starts = [
+        0x1D41A, 0x1D44E, 0x1D482, 0x1D4B6, 0x1D4EA, 0x1D51E, 0x1D552,
+        0x1D586, 0x1D5BA, 0x1D5EE, 0x1D622, 0x1D656, 0x1D68A, 0x1D6C2,
+        0x1D6FC, 0x1D736, 0x1D770, 0x1D7AA,
+    ]
+    for base in az_upper_starts:
+        for i in range(26):
+            table[base + i] = ord("A") + i
+    for base in az_lower_starts:
+        for i in range(26):
+            table[base + i] = ord("a") + i
+
+    return table
+
+
+_SPAM_HOMOGLYPH_TRANSLATION = str.maketrans(_build_homoglyph_table())
 
 
 class ModerationMixin:

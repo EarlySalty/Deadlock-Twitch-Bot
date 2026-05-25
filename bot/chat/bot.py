@@ -1506,6 +1506,7 @@ if TWITCHIO_AVAILABLE:
                                 channel=channel_login,
                                 chatter_login=author_name,
                                 spam_score=spam_score,
+                                spam_reasons=list(spam_reasons),
                             ),
                             name="twitch.spam_ai_review",
                         )
