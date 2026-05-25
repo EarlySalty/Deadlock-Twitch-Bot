@@ -483,6 +483,25 @@ class ModerationMixin:
             hits += 1
             reasons.append("Muster: viewer + name")
 
+        # Gelernte Muster (auto-improving via AI Review)
+        try:
+            from .spam_ai_review import load_learned_patterns
+
+            _learned = load_learned_patterns()
+            for _pat, _ptype in _learned:
+                if _ptype == "phrase" and _pat and _pat in lowered:
+                    hits += 2
+                    reasons.append(f"Learned-Phrase: {_pat}")
+                    break
+            for _pat, _ptype in _learned:
+                if _ptype != "phrase" and _pat:
+                    if re.search(r"\b" + re.escape(_pat) + r"\b", lowered):
+                        hits += 1
+                        reasons.append(f"Learned-Fragment: {_pat}")
+                        break
+        except Exception:
+            pass
+
         return hits, reasons
 
     @staticmethod

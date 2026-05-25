@@ -1,3 +1,10 @@
+## #52 — Auto-Ban lernt jetzt selbst neue Spam-Muster dazu
+
+- Nachrichten die verdächtig wirken aber noch nicht gebannt werden, prüft MiniMax M2.7 automatisch im Hintergrund
+- Wird Spam bestätigt, merkt sich der Bot das Kernmuster (Domain, Phrase, Keyword) dauerhaft in der Datenbank
+- Zukünftige Nachrichten mit demselben Muster werden direkt erkannt und gebannt — kein manuelles Nachtragen mehr nötig
+- Auch Score-0-Nachrichten mit URLs oder Viewer-Keywords werden geprüft (wie der Miracle-Ghost-Fall)
+
 ## #51 — AI-Engagement pro Kanal im Admin-Dashboard steuerbar
 
 - Im Streamer-Detail des Admin-Dashboards gibt es jetzt einen Toggle für den AI-Engagement-Chatter
