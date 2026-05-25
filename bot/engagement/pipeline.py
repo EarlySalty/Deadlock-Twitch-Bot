@@ -39,6 +39,7 @@ from .lurker_signal import known_regulars_currently_lurking, lurker_hint_to_prom
 from .match_context import get_match_state
 from .persona import sample_tone
 from .rhythm import RhythmGuard
+from .stream_transcripts import load_recent_segments, segments_to_prompt_fragment
 from .threads import load_open_threads_for_user, mark_referenced, threads_to_prompt_fragment
 
 log = logging.getLogger("TwitchStreams.Engagement.Pipeline")
@@ -286,6 +287,14 @@ class EngagementPipeline:
                     system_prompt = f"{system_prompt}\n\n{match_fragment}"
         except Exception:
             log.exception("Engagement: match-context fehlgeschlagen")
+
+        try:
+            transcript_segments = await load_recent_segments(msg.channel_login)
+            transcript_fragment = segments_to_prompt_fragment(transcript_segments)
+            if transcript_fragment:
+                system_prompt = f"{system_prompt}\n\n{transcript_fragment}"
+        except Exception:
+            log.exception("Engagement: stream-transcript-context fehlgeschlagen")
 
         if settings.persona_override:
             system_prompt = (

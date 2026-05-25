@@ -96,8 +96,12 @@ async def legacy_admin_redirect(server: Any, request: web.Request) -> web.Stream
 
 
 async def legacy_admin(server: Any, request: web.Request) -> web.StreamResponse:
-    """Serve the legacy admin surface."""
-    return await DashboardLiveMixin.index(server, request)
+    """Redirect deprecated /twitch/admin/legacy to the canonical /twitch/admin."""
+    destination = "/twitch/admin"
+    if request.query_string:
+        destination = f"{destination}?{request.query_string}"
+    safe_destination = server._safe_internal_redirect(destination, fallback="/twitch/admin")
+    raise web.HTTPFound(safe_destination)
 
 
 async def admin_dashboard_redirect(server: Any, request: web.Request) -> web.StreamResponse:
@@ -155,7 +159,6 @@ async def stats_entry(
             raise response
         return response
 
-    legacy_url = server._resolve_legacy_stats_url()
     beta_url = "/analyse"
     logout_url = (
         server._discord_admin_logout_url()
@@ -196,7 +199,6 @@ async def stats_entry(
     page_html = build_stats_entry_page(
         twitch_login=twitch_login,
         logout_url=logout_url,
-        legacy_url=legacy_url,
         beta_url=beta_url,
         scope_panel=scope_panel,
     )

@@ -51,6 +51,16 @@ class DeadlockInviteDetectionTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertFalse(harness._looks_like_deadlock_access_question("Wie spielt man Lash?"))
 
+    def test_toxic_gameplay_complaint_is_ignored(self) -> None:
+        harness = _InviteHarness()
+
+        self.assertFalse(
+            harness._looks_like_deadlock_access_question(
+                "Suelze, wie kann man in Deadlock eigentlich so bodenlos schlecht sein? "
+                "Deinstallier das Spiel lieber."
+            )
+        )
+
     def test_can_one_join_is_detected(self) -> None:
         harness = _InviteHarness()
 

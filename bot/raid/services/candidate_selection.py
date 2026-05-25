@@ -17,6 +17,7 @@ except Exception:  # pragma: no cover - optional fallback import
 
 
 log = logging.getLogger(__name__)
+DAILY_RAID_SOFT_CAP = 2
 
 Candidate = dict[str, Any]
 ScoreMap = dict[str, dict[str, object]]
@@ -281,14 +282,32 @@ class CandidateSelectionService:
             started_at = str(candidate.get("started_at") or "9999-99-99")
             return (viewers, followers, started_at)
 
-        best_final_score = max(_score(candidate) for candidate in scored_candidates)
-        close_candidates = [
+        eligible_under_daily_cap = [
             candidate
             for candidate in scored_candidates
+            if _today_received(candidate) < DAILY_RAID_SOFT_CAP
+        ]
+        selection_pool = eligible_under_daily_cap or scored_candidates
+        daily_cap_filtered = len(scored_candidates) - len(selection_pool)
+        if daily_cap_filtered:
+            self.logger.info(
+                "Partner raid target selection limited to candidates below daily soft cap "
+                "(cap=%d, filtered=%d, available=%d)",
+                DAILY_RAID_SOFT_CAP,
+                daily_cap_filtered,
+                len(selection_pool),
+            )
+
+        best_final_score = max(_score(candidate) for candidate in selection_pool)
+        close_candidates = [
+            candidate
+            for candidate in selection_pool
             if abs(best_final_score - _score(candidate)) <= self.partner_score_threshold
         ]
 
         selection_reason = "highest_final_score"
+        if daily_cap_filtered:
+            selection_reason = "daily_raid_soft_cap"
         selected: Candidate
         if len(close_candidates) == 1:
             selected = close_candidates[0]
@@ -300,25 +319,37 @@ class CandidateSelectionService:
                 if _today_received(candidate) == lowest_today_received
             ]
             if len(tie_candidates) == 1:
-                selection_reason = "today_received_raids"
+                selection_reason = (
+                    "daily_raid_soft_cap_today_received_raids"
+                    if daily_cap_filtered
+                    else "today_received_raids"
+                )
                 selected = tie_candidates[0]
             else:
                 if callable(self.attach_followers_totals):
                     await self.attach_followers_totals(tie_candidates)
                 tie_candidates.sort(key=_fallback_sort_key)
-                selection_reason = "viewer_count_followers_started_at"
+                selection_reason = (
+                    "daily_raid_soft_cap_viewer_count_followers_started_at"
+                    if daily_cap_filtered
+                    else "viewer_count_followers_started_at"
+                )
                 selected = tie_candidates[0]
 
         selected_score = selected.get("_partner_score") or {}
         self.logger.info(
             "Partner raid target selection (prepared score): %s final=%.3f today=%s "
-            "reason=%s cache_misses=%d stale_not_live=%d from %d candidates",
+            "raid_boost=%.3f new_partner=%.3f reason=%s cache_misses=%d "
+            "stale_not_live=%d daily_cap_filtered=%d from %d candidates",
             selected.get("user_login"),
             _safe_float(selected_score.get("final_score"), 0.0),
             _safe_int(selected_score.get("today_received_raids"), 0),
+            _safe_float(selected_score.get("raid_boost_multiplier"), 1.0),
+            _safe_float(selected_score.get("new_partner_multiplier"), 1.0),
             selection_reason,
             cache_misses,
             stale_not_live,
+            daily_cap_filtered,
             len(candidates),
         )
 

@@ -1,8 +1,10 @@
 import { useState } from 'react';
-import { Coins, Download, FileText, Mail, RefreshCw, TriangleAlert } from 'lucide-react';
+import { Coins, Download, FileText, Mail, RefreshCw, SearchX, TriangleAlert } from 'lucide-react';
 import type { GutschriftDocument } from '@/api/types';
+import { PageHeader } from '@/components/layout/PageHeader';
 import { ConfirmDialog } from '@/components/shared/ConfirmDialog';
 import { DataTable, type TableColumn } from '@/components/shared/DataTable';
+import { EmptyState } from '@/components/shared/EmptyState';
 import { KpiCard } from '@/components/shared/KpiCard';
 import { SearchInput } from '@/components/shared/SearchInput';
 import { StatusBadge } from '@/components/shared/StatusBadge';
@@ -172,15 +174,10 @@ export function Gutschriften() {
   return (
     <>
       <section className="space-y-6">
-        <header className="panel-card rounded-[1.8rem] p-6">
-          <div className="flex flex-col gap-5 lg:flex-row lg:items-end lg:justify-between">
-            <div>
-              <p className="text-xs font-semibold uppercase tracking-[0.28em] text-text-secondary">Billing</p>
-              <h1 className="mt-3 text-3xl font-semibold text-white">Globale Gutschriften-Übersicht</h1>
-              <p className="mt-3 max-w-3xl text-sm leading-6 text-text-secondary">
-                Zentrale Sicht auf generierte, versendete und blockierte Dokumente inklusive PDF-Download.
-              </p>
-            </div>
+        <PageHeader
+          title="Globale Gutschriften-Übersicht"
+          description="Zentrale Sicht auf generierte, versendete und blockierte Dokumente inklusive PDF-Download."
+          primaryAction={
             <div className="flex flex-col gap-3 sm:flex-row">
               <div className="min-w-[18rem] flex-1">
                 <SearchInput
@@ -198,16 +195,16 @@ export function Gutschriften() {
                 Alle generieren
               </button>
             </div>
-          </div>
+          }
+        />
 
-          {documentsQuery.isError ? (
-            <div className="mt-5 rounded-2xl border border-red-400/20 bg-red-500/10 px-4 py-3 text-sm text-red-100">
-              {documentsQuery.error instanceof Error
-                ? documentsQuery.error.message
-                : 'Gutschriften konnten nicht geladen werden.'}
-            </div>
-          ) : null}
-        </header>
+        {documentsQuery.isError ? (
+          <div className="rounded-2xl border border-red-400/20 bg-red-500/10 px-4 py-3 text-sm text-red-100">
+            {documentsQuery.error instanceof Error
+              ? documentsQuery.error.message
+              : 'Gutschriften konnten nicht geladen werden.'}
+          </div>
+        ) : null}
 
         <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
           <KpiCard
@@ -253,12 +250,18 @@ export function Gutschriften() {
             columns={columns}
             rows={filteredDocuments}
             rowKey={(row) => `${row.affiliateLogin ?? 'affiliate'}-${row.gutschriftNumber ?? row.id ?? row.periodLabel ?? 'doc'}`}
-            emptyLabel={
-              documentsQuery.isLoading
-                ? 'Gutschriften werden geladen …'
-                : normalizedSearch
-                  ? 'Keine Gutschriften für diese Suche gefunden.'
-                  : 'Keine Gutschriften vorhanden.'
+            emptyState={
+              <EmptyState
+                icon={SearchX}
+                title={documentsQuery.isLoading ? 'Gutschriften werden geladen' : 'Keine Gutschriften gefunden'}
+                description={
+                  documentsQuery.isLoading
+                    ? 'Die globale Gutschriftenliste wird gerade geladen.'
+                    : normalizedSearch
+                      ? 'Für die aktuelle Suche wurden keine Dokumente gefunden.'
+                      : 'Es sind aktuell keine Gutschriften im System sichtbar.'
+                }
+              />
             }
           />
         </article>

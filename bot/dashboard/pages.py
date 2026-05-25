@@ -286,7 +286,6 @@ def build_stats_entry_page(
     *,
     twitch_login: str,
     logout_url: str,
-    legacy_url: str,
     beta_url: str,
     scope_panel: str,
 ) -> str:
@@ -395,15 +394,6 @@ def build_stats_entry_page(
         "<li>Trendanalysen</li>"
         "</ul>"
         f"<a class='btn' href='{beta_url}'>Öffnen →</a>"
-        "</div>"
-        "<div class='card card-accent-blue'>"
-        "<h3 class='card-title'>📈 Stats (Alt)</h3>"
-        "<p class='card-desc'>Klassisches Dashboard mit detaillierten Statistiken und Logs.</p>"
-        "<ul class='card-bullets'>"
-        "<li>Viewer-Verlauf</li>"
-        "<li>Stream-Logs</li>"
-        "</ul>"
-        f"<a class='btn' href='{legacy_url}'>Öffnen →</a>"
         "</div>"
         "<div class='card card-accent-teal'>"
         "<h3 class='card-title'>🎨 Live Message Builder</h3>"

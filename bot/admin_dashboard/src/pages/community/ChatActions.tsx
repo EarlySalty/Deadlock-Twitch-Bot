@@ -1,10 +1,11 @@
-import { ChevronRight, Megaphone, Send } from 'lucide-react';
+import { ChevronRight, Megaphone, SearchX, Send } from 'lucide-react';
 import { useDeferredValue, useMemo, useState } from 'react';
 import type { PartnerChatActionMode, StreamerRow } from '@/api/types';
 import { PageHeader } from '@/components/layout/PageHeader';
 import { Section } from '@/components/layout/Section';
 import { ConfirmDialog } from '@/components/shared/ConfirmDialog';
 import { DataTable, type TableColumn } from '@/components/shared/DataTable';
+import { EmptyState } from '@/components/shared/EmptyState';
 import { SearchInput } from '@/components/shared/SearchInput';
 import { StatusBadge } from '@/components/shared/StatusBadge';
 import { Toast } from '@/components/shared/Toast';
@@ -179,7 +180,7 @@ export default function ChatActionsPage() {
                         <button
                           key={row.login}
                           type="button"
-                          className="flex w-full items-center justify-between rounded-[1rem] px-3 py-3 text-left text-text-secondary transition hover:bg-white/6 hover:text-white"
+                          className="interactive-surface flex w-full items-center justify-between rounded-[1rem] px-3 py-3 text-left text-text-secondary hover:text-white"
                           onClick={() => {
                             setSelectedLogin(row.login);
                             setPickerValue(row.displayName || row.login);
@@ -194,7 +195,12 @@ export default function ChatActionsPage() {
                       ))}
                     </div>
                   ) : (
-                    <div className="px-3 py-3 text-sm text-text-secondary">Keine Treffer.</div>
+                    <EmptyState
+                      icon={SearchX}
+                      title="Keine Treffer"
+                      description="Die Streamer-Suche hat keinen passenden verwalteten Channel gefunden."
+                      className="!rounded-[1rem] !border-white/8 !bg-transparent !p-5"
+                    />
                   )}
                 </div>
               ) : null}
@@ -214,10 +220,8 @@ export default function ChatActionsPage() {
                       key={option.value}
                       type="button"
                       className={[
-                        'rounded-full border px-4 py-2 text-sm font-medium transition',
-                        mode === option.value
-                          ? 'border-primary/40 bg-primary/15 text-white'
-                          : 'border-white/10 bg-white/[0.03] text-text-secondary hover:text-white',
+                        'filter-chip',
+                        mode === option.value ? '!border-primary/40 !bg-primary/15 !text-white' : 'text-text-secondary',
                       ].join(' ')}
                       onClick={() => setMode(option.value)}
                     >
@@ -314,9 +318,11 @@ export default function ChatActionsPage() {
         {history.length ? (
           <DataTable columns={historyColumns} rows={history} rowKey={(row) => row.id} />
         ) : (
-          <div className="rounded-[1.5rem] border border-white/10 bg-white/[0.03] px-5 py-8 text-sm text-text-secondary">
-            Noch keine Aktionen in dieser Session.
-          </div>
+          <EmptyState
+            icon={Megaphone}
+            title="Noch keine Aktionen"
+            description="In dieser Session wurden noch keine Chat-Aktionen ausgelöst."
+          />
         )}
       </Section>
 

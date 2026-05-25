@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { RadioTower, Save, Users } from 'lucide-react';
 import type { AdminConfigScope } from '@/api/types';
+import { PageHeader } from '@/components/layout/PageHeader';
 import { KpiCard } from '@/components/shared/KpiCard';
 import { Toast } from '@/components/shared/Toast';
 import { useConfigOverview, useRaidConfigMutation } from '@/hooks/useAdmin';
@@ -40,13 +41,10 @@ export function RaidConfig() {
 
   return (
     <section className="space-y-5">
-      <header className="panel-card rounded-[1.8rem] p-6">
-        <p className="text-xs font-semibold uppercase tracking-[0.28em] text-text-secondary">Raid Settings</p>
-        <h1 className="mt-3 text-3xl font-semibold text-white">Raid-Konfiguration im Bulk steuern</h1>
-        <p className="mt-3 max-w-3xl text-sm leading-7 text-text-secondary">
-          Diese Änderungen wirken standardmäßig auf aktive Streamer. Mit dem Scope <span className="font-semibold text-white">All</span> kannst du die Werte bewusst auf alle verwalteten Streamer ausrollen.
-        </p>
-      </header>
+      <PageHeader
+        title="Raid Config"
+        description="Raid-Bot und Live-Ping gesammelt ausrollen. Der Scope `all` wendet die Änderungen bewusst auf den gesamten Bestand an."
+      />
 
       <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
         <KpiCard

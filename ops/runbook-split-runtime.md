@@ -83,15 +83,15 @@ powershell -NoProfile -ExecutionPolicy $ExecutionPolicy -File C:/nssm/restart-bo
 
 ## Legal Access Gate
 
-Die Legal-Seiten `/twitch/impressum` und `/twitch/datenschutz` laufen ueber ein Human-Gate mit Cloudflare Turnstile.
+Die Legal-Seiten `/twitch/impressum`, `/twitch/datenschutz` und `/twitch/agb` laufen über ein Human-Gate mit Cloudflare Turnstile.
 
 Pfadfluss:
 
-- `GET /twitch/impressum` oder `GET /twitch/datenschutz`
+- `GET /twitch/impressum`, `GET /twitch/datenschutz` oder `GET /twitch/agb`
 - Redirect nach `GET /twitch/legal/access?next=...`
 - Formular-Submit nach `POST /twitch/legal/verify`
 
-Der Dashboard-Service auf `127.0.0.1:8765` muss diese Pfade registriert haben, und Caddy muss sie oeffentlich explizit durchlassen.
+Der Dashboard-Service auf `127.0.0.1:8765` muss diese Pfade registriert haben, und Caddy muss sie öffentlich explizit durchlassen.
 
 Erforderliche Secrets:
 

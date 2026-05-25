@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { MessageSquareWarning, Save, ShieldAlert, Users } from 'lucide-react';
 import type { AdminConfigScope } from '@/api/types';
+import { PageHeader } from '@/components/layout/PageHeader';
 import { KpiCard } from '@/components/shared/KpiCard';
 import { Toast } from '@/components/shared/Toast';
 import { useChatConfigMutation, useConfigOverview } from '@/hooks/useAdmin';
@@ -40,13 +41,10 @@ export function ChatConfig() {
 
   return (
     <section className="space-y-5">
-      <header className="panel-card rounded-[1.8rem] p-6">
-        <p className="text-xs font-semibold uppercase tracking-[0.28em] text-text-secondary">Chat Bot</p>
-        <h1 className="mt-3 text-3xl font-semibold text-white">Moderations-Flags gesammelt steuern</h1>
-        <p className="mt-3 max-w-3xl text-sm leading-7 text-text-secondary">
-          Diese Bulk-Änderungen greifen standardmäßig nur für aktive Streamer. Der Scope <span className="font-semibold text-white">All</span> erweitert den Rollout bewusst auf alle verwalteten Streamer.
-        </p>
-      </header>
+      <PageHeader
+        title="Chat Config"
+        description="Moderations-Flags gesammelt steuern. Der Scope `all` erweitert den Rollout bewusst auf den gesamten verwalteten Bestand."
+      />
 
       <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
         <KpiCard

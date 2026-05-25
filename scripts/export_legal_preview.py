@@ -44,6 +44,15 @@ def _iis_web_config() -> str:
       </httpProtocol>
     </system.webServer>
   </location>
+  <location path="twitch/agb">
+    <system.webServer>
+      <httpProtocol>
+        <customHeaders>
+          <add name="X-Robots-Tag" value="noindex, nofollow" />
+        </customHeaders>
+      </httpProtocol>
+    </system.webServer>
+  </location>
   <system.webServer>
     <defaultDocument enabled="true">
       <files>
@@ -104,7 +113,7 @@ def _root_index() -> str:
         "</a>"
         "<a class='card' href='twitch/agb/index.html'>"
         "<span class='label'>AGB</span>"
-        "<span class='meta'>Zum Vergleich der restlichen Rechtsnavigation.</span>"
+        "<span class='meta'>Statische Vorschau mit noindex-Markup.</span>"
         "</a>"
         "</div></div></body></html>"
     )
@@ -169,7 +178,7 @@ async def _render_pages() -> dict[str, str]:
         "twitch/datenschutz/index.html": _ensure_noindex_meta(
             _rewrite_for_static(datenschutz.text)
         ),
-        "twitch/agb/index.html": _rewrite_for_static(agb.text),
+        "twitch/agb/index.html": _ensure_noindex_meta(_rewrite_for_static(agb.text)),
     }
 
 

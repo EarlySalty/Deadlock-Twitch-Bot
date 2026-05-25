@@ -1,10 +1,13 @@
 import { useState } from 'react';
-import { ArchiveRestore, Ban, Eye, FolderArchive, Plus, ShieldCheck, Trash2 } from 'lucide-react';
+import { ArchiveRestore, Ban, Eye, FolderArchive, Maximize2, Minimize2, Plus, SearchX, ShieldAlert, ShieldCheck, Trash2, X } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { buildRaidAuthUrl, buildRaidRequirementsUrl } from '@/api/client';
 import type { ScopeStatusRow, StreamerPartnerStatus, StreamerRow } from '@/api/types';
+import { PageHeader } from '@/components/layout/PageHeader';
+import { Section } from '@/components/layout/Section';
 import { ConfirmDialog } from '@/components/shared/ConfirmDialog';
 import { DataTable, type TableColumn } from '@/components/shared/DataTable';
+import { EmptyState } from '@/components/shared/EmptyState';
 import { SearchInput } from '@/components/shared/SearchInput';
 import { StatusBadge } from '@/components/shared/StatusBadge';
 import { Toast } from '@/components/shared/Toast';
@@ -82,6 +85,7 @@ function formatPartnerStatus(status: StreamerPartnerStatus | undefined) {
 export function StreamerList() {
   const [search, setSearch] = useState('');
   const [view, setView] = useState<StreamerPartnerStatus | 'all'>('active');
+  const [density, setDensity] = useState<'comfortable' | 'compact'>('comfortable');
   const [newLogin, setNewLogin] = useState('');
   const [newDiscordUserId, setNewDiscordUserId] = useState('');
   const [newDiscordDisplayName, setNewDiscordDisplayName] = useState('');
@@ -99,26 +103,7 @@ export function StreamerList() {
   const removeMutation = useRemoveStreamer();
   const archiveMutation = useArchiveStreamer();
   const blockMutation = useBlockStreamer();
-
-  if (streamersQuery.isLoading && !streamersQuery.data) {
-    return <div className="panel-card rounded-[1.8rem] p-8 text-white">Streamer werden geladen …</div>;
-  }
-
-  if (streamersQuery.isError) {
-    return (
-      <section className="space-y-5">
-        <header className="panel-card rounded-[1.8rem] p-6">
-          <p className="text-xs font-semibold uppercase tracking-[0.28em] text-text-secondary">Streamer Verwaltung</p>
-          <h1 className="mt-3 text-3xl font-semibold text-white">Streamer konnten nicht geladen werden</h1>
-          <p className="mt-3 max-w-2xl text-sm leading-7 text-text-secondary">
-            {streamersQuery.error instanceof Error
-              ? streamersQuery.error.message
-              : 'Die Streamer-Liste konnte nicht geladen werden.'}
-          </p>
-        </header>
-      </section>
-    );
-  }
+  const selectedView = viewOptions.find((option) => option.value === view);
 
   const allRows = streamersQuery.data ?? [];
   const counts = {
@@ -131,6 +116,69 @@ export function StreamerList() {
     all: allRows.length,
   };
   const rows = filterByView(allRows, view).filter((row) => matchesStreamerSearch(row, search));
+  const scopeRows = (scopeStatusQuery.data?.items ?? []).filter((row) => matchesScopeSearch(row, search));
+
+  const header = (
+    <PageHeader
+      title="Streamer-Verwaltung"
+      description="Bestand, Lifecycle-Status und OAuth-Scope-Lage in einer konsistenten Admin-Oberfläche bündeln."
+      secondaryChips={
+        <>
+          <span className="stat-pill">{formatNumber(allRows.length)} gesamt</span>
+          <span className="stat-pill">{formatNumber(allRows.filter((row) => row.isLive).length)} live</span>
+          <span className="stat-pill">{formatNumber(allRows.filter((row) => row.oauthNeedsReauth).length)} Reauth</span>
+          {selectedView && selectedView.value !== 'all' ? <span className="stat-pill">Filter: {selectedView.label}</span> : null}
+        </>
+      }
+    />
+  );
+
+  function renderDensityToggle() {
+    return (
+      <div className="flex items-center gap-2">
+        <button
+          type="button"
+          className={`admin-button admin-button-secondary !px-3 !py-2 text-xs ${density === 'comfortable' ? '!border-primary/40 !bg-primary/10 !text-white' : ''}`}
+          onClick={() => setDensity('comfortable')}
+        >
+          <Maximize2 className="h-4 w-4" />
+          Komfort
+        </button>
+        <button
+          type="button"
+          className={`admin-button admin-button-secondary !px-3 !py-2 text-xs ${density === 'compact' ? '!border-primary/40 !bg-primary/10 !text-white' : ''}`}
+          onClick={() => setDensity('compact')}
+        >
+          <Minimize2 className="h-4 w-4" />
+          Kompakt
+        </button>
+      </div>
+    );
+  }
+
+  if (streamersQuery.isLoading && !streamersQuery.data) {
+    return (
+      <section className="space-y-6">
+        {header}
+        <div className="panel-card rounded-[1.8rem] p-8 text-white">Streamer werden geladen …</div>
+      </section>
+    );
+  }
+
+  if (streamersQuery.isError) {
+    return (
+      <section className="space-y-6">
+        <PageHeader
+          title="Streamer konnten nicht geladen werden"
+          description={
+            streamersQuery.error instanceof Error
+              ? streamersQuery.error.message
+              : 'Die Streamer-Liste konnte nicht geladen werden.'
+          }
+        />
+      </section>
+    );
+  }
 
   const streamersColumns: TableColumn<StreamerRow>[] = [
     {
@@ -140,7 +188,7 @@ export function StreamerList() {
       sortValue: (row) => row.login,
       render: (row) => (
         <div>
-          <Link to={`/streamers/${encodeURIComponent(row.login)}`} className="font-semibold text-white hover:text-primary">
+          <Link to={`/community/streamers/${encodeURIComponent(row.login)}`} className="font-semibold text-white transition hover:text-primary">
             {row.displayName || row.login}
           </Link>
           <p className="text-xs uppercase tracking-[0.16em] text-text-secondary">{row.login}</p>
@@ -203,7 +251,7 @@ export function StreamerList() {
       className: 'min-w-[320px]',
       render: (row) => (
         <div className="flex flex-wrap gap-2">
-          <Link to={`/streamers/${encodeURIComponent(row.login)}`} className="admin-button admin-button-secondary !px-3 !py-2">
+          <Link to={`/community/streamers/${encodeURIComponent(row.login)}`} className="admin-button admin-button-secondary !px-3 !py-2">
             <Eye className="h-4 w-4" />
             Verwalten
           </Link>
@@ -301,22 +349,13 @@ export function StreamerList() {
     })),
   ];
 
-  const scopeRows = (scopeStatusQuery.data?.items ?? []).filter((row) => matchesScopeSearch(row, search));
-
   return (
-    <section className="space-y-5">
-      <header className="panel-card rounded-[1.8rem] p-6">
-        <div className="flex flex-col gap-5 lg:flex-row lg:items-end lg:justify-between">
-          <div>
-            <p className="text-xs font-semibold uppercase tracking-[0.28em] text-text-secondary">Streamer Verwaltung</p>
-            <h1 className="mt-3 text-3xl font-semibold text-white">Legacy-Funktionen im React-Admin bündeln</h1>
-            <p className="mt-3 max-w-3xl text-sm leading-7 text-text-secondary">
-              Archiv, OAuth-Scope-Matrix und die wichtigsten Verwaltungs-Workflows laufen jetzt über dieselbe Datenbasis wie im Legacy-Admin.
-              Die Detailseite übernimmt Discord-, Billing-, Chat- und Verifizierungsaktionen.
-            </p>
-          </div>
-          <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-            <label className="rounded-[1.2rem] border border-white/10 bg-white/[0.04] p-4 text-sm">
+    <section className="space-y-6">
+      {header}
+
+      <Section title="Streamer hinzufügen" hint="Neue Twitch-Logins samt optionaler Discord-Zuordnung in den verwalteten Bestand aufnehmen.">
+        <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+          <label className="rounded-[1.6rem] border border-white/10 bg-white/[0.04] p-4 text-sm">
               <span className="text-xs uppercase tracking-[0.18em] text-text-secondary">Twitch Login</span>
               <input
                 value={newLogin}
@@ -324,8 +363,8 @@ export function StreamerList() {
                 placeholder="earlysalty"
                 className="admin-input mt-3"
               />
-            </label>
-            <label className="rounded-[1.2rem] border border-white/10 bg-white/[0.04] p-4 text-sm">
+          </label>
+          <label className="rounded-[1.6rem] border border-white/10 bg-white/[0.04] p-4 text-sm">
               <span className="text-xs uppercase tracking-[0.18em] text-text-secondary">Discord User ID</span>
               <input
                 value={newDiscordUserId}
@@ -333,8 +372,8 @@ export function StreamerList() {
                 placeholder="123456789012345678"
                 className="admin-input mt-3"
               />
-            </label>
-            <label className="rounded-[1.2rem] border border-white/10 bg-white/[0.04] p-4 text-sm">
+          </label>
+          <label className="rounded-[1.6rem] border border-white/10 bg-white/[0.04] p-4 text-sm">
               <span className="text-xs uppercase tracking-[0.18em] text-text-secondary">Discord Anzeigename</span>
               <input
                 value={newDiscordDisplayName}
@@ -342,8 +381,8 @@ export function StreamerList() {
                 placeholder="Discord-Name"
                 className="admin-input mt-3"
               />
-            </label>
-            <div className="rounded-[1.2rem] border border-white/10 bg-white/[0.04] p-4 text-sm">
+          </label>
+          <div className="rounded-[1.6rem] border border-white/10 bg-white/[0.04] p-4 text-sm">
               <span className="text-xs uppercase tracking-[0.18em] text-text-secondary">Optionen</span>
               <label className="mt-4 flex items-center gap-3 text-text-secondary">
                 <input
@@ -381,34 +420,59 @@ export function StreamerList() {
                 <Plus className="h-4 w-4" />
                 Streamer hinzufügen
               </button>
-            </div>
           </div>
         </div>
-      </header>
+      </Section>
 
-      <div className="grid gap-4 lg:grid-cols-[minmax(280px,420px)_1fr] lg:items-center">
-        <SearchInput placeholder="Nach Login, Discord, Plan oder OAuth suchen" onDebouncedChange={setSearch} />
-        <div className="flex flex-wrap gap-2">
-          {viewOptions.map((option) => (
-            <button
-              key={option.value}
-              onClick={() => setView(option.value)}
-              className={[
-                'rounded-full border px-4 py-2 text-sm font-semibold transition',
-                view === option.value
-                  ? 'border-primary/50 bg-primary/14 text-white'
-                  : 'border-white/10 bg-white/[0.04] text-text-secondary hover:border-white/20 hover:text-white',
-              ].join(' ')}
-            >
-              {option.label} <span className="ml-2 text-white">{counts[option.value]}</span>
-            </button>
-          ))}
+      <Section title="Filter" hint="Statusansicht und Suche greifen auf Listen- und Scope-Matrix gleichzeitig.">
+        <div className="grid gap-4 lg:grid-cols-[minmax(280px,420px)_1fr] lg:items-center">
+          <SearchInput
+            placeholder="Nach Login, Discord, Plan oder OAuth suchen"
+            defaultValue={search}
+            onDebouncedChange={setSearch}
+          />
+          <div className="flex flex-wrap gap-2">
+            {viewOptions.map((option) => (
+              <button
+                key={option.value}
+                onClick={() => setView(option.value)}
+                className={[
+                  'filter-chip',
+                  view === option.value ? '!border-primary/45 !bg-primary/12 !text-white' : 'text-text-secondary',
+                ].join(' ')}
+              >
+                {option.label}
+                <span className="text-white">{counts[option.value]}</span>
+              </button>
+            ))}
+          </div>
         </div>
-      </div>
+
+        {view !== 'all' || search.trim() ? (
+          <div className="mt-5 flex flex-wrap gap-2">
+            {view !== 'all' && selectedView ? (
+              <div className="filter-chip">
+                <span>{selectedView.label}</span>
+                <button type="button" aria-label={`${selectedView.label} entfernen`} onClick={() => setView('all')}>
+                  <X className="h-3.5 w-3.5" />
+                </button>
+              </div>
+            ) : null}
+            {search.trim() ? (
+              <div className="filter-chip">
+                <span>Suche: {search}</span>
+                <button type="button" aria-label="Suche entfernen" onClick={() => setSearch('')}>
+                  <X className="h-3.5 w-3.5" />
+                </button>
+              </div>
+            ) : null}
+          </div>
+        ) : null}
+      </Section>
 
       <div className="grid gap-4 xl:grid-cols-4">
         {viewOptions.map((option) => (
-          <article key={option.value} className="panel-card rounded-[1.5rem] p-5">
+          <article key={option.value} className="panel-card rounded-[1.6rem] p-5">
             <p className="text-xs font-semibold uppercase tracking-[0.2em] text-text-secondary">{option.label}</p>
             <div className="mt-3 text-3xl font-semibold text-white">{formatNumber(counts[option.value])}</div>
             <p className="mt-2 text-sm leading-6 text-text-secondary">{option.description}</p>
@@ -416,51 +480,75 @@ export function StreamerList() {
         ))}
       </div>
 
-      <article className="panel-card rounded-[1.8rem] p-6">
-        <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
-          <div>
-            <p className="text-xs font-semibold uppercase tracking-[0.2em] text-text-secondary">Bestand</p>
-            <h2 className="mt-2 text-2xl font-semibold text-white">Streamer-Bestand nach Status</h2>
-          </div>
-          <div className="flex flex-wrap gap-2 text-sm text-text-secondary">
-            <span className="stat-pill">{rows.length} Treffer</span>
-            <span className="stat-pill">{allRows.filter((row) => row.isLive).length} live</span>
-            <span className="stat-pill">{allRows.filter((row) => row.oauthNeedsReauth).length} Reauth</span>
-          </div>
-        </div>
-        <div className="mt-5">
-          <DataTable columns={streamersColumns} rows={rows} rowKey={(row) => row.login} />
-        </div>
-      </article>
+      <Section
+        title="Bestand"
+        hint="Sichtbarer Streamer-Bestand nach Status, Aktivität und Discord-/OAuth-Signalen."
+        action={renderDensityToggle()}
+      >
+        <DataTable
+          columns={streamersColumns}
+          rows={rows}
+          rowKey={(row) => row.login}
+          density={density}
+          emptyState={
+            <EmptyState
+              icon={SearchX}
+              title="Keine Streamer gefunden"
+              description={
+                search.trim()
+                  ? 'Die aktuelle Suche oder Statusansicht liefert keine Treffer.'
+                  : 'Für den gewählten Status sind aktuell keine Streamer vorhanden.'
+              }
+              action={
+                view !== 'all' || search.trim() ? (
+                  <button
+                    type="button"
+                    className="admin-button admin-button-secondary"
+                    onClick={() => {
+                      setView('all');
+                      setSearch('');
+                    }}
+                  >
+                    Filter zurücksetzen
+                  </button>
+                ) : undefined
+              }
+            />
+          }
+        />
+      </Section>
 
-      <article className="panel-card rounded-[1.8rem] p-6">
-        <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
-          <div>
-            <p className="text-xs font-semibold uppercase tracking-[0.2em] text-text-secondary">OAuth Token Scopes</p>
-            <h2 className="mt-2 text-2xl font-semibold text-white">Scope-Status pro Streamer</h2>
-            <p className="mt-2 max-w-3xl text-sm leading-7 text-text-secondary">
-              Diese Matrix nutzt dieselbe Logik wie das Legacy-Admin und zeigt alle autorisierten Twitch-Logins aus <code>twitch_raid_auth</code>.
-            </p>
-          </div>
-          <div className="flex flex-wrap gap-2 text-sm text-text-secondary">
-            <span className="stat-pill">{formatNumber(scopeStatusQuery.data?.summary.totalAuthorized ?? 0)} mit OAuth</span>
-            <span className="stat-pill">{formatNumber(scopeStatusQuery.data?.summary.fullScopeCount ?? 0)} vollständig</span>
-            <span className="stat-pill">{formatNumber(scopeStatusQuery.data?.summary.missingScopeCount ?? 0)} unvollständig</span>
-          </div>
-        </div>
-
-        <div className="mt-5">
-          {scopeStatusQuery.isError ? (
-            <div className="empty-state">
-              {scopeStatusQuery.error instanceof Error
+      <Section
+        title="OAuth Token Scopes"
+        hint="Dieselbe Logik wie im Legacy-Admin für autorisierte Twitch-Logins aus `twitch_raid_auth`."
+        action={renderDensityToggle()}
+      >
+        {scopeStatusQuery.isError ? (
+          <EmptyState
+            icon={ShieldAlert}
+            title="Scope-Status nicht verfügbar"
+            description={
+              scopeStatusQuery.error instanceof Error
                 ? scopeStatusQuery.error.message
-                : 'Scope-Status konnte nicht geladen werden.'}
-            </div>
-          ) : (
-            <DataTable columns={scopeColumns} rows={scopeRows} rowKey={(row) => `scope-${row.login}`} />
-          )}
-        </div>
-      </article>
+                : 'Die Scope-Matrix konnte nicht geladen werden.'
+            }
+          />
+        ) : (
+          <DataTable
+            columns={scopeColumns}
+            rows={scopeRows}
+            rowKey={(row) => `scope-${row.login}`}
+            density={density}
+            emptyState={
+              <EmptyState
+                icon={SearchX}
+                title="Keine Scope-Treffer"
+                description="Für die aktuelle Suche wurden keine OAuth-Datensätze gefunden."
+              />
+            }
+          />
+        )}
+      </Section>
 
       <ConfirmDialog
         open={Boolean(pendingAction)}

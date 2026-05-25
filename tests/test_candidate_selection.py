@@ -120,11 +120,11 @@ class CandidateSelectionServiceTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(targets, {"target-a"})
 
-    async def test_select_partner_candidate_prefers_highest_final_score(self) -> None:
+    async def test_select_partner_candidate_prefers_highest_final_score_below_daily_cap(self) -> None:
         service = CandidateSelectionService(
             load_partner_raid_score_map=self._score_loader(
                 {
-                    "1001": {"is_live": True, "final_score": 0.91, "today_received_raids": 5},
+                    "1001": {"is_live": True, "final_score": 0.91, "today_received_raids": 1},
                     "2002": {"is_live": True, "final_score": 0.66, "today_received_raids": 0},
                 }
             ),
@@ -141,6 +141,113 @@ class CandidateSelectionServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNotNone(selected)
         assert selected is not None
         self.assertEqual(selected["user_login"], "alpha")
+        service.attach_followers_totals.assert_not_awaited()
+
+    async def test_select_partner_candidate_defers_targets_at_daily_soft_cap(self) -> None:
+        service = CandidateSelectionService(
+            load_partner_raid_score_map=self._score_loader(
+                {
+                    "1001": {
+                        "is_live": True,
+                        "final_score": 1.10,
+                        "today_received_raids": 2,
+                        "raid_boost_multiplier": 1.25,
+                    },
+                    "2002": {"is_live": True, "final_score": 0.66, "today_received_raids": 0},
+                }
+            ),
+            attach_followers_totals=AsyncMock(),
+            readonly_connection_factory=lambda: contextlib.nullcontext(_CompatConn(self.conn)),
+        )
+        candidates = [
+            {"user_id": "1001", "user_login": "alpha", "viewer_count": 50, "followers_total": 1000, "started_at": "2026-03-08T18:00:00+00:00"},
+            {"user_id": "2002", "user_login": "bravo", "viewer_count": 10, "followers_total": 200, "started_at": "2026-03-08T18:10:00+00:00"},
+        ]
+
+        selected = await service.select_partner_candidate_by_score(candidates, "source-1")
+
+        self.assertIsNotNone(selected)
+        assert selected is not None
+        self.assertEqual(selected["user_login"], "bravo")
+        service.attach_followers_totals.assert_not_awaited()
+
+    async def test_select_partner_candidate_allows_one_today_raid_to_win_by_score(self) -> None:
+        service = CandidateSelectionService(
+            load_partner_raid_score_map=self._score_loader(
+                {
+                    "1001": {
+                        "is_live": True,
+                        "final_score": 1.10,
+                        "today_received_raids": 1,
+                        "raid_boost_multiplier": 1.25,
+                    },
+                    "2002": {"is_live": True, "final_score": 0.66, "today_received_raids": 0},
+                }
+            ),
+            attach_followers_totals=AsyncMock(),
+            readonly_connection_factory=lambda: contextlib.nullcontext(_CompatConn(self.conn)),
+        )
+        candidates = [
+            {"user_id": "1001", "user_login": "alpha", "viewer_count": 50, "followers_total": 1000, "started_at": "2026-03-08T18:00:00+00:00"},
+            {"user_id": "2002", "user_login": "bravo", "viewer_count": 10, "followers_total": 200, "started_at": "2026-03-08T18:10:00+00:00"},
+        ]
+
+        selected = await service.select_partner_candidate_by_score(candidates, "source-1")
+
+        self.assertIsNotNone(selected)
+        assert selected is not None
+        self.assertEqual(selected["user_login"], "alpha")
+        service.attach_followers_totals.assert_not_awaited()
+
+    async def test_select_partner_candidate_uses_all_candidates_when_all_at_daily_soft_cap(self) -> None:
+        service = CandidateSelectionService(
+            load_partner_raid_score_map=self._score_loader(
+                {
+                    "1001": {"is_live": True, "final_score": 0.91, "today_received_raids": 2},
+                    "2002": {"is_live": True, "final_score": 0.66, "today_received_raids": 3},
+                }
+            ),
+            attach_followers_totals=AsyncMock(),
+            readonly_connection_factory=lambda: contextlib.nullcontext(_CompatConn(self.conn)),
+        )
+        candidates = [
+            {"user_id": "1001", "user_login": "alpha", "viewer_count": 50, "followers_total": 1000, "started_at": "2026-03-08T18:00:00+00:00"},
+            {"user_id": "2002", "user_login": "bravo", "viewer_count": 10, "followers_total": 200, "started_at": "2026-03-08T18:10:00+00:00"},
+        ]
+
+        selected = await service.select_partner_candidate_by_score(candidates, "source-1")
+
+        self.assertIsNotNone(selected)
+        assert selected is not None
+        self.assertEqual(selected["user_login"], "alpha")
+        service.attach_followers_totals.assert_not_awaited()
+
+    async def test_select_partner_candidate_defers_new_partner_at_daily_soft_cap(self) -> None:
+        service = CandidateSelectionService(
+            load_partner_raid_score_map=self._score_loader(
+                {
+                    "1001": {
+                        "is_live": True,
+                        "final_score": 1.05,
+                        "today_received_raids": 2,
+                        "new_partner_multiplier": 1.25,
+                    },
+                    "2002": {"is_live": True, "final_score": 0.70, "today_received_raids": 0},
+                }
+            ),
+            attach_followers_totals=AsyncMock(),
+            readonly_connection_factory=lambda: contextlib.nullcontext(_CompatConn(self.conn)),
+        )
+        candidates = [
+            {"user_id": "1001", "user_login": "alpha", "viewer_count": 50, "followers_total": 1000, "started_at": "2026-03-08T18:00:00+00:00"},
+            {"user_id": "2002", "user_login": "bravo", "viewer_count": 10, "followers_total": 200, "started_at": "2026-03-08T18:10:00+00:00"},
+        ]
+
+        selected = await service.select_partner_candidate_by_score(candidates, "source-1")
+
+        self.assertIsNotNone(selected)
+        assert selected is not None
+        self.assertEqual(selected["user_login"], "bravo")
         service.attach_followers_totals.assert_not_awaited()
 
     async def test_select_partner_candidate_uses_today_received_raids_for_close_scores(self) -> None:

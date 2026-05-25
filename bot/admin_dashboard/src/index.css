@@ -172,6 +172,18 @@ select {
     inset 0 1px 0 rgba(255, 255, 255, 0.04);
 }
 
+.interactive-surface {
+  transition:
+    background-color 180ms ease,
+    border-color 180ms ease,
+    color 180ms ease,
+    transform 180ms ease;
+}
+
+.interactive-surface:hover {
+  background: rgba(255, 255, 255, 0.05);
+}
+
 .admin-input {
   width: 100%;
   border-radius: 1rem;
@@ -197,6 +209,12 @@ select {
   padding: 0.82rem 1.15rem;
   font-weight: 700;
   cursor: pointer;
+  transition:
+    background-color 180ms ease,
+    border-color 180ms ease,
+    color 180ms ease,
+    box-shadow 180ms ease,
+    transform 180ms ease;
 }
 
 .admin-button-primary {
@@ -216,9 +234,61 @@ select {
   color: #ffd2ce;
 }
 
+.admin-button:hover:not(:disabled) {
+  transform: translateY(-1px);
+}
+
+.admin-button-primary:hover:not(:disabled) {
+  box-shadow: 0 12px 26px rgba(255, 122, 24, 0.24);
+}
+
+.admin-button-secondary:hover:not(:disabled) {
+  border-color: var(--color-border-hover);
+  background: rgba(12, 30, 41, 0.82);
+}
+
+.admin-button-danger:hover:not(:disabled) {
+  border-color: rgba(255, 107, 94, 0.44);
+  background: rgba(255, 107, 94, 0.22);
+}
+
+.filter-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  border-radius: 999px;
+  border: 1px solid var(--color-border);
+  background: rgba(8, 24, 33, 0.76);
+  padding: 0.55rem 0.9rem;
+  color: var(--color-text-primary);
+  font-size: 0.8rem;
+  font-weight: 700;
+  line-height: 1;
+  transition:
+    background-color 180ms ease,
+    border-color 180ms ease,
+    color 180ms ease;
+}
+
+.filter-chip:hover {
+  border-color: var(--color-border-hover);
+  background: rgba(14, 35, 47, 0.88);
+}
+
+.filter-chip button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  padding: 0;
+  cursor: pointer;
+}
+
 .empty-state {
   border: 1px dashed var(--color-border);
-  border-radius: 1.25rem;
+  border-radius: 1.6rem;
   padding: 2rem;
   text-align: center;
   color: var(--color-text-secondary);

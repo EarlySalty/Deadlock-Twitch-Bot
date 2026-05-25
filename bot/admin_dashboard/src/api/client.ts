@@ -3,6 +3,8 @@ import type {
   AdminActionResult,
   AdminAuthStatus,
   AdminTextDocument,
+  AuditLogEntry,
+  AuditLogResponse,
   AdminConfigScope,
   AffiliateClaim,
   AffiliateDetail,
@@ -733,6 +735,42 @@ export async function fetchDatabaseStats(): Promise<DatabaseStatsResponse> {
 
 export async function fetchErrorLogs(page = 1, pageSize = 25): Promise<ErrorLogsResponse> {
   return admin<ErrorLogsResponse>(`/system/errors?page=${page}&page_size=${pageSize}`);
+}
+
+export async function fetchAuditLog(params: {
+  since?: string;
+  limit?: number;
+  source?: string;
+} = {}): Promise<AuditLogResponse> {
+  const search = new URLSearchParams();
+  if (params.since) {
+    search.set('since', params.since);
+  }
+  if (typeof params.limit === 'number' && Number.isFinite(params.limit)) {
+    search.set('limit', String(params.limit));
+  }
+  if (params.source) {
+    search.set('source', params.source);
+  }
+  const suffix = search.size ? `?${search.toString()}` : '';
+  const payload = await admin<Record<string, unknown>>(`/audit-log${suffix}`);
+  return {
+    entries: coerceArray<Record<string, unknown>>(payload.entries).map((entry) => ({
+      id:
+        readString(entry, 'id') ||
+        `${readString(entry, 'source') || 'unknown'}:${readString(entry, 'timestamp') || 'missing'}:${readString(entry, 'action') || 'unknown'}`,
+      source: readString(entry, 'source') || 'unknown',
+      action: readString(entry, 'action') || 'unknown',
+      actor: readString(entry, 'actor') || null,
+      target: readString(entry, 'target') || null,
+      timestamp: readString(entry, 'timestamp') || '',
+      description: readString(entry, 'description') || 'Ohne Beschreibung',
+      metadata: coerceRecord(entry.metadata),
+    })) as AuditLogEntry[],
+    sources: readStringArray(payload.sources),
+    totalCount: readNumber(payload, 'totalCount', 'total_count') ?? 0,
+    hasMore: readBoolean(payload, 'hasMore', 'has_more') ?? false,
+  };
 }
 
 export async function fetchConfigOverview(scope?: AdminConfigScope): Promise<ConfigOverview> {

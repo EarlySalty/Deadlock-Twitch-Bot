@@ -1,10 +1,11 @@
 import { useState, type ReactNode } from 'react';
-import { AlertTriangle, Link2, RefreshCw, ShieldAlert, ShieldCheck } from 'lucide-react';
+import { AlertTriangle, Link2, Maximize2, Minimize2, RefreshCw, SearchX, ShieldAlert, ShieldCheck } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import type { ScopeStatusResponse, ScopeStatusRow } from '@/api/types';
 import { PageHeader } from '@/components/layout/PageHeader';
 import { Section } from '@/components/layout/Section';
 import { DataTable, type TableColumn } from '@/components/shared/DataTable';
+import { EmptyState } from '@/components/shared/EmptyState';
 import { KpiCard } from '@/components/shared/KpiCard';
 import { SearchInput } from '@/components/shared/SearchInput';
 import { StatusBadge } from '@/components/shared/StatusBadge';
@@ -166,6 +167,7 @@ function renderHeader(response: ScopeStatusResponse | undefined, onRefresh: () =
 
 export default function ScopesPage() {
   const [search, setSearch] = useState('');
+  const [density, setDensity] = useState<'comfortable' | 'compact'>('compact');
   const scopeQuery = useScopeStatus();
 
   if (scopeQuery.isLoading && !scopeQuery.data) {
@@ -250,7 +252,7 @@ export default function ScopesPage() {
       sortValue: (row) => (row.oauthNeedsReauth ? 1 : 0),
       render: (row) =>
         row.oauthNeedsReauth ? (
-          <span className="stat-pill !border-amber-400/35 !bg-amber-500/12 !text-amber-100">Reauth nötig</span>
+          <StatusBadge status="reauth-needed" />
         ) : (
           '—'
         ),
@@ -341,12 +343,32 @@ export default function ScopesPage() {
         title="Streamer-Diff"
         hint="Welcher Streamer hat welche Scopes"
         action={
-          <div className="w-full max-w-sm">
-            <SearchInput
-              placeholder="Nach Login oder Display Name suchen …"
-              defaultValue={search}
-              onDebouncedChange={setSearch}
-            />
+          <div className="flex w-full max-w-2xl flex-col gap-3 lg:flex-row lg:items-center lg:justify-end">
+            <div className="w-full lg:max-w-sm">
+              <SearchInput
+                placeholder="Nach Login oder Display Name suchen …"
+                defaultValue={search}
+                onDebouncedChange={setSearch}
+              />
+            </div>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                className={`admin-button admin-button-secondary !px-3 !py-2 text-xs ${density === 'comfortable' ? '!border-primary/40 !bg-primary/10 !text-white' : ''}`}
+                onClick={() => setDensity('comfortable')}
+              >
+                <Maximize2 className="h-4 w-4" />
+                Komfort
+              </button>
+              <button
+                type="button"
+                className={`admin-button admin-button-secondary !px-3 !py-2 text-xs ${density === 'compact' ? '!border-primary/40 !bg-primary/10 !text-white' : ''}`}
+                onClick={() => setDensity('compact')}
+              >
+                <Minimize2 className="h-4 w-4" />
+                Kompakt
+              </button>
+            </div>
           </div>
         }
       >
@@ -354,7 +376,14 @@ export default function ScopesPage() {
           columns={columns}
           rows={filteredItems}
           rowKey={(row) => row.login}
-          emptyLabel="Keine Streamer mit OAuth-Status gefunden."
+          density={density}
+          emptyState={
+            <EmptyState
+              icon={SearchX}
+              title="Keine OAuth-Treffer"
+              description="Für die aktuelle Suche wurden keine Streamer mit Scope-Status gefunden."
+            />
+          }
         />
       </Section>
     </section>

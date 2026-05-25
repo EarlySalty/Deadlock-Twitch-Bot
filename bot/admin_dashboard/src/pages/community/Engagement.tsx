@@ -1,4 +1,4 @@
-import { RefreshCw, Sparkles, UserCheck, UserMinus } from 'lucide-react';
+import { RefreshCw, SearchX, Sparkles, UserCheck, UserMinus } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { fetchEngagementSettings } from '@/api/client';
@@ -7,6 +7,7 @@ import { PageHeader } from '@/components/layout/PageHeader';
 import { Section } from '@/components/layout/Section';
 import { ConfirmDialog } from '@/components/shared/ConfirmDialog';
 import { DataTable, type TableColumn } from '@/components/shared/DataTable';
+import { EmptyState } from '@/components/shared/EmptyState';
 import { KpiCard } from '@/components/shared/KpiCard';
 import { SearchInput } from '@/components/shared/SearchInput';
 import { StatusBadge } from '@/components/shared/StatusBadge';
@@ -456,7 +457,13 @@ export default function EngagementPage() {
           columns={columns}
           rows={filteredStreamers}
           rowKey={(row) => row.login}
-          emptyLabel="Keine Streamer fuer den aktuellen Filter gefunden."
+          emptyState={
+            <EmptyState
+              icon={SearchX}
+              title="Keine Streamer im Filter"
+              description="Die aktuelle Suche liefert keine verwalteten Streamer für die Engagement-Ansicht."
+            />
+          }
         />
       </Section>
 

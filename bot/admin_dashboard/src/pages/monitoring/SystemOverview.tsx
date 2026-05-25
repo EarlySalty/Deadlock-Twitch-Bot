@@ -1,5 +1,8 @@
+import { ShieldAlert } from 'lucide-react';
 import { motion } from 'framer-motion';
 import { Area, AreaChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
+import { PageHeader } from '@/components/layout/PageHeader';
+import { EmptyState } from '@/components/shared/EmptyState';
 import { KpiCard } from '@/components/shared/KpiCard';
 import { StatusBadge } from '@/components/shared/StatusBadge';
 import { useEventSubStatus, useSystemHealth } from '@/hooks/useAdmin';
@@ -30,15 +33,11 @@ export function SystemOverview() {
 
   return (
     <motion.section initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="space-y-5">
-      <header className="panel-card rounded-[1.8rem] p-6">
-        <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
-          <div>
-            <p className="text-xs font-semibold uppercase tracking-[0.28em] text-text-secondary">System Monitoring</p>
-            <h1 className="mt-3 text-3xl font-semibold text-white">Bot Health und Runtime-Signale</h1>
-          </div>
-          <StatusBadge status={hasSystemWarning ? 'warning' : healthQuery.isSuccess ? 'active' : 'warning'} />
-        </div>
-      </header>
+      <PageHeader
+        title="System Overview"
+        description="Bot-Health, Runtime-Signale und aktuelle Service-Warnungen im Überblick."
+        primaryAction={<StatusBadge status={hasSystemWarning ? 'warning' : healthQuery.isSuccess ? 'active' : 'warning'} />}
+      />
 
       <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-5">
         <KpiCard title="Uptime" value={formatDuration(healthQuery.data?.uptimeSeconds)} hint="Prozesslaufzeit" />
@@ -98,7 +97,11 @@ export function SystemOverview() {
                 </div>
               ))
             ) : (
-              <div className="empty-state">Keine Service-Warnings im Payload vorhanden.</div>
+              <EmptyState
+                icon={ShieldAlert}
+                title="Keine Service-Warnungen"
+                description="Im aktuellen Health-Payload wurden keine zusätzlichen Warnungen gemeldet."
+              />
             )}
           </div>
         </article>

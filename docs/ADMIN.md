@@ -122,12 +122,12 @@ Moderations-Aktionen per Chat fuer Partner-Streamer:
 | `/twitch/legal/access` | Human-Gate mit Cloudflare Turnstile | admin/legal_mixin.py |
 | `/twitch/legal/verify` | Validiert Turnstile und setzt Gate-Cookie | admin/legal_mixin.py |
 | `/twitch/impressum` | Impressum | admin/legal_mixin.py |
-| `/twitch/datenschutz` | Datenschutzerklaerung | admin/legal_mixin.py |
+| `/twitch/datenschutz` | Datenschutzerklärung | admin/legal_mixin.py |
 | `/twitch/agb` | AGB / ToS | admin/legal_mixin.py |
 
-`/twitch/impressum` und `/twitch/datenschutz` werden ueber ein Human-Gate vor Bots und KI-Crawlern geschuetzt. `/twitch/agb` ist aktuell oeffentlich ohne Gate.
+`/twitch/impressum`, `/twitch/datenschutz` und `/twitch/agb` werden über ein Human-Gate vor Bots und KI-Crawlern geschützt.
 
-Fuer den produktiven Betrieb sind drei Secrets noetig:
+Für den produktiven Betrieb sind drei Secrets nötig:
 - `TWITCH_LEGAL_TURNSTILE_SITE_KEY`
 - `TWITCH_LEGAL_TURNSTILE_SECRET_KEY`
 - `TWITCH_LEGAL_GATE_COOKIE_SECRET`

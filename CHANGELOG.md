@@ -1,3 +1,11 @@
+## #56 — Twitch Admin Dashboard komplett neu strukturiert
+
+- Neues Admin-Cockpit auf `/twitch/admin` mit Live-Status auf einen Blick: aktive EventSub-Verbindung, ausstehende OAuth-Reauths, Bot-Uptime und Datenbank-Status
+- Sidebar in fünf klare Bereiche gegliedert: Cockpit, Operations, Community, Content & Comms, Money & Compliance — keine endlose flache Linkliste mehr
+- Globale Streamer-Suche oben in der Top-Bar — Login eintippen, Enter, direkt in der Detail-Ansicht
+- Neue Bereiche im Dashboard: OAuth-Scope-Diff pro Streamer, Bot-Control (Reload, Promo-Mode), Engagement-AI-Steuerung, Chat-Aktionen senden, Roadmap- und Legal-Editor mit Vorschau, Audit-Log über alle Admin-Aktionen
+- Das alte Legacy-Dashboard leitet jetzt automatisch auf die neue Oberfläche um — Bookmarks bleiben funktionieren
+
 ## #55 — Lade-Bildschirm für Rechtstexte vereinfacht
 
 - Die Bot-Prüfseite zeigt jetzt nur noch einen Spinner mit „Einen Moment bitte …" und einem dezenten Hinweis

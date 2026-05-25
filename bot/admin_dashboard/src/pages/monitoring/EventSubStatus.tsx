@@ -1,4 +1,7 @@
+import { RadioTower } from 'lucide-react';
+import { PageHeader } from '@/components/layout/PageHeader';
 import { DataTable, type TableColumn } from '@/components/shared/DataTable';
+import { EmptyState } from '@/components/shared/EmptyState';
 import { KpiCard } from '@/components/shared/KpiCard';
 import { StatusBadge } from '@/components/shared/StatusBadge';
 import type { EventSubSubscription } from '@/api/types';
@@ -41,10 +44,7 @@ export function EventSubStatusPage() {
 
   return (
     <section className="space-y-5">
-      <header className="panel-card rounded-[1.8rem] p-6">
-        <p className="text-xs font-semibold uppercase tracking-[0.28em] text-text-secondary">EventSub</p>
-        <h1 className="mt-3 text-3xl font-semibold text-white">Verbindungen und Subscription-Lage</h1>
-      </header>
+      <PageHeader title="EventSub Status" description="WebSocket-Status, Subscription-Lage und Raw-Conditions der Twitch-Integration." />
 
       <div className="grid gap-4 md:grid-cols-3">
         <KpiCard title="WebSocket" value={data?.websocketStatus || '—'} hint={data?.websocketSessionId || 'keine Session-ID'} tone="accent" />
@@ -55,7 +55,18 @@ export function EventSubStatusPage() {
       <article className="panel-card rounded-[1.8rem] p-6">
         <p className="text-xs font-semibold uppercase tracking-[0.2em] text-text-secondary">Subscriptions</p>
         <div className="mt-4">
-          <DataTable columns={columns} rows={subscriptions} rowKey={(row, index) => row.id || `${index}`} />
+          <DataTable
+            columns={columns}
+            rows={subscriptions}
+            rowKey={(row, index) => row.id || `${index}`}
+            emptyState={
+              <EmptyState
+                icon={RadioTower}
+                title="Keine EventSub-Subscriptions"
+                description="Der Snapshot enthält aktuell keine aktiven oder historischen EventSub-Einträge."
+              />
+            }
+          />
         </div>
       </article>
 

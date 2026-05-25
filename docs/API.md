@@ -89,7 +89,7 @@ Alle HTTP-Routes des Systems. Zugriffslevel: **A** = Admin only, **S** = Streame
 | GET | `/twitch/datenschutz` | P | routes_mixin.py |
 | GET | `/twitch/agb` | P | routes_mixin.py |
 
-Hinweis: Das Human-Gate schuetzt aktuell `/twitch/impressum` und `/twitch/datenschutz`. `/twitch/agb` bleibt oeffentlich ohne Gate. Details zu Secrets, Caddy-Allowlist, CSP und Troubleshooting stehen in [`docs/LEGAL_ACCESS_GATE.md`](LEGAL_ACCESS_GATE.md).
+Hinweis: Das Human-Gate schützt aktuell `/twitch/impressum`, `/twitch/datenschutz` und `/twitch/agb`. Details zu Secrets, Caddy-Allowlist, CSP und Troubleshooting stehen in [`docs/LEGAL_ACCESS_GATE.md`](LEGAL_ACCESS_GATE.md).
 
 ### Raid-Dashboard (Streamer)
 | Methode | Pfad | Level | Datei |

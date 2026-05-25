@@ -94,7 +94,7 @@ class RaidPartnerScoreSelectionTests(unittest.IsolatedAsyncioTestCase):
 
         return _loader
 
-    async def test_select_partner_candidate_prefers_highest_final_score(self) -> None:
+    async def test_select_partner_candidate_prefers_highest_final_score_below_daily_cap(self) -> None:
         candidates = [
             {
                 "user_id": "1001",
@@ -112,7 +112,7 @@ class RaidPartnerScoreSelectionTests(unittest.IsolatedAsyncioTestCase):
             },
         ]
         score_rows = {
-            "1001": {"is_live": True, "final_score": 0.91, "today_received_raids": 5},
+            "1001": {"is_live": True, "final_score": 0.91, "today_received_raids": 1},
             "2002": {"is_live": True, "final_score": 0.66, "today_received_raids": 0},
         }
 
@@ -132,6 +132,181 @@ class RaidPartnerScoreSelectionTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNotNone(selected)
         assert selected is not None
         self.assertEqual(selected["user_login"], "alpha")
+        attach_mock.assert_not_awaited()
+
+    async def test_select_partner_candidate_defers_targets_at_daily_soft_cap(self) -> None:
+        candidates = [
+            {
+                "user_id": "1001",
+                "user_login": "alpha",
+                "viewer_count": 50,
+                "followers_total": 1000,
+                "started_at": "2026-03-08T18:00:00+00:00",
+            },
+            {
+                "user_id": "2002",
+                "user_login": "bravo",
+                "viewer_count": 10,
+                "followers_total": 200,
+                "started_at": "2026-03-08T18:10:00+00:00",
+            },
+        ]
+        score_rows = {
+            "1001": {
+                "is_live": True,
+                "final_score": 1.10,
+                "today_received_raids": 2,
+                "raid_boost_multiplier": 1.25,
+            },
+            "2002": {"is_live": True, "final_score": 0.66, "today_received_raids": 0},
+        }
+
+        with (
+            self._conn_patch(),
+            patch(
+                "bot.raid.runtime.dependencies.load_partner_raid_score_map",
+                side_effect=self._score_map(score_rows),
+            ),
+            patch.object(self.raid_bot, "_attach_followers_totals", new=AsyncMock()) as attach_mock,
+        ):
+            selected = await self.raid_bot._select_partner_candidate_by_score(
+                candidates,
+                "source-1",
+            )
+
+        self.assertIsNotNone(selected)
+        assert selected is not None
+        self.assertEqual(selected["user_login"], "bravo")
+        attach_mock.assert_not_awaited()
+
+    async def test_select_partner_candidate_allows_one_today_raid_to_win_by_score(self) -> None:
+        candidates = [
+            {
+                "user_id": "1001",
+                "user_login": "alpha",
+                "viewer_count": 50,
+                "followers_total": 1000,
+                "started_at": "2026-03-08T18:00:00+00:00",
+            },
+            {
+                "user_id": "2002",
+                "user_login": "bravo",
+                "viewer_count": 10,
+                "followers_total": 200,
+                "started_at": "2026-03-08T18:10:00+00:00",
+            },
+        ]
+        score_rows = {
+            "1001": {
+                "is_live": True,
+                "final_score": 1.10,
+                "today_received_raids": 1,
+                "raid_boost_multiplier": 1.25,
+            },
+            "2002": {"is_live": True, "final_score": 0.66, "today_received_raids": 0},
+        }
+
+        with (
+            self._conn_patch(),
+            patch(
+                "bot.raid.runtime.dependencies.load_partner_raid_score_map",
+                side_effect=self._score_map(score_rows),
+            ),
+            patch.object(self.raid_bot, "_attach_followers_totals", new=AsyncMock()) as attach_mock,
+        ):
+            selected = await self.raid_bot._select_partner_candidate_by_score(
+                candidates,
+                "source-1",
+            )
+
+        self.assertIsNotNone(selected)
+        assert selected is not None
+        self.assertEqual(selected["user_login"], "alpha")
+        attach_mock.assert_not_awaited()
+
+    async def test_select_partner_candidate_uses_all_candidates_when_all_at_daily_soft_cap(self) -> None:
+        candidates = [
+            {
+                "user_id": "1001",
+                "user_login": "alpha",
+                "viewer_count": 50,
+                "followers_total": 1000,
+                "started_at": "2026-03-08T18:00:00+00:00",
+            },
+            {
+                "user_id": "2002",
+                "user_login": "bravo",
+                "viewer_count": 10,
+                "followers_total": 200,
+                "started_at": "2026-03-08T18:10:00+00:00",
+            },
+        ]
+        score_rows = {
+            "1001": {"is_live": True, "final_score": 0.91, "today_received_raids": 2},
+            "2002": {"is_live": True, "final_score": 0.66, "today_received_raids": 3},
+        }
+
+        with (
+            self._conn_patch(),
+            patch(
+                "bot.raid.runtime.dependencies.load_partner_raid_score_map",
+                side_effect=self._score_map(score_rows),
+            ),
+            patch.object(self.raid_bot, "_attach_followers_totals", new=AsyncMock()) as attach_mock,
+        ):
+            selected = await self.raid_bot._select_partner_candidate_by_score(
+                candidates,
+                "source-1",
+            )
+
+        self.assertIsNotNone(selected)
+        assert selected is not None
+        self.assertEqual(selected["user_login"], "alpha")
+        attach_mock.assert_not_awaited()
+
+    async def test_select_partner_candidate_defers_new_partner_at_daily_soft_cap(self) -> None:
+        candidates = [
+            {
+                "user_id": "1001",
+                "user_login": "alpha",
+                "viewer_count": 50,
+                "followers_total": 1000,
+                "started_at": "2026-03-08T18:00:00+00:00",
+            },
+            {
+                "user_id": "2002",
+                "user_login": "bravo",
+                "viewer_count": 10,
+                "followers_total": 200,
+                "started_at": "2026-03-08T18:10:00+00:00",
+            },
+        ]
+        score_rows = {
+            "1001": {
+                "is_live": True,
+                "final_score": 1.05,
+                "today_received_raids": 2,
+                "new_partner_multiplier": 1.25,
+            },
+            "2002": {"is_live": True, "final_score": 0.70, "today_received_raids": 0},
+        }
+
+        with (
+            self._conn_patch(),
+            patch(
+                "bot.raid.runtime.dependencies.load_partner_raid_score_map",
+                side_effect=self._score_map(score_rows),
+            ),
+            patch.object(self.raid_bot, "_attach_followers_totals", new=AsyncMock()) as attach_mock,
+        ):
+            selected = await self.raid_bot._select_partner_candidate_by_score(
+                candidates,
+                "source-1",
+            )
+
+        self.assertIsNotNone(selected)
+        assert selected is not None
+        self.assertEqual(selected["user_login"], "bravo")
         attach_mock.assert_not_awaited()
 
     async def test_select_partner_candidate_uses_today_received_raids_for_close_scores(self) -> None:

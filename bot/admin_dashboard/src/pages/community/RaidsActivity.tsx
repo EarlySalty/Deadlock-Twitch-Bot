@@ -1,8 +1,9 @@
-import { RefreshCw } from 'lucide-react';
+import { Clock3, RefreshCw, SearchX } from 'lucide-react';
 import { useMemo } from 'react';
 import { PageHeader } from '@/components/layout/PageHeader';
 import { Section } from '@/components/layout/Section';
 import { DataTable, type TableColumn } from '@/components/shared/DataTable';
+import { EmptyState } from '@/components/shared/EmptyState';
 import { StatusBadge } from '@/components/shared/StatusBadge';
 import { useConfigOverview } from '@/hooks/useAdmin';
 import { coerceArray, coerceRecord, formatNumber, formatRelativeTime } from '@/utils/formatters';
@@ -294,9 +295,11 @@ export default function RaidsActivityPage() {
         {activeEntries.length ? (
           <DataTable columns={columns} rows={activeEntries} rowKey={(row) => row.id} />
         ) : (
-          <div className="rounded-[1.5rem] border border-white/10 bg-white/[0.03] px-5 py-8 text-sm text-text-secondary">
-            Keine API fuer aktive Raid-Sessions verfuegbar — folgt in spaeterer Iteration.
-          </div>
+          <EmptyState
+            icon={Clock3}
+            title="Keine aktiven Raid-Sessions"
+            description="Der aktuelle Payload enthält keine laufenden Raids oder noch keinen dedizierten Live-Feed."
+          />
         )}
       </Section>
 
@@ -304,9 +307,11 @@ export default function RaidsActivityPage() {
         {historyEntries.length ? (
           <DataTable columns={columns} rows={historyEntries} rowKey={(row) => row.id} />
         ) : (
-          <div className="rounded-[1.5rem] border border-white/10 bg-white/[0.03] px-5 py-8 text-sm text-text-secondary">
-            Keine Historien-Daten im ConfigOverview-Payload verfuegbar.
-          </div>
+          <EmptyState
+            icon={SearchX}
+            title="Keine Raid-Historie"
+            description="Im ConfigOverview-Payload wurden keine abgeschlossenen Raid-Einträge gefunden."
+          />
         )}
       </Section>
     </section>

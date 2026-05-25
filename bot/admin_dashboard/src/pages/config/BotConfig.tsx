@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Save } from 'lucide-react';
+import { PageHeader } from '@/components/layout/PageHeader';
 import { Toast } from '@/components/shared/Toast';
 import { useConfigOverview, usePromoConfigMutation } from '@/hooks/useAdmin';
 import { coerceRecord } from '@/utils/formatters';
@@ -114,10 +115,7 @@ export function BotConfig() {
 
   return (
     <section className="space-y-5">
-      <header className="panel-card rounded-[1.8rem] p-6">
-        <p className="text-xs font-semibold uppercase tracking-[0.28em] text-text-secondary">Bot Konfiguration</p>
-        <h1 className="mt-3 text-3xl font-semibold text-white">Promo administrieren</h1>
-      </header>
+      <PageHeader title="Bot Config" description="Globale Promo-Zeiträume und Custom-Messages für den Bot pflegen." />
 
       <div className="grid gap-5">
         <article className="panel-card rounded-[1.8rem] p-6">

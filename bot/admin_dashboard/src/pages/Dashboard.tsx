@@ -1,9 +1,10 @@
-import { Activity, AlertTriangle, ArrowUpRight, CreditCard, Database, Radio, RefreshCw, Server, ShieldCheck, Users } from 'lucide-react';
+import { Activity, AlertTriangle, ArrowUpRight, CreditCard, Database, Radio, RefreshCw, Server, ShieldCheck, Users, ZapOff } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import type { StreamerRow } from '@/api/types';
 import { PageHeader } from '@/components/layout/PageHeader';
 import { Section } from '@/components/layout/Section';
 import { DataTable, type TableColumn } from '@/components/shared/DataTable';
+import { EmptyState } from '@/components/shared/EmptyState';
 import { StatusBadge } from '@/components/shared/StatusBadge';
 import {
   useDashboardOverview,
@@ -504,7 +505,17 @@ export function Dashboard() {
             columns={liveColumns}
             rows={liveNowRows}
             rowKey={(row) => row.login}
-            emptyLabel={streamersQuery.isLoading && !streamersQuery.data ? 'Lade Live-Daten …' : 'Aktuell ist kein Streamer live.'}
+            emptyState={
+              <EmptyState
+                icon={Radio}
+                title={streamersQuery.isLoading && !streamersQuery.data ? 'Live-Daten werden geladen' : 'Aktuell ist kein Streamer live'}
+                description={
+                  streamersQuery.isLoading && !streamersQuery.data
+                    ? 'Der Cockpit-Snapshot lädt gerade die aktuellen Live-Streamer.'
+                    : 'Sobald ein verwalteter Stream live ist, erscheint er hier mit Viewer-Zahl und Quick-Links.'
+                }
+              />
+            }
           />
         </Section>
 
@@ -534,7 +545,11 @@ export function Dashboard() {
               })}
             </div>
           ) : (
-            <div className="empty-state">Alles ruhig — keine offenen Punkte</div>
+            <EmptyState
+              icon={ShieldCheck}
+              title="Keine offenen Punkte"
+              description="Aktuell gibt es keine Pending Actions, die unmittelbare Aufmerksamkeit benötigen."
+            />
           )}
         </Section>
       </section>
@@ -562,7 +577,11 @@ export function Dashboard() {
             ))}
           </div>
         ) : (
-          <div className="empty-state">Keine kürzlichen Signale.</div>
+          <EmptyState
+            icon={ZapOff}
+            title="Keine kürzlichen Signale"
+            description="Im aktuellen Cockpit-Payload wurden keine frischen Admin- oder Systemaktivitäten gefunden."
+          />
         )}
       </Section>
     </div>

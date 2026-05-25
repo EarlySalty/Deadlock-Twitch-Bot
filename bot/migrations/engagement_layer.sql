@@ -78,6 +78,20 @@ CREATE TABLE IF NOT EXISTS twitch_channel_match_state (
     is_live              BOOLEAN NOT NULL DEFAULT FALSE
 );
 
+-- ========= kurze Voice-to-Text Segmente pro Channel =========
+CREATE TABLE IF NOT EXISTS twitch_engagement_stream_transcripts (
+    id                   BIGSERIAL PRIMARY KEY,
+    channel_login        TEXT NOT NULL,
+    started_at           TIMESTAMPTZ NOT NULL,
+    ended_at             TIMESTAMPTZ NOT NULL,
+    text                 TEXT NOT NULL,
+    engine               TEXT NOT NULL,
+    model                TEXT,
+    created_at           TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_eng_stream_transcripts_channel_ended
+    ON twitch_engagement_stream_transcripts (channel_login, ended_at DESC);
+
 -- ========= Engagement-Log (rein informativ, kein Budget-Gating) =========
 CREATE TABLE IF NOT EXISTS twitch_engagement_log (
     id                    BIGSERIAL PRIMARY KEY,

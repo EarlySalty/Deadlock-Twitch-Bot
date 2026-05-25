@@ -1,5 +1,8 @@
 import { useState } from 'react';
+import { BugOff } from 'lucide-react';
+import { PageHeader } from '@/components/layout/PageHeader';
 import { DataTable, type TableColumn } from '@/components/shared/DataTable';
+import { EmptyState } from '@/components/shared/EmptyState';
 import type { ErrorLogEntry } from '@/api/types';
 import { useErrorLogs } from '@/hooks/useAdmin';
 import { formatDateTime } from '@/utils/formatters';
@@ -43,13 +46,21 @@ export function ErrorLogs() {
 
   return (
     <section className="space-y-5">
-      <header className="panel-card rounded-[1.8rem] p-6">
-        <p className="text-xs font-semibold uppercase tracking-[0.28em] text-text-secondary">Fehler-Logs</p>
-        <h1 className="mt-3 text-3xl font-semibold text-white">Paginiertes Error Log Viewer</h1>
-      </header>
+      <PageHeader title="Error Logs" description="Paginierte Laufzeitfehler aus dem Monitoring-Endpoint durchsuchen." />
 
       <article className="panel-card rounded-[1.8rem] p-6">
-        <DataTable columns={columns} rows={rows} rowKey={(row) => row.id} />
+        <DataTable
+          columns={columns}
+          rows={rows}
+          rowKey={(row) => row.id}
+          emptyState={
+            <EmptyState
+              icon={BugOff}
+              title="Keine Fehlereinträge"
+              description="Für die aktuelle Seite liegen keine Error-Logs vor."
+            />
+          }
+        />
         <div className="mt-4 flex items-center justify-between">
           <p className="text-sm text-text-secondary">
             Seite {logsQuery.data?.page ?? page} · {rows.length} Einträge

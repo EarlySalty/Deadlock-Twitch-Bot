@@ -1,4 +1,7 @@
+import { DatabaseZap } from 'lucide-react';
+import { PageHeader } from '@/components/layout/PageHeader';
 import { DataTable, type TableColumn } from '@/components/shared/DataTable';
+import { EmptyState } from '@/components/shared/EmptyState';
 import { KpiCard } from '@/components/shared/KpiCard';
 import type { DatabaseTableStat } from '@/api/types';
 import { useDatabaseStats } from '@/hooks/useAdmin';
@@ -34,10 +37,7 @@ export function DatabaseStats() {
 
   return (
     <section className="space-y-5">
-      <header className="panel-card rounded-[1.8rem] p-6">
-        <p className="text-xs font-semibold uppercase tracking-[0.28em] text-text-secondary">Database</p>
-        <h1 className="mt-3 text-3xl font-semibold text-white">Row Counts und Größen</h1>
-      </header>
+      <PageHeader title="Database Stats" description="Tabellengrößen und Row-Counts aus dem aktuellen Admin-Snapshot." />
 
       <div className="grid gap-4 md:grid-cols-2">
         <KpiCard title="DB Gesamtgröße" value={formatBytes(databaseQuery.data?.databaseSizeBytes)} hint="vom Admin-Endpoint geliefert" tone="primary" />
@@ -45,7 +45,18 @@ export function DatabaseStats() {
       </div>
 
       <article className="panel-card rounded-[1.8rem] p-6">
-        <DataTable columns={columns} rows={rows} rowKey={(row) => row.table} />
+        <DataTable
+          columns={columns}
+          rows={rows}
+          rowKey={(row) => row.table}
+          emptyState={
+            <EmptyState
+              icon={DatabaseZap}
+              title="Keine Tabellenstatistiken vorhanden"
+              description="Der aktuelle Datenbank-Snapshot enthält noch keine Tabellenzeilen."
+            />
+          }
+        />
       </article>
     </section>
   );

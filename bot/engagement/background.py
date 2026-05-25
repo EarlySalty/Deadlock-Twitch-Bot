@@ -3,8 +3,9 @@
 Vier asyncio-Loops, gestartet lazy beim ersten Pipeline-Aufruf:
 1. Thread-Extractor (alle 15min, pro enabled Channel)
 2. Match-Poller (alle 30s, pro enabled Channel mit steam_id)
-3. Auto-Closer für Threads (alle 1h)
-4. Conversation-Trim (alle 24h, behält letzte 500 pro Channel)
+3. Stream-Transkript-Worker (kurze OpenAI-STT-Chunks pro enabled Channel)
+4. Auto-Closer für Threads (alle 1h)
+5. Conversation-Trim (alle 24h, behält letzte 500 pro Channel)
 
 Lifecycle: `ensure_started()` idempotent, Tasks leben mit dem Prozess.
 """
@@ -13,13 +14,23 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import random
 import threading
+from datetime import UTC, datetime, timedelta
 
 from bot.storage.pg import query_all, transaction
 
 from .match_context import poll_match_state
 from .minimax_chat import EngagementMinimaxClient
+from .stream_transcripts import (
+    StreamTranscriptSegment,
+    append_segment,
+    transcript_capture_seconds,
+    transcript_poll_interval_seconds,
+    transcript_quality,
+    trim_segments,
+)
 from .threads import auto_close_stale, extract_threads
 
 log = logging.getLogger("TwitchStreams.Engagement.Background")
@@ -30,6 +41,7 @@ _MATCH_POLLER_INTERVAL_SEC = 30
 _AUTO_CLOSER_INTERVAL_SEC = 60 * 60
 _CONVERSATION_TRIM_INTERVAL_SEC = 24 * 60 * 60
 _CONVERSATION_KEEP_PER_CHANNEL = 500
+_TRANSCRIPT_TRIM_INTERVAL_SEC = 15 * 60
 
 _started = False
 _started_lock = threading.Lock()
@@ -101,6 +113,87 @@ async def _run_match_poller_loop() -> None:
         await _jittered_sleep(_MATCH_POLLER_INTERVAL_SEC)
 
 
+def _stream_transcripts_enabled() -> bool:
+    value = str(os.getenv("ENGAGEMENT_STREAM_TRANSCRIPTS_ENABLED", "1")).strip().lower()
+    return value not in {"", "0", "false", "no", "off"}
+
+
+def _resolve_transcriber():
+    engine_name = os.getenv("ENGAGEMENT_TRANSCRIBER") or "openai_api"
+    from bot.social_media.transcription.whisper import get_transcriber
+
+    return get_transcriber(engine_name)
+
+
+async def _transcribe_capture(channel_login: str, transcriber) -> None:
+    from bot.community.voice_reaction import audio_capture
+    from bot.social_media.transcription.whisper import transcribe_clip
+
+    capture_result = None
+    try:
+        capture_result = await audio_capture.capture(
+            channel_login,
+            duration_seconds=transcript_capture_seconds(),
+            quality=transcript_quality(),
+        )
+        result = await transcribe_clip(capture_result.media_path, engine=transcriber)
+        text = " ".join(str(getattr(result, "text", "") or "").split())
+        if not text:
+            return
+        duration_seconds = (
+            float(getattr(result, "duration_seconds", 0.0) or 0.0)
+            or float(capture_result.actual_duration_seconds or 0.0)
+            or float(capture_result.requested_duration_seconds or 0.0)
+        )
+        ended_at = datetime.now(UTC)
+        started_at = ended_at - timedelta(seconds=max(1.0, duration_seconds))
+        await append_segment(
+            StreamTranscriptSegment(
+                channel_login=channel_login,
+                started_at=started_at,
+                ended_at=ended_at,
+                text=text,
+                engine=str(getattr(result, "engine", "") or "openai_api"),
+                model=str(getattr(result, "model", "") or "") or None,
+            )
+        )
+    finally:
+        if capture_result is not None:
+            capture_result.cleanup()
+
+
+async def _run_stream_transcript_loop() -> None:
+    transcriber = None
+    last_trim_at = 0.0
+    while True:
+        if not _stream_transcripts_enabled():
+            await _jittered_sleep(transcript_poll_interval_seconds())
+            continue
+        try:
+            if transcriber is None:
+                transcriber = _resolve_transcriber()
+            channels = await asyncio.to_thread(_sync_load_enabled_channels)
+            for channel_login, _steam_id in channels:
+                try:
+                    await _transcribe_capture(str(channel_login), transcriber)
+                except Exception:
+                    log.debug(
+                        "Background: stream-transcript für %s fehlgeschlagen",
+                        channel_login,
+                        exc_info=True,
+                    )
+            now = asyncio.get_running_loop().time()
+            if now - last_trim_at >= _TRANSCRIPT_TRIM_INTERVAL_SEC:
+                last_trim_at = now
+                deleted = await trim_segments()
+                if deleted:
+                    log.info("Background: stream-transcript-trim deleted %d rows", deleted)
+        except Exception:
+            log.exception("Background: stream-transcript loop iteration fehlgeschlagen")
+            transcriber = None
+        await _jittered_sleep(transcript_poll_interval_seconds())
+
+
 async def _run_auto_closer_loop() -> None:
     while True:
         try:
@@ -145,9 +238,11 @@ def ensure_started() -> None:
         _started = True
         loop.create_task(_run_thread_extractor_loop(), name="engagement-thread-extractor")
         loop.create_task(_run_match_poller_loop(), name="engagement-match-poller")
+        loop.create_task(_run_stream_transcript_loop(), name="engagement-stream-transcripts")
         loop.create_task(_run_auto_closer_loop(), name="engagement-auto-closer")
         loop.create_task(_run_conversation_trim_loop(), name="engagement-conv-trim")
         log.info(
             "Engagement-Background-Jobs gestartet "
-            "(thread-extractor=15min, match-poller=30s, auto-closer=1h, conv-trim=24h)"
+            "(thread-extractor=15min, match-poller=30s, stream-transcripts=on, "
+            "auto-closer=1h, conv-trim=24h)"
         )

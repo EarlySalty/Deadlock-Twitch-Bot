@@ -1,4 +1,4 @@
-"""Legal pages mixin: Impressum + Datenschutz (§5 TMG / DSGVO)."""
+"""Legal pages mixin: Impressum, Datenschutz and AGB."""
 
 from __future__ import annotations
 
@@ -21,15 +21,15 @@ LEGAL_PAGE_HEADERS = {
     "X-Robots-Tag": "noindex, nofollow, noarchive, nosnippet, noimageindex"
 }
 LEGAL_GATE_TURNSTILE_VERIFY_URL = "https://challenges.cloudflare.com/turnstile/v0/siteverify"
-LEGAL_GATE_ALLOWED_PATHS = frozenset(("/twitch/impressum", "/twitch/datenschutz"))
+LEGAL_GATE_ALLOWED_PATHS = frozenset(("/twitch/impressum", "/twitch/datenschutz", "/twitch/agb"))
 LEGAL_GATE_COOKIE_NAME = "twitch_legal_gate"
 LEGAL_GATE_COOKIE_TTL_SECONDS = 600
 LEGAL_GATE_TURNSTILE_ACTION = "legal_access"
 LEGAL_PAGE_SLUGS = frozenset(("impressum", "datenschutz", "agb"))
 LEGAL_PAGE_TITLES = {
     "impressum": "Impressum",
-    "datenschutz": "Datenschutzerklaerung",
-    "agb": "Allgemeine Geschaeftsbedingungen",
+    "datenschutz": "Datenschutzerklärung",
+    "agb": "Allgemeine Geschäftsbedingungen",
 }
 _LEGAL_STORAGE_PATH = (
     Path(__file__).resolve().parents[3] / "data" / "admin_dashboard" / "legal_pages.json"
@@ -77,124 +77,144 @@ def _build_blocked_legal_page_response() -> web.Response:
 
 _DEFAULT_LEGAL_PAGE_BODIES: dict[str, str] = {
     "impressum": (
-        "<p class='sub'>Angaben gemaess § 5 TMG</p>"
+        "<p class='sub'>Angaben gemäß § 5 DDG</p>"
         "<h2>Betreiber</h2>"
-        "<address>Nathanael Golla<br>Binger Strasse 5<br>55263 Wackernheim</address>"
+        "<address>Nathanael Golla<br>Binger Straße 5<br>55263 Wackernheim</address>"
         "<h2>Kontakt</h2>"
         "<p><a href='mailto:mail@earlysalty.com'>mail@earlysalty.com</a></p>"
-        "<h2>Verantwortlich fuer den Inhalt</h2>"
-        "<p>Verantwortlich fuer den Inhalt nach § 18 Abs. 2 MStV:<br>"
+        "<h2>Verantwortlich für den Inhalt</h2>"
+        "<p>Verantwortlich für den Inhalt nach § 18 Abs. 2 MStV:<br>"
         "Nathanael Golla, Anschrift wie oben.</p>"
     ),
     "agb": (
         "<p class='sub'>Stand: Mai 2026</p>"
         "<h2>§ 1 Geltungsbereich</h2>"
-        "<p>Diese Allgemeinen Geschaeftsbedingungen (AGB) gelten fuer alle Vertraege zwischen "
-        "Nathanael Golla, Binger Strasse 5, 55263 Wackernheim (nachfolgend "
-        "<em>Anbieter</em>) und Nutzern des Dienstes Deutsche Deadlock Community "
-        "(nachfolgend <em>Kunde</em>). Abweichende Bedingungen des Kunden werden nicht "
-        "anerkannt, es sei denn, der Anbieter stimmt ihrer Geltung ausdruecklich schriftlich zu.</p>"
+        "<p>Diese Allgemeinen Geschäftsbedingungen (AGB) gelten für Verträge über die "
+        "digitalen Dienste der Deutschen Deadlock Community zwischen Nathanael Golla, "
+        "Binger Straße 5, 55263 Wackernheim (nachfolgend <em>Anbieter</em>) und den "
+        "Nutzerinnen und Nutzern des Dienstes (nachfolgend <em>Kundschaft</em>). "
+        "Abweichende Bedingungen werden nur Vertragsbestandteil, wenn der Anbieter ihnen "
+        "ausdrücklich zustimmt.</p>"
         "<h2>§ 2 Vertragsgegenstand</h2>"
-        "<p>Der Anbieter stellt digitale Dienste fuer Twitch-Streamer bereit. Das Angebot umfasst:</p>"
-        "<p><strong>Raid Boost</strong> - Bevorzugte Platzierung des Kanals im Raid-Netzwerk des Anbieters.</p>"
-        "<p><strong>Analyse Dashboard</strong> - Zugang zu einem Analytics-Dashboard mit Stream-Statistiken, "
-        "Viewer-Verlauf und Wachstumsanalysen.</p>"
-        "<p><strong>Bundle: Analyse + Raid Boost</strong> - Kombination beider Dienste zu einem "
-        "verguenstigten Preis.</p>"
+        "<p>Der Anbieter stellt digitale Dienste für Twitch-Streamer bereit. Das Angebot kann "
+        "insbesondere folgende Bestandteile umfassen:</p>"
+        "<ul>"
+        "<li><strong>Raid Boost:</strong> bevorzugte Platzierung des Kanals im Raid-Netzwerk.</li>"
+        "<li><strong>Analyse-Dashboard:</strong> Zugang zu Statistiken, Viewer-Verläufen und "
+        "Wachstumsanalysen.</li>"
+        "<li><strong>Bundle:</strong> Kombination aus Analyse-Dashboard und Raid Boost.</li>"
+        "</ul>"
+        "<p>Der konkrete Leistungsumfang ergibt sich aus der im Checkout ausgewählten Option.</p>"
         "<h2>§ 3 Vertragsschluss</h2>"
-        "<p>Das Angebot des Anbieters auf der Plattform stellt eine unverbindliche Aufforderung "
-        "zur Abgabe eines Angebots dar. Durch das Absenden des Checkout-Formulars (via Stripe) "
-        "gibt der Kunde ein verbindliches Angebot ab. Der Vertrag kommt mit der Bestaetigung der "
-        "Zahlung durch Stripe zustande.</p>"
+        "<p>Die Darstellung der Dienste ist eine unverbindliche Aufforderung zur Bestellung. "
+        "Durch Absenden des Checkout-Formulars über Stripe gibt die Kundschaft ein verbindliches "
+        "Angebot ab. Der Vertrag kommt zustande, sobald die Zahlung durch Stripe bestätigt wurde "
+        "oder der Anbieter den Zugang freischaltet.</p>"
         "<h2>§ 4 Preise und Zahlung</h2>"
-        "<p>Alle angegebenen Preise verstehen sich als Nettopreise zzgl. der gesetzlichen "
-        "Mehrwertsteuer (derzeit 19 % gem. § 12 UStG). Die Abrechnung erfolgt ueber den "
-        "Zahlungsdienstleister Stripe. Der Rechnungsbetrag wird zum Beginn des gebuchten "
-        "Abrechnungszeitraums faellig.</p>"
-        "<p>Bei Buchung eines <strong>Jahresabonnements</strong> (12 Monate) wird der volle "
-        "Jahresbetrag sofort bei Vertragsschluss berechnet. Als Dankeschoen fuer die Jahresbindung "
-        "gewaehrt der Anbieter zusaetzlich 2 kostenfreie Bonusmonate, sodass der Zugang insgesamt "
-        "14 Monate ab Zahlung besteht. Diese Gutschrift ist nicht bar auszahlbar und nicht "
-        "uebertragbar.</p>"
-        "<h2>§ 5 Laufzeit und Kuendigung</h2>"
-        "<p>Abonnements werden fuer den gewaehlten Zeitraum (1 oder 12 Monate) abgeschlossen "
-        "und verlaengern sich automatisch um den gleichen Zeitraum, sofern nicht rechtzeitig "
-        "gekuendigt wird. Die Kuendigung ist jederzeit zum Ende der laufenden Periode ueber die "
-        "Abo-Verwaltung unter <a href='/twitch/dashboard'>/twitch/dashboard</a> moeglich.</p>"
+        "<p>Die im Checkout angegebenen Preise gelten zum Zeitpunkt der Bestellung. Soweit nicht "
+        "anders angegeben, verstehen sich Preise zuzüglich der gesetzlichen Umsatzsteuer. Die "
+        "Abrechnung erfolgt über den Zahlungsdienstleister Stripe. Der Rechnungsbetrag wird zu "
+        "Beginn des gebuchten Abrechnungszeitraums fällig.</p>"
+        "<p>Bei Buchung eines Jahresabonnements wird der Jahresbetrag sofort berechnet. Sofern "
+        "im Angebot ausgewiesen, können zusätzliche Bonusmonate gewährt werden. Bonusmonate sind "
+        "nicht bar auszahlbar und nicht übertragbar.</p>"
+        "<h2>§ 5 Laufzeit und Kündigung</h2>"
+        "<p>Abonnements laufen für den gewählten Zeitraum und verlängern sich automatisch um den "
+        "gleichen Zeitraum, sofern sie nicht zum Ende der laufenden Periode gekündigt werden. "
+        "Die Kündigung ist über die Abo-Verwaltung unter "
+        "<a href='/twitch/dashboard'>/twitch/dashboard</a> oder per E-Mail an "
+        "<a href='mailto:mail@earlysalty.com'>mail@earlysalty.com</a> möglich.</p>"
         "<h2 id='widerruf'>§ 6 Widerrufsrecht und sofortige Leistungserbringung</h2>"
-        "<p>Bei den angebotenen Diensten handelt es sich um digitale Inhalte, die auf Abruf "
-        "bereitgestellt werden (§ 312f Abs. 3 BGB). Der Anbieter beginnt mit der Erbringung "
-        "der Leistung unmittelbar nach Vertragsschluss.</p>"
-        "<p>Das Widerrufsrecht erlischt gemaess <strong>§ 356 Abs. 5 BGB</strong>, wenn der "
-        "Verbraucher vor Beginn der Ausfuehrung ausdruecklich zugestimmt hat, dass der Anbieter "
-        "vor Ablauf der Widerrufsfrist mit der Ausfuehrung des Vertrags beginnt, und seine "
-        "Kenntnis davon bestaetigt hat, dass er durch seine Zustimmung mit Beginn der Ausfuehrung "
-        "sein Widerrufsrecht verliert.</p>"
-        "<p>Der Kunde bestaetigt diese Einwilligung im Bestellprozess durch Aktivieren der "
-        "entsprechenden Checkbox. Mit Abschluss der Bestellung gilt das Widerrufsrecht als "
-        "erloschen. Eine Rueckerstattung bereits erbrachter Leistungen ist daher ausgeschlossen, "
-        "sofern nicht zwingende gesetzliche Vorschriften entgegenstehen.</p>"
-        "<h2>§ 7 Verfuegbarkeit und Haftung</h2>"
-        "<p>Der Anbieter bemueht sich nach besten Kraeften um eine hohe Verfuegbarkeit der "
-        "Dienste, uebernimmt jedoch keine Garantie fuer einen unterbrechungsfreien Betrieb. "
-        "Die Haftung des Anbieters ist auf Vorsatz und grobe Fahrlaessigkeit beschraenkt, "
-        "soweit keine zwingenden gesetzlichen Regelungen entgegenstehen. Eine Haftung fuer "
-        "entgangene Gewinne oder mittelbare Schaeden ist ausgeschlossen.</p>"
+        "<p>Bei den angebotenen Diensten handelt es sich um digitale Leistungen, die unmittelbar "
+        "nach Vertragsschluss bereitgestellt werden können. Das Widerrufsrecht kann nach "
+        "<strong>§ 356 Abs. 5 BGB</strong> erlöschen, wenn Verbraucherinnen und Verbraucher "
+        "ausdrücklich zustimmen, dass der Anbieter vor Ablauf der Widerrufsfrist mit der "
+        "Ausführung beginnt, und bestätigen, dass sie dadurch ihr Widerrufsrecht verlieren.</p>"
+        "<p>Diese Zustimmung wird im Bestellprozess gesondert abgefragt, sofern sie für den "
+        "jeweiligen Vertrag erforderlich ist. Zwingende gesetzliche Rechte bleiben unberührt.</p>"
+        "<h2>§ 7 Verfügbarkeit und Haftung</h2>"
+        "<p>Der Anbieter bemüht sich um einen stabilen Betrieb, kann aber keine ununterbrochene "
+        "Verfügbarkeit garantieren. Wartung, Störungen bei Drittanbietern wie Twitch, Discord "
+        "oder Stripe sowie technische Ausfälle können die Nutzung zeitweise einschränken.</p>"
+        "<p>Die Haftung richtet sich nach den gesetzlichen Vorschriften. Für leicht fahrlässige "
+        "Pflichtverletzungen haftet der Anbieter nur bei Verletzung wesentlicher Vertragspflichten "
+        "und begrenzt auf den vertragstypischen, vorhersehbaren Schaden.</p>"
         "<h2>§ 8 Datenschutz</h2>"
         "<p>Informationen zur Verarbeitung personenbezogener Daten finden sich in der "
-        "<a href='/twitch/datenschutz'>Datenschutzerklaerung</a>.</p>"
-        "<h2>§ 9 Aenderungen der AGB</h2>"
-        "<p>Der Anbieter behaelt sich das Recht vor, diese AGB mit einer Frist von 4 Wochen "
-        "zu aendern. Aenderungen werden dem Kunden per E-Mail an die hinterlegte Adresse "
-        "mitgeteilt. Widerspricht der Kunde nicht innerhalb von 4 Wochen nach Zugang der "
-        "Mitteilung, gelten die geaenderten AGB als angenommen.</p>"
+        "<a href='/twitch/datenschutz'>Datenschutzerklärung</a>.</p>"
+        "<h2>§ 9 Änderungen der AGB</h2>"
+        "<p>Der Anbieter kann diese AGB anpassen, wenn sachliche Gründe vorliegen, zum Beispiel "
+        "gesetzliche Änderungen, technische Weiterentwicklungen oder Änderungen des "
+        "Leistungsumfangs. Wesentliche Änderungen werden rechtzeitig mitgeteilt. "
+        "Bestehende gesetzliche Rechte der Kundschaft bleiben unberührt.</p>"
         "<h2>§ 10 Schlussbestimmungen</h2>"
-        "<p>Es gilt deutsches Recht unter Ausschluss des UN-Kaufrechts. Gerichtsstand fuer "
-        "Kaufleute und juristische Personen des oeffentlichen Rechts ist Wackernheim; "
-        "zustaendig ist das Amtsgericht Mainz. Sollten einzelne Bestimmungen dieser AGB "
-        "unwirksam sein, bleibt die Wirksamkeit der uebrigen Bestimmungen unberuehrt.</p>"
+        "<p>Es gilt deutsches Recht unter Ausschluss des UN-Kaufrechts. Für Verbraucherinnen "
+        "und Verbraucher gelten zusätzlich die zwingenden Verbraucherschutzvorschriften ihres "
+        "gewöhnlichen Aufenthaltsortes. Sollten einzelne Bestimmungen dieser AGB unwirksam sein, "
+        "bleibt die Wirksamkeit der übrigen Bestimmungen unberührt.</p>"
     ),
     "datenschutz": (
-        "<p class='sub'>Stand: Februar 2026</p>"
+        "<p class='sub'>Stand: Mai 2026</p>"
         "<h2>Verantwortlicher</h2>"
-        "<p>Nathanael Golla<br>Binger Strasse 5, 55263 Wackernheim<br>"
+        "<p>Nathanael Golla<br>Binger Straße 5, 55263 Wackernheim<br>"
         "<a href='mailto:mail@earlysalty.com'>mail@earlysalty.com</a></p>"
-        "<h2>Erhobene Daten</h2>"
-        "<p>Beim Login und bei der Nutzung des Dienstes werden folgende Daten verarbeitet:</p>"
+        "<h2>Zwecke und Rechtsgrundlagen</h2>"
+        "<p>Wir verarbeiten personenbezogene Daten, um Login, Abo-Verwaltung, Zahlungsabwicklung, "
+        "Dashboard-Funktionen, Support und den sicheren Betrieb des Dienstes bereitzustellen. "
+        "Rechtsgrundlagen sind insbesondere Art. 6 Abs. 1 lit. b DSGVO (Vertragserfüllung), "
+        "Art. 6 Abs. 1 lit. c DSGVO (gesetzliche Pflichten) und Art. 6 Abs. 1 lit. f DSGVO "
+        "(berechtigte Interessen an Sicherheit, Fehleranalyse und Missbrauchsschutz).</p>"
+        "<h2>Verarbeitete Daten</h2>"
+        "<p>Je nach Nutzung können insbesondere folgende Daten verarbeitet werden:</p>"
         "<ul>"
-        "<li>Twitch OAuth: Twitch-Name, Twitch-ID, E-Mail-Adresse</li>"
-        "<li>Zahlungsdaten: werden ausschliesslich ueber Stripe verarbeitet (s.&nbsp;u.)</li>"
+        "<li>Twitch-Daten: Twitch-Name, Twitch-ID, OAuth-Status und von Twitch "
+        "bereitgestellte Profildaten.</li>"
+        "<li>Discord-Daten: Discord-ID, Anzeigename und Rollenstatus, soweit für Community- "
+        "oder Admin-Funktionen erforderlich.</li>"
+        "<li>Abonnement- und Rechnungsdaten: Plan, Status, Buchungszeitpunkt, "
+        "Rechnungsreferenzen und steuerlich relevante Angaben.</li>"
+        "<li>Nutzungs- und Analysedaten: Stream-Statistiken, Viewer-Verläufe, Chat- und "
+        "Dashboard-Metriken, soweit sie für gebuchte Funktionen benötigt werden.</li>"
+        "<li>Technische Daten: IP-Adresse, User-Agent, Zeitstempel, Logdaten, "
+        "Sicherheitsereignisse und Session-Cookies.</li>"
         "</ul>"
-        "<h2>Stripe als Zahlungsdienstleister</h2>"
-        "<p>Zahlungen werden ueber Stripe Payments Europe Ltd. abgewickelt. "
-        "Stripe verarbeitet Zahlungsdaten als eigenverantwortlicher Verantwortlicher "
-        "gemaess seiner eigenen Datenschutzrichtlinie: "
+        "<h2>Empfänger und Dienstleister</h2>"
+        "<p>Zahlungen werden über Stripe Payments Europe Ltd. abgewickelt. Stripe verarbeitet "
+        "Zahlungsdaten nach eigener Datenschutzrichtlinie: "
         "<a href='https://stripe.com/de/privacy' target='_blank' "
         "rel='noopener noreferrer'>stripe.com/de/privacy</a>.</p>"
+        "<p>Für Login- und Plattformfunktionen werden Daten mit Twitch, Discord und den jeweils "
+        "angebundenen Plattformen ausgetauscht, soweit dies technisch oder vertraglich "
+        "notwendig ist. Für den Schutz der Legal-Seiten kann Cloudflare Turnstile eingesetzt "
+        "werden, um automatisierte Zugriffe zu erkennen.</p>"
         "<h2>Cookies</h2>"
-        "<p>Diese Website verwendet ausschliesslich technisch notwendige Cookies (Session-Cookie "
-        "fuer die Anmeldung via Twitch OAuth). Es werden keine Tracking-, Analyse- oder "
-        "Marketing-Cookies eingesetzt. Eine Einwilligung ist gem. § 25 Abs. 2 TTDSG nicht "
-        "erforderlich. Stripe setzt Cookies nur auf der eigenen Domain (stripe.com) "
-        "waehrend des Bezahlvorgangs.</p>"
+        "<p>Diese Website verwendet technisch notwendige Cookies, insbesondere für Login-Sessions, "
+        "Abo-Verwaltung und das Legal-Access-Gate. Es werden keine Marketing-Cookies eingesetzt. "
+        "Eine Einwilligung ist für unbedingt erforderliche Cookies gemäß § 25 Abs. 2 Nr. 2 TDDDG "
+        "nicht erforderlich. Stripe kann während des Bezahlvorgangs Cookies auf eigenen "
+        "Domains setzen.</p>"
         "<h2>Speicherdauer</h2>"
-        "<p>Deine Daten werden gespeichert, solange dein Abonnement aktiv ist oder "
-        "gesetzliche Aufbewahrungspflichten bestehen "
-        "(z.&nbsp;B. steuerrechtlich 10 Jahre fuer Rechnungsdaten).</p>"
+        "<p>Daten werden nur so lange gespeichert, wie sie für die genannten Zwecke "
+        "erforderlich sind. Abonnement- und Nutzungsdaten werden grundsätzlich für die Dauer "
+        "des Vertrags gespeichert. "
+        "Rechnungs- und Buchungsdaten können aufgrund gesetzlicher Aufbewahrungspflichten bis zu "
+        "10 Jahre gespeichert werden. Sicherheits- und Serverlogs werden regelmäßig gelöscht, "
+        "sofern keine längere Aufbewahrung zur Aufklärung von Missbrauch oder Störungen "
+        "erforderlich ist.</p>"
         "<h2>Deine Rechte (Art. 15-22 DSGVO)</h2>"
         "<ul>"
-        "<li>Auskunft ueber gespeicherte Daten (Art. 15)</li>"
+        "<li>Auskunft über gespeicherte Daten (Art. 15)</li>"
         "<li>Berichtigung unrichtiger Daten (Art. 16)</li>"
-        "<li>Loeschung deiner Daten (Art. 17)</li>"
-        "<li>Einschraenkung der Verarbeitung (Art. 18)</li>"
-        "<li>Datenuebertragbarkeit (Art. 20)</li>"
+        "<li>Löschung deiner Daten (Art. 17)</li>"
+        "<li>Einschränkung der Verarbeitung (Art. 18)</li>"
+        "<li>Datenübertragbarkeit (Art. 20)</li>"
         "<li>Widerspruch gegen die Verarbeitung (Art. 21)</li>"
         "</ul>"
         "<p>Zur Wahrnehmung dieser Rechte wende dich an: "
         "<a href='mailto:mail@earlysalty.com'>mail@earlysalty.com</a></p>"
         "<h2>Beschwerderecht</h2>"
-        "<p>Du hast das Recht, dich bei der zustaendigen Datenschutz-Aufsichtsbehoerde "
-        "zu beschweren. Zustaendig ist der <em>Landesbeauftragte fuer den Datenschutz "
+        "<p>Du hast das Recht, dich bei der zuständigen Datenschutz-Aufsichtsbehörde "
+        "zu beschweren. Zuständig ist der <em>Landesbeauftragte für den Datenschutz "
         "und die Informationsfreiheit Rheinland-Pfalz (LfDI)</em>, "
         "Hintere Bleiche 34, 55116 Mainz.</p>"
     ),
@@ -276,14 +296,14 @@ def save_legal_page_document(
 
     _LEGAL_STORAGE_PATH.parent.mkdir(parents=True, exist_ok=True)
     _LEGAL_STORAGE_PATH.write_text(
-        json.dumps(raw_payload, ensure_ascii=True, indent=2),
+        json.dumps(raw_payload, ensure_ascii=False, indent=2),
         encoding="utf-8",
     )
     return document
 
 
 class _DashboardLegalMixin:
-    """Handlers for /twitch/impressum and /twitch/datenschutz — no auth required."""
+    """Handlers for /twitch/impressum, /twitch/datenschutz and /twitch/agb."""
 
     @staticmethod
     def _legal_page_request_is_blocked(request: web.Request) -> bool:
@@ -395,7 +415,7 @@ class _DashboardLegalMixin:
         safe_location = (
             self._safe_internal_redirect(location, fallback="/twitch/legal/access")
             if hasattr(self, "_safe_internal_redirect")
-            else "/twitch/legal/access"
+            else location
         )
         return web.HTTPFound(safe_location)
 
@@ -546,6 +566,7 @@ class _DashboardLegalMixin:
             "User-agent: *\n"
             "Disallow: /twitch/impressum\n"
             "Disallow: /twitch/datenschutz\n"
+            "Disallow: /twitch/agb\n"
         )
         return web.Response(text=robots, content_type="text/plain")
 
@@ -559,7 +580,7 @@ class _DashboardLegalMixin:
             safe_next_path = (
                 self._safe_internal_redirect(next_path, fallback="/twitch/impressum")
                 if hasattr(self, "_safe_internal_redirect")
-                else "/twitch/impressum"
+                else next_path
             )
             raise web.HTTPFound(safe_next_path)
         page = self._render_legal_gate_page(
@@ -586,7 +607,7 @@ class _DashboardLegalMixin:
         safe_next_path = (
             self._safe_internal_redirect(next_path, fallback="/twitch/impressum")
             if hasattr(self, "_safe_internal_redirect")
-            else "/twitch/impressum"
+            else next_path
         )
         response = web.HTTPFound(safe_next_path)
         self._legal_gate_set_cookie(response, request)
@@ -645,7 +666,7 @@ class _DashboardLegalMixin:
             ".footer{margin-top:40px;font-size:12px;color:#94a3b8;"
             "border-top:1px solid #e2e8f0;padding-top:14px;}"
             "</style></head><body><div class='wrap'>"
-            "<a class='back' href='/twitch/pricing'>&larr; Zurueck zu den Plaenen</a>"
+            "<a class='back' href='/twitch/pricing'>&larr; Zurück zu den Plänen</a>"
             f"<h1>{html.escape(title)}</h1>"
             f"{body}"
             f"<div class='footer'>{footer_html}</div>"
@@ -653,7 +674,7 @@ class _DashboardLegalMixin:
         )
 
     async def abbo_impressum(self, request: web.Request) -> web.StreamResponse:
-        """GET /twitch/impressum — §5 TMG. Must be accessible without login."""
+        """GET /twitch/impressum — §5 DDG behind the legal human gate."""
         if self._legal_page_request_is_blocked(request):
             return _build_blocked_legal_page_response()
         if not self._legal_gate_is_enabled():
@@ -665,29 +686,35 @@ class _DashboardLegalMixin:
             title=str(document.get("title") or LEGAL_PAGE_TITLES["impressum"]),
             body=str(document.get("body") or ""),
             footer_links=(
-                ("/twitch/abbo", "Plaene"),
+                ("/twitch/abbo", "Pläne"),
                 ("/twitch/datenschutz", "Datenschutz"),
                 ("/twitch/agb", "AGB"),
             ),
         )
         return web.Response(text=page, content_type="text/html", headers=LEGAL_PAGE_HEADERS)
 
-    async def abbo_agb(self, request: web.Request) -> web.StreamResponse:  # noqa: ARG002
-        """GET /twitch/agb — AGB für digitale Abo-Dienste. Kein Auth nötig."""
+    async def abbo_agb(self, request: web.Request) -> web.StreamResponse:
+        """GET /twitch/agb — AGB for digital subscription services behind the legal human gate."""
+        if self._legal_page_request_is_blocked(request):
+            return _build_blocked_legal_page_response()
+        if not self._legal_gate_is_enabled():
+            return self._legal_gate_configuration_error_response()
+        if not self._legal_gate_cookie_is_valid(request):
+            raise self._legal_gate_redirect(request)
         document = self._load_legal_page_document("agb")
         page = self._render_legal_page(
             title=str(document.get("title") or LEGAL_PAGE_TITLES["agb"]),
             body=str(document.get("body") or ""),
             footer_links=(
-                ("/twitch/pricing", "Plaene"),
+                ("/twitch/pricing", "Pläne"),
                 ("/twitch/impressum", "Impressum"),
                 ("/twitch/datenschutz", "Datenschutz"),
             ),
         )
-        return web.Response(text=page, content_type="text/html")
+        return web.Response(text=page, content_type="text/html", headers=LEGAL_PAGE_HEADERS)
 
     async def abbo_datenschutz(self, request: web.Request) -> web.StreamResponse:
-        """GET /twitch/datenschutz — DSGVO Art. 13/14. Must be accessible without login."""
+        """GET /twitch/datenschutz — DSGVO Art. 13/14 behind the legal human gate."""
         if self._legal_page_request_is_blocked(request):
             return _build_blocked_legal_page_response()
         if not self._legal_gate_is_enabled():
@@ -699,7 +726,7 @@ class _DashboardLegalMixin:
             title=str(document.get("title") or LEGAL_PAGE_TITLES["datenschutz"]),
             body=str(document.get("body") or ""),
             footer_links=(
-                ("/twitch/abbo", "Plaene"),
+                ("/twitch/abbo", "Pläne"),
                 ("/twitch/impressum", "Impressum"),
                 ("/twitch/agb", "AGB"),
             ),

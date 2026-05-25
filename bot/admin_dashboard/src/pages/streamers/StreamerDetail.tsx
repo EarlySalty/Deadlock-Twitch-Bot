@@ -1,10 +1,12 @@
 import { useEffect, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
-import { ArrowLeft, Ban, BarChart3, Clock3, Radio, Save, Send, ShieldCheck, Trash2 } from 'lucide-react';
+import { ArrowLeft, Ban, BarChart3, CctvOff, Clock3, Radio, Save, Send, ShieldCheck, ShieldOff, Trash2 } from 'lucide-react';
 import { buildRaidAuthUrl, buildRaidRequirementsUrl } from '@/api/client';
+import { PageHeader } from '@/components/layout/PageHeader';
 import { KpiCard } from '@/components/shared/KpiCard';
 import { ConfirmDialog } from '@/components/shared/ConfirmDialog';
 import { DataTable, type TableColumn } from '@/components/shared/DataTable';
+import { EmptyState } from '@/components/shared/EmptyState';
 import { StatusBadge } from '@/components/shared/StatusBadge';
 import { Toast } from '@/components/shared/Toast';
 import {
@@ -200,58 +202,79 @@ export function StreamerDetailPage() {
   ];
 
   if (detailQuery.isLoading) {
-    return <div className="panel-card rounded-[1.8rem] p-8 text-white">Streamer wird geladen …</div>;
+    return (
+      <section className="space-y-5">
+        <PageHeader title="Streamer wird geladen" description="Die Detaildaten werden gerade aus dem Admin-Backend geladen." />
+        <div className="panel-card rounded-[1.8rem] p-8 text-white">Streamer wird geladen …</div>
+      </section>
+    );
   }
 
   if (detailQuery.isError) {
     return (
       <section className="space-y-5">
         <div className="panel-card rounded-[1.8rem] p-6">
-          <Link to="/community/streamers" className="inline-flex items-center gap-2 text-sm text-text-secondary hover:text-white">
+          <Link to="/community/streamers" className="inline-flex items-center gap-2 text-sm text-text-secondary transition hover:text-white">
             <ArrowLeft className="h-4 w-4" />
             Zurück zur Liste
           </Link>
         </div>
-        <div className="panel-card rounded-[1.8rem] p-8 text-white">
-          {detailQuery.error instanceof Error
-            ? detailQuery.error.message
-            : 'Streamer-Details konnten nicht geladen werden.'}
-        </div>
+        <PageHeader
+          title="Streamer-Details nicht verfügbar"
+          description={
+            detailQuery.error instanceof Error
+              ? detailQuery.error.message
+              : 'Streamer-Details konnten nicht geladen werden.'
+          }
+        />
       </section>
     );
   }
 
   if (!login) {
-    return <div className="panel-card rounded-[1.8rem] p-8 text-white">Ungültiger Streamer-Link.</div>;
+    return (
+      <section className="space-y-5">
+        <PageHeader title="Ungültiger Streamer-Link" description="Die Detailseite benötigt einen gültigen Login im Pfad." />
+      </section>
+    );
   }
 
   if (!detail) {
-    return <div className="panel-card rounded-[1.8rem] p-8 text-white">Kein Datensatz für diesen Streamer.</div>;
+    return (
+      <section className="space-y-5">
+        <PageHeader title={login} description="Für diesen Login ist aktuell kein verwalteter Streamer-Datensatz vorhanden." />
+      </section>
+    );
   }
 
   return (
     <section className="space-y-5">
-      <header className="panel-card rounded-[1.8rem] p-6">
-        <Link to="/community/streamers" className="inline-flex items-center gap-2 text-sm text-text-secondary hover:text-white">
+      <div className="panel-card rounded-[1.8rem] p-6">
+        <Link to="/community/streamers" className="inline-flex items-center gap-2 text-sm text-text-secondary transition hover:text-white">
           <ArrowLeft className="h-4 w-4" />
           Zurück zur Liste
         </Link>
-        <div className="mt-5 flex flex-col gap-5 lg:flex-row lg:items-end lg:justify-between">
-          <div>
-            <p className="text-xs font-semibold uppercase tracking-[0.28em] text-text-secondary">Streamer Detail</p>
-            <h1 className="mt-2 text-3xl font-semibold text-white">{detail.displayName || detail.login}</h1>
-            <p className="mt-2 text-sm text-text-secondary">
-              Zuletzt gesehen {formatRelativeTime(readString(stats, 'lastSeenAt', 'last_seen_at') || detail.archivedAt || detail.createdAt)}
-            </p>
+      </div>
+
+      <PageHeader
+        title={detail.displayName || detail.login}
+        description={`Zuletzt gesehen ${formatRelativeTime(readString(stats, 'lastSeenAt', 'last_seen_at') || detail.archivedAt || detail.createdAt)}`}
+        primaryAction={
+          <div className="flex flex-wrap justify-end gap-2">
+            <span className="stat-pill">Plan: {detail.planId || 'Unbekannt'}</span>
+            <span className="stat-pill">Sessions: {metricFromStats(stats, 'totalSessions', 'session_count', 'sessions')}</span>
           </div>
-          <div className="flex flex-wrap gap-2">
+        }
+        secondaryChips={
+          <>
             <StatusBadge status={detail.partnerStatus || 'active'} />
             <StatusBadge status={detail.isLive ? 'live' : detail.verified ? 'verified' : 'offline'} />
             <StatusBadge status={oauthStatus} />
+            {oauthNeedsReauth ? <StatusBadge status="reauth-needed" /> : null}
             {detail.planId ? <StatusBadge status={detail.planId} /> : null}
-          </div>
-        </div>
-      </header>
+          </>
+        }
+      />
 
       <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
         <KpiCard title="Plan" value={detail.planId || 'Unbekannt'} hint="effektiver Admin-Plan" icon={BarChart3} tone="primary" />
@@ -409,7 +432,7 @@ export function StreamerDetailPage() {
           <p className="text-xs font-semibold uppercase tracking-[0.2em] text-text-secondary">Raid OAuth & Scopes</p>
           <div className="mt-4 flex flex-wrap gap-2">
             <StatusBadge status={oauthStatus} />
-            {oauthNeedsReauth ? <StatusBadge status="warning" /> : null}
+            {oauthNeedsReauth ? <StatusBadge status="reauth-needed" /> : null}
             <span className="stat-pill">{grantedScopes.length} Scopes vorhanden</span>
             <span className="stat-pill">{missingScopes.length} Scopes fehlen</span>
           </div>
@@ -432,7 +455,12 @@ export function StreamerDetailPage() {
                     </span>
                   ))
                 ) : (
-                  <div className="text-sm text-text-secondary">Keine Scopes vorhanden.</div>
+                  <EmptyState
+                    icon={ShieldOff}
+                    title="Keine Scopes vorhanden"
+                    description="Für diesen Streamer liegen aktuell keine granteten OAuth-Scopes vor."
+                    className="w-full"
+                  />
                 )}
               </div>
             </div>
@@ -633,7 +661,18 @@ export function StreamerDetailPage() {
       <article className="panel-card rounded-[1.8rem] p-6">
         <p className="text-xs font-semibold uppercase tracking-[0.2em] text-text-secondary">Letzte Sessions</p>
         <div className="mt-4">
-          <DataTable columns={sessionColumns} rows={detail.sessions ?? []} rowKey={(row, index) => `${row.sessionId ?? index}`} />
+          <DataTable
+            columns={sessionColumns}
+            rows={detail.sessions ?? []}
+            rowKey={(row, index) => `${row.sessionId ?? index}`}
+            emptyState={
+              <EmptyState
+                icon={CctvOff}
+                title="Keine Sessions sichtbar"
+                description="Für diesen Streamer wurden im aktuellen Snapshot noch keine Sessions gefunden."
+              />
+            }
+          />
         </div>
       </article>
 
@@ -654,7 +693,7 @@ export function StreamerDetailPage() {
             setToast({ open: true, tone: result.ok ? 'success' : 'error', message: result.message });
             setConfirmRemove(false);
             if (result.ok) {
-              navigate('/streamers');
+              navigate('/community/streamers');
             }
           } catch (error) {
             setToast({ open: true, tone: 'error', message: error instanceof Error ? error.message : 'Streamer konnte nicht entfernt werden' });

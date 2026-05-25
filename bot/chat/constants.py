@@ -219,7 +219,7 @@ INVITE_QUESTION_USER_COOLDOWN_SEC: int = _INVITE_QUESTION_USER_COOLDOWN_SEC
 INVITE_QUESTION_RE = _INVITE_QUESTION_RE
 
 INVITE_ACCESS_RE = re.compile(
-    r"\b(spielen|spiel|play|zock\w*|zugang|einlad\w*|invit\w*|beta|key|access|ea|early\s*access|reinkomm\w*|rankomm\w*)\b",
+    r"\b(spielen|play|zock\w*|zugang|einlad\w*|invit\w*|beta|key|access|ea|early\s*access|reinkomm\w*|rankomm\w*)\b",
     re.IGNORECASE,
 )
 INVITE_STRONG_ACCESS_RE = re.compile(

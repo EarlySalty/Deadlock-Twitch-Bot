@@ -157,6 +157,24 @@ export interface AdminTextDocument {
   lastUpdatedBy?: string | null;
 }
 
+export interface AuditLogEntry {
+  id: string;
+  source: string;
+  action: string;
+  actor?: string | null;
+  target?: string | null;
+  timestamp: string;
+  description: string;
+  metadata?: Record<string, unknown> | null;
+}
+
+export interface AuditLogResponse {
+  entries: AuditLogEntry[];
+  sources: string[];
+  totalCount: number;
+  hasMore: boolean;
+}
+
 export type LegalPageSlug = 'impressum' | 'datenschutz' | 'agb';
 
 export interface LegalPageDocument extends AdminTextDocument {

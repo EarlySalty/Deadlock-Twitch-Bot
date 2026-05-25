@@ -51,13 +51,11 @@ def test_stats_entry_page_contains_expected_navigation() -> None:
     page = build_stats_entry_page(
         twitch_login="tester",
         logout_url="/logout",
-        legacy_url="/legacy",
         beta_url="/beta",
         scope_panel="<div>scope</div>",
     )
     assert "Willkommen, tester!" in page
     assert "/logout" in page
-    assert "/legacy" in page
     assert "/beta" in page
     assert "insights-panel" in page
 

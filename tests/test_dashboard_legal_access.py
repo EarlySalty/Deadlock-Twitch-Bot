@@ -90,6 +90,7 @@ class DashboardLegalAccessTests(unittest.IsolatedAsyncioTestCase):
                 web.post("/twitch/legal/verify", self.server_impl.legal_verify),
                 web.get("/twitch/impressum", self.server_impl.abbo_impressum),
                 web.get("/twitch/datenschutz", self.server_impl.abbo_datenschutz),
+                web.get("/twitch/agb", self.server_impl.abbo_agb),
             ]
         )
 
@@ -102,6 +103,7 @@ class DashboardLegalAccessTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.status, 200)
         self.assertIn("Disallow: /twitch/impressum", body)
         self.assertIn("Disallow: /twitch/datenschutz", body)
+        self.assertIn("Disallow: /twitch/agb", body)
 
     async def test_build_v2_app_registers_robots_txt_route(self) -> None:
         with (
@@ -184,6 +186,35 @@ class DashboardLegalAccessTests(unittest.IsolatedAsyncioTestCase):
             "/twitch/legal/access?next=/twitch/impressum",
         )
 
+    async def test_gate_redirects_agb_without_cookie_when_configured(self) -> None:
+        server_impl = _DummyLegalServer(
+            turnstile_site_key="site-key",
+            turnstile_secret_key="secret-key",
+            cookie_secret="cookie-secret",
+        )
+        app = web.Application()
+        app.add_routes(
+            [
+                web.get("/twitch/legal/access", server_impl.legal_access_page),
+                web.post("/twitch/legal/verify", server_impl.legal_verify),
+                web.get("/twitch/agb", server_impl.abbo_agb),
+            ]
+        )
+
+        async with TestServer(app) as server:
+            async with TestClient(server) as client:
+                response = await client.get(
+                    "/twitch/agb",
+                    allow_redirects=False,
+                    headers={"User-Agent": "Mozilla/5.0"},
+                )
+
+        self.assertEqual(response.status, 302)
+        self.assertEqual(
+            response.headers.get("Location"),
+            "/twitch/legal/access?next=/twitch/agb",
+        )
+
     async def test_gate_page_renders_turnstile_widget(self) -> None:
         server_impl = _DummyLegalServer(
             turnstile_site_key="site-key",
@@ -202,6 +233,23 @@ class DashboardLegalAccessTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("site-key", body)
         self.assertIn("cf-turnstile", body)
         self.assertIn("/twitch/datenschutz", body)
+
+    async def test_gate_page_accepts_agb_next_path(self) -> None:
+        server_impl = _DummyLegalServer(
+            turnstile_site_key="site-key",
+            turnstile_secret_key="secret-key",
+            cookie_secret="cookie-secret",
+        )
+        app = web.Application()
+        app.add_routes([web.get("/twitch/legal/access", server_impl.legal_access_page)])
+
+        async with TestServer(app) as server:
+            async with TestClient(server) as client:
+                response = await client.get("/twitch/legal/access?next=/twitch/agb")
+                body = await response.text()
+
+        self.assertEqual(response.status, 200)
+        self.assertIn("/twitch/agb", body)
 
     async def test_verify_sets_cookie_and_redirects_to_legal_page(self) -> None:
         server_impl = _DummyLegalServer(
@@ -257,6 +305,30 @@ class DashboardLegalAccessTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(response.status, 200)
         self.assertIn("Impressum", body)
+
+    async def test_valid_gate_cookie_allows_human_to_open_agb(self) -> None:
+        server_impl = _DummyLegalServer(
+            turnstile_site_key="site-key",
+            turnstile_secret_key="secret-key",
+            cookie_secret="cookie-secret",
+        )
+        app = web.Application()
+        app.add_routes([web.get("/twitch/agb", server_impl.abbo_agb)])
+        valid_cookie = server_impl._legal_gate_cookie_value(expires_at=2_000_000_000)
+
+        async with TestServer(app) as server:
+            async with TestClient(server) as client:
+                client.session.cookie_jar.update_cookies(
+                    {LEGAL_GATE_COOKIE_NAME: valid_cookie}
+                )
+                response = await client.get(
+                    "/twitch/agb",
+                    headers={"User-Agent": "Mozilla/5.0"},
+                )
+                body = await response.text()
+
+        self.assertEqual(response.status, 200)
+        self.assertIn("Allgemeine Geschäftsbedingungen", body)
 
     async def test_verify_rejects_invalid_turnstile_response(self) -> None:
         server_impl = _DummyLegalServer(
@@ -365,3 +437,15 @@ class DashboardLegalAccessTests(unittest.IsolatedAsyncioTestCase):
             response.headers.get("X-Robots-Tag"),
             "noindex, nofollow, noarchive, nosnippet, noimageindex",
         )
+
+    async def test_ai_bot_is_blocked_from_agb(self) -> None:
+        async with TestServer(self.app) as server:
+            async with TestClient(server) as client:
+                response = await client.get(
+                    "/twitch/agb",
+                    headers={"User-Agent": "GPTBot/1.0"},
+                )
+                body = await response.text()
+
+        self.assertEqual(response.status, 403)
+        self.assertEqual(body, "Forbidden")

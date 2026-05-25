@@ -1,9 +1,11 @@
 import { useState } from 'react';
-import { ChevronRight, Coins, FileText, RefreshCw, ShieldCheck, Users } from 'lucide-react';
+import { ChevronRight, Coins, FileText, RefreshCw, SearchX, ShieldCheck, Users } from 'lucide-react';
 import type { AffiliateListItem } from '@/api/types';
+import { PageHeader } from '@/components/layout/PageHeader';
 import { AffiliateDetailPanel } from '@/pages/billing/AffiliateDetailPanel';
 import { ConfirmDialog } from '@/components/shared/ConfirmDialog';
 import { DataTable, type TableColumn } from '@/components/shared/DataTable';
+import { EmptyState } from '@/components/shared/EmptyState';
 import { KpiCard } from '@/components/shared/KpiCard';
 import { SearchInput } from '@/components/shared/SearchInput';
 import { StatusBadge } from '@/components/shared/StatusBadge';
@@ -186,22 +188,13 @@ export function Affiliates() {
   return (
     <>
       <section className="space-y-6">
-        <header className="panel-card rounded-[1.8rem] p-6">
-          <div className="flex flex-col gap-5 lg:flex-row lg:items-end lg:justify-between">
-            <div>
-              <p className="text-xs font-semibold uppercase tracking-[0.28em] text-text-secondary">Billing</p>
-              <h1 className="mt-3 text-3xl font-semibold text-white">Affiliate-Verwaltung und Gutschriften</h1>
-              <p className="mt-3 max-w-3xl text-sm leading-6 text-text-secondary">
-                Aktivität, Provisionen und Gutschrift-Bereitschaft auf einen Blick. Leere oder fehlende Backend-Daten
-                werden defensiv behandelt, damit die Oberfläche bedienbar bleibt.
-              </p>
-            </div>
+        <PageHeader
+          title="Affiliate-Verwaltung und Gutschriften"
+          description="Aktivität, Provisionen und Gutschrift-Bereitschaft auf einen Blick. Leere oder fehlende Backend-Daten werden defensiv behandelt, damit die Oberfläche bedienbar bleibt."
+          primaryAction={
             <div className="flex flex-col gap-3 sm:flex-row">
               <div className="min-w-[18rem] flex-1">
-                <SearchInput
-                  placeholder="Nach Login oder Namen suchen"
-                  onDebouncedChange={setSearch}
-                />
+                <SearchInput placeholder="Nach Login oder Namen suchen" onDebouncedChange={setSearch} />
               </div>
               <button
                 type="button"
@@ -213,16 +206,16 @@ export function Affiliates() {
                 Gutschriften generieren
               </button>
             </div>
-          </div>
+          }
+        />
 
-          {affiliatesQuery.isError ? (
-            <div className="mt-5 rounded-2xl border border-red-400/20 bg-red-500/10 px-4 py-3 text-sm text-red-100">
-              {affiliatesQuery.error instanceof Error
-                ? affiliatesQuery.error.message
-                : 'Affiliate-Liste konnte nicht geladen werden.'}
-            </div>
-          ) : null}
-        </header>
+        {affiliatesQuery.isError ? (
+          <div className="rounded-2xl border border-red-400/20 bg-red-500/10 px-4 py-3 text-sm text-red-100">
+            {affiliatesQuery.error instanceof Error
+              ? affiliatesQuery.error.message
+              : 'Affiliate-Liste konnte nicht geladen werden.'}
+          </div>
+        ) : null}
 
         <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
           <KpiCard
@@ -269,12 +262,18 @@ export function Affiliates() {
               columns={columns}
               rows={filteredRows}
               rowKey={(row) => row.login}
-              emptyLabel={
-                affiliatesQuery.isLoading
-                  ? 'Affiliates werden geladen …'
-                  : normalizedSearch
-                    ? 'Keine Affiliates für diese Suche gefunden.'
-                    : 'Keine Affiliates vorhanden.'
+              emptyState={
+                <EmptyState
+                  icon={SearchX}
+                  title={affiliatesQuery.isLoading ? 'Affiliates werden geladen' : 'Keine Affiliates gefunden'}
+                  description={
+                    affiliatesQuery.isLoading
+                      ? 'Die Affiliate-Liste wird gerade geladen.'
+                      : normalizedSearch
+                        ? 'Für die aktuelle Suche wurden keine Affiliate-Profile gefunden.'
+                        : 'Es sind aktuell keine Affiliate-Profile vorhanden.'
+                  }
+                />
               }
             />
           </article>
@@ -283,14 +282,12 @@ export function Affiliates() {
             <AffiliateDetailPanel login={selectedLogin} onClose={() => setSelectedLogin(null)} />
           ) : (
             <aside className="panel-card flex min-h-[22rem] items-center justify-center rounded-[1.8rem] p-6">
-              <div className="max-w-xs text-center">
-                <p className="text-xs font-semibold uppercase tracking-[0.24em] text-text-secondary">Detailpanel</p>
-                <h2 className="mt-3 text-xl font-semibold text-white">Affiliate auswählen</h2>
-                <p className="mt-3 text-sm leading-6 text-text-secondary">
-                  Öffne einen Datensatz aus der Tabelle, um Stats, Readiness, letzte Claims und vorhandene
-                  Gutschriften zu prüfen.
-                </p>
-              </div>
+              <EmptyState
+                icon={FileText}
+                title="Affiliate auswählen"
+                description="Öffne einen Datensatz aus der Tabelle, um Stats, Readiness, letzte Claims und vorhandene Gutschriften zu prüfen."
+                className="w-full border-transparent bg-transparent"
+              />
             </aside>
           )}
         </div>

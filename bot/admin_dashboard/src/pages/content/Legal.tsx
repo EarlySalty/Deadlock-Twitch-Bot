@@ -106,7 +106,7 @@ export default function LegalPage() {
     <section className="space-y-6">
       <PageHeader
         title="Legal Pages"
-        description="Drei editierbare Rechtsseiten mit gemeinsamer Persistenz fuer Admin-JSON und die oeffentlichen /twitch/*-Seiten."
+        description="Drei editierbare Rechtsseiten mit gemeinsamer Persistenz für Admin-JSON und die öffentlichen /twitch/*-Seiten."
         primaryAction={
           <button
             className="admin-button admin-button-secondary"

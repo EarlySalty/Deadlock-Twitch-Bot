@@ -184,7 +184,7 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
                       title={collapsed ? item.label : undefined}
                       className={({ isActive }) =>
                         [
-                          'group flex items-center rounded-2xl border py-3 transition',
+                          'interactive-surface group flex items-center rounded-2xl border py-3',
                           collapsed ? 'justify-center px-2' : 'gap-3 px-3',
                           isActive
                             ? 'border-primary/40 bg-primary/12 text-white'
@@ -204,22 +204,6 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
           );
         })}
       </nav>
-
-      <div className={collapsed ? 'hidden' : 'block'}>
-        <div className="panel-card rounded-[1.6rem] p-4">
-          <p className="text-xs font-semibold uppercase tracking-[0.2em] text-text-secondary">Host</p>
-          <p className="mt-2 text-sm text-white">admin.deutsche-deadlock-community.de</p>
-          <p className="mt-2 text-xs leading-5 text-text-secondary">
-            Neue React-App unter <code>/twitch/admin</code> mit separater Admin-API.
-          </p>
-          <a
-            href="/twitch/admin/legacy"
-            className="mt-3 inline-flex w-full items-center justify-center rounded-2xl border border-white/10 bg-white/5 px-3 py-2 text-sm text-white transition hover:border-primary/40 hover:bg-primary/10"
-          >
-            Legacy Admin öffnen
-          </a>
-        </div>
-      </div>
     </aside>
   );
 }

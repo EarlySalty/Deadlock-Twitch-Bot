@@ -13,6 +13,7 @@ import {
   fetchAffiliatesList,
   fetchAffiliateStats,
   fetchAllGutschriften,
+  fetchAuditLog,
   fetchAdminStreamerDetail,
   fetchAdminStreamers,
   fetchConfigOverview,
@@ -119,6 +120,14 @@ export function useErrorLogs(page: number, pageSize: number) {
     queryKey: ['admin-error-logs', page, pageSize],
     queryFn: () => fetchErrorLogs(page, pageSize),
     staleTime: 15_000,
+  });
+}
+
+export function useAuditLog(params: { since?: string; limit?: number; source?: string } = {}) {
+  return useQuery({
+    queryKey: ['admin-audit-log', params.since ?? '', params.limit ?? 100, params.source ?? ''],
+    queryFn: () => fetchAuditLog(params),
+    staleTime: 30_000,
   });
 }
 

@@ -222,7 +222,7 @@ export function TopBar({ auth }: TopBarProps) {
                       key={row.login}
                       type="button"
                       className={[
-                        'flex w-full items-center justify-between rounded-[1rem] px-3 py-3 text-left transition',
+                        'interactive-surface flex w-full items-center justify-between rounded-[1rem] px-3 py-3 text-left',
                         index === activeIndex ? 'bg-white/10 text-white' : 'bg-transparent text-text-secondary hover:bg-white/6 hover:text-white',
                       ].join(' ')}
                       onMouseEnter={() => setActiveIndex(index)}

@@ -20,7 +20,7 @@ import LegalPage from '@/pages/content/Legal';
 import RoadmapPage from '@/pages/content/Roadmap';
 import BotControlPage from '@/pages/operations/BotControl';
 import ScopesPage from '@/pages/operations/Scopes';
-import { Placeholder } from '@/pages/_placeholder/Placeholder';
+import AuditLogPage from '@/pages/money/AuditLog';
 import { StreamerDetailPage } from '@/pages/streamers/StreamerDetail';
 import { StreamerList } from '@/pages/streamers/StreamerList';
 
@@ -73,16 +73,7 @@ const router = createBrowserRouter(
         { path: 'money/subscriptions', element: <Subscriptions /> },
         { path: 'money/affiliates', element: <Affiliates /> },
         { path: 'money/gutschriften', element: <Gutschriften /> },
-        {
-          path: 'money/audit',
-          element: (
-            <Placeholder
-              title="Audit Log"
-              description="Ein vereinheitlichtes Audit-Log wird im Money-&-Compliance-Schritt ergänzt."
-              plannedStep={6}
-            />
-          ),
-        },
+        { path: 'money/audit', element: <AuditLogPage /> },
         { path: 'streamers', element: <Navigate to="/community/streamers" replace /> },
         { path: 'streamers/:login', element: <LegacyRedirect to="/community/streamers/:login" /> },
         { path: 'monitoring', element: <Navigate to="/operations/system" replace /> },

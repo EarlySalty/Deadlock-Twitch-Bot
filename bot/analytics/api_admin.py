@@ -43,6 +43,7 @@ from .admin_streamer_queries import (
     load_admin_streamer_detail,
     load_admin_streamers,
 )
+from .audit_log import load_admin_audit_log
 from ..core.twitch_login import normalize_twitch_login
 from ..dashboard.admin.legal_mixin import (
     load_legal_page_document,
@@ -613,6 +614,7 @@ class _AnalyticsAdminMixin:
         router.add_post("/twitch/api/admin/roadmap", self._api_admin_roadmap_save)
         router.add_get("/twitch/api/admin/legal/{slug}", self._api_admin_legal_page)
         router.add_post("/twitch/api/admin/legal/{slug}", self._api_admin_legal_page_save)
+        router.add_get("/twitch/api/admin/audit-log", self._api_admin_audit_log)
         router.add_get(
             "/twitch/api/admin/billing/subscriptions",
             self._api_admin_billing_subscriptions,
@@ -1832,6 +1834,55 @@ class _AnalyticsAdminMixin:
         except Exception as exc:
             return _admin_500(exc)
         return web.json_response(self._admin_legal_payload(document))
+
+    async def _api_admin_audit_log(self, request: web.Request) -> web.Response:
+        auth_error = self._admin_auth_error(request, getattr(self, "_require_v2_admin_api", None))
+        if auth_error is not None:
+            return auth_error
+
+        since_raw = str(request.query.get("since") or "").strip()
+        since = None
+        if since_raw:
+            since = _coerce_utc_datetime(since_raw)
+            if since is None:
+                return web.json_response(
+                    {
+                        "error": "invalid_since",
+                        "message": "since muss ein gueltiges ISO-Datum oder ISO-Timestamp sein.",
+                    },
+                    status=400,
+                )
+
+        limit_raw = str(request.query.get("limit") or "").strip()
+        limit = None
+        if limit_raw:
+            try:
+                limit = int(limit_raw)
+            except ValueError:
+                return web.json_response(
+                    {
+                        "error": "invalid_limit",
+                        "message": "limit muss eine ganze Zahl sein.",
+                    },
+                    status=400,
+                )
+
+        source_values = [
+            str(value).strip()
+            for value in request.query.getall("source", [])
+            if str(value or "").strip()
+        ]
+
+        try:
+            payload = await asyncio.to_thread(
+                load_admin_audit_log,
+                since=since,
+                limit=limit,
+                source=source_values or None,
+            )
+        except Exception as exc:
+            return _admin_500(exc)
+        return web.json_response(payload)
 
     async def _api_admin_billing_subscriptions(self, request: web.Request) -> web.Response:
         auth_error = self._admin_auth_error(request, getattr(self, "_require_v2_admin_api", None))

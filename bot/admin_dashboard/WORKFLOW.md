@@ -26,3 +26,7 @@
 - Chat-Actions-Page mit Streamer-Live-Suche, Confirm-Submit und lokalem Session-Verlauf umgesetzt; Backend-Limit fuer Nachrichtenlaenge wird im UI respektiert.
 - Raids-Page als read-only Config-/Activity-Ansicht mit Multi-Key-Fallbacks auf `ConfigOverview.raids.raw` umgesetzt.
 - Lokale Verifikation fuer Schritt 4 abgeschlossen: `npm install`, `npx tsc --noEmit`, `npm run build` erfolgreich; ein Build-Typfehler in `Engagement.tsx` (`Map.get()` -> `undefined`) wurde direkt behoben.
+- Schritt 7 "Visual Polish" gestartet.
+- Shared-UI erweitert: `EmptyState` neu angelegt, `StatusBadge` um fehlende Varianten ergaenzt, `DataTable` um `density` plus optionalen `emptyState`-Slot erweitert.
+- Streamer-, Monitoring-, Config-, Billing- und Community-Pages auf `PageHeader`, konsistente Empty-States und gemeinsame Hover-/Button-Patterns umgestellt; `StreamerList` und `Scopes` erhielten Dichte-Toggle, `StreamerList` zusaetzlich entfernbare Filter-Chips.
+- Zwischenstand verifiziert: `npx tsc --noEmit` erfolgreich.

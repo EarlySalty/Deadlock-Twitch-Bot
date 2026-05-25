@@ -17,11 +17,26 @@ interface DataTableProps<T> {
   rows: T[];
   rowKey: (row: T, index: number) => string;
   emptyLabel?: string;
+  emptyState?: ReactNode;
+  initialSortKey?: string;
+  initialSortDirection?: 'asc' | 'desc';
+  density?: 'comfortable' | 'compact';
 }
 
-export function DataTable<T>({ columns, rows, rowKey, emptyLabel = 'Keine Daten vorhanden.' }: DataTableProps<T>) {
-  const [sortKey, setSortKey] = useState<string>('');
-  const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('asc');
+export function DataTable<T>({
+  columns,
+  rows,
+  rowKey,
+  emptyLabel = 'Keine Daten vorhanden.',
+  emptyState,
+  initialSortKey = '',
+  initialSortDirection = 'asc',
+  density = 'comfortable',
+}: DataTableProps<T>) {
+  const [sortKey, setSortKey] = useState<string>(initialSortKey);
+  const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>(initialSortDirection);
+  const headerPaddingClass = density === 'compact' ? 'py-2.5' : 'py-3';
+  const cellPaddingClass = density === 'compact' ? 'py-2' : 'py-3';
 
   const sortedRows = [...rows].sort((left, right) => {
     if (!sortKey) {
@@ -46,11 +61,11 @@ export function DataTable<T>({ columns, rows, rowKey, emptyLabel = 'Keine Daten 
               {columns.map((column) => (
                 <th
                   key={column.key}
-                  className={`px-4 py-3 text-left text-[0.7rem] font-semibold uppercase tracking-[0.2em] text-text-secondary ${column.className ?? ''}`}
+                  className={`px-4 ${headerPaddingClass} text-left text-[0.7rem] font-semibold uppercase tracking-[0.2em] text-text-secondary ${column.className ?? ''}`}
                 >
                   {column.sortable ? (
                     <button
-                      className="inline-flex items-center gap-2"
+                      className="inline-flex items-center gap-2 transition-colors hover:text-white"
                       onClick={() => {
                         if (sortKey === column.key) {
                           setSortDirection((current) => (current === 'asc' ? 'desc' : 'asc'));
@@ -78,10 +93,10 @@ export function DataTable<T>({ columns, rows, rowKey, emptyLabel = 'Keine Daten 
                   initial={{ opacity: 0, y: 6 }}
                   animate={{ opacity: 1, y: 0 }}
                   transition={{ delay: index * 0.02, duration: 0.18 }}
-                  className="hover:bg-white/[0.03]"
+                  className="interactive-surface"
                 >
                   {columns.map((column) => (
-                    <td key={column.key} className={`px-4 py-3 align-top text-sm text-white ${column.className ?? ''}`}>
+                    <td key={column.key} className={`px-4 ${cellPaddingClass} align-top text-sm text-white ${column.className ?? ''}`}>
                       {column.render(row)}
                     </td>
                   ))}
@@ -90,7 +105,7 @@ export function DataTable<T>({ columns, rows, rowKey, emptyLabel = 'Keine Daten 
             ) : (
               <tr>
                 <td colSpan={columns.length} className="px-4 py-10 text-center text-sm text-text-secondary">
-                  {emptyLabel}
+                  {emptyState ?? emptyLabel}
                 </td>
               </tr>
             )}
