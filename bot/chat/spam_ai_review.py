@@ -1,9 +1,12 @@
 """Auto-Improvement für den Spam-Filter via MiniMax M2.7.
 
-Wenn eine Nachricht verdächtig ist (spam_score > 0) aber den Ban-Threshold
-nicht erreicht, oder wenn strukturelle Signale vorliegen (Domains, Viewer-Keywords),
-wird MiniMax asynchron befragt. Bei bestätigtem Spam wird das Kernmuster
-in der DB gespeichert und künftig beim Scoring mitgeprüft.
+Wenn der bestehende Spam-Filter ein Signal erkennt (spam_score > 0) aber der
+Ban-Threshold nicht erreicht wird, fragt MiniMax asynchron nach ob es echter
+Viewer-Bot/SMM-Spam ist. Bei Bestätigung wird das Kernmuster in der DB
+gespeichert und fließt künftig direkt in den Spam-Score ein.
+
+Nur Nachrichten mit vorhandenen Filter-Treffern werden geprüft — keine
+allgemeine URL- oder Keyword-Erkennung.
 """
 
 from __future__ import annotations
@@ -15,17 +18,6 @@ import time
 from datetime import UTC, datetime
 
 log = logging.getLogger("TwitchStreams.SpamAI")
-
-# Strukturelle Signale für Score=0-Nachrichten die trotzdem geprüft werden sollen.
-# Konservativ: nur klare Viewer-Selling / Scam-Service-Muster.
-_STRUCTURAL_URL_RE = re.compile(
-    r"(?:https?://|www\.)\S+|\b\S+\.(?:com|ru|online|io|net|xyz|site)\b",
-    re.IGNORECASE,
-)
-_STRUCTURAL_VIEWER_RE = re.compile(
-    r"\b(?:viewers?\s+\w+|cheap\s+\w+|best\s+\w+|boost\s+\w+|buy\s+\w+)\b",
-    re.IGNORECASE,
-)
 
 # Cooldown pro (channel, chatter_login) — verhindert doppelte AI-Calls.
 _REVIEW_COOLDOWN: dict[tuple[str, str], float] = {}
@@ -39,33 +31,25 @@ _PATTERN_CACHE_TTL = 120.0
 _SCHEMA_ENSURED = False
 
 _SPAM_REVIEW_SYSTEM_PROMPT = (
-    "Du bist ein Spam-Erkennungs-Assistent für Twitch-Chats. "
-    "Analysiere die Nachricht und entscheide ob es Spam, Scam, Viewer-Kauf-Werbung, "
-    "Bot-Promotion oder andere unerwünschte kommerzielle Nachrichten sind.\n"
+    "Du bist ein Spam-Erkennungs-Assistent speziell für Twitch Viewer-Bot-Spam und SMM-Dienste.\n"
+    "\n"
+    "Die Nachricht wurde bereits von einem regelbasierten Filter als VERDÄCHTIG markiert "
+    "(hatte Teilübereinstimmungen mit bekannten Spam-Mustern). Deine Aufgabe: bestätige oder "
+    "widerlege ob es sich um Werbung für Viewer-Bot-Services, SMM-Dienste oder ähnliche "
+    "Twitch-Manipulation handelt.\n"
     "\n"
     "Antworte NUR mit einem JSON-Objekt, ohne Markdown, ohne <think>-Block:\n"
     '{"is_spam": true/false, '
-    '"pattern": "kürzestes wiedererkennbares Kernmuster (Domain/Phrase/Keyword) oder null", '
+    '"pattern": "kürzestes eindeutiges Kernmuster (Domain/Service-Name/Phrase) oder null", '
     '"pattern_type": "phrase" oder "fragment", '
     '"reason": "Begründung max 80 Zeichen"}\n'
     "\n"
-    "Spam: Viewer-Kauf, Bot-Follower, SMM-Dienste, neue Domains für bekannte Spam-Services, "
-    "leicht abgewandelte Schreibweisen (Leerzeichen in Domains, Sonderzeichen).\n"
-    "Kein Spam: normale Unterhaltungen, auch mit Links wenn nicht kommerziell verdächtig.\n"
+    "is_spam=true NUR bei: Viewer-Kauf, Bot-Views, Bot-Follower, SMM-Services, "
+    "neue/abgewandelte Schreibweisen bekannter Spam-Dienste (Leerzeichen in Domains, "
+    "Sonderzeichen, leicht veränderte Namen).\n"
+    "is_spam=false bei allem anderen — normale URLs, Selbstpromotion, Community-Werbung.\n"
     "Im Zweifel: is_spam=false."
 )
-
-
-def message_needs_ai_review(content: str, spam_score: int) -> bool:
-    """True wenn diese Nachricht MiniMax-Prüfung benötigt."""
-    if spam_score > 0:
-        return True
-    lowered = (content or "").casefold()
-    if _STRUCTURAL_URL_RE.search(lowered):
-        return True
-    if _STRUCTURAL_VIEWER_RE.search(lowered):
-        return True
-    return False
 
 
 def _should_review_now(channel: str, chatter_login: str) -> bool:

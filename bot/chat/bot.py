@@ -42,7 +42,7 @@ from .constants import (
     twitchio_web,
 )
 from .moderation import ModerationMixin
-from .spam_ai_review import message_needs_ai_review, run_spam_ai_review
+from .spam_ai_review import run_spam_ai_review
 from .promos import PromoMixin
 from .service_pitch_warning import ServicePitchWarningMixin
 from .tokens import (
@@ -1506,20 +1506,6 @@ if TWITCHIO_AVAILABLE:
                                 channel=channel_login,
                                 chatter_login=author_name,
                                 spam_score=spam_score,
-                            ),
-                            name="twitch.spam_ai_review",
-                        )
-
-                    elif message_needs_ai_review(message.content or "", 0):
-                        # Score=0, aber strukturelle Signale (URL/Viewer-Keywords) →
-                        # MiniMax prüft auf neue Domains / Schreibweisen
-                        _review_author = getattr(message.author, "name", "")
-                        asyncio.create_task(
-                            run_spam_ai_review(
-                                content=message.content or "",
-                                channel=channel_login,
-                                chatter_login=_review_author,
-                                spam_score=0,
                             ),
                             name="twitch.spam_ai_review",
                         )
