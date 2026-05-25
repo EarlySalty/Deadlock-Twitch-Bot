@@ -1,3 +1,8 @@
+## #55 — Lade-Bildschirm für Rechtstexte vereinfacht
+
+- Die Bot-Prüfseite zeigt jetzt nur noch einen Spinner mit „Einen Moment bitte …" und einem dezenten Hinweis
+- Kein sichtbares Captcha, keine Erklärungstexte mehr — für normale Besucher wirkt es wie ein kurzer Ladevorgang
+
 ## #54 — Impressum & Datenschutz jetzt Bot-geschützt, Dashboard erweitert
 
 - Impressum, Datenschutz und AGB sind jetzt durch eine unsichtbare KI-Bot-Sperre geschützt — normale Besucher werden automatisch weitergeleitet, ohne ein Captcha zu sehen
