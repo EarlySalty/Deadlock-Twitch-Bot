@@ -44,16 +44,23 @@ from .admin_streamer_queries import (
     load_admin_streamers,
 )
 from ..core.twitch_login import normalize_twitch_login
+from ..dashboard.admin.legal_mixin import (
+    load_legal_page_document,
+    normalize_legal_page_slug,
+    save_legal_page_document,
+)
 from ..dashboard.affiliate.affiliate_pii import AffiliatePII
 from ..dashboard.live.live import (
     _CRITICAL_SCOPES as _ADMIN_CRITICAL_SCOPES,
     _REQUIRED_SCOPES as _ADMIN_REQUIRED_SCOPES,
     _SCOPE_COLUMN_LABELS as _ADMIN_SCOPE_COLUMN_LABELS,
 )
+from ..dashboard.pages import load_roadmap_document, save_roadmap_document
 from ..logging_setup import log_path, logs_dir
 from ..promo_mode import (
     evaluate_global_promo_mode,
     load_global_promo_mode,
+    save_global_promo_mode,
     validate_global_promo_mode_config,
 )
 from ..storage import pg as storage
@@ -600,6 +607,12 @@ class _AnalyticsAdminMixin:
         router.add_post("/twitch/api/admin/config/promo", self._api_admin_config_promo)
         router.add_post("/twitch/api/admin/config/raids", self._api_admin_config_raids)
         router.add_post("/twitch/api/admin/config/chat", self._api_admin_config_chat)
+        router.add_get("/twitch/api/admin/announcements", self._api_admin_announcements)
+        router.add_post("/twitch/api/admin/announcements", self._api_admin_announcements_save)
+        router.add_get("/twitch/api/admin/roadmap", self._api_admin_roadmap)
+        router.add_post("/twitch/api/admin/roadmap", self._api_admin_roadmap_save)
+        router.add_get("/twitch/api/admin/legal/{slug}", self._api_admin_legal_page)
+        router.add_post("/twitch/api/admin/legal/{slug}", self._api_admin_legal_page_save)
         router.add_get(
             "/twitch/api/admin/billing/subscriptions",
             self._api_admin_billing_subscriptions,
@@ -690,6 +703,44 @@ class _AnalyticsAdminMixin:
             return bool(verifier(request, provided_token))
         except Exception:
             return False
+
+    @staticmethod
+    def _admin_announcement_payload(config: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "body": str(config.get("custom_message") or ""),
+            "lastUpdatedAt": _json_safe_datetime(config.get("updated_at")),
+            "lastUpdatedBy": str(config.get("updated_by") or "").strip() or None,
+        }
+
+    @staticmethod
+    def _admin_text_document_payload(document: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "body": str(document.get("body") or ""),
+            "lastUpdatedAt": _json_safe_datetime(document.get("lastUpdatedAt")),
+            "lastUpdatedBy": str(document.get("lastUpdatedBy") or "").strip() or None,
+        }
+
+    @staticmethod
+    def _admin_legal_payload(document: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "slug": str(document.get("slug") or "").strip(),
+            "title": str(document.get("title") or "").strip(),
+            "body": str(document.get("body") or ""),
+            "lastUpdatedAt": _json_safe_datetime(document.get("lastUpdatedAt")),
+            "lastUpdatedBy": str(document.get("lastUpdatedBy") or "").strip() or None,
+        }
+
+    @staticmethod
+    def _admin_load_announcements_config() -> dict[str, Any]:
+        with storage.readonly_connection() as conn:
+            return load_global_promo_mode(conn)
+
+    @staticmethod
+    def _admin_save_announcements_body(*, body: str, updated_by: str) -> dict[str, Any]:
+        with storage.transaction() as conn:
+            config = load_global_promo_mode(conn)
+            config["custom_message"] = str(body or "")
+            return save_global_promo_mode(conn, config=config, updated_by=updated_by)
 
     @staticmethod
     def _admin_is_missing_schema_error(exc: Exception) -> bool:
@@ -1645,6 +1696,142 @@ class _AnalyticsAdminMixin:
         except Exception as exc:
             return _admin_500(exc)
         return web.json_response(payload)
+
+    async def _api_admin_announcements(self, request: web.Request) -> web.Response:
+        auth_error = self._admin_auth_error(request, getattr(self, "_require_v2_admin_api", None))
+        if auth_error is not None:
+            return auth_error
+
+        try:
+            config = await asyncio.to_thread(self._admin_load_announcements_config)
+        except Exception as exc:
+            return _admin_500(exc)
+        return web.json_response(self._admin_announcement_payload(config))
+
+    async def _api_admin_announcements_save(self, request: web.Request) -> web.Response:
+        auth_error = self._admin_auth_error(request, getattr(self, "_require_v2_admin_api", None))
+        if auth_error is not None:
+            return auth_error
+
+        csrf_token, payload = await self._admin_extract_csrf(request)
+        if not self._admin_verify_csrf(request, csrf_token):
+            return web.json_response({"error": "invalid_csrf"}, status=403)
+        if "body" not in payload:
+            return web.json_response(
+                {"error": "validation_failed", "message": "body ist erforderlich."},
+                status=400,
+            )
+
+        actor_label = self._admin_actor_label(request, getattr(self, "_get_discord_admin_session", None))
+        try:
+            config = await asyncio.to_thread(
+                self._admin_save_announcements_body,
+                body=str(payload.get("body") or ""),
+                updated_by=actor_label,
+            )
+        except ValueError as exc:
+            return web.json_response({"error": str(exc)}, status=400)
+        except Exception as exc:
+            return _admin_500(exc)
+        return web.json_response(self._admin_announcement_payload(config))
+
+    async def _api_admin_roadmap(self, request: web.Request) -> web.Response:
+        auth_error = self._admin_auth_error(request, getattr(self, "_require_v2_admin_api", None))
+        if auth_error is not None:
+            return auth_error
+
+        try:
+            document = await asyncio.to_thread(load_roadmap_document)
+        except Exception as exc:
+            return _admin_500(exc)
+        return web.json_response(self._admin_text_document_payload(document))
+
+    async def _api_admin_roadmap_save(self, request: web.Request) -> web.Response:
+        auth_error = self._admin_auth_error(request, getattr(self, "_require_v2_admin_api", None))
+        if auth_error is not None:
+            return auth_error
+
+        csrf_token, payload = await self._admin_extract_csrf(request)
+        if not self._admin_verify_csrf(request, csrf_token):
+            return web.json_response({"error": "invalid_csrf"}, status=403)
+        if "body" not in payload:
+            return web.json_response(
+                {"error": "validation_failed", "message": "body ist erforderlich."},
+                status=400,
+            )
+
+        actor_label = self._admin_actor_label(request, getattr(self, "_get_discord_admin_session", None))
+        try:
+            document = await asyncio.to_thread(
+                save_roadmap_document,
+                str(payload.get("body") or ""),
+                updated_by=actor_label,
+            )
+        except Exception as exc:
+            return _admin_500(exc)
+        return web.json_response(self._admin_text_document_payload(document))
+
+    async def _api_admin_legal_page(self, request: web.Request) -> web.Response:
+        auth_error = self._admin_auth_error(request, getattr(self, "_require_v2_admin_api", None))
+        if auth_error is not None:
+            return auth_error
+
+        slug = normalize_legal_page_slug(request.match_info.get("slug"))
+        if slug is None:
+            return web.json_response({"error": "not_found"}, status=404)
+
+        try:
+            document = await asyncio.to_thread(load_legal_page_document, slug)
+        except Exception as exc:
+            return _admin_500(exc)
+        return web.json_response(self._admin_legal_payload(document))
+
+    async def _api_admin_legal_page_save(self, request: web.Request) -> web.Response:
+        auth_error = self._admin_auth_error(request, getattr(self, "_require_v2_admin_api", None))
+        if auth_error is not None:
+            return auth_error
+
+        slug = normalize_legal_page_slug(request.match_info.get("slug"))
+        if slug is None:
+            return web.json_response({"error": "not_found"}, status=404)
+
+        csrf_token, payload = await self._admin_extract_csrf(request)
+        if not self._admin_verify_csrf(request, csrf_token):
+            return web.json_response({"error": "invalid_csrf"}, status=403)
+        if "body" not in payload:
+            return web.json_response(
+                {"error": "validation_failed", "message": "body ist erforderlich."},
+                status=400,
+            )
+
+        try:
+            current_document = await asyncio.to_thread(load_legal_page_document, slug)
+        except Exception as exc:
+            return _admin_500(exc)
+
+        next_title = current_document.get("title") or ""
+        if "title" in payload:
+            next_title = str(payload.get("title") or "").strip()
+            if not next_title:
+                return web.json_response(
+                    {"error": "validation_failed", "message": "title darf nicht leer sein."},
+                    status=400,
+                )
+
+        actor_label = self._admin_actor_label(request, getattr(self, "_get_discord_admin_session", None))
+        try:
+            document = await asyncio.to_thread(
+                save_legal_page_document,
+                slug,
+                title=str(next_title),
+                body=str(payload.get("body") or ""),
+                updated_by=actor_label,
+            )
+        except ValueError:
+            return web.json_response({"error": "not_found"}, status=404)
+        except Exception as exc:
+            return _admin_500(exc)
+        return web.json_response(self._admin_legal_payload(document))
 
     async def _api_admin_billing_subscriptions(self, request: web.Request) -> web.Response:
         auth_error = self._admin_auth_error(request, getattr(self, "_require_v2_admin_api", None))

@@ -1,3 +1,10 @@
+## #54 — Impressum & Datenschutz jetzt Bot-geschützt, Dashboard erweitert
+
+- Impressum, Datenschutz und AGB sind jetzt durch eine unsichtbare KI-Bot-Sperre geschützt — normale Besucher werden automatisch weitergeleitet, ohne ein Captcha zu sehen
+- Admin-Dashboard: Inhalte der Rechtstexte (Impressum, AGB, Datenschutz) und der Roadmap können direkt im Dashboard bearbeitet werden
+- Admin-Dashboard: Neue Analytics-Übersicht und überarbeitete Navigation mit erweitertem Sidebar-Menü
+- Zugriffs-Log des Dashboards wird jetzt in eine eigene Datei geschrieben (rotierend, max. 5 MB)
+
 ## #53 — Spam-Filter präziser und resistenter gegen Unicode-Tricks
 
 - Spam-Schreibweisen mit verschlüsselten Buchstaben (z. B. `sᴛʀᴇᴀᴍbᴏᴏ`, `𝗩𝗶𝗲𝘄𝗲𝗿𝘀`) werden jetzt korrekt erkannt und gebannt

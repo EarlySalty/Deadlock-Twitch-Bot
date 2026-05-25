@@ -522,6 +522,10 @@ class _AnalyticsOverviewMixin:
                     message = str(payload_builder(request).get("message") or message)
                 raise web.HTTPForbidden(text=message)
         if self._check_v2_auth(request) and not self._can_access_v2_analytics(request):
+            log.info(
+                "HTTPFound -> /twitch/dashboard from handler=%s reason=can_access_v2_analytics=false",
+                "_redirect_dashboard_v2_to_analyse",
+            )
             raise web.HTTPFound("/twitch/dashboard")
         return await self._redirect_legacy_analyse_to_root(request)
 
@@ -558,6 +562,10 @@ class _AnalyticsOverviewMixin:
         if callable(landing_checker) and not bool(landing_checker(request)):
             raise web.HTTPForbidden(text="This account is blocked from all dashboard surfaces.")
         if not self._can_access_v2_analytics(request):
+            log.info(
+                "HTTPFound -> /twitch/dashboard from handler=%s reason=can_access_v2_analytics=false",
+                "_serve_dashboard_v2",
+            )
             raise web.HTTPFound("/twitch/dashboard")
         import pathlib
 
@@ -684,6 +692,17 @@ class _AnalyticsOverviewMixin:
 
     async def _serve_verwaltung(self, request: web.Request) -> web.Response:
         """Serve the account management page."""
+        discord_admin_cookie_name = str(getattr(self, "_discord_admin_cookie_name", "") or "")
+        log.info(
+            "verwaltung request path=%s peer=%s cookie_names=%s discord_admin_cookie_present=%s",
+            request.path,
+            request.headers.get("X-Forwarded-For") or request.remote,
+            list(request.cookies.keys()),
+            bool(
+                discord_admin_cookie_name
+                and request.cookies.get(discord_admin_cookie_name)
+            ),
+        )
         gate_response = self._admin_dashboard_host_page_gate(request)
         if gate_response is not None:
             return gate_response
@@ -708,6 +727,7 @@ class _AnalyticsOverviewMixin:
 
         dist_path = pathlib.Path(__file__).parent / "dashboard_v2" / "dist" / "index.html"
         if dist_path.exists():
+            log.info("verwaltung handler -> 200 file response")
             return web.FileResponse(dist_path)
         return web.Response(
             text="Dashboard not built. Run npm run build in dashboard_v2/", status=404

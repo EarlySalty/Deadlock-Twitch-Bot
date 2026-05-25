@@ -1,4 +1,4 @@
-import { createBrowserRouter, Navigate } from 'react-router-dom';
+import { createBrowserRouter, Navigate, useParams } from 'react-router-dom';
 import { AdminShell } from '@/components/layout/AdminShell';
 import { Dashboard } from '@/pages/Dashboard';
 import { Affiliates } from '@/pages/billing/Affiliates';
@@ -11,8 +11,35 @@ import { DatabaseStats } from '@/pages/monitoring/DatabaseStats';
 import { ErrorLogs } from '@/pages/monitoring/ErrorLogs';
 import { EventSubStatusPage } from '@/pages/monitoring/EventSubStatus';
 import { SystemOverview } from '@/pages/monitoring/SystemOverview';
+import ChatActionsPage from '@/pages/community/ChatActions';
+import EngagementPage from '@/pages/community/Engagement';
+import RaidsActivityPage from '@/pages/community/RaidsActivity';
+import AnnouncementsPage from '@/pages/content/Announcements';
+import ChangelogPage from '@/pages/content/Changelog';
+import LegalPage from '@/pages/content/Legal';
+import RoadmapPage from '@/pages/content/Roadmap';
+import BotControlPage from '@/pages/operations/BotControl';
+import ScopesPage from '@/pages/operations/Scopes';
+import { Placeholder } from '@/pages/_placeholder/Placeholder';
 import { StreamerDetailPage } from '@/pages/streamers/StreamerDetail';
 import { StreamerList } from '@/pages/streamers/StreamerList';
+
+interface LegacyRedirectProps {
+  to: string;
+}
+
+function LegacyRedirect({ to }: LegacyRedirectProps) {
+  const params = useParams();
+  let resolvedTo = to;
+
+  Object.entries(params).forEach(([key, value]) => {
+    if (value) {
+      resolvedTo = resolvedTo.replace(`:${key}`, encodeURIComponent(value));
+    }
+  });
+
+  return <Navigate to={resolvedTo} replace />;
+}
 
 const router = createBrowserRouter(
   [
@@ -21,18 +48,50 @@ const router = createBrowserRouter(
       element: <AdminShell />,
       children: [
         { index: true, element: <Dashboard /> },
-        { path: 'streamers', element: <StreamerList /> },
-        { path: 'streamers/:login', element: <StreamerDetailPage /> },
-        { path: 'monitoring', element: <SystemOverview /> },
-        { path: 'monitoring/eventsub', element: <EventSubStatusPage /> },
-        { path: 'monitoring/database', element: <DatabaseStats /> },
-        { path: 'monitoring/errors', element: <ErrorLogs /> },
+        { path: 'operations', element: <Navigate to="/operations/system" replace /> },
+        { path: 'operations/system', element: <SystemOverview /> },
+        { path: 'operations/scopes', element: <ScopesPage /> },
+        { path: 'operations/eventsub', element: <EventSubStatusPage /> },
+        { path: 'operations/database', element: <DatabaseStats /> },
+        { path: 'operations/errors', element: <ErrorLogs /> },
+        { path: 'operations/bot', element: <BotControlPage /> },
+        { path: 'community', element: <Navigate to="/community/streamers" replace /> },
+        { path: 'community/streamers', element: <StreamerList /> },
+        { path: 'community/streamers/:login', element: <StreamerDetailPage /> },
+        { path: 'community/raids', element: <RaidsActivityPage /> },
+        { path: 'community/engagement', element: <EngagementPage /> },
+        { path: 'community/chat', element: <ChatActionsPage /> },
+        { path: 'content', element: <Navigate to="/content/announcements" replace /> },
+        { path: 'content/announcements', element: <AnnouncementsPage /> },
+        { path: 'content/roadmap', element: <RoadmapPage /> },
+        { path: 'content/changelog', element: <ChangelogPage /> },
+        { path: 'content/legal', element: <LegalPage /> },
         { path: 'config', element: <BotConfig /> },
         { path: 'config/raids', element: <RaidConfig /> },
         { path: 'config/chat', element: <ChatConfig /> },
-        { path: 'billing', element: <Subscriptions /> },
-        { path: 'billing/affiliates', element: <Affiliates /> },
-        { path: 'billing/gutschriften', element: <Gutschriften /> },
+        { path: 'money', element: <Navigate to="/money/subscriptions" replace /> },
+        { path: 'money/subscriptions', element: <Subscriptions /> },
+        { path: 'money/affiliates', element: <Affiliates /> },
+        { path: 'money/gutschriften', element: <Gutschriften /> },
+        {
+          path: 'money/audit',
+          element: (
+            <Placeholder
+              title="Audit Log"
+              description="Ein vereinheitlichtes Audit-Log wird im Money-&-Compliance-Schritt ergänzt."
+              plannedStep={6}
+            />
+          ),
+        },
+        { path: 'streamers', element: <Navigate to="/community/streamers" replace /> },
+        { path: 'streamers/:login', element: <LegacyRedirect to="/community/streamers/:login" /> },
+        { path: 'monitoring', element: <Navigate to="/operations/system" replace /> },
+        { path: 'monitoring/eventsub', element: <Navigate to="/operations/eventsub" replace /> },
+        { path: 'monitoring/database', element: <Navigate to="/operations/database" replace /> },
+        { path: 'monitoring/errors', element: <Navigate to="/operations/errors" replace /> },
+        { path: 'billing', element: <Navigate to="/money/subscriptions" replace /> },
+        { path: 'billing/affiliates', element: <Navigate to="/money/affiliates" replace /> },
+        { path: 'billing/gutschriften', element: <Navigate to="/money/gutschriften" replace /> },
         { path: '*', element: <Navigate to="/" replace /> },
       ],
     },

@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
 from datetime import UTC, datetime, timedelta
+from logging.handlers import RotatingFileHandler
 from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
 import discord
@@ -739,7 +741,31 @@ class TwitchDashboardMixin:
                     legacy_stats_url=getattr(self, "_legacy_stats_url", None),
                     dashboard_services=dashboard_services,
                 )
-                runner = web.AppRunner(app)
+                log_dir = os.path.abspath(
+                    os.path.join(os.path.dirname(__file__), "..", "..", "logs")
+                )
+                os.makedirs(log_dir, exist_ok=True)
+                access_log_path = os.path.join(log_dir, "twitch_dashboard_access.log")
+                access_logger = logging.getLogger("aiohttp.access")
+                access_logger.setLevel(logging.INFO)
+                if not any(
+                    isinstance(handler, RotatingFileHandler)
+                    and getattr(handler, "baseFilename", None) == access_log_path
+                    for handler in access_logger.handlers
+                ):
+                    access_handler = RotatingFileHandler(
+                        access_log_path,
+                        maxBytes=5_000_000,
+                        backupCount=3,
+                    )
+                    access_handler.setLevel(logging.INFO)
+                    access_handler.setFormatter(logging.Formatter("%(asctime)s %(message)s"))
+                    access_logger.addHandler(access_handler)
+                runner = web.AppRunner(
+                    app,
+                    access_log=access_logger,
+                    access_log_format='%a "%r" %s %b "%{Referer}i" "%{User-Agent}i"',
+                )
                 await runner.setup()
                 site = web.TCPSite(runner, host=self._dashboard_host, port=self._dashboard_port)
                 await site.start()

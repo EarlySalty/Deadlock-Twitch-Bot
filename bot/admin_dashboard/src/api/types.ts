@@ -147,7 +147,35 @@ export interface InternalHomeOverview {
   metrics?: InternalHomeMetric[];
   actions?: Record<string, unknown>[];
   recentActivity?: Record<string, unknown>[];
+  changelog?: ChangelogEntry[];
   raw?: Record<string, unknown>;
+}
+
+export interface AdminTextDocument {
+  body: string;
+  lastUpdatedAt?: string | null;
+  lastUpdatedBy?: string | null;
+}
+
+export type LegalPageSlug = 'impressum' | 'datenschutz' | 'agb';
+
+export interface LegalPageDocument extends AdminTextDocument {
+  slug: LegalPageSlug;
+  title: string;
+}
+
+export interface ChangelogEntry {
+  id?: number | string | null;
+  entryDate?: string | null;
+  title: string;
+  content: string;
+  createdAt?: string | null;
+}
+
+export interface CreateChangelogEntryPayload {
+  title?: string;
+  content: string;
+  entry_date: string;
 }
 
 export interface SystemHealth {

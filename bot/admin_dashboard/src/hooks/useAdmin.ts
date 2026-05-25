@@ -1,11 +1,13 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import type { AdminConfigScope, StreamerView } from '@/api/types';
+import type { AdminConfigScope, LegalPageSlug, StreamerView } from '@/api/types';
 import {
   addStreamer,
   archiveStreamer,
   blockStreamer,
   clearManualPlanOverride,
+  createChangelogEntry,
   fetchScopeStatus,
+  fetchAnnouncements,
   fetchAffiliateDetail,
   fetchAffiliateGutschriften,
   fetchAffiliatesList,
@@ -18,14 +20,20 @@ import {
   fetchDatabaseStats,
   fetchErrorLogs,
   fetchEventSubStatus,
+  fetchLegalPage,
+  fetchRoadmap,
   generateGutschriften,
   saveManualPlanOverride,
+  saveAnnouncements,
+  saveLegalPage,
+  saveRoadmap,
   sendPartnerChatAction,
   fetchSubscriptions,
   fetchSystemHealth,
   fetchEngagementSettings,
   toggleEngagement,
   removeStreamer,
+  reloadBot,
   toggleStreamerDiscordFlag,
   toggleAffiliateActive,
   updateStreamerDiscordProfile,
@@ -119,6 +127,71 @@ export function useConfigOverview(scope?: AdminConfigScope) {
     queryKey: ['admin-config-overview', scope ?? 'default'],
     queryFn: () => fetchConfigOverview(scope),
     staleTime: 30_000,
+  });
+}
+
+export function useAnnouncements() {
+  return useQuery({
+    queryKey: ['admin-announcements'],
+    queryFn: fetchAnnouncements,
+    staleTime: 30_000,
+  });
+}
+
+export function useSaveAnnouncements() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (body: string) => saveAnnouncements(body),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ['admin-announcements'] });
+      void queryClient.invalidateQueries({ queryKey: ['admin-config-overview'] });
+    },
+  });
+}
+
+export function useRoadmap() {
+  return useQuery({
+    queryKey: ['admin-roadmap'],
+    queryFn: fetchRoadmap,
+    staleTime: 30_000,
+  });
+}
+
+export function useSaveRoadmap() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (body: string) => saveRoadmap(body),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ['admin-roadmap'] });
+    },
+  });
+}
+
+export function useLegalPage(slug: LegalPageSlug) {
+  return useQuery({
+    queryKey: ['admin-legal-page', slug],
+    queryFn: () => fetchLegalPage(slug),
+    staleTime: 30_000,
+  });
+}
+
+export function useSaveLegalPage(slug: LegalPageSlug) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (payload: { title?: string; body: string }) => saveLegalPage(slug, payload),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ['admin-legal-page', slug] });
+    },
+  });
+}
+
+export function useCreateChangelogEntry() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: createChangelogEntry,
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ['admin-dashboard-overview'] });
+    },
   });
 }
 
@@ -284,6 +357,19 @@ export function usePartnerChatAction() {
     mutationFn: sendPartnerChatAction,
     onSuccess: (_result, variables) => {
       invalidateStreamerQueries(queryClient, variables.login);
+    },
+  });
+}
+
+export function useReloadBot() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: reloadBot,
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ['admin-config-overview'] });
+      void queryClient.invalidateQueries({ queryKey: ['admin-dashboard-overview'] });
+      void queryClient.invalidateQueries({ queryKey: ['admin-system-health'] });
+      void queryClient.invalidateQueries({ queryKey: ['admin-eventsub-status'] });
     },
   });
 }

@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
+from logging.handlers import RotatingFileHandler
 from typing import Any
 
 from aiohttp import web
@@ -839,7 +841,31 @@ async def run_dashboard_service(
     enforce_dashboard_service_runtime(port=resolved_port)
     with runtime_pid_lock("dashboard_service", port=resolved_port):
         dashboard_app = app or build_dashboard_service_app(noauth=resolved_noauth)
-        runner = web.AppRunner(dashboard_app)
+        log_dir = os.path.abspath(
+            os.path.join(os.path.dirname(__file__), "..", "..", "logs")
+        )
+        os.makedirs(log_dir, exist_ok=True)
+        access_log_path = os.path.join(log_dir, "twitch_dashboard_access.log")
+        access_logger = logging.getLogger("aiohttp.access")
+        access_logger.setLevel(logging.INFO)
+        if not any(
+            isinstance(handler, RotatingFileHandler)
+            and getattr(handler, "baseFilename", None) == access_log_path
+            for handler in access_logger.handlers
+        ):
+            access_handler = RotatingFileHandler(
+                access_log_path,
+                maxBytes=5_000_000,
+                backupCount=3,
+            )
+            access_handler.setLevel(logging.INFO)
+            access_handler.setFormatter(logging.Formatter("%(asctime)s %(message)s"))
+            access_logger.addHandler(access_handler)
+        runner = web.AppRunner(
+            dashboard_app,
+            access_log=access_logger,
+            access_log_format='%a "%r" %s %b "%{Referer}i" "%{User-Agent}i"',
+        )
         await runner.setup()
         site = web.TCPSite(runner, host=resolved_host, port=resolved_port)
         await site.start()

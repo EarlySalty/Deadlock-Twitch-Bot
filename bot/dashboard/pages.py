@@ -4,10 +4,16 @@ from __future__ import annotations
 
 import html
 import json
+from datetime import UTC, datetime
+from pathlib import Path
 from collections.abc import Iterable, Mapping, Sequence
 
+_ROADMAP_STORAGE_PATH = (
+    Path(__file__).resolve().parents[2] / "data" / "admin_dashboard" / "roadmap_body.json"
+)
 
-def build_roadmap_body() -> str:
+
+def _default_roadmap_body() -> str:
     return """
 <div class="hero">
   <div>
@@ -177,6 +183,49 @@ async function addItem() {
 loadRoadmap();
 </script>
 """.strip()
+
+
+def load_roadmap_document() -> dict[str, str | None]:
+    document: dict[str, str | None] = {
+        "body": _default_roadmap_body(),
+        "lastUpdatedAt": None,
+        "lastUpdatedBy": None,
+    }
+    try:
+        raw_payload = json.loads(_ROADMAP_STORAGE_PATH.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return document
+    except Exception:
+        return document
+
+    if isinstance(raw_payload, dict):
+        body = raw_payload.get("body")
+        if isinstance(body, str) and body.strip():
+            document["body"] = body
+        updated_at = raw_payload.get("lastUpdatedAt")
+        updated_by = raw_payload.get("lastUpdatedBy")
+        document["lastUpdatedAt"] = str(updated_at).strip() or None if updated_at is not None else None
+        document["lastUpdatedBy"] = str(updated_by).strip() or None if updated_by is not None else None
+    return document
+
+
+def save_roadmap_document(body: str, *, updated_by: str | None = None) -> dict[str, str | None]:
+    now = datetime.now(UTC).isoformat()
+    document: dict[str, str | None] = {
+        "body": str(body or ""),
+        "lastUpdatedAt": now,
+        "lastUpdatedBy": str(updated_by or "").strip() or None,
+    }
+    _ROADMAP_STORAGE_PATH.parent.mkdir(parents=True, exist_ok=True)
+    _ROADMAP_STORAGE_PATH.write_text(
+        json.dumps(document, ensure_ascii=True, indent=2),
+        encoding="utf-8",
+    )
+    return document
+
+
+def build_roadmap_body() -> str:
+    return str(load_roadmap_document().get("body") or "")
 
 
 def build_scope_panel(

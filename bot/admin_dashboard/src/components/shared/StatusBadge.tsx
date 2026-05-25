@@ -3,6 +3,7 @@ interface StatusBadgeProps {
 }
 
 const STATUS_STYLES: Record<string, string> = {
+  ok: 'border-emerald-400/35 bg-emerald-500/15 text-emerald-100',
   live: 'border-red-400/35 bg-red-500/15 text-red-100',
   active: 'border-emerald-400/35 bg-emerald-500/15 text-emerald-100',
   verified: 'border-sky-400/35 bg-sky-500/15 text-sky-100',

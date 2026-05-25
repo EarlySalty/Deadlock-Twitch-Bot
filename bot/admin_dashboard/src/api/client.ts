@@ -2,6 +2,7 @@ import type {
   AddStreamerPayload,
   AdminActionResult,
   AdminAuthStatus,
+  AdminTextDocument,
   AdminConfigScope,
   AffiliateClaim,
   AffiliateDetail,
@@ -9,6 +10,8 @@ import type {
   AffiliateStats,
   ChatConfigSnapshot,
   ChatConfigUpdatePayload,
+  ChangelogEntry,
+  CreateChangelogEntryPayload,
   ConfigOverview,
   DatabaseStatsResponse,
   DiscordFlagMode,
@@ -17,6 +20,8 @@ import type {
   EventSubStatusResponse,
   GutschriftDocument,
   InternalHomeOverview,
+  LegalPageDocument,
+  LegalPageSlug,
   LegacyVerifyMode,
   ManualPlanPayload,
   PartnerChatActionPayload,
@@ -558,7 +563,36 @@ export async function fetchDashboardOverview(): Promise<InternalHomeOverview> {
     metrics: coerceArray(payload.metrics) as InternalHomeOverview['metrics'],
     actions: coerceArray(payload.actions),
     recentActivity: coerceArray(payload.recentActivity ?? payload.recent_activity ?? payload.activity),
+    changelog: coerceArray<Record<string, unknown>>(coerceRecord(payload.changelog).entries).map(parseChangelogEntry),
     raw: payload,
+  };
+}
+
+function parseAdminTextDocument(payload: Record<string, unknown>): AdminTextDocument {
+  return {
+    body: readString(payload, 'body'),
+    lastUpdatedAt: readString(payload, 'lastUpdatedAt', 'last_updated_at') || null,
+    lastUpdatedBy: readString(payload, 'lastUpdatedBy', 'last_updated_by') || null,
+  };
+}
+
+function parseLegalPageDocument(payload: Record<string, unknown>, fallbackSlug: LegalPageSlug): LegalPageDocument {
+  const slug = readString(payload, 'slug') as LegalPageSlug;
+  return {
+    slug: slug === 'impressum' || slug === 'datenschutz' || slug === 'agb' ? slug : fallbackSlug,
+    title: readString(payload, 'title') || fallbackSlug,
+    ...parseAdminTextDocument(payload),
+  };
+}
+
+function parseChangelogEntry(payload: Record<string, unknown>): ChangelogEntry {
+  const rawId = payload.id;
+  return {
+    id: typeof rawId === 'string' || typeof rawId === 'number' ? rawId : null,
+    entryDate: readString(payload, 'entryDate', 'entry_date') || null,
+    title: readString(payload, 'title'),
+    content: readString(payload, 'content'),
+    createdAt: readString(payload, 'createdAt', 'created_at') || null,
   };
 }
 
@@ -713,6 +747,49 @@ export async function fetchConfigOverview(scope?: AdminConfigScope): Promise<Con
     csrfToken,
     raw: payload,
   };
+}
+
+export async function fetchAnnouncements(): Promise<AdminTextDocument> {
+  const payload = await admin<Record<string, unknown>>('/announcements');
+  return parseAdminTextDocument(payload);
+}
+
+export async function saveAnnouncements(body: string): Promise<AdminTextDocument> {
+  const payload = await postAdminJson<Record<string, unknown>>('/announcements', { body });
+  return parseAdminTextDocument(payload);
+}
+
+export async function fetchRoadmap(): Promise<AdminTextDocument> {
+  const payload = await admin<Record<string, unknown>>('/roadmap');
+  return parseAdminTextDocument(payload);
+}
+
+export async function saveRoadmap(body: string): Promise<AdminTextDocument> {
+  const payload = await postAdminJson<Record<string, unknown>>('/roadmap', { body });
+  return parseAdminTextDocument(payload);
+}
+
+export async function fetchLegalPage(slug: LegalPageSlug): Promise<LegalPageDocument> {
+  const payload = await admin<Record<string, unknown>>(`/legal/${encodeURIComponent(slug)}`);
+  return parseLegalPageDocument(payload, slug);
+}
+
+export async function saveLegalPage(
+  slug: LegalPageSlug,
+  body: { title?: string; body: string },
+): Promise<LegalPageDocument> {
+  const payload = await postAdminJson<Record<string, unknown>>(`/legal/${encodeURIComponent(slug)}`, body);
+  return parseLegalPageDocument(payload, slug);
+}
+
+export async function createChangelogEntry(
+  body: CreateChangelogEntryPayload,
+): Promise<ChangelogEntry> {
+  const payload = await postJson<Record<string, unknown>, CreateChangelogEntryPayload>(
+    `${INTERNAL_HOME_URL}/changelog`,
+    body,
+  );
+  return parseChangelogEntry(payload);
 }
 
 function readBodyCsrfToken(body: Record<string, unknown>): string {
@@ -1032,6 +1109,10 @@ export function sendPartnerChatAction(payload: PartnerChatActionPayload) {
     color: payload.color || 'purple',
     message: payload.message,
   });
+}
+
+export function reloadBot() {
+  return submitLegacyAction('/twitch/reload', {});
 }
 
 export async function fetchEngagementSettings(login: string): Promise<EngagementSettings | null> {

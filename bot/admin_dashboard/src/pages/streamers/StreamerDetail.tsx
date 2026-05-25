@@ -207,7 +207,7 @@ export function StreamerDetailPage() {
     return (
       <section className="space-y-5">
         <div className="panel-card rounded-[1.8rem] p-6">
-          <Link to="/streamers" className="inline-flex items-center gap-2 text-sm text-text-secondary hover:text-white">
+          <Link to="/community/streamers" className="inline-flex items-center gap-2 text-sm text-text-secondary hover:text-white">
             <ArrowLeft className="h-4 w-4" />
             Zurück zur Liste
           </Link>
@@ -232,7 +232,7 @@ export function StreamerDetailPage() {
   return (
     <section className="space-y-5">
       <header className="panel-card rounded-[1.8rem] p-6">
-        <Link to="/streamers" className="inline-flex items-center gap-2 text-sm text-text-secondary hover:text-white">
+        <Link to="/community/streamers" className="inline-flex items-center gap-2 text-sm text-text-secondary hover:text-white">
           <ArrowLeft className="h-4 w-4" />
           Zurück zur Liste
         </Link>

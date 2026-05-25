@@ -1,5 +1,9 @@
 ## FAQ-Bot Doku Initiative · Twitch-Bot User + Internal
 
+- 2026-05-25: Aufgabe "Step 5: Content & Comms (Editoren + Backend-Wrapper)" aufgenommen. Plan, bestehende Admin-API, Legacy-Announcement-/Roadmap-Pfade, Legal-Mixin sowie Admin-Dashboard-Client/Hooks/Layouts fuer neue JSON-Routen und vier Content-Seiten geprueft.
+- 2026-05-25: Backend fuer Content & Comms umgesetzt: neue Admin-JSON-Routen in `bot/analytics/api_admin.py` fuer Announcements, Roadmap und Legal; Roadmap-Body ueber `bot/dashboard/pages.py` minimal dateibasiert persistierbar gemacht; Legal-Seiten in `bot/dashboard/admin/legal_mixin.py` auf gemeinsame JSON-Dateiablage mit Public-Page-Read verdrahtet.
+- 2026-05-25: Frontend umgesetzt in `bot/admin_dashboard/`: neue Client-/Typ-/Hook-Pfade fuer Announcements, Roadmap, Legal und Changelog; neue Seiten `src/pages/content/{Announcements,Roadmap,Changelog,Legal}.tsx` plus `TextPreview` und Routing in `src/App.tsx` integriert. Verifikation gruen: `python3 -m py_compile ...`, `npm install`, `npx tsc --noEmit`, `npm run build`.
+
 - 2026-05-23: Aufgabe aufgenommen. Billing-, Auth-, Raid-, Affiliate-, Admin- und Social-Media-Module sowie bestehende Streamer-/Ops-Doku und die FAQ-Bot-Referenzplanung geprueft.
 - 2026-05-23: Neue User-Doku in `../Deadlock-Bots/docs/` fuer Dashboard sowie Clips/Social erstellt; lokale Internal-Doku unter `docs/internal/` fuer Admin-Panel, Stripe-Webhooks, Social-Media-Pipeline, Ops-Runbooks und Analytics angelegt. `docs/README.md` auf Pointer-README umgestellt.
 - 2026-05-23: Inhaltlich verifiziert gegen `bot/dashboard/billing/billing_plans.py`, `bot/dashboard/billing/billing_mixin.py`, `bot/dashboard/routes_entry.py` und `bot/social_media/*`; Preis-/Trial-Widersprueche als Auffaelligkeiten notiert.
@@ -235,3 +239,9 @@
 
 - 2026-05-21: Aufgabe aufgenommen. `ChatAnalytics.tsx`, `chatAnalyticsContent.tsx`, `Publikum.tsx` und bestehendes `WORKFLOW.md` geprueft; `ChatAnalytics`-Nutzung in `bot/dashboard_v2/src` per `rg` verifiziert und auf `Publikum.tsx` eingegrenzt.
 - 2026-05-21: `chatAnalyticsContent.tsx` in `ChatTreueContent`, `ChatAktivitaetContent` und `ChatTiefeContent` aufgeteilt, neue `chatSubPages.tsx` mit drei Sub-Pages angelegt, `Publikum.tsx` auf drei Chat-Tabs umgestellt und den alten Wrapper `ChatAnalytics.tsx` entfernt.
+
+## Diagnose-Logging Verwaltung-Redirect
+
+- 2026-05-25: Aufgabe aufgenommen. `WORKFLOW.md`, `bot/dashboard/mixin.py` und `bot/analytics/api_overview.py` geprueft; Ziel auf reines Diagnose-Logging fuer Dashboard-Access und Verwaltung-/Dashboard-Redirect-Pfade begrenzt.
+- 2026-05-25: Access-Log-Writer in `bot/dashboard/mixin.py` sowie gezielte `log.info(...)`-Spuren in `bot/analytics/api_overview.py` fuer Verwaltung und `HTTPFound("/twitch/dashboard")` ergaenzt. Service-Restart und Log-Pruefung folgen direkt im Anschluss.
+- 2026-05-25: Beim Pflicht-Restart verifiziert, dass `deadlock-twitch-dashboard.service` den Standalone-Runner `bot/dashboard_service/app.py` nutzt; identisches Access-Logging dort ebenfalls ergaenzt, damit `logs/twitch_dashboard_access.log` im realen Runtime-Pfad beschrieben wird.

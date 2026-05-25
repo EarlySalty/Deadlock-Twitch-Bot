@@ -334,5 +334,5 @@ async def admin_roadmap_page(server: Any, request: web.Request) -> web.StreamRes
 
     return web.Response(
         content_type="text/html",
-        text=server._html(ROADMAP_BODY, "roadmap"),
+        text=server._html(build_roadmap_body(), "roadmap"),
     )
