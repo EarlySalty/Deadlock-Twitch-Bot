@@ -1,3 +1,11 @@
+## #57 — Streamer-Landingpage komplett SEO-fähig gemacht
+
+- Die Streamer-Seite hatte vorher nur einen leeren Titel ("Twitch-Bot") und keinen lesbaren Inhalt für Google — deshalb hat sie Google bisher gar nicht gecrawlt
+- Jetzt mit klarem Titel ("Deadlock Auto-Raid Bot für Twitch — Streamer-Netzwerk"), Hero-Text, Feature-Liste, So-funktioniert-es-Schritten und FAQ-Block, die alle Suchmaschinen direkt lesen können
+- Strukturierte Daten (Schema.org) für die Web-App, Breadcrumbs und FAQ ergänzt — damit Google AI Overviews, Bing Copilot und Perplexity die Seite zitieren können
+- Vollständige Social-Media-Vorschau (Open Graph + Twitter Card) für Discord, Twitter und WhatsApp ergänzt — Links zeigen jetzt Vorschaubild und Beschreibung
+- Statischer Inhalt bleibt für Crawler ohne JavaScript (Bing, Brave, DuckDuckGo) dauerhaft sichtbar, normale Besucher sehen die interaktive Version wie gewohnt
+
 ## #56 — Twitch Admin Dashboard komplett neu strukturiert
 
 - Neues Admin-Cockpit auf `/twitch/admin` mit Live-Status auf einen Blick: aktive EventSub-Verbindung, ausstehende OAuth-Reauths, Bot-Uptime und Datenbank-Status
