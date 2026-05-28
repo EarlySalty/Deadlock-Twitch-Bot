@@ -1,3 +1,9 @@
+## #60 — Highlight-Clipper: Clip-Download funktioniert jetzt zuverlässig
+
+- Clips konnten bisher wegen eines ffmpeg-Crashes nicht erstellt werden — der Fehler ist behoben
+- yt-dlp nutzt jetzt das stabile System-ffmpeg statt einer statischen Binary die abstürzte
+- VODs mit eingeschränkten Qualitätsstufen (z. B. Sub-Only-Streams) werden trotzdem verarbeitet
+
 ## #59 — Highlight-Clipper funktioniert jetzt für alle Partner-Streamer
 
 - Der automatische Clip-Ersteller lief bisher gar nicht — Twitch-Zugangsdaten wurden falsch gesucht und nie gefunden

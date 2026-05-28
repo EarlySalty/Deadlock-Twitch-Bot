@@ -60,6 +60,8 @@ async def download_clip(vod_id: str, clip_start_s: int, clip_end_s: int, output_
 
     yt_dlp_cmd = [
         str(_YT_DLP_PATH),
+        "--ffmpeg-location",
+        FFMPEG_PATH,
         "--download-sections",
         f"*{_format_hhmmss(clip_start_s)}-{_format_hhmmss(clip_end_s)}",
         "-o",
@@ -67,7 +69,7 @@ async def download_clip(vod_id: str, clip_start_s: int, clip_end_s: int, output_
         "--merge-output-format",
         "mp4",
         "-f",
-        "bestvideo[height<=720]+bestaudio/best[height<=720]",
+        "bestvideo[height<=720]+bestaudio/bestvideo+bestaudio/best",
         f"https://www.twitch.tv/videos/{vod_id}",
     ]
     if not await _run_process(yt_dlp_cmd):
