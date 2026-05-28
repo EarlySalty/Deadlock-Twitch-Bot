@@ -1,3 +1,9 @@
+## #62 — Highlight-Clips zeigen jetzt echte Highlights
+
+- Einzelne Kills werden nicht mehr als Clips verschickt — das war uninteressantes 0815-Gameplay
+- Nur noch Double Kills, Triple Kills und Team Fights werden geclippt
+- Neue Bezeichnungen: Double Kill, Triple Kill, Quadra Kill statt generischem "Multi Kill"
+
 ## #61 — Highlight-Clips landen jetzt wirklich im Discord-Channel
 
 - Clips wurden erstellt aber konnten nicht gesendet werden — Fehler beim Discord-Zugriff behoben

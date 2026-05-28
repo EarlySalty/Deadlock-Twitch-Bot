@@ -11,7 +11,7 @@ from .config import TEAMFIGHT_THRESHOLD_SECONDS
 
 @dataclass(slots=True)
 class HighlightEvent:
-    event_type: Literal["kill", "multikill", "teamfight"]
+    event_type: Literal["multikill", "teamfight"]
     game_time_s: int
     duration_s: int
     kill_count: int
@@ -58,19 +58,6 @@ def detect_events(account_id: int, match_info: dict) -> list[HighlightEvent]:
                 duration_s=last_kill - first_kill,
                 kill_count=len(fight),
                 label=f"Team Fight ({len(fight)} Kills)",
-            )
-        )
-
-    for kill_index, kill in enumerate(player_kills):
-        if kill_index in used_kill_indexes:
-            continue
-        events.append(
-            HighlightEvent(
-                event_type="kill",
-                game_time_s=kill["game_time_s"],
-                duration_s=0,
-                kill_count=1,
-                label="Kill",
             )
         )
 
@@ -143,6 +130,7 @@ def _find_teamfights(
 
 def _multikill_name(kill_count: int) -> str:
     return {
+        2: "Double Kill",
         3: "Triple Kill",
         4: "Quadra Kill",
         5: "Penta Kill",
