@@ -2,37 +2,42 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import os
 import shutil
 import time
 from pathlib import Path
 
-from ..secret_store import load_secret_value
-from .config import BETA_DISCORD_USER_ID
-from .config import BETA_STEAM_ACCOUNT_ID
-from .config import BETA_TWITCH_LOGIN
 from .config import CLIPS_DIR
 from .config import CLIP_PADDING_SECONDS
 from .config import POLL_INTERVAL_SECONDS
 from .deadlock_client import get_match_history
 from .deadlock_client import get_match_metadata
-from .dm_sender import send_highlight_dm
+from .dm_sender import send_highlight_to_channel
 from .event_detector import HighlightEvent
 from .event_detector import detect_events
 from .state import is_match_processed
 from .state import load_state
 from .state import mark_match_processed
-from .state import save_state
 from .twitch_vod import download_clip
 from .twitch_vod import find_vod_for_match
 from .twitch_vod import get_channel_id
 
 log = logging.getLogger("TwitchStreams.HighlightClipper")
 
+_PARTNERS_QUERY = """
+    SELECT p.twitch_login, e.steam_id
+      FROM twitch_streamers_partner_state p
+      JOIN twitch_engagement_settings e ON e.channel_login = p.twitch_login
+     WHERE p.is_partner_active = 1
+       AND e.steam_id IS NOT NULL
+       AND e.steam_id != ''
+     ORDER BY p.twitch_login
+"""
+
 
 class HighlightClipperWorker:
-    def __init__(self, bot) -> None:
+    def __init__(self, bot, *, cog=None) -> None:
         self.bot = bot
+        self._cog = cog
         self._task: asyncio.Task[None] | None = None
         Path(CLIPS_DIR).mkdir(parents=True, exist_ok=True)
 
@@ -66,37 +71,65 @@ class HighlightClipperWorker:
             await asyncio.sleep(POLL_INTERVAL_SECONDS)
 
     async def _run_once(self) -> None:
+        twitch_api = self._get_twitch_api()
+        if twitch_api is None:
+            log.warning("HighlightClipper: TwitchAPI nicht verfügbar, überspringe")
+            return
+
+        streamers = await self._get_partner_streamers()
+        if not streamers:
+            log.info("HighlightClipper: Keine aktiven Partner mit Steam-ID gefunden")
+            return
+        log.info("HighlightClipper: %s Partner werden verarbeitet", len(streamers))
+
         state = load_state()
         now = int(time.time())
-        state["last_checked"] = now
-        save_state(state)
 
-        matches = await get_match_history(BETA_STEAM_ACCOUNT_ID, limit=10)
-        recent_matches = _filter_recent_matches(matches, state, now=now)
+        for twitch_login, steam_id in streamers:
+            try:
+                await self._process_streamer(
+                    state=state,
+                    twitch_login=twitch_login,
+                    steam_id=int(steam_id),
+                    twitch_api=twitch_api,
+                    now=now,
+                )
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                log.exception("HighlightClipper: Fehler bei Streamer %s", twitch_login)
+
+    async def _process_streamer(
+        self,
+        *,
+        state: dict,
+        twitch_login: str,
+        steam_id: int,
+        twitch_api,
+        now: int,
+    ) -> None:
+        matches = await get_match_history(steam_id, limit=10)
+        recent_matches = _filter_recent_matches(matches, state, login=twitch_login, now=now)
         if not recent_matches:
             return
 
-        client_id, access_token = self._load_twitch_credentials()
-        if not client_id or not access_token:
-            log.warning("HighlightClipper: Twitch credentials fehlen, Matches werden uebersprungen")
-            return
-
-        channel_id = await get_channel_id(BETA_TWITCH_LOGIN, client_id, access_token)
+        channel_id = await get_channel_id(twitch_login, twitch_api)
         if not channel_id:
-            log.warning("HighlightClipper: Twitch channel id nicht gefunden fuer %s", BETA_TWITCH_LOGIN)
+            log.warning("HighlightClipper: Kein Twitch-Channel für %s", twitch_login)
             return
 
         for match in recent_matches:
             match_id = int(match["match_id"])
-            clip_dir = Path(CLIPS_DIR) / str(match_id)
+            clip_dir = Path(CLIPS_DIR) / twitch_login / str(match_id)
             clip_dir.mkdir(parents=True, exist_ok=True)
             try:
                 await self._process_match(
                     state=state,
+                    twitch_login=twitch_login,
+                    steam_id=steam_id,
                     match=match,
                     channel_id=channel_id,
-                    client_id=client_id,
-                    access_token=access_token,
+                    twitch_api=twitch_api,
                     clip_dir=clip_dir,
                 )
             finally:
@@ -106,31 +139,36 @@ class HighlightClipperWorker:
         self,
         *,
         state: dict,
+        twitch_login: str,
+        steam_id: int,
         match: dict,
         channel_id: str,
-        client_id: str,
-        access_token: str,
+        twitch_api,
         clip_dir: Path,
     ) -> None:
         match_id = int(match["match_id"])
         match_start_unix = int(match["start_time"])
         match_duration_s = int(match.get("match_duration_s") or 0)
+
         match_info = await get_match_metadata(match_id)
-        events = detect_events(BETA_STEAM_ACCOUNT_ID, match_info)
+        events = detect_events(steam_id, match_info)
         if not events:
-            mark_match_processed(state, match_id)
+            mark_match_processed(state, twitch_login, match_id)
             return
 
         vod = await find_vod_for_match(
             channel_id,
             match_start_unix,
             match_duration_s,
-            client_id,
-            access_token,
+            twitch_api,
         )
         if vod is None:
-            log.warning("HighlightClipper: Kein passendes VOD fuer match_id=%s gefunden", match_id)
-            mark_match_processed(state, match_id)
+            log.warning(
+                "HighlightClipper: Kein VOD für %s match_id=%s",
+                twitch_login,
+                match_id,
+            )
+            mark_match_processed(state, twitch_login, match_id)
             return
 
         clip_paths: list[str] = []
@@ -139,7 +177,10 @@ class HighlightClipperWorker:
 
         for index, event in enumerate(events, start=1):
             clip_start_s = max(0, vod_offset_s + event.game_time_s - CLIP_PADDING_SECONDS)
-            clip_end_s = max(clip_start_s + 1, vod_offset_s + event.game_time_s + event.duration_s + CLIP_PADDING_SECONDS)
+            clip_end_s = max(
+                clip_start_s + 1,
+                vod_offset_s + event.game_time_s + event.duration_s + CLIP_PADDING_SECONDS,
+            )
             output_path = clip_dir / f"{index:02d}_{event.event_type}_{event.game_time_s}.mp4"
             downloaded = await download_clip(
                 str(vod["vod_id"]),
@@ -153,36 +194,67 @@ class HighlightClipperWorker:
             clip_events.append(event)
 
         if clip_paths:
-            await send_highlight_dm(
+            await send_highlight_to_channel(
                 self.bot,
-                BETA_DISCORD_USER_ID,
+                twitch_login,
                 match_id,
                 clip_events,
                 clip_paths,
             )
         else:
-            log.warning("HighlightClipper: Keine Clips fuer match_id=%s erstellt", match_id)
+            log.warning(
+                "HighlightClipper: Keine Clips erstellt für %s match_id=%s",
+                twitch_login,
+                match_id,
+            )
 
-        mark_match_processed(state, match_id)
+        mark_match_processed(state, twitch_login, match_id)
 
-    def _load_twitch_credentials(self) -> tuple[str, str]:
-        client_id = str(os.getenv("TWITCH_CLIENT_ID") or "").strip()
-        access_token = str(os.getenv("TWITCH_ACCESS_TOKEN") or "").strip()
-        if client_id and access_token:
-            return client_id, access_token
+    def _get_twitch_api(self):
+        if self._cog is not None:
+            return getattr(self._cog, "api", None)
+        cog = getattr(self.bot, "cogs", {}).get("TwitchStreamCog")
+        return getattr(cog, "api", None) if cog is not None else None
 
-        secret_store = getattr(self.bot, "secret_store", None)
-        loader = getattr(secret_store, "load_secret_value", None)
-        if callable(loader):
-            client_id = client_id or str(loader("TWITCH_CLIENT_ID") or "").strip()
-            access_token = access_token or str(loader("TWITCH_ACCESS_TOKEN") or "").strip()
-        else:
-            client_id = client_id or load_secret_value("TWITCH_CLIENT_ID")
-            access_token = access_token or load_secret_value("TWITCH_ACCESS_TOKEN")
-        return client_id, access_token
+    async def _get_partner_streamers(self) -> list[tuple[str, str]]:
+        loop = asyncio.get_event_loop()
+        try:
+            rows = await loop.run_in_executor(None, _query_partner_streamers)
+        except Exception:
+            log.exception("HighlightClipper: DB-Abfrage für Partner fehlgeschlagen")
+            rows = []
+        result = {str(row[0]): str(row[1]) for row in (rows or []) if row[0] and row[1]}
+        result.update(_load_manual_steamids())
+        return list(result.items())
 
 
-def _filter_recent_matches(matches: list[dict], state: dict, *, now: int) -> list[dict]:
+def _load_manual_steamids() -> dict[str, str]:
+    """Lädt manuelle Steam-ID-Zuordnungen aus data/highlight_clipper/steamids.json."""
+    import json
+    path = Path("data/highlight_clipper/steamids.json")
+    if not path.exists():
+        return {}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        if isinstance(data, dict):
+            return {str(k): str(v) for k, v in data.items() if k and v}
+    except Exception:
+        log.warning("HighlightClipper: steamids.json konnte nicht gelesen werden")
+    return {}
+
+
+def _query_partner_streamers() -> list:
+    from ..storage.pg import query_all
+    return query_all(_PARTNERS_QUERY) or []
+
+
+def _filter_recent_matches(
+    matches: list[dict],
+    state: dict,
+    *,
+    login: str,
+    now: int,
+) -> list[dict]:
     min_start = now - 86400
     filtered: list[dict] = []
     for match in matches:
@@ -192,7 +264,7 @@ def _filter_recent_matches(matches: list[dict], state: dict, *, now: int) -> lis
         start_time = _as_int(match.get("start_time"))
         if match_id is None or start_time is None:
             continue
-        if start_time <= min_start or is_match_processed(state, match_id):
+        if start_time <= min_start or is_match_processed(state, login, match_id):
             continue
         filtered.append(
             {

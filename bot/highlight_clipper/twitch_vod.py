@@ -6,48 +6,35 @@ import re
 from datetime import UTC
 from datetime import datetime
 from pathlib import Path
+from typing import TYPE_CHECKING
 
-import aiohttp
+if TYPE_CHECKING:
+    from ..api.twitch_api import TwitchAPI
 
 from .config import FFMPEG_PATH
 from .config import MAX_DISCORD_FILE_MB
 
 log = logging.getLogger("TwitchStreams.HighlightClipper")
 
-_REQUEST_TIMEOUT = aiohttp.ClientTimeout(total=30)
 _DURATION_RE = re.compile(r"(?:(?P<hours>\d+)h)?(?:(?P<minutes>\d+)m)?(?:(?P<seconds>\d+)s)?")
 _YT_DLP_PATH = Path(__file__).resolve().parents[2] / ".venv" / "bin" / "yt-dlp"
 
 
-async def get_channel_id(login: str, client_id: str, access_token: str) -> str | None:
-    headers = _twitch_headers(client_id, access_token)
-    async with aiohttp.ClientSession(timeout=_REQUEST_TIMEOUT, headers=headers) as session:
-        async with session.get("https://api.twitch.tv/helix/users", params={"login": login}) as response:
-            response.raise_for_status()
-            payload = await response.json()
-    data = payload.get("data") or []
-    if not data:
+async def get_channel_id(login: str, twitch_api: "TwitchAPI") -> str | None:
+    user = await twitch_api.get_user_info(login)
+    if user is None:
         return None
-    return str(data[0].get("id") or "").strip() or None
+    return str(user.get("id") or "").strip() or None
 
 
 async def find_vod_for_match(
     channel_id: str,
     match_start_unix: int,
     match_duration_s: int,
-    client_id: str,
-    access_token: str,
+    twitch_api: "TwitchAPI",
 ) -> dict | None:
-    headers = _twitch_headers(client_id, access_token)
-    async with aiohttp.ClientSession(timeout=_REQUEST_TIMEOUT, headers=headers) as session:
-        async with session.get(
-            "https://api.twitch.tv/helix/videos",
-            params={"user_id": channel_id, "type": "archive", "first": 20},
-        ) as response:
-            response.raise_for_status()
-            payload = await response.json()
-
-    for vod in payload.get("data") or []:
+    vods = await twitch_api.get_archive_videos(channel_id, first=20)
+    for vod in vods:
         started_at = _parse_twitch_datetime(vod.get("created_at"))
         duration_s = _parse_duration_seconds(vod.get("duration"))
         if started_at is None or duration_s <= 0:
@@ -162,13 +149,6 @@ def _pick_downloaded_video(paths: list[Path]) -> Path | None:
             if path.suffix == suffix:
                 return path
     return paths[0] if paths else None
-
-
-def _twitch_headers(client_id: str, access_token: str) -> dict[str, str]:
-    return {
-        "Client-Id": client_id,
-        "Authorization": f"Bearer {access_token}",
-    }
 
 
 def _parse_twitch_datetime(value: object) -> int | None:

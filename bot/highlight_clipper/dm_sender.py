@@ -5,19 +5,33 @@ from pathlib import Path
 
 import discord
 
+from .config import HIGHLIGHT_DISCORD_CHANNEL_ID
 from .config import MAX_DISCORD_FILE_MB
 
 log = logging.getLogger("TwitchStreams.HighlightClipper")
 
 
-async def send_highlight_dm(bot, discord_user_id: int, match_id: int, events: list, clip_paths: list[str]) -> None:
-    user = await bot.fetch_user(int(discord_user_id))
+async def send_highlight_to_channel(
+    bot,
+    streamer_login: str,
+    match_id: int,
+    events: list,
+    clip_paths: list[str],
+) -> None:
+    channel = bot.get_channel(HIGHLIGHT_DISCORD_CHANNEL_ID)
+    if channel is None:
+        try:
+            channel = await bot.fetch_channel(HIGHLIGHT_DISCORD_CHANNEL_ID)
+        except Exception:
+            log.error("HighlightClipper: Channel %s nicht gefunden", HIGHLIGHT_DISCORD_CHANNEL_ID)
+            return
+
     embed = discord.Embed(
-        title=f"\N{VIDEO GAME} Neue Highlights aus Match #{match_id}",
-        description=f"{len(clip_paths)} Clips",
-        color=discord.Color.blue(),
+        title=f"\N{VIDEO GAME} Highlights — {streamer_login} (Match #{match_id})",
+        description=f"{len(clip_paths)} Clip(s)",
+        color=discord.Color.orange(),
     )
-    await user.send(embed=embed)
+    await channel.send(embed=embed)
 
     max_bytes = MAX_DISCORD_FILE_MB * 1024 * 1024
     for event, clip_path in zip(events, clip_paths, strict=False):
@@ -25,10 +39,15 @@ async def send_highlight_dm(bot, discord_user_id: int, match_id: int, events: li
         if not path.exists():
             continue
         if path.stat().st_size > max_bytes:
-            await user.send(f"{event.label}: Datei ist groesser als {MAX_DISCORD_FILE_MB} MB und wurde uebersprungen.")
+            await channel.send(f"{event.label}: Datei > {MAX_DISCORD_FILE_MB} MB, übersprungen.")
             continue
-        await user.send(
-            content=event.label,
+        await channel.send(
+            content=f"**{streamer_login}** — {event.label}",
             file=discord.File(path, filename=path.name),
         )
-    log.info("HighlightClipper DM sent for match_id=%s clips=%s", match_id, len(clip_paths))
+    log.info(
+        "HighlightClipper: %s Clips für %s match=%s gepostet",
+        len(clip_paths),
+        streamer_login,
+        match_id,
+    )

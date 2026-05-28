@@ -477,6 +477,17 @@ class TwitchAPI:
         users = await self.get_users([login])
         return users.get(login.lower())
 
+    async def get_app_access_token(self) -> str:
+        """Stellt sicher dass ein gültiges App-Token vorhanden ist und gibt es zurück."""
+        await self._ensure_token()
+        return self._token or ""
+
+    async def get_archive_videos(self, user_id: str, first: int = 20) -> list[dict]:
+        """Gibt die letzten archivierten VODs eines Channels zurück."""
+        params = [("user_id", user_id), ("type", "archive"), ("first", str(first))]
+        js = await self._get("/videos", params=params)
+        return js.get("data") or []
+
     async def _fetch_stream_page(
         self,
         *,

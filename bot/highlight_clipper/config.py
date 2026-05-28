@@ -1,8 +1,6 @@
 from __future__ import annotations
 
-BETA_STEAM_ACCOUNT_ID = 1066648163
-BETA_TWITCH_LOGIN = "earlysalty"
-BETA_DISCORD_USER_ID = 662995601738170389
+HIGHLIGHT_DISCORD_CHANNEL_ID = 1374364800817303632
 STATE_PATH = "data/highlight_clipper/state.json"
 CLIPS_DIR = "data/highlight_clipper/clips"
 POLL_INTERVAL_SECONDS = 600

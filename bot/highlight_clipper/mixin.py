@@ -7,7 +7,7 @@ if TYPE_CHECKING:
 
 
 class HighlightClipperMixin:
-    """Beta-Mixin: Auto-Clips fuer EarlySalty per Discord DM."""
+    """Automatische Highlight-Clips für alle aktiven Partner-Streamer."""
 
     _highlight_clipper_worker: HighlightClipperWorker | None = None
 
@@ -15,7 +15,7 @@ class HighlightClipperMixin:
         if self._highlight_clipper_worker is None:
             from .worker import HighlightClipperWorker
 
-            self._highlight_clipper_worker = HighlightClipperWorker(self.bot)
+            self._highlight_clipper_worker = HighlightClipperWorker(self.bot, cog=self)
         await self._highlight_clipper_worker.start()
 
     async def _hc_stop(self) -> None:
