@@ -1,3 +1,8 @@
+## #58 — Streamer-Seite lädt jetzt blitzschnell ohne weißen Flash
+
+- Die Streamer-Seite wird beim Build jetzt vollständig als fertiges HTML vorgerendert — Besucher sehen die Seite sofort, ohne kurzen weißen Ladeblitz
+- Kein sichtbarer Unterschied für normale User, aber Suchmaschinen und KI-Crawler sehen exakt dasselbe wie echte Besucher — keine versteckten Tricks mehr
+
 ## #57 — Streamer-Landingpage komplett SEO-fähig gemacht
 
 - Die Streamer-Seite hatte vorher nur einen leeren Titel ("Twitch-Bot") und keinen lesbaren Inhalt für Google — deshalb hat sie Google bisher gar nicht gecrawlt
