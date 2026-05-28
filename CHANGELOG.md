@@ -1,3 +1,8 @@
+## #61 — Highlight-Clips landen jetzt wirklich im Discord-Channel
+
+- Clips wurden erstellt aber konnten nicht gesendet werden — Fehler beim Discord-Zugriff behoben
+- Clips werden jetzt über den Deadlock-Bot in den Highlight-Channel gepostet
+
 ## #60 — Highlight-Clipper: Clip-Download funktioniert jetzt zuverlässig
 
 - Clips konnten bisher wegen eines ffmpeg-Crashes nicht erstellt werden — der Fehler ist behoben
