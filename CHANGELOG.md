@@ -1,3 +1,9 @@
+## #63 — Highlight-Erkennung deutlich smarter
+
+- Close Situations werden jetzt erkannt: wenn ein Kill und ein eigener Tod nah beieinander liegen (z. B. Kill dann 3 Sekunden später gestorben), wird das als Highlight gewertet
+- Teamfights werden jetzt auch geclippt wenn der Spieler nur einen Kill gemacht hat (nicht mehr min. 2 nötig)
+- Einzelne, isolierte Kills werden weiterhin nicht geclippt
+
 ## #62 — Highlight-Clips zeigen jetzt echte Highlights
 
 - Einzelne Kills werden nicht mehr als Clips verschickt — das war uninteressantes 0815-Gameplay
