@@ -23,14 +23,16 @@ from .twitch_vod import get_channel_id
 
 log = logging.getLogger("TwitchStreams.HighlightClipper")
 
+_STEAM64_BASE = 76561197960265728
+_STEAM_LINKS_DB = Path("/home/naniadm/Documents/Deadlock-Bots/data/deadlock.sqlite3")
+
+# Alle aktiven Partner mit Discord-User-ID aus der Twitch-Bot-DB
 _PARTNERS_QUERY = """
-    SELECT p.twitch_login, e.steam_id
-      FROM twitch_streamers_partner_state p
-      JOIN twitch_engagement_settings e ON e.channel_login = p.twitch_login
-     WHERE p.is_partner_active = 1
-       AND e.steam_id IS NOT NULL
-       AND e.steam_id != ''
-     ORDER BY p.twitch_login
+    SELECT twitch_login, discord_user_id
+      FROM twitch_streamers_partner_state
+     WHERE is_partner_active = 1
+       AND discord_user_id IS NOT NULL
+     ORDER BY twitch_login
 """
 
 
@@ -223,7 +225,28 @@ class HighlightClipperWorker:
         except Exception:
             log.exception("HighlightClipper: DB-Abfrage für Partner fehlgeschlagen")
             rows = []
-        result = {str(row[0]): str(row[1]) for row in (rows or []) if row[0] and row[1]}
+
+        # Discord user_id → account_id aus Steam-Bot SQLite auflösen
+        discord_to_account: dict[int, str] = {}
+        try:
+            discord_ids = [int(row[1]) for row in (rows or []) if row[1]]
+            if discord_ids:
+                discord_to_account = await loop.run_in_executor(
+                    None, _load_steam_account_ids, discord_ids
+                )
+        except Exception:
+            log.exception("HighlightClipper: Steam-Links-Abfrage fehlgeschlagen")
+
+        result: dict[str, str] = {}
+        for row in (rows or []):
+            login = str(row[0] or "").strip()
+            discord_id = _as_int(row[1])
+            if not login or discord_id is None:
+                continue
+            account_id = discord_to_account.get(discord_id)
+            if account_id:
+                result[login] = account_id
+
         result.update(_load_manual_steamids())
         return list(result.items())
 
@@ -246,6 +269,33 @@ def _load_manual_steamids() -> dict[str, str]:
 def _query_partner_streamers() -> list:
     from ..storage.pg import query_all
     return query_all(_PARTNERS_QUERY) or []
+
+
+def _load_steam_account_ids(discord_ids: list[int]) -> dict[int, str]:
+    """Liest primary Steam-Account-IDs aus der Steam-Bot-SQLite für gegebene Discord-User-IDs."""
+    import sqlite3
+    if not _STEAM_LINKS_DB.exists():
+        log.warning("HighlightClipper: Steam-Links-DB nicht gefunden: %s", _STEAM_LINKS_DB)
+        return {}
+    placeholders = ",".join("?" * len(discord_ids))
+    conn = sqlite3.connect(f"file:{_STEAM_LINKS_DB}?mode=ro", uri=True)
+    try:
+        rows = conn.execute(
+            f"SELECT user_id, steam_id FROM steam_links"
+            f" WHERE user_id IN ({placeholders}) AND primary_account = 1",
+            discord_ids,
+        ).fetchall()
+    finally:
+        conn.close()
+    result: dict[int, str] = {}
+    for user_id, steam_id in rows:
+        try:
+            account_id = int(steam_id) - _STEAM64_BASE
+            if account_id > 0:
+                result[int(user_id)] = str(account_id)
+        except (ValueError, TypeError):
+            pass
+    return result
 
 
 def _filter_recent_matches(

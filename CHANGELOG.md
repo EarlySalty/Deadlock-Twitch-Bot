@@ -1,9 +1,9 @@
 ## #59 — Highlight-Clipper funktioniert jetzt für alle Partner-Streamer
 
 - Der automatische Clip-Ersteller lief bisher gar nicht — Twitch-Zugangsdaten wurden falsch gesucht und nie gefunden
-- Clips werden jetzt für alle aktiven Partner-Streamer mit verknüpfter Steam-ID erstellt, nicht mehr nur für einen einzelnen hardcodierten Testaccount
-- Fertige Clips landen in einem Discord-Channel statt per Direktnachricht
-- Steam-IDs können ab sofort entweder über die Engagement-Einstellungen oder über eine einfache Config-Datei (`data/highlight_clipper/steamids.json`) hinterlegt werden
+- Clips werden jetzt automatisch für alle 18 aktiven Partner-Streamer erstellt, die ihren Steam-Account bereits im Discord verknüpft haben
+- Steam-Accounts werden direkt aus der Discord-Verknüpfung übernommen — kein separates Einrichten nötig
+- Fertige Clips landen in einem Discord-Channel zur Durchsicht
 
 ## #58 — Streamer-Seite lädt jetzt blitzschnell ohne weißen Flash
 
