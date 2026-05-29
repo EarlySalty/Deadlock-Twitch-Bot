@@ -393,21 +393,48 @@ def _score_events_with_demo(
             result.append(event)
             continue
 
-        if event.event_type == "teamfight" or event.event_type == "close_fight":
-            # Teamfights/Close Fights immer behalten, Label mit Combo anreichern
-            label = event.label
-            if best.combo_label and best.combo_label != "Kill":
-                label = f"{event.label} ({best.combo_label})"
+        # Health-Label zusammenbauen
+        hp_pct = round(best.health_pct * 100)
+        health_label = ""
+        if best.health_pct < 0.20:
+            health_label = f"🔴 {hp_pct}% HP"
+        elif best.health_pct < 0.35:
+            health_label = f"🟠 {hp_pct}% HP"
+        elif best.health_pct < 0.50:
+            health_label = f"🟡 {hp_pct}% HP"
+
+        parts = [event.label]
+        if health_label:
+            parts.append(health_label)
+        if best.combo_label and best.combo_label != "Kill":
+            parts.append(best.combo_label)
+        label = " — ".join(parts)
+
+        # Clips nur wenn excitement_score > 0 ODER Teamfight/Close Fight
+        if event.event_type in ("teamfight", "close_fight") or best.excitement_score > 0:
             result.append(dataclasses.replace(event, label=label))
         else:
-            # Multikill: nur wenn Combo vorhanden
-            if best.combo_score >= 2:
-                label = f"{event.label} — {best.combo_label}" if best.combo_label else event.label
-                result.append(dataclasses.replace(event, label=label))
-            else:
-                log.info(
-                    "HighlightClipper: Multikill @ %ss herausgefiltert (combo_score=%s)",
-                    event.game_time_s, best.combo_score,
-                )
+            log.info(
+                "HighlightClipper: Event @ %ss herausgefiltert (HP=%s%% score=%s)",
+                event.game_time_s, hp_pct, best.excitement_score,
+            )
+
+    # Hochscorende Demo-Momente die kein API-Event abdeckt → eigenes Clip-Event
+    covered_times = {e.game_time_s for e in events}
+    for m in moments:
+        if m.excitement_score < 3:
+            continue
+        if any(abs(m.game_time_s - t) <= 10 for t in covered_times):
+            continue  # Bereits abgedeckt
+        pre_roll = min(int(m.combo_score) * 3 + 15, 30)
+        result.append(HighlightEvent(
+            event_type="close_fight",
+            game_time_s=int(m.game_time_s),
+            duration_s=0,
+            kill_count=1,
+            label=f"Clutch Kill ({int(m.health_pct*100)}% HP) — {m.combo_label}",
+            pre_roll_s=pre_roll,
+        ))
+        covered_times.add(m.game_time_s)
 
     return result or events  # Fallback: alle Events wenn Demo-Filtering nichts übrig lässt

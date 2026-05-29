@@ -35,9 +35,26 @@ class KillMoment:
     game_time_s: float
     tick: int
     combo_abilities: list[str] = field(default_factory=list)
-    combo_score: int = 0       # Anzahl Abilities in Combo-Fenster
+    combo_score: int = 0
     has_high_impact: bool = False
     combo_label: str = ""
+    health_pct: float = 1.0    # Health-Prozent beim Kill (1.0 = 100%)
+    is_clutch: bool = False    # True wenn health_pct < 0.35
+
+    @property
+    def excitement_score(self) -> int:
+        """Gesamtpunktzahl — Health-basiert, nicht Ability-basiert."""
+        score = 0
+        if self.health_pct < 0.20:
+            score += 5   # Extrem niedrige HP — ultra clutch
+        elif self.health_pct < 0.35:
+            score += 3   # Gefährlich niedrig — echter Clutch
+        elif self.health_pct < 0.50:
+            score += 1   # Etwas unter Druck
+        # Kombos als Zusatz-Kontext, aber nicht primäre Metrik
+        if self.has_high_impact and self.combo_score >= 2:
+            score += 1
+        return score
 
 
 async def analyze_match(
@@ -46,7 +63,7 @@ async def analyze_match(
     kill_times_s: list[float],
     player_name: str = "",
 ) -> list[KillMoment]:
-    """Extrahiert KillMoments mit Combo-Scoring aus der Demo."""
+    """Extrahiert KillMoments mit Health- und Combo-Scoring aus der Demo."""
     loop = asyncio.get_event_loop()
     try:
         abilities = await loop.run_in_executor(None, _parse_abilities, demo_path)
@@ -56,9 +73,10 @@ async def analyze_match(
 
     player_abilities = [(t, name) for t, hid, name in abilities if hid == hero_id]
 
-    # Kill-Ticks aus API-Zeitstempeln ableiten (robuster als Namen-Matching)
     kill_ticks = [round(t * _TICK_RATE) for t in kill_times_s]
 
+    # Entity-Index für unseren Spieler — anhand der bekannten Kill-Ticks
+    entity_idx = await loop.run_in_executor(None, _find_player_entity, demo_path, kill_ticks)
     moments: list[KillMoment] = []
 
     for kill_tick in kill_ticks:
@@ -69,6 +87,19 @@ async def analyze_match(
         ]
         high_impact = any(a in _HIGH_IMPACT for a in combo)
         label = _build_combo_label(combo)
+
+        # Minimum-Health im Fight-Fenster: Kill ± 15s (Fight kann danach weitergehen)
+        health_pct = 1.0
+        if entity_idx is not None:
+            health_pct = await loop.run_in_executor(
+                None, _get_min_health_in_window,
+                demo_path, entity_idx,
+                max(0, kill_tick - 320),     # 5s vor Kill
+                kill_tick + 960,             # 15s nach Kill
+                320,                         # 5s Schritte
+            )
+
+        is_clutch = health_pct < 0.35
         moments.append(KillMoment(
             game_time_s=kill_tick / _TICK_RATE,
             tick=kill_tick,
@@ -76,9 +107,72 @@ async def analyze_match(
             combo_score=len(combo),
             has_high_impact=high_impact,
             combo_label=label,
+            health_pct=health_pct,
+            is_clutch=is_clutch,
         ))
 
     return moments
+
+
+def _find_player_entity(demo_path: Path, kill_ticks: list[int]) -> int | None:
+    """Findet den Entity-Index des Spielers über seine bekannten Kill-Ticks."""
+    result = _run_boon(["events", str(demo_path)])
+    current_tick: int | None = None
+    in_death = False
+    tolerance = 200  # ~3s bei 64 ticks/s
+
+    for line in result.splitlines():
+        m = re.match(r"\[tick (\d+)\] player_death", line)
+        if m:
+            current_tick = int(m.group(1))
+            in_death = True
+            continue
+        if in_death:
+            if line.strip() == "--":
+                in_death = False
+                continue
+            if current_tick and any(abs(current_tick - kt) < tolerance for kt in kill_ticks):
+                m2 = re.match(r"\s+attacker_pawn: (-?\d+)", line)
+                if m2:
+                    pawn = int(m2.group(1))
+                    return (pawn & 0xFFFFFFFF) & 0x7FFF
+    return None
+
+
+def _get_health_at_tick(demo_path: Path, entity_idx: int, tick: int) -> tuple[int, int] | None:
+    import json as _json
+    result = _run_boon(["entities", str(demo_path), "--tick", str(tick),
+                        "--filter", "CitadelPlayerPawn", "--json"])
+    if not result:
+        return None
+    try:
+        ents = _json.loads(result)
+        for e in ents:
+            if e.get("index") == entity_idx:
+                f = e.get("fields", {})
+                hp = f.get("m_iHealth")
+                max_hp = f.get("m_iMaxHealth")
+                if hp is not None and max_hp:
+                    return int(hp), int(max_hp)
+    except Exception:
+        pass
+    return None
+
+
+def _get_min_health_in_window(
+    demo_path: Path, entity_idx: int, start_tick: int, end_tick: int, step: int
+) -> float:
+    """Minimum Health-Prozent im Zeitfenster — erkennt low-HP-Momente während/nach dem Kill."""
+    min_pct = 1.0
+    for tick in range(start_tick, end_tick, step):
+        hp_data = _get_health_at_tick(demo_path, entity_idx, tick)
+        if hp_data:
+            hp, max_hp = hp_data
+            if max_hp > 0:
+                pct = min(1.0, hp / max_hp)
+                if pct < min_pct:
+                    min_pct = pct
+    return min_pct
 
 
 def _build_combo_label(abilities: list[str]) -> str:
