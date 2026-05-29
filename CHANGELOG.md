@@ -1,3 +1,14 @@
+## #67 — Timeout-Erkennung über EventSub + Stream-Start-Pitch
+
+**Problem:** Ein 10-Minuten-Timeout des Bots wurde über den bisherigen Drop-Code-Ansatz nicht erkannt, weil der Bot in dieser Zeit nichts schreibt. Außerdem kam der Werbefrei-Pitch beim nächsten Promo-Slot statt am nächsten Stream-Start. Pitch-Text war zu generisch.
+
+**Geändert:**
+- **Echtzeit-Erkennung via EventSub**: Die bestehende `channel.ban`-Subscription (feuert bei Timeout und permanentem Ban) prüft jetzt ob der Bot selbst das Ziel ist. Bei `is_permanent: false` → Timeout erkannt → TimeoutGuard wird aktualisiert.
+- **Pitch zum Stream-Start**: Der Werbefrei-Pitch wird nicht mehr beim nächsten freien Promo-Slot gesendet, sondern 90 Sekunden nach dem nächsten Stream-Start – so ist der Streamer gerade frisch live und liest tatsächlich mit.
+- **Klarerer Pitch-Text**: "Beim letzten Stream wurde der Bot in diesem Chat getimed outed 🙈 Falls die automatischen Promo-Nachrichten stören – es gibt ein Werbefrei-Abo…" Klar formuliert, kein Rätselraten.
+
+**Wie's funktioniert:** Der `channel.ban`-Callback im Monitoring-Bot vergleicht die `user_id` des Gebannten mit der Bot-ID (aus `_twitch_chat_bot.bot_id`). Passt sie, trägt er den Timeout im `TimeoutGuard` (Singleton, gleicher Prozess) ein. Wenn der Streamer das nächste Mal live geht, überprüft der Go-Live-Handler ob ein Pitch aussteht, und plant ihn mit 90s Delay als asyncio-Task.
+
 ## #66 — Timeout-Schutz, Werbefrei-Pitch und schärfere Promo-Logik
 
 **Problem:** Der Bot hat in Channels, die ihn regelmäßig timeout'en, trotzdem weitergemacht — ohne Konsequenz. Außerdem hat die Deadlock-Beta-Zugangserkennung zu viele Fehlzündungen produziert (z.B. "brauchst mitspieler?" löste fälschlicherweise einen Invite-Hinweis aus). Die Promo-Nachrichten wiederholten sich zu schnell und kamen zu oft.

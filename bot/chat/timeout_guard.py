@@ -13,8 +13,9 @@ _DAY_SEC = 24 * 3600
 
 WERBEFREI_PITCH_URL = "https://deutsche-deadlock-community.de/twitch/pricing"
 WERBEFREI_PITCH_MSG = (
-    "Kleiner Hinweis: Wer keine Promo-Nachrichten vom Bot möchte, "
-    "kann das Werbefrei-Abo nutzen – alle Features ohne automatische Nachrichten: "
+    "Kurzer Hinweis: Beim letzten Stream wurde der Bot in diesem Chat getimed outed 🙈 "
+    "Falls die automatischen Promo-Nachrichten stören – es gibt ein Werbefrei-Abo, "
+    "das alle Bot-Features ohne automatische Nachrichten bietet: "
     + WERBEFREI_PITCH_URL
 )
 
@@ -58,8 +59,8 @@ class TimeoutGuard:
             return False
         return (now or time.monotonic()) < until
 
-    def consume_pitch(self, login: str, now: float | None = None) -> bool:
-        """True wenn ein Werbefrei-Pitch gesendet werden soll (Flag wird geleert)."""
+    def consume_stream_start_pitch(self, login: str, now: float | None = None) -> bool:
+        """True wenn beim nächsten Stream-Start ein Werbefrei-Pitch gesendet werden soll."""
         if login not in self._pending_pitch:
             return False
         self._pending_pitch.discard(login)

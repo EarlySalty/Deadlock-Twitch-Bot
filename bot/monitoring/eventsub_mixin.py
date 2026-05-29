@@ -1520,6 +1520,40 @@ class _EventSubMixin:
                                     bid,
                                 )
 
+                        # Werbefrei-Pitch wenn Bot in diesem Channel getimed outed wurde
+                        try:
+                            from bot.chat.timeout_guard import WERBEFREI_PITCH_MSG, get_timeout_guard
+                            _tg = get_timeout_guard()
+                            if _tg.consume_stream_start_pitch(login_norm):
+                                _channel_id_for_pitch = str(bid).strip()
+                                if _channel_id_for_pitch:
+                                    async def _send_timeout_pitch(_login=login_norm, _cid=_channel_id_for_pitch):
+                                        await __import__("asyncio").sleep(90)
+                                        _send_ann = getattr(chat_bot, "_send_announcement", None)
+                                        _make_ch = getattr(chat_bot, "_make_promo_channel", None)
+                                        _mark = getattr(chat_bot, "_mark_promo_sent", None)
+                                        if callable(_send_ann) and callable(_make_ch):
+                                            import time as _time
+                                            ok = await _send_ann(
+                                                _make_ch(_login, _cid),
+                                                WERBEFREI_PITCH_MSG,
+                                                color="blue",
+                                                source="promo",
+                                            )
+                                            if ok and callable(_mark):
+                                                _mark(_login, _time.monotonic(), reason="timeout_pitch")
+                                            log.info(
+                                                "Werbefrei-Pitch nach Stream-Start in #%s gesendet: %s",
+                                                _login, ok,
+                                            )
+                                    import asyncio as _asyncio
+                                    _asyncio.create_task(
+                                        _send_timeout_pitch(),
+                                        name=f"twitch.timeout_pitch.{login_norm}",
+                                    )
+                        except Exception:
+                            log.debug("Werbefrei-Pitch-Planung fehlgeschlagen für %s", login_norm, exc_info=True)
+
                 webhook_transport_available = bool(
                     webhook_url and webhook_secret and self._has_eventsub_webhook_transport()
                 )
@@ -2256,6 +2290,24 @@ class _EventSubMixin:
 
         async def _ban_cb(bid: str, login: str, event: dict):
             try:
+                is_permanent = bool(event.get("is_permanent", True))
+                if not is_permanent:
+                    banned_user_id = str(event.get("user_id") or "").strip()
+                    _chat_bot = getattr(self, "_twitch_chat_bot", None)
+                    _bot_id = str(
+                        getattr(_chat_bot, "bot_id_safe", None)
+                        or getattr(_chat_bot, "bot_id", None)
+                        or ""
+                    ).strip()
+                    if banned_user_id and _bot_id and banned_user_id == _bot_id:
+                        _login_norm = str(login or "").strip().lower()
+                        if _login_norm:
+                            from bot.chat.timeout_guard import get_timeout_guard
+                            get_timeout_guard().record_timeout(_login_norm)
+                            log.info(
+                                "Bot-Timeout in #%s erkannt (user_id=%s) → TimeoutGuard aktualisiert",
+                                _login_norm, banned_user_id,
+                            )
                 await self._store_ban_event(bid, event, unbanned=False)
             except Exception:
                 log.exception(
