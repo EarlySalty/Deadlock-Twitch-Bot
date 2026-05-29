@@ -749,11 +749,49 @@ class ModerationMixin:
 
     _DISCORD_INVITE_RE = re.compile(r"discord\.gg/[A-Za-z0-9]+", re.IGNORECASE)
 
+    @staticmethod
+    def _is_established_chatter(channel_login: str, chatter_login: str) -> bool:
+        """Prüft ob ein Chatter in diesem Kanal als bekannt gilt.
+
+        Gilt als bekannt wenn mindestens eines zutrifft:
+        - >= 3 Sessions in diesem Kanal
+        - >= 20 Nachrichten in diesem Kanal
+        - Erstmals vor mehr als 14 Tagen gesehen
+        """
+        try:
+            from ..storage import readonly_connection
+
+            with readonly_connection() as conn:
+                row = conn.execute(
+                    """
+                    SELECT total_sessions, total_messages, first_seen_at
+                    FROM twitch_chatter_rollup
+                    WHERE streamer_login = %s AND chatter_login = %s
+                    LIMIT 1
+                    """,
+                    (channel_login, chatter_login),
+                ).fetchone()
+            if row is None:
+                return False
+            sessions, messages, first_seen = row[0] or 0, row[1] or 0, row[2]
+            if sessions >= 3 or messages >= 20:
+                return True
+            if first_seen is not None:
+                from datetime import UTC, datetime, timedelta
+
+                age = datetime.now(UTC) - first_seen
+                if age >= timedelta(days=14):
+                    return True
+        except Exception:
+            pass
+        return False
+
     async def _check_sus_discord_invite(self, message, channel_login: str) -> None:
         """Erkennt direkte discord.gg/-Links im Chat und loggt sie als Verdacht.
 
         Nur echte Invite-Links (discord.gg/CODE) triggern — nicht allgemeines
         Reden über Discord oder "spielen"/"mitspielen"-Nachrichten.
+        Bekannte Chatter (lange dabei, viele Sessions) werden übersprungen.
         """
         content = message.content or ""
         if not self._DISCORD_INVITE_RE.search(content):
@@ -764,6 +802,10 @@ class ModerationMixin:
         if not chatter_login:
             return
         if getattr(author, "moderator", False) or getattr(author, "broadcaster", False):
+            return
+
+        # Bekannte Chatter (Semi-Mods, Stammgäste) nicht flaggen
+        if self._is_established_chatter(channel_login, chatter_login):
             return
 
         cooldown: dict[tuple, float] = getattr(self, "_sus_invite_cooldown", None) or {}
