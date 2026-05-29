@@ -774,7 +774,7 @@ class ModerationMixin:
             if row is None:
                 return False
             sessions, messages, first_seen = row[0] or 0, row[1] or 0, row[2]
-            if sessions >= 3 or messages >= 20:
+            if sessions >= 3 or messages >= 40:
                 return True
             if first_seen is not None:
                 from datetime import UTC, datetime, timedelta
