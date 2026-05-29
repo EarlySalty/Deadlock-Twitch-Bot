@@ -1,3 +1,10 @@
+## #64 — Highlight-Clips zeigen jetzt echte Combos aus dem Replay
+
+- Clips werden ab jetzt nur noch für echte Combo-Kills erstellt — wenn der Spieler kurz vor dem Kill mindestens 2 Abilities eingesetzt hat (z. B. Hook → Sticky Bomb → Uppercut)
+- Solo-Kills ohne Combo-Bewegung werden automatisch herausgefiltert
+- Combo-Label erscheint im Discord-Clip-Embed (z. B. "Hook → Bomb → Uppercut")
+- Für jedes Match wird das Valve-Replay (227 MB) automatisch geladen und mit dem Open-Source-Tool "boon" analysiert — kein manueller Eingriff nötig
+
 ## #63 — Highlight-Erkennung deutlich smarter
 
 - Close Situations werden jetzt erkannt: wenn ein Kill und ein eigener Tod nah beieinander liegen (z. B. Kill dann 3 Sekunden später gestorben), wird das als Highlight gewertet

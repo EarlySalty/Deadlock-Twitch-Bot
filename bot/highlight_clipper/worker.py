@@ -11,6 +11,10 @@ from .config import CLIP_PADDING_SECONDS
 from .config import POLL_INTERVAL_SECONDS
 from .deadlock_client import get_match_history
 from .deadlock_client import get_match_metadata
+from .demo_analyzer import KillMoment
+from .demo_analyzer import analyze_match
+from .demo_downloader import cleanup_demo
+from .demo_downloader import get_demo_path
 from .dm_sender import send_highlight_to_channel
 from .event_detector import HighlightEvent
 from .event_detector import detect_events
@@ -122,7 +126,7 @@ class HighlightClipperWorker:
 
         for match in recent_matches:
             match_id = int(match["match_id"])
-            clip_dir = Path(CLIPS_DIR) / twitch_login / str(match_id)
+            clip_dir = (Path(CLIPS_DIR).resolve() / twitch_login / str(match_id))
             clip_dir.mkdir(parents=True, exist_ok=True)
             try:
                 await self._process_match(
@@ -158,6 +162,26 @@ class HighlightClipperWorker:
             mark_match_processed(state, twitch_login, match_id)
             return
 
+        # Demo-Analyse: Combo-Scoring für Kills
+        hero_id = _get_hero_id(steam_id, match_info)
+        demo_moments: list[KillMoment] = []
+        if hero_id is not None:
+            demo_path = await get_demo_path(match_id)
+            if demo_path is not None:
+                try:
+                    kill_times = [float(e.game_time_s) for e in events]
+                    demo_moments = await analyze_match(demo_path, hero_id, kill_times)
+                    log.info(
+                        "HighlightClipper: Demo analysiert für %s match=%s — %s Kills gefunden",
+                        twitch_login, match_id, len(demo_moments),
+                    )
+                finally:
+                    cleanup_demo(match_id)
+
+        # Events mit Demo-Scoring anreichern
+        if demo_moments:
+            events = _score_events_with_demo(events, demo_moments)
+
         vod = await find_vod_for_match(
             channel_id,
             match_start_unix,
@@ -178,11 +202,13 @@ class HighlightClipperWorker:
         vod_offset_s = match_start_unix - int(vod["vod_started_at"])
 
         for index, event in enumerate(events, start=1):
-            clip_start_s = max(0, vod_offset_s + event.game_time_s - CLIP_PADDING_SECONDS)
+            pre_roll = max(CLIP_PADDING_SECONDS, event.pre_roll_s)
+            clip_start_s = max(0, vod_offset_s + event.game_time_s - pre_roll)
             clip_end_s = max(
                 clip_start_s + 1,
                 vod_offset_s + event.game_time_s + event.duration_s + CLIP_PADDING_SECONDS,
             )
+            clip_end_s = min(clip_end_s, clip_start_s + 60)
             output_path = clip_dir / f"{index:02d}_{event.event_type}_{event.game_time_s}.mp4"
             downloaded = await download_clip(
                 str(vod["vod_id"]),
@@ -332,3 +358,56 @@ def _as_int(value: object) -> int | None:
         return int(value)
     except (TypeError, ValueError):
         return None
+
+
+def _get_hero_id(steam_id: int, match_info: dict) -> int | None:
+    """Sucht die hero_id des Spielers anhand seiner account_id."""
+    for player in (match_info.get("players") or []):
+        if _as_int(player.get("account_id")) == steam_id:
+            return _as_int(player.get("hero_id"))
+    return None
+
+
+def _score_events_with_demo(
+    events: list[HighlightEvent],
+    moments: list[KillMoment],
+) -> list[HighlightEvent]:
+    """
+    Reichert Events mit Demo-Combo-Labels an und filtert Solo-Kills heraus.
+    Events ohne passenden Demo-Moment bleiben unverändert.
+    """
+    from .event_detector import HighlightEvent as HE
+    import dataclasses
+
+    result = []
+    for event in events:
+        # Passendes Demo-Moment suchen (±5s Toleranz)
+        best: KillMoment | None = None
+        for m in moments:
+            if abs(m.game_time_s - event.game_time_s) <= 5:
+                if best is None or m.combo_score > best.combo_score:
+                    best = m
+
+        if best is None:
+            # Kein Demo-Moment → Event unverändert behalten
+            result.append(event)
+            continue
+
+        if event.event_type == "teamfight" or event.event_type == "close_fight":
+            # Teamfights/Close Fights immer behalten, Label mit Combo anreichern
+            label = event.label
+            if best.combo_label and best.combo_label != "Kill":
+                label = f"{event.label} ({best.combo_label})"
+            result.append(dataclasses.replace(event, label=label))
+        else:
+            # Multikill: nur wenn Combo vorhanden
+            if best.combo_score >= 2:
+                label = f"{event.label} — {best.combo_label}" if best.combo_label else event.label
+                result.append(dataclasses.replace(event, label=label))
+            else:
+                log.info(
+                    "HighlightClipper: Multikill @ %ss herausgefiltert (combo_score=%s)",
+                    event.game_time_s, best.combo_score,
+                )
+
+    return result or events  # Fallback: alle Events wenn Demo-Filtering nichts übrig lässt
