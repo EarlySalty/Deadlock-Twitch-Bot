@@ -565,13 +565,11 @@ class ModerationMixin:
             )
             and has_strong_access
         )
-        if (
-            has_deadlock_context
-            or (has_game_context and has_strong_access)
-            or has_join_intent
-            or has_direct_invite_request
-            or has_where_to_play_question
-        ):
+        if has_deadlock_context:
+            return True
+        if has_strong_access and (has_game_context or has_join_intent):
+            return True
+        if has_direct_invite_request:
             return True
         return False
 
@@ -1473,6 +1471,14 @@ class ModerationMixin:
                                                         drop_message,
                                                         source,
                                                     )
+                                                    from .timeout_guard import (
+                                                        _BOT_TIMEOUT_DROP_CODES,
+                                                        get_timeout_guard,
+                                                    )
+                                                    if drop_code in _BOT_TIMEOUT_DROP_CODES:
+                                                        _login = self._normalize_channel_login_safe(channel)
+                                                        if _login:
+                                                            get_timeout_guard().record_timeout(_login)
                                                     log.warning(
                                                         "Twitch hat die Bot-Nachricht verworfen "
                                                         "(broadcaster=%s, code=%s, detail=%s)",

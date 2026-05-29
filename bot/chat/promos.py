@@ -916,7 +916,15 @@ class PromoMixin:
 
         if not messages:
             return None
-        return self._format_promo_template(secrets.choice(messages), invite)
+        last_map = getattr(self, "_last_promo_text", None)
+        if not isinstance(last_map, dict):
+            last_map = {}
+            self._last_promo_text = last_map
+        last_text = last_map.get(login)
+        pool = [m for m in messages if m != last_text] if len(messages) > 1 else messages
+        chosen = secrets.choice(pool)
+        last_map[login] = chosen
+        return self._format_promo_template(chosen, invite)
 
     def _promo_blocked_by_plan_or_flag(self, login: str) -> bool:
         """Returns True wenn Bot-Werbung fuer diesen Streamer dauerhaft blockiert ist
@@ -956,8 +964,25 @@ class PromoMixin:
     async def _send_promo_message(
         self, login: str, channel_id: str, now: float, *, reason: str
     ) -> bool:
+        from .timeout_guard import WERBEFREI_PITCH_MSG, get_timeout_guard
+        _tg = get_timeout_guard()
+        if _tg.is_muted(login, now):
+            return False
+
         if self._promo_blocked_by_plan_or_flag(login):
             return False
+
+        # Werbefrei-Pitch wenn ein Timeout registriert wurde
+        if _tg.consume_pitch(login, now):
+            pitch_ok = await self._send_announcement(
+                self._make_promo_channel(login, channel_id),
+                WERBEFREI_PITCH_MSG,
+                color="blue",
+                source="promo",
+            )
+            if pitch_ok:
+                self._mark_promo_sent(login, now, reason="timeout_pitch")
+            return pitch_ok
 
         invite, is_specific = await self._get_promo_invite(login)
         if not invite:

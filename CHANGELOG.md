@@ -1,3 +1,16 @@
+## #66 — Timeout-Schutz, Werbefrei-Pitch und schärfere Promo-Logik
+
+**Problem:** Der Bot hat in Channels, die ihn regelmäßig timeout'en, trotzdem weitergemacht — ohne Konsequenz. Außerdem hat die Deadlock-Beta-Zugangserkennung zu viele Fehlzündungen produziert (z.B. "brauchst mitspieler?" löste fälschlicherweise einen Invite-Hinweis aus). Die Promo-Nachrichten wiederholten sich zu schnell und kamen zu oft.
+
+**Geändert:**
+- **Timeout-Tracking** (neu): Wenn der Bot in einem Channel getimed outed wird (Twitch meldet `sender_banned` beim nächsten Send-Versuch), wird das gezählt. Bei 2x an einem Tag oder 5x in einer Woche werden **alle Bot-Funktionen in diesem Channel für 7 Tage deaktiviert**.
+- **Werbefrei-Pitch**: Nach einem erkannten Timeout schickt der Bot (sobald er wieder darf) einmalig einen Hinweis auf das Werbefrei-Abo, das Promo-Nachrichten abschaltet.
+- **Beta-Zugang-Fix**: "Mitspiel\*"-Signale lösen nur noch einen Invite-Hinweis aus, wenn gleichzeitig ein starkes Zugangs-Signal ("beta", "zugang", "key" etc.) oder expliziter Deadlock-Bezug vorliegt. Damit fällt "moin, brauchst mitspieler?" nicht mehr in die Kategorie.
+- **Mehr Nachrichten-Vielfalt**: Der Promo-Pool wuchs von 14 auf 22 Texte (aufgeteilt in 5 Kategorien). Zusätzlich wird die zuletzt gesendete Nachricht beim nächsten Mal ausgeschlossen.
+- **Höhere Cooldowns**: Minimaler Promo-Cooldown von 30 auf 45 Min, maximaler von 120 auf 180 Min, globaler Cooldown von 60 auf 90 Min, Attempt-Cooldown von 5 auf 10 Min.
+
+**Wie's funktioniert:** Der `TimeoutGuard` hält eine In-Memory-Liste der Timeout-Zeitpunkte pro Channel (rollendes 7-Tage-Fenster). Überschreitet die Tageszahl ≥ 2 oder die Wochenzahl ≥ 5, wird der Channel für 604.800 Sekunden stumm geschaltet — kein Discord-Post, kein Raid, kein Bot-Ban, keine Promos, nichts. Der Werbefrei-Pitch erscheint maximal einmal pro 24 Stunden pro Channel.
+
 ## #65 — Globale Chatter-Bannliste + Discord-Invite-Erkennung
 
 - Bestimmte Nutzer können jetzt global gesperrt werden und werden in jedem Partner-Kanal sofort gebannt, sobald sie dort schreiben

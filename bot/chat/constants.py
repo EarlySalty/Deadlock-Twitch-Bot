@@ -100,29 +100,37 @@ SPAM_MIN_MATCHES = 3
 # ---------------------------------------------------------------------------
 PROMO_MESSAGES_CATEGORIZED: dict[str, list[str]] = {
     "generic": [
-        "heyo! Falls ihr bock habt auf Deadlock und noch eine deutsche Community sucht – schau gerne mal vorbei: {invite}",
+        "heyo! Falls ihr Bock auf Deadlock habt und noch eine deutsche Community sucht – schau gerne mal vorbei: {invite}",
         "Hey! Noch eine deutsche Deadlock-Community am suchen? Wir sind hier: {invite} 🎮",
-        "Falls du noch eine deutsche Deadlock-Community sucht – schau doch mal vorbei: {invite}",
+        "Falls du noch eine deutsche Deadlock-Community suchst – schau doch mal vorbei: {invite}",
+        "Wer nach dem Stream noch Deadlock zockt und ne Community sucht – wir sind auf Discord: {invite}",
+        "Kurze Info: Es gibt eine aktive deutsche Deadlock-Community, falls jemand interessiert ist 👀 {invite}",
     ],
     "competitive": [
         "Kein Bock mehr auf Solo-Queue-Grief? Such dir feste Mates in unserer Community! {invite} 🔫",
         "Schon den neuesten Meta-Build ausprobiert? Tausch dich mit anderen Pros aus: {invite}",
         "MMR-Grind ist hart, aber im Team macht's mehr Spaß. Hier findest du die deutsche Deadlock-Community: {invite}",
         "Du willst deine Lane-Phase verbessern? Tipps & Tricks gibt's bei uns auf Discord: {invite}",
+        "Ranked Solo macht manchmal keinen Spaß – in unserer Community findest du jemanden zum Duo-Queue: {invite}",
+        "Patch-Diskussionen, Tier-Listen, Meta-Talks – alles bei uns auf Discord: {invite}",
     ],
     "community": [
         "Bock auf Inhouses oder kleine Turniere? Wir organisieren regelmäßig Events! Schau doch mal vorbei: {invite} 🏆",
-        "Noch auf der suche nach Mates für die nächste Runde Deadlock? In unserer Community wirst du fündig! {invite}",
-        "Dein suchen hat ein Ende, falls du nach dem Stream noch Mates zum Zocken suchst, schau bei uns vorbei: {invite}",
+        "Noch auf der Suche nach Mates für die nächste Runde Deadlock? In unserer Community wirst du fündig! {invite}",
+        "Wer nach dem Stream noch Mates zum Zocken sucht, schau bei uns vorbei: {invite}",
+        "Die deutschen Deadlock-Streamer sind auch auf unserem Discord unterwegs – komm vorbei: {invite}",
+        "Events, Inhouses und jede Menge Deadlock-Nerds findest du bei uns auf Discord: {invite} 🎮",
     ],
     "growth": [
-        "Deadlock ist komplex – wir helfen dir beim Einstieg! Guides und mehr bei uns auf dem Discord: {invite}",
+        "Deadlock ist komplex – wir helfen dir beim Einstieg! Guides und mehr bei uns auf Discord: {invite}",
         "Neu in Deadlock? Keine Sorge, unsere Community hat die besten Tipps für Einsteiger: {invite} 📚",
+        "Lust den nächsten Rank zu grinden? Bei uns findest du Leute die genauso drauf sind: {invite}",
     ],
     "hype": [
         "Willkommen an alle neuen Gesichter! 🎮 Wenn ihr Bock auf Deadlock habt, schaut gerne bei unserer Community vorbei: {invite}",
-
-    ]
+        "Schön dass so viele dabei sind! Falls jemand die deutsche Deadlock-Community noch nicht kennt – hier entlang: {invite}",
+        "So viele Zuschauer! Wer davon noch eine Community sucht, ist bei uns richtig: {invite} 🙌",
+    ],
 }
 
 # Flache Liste für Abwärtskompatibilität (wird von secrets.choice verwendet, wenn kein Grund angegeben ist)
@@ -144,10 +152,10 @@ PROMO_ACTIVITY_TARGET_MPM: float = 3.0
 PROMO_ACTIVITY_CHATTER_DEDUP_SEC: int = (
     30  # derselbe Chatter zählt höchstens einmal alle x Sekunden
 )
-_PROMO_COOLDOWN_MIN: int = 30
-_PROMO_COOLDOWN_MAX: int = 120
-PROMO_OVERALL_COOLDOWN_MIN: int = 60
-PROMO_ATTEMPT_COOLDOWN_MIN: int = 5
+_PROMO_COOLDOWN_MIN: int = 45
+_PROMO_COOLDOWN_MAX: int = 180
+PROMO_OVERALL_COOLDOWN_MIN: int = 90
+PROMO_ATTEMPT_COOLDOWN_MIN: int = 10
 PROMO_IGNORE_COMMANDS: bool = True
 PROMO_LOOP_INTERVAL_SEC: int = 60
 
