@@ -702,6 +702,96 @@ class ModerationMixin:
     def _normalize_outbound_chat_source(source: str | None) -> str:
         return str(source or "").strip().lower()
 
+    # ── Global Chatter Ban ─────────────────────────────────────────────────────
+
+    def _is_globally_banned_cached(self, chatter_login: str, chatter_id: str) -> bool:
+        """Gecachter Check gegen die globale Chatter-Bannliste.
+
+        Positive Treffer bleiben 5 Minuten im In-Memory-Cache, damit nicht bei
+        jeder Nachricht ein DB-Call ausgelöst wird.
+        """
+        key = chatter_login.lower()
+        cache: dict[str, float] = getattr(self, "_global_ban_cache", None) or {}
+        if not hasattr(self, "_global_ban_cache"):
+            self._global_ban_cache = cache
+
+        now = time.monotonic()
+        if key in cache and (now - cache[key]) < 300.0:
+            return True
+
+        try:
+            from ..storage.pg import is_chatter_globally_banned
+
+            banned = is_chatter_globally_banned(key, chatter_id)
+            if banned:
+                cache[key] = now
+                if len(cache) > 500:
+                    stale = [k for k, ts in cache.items() if now - ts > 300.0]
+                    for k in stale:
+                        cache.pop(k, None)
+            return banned
+        except Exception:
+            return False
+
+    async def _enforce_global_chatter_ban(self, message) -> bool:
+        """Bannt global gebannte Chatter in dem Kanal wo sie gerade schreiben."""
+        author = getattr(message, "author", None)
+        chatter_login = (getattr(author, "name", "") or "").lower()
+        chatter_id = str(getattr(author, "id", "") or "")
+        if not chatter_login:
+            return False
+        if not self._is_globally_banned_cached(chatter_login, chatter_id):
+            return False
+        log.info("Global-Ban-Treffer: %s — führe Channel-Ban aus", chatter_login)
+        return await self._auto_ban_and_cleanup(message)
+
+    # ── Suspicious Discord Invite ───────────────────────────────────────────────
+
+    _DISCORD_INVITE_RE = re.compile(r"discord\.gg/[A-Za-z0-9]+", re.IGNORECASE)
+
+    async def _check_sus_discord_invite(self, message, channel_login: str) -> None:
+        """Erkennt direkte discord.gg/-Links im Chat und loggt sie als Verdacht.
+
+        Nur echte Invite-Links (discord.gg/CODE) triggern — nicht allgemeines
+        Reden über Discord oder "spielen"/"mitspielen"-Nachrichten.
+        """
+        content = message.content or ""
+        if not self._DISCORD_INVITE_RE.search(content):
+            return
+
+        author = getattr(message, "author", None)
+        chatter_login = (getattr(author, "name", "") or "").lower()
+        if not chatter_login:
+            return
+        if getattr(author, "moderator", False) or getattr(author, "broadcaster", False):
+            return
+
+        cooldown: dict[tuple, float] = getattr(self, "_sus_invite_cooldown", None) or {}
+        if not hasattr(self, "_sus_invite_cooldown"):
+            self._sus_invite_cooldown = cooldown
+
+        key = (channel_login, chatter_login)
+        now = time.monotonic()
+        if now - cooldown.get(key, 0.0) < 300.0:
+            return
+        cooldown[key] = now
+
+        chatter_id = str(getattr(author, "id", "") or "")
+        log.warning(
+            "Sus Discord-Invite in #%s von %s: %s",
+            channel_login,
+            chatter_login,
+            content[:200],
+        )
+        self._record_autoban(
+            channel_name=channel_login,
+            chatter_login=chatter_login,
+            chatter_id=chatter_id,
+            content=content,
+            status="SUSPICIOUS_DISCORD_INVITE",
+            reason="discord.gg link in partner chat",
+        )
+
     def _ensure_outbound_chat_suppression_schema(self) -> bool:
         if getattr(self, "_outbound_chat_suppression_schema_ok", False):
             return True

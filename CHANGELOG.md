@@ -1,3 +1,9 @@
+## #65 — Globale Chatter-Bannliste + Discord-Invite-Erkennung
+
+- Bestimmte Nutzer können jetzt global gesperrt werden und werden in jedem Partner-Kanal sofort gebannt, sobald sie dort schreiben
+- Discord-Invite-Links (discord.gg/...) werden automatisch im Log als verdächtig markiert
+- Normales Reden über Discord oder "mitspielen" wird davon nicht berührt
+
 ## #64 — Highlight-Clips zeigen jetzt echte Combos aus dem Replay
 
 - Clips werden ab jetzt nur noch für echte Combo-Kills erstellt — wenn der Spieler kurz vor dem Kill mindestens 2 Abilities eingesetzt hat (z. B. Hook → Sticky Bomb → Uppercut)

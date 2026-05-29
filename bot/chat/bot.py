@@ -1410,6 +1410,13 @@ if TWITCHIO_AVAILABLE:
 
             # AB HIER: Nur noch Partner! (Volle Bot-Funktionen)
             if is_partner:
+                # Global Chatter Ban: sofort bannen und verwerfen
+                try:
+                    if await self._enforce_global_chatter_ban(message):
+                        return
+                except Exception:
+                    log.debug("Global-Chatter-Ban-Check fehlgeschlagen", exc_info=True)
+
                 try:
                     await self._maybe_warn_service_pitch(message, channel_login=channel_login)
                 except Exception:
@@ -1513,6 +1520,12 @@ if TWITCHIO_AVAILABLE:
 
                 except Exception:
                     log.debug("Auto-Ban Prüfung fehlgeschlagen", exc_info=True)
+
+                # Sus Discord-Invite-Erkennung (nur echter discord.gg/Link, kein "spielen"-Text)
+                try:
+                    await self._check_sus_discord_invite(message, channel_login)
+                except Exception:
+                    log.debug("Sus-Discord-Invite-Check fehlgeschlagen", exc_info=True)
 
             # Freche Auto-Replies nur, wenn Deadlock läuft
             if is_deadlock_live:

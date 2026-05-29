@@ -3984,4 +3984,61 @@ def ensure_schema(conn) -> None:
         "WHERE human_notify_pending_at IS NOT NULL AND human_notify_sent_at IS NULL"
     )
 
+    # 24) Global Chatter Ban List
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS twitch_chatter_global_ban (
+            chatter_login  TEXT PRIMARY KEY,
+            chatter_id     TEXT,
+            reason         TEXT,
+            added_by       TEXT,
+            added_at       TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )
+        """
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_twitch_chatter_global_ban_id "
+        "ON twitch_chatter_global_ban(chatter_id) WHERE chatter_id IS NOT NULL"
+    )
+
     migrate_legacy_partner_registry(conn)
+
+
+def is_chatter_globally_banned(chatter_login: str, chatter_id: str) -> bool:
+    """Prüft ob ein Chatter auf der globalen Bannliste steht (Login ODER ID)."""
+    try:
+        with readonly_connection() as conn:
+            row = conn.execute(
+                """
+                SELECT 1 FROM twitch_chatter_global_ban
+                WHERE chatter_login = %s
+                   OR (chatter_id IS NOT NULL AND chatter_id = %s AND chatter_id <> '')
+                LIMIT 1
+                """,
+                (chatter_login.lower(), chatter_id),
+            ).fetchone()
+            return row is not None
+    except Exception:
+        return False
+
+
+def add_chatter_global_ban(
+    chatter_login: str,
+    chatter_id: str | None = None,
+    reason: str = "",
+    added_by: str = "manual",
+) -> None:
+    """Fügt einen Chatter zur globalen Bannliste hinzu (upsert)."""
+    with transaction() as conn:
+        conn.execute(
+            """
+            INSERT INTO twitch_chatter_global_ban (chatter_login, chatter_id, reason, added_by)
+            VALUES (%s, %s, %s, %s)
+            ON CONFLICT (chatter_login) DO UPDATE SET
+                chatter_id = COALESCE(EXCLUDED.chatter_id, twitch_chatter_global_ban.chatter_id),
+                reason     = EXCLUDED.reason,
+                added_by   = EXCLUDED.added_by,
+                added_at   = NOW()
+            """,
+            (chatter_login.lower(), chatter_id or None, reason, added_by),
+        )
