@@ -1506,6 +1506,18 @@ if TWITCHIO_AVAILABLE:
                             message.content,
                         )
 
+                        asyncio.create_task(
+                            self._send_moderation_alert(
+                                kind="sus_spam",
+                                channel_login=channel_name,
+                                chatter_login=author_name,
+                                chatter_id=author_id,
+                                content=message.content or "",
+                                reason=f"Score {spam_score}: {reasons_str}",
+                            ),
+                            name="twitch.mod_alert",
+                        )
+
                         # AI-Review: MiniMax prüft ob echter Spam → lernt Muster
                         asyncio.create_task(
                             run_spam_ai_review(

@@ -833,6 +833,68 @@ class ModerationMixin:
             status="SUSPICIOUS_DISCORD_INVITE",
             reason="discord.gg link in partner chat",
         )
+        asyncio.create_task(
+            self._send_moderation_alert(
+                kind="sus_invite",
+                channel_login=channel_login,
+                chatter_login=chatter_login,
+                chatter_id=chatter_id,
+                content=content,
+            ),
+            name="twitch.mod_alert",
+        )
+
+    # ── Moderation Alerts → Discord ────────────────────────────────────────────
+
+    _MOD_ALERT_CHANNEL_ID = 1374364800817303632
+
+    async def _send_moderation_alert(
+        self,
+        *,
+        kind: str,
+        channel_login: str,
+        chatter_login: str,
+        chatter_id: str = "",
+        content: str = "",
+        reason: str = "",
+    ) -> None:
+        """Postet einen Moderations-Alert in den konfigurierten Discord-Kanal."""
+        _TITLES = {
+            "ban":        ("🔨 Ban ausgeführt",         0xED4245),
+            "global_ban": ("🚫 Global-Ban ausgeführt",  0xED4245),
+            "sus_invite": ("⚠️ Verdächtiger Discord-Link", 0xFEE75C),
+            "sus_spam":   ("👀 Verdächtige Nachricht",  0xFEE75C),
+        }
+        title_text, color = _TITLES.get(kind, ("ℹ️ Moderation", 0x5865F2))
+
+        lines = [f"**Kanal:** #{channel_login}", f"**Chatter:** {chatter_login}"]
+        if chatter_id:
+            lines.append(f"**ID:** {chatter_id}")
+        if reason:
+            lines.append(f"**Grund:** {reason}")
+        if content:
+            safe = content[:300].replace("`", "'")
+            lines.append(f"**Nachricht:** `{safe}`")
+
+        try:
+            import aiohttp
+
+            payload = {
+                "title": title_text,
+                "content": "\n".join(lines),
+                "channel_id": self._MOD_ALERT_CHANNEL_ID,
+                "token": "changeme-local",
+            }
+            async with aiohttp.ClientSession() as session:
+                async with session.post(
+                    "http://localhost:8899/changelog",
+                    json=payload,
+                    timeout=aiohttp.ClientTimeout(total=5.0),
+                ) as resp:
+                    if resp.status not in {200, 201, 204}:
+                        log.debug("Mod-Alert Discord-Post fehlgeschlagen: HTTP %s", resp.status)
+        except Exception:
+            log.debug("Mod-Alert konnte nicht gesendet werden", exc_info=True)
 
     def _ensure_outbound_chat_suppression_schema(self) -> bool:
         if getattr(self, "_outbound_chat_suppression_schema_ok", False):
@@ -1598,6 +1660,16 @@ class ModerationMixin:
                                     content=original_content,
                                     status="BANNED",
                                 )
+                                asyncio.create_task(
+                                    self._send_moderation_alert(
+                                        kind="ban",
+                                        channel_login=channel_name,
+                                        chatter_login=chatter_login,
+                                        chatter_id=chatter_id,
+                                        content=original_content,
+                                    ),
+                                    name="twitch.mod_alert",
+                                )
                                 # Nachricht an den Chat senden, WARUM gebannt wurde (wenn nicht silent)
                                 silent = False
                                 try:
@@ -1657,6 +1729,17 @@ class ModerationMixin:
                                     content=original_content,
                                     status="BANNED",
                                     reason="already_banned",
+                                )
+                                asyncio.create_task(
+                                    self._send_moderation_alert(
+                                        kind="ban",
+                                        channel_login=channel_name,
+                                        chatter_login=chatter_login,
+                                        chatter_id=chatter_id,
+                                        content=original_content,
+                                        reason="already_banned",
+                                    ),
+                                    name="twitch.mod_alert",
                                 )
                                 return True
 
