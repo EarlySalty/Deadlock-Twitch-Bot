@@ -36,6 +36,7 @@ ChattersDebugCallback = Callable[[str], Awaitable[dict[str, Any]]]
 EventsubDispatchCallback = Callable[..., Awaitable[dict[str, Any]]]
 EventsubProcessingDebugCallback = Callable[..., Awaitable[dict[str, Any]]]
 EventsubProcessingRequeueCallback = Callable[[str], Awaitable[dict[str, Any]]]
+PartnerChatActionCallback = Callable[[str, str, str, str], Awaitable[str]]
 
 
 @dataclass(slots=True, frozen=True)
@@ -66,6 +67,7 @@ class InternalApiCallbacks:
     eventsub_dispatch: EventsubDispatchCallback | None = None
     eventsub_processing_debug: EventsubProcessingDebugCallback | None = None
     eventsub_processing_requeue: EventsubProcessingRequeueCallback | None = None
+    partner_chat_action: PartnerChatActionCallback | None = None
 
     @classmethod
     def coalesce(
@@ -96,6 +98,7 @@ class InternalApiCallbacks:
         eventsub_dispatch_cb: EventsubDispatchCallback | None = None,
         eventsub_processing_debug_cb: EventsubProcessingDebugCallback | None = None,
         eventsub_processing_requeue_cb: EventsubProcessingRequeueCallback | None = None,
+        partner_chat_action_cb: PartnerChatActionCallback | None = None,
     ) -> "InternalApiCallbacks":
         base = callbacks or cls()
         return cls(
@@ -161,6 +164,11 @@ class InternalApiCallbacks:
                 if eventsub_processing_requeue_cb is not None
                 else base.eventsub_processing_requeue
             ),
+            partner_chat_action=(
+                partner_chat_action_cb
+                if partner_chat_action_cb is not None
+                else base.partner_chat_action
+            ),
         )
 
 
@@ -202,4 +210,5 @@ __all__ = [
     "StreamerAnalyticsCallback",
     "StreamersCallback",
     "VerifyStreamerCallback",
+    "PartnerChatActionCallback",
 ]

@@ -1,3 +1,13 @@
+## #69 — Chat-Actions im Admin-Dashboard vollständig repariert
+
+**Problem 1 (Senden-Button tut nichts):** Die Streamer-Suchbox hat einen internen Debounce (220 ms). Wenn der Anzeigename vom Login-Slug abweicht (z. B. `"Earl Salty"` vs. `"earlsalty"`), hat der Debounce 220 ms nach dem Klick die Auswahl gecleart — `canSubmit` wurde false, der Button disabled. Fix: Vergleich jetzt gegen Login **und** Anzeigenamen.
+
+**Problem 2 (Fehlermeldung „Twitch Chat Bot ist aktuell nicht verfügbar"):** Bot und Dashboard laufen als getrennte Prozesse. Alle Bot-Operationen (Streamer hinzufügen, entfernen, …) gehen über eine interne REST-API. Chat-Actions hatten diese Brücke nie bekommen — das Dashboard versuchte den Chat-Bot direkt anzusprechen und schlug deshalb immer fehl.
+
+**Geändert:** Die interne API-Kette wurde um eine `partner_chat_action`-Callback-Route erweitert. Der Bot-Prozess führt die eigentliche Chat-Aktion aus (er hat Zugriff auf den Chat-Bot); der Dashboard-Prozess leitet die Anfrage über HTTP weiter. Wenn kein lokaler Chat-Bot vorhanden ist, greift das Dashboard jetzt auf diesen Callback zurück statt mit einer Fehlermeldung abzubrechen.
+
+---
+
 ## #69 — Chat-Actions im Admin-Dashboard funktionstüchtig
 
 **Problem:** Auf der Seite `/twitch/admin/community/chat` passierte beim Drücken von "Nachricht senden" scheinbar nichts — der Button blieb inaktiv oder die Aktion wurde nie abgeschickt.

@@ -246,6 +246,7 @@ class BotRuntimeBootstrap:
                     "_internal_eventsub_processing_requeue",
                     None,
                 ),
+                partner_chat_action=getattr(cog, "_dashboard_partner_chat_action", None),
             ),
         )
 

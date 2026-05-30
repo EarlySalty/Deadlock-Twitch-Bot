@@ -44,6 +44,7 @@ from .contracts import (
     StreamerAnalyticsCallback,
     StreamersCallback,
     VerifyStreamerCallback,
+    PartnerChatActionCallback,
 )
 from .policy import (
     coerce_optional_positive_int as _coerce_optional_positive_int_impl,
@@ -105,6 +106,7 @@ class InternalApiServer:
         eventsub_dispatch_cb: EventsubDispatchCallback | None = None,
         eventsub_processing_debug_cb: EventsubProcessingDebugCallback | None = None,
         eventsub_processing_requeue_cb: EventsubProcessingRequeueCallback | None = None,
+        partner_chat_action_cb: PartnerChatActionCallback | None = None,
     ) -> None:
         self._token = (token or "").strip()
         base = (base_path or INTERNAL_API_BASE_PATH).strip()
@@ -140,6 +142,7 @@ class InternalApiServer:
             eventsub_dispatch_cb=eventsub_dispatch_cb,
             eventsub_processing_debug_cb=eventsub_processing_debug_cb,
             eventsub_processing_requeue_cb=eventsub_processing_requeue_cb,
+            partner_chat_action_cb=partner_chat_action_cb,
         )
 
         self._add = callbacks.add if callable(callbacks.add) else self._empty_add
@@ -222,6 +225,11 @@ class InternalApiServer:
             if callable(callbacks.eventsub_processing_requeue)
             else self._empty_eventsub_processing_requeue
         )
+        self._partner_chat_action = (
+            callbacks.partner_chat_action
+            if callable(callbacks.partner_chat_action)
+            else self._empty_partner_chat_action
+        )
         self._idempotency_cache: dict[str, dict[str, Any]] = {}
         self._idempotency_inflight: dict[str, IdempotencyInFlight] = {}
         self._idempotency_ttl_seconds = 15 * 60
@@ -274,6 +282,10 @@ class InternalApiServer:
     async def _empty_eventsub_processing_requeue(self, work_id: str) -> dict[str, Any]:
         del work_id
         raise ValueError("eventsub processing requeue unavailable")
+
+    async def _empty_partner_chat_action(self, login: str, mode: str, color: str, message: str) -> str:
+        del login, mode, color, message
+        return "Twitch Chat Bot ist aktuell nicht verfügbar"
 
     async def _empty_stats(self, **_: Any) -> dict[str, Any]:
         return {}
@@ -896,6 +908,7 @@ def build_internal_api_app(
     eventsub_dispatch_cb: EventsubDispatchCallback | None = None,
     eventsub_processing_debug_cb: EventsubProcessingDebugCallback | None = None,
     eventsub_processing_requeue_cb: EventsubProcessingRequeueCallback | None = None,
+    partner_chat_action_cb: PartnerChatActionCallback | None = None,
 ) -> web.Application:
     server = InternalApiServer(
         token=token,
@@ -925,6 +938,7 @@ def build_internal_api_app(
         eventsub_dispatch_cb=eventsub_dispatch_cb,
         eventsub_processing_debug_cb=eventsub_processing_debug_cb,
         eventsub_processing_requeue_cb=eventsub_processing_requeue_cb,
+        partner_chat_action_cb=partner_chat_action_cb,
     )
 
     @web.middleware

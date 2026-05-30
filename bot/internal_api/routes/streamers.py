@@ -467,6 +467,26 @@ async def session_detail(server: Any, request: web.Request) -> web.Response:
         return server._json_error("internal_error", 500, "failed to fetch session detail")
 
 
+async def streamer_chat_action(server: Any, request: web.Request) -> web.Response:
+    raw_login = request.match_info.get("login", "")
+    login = server._normalize_login(raw_login)
+    if not login:
+        return server._json_error("bad_request", 400, "invalid login")
+    try:
+        body = await server._json_body(request)
+        mode = str(body.get("mode") or "message").strip().lower()
+        color = str(body.get("color") or "purple").strip().lower()
+        message_text = str(body.get("message") or "").strip()
+        if not message_text:
+            return server._json_error("bad_request", 400, "message is required")
+        result = await server._partner_chat_action(login, mode, color, message_text)
+        ok = bool(result) and "nicht verfügbar" not in result and "Fehler" not in result
+        return server._json_response({"ok": ok, "login": login, "message": str(result or "ok")})
+    except Exception:
+        log.exception("internal api chat action failed for %s", login)
+        return server._json_error("internal_error", 500, "chat action failed")
+
+
 def build_streamer_route_defs(server: Any) -> list[web.RouteDef]:
     base = str(getattr(server, "_base_path", INTERNAL_API_BASE_PATH) or INTERNAL_API_BASE_PATH).rstrip("/")
     return [
@@ -477,6 +497,7 @@ def build_streamer_route_defs(server: Any) -> list[web.RouteDef]:
         web.post(f"{base}/streamers/{{login}}/archive", bind(server, streamer_archive)),
         web.post(f"{base}/streamers/{{login}}/discord-flag", bind(server, streamer_discord_flag)),
         web.post(f"{base}/streamers/{{login}}/discord-profile", bind(server, streamer_discord_profile)),
+        web.post(f"{base}/streamers/{{login}}/chat-action", bind(server, streamer_chat_action)),
         web.get(f"{base}/stats", bind(server, stats)),
         web.get(f"{base}/analytics/streamer/{{login}}", bind(server, streamer_analytics)),
         web.get(f"{base}/analytics/comparison", bind(server, analytics_comparison)),
@@ -496,6 +517,7 @@ __all__ = [
     "session_detail",
     "stats",
     "streamer_add",
+    "streamer_chat_action",
     "streamer_analytics",
     "streamer_archive",
     "streamer_discord_flag",

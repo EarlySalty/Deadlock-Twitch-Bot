@@ -465,6 +465,22 @@ class BaseInternalHttpClient:
         )
         return self._message_or_default(payload, fallback="updated")
 
+    async def send_partner_chat_action(
+        self,
+        login: str,
+        *,
+        mode: str,
+        color: str,
+        message: str,
+    ) -> str:
+        normalized_login = self._normalize_login_path_segment(login)
+        payload = await self._request_json(
+            "POST",
+            f"{self.api_base_path}/streamers/{normalized_login}/chat-action",
+            payload={"mode": mode, "color": color, "message": message},
+        )
+        return self._message_or_default(payload, fallback="gesendet")
+
     async def save_discord_profile(
         self,
         login: str,

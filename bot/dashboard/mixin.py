@@ -186,6 +186,62 @@ class TwitchDashboardMixin:
     async def _dashboard_remove(self, login: str) -> str:
         return await self._cmd_remove(login)
 
+    async def _dashboard_partner_chat_action(
+        self, login: str, mode: str, color: str, message: str
+    ) -> str:
+        from .live.live import DashboardLiveMixin, _CHAT_ACTION_MODES, _CHAT_ANNOUNCEMENT_COLORS
+
+        bot_service = self._dashboard_bot_service()
+        chat_bot = getattr(bot_service, "_chat_bot", None)
+        if chat_bot is None:
+            return "Twitch Chat Bot ist aktuell nicht verfügbar"
+
+        normalized_mode = mode.strip().lower() if mode.strip().lower() in _CHAT_ACTION_MODES else "message"
+        normalized_color = color.strip().lower() if color.strip().lower() in _CHAT_ANNOUNCEMENT_COLORS else "purple"
+
+        channel_id = None
+        try:
+            with storage.readonly_connection() as conn:
+                row = conn.execute(
+                    "SELECT twitch_user_id FROM twitch_partners_all_state WHERE twitch_login = %s LIMIT 1",
+                    (login,),
+                ).fetchone()
+                if row:
+                    channel_id = str(row[0] or "").strip() or None
+        except Exception:
+            pass
+
+        if not channel_id:
+            channel_id = await DashboardLiveMixin._resolve_streamer_user_id_from_twitch(
+                self, chat_bot, login
+            )
+        if not channel_id:
+            return f"Für {login} fehlt die Twitch User-ID"
+
+        channel = DashboardLiveMixin._build_dashboard_chat_channel(chat_bot, login, channel_id)
+        send_text = message if normalized_mode != "action" else f"/me {message}"
+
+        try:
+            if normalized_mode == "announcement":
+                send_announcement = getattr(chat_bot, "_send_announcement", None)
+                if callable(send_announcement):
+                    ok = bool(
+                        await send_announcement(channel, send_text, color=normalized_color, source="admin_dashboard_manual")
+                    )
+                else:
+                    send_chat = getattr(chat_bot, "_send_chat_message", None)
+                    ok = bool(await send_chat(channel, send_text, source="admin_dashboard_manual")) if callable(send_chat) else False
+            else:
+                send_chat = getattr(chat_bot, "_send_chat_message", None)
+                ok = bool(await send_chat(channel, send_text, source="admin_dashboard_manual")) if callable(send_chat) else False
+        except Exception:
+            ok = False
+
+        if not ok:
+            return f"Chat-Aktion für {login} konnte nicht gesendet werden"
+        action_label = "Announcement" if normalized_mode == "announcement" else ("Action" if normalized_mode == "action" else "Nachricht")
+        return f"{action_label} an {login} gesendet"
+
     async def _dashboard_live_active_announcements(self) -> list[dict[str, object]]:
         channel_id = int(getattr(self, "_notify_channel_id", 0) or 0)
         if channel_id <= 0:

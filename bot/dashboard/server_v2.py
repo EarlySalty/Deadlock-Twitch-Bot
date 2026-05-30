@@ -129,6 +129,7 @@ class DashboardV2Server(
         reload_cb: Callable[[], Awaitable[str]] | None = None,
         social_media_clip_manager: Any | None = None,
         social_media_twitch_api: Any | None = None,
+        partner_chat_action_cb: Callable[[str, str, str, str], Awaitable[str]] | None = None,
     ) -> None:
         services = dashboard_services or DashboardRuntimeServices()
         bot_service = services.resolve_bot_service() or DashboardBotService()
@@ -283,6 +284,9 @@ class DashboardV2Server(
             else services.raid_oauth_callback_cb
             if callable(services.raid_oauth_callback_cb)
             else None
+        )
+        self._partner_chat_action_cb = (
+            partner_chat_action_cb if callable(partner_chat_action_cb) else None
         )
         self._social_media_clip_manager = (
             social_media_clip_manager
@@ -1105,6 +1109,7 @@ def build_v2_app(
     eventsub_webhook_handler: Any | None = None,
     social_media_clip_manager: Any | None = None,
     social_media_twitch_api: Any | None = None,
+    partner_chat_action_cb: Callable[[str, str, str, str], Awaitable[str]] | None = None,
 ) -> web.Application:
     server = DashboardV2Server(
         app_token=token,
@@ -1132,6 +1137,7 @@ def build_v2_app(
         reload_cb=reload_cb,
         social_media_clip_manager=social_media_clip_manager,
         social_media_twitch_api=social_media_twitch_api,
+        partner_chat_action_cb=partner_chat_action_cb,
     )
 
     app = web.Application(

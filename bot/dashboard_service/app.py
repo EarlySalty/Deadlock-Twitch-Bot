@@ -438,6 +438,19 @@ def build_dashboard_service_app(
             _warn_upstream_once("raid_requirements", exc)
             raise _upstream_unavailable_error("raid_requirements", exc) from exc
 
+    async def _partner_chat_action_cb(
+        login: str, mode: str, color: str, message: str
+    ) -> str:
+        if client is None:
+            return "Twitch Chat Bot ist aktuell nicht verfügbar"
+        try:
+            return await client.send_partner_chat_action(
+                login, mode=mode, color=color, message=message
+            )
+        except BotApiClientError as exc:
+            _warn_upstream_once("partner_chat_action", exc)
+            return f"Chat-Aktion für {login} konnte nicht gesendet werden"
+
     async def _raid_oauth_callback_cb(
         *, code: str, state: str, error: str
     ) -> dict[str, Any]:
@@ -678,6 +691,7 @@ def build_dashboard_service_app(
         eventsub_webhook_handler=eventsub_webhook_handler,
         social_media_clip_manager=None,
         social_media_twitch_api=None,
+        partner_chat_action_cb=_partner_chat_action_cb,
     )
 
     def _oauth_ready() -> bool:

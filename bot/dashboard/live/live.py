@@ -1868,6 +1868,18 @@ class DashboardLiveMixin:
 
         chat_bot = self._resolve_dashboard_chat_bot()
         if chat_bot is None:
+            partner_chat_action_cb = getattr(self, "_partner_chat_action_cb", None)
+            if callable(partner_chat_action_cb):
+                result = await partner_chat_action_cb(login, mode, color, message)
+                ok_flag = bool(result) and "nicht verfügbar" not in result and "Fehler" not in result and "konnte nicht" not in result
+                action_label = "Announcement" if mode == "announcement" else ("Action" if mode == "action" else "Nachricht")
+                location = self._redirect_location(
+                    request,
+                    ok=result if ok_flag else None,
+                    err=result if not ok_flag else None,
+                    default_path="/twitch/admin",
+                )
+                raise web.HTTPFound(location=location)
             location = self._redirect_location(
                 request,
                 err="Twitch Chat Bot ist aktuell nicht verfügbar",
