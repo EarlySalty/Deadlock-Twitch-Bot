@@ -1166,6 +1166,14 @@ if TWITCHIO_AVAILABLE:
             except Exception:
                 log.exception("VoiceReaction: Start in event_ready fehlgeschlagen")
 
+            # Engagement-IRC-Reader starten (no-op wenn keine irc_read-Kanäle)
+            try:
+                from bot.engagement.irc_reader import ensure_started as _engagement_irc_ensure_started
+
+                _engagement_irc_ensure_started()
+            except Exception:
+                log.exception("Engagement-IRC: Start in event_ready fehlgeschlagen")
+
             # Initial channels erst hier joinen – WS-Session ist jetzt bereit
             if self._skip_initial_join_once:
                 self._skip_initial_join_once = False
