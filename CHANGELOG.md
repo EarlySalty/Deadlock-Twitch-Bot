@@ -1,3 +1,13 @@
+## #69 — Chat-Actions im Admin-Dashboard funktionstüchtig
+
+**Problem:** Auf der Seite `/twitch/admin/community/chat` passierte beim Drücken von "Nachricht senden" scheinbar nichts — der Button blieb inaktiv oder die Aktion wurde nie abgeschickt.
+
+**Ursache:** Die Streamer-Suchbox hat einen internen Debounce (220 ms). Wenn nach einem Klick auf einen Streamer-Vorschlag der Anzeigename (`displayName`) vom Login-Slug abweicht (z. B. `"Earl Salty"` vs. `"earlsalty"`), hat der Debounce die Auswahl 220 ms später wieder gecleart. Danach war kein Streamer mehr ausgewählt, `canSubmit` war false und der Button disabled.
+
+**Geändert:** Die Vergleich-Logik prüft jetzt, ob der Eingabewert mit dem Login **oder** dem Anzeigenamen des ausgewählten Streamers übereinstimmt. Stimmt beides nicht, wird die Auswahl gecleart — stimmt eines, bleibt sie erhalten.
+
+---
+
 ## #68 — Zielgerichtete Discord-Promos mit MiniMax-Preset-Auswahl
 
 **Problem:** Alle Promo-Nachrichten waren bisher kanal-weite Announcements — gleicher Text für alle, egal ob jemand seit Monaten dabei ist oder gerade zum ersten Mal reinschaut.

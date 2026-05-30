@@ -160,8 +160,14 @@ export default function ChatActionsPage() {
                     defaultValue={pickerValue}
                     onDebouncedChange={(value) => {
                       setPickerValue(value);
-                      if (selectedLogin && value.trim().toLowerCase() !== selectedLogin) {
-                        setSelectedLogin('');
+                      if (selectedLogin) {
+                        const normalized = value.trim().toLowerCase();
+                        const loginMatches = normalized === selectedLogin;
+                        const displayNameMatches =
+                          normalized === (selectedStreamer?.displayName || '').toLowerCase();
+                        if (!loginMatches && !displayNameMatches) {
+                          setSelectedLogin('');
+                        }
                       }
                     }}
                   />
