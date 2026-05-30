@@ -1,3 +1,17 @@
+## #68 — Zielgerichtete Discord-Promos mit MiniMax-Preset-Auswahl
+
+**Problem:** Alle Promo-Nachrichten waren bisher kanal-weite Announcements — gleicher Text für alle, egal ob jemand seit Monaten dabei ist oder gerade zum ersten Mal reinschaut.
+
+**Geändert:**
+- **Preset-System** (neu): 10 definierte Templates — 5 globale Announcements (competitive, community, chill etc.) und 5 user-spezifische Nachrichten mit @mention (welcome, lurker, mates, ranked, new player).
+- **MiniMax-Auswahl**: MiniMax bekommt die letzten paar Chat-Messages des Ziel-Users + die Preset-Tags und entscheidet welches Template am besten passt. Kein Freitext — nur Auswahl aus vordefinierten Texten. Timeout 5s, Fallback auf Zufalls-Preset.
+- **Stammgast-Ausschluss**: Wer ≥ 10 Chat-Messages in den letzten 30 Tagen hat (Stammgast), wird beim User-Targeting übersprungen. Zielgruppe: neue Chatter und stille Lurker.
+- **1x pro User pro Tag**: Jeder User bekommt höchstens einmal täglich einen personalisierten Pitch.
+- **Abwechslung Global/User**: Das System wechselt zwischen kanal-weiter Announcement und direktem @mention-Pitch — kein Double-Ping.
+- **Vorrang + Fallback**: Targeted Promo hat Vorrang (eigener 15-Min-Cooldown). Feuert er nicht (Cooldown läuft noch), übernimmt das bestehende Activity/Spike-System.
+
+**Wie's funktioniert:** Jeder Promo-Loop-Tick prüft pro Channel ob der targeted 15-Min-Cooldown abgelaufen ist. Wenn ja: aktive Chatter aus dem 8-Min-Aktivitätsfenster filtern, Kandidaten-Check (nicht Stammgast, nicht heute gepitcht, user_id via DB), MiniMax-Aufruf für Preset-Wahl, Message rendern + senden. @mention-Pitches gehen als normale Chat-Message, globale als farbige Announcement.
+
 ## #67 — Timeout-Erkennung über EventSub + Stream-Start-Pitch
 
 **Problem:** Ein 10-Minuten-Timeout des Bots wurde über den bisherigen Drop-Code-Ansatz nicht erkannt, weil der Bot in dieser Zeit nichts schreibt. Außerdem kam der Werbefrei-Pitch beim nächsten Promo-Slot statt am nächsten Stream-Start. Pitch-Text war zu generisch.

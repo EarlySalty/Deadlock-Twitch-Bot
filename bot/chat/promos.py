@@ -1321,11 +1321,35 @@ class PromoMixin:
             await self._maybe_send_lurker_tax_reminder(login, str(broadcaster_id), now)
 
         if _PROMO_ACTIVITY_ENABLED or PROMO_VIEWER_SPIKE_ENABLED:
+            from .targeted_promo import maybe_send_targeted_promo
             for login, broadcaster_id in live_channels:
                 if not self._promo_channel_allowed(login):
                     continue
                 if not is_partner_channel_for_chat_tracking(login):
                     continue
+
+                # Targeted Promo: hat eigene 15-Min-Cooldown-Logik, Vorrang wenn ready
+                if self._overall_promo_ready(login, now):
+                    invite, _ = await self._get_promo_invite(login)
+                    if invite:
+                        bucket = self._promo_activity.get(login)
+                        active_chatters = list(dict.fromkeys(
+                            c for _, c in (bucket or [])
+                        ))
+                        try:
+                            targeted_sent = await maybe_send_targeted_promo(
+                                bot=self,
+                                channel_login=login,
+                                channel_id=str(broadcaster_id),
+                                active_chatters=active_chatters,
+                                invite_url=invite,
+                                now=now,
+                            )
+                            if targeted_sent:
+                                continue
+                        except Exception:
+                            log.debug("Targeted-Promo fehlgeschlagen für %s", login, exc_info=True)
+
                 sent = False
                 if _PROMO_ACTIVITY_ENABLED:
                     sent = await self._maybe_send_promo_with_stats(login, str(broadcaster_id), now)
