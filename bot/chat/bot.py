@@ -1569,12 +1569,41 @@ if TWITCHIO_AVAILABLE:
                         )
                     )
                     if _eng_result.response_text:
-                        _eng_channel = getattr(message, "channel", None)
-                        if _eng_channel is not None:
-                            try:
-                                await _eng_channel.send(_eng_result.response_text)
-                            except Exception:
-                                log.exception("Engagement: Chat-Send fehlgeschlagen")
+                        # AI antwortet ausschliesslich ueber den Engagement-Sende-Account
+                        # (Smoke-Account), nie ueber die zentrale Bot-Identitaet.
+                        try:
+                            from bot.engagement.stealth_sender import send as _engagement_stealth_send
+
+                            _eng_bid = None
+                            _eng_bcaster = getattr(message, "broadcaster", None)
+                            if _eng_bcaster is not None:
+                                _eng_bid = getattr(_eng_bcaster, "id", None)
+                            if not _eng_bid:
+                                _eng_channel_obj = getattr(message, "channel", None)
+                                if _eng_channel_obj is not None:
+                                    _eng_bid = getattr(_eng_channel_obj, "id", None)
+                                    if not _eng_bid:
+                                        _eng_inner = getattr(_eng_channel_obj, "broadcaster", None)
+                                        _eng_bid = getattr(_eng_inner, "id", None) if _eng_inner else None
+                            if not _eng_bid and channel_login:
+                                try:
+                                    _eng_user = await self.fetch_user(login=channel_login)
+                                    _eng_bid = getattr(_eng_user, "id", None) if _eng_user else None
+                                except Exception:
+                                    _eng_bid = None
+
+                            if _eng_bid:
+                                _eng_sent = await _engagement_stealth_send(
+                                    str(_eng_bid), _eng_result.response_text
+                                )
+                                if _eng_sent is None:
+                                    log.info(
+                                        "Engagement: kein Sende-Account autorisiert, AI-Antwort verworfen"
+                                    )
+                            else:
+                                log.warning("Engagement: broadcaster_id nicht aufloesbar, Send uebersprungen")
+                        except Exception:
+                            log.exception("Engagement: Stealth-Send fehlgeschlagen")
             except Exception:
                 log.exception("Engagement-Pipeline fehlgeschlagen")
 

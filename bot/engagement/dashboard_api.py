@@ -383,6 +383,64 @@ async def _handle_get_log(server, request: web.Request) -> web.Response:
     )
 
 
+async def _handle_sender_auth_start(server, request: web.Request) -> web.Response:
+    """Admin-only: erzeugt den Authorize-Link für den Engagement-Sende-Account."""
+    _actor_id, _actor_login, admin, err = await _resolve_actor(server, request)
+    if err is not None:
+        return err
+    if not admin:
+        return _err(403, "Nur Admins dürfen den Sende-Account autorisieren.")
+    try:
+        from bot.engagement import sender_auth
+        url = await asyncio.to_thread(sender_auth.build_authorize_url)
+    except Exception as exc:
+        log.exception("engagement sender-auth: Link-Erzeugung fehlgeschlagen")
+        return _err(500, f"Link-Erzeugung fehlgeschlagen: {type(exc).__name__}")
+    return _json(
+        {
+            "authorizeUrl": url,
+            "senderLogin": sender_auth.SENDER_LOGIN,
+            "hint": (
+                "In einem separaten Browser/Inkognito als der Sende-Account einloggen, "
+                "dann diesen Link öffnen und Authorize klicken."
+            ),
+        }
+    )
+
+
+async def _handle_sender_auth_callback(server, request: web.Request) -> web.Response:
+    """Öffentlicher OAuth-Callback (Sicherheit über den State-Token)."""
+    code = request.query.get("code") or ""
+    state = request.query.get("state") or ""
+    error = request.query.get("error") or ""
+
+    def _page(title: str, body: str, status: int = 200) -> web.Response:
+        html = (
+            "<!doctype html><html><head><meta charset='utf-8'>"
+            f"<title>{title}</title></head><body style='font-family:sans-serif;max-width:560px;margin:40px auto'>"
+            f"<h2>{title}</h2><p>{body}</p></body></html>"
+        )
+        return web.Response(status=status, text=html, content_type="text/html", charset="utf-8")
+
+    if error:
+        return _page("Autorisierung abgebrochen", f"Twitch meldete: {error}", status=400)
+    if not code or not state:
+        return _page("Ungültige Anfrage", "Code oder State fehlt.", status=400)
+
+    try:
+        from bot.engagement import sender_auth
+        result = await sender_auth.handle_callback(code, state)
+    except Exception as exc:
+        log.exception("engagement sender-auth callback fehlgeschlagen")
+        return _page("Autorisierung fehlgeschlagen", f"{type(exc).__name__}: {exc}", status=400)
+
+    return _page(
+        "Sende-Account verbunden ✓",
+        f"Der Engagement-Account <b>{result.get('login')}</b> ist jetzt autorisiert. "
+        "Du kannst dieses Fenster schließen.",
+    )
+
+
 def register_engagement_v2_routes(router: web.UrlDispatcher, server: Any) -> None:
     """Mountet alle JSON-Endpoints auf den v2-Server (api_overview.py setup)."""
 
@@ -398,7 +456,20 @@ def register_engagement_v2_routes(router: web.UrlDispatcher, server: Any) -> Non
     async def _get_log(request: web.Request) -> web.Response:
         return await _handle_get_log(server, request)
 
+    async def _sender_auth_start(request: web.Request) -> web.Response:
+        return await _handle_sender_auth_start(server, request)
+
+    async def _sender_auth_callback(request: web.Request) -> web.Response:
+        return await _handle_sender_auth_callback(server, request)
+
     router.add_get("/twitch/api/v2/engagement/settings", _get_settings)
     router.add_post("/twitch/api/v2/engagement/toggle", _post_toggle)
     router.add_post("/twitch/api/v2/engagement/update", _post_update)
     router.add_get("/twitch/api/v2/engagement/log", _get_log)
+    # Engagement-Sende-Account onboarding (getrennt vom normalen Streamer-OAuth)
+    router.add_get("/twitch/api/v2/engagement/sender-auth", _sender_auth_start)
+    # Callback auf beiden Pfaden: der engagement-Namespace ist bereits durch Caddy
+    # geroutet; /callback/engagement-sender wird zusätzlich akzeptiert, falls dieser
+    # in der Twitch-App registriert ist (braucht dann eine Caddy-Pfad-Freigabe).
+    router.add_get("/twitch/api/v2/engagement/sender-callback", _sender_auth_callback)
+    router.add_get("/callback/engagement-sender", _sender_auth_callback)
