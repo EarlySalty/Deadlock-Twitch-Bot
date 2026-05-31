@@ -38,6 +38,9 @@ EventsubProcessingDebugCallback = Callable[..., Awaitable[dict[str, Any]]]
 EventsubProcessingRequeueCallback = Callable[[str], Awaitable[dict[str, Any]]]
 PartnerChatActionCallback = Callable[[str, str, str, str], Awaitable[str]]
 RaidBlacklistAddCallback = Callable[[str, str], Awaitable[dict[str, Any]]]
+RaidBlacklistRemoveCallback = Callable[[str], Awaitable[dict[str, Any]]]
+RaidBlacklistCheckCallback = Callable[[str], Awaitable[dict[str, Any]]]
+RaidBlacklistListCallback = Callable[[], Awaitable[list[dict[str, Any]]]]
 
 
 @dataclass(slots=True, frozen=True)
@@ -70,6 +73,9 @@ class InternalApiCallbacks:
     eventsub_processing_requeue: EventsubProcessingRequeueCallback | None = None
     partner_chat_action: PartnerChatActionCallback | None = None
     raid_blacklist_add: RaidBlacklistAddCallback | None = None
+    raid_blacklist_remove: RaidBlacklistRemoveCallback | None = None
+    raid_blacklist_check: RaidBlacklistCheckCallback | None = None
+    raid_blacklist_list: RaidBlacklistListCallback | None = None
 
     @classmethod
     def coalesce(
@@ -102,6 +108,9 @@ class InternalApiCallbacks:
         eventsub_processing_requeue_cb: EventsubProcessingRequeueCallback | None = None,
         partner_chat_action_cb: PartnerChatActionCallback | None = None,
         raid_blacklist_add_cb: RaidBlacklistAddCallback | None = None,
+        raid_blacklist_remove_cb: RaidBlacklistRemoveCallback | None = None,
+        raid_blacklist_check_cb: RaidBlacklistCheckCallback | None = None,
+        raid_blacklist_list_cb: RaidBlacklistListCallback | None = None,
     ) -> "InternalApiCallbacks":
         base = callbacks or cls()
         return cls(
@@ -177,6 +186,21 @@ class InternalApiCallbacks:
                 if raid_blacklist_add_cb is not None
                 else base.raid_blacklist_add
             ),
+            raid_blacklist_remove=(
+                raid_blacklist_remove_cb
+                if raid_blacklist_remove_cb is not None
+                else base.raid_blacklist_remove
+            ),
+            raid_blacklist_check=(
+                raid_blacklist_check_cb
+                if raid_blacklist_check_cb is not None
+                else base.raid_blacklist_check
+            ),
+            raid_blacklist_list=(
+                raid_blacklist_list_cb
+                if raid_blacklist_list_cb is not None
+                else base.raid_blacklist_list
+            ),
         )
 
 
@@ -220,4 +244,7 @@ __all__ = [
     "VerifyStreamerCallback",
     "PartnerChatActionCallback",
     "RaidBlacklistAddCallback",
+    "RaidBlacklistCheckCallback",
+    "RaidBlacklistListCallback",
+    "RaidBlacklistRemoveCallback",
 ]

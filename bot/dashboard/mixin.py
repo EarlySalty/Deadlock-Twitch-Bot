@@ -576,6 +576,53 @@ class TwitchDashboardMixin:
         await asyncio.to_thread(_insert)
         return {"login": normalized, "reason": reason}
 
+    async def _dashboard_raid_blacklist_remove(self, login: str) -> dict:
+        normalized = self._normalize_login(login)
+        if not normalized:
+            raise ValueError("Missing or invalid login")
+
+        def _delete():
+            with storage.transaction() as conn:
+                result = conn.execute(
+                    "DELETE FROM twitch_raid_blacklist WHERE lower(target_login) = lower(%s) RETURNING target_login",
+                    (normalized,),
+                )
+                return result.fetchone() is not None
+
+        removed = await asyncio.to_thread(_delete)
+        return {"login": normalized, "removed": removed}
+
+    async def _dashboard_raid_blacklist_check(self, login: str) -> dict:
+        normalized = self._normalize_login(login)
+        if not normalized:
+            raise ValueError("Missing or invalid login")
+
+        def _check():
+            with storage.readonly_connection() as conn:
+                row = conn.execute(
+                    "SELECT reason, added_at FROM twitch_raid_blacklist WHERE lower(target_login) = lower(%s)",
+                    (normalized,),
+                ).fetchone()
+                if row is None:
+                    return None
+                return {"reason": str(row[0] or ""), "added_at": str(row[1] or "")}
+
+        entry = await asyncio.to_thread(_check)
+        return {"login": normalized, "blacklisted": entry is not None, **(entry or {})}
+
+    async def _dashboard_raid_blacklist_list(self) -> list[dict]:
+        def _load():
+            with storage.readonly_connection() as conn:
+                rows = conn.execute(
+                    "SELECT target_login, reason, added_at FROM twitch_raid_blacklist ORDER BY added_at DESC"
+                ).fetchall()
+                return [
+                    {"login": str(r[0] or ""), "reason": str(r[1] or ""), "added_at": str(r[2] or "")}
+                    for r in rows
+                ]
+
+        return await asyncio.to_thread(_load)
+
     async def _dashboard_raid_oauth_callback(
         self,
         *,

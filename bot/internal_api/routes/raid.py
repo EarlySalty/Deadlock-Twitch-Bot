@@ -344,6 +344,66 @@ async def raid_blacklist_add(server: Any, request: web.Request) -> web.Response:
         return server._json_error("internal_error", 500, "failed to add to raid blacklist")
 
 
+async def raid_blacklist_remove(server: Any, request: web.Request) -> web.Response:
+    try:
+        body = await server._json_body(request)
+        login = server._normalize_login(
+            str(body.get("login") or body.get("twitch_login") or "")
+        )
+        if not login:
+            return server._json_error("bad_request", 400, "invalid or missing login")
+        result = await server._raid_blacklist_remove(login)
+        return server._json_response({"ok": True, "login": login, **(result or {})})
+    except RuntimeError as exc:
+        return server._safe_exception_error(
+            context="raid blacklist remove runtime",
+            exc=exc,
+            error="upstream_unavailable",
+            status=503,
+            message="upstream unavailable",
+        )
+    except Exception:
+        log.exception("internal api raid blacklist remove failed")
+        return server._json_error("internal_error", 500, "failed to remove from raid blacklist")
+
+
+async def raid_blacklist_check(server: Any, request: web.Request) -> web.Response:
+    try:
+        login = server._normalize_login(str(request.query.get("login") or ""))
+        if not login:
+            return server._json_error("bad_request", 400, "invalid or missing login")
+        result = await server._raid_blacklist_check(login)
+        return server._json_response({"ok": True, "login": login, **(result or {})})
+    except RuntimeError as exc:
+        return server._safe_exception_error(
+            context="raid blacklist check runtime",
+            exc=exc,
+            error="upstream_unavailable",
+            status=503,
+            message="upstream unavailable",
+        )
+    except Exception:
+        log.exception("internal api raid blacklist check failed")
+        return server._json_error("internal_error", 500, "failed to check raid blacklist")
+
+
+async def raid_blacklist_list(server: Any, request: web.Request) -> web.Response:
+    try:
+        entries = await server._raid_blacklist_list()
+        return server._json_response({"ok": True, "entries": entries or []})
+    except RuntimeError as exc:
+        return server._safe_exception_error(
+            context="raid blacklist list runtime",
+            exc=exc,
+            error="upstream_unavailable",
+            status=503,
+            message="upstream unavailable",
+        )
+    except Exception:
+        log.exception("internal api raid blacklist list failed")
+        return server._json_error("internal_error", 500, "failed to list raid blacklist")
+
+
 def build_raid_route_defs(server: Any) -> list[web.RouteDef]:
     base = str(getattr(server, "_base_path", INTERNAL_API_BASE_PATH) or INTERNAL_API_BASE_PATH).rstrip("/")
     return [
@@ -354,6 +414,9 @@ def build_raid_route_defs(server: Any) -> list[web.RouteDef]:
         web.post(f"{base}/raid/requirements", bind(server, raid_requirements)),
         web.post(f"{base}/raid/oauth-callback", bind(server, raid_oauth_callback)),
         web.post(f"{base}/raid/blacklist/add", bind(server, raid_blacklist_add)),
+        web.post(f"{base}/raid/blacklist/remove", bind(server, raid_blacklist_remove)),
+        web.get(f"{base}/raid/blacklist/check", bind(server, raid_blacklist_check)),
+        web.get(f"{base}/raid/blacklist", bind(server, raid_blacklist_list)),
     ]
 
 
@@ -368,6 +431,9 @@ __all__ = [
     "raid_auth_state",
     "raid_auth_url",
     "raid_blacklist_add",
+    "raid_blacklist_check",
+    "raid_blacklist_list",
+    "raid_blacklist_remove",
     "raid_block_state",
     "raid_go_url",
     "raid_oauth_callback",

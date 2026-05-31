@@ -46,6 +46,9 @@ from .contracts import (
     VerifyStreamerCallback,
     PartnerChatActionCallback,
     RaidBlacklistAddCallback,
+    RaidBlacklistCheckCallback,
+    RaidBlacklistListCallback,
+    RaidBlacklistRemoveCallback,
 )
 from .policy import (
     coerce_optional_positive_int as _coerce_optional_positive_int_impl,
@@ -109,6 +112,9 @@ class InternalApiServer:
         eventsub_processing_requeue_cb: EventsubProcessingRequeueCallback | None = None,
         partner_chat_action_cb: PartnerChatActionCallback | None = None,
         raid_blacklist_add_cb: RaidBlacklistAddCallback | None = None,
+        raid_blacklist_remove_cb: RaidBlacklistRemoveCallback | None = None,
+        raid_blacklist_check_cb: RaidBlacklistCheckCallback | None = None,
+        raid_blacklist_list_cb: RaidBlacklistListCallback | None = None,
     ) -> None:
         self._token = (token or "").strip()
         base = (base_path or INTERNAL_API_BASE_PATH).strip()
@@ -146,6 +152,9 @@ class InternalApiServer:
             eventsub_processing_requeue_cb=eventsub_processing_requeue_cb,
             partner_chat_action_cb=partner_chat_action_cb,
             raid_blacklist_add_cb=raid_blacklist_add_cb,
+            raid_blacklist_remove_cb=raid_blacklist_remove_cb,
+            raid_blacklist_check_cb=raid_blacklist_check_cb,
+            raid_blacklist_list_cb=raid_blacklist_list_cb,
         )
 
         self._add = callbacks.add if callable(callbacks.add) else self._empty_add
@@ -238,6 +247,21 @@ class InternalApiServer:
             if callable(callbacks.raid_blacklist_add)
             else self._empty_raid_blacklist_add
         )
+        self._raid_blacklist_remove = (
+            callbacks.raid_blacklist_remove
+            if callable(callbacks.raid_blacklist_remove)
+            else self._empty_raid_blacklist_remove
+        )
+        self._raid_blacklist_check = (
+            callbacks.raid_blacklist_check
+            if callable(callbacks.raid_blacklist_check)
+            else self._empty_raid_blacklist_check
+        )
+        self._raid_blacklist_list = (
+            callbacks.raid_blacklist_list
+            if callable(callbacks.raid_blacklist_list)
+            else self._empty_raid_blacklist_list
+        )
         self._idempotency_cache: dict[str, dict[str, Any]] = {}
         self._idempotency_inflight: dict[str, IdempotencyInFlight] = {}
         self._idempotency_ttl_seconds = 15 * 60
@@ -298,6 +322,17 @@ class InternalApiServer:
     async def _empty_raid_blacklist_add(self, login: str, reason: str) -> dict[str, Any]:
         del login, reason
         raise RuntimeError("raid blacklist add unavailable")
+
+    async def _empty_raid_blacklist_remove(self, login: str) -> dict[str, Any]:
+        del login
+        raise RuntimeError("raid blacklist remove unavailable")
+
+    async def _empty_raid_blacklist_check(self, login: str) -> dict[str, Any]:
+        del login
+        raise RuntimeError("raid blacklist check unavailable")
+
+    async def _empty_raid_blacklist_list(self) -> list[dict[str, Any]]:
+        raise RuntimeError("raid blacklist list unavailable")
 
     async def _empty_stats(self, **_: Any) -> dict[str, Any]:
         return {}
@@ -922,6 +957,9 @@ def build_internal_api_app(
     eventsub_processing_requeue_cb: EventsubProcessingRequeueCallback | None = None,
     partner_chat_action_cb: PartnerChatActionCallback | None = None,
     raid_blacklist_add_cb: RaidBlacklistAddCallback | None = None,
+    raid_blacklist_remove_cb: RaidBlacklistRemoveCallback | None = None,
+    raid_blacklist_check_cb: RaidBlacklistCheckCallback | None = None,
+    raid_blacklist_list_cb: RaidBlacklistListCallback | None = None,
 ) -> web.Application:
     server = InternalApiServer(
         token=token,
@@ -953,6 +991,9 @@ def build_internal_api_app(
         eventsub_processing_requeue_cb=eventsub_processing_requeue_cb,
         partner_chat_action_cb=partner_chat_action_cb,
         raid_blacklist_add_cb=raid_blacklist_add_cb,
+        raid_blacklist_remove_cb=raid_blacklist_remove_cb,
+        raid_blacklist_check_cb=raid_blacklist_check_cb,
+        raid_blacklist_list_cb=raid_blacklist_list_cb,
     )
 
     @web.middleware

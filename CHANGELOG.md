@@ -1,3 +1,17 @@
+## #72 — Interne Blacklist-API komplett: Check, List und Remove
+
+**Problem:** Nach dem ersten Blacklist-Endpunkt (`/add`) fehlten noch die restlichen Operationen — prüfen ob ein Kanal gebannt ist, alle gesperrten Kanäle auflisten und einen Bann wieder aufheben.
+
+**Geändert:** Drei neue Endpunkte auf demselben internen API-Port (8776, nur localhost):
+
+- `GET /raid/blacklist/check?login=kanalname` — antwortet mit `blacklisted: true/false` plus Grund und Zeitstempel falls vorhanden
+- `GET /raid/blacklist` — gibt alle aktuell gesperrten Kanäle sortiert nach Eintragsdatum zurück
+- `POST /raid/blacklist/remove` — entfernt einen Kanal aus der Blacklist, `removed: true` wenn er tatsächlich drin war
+
+**Wie's funktioniert:** Alle drei Operationen laufen über direktes SQL auf `twitch_raid_blacklist`, in `asyncio.to_thread` gekapselt damit der Event-Loop nicht blockiert. Auth und Loopback-Schutz identisch zu `/add`. Die Endpunkte sind rein additiv — kein bestehender Code-Pfad wurde geändert.
+
+---
+
 ## #71 — Interner API-Endpunkt: Twitch-Kanäle manuell in die Raid-Blacklist eintragen
 
 **Problem:** Es gab keinen direkten Weg, einen Twitch-Kanal per API in die Raid-Blacklist einzutragen — der einzige Pfad war ein manuelles SQL-Insert in die Datenbank, was jedes Mal erforderte, den DSN-Secret in eine Shell zu laden.

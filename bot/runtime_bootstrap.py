@@ -248,6 +248,9 @@ class BotRuntimeBootstrap:
                 ),
                 partner_chat_action=getattr(cog, "_dashboard_partner_chat_action", None),
                 raid_blacklist_add=getattr(cog, "_dashboard_raid_blacklist_add", None),
+                raid_blacklist_remove=getattr(cog, "_dashboard_raid_blacklist_remove", None),
+                raid_blacklist_check=getattr(cog, "_dashboard_raid_blacklist_check", None),
+                raid_blacklist_list=getattr(cog, "_dashboard_raid_blacklist_list", None),
             ),
         )
 
