@@ -39,6 +39,7 @@ from .lurker_signal import known_regulars_currently_lurking, lurker_hint_to_prom
 from .match_context import get_match_state
 from .persona import sample_tone
 from .rhythm import RhythmGuard
+from .style_examples import build_style_fragment
 from .stream_transcripts import load_recent_segments, segments_to_prompt_fragment
 from .threads import load_open_threads_for_user, mark_referenced, threads_to_prompt_fragment
 
@@ -258,6 +259,13 @@ class EngagementPipeline:
         except Exception:
             log.exception("Engagement: persona-sample fehlgeschlagen")
 
+        try:
+            style_fragment = await build_style_fragment(msg.channel_login)
+            if style_fragment:
+                system_prompt = f"{system_prompt}\n\n{style_fragment}"
+        except Exception:
+            log.exception("Engagement: style-examples fehlgeschlagen")
+
         threads: list = []
         try:
             threads = await load_open_threads_for_user(
@@ -287,6 +295,15 @@ class EngagementPipeline:
                     system_prompt = f"{system_prompt}\n\n{match_fragment}"
         except Exception:
             log.exception("Engagement: match-context fehlgeschlagen")
+
+        try:
+            from .deadlock_wiki import build_grounding_fragment
+
+            grounding_fragment = await build_grounding_fragment(msg.content)
+            if grounding_fragment:
+                system_prompt = f"{system_prompt}\n\n{grounding_fragment}"
+        except Exception:
+            log.exception("Engagement: deadlock-wiki-grounding fehlgeschlagen")
 
         try:
             transcript_segments = await load_recent_segments(msg.channel_login)

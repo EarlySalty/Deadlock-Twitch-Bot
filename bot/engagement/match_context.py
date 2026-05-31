@@ -25,6 +25,7 @@ log = logging.getLogger("TwitchStreams.Engagement.MatchContext")
 
 
 DEADLOCK_API_BASE = "https://api.deadlock-api.com/v1"
+ASSETS_API_BASE = "https://assets.deadlock-api.com"
 
 _HERO_CACHE: dict[int, str] = {}
 _HERO_CACHE_LOADED_AT: float = 0.0
@@ -88,9 +89,12 @@ async def get_match_state(channel_login: str) -> MatchSnapshot | None:
 
 
 async def _fetch_heroes() -> dict[int, str]:
+    # Heldenliste liegt auf der Assets-API; api.deadlock-api.com/v1/heroes ist 404.
     try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            r = await client.get(f"{DEADLOCK_API_BASE}/heroes")
+        async with httpx.AsyncClient(timeout=10.0, follow_redirects=True) as client:
+            r = await client.get(
+                f"{ASSETS_API_BASE}/v2/heroes", params={"only_active": "true"}
+            )
             r.raise_for_status()
             data = r.json()
     except Exception:
