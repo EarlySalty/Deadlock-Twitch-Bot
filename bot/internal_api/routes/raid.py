@@ -320,6 +320,30 @@ async def raid_oauth_callback(server: Any, request: web.Request) -> web.Response
         )
 
 
+async def raid_blacklist_add(server: Any, request: web.Request) -> web.Response:
+    try:
+        body = await server._json_body(request)
+        login = server._normalize_login(
+            str(body.get("login") or body.get("twitch_login") or "")
+        )
+        if not login:
+            return server._json_error("bad_request", 400, "invalid or missing login")
+        reason = str(body.get("reason") or "manual_ban:absolut").strip() or "manual_ban:absolut"
+        result = await server._raid_blacklist_add(login, reason)
+        return server._json_response({"ok": True, "login": login, **(result or {})})
+    except RuntimeError as exc:
+        return server._safe_exception_error(
+            context="raid blacklist add runtime",
+            exc=exc,
+            error="upstream_unavailable",
+            status=503,
+            message="upstream unavailable",
+        )
+    except Exception:
+        log.exception("internal api raid blacklist add failed")
+        return server._json_error("internal_error", 500, "failed to add to raid blacklist")
+
+
 def build_raid_route_defs(server: Any) -> list[web.RouteDef]:
     base = str(getattr(server, "_base_path", INTERNAL_API_BASE_PATH) or INTERNAL_API_BASE_PATH).rstrip("/")
     return [
@@ -329,6 +353,7 @@ def build_raid_route_defs(server: Any) -> list[web.RouteDef]:
         web.get(f"{base}/raid/go-url", bind(server, raid_go_url)),
         web.post(f"{base}/raid/requirements", bind(server, raid_requirements)),
         web.post(f"{base}/raid/oauth-callback", bind(server, raid_oauth_callback)),
+        web.post(f"{base}/raid/blacklist/add", bind(server, raid_blacklist_add)),
     ]
 
 
@@ -342,6 +367,7 @@ __all__ = [
     "build_raid_route_defs",
     "raid_auth_state",
     "raid_auth_url",
+    "raid_blacklist_add",
     "raid_block_state",
     "raid_go_url",
     "raid_oauth_callback",

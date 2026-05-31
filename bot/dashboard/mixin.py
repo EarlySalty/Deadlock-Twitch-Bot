@@ -555,6 +555,27 @@ class TwitchDashboardMixin:
 
         return f"Anforderungen per Discord an @{normalized} gesendet"
 
+    async def _dashboard_raid_blacklist_add(self, login: str, reason: str) -> dict:
+        normalized = self._normalize_login(login)
+        if not normalized:
+            raise ValueError("Missing or invalid login")
+
+        def _insert():
+            with storage.transaction() as conn:
+                conn.execute(
+                    """
+                    INSERT INTO twitch_raid_blacklist (target_id, target_login, reason)
+                    VALUES (NULL, %s, %s)
+                    ON CONFLICT (target_login) DO UPDATE SET
+                        reason   = EXCLUDED.reason,
+                        added_at = CURRENT_TIMESTAMP
+                    """,
+                    (normalized, str(reason or "manual_ban:absolut")),
+                )
+
+        await asyncio.to_thread(_insert)
+        return {"login": normalized, "reason": reason}
+
     async def _dashboard_raid_oauth_callback(
         self,
         *,

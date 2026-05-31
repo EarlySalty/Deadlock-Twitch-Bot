@@ -1,3 +1,13 @@
+## #71 — Interner API-Endpunkt: Twitch-Kanäle manuell in die Raid-Blacklist eintragen
+
+**Problem:** Es gab keinen direkten Weg, einen Twitch-Kanal per API in die Raid-Blacklist einzutragen — der einzige Pfad war ein manuelles SQL-Insert in die Datenbank, was jedes Mal erforderte, den DSN-Secret in eine Shell zu laden.
+
+**Geändert:** Neuer interner HTTP-Endpunkt `POST /internal/twitch/v1/raid/blacklist/add`. Akzeptiert `login` und optional `reason` im JSON-Body. Trägt den Kanal direkt per `ON CONFLICT`-Insert in `twitch_raid_blacklist` ein — idempotent, d.h. ein wiederholter Aufruf überschreibt nur Grund und Zeitstempel, legt keinen Duplikat-Eintrag an.
+
+**Wie's funktioniert:** Der Endpunkt hängt in der bestehenden internen API auf Port 8776, die ausschließlich auf `127.0.0.1` lauscht und durch zwei Middleware-Schichten abgesichert ist: eine Loopback-Prüfung (Verbindungen nur von localhost) und eine Token-Auth via `X-Internal-Token`-Header. Port 8776 ist zusätzlich nicht in der UFW-Allowlist — von extern ist der Port komplett unerreichbar. Die DB-Operation läuft in einem Thread-Pool (`asyncio.to_thread`), damit der async Event-Loop nicht blockiert.
+
+---
+
 ## #70 — Viewbot-Spam-Filter: trennscharf gegen Verschleierung, sicherer für echte Zuschauer
 
 **Problem:** Die Viewbot-/SMM-Werbung im Chat (Marke „Ai viewers streamboo. com" und Verwandte) rutschte zuletzt durch, obwohl der Filter die Marke kannte. Der Trick der Spammer: Sie streuen Leerzeichen und Sonderzeichen in die Domain (`streamboo. com`, `s t r e a m b o o . c o m`), wodurch die wörtliche Mustererkennung ins Leere lief — der Treffer reichte nur für „verdächtig", nicht für eine Aktion, und derselbe Spam kam tagelang immer wieder. Gleichzeitig steckte ein latentes Fehlban-Risiko im Filter: generische Wendungen wie „best viewers" zählten so stark, dass ein normales Kompliment an den Streamer („you have the best viewers today") rechnerisch die Ban-Schwelle erreichen konnte.

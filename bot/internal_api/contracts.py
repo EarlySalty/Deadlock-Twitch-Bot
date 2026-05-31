@@ -37,6 +37,7 @@ EventsubDispatchCallback = Callable[..., Awaitable[dict[str, Any]]]
 EventsubProcessingDebugCallback = Callable[..., Awaitable[dict[str, Any]]]
 EventsubProcessingRequeueCallback = Callable[[str], Awaitable[dict[str, Any]]]
 PartnerChatActionCallback = Callable[[str, str, str, str], Awaitable[str]]
+RaidBlacklistAddCallback = Callable[[str, str], Awaitable[dict[str, Any]]]
 
 
 @dataclass(slots=True, frozen=True)
@@ -68,6 +69,7 @@ class InternalApiCallbacks:
     eventsub_processing_debug: EventsubProcessingDebugCallback | None = None
     eventsub_processing_requeue: EventsubProcessingRequeueCallback | None = None
     partner_chat_action: PartnerChatActionCallback | None = None
+    raid_blacklist_add: RaidBlacklistAddCallback | None = None
 
     @classmethod
     def coalesce(
@@ -99,6 +101,7 @@ class InternalApiCallbacks:
         eventsub_processing_debug_cb: EventsubProcessingDebugCallback | None = None,
         eventsub_processing_requeue_cb: EventsubProcessingRequeueCallback | None = None,
         partner_chat_action_cb: PartnerChatActionCallback | None = None,
+        raid_blacklist_add_cb: RaidBlacklistAddCallback | None = None,
     ) -> "InternalApiCallbacks":
         base = callbacks or cls()
         return cls(
@@ -169,6 +172,11 @@ class InternalApiCallbacks:
                 if partner_chat_action_cb is not None
                 else base.partner_chat_action
             ),
+            raid_blacklist_add=(
+                raid_blacklist_add_cb
+                if raid_blacklist_add_cb is not None
+                else base.raid_blacklist_add
+            ),
         )
 
 
@@ -211,4 +219,5 @@ __all__ = [
     "StreamersCallback",
     "VerifyStreamerCallback",
     "PartnerChatActionCallback",
+    "RaidBlacklistAddCallback",
 ]
