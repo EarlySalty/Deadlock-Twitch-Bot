@@ -1,3 +1,27 @@
+## #70 — Viewbot-Spam-Filter: trennscharf gegen Verschleierung, sicherer für echte Zuschauer
+
+**Problem:** Die Viewbot-/SMM-Werbung im Chat (Marke „Ai viewers streamboo. com" und Verwandte) rutschte zuletzt durch, obwohl der Filter die Marke kannte. Der Trick der Spammer: Sie streuen Leerzeichen und Sonderzeichen in die Domain (`streamboo. com`, `s t r e a m b o o . c o m`), wodurch die wörtliche Mustererkennung ins Leere lief — der Treffer reichte nur für „verdächtig", nicht für eine Aktion, und derselbe Spam kam tagelang immer wieder. Gleichzeitig steckte ein latentes Fehlban-Risiko im Filter: generische Wendungen wie „best viewers" zählten so stark, dass ein normales Kompliment an den Streamer („you have the best viewers today") rechnerisch die Ban-Schwelle erreichen konnte.
+
+**Geändert:**
+- **Verschleierungs-robuste Erkennung:** Bekannte Spam-Domains werden jetzt erkannt, egal wie viele Leerzeichen oder Trenner dazwischenstehen.
+- **Hart/Weich-Trennung:** Signale werden unterteilt in „hart" (echte Spam-Domain/Markenname — kommt in normalem Chat praktisch nie vor) und „weich" (Alltagswörter wie „viewers", „best viewers"). Nur harte Signale lösen automatische Maßnahmen aus.
+- **Selbstlernend in beide Richtungen:** Eine KI prüft Grenzfälle und pflegt zwei Listen — eine Spam-Liste für neue/abgewandelte Schreibweisen und eine Schutz-Liste für Fehlalarme (harmlose Wendungen, die fälschlich angeschlagen haben).
+- **Generische Floskeln entschärft:** Reine Komplimente wie „best viewers" können allein keinen Bann mehr auslösen.
+- **Fremdschrift-Tarnung erkannt:** Buchstaben aus anderen Alphabeten, die wie lateinische aussehen (z. B. kyrillisches „о/е/а" in „strеаmbоо"), werden vor der Prüfung auf normale Buchstaben zurückgeführt.
+- **Kontext als Verstärker:** Frisch erstelltes Konto und allererste Nachricht im Kanal erhöhen den Verdacht — aber nur, wenn ohnehin schon ein echtes Spam-Signal vorliegt.
+
+**Wie's funktioniert:** Jede Chat-Nachricht bekommt einen Spam-Score. Ab 3 Punkten wird automatisch gelöscht und gebannt; darunter passiert je nach Signalstärke nichts oder die Nachricht wird (nur bei einem harten Treffer) entfernt, ohne den Schreiber zu bannen. Punkte gibt es u. a. für eine bekannte Spam-Domain (+2) und für das Muster „viewers <Wort>" (+1) — Alltagswörter allein erreichen die Ban-Schwelle also nie. Vor der Bewertung wird der Text „geglättet": eingestreute Leerzeichen und Sonderzeichen werden ignoriert, sodass `streamboo. com` und `s t r e a m b o o` denselben Treffer ergeben wie die saubere Domain. Damit das nicht überschießt, ist die Domain-Erkennung an eine echte Endung gekoppelt (`.com`, `.ru`, …) — harmlose Wortpaare wie „laptop smm" oder „stream boo" lösen daher nichts aus.
+
+Auch Tarnung über fremde Alphabete läuft ins Leere: Zeichen wie das kyrillische „о", das optisch identisch zum lateinischen „o" ist, werden beim Glätten auf den lateinischen Buchstaben zurückgeführt — `strеаmbоо` wird also wie `streamboo` behandelt.
+
+Zwei zusätzliche Kontext-Punkte verschärfen den Verdacht gezielt: ein erst kürzlich erstelltes Twitch-Konto (+1) und die allererste Nachricht eines Accounts in genau diesem Kanal (+1). Beide zählen aber **nur**, wenn bereits ein hartes Spam-Signal vorliegt — ein bekannter Spam-Bot, der mit frischem Konto seine erste Nachricht absetzt, kippt damit über die Ban-Schwelle, während ein neuer echter Zuschauer mit einer harmlosen Begrüßung garantiert unberührt bleibt.
+
+Die KI-Prüfung läuft im Hintergrund: Schlägt der Filter an, ohne sicher zu sein, bewertet die KI nach, ob es echte Viewbot-Werbung ist. Bestätigt sie es, lernt das System die neue Schreibweise und erkennt sie beim nächsten Mal sofort. Sagt die KI „kein Spam", wandert das auslösende Alltagswort auf die Schutz-Liste und senkt den Score solcher Nachrichten künftig wieder — **außer** es kommt zusätzlich ein hartes Spam-Signal hinzu. Diese Vorrang-Regel verhindert, dass jemand ein harmloses Wort an eine echte Spam-Domain anhängt, um den Filter auszuhebeln.
+
+**Für Zuschauer wichtig:** Automatische Banns treffen ausschließlich klar erkennbare Viewbot-Werbung mit echter Spam-Domain. Ein normales Gespräch über „viewers" oder ein Kompliment an den Streamer löst keine Maßnahme aus. Sollte trotzdem jemand fälschlich getimeoutet oder gebannt werden: Das ist sehr unwahrscheinlich, aber kein Bann ist endgültig — meldet euch beim Streamer oder einem Mod (Rückgängigmachen per `!unban`), wir schauen es uns an. Genau für solche Fälle gibt es die lernende Schutz-Liste.
+
+---
+
 ## #69 — Chat-Actions im Admin-Dashboard vollständig repariert
 
 **Problem 1 (Senden-Button tut nichts):** Die Streamer-Suchbox hat einen internen Debounce (220 ms). Wenn der Anzeigename vom Login-Slug abweicht (z. B. `"Earl Salty"` vs. `"earlsalty"`), hat der Debounce 220 ms nach dem Klick die Auswahl gecleart — `canSubmit` wurde false, der Button disabled. Fix: Vergleich jetzt gegen Login **und** Anzeigenamen.

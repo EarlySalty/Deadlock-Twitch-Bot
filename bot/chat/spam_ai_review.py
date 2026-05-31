@@ -36,7 +36,12 @@ _PATTERN_CACHE: list[tuple[str, str]] | None = None
 _PATTERN_CACHE_TS: float = 0.0
 _PATTERN_CACHE_TTL = 120.0
 
+# Safe-Pattern-Cache (AI-gelernte False-Positive-Whitelist, gleiche TTL)
+_SAFE_CACHE: list[str] | None = None
+_SAFE_CACHE_TS: float = 0.0
+
 _SCHEMA_ENSURED = False
+_SAFE_SCHEMA_ENSURED = False
 
 _SPAM_REVIEW_SYSTEM_PROMPT = (
     "Du bist ein Spam-Erkennungs-Assistent speziell für Twitch Viewer-Bot-Spam und SMM-Dienste.\n"
@@ -48,14 +53,21 @@ _SPAM_REVIEW_SYSTEM_PROMPT = (
     "\n"
     "Antworte NUR mit einem JSON-Objekt, ohne Markdown, ohne <think>-Block:\n"
     '{"is_spam": true/false, '
-    '"pattern": "kürzestes eindeutiges Kernmuster (Domain/Service-Name/Phrase) oder null", '
+    '"pattern": "Kernmuster oder null", '
     '"pattern_type": "phrase" oder "fragment", '
     '"reason": "Begründung max 80 Zeichen"}\n'
+    "\n"
+    "Bei is_spam=true: pattern = kürzestes eindeutiges Spam-Kernmuster "
+    "(Domain/Service-Name/Phrase).\n"
+    "Bei is_spam=false: pattern = das harmlose Schlüsselwort/die Wendung, die den "
+    "Fehlalarm ausgelöst hat und künftig NICHT mehr verdächtig sein soll "
+    "(z.B. 'best viewers', 'cheap viewers'), oder null wenn nicht eindeutig.\n"
     "\n"
     "is_spam=true NUR bei: Viewer-Kauf, Bot-Views, Bot-Follower, SMM-Services, "
     "neue/abgewandelte Schreibweisen bekannter Spam-Dienste (Leerzeichen in Domains, "
     "Sonderzeichen, leicht veränderte Namen).\n"
-    "is_spam=false bei allem anderen — normale URLs, Selbstpromotion, Community-Werbung.\n"
+    "is_spam=false bei allem anderen — normale Chat-Nachrichten, Komplimente an den "
+    "Streamer ('best viewers'), normale URLs, Selbstpromotion, Community-Werbung.\n"
     "Im Zweifel: is_spam=false."
 )
 
@@ -79,6 +91,12 @@ def _invalidate_pattern_cache() -> None:
     _PATTERN_CACHE_TS = 0.0
 
 
+def _invalidate_safe_cache() -> None:
+    global _SAFE_CACHE, _SAFE_CACHE_TS
+    _SAFE_CACHE = None
+    _SAFE_CACHE_TS = 0.0
+
+
 def load_learned_patterns() -> list[tuple[str, str]]:
     """Gibt gelernte [(pattern, pattern_type)] aus DB zurück (gecacht)."""
     global _PATTERN_CACHE, _PATTERN_CACHE_TS
@@ -99,6 +117,28 @@ def load_learned_patterns() -> list[tuple[str, str]]:
         return result
     except Exception:
         return _PATTERN_CACHE or []
+
+
+def load_safe_patterns() -> list[str]:
+    """Gibt AI-gelernte Safe-Muster (False-Positive-Whitelist) aus DB zurück."""
+    global _SAFE_CACHE, _SAFE_CACHE_TS
+    now = time.monotonic()
+    if _SAFE_CACHE is not None and (now - _SAFE_CACHE_TS) < _PATTERN_CACHE_TTL:
+        return _SAFE_CACHE
+
+    try:
+        from ..storage import readonly_connection
+
+        with readonly_connection() as conn:
+            rows = conn.execute(
+                "SELECT pattern FROM twitch_auto_learned_safe_patterns ORDER BY created_at"
+            ).fetchall()
+        result = [str(r[0]) for r in (rows or [])]
+        _SAFE_CACHE = result
+        _SAFE_CACHE_TS = now
+        return result
+    except Exception:
+        return _SAFE_CACHE or []
 
 
 async def _call_minimax(content: str) -> dict | None:
@@ -191,6 +231,58 @@ async def _save_pattern(
         log.debug("Spam-AI: Muster konnte nicht gespeichert werden", exc_info=True)
 
 
+async def _save_safe_pattern(
+    pattern: str,
+    source_message: str,
+    source_channel: str,
+    reasoning: str,
+) -> None:
+    """Persistiert ein AI-bestätigtes Safe-Muster (False-Positive-Whitelist)."""
+    global _SAFE_SCHEMA_ENSURED
+    try:
+        from ..storage import transaction
+
+        with transaction() as conn:
+            if not _SAFE_SCHEMA_ENSURED:
+                conn.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS twitch_auto_learned_safe_patterns (
+                        pattern TEXT PRIMARY KEY,
+                        source_message TEXT,
+                        source_channel TEXT,
+                        minimax_reasoning TEXT,
+                        hit_count INT NOT NULL DEFAULT 0,
+                        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                    )
+                    """
+                )
+                _SAFE_SCHEMA_ENSURED = True
+            conn.execute(
+                """
+                INSERT INTO twitch_auto_learned_safe_patterns
+                    (pattern, source_message, source_channel, minimax_reasoning, created_at)
+                VALUES (%s, %s, %s, %s, %s)
+                ON CONFLICT (pattern) DO UPDATE SET
+                    hit_count = twitch_auto_learned_safe_patterns.hit_count + 1
+                """,
+                (
+                    pattern.lower(),
+                    source_message[:500],
+                    source_channel,
+                    reasoning[:200],
+                    datetime.now(UTC).isoformat(),
+                ),
+            )
+        _invalidate_safe_cache()
+        log.info(
+            "Spam-AI: neues SAFE-Muster gelernt '%s' aus #%s (False-Positive)",
+            pattern,
+            source_channel,
+        )
+    except Exception:
+        log.debug("Spam-AI: Safe-Muster konnte nicht gespeichert werden", exc_info=True)
+
+
 def _review_worthwhile(content: str, spam_reasons: list[str]) -> bool:
     """
     Prüft ob ein AI-Review sinnvoll ist.
@@ -237,7 +329,21 @@ async def run_spam_ai_review(
     reason = str(result.get("reason") or "").strip()
 
     if not is_spam:
-        log.debug("Spam-AI: kein Spam (score=%d, chatter=%s, channel=%s)", spam_score, chatter_login, channel)
+        # False-Positive: das harmlose Auslöser-Muster in die Safe-Whitelist lernen,
+        # damit ähnliche Nachrichten künftig negativ gescort werden (außer es kommt
+        # zusätzlich ein hartes Spam-Signal hinzu — das hat im Scoring Vorrang).
+        if pattern and len(pattern) >= 4:
+            await _save_safe_pattern(
+                pattern=pattern,
+                source_message=content,
+                source_channel=channel,
+                reasoning=reason,
+            )
+        else:
+            log.debug(
+                "Spam-AI: kein Spam (score=%d, chatter=%s, channel=%s)",
+                spam_score, chatter_login, channel,
+            )
         return
 
     log.warning(

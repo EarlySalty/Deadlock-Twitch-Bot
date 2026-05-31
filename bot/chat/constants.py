@@ -40,11 +40,6 @@ SPAM_PHRASES = (
     "Best viewers smmtop32.online",
     "Best viewers smmtop32 .online",
     "Best viewers smmtop32 online",
-    "Best viewers on",
-    "Best viewers",
-    "B̟est viewers",
-    "Cheap Viewers",
-    "Ch͟eap viewers",
     "Ai viewers streamboo . com",
     "Ai viewers streamboo .com",
     "(remove the space)",
@@ -92,6 +87,24 @@ SPAM_FRAGMENTS = (
     "top viewers",
     "prmxy",
     "prmup",
+)
+# Bekannte Viewbot/SMM-Service-Domains, erkannt auch in "verstümmelter" Form.
+# Spammer streuen Trenner ein ("streamboo. com", "s t r e a m b o o . c o m"),
+# um Substring-Filter zu umgehen. Vor dem Matchen wird der Text "domainisiert":
+# nur a-z0-9 und Punkte bleiben, Leerzeichen fallen weg. Die Regex verlangt den
+# Service-Namen UNMITTELBAR gefolgt von einem Punkt und einer Spam-TLD — dadurch
+# trifft sie "streamboo.com"/"streambooorg", aber nicht harmlose Wortpaare wie
+# "stream boo" oder "laptop smm" (keine TLD dahinter → kein Treffer).
+_SPAM_DOMAIN_CORE_NAMES = (
+    "streamboo",
+    "smmhype",
+    "smmbest",
+    "smmtop",
+    "topsmm",
+    "promnow",
+)
+SPAM_DOMAIN_RE = re.compile(
+    r"(?:" + "|".join(_SPAM_DOMAIN_CORE_NAMES) + r")\.?(?:com|org|net|ru|online|xyz|site|io|gg)",
 )
 SPAM_MIN_MATCHES = 3
 

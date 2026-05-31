@@ -1445,9 +1445,14 @@ if TWITCHIO_AVAILABLE:
                         spam_score += mention_score
                         spam_reasons.extend(mention_reasons)
 
-                    # 2. Faktor: Account-Alter prüft nur den letzten fehlenden Punkt zum Ban.
-                    # Ein junges Konto soll nur dann eskalieren, wenn bereits zwei Signale vorliegen.
-                    if spam_score == (SPAM_MIN_MATCHES - 1):
+                    # 2. Faktor: Kontext-Eskalatoren (neues Konto, Erstnachricht).
+                    # Sie zählen NUR, wenn bereits ein HARTES Signal (echte Spam-
+                    # Domain/-Marke) vorliegt — sonst würde die erste, harmlose
+                    # Nachricht eines neuen Zuschauers (z. B. "im a rookie") fälschlich
+                    # zum Ban eskalieren. Je Treffer +1: ein hartes Signal plus ein
+                    # neues Konto plus eine Erstnachricht erreichen so die Ban-Schwelle.
+                    if spam_score < SPAM_MIN_MATCHES and self._has_hard_spam_signal(spam_reasons):
+                        # Neues Konto (< 90 Tage): +1
                         try:
                             author_id = getattr(message.author, "id", None)
                             if author_id:
@@ -1467,6 +1472,16 @@ if TWITCHIO_AVAILABLE:
                                 "Konnte User-Alter für Spam-Check nicht laden",
                                 exc_info=True,
                             )
+                        # Erstnachricht (Chatter in diesem Kanal noch nie erfasst): +1
+                        try:
+                            _author_name = getattr(message.author, "name", "") or ""
+                            if _author_name and self._is_first_message_for_streamer(
+                                channel_login, _author_name
+                            ):
+                                spam_score += 1
+                                spam_reasons.append("Erstnachricht")
+                        except Exception:
+                            log.debug("First-Message-Check fehlgeschlagen", exc_info=True)
 
                     if spam_score >= SPAM_MIN_MATCHES:
                         enforced = await self._auto_ban_and_cleanup(message)
@@ -1504,6 +1519,17 @@ if TWITCHIO_AVAILABLE:
                             status=f"SUSPICIOUS({spam_score})",
                             reason=reasons_str,
                         )
+
+                        # Hartes Signal (echte Spam-Domain/-Marke) unterhalb der
+                        # Ban-Schwelle: Nachricht entfernen, aber NICHT bannen.
+                        # (First-Message-Verifikation für Ban steht noch aus.)
+                        # Weiche Treffer wie "viewer + name" allein lösen bewusst
+                        # KEINE Aktion aus – sie werden nur gemeldet.
+                        if self._has_hard_spam_signal(spam_reasons):
+                            try:
+                                await self._auto_ban_and_cleanup(message, ban=False)
+                            except Exception:
+                                log.debug("Hard-Signal-Delete fehlgeschlagen", exc_info=True)
 
                         log.info(
                             "Verdächtige Nachricht (Score %d, Treffer: %s) in %s von %s: %s",

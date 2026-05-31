@@ -18,6 +18,7 @@ from .constants import (
     INVITE_GAME_CONTEXT_RE,
     INVITE_JOIN_RE,
     INVITE_STRONG_ACCESS_RE,
+    SPAM_DOMAIN_RE,
     SPAM_FRAGMENTS,
     SPAM_PHRASES,
 )
@@ -63,6 +64,26 @@ def _build_homoglyph_table() -> dict:
     for base in az_lower_starts:
         for i in range(26):
             table[base + i] = ord("a") + i
+
+    # Kyrillische / griechische Homoglyphen (Schrift-Zwillinge). NFKC faltet
+    # diese NICHT, weil es eigene Zeichen sind — Spammer nutzen genau das
+    # (z. B. "strеаmbоо" mit kyrillischem е/а/о). Nur eindeutige Latein-Zwillinge,
+    # und nur für die Spam-Bewertung (die Originalnachricht bleibt unangetastet).
+    for src, dst in (
+        # Kyrillisch – Kleinbuchstaben
+        ("а", "a"), ("е", "e"), ("о", "o"), ("с", "c"), ("р", "p"), ("х", "x"),
+        ("у", "y"), ("к", "k"), ("м", "m"), ("т", "t"), ("і", "i"), ("ѕ", "s"),
+        ("ј", "j"), ("ԁ", "d"), ("о", "o"),
+        # Kyrillisch – Großbuchstaben
+        ("А", "A"), ("Е", "E"), ("О", "O"), ("С", "C"), ("Р", "P"), ("Х", "X"),
+        ("У", "Y"), ("К", "K"), ("М", "M"), ("Т", "T"), ("В", "B"), ("Н", "H"),
+        ("І", "I"), ("Ѕ", "S"), ("Ј", "J"),
+        # Griechisch
+        ("ο", "o"), ("α", "a"), ("ρ", "p"), ("ν", "v"), ("κ", "k"), ("μ", "m"),
+        ("τ", "t"), ("χ", "x"), ("Ο", "O"), ("Α", "A"), ("Ε", "E"), ("Ρ", "P"),
+        ("Τ", "T"), ("Χ", "X"), ("Κ", "K"), ("Μ", "M"), ("Ν", "N"), ("Ι", "I"),
+    ):
+        table[ord(src)] = ord(dst)
 
     return table
 
@@ -486,6 +507,13 @@ class ModerationMixin:
                 break  # Nur einmal zählen
 
         lowered = raw.casefold()
+        # Zwei verstümmelungs-robuste Formen:
+        #  compact     = nur a-z0-9 (für gelernte Muster, voller Squash)
+        #  domainized  = a-z0-9 und Punkte, Leerzeichen/Trenner raus
+        # Beide neutralisieren Buchstaben-Spreizung ("s t r e a m b o o") und
+        # eingestreute Leerzeichen ("streamboo. com").
+        compact = re.sub(r"[^a-z0-9]", "", lowered)
+        domainized = re.sub(r"[^a-z0-9.]", "", lowered)
         if not phrase_matched:  # Nur prüfen wenn noch keine exakte Phrase gefunden
             for phrase in SPAM_PHRASES:
                 if phrase.casefold() in lowered:
@@ -494,21 +522,24 @@ class ModerationMixin:
                     phrase_matched = True
                     break
 
-        # Fragment-/Keyword-Fallback: nur wenn keine Phrase gematcht wurde.
-        # Die kompakte Domain-Form wird wie ein Keyword behandelt, nicht als Extra-Bonus.
+        # Kompakt-Domain: bekannte Viewbot/SMM-Domains (Service-Name + TLD) auch
+        # in verstümmelter Form erkennen. Die TLD-Verankerung verhindert, dass
+        # harmlose Wortpaare ("stream boo", "laptop smm") fälschlich greifen.
+        # Zählt wie eine Phrase (+2) und schließt den Fragment-Fallback aus.
         if not phrase_matched:
-            fragment_hit = False
+            m = SPAM_DOMAIN_RE.search(domainized)
+            if m:
+                hits += 2
+                reasons.append(f"Domain(Kompakt): {m.group()}")
+                phrase_matched = True
+
+        # Fragment-/Keyword-Fallback: nur wenn keine Phrase/Domain gematcht wurde.
+        if not phrase_matched:
             for frag in SPAM_FRAGMENTS:
                 if re.search(r"\b" + re.escape(frag.casefold()) + r"\b", lowered):
                     hits += 1
                     reasons.append(f"Fragment(Fallback): {frag}")
-                    fragment_hit = True
                     break
-            if not fragment_hit:
-                compact = re.sub(r"[^a-z0-9]", "", lowered)
-                if "streamboocom" in compact:
-                    hits += 1
-                    reasons.append("Fragment(Fallback): streamboocom (kompakt)")
 
         # Muster: "viewer(s) [name]": +1 Punkt
         if re.search(r"\bviewers?\s+\w+", lowered):
@@ -521,20 +552,72 @@ class ModerationMixin:
 
             _learned = load_learned_patterns()
             for _pat, _ptype in _learned:
-                if _ptype == "phrase" and _pat and _pat in lowered:
+                _pc = re.sub(r"[^a-z0-9]", "", _pat or "")
+                if _ptype == "phrase" and _pat and (
+                    _pat in lowered or (len(_pc) >= 4 and _pc in compact)
+                ):
                     hits += 2
                     reasons.append(f"Learned-Phrase: {_pat}")
                     break
             for _pat, _ptype in _learned:
                 if _ptype != "phrase" and _pat:
-                    if re.search(r"\b" + re.escape(_pat) + r"\b", lowered):
+                    _pc = re.sub(r"[^a-z0-9]", "", _pat)
+                    if re.search(r"\b" + re.escape(_pat) + r"\b", lowered) or (
+                        len(_pc) >= 4 and _pc in compact
+                    ):
                         hits += 1
                         reasons.append(f"Learned-Fragment: {_pat}")
                         break
         except Exception:
             pass
 
+        # Negativ-Scoring: AI-gelernte "Safe"-Muster (False-Positive-Korrektur).
+        # Wirkt bewusst NUR, wenn kein hartes Signal (Domain/Marke/gelerntes
+        # Spam-Muster) vorliegt — sonst könnte ein Spammer ein whitelisted Wort
+        # anhängen, um eine echte Spam-Domain zu neutralisieren.
+        if hits > 0 and not self._has_hard_spam_signal(reasons):
+            try:
+                from .spam_ai_review import load_safe_patterns
+
+                for _spat in load_safe_patterns():
+                    _spat = (_spat or "").casefold()
+                    _spc = re.sub(r"[^a-z0-9]", "", _spat)
+                    if len(_spat) >= 4 and (
+                        re.search(r"\b" + re.escape(_spat) + r"\b", lowered)
+                        or (len(_spc) >= 4 and _spc in compact)
+                    ):
+                        hits = max(0, hits - 2)
+                        reasons.append(f"Safe(AI): {_spat}")
+                        break
+            except Exception:
+                pass
+
         return hits, reasons
+
+    # Marken-Tokens, die in echtem Chat praktisch nie vorkommen. Ein Fragment-
+    # Treffer auf eines davon gilt als HARTES Signal (Aktion erlaubt); generische
+    # Fragmente ("rookie", "best viewers") und das breite "viewer + name"-Muster
+    # sind WEICH und dürfen allein nie zu Lösch-/Ban-Aktionen führen.
+    _SPAM_BRAND_TOKENS = (
+        "streamboo", "smmhype", "smmbest", "smmtop", "topsmm",
+        "promnow", "prmxy", "prmup", "smmtop32", "smmbest4", "smmbest5",
+    )
+
+    @classmethod
+    def _has_hard_spam_signal(cls, spam_reasons) -> bool:
+        """True nur bei hochkonfidentem Spam-Signal: ein Domain-Kompakt-Treffer,
+        ein gelerntes (AI-bestätigtes) Muster, oder eine Phrase/ein Fragment, das
+        ein echtes Spam-Marken-Token enthält. Generische Wendungen wie
+        'best viewers' oder das breite 'viewer + name'-Muster sind WEICH und
+        lösen niemals eine Lösch-/Ban-Aktion aus."""
+        for reason in spam_reasons or ():
+            if reason.startswith(("Domain(", "Learned-")):
+                return True
+            if reason.startswith(("Phrase(", "Fragment(")):
+                low = reason.casefold()
+                if any(tok in low for tok in cls._SPAM_BRAND_TOKENS):
+                    return True
+        return False
 
     @staticmethod
     def _normalize_spam_text(content: str) -> str:
@@ -783,6 +866,34 @@ class ModerationMixin:
         except Exception:
             pass
         return False
+
+    @staticmethod
+    def _is_first_message_for_streamer(channel_login: str, chatter_login: str) -> bool:
+        """True, wenn dieser Chatter für diesen Streamer noch NIE erfasst wurde
+        (kein Rollup-Eintrag). In Partner-Kanälen race-frei, weil der Rollup-Zähler
+        erst NACH dem Spam-Check hochgezählt wird.
+
+        Fail-safe: bei fehlenden Daten oder DB-Fehler wird False zurückgegeben —
+        es wird also lieber NICHT eskaliert als fälschlich gebannt.
+        """
+        if not channel_login or not chatter_login:
+            return False
+        try:
+            from ..storage import readonly_connection
+
+            with readonly_connection() as conn:
+                row = conn.execute(
+                    """
+                    SELECT 1 FROM twitch_chatter_rollup
+                    WHERE lower(streamer_login) = lower(%s)
+                      AND lower(chatter_login) = lower(%s)
+                    LIMIT 1
+                    """,
+                    (channel_login, chatter_login),
+                ).fetchone()
+            return row is None
+        except Exception:
+            return False
 
     async def _check_sus_discord_invite(self, message, channel_login: str) -> None:
         """Erkennt direkte discord.gg/-Links im Chat und loggt sie als Verdacht.
@@ -1539,8 +1650,12 @@ class ModerationMixin:
             log.debug("Konnte message-id aus Tags nicht lesen", exc_info=exc)
         return None
 
-    async def _auto_ban_and_cleanup(self, message) -> bool:
-        """Bannt erkannte Spam-Bots und löscht die Nachricht (als Bot)."""
+    async def _auto_ban_and_cleanup(self, message, *, ban: bool = True) -> bool:
+        """Löscht die Nachricht (als Bot) und bannt den Chatter.
+
+        ban=False: Delete-only-Modus — Nachricht wird entfernt, aber kein Ban
+        ausgeführt (für hochkonfidente Spam-Signale unterhalb der Ban-Schwelle).
+        """
         channel = self._resolve_message_channel(message)
         channel_name = getattr(channel, "name", "") or getattr(channel, "login", "") or ""
         channel_key = self._normalize_channel_login(channel_name)
@@ -1629,6 +1744,17 @@ class ModerationMixin:
                                 channel_name,
                                 exc_info=True,
                             )
+
+                    # Delete-only-Modus: Nachricht ist entfernt, kein Ban gewünscht.
+                    if not ban:
+                        self._record_autoban(
+                            channel_name=channel_name,
+                            chatter_login=chatter_login,
+                            chatter_id=chatter_id,
+                            content=original_content,
+                            status="DELETED",
+                        )
+                        return True
 
                     # 2. User bannen
                     try:
