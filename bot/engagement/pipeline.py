@@ -342,6 +342,15 @@ class EngagementPipeline:
         except Exception:
             log.exception("Engagement: deadlock-patch-context fehlgeschlagen")
 
+        try:
+            from .deadlock_stats import build_stats_fragment
+
+            stats_fragment = await build_stats_fragment(msg.content)
+            if stats_fragment:
+                system_prompt = f"{system_prompt}\n\n{stats_fragment}"
+        except Exception:
+            log.exception("Engagement: deadlock-stats-context fehlgeschlagen")
+
         if settings.persona_override:
             system_prompt = (
                 f"{system_prompt}\n\nZusätzliche Persona-Hinweise: {settings.persona_override}"

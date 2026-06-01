@@ -1,3 +1,13 @@
+## #75 — Engagement-AI: Stats-Gespür + die Soul wächst mit
+
+**Problem:** Nach dem großen Umbau fehlten dem KI-Stammgast noch zwei Sachen. Erstens hatte er kein Gefühl dafür, welcher Held gerade wirklich stark oder beliebt ist — er konnte über die Meta-Stimmung reden, aber nicht über die nackte Stärke einzelner Helden. Zweitens war seine Persönlichkeit statisch: Er konnte sich nichts aus laufenden Gesprächen merken.
+
+**Geändert:** Zwei neue Bausteine — echte Spielstatistiken als Stärke-Anhaltspunkt pro Held, und ein „Gedächtnis", das sich aus den Gesprächen selbst füllt.
+
+**Wie's funktioniert:** Wird ein Held erwähnt, zieht die KI dessen aggregierte Win- und Pick-Rate aus der Statistik-Schnittstelle — aber bewusst nur als grobes Gefühl („Winrate über 50%, wird oft gespielt") statt als Zahlen-Tabelle zum Vorlesen. So weiß sie, ob ein Held gerade meta ist. Parallel läuft alle paar Stunden ein Reflexions-Durchgang: Die KI schaut sich die letzten Chats an, in denen sie mitgemischt hat, und merkt sich — wenn etwas hängen blieb (ein gutes Gespräch, ein Running Gag, ein cooler Move, ein lustiges Wort) — eine kurze Notiz. Diese Notizen hängen unter ihrer Grund-Persönlichkeit und werden später nur beiläufig aufgegriffen, wenn es gerade passt — nicht ausgepackt. So fühlt sich der Charakter mit der Zeit lebendiger an, statt jeden Tag bei null zu starten.
+
+**Betroffen:** Nur die (noch nicht scharfgeschaltete) Engagement-AI.
+
 ## #74 — Engagement-AI: großer Qualitäts-Umbau gegen „klingt wie ein Bot"
 
 **Problem:** Der KI-Stammgast, der sich in den Twitch-Chat einklinken soll, hatte zwei Kernprobleme. Erstens halluzinierte er Deadlock-Fakten — im Test erfand er ein Item samt frei erfundener Mechanik. Zweitens klang er unverkennbar nach KI: Floskeln wie „gute Frage, das kann ich gerade nicht belegen", reflexhaftes Zustimmen zu jeder Meinung, steife ganze Sätze statt Chat-Sprache.
