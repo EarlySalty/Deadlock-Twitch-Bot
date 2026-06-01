@@ -356,54 +356,6 @@ def load_offline_auto_raid_eligibility(
     )
 
 
-def archive_active_partner(
-    conn: Any,
-    *,
-    twitch_login: str | None = None,
-    twitch_user_id: str | None = None,
-) -> dict[str, Any] | None:
-    archived = departner_active_partner(
-        conn,
-        twitch_login=twitch_login,
-        twitch_user_id=twitch_user_id,
-        restore_non_partner=False,
-        disable_raid_auth=True,
-        clear_verification=False,
-    )
-    if not archived:
-        return None
-
-    normalized_login = _normalize_login(archived.get("twitch_login"))
-    normalized_user_id = _normalize_user_id(archived.get("twitch_user_id"))
-    partner_row_id = archived.get("partner_row_id")
-    if partner_row_id is not None:
-        conn.execute(
-            """
-            UPDATE twitch_partners
-            SET status = %s
-            WHERE id = %s
-            """,
-            (_LEGACY_PARTNER_STATUS_ARCHIVED, partner_row_id),
-        )
-    else:
-        conn.execute(
-            """
-            UPDATE twitch_partners
-            SET status = %s
-            WHERE (%s <> '' AND twitch_user_id = %s)
-               OR (%s <> '' AND LOWER(twitch_login) = LOWER(%s))
-            """,
-            (
-                _LEGACY_PARTNER_STATUS_ARCHIVED,
-                normalized_user_id,
-                normalized_user_id,
-                normalized_login,
-                normalized_login,
-            ),
-        )
-    return archived
-
-
 def load_latest_partner_history(
     conn: Any,
     *,
@@ -1317,6 +1269,24 @@ def departner_active_partner(
             """,
             (normalized_login, normalized_user_id, normalized_login),
         )
+
+    # Engagement-Layer beim Departnern abschalten: ein departnerter Channel ist
+    # kein Partner mehr, also darf die Engagement-AI dort nicht weiter antworten.
+    # Das Laufzeit-Gate in der Pipeline greift zusaetzlich; dieser Cleanup haelt
+    # den Settings-Zustand sauber, statt enabled=TRUE verwaisen zu lassen.
+    try:
+        conn.execute(
+            """
+            UPDATE twitch_engagement_settings
+            SET enabled = FALSE
+            WHERE LOWER(channel_login) = LOWER(%s)
+            """,
+            (normalized_login,),
+        )
+    except Exception:
+        # Tabelle existiert evtl. nicht (Engagement-Layer nicht migriert) — der
+        # Laufzeit-Gate schuetzt unabhaengig davon.
+        pass
 
     _normalize_related_tables(
         conn,

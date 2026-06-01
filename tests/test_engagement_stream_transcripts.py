@@ -66,7 +66,7 @@ class _FakeMiniMax:
         self.system_prompt = system_prompt
         return ChatResponse(
             text="gegen haze frueh metal skin einplanen.",
-            model="MiniMax-M2.7",
+            model="MiniMax-M3",
             prompt_tokens=100,
             completion_tokens=12,
             latency_ms=50,
@@ -122,6 +122,10 @@ class EngagementStreamTranscriptTests(unittest.IsolatedAsyncioTestCase):
         )
 
         with (
+            patch(
+                "bot.core.partner_utils.is_operational_partner_channel",
+                return_value=True,
+            ),
             patch("bot.engagement.pipeline.sample_tone", new=AsyncMock(side_effect=RuntimeError)),
             patch(
                 "bot.engagement.pipeline.load_open_threads_for_user",

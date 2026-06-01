@@ -154,6 +154,20 @@ def _sync_is_opted_out(twitch_user_id: str) -> bool:
     return row is not None
 
 
+def _sync_is_operational_partner(channel_login: str) -> bool:
+    """True nur fuer operativ aktive Partner-Channels.
+
+    Spiegelt das Partner-Gate, das Moderation/Promos/Channel-Join bereits ueber
+    ``bot.core.partner_utils`` durchsetzen, in den Engagement-Layer. Departnerte,
+    monitored-only und per Opt-out/Pause deaktivierte Channels werden so auch hier
+    abgewiesen. Lokaler Import, um einen Import-Zyklus
+    bot.engagement -> bot.core -> bot.storage zu vermeiden.
+    """
+    from bot.core.partner_utils import is_operational_partner_channel
+
+    return bool(is_operational_partner_channel(channel_login))
+
+
 class EngagementPipeline:
     """V1 minimal: Buffer + Gates + Modell-Call. Persona/Threads/Lurker/Match
     folgen in späteren Rollout-Schritten und erweitern den System-Prompt."""
@@ -211,6 +225,15 @@ class EngagementPipeline:
     async def _handle_inner(self, msg: IncomingMessage) -> HandleResult:
         settings = await self._load_settings(msg.channel_login)
         if settings is None or not settings.enabled:
+            return HandleResult(decision=Decision.DISABLED)
+
+        # Partner-Gate: Engagement feuert ausschliesslich in operativ aktiven
+        # Partner-Channels. Departnerte / monitored-only / opt-out Channels werden
+        # hier abgewiesen, selbst wenn ein verwaistes enabled=TRUE zurueckbleibt
+        # (gleiches Gate wie Moderation/Promos/Channel-Join).
+        if not await asyncio.to_thread(
+            _sync_is_operational_partner, msg.channel_login
+        ):
             return HandleResult(decision=Decision.DISABLED)
 
         # Nur wenn der Channel GERADE live ist UND Deadlock streamt — sonst Funkstille.

@@ -1,3 +1,13 @@
+## #79 — Engagement-AI: redet nur noch in echten Partner-Kanälen
+
+**Problem:** Die KI prüfte vor dem Antworten nur zwei Dinge: ob sie für den Kanal eingeschaltet ist und ob dort gerade Deadlock live läuft. Den Partner-Status hat sie dabei komplett übersprungen. Der Bot ist aber auch in beobachteten Nicht-Partner-Kanälen präsent (rein fürs Statistik-Tracking), und genau dort war die Engagement-AI die einzige Chat-Funktion, die trotzdem mitgeredet hat — Moderation, Promos und die frechen Auto-Antworten schweigen in solchen Kanälen längst, weil sie alle denselben Partner-Check davorhängen. Zusätzlich blieb der Engagement-Schalter eines Kanals auf „an", selbst wenn die Partnerschaft später beendet wurde.
+
+**Geändert:** Ein Partner-Gate vor jeder Engagement-Antwort, plus ein automatischer Aufräum-Schritt beim Beenden einer Partnerschaft.
+
+**Wie's funktioniert:** Vor jeder möglichen Antwort prüft die KI jetzt zusätzlich denselben Partner-Status, den Moderation, Promos und das Kanal-Beitreten ohnehin schon verwenden — also über eine zentrale, gemeinsame Stelle, nicht über eine eigene Sonderlogik. Durch kommen nur operativ aktive Partner: reines Beobachten, ein Admin-Opt-out oder eine pausierte bzw. beendete Partnerschaft zählen bewusst nicht. Trifft das nicht zu, bleibt sie still — selbst wenn ihr Schalter (noch) auf „an" steht. Als zweite, unabhängige Sicherung wird beim Beenden einer Partnerschaft der Engagement-Schalter des Kanals automatisch ausgeschaltet, genau wie es dort schon mit der Raid-Berechtigung passiert; so bleibt kein „verwaister An-Zustand" in der Datenbank zurück. Damit greifen zwei Schichten: Das Gate fängt jede einzelne Nachricht in Echtzeit ab, der Aufräum-Schritt hält den gespeicherten Zustand sauber — fällt eine Schicht aus, schützt die andere weiter.
+
+**Betroffen:** Nur die (noch nicht scharfgeschaltete) Engagement-AI.
+
 ## #78 — Engagement-AI: lockerer Stammgast statt Deadlock-Roboter
 
 **Problem:** Nach der Themen-Eingrenzung war die KI zu steif — sie redete fast nur noch in ausformulierten Deadlock-Takes und ging auf lockeren Chat-Banter gar nicht mehr ein. Das wirkte wieder nach Bot, nur andersrum.
