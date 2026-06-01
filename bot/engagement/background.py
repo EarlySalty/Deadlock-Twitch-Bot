@@ -44,6 +44,7 @@ _CONVERSATION_KEEP_PER_CHANNEL = 500
 _TRANSCRIPT_TRIM_INTERVAL_SEC = 15 * 60
 _GLOBAL_SENTIMENT_INTERVAL_SEC = 20 * 60
 _SOUL_ANCHOR_INTERVAL_SEC = 3 * 60 * 60
+_CHANNEL_PROFILE_INTERVAL_SEC = 4 * 60 * 60
 
 _started = False
 _started_lock = threading.Lock()
@@ -244,6 +245,18 @@ async def _run_soul_anchor_loop() -> None:
         await _jittered_sleep(_SOUL_ANCHOR_INTERVAL_SEC)
 
 
+async def _run_channel_profile_loop() -> None:
+    minimax = EngagementMinimaxClient(timeout=180.0)
+    while True:
+        try:
+            from .channel_background import rebuild_all_channel_profiles
+
+            await rebuild_all_channel_profiles(minimax=minimax)
+        except Exception:
+            log.exception("Background: channel-profile loop iteration fehlgeschlagen")
+        await _jittered_sleep(_CHANNEL_PROFILE_INTERVAL_SEC)
+
+
 def ensure_started() -> None:
     """Idempotent — startet die Background-Loops einmal pro Prozess.
 
@@ -269,8 +282,10 @@ def ensure_started() -> None:
         loop.create_task(_run_conversation_trim_loop(), name="engagement-conv-trim")
         loop.create_task(_run_global_sentiment_loop(), name="engagement-global-sentiment")
         loop.create_task(_run_soul_anchor_loop(), name="engagement-soul-anchor")
+        loop.create_task(_run_channel_profile_loop(), name="engagement-channel-profile")
         log.info(
             "Engagement-Background-Jobs gestartet "
             "(thread-extractor=15min, match-poller=30s, stream-transcripts=on, "
-            "auto-closer=1h, conv-trim=24h, global-sentiment=20min, soul-anchor=3h)"
+            "auto-closer=1h, conv-trim=24h, global-sentiment=20min, soul-anchor=3h, "
+            "channel-profile=4h)"
         )

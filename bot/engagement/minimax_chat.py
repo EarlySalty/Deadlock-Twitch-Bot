@@ -99,10 +99,11 @@ class EngagementMinimaxClient:
 
         messages: list[dict] = [{"role": "system", "content": system_prompt}]
         for turn in history:
-            entry: dict = {"role": turn.role, "content": turn.content}
-            if turn.name:
-                entry["name"] = turn.name
-            messages.append(entry)
+            # Sprecher in den Content falten statt ins name-Feld: MiniMax verlangt über
+            # alle Messages konsistente name-Werte (Fehler 2013), was bei Multi-User-Chat
+            # (verschiedene Logins) bricht. Im Content ist der Name ohnehin nützlicher.
+            content = f"{turn.name}: {turn.content}" if turn.name else turn.content
+            messages.append({"role": turn.role, "content": content})
 
         started = time.perf_counter()
         try:
@@ -215,9 +216,22 @@ def build_baseline_system_prompt(*, streamer_login: str) -> str:
         "freundlich dagegen, nie streitlustig, nie belehrend. In pauschales Meckern oder "
         "Doom übers Spiel stimmst du nicht einfach mit ein.\n"
         "\n"
+        "Dein Thema ist AUSSCHLIESSLICH Deadlock — das Spiel: Helden, Items, Builds, Matches, "
+        "Plays, Meta, Patches, der Gameplay-Moment im Stream. Geht es im Chat gerade NICHT um "
+        "Deadlock (reiner Smalltalk, Begrüßungen, Subs/Resubs, Danksagungen, IRL, andere "
+        "Spiele, Off-Topic), bleibst du still — du bist kein allgemeiner Chat-Bot. "
+        "Und du antwortest nur auf das, was in die offene Chat-Runde gehört: ist eine Nachricht "
+        "erkennbar an den Streamer oder eine bestimmte andere Person gerichtet (eine Frage oder "
+        "Ansage direkt an ihn, ein 'danke dir' o.ä.), ist das NICHT deine Nachricht — dann "
+        "mischst du dich nicht ein und bleibst still.\n"
+        "\n"
         "Sprache: Spiegele den Channel-Vibe — wenn dort deutsch geschrieben wird, "
         "antworte deutsch; wenn englisch, dann englisch. "
-        "Antworten kurz, 1-2 Sätze, max ~250 Zeichen. "
+        "Halte dich KURZ und punchig — meist ein knapper Satz, oft reicht ein Halbsatz. "
+        "Keine abwägenden 'einerseits/andererseits'-Antworten, kein 'naja', kein 'hmm kommt "
+        "drauf an' — hab eine klare, kurze Meinung mit Kante statt eines ausgewogenen Absatzes. "
+        "Auf reine Emotes, einzelne Wörter ('LUL', 'gg', 'KEKW') oder inhaltsleere Nachrichten "
+        "reagierst du gar nicht. "
         "Vermeide es, denselben Gedanken in mehreren Nachrichten zu zerlegen.\n"
         "\n"
         "Ausgabeformat: Antworte direkt, keine <think>-Blöcke, keine Meta-Kommentare über "

@@ -1,3 +1,13 @@
+## #76 — Engagement-AI: nur noch Deadlock, kürzer, mit Streamer-Gespür
+
+**Problem:** Im Mehr-Kanal-Test fiel auf, dass die KI sich überall einmischte — bei Begrüßungen, Resubs, Smalltalk, sogar bei Nachrichten, die klar an den Streamer gerichtet waren. Das wirkte aufdringlich und nach Bot. Dazu zwei technische Sachen: In belebten Chats (mehrere Leute gleichzeitig) brach jede Antwort mit einem Schnittstellen-Fehler ab, und die KI hatte keinerlei Hintergrundwissen über den einzelnen Streamer.
+
+**Geändert:** Klare Eingrenzung aufs Thema, knappere Antworten, ein Fix für den Mehr-Personen-Fehler und ein wachsendes Profil pro Streamer.
+
+**Wie's funktioniert:** Die KI antwortet jetzt nur noch, wenn es im Chat tatsächlich um Deadlock geht (Helden, Matches, Plays, Meta, Patches) — bei reinem Smalltalk, Subs, Begrüßungen oder Off-Topic bleibt sie still. Ist eine Nachricht erkennbar an den Streamer oder eine bestimmte Person gerichtet, hält sie sich raus, weil das nicht ihre Nachricht ist. Antworten sind kürzer und haben mehr Kante statt abwägender Absätze, und auf reine Emotes reagiert sie gar nicht. Der Mehr-Personen-Fehler lag daran, dass der Sprechername in einem separaten Feld mitgeschickt wurde, das die KI-Schnittstelle bei wechselnden Namen ablehnte — jetzt steht der Name direkt im Nachrichtentext, was den Verlauf bei vielen Chattern sogar klarer macht. Zusätzlich destilliert ein Hintergrund-Durchlauf alle paar Stunden pro Kanal ein kurzes Profil aus dem Chat (welche Helden der Streamer spielt, sein Hintergrund, der Community-Vibe, Running-Gags) — reines Kontextwissen, das der KI hilft, sich natürlich einzufügen, ohne es je vorzulesen.
+
+**Betroffen:** Nur die (noch nicht scharfgeschaltete) Engagement-AI.
+
 ## #75 — Engagement-AI: Stats-Gespür + die Soul wächst mit
 
 **Problem:** Nach dem großen Umbau fehlten dem KI-Stammgast noch zwei Sachen. Erstens hatte er kein Gefühl dafür, welcher Held gerade wirklich stark oder beliebt ist — er konnte über die Meta-Stimmung reden, aber nicht über die nackte Stärke einzelner Helden. Zweitens war seine Persönlichkeit statisch: Er konnte sich nichts aus laufenden Gesprächen merken.

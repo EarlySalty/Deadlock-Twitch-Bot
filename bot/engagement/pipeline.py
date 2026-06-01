@@ -263,6 +263,15 @@ class EngagementPipeline:
             log.exception("Engagement: soul-extension fehlgeschlagen")
 
         try:
+            from .channel_background import get_channel_profile_fragment
+
+            channel_profile = await get_channel_profile_fragment(msg.channel_login)
+            if channel_profile:
+                system_prompt = f"{system_prompt}\n\n{channel_profile}"
+        except Exception:
+            log.exception("Engagement: channel-background fehlgeschlagen")
+
+        try:
             persona = await sample_tone(msg.channel_login)
             system_prompt = f"{system_prompt}\n\n{persona.to_prompt_fragment()}"
         except Exception:
