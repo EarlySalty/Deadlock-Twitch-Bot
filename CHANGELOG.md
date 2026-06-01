@@ -1,3 +1,11 @@
+## #73 — Highlight-Clips landen jetzt im dedizierten Thread
+
+**Problem:** Der Highlight-Clipper hat fertige Gameplay-Clips in den allgemeinen Bot-Log-Kanal gepostet, wo sie zwischen anderen Bot-Meldungen untergingen.
+
+**Geändert:** Ziel-Kanal auf den dedizierten Highlight-Thread umgestellt.
+
+**Wie's funktioniert:** Der Clipper schickt fertige Clips per interner HTTP-API an den Deadlock-Bots-Prozess, der den Discord-Post übernimmt. Der API-Payload enthält eine `channel_id` — die zeigt jetzt auf den Thread. Discord-Threads verhalten sich aus Bot-Sicht identisch zu normalen Kanälen (gleiches `send()`-Interface), daher war keine weitere Code-Änderung nötig.
+
 ## #72 — Interne Blacklist-API komplett: Check, List und Remove
 
 **Problem:** Nach dem ersten Blacklist-Endpunkt (`/add`) fehlten noch die restlichen Operationen — prüfen ob ein Kanal gebannt ist, alle gesperrten Kanäle auflisten und einen Bann wieder aufheben.
