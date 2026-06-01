@@ -24,7 +24,8 @@ import time
 from bot.storage.pg import query_all
 
 _POOL_LIMIT = 120        # so viele jüngste Turns durchsuchen
-_MAX_EXAMPLES = 6        # so viele Beispiele in den Prompt
+_MAX_EXAMPLES = 8        # so viele Beispiele in den Prompt
+_GOLD_KEEP = 4           # so viele Gold-Standard-Zeilen IMMER zuerst
 _MIN_LEN = 8
 _MAX_LEN = 100
 
@@ -53,6 +54,24 @@ _SEED_EXAMPLES: list[str] = [
     "no way he survived that one",
     "the gap close is straight up crime",
     "man this lane is rough rn",
+]
+
+# Gold-Standard: echter Schreibstil von EarlySalty (vom User als Ziel-Vibe bestätigt) —
+# kurz, trocken, viel Banter/Roast, oft nur ein paar Wörter, Deadlock wenn's passt.
+# Wird IMMER zuerst eingespeist, damit der Bot in diesem Register schreibt.
+_GOLD_EXAMPLES: list[str] = [
+    "wilder take",
+    "haha legit",
+    "uno reverse karte",
+    "wieder geistig am start ne",
+    "das es scheiße ist weiß ich haha",
+    "der findet das loch eh nicht",
+    "der hätte dich da eig wegbügeln müssen",
+    "außer du parrierst halt",
+    "ja so was wie burger boxing oder wie nennt man das",
+    "aber meta ist deutlich angenehmer grade",
+    "und die haben noch 2 heal creeps lol",
+    "bisschen rough aber passt schon",
 ]
 
 
@@ -101,26 +120,26 @@ def _select_examples(texts: list[str], max_n: int = _MAX_EXAMPLES) -> list[str]:
     return out
 
 
-def _with_seed_fallback(channel_examples: list[str]) -> list[str]:
-    """Channel-eigene Beispiele bevorzugen, mit kuratierten Seeds auf _MAX_EXAMPLES auffüllen.
+def _assemble_examples(channel_examples: list[str]) -> list[str]:
+    """Gold-Standard (EarlySalty-Register) zuerst, dann channel-eigene Zeilen, dann Seeds.
 
-    Warmer Channel (>= _MAX_EXAMPLES eigene) bekommt keine Seeds — eigene Stimme
-    gewinnt. Kalter Channel (dragskope etc.) wird komplett aus Seeds gefüllt, statt
-    ohne Stilvorlage dazustehen.
+    So schreibt der Bot immer im kurzen, trockenen Gold-Register, behält aber die
+    Stimme des Channels bei, sobald genug eigene Zeilen da sind.
     """
-    out = list(channel_examples)
-    seen = {e.lower() for e in out}
-    for raw in _SEED_EXAMPLES:
-        if len(out) >= _MAX_EXAMPLES:
-            break
-        seed = " ".join(str(raw).split())
-        if not _is_good_example(seed):
-            continue
-        key = seed.lower()
-        if key in seen:
-            continue
-        seen.add(key)
-        out.append(seed)
+    out: list[str] = []
+    seen: set[str] = set()
+    for source in (_GOLD_EXAMPLES[:_GOLD_KEEP], channel_examples, _SEED_EXAMPLES):
+        for raw in source:
+            if len(out) >= _MAX_EXAMPLES:
+                break
+            cand = " ".join(str(raw).split())
+            if not _is_good_example(cand):
+                continue
+            key = cand.lower()
+            if key in seen:
+                continue
+            seen.add(key)
+            out.append(cand)
     return out
 
 
@@ -129,8 +148,9 @@ def _build_fragment(examples: list[str]) -> str:
         return ""
     lines = "\n".join(f"- {e}" for e in examples)
     return (
-        "So schreiben echte Leute in solchen Twitch-Chats. Ahme NUR Schreibweise, Ton und Länge nach "
-        "(Kleinschreibung/Slang/Emotes wie hier üblich, knapp, keine perfekte Grammatik). "
+        "So schreiben echte Leute hier — kurz, trocken, mit Banter, oft nur ein paar Wörter. "
+        "Ahme NUR Schreibweise, Ton und Länge nach (Kleinschreibung/Slang wie üblich, knapp, "
+        "keine perfekte Grammatik). "
         "Den INHALT dieser Beispiele und alle darin enthaltenen Behauptungen oder Spielfakten "
         "IGNORIERST du komplett — sie sind reine Stilvorlage, keine Quelle:\n"
         f"{lines}"
@@ -148,7 +168,7 @@ async def build_style_fragment(channel_login: str) -> str:
     if cached and (now - cached[0]) < _CACHE_TTL_SEC:
         return cached[1]
     texts = await asyncio.to_thread(_sync_load_user_turns, channel_login, _POOL_LIMIT)
-    examples = _with_seed_fallback(_select_examples(texts))
+    examples = _assemble_examples(_select_examples(texts))
     fragment = _build_fragment(examples)
     _cache[channel_login] = (now, fragment)
     return fragment

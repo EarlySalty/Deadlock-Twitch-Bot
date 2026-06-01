@@ -1,3 +1,13 @@
+## #78 — Engagement-AI: lockerer Stammgast statt Deadlock-Roboter
+
+**Problem:** Nach der Themen-Eingrenzung war die KI zu steif — sie redete fast nur noch in ausformulierten Deadlock-Takes und ging auf lockeren Chat-Banter gar nicht mehr ein. Das wirkte wieder nach Bot, nur andersrum.
+
+**Geändert:** Die KI ist wieder ein lockerer Stammgast, der mit dem Chat vibet — und sie schreibt kürzer und trockener, an einem echten Vorbild ausgerichtet.
+
+**Wie's funktioniert:** Deadlock bleibt ihre Stärke und sie ist nur in Deadlock-Streams aktiv, aber sie zwingt das Thema nicht mehr in jede Nachricht: Banter, Reaktionen und Mitlachen sind wieder erlaubt, solange es zur Runde passt. Nachrichten, die klar an den Streamer gerichtet sind, lässt sie weiter aus, und bei fremden Themen spielt sie sich nicht als Experte auf. Für den Schreibstil dient jetzt der echte Chat-Ton eines Stamm-Streamers als Gold-Vorlage (kurz, trocken, viel Banter, oft nur ein paar Wörter) — diese Beispiele stehen im Stil-Vorbild immer ganz vorne, sodass die KI in diesem Register schreibt statt in langen Absätzen.
+
+**Betroffen:** Nur die (noch nicht scharfgeschaltete) Engagement-AI.
+
 ## #77 — Engagement-AI: schweigt, wenn kein Deadlock läuft
 
 **Problem:** Die KI hat auch in Streams geantwortet, die gerade gar kein Deadlock zeigten — bei „Just Chatting", anderen Spielen oder wenn der Kanal offline war. Sie hing nur am Chat-Inhalt, nicht daran, was im Stream tatsächlich lief.
