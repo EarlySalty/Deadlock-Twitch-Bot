@@ -1,3 +1,13 @@
+## #77 — Engagement-AI: schweigt, wenn kein Deadlock läuft
+
+**Problem:** Die KI hat auch in Streams geantwortet, die gerade gar kein Deadlock zeigten — bei „Just Chatting", anderen Spielen oder wenn der Kanal offline war. Sie hing nur am Chat-Inhalt, nicht daran, was im Stream tatsächlich lief.
+
+**Geändert:** Ein Stream-Gate vor allem anderen: Die KI wird pro Kanal nur aktiv, wenn der gerade live ist UND als Kategorie Deadlock läuft.
+
+**Wie's funktioniert:** Der Bot pflegt ohnehin für jeden Streamer einen Live-Status samt aktueller Spiel-Kategorie. Bevor die KI überhaupt über eine Antwort nachdenkt, prüft sie diesen Status (kurz zwischengespeichert, damit das nicht jede Nachricht die Datenbank trifft): Ist der Kanal offline oder läuft etwas anderes als Deadlock, bleibt sie komplett still — egal wie deadlock-lastig eine einzelne Chat-Nachricht klingt. So redet sie nur dort, wo wirklich gerade Deadlock gestreamt wird.
+
+**Betroffen:** Nur die (noch nicht scharfgeschaltete) Engagement-AI.
+
 ## #76 — Engagement-AI: nur noch Deadlock, kürzer, mit Streamer-Gespür
 
 **Problem:** Im Mehr-Kanal-Test fiel auf, dass die KI sich überall einmischte — bei Begrüßungen, Resubs, Smalltalk, sogar bei Nachrichten, die klar an den Streamer gerichtet waren. Das wirkte aufdringlich und nach Bot. Dazu zwei technische Sachen: In belebten Chats (mehrere Leute gleichzeitig) brach jede Antwort mit einem Schnittstellen-Fehler ab, und die KI hatte keinerlei Hintergrundwissen über den einzelnen Streamer.

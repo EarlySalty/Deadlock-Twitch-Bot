@@ -213,6 +213,12 @@ class EngagementPipeline:
         if settings is None or not settings.enabled:
             return HandleResult(decision=Decision.DISABLED)
 
+        # Nur wenn der Channel GERADE live ist UND Deadlock streamt — sonst Funkstille.
+        from .stream_state import is_streaming_deadlock
+
+        if not await is_streaming_deadlock(msg.channel_login):
+            return HandleResult(decision=Decision.DISABLED)
+
         if await self._is_opted_out(msg.twitch_user_id):
             return HandleResult(decision=Decision.OPTOUT)
 
