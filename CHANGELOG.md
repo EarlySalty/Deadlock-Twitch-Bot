@@ -1,3 +1,13 @@
+## #74 — Engagement-AI: großer Qualitäts-Umbau gegen „klingt wie ein Bot"
+
+**Problem:** Der KI-Stammgast, der sich in den Twitch-Chat einklinken soll, hatte zwei Kernprobleme. Erstens halluzinierte er Deadlock-Fakten — im Test erfand er ein Item samt frei erfundener Mechanik. Zweitens klang er unverkennbar nach KI: Floskeln wie „gute Frage, das kann ich gerade nicht belegen", reflexhaftes Zustimmen zu jeder Meinung, steife ganze Sätze statt Chat-Sprache.
+
+**Geändert:** Der Antwort-Aufbau wurde von Grund auf umgebaut. Die KI bekommt jetzt echte Fakten vorgesetzt und bildet sich darauf eine Meinung, statt aus dem Gedächtnis zu raten — und sie hat einen festen Charakter mit eigenem Geschmack.
+
+**Wie's funktioniert:** Vor jeder Antwort werden mehrere Faktenquellen zusammengezogen und der KI als Beleg mitgegeben: (1) Helden-/Item-Beschreibungen aus dem Deadlock-Wiki, (2) ein Stimmungsbild, das laufend aus den echten Chat-Nachrichten *aller* mitgelesenen Streams destilliert wird („wie fühlt sich die Meta gerade an"), und (3) die echten Änderungen des aktuellen Patches direkt aus den offiziellen Notes. Die KI darf nur über das reden, was in diesen Belegen steht; fehlt ein Beleg, trifft sie keine faktische Aussage, sondern weicht locker aus oder schweigt — statt einen Disclaimer abzulassen. Dazu kam ein fester Charakter („Soul"), den das Modell sich selbst geschrieben hat, plus eigene, aus allen 38 Helden samt Fähigkeiten gebildete Lieblings- und Hass-Helden — die liefern aber nur die Meinung, nicht den Ton: im Chat bleibt die KI knapp und trocken. Eiserne Regeln unterbinden das KI-Gehabe: nie zugeben, eine KI zu sein, nie über die eigene Funktionsweise reden, nicht jeder Meinung hinterherlaufen.
+
+**Betroffen:** Nur die (noch nicht scharfgeschaltete) Engagement-AI; am restlichen Bot ändert sich nichts.
+
 ## #73 — Highlight-Clips landen jetzt im dedizierten Thread
 
 **Problem:** Der Highlight-Clipper hat fertige Gameplay-Clips in den allgemeinen Bot-Log-Kanal gepostet, wo sie zwischen anderen Bot-Meldungen untergingen.

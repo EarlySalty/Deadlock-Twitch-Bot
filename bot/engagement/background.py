@@ -42,6 +42,7 @@ _AUTO_CLOSER_INTERVAL_SEC = 60 * 60
 _CONVERSATION_TRIM_INTERVAL_SEC = 24 * 60 * 60
 _CONVERSATION_KEEP_PER_CHANNEL = 500
 _TRANSCRIPT_TRIM_INTERVAL_SEC = 15 * 60
+_GLOBAL_SENTIMENT_INTERVAL_SEC = 20 * 60
 
 _started = False
 _started_lock = threading.Lock()
@@ -218,8 +219,20 @@ async def _run_conversation_trim_loop() -> None:
         await _jittered_sleep(_CONVERSATION_TRIM_INTERVAL_SEC)
 
 
+async def _run_global_sentiment_loop() -> None:
+    minimax = EngagementMinimaxClient(timeout=180.0)
+    while True:
+        try:
+            from .global_sentiment import rebuild_global_sentiment
+
+            await rebuild_global_sentiment(minimax=minimax)
+        except Exception:
+            log.exception("Background: global-sentiment loop iteration fehlgeschlagen")
+        await _jittered_sleep(_GLOBAL_SENTIMENT_INTERVAL_SEC)
+
+
 def ensure_started() -> None:
-    """Idempotent — startet die vier Background-Loops einmal pro Prozess.
+    """Idempotent — startet die Background-Loops einmal pro Prozess.
 
     Muss aus einem laufenden asyncio-Event-Loop heraus aufgerufen werden;
     aus sync-Kontext ohne laufenden Loop ist es ein No-Op.
@@ -241,8 +254,9 @@ def ensure_started() -> None:
         loop.create_task(_run_stream_transcript_loop(), name="engagement-stream-transcripts")
         loop.create_task(_run_auto_closer_loop(), name="engagement-auto-closer")
         loop.create_task(_run_conversation_trim_loop(), name="engagement-conv-trim")
+        loop.create_task(_run_global_sentiment_loop(), name="engagement-global-sentiment")
         log.info(
             "Engagement-Background-Jobs gestartet "
             "(thread-extractor=15min, match-poller=30s, stream-transcripts=on, "
-            "auto-closer=1h, conv-trim=24h)"
+            "auto-closer=1h, conv-trim=24h, global-sentiment=20min)"
         )

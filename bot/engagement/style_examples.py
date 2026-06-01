@@ -31,6 +31,30 @@ _MAX_LEN = 100
 _cache: dict[str, tuple[float, str]] = {}
 _CACHE_TTL_SEC = 600.0   # 10min
 
+# Kuratierter Stil-Fallback: echtes Deadlock-Twitch-Chat-Register (DE/EN gemischt,
+# Kleinschreibung, Slang, Emotes, kurz). Wird genutzt, wenn ein Channel noch zu
+# wenig eigene Turns hat (kalter Start) — sonst stünde das Modell ohne Stilvorlage
+# da und schreibt generisch-AI-haft. NUR Schreibweise/Ton; bewusst reine
+# Vibe-/Reaktionszeilen ohne erfundene Item-/Zahlen-Fakten (Inhalt wird eh ignoriert).
+_SEED_EXAMPLES: list[str] = [
+    "lol was war das für ein dive",
+    "brudi warum gehst du da solo rein 😭",
+    "der flick war einfach nasty ngl",
+    "ok der gap close ist kriminell",
+    "no shot dass der das überlebt hat",
+    "warum peelt da eigentlich keiner",
+    "der teamfight grad war komplett wild",
+    "der heal kam mega clutch",
+    "sheesh die combo war eklig",
+    "läuft bei dir heut richtig gut",
+    "yo that dive was actually nasty",
+    "bro why go solo in there lol",
+    "that last fight was so clean",
+    "no way he survived that one",
+    "the gap close is straight up crime",
+    "man this lane is rough rn",
+]
+
 
 def _sync_load_user_turns(channel_login: str, limit: int) -> list[str]:
     rows = query_all(
@@ -77,12 +101,35 @@ def _select_examples(texts: list[str], max_n: int = _MAX_EXAMPLES) -> list[str]:
     return out
 
 
+def _with_seed_fallback(channel_examples: list[str]) -> list[str]:
+    """Channel-eigene Beispiele bevorzugen, mit kuratierten Seeds auf _MAX_EXAMPLES auffüllen.
+
+    Warmer Channel (>= _MAX_EXAMPLES eigene) bekommt keine Seeds — eigene Stimme
+    gewinnt. Kalter Channel (dragskope etc.) wird komplett aus Seeds gefüllt, statt
+    ohne Stilvorlage dazustehen.
+    """
+    out = list(channel_examples)
+    seen = {e.lower() for e in out}
+    for raw in _SEED_EXAMPLES:
+        if len(out) >= _MAX_EXAMPLES:
+            break
+        seed = " ".join(str(raw).split())
+        if not _is_good_example(seed):
+            continue
+        key = seed.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(seed)
+    return out
+
+
 def _build_fragment(examples: list[str]) -> str:
     if not examples:
         return ""
     lines = "\n".join(f"- {e}" for e in examples)
     return (
-        "So schreiben echte Leute in diesem Chat. Ahme NUR Schreibweise, Ton und Länge nach "
+        "So schreiben echte Leute in solchen Twitch-Chats. Ahme NUR Schreibweise, Ton und Länge nach "
         "(Kleinschreibung/Slang/Emotes wie hier üblich, knapp, keine perfekte Grammatik). "
         "Den INHALT dieser Beispiele und alle darin enthaltenen Behauptungen oder Spielfakten "
         "IGNORIERST du komplett — sie sind reine Stilvorlage, keine Quelle:\n"
@@ -91,12 +138,17 @@ def _build_fragment(examples: list[str]) -> str:
 
 
 async def build_style_fragment(channel_login: str) -> str:
-    """Few-Shot-Stilblock pro Channel; cached 10min. "" wenn zu wenig Material."""
+    """Few-Shot-Stilblock pro Channel; cached 10min.
+
+    Channel-eigene Zeilen bevorzugt, mit kuratierten Seeds aufgefüllt — der Block
+    ist daher auch auf kaltem Channel nie leer (gegen generisch-AI-haftes Schreiben).
+    """
     now = time.time()
     cached = _cache.get(channel_login)
     if cached and (now - cached[0]) < _CACHE_TTL_SEC:
         return cached[1]
     texts = await asyncio.to_thread(_sync_load_user_turns, channel_login, _POOL_LIMIT)
-    fragment = _build_fragment(_select_examples(texts))
+    examples = _with_seed_fallback(_select_examples(texts))
+    fragment = _build_fragment(examples)
     _cache[channel_login] = (now, fragment)
     return fragment

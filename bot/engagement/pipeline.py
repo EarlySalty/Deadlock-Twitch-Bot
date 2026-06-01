@@ -254,6 +254,15 @@ class EngagementPipeline:
 
         system_prompt = build_baseline_system_prompt(streamer_login=msg.channel_login)
         try:
+            from .soul_store import get_soul_extension_fragment
+
+            soul_ext = await get_soul_extension_fragment()
+            if soul_ext:
+                system_prompt = f"{system_prompt}\n\n{soul_ext}"
+        except Exception:
+            log.exception("Engagement: soul-extension fehlgeschlagen")
+
+        try:
             persona = await sample_tone(msg.channel_login)
             system_prompt = f"{system_prompt}\n\n{persona.to_prompt_fragment()}"
         except Exception:
@@ -312,6 +321,26 @@ class EngagementPipeline:
                 system_prompt = f"{system_prompt}\n\n{transcript_fragment}"
         except Exception:
             log.exception("Engagement: stream-transcript-context fehlgeschlagen")
+
+        try:
+            from .global_sentiment import get_sentiment_fragment
+
+            sentiment_fragment = await get_sentiment_fragment()
+            if sentiment_fragment:
+                system_prompt = f"{system_prompt}\n\n{sentiment_fragment}"
+        except Exception:
+            log.exception("Engagement: global-sentiment-context fehlgeschlagen")
+
+        try:
+            from .deadlock_patches import build_patch_fragment, get_patch_digest_fragment
+
+            patch_fragment = await build_patch_fragment(msg.content)
+            if not patch_fragment:
+                patch_fragment = await get_patch_digest_fragment(msg.content)
+            if patch_fragment:
+                system_prompt = f"{system_prompt}\n\n{patch_fragment}"
+        except Exception:
+            log.exception("Engagement: deadlock-patch-context fehlgeschlagen")
 
         if settings.persona_override:
             system_prompt = (
