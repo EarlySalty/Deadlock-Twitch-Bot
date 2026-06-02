@@ -7,12 +7,16 @@ import time
 from pathlib import Path
 
 from .config import CLIPS_DIR
-from .config import CLIP_PADDING_SECONDS
+from .config import CLIP_POST_ROLL_SECONDS
+from .config import CLIP_PRE_ROLL_SECONDS
+from .config import MAX_CLIP_SECONDS
 from .config import POLL_INTERVAL_SECONDS
 from .deadlock_client import get_match_history
 from .deadlock_client import get_match_metadata
 from .demo_analyzer import KillMoment
 from .demo_analyzer import analyze_match
+from .demo_analyzer import detect_all_events
+from .demo_analyzer import moments_to_events
 from .demo_downloader import cleanup_demo
 from .demo_downloader import get_demo_path
 from .dm_sender import send_highlight_to_channel
@@ -156,31 +160,30 @@ class HighlightClipperWorker:
         match_start_unix = int(match["start_time"])
         match_duration_s = int(match.get("match_duration_s") or 0)
 
+        # Demo-First: Events direkt aus Replay lesen, kein API-based detect_events mehr
         match_info = await get_match_metadata(match_id)
-        events = detect_events(steam_id, match_info)
-        if not events:
-            mark_match_processed(state, twitch_login, match_id)
-            return
-
-        # Demo-Analyse: Combo-Scoring für Kills
         hero_id = _get_hero_id(steam_id, match_info)
-        demo_moments: list[KillMoment] = []
-        if hero_id is not None:
-            demo_path = await get_demo_path(match_id)
-            if demo_path is not None:
-                try:
-                    kill_times = [float(e.game_time_s) for e in events]
-                    demo_moments = await analyze_match(demo_path, hero_id, kill_times)
-                    log.info(
-                        "HighlightClipper: Demo analysiert für %s match=%s — %s Kills gefunden",
-                        twitch_login, match_id, len(demo_moments),
-                    )
-                finally:
-                    cleanup_demo(match_id)
+        events: list[HighlightEvent] = []
 
-        # Events mit Demo-Scoring anreichern
-        if demo_moments:
-            events = _score_events_with_demo(events, demo_moments)
+        demo_path = await get_demo_path(match_id)
+        if demo_path is not None:
+            try:
+                moments = await detect_all_events(demo_path, hero_id or 0, twitch_login)
+                log.info(
+                    "HighlightClipper: Demo analysiert für %s match=%s — %s Kills (%s clutch)",
+                    twitch_login, match_id, len(moments),
+                    sum(1 for m in moments if m.is_clutch),
+                )
+                events = moments_to_events(moments, min_score=2)
+            finally:
+                cleanup_demo(match_id)
+
+        # Fallback auf API-Erkennung wenn Demo nicht verfügbar
+        if not events:
+            api_events = detect_events(steam_id, match_info)
+            if api_events:
+                log.info("HighlightClipper: Demo-Analyse fehlgeschlagen, nutze API-Fallback für %s", twitch_login)
+                events = api_events
 
         vod = await find_vod_for_match(
             channel_id,
@@ -202,13 +205,12 @@ class HighlightClipperWorker:
         vod_offset_s = match_start_unix - int(vod["vod_started_at"])
 
         for index, event in enumerate(events, start=1):
-            pre_roll = max(CLIP_PADDING_SECONDS, event.pre_roll_s)
-            clip_start_s = max(0, vod_offset_s + event.game_time_s - pre_roll)
+            clip_start_s = max(0, vod_offset_s + event.game_time_s - CLIP_PRE_ROLL_SECONDS)
             clip_end_s = max(
                 clip_start_s + 1,
-                vod_offset_s + event.game_time_s + event.duration_s + CLIP_PADDING_SECONDS,
+                vod_offset_s + event.game_time_s + event.duration_s + CLIP_POST_ROLL_SECONDS,
             )
-            clip_end_s = min(clip_end_s, clip_start_s + 60)
+            clip_end_s = min(clip_end_s, clip_start_s + MAX_CLIP_SECONDS)
             output_path = clip_dir / f"{index:02d}_{event.event_type}_{event.game_time_s}.mp4"
             downloaded = await download_clip(
                 str(vod["vod_id"]),

@@ -57,6 +57,138 @@ class KillMoment:
         return score
 
 
+async def detect_all_events(
+    demo_path: Path,
+    hero_id: int,
+    twitch_login: str,
+) -> list[KillMoment]:
+    """
+    Vollständige Demo-basierte Event-Erkennung ohne API-Abhängigkeit.
+    Erkennt direkt alle interessanten Momente aus dem Replay.
+    """
+    loop = asyncio.get_event_loop()
+    try:
+        abilities = await loop.run_in_executor(None, _parse_abilities, demo_path)
+        raw_kills = await loop.run_in_executor(None, _parse_kills_from_demo, demo_path, twitch_login)
+    except Exception:
+        log.exception("HighlightClipper: Demo-Vollanalyse fehlgeschlagen")
+        return []
+
+    if not raw_kills:
+        log.warning("HighlightClipper: Keine Kills im Demo für '%s' gefunden", twitch_login)
+        return []
+
+    player_abilities = [(t, name) for t, hid, name in abilities if hid == hero_id]
+
+    # Entity-Index via Demo-Kill-Ticks bestimmen
+    kill_ticks = [k["tick"] for k in raw_kills]
+    entity_idx = await loop.run_in_executor(None, _find_player_entity, demo_path, kill_ticks)
+
+    moments: list[KillMoment] = []
+    window = _COMBO_WINDOW_S * _TICK_RATE
+
+    for kill_data in raw_kills:
+        kill_tick = kill_data["tick"]
+        combo = [name for t, name in player_abilities if kill_tick - window <= t <= kill_tick]
+        high_impact = any(a in _HIGH_IMPACT for a in combo)
+        label = _build_combo_label(combo)
+
+        health_pct = 1.0
+        if entity_idx is not None:
+            health_pct = await loop.run_in_executor(
+                None, _get_min_health_in_window,
+                demo_path, entity_idx,
+                max(0, kill_tick - 320),
+                kill_tick + 960,
+                320,
+            )
+
+        is_clutch = health_pct < 0.35
+        moments.append(KillMoment(
+            game_time_s=kill_tick / _TICK_RATE,
+            tick=kill_tick,
+            combo_abilities=combo,
+            combo_score=len(combo),
+            has_high_impact=high_impact,
+            combo_label=label,
+            health_pct=health_pct,
+            is_clutch=is_clutch,
+        ))
+
+    return moments
+
+
+def moments_to_events(moments: list[KillMoment], min_score: int = 0) -> list:
+    """
+    Konvertiert Demo-KillMoments zu HighlightEvents für den Clip-Worker.
+    Detectiert Multikills, Teamfights und Solo-Clutch-Kills direkt aus Demo-Daten.
+    """
+    from .event_detector import HighlightEvent, _multikill_name
+    import dataclasses as dc
+
+    if not moments:
+        return []
+
+    sorted_m = sorted(moments, key=lambda m: m.tick)
+    events: list[HighlightEvent] = []
+    used: set[int] = set()
+
+    # 1) Multikills: ≥2 Kills in 15s
+    for i, m in enumerate(sorted_m):
+        if m.tick in used:
+            continue
+        cluster = [m]
+        for m2 in sorted_m[i + 1:]:
+            if m2.tick - cluster[0].tick <= 15 * _TICK_RATE:
+                cluster.append(m2)
+            else:
+                break
+        if len(cluster) >= 2:
+            best = max(cluster, key=lambda x: x.excitement_score)
+            pre_roll = min(int(max(x.combo_score for x in cluster) * 3 + 15), 35)
+            events.append(HighlightEvent(
+                event_type="multikill",
+                game_time_s=int(cluster[0].game_time_s),
+                duration_s=int(cluster[-1].game_time_s - cluster[0].game_time_s),
+                kill_count=len(cluster),
+                label=f"{_multikill_name(len(cluster))} ({len(cluster)} Kills) — {best.combo_label}",
+                pre_roll_s=pre_roll,
+            ))
+            for c in cluster:
+                used.add(c.tick)
+
+    # 2) Solo Clutch-Kills (excitement_score >= min_score)
+    for m in sorted_m:
+        if m.tick in used:
+            continue
+        if m.excitement_score < max(min_score, 1):
+            continue
+        hp_tag = f"🔴 {int(m.health_pct*100)}%HP" if m.health_pct < 0.20 else (
+                 f"🟠 {int(m.health_pct*100)}%HP" if m.health_pct < 0.35 else
+                 f"🟡 {int(m.health_pct*100)}%HP" if m.health_pct < 0.50 else "")
+        label_parts = []
+        if m.is_clutch:
+            label_parts.append("Clutch Kill")
+        else:
+            label_parts.append("Kill")
+        if hp_tag:
+            label_parts.append(hp_tag)
+        if m.combo_label and m.combo_label != "Kill":
+            label_parts.append(m.combo_label)
+        pre_roll = min(int(m.combo_score * 3 + 15), 35)
+        events.append(HighlightEvent(
+            event_type="close_fight",
+            game_time_s=int(m.game_time_s),
+            duration_s=0,
+            kill_count=1,
+            label=" — ".join(label_parts),
+            pre_roll_s=pre_roll,
+        ))
+        used.add(m.tick)
+
+    return sorted(events, key=lambda e: e.game_time_s)
+
+
 async def analyze_match(
     demo_path: Path,
     hero_id: int,
@@ -112,6 +244,44 @@ async def analyze_match(
         ))
 
     return moments
+
+
+def _parse_kills_from_demo(demo_path: Path, twitch_login: str) -> list[dict]:
+    """
+    Liest alle Kills des Spielers direkt aus dem Demo — keine API nötig.
+    Sucht nach attackername == twitch_login (case-insensitive).
+    """
+    result = _run_boon(["events", str(demo_path)])
+    kills: list[dict] = []
+    current_tick: int | None = None
+    in_death = False
+    current_attacker: str = ""
+    current_pawn: int | None = None
+
+    login_lower = twitch_login.lower()
+
+    for line in result.splitlines():
+        m = re.match(r"\[tick (\d+)\] player_death", line)
+        if m:
+            current_tick = int(m.group(1))
+            in_death = True
+            current_attacker = ""
+            current_pawn = None
+            continue
+        if in_death:
+            if line.strip() == "--" or (line.startswith("[tick") and "player_death" not in line):
+                if current_attacker.lower() == login_lower and current_tick is not None:
+                    kills.append({"tick": current_tick, "pawn": current_pawn})
+                in_death = False
+                continue
+            m_name = re.match(r"\s+attackername: (.+)", line)
+            if m_name:
+                current_attacker = m_name.group(1).strip()
+            m_pawn = re.match(r"\s+attacker_pawn: (-?\d+)", line)
+            if m_pawn:
+                current_pawn = int(m_pawn.group(1))
+
+    return kills
 
 
 def _find_player_entity(demo_path: Path, kill_ticks: list[int]) -> int | None:
