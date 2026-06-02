@@ -220,6 +220,31 @@ PROMO_COOLDOWN_MIN: int = _PROMO_COOLDOWN_MIN
 PROMO_COOLDOWN_MAX: int = _PROMO_COOLDOWN_MAX
 
 # ---------------------------------------------------------------------------
+# Fake-/Scam-Server-Warnung (läuft über dieselbe Promo-Engine, eigener Cooldown)
+# ---------------------------------------------------------------------------
+# Warnt Zuschauer vor Discord-Servern, die sich als deutsche Deadlock-Community
+# ausgeben, aber nicht offiziell sind. Hängt im Promo-Sendepfad: ist der
+# Warn-Cooldown abgelaufen, kommt bei einer normalen Promo-Gelegenheit die
+# Warnung statt der Discord-Werbung – Promos und Warnung wechseln sich so ab.
+# Wortlaut bewusst mit "könnte/möglicherweise"-Hedge (kein harter Scam-Vorwurf).
+SCAM_WARNING_ENABLED: bool = True
+SCAM_WARNING_COOLDOWN_MIN: int = 45  # frühestens alle x Minuten pro Kanal
+SCAM_WARNING_MESSAGES: list[str] = [
+    (
+        "⚠️ Achtung: „Deadlock Discord Deutschland\" und „Deadlock German Competitiv HUB\" "
+        "sind NICHT unsere Server und könnten Fake/Scam sein. "
+        "Unser einziger offizieller Discord: {invite}"
+    ),
+    (
+        "⚠️ Vorsicht vor „Deadlock Discord Deutschland\" und „Deadlock German Competitiv HUB\" "
+        "– das sind nicht wir und könnte Scam sein. Offizieller Discord: {invite}"
+    ),
+]
+
+SCAM_WARNING_ENABLED = bool(SCAM_WARNING_ENABLED) and bool(SCAM_WARNING_MESSAGES)
+SCAM_WARNING_COOLDOWN_MIN = max(1, int(SCAM_WARNING_COOLDOWN_MIN))
+
+# ---------------------------------------------------------------------------
 # Deadlock Zugangsfragen (Invite-Only Hinweise)
 # ---------------------------------------------------------------------------
 DEADLOCK_INVITE_REPLY: str = (

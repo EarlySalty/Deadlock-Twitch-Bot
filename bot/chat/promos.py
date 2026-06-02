@@ -49,6 +49,9 @@ from .constants import (
     PROMO_VIEWER_SPIKE_MIN_STATS_SAMPLES,
     PROMO_VIEWER_SPIKE_SESSION_SAMPLE_LIMIT,
     PROMO_VIEWER_SPIKE_STATS_SAMPLE_LIMIT,
+    SCAM_WARNING_COOLDOWN_MIN,
+    SCAM_WARNING_ENABLED,
+    SCAM_WARNING_MESSAGES,
     SUBSCRIPTION_PLANS_ENABLED,
 )
 
@@ -926,6 +929,49 @@ class PromoMixin:
         last_map[login] = chosen
         return self._format_promo_template(chosen, invite)
 
+    def _scam_warning_due(self, login: str, now: float, *, reason: str) -> bool:
+        """True, wenn statt einer Promo die Fake-Server-Warnung dran ist.
+
+        Nur bei normalen Promo-Gelegenheiten ("promo"/"chat_activity") – nicht bei
+        Viewer-Spike oder Lurker-Tax, die einen eigenen Zweck haben. Eigener
+        Cooldown pro Kanal sorgt dafür, dass die Warnung regelmäßig, aber seltener
+        als Promos kommt.
+        """
+        if not SCAM_WARNING_ENABLED:
+            return False
+        if reason not in ("promo", "chat_activity"):
+            return False
+        last_map = getattr(self, "_last_scam_warning_sent", None)
+        if not isinstance(last_map, dict):
+            last_map = {}
+            self._last_scam_warning_sent = last_map
+        last = last_map.get(login)
+        if last is None:
+            # Erste Promo-Gelegenheit pro Kanal: Timer nur säen, normal werben.
+            # So kommt die Warnung erst nach Ablauf des Intervalls – nicht direkt
+            # beim Bot-Start bzw. nach jedem Neustart (Cooldown ist in-memory).
+            last_map[login] = now
+            return False
+        cooldown_sec = float(SCAM_WARNING_COOLDOWN_MIN) * 60.0
+        if (now - last) < cooldown_sec:
+            return False
+        return True
+
+    def _build_scam_warning_text(self, login: str, invite: str) -> str | None:
+        """Festen Warntext wählen (rotiert, nie zweimal denselben hintereinander)."""
+        messages = SCAM_WARNING_MESSAGES
+        if not messages:
+            return None
+        last_map = getattr(self, "_last_scam_warning_text", None)
+        if not isinstance(last_map, dict):
+            last_map = {}
+            self._last_scam_warning_text = last_map
+        last_text = last_map.get(login)
+        pool = [m for m in messages if m != last_text] if len(messages) > 1 else messages
+        chosen = secrets.choice(pool)
+        last_map[login] = chosen
+        return self._format_promo_template(chosen, invite)
+
     def _promo_blocked_by_plan_or_flag(self, login: str) -> bool:
         """Returns True wenn Bot-Werbung fuer diesen Streamer dauerhaft blockiert ist
         (promo_disabled=1 oder Plan-Entitlement chat.promos.disable). Greift VOR jeder
@@ -975,6 +1021,23 @@ class PromoMixin:
         invite, is_specific = await self._get_promo_invite(login)
         if not invite:
             return False
+
+        # Statt der Discord-Werbung gelegentlich die Fake-Server-Warnung posten.
+        # Eigener Cooldown -> Promos und Warnung wechseln sich von selbst ab.
+        if self._scam_warning_due(login, now, reason=reason):
+            warn_text = self._build_scam_warning_text(login, invite)
+            if warn_text:
+                warned = await self._send_announcement(
+                    self._make_promo_channel(login, channel_id),
+                    warn_text,
+                    color="orange",
+                    source="scam_warning",
+                )
+                if not warned:
+                    return False
+                self._mark_promo_sent(login, now, reason=reason)
+                self._last_scam_warning_sent[login] = now
+                return True
 
         msg = self._build_promo_text(login, invite, reason=reason)
         if not msg:

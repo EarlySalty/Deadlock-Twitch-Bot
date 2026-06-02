@@ -180,6 +180,7 @@ if TWITCHIO_AVAILABLE:
             self._promo_activity: dict[str, deque[tuple[float, str]]] = {}
             self._promo_chatter_dedupe: dict[str, dict[str, float]] = {}
             self._last_promo_viewer_spike: dict[str, float] = {}
+            self._last_scam_warning_sent: dict[str, float] = {}  # login -> monotonic timestamp
             self._promo_seen_chatters: dict[str, set[str]] = {}
             self._promo_seen_chatters_ts: dict[str, float] = {}
             self._promo_task: asyncio.Task | None = None
