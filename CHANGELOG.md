@@ -1,3 +1,13 @@
+## #85 — Admin-Dashboard: Affiliate-Abrechnung repariert + Admin-Login hält 2 Wochen
+
+**Problem:** Zwei Dinge im Admin-Bereich. Erstens warf die Affiliate-Abrechnung beim Öffnen einen Server-Fehler (500) und lud gar nicht — die Datenbank-Abfrage fragte eine Spalte („Provisionssatz") ab, die es in der Vertriebler-Konten-Tabelle nie gegeben hat. Zweitens fiel die Admin-Anmeldung schon nach wenigen Stunden wieder raus (die Sitzung galt nur 6 Stunden), was sich anfühlte, als wäre das Dashboard ständig „tot": Oberfläche lädt, aber jede Aktion läuft ins Leere, weil man im Hintergrund längst abgemeldet war.
+
+**Geändert:** Die nicht existierende Spalte fliegt aus der Abrechnungs-Abfrage. Die Gültigkeit der Admin-Sitzung steigt von 6 Stunden auf 2 Wochen.
+
+**Wie's funktioniert:** Provisionen werden ohnehin als fester Betrag pro Buchung gespeichert, nicht als Satz am Konto — die Abfrage liest jetzt nur noch tatsächlich vorhandene Felder, der 500er ist weg und die Abrechnungs-Liste lädt wieder. Bei der Sitzung wurden beide beteiligten Lebensdauern angehoben: die zentrale Login-Sitzung (über die der Admin-Zugang läuft) und die davon abgeleitete Dashboard-Sitzung stehen jetzt auf 14 Tagen und verlängern sich bei jeder Nutzung automatisch — einmal anmelden reicht damit praktisch für zwei Wochen, statt mehrmals täglich neu einloggen zu müssen.
+
+**Betroffen:** Admin-intern (Affiliate-Verwaltung und Login-Komfort), für Zuschauer und Streamer nichts sichtbar.
+
 ## #84 — Tracking-Tabelle: vestigiale Alt-Spalten entfernt
 
 **Problem:** Auf der Tracking-Tabelle lagen noch vier Spalten aus einem alten Schema (Beschreibung des letzten Link-Checks, Link-Status, „hinzugefügt von", Zeitpunkt des letzten Checks) — partner-klingende Reste, die seit Langem von keinem Code mehr geschrieben oder gelesen wurden. Tot, aber verwirrend, weil sie auf der „nur Tracking"-Tabelle nach Partner-Daten aussehen.

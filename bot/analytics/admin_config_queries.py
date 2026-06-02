@@ -140,7 +140,6 @@ def load_admin_billing_affiliates() -> dict[str, Any]:
                 email,
                 stripe_account_id,
                 stripe_connect_status,
-                commission_rate,
                 updated_at,
                 created_at
             FROM affiliate_accounts
@@ -154,9 +153,11 @@ def load_admin_billing_affiliates() -> dict[str, Any]:
             "stripeAccountId": _row_get_value(row, "stripe_account_id", 2, None),
             "status": _row_get_value(row, "stripe_connect_status", 3, None),
             "payoutEmail": _row_get_value(row, "email", 1, None),
-            "commissionRate": _row_get_value(row, "commission_rate", 4, None),
-            "updatedAt": _row_get_value(row, "updated_at", 5, None)
-            or _row_get_value(row, "created_at", 6, None),
+            # affiliate_accounts hat keine commission_rate-Spalte; Provisionen liegen
+            # absolut pro Buchung in affiliate_commissions.commission_cents.
+            "commissionRate": None,
+            "updatedAt": _row_get_value(row, "updated_at", 4, None)
+            or _row_get_value(row, "created_at", 5, None),
         }
         for row in rows
     ]

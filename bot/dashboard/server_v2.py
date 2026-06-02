@@ -326,8 +326,8 @@ class DashboardV2Server(
         )
         # Discord Admin nutzt einen eigenen Cookie, der mit dem Discord Dashboard geteilt wird
         self._discord_admin_cookie_name = "master_dash_session"
-        # Admin Discord sessions sind 24h gültig (statt der generischen 6h)
-        self._discord_admin_session_ttl = 24 * 3600
+        # Admin Discord sessions sind 2 Wochen gültig (statt der generischen 6h)
+        self._discord_admin_session_ttl = 14 * 24 * 3600
         self._discord_admin_state_ttl = 600
         self._discord_admin_oauth_states: dict[str, dict[str, Any]] = {}
         self._discord_admin_sessions: dict[str, dict[str, Any]] = {}
