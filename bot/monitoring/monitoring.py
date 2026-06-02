@@ -1143,9 +1143,12 @@ class TwitchMonitoringMixin(_EventSubMixin, _ExpSessionsMixin, _SessionsMixin, _
                            live_ping_role_id, COALESCE(live_ping_enabled, 1) AS live_ping_enabled
                       FROM twitch_streamers_partner_state
                     UNION ALL
-                    SELECT s.twitch_login, s.twitch_user_id, s.require_discord_link,
+                    -- Monitored-only Kanaele sind keine Partner: Partner-Config wird
+                    -- nicht aus der Tracking-Tabelle gelesen, sondern als Default gesetzt
+                    -- (entspricht den Spalten-Defaults). archived_at bleibt echtes Monitoring-Feld.
+                    SELECT s.twitch_login, s.twitch_user_id, 0 AS require_discord_link,
                            s.archived_at::text AS archived_at, 0 AS is_partner_active, s.discord_user_id,
-                           s.live_ping_role_id, COALESCE(s.live_ping_enabled, 1) AS live_ping_enabled
+                           NULL AS live_ping_role_id, 1 AS live_ping_enabled
                       FROM twitch_streamers s
                      WHERE COALESCE(s.is_monitored_only, 0) = 1
                        AND NOT EXISTS (

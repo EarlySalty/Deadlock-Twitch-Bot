@@ -1,3 +1,13 @@
+## #82 — Partner-DB-Konsolidierung: Monitoring-Loop liest keine Partner-Config mehr aus der Tracking-Tabelle
+
+**Problem:** Die Überwachungs-Schleife lud auch für reine Beobachtungs-Kanäle (keine Partner) Partner-Einstellungen wie „Discord-Link nötig" oder die Live-Ping-Rolle aus der breiten Tracking-Tabelle mit — Werte, die für einen Nicht-Partner nichts bedeuten. Das war der letzte offene Leser aus der Aufräumarbeit von #80/#81.
+
+**Geändert:** Für Nicht-Partner setzt die Schleife diese Partner-Felder jetzt auf ihre Standardwerte, statt sie aus der Tracking-Tabelle zu lesen. Das echte Beobachtungs-Feld „archiviert?" bleibt unangetastet.
+
+**Wie's funktioniert:** Aktive Partner kommen ohnehin schon aus der zentralen Partner-Sicht; nur der Zweig für reine Beobachtungs-Kanäle griff noch auf die gespiegelten Partner-Spalten zu. Für solche Kanäle sind diese Felder jetzt fest auf den Standard gesetzt (kein Link-Zwang, keine Live-Ping-Rolle) — exakt das, was dort heute ohnehin drinstand. Damit liest kein Programmteil mehr Partner-Status aus der Tracking-Tabelle; die doppelten Spalten lassen sich in einem späteren Schritt gefahrlos entfernen.
+
+**Betroffen:** Nichts sichtbar — interne Datenhygiene, Abschluss der Leser-Umstellung.
+
 ## #81 — Partner-Status-Konsolidierung: zwei weitere Leser auf die zentrale Wahrheit
 
 **Problem:** Mehrere Programmteile lasen Partner-Eigenschaften (z. B. „verifiziert seit", Raid-/Live-Ping-Einstellungen) direkt aus der breiten Tracking-Tabelle statt aus der zentralen Partner-Sicht. Dort liegen diese Eigenschaften nur als gespiegelte Kopie — pflegt man denselben Wert an zwei Orten, driften die beiden Stände früher oder später auseinander. Das ist die Fortsetzung der Aufräumarbeit aus #80.
