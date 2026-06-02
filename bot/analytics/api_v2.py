@@ -2738,6 +2738,7 @@ class AnalyticsV2Mixin(
                     "isLocalhost": False,
                     "canViewAllStreamers": False,
                     "twitchLogin": None,
+                    "adminDefaultStreamer": None,
                     "displayName": None,
                     "partnerStatus": None,
                     "technicalPauseReason": None,
@@ -2802,6 +2803,14 @@ class AnalyticsV2Mixin(
                 "entitlements": list(_plan_entitlements("bundle_analysis_raid_boost")),
             }
 
+        # Fuer Admins ohne eigenes twitch_login in der Session (z. B. Discord-Admin):
+        # Wenn es genau einen bekannten Admin-Login gibt, diesen als Default-Streamer
+        # melden, damit das Dashboard auf den eigenen Kanal statt auf den alphabetisch
+        # ersten Partner defaultet.
+        admin_default_streamer = None
+        if auth_level in ("localhost", "admin") and len(_TWITCH_ADMIN_LOGINS) == 1:
+            admin_default_streamer = next(iter(_TWITCH_ADMIN_LOGINS))
+
         return web.json_response(
             {
                 "authenticated": is_authenticated,
@@ -2812,6 +2821,7 @@ class AnalyticsV2Mixin(
                 "isLocalhost": auth_level == "localhost",
                 "canViewAllStreamers": can_view_all_streamers,
                 "twitchLogin": session.get("twitch_login"),
+                "adminDefaultStreamer": admin_default_streamer,
                 "displayName": session.get("display_name"),
                 "partnerStatus": access_state.get("partner_status"),
                 "technicalPauseReason": access_state.get("technical_pause_reason"),

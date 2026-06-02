@@ -9,6 +9,7 @@ export interface AuthStatus {
   isLocalhost: boolean;
   canViewAllStreamers: boolean;
   twitchLogin?: string | null;
+  adminDefaultStreamer?: string | null;
   displayName?: string | null;
   partnerStatus?: 'active' | 'archived' | 'departnered' | 'non_partner' | 'token_error' | 'blocked' | null;
   technicalPauseReason?: string | null;

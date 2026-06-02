@@ -158,6 +158,7 @@ function AnalyticsDashboard() {
   useEffect(() => {
     const fallbackStreamer =
       authStatus?.twitchLogin ??
+      authStatus?.adminDefaultStreamer ??
       (isDemoShell ? dashboardRuntimeConfig.defaultDemoProfile : null);
     if (!hasAutoSetStreamer.current && fallbackStreamer) {
       setStreamer(fallbackStreamer);

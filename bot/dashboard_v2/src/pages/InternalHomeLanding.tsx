@@ -638,13 +638,17 @@ export function InternalHomeLanding() {
     if (loadingAuth || !isAdminView || loadingStreamers) return;
     if (normalizedSelectedStreamer && partnerLoginSet.has(normalizedSelectedStreamer)) return;
     const ownLogin = authStatus?.twitchLogin?.trim().toLowerCase() || '';
+    const adminDefault = authStatus?.adminDefaultStreamer?.trim().toLowerCase() || '';
     const fallbackStreamer =
       ownLogin && partnerLoginSet.has(ownLogin)
         ? ownLogin
-        : partnerStreamers[0]?.login || null;
+        : adminDefault && partnerLoginSet.has(adminDefault)
+          ? adminDefault
+          : null;
     if (fallbackStreamer !== normalizedSelectedStreamer) setSelectedStreamer(fallbackStreamer);
   }, [
     authStatus?.twitchLogin,
+    authStatus?.adminDefaultStreamer,
     isAdminView,
     loadingAuth,
     loadingStreamers,
@@ -670,20 +674,41 @@ export function InternalHomeLanding() {
   }, [isAdminView, loadingAuth, normalizedSelectedStreamer]);
 
   if (!canRequestInternalHome) {
-    const emptyAdminState =
+    const noPartnersAtAll =
       !loadingAuth && isAdminView && !loadingStreamers && partnerStreamers.length === 0;
+    const needsAdminPick =
+      !loadingAuth && isAdminView && !loadingStreamers && partnerStreamers.length > 0;
 
     return (
       <div className="internal-home-vibe relative min-h-screen px-3 py-4 md:px-6 md:py-6">
         <BackgroundBlobs />
         <div className="relative mx-auto max-w-[1440px]">
           <div className="panel-card rounded-2xl p-6 md:p-8">
-            {emptyAdminState ? (
+            {noPartnersAtAll ? (
               <div className="space-y-2">
                 <h2 className="text-xl font-bold text-white">Kein Partner auswaehlbar</h2>
                 <p className="text-sm text-text-secondary">
                   In der Admin-Ansicht werden nur aktive Partner-Profile angezeigt.
                 </p>
+              </div>
+            ) : needsAdminPick ? (
+              <div className="space-y-3">
+                <h2 className="text-xl font-bold text-white">Partner auswaehlen</h2>
+                <p className="text-sm text-text-secondary">
+                  Waehle einen Partner, dessen Dashboard du ansehen moechtest.
+                </p>
+                <select
+                  value={normalizedSelectedStreamer || ''}
+                  onChange={(event) => setSelectedStreamer(event.target.value || null)}
+                  className="w-full max-w-sm rounded-xl border border-border bg-background/80 px-3 py-2 text-sm font-medium text-white outline-none transition-colors focus:border-border-hover"
+                >
+                  <option value="">— Partner waehlen —</option>
+                  {partnerStreamers.map((channel) => (
+                    <option key={channel.login} value={channel.login}>
+                      {channel.login}
+                    </option>
+                  ))}
+                </select>
               </div>
             ) : (
               <div className="flex items-center gap-3 text-text-secondary">
