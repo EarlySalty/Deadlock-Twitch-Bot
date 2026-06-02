@@ -1,3 +1,13 @@
+## #83 — Partner-DB-Konsolidierung: doppelte Partner-Spalten endgültig entfernt
+
+**Problem:** Partner-Eigenschaften (Verifizierungs-Status, Raid-Schalter, Stumm-Flags, Live-Ping-Einstellungen, Discord-Link-Pflicht) lagen jahrelang in **zwei** Tabellen gleichzeitig — einmal in der schmalen Partner-Tabelle (die eigentliche Wahrheit) und einmal als gespiegelte Kopie in der breiten Tracking-Tabelle. Zwei Pflegeorte für denselben Wert heißt: sie können auseinanderlaufen, und genau dieser Drift war die Wurzel der wiederkehrenden „mal stimmt der Partner-Status, mal nicht"-Verwirrung (siehe #80–#82).
+
+**Geändert:** Die elf gespiegelten Spalten wurden aus der Tracking-Tabelle entfernt. Der Partner-Status lebt jetzt an genau einer Stelle.
+
+**Wie's funktioniert:** Voraussetzung war die Vorarbeit aus #80–#82 — erst nachdem nachweislich kein Programmteil diese Spalten mehr aus der Tracking-Tabelle liest und die zentrale Schreib-Stelle sie nicht mehr dorthin spiegelt, sind sie „tot" und können weg. Ein versionierter Migrationsschritt legt beim Start einmalig ein vollständiges Backup der Tracking-Tabelle an und entfernt dann die elf Duplikat-Spalten; er greift nur solange die Alt-Spalten existieren und läuft sonst als No-op. Reine Tracking-Felder (Beobachtungs-Archivierung, „nur beobachtet"-Markierung, Identität) bleiben unangetastet. Ergebnis: eine einzige Quelle für den Partner-Status, kein Drift mehr möglich, und die ohnehin kanonische Lese-Sicht zieht ihre Werte unverändert aus der Partner-Tabelle.
+
+**Betroffen:** Für Zuschauer und Streamer nichts sichtbar — interne Datenhygiene, Abschluss der Partner-DB-Konsolidierung.
+
 ## #82 — Partner-DB-Konsolidierung: Monitoring-Loop liest keine Partner-Config mehr aus der Tracking-Tabelle
 
 **Problem:** Die Überwachungs-Schleife lud auch für reine Beobachtungs-Kanäle (keine Partner) Partner-Einstellungen wie „Discord-Link nötig" oder die Live-Ping-Rolle aus der breiten Tracking-Tabelle mit — Werte, die für einen Nicht-Partner nichts bedeuten. Das war der letzte offene Leser aus der Aufräumarbeit von #80/#81.

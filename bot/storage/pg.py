@@ -103,7 +103,7 @@ ENV_DSN = "TWITCH_ANALYTICS_DSN"
 _DB_FINGERPRINT_SALT = b"deadlock.analytics-db-fingerprint.v1"
 _DB_FINGERPRINT_ITERATIONS = 100_000
 _RUNTIME_SCHEMA_COMPONENT = "storage_pg"
-_RUNTIME_SCHEMA_VERSION = 5
+_RUNTIME_SCHEMA_VERSION = 6
 _RUNTIME_SCHEMA_BOOTSTRAP_ENV = "TWITCH_ALLOW_RUNTIME_SCHEMA_BOOTSTRAP"
 
 
@@ -907,6 +907,44 @@ def _record_runtime_schema_version(conn: psycopg.Connection, version: int) -> No
     )
 
 
+def _drop_legacy_streamer_lifecycle_columns(conn: psycopg.Connection) -> None:
+    """Entfernt die Partner-Lifecycle-Duplikate aus twitch_streamers.
+
+    Diese Spalten leben kanonisch in twitch_partners; auf twitch_streamers waren sie nur
+    gespiegelte Kopien (Drift-Quelle). Vorher wird einmalig ein vollständiges Daten-Backup
+    der Tabelle angelegt. Idempotent: greift nur, solange die Alt-Spalten existieren.
+    """
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS twitch_streamers_backup_preconsolidation AS "
+        "SELECT * FROM twitch_streamers"
+    )
+    legacy_cols = (
+        "require_discord_link", "next_link_check_at", "manual_verified_permanent",
+        "manual_verified_until", "manual_verified_at", "manual_partner_opt_out",
+        "raid_bot_enabled", "silent_ban", "silent_raid", "live_ping_role_id",
+        "live_ping_enabled",
+    )
+    dropped = []
+    for col in legacy_cols:
+        present = conn.execute(
+            "SELECT 1 FROM information_schema.columns "
+            "WHERE table_name = 'twitch_streamers' AND column_name = %s",
+            (col,),
+        ).fetchone()
+        if present:
+            conn.execute(f"ALTER TABLE twitch_streamers DROP COLUMN IF EXISTS {col}")
+            dropped.append(col)
+    if dropped:
+        backup_rows = conn.execute(
+            "SELECT COUNT(*) FROM twitch_streamers_backup_preconsolidation"
+        ).fetchone()
+        log.info(
+            "twitch_streamers Schema-Cleanup (v6): %d Lifecycle-Spalten gedroppt (%s); "
+            "Backup twitch_streamers_backup_preconsolidation hat %s Zeilen",
+            len(dropped), ", ".join(dropped), backup_rows[0] if backup_rows else "?",
+        )
+
+
 def _apply_runtime_schema_migrations(
     conn: psycopg.Connection, *, current_version: int | None
 ) -> int:
@@ -956,6 +994,15 @@ def _apply_runtime_schema_migrations(
         ensure_billing_entitlement_schema(conn)
         _record_runtime_schema_version(conn, 5)
         version = 5
+    if version < 6:
+        if not _runtime_schema_bootstrap_allowed():
+            raise RuntimeError(
+                "Runtime schema bootstrap is disabled. Apply the PostgreSQL migrations before startup "
+                f"or set {_RUNTIME_SCHEMA_BOOTSTRAP_ENV}=1 only for controlled local bootstrap."
+            )
+        _drop_legacy_streamer_lifecycle_columns(conn)
+        _record_runtime_schema_version(conn, 6)
+        version = 6
     return version
 
 
@@ -2142,7 +2189,8 @@ def ensure_schema(conn) -> None:
     )
     # Partner-Lifecycle-Spalten (verify/raid/silent/live_ping/require_link/next_link)
     # leben ausschließlich in twitch_partners; auf twitch_streamers werden sie weder neu
-    # angelegt noch gepflegt (siehe Migration: ALTER TABLE ... DROP COLUMN).
+    # angelegt noch gepflegt. Das einmalige Cleanup bestehender DBs erledigt der
+    # versionierte Migrationsschritt _drop_legacy_streamer_lifecycle_columns (Version 6).
     conn.execute(
         "CREATE UNIQUE INDEX IF NOT EXISTS idx_twitch_streamers_user_id ON twitch_streamers(twitch_user_id)"
     )
