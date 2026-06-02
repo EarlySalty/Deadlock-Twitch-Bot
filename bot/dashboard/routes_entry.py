@@ -212,6 +212,13 @@ async def auth_logout(
     deps: EntryRouteDeps,
 ) -> web.StreamResponse:
     """Logout and clear dashboard session cookie."""
+    # Auf der Admin-Domain ist der Discord-Admin-Logout der richtige Weg. Der
+    # Twitch-Logout-Flow leitet zu /analyse weiter, das es auf der Admin-Domain
+    # nicht gibt (-> "Not Found"). Daher dort an den Discord-Logout delegieren.
+    admin_host_checker = getattr(server, "_is_admin_dashboard_host_request", None)
+    if callable(admin_host_checker) and admin_host_checker(request):
+        return await server.discord_auth_logout(request)
+
     log = deps.log
     dashboard_v2_login_url = deps.dashboard_v2_login_url
 

@@ -1825,7 +1825,9 @@ class _DashboardAuthMixin:
                 self._dashboard_auth_state_repo().delete_session(session_id)
             except Exception as _exc:
                 log.debug("Could not delete discord admin session from DB: %s", _exc)
-        response = web.HTTPFound(self._discord_admin_logout_url())
+        response = web.HTTPFound(
+            self._build_discord_admin_route_url("/twitch/auth/discord/login")
+        )
         self._clear_discord_admin_cookie(response, request)
         self._set_no_store_headers(response)
         raise response

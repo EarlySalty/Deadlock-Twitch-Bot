@@ -1,3 +1,13 @@
+## #87 — Admin-Dashboard: Logout und Direktaufrufe führen nicht mehr ins Leere
+
+**Problem:** Zwei Ärgernisse beim Admin-Zugang. Erstens schickte der Logout-Button einen auf eine „Seite nicht gefunden", statt sauber abzumelden — er rutschte in den Anmelde-Weg der öffentlichen Streamer-Seite, dessen Ziel es auf der Admin-Adresse gar nicht gibt. Zweitens: Wer eine Admin-Unterseite direkt aufrief (z. B. einen gespeicherten Link), ohne angemeldet zu sein, bekam eine nackte Fehlerseite (401) statt zur Anmeldung geleitet zu werden — man musste erst umständlich die Startseite ansteuern und sich dort einloggen.
+
+**Geändert:** Auf der Admin-Adresse führt der Logout jetzt direkt zur Admin-Anmeldung. Und ein Direktaufruf einer Admin-Seite ohne Anmeldung leitet automatisch zur Anmeldung weiter, statt eine Fehlerseite zu zeigen.
+
+**Wie's funktioniert:** Der Abmelde-Vorgang erkennt jetzt, dass er auf der Admin-Adresse läuft, und nimmt den richtigen Discord-Abmelde-Weg — der die Sitzung beendet und auf die Anmeldeseite führt, statt in den Twitch-Login der Streamer-Seite zu rutschen (dessen Weiterleitungsziel auf der Admin-Adresse nicht existiert und deshalb „nicht gefunden" lieferte). Für Direktaufrufe prüft der vorgelagerte Reverse-Proxy, ob überhaupt eine Admin-Sitzung vorliegt: fehlt sie, geht es sofort zur Anmeldung; ist sie da, läuft alles unverändert weiter — Angemeldete merken nichts. Der Proxy musste dafür einmal neu gestartet werden, weil seine Konfigurationsdatei nur als Einzeldatei eingebunden war und Änderungen sonst nicht ankamen.
+
+**Betroffen:** Admin-Login-/Logout-Komfort; für Zuschauer und Streamer nichts sichtbar.
+
 ## #86 — Chat-KI (Testphase): vom Cringe-Mitspieler zum stillen Zuschauer
 
 **Problem:** Der KI-Stammgast, der gerade nur intern im Review getestet wird, verhielt sich wie ein aufdringlicher Mitspieler statt wie ein normaler Zuschauer. Er reagierte auf praktisch jede Chatzeile — auch auf einzelne Emotes, Begrüßungen, Reaktionswörter („gg", „easy") und Chat-Commands. Schlimmer: Lob für gute Spielzüge nahm er an, als hätte er selbst gespielt („läuft grad gut"), sprach einzelne Zuschauer wie ein Gastgeber mit Namen an und klinkte sich in Absprachen der Stammcrew ein. Dazu klangen die Antworten nach KI — zu lang, zwei ausformulierte Sätze mit Abschluss-Pointe, wo ein echter Chatter nur ein Fragment hinwirft.
