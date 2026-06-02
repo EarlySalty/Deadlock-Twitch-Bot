@@ -1,5 +1,5 @@
 import unittest
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from bot.chat.constants import SPAM_MIN_MATCHES
 from bot.chat.moderation import ModerationMixin
@@ -213,32 +213,26 @@ class ChatMessageBlacklistTests(unittest.IsolatedAsyncioTestCase):
     def test_blacklist_skip_requires_operational_partner(self) -> None:
         handler = _DummyModerationChat()
 
-        archived_row = {
-            "status": "active",
-            "manual_partner_opt_out": 0,
-            "admin_archived_at": "2026-03-25T21:52:27+00:00",
-        }
-        active_row = {
-            "status": "active",
-            "manual_partner_opt_out": 0,
-            "admin_archived_at": None,
-        }
-        opted_out_row = {
-            "status": "active",
-            "manual_partner_opt_out": 1,
-            "admin_archived_at": None,
-        }
-
         with patch("bot.chat.moderation.is_operational_partner_channel", return_value=True):
             self.assertTrue(handler._is_partner_channel_for_blacklist_skip("live_partner"))
         with patch("bot.chat.moderation.is_operational_partner_channel", return_value=False):
             self.assertFalse(handler._is_partner_channel_for_blacklist_skip("archived_partner"))
 
-        with patch("bot.core.partner_utils.readonly_connection") as readonly_mock, patch(
-            "bot.core.partner_utils.load_active_partner",
-            side_effect=[archived_row, active_row, opted_out_row, None],
-        ):
-            readonly_mock.return_value.__enter__.return_value = object()
+        # Kanonische View-Wahrheit: twitch_streamers_partner_state.is_partner_active
+        # kollabiert status/opt-out/archiviert/pausiert/bot_banned in eine Spalte.
+        # archived_partner taucht wegen WHERE status='active' gar nicht erst auf.
+        view_rows = [
+            None,                       # archived_partner -> nicht in der View
+            {"is_partner_active": 1},   # live_partner
+            {"is_partner_active": 0},   # opted_out_partner
+            {"is_partner_active": 0},   # bot_banned_partner (Regression: vorher True)
+            None,                       # missing_partner
+        ]
+
+        with patch("bot.core.partner_utils.readonly_connection") as readonly_mock:
+            conn = MagicMock()
+            conn.execute.return_value.fetchone.side_effect = view_rows
+            readonly_mock.return_value.__enter__.return_value = conn
             readonly_mock.return_value.__exit__.return_value = False
 
             from bot.core.partner_utils import is_operational_partner_channel
@@ -246,6 +240,7 @@ class ChatMessageBlacklistTests(unittest.IsolatedAsyncioTestCase):
             self.assertFalse(is_operational_partner_channel("archived_partner"))
             self.assertTrue(is_operational_partner_channel("live_partner"))
             self.assertFalse(is_operational_partner_channel("opted_out_partner"))
+            self.assertFalse(is_operational_partner_channel("bot_banned_partner"))
             self.assertFalse(is_operational_partner_channel("missing_partner"))
 
     async def test_channel_settings_drop_records_outbound_chat_suppression(self) -> None:

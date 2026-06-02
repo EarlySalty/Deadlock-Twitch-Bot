@@ -1,3 +1,13 @@
+## #80 — Partner-Status-Check: kein veralteter Nachbau mehr
+
+**Problem:** Der Bot beantwortet an mehreren Stellen die Frage „ist das ein operativ aktiver Partner?" — und zwei dieser Stellen waren sich uneinig. Die eine las den zentral gepflegten Partner-Status; die andere, eigentlich die strengere (sie steuert u. a. den Bot-Ban-/Blacklist-Schutz und seit der letzten Änderung auch das Engagement-AI-Gate), rechnete den Status von Hand aus dem rohen Partner-Datensatz nach. Dieser Nachbau war veraltet: Er prüfte nur, ob die Partnerschaft formal aktiv, nicht per Opt-out abgeschaltet und nicht admin-archiviert war — den Zustand „technisch pausiert" bzw. „Bot wurde in diesem Kanal gebannt" hat er übersehen. Folge: Kanäle, in denen der Bot pausiert oder gebannt war, zählten trotzdem als operative Partner. Genau das war der Auslöser dafür, dass die Engagement-AI in solchen Kanälen anschlug.
+
+**Geändert:** Die strenge „operativ aktiver Partner"-Prüfung rechnet nichts mehr selbst nach, sondern liest dieselbe zentrale Wahrheit wie alle übrigen Partner-Checks.
+
+**Wie's funktioniert:** Es gibt eine zentrale, laufend gepflegte Sicht auf den Partner-Status, die alle Ausschlussgründe zu einem einzigen „aktiv: ja/nein" zusammenfasst — formal aktiv, kein Opt-out, nicht archiviert, nicht pausiert, nicht gebannt. Die strenge Prüfung schaut jetzt genau dort nach, statt die Bedingungen einzeln und unvollständig selbst zusammenzusetzen. Dadurch ist sie immer auf demselben Stand wie diese Sicht: Wird ein Partner pausiert oder der Bot dort gebannt, fällt der Kanal sofort aus allen Pfaden, die diese Prüfung nutzen. Vorher konnte der handgestrickte Nachbau der zentralen Sicht „hinterherhinken", weil er bei jeder Erweiterung der Ausschlussgründe mit angepasst werden musste — und das zuletzt nicht geschehen war.
+
+**Betroffen:** Bot-Ban-/Blacklist-Schutz und die (noch nicht scharfgeschaltete) Engagement-AI — jeweils nur für Kanäle, in denen der Bot pausiert oder gebannt ist.
+
 ## #79 — Engagement-AI: redet nur noch in echten Partner-Kanälen
 
 **Problem:** Die KI prüfte vor dem Antworten nur zwei Dinge: ob sie für den Kanal eingeschaltet ist und ob dort gerade Deadlock live läuft. Den Partner-Status hat sie dabei komplett übersprungen. Der Bot ist aber auch in beobachteten Nicht-Partner-Kanälen präsent (rein fürs Statistik-Tracking), und genau dort war die Engagement-AI die einzige Chat-Funktion, die trotzdem mitgeredet hat — Moderation, Promos und die frechen Auto-Antworten schweigen in solchen Kanälen längst, weil sie alle denselben Partner-Check davorhängen. Zusätzlich blieb der Engagement-Schalter eines Kanals auf „an", selbst wenn die Partnerschaft später beendet wurde.

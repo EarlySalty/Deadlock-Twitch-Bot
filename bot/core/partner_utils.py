@@ -9,7 +9,7 @@ Klare Trennung zwischen:
 import logging
 from datetime import UTC, datetime
 
-from ..storage import load_active_partner, readonly_connection
+from ..storage import readonly_connection
 
 log = logging.getLogger("TwitchStreams.PartnerUtils")
 
@@ -185,32 +185,32 @@ def is_operational_partner_channel(login: str) -> bool:
     """
     True nur fuer operativ aktive Partner.
 
-    Admin-archivierte oder per Opt-out deaktivierte Eintraege zaehlen hier bewusst
-    nicht als aktive Partner, damit Blacklist-/Bot-Ban-Schutz nur fuer die echte
-    Live-Partnerliste greift.
+    Liest die kanonische View-Wahrheit ``is_partner_active`` aus
+    ``twitch_streamers_partner_state``. Damit sind admin-archivierte, per
+    Opt-out deaktivierte, technisch pausierte und bot-gebannte Partner bewusst
+    ausgeschlossen, sodass Blacklist-/Bot-Ban-Schutz nur fuer die echte
+    Live-Partnerliste greift. Frueher rechnete diese Funktion den Status aus der
+    Roh-Partner-Zeile nach und uebersah dabei ``operational_state`` (z. B.
+    ``bot_banned``) -- jetzt entscheidet allein die View.
     """
     normalized_login = str(login or "").strip().lower().lstrip("#")
     if not normalized_login:
         return False
 
     with readonly_connection() as conn:
-        row = load_active_partner(conn, twitch_login=normalized_login)
+        row = conn.execute(
+            """
+            SELECT is_partner_active
+              FROM twitch_streamers_partner_state
+             WHERE LOWER(twitch_login) = %s
+        """,
+            (normalized_login,),
+        ).fetchone()
 
     if not row:
         return False
 
-    if hasattr(row, "get"):
-        archived_at = row.get("admin_archived_at")
-        manual_partner_opt_out = row.get("manual_partner_opt_out")
-    else:
-        archived_at = row[26] if len(row) > 26 else None
-        manual_partner_opt_out = row[12] if len(row) > 12 else 0
-
-    if bool(manual_partner_opt_out):
-        return False
-    if archived_at:
-        return False
-    return True
+    return bool(row["is_partner_active"] if hasattr(row, "keys") else row[0])
 
 
 def get_partner_stats() -> dict:
