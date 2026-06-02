@@ -13,7 +13,6 @@ from .pg import (  # noqa: F401
     delete_streamer,
     bulk_update_partner_flags,
     departner_active_partner,
-    archive_active_partner,
     load_active_partner,
     load_latest_partner_history,
     load_offline_auto_raid_eligibility,

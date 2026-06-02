@@ -4,7 +4,6 @@ import sqlite3
 import unittest
 
 from bot.storage.partner_registry import (
-    archive_active_partner,
     bulk_update_partner_flags,
     migrate_legacy_partner_registry,
     reactivate_partner,
@@ -214,100 +213,6 @@ class PartnerRegistrySemanticsTests(unittest.TestCase):
         self.assertEqual(rows[1]["discord_user_id"], "662995601738170389")
         self.assertEqual(rows[1]["discord_display_name"], "Bravo")
         self.assertEqual(int(rows[1]["is_on_discord"]), 1)
-
-    def test_archive_active_partner_keeps_non_partner_table_empty(self) -> None:
-        conn = _make_conn()
-        compat_conn = _SqlitePgCompatConnection(conn)
-        conn.execute(
-            """
-            INSERT INTO twitch_streamer_identities (
-                twitch_user_id, twitch_login, discord_user_id, discord_display_name, is_on_discord
-            ) VALUES (?, ?, ?, ?, ?)
-            """,
-            ("1001", "alpha", "123", "Alpha", 1),
-        )
-        conn.execute(
-            """
-            INSERT INTO twitch_partners (
-                twitch_user_id, twitch_login, raid_bot_enabled, partnered_at, status
-            ) VALUES (?, ?, 1, '2026-03-01T10:00:00+00:00', 'active')
-            """,
-            ("1001", "alpha"),
-        )
-        conn.execute(
-            """
-            INSERT INTO twitch_raid_auth (twitch_user_id, twitch_login, raid_enabled, needs_reauth)
-            VALUES (?, ?, 1, 0)
-            """,
-            ("1001", "alpha"),
-        )
-
-        result = archive_active_partner(compat_conn, twitch_login="alpha")
-
-        self.assertIsNotNone(result)
-        status_row = conn.execute(
-            "SELECT status, departnered_at FROM twitch_partners WHERE twitch_user_id = ?",
-            ("1001",),
-        ).fetchone()
-        self.assertEqual(status_row["status"], "archived")
-        self.assertTrue(status_row["departnered_at"])
-        streamer_count = conn.execute("SELECT COUNT(*) AS total FROM twitch_streamers").fetchone()
-        self.assertEqual(int(streamer_count["total"]), 0)
-        auth_row = conn.execute(
-            "SELECT raid_enabled FROM twitch_raid_auth WHERE twitch_user_id = ?",
-            ("1001",),
-        ).fetchone()
-        self.assertEqual(int(auth_row["raid_enabled"]), 0)
-
-    def test_archive_active_partner_keeps_historical_rows_unchanged(self) -> None:
-        conn = _make_conn()
-        compat_conn = _SqlitePgCompatConnection(conn)
-        conn.execute(
-            """
-            INSERT INTO twitch_partners (
-                twitch_user_id, twitch_login, partnered_at, departnered_at, status
-            ) VALUES (?, ?, ?, ?, ?)
-            """,
-            (
-                "1001",
-                "alpha",
-                "2026-02-01T10:00:00+00:00",
-                "2026-02-10T10:00:00+00:00",
-                "departnered",
-            ),
-        )
-        history_id = int(conn.execute("SELECT last_insert_rowid()").fetchone()[0])
-        conn.execute(
-            """
-            INSERT INTO twitch_partners (
-                twitch_user_id, twitch_login, raid_bot_enabled, partnered_at, status
-            ) VALUES (?, ?, 1, '2026-03-01T10:00:00+00:00', 'active')
-            """,
-            ("1001", "alpha"),
-        )
-        conn.execute(
-            """
-            INSERT INTO twitch_raid_auth (twitch_user_id, twitch_login, raid_enabled, needs_reauth)
-            VALUES (?, ?, 1, 0)
-            """,
-            ("1001", "alpha"),
-        )
-
-        result = archive_active_partner(compat_conn, twitch_login="alpha")
-
-        self.assertIsNotNone(result)
-        rows = conn.execute(
-            """
-            SELECT id, status
-            FROM twitch_partners
-            WHERE twitch_user_id = ?
-            ORDER BY id
-            """,
-            ("1001",),
-        ).fetchall()
-        self.assertEqual(rows[0]["id"], history_id)
-        self.assertEqual(rows[0]["status"], "departnered")
-        self.assertEqual(rows[1]["status"], "archived")
 
     def test_set_streamer_archive_state_legacy_schema_reports_no_archive_value(self) -> None:
         conn = _make_conn()

@@ -28,7 +28,6 @@ from ._rows import storage_row_factory
 from .partner_registry import (
     bulk_update_partner_flags,
     departner_active_partner,
-    archive_active_partner,
     load_active_partner,
     load_latest_partner_history,
     load_offline_auto_raid_eligibility,
@@ -75,7 +74,6 @@ __all__ = [
     "delete_streamer",
     "bulk_update_partner_flags",
     "departner_active_partner",
-    "archive_active_partner",
     "load_active_partner",
     "load_latest_partner_history",
     "load_offline_auto_raid_eligibility",
