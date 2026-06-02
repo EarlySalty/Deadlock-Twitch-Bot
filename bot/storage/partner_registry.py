@@ -137,24 +137,28 @@ def _load_streamer_row(
     normalized_user_id = _normalize_user_id(twitch_user_id)
     if not normalized_login and not normalized_user_id:
         return None
+    # Partner-Lifecycle lebt nur noch in twitch_partners. Die Lifecycle-Felder werden
+    # hier als Literale an UNVERÄNDERTER Position geliefert, damit positionale Leser
+    # (siehe _row_value; sqlite-Rows haben kein .get) stabil bleiben UND der SELECT die
+    # später gedroppten twitch_streamers-Spalten nicht mehr referenziert.
     return conn.execute(
         """
         SELECT
             twitch_login,
             twitch_user_id,
-            require_discord_link,
-            next_link_check_at,
+            0 AS require_discord_link,
+            NULL AS next_link_check_at,
             discord_user_id,
             discord_display_name,
             is_on_discord,
             created_at,
             archived_at,
-            raid_bot_enabled,
-            silent_ban,
-            silent_raid,
+            0 AS raid_bot_enabled,
+            0 AS silent_ban,
+            0 AS silent_raid,
             is_monitored_only,
-            live_ping_role_id,
-            COALESCE(live_ping_enabled, 1) AS live_ping_enabled
+            NULL AS live_ping_role_id,
+            1 AS live_ping_enabled
         FROM twitch_streamers
         WHERE (%s <> '' AND twitch_user_id = %s)
            OR (%s <> '' AND LOWER(twitch_login) = %s)
@@ -673,56 +677,38 @@ def upsert_non_partner_streamer(
         ),
     }
 
+    # twitch_streamers ist reine Tracking-/Identitätstabelle: Partner-Lifecycle
+    # (verify/raid/silent/live_ping/require_link/next_link) wird NICHT mehr hierher
+    # gespiegelt, sondern lebt allein in twitch_partners. Nur Identität/Monitoring.
     conn.execute(
         """
         INSERT INTO twitch_streamers (
             twitch_login,
             twitch_user_id,
-            require_discord_link,
-            next_link_check_at,
             discord_user_id,
             discord_display_name,
             is_on_discord,
             created_at,
             archived_at,
-            raid_bot_enabled,
-            silent_ban,
-            silent_raid,
-            is_monitored_only,
-            live_ping_role_id,
-            live_ping_enabled
-        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            is_monitored_only
+        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
         ON CONFLICT (twitch_login) DO UPDATE SET
             twitch_user_id = COALESCE(EXCLUDED.twitch_user_id, twitch_streamers.twitch_user_id),
-            require_discord_link = EXCLUDED.require_discord_link,
-            next_link_check_at = EXCLUDED.next_link_check_at,
             discord_user_id = EXCLUDED.discord_user_id,
             discord_display_name = EXCLUDED.discord_display_name,
             is_on_discord = EXCLUDED.is_on_discord,
             archived_at = EXCLUDED.archived_at,
-            raid_bot_enabled = EXCLUDED.raid_bot_enabled,
-            silent_ban = EXCLUDED.silent_ban,
-            silent_raid = EXCLUDED.silent_raid,
-            is_monitored_only = EXCLUDED.is_monitored_only,
-            live_ping_role_id = EXCLUDED.live_ping_role_id,
-            live_ping_enabled = EXCLUDED.live_ping_enabled
+            is_monitored_only = EXCLUDED.is_monitored_only
         """,
         (
             row_values["twitch_login"],
             row_values["twitch_user_id"],
-            row_values["require_discord_link"],
-            row_values["next_link_check_at"],
             row_values["discord_user_id"],
             row_values["discord_display_name"],
             row_values["is_on_discord"],
             row_values["created_at"],
             row_values["archived_at"],
-            row_values["raid_bot_enabled"],
-            row_values["silent_ban"],
-            row_values["silent_raid"],
             row_values["is_monitored_only"],
-            row_values["live_ping_role_id"],
-            row_values["live_ping_enabled"],
         ),
     )
 
@@ -1245,18 +1231,8 @@ def departner_active_partner(
             live_ping_role_id=_row_value(active_row, "live_ping_role_id", 16, None),
             live_ping_enabled=_row_value(active_row, "live_ping_enabled", 17, 1),
         )
-        conn.execute(
-            """
-            UPDATE twitch_streamers
-            SET manual_verified_permanent = 0,
-                manual_verified_until = NULL,
-                manual_verified_at = NULL,
-                manual_partner_opt_out = 0
-            WHERE twitch_user_id = %s
-               OR LOWER(twitch_login) = LOWER(%s)
-            """,
-            (normalized_user_id, normalized_login),
-        )
+        # (Früherer Mirror-Clear der Verify-Flags auf twitch_streamers entfällt: diese
+        # Flags leben nur noch in twitch_partners und werden dort beim Departnern zurückgesetzt.)
 
     if disable_raid_auth:
         conn.execute(
@@ -1955,6 +1931,29 @@ def bulk_update_partner_flags(
     return total
 
 
+def _streamer_has_partner_columns(conn: Any) -> bool:
+    """True solange twitch_streamers noch die Legacy-Partner-Lifecycle-Spalten trägt.
+
+    Nach dem Schema-Cleanup (Lifecycle nur noch in twitch_partners) gibt es nichts mehr
+    aus twitch_streamers zu migrieren. Der Guard verhindert, dass ein SELECT auf eine
+    fehlende Spalte läuft und in Postgres die gesamte Transaktion vergiftet.
+    """
+    try:
+        row = conn.execute(
+            "SELECT 1 FROM information_schema.columns "
+            "WHERE table_name = 'twitch_streamers' "
+            "AND column_name = 'manual_verified_at' LIMIT 1"
+        ).fetchone()
+        return row is not None
+    except Exception:
+        # sqlite (Tests): kein information_schema -> PRAGMA-Fallback
+        try:
+            cols = conn.execute("PRAGMA table_info(twitch_streamers)").fetchall()
+            return any(_row_value(c, "name", 1) == "manual_verified_at" for c in cols)
+        except Exception:
+            return True
+
+
 def migrate_legacy_partner_registry(conn: Any) -> dict[str, int]:
     stats = {
         "identity_upserts": 0,
@@ -1962,6 +1961,10 @@ def migrate_legacy_partner_registry(conn: Any) -> dict[str, int]:
         "partner_archives": 0,
         "source_deletes": 0,
     }
+    # Obsolet, sobald twitch_streamers keine Partner-Lifecycle-Spalten mehr hat: dann
+    # existiert keine Legacy-Quelle -> sauberer No-op vor jeglichem Spalten-SQL.
+    if not _streamer_has_partner_columns(conn):
+        return stats
     try:
         rows = conn.execute(
             """

@@ -2133,30 +2133,18 @@ def ensure_schema(conn) -> None:
         CREATE TABLE IF NOT EXISTS twitch_streamers (
             twitch_login               TEXT PRIMARY KEY,
             twitch_user_id             TEXT,
-            require_discord_link       INTEGER DEFAULT 0,
-            next_link_check_at         TEXT,
             discord_user_id            TEXT,
             discord_display_name       TEXT,
             is_on_discord              INTEGER DEFAULT 0,
-            manual_verified_permanent  INTEGER DEFAULT 0,
-            manual_verified_until      TEXT,
-            manual_verified_at         TEXT,
-            manual_partner_opt_out     INTEGER DEFAULT 0,
             created_at                 TEXT DEFAULT CURRENT_TIMESTAMP,
             archived_at                TEXT,
-            raid_bot_enabled           INTEGER DEFAULT 0,
-            silent_ban                 INTEGER DEFAULT 0,
-            silent_raid                INTEGER DEFAULT 0,
-            is_monitored_only          INTEGER DEFAULT 0,
-            live_ping_role_id          BIGINT,
-            live_ping_enabled          INTEGER DEFAULT 1
+            is_monitored_only          INTEGER DEFAULT 0
         )
         """
     )
-    _pg_add_col_if_missing(conn, "twitch_streamers", "live_ping_role_id", "BIGINT")
-    _pg_add_col_if_missing(
-        conn, "twitch_streamers", "live_ping_enabled", "INTEGER DEFAULT 1"
-    )
+    # Partner-Lifecycle-Spalten (verify/raid/silent/live_ping/require_link/next_link)
+    # leben ausschließlich in twitch_partners; auf twitch_streamers werden sie weder neu
+    # angelegt noch gepflegt (siehe Migration: ALTER TABLE ... DROP COLUMN).
     conn.execute(
         "CREATE UNIQUE INDEX IF NOT EXISTS idx_twitch_streamers_user_id ON twitch_streamers(twitch_user_id)"
     )
