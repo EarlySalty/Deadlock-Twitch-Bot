@@ -2,7 +2,7 @@
 """
 Engagement-Layer Migration für den Twitch-Bot.
 
-Legt die Tabellen für den AI-Engagement-Layer (MiniMax-M2.7-Stammgast) an
+Legt die Tabellen für den AI-Engagement-Layer (MiniMax-M3-Stammgast) an
 und seedet EarlySalty als super_mod, falls bereits in twitch_streamers
 registriert.
 

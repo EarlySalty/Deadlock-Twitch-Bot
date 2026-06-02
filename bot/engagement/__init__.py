@@ -1,4 +1,4 @@
-"""AI-Engagement-Layer: MiniMax-M2.7-Stammgast pro Twitch-Channel.
+"""AI-Engagement-Layer: MiniMax-M3-Stammgast pro Twitch-Channel.
 
 Spec: /home/naniadm/.claude/plans/ich-m-chte-das-wir-buzzing-pebble.md
 

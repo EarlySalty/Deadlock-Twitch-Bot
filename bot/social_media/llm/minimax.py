@@ -1,8 +1,8 @@
 """MiniMax-LLM-Adapter (extern, *nur* mit external_llm_consent=True nutzbar).
 
 Nutzt MiniMax's OpenAI-kompatible Schnittstelle. Erfordert `MINIMAX_API_KEY`
-und optional `MINIMAX_BASE_URL` (Default: `https://api.minimax.chat/v1`) sowie
-`MINIMAX_MODEL` (Default: `MiniMax-Text-2.7`).
+und optional `MINIMAX_BASE_URL` (Default: `https://api.minimax.io/v1`) sowie
+`MINIMAX_MODEL` (Default: `MiniMax-M3`).
 """
 
 from __future__ import annotations
@@ -24,12 +24,12 @@ from .prompts import SYSTEM_PROMPT, render_user_prompt
 
 log = logging.getLogger("TwitchStreams.SocialMedia.LLM.MiniMax")
 
-DEFAULT_BASE_URL = "https://api.minimax.chat/v1"
-DEFAULT_MODEL = "MiniMax-Text-2.7"
+DEFAULT_BASE_URL = "https://api.minimax.io/v1"
+DEFAULT_MODEL = "MiniMax-M3"
 GENERATE_TIMEOUT_SECONDS = 60
 
 # Best-effort estimation. Adjust via env if MiniMax pricing changes.
-_INPUT_USD_PER_1K = float(os.getenv("MINIMAX_PRICE_INPUT_PER_1K", "0.0008") or 0.0008)
+_INPUT_USD_PER_1K = float(os.getenv("MINIMAX_PRICE_INPUT_PER_1K", "0.0006") or 0.0006)
 _OUTPUT_USD_PER_1K = float(os.getenv("MINIMAX_PRICE_OUTPUT_PER_1K", "0.0024") or 0.0024)
 
 

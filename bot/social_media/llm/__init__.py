@@ -2,7 +2,7 @@
 
 - base:          Datenklassen + abstrakte Provider-Schnittstelle
 - prompts:       Prompts pro Plattform (YouTube/TikTok/Instagram)
-- minimax:       MiniMax-2.7 Adapter (OpenAI-kompatible Schnittstelle)
+- minimax:       MiniMax-M3 Adapter (OpenAI-kompatible Schnittstelle)
 - claude_haiku:  Claude Haiku 4.5 Adapter (Anthropic-Schnittstelle)
 - dispatcher:    Auswahl + Fallback-Logik
 """

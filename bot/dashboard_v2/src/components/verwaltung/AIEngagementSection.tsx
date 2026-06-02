@@ -101,7 +101,7 @@ export function AIEngagementSection() {
           Stammgast-AI im Chat
         </h2>
         <p className="text-sm text-text-secondary">
-          MiniMax-M2.7 liest deinen Chat mit und mischt sich situativ ein — kennt Deadlock,
+          MiniMax-M3 liest deinen Chat mit und mischt sich situativ ein — kennt Deadlock,
           merkt sich Konversationen mit deinen Chattern, deaktiviert sich automatisch bei
           Stream-Ende.
         </p>

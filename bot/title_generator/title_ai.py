@@ -10,7 +10,7 @@ from typing import Any
 from ..core.llm_providers import get_minimax_client
 
 MINIMAX_BASE_URL = "https://api.minimax.io/v1"
-MINIMAX_MODEL = "MiniMax-M2.7"
+MINIMAX_MODEL = "MiniMax-M3"
 EMOJI_PATTERN = re.compile(
     "[\U00010000-\U0010ffff\U0001F300-\U0001F9FF\u2600-\u26FF\u2700-\u27BF]",  # lgtm[py/overly-large-range]
     flags=re.UNICODE,

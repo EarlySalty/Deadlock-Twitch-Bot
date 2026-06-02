@@ -1,4 +1,4 @@
-"""Auto-Improvement für den Spam-Filter via MiniMax M2.7.
+"""Auto-Improvement für den Spam-Filter via MiniMax M3.
 
 Wenn der bestehende Spam-Filter ein Signal erkennt (spam_score > 0) aber der
 Ban-Threshold nicht erreicht wird, fragt MiniMax asynchron nach ob es echter
@@ -156,7 +156,7 @@ async def _call_minimax(content: str) -> dict | None:
     ]
     try:
         response = await client.chat.completions.create(
-            model="MiniMax-M2.7",
+            model="MiniMax-M3",
             messages=messages,
             max_tokens=200,
             temperature=0.0,
