@@ -103,7 +103,7 @@ ENV_DSN = "TWITCH_ANALYTICS_DSN"
 _DB_FINGERPRINT_SALT = b"deadlock.analytics-db-fingerprint.v1"
 _DB_FINGERPRINT_ITERATIONS = 100_000
 _RUNTIME_SCHEMA_COMPONENT = "storage_pg"
-_RUNTIME_SCHEMA_VERSION = 6
+_RUNTIME_SCHEMA_VERSION = 7
 _RUNTIME_SCHEMA_BOOTSTRAP_ENV = "TWITCH_ALLOW_RUNTIME_SCHEMA_BOOTSTRAP"
 
 
@@ -945,6 +945,32 @@ def _drop_legacy_streamer_lifecycle_columns(conn: psycopg.Connection) -> None:
         )
 
 
+def _drop_dead_streamer_columns(conn: psycopg.Connection) -> None:
+    """Entfernt vestigiale Alt-Spalten aus twitch_streamers.
+
+    last_description/last_link_ok/added_by/last_link_checked_at sind Reste eines alten
+    Schemas (partner-klingende Namen), wurden vom Mirror nie geschrieben und von niemandem
+    gelesen. Ihre Daten stecken bereits im v6-Backup twitch_streamers_backup_preconsolidation.
+    Die PK-Spalte id (bigserial) bleibt bewusst erhalten. Idempotent.
+    """
+    dead_cols = ("last_description", "last_link_ok", "added_by", "last_link_checked_at")
+    dropped = []
+    for col in dead_cols:
+        present = conn.execute(
+            "SELECT 1 FROM information_schema.columns "
+            "WHERE table_name = 'twitch_streamers' AND column_name = %s",
+            (col,),
+        ).fetchone()
+        if present:
+            conn.execute(f"ALTER TABLE twitch_streamers DROP COLUMN IF EXISTS {col}")
+            dropped.append(col)
+    if dropped:
+        log.info(
+            "twitch_streamers Schema-Cleanup (v7): vestigiale Alt-Spalten gedroppt (%s)",
+            ", ".join(dropped),
+        )
+
+
 def _apply_runtime_schema_migrations(
     conn: psycopg.Connection, *, current_version: int | None
 ) -> int:
@@ -1003,6 +1029,15 @@ def _apply_runtime_schema_migrations(
         _drop_legacy_streamer_lifecycle_columns(conn)
         _record_runtime_schema_version(conn, 6)
         version = 6
+    if version < 7:
+        if not _runtime_schema_bootstrap_allowed():
+            raise RuntimeError(
+                "Runtime schema bootstrap is disabled. Apply the PostgreSQL migrations before startup "
+                f"or set {_RUNTIME_SCHEMA_BOOTSTRAP_ENV}=1 only for controlled local bootstrap."
+            )
+        _drop_dead_streamer_columns(conn)
+        _record_runtime_schema_version(conn, 7)
+        version = 7
     return version
 
 

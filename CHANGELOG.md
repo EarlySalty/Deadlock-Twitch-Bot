@@ -1,3 +1,13 @@
+## #84 — Tracking-Tabelle: vestigiale Alt-Spalten entfernt
+
+**Problem:** Auf der Tracking-Tabelle lagen noch vier Spalten aus einem alten Schema (Beschreibung des letzten Link-Checks, Link-Status, „hinzugefügt von", Zeitpunkt des letzten Checks) — partner-klingende Reste, die seit Langem von keinem Code mehr geschrieben oder gelesen wurden. Tot, aber verwirrend, weil sie auf der „nur Tracking"-Tabelle nach Partner-Daten aussehen.
+
+**Geändert:** Diese vier toten Spalten wurden entfernt. Eine geprüfte Abhängigkeits-Analyse hat vorher bestätigt, dass kein Programmteil sie noch liest.
+
+**Wie's funktioniert:** Ein weiterer versionierter Migrationsschritt entfernt die vier Spalten (idempotent, greift nur solange sie existieren). Ihre Daten waren ohnehin schon im Gesamt-Backup aus #83 enthalten. Die interne Identitäts-Spalte der Tabelle bleibt unangetastet. Damit enthält die Tracking-Tabelle wirklich nur noch Tracking-/Identitäts-Felder — keine partner-klingenden Altlasten mehr.
+
+**Betroffen:** Für Zuschauer und Streamer nichts sichtbar — interne Datenhygiene.
+
 ## #83 — Partner-DB-Konsolidierung: doppelte Partner-Spalten endgültig entfernt
 
 **Problem:** Partner-Eigenschaften (Verifizierungs-Status, Raid-Schalter, Stumm-Flags, Live-Ping-Einstellungen, Discord-Link-Pflicht) lagen jahrelang in **zwei** Tabellen gleichzeitig — einmal in der schmalen Partner-Tabelle (die eigentliche Wahrheit) und einmal als gespiegelte Kopie in der breiten Tracking-Tabelle. Zwei Pflegeorte für denselben Wert heißt: sie können auseinanderlaufen, und genau dieser Drift war die Wurzel der wiederkehrenden „mal stimmt der Partner-Status, mal nicht"-Verwirrung (siehe #80–#82).
