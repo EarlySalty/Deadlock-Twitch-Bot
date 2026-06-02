@@ -1680,7 +1680,7 @@ class TwitchMonitoringMixin(_EventSubMixin, _ExpSessionsMixin, _SessionsMixin, _
                         twitch_user_id=twitch_user_id or previous_state.get("twitch_user_id"),
                     )
 
-                    ended_content = f"**{display_name}** ist OFFLINE - VOD per Button."
+                    ended_content = ""
                     offline_embed = self._build_offline_embed(
                         login=login,
                         display_name=display_name,

@@ -79,6 +79,20 @@ class PromoMixin:
             return False
         if PROMO_CHANNEL_ALLOWLIST and login not in PROMO_CHANNEL_ALLOWLIST:
             return False
+        try:
+            row = _pg_query_one(
+                "SELECT is_partner_active, archived_at FROM twitch_streamers_partner_state"
+                " WHERE LOWER(twitch_login) = LOWER(%s) LIMIT 1",
+                [login],
+            )
+        except Exception:
+            return False
+        if row is None:
+            return False
+        is_active = bool(int(row["is_partner_active"] if hasattr(row, "keys") else row[0] or 0))
+        archived_at = row["archived_at"] if hasattr(row, "keys") else row[1]
+        if not is_active or archived_at is not None:
+            return False
         return True
 
     async def _get_promo_invite(self, login: str) -> tuple[str | None, bool]:

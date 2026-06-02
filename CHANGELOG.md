@@ -1,3 +1,11 @@
+## #89 — Live-Ankündigungen: kein Schriftzug über dem Embed, echte Umlaute, Promos nur für aktive Partner
+
+**Problem:** Drei separate Baustellen. Erstens stand über jedem Live-Embed ein redundanter Klartext-Satz („X ist live! Schau über den Button unten rein."), der denselben Inhalt wie das Embed doppelt zeigte. Zweitens verwendeten Embeds und Buttons ASCII-Ausweichreplacement statt echter Umlaute (`ue`, `fuer`, `ueber` statt `ü`, `für`, `über`). Drittens wurden Chat-Promos an Streamer gesendet, auch wenn deren Partner-Status inzwischen deaktiviert oder archiviert war.
+
+**Geändert:** Der Freitext-Content der Go-Live-Nachricht enthält jetzt nur noch die Rollen-Mention (damit der Ping feuert), kein angehängter Beschreibungstext mehr — das Embed trägt alle Infos. Der Offline-Edit schreibt ebenfalls keinen Plaintext mehr über das OFFLINE-Embed. Alle `ue`/`fuer`/`ueber`-Einträge in Embed-Titeln, Feldern und Footer wurden durch echte Umlaute ersetzt. `_promo_channel_allowed` fragt jetzt live gegen `twitch_streamers_partner_state` ab: `is_partner_active = true` und `archived_at IS NULL` — wer nicht mehr aktiver Partner ist, bekommt keine Chat-Promos mehr.
+
+**Wie's funktioniert:** Discord zeigt Mentions nur dann als echten Ping an, wenn die Mention-ID im Content-Text steht — deshalb bleibt der Content nicht leer, sondern enthält nur die `<@&role_id>`. Fehlt eine Rolle (kein Ping konfiguriert), ist Content `None` → keine sichtbare Textzeile über dem Embed. Die Partner-Prüfung passiert bei jedem `_promo_channel_allowed`-Aufruf synchron gegen die DB, da dieselbe Funktion ohnehin vor echten Netzwerk-/API-Operationen steht.
+
 ## #88 — Chat-Werbung: kein Spam zum Stream-Start, Fake-Server-Warnung wird endlich sichtbar
 
 **Problem:** Drei zusammenhängende Macken in der automatischen Discord-Werbung im Chat. Erstens warf der Bot direkt zu Stream-Beginn eine Werbenachricht raus, obwohl noch niemand im Chat geschrieben hatte. Zweitens griff die eigentlich vorgesehene Regel „erst nach genug Chat-Aktivität werben" nicht — es wurde geworben, egal wie tot der Chat war. Und drittens tauchte die Warnung vor den gefälschten Discord-Servern („Deadlock Discord Deutschland" / „Deadlock German Competitiv HUB") praktisch nie auf.

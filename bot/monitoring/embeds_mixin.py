@@ -60,7 +60,7 @@ class _EmbedsMixin:
             except Exception:
                 log.debug("Could not load live-announcement defaults from template module", exc_info=True)
         return {
-            "content": "{rolle} **{channel}** ist live! Schau ueber den Button unten rein.",
+            "content": "{mention_role}",
             "mentions": {"enabled": True, "role_id": ""},
             "button": {"enabled": True, "label": TWITCH_BUTTON_LABEL, "url_template": "{url}"},
         }
@@ -408,7 +408,7 @@ class _EmbedsMixin:
         content_template = str(
             config_data.get("content_template")
             or config_data.get("content")
-            or "{rolle} **{channel}** ist live! Schau ueber den Button unten rein."
+            or "{mention_role}"
         )
         title_template = str(config_data.get("title_template") or "{channel} ist LIVE in {game}!")
         description_mode = str(config_data.get("description_mode") or "stream_title").strip().lower()
@@ -612,7 +612,7 @@ class _EmbedsMixin:
         author_name = f"LIVE: {display_name}"
         author_icon_url = None
         author_url = None
-        footer_text = "Auf Twitch ansehen fuer mehr Deadlock-Action!"
+        footer_text = "Auf Twitch ansehen für mehr Deadlock-Action!"
         footer_icon_url = None
         thumbnail_cfg: dict = {}
         image_cfg: dict = {}
@@ -756,7 +756,7 @@ class _EmbedsMixin:
 
         embed.add_field(name="Status", value="OFFLINE", inline=True)
         embed.add_field(name="Kategorie", value=game, inline=True)
-        embed.add_field(name="Hinweis", value="VOD ueber den Button abrufen.", inline=False)
+        embed.add_field(name="Hinweis", value="VOD über den Button abrufen.", inline=False)
 
         if preview_image_url:
             embed.set_image(url=preview_image_url)
@@ -889,10 +889,7 @@ class _EmbedsMixin:
             mention_text = f"<@&{streamer_role_id}>"
 
         display_name = stream.get("user_name") or login
-        stream_title = (stream.get("title") or "").strip()
-        fallback_message = f"{mention_text} **{display_name}** ist live! Schau ueber den Button unten rein."
-        if stream_title:
-            fallback_message = f"{fallback_message} - {stream_title}"
+        fallback_message = mention_text
 
         content = fallback_message
         button_label = TWITCH_BUTTON_LABEL
