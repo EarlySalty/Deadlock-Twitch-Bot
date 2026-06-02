@@ -1,3 +1,17 @@
+## #86 — Chat-KI (Testphase): vom Cringe-Mitspieler zum stillen Zuschauer
+
+**Problem:** Der KI-Stammgast, der gerade nur intern im Review getestet wird, verhielt sich wie ein aufdringlicher Mitspieler statt wie ein normaler Zuschauer. Er reagierte auf praktisch jede Chatzeile — auch auf einzelne Emotes, Begrüßungen, Reaktionswörter („gg", „easy") und Chat-Commands. Schlimmer: Lob für gute Spielzüge nahm er an, als hätte er selbst gespielt („läuft grad gut"), sprach einzelne Zuschauer wie ein Gastgeber mit Namen an und klinkte sich in Absprachen der Stammcrew ein. Dazu klangen die Antworten nach KI — zu lang, zwei ausformulierte Sätze mit Abschluss-Pointe, wo ein echter Chatter nur ein Fragment hinwirft.
+
+**Geändert:** Eine zweistufige Brems-Logik, ein neues Selbstbild und ein an echten Chatdaten geeichter Schreibton. Außerdem hört die KI im Test nur noch echte Partnerkanäle mit.
+
+**Wie's funktioniert:**
+- Vor dem Sprachmodell sortiert ein billiger Vorfilter offensichtliches Rauschen aus, ohne das Modell überhaupt zu fragen: einzelne Emotes und Reaktionswörter, mehrfach wiederholte Emote-Ketten, Chat-Commands und Nachrichten, die mit „@name" direkt an eine bestimmte Person gehen. Das spart Rechenzeit und lässt sich nicht per Prompt „überreden".
+- Das Modell weiß jetzt klar, dass es Zuschauer ist und nicht der Streamer: Lob und Zurufe zum Spielgeschehen gehören dem Streamer, nicht ihm; es grüßt, dankt und verabschiedet niemanden wie ein Gastgeber und mischt sich nicht in Pläne ein.
+- Melden darf es sich nur noch bei einem echten Deadlock-Anlass — einer konkreten Frage oder Meinung zu Helden, Items, Builds oder Meta. Alles andere bleibt stumm; der Normalfall ist Schweigen.
+- Der Schreibton wurde an rund 3000 echten Chatnachrichten gemessen (typisch: drei bis vier Wörter, ein einziger Satz, kaum Satzzeichen, echte Umlaute) und genau darauf geeicht — kurze Fragmente statt ausformulierter Absätze.
+
+**Betroffen:** Intern. Die Chat-KI ist weiter in der Review-Testphase und für Zuschauer wie Streamer noch nicht aktiv.
+
 ## #85 — Admin-Dashboard: Affiliate-Abrechnung repariert + Admin-Login hält 2 Wochen
 
 **Problem:** Zwei Dinge im Admin-Bereich. Erstens warf die Affiliate-Abrechnung beim Öffnen einen Server-Fehler (500) und lud gar nicht — die Datenbank-Abfrage fragte eine Spalte („Provisionssatz") ab, die es in der Vertriebler-Konten-Tabelle nie gegeben hat. Zweitens fiel die Admin-Anmeldung schon nach wenigen Stunden wieder raus (die Sitzung galt nur 6 Stunden), was sich anfühlte, als wäre das Dashboard ständig „tot": Oberfläche lädt, aber jede Aktion läuft ins Leere, weil man im Hintergrund längst abgemeldet war.

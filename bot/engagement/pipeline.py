@@ -133,12 +133,27 @@ class HandleResult:
     referenced_thread_ids: list[int] | None = None
 
 
-def _is_directed_at_other(content: str) -> bool:
-    """Billiger Pre-Filter: führendes ``@name`` heisst, die Nachricht ist klar an eine
-    bestimmte Person gerichtet — kein offenes Angebot an die Runde, also schweigen wir,
-    ohne überhaupt das Modell zu fragen. Bewusst eng (nur FÜHRENDES @), damit offene
-    Runden-Nachrichten, die nur nebenbei jemanden erwähnen, nicht fälschlich rausfliegen."""
-    return content.lstrip().startswith("@")
+def _should_skip_trigger(content: str) -> bool:
+    """Billiger Pre-Filter ohne Modell-Call: Nachrichten, auf die ein Zuschauer nie
+    antworten würde, fliegen sofort raus.
+    (1) führendes ``@name`` / ``!command`` → an eine bestimmte Person bzw. einen Bot
+        gerichtet, nicht an die offene Runde.
+    (2) ein einzelnes Token ohne Fragezeichen → Emote, Channel-Emote oder Reaktionswort
+        ('stark', 'gg', 'easy', 'peace', 'wallah', '<3', 'kitant2Dance') — nie ein echter
+        Andock-Punkt. Ein-Wort-Fragen ('haze?') gehen bewusst weiter ans Modell.
+    (3) dasselbe Token mehrfach → wiederholtes Emote-/Cheer-Spam ('Cheer1 Cheer1 Cheer1').
+    Alles andere (Mehrwort-Nachrichten) entscheidet weiter das Modell."""
+    text = content.strip()
+    if not text:
+        return True
+    if text[0] in "@!":
+        return True
+    tokens = text.split()
+    if len(tokens) == 1 and not text.endswith("?"):
+        return True
+    if len(tokens) >= 2 and len(set(tokens)) == 1:
+        return True
+    return False
 
 
 def _sync_load_settings(channel_login: str):
@@ -269,7 +284,7 @@ class EngagementPipeline:
         # Führendes @name → an eine bestimmte Person gerichtet, nicht an die Runde.
         # Hart überspringen (spart den Modell-Call), Nachricht bleibt aber im Buffer
         # als Kontext für spätere Antworten.
-        if _is_directed_at_other(msg.content):
+        if _should_skip_trigger(msg.content):
             return HandleResult(decision=Decision.SILENT)
 
         now = datetime.now(timezone.utc)
