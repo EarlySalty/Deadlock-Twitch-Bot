@@ -235,7 +235,7 @@ def _load_registry(conn: Any, streamer: str) -> dict[str, Any]:
         conn,
         """
         SELECT twitch_user_id, discord_user_id, discord_display_name,
-               is_monitored_only, raid_bot_enabled, live_ping_enabled
+               is_monitored_only
           FROM twitch_streamers
          WHERE LOWER(twitch_login) = LOWER(%s)
          LIMIT 1
@@ -246,8 +246,6 @@ def _load_registry(conn: Any, streamer: str) -> dict[str, Any]:
             "discord_user_id",
             "discord_display_name",
             "is_monitored_only",
-            "raid_bot_enabled",
-            "live_ping_enabled",
         ),
     )
 

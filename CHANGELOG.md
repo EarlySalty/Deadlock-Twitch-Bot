@@ -1,3 +1,13 @@
+## #81 — Partner-Status-Konsolidierung: zwei weitere Leser auf die zentrale Wahrheit
+
+**Problem:** Mehrere Programmteile lasen Partner-Eigenschaften (z. B. „verifiziert seit", Raid-/Live-Ping-Einstellungen) direkt aus der breiten Tracking-Tabelle statt aus der zentralen Partner-Sicht. Dort liegen diese Eigenschaften nur als gespiegelte Kopie — pflegt man denselben Wert an zwei Orten, driften die beiden Stände früher oder später auseinander. Das ist die Fortsetzung der Aufräumarbeit aus #80.
+
+**Geändert:** Zwei dieser Stellen beziehen den Partner-Status jetzt aus der zentralen Wahrheit bzw. fragen ihn gar nicht mehr aus der Tracking-Tabelle ab.
+
+**Wie's funktioniert:** Der Post-Stream-Report lud zwei Partner-Konfig-Werte mit, die er nirgends verwendet hat — die werden schlicht nicht mehr abgefragt. Der Admin-Verifizierungs-Dialog entscheidet „schon verifiziert → keine erneute Benachrichtigung" jetzt anhand des echten Partner-Datensatzes statt anhand der gespiegelten Kopie in der Tracking-Tabelle. Für bestehende Partner ist das Ergebnis heute identisch (beide Kopien sind gleich); der Unterschied greift erst, wenn die doppelten Spalten später ganz aus der Tracking-Tabelle entfernt werden — dann gibt es nur noch eine Quelle, die nicht mehr veralten kann.
+
+**Betroffen:** Für Zuschauer und Streamer nichts sichtbar — reine interne Datenhygiene als Zwischenschritt der Partner-DB-Konsolidierung.
+
 ## #80 — Partner-Status-Check: kein veralteter Nachbau mehr
 
 **Problem:** Der Bot beantwortet an mehreren Stellen die Frage „ist das ein operativ aktiver Partner?" — und zwei dieser Stellen waren sich uneinig. Die eine las den zentral gepflegten Partner-Status; die andere, eigentlich die strengere (sie steuert u. a. den Bot-Ban-/Blacklist-Schutz und seit der letzten Änderung auch das Engagement-AI-Gate), rechnete den Status von Hand aus dem rohen Partner-Datensatz nach. Dieser Nachbau war veraltet: Er prüfte nur, ob die Partnerschaft formal aktiv, nicht per Opt-out abgeschaltet und nicht admin-archiviert war — den Zustand „technisch pausiert" bzw. „Bot wurde in diesem Kanal gebannt" hat er übersehen. Folge: Kanäle, in denen der Bot pausiert oder gebannt war, zählten trotzdem als operative Partner. Genau das war der Auslöser dafür, dass die Engagement-AI in solchen Kanälen anschlug.

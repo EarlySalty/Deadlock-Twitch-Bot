@@ -280,27 +280,32 @@ def _dashboard_verify_storage_step(self, login: str, mode: str) -> dict[str, obj
         with storage.transaction() as c:
             source_row = c.execute(
                 """
-                SELECT twitch_user_id, discord_user_id, discord_display_name, manual_verified_at
+                SELECT twitch_user_id, discord_user_id, discord_display_name
                 FROM twitch_streamers
                 WHERE twitch_login=%s
                 """,
                 (login,),
             ).fetchone()
             partner_row = storage.load_active_partner(c, twitch_login=login)
+            # Verifizierungs-Status kommt aus der Partner-Wahrheit, nicht mehr aus der
+            # gespiegelten twitch_streamers-Spalte: schon verifiziert -> nicht erneut benachrichtigen.
+            already_verified_at = (
+                (partner_row["manual_verified_at"] if hasattr(partner_row, "keys") else partner_row[11])
+                if partner_row
+                else None
+            )
+            should_notify = already_verified_at is None
             twitch_user_id = ""
             if source_row:
                 row_data = _row_to_dict(source_row)
                 twitch_user_id = str(row_data.get("twitch_user_id") or "").strip()
-                should_notify = row_data.get("manual_verified_at") is None
             elif partner_row:
                 row_data = {
                     "twitch_user_id": partner_row["twitch_user_id"] if hasattr(partner_row, "keys") else partner_row[1],
                     "discord_user_id": partner_row["discord_user_id"] if hasattr(partner_row, "keys") else partner_row[21],
                     "discord_display_name": partner_row["discord_display_name"] if hasattr(partner_row, "keys") else partner_row[22],
-                    "manual_verified_at": partner_row["manual_verified_at"] if hasattr(partner_row, "keys") else partner_row[11],
                 }
                 twitch_user_id = str(row_data.get("twitch_user_id") or "").strip()
-                should_notify = row_data.get("manual_verified_at") is None
 
             if not twitch_user_id:
                 return {"kind": "message", "message": f"{login} ist nicht gespeichert"}
