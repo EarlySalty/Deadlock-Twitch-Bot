@@ -1,3 +1,15 @@
+## #88 — Chat-Werbung: kein Spam zum Stream-Start, Fake-Server-Warnung wird endlich sichtbar
+
+**Problem:** Drei zusammenhängende Macken in der automatischen Discord-Werbung im Chat. Erstens warf der Bot direkt zu Stream-Beginn eine Werbenachricht raus, obwohl noch niemand im Chat geschrieben hatte. Zweitens griff die eigentlich vorgesehene Regel „erst nach genug Chat-Aktivität werben" nicht — es wurde geworben, egal wie tot der Chat war. Und drittens tauchte die Warnung vor den gefälschten Discord-Servern („Deadlock Discord Deutschland" / „Deadlock German Competitiv HUB") praktisch nie auf.
+
+Ursache war ein zweiter, neuerer Werbe-Weg (die zielgerichtete Promo mit KI-Vorauswahl), der parallel zum älteren lief, aber nur seinen eigenen 15-Minuten-Kanaltakt prüfte — nicht die Aktivitäts-Schwellen. Bei frischem Stream ist dieser Takt sofort „frei", also feuerte er sofort. Und weil er den Werbe-Slot dauerhaft belegte, kam der ältere Weg, an dem die Fake-Server-Warnung hängt, fast nie zum Zug — die Warnung wurde regelrecht ausgehungert, ihr Timer nicht mal gestartet.
+
+**Geändert:** Beide Werbe-Wege hängen jetzt an derselben Aktivitäts-Schwelle, und die Fake-Server-Warnung wird eine Ebene höher entschieden — dort, wo feststeht, welcher Werbetyp den Slot überhaupt bekommt.
+
+**Wie's funktioniert:** Bevor geworben wird — egal über welchen Weg — muss seit der letzten Werbung genug echte Chat-Aktivität zusammengekommen sein: eine Mindestzahl an Nachrichten seit der letzten Promo, mehrere verschiedene Schreiber im Zeitfenster und (nach der ersten Promo) ein paar neue Gesichter. Erst wenn das erfüllt ist, kommt eine Werbung — am toten Stream-Start also gar nichts. Die Fake-Server-Warnung wird jetzt zentral im fälligen Werbe-Slot geprüft: Ist ihr eigener Takt (Standard 45 Minuten pro Kanal) reif, kommt die Warnung statt einer normalen Promo — unabhängig davon, welcher Werbe-Weg sonst gefeuert hätte. So wechseln sich Werbung und Warnung von selbst ab, statt dass ein Weg den anderen verdrängt. Der Wortlaut bleibt bewusst vorsichtig („könnte/möglicherweise Fake"), nennt die beiden Server aber klar beim Namen.
+
+**Betroffen:** Alle Partner-Kanäle, in denen der Bot Discord-Werbung postet. Zuschauer sehen am Stream-Anfang keine Werbung mehr ins Leere und bekommen die Warnung vor den Fake-Servern jetzt regelmäßig zu Gesicht.
+
 ## #87 — Admin-Dashboard: Logout und Direktaufrufe führen nicht mehr ins Leere
 
 **Problem:** Zwei Ärgernisse beim Admin-Zugang. Erstens schickte der Logout-Button einen auf eine „Seite nicht gefunden", statt sauber abzumelden — er rutschte in den Anmelde-Weg der öffentlichen Streamer-Seite, dessen Ziel es auf der Admin-Adresse gar nicht gibt. Zweitens: Wer eine Admin-Unterseite direkt aufrief (z. B. einen gespeicherten Link), ohne angemeldet zu sein, bekam eine nackte Fehlerseite (401) statt zur Anmeldung geleitet zu werden — man musste erst umständlich die Startseite ansteuern und sich dort einloggen.

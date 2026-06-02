@@ -972,6 +972,34 @@ class PromoMixin:
         last_map[login] = chosen
         return self._format_promo_template(chosen, invite)
 
+    async def _maybe_send_scam_warning(
+        self, login: str, channel_id: str, invite: str, now: float, *, reason: str
+    ) -> bool:
+        """Postet im fälligen Promo-Slot die Fake-Server-Warnung statt einer Promo.
+
+        Eigener Cooldown (SCAM_WARNING_COOLDOWN_MIN) -> Warnung und reguläre Promos
+        wechseln sich von selbst ab. Wird sowohl vom Stats-Promo-Pfad
+        (_send_promo_message) als auch direkt aus der Promo-Schleife aufgerufen,
+        damit die Warnung auch dann erscheint, wenn sonst eine Targeted-Promo den
+        Slot belegt hätte. Gibt True zurück, wenn die Warnung gesendet wurde.
+        """
+        if not self._scam_warning_due(login, now, reason=reason):
+            return False
+        warn_text = self._build_scam_warning_text(login, invite)
+        if not warn_text:
+            return False
+        warned = await self._send_announcement(
+            self._make_promo_channel(login, channel_id),
+            warn_text,
+            color="orange",
+            source="scam_warning",
+        )
+        if not warned:
+            return False
+        self._mark_promo_sent(login, now, reason=reason)
+        self._last_scam_warning_sent[login] = now
+        return True
+
     def _promo_blocked_by_plan_or_flag(self, login: str) -> bool:
         """Returns True wenn Bot-Werbung fuer diesen Streamer dauerhaft blockiert ist
         (promo_disabled=1 oder Plan-Entitlement chat.promos.disable). Greift VOR jeder
@@ -1024,20 +1052,10 @@ class PromoMixin:
 
         # Statt der Discord-Werbung gelegentlich die Fake-Server-Warnung posten.
         # Eigener Cooldown -> Promos und Warnung wechseln sich von selbst ab.
-        if self._scam_warning_due(login, now, reason=reason):
-            warn_text = self._build_scam_warning_text(login, invite)
-            if warn_text:
-                warned = await self._send_announcement(
-                    self._make_promo_channel(login, channel_id),
-                    warn_text,
-                    color="orange",
-                    source="scam_warning",
-                )
-                if not warned:
-                    return False
-                self._mark_promo_sent(login, now, reason=reason)
-                self._last_scam_warning_sent[login] = now
-                return True
+        if await self._maybe_send_scam_warning(
+            login, channel_id, invite, now, reason=reason
+        ):
+            return True
 
         msg = self._build_promo_text(login, invite, reason=reason)
         if not msg:
@@ -1172,12 +1190,15 @@ class PromoMixin:
         )
         return current_viewers, baseline, source, sample_count, threshold
 
-    async def _maybe_send_promo_with_stats(self, login: str, channel_id: str, now: float) -> bool:
-        if not self._promo_channel_allowed(login):
-            return False
-        if not self._overall_promo_ready(login, now):
-            return False
+    def _promo_activity_ready(self, login: str, now: float) -> bool:
+        """True, wenn seit der letzten Promo genug frische Chat-Aktivität war.
 
+        Bündelt die Aktivitäts-Schwellen einer regulären Chat-Promo: Mindest-Roh-
+        Nachrichten seit der letzten Promo, Mindest-Messages/Chatter im
+        Aktivitätsfenster, der aktivitätsabhängige Cooldown und neue Chatter. Gilt
+        jetzt auch für die Targeted-Promo, damit am Session-Start (noch keine
+        Aktivität) nicht sofort geworben wird.
+        """
         min_raw_msgs = max(0, int(PROMO_ACTIVITY_MIN_RAW_MSGS_SINCE_PROMO))
         if min_raw_msgs > 0 and self._raw_msg_count_since_last_promo(login) < min_raw_msgs:
             return False
@@ -1197,8 +1218,20 @@ class PromoMixin:
             if self._get_new_chatters_in_window(login, now) < PROMO_NEW_CHATTERS_MIN:
                 return False
 
+        return True
+
+    async def _maybe_send_promo_with_stats(self, login: str, channel_id: str, now: float) -> bool:
+        if not self._promo_channel_allowed(login):
+            return False
+        if not self._overall_promo_ready(login, now):
+            return False
+        if not self._promo_activity_ready(login, now):
+            return False
         if not self._promo_attempt_allowed(login, now):
             return False
+
+        msg_count, unique_chatters, msgs_per_min = self._get_promo_activity_stats(login, now)
+        cooldown_sec = self._promo_cooldown_sec(msgs_per_min)
 
         ok = await self._send_promo_message(login, channel_id, now, reason="chat_activity")
         if ok:
@@ -1391,10 +1424,21 @@ class PromoMixin:
                 if not is_partner_channel_for_chat_tracking(login):
                     continue
 
-                # Targeted Promo: hat eigene 15-Min-Cooldown-Logik, Vorrang wenn ready
-                if self._overall_promo_ready(login, now):
+                # Targeted Promo + Fake-Server-Warnung nur im FÄLLIGEN Promo-Slot:
+                # erst wenn seit der letzten Promo genug frische Chat-Aktivität da
+                # war (kein Werben direkt beim Session-Start, gleiche Schwellen wie
+                # der Stats-Pfad).
+                if self._overall_promo_ready(login, now) and self._promo_activity_ready(
+                    login, now
+                ):
                     invite, _ = await self._get_promo_invite(login)
                     if invite:
+                        # Warnung hat im fälligen Slot Vorrang (eigener Cooldown),
+                        # sonst würde die Targeted-Promo sie dauerhaft verdrängen.
+                        if await self._maybe_send_scam_warning(
+                            login, str(broadcaster_id), invite, now, reason="promo"
+                        ):
+                            continue
                         bucket = self._promo_activity.get(login)
                         active_chatters = list(dict.fromkeys(
                             c for _, c in (bucket or [])
