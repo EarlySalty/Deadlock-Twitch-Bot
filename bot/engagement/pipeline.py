@@ -133,6 +133,14 @@ class HandleResult:
     referenced_thread_ids: list[int] | None = None
 
 
+def _is_directed_at_other(content: str) -> bool:
+    """Billiger Pre-Filter: führendes ``@name`` heisst, die Nachricht ist klar an eine
+    bestimmte Person gerichtet — kein offenes Angebot an die Runde, also schweigen wir,
+    ohne überhaupt das Modell zu fragen. Bewusst eng (nur FÜHRENDES @), damit offene
+    Runden-Nachrichten, die nur nebenbei jemanden erwähnen, nicht fälschlich rausfliegen."""
+    return content.lstrip().startswith("@")
+
+
 def _sync_load_settings(channel_login: str):
     return query_one(
         """
@@ -257,6 +265,12 @@ class EngagementPipeline:
         except Exception:
             log.exception("Engagement: append_user_turn fehlgeschlagen")
             return HandleResult(decision=Decision.PROVIDER_ERROR)
+
+        # Führendes @name → an eine bestimmte Person gerichtet, nicht an die Runde.
+        # Hart überspringen (spart den Modell-Call), Nachricht bleibt aber im Buffer
+        # als Kontext für spätere Antworten.
+        if _is_directed_at_other(msg.content):
+            return HandleResult(decision=Decision.SILENT)
 
         now = datetime.now(timezone.utc)
         if not self._rhythm.anti_flood_ok(msg.channel_login, now=now):
