@@ -1,3 +1,11 @@
+## #94 — Fairere Raid-Verteilung im Fallback (kein Partner online)
+
+**Problem:** Wenn kein Partner live war, wurde der Fallback-Kanal immer nur nach wenigsten Viewern ausgewählt — ohne Rücksicht darauf, wie viele Raids jemand schon bekommen hat. Wer klein streamt und oft live ist, bekam dadurch unverhältnismäßig viele Raids.
+
+**Geändert:** Die Fallback-Selektion (`select_fairest_candidate`) berücksichtigt jetzt `received_successful_raids_total` aus der Score-Datenbank als primären Sortierschlüssel. Viewer-Count bleibt Tiebreaker.
+
+**Wie's funktioniert:** Vor der Auswahl wird für alle Kandidaten die bisherige Raid-Gesamtzahl aus der DB geladen. Sortiert wird dann zuerst nach wenigsten erhaltenen Raids — wer noch kaum Raids hat, kommt nach vorne. Kanäle die noch gar nicht im System sind, bekommen automatisch 0 und haben damit höchste Priorität. Viewer-Count und Follower-Count entscheiden bei Gleichstand. Das verhindert, dass ein Kanal mit wenig Viewern dauerhaft alle Fallback-Raids kassiert während andere leer ausgehen.
+
 ## #93 — Abo-Preise drastisch gesenkt + Raid-Boost-Gewichtung reduziert
 
 **Ausgangslage:** Die Abo-Preise lagen zwischen 3,99 € und 13,99 € und wurden als zu hoch eingestuft — insbesondere weil das Analyse-Dashboard aktuell MiniMax als KI nutzt, nicht Claude.

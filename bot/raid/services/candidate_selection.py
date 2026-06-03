@@ -377,20 +377,52 @@ class CandidateSelectionService:
         if callable(self.attach_followers_totals):
             await self.attach_followers_totals(pool)
 
-        def _sort_key(candidate: Candidate) -> tuple[int, int, str]:
+        # Raid-Totals laden um faire Verteilung sicherzustellen — wer weniger Raids
+        # erhalten hat, wird bevorzugt. Unbekannte Kandidaten (nicht im System)
+        # defaulten auf 0 und haben damit automatisch höchste Priorität.
+        received_raids_by_id: dict[str, int] = {}
+        candidate_ids = [
+            str(c.get("user_id") or "").strip()
+            for c in pool
+            if str(c.get("user_id") or "").strip()
+        ]
+        if candidate_ids:
+            try:
+                connection_factory = self.readonly_connection_factory or readonly_connection
+                with connection_factory() as conn:
+                    placeholders = ",".join("%s" for _ in candidate_ids)
+                    rows = conn.execute(
+                        "SELECT twitch_user_id, received_successful_raids_total "
+                        f"FROM twitch_partner_raid_scores WHERE twitch_user_id IN ({placeholders})",
+                        candidate_ids,
+                    ).fetchall()
+                for row in rows:
+                    uid = str(row[0] or "").strip()
+                    if uid:
+                        received_raids_by_id[uid] = _safe_int(row[1], 0)
+            except Exception:
+                self.logger.debug("Fairest selection: failed to load raid totals", exc_info=True)
+
+        def _sort_key(candidate: Candidate) -> tuple[int, int, int, str]:
+            uid = str(candidate.get("user_id") or "").strip()
+            raids_total = received_raids_by_id.get(uid, 0)
             viewers = _safe_int(candidate.get("viewer_count"), 10**9)
             followers = _safe_int(candidate.get("followers_total"), 10**9)
             started_at = str(candidate.get("started_at") or "9999-99-99")
-            return (viewers, followers, started_at)
+            return (raids_total, viewers, followers, started_at)
 
         pool.sort(key=_sort_key)
 
         selected = pool[0]
+        selected_id = str(selected.get("user_id") or "").strip()
+        selected_raids = received_raids_by_id.get(selected_id, 0)
         self.logger.info(
-            "Raid target selection (min viewers): %s (viewers=%s, followers=%s, recent_filtered=%d) from %d candidates",
+            "Raid target selection (fairest): %s (viewers=%s, followers=%s, "
+            "received_raids_total=%d, recent_filtered=%d) from %d candidates",
             selected.get("user_login"),
             selected.get("viewer_count"),
             selected.get("followers_total"),
+            selected_raids,
             max(0, len(candidates) - len(pool)),
             len(candidates),
         )
