@@ -82,7 +82,7 @@ class _EmbedsMixin:
         cleaned = " ".join(cleaned.split())
         if not cleaned:
             cleaned = "STREAMER"
-        name = f"{cleaned.upper()} LIVE PING"
+        name = f"{cleaned} ist live"
         return name[:100]
 
     @staticmethod
@@ -296,7 +296,7 @@ class _EmbedsMixin:
             },
             "mentions": {
                 "use_streamer_ping_role": bool(mentions.get("enabled", True)),
-                "streamer_ping_role_name_template": "{channel} LIVE PING",
+                "streamer_ping_role_name_template": "{channel} ist live",
                 "allowed_editor_role_ids": [
                     int(role_id)
                     for role_id in (config.get("allowed_editor_role_ids") or [])
@@ -557,19 +557,6 @@ class _EmbedsMixin:
                     )
             except Exception:
                 log.debug("Could not persist live ping role_id for %s", login, exc_info=True)
-
-        if role is not None and discord_user_id:
-            member = guild.get_member(discord_user_id)
-            if member is None:
-                try:
-                    member = await guild.fetch_member(discord_user_id)
-                except Exception:
-                    member = None
-            if member is not None and role not in member.roles:
-                try:
-                    await member.add_roles(role, reason=f"Live ping role mapping for {login}")
-                except Exception:
-                    log.debug("Could not assign live ping role to member=%s", discord_user_id, exc_info=True)
 
         return (f"<@&{role_id}>", role_id) if role_id else ("", None)
 

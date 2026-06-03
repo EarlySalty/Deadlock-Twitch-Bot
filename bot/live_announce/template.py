@@ -141,7 +141,7 @@ class AnnouncementImages:
 @dataclass(slots=True)
 class AnnouncementMentions:
     use_streamer_ping_role: bool = True
-    streamer_ping_role_name_template: str = "{channel} LIVE PING"
+    streamer_ping_role_name_template: str = "{channel} ist live"
     allowed_editor_role_ids: list[int] = field(default_factory=list)
     static_ping_role_ids: list[int] = field(default_factory=list)
     allow_everyone: bool = False
@@ -155,7 +155,7 @@ class AnnouncementMentions:
             use_streamer_ping_role=_coerce_bool(src.get("use_streamer_ping_role"), True),
             streamer_ping_role_name_template=_coerce_str(
                 src.get("streamer_ping_role_name_template"),
-                "{channel} LIVE PING",
+                "{channel} ist live",
             ),
             allowed_editor_role_ids=[
                 _coerce_int(item, -1)
@@ -692,7 +692,7 @@ def _to_template_compatible_dict(config: dict[str, Any]) -> dict[str, Any]:
         },
         "mentions": {
             "use_streamer_ping_role": bool(mentions.get("enabled", True)),
-            "streamer_ping_role_name_template": "{channel} LIVE PING",
+            "streamer_ping_role_name_template": "{channel} ist live",
             "allowed_editor_role_ids": [
                 int(role_id)
                 for role_id in (config.get("allowed_editor_role_ids") or [])

@@ -1,3 +1,11 @@
+## #92 — Live-Ping-Rolle: Umbenennung + Streamer pingen sich nicht mehr selbst
+
+**Problem:** Die automatisch erstellte Discord-Ping-Rolle hieß `KANALNAME LIVE PING` (alles Großbuchstaben, englisch) — unpassend. Dazu hatte der Bot beim Erstellen der Rolle dem Streamer die Rolle direkt selbst zugewiesen: wer live geht, bekam die eigene Ping-Rolle und wurde beim nächsten Go-Live-Event angepingt. Das ist das Gegenteil von sinnvoll.
+
+**Geändert:** Der Rollenname folgt jetzt dem Format `kanalname ist live`. Die Zuweisung der Ping-Rolle an den Streamer selbst wurde in beiden Code-Pfaden (Monitoring-Flow + Dashboard-Live-Flow) entfernt.
+
+**Wie's funktioniert:** Die Rolle wird nach wie vor automatisch erstellt und im Live-Embed als Mention eingebunden — Zuschauer können sie sich selbst in Discord zuweisen, um Benachrichtigungen zu erhalten. Der Streamer bekommt sie nicht mehr automatisch und wird damit nicht über den eigenen Stream angepingt.
+
 ## #91 — Live-Ankündigung: Textzeile entfernt, Umlaute gefixt, Offline-Embed aufgeräumt
 
 **Problem:** Drei Kleinigkeiten, die zusammen störten. (1) Vor jedem Live-Embed stand eine redundante Klartextzeile (`X ist live! Schau über den Button unten rein.`), die denselben Inhalt wie das Embed selbst doppelt angezeigt hat. (2) Im Footer (`fuer`) und im Content-Template (`ueber`) standen ASCII-Umlaute statt echter Zeichen — sichtbar für alle Streamer ohne eigene DB-Konfiguration, z. B. daxy. (3) Das Offline-Embed zeigte `OFFLINE` dreifach: im Embed-Titel, im Author-Label (`OFFLINE: Name`) und als eigenes Status-Feld.

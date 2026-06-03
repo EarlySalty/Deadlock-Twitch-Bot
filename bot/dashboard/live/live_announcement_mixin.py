@@ -177,7 +177,7 @@ def _to_template_config(cfg: dict[str, Any]) -> dict[str, Any]:
         },
         "mentions": {
             "use_streamer_ping_role": bool(mentions.get("enabled", True)),
-            "streamer_ping_role_name_template": "{channel} LIVE PING",
+            "streamer_ping_role_name_template": "{channel} ist live",
             "allowed_editor_role_ids": [
                 int(role_id)
                 for role_id in (cfg.get("allowed_editor_role_ids") or [])
@@ -699,7 +699,7 @@ class DashboardLiveAnnouncementMixin:
         cleaned = " ".join(cleaned.split())
         if not cleaned:
             cleaned = "STREAMER"
-        return f"{cleaned.upper()} LIVE PING"[:100]
+        return f"{cleaned} ist live"[:100]
 
     @staticmethod
     def _la_sanitize_disallowed_mentions_text(value: Any) -> str:
@@ -850,24 +850,6 @@ class DashboardLiveAnnouncementMixin:
                     safe_login,
                     exc_info=True,
                 )
-
-        discord_user_id = self._la_coerce_role_id(entry.get("discord_user_id"))
-        if role is not None and discord_user_id:
-            member = guild.get_member(discord_user_id)
-            if member is None:
-                try:
-                    member = await guild.fetch_member(discord_user_id)
-                except Exception:
-                    member = None
-            if member is not None and role not in getattr(member, "roles", []):
-                try:
-                    await member.add_roles(role, reason=f"Live ping role mapping for {login}")
-                except Exception:
-                    log.debug(
-                        "Could not assign live ping role in dashboard for member=%s",
-                        discord_user_id,
-                        exc_info=True,
-                    )
 
         if created:
             message = f"Ping-Rolle automatisch erstellt: {role.name}"
