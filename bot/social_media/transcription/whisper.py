@@ -181,14 +181,22 @@ class _OpenAIWhisperEngine:
                 timestamp_granularities=["segment"],
             )
         segments_payload = getattr(response, "segments", None) or []
+
+        def _seg_value(seg, key):
+            # OpenAI-SDK liefert pydantic-Objekte (Attribut-Zugriff), aeltere
+            # Antworten/Mocks koennen Dicts sein.
+            if isinstance(seg, dict):
+                return seg.get(key)
+            return getattr(seg, key, None)
+
         segments = tuple(
             TranscriptSegment(
-                start=float(seg.get("start", 0.0) or 0.0),
-                end=float(seg.get("end", 0.0) or 0.0),
-                text=str(seg.get("text", "") or "").strip(),
+                start=float(_seg_value(seg, "start") or 0.0),
+                end=float(_seg_value(seg, "end") or 0.0),
+                text=str(_seg_value(seg, "text") or "").strip(),
             )
             for seg in segments_payload
-            if str(seg.get("text", "") or "").strip()
+            if str(_seg_value(seg, "text") or "").strip()
         )
         return TranscriptionResult(
             text=str(getattr(response, "text", "") or "").strip(),

@@ -1,0 +1,14 @@
+[Unit]
+Description=Deadlock Twitch authorized stream coaching live watch
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/home/naniadm/Documents/Deadlock-Twitch-Bot
+ExecStart=/home/naniadm/Documents/Deadlock-Twitch-Bot/scripts/run_stream_coaching_watch.sh https://www.twitch.tv/helmbombenricky https://www.twitch.tv/skifahrertv
+Restart=always
+RestartSec=15
+
+[Install]
+WantedBy=default.target

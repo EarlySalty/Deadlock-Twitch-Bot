@@ -45,3 +45,6 @@ logs/
 docs/superpowers/
 security-reports/
 data/highlight_clipper/state.json
+data/stream_coaching_audits/
+*.dem
+*.json
