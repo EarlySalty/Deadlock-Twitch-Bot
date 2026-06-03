@@ -378,12 +378,14 @@ STRIPE_PRODUCT_ID_DEFAULTS: dict[str, str] = {
 
 
 def billing_merge_price_id_defaults(mapping: dict[str, dict[int, str]]) -> dict[str, dict[int, str]]:
-    """Return mapping with STRIPE_PRICE_ID_DEFAULTS filled in for any missing slots."""
+    """Return mapping with STRIPE_PRICE_ID_DEFAULTS filled in for any missing slots.
+
+    Code defaults always win for known plans — vault can only add plans not yet
+    defined in STRIPE_PRICE_ID_DEFAULTS (e.g. future plans added without a deploy).
+    """
     result: dict[str, dict[int, str]] = {}
     for plan_id, cycle_map in STRIPE_PRICE_ID_DEFAULTS.items():
-        merged = dict(cycle_map)
-        merged.update(mapping.get(plan_id) or {})
-        result[plan_id] = merged
+        result[plan_id] = dict(cycle_map)
     for plan_id, cycle_map in mapping.items():
         if plan_id not in result:
             result[plan_id] = dict(cycle_map)
