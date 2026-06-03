@@ -20,6 +20,7 @@ import {
   ShieldCheck,
   Sparkles,
   Swords,
+  Terminal,
   Users,
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
@@ -55,6 +56,7 @@ const navigationGroups: NavigationGroup[] = [
       { label: 'Scopes & OAuth', to: '/operations/scopes', icon: ShieldCheck },
       { label: 'EventSub', to: '/operations/eventsub', icon: Radio },
       { label: 'Database', to: '/operations/database', icon: Database },
+      { label: 'DB Query', to: '/operations/query', icon: Terminal },
       { label: 'Error Logs', to: '/operations/errors', icon: AlertTriangle },
       { label: 'Bot Control', to: '/operations/bot', icon: Power },
     ],

@@ -1,3 +1,17 @@
+## #90 — Admin-Dashboard: Changelog-History, Raid-Historie, DB-Query, Raw-Chat-Lag-Fix, Memory-Fix
+
+**Problem:** Sechs Baustellen im Admin-Dashboard auf einmal. (1) Die Changelog-Seite zeigte nie eine History, weil das Backend das Feld schlicht nicht lieferte. (2) Die Raids-Seite zeigte keine vergangenen Raids — gleicher Grund: Backend lieferte keine History. (3) Die EventSub-Seite zeigte bei inaktivem WebSocket 0 Subscriptions, ohne Hinweis was zuletzt registriert war. (4) Die Memory-KPI zeigte dauerhaft „0 B", weil `psutil` nicht im venv installiert war. (5) Der Raw-Chat-Lag-Warning blieb permanent aktiv für `its_raffi`, weil der Live-State seit dem EventSub-Ausfall nie auf Offline gesetzt wurde — der Bot behandelte einen 80 Tage alten Timestamp als „live". (6) Keine Möglichkeit, direkt Daten aus der DB abzulesen.
+
+**Geändert:**
+- **Changelog-History:** Der `/twitch/api/admin/config/overview`-Endpoint gibt jetzt `changelog.entries` mit den letzten 20 Einträgen aus der `internal_home_changelog`-Tabelle zurück — die History-Sektion auf der Changelog-Seite füllt sich damit automatisch.
+- **Raid-Historie:** Derselbe Endpoint enthält jetzt `raids.history` mit den letzten 50 Einträgen aus `twitch_raid_history` (Streamer, Ziel, Viewer-Zahl, Zeitstempel, Erfolg). Die Raids-Seite im Dashboard zeigt sie direkt in der Tabelle.
+- **EventSub Last-Known-Snapshot:** Wenn der WebSocket inaktiv ist und keine aktiven Subscriptions vorliegen, liest der EventSub-Endpoint den letzten Snapshot mit `listener_count > 0` aus `twitch_eventsub_capacity_snapshot` — inklusive `listeners_json` — und gibt ihn als `lastKnownSubscriptions` zurück. Die EventSub-Seite zeigt diesen Snapshot mit Zeitstempel als eigene Sektion.
+- **Raw-Chat-Lag-Fix:** Das Live-Scope-JOIN in `_fetch_raw_chat_health_snapshot` prüft jetzt zusätzlich, ob `last_seen_at`/`last_started_at` des Live-States nicht älter als 4 Stunden ist. Eingefrorene States aus der Zeit vor dem EventSub-Ausfall gelten nicht mehr als „live" — die veraltete Warnung verschwindet beim nächsten Health-Poll.
+- **Memory-Fix:** `psutil` ins venv installiert. Die RSS/Process-Memory-KPI im System Overview zeigt jetzt den echten Prozess-Speicherverbrauch.
+- **DB Query:** Neuer Admin-Endpoint `GET /twitch/api/admin/system/query?sql=...` — nur SELECT erlaubt, max. 200 Rows, gefährliche Keywords (`INSERT`, `UPDATE`, `DROP` etc.) werden geblockt. Neue Seite „DB Query" in der Sidebar unter Operations: Tabellenliste zum Klicken, SQL-Textarea mit Ctrl+Enter, Ergebnistabelle.
+
+**Wie's funktioniert jetzt:** Admin öffnet `/twitch/admin/operations/query`, klickt eine Tabelle an, der Editor füllt sich mit einem Basis-SELECT, Ctrl+Enter schickt die Abfrage ab, das Ergebnis erscheint als sortierbare Tabelle. Schreiboperationen schlägt der Server mit HTTP 400 zurück bevor eine Verbindung zur DB geht.
+
 ## #89 — Live-Ankündigungen: kein Schriftzug über dem Embed, echte Umlaute, Promos nur für aktive Partner
 
 **Problem:** Drei separate Baustellen. Erstens stand über jedem Live-Embed ein redundanter Klartext-Satz („X ist live! Schau über den Button unten rein."), der denselben Inhalt wie das Embed doppelt zeigte. Zweitens verwendeten Embeds und Buttons ASCII-Ausweichreplacement statt echter Umlaute (`ue`, `fuer`, `ueber` statt `ü`, `für`, `über`). Drittens wurden Chat-Promos an Streamer gesendet, auch wenn deren Partner-Status inzwischen deaktiviert oder archiviert war.

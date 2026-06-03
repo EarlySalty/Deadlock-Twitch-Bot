@@ -8,6 +8,7 @@ import { BotConfig } from '@/pages/config/BotConfig';
 import { ChatConfig } from '@/pages/config/ChatConfig';
 import { RaidConfig } from '@/pages/config/RaidConfig';
 import { DatabaseStats } from '@/pages/monitoring/DatabaseStats';
+import DatabaseQueryPage from '@/pages/monitoring/DatabaseQuery';
 import { ErrorLogs } from '@/pages/monitoring/ErrorLogs';
 import { EventSubStatusPage } from '@/pages/monitoring/EventSubStatus';
 import { SystemOverview } from '@/pages/monitoring/SystemOverview';
@@ -53,6 +54,7 @@ const router = createBrowserRouter(
         { path: 'operations/scopes', element: <ScopesPage /> },
         { path: 'operations/eventsub', element: <EventSubStatusPage /> },
         { path: 'operations/database', element: <DatabaseStats /> },
+        { path: 'operations/query', element: <DatabaseQueryPage /> },
         { path: 'operations/errors', element: <ErrorLogs /> },
         { path: 'operations/bot', element: <BotControlPage /> },
         { path: 'community', element: <Navigate to="/community/streamers" replace /> },

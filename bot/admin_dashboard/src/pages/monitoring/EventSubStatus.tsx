@@ -12,6 +12,8 @@ export function EventSubStatusPage() {
   const eventSubQuery = useEventSubStatus();
   const data = eventSubQuery.data;
   const subscriptions = data?.subscriptions ?? [];
+  const lastKnown = (data as Record<string, unknown> | undefined)?.lastKnownSubscriptions as EventSubSubscription[] | undefined ?? [];
+  const lastKnownAt = (data as Record<string, unknown> | undefined)?.lastKnownSnapshotAt as string | undefined;
 
   const columns: TableColumn<EventSubSubscription>[] = [
     {
@@ -69,6 +71,23 @@ export function EventSubStatusPage() {
           />
         </div>
       </article>
+
+      {subscriptions.length === 0 && lastKnown.length > 0 ? (
+        <article className="panel-card rounded-[1.8rem] p-6">
+          <p className="text-xs font-semibold uppercase tracking-[0.2em] text-text-secondary">
+            Letzter bekannter Snapshot
+            {lastKnownAt ? <span className="ml-2 font-normal normal-case text-text-secondary/70">{formatDateTime(lastKnownAt)}</span> : null}
+          </p>
+          <p className="mt-1 text-xs text-text-secondary">WebSocket aktuell inaktiv — zeigt den letzten Snapshot mit aktiven Subscriptions.</p>
+          <div className="mt-4">
+            <DataTable
+              columns={columns}
+              rows={lastKnown}
+              rowKey={(row, index) => String((row as Record<string, unknown>).id ?? index)}
+            />
+          </div>
+        </article>
+      ) : null}
 
       <article className="panel-card rounded-[1.8rem] p-6">
         <p className="text-xs font-semibold uppercase tracking-[0.2em] text-text-secondary">Raw Condition Snapshot</p>

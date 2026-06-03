@@ -489,10 +489,53 @@ def _load_admin_config_overview_snapshot(scope: str) -> dict[str, Any]:
             conn,
             scope=scope,
         )
+        changelog_entries: list[dict[str, Any]] = []
+        try:
+            for r in conn.execute(
+                """
+                SELECT id, entry_date::text, title, content, created_at::text
+                FROM internal_home_changelog
+                ORDER BY entry_date DESC, created_at DESC
+                LIMIT 20
+                """
+            ).fetchall():
+                changelog_entries.append({
+                    "id": r["id"] if hasattr(r, "keys") else r[0],
+                    "entryDate": str(r["entry_date"] if hasattr(r, "keys") else r[1] or ""),
+                    "title": str(r["title"] if hasattr(r, "keys") else r[2] or ""),
+                    "content": str(r["content"] if hasattr(r, "keys") else r[3] or ""),
+                    "createdAt": str(r["created_at"] if hasattr(r, "keys") else r[4] or ""),
+                })
+        except Exception:
+            pass
+        raid_history: list[dict[str, Any]] = []
+        try:
+            for r in conn.execute(
+                """
+                SELECT from_broadcaster_login, to_broadcaster_login, viewer_count,
+                       executed_at::text, reason, success
+                FROM twitch_raid_history
+                ORDER BY executed_at DESC
+                LIMIT 50
+                """
+            ).fetchall():
+                _ok = bool(r["success"] if hasattr(r, "keys") else r[5])
+                raid_history.append({
+                    "streamer": str(r["from_broadcaster_login"] if hasattr(r, "keys") else r[0] or ""),
+                    "target": str(r["to_broadcaster_login"] if hasattr(r, "keys") else r[1] or ""),
+                    "viewers": int(r["viewer_count"] if hasattr(r, "keys") else r[2] or 0),
+                    "executedAt": str(r["executed_at"] if hasattr(r, "keys") else r[3] or ""),
+                    "reason": str(r["reason"] if hasattr(r, "keys") else r[4] or ""),
+                    "success": _ok,
+                    "status": "success" if _ok else "failed",
+                })
+        except Exception:
+            pass
     return {
         "promo": promo_config,
-        "raids": raid_snapshot,
+        "raids": {**dict(raid_snapshot), "history": raid_history},
         "chat": chat_snapshot,
+        "changelog": {"entries": changelog_entries},
     }
 
 
@@ -510,6 +553,7 @@ def _fetch_raw_chat_health_snapshot(conn: Any) -> dict[str, Any]:
         JOIN twitch_live_state ls
           ON LOWER(ls.streamer_login) = LOWER(h.streamer_login)
         WHERE COALESCE(ls.is_live, 0) = 1
+          AND COALESCE(ls.last_seen_at, ls.last_started_at) >= NOW() - INTERVAL '4 hours'
         ORDER BY COALESCE(
             h.last_raw_chat_message_at,
             h.last_raw_chat_insert_ok_at,
@@ -587,6 +631,37 @@ def _fetch_raw_chat_health_snapshot(conn: Any) -> dict[str, Any]:
 _admin_log = logging.getLogger("analytics.admin")
 
 
+def _run_admin_readonly_query(sql: str) -> tuple[list[str], list[list[Any]]]:
+    with storage.readonly_connection() as conn:
+        cur = conn.execute(sql)
+        raw_rows = cur.fetchmany(200)
+        if not raw_rows:
+            if hasattr(cur, "description") and cur.description:
+                columns = [d[0] for d in cur.description]
+            else:
+                columns = []
+            return columns, []
+        if hasattr(raw_rows[0], "keys"):
+            columns = list(raw_rows[0].keys())
+            rows = [
+                [None if v is None else str(v) for v in row.values()]
+                for row in raw_rows
+            ]
+        elif hasattr(cur, "description") and cur.description:
+            columns = [d[0] for d in cur.description]
+            rows = [
+                [None if v is None else str(v) for v in row]
+                for row in raw_rows
+            ]
+        else:
+            columns = [f"col{i}" for i in range(len(raw_rows[0]))]
+            rows = [
+                [None if v is None else str(v) for v in row]
+                for row in raw_rows
+            ]
+        return columns, rows
+
+
 def _admin_500(exc: Exception) -> web.Response:
     """Return generic 500 without leaking internal details."""
     _admin_log.exception("Admin API error: %s", type(exc).__name__)
@@ -601,6 +676,7 @@ class _AnalyticsAdminMixin:
         router.add_get("/twitch/api/admin/streamers/{login}", self._api_admin_streamer_detail)
         router.add_get("/twitch/api/admin/system/health", self._api_admin_system_health)
         router.add_get("/twitch/api/admin/system/oauth-scopes", self._api_admin_system_oauth_scopes)
+        router.add_get("/twitch/api/admin/system/query", self._api_admin_system_query)
         router.add_get("/twitch/api/admin/system/eventsub", self._api_admin_system_eventsub)
         router.add_get("/twitch/api/admin/system/database", self._api_admin_system_database)
         router.add_get("/twitch/api/admin/system/errors", self._api_admin_system_errors)
@@ -1443,6 +1519,35 @@ class _AnalyticsAdminMixin:
             elif "webhook" in transports:
                 websocket_status = "webhook"
 
+        last_known_subscriptions: list[dict[str, Any]] = []
+        last_known_snapshot_at: str | None = None
+        if not subscriptions:
+            try:
+                import json as _json
+                with storage.readonly_connection() as _conn:
+                    snap = _conn.execute(
+                        """
+                        SELECT listeners_json, ts_utc::text, listener_count
+                        FROM twitch_eventsub_capacity_snapshot
+                        WHERE listener_count > 0 AND listeners_json IS NOT NULL
+                        ORDER BY ts_utc DESC
+                        LIMIT 1
+                        """
+                    ).fetchone()
+                if snap is not None:
+                    lj = snap["listeners_json"] if hasattr(snap, "keys") else snap[0]
+                    last_known_snapshot_at = str(snap["ts_utc"] if hasattr(snap, "keys") else snap[1] or "")
+                    if isinstance(lj, str):
+                        parsed = _json.loads(lj)
+                        if isinstance(parsed, list):
+                            last_known_subscriptions = [
+                                {**item, "snapshotAt": last_known_snapshot_at}
+                                if isinstance(item, dict) else {}
+                                for item in parsed[:200]
+                            ]
+            except Exception:
+                pass
+
         return web.json_response(
             {
                 "websocketStatus": websocket_status,
@@ -1466,10 +1571,31 @@ class _AnalyticsAdminMixin:
                     "lastSnapshotAt": overview.get("last_snapshot_at") if isinstance(overview, dict) else None,
                 },
                 "subscriptions": subscriptions,
+                "lastKnownSubscriptions": last_known_subscriptions,
+                "lastKnownSnapshotAt": last_known_snapshot_at,
                 "transportMode": websocket_status,
                 "raw": overview,
             }
         )
+
+    async def _api_admin_system_query(self, request: web.Request) -> web.Response:
+        auth_error = self._admin_auth_error(request, getattr(self, "_require_v2_admin_api", None))
+        if auth_error is not None:
+            return auth_error
+        sql = str(request.query.get("sql") or "").strip()
+        if not sql:
+            return web.json_response({"error": "sql parameter required"}, status=400)
+        sql_upper = re.sub(r"\s+", " ", sql.upper())
+        if not sql_upper.lstrip().startswith("SELECT"):
+            return web.json_response({"error": "only SELECT statements allowed"}, status=400)
+        for kw in ("INSERT", "UPDATE", "DELETE", "DROP", "ALTER", "CREATE", "TRUNCATE", "GRANT", "REVOKE", "COPY"):
+            if re.search(rf"\b{kw}\b", sql_upper):
+                return web.json_response({"error": f"forbidden keyword: {kw}"}, status=400)
+        try:
+            columns, rows = await asyncio.to_thread(_run_admin_readonly_query, sql)
+        except Exception as exc:
+            return web.json_response({"error": str(exc)}, status=400)
+        return web.json_response({"columns": columns, "rows": rows, "rowCount": len(rows)})
 
     async def _api_admin_system_database(self, request: web.Request) -> web.Response:
         auth_error = self._admin_auth_error(request, getattr(self, "_require_v2_admin_api", None))
