@@ -1,3 +1,11 @@
+## #91 — Live-Ankündigung: Textzeile entfernt, Umlaute gefixt, Offline-Embed aufgeräumt
+
+**Problem:** Drei Kleinigkeiten, die zusammen störten. (1) Vor jedem Live-Embed stand eine redundante Klartextzeile (`X ist live! Schau über den Button unten rein.`), die denselben Inhalt wie das Embed selbst doppelt angezeigt hat. (2) Im Footer (`fuer`) und im Content-Template (`ueber`) standen ASCII-Umlaute statt echter Zeichen — sichtbar für alle Streamer ohne eigene DB-Konfiguration, z. B. daxy. (3) Das Offline-Embed zeigte `OFFLINE` dreifach: im Embed-Titel, im Author-Label (`OFFLINE: Name`) und als eigenes Status-Feld.
+
+**Geändert:** Content-Template auf reinen Rollen-Ping (`{rolle}`) gekürzt — die Textzeile fällt weg, der Mention bleibt. Footer-Text und Template-Fallbacks verwenden jetzt echte Umlaute. Im Offline-Embed ist das redundante Status-Feld (`OFFLINE`) entfernt und das Author-Label zeigt nur noch den Streamer-Namen ohne Präfix.
+
+**Ergebnis:** Live-Embeds sehen kompakter aus (kein doppelter Informationstext über dem Embed). Offline-Embeds zeigen `OFFLINE` nur noch einmal im Titel. Alle Standardtexte verwenden korrekte Umlaute.
+
 ## #90 — Admin-Dashboard: Changelog-History, Raid-Historie, DB-Query, Raw-Chat-Lag-Fix, Memory-Fix
 
 **Problem:** Sechs Baustellen im Admin-Dashboard auf einmal. (1) Die Changelog-Seite zeigte nie eine History, weil das Backend das Feld schlicht nicht lieferte. (2) Die Raids-Seite zeigte keine vergangenen Raids — gleicher Grund: Backend lieferte keine History. (3) Die EventSub-Seite zeigte bei inaktivem WebSocket 0 Subscriptions, ohne Hinweis was zuletzt registriert war. (4) Die Memory-KPI zeigte dauerhaft „0 B", weil `psutil` nicht im venv installiert war. (5) Der Raw-Chat-Lag-Warning blieb permanent aktiv für `its_raffi`, weil der Live-State seit dem EventSub-Ausfall nie auf Offline gesetzt wurde — der Bot behandelte einen 80 Tage alten Timestamp als „live". (6) Keine Möglichkeit, direkt Daten aus der DB abzulesen.

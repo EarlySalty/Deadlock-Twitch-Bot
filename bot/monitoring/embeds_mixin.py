@@ -754,7 +754,6 @@ class _EmbedsMixin:
             timestamp=datetime.now(tz=UTC),
         )
 
-        embed.add_field(name="Status", value="OFFLINE", inline=True)
         embed.add_field(name="Kategorie", value=game, inline=True)
         embed.add_field(name="Hinweis", value="VOD über den Button abrufen.", inline=False)
 
@@ -762,7 +761,7 @@ class _EmbedsMixin:
             embed.set_image(url=preview_image_url)
 
         embed.set_footer(text="Letzten Stream auf Twitch ansehen.")
-        embed.set_author(name=f"OFFLINE: {display_name}")
+        embed.set_author(name=display_name)
 
         return embed
 

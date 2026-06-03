@@ -173,7 +173,7 @@ class AnnouncementMentions:
 
 @dataclass(slots=True)
 class LiveAnnouncementConfig:
-    content_template: str = "{channel} ist live! Schau ueber den Button unten rein."
+    content_template: str = "{mention_role}"
     color: str | int = TWITCH_BRAND_COLOR
     author: AnnouncementAuthor = field(default_factory=AnnouncementAuthor)
     title_template: str = "{channel} ist LIVE in {game}!"
@@ -201,7 +201,7 @@ class LiveAnnouncementConfig:
             parsed_fields = list(cls().fields)
         return cls(
             content_template=_coerce_str(
-                src.get("content_template"), "{channel} ist live! Schau ueber den Button unten rein."
+                src.get("content_template"), "{mention_role}"
             ),
             color=src.get("color", TWITCH_BRAND_COLOR),
             author=AnnouncementAuthor.from_dict(src.get("author")),

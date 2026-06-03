@@ -38,7 +38,7 @@ SUPPORTED_PLACEHOLDERS: tuple[str, ...] = (
 
 def _default_live_announcement_config() -> dict[str, Any]:
     return {
-        "content": "{rolle} **{channel}** ist live! Schau ueber den Button unten rein.",
+        "content": "{rolle}",
         "mentions": {"enabled": True, "role_id": ""},
         "embed": {
             "color": "#9146ff",
@@ -65,7 +65,7 @@ def _default_live_announcement_config() -> dict[str, Any]:
                 "cache_buster": True,
             },
             "footer": {
-                "text": "Auf Twitch ansehen fuer mehr Action!",
+                "text": "Auf Twitch ansehen für mehr Action!",
                 "icon_mode": "none",
                 "timestamp_mode": "started_at",
             },
