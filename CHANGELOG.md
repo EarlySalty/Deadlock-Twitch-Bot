@@ -1,3 +1,20 @@
+## #93 — Abo-Preise drastisch gesenkt + Raid-Boost-Gewichtung reduziert
+
+**Ausgangslage:** Die Abo-Preise lagen zwischen 3,99 € und 13,99 € und wurden als zu hoch eingestuft — insbesondere weil das Analyse-Dashboard aktuell MiniMax als KI nutzt, nicht Claude.
+
+**Geändert:** Alle sieben Abo-Stufen neu bepreist, neue Stripe-Preise angelegt und die alten deaktiviert. Zusätzlich wurde die Zusatz-Gewichtung für Raid-Boost-Abonnenten von 25 % auf 15 % gesenkt.
+
+**Neue Preise:**
+- Werbefrei: 3,99 € → **1,99 €/Monat**
+- Raid Boost: 3,99 € → **1,99 €/Monat**
+- Analyse Dashboard: 8,49 € → **1,99 €/Monat**
+- Werbefrei + Raids: 6,99 € → **3,49 €/Monat** (spart 49 ¢ gegenüber Einzelkauf)
+- Werbefrei + Analyse: 10,49 € → **3,49 €/Monat**
+- Analyse + Raids: 11,49 € → **3,49 €/Monat**
+- Alles drin (Komplett): 13,99 € → **4,99 €/Monat** (spart 0,98 € gegenüber Einzelkauf)
+
+**Wie Preise in Stripe funktionieren:** Stripe-Preise sind unveränderbar — ein gesenkter Preis bedeutet immer: neuen Price-Eintrag anlegen, alten auf inaktiv setzen. Bestehende Abos laufen weiterhin auf dem alten Preis, bis sie verlängert oder migriert werden. Neue Checkout-Sessions zeigen sofort die neuen Preise. Die Raid-Boost-Gewichtung ist ein interner Score-Multiplikator: Abonnenten werden im Raid-Netzwerk weiterhin bevorzugt, aber weniger stark als vorher (15 % statt 25 % Score-Aufschlag).
+
 ## #92 — Live-Ping-Rolle: Umbenennung + Streamer pingen sich nicht mehr selbst
 
 **Problem:** Die automatisch erstellte Discord-Ping-Rolle hieß `KANALNAME LIVE PING` (alles Großbuchstaben, englisch) — unpassend. Dazu hatte der Bot beim Erstellen der Rolle dem Streamer die Rolle direkt selbst zugewiesen: wer live geht, bekam die eigene Ping-Rolle und wurde beim nächsten Go-Live-Event angepingt. Das ist das Gegenteil von sinnvoll.

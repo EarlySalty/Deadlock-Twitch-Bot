@@ -38,7 +38,7 @@ BILLING_PLANS: tuple[dict[str, Any], ...] = (
         "tier": plan_tier("chat_quiet"),
         "badge": "quiet",
         "description": "Discord-Werbung im eigenen Chat dauerhaft aus \u2014 kein Boost, keine Analytics.",
-        "monthly_net_cents": 399,
+        "monthly_net_cents": 199,
         "recommended": False,
         "entitlements": list(plan_entitlements("chat_quiet")),
         "features": [
@@ -53,7 +53,7 @@ BILLING_PLANS: tuple[dict[str, Any], ...] = (
         "tier": plan_tier("raid_boost"),
         "badge": "raids",
         "description": "Dein Kanal wird bevorzugt als Raid-Ziel vorgeschlagen \u2014 mehr eingehende Zuschauer.",
-        "monthly_net_cents": 399,
+        "monthly_net_cents": 199,
         "recommended": False,
         "entitlements": list(plan_entitlements("raid_boost")),
         "features": [
@@ -69,14 +69,14 @@ BILLING_PLANS: tuple[dict[str, Any], ...] = (
         "tier": plan_tier("bundle_chat_quiet_raid_boost"),
         "badge": "bundle",
         "description": "Werbefrei + bevorzugte Raid-Platzierung im Paket \u2014 g\u00fcnstiger als einzeln.",
-        "monthly_net_cents": 699,
+        "monthly_net_cents": 349,
         "recommended": False,
         "entitlements": list(plan_entitlements("bundle_chat_quiet_raid_boost")),
         "features": [
             "Chat-Werbung dauerhaft aus",
             "Bevorzugte Platzierung im Raid-Netzwerk",
             "Lurker Steuer Erinnerungen f\u00fcr bekannte Lurker",
-            "Spart 99\u00a2 gegen\u00fcber Einzelkauf",
+            "Spart 49\u00a2 gegen\u00fcber Einzelkauf",
         ],
     },
     {
@@ -85,7 +85,7 @@ BILLING_PLANS: tuple[dict[str, Any], ...] = (
         "tier": plan_tier("analysis_dashboard"),
         "badge": "analytics",
         "description": "Vollst\u00e4ndiges Analytics-Dashboard mit Stream-Statistiken, Viewer-Kurven und Wachstumsvergleichen.",
-        "monthly_net_cents": 849,
+        "monthly_net_cents": 199,
         "recommended": True,
         "entitlements": list(plan_entitlements("analysis_dashboard")),
         "features": [
@@ -101,14 +101,14 @@ BILLING_PLANS: tuple[dict[str, Any], ...] = (
         "tier": plan_tier("bundle_werbefrei_analyse"),
         "badge": "bundle",
         "description": "Chat-Werbung dauerhaft aus + volles Analytics-Dashboard — günstiger als einzeln.",
-        "monthly_net_cents": 1049,
+        "monthly_net_cents": 349,
         "recommended": False,
         "entitlements": list(plan_entitlements("bundle_werbefrei_analyse")),
         "features": [
             "Chat-Werbung dauerhaft deaktiviert",
             "Vollständiges Analytics-Dashboard",
-            "KI-Coaching & Viewer-Analyse",
-            "Spart 2 EUR gegenüber Einzelkauf",
+            "KI-Analyse & Viewer-Auswertung",
+            "Spart 49¢ gegenüber Einzelkauf",
         ],
     },
     {
@@ -117,14 +117,14 @@ BILLING_PLANS: tuple[dict[str, Any], ...] = (
         "tier": plan_tier("bundle_komplett"),
         "badge": "bundle",
         "description": "Werbefrei + Raid Boost + Analytics — das komplette Paket zum besten Preis.",
-        "monthly_net_cents": 1399,
+        "monthly_net_cents": 499,
         "recommended": False,
         "entitlements": list(plan_entitlements("bundle_komplett")),
         "features": [
             "Alle Features aus allen Plänen",
             "Bevorzugte Raid-Platzierung aktiv",
-            "Volles Analytics + KI-Coaching",
-            "Beste Ersparnis gegenüber Einzelkauf",
+            "Volles Analytics + KI-Analyse",
+            "Spart 0,98€ gegenüber Einzelkauf",
         ],
     },
     {
@@ -133,14 +133,14 @@ BILLING_PLANS: tuple[dict[str, Any], ...] = (
         "tier": plan_tier("bundle_analysis_raid_boost"),
         "badge": "bundle",
         "description": "Analyse Dashboard + Raid Boost im Paket \u2014 g\u00fcnstiger als einzeln.",
-        "monthly_net_cents": 1149,
+        "monthly_net_cents": 349,
         "recommended": False,
         "entitlements": list(plan_entitlements("bundle_analysis_raid_boost")),
         "features": [
             "Alle Analytics-Features inklusive",
             "Bevorzugte Raid-Platzierung aktiv",
             "Lurker Steuer Erinnerungen f\u00fcr bekannte Lurker",
-            "Spare gegen\u00fcber Einzelbuchung",
+            "Spart 49\u00a2 gegen\u00fcber Einzelkauf",
         ],
     },
 )
@@ -360,13 +360,13 @@ def billing_dump_product_id_mapping(mapping: dict[str, str]) -> str:
 # Known Stripe IDs committed to source — not secrets, safe to push.
 # The vault env vars are merged on top (vault wins on conflict).
 STRIPE_PRICE_ID_DEFAULTS: dict[str, dict[int, str]] = {
-    "chat_quiet":                   {1: "price_1TZDfQ0yU8I2yGJ07EtjKXvc",  12: "price_1TZDvw0yU8I2yGJ0q6ZrcLB2"},
-    "raid_boost":                   {12: "price_1TZDvx0yU8I2yGJ0E6pN53qe"},
-    "analysis_dashboard":           {12: "price_1TZDvy0yU8I2yGJ0iPJcramq"},
-    "bundle_chat_quiet_raid_boost": {1: "price_1TZEra0yU8I2yGJ035SjUbNh",  12: "price_1TZEra0yU8I2yGJ0Phh1XQV0"},
-    "bundle_werbefrei_analyse":     {1: "price_1TZErb0yU8I2yGJ0os932ylH",  12: "price_1TZErb0yU8I2yGJ0ul8D2QhG"},
-    "bundle_komplett":              {1: "price_1TZD6W0yU8I2yGJ0JQzboooa",  12: "price_1TZDw00yU8I2yGJ0lQ1sliPd"},
-    "bundle_analysis_raid_boost":   {12: "price_1TZDw00yU8I2yGJ0yYj926cP"},
+    "chat_quiet":                   {1: "price_1TeNGF0yU8I2yGJ0crjsfhHO",  12: "price_1TeNGF0yU8I2yGJ0YLkz7PCX"},
+    "raid_boost":                   {1: "price_1TeNGG0yU8I2yGJ0DhWzKQWU",  12: "price_1TeNGG0yU8I2yGJ0f9iYs3w1"},
+    "analysis_dashboard":           {1: "price_1TeNGH0yU8I2yGJ0UqKylecO",  12: "price_1TeNGH0yU8I2yGJ0tdHu8izl"},
+    "bundle_chat_quiet_raid_boost": {1: "price_1TeNGH0yU8I2yGJ06sCbRobW",  12: "price_1TeNGI0yU8I2yGJ0GaUNdWmK"},
+    "bundle_werbefrei_analyse":     {1: "price_1TeNGI0yU8I2yGJ0YX5iUzX4",  12: "price_1TeNGJ0yU8I2yGJ0NlPVBIHZ"},
+    "bundle_komplett":              {1: "price_1TeNGJ0yU8I2yGJ0V8gH6IGg",   12: "price_1TeNGK0yU8I2yGJ0QTewVRfi"},
+    "bundle_analysis_raid_boost":   {1: "price_1TeNGK0yU8I2yGJ0guZX1iD8",  12: "price_1TeNGL0yU8I2yGJ0Alhd0ZPo"},
 }
 
 STRIPE_PRODUCT_ID_DEFAULTS: dict[str, str] = {
