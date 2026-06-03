@@ -18,10 +18,11 @@ if str(ROOT) not in sys.path:
 from bot.stream_coaching_audit.service import (
     AuditError,
     AuditFinding,
+    _channel_login_from_source,
     audit_source,
     notify_findings_discord_dm,
     notify_findings_webhook,
-    notify_status_discord_dm,
+    resolve_latest_vod_url,
 )
 
 
@@ -70,6 +71,11 @@ def _parser() -> argparse.ArgumentParser:
         type=float,
         default=2.0,
         help="Pause zwischen Live-Watch-Fenstern; Standard: 2 Sekunden",
+    )
+    parser.add_argument(
+        "--audit-vod-on-end",
+        action="store_true",
+        help="Nach Stream-Ende automatisch das komplette VOD pruefen (nur mit --watch-live)",
     )
     parser.add_argument(
         "--chunk-seconds",
@@ -176,11 +182,77 @@ async def _run_once(
     )
 
 
+def _is_offline_error(message: str) -> bool:
+    """Erkennt am Fehlertext, ob der Kanal offline ist (Stream-Ende)."""
+    text = message.lower()
+    return any(
+        marker in text
+        for marker in (
+            "offline",
+            "not currently live",
+            "is not live",
+            "keine live-stream-url",
+            "eventuell offline",
+        )
+    )
+
+
+async def _audit_latest_vod(
+    args: argparse.Namespace,
+    *,
+    login: str,
+    source: str,
+    audited: set[str],
+) -> bool:
+    """Neuestes VOD komplett pruefen. True = Trigger erledigt (auch wenn schon auditiert)."""
+    vod_url = await asyncio.to_thread(resolve_latest_vod_url, login)
+    if not vod_url:
+        print(f"Live-Watch {source}: Stream beendet, aber kein VOD abrufbar - warte", flush=True)
+        return False
+    if vod_url in audited:
+        return True
+    print(f"Live-Watch {source}: Stream beendet -> VOD-Komplettlauf {vod_url}", flush=True)
+    try:
+        report, _json_path, markdown_path = await audit_source(
+            vod_url,
+            authorized=args.authorized,
+            source_kind="vod",
+            chunk_seconds=args.chunk_seconds,
+            transcriber_engine=args.transcriber,
+            llm_provider=args.llm_provider,
+            allow_remote_transcription=args.allow_remote_transcription,
+            allow_remote_llm=args.allow_remote_llm,
+            output_dir=args.output_dir,
+        )
+    except AuditError as exc:
+        print(f"Live-Watch {source}: VOD-Komplettlauf fehlgeschlagen: {exc}", flush=True)
+        return False
+    audited.add(vod_url)
+    print(
+        f"VOD-Komplettlauf fertig ({login}): {len(report.findings)} Fundstelle(n) | {markdown_path}",
+        flush=True,
+    )
+    if args.discord_dm and report.findings:
+        sent = await notify_findings_discord_dm(
+            report.source_label,
+            report.findings,
+            discord_user_id=args.discord_user_id,
+            source_url=vod_url,
+        )
+        if not sent:
+            print("WARN Discord-Bot konnte VOD-DM nicht senden", flush=True)
+    return True
+
+
 async def _run_live_source(args: argparse.Namespace, source: str) -> None:
     seen: set[tuple[str, str]] = set()
     seen_order: deque[tuple[str, str]] = deque()
     window_seconds = max(30, int(args.watch_window_seconds))
     delay_seconds = max(0.0, float(args.watch_delay_seconds))
+    login = _channel_login_from_source(source)
+    audited_vods: set[str] = set()
+    was_live = False
+    pending_vod = False
     print(f"Live-Watch aktiv: {source} | Fenster={window_seconds}s", flush=True)
     while True:
         try:
@@ -191,6 +263,8 @@ async def _run_live_source(args: argparse.Namespace, source: str) -> None:
                 source=source,
                 live_seconds=window_seconds,
             )
+            was_live = True
+            pending_vod = False
             findings = _new_findings(report.findings, seen=seen, seen_order=seen_order)
             if findings:
                 _print_findings(findings)
@@ -213,6 +287,17 @@ async def _run_live_source(args: argparse.Namespace, source: str) -> None:
                 print(f"Live-Watch {source}: Fenster geprueft, keine neue Fundstelle", flush=True)
             await asyncio.sleep(delay_seconds)
         except AuditError as exc:
+            # Stream-Ende erkannt -> einmalig das komplette VOD nachpruefen
+            if (
+                args.audit_vod_on_end
+                and login
+                and (was_live or pending_vod)
+                and _is_offline_error(str(exc))
+            ):
+                pending_vod = True
+                was_live = False
+                if await _audit_latest_vod(args, login=login, source=source, audited=audited_vods):
+                    pending_vod = False
             print(f"WARN Live-Watch {source}: {exc}; neuer Versuch in 30s", flush=True)
             await asyncio.sleep(30)
 
@@ -227,23 +312,6 @@ async def _run_live_watch(args: argparse.Namespace) -> int:
         f"Live-Watch aktiv fuer {len(args.source)} Kanal/Kanaele | Ctrl+C beendet",
         flush=True,
     )
-    if args.discord_dm:
-        sources = "\n".join(f"- {source}" for source in args.source)
-        engine_label = (
-            "OpenAI-Whisper (externe Transkription)"
-            if args.transcriber == "openai_api"
-            else "lokales faster-whisper"
-        )
-        sent = await notify_status_discord_dm(
-            "**Stream-Coaching-Live-Watch gestartet**\n"
-            f"{engine_label} prueft autorisierte Partner-Kandidaten in kurzen Fenstern. "
-            "Neue Fundstellen kommen redigiert als private DM.\n"
-            f"{sources}",
-            discord_user_id=args.discord_user_id,
-        )
-        if not sent:
-            raise AuditError("Discord-Bot konnte Start-DM nicht senden")
-        print("Discord-Bot-Start-DM gesendet", flush=True)
     await asyncio.gather(*(_run_live_source(args, source) for source in args.source))
     return 0
 
@@ -261,21 +329,15 @@ async def _run(args: argparse.Namespace) -> int:
     if args.discord_alerts and report.findings:
         if not await notify_findings_webhook(report.source_label, report.findings):
             print("WARN Discord-Webhook konnte Hinweis nicht senden", flush=True)
-    if args.discord_dm:
-        if report.findings:
-            sent = await notify_findings_discord_dm(
-                report.source_label,
-                report.findings,
-                discord_user_id=args.discord_user_id,
-                source_url=source,
-            )
-            if not sent:
-                print("WARN Discord-Bot konnte DM nicht senden", flush=True)
-        else:
-            await notify_status_discord_dm(
-                f"**VOD-Pruefung fertig**\nQuelle: {report.source_label}\n0 Fundstellen.",
-                discord_user_id=args.discord_user_id,
-            )
+    if args.discord_dm and report.findings:
+        sent = await notify_findings_discord_dm(
+            report.source_label,
+            report.findings,
+            discord_user_id=args.discord_user_id,
+            source_url=source,
+        )
+        if not sent:
+            print("WARN Discord-Bot konnte DM nicht senden", flush=True)
     return 0
 
 

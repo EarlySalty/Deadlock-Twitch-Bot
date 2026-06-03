@@ -397,6 +397,27 @@ def _download_vod(source: str, workdir: Path) -> Path:
     return candidates[0]
 
 
+def resolve_latest_vod_url(login: str) -> str | None:
+    """Neueste abrufbare VOD-URL eines Kanals via yt-dlp; None wenn keins existiert."""
+    yt_dlp = _require_binary("STREAM_AUDIT_YTDLP_BIN", "yt-dlp")
+    try:
+        output = _run_output(
+            [
+                yt_dlp,
+                "--flat-playlist",
+                "--playlist-items",
+                "1",
+                "--print",
+                "%(url)s",
+                f"https://www.twitch.tv/{login}/videos",
+            ]
+        )
+    except AuditError:
+        return None
+    lines = [line.strip() for line in output.splitlines() if line.strip()]
+    return lines[0] if lines else None
+
+
 def _capture_live_audio(login: str, workdir: Path, *, duration_seconds: int) -> Path:
     """Resolve the current Twitch HLS URL and record a short audio-only window."""
     yt_dlp = _require_binary("STREAM_AUDIT_YTDLP_BIN", "yt-dlp")
@@ -904,5 +925,6 @@ __all__ = [
     "notify_findings_webhook",
     "notify_status_discord_dm",
     "redact_text",
+    "resolve_latest_vod_url",
     "write_report",
 ]

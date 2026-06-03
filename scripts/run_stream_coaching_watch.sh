@@ -17,4 +17,5 @@ exec "$ROOT_DIR/scripts/run_with_infisical.sh" \
   --transcriber openai_api \
   --allow-remote-transcription \
   --discord-dm \
+  --audit-vod-on-end \
   "$@"
