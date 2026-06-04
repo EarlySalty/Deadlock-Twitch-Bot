@@ -1,3 +1,17 @@
+## #95 — Engagement-AI: weniger Bot-isch, keine Dialekt-Imitation
+
+**Problem:** Die AI hat sich im Chat zu oft verraten — vor allem durch einen einzigen Tell: 40% aller Nachrichten fingen mit "haja" an, weil das Modell den Ausdruck aus den Channel-Stilvorlagen übernahm und ihn auf jede Antwort klebte. Dazu kamen erfundene Compound-Wörter ("brumm-heizkessel", "konsequenz-plan"), broken Schweizerdeutsch in Channels wo Schweizer zuschauen, und gelegentlich `<3` als Antwort auf komplett unpassende Trigger.
+
+**Geändert:** Drei Stellen gleichzeitig angepasst.
+
+1. **Starter-Repeat-Guard in der Pipeline:** Nach dem Modell-Call wird das erste Wort der generierten Antwort mit dem ersten Wort der letzten Bot-Nachricht verglichen. Stimmen sie überein → Antwort verworfen (silent). Das ist ein harter Filter unabhängig vom Prompt — fängt auf, wenn das Modell die Prompt-Regel ignoriert.
+
+2. **System-Prompt-Ergänzungen:** Vier neue Regeln direkt im Baseline-Prompt: (a) nie mit demselben Wort starten wie die vorherige Antwort, (b) "haja", "hmm", "naja", "danke" nicht als Opener, (c) kein Dialekt — auch wenn Schweizerdeutsch im Channel läuft, bleibt die Antwort normales Deutsch mit Chat-Slang, (d) `<3` nie als eigene Antwort senden.
+
+3. **Style-Beispiel-Deduplication:** Die Few-Shot-Stilvorlagen, die dem Modell aus dem Channel-Chat gezogen werden, dürfen jetzt max. 2 Beispiele mit demselben Starter-Wort enthalten. Vorher konnten 6 von 8 Beispielen mit "haja" anfangen — das hat das Modell trainingsartig auf genau das konditioniert.
+
+**Wie's funktioniert:** Prompt und Filter wirken als Doppelnetz: der Prompt verhindert, der Guard fängt auf. Die Stil-Dedup greift schon früher und sorgt dafür, dass das Modell gar nicht erst lernt, dass "haja" der Standard-Opener ist.
+
 ## #94 — Fairere Raid-Verteilung im Fallback (kein Partner online)
 
 **Problem:** Wenn kein Partner live war, wurde der Fallback-Kanal immer nur nach wenigsten Viewern ausgewählt — ohne Rücksicht darauf, wie viele Raids jemand schon bekommen hat. Wer klein streamt und oft live ist, bekam dadurch unverhältnismäßig viele Raids.

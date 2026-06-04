@@ -449,6 +449,21 @@ class EngagementPipeline:
                 latency_ms=response.latency_ms,
             )
 
+        # Starter-Repeat-Guard: gleicher erster Begriff wie letzte Bot-Antwort → still
+        _last_bot = next((t for t in reversed(history_turns) if t.role == "assistant"), None)
+        if _last_bot and response.text:
+            _prev_start = (_last_bot.content.split()[0].lower().rstrip(".,!?") if _last_bot.content.split() else "")
+            _this_start = (response.text.split()[0].lower().rstrip(".,!?") if response.text.split() else "")
+            if _prev_start and _this_start and _prev_start == _this_start:
+                log.debug("Engagement: starter-repeat %r → silent", _this_start)
+                return HandleResult(
+                    decision=Decision.SILENT,
+                    model=response.model,
+                    prompt_tokens=response.prompt_tokens,
+                    completion_tokens=response.completion_tokens,
+                    latency_ms=response.latency_ms,
+                )
+
         self._rhythm.note_bot_post(
             msg.channel_login, now=datetime.now(timezone.utc)
         )

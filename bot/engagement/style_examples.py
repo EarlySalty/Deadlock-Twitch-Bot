@@ -103,9 +103,12 @@ def _is_good_example(text: str) -> bool:
     return True
 
 
+_MAX_SAME_STARTER = 2  # max so viele Beispiele mit gleichem Starter-Wort
+
 def _select_examples(texts: list[str], max_n: int = _MAX_EXAMPLES) -> list[str]:
     out: list[str] = []
     seen: set[str] = set()
+    starter_count: dict[str, int] = {}
     for raw in texts:
         text = " ".join(str(raw).split())
         if not _is_good_example(text):
@@ -113,7 +116,11 @@ def _select_examples(texts: list[str], max_n: int = _MAX_EXAMPLES) -> list[str]:
         key = text.lower()
         if key in seen:
             continue
+        starter = text.split()[0].lower().rstrip(".,!?") if text.split() else ""
+        if starter_count.get(starter, 0) >= _MAX_SAME_STARTER:
+            continue
         seen.add(key)
+        starter_count[starter] = starter_count.get(starter, 0) + 1
         out.append(text)
         if len(out) >= max_n:
             break
