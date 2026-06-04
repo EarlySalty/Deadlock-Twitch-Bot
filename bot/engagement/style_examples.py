@@ -60,18 +60,22 @@ _SEED_EXAMPLES: list[str] = [
 # kurz, trocken, viel Banter/Roast, oft nur ein paar Wörter, Deadlock wenn's passt.
 # Wird IMMER zuerst eingespeist, damit der Bot in diesem Register schreibt.
 _GOLD_EXAMPLES: list[str] = [
+    # reine Reaktionen — kein Erklär-Nachklapp
     "wilder take",
     "haha legit",
-    "uno reverse karte",
+    "alter bitte",
+    "echt wild",
+    "ngl stimmt",
+    "das ist klassiker",
+    "no shot den",
+    "ich auch",
+    # kurze Meinungen — fertig nach dem ersten Gedanken
     "wieder geistig am start ne",
-    "das es scheiße ist weiß ich haha",
     "der findet das loch eh nicht",
     "der hätte dich da eig wegbügeln müssen",
     "außer du parrierst halt",
-    "ja so was wie burger boxing oder wie nennt man das",
     "aber meta ist deutlich angenehmer grade",
     "und die haben noch 2 heal creeps lol",
-    "bisschen rough aber passt schon",
 ]
 
 

@@ -1,3 +1,15 @@
+## #96 — Engagement-AI: Validate+Erklär-Muster gebrochen
+
+**Problem:** 44% aller generierten Nachrichten folgten dem Muster `[kurze Reaktion], [erklärender zweiter Teil]` — z.B. "haha genau, das ist halt typisch für den hero". Dieses Muster ist das sicherste Bot-Tell überhaupt: echte Chatter sagen entweder die Reaktion oder die Meinung — nie beides in einem Satz.
+
+**Geändert:** Zwei Stellen.
+
+1. **System-Prompt:** Neuer Abschnitt mit konkretem Gegenbeispiel (Show-don't-tell statt abstrakter Regel): Die KI soll bei einem Komma in ihrer Antwort alles nach dem Komma streichen und prüfen ob der erste Teil alleine steht. Dazu explizit: entweder Reaktion oder Meinung, nie beides plus Begründung.
+
+2. **Gold-Beispiele in den Few-Shot-Vorlagen:** Die kuratierten Muster-Nachrichten wurden um mehr reine Reaktionen ergänzt ("alter bitte", "echt wild", "ngl stimmt", "no shot den", "ich auch") — kurze Fragmente ohne Erklär-Nachklapp. Diese erscheinen immer als erste im Prompt und konditionieren den Ton.
+
+**Wie's funktioniert:** LLMs imitieren konkrete Beispiele besser als abstrakte Regeln. Wenn die ersten 4 Beispiele alle pure Reaktionsfragmente ohne Erklärung sind, schreibt das Modell automatisch im gleichen Register — statt zu erklären warum etwas "genau" ist.
+
 ## #95 — Engagement-AI: weniger Bot-isch, keine Dialekt-Imitation
 
 **Problem:** Die AI hat sich im Chat zu oft verraten — vor allem durch einen einzigen Tell: 40% aller Nachrichten fingen mit "haja" an, weil das Modell den Ausdruck aus den Channel-Stilvorlagen übernahm und ihn auf jede Antwort klebte. Dazu kamen erfundene Compound-Wörter ("brumm-heizkessel", "konsequenz-plan"), broken Schweizerdeutsch in Channels wo Schweizer zuschauen, und gelegentlich `<3` als Antwort auf komplett unpassende Trigger.
