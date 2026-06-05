@@ -1708,6 +1708,7 @@ class _EventSubMixin:
                     ("channel.shoutout.create", "1", "moderator:manage:shoutouts", True),
                     ("channel.shoutout.receive", "1", "moderator:manage:shoutouts", True),
                     ("channel.follow", "2", "moderator:read:followers", True),
+                    ("channel.moderate", "1", "channel:moderate", True),
                 ]
 
                 for sub_type, version, required_scope, needs_moderator_id in moderator_subs:
@@ -1896,6 +1897,19 @@ class _EventSubMixin:
                 throttle[broadcaster_id] = now
                 return
         throttle[broadcaster_id] = now
+
+        # Global-Ban: 1h nach Stream-Ende einen Offline-Sweep für diesen Kanal einplanen.
+        # Der Wartungs-Loop arbeitet fällige Sweeps ab -- aber nur, wenn der Kanal
+        # dann immer noch offline ist (Stream-Restart innerhalb der Stunde -> übersprungen).
+        if login_lower and broadcaster_id:
+            try:
+                from ..storage import pg as _gb_pg
+
+                _gb_pg.schedule_global_ban_sweep(login_lower, str(broadcaster_id), 3600)
+            except Exception:
+                log.debug(
+                    "Global-Ban: schedule_global_ban_sweep fehlgeschlagen", exc_info=True
+                )
 
         previous_state = self._load_live_state_row(login_lower)
 
@@ -2478,7 +2492,17 @@ class _EventSubMixin:
                     login,
                 )
 
+        async def _moderate_cb(bid: str, login: str, event: dict):
+            try:
+                await self._guard_blacklisted_outgoing_raid(bid, login, event)
+            except Exception:
+                log.exception(
+                    "EventSub: channel.moderate Guard fehlgeschlagen für %s",
+                    login,
+                )
+
         webhook_handler.set_callback("channel.follow", _follow_cb)
+        webhook_handler.set_callback("channel.moderate", _moderate_cb)
         webhook_handler.set_callback("channel.subscribe", _subscribe_cb)
         webhook_handler.set_callback("channel.subscription.gift", _gift_cb)
         webhook_handler.set_callback("channel.subscription.message", _resub_cb)
@@ -2735,6 +2759,162 @@ class _EventSubMixin:
         self._set_eventsub_webhook_notification_dispatch(active=True)
         self._eventsub_retry_reason = "webhook_ready"
         return True
+
+    async def _guard_blacklisted_outgoing_raid(
+        self,
+        streamer_id: str,
+        streamer_login: str,
+        event: dict[str, Any],
+    ) -> None:
+        """Bricht einen manuell gestarteten Raid auf einen Blacklist-Kanal ab.
+
+        Aufgerufen aus dem channel.moderate-Callback. Reagiert ausschließlich auf
+        die Moderations-Action `raid` (Start eines ausgehenden Raids); alle
+        anderen Aktionen werden ignoriert. Bei einem Blacklist-Treffer wird der
+        laufende Raid abgebrochen und der Streamer per Whisper informiert.
+        """
+        if str(event.get("action") or "").strip().lower() != "raid":
+            return
+        raid_info = event.get("raid")
+        if not isinstance(raid_info, dict):
+            return
+        target_login = str(raid_info.get("user_login") or "").strip().lower()
+        target_id = str(raid_info.get("user_id") or "").strip()
+        if not target_login and not target_id:
+            return
+
+        raid_bot = getattr(self, "_raid_bot", None)
+        if not raid_bot:
+            log.debug("EventSub: Kein Raid-Bot für Blacklist-Raid-Guard verfügbar")
+            return
+        try:
+            is_blacklisted = bool(
+                await asyncio.to_thread(raid_bot._is_blacklisted, target_id, target_login)
+            )
+        except Exception:
+            log.exception(
+                "EventSub: Blacklist-Prüfung fehlgeschlagen für Ziel %s",
+                target_login or target_id,
+            )
+            return
+        if not is_blacklisted:
+            return
+
+        log.warning(
+            "EventSub: %s startet Raid auf Blacklist-Ziel %s - versuche Abbruch",
+            streamer_login or streamer_id,
+            target_login or target_id,
+        )
+
+        cancelled = False
+        try:
+            session = self.api.get_http_session()
+            cancelled, cancel_error = await raid_bot.raid_executor.cancel_raid(
+                streamer_id,
+                streamer_login,
+                session,
+            )
+            if not cancelled:
+                log.warning(
+                    "EventSub: Raid-Abbruch für %s fehlgeschlagen: %s",
+                    streamer_login or streamer_id,
+                    cancel_error,
+                )
+        except Exception:
+            log.exception(
+                "EventSub: Raid-Abbruch warf Exception für %s",
+                streamer_login or streamer_id,
+            )
+
+        await self._send_blacklist_raid_whisper(
+            streamer_id,
+            streamer_login,
+            target_login or target_id,
+            cancelled,
+        )
+
+    async def _send_blacklist_raid_whisper(
+        self,
+        streamer_id: str,
+        streamer_login: str,
+        target: str,
+        cancelled: bool,
+    ) -> None:
+        """Whispert den Streamer, dass das Raid-Ziel auf der Blacklist steht.
+
+        Best-effort: ohne Bot-Token/Scope oder bei nicht zustellbarem Whisper
+        wird nur geloggt. Twitch verwirft Whispers an "Fremde" teils still
+        (204 trotz Nicht-Zustellung), daher ist der Log die Absicherung.
+        """
+        bot_token, bot_id, bot_scopes = await self._resolve_eventsub_bot_auth()
+        if not bot_token or not bot_id:
+            log.info(
+                "EventSub: Kein Bot-Token für Blacklist-Raid-Hinweis an %s",
+                streamer_login or streamer_id,
+            )
+            return
+        if bot_scopes and "user:manage:whispers" not in bot_scopes:
+            log.info(
+                "EventSub: Bot-Token ohne user:manage:whispers - Hinweis an %s nur geloggt",
+                streamer_login or streamer_id,
+            )
+            return
+        if str(bot_id) == str(streamer_id):
+            return
+
+        if cancelled:
+            message = (
+                f"Heads-up: Dein Raid auf {target} wurde abgebrochen - der Kanal steht bei uns "
+                "auf der Raid-Blacklist und wird nicht für Raids unterstützt."
+            )
+        else:
+            message = (
+                f"Heads-up: {target} steht bei uns auf der Raid-Blacklist und wird nicht für Raids "
+                "unterstützt. Der Raid lief schon, ließ sich also nicht mehr stoppen - bitte künftig "
+                "nicht dorthin raiden."
+            )
+
+        raid_bot = getattr(self, "_raid_bot", None)
+        auth_manager = getattr(raid_bot, "auth_manager", None)
+        client_id = getattr(auth_manager, "client_id", None) if auth_manager is not None else None
+        if not client_id:
+            log.info(
+                "EventSub: Keine Client-ID für Whisper an %s",
+                streamer_login or streamer_id,
+            )
+            return
+
+        url = "https://api.twitch.tv/helix/whispers"
+        params = {"from_user_id": str(bot_id), "to_user_id": str(streamer_id)}
+        headers = {
+            "Client-ID": str(client_id),
+            "Authorization": f"Bearer {bot_token}",
+            "Content-Type": "application/json",
+        }
+        try:
+            session = self.api.get_http_session()
+            async with session.post(
+                url, headers=headers, params=params, json={"message": message}
+            ) as r:
+                if r.status not in (200, 204):
+                    txt = await r.text()
+                    log.info(
+                        "EventSub: Blacklist-Raid-Hinweis an %s nicht zugestellt (HTTP %s): %s",
+                        streamer_login or streamer_id,
+                        r.status,
+                        txt[:200],
+                    )
+                else:
+                    log.info(
+                        "EventSub: Blacklist-Raid-Hinweis an %s gesendet (cancelled=%s)",
+                        streamer_login or streamer_id,
+                        cancelled,
+                    )
+        except Exception:
+            log.exception(
+                "EventSub: Whisper-Versand an %s warf Exception",
+                streamer_login or streamer_id,
+            )
 
     async def _resolve_eventsub_bot_auth(self) -> tuple[str | None, str | None, set[str]]:
         """Return bot token + bot id + scopes (best-effort) for EventSub auth.

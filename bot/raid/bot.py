@@ -254,6 +254,7 @@ class RaidBot(
         grace_period_check_interval = 3600.0  # stündlich
         external_limit_pending_interval = 600.0
         external_bot_ban_check_interval = 300.0
+        global_ban_due_interval = 120.0  # fällige Stream-Ende-Sweeps abarbeiten
 
         last_state_cleanup = 0.0
         # Startup-Delay: erster Token-Refresh erst nach 5 Minuten (nicht sofort nach 60s).
@@ -265,6 +266,8 @@ class RaidBot(
         last_grace_period_check = 0.0
         last_external_limit_pending_check = 0.0
         last_external_bot_ban_check = 0.0
+        last_global_ban_due_check = 0.0
+        last_global_ban_full_sweep_date = None  # lokales Datum des letzten 6-Uhr-Sweeps
         while True:
             await asyncio.sleep(60)  # Loop-Tick (Wartungs-Tasks laufen in eigenen Intervallen)
             try:
@@ -311,6 +314,29 @@ class RaidBot(
                 if now - last_external_bot_ban_check >= external_bot_ban_check_interval:
                     await self._process_due_external_target_ban_checks()
                     last_external_bot_ban_check = now
+
+                # Global-Ban: fällige Offline-Sweeps (1h nach Stream-Ende) abarbeiten
+                if now - last_global_ban_due_check >= global_ban_due_interval:
+                    if self.chat_bot:
+                        try:
+                            from ..chat.global_ban_sweep import run_due_sweeps
+
+                            await run_due_sweeps(self.chat_bot)
+                        except Exception:
+                            log.exception("Global-Ban Offline-Sweep (fällig) fehlgeschlagen")
+                    last_global_ban_due_check = now
+
+                # Global-Ban: taeglicher 6-Uhr-Sweep (Kanal-intern offline-gegatet)
+                _local_today = datetime.now().date()
+                if datetime.now().hour >= 6 and last_global_ban_full_sweep_date != _local_today:
+                    if self.chat_bot:
+                        try:
+                            from ..chat.global_ban_sweep import run_full_sweep
+
+                            await run_full_sweep(self.chat_bot)
+                        except Exception:
+                            log.exception("Global-Ban Tages-Sweep fehlgeschlagen")
+                        last_global_ban_full_sweep_date = _local_today
 
                 # 3. Pending Raids Cleanup (alle 2min)
                 if now - last_raid_cleanup >= pending_raid_cleanup_interval:

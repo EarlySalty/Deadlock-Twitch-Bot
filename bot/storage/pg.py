@@ -4070,6 +4070,32 @@ def ensure_schema(conn) -> None:
         "ON twitch_chatter_global_ban(chatter_id) WHERE chatter_id IS NOT NULL"
     )
 
+    # 24b) Proaktiver Global-Ban-Sweep: Applied-Ledger + Stream-Ende-Fälligkeit
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS twitch_chatter_global_ban_applied (
+            chatter_login  TEXT NOT NULL,
+            broadcaster_id TEXT NOT NULL,
+            applied_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            PRIMARY KEY (chatter_login, broadcaster_id)
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS twitch_global_ban_sweep_due (
+            broadcaster_login TEXT PRIMARY KEY,
+            broadcaster_id    TEXT NOT NULL,
+            run_after         TIMESTAMPTZ NOT NULL,
+            scheduled_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )
+        """
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_twitch_global_ban_sweep_due_run "
+        "ON twitch_global_ban_sweep_due(run_after)"
+    )
+
     migrate_legacy_partner_registry(conn)
 
 
@@ -4110,4 +4136,131 @@ def add_chatter_global_ban(
                 added_at   = NOW()
             """,
             (chatter_login.lower(), chatter_id or None, reason, added_by),
+        )
+        # Einbahn-Spiegel: Wer global gebannt ist, ist auch raid-geblacklistet
+        # (global -> raid, nicht umgekehrt). Bestehende Raid-Einträge bleiben
+        # unangetastet (DO NOTHING), damit deren Grund nicht überschrieben wird.
+        conn.execute(
+            """
+            INSERT INTO twitch_raid_blacklist (target_id, target_login, reason)
+            VALUES (%s, %s, %s)
+            ON CONFLICT (target_login) DO NOTHING
+            """,
+            (chatter_id or None, chatter_login.lower(), reason or "global_ban_mirror"),
+        )
+
+
+def list_chatter_global_bans() -> list[dict]:
+    """Alle Einträge der globalen Bannliste (neueste zuerst)."""
+    try:
+        with readonly_connection() as conn:
+            rows = conn.execute(
+                """
+                SELECT chatter_login, chatter_id, reason, added_by, added_at
+                  FROM twitch_chatter_global_ban
+                 ORDER BY added_at DESC
+                """
+            ).fetchall()
+            return [dict(row) for row in rows]
+    except Exception:
+        return []
+
+
+def remove_chatter_global_ban(chatter_login: str) -> bool:
+    """Entfernt einen Chatter aus der globalen Bannliste.
+
+    Der Applied-Ledger wird mitgeleert, damit ein spaeter erneut hinzugefuegter
+    Eintrag wieder frisch über alle Kanäle ausgerollt wird. Bestehende
+    Raid-Blacklist-Einträge bleiben unangetastet (Einbahn-Spiegel).
+    Gibt True zurück, wenn ein Listen-Eintrag gelöscht wurde.
+    """
+    login = chatter_login.lower()
+    with transaction() as conn:
+        cur = conn.execute(
+            "DELETE FROM twitch_chatter_global_ban WHERE chatter_login = %s",
+            (login,),
+        )
+        conn.execute(
+            "DELETE FROM twitch_chatter_global_ban_applied WHERE chatter_login = %s",
+            (login,),
+        )
+        try:
+            return bool(cur.rowcount)
+        except Exception:
+            return True
+
+
+def record_global_ban_applied(chatter_login: str, broadcaster_id: str) -> None:
+    """Vermerkt, dass ein Listen-Eintrag in einem Kanal proaktiv gebannt wurde."""
+    with transaction() as conn:
+        conn.execute(
+            """
+            INSERT INTO twitch_chatter_global_ban_applied (chatter_login, broadcaster_id)
+            VALUES (%s, %s)
+            ON CONFLICT (chatter_login, broadcaster_id) DO NOTHING
+            """,
+            (chatter_login.lower(), str(broadcaster_id)),
+        )
+
+
+def load_applied_global_ban_pairs() -> set[tuple[str, str]]:
+    """Set aus (chatter_login, broadcaster_id) der bereits proaktiv ausgeführten Bans."""
+    try:
+        with readonly_connection() as conn:
+            rows = conn.execute(
+                "SELECT chatter_login, broadcaster_id FROM twitch_chatter_global_ban_applied"
+            ).fetchall()
+            return {
+                (str(r[0]).lower(), str(r[1]))
+                for r in rows
+                if r[0] and r[1]
+            }
+    except Exception:
+        return set()
+
+
+def schedule_global_ban_sweep(
+    broadcaster_login: str, broadcaster_id: str, delay_seconds: int
+) -> None:
+    """Plant einen Offline-Sweep für einen Kanal (z.B. 1h nach Stream-Ende)."""
+    if not broadcaster_login or not broadcaster_id:
+        return
+    with transaction() as conn:
+        conn.execute(
+            """
+            INSERT INTO twitch_global_ban_sweep_due (broadcaster_login, broadcaster_id, run_after)
+            VALUES (%s, %s, NOW() + (%s * INTERVAL '1 second'))
+            ON CONFLICT (broadcaster_login) DO UPDATE SET
+                broadcaster_id = EXCLUDED.broadcaster_id,
+                run_after      = EXCLUDED.run_after,
+                scheduled_at   = NOW()
+            """,
+            (broadcaster_login.lower(), str(broadcaster_id), int(max(0, delay_seconds))),
+        )
+
+
+def load_due_global_ban_sweeps() -> list[dict]:
+    """Fällige Offline-Sweeps (run_after <= now)."""
+    try:
+        with readonly_connection() as conn:
+            rows = conn.execute(
+                """
+                SELECT broadcaster_login, broadcaster_id
+                  FROM twitch_global_ban_sweep_due
+                 WHERE run_after <= NOW()
+                """
+            ).fetchall()
+            return [dict(row) for row in rows]
+    except Exception:
+        return []
+
+
+def delete_global_ban_sweep(broadcaster_login: str) -> None:
+    """Entfernt einen geplanten Offline-Sweep (nach Ausführung oder Stream-Restart)."""
+    if not broadcaster_login:
+        return
+    with transaction() as conn:
+        conn.execute(
+            "DELETE FROM twitch_global_ban_sweep_due WHERE broadcaster_login = %s",
+            (broadcaster_login.lower(),),
         )

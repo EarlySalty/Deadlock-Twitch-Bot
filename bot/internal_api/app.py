@@ -75,6 +75,7 @@ from .routes import raid as _raid_routes
 from .routes import streamers as _streamer_routes
 from .routes.telemetry import attach_telemetry_routes
 from .routes import telemetry as _telemetry_routes
+from .routes.global_ban import attach_global_ban_routes
 
 
 class InternalApiServer:
@@ -924,6 +925,7 @@ class InternalApiServer:
         attach_telemetry_routes(app, self)
         attach_streamer_routes(app, self)
         attach_raid_routes(app, self)
+        attach_global_ban_routes(app, self)
 
 
 def build_internal_api_app(

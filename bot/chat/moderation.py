@@ -824,7 +824,15 @@ class ModerationMixin:
         if not self._is_globally_banned_cached(chatter_login, chatter_id):
             return False
         log.info("Global-Ban-Treffer: %s — führe Channel-Ban aus", chatter_login)
-        return await self._auto_ban_and_cleanup(message)
+        return await self._auto_ban_and_cleanup(
+            message,
+            reason_text="Netzwerkweiter Ban: Verstoß gegen Community-Richtlinien",
+            notice_text=(
+                f"🛡️ {chatter_login} steht netzwerkweit auf der Bannliste "
+                "(Verstoß gegen die Community-Richtlinien) und wurde hier gebannt."
+            ),
+            alert_kind="global_ban",
+        )
 
     # ── Suspicious Discord Invite ───────────────────────────────────────────────
 
@@ -1650,11 +1658,23 @@ class ModerationMixin:
             log.debug("Konnte message-id aus Tags nicht lesen", exc_info=exc)
         return None
 
-    async def _auto_ban_and_cleanup(self, message, *, ban: bool = True) -> bool:
+    async def _auto_ban_and_cleanup(
+        self,
+        message,
+        *,
+        ban: bool = True,
+        reason_text: str = "Automatischer Spam-Ban (Bot-Phrase)",
+        notice_text: str | None = None,
+        alert_kind: str = "ban",
+    ) -> bool:
         """Löscht die Nachricht (als Bot) und bannt den Chatter.
 
         ban=False: Delete-only-Modus — Nachricht wird entfernt, aber kein Ban
         ausgeführt (für hochkonfidente Spam-Signale unterhalb der Ban-Schwelle).
+
+        reason_text: Ban-Grund, der an Twitch übermittelt wird.
+        notice_text: Chat-Hinweis nach erfolgtem Ban (None = Standard-Spam-Text).
+        alert_kind: Kind-Schlüssel für den Discord-Moderations-Alert.
         """
         channel = self._resolve_message_channel(message)
         channel_name = getattr(channel, "name", "") or getattr(channel, "login", "") or ""
@@ -1761,7 +1781,7 @@ class ModerationMixin:
                         payload = {
                             "data": {
                                 "user_id": chatter_id,
-                                "reason": "Automatischer Spam-Ban (Bot-Phrase)",
+                                "reason": reason_text,
                             }
                         }
                         async with session.post(
@@ -1794,7 +1814,7 @@ class ModerationMixin:
                                 )
                                 asyncio.create_task(
                                     self._send_moderation_alert(
-                                        kind="ban",
+                                        kind=alert_kind,
                                         channel_login=channel_name,
                                         chatter_login=chatter_login,
                                         chatter_id=chatter_id,
@@ -1829,7 +1849,8 @@ class ModerationMixin:
                                 if not silent:
                                     await self._send_chat_message(
                                         channel,
-                                        f"🛡️ Auto-Mod: {chatter_login} wurde wegen Spam-Verdacht gebannt. (!unban zum Rückgängigmachen)",
+                                        notice_text
+                                        or f"🛡️ Auto-Mod: {chatter_login} wurde wegen Spam-Verdacht gebannt. (!unban zum Rückgängigmachen)",
                                     )
                                 return True
 
@@ -1864,7 +1885,7 @@ class ModerationMixin:
                                 )
                                 asyncio.create_task(
                                     self._send_moderation_alert(
-                                        kind="ban",
+                                        kind=alert_kind,
                                         channel_login=channel_name,
                                         chatter_login=chatter_login,
                                         chatter_id=chatter_id,

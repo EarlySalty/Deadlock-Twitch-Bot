@@ -1,3 +1,11 @@
+## #97 — Netzwerkweite Sperrliste bannt jetzt vorsorglich (nur wenn offline)
+
+**Problem:** Es gibt eine netzwerkweite Sperrliste für unerwünschte Accounts (z.B. Scammer oder Leute, die gegen die Community-Richtlinien verstoßen haben). Bisher wurde so jemand erst gebannt, wenn er in einem der betreuten Kanäle tatsächlich geschrieben hat — der Ban passierte also reaktiv, mitten im laufenden Stream, oft in einem Kanal, in dem die Person vorher nie aufgetaucht war. Das war auffällig und für Zuschauer verwirrend (warum bannt der Bot jemanden, der gerade nichts getan hat?). Und wer einfach nichts schrieb, rutschte komplett durch.
+
+**Geändert:** Zusätzlich zum reaktiven Ban gibt es jetzt einen vorsorglichen Abgleich, der gesperrte Accounts aus allen betreuten Kanälen bannt — aber bewusst nur, wenn der jeweilige Kanal gerade offline ist. Außerdem wurde die Chat-Begründung beim reaktiven Ban ehrlich gemacht.
+
+**Wie's funktioniert:** Der Abgleich läuft zu zwei Zeitpunkten, beide an „Streamer ist offline" gekoppelt: einmal rund eine Stunde nachdem ein Stream endet (gezielt für genau diesen Kanal), und einmal täglich gegen 6 Uhr morgens als Sammeldurchlauf über alle Kanäle, die gerade nicht senden. Ist ein Kanal live, wird er übersprungen und beim nächsten Mal erneut versucht — so wird nie jemand sichtbar mitten im Stream gebannt. Damit nicht bei jedem Durchlauf dieselben Bans erneut an Twitch geschickt werden, merkt sich das System pro Kombination „Account × Kanal", wo der Ban schon gesetzt wurde. Der frühere reaktive Ban bleibt als Sicherheitsnetz — falls jemand schreibt, bevor der Offline-Abgleich den Kanal erreicht hat — sagt im Chat jetzt aber klar, dass die Person netzwerkweit gesperrt ist (Verstoß gegen die Community-Richtlinien), statt sie pauschal als Spam zu deklarieren. Wer neu auf die Sperrliste kommt, landet automatisch auch auf der Raid-Sperrliste.
+
 ## #96 — Engagement-AI: Validate+Erklär-Muster gebrochen
 
 **Problem:** 44% aller generierten Nachrichten folgten dem Muster `[kurze Reaktion], [erklärender zweiter Teil]` — z.B. "haha genau, das ist halt typisch für den hero". Dieses Muster ist das sicherste Bot-Tell überhaupt: echte Chatter sagen entweder die Reaktion oder die Meinung — nie beides in einem Satz.
