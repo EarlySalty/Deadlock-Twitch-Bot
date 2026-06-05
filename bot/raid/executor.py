@@ -193,6 +193,45 @@ class RaidExecutor:
             )
             return False, error_msg
 
+    async def cancel_raid(
+        self,
+        from_broadcaster_id: str,
+        from_broadcaster_login: str,
+        session: aiohttp.ClientSession,
+    ) -> tuple[bool, str | None]:
+        """Bricht einen ausstehenden Raid des Broadcasters ab (DELETE /helix/raids).
+
+        Funktioniert nur, solange der 90-Sekunden-Countdown läuft. Klickt der
+        Streamer vorher "Raid Now" oder ist der Countdown abgelaufen, existiert
+        kein ausstehender Raid mehr und Twitch liefert einen Fehler.
+        """
+        access_token = await self.auth_manager.get_valid_token(from_broadcaster_id, session)
+        if not access_token:
+            return False, f"No valid token for {from_broadcaster_login}"
+
+        url = f"{TWITCH_API_BASE}/raids"
+        params = {"broadcaster_id": from_broadcaster_id}
+        headers = {
+            "Client-ID": self.client_id,
+            "Authorization": f"Bearer {access_token}",
+        }
+        try:
+            async with session.delete(url, headers=headers, params=params) as r:
+                if r.status not in (200, 204):
+                    txt = await r.text()
+                    error_msg = f"Cancel-Raid API failed: HTTP {r.status}: {txt[:200]}"
+                    log.warning(
+                        "Cancel raid failed for %s: HTTP %s",
+                        from_broadcaster_login,
+                        r.status,
+                    )
+                    return False, error_msg
+                log.info("Raid cancelled for %s", from_broadcaster_login)
+                return True, None
+        except Exception as e:  # noqa: BLE001
+            log.exception("Cancel raid exception for %s", from_broadcaster_login)
+            return False, f"Exception during cancel raid: {e}"
+
     def _save_raid_history(
         self,
         from_broadcaster_id: str,
