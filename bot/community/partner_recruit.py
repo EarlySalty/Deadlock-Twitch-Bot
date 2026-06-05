@@ -28,15 +28,16 @@ RECRUIT_CHECK_INTERVAL_SECONDS = 1800  # Prüfzyklus (30 min)
 RECRUIT_MAX_PER_DAY = 8  # Hartes Tageslimit über alle Ticks
 RECRUIT_MAX_PER_TICK = 3  # Maximale Sends pro Prüfzyklus
 RECRUIT_THROTTLE_SECONDS = 60  # Pause zwischen Sends innerhalb eines Ticks
-RECRUIT_DISCORD_INVITE = "discord.gg/z5TfVHuQq2"
+RECRUIT_MAX_AVG_VIEWERS = 40  # Obergrenze: größere Streamer holen wir mit dieser Pitch nicht ab
 
-# Twitch-Chat-Limit: 500 Zeichen. Initial-Message ist KEIN Pitch und KEINE
-# direkte "willst du Infos?"-Frage — sondern Authority-Anker + offene Frage
-# zum Streamer selbst. Der Brain übernimmt das Locken im Follow-up.
+# Twitch-Chat-Limit: 500 Zeichen. Erstkontakt ohne Vorgeschichte, daher ein
+# direkter, ehrlicher Partner-Ask (Mission + „dich wollen wir") statt vagem
+# Versprechen. Das Konkrete liegt in der Bio — dort ist alles verlinkt.
 _OUTREACH_MSG = (
-    "Hey @{login}, bin gerade auf deinen Stream gestoßen — "
-    "wir sind die größte und aktivste deutsche Deadlock-Community. "
-    "Wie bist du eigentlich zu Deadlock gekommen?"
+    "Hey @{login}, bin gerade über deinen Stream gestolpert — "
+    "wir sind die größte aktive deutsche Deadlock-Community und ziehen die "
+    "Streamer zusammen, die dranbleiben. Dich hätten wir gern als Partner mit "
+    "dabei — wie das läuft, steht in der Bio."
 )
 
 
@@ -162,12 +163,14 @@ class TwitchPartnerRecruitMixin:
                     GROUP BY streamer
                     HAVING COUNT(DISTINCT DATE(ts_utc)) >= %s
                       AND CAST(COUNT(*) AS REAL) / COUNT(DISTINCT DATE(ts_utc)) >= %s
+                      AND AVG(viewer_count) <= %s
                     ORDER BY distinct_days DESC
                     """,
                     (
                         f"-{RECRUIT_LOOKBACK_DAYS} days",
                         RECRUIT_MIN_DAYS,
                         RECRUIT_MIN_AVG_SAMPLES_PER_DAY,
+                        RECRUIT_MAX_AVG_VIEWERS,
                     ),
                 ).fetchall()
 
@@ -206,11 +209,7 @@ class TwitchPartnerRecruitMixin:
         await asyncio.sleep(2)
 
         # 3. Nachricht zusammenbauen
-        message = _OUTREACH_MSG.format(
-            login=login,
-            days=distinct_days,
-            invite=RECRUIT_DISCORD_INVITE,
-        )
+        message = _OUTREACH_MSG.format(login=login)
 
         # 4. Senden via _send_chat_message (gleiche Methode wie raid_manager)
         success = False

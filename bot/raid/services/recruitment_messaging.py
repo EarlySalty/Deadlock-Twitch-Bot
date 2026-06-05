@@ -192,13 +192,7 @@ class RecruitmentMessagingPlanner:
         )
 
         message: str | None = None
-        discord_invite: str | None = None
         if delivery_plan.should_deliver and delivery_plan.message_variant is not None:
-            discord_invite = (
-                "https://discord.gg/z5TfVHuQq2"
-                if delivery_plan.invite_variant == "direct"
-                else "Discord: Server hinzufuegen & Code eingeben: z5TfVHuQq2"
-            )
             message = self._build_message(
                 delivery_plan.message_variant,
                 from_broadcaster_login=from_broadcaster_login,
@@ -210,7 +204,7 @@ class RecruitmentMessagingPlanner:
         return RecruitmentMessageDraft(
             delivery_plan=delivery_plan,
             message=message,
-            discord_invite=discord_invite,
+            discord_invite=None,
             stats_teaser=stats_teaser,
         )
 
@@ -223,32 +217,61 @@ class RecruitmentMessagingPlanner:
         total_recruitment_raid_count: int,
         stats_teaser: str,
     ) -> str:
-        del stats_teaser
-        if variant == "intro":
-            return (
-                f"Was fuer ein Match! 🔥 @{from_broadcaster_login} bringt dir gerade Unterstuetzung aus unserem "
-                f"Deadlock-Streamer-Netzwerk vorbei. Wir suchen gerade Streamer fuer unsere deutsche Deadlock Community noch aktive Streamer. "
-                f"Und wenn du in der Kategorie nicht untergehen willst, sondern endlich Impact haben moechtest, Check mal die Bio ab! ❤️"
-            )
-        if variant == "second":
-            return (
-                "Schon der 2. Raid von UNS fuer DICH! ❤️ Das ist kein Zufall mehr. "
-                "Wir vernetzen die Deutschen Deadlock-Streamer mit der Community, damit du nicht mehr einer von vielen bleibst. "
-                "Mehr infos in der Bio! 🚀"
-            )
-        if variant == "hattrick":
-            return (
-                f"Hattrick! 🎯 Aller guten Dinge sind 3, @{to_broadcaster_login}. Wir liefern dir die Viewer und "
-                f"die Positionierung, die du alleine niemals schaffst. Willst du weiter unsichtbar bleiben oder Teil der Elite werden? "
-                f"Grow or Fade Away - Dein Platz wartet in der Bio! 🕯️"
-            )
-        if variant == "support":
-            return (
-                f"Dauersupport fuer @{to_broadcaster_login}! 💎 {total_recruitment_raid_count}. Raid von uns. "
-                f"Werde Teil des Deadlock-Partner-Netzwerks und dominiere die Kategorie mit uns. Wir regeln die Raids, du den Content. "
-                f"Zum Onboarding gehts in der Bio! 🔥"
-            )
-        return ""
+        del from_broadcaster_login, total_recruitment_raid_count, stats_teaser
+        name = to_broadcaster_login
+        # Fortlaufender Bogen: jede Etappe setzt voraus, dass die vorigen schon
+        # gesehen wurden, und stellt uns ein Stück weiter vor. Ruhig statt laut,
+        # Neugierlücke, CTA immer „in der Bio“. @name nur im Erstkontakt (s1/s2).
+        stages: dict[str, str] = {
+            "s1": (
+                f"Hey @{name} — die Leute, die grad reinkamen, kamen nicht zufällig. "
+                f"Ein Streamer wie du hat sie geschickt, so läuft das bei uns. "
+                f"Wer „uns“ ist, steht in der Bio. 👀"
+            ),
+            "s2": (
+                f"Schon der zweite Support-Raid von uns, @{name} — kein Zufall. "
+                f"Wir ziehen die deutschen Deadlock-Streamer zusammen, damit keiner allein sendet. "
+                f"Mehr dazu in der Bio."
+            ),
+            "s3": (
+                "Dritter Raid, und ja, das hat System. Wir sind die größte aktive deutsche "
+                "Deadlock-Community und bringen Streamer und Zuschauer zusammen. "
+                "Wie das für dich aussieht, erfährst du in der Bio."
+            ),
+            "s4": (
+                "Fragst dich langsam, was wir wollen? Ganz einfach: hier supportet jeder jeden — "
+                "Streamer zocken mit der Community, und das zieht alle hoch. "
+                "Die Bio erklärt den Rest."
+            ),
+            "s5": (
+                "Deadlock ist grad klein, und genau das ist die Chance. Wir vernetzen jetzt die, "
+                "die dranbleiben, damit wir zusammen oben stehen, wenn's zurückkommt. "
+                "Steht alles in der Bio."
+            ),
+            "s6": (
+                "Mal Butter bei die Fische, weil du immer noch hier bist: Wir koordinieren Raids, "
+                "gemeinsame Sessions, gegenseitigen Support. Kein Vertrag, kein Haken — Community. "
+                "In der Bio steht, wie's läuft."
+            ),
+            "s7": (
+                "Die Streamer bei uns raiden sich gegenseitig, zocken zusammen, wachsen zusammen. "
+                "Genau dieser Kreislauf fehlt den meisten, die allein streamen. "
+                "In der Bio siehst du, wie du reinkommst."
+            ),
+            "s8": (
+                "Du bist jetzt oft genug von uns geraidet worden, dass man sagen kann: "
+                "wir mögen deinen Stream. Der nächste Schritt liegt bei dir — "
+                "alles dazu in der Bio."
+            ),
+            "s9": (
+                "Du gehörst hier eigentlich schon halb dazu. Der Platz in der Community steht "
+                "für dich offen — schau in die Bio, da erfährst du mehr."
+            ),
+            "s10": (
+                "Wieder wir 👋 Wir halten dir den Platz frei. Alles Wichtige liegt in der Bio."
+            ),
+        }
+        return stages.get(variant, stages["s10"])
 
 
 class RecruitmentMessagingService:
@@ -591,21 +614,9 @@ class RecruitmentMessagingService:
             session=session,
         )
 
+        # Der Stats-Teaser ist im neuen Bogen bewusst raus (eine rohe Zahl ist kein
+        # Grund); leerer Wert bleibt nur als Plan-Argument erhalten.
         stats_teaser = ""
-        if callable(self._deps.load_deadlock_stats):
-            try:
-                stats = self._deps.load_deadlock_stats(to_broadcaster_login.lower())
-                if stats and stats[0]:
-                    avg_viewers = int(stats[0])
-                    peak_viewers = int(stats[1]) if stats[1] else 0
-                    if peak_viewers > 0:
-                        stats_teaser = (
-                            f"Uebrigens: Du hattest im Schnitt {avg_viewers} Viewer bei Deadlock, dein Peak war {peak_viewers}. "
-                        )
-            except Exception:
-                self._deps.logger.debug(
-                    "Could not fetch stats for %s", to_broadcaster_login, exc_info=True
-                )
 
         draft = self._planner.plan(
             from_broadcaster_login=from_broadcaster_login,

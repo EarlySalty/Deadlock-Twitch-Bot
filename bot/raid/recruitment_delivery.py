@@ -5,7 +5,9 @@ from typing import Literal
 
 
 RecruitmentDeliveryStatus = Literal["ready", "blocked"]
-RecruitmentMessageVariant = Literal["intro", "second", "hattrick", "support"]
+RecruitmentMessageVariant = Literal[
+    "s1", "s2", "s3", "s4", "s5", "s6", "s7", "s8", "s9", "s10"
+]
 RecruitmentInviteVariant = Literal["direct", "standard"]
 
 
@@ -13,7 +15,9 @@ RecruitmentInviteVariant = Literal["direct", "standard"]
 class RecruitmentDeliveryConfig:
     delay_seconds: float = 15.0
     recent_raid_threshold: int = 2
-    max_recruitment_messages: int = 4
+    # Fortlaufender Bogen aus 10 Etappen; danach wiederholt sich die letzte
+    # (Dauer-Nudge), bis dieses harte Limit Dauerbeschallung verhindert.
+    max_recruitment_messages: int = 50
     direct_invite_max_followers: int = 120
 
 
@@ -175,13 +179,13 @@ class RecruitmentDeliveryPlanner:
         )
 
     def _message_variant(self, total_recruitment_raid_count: int) -> RecruitmentMessageVariant:
-        if total_recruitment_raid_count <= 1:
-            return "intro"
-        if total_recruitment_raid_count == 2:
-            return "second"
-        if total_recruitment_raid_count == 3:
-            return "hattrick"
-        return "support"
+        # Der Kontaktzaehler ist der Kapitel-Index des Bogens: 1->s1 ... 10->s10.
+        # Alles darueber bleibt bei s10 (wiederholter Dauer-Nudge).
+        stages: tuple[RecruitmentMessageVariant, ...] = (
+            "s1", "s2", "s3", "s4", "s5", "s6", "s7", "s8", "s9", "s10"
+        )
+        idx = min(max(int(total_recruitment_raid_count), 1), len(stages)) - 1
+        return stages[idx]
 
     def _invite_variant(self, followers_total: int | None) -> RecruitmentInviteVariant:
         if followers_total is not None and followers_total <= self._config.direct_invite_max_followers:

@@ -131,7 +131,8 @@ class RecruitmentMessagingTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(result.status, "sent")
         self.assertIsNotNone(result.message)
-        self.assertIn("Dauersupport fuer @target", result.message or "")
+        # count_confirmed=4 -> Etappe s4 des Bogens
+        self.assertIn("supportet jeder jeden", result.message or "")
         service._deps.join_chat_channel.assert_awaited_once()
         service._deps.send_chat_message.assert_awaited_once()
         service._deps.schedule_external_target_ban_check.assert_called_once_with(

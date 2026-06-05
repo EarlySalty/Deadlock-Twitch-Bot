@@ -42,7 +42,7 @@ class RecruitmentDeliveryTests(unittest.TestCase):
 
         self.assertEqual(plan.status, "ready")
         self.assertIsNone(plan.reason)
-        self.assertEqual(plan.message_variant, "second")
+        self.assertEqual(plan.message_variant, "s2")
         self.assertEqual(plan.invite_variant, "direct")
         self.assertIn("delay_elapsed", plan.prerequisites)
 
