@@ -228,7 +228,11 @@ PROMO_COOLDOWN_MAX: int = _PROMO_COOLDOWN_MAX
 # Warnung statt der Discord-Werbung – Promos und Warnung wechseln sich so ab.
 # Wortlaut bewusst mit "könnte/möglicherweise"-Hedge (kein harter Scam-Vorwurf).
 SCAM_WARNING_ENABLED: bool = True
-SCAM_WARNING_COOLDOWN_MIN: int = 45  # frühestens alle x Minuten pro Kanal
+SCAM_WARNING_COOLDOWN_MIN: int = 120  # frühestens alle x Minuten pro Kanal (> Promo-Takt → seltener als Promos)
+# Verzögerung der allerersten Warnung nach dem Saen des Timers: nicht sofort beim
+# ersten Promo-Slot, aber auch nicht erst nach einer vollen Cooldown-Runde. So
+# erscheint die Warnung zuverlaessig schon in der zweiten Promo-Gelegenheit.
+SCAM_WARNING_INITIAL_DELAY_MIN: int = 20
 SCAM_WARNING_MESSAGES: list[str] = [
     (
         "⚠️ Achtung: „Deadlock Discord Deutschland\" und „Deadlock German Competitiv HUB\" "
@@ -243,6 +247,8 @@ SCAM_WARNING_MESSAGES: list[str] = [
 
 SCAM_WARNING_ENABLED = bool(SCAM_WARNING_ENABLED) and bool(SCAM_WARNING_MESSAGES)
 SCAM_WARNING_COOLDOWN_MIN = max(1, int(SCAM_WARNING_COOLDOWN_MIN))
+# Initial-Delay darf den Cooldown nicht uebersteigen (sonst negative Saat-Logik).
+SCAM_WARNING_INITIAL_DELAY_MIN = max(0, min(int(SCAM_WARNING_INITIAL_DELAY_MIN), SCAM_WARNING_COOLDOWN_MIN))
 
 # ---------------------------------------------------------------------------
 # Deadlock Zugangsfragen (Invite-Only Hinweise)

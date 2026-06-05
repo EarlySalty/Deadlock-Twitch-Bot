@@ -51,6 +51,7 @@ from .constants import (
     PROMO_VIEWER_SPIKE_STATS_SAMPLE_LIMIT,
     SCAM_WARNING_COOLDOWN_MIN,
     SCAM_WARNING_ENABLED,
+    SCAM_WARNING_INITIAL_DELAY_MIN,
     SCAM_WARNING_MESSAGES,
     SUBSCRIPTION_PLANS_ENABLED,
 )
@@ -794,6 +795,23 @@ class PromoMixin:
             pass
         return True
 
+    def _promo_lock_for(self, login: str) -> asyncio.Lock:
+        """Per-Kanal-Lock, der die Sequenz "Gate prüfen -> senden -> Cooldown
+        festschreiben" serialisiert. Ohne ihn können der Per-Message-Pfad und die
+        Periodik-Schleife gleichzeitig durch das Gate laufen (zwischen Prüfung und
+        _mark_promo_sent liegen mehrere awaits), wodurch zwei Promos kurz
+        hintereinander rausgehen und das Mindest-Nachrichten-Gate wirkungslos
+        wirkt."""
+        locks = getattr(self, "_promo_send_locks", None)
+        if not isinstance(locks, dict):
+            locks = {}
+            self._promo_send_locks = locks
+        lock = locks.get(login)
+        if lock is None:
+            lock = asyncio.Lock()
+            locks[login] = lock
+        return lock
+
     @staticmethod
     def _make_promo_channel(login: str, channel_id: str):
         class _Channel:
@@ -846,6 +864,17 @@ class PromoMixin:
         except Exception:
             log.warning("Promo template could not be rendered", exc_info=True)
             return None
+
+    def _persist_scam_warning_ts(self, login: str, mono_ts: float) -> None:
+        """Scam-Warn-Timer in der DB ablegen (ueberlebt Neustarts wie die Promo-
+        Cooldowns). Ohne Persistenz wurde der in-memory Timer bei jedem Bot-
+        Restart neu gesaet -> die Warnung erreichte nie ihre zweite Gelegenheit."""
+        try:
+            from ..storage import save_promo_cooldown
+            wall_ts = time.time() - (time.monotonic() - mono_ts)
+            save_promo_cooldown(login, "scam_warning", wall_ts)
+        except Exception:
+            log.debug("Scam-Warn-Cooldown persist failed for %s", login, exc_info=True)
 
     def _mark_promo_sent(self, login: str, now: float, *, reason: str) -> None:
         self._last_promo_sent[login] = now
@@ -900,6 +929,12 @@ class PromoMixin:
                 self._last_promo_attempt.setdefault(login, mono_ts)
             elif cooldown_type == "viewer_spike":
                 self._last_promo_viewer_spike.setdefault(login, mono_ts)
+            elif cooldown_type == "scam_warning":
+                last_map = getattr(self, "_last_scam_warning_sent", None)
+                if not isinstance(last_map, dict):
+                    last_map = {}
+                    self._last_scam_warning_sent = last_map
+                last_map.setdefault(login, mono_ts)
             else:
                 continue
             restored += 1
@@ -961,10 +996,18 @@ class PromoMixin:
             self._last_scam_warning_sent = last_map
         last = last_map.get(login)
         if last is None:
-            # Erste Promo-Gelegenheit pro Kanal: Timer nur säen, normal werben.
-            # So kommt die Warnung erst nach Ablauf des Intervalls – nicht direkt
-            # beim Bot-Start bzw. nach jedem Neustart (Cooldown ist in-memory).
-            last_map[login] = now
+            # Erste Promo-Gelegenheit pro Kanal: Timer säen, normal werben.
+            # Nicht auf "now" säen (sonst bräuchte es eine zweite Gelegenheit eine
+            # volle Cooldown-Runde später), sondern um Cooldown minus Initial-Delay
+            # zurückdatieren -> die Warnung ist schon in der nächsten Gelegenheit
+            # fällig, aber nicht sofort. Persistiert, damit der Timer Neustarts
+            # überlebt statt bei jedem Restart neu gesät zu werden.
+            grace_sec = max(
+                0.0, float(SCAM_WARNING_COOLDOWN_MIN - SCAM_WARNING_INITIAL_DELAY_MIN)
+            ) * 60.0
+            seed = now - grace_sec
+            last_map[login] = seed
+            self._persist_scam_warning_ts(login, seed)
             return False
         cooldown_sec = float(SCAM_WARNING_COOLDOWN_MIN) * 60.0
         if (now - last) < cooldown_sec:
@@ -1012,6 +1055,7 @@ class PromoMixin:
             return False
         self._mark_promo_sent(login, now, reason=reason)
         self._last_scam_warning_sent[login] = now
+        self._persist_scam_warning_ts(login, now)
         return True
 
     def _promo_blocked_by_plan_or_flag(self, login: str) -> bool:
@@ -1397,7 +1441,10 @@ class PromoMixin:
         if not channel_id:
             return
 
-        await self._maybe_send_promo_with_stats(login, str(channel_id), now)
+        # Lock: verhindert, dass dieser Per-Message-Pfad gleichzeitig mit der
+        # Periodik-Schleife durch dasselbe Gate läuft und doppelt sendet.
+        async with self._promo_lock_for(login):
+            await self._maybe_send_promo_with_stats(login, str(channel_id), now)
 
     # ------------------------------------------------------------------
     # Periodische Chat-Promos
@@ -1438,44 +1485,49 @@ class PromoMixin:
                 if not is_partner_channel_for_chat_tracking(login):
                     continue
 
-                # Targeted Promo + Fake-Server-Warnung nur im FÄLLIGEN Promo-Slot:
-                # erst wenn seit der letzten Promo genug frische Chat-Aktivität da
-                # war (kein Werben direkt beim Session-Start, gleiche Schwellen wie
-                # der Stats-Pfad).
-                if self._overall_promo_ready(login, now) and self._promo_activity_ready(
-                    login, now
-                ):
-                    invite, _ = await self._get_promo_invite(login)
-                    if invite:
-                        # Warnung hat im fälligen Slot Vorrang (eigener Cooldown),
-                        # sonst würde die Targeted-Promo sie dauerhaft verdrängen.
-                        if await self._maybe_send_scam_warning(
-                            login, str(broadcaster_id), invite, now, reason="promo"
-                        ):
-                            continue
-                        bucket = self._promo_activity.get(login)
-                        active_chatters = list(dict.fromkeys(
-                            c for _, c in (bucket or [])
-                        ))
-                        try:
-                            targeted_sent = await maybe_send_targeted_promo(
-                                bot=self,
-                                channel_login=login,
-                                channel_id=str(broadcaster_id),
-                                active_chatters=active_chatters,
-                                invite_url=invite,
-                                now=now,
-                            )
-                            if targeted_sent:
+                # Lock: serialisiert "Gate prüfen -> senden -> Cooldown" pro Kanal,
+                # damit diese Schleife nicht parallel zum Per-Message-Pfad durch
+                # dasselbe Gate läuft und doppelt sendet (TOCTOU zwischen Prüfung
+                # und _mark_promo_sent).
+                async with self._promo_lock_for(login):
+                    # Targeted Promo + Fake-Server-Warnung nur im FÄLLIGEN Promo-Slot:
+                    # erst wenn seit der letzten Promo genug frische Chat-Aktivität da
+                    # war (kein Werben direkt beim Session-Start, gleiche Schwellen wie
+                    # der Stats-Pfad).
+                    if self._overall_promo_ready(login, now) and self._promo_activity_ready(
+                        login, now
+                    ):
+                        invite, _ = await self._get_promo_invite(login)
+                        if invite:
+                            # Warnung hat im fälligen Slot Vorrang (eigener Cooldown),
+                            # sonst würde die Targeted-Promo sie dauerhaft verdrängen.
+                            if await self._maybe_send_scam_warning(
+                                login, str(broadcaster_id), invite, now, reason="promo"
+                            ):
                                 continue
-                        except Exception:
-                            log.debug("Targeted-Promo fehlgeschlagen für %s", login, exc_info=True)
+                            bucket = self._promo_activity.get(login)
+                            active_chatters = list(dict.fromkeys(
+                                c for _, c in (bucket or [])
+                            ))
+                            try:
+                                targeted_sent = await maybe_send_targeted_promo(
+                                    bot=self,
+                                    channel_login=login,
+                                    channel_id=str(broadcaster_id),
+                                    active_chatters=active_chatters,
+                                    invite_url=invite,
+                                    now=now,
+                                )
+                                if targeted_sent:
+                                    continue
+                            except Exception:
+                                log.debug("Targeted-Promo fehlgeschlagen für %s", login, exc_info=True)
 
-                sent = False
-                if _PROMO_ACTIVITY_ENABLED:
-                    sent = await self._maybe_send_promo_with_stats(login, str(broadcaster_id), now)
-                if not sent and PROMO_VIEWER_SPIKE_ENABLED:
-                    await self._maybe_send_viewer_spike_promo(login, str(broadcaster_id), now)
+                    sent = False
+                    if _PROMO_ACTIVITY_ENABLED:
+                        sent = await self._maybe_send_promo_with_stats(login, str(broadcaster_id), now)
+                    if not sent and PROMO_VIEWER_SPIKE_ENABLED:
+                        await self._maybe_send_viewer_spike_promo(login, str(broadcaster_id), now)
             return
 
         interval_sec = max(_PROMO_INTERVAL_MIN * 60, self._overall_promo_cooldown_sec())

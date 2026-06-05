@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import sqlite3
 import unittest
 from contextlib import ExitStack
@@ -122,6 +123,7 @@ class ScamWarningSendTests(unittest.IsolatedAsyncioTestCase):
         stack.enter_context(patch("bot.chat.promos.PROMO_CHANNEL_ALLOWLIST", []))
         stack.enter_context(patch("bot.chat.promos.SCAM_WARNING_ENABLED", True))
         stack.enter_context(patch("bot.chat.promos.SCAM_WARNING_COOLDOWN_MIN", 45))
+        stack.enter_context(patch("bot.chat.promos.SCAM_WARNING_INITIAL_DELAY_MIN", 20))
         stack.enter_context(
             patch(
                 "bot.chat.promos.SCAM_WARNING_MESSAGES",
@@ -145,8 +147,37 @@ class ScamWarningSendTests(unittest.IsolatedAsyncioTestCase):
             self.handler.announcement_calls[0]["text"],
             "Default Promo https://discord.gg/example",
         )
-        # Timer wurde gesät
-        self.assertEqual(self.handler._last_scam_warning_sent["partner_one"], 0.0)
+        # Timer wurde in die Vergangenheit gesät: Cooldown(45) - Initial-Delay(20)
+        # = 25 Min -> -1500s. So ist die Warnung schon in der nächsten Gelegenheit
+        # fällig, statt eine volle Cooldown-Runde zu warten.
+        self.assertEqual(self.handler._last_scam_warning_sent["partner_one"], -25 * 60.0)
+
+    async def test_grace_seed_fires_on_second_opportunity(self) -> None:
+        # 1. Gelegenheit säet den Timer + normale Promo; 2. Gelegenheit schon nach
+        # dem Initial-Delay (20 Min) -> Warnung, nicht erst nach voller Cooldown.
+        with self._base_patches():
+            ok1 = await self.handler._send_promo_message(
+                "partner_one", "1001", 0.0, reason="chat_activity"
+            )
+            ok2 = await self.handler._send_promo_message(
+                "partner_one", "1001", 20 * 60.0, reason="chat_activity"
+            )
+
+        self.assertTrue(ok1)
+        self.assertTrue(ok2)
+        self.assertEqual(self.handler.announcement_calls[0]["source"], "promo")
+        self.assertEqual(self.handler.announcement_calls[1]["source"], "scam_warning")
+
+    async def test_scam_seed_is_persisted(self) -> None:
+        # Der gesäte Timer muss in die DB geschrieben werden, sonst löscht ihn jeder
+        # Bot-Neustart und die Warnung erreicht nie ihre zweite Gelegenheit.
+        with self._base_patches():
+            with patch("bot.storage.save_promo_cooldown") as mock_save:
+                await self.handler._send_promo_message(
+                    "partner_one", "1001", 0.0, reason="chat_activity"
+                )
+        persisted_types = [call.args[1] for call in mock_save.call_args_list]
+        self.assertIn("scam_warning", persisted_types)
 
     async def test_warning_fires_after_cooldown_elapsed(self) -> None:
         # Timer vor 46 Minuten gesät -> jetzt fällig
@@ -206,6 +237,81 @@ class ScamWarningSendTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertFalse(ok)
         self.assertEqual(self.handler.announcement_calls, [])
+
+
+class PromoDoubleSendLockTests(unittest.IsolatedAsyncioTestCase):
+    """Bug A: Per-Message-Pfad und Periodik-Schleife liefen früher gleichzeitig
+    durch dasselbe Gate, weil zwischen Gate-Prüfung und _mark_promo_sent mehrere
+    awaits liegen -> zwei Promos kurz hintereinander. Der Per-Kanal-Lock macht
+    "prüfen -> senden -> Cooldown" atomar."""
+
+    async def test_lock_prevents_concurrent_double_promo(self) -> None:
+        sent: list[str] = []
+        started = asyncio.Event()
+        release = asyncio.Event()
+
+        class _Dummy(PromoMixin):
+            def __init__(self) -> None:
+                self._last_promo_sent: dict[str, float] = {}
+                self._raw_msg_count_since_promo: dict[str, int] = {}
+                self._promo_activity: dict = {}
+
+            # Gates auf "fällig" stellen, aber _overall_promo_ready REAL lassen –
+            # das ist das Gate, das der Lock wirksam machen muss.
+            def _promo_channel_allowed(self, login: str) -> bool:
+                return True
+
+            def _promo_activity_ready(self, login: str, now: float) -> bool:
+                return True
+
+            def _promo_attempt_allowed(self, login: str, now: float) -> bool:
+                return True
+
+            def _promo_blocked_by_plan_or_flag(self, login: str) -> bool:
+                return False
+
+            def _get_promo_activity_stats(self, login: str, now: float):
+                return (3, 1, 0.5)
+
+            def _build_promo_text(self, login: str, invite: str, reason: str = "promo"):
+                return f"Promo {invite}"
+
+            def _update_seen_chatters(self, login: str, now: float) -> None:
+                pass
+
+            async def _maybe_send_scam_warning(
+                self, login, channel_id, invite, now, *, reason
+            ) -> bool:
+                return False
+
+            async def _get_promo_invite(self, login: str):
+                return "https://discord.gg/x", False
+
+            async def _send_announcement(self, channel, text, color="purple", source=""):
+                sent.append(source)
+                started.set()
+                await release.wait()  # mitten in der kritischen Sektion parken
+                return True
+
+        handler = _Dummy()
+
+        async def attempt() -> bool:
+            async with handler._promo_lock_for("partner_one"):
+                return await handler._maybe_send_promo_with_stats(
+                    "partner_one", "1001", 0.0
+                )
+
+        task_a = asyncio.create_task(attempt())
+        await started.wait()          # A hält den Lock und hängt im Send
+        task_b = asyncio.create_task(attempt())
+        await asyncio.sleep(0)        # B versucht den Lock -> blockiert
+        release.set()
+        await asyncio.gather(task_a, task_b)
+
+        # Nur EINE Promo: B bekommt den Lock erst nach _mark_promo_sent, dann blockt
+        # ihn das frisch gesetzte 90-Min-Overall-Gate.
+        self.assertEqual(len(sent), 1)
+        self.assertEqual(handler._last_promo_sent["partner_one"], 0.0)
 
 
 if __name__ == "__main__":
