@@ -221,22 +221,30 @@ class RecruitmentMessagingPlanner:
         name = to_broadcaster_login
         # Fortlaufender Bogen: jede Etappe setzt voraus, dass die vorigen schon
         # gesehen wurden, und stellt uns ein Stück weiter vor. Ruhig statt laut,
-        # Neugierlücke, CTA immer „in der Bio“. @name nur im Erstkontakt (s1/s2).
+        # CTA immer „in der Bio“ — KEINE URLs im Text (Twitch-AutoMod bannt Links
+        # meist sofort). @name nur im Erstkontakt (s1/s2). s1–s3 tragen bewusst
+        # konkrete Substanz zum „was der Bot tut“, um Scam-Verdacht proaktiv zu
+        # entkräften, statt ihn nur zu teasen.
         stages: dict[str, str] = {
             "s1": (
-                f"Hey @{name} — die Leute, die grad reinkamen, kamen nicht zufällig. "
-                f"Ein Streamer wie du hat sie geschickt, so läuft das bei uns. "
-                f"Wer „uns“ ist, steht in der Bio. 👀"
+                f"Hey @{name} — die Zuschauer, die grad reinkamen, sind echt und kamen "
+                f"nicht zufällig: ein anderer deutscher Deadlock-Streamer hat sie dir "
+                f"geschickt, als er offline ging. Genau das macht unser Bot — Zuschauer "
+                f"zwischen Deadlock-Streamern weiterreichen, statt sie verpuffen zu lassen. "
+                f"Wer „wir“ sind, steht in der Bio. 👀"
             ),
             "s2": (
-                f"Schon der zweite Support-Raid von uns, @{name} — kein Zufall. "
-                f"Wir ziehen die deutschen Deadlock-Streamer zusammen, damit keiner allein sendet. "
-                f"Mehr dazu in der Bio."
+                f"Schon der zweite Support-Raid, @{name} — beim ersten hast du wahrscheinlich "
+                f"„Scam“ gedacht. Verständlich, ist aber keiner: wir vernetzen die deutschen "
+                f"Deadlock-Streamer und schieben uns gegenseitig Zuschauer zu. Wer dabei ist, "
+                f"dem hält der Bot nebenbei Viewer-Bot-Spam aus dem Chat. "
+                f"Mehr in der Bio."
             ),
             "s3": (
                 "Dritter Raid, und ja, das hat System. Wir sind die größte aktive deutsche "
-                "Deadlock-Community und bringen Streamer und Zuschauer zusammen. "
-                "Wie das für dich aussieht, erfährst du in der Bio."
+                "Deadlock-Community — Streamer reichen sich gegenseitig Zuschauer weiter, "
+                "keiner sendet allein. Kein Haken: einmal verbinden, der Rest läuft von selbst. "
+                "Wie das für dich aussieht, steht in der Bio."
             ),
             "s4": (
                 "Fragst dich langsam, was wir wollen? Ganz einfach: hier supportet jeder jeden — "
