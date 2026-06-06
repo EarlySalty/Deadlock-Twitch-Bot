@@ -26,7 +26,10 @@ STREAMER_URL = "https://deutsche-deadlock-community.de/streamer"
 # Grenzen
 MAX_QUESTION_LEN = 500
 MAX_ANSWER_LEN = 600
-_MINIMAX_MAX_OUTPUT_TOKENS = 240
+# MiniMax M2.7 erzeugt Think-Blöcke, die der Client wegstrippt — das Token-Budget
+# zählt sie aber mit. Daher großzügig, damit nach dem Denken noch eine vollständige
+# Antwort übrig bleibt (sonst bricht sie mitten im Satz ab).
+_MINIMAX_MAX_OUTPUT_TOKENS = 700
 
 # Der Steckbrief: einzige erlaubte Faktenquelle. Preise/Kosten stehen bewusst
 # NICHT drin — danach soll der Streamer selbst auf der Seite schauen.
