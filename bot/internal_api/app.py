@@ -77,6 +77,7 @@ from .routes.telemetry import attach_telemetry_routes
 from .routes import telemetry as _telemetry_routes
 from .routes.global_ban import attach_global_ban_routes
 from .routes.streamer_link import attach_streamer_link_routes
+from .routes.discord_log import attach_discord_log_routes
 
 
 class InternalApiServer:
@@ -928,6 +929,7 @@ class InternalApiServer:
         attach_raid_routes(app, self)
         attach_global_ban_routes(app, self)
         attach_streamer_link_routes(app, self)
+        attach_discord_log_routes(app, self)
 
 
 def build_internal_api_app(

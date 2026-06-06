@@ -4,9 +4,10 @@ Ein (oft skeptischer) Streamer tippt auf der Website eine Frage; dieser Endpoint
 beantwortet sie grounded über `bot.chat.self_explainer` (strikt aus dem
 Steckbrief, kein Erfinden) und protokolliert Frage + Antwort dauerhaft:
 - in die DB (`twitch_self_explainer_log`) und
-- best-effort als Discord-Embed über die Master-Broker-API des echten Discord-Bots
-  (POST /internal/master/v1/discord/send-rich-message) in den Protokoll-Channel
-  1374364800817303632. Worker/Dashboard sind headless, daher kein direkter Client.
+- best-effort als Discord-Embed in den Protokoll-Channel 1374364800817303632.
+  Dashboard ist headless und hat den Master-Broker-Token nicht — daher Relay über
+  den Worker-Internal-Endpoint (`/internal/twitch/v1/discord/self-explainer-log`),
+  der das Embed an den Master-Broker weiterleitet.
 
 Öffentlich (kein Login — /streamer ist öffentlich), aber per-IP rate-limitiert
 und durch das Grounding/den gehärteten System-Prompt gegen Prompt-Injection
@@ -38,7 +39,8 @@ log = logging.getLogger("TwitchStreams.Dashboard.SelfExplainer")
 # über die bestehende Discord-Bot-Integration des Dashboards hierher gespiegelt
 # (kein Webhook), damit die Konversationen sichtbar sind.
 _LOG_CHANNEL_ID = TWITCH_ALERT_CHANNEL_ID
-_MASTER_BROKER_DISCORD_PATH = "/internal/master/v1/discord/send-rich-message"
+# Dashboard ist headless + hat MASTER_BROKER_TOKEN nicht → Relay über den Worker.
+_WORKER_DISCORD_LOG_PATH = "/internal/twitch/v1/discord/self-explainer-log"
 
 _HARD_MAX_QUESTION = 1000
 # Reasoning-Modell braucht bei vollen Antworten Zeit; Token-Budget ist großzügig,
@@ -148,37 +150,32 @@ def _build_discord_embed(question: str, result: SelfExplainerAnswer, peer: str) 
     return embed
 
 
-def _master_broker_base_url() -> str:
-    explicit = (os.getenv("MASTER_BROKER_BASE_URL") or "").strip()
+def _worker_internal_base_url() -> str:
+    explicit = (os.getenv("TWITCH_INTERNAL_API_BASE_URL") or "").strip()
     if explicit:
         return explicit.rstrip("/")
-    host = (os.getenv("MASTER_BROKER_HOST") or "127.0.0.1").strip() or "127.0.0.1"
-    port = (os.getenv("MASTER_BROKER_PORT") or "8770").strip() or "8770"
+    host = (os.getenv("TWITCH_INTERNAL_API_HOST") or "127.0.0.1").strip() or "127.0.0.1"
+    port = (os.getenv("TWITCH_INTERNAL_API_PORT") or "8776").strip() or "8776"
     return f"http://{host}:{port}"
 
 
-async def _post_discord_via_master_broker(
+async def _post_discord_via_worker(
     question: str, result: SelfExplainerAnswer, peer: str
 ) -> None:
-    """Spiegelt Frage+Antwort über die Master-Broker-API des echten Discord-Bots.
+    """Relayt das Embed über den Worker-Internal-Endpoint nach Discord.
 
-    Worker/Dashboard sind headless (kein lokaler Discord-Client), daher läuft der
-    Post über `POST /internal/master/v1/discord/send-rich-message` (X-Internal-Token).
-    Best-effort — bricht die Antwort an den Besucher nie ab.
+    Das Dashboard ist headless und hat den Master-Broker-Token nicht; der Worker
+    schon. Daher POST an `/internal/twitch/v1/discord/self-explainer-log`
+    (X-Internal-Token), der Worker leitet ans Master-Broker weiter. Best-effort —
+    bricht die Antwort an den Besucher nie ab.
     """
-    token = (os.getenv("MASTER_BROKER_TOKEN") or "").strip()
+    token = (os.getenv("TWITCH_INTERNAL_API_TOKEN") or "").strip()
     if not token:
-        log.warning("self_explainer: MASTER_BROKER_TOKEN fehlt — Discord-Log übersprungen")
+        log.warning("self_explainer: TWITCH_INTERNAL_API_TOKEN fehlt — Discord-Log übersprungen")
         return
     embed = _build_discord_embed(question, result, peer)
-    payload = {
-        "channel_id": int(_LOG_CHANNEL_ID),
-        "content": None,
-        "embed": embed.to_dict(),
-        "allowed_role_ids": [],
-        "view_spec": None,
-    }
-    url = f"{_master_broker_base_url()}{_MASTER_BROKER_DISCORD_PATH}"
+    payload = {"channel_id": int(_LOG_CHANNEL_ID), "embed": embed.to_dict()}
+    url = f"{_worker_internal_base_url()}{_WORKER_DISCORD_LOG_PATH}"
     try:
         import aiohttp
 
@@ -191,11 +188,11 @@ async def _post_discord_via_master_broker(
             ) as resp:
                 if resp.status >= 300:
                     body = (await resp.text())[:200]
-                    log.warning("self_explainer: Discord-Broker status=%s body=%s", resp.status, body)
+                    log.warning("self_explainer: Worker-Discord-Log status=%s body=%s", resp.status, body)
                 else:
-                    log.info("self_explainer: Discord-Log gepostet (channel=%s)", _LOG_CHANNEL_ID)
+                    log.info("self_explainer: Discord-Log via Worker gepostet (channel=%s)", _LOG_CHANNEL_ID)
     except Exception:
-        log.warning("self_explainer: Discord-Broker-Post fehlgeschlagen", exc_info=True)
+        log.warning("self_explainer: Worker-Discord-Log-Post fehlgeschlagen", exc_info=True)
 
 
 async def _safe_log(question: str, result: SelfExplainerAnswer, peer: str) -> None:
@@ -205,7 +202,7 @@ async def _safe_log(question: str, result: SelfExplainerAnswer, peer: str) -> No
     except Exception:
         log.debug("self_explainer: DB-Log fehlgeschlagen", exc_info=True)
     try:
-        asyncio.create_task(_post_discord_via_master_broker(question, result, peer))
+        asyncio.create_task(_post_discord_via_worker(question, result, peer))
     except Exception:
         log.debug("self_explainer: Discord-Task konnte nicht gestartet werden", exc_info=True)
 
