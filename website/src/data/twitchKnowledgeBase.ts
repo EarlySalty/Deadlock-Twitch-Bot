@@ -543,9 +543,10 @@ FAQ_SECTIONS.push({
     {
       question: "Welche Hauptaufgaben übernimmt der Bot für mich?",
       answer:
-        "Der Bot kümmert sich um vier Dinge: Er leitet beim Stream-Ende deine Zuschauer automatisch an einen live Deadlock-Partner weiter (Auto-Raid), trackt deine Stream-Zahlen für dein Dashboard, schickt bei Bedarf eine dezente Discord-Einladung in deinen Chat und bringt optionale Extras wie Lurker-Erinnerungen oder KI-Stream-Reports mit.",
+        "Der Bot kümmert sich um fünf Dinge: Er leitet beim Stream-Ende deine Zuschauer automatisch an einen live Deadlock-Partner weiter (Auto-Raid), hält automatisch nervige Werbe-Bots aus deinem Chat (die dir mehr Viewer oder Follower verkaufen wollen), trackt deine Stream-Zahlen für dein Dashboard, schickt bei Bedarf eine dezente Discord-Einladung in deinen Chat und bringt optionale Extras wie Lurker-Erinnerungen oder KI-Stream-Reports mit.",
       details: [
         "Auto-Raid läuft ohne Setup — der Bot wählt den passenden Partner aus.",
+        "Die Chat-Moderation gegen diese Werbe-Bots läuft automatisch im Hintergrund, ohne dass du Filterlisten oder Befehle pflegen musst.",
         "Analytics werden im Hintergrund erfasst, du musst nichts konfigurieren.",
         "Chat-Werbung kannst du im Dashboard steuern oder mit dem Werbefrei-Plan komplett abschalten.",
         "Stream-Reports (KI) und Lurker-Tax sind optionale Premium-Features.",
@@ -555,6 +556,19 @@ FAQ_SECTIONS.push({
       routes: [
         { label: "Dashboard öffnen", href: buildTwitchDashboardLoginUrl("/twitch/dashboard-v2") },
       ],
+    },
+    {
+      question: "Moderiert der Bot auch meinen Chat?",
+      answer:
+        "Ja. Der Bot räumt automatisch die nervigen Werbe-Bots aus dem Chat, die dir mehr Viewer oder Follower verkaufen wollen — die kennt jeder Streamer, und sie sehen im Chat einfach mies aus. Das läuft im Hintergrund, ohne dass du Wörter sperren oder Mod-Regeln pflegen musst.",
+      details: [
+        "Erkennt gezielt diese Werbe-Bots, nicht pauschal alles — normale Chatter und Links bleiben unangetastet.",
+        "Anders als klassische Mod-Bots (Nightbot & Co.) musst du keine Befehle oder Filterlisten einrichten.",
+        "Auf Treffsicherheit ausgelegt: ein versehentlicher Bann ist praktisch ausgeschlossen.",
+        "Die Moderation ist aktiv, sobald dein Kanal verbunden ist — unabhängig davon, welches Spiel du gerade streamst.",
+      ],
+      access: "Alle",
+      tags: ["moderation", "spam", "viewer-bot", "follow-bot", "werbe-bot", "auto-mod", "chat-schutz"],
     },
     {
       question: "Welche Rechte braucht der Bot in meinem Kanal?",
