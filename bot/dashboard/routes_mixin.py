@@ -22,6 +22,7 @@ from .route_deps import BillingRouteDeps, EntryRouteDeps, MarketRouteDeps
 from . import routes_billing as _routes_billing
 from . import routes_entry as _routes_entry
 from . import routes_market as _routes_market
+from . import routes_self_explainer as _routes_self_explainer
 from . import routes_settings as _routes_settings
 from . import routes_title as _routes_title
 from .billing.billing_plans import (
@@ -618,6 +619,7 @@ class _DashboardRoutesMixin:
         app.add_routes(_routes_settings.build_route_defs(self))
         app.add_routes(_routes_market.build_route_defs(self))
         app.add_routes(_routes_title.build_route_defs(self))
+        app.add_routes(_routes_self_explainer.build_route_defs(self))
         app.add_routes(
             [
                 web.get("/twitch/raid/auth", self.raid_auth_start),
