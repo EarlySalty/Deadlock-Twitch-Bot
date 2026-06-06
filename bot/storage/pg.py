@@ -4117,6 +4117,37 @@ def is_chatter_globally_banned(chatter_login: str, chatter_id: str) -> bool:
         return False
 
 
+def list_unlinked_streamers() -> list[dict]:
+    """Alle nicht-archivierten Streamer ohne Discord-Verknüpfung.
+
+    Quelle für den automatischen Discord-Namens-Abgleich (Matcher im Discord-Bot).
+    Ein Streamer gilt als unverknüpft, wenn weder die gespiegelte Spalte in
+    ``twitch_streamers`` noch die Identity-Wahrheit in ``twitch_streamer_identities``
+    eine ``discord_user_id`` führt. ``is_monitored_only`` wird mitgegeben, damit der
+    Matcher rein gescrapte Kanäle nie automatisch verknüpft, sondern nur vorschlägt.
+    """
+    try:
+        with readonly_connection() as conn:
+            rows = conn.execute(
+                """
+                SELECT s.twitch_login,
+                       COALESCE(NULLIF(s.twitch_user_id, ''), i.twitch_user_id) AS twitch_user_id,
+                       COALESCE(s.is_monitored_only, 0) AS is_monitored_only
+                  FROM twitch_streamers s
+                  LEFT JOIN twitch_streamer_identities i
+                    ON i.twitch_user_id = s.twitch_user_id
+                 WHERE (s.discord_user_id IS NULL OR s.discord_user_id = '')
+                   AND (i.discord_user_id IS NULL OR i.discord_user_id = '')
+                   AND s.archived_at IS NULL
+                 ORDER BY s.twitch_login
+                """
+            ).fetchall()
+            return [dict(row) for row in rows]
+    except Exception:
+        log.exception("list_unlinked_streamers failed")
+        return []
+
+
 def add_chatter_global_ban(
     chatter_login: str,
     chatter_id: str | None = None,
