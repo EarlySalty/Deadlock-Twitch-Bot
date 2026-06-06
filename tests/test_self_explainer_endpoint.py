@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import unittest
 
+import discord
+
 from bot.chat.self_explainer import SelfExplainerAnswer
 from bot.dashboard.routes_self_explainer import (
     _RateLimiter,
-    _build_discord_payload,
+    _build_discord_embed,
     build_route_defs,
 )
 
@@ -40,21 +42,20 @@ class RouteDefTests(unittest.TestCase):
         self.assertIn("self-explainer/ask", route.path)
 
 
-class DiscordPayloadTests(unittest.TestCase):
-    def test_payload_grounded_is_green(self) -> None:
+class DiscordEmbedTests(unittest.TestCase):
+    def test_embed_grounded_is_green(self) -> None:
         ans = SelfExplainerAnswer("Antwort", grounded=True, flagged_injection=False)
-        payload = _build_discord_payload("Frage?", ans, "1.2.3.4")
-        embed = payload["embeds"][0]
-        self.assertEqual(embed["color"], 0x57F287)
-        names = [f["name"] for f in embed["fields"]]
+        embed = _build_discord_embed("Frage?", ans, "1.2.3.4")
+        self.assertEqual(embed.color, discord.Color.green())
+        names = [f.name for f in embed.fields]
         self.assertIn("Frage", names)
         self.assertIn("Antwort", names)
 
-    def test_payload_injection_is_red_and_flagged(self) -> None:
+    def test_embed_injection_is_red_and_flagged(self) -> None:
         ans = SelfExplainerAnswer("x", grounded=True, flagged_injection=True)
-        embed = _build_discord_payload("q", ans, "ip")["embeds"][0]
-        self.assertEqual(embed["color"], 0xED4245)
-        self.assertTrue(any("Injection" in f["value"] for f in embed["fields"]))
+        embed = _build_discord_embed("q", ans, "ip")
+        self.assertEqual(embed.color, discord.Color.red())
+        self.assertTrue(any("Injection" in (f.value or "") for f in embed.fields))
 
 
 if __name__ == "__main__":

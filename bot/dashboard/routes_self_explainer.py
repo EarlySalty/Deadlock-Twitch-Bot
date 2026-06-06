@@ -4,8 +4,8 @@ Ein (oft skeptischer) Streamer tippt auf der Website eine Frage; dieser Endpoint
 beantwortet sie grounded über `bot.chat.self_explainer` (strikt aus dem
 Steckbrief, kein Erfinden) und protokolliert Frage + Antwort dauerhaft:
 - in die DB (`twitch_self_explainer_log`) und
-- best-effort als Discord-Embed (Webhook `SELF_EXPLAINER_DISCORD_WEBHOOK`,
-  zeigt auf den Protokoll-Channel 1374364800817303632).
+- best-effort als Discord-Embed über die bestehende Discord-Bot-Integration des
+  Dashboards in den Protokoll-Channel 1374364800817303632 (kein Webhook).
 
 Öffentlich (kein Login — /streamer ist öffentlich), aber per-IP rate-limitiert
 und durch das Grounding/den gehärteten System-Prompt gegen Prompt-Injection
@@ -16,9 +16,9 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import os
 from typing import Any
 
+import discord
 from aiohttp import web
 
 from bot.chat.self_explainer import (
@@ -27,11 +27,15 @@ from bot.chat.self_explainer import (
     answer_question,
     split_message,
 )
+from bot.core.constants import TWITCH_ALERT_CHANNEL_ID
 from bot.storage import pg as storage
 
 log = logging.getLogger("TwitchStreams.Dashboard.SelfExplainer")
 
-DISCORD_WEBHOOK_ENV = "SELF_EXPLAINER_DISCORD_WEBHOOK"
+# Protokoll-Channel (= TWITCH_ALERT_CHANNEL_ID, 1374...): jede Frage+Antwort wird
+# über die bestehende Discord-Bot-Integration des Dashboards hierher gespiegelt
+# (kein Webhook), damit die Konversationen sichtbar sind.
+_LOG_CHANNEL_ID = TWITCH_ALERT_CHANNEL_ID
 
 _HARD_MAX_QUESTION = 1000
 # Reasoning-Modell braucht bei vollen Antworten Zeit; Token-Budget ist großzügig,
@@ -112,71 +116,67 @@ def _log_to_db_sync(question: str, result: SelfExplainerAnswer, peer: str) -> No
         )
 
 
-def _build_discord_payload(question: str, result: SelfExplainerAnswer, peer: str) -> dict[str, Any]:
-    color = 0xED4245 if result.flagged_injection else (0x57F287 if result.grounded else 0xFEE75C)
-    fields: list[dict[str, Any]] = [
-        {"name": "Frage", "value": (question or "—")[:1024], "inline": False},
-    ]
+def _build_discord_embed(question: str, result: SelfExplainerAnswer, peer: str) -> discord.Embed:
+    color = (
+        discord.Color.red()
+        if result.flagged_injection
+        else (discord.Color.green() if result.grounded else discord.Color.gold())
+    )
+    embed = discord.Embed(title="Frage-Box: neue Frage zum Bot", color=color)
+    embed.add_field(name="Frage", value=(question or "—")[:1024], inline=False)
     answer_parts = split_message(result.answer or "—", 1000) or ["—"]
     if len(answer_parts) == 1:
-        fields.append({"name": "Antwort", "value": answer_parts[0][:1024], "inline": False})
+        embed.add_field(name="Antwort", value=answer_parts[0][:1024], inline=False)
     else:
         for idx, part in enumerate(answer_parts, 1):
-            fields.append(
-                {
-                    "name": f"Antwort ({idx}/{len(answer_parts)})",
-                    "value": part[:1024],
-                    "inline": False,
-                }
+            embed.add_field(
+                name=f"Antwort ({idx}/{len(answer_parts)})",
+                value=part[:1024],
+                inline=False,
             )
-    fields.append(
-        {
-            "name": "Quelle",
-            "value": "Steckbrief (grounded)" if result.grounded else "Fallback (Generik)",
-            "inline": True,
-        }
+    embed.add_field(
+        name="Quelle",
+        value="Steckbrief (grounded)" if result.grounded else "Fallback (Generik)",
+        inline=True,
     )
     if result.flagged_injection:
-        fields.append({"name": "⚠️", "value": "Injection-Marker erkannt", "inline": True})
-    return {
-        "username": "Frage-Box",
-        "embeds": [
-            {
-                "title": "Frage-Box: neue Frage zum Bot",
-                "color": color,
-                "fields": fields,
-                "footer": {"text": f"peer: {peer}"},
-            }
-        ],
-    }
+        embed.add_field(name="⚠️", value="Injection-Marker erkannt", inline=True)
+    embed.set_footer(text=f"peer: {peer}")
+    return embed
 
 
-async def _post_discord(question: str, result: SelfExplainerAnswer, peer: str) -> None:
-    url = os.getenv(DISCORD_WEBHOOK_ENV) or None
-    if not url:
+async def _post_discord_via_bot(
+    server: Any, question: str, result: SelfExplainerAnswer, peer: str
+) -> None:
+    """Spiegelt Frage+Antwort über den bestehenden Discord-Bot des Dashboards in den
+    Protokoll-Channel. Best-effort — bricht die Antwort an den Besucher nie ab."""
+    resolver = getattr(server, "_dashboard_discord_bot", None)
+    discord_bot = resolver() if callable(resolver) else None
+    if discord_bot is None:
+        log.debug("self_explainer: Discord-Bot nicht verfügbar, überspringe Channel-Log")
         return
-    payload = _build_discord_payload(question, result, peer)
     try:
-        import aiohttp
-
-        async with aiohttp.ClientSession() as session:
-            async with session.post(
-                url, json=payload, timeout=aiohttp.ClientTimeout(total=10)
-            ) as resp:
-                if resp.status >= 300:
-                    log.debug("self_explainer: Discord-Webhook status=%s", resp.status)
+        channel = discord_bot.get_channel(_LOG_CHANNEL_ID)
+        if channel is None and hasattr(discord_bot, "fetch_channel"):
+            channel = await discord_bot.fetch_channel(_LOG_CHANNEL_ID)
+        if channel is None:
+            log.debug("self_explainer: Protokoll-Channel %s nicht gefunden", _LOG_CHANNEL_ID)
+            return
+        await channel.send(embed=_build_discord_embed(question, result, peer))
     except Exception:
-        log.debug("self_explainer: Discord-Webhook-Post fehlgeschlagen", exc_info=True)
+        log.debug("self_explainer: Discord-Channel-Post fehlgeschlagen", exc_info=True)
 
 
-async def _safe_log(question: str, result: SelfExplainerAnswer, peer: str) -> None:
+async def _safe_log(
+    server: Any, question: str, result: SelfExplainerAnswer, peer: str
+) -> None:
     loop = asyncio.get_running_loop()
     try:
         await loop.run_in_executor(None, _log_to_db_sync, question, result, peer)
     except Exception:
         log.debug("self_explainer: DB-Log fehlgeschlagen", exc_info=True)
     try:
-        asyncio.create_task(_post_discord(question, result, peer))
+        asyncio.create_task(_post_discord_via_bot(server, question, result, peer))
     except Exception:
         log.debug("self_explainer: Discord-Task konnte nicht gestartet werden", exc_info=True)
 
@@ -205,7 +205,7 @@ async def self_explainer_ask(server: Any, request: web.Request) -> web.Response:
         log.debug("self_explainer: answer_question fehlgeschlagen", exc_info=True)
         result = SelfExplainerAnswer(FALLBACK_UNSURE, grounded=False, flagged_injection=False)
 
-    await _safe_log(question, result, peer)
+    await _safe_log(server, question, result, peer)
     return web.json_response(
         {
             "answer": result.answer,
