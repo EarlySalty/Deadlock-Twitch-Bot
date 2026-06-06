@@ -93,7 +93,8 @@ class EngagementMinimaxClient:
         *,
         system_prompt: str,
         history: list[ChatMessage],
-        max_output_tokens: int | None = 200,
+        max_output_tokens: int = 200,
+        max_answer_len: int = 480,
     ) -> ChatResponse:
         client = self._ensure_client()
 
@@ -131,7 +132,7 @@ class EngagementMinimaxClient:
         if not without_think or SILENT_MARKER in without_think.lower():
             text = None
         else:
-            text = _sanitize_chat_text(without_think)
+            text = _sanitize_chat_text(without_think, max_len=max_answer_len)
             if not text:
                 text = None
 

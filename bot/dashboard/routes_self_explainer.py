@@ -34,7 +34,9 @@ log = logging.getLogger("TwitchStreams.Dashboard.SelfExplainer")
 DISCORD_WEBHOOK_ENV = "SELF_EXPLAINER_DISCORD_WEBHOOK"
 
 _HARD_MAX_QUESTION = 1000
-_ANSWER_TIMEOUT_SEC = 12.0
+# Reasoning-Modell braucht bei vollen Antworten Zeit; Token-Budget ist großzügig,
+# also dem Modell auch zeitlich Luft geben statt vorzeitig in den Fallback zu kippen.
+_ANSWER_TIMEOUT_SEC = 55.0
 
 # Rate-Limit (in-memory, pro Prozess; reset bei Restart — reicht zur Abuse-Abwehr)
 _RATE_WINDOW_SEC = 60.0
