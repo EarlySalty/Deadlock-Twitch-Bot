@@ -21,7 +21,12 @@ from typing import Any
 
 from aiohttp import web
 
-from bot.chat.self_explainer import FALLBACK_UNSURE, SelfExplainerAnswer, answer_question
+from bot.chat.self_explainer import (
+    FALLBACK_UNSURE,
+    SelfExplainerAnswer,
+    answer_question,
+    split_message,
+)
 from bot.storage import pg as storage
 
 log = logging.getLogger("TwitchStreams.Dashboard.SelfExplainer")
@@ -107,15 +112,28 @@ def _log_to_db_sync(question: str, result: SelfExplainerAnswer, peer: str) -> No
 
 def _build_discord_payload(question: str, result: SelfExplainerAnswer, peer: str) -> dict[str, Any]:
     color = 0xED4245 if result.flagged_injection else (0x57F287 if result.grounded else 0xFEE75C)
-    fields = [
+    fields: list[dict[str, Any]] = [
         {"name": "Frage", "value": (question or "—")[:1024], "inline": False},
-        {"name": "Antwort", "value": (result.answer or "—")[:1024], "inline": False},
+    ]
+    answer_parts = split_message(result.answer or "—", 1000) or ["—"]
+    if len(answer_parts) == 1:
+        fields.append({"name": "Antwort", "value": answer_parts[0][:1024], "inline": False})
+    else:
+        for idx, part in enumerate(answer_parts, 1):
+            fields.append(
+                {
+                    "name": f"Antwort ({idx}/{len(answer_parts)})",
+                    "value": part[:1024],
+                    "inline": False,
+                }
+            )
+    fields.append(
         {
             "name": "Quelle",
             "value": "Steckbrief (grounded)" if result.grounded else "Fallback (Generik)",
             "inline": True,
-        },
-    ]
+        }
+    )
     if result.flagged_injection:
         fields.append({"name": "⚠️", "value": "Injection-Marker erkannt", "inline": True})
     return {
@@ -186,7 +204,13 @@ async def self_explainer_ask(server: Any, request: web.Request) -> web.Response:
         result = SelfExplainerAnswer(FALLBACK_UNSURE, grounded=False, flagged_injection=False)
 
     await _safe_log(question, result, peer)
-    return web.json_response({"answer": result.answer, "grounded": result.grounded})
+    return web.json_response(
+        {
+            "answer": result.answer,
+            "parts": split_message(result.answer),
+            "grounded": result.grounded,
+        }
+    )
 
 
 def build_route_defs(server: Any) -> list[web.RouteDef]:

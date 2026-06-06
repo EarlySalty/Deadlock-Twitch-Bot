@@ -93,7 +93,7 @@ class EngagementMinimaxClient:
         *,
         system_prompt: str,
         history: list[ChatMessage],
-        max_output_tokens: int = 200,
+        max_output_tokens: int | None = 200,
     ) -> ChatResponse:
         client = self._ensure_client()
 

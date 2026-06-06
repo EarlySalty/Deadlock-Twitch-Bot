@@ -11,6 +11,7 @@ from bot.chat.self_explainer import (
     answer_question,
     build_system_prompt,
     looks_like_injection,
+    split_message,
 )
 
 
@@ -60,7 +61,7 @@ class SelfExplainerTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(result.grounded)
 
     async def test_long_answer_is_truncated(self) -> None:
-        long_text = "Wort " * 400
+        long_text = "Wort " * 600
         result = await answer_question("Erzähl mir alles.", generate=_fixed(long_text))
         self.assertLessEqual(len(result.answer), MAX_ANSWER_LEN + 1)
         self.assertTrue(result.answer.endswith("…"))
@@ -78,6 +79,22 @@ class SelfExplainerTests(unittest.IsolatedAsyncioTestCase):
         # Preise sind bewusst ausgeklammert.
         for forbidden in ("€", "Abo", "kostenlos", "Preis", "Euro", "bezahl"):
             self.assertNotIn(forbidden.lower(), BOT_FACTS.lower())
+
+    def test_split_message_short_and_empty(self) -> None:
+        self.assertEqual(split_message("Kurz.", 400), ["Kurz."])
+        self.assertEqual(split_message("   ", 400), [])
+
+    def test_split_message_packs_sentences(self) -> None:
+        text = "Satz eins. Satz zwei. Satz drei."
+        parts = split_message(text, 12)
+        self.assertTrue(all(len(p) <= 12 for p in parts))
+        self.assertGreater(len(parts), 1)
+        self.assertEqual(" ".join(parts).split(), text.split())
+
+    def test_split_message_hard_word_split(self) -> None:
+        parts = split_message("supercalifragilisticexpialidocious wort", 10)
+        self.assertTrue(all(len(p) <= 10 for p in parts))
+        self.assertGreater(len(parts), 1)
 
 
 if __name__ == "__main__":

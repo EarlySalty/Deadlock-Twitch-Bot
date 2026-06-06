@@ -25,11 +25,11 @@ STREAMER_URL = "https://deutsche-deadlock-community.de/streamer"
 
 # Grenzen
 MAX_QUESTION_LEN = 500
-MAX_ANSWER_LEN = 600
-# MiniMax M2.7 erzeugt Think-Blöcke, die der Client wegstrippt — das Token-Budget
-# zählt sie aber mit. Daher großzügig, damit nach dem Denken noch eine vollständige
-# Antwort übrig bleibt (sonst bricht sie mitten im Satz ab).
-_MINIMAX_MAX_OUTPUT_TOKENS = 700
+# Defensive Obergrenze für eine Einzelantwort; lange Antworten werden NICHT
+# abgeschnitten, sondern via split_message() in mehrere Teile zerlegt.
+MAX_ANSWER_LEN = 2000
+# Standard-Teillänge beim Splitten (z. B. für Chat-Bubbles auf der Website).
+SPLIT_LIMIT = 400
 
 # Der Steckbrief: einzige erlaubte Faktenquelle. Preise/Kosten stehen bewusst
 # NICHT drin — danach soll der Streamer selbst auf der Seite schauen.
@@ -126,6 +126,42 @@ def _truncate(text: str, limit: int) -> str:
     return cut + "…"
 
 
+def split_message(text: str, limit: int = SPLIT_LIMIT) -> list[str]:
+    """Zerlegt einen Text in Teile von höchstens `limit` Zeichen — bevorzugt an
+    Satzgrenzen, sonst an Wortgrenzen. Schneidet nie mitten im Wort ab.
+
+    Gibt `[]` für leeren Text zurück und `[text]`, wenn er bereits passt.
+    Für jeden längen-begrenzten Kanal nutzbar (Website-Bubbles, Discord-Felder).
+    """
+    text = " ".join((text or "").split())
+    if not text:
+        return []
+    if len(text) <= limit:
+        return [text]
+
+    parts: list[str] = []
+    cur = ""
+    for sentence in re.split(r"(?<=[.!?]) ", text):
+        candidate = sentence if not cur else f"{cur} {sentence}"
+        if len(candidate) <= limit:
+            cur = candidate
+            continue
+        if cur:
+            parts.append(cur)
+            cur = ""
+        # Einzelner Satz länger als das Limit -> an Wortgrenzen hart aufteilen.
+        while len(sentence) > limit:
+            cut = sentence[:limit].rfind(" ")
+            if cut <= 0:
+                cut = limit
+            parts.append(sentence[:cut].rstrip())
+            sentence = sentence[cut:].lstrip()
+        cur = sentence
+    if cur:
+        parts.append(cur)
+    return parts
+
+
 def _output_unusable(text: str) -> bool:
     """True, wenn das Modell offensichtlich nichts Brauchbares lieferte oder den
     Prompt durchsickern lässt."""
@@ -152,7 +188,7 @@ async def _minimax_generate(system_prompt: str, user_message: str) -> str | None
         response = await client.generate(
             system_prompt=system_prompt,
             history=[ChatMessage(role="user", content=user_message)],
-            max_output_tokens=_MINIMAX_MAX_OUTPUT_TOKENS,
+            max_output_tokens=None,  # kein Output-Token-Limit (Think-Block würde sonst das Budget fressen)
         )
         return (response.text or "").strip() or None
     except LLMProviderUnavailable:
@@ -197,9 +233,11 @@ __all__ = [
     "FALLBACK_UNSURE",
     "MAX_ANSWER_LEN",
     "MAX_QUESTION_LEN",
+    "SPLIT_LIMIT",
     "STREAMER_URL",
     "SelfExplainerAnswer",
     "answer_question",
     "build_system_prompt",
     "looks_like_injection",
+    "split_message",
 ]
