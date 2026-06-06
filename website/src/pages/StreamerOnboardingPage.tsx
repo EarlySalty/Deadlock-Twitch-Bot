@@ -6,6 +6,7 @@ import { PublicInfoFooter } from "@/components/layout/PublicInfoFooter";
 import { PublicInfoHeader } from "@/components/layout/PublicInfoHeader";
 import { OnboardingProgress } from "@/components/onboarding/OnboardingProgress";
 import { StepCard } from "@/components/onboarding/StepCard";
+import { BotQuestionBox } from "@/components/sections/BotQuestionBox";
 import {
   DISCORD_INVITE_URL,
   TWITCH_FAQ_URL,
@@ -15,6 +16,7 @@ import { ONBOARDING_VISUAL_STEPS } from "@/data/twitchKnowledgeBase";
 
 const NAV_LINKS = [
   { label: "Features", href: "#features" },
+  { label: "Frag den Bot", href: "#frag-bot" },
   { label: "FAQ", href: "#faq-hinweis" },
 ];
 
@@ -307,6 +309,13 @@ export function StreamerOnboardingPage() {
                 />
               </motion.div>
             ))}
+          </div>
+        </section>
+
+        {/* Frag-den-Bot Section */}
+        <section id="frag-bot" className="px-6 py-12">
+          <div className="mx-auto max-w-7xl">
+            <BotQuestionBox />
           </div>
         </section>
 
