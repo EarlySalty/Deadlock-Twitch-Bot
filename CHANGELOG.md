@@ -1,3 +1,11 @@
+## #99 — Global-Ban-Sweep nur noch für OAuth-autorisierte Kanäle
+
+**Problem:** Der tägliche Ban-Sweep hat alle aktiven Partner-Kanäle durchgearbeitet — auch solche, die sich nie per OAuth autorisiert haben und bei denen der Bot gar kein Moderator sein kann. Das war verschwendete Arbeit und produzierte unnötige 403-Fehler.
+
+**Geändert:** Der Sweep prüft jetzt vor dem Durchlauf, welche Streamer einen gültigen OAuth-Eintrag haben (`needs_reauth = FALSE`). Kanäle ohne Eintrag oder mit ungültigem Token werden übersprungen — invalide Token werden sowieso departnered.
+
+**Wie's funktioniert:** Vor dem Sweep lädt der Bot einmalig alle `twitch_user_ids` mit gültigem OAuth aus der Datenbank. Nur Kanäle, die in dieser Menge enthalten sind, landen im Durchlauf. Wer kein OAuth hat, kommt gar nicht erst dran — statt mit 403 zu scheitern.
+
 ## #98 — Keine doppelte Werbung mehr
 
 **Problem:** Der Bot hat seine Discord-Werbung manchmal doppelt gepostet — zwei Werbungen mit nur einer einzigen Chat-Nachricht dazwischen. Eigentlich gibt es eine Mindestschwelle, wie viele Nachrichten zwischen zwei Werbungen liegen müssen, aber die wurde übergangen. Grund: Über das Werben entscheiden zwei Stellen parallel — eine reagiert auf jede eingehende Chat-Nachricht, eine läuft als Timer im Hintergrund. Beide prüfen die Schwelle, senden dann aber erst nach mehreren Zwischenschritten und setzen den „zuletzt geworben"-Marker erst ganz am Ende. Trifft eine Chat-Nachricht genau in dieses Zeitfenster, sehen beide noch den alten Stand und werben gleichzeitig.

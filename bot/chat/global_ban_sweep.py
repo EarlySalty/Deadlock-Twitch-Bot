@@ -157,8 +157,9 @@ def _live_broadcaster_ids() -> set[str]:
 
 
 def _offline_partner_targets() -> list[tuple[str, str]]:
-    """``(login, broadcaster_id)`` aller operativ aktiven Partner, die GERADE offline sind."""
+    """``(login, broadcaster_id)`` aller operativ aktiven Partner mit gültigem OAuth, die GERADE offline sind."""
     from ..core import partner_utils
+    from ..storage import pg
 
     try:
         all_partners = partner_utils.get_all_partners(include_archived=False)
@@ -166,11 +167,18 @@ def _offline_partner_targets() -> list[tuple[str, str]]:
         log.debug("Partner-Enumeration fehlgeschlagen", exc_info=True)
         return []
     live_ids = _live_broadcaster_ids()
+    try:
+        valid_auth_ids = pg.load_valid_raid_auth_ids()
+    except Exception:
+        log.debug("raid_auth-Abfrage fehlgeschlagen", exc_info=True)
+        valid_auth_ids = set()
     out: list[tuple[str, str]] = []
     for p in all_partners:
         login = str(p.get("twitch_login") or "").lower()
         bid = str(p.get("twitch_user_id") or "")
         if not login or not bid or bid in live_ids:
+            continue
+        if bid not in valid_auth_ids:
             continue
         out.append((login, bid))
     return out

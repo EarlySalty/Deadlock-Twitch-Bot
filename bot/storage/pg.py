@@ -4150,6 +4150,18 @@ def add_chatter_global_ban(
         )
 
 
+def load_valid_raid_auth_ids() -> set[str]:
+    """twitch_user_ids aller Streamer mit aktivem, gültigem OAuth (needs_reauth=FALSE)."""
+    try:
+        with readonly_connection() as conn:
+            rows = conn.execute(
+                "SELECT twitch_user_id FROM twitch_raid_auth WHERE needs_reauth = FALSE"
+            ).fetchall()
+            return {str(r[0]) for r in rows if r[0]}
+    except Exception:
+        return set()
+
+
 def list_chatter_global_bans() -> list[dict]:
     """Alle Einträge der globalen Bannliste (neueste zuerst)."""
     try:
