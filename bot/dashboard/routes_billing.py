@@ -408,6 +408,11 @@ async def api_billing_checkout_session(
         )
 
     customer_reference = server._billing_primary_ref_for_request(request)
+    if not customer_reference:
+        return web.json_response(
+            {"error": "login_required", "contract_version": "2026-02-27"},
+            status=401,
+        )
     billing_profile = server._billing_profile_for_request(request)
     customer_email = str(body.get("customer_email") or billing_profile.get("recipient_email") or "").strip()
     idempotency_key = str(request.headers.get("Idempotency-Key") or body.get("idempotency_key") or "").strip()

@@ -4,7 +4,7 @@
 
 **Geändert:** (1) Der neue API-Checkout-Endpunkt setzt jetzt bei `cycle_months = 12` automatisch `subscription_data.metadata.bonus_months = "2"` in die Stripe-Session — der Webhook liest das nach Zahlungseingang aus und verlängert das Ablaufdatum um 62 Tage über das Abo-Ende hinaus. (2) Das Admin-Dropdown enthält jetzt alle 8 Pläne inkl. Werbefrei, Bundle Werbefrei+Analyse und Bundle Komplett. (3) Das Ablaufdatum-Feld ist jetzt ein nativer Datums-Picker, der im Browser im deutschen Format (TT.MM.JJJJ) anzeigt.
 
-**Wie's funktioniert:** Jahreskäufer erhalten ab sofort ihre Bonusmonate vollautomatisch: Stripe feuert `checkout.session.completed`, der Bot liest `bonus_months: 2` aus der Subscription-Metadata, addiert 62 Tage auf das `current_period_end` und schreibt das Ergebnis als `manual_plan_expires_at` in die DB — kein Admin-Eingriff mehr nötig.
+**Wie's funktioniert:** Jahreskäufer erhalten ab sofort ihre Bonusmonate vollautomatisch: Stripe feuert `checkout.session.completed`, der Bot liest `bonus_months: 2` aus der Subscription-Metadata, addiert 62 Tage auf das `current_period_end` und schreibt das Ergebnis als `manual_plan_expires_at` in die DB — kein Admin-Eingriff mehr nötig. Checkout ohne verknüpften Login wird in beiden Flows jetzt hart geblockt: der alte Abbo-Flow leitet zurück zur Abo-Seite, der neue API-Flow gibt 401 zurück — eine Zahlung ohne zugeordnetem Account ist damit nicht mehr möglich.
 
 ## #99 — Global-Ban-Sweep nur noch für OAuth-autorisierte Kanäle
 

@@ -68,6 +68,8 @@ async def abbo_pay(handler: Any, request: web.Request) -> web.StreamResponse:
 
     billing_profile = handler._billing_profile_for_request(request)
     customer_reference = handler._billing_primary_ref_for_request(request)
+    if not customer_reference:
+        raise web.HTTPFound("/twitch/abbo?checkout=login_required")
     customer_email = str(billing_profile.get("recipient_email") or "").strip()
     metadata: dict[str, str] = {
         "plan_id": plan_id,
