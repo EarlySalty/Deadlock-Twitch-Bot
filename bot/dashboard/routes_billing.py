@@ -450,6 +450,8 @@ async def api_billing_checkout_session(
         session_payload["client_reference_id"] = customer_reference
     if customer_email:
         session_payload["customer_email"] = customer_email
+    if cycle_months == 12:
+        session_payload.setdefault("subscription_data", {}).setdefault("metadata", {})["bonus_months"] = "2"
 
     stripe_session, checkout_error = await server._billing_create_checkout_session_best_effort_async(
         session_payload=session_payload,

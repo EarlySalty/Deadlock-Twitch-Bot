@@ -1,3 +1,11 @@
+## #100 — Jahresabo: Bonusmonate automatisch + Admin-Planvergabe vollständig
+
+**Problem:** Drei separate Baustellen. Erstens: Wer ein Jahresabo über den neuen Checkout-Flow buchte, bekam die versprochenen 2 Bonusmonate nicht — der Webhook hat sie nie in die DB geschrieben, weil das `bonus_months`-Feld nur im alten Legacy-Flow in die Stripe-Subscription-Metadata gesetzt wurde, im neuen API-Checkout-Endpunkt aber fehlte. Zweitens: Das Admin-Dashboard hatte im Dropdown zur manuellen Planvergabe nur 4 der 8 verfügbaren Pläne — `chat_quiet` (Werbefrei) und die neueren Bundles fehlten komplett, was das manuelle Setzen für diese Pläne blockierte. Drittens: Das Ablaufdatum-Feld zeigte das ISO-Format `YYYY-MM-DD`, was Tag und Monat verwechselbar macht.
+
+**Geändert:** (1) Der neue API-Checkout-Endpunkt setzt jetzt bei `cycle_months = 12` automatisch `subscription_data.metadata.bonus_months = "2"` in die Stripe-Session — der Webhook liest das nach Zahlungseingang aus und verlängert das Ablaufdatum um 62 Tage über das Abo-Ende hinaus. (2) Das Admin-Dropdown enthält jetzt alle 8 Pläne inkl. Werbefrei, Bundle Werbefrei+Analyse und Bundle Komplett. (3) Das Ablaufdatum-Feld ist jetzt ein nativer Datums-Picker, der im Browser im deutschen Format (TT.MM.JJJJ) anzeigt.
+
+**Wie's funktioniert:** Jahreskäufer erhalten ab sofort ihre Bonusmonate vollautomatisch: Stripe feuert `checkout.session.completed`, der Bot liest `bonus_months: 2` aus der Subscription-Metadata, addiert 62 Tage auf das `current_period_end` und schreibt das Ergebnis als `manual_plan_expires_at` in die DB — kein Admin-Eingriff mehr nötig.
+
 ## #99 — Global-Ban-Sweep nur noch für OAuth-autorisierte Kanäle
 
 **Problem:** Der tägliche Ban-Sweep hat alle aktiven Partner-Kanäle durchgearbeitet — auch solche, die sich nie per OAuth autorisiert haben und bei denen der Bot gar kein Moderator sein kann. Das war verschwendete Arbeit und produzierte unnötige 403-Fehler.

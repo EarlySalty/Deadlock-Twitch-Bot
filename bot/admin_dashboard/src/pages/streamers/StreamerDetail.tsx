@@ -28,8 +28,12 @@ import { coerceRecord, formatDateTime, formatNumber, formatRelativeTime } from '
 
 const PLAN_OPTIONS = [
   { value: 'raid_free', label: 'Raid Free' },
+  { value: 'chat_quiet', label: 'Werbefrei' },
   { value: 'raid_boost', label: 'Raid Boost' },
   { value: 'analysis_dashboard', label: 'Analyse Dashboard' },
+  { value: 'bundle_chat_quiet_raid_boost', label: 'Bundle: Werbefrei + Raid Boost' },
+  { value: 'bundle_werbefrei_analyse', label: 'Bundle: Werbefrei + Analyse' },
+  { value: 'bundle_komplett', label: 'Bundle Komplett' },
   { value: 'bundle_analysis_raid_boost', label: 'Bundle: Analyse + Raid Boost' },
 ];
 
@@ -498,8 +502,8 @@ export function StreamerDetailPage() {
               <label className="text-sm text-text-secondary">
                 Ablaufdatum
                 <input
+                  type="date"
                   className="admin-input mt-2"
-                  placeholder="YYYY-MM-DD"
                   value={manualPlanExpiresAt}
                   onChange={(event) => setManualPlanExpiresAt(event.target.value)}
                 />
