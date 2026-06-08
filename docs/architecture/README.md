@@ -92,10 +92,10 @@ Status: ✅ fertig · 🔜 geplant.
 
 | Subsystem | Doku | Status | Inhalt |
 |-----------|------|:------:|--------|
-| `bot/internal_api/` | internal-api.md | 🔜 | Interne API (:8776): App, Routen, Policy, Contracts |
-| `bot/bot_service/` + `bot/dashboard_service/` | services.md | 🔜 | Eigenständige Service-Entrypoints, EventSub-Bridge |
-| `bot/migrations/` | migrations.md | 🔜 | Schema-/Daten-Migrationen |
-| `bot/compat/` | compat.md | 🔜 | Kompatibilitäts-Shims |
+| `bot/internal_api/` | [internal-api.md](internal-api.md) | ✅ | Interne API (:8776): App, Routen, Policy, Contracts, Callbacks |
+| `bot/bot_service/` + `bot/dashboard_service/` | [services.md](services.md) | ✅ | Eigenständige Service-Entrypoints, HeadlessBot, EventSub-Bridge |
+| `bot/migrations/` | [migrations.md](migrations.md) | ✅ | Einmalige Schema-/Daten-Migrationen (CLI) |
+| `bot/compat/` | [compat.md](compat.md) | ✅ | FieldCrypto (AES-256-GCM), resilienter HTTP-Connector |
 
 ### Frontends (React/TypeScript)
 
