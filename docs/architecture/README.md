@@ -101,6 +101,6 @@ Status: ✅ fertig · 🔜 geplant.
 
 | Bereich | Doku | Status | Inhalt |
 |---------|------|:------:|--------|
-| `bot/dashboard_v2/` (+ `dashboard_preview/`) | frontend-streamer-dashboard.md | 🔜 | Streamer-Dashboard-SPA (Analytics-Views) |
-| `bot/admin_dashboard/` | frontend-admin-dashboard.md | 🔜 | Admin-Frontend |
-| `website/` | frontend-website.md | 🔜 | Öffentliche Landing-/Onboarding-Site |
+| `bot/dashboard_v2/` (+ `dashboard_preview/`) | [frontend-streamer-dashboard.md](frontend-streamer-dashboard.md) | ✅ | Streamer-Dashboard-SPA (Tab-basiert, react-query, recharts, Live/Demo) |
+| `bot/admin_dashboard/` | [frontend-admin-dashboard.md](frontend-admin-dashboard.md) | ✅ | Admin-Frontend (React-Router, Streamer/Billing/Config/Monitoring) |
+| `website/` | [frontend-website.md](frontend-website.md) | ✅ | Öffentliche Landing-/Onboarding-/Affiliate-Site (Multi-Entry, Prerender) |
