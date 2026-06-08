@@ -38,3 +38,9 @@ from .promo_cooldowns import (  # noqa: F401
     load_promo_cooldowns,
     save_promo_cooldown,
 )
+from .auto_raid_pause import (  # noqa: F401
+    clear_auto_raid_pause,
+    get_auto_raid_pause,
+    is_auto_raid_paused,
+    set_auto_raid_pause,
+)

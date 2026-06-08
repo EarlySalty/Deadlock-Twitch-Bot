@@ -2966,6 +2966,23 @@ def ensure_schema(conn) -> None:
     )
     conn.execute(
         """
+        CREATE TABLE IF NOT EXISTS twitch_auto_raid_pause (
+            twitch_user_id TEXT NOT NULL PRIMARY KEY,
+            twitch_login   TEXT,
+            paused_until   TIMESTAMPTZ NOT NULL,
+            reason         TEXT,
+            set_by         TEXT,
+            created_at     TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at     TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+        )
+        """
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_twitch_auto_raid_pause_until "
+        "ON twitch_auto_raid_pause(paused_until)"
+    )
+    conn.execute(
+        """
         CREATE TABLE IF NOT EXISTS twitch_raid_disabled_strikes (
             target_id    TEXT,
             target_login TEXT NOT NULL PRIMARY KEY,

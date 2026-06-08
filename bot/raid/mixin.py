@@ -6,7 +6,7 @@ import logging
 import time
 from datetime import UTC, datetime
 
-from ..storage import load_active_partner, readonly_connection
+from ..storage import get_auto_raid_pause, load_active_partner, readonly_connection
 
 log = logging.getLogger("TwitchStreams.RaidMixin")
 
@@ -18,6 +18,12 @@ class TwitchRaidMixin:
     def _load_auto_raid_partner_sync(twitch_user_id: str):
         with readonly_connection() as conn:
             return load_active_partner(conn, twitch_user_id=twitch_user_id)
+
+    @staticmethod
+    def _load_auto_raid_pause_sync(twitch_user_id: str):
+        """Liest die aktive Admin-Pause (oder None) fuer den Auto-Raid."""
+        with readonly_connection() as conn:
+            return get_auto_raid_pause(conn, twitch_user_id=twitch_user_id)
 
     @staticmethod
     def _dashboard_raid_history_sync(limit: int = 50, from_broadcaster: str = "") -> list[dict]:
