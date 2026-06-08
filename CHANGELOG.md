@@ -1,3 +1,13 @@
+## #101 — Jeder Partner bekommt jetzt seinen eigenen Discord-Invite-Link
+
+**Problem:** Der Bot sollte pro Streamer einen eindeutigen Discord-Invite erstellen, damit die Quelle jedes Joins (welcher Kanal hat jemanden reingebracht) nachvollziehbar ist. In der Praxis fiel der Bot aber regelmäßig auf den allgemeinen Fallback-Link zurück, besonders bei neu eingetragenen Partnern. Die Ursache: Der Twitch-Bot läuft als eigener Prozess mit einem eigenen Discord-Account — und dieser Account ist kein Mitglied im Deadlock-Discord-Server. `bot.guilds` war daher immer leer, `channel.create_invite()` wurde nie aufgerufen, und jeder Invite-Erstellungsversuch schlug lautlos fehl.
+
+**Geändert:** Invite-Erstellung läuft jetzt über den internen Master-Broker (Port 8770). Der Hauptbot (der tatsächlich im Server ist) bekommt einen neuen Endpunkt `/internal/master/v1/discord/create-invite` und erstellt den Invite auf Anfrage. Der Twitch-Bot ruft diesen Endpunkt per HTTP via dem gleichen Token auf, das er ohnehin für Nachrichten-Routing nutzt.
+
+Zusätzlich läuft beim Start ein Backfill-Task (`_ensure_partner_invites`), der alle aktiven Partner ohne Invite-Eintrag in der DB sequenziell nachversorgt — mit 0,5s Pause zwischen den Requests und einem automatischen Retry-Pass (60s Wartezeit) falls transiente Timeouts einzelne Requests beim Startup-Burst treffen.
+
+**Wie's funktioniert:** Beim Bot-Start wartet `_ensure_partner_invites` auf das Discord-Ready-Event, fragt dann die DB nach Partnern ohne Eintrag in `twitch_streamer_invites`, und ruft für jeden `_create_streamer_invite` auf. Diese Methode baut eine HTTP-POST-Anfrage an den Broker mit `channel_id`, `reason` und einem zufälligen Idempotency-Key. Der Broker löst den Channel auf (`get_channel` / `fetch_channel`), ruft `channel.create_invite(max_age=0, max_uses=0, unique=True)` auf und gibt `invite_url`, `code`, `guild_id` und `channel_id` zurück. Der Twitch-Bot speichert das Ergebnis in `twitch_streamer_invites` (UPSERT) und cached es im Memory-Dict.
+
 ## #100 — Jahresabo: Bonusmonate automatisch + Admin-Planvergabe vollständig
 
 **Problem:** Drei separate Baustellen. Erstens: Wer ein Jahresabo über den neuen Checkout-Flow buchte, bekam die versprochenen 2 Bonusmonate nicht — der Webhook hat sie nie in die DB geschrieben, weil das `bonus_months`-Feld nur im alten Legacy-Flow in die Stripe-Subscription-Metadata gesetzt wurde, im neuen API-Checkout-Endpunkt aber fehlte. Zweitens: Das Admin-Dashboard hatte im Dropdown zur manuellen Planvergabe nur 4 der 8 verfügbaren Pläne — `chat_quiet` (Werbefrei) und die neueren Bundles fehlten komplett, was das manuelle Setzen für diese Pläne blockierte. Drittens: Das Ablaufdatum-Feld zeigte das ISO-Format `YYYY-MM-DD`, was Tag und Monat verwechselbar macht.

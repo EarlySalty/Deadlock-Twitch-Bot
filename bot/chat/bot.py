@@ -866,6 +866,17 @@ if TWITCHIO_AVAILABLE:
                 "Discord bot set for promo invites (channel_id=%s)",
                 str(channel_id) if channel_id else "-",
             )
+            if discord_bot is not None:
+                try:
+                    loop = asyncio.get_running_loop()
+                    loop.create_task(self._ensure_partner_invites())
+                except RuntimeError:
+                    log.warning(
+                        "set_discord_bot: kein laufender Event-Loop — "
+                        "_ensure_partner_invites wird nicht gespawnt"
+                    )
+                except Exception:
+                    log.warning("Konnte _ensure_partner_invites nicht spawnen", exc_info=True)
 
         def _load_streamer_invite_from_db(self, login: str) -> str | None:
             login_norm = (login or "").strip().lower()
@@ -970,105 +981,104 @@ if TWITCHIO_AVAILABLE:
                     exc_info=True,
                 )
 
-        async def _candidate_invite_channels(self) -> list:
-            bot = self._discord_bot
-            if not bot:
-                return []
-
-            channels = []
-            seen = set()
-
-            def _add_channel(channel) -> None:
-                if not channel or not hasattr(channel, "create_invite"):
-                    return
-                cid = getattr(channel, "id", None)
-                if cid is None or cid in seen:
-                    return
-                seen.add(cid)
-                channels.append(channel)
-
-            if self._discord_invite_channel_id:
-                channel = bot.get_channel(self._discord_invite_channel_id)
-                if channel is None and hasattr(bot, "fetch_channel"):
-                    try:
-                        channel = await bot.fetch_channel(self._discord_invite_channel_id)
-                    except Exception:
-                        channel = None
-                _add_channel(channel)
-
-            for guild in getattr(bot, "guilds", []):
-                _add_channel(getattr(guild, "system_channel", None))
-
-            for guild in getattr(bot, "guilds", []):
-                for channel in getattr(guild, "text_channels", []):
-                    _add_channel(channel)
-
-            return channels
-
         async def _create_streamer_invite(self, login: str) -> str | None:
-            bot = self._discord_bot
-            if not bot:
+            import os
+            import secrets as _secrets
+
+            channel_id = self._discord_invite_channel_id
+            if not channel_id:
+                log.warning(
+                    "_create_streamer_invite: kein invite_channel_id konfiguriert für %s", login
+                )
                 return None
 
-            if hasattr(bot, "wait_until_ready"):
-                try:
-                    await bot.wait_until_ready()
-                except Exception:
-                    log.debug("Discord bot readiness check failed", exc_info=True)
-
-            candidates = await self._candidate_invite_channels()
-            if not candidates:
+            token = next(
+                (
+                    (os.getenv(k) or "").strip()
+                    for k in ("MAIN_BOT_INTERNAL_TOKEN", "TWITCH_INTERNAL_API_TOKEN")
+                    if (os.getenv(k) or "").strip()
+                ),
+                "",
+            )
+            if not token:
+                log.warning(
+                    "_create_streamer_invite: kein Broker-Token verfügbar für %s", login
+                )
                 return None
 
-            for channel in candidates:
-                try:
-                    invite = await channel.create_invite(
-                        max_uses=0,
-                        max_age=0,
-                        unique=True,
-                        reason=f"Twitch promo invite for {login}",
-                    )
-                except discord.Forbidden:
-                    continue
-                except discord.HTTPException:
-                    continue
-                except Exception:
-                    log.debug(
-                        "Failed to create invite in channel %s for %s",
-                        getattr(channel, "id", "?"),
-                        login,
-                        exc_info=True,
-                    )
-                    continue
+            try:
+                port = int(os.getenv("MASTER_BROKER_PORT") or 8770)
+            except (TypeError, ValueError):
+                port = 8770
 
-                invite_code = str(getattr(invite, "code", "") or "").strip()
-                invite_url = str(getattr(invite, "url", "") or "").strip()
-                if not invite_url and invite_code:
-                    invite_url = f"https://discord.gg/{invite_code}"
+            idem_key = f"streamer-invite:{login}:{_secrets.token_hex(8)}"
+            broker_url = f"http://127.0.0.1:{port}/internal/master/v1/discord/create-invite"
 
-                guild = getattr(channel, "guild", None)
-                guild_id = getattr(guild, "id", None) if guild else None
-                channel_id = getattr(channel, "id", None)
-                if not invite_code or not invite_url or not guild_id or not channel_id:
-                    continue
+            try:
+                import aiohttp
 
-                self._store_streamer_invite(
+                async with aiohttp.ClientSession() as session:
+                    async with session.post(
+                        broker_url,
+                        headers={
+                            "X-Internal-Token": token,
+                            "X-Idempotency-Key": idem_key,
+                        },
+                        json={
+                            "channel_id": channel_id,
+                            "reason": f"streamer-invite:{login}",
+                            "idempotency_key": idem_key,
+                        },
+                        timeout=aiohttp.ClientTimeout(total=10),
+                    ) as resp:
+                        resp_status = resp.status
+                        data = await resp.json()
+            except Exception:
+                log.warning(
+                    "_create_streamer_invite: Broker-Request fehlgeschlagen für %s",
                     login,
-                    guild_id=int(guild_id),
-                    channel_id=int(channel_id),
-                    invite_code=invite_code,
-                    invite_url=invite_url,
+                    exc_info=True,
                 )
-                log.info(
-                    "Created promo invite for %s (guild=%s, channel=%s, code=%s)",
-                    login,
-                    guild_id,
-                    channel_id,
-                    invite_code,
-                )
-                return invite_url
+                return None
 
-            return None
+            if not (resp_status == 200 and data.get("ok")):
+                log.warning(
+                    "_create_streamer_invite: Broker-Fehler für %s (status=%s, error=%s)",
+                    login,
+                    resp_status,
+                    (data.get("error") or {}).get("code", "?"),
+                )
+                return None
+
+            result = data.get("result") or {}
+            invite_url = str(result.get("invite_url") or "").strip()
+            invite_code = str(result.get("code") or "").strip()
+            guild_id_val = int(result.get("guild_id") or 0)
+            channel_id_val = int(result.get("channel_id") or 0)
+
+            if not invite_url or not invite_code or not guild_id_val or not channel_id_val:
+                log.warning(
+                    "_create_streamer_invite: unvollständige Broker-Antwort für %s: %s",
+                    login,
+                    result,
+                )
+                return None
+
+            self._store_streamer_invite(
+                login,
+                guild_id=guild_id_val,
+                channel_id=channel_id_val,
+                invite_code=invite_code,
+                invite_url=invite_url,
+            )
+            log.info(
+                "Created promo invite via broker for %s (guild=%s, channel=%s, code=%s)",
+                login,
+                guild_id_val,
+                channel_id_val,
+                invite_code,
+            )
+            return invite_url
 
         async def _resolve_streamer_invite(self, login: str) -> tuple[str | None, bool]:
             login_norm = (login or "").strip().lower()
@@ -1090,6 +1100,96 @@ if TWITCHIO_AVAILABLE:
                 return invite_url, True
 
             return None, False
+
+        async def _ensure_partner_invites(self) -> None:
+            """Startup-Task: erstellt Invite-Links für alle aktiven Partner, die noch keinen haben."""
+            bot = self._discord_bot
+            if not bot:
+                return
+            if hasattr(bot, "wait_until_ready"):
+                try:
+                    await bot.wait_until_ready()
+                except Exception:
+                    log.warning("_ensure_partner_invites: wait_until_ready fehlgeschlagen", exc_info=True)
+                    return
+            try:
+                with readonly_connection() as conn:
+                    rows = conn.execute(
+                        """
+                        SELECT p.twitch_login
+                          FROM twitch_partners p
+                         WHERE p.status = 'active'
+                           AND p.admin_archived_at IS NULL
+                           AND p.departnered_at IS NULL
+                           AND NOT EXISTS (
+                               SELECT 1 FROM twitch_streamer_invites i
+                                WHERE i.streamer_login = p.twitch_login
+                           )
+                        """
+                    ).fetchall()
+            except Exception:
+                log.warning("_ensure_partner_invites: DB-Abfrage fehlgeschlagen", exc_info=True)
+                return
+            if not rows:
+                log.debug("_ensure_partner_invites: alle aktiven Partner haben bereits einen Invite")
+                return
+            logins = [
+                (row["twitch_login"] if hasattr(row, "keys") else row[0])
+                for row in rows
+            ]
+            log.info(
+                "_ensure_partner_invites: %d Partner ohne Invite-Link, erstelle jetzt...",
+                len(logins),
+            )
+            created = 0
+            failed: list[str] = []
+            for login in logins:
+                try:
+                    invite_url = await self._create_streamer_invite(login)
+                    if invite_url:
+                        self._promo_invite_cache[login] = invite_url
+                        created += 1
+                    else:
+                        log.warning("_ensure_partner_invites: kein Invite für %s erstellt", login)
+                        failed.append(login)
+                except Exception:
+                    log.warning("_ensure_partner_invites: Fehler bei %s", login, exc_info=True)
+                    failed.append(login)
+                await asyncio.sleep(0.5)
+            log.info(
+                "_ensure_partner_invites: %d/%d Invites erfolgreich erstellt",
+                created,
+                len(logins),
+            )
+            if failed:
+                log.info(
+                    "_ensure_partner_invites: %d fehlgeschlagen, Retry in 60s: %s",
+                    len(failed),
+                    failed,
+                )
+                await asyncio.sleep(60)
+                retried = 0
+                for login in failed:
+                    try:
+                        invite_url = await self._create_streamer_invite(login)
+                        if invite_url:
+                            self._promo_invite_cache[login] = invite_url
+                            retried += 1
+                        else:
+                            log.warning(
+                                "_ensure_partner_invites: Retry fehlgeschlagen für %s", login
+                            )
+                    except Exception:
+                        log.warning(
+                            "_ensure_partner_invites: Retry-Exception für %s", login, exc_info=True
+                        )
+                    await asyncio.sleep(0.5)
+                if retried:
+                    log.info(
+                        "_ensure_partner_invites: Retry %d/%d nachgeholt",
+                        retried,
+                        len(failed),
+                    )
 
         async def setup_hook(self):
             """Wird beim Starten aufgerufen, um initiales Setup zu machen."""
