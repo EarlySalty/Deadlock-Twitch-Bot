@@ -73,8 +73,8 @@ Status: ✅ fertig · 🔜 geplant.
 
 | Subsystem | Doku | Status | Inhalt |
 |-----------|------|:------:|--------|
-| `bot/analytics/` | analytics.md | 🔜 | Analytics-API v2, Coaching-Engine, Demo-Daten, Backend-Queries |
-| `bot/dashboard/` | dashboard.md | 🔜 | aiohttp-App, Auth, Billing, Affiliate, Live (Backend); erweitert [dashboard/README.md](dashboard/README.md) |
+| `bot/analytics/` | [analytics.md](analytics.md) | ✅ | Analytics-API v2, Coaching-Engine, Demo-Daten, Backend-Queries |
+| `bot/dashboard/` | [dashboard.md](dashboard.md) | ✅ | aiohttp-App, Auth, Billing, Affiliate, Live (Backend); erweitert [dashboard/README.md](dashboard/README.md) |
 
 ### Feature-Module
 
