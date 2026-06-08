@@ -4,7 +4,7 @@ import asyncio
 import sqlite3
 import unittest
 from contextlib import ExitStack
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 from bot.chat.constants import SCAM_WARNING_MESSAGES
 from bot.chat.promos import PromoMixin
@@ -236,6 +236,46 @@ class ScamWarningSendTests(unittest.IsolatedAsyncioTestCase):
             )
 
         self.assertFalse(ok)
+        self.assertEqual(self.handler.announcement_calls, [])
+
+    async def test_promo_disabled_blocks_warning_in_promo_loop(self) -> None:
+        # Regression: Die periodische Schleife _send_promo_if_due rief die
+        # Fake-Server-Warnung direkt auf – an _send_promo_message und damit an der
+        # Werbefrei-Sperre vorbei. Ein werbefrei-Kanal bekam die Warnung (die de
+        # facto den eigenen Discord bewirbt) trotzdem. Jetzt werden gesperrte Kanäle
+        # vorab aus live_channels gefiltert; die Schleife sieht sie gar nicht mehr.
+        self.conn.execute(
+            "INSERT INTO streamer_plans (twitch_login, promo_disabled) VALUES (?, ?)",
+            ("partner_one", 1),
+        )
+        self.handler._last_scam_warning_sent["partner_one"] = 0.0  # Warnung wäre fällig
+        with self._base_patches(), patch(
+            "bot.chat.promos._PROMO_ACTIVITY_ENABLED", True
+        ), patch(
+            "bot.chat.promos.PROMO_VIEWER_SPIKE_ENABLED", False
+        ), patch(
+            "bot.chat.promos.time.monotonic", return_value=46 * 60.0
+        ), patch(
+            "bot.core.partner_utils.is_partner_channel_for_chat_tracking",
+            return_value=True,
+        ), patch.object(
+            self.handler, "_overall_promo_ready", return_value=True
+        ), patch.object(
+            self.handler, "_promo_activity_ready", return_value=True
+        ), patch.object(
+            self.handler, "_promo_channel_allowed", return_value=True
+        ), patch.object(
+            self.handler,
+            "_get_live_channels_for_promo",
+            AsyncMock(return_value=[("partner_one", "1001")]),
+        ), patch.object(
+            self.handler,
+            "_get_live_channels_for_lurker_tax",
+            AsyncMock(return_value=[]),
+        ):
+            await self.handler._send_promo_if_due()
+
+        # Werbefrei -> gar keine Announcement, insbesondere keine scam_warning.
         self.assertEqual(self.handler.announcement_calls, [])
 
 

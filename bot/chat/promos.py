@@ -1468,6 +1468,14 @@ class PromoMixin:
         now = time.monotonic()
         self._prune_promo_runtime_state(now)
         live_channels = await self._get_live_channels_for_promo()
+        # Werbefrei: Kanäle mit dauerhafter Promo-Sperre (promo_disabled /
+        # chat.promos.disable) komplett aus dem periodischen Promo-Pfad nehmen.
+        # Deckt auch die Fake-Server-Warnung und die Targeted-Promo ab, die sonst
+        # direkt senden (an _send_promo_message und damit an der Sperre vorbei).
+        live_channels = [
+            entry for entry in live_channels
+            if not self._promo_blocked_by_plan_or_flag(entry[0])
+        ]
         lurker_tax_channels = await self._get_live_channels_for_lurker_tax()
 
         from ..core.partner_utils import is_partner_channel_for_chat_tracking
