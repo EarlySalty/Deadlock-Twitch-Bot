@@ -2,6 +2,8 @@
 
 Alle Python-Dateien mit Pfad, Zweck und Zugriffslevel (A=Admin, S=Streamer, I=Intern).
 
+> Für die **funktionsgenaue** Architektur je Subsystem (Klassen/Funktionen, Datenfluss, Stolperfallen) siehe [`docs/architecture/`](architecture/README.md). Diese Übersicht hier ist die 1-Satz-Ebene; dort liegt die Tiefe. Hinweis: einzelne Einträge unten können gegenüber dem aktuellen Code veraltet sein — die `architecture/`-Docs bilden den Ist-Stand ab.
+
 ## Einstiegspunkte
 
 | Datei | Zweck | Level |

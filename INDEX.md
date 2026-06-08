@@ -7,6 +7,7 @@ Twitch-Monitoring, Analytics, Auto-Raids, Dashboard und Social-Media-Automatisie
 | Dokument | Inhalt |
 |----------|--------|
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | System-Uebersicht, Boot-Flow, Mixin-Komposition, Caddy-Setup |
+| [docs/architecture/README.md](docs/architecture/README.md) | **Funktionsgenaue Architektur je Subsystem** (Tiefen-Doku: 21 Backend-Module + 3 Frontends) |
 | [docs/MODULES.md](docs/MODULES.md) | Alle Python-Module in 1 Satz erklaert |
 | [docs/DATABASE.md](docs/DATABASE.md) | Alle DB-Tabellen mit Spalten und Zweck |
 | [docs/API.md](docs/API.md) | Alle HTTP-Routes mit Methode und Zugriffslevel |

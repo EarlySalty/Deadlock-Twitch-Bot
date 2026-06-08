@@ -22,6 +22,7 @@ Twitch bot, dashboard service, analytics, raid automation, and streamer tooling 
 
 - [`INDEX.md`](INDEX.md)
 - [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)
+- [`docs/architecture/`](docs/architecture/README.md) — function-level architecture per subsystem (backend + frontends)
 - [`docs/API.md`](docs/API.md)
 - [`docs/DATABASE.md`](docs/DATABASE.md)
 - [`docs/ADMIN.md`](docs/ADMIN.md)
