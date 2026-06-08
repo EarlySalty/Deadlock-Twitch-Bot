@@ -64,10 +64,10 @@ Status: ✅ fertig · 🔜 geplant.
 
 | Subsystem | Doku | Status | Inhalt |
 |-----------|------|:------:|--------|
-| `bot/monitoring/` | monitoring.md | 🔜 | EventSub (WS + Webhook), Stream-Sessions, Go-Live-Embeds |
-| `bot/chat/` | chat.md | 🔜 | IRC/Chat-Bot, Moderation, Promos, Scam-Warnung, Lurker-Tracking |
-| `bot/raid/` | raid.md | 🔜 | Auto-Raids, Partner-Scoring, OAuth, Blacklist, Recruitment |
-| `bot/live_announce/` | live-announce.md | 🔜 | Live-Ankündigungs-Pipeline |
+| `bot/monitoring/` | [monitoring.md](monitoring.md) | ✅ | EventSub (WS + Webhook), Stream-Sessions, Go-Live-Embeds |
+| `bot/chat/` | [chat.md](chat.md) | ✅ | IRC/Chat-Bot, Moderation, Promos, Scam-Warnung, Lurker-Tracking |
+| `bot/raid/` | [raid.md](raid.md) | ✅ | Auto-Raids, Partner-Scoring, OAuth, Blacklist, Recruitment |
+| `bot/live_announce/` | [live-announce.md](live-announce.md) | ✅ | Live-Ankündigungs-Template-Engine |
 
 ### Analytics & Dashboard
 
