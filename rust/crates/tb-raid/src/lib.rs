@@ -11,6 +11,10 @@
 //! - [`token_store`] — verschlüsselter Token-Lesepfad (`_enc`-Spalten, AAD).
 //! - [`token_refresher`] — Refresh-Schreibpfad (Advisory-Lock, Lockout-Schutz).
 //! - [`auth_writer`] — Onboarding-/Re-Auth-Write (UPSERT, Scope-Validierung).
+//! - [`scoring`] — reine Score-Berechnung (kein DB-Zugriff, voll unit-testbar).
+//!   **6c, Partner-Raid-Scoring.**
+//! - [`score_store`] — DB-Store für `twitch_partner_raid_scores` (Lesen/Schreiben).
+//!   **6c, Partner-Raid-Scoring.**
 //!
 //! Alle 6a (RaidAuth-Fundament). Plan: `docs/plans/2026-06-09-schritt-6-raid.md`.
 
@@ -18,6 +22,8 @@ pub mod auth_writer;
 pub mod oauth_flow;
 pub mod raid_blacklist;
 pub mod scope_profiles;
+pub mod score_store;
+pub mod scoring;
 pub mod state_store;
 pub mod token_blacklist;
 pub mod token_refresher;
@@ -34,6 +40,14 @@ pub use scope_profiles::{
     normalize_scope_profile, scopes_for_profile, AUTO_SCOPE_PROFILE, BASE_CRITICAL_STREAMER_SCOPES,
     BASE_SCOPE_PROFILE, BASE_STREAMER_SCOPES, DASHBOARD_REAUTH_SCOPE_PROFILE,
     DASHBOARD_UPGRADE_SCOPES, FULL_STREAMER_SCOPES,
+};
+pub use score_store::{PartnerRaidScoreRow, PartnerRaidScoreUpsert, ScoreStore};
+pub use scoring::{
+    compute_base_score, compute_duration_score, compute_fairness_score, compute_final_score,
+    compute_new_partner_multiplier, compute_raid_boost_multiplier, compute_readiness_score,
+    compute_scores, compute_time_pattern_score, ScoreComponents, ScoringInputs,
+    DEFAULT_RAID_BOOST_MULTIPLIER, NEUTRAL_SCORE, NEW_PARTNER_MAX_MULTIPLIER,
+    NEW_PARTNER_RAID_THRESHOLD, RAID_BOOST_MULTIPLIER,
 };
 pub use state_store::{RaidOAuthState, StateStore};
 pub use token_blacklist::TokenBlacklistStore;
