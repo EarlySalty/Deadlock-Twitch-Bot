@@ -1,3 +1,11 @@
+## #117 — Chatter-Statistiken pro Stream waren seit Monaten 0 — gefixt
+
+**Was war das Problem:** Beim Abschluss jeder Stream-Session zählt der Bot, wie viele verschiedene Chatter im Stream geschrieben haben, wie viele davon zum ersten Mal da waren und wie viele Wiederkehrer — diese drei Werte landen in den Session-Statistiken fürs Dashboard. Genau diese Zählung war kaputt: Sie benutzte eine SQL-Summen-Funktion auf einem Wahrheitswert-Feld (`SUM` über ein boolean), und die gibt es in Postgres schlicht nicht. Seit der Umstellung dieser Spalte auf echte Wahrheitswerte schlug die Abfrage bei **jedem** Session-Abschluss fehl. Tückisch daran: Der Fehler wurde intern abgefangen und nur als unauffällige Debug-Zeile geschluckt — nach außen sah alles normal aus, aber jede abgeschlossene Session wurde mit 0 einzigartigen, 0 neuen und 0 wiederkehrenden Chattern gespeichert.
+
+**Was wurde geändert:** Die Zählung nutzt jetzt einen Filter-Ausdruck (`COUNT` mit Bedingung) statt der Summe — das ist die korrekte Postgres-Schreibweise für „zähle nur die Zeilen, bei denen das Flag gesetzt ist". Aufgefallen ist der Bug übrigens nicht im Betrieb, sondern bei der systematischen Verifikation der Datenbank-Zugriffe gegen das echte Schema im Rahmen interner Umbauarbeiten.
+
+**Wie es jetzt funktioniert:** Ab sofort bekommt jede neu abgeschlossene Session wieder echte Chatter-Zahlen: Gesamtzahl der Chatter aus der Session-Chatter-Tabelle, Erstschreiber über das First-Time-Flag, Wiederkehrer als Differenz. **Betroffen:** Alle Sessions seit der Boolean-Umstellung der Chatter-Flags stehen mit 0er-Werten in der Datenbank — die Chat-Nachrichten selbst sind vollständig vorhanden, nur die verdichteten Kennzahlen am Session-Datensatz fehlen. Eine Rückrechnung der Altdaten wäre aus den vorhandenen Chatter-Einträgen möglich, ist aber bewusst nicht Teil dieses Fixes.
+
 ## #116 — Monitoring-Cutover vorbereitet (Schritt 4f) — Umschalten bleibt manuell
 
 **Ausgangslage:** Alle Monitoring-Bausteine (#110–#115) existierten als Bibliotheks-Code mit Tests, aber nichts davon war im Rust-Bot-Prozess zusammengesteckt. Für den späteren Umstieg muss der komplette Kreislauf — Twitch abfragen, Zustände schreiben, Events verarbeiten, Discord posten — startklar verdrahtet sein, ohne versehentlich loszulaufen.
