@@ -16,6 +16,8 @@ pub enum HelixError {
     Token(#[from] TokenError),
     #[error("HTTP-Fehler: {0}")]
     Http(#[from] reqwest::Error),
+    #[error("Helix-Status {status}")]
+    Status { status: u16 },
 }
 
 /// Konfiguration für den HelixClient.
@@ -100,6 +102,29 @@ impl HelixClient {
         Ok(self
             .http
             .get(&url)
+            .header("Client-Id", &self.config.client_id)
+            .header("Authorization", format!("Bearer {token}")))
+    }
+
+    /// Erstellt einen vorbereiteten POST-Request (App-Token; per
+    /// `.header("Authorization", …)` überschreibbar).
+    pub async fn post(&self, path: &str) -> Result<RequestBuilder, HelixError> {
+        let token = self.access_token().await?;
+        let url = format!("{}{}", self.config.helix_base, path);
+        Ok(self
+            .http
+            .post(&url)
+            .header("Client-Id", &self.config.client_id)
+            .header("Authorization", format!("Bearer {token}")))
+    }
+
+    /// Erstellt einen vorbereiteten DELETE-Request.
+    pub async fn delete(&self, path: &str) -> Result<RequestBuilder, HelixError> {
+        let token = self.access_token().await?;
+        let url = format!("{}{}", self.config.helix_base, path);
+        Ok(self
+            .http
+            .delete(&url)
             .header("Client-Id", &self.config.client_id)
             .header("Authorization", format!("Bearer {token}")))
     }

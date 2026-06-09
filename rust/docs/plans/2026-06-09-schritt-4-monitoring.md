@@ -109,4 +109,16 @@ bewusst (noch) nicht hat — beim Cutover müssen sie adressiert sein:
 2. **IRC-Lurker-Experiment-Finalize** (Chat-Subsystem).
 
 Dazu kommen die EventSub-getriggerten Raid-Flows (Auto-Raid bei `stream.offline`,
-Raid-Score-Refresh) — Ownership-Split pro Sub-Type wird in 4d/4f festgelegt.
+Raid-Score-Refresh) — in 4d als `EventSubHooks`-Port modelliert (`on_channel_raid`,
+`on_channel_moderate`, `on_score_refresh`, `on_stream_offline`), Noop bis zur
+Raid-Phase. Weitere Python-Offline-Seiteneffekte hinter demselben Hook:
+Engagement-Auto-Off, Global-Ban-Sweep-Scheduling, Post-Stream-Analyse,
+Re-Auth-Reminder-Reset.
+
+**Telemetrie-Subscription-Erstellung (4d-ii-Entscheid):** Rust verwaltet nur die
+Core-Subs (online/offline/update, App-Token). Die Broadcaster-/Moderator-Subs
+(Bits/Subs/Bans/…) brauchen User-Tokens aus `twitch_raid_auth` (AES-256-GCM,
+Raid-Phase) — bestehende Subscriptions liefern weiter an dieselbe Callback-URL,
+aber für **neue** Partner legt im Interim niemand Telemetrie-Subs an, sobald
+Python-Monitoring aus ist. Beim Cutover entscheiden: Python-Sub-Erstellung als
+Einzelfunktion am Leben lassen oder Lücke bis zur Raid-Phase akzeptieren.

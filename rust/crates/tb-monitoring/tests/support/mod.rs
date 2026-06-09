@@ -210,6 +210,13 @@ pub async fn pool_in_schema(schema: &str) -> Option<PgPool> {
             id BIGSERIAL PRIMARY KEY, twitch_user_id TEXT, title TEXT,
             game_name TEXT, language TEXT, recorded_at TIMESTAMPTZ
         )",
+        "CREATE TABLE twitch_eventsub_capacity_snapshot (
+            id BIGSERIAL PRIMARY KEY, ts_utc TIMESTAMPTZ, trigger_reason TEXT,
+            listener_count INTEGER, ready_listeners INTEGER, failed_listeners INTEGER,
+            used_slots INTEGER, total_slots INTEGER, headroom_slots INTEGER,
+            listeners_at_limit INTEGER, utilization_pct DOUBLE PRECISION,
+            listeners_json TEXT
+        )",
     ] {
         sqlx::query(ddl).execute(&pool).await.unwrap();
     }

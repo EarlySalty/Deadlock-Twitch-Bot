@@ -1,3 +1,11 @@
+## #114 — EventSub-Subscription-Verwaltung in Rust (Schritt 4d, Teil 2)
+
+**Ausgangslage:** Empfangen konnte Rust seit #113 — aber jemand muss Twitch auch sagen, welche Events es überhaupt schicken soll. Diese Anmeldungen (Subscriptions) leben bei Twitch und müssen pro Streamer angelegt, beim Start abgeglichen und bei departnerten Streamern wieder abgeräumt werden.
+
+**Geändert:** Rust verwaltet jetzt die Kern-Anmeldungen des Monitorings selbst — live gegangen, offline gegangen, Titel-/Kategoriewechsel. Der Ablauf wie im Original: Geht ein Raid-fähiger Partner live, wird sofort seine Offline-Anmeldung sichergestellt (damit das Stream-Ende nicht verpasst wird); antwortet Twitch „existiert schon", zählt das als Erfolg statt als Fehler; ein Speicher im Prozess merkt sich bestehende Anmeldungen (beim Start aus dem Twitch-Bestand aufgebaut), damit nicht bei jedem Event neu angelegt wird. Das Aufräumen löscht gezielt nur Anmeldungen der eigenen Callback-Adresse, deren Ziel-Streamer nicht mehr aktiv ist — fremde Anmeldungen werden nie angefasst. Jede Offline-Anmeldung schreibt außerdem einen Kapazitäts-Schnappschuss fürs Admin-Dashboard.
+
+**Bewusste Grenze:** Die Statistik-Anmeldungen (Bits, Subs, Bans, …) brauchen die verschlüsselten Streamer-Tokens aus dem Raid-Bereich — der kommt erst in einer späteren Phase. Bestehende Anmeldungen liefern unabhängig davon weiter; nur für *neue* Partner würde im Übergangsfenster niemand Statistik-Anmeldungen anlegen. Das ist als offener Punkt im Cutover-Plan festgehalten statt halbgar mitgebaut.
+
 ## #113 — EventSub-Empfang in Rust (Schritt 4d, Teil 1) + Exists-Check-Fix
 
 **Ausgangslage:** Twitch-Events (live gegangen, offline, Titelwechsel, Bits, Subs, Follows, …) erreichen den Bot über die Dashboard-Bridge, die sie per HTTP an die interne API auf Port 8776 zustellt. Beim Cutover übernimmt Rust diesen Port — der Empfangsweg musste also vorher vollständig stehen.

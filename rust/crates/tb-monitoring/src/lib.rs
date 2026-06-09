@@ -32,6 +32,7 @@ pub mod poller;
 pub mod sessions;
 pub mod stats;
 pub mod stream;
+pub mod subscriptions;
 pub mod telemetry;
 
 pub use dispatch::{DispatchOutcome, EventSubDispatcher, EventSubHooks, NoopEventSubHooks};
@@ -55,4 +56,8 @@ pub use sessions::{
 };
 pub use stats::{StatsSample, StatsStore};
 pub use stream::StreamSnapshot;
+pub use subscriptions::{
+    CapacitySnapshotStore, RemoteSubscription, SubscriptionConfig, SubscriptionManager,
+    SubscriptionTransport,
+};
 pub use telemetry::TelemetryStore;

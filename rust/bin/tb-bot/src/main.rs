@@ -4,23 +4,30 @@
 //! Auth: X-Internal-Token + loopback_only-Layer (Defense-in-Depth).
 //!
 //! Env-Variablen:
-//!   TWITCH_ANALYTICS_DSN       — PostgreSQL-DSN
-//!   TWITCH_INTERNAL_API_TOKEN  — Auth-Token
-//!   TWITCH_CLIENT_ID           — Twitch Helix Client-ID (optional)
-//!   TWITCH_CLIENT_SECRET       — Twitch Helix Client-Secret (optional)
-//!   PORT                       — optional, default 8776
+//!   TWITCH_ANALYTICS_DSN          — PostgreSQL-DSN
+//!   TWITCH_INTERNAL_API_TOKEN     — Auth-Token
+//!   TWITCH_CLIENT_ID              — Twitch Helix Client-ID (optional)
+//!   TWITCH_CLIENT_SECRET          — Twitch Helix Client-Secret (optional)
+//!   TWITCH_TARGET_GAME_NAME       — Ziel-Kategorie (default "Deadlock")
+//!   TWITCH_WEBHOOK_SECRET         — EventSub-Webhook-Secret (optional)
+//!   TWITCH_EVENTSUB_CALLBACK_URL  — öffentliche Callback-URL (optional;
+//!                                   beide gesetzt → Subscription-Verwaltung)
+//!   PORT                          — optional, default 8776
+
+mod wiring;
 
 use std::net::SocketAddr;
 use std::sync::Arc;
 use tb_config::Settings;
 use tb_internal_api::build_internal_router;
-use tb_monitoring::{
-    EventSubDispatcher, ExpSessionStore, ExpSessionTracker, GuardStore, InboxRuntime,
-    LiveStateStore, MonitoringEventHandler, NoFollowerSource, NoopEventSubHooks, SessionTracker,
-    TelemetryStore,
-};
 use tb_monitoring::sessions::store::SessionStore;
+use tb_monitoring::{
+    CapacitySnapshotStore, EventSubDispatcher, EventSubHooks, ExpSessionStore, ExpSessionTracker,
+    GuardStore, InboxRuntime, LiveStateStore, MonitoringEventHandler, NoFollowerSource,
+    NoopEventSubHooks, SessionTracker, SubscriptionConfig, SubscriptionManager, TelemetryStore,
+};
 use tb_transport_twitch::{HelixClient, HelixConfig};
+use wiring::{HelixSubscriptionTransport, SubscriptionEventSubHooks};
 
 #[tokio::main]
 async fn main() {
@@ -46,18 +53,16 @@ async fn main() {
         let client_id = std::env::var("TWITCH_CLIENT_ID").ok();
         let client_secret = std::env::var("TWITCH_CLIENT_SECRET").ok();
         match (client_id, client_secret) {
-            (Some(id), Some(secret)) => {
-                match HelixClient::new(HelixConfig::new(id, secret)) {
-                    Ok(c) => {
-                        tracing::info!("HelixClient initialisiert");
-                        Arc::new(Some(c))
-                    }
-                    Err(e) => {
-                        tracing::warn!("HelixClient-Initialisierung fehlgeschlagen: {e}");
-                        Arc::new(None)
-                    }
+            (Some(id), Some(secret)) => match HelixClient::new(HelixConfig::new(id, secret)) {
+                Ok(c) => {
+                    tracing::info!("HelixClient initialisiert");
+                    Arc::new(Some(c))
                 }
-            }
+                Err(e) => {
+                    tracing::warn!("HelixClient-Initialisierung fehlgeschlagen: {e}");
+                    Arc::new(None)
+                }
+            },
             _ => {
                 tracing::warn!(
                     "TWITCH_CLIENT_ID/TWITCH_CLIENT_SECRET fehlen — Helix-API deaktiviert"
@@ -67,9 +72,9 @@ async fn main() {
         }
     };
 
-    // EventSub-Ingress: Inbox-Worker + Dispatcher (Hooks Noop bis 4f).
-    // Der Bridge-Vertrag POST /eventsub/dispatch ist damit voll bedienbar;
-    // Außenwirkung (Raid, Announcements) bleibt bis zum Cutover aus.
+    // EventSub-Ingress: Inbox-Worker + Dispatcher. Mit Webhook-Config + Helix
+    // verwaltet Rust die Core-Subscriptions selbst (Go-Live → stream.offline);
+    // Raid-/Score-Hooks bleiben bis zum Cutover (4f) Noop.
     let target_game =
         std::env::var("TWITCH_TARGET_GAME_NAME").unwrap_or_else(|_| "Deadlock".to_string());
     let guard = GuardStore::new(pool.clone());
@@ -83,7 +88,40 @@ async fn main() {
         &target_game,
     ));
     tracker.rehydrate().await;
-    let eventsub_hooks = Arc::new(NoopEventSubHooks);
+
+    let webhook_secret = std::env::var("TWITCH_WEBHOOK_SECRET")
+        .ok()
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty());
+    let callback_url = std::env::var("TWITCH_EVENTSUB_CALLBACK_URL")
+        .ok()
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty());
+    let eventsub_hooks: Arc<dyn EventSubHooks> =
+        match (webhook_secret, callback_url, helix.as_ref().clone()) {
+            (Some(secret), Some(callback_url), Some(helix_client)) => {
+                let manager = Arc::new(SubscriptionManager::new(
+                    Arc::new(HelixSubscriptionTransport {
+                        helix: helix_client,
+                    }),
+                    SubscriptionConfig {
+                        callback_url,
+                        secret,
+                    },
+                    CapacitySnapshotStore::new(pool.clone()),
+                ));
+                manager.rehydrate().await;
+                tracing::info!("EventSub-Subscription-Verwaltung aktiv (Webhook-Modus)");
+                Arc::new(SubscriptionEventSubHooks { manager })
+            }
+            _ => {
+                tracing::info!(
+                    "TWITCH_WEBHOOK_SECRET/TWITCH_EVENTSUB_CALLBACK_URL nicht gesetzt — \
+                     Subscription-Verwaltung deaktiviert (Hooks Noop)"
+                );
+                Arc::new(NoopEventSubHooks)
+            }
+        };
     let handler = Arc::new(MonitoringEventHandler::new(
         guard.clone(),
         live_state,
