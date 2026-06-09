@@ -43,6 +43,28 @@ impl ApiError {
             },
         }
     }
+
+    /// 403 Forbidden — kein analytics.extended-Entitlement.
+    pub fn plan_required() -> Self {
+        Self {
+            status: StatusCode::FORBIDDEN,
+            body: ApiErrorBody {
+                error: "plan_required",
+                message: "analytics.extended entitlement required",
+            },
+        }
+    }
+
+    /// 500 Internal Server Error.
+    pub fn internal() -> Self {
+        Self {
+            status: StatusCode::INTERNAL_SERVER_ERROR,
+            body: ApiErrorBody {
+                error: "internal_error",
+                message: "internal server error",
+            },
+        }
+    }
 }
 
 impl IntoResponse for ApiError {

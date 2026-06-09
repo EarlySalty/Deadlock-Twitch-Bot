@@ -1,12 +1,13 @@
-//! Minimaler HTTP-Server für das public Analytics-Dashboard.
+//! Minimaler HTTP-Server für das Analytics-Dashboard.
 //!
 //! Port: `DASHBOARD_PORT` Env-Variable, Default 8767.
 //! DSN:  `TWITCH_ANALYTICS_DSN` (via tb-config).
 //!
 //! **Nicht automatisch starten** — Start ist user-gated (erfordert echtes DSN).
 
+use std::net::SocketAddr;
 use tb_config::Settings;
-use tb_dashboard_api::build_public_router;
+use tb_dashboard_api::build_router;
 
 #[tokio::main]
 async fn main() {
@@ -27,8 +28,9 @@ async fn main() {
         .and_then(|v| v.parse().ok())
         .unwrap_or(8767);
 
-    let addr = std::net::SocketAddr::from(([127, 0, 0, 1], port));
-    let app = build_public_router(pool);
+    let addr = SocketAddr::from(([127, 0, 0, 1], port));
+    let token = settings.internal_api.token.clone();
+    let app = build_router(pool, token);
 
     tracing::info!("tb-dashboard lauscht auf {addr}");
     let listener = tokio::net::TcpListener::bind(addr)
@@ -37,5 +39,10 @@ async fn main() {
             tracing::error!("Bind-Fehler auf {addr}: {e}");
             std::process::exit(1);
         });
-    axum::serve(listener, app).await.unwrap();
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<SocketAddr>(),
+    )
+    .await
+    .unwrap();
 }

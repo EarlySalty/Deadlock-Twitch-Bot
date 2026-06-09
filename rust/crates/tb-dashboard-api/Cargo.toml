@@ -11,8 +11,10 @@ serde        = { workspace = true }
 serde_json   = { workspace = true }
 sqlx         = { workspace = true }
 tracing      = { workspace = true }
+chrono       = { workspace = true }
 tb-analytics = { workspace = true }
 tb-error     = { workspace = true }
+tb-http-core = { workspace = true }
 
 [dev-dependencies]
 tokio     = { workspace = true }

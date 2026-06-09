@@ -6,7 +6,7 @@ pub mod middleware;
 
 pub use constants::{IDEMPOTENCY_KEY_HEADER, INTERNAL_API_BASE_PATH, INTERNAL_TOKEN_HEADER};
 pub use error::ApiError;
-pub use middleware::auth::internal_auth;
+pub use middleware::auth::{internal_auth, AuthLevel, ExpectedToken};
 pub use middleware::idempotency::IdempotencyKey;
 pub use middleware::loopback::loopback_only;
 

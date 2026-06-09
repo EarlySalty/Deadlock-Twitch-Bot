@@ -3,3 +3,5 @@
 pub mod auth;
 pub mod idempotency;
 pub mod loopback;
+
+pub use auth::{AuthLevel, ExpectedToken};

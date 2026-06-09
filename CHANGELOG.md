@@ -1,3 +1,18 @@
+## #103 — Auth-Layer + Admin-Analytics-Routen (Rust Schritt 1b)
+
+**Ausgangslage:** Der Rust-Rewrite hatte nach Schritt 1a drei öffentliche Read-only-Endpoints ohne jede Zugriffskontrolle. Alle Admin-seitigen Analytics-Routen — Streamer-Liste, Session-Übersicht — waren noch ausschließlich im Python-Backend.
+
+**Geändert:** Rust `tb-dashboard`-Binary (Port 8767) bekommt einen vollständigen Auth-Layer und drei neue Admin-Routen:
+
+- **Auth-Level-Extraktion** (`AuthLevel`): Jeder Request wird eingestuft — `Localhost` wenn Loopback-IP + localhost-Host-Header (kein Token nötig), `Admin` bei korrektem `X-Internal-Token`-Header (constant-time-Vergleich), `None` sonst. Der Extractor sitzt als axum-`FromRequestParts`-Impl direkt im Request-Pipeline, kein Middleware-Wrapper nötig. Partner-Session-Auth (Fernet-Cookie) bleibt deferred (ADR 0003 — kein Fernet-Nachbau, Migration erst wenn Login-Flow auf Rust wechselt).
+- **IDOR-Guard** (`require_owner`): Blockiert `None`-Requests mit 401, lässt Admin/Localhost durch — vorbereitet für Partner-Level wenn es kommt.
+- **Plan-Gating** (`require_extended_plan`): Liest `manual_plan_id` + `manual_plan_expires_at` aus `streamer_plans`, prüft gegen die bekannten Extended-Plan-IDs (`analytics_pro`, `analytics_extended`), respektiert Ablaufdaten. Admin/Localhost überspringen die Prüfung.
+- `GET /twitch/api/v2/auth-status` — antwortet immer 200, liefert `auth_level` + `logged_in`; nützlich für Frontend-Conditional-Rendering.
+- `GET /twitch/api/v2/streamers` — Admin-only; gibt alle aktiven Partner mit Live-Status + Viewer-Count zurück, sortiert nach Live-Zustand dann Viewer-Zahl.
+- `GET /twitch/api/v2/overview?streamer=<login>&days=30` — Admin-only; aggregierte Session-Metriken (avg/peak Viewers, Airtime, Hours-Watched, Follower-Delta, Session-Count) für einen konfigurierbaren Zeitraum (7–365 Tage). Leerer Zeitraum liefert `{empty: true}` statt 500.
+
+**Wie's jetzt funktioniert:** `into_make_service_with_connect_info` injiziert die echte Client-IP in jede Request-Extension — ohne diesen axum-Aufruf würde `ConnectInfo` nie befüllt und `AuthLevel::Localhost` in Produktion nie feuern. Alle SQL-Zeitvergleiche nutzen explizite `::TIMESTAMPTZ`-Casts (PostgreSQL lehnt `TEXT >= TIMESTAMPTZ` sonst ab), Aggregat-Summen explizit `::FLOAT8`/`::BIGINT` um NUMERIC-Rückgaben zu vermeiden. Jeder Test läuft in einem eigenen PostgreSQL-Schema (`SET search_path TO test_xxx`) — keine parallelen Testkonflikte möglich.
+
 ## #102 — Werbefrei deckt jetzt auch die Fake-Server-Warnung ab
 
 **Problem:** Streamer mit Werbefrei-Abo (`chat.promos.disable` bzw. gesetztes `promo_disabled`) sollen keine automatischen Bot-Werbe-Announcements im Chat bekommen. Die regulären Promos (Chat-Aktivität, Viewer-Spike) hielten sich daran, weil sie über `_send_promo_message` laufen, das die Werbefrei-Sperre prüft. Die periodische Promo-Schleife rief aber zwei Inhalte — die Fake-Server-/Scam-Warnung und die Targeted-Promo — *direkt* auf, also am gemeinsamen Sende-Pfad und damit an der Sperre vorbei. Ergebnis: Ein Werbefrei-Kanal sah trotzdem die orange Warn-Announcement (die de facto den eigenen offiziellen Discord bewirbt) und ggf. die personalisierte Promo.
