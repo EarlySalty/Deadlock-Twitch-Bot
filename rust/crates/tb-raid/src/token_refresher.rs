@@ -36,6 +36,9 @@ pub struct TokenResponse {
     pub refresh_token: String,
     /// Gültigkeit in Sekunden (`expires_in`).
     pub expires_in: i64,
+    /// Gewährte Scopes (Twitch `scope`-Array). Beim Refresh ungenutzt
+    /// (Scopes bleiben erhalten), beim Exchange/Onboarding relevant.
+    pub scopes: Vec<String>,
 }
 
 /// Fehlerklassen des Token-Endpoints — steuern Blacklist vs. nicht.
@@ -54,6 +57,10 @@ pub enum RefreshError {
 pub trait TwitchTokenClient: Send + Sync {
     /// Erneuert ein Access-Token via `grant_type=refresh_token`.
     async fn refresh(&self, refresh_token: &str) -> Result<TokenResponse, RefreshError>;
+
+    /// Tauscht einen Authorization-Code gegen Tokens
+    /// (`grant_type=authorization_code`, Python `exchange_code_for_token`).
+    async fn exchange_code(&self, code: &str) -> Result<TokenResponse, RefreshError>;
 }
 
 /// Lockout-Store-Port (`twitch_token_blacklist`, echte Impl in 6b).

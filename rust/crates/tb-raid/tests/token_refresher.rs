@@ -106,6 +106,7 @@ impl StubClient {
                 access_token: access.to_string(),
                 refresh_token: refresh.to_string(),
                 expires_in: 3600,
+                scopes: vec![],
             }))),
         })
     }
@@ -123,6 +124,9 @@ impl TwitchTokenClient for StubClient {
             .unwrap()
             .take()
             .expect("einmal aufgerufen")
+    }
+    async fn exchange_code(&self, _code: &str) -> Result<TokenResponse, RefreshError> {
+        unreachable!("exchange_code im Refresher-Test ungenutzt")
     }
 }
 
