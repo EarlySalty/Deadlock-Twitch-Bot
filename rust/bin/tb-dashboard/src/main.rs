@@ -23,6 +23,9 @@ async fn main() {
         std::process::exit(1);
     });
 
+    // Startzeit-Timestamp so früh wie möglich setzen
+    let _ = tb_dashboard_api::process_info::uptime_secs();
+
     let port: u16 = std::env::var("DASHBOARD_PORT")
         .ok()
         .and_then(|v| v.parse().ok())

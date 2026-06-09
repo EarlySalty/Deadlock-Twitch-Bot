@@ -8,3 +8,7 @@ pub mod network;
 pub mod overview;
 pub mod raids;
 pub mod streamers;
+pub mod system_database;
+pub mod system_errors;
+pub mod system_eventsub;
+pub mod system_health;

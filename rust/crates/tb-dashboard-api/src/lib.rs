@@ -6,6 +6,7 @@
 
 pub mod auth;
 pub mod handlers;
+pub mod process_info;
 
 use axum::{routing::get, Extension, Router};
 use sqlx::PgPool;
@@ -57,9 +58,37 @@ pub fn build_authed_router(pool: PgPool, token: String) -> Router {
         .layer(CorsLayer::permissive())
 }
 
-/// Zusammengeführter Router: public + authed.
+/// Baut den Router für Admin-System-Endpoints.
+pub fn build_admin_system_router(pool: PgPool, token: String) -> Router {
+    use handlers::system::{database, errors, eventsub, health};
+
+    Router::new()
+        .route(
+            "/twitch/api/admin/system/health",
+            get(health::health_handler),
+        )
+        .route(
+            "/twitch/api/admin/system/database",
+            get(database::database_handler),
+        )
+        .route(
+            "/twitch/api/admin/system/eventsub",
+            get(eventsub::eventsub_handler),
+        )
+        .route(
+            "/twitch/api/admin/system/errors",
+            get(errors::errors_handler),
+        )
+        .with_state(pool)
+        .layer(Extension(ExpectedToken(token)))
+        .layer(CorsLayer::permissive())
+}
+
+/// Zusammengeführter Router: public + authed + admin-system.
 ///
 /// Kein doppelter CorsLayer — jeder Sub-Router hat seinen eigenen.
 pub fn build_router(pool: PgPool, token: String) -> Router {
-    build_public_router(pool.clone()).merge(build_authed_router(pool, token))
+    build_public_router(pool.clone())
+        .merge(build_authed_router(pool.clone(), token.clone()))
+        .merge(build_admin_system_router(pool, token))
 }

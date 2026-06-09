@@ -1,3 +1,18 @@
+## #104 — Admin System-Endpoints (Rust Schritt 2a)
+
+**Ausgangslage:** Das Rust-Dashboard hatte nach Schritt 1b zwar Auth-geschützte Analytics-Routen, aber keine Möglichkeit, den Gesundheitszustand des laufenden Systems abzufragen — kein Uptime, kein Memory, kein Überblick über DB-Größe, EventSub-Zustand oder Error-Log.
+
+**Geändert:** Vier neue Admin-only-Endpoints unter `/twitch/api/admin/system/`:
+
+- **`/health`** — Prozess-Uptime (OnceLock-Timestamp aus `main.rs`), RSS-Memory aus `/proc/self/status`, PID, letzter DB-Tick aus `twitch_live_state`, Raw-Chat-Ingest-Lag aus `twitch_raw_chat_ingest_health`. Lag-Warning (`RAW_CHAT_LAG`) wird nur ausgelöst wenn der herangezogene Streamer gerade live ist — Offline-Fallback läuft stumm durch.
+- **`/database`** — DB-Gesamtgröße + Row-Count/Size für 10 definierte Tabellen via `pg_class.reltuples` + `pg_total_relation_size`. Nicht-existierende Tabellen werden einfach weggelassen.
+- **`/eventsub`** — Neuester EventSub-Snapshot aus `twitch_eventsub_capacity_snapshot` (nur Zeilen mit `listener_count > 0` und gefülltem JSON, max. 200 Einträge zurück).
+- **`/errors`** — Paginierter Error-Log aus `twitch_admin_error_log` (page/page_size Query-Params, Default 1/25). Falls die Tabelle noch nicht existiert: leere Antwort statt 500.
+
+Alle vier Routen verlangen den internen Token (`X-Internal-Token`), 401 sonst. Der Live/Fallback-JOIN in der Health-Query nutzt `LOWER()`-Vergleich — konsistent mit allen anderen JOINs im Codebase. `sqlx`-Workspace-Feature `chrono` ergänzt (war bisher nicht gesetzt).
+
+**Wie es jetzt funktioniert:** `build_admin_system_router` wird in `build_router` per `.merge()` eingebunden. Der Uptime-Timestamp wird einmalig in `main.rs` nach dem DB-Connect gesetzt, damit er die echte Startzeit des Prozesses widerspiegelt — nicht den Zeitpunkt des ersten Health-Requests.
+
 ## #103 — Auth-Layer + Admin-Analytics-Routen (Rust Schritt 1b)
 
 **Ausgangslage:** Der Rust-Rewrite hatte nach Schritt 1a drei öffentliche Read-only-Endpoints ohne jede Zugriffskontrolle. Alle Admin-seitigen Analytics-Routen — Streamer-Liste, Session-Übersicht — waren noch ausschließlich im Python-Backend.
