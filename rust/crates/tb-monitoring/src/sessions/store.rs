@@ -309,6 +309,21 @@ impl SessionStore {
         Ok(())
     }
 
+    /// Speichert den gesendeten Announcement-Text an der Session
+    /// (Python: UPDATE `notification_text` nach erfolgreichem Posting).
+    pub async fn set_notification_text(
+        &self,
+        session_id: i64,
+        text: &str,
+    ) -> Result<(), sqlx::Error> {
+        sqlx::query("UPDATE twitch_stream_sessions SET notification_text = $1 WHERE id = $2")
+            .bind(text)
+            .bind(session_id)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
     pub async fn finalize_source(
         &self,
         session_id: i64,

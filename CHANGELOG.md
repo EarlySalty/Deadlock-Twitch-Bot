@@ -1,3 +1,11 @@
+## #112 — Poll-Loop in Rust (Schritt 4c)
+
+**Ausgangslage:** Mit Fundament (#110) und Schreibkern (#111) fehlte der Taktgeber des Monitorings: die Schleife, die alle 15 Sekunden bei Twitch abfragt, wer von den getrackten Streamern live ist, und daraus alle Zustandsübergänge ableitet.
+
+**Geändert:** Der komplette Poll-Durchlauf ist jetzt in Rust nachgebaut, in derselben Mechanik wie das Original: getrackte Streamer plus ein Kategorie-Sample (bis 400 Streams, mit Sprachfiltern und Cursor-Pagination) werden von der Twitch-API geholt, daraus entstehen die Übergänge — frisch live (Session anlegen), offline (Session abschließen samt Kennzahlen), Stream-Neustart (alte Session zu, neue auf), Spielwechsel (Transition-Protokoll). Dazu die Pflege-Kadenzen: Statistik-Samples pro Tick, alle 10 Ticks verwaiste Sessions schließen und abgelaufene Dedup-Einträge abräumen, höchstens alle 15 Minuten die Auto-Archiv-Prüfung (Partner ohne Deadlock-Stream seit 10 Tagen). Das Abfrage-Intervall bleibt zur Laufzeit verstellbar (5–3600 Sekunden, aus der Datenbank gelesen, ungültige Werte fallen auf 15 zurück).
+
+**Wie es zusammenhält:** Alles mit Außenwirkung — Discord-Postings, EventSub-Anmeldungen, Raid-Bewertungs-Updates, Archivierungen — läuft über definierte Andockpunkte, die aktuell auf „tue nichts" stehen. Dadurch kann der Rust-Loop heute schon vollständig gegen eine Wegwerf-Datenbank getestet werden (Transitions über mehrere Ticks, Neustart-Erkennung, Kadenzen), ohne dass er irgendetwas nach außen sendet — die Andockpunkte werden in den nächsten Schritten (EventSub, Announcements, Cutover) einzeln scharfgeschaltet. Die Twitch-API-Anbindung selbst (Streams, Kategorie-Suche mit Cache, Follower-Zahl) ist gegen einen Mock-Server getestet.
+
 ## #111 — Monitoring-Write-Core in Rust (Schritt 4b) + zwei Prod-Befunde
 
 **Ausgangslage:** Nach dem Idempotenz-Fundament (#110) fehlte der eigentliche Schreibkern des Monitorings: Wer ist live, welche Stream-Session läuft, Viewer-Verläufe, Statistik-Zeitreihen. Das ist der Teil, der pro Poll-Tick in die Datenbank schreibt.

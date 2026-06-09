@@ -3,11 +3,9 @@
 //! **prod-verifizierten** Stand (2026-06-09): Sessions mit timestamptz/boolean/
 //! bigint, Live-State mit TEXT-Timestamps, exp_* mit TEXT-Timestamps + REAL.
 
-use std::str::FromStr;
 use std::sync::{Arc, Mutex};
 
 use chrono::{Duration, Utc};
-use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
 use sqlx::PgPool;
 use tb_monitoring::sessions::store::SessionStore;
 use tb_monitoring::{
@@ -16,125 +14,16 @@ use tb_monitoring::{
     StreamSnapshot, TrackedStreamer,
 };
 
-fn test_dsn() -> Option<String> {
-    std::env::var("TB_TEST_DATABASE_URL").ok()
-}
+mod support;
 
-macro_rules! skip_without_db {
-    () => {
-        match test_dsn() {
-            Some(d) => d,
-            None => {
-                eprintln!(
-                    "SKIP: TB_TEST_DATABASE_URL nicht gesetzt — `rust/scripts/test_db.sh up`"
-                );
-                return;
-            }
+/// Schema-Pool oder lauter Skip (DDL + Isolation siehe `tests/support/mod.rs`).
+macro_rules! pool_or_skip {
+    ($schema:expr) => {
+        match support::pool_in_schema($schema).await {
+            Some(pool) => pool,
+            None => return,
         }
     };
-}
-
-async fn pool_in_schema(dsn: &str, schema: &str) -> PgPool {
-    let admin = PgPoolOptions::new()
-        .max_connections(1)
-        .connect(dsn)
-        .await
-        .expect("admin connect");
-    sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
-        .execute(&admin)
-        .await
-        .unwrap();
-    sqlx::query(&format!("CREATE SCHEMA {schema}"))
-        .execute(&admin)
-        .await
-        .unwrap();
-    admin.close().await;
-
-    let opts = PgConnectOptions::from_str(dsn)
-        .expect("dsn parse")
-        .options([("search_path", schema)]);
-    let pool = PgPoolOptions::new()
-        .max_connections(4)
-        .connect_with(opts)
-        .await
-        .expect("connect");
-
-    for ddl in [
-        "CREATE TABLE twitch_live_state (
-            twitch_user_id TEXT PRIMARY KEY,
-            streamer_login TEXT NOT NULL,
-            last_stream_id TEXT, last_started_at TEXT, last_title TEXT, last_game_id TEXT,
-            last_discord_message_id TEXT, last_notified_at TEXT,
-            is_live INTEGER DEFAULT 0, last_seen_at TEXT, last_game TEXT,
-            last_viewer_count INTEGER DEFAULT 0, last_tracking_token TEXT,
-            active_session_id BIGINT, had_deadlock_in_session INTEGER DEFAULT 0,
-            last_deadlock_seen_at TEXT
-        )",
-        "CREATE TABLE twitch_partners (
-            id BIGSERIAL PRIMARY KEY, twitch_user_id TEXT NOT NULL,
-            twitch_login TEXT NOT NULL, status TEXT NOT NULL,
-            raid_bot_enabled INTEGER DEFAULT 0
-        )",
-        "CREATE TABLE twitch_stream_sessions (
-            id BIGSERIAL PRIMARY KEY,
-            streamer_login TEXT NOT NULL,
-            stream_id TEXT,
-            started_at TIMESTAMPTZ NOT NULL,
-            ended_at TIMESTAMPTZ,
-            duration_seconds INTEGER DEFAULT 0,
-            start_viewers INTEGER DEFAULT 0, peak_viewers INTEGER DEFAULT 0,
-            end_viewers INTEGER DEFAULT 0,
-            avg_viewers DOUBLE PRECISION DEFAULT 0, samples INTEGER DEFAULT 0,
-            retention_5m DOUBLE PRECISION, retention_10m DOUBLE PRECISION,
-            retention_20m DOUBLE PRECISION,
-            dropoff_pct DOUBLE PRECISION, dropoff_label TEXT,
-            unique_chatters INTEGER DEFAULT 0, first_time_chatters INTEGER DEFAULT 0,
-            returning_chatters INTEGER DEFAULT 0,
-            followers_start INTEGER, followers_end INTEGER, follower_delta INTEGER,
-            stream_title TEXT, notification_text TEXT, language TEXT,
-            is_mature BOOLEAN DEFAULT FALSE, tags TEXT,
-            had_deadlock_in_session BOOLEAN DEFAULT FALSE,
-            game_name TEXT, notes TEXT
-        )",
-        "CREATE TABLE twitch_session_viewers (
-            session_id BIGINT NOT NULL, ts_utc TIMESTAMPTZ NOT NULL,
-            minutes_from_start INTEGER, viewer_count INTEGER NOT NULL,
-            PRIMARY KEY (session_id, ts_utc)
-        )",
-        "CREATE TABLE twitch_session_chatters (
-            session_id BIGINT NOT NULL, streamer_login TEXT NOT NULL,
-            chatter_login TEXT NOT NULL, is_first_time_streamer BOOLEAN DEFAULT FALSE
-        )",
-        "CREATE TABLE twitch_stats_tracked (
-            ts_utc TIMESTAMPTZ, streamer TEXT, viewer_count INTEGER,
-            is_partner BOOLEAN, game_name TEXT, stream_title TEXT, tags TEXT
-        )",
-        "CREATE TABLE twitch_stats_category (
-            ts_utc TIMESTAMPTZ, streamer TEXT, viewer_count INTEGER,
-            is_partner BOOLEAN, game_name TEXT, stream_title TEXT, tags TEXT
-        )",
-        "CREATE TABLE exp_sessions (
-            id BIGSERIAL PRIMARY KEY, streamer TEXT NOT NULL, stream_id TEXT,
-            started_at TEXT NOT NULL, ended_at TEXT, game_name TEXT, stream_title TEXT,
-            peak_viewers INTEGER DEFAULT 0, avg_viewers REAL DEFAULT 0,
-            samples INTEGER DEFAULT 0, follower_delta INTEGER, duration_min REAL
-        )",
-        "CREATE UNIQUE INDEX idx_exp_sessions_stream_id ON exp_sessions(stream_id)
-            WHERE stream_id IS NOT NULL",
-        "CREATE TABLE exp_snapshots (
-            id BIGSERIAL PRIMARY KEY, exp_session_id BIGINT NOT NULL, ts_utc TEXT NOT NULL,
-            viewer_count INTEGER, minutes_from_start REAL
-        )",
-        "CREATE UNIQUE INDEX idx_exp_snapshots_session_ts
-            ON exp_snapshots(exp_session_id, ts_utc)",
-        "CREATE TABLE exp_game_transitions (
-            id BIGSERIAL PRIMARY KEY, exp_session_id BIGINT NOT NULL, streamer TEXT NOT NULL,
-            ts_utc TEXT NOT NULL, from_game TEXT, to_game TEXT, viewer_count INTEGER
-        )",
-    ] {
-        sqlx::query(ddl).execute(&pool).await.unwrap();
-    }
-    pool
 }
 
 /// Follower-Stub: liefert die Werte der Reihe nach (ensure → start, finalize → end).
@@ -168,6 +57,7 @@ fn deadlock_stream(stream_id: &str, login: &str, viewers: i32) -> StreamSnapshot
     StreamSnapshot {
         id: Some(stream_id.to_string()),
         user_login: login.to_string(),
+        user_name: login.to_uppercase(),
         title: "Ranked Grind".to_string(),
         game_name: "Deadlock".to_string(),
         language: "de".to_string(),
@@ -182,8 +72,7 @@ fn deadlock_stream(stream_id: &str, login: &str, viewers: i32) -> StreamSnapshot
 
 #[tokio::test]
 async fn live_state_upsert_drift_cleanup_und_snapshot() {
-    let dsn = skip_without_db!();
-    let pool = pool_in_schema(&dsn, "t4b_live_state").await;
+    let pool = pool_or_skip!("t4b_live_state");
     let store = LiveStateStore::new(pool.clone());
 
     let row = |user_id: &str, login: &str, live: i32| LiveStateUpsert {
@@ -260,8 +149,7 @@ async fn live_state_upsert_drift_cleanup_und_snapshot() {
 
 #[tokio::test]
 async fn session_lifecycle_start_sample_finalize() {
-    let dsn = skip_without_db!();
-    let pool = pool_in_schema(&dsn, "t4b_lifecycle").await;
+    let pool = pool_or_skip!("t4b_lifecycle");
     let followers = Arc::new(SeqFollowers {
         values: Mutex::new(vec![Some(10), Some(25)]),
     });
@@ -379,8 +267,7 @@ async fn session_lifecycle_start_sample_finalize() {
 
 #[tokio::test]
 async fn session_doppel_start_wird_db_seitig_verhindert() {
-    let dsn = skip_without_db!();
-    let pool = pool_in_schema(&dsn, "t4b_double_start").await;
+    let pool = pool_or_skip!("t4b_double_start");
     let store = SessionStore::new(pool.clone());
 
     let new = NewSession {
@@ -411,8 +298,7 @@ async fn session_doppel_start_wird_db_seitig_verhindert() {
 
 #[tokio::test]
 async fn session_restart_finalisiert_alte_session() {
-    let dsn = skip_without_db!();
-    let pool = pool_in_schema(&dsn, "t4b_restart").await;
+    let pool = pool_or_skip!("t4b_restart");
     let tracker = tracker_with(&pool, Arc::new(NoFollowerSource));
 
     let first = tracker
@@ -449,8 +335,7 @@ async fn session_restart_finalisiert_alte_session() {
 
 #[tokio::test]
 async fn orphan_cleanup_schliesst_scout_und_stale_sessions() {
-    let dsn = skip_without_db!();
-    let pool = pool_in_schema(&dsn, "t4b_orphans").await;
+    let pool = pool_or_skip!("t4b_orphans");
     let tracker = tracker_with(&pool, Arc::new(NoFollowerSource));
 
     // Scout-Session: 0 Samples, > 24 h offen.
@@ -507,8 +392,7 @@ async fn orphan_cleanup_schliesst_scout_und_stale_sessions() {
 
 #[tokio::test]
 async fn stats_batch_inserts() {
-    let dsn = skip_without_db!();
-    let pool = pool_in_schema(&dsn, "t4b_stats").await;
+    let pool = pool_or_skip!("t4b_stats");
     let store = StatsStore::new(pool.clone());
     let ts = Utc::now();
     let sample = |login: &str, partner: bool| StatsSample {
@@ -545,8 +429,7 @@ async fn stats_batch_inserts() {
 
 #[tokio::test]
 async fn exp_hooks_idempotent_und_vollstaendig() {
-    let dsn = skip_without_db!();
-    let pool = pool_in_schema(&dsn, "t4b_exp").await;
+    let pool = pool_or_skip!("t4b_exp");
     let exp = ExpSessionTracker::new(ExpSessionStore::new(pool.clone()));
     let stream = deadlock_stream("s-9", "drag", 11);
     let t0 = Utc::now() - Duration::minutes(3);

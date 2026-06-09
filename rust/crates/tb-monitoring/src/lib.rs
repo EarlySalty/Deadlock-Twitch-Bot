@@ -26,6 +26,7 @@ pub mod guard;
 pub mod inbox_runtime;
 pub mod inbox_store;
 pub mod live_state;
+pub mod poller;
 pub mod sessions;
 pub mod stats;
 pub mod stream;
@@ -39,6 +40,10 @@ pub use inbox_runtime::{
 pub use inbox_store::{DeadLetterEntry, LeasedWork, PendingEntry, ProcessingInboxStore};
 pub use live_state::{
     FinalizeState, LiveStateRow, LiveStateStore, LiveStateUpsert, SnapshotEntry, TrackedStreamer,
+};
+pub use poller::{
+    AnnouncementSink, NoopAnnouncementSink, NoopPollHooks, PollConfig, PollEngine, PollHooks,
+    PollIntervalStore, StreamSource, TrackedEntry, TrackedStore,
 };
 pub use sessions::{
     FollowerCountSource, NewSession, NoFollowerSource, SessionStore, SessionTracker, StartOutcome,

@@ -40,7 +40,7 @@ rust/
 | Crate | Verantwortung | hängt an | Libs |
 |---|---|---|---|
 | `tb-chat` | IRC-Connect, Moderation (Spam-Score als pure logic), Promo, Commands, Lurker-Tracking | transport-twitch, db, llm, transport-discord | twitch_irc, regex |
-| `tb-monitoring` | **4a umgesetzt:** Guard-Store (`eventsub_guard_state`) + Processing-Inbox (Leased-Worker, `FOR UPDATE SKIP LOCKED`). Folgt: Write-Core, Poll-Loop, EventSub-Dispatch, Announcements (4b–4e). Webhook-only, kein WS-Pool — eigene `tb-eventsub`-Crate entfällt (ADR 0004) | transport-twitch, db, transport-discord | sqlx, tokio, uuid |
+| `tb-monitoring` | **4a–4c umgesetzt:** Guard-Store + Processing-Inbox (4a); Write-Core: Live-State/Sessions/Stats/exp (4b); Poll-Engine mit `StreamSource`/`AnnouncementSink`/`PollHooks`-Ports, Runtime-Intervall, Auto-Archiv-Kandidaten, Cleanup-Kadenzen (4c). Folgt: EventSub-Dispatch (4d), Announcements (4e). Webhook-only, kein WS-Pool — eigene `tb-eventsub`-Crate entfällt (ADR 0004) | db (sqlx direkt) — Helix/Broker-Adapter im Composition-Root `tb-bot` | sqlx, tokio, chrono, uuid |
 | `tb-raid` | `RaidAuth` (DB-only State), Scoring, CandidateSelection, Executor, Recruitment; `raid::util` | transport-twitch, db, crypto, transport-discord | rand |
 | `tb-analytics` | Datenerfassung (Helix→DB), SQL-Aggregation, CoachingEngine, Home-Service | transport-twitch, db, llm | regex |
 | `tb-billing` | Stripe (Subscription/Checkout/Invoice/Webhook), Connect+Payout, Gutschrift-PDF | db, crypto, http-core | async-stripe, printpdf* |

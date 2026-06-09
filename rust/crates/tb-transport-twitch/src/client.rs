@@ -51,6 +51,8 @@ pub struct HelixClient {
     http: Arc<Client>,
     config: HelixConfig,
     token: Arc<Mutex<Option<AppToken>>>,
+    /// Kategorie-Name (lowercase) → game_id (Python: `_category_cache`).
+    pub(crate) category_cache: Arc<Mutex<std::collections::HashMap<String, String>>>,
 }
 
 impl HelixClient {
@@ -61,6 +63,7 @@ impl HelixClient {
             http: Arc::new(http),
             config,
             token: Arc::new(Mutex::new(None)),
+            category_cache: Arc::new(Mutex::new(std::collections::HashMap::new())),
         })
     }
 
