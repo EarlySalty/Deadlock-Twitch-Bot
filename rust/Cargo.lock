@@ -2012,11 +2012,26 @@ dependencies = [
  "chrono",
  "serde",
  "serde_json",
+ "sha2",
  "sqlx",
  "tb-config",
  "tb-db",
  "tb-error",
  "tokio",
+]
+
+[[package]]
+name = "tb-bot"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "tb-config",
+ "tb-db",
+ "tb-internal-api",
+ "tb-transport-twitch",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]
@@ -2110,6 +2125,27 @@ dependencies = [
  "tokio",
  "tower",
  "tower-http",
+]
+
+[[package]]
+name = "tb-internal-api"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "chrono",
+ "serde",
+ "serde_json",
+ "sha2",
+ "sqlx",
+ "tb-analytics",
+ "tb-error",
+ "tb-http-core",
+ "tb-transport-twitch",
+ "tokio",
+ "tower",
+ "tower-http",
+ "tracing",
+ "url",
 ]
 
 [[package]]
