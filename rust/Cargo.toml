@@ -6,7 +6,7 @@ members = [
     "crates/tb-domain",
     "crates/tb-config",
     "crates/tb-observability",
-    # "crates/tb-db",  # Worker 2
+    "crates/tb-db",
 ]
 
 [workspace.package]
@@ -30,4 +30,4 @@ tb-crypto = { path = "crates/tb-crypto" }
 tb-domain = { path = "crates/tb-domain" }
 tb-config = { path = "crates/tb-config" }
 tb-observability = { path = "crates/tb-observability" }
-# tb-db = { path = "crates/tb-db" }  # Worker 2
+tb-db = { path = "crates/tb-db" }
