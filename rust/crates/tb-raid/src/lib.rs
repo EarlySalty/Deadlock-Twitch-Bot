@@ -20,12 +20,18 @@
 //! - [`strikes_store`] — Raid-Disabled-Strikes UPSERT. **6d.**
 //! - [`candidate_selection`] — reine Kandidaten-Auswahl-Logik (kein DB).
 //!   **6d.**
+//! - [`pending_raids`] — In-Memory-Store für ausstehende Raids + Key-Normalisierung.
+//!   **6e.**
+//! - [`arrival_tracking_store`] — DB-Store für `twitch_raid_arrival_tracking`
+//!   (INSERT / UPDATE / Unraid-Markierung). **6e.**
 //!
 //! Alle 6a (RaidAuth-Fundament). Plan: `docs/plans/2026-06-09-schritt-6-raid.md`.
 
+pub mod arrival_tracking_store;
 pub mod auth_writer;
 pub mod candidate_selection;
 pub mod oauth_flow;
+pub mod pending_raids;
 pub mod raid_blacklist;
 pub mod raid_executor;
 pub mod raid_history_store;
@@ -40,6 +46,7 @@ pub mod token_refresher;
 pub mod token_store;
 pub mod util;
 
+pub use arrival_tracking_store::{ArrivalTrackingStore, RecordArrivalInput};
 pub use auth_writer::{AuthWriteError, AuthWriter, NewAuth};
 pub use candidate_selection::{
     is_retryable_raid_error, select_by_score, select_fairest, FairnessCandidate, ScoredCandidate,
@@ -48,6 +55,9 @@ pub use candidate_selection::{
 pub use oauth_flow::{
     build_authorize_url, build_state_info, StreamerContextResolver,
     PUBLIC_WEBSITE_ONBOARDING_LOGIN, TWITCH_AUTHORIZE_URL,
+};
+pub use pending_raids::{
+    normalize_broadcaster_login, normalize_pending_raid_key, PendingRaid, PendingRaidStore,
 };
 pub use raid_blacklist::RaidBlacklistStore;
 pub use raid_executor::{RaidApi, RaidExecutor, RaidOutcome, RaidRequest};
