@@ -1,0 +1,15 @@
+[package]
+name = "tb-raid"
+version = "0.1.0"
+edition.workspace = true
+
+[dependencies]
+chrono      = { workspace = true }
+serde       = { workspace = true }
+serde_json  = { workspace = true }
+sqlx        = { workspace = true }
+tracing     = { workspace = true }
+tb-crypto   = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
