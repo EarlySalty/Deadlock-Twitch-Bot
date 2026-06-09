@@ -14,9 +14,20 @@ tracing-subscriber = { workspace = true }
 axum               = { workspace = true }
 async-trait        = { workspace = true }
 serde_json         = { workspace = true }
+chrono              = { workspace = true }
+chrono-tz           = { workspace = true }
+sqlx                = { workspace = true }
 tb-config           = { workspace = true }
 tb-db               = { workspace = true }
 tb-internal-api     = { workspace = true }
 tb-monitoring       = { workspace = true }
+tb-raid             = { workspace = true }
 tb-transport-discord = { workspace = true }
 tb-transport-twitch = { workspace = true }
+
+[features]
+integration = []
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["rt", "macros"] }
+sqlx  = { workspace = true }
