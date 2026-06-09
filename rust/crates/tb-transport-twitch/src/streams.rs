@@ -163,6 +163,51 @@ impl HelixClient {
         Ok(best)
     }
 
+    /// Thumbnail des neuesten VOD (`type=archive`) als 1280x720-URL mit
+    /// `rand`-Cache-Buster (Python `get_latest_vod_thumbnail`). Best-effort.
+    pub async fn get_latest_vod_thumbnail(
+        &self,
+        user_id: &str,
+    ) -> Result<Option<String>, HelixError> {
+        let user_id = user_id.trim();
+        if user_id.is_empty() {
+            return Ok(None);
+        }
+        let resp = self
+            .get("/videos")
+            .await?
+            .query(&[("user_id", user_id), ("type", "archive"), ("first", "1")])
+            .send()
+            .await?;
+        if !resp.status().is_success() {
+            return Ok(None);
+        }
+        #[derive(Deserialize)]
+        struct VideosResponse {
+            #[serde(default)]
+            data: Vec<VideoEntry>,
+        }
+        #[derive(Deserialize)]
+        struct VideoEntry {
+            #[serde(default)]
+            thumbnail_url: String,
+        }
+        let body: VideosResponse = resp.json().await?;
+        let thumb = body
+            .data
+            .first()
+            .map(|v| v.thumbnail_url.trim().to_string())
+            .filter(|t| !t.is_empty());
+        Ok(thumb.map(|t| {
+            let resolved = t.replace("{width}", "1280").replace("{height}", "720");
+            let rand = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs())
+                .unwrap_or(0);
+            format!("{resolved}?rand={rand}")
+        }))
+    }
+
     /// Follower-Gesamtzahl via `/channels/followers`. Best-effort: Der
     /// `total`-Wert verlangt einen Moderator-Token — mit App-Token antwortet
     /// Twitch 401/403, dann (und bei jedem non-200) kommt `None` zurück.

@@ -129,6 +129,7 @@ fn live_stream(login: &str, user_id: &str, stream_id: &str, viewers: i32) -> Str
         is_mature: false,
         tags: vec![format!("uid-{user_id}")],
         started_at: Some((Utc::now() - Duration::minutes(5)).to_rfc3339()),
+        thumbnail_url: None,
     }
 }
 

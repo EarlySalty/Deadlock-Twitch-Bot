@@ -21,6 +21,7 @@
 //! deshalb 1:1 zum Python-Original — bewusste Abweichungen sind im
 //! Plan-Doc `docs/plans/2026-06-09-schritt-4-monitoring.md` dokumentiert.
 
+pub mod announce;
 pub mod dispatch;
 pub mod exp_sessions;
 pub mod guard;
@@ -35,6 +36,10 @@ pub mod stream;
 pub mod subscriptions;
 pub mod telemetry;
 
+pub use announce::{
+    AnnounceConfigStore, AnnouncementSettings, AnnouncementTransport, BrokerAnnouncementSink,
+    NoVodPreview, VodPreviewSource,
+};
 pub use dispatch::{DispatchOutcome, EventSubDispatcher, EventSubHooks, NoopEventSubHooks};
 pub use exp_sessions::{ExpSessionStore, ExpSessionTracker};
 pub use guard::{GuardKind, GuardStore};

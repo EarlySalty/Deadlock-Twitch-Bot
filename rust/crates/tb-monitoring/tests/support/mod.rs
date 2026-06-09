@@ -210,6 +210,10 @@ pub async fn pool_in_schema(schema: &str) -> Option<PgPool> {
             id BIGSERIAL PRIMARY KEY, twitch_user_id TEXT, title TEXT,
             game_name TEXT, language TEXT, recorded_at TIMESTAMPTZ
         )",
+        "CREATE TABLE twitch_live_announcement_configs (
+            streamer_login TEXT PRIMARY KEY,
+            config_json TEXT
+        )",
         "CREATE TABLE twitch_eventsub_capacity_snapshot (
             id BIGSERIAL PRIMARY KEY, ts_utc TIMESTAMPTZ, trigger_reason TEXT,
             listener_count INTEGER, ready_listeners INTEGER, failed_listeners INTEGER,

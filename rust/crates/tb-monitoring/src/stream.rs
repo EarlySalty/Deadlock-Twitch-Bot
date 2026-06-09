@@ -20,6 +20,8 @@ pub struct StreamSnapshot {
     pub tags: Vec<String>,
     /// Stream-Start laut Helix (RFC3339).
     pub started_at: Option<String>,
+    /// Vorschaubild-Template laut Helix (`{width}`/`{height}`-Platzhalter).
+    pub thumbnail_url: Option<String>,
 }
 
 impl StreamSnapshot {

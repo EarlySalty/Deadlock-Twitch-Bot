@@ -1,3 +1,14 @@
+## #115 — Go-Live-Embeds in Rust (Schritt 4e)
+
+**Ausgangslage:** Der letzte fehlende Monitoring-Baustein vor dem Umschalt-Schritt: die Discord-Ankündigungen. Geht ein Partner mit Deadlock live, postet der Bot ein konfigurierbares Embed mit Ping-Rolle und Tracking-Button; endet der Stream, wird dasselbe Posting zum „ist OFFLINE"-Embed mit VOD-Button umgebaut.
+
+**Geändert:** Das komplette Announcement-System ist nachgebaut — in zwei sauber getrennten Teilen:
+
+- **Template-Engine** (reine Logik, ohne Netz/Datenbank): Jeder Streamer kann sein Embed per gespeicherter Konfiguration anpassen — Titel-/Beschreibungs-/Footer-Vorlagen mit Platzhaltern wie `{channel}`, `{game}`, `{viewer_count}` oder `{uptime}`, Farben (auch als Hex), eigene Felder, Bild-Modi (Stream-Vorschau, eigenes Bild, keins) und Erwähnungs-Regeln. Unbekannte Platzhalter bleiben sichtbar stehen, Discord-Längenlimits werden eingehalten, und das Vorschaubild bekommt einen stabilen Cache-Buster, damit Discord beim erneuten Senden kein veraltetes Bild zeigt.
+- **Broker-Versand:** Gesendet wird wie bisher über die interne Discord-Bridge mit deterministischem Idempotenz-Schlüssel — derselbe Inhalt kann nicht doppelt gepostet werden, auch wenn der Versand wiederholt wird. Schlägt das Senden fehl, merkt sich der Bot Tracking-Token und Render-Zeitpunkt und versucht es im nächsten Durchlauf mit identischem Token erneut. Das Stream-Ende editiert das Posting zum Offline-Embed (inkl. VOD-Vorschaubild des letzten Streams, sofern abrufbar) und hängt einen einfachen VOD-Link-Button an.
+
+**Bewusste Grenze:** Das automatische *Anlegen* der „ist live"-Ping-Rollen braucht die Discord-Verbindung des Python-Bots — Rust verwendet die bereits hinterlegte Rollen-ID. Auch das ist im Cutover-Plan als offener Punkt notiert.
+
 ## #114 — EventSub-Subscription-Verwaltung in Rust (Schritt 4d, Teil 2)
 
 **Ausgangslage:** Empfangen konnte Rust seit #113 — aber jemand muss Twitch auch sagen, welche Events es überhaupt schicken soll. Diese Anmeldungen (Subscriptions) leben bei Twitch und müssen pro Streamer angelegt, beim Start abgeglichen und bei departnerten Streamern wieder abgeräumt werden.
