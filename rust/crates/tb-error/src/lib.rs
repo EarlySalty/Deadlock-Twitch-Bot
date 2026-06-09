@@ -28,3 +28,15 @@ pub enum CryptoError {
     #[error("encryption failed")]
     EncryptFailed,
 }
+
+/// Fehler beim Laden typisierter Settings (`tb-config`).
+#[derive(Debug, Error)]
+pub enum ConfigError {
+    /// Pflicht-Setting fehlt oder ist leer.
+    #[error("required setting missing: {0}")]
+    MissingRequired(String),
+
+    /// Setting hat einen ungültigen Wert (z. B. nicht parsebar).
+    #[error("invalid setting {0}")]
+    Invalid(String),
+}

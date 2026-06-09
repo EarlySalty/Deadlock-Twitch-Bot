@@ -3,6 +3,10 @@ resolver = "2"
 members = [
     "crates/tb-error",
     "crates/tb-crypto",
+    "crates/tb-domain",
+    "crates/tb-config",
+    "crates/tb-observability",
+    # "crates/tb-db",  # Worker 2
 ]
 
 [workspace.package]
@@ -16,5 +20,14 @@ hex = "0.4"
 rand = "0.8"
 zeroize = "1"
 serde_json = "1"
+serde = { version = "1", features = ["derive"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+sqlx = { version = "0.8", default-features = false, features = ["postgres", "runtime-tokio", "tls-rustls", "macros", "migrate"] }
 tb-error = { path = "crates/tb-error" }
 tb-crypto = { path = "crates/tb-crypto" }
+tb-domain = { path = "crates/tb-domain" }
+tb-config = { path = "crates/tb-config" }
+tb-observability = { path = "crates/tb-observability" }
+# tb-db = { path = "crates/tb-db" }  # Worker 2
