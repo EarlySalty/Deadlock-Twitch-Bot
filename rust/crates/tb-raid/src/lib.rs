@@ -16,6 +16,7 @@
 
 pub mod auth_writer;
 pub mod oauth_flow;
+pub mod raid_blacklist;
 pub mod scope_profiles;
 pub mod state_store;
 pub mod token_blacklist;
@@ -28,6 +29,7 @@ pub use oauth_flow::{
     build_authorize_url, build_state_info, StreamerContextResolver,
     PUBLIC_WEBSITE_ONBOARDING_LOGIN, TWITCH_AUTHORIZE_URL,
 };
+pub use raid_blacklist::RaidBlacklistStore;
 pub use scope_profiles::{
     normalize_scope_profile, scopes_for_profile, AUTO_SCOPE_PROFILE, BASE_CRITICAL_STREAMER_SCOPES,
     BASE_SCOPE_PROFILE, BASE_STREAMER_SCOPES, DASHBOARD_REAUTH_SCOPE_PROFILE,
