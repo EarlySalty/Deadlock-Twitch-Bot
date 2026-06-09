@@ -38,6 +38,7 @@ pub mod raid_history_store;
 pub mod scope_profiles;
 pub mod score_store;
 pub mod scoring;
+pub mod signal_correlation;
 pub mod state_store;
 pub mod strikes_store;
 pub mod token_blacklist;
@@ -74,6 +75,10 @@ pub use scoring::{
     compute_scores, compute_time_pattern_score, ScoreComponents, ScoringInputs,
     DEFAULT_RAID_BOOST_MULTIPLIER, NEUTRAL_SCORE, NEW_PARTNER_MAX_MULTIPLIER,
     NEW_PARTNER_RAID_THRESHOLD, RAID_BOOST_MULTIPLIER,
+};
+pub use signal_correlation::{
+    ActionData, RaidSignalAction, RaidSignalActionKind, RaidSignalCorrelationService,
+    RaidSignalOutcome, RaidSignalPlan, RaidSignalType,
 };
 pub use state_store::{RaidOAuthState, StateStore};
 pub use strikes_store::StrikesStore;
