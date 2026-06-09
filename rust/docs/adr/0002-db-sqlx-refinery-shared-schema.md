@@ -1,6 +1,7 @@
-# ADR 0002 — sqlx + refinery, geteiltes Schema als unveränderte Baseline
+# ADR 0002 — sqlx (Pool + native Migrationen), geteiltes Schema als unveränderte Baseline
 
-- **Status:** akzeptiert (2026-06-08)
+- **Status:** akzeptiert (2026-06-08); **verfeinert 2026-06-09 (Phase 0b):** Migrations-Engine =
+  sqlx-native (`sqlx::migrate!`) statt refinery — Begründung unten.
 - **Kontext-Doku:** [`02-db-contract.md`](../02-db-contract.md)
 
 ## Kontext
@@ -16,9 +17,13 @@ verteilt DDL heute über fünf Verzeichnisse und führt teils `_ensure_*`-DDL pr
   der `query!`-Makros, damit Timescale-Tabellen und das bestehende (nicht von Rust erzeugte) Schema
   ohne Compile-Zeit-Schemaabgleich nutzbar sind. Wo eine Tabelle voll unter Rust-Kontrolle steht,
   dürfen geprüfte Makros (offline-Modus) verwendet werden.
-- **Migrations:** `refinery` als einzige DDL-SSOT unter `rust/migrations/`. Das **bestehende
-  Prod-Schema wird als Baseline markiert** (nicht neu angelegt, nicht verändert). Rust-Migrations
-  beginnen erst oberhalb dieser Baseline; Timescale-spezifische DDL als raw SQL.
+- **Migrations:** **sqlx-native** (`sqlx::migrate!`, Tracking-Tabelle `_sqlx_migrations`) als einzige
+  DDL-SSOT unter `rust/migrations/`. **refinery verworfen**, weil es einen zweiten PostgreSQL-Treiber
+  (tokio-postgres) neben sqlx erzwingen würde — unnötige Doppelung. Das **bestehende Prod-Schema ist
+  die Baseline** (nicht neu angelegt, nicht verändert; `rust/migrations/` ist vorerst leer, `run`
+  legt nur `_sqlx_migrations` an). Rust-Migrationen beginnen erst oberhalb dieser Baseline;
+  Timescale-spezifische DDL als raw SQL. `_sqlx_migrations` ist getrennt von der Python-`schema_version`
+  (component-PK) → kein Konflikt im Parallelbetrieb (in Phase 0b empirisch bestätigt).
 - **Pool:** sqlx-Pool ersetzt den Eigenbau-LIFO-Pool (`_pool.py`) komplett.
 - **Idempotenz:** ein zentraler Idempotency-Store in `tb-db` (für die `X-Idempotency-Key`-Logik der
   internen API).
@@ -34,7 +39,8 @@ verteilt DDL heute über fünf Verzeichnisse und führt teils `_ensure_*`-DDL pr
 - Runtime-`query()` verliert den Compile-Zeit-Schemaschutz → Row-Mapping muss durch Tests
   abgesichert werden (Vertrags-Tests gegen das echte Schema in Phase 0).
 - Die Baseline-Markierung muss sauber gesetzt sein, bevor irgendein Rust-Schreibzugriff erfolgt,
-  sonst riskiert refinery DDL gegen Prod.
+  sonst riskiert die Migration DDL gegen Prod. (In 0b läuft `run_migrations` nur gegen den
+  Wegwerf-Testcontainer; gegen Prod wird ausschließlich read-only verifiziert.)
 
 ## Offen
 

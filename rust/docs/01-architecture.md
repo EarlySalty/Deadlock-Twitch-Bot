@@ -25,11 +25,11 @@ rust/
 | Crate | Verantwortung | hängt an | Libs |
 |---|---|---|---|
 | `tb-error` | zentrale `Error`/`Result`, `thiserror`-Enums je Domäne, HTTP-Mapping | — | thiserror |
-| `tb-domain` | reine Domänen-Typen (StreamerLogin, PartnerStatus, Score, PlanTier, RaidPlan, Row-Structs) — **kein I/O** | tb-error | serde, time |
-| `tb-config` | typisierte Settings aus Env/Infisical, kein globaler Mutable-State | tb-error | serde, figment |
+| `tb-domain` | reine Domänen-Typen (StreamerLogin, PartnerStatus, Score, PlanTier, RaidPlan) — **kein I/O, keine sqlx-Kopplung** (DB-Row-Structs liegen in `tb-db`) | tb-error | serde, time |
+| `tb-config` | typisierte Settings aus Env (Closure-injizierbarer Loader, kein globaler Mutable-State) | tb-error | serde (kein figment) |
 | `tb-observability` | tracing-Setup, Observability-Event-Writer (mpsc→DB-Task), Metrics | tb-config, tb-db | tracing |
 | `tb-crypto` | AES-256-GCM-Feldverschlüsselung (raid_auth, social-media), Session-Krypto, keyring | tb-error | aes-gcm, keyring, hmac, sha2 |
-| `tb-db` | sqlx-Pool, **eine** Migrations-SSOT, Row-Mapping, Tx-Helper, Idempotency-Store | tb-domain, tb-error | sqlx (postgres,tokio), refinery |
+| `tb-db` | sqlx-Pool, **eine** Migrations-SSOT (sqlx-native), Row-Structs/-Mapping, Tx-Helper, Idempotency-Store | tb-domain, tb-config, tb-error | sqlx (postgres, tokio, migrate) |
 | `tb-transport-twitch` | Helix-Wrapper (shared `Arc<Client>`), Token-Manager (Auto-Refresh), OAuth2-PKCE | tb-config, tb-crypto, tb-error | reqwest (rustls), twitch_api, oauth2 |
 | `tb-transport-discord` | `DiscordBackend`-Trait + `BrokerRelay`-Impl (HTTP an 8770) + `Noop`, Embed-Builder | tb-config, tb-error | reqwest |
 | `tb-eventsub` | EventSub WS-Pool + Webhook-HMAC-Verify + Inbox/Outbox-Queue (`FOR UPDATE SKIP LOCKED`) | tb-transport-twitch, tb-db | tokio-tungstenite, hmac |

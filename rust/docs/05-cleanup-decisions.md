@@ -8,12 +8,13 @@ und die Ziel-Lösung.
 
 Schema, Pool, Sessions und Domain-Queries (Global-Ban, Billing, Clip-Templates) werden getrennt.
 Alle heute über `engagement/`, `chat/`, `analytics/`, `social_media/`, `migrations/` verstreuten
-DDLs ziehen in **ein** `migrations/`-Verzeichnis (refinery). Die linearen `if/elif`-Versionssprünge
+DDLs ziehen in **ein** `migrations/`-Verzeichnis (sqlx-native via `sqlx::migrate!`). Die linearen `if/elif`-Versionssprünge
 (v1–v7) und `_pg_add_col_if_missing`-Drift entfallen.
 
-## 2. Eigenbau-LIFO-Pool (`_pool.py`) → sqlx/deadpool
+## 2. Eigenbau-LIFO-Pool (`_pool.py`) → sqlx-Pool
 
-Komplett ersetzen, keine Eigenimplementierung.
+Komplett ersetzen, keine Eigenimplementierung. Migrationen laufen ebenfalls über sqlx
+(`sqlx::migrate!`) — **ein** PG-Treiber, kein refinery/tokio-postgres-Doppel.
 
 ## 3. Mixin-Gottklassen auflösen *(durchgängig)*
 

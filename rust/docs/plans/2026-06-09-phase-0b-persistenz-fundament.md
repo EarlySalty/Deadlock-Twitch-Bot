@@ -856,11 +856,12 @@ async fn row_structs_map_real_columns() {
 Run:
 ```bash
 cd /home/naniadm/Documents/Deadlock-Twitch-Bot/rust && source "$HOME/.cargo/env"
-source scripts/test_db.sh up
-TB_TEST_DATABASE_URL="$TB_TEST_DATABASE_URL" cargo test -p tb-db --test hermetic
+bash scripts/test_db.sh up
+TB_TEST_DATABASE_URL="postgres://postgres:tbtest@127.0.0.1:5434/postgres" cargo test -p tb-db --test hermetic
 bash scripts/test_db.sh down
 ```
 Expected: 3 Tests grün (`pool_connects_and_pings`, `migrations_create_tracking_table_and_touch_nothing_else`, `row_structs_map_real_columns`).
+> **Nicht** `source scripts/test_db.sh` nutzen: das Skript läuft mit `set -euo pipefail`, das in die aufrufende Shell durchschlägt. `bash …` + expliziter `TB_TEST_DATABASE_URL`. Der Readiness-Check im Skript wartet auf den **zweiten** „ready to accept connections"-Logeintrag (echter TCP-Server), sonst resettet der Docker-Port-Proxy die Verbindung.
 
 ---
 
