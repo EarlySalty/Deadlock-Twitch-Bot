@@ -6,8 +6,9 @@ use axum::{
     Json,
 };
 use serde::Serialize;
+use serde_json::Value;
 
-/// Einheitliches Fehler-Payload der internen API.
+/// Einheitliches Fehler-Payload der internen API (statische Strings).
 #[derive(Debug, Serialize)]
 pub struct ApiErrorBody {
     pub error: &'static str,
@@ -19,6 +20,8 @@ pub struct ApiErrorBody {
 pub struct ApiError {
     pub status: StatusCode,
     pub body: ApiErrorBody,
+    /// Optionaler dynamischer JSON-Override (überschreibt `body` bei IntoResponse).
+    dyn_body: Option<Value>,
 }
 
 impl ApiError {
@@ -30,6 +33,7 @@ impl ApiError {
                 error: "forbidden",
                 message: "only loopback connections are allowed",
             },
+            dyn_body: None,
         }
     }
 
@@ -41,6 +45,7 @@ impl ApiError {
                 error: "unauthorized",
                 message: "missing or invalid internal token",
             },
+            dyn_body: None,
         }
     }
 
@@ -52,6 +57,7 @@ impl ApiError {
                 error: "plan_required",
                 message: "analytics.extended entitlement required",
             },
+            dyn_body: None,
         }
     }
 
@@ -63,12 +69,41 @@ impl ApiError {
                 error: "internal_error",
                 message: "internal server error",
             },
+            dyn_body: None,
+        }
+    }
+
+    /// 404 Not Found.
+    pub fn not_found() -> Self {
+        Self {
+            status: StatusCode::NOT_FOUND,
+            body: ApiErrorBody {
+                error: "not_found",
+                message: "resource not found",
+            },
+            dyn_body: None,
+        }
+    }
+
+    /// 400 Bad Request mit dynamischem JSON-Body.
+    pub fn bad_request_with_body(body: serde_json::Value) -> Self {
+        Self {
+            status: StatusCode::BAD_REQUEST,
+            body: ApiErrorBody {
+                error: "bad_request",
+                message: "bad request",
+            },
+            dyn_body: Some(body),
         }
     }
 }
 
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
-        (self.status, Json(self.body)).into_response()
+        if let Some(dyn_body) = self.dyn_body {
+            (self.status, Json(dyn_body)).into_response()
+        } else {
+            (self.status, Json(self.body)).into_response()
+        }
     }
 }

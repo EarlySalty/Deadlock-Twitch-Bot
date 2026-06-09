@@ -1,3 +1,18 @@
+## #106 — Admin-Streamer-Endpoints (Rust Schritt 2b)
+
+**Ausgangslage:** Das Rust-Dashboard konnte nach Schritt 2a zwar den Systemzustand abfragen, hatte aber noch keinen Ersatz für die Python-seitigen Admin-Streamer-Übersichten — keine Möglichkeit, alle Partner nach Status zu filtern oder einen einzelnen Streamer vollständig abzufragen.
+
+**Geändert:** Zwei neue Admin-only-Endpoints unter `/twitch/api/admin/streamers/`:
+
+- **`GET /twitch/api/admin/streamers?view=<view>`** — gibt alle Streamer eines bestimmten Views zurück: `active`, `archived`, `departnered`, `blocked`, `non_partner`, `token_error` oder `all`. Ungültiger View → 400 mit Liste der erlaubten Werte.
+- **`GET /twitch/api/admin/streamers/{login}`** — vollständige Detail-Ansicht eines Streamers mit Settings, OAuth-Zustand (inkl. Scope-Diff gegen die 7 Required-Scopes), Stream-Stats und letzten 10 Sessions.
+
+Beide Endpoints berechnen den OAuth-Status (`connected/partial/reauth/missing`) und den logischen Partner-Status (`active/archived/departnered/blocked/non_partner/token_error`) lokal aus den DB-Feldern — exakt dieselbe Logik wie bisher in Python.
+
+**Wie es jetzt funktioniert:** Die Query nutzt 5 CTEs (Billing, Partner-State mit ROW_NUMBER-Dedup, Live-State mit User-ID-bevorzugtem JOIN, OAuth mit Reauth-Flag, letzte Stream-Session). Der WHERE-Zweig für den jeweiligen View ist als statischer String im Code hinterlegt und wird per `format!` eingesetzt — kein dynamischer SQL-Wert, kein Injection-Risiko. Zusätzlich wurde `ApiError::not_found()` und `ApiError::bad_request_with_body()` in `tb-http-core` ergänzt.
+
+---
+
 ## #105 — Admin-Session: 5-Minuten-Cap beim Cross-Dashboard-Login entfernt
 
 **Ausgangslage:** Wenn man sich am Discord-Dashboard einloggte und dann das Twitch-Dashboard öffnete, holte der Twitch-Bot die Session per internem API-Call vom Discord-Bot — soweit korrekt. Das Problem: Die lokal gecachte Session wurde dabei mit `expires_at = now + 300` gespeichert (hardcoded 5 Minuten), obwohl die eigentliche Session im Discord-Bot noch 2 Wochen gültig war. Nach 5 Minuten galt die lokale Kopie als abgelaufen; Route-Handler sahen keine gültige Session mehr und verhielten sich inkonsistent, während Caddys Forward-Auth (der parallel re-validiert) noch 200 zurückgab.

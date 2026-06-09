@@ -84,11 +84,30 @@ pub fn build_admin_system_router(pool: PgPool, token: String) -> Router {
         .layer(CorsLayer::permissive())
 }
 
-/// Zusammengeführter Router: public + authed + admin-system.
+/// Baut den Router für Admin-Streamer-Endpoints.
+pub fn build_admin_streamers_router(pool: PgPool, token: String) -> Router {
+    use handlers::admin_streamers;
+
+    Router::new()
+        .route(
+            "/twitch/api/admin/streamers",
+            get(admin_streamers::list_handler),
+        )
+        .route(
+            "/twitch/api/admin/streamers/:login",
+            get(admin_streamers::detail_handler),
+        )
+        .with_state(pool)
+        .layer(Extension(ExpectedToken(token)))
+        .layer(CorsLayer::permissive())
+}
+
+/// Zusammengeführter Router: public + authed + admin-system + admin-streamers.
 ///
 /// Kein doppelter CorsLayer — jeder Sub-Router hat seinen eigenen.
 pub fn build_router(pool: PgPool, token: String) -> Router {
     build_public_router(pool.clone())
         .merge(build_authed_router(pool.clone(), token.clone()))
-        .merge(build_admin_system_router(pool, token))
+        .merge(build_admin_system_router(pool.clone(), token.clone()))
+        .merge(build_admin_streamers_router(pool, token))
 }
