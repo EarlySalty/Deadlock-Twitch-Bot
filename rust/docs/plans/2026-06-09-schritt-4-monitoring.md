@@ -69,6 +69,21 @@ Webhook-Empfang bleibt beim Python-Dashboard, bis dessen eigene Phase kommt.
 Slices 4a–4e laufen ohne Prod-Berührung (Python bleibt alleiniger Live-Writer);
 das gesamte Risiko konzentriert sich auf 4f (Wartungsfenster).
 
+## Prod-Schema-Befunde (read-only verifiziert 2026-06-09, siehe `tb-db/tests/prod_contract.rs`)
+
+- **Das `pg.py`-DDL ist veraltet.** Prod hat für `twitch_stream_sessions` /
+  `twitch_session_viewers` / `twitch_stats_*` längst `timestamptz`, `boolean` und
+  `bigint`-IDs — nicht die TEXT/INTEGER-Typen aus dem CREATE-TABLE-Code. Der Rust-Port
+  bindet die echten Typen direkt (chrono `DateTime<Utc>`, `bool`, `i64`).
+- `twitch_live_state` und `exp_*` führen dagegen **TEXT-Timestamps** (ISO,
+  Sekunden-Präzision, `+00:00`-Suffix) und INTEGER-Flags — Format byte-kompatibel
+  zu Pythons `isoformat(timespec="seconds")` halten.
+- **Prod-Bug gefunden:** Der Chatter-Count im Session-Finalize macht `SUM(boolean)` —
+  diese Funktion existiert in Postgres nicht. Seit der Boolean-Migration der
+  `twitch_session_chatters`-Flags schlägt die Query still fehl (try/except →
+  Debug-Log) und **jede finalisierte Session schreibt 0 unique/first-time/returning
+  Chatters**. Rust fixt das mit `COUNT(*) FILTER (WHERE …)`.
+
 ## Bewusste Abweichungen vom Python-Original
 
 - Guard-`claim`: kein `DELETE` aller abgelaufenen Rows im Hot-Path (Python macht das bei
@@ -77,5 +92,21 @@ das gesamte Risiko konzentriert sich auf 4f (Wartungsfenster).
   DB-Fehler im Lease-Pfad still); Rust loggt, wartet, macht weiter.
 - Python-Bug nicht mitportiert: Dead-Letter-Hook referenziert bei kaputtem Payload-JSON
   eine ungebundene Variable (`payload`) → würde den Inbox-Task killen.
-- Session-Insert bekommt DB-seitigen Doppel-Insert-Guard (Invariante 2).
+- Session-Insert bekommt DB-seitigen Doppel-Insert-Guard (Invariante 2):
+  Advisory-Xact-Lock pro Login + Open-Session-Check in derselben Transaktion;
+  Race liefert `AlreadyOpen(id)` statt einer zweiten Row.
+- Chatter-Zählung via `COUNT(*) FILTER` statt Pythons kaputtem `SUM(boolean)`
+  (siehe Prod-Schema-Befunde).
 - WS-Pool entfällt (Fork 1), `exp_*` nur Write-Hooks (Fork 2).
+
+## Cutover-Kopplungen (für 4f zu klären)
+
+Python-Finalize stößt zwei subsystemfremde Seiteneffekte an, die der Rust-Port
+bewusst (noch) nicht hat — beim Cutover müssen sie adressiert sein:
+
+1. **Partner-Raid-Score-Tracking-Resolve** (`resolve_partner_raid_tracking_for_session`,
+   Raid-Subsystem Phase 6).
+2. **IRC-Lurker-Experiment-Finalize** (Chat-Subsystem).
+
+Dazu kommen die EventSub-getriggerten Raid-Flows (Auto-Raid bei `stream.offline`,
+Raid-Score-Refresh) — Ownership-Split pro Sub-Type wird in 4d/4f festgelegt.

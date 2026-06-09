@@ -1,3 +1,16 @@
+## #111 — Monitoring-Write-Core in Rust (Schritt 4b) + zwei Prod-Befunde
+
+**Ausgangslage:** Nach dem Idempotenz-Fundament (#110) fehlte der eigentliche Schreibkern des Monitorings: Wer ist live, welche Stream-Session läuft, Viewer-Verläufe, Statistik-Zeitreihen. Das ist der Teil, der pro Poll-Tick in die Datenbank schreibt.
+
+**Geändert:** Der komplette Write-Core ist jetzt in Rust nachgebaut — Live-State (inkl. Drift-Schutz: wechselt ein Login die Twitch-User-ID, wird die alte Zeile vorher entfernt, Konflikt-Schlüssel bleibt die User-ID), Session-Lebenszyklus (Anlegen, Viewer-Samples mit laufendem Durchschnitt/Peak, Abschluss mit Retention-Kennzahlen bei 5/10/20 Minuten, größtem Zuschauer-Einbruch, Chatter-Zählung und Follower-Differenz), Auto-Aufräumen verwaister Sessions (Scout-Reste nach 24 h, eingeschlafene Sessions 1 h nach dem letzten Viewer-Datenpunkt) und die Statistik-Zeitreihen. Die experimentellen Analytics-Tabellen werden dünn mitgeschrieben, weil AI-Reports sie lesen.
+
+**Beim Verifizieren des echten Datenbank-Schemas (read-only) kamen zwei Dinge ans Licht:**
+
+- **Die Tabellen-Definitionen im Python-Code sind veraltet.** Die echte Datenbank führt für Sessions längst echte Zeitstempel-, Boolean- und Bigint-Spalten statt der im Code behaupteten Text-/Integer-Typen. Der Rust-Port bindet die echten Typen direkt; ein neuer Schema-Vertrags-Test schlägt künftig an, wenn Prod davon abweicht.
+- **Ein stiller Prod-Bug:** Die Chatter-Zählung beim Session-Abschluss benutzt eine SQL-Funktion, die es für Boolean-Spalten nicht gibt (`SUM` auf einem Wahrheitswert). Seit der Umstellung dieser Spalten schlägt die Abfrage bei jedem Abschluss fehl, der Fehler wird nur als Debug-Zeile geschluckt — **jede Session wurde mit 0 einzigartigen/neuen/wiederkehrenden Chattern gespeichert**. Die Rust-Version zählt korrekt über einen Filter-Ausdruck.
+
+**Außerdem bewusst robuster als das Original:** Das Anlegen einer Session ist jetzt datenbankseitig gegen Doppel-Einträge abgesichert (Sperre pro Login + Prüfung in derselben Transaktion) — Python verlässt sich nur auf einen In-Memory-Cache, was bei einem Race zwei offene Sessions erzeugen kann. Abgesichert mit 16 Tests gegen eine Wegwerf-Datenbank plus Kennzahlen-Unit-Tests.
+
 ## #110 — Idempotenz-Fundament fürs Monitoring (Rust Schritt 4a)
 
 **Ausgangslage:** Schritt 4 des Rust-Umbaus portiert das Monitoring — den Teil des Bots, der weiß wer live ist, Sessions und Statistiken schreibt und Go-Live-Posts auslöst. Bevor irgendein Schreibpfad portiert werden kann, braucht es das Fundament, auf dem dort alles ruht: die Mechanik, die garantiert, dass jedes Twitch-Event genau einmal wirkt, auch wenn es doppelt ankommt oder die Verarbeitung mittendrin abstürzt.

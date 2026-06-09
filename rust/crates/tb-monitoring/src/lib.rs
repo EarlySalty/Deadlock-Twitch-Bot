@@ -1,6 +1,6 @@
 //! tb-monitoring — Monitoring-Subsystem des Twitch-Bots (Schritt 4).
 //!
-//! Slice 4a: das Idempotenz-Fundament, auf dem alle Ingress-Pfade ruhen:
+//! Slice 4a — Idempotenz-Fundament:
 //!
 //! - [`guard`] — persistenter Guard-Store (`eventsub_guard_state`), das
 //!   Exactly-once-Primitiv (Message-Dedup, Offline-Throttle, Business-Effekte).
@@ -8,18 +8,40 @@
 //!   (`twitch_eventsub_processing_inbox`/`_dead_letter`) mit Leased-Worker,
 //!   die Empfang von Verarbeitung entkoppelt.
 //!
-//! Beide Tabellen teilen sich Python und Rust während der Migration
+//! Slice 4b — Write-Core des Poll-Pfads:
+//!
+//! - [`live_state`] — „Wer ist live"-Wahrheit (`twitch_live_state`).
+//! - [`sessions`] — Session-Lebenszyklus (`twitch_stream_sessions` + Viewers).
+//! - [`stats`] — Time-Series (`twitch_stats_tracked`/`_category`).
+//! - [`exp_sessions`] — dünne Hooks des Experimental-Analytics (Fork 2).
+//! - [`stream`] — Domänen-Sicht auf einen Helix-Stream + Zeit-Helfer.
+//!
+//! Die Tabellen teilen sich Python und Rust während der Migration
 //! (Schema-Vertrag, siehe `docs/02-db-contract.md`); die Semantik ist
 //! deshalb 1:1 zum Python-Original — bewusste Abweichungen sind im
 //! Plan-Doc `docs/plans/2026-06-09-schritt-4-monitoring.md` dokumentiert.
 
+pub mod exp_sessions;
 pub mod guard;
 pub mod inbox_runtime;
 pub mod inbox_store;
+pub mod live_state;
+pub mod sessions;
+pub mod stats;
+pub mod stream;
 
+pub use exp_sessions::{ExpSessionStore, ExpSessionTracker};
 pub use guard::{GuardKind, GuardStore};
 pub use inbox_runtime::{
     ClockFn, DeadLetterHook, DeadLetterNotice, HandlerError, InboxHandler, InboxRuntime,
     InboxRuntimeHandle,
 };
 pub use inbox_store::{DeadLetterEntry, LeasedWork, PendingEntry, ProcessingInboxStore};
+pub use live_state::{
+    FinalizeState, LiveStateRow, LiveStateStore, LiveStateUpsert, SnapshotEntry, TrackedStreamer,
+};
+pub use sessions::{
+    FollowerCountSource, NewSession, NoFollowerSource, SessionStore, SessionTracker, StartOutcome,
+};
+pub use stats::{StatsSample, StatsStore};
+pub use stream::StreamSnapshot;

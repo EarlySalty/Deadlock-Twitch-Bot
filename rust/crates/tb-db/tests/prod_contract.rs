@@ -80,3 +80,83 @@ async fn prod_owner_tables_match_contract() {
         Some("integer")
     );
 }
+
+#[tokio::test]
+async fn prod_monitoring_tables_match_contract() {
+    let dsn = match prod_dsn() {
+        Some(d) => d,
+        None => {
+            eprintln!(
+                "SKIP: TWITCH_ANALYTICS_DSN nicht gesetzt — Vertrags-Test wird übersprungen."
+            );
+            return;
+        }
+    };
+    let cfg = DbConfig {
+        dsn,
+        pool_max: 2,
+        acquire_timeout: Duration::from_secs(5),
+        connect_timeout: Duration::from_secs(5),
+    };
+    let pool = tb_db::connect(&cfg)
+        .await
+        .expect("connect prod (read-only)");
+
+    // Verifiziert 2026-06-09: Das pg.py-DDL ist veraltet — Prod hat für die
+    // Session-Tabellen längst timestamptz/boolean/bigint. Der Rust-Port bindet
+    // diese Typen direkt; dieser Test schlägt an, falls Prod davon abweicht.
+    let sessions = column_types(&pool, "twitch_stream_sessions").await;
+    assert_eq!(sessions.get("id").map(String::as_str), Some("bigint"));
+    assert_eq!(
+        sessions.get("started_at").map(String::as_str),
+        Some("timestamp with time zone")
+    );
+    assert_eq!(
+        sessions.get("is_mature").map(String::as_str),
+        Some("boolean")
+    );
+    assert_eq!(
+        sessions.get("had_deadlock_in_session").map(String::as_str),
+        Some("boolean")
+    );
+    assert_eq!(
+        sessions.get("avg_viewers").map(String::as_str),
+        Some("double precision")
+    );
+
+    let viewers = column_types(&pool, "twitch_session_viewers").await;
+    assert_eq!(viewers.get("session_id").map(String::as_str), Some("bigint"));
+    assert_eq!(
+        viewers.get("ts_utc").map(String::as_str),
+        Some("timestamp with time zone")
+    );
+
+    // Live-State dagegen führt TEXT-Timestamps und INTEGER-Flags.
+    let live_state = column_types(&pool, "twitch_live_state").await;
+    assert_eq!(
+        live_state.get("last_seen_at").map(String::as_str),
+        Some("text")
+    );
+    assert_eq!(live_state.get("is_live").map(String::as_str), Some("integer"));
+    assert_eq!(
+        live_state.get("active_session_id").map(String::as_str),
+        Some("bigint")
+    );
+
+    let stats = column_types(&pool, "twitch_stats_tracked").await;
+    assert_eq!(
+        stats.get("ts_utc").map(String::as_str),
+        Some("timestamp with time zone")
+    );
+    assert_eq!(stats.get("is_partner").map(String::as_str), Some("boolean"));
+
+    let guard = column_types(&pool, "eventsub_guard_state").await;
+    assert_eq!(
+        guard.get("expires_at").map(String::as_str),
+        Some("double precision")
+    );
+
+    let exp = column_types(&pool, "exp_sessions").await;
+    assert_eq!(exp.get("started_at").map(String::as_str), Some("text"));
+    assert_eq!(exp.get("avg_viewers").map(String::as_str), Some("real"));
+}

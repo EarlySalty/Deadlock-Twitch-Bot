@@ -14,8 +14,8 @@ use std::time::Duration;
 use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
 use sqlx::PgPool;
 use tb_monitoring::{
-    ClockFn, DeadLetterHook, DeadLetterNotice, GuardKind, GuardStore, HandlerError,
-    InboxHandler, InboxRuntime, ProcessingInboxStore,
+    ClockFn, DeadLetterHook, DeadLetterNotice, GuardKind, GuardStore, HandlerError, InboxHandler,
+    InboxRuntime, ProcessingInboxStore,
 };
 
 fn test_dsn() -> Option<String> {
@@ -105,16 +105,34 @@ async fn guard_claim_gewinnt_nur_einmal_bis_ttl_ablauf() {
     let guard = GuardStore::new(pool);
 
     // Erster Claim gewinnt, zweiter innerhalb des TTL verliert.
-    assert!(guard.claim(GuardKind::MessageId, "msg-1", 10.0, 100.0).await.unwrap());
-    assert!(!guard.claim(GuardKind::MessageId, "msg-1", 10.0, 105.0).await.unwrap());
-    assert!(guard.is_active(GuardKind::MessageId, "msg-1", 105.0).await.unwrap());
+    assert!(guard
+        .claim(GuardKind::MessageId, "msg-1", 10.0, 100.0)
+        .await
+        .unwrap());
+    assert!(!guard
+        .claim(GuardKind::MessageId, "msg-1", 10.0, 105.0)
+        .await
+        .unwrap());
+    assert!(guard
+        .is_active(GuardKind::MessageId, "msg-1", 105.0)
+        .await
+        .unwrap());
 
     // expires_at = 110: ab now >= 110 ist der Guard frei und claimbar.
-    assert!(!guard.is_active(GuardKind::MessageId, "msg-1", 110.0).await.unwrap());
-    assert!(guard.claim(GuardKind::MessageId, "msg-1", 10.0, 110.0).await.unwrap());
+    assert!(!guard
+        .is_active(GuardKind::MessageId, "msg-1", 110.0)
+        .await
+        .unwrap());
+    assert!(guard
+        .claim(GuardKind::MessageId, "msg-1", 10.0, 110.0)
+        .await
+        .unwrap());
 
     // Gleicher Key unter anderem Kind kollidiert nicht.
-    assert!(guard.claim(GuardKind::OfflineThrottle, "msg-1", 10.0, 100.0).await.unwrap());
+    assert!(guard
+        .claim(GuardKind::OfflineThrottle, "msg-1", 10.0, 100.0)
+        .await
+        .unwrap());
 }
 
 #[tokio::test]
@@ -123,14 +141,32 @@ async fn guard_release_und_leerer_key() {
     let pool = pool_in_schema(&dsn, "t4a_guard_release").await;
     let guard = GuardStore::new(pool);
 
-    assert!(guard.claim(GuardKind::BusinessEffect, "fx-1", 604800.0, 50.0).await.unwrap());
-    assert!(!guard.claim(GuardKind::BusinessEffect, "fx-1", 604800.0, 51.0).await.unwrap());
-    guard.release(GuardKind::BusinessEffect, "fx-1").await.unwrap();
-    assert!(guard.claim(GuardKind::BusinessEffect, "fx-1", 604800.0, 52.0).await.unwrap());
+    assert!(guard
+        .claim(GuardKind::BusinessEffect, "fx-1", 604800.0, 50.0)
+        .await
+        .unwrap());
+    assert!(!guard
+        .claim(GuardKind::BusinessEffect, "fx-1", 604800.0, 51.0)
+        .await
+        .unwrap());
+    guard
+        .release(GuardKind::BusinessEffect, "fx-1")
+        .await
+        .unwrap();
+    assert!(guard
+        .claim(GuardKind::BusinessEffect, "fx-1", 604800.0, 52.0)
+        .await
+        .unwrap());
 
     // Leere/Whitespace-Keys: kein Claim, nicht aktiv (wie Python).
-    assert!(!guard.claim(GuardKind::BusinessEffect, "   ", 10.0, 0.0).await.unwrap());
-    assert!(!guard.is_active(GuardKind::BusinessEffect, "", 0.0).await.unwrap());
+    assert!(!guard
+        .claim(GuardKind::BusinessEffect, "   ", 10.0, 0.0)
+        .await
+        .unwrap());
+    assert!(!guard
+        .is_active(GuardKind::BusinessEffect, "", 0.0)
+        .await
+        .unwrap());
 }
 
 #[tokio::test]
@@ -139,12 +175,24 @@ async fn guard_sweep_loescht_nur_abgelaufene() {
     let pool = pool_in_schema(&dsn, "t4a_guard_sweep").await;
     let guard = GuardStore::new(pool);
 
-    assert!(guard.claim(GuardKind::MessageId, "kurz", 10.0, 100.0).await.unwrap()); // expires 110
-    assert!(guard.claim(GuardKind::MessageId, "lang", 100.0, 100.0).await.unwrap()); // expires 200
+    assert!(guard
+        .claim(GuardKind::MessageId, "kurz", 10.0, 100.0)
+        .await
+        .unwrap()); // expires 110
+    assert!(guard
+        .claim(GuardKind::MessageId, "lang", 100.0, 100.0)
+        .await
+        .unwrap()); // expires 200
 
     assert_eq!(guard.sweep_expired(150.0).await.unwrap(), 1);
-    assert!(!guard.is_active(GuardKind::MessageId, "kurz", 150.0).await.unwrap());
-    assert!(guard.is_active(GuardKind::MessageId, "lang", 150.0).await.unwrap());
+    assert!(!guard
+        .is_active(GuardKind::MessageId, "kurz", 150.0)
+        .await
+        .unwrap());
+    assert!(guard
+        .is_active(GuardKind::MessageId, "lang", 150.0)
+        .await
+        .unwrap());
 }
 
 // ── Inbox-Store ───────────────────────────────────────────────────────────────
@@ -156,7 +204,10 @@ async fn inbox_enqueue_lease_deliver() {
     let store = ProcessingInboxStore::new(pool);
     let payload = serde_json::json!({"subscription": {"type": "stream.online"}});
 
-    let id = store.enqueue("stream.online", &payload, Some("m-1"), 1000.0).await.unwrap();
+    let id = store
+        .enqueue("stream.online", &payload, Some("m-1"), 1000.0)
+        .await
+        .unwrap();
     assert_eq!(id.len(), 32, "uuid4().hex-Format ohne Bindestriche");
 
     // Sofort fällig; Lease schiebt next_attempt_at um 30 s.
@@ -183,7 +234,10 @@ async fn inbox_retry_dead_letter_requeue() {
     let store = ProcessingInboxStore::new(pool);
     let payload = serde_json::json!({"event": {"broadcaster_user_id": "42"}});
 
-    let id = store.enqueue("channel.raid", &payload, None, 1000.0).await.unwrap();
+    let id = store
+        .enqueue("channel.raid", &payload, None, 1000.0)
+        .await
+        .unwrap();
     let leased = store.lease_due(1000.0, 30.0, 20).await.unwrap();
     assert_eq!(leased.len(), 1);
 
@@ -200,7 +254,10 @@ async fn inbox_retry_dead_letter_requeue() {
 
     // Dead-Letter: atomar verschoben, Fehlertext auf 500 Zeichen gekürzt.
     let long_error = "x".repeat(800);
-    store.mark_dead_letter(&leased[0], 5, &long_error, 2100.0).await.unwrap();
+    store
+        .mark_dead_letter(&leased[0], 5, &long_error, 2100.0)
+        .await
+        .unwrap();
     assert!(store.list_pending(10).await.unwrap().is_empty());
     let dead = store.list_dead_letters(10).await.unwrap();
     assert_eq!(dead.len(), 1);
@@ -229,7 +286,11 @@ struct CountingHandler {
 
 #[async_trait::async_trait]
 impl InboxHandler for CountingHandler {
-    async fn handle(&self, _work_type: &str, _payload: &serde_json::Value) -> Result<(), HandlerError> {
+    async fn handle(
+        &self,
+        _work_type: &str,
+        _payload: &serde_json::Value,
+    ) -> Result<(), HandlerError> {
         self.calls.fetch_add(1, Ordering::SeqCst);
         Ok(())
     }
@@ -239,7 +300,11 @@ struct FailingHandler;
 
 #[async_trait::async_trait]
 impl InboxHandler for FailingHandler {
-    async fn handle(&self, _work_type: &str, _payload: &serde_json::Value) -> Result<(), HandlerError> {
+    async fn handle(
+        &self,
+        _work_type: &str,
+        _payload: &serde_json::Value,
+    ) -> Result<(), HandlerError> {
         Err("kaputt".into())
     }
 }
@@ -275,7 +340,9 @@ async fn runtime_verarbeitet_auftrag_und_loescht_ihn() {
     let dsn = skip_without_db!();
     let pool = pool_in_schema(&dsn, "t4a_rt_ok").await;
     let store = ProcessingInboxStore::new(pool);
-    let handler = Arc::new(CountingHandler { calls: AtomicU64::new(0) });
+    let handler = Arc::new(CountingHandler {
+        calls: AtomicU64::new(0),
+    });
 
     let runtime = InboxRuntime::new(store.clone(), handler.clone()).start();
     runtime
@@ -300,7 +367,9 @@ async fn runtime_dead_lettert_nach_max_versuchen() {
     let dsn = skip_without_db!();
     let pool = pool_in_schema(&dsn, "t4a_rt_dead").await;
     let store = ProcessingInboxStore::new(pool);
-    let hook = Arc::new(RecordingHook { notices: tokio::sync::Mutex::new(Vec::new()) });
+    let hook = Arc::new(RecordingHook {
+        notices: tokio::sync::Mutex::new(Vec::new()),
+    });
 
     // Uhr springt pro Ablesung 61 s vorwärts — jeder Retry (Backoff-Cap 60 s)
     // ist damit beim nächsten Poll sofort fällig; der Test braucht keine Echtzeit.
@@ -311,7 +380,12 @@ async fn runtime_dead_lettert_nach_max_versuchen() {
     };
 
     store
-        .enqueue("channel.update", &serde_json::json!({"y": 2}), None, 1_000_000.0)
+        .enqueue(
+            "channel.update",
+            &serde_json::json!({"y": 2}),
+            None,
+            1_000_000.0,
+        )
         .await
         .unwrap();
 
@@ -361,7 +435,9 @@ async fn runtime_dead_lettert_kaputtes_payload_json() {
         Arc::new(move || ticks.fetch_add(61, Ordering::SeqCst) as f64)
     };
     // Handler darf nie aufgerufen werden — kaputtes JSON scheitert davor.
-    let handler = Arc::new(CountingHandler { calls: AtomicU64::new(0) });
+    let handler = Arc::new(CountingHandler {
+        calls: AtomicU64::new(0),
+    });
     let runtime = InboxRuntime::new(store.clone(), handler.clone())
         .with_clock(clock)
         .start();
@@ -376,5 +452,9 @@ async fn runtime_dead_lettert_kaputtes_payload_json() {
     assert!(done, "kaputtes Payload wurde nicht dead-lettered");
     assert_eq!(handler.calls.load(Ordering::SeqCst), 0);
     let dead = store.list_dead_letters(5).await.unwrap();
-    assert!(dead[0].last_error.as_deref().unwrap().contains("invalid eventsub processing payload"));
+    assert!(dead[0]
+        .last_error
+        .as_deref()
+        .unwrap()
+        .contains("invalid eventsub processing payload"));
 }

@@ -222,7 +222,12 @@ impl InboxRuntime {
         let next_attempt_at = (self.clock)() + retry_delay_seconds(next_attempt_count);
         if let Err(error) = self
             .store
-            .mark_retry(&work.work_id, next_attempt_count, &error_message, next_attempt_at)
+            .mark_retry(
+                &work.work_id,
+                next_attempt_count,
+                &error_message,
+                next_attempt_at,
+            )
             .await
         {
             tracing::error!(%error, work_id = %work.work_id, "mark_retry fehlgeschlagen");
@@ -273,8 +278,7 @@ impl InboxRuntimeHandle {
 }
 
 fn parse_payload(payload_json: &str) -> Result<serde_json::Value, String> {
-    let value: serde_json::Value =
-        serde_json::from_str(payload_json).map_err(|e| e.to_string())?;
+    let value: serde_json::Value = serde_json::from_str(payload_json).map_err(|e| e.to_string())?;
     if !value.is_object() {
         return Err("payload ist kein JSON-Objekt".to_string());
     }

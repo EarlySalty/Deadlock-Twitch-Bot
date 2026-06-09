@@ -191,7 +191,12 @@ impl ProcessingInboxStore {
         )
         .bind(&work.work_id)
         .bind(&work.work_type)
-        .bind(work.message_id.as_deref().map(str::trim).filter(|m| !m.is_empty()))
+        .bind(
+            work.message_id
+                .as_deref()
+                .map(str::trim)
+                .filter(|m| !m.is_empty()),
+        )
         .bind(&work.payload_json)
         .bind(work.queued_at)
         .bind(dead_lettered_at)
