@@ -147,6 +147,7 @@ impl TokenBlacklist for StubBlacklist {
     async fn add_to_blacklist(&self, twitch_user_id: &str, _login: &str, _err: &str) {
         self.added.lock().unwrap().push(twitch_user_id.to_string());
     }
+    async fn clear_failure_count(&self, _twitch_user_id: &str) {}
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────

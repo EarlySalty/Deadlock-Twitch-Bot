@@ -63,12 +63,14 @@ pub trait TwitchTokenClient: Send + Sync {
     async fn exchange_code(&self, code: &str) -> Result<TokenResponse, RefreshError>;
 }
 
-/// Lockout-Store-Port (`twitch_token_blacklist`, echte Impl in 6b).
+/// Lockout-Store-Port (`twitch_token_blacklist`, echte Impl `TokenBlacklistStore`).
 #[async_trait::async_trait]
 pub trait TokenBlacklist: Send + Sync {
     async fn is_blacklisted(&self, twitch_user_id: &str) -> bool;
     async fn has_recent_failure(&self, twitch_user_id: &str) -> bool;
     async fn add_to_blacklist(&self, twitch_user_id: &str, twitch_login: &str, error_message: &str);
+    /// Nach erfolgreichem Refresh den Fehler-/Lockout-Zustand löschen.
+    async fn clear_failure_count(&self, twitch_user_id: &str);
 }
 
 /// Ergebnis eines Refresh-Versuchs.
@@ -185,6 +187,8 @@ impl RaidTokenRefresher {
             return Ok(RefreshOutcome::Skipped);
         }
         tx.commit().await?;
+        // Erfolgreicher Refresh → Fehler-/Lockout-Zustand löschen (Python).
+        self.blacklist.clear_failure_count(twitch_user_id).await;
         Ok(RefreshOutcome::Refreshed)
     }
 }

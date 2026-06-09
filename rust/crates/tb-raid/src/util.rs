@@ -1,5 +1,27 @@
 //! Kleine crate-interne Helfer.
 
+use chrono::{DateTime, NaiveDateTime, Utc};
+
+/// Parst einen ISO-Timestamp (toleriert `Z`-Suffix); naive Timestamps gelten
+/// als UTC. `None` bei leerem/kaputtem Wert. Für die TEXT-Timestamp-Spalten
+/// (`twitch_token_blacklist` u. a.).
+pub(crate) fn parse_iso_utc(raw: &str) -> Option<DateTime<Utc>> {
+    let raw = raw.trim();
+    if raw.is_empty() {
+        return None;
+    }
+    let normalized = raw.replace('Z', "+00:00");
+    if let Ok(dt) = DateTime::parse_from_rfc3339(&normalized) {
+        return Some(dt.with_timezone(&Utc));
+    }
+    for fmt in ["%Y-%m-%dT%H:%M:%S%.f", "%Y-%m-%d %H:%M:%S%.f"] {
+        if let Ok(naive) = NaiveDateTime::parse_from_str(raw, fmt) {
+            return Some(DateTime::from_naive_utc_and_offset(naive, Utc));
+        }
+    }
+    None
+}
+
 /// Maskiert eine Kennung fürs Logging (Python `_mask_log_identifier`): erste und
 /// letzte 2 Zeichen, Mitte als `…`. Verhindert volle ID-Disclosure im Log; sehr
 /// kurze IDs (≤ 4 Zeichen) werden komplett zu `…`.
