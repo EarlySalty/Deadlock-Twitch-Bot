@@ -12,7 +12,9 @@ members = [
     "crates/tb-http-core",
     "crates/tb-analytics",
     "crates/tb-dashboard-api",
+    "crates/tb-internal-api",
     "bin/tb-dashboard",
+    "bin/tb-bot",
 ]
 
 [workspace.package]
@@ -50,3 +52,5 @@ tb-transport-discord = { path = "crates/tb-transport-discord" }
 tb-http-core     = { path = "crates/tb-http-core" }
 tb-analytics     = { path = "crates/tb-analytics" }
 tb-dashboard-api = { path = "crates/tb-dashboard-api" }
+tb-internal-api  = { path = "crates/tb-internal-api" }
+url = "2"

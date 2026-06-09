@@ -4,6 +4,7 @@
 //! Kein HTTP, kein Serde-JSON — nur reine Query-Logik.
 
 pub mod admin_streamers;
+pub mod global_ban;
 pub mod bans;
 pub mod network;
 pub mod overview;

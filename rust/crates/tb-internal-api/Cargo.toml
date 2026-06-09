@@ -1,0 +1,23 @@
+[package]
+name = "tb-internal-api"
+version = "0.1.0"
+edition.workspace = true
+
+[dependencies]
+axum         = { workspace = true }
+tower        = { workspace = true }
+tower-http   = { workspace = true }
+serde        = { workspace = true }
+serde_json   = { workspace = true }
+sqlx         = { workspace = true }
+tracing      = { workspace = true }
+chrono       = { workspace = true }
+sha2         = { workspace = true }
+url          = { workspace = true }
+tb-analytics = { workspace = true }
+tb-error     = { workspace = true }
+tb-http-core = { workspace = true }
+
+[dev-dependencies]
+tokio     = { workspace = true }
+tower     = { workspace = true, features = ["util"] }

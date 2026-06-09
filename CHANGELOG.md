@@ -1,3 +1,21 @@
+## #107 — Internes API-Binary tb-bot (Rust Schritt 3a)
+
+**Ausgangslage:** Die Python-interne API auf Port 8776 bedient alle CRUD-Operationen des Dashboards. Für den Rust-Umbau braucht es ein neues Binary das diesen Port übernehmen kann — zunächst nur mit den einfachsten, rein datenbankbasierten Endpoints.
+
+**Geändert:** Neues Rust-Binary `tb-bot` auf `127.0.0.1:8776` mit neuem Crate `tb-internal-api`. Implementiert sind 5 Endpoints:
+
+- **`GET /internal/twitch/v1/healthz`** — `{"ok": true, "service": "twitch-internal-api"}` mit DB-Schema-Fingerprint (SHA-256 über `information_schema.tables`) und Connection-Metadaten (Host, Port, DB, User — aus DSN geparst).
+- **`POST /internal/twitch/v1/globalban/add`** — Upsert in `twitch_chatter_global_ban` + Einbahn-Spiegel in `twitch_raid_blacklist`, beides in einer Transaktion.
+- **`POST /internal/twitch/v1/globalban/remove`** — Löscht aus `twitch_chatter_global_ban` und `twitch_chatter_global_ban_applied` (Sweep-Ledger), damit ein späterer Re-Add sauber über alle Kanäle ausrollt.
+- **`GET /internal/twitch/v1/globalban/check?login=...`** — Boolean-Check (Login oder Chatter-ID).
+- **`GET /internal/twitch/v1/globalban`** — Alle Einträge, neueste zuerst.
+
+Auth: `X-Internal-Token`-Header + Loopback-Guard (Defense-in-Depth, da 127.0.0.1-Binding allein schon externe Verbindungen blockiert). healthz antwortet auch bei Fingerprint-Fehler immer 200.
+
+**Wie es jetzt funktioniert:** `tb-bot` liegt als eigenes Binary neben `tb-dashboard` im Workspace. Schritt 3b (Streamer-CRUD mit Twitch-API-Lookup) folgt als nächster Schritt.
+
+---
+
 ## #106 — Admin-Streamer-Endpoints (Rust Schritt 2b)
 
 **Ausgangslage:** Das Rust-Dashboard konnte nach Schritt 2a zwar den Systemzustand abfragen, hatte aber noch keinen Ersatz für die Python-seitigen Admin-Streamer-Übersichten — keine Möglichkeit, alle Partner nach Status zu filtern oder einen einzelnen Streamer vollständig abzufragen.
