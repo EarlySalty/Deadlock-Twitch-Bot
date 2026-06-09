@@ -88,11 +88,15 @@ impl FieldCipher {
         let version = blob[0];
         let kid_len = blob[1] as usize;
         if version != VERSION {
-            return Err(CryptoError::InvalidPayload(format!("unknown version: {version}")));
+            return Err(CryptoError::InvalidPayload(format!(
+                "unknown version: {version}"
+            )));
         }
         let kid_end = 2 + kid_len;
         if blob.len() < kid_end + NONCE_SIZE {
-            return Err(CryptoError::InvalidPayload("blob truncated (missing nonce)".into()));
+            return Err(CryptoError::InvalidPayload(
+                "blob truncated (missing nonce)".into(),
+            ));
         }
         let kid = std::str::from_utf8(&blob[2..kid_end])
             .map_err(|_| CryptoError::InvalidPayload("invalid key id encoding".into()))?;
@@ -109,7 +113,13 @@ impl FieldCipher {
         }
         let pt = self
             .cipher
-            .decrypt(nonce, Payload { msg: ct, aad: aad.as_bytes() })
+            .decrypt(
+                nonce,
+                Payload {
+                    msg: ct,
+                    aad: aad.as_bytes(),
+                },
+            )
             .map_err(|_| CryptoError::DecryptFailed)?;
         String::from_utf8(pt).map_err(|_| CryptoError::DecryptFailed)
     }
@@ -125,8 +135,7 @@ mod tests {
     use super::*;
 
     // Fester 32-Byte-Testschlüssel (Hex). NUR für Tests — niemals ein Prod-Key.
-    const TEST_KEY_HEX: &str =
-        "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f";
+    const TEST_KEY_HEX: &str = "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f";
 
     #[test]
     fn round_trip_recovers_plaintext() {
@@ -142,11 +151,11 @@ mod tests {
         let c = FieldCipher::from_hex_key(TEST_KEY_HEX, KID).unwrap();
         let aad = crate::aad::raid_auth("access_token", "555", 1);
         let blob = c.encrypt_field("x", &aad).unwrap();
-        assert_eq!(blob[0], VERSION); // 0x01
+        assert_eq!(blob[0], VERSION); // version
         assert_eq!(blob[1] as usize, KID.len()); // kid_len = 2
         assert_eq!(&blob[2..2 + KID.len()], KID.as_bytes()); // "v1"
-        // Header(4) + nonce(12) + 1 Byte ct + 16 Byte tag = 33
-        assert_eq!(blob.len(), 2 + KID.len() + NONCE_SIZE + 1 + 16);
+        let expected_len = 2 + KID.len() + NONCE_SIZE + 1 + 16; // Header + nonce + ct(1) + tag(16)
+        assert_eq!(blob.len(), expected_len);
     }
 
     #[test]

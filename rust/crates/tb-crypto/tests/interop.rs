@@ -64,7 +64,10 @@ fn run_oracle(cmd: &str, req: Value) -> Value {
 fn python_encrypts_rust_decrypts() {
     ensure_oracle();
     let aad = aad::social_media("access_token", "tiktok", Some("dragskope"), 1);
-    let resp = run_oracle("encrypt", json!({"plaintext": "py->rust-secret", "aad": aad}));
+    let resp = run_oracle(
+        "encrypt",
+        json!({"plaintext": "py->rust-secret", "aad": aad}),
+    );
     let blob = hex::decode(resp["blob_hex"].as_str().unwrap()).unwrap();
 
     let cipher = FieldCipher::from_hex_key(TEST_KEY_HEX, "v1").unwrap();
