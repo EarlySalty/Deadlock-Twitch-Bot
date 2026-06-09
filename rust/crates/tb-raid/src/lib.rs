@@ -32,6 +32,7 @@ pub mod arrival_tracking_store;
 pub mod auth_writer;
 pub mod candidate_selection;
 pub mod oauth_flow;
+pub mod partner_roster;
 pub mod pending_raids;
 pub mod raid_blacklist;
 pub mod raid_executor;
@@ -59,6 +60,9 @@ pub use candidate_selection::{
 pub use oauth_flow::{
     build_authorize_url, build_state_info, StreamerContextResolver,
     PUBLIC_WEBSITE_ONBOARDING_LOGIN, TWITCH_AUTHORIZE_URL,
+};
+pub use partner_roster::{
+    build_online_candidates, OnlineCandidate, PartnerRosterEntry, PartnerRosterStore, StreamData,
 };
 pub use pending_raids::{
     normalize_broadcaster_login, normalize_pending_raid_key, PendingRaid, PendingRaidStore,
