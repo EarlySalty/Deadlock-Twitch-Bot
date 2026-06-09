@@ -102,8 +102,10 @@ impl BrokerConfig {
                 format!("http://{host}:{port}")
             }
         };
+        // Fallback-Kette: MASTER_BROKER_TOKEN → MAIN_BOT_INTERNAL_TOKEN → TWITCH_INTERNAL_API_TOKEN
         let token = get("MASTER_BROKER_TOKEN")
             .and_then(non_empty)
+            .or_else(|| get("MAIN_BOT_INTERNAL_TOKEN").and_then(non_empty))
             .unwrap_or_else(|| internal_token.to_string());
         Ok(Self { base_url, token })
     }
@@ -187,5 +189,30 @@ mod tests {
         m.insert("TWITCH_ANALYTICS_POOL_MAXSIZE", "abc");
         let err = Settings::load(&src(m)).unwrap_err();
         assert!(matches!(err, ConfigError::Invalid(n) if n == "TWITCH_ANALYTICS_POOL_MAXSIZE"));
+    }
+
+    #[test]
+    fn broker_token_first_priority_master_broker_token() {
+        let mut m = minimal();
+        m.insert("MASTER_BROKER_TOKEN", "master-tok");
+        m.insert("MAIN_BOT_INTERNAL_TOKEN", "main-tok");
+        let s = Settings::load(&src(m)).unwrap();
+        assert_eq!(s.broker.token, "master-tok");
+    }
+
+    #[test]
+    fn broker_token_second_priority_main_bot_internal_token() {
+        let mut m = minimal();
+        m.insert("MAIN_BOT_INTERNAL_TOKEN", "main-tok");
+        let s = Settings::load(&src(m)).unwrap();
+        assert_eq!(s.broker.token, "main-tok");
+    }
+
+    #[test]
+    fn broker_token_fallback_to_internal_api_token() {
+        // Kein MASTER_BROKER_TOKEN, kein MAIN_BOT_INTERNAL_TOKEN
+        // → fällt auf TWITCH_INTERNAL_API_TOKEN zurück
+        let s = Settings::load(&src(minimal())).unwrap();
+        assert_eq!(s.broker.token, "tok-123");
     }
 }

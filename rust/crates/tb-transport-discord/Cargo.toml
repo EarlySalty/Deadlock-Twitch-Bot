@@ -1,0 +1,19 @@
+[package]
+name = "tb-transport-discord"
+version = "0.1.0"
+edition.workspace = true
+
+[dependencies]
+tb-config   = { workspace = true }
+reqwest     = { workspace = true }
+serde       = { workspace = true }
+serde_json  = { workspace = true }
+sha2        = { workspace = true }
+hex         = { workspace = true }
+tokio       = { workspace = true }
+thiserror   = { workspace = true }
+async-trait = { workspace = true }
+
+[dev-dependencies]
+wiremock = { workspace = true }
+tokio    = { workspace = true, features = ["rt-multi-thread", "macros"] }

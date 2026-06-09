@@ -7,6 +7,9 @@ members = [
     "crates/tb-config",
     "crates/tb-observability",
     "crates/tb-db",
+    "crates/tb-transport-twitch",
+    "crates/tb-transport-discord",
+    "crates/tb-http-core",
 ]
 
 [workspace.package]
@@ -25,9 +28,19 @@ tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 sqlx = { version = "0.8", default-features = false, features = ["postgres", "runtime-tokio", "tls-rustls", "macros", "migrate"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+sha2 = "0.10"
+axum = "0.7"
+tower = "0.5"
+tower-http = { version = "0.6", features = ["trace"] }
+async-trait = "0.1"
+wiremock = "0.6"
 tb-error = { path = "crates/tb-error" }
 tb-crypto = { path = "crates/tb-crypto" }
 tb-domain = { path = "crates/tb-domain" }
 tb-config = { path = "crates/tb-config" }
 tb-observability = { path = "crates/tb-observability" }
 tb-db = { path = "crates/tb-db" }
+tb-transport-twitch = { path = "crates/tb-transport-twitch" }
+tb-transport-discord = { path = "crates/tb-transport-discord" }
+tb-http-core = { path = "crates/tb-http-core" }
