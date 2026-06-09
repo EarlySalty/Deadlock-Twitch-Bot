@@ -2,6 +2,7 @@
 
 pub mod client;
 pub mod eventsub;
+pub mod raid;
 pub mod streams;
 pub mod token;
 
