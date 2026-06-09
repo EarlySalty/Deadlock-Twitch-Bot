@@ -1,3 +1,11 @@
+## #109 — EventSub stream.offline sofort nach Auth registrieren
+
+**Problem:** Wenn ein Streamer die Raid-Auth abschloss während sein Stream bereits lief, wartete der Bot bis zu 45 Minuten auf den nächsten Polling-Tick, bevor die `stream.offline` EventSub-Subscription angelegt wurde. In diesem Fenster konnte der Bot ein Offline-Event komplett verpassen — passiert heute bei cheazycrust: Auth um 16:42, Subscription erst 17:27, erster Offline-Event dazwischen verpasst.
+
+**Ursache:** `complete_setup_for_streamer()` erledigte Mod-Hinzufügen und Chat-Join, rief aber nie `_handle_stream_went_live()` auf. Diese Funktion — eigentlich für den Polling-Tick zuständig — ist der einzige Ort, der die Subscription registriert.
+
+**Fix:** `PartnerSetupService` bekommt einen optionalen `stream_went_live_fn`-Callback. Direkt nach dem Auth-Setup (Mod + Chat + Willkommensnachricht) wird dieser aufgerufen und registriert die `stream.offline`-Subscription sofort. Der Callback ist idempotent — läuft der Streamer gerade nicht live, passiert schlimmstenfalls gar nichts.
+
 ## #108 — Streamer-CRUD-Endpoints (Rust Schritt 3b)
 
 **Ausgangslage:** Nach Schritt 3a hatte das neue `tb-bot`-Binary die Global-Ban-Endpoints, aber noch kein Äquivalent für die Streamer-Verwaltung — Add, Remove, Verify, Archive/Block und Discord-Profil-Updates fehlten komplett.

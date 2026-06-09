@@ -64,6 +64,9 @@ class PartnerSetupService:
     transaction_factory: TransactionFactory | None = None
     moderator_url_base: str = "https://api.twitch.tv/helix"
     mask_log_identifier: MaskIdentifierFn | None = None
+    # Wenn gesetzt, wird dieser Callback nach erfolgreichem Auth-Setup aufgerufen
+    # damit EventSub stream.offline sofort registriert wird statt auf den nächsten Polling-Tick zu warten.
+    stream_went_live_fn: Any | None = None
     logger: logging.Logger = field(default_factory=lambda: log)
 
     @staticmethod
@@ -519,6 +522,20 @@ class PartnerSetupService:
             self.logger.info("Sent auth success message to %s", twitch_login)
         except Exception:
             self.logger.exception("Error sending auth success message to %s", twitch_login)
+
+        # EventSub stream.offline sofort registrieren falls der Stream gerade live ist.
+        # Ohne diesen Call passiert das erst beim nächsten Polling-Tick (~15-45min später),
+        # was dazu führt dass ein Offline-Event in diesem Fenster unbemerkt bleibt.
+        went_live = self.stream_went_live_fn
+        if callable(went_live):
+            try:
+                await went_live(twitch_user_id, twitch_login)
+            except Exception:
+                self.logger.exception(
+                    "stream_went_live_fn nach Auth-Setup fehlgeschlagen für %s (%s)",
+                    twitch_login,
+                    twitch_user_id,
+                )
 
 
 __all__ = ["PartnerSetupService"]

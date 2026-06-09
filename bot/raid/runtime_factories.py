@@ -275,6 +275,11 @@ def make_partner_setup_service(
     readonly_connection_factory=readonly_connection,
     transaction_factory=transaction,
 ) -> PartnerSetupService:
+    async def _went_live_after_auth(broadcaster_id: str, login: str) -> None:
+        handler = getattr(bot, "_handle_stream_went_live", None)
+        if callable(handler):
+            await handler(broadcaster_id, login)
+
     return PartnerSetupService(
         auth_manager=bot.auth_manager,
         session_getter=lambda: bot.session,
@@ -284,6 +289,7 @@ def make_partner_setup_service(
         transaction_factory=transaction_factory,
         moderator_url_base=moderator_url_base,
         mask_log_identifier=mask_log_identifier,
+        stream_went_live_fn=_went_live_after_auth,
         logger=log,
     )
 
