@@ -142,6 +142,74 @@ pub async fn pool_in_schema(schema: &str) -> Option<PgPool> {
             updated_at DOUBLE PRECISION NOT NULL,
             PRIMARY KEY (kind, guard_key)
         )",
+        "CREATE TABLE twitch_eventsub_processing_inbox (
+            work_id          TEXT PRIMARY KEY,
+            work_type        TEXT NOT NULL,
+            message_id       TEXT,
+            payload_json     TEXT NOT NULL,
+            queued_at        DOUBLE PRECISION NOT NULL,
+            next_attempt_at  DOUBLE PRECISION NOT NULL,
+            attempt_count    INTEGER NOT NULL DEFAULT 0,
+            last_error       TEXT
+        )",
+        "CREATE TABLE twitch_eventsub_processing_dead_letter (
+            work_id           TEXT PRIMARY KEY,
+            work_type         TEXT NOT NULL,
+            message_id        TEXT,
+            payload_json      TEXT NOT NULL,
+            queued_at         DOUBLE PRECISION NOT NULL,
+            dead_lettered_at  DOUBLE PRECISION NOT NULL,
+            attempt_count     INTEGER NOT NULL,
+            last_error        TEXT
+        )",
+        // Telemetrie-Event-Tabellen (Prod-Typen verifiziert 2026-06-09).
+        "CREATE TABLE twitch_subscription_events (
+            id BIGSERIAL PRIMARY KEY, session_id BIGINT, twitch_user_id TEXT,
+            event_type TEXT, user_login TEXT, tier TEXT, is_gift BOOLEAN,
+            gifter_login TEXT, cumulative_months INTEGER, streak_months INTEGER,
+            message TEXT, total_gifted INTEGER, received_at TIMESTAMPTZ
+        )",
+        "CREATE TABLE twitch_ad_break_events (
+            id BIGSERIAL PRIMARY KEY, session_id BIGINT, twitch_user_id TEXT,
+            duration_seconds INTEGER, is_automatic BOOLEAN, started_at TIMESTAMPTZ
+        )",
+        "CREATE TABLE twitch_bits_events (
+            id BIGSERIAL PRIMARY KEY, session_id BIGINT, twitch_user_id TEXT,
+            donor_login TEXT, amount INTEGER, message TEXT, received_at TIMESTAMPTZ
+        )",
+        "CREATE TABLE twitch_channel_points_events (
+            id BIGSERIAL PRIMARY KEY, session_id BIGINT, twitch_user_id TEXT,
+            user_login TEXT, reward_id TEXT, reward_title TEXT, reward_cost INTEGER,
+            user_input TEXT, redeemed_at TIMESTAMPTZ
+        )",
+        "CREATE TABLE twitch_hype_train_events (
+            id BIGSERIAL PRIMARY KEY, session_id BIGINT, twitch_user_id TEXT,
+            started_at TIMESTAMPTZ, ended_at TIMESTAMPTZ, duration_seconds INTEGER,
+            level INTEGER, total_progress INTEGER, event_phase TEXT
+        )",
+        "CREATE TABLE twitch_ban_events (
+            id BIGSERIAL PRIMARY KEY, session_id BIGINT, twitch_user_id TEXT,
+            event_type TEXT, target_login TEXT, target_id TEXT,
+            moderator_login TEXT, reason TEXT, ends_at TIMESTAMPTZ, received_at TIMESTAMPTZ
+        )",
+        "CREATE TABLE twitch_shoutout_events (
+            id BIGSERIAL PRIMARY KEY, twitch_user_id TEXT, direction TEXT,
+            other_broadcaster_id TEXT, other_broadcaster_login TEXT,
+            moderator_login TEXT, viewer_count INTEGER, received_at TIMESTAMPTZ
+        )",
+        "CREATE TABLE twitch_follow_events (
+            id BIGSERIAL PRIMARY KEY, streamer_login TEXT, twitch_user_id TEXT,
+            follower_login TEXT, follower_id TEXT, followed_at TIMESTAMPTZ
+        )",
+        "CREATE TABLE twitch_first_message_events (
+            id BIGSERIAL PRIMARY KEY, streamer_login TEXT, broadcaster_id TEXT,
+            chatter_login TEXT, chatter_id TEXT, message_id TEXT,
+            message_text TEXT, event_ts TIMESTAMPTZ
+        )",
+        "CREATE TABLE twitch_channel_updates (
+            id BIGSERIAL PRIMARY KEY, twitch_user_id TEXT, title TEXT,
+            game_name TEXT, language TEXT, recorded_at TIMESTAMPTZ
+        )",
     ] {
         sqlx::query(ddl).execute(&pool).await.unwrap();
     }

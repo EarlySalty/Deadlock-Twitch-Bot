@@ -1,0 +1,352 @@
+//! Verarbeitung der Core-EventSub-Aufträge aus der Processing-Inbox
+//! (`stream.online` / `stream.offline` / `channel.update`) — Port der
+//! Python-Handler aus `analytics/mixin.py` und `eventsub_mixin.py`.
+//!
+//! Fachliche Effekte sind über Business-Effect-Guards exactly-once pro
+//! Message (`{effekt}:{message_id}`, TTL 7 Tage, Release bei Fehler);
+//! `stream.offline` ist zusätzlich pro Broadcaster gegen Flapping gedrosselt
+//! (120 s). Subsystemfremde Folgeeffekte laufen über [`EventSubHooks`].
+
+use std::sync::Arc;
+
+use chrono::{DateTime, TimeZone, Utc};
+use serde_json::Value;
+
+use crate::dispatch::EventSubHooks;
+use crate::guard::{GuardKind, GuardStore};
+use crate::inbox_runtime::{ClockFn, HandlerError, InboxHandler};
+use crate::live_state::LiveStateStore;
+use crate::sessions::SessionTracker;
+use crate::stream::iso_seconds;
+use crate::telemetry::TelemetryStore;
+
+/// Business-Effect-TTL (Python: 7 Tage).
+pub const BUSINESS_EFFECT_TTL_SECONDS: f64 = 7.0 * 24.0 * 3600.0;
+/// Offline-Drossel gegen Doppel-Trigger Polling/EventSub (Python: 120 s).
+pub const OFFLINE_THROTTLE_TTL_SECONDS: f64 = 120.0;
+
+/// Führt einen fachlichen Effekt exactly-once pro Message aus
+/// (Python `_run_eventsub_business_effect_once`). Ohne message_id läuft der
+/// Effekt direkt; bei Fehlern wird der Guard wieder freigegeben.
+pub async fn run_business_effect_once<F, Fut>(
+    guard: &GuardStore,
+    message_id: Option<&str>,
+    effect_name: &str,
+    now: f64,
+    effect: F,
+) -> Result<bool, HandlerError>
+where
+    F: FnOnce() -> Fut,
+    Fut: std::future::Future<Output = Result<(), HandlerError>>,
+{
+    let Some(message_id) = message_id.map(str::trim).filter(|m| !m.is_empty()) else {
+        effect().await?;
+        return Ok(true);
+    };
+    let guard_key = format!("{}:{}", effect_name.trim().to_lowercase(), message_id);
+    let claimed = guard
+        .claim(
+            GuardKind::BusinessEffect,
+            &guard_key,
+            BUSINESS_EFFECT_TTL_SECONDS,
+            now,
+        )
+        .await
+        .map_err(|e| Box::new(e) as HandlerError)?;
+    if !claimed {
+        return Ok(false);
+    }
+    if let Err(error) = effect().await {
+        let _ = guard.release(GuardKind::BusinessEffect, &guard_key).await;
+        return Err(error);
+    }
+    Ok(true)
+}
+
+/// Inbox-Handler für die Monitoring-Core-Events.
+pub struct MonitoringEventHandler {
+    guard: GuardStore,
+    live_state: LiveStateStore,
+    tracker: Arc<SessionTracker>,
+    telemetry: TelemetryStore,
+    hooks: Arc<dyn EventSubHooks>,
+    clock: ClockFn,
+}
+
+impl MonitoringEventHandler {
+    pub fn new(
+        guard: GuardStore,
+        live_state: LiveStateStore,
+        tracker: Arc<SessionTracker>,
+        telemetry: TelemetryStore,
+        hooks: Arc<dyn EventSubHooks>,
+        clock: ClockFn,
+    ) -> Self {
+        Self {
+            guard,
+            live_state,
+            tracker,
+            telemetry,
+            hooks,
+            clock,
+        }
+    }
+
+    fn now_pair(&self) -> (f64, DateTime<Utc>) {
+        let epoch = (self.clock)();
+        let dt = Utc
+            .timestamp_opt(epoch as i64, 0)
+            .single()
+            .unwrap_or_else(Utc::now);
+        (epoch, dt)
+    }
+
+    /// stream.online (Python `_handle_stream_online` + Followups):
+    /// minimaler Live-State + Go-Live-Hook + Score-Refresh, beide
+    /// exactly-once pro Message.
+    async fn handle_stream_online(&self, work: &WorkPayload) -> Result<(), HandlerError> {
+        let (epoch, now) = self.now_pair();
+        let started_at = work
+            .event
+            .get("started_at")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|s| !s.is_empty());
+        let stream_id = ["id", "stream_id"]
+            .iter()
+            .find_map(|k| work.event.get(*k))
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|s| !s.is_empty());
+        let login = work.login_lower();
+        self.live_state
+            .apply_stream_online(
+                &work.broadcaster_id,
+                &login,
+                stream_id,
+                started_at,
+                &iso_seconds(now),
+            )
+            .await
+            .map_err(|e| Box::new(e) as HandlerError)?;
+
+        let executed = run_business_effect_once(
+            &self.guard,
+            work.message_id.as_deref(),
+            "stream_online_went_live",
+            epoch,
+            || async {
+                self.hooks
+                    .on_stream_went_live(&work.broadcaster_id, &login)
+                    .await;
+                Ok(())
+            },
+        )
+        .await?;
+        if executed {
+            tracing::info!(
+                login = %login,
+                broadcaster_id = %work.broadcaster_id,
+                "EventSub stream.online: Go-Live-Handler getriggert"
+            );
+        }
+        run_business_effect_once(
+            &self.guard,
+            work.message_id.as_deref(),
+            "stream_online_refresh",
+            epoch,
+            || async {
+                self.hooks
+                    .on_score_refresh(&work.broadcaster_id, Some(&login), "eventsub_stream_online")
+                    .await;
+                Ok(())
+            },
+        )
+        .await?;
+        Ok(())
+    }
+
+    /// stream.offline (Python `_on_eventsub_stream_offline`): Offline-Throttle,
+    /// Session-Finalize + Live-State offline (exactly-once), dann Hooks
+    /// (Score-Refresh, Auto-Raid & Co. via on_stream_offline).
+    async fn handle_stream_offline(&self, work: &WorkPayload) -> Result<(), HandlerError> {
+        if work.broadcaster_id.is_empty() {
+            return Ok(());
+        }
+        let (epoch, now) = self.now_pair();
+        let login = match work.login_lower() {
+            l if l.is_empty() => self
+                .live_state
+                .login_for_user_id(&work.broadcaster_id)
+                .await
+                .ok()
+                .flatten()
+                .unwrap_or_default(),
+            l => l,
+        };
+
+        let claimed = self
+            .guard
+            .claim(
+                GuardKind::OfflineThrottle,
+                &work.broadcaster_id,
+                OFFLINE_THROTTLE_TTL_SECONDS,
+                epoch,
+            )
+            .await
+            .map_err(|e| Box::new(e) as HandlerError)?;
+        if !claimed {
+            tracing::debug!(
+                broadcaster_id = %work.broadcaster_id,
+                "EventSub Offline-Throttle: noch im 120s-Fenster, ignoriere"
+            );
+            return Ok(());
+        }
+
+        run_business_effect_once(
+            &self.guard,
+            work.message_id.as_deref(),
+            "stream_offline_state",
+            epoch,
+            || async {
+                if !login.is_empty() {
+                    self.tracker
+                        .finalize(&login, "offline", None, Some(now))
+                        .await;
+                }
+                self.live_state
+                    .apply_stream_offline(&work.broadcaster_id, &iso_seconds(now))
+                    .await
+                    .map_err(|e| Box::new(e) as HandlerError)
+            },
+        )
+        .await?;
+
+        run_business_effect_once(
+            &self.guard,
+            work.message_id.as_deref(),
+            "stream_offline_refresh",
+            epoch,
+            || async {
+                self.hooks
+                    .on_score_refresh(
+                        &work.broadcaster_id,
+                        Some(&login).filter(|l| !l.is_empty()).map(|l| l.as_str()),
+                        "eventsub_stream_offline",
+                    )
+                    .await;
+                Ok(())
+            },
+        )
+        .await?;
+
+        run_business_effect_once(
+            &self.guard,
+            work.message_id.as_deref(),
+            "stream_offline_auto_raid",
+            epoch,
+            || async {
+                self.hooks
+                    .on_stream_offline(
+                        &work.broadcaster_id,
+                        Some(&login).filter(|l| !l.is_empty()).map(|l| l.as_str()),
+                    )
+                    .await;
+                Ok(())
+            },
+        )
+        .await?;
+        Ok(())
+    }
+
+    /// channel.update (Python `_handle_channel_update`): Protokoll +
+    /// Live-State (exactly-once) + Score-Refresh.
+    async fn handle_channel_update(&self, work: &WorkPayload) -> Result<(), HandlerError> {
+        let (epoch, now) = self.now_pair();
+        run_business_effect_once(
+            &self.guard,
+            work.message_id.as_deref(),
+            "channel_update_db",
+            epoch,
+            || async {
+                self.telemetry
+                    .store_channel_update(&work.broadcaster_id, &work.event, now)
+                    .await
+                    .map_err(|e| Box::new(e) as HandlerError)
+            },
+        )
+        .await?;
+        run_business_effect_once(
+            &self.guard,
+            work.message_id.as_deref(),
+            "channel_update_refresh",
+            epoch,
+            || async {
+                self.hooks
+                    .on_score_refresh(&work.broadcaster_id, None, "eventsub_channel_update")
+                    .await;
+                Ok(())
+            },
+        )
+        .await?;
+        Ok(())
+    }
+}
+
+#[async_trait::async_trait]
+impl InboxHandler for MonitoringEventHandler {
+    async fn handle(&self, work_type: &str, payload: &Value) -> Result<(), HandlerError> {
+        let work = WorkPayload::from(payload);
+        match work_type.trim().to_lowercase().as_str() {
+            "stream.online" => self.handle_stream_online(&work).await,
+            "stream.offline" => self.handle_stream_offline(&work).await,
+            "channel.update" => self.handle_channel_update(&work).await,
+            other => {
+                tracing::warn!(
+                    work_type = other,
+                    "Inbox: unbekannter Work-Type — verworfen"
+                );
+                Ok(())
+            }
+        }
+    }
+}
+
+/// Entpackter Inbox-Payload (vom Dispatcher erzeugt).
+struct WorkPayload {
+    broadcaster_id: String,
+    broadcaster_login: String,
+    message_id: Option<String>,
+    event: Value,
+}
+
+impl WorkPayload {
+    fn from(payload: &Value) -> Self {
+        let text = |key: &str| {
+            payload
+                .get(key)
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .unwrap_or("")
+                .to_string()
+        };
+        Self {
+            broadcaster_id: text("broadcaster_id"),
+            broadcaster_login: text("broadcaster_login"),
+            message_id: Some(text("message_id")).filter(|m| !m.is_empty()),
+            event: payload.get("event").cloned().unwrap_or(Value::Null),
+        }
+    }
+
+    fn login_lower(&self) -> String {
+        let login = self.broadcaster_login.trim().to_lowercase();
+        if !login.is_empty() {
+            return login;
+        }
+        self.event
+            .get("broadcaster_user_login")
+            .and_then(Value::as_str)
+            .map(|l| l.trim().to_lowercase())
+            .unwrap_or_default()
+    }
+}

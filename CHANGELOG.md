@@ -1,3 +1,16 @@
+## #113 — EventSub-Empfang in Rust (Schritt 4d, Teil 1) + Exists-Check-Fix
+
+**Ausgangslage:** Twitch-Events (live gegangen, offline, Titelwechsel, Bits, Subs, Follows, …) erreichen den Bot über die Dashboard-Bridge, die sie per HTTP an die interne API auf Port 8776 zustellt. Beim Cutover übernimmt Rust diesen Port — der Empfangsweg musste also vorher vollständig stehen.
+
+**Geändert:** Die Rust-API hat jetzt denselben Zustell-Endpoint wie Python, mit identischem Vertrag (die Bridge merkt keinen Unterschied). Dahinter steckt die volle Verarbeitungskette:
+
+- **Annahme:** Jede Nachricht wird über den persistenten Dedup-Speicher geprüft (10 Minuten Fenster) — Doppelzustellungen werden sofort als Duplikat beantwortet. Schlägt die Annahme fehl, wird der Dedup-Eintrag wieder freigegeben und die Bridge puffert den Event durable und versucht es erneut — es geht nichts verloren.
+- **Kern-Events** (live/offline/Titelwechsel) wandern in die durable Warteschlange aus #110 und werden vom Worker verarbeitet: live → minimaler Live-State sofort (der Poll-Tick füllt den Rest), offline → Session abschließen + Live-State auf offline (mit 120-Sekunden-Drossel gegen Online/Offline-Flattern und Doppel-Trigger durch Polling), Titelwechsel → Protokoll-Eintrag + Live-State-Update. Jeder fachliche Effekt ist pro Nachricht exactly-once absichert (7-Tage-Gedächtnis) — auch wenn dieselbe Nachricht mehrfach verarbeitet wird, feuert z. B. der Go-Live-Trigger nur einmal.
+- **Telemetrie-Events** (Bits, Subs/Gifts/Resubs, Follows, Werbepausen, Hype-Trains, Bans, Shoutouts, Erstnachrichten) werden direkt in die Statistik-Tabellen geschrieben, inklusive Zuordnung zur laufenden Session. Hype-Train-Enden aktualisieren das passende offene Begin-Event statt zu doppeln.
+- **Raid-Events** gehen an einen Andockpunkt fürs Raid-Subsystem (kommt in einer späteren Phase) statt in der Warteschlange zu verhungern.
+
+**Nebenbei gefunden und gefixt:** Der „Streamer hinzufügen"-Endpoint der Rust-API aus Schritt 3b hatte einen Typ-Fehler im Duplikats-Check — wer einen bereits vorhandenen Streamer anlegte, bekam einen 500er statt der sauberen „existiert schon"-Antwort. Aufgefallen, weil die Tests jetzt konsequent gegen eine echte Wegwerf-Datenbank laufen statt übersprungen zu werden.
+
 ## #112 — Poll-Loop in Rust (Schritt 4c)
 
 **Ausgangslage:** Mit Fundament (#110) und Schreibkern (#111) fehlte der Taktgeber des Monitorings: die Schleife, die alle 15 Sekunden bei Twitch abfragt, wer von den getrackten Streamern live ist, und daraus alle Zustandsübergänge ableitet.

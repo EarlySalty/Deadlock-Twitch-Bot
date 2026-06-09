@@ -2083,6 +2083,7 @@ dependencies = [
  "tb-config",
  "tb-db",
  "tb-internal-api",
+ "tb-monitoring",
  "tb-transport-twitch",
  "tokio",
  "tracing",
@@ -2195,6 +2196,7 @@ dependencies = [
  "tb-analytics",
  "tb-error",
  "tb-http-core",
+ "tb-monitoring",
  "tb-transport-twitch",
  "tokio",
  "tower",
@@ -2209,6 +2211,7 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "chrono",
+ "serde",
  "serde_json",
  "sqlx",
  "tokio",

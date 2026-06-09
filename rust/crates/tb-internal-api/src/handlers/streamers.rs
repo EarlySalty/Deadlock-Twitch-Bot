@@ -105,7 +105,10 @@ pub async fn list_handler(
         })
         .collect();
 
-    Ok(Json(StreamersListResponse { ok: true, streamers }))
+    Ok(Json(StreamersListResponse {
+        ok: true,
+        streamers,
+    }))
 }
 
 /// `POST /internal/twitch/v1/streamers`
@@ -450,10 +453,7 @@ mod tests {
         Router::new()
             .route(&format!("{base}/streamers"), get(list_handler))
             .route(&format!("{base}/streamers"), post(add_handler))
-            .route(
-                &format!("{base}/streamers/:login"),
-                delete(remove_handler),
-            )
+            .route(&format!("{base}/streamers/:login"), delete(remove_handler))
             .route(
                 &format!("{base}/streamers/:login/verify"),
                 post(verify_handler),

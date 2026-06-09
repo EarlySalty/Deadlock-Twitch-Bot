@@ -60,8 +60,8 @@ pub async fn add_streamer(
 ) -> Result<AddStreamerResult, sqlx::Error> {
     let login = login.to_lowercase();
 
-    // Prüfen ob bereits aktiv
-    let exists: Option<(i64,)> = sqlx::query_as(
+    // Prüfen ob bereits aktiv (`SELECT 1` ist INT4 — als i32 dekodieren)
+    let exists: Option<(i32,)> = sqlx::query_as(
         "SELECT 1 FROM twitch_streamers WHERE LOWER(twitch_login) = LOWER($1) AND archived_at IS NULL",
     )
     .bind(&login)

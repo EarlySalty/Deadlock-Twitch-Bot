@@ -54,9 +54,7 @@ fn parse_dsn(dsn: &str) -> DbInfo {
     DbInfo {
         fingerprint: None,
         host: get("host").unwrap_or_else(|| "unknown".to_string()),
-        port: get("port")
-            .and_then(|v| v.parse().ok())
-            .unwrap_or(5432),
+        port: get("port").and_then(|v| v.parse().ok()).unwrap_or(5432),
         database: get("dbname").unwrap_or_else(|| "unknown".to_string()),
         user: get("user").unwrap_or_else(|| "unknown".to_string()),
     }

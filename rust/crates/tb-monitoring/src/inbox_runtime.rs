@@ -56,7 +56,8 @@ pub trait DeadLetterHook: Send + Sync {
 /// Uhr in Epoch-Sekunden — injizierbar für deterministische Tests.
 pub type ClockFn = Arc<dyn Fn() -> f64 + Send + Sync>;
 
-fn system_clock() -> f64 {
+/// System-Uhr in Epoch-Sekunden — Standard-Implementierung für [`ClockFn`].
+pub fn epoch_clock() -> f64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs_f64())
@@ -77,7 +78,7 @@ impl InboxRuntime {
             store,
             handler,
             dead_letter_hook: None,
-            clock: Arc::new(system_clock),
+            clock: Arc::new(epoch_clock),
         }
     }
 
@@ -269,11 +270,45 @@ impl InboxRuntimeHandle {
         Ok(work_id)
     }
 
+    /// Leichtgewichtiger, klonbarer Enqueue-Zugang (z. B. für den Dispatcher),
+    /// ohne das Steuer-Handle (shutdown) herauszugeben.
+    pub fn enqueuer(&self) -> InboxEnqueuer {
+        InboxEnqueuer {
+            store: self.store.clone(),
+            clock: self.clock.clone(),
+            wakeup: self.wakeup.clone(),
+        }
+    }
+
     /// Stoppt den Worker geordnet; ein laufender Auftrag wird noch beendet.
     pub async fn shutdown(self) {
         let _ = self.stop.send(true);
         self.wakeup.notify_one();
         let _ = self.task.await;
+    }
+}
+
+/// Enqueue-only-Sicht auf die laufende Inbox (weckt den Worker mit).
+#[derive(Clone)]
+pub struct InboxEnqueuer {
+    store: ProcessingInboxStore,
+    clock: ClockFn,
+    wakeup: Arc<Notify>,
+}
+
+impl InboxEnqueuer {
+    pub async fn enqueue(
+        &self,
+        work_type: &str,
+        payload: &serde_json::Value,
+        message_id: Option<&str>,
+    ) -> Result<String, sqlx::Error> {
+        let work_id = self
+            .store
+            .enqueue(work_type, payload, message_id, (self.clock)())
+            .await?;
+        self.wakeup.notify_one();
+        Ok(work_id)
     }
 }
 

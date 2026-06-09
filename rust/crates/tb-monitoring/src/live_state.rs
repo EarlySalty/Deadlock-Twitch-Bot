@@ -305,6 +305,91 @@ impl LiveStateStore {
         Ok(())
     }
 
+    /// EventSub stream.online: Drift-Cleanup + minimaler Upsert. Bestehende
+    /// Felder bleiben erhalten (COALESCE-Semantik wie Python
+    /// `_handle_stream_online`) — der Poll-Tick füllt den Rest nach.
+    pub async fn apply_stream_online(
+        &self,
+        broadcaster_user_id: &str,
+        login_lower: &str,
+        stream_id: Option<&str>,
+        started_at: Option<&str>,
+        now_iso: &str,
+    ) -> Result<(), sqlx::Error> {
+        let mut tx = self.pool.begin().await?;
+        if !login_lower.is_empty() {
+            sqlx::query(
+                r#"
+                DELETE FROM twitch_live_state
+                 WHERE LOWER(streamer_login) = LOWER($1)
+                   AND LOWER(COALESCE(twitch_user_id, '')) <> LOWER($2)
+                "#,
+            )
+            .bind(login_lower)
+            .bind(broadcaster_user_id)
+            .execute(&mut *tx)
+            .await?;
+        }
+        sqlx::query(
+            r#"
+            INSERT INTO twitch_live_state (
+                twitch_user_id, streamer_login, is_live, last_seen_at, last_stream_id, last_started_at
+            )
+            VALUES ($1, $2, 1, $3, $4, $5)
+            ON CONFLICT (twitch_user_id) DO UPDATE
+                SET streamer_login = COALESCE(NULLIF(EXCLUDED.streamer_login, ''), twitch_live_state.streamer_login),
+                    is_live = 1,
+                    last_seen_at = EXCLUDED.last_seen_at,
+                    last_stream_id = COALESCE(EXCLUDED.last_stream_id, twitch_live_state.last_stream_id),
+                    last_started_at = COALESCE(EXCLUDED.last_started_at, twitch_live_state.last_started_at)
+            "#,
+        )
+        .bind(broadcaster_user_id)
+        .bind(if login_lower.is_empty() {
+            broadcaster_user_id
+        } else {
+            login_lower
+        })
+        .bind(now_iso)
+        .bind(stream_id)
+        .bind(started_at)
+        .execute(&mut *tx)
+        .await?;
+        tx.commit().await?;
+        Ok(())
+    }
+
+    /// EventSub stream.offline: Live-State sofort auf offline setzen.
+    pub async fn apply_stream_offline(
+        &self,
+        broadcaster_user_id: &str,
+        now_iso: &str,
+    ) -> Result<(), sqlx::Error> {
+        sqlx::query(
+            "UPDATE twitch_live_state
+                SET is_live = 0, last_seen_at = $1, active_session_id = NULL
+              WHERE twitch_user_id = $2",
+        )
+        .bind(now_iso)
+        .bind(broadcaster_user_id)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    /// Login zu einer user_id (Python `_resolve_eventsub_broadcaster_login`).
+    pub async fn login_for_user_id(&self, user_id: &str) -> Result<Option<String>, sqlx::Error> {
+        let login: Option<String> = sqlx::query_scalar(
+            "SELECT streamer_login FROM twitch_live_state WHERE twitch_user_id = $1",
+        )
+        .bind(user_id)
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(login
+            .map(|l| l.trim().to_lowercase())
+            .filter(|l| !l.is_empty()))
+    }
+
     /// Liest den Finalize-relevanten Zustand eines Logins.
     pub async fn finalize_state(&self, login: &str) -> Result<Option<FinalizeState>, sqlx::Error> {
         sqlx::query_as(

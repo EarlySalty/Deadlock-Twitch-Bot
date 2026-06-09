@@ -279,7 +279,12 @@ mod tests {
             .layer(middleware::from_fn(loopback_only))
     }
 
-    fn loopback_req_json(method: &str, uri: &str, body: &str, token: Option<&str>) -> Request<Body> {
+    fn loopback_req_json(
+        method: &str,
+        uri: &str,
+        body: &str,
+        token: Option<&str>,
+    ) -> Request<Body> {
         let mut builder = Request::builder()
             .method(method)
             .uri(uri)
@@ -325,7 +330,12 @@ mod tests {
 
         let base = tb_http_core::INTERNAL_API_BASE_PATH;
         let body = r#"{"login":"testuser","reason":"Spam"}"#;
-        let req = loopback_req_json("POST", &format!("{base}/globalban/add"), body, Some("secret"));
+        let req = loopback_req_json(
+            "POST",
+            &format!("{base}/globalban/add"),
+            body,
+            Some("secret"),
+        );
         let resp = app.oneshot(req).await.unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
     }

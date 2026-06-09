@@ -21,8 +21,10 @@
 //! deshalb 1:1 zum Python-Original — bewusste Abweichungen sind im
 //! Plan-Doc `docs/plans/2026-06-09-schritt-4-monitoring.md` dokumentiert.
 
+pub mod dispatch;
 pub mod exp_sessions;
 pub mod guard;
+pub mod handlers;
 pub mod inbox_runtime;
 pub mod inbox_store;
 pub mod live_state;
@@ -30,12 +32,15 @@ pub mod poller;
 pub mod sessions;
 pub mod stats;
 pub mod stream;
+pub mod telemetry;
 
+pub use dispatch::{DispatchOutcome, EventSubDispatcher, EventSubHooks, NoopEventSubHooks};
 pub use exp_sessions::{ExpSessionStore, ExpSessionTracker};
 pub use guard::{GuardKind, GuardStore};
+pub use handlers::MonitoringEventHandler;
 pub use inbox_runtime::{
-    ClockFn, DeadLetterHook, DeadLetterNotice, HandlerError, InboxHandler, InboxRuntime,
-    InboxRuntimeHandle,
+    epoch_clock, ClockFn, DeadLetterHook, DeadLetterNotice, HandlerError, InboxEnqueuer,
+    InboxHandler, InboxRuntime, InboxRuntimeHandle,
 };
 pub use inbox_store::{DeadLetterEntry, LeasedWork, PendingEntry, ProcessingInboxStore};
 pub use live_state::{
@@ -50,3 +55,4 @@ pub use sessions::{
 };
 pub use stats::{StatsSample, StatsStore};
 pub use stream::StreamSnapshot;
+pub use telemetry::TelemetryStore;

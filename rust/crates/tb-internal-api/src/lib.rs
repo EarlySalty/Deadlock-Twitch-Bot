@@ -6,30 +6,42 @@
 
 pub mod handlers;
 
-use axum::{middleware, routing::{delete, get, post}, Extension, Router};
+use axum::{
+    middleware,
+    routing::{delete, get, post},
+    Extension, Router,
+};
 use sqlx::PgPool;
 use std::sync::Arc;
-use tb_http_core::{
-    loopback_only, internal_auth, ExpectedToken, INTERNAL_API_BASE_PATH,
-};
+use tb_http_core::{internal_auth, loopback_only, ExpectedToken, INTERNAL_API_BASE_PATH};
+use tb_monitoring::EventSubDispatcher;
 use tb_transport_twitch::HelixClient;
+
+pub use handlers::eventsub::EventSubDispatcherExt;
 
 /// Baut den axum-Router für alle internen Endpoints.
 ///
 /// `token` wird als `ExpectedToken`-Extension eingesetzt.
 /// `helix` wird als `Extension<Arc<Option<HelixClient>>>` eingesetzt.
+/// `dispatcher` bedient `POST /eventsub/dispatch`; `None` → 503 (Bridge puffert).
 /// `loopback_only` + `internal_auth` werden als Layer gestapelt.
-pub fn build_internal_router(pool: PgPool, token: String, helix: Arc<Option<HelixClient>>) -> Router {
-    use handlers::{global_ban, healthz, streamers};
+pub fn build_internal_router(
+    pool: PgPool,
+    token: String,
+    helix: Arc<Option<HelixClient>>,
+    dispatcher: Option<Arc<EventSubDispatcher>>,
+) -> Router {
+    use handlers::{eventsub, global_ban, healthz, streamers};
 
     let base = INTERNAL_API_BASE_PATH; // "/internal/twitch/v1"
 
     Router::new()
         .route(&format!("{base}/healthz"), get(healthz::healthz_handler))
         .route(
-            &format!("{base}/globalban"),
-            get(global_ban::list_handler),
+            &format!("{base}/eventsub/dispatch"),
+            post(eventsub::dispatch_handler),
         )
+        .route(&format!("{base}/globalban"), get(global_ban::list_handler))
         .route(
             &format!("{base}/globalban/add"),
             post(global_ban::add_handler),
@@ -67,6 +79,7 @@ pub fn build_internal_router(pool: PgPool, token: String, helix: Arc<Option<Heli
         )
         .with_state(pool)
         .layer(Extension(helix))
+        .layer(Extension(EventSubDispatcherExt(dispatcher)))
         .layer(Extension(ExpectedToken(token.clone())))
         .layer(middleware::from_fn_with_state(token, internal_auth))
         .layer(middleware::from_fn(loopback_only))

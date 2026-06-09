@@ -14,6 +14,12 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use tb_config::Settings;
 use tb_internal_api::build_internal_router;
+use tb_monitoring::{
+    EventSubDispatcher, ExpSessionStore, ExpSessionTracker, GuardStore, InboxRuntime,
+    LiveStateStore, MonitoringEventHandler, NoFollowerSource, NoopEventSubHooks, SessionTracker,
+    TelemetryStore,
+};
+use tb_monitoring::sessions::store::SessionStore;
 use tb_transport_twitch::{HelixClient, HelixConfig};
 
 #[tokio::main]
@@ -61,9 +67,47 @@ async fn main() {
         }
     };
 
+    // EventSub-Ingress: Inbox-Worker + Dispatcher (Hooks Noop bis 4f).
+    // Der Bridge-Vertrag POST /eventsub/dispatch ist damit voll bedienbar;
+    // Außenwirkung (Raid, Announcements) bleibt bis zum Cutover aus.
+    let target_game =
+        std::env::var("TWITCH_TARGET_GAME_NAME").unwrap_or_else(|_| "Deadlock".to_string());
+    let guard = GuardStore::new(pool.clone());
+    let telemetry = TelemetryStore::new(pool.clone());
+    let live_state = LiveStateStore::new(pool.clone());
+    let tracker = Arc::new(SessionTracker::new(
+        SessionStore::new(pool.clone()),
+        live_state.clone(),
+        ExpSessionTracker::new(ExpSessionStore::new(pool.clone())),
+        Arc::new(NoFollowerSource),
+        &target_game,
+    ));
+    tracker.rehydrate().await;
+    let eventsub_hooks = Arc::new(NoopEventSubHooks);
+    let handler = Arc::new(MonitoringEventHandler::new(
+        guard.clone(),
+        live_state,
+        tracker,
+        telemetry.clone(),
+        eventsub_hooks.clone(),
+        Arc::new(tb_monitoring::epoch_clock),
+    ));
+    let inbox = InboxRuntime::new(
+        tb_monitoring::ProcessingInboxStore::new(pool.clone()),
+        handler,
+    )
+    .start();
+    let dispatcher = Arc::new(EventSubDispatcher::new(
+        guard,
+        inbox.enqueuer(),
+        telemetry,
+        eventsub_hooks,
+        Arc::new(tb_monitoring::epoch_clock),
+    ));
+
     let addr = SocketAddr::from(([127, 0, 0, 1], port));
     let token = settings.internal_api.token.clone();
-    let app = build_internal_router(pool, token, helix);
+    let app = build_internal_router(pool, token, helix, Some(dispatcher));
 
     tracing::info!("tb-bot lauscht auf {addr}");
     let listener = tokio::net::TcpListener::bind(addr)

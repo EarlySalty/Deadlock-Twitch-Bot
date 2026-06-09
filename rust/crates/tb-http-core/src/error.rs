@@ -85,6 +85,18 @@ impl ApiError {
         }
     }
 
+    /// 503 Service Unavailable — Upstream/Abhängigkeit nicht bereit.
+    pub fn unavailable() -> Self {
+        Self {
+            status: StatusCode::SERVICE_UNAVAILABLE,
+            body: ApiErrorBody {
+                error: "upstream_unavailable",
+                message: "upstream unavailable",
+            },
+            dyn_body: None,
+        }
+    }
+
     /// 400 Bad Request mit dynamischem JSON-Body.
     pub fn bad_request_with_body(body: serde_json::Value) -> Self {
         Self {

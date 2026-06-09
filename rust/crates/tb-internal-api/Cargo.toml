@@ -17,6 +17,7 @@ url          = { workspace = true }
 tb-analytics        = { workspace = true }
 tb-error            = { workspace = true }
 tb-http-core        = { workspace = true }
+tb-monitoring       = { workspace = true }
 tb-transport-twitch = { workspace = true }
 
 [dev-dependencies]
