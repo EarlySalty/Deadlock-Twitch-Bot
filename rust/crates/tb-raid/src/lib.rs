@@ -15,27 +15,40 @@
 //!   **6c, Partner-Raid-Scoring.**
 //! - [`score_store`] — DB-Store für `twitch_partner_raid_scores` (Lesen/Schreiben).
 //!   **6c, Partner-Raid-Scoring.**
+//! - [`raid_history_store`] — Raid-History schreiben + recent-targets laden.
+//!   **6d, Raid-Ausführung.**
+//! - [`strikes_store`] — Raid-Disabled-Strikes UPSERT. **6d.**
+//! - [`candidate_selection`] — reine Kandidaten-Auswahl-Logik (kein DB).
+//!   **6d.**
 //!
 //! Alle 6a (RaidAuth-Fundament). Plan: `docs/plans/2026-06-09-schritt-6-raid.md`.
 
 pub mod auth_writer;
+pub mod candidate_selection;
 pub mod oauth_flow;
 pub mod raid_blacklist;
+pub mod raid_history_store;
 pub mod scope_profiles;
 pub mod score_store;
 pub mod scoring;
 pub mod state_store;
+pub mod strikes_store;
 pub mod token_blacklist;
 pub mod token_refresher;
 pub mod token_store;
 pub mod util;
 
 pub use auth_writer::{AuthWriteError, AuthWriter, NewAuth};
+pub use candidate_selection::{
+    is_retryable_raid_error, select_by_score, select_fairest, FairnessCandidate, ScoredCandidate,
+    SelectionReason, SelectionResult, DAILY_RAID_SOFT_CAP, PARTNER_SCORE_THRESHOLD,
+};
 pub use oauth_flow::{
     build_authorize_url, build_state_info, StreamerContextResolver,
     PUBLIC_WEBSITE_ONBOARDING_LOGIN, TWITCH_AUTHORIZE_URL,
 };
 pub use raid_blacklist::RaidBlacklistStore;
+pub use raid_history_store::{RaidHistoryStore, RecordRaidInput};
 pub use scope_profiles::{
     normalize_scope_profile, scopes_for_profile, AUTO_SCOPE_PROFILE, BASE_CRITICAL_STREAMER_SCOPES,
     BASE_SCOPE_PROFILE, BASE_STREAMER_SCOPES, DASHBOARD_REAUTH_SCOPE_PROFILE,
@@ -50,6 +63,7 @@ pub use scoring::{
     NEW_PARTNER_RAID_THRESHOLD, RAID_BOOST_MULTIPLIER,
 };
 pub use state_store::{RaidOAuthState, StateStore};
+pub use strikes_store::StrikesStore;
 pub use token_blacklist::TokenBlacklistStore;
 pub use token_refresher::{
     advisory_lock_pair, RaidTokenRefresher, RefreshError, RefreshOutcome, TokenBlacklist,
