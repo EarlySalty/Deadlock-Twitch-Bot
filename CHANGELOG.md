@@ -1,3 +1,9 @@
+## #118 — Doppel-Abschluss-Schutz für Stream-Sessions (Rust-Monitoring)
+
+**Problem:** Eine Stream-Session kann theoretisch von zwei Seiten gleichzeitig abgeschlossen werden — vom Abfrage-Takt und vom Twitch-Offline-Event. Ohne Schutz überschreibt der zweite Abschluss die bereits berechneten Kennzahlen (Retention, Chatter, Dauer) mit neuen, dann falschen Werten. Im Python-Original existiert diese Lücke bis heute.
+
+**Geändert:** Der Abschluss im Rust-Monitoring greift jetzt nur noch, wenn die Session wirklich noch offen ist (Bedingung direkt im Datenbank-Update). Kommt ein zweiter Abschluss-Versuch, läuft er ins Leere, räumt nur seinen Zwischenspeicher auf und meldet sauber „war schon zu" — die ersten, korrekten Kennzahlen bleiben unangetastet.
+
 ## #117 — Chatter-Statistiken pro Stream waren seit Monaten 0 — gefixt
 
 **Was war das Problem:** Beim Abschluss jeder Stream-Session zählt der Bot, wie viele verschiedene Chatter im Stream geschrieben haben, wie viele davon zum ersten Mal da waren und wie viele Wiederkehrer — diese drei Werte landen in den Session-Statistiken fürs Dashboard. Genau diese Zählung war kaputt: Sie benutzte eine SQL-Summen-Funktion auf einem Wahrheitswert-Feld (`SUM` über ein boolean), und die gibt es in Postgres schlicht nicht. Seit der Umstellung dieser Spalte auf echte Wahrheitswerte schlug die Abfrage bei **jedem** Session-Abschluss fehl. Tückisch daran: Der Fehler wurde intern abgefangen und nur als unauffällige Debug-Zeile geschluckt — nach außen sah alles normal aus, aber jede abgeschlossene Session wurde mit 0 einzigartigen, 0 neuen und 0 wiederkehrenden Chattern gespeichert.

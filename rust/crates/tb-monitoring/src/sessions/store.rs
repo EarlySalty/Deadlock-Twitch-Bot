@@ -371,9 +371,13 @@ impl SessionStore {
     }
 
     /// Session abschließen + Live-State-Verknüpfung lösen (eine Transaktion).
-    pub async fn apply_finalize(&self, update: &FinalizeUpdate) -> Result<(), sqlx::Error> {
+    /// `ended_at IS NULL`-Guard härtet gegen Doppel-Finalize (Race
+    /// Poll-Offline vs. EventSub-Offline) — Python fehlt der Guard, ein
+    /// zweiter Abschluss würde dort die fertigen Kennzahlen überschreiben.
+    /// `false` = Session war bereits abgeschlossen.
+    pub async fn apply_finalize(&self, update: &FinalizeUpdate) -> Result<bool, sqlx::Error> {
         let mut tx = self.pool.begin().await?;
-        sqlx::query(
+        let updated = sqlx::query(
             r#"
             UPDATE twitch_stream_sessions
                SET ended_at = $1,
@@ -395,7 +399,7 @@ impl SessionStore {
                    notes = $17,
                    had_deadlock_in_session = $18,
                    game_name = COALESCE(game_name, $19)
-             WHERE id = $20
+             WHERE id = $20 AND ended_at IS NULL
             "#,
         )
         .bind(update.ended_at)
@@ -427,7 +431,7 @@ impl SessionStore {
         .execute(&mut *tx)
         .await?;
         tx.commit().await?;
-        Ok(())
+        Ok(updated.rows_affected() > 0)
     }
 
     /// Verwaiste offene Sessions: (1) Scout-Sessions ohne Samples > 24 h,

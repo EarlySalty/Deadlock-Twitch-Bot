@@ -326,9 +326,19 @@ impl SessionTracker {
             had_deadlock_in_session: had_deadlock_session,
             fallback_game_name: last_game,
         };
-        if let Err(error) = self.store.apply_finalize(&update).await {
-            tracing::debug!(%error, login, "Konnte Session-Abschluss nicht speichern");
-            return false;
+        match self.store.apply_finalize(&update).await {
+            Ok(true) => {}
+            Ok(false) => {
+                // Doppel-Finalize-Race: anderer Pfad war schneller —
+                // Kennzahlen nicht überschreiben, nur Cache aufräumen.
+                tracing::debug!(login, session_id, "Session bereits abgeschlossen");
+                self.drop_cached(&login, session_id);
+                return false;
+            }
+            Err(error) => {
+                tracing::debug!(%error, login, "Konnte Session-Abschluss nicht speichern");
+                return false;
+            }
         }
 
         self.drop_cached(&login, session_id);
