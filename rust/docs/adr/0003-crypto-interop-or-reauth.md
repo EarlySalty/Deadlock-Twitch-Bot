@@ -25,6 +25,13 @@ Base64-/Encoding-Konventionen.
    sichtbarer Effekt (Re-Login). Nur falls Re-Login unerwünscht ist, wird die `fernet`-Crate auf
    Byte-Kompatibilität geprüft. Entscheidung spätestens vor der Dashboard-Phase.
 
+   **Befund (2026-06-09, verstärkt den Re-Login-Default):** Auf Linux ist `keyring` per Default
+   **aus** (Gate `DEADLOCK_ENABLE_KEYRING`, sonst nur unter Windows aktiv). Der Fernet-Key kommt aus
+   dem keyring — fehlt er, erzeugt der Bot pro Prozess einen neuen (`Fernet.generate_key()`). Folge:
+   Bestehende `dashboard_sessions` überleben im aktuellen Deployment **schon heute keinen Neustart**
+   und sind cross-instance nicht entschlüsselbar. Ein Re-Login durch den Cutover kostet also nichts,
+   was real überlebt → der Fernet-Nachbau ist verworfen, AES-256-GCM für Sessions ist gesetzt.
+
 ## Konsequenzen
 
 - AES-Interop ist ein **harter Gate** vor dem Raid-/Social-Cutover — kein Cutover ohne grünen Test
@@ -35,5 +42,8 @@ Base64-/Encoding-Konventionen.
 
 ## Offen
 
-- Ausgang des AES-256-GCM-Interop-Tests (Phase 0).
-- Endgültige Fernet-Entscheidung (Nachbau vs. Re-Login) vor Dashboard-Phase.
+- Ausgang des AES-256-GCM-Interop-Tests. Der Vertrag ist inzwischen byte-genau dokumentiert
+  (`02-db-contract.md` + Plan 0a) und der Gate-Test ist als Cross-Language-Test spezifiziert
+  (`plans/2026-06-09-phase-0a-bootstrap-krypto-gate.md`, Task 4). Es fehlt nur noch die Ausführung.
+- ~~Endgültige Fernet-Entscheidung~~ — **entschieden:** kein Nachbau, Re-Login/AES-256-GCM
+  (siehe Befund oben).
