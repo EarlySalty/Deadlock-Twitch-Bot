@@ -77,7 +77,7 @@
 
 | Slice | Inhalt | Schaltet Monitoring-Hook scharf |
 |---|---|---|
-| **6a** | RaidAuth-Fundament: StateStore + OAuthFlow + TokenRefresher + TokenStore (`twitch_raid_auth`, `oauth_state_tokens`, `twitch_token_blacklist`) | — (Dependency für alles) |
+| **6a** | RaidAuth-Fundament: StateStore ✅ + scope_profiles/OAuthFlow ✅ + TokenStore (Lese-/Entschlüsselungspfad, **Prod-Interop bewiesen**) ✅ + TokenRefresher (Refresh-Schreibpfad, Advisory-Lock byte-identisch) ✅. **Offen: `exchange_code_for_token`** (Onboarding/Initial-Auth, legt Auth-Zeile an). | — (Dependency für alles) |
 | **6b** | Blacklist + Raid-Guard (`twitch_raid_blacklist`, external-recruitment-blacklist-pending, `channel.moderate`-Guard) | `on_channel_moderate` |
 | **6c** | Scoring (`twitch_partner_raid_scores`/`_score_tracking`, Score-Berechnung + Refresh) | `on_score_refresh` |
 | **6d** | Raid-Ausführung: Candidate-Selection + Executor + Pipeline + Pending (`twitch_raid_history`, `twitch_auto_raid_pause`, `twitch_raid_disabled_strikes`) | — |
