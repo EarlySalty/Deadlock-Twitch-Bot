@@ -37,6 +37,7 @@ pub mod raid_executor;
 pub mod raid_history_store;
 pub mod scope_profiles;
 pub mod score_store;
+pub mod score_tracking_store;
 pub mod scoring;
 pub mod signal_correlation;
 pub mod state_store;
@@ -69,6 +70,7 @@ pub use scope_profiles::{
     DASHBOARD_UPGRADE_SCOPES, FULL_STREAMER_SCOPES,
 };
 pub use score_store::{PartnerRaidScoreRow, PartnerRaidScoreUpsert, ScoreStore};
+pub use score_tracking_store::{ScoreTrackingStore, TrackConfirmedInput};
 pub use scoring::{
     compute_base_score, compute_duration_score, compute_fairness_score, compute_final_score,
     compute_new_partner_multiplier, compute_raid_boost_multiplier, compute_readiness_score,
