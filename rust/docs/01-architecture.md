@@ -30,7 +30,7 @@ rust/
 | `tb-observability` | tracing-Setup, Observability-Event-Writer (mpsc→DB-Task), Metrics | tb-config, tb-db | tracing |
 | `tb-crypto` | AES-256-GCM-Feldverschlüsselung (raid_auth, social-media), Session-Krypto, keyring | tb-error | aes-gcm, keyring, hmac, sha2 |
 | `tb-db` | sqlx-Pool, **eine** Migrations-SSOT (sqlx-native), Row-Structs/-Mapping, Tx-Helper, Idempotency-Store | tb-domain, tb-config, tb-error | sqlx (postgres, tokio, migrate) |
-| `tb-transport-twitch` | Helix-Wrapper (shared `Arc<Client>`), Token-Manager (Auto-Refresh), OAuth2-PKCE | tb-config, tb-crypto, tb-error | reqwest (rustls), twitch_api, oauth2 |
+| `tb-transport-twitch` | Helix-Wrapper (shared `Arc<Client>`), App-Token-Manager (Auto-Refresh); OAuth2-PKCE → Raid-Phase | tb-config, tb-crypto, tb-error | reqwest (rustls) — **0c hand-rolled**; `twitch_api`/`oauth2` erst bei vielen Helix-Endpoints (YAGNI) |
 | `tb-transport-discord` | `DiscordBackend`-Trait + `BrokerRelay`-Impl (HTTP an 8770) + `Noop`, Embed-Builder | tb-config, tb-error | reqwest |
 | `tb-eventsub` | EventSub WS-Pool + Webhook-HMAC-Verify + Inbox/Outbox-Queue (`FOR UPDATE SKIP LOCKED`) | tb-transport-twitch, tb-db | tokio-tungstenite, hmac |
 | `tb-llm` | LLM-Dispatcher-Trait (Anthropic/MiniMax/Ollama) + think-Strip + Rate-Limit | tb-config, tb-error | reqwest, serde_json |
