@@ -10,6 +10,9 @@ members = [
     "crates/tb-transport-twitch",
     "crates/tb-transport-discord",
     "crates/tb-http-core",
+    "crates/tb-analytics",
+    "crates/tb-dashboard-api",
+    "bin/tb-dashboard",
 ]
 
 [workspace.package]
@@ -32,7 +35,7 @@ reqwest = { version = "0.12", default-features = false, features = ["json", "rus
 sha2 = "0.10"
 axum = "0.7"
 tower = "0.5"
-tower-http = { version = "0.6", features = ["trace"] }
+tower-http = { version = "0.6", features = ["trace", "cors"] }
 async-trait = "0.1"
 wiremock = "0.6"
 tb-error = { path = "crates/tb-error" }
@@ -43,4 +46,6 @@ tb-observability = { path = "crates/tb-observability" }
 tb-db = { path = "crates/tb-db" }
 tb-transport-twitch = { path = "crates/tb-transport-twitch" }
 tb-transport-discord = { path = "crates/tb-transport-discord" }
-tb-http-core = { path = "crates/tb-http-core" }
+tb-http-core     = { path = "crates/tb-http-core" }
+tb-analytics     = { path = "crates/tb-analytics" }
+tb-dashboard-api = { path = "crates/tb-dashboard-api" }

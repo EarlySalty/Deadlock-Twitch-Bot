@@ -1,0 +1,18 @@
+[package]
+name = "tb-dashboard"
+version = "0.1.0"
+edition.workspace = true
+
+[[bin]]
+name = "tb-dashboard"
+path = "src/main.rs"
+
+[dependencies]
+axum              = { workspace = true }
+tokio             = { workspace = true }
+tracing           = { workspace = true }
+tracing-subscriber = { workspace = true }
+sqlx              = { workspace = true }
+tb-config         = { workspace = true }
+tb-db             = { workspace = true }
+tb-dashboard-api  = { workspace = true }

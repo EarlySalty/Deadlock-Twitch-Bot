@@ -1945,6 +1945,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "tb-analytics"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "sqlx",
+ "tb-config",
+ "tb-db",
+ "tb-error",
+ "tokio",
+]
+
+[[package]]
 name = "tb-config"
 version = "0.1.0"
 dependencies = [
@@ -1961,6 +1973,38 @@ dependencies = [
  "serde_json",
  "tb-error",
  "zeroize",
+]
+
+[[package]]
+name = "tb-dashboard"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "sqlx",
+ "tb-config",
+ "tb-dashboard-api",
+ "tb-db",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
+name = "tb-dashboard-api"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "serde",
+ "serde_json",
+ "sqlx",
+ "tb-analytics",
+ "tb-config",
+ "tb-db",
+ "tb-error",
+ "tokio",
+ "tower",
+ "tower-http",
+ "tracing",
 ]
 
 [[package]]

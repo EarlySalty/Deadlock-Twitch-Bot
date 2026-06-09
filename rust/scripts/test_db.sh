@@ -29,6 +29,14 @@ case "${1:-}" in
       echo -n "."; sleep 1
     done
     if [ "$ready" -ne 1 ]; then echo " TIMEOUT"; docker logs "$NAME" 2>&1 | tail -20; exit 1; fi
+    # Settle: TimescaleDB initialisiert nach "ready to accept connections" noch
+    # Background-Worker. Ein Schwung paralleler Test-Verbindungen direkt danach kann
+    # sonst sporadisch resettet werden. Kurz warten, bis der bg-worker verbunden ist.
+    for _ in $(seq 1 15); do
+      if docker logs "$NAME" 2>&1 | grep -q 'TimescaleDB background worker launcher connected'; then break; fi
+      sleep 1
+    done
+    sleep 2
     echo "TB_TEST_DATABASE_URL=${TB_TEST_DATABASE_URL}"
     ;;
   down)
