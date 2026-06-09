@@ -439,15 +439,15 @@ class PartnerRaidScoreTrackingHookTests(unittest.IsolatedAsyncioTestCase):
         try:
             with (
                 patch(
-                    "bot.raid.bot.readonly_connection",
+                    "bot.raid.runtime.dependencies.readonly_connection",
                     side_effect=lambda: contextlib.nullcontext(_CompatConn(conn)),
                 ),
                 patch(
-                    "bot.raid.bot.transaction",
+                    "bot.raid.runtime.dependencies.transaction",
                     side_effect=lambda: contextlib.nullcontext(_CompatConn(conn)),
                 ),
                 patch(
-                    "bot.raid.bot.track_confirmed_partner_raid",
+                    "bot.raid.runtime.dependencies.track_confirmed_partner_raid",
                     return_value=123,
                 ) as track_mock,
             ):

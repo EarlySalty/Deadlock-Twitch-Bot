@@ -236,34 +236,52 @@ class _SessionsMixin:
         session_id: int | None = None
         try:
             with storage.transaction() as c:
-                cur = c.execute(
-                    """
-                    INSERT INTO twitch_stream_sessions (
-                        streamer_login, stream_id, started_at, start_viewers, peak_viewers,
-                        end_viewers, avg_viewers, samples, followers_start, stream_title,
-                        language, is_mature, tags, game_name, had_deadlock_in_session
-                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                    RETURNING id
-                    """,
-                    (
-                        login,
-                        stream_id,
-                        start_ts,
-                        viewer_count,
-                        viewer_count,
-                        viewer_count,
-                        float(viewer_count),
-                        0,
-                        followers_start,
-                        title,
-                        language,
-                        bool(is_mature),
-                        tags,
-                        game_name,
-                        had_deadlock_initial,
-                    ),
+                # Doppel-Insert-Guard: Advisory-Lock pro Login + Open-Check in
+                # derselben Transaktion. Der In-Memory-Cache allein schützt
+                # nicht gegen Races (zweiter Prozess/Tick) — bei bereits
+                # offener Session wird deren ID übernommen statt eine zweite
+                # anzulegen.
+                c.execute(
+                    "SELECT pg_advisory_xact_lock(hashtextextended('twitch_stream_session:' || %s, 0))",
+                    (login,),
                 )
-                session_id = int(cur.fetchone()[0])
+                existing = c.execute(
+                    "SELECT id FROM twitch_stream_sessions "
+                    "WHERE streamer_login = %s AND ended_at IS NULL "
+                    "ORDER BY started_at DESC LIMIT 1",
+                    (login,),
+                ).fetchone()
+                if existing:
+                    session_id = int(existing[0] if not hasattr(existing, "keys") else existing["id"])
+                else:
+                    cur = c.execute(
+                        """
+                        INSERT INTO twitch_stream_sessions (
+                            streamer_login, stream_id, started_at, start_viewers, peak_viewers,
+                            end_viewers, avg_viewers, samples, followers_start, stream_title,
+                            language, is_mature, tags, game_name, had_deadlock_in_session
+                        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                        RETURNING id
+                        """,
+                        (
+                            login,
+                            stream_id,
+                            start_ts,
+                            viewer_count,
+                            viewer_count,
+                            viewer_count,
+                            float(viewer_count),
+                            0,
+                            followers_start,
+                            title,
+                            language,
+                            bool(is_mature),
+                            tags,
+                            game_name,
+                            had_deadlock_initial,
+                        ),
+                    )
+                    session_id = int(cur.fetchone()[0])
                 c.execute(
                     "UPDATE twitch_live_state SET active_session_id = %s WHERE streamer_login = %s",
                     (session_id, login),
@@ -569,9 +587,10 @@ class _SessionsMixin:
             bool(target_game_lower) and last_game_lower == target_game_lower
         )
 
+        finalized_rowcount = 0
         try:
             with storage.transaction() as c:
-                c.execute(
+                cur = c.execute(
                     """
                     UPDATE twitch_stream_sessions
                        SET ended_at = %s,
@@ -593,7 +612,7 @@ class _SessionsMixin:
                            notes = %s,
                            had_deadlock_in_session = %s,
                            game_name = COALESCE(game_name, %s)
-                     WHERE id = %s
+                     WHERE id = %s AND ended_at IS NULL
                     """,
                     (
                         now_dt.isoformat(timespec="seconds"),
@@ -618,6 +637,13 @@ class _SessionsMixin:
                         resolved_session_id,
                     ),
                 )
+                # Nur ein explizites rowcount == 0 heißt "schon abgeschlossen";
+                # -1/fehlend (Treiber/Fakes ohne Zähler) gilt als Erfolg.
+                raw_rowcount = getattr(cur, "rowcount", None)
+                try:
+                    finalized_rowcount = int(raw_rowcount) if raw_rowcount is not None else -1
+                except (TypeError, ValueError):
+                    finalized_rowcount = -1
                 c.execute(
                     "UPDATE twitch_live_state SET active_session_id = NULL WHERE streamer_login = %s",
                     (login_lower,),
@@ -628,6 +654,19 @@ class _SessionsMixin:
                 login_lower,
                 exc_info=True,
             )
+            return False
+
+        if finalized_rowcount == 0:
+            # Doppel-Finalize-Race (Polling vs. EventSub): anderer Pfad war
+            # schneller — fertige Kennzahlen nicht überschreiben, nur Cache
+            # aufräumen und die Folge-Hooks dem ersten Abschluss überlassen.
+            log.debug(
+                "Session %s für %s bereits abgeschlossen — überspringe Doppel-Finalize",
+                resolved_session_id,
+                login_lower,
+            )
+            if cache.get(login_lower) == resolved_session_id:
+                cache.pop(login_lower, None)
             return False
 
         if cache.get(login_lower) == resolved_session_id:

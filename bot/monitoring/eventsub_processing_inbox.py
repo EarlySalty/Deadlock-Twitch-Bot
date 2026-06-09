@@ -469,7 +469,16 @@ class EventSubProcessingInboxRuntime:
     async def _run(self) -> None:
         while not self._stop.is_set():
             self._wakeup.clear()
-            processed = await self._process_due_batch()
+            try:
+                processed = await self._process_due_batch()
+            except Exception:
+                # Transienter Store-/DB-Fehler darf den Worker nicht still
+                # töten — loggen, idle warten, weiterlaufen (Lease läuft ab,
+                # Aufträge werden erneut fällig).
+                self._log.exception(
+                    "EventSub processing inbox batch failed; retrying after idle wait"
+                )
+                processed = False
             if processed:
                 continue
             try:
@@ -498,10 +507,14 @@ class EventSubProcessingInboxRuntime:
             payload_json = str(record.get("payload_json") or "{}")
             queued_at = float(record.get("queued_at") or 0.0)
             attempt_count = int(record.get("attempt_count") or 0)
+            # Vorab binden: bei kaputtem payload_json wäre `payload` sonst im
+            # Dead-Letter-Hook unten ungebunden (NameError würde den Worker killen).
+            payload: dict[str, Any] = {}
             try:
-                payload = json.loads(payload_json)
-                if not isinstance(payload, dict):
+                parsed = json.loads(payload_json)
+                if not isinstance(parsed, dict):
                     raise RuntimeError("invalid eventsub processing payload")
+                payload = parsed
                 await self._handler(work_type, payload)
             except Exception as exc:
                 next_attempt_count = attempt_count + 1

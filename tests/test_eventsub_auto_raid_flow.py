@@ -1,6 +1,7 @@
 import contextlib
 import unittest
 from datetime import UTC, datetime
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 from bot.analytics.mixin import TwitchAnalyticsMixin
@@ -11,6 +12,8 @@ from bot.raid.mixin import TwitchRaidMixin
 class _RecordingConnection:
     def __init__(self) -> None:
         self.executed: list[tuple[str, tuple[object, ...]]] = []
+        # Prod-Cursor haben rowcount (engagement.auto_off liest ihn).
+        self.rowcount = 0
 
     def execute(self, sql: str, params=(), *args, **kwargs):
         del args, kwargs
@@ -44,6 +47,10 @@ class _FakeRaidBot:
     def is_offline_auto_raid_suppressed(self, twitch_user_id: str) -> bool:
         del twitch_user_id
         return False
+
+    def has_enabled_auth(self, twitch_user_id: str) -> bool:
+        # Prod-RaidBot bietet has_enabled_auth direkt (raid/mixin nutzt es).
+        return bool(twitch_user_id)
 
     def _get_target_game_lower(self) -> str:
         return "deadlock"
@@ -84,6 +91,41 @@ class _FakeRaidBot:
         normalized = [dict(partner) for partner in online_partners]
         self.online_candidate_batches.append(normalized)
         return normalized, []
+
+    def prepare_offline_auto_raid_context(
+        self,
+        *,
+        broadcaster_id: str,
+        previous_state: dict,
+        streams_by_login: dict[str, dict[str, object]],
+    ):
+        # Prod-API: ein Aufruf bündelt Eligibility + Roster + Kandidaten
+        # (OfflineRaidOrchestrator.prepare_offline_auto_raid_context).
+        last_game = str(previous_state.get("last_game") or "").strip()
+        had_deadlock_session = bool(int(previous_state.get("had_deadlock_in_session", 0) or 0))
+        last_deadlock_seen_at = (
+            str(previous_state.get("last_deadlock_seen_at") or "").strip() or None
+        )
+        source_evaluation = self._evaluate_deadlock_raid_source(
+            current_game=last_game,
+            had_deadlock_session=had_deadlock_session,
+            last_deadlock_seen_at=last_deadlock_seen_at,
+        )
+        partner_rows = self._load_partner_roster_for_raid(broadcaster_id)
+        online_partners = self._build_online_partner_candidates(partner_rows, streams_by_login)
+        eligible_partners, filtered_out = self._filter_deadlock_eligible_partner_candidates(
+            online_partners
+        )
+        return SimpleNamespace(
+            target_game_lower=self._get_target_game_lower(),
+            last_game=last_game,
+            had_deadlock_session=had_deadlock_session,
+            last_deadlock_seen_at=last_deadlock_seen_at,
+            source_evaluation=source_evaluation,
+            online_partners=online_partners,
+            eligible_partners=eligible_partners,
+            filtered_out=filtered_out,
+        )
 
 
 class _EventSubAutoRaidHarness(TwitchAnalyticsMixin, _EventSubMixin, TwitchRaidMixin):

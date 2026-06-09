@@ -1,3 +1,15 @@
+## #119 — Drei latente Robustheits-Lücken im Live-Bot geschlossen
+
+**Ausgangslage:** Beim Rust-Port des Monitorings (#110–#116) sind drei Schwachstellen im laufenden Python-Bot aufgefallen, die bisher nur unter Race-/Fehlerbedingungen zuschlagen — also genau dann, wenn man es nicht sieht. Sie wurden zunächst nur im Rust-Code gelöst; jetzt sind sie auch im Live-Bot gefixt.
+
+**Was wurde geändert:**
+
+- **Doppel-Abschluss-Schutz für Sessions:** Stream-Ende kann von zwei Seiten gleichzeitig erkannt werden (Abfrage-Takt und Twitch-Offline-Event). Bisher konnte der zweite Abschluss die bereits berechneten Kennzahlen (Retention, Chatter, Dauer) überschreiben. Jetzt greift der Abschluss nur noch, wenn die Session wirklich noch offen ist — der Verlierer des Rennens räumt nur seinen Zwischenspeicher auf und lässt die korrekten Werte stehen.
+- **Doppel-Anlage-Schutz für Sessions:** Das Anlegen einer neuen Session war nur durch einen Zwischenspeicher im Prozess geschützt — bei einem Race konnten zwei offene Sessions für denselben Streamer entstehen. Jetzt sichert eine Datenbank-Sperre pro Streamer plus eine Prüfung in derselben Transaktion ab: Existiert schon eine offene Session, wird deren ID übernommen statt eine zweite anzulegen.
+- **Event-Warteschlange übersteht Fehler:** Der Hintergrund-Arbeiter der Event-Verarbeitung konnte bei einem Datenbank-Fehler im Abhol-Schritt still sterben — Events wären ab dann liegen geblieben, ohne dass es jemand merkt. Zusätzlich hätte eine kaputte gespeicherte Nachricht beim Aussortieren einen Absturz im Absturz ausgelöst. Beides abgefangen: Der Arbeiter loggt, wartet kurz und macht weiter; kaputte Nachrichten wandern sauber in die Aussortierten-Liste.
+
+**Nebenbei:** Zwei Tests, die der Code-Entwicklung hinterherhingen (veraltete Attrappen nach Raid-Refactoring), wurden auf den aktuellen Stand gebracht — sie waren rot und hätten echte Regressionen verdeckt.
+
 ## #118 — Doppel-Abschluss-Schutz für Stream-Sessions (Rust-Monitoring)
 
 **Problem:** Eine Stream-Session kann theoretisch von zwei Seiten gleichzeitig abgeschlossen werden — vom Abfrage-Takt und vom Twitch-Offline-Event. Ohne Schutz überschreibt der zweite Abschluss die bereits berechneten Kennzahlen (Retention, Chatter, Dauer) mit neuen, dann falschen Werten. Im Python-Original existiert diese Lücke bis heute.
