@@ -23,6 +23,8 @@ use chrono::{DateTime, Utc};
 use sqlx::PgPool;
 use tb_crypto::{aad, FieldCipher};
 
+use crate::util::mask_log_identifier as mask;
+
 /// Entschlüsseltes Token-Bündel eines Streamers.
 #[derive(Debug, Clone)]
 pub struct RaidTokens {
@@ -151,28 +153,5 @@ impl RaidAuthStore {
                 None
             }
         }
-    }
-}
-
-/// Maskiert eine Kennung fürs Logging (Python `_mask_log_identifier`): erste
-/// und letzte 2 Zeichen, Mitte als `…`. Verhindert volle ID-Disclosure im Log.
-fn mask(identifier: &str) -> String {
-    let chars: Vec<char> = identifier.chars().collect();
-    if chars.len() <= 4 {
-        return "…".to_string();
-    }
-    let head: String = chars.iter().take(2).collect();
-    let tail: String = chars.iter().rev().take(2).collect::<Vec<_>>().into_iter().rev().collect();
-    format!("{head}…{tail}")
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn mask_kuerzt_lange_ids_und_schuetzt_kurze() {
-        assert_eq!(mask("123456789"), "12…89");
-        assert_eq!(mask("ab"), "…");
     }
 }

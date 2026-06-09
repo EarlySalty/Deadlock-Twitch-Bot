@@ -17,7 +17,9 @@
 pub mod oauth_flow;
 pub mod scope_profiles;
 pub mod state_store;
+pub mod token_refresher;
 pub mod token_store;
+pub mod util;
 
 pub use oauth_flow::{
     build_authorize_url, build_state_info, StreamerContextResolver,
@@ -29,4 +31,8 @@ pub use scope_profiles::{
     DASHBOARD_UPGRADE_SCOPES, FULL_STREAMER_SCOPES,
 };
 pub use state_store::{RaidOAuthState, StateStore};
+pub use token_refresher::{
+    advisory_lock_pair, RaidTokenRefresher, RefreshError, RefreshOutcome, TokenBlacklist,
+    TokenResponse, TwitchTokenClient,
+};
 pub use token_store::{RaidAuthStore, RaidTokens};

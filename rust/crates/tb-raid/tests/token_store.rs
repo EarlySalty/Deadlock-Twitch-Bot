@@ -127,7 +127,17 @@ async fn entschluesselt_aus_enc_spalten_und_liest_scopes() {
     let cipher = test_cipher();
     let store = RaidAuthStore::new(pool.clone(), cipher.clone());
 
-    insert_encrypted(&pool, &cipher, "42", "drag", "acc-secret", Some("ref-secret"), true, false).await;
+    insert_encrypted(
+        &pool,
+        &cipher,
+        "42",
+        "drag",
+        "acc-secret",
+        Some("ref-secret"),
+        true,
+        false,
+    )
+    .await;
 
     let tokens = store.load_decrypted("42").await.unwrap().expect("Zeile da");
     assert_eq!(tokens.access_token, "acc-secret");
@@ -146,9 +156,25 @@ async fn raid_disabled_und_fehlende_zeile_ergeben_none() {
     let cipher = test_cipher();
     let store = RaidAuthStore::new(pool.clone(), cipher.clone());
 
-    insert_encrypted(&pool, &cipher, "99", "off", "acc", Some("ref"), false, false).await;
-    assert!(store.load_decrypted("99").await.unwrap().is_none(), "raid_enabled=false → None");
-    assert!(store.load_decrypted("unbekannt").await.unwrap().is_none(), "keine Zeile → None");
+    insert_encrypted(
+        &pool,
+        &cipher,
+        "99",
+        "off",
+        "acc",
+        Some("ref"),
+        false,
+        false,
+    )
+    .await;
+    assert!(
+        store.load_decrypted("99").await.unwrap().is_none(),
+        "raid_enabled=false → None"
+    );
+    assert!(
+        store.load_decrypted("unbekannt").await.unwrap().is_none(),
+        "keine Zeile → None"
+    );
 }
 
 #[tokio::test]
@@ -164,7 +190,10 @@ async fn unlesbares_oder_null_enc_ergibt_none_kein_fehler() {
     .execute(&pool)
     .await
     .unwrap();
-    assert!(store.load_decrypted("1").await.unwrap().is_none(), "NULL-enc → None");
+    assert!(
+        store.load_decrypted("1").await.unwrap().is_none(),
+        "NULL-enc → None"
+    );
 
     // Falscher Key: mit anderem Schlüssel verschlüsselt → Tag-Mismatch → None (kein Panic/Err).
     let other = FieldCipher::from_hex_key(
@@ -183,7 +212,10 @@ async fn unlesbares_oder_null_enc_ergibt_none_kein_fehler() {
     .execute(&pool)
     .await
     .unwrap();
-    assert!(store.load_decrypted("2").await.unwrap().is_none(), "falscher Key → None statt Err");
+    assert!(
+        store.load_decrypted("2").await.unwrap().is_none(),
+        "falscher Key → None statt Err"
+    );
 }
 
 /// Beweist Interop auf ECHTEN Prod-Daten: entschlüsselt eine reale Zeile und
@@ -224,7 +256,10 @@ async fn prod_interop_entschluesselt_echten_blob_ohne_klartext_auszugeben() {
         .expect("query ok")
         .expect("Zeile entschlüsselbar");
     // NUR Erfolg + Nicht-Leere prüfen — niemals den Token-Wert ausgeben.
-    assert!(!tokens.access_token.is_empty(), "Access-Token entschlüsselt + nicht-leer");
+    assert!(
+        !tokens.access_token.is_empty(),
+        "Access-Token entschlüsselt + nicht-leer"
+    );
     let _ = Utc::now();
     println!("Prod-Interop OK: echter Access-Token entschlüsselt (Wert nicht ausgegeben).");
 }
