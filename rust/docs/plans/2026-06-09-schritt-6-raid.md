@@ -90,6 +90,30 @@
 Reihenfolge ist dependency-getrieben: 6a (Auth) ist das Fundament; 6b/6c/6e/6f
 schalten je einen Monitoring-Hook scharf; 6i flippt erst, wenn alle Hooks echt sind.
 
+## Stand 2026-06-10 — wiederverwendbare Raid-Schicht KOMPLETT (tb-raid)
+
+19 Commits, 166 tb-raid-Tests, 0 Clippy. Gebaut + getestet:
+
+- **6a** Auth-Kern: StateStore, scope_profiles/OAuthFlow, TokenStore (**Prod-Blob-
+  Interop bewiesen**), TokenRefresher (Advisory-Lock byte-identisch), AuthWriter,
+  TokenProvider (`get_valid_token`-Komposition).
+- **6b** TokenBlacklistStore + RaidBlacklistStore.
+- **6c** scoring (Formeln verifiziert) + score_store.
+- **6d** candidate_selection (Auswahl verifiziert) + raid_history_store + strikes_store
+  + **RaidExecutor** (Raid-Feuer-Pfad end-to-end) + Helix `start_raid`/`cancel_raid`.
+- **6e** pending_raids + arrival_tracking_store + signal_correlation (Plan-Engine) +
+  **arrival_runtime** (Plan-Dispatcher) + score_tracking_store.
+- **6f** partner_roster (Reader + Online-Kandidaten, Gather-Phase).
+
+**Verbleibend = Composition-Root-Wiring in `tb-bot` + Restfeatures + Cutover:**
+- Auto-Raid-Orchestrator: `handle_streamer_offline` → Helix `get_streams` → build_online
+  → Deadlock-Eligibility-Filter → `select_by_score` → `RaidExecutor`.
+- Sink-/Resolver-Adapter: `RaidArrivalSink`-Impl (Stores), Confirm-Resolver
+  (`live_state`/Score/History → `TrackConfirmedInput`), Manual-Raid-Lock.
+- EventSubHooks-Impls in `tb-bot`, die Monitoring → Raid verdrahten (die 6 Cutover-
+  Kopplungen aus `04-cutover-plan.md`).
+- 6g Recruitment, 6h Commands. 6i atomarer Cutover (user-gated).
+
 ## Slices 6a–6h laufen ohne Prod-Berührung
 
 Wie bei Monitoring: gegen isolierte Test-Schemas gebaut + getestet, Python bleibt
