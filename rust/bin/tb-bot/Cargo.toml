@@ -18,4 +18,5 @@ tb-config           = { workspace = true }
 tb-db               = { workspace = true }
 tb-internal-api     = { workspace = true }
 tb-monitoring       = { workspace = true }
+tb-transport-discord = { workspace = true }
 tb-transport-twitch = { workspace = true }

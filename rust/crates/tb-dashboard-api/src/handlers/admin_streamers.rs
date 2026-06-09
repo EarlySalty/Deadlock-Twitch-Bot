@@ -261,12 +261,13 @@ pub async fn detail_handler(
         })?
         .ok_or_else(ApiError::not_found)?;
 
-    let (stats_row, session_rows) = streamer_stats_and_sessions(&pool, &login)
-        .await
-        .map_err(|e| {
-            tracing::error!("streamer_stats_and_sessions Fehler für {login}: {e}");
-            ApiError::internal()
-        })?;
+    let (stats_row, session_rows) =
+        streamer_stats_and_sessions(&pool, &login)
+            .await
+            .map_err(|e| {
+                tracing::error!("streamer_stats_and_sessions Fehler für {login}: {e}");
+                ApiError::internal()
+            })?;
 
     let snap = scope_snapshot(row.scopes.as_deref(), row.needs_reauth.unwrap_or(0));
     let ps = partner_status(

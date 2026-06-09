@@ -79,10 +79,7 @@ pub fn partner_status(
     manual_partner_opt_out: i32,
     technical_pause_reason: Option<&str>,
 ) -> &'static str {
-    let pause = technical_pause_reason
-        .unwrap_or("")
-        .trim()
-        .to_lowercase();
+    let pause = technical_pause_reason.unwrap_or("").trim().to_lowercase();
 
     if pause == "blocked" {
         return "blocked";
@@ -489,10 +486,7 @@ LIMIT 1"#,
         cte_oauth = CTE_PARTNER_OAUTH,
     );
 
-    sqlx::query_as(&sql)
-        .bind(login)
-        .fetch_optional(pool)
-        .await
+    sqlx::query_as(&sql).bind(login).fetch_optional(pool).await
 }
 
 /// Holt Statistik-Aggregat und letzte 10 Sessions für einen Streamer.
@@ -847,9 +841,7 @@ mod tests {
             }
         };
         let pool = make_pool(&dsn, "test_admin_str_detail_none").await;
-        let row = streamer_detail(&pool, "gibts_nicht")
-            .await
-            .expect("query");
+        let row = streamer_detail(&pool, "gibts_nicht").await.expect("query");
         assert!(row.is_none());
     }
 
@@ -870,9 +862,7 @@ mod tests {
         .execute(&pool)
         .await
         .expect("insert");
-        let row = streamer_detail(&pool, "Bekannter")
-            .await
-            .expect("query"); // case-insensitive!
+        let row = streamer_detail(&pool, "Bekannter").await.expect("query"); // case-insensitive!
         assert!(row.is_some());
         assert_eq!(row.unwrap().twitch_login, "bekannter");
     }

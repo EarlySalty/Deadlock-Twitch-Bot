@@ -1,3 +1,11 @@
+## #116 — Monitoring-Cutover vorbereitet (Schritt 4f) — Umschalten bleibt manuell
+
+**Ausgangslage:** Alle Monitoring-Bausteine (#110–#115) existierten als Bibliotheks-Code mit Tests, aber nichts davon war im Rust-Bot-Prozess zusammengesteckt. Für den späteren Umstieg muss der komplette Kreislauf — Twitch abfragen, Zustände schreiben, Events verarbeiten, Discord posten — startklar verdrahtet sein, ohne versehentlich loszulaufen.
+
+**Geändert:** Der Rust-Bot setzt jetzt beim Start alles zusammen: Twitch-API-Anbindung für Streams/Kategorien/Follower/VOD-Vorschau, Discord-Versand über die interne Bridge (inklusive Rückfall auf einen einfachen Link-Button, wenn der Tracking-Button beim Broker nicht verfügbar ist), Event-Verarbeitung und Abfrage-Schleife. **Entscheidend ist der Schutzschalter:** Die Schleife startet nur, wenn sie per Umgebungsvariable ausdrücklich eingeschaltet wird — standardmäßig bleibt der Python-Bot der einzige Schreiber, und der Rust-Prozess beantwortet nur den Event-Empfang. Der Umschaltplan steht jetzt als Checkliste in der internen Doku: welche Variablen zu setzen sind, in welcher Reihenfolge Python-Monitoring aus- und Rust eingeschaltet wird, wie man den Erfolg prüft — plus eine ehrliche Liste der sechs Stellen, die beim Umschalten bewusst noch ohne Nachfolger sind (Raid-Auslösung, Statistik-Anmeldungen für Neue, Rollen-Erstellung, Auto-Archivierung, Offline-Folgeaktionen, Partner-Rekrutierung) und in welcher späteren Phase jede davon ankommt.
+
+**Damit ist Schritt 4 (Monitoring) code-komplett:** sechs Teilschritte, alle gegen eine Wegwerf-Datenbank bzw. Mock-Server getestet, das echte Datenbank-Schema read-only verifiziert. Das tatsächliche Umschalten passiert bewusst nicht automatisch, sondern im geplanten Wartungsfenster.
+
 ## #115 — Go-Live-Embeds in Rust (Schritt 4e)
 
 **Ausgangslage:** Der letzte fehlende Monitoring-Baustein vor dem Umschalt-Schritt: die Discord-Ankündigungen. Geht ein Partner mit Deadlock live, postet der Bot ein konfigurierbares Embed mit Ping-Rolle und Tracking-Button; endet der Stream, wird dasselbe Posting zum „ist OFFLINE"-Embed mit VOD-Button umgebaut.

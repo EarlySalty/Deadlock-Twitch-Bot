@@ -157,12 +157,11 @@ pub async fn remove_streamer(
         RemoveStreamerResult::Archived
     } else {
         // Schritt 2: Falls nichts archiviert wurde, direktes DELETE
-        let deleted = sqlx::query(
-            "DELETE FROM twitch_streamers WHERE LOWER(twitch_login) = LOWER($1)",
-        )
-        .bind(&login)
-        .execute(pool)
-        .await?;
+        let deleted =
+            sqlx::query("DELETE FROM twitch_streamers WHERE LOWER(twitch_login) = LOWER($1)")
+                .bind(&login)
+                .execute(pool)
+                .await?;
 
         if deleted.rows_affected() > 0 {
             RemoveStreamerResult::Deleted
@@ -259,64 +258,56 @@ pub async fn archive_streamer(
     mode: ArchiveMode,
 ) -> Result<bool, sqlx::Error> {
     let rows = match mode {
-        ArchiveMode::Archive => {
-            sqlx::query(
-                r#"
+        ArchiveMode::Archive => sqlx::query(
+            r#"
                 UPDATE twitch_partners
                 SET admin_archived_at = NOW()
                 WHERE LOWER(twitch_login) = LOWER($1)
                   AND admin_archived_at IS NULL
                 "#,
-            )
-            .bind(login)
-            .execute(pool)
-            .await?
-            .rows_affected()
-        }
-        ArchiveMode::Unarchive => {
-            sqlx::query(
-                r#"
+        )
+        .bind(login)
+        .execute(pool)
+        .await?
+        .rows_affected(),
+        ArchiveMode::Unarchive => sqlx::query(
+            r#"
                 UPDATE twitch_partners
                 SET admin_archived_at = NULL
                 WHERE LOWER(twitch_login) = LOWER($1)
                   AND admin_archived_at IS NOT NULL
                 "#,
-            )
-            .bind(login)
-            .execute(pool)
-            .await?
-            .rows_affected()
-        }
-        ArchiveMode::Block => {
-            sqlx::query(
-                r#"
+        )
+        .bind(login)
+        .execute(pool)
+        .await?
+        .rows_affected(),
+        ArchiveMode::Block => sqlx::query(
+            r#"
                 UPDATE twitch_partners
                 SET technical_pause_reason = 'blocked',
                     manual_partner_opt_out = 1,
                     raid_bot_enabled = 0
                 WHERE LOWER(twitch_login) = LOWER($1)
                 "#,
-            )
-            .bind(login)
-            .execute(pool)
-            .await?
-            .rows_affected()
-        }
-        ArchiveMode::Unblock => {
-            sqlx::query(
-                r#"
+        )
+        .bind(login)
+        .execute(pool)
+        .await?
+        .rows_affected(),
+        ArchiveMode::Unblock => sqlx::query(
+            r#"
                 UPDATE twitch_partners
                 SET technical_pause_reason = NULL,
                     manual_partner_opt_out = 0
                 WHERE LOWER(twitch_login) = LOWER($1)
                   AND LOWER(COALESCE(technical_pause_reason, '')) = 'blocked'
                 "#,
-            )
-            .bind(login)
-            .execute(pool)
-            .await?
-            .rows_affected()
-        }
+        )
+        .bind(login)
+        .execute(pool)
+        .await?
+        .rows_affected(),
     };
 
     Ok(rows > 0)
@@ -608,7 +599,9 @@ mod tests {
         };
         let pool = make_pool(&dsn, "test_sc_add").await;
 
-        let result = add_streamer(&pool, "testuser", Some("12345")).await.unwrap();
+        let result = add_streamer(&pool, "testuser", Some("12345"))
+            .await
+            .unwrap();
         assert!(matches!(result, AddStreamerResult::Added));
 
         let list = list_streamers(&pool).await.unwrap();
@@ -627,8 +620,12 @@ mod tests {
         };
         let pool = make_pool(&dsn, "test_sc_add_dup").await;
 
-        add_streamer(&pool, "testuser", Some("12345")).await.unwrap();
-        let result = add_streamer(&pool, "testuser", Some("12345")).await.unwrap();
+        add_streamer(&pool, "testuser", Some("12345"))
+            .await
+            .unwrap();
+        let result = add_streamer(&pool, "testuser", Some("12345"))
+            .await
+            .unwrap();
         assert!(matches!(result, AddStreamerResult::AlreadyExists));
     }
 

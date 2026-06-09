@@ -2086,6 +2086,7 @@ dependencies = [
  "tb-db",
  "tb-internal-api",
  "tb-monitoring",
+ "tb-transport-discord",
  "tb-transport-twitch",
  "tokio",
  "tracing",

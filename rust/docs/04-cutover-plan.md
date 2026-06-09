@@ -49,12 +49,53 @@ bleiben.
 
 ## Schritt 4 — Monitoring *(heikelster DB-Schreibpfad)*
 
+> **Stand: Code komplett (4a–4e gebaut + getestet), Cutover user-gated.** Alles ist hinter
+> `TB_MONITORING_POLL_ENABLED` (default aus) — `tb-bot` bedient den EventSub-Dispatch-Endpoint
+> sofort, schreibt aber erst beim Flip als Poll-Writer.
+
 - **Live:** Rust übernimmt Stream-Poll + EventSub-Inbox-Verarbeitung + Session-Lifecycle +
   Live-State-Schreiben + Live-Embeds (via Relay). **Python-Monitoring AUS** (sonst Doppel-Insert).
-  EventSub-Subscription-Übergabe koordinieren (Subscription-IDs gehören Twitch, nicht der DB).
 - **Erfolg:** Sessions starten/enden korrekt; `twitch_live_state` konsistent; keine doppelten
   `*_events`-Rows; Capacity-Snapshot plausibel.
-- **Rollback:** Python-Monitoring reaktivieren, Rust-WS trennen — **Wartungsfenster nötig.**
+- **Rollback:** Python-Monitoring reaktivieren, `TB_MONITORING_POLL_ENABLED=0` + Restart —
+  **Wartungsfenster nötig.**
+
+### Flip-Checkliste (Wartungsfenster)
+
+1. **Env für `tb-bot` setzen:** `TWITCH_CLIENT_ID/SECRET`, `TWITCH_TARGET_GAME_NAME`,
+   `TWITCH_WEBHOOK_SECRET` + `TWITCH_EVENTSUB_CALLBACK_URL` (Subscription-Verwaltung),
+   `TWITCH_NOTIFY_CHANNEL_ID` + `MASTER_BROKER_*` (Announcements), optional
+   `TWITCH_ALERT_MENTION`, `TWITCH_DISCORD_REF_CODE`, `TWITCH_LANGUAGE_FILTERS`.
+2. Python-Monitoring deaktivieren (Poll-Loop + EventSub-Verarbeitung im Bot-Prozess),
+   Python-Prozess für Chat/Raid/Social weiterlaufen lassen.
+3. Port 8776: Python-internal-api stoppen, Rust `tb-bot` mit
+   `TB_MONITORING_POLL_ENABLED=1` starten. Die Dashboard-Bridge liefert ab sofort an Rust
+   (gleicher Vertrag, `POST /eventsub/dispatch`); gepufferte Outbox-Events laufen nach.
+4. Subscriptions: bestehende Webhook-Subscriptions liefern unverändert an dieselbe
+   Callback-URL — keine Neuanlage nötig. `SubscriptionManager.rehydrate()` übernimmt das
+   Tracking beim Start.
+5. **Verifikation:** Live-Streamer geht online → Session öffnet, Embed postet, `stream.offline`
+   wird subscribed; offline → Session schließt mit Kennzahlen, Embed wird zum VOD-Overlay.
+   Inbox-Dead-Letters = 0, Guard-Dedup greift (Log).
+
+### Offene Kopplungen beim Flip (bewusst, je Punkt entscheiden)
+
+Mit Python-Monitoring AUS verlieren bis zur jeweiligen Phase ihre Trigger — alle als
+Noop-Hooks modelliert (`EventSubHooks`/`PollHooks`), Verdrahtung pro Phase:
+
+1. **Raid-Flows** (Auto-Raid bei offline, `channel.raid`-Arrival, Score-Refreshes,
+   Blacklist-Raid-Guard via `channel.moderate`) → Raid-Phase 6. Interim-Option: Pythons
+   EventSub-Verarbeitung NUR für Raid-Typen aktiv lassen (Bridge fan-out) — vor dem Flip
+   entscheiden.
+2. **Telemetrie-Subscription-Anlage für NEUE Partner** (braucht User-Tokens aus
+   `twitch_raid_auth`) → Raid-Phase 6; Bestand liefert weiter.
+3. **Live-Ping-Rollen-Erstellung** (Discord-Gateway) → Broker-Erweiterung oder Python-Pfad;
+   bestehende Rollen-IDs nutzt Rust aus der Partner-Config.
+4. **Partner-Lifecycle-Ops** Auto-Archiv/Auto-Unarchive (Hooks liefern `false` = no-op) →
+   Verdrahtung auf die Partner-Registry-Ops.
+5. **Offline-Seiteneffekte:** Engagement-Auto-Off, Global-Ban-Sweep-Scheduling,
+   Post-Stream-Analyse, Re-Auth-Reminder — hängen am `on_stream_offline`-Hook.
+6. **Partner-Rekrutierung + Invite-Refresh** (Poll-Tick-Anhängsel) → Outreach/Discord-Phase.
 
 ## Schritt 5 — Chat (IRC + Moderation + Promo)
 

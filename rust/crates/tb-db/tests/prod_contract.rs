@@ -125,7 +125,10 @@ async fn prod_monitoring_tables_match_contract() {
     );
 
     let viewers = column_types(&pool, "twitch_session_viewers").await;
-    assert_eq!(viewers.get("session_id").map(String::as_str), Some("bigint"));
+    assert_eq!(
+        viewers.get("session_id").map(String::as_str),
+        Some("bigint")
+    );
     assert_eq!(
         viewers.get("ts_utc").map(String::as_str),
         Some("timestamp with time zone")
@@ -137,7 +140,10 @@ async fn prod_monitoring_tables_match_contract() {
         live_state.get("last_seen_at").map(String::as_str),
         Some("text")
     );
-    assert_eq!(live_state.get("is_live").map(String::as_str), Some("integer"));
+    assert_eq!(
+        live_state.get("is_live").map(String::as_str),
+        Some("integer")
+    );
     assert_eq!(
         live_state.get("active_session_id").map(String::as_str),
         Some("bigint")

@@ -107,19 +107,15 @@ pub async fn remove_ban(pool: &PgPool, login: &str) -> Result<bool, sqlx::Error>
     let login = login.to_lowercase();
     let mut tx = pool.begin().await?;
 
-    let result = sqlx::query(
-        "DELETE FROM twitch_chatter_global_ban WHERE chatter_login = $1",
-    )
-    .bind(&login)
-    .execute(&mut *tx)
-    .await?;
+    let result = sqlx::query("DELETE FROM twitch_chatter_global_ban WHERE chatter_login = $1")
+        .bind(&login)
+        .execute(&mut *tx)
+        .await?;
 
-    sqlx::query(
-        "DELETE FROM twitch_chatter_global_ban_applied WHERE chatter_login = $1",
-    )
-    .bind(&login)
-    .execute(&mut *tx)
-    .await?;
+    sqlx::query("DELETE FROM twitch_chatter_global_ban_applied WHERE chatter_login = $1")
+        .bind(&login)
+        .execute(&mut *tx)
+        .await?;
 
     tx.commit().await?;
     Ok(result.rows_affected() > 0)
@@ -258,21 +254,28 @@ mod tests {
         };
         let pool = make_pool(&dsn, "test_gb_add").await;
 
-        add_ban(&pool, "boser_user", Some("id123"), Some("Spam"), Some("admin"))
-            .await
-            .expect("add_ban");
+        add_ban(
+            &pool,
+            "boser_user",
+            Some("id123"),
+            Some("Spam"),
+            Some("admin"),
+        )
+        .await
+        .expect("add_ban");
 
         // In Global-Ban-Tabelle
         let banned = check_ban(&pool, "boser_user", "").await.expect("check");
         assert!(banned, "Eintrag muss in twitch_chatter_global_ban sein");
 
         // Mirror in raid_blacklist
-        let row: Option<(String,)> =
-            sqlx::query_as("SELECT target_login FROM twitch_raid_blacklist WHERE target_login = $1")
-                .bind("boser_user")
-                .fetch_optional(&pool)
-                .await
-                .expect("blacklist select");
+        let row: Option<(String,)> = sqlx::query_as(
+            "SELECT target_login FROM twitch_raid_blacklist WHERE target_login = $1",
+        )
+        .bind("boser_user")
+        .fetch_optional(&pool)
+        .await
+        .expect("blacklist select");
         assert!(row.is_some(), "Mirror in twitch_raid_blacklist fehlt");
     }
 
@@ -292,27 +295,31 @@ mod tests {
             .expect("add_ban");
 
         // applied-Eintrag manuell einfügen (wird von Python-Bot gesetzt)
-        sqlx::query(
-            "INSERT INTO twitch_chatter_global_ban_applied (chatter_login) VALUES ($1)",
-        )
-        .bind("zu_loeschender")
-        .execute(&pool)
-        .await
-        .expect("applied insert");
+        sqlx::query("INSERT INTO twitch_chatter_global_ban_applied (chatter_login) VALUES ($1)")
+            .bind("zu_loeschender")
+            .execute(&pool)
+            .await
+            .expect("applied insert");
 
-        let removed = remove_ban(&pool, "zu_loeschender").await.expect("remove_ban");
+        let removed = remove_ban(&pool, "zu_loeschender")
+            .await
+            .expect("remove_ban");
         assert!(removed, "removed muss true sein wenn Eintrag existiert");
 
         let banned = check_ban(&pool, "zu_loeschender", "").await.expect("check");
         assert!(!banned, "Nach remove_ban muss check false liefern");
 
-        let applied: Option<(i64,)> =
-            sqlx::query_as("SELECT id FROM twitch_chatter_global_ban_applied WHERE chatter_login = $1")
-                .bind("zu_loeschender")
-                .fetch_optional(&pool)
-                .await
-                .expect("applied select");
-        assert!(applied.is_none(), "applied-Eintrag muss ebenfalls gelöscht sein");
+        let applied: Option<(i64,)> = sqlx::query_as(
+            "SELECT id FROM twitch_chatter_global_ban_applied WHERE chatter_login = $1",
+        )
+        .bind("zu_loeschender")
+        .fetch_optional(&pool)
+        .await
+        .expect("applied select");
+        assert!(
+            applied.is_none(),
+            "applied-Eintrag muss ebenfalls gelöscht sein"
+        );
     }
 
     #[tokio::test]
@@ -346,11 +353,15 @@ mod tests {
             .expect("add_ban");
 
         // Check via Login
-        let by_login = check_ban(&pool, "bekannter", "").await.expect("check login");
+        let by_login = check_ban(&pool, "bekannter", "")
+            .await
+            .expect("check login");
         assert!(by_login, "Match via chatter_login muss funktionieren");
 
         // Check via chatter_id
-        let by_id = check_ban(&pool, "anderer_login", "uid99").await.expect("check id");
+        let by_id = check_ban(&pool, "anderer_login", "uid99")
+            .await
+            .expect("check id");
         assert!(by_id, "Match via chatter_id muss funktionieren");
     }
 
