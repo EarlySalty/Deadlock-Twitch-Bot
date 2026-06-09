@@ -100,6 +100,41 @@ impl HelixClient {
             .header("Client-Id", &self.config.client_id)
             .header("Authorization", format!("Bearer {token}")))
     }
+
+    /// Holt Twitch-User-Infos für eine Liste von Logins.
+    ///
+    /// Gibt eine Map `login (lowercase) → TwitchUser` zurück.
+    /// Leere Logins werden ignoriert. Unbekannte Logins erscheinen nicht in der Map.
+    pub async fn get_users(
+        &self,
+        logins: &[&str],
+    ) -> Result<std::collections::HashMap<String, TwitchUser>, HelixError> {
+        if logins.is_empty() {
+            return Ok(std::collections::HashMap::new());
+        }
+        let params: Vec<(&str, &str)> = logins.iter().map(|l| ("login", *l)).collect();
+        let builder = self.get("/users").await?;
+        let resp = builder.query(&params).send().await?;
+        let body: HelixUsersResponse = resp.json().await?;
+        Ok(body
+            .data
+            .into_iter()
+            .map(|u| (u.login.to_lowercase(), u))
+            .collect())
+    }
+}
+
+/// Twitch-User-Daten aus der Helix-API.
+#[derive(Debug, serde::Deserialize)]
+pub struct TwitchUser {
+    pub id: String,
+    pub login: String,
+    pub display_name: String,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct HelixUsersResponse {
+    pub data: Vec<TwitchUser>,
 }
 
 #[cfg(test)]

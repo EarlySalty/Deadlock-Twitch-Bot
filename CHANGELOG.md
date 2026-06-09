@@ -1,3 +1,21 @@
+## #108 — Streamer-CRUD-Endpoints (Rust Schritt 3b)
+
+**Ausgangslage:** Nach Schritt 3a hatte das neue `tb-bot`-Binary die Global-Ban-Endpoints, aber noch kein Äquivalent für die Streamer-Verwaltung — Add, Remove, Verify, Archive/Block und Discord-Profil-Updates fehlten komplett.
+
+**Geändert:** 7 neue Endpoints unter `/internal/twitch/v1/streamers/`:
+
+- **`GET /streamers`** — Liste aller nicht-archivierten Streamer.
+- **`POST /streamers`** — Streamer hinzufügen: holt die Twitch-User-ID über die Helix-API, prüft ob der Login schon aktiv ist, führt danach einen Upsert in `twitch_streamers` + `twitch_streamer_identities` durch. Ohne konfigurierten Twitch-Client → 503.
+- **`DELETE /streamers/{login}`** — Departnern: setzt `archived_at = NOW()` auf dem aktiven Eintrag und löscht `twitch_live_state`. War der Login noch nie aktiv, wird der Eintrag direkt gelöscht.
+- **`POST /streamers/{login}/verify`** — Setzt `manual_verified_permanent = 1` in `twitch_partners` wenn ein aktiver Eintrag vorhanden ist; 404 sonst.
+- **`POST /streamers/{login}/archive`** — Archivieren/Blockieren per `mode`-Feld: `archive`/`unarchive` steuert `admin_archived_at`, `block`/`unblock` steuert `technical_pause_reason` + Opt-Out-Flag.
+- **`POST /streamers/{login}/discord-flag`** — Setzt `is_on_discord` (Partner-Pfad via `twitch_partners`, Fallback via `twitch_streamers`).
+- **`POST /streamers/{login}/discord-profile`** — Setzt `discord_user_id` + `discord_display_name` (gleicher Dual-Pfad).
+
+Discord-Rollen-Sync und EventSub-Callbacks sind bewusst weggelassen (kommen mit Schritt 5/6). `HelixClient` wird beim Start aus den Env-Variablen `TWITCH_CLIENT_ID`/`TWITCH_CLIENT_SECRET` gebaut und als Extension im Router eingehängt.
+
+---
+
 ## #107 — Internes API-Binary tb-bot (Rust Schritt 3a)
 
 **Ausgangslage:** Die Python-interne API auf Port 8776 bedient alle CRUD-Operationen des Dashboards. Für den Rust-Umbau braucht es ein neues Binary das diesen Port übernehmen kann — zunächst nur mit den einfachsten, rein datenbankbasierten Endpoints.

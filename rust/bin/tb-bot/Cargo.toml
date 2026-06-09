@@ -12,6 +12,7 @@ tokio              = { workspace = true }
 tracing            = { workspace = true }
 tracing-subscriber = { workspace = true }
 axum               = { workspace = true }
-tb-config          = { workspace = true }
-tb-db              = { workspace = true }
-tb-internal-api    = { workspace = true }
+tb-config           = { workspace = true }
+tb-db               = { workspace = true }
+tb-internal-api     = { workspace = true }
+tb-transport-twitch = { workspace = true }

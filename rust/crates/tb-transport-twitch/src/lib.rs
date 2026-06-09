@@ -3,5 +3,5 @@
 pub mod client;
 pub mod token;
 
-pub use client::{HelixClient, HelixConfig, HelixError};
+pub use client::{HelixClient, HelixConfig, HelixError, TwitchUser};
 pub use token::{AppToken, TokenError};

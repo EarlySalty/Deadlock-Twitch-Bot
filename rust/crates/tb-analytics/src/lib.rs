@@ -5,6 +5,7 @@
 
 pub mod admin_streamers;
 pub mod global_ban;
+pub mod streamers_crud;
 pub mod bans;
 pub mod network;
 pub mod overview;

@@ -6,11 +6,15 @@
 //! Env-Variablen:
 //!   TWITCH_ANALYTICS_DSN       — PostgreSQL-DSN
 //!   TWITCH_INTERNAL_API_TOKEN  — Auth-Token
+//!   TWITCH_CLIENT_ID           — Twitch Helix Client-ID (optional)
+//!   TWITCH_CLIENT_SECRET       — Twitch Helix Client-Secret (optional)
 //!   PORT                       — optional, default 8776
 
 use std::net::SocketAddr;
+use std::sync::Arc;
 use tb_config::Settings;
 use tb_internal_api::build_internal_router;
+use tb_transport_twitch::{HelixClient, HelixConfig};
 
 #[tokio::main]
 async fn main() {
@@ -31,9 +35,35 @@ async fn main() {
         .and_then(|v| v.parse().ok())
         .unwrap_or(8776);
 
+    // HelixClient aus Env bauen — optional, Bot startet auch ohne Helix
+    let helix: Arc<Option<HelixClient>> = {
+        let client_id = std::env::var("TWITCH_CLIENT_ID").ok();
+        let client_secret = std::env::var("TWITCH_CLIENT_SECRET").ok();
+        match (client_id, client_secret) {
+            (Some(id), Some(secret)) => {
+                match HelixClient::new(HelixConfig::new(id, secret)) {
+                    Ok(c) => {
+                        tracing::info!("HelixClient initialisiert");
+                        Arc::new(Some(c))
+                    }
+                    Err(e) => {
+                        tracing::warn!("HelixClient-Initialisierung fehlgeschlagen: {e}");
+                        Arc::new(None)
+                    }
+                }
+            }
+            _ => {
+                tracing::warn!(
+                    "TWITCH_CLIENT_ID/TWITCH_CLIENT_SECRET fehlen — Helix-API deaktiviert"
+                );
+                Arc::new(None)
+            }
+        }
+    };
+
     let addr = SocketAddr::from(([127, 0, 0, 1], port));
     let token = settings.internal_api.token.clone();
-    let app = build_internal_router(pool, token);
+    let app = build_internal_router(pool, token, helix);
 
     tracing::info!("tb-bot lauscht auf {addr}");
     let listener = tokio::net::TcpListener::bind(addr)
