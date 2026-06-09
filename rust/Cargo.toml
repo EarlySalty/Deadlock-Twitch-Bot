@@ -2,7 +2,7 @@
 resolver = "2"
 members = [
     "crates/tb-error",
-    # "crates/tb-crypto",  # ab Task 3 aktiv
+    "crates/tb-crypto",
 ]
 
 [workspace.package]
@@ -17,4 +17,4 @@ rand = "0.8"
 zeroize = "1"
 serde_json = "1"
 tb-error = { path = "crates/tb-error" }
-# tb-crypto = { path = "crates/tb-crypto" }  # ab Task 3 aktiv
+tb-crypto = { path = "crates/tb-crypto" }

@@ -1,0 +1,15 @@
+[package]
+name = "tb-crypto"
+version = "0.1.0"
+edition.workspace = true
+
+[dependencies]
+tb-error.workspace = true
+aes-gcm.workspace = true
+hex.workspace = true
+rand.workspace = true
+zeroize.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true
+hex.workspace = true
