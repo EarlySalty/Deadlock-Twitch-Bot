@@ -27,6 +27,7 @@ pub mod auth_writer;
 pub mod candidate_selection;
 pub mod oauth_flow;
 pub mod raid_blacklist;
+pub mod raid_executor;
 pub mod raid_history_store;
 pub mod scope_profiles;
 pub mod score_store;
@@ -34,6 +35,7 @@ pub mod scoring;
 pub mod state_store;
 pub mod strikes_store;
 pub mod token_blacklist;
+pub mod token_provider;
 pub mod token_refresher;
 pub mod token_store;
 pub mod util;
@@ -48,6 +50,7 @@ pub use oauth_flow::{
     PUBLIC_WEBSITE_ONBOARDING_LOGIN, TWITCH_AUTHORIZE_URL,
 };
 pub use raid_blacklist::RaidBlacklistStore;
+pub use raid_executor::{RaidApi, RaidExecutor, RaidOutcome, RaidRequest};
 pub use raid_history_store::{RaidHistoryStore, RecordRaidInput};
 pub use scope_profiles::{
     normalize_scope_profile, scopes_for_profile, AUTO_SCOPE_PROFILE, BASE_CRITICAL_STREAMER_SCOPES,
@@ -65,6 +68,7 @@ pub use scoring::{
 pub use state_store::{RaidOAuthState, StateStore};
 pub use strikes_store::StrikesStore;
 pub use token_blacklist::TokenBlacklistStore;
+pub use token_provider::TokenProvider;
 pub use token_refresher::{
     advisory_lock_pair, RaidTokenRefresher, RefreshError, RefreshOutcome, TokenBlacklist,
     TokenResponse, TwitchTokenClient,
