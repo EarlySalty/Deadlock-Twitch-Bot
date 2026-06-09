@@ -27,6 +27,7 @@
 //!
 //! Alle 6a (RaidAuth-Fundament). Plan: `docs/plans/2026-06-09-schritt-6-raid.md`.
 
+pub mod arrival_runtime;
 pub mod arrival_tracking_store;
 pub mod auth_writer;
 pub mod candidate_selection;
@@ -48,6 +49,7 @@ pub mod token_refresher;
 pub mod token_store;
 pub mod util;
 
+pub use arrival_runtime::{RaidArrivalRuntime, RaidArrivalSink};
 pub use arrival_tracking_store::{ArrivalTrackingStore, RecordArrivalInput};
 pub use auth_writer::{AuthWriteError, AuthWriter, NewAuth};
 pub use candidate_selection::{
