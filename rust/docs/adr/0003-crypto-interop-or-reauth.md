@@ -1,6 +1,7 @@
 # ADR 0003 — Krypto-Interop nachweisen oder bewusst Re-Auth erzwingen
 
-- **Status:** vorgeschlagen (2026-06-08) — Ausgang hängt am Phase-0-Interop-Test
+- **Status:** akzeptiert (2026-06-09) — AES-256-GCM-Interop-Test in Phase 0a **grün** (byte-identischer
+  Blob bei gleicher Nonce bewiesen); bestehende Tokens überleben den Cutover, kein Re-Auth nötig.
 - **Kontext-Doku:** [`02-db-contract.md`](../02-db-contract.md), [`06-open-questions.md`](../06-open-questions.md)
 
 ## Kontext
@@ -42,8 +43,10 @@ Base64-/Encoding-Konventionen.
 
 ## Offen
 
-- Ausgang des AES-256-GCM-Interop-Tests. Der Vertrag ist inzwischen byte-genau dokumentiert
-  (`02-db-contract.md` + Plan 0a) und der Gate-Test ist als Cross-Language-Test spezifiziert
-  (`plans/2026-06-09-phase-0a-bootstrap-krypto-gate.md`, Task 4). Es fehlt nur noch die Ausführung.
+- ~~Ausgang des AES-256-GCM-Interop-Tests~~ — **erledigt (2026-06-09):** Cross-Language-Gate grün
+  (`tb-crypto/tests/interop.rs`, 3 Tests inkl. byte-identischem Blob). `tb-crypto::FieldCipher`
+  ist byte-kompatibel zum Python-`FieldCrypto`; Tokens überleben.
 - ~~Endgültige Fernet-Entscheidung~~ — **entschieden:** kein Nachbau, Re-Login/AES-256-GCM
   (siehe Befund oben).
+- Verbleibt: Optionaler manueller Prod-Blob-Smoke-Test mit echtem `DB_MASTER_KEY_V1` (secret-sicher,
+  ohne Klartext-Ausgabe) vor dem Raid-/Social-Cutover — nicht blockierend, da das Format bewiesen ist.
