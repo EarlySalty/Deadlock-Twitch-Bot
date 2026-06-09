@@ -10,7 +10,7 @@ rust/
   Cargo.toml            # [workspace] members
   crates/
     tb-error/  tb-domain/  tb-config/  tb-observability/  tb-crypto/
-    tb-db/  tb-transport-twitch/  tb-transport-discord/  tb-eventsub/  tb-llm/  tb-http-core/
+    tb-db/  tb-transport-twitch/  tb-transport-discord/  tb-llm/  tb-http-core/
     tb-chat/  tb-monitoring/  tb-raid/  tb-analytics/  tb-billing/
     tb-social-media/  tb-community/  tb-dashboard-api/
   bin/
@@ -32,7 +32,6 @@ rust/
 | `tb-db` | sqlx-Pool, **eine** Migrations-SSOT (sqlx-native), Row-Structs/-Mapping, Tx-Helper, Idempotency-Store | tb-domain, tb-config, tb-error | sqlx (postgres, tokio, migrate) |
 | `tb-transport-twitch` | Helix-Wrapper (shared `Arc<Client>`), App-Token-Manager (Auto-Refresh); OAuth2-PKCE → Raid-Phase | tb-config, tb-crypto, tb-error | reqwest (rustls) — **0c hand-rolled**; `twitch_api`/`oauth2` erst bei vielen Helix-Endpoints (YAGNI) |
 | `tb-transport-discord` | `DiscordBackend`-Trait + `BrokerRelay`-Impl (HTTP an 8770) + `Noop`, Embed-Builder | tb-config, tb-error | reqwest |
-| `tb-eventsub` | EventSub WS-Pool + Webhook-HMAC-Verify + Inbox/Outbox-Queue (`FOR UPDATE SKIP LOCKED`) | tb-transport-twitch, tb-db | tokio-tungstenite, hmac |
 | `tb-llm` | LLM-Dispatcher-Trait (Anthropic/MiniMax/Ollama) + think-Strip + Rate-Limit | tb-config, tb-error | reqwest, serde_json |
 | `tb-http-core` | gemeinsame axum-Bausteine: Auth-Layer, CSRF, Loopback-Middleware, Session-Cookies, Error-Response | tb-error, tb-crypto | axum, tower, tower-http |
 
@@ -41,7 +40,7 @@ rust/
 | Crate | Verantwortung | hängt an | Libs |
 |---|---|---|---|
 | `tb-chat` | IRC-Connect, Moderation (Spam-Score als pure logic), Promo, Commands, Lurker-Tracking | transport-twitch, db, llm, transport-discord | twitch_irc, regex |
-| `tb-monitoring` | `StreamPoller`, `EventSubManager`, `SessionTracker`, `AnnouncementDispatcher` (getrennte Structs) | transport-twitch, eventsub, db, transport-discord | twitch_api |
+| `tb-monitoring` | **4a umgesetzt:** Guard-Store (`eventsub_guard_state`) + Processing-Inbox (Leased-Worker, `FOR UPDATE SKIP LOCKED`). Folgt: Write-Core, Poll-Loop, EventSub-Dispatch, Announcements (4b–4e). Webhook-only, kein WS-Pool — eigene `tb-eventsub`-Crate entfällt (ADR 0004) | transport-twitch, db, transport-discord | sqlx, tokio, uuid |
 | `tb-raid` | `RaidAuth` (DB-only State), Scoring, CandidateSelection, Executor, Recruitment; `raid::util` | transport-twitch, db, crypto, transport-discord | rand |
 | `tb-analytics` | Datenerfassung (Helix→DB), SQL-Aggregation, CoachingEngine, Home-Service | transport-twitch, db, llm | regex |
 | `tb-billing` | Stripe (Subscription/Checkout/Invoice/Webhook), Connect+Payout, Gutschrift-PDF | db, crypto, http-core | async-stripe, printpdf* |

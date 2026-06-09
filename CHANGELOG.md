@@ -1,3 +1,14 @@
+## #110 — Idempotenz-Fundament fürs Monitoring (Rust Schritt 4a)
+
+**Ausgangslage:** Schritt 4 des Rust-Umbaus portiert das Monitoring — den Teil des Bots, der weiß wer live ist, Sessions und Statistiken schreibt und Go-Live-Posts auslöst. Bevor irgendein Schreibpfad portiert werden kann, braucht es das Fundament, auf dem dort alles ruht: die Mechanik, die garantiert, dass jedes Twitch-Event genau einmal wirkt, auch wenn es doppelt ankommt oder die Verarbeitung mittendrin abstürzt.
+
+**Geändert:** Neues Rust-Modul mit den zwei Bausteinen, die Python und Rust sich während der Migration über dieselben Tabellen teilen:
+
+- **Guard-Store** (`eventsub_guard_state`): Ein „Claim" gewinnt genau dann, wenn für den Schlüssel kein aktiver Eintrag existiert — entschieden durch einen einzigen bedingten Datenbank-Upsert, also ohne Race-Fenster zwischen Prüfen und Schreiben. Damit werden doppelte Event-Zustellungen, Online/Offline-Flapping und doppelte fachliche Effekte (z. B. zwei Go-Live-Posts für denselben Stream-Start) unterdrückt.
+- **Processing-Inbox** (`twitch_eventsub_processing_inbox` + Dead-Letter): Eingehende Events landen erst durable in einer Warteschlange; ein Worker leased fällige Aufträge (Lease 30 s, Batch 20), verarbeitet sie und wiederholt Fehlschläge mit wachsendem Abstand (1 s verdoppelnd, Cap 60 s). Nach 5 Versuchen wandert der Auftrag in die Dead-Letter-Tabelle und kann von dort per Knopfdruck zurück in die Queue. Das Leasing läuft über Row-Locks mit Skip — mehrere Worker (auch der Python-Prozess parallel) stehlen sich keine Aufträge.
+
+**Bewusst anders als das Python-Original:** Die Müllabfuhr abgelaufener Guard-Einträge läuft nicht mehr bei jedem einzelnen Claim mit (unnötiger Schreib-Traffic pro Event), sondern als periodischer Sweep. Zwei latente Python-Schwächen sind nicht mitportiert: Ein Datenbankfehler beim Lease konnte den Verarbeitungs-Worker still sterben lassen, und ein kaputtes Payload-JSON hätte beim Dead-Letter-Alarm den Worker gecrasht — der Rust-Worker loggt, wartet und macht weiter. Außerdem entschieden: Der WebSocket-Fallback-Transport wird nicht portiert (Prod läuft nachweislich über Webhook), und die experimentellen Session-Tabellen werden dünn mitgeführt, weil AI-Reports sie lesen. Abgesichert mit 9 Tests gegen eine Wegwerf-Datenbank.
+
 ## #109 — EventSub stream.offline sofort nach Auth registrieren
 
 **Problem:** Wenn ein Streamer die Raid-Auth abschloss während sein Stream bereits lief, wartete der Bot bis zu 45 Minuten auf den nächsten Polling-Tick, bevor die `stream.offline` EventSub-Subscription angelegt wurde. In diesem Fenster konnte der Bot ein Offline-Event komplett verpassen — passiert heute bei cheazycrust: Auth um 16:42, Subscription erst 17:27, erster Offline-Event dazwischen verpasst.

@@ -83,3 +83,18 @@ HTML-Scraping von `/twitch/admin/announcements` als CSRF-Quelle → dedizierter 
 Kein API-gleicher Rust-Port. Bewusster Entscheid (vor Billing-Phase): `printpdf`/`genpdf` mit
 manuellem Layout **oder** Python-Sidecar nur für das Gutschrift-PDF, bis Rust-PDF reif ist.
 Nicht 1:1 erzwingen. Siehe [`06-open-questions.md`](06-open-questions.md).
+
+## 12. `exp_sessions`-Doppelsystem → nach Cutover konsolidieren
+
+`exp_sessions`/`exp_snapshots`/`exp_game_transitions` sind ein paralleler Session-Tracker
+(„Experimental-Analytics") neben `twitch_stream_sessions` — klassische Doppelung. Sie haben aber
+echte Konsumenten (AI-Stream-Reports lesen das Game-Breakdown, `/twitch/api/v2/exp/game-transitions`),
+deshalb portiert Schritt 4 die 4 Write-Hooks dünn mit (Schema-Vertrag). **Ziel-Lösung:** Nach dem
+Monitoring-Cutover gehen Game-Transitions als Spalten/Beziehung ins Haupt-Session-Modell und die
+`exp_*`-Tabellen entfallen; die Konsumenten werden auf die Haupt-Tabellen umgezogen.
+
+## 13. Guard-GC raus aus dem Claim-Hot-Path
+
+Python löscht bei **jedem** `claim` alle abgelaufenen Guard-Rows (`DELETE … WHERE expires_at <= now`)
+— unnötiger Write-Traffic pro Event. Die Korrektheit steckt allein im konditionalen Upsert.
+Rust: `claim` ist ein einzelner Upsert, die GC läuft als periodischer `sweep_expired` im Poll-Loop.

@@ -9,6 +9,7 @@ members = [
     "crates/tb-db",
     "crates/tb-transport-twitch",
     "crates/tb-transport-discord",
+    "crates/tb-monitoring",
     "crates/tb-http-core",
     "crates/tb-analytics",
     "crates/tb-dashboard-api",
@@ -40,6 +41,7 @@ tower = "0.5"
 tower-http = { version = "0.6", features = ["trace", "cors"] }
 async-trait = "0.1"
 chrono = { version = "0.4", features = ["serde"] }
+uuid = { version = "1", features = ["v4"] }
 wiremock = "0.6"
 tb-error = { path = "crates/tb-error" }
 tb-crypto = { path = "crates/tb-crypto" }
@@ -49,6 +51,7 @@ tb-observability = { path = "crates/tb-observability" }
 tb-db = { path = "crates/tb-db" }
 tb-transport-twitch = { path = "crates/tb-transport-twitch" }
 tb-transport-discord = { path = "crates/tb-transport-discord" }
+tb-monitoring = { path = "crates/tb-monitoring" }
 tb-http-core     = { path = "crates/tb-http-core" }
 tb-analytics     = { path = "crates/tb-analytics" }
 tb-dashboard-api = { path = "crates/tb-dashboard-api" }

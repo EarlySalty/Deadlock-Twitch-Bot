@@ -1,0 +1,12 @@
+[package]
+name = "tb-monitoring"
+version = "0.1.0"
+edition.workspace = true
+
+[dependencies]
+async-trait = { workspace = true }
+serde_json  = { workspace = true }
+sqlx        = { workspace = true }
+tokio       = { workspace = true, features = ["sync", "time"] }
+tracing     = { workspace = true }
+uuid        = { workspace = true }
