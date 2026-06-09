@@ -523,6 +523,7 @@ class DashboardV2Server(
         if not data.get("valid"):
             return None
         now = time.time()
+        _admin_ttl = getattr(self, "_discord_admin_session_ttl", 86400)
         synth: dict[str, Any] = {
             "auth_type": "discord_admin",
             "user_id": str(data.get("user_id") or ""),
@@ -535,7 +536,7 @@ class DashboardV2Server(
             "client_ip": "",
             "created_at": now,
             "last_seen_at": now,
-            "expires_at": min(float(data.get("expires_at") or now + 300), now + 300),
+            "expires_at": min(float(data.get("expires_at") or now + _admin_ttl), now + _admin_ttl),
         }
         cache = self._dashboard_auth_state_cache("_discord_admin_sessions")
         cache.put(session_id, synth)

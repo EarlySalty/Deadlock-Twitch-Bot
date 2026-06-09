@@ -1,3 +1,11 @@
+## #105 — Admin-Session: 5-Minuten-Cap beim Cross-Dashboard-Login entfernt
+
+**Ausgangslage:** Wenn man sich am Discord-Dashboard einloggte und dann das Twitch-Dashboard öffnete, holte der Twitch-Bot die Session per internem API-Call vom Discord-Bot — soweit korrekt. Das Problem: Die lokal gecachte Session wurde dabei mit `expires_at = now + 300` gespeichert (hardcoded 5 Minuten), obwohl die eigentliche Session im Discord-Bot noch 2 Wochen gültig war. Nach 5 Minuten galt die lokale Kopie als abgelaufen; Route-Handler sahen keine gültige Session mehr und verhielten sich inkonsistent, während Caddys Forward-Auth (der parallel re-validiert) noch 200 zurückgab.
+
+**Geändert:** Der 300-Sekunden-Hardcode in `_fetch_discord_dashboard_session` wurde durch `_discord_admin_session_ttl` ersetzt. Die gecachte Synth-Session läuft jetzt genauso lang wie eine lokal erstellte Admin-Session.
+
+**Wie es jetzt funktioniert:** Login am Discord-Dashboard → Cookie wird am Twitch-Dashboard erkannt → beim ersten Zugriff wird die Session vom Discord-Bot geholt und lokal mit voller TTL gespeichert. Route-Handler und Forward-Auth sehen ab dann konsistent dieselbe gültige Session.
+
 ## #104 — Admin System-Endpoints (Rust Schritt 2a)
 
 **Ausgangslage:** Das Rust-Dashboard hatte nach Schritt 1b zwar Auth-geschützte Analytics-Routen, aber keine Möglichkeit, den Gesundheitszustand des laufenden Systems abzufragen — kein Uptime, kein Memory, kein Überblick über DB-Größe, EventSub-Zustand oder Error-Log.
