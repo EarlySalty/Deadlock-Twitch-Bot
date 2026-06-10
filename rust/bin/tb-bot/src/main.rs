@@ -20,6 +20,7 @@
 //!   TWITCH_LANGUAGE_FILTERS       — Komma-Liste (z. B. "de,en"), leer = alle
 //!   PORT                          — optional, default 8776
 
+mod confirm_resolver;
 mod score_refresh;
 mod wiring;
 
