@@ -1843,15 +1843,24 @@ class DashboardLiveMixin:
             )
             raise web.HTTPFound(location=location)
 
-        items = await self._list()
-        target = next(
-            (
-                row
-                for row in items
-                if str(row.get("twitch_login") or "").strip().lower() == login
-            ),
-            None,
-        )
+        target: dict[str, Any] | None = None
+        try:
+            with _storage.readonly_connection() as _conn:
+                _row = _conn.execute(
+                    "SELECT twitch_user_id, archived_at, manual_partner_opt_out"
+                    " FROM twitch_partners_all_state"
+                    " WHERE LOWER(twitch_login) = LOWER(%s) LIMIT 1",
+                    (login,),
+                ).fetchone()
+                if _row:
+                    target = {
+                        "twitch_user_id": _row[0],
+                        "archived_at": _row[1],
+                        "manual_partner_opt_out": _row[2],
+                    }
+        except Exception:
+            log.exception("admin_partner_chat_action: DB-Lookup für %s fehlgeschlagen", login)
+
         if target is None:
             location = self._redirect_location(
                 request,

@@ -1,3 +1,11 @@
+## #121 — Admin-Chat-Aktion: 503 bei kurzzeitigem DB-Fehler behoben
+
+**Ausgangslage:** Das Absenden einer manuellen Chat-Nachricht an einen Partner-Kanal über das Admin-Dashboard schlug sporadisch mit einem 503-Fehler fehl. Logs zeigten: „Dashboard internal API unavailable (degraded mode). First failure in streamers_list: internal server error" — der Endpunkt lieferte immer dann keinen Response, wenn der interne Rust-API-Call auf `GET /streamers` kurzzeitig mit DB-Fehler (500) antwortete.
+
+**Was wurde geändert:** Die Chat-Aktion hat die komplette Streamer-Liste über die interne API geladen, nur um drei Felder eines einzigen Streamers zu prüfen (`twitch_user_id`, `archived_at`, `manual_partner_opt_out`). Das ist durch einen direkten DB-Lookup gegen die `twitch_partners_all_state`-View ersetzt — keine API-Abhängigkeit mehr für diese Validierung.
+
+**Wie es jetzt funktioniert:** Beim Absenden einer Chat-Nachricht liest der Handler direkt aus der DB. Transiente Fehler in der internen API blockieren den Ablauf nicht mehr. Schlägt die DB selbst fehl, erscheint eine klare Fehlermeldung im Dashboard statt eines nackten 503.
+
 ## #120 — Bot war blind für Partner mit nicht-deutscher Kanal-Sprache: Auto-Raid & Werbezitate gefixt
 
 **Ausgangslage:** Ein Partner meldete, dass der Auto-Raid bei ihm nie feuert (manuell ging es) und Werbezitate in seinem Chat komplett ausbleiben. Die Spur in Logs und Datenbank: Der Bot hat seinen Stream über Wochen kein einziges Mal live „gesehen" — keine Stream-Session, keine Kategorie, keine Zuschauerzahlen, nie ein Live-Posting. Grund: Die Live-Abfrage bei Twitch lief mit Sprachfilter Deutsch, und der Partner hat seine Twitch-Kanal-Sprache auf Englisch gestellt. Das Push-Event „Kanal ist live" kam zwar an, enthält aber weder Kategorie noch Zuschauer — und alles, was darauf aufbaut, lief ins Leere: Der Auto-Raid wird am Stream-Ende nur ausgelöst, wenn die letzte Kategorie Deadlock war; bei „Kategorie unbekannt" greift die Sicherheitsregel und überspringt (24 Mal in Folge, als einziger Partner). Werbezitate brauchen Zuschauer-Baseline bzw. Chat-Aktivitätsdaten aus genau diesem Tracking — ohne Daten kein Trigger.
