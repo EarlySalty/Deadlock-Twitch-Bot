@@ -7,6 +7,8 @@
 //! Login (lowercase). Beim Eintragen wird eine evtl. abweichende Zeile mit
 //! gleicher `target_id` aber anderem Login vorher entfernt (Drift-Cleanup).
 
+use std::collections::HashSet;
+
 use chrono::{DateTime, SecondsFormat, Utc};
 use sqlx::PgPool;
 
@@ -88,6 +90,28 @@ impl RaidBlacklistStore {
         .await?;
         tx.commit().await?;
         Ok(())
+    }
+
+    /// Lädt die komplette Blacklist als `(ids, logins)`-Sets für Set-Filterung
+    /// im Auswahl-Loop (Python `load_raid_blacklist`). Logins lowercase,
+    /// leere IDs ausgelassen.
+    pub async fn load_all(&self) -> Result<(HashSet<String>, HashSet<String>), sqlx::Error> {
+        let rows: Vec<(Option<String>, String)> =
+            sqlx::query_as("SELECT target_id, target_login FROM twitch_raid_blacklist")
+                .fetch_all(&self.pool)
+                .await?;
+        let mut ids = HashSet::new();
+        let mut logins = HashSet::new();
+        for (id, login) in rows {
+            if let Some(id) = id.map(|i| i.trim().to_string()).filter(|i| !i.is_empty()) {
+                ids.insert(id);
+            }
+            let login = login.trim().to_lowercase();
+            if !login.is_empty() {
+                logins.insert(login);
+            }
+        }
+        Ok((ids, logins))
     }
 
     /// Entfernt ein Ziel per Login. Liefert `true` wenn etwas gelöscht wurde.

@@ -110,3 +110,40 @@ async fn add_match_per_id_oder_login_und_drift_cleanup() {
     assert!(store.remove("DRAG_NEU").await.unwrap());
     assert!(!store.is_blacklisted(None, "drag_neu").await.unwrap());
 }
+
+#[tokio::test]
+async fn load_all_liefert_id_und_login_sets_normalisiert() {
+    let pool = pool_or_skip!("t6b_raidbl_all");
+    let store = RaidBlacklistStore::new(pool.clone());
+
+    store
+        .add(Some("42"), "Drag", "scam", Utc::now())
+        .await
+        .unwrap();
+    store
+        .add(None, "NurLogin", "spam", Utc::now())
+        .await
+        .unwrap();
+    // Zeile mit leerer ID (Altbestand): nur der Login zählt.
+    sqlx::query(
+        "INSERT INTO twitch_raid_blacklist (target_login, target_id, reason, added_at)
+         VALUES ('altbestand', '', 'x', 'y')",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let (ids, logins) = store.load_all().await.unwrap();
+    assert_eq!(ids, ["42".to_string()].into_iter().collect());
+    assert_eq!(
+        logins,
+        [
+            "drag".to_string(),
+            "nurlogin".to_string(),
+            "altbestand".to_string()
+        ]
+        .into_iter()
+        .collect(),
+        "Logins lowercase-normalisiert, leere IDs nicht im ID-Set"
+    );
+}

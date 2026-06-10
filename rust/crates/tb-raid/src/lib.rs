@@ -33,7 +33,9 @@ pub mod arrival_tracking_store;
 pub mod auth_writer;
 pub mod candidate_selection;
 pub mod eligibility;
+pub mod manual_suppression;
 pub mod oauth_flow;
+pub mod offline_eligibility;
 pub mod partner_roster;
 pub mod pending_raids;
 pub mod raid_blacklist;
@@ -68,10 +70,12 @@ pub use eligibility::{
     classify_eligibility, filter_eligible, is_deadlock_eligible, is_recent_deadlock,
     DeadlockEvalInput, EligibilityBucket, DEADLOCK_RECENCY_CAP_SECONDS,
 };
+pub use manual_suppression::ManualRaidSuppression;
 pub use oauth_flow::{
     build_authorize_url, build_state_info, StreamerContextResolver,
     PUBLIC_WEBSITE_ONBOARDING_LOGIN, TWITCH_AUTHORIZE_URL,
 };
+pub use offline_eligibility::{OfflineAutoRaidEligibility, OfflineEligibilityStore};
 pub use partner_roster::{
     build_online_candidates, OnlineCandidate, PartnerRosterEntry, PartnerRosterStore, StreamData,
 };

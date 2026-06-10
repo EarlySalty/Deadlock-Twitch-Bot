@@ -20,7 +20,8 @@
 //! | signal_observations         | signal_observations         | HashMap<String, HashMap<String, String>> |
 
 use std::collections::HashMap;
-use std::time::{SystemTime, UNIX_EPOCH};
+
+use crate::util::unix_now;
 
 // ---------------------------------------------------------------------------
 // Reine Key-Helfer (Port von pending_raids.py Z. 12–24)
@@ -271,17 +272,6 @@ impl PendingRaidStore {
     pub fn is_empty(&self) -> bool {
         self.raids.is_empty()
     }
-}
-
-// ---------------------------------------------------------------------------
-// Hilfsfunktion
-// ---------------------------------------------------------------------------
-
-fn unix_now() -> f64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs_f64()
 }
 
 // ---------------------------------------------------------------------------

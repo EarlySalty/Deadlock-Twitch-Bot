@@ -1,6 +1,16 @@
 //! Kleine crate-interne Helfer.
 
+use std::time::{SystemTime, UNIX_EPOCH};
+
 use chrono::{DateTime, NaiveDateTime, Utc};
+
+/// Aktuelle Unix-Zeit in Sekunden (f64, wie Pythons `time.time()`).
+pub(crate) fn unix_now() -> f64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs_f64()
+}
 
 /// Parst einen ISO-Timestamp (toleriert `Z`-Suffix); naive Timestamps gelten
 /// als UTC. `None` bei leerem/kaputtem Wert. Für die TEXT-Timestamp-Spalten
