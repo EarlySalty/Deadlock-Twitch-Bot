@@ -15,7 +15,7 @@ pub(crate) fn unix_now() -> f64 {
 /// Parst einen ISO-Timestamp (toleriert `Z`-Suffix); naive Timestamps gelten
 /// als UTC. `None` bei leerem/kaputtem Wert. Für die TEXT-Timestamp-Spalten
 /// (`twitch_token_blacklist` u. a.).
-pub(crate) fn parse_iso_utc(raw: &str) -> Option<DateTime<Utc>> {
+pub fn parse_iso_utc(raw: &str) -> Option<DateTime<Utc>> {
     let raw = raw.trim();
     if raw.is_empty() {
         return None;

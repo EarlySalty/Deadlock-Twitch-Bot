@@ -7,7 +7,7 @@ use serde::Deserialize;
 use crate::client::{HelixClient, HelixError};
 
 /// Ein Live-Stream aus Helix `/streams`.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize)]
 pub struct HelixStream {
     #[serde(default)]
     pub id: String,

@@ -98,7 +98,7 @@ pub fn filter_eligible<T, F>(
     mut eval_of: F,
 ) -> (Vec<T>, usize)
 where
-    F: FnMut(&T) -> DeadlockEvalInput<'static>,
+    F: for<'a> FnMut(&'a T) -> DeadlockEvalInput<'a>,
 {
     if target_game_lower.is_empty() {
         return (candidates, 0);

@@ -51,7 +51,9 @@ impl HelixClient {
             status => {
                 let body = resp.text().await.unwrap_or_default();
                 let snippet: String = body.chars().take(200).collect();
-                Ok(Err(format!("Cancel-Raid API failed: HTTP {status}: {snippet}")))
+                Ok(Err(format!(
+                    "Cancel-Raid API failed: HTTP {status}: {snippet}"
+                )))
             }
         }
     }

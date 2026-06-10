@@ -22,6 +22,7 @@
 
 mod auto_raid;
 mod confirm_resolver;
+mod raid_adapters;
 mod raid_arrival_wiring;
 mod score_refresh;
 mod wiring;

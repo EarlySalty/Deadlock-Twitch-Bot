@@ -507,3 +507,29 @@ async fn offline_source_state_liest_restzustand_nach_offline() {
 
     assert!(store.offline_source_state("99").await.unwrap().is_none());
 }
+
+#[tokio::test]
+async fn source_states_by_logins_liefert_login_map() {
+    let pool = pool_or_skip!("t6_live_loginmap");
+    let store = LiveStateStore::new(pool.clone());
+    sqlx::query(
+        "INSERT INTO twitch_live_state
+            (twitch_user_id, streamer_login, last_game, had_deadlock_in_session, last_deadlock_seen_at)
+         VALUES ('1', 'alpha', 'Deadlock', 1, '2026-06-10T18:00:00+00:00'),
+                ('2', 'beta', 'Just Chatting', 0, NULL)",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let map = store
+        .source_states_by_logins(&["alpha".to_string(), "beta".to_string(), "fehlt".to_string()])
+        .await
+        .unwrap();
+    assert_eq!(map.len(), 2);
+    assert_eq!(map["alpha"].had_deadlock_in_session, Some(1));
+    assert_eq!(map["beta"].last_game.as_deref(), Some("Just Chatting"));
+    assert!(!map.contains_key("fehlt"));
+
+    assert!(store.source_states_by_logins(&[]).await.unwrap().is_empty());
+}

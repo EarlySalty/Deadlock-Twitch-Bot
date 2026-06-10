@@ -388,6 +388,36 @@ impl LiveStateStore {
         Ok(())
     }
 
+    /// Session-Restzustand mehrerer Logins als Map (Python
+    /// `load_partner_live_state_map`) — Eingabe für den
+    /// Kandidaten-Eligibility-Filter des Auto-Raids.
+    pub async fn source_states_by_logins(
+        &self,
+        logins: &[String],
+    ) -> Result<std::collections::HashMap<String, OfflineSourceState>, sqlx::Error> {
+        if logins.is_empty() {
+            return Ok(std::collections::HashMap::new());
+        }
+        #[derive(sqlx::FromRow)]
+        struct LoginStateRow {
+            streamer_login: String,
+            #[sqlx(flatten)]
+            state: OfflineSourceState,
+        }
+        let rows: Vec<LoginStateRow> = sqlx::query_as(
+            "SELECT streamer_login, last_game, had_deadlock_in_session,
+                    last_deadlock_seen_at, last_viewer_count, last_started_at
+               FROM twitch_live_state WHERE streamer_login = ANY($1)",
+        )
+        .bind(logins)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows
+            .into_iter()
+            .map(|row| (row.streamer_login.trim().to_lowercase(), row.state))
+            .collect())
+    }
+
     /// Restzustand der letzten Session für den Auto-Raid-Trigger.
     /// `apply_stream_offline` leert diese Spalten bewusst NICHT — sie
     /// beschreiben, was vor dem Offline-Gehen lief (Python `previous_state`).
