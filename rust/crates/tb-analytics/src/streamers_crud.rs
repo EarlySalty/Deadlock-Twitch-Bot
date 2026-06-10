@@ -10,27 +10,85 @@ use sqlx::PgPool;
 
 // ── GET /streamers ────────────────────────────────────────────────────────────
 
+/// Eine Zeile der Admin-Streamer-Liste — Feldnamen sind der JSON-Vertrag
+/// (identisch zu Pythons `_dashboard_list_sync`-Spalten).
+///
+/// Quelle ist seit der Partner-DB-Konsolidierung der View
+/// `twitch_partners_all_state` (Partner-Lifecycle), NICHT mehr
+/// `twitch_streamers` — dessen Duplikat-Spalten (u. a. `is_verified`)
+/// wurden gedroppt. Timestamps im View sind TEXT; die Raid-Auth-Felder
+/// kommen als echte TIMESTAMPTZ/BOOLEAN aus `twitch_raid_auth`.
 #[derive(Debug, Serialize, sqlx::FromRow)]
 pub struct StreamerListRow {
     pub twitch_login: String,
     pub twitch_user_id: Option<String>,
-    pub is_verified: Option<i32>,
-    pub is_monitored_only: Option<i32>,
-    pub archived_at: Option<DateTime<Utc>>,
-    pub created_at: Option<DateTime<Utc>>,
+    pub manual_verified_permanent: Option<i32>,
+    pub manual_verified_until: Option<String>,
+    pub manual_verified_at: Option<String>,
+    pub manual_partner_opt_out: Option<i32>,
+    pub archived_at: Option<String>,
+    pub is_on_discord: Option<i32>,
+    pub discord_user_id: Option<String>,
+    pub discord_display_name: Option<String>,
+    pub raid_bot_enabled: Option<i32>,
+    pub raid_auth_enabled: Option<bool>,
+    pub raid_needs_reauth: Option<bool>,
+    pub raid_authorized_at: Option<DateTime<Utc>>,
+    pub raid_token_expires_at: Option<DateTime<Utc>>,
+    pub last_deadlock_stream_at: Option<DateTime<Utc>>,
 }
 
-/// Gibt alle nicht-archivierten Streamer zurück, sortiert nach Login.
-pub async fn list_streamers(pool: &PgPool) -> Result<Vec<StreamerListRow>, sqlx::Error> {
+/// Gibt alle aktiven Partner zurück (Python `_dashboard_list_sync`):
+/// Partner-View + Raid-Auth-Join + letzter Deadlock-Stream je Login.
+/// `target_game` für die Deadlock-Erkennung in den Sessions (z. B. "Deadlock").
+pub async fn list_streamers(
+    pool: &PgPool,
+    target_game: &str,
+) -> Result<Vec<StreamerListRow>, sqlx::Error> {
     sqlx::query_as(
         r#"
-        SELECT twitch_login, twitch_user_id, is_verified, is_monitored_only,
-               archived_at, created_at
-        FROM twitch_streamers
-        WHERE archived_at IS NULL
-        ORDER BY LOWER(twitch_login) ASC
+        SELECT s.twitch_login,
+               COALESCE(NULLIF(s.twitch_user_id, ''), NULLIF(a.twitch_user_id, '')) AS twitch_user_id,
+               s.manual_verified_permanent,
+               s.manual_verified_until,
+               s.manual_verified_at,
+               s.manual_partner_opt_out,
+               s.archived_at,
+               s.is_on_discord,
+               s.discord_user_id,
+               s.discord_display_name,
+               s.raid_bot_enabled,
+               a.raid_enabled AS raid_auth_enabled,
+               a.needs_reauth AS raid_needs_reauth,
+               a.authorized_at AS raid_authorized_at,
+               a.token_expires_at AS raid_token_expires_at,
+               sess.last_deadlock_stream_at
+          FROM twitch_partners_all_state s
+          LEFT JOIN twitch_raid_auth a
+            ON (
+                 s.twitch_user_id IS NOT NULL
+                 AND s.twitch_user_id = a.twitch_user_id
+               )
+            OR (
+                 s.twitch_user_id IS NULL
+                 AND LOWER(s.twitch_login) = LOWER(a.twitch_login)
+               )
+          LEFT JOIN (
+               SELECT LOWER(streamer_login) AS streamer_login,
+                      MAX(CASE
+                            WHEN had_deadlock_in_session
+                                 OR LOWER(COALESCE(game_name,'')) = LOWER($1)
+                            THEN COALESCE(ended_at, started_at)
+                      END) AS last_deadlock_stream_at
+                 FROM twitch_stream_sessions
+                GROUP BY LOWER(streamer_login)
+          ) AS sess
+            ON sess.streamer_login = LOWER(s.twitch_login)
+         WHERE s.status = 'active'
+          ORDER BY s.twitch_login
         "#,
     )
+    .bind(target_game)
     .fetch_all(pool)
     .await
 }
@@ -564,8 +622,63 @@ mod tests {
         .await
         .expect("DDL twitch_partners");
 
+        // Quellen der neuen Listen-Query: Partner-View (im Test als Tabelle
+        // mit den referenzierten Spalten), Raid-Auth und Sessions.
         sqlx::query(
-            "TRUNCATE twitch_streamers, twitch_streamer_identities, twitch_live_state, twitch_partners RESTART IDENTITY",
+            r#"
+            CREATE TABLE IF NOT EXISTS twitch_partners_all_state (
+                twitch_login             TEXT,
+                twitch_user_id           TEXT,
+                manual_verified_permanent INTEGER DEFAULT 0,
+                manual_verified_until    TEXT,
+                manual_verified_at       TEXT,
+                manual_partner_opt_out   INTEGER DEFAULT 0,
+                archived_at              TEXT,
+                is_on_discord            INTEGER DEFAULT 0,
+                discord_user_id          TEXT,
+                discord_display_name    TEXT,
+                raid_bot_enabled         INTEGER DEFAULT 1,
+                status                   TEXT DEFAULT 'active'
+            )
+            "#,
+        )
+        .execute(&pool)
+        .await
+        .expect("DDL twitch_partners_all_state");
+
+        sqlx::query(
+            r#"
+            CREATE TABLE IF NOT EXISTS twitch_raid_auth (
+                twitch_user_id   TEXT PRIMARY KEY,
+                twitch_login     TEXT,
+                raid_enabled     BOOLEAN,
+                needs_reauth     BOOLEAN,
+                authorized_at    TIMESTAMPTZ,
+                token_expires_at TIMESTAMPTZ
+            )
+            "#,
+        )
+        .execute(&pool)
+        .await
+        .expect("DDL twitch_raid_auth");
+
+        sqlx::query(
+            r#"
+            CREATE TABLE IF NOT EXISTS twitch_stream_sessions (
+                streamer_login          TEXT,
+                game_name               TEXT,
+                had_deadlock_in_session BOOLEAN DEFAULT FALSE,
+                started_at              TIMESTAMPTZ,
+                ended_at                TIMESTAMPTZ
+            )
+            "#,
+        )
+        .execute(&pool)
+        .await
+        .expect("DDL twitch_stream_sessions");
+
+        sqlx::query(
+            "TRUNCATE twitch_streamers, twitch_streamer_identities, twitch_live_state, twitch_partners, twitch_partners_all_state, twitch_raid_auth, twitch_stream_sessions RESTART IDENTITY",
         )
         .execute(&pool)
         .await
@@ -584,7 +697,7 @@ mod tests {
             }
         };
         let pool = make_pool(&dsn, "test_sc_list_empty").await;
-        let result = list_streamers(&pool).await.unwrap();
+        let result = list_streamers(&pool, "Deadlock").await.unwrap();
         assert!(result.is_empty());
     }
 
@@ -604,9 +717,68 @@ mod tests {
             .unwrap();
         assert!(matches!(result, AddStreamerResult::Added));
 
-        let list = list_streamers(&pool).await.unwrap();
-        assert_eq!(list.len(), 1);
-        assert_eq!(list[0].twitch_login, "testuser");
+        // add schreibt Nicht-Partner nach twitch_streamers — die Admin-Liste
+        // zeigt nur aktive Partner (Python-Semantik), daher Direkt-Check.
+        let row: (String, Option<String>) = sqlx::query_as(
+            "SELECT twitch_login, twitch_user_id FROM twitch_streamers WHERE twitch_login='testuser'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(row.0, "testuser");
+        assert_eq!(row.1.as_deref(), Some("12345"));
+    }
+
+    #[tokio::test]
+    async fn list_liefert_partner_mit_raid_auth_und_deadlock_session() {
+        let dsn = match test_dsn() {
+            Some(d) => d,
+            None => {
+                eprintln!("SKIP: TB_TEST_DATABASE_URL nicht gesetzt");
+                return;
+            }
+        };
+        let pool = make_pool(&dsn, "test_sc_list_rich").await;
+
+        sqlx::query(
+            "INSERT INTO twitch_partners_all_state
+                (twitch_login, twitch_user_id, manual_verified_permanent, status, raid_bot_enabled)
+             VALUES ('drag', '42', 1, 'active', 1),
+                    ('archiviert', '99', 0, 'archived', 0)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO twitch_raid_auth
+                (twitch_user_id, twitch_login, raid_enabled, needs_reauth, authorized_at)
+             VALUES ('42', 'drag', TRUE, FALSE, NOW())",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO twitch_stream_sessions
+                (streamer_login, game_name, had_deadlock_in_session, started_at, ended_at)
+             VALUES ('Drag', 'Deadlock', TRUE, NOW() - INTERVAL '3 hours', NOW() - INTERVAL '1 hour')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let list = list_streamers(&pool, "Deadlock").await.unwrap();
+        assert_eq!(list.len(), 1, "nur status='active'");
+        let row = &list[0];
+        assert_eq!(row.twitch_login, "drag");
+        assert_eq!(row.twitch_user_id.as_deref(), Some("42"));
+        assert_eq!(row.manual_verified_permanent, Some(1));
+        assert_eq!(row.raid_auth_enabled, Some(true));
+        assert_eq!(row.raid_needs_reauth, Some(false));
+        assert!(row.raid_authorized_at.is_some());
+        assert!(
+            row.last_deadlock_stream_at.is_some(),
+            "Session-Join (case-insensitiver Login)"
+        );
     }
 
     #[tokio::test]
@@ -644,8 +816,13 @@ mod tests {
         let result = remove_streamer(&pool, "testuser").await.unwrap();
         assert!(matches!(result, RemoveStreamerResult::Archived));
 
-        let list = list_streamers(&pool).await.unwrap();
-        assert!(list.is_empty());
+        let archived: Option<String> = sqlx::query_scalar(
+            "SELECT archived_at::text FROM twitch_streamers WHERE twitch_login='testuser'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert!(archived.is_some(), "archiviert statt gelistet");
     }
 
     #[tokio::test]

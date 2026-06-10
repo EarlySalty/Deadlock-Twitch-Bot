@@ -33,17 +33,7 @@ pub struct OkMessageResponse {
 #[derive(Serialize)]
 pub struct StreamersListResponse {
     pub ok: bool,
-    pub streamers: Vec<StreamerEntry>,
-}
-
-#[derive(Serialize)]
-pub struct StreamerEntry {
-    pub twitch_login: String,
-    pub twitch_user_id: Option<String>,
-    pub is_verified: Option<i32>,
-    pub is_monitored_only: Option<i32>,
-    pub archived_at: Option<String>,
-    pub created_at: Option<String>,
+    pub streamers: Vec<tb_analytics::streamers_crud::StreamerListRow>,
 }
 
 // ── Request-Typen ─────────────────────────────────────────────────────────────
@@ -88,22 +78,17 @@ pub async fn list_handler(
         return Err(ApiError::unauthorized());
     }
 
-    let rows = db::list_streamers(&pool).await.map_err(|e| {
+    // Ziel-Spiel wie Python (`os.getenv` mit "Deadlock"-Default) für die
+    // last_deadlock_stream_at-Erkennung.
+    let target_game = std::env::var("TWITCH_TARGET_GAME_NAME")
+        .ok()
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty())
+        .unwrap_or_else(|| "Deadlock".to_string());
+    let streamers = db::list_streamers(&pool, &target_game).await.map_err(|e| {
         tracing::error!("list_streamers DB-Fehler: {e}");
         ApiError::internal()
     })?;
-
-    let streamers = rows
-        .into_iter()
-        .map(|r| StreamerEntry {
-            twitch_login: r.twitch_login,
-            twitch_user_id: r.twitch_user_id,
-            is_verified: r.is_verified,
-            is_monitored_only: r.is_monitored_only,
-            archived_at: r.archived_at.map(|dt| dt.to_rfc3339()),
-            created_at: r.created_at.map(|dt| dt.to_rfc3339()),
-        })
-        .collect();
 
     Ok(Json(StreamersListResponse {
         ok: true,
@@ -437,8 +422,33 @@ mod tests {
         .await
         .expect("DDL twitch_partners");
 
+        // Quellen der Listen-Query (Partner-View als Test-Tabelle + Joins).
+        for ddl in [
+            "CREATE TABLE IF NOT EXISTS twitch_partners_all_state (
+                twitch_login TEXT, twitch_user_id TEXT,
+                manual_verified_permanent INTEGER DEFAULT 0,
+                manual_verified_until TEXT, manual_verified_at TEXT,
+                manual_partner_opt_out INTEGER DEFAULT 0, archived_at TEXT,
+                is_on_discord INTEGER DEFAULT 0, discord_user_id TEXT,
+                discord_display_name TEXT, raid_bot_enabled INTEGER DEFAULT 1,
+                status TEXT DEFAULT 'active' )",
+            "CREATE TABLE IF NOT EXISTS twitch_raid_auth (
+                twitch_user_id TEXT PRIMARY KEY, twitch_login TEXT,
+                raid_enabled BOOLEAN, needs_reauth BOOLEAN,
+                authorized_at TIMESTAMPTZ, token_expires_at TIMESTAMPTZ )",
+            "CREATE TABLE IF NOT EXISTS twitch_stream_sessions (
+                streamer_login TEXT, game_name TEXT,
+                had_deadlock_in_session BOOLEAN DEFAULT FALSE,
+                started_at TIMESTAMPTZ, ended_at TIMESTAMPTZ )",
+        ] {
+            sqlx::query(ddl)
+                .execute(&pool)
+                .await
+                .expect("DDL Listen-Quellen");
+        }
+
         sqlx::query(
-            "TRUNCATE twitch_streamers, twitch_streamer_identities, twitch_live_state, twitch_partners RESTART IDENTITY",
+            "TRUNCATE twitch_streamers, twitch_streamer_identities, twitch_live_state, twitch_partners, twitch_partners_all_state, twitch_raid_auth, twitch_stream_sessions RESTART IDENTITY",
         )
         .execute(&pool)
         .await
