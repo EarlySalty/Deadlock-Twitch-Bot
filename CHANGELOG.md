@@ -1,3 +1,11 @@
+## #128 — Discord-Rollen-Sync beim Speichern des Discord-Profils
+
+**Ausgangslage:** Im Admin-Dashboard kann man für einen Partner eine Discord-User-ID hinterlegen. Die Streamer-Rolle im Discord-Server wurde aber nur bei der initialen Verifizierung vergeben — wer erst nachträglich verknüpft wurde oder dessen ID später gesetzt/korrigiert wurde, bekam die Rolle nie automatisch.
+
+**Geändert:** Sobald im Dashboard eine Discord-ID gespeichert wird, löst der Bot jetzt unmittelbar `sync_streamer_role` aus. Wenn die Person bereits im Server ist, landet die Rolle sofort. Wenn nicht, passiert nichts (kein Fehler, kein Absturz).
+
+**Jetzt:** Discord-Profil speichern = Rolle wird in einem Zug gesetzt, ohne dass ein zweiter manueller Schritt nötig ist.
+
 ## #127 — Raid-Priorität aus Plänen zählt wieder im Scoring
 
 **Ausgangslage:** Wer einen Plan mit Raid-Priorität hat (Raid Boost, die Bundles oder „Alles drin"), soll bei der automatischen Raid-Ziel-Auswahl bevorzugt werden. Seit dem Umzug der Score-Berechnung auf den neuen Kern wurde aber nur noch das direkte Boost-Häkchen in der Datenbank geprüft — die Zuordnung „Plan → enthält Raid-Priorität" (inklusive manuell vergebener Pläne mit Ablaufdatum) war schlicht noch nicht mit umgezogen und im Code als offene Lücke vermerkt. Partner, deren Boost allein aus ihrem Plan kommt, wurden im Scoring wie Free-Nutzer behandelt.

@@ -269,6 +269,22 @@ async def _dashboard_save_discord_profile(
     except Exception:
         raise ValueError("Discord-ID wird bereits verwendet")
 
+    if discord_id_clean:
+        try:
+            await sync_streamer_role(
+                getattr(self, "bot", None),
+                discord_id_clean,
+                should_have_role=True,
+                reason=f"Discord-Profil für {normalized} im Dashboard gesetzt",
+                logger=log,
+            )
+        except Exception:
+            log.warning(
+                "Discord-Rollen-Sync nach Profil-Update fehlgeschlagen für %s",
+                normalized,
+                exc_info=True,
+            )
+
     return f"Discord-Daten für {normalized} aktualisiert"
 
 
