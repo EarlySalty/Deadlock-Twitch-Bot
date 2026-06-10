@@ -39,6 +39,5 @@ pub struct ChannelInfo {
 /// kürzer als ein Poll-Intervall sind).
 #[async_trait::async_trait]
 pub trait ChannelInfoSource: Send + Sync {
-    async fn channel_info(&self, broadcaster_id: &str)
-        -> Result<Option<ChannelInfo>, SourceError>;
+    async fn channel_info(&self, broadcaster_id: &str) -> Result<Option<ChannelInfo>, SourceError>;
 }

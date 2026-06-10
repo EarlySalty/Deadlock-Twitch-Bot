@@ -138,10 +138,7 @@ impl StreamSource for HelixStreamSource {
 
 #[async_trait::async_trait]
 impl ChannelInfoSource for HelixStreamSource {
-    async fn channel_info(
-        &self,
-        broadcaster_id: &str,
-    ) -> Result<Option<ChannelInfo>, SourceError> {
+    async fn channel_info(&self, broadcaster_id: &str) -> Result<Option<ChannelInfo>, SourceError> {
         let info = self.helix.get_channel_information(broadcaster_id).await?;
         Ok(info.map(|i| ChannelInfo {
             title: Some(i.title).filter(|t| !t.trim().is_empty()),

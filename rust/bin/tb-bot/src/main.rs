@@ -49,10 +49,10 @@ use tb_monitoring::{
     TrackedStore, VodPreviewSource,
 };
 use tb_raid::{
-    AutoRaidPipeline, ManualRaidSuppression, OfflineEligibilityStore, PartnerRosterStore,
-    PendingRaidStore, RaidArrivalRuntime, RaidAuthStore, RaidBlacklistStore, RaidExecutor,
-    RaidHistoryStore, RaidTokenRefresher, ScoreStore, StrikesStore, TokenBlacklistStore,
-    TokenProvider,
+    AutoRaidPipeline, ManualRaidSuppression, OfflineEligibilityStore, OutreachBoostStore,
+    PartnerRosterStore, PendingRaidStore, RaidArrivalRuntime, RaidAuthStore, RaidBlacklistStore,
+    RaidExecutor, RaidHistoryStore, RaidTokenRefresher, ScoreStore, StrikesStore,
+    TokenBlacklistStore, TokenProvider,
 };
 use tb_transport_discord::BrokerRelay;
 use tb_transport_twitch::{HelixClient, HelixConfig};
@@ -228,6 +228,7 @@ async fn main() {
                 Some(Arc::new(HelixFallbackStreams {
                     helix: helix_client.clone(),
                 })),
+                Some(OutreachBoostStore::new(pool.clone())),
             );
             let offline = Arc::new(OfflineRaidHandler::new(
                 suppression.clone(),
@@ -280,10 +281,10 @@ async fn main() {
     };
     // Go-Live-Enrichment: gezielter /channels-Lookup beim stream.online-Event
     // (sprachfilter-frei) — nur mit HelixClient verfügbar.
-    let channel_info_source: Option<Arc<dyn ChannelInfoSource>> =
-        helix.as_ref().clone().map(|client| {
-            Arc::new(HelixStreamSource { helix: client }) as Arc<dyn ChannelInfoSource>
-        });
+    let channel_info_source: Option<Arc<dyn ChannelInfoSource>> = helix
+        .as_ref()
+        .clone()
+        .map(|client| Arc::new(HelixStreamSource { helix: client }) as Arc<dyn ChannelInfoSource>);
     let handler = Arc::new(MonitoringEventHandler::new(
         guard.clone(),
         live_state.clone(),

@@ -7,9 +7,10 @@
 //! eligibility-gefilterten** Online-Partner; Quell-Eligibility und
 //! Deadlock-Filter passieren vorher im Aufrufer.
 //!
-//! Bewusst noch nicht portiert (Phase 6g, Post-Cutover): Outreach-Boost-Ziele
-//! und Voice-Reaction-Conversations — beides optionale Pfade, die in Python
-//! über None-bare Hooks liefen.
+//! Outreach-Boost (6g) ist portiert: frisch kontaktierte Outreach-Empfänger
+//! haben Vorrang vor Partnern und werden nach dem Raid per CAS als verbraucht
+//! markiert. Bewusst noch nicht portiert: Voice-Reaction-Conversations
+//! (Discord-Pfad, folgt mit der Broker-Erweiterung).
 //!
 //! Abweichungen von Python (dokumentiert):
 //! - Score-Cache wird einmal pro Lauf geladen statt einmal pro Versuch
@@ -23,6 +24,7 @@ use std::sync::{Arc, Mutex};
 use chrono::Utc;
 
 use crate::candidate_selection::{is_retryable_raid_error, FairnessCandidate};
+use crate::outreach_boost::{OutreachBoostStore, OUTREACH_BOOST_LOOKBACK_HOURS};
 use crate::partner_roster::OnlineCandidate;
 use crate::pending_raids::{PendingRaid, PendingRaidStore};
 use crate::raid_blacklist::RaidBlacklistStore;
@@ -30,7 +32,9 @@ use crate::raid_executor::{RaidExecutor, RaidOutcome, RaidRequest};
 use crate::raid_history_store::RaidHistoryStore;
 use crate::score_store::{PartnerRaidScoreRow, ScoreStore};
 use crate::strikes_store::StrikesStore;
-use crate::target_resolution::{resolve_fallback_target, resolve_partner_target, ResolvedTarget};
+use crate::target_resolution::{
+    resolve_boost_target, resolve_fallback_target, resolve_partner_target, ResolvedTarget,
+};
 use crate::util::{parse_iso_utc, unix_now};
 
 /// Maximale Ziel-Versuche pro Lauf (Python `max_attempts = 3`).
@@ -105,6 +109,8 @@ pub struct AutoRaidPipeline {
     pending: Arc<Mutex<PendingRaidStore>>,
     readiness: Arc<dyn ArrivalReadiness>,
     fallback: Option<Arc<dyn FallbackStreamSource>>,
+    /// Outreach-Boost-Ziele (Phase 6g) — `None` deaktiviert den Boost-Pfad.
+    outreach: Option<OutreachBoostStore>,
 }
 
 impl AutoRaidPipeline {
@@ -118,6 +124,7 @@ impl AutoRaidPipeline {
         pending: Arc<Mutex<PendingRaidStore>>,
         readiness: Arc<dyn ArrivalReadiness>,
         fallback: Option<Arc<dyn FallbackStreamSource>>,
+        outreach: Option<OutreachBoostStore>,
     ) -> Self {
         Self {
             blacklist,
@@ -128,6 +135,7 @@ impl AutoRaidPipeline {
             pending,
             readiness,
             fallback,
+            outreach,
         }
     }
 
@@ -162,6 +170,18 @@ impl AutoRaidPipeline {
                 }
             };
 
+        // Outreach-Boost-Ziele einmal pro Lauf laden (Python lädt vor dem Loop).
+        let boost_logins: HashSet<String> = match &self.outreach {
+            Some(store) => store
+                .load_boost_logins(OUTREACH_BOOST_LOOKBACK_HOURS)
+                .await
+                .unwrap_or_else(|error| {
+                    tracing::debug!(%error, "Outreach-Boost-Loader fehlgeschlagen");
+                    HashSet::new()
+                }),
+            None => HashSet::new(),
+        };
+
         let mut exclude_ids: HashSet<String> = [req.broadcaster_id.clone()].into();
         // Fallback-Streams werden lazy geholt und über Versuche gecacht
         // (Python `cached_de_streams`).
@@ -172,6 +192,7 @@ impl AutoRaidPipeline {
                 .resolve_target(
                     req,
                     &scores,
+                    &boost_logins,
                     &blacklist_ids,
                     &blacklist_logins,
                     &exclude_ids,
@@ -233,6 +254,9 @@ impl AutoRaidPipeline {
             match outcome {
                 RaidOutcome::Started => {
                     self.register_pending(req, &target, &flow_id, channel_raid_ready);
+                    if target.is_outreach_boost {
+                        self.consume_outreach_boost(&target.user_login).await;
+                    }
                     tracing::info!(
                         from = %req.broadcaster_login,
                         to = %target.user_login,
@@ -273,12 +297,35 @@ impl AutoRaidPipeline {
         &self,
         req: &AutoRaidRequest,
         scores: &HashMap<String, PartnerRaidScoreRow>,
+        boost_logins: &HashSet<String>,
         blacklist_ids: &HashSet<String>,
         blacklist_logins: &HashSet<String>,
         exclude_ids: &HashSet<String>,
         cached_fallback: &mut Option<Vec<FairnessCandidate>>,
         attempt: usize,
     ) -> Option<ResolvedTarget> {
+        // Prio 1 (Python Z. 144–178): Outreach-Boost-Ziel unter den
+        // Kategorie-Streams — VOR dem Partner-Pfad.
+        if !boost_logins.is_empty() {
+            self.ensure_fallback_streams(req, cached_fallback, attempt)
+                .await;
+            if let Some(target) = resolve_boost_target(
+                cached_fallback.as_deref().unwrap_or(&[]),
+                boost_logins,
+                blacklist_ids,
+                blacklist_logins,
+                exclude_ids,
+            ) {
+                tracing::info!(
+                    from = %req.broadcaster_login,
+                    to = %target.user_login,
+                    pool = target.candidates_count,
+                    "Outreach-Boost-Ziel gewählt"
+                );
+                return Some(target);
+            }
+        }
+
         let partner = resolve_partner_target(
             &req.partners,
             scores,
@@ -306,28 +353,8 @@ impl AutoRaidPipeline {
             return Some(target);
         }
 
-        let (Some(fallback), Some(category_id)) = (&self.fallback, &req.category_id) else {
-            return None;
-        };
-
-        if cached_fallback.is_none() {
-            tracing::info!(
-                from = %req.broadcaster_login,
-                attempt,
-                "Keine Partner online — hole Deadlock-DE-Fallback-Streams"
-            );
-            let streams = match fallback
-                .category_streams(category_id, FALLBACK_LANGUAGE, FALLBACK_LIMIT)
-                .await
-            {
-                Ok(streams) => streams,
-                Err(error) => {
-                    tracing::error!(%error, "Fallback-Streams nicht abrufbar");
-                    Vec::new()
-                }
-            };
-            *cached_fallback = Some(streams);
-        }
+        self.ensure_fallback_streams(req, cached_fallback, attempt)
+            .await;
         let streams = cached_fallback.as_deref().unwrap_or(&[]);
         if streams.is_empty() {
             return None;
@@ -362,6 +389,38 @@ impl AutoRaidPipeline {
             blacklist_logins,
             exclude_ids,
         )
+    }
+
+    /// Holt die Kategorie-Streams einmalig (lazy, über Versuche gecacht —
+    /// Python `cached_de_streams`). No-op ohne Fallback-Quelle/Kategorie.
+    async fn ensure_fallback_streams(
+        &self,
+        req: &AutoRaidRequest,
+        cached_fallback: &mut Option<Vec<FairnessCandidate>>,
+        attempt: usize,
+    ) {
+        if cached_fallback.is_some() {
+            return;
+        }
+        let (Some(fallback), Some(category_id)) = (&self.fallback, &req.category_id) else {
+            return;
+        };
+        tracing::info!(
+            from = %req.broadcaster_login,
+            attempt,
+            "Hole Deadlock-DE-Kategorie-Streams (Boost/Fallback)"
+        );
+        let streams = match fallback
+            .category_streams(category_id, FALLBACK_LANGUAGE, FALLBACK_LIMIT)
+            .await
+        {
+            Ok(streams) => streams,
+            Err(error) => {
+                tracing::error!(%error, "Kategorie-Streams nicht abrufbar");
+                Vec::new()
+            }
+        };
+        *cached_fallback = Some(streams);
     }
 
     /// Strike-/Blacklist-Behandlung für ein Ziel, das Raids ablehnt
@@ -406,6 +465,23 @@ impl AutoRaidPipeline {
                 strikes,
                 "Raid abgelehnt: Strike vergeben, noch keine Blacklist — nächster Versuch"
             );
+        }
+    }
+
+    /// Markiert das Outreach-Boost-Ziel als verbraucht (CAS; Python
+    /// `mark_outreach_boost_used`). Best-effort — der Raid lief bereits.
+    async fn consume_outreach_boost(&self, target_login: &str) {
+        let Some(store) = &self.outreach else { return };
+        match store.mark_used(target_login).await {
+            Ok(true) => {
+                tracing::info!(to = %target_login, "Outreach-Boost verbraucht");
+            }
+            Ok(false) => {
+                tracing::debug!(to = %target_login, "Outreach-Boost war bereits verbraucht");
+            }
+            Err(error) => {
+                tracing::error!(%error, to = %target_login, "Outreach-Boost-Markierung fehlgeschlagen");
+            }
         }
     }
 

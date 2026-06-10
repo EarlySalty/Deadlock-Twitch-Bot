@@ -35,6 +35,8 @@ pub struct ResolvedTarget {
     /// ISO-Startzeit des Ziel-Streams (für die Raid-History), falls bekannt.
     pub started_at: Option<String>,
     pub is_partner_raid: bool,
+    /// Outreach-Boost-Ziel (Phase 6g): nach Erfolg als verbraucht markieren.
+    pub is_outreach_boost: bool,
     /// Größe des Kandidaten-Pools, aus dem gewählt wurde (für History/Logs).
     pub candidates_count: i32,
 }
@@ -138,6 +140,7 @@ pub fn resolve_partner_target(
             user_login: s.candidate.user_login.clone(),
             started_at: Some(s.candidate.started_at.clone()).filter(|v| v != STARTED_AT_SENTINEL),
             is_partner_raid: true,
+            is_outreach_boost: false,
             candidates_count,
         }),
         stats,
@@ -174,7 +177,53 @@ pub fn resolve_fallback_target(
         started_at: Some(chosen.started_at.clone())
             .filter(|v| !v.trim().is_empty() && v != STARTED_AT_SENTINEL),
         is_partner_raid: false,
+        is_outreach_boost: false,
         candidates_count,
+    })
+}
+
+/// Boost-Pfad (Python `execute` Z. 144–178): Outreach-Empfänger unter den
+/// Kategorie-Streams — kleinster Stream zuerst (der Boost soll gezielt
+/// kleinen, frisch kontaktierten Streamern helfen).
+pub fn resolve_boost_target(
+    streams: &[FairnessCandidate],
+    boost_logins: &HashSet<String>,
+    blacklist_ids: &HashSet<String>,
+    blacklist_logins: &HashSet<String>,
+    exclude_ids: &HashSet<String>,
+) -> Option<ResolvedTarget> {
+    if boost_logins.is_empty() {
+        return None;
+    }
+    let mut matches: Vec<&FairnessCandidate> = streams
+        .iter()
+        .filter(|s| {
+            let login = s.user_login.trim().to_lowercase();
+            boost_logins.contains(&login)
+                && !is_filtered(
+                    s.user_id.trim(),
+                    &login,
+                    blacklist_ids,
+                    blacklist_logins,
+                    exclude_ids,
+                )
+        })
+        .collect();
+    if matches.is_empty() {
+        return None;
+    }
+    matches.sort_by(|a, b| {
+        (a.viewer_count, a.started_at.as_str()).cmp(&(b.viewer_count, b.started_at.as_str()))
+    });
+    let chosen = matches[0];
+    Some(ResolvedTarget {
+        user_id: chosen.user_id.trim().to_string(),
+        user_login: chosen.user_login.trim().to_lowercase(),
+        started_at: Some(chosen.started_at.clone())
+            .filter(|v| !v.trim().is_empty() && v != STARTED_AT_SENTINEL),
+        is_partner_raid: false,
+        is_outreach_boost: true,
+        candidates_count: matches.len() as i32,
     })
 }
 
@@ -364,5 +413,57 @@ mod tests {
         )
         .unwrap();
         assert_eq!(target.user_login, "einziger");
+    }
+
+    #[test]
+    fn boost_waehlt_kleinsten_match_und_respektiert_filter() {
+        let streams = vec![
+            fairness("1", "Boost_Gross", 50),
+            fairness("2", "boost_klein", 3),
+            fairness("3", "geblockt", 1),
+            fairness("4", "kein_boost", 1),
+        ];
+        let boost: HashSet<String> = ["boost_gross", "boost_klein", "geblockt"]
+            .into_iter()
+            .map(String::from)
+            .collect();
+        let blacklist_logins: HashSet<String> = ["geblockt".to_string()].into();
+        let target = resolve_boost_target(
+            &streams,
+            &boost,
+            &HashSet::new(),
+            &blacklist_logins,
+            &HashSet::new(),
+        )
+        .unwrap();
+        assert_eq!(
+            target.user_login, "boost_klein",
+            "kleinster Viewer-Count gewinnt"
+        );
+        assert!(target.is_outreach_boost);
+        assert!(!target.is_partner_raid);
+        assert_eq!(target.candidates_count, 2);
+    }
+
+    #[test]
+    fn boost_leer_oder_ohne_match_gibt_none() {
+        let streams = vec![fairness("1", "x", 5)];
+        assert!(resolve_boost_target(
+            &streams,
+            &HashSet::new(),
+            &HashSet::new(),
+            &HashSet::new(),
+            &HashSet::new()
+        )
+        .is_none());
+        let boost: HashSet<String> = ["anderer".to_string()].into();
+        assert!(resolve_boost_target(
+            &streams,
+            &boost,
+            &HashSet::new(),
+            &HashSet::new(),
+            &HashSet::new()
+        )
+        .is_none());
     }
 }

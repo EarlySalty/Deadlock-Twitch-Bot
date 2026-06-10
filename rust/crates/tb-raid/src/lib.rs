@@ -37,6 +37,7 @@ pub mod eligibility;
 pub mod manual_suppression;
 pub mod oauth_flow;
 pub mod offline_eligibility;
+pub mod outreach_boost;
 pub mod partner_roster;
 pub mod pending_raids;
 pub mod raid_blacklist;
@@ -82,6 +83,7 @@ pub use oauth_flow::{
     PUBLIC_WEBSITE_ONBOARDING_LOGIN, TWITCH_AUTHORIZE_URL,
 };
 pub use offline_eligibility::{OfflineAutoRaidEligibility, OfflineEligibilityStore};
+pub use outreach_boost::{OutreachBoostStore, OUTREACH_BOOST_LOOKBACK_HOURS};
 pub use partner_roster::{
     build_online_candidates, OnlineCandidate, PartnerRosterEntry, PartnerRosterStore, StreamData,
 };
@@ -112,8 +114,8 @@ pub use signal_correlation::{
 pub use state_store::{RaidOAuthState, StateStore};
 pub use strikes_store::StrikesStore;
 pub use target_resolution::{
-    resolve_fallback_target, resolve_partner_target, PartnerResolution, PartnerResolutionStats,
-    ResolvedTarget,
+    resolve_boost_target, resolve_fallback_target, resolve_partner_target, PartnerResolution,
+    PartnerResolutionStats, ResolvedTarget,
 };
 pub use token_blacklist::TokenBlacklistStore;
 pub use token_provider::TokenProvider;

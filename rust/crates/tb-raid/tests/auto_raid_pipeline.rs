@@ -70,6 +70,10 @@ async fn pool_in_schema(dsn: &str, schema: &str) -> PgPool {
             notified INTEGER DEFAULT 0, grace_expires_at TEXT )",
         "CREATE TABLE twitch_raid_blacklist (
             target_login TEXT PRIMARY KEY, target_id TEXT, reason TEXT, added_at TEXT )",
+        "CREATE TABLE twitch_partner_outreach (
+            streamer_login TEXT, streamer_user_id TEXT, detected_at TEXT,
+            contacted_at TEXT, status TEXT, cooldown_until TEXT, notes TEXT,
+            raid_used_at TEXT, conversation_status TEXT )",
         "CREATE TABLE twitch_raid_disabled_strikes (
             target_id TEXT, target_login TEXT NOT NULL, strike_count INTEGER NOT NULL DEFAULT 1,
             last_seen_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), last_reason TEXT,
@@ -260,6 +264,7 @@ fn build(
         Some(Arc::new(StubFallback {
             streams: fallback_streams,
         })),
+        Some(tb_raid::OutreachBoostStore::new(pool.clone())),
     );
     Harness {
         pipeline,
@@ -456,4 +461,42 @@ async fn blacklist_und_quelle_werden_nie_geraidet() {
         .await;
     assert_eq!(outcome, AutoRaidPipelineOutcome::NoTarget);
     assert!(h.api.calls.lock().unwrap().is_empty(), "kein API-Aufruf");
+}
+
+#[tokio::test]
+async fn outreach_boost_gewinnt_vor_partner_und_wird_verbraucht() {
+    let pool = pool_or_skip!("t6w_pipe_boost");
+    seed_source_token(&pool, "100").await;
+    seed_score(&pool, "200", 0.9, 1).await;
+    // Frischer Outreach-Empfänger "300" — in den Kategorie-Streams vorhanden.
+    sqlx::query(
+        "INSERT INTO twitch_partner_outreach (streamer_login, status, contacted_at)
+         VALUES ('boost_ziel', 'sent', (NOW() - INTERVAL '2 hours')::text)",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    let h = build(&pool, HashMap::new(), vec![fairness("300", "boost_ziel")]);
+
+    let outcome = h
+        .pipeline
+        .run(&request(vec![partner("200", "partner")]))
+        .await;
+    assert_eq!(
+        outcome,
+        AutoRaidPipelineOutcome::Started {
+            target_login: "boost_ziel".to_string(),
+            is_partner_raid: false,
+        },
+        "Boost-Ziel schlägt den online Partner"
+    );
+    assert_eq!(h.api.calls.lock().unwrap().clone(), vec!["300"]);
+    // Boost per CAS verbraucht.
+    let used: Option<String> = sqlx::query_scalar(
+        "SELECT raid_used_at FROM twitch_partner_outreach WHERE streamer_login='boost_ziel'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert!(used.is_some(), "raid_used_at gesetzt");
 }
