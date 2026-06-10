@@ -8,7 +8,7 @@ pub mod handlers;
 
 use axum::{
     middleware,
-    routing::{delete, get, post},
+    routing::{get, post},
     Extension, Router,
 };
 use sqlx::PgPool;
@@ -37,7 +37,7 @@ pub fn build_internal_router(
     manual_raid: Option<Arc<dyn handlers::raid::ManualRaidPort>>,
     legacy_proxy: Option<Arc<LegacyProxy>>,
 ) -> Router {
-    use handlers::{eventsub, global_ban, healthz, raid, streamers};
+    use handlers::{eventsub, global_ban, healthz, raid};
 
     let base = INTERNAL_API_BASE_PATH; // "/internal/twitch/v1"
 
@@ -64,33 +64,18 @@ pub fn build_internal_router(
             &format!("{base}/globalban/check"),
             get(global_ban::check_handler),
         )
-        // Streamer-CRUD-Endpoints
-        .route(&format!("{base}/streamers"), get(streamers::list_handler))
-        .route(&format!("{base}/streamers"), post(streamers::add_handler))
-        .route(
-            &format!("{base}/streamers/:login"),
-            delete(streamers::remove_handler),
-        )
-        .route(
-            &format!("{base}/streamers/:login/verify"),
-            post(streamers::verify_handler),
-        )
-        .route(
-            &format!("{base}/streamers/:login/archive"),
-            post(streamers::archive_handler),
-        )
-        .route(
-            &format!("{base}/streamers/:login/discord-flag"),
-            post(streamers::discord_flag_handler),
-        )
-        .route(
-            &format!("{base}/streamers/:login/discord-profile"),
-            post(streamers::discord_profile_handler),
-        )
-        .route(
-            &format!("{base}/streamers/:login/chat-action"),
-            post(streamers::chat_action_handler),
-        )
+        // Streamer-Endpoints: kompletter /streamers-Baum läuft bewusst über
+        // den Legacy-Fallback-Proxy zum Python-Worker, bis die
+        // Paritäts-Audit-Befunde behoben sind: snake_case-Bodies der
+        // Bestandskonsumenten vs. camelCase-Erwartung hier
+        // (discord-flag/-profile), mode="toggle" (archive) und mode-Semantik
+        // (verify) nicht unterstützt, chat-action braucht den live rotierten
+        // Bot-Token, der dem Python-Chat gehört. Auch der Lesepfad
+        // (GET /streamers) bleibt drüben: ein nativer GET würde für POST auf
+        // demselben Pfad 405 statt Fallback liefern (axum matcht den Pfad,
+        // dann erst die Methode). Re-Aktivierung pro Route nur mit
+        // Vertragstests gegen die Python-Antworten
+        // (siehe rust/docs/04-cutover-plan.md, Kopplung 8).
         .fallback(handlers::legacy_proxy::legacy_fallback_handler)
         .with_state(pool)
         .layer(Extension(helix))

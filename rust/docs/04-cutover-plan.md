@@ -133,6 +133,23 @@ Prod-Daten — keine Formelabweichungen (Details im Commit „Score-Cross-Check"
    künftig nativ implementierte Route schattet den Proxy automatisch aus.
    Beim Chat-Cutover (Schritt 5) prüfen, welche Routen der Worker dann noch
    braucht.
+9. **Paritäts-Drift in Rust-nativen Routen** — ✅ ENTSCHÄRFT (10.6. spät,
+   Audit nach dem Prod-Bug): die nativ bedienten `/streamers`-Mutationen
+   wichen vom Python-Vertrag ab — snake_case-Bodies der Bestandskonsumenten
+   vs. camelCase-Deserialisierung (discord-flag → 422, discord-profile →
+   Felder still verworfen + `is_on_discord` auf 0 gezwungen; betroffen auch
+   der Discord-Link-Matcher im Deadlock-Bots-Repo), `mode="toggle"`
+   (Dashboard-Default beim Archivieren) → 400, verify ignorierte den
+   `mode`-Body komplett, chat-action nutzte einen veralteten
+   `TWITCH_BOT_TOKEN`-Env-Snapshot (Rotation gehört dem Python-Chat) → 401.
+   Fix: kompletter `/streamers`-Baum (inkl. GET — axum würde sonst bei
+   Methoden-Mismatch 405 statt Fallback liefern) läuft über den
+   Legacy-Proxy; nativ bleiben healthz, eventsub/dispatch, raid/manual,
+   globalban. Zusätzlich healthz-`analyticsDbFingerprint` auf das
+   Python-Verfahren umgestellt (PBKDF2-Identitäts-Hash statt
+   Schema-Fingerprint) — der falsche „different analytics
+   databases"-Alarm des Dashboards ist damit weg. Re-Aktivierung nativer
+   Routen nur mit Vertragstests gegen die Python-Antworten.
 
 ## Schritt 5 — Chat (IRC + Moderation + Promo)
 
