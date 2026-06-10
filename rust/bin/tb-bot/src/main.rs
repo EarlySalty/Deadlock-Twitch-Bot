@@ -20,6 +20,7 @@
 //!   TWITCH_LANGUAGE_FILTERS       — Komma-Liste (z. B. "de,en"), leer = alle
 //!   PORT                          — optional, default 8776
 
+mod auto_raid;
 mod confirm_resolver;
 mod raid_arrival_wiring;
 mod score_refresh;
