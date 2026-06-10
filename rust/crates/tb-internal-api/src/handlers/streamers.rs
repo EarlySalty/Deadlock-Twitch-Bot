@@ -378,18 +378,14 @@ pub async fn chat_action_handler(
                 .send()
                 .await
             {
-                Ok(r) if r.status().is_success() => {
-                    match r.json::<UsersResp>().await {
-                        Ok(body) if !body.data.is_empty() => body.data.into_iter().next().unwrap().id,
-                        _ => {
-                            return Ok((
-                                StatusCode::SERVICE_UNAVAILABLE,
-                                Json(serde_json::json!({"ok": false, "error": "bot_user_id_unresolvable"})),
-                            )
-                                .into_response())
-                        }
-                    }
-                }
+                Ok(r) if r.status().is_success() => match r.json::<UsersResp>().await {
+                    Ok(body) if !body.data.is_empty() => body.data.into_iter().next().unwrap().id,
+                    _ => return Ok((
+                        StatusCode::SERVICE_UNAVAILABLE,
+                        Json(serde_json::json!({"ok": false, "error": "bot_user_id_unresolvable"})),
+                    )
+                        .into_response()),
+                },
                 Ok(r) => {
                     tracing::warn!("GET /users für Bot-Token: HTTP {}", r.status());
                     return Ok((

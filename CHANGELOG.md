@@ -1,3 +1,11 @@
+## #123 — !raid funktioniert jetzt auch direkt nach Stream-Ende
+
+**Ausgangslage:** `!raid` hat mit „Du musst live sein" abgebrochen, sobald der Stream offline war — also genau in dem Moment, in dem man den Befehl am dringendsten braucht: Der Stream ist gerade zu Ende, der Auto-Raid hat aus irgendeinem Grund nicht gefeuert, und manuell nachsteuern ging nicht. Dabei startet der Auto-Raid selbst seinen Raid auch erst nach dem Offline-Gehen — Twitch lässt den Raid-Start im Nachlauf des Streams zu.
+
+**Was wurde geändert:** Die harte Live-Sperre ist raus. Wenn Twitch den Kanal als offline meldet, nimmt der Bot jetzt den letzten bekannten Stream-Zustand als Grundlage (Spiel, Zuschauerzahl, Startzeit) und versucht den Raid ganz normal. Die Deadlock-Regel bleibt: `!raid` geht weiter nur, wenn der (letzte) Stream Deadlock war oder gerade erst von Deadlock auf Just Chatting gewechselt wurde.
+
+**Wie es jetzt funktioniert:** `!raid` direkt nach Stream-Ende läuft durch die normale Ziel-Auswahl (Partner zuerst, sonst deutsche Deadlock-Streamer) und startet den Raid. Ist das Twitch-Fenster für Raids schon zu (zu lange offline), lehnt Twitch den Versuch ab und der Bot meldet die echte Fehlermeldung im Chat — statt vorher pauschal zu blocken. Nur wer noch nie gestreamt hat, bekommt weiterhin einen Hinweis, dass es keinen Stream gibt, von dem aus geraidet werden kann.
+
 ## #122 — Admin-Chat-Aktion: Versenden funktioniert jetzt wieder vollständig
 
 **Ausgangslage:** Nach dem Fix des 503-Fehlers (#121) schlug das Versenden einer Nachricht immer noch fehl — Fehlermeldung: „Chat-Aktion für [login] konnte nicht gesendet werden". Das Dashboard läuft als eigenständiger Python-Prozess ohne lokalen Twitch-Chat-Bot, weshalb der Fallback-Pfad über die interne Rust-API geht. Der nötige Endpoint `POST /internal/twitch/v1/streamers/{login}/chat-action` war im Rust-Bot aber noch nicht implementiert — stand zwar im HTTP-Vertrag, war aber nicht als Handler gebaut.

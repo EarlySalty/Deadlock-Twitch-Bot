@@ -754,7 +754,7 @@ if TWITCHIO_AVAILABLE:
                 return
             if status == "source_not_live":
                 await ctx.send(
-                    f"@{ctx.author.name} Du musst live sein, um !raid zu benutzen."
+                    f"@{ctx.author.name} Kein Stream gefunden, von dem aus geraidet werden kann."
                 )
                 return
             if status == "source_not_eligible":

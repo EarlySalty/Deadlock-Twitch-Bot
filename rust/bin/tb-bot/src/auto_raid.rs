@@ -88,9 +88,20 @@ impl ManualSource {
         }
     }
 
-    /// DB-Fallback: nur wenn der Restzustand `is_live=1` trägt (Python `db`-Pfad).
+    /// DB-Quelle: letzter bekannter Stream-Zustand — bewusst AUCH offline
+    /// (Abweichung von Python): `!raid` wird gerade nach Stream-Ende
+    /// gebraucht, wenn der Auto-Raid nicht gefeuert hat. Ob das Raid-Fenster
+    /// noch offen ist, entscheidet die Twitch-Raid-API beim Versuch.
+    /// `None` nur, wenn es nie einen Stream gab.
     fn from_db(state: &OfflineSourceState) -> Option<Self> {
-        if state.is_live.unwrap_or(0) == 0 {
+        let never_streamed = state
+            .last_started_at
+            .as_deref()
+            .unwrap_or("")
+            .trim()
+            .is_empty()
+            && state.last_game.as_deref().unwrap_or("").trim().is_empty();
+        if never_streamed {
             return None;
         }
         Some(Self {
@@ -351,12 +362,9 @@ impl OfflineRaidHandler {
                 .find(|s| s.user_login.trim().to_lowercase() == login)
             {
                 Some(stream) => Some(ManualSource::from_stream(&stream, db_state.as_ref())),
-                None => {
-                    return ManualRaidResponse::status_with_reason(
-                        "source_not_live",
-                        "api_offline",
-                    );
-                }
+                // Offline laut API: letzter Stream-Zustand aus der DB —
+                // `!raid` soll gerade nach Stream-Ende funktionieren.
+                None => db_state.as_ref().and_then(ManualSource::from_db),
             },
             Err(error) => {
                 tracing::debug!(%error, streamer = %login, "Manual-Raid: Helix-Refresh fehlgeschlagen — DB-Fallback");
@@ -364,7 +372,7 @@ impl OfflineRaidHandler {
             }
         };
         let Some(source) = source else {
-            return ManualRaidResponse::status_with_reason("source_not_live", "db");
+            return ManualRaidResponse::status_with_reason("source_not_live", "no_known_stream");
         };
 
         // 2. Deadlock-Eligibility der Quelle.
@@ -544,6 +552,35 @@ mod tests {
         assert_eq!(data.viewer_count, 12);
         assert!(data.started_at.is_none(), "leere Startzeit → None");
         assert_eq!(data.game_name.as_deref(), Some("Deadlock"));
+    }
+
+    #[test]
+    fn manual_source_aus_db_auch_offline_aber_nicht_ohne_stream_historie() {
+        // Offline-Restzustand (is_live=0) ist eine gültige Quelle — !raid
+        // wird gerade nach Stream-Ende gebraucht.
+        let offline = OfflineSourceState {
+            is_live: Some(0),
+            last_game: Some("Deadlock".to_string()),
+            had_deadlock_in_session: Some(1),
+            last_deadlock_seen_at: Some("2026-06-10T18:30:00+00:00".to_string()),
+            last_viewer_count: Some(12),
+            last_started_at: Some("2026-06-10T17:00:00+00:00".to_string()),
+        };
+        let source = ManualSource::from_db(&offline).expect("offline ist gültige Quelle");
+        assert_eq!(source.last_game, "Deadlock");
+        assert_eq!(source.viewer_count, 12);
+        assert!(source.had_deadlock_session);
+
+        // Nie gestreamt (kein Spiel, keine Startzeit) → keine Quelle.
+        let leer = OfflineSourceState {
+            is_live: Some(0),
+            last_game: None,
+            had_deadlock_in_session: Some(0),
+            last_deadlock_seen_at: None,
+            last_viewer_count: None,
+            last_started_at: None,
+        };
+        assert!(ManualSource::from_db(&leer).is_none());
     }
 
     #[test]
