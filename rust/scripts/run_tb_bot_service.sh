@@ -48,6 +48,10 @@ export TWITCH_NOTIFY_CHANNEL_ID="${TWITCH_NOTIFY_CHANNEL_ID:-1304169815505637458
 export TWITCH_TARGET_GAME_NAME="${TWITCH_TARGET_GAME_NAME:-Deadlock}"
 # Cutover-Gate: dieser Service IST der Live-Writer.
 export TB_MONITORING_POLL_ENABLED="${TB_MONITORING_POLL_ENABLED:-1}"
+# Strangler-Fig-Fallback: noch nicht portierte interne-API-Routen (Raid-OAuth,
+# Blacklist, Analytics, …) gehen an die Legacy-Python-API auf Seitenport 8779
+# (Python-Worker, TWITCH_INTERNAL_API_LEGACY_PORT im Takeover-Drop-in).
+export TB_INTERNAL_API_LEGACY_FALLBACK_URL="${TB_INTERNAL_API_LEGACY_FALLBACK_URL:-http://127.0.0.1:8779}"
 export RUST_LOG="${RUST_LOG:-info}"
 
 exec "$ROOT_DIR/rust/target/release/tb-bot"

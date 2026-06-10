@@ -1,3 +1,11 @@
+## #124 — Raid-Bot-Autorisierung im Onboarding repariert
+
+**Ausgangslage:** Seit dem heutigen Umzug der Bot-Innereien auf den neuen Rust-Kern war die Raid-Bot-Autorisierung kaputt: Wer auf der Streamer-Seite bzw. im Onboarding auf „Raid-Bot verbinden" klickte, bekam statt der Twitch-Anmeldung nur die Fehlermeldung „Raid bot not initialized". Grund: Beim Umzug hat der neue Kern den internen Schnittstellen-Port komplett übernommen, dort aber nur die bereits portierten Funktionen angeboten — der komplette Autorisierungs-Ablauf (Login-Link erzeugen, Twitch-Rückmeldung verarbeiten), die Raid-Sperrliste und ein paar Statistik-Abfragen liefen ins Leere. Das Dashboard interpretierte die fehlende Antwort als „Raid-Bot nicht da".
+
+**Was wurde geändert:** Der neue Kern hat jetzt ein Auffangnetz: Jede Anfrage an eine Funktion, die er selbst (noch) nicht kennt, reicht er unverändert an den bisherigen Dienst weiter, der dafür auf einem internen Nebenkanal weiterläuft. Antwort geht denselben Weg zurück — für das Dashboard sieht alles aus wie vorher.
+
+**Wie es jetzt funktioniert:** Klick auf „Raid-Bot verbinden" → Dashboard fragt den neuen Kern → der erkennt „kenne ich nicht", reicht an den bisherigen Dienst weiter → der erzeugt den Twitch-Login-Link wie gewohnt. Sobald eine Funktion nativ im neuen Kern nachgebaut ist, beantwortet er sie automatisch selbst — das Auffangnetz greift dann nur noch für den Rest. Verifiziert: exakt der Klick, der heute Nachmittag mit Fehler abbrach, liefert jetzt wieder die Twitch-Anmeldeseite mit den korrekten Berechtigungen.
+
 ## #123 — !raid funktioniert jetzt auch direkt nach Stream-Ende
 
 **Ausgangslage:** `!raid` hat mit „Du musst live sein" abgebrochen, sobald der Stream offline war — also genau in dem Moment, in dem man den Befehl am dringendsten braucht: Der Stream ist gerade zu Ende, der Auto-Raid hat aus irgendeinem Grund nicht gefeuert, und manuell nachsteuern ging nicht. Dabei startet der Auto-Raid selbst seinen Raid auch erst nach dem Offline-Gehen — Twitch lässt den Raid-Start im Nachlauf des Streams zu.

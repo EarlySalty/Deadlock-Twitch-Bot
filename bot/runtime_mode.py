@@ -127,11 +127,33 @@ def enforce_dashboard_service_runtime(*, role: str | None = None, port: int) -> 
     )
 
 
+def legacy_internal_api_port() -> int | None:
+    """Seitenport der Legacy-API während des Rust-Takeovers (8776 gehört Rust).
+
+    Gesetzt über TWITCH_INTERNAL_API_LEGACY_PORT; der Rust-Router proxyt
+    unbekannte Routen dorthin. Der Master-Reserved-Port ist nicht erlaubt.
+    """
+    raw = (os.getenv("TWITCH_INTERNAL_API_LEGACY_PORT") or "").strip()
+    if not raw:
+        return None
+    try:
+        port = int(raw)
+    except ValueError:
+        return None
+    if port <= 0 or port == MASTER_API_RESERVED_PORT:
+        return None
+    return port
+
+
 def enforce_internal_api_runtime(*, role: str | None = None, port: int) -> str:
+    expected_port = INTERNAL_API_PORT
+    legacy_port = legacy_internal_api_port()
+    if legacy_port is not None and int(port) == legacy_port:
+        expected_port = legacy_port
     return _enforce_service_runtime(
         service_name="internal_api",
         expected_role=ROLE_TWITCH_WORKER,
-        expected_port=INTERNAL_API_PORT,
+        expected_port=expected_port,
         role=role,
         port=port,
     )

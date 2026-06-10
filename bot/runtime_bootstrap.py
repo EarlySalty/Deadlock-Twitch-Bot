@@ -39,6 +39,7 @@ from .runtime.dashboard_runtime import (
     DashboardRuntimeContainer,
 )
 from .runtime.contracts import ensure_bot_runtime_container
+from .runtime_mode import legacy_internal_api_port
 from .secret_store import load_secret_value
 from .storage import pg as storage_pg
 
@@ -62,6 +63,12 @@ def _parse_env_int(name: str, default: int) -> int:
         return int(raw)
     except ValueError:
         return default
+
+
+def _rust_monitoring_takeover_active() -> bool:
+    return (
+        os.getenv("TWITCH_RUST_MONITORING_TAKEOVER") or ""
+    ).strip().lower() in {"1", "true", "yes", "on"}
 
 
 def _parse_env_csv(name: str, default: tuple[str, ...] = ()) -> tuple[str, ...]:
@@ -171,6 +178,13 @@ class BotRuntimeBootstrap:
             "TWITCH_INTERNAL_API_PORT",
             int(TWITCH_INTERNAL_API_PORT),
         )
+        # Rust-Takeover: 8776 bedient der Rust-tb-bot. Die noch nicht nach
+        # Rust portierten Routen laufen über den Legacy-Seitenport weiter
+        # (Rust proxyt unbekannte Routen dorthin, s. tb-internal-api).
+        if _rust_monitoring_takeover_active():
+            legacy_api_port = legacy_internal_api_port()
+            if legacy_api_port is not None:
+                config.internal_api_port = legacy_api_port
 
         services.raid_bot = None
         services.twitch_chat_bot = None
@@ -905,21 +919,32 @@ class BotRuntimeBootstrap:
                 # Poll-Loop, EventSub-Verarbeitung und Port 8776 — Python startet
                 # diese drei Komponenten dann NICHT (sonst Doppel-Writes).
                 # Chat/Social/Wartungs-Loops laufen hier unverändert weiter.
-                rust_takeover = (
-                    os.getenv("TWITCH_RUST_MONITORING_TAKEOVER") or ""
-                ).strip().lower() in {"1", "true", "yes", "on"}
+                # Ausnahme interne API: ist TWITCH_INTERNAL_API_LEGACY_PORT
+                # gesetzt, läuft die Legacy-API auf diesem Seitenport weiter —
+                # der Rust-Router proxyt alle noch nicht portierten Routen
+                # (Raid-OAuth, Blacklist, Analytics, …) dorthin.
+                rust_takeover = _rust_monitoring_takeover_active()
+                legacy_api_port = (
+                    legacy_internal_api_port() if rust_takeover else None
+                )
                 if rust_takeover:
                     log.info(
                         "Rust-Takeover aktiv: Poll-Loop, EventSub und interne API "
                         "(8776) werden vom Rust-tb-bot bedient."
                     )
+                    if legacy_api_port is not None:
+                        log.info(
+                            "Legacy-interne-API bleibt auf Seitenport %d aktiv "
+                            "(Rust proxyt nicht portierte Routen dorthin).",
+                            legacy_api_port,
+                        )
 
                 if not rust_takeover and not cog.poll_streams.is_running():
                     cog.poll_streams.start()
 
                 cog._spawn_bg_task(cog._ensure_category_id(), "twitch.ensure_category_id")
                 cog._spawn_bg_task(cog._load_invite_codes_from_db(), "twitch.load_invites")
-                if not rust_takeover:
+                if not rust_takeover or legacy_api_port is not None:
                     cog._spawn_bg_task(cog._start_internal_api(), "twitch.start_internal_api")
                 cog._spawn_bg_task(cog._refresh_all_invites(), "twitch.refresh_all_invites")
                 eventsub_runner = getattr(cog, "_run_eventsub_listener_supervisor", None)

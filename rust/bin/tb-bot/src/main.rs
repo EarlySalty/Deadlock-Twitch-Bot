@@ -20,6 +20,10 @@
 //!   TWITCH_LANGUAGE_FILTERS       — Komma-Liste (z. B. "de,en"), leer = alle
 //!   DB_MASTER_KEY_V1              — AES-Master-Key (Hex); ohne ihn bleiben
 //!                                   die Raid-Hooks deaktiviert (kein Token-Read)
+//!   TB_INTERNAL_API_LEGACY_FALLBACK_URL — Basis-URL der Legacy-Python-API
+//!                                   (z. B. http://127.0.0.1:8779); unbekannte
+//!                                   interne-API-Routen werden dorthin
+//!                                   geproxyt, leer = 404 wie bisher
 //!   PORT                          — optional, default 8776
 
 mod auto_raid;
@@ -399,7 +403,22 @@ async fn main() {
 
     let addr = SocketAddr::from(([127, 0, 0, 1], port));
     let token = settings.internal_api.token.clone();
-    let app = build_internal_router(pool, token, helix, Some(dispatcher), manual_raid_port);
+    let legacy_proxy = std::env::var("TB_INTERNAL_API_LEGACY_FALLBACK_URL")
+        .ok()
+        .map(|raw| raw.trim().to_string())
+        .filter(|raw| !raw.is_empty())
+        .map(|url| {
+            tracing::info!("Legacy-Fallback aktiv: unbekannte interne-API-Routen → {url}");
+            Arc::new(tb_internal_api::LegacyProxy::new(url))
+        });
+    let app = build_internal_router(
+        pool,
+        token,
+        helix,
+        Some(dispatcher),
+        manual_raid_port,
+        legacy_proxy,
+    );
 
     tracing::info!("tb-bot lauscht auf {addr}");
     let listener = tokio::net::TcpListener::bind(addr)

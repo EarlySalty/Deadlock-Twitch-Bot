@@ -73,6 +73,10 @@ Schritt 4+6):
 2. **Python-Gate:** `TWITCH_RUST_MONITORING_TAKEOVER=1` (Drop-in
    `20-rust-takeover.conf`) — der Worker startet Poll-Loop, EventSub-Verarbeitung
    und interne API (8776) dann NICHT; Chat/Social/Wartungs-Loops laufen weiter.
+   Zusätzlich `TWITCH_INTERNAL_API_LEGACY_PORT=8779`: die Python-interne-API
+   läuft auf diesem Seitenport weiter, der Rust-Router (8776) proxyt alle
+   noch nicht portierten Routen dorthin (Fallback in `tb-internal-api`,
+   `TB_INTERNAL_API_LEGACY_FALLBACK_URL` im Run-Skript).
 3. **Flip:** `systemctl --user restart deadlock-twitch-bot` (gibt 8776 frei) →
    `systemctl --user enable --now deadlock-twitch-bot-rust`. Die Dashboard-Bridge
    liefert ab sofort an Rust (gleicher Vertrag, `POST /eventsub/dispatch`);
@@ -116,6 +120,19 @@ Prod-Daten — keine Formelabweichungen (Details im Commit „Score-Cross-Check"
    Pending-Store, eine Suppression für Auto- und Manual-Raids. Fallback auf
    den lokalen Python-Pfad nur, wenn der Endpoint nicht erreichbar ist
    (Rollback-Fall).
+8. **Nicht portierte interne-API-Routen** — ✅ GELÖST (10.6. abends, nach
+   Prod-Bug): das Takeover-Gate schaltete die KOMPLETTE Python-interne-API ab,
+   Rust implementiert aber nur die migrierten Routen — Raid-OAuth
+   (`/raid/auth-url`, `/raid/go-url`, `/raid/oauth-callback`,
+   `/raid/requirements`, `/raid/auth-state`, `/raid/block-state`),
+   Raid-Blacklist, Analytics/Stats/Sessions/Live/Debug und
+   Self-Explainer-Log liefen ins Leere (Streamer-Onboarding antwortete
+   „Raid bot not initialized"). Fix: Strangler-Fig-Fallback — die
+   Python-interne-API läuft auf Seitenport 8779 weiter, der Rust-Router
+   proxyt unbekannte Routen 1:1 dorthin (`handlers/legacy_proxy.rs`). Jede
+   künftig nativ implementierte Route schattet den Proxy automatisch aus.
+   Beim Chat-Cutover (Schritt 5) prüfen, welche Routen der Worker dann noch
+   braucht.
 
 ## Schritt 5 — Chat (IRC + Moderation + Promo)
 
