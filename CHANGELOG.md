@@ -1,3 +1,11 @@
+## #122 — Admin-Chat-Aktion: Versenden funktioniert jetzt wieder vollständig
+
+**Ausgangslage:** Nach dem Fix des 503-Fehlers (#121) schlug das Versenden einer Nachricht immer noch fehl — Fehlermeldung: „Chat-Aktion für [login] konnte nicht gesendet werden". Das Dashboard läuft als eigenständiger Python-Prozess ohne lokalen Twitch-Chat-Bot, weshalb der Fallback-Pfad über die interne Rust-API geht. Der nötige Endpoint `POST /internal/twitch/v1/streamers/{login}/chat-action` war im Rust-Bot aber noch nicht implementiert — stand zwar im HTTP-Vertrag, war aber nicht als Handler gebaut.
+
+**Was wurde geändert:** Der fehlende Endpoint wurde im Rust-Bot (`tb-internal-api`) implementiert. Er liest den Bot-Token und die Bot-User-ID aus Umgebungsvariablen (identisch zur Python-Logik), holt die `twitch_user_id` des Ziel-Streamers direkt aus der DB und sendet die Nachricht über die Twitch Helix API — mit dem Bot-Token des Chat-Accounts.
+
+**Wie es jetzt funktioniert:** Drei Modi werden unterstützt: normaler Chat (`mode=chat`), `/me`-Aktion (`mode=action`, sendet `/me …` als Prefix) und Announcement (`mode=announcement`, nutzt `/helix/chat/announcements` mit wählbarer Farbe). Fehlt die `twitch_user_id` für einen Streamer in der DB, kommt ein 404. Antwortet Helix mit einem Fehler, wird dieser als 502 weitergereicht. Der neue Endpoint ist per Auth-Token + Loopback-Guard gesichert wie alle anderen internen Endpoints.
+
 ## #121 — Admin-Chat-Aktion: 503 bei kurzzeitigem DB-Fehler behoben
 
 **Ausgangslage:** Das Absenden einer manuellen Chat-Nachricht an einen Partner-Kanal über das Admin-Dashboard schlug sporadisch mit einem 503-Fehler fehl. Logs zeigten: „Dashboard internal API unavailable (degraded mode). First failure in streamers_list: internal server error" — der Endpunkt lieferte immer dann keinen Response, wenn der interne Rust-API-Call auf `GET /streamers` kurzzeitig mit DB-Fehler (500) antwortete.

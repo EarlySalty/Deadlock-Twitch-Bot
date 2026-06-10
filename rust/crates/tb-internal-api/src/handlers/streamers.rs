@@ -46,6 +46,16 @@ pub struct AddStreamerRequest {
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct ChatActionRequest {
+    /// "chat" | "action" | "announcement"
+    pub mode: String,
+    pub message: String,
+    #[serde(default)]
+    pub color: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ArchiveRequest {
     /// "archive" | "unarchive" | "block" | "unblock"
     pub mode: String,
@@ -309,6 +319,121 @@ pub async fn discord_profile_handler(
         Ok(false) => Err(ApiError::not_found()),
         Err(e) => {
             tracing::error!("set_discord_profile DB-Fehler: {e}");
+            Err(ApiError::internal())
+        }
+    }
+}
+
+/// `POST /internal/twitch/v1/streamers/{login}/chat-action`
+///
+/// Sendet eine Chat-Nachricht oder Announcement im Kanal des Streamers.
+/// Erfordert `TWITCH_BOT_TOKEN` und `TWITCH_BOT_USER_ID` als Env-Variablen.
+pub async fn chat_action_handler(
+    auth: AuthLevel,
+    State(pool): State<PgPool>,
+    Path(login): Path<String>,
+    Extension(helix): Extension<Arc<Option<HelixClient>>>,
+    Json(body): Json<ChatActionRequest>,
+) -> Result<impl IntoResponse, ApiError> {
+    if !auth.is_privileged() {
+        return Err(ApiError::unauthorized());
+    }
+
+    let bot_token = std::env::var("TWITCH_BOT_TOKEN").unwrap_or_default();
+    let bot_user_id = std::env::var("TWITCH_BOT_USER_ID").unwrap_or_default();
+    if bot_token.is_empty() || bot_user_id.is_empty() {
+        return Ok((
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(serde_json::json!({"ok": false, "error": "bot_credentials_missing"})),
+        )
+            .into_response());
+    }
+
+    let helix_client = match (*helix).as_ref() {
+        Some(c) => c,
+        None => {
+            return Ok((
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(serde_json::json!({"ok": false, "error": "helix_unavailable"})),
+            )
+                .into_response())
+        }
+    };
+
+    let login_lower = login.to_lowercase();
+    let broadcaster_id: Option<String> = sqlx::query_scalar(
+        "SELECT twitch_user_id FROM twitch_streamers WHERE LOWER(twitch_login) = LOWER($1)",
+    )
+    .bind(&login_lower)
+    .fetch_optional(&pool)
+    .await
+    .map_err(|e| {
+        tracing::error!("chat_action DB-Fehler für {login_lower}: {e}");
+        ApiError::internal()
+    })?;
+
+    let Some(broadcaster_id) = broadcaster_id.filter(|s| !s.is_empty()) else {
+        return Err(ApiError::not_found());
+    };
+
+    let mode = body.mode.trim();
+    let send_message = if mode == "action" {
+        format!("/me {}", body.message)
+    } else {
+        body.message.clone()
+    };
+
+    let resp = if mode == "announcement" {
+        let color = body
+            .color
+            .as_deref()
+            .map(|c| c.trim())
+            .filter(|c| !c.is_empty())
+            .unwrap_or("purple");
+        helix_client
+            .post_with_user_token(
+                &format!(
+                    "/chat/announcements?broadcaster_id={broadcaster_id}&moderator_id={bot_user_id}"
+                ),
+                &bot_token,
+            )
+            .json(&serde_json::json!({"message": send_message, "color": color}))
+            .send()
+            .await
+    } else {
+        helix_client
+            .post_with_user_token("/chat/messages", &bot_token)
+            .json(&serde_json::json!({
+                "broadcaster_id": broadcaster_id,
+                "sender_id": bot_user_id,
+                "message": send_message,
+            }))
+            .send()
+            .await
+    };
+
+    match resp {
+        Ok(r) if r.status().is_success() || r.status().as_u16() == 204 => {
+            Ok(Json(OkMessageResponse {
+                ok: true,
+                message: "gesendet".to_string(),
+            })
+            .into_response())
+        }
+        Ok(r) => {
+            let status = r.status();
+            let body_txt = r.text().await.unwrap_or_default();
+            tracing::warn!("chat_action Helix-Fehler HTTP {status} für {login_lower}: {body_txt}");
+            Ok((
+                StatusCode::BAD_GATEWAY,
+                Json(
+                    serde_json::json!({"ok": false, "error": "helix_error", "helix_status": status.as_u16()}),
+                ),
+            )
+                .into_response())
+        }
+        Err(e) => {
+            tracing::error!("chat_action Request-Fehler für {login_lower}: {e}");
             Err(ApiError::internal())
         }
     }

@@ -83,6 +83,10 @@ pub fn build_internal_router(
             &format!("{base}/streamers/:login/discord-profile"),
             post(streamers::discord_profile_handler),
         )
+        .route(
+            &format!("{base}/streamers/:login/chat-action"),
+            post(streamers::chat_action_handler),
+        )
         .with_state(pool)
         .layer(Extension(helix))
         .layer(Extension(EventSubDispatcherExt(dispatcher)))

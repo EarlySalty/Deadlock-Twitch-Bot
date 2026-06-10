@@ -1533,6 +1533,7 @@ class ModerationMixin:
                 # Nutze Helix API direkt (user:write:chat scope erforderlich)
                 import aiohttp
 
+
                 for attempt in range(2):
                     try:
                         tokens = await self._token_manager.get_valid_token()
