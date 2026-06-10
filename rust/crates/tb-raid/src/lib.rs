@@ -32,6 +32,7 @@ pub mod arrival_runtime;
 pub mod arrival_tracking_store;
 pub mod auth_writer;
 pub mod candidate_selection;
+pub mod eligibility;
 pub mod oauth_flow;
 pub mod partner_roster;
 pub mod pending_raids;
@@ -62,6 +63,10 @@ pub use auth_writer::{AuthWriteError, AuthWriter, NewAuth};
 pub use candidate_selection::{
     is_retryable_raid_error, select_by_score, select_fairest, FairnessCandidate, ScoredCandidate,
     SelectionReason, SelectionResult, DAILY_RAID_SOFT_CAP, PARTNER_SCORE_THRESHOLD,
+};
+pub use eligibility::{
+    classify_eligibility, filter_eligible, is_deadlock_eligible, is_recent_deadlock,
+    DeadlockEvalInput, EligibilityBucket, DEADLOCK_RECENCY_CAP_SECONDS,
 };
 pub use oauth_flow::{
     build_authorize_url, build_state_info, StreamerContextResolver,
