@@ -64,18 +64,102 @@ struct InternalMetrics {
     received_7d: i64,
 }
 
-/// Boost-Flag aus `streamer_plans` für einen Partner.
-/// Python-Herkunft: `_load_boost_flags` Z. 587–625.
-/// WICHTIG: Die Python-Logik prüft zusätzlich `legacy_plan_name_has_entitlement`
-/// und `plan_has_entitlement` auf `"raid.priority"` — diese Entitlement-Katalog-
-/// Funktionen sind hier **noch nicht** portiert (kein Rust-Äquivalent existiert).
-/// Für den Übergang wird nur `raid_boost_enabled` aus der DB ausgelesen.
-/// Das ist konservativ: Nutzer mit manuellem Plan-Override ohne gesetzter
-/// `raid_boost_enabled`-Spalte bekommen keinen Boost. Offen für Schritt 7.
+/// Boost-Zeile aus `streamer_plans` für einen Partner.
+/// Python-Herkunft: `_load_boost_flags` Z. 587–625 — inklusive der
+/// Entitlement-Katalog-Prüfung auf `"raid.priority"` (siehe [`boost_active`]).
 #[derive(Debug, sqlx::FromRow)]
 struct BoostFlagRaw {
     twitch_user_id: String,
     raid_boost_enabled: Option<i32>,
+    plan_name: Option<String>,
+    manual_plan_id: Option<String>,
+    /// TEXT-Spalte mit ISO-Timestamp (Python schreibt isoformat).
+    manual_plan_expires_at: Option<String>,
+}
+
+// ─── Entitlement-Katalog (raid.priority-Teilmenge) ──────────────────────────
+//
+// 1:1 aus `bot/entitlements/catalog.py` (PLAN_ENTITLEMENTS_MAP +
+// LEGACY_PLAN_NAME_TO_ID_MAP). Der Katalog ist dort statischer Code — bei
+// Plan-Änderungen BEIDE Stellen pflegen (vollständige Portierung: Schritt 7).
+
+/// Plan-IDs, deren Entitlements `raid.priority` enthalten.
+fn plan_id_has_raid_priority(plan_id: &str) -> bool {
+    matches!(
+        plan_id,
+        "raid_boost"
+            | "bundle_chat_quiet_raid_boost"
+            | "bundle_analysis_raid_boost"
+            | "bundle_komplett"
+    )
+}
+
+/// Legacy-`plan_name` → Plan-ID → raid.priority?
+/// (Nur die Teilmenge der Legacy-Map, die auf Pläne mit raid.priority zeigt;
+/// alle anderen Namen normalisieren auf Pläne ohne dieses Entitlement.)
+fn legacy_plan_name_has_raid_priority(plan_name: &str) -> bool {
+    let plan_id = match plan_name {
+        "raid_boost" => "raid_boost",
+        "chat_quiet_bundle" | "bundle_chat_quiet_raid_boost" => "bundle_chat_quiet_raid_boost",
+        "bundle" | "bundle_analysis_raid_boost" => "bundle_analysis_raid_boost",
+        "bundle_komplett" => "bundle_komplett",
+        _ => return false,
+    };
+    plan_id_has_raid_priority(plan_id)
+}
+
+/// ISO-Timestamp wie Pythons `_parse_dt`: "Z" → +00:00, naive Werte als UTC.
+fn parse_plan_expiry(raw: &str) -> Option<DateTime<Utc>> {
+    let text = raw.trim();
+    if text.is_empty() {
+        return None;
+    }
+    let normalized = text.replace('Z', "+00:00");
+    if let Ok(dt) = DateTime::parse_from_rfc3339(&normalized) {
+        return Some(dt.with_timezone(&Utc));
+    }
+    for fmt in ["%Y-%m-%dT%H:%M:%S%.f", "%Y-%m-%d %H:%M:%S%.f"] {
+        if let Ok(naive) = chrono::NaiveDateTime::parse_from_str(text, fmt) {
+            return Some(naive.and_utc());
+        }
+    }
+    None
+}
+
+/// Boost-Entscheidung mit Python-Parität (`_load_boost_flags`):
+/// `raid_boost_enabled`-Flag ODER Legacy-Plan-Name mit raid.priority ODER
+/// aktiver manueller Plan-Override (nicht abgelaufen) mit raid.priority.
+fn boost_active(row: &BoostFlagRaw, now: DateTime<Utc>) -> bool {
+    if row.raid_boost_enabled.unwrap_or(0) != 0 {
+        return true;
+    }
+    let plan_name = row
+        .plan_name
+        .as_deref()
+        .unwrap_or("")
+        .trim()
+        .to_lowercase();
+    if legacy_plan_name_has_raid_priority(&plan_name) {
+        return true;
+    }
+    let manual_plan_id = row
+        .manual_plan_id
+        .as_deref()
+        .unwrap_or("")
+        .trim()
+        .to_lowercase();
+    if manual_plan_id.is_empty() {
+        return false;
+    }
+    let expires = row
+        .manual_plan_expires_at
+        .as_deref()
+        .and_then(parse_plan_expiry);
+    let override_active = match expires {
+        None => true,
+        Some(ts) => ts >= now,
+    };
+    override_active && plan_id_has_raid_priority(&manual_plan_id)
 }
 
 // ─── Haupt-Resolver ────────────────────────────────────────────────────────
@@ -163,7 +247,7 @@ impl ScoreRefreshResolver {
             let boost = boost_flags
                 .iter()
                 .find(|b| b.twitch_user_id == *user_id)
-                .map(|b| b.raid_boost_enabled.unwrap_or(0) != 0)
+                .map(|b| boost_active(b, now))
                 .unwrap_or(false);
 
             let inputs = build_scoring_inputs(&PartnerBuildCtx {
@@ -618,7 +702,8 @@ async fn load_boost_flags(
         return Ok(vec![]);
     }
     sqlx::query_as::<_, BoostFlagRaw>(
-        "SELECT twitch_user_id, COALESCE(raid_boost_enabled, 0) AS raid_boost_enabled \
+        "SELECT twitch_user_id, COALESCE(raid_boost_enabled, 0) AS raid_boost_enabled, \
+                plan_name, manual_plan_id, manual_plan_expires_at \
          FROM streamer_plans \
          WHERE twitch_user_id = ANY($1)",
     )
@@ -633,6 +718,72 @@ async fn load_boost_flags(
 mod tests {
     use super::*;
     use chrono::TimeZone;
+
+    // ─── Unit-Tests: Boost-Entitlement (Python-Parität _load_boost_flags) ───
+
+    fn boost_row(
+        enabled: i32,
+        plan_name: &str,
+        manual_plan_id: &str,
+        expires: Option<&str>,
+    ) -> BoostFlagRaw {
+        BoostFlagRaw {
+            twitch_user_id: "1".into(),
+            raid_boost_enabled: Some(enabled),
+            plan_name: Some(plan_name.into()),
+            manual_plan_id: Some(manual_plan_id.into()),
+            manual_plan_expires_at: expires.map(str::to_string),
+        }
+    }
+
+    #[test]
+    fn boost_aus_db_flag() {
+        let now = Utc.with_ymd_and_hms(2026, 6, 10, 12, 0, 0).unwrap();
+        assert!(boost_active(&boost_row(1, "", "", None), now));
+        assert!(!boost_active(&boost_row(0, "", "", None), now));
+    }
+
+    #[test]
+    fn boost_aus_legacy_plan_name() {
+        let now = Utc.with_ymd_and_hms(2026, 6, 10, 12, 0, 0).unwrap();
+        // Großschreibung wird wie in Python vor dem Lookup normalisiert.
+        assert!(boost_active(&boost_row(0, "Bundle", "", None), now));
+        assert!(boost_active(&boost_row(0, "raid_boost", "", None), now));
+        assert!(boost_active(&boost_row(0, "chat_quiet_bundle", "", None), now));
+        // Pläne ohne raid.priority-Entitlement:
+        assert!(!boost_active(&boost_row(0, "werbefrei", "", None), now));
+        assert!(!boost_active(&boost_row(0, "analysis", "", None), now));
+        assert!(!boost_active(&boost_row(0, "unbekannt", "", None), now));
+    }
+
+    #[test]
+    fn boost_aus_manuellem_plan_override() {
+        let now = Utc.with_ymd_and_hms(2026, 6, 10, 12, 0, 0).unwrap();
+        // Ohne Ablauf: aktiv.
+        assert!(boost_active(&boost_row(0, "", "bundle_komplett", None), now));
+        // Zukunft: aktiv; Vergangenheit: abgelaufen.
+        assert!(boost_active(
+            &boost_row(0, "", "bundle_komplett", Some("2026-12-31T00:00:00+00:00")),
+            now
+        ));
+        assert!(!boost_active(
+            &boost_row(0, "", "bundle_komplett", Some("2026-01-01T00:00:00Z")),
+            now
+        ));
+        // Plan ohne raid.priority bleibt aus, auch wenn aktiv.
+        assert!(!boost_active(&boost_row(0, "", "analysis_dashboard", None), now));
+    }
+
+    #[test]
+    fn plan_expiry_parsing_wie_python() {
+        // RFC3339, Z-Suffix und naive ISO-Formate (Python fromisoformat).
+        assert!(parse_plan_expiry("2026-06-10T12:00:00+00:00").is_some());
+        assert!(parse_plan_expiry("2026-06-10T12:00:00Z").is_some());
+        assert!(parse_plan_expiry("2026-06-10T12:00:00").is_some());
+        assert!(parse_plan_expiry("2026-06-10 12:00:00").is_some());
+        assert!(parse_plan_expiry("").is_none());
+        assert!(parse_plan_expiry("kaputt").is_none());
+    }
 
     // ─── Unit-Tests: reine Funktionen ──────────────────────────────────────
 

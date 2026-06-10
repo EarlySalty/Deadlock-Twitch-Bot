@@ -1,3 +1,11 @@
+## #127 — Raid-Priorität aus Plänen zählt wieder im Scoring
+
+**Ausgangslage:** Wer einen Plan mit Raid-Priorität hat (Raid Boost, die Bundles oder „Alles drin"), soll bei der automatischen Raid-Ziel-Auswahl bevorzugt werden. Seit dem Umzug der Score-Berechnung auf den neuen Kern wurde aber nur noch das direkte Boost-Häkchen in der Datenbank geprüft — die Zuordnung „Plan → enthält Raid-Priorität" (inklusive manuell vergebener Pläne mit Ablaufdatum) war schlicht noch nicht mit umgezogen und im Code als offene Lücke vermerkt. Partner, deren Boost allein aus ihrem Plan kommt, wurden im Scoring wie Free-Nutzer behandelt.
+
+**Was wurde geändert:** Die Plan-Zuordnung ist jetzt im neuen Kern nachgebaut, exakt nach derselben Tabelle wie im alten System: Boost gilt, wenn das Datenbank-Häkchen gesetzt ist ODER der Plan-Name auf einen Plan mit Raid-Priorität zeigt ODER ein manuell vergebener Plan mit Raid-Priorität aktiv (nicht abgelaufen) ist. Abgesichert mit Tests, die das Verhalten des alten Systems Punkt für Punkt nachstellen — inklusive Groß-/Kleinschreibung und der verschiedenen Datumsformate beim Ablaufdatum.
+
+**Wie es jetzt funktioniert:** Beim regelmäßigen Score-Refresh bekommen alle Partner mit Raid-Priorität — egal ob per Häkchen, Plan oder manuellem Override — wieder ihren Boost-Multiplikator in der Raid-Ziel-Auswahl. Abgelaufene manuelle Pläne verlieren ihn automatisch.
+
 ## #126 — Stream-Reports scheitern nicht mehr an unsauberem KI-Ausgabeformat
 
 **Ausgangslage:** Die automatische Nach-Stream-Analyse (der strukturierte Report nach Stream-Ende) schlug regelmäßig fehl — 15 Mal in den letzten Tagen. Das KI-Modell liefert das Ergebnis als JSON-Datenblock, hängt aber manchmal seinen „Denkprozess" in einem eigenen Block davor oder lässt ein überzähliges Komma vor einer schließenden Klammer stehen. Beides brachte den Parser zum Abbruch: Beim Denkblock griff die Extraktion den falschen Textabschnitt, beim Komma scheiterte das Einlesen — der Streamer bekam dann nur einen leeren Ersatz-Report („Bewertung: gemischt", keine Inhalte). Auch die Wiederholungsversuche scheiterten, weil sie denselben Text durch denselben Parser schickten. Nebenbefund aus demselben Audit: Ein Fehler im Hintergrund-Token-Refresh wurde mit leerer Fehlermeldung geloggt und war damit nicht diagnostizierbar.
