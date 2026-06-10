@@ -25,6 +25,7 @@
 mod auto_raid;
 mod confirm_resolver;
 mod eventsub_hooks;
+mod offline_side_effects;
 mod partner_lookup;
 mod raid_adapters;
 mod raid_arrival_wiring;
@@ -58,6 +59,7 @@ use tb_transport_twitch::{HelixClient, HelixConfig};
 
 use auto_raid::OfflineRaidHandler;
 use eventsub_hooks::{BlacklistRaidGuard, RaidArrivalCoordinator, RaidEventSubHooks};
+use offline_side_effects::OfflineSideEffects;
 use raid_adapters::{
     HelixFallbackStreams, HelixRaidApi, HelixTokenClient, ManagerArrivalReadiness,
 };
@@ -258,6 +260,7 @@ async fn main() {
                 score_resolver: ScoreRefreshResolver::new(pool.clone()),
                 live_state: live_state.clone(),
                 offline,
+                side_effects: OfflineSideEffects::new(pool.clone()),
                 arrival,
                 guard: blacklist_guard,
             })

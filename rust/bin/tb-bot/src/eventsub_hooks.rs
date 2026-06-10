@@ -26,6 +26,7 @@ use tb_raid::{
 use tb_transport_twitch::HelixClient;
 
 use crate::auto_raid::OfflineRaidHandler;
+use crate::offline_side_effects::OfflineSideEffects;
 use crate::partner_lookup::{
     is_target_partner, known_source, resolve_active_partner_id_by_login, PrefetchedLookups,
 };
@@ -263,6 +264,7 @@ pub struct RaidEventSubHooks {
     pub score_resolver: ScoreRefreshResolver,
     pub live_state: LiveStateStore,
     pub offline: Arc<OfflineRaidHandler>,
+    pub side_effects: OfflineSideEffects,
     pub arrival: RaidArrivalCoordinator,
     pub guard: BlacklistRaidGuard,
 }
@@ -312,6 +314,11 @@ impl EventSubHooks for RaidEventSubHooks {
     }
 
     async fn on_stream_offline(&self, twitch_user_id: &str, login: Option<&str>) {
+        // Reihenfolge wie Python: erst die Seiteneffekte (Engagement-Off,
+        // Global-Ban-Sweep), dann der Auto-Raid.
+        if let Some(login) = login.map(str::trim).filter(|l| !l.is_empty()) {
+            self.side_effects.run(twitch_user_id, login).await;
+        }
         self.offline
             .handle_streamer_offline(twitch_user_id, login)
             .await;
