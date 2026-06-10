@@ -31,6 +31,7 @@ pub mod arrival_confirmation;
 pub mod arrival_runtime;
 pub mod arrival_tracking_store;
 pub mod auth_writer;
+pub mod auto_raid_pipeline;
 pub mod candidate_selection;
 pub mod eligibility;
 pub mod manual_suppression;
@@ -48,6 +49,7 @@ pub mod scoring;
 pub mod signal_correlation;
 pub mod state_store;
 pub mod strikes_store;
+pub mod target_resolution;
 pub mod token_blacklist;
 pub mod token_provider;
 pub mod token_refresher;
@@ -62,6 +64,10 @@ pub use arrival_confirmation::{
 pub use arrival_runtime::{RaidArrivalRuntime, RaidArrivalSink};
 pub use arrival_tracking_store::{ArrivalTrackingStore, RecordArrivalInput};
 pub use auth_writer::{AuthWriteError, AuthWriter, NewAuth};
+pub use auto_raid_pipeline::{
+    ArrivalReadiness, AutoRaidPipeline, AutoRaidPipelineOutcome, AutoRaidRequest,
+    FallbackStreamSource,
+};
 pub use candidate_selection::{
     is_retryable_raid_error, select_by_score, select_fairest, FairnessCandidate, ScoredCandidate,
     SelectionReason, SelectionResult, DAILY_RAID_SOFT_CAP, PARTNER_SCORE_THRESHOLD,
@@ -105,6 +111,10 @@ pub use signal_correlation::{
 };
 pub use state_store::{RaidOAuthState, StateStore};
 pub use strikes_store::StrikesStore;
+pub use target_resolution::{
+    resolve_fallback_target, resolve_partner_target, PartnerResolution, PartnerResolutionStats,
+    ResolvedTarget,
+};
 pub use token_blacklist::TokenBlacklistStore;
 pub use token_provider::TokenProvider;
 pub use token_refresher::{

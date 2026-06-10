@@ -1,0 +1,459 @@
+//! End-to-End-Tests der Auto-Raid-Pipeline: Auswahl → Readiness → Executor →
+//! Pending/Strikes/Blacklist. Echte Stores gegen den Test-Container,
+//! Stub-RaidApi mit per-Ziel-Verhalten, Stub-Fallback-Streams.
+
+use std::collections::HashMap;
+use std::str::FromStr;
+use std::sync::{Arc, Mutex};
+
+use chrono::{Duration, Utc};
+use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
+use sqlx::PgPool;
+use tb_crypto::{aad, FieldCipher, KID};
+use tb_raid::{
+    ArrivalReadiness, AutoRaidPipeline, AutoRaidPipelineOutcome, AutoRaidRequest,
+    FairnessCandidate, FallbackStreamSource, OnlineCandidate, PendingRaidStore, RaidApi,
+    RaidAuthStore, RaidBlacklistStore, RaidExecutor, RaidHistoryStore, RaidTokenRefresher,
+    RefreshError, ScoreStore, StreamData, StrikesStore, TokenBlacklistStore, TokenProvider,
+    TokenResponse, TwitchTokenClient,
+};
+
+const TEST_KEY_HEX: &str = "0f0e0d0c0b0a09080706050403020100ffeeddccbbaa99887766554433221100";
+
+macro_rules! pool_or_skip {
+    ($schema:expr) => {{
+        let Some(dsn) = std::env::var("TB_TEST_DATABASE_URL").ok() else {
+            eprintln!("SKIP: TB_TEST_DATABASE_URL nicht gesetzt");
+            return;
+        };
+        pool_in_schema(&dsn, $schema).await
+    }};
+}
+
+async fn pool_in_schema(dsn: &str, schema: &str) -> PgPool {
+    let admin = PgPoolOptions::new()
+        .max_connections(1)
+        .connect(dsn)
+        .await
+        .unwrap();
+    sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
+        .execute(&admin)
+        .await
+        .unwrap();
+    sqlx::query(&format!("CREATE SCHEMA {schema}"))
+        .execute(&admin)
+        .await
+        .unwrap();
+    admin.close().await;
+    let opts = PgConnectOptions::from_str(dsn)
+        .unwrap()
+        .options([("search_path", schema)]);
+    let pool = PgPoolOptions::new()
+        .max_connections(4)
+        .connect_with(opts)
+        .await
+        .unwrap();
+    for ddl in [
+        "CREATE TABLE twitch_raid_auth (
+            twitch_user_id TEXT PRIMARY KEY, twitch_login TEXT, access_token TEXT, refresh_token TEXT,
+            token_expires_at TIMESTAMPTZ, scopes TEXT, raid_enabled BOOLEAN DEFAULT TRUE,
+            needs_reauth BOOLEAN DEFAULT FALSE, access_token_enc BYTEA, refresh_token_enc BYTEA,
+            enc_version INTEGER, enc_kid TEXT, last_refreshed_at TIMESTAMPTZ )",
+        "CREATE TABLE twitch_raid_history (
+            id BIGSERIAL PRIMARY KEY, from_broadcaster_id TEXT, from_broadcaster_login TEXT,
+            to_broadcaster_id TEXT, to_broadcaster_login TEXT, viewer_count INTEGER,
+            stream_duration_sec INTEGER, reason TEXT, executed_at TIMESTAMPTZ, success BOOLEAN,
+            error_message TEXT, target_stream_started_at TIMESTAMPTZ, candidates_count INTEGER )",
+        "CREATE TABLE twitch_token_blacklist (
+            twitch_user_id TEXT PRIMARY KEY, twitch_login TEXT, error_message TEXT,
+            error_count INTEGER DEFAULT 1, first_error_at TEXT, last_error_at TEXT,
+            notified INTEGER DEFAULT 0, grace_expires_at TEXT )",
+        "CREATE TABLE twitch_raid_blacklist (
+            target_login TEXT PRIMARY KEY, target_id TEXT, reason TEXT, added_at TEXT )",
+        "CREATE TABLE twitch_raid_disabled_strikes (
+            target_id TEXT, target_login TEXT NOT NULL, strike_count INTEGER NOT NULL DEFAULT 1,
+            last_seen_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), last_reason TEXT,
+            CONSTRAINT twitch_raid_disabled_strikes_pkey PRIMARY KEY (target_login) )",
+        "CREATE TABLE twitch_partner_raid_scores (
+            twitch_user_id TEXT PRIMARY KEY, twitch_login TEXT NOT NULL,
+            avg_duration_sec INTEGER NOT NULL DEFAULT 0,
+            time_pattern_score_base DOUBLE PRECISION NOT NULL DEFAULT 0.5,
+            received_successful_raids_total INTEGER NOT NULL DEFAULT 0,
+            is_new_partner_preferred INTEGER NOT NULL DEFAULT 0,
+            new_partner_multiplier DOUBLE PRECISION NOT NULL DEFAULT 1.0,
+            raid_boost_multiplier DOUBLE PRECISION NOT NULL DEFAULT 1.0,
+            is_live INTEGER NOT NULL DEFAULT 0, current_started_at TEXT,
+            current_uptime_sec INTEGER NOT NULL DEFAULT 0,
+            duration_score DOUBLE PRECISION NOT NULL DEFAULT 0.5,
+            time_pattern_score DOUBLE PRECISION NOT NULL DEFAULT 0.5,
+            base_score DOUBLE PRECISION NOT NULL DEFAULT 0.5,
+            final_score DOUBLE PRECISION NOT NULL DEFAULT 0.5,
+            today_received_raids INTEGER NOT NULL DEFAULT 0,
+            last_computed_at TEXT NOT NULL,
+            readiness_score DOUBLE PRECISION NOT NULL DEFAULT 0.5,
+            fairness_score DOUBLE PRECISION NOT NULL DEFAULT 0.5,
+            internal_sent_raids_30d INTEGER NOT NULL DEFAULT 0,
+            internal_received_raids_7d INTEGER NOT NULL DEFAULT 0,
+            internal_received_raids_30d INTEGER NOT NULL DEFAULT 0 )",
+    ] {
+        sqlx::query(ddl).execute(&pool).await.unwrap();
+    }
+    pool
+}
+
+// ── Seeding-Helfer ──
+
+async fn seed_source_token(pool: &PgPool, user_id: &str) {
+    let cipher = FieldCipher::from_hex_key(TEST_KEY_HEX, KID).unwrap();
+    let acc = cipher
+        .encrypt_field("acc-tok", &aad::raid_auth("access_token", user_id, 1))
+        .unwrap();
+    let refr = cipher
+        .encrypt_field("ref-tok", &aad::raid_auth("refresh_token", user_id, 1))
+        .unwrap();
+    sqlx::query(
+        "INSERT INTO twitch_raid_auth
+            (twitch_user_id, twitch_login, raid_enabled, enc_version, enc_kid,
+             access_token_enc, refresh_token_enc, token_expires_at)
+         VALUES ($1, 'quelle', TRUE, 1, 'v1', $2, $3, $4)",
+    )
+    .bind(user_id)
+    .bind(acc)
+    .bind(refr)
+    .bind(Utc::now() + Duration::minutes(60))
+    .execute(pool)
+    .await
+    .unwrap();
+}
+
+async fn seed_score(pool: &PgPool, user_id: &str, final_score: f64, is_live: i32) {
+    sqlx::query(
+        "INSERT INTO twitch_partner_raid_scores
+            (twitch_user_id, twitch_login, is_live, final_score, last_computed_at)
+         VALUES ($1, $1, $2, $3, $4)",
+    )
+    .bind(user_id)
+    .bind(is_live)
+    .bind(final_score)
+    .bind(Utc::now().to_rfc3339())
+    .execute(pool)
+    .await
+    .unwrap();
+}
+
+fn partner(user_id: &str, login: &str) -> OnlineCandidate {
+    OnlineCandidate {
+        twitch_user_id: user_id.to_string(),
+        twitch_login: login.to_string(),
+        raid_enabled: true,
+        stream: StreamData {
+            viewer_count: 10,
+            followers_total: 0,
+            started_at: Some("2026-06-10T17:00:00+00:00".to_string()),
+            game_name: Some("Deadlock".to_string()),
+        },
+    }
+}
+
+// ── Stubs ──
+
+struct StubTokenClient;
+#[async_trait::async_trait]
+impl TwitchTokenClient for StubTokenClient {
+    async fn refresh(&self, _t: &str) -> Result<TokenResponse, RefreshError> {
+        Err(RefreshError::Other("nicht erwartet".into()))
+    }
+    async fn exchange_code(&self, _c: &str) -> Result<TokenResponse, RefreshError> {
+        unreachable!()
+    }
+}
+
+/// RaidApi-Stub mit per-Ziel-Verhalten: `errors_by_target[to_id]` → Fehler.
+struct TargetedRaidApi {
+    errors_by_target: HashMap<String, String>,
+    calls: Mutex<Vec<String>>,
+}
+#[async_trait::async_trait]
+impl RaidApi for TargetedRaidApi {
+    async fn start_raid(&self, _from: &str, to: &str, _token: &str) -> Result<(), String> {
+        self.calls.lock().unwrap().push(to.to_string());
+        match self.errors_by_target.get(to) {
+            Some(error) => Err(error.clone()),
+            None => Ok(()),
+        }
+    }
+}
+
+struct StubReadiness {
+    calls: Mutex<Vec<String>>,
+}
+#[async_trait::async_trait]
+impl ArrivalReadiness for StubReadiness {
+    async fn ensure_ready(&self, to_broadcaster_id: &str, _login: &str) -> bool {
+        self.calls
+            .lock()
+            .unwrap()
+            .push(to_broadcaster_id.to_string());
+        true
+    }
+}
+
+struct StubFallback {
+    streams: Vec<FairnessCandidate>,
+}
+#[async_trait::async_trait]
+impl FallbackStreamSource for StubFallback {
+    async fn category_streams(
+        &self,
+        _category_id: &str,
+        _language: &str,
+        _limit: usize,
+    ) -> Result<Vec<FairnessCandidate>, String> {
+        Ok(self.streams.clone())
+    }
+}
+
+// ── Aufbau ──
+
+struct Harness {
+    pipeline: AutoRaidPipeline,
+    pending: Arc<Mutex<PendingRaidStore>>,
+    api: Arc<TargetedRaidApi>,
+    readiness: Arc<StubReadiness>,
+}
+
+fn build(
+    pool: &PgPool,
+    errors_by_target: HashMap<String, String>,
+    fallback_streams: Vec<FairnessCandidate>,
+) -> Harness {
+    let cipher = Arc::new(FieldCipher::from_hex_key(TEST_KEY_HEX, KID).unwrap());
+    let token_blacklist = Arc::new(TokenBlacklistStore::new(pool.clone()));
+    let refresher = RaidTokenRefresher::new(
+        pool.clone(),
+        cipher.clone(),
+        Arc::new(StubTokenClient),
+        token_blacklist.clone(),
+    );
+    let provider = Arc::new(TokenProvider::new(
+        RaidAuthStore::new(pool.clone(), cipher),
+        refresher,
+        token_blacklist,
+    ));
+    let api = Arc::new(TargetedRaidApi {
+        errors_by_target,
+        calls: Mutex::new(Vec::new()),
+    });
+    let executor = RaidExecutor::new(api.clone(), provider, RaidHistoryStore::new(pool.clone()));
+    let pending = Arc::new(Mutex::new(PendingRaidStore::new()));
+    let readiness = Arc::new(StubReadiness {
+        calls: Mutex::new(Vec::new()),
+    });
+    let pipeline = AutoRaidPipeline::new(
+        RaidBlacklistStore::new(pool.clone()),
+        ScoreStore::new(pool.clone()),
+        RaidHistoryStore::new(pool.clone()),
+        StrikesStore::new(pool.clone()),
+        executor,
+        pending.clone(),
+        readiness.clone(),
+        Some(Arc::new(StubFallback {
+            streams: fallback_streams,
+        })),
+    );
+    Harness {
+        pipeline,
+        pending,
+        api,
+        readiness,
+    }
+}
+
+fn request(partners: Vec<OnlineCandidate>) -> AutoRaidRequest {
+    AutoRaidRequest {
+        broadcaster_id: "100".to_string(),
+        broadcaster_login: "quelle".to_string(),
+        viewer_count: 42,
+        stream_duration_sec: 3600,
+        partners,
+        category_id: Some("cat-deadlock".to_string()),
+        offline_trigger_ts: Some(1000.0),
+        reason: "auto_raid_on_offline".to_string(),
+    }
+}
+
+fn fairness(user_id: &str, login: &str) -> FairnessCandidate {
+    FairnessCandidate {
+        user_id: user_id.to_string(),
+        user_login: login.to_string(),
+        viewer_count: 5,
+        followers_total: 0,
+        started_at: "2026-06-10T16:00:00+00:00".to_string(),
+    }
+}
+
+// ── Tests ──
+
+#[tokio::test]
+async fn partner_pfad_startet_raid_und_registriert_pending() {
+    let pool = pool_or_skip!("t6w_pipe_ok");
+    seed_source_token(&pool, "100").await;
+    seed_score(&pool, "200", 0.9, 1).await;
+    let h = build(&pool, HashMap::new(), vec![]);
+
+    let outcome = h.pipeline.run(&request(vec![partner("200", "ziel")])).await;
+    assert_eq!(
+        outcome,
+        AutoRaidPipelineOutcome::Started {
+            target_login: "ziel".to_string(),
+            is_partner_raid: true,
+        }
+    );
+    // Readiness vor dem Start fürs Ziel sichergestellt.
+    assert_eq!(h.readiness.calls.lock().unwrap().clone(), vec!["200"]);
+    // History-Zeile mit Erfolg + Kandidatenzahl.
+    let (success, candidates): (bool, i32) = sqlx::query_as(
+        "SELECT success, candidates_count FROM twitch_raid_history WHERE to_broadcaster_id='200'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert!(success);
+    assert_eq!(candidates, 1);
+    // Pending-Raid registriert (Arrival-Korrelation).
+    let store = h.pending.lock().unwrap();
+    let pending = store.get("200", Some("quelle")).unwrap();
+    assert!(pending.is_partner_raid);
+    assert_eq!(pending.registered_viewer_count, 42);
+    assert_eq!(pending.offline_trigger_ts, Some(1000.0));
+    assert_eq!(pending.channel_raid_ready, Some(true));
+}
+
+#[tokio::test]
+async fn partner_lehnt_ab_wird_uebersprungen_fallback_uebernimmt() {
+    let pool = pool_or_skip!("t6w_pipe_fallback");
+    seed_source_token(&pool, "100").await;
+    seed_score(&pool, "200", 0.9, 1).await;
+    let errors: HashMap<String, String> = [(
+        "200".to_string(),
+        "HTTP 400: target does not allow raids".to_string(),
+    )]
+    .into();
+    let h = build(&pool, errors, vec![fairness("300", "de_streamer")]);
+
+    let outcome = h
+        .pipeline
+        .run(&request(vec![partner("200", "partner_zu")]))
+        .await;
+    assert_eq!(
+        outcome,
+        AutoRaidPipelineOutcome::Started {
+            target_login: "de_streamer".to_string(),
+            is_partner_raid: false,
+        }
+    );
+    // Partner-Ziel: KEIN Strike, KEINE Blacklist (nur überspringen).
+    let strikes: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM twitch_raid_disabled_strikes")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(strikes, 0);
+    let blacklisted: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM twitch_raid_blacklist")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(blacklisted, 0);
+    // Beide Versuche in der History (Fehlschlag + Erfolg).
+    let attempts: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM twitch_raid_history")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(attempts, 2);
+    assert_eq!(h.api.calls.lock().unwrap().clone(), vec!["200", "300"]);
+}
+
+#[tokio::test]
+async fn fallback_ziel_sammelt_strike_und_blacklist_ab_schwelle() {
+    let pool = pool_or_skip!("t6w_pipe_strike");
+    seed_source_token(&pool, "100").await;
+    // Vorbelastung: Ziel 300 hat bereits 1 Strike.
+    sqlx::query(
+        "INSERT INTO twitch_raid_disabled_strikes (target_id, target_login, strike_count)
+         VALUES ('300', 'de_zu', 1)",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    let errors: HashMap<String, String> = [(
+        "300".to_string(),
+        "HTTP 400: raids are disabled".to_string(),
+    )]
+    .into();
+    let h = build(&pool, errors, vec![fairness("300", "de_zu")]);
+
+    let outcome = h.pipeline.run(&request(vec![])).await;
+    // Einziges Ziel abgelehnt → danach kein Ziel mehr.
+    assert_eq!(outcome, AutoRaidPipelineOutcome::NoTarget);
+    // Strike 2 erreicht → Blacklist-Eintrag.
+    let strike_count: i32 = sqlx::query_scalar(
+        "SELECT strike_count FROM twitch_raid_disabled_strikes WHERE target_login='de_zu'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(strike_count, 2);
+    let reason: String =
+        sqlx::query_scalar("SELECT reason FROM twitch_raid_blacklist WHERE target_login='de_zu'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert!(reason.contains("raids are disabled"));
+}
+
+#[tokio::test]
+async fn nicht_wiederholbarer_fehler_bricht_ab() {
+    let pool = pool_or_skip!("t6w_pipe_fatal");
+    seed_source_token(&pool, "100").await;
+    seed_score(&pool, "200", 0.9, 1).await;
+    let errors: HashMap<String, String> = [(
+        "200".to_string(),
+        "Raid API failed: HTTP 500: kaputt".to_string(),
+    )]
+    .into();
+    let h = build(&pool, errors, vec![fairness("300", "unbenutzt")]);
+
+    let outcome = h.pipeline.run(&request(vec![partner("200", "ziel")])).await;
+    assert_eq!(
+        outcome,
+        AutoRaidPipelineOutcome::Failed {
+            error: "Raid API failed: HTTP 500: kaputt".to_string()
+        }
+    );
+    // Kein weiterer Versuch nach nicht-wiederholbarem Fehler.
+    assert_eq!(h.api.calls.lock().unwrap().len(), 1);
+    assert!(h.pending.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn blacklist_und_quelle_werden_nie_geraidet() {
+    let pool = pool_or_skip!("t6w_pipe_blocked");
+    seed_source_token(&pool, "100").await;
+    seed_score(&pool, "200", 0.9, 1).await;
+    sqlx::query(
+        "INSERT INTO twitch_raid_blacklist (target_login, target_id) VALUES ('boese', '200')",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    // Quelle selbst als "Partner" (Roster filtert das normal schon) + Blacklist-Ziel.
+    let h = build(&pool, HashMap::new(), vec![]);
+    let outcome = h
+        .pipeline
+        .run(&request(vec![
+            partner("100", "quelle"),
+            partner("200", "boese"),
+        ]))
+        .await;
+    assert_eq!(outcome, AutoRaidPipelineOutcome::NoTarget);
+    assert!(h.api.calls.lock().unwrap().is_empty(), "kein API-Aufruf");
+}
