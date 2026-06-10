@@ -107,8 +107,25 @@ impl ScoreRefreshResolver {
         partner_user_ids: &[(String, String)],
         now: DateTime<Utc>,
     ) -> Result<usize, sqlx::Error> {
+        let upserts = self.compute_upserts(partner_user_ids, now).await?;
+        let mut written = 0usize;
+        for upsert in &upserts {
+            self.score_store.upsert(upsert).await?;
+            written += 1;
+        }
+        Ok(written)
+    }
+
+    /// Compute-only-Pfad: berechnet die Score-Zeilen ohne zu schreiben.
+    /// Genutzt vom `refresh_scores`-Schreibpfad und vom read-only
+    /// Prod-Cross-Check (Pre-Cutover-Gate).
+    pub async fn compute_upserts(
+        &self,
+        partner_user_ids: &[(String, String)],
+        now: DateTime<Utc>,
+    ) -> Result<Vec<PartnerRaidScoreUpsert>, sqlx::Error> {
         if partner_user_ids.is_empty() {
-            return Ok(0);
+            return Ok(Vec::new());
         }
 
         let ids: Vec<&str> = partner_user_ids.iter().map(|(id, _)| id.as_str()).collect();
@@ -126,7 +143,7 @@ impl ScoreRefreshResolver {
         let cached_scores = self.score_store.load_many(&ids).await?;
 
         let lookback_cutoff = now - chrono::Duration::days(LOOKBACK_DAYS);
-        let mut written = 0usize;
+        let mut upserts = Vec::with_capacity(partner_user_ids.len());
 
         for (user_id, login) in partner_user_ids {
             let live_row = live_states.iter().find(|r| r.twitch_user_id == *user_id);
@@ -228,11 +245,10 @@ impl ScoreRefreshResolver {
                 last_computed_at: now.format("%Y-%m-%dT%H:%M:%S+00:00").to_string(),
             };
 
-            self.score_store.upsert(&upsert).await?;
-            written += 1;
+            upserts.push(upsert);
         }
 
-        Ok(written)
+        Ok(upserts)
     }
 }
 
@@ -943,5 +959,139 @@ mod tests {
         assert_eq!(b_live, 0);
         assert_eq!(b_final, 0.99, "offline+Cache: final_score eingefroren");
         assert_eq!(b_dur, 0.91, "offline+Cache: duration_score eingefroren");
+    }
+}
+
+// ─── Prod-Cross-Check (Pre-Cutover-Gate) ────────────────────────────────────
+
+/// Read-only-Vergleich gegen eine ECHTE Datenbank: Rust-Compute vs. die von
+/// Python geschriebenen `twitch_partner_raid_scores`-Zeilen. Läuft nur, wenn
+/// `TB_CROSSCHECK_DATABASE_URL` gesetzt ist (bewusstes Opt-in), und öffnet die
+/// Verbindung mit `default_transaction_read_only=on` — Schreiben ist damit
+/// auf Verbindungsebene unmöglich.
+///
+/// Der Test FAILT nicht auf Daten-Drift (live Werte ändern sich laufend) —
+/// er druckt den Report (`--nocapture`), der vor dem Flip manuell geprüft
+/// wird. Offline-Partner mit Cache müssen exakt matchen (Freeze-Zweig).
+#[cfg(all(test, feature = "integration"))]
+mod prod_crosscheck {
+    use std::str::FromStr;
+
+    use chrono::Utc;
+    use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
+
+    use super::ScoreRefreshResolver;
+
+    #[tokio::test]
+    async fn report_rust_vs_python_scores() {
+        let Some(dsn) = std::env::var("TB_CROSSCHECK_DATABASE_URL").ok() else {
+            eprintln!("SKIP: TB_CROSSCHECK_DATABASE_URL nicht gesetzt");
+            return;
+        };
+        let opts = PgConnectOptions::from_str(&dsn)
+            .unwrap()
+            .options([("default_transaction_read_only", "on")]);
+        let pool = PgPoolOptions::new()
+            .max_connections(2)
+            .connect_with(opts)
+            .await
+            .unwrap();
+
+        #[derive(sqlx::FromRow)]
+        struct PyRow {
+            twitch_user_id: String,
+            twitch_login: String,
+            final_score: f64,
+            base_score: f64,
+            duration_score: f64,
+            time_pattern_score: f64,
+            new_partner_multiplier: f64,
+            raid_boost_multiplier: f64,
+            is_live: i32,
+            today_received_raids: i32,
+            received_successful_raids_total: i32,
+            last_computed_at: String,
+        }
+        let py_rows: Vec<PyRow> = sqlx::query_as(
+            "SELECT twitch_user_id, twitch_login, final_score, base_score,
+                    duration_score, time_pattern_score, new_partner_multiplier,
+                    raid_boost_multiplier, is_live, today_received_raids,
+                    received_successful_raids_total, last_computed_at
+               FROM twitch_partner_raid_scores ORDER BY twitch_login",
+        )
+        .fetch_all(&pool)
+        .await
+        .unwrap();
+        assert!(!py_rows.is_empty(), "keine Python-Score-Zeilen gefunden");
+
+        let pairs: Vec<(String, String)> = py_rows
+            .iter()
+            .map(|r| (r.twitch_user_id.clone(), r.twitch_login.clone()))
+            .collect();
+        let computed = ScoreRefreshResolver::new(pool.clone())
+            .compute_upserts(&pairs, Utc::now())
+            .await
+            .unwrap();
+
+        let mut exact = 0usize;
+        let mut nah = 0usize;
+        let mut diffs = Vec::new();
+        for py in &py_rows {
+            let Some(rs) = computed
+                .iter()
+                .find(|c| c.twitch_user_id == py.twitch_user_id)
+            else {
+                diffs.push(format!("{}: keine Rust-Berechnung", py.twitch_login));
+                continue;
+            };
+            let d_final = (rs.final_score - py.final_score).abs();
+            let d_base = (rs.base_score - py.base_score).abs();
+            let live_match = rs.is_live == py.is_live;
+            if d_final < 1e-9 && d_base < 1e-9 && live_match {
+                exact += 1;
+            } else if d_final <= 0.1 && live_match {
+                nah += 1;
+            } else {
+                diffs.push(format!(
+                    "{login}: final py={pyf:.4} rs={rsf:.4} | base py={pyb:.4} rs={rsb:.4} | \
+                     dur py={pyd:.4} rs={rsd:.4} | tp py={pyt:.4} rs={rst:.4} | \
+                     boost py={pybo:.2} rs={rsbo:.2} | npm py={pyn:.2} rs={rsn:.2} | \
+                     live py={pyl} rs={rsl} | today py={pyto} rs={rsto} | recv py={pyr} rs={rsr} | \
+                     py_computed_at={at}",
+                    login = py.twitch_login,
+                    pyf = py.final_score,
+                    rsf = rs.final_score,
+                    pyb = py.base_score,
+                    rsb = rs.base_score,
+                    pyd = py.duration_score,
+                    rsd = rs.duration_score,
+                    pyt = py.time_pattern_score,
+                    rst = rs.time_pattern_score,
+                    pybo = py.raid_boost_multiplier,
+                    rsbo = rs.raid_boost_multiplier,
+                    pyn = py.new_partner_multiplier,
+                    rsn = rs.new_partner_multiplier,
+                    pyl = py.is_live,
+                    rsl = rs.is_live,
+                    pyto = py.today_received_raids,
+                    rsto = rs.today_received_raids,
+                    pyr = py.received_successful_raids_total,
+                    rsr = rs.received_successful_raids_total,
+                    at = py.last_computed_at,
+                ));
+            }
+        }
+
+        eprintln!("──── Score-Cross-Check ────");
+        eprintln!(
+            "Zeilen: {} | exakt: {} | nah (Δfinal ≤ 0.1): {} | abweichend: {}",
+            py_rows.len(),
+            exact,
+            nah,
+            diffs.len()
+        );
+        for d in &diffs {
+            eprintln!("  {d}");
+        }
     }
 }
