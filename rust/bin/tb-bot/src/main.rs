@@ -18,10 +18,14 @@
 //!   TWITCH_ALERT_MENTION          — optionale Alert-Mention (z. B. <@&id>)
 //!   TWITCH_DISCORD_REF_CODE       — Referral-Code für Twitch-URLs
 //!   TWITCH_LANGUAGE_FILTERS       — Komma-Liste (z. B. "de,en"), leer = alle
+//!   DB_MASTER_KEY_V1              — AES-Master-Key (Hex); ohne ihn bleiben
+//!                                   die Raid-Hooks deaktiviert (kein Token-Read)
 //!   PORT                          — optional, default 8776
 
 mod auto_raid;
 mod confirm_resolver;
+mod eventsub_hooks;
+mod partner_lookup;
 mod raid_adapters;
 mod raid_arrival_wiring;
 mod score_refresh;
@@ -30,6 +34,7 @@ mod wiring;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use tb_config::Settings;
+use tb_crypto::FieldCipher;
 use tb_internal_api::build_internal_router;
 use tb_monitoring::poller::{PollHooks, StreamSource};
 use tb_monitoring::sessions::store::SessionStore;
@@ -42,8 +47,22 @@ use tb_monitoring::{
     SessionTracker, StatsStore, SubscriptionConfig, SubscriptionManager, TelemetryStore,
     TrackedStore, VodPreviewSource,
 };
+use tb_raid::{
+    AutoRaidPipeline, ManualRaidSuppression, OfflineEligibilityStore, PartnerRosterStore,
+    PendingRaidStore, RaidArrivalRuntime, RaidAuthStore, RaidBlacklistStore, RaidExecutor,
+    RaidHistoryStore, RaidTokenRefresher, ScoreStore, StrikesStore, TokenBlacklistStore,
+    TokenProvider,
+};
 use tb_transport_discord::BrokerRelay;
 use tb_transport_twitch::{HelixClient, HelixConfig};
+
+use auto_raid::OfflineRaidHandler;
+use eventsub_hooks::{BlacklistRaidGuard, RaidArrivalCoordinator, RaidEventSubHooks};
+use raid_adapters::{
+    HelixFallbackStreams, HelixRaidApi, HelixTokenClient, ManagerArrivalReadiness,
+};
+use raid_arrival_wiring::RaidArrivalSinkImpl;
+use score_refresh::ScoreRefreshResolver;
 use wiring::{
     BrokerAnnouncementTransport, HelixFollowerSource, HelixStreamSource,
     HelixSubscriptionTransport, HelixVodPreview, SubscriptionEventSubHooks,
@@ -108,7 +127,7 @@ async fn main() {
 
     // EventSub-Ingress: Inbox-Worker + Dispatcher. Mit Webhook-Config + Helix
     // verwaltet Rust die Core-Subscriptions selbst (Go-Live → stream.offline);
-    // Raid-/Score-Hooks bleiben bis zum Cutover (4f) Noop.
+    // mit Krypto-Key sind zusätzlich alle Raid-Hooks echt (s. unten).
     let target_game =
         std::env::var("TWITCH_TARGET_GAME_NAME").unwrap_or_else(|_| "Deadlock".to_string());
     let guard = GuardStore::new(pool.clone());
@@ -124,7 +143,7 @@ async fn main() {
         SessionStore::new(pool.clone()),
         live_state.clone(),
         ExpSessionTracker::new(ExpSessionStore::new(pool.clone())),
-        followers,
+        followers.clone(),
         &target_game,
     ));
     tracker.rehydrate().await;
@@ -162,11 +181,99 @@ async fn main() {
                 None
             }
         };
-    let eventsub_hooks: Arc<dyn EventSubHooks> = match &subscription_manager {
-        Some(manager) => Arc::new(SubscriptionEventSubHooks {
-            manager: manager.clone(),
-        }),
-        None => Arc::new(NoopEventSubHooks),
+    // Raid-Verdrahtung: mit Manager + Helix + Krypto-Key sind alle vier
+    // Raid-Kopplungen echt (Auto-Raid, Arrival, Score-Refresh, Blacklist-Guard).
+    let suppression = Arc::new(std::sync::Mutex::new(ManualRaidSuppression::new()));
+    let eventsub_hooks: Arc<dyn EventSubHooks> = match (
+        &subscription_manager,
+        helix.as_ref().clone(),
+        FieldCipher::from_env(),
+    ) {
+        (Some(manager), Some(helix_client), Ok(cipher)) => {
+            let cipher = Arc::new(cipher);
+            let token_blacklist = Arc::new(TokenBlacklistStore::new(pool.clone()));
+            let refresher = RaidTokenRefresher::new(
+                pool.clone(),
+                cipher.clone(),
+                Arc::new(HelixTokenClient {
+                    helix: helix_client.clone(),
+                }),
+                token_blacklist.clone(),
+            );
+            let token_provider = Arc::new(TokenProvider::new(
+                RaidAuthStore::new(pool.clone(), cipher),
+                refresher,
+                token_blacklist,
+            ));
+            let pending = Arc::new(std::sync::Mutex::new(PendingRaidStore::new()));
+            let executor = RaidExecutor::new(
+                Arc::new(HelixRaidApi {
+                    helix: helix_client.clone(),
+                }),
+                token_provider.clone(),
+                RaidHistoryStore::new(pool.clone()),
+            );
+            let pipeline = AutoRaidPipeline::new(
+                RaidBlacklistStore::new(pool.clone()),
+                ScoreStore::new(pool.clone()),
+                RaidHistoryStore::new(pool.clone()),
+                StrikesStore::new(pool.clone()),
+                executor,
+                pending.clone(),
+                Arc::new(ManagerArrivalReadiness {
+                    manager: manager.clone(),
+                }),
+                Some(Arc::new(HelixFallbackStreams {
+                    helix: helix_client.clone(),
+                })),
+            );
+            let offline = Arc::new(OfflineRaidHandler::new(
+                suppression.clone(),
+                OfflineEligibilityStore::new(pool.clone()),
+                live_state.clone(),
+                PartnerRosterStore::new(pool.clone()),
+                helix_client.clone(),
+                followers.clone(),
+                pipeline,
+                &target_game,
+            ));
+            let sink = Arc::new(RaidArrivalSinkImpl::new(
+                pool.clone(),
+                pending.clone(),
+                suppression.clone(),
+                &target_game.to_lowercase(),
+            ));
+            let arrival =
+                RaidArrivalCoordinator::new(pool.clone(), pending, RaidArrivalRuntime::new(sink));
+            let blacklist_guard = BlacklistRaidGuard::new(
+                RaidBlacklistStore::new(pool.clone()),
+                token_provider,
+                helix_client,
+            );
+            tracing::info!(
+                "Raid-EventSub-Hooks aktiv (Auto-Raid, Arrival, Score-Refresh, Blacklist-Guard)"
+            );
+            Arc::new(RaidEventSubHooks {
+                manager: manager.clone(),
+                score_resolver: ScoreRefreshResolver::new(pool.clone()),
+                live_state: live_state.clone(),
+                offline,
+                arrival,
+                guard: blacklist_guard,
+            })
+        }
+        (Some(manager), _, cipher) => {
+            if let Err(error) = cipher {
+                tracing::warn!(
+                    %error,
+                    "DB_MASTER_KEY_V1 fehlt/ungültig — Raid-Hooks deaktiviert, nur Go-Live-Subscription aktiv"
+                );
+            }
+            Arc::new(SubscriptionEventSubHooks {
+                manager: manager.clone(),
+            })
+        }
+        _ => Arc::new(NoopEventSubHooks),
     };
     let handler = Arc::new(MonitoringEventHandler::new(
         guard.clone(),

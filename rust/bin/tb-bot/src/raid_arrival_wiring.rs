@@ -6,43 +6,26 @@
 //! die DB-Status ist aber async. Der Adapter beschafft Partner-/Known-Status
 //! **vorab** per async-Query und wrappt sie in `Prefetched*`-Lookups — dann
 //! klassifiziert die sync-Engine ohne await.
-//!
-//! Noch nicht aus `main.rs` aufgerufen (Cutover-Gate).
-#![allow(dead_code)]
 
 use std::sync::{Arc, Mutex};
 
 use chrono::Utc;
 use sqlx::PgPool;
-use tb_raid::arrival_confirmation::{KnownStreamerLookup, PartnerLookup};
 use tb_raid::{
-    ArrivalConfirmationService, ArrivalSignalContext, ArrivalTrackingStore, PendingRaid,
-    PendingRaidStore, RaidArrivalSink, RecordArrivalInput, ScoreTrackingStore,
+    classify_partner_raid_arrival, ArrivalConfirmationService, ArrivalSignalContext,
+    ArrivalTrackingStore, ManualRaidSuppression, PendingRaid, PendingRaidStore, RaidArrivalSink,
+    RecordArrivalInput, ScoreTrackingStore,
 };
 
 use crate::confirm_resolver::{ConfirmContext, ConfirmResolver};
-
-// ─── Prefetched-Lookups (sync, halten vorab geladene DB-Antworten) ──────────
-
-struct PrefetchedPartner(bool);
-impl PartnerLookup for PrefetchedPartner {
-    fn lookup_partner(&self, _id: Option<&str>, _login: Option<&str>) -> bool {
-        self.0
-    }
-}
-
-struct PrefetchedKnown(Option<bool>);
-impl KnownStreamerLookup for PrefetchedKnown {
-    fn lookup_known_streamer(&self, _id: Option<&str>, _login: Option<&str>) -> Option<bool> {
-        self.0
-    }
-}
+use crate::partner_lookup::{is_target_partner, known_source, PrefetchedLookups};
 
 // ─── Adapter ────────────────────────────────────────────────────────────────
 
 pub struct RaidArrivalSinkImpl {
     pool: PgPool,
     pending: Arc<Mutex<PendingRaidStore>>,
+    suppression: Arc<Mutex<ManualRaidSuppression>>,
     arrival_store: ArrivalTrackingStore,
     score_tracking: ScoreTrackingStore,
     confirm_resolver: ConfirmResolver,
@@ -52,6 +35,7 @@ impl RaidArrivalSinkImpl {
     pub fn new(
         pool: PgPool,
         pending: Arc<Mutex<PendingRaidStore>>,
+        suppression: Arc<Mutex<ManualRaidSuppression>>,
         target_game_lower: &str,
     ) -> Self {
         Self {
@@ -60,42 +44,22 @@ impl RaidArrivalSinkImpl {
             confirm_resolver: ConfirmResolver::new(pool.clone(), target_game_lower),
             pool,
             pending,
+            suppression,
         }
     }
 
-    /// Async-Vorabauflösung: ist das Ziel ein aktiver Partner? (`twitch_partners`)
-    async fn is_target_partner(&self, to_id: &str, to_login: &str) -> bool {
-        let row: Option<i32> = sqlx::query_scalar(
-            "SELECT 1 FROM twitch_partners
-              WHERE ((NULLIF($1,'') IS NOT NULL AND twitch_user_id = $1)
-                  OR (NULLIF($2,'') IS NOT NULL AND LOWER(twitch_login) = LOWER($2)))
-                AND status = 'active' LIMIT 1",
-        )
-        .bind(to_id)
-        .bind(to_login)
-        .fetch_optional(&self.pool)
-        .await
-        .unwrap_or(None);
-        row.is_some()
-    }
-
-    /// Async-Vorabauflösung des Quell-Streamers (`twitch_streamer_identities`):
-    /// `Some(true)` = bekannt mit ID, `Some(false)` = nur Login bekannt,
-    /// `None` = unbekannt (Python `resolve_known_streamer_identity`).
-    async fn known_source(&self, from_id: Option<&str>, from_login: &str) -> Option<bool> {
-        let row: Option<(String,)> = sqlx::query_as(
-            "SELECT twitch_user_id FROM twitch_streamer_identities
-              WHERE ((NULLIF($1,'') IS NOT NULL AND twitch_user_id = $1)
-                  OR (NULLIF($2,'') IS NOT NULL AND LOWER(twitch_login) = LOWER($2)))
-              LIMIT 1",
-        )
-        .bind(from_id.unwrap_or(""))
-        .bind(from_login)
-        .fetch_optional(&self.pool)
-        .await
-        .unwrap_or(None);
-        // Bekannt: hat das Signal eine from_broadcaster_id mitgeliefert?
-        row.map(|_| from_id.map(|s| !s.trim().is_empty()).unwrap_or(false))
+    /// Vorab geladene Lookups für die sync Klassifikations-Engine.
+    async fn prefetch_lookups(
+        &self,
+        to_id: &str,
+        to_login: &str,
+        from_id: Option<&str>,
+        from_login: &str,
+    ) -> PrefetchedLookups {
+        PrefetchedLookups {
+            target_is_partner: is_target_partner(&self.pool, to_id, to_login).await,
+            known_source: known_source(&self.pool, from_id, from_login).await,
+        }
     }
 }
 
@@ -124,15 +88,21 @@ impl RaidArrivalSink for RaidArrivalSinkImpl {
         let Some(pending) = pending else { return };
 
         // 2. Partner-/Known-Status vorab async laden, dann sync klassifizieren.
-        let is_partner = self
-            .is_target_partner(to_broadcaster_id, to_broadcaster_login)
+        let lookups = self
+            .prefetch_lookups(
+                to_broadcaster_id,
+                to_broadcaster_login,
+                from_broadcaster_id,
+                from_broadcaster_login,
+            )
             .await;
-        let known = self
-            .known_source(from_broadcaster_id, from_broadcaster_login)
-            .await;
+        let known = lookups.known_source;
         let svc = ArrivalConfirmationService::new(
-            Box::new(PrefetchedPartner(is_partner)),
-            Box::new(PrefetchedKnown(known)),
+            Box::new(PrefetchedLookups {
+                target_is_partner: lookups.target_is_partner,
+                known_source: known,
+            }),
+            Box::new(lookups),
         );
         let ctx = ArrivalSignalContext {
             from_broadcaster_login,
@@ -249,23 +219,69 @@ impl RaidArrivalSink for RaidArrivalSinkImpl {
         // nicht portiert; hier dokumentierter no-op (kein bestätigter Raid).
     }
 
-    async fn mark_manual_raid_started(&self, _source_key: &str, _ttl_seconds: f64) {
-        // Manual-Raid-TTL-Lock — verhindert Doppel-Auto-Raid kurz nach manuellem
-        // Raid. Eigener Lock-Store; hier no-op bis verdrahtet.
+    async fn mark_manual_raid_started(&self, source_key: &str, ttl_seconds: f64) {
+        // Manual-Raid-TTL-Lock: unterdrückt den Auto-Raid kurz nach einem
+        // manuellen/externen Raid (sonst Doppel-Raid beim Offline-Gehen).
+        self.suppression
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .mark(source_key, ttl_seconds, None);
     }
 
     async fn record_independent_raid_arrival(
         &self,
-        _signal_type: &str,
-        _from_broadcaster_login: &str,
-        _from_broadcaster_id: Option<&str>,
-        _to_broadcaster_login: &str,
-        _to_broadcaster_id: &str,
-        _viewer_count: i32,
+        signal_type: &str,
+        from_broadcaster_login: &str,
+        from_broadcaster_id: Option<&str>,
+        to_broadcaster_login: &str,
+        to_broadcaster_id: &str,
+        viewer_count: i32,
     ) {
-        // Unabhängiger Raid-Arrival ohne Pending-Kontext (manueller Raid ohne
-        // vorherige Registrierung) — best-effort no-op bis Arrival-Record-Pfad
-        // ohne Pending angebunden ist.
+        // Manueller/externer Raid auf einen Partner ohne Pending-Kontext —
+        // klassifizieren + Arrival-Zeile schreiben (Python
+        // `process_independent_partner_raid_arrival`; der Suppression-Mark
+        // läuft als eigene Plan-Action über `mark_manual_raid_started`).
+        let lookups = self
+            .prefetch_lookups(
+                to_broadcaster_id,
+                to_broadcaster_login,
+                from_broadcaster_id,
+                from_broadcaster_login,
+            )
+            .await;
+        let resolution = classify_partner_raid_arrival(
+            Some(from_broadcaster_login),
+            from_broadcaster_id,
+            Some(to_broadcaster_id),
+            Some(to_broadcaster_login),
+            &lookups,
+            &lookups,
+        );
+        let Some(classification) = resolution.classification else {
+            return; // Ziel kein Partner → nichts zu tracken.
+        };
+        if let Err(error) = self
+            .arrival_store
+            .record_arrival(&RecordArrivalInput {
+                from_broadcaster_id: from_broadcaster_id.map(str::to_string),
+                from_broadcaster_login: from_broadcaster_login.to_string(),
+                to_broadcaster_id: to_broadcaster_id.to_string(),
+                to_broadcaster_login: to_broadcaster_login.to_string(),
+                viewer_count,
+                classification,
+                confirmation_signals: signal_type.to_string(),
+                primary_signal: signal_type.to_string(),
+                correlation_status: "independent_channel_raid".to_string(),
+                correlation_detail: None,
+                source_resolution: resolution.source_resolution,
+                raid_history_id: None,
+                raid_history_executed_at: None,
+                unraid_seen: false,
+            })
+            .await
+        {
+            tracing::error!(%error, "Independent-Arrival nicht speicherbar");
+        }
     }
 }
 
@@ -329,7 +345,9 @@ mod tests {
             .unwrap()
             .store(PendingRaid::new("src", "200"));
 
-        let sink = RaidArrivalSinkImpl::new(pool.clone(), pending_store.clone(), "deadlock");
+        let suppression = Arc::new(Mutex::new(tb_raid::ManualRaidSuppression::new()));
+        let sink =
+            RaidArrivalSinkImpl::new(pool.clone(), pending_store.clone(), suppression, "deadlock");
         sink.confirm_pending_raid("channel.raid", "200", "dst", "src", Some("100"), 42)
             .await;
 
@@ -362,7 +380,9 @@ mod tests {
             .lock()
             .unwrap()
             .store(PendingRaid::new("src", "200"));
-        let sink = RaidArrivalSinkImpl::new(pool.clone(), pending_store.clone(), "deadlock");
+        let suppression = Arc::new(Mutex::new(tb_raid::ManualRaidSuppression::new()));
+        let sink =
+            RaidArrivalSinkImpl::new(pool.clone(), pending_store.clone(), suppression, "deadlock");
         sink.confirm_pending_raid("channel.raid", "200", "dst", "src", Some("100"), 42)
             .await;
 

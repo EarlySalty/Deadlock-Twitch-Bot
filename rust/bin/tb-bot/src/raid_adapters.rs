@@ -1,14 +1,14 @@
 //! Raid-Adapter der Composition-Root: Helix → tb-raid-Ports.
 //! (Hexagonal — die Pipeline kennt kein Helix.)
-//!
-//! Noch nicht aus `main.rs` aufgerufen (Cutover-Gate).
-#![allow(dead_code)]
 
 use std::sync::Arc;
 
 use tb_monitoring::SubscriptionManager;
-use tb_raid::{ArrivalReadiness, FairnessCandidate, FallbackStreamSource, RaidApi};
-use tb_transport_twitch::{HelixClient, HelixStream};
+use tb_raid::{
+    ArrivalReadiness, FairnessCandidate, FallbackStreamSource, RaidApi, RefreshError,
+    TokenResponse, TwitchTokenClient,
+};
+use tb_transport_twitch::{HelixClient, HelixStream, UserTokenError};
 
 /// Startzeit-Sentinel wie in `target_resolution` (sortiert ans Ende).
 const STARTED_AT_SENTINEL: &str = "9999-99-99";
@@ -74,6 +74,44 @@ impl FallbackStreamSource for HelixFallbackStreams {
             .await
             .map_err(|error| error.to_string())?;
         Ok(streams.into_iter().map(to_fairness_candidate).collect())
+    }
+}
+
+/// OAuth-Token-Client-Adapter für den [`tb_raid::RaidTokenRefresher`].
+/// Der Code-Exchange (Onboarding) bleibt beim Python-Dashboard — hier wird
+/// nur der Refresh-Pfad bedient.
+pub struct HelixTokenClient {
+    pub helix: HelixClient,
+}
+
+fn map_token_error(error: UserTokenError) -> RefreshError {
+    match error {
+        UserTokenError::InvalidClient => RefreshError::InvalidClient,
+        UserTokenError::InvalidGrant => RefreshError::InvalidGrant,
+        UserTokenError::Other(message) => RefreshError::Other(message),
+    }
+}
+
+#[async_trait::async_trait]
+impl TwitchTokenClient for HelixTokenClient {
+    async fn refresh(&self, refresh_token: &str) -> Result<TokenResponse, RefreshError> {
+        let response = self
+            .helix
+            .refresh_user_token(refresh_token)
+            .await
+            .map_err(map_token_error)?;
+        Ok(TokenResponse {
+            access_token: response.access_token,
+            refresh_token: response.refresh_token,
+            expires_in: response.expires_in,
+            scopes: response.scope,
+        })
+    }
+
+    async fn exchange_code(&self, _code: &str) -> Result<TokenResponse, RefreshError> {
+        Err(RefreshError::Other(
+            "OAuth-Code-Exchange läuft weiter über das Python-Dashboard".to_string(),
+        ))
     }
 }
 

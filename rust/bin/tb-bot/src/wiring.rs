@@ -47,11 +47,19 @@ impl SubscriptionTransport for HelixSubscriptionTransport {
                 sub_type: sub.sub_type,
                 status: sub.status,
                 callback: sub.transport.callback,
-                broadcaster_user_id: sub
-                    .condition
-                    .get("broadcaster_user_id")
-                    .and_then(Value::as_str)
-                    .map(str::to_string),
+                // Ziel-Extraktion wie Python `_eventsub_target_user_id`:
+                // channel.raid trägt `to_broadcaster_user_id`.
+                broadcaster_user_id: [
+                    "broadcaster_user_id",
+                    "to_broadcaster_user_id",
+                    "from_broadcaster_user_id",
+                    "user_id",
+                ]
+                .iter()
+                .find_map(|key| sub.condition.get(key).and_then(Value::as_str))
+                .map(str::trim)
+                .filter(|v| !v.is_empty())
+                .map(str::to_string),
             })
             .collect())
     }
@@ -62,9 +70,9 @@ impl SubscriptionTransport for HelixSubscriptionTransport {
     }
 }
 
-/// EventSub-Hooks mit Subscription-Wirkung: Go-Live registriert die
-/// stream.offline-Subscription (Python `_handle_stream_went_live`).
-/// Raid-/Score-Hooks bleiben Noop bis zur Raid-Phase (Cutover-Kopplung).
+/// Interim-Hooks ohne Raid-Anbindung (Fallback, wenn `DB_MASTER_KEY_V1`
+/// fehlt): Go-Live registriert die stream.offline-Subscription, alle
+/// Raid-/Score-Hooks bleiben Noop. Voll verdrahtet: `RaidEventSubHooks`.
 pub struct SubscriptionEventSubHooks {
     pub manager: Arc<SubscriptionManager>,
 }

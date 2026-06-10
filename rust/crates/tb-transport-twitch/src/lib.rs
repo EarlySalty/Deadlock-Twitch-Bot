@@ -5,8 +5,10 @@ pub mod eventsub;
 pub mod raid;
 pub mod streams;
 pub mod token;
+pub mod user_token;
 
 pub use client::{HelixClient, HelixConfig, HelixError, TwitchUser};
 pub use eventsub::{CreateOutcome, EventSubSubscription};
 pub use streams::HelixStream;
 pub use token::{AppToken, TokenError};
+pub use user_token::{UserTokenError, UserTokenResponse};

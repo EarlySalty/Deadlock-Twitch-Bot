@@ -4,9 +4,6 @@
 //! `raid/mixin.py` (Offline-Trigger) + `offline_raid_orchestrator.py`
 //! (`handle_streamer_offline`); die gesamte Auswahl-/Retry-Logik liegt
 //! testbar in `tb-raid`.
-//!
-//! Noch nicht aus `main.rs` aufgerufen (Cutover-Gate).
-#![allow(dead_code)]
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};

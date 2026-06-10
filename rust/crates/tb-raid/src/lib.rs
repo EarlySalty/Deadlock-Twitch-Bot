@@ -106,8 +106,8 @@ pub use scoring::{
     NEW_PARTNER_RAID_THRESHOLD, RAID_BOOST_MULTIPLIER,
 };
 pub use signal_correlation::{
-    ActionData, RaidSignalAction, RaidSignalActionKind, RaidSignalCorrelationService,
-    RaidSignalOutcome, RaidSignalPlan, RaidSignalType,
+    ActionData, RaidArrivalInput, RaidSignalAction, RaidSignalActionKind,
+    RaidSignalCorrelationService, RaidSignalOutcome, RaidSignalPlan, RaidSignalType,
 };
 pub use state_store::{RaidOAuthState, StateStore};
 pub use strikes_store::StrikesStore;

@@ -129,6 +129,15 @@ impl HelixClient {
             .header("Authorization", format!("Bearer {token}")))
     }
 
+    /// Roh-Zugriff für Schwester-Module (z. B. den User-Token-Refresh).
+    pub(crate) fn http_client(&self) -> &Client {
+        &self.http
+    }
+
+    pub(crate) fn helix_config(&self) -> &HelixConfig {
+        &self.config
+    }
+
     /// POST mit einem **User-Token** (Client-Id + dieser Bearer, KEIN App-Token).
     /// Für Endpoints, die die Identität des Broadcasters brauchen (z. B. `/raids`).
     pub fn post_with_user_token(&self, path: &str, user_token: &str) -> RequestBuilder {
