@@ -83,6 +83,8 @@ pub struct FinalizeState {
 /// Python: `previous_state` im Offline-Handler.
 #[derive(Debug, Clone, sqlx::FromRow)]
 pub struct OfflineSourceState {
+    /// INTEGER-Flag (0/1) — für den Manual-Raid-DB-Fallback.
+    pub is_live: Option<i32>,
     pub last_game: Option<String>,
     pub had_deadlock_in_session: Option<i32>,
     pub last_deadlock_seen_at: Option<String>,
@@ -431,7 +433,7 @@ impl LiveStateStore {
             state: OfflineSourceState,
         }
         let rows: Vec<LoginStateRow> = sqlx::query_as(
-            "SELECT streamer_login, last_game, had_deadlock_in_session,
+            "SELECT streamer_login, is_live, last_game, had_deadlock_in_session,
                     last_deadlock_seen_at, last_viewer_count, last_started_at
                FROM twitch_live_state WHERE streamer_login = ANY($1)",
         )
@@ -452,7 +454,7 @@ impl LiveStateStore {
         broadcaster_user_id: &str,
     ) -> Result<Option<OfflineSourceState>, sqlx::Error> {
         sqlx::query_as(
-            "SELECT last_game, had_deadlock_in_session, last_deadlock_seen_at,
+            "SELECT is_live, last_game, had_deadlock_in_session, last_deadlock_seen_at,
                     last_viewer_count, last_started_at
                FROM twitch_live_state WHERE twitch_user_id = $1",
         )

@@ -56,6 +56,107 @@ fn source_skip_reason(state: &OfflineSourceState, target_game_lower: &str) -> &'
     "last_game_not_eligible"
 }
 
+/// Ergebnis der Kandidaten-Assemblierung (Schritte 5–7).
+struct AssembledPartners {
+    eligible: Vec<tb_raid::OnlineCandidate>,
+    online_count: usize,
+    filtered_out: usize,
+}
+
+/// Quell-Zustand für den manuellen Raid — aus dem Helix-Stream (Vorrang)
+/// oder dem DB-Restzustand (Fallback). Session-Flags kommen immer aus der DB
+/// (Python `overlay_broadcaster_live_state_from_stream`).
+#[derive(Debug)]
+struct ManualSource {
+    last_game: String,
+    had_deadlock_session: bool,
+    last_deadlock_seen_at: Option<String>,
+    viewer_count: i32,
+    started_at: Option<String>,
+}
+
+impl ManualSource {
+    fn from_stream(stream: &HelixStream, db: Option<&OfflineSourceState>) -> Self {
+        Self {
+            last_game: stream.game_name.trim().to_string(),
+            had_deadlock_session: db
+                .map(|s| s.had_deadlock_in_session.unwrap_or(0) != 0)
+                .unwrap_or(false),
+            last_deadlock_seen_at: db.and_then(|s| s.last_deadlock_seen_at.clone()),
+            viewer_count: stream.viewer_count as i32,
+            started_at: Some(stream.started_at.clone()).filter(|s| !s.trim().is_empty()),
+        }
+    }
+
+    /// DB-Fallback: nur wenn der Restzustand `is_live=1` trägt (Python `db`-Pfad).
+    fn from_db(state: &OfflineSourceState) -> Option<Self> {
+        if state.is_live.unwrap_or(0) == 0 {
+            return None;
+        }
+        Some(Self {
+            last_game: state.last_game.clone().unwrap_or_default(),
+            had_deadlock_session: state.had_deadlock_in_session.unwrap_or(0) != 0,
+            last_deadlock_seen_at: state.last_deadlock_seen_at.clone(),
+            viewer_count: state.last_viewer_count.unwrap_or(0),
+            started_at: state.last_started_at.clone(),
+        })
+    }
+
+    fn stream_duration_sec(&self, now: chrono::DateTime<Utc>) -> i32 {
+        self.started_at
+            .as_deref()
+            .and_then(tb_raid::parse_iso_utc)
+            .map(|started| (now - started).num_seconds().max(0) as i32)
+            .unwrap_or(0)
+    }
+}
+
+/// Antwort des manuellen Raids — Status-Strings sind der Vertrag des
+/// Python-Chat-Commands (`started`, `source_not_live`, `source_not_eligible`,
+/// `no_target`, `blocked`, `raid_failed`, `unavailable`).
+#[derive(Debug, serde::Serialize)]
+pub struct ManualRaidResponse {
+    pub status: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub target_login: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+impl ManualRaidResponse {
+    fn status(status: &str) -> Self {
+        Self {
+            status: status.to_string(),
+            target_login: None,
+            reason: None,
+            error: None,
+        }
+    }
+
+    fn status_with_reason(status: &str, reason: &str) -> Self {
+        Self {
+            reason: Some(reason.to_string()),
+            ..Self::status(status)
+        }
+    }
+
+    fn started(target_login: String) -> Self {
+        Self {
+            target_login: Some(target_login),
+            ..Self::status("started")
+        }
+    }
+
+    fn error(status: &str, error: &str) -> Self {
+        Self {
+            error: Some(error.to_string()),
+            ..Self::status(status)
+        }
+    }
+}
+
 pub struct OfflineRaidHandler {
     suppression: Arc<Mutex<ManualRaidSuppression>>,
     eligibility: OfflineEligibilityStore,
@@ -175,84 +276,22 @@ impl OfflineRaidHandler {
             .map(|started| (now - started).num_seconds().max(0) as i32)
             .unwrap_or(0);
 
-        // 5. Roster laden, live Partner via Helix + Session-Flags mergen.
-        let roster = match self.roster.load_roster(broadcaster_id).await {
-            Ok(roster) => roster,
-            Err(error) => {
-                tracing::error!(%error, streamer = streamer_label, "Auto-Raid: Roster nicht ladbar");
-                return;
-            }
+        // 5.–7. Online-Partner sammeln, filtern, anreichern (gemeinsam mit
+        // dem manuellen Raid).
+        let Some(assembled) = self.assemble_eligible_partners(broadcaster_id, now).await else {
+            return;
         };
-        let logins: Vec<String> = roster.iter().map(|p| p.twitch_login.clone()).collect();
-        let streams_by_login: HashMap<String, StreamData> = match self
-            .helix
-            .get_streams_by_logins(&logins, None)
-            .await
-        {
-            Ok(streams) => streams
-                .iter()
-                .map(|s| (s.user_login.trim().to_lowercase(), to_stream_data(s)))
-                .collect(),
-            Err(error) => {
-                tracing::error!(%error, streamer = streamer_label, "Auto-Raid: Helix-Streams nicht ladbar");
-                return;
-            }
-        };
-        let flags = self
-            .live_state
-            .source_states_by_logins(&logins)
-            .await
-            .unwrap_or_else(|error| {
-                tracing::debug!(%error, "Auto-Raid: Partner-Live-State nicht ladbar");
-                HashMap::new()
-            });
-
-        let online = build_online_candidates(&roster, &streams_by_login);
-        let online_count = online.len();
-
-        // 6. Deadlock-Eligibility je Kandidat (aktiv vor kürzlich) — Partition
-        //    wie `filter_eligible`, hier inline weil die Session-Flags aus der
-        //    separaten Map kommen (Borrow ausserhalb des Kandidaten).
-        let mut active = Vec::new();
-        let mut recent = Vec::new();
-        let mut filtered_out = 0usize;
-        for candidate in online {
-            let flag = flags.get(&candidate.twitch_login);
-            let input = DeadlockEvalInput {
-                game_name: candidate.stream.game_name.as_deref().unwrap_or(""),
-                had_deadlock_session: flag
-                    .map(|f| f.had_deadlock_in_session.unwrap_or(0) != 0)
-                    .unwrap_or(false),
-                last_deadlock_seen_at: flag.and_then(|f| f.last_deadlock_seen_at.as_deref()),
-            };
-            match classify_eligibility(&input, now, &self.target_game_lower) {
-                Some(EligibilityBucket::Active) => active.push(candidate),
-                Some(EligibilityBucket::Recent) => recent.push(candidate),
-                None => filtered_out += 1,
-            }
-        }
-        let mut eligible = if active.is_empty() { recent } else { active };
-
-        // 7. Follower nur für eligible Kandidaten anreichern (Score-Tie-Break).
-        for candidate in &mut eligible {
-            if let Some(total) = self
-                .followers
-                .follower_total(Some(&candidate.twitch_user_id), &candidate.twitch_login)
-                .await
-            {
-                candidate.stream.followers_total = total;
-            }
-        }
 
         tracing::info!(
             streamer = streamer_label,
             viewers = viewer_count,
             duration_sec = stream_duration_sec,
-            online_partners = online_count,
-            eligible_partners = eligible.len(),
-            filtered_out,
+            online_partners = assembled.online_count,
+            eligible_partners = assembled.eligible.len(),
+            filtered_out = assembled.filtered_out,
             "Auto-Raid-Pipeline gestartet"
         );
+        let eligible = assembled.eligible;
 
         // 8. Pipeline (Auswahl → Readiness → Raid → Pending).
         let request = AutoRaidRequest {
@@ -280,6 +319,194 @@ impl OfflineRaidHandler {
                 tracing::error!(streamer = streamer_label, %error, "Auto-Raid fehlgeschlagen");
             }
         }
+    }
+
+    /// Manueller Raid (`!raid`, Python `start_manual_raid`): Quelle muss live
+    /// und Deadlock-eligible sein; danach dieselbe Pipeline wie der Auto-Raid
+    /// mit `reason=manual_chat_command` + Suppression-Mark nach Erfolg.
+    /// Die Statuswerte sind der Vertrag des Chat-Commands.
+    pub async fn start_manual_raid(
+        &self,
+        broadcaster_id: &str,
+        broadcaster_login: &str,
+    ) -> ManualRaidResponse {
+        let login = broadcaster_login.trim().to_lowercase();
+        let now = Utc::now();
+
+        // 1. Quell-Zustand: Helix hat Vorrang (Python `api_live`/`api_offline`),
+        //    DB-Restzustand nur als Fallback bei Helix-Fehler.
+        let db_state = self
+            .live_state
+            .offline_source_state(broadcaster_id)
+            .await
+            .ok()
+            .flatten();
+        let source = match self
+            .helix
+            .get_streams_by_logins(std::slice::from_ref(&login), None)
+            .await
+        {
+            Ok(streams) => match streams
+                .into_iter()
+                .find(|s| s.user_login.trim().to_lowercase() == login)
+            {
+                Some(stream) => Some(ManualSource::from_stream(&stream, db_state.as_ref())),
+                None => {
+                    return ManualRaidResponse::status_with_reason(
+                        "source_not_live",
+                        "api_offline",
+                    );
+                }
+            },
+            Err(error) => {
+                tracing::debug!(%error, streamer = %login, "Manual-Raid: Helix-Refresh fehlgeschlagen — DB-Fallback");
+                db_state.as_ref().and_then(ManualSource::from_db)
+            }
+        };
+        let Some(source) = source else {
+            return ManualRaidResponse::status_with_reason("source_not_live", "db");
+        };
+
+        // 2. Deadlock-Eligibility der Quelle.
+        let eval = DeadlockEvalInput {
+            game_name: &source.last_game,
+            had_deadlock_session: source.had_deadlock_session,
+            last_deadlock_seen_at: source.last_deadlock_seen_at.as_deref(),
+        };
+        if classify_eligibility(&eval, now, &self.target_game_lower).is_none() {
+            let reason = db_state
+                .as_ref()
+                .map(|s| source_skip_reason(s, &self.target_game_lower))
+                .unwrap_or("last_game_not_eligible");
+            tracing::info!(
+                streamer = %login,
+                last_game = %source.last_game,
+                reason,
+                "Manual-Raid übersprungen: Quelle nicht Deadlock-eligible"
+            );
+            return ManualRaidResponse::status_with_reason("source_not_eligible", reason);
+        }
+
+        // 3. Kandidaten + Pipeline (wie Auto-Raid).
+        let Some(assembled) = self.assemble_eligible_partners(broadcaster_id, now).await else {
+            return ManualRaidResponse::error("unavailable", "candidate_assembly_failed");
+        };
+        tracing::info!(
+            streamer = %login,
+            viewers = source.viewer_count,
+            duration_sec = source.stream_duration_sec(now),
+            online_partners = assembled.online_count,
+            eligible_partners = assembled.eligible.len(),
+            "Manual-Raid-Pipeline gestartet"
+        );
+        let request = AutoRaidRequest {
+            broadcaster_id: broadcaster_id.to_string(),
+            broadcaster_login: login.clone(),
+            viewer_count: source.viewer_count,
+            stream_duration_sec: source.stream_duration_sec(now),
+            partners: assembled.eligible,
+            category_id: self.resolve_category_id().await,
+            offline_trigger_ts: None,
+            reason: "manual_chat_command".to_string(),
+        };
+        match self.pipeline.run(&request).await {
+            AutoRaidPipelineOutcome::Started { target_login, .. } => {
+                // Python `set_manual_suppression=True`: 180 s kein Auto-Raid.
+                self.suppression
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .mark(broadcaster_id, 180.0, None);
+                tracing::info!(from = %login, to = %target_login, "✅ Manual-Raid gestartet");
+                ManualRaidResponse::started(target_login)
+            }
+            AutoRaidPipelineOutcome::NoTarget => ManualRaidResponse::status("no_target"),
+            AutoRaidPipelineOutcome::Blocked { error } => {
+                ManualRaidResponse::error("blocked", &error)
+            }
+            AutoRaidPipelineOutcome::Failed { error } => {
+                ManualRaidResponse::error("raid_failed", &error)
+            }
+        }
+    }
+
+    /// Schritte 5–7 des Raid-Triggers: Roster → Helix-Streams → Session-Flags
+    /// → Eligibility-Partition (aktiv vor kürzlich) → Follower-Anreicherung.
+    /// `None` bei I/O-Fehlern (bereits geloggt).
+    async fn assemble_eligible_partners(
+        &self,
+        broadcaster_id: &str,
+        now: chrono::DateTime<Utc>,
+    ) -> Option<AssembledPartners> {
+        let roster = match self.roster.load_roster(broadcaster_id).await {
+            Ok(roster) => roster,
+            Err(error) => {
+                tracing::error!(%error, broadcaster_id, "Raid: Roster nicht ladbar");
+                return None;
+            }
+        };
+        let logins: Vec<String> = roster.iter().map(|p| p.twitch_login.clone()).collect();
+        let streams_by_login: HashMap<String, StreamData> =
+            match self.helix.get_streams_by_logins(&logins, None).await {
+                Ok(streams) => streams
+                    .iter()
+                    .map(|s| (s.user_login.trim().to_lowercase(), to_stream_data(s)))
+                    .collect(),
+                Err(error) => {
+                    tracing::error!(%error, broadcaster_id, "Raid: Helix-Streams nicht ladbar");
+                    return None;
+                }
+            };
+        let flags = self
+            .live_state
+            .source_states_by_logins(&logins)
+            .await
+            .unwrap_or_else(|error| {
+                tracing::debug!(%error, "Raid: Partner-Live-State nicht ladbar");
+                HashMap::new()
+            });
+
+        let online = build_online_candidates(&roster, &streams_by_login);
+        let online_count = online.len();
+
+        // Deadlock-Eligibility je Kandidat (aktiv vor kürzlich) — Partition
+        // wie `filter_eligible`, hier inline weil die Session-Flags aus der
+        // separaten Map kommen (Borrow ausserhalb des Kandidaten).
+        let mut active = Vec::new();
+        let mut recent = Vec::new();
+        let mut filtered_out = 0usize;
+        for candidate in online {
+            let flag = flags.get(&candidate.twitch_login);
+            let input = DeadlockEvalInput {
+                game_name: candidate.stream.game_name.as_deref().unwrap_or(""),
+                had_deadlock_session: flag
+                    .map(|f| f.had_deadlock_in_session.unwrap_or(0) != 0)
+                    .unwrap_or(false),
+                last_deadlock_seen_at: flag.and_then(|f| f.last_deadlock_seen_at.as_deref()),
+            };
+            match classify_eligibility(&input, now, &self.target_game_lower) {
+                Some(EligibilityBucket::Active) => active.push(candidate),
+                Some(EligibilityBucket::Recent) => recent.push(candidate),
+                None => filtered_out += 1,
+            }
+        }
+        let mut eligible = if active.is_empty() { recent } else { active };
+
+        // Follower nur für eligible Kandidaten anreichern (Score-Tie-Break).
+        for candidate in &mut eligible {
+            if let Some(total) = self
+                .followers
+                .follower_total(Some(&candidate.twitch_user_id), &candidate.twitch_login)
+                .await
+            {
+                candidate.stream.followers_total = total;
+            }
+        }
+
+        Some(AssembledPartners {
+            eligible,
+            online_count,
+            filtered_out,
+        })
     }
 
     /// Kategorie-ID des Ziel-Spiels, lazy aufgelöst und gecacht.
@@ -322,6 +549,7 @@ mod tests {
     #[test]
     fn source_skip_reason_unterscheidet_just_chatting_faelle() {
         let base = OfflineSourceState {
+            is_live: Some(0),
             last_game: Some("Just Chatting".to_string()),
             had_deadlock_in_session: Some(1),
             last_deadlock_seen_at: None,

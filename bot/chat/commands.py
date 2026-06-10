@@ -1,5 +1,8 @@
 import logging
+import os
 import secrets
+
+import aiohttp
 
 from ..storage import (
     load_active_partner,
@@ -699,15 +702,48 @@ if TWITCHIO_AVAILABLE:
                 await ctx.send(f"@{ctx.author.name} Twitch-Bot nicht verfügbar.")
                 return
 
-            try:
-                result = await self._raid_bot.start_manual_raid(
-                    broadcaster_id=str(twitch_user_id),
-                    broadcaster_login=str(twitch_login).lower(),
-                )
-            except Exception as exc:
-                log.exception("Manual raid failed for %s", twitch_login)
-                await ctx.send(f"@{ctx.author.name} Raid fehlgeschlagen: {exc}")
-                return
+            # Rust-Cutover (Phase 6h): manueller Raid läuft über die interne
+            # API des Rust-tb-bot (eine Pipeline/Suppression für Auto+Manual).
+            # Fallback auf den lokalen Python-Pfad nur, wenn der Endpoint
+            # nicht erreichbar ist (z. B. Rollback-Fall).
+            result = None
+            rust_token = (os.getenv("TWITCH_INTERNAL_API_TOKEN") or "").strip()
+            if rust_token:
+                try:
+                    async with self._raid_bot.session.post(
+                        "http://127.0.0.1:8776/internal/twitch/v1/raid/manual",
+                        headers={"X-Internal-Token": rust_token},
+                        json={
+                            "broadcasterId": str(twitch_user_id),
+                            "broadcasterLogin": str(twitch_login).lower(),
+                        },
+                        timeout=aiohttp.ClientTimeout(total=30),
+                    ) as resp:
+                        if resp.status == 200:
+                            result = await resp.json()
+                        else:
+                            log.warning(
+                                "Manual raid via Rust-API HTTP %s für %s — Fallback auf lokalen Pfad",
+                                resp.status,
+                                twitch_login,
+                            )
+                except Exception:
+                    log.warning(
+                        "Manual raid via Rust-API nicht erreichbar für %s — Fallback auf lokalen Pfad",
+                        twitch_login,
+                        exc_info=True,
+                    )
+
+            if result is None:
+                try:
+                    result = await self._raid_bot.start_manual_raid(
+                        broadcaster_id=str(twitch_user_id),
+                        broadcaster_login=str(twitch_login).lower(),
+                    )
+                except Exception as exc:
+                    log.exception("Manual raid failed for %s", twitch_login)
+                    await ctx.send(f"@{ctx.author.name} Raid fehlgeschlagen: {exc}")
+                    return
 
             status = str(result.get("status") or "")
             if status == "started":

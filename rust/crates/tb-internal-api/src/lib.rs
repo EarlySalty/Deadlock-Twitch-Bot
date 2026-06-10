@@ -18,6 +18,7 @@ use tb_monitoring::EventSubDispatcher;
 use tb_transport_twitch::HelixClient;
 
 pub use handlers::eventsub::EventSubDispatcherExt;
+pub use handlers::raid::{ManualRaidExt, ManualRaidPort};
 
 /// Baut den axum-Router für alle internen Endpoints.
 ///
@@ -30,8 +31,9 @@ pub fn build_internal_router(
     token: String,
     helix: Arc<Option<HelixClient>>,
     dispatcher: Option<Arc<EventSubDispatcher>>,
+    manual_raid: Option<Arc<dyn handlers::raid::ManualRaidPort>>,
 ) -> Router {
-    use handlers::{eventsub, global_ban, healthz, streamers};
+    use handlers::{eventsub, global_ban, healthz, raid, streamers};
 
     let base = INTERNAL_API_BASE_PATH; // "/internal/twitch/v1"
 
@@ -40,6 +42,10 @@ pub fn build_internal_router(
         .route(
             &format!("{base}/eventsub/dispatch"),
             post(eventsub::dispatch_handler),
+        )
+        .route(
+            &format!("{base}/raid/manual"),
+            post(raid::manual_raid_handler),
         )
         .route(&format!("{base}/globalban"), get(global_ban::list_handler))
         .route(
@@ -80,6 +86,7 @@ pub fn build_internal_router(
         .with_state(pool)
         .layer(Extension(helix))
         .layer(Extension(EventSubDispatcherExt(dispatcher)))
+        .layer(Extension(handlers::raid::ManualRaidExt(manual_raid)))
         .layer(Extension(ExpectedToken(token.clone())))
         .layer(middleware::from_fn_with_state(token, internal_auth))
         .layer(middleware::from_fn(loopback_only))

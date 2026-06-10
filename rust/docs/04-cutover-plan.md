@@ -110,10 +110,12 @@ Prod-Daten — keine Formelabweichungen (Details im Commit „Score-Cross-Check"
 6. **Partner-Rekrutierung + Invite-Refresh** — Invite-Refresh läuft weiter
    (eigener Task im Worker, nicht am Poll-Tick); Rekrutierungs-Anhängsel des
    Poll-Ticks pausiert bis Outreach-Phase (6g).
-7. **Manueller `!raid`-Chat-Command** — läuft weiter über den Python-Chat
-   (eigener Code-Pfad + dieselben Token-Blobs; Advisory-Lock macht den
-   Token-Refresh multi-process-sicher). Sein Arrival-Tracking degradiert, weil
-   `channel.raid`-Events jetzt bei Rust landen — volle Ablösung in 6h (Commands).
+7. **Manueller `!raid`-Chat-Command** — ✅ GELÖST (6h, 10.6. nachmittags):
+   der Python-Chat-Command ist ein dünner Proxy auf
+   `POST /internal/twitch/v1/raid/manual` (Rust) — eine Pipeline, ein
+   Pending-Store, eine Suppression für Auto- und Manual-Raids. Fallback auf
+   den lokalen Python-Pfad nur, wenn der Endpoint nicht erreichbar ist
+   (Rollback-Fall).
 
 ## Schritt 5 — Chat (IRC + Moderation + Promo)
 

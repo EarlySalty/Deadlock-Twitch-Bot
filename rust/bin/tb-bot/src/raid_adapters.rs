@@ -130,6 +130,29 @@ impl ArrivalReadiness for ManagerArrivalReadiness {
     }
 }
 
+/// Adapter: interner API-Endpoint `POST /raid/manual` → Raid-Handler.
+pub struct ManualRaidAdapter {
+    pub handler: Arc<crate::auto_raid::OfflineRaidHandler>,
+}
+
+#[async_trait::async_trait]
+impl tb_internal_api::ManualRaidPort for ManualRaidAdapter {
+    async fn start_manual_raid(
+        &self,
+        broadcaster_id: &str,
+        broadcaster_login: &str,
+    ) -> serde_json::Value {
+        let response = self
+            .handler
+            .start_manual_raid(broadcaster_id, broadcaster_login)
+            .await;
+        serde_json::to_value(&response).unwrap_or_else(|error| {
+            tracing::error!(%error, "Manual-Raid-Antwort nicht serialisierbar");
+            serde_json::json!({"status": "raid_failed", "error": "serialization"})
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

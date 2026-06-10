@@ -62,6 +62,7 @@ use eventsub_hooks::{BlacklistRaidGuard, RaidArrivalCoordinator, RaidEventSubHoo
 use offline_side_effects::OfflineSideEffects;
 use raid_adapters::{
     HelixFallbackStreams, HelixRaidApi, HelixTokenClient, ManagerArrivalReadiness,
+    ManualRaidAdapter,
 };
 use raid_arrival_wiring::RaidArrivalSinkImpl;
 use score_refresh::ScoreRefreshResolver;
@@ -186,6 +187,7 @@ async fn main() {
     // Raid-Verdrahtung: mit Manager + Helix + Krypto-Key sind alle vier
     // Raid-Kopplungen echt (Auto-Raid, Arrival, Score-Refresh, Blacklist-Guard).
     let suppression = Arc::new(std::sync::Mutex::new(ManualRaidSuppression::new()));
+    let mut manual_raid_port: Option<Arc<dyn tb_internal_api::ManualRaidPort>> = None;
     let eventsub_hooks: Arc<dyn EventSubHooks> = match (
         &subscription_manager,
         helix.as_ref().clone(),
@@ -253,6 +255,9 @@ async fn main() {
                 token_provider,
                 helix_client,
             );
+            manual_raid_port = Some(Arc::new(ManualRaidAdapter {
+                handler: offline.clone(),
+            }));
             tracing::info!(
                 "Raid-EventSub-Hooks aktiv (Auto-Raid, Arrival, Score-Refresh, Blacklist-Guard)"
             );
@@ -394,7 +399,7 @@ async fn main() {
 
     let addr = SocketAddr::from(([127, 0, 0, 1], port));
     let token = settings.internal_api.token.clone();
-    let app = build_internal_router(pool, token, helix, Some(dispatcher));
+    let app = build_internal_router(pool, token, helix, Some(dispatcher), manual_raid_port);
 
     tracing::info!("tb-bot lauscht auf {addr}");
     let listener = tokio::net::TcpListener::bind(addr)
