@@ -426,7 +426,9 @@ impl TelemetryStore {
     ) -> Result<(), sqlx::Error> {
         let title = str_field(event, &["title"]);
         let game_name = str_field(event, &["category_name", "game_name"]);
-        let language = str_field(event, &["broadcaster_language"]);
+        // EventSub channel.update liefert das Feld `language`;
+        // `broadcaster_language` bleibt als Fallback für alte Payloads.
+        let language = str_field(event, &["language", "broadcaster_language"]);
         let mut tx = self.pool.begin().await?;
         sqlx::query(
             "INSERT INTO twitch_channel_updates (twitch_user_id, title, game_name, language, recorded_at)

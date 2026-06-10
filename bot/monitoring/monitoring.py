@@ -1219,18 +1219,17 @@ class TwitchMonitoringMixin(_EventSubMixin, _ExpSessionsMixin, _SessionsMixin, _
         streams_by_login: dict[str, dict] = {}
 
         if logins:
-            for language in language_filters:
-                try:
-                    streams = await self.api.get_streams_by_logins(logins, language=language)
-                except TwitchClientConfigError:
-                    return
-                except Exception:
-                    label = language or "any"
-                    log.exception(
-                        "Konnte Streams für tracked Logins nicht abrufen (language=%s)",
-                        label,
-                    )
-                    continue
+            # Bewusst OHNE Sprachfilter: die tracked Liste ist kuratiert, Partner
+            # mit nicht-deutscher Kanal-Sprache fielen sonst komplett aus
+            # Sessions/last_game/Postings raus. Der Sprachfilter gilt nur fürs
+            # Kategorie-Sampling (Discovery) unten.
+            try:
+                streams = await self.api.get_streams_by_logins(logins)
+            except TwitchClientConfigError:
+                return
+            except Exception:
+                log.exception("Konnte Streams für tracked Logins nicht abrufen")
+            else:
                 for stream in streams:
                     login = (stream.get("user_login") or "").lower()
                     if login:

@@ -170,30 +170,23 @@ impl PollEngine {
             .filter(|l| !l.is_empty())
             .collect();
 
-        // Streams der getrackten Logins, pro Sprachfilter gemerged.
+        // Streams der getrackten Logins — bewusst OHNE Sprachfilter: die Liste
+        // ist kuratiert, Partner mit nicht-deutscher Kanal-Sprache fielen sonst
+        // komplett aus Sessions/last_game/Postings raus. Der Sprachfilter gilt
+        // nur fürs Kategorie-Sampling (Discovery) unten.
         let mut streams_by_login: HashMap<String, StreamSnapshot> = HashMap::new();
         if !logins.is_empty() {
-            for language in &self.languages {
-                match self
-                    .source
-                    .streams_by_logins(&logins, language.as_deref())
-                    .await
-                {
-                    Ok(streams) => {
-                        for stream in streams {
-                            let login = stream.user_login.to_lowercase();
-                            if !login.is_empty() {
-                                streams_by_login.insert(login, stream);
-                            }
+            match self.source.streams_by_logins(&logins, None).await {
+                Ok(streams) => {
+                    for stream in streams {
+                        let login = stream.user_login.to_lowercase();
+                        if !login.is_empty() {
+                            streams_by_login.insert(login, stream);
                         }
                     }
-                    Err(error) => {
-                        tracing::error!(
-                            %error,
-                            language = language.as_deref().unwrap_or("any"),
-                            "Konnte Streams für tracked Logins nicht abrufen"
-                        );
-                    }
+                }
+                Err(error) => {
+                    tracing::error!(%error, "Konnte Streams für tracked Logins nicht abrufen");
                 }
             }
         }

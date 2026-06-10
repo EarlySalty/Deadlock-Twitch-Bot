@@ -1830,7 +1830,11 @@ class TwitchAnalyticsMixin:
         """Speichert eine channel.update Notification (Titel/Game-Änderung) in der DB."""
         title = (event.get("title") or "").strip() or None
         game_name = (event.get("category_name") or event.get("game_name") or "").strip() or None
-        language = (event.get("broadcaster_language") or "").strip() or None
+        # EventSub channel.update liefert das Feld `language`;
+        # `broadcaster_language` bleibt als Fallback für alte Payloads.
+        language = (
+            event.get("language") or event.get("broadcaster_language") or ""
+        ).strip() or None
         spawn_bg_task = getattr(self, "_spawn_bg_task", None)
         async def _persist_update() -> None:
             with storage.transaction() as c:

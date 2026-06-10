@@ -43,7 +43,7 @@ Abgrenzung: `monitoring/` **erkennt** und **persistiert** — die fachliche Ausw
 
 **Polling-Tick (alle 15 s):** `poll_streams` (discord.py `tasks.loop`) → `_tick()`:
 1. `_load_tracked_streamers()` lädt alle zu überwachenden Kanäle.
-2. Helix liefert Live-Streams (getrackt per Logins + Deadlock-Kategorie-Sample bis `TWITCH_CATEGORY_SAMPLE_LIMIT`); `_stream_is_in_target_category` + `_language_filter_values` filtern.
+2. Helix liefert Live-Streams: getrackte Logins **ohne Sprachfilter** (kuratierte Liste — Partner mit nicht-deutscher Kanal-Sprache würden sonst nie erfasst, s. trippymelo-Fall) + Deadlock-Kategorie-Sample bis `TWITCH_CATEGORY_SAMPLE_LIMIT` mit `_language_filter_values`-Filter; `_stream_is_in_target_category` filtert die Kategorie.
 3. `_load_live_state_snapshot` + `_persist_live_state_rows` schreiben den neuen Live-State (Batch).
 4. `_process_postings` postet Go-Live für frisch live gegangene Streamer; `_log_stats` schreibt Stats-Samples.
 5. `_ensure_stream_session`/`_record_session_sample` pflegen die Session; bei Offline `_finalize_stream_session`.
