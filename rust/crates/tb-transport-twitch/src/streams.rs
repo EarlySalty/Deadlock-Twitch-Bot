@@ -1,6 +1,6 @@
 //! Helix-Endpoints rund um Streams und Kategorien (für das Monitoring):
-//! `/streams` (Login-Batches + Kategorie-Pagination), `/search/categories`
-//! und `/channels/followers`. Semantik wie der Python-`TwitchAPI`-Wrapper.
+//! `/streams` (Login-Batches + Kategorie-Pagination), `/search/categories`,
+//! `/channels` und `/channels/followers`. Semantik wie der Python-`TwitchAPI`-Wrapper.
 
 use serde::Deserialize;
 
@@ -69,6 +69,25 @@ struct FollowersResponse {
     total: Option<i64>,
 }
 
+/// Kanal-Metadaten aus Helix `/channels` (auch offline verfügbar).
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct HelixChannelInfo {
+    #[serde(default)]
+    pub broadcaster_id: String,
+    #[serde(default)]
+    pub title: String,
+    #[serde(default)]
+    pub game_name: String,
+    #[serde(default)]
+    pub broadcaster_language: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct ChannelsResponse {
+    #[serde(default)]
+    data: Vec<HelixChannelInfo>,
+}
+
 /// Hartes Limit der Kategorie-Pagination (Python: `min(limit, 1200)`).
 const CATEGORY_HARD_CAP: usize = 1200;
 
@@ -92,6 +111,23 @@ impl HelixClient {
             out.extend(body.data);
         }
         Ok(out)
+    }
+
+    /// Kanal-Metadaten (Titel/Kategorie) eines Broadcasters über `/channels`
+    /// — liefert im Gegensatz zu `/streams` beim Go-Live sofort (kein
+    /// Propagations-Lag) und unabhängig von der Kanal-Sprache.
+    pub async fn get_channel_information(
+        &self,
+        broadcaster_id: &str,
+    ) -> Result<Option<HelixChannelInfo>, HelixError> {
+        let broadcaster_id = broadcaster_id.trim();
+        if broadcaster_id.is_empty() {
+            return Ok(None);
+        }
+        let params = [("broadcaster_id", broadcaster_id)];
+        let resp = self.get("/channels").await?.query(&params).send().await?;
+        let body: ChannelsResponse = resp.json().await?;
+        Ok(body.data.into_iter().next())
     }
 
     /// Bis zu `limit` Live-Streams einer Kategorie (Cursor-Pagination à 100).

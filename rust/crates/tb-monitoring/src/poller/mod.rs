@@ -14,5 +14,5 @@ pub use hooks::{
     TickReport,
 };
 pub use settings::{PollIntervalStore, POLL_INTERVAL_DEFAULT_SECONDS};
-pub use source::{SourceError, StreamSource};
+pub use source::{ChannelInfo, ChannelInfoSource, SourceError, StreamSource};
 pub use tracked::{TrackedEntry, TrackedStore};

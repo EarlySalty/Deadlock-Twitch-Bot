@@ -25,3 +25,20 @@ pub trait StreamSource: Send + Sync {
     /// game_id der Ziel-Kategorie (`/search/categories`).
     async fn category_id(&self, game_name: &str) -> Result<Option<String>, SourceError>;
 }
+
+/// Kanal-Metadaten für das Go-Live-Enrichment (Helix `/channels`).
+#[derive(Debug, Clone, Default)]
+pub struct ChannelInfo {
+    pub title: Option<String>,
+    pub game_name: Option<String>,
+}
+
+/// Port für den gezielten Kanal-Lookup beim stream.online-Event — macht die
+/// Kategorie event-getrieben statt poll-abhängig (wichtig für Partner, deren
+/// Kanal-Sprache nicht im Poll-Sprachfilter liegt, und für Streams, die
+/// kürzer als ein Poll-Intervall sind).
+#[async_trait::async_trait]
+pub trait ChannelInfoSource: Send + Sync {
+    async fn channel_info(&self, broadcaster_id: &str)
+        -> Result<Option<ChannelInfo>, SourceError>;
+}

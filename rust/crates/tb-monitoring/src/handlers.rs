@@ -16,6 +16,7 @@ use crate::dispatch::EventSubHooks;
 use crate::guard::{GuardKind, GuardStore};
 use crate::inbox_runtime::{ClockFn, HandlerError, InboxHandler};
 use crate::live_state::LiveStateStore;
+use crate::poller::source::ChannelInfoSource;
 use crate::sessions::SessionTracker;
 use crate::stream::iso_seconds;
 use crate::telemetry::TelemetryStore;
@@ -70,6 +71,7 @@ pub struct MonitoringEventHandler {
     tracker: Arc<SessionTracker>,
     telemetry: TelemetryStore,
     hooks: Arc<dyn EventSubHooks>,
+    channel_info: Option<Arc<dyn ChannelInfoSource>>,
     clock: ClockFn,
 }
 
@@ -80,6 +82,7 @@ impl MonitoringEventHandler {
         tracker: Arc<SessionTracker>,
         telemetry: TelemetryStore,
         hooks: Arc<dyn EventSubHooks>,
+        channel_info: Option<Arc<dyn ChannelInfoSource>>,
         clock: ClockFn,
     ) -> Self {
         Self {
@@ -88,6 +91,7 @@ impl MonitoringEventHandler {
             tracker,
             telemetry,
             hooks,
+            channel_info,
             clock,
         }
     }
@@ -129,6 +133,50 @@ impl MonitoringEventHandler {
             )
             .await
             .map_err(|e| Box::new(e) as HandlerError)?;
+
+        // Go-Live-Enrichment: Kategorie/Titel sofort per gezieltem
+        // /channels-Lookup setzen (sprachfilter-frei, kein Helix-Lag wie bei
+        // /streams). Best-Effort: Fehler loggen statt failen, das Polling
+        // füllt die Felder sonst beim nächsten Tick nach.
+        if let Some(source) = &self.channel_info {
+            run_business_effect_once(
+                &self.guard,
+                work.message_id.as_deref(),
+                "stream_online_channel_info",
+                epoch,
+                || async {
+                    match source.channel_info(&work.broadcaster_id).await {
+                        Ok(Some(info)) => {
+                            if let Err(error) = self
+                                .live_state
+                                .apply_channel_info(
+                                    &work.broadcaster_id,
+                                    info.title.as_deref(),
+                                    info.game_name.as_deref(),
+                                )
+                                .await
+                            {
+                                tracing::warn!(
+                                    %error,
+                                    broadcaster_id = %work.broadcaster_id,
+                                    "Go-Live-Enrichment: Live-State-Update fehlgeschlagen"
+                                );
+                            }
+                        }
+                        Ok(None) => {}
+                        Err(error) => {
+                            tracing::warn!(
+                                %error,
+                                broadcaster_id = %work.broadcaster_id,
+                                "Go-Live-Enrichment: Kanal-Lookup fehlgeschlagen"
+                            );
+                        }
+                    }
+                    Ok(())
+                },
+            )
+            .await?;
+        }
 
         let executed = run_business_effect_once(
             &self.guard,

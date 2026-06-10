@@ -4,7 +4,7 @@
 use std::sync::Arc;
 
 use serde_json::Value;
-use tb_monitoring::poller::source::{SourceError, StreamSource};
+use tb_monitoring::poller::source::{ChannelInfo, ChannelInfoSource, SourceError, StreamSource};
 use tb_monitoring::sessions::tracker::FollowerCountSource;
 use tb_monitoring::{
     AnnouncementTransport, EventSubHooks, RemoteSubscription, StreamSnapshot, SubscriptionManager,
@@ -133,6 +133,20 @@ impl StreamSource for HelixStreamSource {
 
     async fn category_id(&self, game_name: &str) -> Result<Option<String>, SourceError> {
         Ok(self.helix.search_category_id(game_name).await?)
+    }
+}
+
+#[async_trait::async_trait]
+impl ChannelInfoSource for HelixStreamSource {
+    async fn channel_info(
+        &self,
+        broadcaster_id: &str,
+    ) -> Result<Option<ChannelInfo>, SourceError> {
+        let info = self.helix.get_channel_information(broadcaster_id).await?;
+        Ok(info.map(|i| ChannelInfo {
+            title: Some(i.title).filter(|t| !t.trim().is_empty()),
+            game_name: Some(i.game_name).filter(|g| !g.trim().is_empty()),
+        }))
     }
 }
 

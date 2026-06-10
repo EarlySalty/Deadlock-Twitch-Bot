@@ -370,6 +370,32 @@ impl LiveStateStore {
         Ok(())
     }
 
+    /// Go-Live-Enrichment: Titel/Kategorie aus dem gezielten `/channels`-Lookup
+    /// in den Live-State übernehmen (COALESCE-Semantik wie channel.update,
+    /// aber ohne Protokoll-Insert). Greift nur solange der Kanal live ist.
+    pub async fn apply_channel_info(
+        &self,
+        broadcaster_user_id: &str,
+        title: Option<&str>,
+        game_name: Option<&str>,
+    ) -> Result<(), sqlx::Error> {
+        if title.is_none() && game_name.is_none() {
+            return Ok(());
+        }
+        sqlx::query(
+            "UPDATE twitch_live_state
+                SET last_title = COALESCE($1, last_title),
+                    last_game  = COALESCE($2, last_game)
+              WHERE twitch_user_id = $3 AND is_live = 1",
+        )
+        .bind(title)
+        .bind(game_name)
+        .bind(broadcaster_user_id)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
     /// EventSub stream.offline: Live-State sofort auf offline setzen.
     pub async fn apply_stream_offline(
         &self,

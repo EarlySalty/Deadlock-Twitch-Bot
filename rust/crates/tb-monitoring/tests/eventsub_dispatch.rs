@@ -6,6 +6,7 @@ use std::sync::Arc;
 
 use chrono::{Duration, Utc};
 use sqlx::PgPool;
+use tb_monitoring::poller::source::{ChannelInfo, ChannelInfoSource, SourceError};
 use tb_monitoring::sessions::store::SessionStore;
 use tb_monitoring::{
     epoch_clock, EventSubDispatcher, EventSubHooks, ExpSessionStore, ExpSessionTracker, GuardStore,
@@ -54,9 +55,33 @@ impl EventSubHooks for RecordingHooks {
     }
 }
 
+/// Statische Kanal-Metadaten für das Go-Live-Enrichment im Test.
+struct StaticChannelInfo;
+
+#[async_trait::async_trait]
+impl ChannelInfoSource for StaticChannelInfo {
+    async fn channel_info(
+        &self,
+        _broadcaster_id: &str,
+    ) -> Result<Option<ChannelInfo>, SourceError> {
+        Ok(Some(ChannelInfo {
+            title: Some("Ranked Grind".to_string()),
+            game_name: Some("Deadlock".to_string()),
+        }))
+    }
+}
+
 fn build_stack(
     pool: &PgPool,
     hooks: Arc<RecordingHooks>,
+) -> (EventSubDispatcher, InboxRuntimeHandle, ProcessingInboxStore) {
+    build_stack_with(pool, hooks, None)
+}
+
+fn build_stack_with(
+    pool: &PgPool,
+    hooks: Arc<RecordingHooks>,
+    channel_info: Option<Arc<dyn ChannelInfoSource>>,
 ) -> (EventSubDispatcher, InboxRuntimeHandle, ProcessingInboxStore) {
     let guard = GuardStore::new(pool.clone());
     let telemetry = TelemetryStore::new(pool.clone());
@@ -74,6 +99,7 @@ fn build_stack(
         tracker,
         telemetry.clone(),
         hooks.clone(),
+        channel_info,
         Arc::new(epoch_clock),
     ));
     let store = ProcessingInboxStore::new(pool.clone());
@@ -153,6 +179,51 @@ async fn stream_online_dispatch_dedup_und_verarbeitung() {
     );
     assert_eq!(hooks.went_live.load(Ordering::SeqCst), 1);
     assert_eq!(hooks.score_refresh.load(Ordering::SeqCst), 1);
+}
+
+/// Go-Live-Enrichment: stream.online holt Titel/Kategorie über den
+/// ChannelInfoSource-Port und schreibt sie sofort in den Live-State —
+/// last_game ist damit nicht mehr poll-abhängig (Auto-Raid-Grundlage).
+#[tokio::test]
+async fn stream_online_enrichment_setzt_titel_und_kategorie() {
+    let pool = pool_or_skip!("t4d_online_enrich");
+    let hooks = Arc::new(RecordingHooks::default());
+    let (dispatcher, runtime, store) = build_stack_with(
+        &pool,
+        hooks.clone(),
+        Some(Arc::new(StaticChannelInfo) as Arc<dyn ChannelInfoSource>),
+    );
+
+    let body = serde_json::json!({
+        "subscription": {"type": "stream.online"},
+        "event": {
+            "broadcaster_user_id": "99",
+            "broadcaster_user_login": "trippy",
+            "id": "s-99",
+            "started_at": "2026-06-10T12:00:00Z"
+        }
+    });
+    let outcome = dispatcher
+        .dispatch("stream.online", Some("m-enrich-1"), &body)
+        .await
+        .unwrap();
+    assert!(outcome.ok && outcome.queued);
+    assert!(wait_until_empty(&store).await, "Inbox nicht abgearbeitet");
+    runtime.shutdown().await;
+
+    #[derive(sqlx::FromRow)]
+    struct StateRow {
+        last_title: Option<String>,
+        last_game: Option<String>,
+    }
+    let state: StateRow = sqlx::query_as(
+        "SELECT last_title, last_game FROM twitch_live_state WHERE twitch_user_id = '99'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(state.last_title.as_deref(), Some("Ranked Grind"));
+    assert_eq!(state.last_game.as_deref(), Some("Deadlock"));
 }
 
 #[tokio::test]

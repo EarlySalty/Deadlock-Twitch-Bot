@@ -37,7 +37,7 @@ use std::sync::Arc;
 use tb_config::Settings;
 use tb_crypto::FieldCipher;
 use tb_internal_api::build_internal_router;
-use tb_monitoring::poller::{PollHooks, StreamSource};
+use tb_monitoring::poller::{ChannelInfoSource, PollHooks, StreamSource};
 use tb_monitoring::sessions::store::SessionStore;
 use tb_monitoring::sessions::tracker::FollowerCountSource;
 use tb_monitoring::{
@@ -278,12 +278,19 @@ async fn main() {
         }
         _ => Arc::new(NoopEventSubHooks),
     };
+    // Go-Live-Enrichment: gezielter /channels-Lookup beim stream.online-Event
+    // (sprachfilter-frei) — nur mit HelixClient verfügbar.
+    let channel_info_source: Option<Arc<dyn ChannelInfoSource>> =
+        helix.as_ref().clone().map(|client| {
+            Arc::new(HelixStreamSource { helix: client }) as Arc<dyn ChannelInfoSource>
+        });
     let handler = Arc::new(MonitoringEventHandler::new(
         guard.clone(),
         live_state.clone(),
         tracker.clone(),
         telemetry.clone(),
         eventsub_hooks.clone(),
+        channel_info_source,
         Arc::new(tb_monitoring::epoch_clock),
     ));
     let inbox = InboxRuntime::new(
