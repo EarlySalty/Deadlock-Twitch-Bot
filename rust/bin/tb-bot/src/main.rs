@@ -21,6 +21,7 @@
 //!   PORT                          — optional, default 8776
 
 mod confirm_resolver;
+mod raid_arrival_wiring;
 mod score_refresh;
 mod wiring;
 
