@@ -48,3 +48,4 @@ data/highlight_clipper/state.json
 data/stream_coaching_audits/
 *.dem
 *.json
+rust/bin/tb-bot/tb-bot
