@@ -60,42 +60,60 @@ bleiben.
 - **Rollback:** Python-Monitoring reaktivieren, `TB_MONITORING_POLL_ENABLED=0` + Restart —
   **Wartungsfenster nötig.**
 
-### Flip-Checkliste (Wartungsfenster)
+### Flip-Checkliste (Wartungsfenster) — Stand 2026-06-10: vorbereitet
 
-1. **Env für `tb-bot` setzen:** `TWITCH_CLIENT_ID/SECRET`, `TWITCH_TARGET_GAME_NAME`,
-   `TWITCH_WEBHOOK_SECRET` + `TWITCH_EVENTSUB_CALLBACK_URL` (Subscription-Verwaltung),
-   `TWITCH_NOTIFY_CHANNEL_ID` + `MASTER_BROKER_*` (Announcements), optional
-   `TWITCH_ALERT_MENTION`, `TWITCH_DISCORD_REF_CODE`, `TWITCH_LANGUAGE_FILTERS`.
-2. Python-Monitoring deaktivieren (Poll-Loop + EventSub-Verarbeitung im Bot-Prozess),
-   Python-Prozess für Chat/Raid/Social weiterlaufen lassen.
-3. Port 8776: Python-internal-api stoppen, Rust `tb-bot` mit
-   `TB_MONITORING_POLL_ENABLED=1` starten. Die Dashboard-Bridge liefert ab sofort an Rust
-   (gleicher Vertrag, `POST /eventsub/dispatch`); gepufferte Outbox-Events laufen nach.
+Der Flip ist als Service-Paar umgesetzt (Monitoring **und** Raid gemeinsam,
+Schritt 4+6):
+
+1. **Rust-Service:** `deadlock-twitch-bot-rust.service` (User-Unit) startet
+   `rust/scripts/run_tb_bot_service.sh` — lädt Secrets via
+   `export_infisical_env.py` (wie der Python-Worker; inkl. `DB_MASTER_KEY_V1`
+   für die Raid-Token), setzt Callback-URL/Notify-Channel/Target-Game und
+   `TB_MONITORING_POLL_ENABLED=1`, exec't `rust/target/release/tb-bot`.
+2. **Python-Gate:** `TWITCH_RUST_MONITORING_TAKEOVER=1` (Drop-in
+   `20-rust-takeover.conf`) — der Worker startet Poll-Loop, EventSub-Verarbeitung
+   und interne API (8776) dann NICHT; Chat/Social/Wartungs-Loops laufen weiter.
+3. **Flip:** `systemctl --user restart deadlock-twitch-bot` (gibt 8776 frei) →
+   `systemctl --user enable --now deadlock-twitch-bot-rust`. Die Dashboard-Bridge
+   liefert ab sofort an Rust (gleicher Vertrag, `POST /eventsub/dispatch`);
+   gepufferte Outbox-Events laufen nach.
 4. Subscriptions: bestehende Webhook-Subscriptions liefern unverändert an dieselbe
    Callback-URL — keine Neuanlage nötig. `SubscriptionManager.rehydrate()` übernimmt das
    Tracking beim Start.
 5. **Verifikation:** Live-Streamer geht online → Session öffnet, Embed postet, `stream.offline`
-   wird subscribed; offline → Session schließt mit Kennzahlen, Embed wird zum VOD-Overlay.
-   Inbox-Dead-Letters = 0, Guard-Dedup greift (Log).
+   wird subscribed; offline → Session schließt mit Kennzahlen, Embed wird zum VOD-Overlay,
+   Score-Refresh läuft, Auto-Raid-Pfad loggt Entscheidung. Inbox-Dead-Letters = 0,
+   Guard-Dedup greift (Log).
+6. **Rollback:** `deadlock-twitch-bot-rust` stoppen, Drop-in `20-rust-takeover.conf`
+   entfernen, `daemon-reload`, Python-Worker neu starten.
 
-### Offene Kopplungen beim Flip (bewusst, je Punkt entscheiden)
+Pre-Cutover-Gate bestanden (2026-06-10): Score-Cross-Check Rust vs. Python auf
+Prod-Daten — keine Formelabweichungen (Details im Commit „Score-Cross-Check").
 
-Mit Python-Monitoring AUS verlieren bis zur jeweiligen Phase ihre Trigger — alle als
-Noop-Hooks modelliert (`EventSubHooks`/`PollHooks`), Verdrahtung pro Phase:
+### Kopplungen beim Flip — Status 2026-06-10
 
-1. **Raid-Flows** (Auto-Raid bei offline, `channel.raid`-Arrival, Score-Refreshes,
-   Blacklist-Raid-Guard via `channel.moderate`) → Raid-Phase 6. Interim-Option: Pythons
-   EventSub-Verarbeitung NUR für Raid-Typen aktiv lassen (Bridge fan-out) — vor dem Flip
-   entscheiden.
-2. **Telemetrie-Subscription-Anlage für NEUE Partner** (braucht User-Tokens aus
-   `twitch_raid_auth`) → Raid-Phase 6; Bestand liefert weiter.
-3. **Live-Ping-Rollen-Erstellung** (Discord-Gateway) → Broker-Erweiterung oder Python-Pfad;
-   bestehende Rollen-IDs nutzt Rust aus der Partner-Config.
-4. **Partner-Lifecycle-Ops** Auto-Archiv/Auto-Unarchive (Hooks liefern `false` = no-op) →
-   Verdrahtung auf die Partner-Registry-Ops.
-5. **Offline-Seiteneffekte:** Engagement-Auto-Off, Global-Ban-Sweep-Scheduling,
-   Post-Stream-Analyse, Re-Auth-Reminder — hängen am `on_stream_offline`-Hook.
-6. **Partner-Rekrutierung + Invite-Refresh** (Poll-Tick-Anhängsel) → Outreach/Discord-Phase.
+1. **Raid-Flows** — ✅ GELÖST: Auto-Raid, `channel.raid`-Arrival, Score-Refresh
+   und Blacklist-Raid-Guard laufen echt im Rust-`RaidEventSubHooks`.
+   Interim-Lücke: der Streamer-**Whisper** des Blacklist-Guards folgt mit dem
+   Chat-Cutover (Bot-Token gehört dem Python-Chat-Prozess); Cancel + Log aktiv.
+2. **Telemetrie-Subscription-Anlage für NEUE Partner** (moderator-gated Subs wie
+   `channel.follow`/`channel.moderate`, braucht Bot-/Broadcaster-Token) — ⏳ offen
+   bis Chat-Phase; Bestand liefert weiter, Rust legt Core-Subs (App-Token) +
+   `channel.raid`-Subs an.
+3. **Live-Ping-Rollen-Erstellung** (Discord-Gateway) — ⏳ bestehende Rollen-IDs
+   nutzt Rust; Neuanlage später via Broker.
+4. **Partner-Lifecycle-Ops** Auto-Archiv/Auto-Unarchive — ⏳ no-op wie geplant.
+5. **Offline-Seiteneffekte** — ✅ Engagement-Auto-Off + Global-Ban-Sweep-Scheduling
+   laufen im Rust-Hook; Post-Stream-Analyse bleibt DB-getrieben im Python-Worker
+   (Backfill-/Retry-Job, findet auch Rust-Sessions); Re-Auth-Reminder pausiert
+   im Interim (hing am Python-Go-Live-Pfad).
+6. **Partner-Rekrutierung + Invite-Refresh** — Invite-Refresh läuft weiter
+   (eigener Task im Worker, nicht am Poll-Tick); Rekrutierungs-Anhängsel des
+   Poll-Ticks pausiert bis Outreach-Phase (6g).
+7. **Manueller `!raid`-Chat-Command** — läuft weiter über den Python-Chat
+   (eigener Code-Pfad + dieselben Token-Blobs; Advisory-Lock macht den
+   Token-Refresh multi-process-sicher). Sein Arrival-Tracking degradiert, weil
+   `channel.raid`-Events jetzt bei Rust landen — volle Ablösung in 6h (Commands).
 
 ## Schritt 5 — Chat (IRC + Moderation + Promo)
 

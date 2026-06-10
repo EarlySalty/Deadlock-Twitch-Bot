@@ -900,15 +900,32 @@ class BotRuntimeBootstrap:
                             exc_info=True,
                         )
 
-                if not cog.poll_streams.is_running():
+                # Rust-Cutover-Gate (Schritt 4+6, rust/docs/04-cutover-plan.md):
+                # Mit TWITCH_RUST_MONITORING_TAKEOVER=1 übernimmt der Rust-tb-bot
+                # Poll-Loop, EventSub-Verarbeitung und Port 8776 — Python startet
+                # diese drei Komponenten dann NICHT (sonst Doppel-Writes).
+                # Chat/Social/Wartungs-Loops laufen hier unverändert weiter.
+                rust_takeover = (
+                    os.getenv("TWITCH_RUST_MONITORING_TAKEOVER") or ""
+                ).strip().lower() in {"1", "true", "yes", "on"}
+                if rust_takeover:
+                    log.info(
+                        "Rust-Takeover aktiv: Poll-Loop, EventSub und interne API "
+                        "(8776) werden vom Rust-tb-bot bedient."
+                    )
+
+                if not rust_takeover and not cog.poll_streams.is_running():
                     cog.poll_streams.start()
 
                 cog._spawn_bg_task(cog._ensure_category_id(), "twitch.ensure_category_id")
                 cog._spawn_bg_task(cog._load_invite_codes_from_db(), "twitch.load_invites")
-                cog._spawn_bg_task(cog._start_internal_api(), "twitch.start_internal_api")
+                if not rust_takeover:
+                    cog._spawn_bg_task(cog._start_internal_api(), "twitch.start_internal_api")
                 cog._spawn_bg_task(cog._refresh_all_invites(), "twitch.refresh_all_invites")
                 eventsub_runner = getattr(cog, "_run_eventsub_listener_supervisor", None)
-                if callable(eventsub_runner):
+                if rust_takeover:
+                    pass
+                elif callable(eventsub_runner):
                     eventsub_task = cog._spawn_bg_task(eventsub_runner(), "twitch.eventsub")
                     if eventsub_task is not None:
                         cog._eventsub_supervisor_task = eventsub_task
