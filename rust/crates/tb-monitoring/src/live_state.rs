@@ -79,6 +79,17 @@ pub struct FinalizeState {
     pub had_deadlock_in_session: Option<i32>,
 }
 
+/// Restzustand der letzten Session (Quelle für den Auto-Raid-Trigger).
+/// Python: `previous_state` im Offline-Handler.
+#[derive(Debug, Clone, sqlx::FromRow)]
+pub struct OfflineSourceState {
+    pub last_game: Option<String>,
+    pub had_deadlock_in_session: Option<i32>,
+    pub last_deadlock_seen_at: Option<String>,
+    pub last_viewer_count: Option<i32>,
+    pub last_started_at: Option<String>,
+}
+
 #[derive(sqlx::FromRow)]
 struct SnapshotJoinRow {
     #[sqlx(flatten)]
@@ -375,6 +386,23 @@ impl LiveStateStore {
         .execute(&self.pool)
         .await?;
         Ok(())
+    }
+
+    /// Restzustand der letzten Session für den Auto-Raid-Trigger.
+    /// `apply_stream_offline` leert diese Spalten bewusst NICHT — sie
+    /// beschreiben, was vor dem Offline-Gehen lief (Python `previous_state`).
+    pub async fn offline_source_state(
+        &self,
+        broadcaster_user_id: &str,
+    ) -> Result<Option<OfflineSourceState>, sqlx::Error> {
+        sqlx::query_as(
+            "SELECT last_game, had_deadlock_in_session, last_deadlock_seen_at,
+                    last_viewer_count, last_started_at
+               FROM twitch_live_state WHERE twitch_user_id = $1",
+        )
+        .bind(broadcaster_user_id)
+        .fetch_optional(&self.pool)
+        .await
     }
 
     /// Login zu einer user_id (Python `_resolve_eventsub_broadcaster_login`).

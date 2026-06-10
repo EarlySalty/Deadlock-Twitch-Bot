@@ -25,6 +25,7 @@ macro_rules! pool_or_skip {
 #[derive(Default)]
 struct StubTransport {
     creates: Mutex<Vec<(String, String)>>,
+    conditions: Mutex<Vec<(String, serde_json::Value)>>,
     deletes: Mutex<Vec<String>>,
     listing: Mutex<Vec<RemoteSubscription>>,
 }
@@ -48,6 +49,10 @@ impl SubscriptionTransport for StubTransport {
             .lock()
             .unwrap()
             .push((sub_type.to_string(), bid));
+        self.conditions
+            .lock()
+            .unwrap()
+            .push((sub_type.to_string(), condition.clone()));
         Ok(false)
     }
     async fn list(&self) -> Result<Vec<RemoteSubscription>, SourceError> {
@@ -140,4 +145,34 @@ async fn rehydrate_und_cleanup_nur_eigene_callback() {
     let active: HashSet<String> = ["42".to_string()].into_iter().collect();
     assert_eq!(manager.cleanup_stale(&active).await, 1);
     assert_eq!(*transport.deletes.lock().unwrap(), vec!["b".to_string()]);
+}
+
+#[tokio::test]
+async fn raid_subscription_nutzt_to_broadcaster_condition_und_dedup() {
+    let pool = pool_or_skip!("t6_subs_raid");
+    let transport = Arc::new(StubTransport::default());
+    let manager = SubscriptionManager::new(
+        transport.clone(),
+        SubscriptionConfig {
+            callback_url: "https://cb/x".to_string(),
+            secret: "geheim".to_string(),
+        },
+        CapacitySnapshotStore::new(pool.clone()),
+    );
+
+    assert!(manager.ensure_raid_subscription("777", "ziel").await);
+    // channel.raid wird über das RAID-ZIEL abonniert, nicht den Broadcaster.
+    let conditions = transport.conditions.lock().unwrap().clone();
+    assert_eq!(conditions.len(), 1);
+    assert_eq!(conditions[0].0, "channel.raid");
+    assert_eq!(
+        conditions[0].1,
+        serde_json::json!({ "to_broadcaster_user_id": "777" })
+    );
+    drop(conditions);
+
+    // Dedup über Tracking; leere ID → kein Create.
+    assert!(manager.ensure_raid_subscription("777", "ziel").await);
+    assert_eq!(transport.conditions.lock().unwrap().len(), 1);
+    assert!(!manager.ensure_raid_subscription(" ", "x").await);
 }

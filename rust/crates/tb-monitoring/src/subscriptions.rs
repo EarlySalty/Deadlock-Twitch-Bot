@@ -126,6 +126,20 @@ impl SubscriptionManager {
             .await
     }
 
+    /// `channel.raid`-Subscription für ein Raid-Ziel: Condition ist
+    /// `to_broadcaster_user_id` (Events kommen beim ZIEL an, nicht der Quelle).
+    /// Python `ensure_raid_arrival_subscription_ready` (best-effort).
+    pub async fn ensure_raid_subscription(&self, to_broadcaster_id: &str, login: &str) -> bool {
+        self.ensure_subscription_with_key(
+            "channel.raid",
+            "1",
+            "to_broadcaster_user_id",
+            to_broadcaster_id,
+            login,
+        )
+        .await
+    }
+
     /// Alle Core-Subscriptions für einen Broadcaster sicherstellen.
     pub async fn ensure_core_subscriptions(&self, broadcaster_id: &str, login: &str) {
         for (sub_type, version) in CORE_SUBSCRIPTIONS {
@@ -141,6 +155,24 @@ impl SubscriptionManager {
         broadcaster_id: &str,
         login: &str,
     ) -> bool {
+        self.ensure_subscription_with_key(
+            sub_type,
+            version,
+            "broadcaster_user_id",
+            broadcaster_id,
+            login,
+        )
+        .await
+    }
+
+    async fn ensure_subscription_with_key(
+        &self,
+        sub_type: &str,
+        version: &str,
+        condition_key: &str,
+        broadcaster_id: &str,
+        login: &str,
+    ) -> bool {
         let broadcaster_id = broadcaster_id.trim();
         if broadcaster_id.is_empty() {
             return false;
@@ -149,7 +181,7 @@ impl SubscriptionManager {
             tracing::debug!(sub_type, login, "EventSub: bereits subscribed, überspringe");
             return true;
         }
-        let condition = serde_json::json!({ "broadcaster_user_id": broadcaster_id });
+        let condition = serde_json::json!({ condition_key: broadcaster_id });
         match self
             .transport
             .create(

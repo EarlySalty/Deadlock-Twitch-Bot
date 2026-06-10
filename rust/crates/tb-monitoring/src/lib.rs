@@ -50,7 +50,8 @@ pub use inbox_runtime::{
 };
 pub use inbox_store::{DeadLetterEntry, LeasedWork, PendingEntry, ProcessingInboxStore};
 pub use live_state::{
-    FinalizeState, LiveStateRow, LiveStateStore, LiveStateUpsert, SnapshotEntry, TrackedStreamer,
+    FinalizeState, LiveStateRow, LiveStateStore, LiveStateUpsert, OfflineSourceState,
+    SnapshotEntry, TrackedStreamer,
 };
 pub use poller::{
     AnnouncementSink, NoopAnnouncementSink, NoopPollHooks, PollConfig, PollEngine, PollHooks,

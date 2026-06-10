@@ -470,3 +470,40 @@ async fn exp_hooks_idempotent_und_vollstaendig() {
     assert_eq!(delta, Some(4));
     assert!(duration.unwrap() >= 3.0, "duration_min aus started_at");
 }
+
+#[tokio::test]
+async fn offline_source_state_liest_restzustand_nach_offline() {
+    let pool = pool_or_skip!("t6_live_remnant");
+    let store = LiveStateStore::new(pool.clone());
+    sqlx::query(
+        "INSERT INTO twitch_live_state
+            (twitch_user_id, streamer_login, is_live, last_game, last_viewer_count,
+             last_started_at, had_deadlock_in_session, last_deadlock_seen_at)
+         VALUES ('42', 'drag', 1, 'Deadlock', 33,
+                 '2026-06-10T17:00:00+00:00', 1, '2026-06-10T18:30:00+00:00')",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    // Offline setzen — die Session-Restfelder bleiben bewusst stehen.
+    store
+        .apply_stream_offline("42", "2026-06-10T19:00:00+00:00")
+        .await
+        .unwrap();
+
+    let state = store.offline_source_state("42").await.unwrap().unwrap();
+    assert_eq!(state.last_game.as_deref(), Some("Deadlock"));
+    assert_eq!(state.last_viewer_count, Some(33));
+    assert_eq!(
+        state.last_started_at.as_deref(),
+        Some("2026-06-10T17:00:00+00:00")
+    );
+    assert_eq!(state.had_deadlock_in_session, Some(1));
+    assert_eq!(
+        state.last_deadlock_seen_at.as_deref(),
+        Some("2026-06-10T18:30:00+00:00")
+    );
+
+    assert!(store.offline_source_state("99").await.unwrap().is_none());
+}
