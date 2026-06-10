@@ -1151,7 +1151,14 @@ class RaidAuthManager:
                             login,
                         )
                         raise
-                    log.error("Background refresh failed for %s: %s", login, exc)
+                    # repr + Stacktrace: str(exc) ist bei argumentlosen
+                    # Exceptions leer und macht den Fehler undiagnostizierbar.
+                    log.error(
+                        "Background refresh failed for %s: %s",
+                        login,
+                        repr(exc),
+                        exc_info=True,
+                    )
 
         if refreshed_count > 0:
             log.debug("Maintenance: Refreshed %d user tokens", refreshed_count)

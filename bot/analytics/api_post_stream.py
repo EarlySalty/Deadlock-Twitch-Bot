@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from typing import Any
 
 from aiohttp import web
@@ -174,8 +175,24 @@ Antworte NUR als valides JSON mit exakt dieser Struktur (kein Markdown, keine Er
 }}"""
 
 
+# MiniMax-M3 liefert Reasoning in <think>…</think>-Bloecken mit; enthaelt so
+# ein Block eine Klammer, wuerde die Extraktion den falschen Block greifen.
+_THINK_BLOCK_RE = re.compile(r"<think>.*?</think>", re.DOTALL | re.IGNORECASE)
+# Haeufigster Modell-JSON-Fehler: trailing comma vor } oder ].
+_TRAILING_COMMA_RE = re.compile(r",\s*([}\]])")
+
+
+def _loads_ai_json(extracted: str) -> Any:
+    """json.loads mit Reparatur-Retry fuer modelltypische trailing commas."""
+    try:
+        return json.loads(extracted)
+    except json.JSONDecodeError:
+        return json.loads(_TRAILING_COMMA_RE.sub(r"\1", extracted))
+
+
 def _extract_json_object(text: str) -> str | None:
     """Extrahiere den ersten vollstaendigen JSON-Block ({...} oder [...])."""
+    text = _THINK_BLOCK_RE.sub("", text or "")
     for start_char, end_char in (("{", "}"), ("[", "]")):
         start = text.find(start_char)
         if start == -1:
@@ -369,7 +386,7 @@ async def _generate_report_v2(
         raw = await call_ai(prompt)
         extracted = _extract_json_object(raw)
         if extracted and extracted.startswith("{"):
-            report = json.loads(extracted)
+            report = _loads_ai_json(extracted)
             if isinstance(report, dict):
                 report.setdefault("admin_notizen", [])
                 report["schema_version"] = snapshot.get("schema_version")
@@ -497,7 +514,7 @@ async def _generate_word_groups(messages: list[str], call_ai) -> list[dict[str, 
         raw = await call_ai(prompt)
         extracted = _extract_json_object(raw)
         if extracted and extracted.startswith("["):
-            groups = json.loads(extracted)
+            groups = _loads_ai_json(extracted)
             if isinstance(groups, list):
                 normalized_groups: list[dict[str, Any]] = []
                 for group in groups:
@@ -615,7 +632,7 @@ async def _generate_report(
         raw = await call_ai(prompt)
         extracted = _extract_json_object(raw)
         if extracted and extracted.startswith("{"):
-            report = json.loads(extracted)
+            report = _loads_ai_json(extracted)
             if isinstance(report, dict):
                 return {
                     "gut": report.get("gut") or [],
