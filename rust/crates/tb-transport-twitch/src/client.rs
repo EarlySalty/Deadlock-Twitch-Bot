@@ -148,6 +148,15 @@ impl HelixClient {
             .header("Authorization", format!("Bearer {user_token}"))
     }
 
+    /// GET mit einem **User-Token** (Client-Id + dieser Bearer, KEIN App-Token).
+    pub fn get_with_user_token(&self, path: &str, user_token: &str) -> RequestBuilder {
+        let url = format!("{}{}", self.config.helix_base, path);
+        self.http
+            .get(&url)
+            .header("Client-Id", &self.config.client_id)
+            .header("Authorization", format!("Bearer {user_token}"))
+    }
+
     /// DELETE mit einem **User-Token** (analog [`Self::post_with_user_token`]).
     pub fn delete_with_user_token(&self, path: &str, user_token: &str) -> RequestBuilder {
         let url = format!("{}{}", self.config.helix_base, path);

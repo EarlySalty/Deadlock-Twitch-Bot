@@ -340,8 +340,7 @@ pub async fn chat_action_handler(
     }
 
     let bot_token = std::env::var("TWITCH_BOT_TOKEN").unwrap_or_default();
-    let bot_user_id = std::env::var("TWITCH_BOT_USER_ID").unwrap_or_default();
-    if bot_token.is_empty() || bot_user_id.is_empty() {
+    if bot_token.is_empty() {
         return Ok((
             StatusCode::SERVICE_UNAVAILABLE,
             Json(serde_json::json!({"ok": false, "error": "bot_credentials_missing"})),
@@ -357,6 +356,53 @@ pub async fn chat_action_handler(
                 Json(serde_json::json!({"ok": false, "error": "helix_unavailable"})),
             )
                 .into_response())
+        }
+    };
+
+    // Bot-User-ID aus Env oder dynamisch via Helix ermitteln
+    let bot_user_id = {
+        let from_env = std::env::var("TWITCH_BOT_USER_ID").unwrap_or_default();
+        if !from_env.is_empty() {
+            from_env
+        } else {
+            #[derive(serde::Deserialize)]
+            struct UsersResp {
+                data: Vec<UsersEntry>,
+            }
+            #[derive(serde::Deserialize)]
+            struct UsersEntry {
+                id: String,
+            }
+            match helix_client
+                .get_with_user_token("/users", &bot_token)
+                .send()
+                .await
+            {
+                Ok(r) if r.status().is_success() => {
+                    match r.json::<UsersResp>().await {
+                        Ok(body) if !body.data.is_empty() => body.data.into_iter().next().unwrap().id,
+                        _ => {
+                            return Ok((
+                                StatusCode::SERVICE_UNAVAILABLE,
+                                Json(serde_json::json!({"ok": false, "error": "bot_user_id_unresolvable"})),
+                            )
+                                .into_response())
+                        }
+                    }
+                }
+                Ok(r) => {
+                    tracing::warn!("GET /users für Bot-Token: HTTP {}", r.status());
+                    return Ok((
+                        StatusCode::SERVICE_UNAVAILABLE,
+                        Json(serde_json::json!({"ok": false, "error": "bot_user_id_unresolvable"})),
+                    )
+                        .into_response());
+                }
+                Err(e) => {
+                    tracing::error!("GET /users für Bot-Token fehlgeschlagen: {e}");
+                    return Err(ApiError::internal());
+                }
+            }
         }
     };
 
