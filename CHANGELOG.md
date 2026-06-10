@@ -1,3 +1,17 @@
+## #120 — Bot war blind für Partner mit nicht-deutscher Kanal-Sprache: Auto-Raid & Werbezitate gefixt
+
+**Ausgangslage:** Ein Partner meldete, dass der Auto-Raid bei ihm nie feuert (manuell ging es) und Werbezitate in seinem Chat komplett ausbleiben. Die Spur in Logs und Datenbank: Der Bot hat seinen Stream über Wochen kein einziges Mal live „gesehen" — keine Stream-Session, keine Kategorie, keine Zuschauerzahlen, nie ein Live-Posting. Grund: Die Live-Abfrage bei Twitch lief mit Sprachfilter Deutsch, und der Partner hat seine Twitch-Kanal-Sprache auf Englisch gestellt. Das Push-Event „Kanal ist live" kam zwar an, enthält aber weder Kategorie noch Zuschauer — und alles, was darauf aufbaut, lief ins Leere: Der Auto-Raid wird am Stream-Ende nur ausgelöst, wenn die letzte Kategorie Deadlock war; bei „Kategorie unbekannt" greift die Sicherheitsregel und überspringt (24 Mal in Folge, als einziger Partner). Werbezitate brauchen Zuschauer-Baseline bzw. Chat-Aktivitätsdaten aus genau diesem Tracking — ohne Daten kein Trigger.
+
+**Was wurde geändert:**
+
+- **Partnerliste ohne Sprachfilter:** Die Live-Abfrage der eigenen, kuratierten Partnerliste läuft jetzt ohne Sprachfilter — wer Partner ist, wird getrackt, egal welche Kanal-Sprache bei Twitch eingestellt ist. Der Deutsch-Filter bleibt nur dort aktiv, wo er hingehört: bei der Entdeckung fremder Deadlock-Streams in der Kategorie-Suche.
+- **Kategorie sofort beim Live-Gehen:** Zusätzlich holt der Bot beim „Kanal ist live"-Event jetzt sofort Titel und Kategorie per gezieltem Einzel-Lookup, statt auf den nächsten Abfrage-Takt zu warten. Damit ist die Kategorie ab Sekunde 1 bekannt — auch bei Streams, die kürzer sind als ein Abfrage-Intervall, und unabhängig von jedem Sprachfilter.
+- **Nebenfix Kanal-Sprache:** Beim Kategorie/Titel-Änderungs-Event wurde die Kanal-Sprache aus einem falschen Feld der Twitch-Nachricht gelesen und blieb deshalb in der Statistik fast immer leer (1997 von 1998 Einträgen). Jetzt wird das richtige Feld gelesen.
+
+**Wie es jetzt funktioniert:** Geht ein Partner live, kennt der Bot binnen Sekunden Titel und Kategorie; der laufende Abfrage-Takt ergänzt Zuschauerzahlen und legt die Stream-Session an — für alle Partner, egal ob ihr Kanal auf Deutsch, Englisch oder sonstwas steht. Damit funktionieren Auto-Raid am Stream-Ende, Werbezitate, Live-Postings und Stream-Statistiken jetzt auch für Partner mit nicht-deutscher Kanal-Sprache.
+
+**Betroffen:** Alle Partner, deren Twitch-Kanal-Sprache nicht auf Deutsch steht — bei ihnen waren Auto-Raid, Werbezitate, Live-Postings und Statistiken bisher komplett tot, ohne dass es eine Fehlermeldung gab.
+
 ## #119 — Drei latente Robustheits-Lücken im Live-Bot geschlossen
 
 **Ausgangslage:** Beim Rust-Port des Monitorings (#110–#116) sind drei Schwachstellen im laufenden Python-Bot aufgefallen, die bisher nur unter Race-/Fehlerbedingungen zuschlagen — also genau dann, wenn man es nicht sieht. Sie wurden zunächst nur im Rust-Code gelöst; jetzt sind sie auch im Live-Bot gefixt.
