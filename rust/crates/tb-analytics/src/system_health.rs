@@ -63,7 +63,7 @@ pub async fn raw_chat_health(pool: &PgPool) -> Result<Option<RawChatHealth>, sql
                 h.last_raw_chat_message_at,
                 h.last_raw_chat_insert_ok_at,
                 h.last_raw_chat_insert_error_at,
-                h.last_error,
+                h.last_raw_chat_error AS last_error,
                 GREATEST(
                     h.last_raw_chat_message_at,
                     h.last_raw_chat_insert_ok_at,
@@ -83,7 +83,7 @@ pub async fn raw_chat_health(pool: &PgPool) -> Result<Option<RawChatHealth>, sql
                 h.last_raw_chat_message_at,
                 h.last_raw_chat_insert_ok_at,
                 h.last_raw_chat_insert_error_at,
-                h.last_error,
+                h.last_raw_chat_error AS last_error,
                 GREATEST(
                     h.last_raw_chat_message_at,
                     h.last_raw_chat_insert_ok_at,
@@ -176,7 +176,7 @@ mod tests {
                 last_raw_chat_message_at      TIMESTAMPTZ,
                 last_raw_chat_insert_ok_at    TIMESTAMPTZ,
                 last_raw_chat_insert_error_at TIMESTAMPTZ,
-                last_error                    TEXT,
+                last_raw_chat_error           TEXT,
                 updated_at                    TIMESTAMPTZ NOT NULL DEFAULT NOW()
             )
             "#,

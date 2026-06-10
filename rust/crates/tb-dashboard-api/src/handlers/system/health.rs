@@ -173,7 +173,7 @@ mod tests {
                 last_raw_chat_message_at      TIMESTAMPTZ,
                 last_raw_chat_insert_ok_at    TIMESTAMPTZ,
                 last_raw_chat_insert_error_at TIMESTAMPTZ,
-                last_error                    TEXT,
+                last_raw_chat_error           TEXT,
                 updated_at                    TIMESTAMPTZ NOT NULL DEFAULT NOW()
             )
             "#,
