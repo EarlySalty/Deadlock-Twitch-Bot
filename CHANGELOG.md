@@ -1,3 +1,11 @@
+## #147 — !invite-Command in Rust, Auto-Erkennung entfernt
+
+**Ausgangslage:** Der Bot hatte eine Regex-basierte Auto-Erkennung für Deadlock-Zugangsfragen und antwortete automatisch mit dem Discord-Invite-Link. Die Logik war zu breit: Das Wort "play" reichte als Zugangs-Signal aus, sodass normaler Kommentar-Text mit "play Deadlock" und einem Fragezeichen irgendwo im Satz die Antwort auslöste. Dazu lief die gesamte Logik noch in Python.
+
+**Was wurde geändert:** Die automatische Regex-Erkennung wurde vollständig entfernt. Stattdessen gibt es jetzt einen expliziten `!invite`-Command. Wenn jemand `!invite` in den Chat schreibt, fragt Python den neuen Rust-Endpoint `POST /internal/twitch/v1/chat/command` an. Rust prüft dort in `twitch_live_state`, ob der Kanal gerade Deadlock streamt (`is_live = 1` und `last_game` enthält "deadlock"). Ist das der Fall, wird die Discord-Invite-URL geladen — zuerst streamer-spezifisch aus `twitch_streamer_invites`, dann als Fallback aus der Env-Var `PROMO_DISCORD_INVITE` — und als fertiger Reply-Text zurückgegeben. Python schickt ihn per IRC in den Chat.
+
+**Wie es jetzt funktioniert:** `!invite` im Chat → Python schickt Request an Rust → Rust prüft ob Deadlock läuft → bei Ja: Invite-Link zurück, Python postet Antwort. Kein Deadlock live → keine Antwort, kein Spam. Pro User und Kanal gilt 1h Cooldown. Die gesamte Entscheidungslogik liegt in Rust.
+
 ## #146 — Discord-Link-Click: Typ-Mismatch bei clicked_at behoben
 
 **Ausgangslage:** Jedes Mal wenn ein User auf den Discord-Live-Link klickte, schlug die Datenbank-Eintragung mit einem Typfehler fehl: Die Spalte `clicked_at` in der DB ist `TIMESTAMPTZ`, aber der Code schickte den Zeitstempel als formatierten Text-String. PostgreSQL macht keine implizite Text→Timestamp-Konvertierung, also scheiterte jeder Schreibversuch — der Klick wurde nicht gespeichert, der Nutzer bekam trotzdem ein `ok: true` zurück.

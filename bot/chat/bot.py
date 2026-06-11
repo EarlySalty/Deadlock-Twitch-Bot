@@ -184,8 +184,7 @@ if TWITCHIO_AVAILABLE:
             self._promo_seen_chatters: dict[str, set[str]] = {}
             self._promo_seen_chatters_ts: dict[str, float] = {}
             self._promo_task: asyncio.Task | None = None
-            self._last_invite_reply: dict[str, float] = {}
-            self._last_invite_reply_user: dict[tuple[str, str], float] = {}
+            self._invite_cmd_cd: dict[tuple[str, str], float] = {}  # (channel, user) → mono ts
             self._fun_reply_cd: dict[str, float] = {}
             # Kurzantworten auf "Danke" vorerst deaktiviert (kann später wieder aktiviert werden).
             self._fun_thanks_reply_enabled = False
@@ -778,6 +777,75 @@ if TWITCHIO_AVAILABLE:
                 and "has no attribute" in msg
                 and "suspicious_users" in msg
             )
+
+        async def _handle_invite_command(self, message, channel_login: str) -> bool:
+            """Verarbeitet !invite — delegiert Logik an den Rust-Endpoint.
+
+            Gibt True zurück wenn eine Antwort gesendet wurde.
+            Nur aktiv wenn der Kanal Deadlock streamt (Rust prüft live_state).
+            Cooldown: 1h pro User pro Kanal (in-memory).
+            """
+            content = (message.content or "").strip()
+            if content.lower() != "!invite":
+                return False
+
+            author = getattr(message, "author", None)
+            chatter_login = (getattr(author, "name", "") or "").lower()
+            if not chatter_login or not channel_login:
+                return False
+
+            now = time.monotonic()
+            cd_key = (channel_login, chatter_login)
+            last = self._invite_cmd_cd.get(cd_key, 0.0)
+            if now - last < 3600:
+                return False
+
+            token = next(
+                (
+                    (os.getenv(k) or "").strip()
+                    for k in ("TWITCH_INTERNAL_API_TOKEN", "MAIN_BOT_INTERNAL_TOKEN")
+                    if (os.getenv(k) or "").strip()
+                ),
+                "",
+            )
+            if not token:
+                return False
+
+            try:
+                import aiohttp
+
+                url = "http://127.0.0.1:8776/internal/twitch/v1/chat/command"
+                async with aiohttp.ClientSession() as session:
+                    async with session.post(
+                        url,
+                        headers={"X-Internal-Token": token},
+                        json={
+                            "channelLogin": channel_login,
+                            "chatterLogin": chatter_login,
+                            "content": content,
+                        },
+                        timeout=aiohttp.ClientTimeout(total=5),
+                    ) as resp:
+                        if resp.status != 200:
+                            return False
+                        data = await resp.json()
+            except Exception:
+                log.debug("_handle_invite_command: Rust-Call fehlgeschlagen", exc_info=True)
+                return False
+
+            reply = (data.get("reply") or "").strip()
+            if not reply:
+                return False
+
+            channel = self._resolve_message_channel(message)
+            if channel is None:
+                return False
+
+            ok = await self._send_chat_message(channel, reply, source="invite_cmd")
+            if ok:
+                self._invite_cmd_cd[cd_key] = now
+                self._last_promo_sent[channel_login] = now
+            return ok
 
         async def _maybe_fun_responses(self, message, channel_login: str) -> None:
             """Freche Kurz-Antworten (Danke/Bot-Fragen) – nur wenn Deadlock live."""
@@ -1745,9 +1813,9 @@ if TWITCHIO_AVAILABLE:
             sent_invite = False
             if is_deadlock_live:
                 try:
-                    sent_invite = await self._maybe_send_deadlock_access_hint(message)
+                    sent_invite = await self._handle_invite_command(message, channel_login)
                 except Exception:
-                    log.debug("Deadlock-Invite-Check fehlgeschlagen", exc_info=True)
+                    log.debug("!invite-Command fehlgeschlagen", exc_info=True)
 
                 if _PROMO_ACTIVITY_ENABLED and not sent_invite:
                     try:

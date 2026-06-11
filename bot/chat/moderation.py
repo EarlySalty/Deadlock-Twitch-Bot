@@ -10,14 +10,6 @@ from ..core.chat_bots import is_known_chat_bot
 from ..core.partner_utils import is_operational_partner_channel
 from ..storage import load_active_partner, readonly_connection, transaction
 from .constants import (
-    _INVITE_QUESTION_CHANNEL_COOLDOWN_SEC,
-    _INVITE_QUESTION_RE,
-    _INVITE_QUESTION_USER_COOLDOWN_SEC,
-    DEADLOCK_INVITE_REPLY,
-    INVITE_ACCESS_RE,
-    INVITE_GAME_CONTEXT_RE,
-    INVITE_JOIN_RE,
-    INVITE_STRONG_ACCESS_RE,
     SPAM_DOMAIN_RE,
     SPAM_FRAGMENTS,
     SPAM_PHRASES,
@@ -623,99 +615,6 @@ class ModerationMixin:
     def _normalize_spam_text(content: str) -> str:
         text = unicodedata.normalize("NFKC", str(content or ""))
         return text.translate(_SPAM_HOMOGLYPH_TRANSLATION).strip()
-
-    def _looks_like_deadlock_access_question(self, content: str) -> bool:
-        if not content:
-            return False
-        raw = content.strip().lower()
-        has_deadlock_context = "deadlock" in raw
-        has_game_context = bool(INVITE_GAME_CONTEXT_RE.search(raw))
-        has_join_intent = bool(INVITE_JOIN_RE.search(raw))
-        has_strong_access = bool(INVITE_STRONG_ACCESS_RE.search(raw))
-        has_access = bool(INVITE_ACCESS_RE.search(raw)) or has_join_intent
-        has_where_to_play_question = has_game_context and bool(
-            re.search(r"\bwo(?:her)?\b", raw)
-        )
-        if not has_access:
-            return False
-        has_question = "?" in raw or bool(_INVITE_QUESTION_RE.search(raw))
-        if not has_question:
-            return False
-        has_direct_invite_request = bool(
-            re.search(
-                r"\b(kannst|kann|koennte|könnte|koenntest|könntest|darfst|darf)\s+du\b",
-                raw,
-            )
-            and has_strong_access
-        )
-        if has_deadlock_context:
-            return True
-        if has_strong_access and (has_game_context or has_join_intent):
-            return True
-        if has_direct_invite_request:
-            return True
-        return False
-
-    async def _maybe_send_deadlock_access_hint(self, message) -> bool:
-        """
-        Antwortet auf Deadlock-Zugangsfragen mit einem Discord-Invite (mit Cooldown).
-
-        WICHTIG: Nur für PARTNER (nicht Monitored-Only)!
-        """
-        content = message.content or ""
-        if not self._looks_like_deadlock_access_question(content):
-            return False
-        if content.strip().startswith(self.prefix or "!"):
-            return False
-
-        channel = self._resolve_message_channel(message)
-        channel_name = getattr(channel, "name", "") or getattr(channel, "login", "") or ""
-        login = channel_name.lstrip("#").lower()
-        if not login:
-            return False
-
-        # WICHTIG: Discord-Invite nur für PARTNER senden!
-        from ..core.partner_utils import is_partner_channel_for_chat_tracking
-
-        if not is_partner_channel_for_chat_tracking(login):
-            return False
-
-        now = time.monotonic()
-        last_channel = self._last_invite_reply.get(login)
-        if last_channel and (now - last_channel) < _INVITE_QUESTION_CHANNEL_COOLDOWN_SEC:
-            return False
-
-        author = getattr(message, "author", None)
-        chatter_login = (getattr(author, "name", "") or "").lower()
-        if chatter_login:
-            user_key = (login, chatter_login)
-            last_user = self._last_invite_reply_user.get(user_key)
-            if last_user and (now - last_user) < _INVITE_QUESTION_USER_COOLDOWN_SEC:
-                return False
-        else:
-            user_key = None
-
-        invite, is_specific = await self._get_promo_invite(login)
-        if not invite:
-            return False
-
-        if channel is None:
-            return False
-
-        mention = f"@{getattr(author, 'name', '')} " if getattr(author, "name", None) else ""
-        msg = mention + DEADLOCK_INVITE_REPLY.format(invite=invite)
-        ok = await self._send_chat_message(channel, msg)
-        if ok:
-            self._last_invite_reply[login] = now
-            if user_key:
-                self._last_invite_reply_user[user_key] = now
-            # Verhindert direkt nach Invite-Hinweis eine zusaetzliche Promo
-            self._last_promo_sent[login] = now
-            if is_specific:
-                marker = getattr(self, "_mark_streamer_invite_sent", None)
-                if callable(marker):
-                    marker(login)
-        return ok
 
     async def _get_moderation_context(
         self, twitch_user_id: str

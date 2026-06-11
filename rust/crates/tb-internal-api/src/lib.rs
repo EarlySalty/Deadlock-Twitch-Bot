@@ -43,8 +43,9 @@ pub fn build_internal_router(
     legacy_proxy: Option<Arc<LegacyProxy>>,
 ) -> Router {
     use handlers::{
-        discord_invite, eventsub, global_ban, healthz, market_share, raid, raid_blacklist,
-        raid_oauth as oauth, self_explainer_log, streamer_link, streamers, telemetry_routes,
+        chat_command, discord_invite, eventsub, global_ban, healthz, market_share, raid,
+        raid_blacklist, raid_oauth as oauth, self_explainer_log, streamer_link, streamers,
+        telemetry_routes,
     };
 
     let base = INTERNAL_API_BASE_PATH; // "/internal/twitch/v1"
@@ -62,6 +63,10 @@ pub fn build_internal_router(
         .route(
             &format!("{base}/streamer/:login/discord-invite"),
             get(discord_invite::handler),
+        )
+        .route(
+            &format!("{base}/chat/command"),
+            post(chat_command::handler),
         )
         .route(&format!("{base}/globalban"), get(global_ban::list_handler))
         .route(
