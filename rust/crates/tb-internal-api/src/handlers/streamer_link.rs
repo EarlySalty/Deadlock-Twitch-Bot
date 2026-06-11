@@ -44,10 +44,13 @@ pub async fn list_handler(
         return Err(ApiError::unauthorized());
     }
 
-    let rows = db::list_unlinked(&pool).await.map_err(|e| {
+    // Python `list_unlinked_streamers` fängt Exceptions ab und gibt `[]` zurück
+    // (Matcher-Resilienz, pg.py:4163-4165) — ein DB-Fehler darf hier KEIN 500
+    // werden, sondern eine leere Liste.
+    let rows = db::list_unlinked(&pool).await.unwrap_or_else(|e| {
         tracing::error!("streamer_link list DB-Fehler: {e}");
-        ApiError::internal()
-    })?;
+        Vec::new()
+    });
 
     let entries = rows
         .into_iter()

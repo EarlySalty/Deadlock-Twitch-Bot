@@ -1,3 +1,11 @@
+## #136 — Paritäts-Härtung der nativen Routen nach Voll-Review
+
+**Ausgangslage:** Ein adversarialer Voll-Review des Rust-Umbaus (mehrere unabhängige Prüfer, jeder Befund gegengeprüft) hat die frisch nativisierten internen Routen Feld-für-Feld gegen das alte Python-Verhalten gestellt. Drei kleine, aber echte Abweichungen kamen zum Vorschein — nichts Kaputtes, aber Verhalten, das in Randfällen vom Original abwich.
+
+**Was wurde geändert:** Die Self-Explainer-Discord-Log-Route gibt bei einem nicht lesbaren Anfrage-Body jetzt wieder exakt die alte Fehlerform zurück (klarer „ungültiges JSON"-Fehler mit Statuscode 400) statt der generischen Framework-Antwort, und sie behandelt eine leere oder Null-Kanal-ID jetzt wie früher als ungültige Eingabe statt sie durchzulassen. Die Liste der noch nicht mit Discord verknüpften Streamer (Quelle für den automatischen Namens-Abgleich) liefert bei einem kurzzeitigen Datenbank-Schluckauf jetzt wieder eine leere Liste statt eines harten Fehlers — genau wie das alte System, damit der Abgleich-Prozess robust bleibt und nicht abbricht.
+
+**Wie es jetzt funktioniert:** Die drei Routen verhalten sich in genau diesen Randfällen wieder byte-gleich zum Python-Original. Für Nutzer und Streamer ändert sich nichts Sichtbares; es ist reine Angleichung an das bewährte Verhalten, abgesichert mit zusätzlichen Tests für die Fehlerfälle.
+
 ## #135 — Zwei weitere interne Routen nativ in Rust: Link-Kandidaten + Self-Explainer-Log
 
 **Ausgangslage:** Im Zuge der Rust-Umstellung liefen noch mehrere interne API-Routen über die alte Python-Schicht (Fallback-Proxy). Zwei davon: die Liste der Streamer ohne Discord-Verknüpfung (Quelle für den automatischen Discord-Namens-Abgleich) und das Weiterreichen einer Self-Explainer-Antwort als Discord-Nachricht.

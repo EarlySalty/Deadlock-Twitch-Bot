@@ -151,6 +151,21 @@ fn canonical_json(value: &Value) -> String {
     serde_json::to_string(&sort_value(value)).unwrap_or_default()
 }
 
+/// Python-`not channel_id`-Semantik: `null`/`0`/`""`/`false` (und leere
+/// Container) sind falsy → ungültig. Ein nicht-leerer String wie `"0"` ist
+/// truthy (Parität: Python prüft `not channel_id` auf dem Rohwert, erst danach
+/// `int(channel_id)`).
+fn is_truthy_channel_id(v: &Value) -> bool {
+    match v {
+        Value::Null => false,
+        Value::Bool(b) => *b,
+        Value::Number(n) => n.as_f64().map(|f| f != 0.0).unwrap_or(true),
+        Value::String(s) => !s.is_empty(),
+        Value::Array(a) => !a.is_empty(),
+        Value::Object(o) => !o.is_empty(),
+    }
+}
+
 // ── Handler ───────────────────────────────────────────────────────────────────
 
 /// `POST /internal/twitch/v1/discord/self-explainer-log`
@@ -159,16 +174,30 @@ fn canonical_json(value: &Value) -> String {
 /// an den Master-Broker weiter und gibt `{ok, broker_status}` zurück.
 pub async fn handler(
     auth: AuthLevel,
-    Json(body): Json<SelfExplainerLogRequest>,
+    body: axum::body::Bytes,
 ) -> axum::response::Response {
     if !auth.is_privileged() {
         return ApiError::unauthorized().into_response();
     }
 
-    // Validierung: channel_id muss vorhanden + nicht null sein;
+    // Body wie Python `await request.json()` parsen; nicht-parsebar → 400
+    // {"ok":false,"error":"invalid_json"} (Parität zu discord_log.py:69-72,
+    // statt Axums generischem 422 für den Json<T>-Extractor).
+    let body: SelfExplainerLogRequest = match serde_json::from_slice(&body) {
+        Ok(v) => v,
+        Err(_) => {
+            return (
+                axum::http::StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({ "ok": false, "error": "invalid_json" })),
+            )
+                .into_response();
+        }
+    };
+
+    // Validierung: `not channel_id` (Python falsy) — null/0/""/false ungültig;
     // embed muss ein JSON-Objekt sein.
     let channel_id_val = match &body.channel_id {
-        Some(v) if !v.is_null() => v.clone(),
+        Some(v) if is_truthy_channel_id(v) => v.clone(),
         _ => {
             return (
                 axum::http::StatusCode::BAD_REQUEST,
@@ -382,6 +411,37 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
         let j = json_body(resp).await;
         assert_eq!(j["error"], "channel_id_and_embed_required");
+    }
+
+    #[tokio::test]
+    async fn channel_id_zero_400() {
+        // Python `not channel_id` ist falsy für 0 → 400 (Parität-Fix).
+        let app = make_router("secret");
+        let resp = app
+            .oneshot(req(
+                r#"{"channel_id":0,"embed":{"title":"test"}}"#,
+                Some("secret"),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+        let j = json_body(resp).await;
+        assert_eq!(j["error"], "channel_id_and_embed_required");
+    }
+
+    #[tokio::test]
+    async fn invalid_json_400() {
+        // Nicht-parsebarer Body → 400 {"ok":false,"error":"invalid_json"}
+        // (Parität zu discord_log.py, statt Axums generischem 422).
+        let app = make_router("secret");
+        let resp = app
+            .oneshot(req(r#"das ist kein json"#, Some("secret")))
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+        let j = json_body(resp).await;
+        assert_eq!(j["ok"], false);
+        assert_eq!(j["error"], "invalid_json");
     }
 
     #[tokio::test]
