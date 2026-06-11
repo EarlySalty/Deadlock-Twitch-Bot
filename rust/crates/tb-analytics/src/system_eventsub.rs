@@ -17,10 +17,12 @@ pub struct EventsubSnapshot {
 
 /// Lädt den neuesten EventSub-Snapshot mit Daten.
 /// Gibt `None` zurück wenn keine passende Zeile vorhanden.
+///
+/// `listener_count` ist in Prod int4 → Cast auf bigint damit sqlx i64 dekodieren kann.
 pub async fn eventsub_snapshot(pool: &PgPool) -> Result<Option<EventsubSnapshot>, sqlx::Error> {
     let row: Option<(DateTime<Utc>, i64, String)> = sqlx::query_as(
         r#"
-        SELECT ts_utc, listener_count, listeners_json
+        SELECT ts_utc, listener_count::bigint, listeners_json
         FROM twitch_eventsub_capacity_snapshot
         WHERE listener_count > 0
           AND listeners_json IS NOT NULL
@@ -61,12 +63,13 @@ mod tests {
             .execute(&pool)
             .await
             .expect("search_path");
+        // Prod-Typ: listener_count ist INTEGER (int4), nicht BIGINT
         sqlx::query(
             r#"
             CREATE TABLE IF NOT EXISTS twitch_eventsub_capacity_snapshot (
                 id             BIGSERIAL PRIMARY KEY,
                 ts_utc         TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-                listener_count BIGINT NOT NULL DEFAULT 0,
+                listener_count INTEGER NOT NULL DEFAULT 0,
                 listeners_json TEXT
             )
             "#,

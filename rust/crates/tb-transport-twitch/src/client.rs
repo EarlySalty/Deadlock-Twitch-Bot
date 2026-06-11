@@ -5,9 +5,14 @@
 
 use crate::token::{fetch_app_token, AppToken, TokenError};
 use reqwest::{Client, RequestBuilder};
+use serde::de::DeserializeOwned;
 use std::sync::Arc;
+use std::time::Duration;
 use thiserror::Error;
 use tokio::sync::Mutex;
+
+/// Request-Timeout für alle Helix-Aufrufe (wie discord relay).
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Fehlertyp für Helix-Operationen.
 #[derive(Debug, Error)]
@@ -60,7 +65,7 @@ pub struct HelixClient {
 impl HelixClient {
     /// Erstellt einen neuen HelixClient.
     pub fn new(config: HelixConfig) -> Result<Self, reqwest::Error> {
-        let http = Client::builder().build()?;
+        let http = Client::builder().timeout(REQUEST_TIMEOUT).build()?;
         Ok(Self {
             http: Arc::new(http),
             config,
@@ -180,13 +185,29 @@ impl HelixClient {
         let params: Vec<(&str, &str)> = logins.iter().map(|l| ("login", *l)).collect();
         let builder = self.get("/users").await?;
         let resp = builder.query(&params).send().await?;
-        let body: HelixUsersResponse = resp.json().await?;
+        let body: HelixUsersResponse = check_status_and_json(resp).await?;
         Ok(body
             .data
             .into_iter()
             .map(|u| (u.login.to_lowercase(), u))
             .collect())
     }
+}
+
+/// Prüft den HTTP-Status einer Helix-Response und deserialisiert den Body.
+///
+/// Bei non-2xx wird `HelixError::Status` zurückgegeben, bevor JSON geparst wird.
+/// So entsteht bei 429/5xx ein klarer Status-Fehler statt eines serde-Parse-Fehlers.
+pub(crate) async fn check_status_and_json<T: DeserializeOwned>(
+    resp: reqwest::Response,
+) -> Result<T, HelixError> {
+    let status = resp.status();
+    if !status.is_success() {
+        return Err(HelixError::Status {
+            status: status.as_u16(),
+        });
+    }
+    Ok(resp.json::<T>().await?)
 }
 
 /// Twitch-User-Daten aus der Helix-API.

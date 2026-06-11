@@ -73,9 +73,11 @@ pub fn scope_snapshot(scopes_raw: Option<&str>, needs_reauth: i32) -> ScopeSnaps
 /// Berechnet den logischen Partner-Status aus DB-Feldern.
 ///
 /// Reihenfolge der Prüfungen ist fix — blocked hat höchste Priorität.
+///
+/// `archived_at` ist in Prod TEXT — hier als `Option<&str>` übergeben.
 pub fn partner_status(
     status: Option<&str>,
-    archived_at: Option<chrono::DateTime<chrono::Utc>>,
+    archived_at: Option<&str>,
     manual_partner_opt_out: i32,
     technical_pause_reason: Option<&str>,
 ) -> &'static str {
@@ -92,7 +94,8 @@ pub fn partner_status(
     }
 
     let s = status.unwrap_or("").trim().to_lowercase();
-    if s == "archived" || archived_at.is_some() {
+    // archived_at ist ein TEXT-Timestamp aus Prod — non-empty gilt als gesetzt
+    if s == "archived" || archived_at.is_some_and(|v| !v.trim().is_empty()) {
         return "archived";
     }
     if s == "departnered" {
@@ -191,8 +194,10 @@ pub struct AdminStreamerRow {
     pub twitch_user_id: Option<String>,
     pub discord_user_id: Option<String>,
     pub discord_display_name: Option<String>,
-    pub created_at: Option<chrono::DateTime<chrono::Utc>>,
-    pub archived_at: Option<chrono::DateTime<chrono::Utc>>,
+    /// TEXT in Prod (twitch_partners_all_state.created_at)
+    pub created_at: Option<String>,
+    /// TEXT in Prod (twitch_partners_all_state.archived_at)
+    pub archived_at: Option<String>,
     pub require_discord_link: Option<i32>,
     pub is_on_discord: Option<i32>,
     pub manual_partner_opt_out: Option<i32>,
@@ -204,13 +209,17 @@ pub struct AdminStreamerRow {
     pub is_verified: i32,
     pub is_partner_active: i32,
     pub is_live: i32,
-    pub last_seen_at: Option<chrono::DateTime<chrono::Utc>>,
-    pub last_viewer_count: Option<i64>,
+    /// TEXT in Prod (twitch_live_state.last_seen_at)
+    pub last_seen_at: Option<String>,
+    /// int4 in Prod (twitch_live_state.last_viewer_count)
+    pub last_viewer_count: Option<i32>,
     pub active_session_id: Option<i64>,
     pub last_game: Option<String>,
+    /// TIMESTAMPTZ (twitch_stream_sessions.ended_at/started_at)
     pub last_stream_at: Option<chrono::DateTime<chrono::Utc>>,
     pub scopes: Option<String>,
     pub needs_reauth: Option<i32>,
+    /// TIMESTAMPTZ (twitch_raid_auth.authorized_at)
     pub authorized_at: Option<chrono::DateTime<chrono::Utc>>,
     pub promo_disabled: Option<i32>,
     pub promo_message: Option<String>,
@@ -231,8 +240,10 @@ pub struct AdminStreamerDetailRow {
     pub twitch_user_id: Option<String>,
     pub discord_user_id: Option<String>,
     pub discord_display_name: Option<String>,
-    pub created_at: Option<chrono::DateTime<chrono::Utc>>,
-    pub archived_at: Option<chrono::DateTime<chrono::Utc>>,
+    /// TEXT in Prod (twitch_partners_all_state.created_at)
+    pub created_at: Option<String>,
+    /// TEXT in Prod (twitch_partners_all_state.archived_at)
+    pub archived_at: Option<String>,
     pub require_discord_link: Option<i32>,
     pub is_on_discord: Option<i32>,
     pub manual_partner_opt_out: Option<i32>,
@@ -245,14 +256,18 @@ pub struct AdminStreamerDetailRow {
     pub live_ping_enabled: i32,
     pub status: Option<String>,
     pub is_live: i32,
-    pub last_seen_at: Option<chrono::DateTime<chrono::Utc>>,
-    pub last_viewer_count: Option<i64>,
+    /// TEXT in Prod (twitch_live_state.last_seen_at)
+    pub last_seen_at: Option<String>,
+    /// int4 in Prod (twitch_live_state.last_viewer_count)
+    pub last_viewer_count: Option<i32>,
     pub active_session_id: Option<i64>,
-    pub last_started_at: Option<chrono::DateTime<chrono::Utc>>,
+    /// TEXT in Prod (twitch_live_state.last_started_at)
+    pub last_started_at: Option<String>,
     pub last_game: Option<String>,
     pub scopes: Option<String>,
     pub needs_reauth: Option<i32>,
     pub oauth_raid_enabled: Option<i32>,
+    /// TIMESTAMPTZ (twitch_raid_auth.authorized_at)
     pub authorized_at: Option<chrono::DateTime<chrono::Utc>>,
     pub plan_name: Option<String>,
     pub promo_disabled: Option<i32>,
@@ -551,7 +566,7 @@ mod tests {
             .await
             .expect("search_path");
 
-        // twitch_partners_all_state — Kern-Tabelle
+        // twitch_partners_all_state — Prod-Typen: created_at/archived_at sind TEXT
         sqlx::query(
             r#"
             CREATE TABLE IF NOT EXISTS twitch_partners_all_state (
@@ -560,8 +575,8 @@ mod tests {
                 twitch_user_id           TEXT,
                 discord_user_id          TEXT,
                 discord_display_name     TEXT,
-                created_at               TIMESTAMPTZ,
-                archived_at              TIMESTAMPTZ,
+                created_at               TEXT,
+                archived_at              TEXT,
                 require_discord_link     INTEGER NOT NULL DEFAULT 0,
                 is_on_discord            INTEGER NOT NULL DEFAULT 0,
                 manual_partner_opt_out   INTEGER NOT NULL DEFAULT 0,
@@ -582,15 +597,16 @@ mod tests {
         .await
         .expect("DDL partners_all_state");
 
+        // Prod-Typen: last_seen_at/last_started_at sind TEXT, last_viewer_count ist INTEGER (int4)
         sqlx::query(
             r#"
             CREATE TABLE IF NOT EXISTS twitch_live_state (
                 streamer_login   TEXT PRIMARY KEY,
                 twitch_user_id   TEXT,
                 is_live          INTEGER NOT NULL DEFAULT 0,
-                last_seen_at     TIMESTAMPTZ,
-                last_started_at  TIMESTAMPTZ,
-                last_viewer_count BIGINT,
+                last_seen_at     TEXT,
+                last_started_at  TEXT,
+                last_viewer_count INTEGER,
                 active_session_id BIGINT,
                 last_game        TEXT
             )
@@ -744,9 +760,9 @@ mod tests {
 
     #[test]
     fn partner_status_archived_via_flag() {
-        use chrono::Utc;
+        // archived_at ist TEXT in Prod — non-empty String gilt als gesetzt
         assert_eq!(
-            partner_status(Some("active"), Some(Utc::now()), 0, None),
+            partner_status(Some("active"), Some("2024-01-01T00:00:00Z"), 0, None),
             "archived"
         );
     }
@@ -779,9 +795,10 @@ mod tests {
             }
         };
         let pool = make_pool(&dsn, "test_admin_str_active").await;
+        // created_at ist TEXT in Prod → expliziter Cast
         sqlx::query(
             "INSERT INTO twitch_partners_all_state (twitch_login, status, created_at) \
-             VALUES ('teststreamer', 'active', NOW())",
+             VALUES ('teststreamer', 'active', NOW()::TEXT)",
         )
         .execute(&pool)
         .await
@@ -803,16 +820,17 @@ mod tests {
             }
         };
         let pool = make_pool(&dsn, "test_admin_str_archived").await;
+        // created_at/archived_at sind TEXT in Prod → expliziter Cast
         sqlx::query(
             "INSERT INTO twitch_partners_all_state (twitch_login, status, created_at) \
-             VALUES ('aktiver', 'active', NOW())",
+             VALUES ('aktiver', 'active', NOW()::TEXT)",
         )
         .execute(&pool)
         .await
         .expect("insert aktiver");
         sqlx::query(
             "INSERT INTO twitch_partners_all_state (twitch_login, status, archived_at) \
-             VALUES ('archivierter', 'archived', NOW())",
+             VALUES ('archivierter', 'archived', NOW()::TEXT)",
         )
         .execute(&pool)
         .await
@@ -855,9 +873,10 @@ mod tests {
             }
         };
         let pool = make_pool(&dsn, "test_admin_str_detail_found").await;
+        // created_at ist TEXT in Prod → expliziter Cast
         sqlx::query(
             "INSERT INTO twitch_partners_all_state (twitch_login, status, created_at) \
-             VALUES ('bekannter', 'active', NOW())",
+             VALUES ('bekannter', 'active', NOW()::TEXT)",
         )
         .execute(&pool)
         .await

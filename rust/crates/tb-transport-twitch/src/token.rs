@@ -17,6 +17,11 @@ pub enum TokenError {
     Http(#[from] reqwest::Error),
     #[error("Token-Response nicht parsebar: {0}")]
     Parse(#[from] serde_json::Error),
+    /// Twitch hat mit einem Fehler-Statuscode geantwortet (z. B. 400/401 bei
+    /// ungültigen Credentials). `message` enthält die Twitch-Fehlermeldung,
+    /// falls vorhanden — niemals den Secret-Wert selbst.
+    #[error("Token-Endpunkt antwortete mit HTTP {status}: {message}")]
+    HttpStatus { status: u16, message: String },
 }
 
 /// In-Memory-Repräsentation eines gültigen App-Tokens.
@@ -62,6 +67,14 @@ struct TokenResponse {
     expires_in: u64,
 }
 
+/// Twitch-Fehler-Body (z. B. `{"status":400,"message":"invalid client"}`).
+/// Nur für den Fehlerfall — enthält keine Credentials.
+#[derive(Debug, Deserialize, Default)]
+struct TokenErrorBody {
+    #[serde(default)]
+    message: String,
+}
+
 /// Holt einen neuen App-Token via client_credentials-Grant.
 pub async fn fetch_app_token(
     client: &Client,
@@ -80,7 +93,19 @@ pub async fn fetch_app_token(
         .send()
         .await?;
 
+    // Status prüfen bevor JSON geparst wird — bei 401/400 fehlt `access_token`
+    // im Body und serde würde mit "missing field" abbrechen statt klarem Fehler.
+    let http_status = resp.status();
     let body = resp.text().await?;
+    if !http_status.is_success() {
+        let message = serde_json::from_str::<TokenErrorBody>(&body)
+            .unwrap_or_default()
+            .message;
+        return Err(TokenError::HttpStatus {
+            status: http_status.as_u16(),
+            message,
+        });
+    }
     let parsed: TokenResponse = serde_json::from_str(&body)?;
     Ok(AppToken::new(
         parsed.access_token,

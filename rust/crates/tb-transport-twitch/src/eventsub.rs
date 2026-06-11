@@ -95,14 +95,25 @@ impl HelixClient {
     }
 
     /// Listet alle Subscriptions (optional nach Status gefiltert),
-    /// folgt der Cursor-Pagination.
+    /// folgt der Cursor-Pagination. Obergrenze: 100 Seiten (= 10 000 Subs).
     pub async fn list_eventsub_subscriptions(
         &self,
         status: Option<&str>,
     ) -> Result<Vec<EventSubSubscription>, HelixError> {
+        /// Max. Seiten, um eine Endlosschleife bei defektem API-Cursor auszuschließen.
+        const MAX_PAGES: u32 = 100;
         let mut out = Vec::new();
         let mut after: Option<String> = None;
+        let mut pages = 0u32;
         loop {
+            if pages >= MAX_PAGES {
+                tracing::warn!(
+                    "list_eventsub_subscriptions: Seitenlimit ({MAX_PAGES}) erreicht, \
+                     Pagination abgebrochen"
+                );
+                break;
+            }
+            pages += 1;
             let mut params: Vec<(&str, String)> = Vec::new();
             if let Some(status) = status.map(str::trim).filter(|s| !s.is_empty()) {
                 params.push(("status", status.to_string()));

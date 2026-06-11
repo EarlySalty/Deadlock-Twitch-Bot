@@ -10,10 +10,12 @@ use sqlx::PgPool;
 ///
 /// Gibt `MAX(COALESCE(last_seen_at, last_started_at))` zurück,
 /// oder `None` wenn die Tabelle leer ist.
+///
+/// `last_seen_at` und `last_started_at` sind in Prod TEXT → expliziter Cast auf timestamptz.
 pub async fn system_last_tick(pool: &PgPool) -> Result<Option<DateTime<Utc>>, sqlx::Error> {
     let row: (Option<DateTime<Utc>>,) = sqlx::query_as(
         r#"
-        SELECT MAX(COALESCE(last_seen_at, last_started_at))
+        SELECT MAX(COALESCE(last_seen_at::timestamptz, last_started_at::timestamptz))
         FROM twitch_live_state
         "#,
     )
@@ -54,41 +56,45 @@ type RawChatRow = (
 /// Bug B: `is_live = 1` statt `TRUE` (INTEGER-Spalte).
 /// Bug C: LOWER()-JOIN für case-insensitiven Vergleich.
 /// Bug D: `is_live_scope`-Spalte in beiden CTEs.
+///
+/// Alle Timestamp-Spalten in `twitch_raw_chat_ingest_health` und
+/// `last_seen_at` in `twitch_live_state` sind in Prod TEXT → expliziter
+/// Cast auf timestamptz für Vergleiche und EXTRACT.
 pub async fn raw_chat_health(pool: &PgPool) -> Result<Option<RawChatHealth>, sqlx::Error> {
     let row: Option<RawChatRow> = sqlx::query_as(
         r#"
         WITH live_scope AS (
             SELECT
                 h.streamer_login,
-                h.last_raw_chat_message_at,
-                h.last_raw_chat_insert_ok_at,
-                h.last_raw_chat_insert_error_at,
+                h.last_raw_chat_message_at::timestamptz    AS last_raw_chat_message_at,
+                h.last_raw_chat_insert_ok_at::timestamptz  AS last_raw_chat_insert_ok_at,
+                h.last_raw_chat_insert_error_at::timestamptz AS last_raw_chat_insert_error_at,
                 h.last_raw_chat_error AS last_error,
                 GREATEST(
-                    h.last_raw_chat_message_at,
-                    h.last_raw_chat_insert_ok_at,
-                    h.last_raw_chat_insert_error_at,
-                    h.updated_at
+                    h.last_raw_chat_message_at::timestamptz,
+                    h.last_raw_chat_insert_ok_at::timestamptz,
+                    h.last_raw_chat_insert_error_at::timestamptz,
+                    h.updated_at::timestamptz
                 ) AS newest_signal_at,
                 TRUE AS is_live_scope
             FROM twitch_raw_chat_ingest_health h
             JOIN twitch_live_state ls
                 ON LOWER(ls.streamer_login) = LOWER(h.streamer_login)
             WHERE ls.is_live = 1
-              AND ls.last_seen_at >= NOW() - INTERVAL '4 hours'
+              AND ls.last_seen_at::timestamptz >= NOW() - INTERVAL '4 hours'
         ),
         fallback AS (
             SELECT
                 h.streamer_login,
-                h.last_raw_chat_message_at,
-                h.last_raw_chat_insert_ok_at,
-                h.last_raw_chat_insert_error_at,
+                h.last_raw_chat_message_at::timestamptz    AS last_raw_chat_message_at,
+                h.last_raw_chat_insert_ok_at::timestamptz  AS last_raw_chat_insert_ok_at,
+                h.last_raw_chat_insert_error_at::timestamptz AS last_raw_chat_insert_error_at,
                 h.last_raw_chat_error AS last_error,
                 GREATEST(
-                    h.last_raw_chat_message_at,
-                    h.last_raw_chat_insert_ok_at,
-                    h.last_raw_chat_insert_error_at,
-                    h.updated_at
+                    h.last_raw_chat_message_at::timestamptz,
+                    h.last_raw_chat_insert_ok_at::timestamptz,
+                    h.last_raw_chat_insert_error_at::timestamptz,
+                    h.updated_at::timestamptz
                 ) AS newest_signal_at,
                 FALSE AS is_live_scope
             FROM twitch_raw_chat_ingest_health h
@@ -156,28 +162,30 @@ mod tests {
             .await
             .expect("search_path setzen");
         // Bug B: INTEGER NOT NULL DEFAULT 0 statt BOOLEAN
+        // Prod-Typen: last_seen_at/last_started_at sind TEXT (kein timestamptz)
         sqlx::query(
             r#"
             CREATE TABLE IF NOT EXISTS twitch_live_state (
                 streamer_login  TEXT PRIMARY KEY,
                 is_live         INTEGER NOT NULL DEFAULT 0,
-                last_seen_at    TIMESTAMPTZ,
-                last_started_at TIMESTAMPTZ
+                last_seen_at    TEXT,
+                last_started_at TEXT
             )
             "#,
         )
         .execute(&pool)
         .await
         .expect("DDL twitch_live_state");
+        // Prod-Typen: alle Timestamp-Spalten sind TEXT (kein timestamptz)
         sqlx::query(
             r#"
             CREATE TABLE IF NOT EXISTS twitch_raw_chat_ingest_health (
                 streamer_login                TEXT PRIMARY KEY,
-                last_raw_chat_message_at      TIMESTAMPTZ,
-                last_raw_chat_insert_ok_at    TIMESTAMPTZ,
-                last_raw_chat_insert_error_at TIMESTAMPTZ,
+                last_raw_chat_message_at      TEXT,
+                last_raw_chat_insert_ok_at    TEXT,
+                last_raw_chat_insert_error_at TEXT,
                 last_raw_chat_error           TEXT,
-                updated_at                    TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                updated_at                    TEXT NOT NULL DEFAULT TO_CHAR(NOW(), 'YYYY-MM-DD"T"HH24:MI:SS"Z"')
             )
             "#,
         )
@@ -217,9 +225,10 @@ mod tests {
             }
         };
         let pool = make_pool(&dsn, "test_syshealth_tick").await;
+        // last_seen_at ist TEXT in Prod → ISO-String einsetzen
         sqlx::query(
             "INSERT INTO twitch_live_state (streamer_login, is_live, last_seen_at) \
-             VALUES ('test_s', 1, NOW() - INTERVAL '30 seconds')",
+             VALUES ('test_s', 1, (NOW() - INTERVAL '30 seconds')::TEXT)",
         )
         .execute(&pool)
         .await
@@ -238,17 +247,19 @@ mod tests {
             }
         };
         let pool = make_pool(&dsn, "test_syshealth_chat").await;
+        // last_seen_at ist TEXT in Prod → ISO-String
         sqlx::query(
             "INSERT INTO twitch_live_state (streamer_login, is_live, last_seen_at) \
-             VALUES ('live_s', 1, NOW() - INTERVAL '1 minute')",
+             VALUES ('live_s', 1, (NOW() - INTERVAL '1 minute')::TEXT)",
         )
         .execute(&pool)
         .await
         .unwrap();
+        // Timestamp-Spalten in twitch_raw_chat_ingest_health sind TEXT in Prod
         sqlx::query(
             "INSERT INTO twitch_raw_chat_ingest_health \
              (streamer_login, last_raw_chat_message_at, updated_at) \
-             VALUES ('live_s', NOW() - INTERVAL '10 seconds', NOW())",
+             VALUES ('live_s', (NOW() - INTERVAL '10 seconds')::TEXT, NOW()::TEXT)",
         )
         .execute(&pool)
         .await
@@ -257,7 +268,7 @@ mod tests {
         sqlx::query(
             "INSERT INTO twitch_raw_chat_ingest_health \
              (streamer_login, last_raw_chat_message_at, updated_at) \
-             VALUES ('offline_s', NOW() - INTERVAL '1 second', NOW())",
+             VALUES ('offline_s', (NOW() - INTERVAL '1 second')::TEXT, NOW()::TEXT)",
         )
         .execute(&pool)
         .await
@@ -280,10 +291,11 @@ mod tests {
         };
         let pool = make_pool(&dsn, "test_syshealth_fallback").await;
         // Nur Offline-Streamer in health-Tabelle, kein Eintrag in live_state
+        // Timestamp-Spalten sind TEXT in Prod → expliziter Cast
         sqlx::query(
             "INSERT INTO twitch_raw_chat_ingest_health \
              (streamer_login, last_raw_chat_message_at, updated_at) \
-             VALUES ('offline_x', NOW() - INTERVAL '5 seconds', NOW())",
+             VALUES ('offline_x', (NOW() - INTERVAL '5 seconds')::TEXT, NOW()::TEXT)",
         )
         .execute(&pool)
         .await

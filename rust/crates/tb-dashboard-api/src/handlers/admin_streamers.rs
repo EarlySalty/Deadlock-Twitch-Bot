@@ -186,7 +186,7 @@ pub async fn list_handler(
             let snap = scope_snapshot(r.scopes.as_deref(), r.needs_reauth.unwrap_or(0));
             let ps = partner_status(
                 r.status.as_deref(),
-                r.archived_at,
+                r.archived_at.as_deref(),
                 r.manual_partner_opt_out.unwrap_or(0),
                 r.technical_pause_reason.as_deref(),
             );
@@ -207,15 +207,15 @@ pub async fn list_handler(
                 discord_display_name: r.discord_display_name,
                 verified: r.is_verified != 0,
                 archived: r.archived_at.is_some(),
-                archived_at: r.archived_at.map(fmt_dt),
-                created_at: r.created_at.map(fmt_dt),
+                archived_at: r.archived_at,
+                created_at: r.created_at,
                 is_live: r.is_live != 0,
                 is_on_discord: r.is_on_discord.unwrap_or(0) != 0,
                 manual_partner_opt_out: r.manual_partner_opt_out.unwrap_or(0) != 0,
                 partner_status: ps.to_string(),
-                viewer_count: r.last_viewer_count.unwrap_or(0),
+                viewer_count: r.last_viewer_count.unwrap_or(0) as i64,
                 active_session_id: r.active_session_id,
-                last_seen_at: r.last_seen_at.map(fmt_dt),
+                last_seen_at: r.last_seen_at,
                 last_game: r.last_game,
                 last_stream_at: r.last_stream_at.map(fmt_dt),
                 plan_id: r.billing_plan_id.or(r.manual_plan_id),
@@ -272,7 +272,7 @@ pub async fn detail_handler(
     let snap = scope_snapshot(row.scopes.as_deref(), row.needs_reauth.unwrap_or(0));
     let ps = partner_status(
         row.status.as_deref(),
-        row.archived_at,
+        row.archived_at.as_deref(),
         row.manual_partner_opt_out.unwrap_or(0),
         row.technical_pause_reason.as_deref(),
     );
@@ -325,8 +325,8 @@ pub async fn detail_handler(
             require_discord_link: row.require_discord_link.unwrap_or(0) != 0,
             discord_user_id: row.discord_user_id,
             discord_display_name: row.discord_display_name,
-            created_at: row.created_at.map(fmt_dt),
-            archived_at: row.archived_at.map(fmt_dt),
+            created_at: row.created_at,
+            archived_at: row.archived_at,
             operational_state: row.operational_state,
             technical_pause_reason: row.technical_pause_reason,
         },
@@ -383,8 +383,8 @@ mod tests {
             r#"
             CREATE TABLE IF NOT EXISTS twitch_partners_all_state (
                 id BIGSERIAL PRIMARY KEY, twitch_login TEXT NOT NULL, twitch_user_id TEXT,
-                discord_user_id TEXT, discord_display_name TEXT, created_at TIMESTAMPTZ,
-                archived_at TIMESTAMPTZ, require_discord_link INTEGER NOT NULL DEFAULT 0,
+                discord_user_id TEXT, discord_display_name TEXT, created_at TEXT,
+                archived_at TEXT, require_discord_link INTEGER NOT NULL DEFAULT 0,
                 is_on_discord INTEGER NOT NULL DEFAULT 0, manual_partner_opt_out INTEGER NOT NULL DEFAULT 0,
                 status TEXT, raid_bot_enabled INTEGER NOT NULL DEFAULT 1, silent_ban INTEGER NOT NULL DEFAULT 0,
                 silent_raid INTEGER NOT NULL DEFAULT 0, is_monitored_only INTEGER NOT NULL DEFAULT 0,
@@ -401,8 +401,8 @@ mod tests {
             r#"
             CREATE TABLE IF NOT EXISTS twitch_live_state (
                 streamer_login TEXT PRIMARY KEY, twitch_user_id TEXT,
-                is_live INTEGER NOT NULL DEFAULT 0, last_seen_at TIMESTAMPTZ,
-                last_started_at TIMESTAMPTZ, last_viewer_count BIGINT,
+                is_live INTEGER NOT NULL DEFAULT 0, last_seen_at TEXT,
+                last_started_at TEXT, last_viewer_count INTEGER,
                 active_session_id BIGINT, last_game TEXT
             )
         "#,

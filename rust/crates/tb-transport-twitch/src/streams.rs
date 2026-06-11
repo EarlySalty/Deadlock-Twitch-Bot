@@ -4,7 +4,7 @@
 
 use serde::Deserialize;
 
-use crate::client::{HelixClient, HelixError};
+use crate::client::{check_status_and_json, HelixClient, HelixError};
 
 /// Ein Live-Stream aus Helix `/streams`.
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -107,7 +107,7 @@ impl HelixClient {
                 params.push(("language", language));
             }
             let resp = self.get("/streams").await?.query(&params).send().await?;
-            let body: StreamsResponse = resp.json().await?;
+            let body: StreamsResponse = check_status_and_json(resp).await?;
             out.extend(body.data);
         }
         Ok(out)
@@ -126,7 +126,7 @@ impl HelixClient {
         }
         let params = [("broadcaster_id", broadcaster_id)];
         let resp = self.get("/channels").await?.query(&params).send().await?;
-        let body: ChannelsResponse = resp.json().await?;
+        let body: ChannelsResponse = check_status_and_json(resp).await?;
         Ok(body.data.into_iter().next())
     }
 
@@ -152,7 +152,7 @@ impl HelixClient {
                 params.push(("after", cursor.clone()));
             }
             let resp = self.get("/streams").await?.query(&params).send().await?;
-            let body: StreamsResponse = resp.json().await?;
+            let body: StreamsResponse = check_status_and_json(resp).await?;
             let empty = body.data.is_empty();
             out.extend(body.data);
             after = body.pagination.cursor;
@@ -181,7 +181,7 @@ impl HelixClient {
             .query(&[("query", query), ("first", "25")])
             .send()
             .await?;
-        let body: CategorySearchResponse = resp.json().await?;
+        let body: CategorySearchResponse = check_status_and_json(resp).await?;
         let mut best: Option<String> = None;
         for entry in body.data {
             let name = entry.name.trim().to_lowercase();

@@ -108,13 +108,26 @@ impl RaidTokenRefresher {
 
     /// Erneuert das Token eines Streamers und schreibt es verschlüsselt zurück.
     ///
-    /// Reihenfolge wie Python `get_valid_token`-Refresh-Zweig: Blacklist/Cooldown
-    /// vorab prüfen, dann unter Advisory-Lock refreshen + schreiben.
+    /// Reihenfolge:
+    /// 1. Blacklist/Cooldown vorab prüfen (kein Lock nötig).
+    /// 2. Transaktion beginnen + Advisory-Lock holen (serialisiert Zugriff
+    ///    cross-process mit dem Python-Wartungssweep).
+    /// 3. **Re-Read unter Lock**: frischesten `refresh_token` + `token_expires_at`
+    ///    aus der DB lesen. Wenn ein paralleler Writer (Python-Sweep) den Token
+    ///    bereits rotiert hat, verwenden wir seinen Refresh-Token — nicht den
+    ///    vor dem Lock gelesenen. Ist das Token inzwischen frisch genug, überspringen.
+    /// 4. HTTP-Refresh mit dem frischesten Token (unter Lock, damit kein dritter
+    ///    Writer zwischen HTTP-Antwort und Write reinkommen kann).
+    /// 5. Verschlüsseln + in dieselbe Transaktion schreiben → Commit + Lock frei.
+    ///
+    /// Lock-Dauer: schließt den HTTP-Call ein. Das ist der bewusste Trade-off —
+    /// Korrektheit (kein Doppel-Refresh mit altem Token) geht vor kurzer Lock-Zeit.
+    /// Der Lock ist pro Broadcaster; andere Broadcaster werden nicht blockiert.
     pub async fn refresh_and_store(
         &self,
         twitch_user_id: &str,
         twitch_login: &str,
-        current_refresh_token: &str,
+        _current_refresh_token: &str,
         now: DateTime<Utc>,
     ) -> Result<RefreshOutcome, sqlx::Error> {
         if self.blacklist.is_blacklisted(twitch_user_id).await
@@ -131,7 +144,58 @@ impl RaidTokenRefresher {
             .execute(&mut *tx)
             .await?;
 
-        let response = match self.client.refresh(current_refresh_token).await {
+        // Re-Read unterm Lock: frischesten Stand holen, damit wir keinen bereits
+        // invalidierten Refresh-Token von vor dem Lock verwenden (Twitch rotiert
+        // Refresh-Tokens bei Nutzung — ein paralleler Python-Writer könnte ihn
+        // inzwischen schon konsumiert haben).
+        type RefreshRow = (Option<Vec<u8>>, Option<DateTime<Utc>>);
+        let row: Option<RefreshRow> = sqlx::query_as(
+            "SELECT refresh_token_enc, token_expires_at FROM twitch_raid_auth WHERE twitch_user_id = $1",
+        )
+        .bind(twitch_user_id)
+        .fetch_optional(&mut *tx)
+        .await?;
+
+        let (fresh_refresh_token, fresh_expires_at) = match row {
+            None => {
+                // Zeile verschwunden — nichts zu tun.
+                tx.commit().await?;
+                return Ok(RefreshOutcome::Skipped);
+            }
+            Some((enc_bytes, expires_at)) => {
+                let refresh_aad = aad::raid_auth("refresh_token", twitch_user_id, 1);
+                let token = match enc_bytes {
+                    Some(b) => match self.cipher.decrypt_field(&b, &refresh_aad) {
+                        Ok(t) => t,
+                        Err(_) => {
+                            tracing::error!(
+                                user = %mask(twitch_user_id),
+                                "Re-Read unterm Lock: Entschlüsseln refresh_token fehlgeschlagen"
+                            );
+                            tx.commit().await?;
+                            return Ok(RefreshOutcome::Skipped);
+                        }
+                    },
+                    None => {
+                        tx.commit().await?;
+                        return Ok(RefreshOutcome::Skipped);
+                    }
+                };
+                (token, expires_at)
+            }
+        };
+
+        // Prüfen ob nach dem Lock inzwischen frisch genug — ein paralleler Writer
+        // hat vielleicht schon refresht. Puffer 300 s (identisch zum Provider).
+        const EXPIRY_PUFFER: i64 = 300;
+        if let Some(exp) = fresh_expires_at {
+            if now < exp - Duration::seconds(EXPIRY_PUFFER) {
+                tx.commit().await?;
+                return Ok(RefreshOutcome::Refreshed);
+            }
+        }
+
+        let response = match self.client.refresh(&fresh_refresh_token).await {
             Ok(response) => response,
             Err(RefreshError::InvalidGrant) => {
                 tx.commit().await?;

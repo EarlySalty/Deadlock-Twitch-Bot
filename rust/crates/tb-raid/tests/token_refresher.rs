@@ -150,6 +150,62 @@ impl TokenBlacklist for StubBlacklist {
     async fn clear_failure_count(&self, _twitch_user_id: &str) {}
 }
 
+/// Wie `seed_row`, aber mit `token_expires_at` in der Vergangenheit und einem
+/// explizit gesetzten Refresh-Token-Wert.
+async fn seed_row_expired(pool: &PgPool, cipher: &FieldCipher, user_id: &str, refresh_val: &str) {
+    let acc = cipher
+        .encrypt_field("alt-access", &aad::raid_auth("access_token", user_id, 1))
+        .unwrap();
+    let refr = cipher
+        .encrypt_field(refresh_val, &aad::raid_auth("refresh_token", user_id, 1))
+        .unwrap();
+    sqlx::query(
+        "INSERT INTO twitch_raid_auth
+            (twitch_user_id, twitch_login, raid_enabled, enc_version, enc_kid,
+             access_token_enc, refresh_token_enc, token_expires_at)
+         VALUES ($1, 'drag', TRUE, 1, 'v1', $2, $3,
+                 NOW() - INTERVAL '1 hour')",
+    )
+    .bind(user_id)
+    .bind(acc)
+    .bind(refr)
+    .execute(pool)
+    .await
+    .unwrap();
+}
+
+/// StubClient der den tatsächlich übergebenen Refresh-Token aufzeichnet.
+struct CapturingStubClient {
+    received_token: Mutex<Option<String>>,
+    response: TokenResponse,
+}
+impl CapturingStubClient {
+    fn new(access: &str, refresh: &str) -> Arc<Self> {
+        Arc::new(Self {
+            received_token: Mutex::new(None),
+            response: TokenResponse {
+                access_token: access.to_string(),
+                refresh_token: refresh.to_string(),
+                expires_in: 3600,
+                scopes: vec![],
+            },
+        })
+    }
+    fn received(&self) -> Option<String> {
+        self.received_token.lock().unwrap().clone()
+    }
+}
+#[async_trait::async_trait]
+impl TwitchTokenClient for CapturingStubClient {
+    async fn refresh(&self, refresh_token: &str) -> Result<TokenResponse, RefreshError> {
+        *self.received_token.lock().unwrap() = Some(refresh_token.to_string());
+        Ok(self.response.clone())
+    }
+    async fn exchange_code(&self, _code: &str) -> Result<TokenResponse, RefreshError> {
+        unreachable!()
+    }
+}
+
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 #[tokio::test]
@@ -255,4 +311,48 @@ async fn geblacklisteter_streamer_wird_vorab_uebersprungen() {
         .await
         .unwrap();
     assert_eq!(outcome, RefreshOutcome::Skipped);
+}
+
+/// Kerntest: Token mit abgelaufenem `token_expires_at` → Re-Read unterm Lock
+/// liefert den DB-seitigen (ggf. vom parallelen Writer rotierten) Refresh-Token,
+/// refresht damit, schreibt neuen Token — und gibt `Refreshed` zurück.
+///
+/// Simuliert den Race: Der Aufrufer übergibt einen "alten" Refresh-Token
+/// (`veraltet-refresh`), aber in der DB steht der "frische" (`db-refresh`).
+/// Der Fix stellt sicher, dass der HTTP-Call mit dem DB-seitigen Token erfolgt.
+#[tokio::test]
+async fn re_read_unterm_lock_nutzt_db_refresh_token_nicht_uebergebenen() {
+    let pool = pool_or_skip!("t6a_refresh_reread");
+    let cipher = cipher();
+    // DB enthält `db-refresh` als Refresh-Token; Token ist abgelaufen.
+    seed_row_expired(&pool, &cipher, "42", "db-refresh").await;
+    let blacklist = Arc::new(StubBlacklist::default());
+    let client = CapturingStubClient::new("neu-access", "neu-refresh");
+
+    let refresher = RaidTokenRefresher::new(
+        pool.clone(),
+        cipher.clone(),
+        client.clone(),
+        blacklist.clone(),
+    );
+
+    // Aufrufer übergibt absichtlich einen veralteten Token (simuliert Race).
+    let outcome = refresher
+        .refresh_and_store("42", "drag", "veraltet-refresh", Utc::now())
+        .await
+        .unwrap();
+    assert_eq!(outcome, RefreshOutcome::Refreshed);
+
+    // Der HTTP-Client wurde mit dem DB-seitigen Token aufgerufen, NICHT dem übergebenen.
+    assert_eq!(
+        client.received().as_deref(),
+        Some("db-refresh"),
+        "refresh() muss mit dem frisch aus der DB gelesenen Token aufgerufen werden"
+    );
+
+    // Neuer Token ist korrekt verschlüsselt in der DB gelandet.
+    let store = RaidAuthStore::new(pool.clone(), cipher);
+    let tokens = store.load_decrypted("42").await.unwrap().expect("Zeile");
+    assert_eq!(tokens.access_token, "neu-access");
+    assert_eq!(tokens.refresh_token.as_deref(), Some("neu-refresh"));
 }
