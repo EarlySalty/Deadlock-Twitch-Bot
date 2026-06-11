@@ -238,39 +238,6 @@ class RaidCommandsMixin:
         )
         log.info("Enabled auto-raid for %s (%s)", twitch_login, discord_user_id)
 
-    @commands.hybrid_command(name="raid_disable", aliases=["raidbot_off"])
-    async def cmd_raid_disable(self, ctx: commands.Context):
-        """Deaktiviere den Auto-Raid-Bot für deinen Twitch-Kanal."""
-        discord_user_id = str(ctx.author.id)
-
-        with readonly_connection() as conn:
-            row = load_partner_by_discord_user_id(conn, discord_user_id)
-
-        if not row:
-            await ctx.send(
-                "❌ Du bist nicht als Streamer-Partner registriert.",
-                ephemeral=True,
-            )
-            return
-
-        twitch_login = row["twitch_login"] if hasattr(row, "keys") else row[2]
-        twitch_user_id = row["twitch_user_id"] if hasattr(row, "keys") else row[1]
-
-        with transaction() as conn:
-            conn.execute(
-                "UPDATE twitch_raid_auth SET raid_enabled = %s WHERE twitch_user_id = %s",
-                (False, twitch_user_id),
-            )
-        with transaction() as conn:
-            set_partner_raid_bot_enabled(conn, twitch_user_id=twitch_user_id, enabled=False)
-
-        await ctx.send(
-            f"🛑 Auto-Raid wurde für **{twitch_login}** deaktiviert.\n"
-            "Du kannst es jederzeit mit `/raid_enable` wieder aktivieren.",
-            ephemeral=True,
-        )
-        log.info("Disabled auto-raid for %s (%s)", twitch_login, discord_user_id)
-
     @commands.hybrid_command(name="raid_status", aliases=["raidbot_status"])
     async def cmd_raid_status(self, ctx: commands.Context):
         """Zeige den Status deines Auto-Raid-Bots an."""

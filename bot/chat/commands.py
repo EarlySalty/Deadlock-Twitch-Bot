@@ -123,43 +123,6 @@ if TWITCHIO_AVAILABLE:
             )
             log.info("Enabled auto-raid for %s via chat", twitch_login)
 
-        @twitchio_commands.command(name="raid_disable", aliases=["raidbot_off"])
-        async def cmd_raid_disable(self, ctx: twitchio_commands.Context):
-            """!raid_disable - Deaktiviert den Auto-Raid-Bot."""
-            is_mod = getattr(ctx.author, "is_moderator", getattr(ctx.author, "moderator", False))
-            is_broadcaster = getattr(
-                ctx.author, "is_broadcaster", getattr(ctx.author, "broadcaster", False)
-            )
-            if not (is_broadcaster or is_mod):
-                await ctx.send(
-                    f"@{ctx.author.name} Nur der Broadcaster oder Mods können den Twitch-Bot steuern."
-                )
-                return
-
-            channel_name = ctx.channel.name
-            streamer_data = self._get_streamer_by_channel(channel_name)
-
-            if not streamer_data:
-                await ctx.send(
-                    f"@{ctx.author.name} Dieser Kanal ist nicht als Partner registriert."
-                )
-                return
-
-            twitch_login, twitch_user_id, _ = streamer_data
-
-            with transaction() as conn:
-                conn.execute(
-                    "UPDATE twitch_raid_auth SET raid_enabled = %s WHERE twitch_user_id = %s",
-                    (False, twitch_user_id),
-                )
-                set_partner_raid_bot_enabled(conn, twitch_user_id=twitch_user_id, enabled=False)
-
-            await ctx.send(
-                f"@{ctx.author.name} 🛑 Auto-Raid deaktiviert. "
-                "Du kannst es jederzeit mit !raid_enable wieder aktivieren."
-            )
-            log.info("Disabled auto-raid for %s via chat", twitch_login)
-
         @twitchio_commands.command(name="raid_status", aliases=["raidbot_status"])
         async def cmd_raid_status(self, ctx: twitchio_commands.Context):
             """!raid_status - Zeigt den Twitch-Bot-Status an."""
