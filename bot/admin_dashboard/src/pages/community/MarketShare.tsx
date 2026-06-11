@@ -6,7 +6,6 @@ import {
   CartesianGrid,
   ComposedChart,
   Legend,
-  Line,
   ResponsiveContainer,
   Tooltip,
   XAxis,
@@ -193,59 +192,95 @@ export default function MarketSharePage() {
             </p>
           ) : null}
         </div>
-        <div className="mt-6 h-96">
+        <div className="mt-6">
           {query.isLoading ? (
-            <div className="flex h-full items-center justify-center text-sm text-text-secondary">
+            <div className="flex h-64 items-center justify-center text-sm text-text-secondary">
               Lade Marktdaten …
             </div>
           ) : chartRows.length ? (
-            <ResponsiveContainer width="100%" height="100%">
-              <ComposedChart data={chartRows}>
-                <CartesianGrid stroke="rgba(255,255,255,0.06)" vertical={false} />
-                <XAxis dataKey="label" stroke="#9bb3c5" tickLine={false} axisLine={false} minTickGap={32} />
-                <YAxis yAxisId="viewers" stroke="#9bb3c5" tickLine={false} axisLine={false} />
-                <YAxis
-                  yAxisId="share"
-                  orientation="right"
-                  stroke="#f5b94c"
-                  tickLine={false}
-                  axisLine={false}
-                  unit="%"
-                />
-                <Tooltip
-                  contentStyle={{
-                    background: '#0f2431',
-                    border: '1px solid rgba(255,255,255,0.1)',
-                    borderRadius: '16px',
-                  }}
-                />
-                <Legend />
-                <Area
-                  yAxisId="viewers"
-                  type="monotone"
-                  dataKey="Netzwerk"
-                  stackId="viewers"
-                  stroke="#10b7ad"
-                  fill="rgba(16,183,173,0.45)"
-                />
-                <Area
-                  yAxisId="viewers"
-                  type="monotone"
-                  dataKey="Rest"
-                  stackId="viewers"
-                  stroke="#3a566b"
-                  fill="rgba(58,86,107,0.30)"
-                />
-                <Line
-                  yAxisId="share"
-                  type="monotone"
-                  dataKey="Anteil %"
-                  stroke="#f5b94c"
-                  strokeWidth={2}
-                  dot={false}
-                />
-              </ComposedChart>
-            </ResponsiveContainer>
+            <div className="space-y-8">
+              <div>
+                <p className="text-xs uppercase tracking-[0.18em] text-text-secondary">
+                  Marktanteil des Netzwerks
+                </p>
+                <div className="mt-3 h-64">
+                  <ResponsiveContainer width="100%" height="100%">
+                    <ComposedChart data={chartRows}>
+                      <CartesianGrid stroke="rgba(255,255,255,0.06)" vertical={false} />
+                      <XAxis
+                        dataKey="label"
+                        stroke="#9bb3c5"
+                        tickLine={false}
+                        axisLine={false}
+                        minTickGap={48}
+                      />
+                      <YAxis stroke="#f5b94c" tickLine={false} axisLine={false} unit="%" />
+                      <Tooltip
+                        contentStyle={{
+                          background: '#0f2431',
+                          border: '1px solid rgba(255,255,255,0.1)',
+                          borderRadius: '16px',
+                        }}
+                      />
+                      <Area
+                        type="monotone"
+                        dataKey="Anteil %"
+                        stroke="#f5b94c"
+                        strokeWidth={2}
+                        fill="rgba(245,185,76,0.18)"
+                        connectNulls
+                      />
+                    </ComposedChart>
+                  </ResponsiveContainer>
+                </div>
+                <p className="mt-2 text-xs text-text-secondary">
+                  Phasen mit weniger als {MIN_MARKET_VIEWERS} Markt-Viewern (z.&nbsp;B. nachts) fließen
+                  nicht in die Linie ein und werden überbrückt.
+                </p>
+              </div>
+              <div>
+                <p className="text-xs uppercase tracking-[0.18em] text-text-secondary">
+                  Viewer im Markt — Netzwerk vs. Rest
+                </p>
+                <div className="mt-3 h-52">
+                  <ResponsiveContainer width="100%" height="100%">
+                    <ComposedChart data={chartRows}>
+                      <CartesianGrid stroke="rgba(255,255,255,0.06)" vertical={false} />
+                      <XAxis
+                        dataKey="label"
+                        stroke="#9bb3c5"
+                        tickLine={false}
+                        axisLine={false}
+                        minTickGap={48}
+                      />
+                      <YAxis stroke="#9bb3c5" tickLine={false} axisLine={false} />
+                      <Tooltip
+                        contentStyle={{
+                          background: '#0f2431',
+                          border: '1px solid rgba(255,255,255,0.1)',
+                          borderRadius: '16px',
+                        }}
+                      />
+                      <Legend />
+                      <Area
+                        type="monotone"
+                        dataKey="Netzwerk"
+                        stackId="viewers"
+                        stroke="#10b7ad"
+                        fill="rgba(16,183,173,0.45)"
+                      />
+                      <Area
+                        type="monotone"
+                        dataKey="Rest"
+                        stackId="viewers"
+                        stroke="#3a566b"
+                        fill="rgba(58,86,107,0.30)"
+                      />
+                    </ComposedChart>
+                  </ResponsiveContainer>
+                </div>
+              </div>
+            </div>
           ) : (
             <EmptyState
               icon={BarChart3}

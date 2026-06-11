@@ -110,11 +110,11 @@ pub struct TopStream {
 /// Bucket-Breite passend zum Zeitraum, damit die Punktzahl handhabbar bleibt.
 fn bucket_seconds_for(days: i64) -> i64 {
     if days <= 1 {
-        600 // 10 min → ≤144 Punkte
+        900 // 15 min → ≤96 Punkte
     } else if days <= 7 {
-        3600 // 1 h → ≤168 Punkte
+        7200 // 2 h → ≤84 Punkte
     } else if days <= 31 {
-        14400 // 4 h → ≤186 Punkte
+        21600 // 6 h → ≤124 Punkte
     } else {
         86400 // 1 Tag → ≤365 Punkte
     }

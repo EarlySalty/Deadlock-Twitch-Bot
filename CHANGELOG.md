@@ -1,3 +1,9 @@
+## #142 — Markt-Dominanz: Chart in zwei lesbare Panels aufgeteilt
+
+**Ausgangslage:** Marktanteils-Linie und Viewer-Flächen teilten sich ein Diagramm mit zwei Y-Achsen. Ergebnis: Die Prozent-Linie zerfiel durch die nächtlichen Mindestmarkt-Lücken in abgehackte Stücke, und die Viewer-Flächen waren neben einzelnen Tages-Spitzen kaum noch ablesbar.
+
+**Was wurde geändert:** Das Diagramm ist jetzt zweigeteilt — oben der Marktanteil als durchgehende Fläche mit eigener Prozent-Skala (Phasen unter 20 Markt-Viewern werden überbrückt statt als Loch zu erscheinen, mit Hinweistext darunter), darunter die Viewer-Verteilung Netzwerk vs. Rest mit eigener Skala. Zusätzlich sind die Zeit-Buckets gröber (24 h → 15 min, 7 Tage → 2 h, 30 Tage → 6 h), was das Zickzack glättet und die Kurven ruhiger macht.
+
 ## #141 — Markt-Dominanz: DE-Erkennung jetzt über die Stream-Sprache statt über Tags
 
 **Ausgangslage:** Die deutschsprachige Marktsicht erkannte Streams über die frei wählbaren Stream-Tags („Deutsch"/„German"). Das war zu grob: Internationale Streamer, die mehrsprachig taggen, rutschten in den DE-Markt, obwohl sie englisch streamen — und blähten dessen Viewer-Basis künstlich auf, sodass der eigene Anteil viel kleiner wirkte als er ist.
