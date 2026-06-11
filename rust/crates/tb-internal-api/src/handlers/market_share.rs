@@ -128,10 +128,6 @@ fn share_pct(part: f64, total: f64) -> f64 {
     }
 }
 
-/// Mindest-Marktgröße (Viewer) für den Peak: ein 100%-Anteil nachts bei
-/// 2 Viewern ist keine Dominanz. Buckets darunter werden für den Peak
-/// ignoriert; das Frontend nutzt dieselbe Schwelle für die Anteil-Linie.
-const MIN_PEAK_MARKET_VIEWERS: f64 = 20.0;
 
 /// `GET /internal/twitch/v1/market-share?days=7&scope=all|german`
 pub async fn market_share_handler(
@@ -172,9 +168,12 @@ pub async fn market_share_handler(
         })
         .collect();
 
+    // Bewusst ohne Mindestmarkt-Schwelle: auch ein 100%-Bucket mit kleinem
+    // Markt ist echte Dominanz (alle Live-Kanäle gehören dem Netzwerk);
+    // die Einordnung liefert der Hint (x von y Viewern) im Frontend.
     let peak = series
         .iter()
-        .filter(|p| p.total_viewers >= MIN_PEAK_MARKET_VIEWERS)
+        .filter(|p| p.total_viewers > 0.0)
         .max_by(|a, b| a.share_pct.total_cmp(&b.share_pct))
         .map(|p| PeakPoint {
             ts: p.ts,

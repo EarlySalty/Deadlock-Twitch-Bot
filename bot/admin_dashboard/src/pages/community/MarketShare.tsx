@@ -26,10 +26,6 @@ const DAY_OPTIONS: { label: string; days: number }[] = [
   { label: 'Alles', days: 365 },
 ];
 
-// Unterhalb dieser Marktgröße ist ein Viewer-Anteil nicht aussagekräftig
-// (nachts 2/2 Viewer = „100 %"): die Anteil-Linie bekommt dort eine Lücke.
-// Muss zur Peak-Schwelle im Backend passen (MIN_PEAK_MARKET_VIEWERS).
-const MIN_MARKET_VIEWERS = 20;
 
 const SCOPE_OPTIONS: { label: string; scope: MarketShareScope }[] = [
   { label: 'Deutschsprachig', scope: 'german' },
@@ -88,8 +84,7 @@ export default function MarketSharePage() {
       label: formatBucketLabel(point.ts, data.bucketSeconds),
       Netzwerk: Math.round(point.partnerViewers * 10) / 10,
       Rest: Math.max(Math.round((point.totalViewers - point.partnerViewers) * 10) / 10, 0),
-      'Anteil %':
-        point.totalViewers >= MIN_MARKET_VIEWERS ? Math.round(point.sharePct * 10) / 10 : null,
+      'Anteil %': point.totalViewers > 0 ? Math.round(point.sharePct * 10) / 10 : null,
     }));
   }, [data]);
 
@@ -97,6 +92,20 @@ export default function MarketSharePage() {
     const from = new Date(Date.now() - days * 86_400_000);
     return from < FULL_CATEGORY_SINCE;
   }, [days]);
+
+  // Dominanz-Zeit: Anteil der Mess-Fenster, in denen das Netzwerk die
+  // Mehrheit des Marktes hielt (≥ 50 % Viewer-Anteil).
+  const dominancePct = useMemo(() => {
+    if (!data) {
+      return null;
+    }
+    const active = data.series.filter((point) => point.totalViewers > 0);
+    if (!active.length) {
+      return null;
+    }
+    const dominant = active.filter((point) => point.sharePct >= 50).length;
+    return (dominant / active.length) * 100;
+  }, [data]);
 
   const liveShare = scope === 'german' ? current?.germanSharePct : current?.sharePct;
   const liveViewers = scope === 'german' ? current?.germanPartnerViewers : current?.partnerViewers;
@@ -170,12 +179,12 @@ export default function MarketSharePage() {
           icon={Globe}
         />
         <KpiCard
-          title="Peak-Anteil im Zeitraum"
-          value={peak ? formatPct(peak.sharePct) : '—'}
+          title="Dominanz im Zeitraum"
+          value={dominancePct !== null ? formatPct(dominancePct) : '—'}
           hint={
             peak
-              ? `${formatNumber(peak.partnerViewers)} von ${formatNumber(peak.totalViewers)} Viewern am ${new Date(peak.ts).toLocaleString('de-DE')}`
-              : undefined
+              ? `der Zeit ≥ 50 % Marktanteil · Peak ${formatPct(peak.sharePct)} (${formatNumber(peak.partnerViewers)} von ${formatNumber(peak.totalViewers)} Viewern)`
+              : 'der Zeit ≥ 50 % Marktanteil'
           }
           icon={TrendingUp}
         />
@@ -234,8 +243,8 @@ export default function MarketSharePage() {
                   </ResponsiveContainer>
                 </div>
                 <p className="mt-2 text-xs text-text-secondary">
-                  Phasen mit weniger als {MIN_MARKET_VIEWERS} Markt-Viewern (z.&nbsp;B. nachts) fließen
-                  nicht in die Linie ein und werden überbrückt.
+                  100 % = alle Live-Kanäle des Marktes gehören zum Netzwerk; die Marktgröße dazu
+                  zeigt das Viewer-Panel darunter.
                 </p>
               </div>
               <div>

@@ -1,3 +1,9 @@
+## #143 — Markt-Dominanz: 100-%-Phasen sichtbar + neue Dominanz-Zeit-Kennzahl
+
+**Ausgangslage:** Die Mindestmarkt-Schwelle (20 Viewer) sollte nächtliche 0↔100-%-Sprünge glätten — hat dabei aber genau die wertvollsten Momente versteckt: die Phasen, in denen ausschließlich Netzwerk-Kanäle live sind und der Marktanteil real 100 % beträgt. Diese Zeiten tauchten weder in der Linie noch im Peak auf.
+
+**Was wurde geändert:** Die Schwelle ist komplett raus — die Anteil-Linie zeigt jetzt jeden Mess-Zeitraum mit aktivem Markt, inklusive der 100-%-Phasen; die Einordnung (wie groß der Markt dabei war) liefert das Viewer-Panel direkt darunter. Die Peak-Karte wurde zur Dominanz-Karte: Sie zeigt, in wie viel Prozent der gemessenen Zeit das Netzwerk mindestens die Hälfte aller Markt-Viewer hielt, plus den Spitzenwert mit absoluten Zahlen (z. B. „100 % — 3 von 3 Viewern"), damit klein-aber-100 % von groß-und-40 % unterscheidbar bleibt.
+
 ## #142 — Markt-Dominanz: Chart in zwei lesbare Panels aufgeteilt
 
 **Ausgangslage:** Marktanteils-Linie und Viewer-Flächen teilten sich ein Diagramm mit zwei Y-Achsen. Ergebnis: Die Prozent-Linie zerfiel durch die nächtlichen Mindestmarkt-Lücken in abgehackte Stücke, und die Viewer-Flächen waren neben einzelnen Tages-Spitzen kaum noch ablesbar.
