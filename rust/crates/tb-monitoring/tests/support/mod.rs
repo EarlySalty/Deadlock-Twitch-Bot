@@ -10,8 +10,16 @@ use sqlx::PgPool;
 
 /// Frisches Schema + alle Monitoring-Tabellen. `None` = `TB_TEST_DATABASE_URL`
 /// fehlt (laut überspringen, `rust/scripts/test_db.sh up`).
+/// Wenn `TB_TEST_REQUIRE_DB=1` gesetzt ist, wird statt des stillen Skips
+/// ein Panic ausgelöst — damit CI-Läufe mit DB keine grünen Phantoms liefern.
 pub async fn pool_in_schema(schema: &str) -> Option<PgPool> {
     let Some(dsn) = std::env::var("TB_TEST_DATABASE_URL").ok() else {
+        if std::env::var("TB_TEST_REQUIRE_DB").as_deref() == Ok("1") {
+            panic!(
+                "TB_TEST_REQUIRE_DB=1 ist gesetzt, aber TB_TEST_DATABASE_URL fehlt — \
+                 `rust/scripts/test_db.sh up` ausführen"
+            );
+        }
         eprintln!("SKIP: TB_TEST_DATABASE_URL nicht gesetzt — `rust/scripts/test_db.sh up`");
         return None;
     };

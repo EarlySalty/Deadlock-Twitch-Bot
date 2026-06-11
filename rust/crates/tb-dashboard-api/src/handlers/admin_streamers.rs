@@ -363,16 +363,39 @@ mod tests {
         std::env::var("TB_TEST_DATABASE_URL").ok()
     }
 
+    /// Gibt die DSN zurück oder bricht den Test ab.
+    /// Mit `TB_TEST_REQUIRE_DB=1` wird statt des stillen Skips ein panic ausgelöst.
+    macro_rules! db_dsn_or_skip {
+        () => {
+            match test_dsn() {
+                Some(d) => d,
+                None => {
+                    if std::env::var("TB_TEST_REQUIRE_DB").as_deref() == Ok("1") {
+                        panic!(
+                            "TB_TEST_REQUIRE_DB=1 ist gesetzt, aber TB_TEST_DATABASE_URL fehlt"
+                        );
+                    }
+                    eprintln!("SKIP: TB_TEST_DATABASE_URL nicht gesetzt");
+                    return;
+                }
+            }
+        };
+    }
+
     async fn make_pool(dsn: &str, schema: &str) -> PgPool {
         let pool = PgPoolOptions::new()
             .max_connections(1)
             .connect(dsn)
             .await
             .expect("connect");
-        sqlx::query(&format!("CREATE SCHEMA IF NOT EXISTS {schema}"))
+        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
             .execute(&pool)
             .await
-            .expect("Schema");
+            .expect("Schema droppen");
+        sqlx::query(&format!("CREATE SCHEMA {schema}"))
+            .execute(&pool)
+            .await
+            .expect("Schema anlegen");
         sqlx::query(&format!("SET search_path TO {schema}"))
             .execute(&pool)
             .await
@@ -491,13 +514,7 @@ mod tests {
 
     #[tokio::test]
     async fn list_returns_401_ohne_auth() {
-        let dsn = match test_dsn() {
-            Some(d) => d,
-            None => {
-                eprintln!("SKIP");
-                return;
-            }
-        };
+        let dsn = db_dsn_or_skip!();
         let pool = make_pool(&dsn, "test_admin_h_list_unauth").await;
         let req = Request::builder()
             .uri("/twitch/api/admin/streamers?view=all")
@@ -511,13 +528,7 @@ mod tests {
 
     #[tokio::test]
     async fn list_returns_400_bei_invalidem_view() {
-        let dsn = match test_dsn() {
-            Some(d) => d,
-            None => {
-                eprintln!("SKIP");
-                return;
-            }
-        };
+        let dsn = db_dsn_or_skip!();
         let pool = make_pool(&dsn, "test_admin_h_list_400").await;
         let req = Request::builder()
             .uri("/twitch/api/admin/streamers?view=ungueltig")
@@ -536,13 +547,7 @@ mod tests {
 
     #[tokio::test]
     async fn list_returns_200_mit_leerer_liste() {
-        let dsn = match test_dsn() {
-            Some(d) => d,
-            None => {
-                eprintln!("SKIP");
-                return;
-            }
-        };
+        let dsn = db_dsn_or_skip!();
         let pool = make_pool(&dsn, "test_admin_h_list_200_leer").await;
         let req = Request::builder()
             .uri("/twitch/api/admin/streamers?view=all")
@@ -564,13 +569,7 @@ mod tests {
 
     #[tokio::test]
     async fn detail_returns_401_ohne_auth() {
-        let dsn = match test_dsn() {
-            Some(d) => d,
-            None => {
-                eprintln!("SKIP");
-                return;
-            }
-        };
+        let dsn = db_dsn_or_skip!();
         let pool = make_pool(&dsn, "test_admin_h_detail_unauth").await;
         let req = Request::builder()
             .uri("/twitch/api/admin/streamers/teststreamer")
@@ -584,13 +583,7 @@ mod tests {
 
     #[tokio::test]
     async fn detail_returns_404_fuer_unbekannten_login() {
-        let dsn = match test_dsn() {
-            Some(d) => d,
-            None => {
-                eprintln!("SKIP");
-                return;
-            }
-        };
+        let dsn = db_dsn_or_skip!();
         let pool = make_pool(&dsn, "test_admin_h_detail_404").await;
         let req = Request::builder()
             .uri("/twitch/api/admin/streamers/gibts_nicht")
@@ -605,13 +598,7 @@ mod tests {
 
     #[tokio::test]
     async fn detail_returns_200_fuer_bekannten_login() {
-        let dsn = match test_dsn() {
-            Some(d) => d,
-            None => {
-                eprintln!("SKIP");
-                return;
-            }
-        };
+        let dsn = db_dsn_or_skip!();
         let pool = make_pool(&dsn, "test_admin_h_detail_200").await;
         sqlx::query(
             "INSERT INTO twitch_partners_all_state (twitch_login, status, created_at) \

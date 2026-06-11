@@ -62,3 +62,17 @@ tb-analytics     = { path = "crates/tb-analytics" }
 tb-dashboard-api = { path = "crates/tb-dashboard-api" }
 tb-internal-api  = { path = "crates/tb-internal-api" }
 url = "2"
+
+# Produktions-Optimierungsprofil für den Dauerlauf-Server.
+# lto = "thin": Thin-LTO statt Fat-LTO — nahezu gleiche Größen-/Laufzeitwirkung,
+#   aber deutlich kürzere Link-Zeit (kein monolithischer Codegen-Pass über alle
+#   Crates). Fat-LTO lohnt sich erst bei sehr kleinen, latenzgetriebenen
+#   Single-Binary-Tools ohne Build-CI-Druck — hier nicht der Fall.
+# codegen-units = 1: zwingt LLVM zu einem einzigen Codegen-Durchlauf je Crate,
+#   was Inlining und Optimierung über Modulgrenzen hinweg verbessert.
+# panic = "abort" wird NICHT gesetzt: ein Panic in einem Tokio-Task soll den
+#   Task abreißen, nicht den gesamten Prozess — das setzt voraus, dass der
+#   Stack-Unwinder läuft. Außerdem brechen should_panic-Tests mit abort-Modus.
+[profile.release]
+lto          = "thin"
+codegen-units = 1

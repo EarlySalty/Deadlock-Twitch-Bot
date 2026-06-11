@@ -10,8 +10,8 @@ use tb_monitoring::poller::source::{ChannelInfo, ChannelInfoSource, SourceError}
 use tb_monitoring::sessions::store::SessionStore;
 use tb_monitoring::{
     epoch_clock, EventSubDispatcher, EventSubHooks, ExpSessionStore, ExpSessionTracker, GuardStore,
-    InboxRuntime, InboxRuntimeHandle, LiveStateStore, MonitoringEventHandler, NoFollowerSource,
-    ProcessingInboxStore, SessionTracker, StreamSnapshot, TelemetryStore,
+    HypeTrainPhase, InboxRuntime, InboxRuntimeHandle, LiveStateStore, MonitoringEventHandler,
+    NoFollowerSource, ProcessingInboxStore, SessionTracker, StreamSnapshot, TelemetryStore,
 };
 
 mod support;
@@ -402,4 +402,74 @@ async fn telemetrie_und_channel_update_und_raid_hook() {
     assert!(outcome.ok && !outcome.processed && !outcome.queued);
 
     runtime.shutdown().await;
+}
+
+// ── Hype-Train NULL-Bug (started_at nicht parsebar) ──────────────────────────
+
+/// Normalfall: begin → end mit gültigem started_at → genau eine Zeile, phase='begin'
+/// wird auf phase='end' aktualisiert (kein Doppel-INSERT).
+#[tokio::test]
+async fn hype_train_end_aktualisiert_begin_zeile() {
+    let pool = pool_or_skip!("t4d_ht_normal");
+    let store = TelemetryStore::new(pool.clone());
+
+    let begin_event = serde_json::json!({
+        "started_at": "2026-06-10T20:00:00Z",
+        "level": 3,
+        "total": 1200
+    });
+    store
+        .store_hype_train_event("u1", &begin_event, HypeTrainPhase::Begin)
+        .await
+        .unwrap();
+
+    let end_event = serde_json::json!({
+        "started_at": "2026-06-10T20:00:00Z",
+        "ended_at": "2026-06-10T20:05:00Z",
+        "level": 4,
+        "total": 1800
+    });
+    store
+        .store_hype_train_event("u1", &end_event, HypeTrainPhase::End)
+        .await
+        .unwrap();
+
+    let rows: Vec<(String, Option<String>)> =
+        sqlx::query_as("SELECT event_phase, ended_at::text FROM twitch_hype_train_events ORDER BY id")
+            .fetch_all(&pool)
+            .await
+            .unwrap();
+    // Exakt eine Zeile — das Begin-Event wurde zum End-Event aktualisiert.
+    assert_eq!(rows.len(), 1, "Kein Doppel-INSERT erwartet");
+    assert_eq!(rows[0].0, "begin");
+    assert!(rows[0].1.is_some(), "ended_at muss gesetzt sein");
+}
+
+/// Bug-Regression: started_at nicht parsebar (NULL) → End-Event darf nicht
+/// als verwaiste Extra-Zeile landen. Stattdessen: ein INSERT mit phase='end'.
+#[tokio::test]
+async fn hype_train_end_mit_started_at_null_kein_verwaister_insert() {
+    let pool = pool_or_skip!("t4d_ht_null");
+    let store = TelemetryStore::new(pool.clone());
+
+    // Kein vorheriges Begin-Event (simuliert den Fall, wo started_at fehlt/unlesbar ist).
+    let end_event = serde_json::json!({
+        // started_at fehlt absichtlich → None nach parse_dt_utc
+        "ended_at": "2026-06-10T20:05:00Z",
+        "level": 2,
+        "total": 900
+    });
+    store
+        .store_hype_train_event("u2", &end_event, HypeTrainPhase::End)
+        .await
+        .unwrap();
+
+    let rows: Vec<(String,)> =
+        sqlx::query_as("SELECT event_phase FROM twitch_hype_train_events")
+            .fetch_all(&pool)
+            .await
+            .unwrap();
+    // Exakt ein Fallback-INSERT mit phase='end' — kein doppelter verwaister Eintrag.
+    assert_eq!(rows.len(), 1, "Genau ein End-Insert erwartet");
+    assert_eq!(rows[0].0, "end");
 }

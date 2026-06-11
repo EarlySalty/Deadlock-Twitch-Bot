@@ -233,7 +233,7 @@ impl TelemetryStore {
                        level = COALESCE($3, level),
                        total_progress = COALESCE($4, total_progress)
                  WHERE twitch_user_id = $5
-                   AND started_at = $6
+                   AND started_at IS NOT DISTINCT FROM $6
                    AND ended_at IS NULL
                 "#,
             )

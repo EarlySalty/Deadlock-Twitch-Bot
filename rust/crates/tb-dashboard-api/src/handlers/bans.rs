@@ -76,6 +76,25 @@ mod tests {
         std::env::var("TB_TEST_DATABASE_URL").ok()
     }
 
+    /// Gibt die DSN zurück oder bricht den Test ab.
+    /// Mit `TB_TEST_REQUIRE_DB=1` wird statt des stillen Skips ein panic ausgelöst.
+    macro_rules! db_dsn_or_skip {
+        () => {
+            match test_dsn() {
+                Some(d) => d,
+                None => {
+                    if std::env::var("TB_TEST_REQUIRE_DB").as_deref() == Ok("1") {
+                        panic!(
+                            "TB_TEST_REQUIRE_DB=1 ist gesetzt, aber TB_TEST_DATABASE_URL fehlt"
+                        );
+                    }
+                    eprintln!("SKIP: TB_TEST_DATABASE_URL nicht gesetzt");
+                    return;
+                }
+            }
+        };
+    }
+
     /// Baut einen Pool mit max 1 Connection und setzt `search_path` auf das isolierte Schema.
     async fn make_pool(dsn: &str, schema: &str) -> sqlx::PgPool {
         let pool = PgPoolOptions::new()
@@ -83,7 +102,11 @@ mod tests {
             .connect(dsn)
             .await
             .unwrap();
-        sqlx::query(&format!("CREATE SCHEMA IF NOT EXISTS {schema}"))
+        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
+            .execute(&pool)
+            .await
+            .expect("Schema droppen");
+        sqlx::query(&format!("CREATE SCHEMA {schema}"))
             .execute(&pool)
             .await
             .expect("Schema anlegen");
@@ -115,13 +138,7 @@ mod tests {
 
     #[tokio::test]
     async fn bans_endpoint_leere_tabelle_json_form() {
-        let dsn = match test_dsn() {
-            Some(d) => d,
-            None => {
-                eprintln!("SKIP");
-                return;
-            }
-        };
+        let dsn = db_dsn_or_skip!();
         let pool = make_pool(&dsn, "api_bans_leer").await;
 
         let app = build_public_router(pool);
@@ -149,13 +166,7 @@ mod tests {
 
     #[tokio::test]
     async fn bans_endpoint_null_felder_korrekt() {
-        let dsn = match test_dsn() {
-            Some(d) => d,
-            None => {
-                eprintln!("SKIP");
-                return;
-            }
-        };
+        let dsn = db_dsn_or_skip!();
         let pool = make_pool(&dsn, "api_bans_null").await;
 
         sqlx::query(

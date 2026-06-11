@@ -56,7 +56,11 @@ pub async fn known_source(pool: &PgPool, from_id: Option<&str>, from_login: &str
     .fetch_optional(pool)
     .await
     .unwrap_or(None);
-    row.map(|_| from_id.map(|s| !s.trim().is_empty()).unwrap_or(false))
+    // Python-Parität: `_identity_value(known_source, "twitch_user_id", "user_id")` —
+    // prüft den tatsächlich gespeicherten DB-Wert, nicht den Aufrufer-Parameter from_id.
+    // Some(true) = twitch_user_id in DB nicht leer → "known_streamer_id"
+    // Some(false) = Zeile gefunden, aber twitch_user_id leer → "known_streamer_login"
+    row.map(|r| !r.0.trim().is_empty())
 }
 
 /// Broadcaster-ID eines aktiven Partners per Login (Python

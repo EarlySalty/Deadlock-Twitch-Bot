@@ -103,16 +103,39 @@ mod tests {
         std::env::var("TB_TEST_DATABASE_URL").ok()
     }
 
+    /// Gibt die DSN zurück oder bricht den Test ab.
+    /// Mit `TB_TEST_REQUIRE_DB=1` wird statt des stillen Skips ein panic ausgelöst.
+    macro_rules! db_dsn_or_skip {
+        () => {
+            match test_dsn() {
+                Some(d) => d,
+                None => {
+                    if std::env::var("TB_TEST_REQUIRE_DB").as_deref() == Ok("1") {
+                        panic!(
+                            "TB_TEST_REQUIRE_DB=1 ist gesetzt, aber TB_TEST_DATABASE_URL fehlt"
+                        );
+                    }
+                    eprintln!("SKIP: TB_TEST_DATABASE_URL nicht gesetzt");
+                    return;
+                }
+            }
+        };
+    }
+
     async fn make_pool(dsn: &str, schema: &str) -> PgPool {
         let pool = PgPoolOptions::new()
             .max_connections(1)
             .connect(dsn)
             .await
             .expect("connect");
-        sqlx::query(&format!("CREATE SCHEMA IF NOT EXISTS {schema}"))
+        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
             .execute(&pool)
             .await
-            .expect("Schema");
+            .expect("Schema droppen");
+        sqlx::query(&format!("CREATE SCHEMA {schema}"))
+            .execute(&pool)
+            .await
+            .expect("Schema anlegen");
         sqlx::query(&format!("SET search_path TO {schema}"))
             .execute(&pool)
             .await
@@ -145,13 +168,7 @@ mod tests {
 
     #[tokio::test]
     async fn tabelle_nicht_vorhanden_gibt_leere_antwort() {
-        let dsn = match test_dsn() {
-            Some(d) => d,
-            None => {
-                eprintln!("SKIP: TB_TEST_DATABASE_URL nicht gesetzt");
-                return;
-            }
-        };
+        let dsn = db_dsn_or_skip!();
         // Schema ohne die Tabelle — simuliert fehlende Tabelle
         let pool = make_pool(&dsn, "test_syserr_notable").await;
         let page = error_log_entries(&pool, 1, 25).await.unwrap();
@@ -161,13 +178,7 @@ mod tests {
 
     #[tokio::test]
     async fn leere_tabelle_gibt_leere_antwort() {
-        let dsn = match test_dsn() {
-            Some(d) => d,
-            None => {
-                eprintln!("SKIP: TB_TEST_DATABASE_URL nicht gesetzt");
-                return;
-            }
-        };
+        let dsn = db_dsn_or_skip!();
         let pool = make_pool_with_table(&dsn, "test_syserr_leer").await;
         let page = error_log_entries(&pool, 1, 25).await.unwrap();
         assert_eq!(page.total, 0);
@@ -176,13 +187,7 @@ mod tests {
 
     #[tokio::test]
     async fn paginierung_funktioniert() {
-        let dsn = match test_dsn() {
-            Some(d) => d,
-            None => {
-                eprintln!("SKIP: TB_TEST_DATABASE_URL nicht gesetzt");
-                return;
-            }
-        };
+        let dsn = db_dsn_or_skip!();
         let pool = make_pool_with_table(&dsn, "test_syserr_pages").await;
         for i in 0..5i64 {
             sqlx::query("INSERT INTO twitch_admin_error_log (level, message) VALUES ('ERROR', $1)")

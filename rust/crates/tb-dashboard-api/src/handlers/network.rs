@@ -63,13 +63,36 @@ mod tests {
         std::env::var("TB_TEST_DATABASE_URL").ok()
     }
 
+    /// Gibt die DSN zurück oder bricht den Test ab.
+    /// Mit `TB_TEST_REQUIRE_DB=1` wird statt des stillen Skips ein panic ausgelöst.
+    macro_rules! db_dsn_or_skip {
+        () => {
+            match test_dsn() {
+                Some(d) => d,
+                None => {
+                    if std::env::var("TB_TEST_REQUIRE_DB").as_deref() == Ok("1") {
+                        panic!(
+                            "TB_TEST_REQUIRE_DB=1 ist gesetzt, aber TB_TEST_DATABASE_URL fehlt"
+                        );
+                    }
+                    eprintln!("SKIP: TB_TEST_DATABASE_URL nicht gesetzt");
+                    return;
+                }
+            }
+        };
+    }
+
     async fn make_pool(dsn: &str, schema: &str) -> sqlx::PgPool {
         let pool = PgPoolOptions::new()
             .max_connections(1)
             .connect(dsn)
             .await
             .unwrap();
-        sqlx::query(&format!("CREATE SCHEMA IF NOT EXISTS {schema}"))
+        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
+            .execute(&pool)
+            .await
+            .expect("Schema droppen");
+        sqlx::query(&format!("CREATE SCHEMA {schema}"))
             .execute(&pool)
             .await
             .expect("Schema anlegen");
@@ -120,13 +143,7 @@ mod tests {
 
     #[tokio::test]
     async fn network_endpoint_leere_tabelle_json_form() {
-        let dsn = match test_dsn() {
-            Some(d) => d,
-            None => {
-                eprintln!("SKIP");
-                return;
-            }
-        };
+        let dsn = db_dsn_or_skip!();
         let pool = make_pool(&dsn, "api_network_leer").await;
 
         let app = build_public_router(pool);
@@ -146,13 +163,7 @@ mod tests {
 
     #[tokio::test]
     async fn network_is_live_bool_und_is_partner_true() {
-        let dsn = match test_dsn() {
-            Some(d) => d,
-            None => {
-                eprintln!("SKIP");
-                return;
-            }
-        };
+        let dsn = db_dsn_or_skip!();
         let pool = make_pool(&dsn, "api_network_bool").await;
 
         sqlx::query("INSERT INTO _partner_state_base VALUES ('liveuser', 1), ('offuser', 1)")

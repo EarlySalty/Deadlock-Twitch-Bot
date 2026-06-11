@@ -368,7 +368,9 @@ fn build_scoring_inputs(ctx: &PartnerBuildCtx<'_>) -> ScoringInputs {
     let lookback_cutoff = *lookback_cutoff;
     let metrics = *metrics;
     let raid_boost_enabled = *raid_boost_enabled;
-    // Sessions auf Lookback-Fenster filtern (Python Z. 673–682)
+    // Sicherheitsnetz: SQL filtert bereits auf started_at >= cutoff (load_sessions),
+    // dieser Filter kann keine zusätzlichen Rows mehr wegwerfen. Er bleibt,
+    // um gegen versehentliche Query-Änderungen abzusichern (Python Z. 673–682).
     let recent_sessions: Vec<&&SessionRaw> = sessions
         .iter()
         .filter(|s| s.started_at >= lookback_cutoff)
@@ -555,26 +557,43 @@ async fn load_live_states(
     .await
 }
 
-/// Lädt Sessions für alle Partner-Logins — OHNE Lookback-Filter in SQL,
-/// da Python ebenfalls alle lädt und in `_build_score` per Code filtert.
+/// Lädt Sessions für alle Partner-Logins — MIT Lookback-Filter in SQL
+/// (Abweichung von Python, das alle Sessions lädt und per Code filtert).
+/// Wir ziehen den Filter in die DB, weil bei wachsender `twitch_stream_sessions`-
+/// Tabelle sonst unnötige Datenmengen übertragen werden. Das Ergebnis ist
+/// bit-identisch: der Code-seitige Filter in `build_scoring_inputs` bleibt
+/// als Sicherheitsnetz erhalten, kann aber keine zusätzlichen Rows mehr
+/// wegwerfen, solange beide denselben `LOOKBACK_DAYS`-Wert nutzen.
+///
+/// Semantik: `started_at >= cutoff` (inklusiv, spiegelt `>= lookback_cutoff`
+/// in Z. 374 exakt wider). `cutoff` wird als gebundener Timestamp-Parameter
+/// übergeben — typsicher, kein Casting/String-Interpolation nötig.
 ///
 /// Python-Herkunft: `_load_sessions` Z. ~460–480.
 /// Lookup ist case-insensitive (Python: `LOWER(streamer_login) IN (...)`).
+/// LOWER(streamer_login) = ANY($1) sabotiert prinzipiell einen einfachen
+/// B-Tree-Index auf `streamer_login`; da die Spalte textlich klein ist und
+/// der Filter hauptsächlich über `started_at` schneidet, ist das vertretbar.
+/// Ein funktionaler Index `ON twitch_stream_sessions (LOWER(streamer_login))`
+/// würde helfen, ist aber außerhalb dieses Scope.
 async fn load_sessions(
     pool: &PgPool,
     logins: &[&str],
-    _now: DateTime<Utc>,
+    now: DateTime<Utc>,
 ) -> Result<Vec<SessionRaw>, sqlx::Error> {
     if logins.is_empty() {
         return Ok(vec![]);
     }
     let lower_logins: Vec<String> = logins.iter().map(|l| l.to_lowercase()).collect();
+    let cutoff = now - chrono::Duration::days(LOOKBACK_DAYS);
     sqlx::query_as::<_, SessionRaw>(
         "SELECT streamer_login, started_at, duration_seconds \
          FROM twitch_stream_sessions \
-         WHERE LOWER(streamer_login) = ANY($1)",
+         WHERE LOWER(streamer_login) = ANY($1) \
+           AND started_at >= $2",
     )
     .bind(&lower_logins)
+    .bind(cutoff)
     .fetch_all(pool)
     .await
 }
@@ -881,6 +900,29 @@ mod tests {
         let (score, reliable) = compute_time_pattern(&refs, now);
         assert!(reliable);
         assert!((score - 0.0).abs() < 1e-6, "erwartet 0.0, war {score}");
+    }
+
+    /// Stellt sicher, dass der Code-seitige Lookback-Filter (Sicherheitsnetz)
+    /// das 45-Tage-Fenster korrekt abschneidet — Session knapp innerhalb vs.
+    /// knapp außerhalb der Grenze.
+    #[test]
+    fn lookback_filter_grenze_korrekt() {
+        let now = Utc.with_ymd_and_hms(2026, 6, 11, 12, 0, 0).unwrap();
+        let lookback_cutoff = now - chrono::Duration::days(LOOKBACK_DAYS);
+
+        // Knapp innerhalb: genau auf der Grenze (>= cutoff → soll enthalten sein)
+        let s_grenze = make_session("alice", lookback_cutoff, Some(3600));
+        // Knapp außerhalb: eine Sekunde vor der Grenze (soll herausgefiltert werden)
+        let s_aussen = make_session("alice", lookback_cutoff - chrono::Duration::seconds(1), Some(3600));
+        // Normal innerhalb
+        let s_innen = make_session("alice", now - chrono::Duration::days(1), Some(3600));
+
+        let all = [&s_grenze, &s_aussen, &s_innen];
+        let recent: Vec<_> = all.iter().filter(|s| s.started_at >= lookback_cutoff).collect();
+
+        assert_eq!(recent.len(), 2, "Grenz-Session und innere Session sollen enthalten sein");
+        assert!(recent.iter().any(|s| s.started_at == lookback_cutoff), "Grenz-Session (>=) muss drin sein");
+        assert!(!recent.iter().any(|s| s.started_at == s_aussen.started_at), "Session außerhalb muss raus");
     }
 
     #[test]

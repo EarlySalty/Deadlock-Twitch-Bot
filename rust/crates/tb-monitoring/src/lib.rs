@@ -66,4 +66,4 @@ pub use subscriptions::{
     CapacitySnapshotStore, RemoteSubscription, SubscriptionConfig, SubscriptionManager,
     SubscriptionTransport,
 };
-pub use telemetry::TelemetryStore;
+pub use telemetry::{HypeTrainPhase, TelemetryStore};

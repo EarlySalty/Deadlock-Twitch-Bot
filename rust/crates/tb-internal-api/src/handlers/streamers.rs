@@ -503,6 +503,25 @@ mod tests {
         std::env::var("TB_TEST_DATABASE_URL").ok()
     }
 
+    /// Gibt die DSN zurück oder bricht den Test ab.
+    /// Mit `TB_TEST_REQUIRE_DB=1` wird statt des stillen Skips ein panic ausgelöst.
+    macro_rules! db_dsn_or_skip {
+        () => {
+            match test_dsn() {
+                Some(d) => d,
+                None => {
+                    if std::env::var("TB_TEST_REQUIRE_DB").as_deref() == Ok("1") {
+                        panic!(
+                            "TB_TEST_REQUIRE_DB=1 ist gesetzt, aber TB_TEST_DATABASE_URL fehlt"
+                        );
+                    }
+                    eprintln!("SKIP: TB_TEST_DATABASE_URL nicht gesetzt");
+                    return;
+                }
+            }
+        };
+    }
+
     async fn make_pool(dsn: &str, schema: &str) -> PgPool {
         let pool = PgPoolOptions::new()
             .max_connections(1)
@@ -510,10 +529,14 @@ mod tests {
             .await
             .expect("DB-Verbindung");
 
-        sqlx::query(&format!("CREATE SCHEMA IF NOT EXISTS {schema}"))
+        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
             .execute(&pool)
             .await
-            .expect("Schema");
+            .expect("Schema droppen");
+        sqlx::query(&format!("CREATE SCHEMA {schema}"))
+            .execute(&pool)
+            .await
+            .expect("Schema anlegen");
 
         sqlx::query(&format!("SET search_path TO {schema}"))
             .execute(&pool)
@@ -673,13 +696,7 @@ mod tests {
 
     #[tokio::test]
     async fn returns_401_ohne_auth() {
-        let dsn = match test_dsn() {
-            Some(d) => d,
-            None => {
-                eprintln!("SKIP: TB_TEST_DATABASE_URL nicht gesetzt");
-                return;
-            }
-        };
+        let dsn = db_dsn_or_skip!();
         let pool = make_pool(&dsn, "test_sh_401").await;
         let app = make_router(pool, "secret");
         let base = INTERNAL_API_BASE_PATH;
@@ -690,13 +707,7 @@ mod tests {
 
     #[tokio::test]
     async fn list_returns_200() {
-        let dsn = match test_dsn() {
-            Some(d) => d,
-            None => {
-                eprintln!("SKIP: TB_TEST_DATABASE_URL nicht gesetzt");
-                return;
-            }
-        };
+        let dsn = db_dsn_or_skip!();
         let pool = make_pool(&dsn, "test_sh_list").await;
         let app = make_router(pool, "secret");
         let base = INTERNAL_API_BASE_PATH;
@@ -707,13 +718,7 @@ mod tests {
 
     #[tokio::test]
     async fn remove_returns_404_bei_unbekanntem_login() {
-        let dsn = match test_dsn() {
-            Some(d) => d,
-            None => {
-                eprintln!("SKIP: TB_TEST_DATABASE_URL nicht gesetzt");
-                return;
-            }
-        };
+        let dsn = db_dsn_or_skip!();
         let pool = make_pool(&dsn, "test_sh_remove_404").await;
         let app = make_router(pool, "secret");
         let base = INTERNAL_API_BASE_PATH;
@@ -729,13 +734,7 @@ mod tests {
 
     #[tokio::test]
     async fn archive_returns_400_bei_ungueltigem_mode() {
-        let dsn = match test_dsn() {
-            Some(d) => d,
-            None => {
-                eprintln!("SKIP: TB_TEST_DATABASE_URL nicht gesetzt");
-                return;
-            }
-        };
+        let dsn = db_dsn_or_skip!();
         let pool = make_pool(&dsn, "test_sh_archive_400").await;
         let app = make_router(pool, "secret");
         let base = INTERNAL_API_BASE_PATH;
@@ -751,13 +750,7 @@ mod tests {
 
     #[tokio::test]
     async fn discord_profile_returns_400_bei_nicht_numerischer_discord_id() {
-        let dsn = match test_dsn() {
-            Some(d) => d,
-            None => {
-                eprintln!("SKIP: TB_TEST_DATABASE_URL nicht gesetzt");
-                return;
-            }
-        };
+        let dsn = db_dsn_or_skip!();
         let pool = make_pool(&dsn, "test_sh_discord_val").await;
         let app = make_router(pool, "secret");
         let base = INTERNAL_API_BASE_PATH;
@@ -773,13 +766,7 @@ mod tests {
 
     #[tokio::test]
     async fn add_returns_503_wenn_helix_nicht_konfiguriert() {
-        let dsn = match test_dsn() {
-            Some(d) => d,
-            None => {
-                eprintln!("SKIP: TB_TEST_DATABASE_URL nicht gesetzt");
-                return;
-            }
-        };
+        let dsn = db_dsn_or_skip!();
         let pool = make_pool(&dsn, "test_sh_add_503").await;
         let app = make_router(pool, "secret"); // helix = Arc::new(None) → 503
         let base = INTERNAL_API_BASE_PATH;

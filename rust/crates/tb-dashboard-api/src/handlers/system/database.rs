@@ -82,16 +82,39 @@ mod tests {
         std::env::var("TB_TEST_DATABASE_URL").ok()
     }
 
+    /// Gibt die DSN zurück oder bricht den Test ab.
+    /// Mit `TB_TEST_REQUIRE_DB=1` wird statt des stillen Skips ein panic ausgelöst.
+    macro_rules! db_dsn_or_skip {
+        () => {
+            match test_dsn() {
+                Some(d) => d,
+                None => {
+                    if std::env::var("TB_TEST_REQUIRE_DB").as_deref() == Ok("1") {
+                        panic!(
+                            "TB_TEST_REQUIRE_DB=1 ist gesetzt, aber TB_TEST_DATABASE_URL fehlt"
+                        );
+                    }
+                    eprintln!("SKIP: TB_TEST_DATABASE_URL nicht gesetzt");
+                    return;
+                }
+            }
+        };
+    }
+
     async fn make_pool(dsn: &str, schema: &str) -> PgPool {
         let pool = PgPoolOptions::new()
             .max_connections(1)
             .connect(dsn)
             .await
             .expect("connect");
-        sqlx::query(&format!("CREATE SCHEMA IF NOT EXISTS {schema}"))
+        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
             .execute(&pool)
             .await
-            .expect("Schema");
+            .expect("Schema droppen");
+        sqlx::query(&format!("CREATE SCHEMA {schema}"))
+            .execute(&pool)
+            .await
+            .expect("Schema anlegen");
         sqlx::query(&format!("SET search_path TO {schema}"))
             .execute(&pool)
             .await
@@ -108,13 +131,7 @@ mod tests {
 
     #[tokio::test]
     async fn returns_401_ohne_auth() {
-        let dsn = match test_dsn() {
-            Some(d) => d,
-            None => {
-                eprintln!("SKIP: TB_TEST_DATABASE_URL nicht gesetzt");
-                return;
-            }
-        };
+        let dsn = db_dsn_or_skip!();
         let pool = make_pool(&dsn, "test_handler_db_unauth").await;
         let addr: SocketAddr = "1.2.3.4:9999".parse().unwrap();
         let req = Request::builder()
@@ -129,13 +146,7 @@ mod tests {
 
     #[tokio::test]
     async fn returns_200_mit_leerer_tabellenliste() {
-        let dsn = match test_dsn() {
-            Some(d) => d,
-            None => {
-                eprintln!("SKIP: TB_TEST_DATABASE_URL nicht gesetzt");
-                return;
-            }
-        };
+        let dsn = db_dsn_or_skip!();
         // Schema ohne tracked tables → tables-Array leer, DB-Size > 0
         let pool = make_pool(&dsn, "test_handler_db_leer").await;
         let addr: SocketAddr = "1.2.3.4:9999".parse().unwrap();
