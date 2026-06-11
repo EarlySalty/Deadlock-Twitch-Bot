@@ -360,6 +360,44 @@ export default function MarketSharePage() {
               </div>
               <div>
                 <p className="text-xs uppercase tracking-[0.18em] text-text-secondary">
+                  Netzwerk-Viewer — eigene Skala
+                </p>
+                <div className="mt-3 h-44">
+                  <ResponsiveContainer width="100%" height="100%">
+                    <ComposedChart data={chartRows}>
+                      <CartesianGrid stroke="rgba(255,255,255,0.06)" vertical={false} />
+                      <XAxis
+                        dataKey="label"
+                        stroke="#9bb3c5"
+                        tickLine={false}
+                        axisLine={false}
+                        minTickGap={48}
+                      />
+                      <YAxis stroke="#10b7ad" tickLine={false} axisLine={false} />
+                      <Tooltip
+                        contentStyle={{
+                          background: '#0f2431',
+                          border: '1px solid rgba(255,255,255,0.1)',
+                          borderRadius: '16px',
+                        }}
+                      />
+                      <Area
+                        type="monotone"
+                        dataKey="Netzwerk"
+                        stroke="#10b7ad"
+                        strokeWidth={2}
+                        fill="rgba(16,183,173,0.30)"
+                      />
+                    </ComposedChart>
+                  </ResponsiveContainer>
+                </div>
+                <p className="mt-2 text-xs text-text-secondary">
+                  Dieselben Netzwerk-Viewer wie im Markt-Chart darüber — nur mit eigener Skala,
+                  damit der Verlauf neben dem viel größeren Gesamtmarkt erkennbar bleibt.
+                </p>
+              </div>
+              <div>
+                <p className="text-xs uppercase tracking-[0.18em] text-text-secondary">
                   Kanal-Anteil des Netzwerks
                 </p>
                 <div className="mt-3 h-52">
