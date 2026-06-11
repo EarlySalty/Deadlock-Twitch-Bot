@@ -5,6 +5,7 @@
 //! Auth: X-Internal-Token-Header + Loopback-Guard (Defense-in-Depth).
 
 pub mod handlers;
+pub mod idempotency;
 
 use axum::{
     middleware,
@@ -20,12 +21,15 @@ use tb_transport_twitch::HelixClient;
 pub use handlers::eventsub::EventSubDispatcherExt;
 pub use handlers::legacy_proxy::{LegacyProxy, LegacyProxyExt};
 pub use handlers::raid::{ManualRaidExt, ManualRaidPort};
+pub use handlers::raid_oauth::{RaidOAuthExt, RaidOAuthPort};
+pub use idempotency::IdempotencyState;
 
 /// Baut den axum-Router für alle internen Endpoints.
 ///
 /// `token` wird als `ExpectedToken`-Extension eingesetzt.
 /// `helix` wird als `Extension<Arc<Option<HelixClient>>>` eingesetzt.
 /// `dispatcher` bedient `POST /eventsub/dispatch`; `None` → 503 (Bridge puffert).
+/// `raid_oauth` bedient die `/raid/*`-OAuth-Strecke; `None` → 503.
 /// `legacy_proxy` reicht unbekannte Routen an die Legacy-Python-API weiter;
 /// `None` → unbekannte Routen antworten 404 (Strangler-Fig, s. `legacy_proxy`).
 /// `loopback_only` + `internal_auth` werden als Layer gestapelt.
@@ -35,11 +39,12 @@ pub fn build_internal_router(
     helix: Arc<Option<HelixClient>>,
     dispatcher: Option<Arc<EventSubDispatcher>>,
     manual_raid: Option<Arc<dyn handlers::raid::ManualRaidPort>>,
+    raid_oauth: Option<Arc<dyn handlers::raid_oauth::RaidOAuthPort>>,
     legacy_proxy: Option<Arc<LegacyProxy>>,
 ) -> Router {
     use handlers::{
         discord_invite, eventsub, global_ban, healthz, market_share, raid, raid_blacklist,
-        self_explainer_log, streamer_link,
+        raid_oauth as oauth, self_explainer_log, streamer_link, streamers, telemetry_routes,
     };
 
     let base = INTERNAL_API_BASE_PATH; // "/internal/twitch/v1"
@@ -110,16 +115,71 @@ pub fn build_internal_router(
             &format!("{base}/discord/self-explainer-log"),
             post(self_explainer_log::handler),
         )
+        // Raid-OAuth-Lesestrecke (Welle B): nativ via RaidOAuthPort +
+        // Composition-Root in tb-bot (raid_oauth_impl.rs). auth-url schreibt
+        // den State in oauth_state_tokens mit IDENTISCHEM SQL wie Python —
+        // der (weiter proxied laufende) Python-Callback kann ihn einlösen.
+        // BEWUSST NICHT nativ:
+        // - POST /raid/oauth-callback — der native Pfad ist am letzten
+        //   Schritt Stub (kein Helix-User-Lookup), würde aber den Single-Use-
+        //   State KONSUMIEREN und den OAuth-Code verbrennen, bevor er 503
+        //   liefert → Re-Auth wäre kaputt statt degradiert. Bleibt Proxy,
+        //   bis TwitchTokenClient exchange_code_with_user_info kann.
+        // - POST /raid/requirements — sendet in Python eine echte Discord-DM;
+        //   ohne Discord-Bridge bleibt die Route über den Legacy-Proxy.
+        .route(
+            &format!("{base}/raid/auth-url"),
+            get(oauth::auth_url_handler),
+        )
+        .route(
+            &format!("{base}/raid/auth-state"),
+            get(oauth::auth_state_handler),
+        )
+        .route(
+            &format!("{base}/raid/block-state"),
+            get(oauth::block_state_handler),
+        )
+        .route(&format!("{base}/raid/go-url"), get(oauth::go_url_handler))
+        // Telemetrie (Welle B): announcements = reiner DB-Read; link-click =
+        // Write mit geteiltem Idempotenz-Layer (Scope-Key, Fingerprint→409,
+        // Inflight-Dedup, Replay-Header — voller Python-Vertrag).
+        .route(
+            &format!("{base}/live/active-announcements"),
+            get(telemetry_routes::live_active_announcements_handler),
+        )
+        .route(
+            &format!("{base}/live/link-click"),
+            post(telemetry_routes::live_link_click_handler),
+        )
+        // Analytics-Reads (Welle B). Nur /analytics/comparison ist nativ —
+        // Shape im Live-Diff gegen Python 8779 verifiziert.
+        // BEWUSST NICHT nativ (Live-Diff zeigte echte Shape-Lücken):
+        // - GET /stats — Python liefert {tracked:{top,hourly,weekday},
+        //   category, avg_viewers_all, avg_viewers_tracked}; der Rust-Handler
+        //   eine andere Aggregation. Der Dashboard-Split-Mode liest exakt
+        //   die Python-Felder.
+        // - GET /analytics/streamer/:login — Python delegiert an
+        //   AnalyticsBackendExtended.get_comprehensive_analytics; der
+        //   Rust-Handler baut nur {stats, recent_sessions}.
+        // - GET /sessions/:session_id — Python macht SELECT * plus
+        //   berechnete Felder (retention_5m/10m/20m, dropoff_label,
+        //   start/end_viewers, …); dem Rust-Port fehlen ~15 Felder.
+        .route(
+            &format!("{base}/analytics/comparison"),
+            get(streamers::analytics_comparison_handler),
+        )
         // Streamer-Endpoints: kompletter /streamers-Baum läuft bewusst über
-        // den Legacy-Fallback-Proxy zum Python-Worker, bis die
-        // Paritäts-Audit-Befunde behoben sind: snake_case-Bodies der
-        // Bestandskonsumenten vs. camelCase-Erwartung hier
-        // (discord-flag/-profile), mode="toggle" (archive) und mode-Semantik
-        // (verify) nicht unterstützt, chat-action braucht den live rotierten
-        // Bot-Token, der dem Python-Chat gehört. Auch der Lesepfad
+        // den Legacy-Fallback-Proxy zum Python-Worker, bis Partner-Lifecycle
+        // (promote/departner) + Discord-Bridge nativ sind: verify
+        // mode=clear/failed departnern in Python KOMPLETT inkl. Discord-DM,
+        // add/remove brauchen Promote-Logik + Helix-Verhalten, discord-flag/
+        // -profile brauchen Rollen-Sync, chat-action braucht den live
+        // rotierten Bot-Token des Python-Chats. Auch der Lesepfad
         // (GET /streamers) bleibt drüben: ein nativer GET würde für POST auf
         // demselben Pfad 405 statt Fallback liefern (axum matcht den Pfad,
-        // dann erst die Methode). Re-Aktivierung pro Route nur mit
+        // dann erst die Methode). Ebenfalls proxied: GET /debug/observability
+        // + /debug/chatters/:login (brauchen Python-In-Process-Bot-State) und
+        // POST /eventsub/processing/requeue. Re-Aktivierung pro Route nur mit
         // Vertragstests gegen die Python-Antworten
         // (siehe rust/docs/04-cutover-plan.md, Kopplung 8).
         .fallback(handlers::legacy_proxy::legacy_fallback_handler)
@@ -127,6 +187,8 @@ pub fn build_internal_router(
         .layer(Extension(helix))
         .layer(Extension(EventSubDispatcherExt(dispatcher)))
         .layer(Extension(handlers::raid::ManualRaidExt(manual_raid)))
+        .layer(Extension(handlers::raid_oauth::RaidOAuthExt(raid_oauth)))
+        .layer(Extension(idempotency::IdempotencyState::new()))
         .layer(Extension(LegacyProxyExt(legacy_proxy)))
         .layer(Extension(ExpectedToken(token.clone())))
         .layer(middleware::from_fn_with_state(token, internal_auth))

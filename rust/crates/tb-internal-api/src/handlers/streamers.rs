@@ -1,38 +1,54 @@
 //! Handler für die Streamer-CRUD- und Analytics-Endpoints.
 //!
-//! Nativ implementierte Routen (können sicher in build_internal_router eingehängt werden):
+//! # Verdrahtungs-Status — Wahrheit ist `build_internal_router` (lib.rs)
+//!
+//! Sicher verdrahtbar (reiner Read, Shape im Live-Diff gegen 8779 verifiziert):
 //!
 //! | Methode | Pfad                                          | Handler                   |
 //! |---------|-----------------------------------------------|---------------------------|
-//! | GET     | /streamers                                    | list_handler              |
-//! | POST    | /streamers                                    | add_handler               |
-//! | DELETE  | /streamers/:login                             | remove_handler            |
-//! | POST    | /streamers/:login/verify                      | verify_handler            |
-//! | POST    | /streamers/:login/archive                     | archive_handler           |
-//! | POST    | /streamers/:login/discord-flag                | discord_flag_handler      |
-//! | POST    | /streamers/:login/discord-profile             | discord_profile_handler   |
-//! | GET     | /stats                                        | stats_handler             |
-//! | GET     | /analytics/streamer/:login                    | streamer_analytics_handler|
 //! | GET     | /analytics/comparison                         | analytics_comparison_handler |
-//! | GET     | /sessions/:session_id                         | session_detail_handler    |
 //!
-//! NICHT nativ (bleibt proxied):
-//! - POST /streamers/:login/chat-action
-//!   Erfordert den Live-Bot-Token für Twitch-Chat; kann nicht ohne die
-//!   Python-Laufzeit ausgeführt werden. Wird weiterhin über den Legacy-Proxy
-//!   an Port 8779 weitergeleitet.
+//! NICHT verdrahten — Handler existieren, erfüllen aber den
+//! Python-Vertrag noch nicht vollständig:
+//! - GET /stats: Rust-Shape ist eine Eigen-Erfindung
+//!   (`total_sessions/avg_viewers/…`), Python liefert
+//!   `{tracked:{top,hourly,weekday}, category, avg_viewers_all,
+//!   avg_viewers_tracked}` (`dashboard_metrics_mixin.py:212-259`) — der
+//!   Dashboard-Split-Mode liest exakt diese Felder.
+//! - GET /analytics/streamer/:login: Python delegiert an
+//!   `AnalyticsBackendExtended.get_comprehensive_analytics`
+//!   (`runtime_bootstrap.py:230`) — der Rust-Handler baut nur
+//!   `{stats, recent_sessions}` und ist damit eine andere API.
+//! - GET /sessions/:session_id: Python liefert `SELECT *` plus berechnete
+//!   Felder (`retention_5m/10m/20m`, `dropoff_label`, `start/end_viewers`,
+//!   `samples`, …) — dem Rust-Port fehlen ~15 Felder (Live-Diff 11.6.).
+//! - GET /streamers + alle Mutationen (POST/DELETE /streamers,
+//!   verify/archive/discord-flag/discord-profile): brauchen den
+//!   Partner-Lifecycle (`promote_streamer_to_partner` /
+//!   `departner_active_partner`) + Discord-Bridge (Rollen-Sync, DMs).
+//!   verify mode=clear/failed departnern in Python KOMPLETT — der native
+//!   Handler antwortet dafür ehrlich 503. GET teilt den Pfad mit POST
+//!   (axum: Pfad-Match vor Methoden-Match → nativer GET würde POST mit
+//!   405 statt Proxy-Fallback beantworten — kein Teil-Flip möglich).
+//! - POST /streamers/:login/chat-action: braucht den live rotierten
+//!   Bot-Token des Python-Chats.
 //!
 //! Alle Endpoints: `auth.is_privileged()` → 401.
 //!
 //! Request-Body-Konventionen:
 //! - Bestandskonsumenten (Python-Client) senden snake_case-Bodies.
 //! - Felder mit Underscores akzeptieren via `#[serde(alias)]` auch camelCase.
-//! - Kein Idempotency-Caching (kommt in Schritt 5/6).
+//! - Kein Idempotency-Caching (kommt mit dem geteilten Idempotenz-Layer).
 //! - Discord-Nebeneffekte (Rollen-Sync, EventSub): deferred bis Schritt 5/6.
 //!
 //! archive-mode-Semantik:
 //! - Python gibt NIEMALS 400 für unbekannte mode-Werte — unbekannte Werte
 //!   fallen durch auf "toggle". ArchiveMode::parse ist deshalb infallibel.
+//!
+//! verify-mode-Semantik:
+//! - permanent/temp aktualisieren aktive Partner; clear/failed → 503
+//!   (Lifecycle nicht portiert); unbekannte Modi → 200 "Unbekannter Modus"
+//!   (Python-Parität, KEIN Permanent-Fallback).
 
 use axum::{
     extract::{Path, Query, State},
@@ -314,14 +330,33 @@ pub async fn verify_handler(
         .unwrap_or_else(|| "permanent".to_string());
 
     use db::VerifyStreamerResult;
-    match db::verify_streamer(&pool, &login, &mode).await {
-        Ok(VerifyStreamerResult::Verified) => Ok(Json(OkLoginMessageResponse {
+    // Python (`streamers.py:169`): IMMER 200 {ok, login, message} für alle
+    // Geschäftsfälle — auch "nicht gespeichert" und "Unbekannter Modus".
+    let ok_message = |message: String| {
+        Json(OkLoginMessageResponse {
             ok: true,
             login: login.clone(),
-            message: format!("{login} verifiziert"),
+            message,
         })
-        .into_response()),
-        Ok(VerifyStreamerResult::NotAPartner) => Err(ApiError::not_found()),
+        .into_response()
+    };
+    match db::verify_streamer(&pool, &login, &mode).await {
+        Ok(VerifyStreamerResult::Verified) => {
+            // Python base_msg (`streamer_admin_mixin.py:341-345`).
+            let message = if mode == "temp" {
+                format!("{login} für 30 Tage verifiziert")
+            } else {
+                format!("{login} dauerhaft verifiziert")
+            };
+            Ok(ok_message(message))
+        }
+        Ok(VerifyStreamerResult::NotAPartner) => {
+            Ok(ok_message(format!("{login} ist nicht gespeichert")))
+        }
+        Ok(VerifyStreamerResult::UnknownMode) => Ok(ok_message("Unbekannter Modus".to_string())),
+        // clear/failed departnern in Python komplett (Partner-Lifecycle +
+        // Discord-DM) — nativ nicht portiert, ehrlicher 503 statt Halb-Aktion.
+        Ok(VerifyStreamerResult::RequiresPartnerLifecycle) => Err(ApiError::unavailable()),
         Err(e) => {
             tracing::error!("verify_streamer DB-Fehler: {e}");
             Err(ApiError::internal())
@@ -589,9 +624,9 @@ pub async fn analytics_comparison_handler(
             ApiError::internal()
         })?;
 
+    // Python-Shape exakt: KEIN ok/days-Wrapper (Payload von `_comparison`
+    // wird in streamers.py:436 unverändert durchgereicht).
     Ok(Json(json!({
-        "ok": true,
-        "days": days,
         "category": category,
         "tracked_avg": tracked,
         "top_streamers": top,

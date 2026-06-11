@@ -53,10 +53,12 @@ pub async fn db_schema_fingerprint(pool: &PgPool) -> Result<String, sqlx::Error>
 /// Upsert in `twitch_chatter_global_ban`.
 ///
 /// Global-Ban (gesperrter Chatter über alle Kanäle) und Raid-Blacklist (Kanäle,
-/// die nicht als Raid-Ziel angefahren werden) sind zwei getrennte Mechanismen —
-/// wie im Python-Original. Ein Global-Ban spiegelt bewusst NICHT in
-/// `twitch_raid_blacklist`; die Raid-Blacklist wird ausschließlich über die
-/// dedizierten Raid-Blacklist-Routen gepflegt.
+/// die nicht als Raid-Ziel angefahren werden) sind hier zwei getrennte
+/// Mechanismen. Achtung, bewusste Abweichung vom Python-Original:
+/// `pg.add_chatter_global_ban` spiegelte jeden Global-Ban zusätzlich in
+/// `twitch_raid_blacklist` (Einbahn global→raid). Diese Kopplung wurde mit
+/// Changelog #129 absichtlich aufgehoben — die Raid-Blacklist wird
+/// ausschließlich über die dedizierten Raid-Blacklist-Routen gepflegt.
 pub async fn add_ban(
     pool: &PgPool,
     login: &str,

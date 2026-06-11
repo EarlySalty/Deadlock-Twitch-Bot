@@ -1,3 +1,4 @@
+pub mod common;
 pub mod discord_invite;
 pub mod eventsub;
 pub mod global_ban;
@@ -6,6 +7,8 @@ pub mod legacy_proxy;
 pub mod market_share;
 pub mod raid;
 pub mod raid_blacklist;
+pub mod raid_oauth;
 pub mod self_explainer_log;
 pub mod streamer_link;
 pub mod streamers;
+pub mod telemetry_routes;

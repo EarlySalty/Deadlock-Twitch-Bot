@@ -33,6 +33,7 @@ mod offline_side_effects;
 mod partner_lookup;
 mod raid_adapters;
 mod raid_arrival_wiring;
+mod raid_oauth_impl;
 mod score_refresh;
 mod wiring;
 
@@ -192,6 +193,7 @@ async fn main() {
     // Raid-Kopplungen echt (Auto-Raid, Arrival, Score-Refresh, Blacklist-Guard).
     let suppression = Arc::new(std::sync::Mutex::new(ManualRaidSuppression::new()));
     let mut manual_raid_port: Option<Arc<dyn tb_internal_api::ManualRaidPort>> = None;
+    let mut raid_oauth_port: Option<Arc<dyn tb_internal_api::RaidOAuthPort>> = None;
     let eventsub_hooks: Arc<dyn EventSubHooks> = match (
         &subscription_manager,
         helix.as_ref().clone(),
@@ -199,6 +201,34 @@ async fn main() {
     ) {
         (Some(manager), Some(helix_client), Ok(cipher)) => {
             let cipher = Arc::new(cipher);
+
+            // Raid-OAuth-Strecke (Welle B): StateStore + AuthWriter +
+            // Token-Client zur Composition-Root verdrahten. redirect_uri wie
+            // Python (TWITCH_RAID_REDIRECT_URI mit Hardcode-Default,
+            // runtime_bootstrap.py:341).
+            let raid_redirect_uri = std::env::var("TWITCH_RAID_REDIRECT_URI")
+                .ok()
+                .map(|v| v.trim().to_string())
+                .filter(|v| !v.is_empty())
+                .unwrap_or_else(|| {
+                    "https://deutsche-deadlock-community.de/callback/twitch".to_string()
+                });
+            if let Ok(client_id) = std::env::var("TWITCH_CLIENT_ID") {
+                raid_oauth_port = Some(Arc::new(raid_oauth_impl::TbRaidOAuthImpl::new(
+                    pool.clone(),
+                    tb_raid::state_store::StateStore::new(pool.clone(), raid_redirect_uri.clone()),
+                    tb_raid::auth_writer::AuthWriter::new(pool.clone(), cipher.clone()),
+                    Arc::new(HelixTokenClient {
+                        helix: helix_client.clone(),
+                    }),
+                    client_id,
+                    raid_redirect_uri,
+                )));
+                tracing::info!(
+                    "Raid-OAuth-Lesestrecke nativ aktiv (auth-url/auth-state/block-state/go-url); oauth-callback + requirements weiter via Proxy"
+                );
+            }
+
             let token_blacklist = Arc::new(TokenBlacklistStore::new(pool.clone()));
             let refresher = RaidTokenRefresher::new(
                 pool.clone(),
@@ -417,6 +447,7 @@ async fn main() {
         helix,
         Some(dispatcher),
         manual_raid_port,
+        raid_oauth_port,
         legacy_proxy,
     );
 

@@ -242,22 +242,31 @@ pub async fn remove_streamer(
 /// Ergebnis von `verify_streamer`.
 #[derive(Debug)]
 pub enum VerifyStreamerResult {
-    /// Verifikation gesetzt.
+    /// Verifikation gesetzt (mode permanent/temp auf aktivem Partner).
     Verified,
-    /// Kein aktiver Partner-Eintrag — Verifikation nicht möglich.
+    /// Kein aktiver Partner-Eintrag — Python: "<login> ist nicht gespeichert".
     NotAPartner,
+    /// mode "clear"/"failed" — braucht `departner_active_partner`
+    /// (Status-Wechsel + Identity-Upsert + Raid-Auth-Disable + ggf.
+    /// Discord-Failure-DM). KEINE Mutation: eine halbe Departner-Semantik
+    /// wäre gefährlicher als gar keine.
+    RequiresPartnerLifecycle,
+    /// Unbekannter Modus — Python antwortet 200 "Unbekannter Modus",
+    /// ebenfalls ohne Mutation (KEIN Permanent-Fallback!).
+    UnknownMode,
 }
 
-/// Setzt `manual_verified_permanent = 1, manual_verified_at = NOW()` in `twitch_partners`.
+/// Verifikations-Modi auf `twitch_partners` (Python `_dashboard_verify_storage_step`):
+/// - mode "permanent" → `manual_verified_permanent = 1, manual_verified_at = NOW()`
+/// - mode "temp"      → befristet: `manual_verified_at = NOW(), manual_verified_until = NOW()+30d`
+/// - mode "clear" / "failed" → [`VerifyStreamerResult::RequiresPartnerLifecycle`],
+///   denn Python departnert hier KOMPLETT (`departner_active_partner` mit
+///   `clear_verification=True`) — dieser Lifecycle ist noch nicht portiert.
+/// - alles andere → [`VerifyStreamerResult::UnknownMode`] (Python-Parität).
 ///
-/// Parität Python `_dashboard_verify_storage_step`:
-/// - mode "permanent" → dauerhaft verifizieren
-/// - mode "temp"      → befristet (30 Tage) verifizieren: manual_verified_at = NOW(), manual_verified_until = NOW()+30d
-/// - mode "clear"     → Verifizierung zurücksetzen
-/// - Alles andere     → "permanent"-Semantik (Python-Fallback)
-///
-/// Nur für aktive Partner (`status = 'active'`). Eine Promotion von
-/// `twitch_streamers` → `twitch_partners` ist Bestandteil eines späteren Schritts.
+/// Teilport: Python promotet bei permanent/temp auch Nicht-Partner via
+/// `promote_streamer_to_partner` — hier nur Update aktiver Partner. Deshalb
+/// bleibt die Route bis zum Lifecycle-Port über den Legacy-Proxy.
 pub async fn verify_streamer(
     pool: &PgPool,
     login: &str,
@@ -279,22 +288,7 @@ pub async fn verify_streamer(
         .execute(pool)
         .await?
         .rows_affected(),
-        "clear" => sqlx::query(
-            r#"
-            UPDATE twitch_partners
-            SET manual_verified_permanent = 0,
-                manual_verified_at = NULL,
-                manual_verified_until = NULL
-            WHERE LOWER(twitch_login) = LOWER($1)
-              AND COALESCE(status, '') = 'active'
-            "#,
-        )
-        .bind(login)
-        .execute(pool)
-        .await?
-        .rows_affected(),
-        // "permanent" und alle anderen Werte → dauerhaft verifizieren
-        _ => sqlx::query(
+        "permanent" => sqlx::query(
             r#"
             UPDATE twitch_partners
             SET manual_verified_permanent = 1,
@@ -307,6 +301,8 @@ pub async fn verify_streamer(
         .execute(pool)
         .await?
         .rows_affected(),
+        "clear" | "failed" => return Ok(VerifyStreamerResult::RequiresPartnerLifecycle),
+        _ => return Ok(VerifyStreamerResult::UnknownMode),
     };
 
     if updated > 0 {
@@ -734,7 +730,7 @@ pub async fn streamer_analytics(
                COALESCE(SUM(unique_chatters)::BIGINT, 0)              AS total_unique_chatters
           FROM twitch_stream_sessions
          WHERE LOWER(streamer_login) = LOWER($1)
-           AND started_at > NOW() - ($2 || ' days')::INTERVAL
+           AND started_at > NOW() - ($2 * INTERVAL '1 day')
         "#,
     )
     .bind(login)
@@ -762,16 +758,21 @@ pub async fn streamer_analytics(
 // ── GET /analytics/comparison ─────────────────────────────────────────────────
 
 /// Vergleichs-Statistik (Parität Python `_dashboard_comparison_stats_sync`).
+/// `peak_viewers` ist i64: Python liefert `MAX(viewer_count)` als int
+/// (JSON `7256`, nicht `7256.0`) — Konsumenten, die den Wert formatieren,
+/// sähen sonst den Float-Suffix.
 #[derive(Debug, Serialize, sqlx::FromRow)]
 pub struct ComparisonCategoryRow {
     pub avg_viewers: Option<f64>,
-    pub peak_viewers: Option<f64>,
+    pub peak_viewers: Option<i64>,
 }
 
+/// Python-SQL aliasiert die Spalte als `val` (`dashboard_metrics_mixin.py:399`)
+/// und das Dashboard-Template liest `s["val"]` — Feldname ist Vertrag.
 #[derive(Debug, Serialize, sqlx::FromRow)]
 pub struct ComparisonTopStreamerRow {
     pub streamer_login: String,
-    pub avg_viewers: Option<f64>,
+    pub val: Option<f64>,
 }
 
 pub async fn analytics_comparison(
@@ -788,9 +789,9 @@ pub async fn analytics_comparison(
     let category: ComparisonCategoryRow = sqlx::query_as(
         r#"
         SELECT AVG(viewer_count)::FLOAT8 AS avg_viewers,
-               MAX(viewer_count)::FLOAT8 AS peak_viewers
+               MAX(viewer_count)::BIGINT AS peak_viewers
           FROM twitch_stats_category
-         WHERE ts_utc > NOW() - ($1 || ' days')::INTERVAL
+         WHERE ts_utc > NOW() - ($1 * INTERVAL '1 day')
         "#,
     )
     .bind(days)
@@ -800,9 +801,9 @@ pub async fn analytics_comparison(
     let tracked: ComparisonCategoryRow = sqlx::query_as(
         r#"
         SELECT AVG(viewer_count)::FLOAT8 AS avg_viewers,
-               MAX(viewer_count)::FLOAT8 AS peak_viewers
+               MAX(viewer_count)::BIGINT AS peak_viewers
           FROM twitch_stats_tracked
-         WHERE ts_utc > NOW() - ($1 || ' days')::INTERVAL
+         WHERE ts_utc > NOW() - ($1 * INTERVAL '1 day')
         "#,
     )
     .bind(days)
@@ -812,11 +813,11 @@ pub async fn analytics_comparison(
     let top: Vec<ComparisonTopStreamerRow> = sqlx::query_as(
         r#"
         SELECT streamer_login,
-               AVG(avg_viewers)::FLOAT8 AS avg_viewers
+               AVG(avg_viewers)::FLOAT8 AS val
           FROM twitch_stream_sessions
-         WHERE started_at > NOW() - ($1 || ' days')::INTERVAL
+         WHERE started_at > NOW() - ($1 * INTERVAL '1 day')
          GROUP BY streamer_login
-         ORDER BY avg_viewers DESC NULLS LAST
+         ORDER BY val DESC
          LIMIT 5
         "#,
     )
@@ -1271,6 +1272,74 @@ mod tests {
 
         let result = verify_streamer(&pool, "niemand", "permanent").await.unwrap();
         assert!(matches!(result, VerifyStreamerResult::NotAPartner));
+    }
+
+    // Python departnert bei clear/failed KOMPLETT (departner_active_partner) —
+    // bis der Lifecycle portiert ist, darf hier NICHTS mutiert werden.
+    #[tokio::test]
+    async fn verify_clear_und_failed_mutieren_nichts() {
+        let dsn = db_dsn_or_skip!();
+        let pool = make_pool(&dsn, "test_sc_verify_lifecycle").await;
+        sqlx::query(
+            "INSERT INTO twitch_partners (twitch_login, status) VALUES ('lifecycleuser', 'active')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "UPDATE twitch_partners SET manual_verified_permanent = 1, manual_verified_at = NOW()
+             WHERE twitch_login = 'lifecycleuser'",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        for mode in ["clear", "failed"] {
+            let result = verify_streamer(&pool, "lifecycleuser", mode).await.unwrap();
+            assert!(
+                matches!(result, VerifyStreamerResult::RequiresPartnerLifecycle),
+                "mode={mode}"
+            );
+        }
+
+        // Verifikation und Status sind unangetastet.
+        let row: (Option<i32>, Option<String>) = sqlx::query_as(
+            "SELECT manual_verified_permanent, status FROM twitch_partners
+             WHERE twitch_login = 'lifecycleuser'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(row.0, Some(1), "Verifikation darf nicht angefasst werden");
+        assert_eq!(row.1.as_deref(), Some("active"), "kein Halb-Departner");
+    }
+
+    // Python: unbekannte Modi → "Unbekannter Modus" OHNE Mutation — der alte
+    // Permanent-Fallback hätte z. B. mode="failed-typo" still verifiziert.
+    #[tokio::test]
+    async fn verify_unbekannter_modus_mutiert_nichts() {
+        let dsn = db_dsn_or_skip!();
+        let pool = make_pool(&dsn, "test_sc_verify_unknown").await;
+        sqlx::query(
+            "INSERT INTO twitch_partners (twitch_login, status) VALUES ('unknownmodeuser', 'active')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let result = verify_streamer(&pool, "unknownmodeuser", "quatschmodus")
+            .await
+            .unwrap();
+        assert!(matches!(result, VerifyStreamerResult::UnknownMode));
+
+        let row: (Option<i32>,) = sqlx::query_as(
+            "SELECT manual_verified_permanent FROM twitch_partners
+             WHERE twitch_login = 'unknownmodeuser'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_ne!(row.0, Some(1), "unbekannter Modus darf NICHT verifizieren");
     }
 
     #[tokio::test]

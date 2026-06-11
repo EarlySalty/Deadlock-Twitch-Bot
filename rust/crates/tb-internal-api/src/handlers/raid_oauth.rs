@@ -99,7 +99,9 @@ impl From<RaidOAuthError> for ApiError {
         match e {
             RaidOAuthError::NotInitialized => ApiError::unavailable(),
             RaidOAuthError::NotFound => ApiError::not_found(),
-            RaidOAuthError::Forbidden => ApiError::forbidden(),
+            // Python raid.py:53-57: error="forbidden", message="forbidden" —
+            // NICHT die Loopback-Middleware-Message.
+            RaidOAuthError::Forbidden => ApiError::forbidden_generic(),
             RaidOAuthError::BadRequest(_) => ApiError::bad_request("invalid request parameters"),
             RaidOAuthError::Upstream => ApiError::unavailable(),
             RaidOAuthError::Internal => ApiError::internal(),
@@ -498,9 +500,12 @@ pub async fn auth_state_handler(
         return Err(ApiError::unavailable());
     };
 
+    // Python (raid.py:90-94) wrappt JEDEN ValueError dieser Route als
+    // "invalid query parameters" — keine feldspezifische Message.
     let raw = params.discord_user_id.as_deref().unwrap_or("");
-    let discord_user_id = normalize_discord_user_id(raw, true)?
-        .ok_or(ApiError::bad_request("invalid discord_user_id"))?;
+    let discord_user_id = normalize_discord_user_id(raw, true)
+        .map_err(|_| ApiError::bad_request("invalid query parameters"))?
+        .ok_or(ApiError::bad_request("invalid query parameters"))?;
 
     let payload = port.auth_state(&discord_user_id).await.map_err(|e| {
         tracing::error!("raid auth state Fehler: {e:?}");
@@ -526,8 +531,11 @@ pub async fn block_state_handler(
         return Err(ApiError::unavailable());
     };
 
+    // Python (raid.py:127-131) wrappt JEDEN ValueError dieser Route als
+    // "invalid query parameters" — keine feldspezifische Message.
     let raw_discord = params.discord_user_id.as_deref().unwrap_or("");
-    let discord_user_id = normalize_discord_user_id(raw_discord, false)?;
+    let discord_user_id = normalize_discord_user_id(raw_discord, false)
+        .map_err(|_| ApiError::bad_request("invalid query parameters"))?;
 
     // twitch_login normalisieren (Python: _normalize_login via normalize_twitch_login)
     let raw_login = params.twitch_login.as_deref().unwrap_or("").trim().to_string();
@@ -535,15 +543,13 @@ pub async fn block_state_handler(
         None
     } else {
         let normalized = normalize_twitch_login(&raw_login)
-            .ok_or(ApiError::bad_request("invalid twitch_login"))?;
+            .ok_or(ApiError::bad_request("invalid query parameters"))?;
         Some(normalized)
     };
 
     // Python: if discord_user_id is None and not twitch_login: raise ValueError
     if discord_user_id.is_none() && twitch_login.is_none() {
-        return Err(ApiError::bad_request(
-            "discord_user_id or twitch_login is required",
-        ));
+        return Err(ApiError::bad_request("invalid query parameters"));
     }
 
     let payload = port
@@ -588,10 +594,10 @@ pub async fn go_url_handler(
         ApiError::from(e)
     })?;
 
-    // Python: if not auth_url_str: return not_found
+    // Python (raid.py:145): 404 mit "state not found or expired".
     let auth_url = maybe_url
         .filter(|u| !u.trim().is_empty())
-        .ok_or(ApiError::not_found())?;
+        .ok_or(ApiError::not_found_with("state not found or expired"))?;
 
     Ok(Json(GoUrlResponse {
         ok: true,
@@ -621,14 +627,15 @@ pub async fn requirements_handler(
         return Err(ApiError::unavailable());
     };
 
-    // Discord-Scope-Guard (Python: _enforce_discord_action_scope).
+    // Discord-Scope-Guard (Python: _enforce_discord_action_scope →
+    // 403 {"error":"forbidden","message":"action outside configured scope"}).
     port.enforce_discord_action_scope(
         body.guild_id.as_ref(),
         body.channel_id.as_ref(),
         body.role_id.as_ref(),
     )
     .await
-    .map_err(|_| ApiError::forbidden())?;
+    .map_err(|_| ApiError::forbidden_scope())?;
 
     // Python: body.get("login") or body.get("streamer") or body.get("twitch_login")
     let raw = {
@@ -666,8 +673,11 @@ pub async fn requirements_handler(
 
 /// `POST /internal/twitch/v1/raid/oauth-callback`
 ///
-/// Verarbeitet den OAuth-Callback-Payload und gibt status/title/body_html zurück.
-/// Der HTTP-Status-Code der Antwort entspricht `result.status` (200–599).
+/// Verarbeitet den OAuth-Callback-Payload und gibt status/title/body_html
+/// zurück. Der HTTP-Status der Antwort ist IMMER 200 — Python ruft
+/// `_json_response(result)` ohne `status=`-Argument auf (`raid.py:291`);
+/// der geklemmte `result.status` (200–599) erscheint nur als Feld im
+/// JSON-Body. Die OAuth-Flow-UI wertet genau dieses Body-Feld aus.
 ///
 /// # Idempotenz
 /// Wie [`requirements_handler`]: noch kein nativer Idempotenz-Layer.
@@ -683,14 +693,15 @@ pub async fn oauth_callback_handler(
         return Err(ApiError::unavailable());
     };
 
-    // Discord-Scope-Guard (Python: _enforce_discord_action_scope).
+    // Discord-Scope-Guard (Python: _enforce_discord_action_scope →
+    // 403 {"error":"forbidden","message":"action outside configured scope"}).
     port.enforce_discord_action_scope(
         body.guild_id.as_ref(),
         body.channel_id.as_ref(),
         body.role_id.as_ref(),
     )
     .await
-    .map_err(|_| ApiError::forbidden())?;
+    .map_err(|_| ApiError::forbidden_scope())?;
 
     let code = body.code.as_deref().unwrap_or("").to_string();
     let state = body.state.as_deref().unwrap_or("").to_string();
@@ -701,10 +712,9 @@ pub async fn oauth_callback_handler(
         ApiError::from(e)
     })?;
 
-    // Python: status_code = max(200, min(status_code, 599))
+    // Python: status_code = max(200, min(status_code, 599)) — nur Body-Feld,
+    // NICHT der HTTP-Status (raid.py:284-291, _json_response default 200).
     let status_code = result.status.clamp(200, 599);
-    let http_status = axum::http::StatusCode::from_u16(status_code)
-        .unwrap_or(axum::http::StatusCode::INTERNAL_SERVER_ERROR);
 
     let json_body = serde_json::json!({
         "status": status_code,
@@ -712,7 +722,7 @@ pub async fn oauth_callback_handler(
         "body_html": result.body_html,
     });
 
-    Ok((http_status, Json(json_body)))
+    Ok((axum::http::StatusCode::OK, Json(json_body)))
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────

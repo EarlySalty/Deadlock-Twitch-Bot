@@ -15,30 +15,26 @@
 //!
 //! Auth: alle Endpoints verlangen `is_privileged()` (X-Internal-Token).
 //!
-//! Idempotenz-Cache für `POST /live/link-click`:
-//! Python hat einen In-Memory-Cache (TTL 15 min, max 2000 Einträge) je
-//! `Idempotency-Key`-Header + Scope. Hier wird dasselbe in Rust nachgebaut:
-//! `Mutex<HashMap<String, CacheEntry>>` mit Zeitstempel; Cleanup on write.
-//! Vereinfachung gegenüber Python: kein Inflight-Future-Mechanismus (Parität
-//! für den Normalfall; Inflight-Warten nur wenn zwei identische parallele
-//! Requests gleichzeitig eintreffen — extrem selten, für diesen Fall gibt es
-//! im schlimmsten Fall einen zweiten DB-Write statt eines Wait).
+//! Idempotenz für `POST /live/link-click`: läuft über den geteilten
+//! [`crate::idempotency`]-Layer (voller Python-Vertrag: Scope-Key,
+//! Fingerprint+409, Inflight-Dedup, Replay-Header) — als
+//! `Extension<IdempotencyState>` eingehängt.
 
 use axum::{
-    extract::State,
+    extract::{OriginalUri, State},
     http::HeaderMap,
-    response::IntoResponse,
+    response::{IntoResponse, Response},
     Extension, Json,
 };
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sqlx::PgPool;
-use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
 use tb_analytics::telemetry_routes as db;
 use tb_domain::normalize_twitch_login;
 use tb_http_core::{ApiError, AuthLevel};
+
+use crate::idempotency::{IdempotencyState, Prepared, IDEMPOTENCY_KEY_HEADER};
 
 /// Referral-Code identisch zu `TWITCH_DISCORD_REF_CODE` in `bot/core/constants.py`.
 const DISCORD_REF_CODE: &str = "DE-Deadlock-Discord";
@@ -55,75 +51,6 @@ const ENV_ALLOWED_GUILD_IDS: &str = "TWITCH_INTERNAL_API_ALLOWED_GUILD_IDS";
 const ENV_ALLOWED_CHANNEL_IDS: &str = "TWITCH_INTERNAL_API_ALLOWED_CHANNEL_IDS";
 /// Env-Variable für die Role-ID-Allowlist (Parität zu `_allowed_role_ids`).
 const ENV_ALLOWED_ROLE_IDS: &str = "TWITCH_INTERNAL_API_ALLOWED_ROLE_IDS";
-
-/// TTL für den Idempotenz-Cache (15 min — Parität zu Python `_idempotency_ttl_seconds`).
-const IDEMPOTENCY_TTL_SECS: u64 = 15 * 60;
-/// Max. Einträge (Parität zu Python `_idempotency_max_entries`).
-const IDEMPOTENCY_MAX_ENTRIES: usize = 2000;
-
-// ── Idempotenz-Cache ──────────────────────────────────────────────────────────
-
-#[derive(Clone)]
-struct CacheEntry {
-    /// UNIX-Zeitstempel (Sekunden) beim Einfügen.
-    created_at: u64,
-    /// Der gecachte Response-Body als JSON-Bytes.
-    body: Vec<u8>,
-    /// HTTP-Status-Code des gecachten Responses.
-    status: u16,
-}
-
-/// Shared Idempotenz-Cache für `POST /live/link-click`.
-/// Parität zu Python `_idempotency_cache` in `app.py`.
-/// Wird als `Extension<LinkClickIdempotencyCache>` in den Router eingehängt.
-#[derive(Clone, Default)]
-pub struct LinkClickIdempotencyCache(Arc<Mutex<HashMap<String, CacheEntry>>>);
-
-impl LinkClickIdempotencyCache {
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    fn now_secs() -> u64 {
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs()
-    }
-
-    /// Bereinigt abgelaufene Einträge und begrenzt auf max. Größe.
-    fn cleanup(map: &mut HashMap<String, CacheEntry>) {
-        let now = Self::now_secs();
-        map.retain(|_, v| now.saturating_sub(v.created_at) < IDEMPOTENCY_TTL_SECS);
-        if map.len() > IDEMPOTENCY_MAX_ENTRIES {
-            // Älteste Einträge entfernen (Parität Python: `sorted(cache.items(), key=...`)
-            let mut pairs: Vec<_> = map.iter().map(|(k, v)| (k.clone(), v.created_at)).collect();
-            pairs.sort_by_key(|(_, ts)| *ts);
-            let overflow = map.len() - IDEMPOTENCY_MAX_ENTRIES;
-            for (k, _) in pairs.into_iter().take(overflow) {
-                map.remove(&k);
-            }
-        }
-    }
-
-    /// Gibt `Some((body, status))` zurück wenn der Key gecacht und noch gültig ist.
-    fn get(&self, key: &str) -> Option<(Vec<u8>, u16)> {
-        let map = self.0.lock().unwrap_or_else(|e| e.into_inner());
-        let entry = map.get(key)?;
-        let age = Self::now_secs().saturating_sub(entry.created_at);
-        if age >= IDEMPOTENCY_TTL_SECS {
-            return None;
-        }
-        Some((entry.body.clone(), entry.status))
-    }
-
-    /// Speichert einen Response unter dem Key (mit Cleanup).
-    fn set(&self, key: String, body: Vec<u8>, status: u16) {
-        let mut map = self.0.lock().unwrap_or_else(|e| e.into_inner());
-        Self::cleanup(&mut map);
-        map.insert(key, CacheEntry { created_at: Self::now_secs(), body, status });
-    }
-}
 
 // ── Hilfs-Typen ───────────────────────────────────────────────────────────────
 
@@ -210,8 +137,7 @@ fn normalize_text_field(
     let text = value
         .as_deref()
         .unwrap_or("")
-        .replace('\r', " ")
-        .replace('\n', " ");
+        .replace(['\r', '\n'], " ");
     let text = text.trim().to_string();
     if text.is_empty() {
         if required {
@@ -436,55 +362,61 @@ pub async fn live_active_announcements_handler(
 /// Parität zu `live_link_click` in `telemetry.py` +
 /// `_dashboard_live_link_click` in `bot/dashboard/mixin.py`.
 ///
-/// Validiert alle Pflichtfelder → prüft Discord-Action-Scope (Guild/Channel/Role
-/// gegen Env-Allowlists) → Idempotenz-Check → schreibt `twitch_link_clicks`.
+/// Idempotenz (geteilter Layer, voller Python-Vertrag) → Validierung →
+/// Discord-Action-Scope → INSERT in `twitch_link_clicks`. Wie in Python
+/// laufen Validierungs-/Scope-Fehler als Owner durch und werden den Waitern
+/// zurückgespielt, aber NICHT gecacht (`cacheable` erst nach Erfolg).
 pub async fn live_link_click_handler(
     auth: AuthLevel,
     headers: HeaderMap,
+    OriginalUri(uri): OriginalUri,
     State(pool): State<PgPool>,
-    Extension(idem_cache): Extension<LinkClickIdempotencyCache>,
-    Json(body): Json<LinkClickRequest>,
-) -> Result<impl IntoResponse, ApiError> {
+    Extension(idem): Extension<IdempotencyState>,
+    Json(raw_payload): Json<Value>,
+) -> Result<Response, ApiError> {
     if !auth.is_privileged() {
         return Err(ApiError::unauthorized());
     }
 
-    // ── Idempotenz-Key aus Header (Parität zu Python `_prepare_idempotency`) ──
-    let idem_key_raw = headers
-        .get("Idempotency-Key")
-        .or_else(|| headers.get("idempotency-key"))
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("")
-        .trim()
-        .to_string();
+    // Fingerprint über den ROHEN Body (wie Python canonical_json(payload) —
+    // unbekannte Felder zählen mit); erst danach typisiert deserialisieren.
+    let body: LinkClickRequest = serde_json::from_value(raw_payload.clone())
+        .map_err(|_| ApiError::bad_request("invalid request body"))?;
 
-    let idem_key: Option<String> = if idem_key_raw.is_empty() {
-        None
-    } else if idem_key_raw.len() > 128 {
-        return Err(ApiError::bad_request("invalid idempotency key"));
-    } else {
-        Some(idem_key_raw)
-    };
+    let raw_key = headers
+        .get(IDEMPOTENCY_KEY_HEADER)
+        .and_then(|v| v.to_str().ok());
+    let path = uri.path().to_string();
+    let path_qs = uri
+        .path_and_query()
+        .map(|pq| pq.as_str().to_string())
+        .unwrap_or_else(|| path.clone());
 
-    // Wenn Key bekannt → gecachte Antwort zurückgeben (Replay)
-    if let Some(ref key) = idem_key {
-        if let Some((cached_body, cached_status)) = idem_cache.get(key) {
-            let status = axum::http::StatusCode::from_u16(cached_status)
-                .unwrap_or(axum::http::StatusCode::OK);
-            let mut resp = axum::response::Response::new(axum::body::Body::from(cached_body));
-            *resp.status_mut() = status;
-            resp.headers_mut().insert(
-                "content-type",
-                axum::http::HeaderValue::from_static("application/json"),
-            );
-            resp.headers_mut().insert(
-                "X-Idempotency-Replayed",
-                axum::http::HeaderValue::from_static("1"),
-            );
-            return Ok(resp);
+    match idem.prepare(raw_key, "POST", &path, &path_qs, &raw_payload).await {
+        Prepared::Immediate(resp) => Ok(resp),
+        Prepared::Skip => {
+            let result = process_link_click(&pool, body).await?;
+            Ok(Json(result).into_response())
         }
+        Prepared::Owner(slot) => match process_link_click(&pool, body).await {
+            Ok(result) => {
+                // Python: owner_cacheable erst NACH erfolgreichem Write.
+                slot.complete(200, &result, true);
+                Ok(Json(result).into_response())
+            }
+            Err(e) => {
+                // Fehler an Waiter zurückspielen, aber nicht cachen — Retry
+                // mit gleichem Key führt neu aus.
+                slot.complete(e.status.as_u16(), &e.payload_json(), false);
+                Err(e)
+            }
+        },
     }
+}
 
+/// Geschäftslogik von `POST /live/link-click` — Validierung, Scope-Guard,
+/// INSERT. Gibt den Erfolgs-Body `{"ok": true}` zurück.
+async fn process_link_click(pool: &PgPool, body: LinkClickRequest) -> Result<Value, ApiError> {
     // ── Validation (Parität zu telemetry.py + policy.py) ─────────────────────
 
     let streamer_login =
@@ -558,7 +490,7 @@ pub async fn live_link_click_handler(
     let message_id_str = message_id_val.to_string();
 
     db::insert_link_click(
-        &pool,
+        pool,
         &clicked_at,
         &streamer_login,
         &tracking_token,
@@ -576,18 +508,7 @@ pub async fn live_link_click_handler(
         ApiError::internal()
     })?;
 
-    let ok_body = serde_json::to_vec(&json!({ "ok": true })).unwrap_or_default();
-
-    // Idempotenz-Cache befüllen
-    if let Some(key) = idem_key {
-        idem_cache.set(key, ok_body.clone(), 200);
-    }
-
-    Ok(axum::response::Response::builder()
-        .status(axum::http::StatusCode::OK)
-        .header("content-type", "application/json")
-        .body(axum::body::Body::from(ok_body))
-        .unwrap())
+    Ok(json!({ "ok": true }))
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
@@ -724,7 +645,7 @@ mod tests {
                 post(live_link_click_handler),
             )
             .with_state(pool)
-            .layer(Extension(LinkClickIdempotencyCache::new()))
+            .layer(Extension(IdempotencyState::new()))
             .layer(Extension(ExpectedToken(token.to_string())))
             .layer(middleware::from_fn_with_state(token.to_string(), internal_auth))
             .layer(middleware::from_fn(loopback_only))
@@ -1227,14 +1148,4 @@ mod tests {
         assert_eq!(result.len(), 80, "Label muss auf 80 Zeichen gekürzt werden");
     }
 
-    #[test]
-    fn idempotency_cache_replay_und_cleanup() {
-        let cache = LinkClickIdempotencyCache::new();
-        cache.set("key1".to_string(), b"response".to_vec(), 200);
-        let hit = cache.get("key1");
-        assert!(hit.is_some());
-        assert_eq!(hit.unwrap().1, 200);
-        // Unbekannter Key → None
-        assert!(cache.get("key2").is_none());
-    }
 }

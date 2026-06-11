@@ -6,5 +6,7 @@
 
 pub mod aad;
 pub mod field;
+pub mod token;
 
 pub use field::{FieldCipher, KEY_SIZE, KID, NONCE_SIZE, VERSION};
+pub use token::random_hex_token;

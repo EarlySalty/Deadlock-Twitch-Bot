@@ -91,22 +91,24 @@ fn normalize_login_db(value: &str) -> Option<String> {
 // ---------------------------------------------------------------------------
 
 /// Parst eine kommagetrennte Umgebungsvariable als Menge positiver Integers.
-/// Leere Variablen oder fehlende Werte → `None` (kein Guard aktiv).
-fn parse_allowlist(raw: &str) -> Option<HashSet<i64>> {
-    let trimmed = raw.trim();
-    if trimmed.is_empty() {
-        return None;
-    }
-    let ids: HashSet<i64> = trimmed
+///
+/// Fail-closed wie Python `parse_allowlist_ids` (`policy.py:183-210`):
+/// `None` (Variable nicht gesetzt) → kein Guard. GESETZTE Variable — auch
+/// leer oder ohne gültige IDs — → `Some(set)`; ein leeres Set bedeutet
+/// deny-all, nicht guard-aus.
+fn parse_allowlist(raw: Option<&str>) -> Option<HashSet<i64>> {
+    let raw = raw?;
+    let ids: HashSet<i64> = raw
         .split(',')
         .filter_map(|s| s.trim().parse::<i64>().ok())
         .filter(|&v| v > 0)
         .collect();
     if ids.is_empty() {
-        None
-    } else {
-        Some(ids)
+        tracing::warn!(
+            "Scope-Allowlist gesetzt, aber keine gültigen positiven IDs — fail-closed deny-all"
+        );
     }
+    Some(ids)
 }
 
 /// Parst einen optionalen `serde_json::Value` als positive i64.
@@ -120,8 +122,9 @@ fn coerce_positive_int(value: &Option<serde_json::Value>) -> Option<i64> {
 }
 
 /// Prüft, ob der gegebene Wert in der Allowlist enthalten ist.
-/// Wenn `allowed` leer ist (kein Guard aktiv), wird kein Fehler geworfen.
-/// Wenn `allowed` gesetzt ist und der Wert fehlt oder nicht enthalten ist → Fehler.
+/// `None` = kein Guard aktiv → kein Fehler. `Some(set)` = Guard aktiv:
+/// fehlender oder nicht enthaltener Wert → Fehler; ein leeres Set weist
+/// damit alles ab (deny-all, Python-Parität).
 fn enforce_scope_allowlist(
     value: &Option<serde_json::Value>,
     allowed: &Option<HashSet<i64>>,
@@ -203,12 +206,16 @@ impl StreamerContextResolver for PgStreamerContextResolver {
 // ---------------------------------------------------------------------------
 
 /// DB-Zeile aus `twitch_streamers_partner_state` für State-Abfragen.
+///
+/// `manual_partner_opt_out` ist INT4 in Prod (0/1-Flag wie alle
+/// Partner-Flags) — eine bool-Dekodierung schlägt zur Laufzeit fehl
+/// (Typ-Drift-Klasse aus dem Audit; Prod-Schema am 11.6. verifiziert).
 #[derive(sqlx::FromRow, Debug)]
 struct PartnerStateRow {
     twitch_login: Option<String>,
     twitch_user_id: Option<String>,
     discord_user_id: Option<String>,
-    manual_partner_opt_out: Option<bool>,
+    manual_partner_opt_out: Option<i32>,
 }
 
 /// Alle Zeilen für eine Discord-User-ID aus der Partner-State-View.
@@ -257,12 +264,16 @@ async fn query_partner_row_by_login(
 }
 
 /// Auth-Zeile aus `twitch_raid_auth` per user_id.
+///
+/// `authorized_at` ist TIMESTAMPTZ in Prod — gebraucht wird nur "ist
+/// gesetzt?", deshalb `DateTime<Utc>` statt String-Dekodierung
+/// (Typ-Drift-Klasse; Prod-Schema am 11.6. verifiziert).
 #[derive(sqlx::FromRow)]
 struct RaidAuthLookupRow {
     twitch_login: Option<String>,
     twitch_user_id: Option<String>,
     raid_enabled: Option<bool>,
-    authorized_at: Option<String>,
+    authorized_at: Option<chrono::DateTime<Utc>>,
 }
 
 async fn query_auth_by_user_id(
@@ -306,11 +317,13 @@ async fn is_token_blacklisted(pool: &PgPool, twitch_user_id: &str) -> bool {
 
 /// Gibt `true` zurück wenn der Login in `twitch_raid_blacklist` steht.
 async fn is_raid_blacklisted(pool: &PgPool, login: &str) -> bool {
-    let row: Result<Option<i64>, _> = sqlx::query_scalar(
+    // `SELECT 1` ist INT4 — eine i64-Dekodierung schlägt fehl und der Fehler
+    // würde still zu `false` verschluckt (Bug-Klasse „Arrival-int4", #129).
+    let row: Result<Option<i32>, _> = sqlx::query_scalar(
         "SELECT 1 FROM twitch_raid_blacklist WHERE LOWER(target_login) = LOWER($1) LIMIT 1",
     )
     .bind(login)
-    .fetch_optional(&*pool)
+    .fetch_optional(pool)
     .await;
     matches!(row, Ok(Some(_)))
 }
@@ -341,7 +354,7 @@ async fn resolve_integration_state(
             result_login = first
                 .twitch_login
                 .as_deref()
-                .and_then(|s| normalize_login_db(s));
+                .and_then(normalize_login_db);
             result_user_id = first
                 .twitch_user_id
                 .as_deref()
@@ -357,13 +370,13 @@ async fn resolve_integration_state(
                 .or(result_discord_id.clone());
         }
         for row in &rows {
-            if let Some(l) = row.twitch_login.as_deref().and_then(|s| normalize_login_db(s)) {
+            if let Some(l) = row.twitch_login.as_deref().and_then(normalize_login_db) {
                 candidate_logins.insert(l);
             }
             if let Some(u) = row.twitch_user_id.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
                 candidate_user_ids.insert(u.to_string());
             }
-            if let Some(true) = row.manual_partner_opt_out {
+            if row.manual_partner_opt_out.unwrap_or(0) != 0 {
                 partner_opt_out = true;
             }
         }
@@ -380,7 +393,7 @@ async fn resolve_integration_state(
                 RaidOAuthError::Internal
             })?;
         if let Some(row) = row_opt {
-            if let Some(l) = row.twitch_login.as_deref().and_then(|s| normalize_login_db(s)) {
+            if let Some(l) = row.twitch_login.as_deref().and_then(normalize_login_db) {
                 if result_login.is_none() {
                     result_login = Some(l.clone());
                 }
@@ -400,7 +413,7 @@ async fn resolve_integration_state(
                     .filter(|s| !s.is_empty())
                     .map(str::to_string);
             }
-            if let Some(true) = row.manual_partner_opt_out {
+            if row.manual_partner_opt_out.unwrap_or(0) != 0 {
                 partner_opt_out = true;
             }
         }
@@ -424,7 +437,7 @@ async fn resolve_integration_state(
                 auth_user_id = Some(au.to_string());
             }
             authorized = row.raid_enabled.unwrap_or(false)
-                || !row.authorized_at.as_deref().unwrap_or("").trim().is_empty();
+                || row.authorized_at.is_some();
         }
     }
     if !authorized {
@@ -441,14 +454,14 @@ async fn resolve_integration_state(
                 })?;
             if let Some(row) = auth {
                 authorized = row.raid_enabled.unwrap_or(false)
-                    || !row.authorized_at.as_deref().unwrap_or("").trim().is_empty();
+                    || row.authorized_at.is_some();
                 if let Some(u) = row.twitch_user_id.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
                     if auth_user_id.is_none() {
                         auth_user_id = Some(u.to_string());
                     }
                     candidate_user_ids.insert(u.to_string());
                 }
-                if let Some(l) = row.twitch_login.as_deref().and_then(|s| normalize_login_db(s)) {
+                if let Some(l) = row.twitch_login.as_deref().and_then(normalize_login_db) {
                     if result_login.is_none() {
                         result_login = Some(l.clone());
                     }
@@ -477,7 +490,7 @@ async fn resolve_integration_state(
                     result_user_id = Some(u.to_string());
                     candidate_user_ids.insert(u.to_string());
                 }
-                if let Some(l) = row.twitch_login.as_deref().and_then(|s| normalize_login_db(s)) {
+                if let Some(l) = row.twitch_login.as_deref().and_then(normalize_login_db) {
                     if result_login.is_none() {
                         result_login = Some(l.clone());
                     }
@@ -516,9 +529,7 @@ async fn resolve_integration_state(
     let blocked = partner_opt_out || token_blacklisted || raid_blacklisted;
 
     // result_login: Fallback auf normalisierter twitch_login-Parameter.
-    let final_login = result_login.or_else(|| {
-        twitch_login.and_then(|l| normalize_login_db(l))
-    });
+    let final_login = result_login.or_else(|| twitch_login.and_then(normalize_login_db));
 
     Ok(RaidStatePayload {
         discord_user_id: result_discord_id,
@@ -543,6 +554,10 @@ async fn resolve_integration_state(
 pub struct TbRaidOAuthImpl {
     pool: PgPool,
     state_store: StateStore,
+    /// Noch ungenutzt: `oauth_callback` ist am Persist-Schritt Stub (kein
+    /// Helix-User-Lookup) und deshalb NICHT im Router verdrahtet — der
+    /// Writer steht für die Vervollständigung bereit.
+    #[allow(dead_code)]
     auth_writer: AuthWriter,
     token_client: Arc<dyn TwitchTokenClient>,
     client_id: String,
@@ -574,18 +589,15 @@ impl TbRaidOAuthImpl {
         client_id: String,
         redirect_uri: String,
     ) -> Self {
-        let allowed_guild_ids = std::env::var("TWITCH_INTERNAL_API_ALLOWED_GUILD_IDS")
-            .ok()
-            .as_deref()
-            .and_then(|v| parse_allowlist(v));
-        let allowed_channel_ids = std::env::var("TWITCH_INTERNAL_API_ALLOWED_CHANNEL_IDS")
-            .ok()
-            .as_deref()
-            .and_then(|v| parse_allowlist(v));
-        let allowed_role_ids = std::env::var("TWITCH_INTERNAL_API_ALLOWED_ROLE_IDS")
-            .ok()
-            .as_deref()
-            .and_then(|v| parse_allowlist(v));
+        // Fail-closed: gesetzte (auch leere) Variable aktiviert den Guard —
+        // nur eine NICHT gesetzte Variable bedeutet guard-aus (policy.py).
+        let allowed_guild_ids =
+            parse_allowlist(std::env::var("TWITCH_INTERNAL_API_ALLOWED_GUILD_IDS").ok().as_deref());
+        let allowed_channel_ids = parse_allowlist(
+            std::env::var("TWITCH_INTERNAL_API_ALLOWED_CHANNEL_IDS").ok().as_deref(),
+        );
+        let allowed_role_ids =
+            parse_allowlist(std::env::var("TWITCH_INTERNAL_API_ALLOWED_ROLE_IDS").ok().as_deref());
         Self {
             pool,
             state_store,
@@ -643,29 +655,9 @@ impl RaidOAuthPort for TbRaidOAuthImpl {
         )
         .await;
 
-        // Zufälligen State-Token erzeugen (32 Bytes hex = 64 Zeichen).
-        let state_token = {
-            use std::fmt::Write as _;
-            let bytes: [u8; 32] = {
-                let mut b = [0u8; 32];
-                // Nicht kryptographisch stark nötig — State-Token ist kein Secret;
-                // der eigentliche Security-Anker ist das verschlüsselte pkce_verifier-Feld.
-                let ts = Utc::now().timestamp_nanos_opt().unwrap_or_default();
-                let ptr = &b as *const _ as usize;
-                let mix = ts ^ (ptr as i64);
-                for (i, chunk) in b.chunks_mut(8).enumerate() {
-                    let v = (mix.wrapping_add(i as i64 * 0x9e3779b97f4a7c15u64 as i64))
-                        .wrapping_mul(0x6c62272e07bb0142u64 as i64);
-                    chunk.copy_from_slice(&v.to_le_bytes());
-                }
-                b
-            };
-            let mut s = String::with_capacity(64);
-            for byte in bytes {
-                write!(&mut s, "{byte:02x}").ok();
-            }
-            s
-        };
+        // State-Token = CSRF-Anker des OAuth-Flows → OS-CSPRNG, wie Pythons
+        // `secrets.token_urlsafe(16)` (`bot/raid/auth.py`).
+        let state_token = tb_crypto::random_hex_token(32);
 
         self.state_store
             .persist(&state_token, &state_info, Utc::now())
@@ -724,18 +716,18 @@ impl RaidOAuthPort for TbRaidOAuthImpl {
     ///
     /// In Python ruft `_raid_requirements` `auth_manager.generate_requirements_dm_embed`
     /// auf, sendet eine Discord-DM und gibt eine Status-Nachricht zurück.
-    /// Im nativen Port delegieren wir das an die interne API, die nur das
-    /// textuelle Ergebnis zurückgibt. Da die Discord-DM-Integration noch nicht
-    /// nativ portiert ist, gibt diese Impl eine statische Bestätigungsnachricht
-    /// zurück und protokolliert das Login.
-    ///
-    /// # open_risk
-    /// Die Discord-DM-Sendung ist noch nicht nativ — der Endpoint antwortet mit
-    /// 200 + "sent"-Message, aber kein tatsächlicher Discord-DM wird abgesetzt.
-    /// Für die echte Impl muss hier eine Discord-Bridge-Anfrage erfolgen.
+    /// Die Discord-DM-Sendung ist noch nicht nativ portiert — deshalb
+    /// antwortet diese Impl ehrlich mit 503 (`upstream_unavailable`) statt
+    /// einen Erfolg vorzutäuschen, den es nie gab. Die Route
+    /// `POST /raid/requirements` bleibt bewusst UNregistriert und läuft über
+    /// den Legacy-Proxy zu Python, das die DM wirklich sendet; dieser Pfad
+    /// ist nur ein Sicherheitsnetz gegen versehentliches Wiren.
     async fn requirements(&self, login: &str) -> Result<String, RaidOAuthError> {
-        tracing::info!(login, "raid requirements angefordert (Discord-DM noch nicht nativ)");
-        Ok(format!("Requirements für {login} wurden angefordert."))
+        tracing::warn!(
+            login,
+            "raid requirements nativ aufgerufen, aber Discord-DM ist nicht portiert — 503"
+        );
+        Err(RaidOAuthError::Upstream)
     }
 
     /// Discord-Scope-Guard: prüft guild_id/channel_id/role_id gegen Allowlists.
@@ -898,14 +890,22 @@ mod tests {
     // ── parse_allowlist ───────────────────────────────────────────────────────
 
     #[test]
-    fn parse_allowlist_leer_gibt_none() {
-        assert!(parse_allowlist("").is_none());
-        assert!(parse_allowlist("   ").is_none());
+    fn parse_allowlist_nicht_gesetzt_gibt_none() {
+        assert!(parse_allowlist(None).is_none());
+    }
+
+    // Python policy.py: gesetzte-aber-leere Variable → leeres Set = deny-all
+    // (fail-closed), NICHT guard-aus.
+    #[test]
+    fn parse_allowlist_leer_gesetzt_gibt_leeres_set_deny_all() {
+        assert_eq!(parse_allowlist(Some("")).unwrap().len(), 0);
+        assert_eq!(parse_allowlist(Some("   ")).unwrap().len(), 0);
+        assert_eq!(parse_allowlist(Some("abc,-1,0")).unwrap().len(), 0);
     }
 
     #[test]
     fn parse_allowlist_kommagetrennt() {
-        let set = parse_allowlist("123,456,789").unwrap();
+        let set = parse_allowlist(Some("123,456,789")).unwrap();
         assert!(set.contains(&123));
         assert!(set.contains(&456));
         assert!(set.contains(&789));
@@ -914,7 +914,7 @@ mod tests {
 
     #[test]
     fn parse_allowlist_ungueltige_werte_werden_ignoriert() {
-        let set = parse_allowlist("123,abc,456,-1,0,789").unwrap();
+        let set = parse_allowlist(Some("123,abc,456,-1,0,789")).unwrap();
         // abc, -1, 0 sind keine positiven Integers → ignoriert.
         assert!(set.contains(&123));
         assert!(set.contains(&456));
@@ -924,9 +924,21 @@ mod tests {
 
     #[test]
     fn parse_allowlist_mit_leerzeichen() {
-        let set = parse_allowlist(" 111 , 222 ").unwrap();
+        let set = parse_allowlist(Some(" 111 , 222 ")).unwrap();
         assert!(set.contains(&111));
         assert!(set.contains(&222));
+    }
+
+    // Leeres Set = Guard aktiv mit deny-all: jeder Wert (auch gültige IDs)
+    // wird abgewiesen.
+    #[test]
+    fn enforce_scope_leeres_set_weist_alles_ab() {
+        let allowed = Some(HashSet::new());
+        let value = Some(json!(123));
+        assert!(matches!(
+            enforce_scope_allowlist(&value, &allowed),
+            Err(RaidOAuthError::Forbidden)
+        ));
     }
 
     // ── coerce_positive_int ───────────────────────────────────────────────────
@@ -1062,7 +1074,7 @@ mod db_tests {
                 enc_kid             TEXT DEFAULT 'v1',
                 token_expires_at    TIMESTAMPTZ,
                 scopes              TEXT,
-                authorized_at       TEXT,
+                authorized_at       TIMESTAMPTZ,
                 raid_enabled        BOOLEAN DEFAULT FALSE,
                 needs_reauth        BOOLEAN DEFAULT FALSE,
                 reauth_notified_at  TEXT
@@ -1080,7 +1092,9 @@ mod db_tests {
                 twitch_login            TEXT PRIMARY KEY,
                 twitch_user_id          TEXT,
                 discord_user_id         TEXT,
-                manual_partner_opt_out  BOOLEAN DEFAULT FALSE,
+                -- INT4 wie Prod (alle Partner-Flags sind 0/1-Integer) —
+                -- BOOLEAN hier hätte den Typ-Drift-Bug im Test versteckt.
+                manual_partner_opt_out  INTEGER DEFAULT 0,
                 status                  TEXT DEFAULT 'active',
                 manual_verified_at      TEXT,
                 created_at              TEXT DEFAULT CURRENT_TIMESTAMP
@@ -1193,11 +1207,10 @@ mod db_tests {
         let dsn = db_dsn_or_skip!();
         let pool = make_pool(&dsn, "test_ro_ctx_auth").await;
         sqlx::query(
-            "INSERT INTO twitch_raid_auth (twitch_user_id, twitch_login, authorized_at) VALUES ($1, $2, $3)",
+            "INSERT INTO twitch_raid_auth (twitch_user_id, twitch_login, authorized_at) VALUES ($1, $2, NOW())",
         )
         .bind("uid_2")
         .bind("streamer_b")
-        .bind("2026-01-01T00:00:00Z")
         .execute(&pool)
         .await
         .expect("insert");
@@ -1321,7 +1334,7 @@ mod db_tests {
 
         sqlx::query(
             "INSERT INTO twitch_partners (twitch_login, twitch_user_id, discord_user_id, manual_partner_opt_out) \
-             VALUES ($1, $2, $3, TRUE)",
+             VALUES ($1, $2, $3, 1)",
         )
         .bind("optout_login")
         .bind("uid_opt")

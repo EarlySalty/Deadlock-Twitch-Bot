@@ -22,7 +22,7 @@ use tb_analytics::raid_blacklist as db;
 use tb_domain::normalize_twitch_login;
 use tb_http_core::{ApiError, AuthLevel};
 
-const DEFAULT_REASON: &str = "manual_ban:absolut";
+use super::common::{pick_first_truthy, resolve_reason};
 
 // ── Request-Typen ─────────────────────────────────────────────────────────────
 
@@ -90,31 +90,6 @@ pub struct ListResponse {
     pub entries: Vec<ListEntry>,
 }
 
-// ── Helfer ────────────────────────────────────────────────────────────────────
-
-/// Python: `body.get("login") or body.get("twitch_login")` — `login` gewinnt
-/// nur wenn nicht-leer, sonst `twitch_login`.
-fn pick_login(login: Option<String>, twitch_login: Option<String>) -> String {
-    let primary = login.unwrap_or_default();
-    if primary.trim().is_empty() {
-        twitch_login.unwrap_or_default()
-    } else {
-        primary
-    }
-}
-
-/// `reason` defaulten: fehlend/leer → Default, sonst getrimmt; leer nach Trim
-/// → Default (Python: `str(body.get("reason") or DEFAULT).strip() or DEFAULT`).
-fn resolve_reason(reason: Option<String>) -> String {
-    let reason = reason.unwrap_or_default();
-    let trimmed = reason.trim();
-    if trimmed.is_empty() {
-        DEFAULT_REASON.to_string()
-    } else {
-        trimmed.to_string()
-    }
-}
-
 // ── Handler ───────────────────────────────────────────────────────────────────
 
 /// `POST /internal/twitch/v1/raid/blacklist/add`
@@ -126,7 +101,7 @@ pub async fn add_handler(
     if !auth.is_privileged() {
         return Err(ApiError::unauthorized());
     }
-    let raw = pick_login(body.login, body.twitch_login);
+    let raw = pick_first_truthy(body.login, body.twitch_login);
     let Some(login) = normalize_twitch_login(&raw) else {
         return Err(ApiError::bad_request("invalid or missing login"));
     };
@@ -153,7 +128,7 @@ pub async fn remove_handler(
     if !auth.is_privileged() {
         return Err(ApiError::unauthorized());
     }
-    let raw = pick_login(body.login, body.twitch_login);
+    let raw = pick_first_truthy(body.login, body.twitch_login);
     let Some(login) = normalize_twitch_login(&raw) else {
         return Err(ApiError::bad_request("invalid or missing login"));
     };
