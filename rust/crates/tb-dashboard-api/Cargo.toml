@@ -12,6 +12,11 @@ serde_json   = { workspace = true }
 sqlx         = { workspace = true }
 tracing      = { workspace = true }
 chrono       = { workspace = true }
+hmac         = { workspace = true }
+sha2         = { workspace = true }
+hex          = { workspace = true }
+reqwest      = { workspace = true }
+url          = { workspace = true }
 tb-analytics = { workspace = true }
 tb-error     = { workspace = true }
 tb-http-core = { workspace = true }

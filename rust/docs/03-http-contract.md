@@ -67,7 +67,9 @@ Auth: Header `X-Internal-Token`, Loopback-Pflicht, `X-Idempotency-Key` für muti
 
 - **OAuth-Callbacks:** `/twitch/auth/*`, `/callback/twitch`, `/callback/discord`, `/twitch/auth/discord/*`, affiliate/stripe-connect
 - **Billing-UI:** `/twitch/abbo/*`
-- **Legal:** `/twitch/impressum|datenschutz|agb`, `/twitch/legal/*`
+- **Legal:** `/twitch/impressum|datenschutz|agb|sicherheit`, `/twitch/legal/*` — **NATIV** seit 12.6.
+  (`tb-dashboard-api/src/handlers/legal.rs`, Binary tb-dashboard auf **8769**, Caddy-Flip vollzogen;
+  Live-Diff: alle Renderings byte-identisch gegen Python 8765)
 - **Stripe-Webhook:** `POST /twitch/api/billing/stripe/webhook` *(raw-body, Signatur-Verify)*
 - **EventSub-Webhook:** `POST /twitch/eventsub/callback` *(HMAC)*
 - `healthz` / `readyz`

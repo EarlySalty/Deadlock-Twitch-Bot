@@ -225,3 +225,31 @@ Fehler dort teuer/sichtbar sind — und Stripe bzw. die DB-Queue ohnehin Retry-S
   eventsub-KPIs (websocket_status/capacity) sind Platzhalter. Sofort gefixt:
   recent-raids ohne success-Filter + LIMIT 20→10, CORS-permissive auf
   authed/admin-Routen entfernt (nur public behält CORS wie Python).
+
+## Stand 12.6. — Legal-Komplex nativ + erster tb-dashboard-Live-Betrieb
+
+- **Legal komplett portiert** (`tb-dashboard-api/src/handlers/legal.rs`): vier Seiten
+  (impressum/datenschutz/agb/**neu: sicherheit**), Turnstile-Gate (HMAC-SHA256-Cookie,
+  Verify in konstanter Zeit), UA-Blockliste, JSON-Override via `TB_LEGAL_PAGES_PATH`
+  (Default identisch zu Python: `data/admin_dashboard/legal_pages.json`), robots.txt
+  als Parity-Artefakt (Caddy serviert `/robots.txt` real statisch aus dem Landing-Build).
+- **Live-Diff bestanden:** alle 5 Renderings (4 Seiten + Gate-Page) byte-identisch
+  gegen Python verifiziert — offline via Dev-Test `dump_rendered_pages_fuer_live_diff`
+  (`cargo test -p tb-dashboard-api -- --ignored`) plus HTTP-Diff gegen 8765. Einzige
+  bekannte Abweichung: Rust percent-encodet `next` im Gate-Redirect-Location (`%2F`),
+  Python nicht — semantisch identisch, beide Handler normalisieren gegen die Allowlist.
+- **Cutover vollzogen:** neuer Service `deadlock-twitch-dashboard-rust.service`
+  (Start-Skript `rust/scripts/run_tb_dashboard_service.sh`, Infisical-Env wie tb-bot).
+  Caddy-Flip: `/twitch/{impressum,datenschutz,agb,sicherheit}` + `/twitch/legal/{access,verify}`
+  → 8769. Rollback: `Caddyfile.bak-legal-cutover` zurückkopieren + `docker restart caddy`.
+- **Port-Realität:** Der Doku-Plan-Port 8767 für tb-dashboard ist seit jeher vom
+  Turnier-Public-Cog (Deadlock-Bots `main_bot.py`) belegt → tb-dashboard läuft auf
+  **8769** (`DASHBOARD_PORT`). Doku-Stellen mit „8767" sind damit historisch.
+- **Inhalt:** AGB von Shop-only auf vollständige Bot-Nutzungsbedingungen erweitert
+  (§1–§14: kostenlose Basisnutzung, Partnerprogramm/OAuth, Auto-Moderation + Bannliste
+  mit Einspruchsweg, KI-Funktionen, Pflichten, Haftung für unentgeltliche Leistungen)
+  + neue öffentliche Seite `/twitch/sicherheit` (ungegated, indexierbar). Python-Mixin
+  bleibt synchroner Fallback — Inhaltsänderungen in beiden Defaults nachziehen.
+- **Hinweis Welle D:** Die v2-/Session-Auth-Blocker aus dem 11.6.-Audit bleiben
+  unverändert offen; der Legal-Cutover ist davon unabhängig (kein Partner-Auth,
+  keine DB-Writes — nur Pool-Connect beim Start).

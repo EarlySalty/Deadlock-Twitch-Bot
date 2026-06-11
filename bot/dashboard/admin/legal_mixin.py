@@ -25,11 +25,12 @@ LEGAL_GATE_ALLOWED_PATHS = frozenset(("/twitch/impressum", "/twitch/datenschutz"
 LEGAL_GATE_COOKIE_NAME = "twitch_legal_gate"
 LEGAL_GATE_COOKIE_TTL_SECONDS = 600
 LEGAL_GATE_TURNSTILE_ACTION = "legal_access"
-LEGAL_PAGE_SLUGS = frozenset(("impressum", "datenschutz", "agb"))
+LEGAL_PAGE_SLUGS = frozenset(("impressum", "datenschutz", "agb", "sicherheit"))
 LEGAL_PAGE_TITLES = {
     "impressum": "Impressum",
     "datenschutz": "Datenschutzerklärung",
     "agb": "Allgemeine Geschäftsbedingungen",
+    "sicherheit": "Sicherheitskonzept",
 }
 _LEGAL_STORAGE_PATH = (
     Path(__file__).resolve().parents[3] / "data" / "admin_dashboard" / "legal_pages.json"
@@ -87,30 +88,82 @@ _DEFAULT_LEGAL_PAGE_BODIES: dict[str, str] = {
         "Nathanael Golla, Anschrift wie oben.</p>"
     ),
     "agb": (
-        "<p class='sub'>Stand: Mai 2026</p>"
+        "<p class='sub'>Stand: Juni 2026</p>"
         "<h2>§ 1 Geltungsbereich</h2>"
-        "<p>Diese Allgemeinen Geschäftsbedingungen (AGB) gelten für Verträge über die "
-        "digitalen Dienste der Deutschen Deadlock Community zwischen Nathanael Golla, "
-        "Binger Straße 5, 55263 Wackernheim (nachfolgend <em>Anbieter</em>) und den "
-        "Nutzerinnen und Nutzern des Dienstes (nachfolgend <em>Kundschaft</em>). "
+        "<p>Diese Allgemeinen Geschäftsbedingungen (AGB) gelten für die Nutzung der "
+        "digitalen Dienste der Deutschen Deadlock Community von Nathanael Golla, "
+        "Binger Straße 5, 55263 Wackernheim (nachfolgend <em>Anbieter</em>). Sie gelten "
+        "sowohl für die unentgeltliche Nutzung des Community-Bots als auch für "
+        "kostenpflichtige Zusatzleistungen. Nutzerinnen und Nutzer sind insbesondere "
+        "Streamerinnen und Streamer, die am Partnerprogramm teilnehmen (nachfolgend "
+        "<em>Partner</em>), sowie bei kostenpflichtigen Leistungen die <em>Kundschaft</em>. "
         "Abweichende Bedingungen werden nur Vertragsbestandteil, wenn der Anbieter ihnen "
         "ausdrücklich zustimmt.</p>"
-        "<h2>§ 2 Vertragsgegenstand</h2>"
-        "<p>Der Anbieter stellt digitale Dienste für Twitch-Streamer bereit. Das Angebot kann "
-        "insbesondere folgende Bestandteile umfassen:</p>"
+        "<h2>§ 2 Leistungen des Anbieters</h2>"
+        "<p>Der Anbieter betreibt einen Chat-Bot und zugehörige Dienste für Twitch-Streamer "
+        "der Deadlock-Community. Die kostenlose Basisnutzung kann insbesondere umfassen:</p>"
+        "<ul>"
+        "<li><strong>Chat-Bot:</strong> Chat-Befehle, Community-Hinweise und automatische "
+        "Nachrichten im Kanal des Partners.</li>"
+        "<li><strong>Raid-Netzwerk:</strong> automatische Weiterleitung der Zuschauer (Raid) "
+        "an einen anderen Partner zum Stream-Ende. Die gegenseitigen Raids sind fester "
+        "Bestandteil des Partnernetzwerks.</li>"
+        "<li><strong>Automatische Moderation:</strong> Erkennung und Moderation von Spam-, "
+        "Scam- und Bot-Aktivität (siehe § 4).</li>"
+        "<li><strong>Statistiken und Dashboard:</strong> Stream- und Community-Auswertungen "
+        "für Partner.</li>"
+        "<li><strong>Discord-Integration:</strong> z. B. Live-Ankündigungen im "
+        "Community-Discord.</li>"
+        "</ul>"
+        "<p>Kostenpflichtige Zusatzleistungen können insbesondere umfassen:</p>"
         "<ul>"
         "<li><strong>Raid Boost:</strong> bevorzugte Platzierung des Kanals im Raid-Netzwerk.</li>"
-        "<li><strong>Analyse-Dashboard:</strong> Zugang zu Statistiken, Viewer-Verläufen und "
-        "Wachstumsanalysen.</li>"
+        "<li><strong>Analyse-Dashboard:</strong> Zugang zu erweiterten Statistiken, "
+        "Viewer-Verläufen und Wachstumsanalysen.</li>"
         "<li><strong>Bundle:</strong> Kombination aus Analyse-Dashboard und Raid Boost.</li>"
         "</ul>"
-        "<p>Der konkrete Leistungsumfang ergibt sich aus der im Checkout ausgewählten Option.</p>"
-        "<h2>§ 3 Vertragsschluss</h2>"
+        "<p>Der konkrete Leistungsumfang kostenpflichtiger Leistungen ergibt sich aus der im "
+        "Checkout ausgewählten Option. Auf unentgeltliche Leistungen besteht kein Anspruch; "
+        "der Anbieter kann sie weiterentwickeln, einschränken oder einstellen.</p>"
+        "<h2>§ 3 Teilnahme am Partnerprogramm</h2>"
+        "<p>Die Nutzung setzt ein Twitch-Konto voraus. Die Nutzungsbedingungen von Twitch "
+        "bleiben unberührt und sind einzuhalten. Die Aufnahme in das Partnerprogramm erfolgt "
+        "nach Freischaltung durch den Anbieter; ein Anspruch auf Aufnahme besteht nicht.</p>"
+        "<p>Funktionen, die der Bot im Namen des Partners ausführt (insbesondere Raids), "
+        "erfordern eine ausdrückliche Autorisierung über Twitch (OAuth). Der Umfang der "
+        "Berechtigungen wird im Twitch-Autorisierungsdialog angezeigt. Die Autorisierung "
+        "kann jederzeit in den Twitch-Kontoeinstellungen unter <em>Verbindungen</em> "
+        "widerrufen werden; der Bot erkennt den Widerruf und deaktiviert die betroffenen "
+        "Funktionen automatisch.</p>"
+        "<h2>§ 4 Automatische Moderation und Bannliste</h2>"
+        "<p>Der Bot führt in Partner-Kanälen automatische Moderation durch. Dazu gehören "
+        "das Löschen von Nachrichten, Timeouts und Banns bei erkannter Spam-, Scam- oder "
+        "Bot-Aktivität. Zum Schutz aller Partner führt der Anbieter eine kanalübergreifende "
+        "Bannliste; Einträge können in allen Partner-Kanälen vollzogen werden.</p>"
+        "<p>Moderationsentscheidungen werden automatisiert getroffen. Wer eine Maßnahme für "
+        "fehlerhaft hält, kann sich per E-Mail an "
+        "<a href='mailto:mail@earlysalty.com'>mail@earlysalty.com</a> oder über den "
+        "Community-Discord melden; der Eintrag wird dann durch einen Menschen geprüft. "
+        "Die Verantwortung der Partner für ihren eigenen Kanal bleibt unberührt.</p>"
+        "<h2>§ 5 KI-gestützte Funktionen</h2>"
+        "<p>Einzelne Funktionen nutzen künstliche Intelligenz, etwa die Bewertung "
+        "verdächtiger Chat-Nachrichten, automatische Antworten, der Titel-Generator und "
+        "Stream-Analysen. Dabei können einzelne Inhalte (z. B. Chat-Nachrichten) zur "
+        "Verarbeitung an KI-Dienstleister übermittelt werden; Einzelheiten regelt die "
+        "<a href='/twitch/datenschutz'>Datenschutzerklärung</a>. KI-generierte Inhalte "
+        "können Fehler enthalten; der Anbieter übernimmt keine Gewähr für ihre Richtigkeit.</p>"
+        "<h2>§ 6 Pflichten der Nutzerinnen und Nutzer</h2>"
+        "<p>Es ist untersagt, den Dienst zu manipulieren, zu stören oder zu überlasten, "
+        "Moderations- oder Schutzmechanismen (einschließlich der KI-Schutzmechanismen) zu "
+        "umgehen oder den Dienst zur Verbreitung rechtswidriger Inhalte zu nutzen. Bei "
+        "Verstößen kann der Anbieter Nutzerinnen und Nutzer vom Dienst ausschließen und "
+        "Partner aus dem Partnerprogramm entfernen.</p>"
+        "<h2>§ 7 Vertragsschluss bei kostenpflichtigen Leistungen</h2>"
         "<p>Die Darstellung der Dienste ist eine unverbindliche Aufforderung zur Bestellung. "
         "Durch Absenden des Checkout-Formulars über Stripe gibt die Kundschaft ein verbindliches "
         "Angebot ab. Der Vertrag kommt zustande, sobald die Zahlung durch Stripe bestätigt wurde "
         "oder der Anbieter den Zugang freischaltet.</p>"
-        "<h2>§ 4 Preise und Zahlung</h2>"
+        "<h2>§ 8 Preise und Zahlung</h2>"
         "<p>Die im Checkout angegebenen Preise gelten zum Zeitpunkt der Bestellung. Soweit nicht "
         "anders angegeben, verstehen sich Preise zuzüglich der gesetzlichen Umsatzsteuer. Die "
         "Abrechnung erfolgt über den Zahlungsdienstleister Stripe. Der Rechnungsbetrag wird zu "
@@ -118,13 +171,18 @@ _DEFAULT_LEGAL_PAGE_BODIES: dict[str, str] = {
         "<p>Bei Buchung eines Jahresabonnements wird der Jahresbetrag sofort berechnet. Sofern "
         "im Angebot ausgewiesen, können zusätzliche Bonusmonate gewährt werden. Bonusmonate sind "
         "nicht bar auszahlbar und nicht übertragbar.</p>"
-        "<h2>§ 5 Laufzeit und Kündigung</h2>"
+        "<h2>§ 9 Laufzeit und Kündigung</h2>"
         "<p>Abonnements laufen für den gewählten Zeitraum und verlängern sich automatisch um den "
         "gleichen Zeitraum, sofern sie nicht zum Ende der laufenden Periode gekündigt werden. "
         "Die Kündigung ist über die Abo-Verwaltung unter "
         "<a href='/twitch/dashboard'>/twitch/dashboard</a> oder per E-Mail an "
         "<a href='mailto:mail@earlysalty.com'>mail@earlysalty.com</a> möglich.</p>"
-        "<h2 id='widerruf'>§ 6 Widerrufsrecht und sofortige Leistungserbringung</h2>"
+        "<p>Die unentgeltliche Nutzung kann von beiden Seiten jederzeit ohne Einhaltung einer "
+        "Frist beendet werden — durch Partner insbesondere durch Austritt aus dem "
+        "Partnerprogramm oder Widerruf der Twitch-Autorisierung, durch den Anbieter "
+        "insbesondere bei Verstößen gegen diese AGB. Bestehende kostenpflichtige Abonnements "
+        "und zwingende gesetzliche Rechte bleiben davon unberührt.</p>"
+        "<h2 id='widerruf'>§ 10 Widerrufsrecht und sofortige Leistungserbringung</h2>"
         "<p>Bei den angebotenen Diensten handelt es sich um digitale Leistungen, die unmittelbar "
         "nach Vertragsschluss bereitgestellt werden können. Das Widerrufsrecht kann nach "
         "<strong>§ 356 Abs. 5 BGB</strong> erlöschen, wenn Verbraucherinnen und Verbraucher "
@@ -132,22 +190,27 @@ _DEFAULT_LEGAL_PAGE_BODIES: dict[str, str] = {
         "Ausführung beginnt, und bestätigen, dass sie dadurch ihr Widerrufsrecht verlieren.</p>"
         "<p>Diese Zustimmung wird im Bestellprozess gesondert abgefragt, sofern sie für den "
         "jeweiligen Vertrag erforderlich ist. Zwingende gesetzliche Rechte bleiben unberührt.</p>"
-        "<h2>§ 7 Verfügbarkeit und Haftung</h2>"
+        "<h2>§ 11 Verfügbarkeit und Haftung</h2>"
         "<p>Der Anbieter bemüht sich um einen stabilen Betrieb, kann aber keine ununterbrochene "
         "Verfügbarkeit garantieren. Wartung, Störungen bei Drittanbietern wie Twitch, Discord "
         "oder Stripe sowie technische Ausfälle können die Nutzung zeitweise einschränken.</p>"
         "<p>Die Haftung richtet sich nach den gesetzlichen Vorschriften. Für leicht fahrlässige "
         "Pflichtverletzungen haftet der Anbieter nur bei Verletzung wesentlicher Vertragspflichten "
-        "und begrenzt auf den vertragstypischen, vorhersehbaren Schaden.</p>"
-        "<h2>§ 8 Datenschutz</h2>"
+        "und begrenzt auf den vertragstypischen, vorhersehbaren Schaden. Für unentgeltlich "
+        "erbrachte Leistungen haftet der Anbieter nur für Vorsatz und grobe Fahrlässigkeit. "
+        "Die Haftung für Schäden aus der Verletzung von Leben, Körper oder Gesundheit sowie "
+        "nach dem Produkthaftungsgesetz bleibt jeweils unberührt.</p>"
+        "<h2>§ 12 Datenschutz</h2>"
         "<p>Informationen zur Verarbeitung personenbezogener Daten finden sich in der "
-        "<a href='/twitch/datenschutz'>Datenschutzerklärung</a>.</p>"
-        "<h2>§ 9 Änderungen der AGB</h2>"
+        "<a href='/twitch/datenschutz'>Datenschutzerklärung</a>. Wie das Projekt mit "
+        "Sicherheit umgeht, beschreibt das öffentliche "
+        "<a href='/twitch/sicherheit'>Sicherheitskonzept</a>.</p>"
+        "<h2>§ 13 Änderungen der AGB</h2>"
         "<p>Der Anbieter kann diese AGB anpassen, wenn sachliche Gründe vorliegen, zum Beispiel "
         "gesetzliche Änderungen, technische Weiterentwicklungen oder Änderungen des "
         "Leistungsumfangs. Wesentliche Änderungen werden rechtzeitig mitgeteilt. "
         "Bestehende gesetzliche Rechte der Kundschaft bleiben unberührt.</p>"
-        "<h2>§ 10 Schlussbestimmungen</h2>"
+        "<h2>§ 14 Schlussbestimmungen</h2>"
         "<p>Es gilt deutsches Recht unter Ausschluss des UN-Kaufrechts. Für Verbraucherinnen "
         "und Verbraucher gelten zusätzlich die zwingenden Verbraucherschutzvorschriften ihres "
         "gewöhnlichen Aufenthaltsortes. Sollten einzelne Bestimmungen dieser AGB unwirksam sein, "
@@ -217,6 +280,112 @@ _DEFAULT_LEGAL_PAGE_BODIES: dict[str, str] = {
         "zu beschweren. Zuständig ist der <em>Landesbeauftragte für den Datenschutz "
         "und die Informationsfreiheit Rheinland-Pfalz (LfDI)</em>, "
         "Hintere Bleiche 34, 55116 Mainz.</p>"
+    ),
+    "sicherheit": (
+        "<p class='sub'>Stand: Juni 2026</p>"
+        "<p>Der Bot bekommt in Partner-Kanälen Moderator-Rechte und verarbeitet "
+        "Twitch-Autorisierungen. Wer so viel Vertrauen bekommt, sollte offenlegen, wie er "
+        "damit umgeht. Diese Seite beschreibt deshalb, wie das Projekt das Thema Sicherheit "
+        "angeht — zum Nachlesen für alle, die es genauer wissen wollen.</p>"
+        "<h2>Grundprinzipien</h2>"
+        "<ul>"
+        "<li><strong>Minimale Berechtigungen:</strong> Der Bot fordert nur die Rechte an, "
+        "die eine Funktion wirklich braucht.</li>"
+        "<li><strong>Datensparsamkeit:</strong> Gespeichert wird, was für Statistiken und "
+        "Moderation nötig ist — bevorzugt aggregiert statt als Rohdaten.</li>"
+        "<li><strong>Verschlüsselung:</strong> Sensible Daten wie Zugriffs-Tokens liegen "
+        "nie im Klartext in der Datenbank.</li>"
+        "<li><strong>Transparenz:</strong> Jede Berechtigung ist im "
+        "Twitch-Autorisierungsdialog sichtbar und jederzeit widerrufbar.</li>"
+        "</ul>"
+        "<h2>Wie der Bot selbst geschützt wird</h2>"
+        "<p>Die wichtigste Frage ist nicht nur, was der Bot darf — sondern was passiert, "
+        "wenn etwas schiefgeht. Deshalb ist der Bot so gebaut, dass ein einzelner Fehler "
+        "oder ein kompromittierter Baustein möglichst wenig Schaden anrichten kann:</p>"
+        "<ul>"
+        "<li><strong>Begrenzter Schadensradius:</strong> Der Bot-Account besitzt keine "
+        "Broadcaster-Rechte. Selbst wenn jemand den Bot-Account übernehmen würde, könnte "
+        "er damit keine Kanäle umkonfigurieren — die mächtigeren Streamer-Autorisierungen "
+        "liegen separat und verschlüsselt.</li>"
+        "<li><strong>Fail-safe statt fail-open:</strong> Fehlt eine sichere Konfiguration "
+        "(z. B. ein Verschlüsselungsschlüssel oder eine Datenbank-Anbindung), startet der "
+        "betroffene Dienst gar nicht erst, statt unsicher weiterzulaufen. Bei "
+        "Entschlüsselungsfehlern wird die Aktion abgebrochen — niemals mit Klartext-Daten "
+        "improvisiert.</li>"
+        "<li><strong>Getrennte Dienste:</strong> Chat, Moderation, Raids und Dashboard "
+        "laufen als getrennte Prozesse mit klaren Schnittstellen. Ein Absturz oder Fehler "
+        "in einem Teil legt nicht das Ganze lahm und öffnet keinen Zugriff auf die anderen "
+        "Teile.</li>"
+        "<li><strong>Schutz vor Doppel-Aktionen:</strong> Kritische Aktionen (z. B. Raids "
+        "oder Banns) sind idempotent abgesichert — ein Netzwerk-Wackler, der eine Anfrage "
+        "doppelt sendet, löst die Aktion trotzdem nur einmal aus.</li>"
+        "<li><strong>Vorsichtige Rollouts:</strong> Neue automatische Funktionen (etwa "
+        "KI-Chat-Antworten) laufen zuerst im Beobachtungsmodus und werden überprüft, "
+        "bevor sie live wirken dürfen.</li>"
+        "<li><strong>Laufende Selbstkontrolle:</strong> Automatische Log-Prüfungen laufen "
+        "stündlich, ein vollständiges Audit täglich. Auffälligkeiten alarmieren die "
+        "Betreiber sofort — Probleme sollen auffallen, bevor Nutzer sie bemerken.</li>"
+        "</ul>"
+        "<h2>Was der Bot darf — und was nicht</h2>"
+        "<p>Es gibt zwei getrennte Berechtigungsebenen. Der Bot-eigene Twitch-Account "
+        "arbeitet ausschließlich mit Moderator-Rechten: Nachrichten lesen und schreiben, "
+        "Spam moderieren, Ankündigungen senden. Er besitzt bewusst keine "
+        "Broadcaster-Berechtigungen — er kann also weder Streamtitel noch "
+        "Kanaleinstellungen ändern.</p>"
+        "<p>Funktionen, die im Namen des Streamers laufen (insbesondere der automatische "
+        "Raid zum Stream-Ende), erfordern eine separate, ausdrückliche OAuth-Autorisierung "
+        "durch den Streamer. Der angefragte Umfang steht im Twitch-Dialog. Die "
+        "Autorisierung lässt sich jederzeit in den Twitch-Kontoeinstellungen unter "
+        "<em>Verbindungen</em> widerrufen — der Bot erkennt das und deaktiviert die "
+        "betroffenen Funktionen automatisch, statt mit ungültigen Rechten weiterzulaufen.</p>"
+        "<h2>Umgang mit Zugangsdaten und Tokens</h2>"
+        "<p>Betriebsgeheimnisse (API-Schlüssel, Datenbank-Zugänge) liegen in einem "
+        "zentralen Secret-Manager statt in Konfigurationsdateien. Die OAuth-Tokens der "
+        "Streamer werden in der Datenbank feldweise mit AES-256-GCM verschlüsselt; der "
+        "Schlüssel dafür wird getrennt vom Datenbestand verwahrt. Tokens und "
+        "Verbindungsdaten werden in Logdateien maskiert, sodass sie auch bei der "
+        "Fehlersuche nicht im Klartext auftauchen. Schlüssel-Rotationen werden "
+        "protokolliert, und die Code-Historie wird automatisiert auf versehentlich "
+        "eingecheckte Geheimnisse gescannt.</p>"
+        "<h2>Netzwerk und Infrastruktur</h2>"
+        "<p>Interne Dienste des Bots sind nur auf der lokalen Maschine erreichbar "
+        "(Loopback-Bindung) und zusätzlich per Firewall von außen blockiert. Öffentlich "
+        "erreichbar ist nur, was über den Reverse-Proxy mit einer expliziten "
+        "Pfad-Freigabeliste läuft. Interne Schnittstellen verlangen einen eigenen "
+        "Zugriffs-Token, dessen Prüfung in konstanter Zeit erfolgt (Schutz vor "
+        "Timing-Angriffen), sowie Idempotenz-Schlüssel, damit wiederholte Anfragen keine "
+        "doppelten Aktionen auslösen.</p>"
+        "<h2>Logins und Sessions</h2>"
+        "<p>Streamer melden sich am Dashboard per Twitch-OAuth an; die Anmelde-Abläufe "
+        "sind mit CSRF-Schutz abgesichert. Sessions werden verschlüsselt gespeichert und "
+        "laufen automatisch ab. Der Admin-Zugang ist nicht an ein statisches Passwort, "
+        "sondern an die Mitgliedschaft im Community-Discord-Team gebunden.</p>"
+        "<h2>Sicherheit der KI-Funktionen</h2>"
+        "<p>Die Frage-Box auf der Website hat einen mehrschichtigen Schutz gegen "
+        "Prompt-Injection: bekannte Manipulationsmuster werden erkannt, das Modell darf "
+        "nur mit einem festen Fakten-Steckbrief antworten (kein erfundenes Wissen), und "
+        "die Ausgabe wird geprüft, bevor sie angezeigt wird. Automatische Chat-Antworten "
+        "durchlaufen einen Review-Prozess, bevor sie live gehen. Der lernende Spam-Filter "
+        "hat einen eingebauten Fehlbann-Schutz: Er lernt nicht nur Spam-Muster, sondern "
+        "auch ausdrücklich unbedenkliche Muster, und normalisiert Zeichen-Tricks "
+        "(z. B. kyrillische Doppelgänger-Buchstaben), bevor er bewertet.</p>"
+        "<h2>Moderation mit Augenmaß</h2>"
+        "<p>Automatische Maßnahmen sind bewusst konservativ gebaut: Raid-Ereignisse werden "
+        "über mehrere unabhängige Signale korreliert, bevor reagiert wird; auffällige "
+        "externe Kanäle bekommen erst eine Karenzzeit statt eines Sofort-Banns; und wo der "
+        "Bot keine Rechte hat oder nicht willkommen ist, stellt er das Senden ein, statt "
+        "es immer wieder zu versuchen.</p>"
+        "<h2>Überwachung und Reaktion</h2>"
+        "<p>Der Betrieb wird laufend überwacht: strukturierte, rotierende Logs (mit "
+        "maskierten Geheimnissen), automatische Alarme an die Betreiber bei kritischen "
+        "Ereignissen, eine stündliche automatische Log-Prüfung und ein tägliches "
+        "Gesamt-Audit. Der Code wird regelmäßig mit statischer Analyse, "
+        "Abhängigkeits-Audits und Container-Scans geprüft.</p>"
+        "<h2>Sicherheitslücke gefunden?</h2>"
+        "<p>Hinweise auf Schwachstellen sind ausdrücklich willkommen — bitte vertraulich "
+        "an <a href='mailto:mail@earlysalty.com'>mail@earlysalty.com</a> oder direkt an "
+        "das Team im Community-Discord. Bitte keine Details öffentlich posten, bevor das "
+        "Problem behoben ist (Responsible Disclosure).</p>"
     ),
 }
 
@@ -638,15 +807,17 @@ class _DashboardLegalMixin:
         title: str,
         body: str,
         footer_links: tuple[tuple[str, str], ...],
+        noindex: bool = True,
     ) -> str:
         footer_html = " &nbsp;&middot;&nbsp; ".join(
             f"<a href='{html.escape(href, quote=True)}'>{html.escape(label)}</a>"
             for href, label in footer_links
         )
+        robots_meta = "<meta name='robots' content='noindex, nofollow'>" if noindex else ""
         return (
             "<!doctype html><html lang='de'><head><meta charset='utf-8'>"
             "<meta name='viewport' content='width=device-width,initial-scale=1'>"
-            "<meta name='robots' content='noindex, nofollow'>"
+            f"{robots_meta}"
             f"<title>{html.escape(title)} · EarlySalty</title>"
             "<style>"
             "body{margin:0;background:#f8fafc;color:#0f172a;"
@@ -689,6 +860,7 @@ class _DashboardLegalMixin:
                 ("/twitch/abbo", "Pläne"),
                 ("/twitch/datenschutz", "Datenschutz"),
                 ("/twitch/agb", "AGB"),
+                ("/twitch/sicherheit", "Sicherheit"),
             ),
         )
         return web.Response(text=page, content_type="text/html", headers=LEGAL_PAGE_HEADERS)
@@ -709,6 +881,7 @@ class _DashboardLegalMixin:
                 ("/twitch/pricing", "Pläne"),
                 ("/twitch/impressum", "Impressum"),
                 ("/twitch/datenschutz", "Datenschutz"),
+                ("/twitch/sicherheit", "Sicherheit"),
             ),
         )
         return web.Response(text=page, content_type="text/html", headers=LEGAL_PAGE_HEADERS)
@@ -729,6 +902,22 @@ class _DashboardLegalMixin:
                 ("/twitch/abbo", "Pläne"),
                 ("/twitch/impressum", "Impressum"),
                 ("/twitch/agb", "AGB"),
+                ("/twitch/sicherheit", "Sicherheit"),
             ),
         )
         return web.Response(text=page, content_type="text/html", headers=LEGAL_PAGE_HEADERS)
+
+    async def abbo_sicherheit(self, request: web.Request) -> web.StreamResponse:  # noqa: ARG002
+        """GET /twitch/sicherheit — public security concept, intentionally ungated."""
+        document = self._load_legal_page_document("sicherheit")
+        page = self._render_legal_page(
+            title=str(document.get("title") or LEGAL_PAGE_TITLES["sicherheit"]),
+            body=str(document.get("body") or ""),
+            footer_links=(
+                ("/twitch/impressum", "Impressum"),
+                ("/twitch/datenschutz", "Datenschutz"),
+                ("/twitch/agb", "AGB"),
+            ),
+            noindex=False,
+        )
+        return web.Response(text=page, content_type="text/html")

@@ -2136,6 +2136,7 @@ dependencies = [
  "axum",
  "chrono",
  "chrono-tz",
+ "reqwest",
  "serde",
  "serde_json",
  "sqlx",
@@ -2191,8 +2192,12 @@ version = "0.1.0"
 dependencies = [
  "axum",
  "chrono",
+ "hex",
+ "hmac",
+ "reqwest",
  "serde",
  "serde_json",
+ "sha2",
  "sqlx",
  "tb-analytics",
  "tb-config",
@@ -2203,6 +2208,7 @@ dependencies = [
  "tower",
  "tower-http",
  "tracing",
+ "url",
 ]
 
 [[package]]
@@ -2307,6 +2313,7 @@ dependencies = [
  "serde_json",
  "sqlx",
  "tb-crypto",
+ "tb-domain",
  "tokio",
  "tracing",
  "url",

@@ -102,7 +102,8 @@ pub fn build_admin_streamers_router(pool: PgPool, token: String) -> Router {
         .layer(Extension(ExpectedToken(token)))
 }
 
-/// Zusammengeführter Router: public + authed + admin-system + admin-streamers.
+/// Zusammengeführter Router: public + authed + admin-system + admin-streamers
+/// + Legal-Seiten (HTML, statuslos).
 ///
 /// CORS nur auf dem Public-Sub-Router (s. oben).
 pub fn build_router(pool: PgPool, token: String) -> Router {
@@ -110,4 +111,5 @@ pub fn build_router(pool: PgPool, token: String) -> Router {
         .merge(build_authed_router(pool.clone(), token.clone()))
         .merge(build_admin_system_router(pool.clone(), token.clone()))
         .merge(build_admin_streamers_router(pool, token))
+        .merge(handlers::legal::build_legal_router())
 }

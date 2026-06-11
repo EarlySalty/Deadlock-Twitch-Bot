@@ -25,6 +25,8 @@ const MORE_LINKS: FooterLink[] = [
   { label: 'Discord beitreten', href: DISCORD_INVITE_URL, external: true },
   { label: 'Impressum', href: 'https://deutsche-deadlock-community.de/twitch/impressum', external: true },
   { label: 'Datenschutz', href: 'https://deutsche-deadlock-community.de/twitch/datenschutz', external: true },
+  { label: 'AGB', href: 'https://deutsche-deadlock-community.de/twitch/agb', external: true },
+  { label: 'Sicherheitskonzept', href: 'https://deutsche-deadlock-community.de/twitch/sicherheit', external: true },
 ];
 
 function FooterLinkItem({ link }: { link: FooterLink }) {
