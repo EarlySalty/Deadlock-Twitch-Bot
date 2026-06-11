@@ -26,6 +26,8 @@ import type {
   LegalPageSlug,
   LegacyVerifyMode,
   ManualPlanPayload,
+  MarketShareResponse,
+  MarketShareScope,
   PartnerChatActionPayload,
   PiiReadiness,
   RaidConfigSnapshot,
@@ -1186,4 +1188,13 @@ export async function toggleEngagement(login: string, enabled: boolean): Promise
     const message = error instanceof ApiError ? error.message : 'Toggle fehlgeschlagen.';
     return { ok: false, message };
   }
+}
+
+export async function fetchMarketShare(
+  days: number,
+  scope: MarketShareScope,
+): Promise<MarketShareResponse> {
+  return request<MarketShareResponse>(
+    `/twitch/api/v2/market-share?days=${encodeURIComponent(days)}&scope=${encodeURIComponent(scope)}`,
+  );
 }

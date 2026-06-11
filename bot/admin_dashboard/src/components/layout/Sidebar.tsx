@@ -12,6 +12,7 @@ import {
   LayoutDashboard,
   Map,
   Megaphone,
+  PieChart,
   MessageSquare,
   Power,
   Radio,
@@ -66,6 +67,7 @@ const navigationGroups: NavigationGroup[] = [
     items: [
       { label: 'Streamer', to: '/community/streamers', icon: Users },
       { label: 'Raids', to: '/community/raids', icon: Swords },
+      { label: 'Markt-Dominanz', to: '/community/market', icon: PieChart },
       { label: 'Engagement AI', to: '/community/engagement', icon: Sparkles },
       { label: 'Chat Actions', to: '/community/chat', icon: MessageSquare },
     ],

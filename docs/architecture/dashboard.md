@@ -105,7 +105,7 @@ Brücke vom Cog zum Dashboard/Bot-Zustand über `_dashboard_bot_service()` (= `D
 - `dashboard_metrics_mixin.py` — Dashboard-Metriken.
 
 ### routes_* / pages.py
-Registrieren die Route-Gruppen (Entry/Market/Billing/Title/Settings/Self-Explainer) und liefern die HTML-Seiten. `route_deps.py` bündelt geteilte Abhängigkeiten; `routes_self_explainer.py` bindet den [Self-Explainer](chat.md) als öffentlichen Frage-Endpoint ein.
+Registrieren die Route-Gruppen (Entry/Market/Billing/Title/Settings/Self-Explainer) und liefern die HTML-Seiten. `route_deps.py` bündelt geteilte Abhängigkeiten; `routes_self_explainer.py` bindet den [Self-Explainer](chat.md) als öffentlichen Frage-Endpoint ein. `routes_market.py` enthält neben der Legacy-Market-Research-Seite auch `GET /twitch/api/v2/market-share` (Admin-Gate via `_require_v2_admin_api`): ein dünner Proxy auf den Rust-Worker (`/internal/twitch/v1/market-share`, 8776), der Marktanteils-Zeitreihen aus `twitch_stats_category` berechnet — Datengrundlage der Admin-Seite „Markt-Dominanz".
 
 ### _compat.py
 - `export_lazy(globals_dict, target, *, public=None)` / `export_name_map(globals_dict, exports)` — machen die 6-Zeilen-Shim-Module zu Lazy-Re-Exports der Feature-Pakete (alte Importpfade bleiben gültig).

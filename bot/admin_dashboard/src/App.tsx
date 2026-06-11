@@ -14,6 +14,7 @@ import { EventSubStatusPage } from '@/pages/monitoring/EventSubStatus';
 import { SystemOverview } from '@/pages/monitoring/SystemOverview';
 import ChatActionsPage from '@/pages/community/ChatActions';
 import EngagementPage from '@/pages/community/Engagement';
+import MarketSharePage from '@/pages/community/MarketShare';
 import RaidsActivityPage from '@/pages/community/RaidsActivity';
 import AnnouncementsPage from '@/pages/content/Announcements';
 import ChangelogPage from '@/pages/content/Changelog';
@@ -61,6 +62,7 @@ const router = createBrowserRouter(
         { path: 'community/streamers', element: <StreamerList /> },
         { path: 'community/streamers/:login', element: <StreamerDetailPage /> },
         { path: 'community/raids', element: <RaidsActivityPage /> },
+        { path: 'community/market', element: <MarketSharePage /> },
         { path: 'community/engagement', element: <EngagementPage /> },
         { path: 'community/chat', element: <ChatActionsPage /> },
         { path: 'content', element: <Navigate to="/content/announcements" replace /> },

@@ -1,11 +1,12 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import type { AdminConfigScope, LegalPageSlug, StreamerView } from '@/api/types';
+import type { AdminConfigScope, LegalPageSlug, MarketShareScope, StreamerView } from '@/api/types';
 import {
   addStreamer,
   archiveStreamer,
   blockStreamer,
   clearManualPlanOverride,
   createChangelogEntry,
+  fetchMarketShare,
   fetchScopeStatus,
   fetchAnnouncements,
   fetchAffiliateDetail,
@@ -468,5 +469,13 @@ export function useEngagementToggle() {
         queryKey: ['admin-engagement-settings', variables.login],
       });
     },
+  });
+}
+
+export function useMarketShare(days: number, scope: MarketShareScope) {
+  return useQuery({
+    queryKey: ['admin-market-share', days, scope],
+    queryFn: () => fetchMarketShare(days, scope),
+    staleTime: 60_000,
   });
 }

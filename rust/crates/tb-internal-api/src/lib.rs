@@ -38,8 +38,8 @@ pub fn build_internal_router(
     legacy_proxy: Option<Arc<LegacyProxy>>,
 ) -> Router {
     use handlers::{
-        discord_invite, eventsub, global_ban, healthz, raid, raid_blacklist, self_explainer_log,
-        streamer_link,
+        discord_invite, eventsub, global_ban, healthz, market_share, raid, raid_blacklist,
+        self_explainer_log, streamer_link,
     };
 
     let base = INTERNAL_API_BASE_PATH; // "/internal/twitch/v1"
@@ -96,6 +96,13 @@ pub fn build_internal_router(
         .route(
             &format!("{base}/streamers/link-candidates"),
             get(streamer_link::list_handler),
+        )
+        // Markt-Dominanz fürs Admin-Dashboard: nativer GET-Read auf
+        // twitch_stats_category; das Python-Dashboard (8765) proxied
+        // /twitch/api/v2/market-share hierher.
+        .route(
+            &format!("{base}/market-share"),
+            get(market_share::market_share_handler),
         )
         // Self-Explainer-Discord-Log: reiner Relay an den Master-Broker (8770),
         // kein DB-Zugriff. Token-Fallback-Kette inkl. TWITCH_INTERNAL_API_TOKEN.

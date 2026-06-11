@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import logging
+import os
 from typing import Any
 
 from aiohttp import web
@@ -9,13 +11,55 @@ from aiohttp import web
 from .pages import build_market_research_page
 from .route_deps import MarketRouteDeps
 
+_market_share_log = logging.getLogger("twitch.dashboard.market_share")
+
 
 def build_route_defs(server: Any) -> list[web.RouteDef]:
     """Return route definitions for market research routes."""
     return [
         web.get("/twitch/market", server.market_research),
         web.get("/twitch/api/market_data", server.api_market_data),
+        web.get("/twitch/api/v2/market-share", server.api_market_share),
     ]
+
+
+async def api_market_share(server: Any, request: web.Request) -> web.Response:
+    """Admin-Proxy auf den Rust-Worker (8776): Markt-Dominanz-Daten.
+
+    Die Berechnung lebt nativ in Rust (`/internal/twitch/v1/market-share`,
+    s. tb_analytics::market); hier nur Admin-Gate + Durchreichen.
+    """
+    admin_error = server._require_v2_admin_api(request)
+    if admin_error is not None:
+        return admin_error
+
+    token = (os.getenv("TWITCH_INTERNAL_API_TOKEN") or "").strip()
+    if not token:
+        _market_share_log.warning("market-share: TWITCH_INTERNAL_API_TOKEN fehlt")
+        return web.json_response({"error": "internal_token_missing"}, status=503)
+
+    host = (os.getenv("TWITCH_INTERNAL_API_HOST") or "127.0.0.1").strip() or "127.0.0.1"
+    port = (os.getenv("TWITCH_INTERNAL_API_PORT") or "8776").strip() or "8776"
+    params = {
+        "days": request.query.get("days", "7"),
+        "scope": request.query.get("scope", "all"),
+    }
+    url = f"http://{host}:{port}/internal/twitch/v1/market-share"
+    try:
+        import aiohttp
+
+        async with aiohttp.ClientSession() as session:
+            async with session.get(
+                url,
+                params=params,
+                headers={"X-Internal-Token": token},
+                timeout=aiohttp.ClientTimeout(total=30),
+            ) as resp:
+                body = await resp.json(content_type=None)
+                return web.json_response(body, status=resp.status)
+    except Exception:
+        _market_share_log.exception("market-share: Worker-Proxy fehlgeschlagen")
+        return web.json_response({"error": "market_share_unavailable"}, status=502)
 
 
 async def market_research(server: Any, request: web.Request) -> web.StreamResponse:

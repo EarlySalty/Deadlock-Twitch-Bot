@@ -3,6 +3,7 @@ pub mod eventsub;
 pub mod global_ban;
 pub mod healthz;
 pub mod legacy_proxy;
+pub mod market_share;
 pub mod raid;
 pub mod raid_blacklist;
 pub mod self_explainer_log;

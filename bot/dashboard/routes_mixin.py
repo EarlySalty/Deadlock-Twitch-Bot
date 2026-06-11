@@ -543,6 +543,9 @@ class _DashboardRoutesMixin:
             deps=self._market_route_deps(),
         )
 
+    async def api_market_share(self, request: web.Request) -> web.Response:
+        return await _routes_market.api_market_share(self, request)
+
     async def reload_cog(self, request: web.Request) -> web.Response:
         return await _routes_entry.reload_cog(self, request, deps=self._entry_route_deps())
 

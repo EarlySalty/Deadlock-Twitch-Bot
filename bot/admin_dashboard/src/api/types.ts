@@ -433,3 +433,51 @@ export interface EngagementSettings {
   enabledBy?: string | null;
   updatedAt?: string | null;
 }
+
+export interface MarketSharePoint {
+  ts: string;
+  partnerViewers: number;
+  totalViewers: number;
+  partnerStreams: number;
+  totalStreams: number;
+  sharePct: number;
+}
+
+export interface MarketSharePeak {
+  ts: string;
+  sharePct: number;
+  partnerViewers: number;
+  totalViewers: number;
+}
+
+export interface MarketShareTopStream {
+  streamer: string;
+  viewers: number;
+  isPartner: boolean;
+  isGerman: boolean;
+}
+
+export interface MarketShareCurrent {
+  ts: string;
+  totalViewers: number;
+  partnerViewers: number;
+  totalStreams: number;
+  partnerStreams: number;
+  sharePct: number;
+  germanViewers: number;
+  germanStreams: number;
+  germanPartnerViewers: number;
+  germanSharePct: number;
+  topStreams: MarketShareTopStream[];
+}
+
+export type MarketShareScope = 'all' | 'german';
+
+export interface MarketShareResponse {
+  days: number;
+  scope: MarketShareScope;
+  bucketSeconds: number;
+  series: MarketSharePoint[];
+  peak: MarketSharePeak | null;
+  current: MarketShareCurrent | null;
+}

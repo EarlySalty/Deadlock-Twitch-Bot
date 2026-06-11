@@ -6,6 +6,7 @@
 pub mod admin_streamers;
 pub mod bans;
 pub mod global_ban;
+pub mod market;
 pub mod network;
 pub mod overview;
 pub mod raid_blacklist;
