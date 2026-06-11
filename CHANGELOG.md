@@ -1,3 +1,11 @@
+## #132 — !dldc / !dlde: Discord-Link-Command
+
+**Ausgangslage:** Zuschauer fragten in mehreren Partner-Kanälen nach dem Discord-Link des Streamers — bisher keine Bot-Antwort, Streamer musste manuell tippen oder hatte es nicht im Profil hinterlegt.
+
+**Was wurde geändert:** Neuer Chat-Command `!dldc` (Alias `!dlde`) — gibt den für den jeweiligen Streamer bereits generierten Discord-Invite-Link aus. Die Lookup-Logik wurde als nativer Rust-Endpoint in die interne API gebaut (`GET /internal/twitch/v1/streamer/:login/discord-invite`), der direkt die `twitch_streamer_invites`-Tabelle liest. Python empfängt den Chat-Command und ruft nur noch diesen Endpunkt auf — keine Datenbanklogik in Python.
+
+**Wie es funktioniert:** Wer `!dldc` oder `!dlde` tippt, bekommt sofort den hinterlegten Discord-Invite-Link des Streamers als Chat-Antwort. Ist für diesen Kanal noch kein Invite generiert worden, antwortet der Bot mit einem kurzen Hinweis. Fehlt der Eintrag, läuft der Command lautlos durch (kein Chat-Noise).
+
 ## #131 — Härtungswelle: Token-Erneuerung race-sicher, Helix-Zeitlimits, klare HTTP-Fehler
 
 **Ausgangslage:** Drei robustheitskritische Befunde aus dem Audit plus eine Vorab-Korrektur. Erstens: Beim Erneuern eines Raid-Tokens konnte ein Wettlauf mit dem parallel laufenden Wartungsprozess dazu führen, dass mit einem bereits verbrauchten Refresh-Token erneuert wird — Twitch entwertet den alten Token bei Benutzung, also stirbt dann die ganze Token-Kette und der Partner wird grundlos zur Neu-Autorisierung aufgefordert. Zweitens: Die Aufrufe an die Twitch-API hatten kein Zeitlimit; ein hängender Twitch-Server konnte den gesamten Überwachungs-Durchlauf einfrieren. Drittens: Bei Fehlerantworten (z. B. Rate-Limit oder ungültige Zugangsdaten) parste der Code direkt das Antwort-JSON und meldete dann ein kryptisches „Feld fehlt" statt des echten HTTP-Status. Viertens (intern, noch nicht aktiv): die künftige Dashboard-Lese-API dekodierte mehrere Datenbankspalten im falschen Typ und wäre beim Scharfschalten sofort gebrochen.

@@ -37,7 +37,7 @@ pub fn build_internal_router(
     manual_raid: Option<Arc<dyn handlers::raid::ManualRaidPort>>,
     legacy_proxy: Option<Arc<LegacyProxy>>,
 ) -> Router {
-    use handlers::{eventsub, global_ban, healthz, raid};
+    use handlers::{discord_invite, eventsub, global_ban, healthz, raid};
 
     let base = INTERNAL_API_BASE_PATH; // "/internal/twitch/v1"
 
@@ -50,6 +50,10 @@ pub fn build_internal_router(
         .route(
             &format!("{base}/raid/manual"),
             post(raid::manual_raid_handler),
+        )
+        .route(
+            &format!("{base}/streamer/:login/discord-invite"),
+            get(discord_invite::handler),
         )
         .route(&format!("{base}/globalban"), get(global_ban::list_handler))
         .route(

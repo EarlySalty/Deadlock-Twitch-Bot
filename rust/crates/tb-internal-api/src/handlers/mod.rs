@@ -1,3 +1,4 @@
+pub mod discord_invite;
 pub mod eventsub;
 pub mod global_ban;
 pub mod healthz;

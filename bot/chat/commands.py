@@ -738,6 +738,35 @@ if TWITCHIO_AVAILABLE:
                 f"@{ctx.author.name} Raid fehlgeschlagen: {result.get('error') or 'unbekannter Fehler'}"
             )
 
+        @twitchio_commands.command(name="dldc", aliases=["dlde"])
+        async def cmd_discord(self, ctx: twitchio_commands.Context) -> None:
+            """!dldc / !dlde — Discord-Invite-Link des Streamers."""
+            channel_name = ctx.channel.name.lower()
+            rust_token = (os.getenv("TWITCH_INTERNAL_API_TOKEN") or "").strip()
+            if not rust_token:
+                return
+            try:
+                async with aiohttp.ClientSession() as session:
+                    async with session.get(
+                        f"http://127.0.0.1:8776/internal/twitch/v1/streamer/{channel_name}/discord-invite",
+                        headers={"X-Internal-Token": rust_token},
+                        timeout=aiohttp.ClientTimeout(total=5),
+                    ) as resp:
+                        if resp.status == 200:
+                            data = await resp.json()
+                            invite_url = data.get("inviteUrl") or ""
+                            if invite_url:
+                                await ctx.send(
+                                    f"@{ctx.author.name} Discord: {invite_url}"
+                                )
+                            return
+                        if resp.status == 404:
+                            await ctx.send(
+                                f"@{ctx.author.name} Kein Discord-Link für diesen Streamer hinterlegt."
+                            )
+            except Exception:
+                log.debug("cmd_discord Rust-Aufruf fehlgeschlagen", exc_info=True)
+
         @twitchio_commands.command(name="title", aliases=["titel"])
         async def cmd_title(self, ctx: twitchio_commands.Context) -> None:
             """`!title <keywords>` — Generiert einen Stream-Titel mit MiniMax."""
