@@ -50,9 +50,13 @@ pub async fn db_schema_fingerprint(pool: &PgPool) -> Result<String, sqlx::Error>
 
 // ── Global-Ban Add ────────────────────────────────────────────────────────────
 
-/// Upsert in `twitch_chatter_global_ban` + Mirror in `twitch_raid_blacklist`.
+/// Upsert in `twitch_chatter_global_ban`.
 ///
-/// Beide Writes laufen in einer Transaktion.
+/// Global-Ban (gesperrter Chatter über alle Kanäle) und Raid-Blacklist (Kanäle,
+/// die nicht als Raid-Ziel angefahren werden) sind zwei getrennte Mechanismen —
+/// wie im Python-Original. Ein Global-Ban spiegelt bewusst NICHT in
+/// `twitch_raid_blacklist`; die Raid-Blacklist wird ausschließlich über die
+/// dedizierten Raid-Blacklist-Routen gepflegt.
 pub async fn add_ban(
     pool: &PgPool,
     login: &str,
@@ -61,7 +65,6 @@ pub async fn add_ban(
     added_by: Option<&str>,
 ) -> Result<(), sqlx::Error> {
     let login = login.to_lowercase();
-    let mut tx = pool.begin().await?;
 
     sqlx::query(
         r#"
@@ -78,23 +81,9 @@ pub async fn add_ban(
     .bind(chatter_id)
     .bind(reason)
     .bind(added_by)
-    .execute(&mut *tx)
+    .execute(pool)
     .await?;
 
-    sqlx::query(
-        r#"
-        INSERT INTO twitch_raid_blacklist (target_id, target_login, reason)
-        VALUES ($1, $2, $3)
-        ON CONFLICT (target_login) DO NOTHING
-        "#,
-    )
-    .bind(chatter_id)
-    .bind(&login)
-    .bind(reason)
-    .execute(&mut *tx)
-    .await?;
-
-    tx.commit().await?;
     Ok(())
 }
 
@@ -244,7 +233,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn add_ban_funktioniert_und_spiegelt_in_raid_blacklist() {
+    async fn add_ban_schreibt_global_ban_ohne_raid_blacklist_mirror() {
         let dsn = match test_dsn() {
             Some(d) => d,
             None => {
@@ -268,7 +257,7 @@ mod tests {
         let banned = check_ban(&pool, "boser_user", "").await.expect("check");
         assert!(banned, "Eintrag muss in twitch_chatter_global_ban sein");
 
-        // Mirror in raid_blacklist
+        // Global-Ban und Raid-Blacklist sind getrennt: KEIN Mirror.
         let row: Option<(String,)> = sqlx::query_as(
             "SELECT target_login FROM twitch_raid_blacklist WHERE target_login = $1",
         )
@@ -276,7 +265,10 @@ mod tests {
         .fetch_optional(&pool)
         .await
         .expect("blacklist select");
-        assert!(row.is_some(), "Mirror in twitch_raid_blacklist fehlt");
+        assert!(
+            row.is_none(),
+            "Global-Ban darf NICHT in twitch_raid_blacklist spiegeln"
+        );
     }
 
     #[tokio::test]

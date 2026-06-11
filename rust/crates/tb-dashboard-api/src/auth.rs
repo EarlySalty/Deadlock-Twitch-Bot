@@ -9,7 +9,7 @@ use tb_http_core::{ApiError, AuthLevel};
 
 /// Prüft ob der anfragende User die angegebene Login abfragen darf.
 ///
-/// - `Admin` / `Localhost` → immer OK
+/// - `Admin` → immer OK
 /// - `None` → immer 401
 ///
 /// `session_login` und `queried_login` werden für das deferred Partner-Level gebraucht.
@@ -19,7 +19,7 @@ pub fn require_owner(
     _session_login: Option<&str>,
 ) -> Result<(), ApiError> {
     match auth {
-        AuthLevel::Admin | AuthLevel::Localhost => Ok(()),
+        AuthLevel::Admin => Ok(()),
         AuthLevel::None => Err(ApiError::unauthorized()),
     }
 }
@@ -30,7 +30,7 @@ pub fn require_owner(
 /// Plan-IDs mit Entitlement: `analytics_pro`, `analytics_extended`
 /// (muss mit Python-`_KNOWN_BILLING_PLAN_IDS` synchron gehalten werden).
 ///
-/// Admin + Localhost überspringen die Prüfung (bypass).
+/// Admin überspringt die Prüfung (bypass).
 pub async fn require_extended_plan(
     pool: &PgPool,
     login: &str,

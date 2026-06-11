@@ -84,7 +84,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn localhost_gives_localhost() {
+    async fn loopback_without_token_gives_none() {
+        // Kein Localhost-Bypass mehr: Loopback ohne Token ist nicht eingeloggt.
         let app = make_router("tok");
         let addr: SocketAddr = "127.0.0.1:9999".parse().unwrap();
         let req = Request::builder()
@@ -97,7 +98,7 @@ mod tests {
         assert_eq!(res.status(), StatusCode::OK);
         let b = axum::body::to_bytes(res.into_body(), 256).await.unwrap();
         let v: serde_json::Value = serde_json::from_slice(&b).unwrap();
-        assert_eq!(v["auth_level"], "localhost");
-        assert_eq!(v["logged_in"], true);
+        assert_eq!(v["auth_level"], "none");
+        assert_eq!(v["logged_in"], false);
     }
 }

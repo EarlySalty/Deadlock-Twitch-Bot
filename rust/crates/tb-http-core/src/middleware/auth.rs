@@ -39,18 +39,19 @@ pub async fn internal_auth(
 /// Auth-Level eines eingehenden Requests.
 ///
 /// Auswertungsreihenfolge:
-/// 1. Loopback-IP (127.x.x.x) **und** Host-Header ist `localhost` oder `127.0.0.1`
-///    → `Localhost` (impliziert admin-Level, kein Token nötig)
-/// 2. `X-Internal-Token`-Header stimmt constant-time mit konfiguriertem Token überein
+/// 1. `X-Internal-Token`-Header stimmt constant-time mit konfiguriertem Token überein
 ///    → `Admin`
-/// 3. Sonst → `None`
+/// 2. Sonst → `None`
+///
+/// Es gibt **keinen** Localhost-/Loopback-Bypass: Admin-Rechte werden ausschließlich
+/// über den konfigurierten Token (bzw. künftig die Discord-/Twitch-Session) vergeben.
+/// Das frühere Loopback-Privileg war für die Anfangsphase gedacht und ist hinter einem
+/// Reverse-Proxy gefährlich (Peer-IP wäre dort immer Loopback).
 ///
 /// Partner-Session-Auth (Fernet-Cookie) ist deferred (ADR 0003) und wird hier nicht
 /// implementiert.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AuthLevel {
-    /// Loopback-Verbindung (127.x.x.x) mit localhost-Host-Header.
-    Localhost,
     /// Gültiger X-Internal-Token.
     Admin,
     /// Nicht authentifiziert.
@@ -58,15 +59,14 @@ pub enum AuthLevel {
 }
 
 impl AuthLevel {
-    /// Gibt `true` zurück wenn Admin oder Localhost.
+    /// Gibt `true` zurück wenn Admin.
     pub fn is_privileged(&self) -> bool {
-        matches!(self, AuthLevel::Admin | AuthLevel::Localhost)
+        matches!(self, AuthLevel::Admin)
     }
 
     /// Serialisiert den Level als JSON-String-Wert.
     pub fn as_str(&self) -> &'static str {
         match self {
-            AuthLevel::Localhost => "localhost",
             AuthLevel::Admin => "admin",
             AuthLevel::None => "none",
         }
@@ -90,27 +90,7 @@ where
         parts: &mut axum::http::request::Parts,
         _state: &S,
     ) -> Result<Self, Self::Rejection> {
-        // 1. Loopback: ConnectInfo + Host-Check
-        let is_loopback = parts
-            .extensions
-            .get::<axum::extract::ConnectInfo<std::net::SocketAddr>>()
-            .map(|ci| ci.0.ip().is_loopback())
-            .unwrap_or(false);
-
-        if is_loopback {
-            let host = parts
-                .headers
-                .get(axum::http::header::HOST)
-                .and_then(|v| v.to_str().ok())
-                .unwrap_or("");
-            // Host-Header: "localhost", "localhost:<port>", "127.0.0.1", "127.0.0.1:<port>"
-            let host_base = host.split(':').next().unwrap_or(host);
-            if host_base == "localhost" || host_base == "127.0.0.1" {
-                return Ok(AuthLevel::Localhost);
-            }
-        }
-
-        // 2. Admin: X-Internal-Token aus Extension
+        // Admin: X-Internal-Token aus Extension (kein Loopback-Bypass mehr)
         if let Some(expected) = parts.extensions.get::<ExpectedToken>() {
             let provided = parts
                 .headers
@@ -184,8 +164,8 @@ mod auth_level_tests {
     }
 
     #[tokio::test]
-    async fn localhost_loopback_with_localhost_host() {
-        // ConnectInfo wird direkt als Extension injiziert — kein into_make_service nötig
+    async fn loopback_without_token_is_not_admin() {
+        // Loopback-Verbindung mit localhost-Host, aber ohne Token → kein Bypass mehr.
         let app = make_router("secret");
         let res = app
             .oneshot(req("127.0.0.1", "localhost", None))
@@ -193,7 +173,7 @@ mod auth_level_tests {
             .unwrap();
         assert_eq!(res.status(), StatusCode::OK);
         let body = axum::body::to_bytes(res.into_body(), 64).await.unwrap();
-        assert_eq!(&body[..], b"localhost");
+        assert_eq!(&body[..], b"none");
     }
 
     #[tokio::test]

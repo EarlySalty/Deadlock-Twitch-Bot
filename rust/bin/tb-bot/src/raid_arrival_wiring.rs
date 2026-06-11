@@ -118,7 +118,7 @@ impl RaidArrivalSink for RaidArrivalSinkImpl {
 
         // 3. Bei Partner-Ziel: Arrival-Tracking schreiben.
         if decision.target_is_partner {
-            let _ = self
+            if let Err(e) = self
                 .arrival_store
                 .record_arrival(&RecordArrivalInput {
                     from_broadcaster_id: from_broadcaster_id.map(str::to_string),
@@ -136,7 +136,15 @@ impl RaidArrivalSink for RaidArrivalSinkImpl {
                     raid_history_executed_at: None,
                     unraid_seen: false,
                 })
-                .await;
+                .await
+            {
+                tracing::error!(
+                    error = %e,
+                    from = %from_broadcaster_login,
+                    to = %to_broadcaster_login,
+                    "Arrival-Tracking-Insert (confirm_pending_raid) fehlgeschlagen"
+                );
+            }
         }
 
         // 4. Bei ours_to_partner: bestätigten Partner-Raid tracken (Score-Effekt).

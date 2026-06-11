@@ -7,7 +7,7 @@
 //!
 //! | Spalte                    | Typ          | Rust-Typ                  |
 //! |---------------------------|--------------|---------------------------|
-//! | id                        | int          | i64 (RETURNING)           |
+//! | id                        | int (int4)   | i64 via `RETURNING id::bigint` |
 //! | detected_at               | timestamptz  | serverseitig NOW()        |
 //! | last_signal_at            | timestamptz  | serverseitig NOW()        |
 //! | from_broadcaster_id       | text         | Option<String>            |
@@ -98,6 +98,8 @@ impl ArrivalTrackingStore {
     /// Port von `PartnerArrivalTrackingService.store_partner_raid_arrival`
     /// (partner_arrival_tracking.py Z. 193–255).
     pub async fn record_arrival(&self, input: &RecordArrivalInput) -> Result<i64, sqlx::Error> {
+        // Prod-Spalte `id` ist int4 (SERIAL). Ohne den expliziten `::bigint`-Cast
+        // lehnt sqlx das Tupel-Decode in `(i64,)` strikt ab → jeder Insert schlägt fehl.
         let row: (i64,) = sqlx::query_as(
             r#"
             INSERT INTO twitch_raid_arrival_tracking (
@@ -120,7 +122,7 @@ impl ArrivalTrackingStore {
                 $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14,
                 CASE WHEN $14 THEN NOW() ELSE NULL END
             )
-            RETURNING id
+            RETURNING id::bigint
             "#,
         )
         .bind(&input.from_broadcaster_id)
@@ -235,7 +237,7 @@ mod tests {
         sqlx::query(
             r#"
             CREATE TABLE twitch_raid_arrival_tracking (
-                id                        BIGSERIAL PRIMARY KEY,
+                id                        SERIAL PRIMARY KEY,
                 detected_at               TIMESTAMPTZ NOT NULL DEFAULT NOW(),
                 last_signal_at            TIMESTAMPTZ NOT NULL DEFAULT NOW(),
                 from_broadcaster_id       TEXT,
