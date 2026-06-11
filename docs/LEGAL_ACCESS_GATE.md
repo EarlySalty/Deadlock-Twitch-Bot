@@ -132,7 +132,7 @@ Ursache:
 Prüfen:
 
 ```powershell
-curl.exe -i "https://deutsche-deadlock-community.de/twitch/twitch/legal/access?next=/twitch/impressum"
+curl.exe -i "https://deutsche-deadlock-community.de/twitch/legal/access?next=/twitch/impressum"
 ```
 
 Wenn derselbe Pfad lokal direkt gegen `127.0.0.1:8765` funktioniert, liegt das Problem im Reverse Proxy.
@@ -171,9 +171,9 @@ Erwartung:
 ### Oeffentliche Domain
 
 ```powershell
-curl.exe -i "https://deutsche-deadlock-community.de/twitch/twitch/legal/access?next=/twitch/impressum"
-curl.exe -i "https://deutsche-deadlock-community.de/twitch/twitch/impressum"
-curl.exe -i "https://deutsche-deadlock-community.de/twitch/twitch/agb"
+curl.exe -i "https://deutsche-deadlock-community.de/twitch/legal/access?next=/twitch/impressum"
+curl.exe -i "https://deutsche-deadlock-community.de/twitch/impressum"
+curl.exe -i "https://deutsche-deadlock-community.de/twitch/agb"
 ```
 
 Erwartung:
