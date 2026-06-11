@@ -52,6 +52,10 @@ export TB_MONITORING_POLL_ENABLED="${TB_MONITORING_POLL_ENABLED:-1}"
 # Blacklist, Analytics, …) gehen an die Legacy-Python-API auf Seitenport 8779
 # (Python-Worker, TWITCH_INTERNAL_API_LEGACY_PORT im Takeover-Drop-in).
 export TB_INTERNAL_API_LEGACY_FALLBACK_URL="${TB_INTERNAL_API_LEGACY_FALLBACK_URL:-http://127.0.0.1:8779}"
+# Bot-Account für OAuth-Followups (Moderator-Einsetzung): öffentliche User-ID
+# von deutschedeadlockcommunity — Python löst sie zur Laufzeit aus dem
+# Chat-Token auf, Rust besitzt den Chat-Token (noch) nicht.
+export TWITCH_BOT_USER_ID="${TWITCH_BOT_USER_ID:-1422558159}"
 export RUST_LOG="${RUST_LOG:-info}"
 
 exec "$ROOT_DIR/rust/target/release/tb-bot"

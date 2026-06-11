@@ -1,0 +1,247 @@
+//! Composition-Root für die OAuth-Callback-Followups — verdrahtet die
+//! `tb_raid::partner_setup`-Ports mit den echten Transporten:
+//!
+//! - **Discord** (Display-Name + Streamer-Rolle) → Master-Broker 8770
+//!   (`resolve-user` / `member/add-role`). Python machte beides in-process
+//!   über den lokalen Discord-Bot (`bot/discord_role_sync.py`).
+//! - **Moderator-Einsetzung** → Helix `POST /moderation/moderators` mit dem
+//!   Streamer-Token (`tb_transport_twitch::moderation`).
+//! - **Chat-Begrüßung** → Delegation an den Python-Chat-Prozess via
+//!   `POST /internal/twitch/v1/streamers/{login}/chat-action` auf dem
+//!   Legacy-Seitenport 8779 — bis zum Chat-Cutover (Welle B).
+
+use std::sync::Arc;
+use std::time::Duration;
+
+use async_trait::async_trait;
+use sqlx::PgPool;
+use tb_raid::partner_setup::{
+    ChatGreeterPort, DiscordDirectoryPort, ModeratorInstallPort, PartnerSetupService,
+};
+use tb_transport_discord::BrokerRelay;
+use tb_transport_twitch::{AddModeratorOutcome, HelixClient};
+
+/// Discord-Streamer-Rolle (Python `_DEFAULT_STREAMER_ROLE_ID`,
+/// `bot/discord_role_sync.py:14`; Env `STREAMER_ROLE_ID` überschreibt).
+const DEFAULT_STREAMER_ROLE_ID: u64 = 1313624729466441769;
+
+fn env_u64(name: &str) -> Option<u64> {
+    std::env::var(name)
+        .ok()
+        .and_then(|v| v.trim().parse::<u64>().ok())
+        .filter(|&v| v > 0)
+}
+
+// ---------------------------------------------------------------------------
+// Discord via Master-Broker
+// ---------------------------------------------------------------------------
+
+/// Rollen-Sync + User-Auflösung über den Master-Broker.
+///
+/// Guild-Kandidaten wie Python `iter_role_guild_candidates`:
+/// `STREAMER_GUILD_ID` → `MAIN_GUILD_ID` (erste gesetzte gewinnt — der Broker
+/// braucht eine konkrete Guild, das "alle Guilds des Bots"-Fallback entfällt).
+pub struct BrokerDiscordDirectory {
+    relay: Option<BrokerRelay>,
+    guild_id: Option<u64>,
+    role_id: u64,
+}
+
+impl BrokerDiscordDirectory {
+    pub fn from_env(relay: Option<BrokerRelay>) -> Self {
+        Self {
+            relay,
+            guild_id: env_u64("STREAMER_GUILD_ID").or_else(|| env_u64("MAIN_GUILD_ID")),
+            role_id: env_u64("STREAMER_ROLE_ID").unwrap_or(DEFAULT_STREAMER_ROLE_ID),
+        }
+    }
+}
+
+#[async_trait]
+impl DiscordDirectoryPort for BrokerDiscordDirectory {
+    async fn resolve_display_name(&self, discord_user_id: &str) -> Option<String> {
+        let relay = self.relay.as_ref()?;
+        let user_id: u64 = discord_user_id.parse().ok()?;
+        match relay.resolve_user(user_id).await {
+            Ok(Some(user)) => user.preferred_display_name(),
+            Ok(None) => None,
+            Err(e) => {
+                tracing::warn!("Discord-Display-Name-Auflösung via Broker fehlgeschlagen: {e}");
+                None
+            }
+        }
+    }
+
+    async fn grant_streamer_role(&self, discord_user_id: &str, reason: &str) {
+        let Some(ref relay) = self.relay else {
+            tracing::warn!("Streamer-Rollen-Sync übersprungen: kein BrokerRelay konfiguriert");
+            return;
+        };
+        let Some(guild_id) = self.guild_id else {
+            tracing::warn!(
+                "Streamer-Rollen-Sync übersprungen: STREAMER_GUILD_ID/MAIN_GUILD_ID nicht gesetzt"
+            );
+            return;
+        };
+        let Ok(user_id) = discord_user_id.parse::<u64>() else {
+            return;
+        };
+        match relay
+            .add_member_role(guild_id, user_id, self.role_id, reason)
+            .await
+        {
+            Ok(()) => tracing::info!(
+                "Streamer role granted to {discord_user_id} in guild {guild_id}"
+            ),
+            Err(e) => tracing::warn!(
+                "Streamer-Rollen-Sync für {discord_user_id} fehlgeschlagen: {e}"
+            ),
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Moderator via Helix
+// ---------------------------------------------------------------------------
+
+pub struct HelixModeratorInstaller {
+    helix: HelixClient,
+}
+
+impl HelixModeratorInstaller {
+    pub fn new(helix: HelixClient) -> Self {
+        Self { helix }
+    }
+}
+
+#[async_trait]
+impl ModeratorInstallPort for HelixModeratorInstaller {
+    async fn add_channel_moderator(
+        &self,
+        broadcaster_id: &str,
+        bot_user_id: &str,
+        streamer_access_token: &str,
+    ) {
+        match self
+            .helix
+            .add_channel_moderator(broadcaster_id, bot_user_id, streamer_access_token)
+            .await
+        {
+            Ok(AddModeratorOutcome::Added) => tracing::info!(
+                "Bot (ID: {bot_user_id}) is now moderator in channel {broadcaster_id}"
+            ),
+            Ok(AddModeratorOutcome::AlreadyModerator) => tracing::info!(
+                "Bot (ID: {bot_user_id}) is already moderator in channel {broadcaster_id}"
+            ),
+            Ok(AddModeratorOutcome::Failed { status, body }) => tracing::warn!(
+                "Failed to add bot as moderator in channel {broadcaster_id}: HTTP {status}: {body}"
+            ),
+            Err(e) => tracing::error!(
+                "Error adding bot as moderator in channel {broadcaster_id}: {e}"
+            ),
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Chat-Begrüßung via Legacy-Python (Interim bis Chat-Cutover)
+// ---------------------------------------------------------------------------
+
+pub struct LegacyChatGreeter {
+    client: reqwest::Client,
+    base_url: String,
+    token: String,
+}
+
+impl LegacyChatGreeter {
+    /// `base_url` = `TB_INTERNAL_API_LEGACY_FALLBACK_URL` (Python-Seitenport
+    /// 8779), `token` = `TWITCH_INTERNAL_API_TOKEN` (gleicher Token wie die
+    /// interne API selbst).
+    pub fn from_env() -> Option<Self> {
+        let token = std::env::var("TWITCH_INTERNAL_API_TOKEN")
+            .ok()
+            .map(|v| v.trim().to_string())
+            .filter(|v| !v.is_empty())?;
+        let base_url = std::env::var("TB_INTERNAL_API_LEGACY_FALLBACK_URL")
+            .ok()
+            .map(|v| v.trim().trim_end_matches('/').to_string())
+            .filter(|v| !v.is_empty())
+            .unwrap_or_else(|| "http://127.0.0.1:8779".to_string());
+        let client = reqwest::Client::builder()
+            .timeout(Duration::from_secs(10))
+            .build()
+            .ok()?;
+        Some(Self {
+            client,
+            base_url,
+            token,
+        })
+    }
+}
+
+#[async_trait]
+impl ChatGreeterPort for LegacyChatGreeter {
+    async fn send_partner_chat_message(
+        &self,
+        twitch_login: &str,
+        message: &str,
+    ) -> Result<bool, String> {
+        let url = format!(
+            "{}/internal/twitch/v1/streamers/{}/chat-action",
+            self.base_url, twitch_login
+        );
+        let resp = self
+            .client
+            .post(&url)
+            .header("X-Internal-Token", &self.token)
+            .json(&serde_json::json!({ "message": message }))
+            .send()
+            .await
+            .map_err(|e| format!("chat-action request failed: {e}"))?;
+        let status = resp.status().as_u16();
+        if status != 200 {
+            let body = resp.text().await.unwrap_or_default();
+            let snippet: String = body.chars().take(200).collect();
+            return Err(format!("chat-action HTTP {status}: {snippet}"));
+        }
+        let body: serde_json::Value = resp
+            .json()
+            .await
+            .map_err(|e| format!("chat-action response invalid: {e}"))?;
+        Ok(body
+            .get("ok")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false))
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Builder
+// ---------------------------------------------------------------------------
+
+/// Baut den `PartnerSetupService` aus Env + Transporten. `None` nur, wenn der
+/// Chat-Greeter mangels `TWITCH_INTERNAL_API_TOKEN` nicht konstruierbar ist
+/// (dann wäre auch die interne API selbst nicht nutzbar — praktisch nie).
+pub fn build_partner_setup_service(
+    pool: PgPool,
+    helix: HelixClient,
+    relay: Option<BrokerRelay>,
+) -> Option<Arc<PartnerSetupService>> {
+    let greeter = LegacyChatGreeter::from_env()?;
+    let bot_user_id = std::env::var("TWITCH_BOT_USER_ID")
+        .ok()
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty());
+    if bot_user_id.is_none() {
+        tracing::warn!(
+            "TWITCH_BOT_USER_ID nicht gesetzt — OAuth-Followups laufen ohne Moderator-Setup/Begrüßung"
+        );
+    }
+    Some(Arc::new(PartnerSetupService::new(
+        pool,
+        Arc::new(BrokerDiscordDirectory::from_env(relay)),
+        Arc::new(HelixModeratorInstaller::new(helix)),
+        Arc::new(greeter),
+        bot_user_id,
+    )))
+}

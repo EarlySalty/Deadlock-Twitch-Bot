@@ -39,6 +39,7 @@ pub mod oauth_flow;
 pub mod offline_eligibility;
 pub mod outreach_boost;
 pub mod partner_roster;
+pub mod partner_setup;
 pub mod pending_raids;
 pub mod raid_blacklist;
 pub mod raid_executor;

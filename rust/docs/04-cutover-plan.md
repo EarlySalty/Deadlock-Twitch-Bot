@@ -253,3 +253,46 @@ Fehler dort teuer/sichtbar sind — und Stripe bzw. die DB-Queue ohnehin Retry-S
 - **Hinweis Welle D:** Die v2-/Session-Auth-Blocker aus dem 11.6.-Audit bleiben
   unverändert offen; der Legal-Cutover ist davon unabhängig (kein Partner-Auth,
   keine DB-Writes — nur Pool-Connect beim Start).
+
+## Stand 12.6. nachts — OAuth-Callback-Flip (Followups nativ)
+
+- **Followups portiert** (`tb-raid/src/partner_setup.rs` + Composition
+  `tb-bot/src/oauth_followups.rs`): `complete_setup_for_streamer` +
+  `sync_partner_state_after_auth` inkl. `promote_streamer_to_partner`
+  (Identity-Upsert mit Steal, Related-Tables-Normalisierung mit
+  Savepoint-je-Statement, clear_source, Stats-Backfill) und
+  `_record_first_login` (COALESCE-idempotent). 13 DB-Tests gegen prod-treue
+  DDL (alle `twitch_partners`-Timestamps TEXT, Flags INTEGER).
+- **Externe Seiteneffekte:** Moderator-Einsetzung nativ via Helix
+  `POST /moderation/moderators` mit Streamer-Token
+  (`tb-transport-twitch/src/moderation.rs`); Discord-Display-Name +
+  Streamer-Rolle via Master-Broker (neue Broker-Route `resolve-user`,
+  Deadlock-Bots #118, + bestehendes `member/add-role`); Chat-Begrüßung
+  delegiert an den Python-Chat via `POST /streamers/{login}/chat-action`
+  auf 8779 (Interim bis Welle B; Join übernimmt der periodische
+  Partner-Join-Loop des Python-Chats, die Nachrichten gehen Helix-seitig).
+  `stream_went_live_fn` entfällt: der native Poll (15 s) ersetzt den
+  Sofort-Sub-Call (Python-Lücke war 15–45 min).
+- **Bot-Identität:** `TWITCH_BOT_USER_ID=1422558159`
+  (deutschedeadlockcommunity, via Chat-Log + Helix verifiziert) als
+  Run-Skript-Default — Python löst die ID zur Laufzeit aus dem Chat-Token,
+  den Rust noch nicht besitzt.
+- **Flip vollzogen:** `POST /raid/oauth-callback` nativ registriert
+  (schattet den 8779-Proxy aus). Verifikation: Fehlerpfade (error-Param,
+  redirect_mismatch, leerer Body, unbekannter State) live gegen Python
+  gedifft — semantisch identisch (Byte-Differenz nur JSON-Key-Reihenfolge +
+  Whitespace; Konsumenten parsen feldweise); Idempotenz-Replay live grün
+  (`x-idempotency-replayed`, identischer Body). Der Erfolgspfad ist nicht
+  live-diffbar (Single-Use-State) — abgedeckt durch die Port-Tests aus #145
+  + Followup-Tests. Echter Streamer-Flow läuft weiterhin über Dashboard
+  8765 in-process (Welle D).
+- **Python-Bug gefunden (bewusste Rust-Abweichung):**
+  `promote_streamer_to_partner` wipet bei jeder Re-Promotion
+  `require_discord_link`/`silent_ban`/`silent_raid` auf 0,
+  `live_ping_role_id` auf NULL, `live_ping_enabled` auf 1 — die
+  `_row_value`-Defaults machen die vorgesehenen active_row-Fallbacks zu
+  totem Code (Folge der Partner-DB-Konsolidierung: die Quell-Spalten sind
+  Literale). Rust bewahrt die Werte des aktiven Partners. Python-Fix steht
+  aus (betrifft Re-Auth über Dashboard 8765 + /streamers-Verify-Pfade).
+- **Nebenbefund:** `bot/billing/catalog.py:21` — Kommentar sagt
+  „45-day free trial", Konstante ist 30. Laufzeitwert 30 ist korrekt.

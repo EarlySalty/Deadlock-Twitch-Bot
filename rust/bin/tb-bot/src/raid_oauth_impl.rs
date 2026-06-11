@@ -59,6 +59,7 @@ use tb_internal_api::handlers::raid_oauth::{
 use tb_raid::{
     auth_writer::AuthWriter,
     oauth_flow::{build_authorize_url, build_state_info, StreamerContextResolver},
+    partner_setup::PartnerSetupService,
     scope_profiles::scopes_for_profile,
     state_store::StateStore,
     token_refresher::TwitchTokenClient,
@@ -555,11 +556,12 @@ async fn resolve_integration_state(
 pub struct TbRaidOAuthImpl {
     pool: PgPool,
     state_store: StateStore,
-    /// Noch ungenutzt: `oauth_callback` ist am Persist-Schritt Stub (kein
-    /// Helix-User-Lookup) und deshalb NICHT im Router verdrahtet — der
-    /// Writer steht für die Vervollständigung bereit.
     auth_writer: AuthWriter,
     token_client: Arc<dyn TwitchTokenClient>,
+    /// Followup-Service (Python `complete_setup_for_streamer` /
+    /// `sync_partner_state_after_auth`). `None` → Followups entfallen mit
+    /// Warning (z. B. Token-Env fehlt) — der Callback persistiert trotzdem.
+    partner_setup: Option<Arc<PartnerSetupService>>,
     client_id: String,
     redirect_uri: String,
     /// Ziel-URL nach erfolgreicher Autorisierung (Python:
@@ -592,6 +594,7 @@ impl TbRaidOAuthImpl {
         token_client: Arc<dyn TwitchTokenClient>,
         client_id: String,
         redirect_uri: String,
+        partner_setup: Option<Arc<PartnerSetupService>>,
     ) -> Self {
         // Fail-closed: gesetzte (auch leere) Variable aktiviert den Guard —
         // nur eine NICHT gesetzte Variable bedeutet guard-aus (policy.py).
@@ -614,6 +617,7 @@ impl TbRaidOAuthImpl {
             state_store,
             auth_writer,
             token_client,
+            partner_setup,
             client_id,
             redirect_uri,
             success_redirect_url,
@@ -955,8 +959,8 @@ impl RaidOAuthPort for TbRaidOAuthImpl {
             return Ok(invalid_scopes_failure());
         }
 
-        // 8. Erst-Auth erkennen (nur Observability — die Followups laufen noch
-        // nicht nativ, s. unten).
+        // 8. Erst-Auth erkennen — entscheidet das Followup-Routing in
+        // Schritt 10 (Python: VOR save_auth geprüft).
         let had_existing_auth = self.has_saved_auth_record(&twitch_user_id, &twitch_login).await;
 
         // 9. Tokens verschlüsselt persistieren (Python `save_auth`).
@@ -991,19 +995,59 @@ impl RaidOAuthPort for TbRaidOAuthImpl {
             });
         }
 
-        // 10. Followups: Python startet hier complete_setup (Erst-Auth:
-        // Moderator-Einsetzung mit dem Streamer-Token, Chat-Begrüßung,
-        // EventSub-Sofort-Subscription, Trial-Timer) bzw. sync_partner_state
-        // als Background-Tasks. Diese laufen NOCH NICHT nativ — deshalb ist
-        // die Route bewusst nicht im Router registriert und der echte Flow
-        // (Dashboard 8765 → in-process) bleibt unverändert. Beim Flip müssen
-        // die Followups portiert oder delegiert sein.
-        if !had_existing_auth {
-            tracing::warn!(
-                login = %twitch_login,
-                "oauth_callback: Erst-Auth gespeichert, complete_setup-Followup ist NICHT nativ \
-                 (Moderator-Setup/Chat-Begrüßung/EventSub-Sofort-Sub entfallen auf diesem Pfad)"
-            );
+        // 10. Followups als Background-Tasks (Python `schedule_background`,
+        // `oauth_callback.py:207-254`): Erst-Auth → complete_setup
+        // (Partner-Sync, first_login, Moderator-Einsetzung, Chat-Begrüßung);
+        // Re-Auth mit Discord-ID im OAuth-State → nur sync_partner_state.
+        let state_discord_user_id = state_info
+            .discord_user_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string);
+        match (&self.partner_setup, had_existing_auth) {
+            (Some(setup), false) => {
+                let setup = setup.clone();
+                let uid = twitch_user_id.clone();
+                let login = twitch_login.clone();
+                let access_token = token_response.access_token.clone();
+                tokio::spawn(async move {
+                    setup
+                        .complete_setup_for_streamer(
+                            &uid,
+                            &login,
+                            &access_token,
+                            state_discord_user_id.as_deref(),
+                        )
+                        .await;
+                });
+            }
+            (Some(setup), true) => {
+                if let Some(discord_id) = state_discord_user_id {
+                    let setup = setup.clone();
+                    let uid = twitch_user_id.clone();
+                    let login = twitch_login.clone();
+                    tokio::spawn(async move {
+                        if let Err(e) = setup
+                            .sync_partner_state_after_auth(&uid, &login, Some(&discord_id), true)
+                            .await
+                        {
+                            tracing::error!(
+                                login = %login,
+                                "sync_partner_state_after_auth-Followup fehlgeschlagen: {e}"
+                            );
+                        }
+                    });
+                }
+            }
+            (None, false) => {
+                tracing::warn!(
+                    login = %twitch_login,
+                    "oauth_callback: Erst-Auth gespeichert, aber kein PartnerSetupService \
+                     verdrahtet — Followups entfallen"
+                );
+            }
+            (None, true) => {}
         }
 
         tracing::info!(login = %twitch_login, "Raid auth successful");
@@ -1765,6 +1809,7 @@ mod callback_tests {
             Arc::new(stub),
             "cid".to_string(),
             "https://example.test/callback".to_string(),
+            None, // Followups in Handler-Tests nicht verdrahtet
         )
     }
 

@@ -12,6 +12,8 @@ use tb_config::BrokerConfig;
 
 const SEND_PATH: &str = "/internal/master/v1/discord/send-rich-message";
 const EDIT_PATH: &str = "/internal/master/v1/discord/edit-rich-message";
+const RESOLVE_USER_PATH: &str = "/internal/master/v1/discord/resolve-user";
+const ADD_ROLE_PATH: &str = "/internal/master/v1/discord/member/add-role";
 const TIMEOUT: Duration = Duration::from_secs(10);
 const RETRY_WAIT: Duration = Duration::from_secs(2);
 const MAX_ATTEMPTS: u32 = 2;
@@ -22,6 +24,52 @@ pub struct BrokerRelay {
     client: Arc<Client>,
     base_url: String,
     token: String,
+}
+
+/// Aufgelöster Discord-User aus `POST /discord/resolve-user`.
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct ResolvedDiscordUser {
+    pub found: bool,
+    #[serde(default)]
+    pub name: Option<String>,
+    #[serde(default)]
+    pub global_name: Option<String>,
+    #[serde(default)]
+    pub display_name: Option<String>,
+}
+
+impl ResolvedDiscordUser {
+    /// Anzeigename nach Python-Präzedenz (`resolve_discord_display_name`):
+    /// global_name → display_name → name; leere Strings zählen nicht.
+    pub fn preferred_display_name(&self) -> Option<String> {
+        [&self.global_name, &self.display_name, &self.name]
+            .into_iter()
+            .filter_map(|v| v.as_deref())
+            .map(str::trim)
+            .find(|s| !s.is_empty())
+            .map(str::to_string)
+    }
+}
+
+/// Broker-Antwort-Envelope (`_success_response`): `{"ok": .., "result": ..}`.
+#[derive(Debug, serde::Deserialize)]
+struct BrokerEnvelope<T> {
+    ok: bool,
+    #[serde(default = "Option::default")]
+    result: Option<T>,
+}
+
+#[derive(serde::Serialize)]
+struct ResolveUserRequest {
+    user_id: u64,
+}
+
+#[derive(serde::Serialize)]
+struct AddRoleRequest {
+    guild_id: u64,
+    user_id: u64,
+    role_id: u64,
+    reason: String,
 }
 
 impl BrokerRelay {
@@ -82,6 +130,53 @@ impl BrokerRelay {
             }
         }
         Err(last_err.unwrap())
+    }
+
+    /// Löst einen Discord-User über den Broker auf (read-only).
+    /// `Ok(None)` = User nicht gefunden; Fehler nur bei Transport/HTTP-Problemen.
+    pub async fn resolve_user(
+        &self,
+        user_id: u64,
+    ) -> Result<Option<ResolvedDiscordUser>, DiscordError> {
+        let payload = ResolveUserRequest { user_id };
+        let key = Self::idempotency_key("resolve-user", &payload);
+        let resp = self
+            .post_with_retry(RESOLVE_USER_PATH, &payload, &key)
+            .await?;
+        if !resp.status().is_success() {
+            let status = resp.status().as_u16();
+            let body = resp.text().await.unwrap_or_default();
+            return Err(DiscordError::BrokerError { status, body });
+        }
+        let envelope: BrokerEnvelope<ResolvedDiscordUser> = resp.json().await?;
+        Ok(envelope
+            .result
+            .filter(|user| envelope.ok && user.found))
+    }
+
+    /// Fügt einem Guild-Mitglied eine Rolle hinzu
+    /// (`POST /discord/member/add-role`, idempotent auf Broker-Seite).
+    pub async fn add_member_role(
+        &self,
+        guild_id: u64,
+        user_id: u64,
+        role_id: u64,
+        reason: &str,
+    ) -> Result<(), DiscordError> {
+        let payload = AddRoleRequest {
+            guild_id,
+            user_id,
+            role_id,
+            reason: reason.to_string(),
+        };
+        let key = Self::idempotency_key("add-role", &payload);
+        let resp = self.post_with_retry(ADD_ROLE_PATH, &payload, &key).await?;
+        if !resp.status().is_success() {
+            let status = resp.status().as_u16();
+            let body = resp.text().await.unwrap_or_default();
+            return Err(DiscordError::BrokerError { status, body });
+        }
+        Ok(())
     }
 }
 
@@ -215,6 +310,86 @@ mod tests {
             .unwrap_err();
         assert!(matches!(err, DiscordError::BrokerError { status: 400, .. }));
         server.verify().await;
+    }
+
+    #[tokio::test]
+    async fn resolve_user_parst_treffer_und_praeferenz() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/internal/master/v1/discord/resolve-user"))
+            .and(header("X-Internal-Token", "test-token"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "ok": true,
+                "result": {
+                    "found": true,
+                    "name": "rawname",
+                    "global_name": "Globaler Name",
+                    "display_name": "Server-Name"
+                }
+            })))
+            .mount(&server)
+            .await;
+
+        let relay = BrokerRelay::new(&test_config(&server.uri())).unwrap();
+        let user = relay.resolve_user(123).await.unwrap().unwrap();
+        assert_eq!(
+            user.preferred_display_name().as_deref(),
+            Some("Globaler Name"),
+            "global_name hat Vorrang"
+        );
+    }
+
+    #[tokio::test]
+    async fn resolve_user_nicht_gefunden_gibt_none() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/internal/master/v1/discord/resolve-user"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "ok": true,
+                "result": { "found": false }
+            })))
+            .mount(&server)
+            .await;
+
+        let relay = BrokerRelay::new(&test_config(&server.uri())).unwrap();
+        assert!(relay.resolve_user(123).await.unwrap().is_none());
+    }
+
+    #[test]
+    fn preferred_display_name_fallback_kette() {
+        let user = ResolvedDiscordUser {
+            found: true,
+            name: Some("rawname".to_string()),
+            global_name: Some("  ".to_string()),
+            display_name: None,
+        };
+        assert_eq!(user.preferred_display_name().as_deref(), Some("rawname"));
+    }
+
+    #[tokio::test]
+    async fn add_member_role_sendet_payload() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/internal/master/v1/discord/member/add-role"))
+            .and(header("X-Internal-Token", "test-token"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "ok": true,
+                "result": { "changed": true }
+            })))
+            .mount(&server)
+            .await;
+
+        let relay = BrokerRelay::new(&test_config(&server.uri())).unwrap();
+        relay
+            .add_member_role(1, 2, 3, "Twitch-Bot erfolgreich autorisiert")
+            .await
+            .unwrap();
+        let received = server.received_requests().await.unwrap();
+        let body: serde_json::Value = serde_json::from_slice(&received[0].body).unwrap();
+        assert_eq!(body["guild_id"], 1);
+        assert_eq!(body["user_id"], 2);
+        assert_eq!(body["role_id"], 3);
+        assert_eq!(body["reason"], "Twitch-Bot erfolgreich autorisiert");
     }
 
     #[tokio::test]

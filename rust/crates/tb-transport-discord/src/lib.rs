@@ -6,4 +6,4 @@ pub mod relay;
 
 pub use backend::{DiscordBackend, DiscordError, EditRichMessage, SendResult, SendRichMessage};
 pub use noop::HeadlessNoop;
-pub use relay::BrokerRelay;
+pub use relay::{BrokerRelay, ResolvedDiscordUser};

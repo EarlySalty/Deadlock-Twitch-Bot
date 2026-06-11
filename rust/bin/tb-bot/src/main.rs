@@ -29,6 +29,7 @@
 mod auto_raid;
 mod confirm_resolver;
 mod eventsub_hooks;
+mod oauth_followups;
 mod offline_side_effects;
 mod partner_lookup;
 mod raid_adapters;
@@ -214,6 +215,29 @@ async fn main() {
                     "https://deutsche-deadlock-community.de/callback/twitch".to_string()
                 });
             if let Ok(client_id) = std::env::var("TWITCH_CLIENT_ID") {
+                // Followup-Service: Discord via Master-Broker, Moderator via
+                // Helix, Chat-Begrüßung via Legacy-Python (8779).
+                let followup_relay = match BrokerRelay::new(&settings.broker) {
+                    Ok(relay) => Some(relay),
+                    Err(e) => {
+                        tracing::warn!(
+                            "BrokerRelay für OAuth-Followups nicht initialisierbar: {e} — \
+                             Rollen-Sync/Display-Name entfallen"
+                        );
+                        None
+                    }
+                };
+                let partner_setup = oauth_followups::build_partner_setup_service(
+                    pool.clone(),
+                    helix_client.clone(),
+                    followup_relay,
+                );
+                if partner_setup.is_none() {
+                    tracing::warn!(
+                        "PartnerSetupService nicht konstruierbar (TWITCH_INTERNAL_API_TOKEN fehlt) \
+                         — OAuth-Followups entfallen"
+                    );
+                }
                 raid_oauth_port = Some(Arc::new(raid_oauth_impl::TbRaidOAuthImpl::new(
                     pool.clone(),
                     tb_raid::state_store::StateStore::new(pool.clone(), raid_redirect_uri.clone()),
@@ -224,9 +248,10 @@ async fn main() {
                     }),
                     client_id,
                     raid_redirect_uri.clone(),
+                    partner_setup,
                 )));
                 tracing::info!(
-                    "Raid-OAuth-Lesestrecke nativ aktiv (auth-url/auth-state/block-state/go-url); oauth-callback + requirements weiter via Proxy"
+                    "Raid-OAuth-Strecke nativ aktiv (auth-url/auth-state/block-state/go-url/oauth-callback inkl. Followups); requirements weiter via Proxy"
                 );
             }
 

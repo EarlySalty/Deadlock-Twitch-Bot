@@ -120,21 +120,24 @@ pub fn build_internal_router(
             &format!("{base}/discord/self-explainer-log"),
             post(self_explainer_log::handler),
         )
-        // Raid-OAuth-Lesestrecke (Welle B): nativ via RaidOAuthPort +
+        // Raid-OAuth-Strecke (Welle B): nativ via RaidOAuthPort +
         // Composition-Root in tb-bot (raid_oauth_impl.rs). auth-url schreibt
-        // den State in oauth_state_tokens mit IDENTISCHEM SQL wie Python —
-        // der (weiter proxied laufende) Python-Callback kann ihn einlösen.
+        // den State in oauth_state_tokens mit IDENTISCHEM SQL wie Python.
+        // oauth-callback ist seit dem Followup-Port (12.6.) komplett nativ:
+        // Token-Exchange + Helix-Owner-Lookup + Mismatch-/Scope-Checks +
+        // verschlüsselter Persist + Background-Followups (complete_setup /
+        // sync_partner_state via PartnerSetupService); Idempotenz cacht das
+        // Ergebnis als HTTP 200 wie Python.
         // BEWUSST NICHT nativ:
-        // - POST /raid/oauth-callback — der native Pfad ist am letzten
-        //   Schritt Stub (kein Helix-User-Lookup), würde aber den Single-Use-
-        //   State KONSUMIEREN und den OAuth-Code verbrennen, bevor er 503
-        //   liefert → Re-Auth wäre kaputt statt degradiert. Bleibt Proxy,
-        //   bis TwitchTokenClient exchange_code_with_user_info kann.
         // - POST /raid/requirements — sendet in Python eine echte Discord-DM;
         //   ohne Discord-Bridge bleibt die Route über den Legacy-Proxy.
         .route(
             &format!("{base}/raid/auth-url"),
             get(oauth::auth_url_handler),
+        )
+        .route(
+            &format!("{base}/raid/oauth-callback"),
+            post(oauth::oauth_callback_handler),
         )
         .route(
             &format!("{base}/raid/auth-state"),
