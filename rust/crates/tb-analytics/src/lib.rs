@@ -16,3 +16,4 @@ pub mod system_database;
 pub mod system_errors;
 pub mod system_eventsub;
 pub mod system_health;
+pub mod streamer_link;

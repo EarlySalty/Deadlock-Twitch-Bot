@@ -5,4 +5,6 @@ pub mod healthz;
 pub mod legacy_proxy;
 pub mod raid;
 pub mod raid_blacklist;
+pub mod self_explainer_log;
+pub mod streamer_link;
 pub mod streamers;

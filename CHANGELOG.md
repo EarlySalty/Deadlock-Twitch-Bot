@@ -1,3 +1,11 @@
+## #135 — Zwei weitere interne Routen nativ in Rust: Link-Kandidaten + Self-Explainer-Log
+
+**Ausgangslage:** Im Zuge der Rust-Umstellung liefen noch mehrere interne API-Routen über die alte Python-Schicht (Fallback-Proxy). Zwei davon: die Liste der Streamer ohne Discord-Verknüpfung (Quelle für den automatischen Discord-Namens-Abgleich) und das Weiterreichen einer Self-Explainer-Antwort als Discord-Nachricht.
+
+**Was wurde geändert:** Beide Routen laufen jetzt nativ im Rust-Kern. Die Link-Kandidaten-Liste liest direkt aus der Datenbank — identische Abfrage wie vorher, inklusive der Feinheiten: leerer Verknüpfungs-Eintrag zählt als unverknüpft, die Identitäts-Tabelle dient als zweite Wahrheitsquelle, archivierte Streamer fallen raus, Sortierung alphabetisch. Ein Paritäts-Detail wurde dabei gleich geradegezogen: das Feld für die Twitch-User-ID erscheint jetzt — wie im alten System — immer im Ergebnis (leer = `null`) statt bei fehlendem Wert ganz zu verschwinden, damit der Discord-Matcher nicht über ein fehlendes Feld stolpert. Die Self-Explainer-Log-Route ist ein reiner Weiterleiter: sie nimmt das fertige Discord-Embed entgegen und schickt es über den zentralen Nachrichten-Broker an Discord — mit demselben Dedup-Schlüssel-Verfahren wie zuvor (kanonisches JSON → Hash), sodass echte Wiederholungen derselben Frage+Antwort nicht doppelt gepostet werden. Beide mit Vertragstests gegen das alte Verhalten abgesichert.
+
+**Wie es jetzt funktioniert:** Der automatische Discord-Namens-Abgleich und das Posten von Self-Explainer-Antworten laufen unverändert — nur über den Rust-Kern statt über die alte Python-Schicht. Für Nutzer und Streamer ändert sich nichts Sichtbares; der Proxy wird ein weiteres Stück kleiner.
+
 ## #134 — Raid-Sperrliste läuft jetzt nativ in Rust (Python-Proxy schrumpft)
 
 **Ausgangslage:** Bei der schrittweisen Umstellung auf Rust laufen die Verwaltungs-Routen der Raid-Sperrliste — Eintragen, Entfernen, Prüfen und Auflisten der Kanäle, die nie angeraidet werden — noch über die alte Python-Schicht. Der Rust-Kern reicht diese Anfragen bislang über einen internen Seitenport an den Python-Worker durch (Übergangs-Klempnerei aus der „Strangler-Fig"-Migration, bei der nach und nach Route für Route von Python nach Rust wandert). Damit hängt ein Stück Admin-Funktion ohne sachlichen Grund weiter an Python.

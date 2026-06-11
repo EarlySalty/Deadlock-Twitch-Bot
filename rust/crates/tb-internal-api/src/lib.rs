@@ -37,7 +37,10 @@ pub fn build_internal_router(
     manual_raid: Option<Arc<dyn handlers::raid::ManualRaidPort>>,
     legacy_proxy: Option<Arc<LegacyProxy>>,
 ) -> Router {
-    use handlers::{discord_invite, eventsub, global_ban, healthz, raid, raid_blacklist};
+    use handlers::{
+        discord_invite, eventsub, global_ban, healthz, raid, raid_blacklist, self_explainer_log,
+        streamer_link,
+    };
 
     let base = INTERNAL_API_BASE_PATH; // "/internal/twitch/v1"
 
@@ -87,6 +90,18 @@ pub fn build_internal_router(
         .route(
             &format!("{base}/raid/blacklist/check"),
             get(raid_blacklist::check_handler),
+        )
+        // Streamer-Link-Kandidaten (nativer Port, reiner GET-Read; kein POST auf
+        // demselben Pfad → kein 405-vs-Fallback-Konflikt).
+        .route(
+            &format!("{base}/streamers/link-candidates"),
+            get(streamer_link::list_handler),
+        )
+        // Self-Explainer-Discord-Log: reiner Relay an den Master-Broker (8770),
+        // kein DB-Zugriff. Token-Fallback-Kette inkl. TWITCH_INTERNAL_API_TOKEN.
+        .route(
+            &format!("{base}/discord/self-explainer-log"),
+            post(self_explainer_log::handler),
         )
         // Streamer-Endpoints: kompletter /streamers-Baum läuft bewusst über
         // den Legacy-Fallback-Proxy zum Python-Worker, bis die
