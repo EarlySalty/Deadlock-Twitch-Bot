@@ -26,7 +26,7 @@ pub async fn overview_metrics(
         r#"
         SELECT
             AVG(s.avg_viewers)::FLOAT8                                AS avg_avg_viewers,
-            MAX(s.peak_viewers)                                       AS max_peak_viewers,
+            MAX(s.peak_viewers)::BIGINT                               AS max_peak_viewers,
             SUM(s.avg_viewers * s.duration_seconds / 3600.0)::FLOAT8  AS total_hours_watched,
             SUM(s.duration_seconds / 3600.0)::FLOAT8                  AS total_airtime_hours,
             SUM(CASE

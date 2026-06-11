@@ -37,15 +37,18 @@
 //!   body {login|streamer|twitch_login: <str>, [guild_id, channel_id, role_id]}
 //!   → 200 {ok:true, login:<str>, message:<str>}
 //!   → 400 / 403 / 404 / 503
-//!   HINWEIS: Idempotenz-Layer ist noch nicht nativ — X-Idempotency-Key
-//!   wird **durchgeliefert** ohne Deduplizierung (open_risk, s. u.).
+//!   NICHT verdrahtet: Discord-DM-Versand braucht die Python-Laufzeit;
+//!   die Port-Impl antwortet ehrlich 503 (Route läuft über den Proxy).
 //!
 //! POST /internal/twitch/v1/raid/oauth-callback
 //!   body {code:<str>, state:<str>, error:<str>,
 //!         [guild_id, channel_id, role_id]}
-//!   → 200..599 {status:<int>, title:<str>, body_html:<str>}
-//!              (HTTP-Status = result["status"], immer 200–599)
-//!   HINWEIS: Idempotenz-Layer wie requirements (open_risk).
+//!   → HTTP IMMER 200; Ergebnis-Status nur im Body:
+//!     {status:<200..599>, title:<str>, body_html:<str>[, redirect_url]}
+//!   Idempotenz über den geteilten Layer (Scope-Key, Fingerprint→409,
+//!   Replay mit X-Idempotency-Replayed) — OAuth-Codes sind Single-Use.
+//!   NICHT verdrahtet, bis die complete_setup-/sync_partner_state-Followups
+//!   nativ sind (Python startet sie als Background-Tasks nach save_auth).
 //! ```
 //!
 //! # Port-Trait
@@ -128,10 +131,13 @@ pub struct RaidStatePayload {
 /// Ergebnis des OAuth-Callbacks (Python: dict mit status/title/body_html).
 #[derive(Debug, Clone)]
 pub struct OAuthCallbackResult {
-    /// HTTP-Status-Code der Antwort (wird auf 200–599 geclampt wie in Python).
+    /// Ergebnis-Status im Body (wird auf 200–599 geclampt wie in Python;
+    /// der HTTP-Status der Antwort ist IMMER 200).
     pub status: u16,
     pub title: String,
     pub body_html: String,
+    /// Nur im Erfolgsfall gesetzt (Python: `redirect_url` nur im 200-Dict).
+    pub redirect_url: Option<String>,
 }
 
 // ── Port-Trait ────────────────────────────────────────────────────────────────
@@ -674,25 +680,72 @@ pub async fn requirements_handler(
 /// `POST /internal/twitch/v1/raid/oauth-callback`
 ///
 /// Verarbeitet den OAuth-Callback-Payload und gibt status/title/body_html
-/// zurück. Der HTTP-Status der Antwort ist IMMER 200 — Python ruft
-/// `_json_response(result)` ohne `status=`-Argument auf (`raid.py:291`);
-/// der geklemmte `result.status` (200–599) erscheint nur als Feld im
-/// JSON-Body. Die OAuth-Flow-UI wertet genau dieses Body-Feld aus.
+/// (+ redirect_url im Erfolgsfall) zurück. Der HTTP-Status der Antwort ist
+/// IMMER 200 — Python ruft `_json_response(result)` ohne `status=`-Argument
+/// auf (`raid.py:291`); der geklemmte `result.status` (200–599) erscheint
+/// nur als Feld im JSON-Body. Die OAuth-Flow-UI wertet das Body-Feld aus.
 ///
-/// # Idempotenz
-/// Wie [`requirements_handler`]: noch kein nativer Idempotenz-Layer.
+/// # Idempotenz (geteilter Layer, Python-Vertrag)
+/// OAuth-Codes sind Single-Use — ein Netz-Retry mit demselben
+/// `Idempotency-Key` bekommt die gecachte Antwort statt eines geplatzten
+/// Zweit-Tauschs. Wie in Python wird das Callback-ERGEBNIS (auch mit
+/// `status: 4xx/5xx` im Body) als HTTP-200 gecacht (`raid.py:292`:
+/// `owner_cacheable = True` nach dem Callback-Aufruf); nur
+/// Transport-Fehler (401/403/503 vor dem Callback) sind nicht cachebar.
 pub async fn oauth_callback_handler(
     auth: AuthLevel,
+    headers: axum::http::HeaderMap,
+    axum::extract::OriginalUri(uri): axum::extract::OriginalUri,
     Extension(port): Extension<RaidOAuthExt>,
-    Json(body): Json<OAuthCallbackRequest>,
-) -> Result<impl IntoResponse, ApiError> {
+    Extension(idem): Extension<crate::idempotency::IdempotencyState>,
+    Json(raw_payload): Json<serde_json::Value>,
+) -> Result<axum::response::Response, ApiError> {
+    use crate::idempotency::{Prepared, IDEMPOTENCY_KEY_HEADER};
+
     if !auth.is_privileged() {
         return Err(ApiError::unauthorized());
     }
     let Some(port) = port.0 else {
         return Err(ApiError::unavailable());
     };
+    let body: OAuthCallbackRequest = serde_json::from_value(raw_payload.clone())
+        .map_err(|_| ApiError::bad_request("invalid request body"))?;
 
+    let raw_key = headers
+        .get(IDEMPOTENCY_KEY_HEADER)
+        .and_then(|v| v.to_str().ok());
+    let path = uri.path().to_string();
+    let path_qs = uri
+        .path_and_query()
+        .map(|pq| pq.as_str().to_string())
+        .unwrap_or_else(|| path.clone());
+
+    match idem.prepare(raw_key, "POST", &path, &path_qs, &raw_payload).await {
+        Prepared::Immediate(resp) => Ok(resp),
+        Prepared::Skip => {
+            let json_body = run_oauth_callback(&*port, &body).await?;
+            Ok((axum::http::StatusCode::OK, Json(json_body)).into_response())
+        }
+        Prepared::Owner(slot) => match run_oauth_callback(&*port, &body).await {
+            Ok(json_body) => {
+                // Python cacht das Ergebnis als HTTP 200 — auch wenn der
+                // Body-Status ein Fehler ist (Spec: Sonderfall oauth_callback).
+                slot.complete(200, &json_body, true);
+                Ok((axum::http::StatusCode::OK, Json(json_body)).into_response())
+            }
+            Err(e) => {
+                slot.complete(e.status.as_u16(), &e.payload_json(), false);
+                Err(e)
+            }
+        },
+    }
+}
+
+/// Kern des Callback-Handlers: Scope-Guard → Port-Aufruf → Body-Aufbau.
+async fn run_oauth_callback(
+    port: &dyn RaidOAuthPort,
+    body: &OAuthCallbackRequest,
+) -> Result<serde_json::Value, ApiError> {
     // Discord-Scope-Guard (Python: _enforce_discord_action_scope →
     // 403 {"error":"forbidden","message":"action outside configured scope"}).
     port.enforce_discord_action_scope(
@@ -703,11 +756,11 @@ pub async fn oauth_callback_handler(
     .await
     .map_err(|_| ApiError::forbidden_scope())?;
 
-    let code = body.code.as_deref().unwrap_or("").to_string();
-    let state = body.state.as_deref().unwrap_or("").to_string();
-    let error = body.error.as_deref().unwrap_or("").to_string();
+    let code = body.code.as_deref().unwrap_or("");
+    let state = body.state.as_deref().unwrap_or("");
+    let error = body.error.as_deref().unwrap_or("");
 
-    let result = port.oauth_callback(&code, &state, &error).await.map_err(|e| {
+    let result = port.oauth_callback(code, state, error).await.map_err(|e| {
         tracing::error!("raid oauth callback Fehler: {e:?}");
         ApiError::from(e)
     })?;
@@ -716,13 +769,16 @@ pub async fn oauth_callback_handler(
     // NICHT der HTTP-Status (raid.py:284-291, _json_response default 200).
     let status_code = result.status.clamp(200, 599);
 
-    let json_body = serde_json::json!({
+    let mut json_body = serde_json::json!({
         "status": status_code,
         "title": result.title,
         "body_html": result.body_html,
     });
-
-    Ok((axum::http::StatusCode::OK, Json(json_body)))
+    // Python: redirect_url nur im Erfolgs-Dict vorhanden.
+    if let Some(redirect_url) = result.redirect_url {
+        json_body["redirect_url"] = serde_json::Value::String(redirect_url);
+    }
+    Ok(json_body)
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
@@ -857,6 +913,7 @@ mod tests {
                 status: 200,
                 title: "Autorisierung erfolgreich".to_string(),
                 body_html: "<p>OK</p>".to_string(),
+                redirect_url: Some("https://example.test/dashboard".to_string()),
             })
         }
 
@@ -892,7 +949,7 @@ mod tests {
             Ok("ok".to_string())
         }
         async fn oauth_callback(&self, _: &str, _: &str, _: &str) -> Result<OAuthCallbackResult, RaidOAuthError> {
-            Ok(OAuthCallbackResult { status: 200, title: "ok".to_string(), body_html: "ok".to_string() })
+            Ok(OAuthCallbackResult { status: 200, title: "ok".to_string(), body_html: "ok".to_string(), redirect_url: None })
         }
         async fn enforce_discord_action_scope(
             &self,
@@ -923,6 +980,7 @@ mod tests {
                 post(oauth_callback_handler),
             )
             .layer(Extension(RaidOAuthExt(port)))
+            .layer(Extension(crate::idempotency::IdempotencyState::new()))
             .layer(Extension(ExpectedToken("tok".to_string())))
             .layer(middleware::from_fn_with_state(
                 "tok".to_string(),

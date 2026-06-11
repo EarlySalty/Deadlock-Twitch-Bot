@@ -11,4 +11,4 @@ pub use client::{HelixClient, HelixConfig, HelixError, TwitchUser};
 pub use eventsub::{CreateOutcome, EventSubSubscription};
 pub use streams::{HelixChannelInfo, HelixStream};
 pub use token::{AppToken, TokenError};
-pub use user_token::{UserTokenError, UserTokenResponse};
+pub use user_token::{TokenOwner, UserTokenError, UserTokenResponse};

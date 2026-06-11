@@ -199,6 +199,54 @@ impl ArrivalTrackingStore {
 
         Ok(())
     }
+
+    /// Findet die jüngste Arrival-Zeile für ein (Ziel, Quelle)-Paar innerhalb
+    /// des Recent-Fensters und gibt `(id, confirmation_signals)` zurück.
+    ///
+    /// DB-Pendant zu Pythons In-Memory-Cache `lookup_recent_raid_arrival`
+    /// (`raid_state_store.py:137-155`, TTL `recent_raid_arrival_ttl_seconds
+    /// = 600`): Sekundär-Signale aktualisieren nur Arrivals, die jünger als
+    /// das Fenster sind — ältere gelten als eigenständige Vorgänge.
+    pub async fn find_recent_arrival(
+        &self,
+        to_broadcaster_id: &str,
+        from_broadcaster_login: &str,
+        max_age_seconds: i64,
+    ) -> Result<Option<(i64, String)>, sqlx::Error> {
+        let row: Option<(i64, Option<String>)> = sqlx::query_as(
+            r#"
+            SELECT id::bigint, confirmation_signals
+            FROM twitch_raid_arrival_tracking
+            WHERE to_broadcaster_id = $1
+              AND LOWER(from_broadcaster_login) = LOWER($2)
+              AND detected_at > NOW() - ($3 * INTERVAL '1 second')
+            ORDER BY detected_at DESC
+            LIMIT 1
+            "#,
+        )
+        .bind(to_broadcaster_id)
+        .bind(from_broadcaster_login)
+        .bind(max_age_seconds)
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(row.map(|(id, signals)| (id, signals.unwrap_or_default())))
+    }
+}
+
+/// Serialisiert Bestätigungs-Signale wie Python
+/// `serialize_confirmation_signals` (`partner_arrival_tracking.py:390-393`):
+/// trim, dedupe, sortiert, kommasepariert.
+pub fn serialize_confirmation_signals<I, S>(signals: I) -> String
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<str>,
+{
+    let set: std::collections::BTreeSet<String> = signals
+        .into_iter()
+        .map(|s| s.as_ref().trim().to_string())
+        .filter(|s| !s.is_empty())
+        .collect();
+    set.into_iter().collect::<Vec<_>>().join(",")
 }
 
 // ---------------------------------------------------------------------------

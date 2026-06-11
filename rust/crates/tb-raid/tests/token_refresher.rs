@@ -10,7 +10,7 @@ use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
 use sqlx::PgPool;
 use tb_crypto::{aad, FieldCipher, KID};
 use tb_raid::{
-    RaidAuthStore, RaidTokenRefresher, RefreshError, RefreshOutcome, TokenBlacklist, TokenResponse,
+    RaidAuthStore, RaidTokenRefresher, RefreshError, RefreshOutcome, TokenBlacklist, TokenOwnerInfo, TokenResponse,
     TwitchTokenClient,
 };
 
@@ -128,6 +128,9 @@ impl TwitchTokenClient for StubClient {
     async fn exchange_code(&self, _code: &str) -> Result<TokenResponse, RefreshError> {
         unreachable!("exchange_code im Refresher-Test ungenutzt")
     }
+    async fn token_owner(&self, _a: &str) -> Result<TokenOwnerInfo, RefreshError> {
+        unreachable!("token_owner im Test ungenutzt")
+    }
 }
 
 #[derive(Default)]
@@ -203,6 +206,9 @@ impl TwitchTokenClient for CapturingStubClient {
     }
     async fn exchange_code(&self, _code: &str) -> Result<TokenResponse, RefreshError> {
         unreachable!()
+    }
+    async fn token_owner(&self, _a: &str) -> Result<TokenOwnerInfo, RefreshError> {
+        unreachable!("token_owner im Test ungenutzt")
     }
 }
 

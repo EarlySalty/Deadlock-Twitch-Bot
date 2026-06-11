@@ -15,7 +15,10 @@ use tower_http::cors::CorsLayer;
 
 /// Baut den axum-Router für alle public Analytics-GET-Endpoints.
 ///
-/// CORS-Policy: `CorsLayer::permissive()`.
+/// CORS-Policy: `CorsLayer::permissive()` NUR auf den Public-Routen —
+/// Python setzt Access-Control-Header ausschließlich dort
+/// (`api_public.py:52-58`). Authed/Admin-Routen bleiben ohne CORS-Header,
+/// sonst wäre die Token-API cross-origin per Browser ansprechbar.
 pub fn build_public_router(pool: PgPool) -> Router {
     use handlers::{bans, network, raids};
 
@@ -55,7 +58,6 @@ pub fn build_authed_router(pool: PgPool, token: String) -> Router {
         .route("/twitch/api/v2/overview", get(overview::overview_handler))
         .with_state(pool)
         .layer(Extension(ExpectedToken(token)))
-        .layer(CorsLayer::permissive())
 }
 
 /// Baut den Router für Admin-System-Endpoints.
@@ -81,7 +83,6 @@ pub fn build_admin_system_router(pool: PgPool, token: String) -> Router {
         )
         .with_state(pool)
         .layer(Extension(ExpectedToken(token)))
-        .layer(CorsLayer::permissive())
 }
 
 /// Baut den Router für Admin-Streamer-Endpoints.
@@ -99,12 +100,11 @@ pub fn build_admin_streamers_router(pool: PgPool, token: String) -> Router {
         )
         .with_state(pool)
         .layer(Extension(ExpectedToken(token)))
-        .layer(CorsLayer::permissive())
 }
 
 /// Zusammengeführter Router: public + authed + admin-system + admin-streamers.
 ///
-/// Kein doppelter CorsLayer — jeder Sub-Router hat seinen eigenen.
+/// CORS nur auf dem Public-Sub-Router (s. oben).
 pub fn build_router(pool: PgPool, token: String) -> Router {
     build_public_router(pool.clone())
         .merge(build_authed_router(pool.clone(), token.clone()))

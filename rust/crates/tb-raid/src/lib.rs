@@ -63,7 +63,9 @@ pub use arrival_confirmation::{
     PartnerRaidArrivalResolution,
 };
 pub use arrival_runtime::{RaidArrivalRuntime, RaidArrivalSink};
-pub use arrival_tracking_store::{ArrivalTrackingStore, RecordArrivalInput};
+pub use arrival_tracking_store::{
+    serialize_confirmation_signals, ArrivalTrackingStore, RecordArrivalInput,
+};
 pub use auth_writer::{AuthWriteError, AuthWriter, NewAuth};
 pub use auto_raid_pipeline::{
     ArrivalReadiness, AutoRaidPipeline, AutoRaidPipelineOutcome, AutoRaidRequest,
@@ -121,7 +123,7 @@ pub use token_blacklist::TokenBlacklistStore;
 pub use token_provider::TokenProvider;
 pub use token_refresher::{
     advisory_lock_pair, RaidTokenRefresher, RefreshError, RefreshOutcome, TokenBlacklist,
-    TokenResponse, TwitchTokenClient,
+    TokenOwnerInfo, TokenResponse, TwitchTokenClient,
 };
 pub use token_store::{RaidAuthStore, RaidTokens};
 pub use util::parse_iso_utc;

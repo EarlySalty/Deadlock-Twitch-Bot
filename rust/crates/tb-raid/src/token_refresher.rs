@@ -61,6 +61,19 @@ pub trait TwitchTokenClient: Send + Sync {
     /// Tauscht einen Authorization-Code gegen Tokens
     /// (`grant_type=authorization_code`, Python `exchange_code_for_token`).
     async fn exchange_code(&self, code: &str) -> Result<TokenResponse, RefreshError>;
+
+    /// Ermittelt den Inhaber eines frischen Access-Tokens (Python
+    /// `oauth_callback.py:130`: `GET /helix/users` mit dem User-Bearer ohne
+    /// Parameter). Ohne diesen Schritt ist nach dem Code-Tausch unbekannt,
+    /// WEM die Tokens gehören — der Persist-Pfad braucht User-ID + Login.
+    async fn token_owner(&self, access_token: &str) -> Result<TokenOwnerInfo, RefreshError>;
+}
+
+/// Inhaber eines User-Access-Tokens (Login bereits lowercase-normalisiert).
+#[derive(Debug, Clone)]
+pub struct TokenOwnerInfo {
+    pub twitch_user_id: String,
+    pub twitch_login: String,
 }
 
 /// Lockout-Store-Port (`twitch_token_blacklist`, echte Impl `TokenBlacklistStore`).

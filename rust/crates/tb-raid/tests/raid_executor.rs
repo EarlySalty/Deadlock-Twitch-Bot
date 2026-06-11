@@ -11,7 +11,7 @@ use sqlx::PgPool;
 use tb_crypto::{aad, FieldCipher, KID};
 use tb_raid::{
     RaidApi, RaidAuthStore, RaidExecutor, RaidHistoryStore, RaidOutcome, RaidRequest,
-    RaidTokenRefresher, RefreshError, TokenBlacklistStore, TokenProvider, TokenResponse,
+    RaidTokenRefresher, RefreshError, TokenBlacklistStore, TokenOwnerInfo, TokenProvider, TokenResponse,
     TwitchTokenClient,
 };
 
@@ -114,6 +114,9 @@ impl TwitchTokenClient for StubTokenClient {
     }
     async fn exchange_code(&self, _c: &str) -> Result<TokenResponse, RefreshError> {
         unreachable!()
+    }
+    async fn token_owner(&self, _a: &str) -> Result<TokenOwnerInfo, RefreshError> {
+        unreachable!("token_owner im Test ungenutzt")
     }
 }
 

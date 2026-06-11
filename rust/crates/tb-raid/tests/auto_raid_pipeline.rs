@@ -14,7 +14,7 @@ use tb_raid::{
     ArrivalReadiness, AutoRaidPipeline, AutoRaidPipelineOutcome, AutoRaidRequest,
     FairnessCandidate, FallbackStreamSource, OnlineCandidate, PendingRaidStore, RaidApi,
     RaidAuthStore, RaidBlacklistStore, RaidExecutor, RaidHistoryStore, RaidTokenRefresher,
-    RefreshError, ScoreStore, StreamData, StrikesStore, TokenBlacklistStore, TokenProvider,
+    RefreshError, ScoreStore, StreamData, StrikesStore, TokenBlacklistStore, TokenOwnerInfo, TokenProvider,
     TokenResponse, TwitchTokenClient,
 };
 
@@ -169,6 +169,9 @@ impl TwitchTokenClient for StubTokenClient {
     }
     async fn exchange_code(&self, _c: &str) -> Result<TokenResponse, RefreshError> {
         unreachable!()
+    }
+    async fn token_owner(&self, _a: &str) -> Result<TokenOwnerInfo, RefreshError> {
+        unreachable!("token_owner im Test ungenutzt")
     }
 }
 

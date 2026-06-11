@@ -528,7 +528,14 @@ pub async fn discord_profile_handler(
 /// `GET /internal/twitch/v1/stats`
 ///
 /// Query-Parameter: `hour_from`, `hour_to` (optional, UTC-Stunde 0–23), `streamer` (optional).
-/// Parität Python `stats` + `_dashboard_stats` (Basis-Aggregat aus `twitch_stream_sessions`).
+///
+/// ACHTUNG, KEIN Python-Vertrag: Diese Shape (`total_sessions`/`avg_viewers`/…)
+/// ist eine Eigen-Aggregation. Python `_dashboard_stats`
+/// (`dashboard_metrics_mixin.py:212-259`) liefert
+/// `{tracked:{top,hourly,weekday}, category, avg_viewers_all,
+/// avg_viewers_tracked}` — der Dashboard-Split-Mode liest exakt diese
+/// Felder. Deshalb NICHT verdrahten; vor einem Flip nach Python-Shape
+/// neu portieren (s. Modul-Docblock).
 pub async fn stats_handler(
     auth: AuthLevel,
     State(pool): State<PgPool>,

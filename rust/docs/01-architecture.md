@@ -10,8 +10,9 @@ rust/
   Cargo.toml            # [workspace] members
   crates/
     tb-error/  tb-domain/  tb-config/  tb-observability/  tb-crypto/
-    tb-db/  tb-transport-twitch/  tb-transport-discord/  tb-llm/  tb-http-core/
-    tb-chat/  tb-monitoring/  tb-raid/  tb-analytics/  tb-billing/
+    tb-db/  tb-transport-twitch/  tb-transport-discord/  tb-llm*/  tb-http-core/
+    tb-chat*/  tb-monitoring/  tb-raid/  tb-analytics/  tb-billing*/
+    (* = geplant, existiert noch nicht im Workspace)
     tb-social-media/  tb-community/  tb-dashboard-api/
   bin/
     tb-bot/             # laufender Bot-Prozess (+ interne API 8776)

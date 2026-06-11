@@ -6,7 +6,7 @@ use std::sync::Arc;
 use tb_monitoring::SubscriptionManager;
 use tb_raid::{
     ArrivalReadiness, FairnessCandidate, FallbackStreamSource, RaidApi, RefreshError,
-    TokenResponse, TwitchTokenClient,
+    TokenOwnerInfo, TokenResponse, TwitchTokenClient,
 };
 use tb_transport_twitch::{HelixClient, HelixStream, UserTokenError};
 
@@ -77,11 +77,15 @@ impl FallbackStreamSource for HelixFallbackStreams {
     }
 }
 
-/// OAuth-Token-Client-Adapter für den [`tb_raid::RaidTokenRefresher`].
-/// Der Code-Exchange (Onboarding) bleibt beim Python-Dashboard — hier wird
-/// nur der Refresh-Pfad bedient.
+/// OAuth-Token-Client-Adapter: Refresh, Code-Exchange (Onboarding) und
+/// Token-Owner-Lookup gegen Twitch.
+///
+/// `redirect_uri` muss exakt der beim Authorize-Link verwendeten URI
+/// entsprechen (Twitch validiert sie beim `authorization_code`-Grant);
+/// für den reinen Refresh-Pfad ist sie ungenutzt.
 pub struct HelixTokenClient {
     pub helix: HelixClient,
+    pub redirect_uri: String,
 }
 
 fn map_token_error(error: UserTokenError) -> RefreshError {
@@ -92,26 +96,43 @@ fn map_token_error(error: UserTokenError) -> RefreshError {
     }
 }
 
+fn to_token_response(response: tb_transport_twitch::UserTokenResponse) -> TokenResponse {
+    TokenResponse {
+        access_token: response.access_token,
+        refresh_token: response.refresh_token,
+        expires_in: response.expires_in,
+        scopes: response.scope,
+    }
+}
+
 #[async_trait::async_trait]
 impl TwitchTokenClient for HelixTokenClient {
     async fn refresh(&self, refresh_token: &str) -> Result<TokenResponse, RefreshError> {
-        let response = self
-            .helix
+        self.helix
             .refresh_user_token(refresh_token)
             .await
-            .map_err(map_token_error)?;
-        Ok(TokenResponse {
-            access_token: response.access_token,
-            refresh_token: response.refresh_token,
-            expires_in: response.expires_in,
-            scopes: response.scope,
-        })
+            .map(to_token_response)
+            .map_err(map_token_error)
     }
 
-    async fn exchange_code(&self, _code: &str) -> Result<TokenResponse, RefreshError> {
-        Err(RefreshError::Other(
-            "OAuth-Code-Exchange läuft weiter über das Python-Dashboard".to_string(),
-        ))
+    async fn exchange_code(&self, code: &str) -> Result<TokenResponse, RefreshError> {
+        self.helix
+            .exchange_user_code(code, &self.redirect_uri)
+            .await
+            .map(to_token_response)
+            .map_err(map_token_error)
+    }
+
+    async fn token_owner(&self, access_token: &str) -> Result<TokenOwnerInfo, RefreshError> {
+        let owner = self
+            .helix
+            .fetch_token_owner(access_token)
+            .await
+            .map_err(map_token_error)?;
+        Ok(TokenOwnerInfo {
+            twitch_user_id: owner.id,
+            twitch_login: owner.login,
+        })
     }
 }
 

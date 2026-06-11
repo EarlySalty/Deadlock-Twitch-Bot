@@ -220,9 +220,10 @@ async fn main() {
                     tb_raid::auth_writer::AuthWriter::new(pool.clone(), cipher.clone()),
                     Arc::new(HelixTokenClient {
                         helix: helix_client.clone(),
+                        redirect_uri: raid_redirect_uri.clone(),
                     }),
                     client_id,
-                    raid_redirect_uri,
+                    raid_redirect_uri.clone(),
                 )));
                 tracing::info!(
                     "Raid-OAuth-Lesestrecke nativ aktiv (auth-url/auth-state/block-state/go-url); oauth-callback + requirements weiter via Proxy"
@@ -235,6 +236,7 @@ async fn main() {
                 cipher.clone(),
                 Arc::new(HelixTokenClient {
                     helix: helix_client.clone(),
+                    redirect_uri: raid_redirect_uri.clone(),
                 }),
                 token_blacklist.clone(),
             );
@@ -282,6 +284,68 @@ async fn main() {
                 suppression.clone(),
                 &target_game.to_lowercase(),
             ));
+
+            // Orphan-Sweeper: promotet channel.chat.notification ohne
+            // korrelierendes Raid-Event nach 15 s Grace als eigenständigen
+            // Arrival (Python ruft promote_stale_* bei jedem Tracking-Tick).
+            {
+                let sweeper_sink = sink.clone();
+                tokio::spawn(async move {
+                    let mut tick = tokio::time::interval(std::time::Duration::from_secs(5));
+                    tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+                    loop {
+                        tick.tick().await;
+                        sweeper_sink.promote_stale_orphans().await;
+                    }
+                });
+            }
+
+            // Periodischer Voll-Refresh aller Partner-Raid-Scores (Python
+            // maybe_schedule_partner_raid_score_reconciliation, Intervall
+            // 300 s): fängt Partner, deren Online/Offline-Events verpasst
+            // wurden — sonst veralten deren Scores dauerhaft.
+            {
+                let refresh_pool = pool.clone();
+                tokio::spawn(async move {
+                    let resolver = ScoreRefreshResolver::new(refresh_pool.clone());
+                    let mut tick = tokio::time::interval(std::time::Duration::from_secs(300));
+                    tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+                    loop {
+                        tick.tick().await;
+                        let partners: Result<Vec<(String, String)>, _> = sqlx::query_as(
+                            r#"
+                            SELECT twitch_user_id, twitch_login
+                            FROM twitch_partners_all_state
+                            WHERE status = 'active'
+                              AND COALESCE(twitch_user_id, '') <> ''
+                            "#,
+                        )
+                        .fetch_all(&refresh_pool)
+                        .await;
+                        match partners {
+                            Ok(pairs) if !pairs.is_empty() => {
+                                match resolver.refresh_scores(&pairs, chrono::Utc::now()).await {
+                                    Ok(written) => tracing::debug!(
+                                        partners = pairs.len(),
+                                        written,
+                                        "Periodischer Partner-Score-Refresh abgeschlossen"
+                                    ),
+                                    Err(error) => tracing::error!(
+                                        %error,
+                                        "Periodischer Partner-Score-Refresh fehlgeschlagen"
+                                    ),
+                                }
+                            }
+                            Ok(_) => {}
+                            Err(error) => tracing::error!(
+                                %error,
+                                "Partner-Liste für Score-Refresh nicht ladbar"
+                            ),
+                        }
+                    }
+                });
+            }
+
             let arrival =
                 RaidArrivalCoordinator::new(pool.clone(), pending, RaidArrivalRuntime::new(sink));
             let blacklist_guard = BlacklistRaidGuard::new(

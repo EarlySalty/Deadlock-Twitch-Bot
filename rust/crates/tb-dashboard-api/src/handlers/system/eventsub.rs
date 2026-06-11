@@ -57,6 +57,11 @@ pub async fn eventsub_handler(
             last_known_snapshot_at: None,
         },
         Some(s) => {
+            // OFFEN (Welle D): websocket_status/"active_subscription_count"/
+            // capacity.max sind hier Platzhalter ("inactive"/0) — das
+            // React-Frontend liest diese Felder als echte KPIs. Vor dem
+            // Dashboard-Cutover aus dem Python-Vertrag ableiten
+            // (used_slots/total_slots liegen in der Snapshot-Tabelle).
             let last_snapshot_at = Some(s.ts_utc.to_rfc3339());
             let parsed: Vec<Value> = serde_json::from_str(&s.listeners_json).unwrap_or_default();
             let last_known: Vec<Value> = parsed.into_iter().take(200).collect();

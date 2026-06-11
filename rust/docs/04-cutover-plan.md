@@ -195,3 +195,33 @@ Read-only-Analytics (1–2) ist der sicherste Einstieg — bei Fehler nur falsch
 sofort per Proxy rückrollbar. Monitoring (4) ist der heikelste Schreibpfad und kommt, sobald das
 Fundament steht. Geld (Billing, 7) und externe Side-Effects (Social-Uploads, 8) zuletzt, weil
 Fehler dort teuer/sichtbar sind — und Stripe bzw. die DB-Queue ohnehin Retry-Sicherheit bieten.
+
+## Stand 11.6. abends — Welle-B-Korrektur + OAuth-Callback + Halbport-Audit
+
+- **#140:** Die in #137 deklarierten 12 Routen waren nie einkompiliert/registriert
+  (Geisterlandung). Korrigiert: 7 Routen wirklich nativ und im authed Live-Diff
+  gegen 8779 byte-identisch verifiziert (raid/auth-url, auth-state, block-state,
+  go-url; live/active-announcements, link-click; analytics/comparison). Geteilter
+  Idempotenz-Layer (`tb-internal-api/src/idempotency.rs`) nach `app.py`-Vertrag.
+  Regel ab jetzt: „nativ" erst nach Router-Registrierung + Live-Diff.
+- **OAuth-Callback komplett portiert** (Code-Tausch + Helix-Token-Owner-Lookup +
+  Mismatch-/Scope-Checks + verschlüsselter AuthWriter-Persist + Idempotenz im
+  Handler). Bewusst NICHT verdrahtet: Python startet nach `save_auth` die
+  Background-Followups `complete_setup_for_streamer` (Moderator-Einsetzung mit
+  dem Streamer-Token, Chat-Begrüßung über den Python-Chat-Bot, sofortige
+  stream.offline-Subscription, Trial-Timer) bzw. `sync_partner_state_after_auth`
+  — die sind noch nicht nativ. Der echte Streamer-Flow läuft ohnehin über
+  Dashboard 8765 (Caddy `/callback/twitch` → 8765, in-process). Flip-Bedingung:
+  Followups portieren oder delegieren.
+- **Halbport-Audit (84 Agenten):** Drei stille No-Ops im Arrival-Wiring gefixt
+  (Sekundär-Signal-Update, Orphan-Chat-Notification-Store mit 15s-Promotion,
+  verschlucktes Score-Tracking-Resultat) + periodischer 5-Minuten-Voll-Refresh
+  aller Partner-Scores ergänzt (war nur event-driven). Typ-Drift-Nachzieher
+  gegen das frisch gedumpte Prod-Schema (INT4/TEXT-Decodes + Test-DDLs).
+- **tb-dashboard-api (Welle D) — Audit-Urteil: Teil-Neubau nötig.** Blocker vor
+  dem Cutover: Partner-Session-Auth (Fernet-Cookie + AuthLevel::Partner) fehlt
+  komplett; ~40+ v2-Routen fehlen (Strangler-Proxy oder Port nötig);
+  auth-status liefert 2 statt ~18 Felder; /streamers-Shape inkompatibel;
+  eventsub-KPIs (websocket_status/capacity) sind Platzhalter. Sofort gefixt:
+  recent-raids ohne success-Filter + LIMIT 20→10, CORS-permissive auf
+  authed/admin-Routen entfernt (nur public behält CORS wie Python).

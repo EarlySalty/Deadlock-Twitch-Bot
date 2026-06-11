@@ -455,8 +455,10 @@ pub async fn archive_streamer(
             }
         }
         ArchiveMode::Toggle => {
-            // Aktuellen admin_archived_at lesen und umschalten
-            let current: Option<(Option<DateTime<Utc>>,)> = sqlx::query_as(
+            // Aktuellen admin_archived_at lesen und umschalten.
+            // Spalte ist TEXT in Prod (nicht TIMESTAMPTZ!) — nur die
+            // Gesetzt-Prüfung zählt, deshalb String-Decode (Typ-Drift-Klasse).
+            let current: Option<(Option<String>,)> = sqlx::query_as(
                 "SELECT admin_archived_at FROM twitch_partners WHERE LOWER(twitch_login) = LOWER($1) LIMIT 1",
             )
             .bind(login)
@@ -738,10 +740,13 @@ pub async fn streamer_analytics(
     .fetch_one(pool)
     .await?;
 
+    // id/duration_seconds/peak_viewers/follower_delta sind INT4 in Prod —
+    // ohne ::BIGINT-Cast lehnt sqlx das i64-Decode strikt ab (Typ-Drift-Klasse).
     let sessions: Vec<RecentSessionRow> = sqlx::query_as(
         r#"
-        SELECT id, stream_id, started_at, duration_seconds,
-               avg_viewers, peak_viewers, follower_delta, stream_title
+        SELECT id::BIGINT, stream_id, started_at,
+               duration_seconds::BIGINT, avg_viewers,
+               peak_viewers::BIGINT, follower_delta::BIGINT, stream_title
           FROM twitch_stream_sessions
          WHERE LOWER(streamer_login) = LOWER($1)
          ORDER BY started_at DESC
@@ -1011,9 +1016,10 @@ mod tests {
                 twitch_user_id           TEXT,
                 status                   TEXT DEFAULT 'active',
                 manual_verified_permanent INTEGER DEFAULT 0,
-                manual_verified_at       TIMESTAMPTZ,
-                manual_verified_until    TIMESTAMPTZ,
-                admin_archived_at        TIMESTAMPTZ,
+                -- TEXT wie Prod (Python schreibt ISO-Strings) — Typ-Drift-Schutz
+                manual_verified_at       TEXT,
+                manual_verified_until    TEXT,
+                admin_archived_at        TEXT,
                 technical_pause_reason   TEXT,
                 manual_partner_opt_out   INTEGER DEFAULT 0,
                 raid_bot_enabled         INTEGER DEFAULT 1
@@ -1074,14 +1080,15 @@ mod tests {
                 had_deadlock_in_session BOOLEAN DEFAULT FALSE,
                 started_at              TIMESTAMPTZ,
                 ended_at                TIMESTAMPTZ,
-                duration_seconds        BIGINT,
+                -- INT4 wie Prod — i64-Decodes brauchen ::BIGINT-Cast im SQL
+                duration_seconds        INTEGER,
                 avg_viewers             FLOAT8,
-                peak_viewers            BIGINT,
-                follower_delta          BIGINT,
+                peak_viewers            INTEGER,
+                follower_delta          INTEGER,
                 followers_start         BIGINT,
                 followers_end           BIGINT,
                 stream_title            TEXT,
-                unique_chatters         BIGINT
+                unique_chatters         INTEGER
             )
             "#,
         )
@@ -1255,7 +1262,8 @@ mod tests {
         let result = verify_streamer(&pool, "tmppartner", "temp").await.unwrap();
         assert!(matches!(result, VerifyStreamerResult::Verified));
 
-        let row: (Option<i32>, Option<DateTime<Utc>>) = sqlx::query_as(
+        // until ist TEXT in Prod — als String lesen (Typ-Drift-Schutz).
+        let row: (Option<i32>, Option<String>) = sqlx::query_as(
             "SELECT manual_verified_permanent, manual_verified_until FROM twitch_partners WHERE LOWER(twitch_login) = 'tmppartner'",
         )
         .fetch_one(&pool)
@@ -1374,7 +1382,7 @@ mod tests {
             .await
             .unwrap();
         assert!(ok);
-        let archived: Option<DateTime<Utc>> = sqlx::query_scalar(
+        let archived: Option<String> = sqlx::query_scalar(
             "SELECT admin_archived_at FROM twitch_partners WHERE twitch_login='toggler'",
         )
         .fetch_one(&pool)

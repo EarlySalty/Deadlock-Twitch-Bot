@@ -12,13 +12,44 @@ use std::sync::{Arc, Mutex};
 use chrono::Utc;
 use sqlx::PgPool;
 use tb_raid::{
-    classify_partner_raid_arrival, ArrivalConfirmationService, ArrivalSignalContext,
-    ArrivalTrackingStore, ManualRaidSuppression, PendingRaid, PendingRaidStore, RaidArrivalSink,
-    RecordArrivalInput, ScoreTrackingStore,
+    classify_partner_raid_arrival, serialize_confirmation_signals, ArrivalConfirmationService,
+    ArrivalSignalContext, ArrivalTrackingStore, ManualRaidSuppression, PendingRaid,
+    PendingRaidStore, RaidArrivalSink, RecordArrivalInput, ScoreTrackingStore,
 };
 
 use crate::confirm_resolver::{ConfirmContext, ConfirmResolver};
 use crate::partner_lookup::{is_target_partner, known_source, PrefetchedLookups};
+
+/// Recent-Fenster für Sekundär-Signale (Python
+/// `recent_raid_arrival_ttl_seconds = 600`, raid_state_store.py:16).
+const RECENT_ARRIVAL_TTL_SECS: i64 = 600;
+/// Grace-Period, bevor ein Orphan als eigenständiger Arrival promotet wird
+/// (Python `orphan_chat_notification_grace_seconds = 15`).
+const ORPHAN_GRACE_SECS: u64 = 15;
+/// Aufbewahrung nicht-promotbarer Orphans (Python
+/// `orphan_chat_notification_retention_seconds = 900`).
+const ORPHAN_RETENTION_SECS: u64 = 900;
+
+/// Verwaiste `channel.chat.notification`, die auf ein korrelierendes
+/// Raid-Event wartet (Python-Payload-Dict in `orphan_chat_raid_notifications`).
+#[derive(Debug, Clone)]
+struct OrphanChatNotification {
+    to_broadcaster_id: String,
+    to_broadcaster_login: String,
+    from_broadcaster_id: Option<String>,
+    from_broadcaster_login: String,
+    viewer_count: i32,
+    observed_at: std::time::Instant,
+}
+
+/// Cache-Key wie Python `build_raid_arrival_cache_key` (Ziel-ID + Quell-Login).
+fn orphan_key(to_broadcaster_id: &str, from_broadcaster_login: &str) -> String {
+    format!(
+        "{}|{}",
+        to_broadcaster_id.trim(),
+        from_broadcaster_login.trim().to_lowercase()
+    )
+}
 
 // ─── Adapter ────────────────────────────────────────────────────────────────
 
@@ -29,6 +60,9 @@ pub struct RaidArrivalSinkImpl {
     arrival_store: ArrivalTrackingStore,
     score_tracking: ScoreTrackingStore,
     confirm_resolver: ConfirmResolver,
+    /// Verwaiste Chat-Notifications, vom Sweeper periodisch promotet
+    /// (Python `orphan_chat_raid_notifications` in `raid_state_store.py`).
+    orphans: Mutex<std::collections::HashMap<String, OrphanChatNotification>>,
 }
 
 impl RaidArrivalSinkImpl {
@@ -45,6 +79,154 @@ impl RaidArrivalSinkImpl {
             pool,
             pending,
             suppression,
+            orphans: Mutex::new(std::collections::HashMap::new()),
+        }
+    }
+
+    /// Entfernt einen wartenden Orphan, sobald das korrelierende Raid-Event
+    /// eintrifft (Python `raid_tracking_runtime.py:477-490` — nur Log).
+    fn pop_orphan(&self, to_broadcaster_id: &str, from_broadcaster_login: &str) {
+        let key = orphan_key(to_broadcaster_id, from_broadcaster_login);
+        let popped = self
+            .orphans
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .remove(&key);
+        if popped.is_some() {
+            tracing::info!(
+                from = %from_broadcaster_login,
+                to_id = %to_broadcaster_id,
+                "Pending-Raid hat frühere channel.chat.notification korreliert"
+            );
+        }
+    }
+
+    /// Promotet Orphans nach Ablauf der Grace-Period als eigenständige
+    /// Arrival-Zeilen; verwirft nicht-promotbare nach der Retention-Zeit
+    /// (Python `promote_stale_orphan_chat_raid_notifications`,
+    /// `raid_state_store.py:225-266`). Wird vom Sweeper-Task in `main.rs`
+    /// periodisch aufgerufen.
+    pub async fn promote_stale_orphans(&self) {
+        let stale: Vec<OrphanChatNotification> = {
+            let map = self
+                .orphans
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            map.values()
+                .filter(|o| o.observed_at.elapsed().as_secs() >= ORPHAN_GRACE_SECS)
+                .cloned()
+                .collect()
+        };
+
+        for orphan in stale {
+            let processed = self
+                .record_independent_orphan_arrival(
+                    &orphan.to_broadcaster_id,
+                    &orphan.to_broadcaster_login,
+                    orphan.from_broadcaster_id.as_deref(),
+                    &orphan.from_broadcaster_login,
+                    orphan.viewer_count,
+                )
+                .await;
+
+            let drop_entry = processed
+                || orphan.observed_at.elapsed().as_secs() >= ORPHAN_RETENTION_SECS;
+            if drop_entry {
+                let key =
+                    orphan_key(&orphan.to_broadcaster_id, &orphan.from_broadcaster_login);
+                self.orphans
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .remove(&key);
+                if !processed {
+                    tracing::info!(
+                        from = %orphan.from_broadcaster_login,
+                        to = %orphan.to_broadcaster_login,
+                        "Verwaiste channel.chat.notification ohne Korrelation verworfen"
+                    );
+                }
+            }
+        }
+    }
+
+    /// Schreibt einen promoteten Orphan als eigenständigen Arrival
+    /// (Python `process_independent_partner_raid_arrival` mit
+    /// `correlation_status="orphan_chat_notification"`). Gibt `true` zurück,
+    /// wenn der Eintrag verarbeitet ist (auch: Ziel kein Partner).
+    async fn record_independent_orphan_arrival(
+        &self,
+        to_broadcaster_id: &str,
+        to_broadcaster_login: &str,
+        from_broadcaster_id: Option<&str>,
+        from_broadcaster_login: &str,
+        viewer_count: i32,
+    ) -> bool {
+        let lookups = self
+            .prefetch_lookups(
+                to_broadcaster_id,
+                to_broadcaster_login,
+                from_broadcaster_id,
+                from_broadcaster_login,
+            )
+            .await;
+        let resolution = classify_partner_raid_arrival(
+            Some(from_broadcaster_login),
+            from_broadcaster_id,
+            Some(to_broadcaster_id),
+            Some(to_broadcaster_login),
+            &lookups,
+            &lookups,
+        );
+        let Some(classification) = resolution.classification else {
+            // Ziel kein Partner → wie Python processed=False; der Aufrufer
+            // verwirft den Eintrag erst nach der Retention-Zeit.
+            return false;
+        };
+        match self
+            .arrival_store
+            .record_arrival(&RecordArrivalInput {
+                from_broadcaster_id: from_broadcaster_id.map(str::to_string),
+                from_broadcaster_login: from_broadcaster_login.to_string(),
+                to_broadcaster_id: to_broadcaster_id.to_string(),
+                to_broadcaster_login: to_broadcaster_login.to_string(),
+                viewer_count,
+                classification,
+                confirmation_signals: "channel.chat.notification".to_string(),
+                primary_signal: "channel.chat.notification".to_string(),
+                correlation_status: "orphan_chat_notification".to_string(),
+                correlation_detail: Some(
+                    "channel.chat.notification arrived before pending raid registration"
+                        .to_string(),
+                ),
+                source_resolution: resolution.source_resolution,
+                raid_history_id: None,
+                raid_history_executed_at: None,
+                unraid_seen: false,
+            })
+            .await
+        {
+            Ok(_) => {
+                // Suppression wie Python (mark_manual_raid_started, 180 s) —
+                // verhindert einen Auto-Raid direkt nach dem externen Raid.
+                if let Some(from_id) =
+                    from_broadcaster_id.map(str::trim).filter(|s| !s.is_empty())
+                {
+                    self.suppression
+                        .lock()
+                        .unwrap_or_else(|poisoned| poisoned.into_inner())
+                        .mark(from_id, 180.0, None);
+                }
+                tracing::info!(
+                    from = %from_broadcaster_login,
+                    to = %to_broadcaster_login,
+                    "Orphan-Chat-Notification als eigenständiger Raid-Arrival promotet"
+                );
+                true
+            }
+            Err(error) => {
+                tracing::error!(%error, "Orphan-Promotion: Arrival-Insert fehlgeschlagen");
+                false
+            }
         }
     }
 
@@ -80,6 +262,10 @@ impl RaidArrivalSink for RaidArrivalSinkImpl {
         from_broadcaster_id: Option<&str>,
         viewer_count: i32,
     ) {
+        // 0. Frühere Orphan-Chat-Notification korrelieren (Python
+        // raid_tracking_runtime.py:477-490 — pop + Log, kein Doppel-Insert).
+        self.pop_orphan(to_broadcaster_id, from_broadcaster_login);
+
         // 1. Pending entfernen (pop) — wie Python `pop_pending_raid`.
         let pending = match self.pending.lock() {
             Ok(mut store) => store.pop(to_broadcaster_id, Some(from_broadcaster_login)),
@@ -163,7 +349,16 @@ impl RaidArrivalSink for RaidArrivalSinkImpl {
                 .await
             {
                 Ok(input) => {
-                    let _ = self.score_tracking.track_confirmed(&input).await;
+                    // Score-Effekt des bestätigten Raids — DB-Fehler dürfen
+                    // den Arrival-Pfad nicht stoppen, aber nie still bleiben.
+                    if let Err(error) = self.score_tracking.track_confirmed(&input).await {
+                        tracing::error!(
+                            %error,
+                            from = %from_broadcaster_login,
+                            to = %to_broadcaster_login,
+                            "score_tracking.track_confirmed fehlgeschlagen"
+                        );
+                    }
                 }
                 Err(error) => {
                     tracing::error!(%error, "Confirm-Resolver fehlgeschlagen");
@@ -199,32 +394,89 @@ impl RaidArrivalSink for RaidArrivalSinkImpl {
 
     async fn record_secondary_signal(
         &self,
-        _signal_type: &str,
-        _from_broadcaster_login: &str,
+        signal_type: &str,
+        from_broadcaster_login: &str,
         _from_broadcaster_id: Option<&str>,
-        _to_broadcaster_login: &str,
-        _to_broadcaster_id: &str,
+        to_broadcaster_login: &str,
+        to_broadcaster_id: &str,
         _viewer_count: i32,
-        _unraid_seen: bool,
+        unraid_seen: bool,
     ) {
-        // Sekundär-Signal (z. B. doppelte Arrival-Notification) — aktualisiert
-        // ein bestehendes Arrival-Tracking. Folgeeffekt, hier best-effort no-op
-        // bis das Arrival-Update an confirmation_signals angebunden ist.
+        // Sekundär-Signal auf einen bereits getrackten Raid: Signal-Liste der
+        // jüngsten Arrival-Zeile erweitern (Python
+        // `_handle_secondary_confirmed_signal`, raid_arrival_runtime.py:102-141;
+        // viewer_count wird dort nur im Cache, NICHT in der DB aktualisiert).
+        let recent = match self
+            .arrival_store
+            .find_recent_arrival(to_broadcaster_id, from_broadcaster_login, RECENT_ARRIVAL_TTL_SECS)
+            .await
+        {
+            Ok(r) => r,
+            Err(error) => {
+                tracing::error!(%error, "Sekundär-Signal: Arrival-Lookup fehlgeschlagen");
+                return;
+            }
+        };
+        let Some((arrival_id, existing_signals)) = recent else {
+            // Wie Python: kein jüngerer Arrival im Fenster → no-op.
+            tracing::debug!(
+                from = %from_broadcaster_login,
+                to = %to_broadcaster_login,
+                signal = %signal_type,
+                "Sekundär-Signal ohne jüngeren Arrival — ignoriert"
+            );
+            return;
+        };
+
+        let merged = serialize_confirmation_signals(
+            existing_signals.split(',').chain(std::iter::once(signal_type)),
+        );
+        if let Err(error) = self
+            .arrival_store
+            .update_arrival(arrival_id, &merged, unraid_seen)
+            .await
+        {
+            tracing::error!(%error, arrival_id, "Sekundär-Signal: Arrival-Update fehlgeschlagen");
+            return;
+        }
+        tracing::info!(
+            from = %from_broadcaster_login,
+            to = %to_broadcaster_login,
+            signal = %signal_type,
+            signals = %merged,
+            unraid_seen,
+            "Raid-Arrival-Sekundär-Signal vermerkt"
+        );
     }
 
     async fn store_orphan_chat_notification(
         &self,
-        _to_broadcaster_id: &str,
-        _to_broadcaster_login: &str,
-        _from_broadcaster_id: Option<&str>,
-        _from_broadcaster_login: &str,
-        _viewer_count: i32,
+        to_broadcaster_id: &str,
+        to_broadcaster_login: &str,
+        from_broadcaster_id: Option<&str>,
+        from_broadcaster_login: &str,
+        viewer_count: i32,
         _message_id: Option<&str>,
         _event_timestamp: Option<&str>,
     ) {
-        // Verwaiste Chat-Notification (Raid-Signal ohne Pending) — Python legt
-        // einen Orphan-Eintrag an für spätere Korrelation. Eigener Store noch
-        // nicht portiert; hier dokumentierter no-op (kein bestätigter Raid).
+        // Chat-Notification ohne Pending-Kontext: für spätere Korrelation
+        // vormerken (Python `store_orphan_chat_raid_notification`,
+        // raid_state_store.py:200-211). Kommt innerhalb der Grace-Period ein
+        // echtes Raid-Event, wird der Eintrag gepoppt; sonst promotet ihn der
+        // Sweeper nach 15 s als eigenständigen Arrival.
+        let key = orphan_key(to_broadcaster_id, from_broadcaster_login);
+        let orphan = OrphanChatNotification {
+            to_broadcaster_id: to_broadcaster_id.to_string(),
+            to_broadcaster_login: to_broadcaster_login.to_string(),
+            from_broadcaster_id: from_broadcaster_id.map(str::to_string),
+            from_broadcaster_login: from_broadcaster_login.to_string(),
+            viewer_count,
+            observed_at: std::time::Instant::now(),
+        };
+        self.orphans
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .insert(key, orphan);
     }
 
     async fn mark_manual_raid_started(&self, source_key: &str, ttl_seconds: f64) {

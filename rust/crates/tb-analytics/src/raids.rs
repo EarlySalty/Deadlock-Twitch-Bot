@@ -22,7 +22,9 @@ pub struct RaidRow {
     pub executed_at: Option<String>,
 }
 
-/// Lädt die letzten 20 Raids.
+/// Lädt die letzten 10 erfolgreichen Raids (Python `_load_recent_raids_sync`,
+/// `api_public.py:142-158`: `WHERE success = TRUE … LIMIT 10` — ohne den
+/// Filter erschienen auch fehlgeschlagene Raids in der öffentlichen Liste).
 pub async fn recent_raids(pool: &PgPool) -> Result<Vec<RaidRow>, sqlx::Error> {
     sqlx::query_as(
         r#"
@@ -32,8 +34,9 @@ pub async fn recent_raids(pool: &PgPool) -> Result<Vec<RaidRow>, sqlx::Error> {
             viewer_count            AS viewers,
             executed_at::text       AS executed_at
         FROM twitch_raid_history
+        WHERE success = TRUE
         ORDER BY executed_at DESC
-        LIMIT 20
+        LIMIT 10
         "#,
     )
     .fetch_all(pool)
@@ -56,7 +59,13 @@ mod tests {
             .connect(dsn)
             .await
             .expect("connect test-db");
-        sqlx::query(&format!("CREATE SCHEMA IF NOT EXISTS {schema}"))
+        // Frisches Schema je Lauf — IF-NOT-EXISTS würde alte Tabellen ohne
+        // neue Spalten verschleppen (Test-Hermetik-Lektion aus #133).
+        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
+            .execute(&pool)
+            .await
+            .expect("Schema droppen fehlgeschlagen");
+        sqlx::query(&format!("CREATE SCHEMA {schema}"))
             .execute(&pool)
             .await
             .expect("Schema anlegen fehlgeschlagen");
@@ -71,7 +80,8 @@ mod tests {
                 from_broadcaster_login TEXT NOT NULL,
                 to_broadcaster_login   TEXT NOT NULL,
                 viewer_count           INTEGER DEFAULT 0,
-                executed_at            TIMESTAMPTZ
+                executed_at            TIMESTAMPTZ,
+                success                BOOLEAN DEFAULT TRUE
             )
             "#,
         )
@@ -118,10 +128,11 @@ mod tests {
         sqlx::query(
             r#"
             INSERT INTO twitch_raid_history
-                (from_broadcaster_login, to_broadcaster_login, viewer_count, executed_at)
+                (from_broadcaster_login, to_broadcaster_login, viewer_count, executed_at, success)
             VALUES
-                ('kanal_a', 'kanal_b', 150, NOW() - INTERVAL '2 hours'),
-                ('kanal_b', 'kanal_c', 80,  NOW() - INTERVAL '1 hour')
+                ('kanal_a', 'kanal_b', 150, NOW() - INTERVAL '2 hours', TRUE),
+                ('kanal_b', 'kanal_c', 80,  NOW() - INTERVAL '1 hour', TRUE),
+                ('kanal_x', 'kanal_y', 999, NOW(),                     FALSE)
             "#,
         )
         .execute(&pool)
@@ -129,7 +140,9 @@ mod tests {
         .unwrap();
 
         let rows = recent_raids(&pool).await.unwrap();
+        // Der success=FALSE-Raid (kanal_x) ist gefiltert (Python-Parität).
         assert_eq!(rows.len(), 2);
+        assert!(rows.iter().all(|r| r.from_channel != "kanal_x"));
         // Neuester zuerst (kanal_b→kanal_c, 1h alt)
         assert_eq!(rows[0].from_channel, "kanal_b");
         assert_eq!(rows[0].to_channel, "kanal_c");

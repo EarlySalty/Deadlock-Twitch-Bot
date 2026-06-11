@@ -107,7 +107,8 @@ mod tests {
                 from_broadcaster_login TEXT NOT NULL,
                 to_broadcaster_login   TEXT NOT NULL,
                 viewer_count           INTEGER DEFAULT 0,
-                executed_at            TIMESTAMPTZ
+                executed_at            TIMESTAMPTZ,
+                success                BOOLEAN DEFAULT TRUE
             )
             "#,
         )
@@ -148,8 +149,9 @@ mod tests {
 
         sqlx::query(
             "INSERT INTO twitch_raid_history \
-             (from_broadcaster_login, to_broadcaster_login, viewer_count, executed_at) \
-             VALUES ('von', 'nach', 200, NOW())",
+             (from_broadcaster_login, to_broadcaster_login, viewer_count, executed_at, success) \
+             VALUES ('von', 'nach', 200, NOW(), TRUE), \
+                    ('fail_von', 'fail_nach', 5, NOW(), FALSE)",
         )
         .execute(&pool)
         .await

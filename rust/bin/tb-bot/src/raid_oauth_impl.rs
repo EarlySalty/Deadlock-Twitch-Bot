@@ -59,6 +59,7 @@ use tb_internal_api::handlers::raid_oauth::{
 use tb_raid::{
     auth_writer::AuthWriter,
     oauth_flow::{build_authorize_url, build_state_info, StreamerContextResolver},
+    scope_profiles::scopes_for_profile,
     state_store::StateStore,
     token_refresher::TwitchTokenClient,
 };
@@ -557,11 +558,14 @@ pub struct TbRaidOAuthImpl {
     /// Noch ungenutzt: `oauth_callback` ist am Persist-Schritt Stub (kein
     /// Helix-User-Lookup) und deshalb NICHT im Router verdrahtet — der
     /// Writer steht für die Vervollständigung bereit.
-    #[allow(dead_code)]
     auth_writer: AuthWriter,
     token_client: Arc<dyn TwitchTokenClient>,
     client_id: String,
     redirect_uri: String,
+    /// Ziel-URL nach erfolgreicher Autorisierung (Python:
+    /// `TWITCH_RAID_SUCCESS_REDIRECT_URL` mit Hardcode-Default,
+    /// `mixin.py:634-637` + `oauth_callback.py:15`).
+    success_redirect_url: String,
     /// Kommagetrennte Guild-IDs (Env: TWITCH_INTERNAL_API_ALLOWED_GUILD_IDS).
     allowed_guild_ids: Option<HashSet<i64>>,
     /// Kommagetrennte Channel-IDs.
@@ -598,6 +602,13 @@ impl TbRaidOAuthImpl {
         );
         let allowed_role_ids =
             parse_allowlist(std::env::var("TWITCH_INTERNAL_API_ALLOWED_ROLE_IDS").ok().as_deref());
+        let success_redirect_url = std::env::var("TWITCH_RAID_SUCCESS_REDIRECT_URL")
+            .ok()
+            .map(|v| v.trim().to_string())
+            .filter(|v| !v.is_empty())
+            .unwrap_or_else(|| {
+                "https://deutsche-deadlock-community.de/twitch/dashboard".to_string()
+            });
         Self {
             pool,
             state_store,
@@ -605,6 +616,7 @@ impl TbRaidOAuthImpl {
             token_client,
             client_id,
             redirect_uri,
+            success_redirect_url,
             allowed_guild_ids,
             allowed_channel_ids,
             allowed_role_ids,
@@ -778,35 +790,35 @@ impl RaidOAuthPort for TbRaidOAuthImpl {
         let state_str = state.trim().to_string();
         let error_str = error.trim().to_string();
 
-        // 1. Fehler-Parameter → 400.
+        // 1. Fehler-Parameter → 400 (Python `oauth_callback.py:61-84`).
         if !error_str.is_empty() {
             let body = if error_str == "redirect_mismatch" {
+                let expected_html = if self.redirect_uri.trim().is_empty() {
+                    String::new()
+                } else {
+                    format!("<p><code>{}</code></p>", html_escape(&self.redirect_uri))
+                };
                 format!(
                     "<p>Twitch hat die Redirect-URI abgelehnt (redirect_mismatch).</p>\
                      <p>Bitte trage diese URL exakt in der Twitch Application unter \
-                     <strong>OAuth Redirect URLs</strong> ein: \
-                     <code>{}</code></p>",
-                    html_escape(&self.redirect_uri)
+                     <strong>OAuth Redirect URLs</strong> ein und starte die Autorisierung neu:</p>\
+                     {expected_html}"
                 )
             } else {
                 "<p>OAuth-Fehler beim Autorisieren.</p>\
                  <p>Bitte die Autorisierung erneut starten.</p>"
                     .to_string()
             };
-            return Ok(OAuthCallbackResult {
-                status: 400,
-                title: "Autorisierung fehlgeschlagen".to_string(),
-                body_html: body,
-            });
+            return Ok(failure(400, "Autorisierung fehlgeschlagen", body));
         }
 
         // 2. Fehlende code/state → 400.
         if code.is_empty() || state_str.is_empty() {
-            return Ok(OAuthCallbackResult {
-                status: 400,
-                title: "Ungültige Anfrage".to_string(),
-                body_html: "<p>Fehlender OAuth Code oder State.</p>".to_string(),
-            });
+            return Ok(failure(
+                400,
+                "Ungültige Anfrage",
+                "<p>Fehlender OAuth Code oder State.</p>".to_string(),
+            ));
         }
 
         // 3. State konsumieren (single-use).
@@ -819,54 +831,257 @@ impl RaidOAuthPort for TbRaidOAuthImpl {
                 RaidOAuthError::Internal
             })?;
         let Some(state_info) = state_info else {
-            return Ok(OAuthCallbackResult {
-                status: 400,
-                title: "Ungültiger State".to_string(),
-                body_html: "<p>Der OAuth-State ist ungültig oder abgelaufen. \
-                            Bitte den Link neu erzeugen.</p>"
+            return Ok(failure(
+                400,
+                "Ungültiger State",
+                "<p>Der OAuth-State ist ungültig oder abgelaufen. \
+                 Bitte den Link neu erzeugen.</p>"
                     .to_string(),
-            });
+            ));
         };
+        let requested_login = state_info.requested_login.trim().to_lowercase();
 
-        // 4. Code gegen Twitch austauschen.
+        // 4. Code gegen Twitch tauschen. Python fängt JEDEN Fehler ab hier im
+        // äußeren except und antwortet mit der generischen 500-Failure-Payload
+        // der internen API (`mixin.py:646-649`) — keine differenzierten Texte.
         let token_response = match self.token_client.exchange_code(&code).await {
             Ok(r) => r,
             Err(e) => {
                 tracing::error!(
-                    login = %state_info.requested_login,
+                    login = %requested_login,
                     "oauth_callback: exchange_code fehlgeschlagen: {e:?}"
                 );
-                return Ok(OAuthCallbackResult {
-                    status: 500,
-                    title: "Autorisierung fehlgeschlagen".to_string(),
-                    body_html: "<p>Token-Austausch mit Twitch fehlgeschlagen. \
-                                Bitte erneut versuchen.</p>"
-                        .to_string(),
-                });
+                return Ok(generic_failure());
             }
         };
+        if token_response.access_token.trim().is_empty()
+            || token_response.refresh_token.trim().is_empty()
+        {
+            tracing::error!(
+                login = %requested_login,
+                "oauth_callback: Twitch-Antwort ohne access/refresh_token"
+            );
+            return Ok(generic_failure());
+        }
 
-        // 5. open_risk: Helix-User-Lookup fehlt.
-        // TwitchTokenClient gibt kein User-Object zurück. Ohne User-ID und Login
-        // können wir keine Scope-Validierung + kein AuthWriter::store_new_auth
-        // durchführen. Daher: 503 mit erklärendem HTML.
-        //
-        // Für die vollständige Implementierung muss hier ein Helix-/users-Call
-        // mit dem fresh token_response.access_token folgen.
-        let _ = token_response; // access_token + scopes vorhanden, aber User-ID fehlt.
+        // 5. Token-Inhaber ermitteln (Python: GET /helix/users mit dem
+        // frischen Bearer, `oauth_callback.py:126-146`).
+        let owner = match self
+            .token_client
+            .token_owner(&token_response.access_token)
+            .await
+        {
+            Ok(o) => o,
+            Err(e) => {
+                tracing::error!(
+                    login = %requested_login,
+                    "oauth_callback: Token-Owner-Lookup fehlgeschlagen: {e:?}"
+                );
+                return Ok(generic_failure());
+            }
+        };
+        let twitch_user_id = owner.twitch_user_id.trim().to_string();
+        let twitch_login = owner.twitch_login.trim().to_lowercase();
+        if twitch_user_id.is_empty() || twitch_login.is_empty() {
+            tracing::error!(login = %requested_login, "oauth_callback: leere User-Identität");
+            return Ok(generic_failure());
+        }
 
-        tracing::warn!(
-            login = %state_info.requested_login,
-            "oauth_callback: Helix-User-Lookup nicht implementiert \
-             (open_risk: TwitchTokenClient braucht exchange_code_with_user_info)"
-        );
+        // 6. Account-Mismatch-Checks (`oauth_callback.py:148-187`):
+        // User-ID-Erwartung gewinnt; Login-Erwartung greift nur ohne ID —
+        // abgeleitet aus requested_login, außer bei den synthetischen
+        // Onboarding-Logins (`discord:<id>`, public:website_onboarding).
+        let expected_user_id = state_info
+            .expected_twitch_user_id
+            .as_deref()
+            .unwrap_or("")
+            .trim()
+            .to_string();
+        if !expected_user_id.is_empty() && twitch_user_id != expected_user_id {
+            tracing::warn!(
+                expected = %expected_user_id,
+                actual = %twitch_user_id,
+                state_login = %requested_login,
+                "oauth_callback: User-ID-Mismatch"
+            );
+            return Ok(wrong_account_failure());
+        }
+        let mut expected_login = state_info
+            .expected_twitch_login
+            .as_deref()
+            .unwrap_or("")
+            .trim()
+            .to_lowercase();
+        if expected_login.is_empty()
+            && !requested_login.is_empty()
+            && !requested_login.starts_with("discord:")
+            && requested_login != PUBLIC_ONBOARDING_LOGIN
+        {
+            expected_login = requested_login.clone();
+        }
+        if expected_user_id.is_empty() && !expected_login.is_empty() && twitch_login != expected_login
+        {
+            tracing::warn!(
+                expected = %expected_login,
+                actual = %twitch_login,
+                "oauth_callback: Login-Mismatch"
+            );
+            return Ok(wrong_account_failure());
+        }
+
+        // 7. Scope-Check (`oauth_callback.py:189-206`): gewährte Scopes dürfen
+        // das Profil nicht ÜBERSCHREITEN. (Der AuthWriter prüft beim Persist
+        // zusätzlich auf exakte Gleichheit — strenger als Python bei
+        // theoretisch fehlenden Scopes, was Twitch praktisch nie liefert.)
+        let granted: Vec<String> = token_response
+            .scopes
+            .iter()
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .collect();
+        let allowed: std::collections::BTreeSet<&str> =
+            scopes_for_profile(&state_info.scope_profile).iter().copied().collect();
+        let unexpected: Vec<&str> = granted
+            .iter()
+            .map(String::as_str)
+            .filter(|s| !allowed.contains(s))
+            .collect();
+        if !unexpected.is_empty() {
+            tracing::warn!(
+                login = %twitch_login,
+                scopes = %unexpected.join(", "),
+                "oauth_callback: Scopes außerhalb des Profils"
+            );
+            return Ok(invalid_scopes_failure());
+        }
+
+        // 8. Erst-Auth erkennen (nur Observability — die Followups laufen noch
+        // nicht nativ, s. unten).
+        let had_existing_auth = self.has_saved_auth_record(&twitch_user_id, &twitch_login).await;
+
+        // 9. Tokens verschlüsselt persistieren (Python `save_auth`).
+        let new_auth = tb_raid::auth_writer::NewAuth {
+            twitch_user_id: twitch_user_id.clone(),
+            twitch_login: twitch_login.clone(),
+            access_token: token_response.access_token.clone(),
+            refresh_token: token_response.refresh_token.clone(),
+            expires_in: token_response.expires_in.max(1),
+            granted_scopes: granted,
+            resolved_scope_profile: state_info.scope_profile.clone(),
+            activate_raid_features: true,
+        };
+        if let Err(e) = self.auth_writer.store_new_auth(&new_auth, Utc::now()).await {
+            use tb_raid::auth_writer::AuthWriteError;
+            return Ok(match e {
+                AuthWriteError::ScopeMismatch { profile } => {
+                    tracing::warn!(
+                        login = %twitch_login,
+                        %profile,
+                        "oauth_callback: Scope-Profil-Mismatch beim Persist"
+                    );
+                    invalid_scopes_failure()
+                }
+                other => {
+                    tracing::error!(
+                        login = %twitch_login,
+                        "oauth_callback: store_new_auth fehlgeschlagen: {other:?}"
+                    );
+                    generic_failure()
+                }
+            });
+        }
+
+        // 10. Followups: Python startet hier complete_setup (Erst-Auth:
+        // Moderator-Einsetzung mit dem Streamer-Token, Chat-Begrüßung,
+        // EventSub-Sofort-Subscription, Trial-Timer) bzw. sync_partner_state
+        // als Background-Tasks. Diese laufen NOCH NICHT nativ — deshalb ist
+        // die Route bewusst nicht im Router registriert und der echte Flow
+        // (Dashboard 8765 → in-process) bleibt unverändert. Beim Flip müssen
+        // die Followups portiert oder delegiert sein.
+        if !had_existing_auth {
+            tracing::warn!(
+                login = %twitch_login,
+                "oauth_callback: Erst-Auth gespeichert, complete_setup-Followup ist NICHT nativ \
+                 (Moderator-Setup/Chat-Begrüßung/EventSub-Sofort-Sub entfallen auf diesem Pfad)"
+            );
+        }
+
+        tracing::info!(login = %twitch_login, "Raid auth successful");
         Ok(OAuthCallbackResult {
-            status: 503,
-            title: "Raid-Bot nicht vollständig verfügbar".to_string(),
-            body_html: "<p>Der OAuth-Callback-Flow ist noch nicht vollständig nativ portiert.</p>\
-                        <p>Bitte die Autorisierung über den Python-Endpunkt durchführen.</p>"
+            status: 200,
+            title: "Autorisierung erfolgreich".to_string(),
+            body_html: "<p>Der Raid-Bot wurde erfolgreich autorisiert.</p>\
+                        <p>Du kannst dieses Fenster jetzt schließen.</p>"
                 .to_string(),
+            redirect_url: Some(self.success_redirect_url.clone()),
         })
+    }
+}
+
+/// Synthetischer Onboarding-Login (Python `PUBLIC_STREAMER_ONBOARDING_LOGIN`).
+const PUBLIC_ONBOARDING_LOGIN: &str = "public:website_onboarding";
+
+/// Fehler-Payload ohne redirect_url (Python `_oauth_error_payload`).
+fn failure(status: u16, title: &str, body_html: String) -> OAuthCallbackResult {
+    OAuthCallbackResult {
+        status,
+        title: title.to_string(),
+        body_html,
+        redirect_url: None,
+    }
+}
+
+/// Generische 500-Payload der internen API — Python fängt alle Fehler nach
+/// dem State-Consume im äußeren `except` und antwortet mit den
+/// `failure_title`/`failure_body_html`-Texten aus `mixin.py:646-649`.
+fn generic_failure() -> OAuthCallbackResult {
+    failure(
+        500,
+        "Autorisierung fehlgeschlagen",
+        "<p>Autorisierung fehlgeschlagen.</p>\
+         <p>Bitte erneut versuchen oder Admin kontaktieren.</p>"
+            .to_string(),
+    )
+}
+
+/// 403-Payload bei Account-Mismatch (`oauth_callback.py:180-187`).
+fn wrong_account_failure() -> OAuthCallbackResult {
+    failure(
+        403,
+        "Falscher Twitch-Account",
+        "<p>Die Autorisierung wurde mit dem falschen Twitch-Account abgeschlossen.</p>\
+         <p>Bitte den Link erneut öffnen und dich mit dem vorgesehenen Kanal anmelden.</p>"
+            .to_string(),
+    )
+}
+
+/// 400-Payload bei Scopes außerhalb des Profils (`oauth_callback.py:198-206`).
+fn invalid_scopes_failure() -> OAuthCallbackResult {
+    failure(
+        400,
+        "Ungültige Berechtigungen",
+        "<p>Die Autorisierung wurde mit unerwarteten Berechtigungen abgeschlossen.</p>\
+         <p>Bitte den Vorgang neu starten.</p>"
+            .to_string(),
+    )
+}
+
+impl TbRaidOAuthImpl {
+    /// Existiert bereits ein Auth-Eintrag für User-ID oder Login?
+    /// (Python `has_saved_auth_record` — nur Observability/Followup-Routing.)
+    async fn has_saved_auth_record(&self, twitch_user_id: &str, twitch_login: &str) -> bool {
+        let row: Result<Option<i32>, _> = sqlx::query_scalar(
+            r#"
+            SELECT 1 FROM twitch_raid_auth
+            WHERE twitch_user_id = $1 OR LOWER(COALESCE(twitch_login, '')) = LOWER($2)
+            LIMIT 1
+            "#,
+        )
+        .bind(twitch_user_id)
+        .bind(twitch_login)
+        .fetch_optional(&self.pool)
+        .await;
+        matches!(row, Ok(Some(_)))
     }
 }
 
@@ -1077,7 +1292,7 @@ mod db_tests {
                 authorized_at       TIMESTAMPTZ,
                 raid_enabled        BOOLEAN DEFAULT FALSE,
                 needs_reauth        BOOLEAN DEFAULT FALSE,
-                reauth_notified_at  TEXT
+                reauth_notified_at  TIMESTAMPTZ
             )
             "#,
         )
@@ -1400,5 +1615,308 @@ mod db_tests {
             .expect("resolve");
         assert!(result.raid_blacklisted, "raid_blacklisted sollte true sein");
         assert!(result.blocked, "sollte geblockt sein");
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Callback-Flow-Tests (DB + Stub-TokenClient — kein echtes Twitch)
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod callback_tests {
+    use super::*;
+    use std::sync::Mutex;
+    use tb_crypto::{FieldCipher, KID};
+    use tb_raid::token_refresher::{RefreshError, TokenOwnerInfo, TokenResponse};
+    use tb_raid::RaidOAuthState;
+
+    const TEST_KEY_HEX: &str = "0f0e0d0c0b0a09080706050403020100ffeeddccbbaa99887766554433221100";
+
+    fn test_dsn() -> Option<String> {
+        std::env::var("TB_TEST_DATABASE_URL").ok()
+    }
+
+    macro_rules! db_dsn_or_skip {
+        () => {
+            match test_dsn() {
+                Some(d) => d,
+                None => {
+                    if std::env::var("TB_TEST_REQUIRE_DB").as_deref() == Ok("1") {
+                        panic!("TB_TEST_REQUIRE_DB=1 gesetzt, aber TB_TEST_DATABASE_URL fehlt");
+                    }
+                    eprintln!("SKIP: TB_TEST_DATABASE_URL nicht gesetzt");
+                    return;
+                }
+            }
+        };
+    }
+
+    async fn make_pool(dsn: &str, schema: &str) -> PgPool {
+        let pool = sqlx::postgres::PgPoolOptions::new()
+            .max_connections(1)
+            .connect(dsn)
+            .await
+            .expect("connect");
+        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query(&format!("CREATE SCHEMA {schema}"))
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query(&format!("SET search_path TO {schema}"))
+            .execute(&pool)
+            .await
+            .unwrap();
+        // Prod-treue Typen (TIMESTAMPTZ/BOOLEAN wie twitch_analytics).
+        sqlx::query(
+            r#"
+            CREATE TABLE twitch_raid_auth (
+                twitch_user_id      TEXT PRIMARY KEY,
+                twitch_login        TEXT,
+                access_token        TEXT,
+                refresh_token       TEXT,
+                access_token_enc    BYTEA,
+                refresh_token_enc   BYTEA,
+                enc_version         INTEGER,
+                enc_kid             TEXT,
+                token_expires_at    TIMESTAMPTZ,
+                scopes              TEXT,
+                authorized_at       TIMESTAMPTZ,
+                last_refreshed_at   TIMESTAMPTZ,
+                raid_enabled        BOOLEAN DEFAULT FALSE,
+                needs_reauth        BOOLEAN DEFAULT FALSE,
+                created_at          TIMESTAMPTZ,
+                reauth_notified_at  TIMESTAMPTZ
+            )
+            "#,
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            r#"
+            CREATE TABLE oauth_state_tokens (
+                state_token     TEXT PRIMARY KEY,
+                platform        TEXT,
+                streamer_login  TEXT,
+                redirect_uri    TEXT,
+                pkce_verifier   TEXT,
+                expires_at      TIMESTAMPTZ
+            )
+            "#,
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        pool
+    }
+
+    /// Konfigurierbarer Token-Client: liefert vorgegebene Tokens/Owner oder Fehler.
+    struct StubTokenClient {
+        exchange: Mutex<Option<Result<TokenResponse, RefreshError>>>,
+        owner: Mutex<Option<Result<TokenOwnerInfo, RefreshError>>>,
+    }
+
+    impl StubTokenClient {
+        fn ok(scopes: &[&str], owner_id: &str, owner_login: &str) -> Self {
+            Self {
+                exchange: Mutex::new(Some(Ok(TokenResponse {
+                    access_token: "frisch-acc".to_string(),
+                    refresh_token: "frisch-ref".to_string(),
+                    expires_in: 14000,
+                    scopes: scopes.iter().map(|s| s.to_string()).collect(),
+                }))),
+                owner: Mutex::new(Some(Ok(TokenOwnerInfo {
+                    twitch_user_id: owner_id.to_string(),
+                    twitch_login: owner_login.to_string(),
+                }))),
+            }
+        }
+
+        fn exchange_fails() -> Self {
+            Self {
+                exchange: Mutex::new(Some(Err(RefreshError::Other("kaputt".into())))),
+                owner: Mutex::new(None),
+            }
+        }
+    }
+
+    #[async_trait]
+    impl TwitchTokenClient for StubTokenClient {
+        async fn refresh(&self, _t: &str) -> Result<TokenResponse, RefreshError> {
+            unreachable!("refresh im Callback-Test ungenutzt")
+        }
+        async fn exchange_code(&self, _c: &str) -> Result<TokenResponse, RefreshError> {
+            self.exchange.lock().unwrap().take().expect("exchange einmal")
+        }
+        async fn token_owner(&self, _a: &str) -> Result<TokenOwnerInfo, RefreshError> {
+            self.owner.lock().unwrap().take().expect("owner einmal")
+        }
+    }
+
+    async fn make_impl(pool: &PgPool, stub: StubTokenClient) -> TbRaidOAuthImpl {
+        let cipher = Arc::new(FieldCipher::from_hex_key(TEST_KEY_HEX, KID).unwrap());
+        TbRaidOAuthImpl::new(
+            pool.clone(),
+            StateStore::new(pool.clone(), "https://example.test/callback"),
+            AuthWriter::new(pool.clone(), cipher),
+            Arc::new(stub),
+            "cid".to_string(),
+            "https://example.test/callback".to_string(),
+        )
+    }
+
+    /// Persistiert einen State und gibt den Token zurück.
+    async fn seed_state(
+        pool: &PgPool,
+        requested_login: &str,
+        expected_login: Option<&str>,
+        expected_user_id: Option<&str>,
+    ) -> String {
+        let store = StateStore::new(pool.clone(), "https://example.test/callback");
+        let token = format!("state-{requested_login}");
+        let state = RaidOAuthState {
+            requested_login: requested_login.to_string(),
+            scope_profile: "raid".to_string(),
+            expected_twitch_login: expected_login.map(str::to_string),
+            expected_twitch_user_id: expected_user_id.map(str::to_string),
+            discord_user_id: None,
+        };
+        store.persist(&token, &state, Utc::now()).await.expect("persist");
+        token
+    }
+
+    fn raid_scopes() -> Vec<&'static str> {
+        scopes_for_profile("raid").to_vec()
+    }
+
+    #[tokio::test]
+    async fn erfolg_speichert_verschluesselte_tokens_und_liefert_redirect() {
+        let dsn = db_dsn_or_skip!();
+        let pool = make_pool(&dsn, "test_cb_ok").await;
+        let state = seed_state(&pool, "dragscope", None, None).await;
+        let imp = make_impl(&pool, StubTokenClient::ok(&raid_scopes(), "111", "dragscope")).await;
+
+        let result = imp.oauth_callback("code-1", &state, "").await.expect("callback");
+        assert_eq!(result.status, 200, "body: {}", result.body_html);
+        assert_eq!(result.title, "Autorisierung erfolgreich");
+        assert!(result.redirect_url.is_some(), "Erfolg braucht redirect_url");
+
+        // Tokens liegen verschlüsselt in twitch_raid_auth.
+        let row: (Option<Vec<u8>>, Option<String>, Option<bool>) = sqlx::query_as(
+            "SELECT access_token_enc, twitch_login, raid_enabled FROM twitch_raid_auth WHERE twitch_user_id = '111'",
+        )
+        .fetch_one(&pool)
+        .await
+        .expect("auth row");
+        assert!(row.0.is_some(), "access_token_enc muss gesetzt sein");
+        assert_eq!(row.1.as_deref(), Some("dragscope"));
+        assert_eq!(row.2, Some(true), "activate_raid_features");
+
+        // State ist konsumiert (Single-Use).
+        let leftover: Option<(String,)> =
+            sqlx::query_as("SELECT state_token FROM oauth_state_tokens WHERE state_token = $1")
+                .bind(&state)
+                .fetch_optional(&pool)
+                .await
+                .unwrap();
+        assert!(leftover.is_none(), "State muss konsumiert sein");
+    }
+
+    #[tokio::test]
+    async fn user_id_mismatch_gibt_403_und_speichert_nichts() {
+        let dsn = db_dsn_or_skip!();
+        let pool = make_pool(&dsn, "test_cb_uid_mismatch").await;
+        let state = seed_state(&pool, "dragscope", None, Some("999")).await;
+        let imp = make_impl(&pool, StubTokenClient::ok(&raid_scopes(), "111", "dragscope")).await;
+
+        let result = imp.oauth_callback("code-1", &state, "").await.expect("callback");
+        assert_eq!(result.status, 403);
+        assert_eq!(result.title, "Falscher Twitch-Account");
+        assert!(result.redirect_url.is_none());
+
+        let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM twitch_raid_auth")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(count, 0, "bei Mismatch darf nichts gespeichert werden");
+    }
+
+    #[tokio::test]
+    async fn login_mismatch_ohne_user_id_erwartung_gibt_403() {
+        let dsn = db_dsn_or_skip!();
+        let pool = make_pool(&dsn, "test_cb_login_mismatch").await;
+        // requested_login wird zur Login-Erwartung (kein discord:/public:-Präfix).
+        let state = seed_state(&pool, "erwarteter_kanal", None, None).await;
+        let imp = make_impl(&pool, StubTokenClient::ok(&raid_scopes(), "111", "anderer_kanal")).await;
+
+        let result = imp.oauth_callback("code-1", &state, "").await.expect("callback");
+        assert_eq!(result.status, 403);
+        assert_eq!(result.title, "Falscher Twitch-Account");
+    }
+
+    #[tokio::test]
+    async fn discord_login_erzeugt_keine_login_erwartung() {
+        let dsn = db_dsn_or_skip!();
+        let pool = make_pool(&dsn, "test_cb_discord_login").await;
+        // Synthetischer Onboarding-Login → kein Mismatch trotz fremdem Kanal.
+        let state = seed_state(&pool, "discord:42", None, None).await;
+        let imp = make_impl(&pool, StubTokenClient::ok(&raid_scopes(), "111", "irgendein_kanal")).await;
+
+        let result = imp.oauth_callback("code-1", &state, "").await.expect("callback");
+        assert_eq!(result.status, 200, "body: {}", result.body_html);
+    }
+
+    #[tokio::test]
+    async fn unerwartete_scopes_geben_400_und_speichern_nichts() {
+        let dsn = db_dsn_or_skip!();
+        let pool = make_pool(&dsn, "test_cb_scopes").await;
+        let state = seed_state(&pool, "dragscope", None, None).await;
+        let mut scopes = raid_scopes();
+        scopes.push("channel:manage:broadcast"); // außerhalb des Profils
+        let imp = make_impl(&pool, StubTokenClient::ok(&scopes, "111", "dragscope")).await;
+
+        let result = imp.oauth_callback("code-1", &state, "").await.expect("callback");
+        assert_eq!(result.status, 400);
+        assert_eq!(result.title, "Ungültige Berechtigungen");
+
+        let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM twitch_raid_auth")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(count, 0);
+    }
+
+    #[tokio::test]
+    async fn exchange_fehler_gibt_generische_500_payload() {
+        let dsn = db_dsn_or_skip!();
+        let pool = make_pool(&dsn, "test_cb_exchange_fail").await;
+        let state = seed_state(&pool, "dragscope", None, None).await;
+        let imp = make_impl(&pool, StubTokenClient::exchange_fails()).await;
+
+        let result = imp.oauth_callback("code-1", &state, "").await.expect("callback");
+        // Python: äußerer except → failure_title/body der internen API.
+        assert_eq!(result.status, 500);
+        assert_eq!(result.title, "Autorisierung fehlgeschlagen");
+        assert!(result.body_html.contains("Admin kontaktieren"));
+    }
+
+    #[tokio::test]
+    async fn ungueltiger_state_gibt_400_ohne_token_calls() {
+        let dsn = db_dsn_or_skip!();
+        let pool = make_pool(&dsn, "test_cb_bad_state").await;
+        // Stub würde bei Aufruf panicen (None) — beweist, dass vor dem
+        // State-Check kein Twitch-Call passiert.
+        let imp = make_impl(
+            &pool,
+            StubTokenClient { exchange: Mutex::new(None), owner: Mutex::new(None) },
+        )
+        .await;
+
+        let result = imp.oauth_callback("code-1", "unbekannt", "").await.expect("callback");
+        assert_eq!(result.status, 400);
+        assert_eq!(result.title, "Ungültiger State");
     }
 }
