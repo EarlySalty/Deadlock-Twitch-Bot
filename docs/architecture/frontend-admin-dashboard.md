@@ -50,7 +50,7 @@ Abgrenzung: Im Gegensatz zum [Streamer-Dashboard](frontend-streamer-dashboard.md
 ### pages/ (nach Bereich)
 - `streamers/` — `StreamerList`, `StreamerDetail` (712 Z., das zentrale Streamer-Verwaltungs-Panel).
 - `billing/` — `Affiliates`, `AffiliateDetailPanel`, `Gutschriften`, `Subscriptions`.
-- `community/` — `ChatActionsPage`, `EngagementPage`, `RaidsActivityPage`, `MarketSharePage` (`/community/market`, Markt-Dominanz: Viewer-Anteil des Partner-Netzwerks an der Deadlock-Kategorie via `GET /twitch/api/v2/market-share`, Scope-Toggle global/deutschsprachig + Zeitraum 1–90 Tage).
+- `community/` — `ChatActionsPage`, `EngagementPage`, `RaidsActivityPage`, `MarketSharePage` (`/community/market`, Markt-Dominanz: Viewer-Anteil des Partner-Netzwerks an der Deadlock-Kategorie via `GET /twitch/api/v2/market-share`, Scope-Toggle deutschsprachig/global + Zeitraum 1–365 Tage; DE-Markt = Deutsch-Tag oder Partner, Alt-Daten vor 10.06.2026 zählen im DE-Scope ungefiltert).
 - `config/` — `BotConfig`, `ChatConfig`, `RaidConfig`.
 - `content/` — `AnnouncementsPage`, `ChangelogPage`, `LegalPage`, `RoadmapPage`.
 - `monitoring/` — `SystemOverview`, `EventSubStatusPage`, `DatabaseQueryPage` (read-only DB-Konsole), `DatabaseStats`, `ErrorLogs`.

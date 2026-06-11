@@ -29,6 +29,11 @@ pub struct MarketShareBucketRow {
 /// Durchschnitt der Per-Tick-Summen im Bucket, unabhängig davon wie viele
 /// Poll-Ticks in den Bucket fallen. Bucketing über epoch-floor statt
 /// `time_bucket`, damit die Query auch ohne TimescaleDB läuft (Tests).
+///
+/// `german_only`-Markt-Definition: Deutsch-Tag ODER Partner (Partner gehören
+/// immer zum DE-Markt, auch ohne gesetzten Tag). Zeilen vor dem Kategorie-
+/// Poll-Cutover (10.06.2026) zählen ungefiltert — die Erhebung selbst war
+/// bis dahin bereits sprachgefiltert (de).
 pub async fn market_share_series(
     pool: &PgPool,
     since: DateTime<Utc>,
@@ -49,7 +54,10 @@ pub async fn market_share_series(
                 / NULLIF(COUNT(DISTINCT ts_utc), 0)                   AS total_streams
         FROM twitch_stats_category
         WHERE ts_utc >= $2
-          AND ($3::BOOL IS FALSE OR tags ILIKE '%deutsch%' OR tags ILIKE '%german%')
+          AND ($3::BOOL IS FALSE
+               OR ts_utc < '2026-06-10T00:00:00+00'
+               OR is_partner
+               OR tags ILIKE '%deutsch%' OR tags ILIKE '%german%')
         GROUP BY bucket
         ORDER BY bucket
         "#,
@@ -202,6 +210,38 @@ mod tests {
         assert!((row.total_viewers.unwrap() - 100.0).abs() < 1e-9);
         assert!((row.partner_streams.unwrap() - 1.0).abs() < 1e-9);
         assert!((row.total_streams.unwrap() - 2.0).abs() < 1e-9);
+    }
+
+    #[tokio::test]
+    async fn series_german_zaehlt_altdaten_und_partner_ohne_tag() {
+        let dsn = db_dsn_or_skip!();
+        let pool = make_pool(&dsn, "test_market_altdaten").await;
+
+        // Vor dem Cutover (10.06.2026): Erhebung war bereits DE-gefiltert →
+        // zählt im german-Scope auch ohne Deutsch-Tag.
+        let alt = Utc.with_ymd_and_hms(2026, 5, 1, 12, 0, 0).unwrap();
+        seed(&pool, alt, &[("alt_de", 30, false, r#"["deadlock"]"#)]).await;
+
+        // Nach dem Cutover: Partner zählt auch ohne Deutsch-Tag zum DE-Markt,
+        // ungetaggter Nicht-Partner nicht.
+        let neu = Utc.with_ymd_and_hms(2026, 6, 11, 12, 0, 0).unwrap();
+        seed(
+            &pool,
+            neu,
+            &[
+                ("partner_ohne_tag", 10, true, r#"["English"]"#),
+                ("intl", 500, false, r#"["English"]"#),
+            ],
+        )
+        .await;
+
+        let rows = market_share_series(&pool, alt - chrono::Duration::hours(1), 3600, true)
+            .await
+            .expect("series query");
+        assert_eq!(rows.len(), 2);
+        assert!((rows[0].total_viewers.unwrap() - 30.0).abs() < 1e-9);
+        assert!((rows[1].total_viewers.unwrap() - 10.0).abs() < 1e-9);
+        assert!((rows[1].partner_viewers.unwrap() - 10.0).abs() < 1e-9);
     }
 
     #[tokio::test]

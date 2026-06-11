@@ -23,7 +23,14 @@ const DAY_OPTIONS: { label: string; days: number }[] = [
   { label: '7 Tage', days: 7 },
   { label: '30 Tage', days: 31 },
   { label: '90 Tage', days: 90 },
+  { label: '180 Tage', days: 180 },
+  { label: 'Alles', days: 365 },
 ];
+
+// Unterhalb dieser Marktgröße ist ein Viewer-Anteil nicht aussagekräftig
+// (nachts 2/2 Viewer = „100 %"): die Anteil-Linie bekommt dort eine Lücke.
+// Muss zur Peak-Schwelle im Backend passen (MIN_PEAK_MARKET_VIEWERS).
+const MIN_MARKET_VIEWERS = 20;
 
 const SCOPE_OPTIONS: { label: string; scope: MarketShareScope }[] = [
   { label: 'Deutschsprachig', scope: 'german' },
@@ -82,7 +89,8 @@ export default function MarketSharePage() {
       label: formatBucketLabel(point.ts, data.bucketSeconds),
       Netzwerk: Math.round(point.partnerViewers * 10) / 10,
       Rest: Math.max(Math.round((point.totalViewers - point.partnerViewers) * 10) / 10, 0),
-      'Anteil %': Math.round(point.sharePct * 10) / 10,
+      'Anteil %':
+        point.totalViewers >= MIN_MARKET_VIEWERS ? Math.round(point.sharePct * 10) / 10 : null,
     }));
   }, [data]);
 
@@ -140,15 +148,25 @@ export default function MarketSharePage() {
           icon={Crown}
         />
         <KpiCard
-          title="Live-Streams"
-          value={current ? `${formatNumber(current.partnerStreams)} / ${formatNumber(current.totalStreams)}` : '—'}
-          hint={current ? `davon ${formatNumber(current.germanStreams)} mit Deutsch-Tag` : undefined}
+          title={scope === 'german' ? 'Live-Streams (DE-Markt)' : 'Live-Streams (global)'}
+          value={
+            current
+              ? scope === 'german'
+                ? `${formatNumber(current.germanPartnerStreams)} / ${formatNumber(current.germanStreams)}`
+                : `${formatNumber(current.partnerStreams)} / ${formatNumber(current.totalStreams)}`
+              : '—'
+          }
+          hint={current ? 'Netzwerk / Markt gesamt' : undefined}
           tone="accent"
           icon={Users}
         />
         <KpiCard
-          title="Kategorie-Viewer live"
-          value={current ? formatNumber(current.totalViewers) : '—'}
+          title={scope === 'german' ? 'DE-Markt-Viewer live' : 'Kategorie-Viewer live'}
+          value={
+            current
+              ? formatNumber(scope === 'german' ? current.germanViewers : current.totalViewers)
+              : '—'
+          }
           hint={current ? `Stand ${new Date(current.ts).toLocaleString('de-DE')}` : undefined}
           icon={Globe}
         />
@@ -169,7 +187,7 @@ export default function MarketSharePage() {
           <p className="text-xs font-semibold uppercase tracking-[0.2em] text-text-secondary">
             Viewer-Verteilung & Marktanteil
           </p>
-          {rangeIncludesLegacyData ? (
+          {scope === 'all' && rangeIncludesLegacyData ? (
             <p className="text-xs text-warning">
               Hinweis: Daten vor dem 10.06.2026 enthalten nur die deutschsprachige Teilmenge der Kategorie.
             </p>
@@ -240,7 +258,7 @@ export default function MarketSharePage() {
 
       <article className="panel-card rounded-[1.8rem] p-6">
         <p className="text-xs font-semibold uppercase tracking-[0.2em] text-text-secondary">
-          Live: Top-Streams der Kategorie
+          {scope === 'german' ? 'Live: Top-Streams im DE-Markt' : 'Live: Top-Streams der Kategorie'}
         </p>
         {current && current.topStreams.length ? (
           <div className="mt-4 overflow-x-auto">
@@ -268,7 +286,7 @@ export default function MarketSharePage() {
                       )}
                     </td>
                     <td className="py-2.5 text-xs text-text-secondary">
-                      {stream.isGerman ? 'Deutsch-Tag' : '—'}
+                      {stream.isGerman ? 'Deutsch' : '—'}
                     </td>
                   </tr>
                 ))}

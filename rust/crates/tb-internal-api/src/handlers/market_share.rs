@@ -87,6 +87,8 @@ pub struct CurrentSnapshot {
     pub german_streams: i64,
     #[serde(rename = "germanPartnerViewers")]
     pub german_partner_viewers: i64,
+    #[serde(rename = "germanPartnerStreams")]
+    pub german_partner_streams: i64,
     #[serde(rename = "germanSharePct")]
     pub german_share_pct: f64,
     #[serde(rename = "topStreams")]
@@ -123,6 +125,11 @@ fn share_pct(part: f64, total: f64) -> f64 {
         0.0
     }
 }
+
+/// Mindest-Marktgröße (Viewer) für den Peak: ein 100%-Anteil nachts bei
+/// 2 Viewern ist keine Dominanz. Buckets darunter werden für den Peak
+/// ignoriert; das Frontend nutzt dieselbe Schwelle für die Anteil-Linie.
+const MIN_PEAK_MARKET_VIEWERS: f64 = 20.0;
 
 /// `GET /internal/twitch/v1/market-share?days=7&scope=all|german`
 pub async fn market_share_handler(
@@ -165,7 +172,7 @@ pub async fn market_share_handler(
 
     let peak = series
         .iter()
-        .filter(|p| p.total_viewers > 0.0)
+        .filter(|p| p.total_viewers >= MIN_PEAK_MARKET_VIEWERS)
         .max_by(|a, b| a.share_pct.total_cmp(&b.share_pct))
         .map(|p| PeakPoint {
             ts: p.ts,
@@ -186,9 +193,11 @@ pub async fn market_share_handler(
         let mut german_viewers = 0i64;
         let mut german_streams = 0i64;
         let mut german_partner_viewers = 0i64;
+        let mut german_partner_streams = 0i64;
         for row in &tick {
             let viewers = i64::from(row.viewer_count.unwrap_or(0));
-            let german = row.is_german.unwrap_or(false);
+            // DE-Markt = Deutsch-Tag ODER Partner (Partner zählen immer dazu).
+            let german = row.is_german.unwrap_or(false) || row.is_partner;
             total_viewers += viewers;
             if row.is_partner {
                 partner_viewers += viewers;
@@ -199,17 +208,21 @@ pub async fn market_share_handler(
                 german_streams += 1;
                 if row.is_partner {
                     german_partner_viewers += viewers;
+                    german_partner_streams += 1;
                 }
             }
         }
+        // Top-Streams passend zum angefragten Scope: in der DE-Sicht nur
+        // Streams des DE-Markts, nicht die globale Kategorie.
         let top_streams = tick
             .iter()
+            .filter(|row| !german_only || row.is_german.unwrap_or(false) || row.is_partner)
             .take(15)
             .map(|row| TopStream {
                 streamer: row.streamer.clone(),
                 viewers: i64::from(row.viewer_count.unwrap_or(0)),
                 is_partner: row.is_partner,
-                is_german: row.is_german.unwrap_or(false),
+                is_german: row.is_german.unwrap_or(false) || row.is_partner,
             })
             .collect();
         CurrentSnapshot {
@@ -222,6 +235,7 @@ pub async fn market_share_handler(
             german_viewers,
             german_streams,
             german_partner_viewers,
+            german_partner_streams,
             german_share_pct: share_pct(german_partner_viewers as f64, german_viewers as f64),
             top_streams,
         }

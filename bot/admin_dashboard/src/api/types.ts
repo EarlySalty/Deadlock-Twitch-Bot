@@ -467,6 +467,7 @@ export interface MarketShareCurrent {
   germanViewers: number;
   germanStreams: number;
   germanPartnerViewers: number;
+  germanPartnerStreams: number;
   germanSharePct: number;
   topStreams: MarketShareTopStream[];
 }
