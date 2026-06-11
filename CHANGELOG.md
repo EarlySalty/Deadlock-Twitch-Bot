@@ -1,3 +1,11 @@
+## #151 — Re-Autorisierung setzt Partner-Einstellungen nicht mehr zurück (Python-Fix)
+
+**Ausgangslage:** Der in #149 beschriebene Bug im Python-Pfad: Bei jeder Re-Autorisierung oder erneuten Partner-Aktivierung wurden Silent-Ban, Silent-Raid, die Live-Ping-Rolle und das Discord-Link-Pflicht-Flag still auf ihre Standardwerte zurückgesetzt. Ursache war das Aufräumen der alten Streamer-Tabelle: Die dort gedroppten Spalten liefern seitdem nur noch Festwerte, und der als Sicherheitsnetz gedachte Rückgriff auf den bestehenden Partner-Datensatz konnte nie greifen, weil ein Default-Wert ihn verdeckte.
+
+**Was wurde geändert:** Die fünf betroffenen Felder greifen bei nicht explizit übergebenen Werten jetzt direkt auf den aktiven Partner-Datensatz zurück — exakt das Verhalten, das die Rust-Seite seit #149 hat. Ein neuer Regressionstest legt einen Partner mit gesetzten Einstellungen an, re-promotet ihn und prüft, dass alles erhalten bleibt.
+
+**Wie es jetzt funktioniert:** Streamer autorisiert den Bot erneut → Partner-Status wird aufgefrischt (verifiziert, aktiv, Raid-Bot an) → alle individuellen Einstellungen bleiben unverändert stehen. Bereits zurückgesetzte Einstellungen aus dem Bug-Zeitfenster lassen sich nicht automatisch wiederherstellen — betroffene Partner müssen sie einmalig neu setzen.
+
 ## #150 — AGB klar auf den Twitch-Bot eingegrenzt, Server-Schutz im Sicherheitskonzept
 
 **Ausgangslage:** Die frisch erweiterten AGB sprachen pauschal von den „digitalen Diensten der Deutschen Deadlock Community" — damit war unklar, ob sie auch für die anderen Angebote (Discord-Bots, Steam-Bot, Community-Server) gelten sollen. Und im Sicherheitskonzept fehlte die Server-Ebene: Wie die Maschine selbst geschützt ist, stand dort noch nicht.

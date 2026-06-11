@@ -6,6 +6,7 @@ import unittest
 from bot.storage.partner_registry import (
     bulk_update_partner_flags,
     migrate_legacy_partner_registry,
+    promote_streamer_to_partner,
     reactivate_partner,
     set_streamer_archive_state,
     upsert_streamer_identity,
@@ -396,6 +397,64 @@ class PartnerRegistrySemanticsTests(unittest.TestCase):
         self.assertEqual(rows[0]["status"], "active")
         self.assertEqual(int(rows[1]["silent_raid"]), 0)
         self.assertEqual(rows[1]["status"], "archived")
+
+    def test_promote_existing_partner_preserves_settings(self) -> None:
+        # Regression: Re-Promotion (z. B. Re-Auth) darf die Partner-
+        # Einstellungen nicht auf die Quell-Literale zurücksetzen —
+        # silent_ban/silent_raid/live_ping_*/require_discord_link/
+        # raid_bot_enabled müssen vom aktiven Datensatz bewahrt werden.
+        conn = _make_conn()
+        compat_conn = _SqlitePgCompatConnection(conn)
+        conn.execute(
+            """
+            INSERT INTO twitch_partners (
+                twitch_user_id, twitch_login, require_discord_link,
+                silent_ban, silent_raid, live_ping_role_id,
+                live_ping_enabled, partnered_at, status
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "3003",
+                "veteran",
+                1,
+                1,
+                1,
+                "1313624729466441769",
+                0,
+                "2025-01-01T00:00:00+00:00",
+                "active",
+            ),
+        )
+
+        promote_streamer_to_partner(
+            compat_conn,
+            twitch_login="veteran",
+            twitch_user_id="3003",
+            discord_user_id="424242",
+            discord_display_name="Veteran",
+            is_on_discord=1,
+            manual_verified_permanent=1,
+            manual_verified_until=None,
+            manual_verified_at="2026-06-12T00:00:00+00:00",
+            manual_partner_opt_out=0,
+            raid_bot_enabled=1,
+        )
+
+        row = conn.execute(
+            """
+            SELECT require_discord_link, silent_ban, silent_raid,
+                   live_ping_role_id, live_ping_enabled, partnered_at, status
+            FROM twitch_partners
+            WHERE twitch_user_id = '3003'
+            """
+        ).fetchone()
+        self.assertEqual(int(row["require_discord_link"]), 1)
+        self.assertEqual(int(row["silent_ban"]), 1)
+        self.assertEqual(int(row["silent_raid"]), 1)
+        self.assertEqual(str(row["live_ping_role_id"]), "1313624729466441769")
+        self.assertEqual(int(row["live_ping_enabled"]), 0)
+        self.assertEqual(row["partnered_at"], "2025-01-01T00:00:00+00:00")
+        self.assertEqual(row["status"], "active")
 
 
 if __name__ == "__main__":

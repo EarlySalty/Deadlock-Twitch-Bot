@@ -821,14 +821,18 @@ def promote_streamer_to_partner(
         twitch_user_id=normalized_user_id,
     )
 
+    # Seit der Partner-DB-Konsolidierung liefert _load_streamer_row für die
+    # Partner-Spalten nur noch Literale (0/NULL/1) — der Rückgriff auf den
+    # aktiven Partner-Datensatz muss deshalb VOR dem Quell-Literal greifen,
+    # sonst wipet jede Re-Promotion (z. B. Re-Auth) die Einstellungen
+    # (silent_ban/silent_raid → 0, live_ping_role_id → NULL,
+    # live_ping_enabled → 1, require_discord_link → 0).
     partner_values = {
         "require_discord_link": _bool_int(
-            _row_value(source_row, "require_discord_link", 2, 0)
+            _row_value(active_row, "require_discord_link", 3, None)
             if require_discord_link is _UNSET
             else require_discord_link,
-            default=_bool_int(
-                _row_value(active_row, "require_discord_link", 3, 0), default=0
-            ),
+            default=0,
         ),
         "last_description": _row_value(active_row, "last_description", 4, None)
         if last_description is _UNSET
@@ -866,35 +870,31 @@ def promote_streamer_to_partner(
             default=0,
         ),
         "raid_bot_enabled": _bool_int(
-            _row_value(source_row, "raid_bot_enabled", 9, 0)
+            _row_value(active_row, "raid_bot_enabled", 13, None)
             if raid_bot_enabled is _UNSET
             else raid_bot_enabled,
-            default=_bool_int(
-                _row_value(active_row, "raid_bot_enabled", 13, 0), default=0
-            ),
+            default=0,
         ),
         "silent_ban": _bool_int(
-            _row_value(source_row, "silent_ban", 10, 0)
+            _row_value(active_row, "silent_ban", 14, None)
             if silent_ban is _UNSET
             else silent_ban,
-            default=_bool_int(_row_value(active_row, "silent_ban", 14, 0), default=0),
+            default=0,
         ),
         "silent_raid": _bool_int(
-            _row_value(source_row, "silent_raid", 11, 0)
+            _row_value(active_row, "silent_raid", 15, None)
             if silent_raid is _UNSET
             else silent_raid,
-            default=_bool_int(_row_value(active_row, "silent_raid", 15, 0), default=0),
+            default=0,
         ),
-        "live_ping_role_id": _row_value(source_row, "live_ping_role_id", 13, None)
+        "live_ping_role_id": _row_value(active_row, "live_ping_role_id", 16, None)
         if live_ping_role_id is _UNSET
         else live_ping_role_id,
         "live_ping_enabled": _bool_int(
-            _row_value(source_row, "live_ping_enabled", 14, 1)
+            _row_value(active_row, "live_ping_enabled", 17, None)
             if live_ping_enabled is _UNSET
             else live_ping_enabled,
-            default=_bool_int(
-                _row_value(active_row, "live_ping_enabled", 17, 1), default=1
-            ),
+            default=1,
         ),
     }
 
