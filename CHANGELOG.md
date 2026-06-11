@@ -1,3 +1,11 @@
+## #146 — Discord-Link-Click: Typ-Mismatch bei clicked_at behoben
+
+**Ausgangslage:** Jedes Mal wenn ein User auf den Discord-Live-Link klickte, schlug die Datenbank-Eintragung mit einem Typfehler fehl: Die Spalte `clicked_at` in der DB ist `TIMESTAMPTZ`, aber der Code schickte den Zeitstempel als formatierten Text-String. PostgreSQL macht keine implizite Text→Timestamp-Konvertierung, also scheiterte jeder Schreibversuch — der Klick wurde nicht gespeichert, der Nutzer bekam trotzdem ein `ok: true` zurück.
+
+**Was wurde geändert:** Der Klick-Zeitstempel wird jetzt direkt als `DateTime<Utc>` an die Datenbank übergeben, nicht mehr als formatierter String. sqlx weiß, wie es einen nativen Zeitstempel-Typ korrekt an eine `TIMESTAMPTZ`-Spalte bindet. Gleichzeitig wurde das Test-Schema mit dem Prod-Schema synchronisiert (`TEXT` → `TIMESTAMPTZ`).
+
+**Wie es jetzt funktioniert:** Jeder Discord-Link-Click landet sauber in der DB — der Zeitstempel wird typ-korrekt als Timestamp with time zone gespeichert, ohne Konvertierungsumweg über einen String.
+
 ## #145 — OAuth-Anmeldung fertig portiert + Systemsuche nach weiteren Halb-Portierungen: vier stille Lücken im Raid-Tracking geschlossen
 
 **Ausgangslage:** Nach der #140-Korrektur stellte sich die Frage, ob es im Rust-Teil weitere Stellen gibt, die Arbeit versprechen, aber nicht (ganz) tun. Zwei Dinge wurden angegangen: Erstens die OAuth-Anmeldung der Streamer — deren Rust-Fassung brach bisher mitten im Ablauf ab, weil nach dem Token-Tausch der Schritt fehlte, der ermittelt, *wem* das frische Token gehört (die Twitch-Token-Antwort enthält keine Identität; dafür braucht es einen zweiten Abruf mit dem frischen Token). Zweitens ein systematischer Audit (84 unabhängige Prüf-Agenten, jeder Befund dreifach gegengeprüft) über den gesamten Rust-Baum nach genau solchen Mustern: Erfolgsmeldungen ohne Wirkung, Datenbanktyp-Abweichungen, eigenerfundene Antwortformate, zu schmale Schnittstellen.

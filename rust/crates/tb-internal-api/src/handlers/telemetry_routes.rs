@@ -483,7 +483,6 @@ async fn process_link_click(pool: &PgPool, body: LinkClickRequest) -> Result<Val
 
     // ── Persistenz ───────────────────────────────────────────────────────────
 
-    let clicked_at = Utc::now().format("%Y-%m-%dT%H:%M:%S+00:00").to_string();
     let ref_code = Some(DISCORD_REF_CODE);
     let guild_id_str = guild_id_opt.map(|v| v.to_string());
     let channel_id_str = channel_id_val.to_string();
@@ -491,7 +490,7 @@ async fn process_link_click(pool: &PgPool, body: LinkClickRequest) -> Result<Val
 
     db::insert_link_click(
         pool,
-        &clicked_at,
+        Utc::now(),
         &streamer_login,
         &tracking_token,
         &discord_user_id,
@@ -613,7 +612,7 @@ mod tests {
             r#"
             CREATE TABLE twitch_link_clicks (
                 id               SERIAL PRIMARY KEY,
-                clicked_at       TEXT DEFAULT CURRENT_TIMESTAMP,
+                clicked_at       TIMESTAMPTZ DEFAULT NOW(),
                 streamer_login   TEXT NOT NULL,
                 tracking_token   TEXT,
                 discord_user_id  TEXT,

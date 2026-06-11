@@ -11,6 +11,7 @@
 //!
 //! Kein HTTP, kein Serde — nur reine Query-Logik.
 
+use chrono::{DateTime, Utc};
 use sqlx::PgPool;
 
 // ── Typen ─────────────────────────────────────────────────────────────────────
@@ -60,13 +61,13 @@ pub async fn list_active_announcements(
 /// Schreibt einen Link-Click in `twitch_link_clicks`.
 ///
 /// Parität zu `_dashboard_live_link_click` in `bot/dashboard/mixin.py`:
-/// - `clicked_at` als ISO-8601-String (UTC, Sekunden-Genauigkeit)
+/// - `clicked_at` als TIMESTAMPTZ (sqlx bindet DateTime<Utc> direkt)
 /// - `ref_code` aus Umgebung / Konstante ("DE-Deadlock-Discord")
 /// - alle IDs als TEXT (guild_id nullable)
 #[allow(clippy::too_many_arguments)]
 pub async fn insert_link_click(
     pool: &PgPool,
-    clicked_at: &str,
+    clicked_at: DateTime<Utc>,
     streamer_login: &str,
     tracking_token: &str,
     discord_user_id: &str,
@@ -201,7 +202,7 @@ mod tests {
             r#"
             CREATE TABLE twitch_link_clicks (
                 id               SERIAL PRIMARY KEY,
-                clicked_at       TEXT DEFAULT CURRENT_TIMESTAMP,
+                clicked_at       TIMESTAMPTZ DEFAULT NOW(),
                 streamer_login   TEXT NOT NULL,
                 tracking_token   TEXT,
                 discord_user_id  TEXT,
@@ -338,7 +339,7 @@ mod tests {
 
         insert_link_click(
             &pool,
-            "2026-06-11T12:00:00+00:00",
+            chrono::DateTime::parse_from_rfc3339("2026-06-11T12:00:00+00:00").unwrap().with_timezone(&chrono::Utc),
             "dragscope",
             "tok_abc",
             "123456789",
@@ -377,7 +378,7 @@ mod tests {
 
         insert_link_click(
             &pool,
-            "2026-06-11T13:00:00+00:00",
+            chrono::DateTime::parse_from_rfc3339("2026-06-11T13:00:00+00:00").unwrap().with_timezone(&chrono::Utc),
             "streamer_y",
             "tok_xyz",
             "111",
