@@ -8,6 +8,7 @@ pub mod bans;
 pub mod global_ban;
 pub mod network;
 pub mod overview;
+pub mod raid_blacklist;
 pub mod raids;
 pub mod streamers;
 pub mod streamers_crud;

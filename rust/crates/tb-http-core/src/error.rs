@@ -97,6 +97,20 @@ impl ApiError {
         }
     }
 
+    /// 400 Bad Request mit `error="bad_request"` und gegebener Nachricht.
+    /// Rendert `{"error":"bad_request","message":<message>}` — Parität zu
+    /// Pythons `_json_error("bad_request", 400, message)`.
+    pub fn bad_request(message: &'static str) -> Self {
+        Self {
+            status: StatusCode::BAD_REQUEST,
+            body: ApiErrorBody {
+                error: "bad_request",
+                message,
+            },
+            dyn_body: None,
+        }
+    }
+
     /// 400 Bad Request mit dynamischem JSON-Body.
     pub fn bad_request_with_body(body: serde_json::Value) -> Self {
         Self {

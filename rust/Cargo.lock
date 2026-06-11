@@ -2260,6 +2260,7 @@ dependencies = [
  "sha2",
  "sqlx",
  "tb-analytics",
+ "tb-domain",
  "tb-error",
  "tb-http-core",
  "tb-monitoring",

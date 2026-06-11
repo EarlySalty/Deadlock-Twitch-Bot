@@ -37,7 +37,7 @@ pub fn build_internal_router(
     manual_raid: Option<Arc<dyn handlers::raid::ManualRaidPort>>,
     legacy_proxy: Option<Arc<LegacyProxy>>,
 ) -> Router {
-    use handlers::{discord_invite, eventsub, global_ban, healthz, raid};
+    use handlers::{discord_invite, eventsub, global_ban, healthz, raid, raid_blacklist};
 
     let base = INTERNAL_API_BASE_PATH; // "/internal/twitch/v1"
 
@@ -67,6 +67,26 @@ pub fn build_internal_router(
         .route(
             &format!("{base}/globalban/check"),
             get(global_ban::check_handler),
+        )
+        // Raid-Blacklist: nativer Port der bislang an Python 8779 proxied
+        // CRUD-Routen. Distinkte Pfade je Methode → kein 405-vs-Fallback-
+        // Konflikt. Login via tb_domain::normalize_twitch_login kanonisiert;
+        // Byte-Parität durch identisches SQL (s. tb_analytics::raid_blacklist).
+        .route(
+            &format!("{base}/raid/blacklist"),
+            get(raid_blacklist::list_handler),
+        )
+        .route(
+            &format!("{base}/raid/blacklist/add"),
+            post(raid_blacklist::add_handler),
+        )
+        .route(
+            &format!("{base}/raid/blacklist/remove"),
+            post(raid_blacklist::remove_handler),
+        )
+        .route(
+            &format!("{base}/raid/blacklist/check"),
+            get(raid_blacklist::check_handler),
         )
         // Streamer-Endpoints: kompletter /streamers-Baum läuft bewusst über
         // den Legacy-Fallback-Proxy zum Python-Worker, bis die
