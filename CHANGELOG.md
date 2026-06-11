@@ -1,3 +1,11 @@
+## #141 — Markt-Dominanz: DE-Erkennung jetzt über die Stream-Sprache statt über Tags
+
+**Ausgangslage:** Die deutschsprachige Marktsicht erkannte Streams über die frei wählbaren Stream-Tags („Deutsch"/„German"). Das war zu grob: Internationale Streamer, die mehrsprachig taggen, rutschten in den DE-Markt, obwohl sie englisch streamen — und blähten dessen Viewer-Basis künstlich auf, sodass der eigene Anteil viel kleiner wirkte als er ist.
+
+**Was wurde geändert:** Die Kategorie-Zeitreihe speichert ab sofort pro Stream die offizielle Stream-Sprache aus der Twitch-API (neue Spalte, der Poller schreibt sie bei jedem ~17-Sekunden-Tick mit). Die DE-Markt-Definition ist jetzt exakt dieselbe wie bei der Bot-Discovery: Stream-Sprache `de` — oder Partner, die zählen immer dazu. Für ältere Datenpunkte ohne Sprachinfo bleibt ein Fallback: vor dem 10.06.2026 zählen sie komplett (die Erhebung war damals selbst schon auf Deutsch gefiltert), für die zwei Tage danach gilt näherungsweise der Tag-Filter. Die Top-Stream-Tabelle zeigt jetzt den echten Sprachcode pro Stream.
+
+**Wie es sich auswirkt:** Der mehrsprachig getaggte englische Stream mit 400 Viewern fällt aus dem DE-Markt raus — übrig bleibt der echte deutschsprachige Markt. Direkt nach der Umstellung: 12 von 29 DE-Viewern beim Netzwerk, also rund 41 % Marktanteil statt scheinbarer 2 %.
+
 ## #140 — Korrektur zu #137: Routen waren nie aktiv — jetzt wirklich nativ, geprüft gegen das Live-System
 
 **Ausgangslage:** Eintrag #137 behauptete, zwölf interne API-Routen liefen nativ in Rust. Das stimmte nicht: Der Code lag zwar im Repo, war aber nie in das Programm eingebunden — die neuen Module waren nicht einkompiliert und keine einzige der zwölf Routen im Router registriert. Alles lief still weiter über den Python-Umweg, ohne dass es jemand merkte, weil der Fallback-Mechanismus genau dafür gebaut ist. Ein adversarialer Voll-Review (70 unabhängige Prüf-Agenten, jeder Befund von drei Skeptikern gegengeprüft) fand zusätzlich 19 bestätigte Abweichungen vom Python-Verhalten, einige davon auf Routen, die bereits live liefen.

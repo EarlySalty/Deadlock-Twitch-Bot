@@ -455,6 +455,7 @@ export interface MarketShareTopStream {
   viewers: number;
   isPartner: boolean;
   isGerman: boolean;
+  language: string | null;
 }
 
 export interface MarketShareCurrent {

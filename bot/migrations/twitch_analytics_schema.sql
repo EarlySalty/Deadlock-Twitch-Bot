@@ -288,11 +288,14 @@ CREATE TABLE IF NOT EXISTS twitch_stats_tracked (
     is_partner   BOOLEAN DEFAULT FALSE,
     game_name    TEXT,
     stream_title TEXT,
-    tags         TEXT
+    tags         TEXT,
+    language     TEXT
 );
 SELECT create_hypertable('twitch_stats_tracked', 'ts_utc', if_not_exists => TRUE, migrate_data => TRUE, chunk_time_interval => INTERVAL '7 days');
 ALTER TABLE twitch_stats_tracked SET (timescaledb.compress, timescaledb.compress_segmentby = 'streamer', timescaledb.compress_orderby = 'ts_utc DESC');
 SELECT add_compression_policy('twitch_stats_tracked', INTERVAL '7 days', if_not_exists => TRUE);
+-- Nachrüstung für Bestands-DBs (Spalte seit 11.06.2026, Helix-Stream-Sprache):
+ALTER TABLE twitch_stats_tracked ADD COLUMN IF NOT EXISTS language TEXT;
 
 CREATE TABLE IF NOT EXISTS twitch_stats_category (
     ts_utc       TIMESTAMPTZ NOT NULL,
@@ -301,11 +304,14 @@ CREATE TABLE IF NOT EXISTS twitch_stats_category (
     is_partner   BOOLEAN DEFAULT FALSE,
     game_name    TEXT,
     stream_title TEXT,
-    tags         TEXT
+    tags         TEXT,
+    language     TEXT
 );
 SELECT create_hypertable('twitch_stats_category', 'ts_utc', if_not_exists => TRUE, migrate_data => TRUE, chunk_time_interval => INTERVAL '7 days');
 ALTER TABLE twitch_stats_category SET (timescaledb.compress, timescaledb.compress_segmentby = 'streamer', timescaledb.compress_orderby = 'ts_utc DESC');
 SELECT add_compression_policy('twitch_stats_category', INTERVAL '7 days', if_not_exists => TRUE);
+-- Nachrüstung für Bestands-DBs (Spalte seit 11.06.2026, Helix-Stream-Sprache):
+ALTER TABLE twitch_stats_category ADD COLUMN IF NOT EXISTS language TEXT;
 
 -- ========= Events =========
 CREATE TABLE IF NOT EXISTS twitch_follow_events (

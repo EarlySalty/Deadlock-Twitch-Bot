@@ -15,6 +15,8 @@ pub struct StatsSample {
     pub stream_title: Option<String>,
     /// JSON-Array-Text (siehe `StreamSnapshot::tags_json`).
     pub tags: Option<String>,
+    /// Helix-Stream-Sprache (ISO 639-1, z. B. "de"); Basis der DE-Markt-Sicht.
+    pub language: Option<String>,
 }
 
 #[derive(Clone)]
@@ -56,8 +58,8 @@ impl StatsStore {
         }
         // Tabellenname kommt ausschließlich aus den beiden Konstanten oben.
         let sql = format!(
-            "INSERT INTO {table} (ts_utc, streamer, viewer_count, is_partner, game_name, stream_title, tags)
-             VALUES ($1, $2, $3, $4, $5, $6, $7)"
+            "INSERT INTO {table} (ts_utc, streamer, viewer_count, is_partner, game_name, stream_title, tags, language)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8)"
         );
         let mut tx = self.pool.begin().await?;
         for row in rows {
@@ -69,6 +71,7 @@ impl StatsStore {
                 .bind(&row.game_name)
                 .bind(&row.stream_title)
                 .bind(&row.tags)
+                .bind(&row.language)
                 .execute(&mut *tx)
                 .await?;
         }

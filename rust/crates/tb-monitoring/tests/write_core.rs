@@ -403,6 +403,7 @@ async fn stats_batch_inserts() {
         game_name: Some("Deadlock".to_string()),
         stream_title: None,
         tags: Some(r#"["DE"]"#.to_string()),
+        language: Some("de".to_string()),
     };
     store
         .log_tracked(ts, &[sample("a", true), sample("b", false)])

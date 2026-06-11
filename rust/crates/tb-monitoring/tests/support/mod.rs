@@ -95,11 +95,13 @@ pub async fn pool_in_schema(schema: &str) -> Option<PgPool> {
         )",
         "CREATE TABLE twitch_stats_tracked (
             ts_utc TIMESTAMPTZ, streamer TEXT, viewer_count INTEGER,
-            is_partner BOOLEAN, game_name TEXT, stream_title TEXT, tags TEXT
+            is_partner BOOLEAN, game_name TEXT, stream_title TEXT, tags TEXT,
+            language TEXT
         )",
         "CREATE TABLE twitch_stats_category (
             ts_utc TIMESTAMPTZ, streamer TEXT, viewer_count INTEGER,
-            is_partner BOOLEAN, game_name TEXT, stream_title TEXT, tags TEXT
+            is_partner BOOLEAN, game_name TEXT, stream_title TEXT, tags TEXT,
+            language TEXT
         )",
         "CREATE TABLE exp_sessions (
             id BIGSERIAL PRIMARY KEY, streamer TEXT NOT NULL, stream_id TEXT,

@@ -103,6 +103,8 @@ pub struct TopStream {
     pub is_partner: bool,
     #[serde(rename = "isGerman")]
     pub is_german: bool,
+    /// Helix-Stream-Sprache (ISO 639-1), `null` bei Alt-Ticks ohne Spalte.
+    pub language: Option<String>,
 }
 
 /// Bucket-Breite passend zum Zeitraum, damit die Punktzahl handhabbar bleibt.
@@ -223,6 +225,7 @@ pub async fn market_share_handler(
                 viewers: i64::from(row.viewer_count.unwrap_or(0)),
                 is_partner: row.is_partner,
                 is_german: row.is_german.unwrap_or(false) || row.is_partner,
+                language: row.language.clone(),
             })
             .collect();
         CurrentSnapshot {
@@ -314,7 +317,8 @@ mod tests {
                 is_partner   BOOLEAN DEFAULT FALSE,
                 game_name    TEXT,
                 stream_title TEXT,
-                tags         TEXT
+                tags         TEXT,
+                language     TEXT
             )
             "#,
         )
@@ -361,10 +365,10 @@ mod tests {
         sqlx::query(
             r#"
             INSERT INTO twitch_stats_category
-                (ts_utc, streamer, viewer_count, is_partner, tags)
+                (ts_utc, streamer, viewer_count, is_partner, tags, language)
             VALUES
-                (NOW(), 'partner_a', 25, TRUE,  '["Deutsch"]'),
-                (NOW(), 'big_intl',  75, FALSE, '["English"]')
+                (NOW(), 'partner_a', 25, TRUE,  '["Deutsch"]', 'de'),
+                (NOW(), 'big_intl',  75, FALSE, '["English"]', 'en')
             "#,
         )
         .execute(&pool)

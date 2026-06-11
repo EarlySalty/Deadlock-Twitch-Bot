@@ -616,6 +616,7 @@ impl PollEngine {
             game_name: stream.game_name_opt(),
             stream_title: stream.title_opt(),
             tags: stream.tags_json(),
+            language: Some(stream.language.trim().to_lowercase()).filter(|l| !l.is_empty()),
         };
 
         // 1) Tracked-Stats: nur Ziel-Kategorie.

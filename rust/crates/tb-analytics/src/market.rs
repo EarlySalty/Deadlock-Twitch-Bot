@@ -30,10 +30,11 @@ pub struct MarketShareBucketRow {
 /// Poll-Ticks in den Bucket fallen. Bucketing über epoch-floor statt
 /// `time_bucket`, damit die Query auch ohne TimescaleDB läuft (Tests).
 ///
-/// `german_only`-Markt-Definition: Deutsch-Tag ODER Partner (Partner gehören
-/// immer zum DE-Markt, auch ohne gesetzten Tag). Zeilen vor dem Kategorie-
-/// Poll-Cutover (10.06.2026) zählen ungefiltert — die Erhebung selbst war
-/// bis dahin bereits sprachgefiltert (de).
+/// `german_only`-Markt-Definition (wie die Bot-Discovery): Stream-Sprache
+/// `de` ODER Partner. Für Alt-Zeilen ohne `language`-Wert (Spalte existiert
+/// erst seit 11.06.2026) gilt der Fallback: vor dem Kategorie-Poll-Cutover
+/// (10.06.2026) zählen sie ungefiltert (Erhebung war bereits language=de),
+/// danach über die Stream-Tags (Deutsch/German) als Näherung.
 pub async fn market_share_series(
     pool: &PgPool,
     since: DateTime<Utc>,
@@ -55,9 +56,11 @@ pub async fn market_share_series(
         FROM twitch_stats_category
         WHERE ts_utc >= $2
           AND ($3::BOOL IS FALSE
-               OR ts_utc < '2026-06-10T00:00:00+00'
                OR is_partner
-               OR tags ILIKE '%deutsch%' OR tags ILIKE '%german%')
+               OR language = 'de'
+               OR (language IS NULL
+                   AND (ts_utc < '2026-06-10T00:00:00+00'
+                        OR tags ILIKE '%deutsch%' OR tags ILIKE '%german%')))
         GROUP BY bucket
         ORDER BY bucket
         "#,
@@ -77,9 +80,12 @@ pub struct MarketStreamRow {
     pub viewer_count: Option<i32>,
     pub is_partner: bool,
     pub is_german: Option<bool>,
+    pub language: Option<String>,
 }
 
 /// Alle Streams des letzten Kategorie-Ticks, absteigend nach Viewern.
+/// `is_german` = Stream-Sprache `de`; Tag-Fallback nur für Zeilen ohne
+/// `language`-Wert (Ticks vor Einführung der Spalte).
 pub async fn market_current_tick(pool: &PgPool) -> Result<Vec<MarketStreamRow>, sqlx::Error> {
     sqlx::query_as(
         r#"
@@ -88,7 +94,10 @@ pub async fn market_current_tick(pool: &PgPool) -> Result<Vec<MarketStreamRow>, 
             streamer,
             viewer_count,
             COALESCE(is_partner, FALSE)                            AS is_partner,
-            (tags ILIKE '%deutsch%' OR tags ILIKE '%german%')      AS is_german
+            (language = 'de'
+             OR (language IS NULL
+                 AND (tags ILIKE '%deutsch%' OR tags ILIKE '%german%'))) AS is_german,
+            language
         FROM twitch_stats_category
         WHERE ts_utc = (SELECT MAX(ts_utc) FROM twitch_stats_category)
         ORDER BY viewer_count DESC NULLS LAST, streamer
@@ -152,7 +161,8 @@ mod tests {
                 is_partner   BOOLEAN DEFAULT FALSE,
                 game_name    TEXT,
                 stream_title TEXT,
-                tags         TEXT
+                tags         TEXT,
+                language     TEXT
             )
             "#,
         )
@@ -162,18 +172,23 @@ mod tests {
         pool
     }
 
-    async fn seed(pool: &PgPool, ts: DateTime<Utc>, rows: &[(&str, i32, bool, &str)]) {
-        for (streamer, viewers, partner, tags) in rows {
+    async fn seed(
+        pool: &PgPool,
+        ts: DateTime<Utc>,
+        rows: &[(&str, i32, bool, &str, Option<&str>)],
+    ) {
+        for (streamer, viewers, partner, tags, language) in rows {
             sqlx::query(
                 "INSERT INTO twitch_stats_category
-                     (ts_utc, streamer, viewer_count, is_partner, tags)
-                 VALUES ($1, $2, $3, $4, $5)",
+                     (ts_utc, streamer, viewer_count, is_partner, tags, language)
+                 VALUES ($1, $2, $3, $4, $5, $6)",
             )
             .bind(ts)
             .bind(streamer)
             .bind(viewers)
             .bind(partner)
             .bind(tags)
+            .bind(language)
             .execute(pool)
             .await
             .expect("seed insert");
@@ -194,8 +209,8 @@ mod tests {
                 &pool,
                 ts,
                 &[
-                    ("partner_a", 10, true, r#"["Deutsch","deadlock"]"#),
-                    ("big_intl", 90, false, r#"["English"]"#),
+                    ("partner_a", 10, true, r#"["Deutsch","deadlock"]"#, Some("de")),
+                    ("big_intl", 90, false, r#"["English"]"#, Some("en")),
                 ],
             )
             .await;
@@ -217,20 +232,20 @@ mod tests {
         let dsn = db_dsn_or_skip!();
         let pool = make_pool(&dsn, "test_market_altdaten").await;
 
-        // Vor dem Cutover (10.06.2026): Erhebung war bereits DE-gefiltert →
-        // zählt im german-Scope auch ohne Deutsch-Tag.
+        // Vor dem Cutover (10.06.2026), language NULL: Erhebung war bereits
+        // DE-gefiltert → zählt im german-Scope auch ohne Deutsch-Tag.
         let alt = Utc.with_ymd_and_hms(2026, 5, 1, 12, 0, 0).unwrap();
-        seed(&pool, alt, &[("alt_de", 30, false, r#"["deadlock"]"#)]).await;
+        seed(&pool, alt, &[("alt_de", 30, false, r#"["deadlock"]"#, None)]).await;
 
-        // Nach dem Cutover: Partner zählt auch ohne Deutsch-Tag zum DE-Markt,
-        // ungetaggter Nicht-Partner nicht.
+        // Nach dem Cutover: Partner zählt auch mit Fremdsprache zum DE-Markt,
+        // fremdsprachiger Nicht-Partner nicht.
         let neu = Utc.with_ymd_and_hms(2026, 6, 11, 12, 0, 0).unwrap();
         seed(
             &pool,
             neu,
             &[
-                ("partner_ohne_tag", 10, true, r#"["English"]"#),
-                ("intl", 500, false, r#"["English"]"#),
+                ("partner_ohne_tag", 10, true, r#"["English"]"#, Some("en")),
+                ("intl", 500, false, r#"["English"]"#, Some("en")),
             ],
         )
         .await;
@@ -253,9 +268,12 @@ mod tests {
             &pool,
             ts,
             &[
-                ("partner_a", 10, true, r#"["Deutsch","deadlock"]"#),
-                ("de_fremd", 40, false, r#"["deadlock","german"]"#),
-                ("big_intl", 950, false, r#"["English"]"#),
+                ("partner_a", 10, true, r#"["Deutsch","deadlock"]"#, Some("de")),
+                ("de_fremd", 40, false, r#"["deadlock"]"#, Some("de")),
+                // metro-Fall: Deutsch-Tag gesetzt, streamt aber englisch →
+                // language gewinnt, zählt NICHT zum DE-Markt.
+                ("tag_only", 100, false, r#"["Deutsch","English"]"#, Some("en")),
+                ("big_intl", 950, false, r#"["English"]"#, Some("en")),
             ],
         )
         .await;
@@ -268,12 +286,15 @@ mod tests {
         assert!((rows[0].partner_viewers.unwrap() - 10.0).abs() < 1e-9);
 
         let current = market_current_tick(&pool).await.expect("current query");
-        assert_eq!(current.len(), 3);
+        assert_eq!(current.len(), 4);
         assert_eq!(current[0].streamer, "big_intl");
         assert!(!current[0].is_partner);
         assert_eq!(current[0].is_german, Some(false));
         let partner = current.iter().find(|r| r.streamer == "partner_a").unwrap();
         assert!(partner.is_partner);
         assert_eq!(partner.is_german, Some(true));
+        let tag_only = current.iter().find(|r| r.streamer == "tag_only").unwrap();
+        assert_eq!(tag_only.is_german, Some(false));
+        assert_eq!(tag_only.language.as_deref(), Some("en"));
     }
 }

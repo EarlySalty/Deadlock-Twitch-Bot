@@ -107,7 +107,7 @@ export default function MarketSharePage() {
     <motion.section initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="space-y-5">
       <PageHeader
         title="Markt-Dominanz"
-        description="Viewer-Anteil unseres Partner-Netzwerks an der Deadlock-Kategorie auf Twitch — live und im Zeitverlauf. Die deutschsprachige Sicht filtert über Stream-Tags (Deutsch/German)."
+        description="Viewer-Anteil unseres Partner-Netzwerks an der Deadlock-Kategorie auf Twitch — live und im Zeitverlauf. Die deutschsprachige Sicht filtert über die Stream-Sprache (de), genau wie die Bot-Discovery; ältere Datenpunkte ohne Sprachinfo über Stream-Tags."
         secondaryChips={
           <div className="flex flex-wrap items-center gap-2">
             {SCOPE_OPTIONS.map((option) => (
@@ -286,7 +286,7 @@ export default function MarketSharePage() {
                       )}
                     </td>
                     <td className="py-2.5 text-xs text-text-secondary">
-                      {stream.isGerman ? 'Deutsch' : '—'}
+                      {stream.language ? stream.language.toUpperCase() : stream.isGerman ? 'DE' : '—'}
                     </td>
                   </tr>
                 ))}
