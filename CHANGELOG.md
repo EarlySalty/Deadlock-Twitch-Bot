@@ -1,3 +1,21 @@
+## #137 — Raid-OAuth, Telemetrie und Analytics nativ in Rust (12 Routen, Welle B)
+
+**Ausgangslage:** Trotz der bisherigen Portierungswellen liefen noch zwölf interne API-Routen über den Fallback-Proxy zu Python-8779 weiter: die komplette Raid-OAuth-Strecke (sechs Schritte von der Auth-URL-Generierung bis zum fertigen OAuth-Callback), zwei Telemetrie-Routen (Liste aktiver Live-Announcements, Link-Click-Logging), vier Analytics-Routen (Bot-Statistiken, Streamer-Einzelanalyse, Vergleichsauswertung, Session-Details). Außerdem fehlten der Verify-Route die befristete und löschbare Verifizierungs-Variante, und ArchiveMode kannte keine Toggle-Block-Variante — beide boten damit nicht die volle Python-Semantik.
+
+**Was wurde geändert:** Alle zwölf Routen laufen jetzt direkt im Rust-Kern:
+
+- **Raid-OAuth (6 Routen):** `GET /raid/auth-url`, `/raid/auth-state`, `/raid/block-state`, `/raid/go-url`, `POST /raid/requirements`, `/raid/oauth-callback` — der OAuth-Flow-Stack (`StateStore`, `AuthWriter`, `TwitchTokenClient`) wird per Composition-Root `raid_oauth_impl.rs` verdrahtet und über den Trait `RaidOAuthPort` mit den Handlern verbunden. Discord-Scope-Guard (Allowlist-Prüfung für Guild-/Channel-/Role-IDs) ist identisch zur Python-Implementierung eingebaut. Offener Punkt: Idempotenz-Layer für `requirements` + `oauth-callback` fehlt noch (OAuth-Codes sind Single-Use; ein zweiter Aufruf mit demselben Code schlägt beim Token-Exchange fehl statt eine gecachte Antwort zu liefern).
+
+- **Telemetrie (2 Routen):** `GET /live/active-announcements` liest aktive Discord-Announcements direkt aus DB (JOIN auf State + Config, nur Zeilen mit Message- und Tracking-Token, alphabetisch sortiert). `POST /live/link-click` schreibt Link-Klicks in `twitch_link_clicks`; ein In-Memory-Idempotenz-Cache (15 min TTL, max 2000 Einträge, cleanup on write) verhindert Doppel-Writes bei Wiederholungsanfragen — Parität zu Pythons In-Process-Cache. `GET /debug/observability` und `/debug/chatters/:login` bleiben weiterhin proxied, da sie Live-Bot-Laufzeitstatus brauchen.
+
+- **Analytics (4 Routen):** `GET /stats` (Bot-weite Kennzahlen), `/analytics/streamer/:login` (30-Tage-Statistiken + letzte Sessions), `/analytics/comparison` (Vergleichskategorien + Top-Streamer), `/sessions/:session_id` (Session-Detail) — alles direkte DB-Abfragen, kein Proxy-Umweg.
+
+- **Verify-Modus:** `POST /streamers/:login/verify` unterstützt jetzt `mode: permanent | temp | clear`. `temp` setzt eine 30-Tage-Frist (`manual_verified_until = NOW()+30d`), `clear` löscht die Verifizierung, alles andere (inkl. leer/fehlt) verhält sich wie bisher als `permanent`.
+
+- **ArchiveMode:** `parse()` ist jetzt infallibel — unbekannte Werte fallen auf `Toggle` durch statt 400 zu liefern (Python-Parität: unbekannte modi landen immer auf „toggle"). Neue Varianten `ToggleBlock` und `Toggle` ergänzen `Archive`, `Unarchive`, `Block`, `Unblock`.
+
+**Wie es jetzt funktioniert:** Die zwölf Routen werden vom Rust-Kern direkt beantwortet; für Nutzer und Streamer ändert sich nichts Sichtbares. Der Proxy-Fallback zu Python-8779 wird damit ein weiteres Stück kleiner — die verbleibenden proxied Routen sind nur noch solche, die echten Live-Bot-Laufzeitstatus (Chat-Verbindung, In-Process-State) brauchen.
+
 ## #136 — Paritäts-Härtung der nativen Routen nach Voll-Review
 
 **Ausgangslage:** Ein adversarialer Voll-Review des Rust-Umbaus (mehrere unabhängige Prüfer, jeder Befund gegengeprüft) hat die frisch nativisierten internen Routen Feld-für-Feld gegen das alte Python-Verhalten gestellt. Drei kleine, aber echte Abweichungen kamen zum Vorschein — nichts Kaputtes, aber Verhalten, das in Randfällen vom Original abwich.

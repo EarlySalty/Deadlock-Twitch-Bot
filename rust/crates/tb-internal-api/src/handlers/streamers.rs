@@ -1,80 +1,144 @@
-//! Handler für 7 Streamer-CRUD-Endpoints.
+//! Handler für die Streamer-CRUD- und Analytics-Endpoints.
+//!
+//! Nativ implementierte Routen (können sicher in build_internal_router eingehängt werden):
+//!
+//! | Methode | Pfad                                          | Handler                   |
+//! |---------|-----------------------------------------------|---------------------------|
+//! | GET     | /streamers                                    | list_handler              |
+//! | POST    | /streamers                                    | add_handler               |
+//! | DELETE  | /streamers/:login                             | remove_handler            |
+//! | POST    | /streamers/:login/verify                      | verify_handler            |
+//! | POST    | /streamers/:login/archive                     | archive_handler           |
+//! | POST    | /streamers/:login/discord-flag                | discord_flag_handler      |
+//! | POST    | /streamers/:login/discord-profile             | discord_profile_handler   |
+//! | GET     | /stats                                        | stats_handler             |
+//! | GET     | /analytics/streamer/:login                    | streamer_analytics_handler|
+//! | GET     | /analytics/comparison                         | analytics_comparison_handler |
+//! | GET     | /sessions/:session_id                         | session_detail_handler    |
+//!
+//! NICHT nativ (bleibt proxied):
+//! - POST /streamers/:login/chat-action
+//!   Erfordert den Live-Bot-Token für Twitch-Chat; kann nicht ohne die
+//!   Python-Laufzeit ausgeführt werden. Wird weiterhin über den Legacy-Proxy
+//!   an Port 8779 weitergeleitet.
 //!
 //! Alle Endpoints: `auth.is_privileged()` → 401.
-//! Kein Idempotency-Caching (kommt später).
-//! Discord-Nebeneffekte: deferred bis Schritt 5/6.
+//!
+//! Request-Body-Konventionen:
+//! - Bestandskonsumenten (Python-Client) senden snake_case-Bodies.
+//! - Felder mit Underscores akzeptieren via `#[serde(alias)]` auch camelCase.
+//! - Kein Idempotency-Caching (kommt in Schritt 5/6).
+//! - Discord-Nebeneffekte (Rollen-Sync, EventSub): deferred bis Schritt 5/6.
+//!
+//! archive-mode-Semantik:
+//! - Python gibt NIEMALS 400 für unbekannte mode-Werte — unbekannte Werte
+//!   fallen durch auf "toggle". ArchiveMode::parse ist deshalb infallibel.
 
 use axum::{
-    extract::{Path, State},
+    extract::{Path, Query, State},
     http::StatusCode,
     response::IntoResponse,
     Extension, Json,
 };
 use serde::{Deserialize, Serialize};
+use serde_json::json;
 use sqlx::PgPool;
 use std::sync::Arc;
 use tb_analytics::streamers_crud as db;
+use tb_domain::normalize_twitch_login;
 use tb_http_core::{ApiError, AuthLevel};
 use tb_transport_twitch::HelixClient;
 
 // ── Response-Typen ────────────────────────────────────────────────────────────
 
 #[derive(Serialize)]
-pub struct OkResponse {
+pub struct OkLoginMessageResponse {
     pub ok: bool,
-}
-
-#[derive(Serialize)]
-pub struct OkMessageResponse {
-    pub ok: bool,
+    pub login: String,
     pub message: String,
 }
 
 #[derive(Serialize)]
 pub struct StreamersListResponse {
     pub ok: bool,
-    pub streamers: Vec<tb_analytics::streamers_crud::StreamerListRow>,
+    pub streamers: Vec<db::StreamerListRow>,
 }
 
 // ── Request-Typen ─────────────────────────────────────────────────────────────
 
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct AddStreamerRequest {
-    pub login: String,
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ChatActionRequest {
-    /// "chat" | "action" | "announcement"
-    pub mode: String,
-    pub message: String,
+/// POST /streamers/:login/verify
+/// Python sendet: {"mode": "permanent"|"temp"|"clear"|"failed"}
+#[derive(Deserialize, Default)]
+pub struct VerifyRequest {
     #[serde(default)]
-    pub color: Option<String>,
+    pub mode: Option<String>,
 }
 
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
+/// POST /streamers/:login/archive
+/// Python sendet: {"mode": "toggle"|"archive"|"unarchive"|"block"|...}
+/// Default wenn leer/fehlt: "toggle" (Python-Semantik).
+#[derive(Deserialize, Default)]
 pub struct ArchiveRequest {
-    /// "archive" | "unarchive" | "block" | "unblock"
-    pub mode: String,
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct DiscordFlagRequest {
-    pub is_on_discord: bool,
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct DiscordProfileRequest {
-    pub discord_user_id: Option<String>,
-    pub discord_display_name: Option<String>,
-    /// Wenn true: is_on_discord = 1
     #[serde(default)]
+    pub mode: Option<String>,
+}
+
+/// POST /streamers/:login/discord-flag
+/// Python sendet: {"is_on_discord": true/false}
+/// Alias isOnDiscord akzeptiert auch camelCase (Tests, Frontend).
+#[derive(Deserialize)]
+pub struct DiscordFlagRequest {
+    #[serde(default, alias = "isOnDiscord", alias = "enabled", alias = "value")]
+    pub is_on_discord: Option<serde_json::Value>,
+}
+
+impl DiscordFlagRequest {
+    /// Parst is_on_discord — wie Python: bool(value), Default false.
+    pub fn parse_enabled(&self) -> Option<bool> {
+        match &self.is_on_discord {
+            None => None,
+            Some(serde_json::Value::Bool(b)) => Some(*b),
+            Some(serde_json::Value::Number(n)) => Some(n.as_i64().unwrap_or(0) != 0),
+            Some(serde_json::Value::String(s)) => match s.to_lowercase().as_str() {
+                "true" | "1" | "yes" | "on" => Some(true),
+                _ => Some(false),
+            },
+            Some(serde_json::Value::Null) => Some(false),
+            _ => Some(false),
+        }
+    }
+}
+
+/// POST /streamers/:login/discord-profile
+/// Python sendet snake_case: {"discord_user_id": "...", "discord_display_name": "...", "mark_member": true}
+/// Aliases ermöglichen zusätzlich camelCase (Tests, manche Frontends).
+#[derive(Deserialize, Default)]
+pub struct DiscordProfileRequest {
+    #[serde(default, alias = "discordUserId")]
+    pub discord_user_id: Option<String>,
+    #[serde(default, alias = "discordDisplayName")]
+    pub discord_display_name: Option<String>,
+    /// Default true — wie Python: server._parse_bool(body.get("mark_member", body.get("member_flag")), default=True)
+    #[serde(default = "default_mark_member", alias = "markMember", alias = "member_flag")]
     pub mark_member: bool,
+}
+
+fn default_mark_member() -> bool {
+    true
+}
+
+// ── Query-Typen ───────────────────────────────────────────────────────────────
+
+#[derive(Deserialize)]
+pub struct StatsQuery {
+    pub hour_from: Option<i32>,
+    pub hour_to: Option<i32>,
+    pub streamer: Option<String>,
+}
+
+#[derive(Deserialize)]
+pub struct AnalyticsDaysQuery {
+    pub days: Option<i32>,
 }
 
 // ── Handler ───────────────────────────────────────────────────────────────────
@@ -88,8 +152,6 @@ pub async fn list_handler(
         return Err(ApiError::unauthorized());
     }
 
-    // Ziel-Spiel wie Python (`os.getenv` mit "Deadlock"-Default) für die
-    // last_deadlock_stream_at-Erkennung.
     let target_game = std::env::var("TWITCH_TARGET_GAME_NAME")
         .ok()
         .map(|v| v.trim().to_string())
@@ -108,6 +170,7 @@ pub async fn list_handler(
 
 /// `POST /internal/twitch/v1/streamers`
 ///
+/// Body: `{"login": "...", "require_link": false}` (snake_case)
 /// Wenn HelixClient nicht konfiguriert: 503.
 /// Wenn Helix den Login nicht kennt: 422 `{"ok": false, "error": "unknown_login"}`.
 /// Wenn bereits aktiver Partner: 200 `{"ok": true, "message": "already_active_partner"}`.
@@ -115,27 +178,34 @@ pub async fn add_handler(
     auth: AuthLevel,
     State(pool): State<PgPool>,
     Extension(helix): Extension<Arc<Option<HelixClient>>>,
-    Json(body): Json<AddStreamerRequest>,
+    Json(body): Json<serde_json::Value>,
 ) -> Result<impl IntoResponse, ApiError> {
     if !auth.is_privileged() {
         return Err(ApiError::unauthorized());
     }
 
-    let login = body.login.trim().to_lowercase();
-    if login.is_empty() {
-        return Err(ApiError::bad_request_with_body(
-            serde_json::json!({"ok": false, "error": "login_required"}),
-        ));
-    }
+    // Python: login = server._normalize_login(str(body.get("login") or body.get("streamer") or body.get("twitch_login") or ""))
+    let raw = body
+        .get("login")
+        .or_else(|| body.get("streamer"))
+        .or_else(|| body.get("twitch_login"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+
+    let login = match normalize_twitch_login(&raw) {
+        Some(l) => l,
+        None => {
+            return Err(ApiError::bad_request("invalid or missing login"));
+        }
+    };
 
     // Helix-Lookup: user_id auflösen und Login validieren
-    // `helix` ist Arc<Option<HelixClient>> — `(*helix).as_ref()` gibt Option<&HelixClient>
     let user_id: Option<String> = match (*helix).as_ref() {
         None => {
-            // HelixClient nicht konfiguriert → 503
             return Ok((
                 StatusCode::SERVICE_UNAVAILABLE,
-                Json(serde_json::json!({"ok": false, "error": "helix_unavailable"})),
+                Json(json!({"ok": false, "error": "helix_unavailable"})),
             )
                 .into_response());
         }
@@ -145,17 +215,15 @@ pub async fn add_handler(
                     if map.contains_key(&login) {
                         map.get(&login).map(|u| u.id.clone())
                     } else {
-                        // Helix kennt den Login nicht → 422
                         return Ok((
                             StatusCode::UNPROCESSABLE_ENTITY,
-                            Json(serde_json::json!({"ok": false, "error": "unknown_login"})),
+                            Json(json!({"ok": false, "error": "unknown_login"})),
                         )
                             .into_response());
                     }
                 }
                 Err(e) => {
                     tracing::warn!("Helix-Lookup für {login} fehlgeschlagen: {e}");
-                    // Helix-Fehler → trotzdem fortfahren ohne user_id (graceful degradation)
                     None
                 }
             }
@@ -166,12 +234,12 @@ pub async fn add_handler(
     match db::add_streamer(&pool, &login, user_id.as_deref()).await {
         Ok(AddStreamerResult::AlreadyExists) => Ok((
             StatusCode::OK,
-            Json(serde_json::json!({"ok": true, "login": login, "message": "already_active_partner"})),
+            Json(json!({"ok": true, "login": login, "message": "already_active_partner"})),
         )
             .into_response()),
         Ok(AddStreamerResult::Added) => Ok((
-            StatusCode::OK,
-            Json(serde_json::json!({"ok": true, "message": format!("{login} hinzugefügt")})),
+            StatusCode::CREATED,
+            Json(json!({"ok": true, "login": login, "message": format!("{login} hinzugefügt")})),
         )
             .into_response()),
         Err(e) => {
@@ -181,27 +249,36 @@ pub async fn add_handler(
     }
 }
 
-/// `DELETE /internal/twitch/v1/streamers/{login}`
+/// `DELETE /internal/twitch/v1/streamers/:login`
 pub async fn remove_handler(
     auth: AuthLevel,
     State(pool): State<PgPool>,
-    Path(login): Path<String>,
+    Path(raw_login): Path<String>,
 ) -> Result<impl IntoResponse, ApiError> {
     if !auth.is_privileged() {
         return Err(ApiError::unauthorized());
     }
 
+    let login = match normalize_twitch_login(&raw_login) {
+        Some(l) => l,
+        None => return Err(ApiError::bad_request("invalid login")),
+    };
+
     use db::RemoveStreamerResult;
     match db::remove_streamer(&pool, &login).await {
         Ok(RemoveStreamerResult::NotFound) => Err(ApiError::not_found()),
-        Ok(RemoveStreamerResult::Archived) => Ok(Json(OkMessageResponse {
+        Ok(RemoveStreamerResult::Archived) => Ok(Json(OkLoginMessageResponse {
             ok: true,
-            message: format!("{login} archiviert"),
-        })),
-        Ok(RemoveStreamerResult::Deleted) => Ok(Json(OkMessageResponse {
+            login,
+            message: "archiviert".to_string(),
+        })
+        .into_response()),
+        Ok(RemoveStreamerResult::Deleted) => Ok(Json(OkLoginMessageResponse {
             ok: true,
-            message: format!("{login} gelöscht"),
-        })),
+            login,
+            message: "gelöscht".to_string(),
+        })
+        .into_response()),
         Err(e) => {
             tracing::error!("remove_streamer DB-Fehler: {e}");
             Err(ApiError::internal())
@@ -209,22 +286,41 @@ pub async fn remove_handler(
     }
 }
 
-/// `POST /internal/twitch/v1/streamers/{login}/verify`
+/// `POST /internal/twitch/v1/streamers/:login/verify`
+///
+/// Body: `{"mode": "permanent"|"temp"|"clear"|"failed"}` — Default: "permanent".
+/// Parität Python: mode-Wert kommt aus Body, Default ist "permanent".
 pub async fn verify_handler(
     auth: AuthLevel,
     State(pool): State<PgPool>,
-    Path(login): Path<String>,
+    Path(raw_login): Path<String>,
+    body: Option<Json<VerifyRequest>>,
 ) -> Result<impl IntoResponse, ApiError> {
     if !auth.is_privileged() {
         return Err(ApiError::unauthorized());
     }
 
+    let login = match normalize_twitch_login(&raw_login) {
+        Some(l) => l,
+        None => return Err(ApiError::bad_request("invalid login")),
+    };
+
+    let mode = body
+        .and_then(|b| b.mode.clone())
+        .map(|m| {
+            let m = m.trim().to_lowercase();
+            if m.is_empty() { "permanent".to_string() } else { m }
+        })
+        .unwrap_or_else(|| "permanent".to_string());
+
     use db::VerifyStreamerResult;
-    match db::verify_streamer(&pool, &login).await {
-        Ok(VerifyStreamerResult::Verified) => Ok(Json(OkMessageResponse {
+    match db::verify_streamer(&pool, &login, &mode).await {
+        Ok(VerifyStreamerResult::Verified) => Ok(Json(OkLoginMessageResponse {
             ok: true,
+            login: login.clone(),
             message: format!("{login} verifiziert"),
-        })),
+        })
+        .into_response()),
         Ok(VerifyStreamerResult::NotAPartner) => Err(ApiError::not_found()),
         Err(e) => {
             tracing::error!("verify_streamer DB-Fehler: {e}");
@@ -233,27 +329,46 @@ pub async fn verify_handler(
     }
 }
 
-/// `POST /internal/twitch/v1/streamers/{login}/archive`
+/// `POST /internal/twitch/v1/streamers/:login/archive`
+///
+/// Body: `{"mode": "toggle"|"archive"|"unarchive"|"block"|"unblock"|...}` — Default: "toggle".
+///
+/// Python gibt NIEMALS 400 für unbekannte modi. Unbekannte Werte → Toggle.
+/// `ArchiveMode::parse` ist deshalb infallibel (kein `?`).
 pub async fn archive_handler(
     auth: AuthLevel,
     State(pool): State<PgPool>,
-    Path(login): Path<String>,
-    Json(body): Json<ArchiveRequest>,
+    Path(raw_login): Path<String>,
+    body: Option<Json<ArchiveRequest>>,
 ) -> Result<impl IntoResponse, ApiError> {
     if !auth.is_privileged() {
         return Err(ApiError::unauthorized());
     }
 
-    let mode = db::ArchiveMode::parse(&body.mode).ok_or_else(|| {
-        ApiError::bad_request_with_body(serde_json::json!({
-            "ok": false,
-            "error": "invalid_mode",
-            "message": "ungültiger mode — erwartet: archive|unarchive|block|unblock"
-        }))
-    })?;
+    let login = match normalize_twitch_login(&raw_login) {
+        Some(l) => l,
+        None => return Err(ApiError::bad_request("invalid login")),
+    };
+
+    // mode-String extrahieren — Default "toggle" wenn fehlt/leer (Python-Semantik)
+    let mode_str = body
+        .and_then(|b| b.mode.clone())
+        .map(|m| {
+            let m = m.trim().to_lowercase();
+            if m.is_empty() { "toggle".to_string() } else { m }
+        })
+        .unwrap_or_else(|| "toggle".to_string());
+
+    // Infallible parse — unbekannte Werte → Toggle, kein 400
+    let mode = db::ArchiveMode::parse(&mode_str);
 
     match db::archive_streamer(&pool, &login, mode).await {
-        Ok(true) => Ok(Json(OkResponse { ok: true })),
+        Ok(true) => Ok(Json(OkLoginMessageResponse {
+            ok: true,
+            login: login.clone(),
+            message: "updated".to_string(),
+        })
+        .into_response()),
         Ok(false) => Err(ApiError::not_found()),
         Err(e) => {
             tracing::error!("archive_streamer DB-Fehler: {e}");
@@ -262,19 +377,39 @@ pub async fn archive_handler(
     }
 }
 
-/// `POST /internal/twitch/v1/streamers/{login}/discord-flag`
+/// `POST /internal/twitch/v1/streamers/:login/discord-flag`
+///
+/// Body (Python/snake_case): `{"is_on_discord": true}`
+/// Body (camelCase-Alias): `{"isOnDiscord": true}`
+/// Body-Aliases für den Wert: "enabled", "value"
+/// Fehlendes Feld → 400 (Python: "is_on_discord is required")
 pub async fn discord_flag_handler(
     auth: AuthLevel,
     State(pool): State<PgPool>,
-    Path(login): Path<String>,
+    Path(raw_login): Path<String>,
     Json(body): Json<DiscordFlagRequest>,
 ) -> Result<impl IntoResponse, ApiError> {
     if !auth.is_privileged() {
         return Err(ApiError::unauthorized());
     }
 
-    match db::set_discord_flag(&pool, &login, body.is_on_discord).await {
-        Ok(true) => Ok(Json(OkResponse { ok: true })),
+    let login = match normalize_twitch_login(&raw_login) {
+        Some(l) => l,
+        None => return Err(ApiError::bad_request("invalid login")),
+    };
+
+    let enabled = match body.parse_enabled() {
+        Some(v) => v,
+        None => return Err(ApiError::bad_request("is_on_discord is required")),
+    };
+
+    match db::set_discord_flag(&pool, &login, enabled).await {
+        Ok(true) => Ok(Json(OkLoginMessageResponse {
+            ok: true,
+            login: login.clone(),
+            message: "updated".to_string(),
+        })
+        .into_response()),
         Ok(false) => Err(ApiError::not_found()),
         Err(e) => {
             tracing::error!("set_discord_flag DB-Fehler: {e}");
@@ -283,39 +418,70 @@ pub async fn discord_flag_handler(
     }
 }
 
-/// `POST /internal/twitch/v1/streamers/{login}/discord-profile`
+/// `POST /internal/twitch/v1/streamers/:login/discord-profile`
+///
+/// Body (Python/snake_case): `{"discord_user_id": "...", "discord_display_name": "...", "mark_member": true}`
+/// Aliases akzeptieren auch camelCase.
+/// Validierung: discord_user_id muss numerisch sein wenn angegeben (Python: `isdigit()`).
 pub async fn discord_profile_handler(
     auth: AuthLevel,
     State(pool): State<PgPool>,
-    Path(login): Path<String>,
+    Path(raw_login): Path<String>,
     Json(body): Json<DiscordProfileRequest>,
 ) -> Result<impl IntoResponse, ApiError> {
     if !auth.is_privileged() {
         return Err(ApiError::unauthorized());
     }
 
-    // Discord-ID muss numerisch sein wenn angegeben
-    if let Some(ref did) = body.discord_user_id {
-        let clean = did.trim();
-        if !clean.is_empty() && !clean.chars().all(|c| c.is_ascii_digit()) {
-            return Err(ApiError::bad_request_with_body(serde_json::json!({
-                "ok": false,
-                "error": "invalid_discord_id",
-                "message": "discord_user_id muss numerisch sein"
-            })));
+    let login = match normalize_twitch_login(&raw_login) {
+        Some(l) => l,
+        None => return Err(ApiError::bad_request("invalid login")),
+    };
+
+    // discord_user_id: trimmen, leer → None; nicht-numerisch → 400
+    // Python: discord_id_clean = (discord_user_id or "").strip()
+    //         if discord_id_clean and not discord_id_clean.isdigit(): raise ValueError(...)
+    let discord_user_id: Option<String> = body
+        .discord_user_id
+        .as_deref()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
+
+    if let Some(ref did) = discord_user_id {
+        if !did.chars().all(|c| c.is_ascii_digit()) {
+            return Err(ApiError::bad_request("discord_user_id muss numerisch sein"));
         }
     }
+
+    // display_name auf 120 Zeichen kürzen (Python-Vertrag)
+    let discord_display_name: Option<String> = body
+        .discord_display_name
+        .as_deref()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .map(|s| {
+            if s.chars().count() > 120 {
+                s.chars().take(120).collect()
+            } else {
+                s
+            }
+        });
 
     match db::set_discord_profile(
         &pool,
         &login,
-        body.discord_user_id.as_deref(),
-        body.discord_display_name.as_deref(),
+        discord_user_id.as_deref(),
+        discord_display_name.as_deref(),
         body.mark_member,
     )
     .await
     {
-        Ok(true) => Ok(Json(OkResponse { ok: true })),
+        Ok(true) => Ok(Json(OkLoginMessageResponse {
+            ok: true,
+            login: login.clone(),
+            message: "updated".to_string(),
+        })
+        .into_response()),
         Ok(false) => Err(ApiError::not_found()),
         Err(e) => {
             tracing::error!("set_discord_profile DB-Fehler: {e}");
@@ -324,158 +490,142 @@ pub async fn discord_profile_handler(
     }
 }
 
-/// `POST /internal/twitch/v1/streamers/{login}/chat-action`
+/// `GET /internal/twitch/v1/stats`
 ///
-/// Sendet eine Chat-Nachricht oder Announcement im Kanal des Streamers.
-/// Erfordert `TWITCH_BOT_TOKEN` und `TWITCH_BOT_USER_ID` als Env-Variablen.
-pub async fn chat_action_handler(
+/// Query-Parameter: `hour_from`, `hour_to` (optional, UTC-Stunde 0–23), `streamer` (optional).
+/// Parität Python `stats` + `_dashboard_stats` (Basis-Aggregat aus `twitch_stream_sessions`).
+pub async fn stats_handler(
     auth: AuthLevel,
     State(pool): State<PgPool>,
-    Path(login): Path<String>,
-    Extension(helix): Extension<Arc<Option<HelixClient>>>,
-    Json(body): Json<ChatActionRequest>,
+    Query(params): Query<StatsQuery>,
 ) -> Result<impl IntoResponse, ApiError> {
     if !auth.is_privileged() {
         return Err(ApiError::unauthorized());
     }
 
-    let bot_token = std::env::var("TWITCH_BOT_TOKEN").unwrap_or_default();
-    if bot_token.is_empty() {
-        return Ok((
-            StatusCode::SERVICE_UNAVAILABLE,
-            Json(serde_json::json!({"ok": false, "error": "bot_credentials_missing"})),
-        )
-            .into_response());
+    // Streamer-Login normalisieren wenn angegeben
+    let streamer: Option<String> = params
+        .streamer
+        .as_deref()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .map(|s| match normalize_twitch_login(&s) {
+            Some(l) => Ok(l),
+            None => Err(ApiError::bad_request("invalid streamer login")),
+        })
+        .transpose()?;
+
+    let row = db::stats(&pool, params.hour_from, params.hour_to, streamer.as_deref())
+        .await
+        .map_err(|e| {
+            tracing::error!("stats DB-Fehler: {e}");
+            ApiError::internal()
+        })?;
+
+    Ok(Json(json!({
+        "ok": true,
+        "total_sessions": row.total_sessions.unwrap_or(0),
+        "avg_viewers": row.avg_viewers.unwrap_or(0.0),
+        "peak_viewers": row.peak_viewers.unwrap_or(0),
+        "total_duration_hours": row.total_duration_hours.unwrap_or(0.0),
+        "total_follower_delta": row.total_follower_delta.unwrap_or(0),
+    })))
+}
+
+/// `GET /internal/twitch/v1/analytics/streamer/:login`
+///
+/// Query: `days` (Default 30, Minimum 1).
+pub async fn streamer_analytics_handler(
+    auth: AuthLevel,
+    State(pool): State<PgPool>,
+    Path(raw_login): Path<String>,
+    Query(params): Query<AnalyticsDaysQuery>,
+) -> Result<impl IntoResponse, ApiError> {
+    if !auth.is_privileged() {
+        return Err(ApiError::unauthorized());
     }
 
-    let helix_client = match (*helix).as_ref() {
-        Some(c) => c,
-        None => {
-            return Ok((
-                StatusCode::SERVICE_UNAVAILABLE,
-                Json(serde_json::json!({"ok": false, "error": "helix_unavailable"})),
-            )
-                .into_response())
-        }
+    let login = match normalize_twitch_login(&raw_login) {
+        Some(l) => l,
+        None => return Err(ApiError::bad_request("invalid login")),
     };
 
-    // Bot-User-ID aus Env oder dynamisch via Helix ermitteln
-    let bot_user_id = {
-        let from_env = std::env::var("TWITCH_BOT_USER_ID").unwrap_or_default();
-        if !from_env.is_empty() {
-            from_env
-        } else {
-            #[derive(serde::Deserialize)]
-            struct UsersResp {
-                data: Vec<UsersEntry>,
-            }
-            #[derive(serde::Deserialize)]
-            struct UsersEntry {
-                id: String,
-            }
-            match helix_client
-                .get_with_user_token("/users", &bot_token)
-                .send()
-                .await
-            {
-                Ok(r) if r.status().is_success() => match r.json::<UsersResp>().await {
-                    Ok(body) if !body.data.is_empty() => body.data.into_iter().next().unwrap().id,
-                    _ => return Ok((
-                        StatusCode::SERVICE_UNAVAILABLE,
-                        Json(serde_json::json!({"ok": false, "error": "bot_user_id_unresolvable"})),
-                    )
-                        .into_response()),
-                },
-                Ok(r) => {
-                    tracing::warn!("GET /users für Bot-Token: HTTP {}", r.status());
-                    return Ok((
-                        StatusCode::SERVICE_UNAVAILABLE,
-                        Json(serde_json::json!({"ok": false, "error": "bot_user_id_unresolvable"})),
-                    )
-                        .into_response());
-                }
-                Err(e) => {
-                    tracing::error!("GET /users für Bot-Token fehlgeschlagen: {e}");
-                    return Err(ApiError::internal());
-                }
-            }
-        }
-    };
+    let days = params.days.unwrap_or(30).max(1);
 
-    let login_lower = login.to_lowercase();
-    let broadcaster_id: Option<String> = sqlx::query_scalar(
-        "SELECT twitch_user_id FROM twitch_streamers WHERE LOWER(twitch_login) = LOWER($1)",
-    )
-    .bind(&login_lower)
-    .fetch_optional(&pool)
-    .await
-    .map_err(|e| {
-        tracing::error!("chat_action DB-Fehler für {login_lower}: {e}");
-        ApiError::internal()
-    })?;
+    let (agg, sessions) = db::streamer_analytics(&pool, &login, days)
+        .await
+        .map_err(|e| {
+            tracing::error!("streamer_analytics DB-Fehler: {e}");
+            ApiError::internal()
+        })?;
 
-    let Some(broadcaster_id) = broadcaster_id.filter(|s| !s.is_empty()) else {
-        return Err(ApiError::not_found());
-    };
+    Ok(Json(json!({
+        "ok": true,
+        "login": login,
+        "days": days,
+        "stats": agg,
+        "recent_sessions": sessions,
+    })))
+}
 
-    let mode = body.mode.trim();
-    let send_message = if mode == "action" {
-        format!("/me {}", body.message)
-    } else {
-        body.message.clone()
-    };
+/// `GET /internal/twitch/v1/analytics/comparison`
+///
+/// Query: `days` (Default 30, Minimum 1).
+pub async fn analytics_comparison_handler(
+    auth: AuthLevel,
+    State(pool): State<PgPool>,
+    Query(params): Query<AnalyticsDaysQuery>,
+) -> Result<impl IntoResponse, ApiError> {
+    if !auth.is_privileged() {
+        return Err(ApiError::unauthorized());
+    }
 
-    let resp = if mode == "announcement" {
-        let color = body
-            .color
-            .as_deref()
-            .map(|c| c.trim())
-            .filter(|c| !c.is_empty())
-            .unwrap_or("purple");
-        helix_client
-            .post_with_user_token(
-                &format!(
-                    "/chat/announcements?broadcaster_id={broadcaster_id}&moderator_id={bot_user_id}"
-                ),
-                &bot_token,
-            )
-            .json(&serde_json::json!({"message": send_message, "color": color}))
-            .send()
-            .await
-    } else {
-        helix_client
-            .post_with_user_token("/chat/messages", &bot_token)
-            .json(&serde_json::json!({
-                "broadcaster_id": broadcaster_id,
-                "sender_id": bot_user_id,
-                "message": send_message,
-            }))
-            .send()
-            .await
-    };
+    let days = params.days.unwrap_or(30).max(1);
 
-    match resp {
-        Ok(r) if r.status().is_success() || r.status().as_u16() == 204 => {
-            Ok(Json(OkMessageResponse {
-                ok: true,
-                message: "gesendet".to_string(),
-            })
-            .into_response())
-        }
-        Ok(r) => {
-            let status = r.status();
-            let body_txt = r.text().await.unwrap_or_default();
-            tracing::warn!("chat_action Helix-Fehler HTTP {status} für {login_lower}: {body_txt}");
-            Ok((
-                StatusCode::BAD_GATEWAY,
-                Json(
-                    serde_json::json!({"ok": false, "error": "helix_error", "helix_status": status.as_u16()}),
-                ),
-            )
-                .into_response())
-        }
+    let (category, tracked, top) = db::analytics_comparison(&pool, days)
+        .await
+        .map_err(|e| {
+            tracing::error!("analytics_comparison DB-Fehler: {e}");
+            ApiError::internal()
+        })?;
+
+    Ok(Json(json!({
+        "ok": true,
+        "days": days,
+        "category": category,
+        "tracked_avg": tracked,
+        "top_streamers": top,
+    })))
+}
+
+/// `GET /internal/twitch/v1/sessions/:session_id`
+///
+/// session_id muss eine gültige Ganzzahl sein — sonst 400.
+pub async fn session_detail_handler(
+    auth: AuthLevel,
+    State(pool): State<PgPool>,
+    Path(raw_id): Path<String>,
+) -> Result<impl IntoResponse, ApiError> {
+    if !auth.is_privileged() {
+        return Err(ApiError::unauthorized());
+    }
+
+    let session_id: i64 = raw_id
+        .trim()
+        .parse()
+        .map_err(|_| ApiError::bad_request("invalid session id"))?;
+
+    match db::session_detail(&pool, session_id).await {
+        Ok(Some(detail)) => Ok(Json(json!({
+            "ok": true,
+            "session": detail.session,
+            "timeline": detail.timeline,
+            "top_chatters": detail.top_chatters,
+        }))
+        .into_response()),
+        Ok(None) => Err(ApiError::not_found()),
         Err(e) => {
-            tracing::error!("chat_action Request-Fehler für {login_lower}: {e}");
+            tracing::error!("session_detail DB-Fehler: {e}");
             Err(ApiError::internal())
         }
     }
@@ -499,15 +649,9 @@ mod tests {
     use tb_http_core::{internal_auth, loopback_only, ExpectedToken, INTERNAL_API_BASE_PATH};
     use tower::ServiceExt;
 
-    fn test_dsn() -> Option<String> {
-        std::env::var("TB_TEST_DATABASE_URL").ok()
-    }
-
-    /// Gibt die DSN zurück oder bricht den Test ab.
-    /// Mit `TB_TEST_REQUIRE_DB=1` wird statt des stillen Skips ein panic ausgelöst.
     macro_rules! db_dsn_or_skip {
         () => {
-            match test_dsn() {
+            match std::env::var("TB_TEST_DATABASE_URL").ok() {
                 Some(d) => d,
                 None => {
                     if std::env::var("TB_TEST_REQUIRE_DB").as_deref() == Ok("1") {
@@ -543,6 +687,7 @@ mod tests {
             .await
             .expect("search_path");
 
+        // prod-treue DDL
         sqlx::query(
             r#"
             CREATE TABLE IF NOT EXISTS twitch_streamers (
@@ -612,24 +757,26 @@ mod tests {
         .await
         .expect("DDL twitch_partners");
 
-        // Quellen der Listen-Query (Partner-View als Test-Tabelle + Joins).
         for ddl in [
-            "CREATE TABLE IF NOT EXISTS twitch_partners_all_state (
+            r#"CREATE TABLE IF NOT EXISTS twitch_partners_all_state (
                 twitch_login TEXT, twitch_user_id TEXT,
                 manual_verified_permanent INTEGER DEFAULT 0,
                 manual_verified_until TEXT, manual_verified_at TEXT,
                 manual_partner_opt_out INTEGER DEFAULT 0, archived_at TEXT,
                 is_on_discord INTEGER DEFAULT 0, discord_user_id TEXT,
                 discord_display_name TEXT, raid_bot_enabled INTEGER DEFAULT 1,
-                status TEXT DEFAULT 'active' )",
-            "CREATE TABLE IF NOT EXISTS twitch_raid_auth (
+                status TEXT DEFAULT 'active' )"#,
+            r#"CREATE TABLE IF NOT EXISTS twitch_raid_auth (
                 twitch_user_id TEXT PRIMARY KEY, twitch_login TEXT,
                 raid_enabled BOOLEAN, needs_reauth BOOLEAN,
-                authorized_at TIMESTAMPTZ, token_expires_at TIMESTAMPTZ )",
-            "CREATE TABLE IF NOT EXISTS twitch_stream_sessions (
-                streamer_login TEXT, game_name TEXT,
-                had_deadlock_in_session BOOLEAN DEFAULT FALSE,
-                started_at TIMESTAMPTZ, ended_at TIMESTAMPTZ )",
+                authorized_at TIMESTAMPTZ, token_expires_at TIMESTAMPTZ )"#,
+            r#"CREATE TABLE IF NOT EXISTS twitch_stream_sessions (
+                id BIGSERIAL PRIMARY KEY, stream_id TEXT, streamer_login TEXT,
+                game_name TEXT, had_deadlock_in_session BOOLEAN DEFAULT FALSE,
+                started_at TIMESTAMPTZ, ended_at TIMESTAMPTZ,
+                duration_seconds BIGINT, avg_viewers FLOAT8, peak_viewers BIGINT,
+                follower_delta BIGINT, followers_start BIGINT, followers_end BIGINT,
+                stream_title TEXT, unique_chatters BIGINT )"#,
         ] {
             sqlx::query(ddl)
                 .execute(&pool)
@@ -670,6 +817,19 @@ mod tests {
                 &format!("{base}/streamers/:login/discord-profile"),
                 post(discord_profile_handler),
             )
+            .route(&format!("{base}/stats"), get(stats_handler))
+            .route(
+                &format!("{base}/analytics/streamer/:login"),
+                get(streamer_analytics_handler),
+            )
+            .route(
+                &format!("{base}/analytics/comparison"),
+                get(analytics_comparison_handler),
+            )
+            .route(
+                &format!("{base}/sessions/:session_id"),
+                get(session_detail_handler),
+            )
             .with_state(pool)
             .layer(Extension(helix))
             .layer(Extension(ExpectedToken(token.to_string())))
@@ -694,6 +854,13 @@ mod tests {
         builder.body(Body::from(body.to_string())).unwrap()
     }
 
+    async fn json_body(resp: axum::response::Response) -> serde_json::Value {
+        let bytes = axum::body::to_bytes(resp.into_body(), 65536).await.unwrap();
+        serde_json::from_slice(&bytes).unwrap()
+    }
+
+    // ── Auth-Tests ───────────────────────────────────────────────────────────
+
     #[tokio::test]
     async fn returns_401_ohne_auth() {
         let dsn = db_dsn_or_skip!();
@@ -705,6 +872,8 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
     }
 
+    // ── GET /streamers ───────────────────────────────────────────────────────
+
     #[tokio::test]
     async fn list_returns_200() {
         let dsn = db_dsn_or_skip!();
@@ -714,7 +883,12 @@ mod tests {
         let req = loopback_req("GET", &format!("{base}/streamers"), "", Some("secret"));
         let resp = app.oneshot(req).await.unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
+        let j = json_body(resp).await;
+        assert_eq!(j["ok"], true);
+        assert!(j["streamers"].is_array());
     }
+
+    // ── DELETE /streamers/:login ─────────────────────────────────────────────
 
     #[tokio::test]
     async fn remove_returns_404_bei_unbekanntem_login() {
@@ -732,12 +906,19 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::NOT_FOUND);
     }
 
+    // ── POST /streamers/:login/archive ───────────────────────────────────────
+
+    /// Python gibt NIEMALS 400 für unbekannte mode-Werte.
+    /// "ungueltig" → Toggle-Semantik → User nicht gefunden → 404.
     #[tokio::test]
-    async fn archive_returns_400_bei_ungueltigem_mode() {
+    async fn archive_unbekannter_mode_gibt_nicht_400_sondern_404() {
         let dsn = db_dsn_or_skip!();
-        let pool = make_pool(&dsn, "test_sh_archive_400").await;
+        let pool = make_pool(&dsn, "test_sh_archive_unbekannt").await;
         let app = make_router(pool, "secret");
         let base = INTERNAL_API_BASE_PATH;
+        // "testuser" existiert nicht → archive_streamer gibt false → 404
+        // Vorher (falsches Draft-Verhalten): 400 wegen "ungültigem" mode
+        // Jetzt (Python-parität): 404, da Toggle für nicht-existenten User
         let req = loopback_req(
             "POST",
             &format!("{base}/streamers/testuser/archive"),
@@ -745,9 +926,34 @@ mod tests {
             Some("secret"),
         );
         let resp = app.oneshot(req).await.unwrap();
-        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(
+            resp.status(),
+            StatusCode::NOT_FOUND,
+            "unbekannter mode → Toggle → User nicht gefunden → 404 (kein 400)"
+        );
     }
 
+    /// Fehlender mode-Body → Default "toggle" → Python-Semantik.
+    #[tokio::test]
+    async fn archive_ohne_mode_body_gibt_404_fuer_unbekannten_user() {
+        let dsn = db_dsn_or_skip!();
+        let pool = make_pool(&dsn, "test_sh_archive_kein_body").await;
+        let app = make_router(pool, "secret");
+        let base = INTERNAL_API_BASE_PATH;
+        let req = loopback_req(
+            "POST",
+            &format!("{base}/streamers/niemand/archive"),
+            r#"{}"#,
+            Some("secret"),
+        );
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    }
+
+    // ── POST /streamers/:login/discord-profile ───────────────────────────────
+
+    /// Nicht-numerische discord_user_id → 400.
+    /// Test sendet camelCase "discordUserId" — wird via alias akzeptiert.
     #[tokio::test]
     async fn discord_profile_returns_400_bei_nicht_numerischer_discord_id() {
         let dsn = db_dsn_or_skip!();
@@ -761,14 +967,95 @@ mod tests {
             Some("secret"),
         );
         let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(
+            resp.status(),
+            StatusCode::BAD_REQUEST,
+            "nicht-numerische discord_user_id muss 400 ergeben"
+        );
+        let j = json_body(resp).await;
+        assert_eq!(j["error"], "bad_request");
+    }
+
+    /// Python-Client sendet snake_case — muss ebenfalls validiert werden.
+    #[tokio::test]
+    async fn discord_profile_returns_400_bei_snake_case_nicht_numerischer_id() {
+        let dsn = db_dsn_or_skip!();
+        let pool = make_pool(&dsn, "test_sh_discord_snake_val").await;
+        let app = make_router(pool, "secret");
+        let base = INTERNAL_API_BASE_PATH;
+        let req = loopback_req(
+            "POST",
+            &format!("{base}/streamers/testuser/discord-profile"),
+            r#"{"discord_user_id":"nicht-eine-zahl"}"#,
+            Some("secret"),
+        );
+        let resp = app.oneshot(req).await.unwrap();
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
     }
+
+    /// Numerische discord_user_id (snake_case) → kein 400 (Validierung ok),
+    /// nur 404 weil User nicht in DB.
+    #[tokio::test]
+    async fn discord_profile_numerische_id_gibt_404_fuer_unbekannten_user() {
+        let dsn = db_dsn_or_skip!();
+        let pool = make_pool(&dsn, "test_sh_discord_num").await;
+        let app = make_router(pool, "secret");
+        let base = INTERNAL_API_BASE_PATH;
+        let req = loopback_req(
+            "POST",
+            &format!("{base}/streamers/niemand/discord-profile"),
+            r#"{"discord_user_id":"123456789"}"#,
+            Some("secret"),
+        );
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    }
+
+    // ── POST /streamers/:login/discord-flag ──────────────────────────────────
+
+    /// Fehlendes Feld → 400.
+    #[tokio::test]
+    async fn discord_flag_ohne_feld_gibt_400() {
+        let dsn = db_dsn_or_skip!();
+        let pool = make_pool(&dsn, "test_sh_dflag_400").await;
+        let app = make_router(pool, "secret");
+        let base = INTERNAL_API_BASE_PATH;
+        let req = loopback_req(
+            "POST",
+            &format!("{base}/streamers/testuser/discord-flag"),
+            r#"{}"#,
+            Some("secret"),
+        );
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+        let j = json_body(resp).await;
+        assert_eq!(j["error"], "bad_request");
+    }
+
+    /// Python-Client sendet snake_case is_on_discord → 404 für unbekannten User.
+    #[tokio::test]
+    async fn discord_flag_snake_case_gibt_404_fuer_unbekannten_user() {
+        let dsn = db_dsn_or_skip!();
+        let pool = make_pool(&dsn, "test_sh_dflag_snake").await;
+        let app = make_router(pool, "secret");
+        let base = INTERNAL_API_BASE_PATH;
+        let req = loopback_req(
+            "POST",
+            &format!("{base}/streamers/niemand/discord-flag"),
+            r#"{"is_on_discord":true}"#,
+            Some("secret"),
+        );
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    }
+
+    // ── POST /streamers (add) ────────────────────────────────────────────────
 
     #[tokio::test]
     async fn add_returns_503_wenn_helix_nicht_konfiguriert() {
         let dsn = db_dsn_or_skip!();
         let pool = make_pool(&dsn, "test_sh_add_503").await;
-        let app = make_router(pool, "secret"); // helix = Arc::new(None) → 503
+        let app = make_router(pool, "secret");
         let base = INTERNAL_API_BASE_PATH;
         let req = loopback_req(
             "POST",
@@ -778,5 +1065,83 @@ mod tests {
         );
         let resp = app.oneshot(req).await.unwrap();
         assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
+    }
+
+    #[tokio::test]
+    async fn add_leerer_login_gibt_400() {
+        let dsn = db_dsn_or_skip!();
+        let pool = make_pool(&dsn, "test_sh_add_400").await;
+        let app = make_router(pool, "secret");
+        let base = INTERNAL_API_BASE_PATH;
+        let req = loopback_req(
+            "POST",
+            &format!("{base}/streamers"),
+            r#"{"login":""}"#,
+            Some("secret"),
+        );
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    }
+
+    // ── GET /stats ───────────────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn stats_gibt_200_bei_leerer_db() {
+        let dsn = db_dsn_or_skip!();
+        let pool = make_pool(&dsn, "test_sh_stats_empty").await;
+        let app = make_router(pool, "secret");
+        let base = INTERNAL_API_BASE_PATH;
+        let req = loopback_req("GET", &format!("{base}/stats"), "", Some("secret"));
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let j = json_body(resp).await;
+        assert_eq!(j["ok"], true);
+        assert_eq!(j["total_sessions"], 0);
+    }
+
+    #[tokio::test]
+    async fn stats_ungültiger_streamer_login_gibt_400() {
+        let dsn = db_dsn_or_skip!();
+        let pool = make_pool(&dsn, "test_sh_stats_bad_login").await;
+        let app = make_router(pool, "secret");
+        let base = INTERNAL_API_BASE_PATH;
+        // Login "ab" ist zu kurz — normalize_twitch_login gibt None
+        let req = loopback_req(
+            "GET",
+            &format!("{base}/stats?streamer=ab"),
+            "",
+            Some("secret"),
+        );
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    }
+
+    // ── GET /sessions/:session_id ─────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn session_nicht_gefunden_gibt_404() {
+        let dsn = db_dsn_or_skip!();
+        let pool = make_pool(&dsn, "test_sh_session_404").await;
+        let app = make_router(pool, "secret");
+        let base = INTERNAL_API_BASE_PATH;
+        let req = loopback_req("GET", &format!("{base}/sessions/99999"), "", Some("secret"));
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn session_ungueltige_id_gibt_400() {
+        let dsn = db_dsn_or_skip!();
+        let pool = make_pool(&dsn, "test_sh_session_bad_id").await;
+        let app = make_router(pool, "secret");
+        let base = INTERNAL_API_BASE_PATH;
+        let req = loopback_req(
+            "GET",
+            &format!("{base}/sessions/nichtganzzahl"),
+            "",
+            Some("secret"),
+        );
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
     }
 }
