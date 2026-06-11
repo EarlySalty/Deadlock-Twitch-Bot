@@ -1,3 +1,9 @@
+## #144 — Markt-Dominanz: Viewer- und Kanal-Dimension getrennt + Partner-Bestand
+
+**Ausgangslage:** Die Seite zeigte nur die Viewer-Dimension. Dass z. B. 4 von 6 live geschalteten DE-Kanälen zum Netzwerk gehören (Kanal-Dominanz 67 %), war nirgends ablesbar — genauso wenig wie der Bestand: wie viele Partner überhaupt unter Vertrag sind und wie viele davon im Zeitraum wirklich gestreamt haben.
+
+**Was wurde geändert:** Die Kennzahlen sind jetzt in zwei beschriftete Reihen aufgeteilt. „Viewer": Marktanteil live, Netzwerk-Viewer live, Markt-Viewer gesamt, Dominanz-Zeit. „Streamer": Partner unter Vertrag (aktive, ohne Opt-out/Pause), davon im Zeitraum mit Deadlock-Stream aktiv, live jetzt (Netzwerk-/Markt-Kanäle mit Prozent), Ø Kanal-Anteil über den Zeitraum. Dazu zwei neue Verlaufs-Charts: Kanal-Anteil des Netzwerks (wie viele der gleichzeitig live geschalteten Markt-Kanäle gehören uns — unabhängig von deren Größe) und die Live-Kanal-Verteilung Netzwerk vs. Rest. Die Kanal-Sicht zeigt die Netzwerk-Stärke fairer als die Viewer-Sicht, in der ein einzelner großer externer Kanal alles dominiert.
+
 ## #143 — Markt-Dominanz: 100-%-Phasen sichtbar + neue Dominanz-Zeit-Kennzahl
 
 **Ausgangslage:** Die Mindestmarkt-Schwelle (20 Viewer) sollte nächtliche 0↔100-%-Sprünge glätten — hat dabei aber genau die wertvollsten Momente versteckt: die Phasen, in denen ausschließlich Netzwerk-Kanäle live sind und der Marktanteil real 100 % beträgt. Diese Zeiten tauchten weder in der Linie noch im Peak auf.

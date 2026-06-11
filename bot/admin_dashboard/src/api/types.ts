@@ -475,6 +475,11 @@ export interface MarketShareCurrent {
 
 export type MarketShareScope = 'all' | 'german';
 
+export interface MarketShareRoster {
+  partnersTotal: number;
+  partnersSeenInRange: number;
+}
+
 export interface MarketShareResponse {
   days: number;
   scope: MarketShareScope;
@@ -482,4 +487,5 @@ export interface MarketShareResponse {
   series: MarketSharePoint[];
   peak: MarketSharePeak | null;
   current: MarketShareCurrent | null;
+  roster: MarketShareRoster;
 }

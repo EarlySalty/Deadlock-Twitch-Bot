@@ -72,6 +72,27 @@ pub async fn market_share_series(
     .await
 }
 
+/// Partner-Bestand: (aktive Partner gesamt, davon im Zeitfenster mit
+/// mindestens einem Kategorie-Tick als Partner gesehen).
+pub async fn partner_roster(
+    pool: &PgPool,
+    since: DateTime<Utc>,
+) -> Result<(i64, i64), sqlx::Error> {
+    let total: (i64,) = sqlx::query_as(
+        "SELECT COUNT(*) FROM twitch_partners_all_state WHERE is_partner_active = 1",
+    )
+    .fetch_one(pool)
+    .await?;
+    let seen: (i64,) = sqlx::query_as(
+        "SELECT COUNT(DISTINCT LOWER(streamer)) FROM twitch_stats_category
+          WHERE is_partner AND ts_utc >= $1",
+    )
+    .bind(since)
+    .fetch_one(pool)
+    .await?;
+    Ok((total.0, seen.0))
+}
+
 /// Ein Stream des letzten Kategorie-Ticks.
 #[derive(Debug, sqlx::FromRow)]
 pub struct MarketStreamRow {

@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react';
 import { motion } from 'framer-motion';
-import { BarChart3, Crown, Globe, TrendingUp, Users } from 'lucide-react';
+import { Activity, BarChart3, Crown, Globe, Radio, TrendingUp, Users } from 'lucide-react';
 import {
   Area,
   CartesianGrid,
@@ -85,6 +85,12 @@ export default function MarketSharePage() {
       Netzwerk: Math.round(point.partnerViewers * 10) / 10,
       Rest: Math.max(Math.round((point.totalViewers - point.partnerViewers) * 10) / 10, 0),
       'Anteil %': point.totalViewers > 0 ? Math.round(point.sharePct * 10) / 10 : null,
+      'Netzwerk-Kanäle': Math.round(point.partnerStreams * 10) / 10,
+      'Rest-Kanäle': Math.max(Math.round((point.totalStreams - point.partnerStreams) * 10) / 10, 0),
+      'Kanal-Anteil %':
+        point.totalStreams > 0
+          ? Math.round((point.partnerStreams / point.totalStreams) * 1000) / 10
+          : null,
     }));
   }, [data]);
 
@@ -107,9 +113,26 @@ export default function MarketSharePage() {
     return (dominant / active.length) * 100;
   }, [data]);
 
+  // Durchschnittlicher Kanal-Anteil über den Zeitraum (bucket-gewichtet).
+  const channelShareAvg = useMemo(() => {
+    if (!data) {
+      return null;
+    }
+    let partner = 0;
+    let total = 0;
+    for (const point of data.series) {
+      partner += point.partnerStreams;
+      total += point.totalStreams;
+    }
+    return total > 0 ? (partner / total) * 100 : null;
+  }, [data]);
+
   const liveShare = scope === 'german' ? current?.germanSharePct : current?.sharePct;
   const liveViewers = scope === 'german' ? current?.germanPartnerViewers : current?.partnerViewers;
   const liveMarket = scope === 'german' ? current?.germanViewers : current?.totalViewers;
+  const livePartnerStreams =
+    scope === 'german' ? current?.germanPartnerStreams : current?.partnerStreams;
+  const liveMarketStreams = scope === 'german' ? current?.germanStreams : current?.totalStreams;
 
   return (
     <motion.section initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="space-y-5">
@@ -143,51 +166,97 @@ export default function MarketSharePage() {
         }
       />
 
-      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-        <KpiCard
-          title={scope === 'german' ? 'Marktanteil live (DE)' : 'Marktanteil live (global)'}
-          value={liveShare !== undefined && liveShare !== null ? formatPct(liveShare) : '—'}
-          hint={
-            current
-              ? `${formatNumber(liveViewers ?? 0)} von ${formatNumber(liveMarket ?? 0)} Viewern`
-              : 'Keine Live-Daten'
-          }
-          tone="primary"
-          icon={Crown}
-        />
-        <KpiCard
-          title={scope === 'german' ? 'Live-Streams (DE-Markt)' : 'Live-Streams (global)'}
-          value={
-            current
-              ? scope === 'german'
-                ? `${formatNumber(current.germanPartnerStreams)} / ${formatNumber(current.germanStreams)}`
-                : `${formatNumber(current.partnerStreams)} / ${formatNumber(current.totalStreams)}`
-              : '—'
-          }
-          hint={current ? 'Netzwerk / Markt gesamt' : undefined}
-          tone="accent"
-          icon={Users}
-        />
-        <KpiCard
-          title={scope === 'german' ? 'DE-Markt-Viewer live' : 'Kategorie-Viewer live'}
-          value={
-            current
-              ? formatNumber(scope === 'german' ? current.germanViewers : current.totalViewers)
-              : '—'
-          }
-          hint={current ? `Stand ${new Date(current.ts).toLocaleString('de-DE')}` : undefined}
-          icon={Globe}
-        />
-        <KpiCard
-          title="Dominanz im Zeitraum"
-          value={dominancePct !== null ? formatPct(dominancePct) : '—'}
-          hint={
-            peak
-              ? `der Zeit ≥ 50 % Marktanteil · Peak ${formatPct(peak.sharePct)} (${formatNumber(peak.partnerViewers)} von ${formatNumber(peak.totalViewers)} Viewern)`
-              : 'der Zeit ≥ 50 % Marktanteil'
-          }
-          icon={TrendingUp}
-        />
+      <div className="space-y-5">
+        <div>
+          <p className="px-1 text-xs font-semibold uppercase tracking-[0.2em] text-text-secondary">
+            Viewer
+          </p>
+          <div className="mt-2 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+            <KpiCard
+              title={scope === 'german' ? 'Marktanteil live (DE)' : 'Marktanteil live (global)'}
+              value={liveShare !== undefined && liveShare !== null ? formatPct(liveShare) : '—'}
+              hint={
+                current
+                  ? `${formatNumber(liveViewers ?? 0)} von ${formatNumber(liveMarket ?? 0)} Viewern`
+                  : 'Keine Live-Daten'
+              }
+              tone="primary"
+              icon={Crown}
+            />
+            <KpiCard
+              title="Netzwerk-Viewer live"
+              value={current ? formatNumber(liveViewers ?? 0) : '—'}
+              hint={current ? `von ${formatNumber(liveMarket ?? 0)} Viewern im Markt` : undefined}
+              tone="accent"
+              icon={Users}
+            />
+            <KpiCard
+              title={scope === 'german' ? 'DE-Markt-Viewer live' : 'Kategorie-Viewer live'}
+              value={
+                current
+                  ? formatNumber(scope === 'german' ? current.germanViewers : current.totalViewers)
+                  : '—'
+              }
+              hint={current ? `Stand ${new Date(current.ts).toLocaleString('de-DE')}` : undefined}
+              icon={Globe}
+            />
+            <KpiCard
+              title="Dominanz im Zeitraum"
+              value={dominancePct !== null ? formatPct(dominancePct) : '—'}
+              hint={
+                peak
+                  ? `der Zeit ≥ 50 % Marktanteil · Peak ${formatPct(peak.sharePct)} (${formatNumber(peak.partnerViewers)} von ${formatNumber(peak.totalViewers)} Viewern)`
+                  : 'der Zeit ≥ 50 % Marktanteil'
+              }
+              icon={TrendingUp}
+            />
+          </div>
+        </div>
+        <div>
+          <p className="px-1 text-xs font-semibold uppercase tracking-[0.2em] text-text-secondary">
+            Streamer
+          </p>
+          <div className="mt-2 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+            <KpiCard
+              title="Unter Vertrag"
+              value={data ? formatNumber(data.roster.partnersTotal) : '—'}
+              hint="aktive Partner im Netzwerk"
+              tone="primary"
+              icon={Crown}
+            />
+            <KpiCard
+              title="Aktiv im Zeitraum"
+              value={
+                data
+                  ? `${formatNumber(data.roster.partnersSeenInRange)} von ${formatNumber(data.roster.partnersTotal)}`
+                  : '—'
+              }
+              hint={`Partner mit Deadlock-Stream in den letzten ${days === 1 ? '24 h' : `${days} Tagen`}`}
+              tone="accent"
+              icon={Activity}
+            />
+            <KpiCard
+              title="Live jetzt"
+              value={
+                current
+                  ? `${formatNumber(livePartnerStreams ?? 0)} / ${formatNumber(liveMarketStreams ?? 0)}`
+                  : '—'
+              }
+              hint={
+                current && (liveMarketStreams ?? 0) > 0
+                  ? `${formatPct(((livePartnerStreams ?? 0) / (liveMarketStreams ?? 1)) * 100)} der Markt-Kanäle gehören uns`
+                  : 'Netzwerk / Markt-Kanäle'
+              }
+              icon={Radio}
+            />
+            <KpiCard
+              title="Ø Kanal-Anteil"
+              value={channelShareAvg !== null ? formatPct(channelShareAvg) : '—'}
+              hint="Anteil Netzwerk-Kanäle an allen Markt-Kanälen im Zeitraum"
+              icon={BarChart3}
+            />
+          </div>
+        </div>
       </div>
 
       <article className="panel-card rounded-[1.8rem] p-6">
@@ -282,6 +351,87 @@ export default function MarketSharePage() {
                         type="monotone"
                         dataKey="Rest"
                         stackId="viewers"
+                        stroke="#3a566b"
+                        fill="rgba(58,86,107,0.30)"
+                      />
+                    </ComposedChart>
+                  </ResponsiveContainer>
+                </div>
+              </div>
+              <div>
+                <p className="text-xs uppercase tracking-[0.18em] text-text-secondary">
+                  Kanal-Anteil des Netzwerks
+                </p>
+                <div className="mt-3 h-52">
+                  <ResponsiveContainer width="100%" height="100%">
+                    <ComposedChart data={chartRows}>
+                      <CartesianGrid stroke="rgba(255,255,255,0.06)" vertical={false} />
+                      <XAxis
+                        dataKey="label"
+                        stroke="#9bb3c5"
+                        tickLine={false}
+                        axisLine={false}
+                        minTickGap={48}
+                      />
+                      <YAxis stroke="#7aa2f7" tickLine={false} axisLine={false} unit="%" />
+                      <Tooltip
+                        contentStyle={{
+                          background: '#0f2431',
+                          border: '1px solid rgba(255,255,255,0.1)',
+                          borderRadius: '16px',
+                        }}
+                      />
+                      <Area
+                        type="monotone"
+                        dataKey="Kanal-Anteil %"
+                        stroke="#7aa2f7"
+                        strokeWidth={2}
+                        fill="rgba(122,162,247,0.16)"
+                        connectNulls
+                      />
+                    </ComposedChart>
+                  </ResponsiveContainer>
+                </div>
+                <p className="mt-2 text-xs text-text-secondary">
+                  Wie viele der gleichzeitig live geschalteten Markt-Kanäle gehören zum Netzwerk —
+                  unabhängig von deren Viewerzahl.
+                </p>
+              </div>
+              <div>
+                <p className="text-xs uppercase tracking-[0.18em] text-text-secondary">
+                  Live-Kanäle im Markt — Netzwerk vs. Rest
+                </p>
+                <div className="mt-3 h-52">
+                  <ResponsiveContainer width="100%" height="100%">
+                    <ComposedChart data={chartRows}>
+                      <CartesianGrid stroke="rgba(255,255,255,0.06)" vertical={false} />
+                      <XAxis
+                        dataKey="label"
+                        stroke="#9bb3c5"
+                        tickLine={false}
+                        axisLine={false}
+                        minTickGap={48}
+                      />
+                      <YAxis stroke="#9bb3c5" tickLine={false} axisLine={false} />
+                      <Tooltip
+                        contentStyle={{
+                          background: '#0f2431',
+                          border: '1px solid rgba(255,255,255,0.1)',
+                          borderRadius: '16px',
+                        }}
+                      />
+                      <Legend />
+                      <Area
+                        type="monotone"
+                        dataKey="Netzwerk-Kanäle"
+                        stackId="streams"
+                        stroke="#10b7ad"
+                        fill="rgba(16,183,173,0.45)"
+                      />
+                      <Area
+                        type="monotone"
+                        dataKey="Rest-Kanäle"
+                        stackId="streams"
                         stroke="#3a566b"
                         fill="rgba(58,86,107,0.30)"
                       />

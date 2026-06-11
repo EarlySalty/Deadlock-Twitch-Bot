@@ -14,7 +14,7 @@ use axum::{
 use chrono::{DateTime, Duration, Utc};
 use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
-use tb_analytics::market::{market_current_tick, market_share_series};
+use tb_analytics::market::{market_current_tick, market_share_series, partner_roster};
 use tb_http_core::{ApiError, AuthLevel};
 
 #[derive(Deserialize)]
@@ -40,6 +40,18 @@ pub struct MarketShareResponse {
     pub series: Vec<SeriesPoint>,
     pub peak: Option<PeakPoint>,
     pub current: Option<CurrentSnapshot>,
+    pub roster: RosterInfo,
+}
+
+/// Partner-Bestand, unabhängig vom Live-Zustand.
+#[derive(Serialize)]
+pub struct RosterInfo {
+    /// Aktive Partner gesamt (unter Vertrag, ohne Opt-out/Pause).
+    #[serde(rename = "partnersTotal")]
+    pub partners_total: i64,
+    /// Davon im gewählten Zeitraum mit mindestens einem Deadlock-Stream.
+    #[serde(rename = "partnersSeenInRange")]
+    pub partners_seen_in_range: i64,
 }
 
 #[derive(Serialize)]
@@ -186,6 +198,10 @@ pub async fn market_share_handler(
         .await
         .map_err(|_| ApiError::internal())?;
 
+    let (partners_total, partners_seen_in_range) = partner_roster(&pool, since)
+        .await
+        .map_err(|_| ApiError::internal())?;
+
     let current = tick.first().map(|first| {
         let ts = first.ts_utc;
         let mut total_viewers = 0i64;
@@ -250,6 +266,10 @@ pub async fn market_share_handler(
         series,
         peak,
         current,
+        roster: RosterInfo {
+            partners_total,
+            partners_seen_in_range,
+        },
     }))
 }
 
@@ -324,6 +344,13 @@ mod tests {
         .execute(&pool)
         .await
         .expect("DDL fehlgeschlagen");
+        // Minimal-Abbild der Prod-View für die Roster-Query.
+        sqlx::query(
+            "CREATE TABLE twitch_partners_all_state (twitch_login TEXT, is_partner_active INTEGER)",
+        )
+        .execute(&pool)
+        .await
+        .expect("Roster-DDL fehlgeschlagen");
         pool
     }
 
@@ -391,5 +418,7 @@ mod tests {
         assert_eq!(series.len(), 1);
         assert!((series[0]["sharePct"].as_f64().unwrap() - 25.0).abs() < 1e-9);
         assert!((v["peak"]["sharePct"].as_f64().unwrap() - 25.0).abs() < 1e-9);
+        assert_eq!(v["roster"]["partnersTotal"], 0);
+        assert_eq!(v["roster"]["partnersSeenInRange"], 1);
     }
 }
