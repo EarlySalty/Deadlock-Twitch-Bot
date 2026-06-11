@@ -1,3 +1,11 @@
+## #150 — AGB klar auf den Twitch-Bot eingegrenzt, Server-Schutz im Sicherheitskonzept
+
+**Ausgangslage:** Die frisch erweiterten AGB sprachen pauschal von den „digitalen Diensten der Deutschen Deadlock Community" — damit war unklar, ob sie auch für die anderen Angebote (Discord-Bots, Steam-Bot, Community-Server) gelten sollen. Und im Sicherheitskonzept fehlte die Server-Ebene: Wie die Maschine selbst geschützt ist, stand dort noch nicht.
+
+**Was wurde geändert:** § 1 der AGB grenzt den Geltungsbereich jetzt ausdrücklich ein: Sie gelten ausschließlich für den Twitch-Bot samt zugehöriger Web-Dienste (Dashboard, Statistik-Seiten, Abo-Verwaltung) — die Discord-Bots, der Steam-Bot und der Community-Discord-Server sind explizit ausgenommen. Im Sicherheitskonzept gibt es einen neuen Abschnitt „Wie der Server geschützt wird".
+
+**Wie es jetzt funktioniert:** Der neue Abschnitt erklärt die Schutzschichten des Servers: die doppelte Firewall (Rechenzentrums-Firewall bei IONOS vor dem Server, zweite Firewall auf dem Server selbst — offen ist nur das Minimum), Fernzugriff nur über ein privates VPN-Netz, Schutz vor SQL-Injection durch ausschließlich parametrisierte Datenbank-Abfragen (Nutzereingaben werden nie Teil des SQL-Befehls), Schutz vor eingeschleustem Browser-Code durch Ausgabe-Maskierung plus Content-Security-Policy und automatische Betriebssystem-Sicherheitsupdates inklusive kontrolliertem Neustart. Beide Änderungen sind synchron in der Python- und der Rust-Implementierung gelandet (byte-identisch verifiziert), live ausgeliefert wird weiter über Rust.
+
 ## #149 — Streamer-Autorisierung: Setup-Followups in Rust + Einstellungs-Wipe-Bug entdeckt
 
 **Ausgangslage:** Der OAuth-Callback (Streamer autorisiert den Bot) war in Rust zwar fertig portiert, durfte aber nicht live gehen: Nach dem Token-Speichern startet das System Hintergrund-Schritte — Bot als Moderator einsetzen, Begrüßungsnachrichten in den Chat, Partner-Status setzen, Discord-Rolle vergeben, Trial-Zeitstempel — und die liefen nur im Python-Prozess. Ein nativer Callback hätte den Einmal-OAuth-Code verbrannt und diese Schritte verschluckt.
