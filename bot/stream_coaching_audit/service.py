@@ -149,10 +149,16 @@ def _evidence_excerpt_raw(text: str, match: re.Match[str] | None = None) -> str:
 
 
 def _vod_jump_url(source_url: str | None, seconds: float) -> str:
-    """Twitch-VOD-Sprunglink auf die Fundstelle (?t=1h2m3s); leer wenn kein VOD."""
-    if not source_url or "/videos/" not in source_url:
+    """Twitch-VOD-/YouTube-Sprunglink auf die Fundstelle; leer wenn keine Video-URL."""
+    if not source_url:
         return ""
     total = max(0, int(seconds))
+    if "youtube.com/watch" in source_url or "youtu.be/" in source_url:
+        base = source_url.split("&t=", 1)[0]
+        separator = "&" if "?" in base else "?"
+        return f"{base}{separator}t={total}s"
+    if "/videos/" not in source_url:
+        return ""
     hours, remainder = divmod(total, 3600)
     minutes, secs = divmod(remainder, 60)
     base = source_url.split("?", 1)[0]

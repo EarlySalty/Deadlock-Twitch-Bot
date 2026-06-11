@@ -9,13 +9,14 @@ if [[ $# -lt 1 ]]; then
 fi
 
 cd "$ROOT_DIR"
+# PATH des Service-Starts enthält ~/.local/bin nicht zuverlässig → Binaries explizit pinnen.
+# /usr/bin/ffmpeg statt ~/.local: der statische Build segfaultet beim Twitch-HLS.
+export STREAM_AUDIT_YTDLP_BIN="$ROOT_DIR/.venv/bin/yt-dlp"
+export FFMPEG_BIN="/usr/bin/ffmpeg"
 exec "$ROOT_DIR/scripts/run_with_infisical.sh" \
   "$ROOT_DIR/.venv/bin/python" \
   "$ROOT_DIR/scripts/audit_stream_tos.py" \
   --authorized \
-  --watch-live \
-  --transcriber openai_api \
-  --allow-remote-transcription \
+  --watch-record \
   --discord-dm \
-  --audit-vod-on-end \
   "$@"

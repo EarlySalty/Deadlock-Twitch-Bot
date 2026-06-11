@@ -7,6 +7,8 @@ import asyncio
 import logging
 import os
 import sys
+import tempfile
+import time
 from collections import deque
 from datetime import datetime
 from pathlib import Path
@@ -15,13 +17,17 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+from bot.stream_coaching_audit import youtube_archive
 from bot.stream_coaching_audit.service import (
     AuditError,
     AuditFinding,
     _channel_login_from_source,
+    _require_binary,
+    _run_output,
     audit_source,
     notify_findings_discord_dm,
     notify_findings_webhook,
+    notify_status_discord_dm,
     resolve_latest_vod_url,
 )
 
@@ -76,6 +82,43 @@ def _parser() -> argparse.ArgumentParser:
         "--audit-vod-on-end",
         action="store_true",
         help="Nach Stream-Ende automatisch das komplette VOD pruefen (nur mit --watch-live)",
+    )
+    parser.add_argument(
+        "--watch-record",
+        action="store_true",
+        help=(
+            "Kanal beobachten, Live-Stream lokal mitschneiden, nach Stream-Ende privat "
+            "zum YouTube-Audit-Account hochladen und via Auto-Captions pruefen"
+        ),
+    )
+    parser.add_argument(
+        "--record-format",
+        default=os.getenv("STREAM_AUDIT_RECORD_FORMAT") or youtube_archive.DEFAULT_RECORD_FORMAT,
+        help="yt-dlp-Format fuer Mitschnitt/VOD-Download; Standard: max. 720p",
+    )
+    parser.add_argument(
+        "--poll-seconds",
+        type=float,
+        default=60.0,
+        help="Live-Poll-Intervall im Watch-Record; Standard: 60 Sekunden",
+    )
+    parser.add_argument(
+        "--caption-poll-seconds",
+        type=float,
+        default=600.0,
+        help="Poll-Intervall fuer YouTube-Auto-Captions; Standard: 600 Sekunden",
+    )
+    parser.add_argument(
+        "--caption-timeout-hours",
+        type=float,
+        default=24.0,
+        help="Maximale Wartezeit auf Auto-Captions, danach Whisper-Fallback; Standard: 24 h",
+    )
+    parser.add_argument(
+        "--min-free-gb",
+        type=float,
+        default=20.0,
+        help="Mindest-freier Speicher fuer neue Mitschnitte; Standard: 20 GB",
     )
     parser.add_argument(
         "--chunk-seconds",
@@ -316,7 +359,206 @@ async def _run_live_watch(args: argparse.Namespace) -> int:
     return 0
 
 
+def _is_channel_live(login: str) -> bool:
+    """Schneller Live-Check via yt-dlp; False bei offline oder Aufloesungsfehler."""
+    yt_dlp = _require_binary("STREAM_AUDIT_YTDLP_BIN", "yt-dlp")
+    try:
+        output = _run_output(
+            [yt_dlp, "--no-playlist", "--format", "worst", "--get-url", f"https://twitch.tv/{login}"]
+        )
+    except AuditError as exc:
+        if not _is_offline_error(str(exc)):
+            print(f"WARN Live-Check {login}: {exc}", flush=True)
+        return False
+    return bool(output.strip())
+
+
+async def _notify_status_safe(args: argparse.Namespace, content: str) -> None:
+    if not args.discord_dm:
+        return
+    try:
+        await notify_status_discord_dm(content, discord_user_id=args.discord_user_id)
+    except AuditError as exc:
+        print(f"WARN Status-DM nicht moeglich: {exc}", flush=True)
+
+
+async def _process_recording(
+    args: argparse.Namespace,
+    *,
+    login: str,
+    media_path: Path,
+    prefer_vod: bool,
+    pending: set[Path],
+) -> None:
+    """Mitschnitt (oder VOD-Fallback) hochladen, auditieren, bei Erfolg lokal loeschen."""
+    try:
+        recording_valid = False
+        if media_path.is_file() and media_path.stat().st_size > 5 * 1024 * 1024:
+            try:
+                duration = await asyncio.to_thread(youtube_archive.probe_duration_seconds, media_path)
+                recording_valid = duration >= 60.0
+            except AuditError as exc:
+                print(f"WARN {login}: Mitschnitt nicht lesbar ({exc})", flush=True)
+
+        media = media_path
+        vod_url: str | None = None
+        if prefer_vod or not recording_valid:
+            vod_url = await asyncio.to_thread(resolve_latest_vod_url, login)
+            if vod_url:
+                vod_path = media_path.with_name(media_path.stem + "-vod.mp4")
+                try:
+                    media = await asyncio.to_thread(
+                        youtube_archive.download_vod_video,
+                        vod_url,
+                        vod_path,
+                        record_format=args.record_format,
+                    )
+                    print(f"{login}: VOD-Fallback geladen ({vod_url})", flush=True)
+                except AuditError as exc:
+                    print(f"WARN {login}: VOD-Download fehlgeschlagen ({exc})", flush=True)
+                    vod_url = None
+                    media = media_path
+            if media is media_path and not recording_valid:
+                raise AuditError("weder verwertbarer Mitschnitt noch abrufbares VOD")
+
+        title = f"[Audit] {login} {datetime.now().strftime('%Y-%m-%d %H:%M')}"
+        source_label = vod_url or f"https://twitch.tv/{login}"
+        with tempfile.TemporaryDirectory(prefix="stream-audit-yt-") as tmp:
+            report, markdown_path, watch_url = await youtube_archive.audit_media_via_youtube(
+                media,
+                source_label=source_label,
+                channel_login=login,
+                workdir=Path(tmp),
+                llm_provider=args.llm_provider,
+                output_dir=args.output_dir,
+                caption_poll_seconds=args.caption_poll_seconds,
+                caption_timeout_seconds=args.caption_timeout_hours * 3600.0,
+                chunk_seconds=args.chunk_seconds,
+                upload_title=title,
+            )
+        print(
+            f"Archiv-Audit fertig ({login}): {len(report.findings)} Fundstelle(n) | "
+            f"{watch_url} | {markdown_path}",
+            flush=True,
+        )
+        if args.discord_dm and report.findings:
+            sent = await notify_findings_discord_dm(
+                report.source_label,
+                report.findings,
+                discord_user_id=args.discord_user_id,
+                source_url=watch_url,
+            )
+            if not sent:
+                print("WARN Discord-Bot konnte Archiv-DM nicht senden", flush=True)
+        await _notify_status_safe(
+            args,
+            f"Stream-Archiv {login}: {watch_url} | {len(report.findings)} Fundstelle(n) | "
+            f"Transkript: {report.transcriber_engine}",
+        )
+        # YouTube ist jetzt das Archiv - lokale Dateien nur nach vollem Erfolg loeschen
+        media_path.unlink(missing_ok=True)
+        if media != media_path:
+            media.unlink(missing_ok=True)
+    except AuditError as exc:
+        print(f"WARN Verarbeitung {login}: {exc} - Datei bleibt fuer Retry liegen", flush=True)
+        await _notify_status_safe(args, f"Stream-Archiv {login} fehlgeschlagen: {exc}")
+    finally:
+        pending.discard(media_path)
+
+
+async def _record_channel_loop(args: argparse.Namespace, source: str) -> None:
+    login = _channel_login_from_source(source)
+    if not login:
+        raise AuditError(f"Watch-Record braucht Twitch-Login oder Kanal-URL: {source}")
+    recordings_dir = args.output_dir / "recordings" / login
+    recordings_dir.mkdir(parents=True, exist_ok=True)
+    pending: set[Path] = set()
+    tasks: set[asyncio.Task] = set()
+
+    def _spawn_processing(path: Path, *, prefer_vod: bool) -> None:
+        if path in pending:
+            return
+        pending.add(path)
+        task = asyncio.create_task(
+            _process_recording(args, login=login, media_path=path, prefer_vod=prefer_vod, pending=pending)
+        )
+        tasks.add(task)
+        task.add_done_callback(tasks.discard)
+
+    # Liegengebliebene Mitschnitte aus frueheren Laeufen nachziehen. Halbfertige
+    # VOD-Zwischendateien vorher entsorgen, sonst wuerde derselbe Stream doppelt
+    # hochgeladen (Original + VOD-Variante).
+    for stale_vod in sorted(recordings_dir.glob("*-vod.mp4")):
+        stale_vod.unlink(missing_ok=True)
+    for leftover in sorted(recordings_dir.glob("*.mp4")):
+        print(f"{login}: verarbeite liegengebliebenen Mitschnitt {leftover.name}", flush=True)
+        _spawn_processing(leftover, prefer_vod=False)
+
+    poll_seconds = max(15.0, float(args.poll_seconds))
+    first_poll = True
+    print(f"Watch-Record aktiv: {source} | Poll={poll_seconds:.0f}s", flush=True)
+    while True:
+        live = await asyncio.to_thread(_is_channel_live, login)
+        if not live:
+            first_poll = False
+            await asyncio.sleep(poll_seconds)
+            continue
+        # Lief der Stream schon beim Watcher-Start, fehlt der Anfang -> spaeter VOD bevorzugen
+        partial = first_poll
+        first_poll = False
+        try:
+            youtube_archive.ensure_disk_space(recordings_dir, min_free_gb=args.min_free_gb)
+        except AuditError as exc:
+            print(f"WARN {login}: {exc}", flush=True)
+            await _notify_status_safe(args, f"Aufnahme {login} uebersprungen: {exc}")
+            await asyncio.sleep(max(300.0, poll_seconds))
+            continue
+        media_path = recordings_dir / f"{login}-{datetime.now().strftime('%Y%m%d-%H%M%S')}.mp4"
+        print(f"{login}: live -> Mitschnitt startet ({media_path.name})", flush=True)
+        await _notify_status_safe(args, f"Aufnahme gestartet: {login}")
+        record_start = time.monotonic()
+        try:
+            await asyncio.to_thread(
+                youtube_archive.record_live_stream,
+                login,
+                media_path,
+                record_format=args.record_format,
+            )
+        except AuditError as exc:
+            print(f"WARN Mitschnitt {login}: {exc}", flush=True)
+            await asyncio.sleep(poll_seconds)
+            continue
+        recorded_wall = time.monotonic() - record_start
+        print(f"{login}: Stream zu Ende ({recorded_wall / 60:.0f} min aufgenommen)", flush=True)
+        _spawn_processing(media_path, prefer_vod=partial or recorded_wall < 120.0)
+        await asyncio.sleep(poll_seconds)
+
+
+async def _run_record_watch(args: argparse.Namespace) -> int:
+    if not args.authorized:
+        raise AuditError("Watch-Record nur mit --authorized erlaubt")
+    if args.llm_provider != "none" and not args.allow_remote_llm:
+        raise AuditError("Externe LLM-Pruefung braucht --allow-remote-llm")
+    if youtube_archive.load_credentials() is None:
+        print(
+            "WARN YouTube-Audit-Account nicht eingerichtet "
+            "(scripts/setup_youtube_audit_oauth.py) - Mitschnitte bleiben liegen, "
+            "Upload klappt erst nach dem Setup",
+            flush=True,
+        )
+    print(
+        f"Watch-Record aktiv fuer {len(args.source)} Kanal/Kanaele | Ctrl+C beendet",
+        flush=True,
+    )
+    await asyncio.gather(*(_record_channel_loop(args, source) for source in args.source))
+    return 0
+
+
 async def _run(args: argparse.Namespace) -> int:
+    if args.watch_record and args.watch_live:
+        raise AuditError("--watch-record und --watch-live schliessen sich aus")
+    if args.watch_record:
+        return await _run_record_watch(args)
     if args.watch_live:
         return await _run_live_watch(args)
     if len(args.source) != 1:
@@ -346,6 +588,7 @@ def main() -> int:
     # Der statische ffmpeg in ~/.local/bin segfaultet beim Twitch-HLS-Mitschnitt;
     # daher per Default den funktionierenden System-ffmpeg nutzen (ueberschreibbar).
     os.environ.setdefault("FFMPEG_BIN", "/usr/bin/ffmpeg")
+    os.environ.setdefault("FFPROBE_BIN", "/usr/bin/ffprobe")
     args = _parser().parse_args()
     try:
         return asyncio.run(_run(args))
