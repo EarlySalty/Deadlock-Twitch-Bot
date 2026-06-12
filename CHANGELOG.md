@@ -1,3 +1,16 @@
+## #193 — Bugfixes: category-comparison + audience-demographics
+
+**Was war kaputt:**
+
+**category-comparison:**
+- Q5 (Kategorie-Durchschnitt für Retention + Chat-Health) lief doppelt — erster Durchlauf wurde komplett verworfen. Jeder Request löste damit eine extra DB-Query aus die nichts beitrug.
+- `categoryRank` (Rang des Streamers) wurde über eine Integer-Division-Näherung berechnet: `total - percentile*total/100`. Bei mehreren Streamern mit gleichem Durchschnitt wich das deutlich ab. Jetzt exakt: `partition_point` zählt Streamer mit Avg ≤ deinem Wert, Rang = total − dieser Zahl + 1.
+
+**audience-demographics:**
+- Leere Schleife über `time_rows` (Stunden-Daten) mit `let _ = row` — tat buchstäblich nichts.
+- Drei `.max(0)` auf `usize`-Feldern (können nie negativ sein) — entfernt.
+- Überflüssiges `format!()` ohne Platzhalter als SQL-String — jetzt direktes Literal.
+
 ## #192 — Python-Bot abgeschaltet: Rust übernimmt alle verbleibenden API-Routen nativ
 
 **Ausgangslage:** Trotz vollständiger Chat-, Monitoring- und Raid-Übernahme durch Rust lief der Python-Prozess noch weiter — einzig wegen 5 interner API-Routen die kein Rust-Pendant hatten und über den Legacy-Proxy an Python auf Port 8779 weitergeleitet wurden. Das hieß: Python brauchte Speicher, startete voll durch und hätte einen API-Fehler auf 8779 produziert sobald die Route gerufen wird.

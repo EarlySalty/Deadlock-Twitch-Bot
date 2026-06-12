@@ -57,9 +57,9 @@ fn safe_ratio(num: f64, den: f64) -> f64 {
 }
 
 fn calculate_engagement(inp: &EngagementInputs) -> EngagementOutputs {
-    let tracked = inp.tracked_chat_accounts.max(0) as f64;
-    let active = inp.active_chatters.max(0) as f64;
-    let api_seen = inp.chatters_api_seen.max(0) as f64;
+    let tracked = inp.tracked_chat_accounts as f64;
+    let active = inp.active_chatters as f64;
+    let api_seen = inp.chatters_api_seen as f64;
     let msgs = inp.total_messages.max(0) as f64;
     let vm = inp.viewer_minutes.max(0.0);
     let avg_v = inp.avg_viewers.max(0.0);
@@ -163,13 +163,11 @@ async fn compute_weighted_peak_hours(
 
     // Q3b: Chat-Messages aggregiert nach (session_id, hour_in_tz)
     let msg_rows = sqlx::query(
-        &format!(
-            "SELECT cm.session_id, EXTRACT(HOUR FROM (cm.message_ts AT TIME ZONE $1))::int AS hour, COUNT(*) AS cnt
-             FROM twitch_chat_messages cm
-             WHERE cm.session_id = ANY($2::bigint[])
-               AND NOT (cm.chatter_login = ANY($3::text[]))
-             GROUP BY cm.session_id, EXTRACT(HOUR FROM (cm.message_ts AT TIME ZONE $1))::int"
-        )
+        "SELECT cm.session_id, EXTRACT(HOUR FROM (cm.message_ts AT TIME ZONE $1))::int AS hour, COUNT(*) AS cnt
+         FROM twitch_chat_messages cm
+         WHERE cm.session_id = ANY($2::bigint[])
+           AND NOT (cm.chatter_login = ANY($3::text[]))
+         GROUP BY cm.session_id, EXTRACT(HOUR FROM (cm.message_ts AT TIME ZONE $1))::int"
     ).bind(tz_name).bind(&session_ids[..]).bind(&bots[..])
     .fetch_all(pool).await.unwrap_or_default();
 
@@ -455,10 +453,6 @@ pub async fn audience_demographics_handler(
     // ── Aktivitätsmuster (Schedule) ───────────────────────────────────────────
     let mut weekday_counts: [i64; 7] = [0; 7];
     let mut schedule_total: i64 = 0;
-    for row in &time_rows {
-        // time_rows hat HOUR, nicht DOW — weekday braucht separaten Q (s.u.)
-        let _ = row;
-    }
     // Schedule-DOW-Query für Aktivitätsmuster
     let dow_rows = sqlx::query(
         "SELECT EXTRACT(DOW FROM (started_at AT TIME ZONE 'UTC'))::int AS dow, COUNT(*) AS cnt

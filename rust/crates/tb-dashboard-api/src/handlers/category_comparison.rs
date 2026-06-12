@@ -157,37 +157,6 @@ pub async fn category_comparison_handler(
     };
 
     // ── Q5: Category session averages (ret + chat) ──────────────────────────
-    let cat_sess_row: Option<f64> = {
-        let (avg_ret, _avg_chat) = if exclude_external {
-            let r = sqlx::query(r#"
-                SELECT AVG(retention_10m) AS avg_ret,
-                       AVG(CASE WHEN avg_viewers > 0 THEN unique_chatters * 100.0 / avg_viewers ELSE 0 END) AS avg_chat
-                FROM twitch_stream_sessions
-                WHERE started_at >= $1 AND ended_at IS NOT NULL
-                  AND LOWER(streamer_login) NOT IN (
-                      SELECT LOWER(streamer_login) FROM twitch_stream_sessions
-                      WHERE started_at >= $1 AND ended_at IS NOT NULL
-                      GROUP BY LOWER(streamer_login) HAVING AVG(avg_viewers) > $2
-                  )
-            "#).bind(since).bind(EXTERNAL_REACH_AVG_THRESHOLD)
-            .fetch_optional(&pool).await.ok().flatten();
-            (r.as_ref().and_then(|row| row.try_get::<Option<f64>, _>("avg_ret").ok().flatten()),
-             r.as_ref().and_then(|row| row.try_get::<Option<f64>, _>("avg_chat").ok().flatten()))
-        } else {
-            let r = sqlx::query(r#"
-                SELECT AVG(retention_10m) AS avg_ret,
-                       AVG(CASE WHEN avg_viewers > 0 THEN unique_chatters * 100.0 / avg_viewers ELSE 0 END) AS avg_chat
-                FROM twitch_stream_sessions
-                WHERE started_at >= $1 AND ended_at IS NOT NULL
-            "#).bind(since)
-            .fetch_optional(&pool).await.ok().flatten();
-            (r.as_ref().and_then(|row| row.try_get::<Option<f64>, _>("avg_ret").ok().flatten()),
-             r.as_ref().and_then(|row| row.try_get::<Option<f64>, _>("avg_chat").ok().flatten()))
-        };
-        avg_ret
-    };
-
-    // Redo Q5 properly to get both values
     let (cat_avg_ret, cat_avg_chat): (f64, f64) = if exclude_external {
         let r = sqlx::query(r#"
             SELECT AVG(retention_10m) AS avg_ret,
@@ -214,7 +183,6 @@ pub async fn category_comparison_handler(
         let chat = r.as_ref().and_then(|row| row.try_get::<Option<f64>, _>("avg_chat").ok().flatten()).unwrap_or(0.0);
         (ret, chat)
     };
-    let _ = cat_sess_row; // superseded by above
 
     // ── Q6+Q7: Per-streamer ret + chat sorted lists ─────────────────────────
     let mut ret_sorted: Vec<f64>;
@@ -281,8 +249,10 @@ pub async fn category_comparison_handler(
     let peak_percentile = percentile_of(&peak_sorted, your_peak as f64);
     let ret_percentile  = percentile_of(&ret_sorted, your_ret);
     let chat_percentile = percentile_of(&chat_sorted, your_chat);
-    let category_rank   = if category_total > 0 {
-        (category_total as i64 - (avg_percentile as i64 * category_total as i64 / 100)).max(0)
+    // Rang von oben: Anzahl Streamer mit strikt höherem avg als deiner + 1
+    let below_equal = sorted_avgs.partition_point(|&v| v <= your_avg);
+    let category_rank = if category_total > 0 {
+        (category_total - below_equal + 1) as i64
     } else { 0 };
 
     // ── Peer group (no threshold — same as Python _get_peer_group_stats) ─────
