@@ -64,6 +64,9 @@ pub struct SubscriptionManager {
     /// In-Memory-Tracking (Typ, broadcaster_user_id) — wie Pythons
     /// `_eventsub_has_sub`, beim Start via [`Self::rehydrate`] gefüllt.
     tracked: Mutex<HashSet<(String, String)>>,
+    /// Permanent-Fehler (Typ, broadcaster_user_id): 403 = Bot gebannt oder
+    /// Kanal sperrt externe Subs. Kein Retry bis Neustart.
+    perm_failed: Mutex<HashSet<(String, String)>>,
 }
 
 impl SubscriptionManager {
@@ -77,6 +80,7 @@ impl SubscriptionManager {
             config,
             capacity,
             tracked: Mutex::new(HashSet::new()),
+            perm_failed: Mutex::new(HashSet::new()),
         }
     }
 
@@ -219,6 +223,15 @@ impl SubscriptionManager {
             tracing::debug!(sub_type, login, "EventSub: bereits subscribed, überspringe");
             return true;
         }
+        if self
+            .perm_failed
+            .lock()
+            .expect("perm_failed lock")
+            .contains(&(sub_type.to_string(), broadcaster_id.to_string()))
+        {
+            tracing::debug!(sub_type, login, "EventSub: 403-gebannt, überspringe");
+            return false;
+        }
         match self
             .transport
             .create(
@@ -249,7 +262,21 @@ impl SubscriptionManager {
                 true
             }
             Err(error) => {
-                tracing::warn!(%error, sub_type, login, "EventSub: Subscription fehlgeschlagen");
+                let msg = error.to_string();
+                if msg.contains("403") {
+                    self.perm_failed
+                        .lock()
+                        .expect("perm_failed lock")
+                        .insert((sub_type.to_string(), broadcaster_id.to_string()));
+                    tracing::warn!(
+                        sub_type,
+                        login,
+                        "EventSub 403: Bot gebannt oder Kanal gesperrt — \
+                         kein weiterer Retry bis Neustart"
+                    );
+                } else {
+                    tracing::warn!(%error, sub_type, login, "EventSub: Subscription fehlgeschlagen");
+                }
                 false
             }
         }

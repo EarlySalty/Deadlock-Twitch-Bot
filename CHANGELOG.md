@@ -1,3 +1,11 @@
+## #161 — EventSub 403-Spam gestoppt (xoralle, berserkkoo)
+
+**Ausgangslage:** Für Kanäle, bei denen der Bot-Account gebannt wurde oder der Streamer externe EventSub-Subscriptions gesperrt hat, schlägt Twitch mit HTTP 403 zurück. Der Reconciler lief alle 30 Minuten durch alle Partner-Kanäle und versuchte es jedes Mal erneut — mit demselben Ergebnis. Das erzeugte konstante Warn-Logs und löste stündlich Discord-Alerts aus, obwohl kein Code-Bug vorlag.
+
+**Was wurde geändert:** Der `SubscriptionManager` führt jetzt ein In-Memory-Set `perm_failed`. Beim ersten 403 wird der betroffene `(sub_type, broadcaster_id)`-Schlüssel dort eingetragen und eine einmalige Warn-Meldung geloggt ("Bot gebannt oder Kanal gesperrt — kein weiterer Retry bis Neustart"). Alle folgenden Reconcile-Läufe skippen diesen Eintrag lautlos auf Debug-Level. Beim Bot-Neustart wird einmal erneut versucht — bleibt das 403, landet der Kanal wieder im Set.
+
+**Jetzt:** xoralle und berserkkoo werden beim nächsten Reconcile-Lauf (spätestens in 30 min) ein letztes Mal mit Warn-Log quittiert und danach aus dem Alert-Radar verschwinden, solange der Bot-Account in diesen Kanälen gebannt bleibt.
+
 ## #160 — Chat-Bot komplett auf Rust umgestellt (Welle B: Cutover vollzogen)
 
 **Ausgangslage:** Der Twitch-Chat (Moderation, Spam-Filter, Commands, Promos, Chatter-Tracking) lief als letzter großer Brocken noch im Python-Worker — inklusive der Hoheit über das Bot-Token. Der Rust-Bot bediente bereits Monitoring, Raids und die interne API, musste für jede Chat-Aktion aber den Umweg über Python nehmen.
