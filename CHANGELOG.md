@@ -1,3 +1,11 @@
+## #176 — Follower-Funnel nativ in Rust (tb-dashboard-api 8769)
+
+**Ausgangslage:** `GET /twitch/api/v2/follower-funnel` lief über den Legacy-Proxy. Der Endpoint berechnet Follower-Conversion aus mehreren verknüpften Quellen und war wegen der Komplexität noch nicht portiert.
+
+**Was wurde geändert:** Fünf SQL-Queries laufen jetzt direkt in Postgres: (1) Session-Aggregat (Anzahl, Dauer, Follower-Delta), (2) bot-bereinigte Chatter-Distinct-Counts (10 bekannte Bots ausgeschlossen, gleiche Liste wie chatter_tracking), (3) Follow-Events die tatsächlich während aktiver Streams stattfanden (JOIN auf Session-Zeitfenster), (4) Raid-Inflow (erfolgreiche eingehende Raids), (5) alles wird zu einem Confidence-Level kombiniert. Conversion-Rate nimmt echte Follow-Events als erste Quelle, fällt auf Follower-Delta-Summe zurück wenn keine Events vorliegen.
+
+**Wie es jetzt funktioniert:** Endpoint antwortet mit 200 und dem vollständigen Payload inkl. `dataQuality`-Block.
+
 ## #175 — Rankings + Session-Detail-Endpoints nativ in Rust
 
 **Ausgangslage:** `GET /twitch/api/v2/rankings` (Streamer-Rangliste) und `GET /twitch/api/v2/session/{id}` + `session/{id}/events` liefen noch über den Legacy-Proxy an Python 8765.
