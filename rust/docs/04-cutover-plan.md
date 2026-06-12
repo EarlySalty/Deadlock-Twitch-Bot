@@ -331,3 +331,20 @@ Fehler dort teuer/sichtbar sind — und Stripe bzw. die DB-Queue ohnehin Retry-S
   liefert seit dem Takeover Stales, Rust leere Listen bis der
   `EventSubStatsSource`-Port an den SubscriptionManager verdrahtet ist
   (Followup). Die DB-Capacity-Teile sind paritätisch.
+
+### Restfläche interne API nach 12.6. (Welle A im Wesentlichen abgeschlossen)
+
+Nativ (21): healthz, eventsub/dispatch, raid/manual, chat/command,
+discord-invite, globalban×4, raid/blacklist×4, streamers/link-candidates,
+market-share, discord/self-explainer-log, raid/auth-url+auth-state+
+block-state+go-url+oauth-callback, live/active-announcements+link-click,
+analytics/comparison, **/stats, /analytics/streamer/:login,
+/sessions/:session_id**.
+
+Proxied (14, mit Grund): /streamers-Baum (GET/POST/DELETE + verify/archive/
+discord-flag/discord-profile/chat-action — Partner-Lifecycle promote/departner
++ Discord-DM/Rollen-Sync + rotierter Bot-Token; Lifecycle-Bausteine existieren
+seit dem Followup-Port in tb-raid::partner_setup!), raid/requirements
+(Discord-DM → Broker send-dm wäre jetzt möglich), debug/observability +
+debug/eventsub-processing + debug/chatters (Python-In-Process-State),
+eventsub/processing/requeue (dito).
