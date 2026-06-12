@@ -1,3 +1,14 @@
+## #179 — Retention-Curve, Loyalty-Curve, Viewer-Timeline nativ in Rust
+
+**Ausgangslage:** Drei analytisch komplexe Endpoints liefen noch über den Python-Proxy — jeder davon holte Rohdaten aus der DB und machte Berechnungen serverseitig in Python.
+
+**Was wurde portiert:**
+- `GET /twitch/api/v2/retention-curve`: Pro Minute der letzten 50 Sessions wird `viewer_count / peak_viewers` normalisiert. Postgres `PERCENTILE_CONT(0.5/0.25/0.75)` aggregiert direkt auf DB-Seite — Python holte alle Rows und rechnete Quantile im Speicher. Drop-Events (>10 % Median-Rückgang) werden in Rust berechnet.
+- `GET /twitch/api/v2/loyalty-curve`: Aus `twitch_chatter_rollup` wird gezählt, wie viele Chatter genau 1×, 2×, 3×, … aufgetaucht sind — gibt One-Time-Rate und Gesamt-Verteilung.
+- `GET /twitch/api/v2/:streamer/viewer-timeline` + `/profile`: Berechnet Anwesenheits-Spans aus `twitch_viewer_presence_ticks` per Postgres `LAG()`-Window-Funktion (Gap > 2 Min = neuer Span). Viewer werden mit `_classify_viewer`-Logik (new/lurker/dedicated/regular/casual) basierend auf Sessions-per-Week und Msgs-per-Session klassifiziert — identisch zu Python portiert.
+
+**Wie es jetzt funktioniert:** Alle fünf Endpoints antworten nativ aus Rust. Kein Proxy-Hop.
+
 ## #178 — Title-Performance + Ads-Schedule nativ in Rust
 
 **Was wurde portiert:** `GET /twitch/api/v2/title-performance` aggregiert Stream-Titel aus `twitch_stream_sessions` nach Avg-Viewers, Retention-10m, Follower-Gain und Peak — sortiert nach Avg-Viewers. Keywords werden direkt in Rust extrahiert (Stop-Wort-Filter + 3+-Zeichen-Wörter, max 5 Keywords, identisch zu Python). `peerBenchmark` wird als `null` zurückgegeben (`_get_peer_group_stats` noch nicht portiert). `GET /twitch/api/v2/ads-schedule` liest die letzten 50 Snapshots aus `twitch_ads_schedule_snapshot` und gibt aktuellen Stand + 10-Einträge-Verlauf zurück.
