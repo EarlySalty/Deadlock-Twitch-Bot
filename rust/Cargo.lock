@@ -2116,6 +2116,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "strsim"
+version = "0.11.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7da8b5736845d9f2fcb837ea5d9e2628564b3b043a70948a3f0b778838c5fb4f"
+
+[[package]]
 name = "subtle"
 version = "2.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2179,6 +2185,8 @@ dependencies = [
  "serde",
  "serde_json",
  "sqlx",
+ "strsim",
+ "tb-analytics",
  "tb-chat",
  "tb-config",
  "tb-crypto",
@@ -2192,6 +2200,7 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber",
+ "unicode-normalization",
 ]
 
 [[package]]

@@ -32,6 +32,7 @@
 
 mod auto_raid;
 mod chat_wiring;
+mod streamer_link;
 mod confirm_resolver;
 mod eventsub_hooks;
 mod oauth_followups;
@@ -613,6 +614,24 @@ async fn main() {
             scout_lang_filters,
         )
         .start_if_enabled();
+    }
+
+    // Streamer-Link-Matcher: verknüpft neue Twitch-Partner mit ihrem Discord-Account.
+    // Läuft alle 6h, ist still wenn keine neuen Kandidaten vorhanden.
+    if let Ok(sl_relay) = BrokerRelay::new(&settings.broker) {
+        let sl_config = Arc::new(streamer_link::StreamerLinkConfig::from_env(
+            std::path::PathBuf::from("data/streamer_link_state.json"),
+        ));
+        let sl_pool = pool.clone();
+        let sl_base = format!("http://127.0.0.1:{port}");
+        let sl_token = settings.internal_api.token.clone();
+        tokio::spawn(streamer_link::streamer_link_task(
+            sl_pool,
+            sl_relay,
+            sl_config,
+            sl_base,
+            sl_token,
+        ));
     }
 
     let addr = SocketAddr::from(([127, 0, 0, 1], port));

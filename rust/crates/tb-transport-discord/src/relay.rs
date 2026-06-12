@@ -14,6 +14,7 @@ const SEND_PATH: &str = "/internal/master/v1/discord/send-rich-message";
 const EDIT_PATH: &str = "/internal/master/v1/discord/edit-rich-message";
 const RESOLVE_USER_PATH: &str = "/internal/master/v1/discord/resolve-user";
 const ADD_ROLE_PATH: &str = "/internal/master/v1/discord/member/add-role";
+const MEMBERS_PATH: &str = "/internal/master/v1/discord/members";
 const TIMEOUT: Duration = Duration::from_secs(10);
 const RETRY_WAIT: Duration = Duration::from_secs(2);
 const MAX_ATTEMPTS: u32 = 2;
@@ -24,6 +25,15 @@ pub struct BrokerRelay {
     client: Arc<Client>,
     base_url: String,
     token: String,
+}
+
+/// Ein Guild-Member aus `GET /discord/members`.
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct GuildMember {
+    pub id: String,
+    pub name: String,
+    pub global_name: Option<String>,
+    pub nick: Option<String>,
 }
 
 /// Aufgelöster Discord-User aus `POST /discord/resolve-user`.
@@ -177,6 +187,29 @@ impl BrokerRelay {
             return Err(DiscordError::BrokerError { status, body });
         }
         Ok(())
+    }
+    /// Holt alle nicht-Bot-Guild-Member vom Broker (loopback, kein Token).
+    /// `GET /internal/master/v1/discord/members`
+    pub async fn list_members(&self) -> Result<Vec<GuildMember>, DiscordError> {
+        let url = format!("{}{}", self.base_url, MEMBERS_PATH);
+        let resp = self
+            .client
+            .get(&url)
+            .timeout(Duration::from_secs(15))
+            .send()
+            .await
+            .map_err(DiscordError::Http)?;
+        if !resp.status().is_success() {
+            let status = resp.status().as_u16();
+            let body = resp.text().await.unwrap_or_default();
+            return Err(DiscordError::BrokerError { status, body });
+        }
+        #[derive(serde::Deserialize)]
+        struct Envelope {
+            members: Vec<GuildMember>,
+        }
+        let env: Envelope = resp.json().await.map_err(DiscordError::Http)?;
+        Ok(env.members)
     }
 }
 

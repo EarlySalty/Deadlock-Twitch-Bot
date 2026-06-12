@@ -1,3 +1,11 @@
+## #195 — Streamer-Link-Matcher: Rust-Implementierung im tb-bot
+
+**Ausgangslage:** Der automatische Twitch↔Discord-Abgleich lief als Python-Cog im Discord-Bot (StreamerLinkMatcher) und sendete alle 6h ein Discord-Embed — auch wenn keine neuen unverknüpften Streamer vorhanden waren.
+
+**Was wurde geändert:** Neues Modul `streamer_link` im tb-bot (Rust). Der Matcher läuft als Tokio-Hintergrund-Task alle 6h, ist aber komplett still wenn keine neuen Partner-Streamer ohne Discord-Verknüpfung in der DB vorhanden sind. Für das Matching wird der neue Broker-Endpoint `GET /discord/members` genutzt (2315 Guild-Member). Namens-Normalisierung: Unicode-NFKD, Leetspeak-Ersatz, Stream-Affixe entfernen, Jaro-Winkler-Ähnlichkeit (strsim). State-Datei bleibt kompatibel mit dem Python-Cog (gleicher JSON-Pfad, gleiche Felder) — kein Re-Scan beim Umstieg. Schwellen wie bisher: Score ≥ 90 → Auto-Link + Rolle, Score 70–89 → Manual-Prompt-Embed, darunter → still verworfen. Den Broker-Aufruf für `add-role` und `send-rich-message` nutzt der Task über die bestehende BrokerRelay-Infra.
+
+**Wie es jetzt funktioniert:** Neuer aktiver Partner ohne discord_user_id → erscheint beim nächsten 6h-Tick im Scan → Member-Index wird aus allen Guild-Membern gebaut → Match-Score berechnet → Auto-Link oder Prompt. Kein Embed wenn nichts zu tun ist.
+
 ## #194 — Viewer-Spike-Promo: Silence-Check bei fehlendem Chat-History-Eintrag korrigiert
 
 **Problem:** Wenn ein Channel noch nie eine Chat-Nachricht hatte (kein `last_raw_chat_message_ts`-Eintrag im In-Memory-State), hat der Viewer-Spike-Promo-Guard in Rust den Channel als „nicht still genug" eingestuft und die Promo geblockt. In Python gilt: kein Chat-Aktivitäts-Timestamp = kein aktiver Chat = Silence gilt als erfüllt (die Bedingung prüft explizit `if activity_age_sec is not None`).
