@@ -718,13 +718,12 @@ impl PromoEngine {
             let _guard = lock.lock().await;
 
             // Overall-Ready + Activity-Ready prüfen (promos.py:1466).
-            let (overall_ready, activity_ready, invite_opt) = {
+            let (overall_ready, activity_ready) = {
                 let state_ref = self.channel_states.entry(login.clone()).or_insert_with(|| Mutex::new(ChannelState::new()));
                 let state = state_ref.lock().await;
                 let overall = self.overall_promo_ready_inner(&state, now);
                 let activity = self.promo_activity_ready_inner(&state, now);
-                let invite = self.cached_invite_or_none(); // Invite-Auflösung außerhalb des State-Lock
-                (overall, activity, invite)
+                (overall, activity)
             };
 
             // Scam+Targeted nur im fälligen Slot (promos.py:1466: activity_ready Pflicht).
@@ -750,16 +749,10 @@ impl PromoEngine {
                     self.maybe_send_viewer_spike_promo(login, channel_id, now).await;
                 }
             }
-
-            let _ = invite_opt; // suppress unused warning
         }
     }
 
     /// Dummy-Rückgabe (Invite-Auflösung wird per async-Trait gemacht, nicht cached).
-    fn cached_invite_or_none(&self) -> Option<()> {
-        None
-    }
-
     /// maybe_send_promo_with_stats (promos.py:1281).
     /// Gibt true zurück wenn gesendet.
     async fn maybe_send_promo_with_stats(&self, login: &str, channel_id: &str, now: Instant) -> bool {

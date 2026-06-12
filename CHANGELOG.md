@@ -1,3 +1,15 @@
+## #198 — Tote Refactoring-Relikte entfernt: promos.rs, scam_pitch.rs, auto_raid.rs
+
+**Ausgangslage:** Drei weitere Reste aus früheren Umbauphasen hatten sich im Code gehalten — toter Code, der mit `let _ =` vor Compiler-Warnungen kaschiert wurde.
+
+**Was wurde geändert:**
+
+- `promos.rs`: `invite_opt` aus dem periodischen Promo-Loop entfernt. Die zugehörige `cached_invite_or_none()`-Methode gab immer `None` zurück (Invite-Feature nie implementiert) — der Rückgabewert wurde daher direkt ignoriert. Methode und Tuple-Feld vollständig gelöscht.
+- `scam_pitch.rs`: Tote `now`-Variable vor dem `tokio::spawn`-Block entfernt. Zeitstempel innerhalb des Spawns werden über eine eigene `epoch.elapsed()`-Berechnung ermittelt — die äußere `now`-Bindung wurde nie an den Spawn übergeben.
+- `auto_raid.rs` (`source_skip_reason`): Toter `target_game_lower`-Parameter bereinigt und gleichzeitig Logging-Granularität auf Python-Niveau gebracht. Vorher: alle nicht-eligiblen Spiele → `last_game_not_eligible`. Jetzt: leeres Spiel → `missing_current_game`, falsches Spiel → `source_category_mismatch` (entspricht Python `raid_data_sources.py`). Parameter war tot, weil der `target_game == current_game`-Fall (= eligible) nie diese Funktion erreicht.
+
+**Ergebnis:** Kein Verhaltensunterschied für Endnutzer, aber sauberere Logs beim Auto/Manual-Raid-Skipping — künftig ist im Tracing-Log erkennbar, ob ein Streamer kein Spiel gesetzt hatte oder ein anderes gespielt hat.
+
 ## #197 — Chatter-Tracking: Partner-Gate entfernt + Refactoring-Relikt in GlobalBanSweep bereinigt
 
 **Ausgangslage:** Chatter-Daten (Chat-Nachrichten, Session-Chatters, Rollup) wurden im Rust-Bot nur für aktive Partner-Kanäle gespeichert — alle anderen Kanäle wurden still ignoriert. Gleichzeitig gab es in der Global-Ban-Sweep-Logik einen toten API-Call, der aus einem unvollständigen Refactor stammte.

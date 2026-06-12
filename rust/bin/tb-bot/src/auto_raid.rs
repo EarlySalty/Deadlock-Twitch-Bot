@@ -38,7 +38,7 @@ fn to_stream_data(stream: &HelixStream) -> StreamData {
 }
 
 /// Skip-Grund der Quell-Prüfung fürs Log (Python-Reasons in `mixin.py`).
-fn source_skip_reason(state: &OfflineSourceState, target_game_lower: &str) -> &'static str {
+fn source_skip_reason(state: &OfflineSourceState, _target_game_lower: &str) -> &'static str {
     let game_lower = state
         .last_game
         .as_deref()
@@ -52,8 +52,10 @@ fn source_skip_reason(state: &OfflineSourceState, target_game_lower: &str) -> &'
         }
         return "just_chatting_without_deadlock_session";
     }
-    let _ = target_game_lower;
-    "last_game_not_eligible"
+    if game_lower.is_empty() {
+        return "missing_current_game";
+    }
+    "source_category_mismatch"
 }
 
 /// Ergebnis der Kandidaten-Assemblierung (Schritte 5–7).
@@ -613,7 +615,7 @@ mod tests {
         };
         assert_eq!(
             source_skip_reason(&other_game, "deadlock"),
-            "last_game_not_eligible"
+            "source_category_mismatch"
         );
     }
 }

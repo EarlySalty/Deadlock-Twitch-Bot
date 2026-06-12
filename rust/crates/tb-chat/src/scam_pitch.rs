@@ -1404,7 +1404,6 @@ impl SpamAiReviewer {
         let chatter = event.chatter_user_login.to_lowercase();
 
         let cooldowns = Arc::clone(&self.cooldowns);
-        let now = self.now();
 
         // Prüfe Cooldown synchron vor dem Spawn
         let pool = self.pool.clone();
@@ -1442,7 +1441,6 @@ impl SpamAiReviewer {
                 }
             };
 
-            let _ = now; // suppress unused warning
             let result =
                 call_minimax(&http, &api_key, &content, &patterns).await;
             match result {
