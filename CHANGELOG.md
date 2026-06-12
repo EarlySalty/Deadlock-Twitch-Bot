@@ -1,3 +1,11 @@
+## #163 — EventSub: 429- und 401-Fehler stumm schalten
+
+**Ausgangslage:** Die Fehlerbehandlung beim EventSub-Subscription-Erstellen kannte nur einen Sonderfall: HTTP 403 (Bot gebannt / Kanal gesperrt). Alle anderen HTTP-Fehler — darunter 429 (Rate-Limit) und 401 (App-Token abgelaufen) — landeten im gleichen warn!-Zweig. Da der Chat-Reconcile-Loop alle 30 Minuten für alle ~48 aktiven Partner-Kanäle läuft, würde ein temporäres Rate-Limit oder ein kurzzeitig ungültiger App-Token dieselbe Spam-Flut im Discord auslösen wie der 403-Bug, der diese Audit-Runde ausgelöst hat.
+
+**Was wurde geändert:** In `subscriptions.rs` wurden 429 und 401 als eigene Zweige aus dem Fehler-String (`"Helix-Status 429"` / `"Helix-Status 401"`) erkannt und auf `debug!` heruntergezogen. Beide Fehler sind transient: 429 wird beim nächsten Reconcile-Zyklus automatisch erneut versucht, 401 wird vom Token-Manager durch Token-Refresh behoben. Ein `warn!` mit vollständigem Fehler-String bleibt für alle unbekannten HTTP-Status erhalten.
+
+**Wie es jetzt funktioniert:** Der Fehler-Klassifikations-Baum lautet: 403 → `perm_failed`-Set + einmaliges warn! (kein Retry bis Neustart) · 429 → debug! (Retry nächster Zyklus) · 401 → debug! (Token-Manager refresht) · alles andere → warn! mit Fehlerdetail.
+
 ## #162 — EventSub-Wartung: Stale-Cleanup + Core-Sub-Reconcile beim Start
 
 **Ausgangslage:** Die Rust-Migration hatte zwei stille Lücken beim EventSub-Lifecycle. Erstens: `cleanup_stale()` existierte im Code, wurde aber nie aufgerufen — veraltete Twitch-Subscriptions für Partner die ausgetreten sind blieben dauerhaft bei Twitch liegen und fraßen Subscription-Slots. Zweitens: `ensure_core_subscriptions()` (stream.online, stream.offline, channel.update) wurde ebenfalls nie aufgerufen — Kanäle die nach der Rust-Migration neu hinzukamen hatten nur einen Teil ihrer Subs, weil Python die ursprünglichen angelegt hatte und Rust das einfach voraussetzte.

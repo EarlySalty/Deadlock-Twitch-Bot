@@ -274,6 +274,14 @@ impl SubscriptionManager {
                         "EventSub 403: Bot gebannt oder Kanal gesperrt — \
                          kein weiterer Retry bis Neustart"
                     );
+                } else if msg.contains("429") {
+                    // Rate-Limit: transient, nächster Reconcile-Zyklus versucht erneut.
+                    // debug! statt warn! — sonst gleicher Spam wie 403 (48 Kanäle × 30 min).
+                    tracing::debug!(sub_type, login, "EventSub 429: Rate-Limit — Retry nächster Zyklus");
+                } else if msg.contains("401") {
+                    // App-Token abgelaufen/ungültig: TokenManager übernimmt Refresh.
+                    // debug! — betrifft alle Kanäle gleichzeitig, würde sonst 48× spammen.
+                    tracing::debug!(sub_type, login, "EventSub 401: App-Token temporär ungültig");
                 } else {
                     tracing::warn!(%error, sub_type, login, "EventSub: Subscription fehlgeschlagen");
                 }
