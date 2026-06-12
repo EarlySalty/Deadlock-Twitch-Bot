@@ -1,3 +1,13 @@
+## #181 — Raid-Retention + Raid-Analytics nativ in Rust
+
+**Ausgangslage:** Die beiden Raid-Analytics-Endpoints liefen noch über den Proxy. Beide nutzen `recalculate_raid_chat_metrics`, eine Bulk-Berechnung von Chatter-Metriken pro Raid via Postgres `json_to_recordset`.
+
+**Was wurde portiert:**
+- `GET /twitch/api/v2/raid-retention`: Liest bis zu 100 Outgoing-Raids aus `twitch_raid_retention` und berechnet Retention (30m-Chatter vs. gesendete Viewer) + New-Chatter-Conversion live neu. Fallback auf stored Werte wenn kein `target_session_id` vorhanden. Gibt `dataAvailable: false` wenn keine Raids im Fenster.
+- `GET /twitch/api/v2/raid-analytics`: Per-Source-Aggregation (avg_viewers, avg_new_chatters, avg_retention_30m, follows_attributed), Retention-Curves für die 50 neuesten Raids, Follow-Attribution (raid vs. organic via Session-Join + pre-session-Check), Incoming-Raids aus `twitch_raid_arrival_tracking` mit Boost- und Retention-Impact (Viewer-Timeline-Differenz). Incoming-Summary mit Best-Raider (höchster avg Boost-%).
+
+**Technisch:** `recalculate_raid_chat_metrics` übergibt die Raid-Inputs als JSON-String an Postgres via `json_to_recordset` — drei CTEs für plus5m/15m/30m, known_from_raider und new_chatters. Python-Batch-Loop entfällt, da Postgres das Array selbst verarbeitet.
+
 ## #180 — Viewer-Directory, Viewer-Detail, Viewer-Segments nativ in Rust
 
 **Ausgangslage:** Die drei Viewer-Profil-Endpoints liefen noch über den Proxy. Sie sind die komplexesten Analyse-Endpoints: mehrere Sub-Queries, Batch-Loops, Cross-Channel-Auswertung, Churn-Erkennung und Ingestion-Gap-Diagnostik.

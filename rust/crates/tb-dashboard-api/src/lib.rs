@@ -49,7 +49,7 @@ pub fn build_public_router(pool: PgPool) -> Router {
 /// Auth-Level wird per Extension eingesetzt — `AuthLevel` als `FromRequestParts`
 /// liest den Token selbst aus der Extension.
 pub fn build_authed_router(pool: PgPool, token: String) -> Router {
-    use handlers::{ads_schedule, audience, auth_status, follower_funnel, loyalty_curve, overview, performance, rankings, retention_curve, session_detail, spa, streamers, title_performance, viewer_timeline, viewers};
+    use handlers::{ads_schedule, audience, auth_status, follower_funnel, loyalty_curve, overview, performance, raid_analytics, rankings, retention_curve, session_detail, spa, streamers, title_performance, viewer_timeline, viewers};
 
     Router::new()
         .route(
@@ -117,6 +117,14 @@ pub fn build_authed_router(pool: PgPool, token: String) -> Router {
         .route(
             "/twitch/api/v2/:streamer/viewer-timeline/profile",
             get(viewer_timeline::viewer_timeline_profile_handler),
+        )
+        .route(
+            "/twitch/api/v2/raid-retention",
+            get(raid_analytics::raid_retention_handler),
+        )
+        .route(
+            "/twitch/api/v2/raid-analytics",
+            get(raid_analytics::raid_analytics_handler),
         )
         .route(
             "/twitch/api/v2/viewer-directory",

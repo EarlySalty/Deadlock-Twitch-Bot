@@ -9,6 +9,7 @@ pub mod raids;
 pub mod streamers;
 pub mod ads_schedule;
 pub mod loyalty_curve;
+pub mod raid_analytics;
 pub mod viewer_timeline;
 pub mod viewers;
 pub mod audience;
