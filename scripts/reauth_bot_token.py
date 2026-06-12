@@ -46,7 +46,7 @@ VALIDATE_URL = "https://id.twitch.tv/oauth2/validate"
 # Erwarteter Bot-Login – Schutz davor, versehentlich ein fremdes Konto zu minten.
 EXPECTED_LOGIN = (os.getenv("BOT_LOGIN") or "deutschedeadlockcommunity").strip().lower()
 
-# Voller Scope-Satz: bisherige 30 (aus docs/BOT_TOKEN_SCOPES.md) + 2 neue.
+# Voller Scope-Satz: bisherige 30 (aus docs/BOT_TOKEN_SCOPES.md) + 3 neue.
 SCOPES = [
     "moderator:manage:announcements",
     "moderator:manage:automod",
@@ -76,6 +76,7 @@ SCOPES = [
     "moderator:read:vips",
     "moderator:read:warnings",
     "moderator:manage:warnings",
+    "user:bot",
     "user:read:chat",
     "user:write:chat",
     # NEU für den Blacklist-Raid-Guard:
@@ -235,7 +236,7 @@ def main() -> int:
     login = str(info.get("login") or "").strip().lower()
     print(f"\nNeues Token für Login: {login}")
     print(f"Scopes ({len(granted)}): {', '.join(granted)}")
-    for need in ("channel:moderate", "user:manage:whispers"):
+    for need in ("user:bot", "channel:moderate", "user:manage:whispers"):
         print(f"  {need:<26} {'vorhanden' if need in granted else 'FEHLT'}")
 
     if login != EXPECTED_LOGIN:
