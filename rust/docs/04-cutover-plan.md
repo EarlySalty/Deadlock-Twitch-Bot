@@ -348,3 +348,21 @@ seit dem Followup-Port in tb-raid::partner_setup!), raid/requirements
 (Discord-DM → Broker send-dm wäre jetzt möglich), debug/observability +
 debug/eventsub-processing + debug/chatters (Python-In-Process-State),
 eventsub/processing/requeue (dito).
+
+## Welle C (Billing) — eingedampft auf Stripe-Minimum (Nani, 12.6.)
+
+Nani: „Billing machen wir fast nichts mehr selber — Stripe macht das alles,
+das meiste kannst du entfernen." Konsequenz für die Migration:
+
+- **Portiert wird NUR:** der Stripe-Webhook-Eingang
+  (`POST /twitch/api/billing/stripe/webhook`, heute Dashboard 8765,
+  `billing_mixin.api_billing_stripe_webhook` → Status-Sync in
+  `twitch_billing_subscriptions`) + die Entitlement-Reads
+  (`bot/entitlements/repository.py`-Äquivalente; Score-Boost ist seit #127
+  in Rust). Wandert mit Welle D (Dashboard), kein eigener Cutover-Schritt.
+- **NICHT portiert (= entfällt):** Checkout-/Plan-Verwaltungs-UI,
+  sync-products-Admin, Gutschrift-PDFs (fpdf2-Frage damit OBSOLET),
+  Rechnungs-/Abo-Detailflächen — Stripe-hosted. Der Python-Code bleibt bis
+  zur End-Abschaltung als Fallback liegen (Lösch-Politik: /old erst am Ende).
+- Trial-Logik (`streamer_plans.first_login_at` + analytics_trial) bleibt —
+  ist DB-seitig und schon teilweise nativ (record_first_login, #149).
