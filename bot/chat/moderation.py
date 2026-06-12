@@ -668,6 +668,44 @@ class ModerationMixin:
         except Exception:
             log.debug("Konnte Auto-Ban Review-Log nicht schreiben", exc_info=True)
 
+    def _record_autoban_db_event(
+        self,
+        *,
+        twitch_user_id: str,
+        chatter_login: str,
+        chatter_id: str,
+        reason: str,
+    ) -> None:
+        """Best-effort-Protokoll eines Auto-Bans in ``twitch_ban_events``.
+
+        Damit die öffentliche ``recent-bans``-Statistik die echte Spam-/Viewer-Bot-
+        Moderation widerspiegelt (der Auto-Ban-Pfad schrieb bisher nur in eine
+        Review-Logdatei). Fehler hier dürfen den Ban-Flow niemals unterbrechen.
+
+        Hinweis: In den wenigen Kanälen mit aktiver ``channel.ban``-EventSub-
+        Subscription kann derselbe Ban zusätzlich über ``_store_ban_event`` landen
+        (minimale Doppelzählung) — EventSub ist aktuell aber kaum aktiv.
+        """
+        try:
+            with transaction() as conn:
+                conn.execute(
+                    """
+                    INSERT INTO twitch_ban_events
+                        (twitch_user_id, event_type, target_login, target_id, reason, received_at)
+                    VALUES (%s, %s, %s, %s, %s, %s)
+                    """,
+                    (
+                        str(twitch_user_id),
+                        "ban",
+                        (chatter_login or "").strip().lower() or None,
+                        str(chatter_id or "") or None,
+                        (reason or "").strip()[:300] or None,
+                        datetime.now(UTC).isoformat(timespec="seconds"),
+                    ),
+                )
+        except Exception:
+            log.debug("Auto-Ban DB-Event konnte nicht geschrieben werden", exc_info=True)
+
     def _normalize_channel_login_safe(self, channel) -> str:
         """Best-effort Normalisierung fuer Channel-Logins (lowercase, ohne #)."""
         name = getattr(channel, "name", "") or ""
@@ -1711,6 +1749,14 @@ class ModerationMixin:
                                     chatter_id=chatter_id,
                                     content=original_content,
                                     status="BANNED",
+                                )
+                                # Im Feed soll der Spam-Inhalt stehen (aussagekräftiger
+                                # als der generische Ban-Grund); Fallback auf reason_text.
+                                self._record_autoban_db_event(
+                                    twitch_user_id=str(twitch_user_id),
+                                    chatter_login=chatter_login,
+                                    chatter_id=chatter_id,
+                                    reason=(original_content or "").strip() or reason_text,
                                 )
                                 asyncio.create_task(
                                     self._send_moderation_alert(

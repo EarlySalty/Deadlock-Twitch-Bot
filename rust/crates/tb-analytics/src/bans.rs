@@ -50,6 +50,7 @@ pub async fn recent_bans(pool: &PgPool) -> Result<RecentBansResult, sqlx::Error>
             reason,
             received_at::text AS received_at
         FROM twitch_ban_events
+        WHERE event_type = 'ban'
         ORDER BY received_at DESC
         LIMIT 20
         "#,
@@ -63,7 +64,8 @@ pub async fn recent_bans(pool: &PgPool) -> Result<RecentBansResult, sqlx::Error>
             COUNT(*) FILTER (WHERE received_at >= CURRENT_DATE)               AS today,
             COUNT(*) FILTER (WHERE received_at >= NOW() - INTERVAL '30 days') AS total_30d
         FROM twitch_ban_events
-        WHERE received_at >= NOW() - INTERVAL '30 days'
+        WHERE event_type = 'ban'
+          AND received_at >= NOW() - INTERVAL '30 days'
         "#,
     )
     .fetch_one(pool)
@@ -119,6 +121,7 @@ mod tests {
             CREATE TABLE IF NOT EXISTS twitch_ban_events (
                 id              BIGSERIAL PRIMARY KEY,
                 twitch_user_id  TEXT NOT NULL DEFAULT 'default_uid',
+                event_type      TEXT NOT NULL DEFAULT 'ban',
                 target_login    TEXT NOT NULL,
                 moderator_login TEXT,
                 reason          TEXT,
@@ -193,11 +196,12 @@ mod tests {
         sqlx::query(
             r#"
             INSERT INTO twitch_ban_events
-                (twitch_user_id, target_login, moderator_login, reason, received_at)
+                (twitch_user_id, event_type, target_login, moderator_login, reason, received_at)
             VALUES
-                ('uid_a', 'spammer1', 'mod_a', 'Spam',    NOW()),
-                ('uid_b', 'spammer2', NULL,    NULL,       NOW()),
-                ('uid_a', 'alter_ban', 'mod_c', 'Werbung', NOW() - INTERVAL '60 days')
+                ('uid_a', 'ban',   'spammer1',  'mod_a', 'Spam',    NOW()),
+                ('uid_b', 'ban',   'spammer2',  NULL,    NULL,       NOW()),
+                ('uid_a', 'ban',   'alter_ban', 'mod_c', 'Werbung', NOW() - INTERVAL '60 days'),
+                ('uid_c', 'unban', 'wieder_frei', 'mod_a', NULL,    NOW())
             "#,
         )
         .execute(&pool)
@@ -224,8 +228,12 @@ mod tests {
         // today ≥ 2 (beide frisch)
         assert!(result.stats.today >= 2);
 
-        // Alle 3 Einträge kommen zurück (LIMIT 20, ORDER BY DESC)
+        // Nur die 3 'ban'-Einträge kommen zurück; das 'unban'-Event ist gefiltert.
         assert_eq!(result.bans.len(), 3);
+        assert!(
+            !result.bans.iter().any(|b| b.target_login == "wieder_frei"),
+            "unban-Event darf nicht im Ban-Feed erscheinen"
+        );
         // NULL-Felder erhalten
         let null_ban = result
             .bans
