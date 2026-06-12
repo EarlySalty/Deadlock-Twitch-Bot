@@ -1,3 +1,11 @@
+## #167 — Dashboard-Login überlebt jetzt Bot-Neustarts
+
+**Ausgangslage:** Nach jedem Update oder Neustart des Dashboard-Dienstes waren alle eingeloggten Streamer und Admins plötzlich ausgeloggt und mussten neu durch den Login. Der Grund saß tief: Die Login-Sessions werden verschlüsselt in der Datenbank abgelegt — der Schlüssel dafür stammte aber aus einem Code-Pfad, der nur unter Windows funktioniert. Auf dem Linux-Server griff stattdessen ein Notfall-Verhalten, das bei jedem Start einen **neuen Zufallsschlüssel** erzeugte. Damit waren alle vorher gespeicherten Sessions ab dem Moment des Neustarts unlesbar — für das System sahen sie aus wie „nie eingeloggt gewesen". Aufgefallen ist das nie, weil unlesbare Sessions still als „abgelaufen" behandelt wurden.
+
+**Was wurde geändert:** Der Dienst bezieht den Verschlüsselungs-Schlüssel jetzt zuerst aus dem zentralen Secret-Tresor, der beim Start ohnehin in die Dienst-Umgebung geladen wird. Der alte Windows-Weg bleibt nur noch als Fallback bestehen.
+
+**Wie es jetzt funktioniert:** Der Schlüssel ist über Neustarts hinweg stabil — bestehende Logins bleiben gültig, egal wie oft der Bot dahinter aktualisiert wird. Sessions verlängern sich wie gehabt bei Aktivität automatisch (Streamer-Dashboard 6 Stunden rollierend, Admin-Bereich 14 Tage). Einmalig wurden durch die Umstellung alle aktiven Logins zurückgesetzt — das war der letzte erzwungene Re-Login dieser Art.
+
 ## #166 — Discord-Link-Meldungen nur noch für echte Partner
 
 **Ausgangslage:** Der automatische Discord-Namens-Matcher schickte für jeden Streamer in `twitch_streamers` eine "Kein Discord-Match"-Meldung, sobald kein passender Discord-Account gefunden wurde — also auch für Kanäle, die zufällig oder per Monitoring in die Tabelle gerutscht sind, ohne je Partner zu sein.

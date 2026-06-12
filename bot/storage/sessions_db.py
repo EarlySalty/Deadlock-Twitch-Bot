@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 from typing import TYPE_CHECKING
 
 from ..core.constants import log
@@ -40,7 +41,12 @@ def _escape_like(value: str) -> str:
 # ---------------------------------------------------------------------------
 
 def _load_or_create_key() -> bytes:
-    """Return the Fernet key from keyring, creating and storing it on first use."""
+    """Return the Fernet key from env/keyring, creating and storing it on first use."""
+    env_val = (os.getenv(_KEYRING_KEY_NAME) or "").strip()
+    if env_val:
+        log.info("Sessions: using encryption key from environment")
+        return env_val.encode()
+
     if keyring_enabled():
         try:
             import keyring  # type: ignore
