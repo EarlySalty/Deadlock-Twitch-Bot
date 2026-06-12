@@ -1,6 +1,8 @@
 import { ExternalLink } from "lucide-react";
 import { ScrollReveal } from "@/components/ui/ScrollReveal";
+import { DiscordLogo } from "@/components/ui/DiscordLogo";
 import {
+  DISCORD_INVITE_URL,
   TWITCH_FAQ_URL,
   TWITCH_ONBOARDING_URL,
 } from "@/data/externalLinks";
@@ -32,6 +34,16 @@ export function CTA() {
             >
               <ExternalLink size={20} />
               Zum Onboarding
+            </a>
+            <a
+              href={DISCORD_INVITE_URL}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="rounded-xl px-8 py-4 font-semibold text-white text-lg inline-flex items-center gap-2 transition-opacity duration-200 hover:opacity-90"
+              style={{ background: "#5865F2" }}
+            >
+              <DiscordLogo size={22} className="text-white" />
+              Discord beitreten
             </a>
             <a
               href={TWITCH_FAQ_URL}

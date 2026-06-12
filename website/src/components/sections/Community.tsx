@@ -1,7 +1,9 @@
-import { Trophy, Link, Award, Bell } from "lucide-react";
+import { Trophy, Link, Award, Bell, ArrowRight } from "lucide-react";
 import type { ReactNode } from "react";
 import { ScrollReveal } from "@/components/ui/ScrollReveal";
 import { SectionHeading } from "@/components/ui/SectionHeading";
+import { DiscordLogo } from "@/components/ui/DiscordLogo";
+import { DISCORD_INVITE_URL } from "@/data/externalLinks";
 
 interface CommunityCardProps {
   icon: ReactNode;
@@ -66,6 +68,48 @@ export function Community() {
             delay={0.3}
           />
         </div>
+
+        {/* Discord-Beitritt — prominent, weil das Herz der Community dort schlägt */}
+        <ScrollReveal delay={0.1}>
+          <div
+            className="mt-10 rounded-2xl p-8 md:p-10 flex flex-col md:flex-row items-center gap-8 justify-between relative overflow-hidden"
+            style={{
+              background:
+                "linear-gradient(135deg, rgba(88,101,242,0.18), rgba(88,101,242,0.06))",
+              border: "1px solid rgba(88,101,242,0.35)",
+            }}
+          >
+            <div className="flex items-center gap-5 text-center md:text-left flex-col md:flex-row">
+              <div
+                className="w-16 h-16 rounded-2xl flex items-center justify-center shrink-0"
+                style={{ background: "#5865F2" }}
+              >
+                <DiscordLogo size={34} className="text-white" />
+              </div>
+              <div>
+                <h3 className="text-2xl font-bold text-[var(--color-text-primary)] font-display">
+                  Komm auf unseren Discord
+                </h3>
+                <p className="text-[var(--color-text-secondary)] mt-1 max-w-md">
+                  Hier läuft die Community zusammen — Mitspieler finden, Hilfe bekommen,
+                  Updates verfolgen und direkt mit uns reden.
+                </p>
+              </div>
+            </div>
+
+            <a
+              href={DISCORD_INVITE_URL}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="shrink-0 inline-flex items-center gap-2 whitespace-nowrap rounded-xl px-7 py-3.5 font-semibold text-white transition-opacity duration-200 hover:opacity-90"
+              style={{ background: "#5865F2" }}
+            >
+              <DiscordLogo size={20} className="text-white" />
+              Discord beitreten
+              <ArrowRight size={18} />
+            </a>
+          </div>
+        </ScrollReveal>
       </div>
     </section>
   );

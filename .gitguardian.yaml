@@ -1,0 +1,16 @@
+# GitGuardian / ggshield-Konfiguration.
+#
+# Die folgenden Treffer sind KEINE echten Secrets, sondern Demo-Werte zur
+# Veranschaulichung der Feldverschlüsselung auf der Sicherheitskonzept-Seite
+# (/twitch/sicherheit) und der Streamer-Landingpage. Sie wurden mit einem
+# Wegwerf-Schlüssel über Dummy-Klartext erzeugt und sind ohne den (nicht
+# existierenden) Master-Schlüssel wertlos. Sie tauchen identisch in
+# bot/dashboard/admin/legal_mixin.py, rust/crates/tb-dashboard-api/src/handlers/legal.rs
+# und website/src/components/sections/Security.tsx auf.
+version: 2
+secret:
+  ignored-matches:
+    - name: "Demo verschlüsselter Access-Token (Format-Beispiel, Wegwerf-Schlüssel)"
+      match: "01027631cc1a318fc855cd096f414d4eb9140a1efaabbe7033619b7376eb2ade6399c5600e0bde49e5a9a314708da992a6e6c430146335861b9766631c795c9379b40f03da76d94ee642ec"
+    - name: "Demo verschlüsselter Refresh-Token (Format-Beispiel, Wegwerf-Schlüssel)"
+      match: "010276315877678bb2ed322b62caed1893dda920643dafb46c11418b47095a2276fa41c0b95787b2fba008224c4d32173bfd6631bbca88554ed73a66aea84ff9de382af161cde3f65398480e"

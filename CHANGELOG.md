@@ -1,3 +1,11 @@
+## #157 — Streamer-Seite: Sicherheits-Sektion, Discord-Beitritt, Demo-Vorschau repariert, Ban-Zahl korrigiert
+
+**Ausgangslage:** Auf der Streamer-Landingpage fehlte ein sichtbarer Hinweis darauf, wie sicher der Bot mit den Mod-Rechten umgeht. Einen echten Discord-Beitritts-Button gab es nirgends — die Community-Sektion erwähnte Discord nur. Die eingebettete Dashboard-Demo lud nicht (leerer, kaputter Rahmen), und die „Spam-Schutz"-Sektion zeigte unglaubwürdige Zahlen, u. a. „1 geschützter Kanal", obwohl der Bot viele Partner moderiert.
+
+**Was wurde geändert:** Die Streamer-Seite hat eine neue Sicherheits-Sektion bekommen, die kurz und ehrlich zeigt, was der Bot darf und was nicht — mit Verweis auf das vollständige Sicherheitskonzept. Discord ist jetzt an zwei prominenten Stellen direkt beitretbar (eigener Block in der Community-Sektion und Button im Schluss-Aufruf). Die Demo-Vorschau wurde repariert, die Navigationsleiste überarbeitet, und die Zahl der geschützten Kanäle zeigt jetzt den echten Wert.
+
+**Wie es jetzt funktioniert:** Die Demo lud nicht, weil die Sicherheitsrichtlinie der Seite das Einbetten der Demo-Adresse blockierte — die Freigabe für die eigene Domain hat gefehlt; sie ist jetzt ergänzt, die Vorschau lädt wieder. Die „geschützte Kanäle"-Zahl wurde bisher falsch aus den protokollierten Ban-Ereignissen abgeleitet (daher 1); sie kommt jetzt aus der Zahl der aktiv betreuten Partner-Kanäle (aktuell 47) — das ist die korrekte Bedeutung, denn der Bot schützt jeden Partner-Kanal, unabhängig davon, ob dort zuletzt etwas gebannt wurde. Diese öffentliche Statistik-Abfrage wird seit diesem Schritt nativ von der Rust-Schicht beantwortet. In der Navigationsleiste überlappten sich bei mittlerer Fensterbreite Logo, Menü und Buttons; sie klappt jetzt früher ins kompakte Menü und hat einen klareren Demo-Button.
+
 ## #156 — Stats-Leaderboard Slow-Query-Fix
 
 **Problem:** Das Stats-Leaderboard im Admin-Dashboard brauchte bei jedem Aufruf 1,3–3,2 Sekunden statt unter 100 ms. Betraf alle drei Teilabfragen (Top-Streamer-Ranking, Stunden-Verteilung, Wochentag-Verteilung) gleichzeitig — also 9 langsame Queries pro Dashboard-Besuch.

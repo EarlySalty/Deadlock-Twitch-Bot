@@ -15,6 +15,7 @@ export const TWITCH_SOCIAL_MEDIA_URL = `${TWITCH_PUBLIC_ORIGIN}/social-media`;
 export const TWITCH_IMPRESSUM_URL = `${TWITCH_PUBLIC_ORIGIN}/twitch/impressum`;
 export const TWITCH_DATENSCHUTZ_URL = `${TWITCH_PUBLIC_ORIGIN}/twitch/datenschutz`;
 export const TWITCH_AGB_URL = `${TWITCH_PUBLIC_ORIGIN}/twitch/agb`;
+export const TWITCH_SECURITY_URL = `${TWITCH_PUBLIC_ORIGIN}/twitch/sicherheit`;
 
 export const TWITCH_BOT_AUTH_START_URL =
   `${TWITCH_PUBLIC_ORIGIN}/twitch/raid/auth`;

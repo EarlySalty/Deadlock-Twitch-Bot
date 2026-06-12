@@ -2154,6 +2154,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "tb-chat"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "chrono",
+ "rand 0.8.6",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "sqlx",
+ "tb-domain",
+ "tb-transport-twitch",
+ "tokio",
+ "tracing",
+ "wiremock",
+]
+
+[[package]]
 name = "tb-config"
 version = "0.1.0"
 dependencies = [

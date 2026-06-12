@@ -9,6 +9,7 @@ import { BanFeed } from '@/components/sections/BanFeed'
 import { Dashboard } from '@/components/sections/Dashboard'
 import { ClipManager } from '@/components/sections/ClipManager'
 import { Community } from '@/components/sections/Community'
+import { Security } from '@/components/sections/Security'
 import { CTA } from '@/components/sections/CTA'
 
 export default function App() {
@@ -25,6 +26,7 @@ export default function App() {
         <Features />
         <ClipManager />
         <Community />
+        <Security />
         <CTA />
       </main>
       <Footer />

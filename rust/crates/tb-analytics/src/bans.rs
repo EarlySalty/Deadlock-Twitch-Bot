@@ -33,11 +33,14 @@ pub struct RecentBansResult {
 
 /// Lädt die letzten 20 Bans + 30-Tage-Stats.
 ///
-/// Beide Queries laufen sequenziell auf demselben Pool; kein Transaktions-Snapshot
+/// Die Queries laufen sequenziell auf demselben Pool; kein Transaktions-Snapshot
 /// nötig (read-only, kleine Drift zwischen den Queries ist akzeptabel).
 ///
-/// `channels_protected` zählt `DISTINCT twitch_user_id` — die Tabelle hat keine
-/// `channel_login`-Spalte; `twitch_user_id` entspricht dem Kanal-Owner.
+/// `channels_protected` ist die Zahl der aktiv geschützten Partner-Kanäle
+/// (`twitch_partners_all_state.is_partner_active = 1`) — NICHT die Kanäle mit
+/// Ban-Events. Der Bot moderiert jeden Partner-Kanal, unabhängig davon, ob dort
+/// zuletzt etwas gebannt wurde; die alte `DISTINCT twitch_user_id`-Zählung über
+/// `twitch_ban_events` lieferte daher irreführend kleine Werte.
 pub async fn recent_bans(pool: &PgPool) -> Result<RecentBansResult, sqlx::Error> {
     let bans: Vec<BanRow> = sqlx::query_as(
         r#"
@@ -54,12 +57,11 @@ pub async fn recent_bans(pool: &PgPool) -> Result<RecentBansResult, sqlx::Error>
     .fetch_all(pool)
     .await?;
 
-    let row: (Option<i64>, Option<i64>, Option<i64>) = sqlx::query_as(
+    let counts: (Option<i64>, Option<i64>) = sqlx::query_as(
         r#"
         SELECT
             COUNT(*) FILTER (WHERE received_at >= CURRENT_DATE)               AS today,
-            COUNT(*) FILTER (WHERE received_at >= NOW() - INTERVAL '30 days') AS total_30d,
-            COUNT(DISTINCT twitch_user_id)                                     AS channels_protected
+            COUNT(*) FILTER (WHERE received_at >= NOW() - INTERVAL '30 days') AS total_30d
         FROM twitch_ban_events
         WHERE received_at >= NOW() - INTERVAL '30 days'
         "#,
@@ -67,12 +69,19 @@ pub async fn recent_bans(pool: &PgPool) -> Result<RecentBansResult, sqlx::Error>
     .fetch_one(pool)
     .await?;
 
+    // Geschützte Kanäle = aktive Partner (gleiche Quelle wie der Markt-Anteil).
+    let channels_protected: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM twitch_partners_all_state WHERE is_partner_active = 1")
+            .fetch_one(pool)
+            .await
+            .unwrap_or(0);
+
     Ok(RecentBansResult {
         bans,
         stats: BanStats {
-            today: row.0.unwrap_or(0),
-            total_30d: row.1.unwrap_or(0),
-            channels_protected: row.2.unwrap_or(0),
+            today: counts.0.unwrap_or(0),
+            total_30d: counts.1.unwrap_or(0),
+            channels_protected,
         },
     })
 }
@@ -120,6 +129,17 @@ mod tests {
         .execute(&pool)
         .await
         .expect("DDL fehlgeschlagen");
+        sqlx::query(
+            r#"
+            CREATE TABLE IF NOT EXISTS twitch_partners_all_state (
+                twitch_user_id     TEXT PRIMARY KEY,
+                is_partner_active  INTEGER NOT NULL DEFAULT 0
+            )
+            "#,
+        )
+        .execute(&pool)
+        .await
+        .expect("Partner-DDL fehlgeschlagen");
         pool
     }
 
@@ -137,11 +157,16 @@ mod tests {
             .execute(&pool)
             .await
             .unwrap();
+        sqlx::query("TRUNCATE twitch_partners_all_state")
+            .execute(&pool)
+            .await
+            .unwrap();
 
         let result = recent_bans(&pool).await.unwrap();
         assert!(result.bans.is_empty(), "erwartet leere Liste");
         assert_eq!(result.stats.today, 0);
         assert_eq!(result.stats.total_30d, 0);
+        // Keine aktiven Partner -> 0 geschützte Kanäle.
         assert_eq!(result.stats.channels_protected, 0);
     }
 
@@ -156,6 +181,10 @@ mod tests {
         };
         let pool = make_pool(&dsn, "test_bans_fixture").await;
         sqlx::query("TRUNCATE twitch_ban_events")
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("TRUNCATE twitch_partners_all_state")
             .execute(&pool)
             .await
             .unwrap();
@@ -175,12 +204,23 @@ mod tests {
         .await
         .unwrap();
 
+        // 3 aktive + 1 inaktiver Partner -> channels_protected soll 3 sein.
+        sqlx::query(
+            r#"
+            INSERT INTO twitch_partners_all_state (twitch_user_id, is_partner_active)
+            VALUES ('p1', 1), ('p2', 1), ('p3', 1), ('p4', 0)
+            "#,
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
         let result = recent_bans(&pool).await.unwrap();
 
         // Nur 2 Bans im 30-Tage-Fenster (alter_ban ist 60 Tage alt)
         assert_eq!(result.stats.total_30d, 2);
-        // 2 distinct twitch_user_ids im 30-Tage-Fenster
-        assert_eq!(result.stats.channels_protected, 2);
+        // channels_protected = aktive Partner (3), unabhängig von Ban-Events
+        assert_eq!(result.stats.channels_protected, 3);
         // today ≥ 2 (beide frisch)
         assert!(result.stats.today >= 2);
 
