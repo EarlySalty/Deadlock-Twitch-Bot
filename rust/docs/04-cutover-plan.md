@@ -366,3 +366,36 @@ das meiste kannst du entfernen." Konsequenz für die Migration:
   zur End-Abschaltung als Fallback liegen (Lösch-Politik: /old erst am Ende).
 - Trial-Logik (`streamer_plans.first_login_at` + analytics_trial) bleibt —
   ist DB-seitig und schon teilweise nativ (record_first_login, #149).
+
+## Stand 12.6. nachmittags — Welle B: tb-chat-Kern gebaut (Flip steht aus)
+
+- **Architektur-Erkenntnis:** Der Python-Chat ist KEIN IRC — TwitchIO 3.x
+  liest über EventSub-WebSocket (`channel.chat.message`/`.notification`) und
+  sendet via Helix. Rust nutzt stattdessen den bestehenden Webhook-Stack:
+  Chat-Subs per App-Token (Bot hat `user:bot`, Partner `channel:bot`) —
+  „Join" = `SubscriptionManager::ensure_chat_subscriptions`. Kein
+  WebSocket-Neubau.
+- **Token-Ownership geklärt + gebaut:** Infisical-Access-Token ist tot
+  (Rotation lebt in-memory im Python-Chat), der Refresh-Token bleibt gültig
+  (Worker-Restart 12.6. 01:41 bewies den Boot-Pfad). `tb-chat::BotTokenManager`
+  bootet identisch (validate → tot → Refresh), 30-min-Loop, 2-Attempt-401.
+  Flip muss ATOMAR sein (Python-Chat aus VOR Rust-Chat an — Dual-Refresh-Race).
+- **Gebaut + getestet (177 Tests, gepusht b491685):** spam_filter, scam_pitch,
+  promos, commands (12 Commands als interne Trait-Ports statt HTTP-Proxys),
+  moderation (HelixChatClient, AutoBan, TimeoutGuard, Outbound-Suppression),
+  global_ban_sweep (Executor 120s + 6-Uhr-Vollsweep). Dazu:
+  tb-transport-twitch/chat.rs (Helix-Endpoints mit is_sent/drop_reason-
+  Parsing), `on_chat_message`-Hook im Dispatcher, Python-Gate
+  `TWITCH_RUST_CHAT_TAKEOVER`.
+- **Vor dem Flip FEHLEN noch** (Pipeline-Schritte aus bot_runtime.md):
+  Chat-Health-/Chatter-Tracking (twitch_session_chatters — DATENKRITISCH,
+  füttert Analytics/first_time), Fun-Responses, Sus-Discord-Invite-Check,
+  VoiceReaction-Dispatch, Engagement-Feed-Schnittstelle (Lösung: anonymer
+  IRC-Reader des Engagement-Layers, irc_read-Flag), pipeline.rs
+  (15-Schritte-Reihenfolge), tb-bot-Composition (alle Trait-Ports verdrahten),
+  Helix-Chatters-Polling (Lurker-Quelle), !title (bewusst außerhalb Scope).
+- **Flip-Prozedur (wenn Bausteine fertig):** Worker-Drop-in
+  `TWITCH_RUST_CHAT_TAKEOVER=1` + Worker-Restart → tb-bot-Restart mit
+  `TB_CHAT_ENABLED=1` → Scope-Validate des Bot-Tokens loggen → Chat-Subs für
+  Partner anlegen → Begrüßungs-Delegation (oauth_followups::LegacyChatGreeter)
+  auf nativen Send umstellen. Rollback: Drop-in weg, Worker-Restart.
