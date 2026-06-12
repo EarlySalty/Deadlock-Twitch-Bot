@@ -1,3 +1,11 @@
+## #174 — Performance-Analytics-Endpoints nativ in Rust (tb-dashboard-api 8769)
+
+**Ausgangslage:** Die vier Analytics-Endpoints `monthly-stats`, `weekly-stats`, `hourly-heatmap` und `calendar-heatmap` wurden über den Legacy-Proxy an Python 8765 weitergeleitet. Ein erster Port-Versuch scheiterte mit HTTP 500: sqlx übergab den Zeitstempel als formatierten String, Postgres verweigerte den Vergleich mit der `TIMESTAMPTZ`-Spalte (`operator does not exist: timestamp with time zone >= text`).
+
+**Was wurde geändert:** Alle vier Handler lesen jetzt direkt aus `twitch_stream_sessions` in Postgres. Der Zeitstempel wird als `chrono::DateTime<Utc>` direkt an sqlx gebunden — ohne Umweg über einen formatierten String. Die Queries folgen zeilengenau dem Python-Original (`api_performance.py`): Monatsgrupierung mit Follower-Delta-Korrektur, Wochentags-Aggregation, Stunden-DOW-Heatmap, Kalender-Heatmap mit `DATE(started_at)`-Gruppierung.
+
+**Wie es jetzt funktioniert:** Alle vier Endpoints liefern 200 mit echten Daten aus der DB. Auth-Parität: `DashboardAuthLevel::None` → 401, alles andere erlaubt. Streamer-Filter via optionalem `?streamer=`-Parameter.
+
 ## #173 — Kompletter `/streamers`-Baum nativ in Rust (tb-internal-api 8776)
 
 **Ausgangslage:** Alle Streamer-CRUD-Routen (`GET/POST /streamers`, `DELETE /streamers/:login`, `verify`, `archive`, `discord-flag`, `discord-profile`) wurden trotz vollständiger Handler-Implementierung noch über den Legacy-Proxy an Python 8779 weitergeleitet. Grund war ein Axum-Eigenheit: nativer GET hätte POST auf demselben Pfad mit 405 statt Proxy-Fallback beantwortet — kein Teil-Flip möglich, solange POST nicht auch nativ war.
