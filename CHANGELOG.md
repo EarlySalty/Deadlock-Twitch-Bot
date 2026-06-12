@@ -1,3 +1,11 @@
+## #154 — Sicherheitskonzept: Passwortmanager als Phishing-Schutz
+
+**Ausgangslage:** Der Abschnitt zur menschlichen Schutzebene nannte den Passwortmanager bisher nur als Speicher für lange, einzigartige Passwörter. Sein vielleicht stärkster Effekt fehlte: Er ist selbst ein Phishing-Schutz.
+
+**Was wurde geändert:** Die Seite `/twitch/sicherheit` erklärt jetzt, dass der Passwortmanager Zugangsdaten an die echte Adresse (Domain) bindet und auf gefälschten Seiten deshalb gar nicht erst ausfüllt.
+
+**Wie es jetzt funktioniert:** Ein Passwortmanager merkt sich zu jedem Zugang die echte Domain und füllt das Passwort nur dort automatisch ein. Landet man über einen gefälschten Link auf einer täuschend echt aussehenden Betrugsseite, bleibt das Feld leer — die Adresse ist dem Manager unbekannt. Damit dort überhaupt ein Passwort hineingerät, müsste man es bewusst von Hand eintippen oder die falsche Seite aktiv freigeben. Genau dieses ausbleibende Auto-Ausfüllen wirkt als zweite Warnstufe: Es erzwingt einen aktiven, bewussten Schritt, statt dass die Anmeldung unbemerkt durchläuft.
+
 ## #153 — Sicherheitskonzept: Tresor statt .env, Server-Praktiken, menschliche Schutzebene
 
 **Ausgangslage:** Das Sicherheitskonzept beschrieb den Secret-Manager nur knapp und ließ drei Dinge offen, nach denen ein sicherheitsbewusster Nutzer fragt: Wie genau werden Geheimnisse verwahrt (und warum nicht der übliche, riskante Weg über Klartext-Dateien), welche gängigen Server-Schutzpraktiken laufen, und wie ist die menschliche Ebene abgesichert — also die Zugänge des Betreibers selbst, die in der Praxis das häufigste Angriffsziel sind.
