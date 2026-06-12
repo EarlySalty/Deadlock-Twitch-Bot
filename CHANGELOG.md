@@ -1,3 +1,11 @@
+## #156 — Stats-Leaderboard Slow-Query-Fix
+
+**Problem:** Das Stats-Leaderboard im Admin-Dashboard brauchte bei jedem Aufruf 1,3–3,2 Sekunden statt unter 100 ms. Betraf alle drei Teilabfragen (Top-Streamer-Ranking, Stunden-Verteilung, Wochentag-Verteilung) gleichzeitig — also 9 langsame Queries pro Dashboard-Besuch.
+
+**Ursache:** Die Abfragen liefen über ein `UNION ALL`-CTE-Muster (`WITH source_rows AS (SELECT ... FROM twitch_stats_tracked UNION ALL SELECT ... FROM twitch_stats_category)`). TimescaleDB erkennt in einem CTE keine echten Hypertable-Referenzen — es kann deshalb die 30-Tage-Grenze nicht für Chunk-Exclusion nutzen und scannt alle Chunks beider Tabellen komplett durch. Mit ~3500–3560 Ergebniszeilen und wachsendem Datenbestand wurde das zunehmend langsamer.
+
+**Fix:** UNION ALL CTE entfernt. Jede Abfrage fragt jetzt direkt die zuständige Tabelle an (`twitch_stats_tracked` für Partner-Daten, `twitch_stats_category` für den Rest). TimescaleDB kann so den Zeitraum-Filter auf die relevanten Chunks (ca. 5 Stück bei 7-Tage-Interval) beschränken statt alle zu scannen. Zusätzlich neue DB-Migration mit `LOWER(streamer)`-Indizes auf beiden Tabellen, die beim nächsten Start automatisch angewendet wird.
+
 ## #155 — Streamer-Analytics repariert + drei Analytics-Routen nativ in Rust
 
 **Ausgangslage:** Die Analytics-Ansicht im Streamer-Dashboard war für jeden Streamer mit Daten kaputt — und zwar schon seit der Umstellung der Datenbank auf Postgres: Die zentrale Session-Abfrage nutzte eine SQLite-Funktion (`TIME(...)`), die Postgres nicht kennt. Jede Anfrage endete mit „Internal error", das Dashboard zeigte dauerhaft „keine Daten". Zusätzlich standen drei interne Lese-Routen (/stats, Streamer-Analytics, Session-Detail) noch auf dem Python-Umweg, weil frühere Rust-Versuche die Antwort-Struktur nicht exakt trafen.

@@ -316,143 +316,113 @@ fn parse_db_datetime(value: &str) -> Option<DateTime<Utc>> {
 
 // ── SQL-Templates ─────────────────────────────────────────────────────────────
 
-const PARTITION_CLAUSE: &str = "
-           AND (
-                (source_key = 'tracked' AND LOWER(streamer) IN (
-                    SELECT LOWER(twitch_login)
-                      FROM twitch_streamers_partner_state
-                     WHERE is_partner_active = 1
-                ))
-                OR
-                (source_key = 'category' AND LOWER(streamer) NOT IN (
-                    SELECT LOWER(twitch_login)
-                      FROM twitch_streamers_partner_state
-                     WHERE is_partner_active = 1
-                ))
-           )";
-
-fn build_top_sql(streamer_filter: bool) -> String {
+fn build_top_sql(table: &str, is_tracked: bool, streamer_filter: bool) -> String {
+    let partition_filter = if is_tracked {
+        "           AND LOWER(streamer) IN (\n               SELECT LOWER(twitch_login)\n                 FROM twitch_streamers_partner_state\n                WHERE is_partner_active = 1\n           )\n"
+    } else {
+        "           AND LOWER(streamer) NOT IN (\n               SELECT LOWER(twitch_login)\n                 FROM twitch_streamers_partner_state\n                WHERE is_partner_active = 1\n           )\n"
+    };
     let streamer_cond = if streamer_filter {
-        "           AND LOWER(streamer) = $2\n"
+        "           AND LOWER(streamer) = $1\n"
     } else {
         ""
     };
     let offset = if streamer_filter { 1 } else { 0 };
-    let (p2, p3, p4, p5, p6, p7, p8) = params_offset(offset);
+    let (p1, p2, p3, p4, p5, p6, p7) = params_offset(offset);
     format!(
-        r#"WITH source_rows AS (
-            SELECT 'tracked' AS source_key, streamer, viewer_count, is_partner, ts_utc
-            FROM twitch_stats_tracked
-            UNION ALL
-            SELECT 'category' AS source_key, streamer, viewer_count, is_partner, ts_utc
-            FROM twitch_stats_category
-        )
-        SELECT streamer,
+        r#"SELECT streamer,
                CAST(AVG(viewer_count) AS DOUBLE PRECISION) AS avg_viewers,
                CAST(MAX(viewer_count) AS BIGINT)           AS max_viewers,
                CAST(COUNT(*) AS BIGINT)                    AS samples,
                MAX(CASE WHEN is_partner THEN 1 ELSE 0 END) AS is_partner
-          FROM source_rows
-         WHERE source_key = $1
-{streamer_cond}           AND ts_utc >= NOW() - INTERVAL '30 days'
-{partition}
-           AND (
-                {p2} = 'none'
-                OR ({p3} = 'between' AND EXTRACT(HOUR FROM (ts_utc AT TIME ZONE 'UTC'))::int BETWEEN {p4} AND {p5})
-                OR ({p6} = 'wrap' AND (
-                        EXTRACT(HOUR FROM (ts_utc AT TIME ZONE 'UTC'))::int >= {p7}
-                        OR EXTRACT(HOUR FROM (ts_utc AT TIME ZONE 'UTC'))::int <= {p8}
+          FROM {table}
+         WHERE ts_utc >= NOW() - INTERVAL '30 days'
+{streamer_cond}{partition_filter}           AND (
+                {p1} = 'none'
+                OR ({p2} = 'between' AND EXTRACT(HOUR FROM (ts_utc AT TIME ZONE 'UTC'))::int BETWEEN {p3} AND {p4})
+                OR ({p5} = 'wrap' AND (
+                        EXTRACT(HOUR FROM (ts_utc AT TIME ZONE 'UTC'))::int >= {p6}
+                        OR EXTRACT(HOUR FROM (ts_utc AT TIME ZONE 'UTC'))::int <= {p7}
                     ))
            )
          GROUP BY streamer
          ORDER BY avg_viewers DESC"#,
-        partition = PARTITION_CLAUSE,
     )
 }
 
-fn build_hourly_sql(streamer_filter: bool) -> String {
+fn build_hourly_sql(table: &str, is_tracked: bool, streamer_filter: bool) -> String {
+    let partition_filter = if is_tracked {
+        "           AND LOWER(streamer) IN (\n               SELECT LOWER(twitch_login)\n                 FROM twitch_streamers_partner_state\n                WHERE is_partner_active = 1\n           )\n"
+    } else {
+        "           AND LOWER(streamer) NOT IN (\n               SELECT LOWER(twitch_login)\n                 FROM twitch_streamers_partner_state\n                WHERE is_partner_active = 1\n           )\n"
+    };
     let streamer_cond = if streamer_filter {
-        "           AND LOWER(streamer) = $2\n"
+        "           AND LOWER(streamer) = $1\n"
     } else {
         ""
     };
     let offset = if streamer_filter { 1 } else { 0 };
-    let (p2, p3, p4, p5, p6, p7, p8) = params_offset(offset);
+    let (p1, p2, p3, p4, p5, p6, p7) = params_offset(offset);
     format!(
-        r#"WITH source_rows AS (
-            SELECT 'tracked' AS source_key, streamer, viewer_count, is_partner, ts_utc
-            FROM twitch_stats_tracked
-            UNION ALL
-            SELECT 'category' AS source_key, streamer, viewer_count, is_partner, ts_utc
-            FROM twitch_stats_category
-        )
-        SELECT EXTRACT(HOUR FROM (ts_utc AT TIME ZONE 'UTC'))::int AS hour,
+        r#"SELECT EXTRACT(HOUR FROM (ts_utc AT TIME ZONE 'UTC'))::int AS hour,
                CAST(AVG(viewer_count) AS DOUBLE PRECISION) AS avg_viewers,
                CAST(MAX(viewer_count) AS DOUBLE PRECISION) AS max_viewers,
                CAST(COUNT(*) AS BIGINT)                    AS samples
-          FROM source_rows
-         WHERE source_key = $1
-{streamer_cond}           AND ts_utc >= NOW() - INTERVAL '30 days'
-{partition}
-           AND (
-                {p2} = 'none'
-                OR ({p3} = 'between' AND EXTRACT(HOUR FROM (ts_utc AT TIME ZONE 'UTC'))::int BETWEEN {p4} AND {p5})
-                OR ({p6} = 'wrap' AND (
-                        EXTRACT(HOUR FROM (ts_utc AT TIME ZONE 'UTC'))::int >= {p7}
-                        OR EXTRACT(HOUR FROM (ts_utc AT TIME ZONE 'UTC'))::int <= {p8}
+          FROM {table}
+         WHERE ts_utc >= NOW() - INTERVAL '30 days'
+{streamer_cond}{partition_filter}           AND (
+                {p1} = 'none'
+                OR ({p2} = 'between' AND EXTRACT(HOUR FROM (ts_utc AT TIME ZONE 'UTC'))::int BETWEEN {p3} AND {p4})
+                OR ({p5} = 'wrap' AND (
+                        EXTRACT(HOUR FROM (ts_utc AT TIME ZONE 'UTC'))::int >= {p6}
+                        OR EXTRACT(HOUR FROM (ts_utc AT TIME ZONE 'UTC'))::int <= {p7}
                     ))
            )
          GROUP BY hour
          ORDER BY hour"#,
-        partition = PARTITION_CLAUSE,
     )
 }
 
-fn build_weekday_sql(streamer_filter: bool) -> String {
+fn build_weekday_sql(table: &str, is_tracked: bool, streamer_filter: bool) -> String {
+    let partition_filter = if is_tracked {
+        "           AND LOWER(streamer) IN (\n               SELECT LOWER(twitch_login)\n                 FROM twitch_streamers_partner_state\n                WHERE is_partner_active = 1\n           )\n"
+    } else {
+        "           AND LOWER(streamer) NOT IN (\n               SELECT LOWER(twitch_login)\n                 FROM twitch_streamers_partner_state\n                WHERE is_partner_active = 1\n           )\n"
+    };
     let streamer_cond = if streamer_filter {
-        "           AND LOWER(streamer) = $2\n"
+        "           AND LOWER(streamer) = $1\n"
     } else {
         ""
     };
     let offset = if streamer_filter { 1 } else { 0 };
-    let (p2, p3, p4, p5, p6, p7, p8) = params_offset(offset);
+    let (p1, p2, p3, p4, p5, p6, p7) = params_offset(offset);
     format!(
-        r#"WITH source_rows AS (
-            SELECT 'tracked' AS source_key, streamer, viewer_count, is_partner, ts_utc
-            FROM twitch_stats_tracked
-            UNION ALL
-            SELECT 'category' AS source_key, streamer, viewer_count, is_partner, ts_utc
-            FROM twitch_stats_category
-        )
-        SELECT EXTRACT(DOW FROM (ts_utc AT TIME ZONE 'UTC'))::int AS weekday,
+        r#"SELECT EXTRACT(DOW FROM (ts_utc AT TIME ZONE 'UTC'))::int AS weekday,
                CAST(AVG(viewer_count) AS DOUBLE PRECISION) AS avg_viewers,
                CAST(MAX(viewer_count) AS DOUBLE PRECISION) AS max_viewers,
                CAST(COUNT(*) AS BIGINT)                    AS samples
-          FROM source_rows
-         WHERE source_key = $1
-{streamer_cond}           AND ts_utc >= NOW() - INTERVAL '30 days'
-{partition}
-           AND (
-                {p2} = 'none'
-                OR ({p3} = 'between' AND EXTRACT(HOUR FROM (ts_utc AT TIME ZONE 'UTC'))::int BETWEEN {p4} AND {p5})
-                OR ({p6} = 'wrap' AND (
-                        EXTRACT(HOUR FROM (ts_utc AT TIME ZONE 'UTC'))::int >= {p7}
-                        OR EXTRACT(HOUR FROM (ts_utc AT TIME ZONE 'UTC'))::int <= {p8}
+          FROM {table}
+         WHERE ts_utc >= NOW() - INTERVAL '30 days'
+{streamer_cond}{partition_filter}           AND (
+                {p1} = 'none'
+                OR ({p2} = 'between' AND EXTRACT(HOUR FROM (ts_utc AT TIME ZONE 'UTC'))::int BETWEEN {p3} AND {p4})
+                OR ({p5} = 'wrap' AND (
+                        EXTRACT(HOUR FROM (ts_utc AT TIME ZONE 'UTC'))::int >= {p6}
+                        OR EXTRACT(HOUR FROM (ts_utc AT TIME ZONE 'UTC'))::int <= {p7}
                     ))
            )
          GROUP BY weekday
          ORDER BY weekday"#,
-        partition = PARTITION_CLAUSE,
     )
 }
 
-/// Gibt die Parameter-Platzhalter $2…$8 zurück, verschoben um `offset`
-/// (0 = kein Streamer-Filter, 1 = +1 wegen $2=login).
+/// Gibt die Parameter-Platzhalter $1…$7 zurück, verschoben um `offset`
+/// (0 = kein Streamer-Filter, 1 = +1 wegen $1=login).
 fn params_offset(offset: usize) -> (&'static str, &'static str, &'static str, &'static str, &'static str, &'static str, &'static str) {
     match offset {
-        0 => ("$2", "$3", "$4", "$5", "$6", "$7", "$8"),
-        1 => ("$3", "$4", "$5", "$6", "$7", "$8", "$9"),
-        _ => ("$2", "$3", "$4", "$5", "$6", "$7", "$8"),
+        0 => ("$1", "$2", "$3", "$4", "$5", "$6", "$7"),
+        1 => ("$2", "$3", "$4", "$5", "$6", "$7", "$8"),
+        _ => ("$1", "$2", "$3", "$4", "$5", "$6", "$7"),
     }
 }
 
@@ -488,18 +458,17 @@ async fn fetch_partner_state(pool: &PgPool) -> Result<Vec<PartnerStateRow>, sqlx
         .collect())
 }
 
-/// Bindet 8 Parameter für die top/hourly/weekday-Queries ohne Streamer-Filter.
 async fn fetch_top(
     pool: &PgPool,
-    source_key: &str,
+    table: &str,
+    is_tracked: bool,
     hf: &HourFilter,
 ) -> Result<Vec<TopRow>, sqlx::Error> {
     let mode = hf.mode_str();
     let start = hf.start();
     let end = hf.end();
-    let sql = build_top_sql(false);
+    let sql = build_top_sql(table, is_tracked, false);
     let rows = sqlx::query(&sql)
-        .bind(source_key)
         .bind(mode)
         .bind(mode)
         .bind(start)
@@ -523,15 +492,15 @@ async fn fetch_top(
 
 async fn fetch_hourly(
     pool: &PgPool,
-    source_key: &str,
+    table: &str,
+    is_tracked: bool,
     hf: &HourFilter,
 ) -> Result<Vec<HourlyRow>, sqlx::Error> {
     let mode = hf.mode_str();
     let start = hf.start();
     let end = hf.end();
-    let sql = build_hourly_sql(false);
+    let sql = build_hourly_sql(table, is_tracked, false);
     let rows = sqlx::query(&sql)
-        .bind(source_key)
         .bind(mode)
         .bind(mode)
         .bind(start)
@@ -554,15 +523,15 @@ async fn fetch_hourly(
 
 async fn fetch_weekday(
     pool: &PgPool,
-    source_key: &str,
+    table: &str,
+    is_tracked: bool,
     hf: &HourFilter,
 ) -> Result<Vec<WeekdayRow>, sqlx::Error> {
     let mode = hf.mode_str();
     let start = hf.start();
     let end = hf.end();
-    let sql = build_weekday_sql(false);
+    let sql = build_weekday_sql(table, is_tracked, false);
     let rows = sqlx::query(&sql)
-        .bind(source_key)
         .bind(mode)
         .bind(mode)
         .bind(start)
@@ -583,19 +552,18 @@ async fn fetch_weekday(
         .collect())
 }
 
-/// Q5 — user_top_sql: 9 Parameter (source_key, login, mode*6).
 async fn fetch_user_top(
     pool: &PgPool,
-    source_key: &str,
+    table: &str,
+    is_tracked: bool,
     login: &str,
     hf: &HourFilter,
 ) -> Result<Vec<TopRow>, sqlx::Error> {
     let mode = hf.mode_str();
     let start = hf.start();
     let end = hf.end();
-    let sql = build_top_sql(true);
+    let sql = build_top_sql(table, is_tracked, true);
     let rows = sqlx::query(&sql)
-        .bind(source_key)
         .bind(login)
         .bind(mode)
         .bind(mode)
@@ -620,16 +588,16 @@ async fn fetch_user_top(
 
 async fn fetch_user_hourly(
     pool: &PgPool,
-    source_key: &str,
+    table: &str,
+    is_tracked: bool,
     login: &str,
     hf: &HourFilter,
 ) -> Result<Vec<HourlyRow>, sqlx::Error> {
     let mode = hf.mode_str();
     let start = hf.start();
     let end = hf.end();
-    let sql = build_hourly_sql(true);
+    let sql = build_hourly_sql(table, is_tracked, true);
     let rows = sqlx::query(&sql)
-        .bind(source_key)
         .bind(login)
         .bind(mode)
         .bind(mode)
@@ -653,16 +621,16 @@ async fn fetch_user_hourly(
 
 async fn fetch_user_weekday(
     pool: &PgPool,
-    source_key: &str,
+    table: &str,
+    is_tracked: bool,
     login: &str,
     hf: &HourFilter,
 ) -> Result<Vec<WeekdayRow>, sqlx::Error> {
     let mode = hf.mode_str();
     let start = hf.start();
     let end = hf.end();
-    let sql = build_weekday_sql(true);
+    let sql = build_weekday_sql(table, is_tracked, true);
     let rows = sqlx::query(&sql)
-        .bind(source_key)
         .bind(login)
         .bind(mode)
         .bind(mode)
@@ -1242,12 +1210,12 @@ async fn compute_stats(
     })?;
     let maps = build_partner_maps(partner_rows, now);
 
-    let tracked_top_raw = fetch_top(pool, "tracked", hf).await?;
-    let tracked_hourly_raw = fetch_hourly(pool, "tracked", hf).await?;
-    let tracked_weekday_raw = fetch_weekday(pool, "tracked", hf).await?;
-    let category_top_raw = fetch_top(pool, "category", hf).await?;
-    let category_hourly_raw = fetch_hourly(pool, "category", hf).await?;
-    let category_weekday_raw = fetch_weekday(pool, "category", hf).await?;
+    let tracked_top_raw = fetch_top(pool, "twitch_stats_tracked", true, hf).await?;
+    let tracked_hourly_raw = fetch_hourly(pool, "twitch_stats_tracked", true, hf).await?;
+    let tracked_weekday_raw = fetch_weekday(pool, "twitch_stats_tracked", true, hf).await?;
+    let category_top_raw = fetch_top(pool, "twitch_stats_category", false, hf).await?;
+    let category_hourly_raw = fetch_hourly(pool, "twitch_stats_category", false, hf).await?;
+    let category_weekday_raw = fetch_weekday(pool, "twitch_stats_category", false, hf).await?;
 
     let tracked_top: Vec<StreamerEntry> = tracked_top_raw.into_iter().map(|r| enrich_top_row(r, &maps)).collect();
     let category_top: Vec<StreamerEntry> = category_top_raw.into_iter().map(|r| enrich_top_row(r, &maps)).collect();
@@ -1338,7 +1306,12 @@ async fn compute_streamer_block(
     let mut had_results = false;
 
     for src_key in &["tracked", "category"] {
-        match fetch_user_top(pool, src_key, login, hf).await {
+        let (table, is_tracked) = if *src_key == "tracked" {
+            ("twitch_stats_tracked", true)
+        } else {
+            ("twitch_stats_category", false)
+        };
+        match fetch_user_top(pool, table, is_tracked, login, hf).await {
             Ok(rows) if !rows.is_empty() && rows[0].samples > 0 => {
                 let entry = enrich_top_row(rows.into_iter().next().unwrap(), maps);
                 summary = json!({
@@ -1354,10 +1327,10 @@ async fn compute_streamer_block(
                 });
                 source = Some(src_key.to_string());
                 had_results = true;
-                if let Ok(hr) = fetch_user_hourly(pool, src_key, login, hf).await {
+                if let Ok(hr) = fetch_user_hourly(pool, table, is_tracked, login, hf).await {
                     hourly = map_hourly(hr);
                 }
-                if let Ok(wd) = fetch_user_weekday(pool, src_key, login, hf).await {
+                if let Ok(wd) = fetch_user_weekday(pool, table, is_tracked, login, hf).await {
                     weekday = map_weekday(wd);
                 }
                 break;
