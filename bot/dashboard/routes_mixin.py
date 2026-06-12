@@ -500,13 +500,6 @@ class _DashboardRoutesMixin:
             deps=self._billing_route_deps(),
         )
 
-    async def api_billing_checkout_session(self, request: web.Request) -> web.Response:
-        return await _routes_billing.api_billing_checkout_session(
-            self,
-            request,
-            deps=self._billing_route_deps(),
-        )
-
     async def abbo_invoice(self, request: web.Request) -> web.StreamResponse:
         return await _routes_billing.abbo_invoice(self, request)
 

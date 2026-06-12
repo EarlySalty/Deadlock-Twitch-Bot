@@ -249,7 +249,6 @@ def build_billing_catalog(
             "checkout_preview_enabled": True,
             "catalog_path": "/twitch/api/billing/catalog",
             "checkout_preview_path": "/twitch/api/billing/checkout-preview",
-            "checkout_session_path": "/twitch/api/billing/checkout-session",
             "readiness_path": "/twitch/api/billing/readiness",
             "webhook_path": "/twitch/api/billing/stripe/webhook",
             "quickstart_url": BILLING_STRIPE_QUICKSTART_URL,

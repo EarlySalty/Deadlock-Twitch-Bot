@@ -36,7 +36,6 @@ def build_route_defs(server: Any) -> list[web.RouteDef]:
         web.get("/twitch/api/billing/readiness", server.api_billing_readiness),
         web.post("/twitch/api/billing/stripe/webhook", server.api_billing_stripe_webhook),
         web.post("/twitch/api/billing/checkout-preview", server.api_billing_checkout_preview),
-        web.post("/twitch/api/billing/checkout-session", server.api_billing_checkout_session),
         web.post("/twitch/api/billing/invoice-preview", server.api_billing_invoice_preview),
         web.post("/twitch/api/billing/stripe/sync-products", server.api_billing_stripe_sync_products),
         web.post("/twitch/api/billing/trial/start", server.api_billing_trial_start),
@@ -287,234 +286,17 @@ async def api_billing_checkout_preview(
         "cycle_label": catalog["cycle_label"],
         "plan": selected_plan,
         "stripe_price_id": price_id or None,
-        "checkout_session_path": "/twitch/api/billing/checkout-session",
         "invoice_preview_path": "/twitch/api/billing/invoice-preview",
         "invoice_page_path": "/twitch/abbo/rechnung",
         "message": message,
         "stripe_docs_url": quickstart_url,
         "next_steps": [
             "stripe_product_price_ids_hinterlegen",
-            "checkout_session_endpoint_live_testen",
             "webhook_verarbeitung_fuer_abos_aktivieren",
         ],
     }
     return web.json_response(payload, dumps=lambda data: json_module.dumps(data, ensure_ascii=True))
 
-
-async def api_billing_checkout_session(
-    server: Any,
-    request: web.Request,
-    *,
-    deps: BillingRouteDeps,
-) -> web.Response:
-    """Create a live Stripe Checkout Session for a paid billing plan."""
-    build_billing_catalog = deps.build_billing_catalog
-    format_eur_cents = deps.format_eur_cents
-    json_module = deps.json
-
-    if not server._check_v2_auth(request):
-        return web.json_response({"error": "auth_required"}, status=401)
-
-    body = await server._billing_read_request_body(request)
-    selected_plan_id = str(body.get("plan_id") or "").strip()
-    if not selected_plan_id:
-        return web.json_response(
-            {"error": "plan_id_required", "contract_version": "2026-02-27", "required_fields": ["plan_id"]},
-            status=400,
-        )
-
-    catalog = build_billing_catalog(body.get("cycle_months"))
-    selected_plan = next(
-        (plan for plan in catalog["plans"] if str(plan.get("id")) == selected_plan_id),
-        None,
-    )
-    if not selected_plan:
-        return web.json_response(
-            {
-                "error": "unknown_plan_id",
-                "contract_version": "2026-02-27",
-                "available_plan_ids": [str(plan.get("id")) for plan in catalog["plans"]],
-            },
-            status=404,
-        )
-
-    quantity_raw = body.get("quantity", 1)
-    try:
-        quantity = int(quantity_raw or 1)
-    except (TypeError, ValueError):
-        quantity = -1
-    if quantity < 1 or quantity > 24:
-        return web.json_response(
-            {"error": "invalid_quantity", "contract_version": "2026-02-27", "allowed_range": [1, 24]},
-            status=400,
-        )
-
-    unit_net_cents = int((selected_plan.get("price") or {}).get("total_net_cents") or 0)
-    if unit_net_cents <= 0:
-        return web.json_response(
-            {"error": "free_plan_no_checkout_required", "contract_version": "2026-02-27", "plan_id": selected_plan_id},
-            status=400,
-        )
-
-    default_success_url = str(getattr(server, "_billing_checkout_success_url", "") or "").strip()
-    default_cancel_url = str(getattr(server, "_billing_checkout_cancel_url", "") or "").strip()
-    success_url = str(body.get("success_url") or default_success_url).strip()
-    cancel_url = str(body.get("cancel_url") or default_cancel_url).strip()
-    allowed_redirect_hosts = list(server._billing_checkout_allowed_redirect_hosts())
-    if success_url and not server._billing_is_http_url(success_url):
-        return web.json_response(
-            {"error": "invalid_success_url", "contract_version": "2026-02-27", "field": "success_url", "allowed_hosts": allowed_redirect_hosts},
-            status=400,
-        )
-    if cancel_url and not server._billing_is_http_url(cancel_url):
-        return web.json_response(
-            {"error": "invalid_cancel_url", "contract_version": "2026-02-27", "field": "cancel_url", "allowed_hosts": allowed_redirect_hosts},
-            status=400,
-        )
-
-    readiness = server._billing_stripe_readiness_payload()
-    if not bool(readiness.get("checkout_ready")):
-        return web.json_response(
-            {
-                "error": "checkout_not_ready",
-                "contract_version": "2026-02-27",
-                "missing": list(readiness.get("missing") or []),
-                "readiness": readiness,
-            },
-            status=409,
-        )
-    if not bool(readiness.get("price_map_ready")):
-        return web.json_response(
-            {
-                "error": "stripe_price_id_map_missing",
-                "contract_version": "2026-02-27",
-                "required_price_ids": int(readiness.get("required_price_ids") or 0),
-                "mapped_price_ids": int(readiness.get("mapped_price_ids") or 0),
-                "missing_price_slots": list(readiness.get("missing_price_slots") or []),
-            },
-            status=409,
-        )
-    if not success_url or not cancel_url:
-        return web.json_response(
-            {"error": "missing_checkout_urls", "contract_version": "2026-02-27", "required_fields": ["success_url", "cancel_url"]},
-            status=409,
-        )
-
-    cycle_months = int(catalog.get("cycle_months") or 1)
-    stripe_price_id = server._billing_price_id_for_plan(selected_plan_id, cycle_months)
-    if not stripe_price_id:
-        return web.json_response(
-            {"error": "missing_stripe_price_id", "contract_version": "2026-02-27", "plan_id": selected_plan_id, "cycle_months": cycle_months},
-            status=409,
-        )
-
-    customer_reference = server._billing_primary_ref_for_request(request)
-    if not customer_reference:
-        return web.json_response(
-            {"error": "login_required", "contract_version": "2026-02-27"},
-            status=401,
-        )
-    billing_profile = server._billing_profile_for_request(request)
-    customer_email = str(body.get("customer_email") or billing_profile.get("recipient_email") or "").strip()
-    idempotency_key = str(request.headers.get("Idempotency-Key") or body.get("idempotency_key") or "").strip()
-
-    raw_metadata = body.get("metadata")
-    metadata: dict[str, str] = {}
-    if isinstance(raw_metadata, dict):
-        for raw_key, raw_value in raw_metadata.items():
-            key = str(raw_key or "").strip()
-            if not key:
-                continue
-            value = str(raw_value or "").strip()
-            if value:
-                metadata[key[:40]] = value[:500]
-
-    total_net_cents = unit_net_cents * quantity
-    metadata["plan_id"] = selected_plan_id
-    metadata["cycle_months"] = str(cycle_months)
-    metadata["quantity"] = str(quantity)
-    if customer_reference:
-        metadata["customer_reference"] = customer_reference
-
-    stripe_secret_key = str(getattr(server, "_billing_stripe_secret_key", "") or "").strip()
-    if not stripe_secret_key:
-        return web.json_response(
-            {"error": "stripe_secret_key_missing", "contract_version": "2026-02-27"},
-            status=409,
-        )
-
-    session_payload: dict[str, Any] = {
-        "mode": "subscription",
-        "success_url": success_url,
-        "cancel_url": cancel_url,
-        "line_items": [{"price": stripe_price_id, "quantity": quantity}],
-        "billing_address_collection": "required",
-        "tax_id_collection": {"enabled": True},
-        "metadata": metadata,
-    }
-    if customer_reference:
-        session_payload["client_reference_id"] = customer_reference
-    if customer_email:
-        session_payload["customer_email"] = customer_email
-    if cycle_months == 12:
-        session_payload.setdefault("subscription_data", {}).setdefault("metadata", {})["bonus_months"] = "2"
-
-    stripe_session, checkout_error = await server._billing_create_checkout_session_best_effort_async(
-        session_payload=session_payload,
-        idempotency_key=idempotency_key,
-    )
-    if stripe_session is None:
-        return web.json_response(
-            {
-                "error": "stripe_checkout_create_failed",
-                "contract_version": "2026-02-27",
-                "message": str(checkout_error or "Stripe checkout create failed"),
-            },
-            status=502,
-        )
-
-    session_id = str(server._billing_stripe_obj_get(stripe_session, "id", "") or "")
-    session_url = str(server._billing_stripe_obj_get(stripe_session, "url", "") or "")
-    expires_at_epoch = int(server._billing_stripe_obj_get(stripe_session, "expires_at", 0) or 0)
-    expires_at_iso = datetime.fromtimestamp(expires_at_epoch, tz=UTC).isoformat() if expires_at_epoch > 0 else None
-    payload = {
-        "ok": True,
-        "provider": "stripe",
-        "integration_state": "live",
-        "contract_version": "2026-02-27",
-        "currency": catalog["currency"],
-        "tax_mode": catalog["tax_mode"],
-        "request": {
-            "plan_id": selected_plan_id,
-            "stripe_price_id": stripe_price_id,
-            "cycle_months": cycle_months,
-            "quantity": quantity,
-            "success_url": success_url,
-            "cancel_url": cancel_url,
-            "customer_reference": customer_reference,
-            "customer_email": customer_email,
-            "idempotency_key": idempotency_key,
-            "metadata": metadata,
-        },
-        "plan": selected_plan,
-        "amount": {
-            "unit_net_cents": unit_net_cents,
-            "total_net_cents": total_net_cents,
-            "unit_net_label": format_eur_cents(unit_net_cents),
-            "total_net_label": format_eur_cents(total_net_cents),
-        },
-        "checkout": {
-            "status": "created",
-            "mode": "subscription",
-            "session_id": session_id,
-            "session_url": session_url or None,
-            "expires_at": expires_at_iso,
-        },
-        "invoice_preview_path": "/twitch/api/billing/invoice-preview",
-        "invoice_page_path": "/twitch/abbo/rechnung",
-        "message": "Stripe Checkout Session wurde erfolgreich erstellt.",
-    }
-    return web.json_response(payload, status=201, dumps=lambda data: json_module.dumps(data, ensure_ascii=True))
 
 
 async def api_billing_invoice_preview(
