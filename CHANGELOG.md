@@ -1,3 +1,9 @@
+## #178 — Title-Performance + Ads-Schedule nativ in Rust
+
+**Was wurde portiert:** `GET /twitch/api/v2/title-performance` aggregiert Stream-Titel aus `twitch_stream_sessions` nach Avg-Viewers, Retention-10m, Follower-Gain und Peak — sortiert nach Avg-Viewers. Keywords werden direkt in Rust extrahiert (Stop-Wort-Filter + 3+-Zeichen-Wörter, max 5 Keywords, identisch zu Python). `peerBenchmark` wird als `null` zurückgegeben (`_get_peer_group_stats` noch nicht portiert). `GET /twitch/api/v2/ads-schedule` liest die letzten 50 Snapshots aus `twitch_ads_schedule_snapshot` und gibt aktuellen Stand + 10-Einträge-Verlauf zurück.
+
+**Wie es jetzt funktioniert:** Beide Endpoints antworten mit 200. Kein Proxy-Hop mehr.
+
 ## #177 — Tag-Analysis + Viewer-Overlap nativ in Rust
 
 **Ausgangslage:** `GET /twitch/api/v2/tag-analysis` und `viewer-overlap` liefen über den Proxy. `tag-analysis` war in Python schon ein leerer Stub.
