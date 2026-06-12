@@ -1,3 +1,14 @@
+## #180 — Viewer-Directory, Viewer-Detail, Viewer-Segments nativ in Rust
+
+**Ausgangslage:** Die drei Viewer-Profil-Endpoints liefen noch über den Proxy. Sie sind die komplexesten Analyse-Endpoints: mehrere Sub-Queries, Batch-Loops, Cross-Channel-Auswertung, Churn-Erkennung und Ingestion-Gap-Diagnostik.
+
+**Was wurde portiert:**
+- `GET /twitch/api/v2/viewer-directory`: Paginiertes Viewer-Verzeichnis mit Segment, Cross-Channel-Anzahl, Top-3-anderen-Kanälen und Window-Metadata (Presence + Roh-Chat). Filter-Typen: active/lurker/exclusive/shared/new/churned. Sort nach sessions/messages/last\_seen/other\_channels/first\_seen.
+- `GET /twitch/api/v2/viewer-detail`: Einzelner Viewer — Activity-Timeline pro Tag, Cross-Channel-Präsenz mit Overlap-Richtung (before/after), Chat-Patterns (Peak-Stunden, aktivster Wochentag, Trend increasing/decreasing/stable). `personality` bleibt `null` (braucht `_classify_message`, Python-only).
+- `GET /twitch/api/v2/viewer-segments`: Segment-Verteilung (dedicated/regular/casual/lurker/new), Churn-Risiko-Liste mit Whereabouts der Top-20-At-Risk-Viewer, Cross-Channel-Statistik (Exklusivitäts-%), Top-Shared-Channels mit Richtungsanalyse (incoming/outgoing/bidirectional).
+
+**Technisch:** Python-Batch-Loops durch Postgres `= ANY($n)` ersetzt. `build_raw_chat_status` und `build_viewer_window_metadata` als async Rust-Helpers inlined.
+
 ## #179 — Retention-Curve, Loyalty-Curve, Viewer-Timeline nativ in Rust
 
 **Ausgangslage:** Drei analytisch komplexe Endpoints liefen noch über den Python-Proxy — jeder davon holte Rohdaten aus der DB und machte Berechnungen serverseitig in Python.

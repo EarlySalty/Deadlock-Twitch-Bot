@@ -10,6 +10,7 @@ pub mod streamers;
 pub mod ads_schedule;
 pub mod loyalty_curve;
 pub mod viewer_timeline;
+pub mod viewers;
 pub mod audience;
 pub mod follower_funnel;
 pub mod performance;
