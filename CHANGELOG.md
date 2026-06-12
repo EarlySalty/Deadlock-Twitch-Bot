@@ -1,3 +1,12 @@
+## #183 — Lurker-Analysis nativ in Rust
+
+**Ausgangslage:** Der Lurker-Analysis-Endpoint lief noch über den Fallback-Proxy.
+
+**Was wurde portiert:**
+- `GET /twitch/api/v2/lurker-analysis`: Analysiert Viewer die via Chatters-API gesehen wurden (`seen_via_chatters_api = TRUE`) aber nie geschrieben haben. Gibt Lurker-Ratio (Lurker / Seen-Sample-Viewer), Durchschnittliche Sessions der Lurker, Konversionsrate (Viewer die erst lurken und dann aktiv werden, erkennbar daran dass `first_active_seen > first_lurk_seen`) und die Top-25 reinen Lurker nach Session-Anzahl zurück.
+
+**Technisch:** Zwei Queries mit identischer Sessions-CTE (`started_at >= since`). Die erste Query nutzt `COUNT(*) FILTER (WHERE ...)` direkt in Postgres, statt Python-seitiger Listenschleifen. Bot-Exclusion via `NOT (chatter_login = ANY($3::text[]))`.
+
 ## #182 — Viewer-Profiles, Audience-Sharing + Audience-Insights nativ in Rust
 
 **Ausgangslage:** Drei weitere Analytics-Endpoints liefen noch über den Fallback-Proxy nach Python 8765.
