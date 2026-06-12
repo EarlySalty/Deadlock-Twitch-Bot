@@ -1,0 +1,36 @@
+//! Social-Media-Integrationsschicht des Twitch-Bots.
+//!
+//! Aktuell enthält der Crate den periodischen Clip-Fetcher:
+//! - `clip::repository` — sqlx-DB-Zugriff (twitch_clips_social_media, clip_fetch_history)
+//! - `clip::helix`      — Twitch Helix-API (GET /clips)
+//! - `clip::service`    — Orchestrierung eines Fetch-Laufs
+//! - `clip::task`       — Tokio-Hintergrundtask (Gate: TB_CLIP_FETCHER_ENABLED=1)
+//!
+//! # Deaktiviert
+//! Der Task ist **standardmäßig deaktiviert** und wird nicht in `tb-bot` gestartet
+//! bis die Social-Media-Pipeline bereit ist. Aktivierung: Env-Var setzen +
+//! `ClipFetchTask::start_if_enabled()` aufrufen.
+
+pub mod clip;
+
+pub use clip::{
+    repository::ClipRepository,
+    helix::HelixClipSource,
+    service::ClipFetchService,
+    task::ClipFetchTask,
+};
+
+use sqlx::PgPool;
+use std::sync::Arc;
+use tb_transport_twitch::HelixClient;
+
+/// Baut alle Clip-Fetcher-Komponenten und gibt einen fertigen Task zurück.
+///
+/// Der Task ist nach diesem Aufruf NOCH NICHT gestartet — erst
+/// `ClipFetchTask::start_if_enabled()` startet den Hintergrundloop.
+pub fn build_clip_fetch_task(pool: PgPool, helix: Arc<HelixClient>) -> ClipFetchTask {
+    let repo = ClipRepository::new(pool);
+    let helix_src = HelixClipSource::new(helix);
+    let service = Arc::new(ClipFetchService::new(repo, helix_src));
+    ClipFetchTask::new(service)
+}

@@ -25,6 +25,8 @@
 //!                                   interne-API-Routen werden dorthin
 //!                                   geproxyt, leer = 404 wie bisher
 //!   PORT                          — optional, default 8776
+//!   TB_CLIP_FETCHER_ENABLED       — "1" startet den Clip-Fetch-Task (default aus;
+//!                                   benötigt Helix-Client)
 
 mod auto_raid;
 mod chat_wiring;
@@ -586,6 +588,13 @@ async fn main() {
         tracing::info!("Poll-Loop deaktiviert (TB_MONITORING_POLL_ENABLED != 1)");
         None
     };
+
+    // Clip-Fetch-Task: gebaut aber standardmäßig deaktiviert (TB_CLIP_FETCHER_ENABLED≠1).
+    // Setzt Helix-Client voraus — ohne ihn kein Start, auch wenn Env-Var gesetzt.
+    if let Some(ref h) = *helix {
+        tb_social_media::build_clip_fetch_task(pool.clone(), std::sync::Arc::new(h.clone()))
+            .start_if_enabled();
+    }
 
     let addr = SocketAddr::from(([127, 0, 0, 1], port));
     let token = settings.internal_api.token.clone();
