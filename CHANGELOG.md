@@ -1,3 +1,14 @@
+## #182 — Viewer-Profiles, Audience-Sharing + Audience-Insights nativ in Rust
+
+**Ausgangslage:** Drei weitere Analytics-Endpoints liefen noch über den Fallback-Proxy nach Python 8765.
+
+**Was wurde portiert:**
+- `GET /twitch/api/v2/viewer-profiles`: Für jeden Chatter der Streamer-Basis wird global gezählt, auf wie vielen Streamern er auftaucht. Daraus entstehen fünf Segmente: `exclusive` (nur dieser Streamer), `loyalMulti` (2–3 Streamer), `casual` (Restmenge), `explorer` (≥8 Streamer), `passive` (≥3 Sessions aber 0 Nachrichten). Zwei Queries: eine CTE für die globale Exklusivitäts-Verteilung, eine separate für den Passive-Count.
+- `GET /twitch/api/v2/audience-sharing`: Cross-Streamer-Overlap mit Jaccard-Ähnlichkeit, Inflow (Viewer die erst nach `since_date` beim anderen Streamer auftauchten) und Outflow (Viewer zuletzt vor `since_date` gesehen). Top-5-Partner erhalten zusätzlich eine Monats-Timeline der geteilten Viewer. `days`-Parameter 7–365, Standard 30.
+- `GET /twitch/api/v2/audience-insights`: Vergleicht zwei aufeinanderfolgende Zeitfenster (`days` vs. `days×2` zurück). Berechnet Watch-Time-Trend (echter Durchschnitt aus `twitch_session_chatters.last_seen_at − first_message_at`, nur gültig wenn ≥25 Samples und ≥15 % Coverage) und Return-Rate (Anteil Viewer im Fenster, die in `twitch_chatter_rollup.first_seen_at` schon vor dem Fensterstart bekannt waren).
+
+**Technisch:** Alle drei nutzen `NOT (chatter_login = ANY($n::text[]))` für Bot-Exclusion statt N+1-Loops. Watch-Time-Distribution verwendet `= ANY($n::bigint[])` für Session-IDs. Der `$1`-Parameter in `true_return_rate` wird in derselben Query zweimal referenziert (WHERE-Bedingung und JOIN-Bedingung) — Postgres erlaubt das nativ ohne doppeltes Binden.
+
 ## #181 — Raid-Retention + Raid-Analytics nativ in Rust
 
 **Ausgangslage:** Die beiden Raid-Analytics-Endpoints liefen noch über den Proxy. Beide nutzen `recalculate_raid_chat_metrics`, eine Bulk-Berechnung von Chatter-Metriken pro Raid via Postgres `json_to_recordset`.

@@ -95,6 +95,18 @@ pub fn build_authed_router(pool: PgPool, token: String) -> Router {
             get(audience::viewer_overlap_handler),
         )
         .route(
+            "/twitch/api/v2/viewer-profiles",
+            get(audience::viewer_profiles_handler),
+        )
+        .route(
+            "/twitch/api/v2/audience-sharing",
+            get(audience::audience_sharing_handler),
+        )
+        .route(
+            "/twitch/api/v2/audience-insights",
+            get(audience::audience_insights_handler),
+        )
+        .route(
             "/twitch/api/v2/title-performance",
             get(title_performance::title_performance_handler),
         )
