@@ -9,7 +9,7 @@ pub mod idempotency;
 
 use axum::{
     middleware,
-    routing::{get, post},
+    routing::{delete, get, post},
     Extension, Router,
 };
 use sqlx::PgPool;
@@ -189,20 +189,36 @@ pub fn build_internal_router(
             &format!("{base}/sessions/:session_id"),
             get(session_detail::session_detail_handler),
         )
-        // Streamer-Endpoints: kompletter /streamers-Baum läuft bewusst über
-        // den Legacy-Fallback-Proxy zum Python-Worker, bis Partner-Lifecycle
-        // (promote/departner) + Discord-Bridge nativ sind: verify
-        // mode=clear/failed departnern in Python KOMPLETT inkl. Discord-DM,
-        // add/remove brauchen Promote-Logik + Helix-Verhalten, discord-flag/
-        // -profile brauchen Rollen-Sync, chat-action braucht den live
-        // rotierten Bot-Token des Python-Chats. Auch der Lesepfad
-        // (GET /streamers) bleibt drüben: ein nativer GET würde für POST auf
-        // demselben Pfad 405 statt Fallback liefern (axum matcht den Pfad,
-        // dann erst die Methode). Ebenfalls proxied: GET /debug/observability
-        // + /debug/chatters/:login (brauchen Python-In-Process-Bot-State) und
-        // POST /eventsub/processing/requeue. Re-Aktivierung pro Route nur mit
-        // Vertragstests gegen die Python-Antworten
-        // (siehe rust/docs/04-cutover-plan.md, Kopplung 8).
+        // Streamer-CRUD: vollständig nativ portiert.
+        // Ausnahme: POST /streamers/:login/chat-action braucht den live
+        // rotierten Bot-Token des Python-Chats → bleibt im Fallback-Proxy.
+        // verify mode=clear/failed liefert 503 (Partner-Lifecycle nicht portiert).
+        // Ebenfalls proxied: GET /debug/observability + /debug/chatters/:login
+        // (Python-In-Process-Bot-State) und POST /eventsub/processing/requeue.
+        .route(
+            &format!("{base}/streamers"),
+            get(streamers::list_handler).post(streamers::add_handler),
+        )
+        .route(
+            &format!("{base}/streamers/:login"),
+            delete(streamers::remove_handler),
+        )
+        .route(
+            &format!("{base}/streamers/:login/verify"),
+            post(streamers::verify_handler),
+        )
+        .route(
+            &format!("{base}/streamers/:login/archive"),
+            post(streamers::archive_handler),
+        )
+        .route(
+            &format!("{base}/streamers/:login/discord-flag"),
+            post(streamers::discord_flag_handler),
+        )
+        .route(
+            &format!("{base}/streamers/:login/discord-profile"),
+            post(streamers::discord_profile_handler),
+        )
         .fallback(handlers::legacy_proxy::legacy_fallback_handler)
         .with_state(pool)
         .layer(Extension(helix))

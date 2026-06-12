@@ -1,3 +1,11 @@
+## #173 — Kompletter `/streamers`-Baum nativ in Rust (tb-internal-api 8776)
+
+**Ausgangslage:** Alle Streamer-CRUD-Routen (`GET/POST /streamers`, `DELETE /streamers/:login`, `verify`, `archive`, `discord-flag`, `discord-profile`) wurden trotz vollständiger Handler-Implementierung noch über den Legacy-Proxy an Python 8779 weitergeleitet. Grund war ein Axum-Eigenheit: nativer GET hätte POST auf demselben Pfad mit 405 statt Proxy-Fallback beantwortet — kein Teil-Flip möglich, solange POST nicht auch nativ war.
+
+**Was wurde geändert:** Alle sechs CRUD-Methoden sind jetzt direkt im Rust-Router 8776 registriert. GET und POST auf `/streamers` liegen auf demselben Route-Eintrag (`get(list).post(add)`), womit das 405-Problem entfällt. Die Handler lesen/schreiben direkt in die DB über `tb-analytics::streamers_crud`. `chat-action` bleibt bewusst im Fallback-Proxy, weil es den live rotierten Bot-Token des Python-Chat-Prozesses braucht.
+
+**Wie es jetzt funktioniert:** `verify` mit `mode=permanent/temp` → DB-Update + 200. `verify` mit `mode=clear/failed` → ehrlicher 503 (departnern mit Discord-DM ist noch nicht nativ portiert, Admin sieht den Fehler). `archive`, `discord-flag`, `discord-profile` → DB-Update, kein Discord-Nebeneffekt (der Flag in der DB steuert ob der Streamer im Server ist, die eigentliche Discord-Rollen-Sync läuft noch auf Python-Seite). Python 8779 ist jetzt nur noch für `chat-action`, Debug-Routen und EventSub-Requeue zuständig.
+
 ## #172 — Analytics-Dashboard nativ in Rust: SPA-Serving für `/analyse`
 
 **Ausgangslage:** Die Route `/analyse` (Dashboard-HTML + alle statischen Assets wie JS/CSS/Icons) lief bislang über den Legacy-Proxy an Python 8765. Jedes Dashboard-Seitenaufruf war ein Umweg durch Python, obwohl die Auth-Logik und der Auth-Status schon nativ in Rust liefen.
