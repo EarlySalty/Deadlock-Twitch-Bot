@@ -6,13 +6,16 @@ edition.workspace = true
 [dependencies]
 async-trait = { workspace = true }
 chrono      = { workspace = true }
+dashmap     = { workspace = true }
 rand        = { workspace = true }
+regex       = { workspace = true }
 reqwest     = { workspace = true }
 serde       = { workspace = true }
 serde_json  = { workspace = true }
 sqlx        = { workspace = true }
 tokio       = { workspace = true, features = ["time", "sync"] }
 tracing     = { workspace = true }
+unicode-normalization = { workspace = true }
 tb-domain   = { workspace = true }
 tb-transport-twitch = { workspace = true }
 

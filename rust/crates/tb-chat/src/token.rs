@@ -199,6 +199,16 @@ impl BotTokenManager {
         self.bot_login.read().await.clone()
     }
 
+    /// Adapter für den 2-Attempt-Loop in [`HelixChatClient`]:
+    /// `force=true` → erst `force_refresh()`, dann `access_token()`;
+    /// `force=false` → direkt `access_token()` (lazy Refresh wenn nötig).
+    pub async fn get_valid_token(&self, force: bool) -> Result<String, String> {
+        if force {
+            self.force_refresh().await.map_err(|e| e.to_string())?;
+        }
+        self.access_token().await.map_err(|e| e.to_string())
+    }
+
     /// Gewährte Scopes (aus validate/refresh — Python hält sie dynamisch).
     pub async fn scopes(&self) -> Vec<String> {
         self.state

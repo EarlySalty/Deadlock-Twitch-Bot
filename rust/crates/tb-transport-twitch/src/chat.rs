@@ -1,0 +1,804 @@
+//! Helix-Chat-Endpoints — Nachrichten senden, Ankündigungen, Bans, Löschen.
+//!
+//! Port von `bot/chat/moderation.py:1293–1903` (send/announcement/ban/unban/delete).
+//! Alle Endpoints brauchen einen **User-Token** des Bot-Accounts (nicht App-Token),
+//! deshalb expliziter `user_token`-Parameter analog zu `raid.rs`/`moderation.rs`.
+
+use crate::client::{HelixClient, HelixError};
+use chrono::{DateTime, Utc};
+use serde::{Deserialize, Serialize};
+
+// ---------------------------------------------------------------------------
+// Typen
+// ---------------------------------------------------------------------------
+
+/// Ergebnis eines `send_chat_message`-Aufrufs.
+/// HTTP-200 mit `is_sent=false` = Drop — diesen Fall separat auswerten!
+///
+/// Port von `moderation.py:1435–1500` (is_sent/drop_reason-Parsing).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SendOutcome {
+    /// Nachricht wurde zugestellt (`is_sent=true` oder 204).
+    Sent,
+    /// Twitch hat die Nachricht intern verworfen (`is_sent=false`).
+    ///
+    /// `code` z. B. `"sender_banned"`, `"sender_timedout"`, `"channel_settings"`.
+    /// `message` ist der menschenlesbare Grund aus der Helix-Antwort.
+    Dropped { code: String, message: String },
+    /// HTTP-Fehler (4xx/5xx) der nicht durch den 2-Attempt-Retry aufgelöst wurde.
+    HttpError { status: u16, body: String },
+}
+
+/// Drop-Reason aus der Helix-Antwort auf `POST /chat/messages`.
+///
+/// Port: `moderation.py:1490–1498`.
+#[derive(Debug, Deserialize, Clone)]
+struct DropReason {
+    pub code: String,
+    pub message: String,
+}
+
+/// Einzelnes `data[0]`-Objekt aus der Send-Message-Antwort.
+#[derive(Debug, Deserialize)]
+struct SendMessageData {
+    pub is_sent: bool,
+    pub drop_reason: Option<DropReason>,
+}
+
+/// Vollständige Antwort auf `POST /chat/messages`.
+#[derive(Debug, Deserialize)]
+struct SendMessageResponse {
+    pub data: Vec<SendMessageData>,
+}
+
+/// Ergebnis eines Ban- oder Unban-Aufrufs.
+///
+/// Port: `_auto_ban_and_cleanup` + `_unban_user` (moderation.py Z. 1679–1903).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum BanOutcome {
+    /// 200/201/202 — Ban ausgeführt.
+    Banned,
+    /// 400 mit „already banned" im Body.
+    AlreadyBanned,
+    /// 200/204 (Unban).
+    Unbanned,
+    /// 403 — Bot hat keine Moderator-Rechte.
+    Forbidden,
+    /// Sonstiger HTTP-Fehler.
+    Failed { status: u16, body: String },
+}
+
+/// Payload für `POST /moderation/bans`.
+#[derive(Debug, Serialize)]
+struct BanPayload<'a> {
+    data: BanData<'a>,
+}
+
+#[derive(Debug, Serialize)]
+struct BanData<'a> {
+    user_id: &'a str,
+    reason: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    duration: Option<u32>,
+}
+
+/// Einzelner Twitch-User aus `GET /users`.
+#[derive(Debug, Deserialize, Clone)]
+pub struct HelixUserInfo {
+    pub id: String,
+    pub login: String,
+    pub display_name: String,
+    /// ISO-8601-Timestamp (TEXT in Helix-Antwort).
+    /// Port: `fetch_users(ids=[...])` in `bot.py:1617–1627`.
+    pub created_at: String,
+}
+
+/// Antwort auf `GET /users`.
+#[derive(Debug, Deserialize)]
+struct UsersResponse {
+    pub data: Vec<HelixUserInfo>,
+}
+
+/// Payload für `POST /chat/announcements`.
+#[derive(Debug, Serialize)]
+struct AnnouncementPayload<'a> {
+    message: &'a str,
+    color: &'a str,
+}
+
+// ---------------------------------------------------------------------------
+// HelixClient-Erweiterung
+// ---------------------------------------------------------------------------
+
+impl HelixClient {
+    /// Sendet eine Chat-Nachricht via `POST /chat/messages`.
+    ///
+    /// HTTP-200 mit `is_sent=false` → [`SendOutcome::Dropped`] (kein Fehler!).
+    /// `drop_reason.code` `sender_banned`/`sender_timedout` → TimeoutGuard-Trigger
+    /// (im oberen Layer, nicht hier).
+    ///
+    /// Port: `moderation.py:1389–1542`, Weg 2 (Helix API).
+    /// Scope: `user:write:chat`.
+    pub async fn send_chat_message(
+        &self,
+        broadcaster_id: &str,
+        sender_id: &str,
+        message: &str,
+        user_token: &str,
+    ) -> Result<SendOutcome, HelixError> {
+        let url = format!("{}/chat/messages", self.helix_config().helix_base);
+        let body = serde_json::json!({
+            "broadcaster_id": broadcaster_id,
+            "sender_id": sender_id,
+            "message": message,
+        });
+        let resp = self
+            .http_client()
+            .post(&url)
+            .header("Client-Id", &self.helix_config().client_id)
+            .header("Authorization", format!("Bearer {user_token}"))
+            .header("Content-Type", "application/json")
+            .json(&body)
+            .send()
+            .await?;
+
+        let status = resp.status().as_u16();
+        match status {
+            200 => {
+                // Helix gibt 200 zurück auch wenn die Nachricht verworfen wurde —
+                // is_sent=false + drop_reason auswerten.
+                let parsed: SendMessageResponse = resp.json().await.map_err(|e| {
+                    HelixError::Http(e)
+                })?;
+                if let Some(item) = parsed.data.first() {
+                    if !item.is_sent {
+                        let (code, msg) = item
+                            .drop_reason
+                            .as_ref()
+                            .map(|r| (r.code.clone(), r.message.clone()))
+                            .unwrap_or_else(|| ("unknown".to_string(), String::new()));
+                        return Ok(SendOutcome::Dropped { code, message: msg });
+                    }
+                }
+                Ok(SendOutcome::Sent)
+            }
+            204 => Ok(SendOutcome::Sent),
+            status => {
+                let body_text = resp.text().await.unwrap_or_default();
+                let snippet: String = body_text.chars().take(300).collect();
+                Ok(SendOutcome::HttpError {
+                    status,
+                    body: snippet,
+                })
+            }
+        }
+    }
+
+    /// Sendet eine Kanal-Ankündigung via `POST /chat/announcements`.
+    ///
+    /// `color` — `"blue"`, `"green"`, `"orange"`, `"purple"` (Default: `"purple"`).
+    ///
+    /// Port: `moderation.py:1293–1387`.
+    /// Scope: `moderator:manage:announcements`.
+    pub async fn send_announcement(
+        &self,
+        broadcaster_id: &str,
+        moderator_id: &str,
+        message: &str,
+        color: &str,
+        user_token: &str,
+    ) -> Result<bool, HelixError> {
+        let url = format!("{}/chat/announcements", self.helix_config().helix_base);
+        let payload = AnnouncementPayload { message, color };
+        let resp = self
+            .http_client()
+            .post(&url)
+            .header("Client-Id", &self.helix_config().client_id)
+            .header("Authorization", format!("Bearer {user_token}"))
+            .header("Content-Type", "application/json")
+            .query(&[
+                ("broadcaster_id", broadcaster_id),
+                ("moderator_id", moderator_id),
+            ])
+            .json(&payload)
+            .send()
+            .await?;
+
+        Ok(matches!(resp.status().as_u16(), 200 | 204))
+    }
+
+    /// Bannt einen User via `POST /moderation/bans`.
+    ///
+    /// `duration` = None → permanenter Ban; Some(n) → Timeout in Sekunden.
+    ///
+    /// Port: `moderation.py:1679–1816`.
+    /// Scope: `moderator:manage:banned_users`.
+    pub async fn ban_user(
+        &self,
+        broadcaster_id: &str,
+        moderator_id: &str,
+        user_id: &str,
+        reason: &str,
+        duration: Option<u32>,
+        user_token: &str,
+    ) -> Result<BanOutcome, HelixError> {
+        let url = format!("{}/moderation/bans", self.helix_config().helix_base);
+        let payload = BanPayload {
+            data: BanData {
+                user_id,
+                reason,
+                duration,
+            },
+        };
+        let resp = self
+            .http_client()
+            .post(&url)
+            .header("Client-Id", &self.helix_config().client_id)
+            .header("Authorization", format!("Bearer {user_token}"))
+            .header("Content-Type", "application/json")
+            .query(&[
+                ("broadcaster_id", broadcaster_id),
+                ("moderator_id", moderator_id),
+            ])
+            .json(&payload)
+            .send()
+            .await?;
+
+        let status = resp.status().as_u16();
+        match status {
+            200..=202 => Ok(BanOutcome::Banned),
+            400 => {
+                let body_text = resp.text().await.unwrap_or_default();
+                if body_text.to_lowercase().contains("already banned") {
+                    Ok(BanOutcome::AlreadyBanned)
+                } else {
+                    let snippet: String = body_text.chars().take(300).collect();
+                    Ok(BanOutcome::Failed {
+                        status,
+                        body: snippet,
+                    })
+                }
+            }
+            403 => Ok(BanOutcome::Forbidden),
+            status => {
+                let body_text = resp.text().await.unwrap_or_default();
+                let snippet: String = body_text.chars().take(300).collect();
+                Ok(BanOutcome::Failed {
+                    status,
+                    body: snippet,
+                })
+            }
+        }
+    }
+
+    /// Hebt einen Ban auf via `DELETE /moderation/bans`.
+    ///
+    /// Port: `moderation.py:1831–1903` (`_unban_user`).
+    /// Scope: `moderator:manage:banned_users`.
+    pub async fn unban_user(
+        &self,
+        broadcaster_id: &str,
+        moderator_id: &str,
+        user_id: &str,
+        user_token: &str,
+    ) -> Result<BanOutcome, HelixError> {
+        let url = format!("{}/moderation/bans", self.helix_config().helix_base);
+        let resp = self
+            .http_client()
+            .delete(&url)
+            .header("Client-Id", &self.helix_config().client_id)
+            .header("Authorization", format!("Bearer {user_token}"))
+            .query(&[
+                ("broadcaster_id", broadcaster_id),
+                ("moderator_id", moderator_id),
+                ("user_id", user_id),
+            ])
+            .send()
+            .await?;
+
+        let status = resp.status().as_u16();
+        match status {
+            200 | 204 => Ok(BanOutcome::Unbanned),
+            403 => Ok(BanOutcome::Forbidden),
+            status => {
+                let body_text = resp.text().await.unwrap_or_default();
+                let snippet: String = body_text.chars().take(300).collect();
+                Ok(BanOutcome::Failed {
+                    status,
+                    body: snippet,
+                })
+            }
+        }
+    }
+
+    /// Löscht eine Chat-Nachricht via `DELETE /moderation/chat`.
+    ///
+    /// Port: `moderation.py:1631–1666` (Schritt 1 in `_auto_ban_and_cleanup`).
+    /// Scope: `moderator:manage:chat_messages`.
+    pub async fn delete_chat_message(
+        &self,
+        broadcaster_id: &str,
+        moderator_id: &str,
+        message_id: &str,
+        user_token: &str,
+    ) -> Result<bool, HelixError> {
+        let url = format!("{}/moderation/chat", self.helix_config().helix_base);
+        let resp = self
+            .http_client()
+            .delete(&url)
+            .header("Client-Id", &self.helix_config().client_id)
+            .header("Authorization", format!("Bearer {user_token}"))
+            .query(&[
+                ("broadcaster_id", broadcaster_id),
+                ("moderator_id", moderator_id),
+                ("message_id", message_id),
+            ])
+            .send()
+            .await?;
+
+        Ok(matches!(resp.status().as_u16(), 200 | 204))
+    }
+
+    /// Holt User-Infos (inkl. `created_at`) für eine Liste von User-IDs.
+    ///
+    /// Port: `bot.py:1617–1627` — Account-Alter-Eskalation.
+    /// Rückgabe: Vec sortiert wie Eingabe (unbekannte IDs werden weggelassen).
+    pub async fn get_users_created_at(
+        &self,
+        ids: &[&str],
+        user_token: &str,
+    ) -> Result<Vec<HelixUserInfo>, HelixError> {
+        if ids.is_empty() {
+            return Ok(vec![]);
+        }
+        let url = format!("{}/users", self.helix_config().helix_base);
+        let params: Vec<(&str, &str)> = ids.iter().map(|id| ("id", *id)).collect();
+        let resp = self
+            .http_client()
+            .get(&url)
+            .header("Client-Id", &self.helix_config().client_id)
+            .header("Authorization", format!("Bearer {user_token}"))
+            .query(&params)
+            .send()
+            .await?;
+
+        if !resp.status().is_success() {
+            return Ok(vec![]);
+        }
+        let parsed: UsersResponse = resp.json().await.map_err(HelixError::Http)?;
+        Ok(parsed.data)
+    }
+
+    /// Holt User-Info für einen einzelnen Login-Namen.
+    ///
+    /// Port: `_resolve_existing_twitch_users` (moderation.py Z. 358–427).
+    pub async fn get_user_by_login(
+        &self,
+        login: &str,
+        user_token: &str,
+    ) -> Result<Option<HelixUserInfo>, HelixError> {
+        let url = format!("{}/users", self.helix_config().helix_base);
+        let resp = self
+            .http_client()
+            .get(&url)
+            .header("Client-Id", &self.helix_config().client_id)
+            .header("Authorization", format!("Bearer {user_token}"))
+            .query(&[("login", login)])
+            .send()
+            .await?;
+
+        if !resp.status().is_success() {
+            return Ok(None);
+        }
+        let parsed: UsersResponse = resp.json().await.map_err(HelixError::Http)?;
+        Ok(parsed.data.into_iter().next())
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Hilfsfunktionen (intern)
+// ---------------------------------------------------------------------------
+
+/// Parst einen Helix-`created_at`-String zu [`DateTime<Utc>`].
+///
+/// Helix liefert RFC-3339 z. B. `"2024-01-15T12:00:00Z"`.
+pub fn parse_created_at(s: &str) -> Option<DateTime<Utc>> {
+    DateTime::parse_from_rfc3339(s)
+        .ok()
+        .map(|dt| dt.with_timezone(&Utc))
+}
+
+// ---------------------------------------------------------------------------
+// Tests (Wiremock)
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::client::{HelixClient, HelixConfig};
+    use wiremock::matchers::{header, method, path, query_param};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    /// Baut einen HelixClient gegen einen MockServer (ohne App-Token-Präfetch).
+    async fn mock_client(server: &MockServer) -> HelixClient {
+        // App-Token-Endpunkt — nur falls intern aufgerufen.
+        Mock::given(method("POST"))
+            .and(path("/oauth2/token"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "access_token": "app-tok", "expires_in": 3600
+            })))
+            .mount(server)
+            .await;
+        let mut cfg = HelixConfig::new("cid", "sec");
+        cfg.helix_base = format!("{}/helix", server.uri());
+        cfg.token_url = format!("{}/oauth2/token", server.uri());
+        HelixClient::new(cfg).unwrap()
+    }
+
+    // -----------------------------------------------------------------------
+    // send_chat_message
+    // -----------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn send_chat_200_is_sent_true() {
+        let server = MockServer::start().await;
+        let client = mock_client(&server).await;
+        Mock::given(method("POST"))
+            .and(path("/helix/chat/messages"))
+            .and(header("Authorization", "Bearer bot-tok"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "data": [{"message_id": "abc", "is_sent": true}]
+            })))
+            .mount(&server)
+            .await;
+        let result = client
+            .send_chat_message("111", "bot1", "Hallo!", "bot-tok")
+            .await
+            .unwrap();
+        assert_eq!(result, SendOutcome::Sent);
+    }
+
+    #[tokio::test]
+    async fn send_chat_200_is_sent_false_ergibt_dropped() {
+        let server = MockServer::start().await;
+        let client = mock_client(&server).await;
+        Mock::given(method("POST"))
+            .and(path("/helix/chat/messages"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "data": [{
+                    "message_id": "abc",
+                    "is_sent": false,
+                    "drop_reason": {"code": "channel_settings", "message": "Blocked by channel settings"}
+                }]
+            })))
+            .mount(&server)
+            .await;
+        let result = client
+            .send_chat_message("111", "bot1", "msg", "bot-tok")
+            .await
+            .unwrap();
+        assert!(
+            matches!(result, SendOutcome::Dropped { ref code, .. } if code == "channel_settings"),
+            "erwartet Dropped(channel_settings), bekam {result:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn send_chat_401_ergibt_http_error() {
+        let server = MockServer::start().await;
+        let client = mock_client(&server).await;
+        Mock::given(method("POST"))
+            .and(path("/helix/chat/messages"))
+            .respond_with(ResponseTemplate::new(401).set_body_string("unauthorized"))
+            .mount(&server)
+            .await;
+        let result = client
+            .send_chat_message("111", "bot1", "msg", "bad-tok")
+            .await
+            .unwrap();
+        assert!(
+            matches!(result, SendOutcome::HttpError { status: 401, .. }),
+            "{result:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn send_chat_dropped_sender_banned() {
+        let server = MockServer::start().await;
+        let client = mock_client(&server).await;
+        Mock::given(method("POST"))
+            .and(path("/helix/chat/messages"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "data": [{
+                    "message_id": "xyz",
+                    "is_sent": false,
+                    "drop_reason": {"code": "sender_banned", "message": "Sender is banned"}
+                }]
+            })))
+            .mount(&server)
+            .await;
+        let result = client
+            .send_chat_message("111", "bot1", "msg", "tok")
+            .await
+            .unwrap();
+        assert!(
+            matches!(result, SendOutcome::Dropped { ref code, .. } if code == "sender_banned"),
+            "{result:?}"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // send_announcement
+    // -----------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn announcement_200_ergibt_true() {
+        let server = MockServer::start().await;
+        let client = mock_client(&server).await;
+        Mock::given(method("POST"))
+            .and(path("/helix/chat/announcements"))
+            .and(query_param("broadcaster_id", "111"))
+            .and(query_param("moderator_id", "bot1"))
+            .respond_with(ResponseTemplate::new(200))
+            .mount(&server)
+            .await;
+        assert!(
+            client
+                .send_announcement("111", "bot1", "Ankündigung", "purple", "tok")
+                .await
+                .unwrap()
+        );
+    }
+
+    #[tokio::test]
+    async fn announcement_204_ergibt_true() {
+        let server = MockServer::start().await;
+        let client = mock_client(&server).await;
+        Mock::given(method("POST"))
+            .and(path("/helix/chat/announcements"))
+            .respond_with(ResponseTemplate::new(204))
+            .mount(&server)
+            .await;
+        assert!(
+            client
+                .send_announcement("111", "bot1", "msg", "blue", "tok")
+                .await
+                .unwrap()
+        );
+    }
+
+    #[tokio::test]
+    async fn announcement_401_ergibt_false() {
+        let server = MockServer::start().await;
+        let client = mock_client(&server).await;
+        Mock::given(method("POST"))
+            .and(path("/helix/chat/announcements"))
+            .respond_with(ResponseTemplate::new(401))
+            .mount(&server)
+            .await;
+        assert!(
+            !client
+                .send_announcement("111", "bot1", "msg", "purple", "tok")
+                .await
+                .unwrap()
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // ban_user
+    // -----------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn ban_user_200_ergibt_banned() {
+        let server = MockServer::start().await;
+        let client = mock_client(&server).await;
+        Mock::given(method("POST"))
+            .and(path("/helix/moderation/bans"))
+            .and(query_param("broadcaster_id", "111"))
+            .and(query_param("moderator_id", "bot1"))
+            .and(header("Authorization", "Bearer tok"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"data":[]})))
+            .mount(&server)
+            .await;
+        let result = client
+            .ban_user("111", "bot1", "user99", "Spam", None, "tok")
+            .await
+            .unwrap();
+        assert_eq!(result, BanOutcome::Banned);
+    }
+
+    #[tokio::test]
+    async fn ban_user_400_already_banned() {
+        let server = MockServer::start().await;
+        let client = mock_client(&server).await;
+        Mock::given(method("POST"))
+            .and(path("/helix/moderation/bans"))
+            .respond_with(
+                ResponseTemplate::new(400)
+                    .set_body_string(r#"{"message":"user is already banned"}"#),
+            )
+            .mount(&server)
+            .await;
+        let result = client
+            .ban_user("111", "bot1", "user99", "Spam", None, "tok")
+            .await
+            .unwrap();
+        assert_eq!(result, BanOutcome::AlreadyBanned);
+    }
+
+    #[tokio::test]
+    async fn ban_user_403_ergibt_forbidden() {
+        let server = MockServer::start().await;
+        let client = mock_client(&server).await;
+        Mock::given(method("POST"))
+            .and(path("/helix/moderation/bans"))
+            .respond_with(ResponseTemplate::new(403).set_body_string("forbidden"))
+            .mount(&server)
+            .await;
+        let result = client
+            .ban_user("111", "bot1", "user99", "Spam", None, "tok")
+            .await
+            .unwrap();
+        assert_eq!(result, BanOutcome::Forbidden);
+    }
+
+    // -----------------------------------------------------------------------
+    // unban_user
+    // -----------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn unban_user_204_ergibt_unbanned() {
+        let server = MockServer::start().await;
+        let client = mock_client(&server).await;
+        Mock::given(method("DELETE"))
+            .and(path("/helix/moderation/bans"))
+            .and(query_param("broadcaster_id", "111"))
+            .and(query_param("moderator_id", "bot1"))
+            .and(query_param("user_id", "user99"))
+            .respond_with(ResponseTemplate::new(204))
+            .mount(&server)
+            .await;
+        let result = client
+            .unban_user("111", "bot1", "user99", "tok")
+            .await
+            .unwrap();
+        assert_eq!(result, BanOutcome::Unbanned);
+    }
+
+    #[tokio::test]
+    async fn unban_user_403_ergibt_forbidden() {
+        let server = MockServer::start().await;
+        let client = mock_client(&server).await;
+        Mock::given(method("DELETE"))
+            .and(path("/helix/moderation/bans"))
+            .respond_with(ResponseTemplate::new(403))
+            .mount(&server)
+            .await;
+        let result = client
+            .unban_user("111", "bot1", "user99", "tok")
+            .await
+            .unwrap();
+        assert_eq!(result, BanOutcome::Forbidden);
+    }
+
+    // -----------------------------------------------------------------------
+    // delete_chat_message
+    // -----------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn delete_message_204_ok() {
+        let server = MockServer::start().await;
+        let client = mock_client(&server).await;
+        Mock::given(method("DELETE"))
+            .and(path("/helix/moderation/chat"))
+            .and(query_param("broadcaster_id", "111"))
+            .and(query_param("moderator_id", "bot1"))
+            .and(query_param("message_id", "msg-abc"))
+            .respond_with(ResponseTemplate::new(204))
+            .mount(&server)
+            .await;
+        assert!(
+            client
+                .delete_chat_message("111", "bot1", "msg-abc", "tok")
+                .await
+                .unwrap()
+        );
+    }
+
+    #[tokio::test]
+    async fn delete_message_401_ergibt_false() {
+        let server = MockServer::start().await;
+        let client = mock_client(&server).await;
+        Mock::given(method("DELETE"))
+            .and(path("/helix/moderation/chat"))
+            .respond_with(ResponseTemplate::new(401))
+            .mount(&server)
+            .await;
+        assert!(
+            !client
+                .delete_chat_message("111", "bot1", "msg-abc", "bad-tok")
+                .await
+                .unwrap()
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // get_users_created_at
+    // -----------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn get_users_created_at_liefert_user_infos() {
+        let server = MockServer::start().await;
+        let client = mock_client(&server).await;
+        Mock::given(method("GET"))
+            .and(path("/helix/users"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "data": [{
+                    "id": "123",
+                    "login": "testuser",
+                    "display_name": "TestUser",
+                    "created_at": "2024-01-15T12:00:00Z"
+                }]
+            })))
+            .mount(&server)
+            .await;
+        let users = client
+            .get_users_created_at(&["123"], "tok")
+            .await
+            .unwrap();
+        assert_eq!(users.len(), 1);
+        assert_eq!(users[0].login, "testuser");
+        let dt = parse_created_at(&users[0].created_at);
+        assert!(dt.is_some(), "created_at muss parsbar sein");
+    }
+
+    #[tokio::test]
+    async fn get_users_created_at_leer_gibt_leer_zurueck() {
+        let server = MockServer::start().await;
+        let client = mock_client(&server).await;
+        let users = client.get_users_created_at(&[], "tok").await.unwrap();
+        assert!(users.is_empty());
+    }
+
+    // -----------------------------------------------------------------------
+    // get_user_by_login
+    // -----------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn get_user_by_login_findet_user() {
+        let server = MockServer::start().await;
+        let client = mock_client(&server).await;
+        Mock::given(method("GET"))
+            .and(path("/helix/users"))
+            .and(query_param("login", "nani"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "data": [{
+                    "id": "456",
+                    "login": "nani",
+                    "display_name": "Nani",
+                    "created_at": "2022-03-01T00:00:00Z"
+                }]
+            })))
+            .mount(&server)
+            .await;
+        let user = client.get_user_by_login("nani", "tok").await.unwrap();
+        assert!(user.is_some());
+        assert_eq!(user.unwrap().id, "456");
+    }
+
+    #[tokio::test]
+    async fn get_user_by_login_nicht_gefunden_gibt_none() {
+        let server = MockServer::start().await;
+        let client = mock_client(&server).await;
+        Mock::given(method("GET"))
+            .and(path("/helix/users"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(serde_json::json!({"data": []})),
+            )
+            .mount(&server)
+            .await;
+        let user = client.get_user_by_login("nobody", "tok").await.unwrap();
+        assert!(user.is_none());
+    }
+}

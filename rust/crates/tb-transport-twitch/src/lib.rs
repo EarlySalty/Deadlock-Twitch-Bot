@@ -1,6 +1,7 @@
 //! tb-transport-twitch — Helix-Client und App-Token-Manager.
 
 pub mod client;
+pub mod chat;
 pub mod eventsub;
 pub mod moderation;
 pub mod raid;
@@ -10,6 +11,7 @@ pub mod user_token;
 
 pub use client::{HelixClient, HelixConfig, HelixError, TwitchUser};
 pub use eventsub::{CreateOutcome, EventSubSubscription};
+pub use chat::{parse_created_at, BanOutcome, HelixUserInfo, SendOutcome};
 pub use moderation::AddModeratorOutcome;
 pub use streams::{HelixChannelInfo, HelixStream};
 pub use token::{AppToken, TokenError};

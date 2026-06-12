@@ -11,18 +11,8 @@ use chrono::{DateTime, Utc};
 
 use crate::types::SendOutcome;
 
-/// Ergebnis einer Ban-/Timeout-Operation.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum BanOutcome {
-    /// 200 — Ban/Timeout gesetzt.
-    Banned,
-    /// Bereits gebannt (Helix 400 mit entsprechender Message).
-    AlreadyBanned,
-    /// 403 — Bot ist kein Moderator im Kanal.
-    NotModerator,
-    /// Sonstiger Fehler (Status + Body-Auszug).
-    Failed { status: u16, body: String },
-}
+/// Ban-/Timeout-Ergebnis: kanonisch im Transport definiert.
+pub use tb_transport_twitch::BanOutcome;
 
 /// Port für ausgehende Chat-/Moderations-Aktionen mit dem Bot-Token.
 #[async_trait]

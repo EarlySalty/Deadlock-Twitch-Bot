@@ -65,6 +65,9 @@ tb-chat          = { path = "crates/tb-chat" }
 tb-dashboard-api = { path = "crates/tb-dashboard-api" }
 tb-internal-api  = { path = "crates/tb-internal-api" }
 url = "2"
+regex = "1"
+unicode-normalization = "0.1"
+dashmap = "6"
 
 # Produktions-Optimierungsprofil für den Dauerlauf-Server.
 # lto = "thin": Thin-LTO statt Fat-LTO — nahezu gleiche Größen-/Laufzeitwirkung,

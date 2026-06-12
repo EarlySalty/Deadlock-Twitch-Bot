@@ -77,17 +77,7 @@ impl ChatMessageEvent {
     }
 }
 
-/// Ergebnis einer Chat-Sendung (Helix `POST /chat/messages` liefert HTTP 200
-/// auch bei Drop — `is_sent=false` + `drop_reason.code` müssen ausgewertet
-/// werden; Python-Vertrag moderation.md).
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum SendOutcome {
-    Sent { message_id: String },
-    Dropped { code: String, message: String },
-}
-
-impl SendOutcome {
-    pub fn is_sent(&self) -> bool {
-        matches!(self, Self::Sent { .. })
-    }
-}
+/// Sende-/Ban-Ergebnisse: kanonisch im Transport definiert
+/// (`tb_transport_twitch::chat` — wire-true inkl. `is_sent=false`-Drop-Parsing
+/// und `HttpError`-Variante für den 2-Attempt-Pfad).
+pub use tb_transport_twitch::SendOutcome;
