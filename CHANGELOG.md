@@ -1,3 +1,16 @@
+## #186 — Audience-Demographics nativ in Rust
+
+**Ausgangslage:** Der aufwändigste Audience-Endpoint lief noch über den Fallback-Proxy. Er enthält eine eigene Engagement-Berechnung, gewichtete Peak-Hour-Analyse und eine 5-Kategorie-Viewer-Klassifikation.
+
+**Was wurde portiert:**
+- `GET /twitch/api/v2/audience-demographics`: Gibt Viewer-Typen (Dedicated/Regular/Silent Regular/Casual/New Visitors), Aktivitätsmuster (weekend-heavy/weekday-focused/balanced), Primärsprache, Chat-Penetration und Peak-Aktivitätsstunden zurück.
+- **`_compute_weighted_peak_hours`**: Statt alle Chat-Messages als Einzelzeilen zu laden (Python: `fetchall()`), gruppiert eine SQL-Query direkt nach `(session_id, EXTRACT(HOUR FROM message_ts AT TIME ZONE $tz))` — max. 720 Aggregat-Zeilen statt N×10.000 Einzelzeilen. Exponentielles Recency-Gewicht (`0.5^(idx/8)` per Session), Winsorisierung des p90 pro Stunde (lineare Interpolation), gewichtete Summe → Top-3 Stunden.
+- **`calculate_engagement`** komplett in Rust: Chat-Penetration (aktive Chatter / tracked Accounts), Messages per 100 Viewer-Minutes, Reliability-Flag (mind. 1 passiver Viewer-Sample + ≥20% Chatters-API-Coverage).
+- **Viewer-Klassifikation**: Cold-Rollup-Detection (>90% `seen_before=False` → Fallback auf session_count≥2), `is_first_time_streamer`-Flag-Logik, 5-Kategorien-Mapping.
+- **Timezone-Validierung**: Timezone-String wird via `chrono-tz` validiert (IANA-Namen), bei ungültigem Wert Fallback auf UTC — kein AT-TIME-ZONE-Injection-Risiko.
+
+**Technisch:** 8 SQL-Queries + 1 DOW-Hilfsquery (Aktivitätsmuster), `$3::text[]`-Bot-Array wird in per_user- und rollup-CTE mehrfach referenziert. `$1` (since-DateTime) wird im CASE-WHEN für `seen_before` wiederverwendet.
+
 ## #185 — Category-Comparison nativ in Rust
 
 **Ausgangslage:** Der Category-Comparison-Endpoint lief noch über den Fallback-Proxy. Er ist der komplexeste Performance-Endpoint: 9 SQL-Queries, Python-seitige Percentile-Berechnung und eine Peer-Group-Analyse.
