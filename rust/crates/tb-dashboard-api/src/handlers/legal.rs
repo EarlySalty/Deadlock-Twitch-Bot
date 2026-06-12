@@ -546,11 +546,52 @@ const DEFAULT_BODY_SICHERHEIT: &str = concat!(
     "Ereignissen, eine stündliche automatische Log-Prüfung und ein tägliches ",
     "Gesamt-Audit. Der Code wird regelmäßig mit statischer Analyse, ",
     "Abhängigkeits-Audits und Container-Scans geprüft.</p>",
-    "<h2>Sicherheitslücke gefunden?</h2>",
-    "<p>Hinweise auf Schwachstellen sind ausdrücklich willkommen — bitte vertraulich ",
-    "an <a href='mailto:mail@earlysalty.com'>mail@earlysalty.com</a> oder direkt an ",
-    "das Team im Community-Discord. Bitte keine Details öffentlich posten, bevor das ",
-    "Problem behoben ist (Responsible Disclosure).</p>"
+    "<h2>Security Testing &amp; Responsible Disclosure</h2>",
+    "<p>White-Hat-Testing ist ausdrücklich erlaubt — wer Schwachstellen im System ",
+    "sucht und findet, tut uns einen Gefallen. Die gängigen Regeln gelten:</p>",
+    "<ul>",
+    "<li><strong>Kein Schaden:</strong> Keine Daten verändern, löschen oder ",
+    "verschlüsseln. Kein Einschleusen von Backdoors oder Schadsoftware. Betrieb und ",
+    "Verfügbarkeit des Systems dürfen nicht beeinträchtigt werden.</li>",
+    "<li><strong>Keine Datenexfiltration:</strong> Gefundene fremde Daten ",
+    "dokumentieren reicht — nicht herunterladen, nicht weitergeben.</li>",
+    "<li><strong>Kein Social Engineering gegen Nutzer:</strong> Tests richten sich ",
+    "gegen die Infrastruktur und den Code, nicht gegen Streamer oder ",
+    "Community-Mitglieder.</li>",
+    "<li><strong>Detaillierter Report Pflicht:</strong> Wir brauchen eine vollständige ",
+    "Beschreibung des Angriffswegs — welche Schritte in welcher Reihenfolge, welche ",
+    "Requests oder Eingaben, was als Ergebnis sichtbar wurde. Nur ",
+    "&#x201E;ich hab was gefunden&#x201C; reicht nicht; ohne reproduzierbaren Weg ",
+    "können wir nichts fixen.</li>",
+    "<li><strong>Vertraulich melden, nicht veröffentlichen:</strong> Bitte keine ",
+    "technischen Details öffentlich posten, bevor das Problem behoben ist.</li>",
+    "</ul>",
+    "<p>Report direkt an:<br>",
+    "&nbsp;&bull;&nbsp;<a href='mailto:mail@earlysalty.com'>mail@earlysalty.com</a><br>",
+    "&nbsp;&bull;&nbsp;Discord: <strong>earlysalty</strong></p>",
+    "<p>Wer sich an diese Regeln hält, muss keine Konsequenzen befürchten. ",
+    "Gezielte Denial-of-Service-Angriffe, das Abgreifen echter Nutzerdaten oder ",
+    "das Einschleusen von Backdoors sind ausdrücklich <em>nicht</em> abgedeckt und ",
+    "fallen nicht unter diese Freigabe.</p>",
+    "<h2 id='melden'>Lücke melden</h2>",
+    "<p class='sub'>Nur echte, selbst geprüfte Schwachstellen — keine KI-generierten Hypothesen, ",
+    "keine Vermutungen ohne eigenen Nachweis.</p>",
+    "<form method='post' action='/twitch/sicherheit/report'>",
+    "<div class='fg'><label for='vtitle'>Kurztitel</label>",
+    "<input type='text' id='vtitle' name='title' required maxlength='120' ",
+    "placeholder='z.B. IDOR auf /twitch/api/streamer-data'></div>",
+    "<div class='fg'><label for='vdesc'>Detaillierter Reproduktionsweg (Pflicht)</label>",
+    "<textarea id='vdesc' name='description' required rows='9' minlength='100' maxlength='5000' ",
+    "placeholder='Schritt f&#x00FC;r Schritt: welche URL, Eingabe oder Request, was sichtbar wurde. ",
+    "Muss reproduzierbar sein.'></textarea></div>",
+    "<div class='fg'><label for='vcontact'>Discord oder E-Mail (optional, f&#x00FC;r R&#x00FC;ckfragen)</label>",
+    "<input type='text' id='vcontact' name='contact' maxlength='100' ",
+    "placeholder='discord: deinname / mail@example.com'></div>",
+    "<p class='fhint'>Durch Absenden best&#x00E4;tigst du: kein DoS, keine Datenexfiltration, ",
+    "kein Social Engineering gegen Nutzer. Nur echte L&#x00FC;cken &#x2014; keine KI-Halluzinationen, ",
+    "keine Vermutungen ohne eigene Pr&#x00FC;fung.</p>",
+    "<button type='submit'>Report einreichen</button>",
+    "</form>"
 );
 
 fn default_legal_page_body(slug: &str) -> Option<&'static str> {
@@ -680,6 +721,21 @@ fn render_legal_page(
             ".cryptohint{{font-size:13px;color:#64748b;margin:0 0 10px;}}",
             ".footer{{margin-top:40px;font-size:12px;color:#94a3b8;",
             "border-top:1px solid #e2e8f0;padding-top:14px;}}",
+            ".fg{{margin-bottom:18px;}}",
+            "label{{display:block;font-size:14px;font-weight:600;color:#0f172a;margin-bottom:6px;}}",
+            "input[type=text],textarea{{width:100%;box-sizing:border-box;border:1px solid #cbd5e1;",
+            "border-radius:8px;padding:10px 12px;font-size:14px;font-family:inherit;",
+            "color:#0f172a;background:#fff;resize:vertical;}}",
+            "input:focus,textarea:focus{{outline:2px solid #2563eb;outline-offset:1px;border-color:transparent;}}",
+            ".fhint{{font-size:13px;color:#64748b;margin:0 0 16px;padding:10px 12px;",
+            "background:#fffbeb;border-radius:6px;border:1px solid #fcd34d;}}",
+            "button[type=submit]{{background:#2563eb;color:#fff;border:none;border-radius:8px;",
+            "padding:11px 24px;font-size:15px;font-weight:600;cursor:pointer;}}",
+            "button[type=submit]:hover{{background:#1d4ed8;}}",
+            ".msg-ok{{padding:16px;background:#f0fdf4;border:1px solid #86efac;",
+            "border-radius:8px;color:#166534;font-size:15px;margin-bottom:16px;}}",
+            ".msg-err{{padding:16px;background:#fef2f2;border:1px solid #fca5a5;",
+            "border-radius:8px;color:#991b1b;font-size:15px;margin-bottom:16px;}}",
             "</style></head><body><div class='wrap'>",
             "<a class='back' href='/twitch/pricing'>&larr; Zurück zu den Plänen</a>",
             "<h1>{title}</h1>",
@@ -1231,6 +1287,138 @@ pub async fn sicherheit_handler() -> Response {
         .into_response()
 }
 
+// ---------------------------------------------------------------------------
+// Security-Report: Formular-Verarbeitung + Discord-DM
+// ---------------------------------------------------------------------------
+
+/// Discord User-ID des Bot-Eigentümers (earlysalty).
+const DISCORD_OWNER_USER_ID: &str = "662995601738170389";
+
+#[derive(Deserialize)]
+pub struct SecurityReportForm {
+    #[serde(default)]
+    title: String,
+    #[serde(default)]
+    description: String,
+    #[serde(default)]
+    contact: String,
+}
+
+async fn send_security_report_dm(
+    title: &str,
+    description: &str,
+    contact: &str,
+) -> Result<(), String> {
+    let token = std::env::var("DISCORD_TOKEN")
+        .map_err(|_| "DISCORD_TOKEN nicht konfiguriert".to_string())?;
+
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(10))
+        .build()
+        .map_err(|e| e.to_string())?;
+
+    let auth = format!("Bot {token}");
+
+    // DM-Kanal öffnen
+    let dm_resp: serde_json::Value = client
+        .post("https://discord.com/api/v10/users/@me/channels")
+        .header("Authorization", &auth)
+        .json(&serde_json::json!({"recipient_id": DISCORD_OWNER_USER_ID}))
+        .send()
+        .await
+        .map_err(|e| format!("DM-Kanal request: {e}"))?
+        .json()
+        .await
+        .map_err(|e| format!("DM-Kanal JSON: {e}"))?;
+
+    let channel_id = dm_resp["id"]
+        .as_str()
+        .ok_or_else(|| format!("Kein channel.id in Discord-Antwort: {dm_resp}"))?;
+
+    let contact_line = if contact.is_empty() { "—" } else { contact };
+    let message = format!(
+        "🔒 **Security Report**\n\n**Titel:** {title}\n**Kontakt:** {contact_line}\n\n**Report:**\n{description}"
+    );
+    let message = &message[..message.len().min(2000)];
+
+    let send_resp = client
+        .post(format!(
+            "https://discord.com/api/v10/channels/{channel_id}/messages"
+        ))
+        .header("Authorization", &auth)
+        .json(&serde_json::json!({"content": message}))
+        .send()
+        .await
+        .map_err(|e| format!("DM-Send request: {e}"))?;
+
+    if send_resp.status().is_success() {
+        Ok(())
+    } else {
+        Err(format!("Discord API {}", send_resp.status()))
+    }
+}
+
+fn render_report_result(ok: bool, msg: &str) -> Response {
+    let (class, heading) = if ok {
+        ("msg-ok", "Report eingegangen")
+    } else {
+        ("msg-err", "Fehler")
+    };
+    let body = format!(
+        "<h2>{heading}</h2><div class='{class}'>{}</div>\
+         <p><a href='/twitch/sicherheit'>&#x2190; Zur&#x00FC;ck</a></p>",
+        escape_html(msg)
+    );
+    let page = render_legal_page(
+        "Security Report",
+        &body,
+        &[
+            ("/twitch/impressum", "Impressum"),
+            ("/twitch/datenschutz", "Datenschutz"),
+            ("/twitch/agb", "AGB"),
+        ],
+        false,
+    );
+    (
+        StatusCode::OK,
+        [(header::CONTENT_TYPE, "text/html; charset=utf-8")],
+        page,
+    )
+        .into_response()
+}
+
+/// POST /twitch/sicherheit/report — Security-Report-Formular verarbeiten.
+pub async fn security_report_handler(Form(form): Form<SecurityReportForm>) -> Response {
+    let title: String = form.title.trim().chars().take(120).collect();
+    let description: String = form.description.trim().chars().take(5000).collect();
+    let contact: String = form.contact.trim().chars().take(100).collect();
+
+    if title.is_empty() || description.len() < 100 {
+        return render_report_result(
+            false,
+            "Kurztitel und ein ausführlicher Reproduktionsweg (mind. 100 Zeichen) sind Pflicht.",
+        );
+    }
+
+    match send_security_report_dm(&title, &description, &contact).await {
+        Ok(()) => {
+            tracing::info!(title = %title, "Security Report eingegangen und als DM weitergeleitet");
+            render_report_result(
+                true,
+                "Report eingegangen — danke. Wir schauen uns das an und melden uns bei Rückfragen.",
+            )
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, "Security Report DM fehlgeschlagen");
+            render_report_result(
+                false,
+                "Technischer Fehler beim Weiterleiten — schreib bitte direkt an \
+                 mail@earlysalty.com oder Discord: earlysalty.",
+            )
+        }
+    }
+}
+
 /// Router für alle Legal-Routen (statuslos, kein DB-Pool nötig).
 pub fn build_legal_router() -> Router {
     Router::new()
@@ -1241,6 +1429,7 @@ pub fn build_legal_router() -> Router {
         .route("/twitch/datenschutz", get(datenschutz_handler))
         .route("/twitch/agb", get(agb_handler))
         .route("/twitch/sicherheit", get(sicherheit_handler))
+        .route("/twitch/sicherheit/report", post(security_report_handler))
 }
 
 #[cfg(test)]

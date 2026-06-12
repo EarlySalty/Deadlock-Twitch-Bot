@@ -1,3 +1,13 @@
+## #159 — Sicherheitsseite: Responsible Disclosure + Security-Report-Formular
+
+**Ausgangslage:** Die `/twitch/sicherheit`-Seite endete mit einem knappen Einzeiler „Hinweise willkommen, bitte vertraulich melden". Kein klarer Rahmen, wer was darf, und kein direkter Meldeweg — wer eine Lücke gefunden hat, musste selbst herausfinden, wie er sie loswird.
+
+**Was wurde geändert:** Zwei Ergänzungen in einem Zug.
+
+Erstens ein vollständiger *Security Testing & Responsible Disclosure*-Abschnitt: White-Hat-Testing ist jetzt ausdrücklich erlaubt. Die Regeln stehen klar da — kein Schaden, keine Datenexfiltration, kein Social Engineering gegen Nutzer, dafür Pflicht zu einem reproduzierbaren Report. Wer sich daran hält, hat keine Konsequenzen zu befürchten; DoS, Backdoors und echte Exfiltration fallen ausdrücklich nicht darunter.
+
+Zweitens ein eingebettetes Meldeformular direkt auf der Seite: Kurztitel, detaillierter Reproduktionsweg (Pflichtfeld, mindestens 100 Zeichen), optionaler Kontakt. Die Hinweisbox macht explizit klar, dass nur echte, selbst geprüfte Lücken erwartet werden — keine KI-Halluzinationen, keine Vermutungen ohne Eigenprüfung. Nach dem Absenden sendet der Rust-Handler (`tb-dashboard`, Port 8769) direkt über die Discord-HTTP-API eine DM an den Bot-Eigentümer — kein Umweg über Python-Cogs, kein Zwischen-Service. Der Kanal wird pro Anfrage frisch geöffnet; der `DISCORD_TOKEN` wird aus der Infisical-Umgebung gelesen, die beim Service-Start bereits geladen ist.
+
 ## #158 — Spam-Bot-Bans werden jetzt im Live-Ban-Feed sichtbar
 
 **Ausgangslage:** Die „Spam-Schutz in Echtzeit"-Sektion zog ihre Zahlen und den Feed aus einer Tabelle, die nur Bans erfasst, die über Twitch-Benachrichtigungen (EventSub) reinkommen — und die sind nur für sehr wenige Kanäle aktiv. Die eigentliche Kernleistung, das automatische Bannen von Viewer-Bot- und Spam-Accounts im Chat, wurde dort gar nicht protokolliert (nur in eine interne Logdatei). Deshalb zeigte der Feed praktisch nichts und „Bans heute" stand auf 0, obwohl der Bot laufend Spam-Bots entfernt.
