@@ -1,8 +1,33 @@
-//! Auth-Hilfsfunktionen: IDOR-Guard + Plan-Gating.
+//! Dashboard-Auth-Modul.
 //!
-//! Partner-Session-Auth ist deferred (ADR 0003). Für jetzt wird `Partner`-Level
-//! nie erzeugt — die Funktionen sind trotzdem korrekt implementiert, damit der
-//! Umbau später ohne Behaviour-Änderung einsetzbar ist.
+//! Struktur:
+//! - `fernet` — Fernet-kompatible Entschlüsselung (Python `cryptography.fernet`)
+//! - `session` — DB-Session-Lookup + 5s-In-Memory-Cache
+//! - `level` — `DashboardAuthLevel`-Kaskade als axum-Extractor
+//!
+//! Routing-Integration: Keine Route in main.rs — dieses Modul ist ein Draft
+//! für Review. Integration erfolgt nach Abnahme in Welle D.
+//!
+//! Verwendung:
+//! ```rust,ignore
+//! use tb_dashboard_api::auth::session::DashboardAuthState;
+//! use tb_dashboard_api::auth::level::DashboardAuthLevel;
+//!
+//! // Im Router:
+//! let auth_state = DashboardAuthState::new(pool, fernet_key);
+//! router.layer(Extension(auth_state))
+//!
+//! // In einem Handler:
+//! async fn handler(auth: DashboardAuthLevel) -> impl IntoResponse { ... }
+//! ```
+
+pub mod fernet;
+pub mod level;
+pub mod session;
+
+// ---------------------------------------------------------------------------
+// Migriert aus dem früheren auth.rs (IDOR-Guard + Plan-Gating)
+// ---------------------------------------------------------------------------
 
 use sqlx::PgPool;
 use tb_http_core::{ApiError, AuthLevel};

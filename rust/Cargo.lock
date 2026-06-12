@@ -204,6 +204,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "block-padding"
+version = "0.3.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a8894febbff9f758034a5b8e12d87918f56dfc64a8e1fe757d65e29041538d93"
+dependencies = [
+ "generic-array",
+]
+
+[[package]]
 name = "bumpalo"
 version = "3.20.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -220,6 +229,15 @@ name = "bytes"
 version = "1.11.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1e748733b7cbc798e1434b6ac524f0c1ff2ab456fe201501e6497c8417a4fc33"
+
+[[package]]
+name = "cbc"
+version = "0.1.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "26b52a9543ae338f279b96b0b9fed9c8093744685043739079ce85cd58f289a6"
+dependencies = [
+ "cipher",
+]
 
 [[package]]
 name = "cc"
@@ -1016,6 +1034,7 @@ version = "0.1.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "879f10e63c20629ecabbb64a8010319738c66a5cd0c29b02d63d272b03751d01"
 dependencies = [
+ "block-padding",
  "generic-array",
 ]
 
@@ -2232,10 +2251,15 @@ dependencies = [
 name = "tb-dashboard-api"
 version = "0.1.0"
 dependencies = [
+ "aes",
+ "async-trait",
  "axum",
+ "base64",
+ "cbc",
  "chrono",
  "hex",
  "hmac",
+ "rand 0.8.6",
  "reqwest",
  "serde",
  "serde_json",
@@ -2246,11 +2270,13 @@ dependencies = [
  "tb-db",
  "tb-error",
  "tb-http-core",
+ "thiserror 1.0.69",
  "tokio",
  "tower",
  "tower-http",
  "tracing",
  "url",
+ "wiremock",
 ]
 
 [[package]]

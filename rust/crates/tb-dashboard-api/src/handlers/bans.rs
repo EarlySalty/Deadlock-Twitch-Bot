@@ -119,6 +119,7 @@ mod tests {
             CREATE TABLE IF NOT EXISTS twitch_ban_events (
                 id              BIGSERIAL PRIMARY KEY,
                 twitch_user_id  TEXT NOT NULL DEFAULT 'default_uid',
+                event_type      TEXT NOT NULL DEFAULT 'ban',
                 target_login    TEXT NOT NULL,
                 moderator_login TEXT,
                 reason          TEXT,
@@ -129,6 +130,19 @@ mod tests {
         .execute(&pool)
         .await
         .expect("DDL fehlgeschlagen");
+        // channels_protected zählt über twitch_partners_all_state
+        // (siehe tb-analytics::bans::recent_bans)
+        sqlx::query(
+            r#"
+            CREATE TABLE IF NOT EXISTS twitch_partners_all_state (
+                twitch_user_id     TEXT PRIMARY KEY,
+                is_partner_active  INTEGER NOT NULL DEFAULT 0
+            )
+            "#,
+        )
+        .execute(&pool)
+        .await
+        .expect("Partner-DDL fehlgeschlagen");
         sqlx::query("TRUNCATE twitch_ban_events")
             .execute(&pool)
             .await

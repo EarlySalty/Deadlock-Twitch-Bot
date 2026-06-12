@@ -481,3 +481,50 @@ das meiste kannst du entfernen." Konsequenz für die Migration:
   Rollback-Fallback im Code. (d) Boot-Token-Refreshes pro Prozessstart
   normal; Per-Send-Refresh-Verdacht von 12:04 war Folge der häufigen
   Service-Restarts der Parallel-Session.
+
+## Stand 12.6. nachmittags — Welle D: Auth+Proxy-Fundament gemergt (Session-Key kanonisiert)
+
+- **Session-Key-Befund (empirisch bewiesen):** Der Python-Dashboard-Service
+  verschlüsselte `dashboard_sessions` mit einem **flüchtigen Boot-Key** —
+  der Keyring-Pfad ist auf Linux ohne `DEADLOCK_ENABLE_KEYRING`-Opt-in tot,
+  der Fallback generierte bei jedem Start einen neuen Fernet-Key. Folge:
+  jeder Restart loggte alle Dashboard-Nutzer aus; weder Keyring- noch
+  Infisical-Key konnten Prod-Rows entschlüsseln (alle Rows InvalidToken).
+- **Fix:** `bot/storage/sessions_db.py::_load_or_create_key` liest jetzt
+  zuerst die Env-Var `SESSIONS_ENCRYPTION_KEY` (liegt via
+  `export_infisical_env.py` ohnehin in der Service-Umgebung; der Secret-Name
+  existierte bereits in Infisical). Keyring bleibt Alt-Fallback.
+  **Beweis:** Login-Trigger nach Restart → frische `oauth_state:twitch`- und
+  `rate_limit`-Rows entschlüsseln mit dem Infisical-Key (Cross-Prozess).
+  Achtung: 8765 wird von `deadlock-twitch-dashboard.service` bedient, nicht
+  vom Worker — beim Deploy beide Units bedenken.
+- **Rust-Fundament gemergt** (`tb-dashboard-api`, aus Workflow-Drafts mit
+  zeilengenauem Review + Härtung):
+  - `auth/fernet.rs`: Fernet decrypt **und encrypt** (encrypt selbst ergänzt,
+    nötig für Sliding-Refresh), Python-Interop-Tests in beide Richtungen.
+  - `auth/session.rs`: DB-Session-Lookup + 5s-Cache; nach Review ergänzt:
+    Payload-`expires_at`-Prüfung (zusätzlich zur DB-Spalte, Python-Parität)
+    und **Sliding-Refresh** (Admin 14d / Partner 6h, Persist ab >1800s Drift,
+    Re-Encrypt des Payloads) — ohne ihn wären Sessions unter nativen Routen
+    still abgelaufen. `NULLS LAST` aus Partner-Gate-SQL entfernt (Parität).
+    Bewusste Abweichung: Partner-Gate + Blacklist pro Request statt nur beim
+    Login (strenger in die sichere Richtung).
+  - `auth/level.rs`: `DashboardAuthLevel`-Extractor (Localhost → Admin via
+    `master_dash_session` → Partner via `twitch_dash_session` → None);
+    Localhost = Host-Header UND Peer-IP loopback.
+  - `proxy.rs`: Strangler-Fallback-Proxy → 8765. **Kritischer Review-Fund:**
+    Der Draft strippte den `Host`-Header („Härtung") — damit hätte reqwest
+    `Host: 127.0.0.1:8765` gesetzt und Pythons `_is_localhost()`-Bypass für
+    JEDEN externen Request geöffnet (Peer ist durch den Hop immer loopback).
+    Fix: Original-Host wird 1:1 durchgereicht — extern kommt via Caddy immer
+    die öffentliche Domain an (kein Bypass), lokale Loopback-Aufrufe behalten
+    ihn (wie heute). Gleicher Befund gilt für den bestehenden
+    tb-internal-api-Proxy (8776→8779) — prüfen, ob 8779 Host-basierte
+    Vertrauensentscheidungen trifft. Test bestätigt: reqwest reicht explizit
+    gesetzte Host-Header durch.
+  - 78 Tests grün (inkl. DB-Integration + Refresh-Roundtrip). Nebenbei
+    Test-DDL-Drift in den Bans-Handler-Tests gefixt (`event_type`-Spalte +
+    `twitch_partners_all_state` fehlten — Query war ihnen davongelaufen).
+- **Nächste Schritte Welle D:** Wiring in tb-dashboard (8769): AuthState +
+  Fallback-Proxy registrieren (`with_connect_info` ist dort schon aktiv),
+  dann v2-Routen wellenweise nativ nach /tmp/welle-d-vertraege/.

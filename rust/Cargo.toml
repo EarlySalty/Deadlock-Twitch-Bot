@@ -27,6 +27,9 @@ edition = "2021"
 [workspace.dependencies]
 thiserror = "1"
 aes-gcm = "0.10"
+aes = "0.8"
+cbc = { version = "0.1", features = ["block-padding"] }
+base64 = "0.22"
 hex = "0.4"
 pbkdf2 = { version = "0.12", default-features = false, features = ["hmac"] }
 hmac = "0.12"

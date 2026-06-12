@@ -7,6 +7,11 @@
 pub mod auth;
 pub mod handlers;
 pub mod process_info;
+/// Strangler-Fig-Fallback-Proxy (→ Python 8765), siehe Modul-Doku.
+pub mod proxy;
+
+pub use auth::level::DashboardAuthLevel;
+pub use auth::session::DashboardAuthState;
 
 use axum::{routing::get, Extension, Router};
 use sqlx::PgPool;
