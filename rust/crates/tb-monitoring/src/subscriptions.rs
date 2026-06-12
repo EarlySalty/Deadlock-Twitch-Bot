@@ -165,11 +165,49 @@ impl SubscriptionManager {
         .await
     }
 
+    /// Chat-Subscriptions für einen Partner-Kanal (Welle B):
+    /// `channel.chat.message` + `channel.chat.notification`, Condition
+    /// `{broadcaster_user_id, user_id: <bot>}`. Per Webhook + App-Token
+    /// erlaubt, sobald der Bot-Account `user:bot` und der Broadcaster
+    /// `channel:bot` autorisiert hat — exakt der Scope-Filter des
+    /// Python-`join_partner_channels` (connection.py). „Join" = diese Subs.
+    pub async fn ensure_chat_subscriptions(
+        &self,
+        broadcaster_id: &str,
+        bot_user_id: &str,
+        login: &str,
+    ) -> bool {
+        let mut ok = true;
+        for sub_type in ["channel.chat.message", "channel.chat.notification"] {
+            let condition = serde_json::json!({
+                "broadcaster_user_id": broadcaster_id,
+                "user_id": bot_user_id,
+            });
+            ok &= self
+                .ensure_subscription_with_condition(sub_type, "1", condition, broadcaster_id, login)
+                .await;
+        }
+        ok
+    }
+
     async fn ensure_subscription_with_key(
         &self,
         sub_type: &str,
         version: &str,
         condition_key: &str,
+        broadcaster_id: &str,
+        login: &str,
+    ) -> bool {
+        let condition = serde_json::json!({ condition_key: broadcaster_id.trim() });
+        self.ensure_subscription_with_condition(sub_type, version, condition, broadcaster_id, login)
+            .await
+    }
+
+    async fn ensure_subscription_with_condition(
+        &self,
+        sub_type: &str,
+        version: &str,
+        condition: serde_json::Value,
         broadcaster_id: &str,
         login: &str,
     ) -> bool {
@@ -181,7 +219,6 @@ impl SubscriptionManager {
             tracing::debug!(sub_type, login, "EventSub: bereits subscribed, überspringe");
             return true;
         }
-        let condition = serde_json::json!({ condition_key: broadcaster_id });
         match self
             .transport
             .create(

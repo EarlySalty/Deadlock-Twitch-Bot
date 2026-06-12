@@ -71,6 +71,17 @@ def _rust_monitoring_takeover_active() -> bool:
     ).strip().lower() in {"1", "true", "yes", "on"}
 
 
+def _rust_chat_takeover_active() -> bool:
+    """Welle B (rust/docs/04-cutover-plan.md): Mit TWITCH_RUST_CHAT_TAKEOVER=1
+    übernimmt der Rust-tb-bot den Chat komplett (EventSub-Chat-Subs, Senden,
+    Moderation, Promos, Commands) — Python startet den Chat-Bot dann NICHT.
+    Kritisch: Damit endet auch der Python-Refresh des Bot-Tokens; die
+    Token-Ownership liegt exklusiv beim Rust-Prozess (Dual-Refresh-Race)."""
+    return (
+        os.getenv("TWITCH_RUST_CHAT_TAKEOVER") or ""
+    ).strip().lower() in {"1", "true", "yes", "on"}
+
+
 def _parse_env_csv(name: str, default: tuple[str, ...] = ()) -> tuple[str, ...]:
     raw = str(os.getenv(name) or "").strip()
     source = raw.split(",") if raw else list(default)
@@ -896,7 +907,13 @@ class BotRuntimeBootstrap:
                     self._ensure_social_media_workers()
                     cog._spawn_bg_task(cog._startup_db_warmup(), "twitch.db_warmup")
 
-                if cog._raid_bot and cog._twitch_bot_token:
+                if _rust_chat_takeover_active():
+                    log.info(
+                        "Rust-Chat-Takeover aktiv: Twitch Chat Bot wird vom "
+                        "Rust-tb-bot bedient — Python startet ihn nicht "
+                        "(inkl. Bot-Token-Refresh-Ownership)."
+                    )
+                elif cog._raid_bot and cog._twitch_bot_token:
                     cog._spawn_bg_task(cog._init_twitch_chat_bot(), "twitch.chat_bot")
                 elif cog.api:
                     log.info(

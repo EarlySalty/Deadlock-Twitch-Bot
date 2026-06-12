@@ -67,6 +67,9 @@ pub trait EventSubHooks: Send + Sync {
     /// stream.offline-Folgeeffekte: Auto-Raid, Global-Ban-Sweep,
     /// Engagement-Auto-Off, Post-Stream-Analyse (Cutover-Kopplungen).
     async fn on_stream_offline(&self, _twitch_user_id: &str, _login: Option<&str>) {}
+    /// `channel.chat.message` (Welle B: nativer Chat-Bot — Moderation,
+    /// Commands, Promos). Default no-op bis zur Chat-Verdrahtung.
+    async fn on_chat_message(&self, _event: &Value, _message_id: Option<&str>) {}
 }
 
 /// Hooks ohne Wirkung (bis zur Verdrahtung in 4f).
@@ -236,6 +239,10 @@ impl EventSubDispatcher {
         match sub_type {
             "channel.raid" => {
                 self.hooks.on_channel_raid(&context.event, message_id).await;
+                outcome.processed = true;
+            }
+            "channel.chat.message" => {
+                self.hooks.on_chat_message(&context.event, message_id).await;
                 outcome.processed = true;
             }
             "channel.moderate" => {
