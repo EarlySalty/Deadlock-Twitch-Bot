@@ -689,15 +689,17 @@ impl PromoEngine {
             let _guard = lock.lock().await;
 
             // Overall-Ready + Activity-Ready prüfen (promos.py:1466).
-            let (overall_ready, invite_opt) = {
+            let (overall_ready, activity_ready, invite_opt) = {
                 let state_ref = self.channel_states.entry(login.clone()).or_insert_with(|| Mutex::new(ChannelState::new()));
                 let state = state_ref.lock().await;
-                let ready = self.overall_promo_ready_inner(&state, now);
+                let overall = self.overall_promo_ready_inner(&state, now);
+                let activity = self.promo_activity_ready_inner(&state, now);
                 let invite = self.cached_invite_or_none(); // Invite-Auflösung außerhalb des State-Lock
-                (ready, invite)
+                (overall, activity, invite)
             };
 
-            if overall_ready && self.stream_start_delay_ok(login).await {
+            // Scam+Targeted nur im fälligen Slot (promos.py:1466: activity_ready Pflicht).
+            if overall_ready && activity_ready && self.stream_start_delay_ok(login).await {
                 let (invite, _is_specific) = self.invite_resolver.resolve_invite(login).await;
 
                 // Scam-Warning-Slot (promos.py:1466).
@@ -1027,24 +1029,29 @@ impl PromoEngine {
         now: Instant,
         reason: &str,
     ) -> bool {
-        // Prüfen und ggf. Seed setzen.
-        let should_send = {
+        // Seed-Phase: wenn noch nie eine Scam-Warning gesendet wurde, Timer initialisieren
+        // und in DB persistieren damit er Neustarts überlebt (promos.py:981: _persist_scam_warning_ts).
+        let seed_wall_ts: Option<f64> = {
             let state_ref = self.channel_states.entry(login.to_string()).or_insert_with(|| Mutex::new(ChannelState::new()));
             let mut state = state_ref.lock().await;
-
             if state.last_scam_warning_sent.is_none() {
-                // Seed: Timer gesät (promos.py:981 — seed = now - (120-20)*60).
-                // Wir simulieren das durch: last_scam_warning_sent setzen auf
-                // "vor 6000 Sekunden" → nach 20 Min (initial delay) fällig.
                 let initial_delay = Duration::from_secs(SCAM_WARNING_COOLDOWN_MIN * 60)
                     - Duration::from_secs(SCAM_WARNING_INITIAL_DELAY_MIN * 60);
-                // Instant-Arithmetik: da checked_sub None bei Underflow, verwenden wir
-                // einen synthetischen Wert: "sent vor initial_delay" bedeutet
-                // "wird fällig nach SCAM_WARNING_INITIAL_DELAY_MIN min".
                 state.last_scam_warning_sent = now.checked_sub(initial_delay);
-                return false;
+                Some((Utc::now().timestamp() as f64) - initial_delay.as_secs_f64())
+            } else {
+                None
             }
+        }; // DashMap-Ref und MutexGuard hier freigegeben — async-safe
+        if let Some(wall_ts) = seed_wall_ts {
+            self.save_promo_cooldown(login, "scam_warning", wall_ts).await;
+            return false;
+        }
 
+        // Fälligkeit prüfen.
+        let should_send = {
+            let state_ref = self.channel_states.entry(login.to_string()).or_insert_with(|| Mutex::new(ChannelState::new()));
+            let state = state_ref.lock().await;
             self.scam_warning_due_inner(&state, now, reason)
         };
 

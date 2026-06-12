@@ -1,3 +1,11 @@
+## #190 — Zwei weitere Promo-Port-Bugs in Rust behoben
+
+**Problem 1 — Scam-Warnung vergaß ihren Seed-Timer nach Neustart:** Die Scam-Warnung benutzt einen Verzögerungs-Mechanismus: beim ersten Auftauchen eines Channels wird der Timer auf "vor 100 Minuten" gesetzt, damit die Warnung frühestens nach 20 Minuten kommen kann (statt sofort nach dem Neustart). Im Rust-Port wurde dieser Seed-Wert zwar in den In-Memory-State geschrieben, aber nicht in die DB persistiert — nach jedem Neustart fehlte der Eintrag, der Timer startete wieder von null, und die 20-Minuten-Initialverzögerung lief jedes Mal erneut ab. Python schreibt den Seed via `_persist_scam_warning_ts` sofort weg. Fix: Rust tut dasselbe — Seed wird direkt nach dem Setzen per `save_promo_cooldown` in `twitch_promo_cooldowns` geschrieben, und die DashMap-Ref wird vorher freigegeben (Rust-Async-Constraint: kein Shard-Lock über einen `.await`-Punkt halten).
+
+**Problem 2 — Scam+Targeted-Block ignorierte Aktivitätsschwellen:** Der `send_promo_if_due`-Block, der Scam-Warnung und Targeted-Promo feuern kann, hat zwar `overall_ready` geprüft (globaler Cooldown + Mindest-Roh-Nachrichten), aber nicht `activity_ready` — also die zweite Schwelle: mindestens 3 Nachrichten im 8-Minuten-Fenster und ≥2 neue Chatter. Python prüft `activity_ready` als Pflicht-Gate vor beiden Typen (Zeile 1466 in promos.py). Im Rust-Port konnte Scam-/Targeted-Promo also auch in toten Chats feuern. Fix: `activity_ready` wird jetzt zusammen mit `overall_ready` berechnet und als AND-Bedingung vor dem Block geprüft.
+
+**Ergebnis:** Scam-Warnung überlebt Bot-Neustarts ohne Timing-Reset. Scam- und Targeted-Promos erscheinen nur noch in aktiven Chats — identisches Verhalten wie Python.
+
 ## #189 — Targeted-Promo belegt jetzt den globalen Promo-Cooldown (Rust)
 
 **Problem:** Nach einer Targeted-Promo (personalisierter Discord-Pitch an einen Chatter) hat der Rust-Bot unmittelbar danach noch eine normale Chat-Promo gesendet. Im schlimmsten Fall zwei Ankündigungen innerhalb von Sekunden.
