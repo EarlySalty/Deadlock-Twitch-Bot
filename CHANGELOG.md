@@ -1,3 +1,11 @@
+## #171 — Scam-Pitch: Nachricht löschen + Timeout bei Erkennung
+
+**Ausgangslage:** Der Scam-Pitch-Detektor erkannte verdächtige Service-Angebote im Chat (Viewer-Kauf, Design-Spam, Account-Takeover-Verdacht) und sendete eine Warn-Nachricht — aber die ursprüngliche Spam-Nachricht blieb sichtbar, und bei einem `StrongTimeout`-Signal (wiederholter oder eskalierter Pitch) wurde kein Timeout ausgelöst. Das Ergebnis: Chat-Warnung erschien, der Spammer-Text stand weiter im Chat.
+
+**Was wurde geändert:** Die Chat-Pipeline führt nach einem `PitchDecision::StrongTimeout`- oder `PublicWarn`-Signal jetzt aktiv Aktionen aus. Beim `StrongTimeout` (z. B. ein älterer Account, der verdächtig scammt — Account-Takeover-Verdacht) wird die Nachricht gelöscht und ein 10-Minuten-Timeout verhängt. Beim `PublicWarn` wird nur die Nachricht gelöscht. In beiden Fällen kommt ein Discord-Moderations-Alert mit passendem Titel. Der Eskalations-Pfad (User bereits gewarnt, sendet erneut `STRONG`) rief `timeout_user` bereits intern auf — der zweite Timeout-Call ist idempotent, Twitch setzt den Timer nur neu.
+
+**Wie es jetzt funktioniert:** `StrongTimeout` → Nachricht weg + 10m Timeout + Discord-Alert „🛡️ Account-Takeover erkannt — Quarantäne (reversibel)". `PublicWarn` → Nachricht weg + Discord-Alert „⚠️ Scam-Pitch erkannt — Verwarnung". Mods und Broadcaster werden nie betroffen (Pre-Check unverändert).
+
 ## #170 — Caddy-Flip: alle Dashboard-Routen gehen jetzt über Rust (Strangler-Fig)
 
 **Ausgangslage:** Caddy leitete den gesamten Twitch-Dashboard-Traffic (`/twitch/api/v2/*`, `/analyse`, etc.) direkt an Python 8765 weiter. Der Rust-Dienst auf Port 8769 war zwar gestartet, aber nur für Legal-Seiten und drei Public-v2-Routen im Caddy verdrahtet — der Rest wurde komplett umgangen.

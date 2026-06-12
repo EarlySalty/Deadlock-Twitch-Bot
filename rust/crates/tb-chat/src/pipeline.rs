@@ -12,7 +12,7 @@
 //! 3. Kanal-Klassifizierung (1559–1572)
 //! 4. Non-Partner/Monitored-Only: nur Tracking (1575–1585)
 //! 5. Global-Chatter-Ban (1589–1595)
-//! 6. Scam-Pitch-Warnung (1597–1601) — Detektor sendet/timeoutet intern
+//! 6. Scam-Pitch-Warnung (1597–1601) — Detektor sendet Chat-Warnung intern; Pipeline löscht Nachricht + führt Timeout (StrongTimeout) aus
 //! 7. Spam-Score + Auto-Ban (1602–1737)
 //! 8. Sus-Discord-Invite (1741–1743)
 //! 9. Fun-Responses, nur wenn Deadlock live (1745–1750)
@@ -162,6 +162,8 @@ impl ModAlerter {
             "global_ban" => ("🚫 Global-Ban ausgeführt", 0xED4245),
             "sus_invite" => ("⚠️ Verdächtiger Discord-Link", 0xFEE75C),
             "sus_spam" => ("👀 Verdächtige Nachricht", 0xFEE75C),
+            "scam_pitch_timeout" => ("🛡️ Account-Takeover erkannt — Quarantäne (reversibel)", 0xFEE75C),
+            "scam_pitch_warn" => ("⚠️ Scam-Pitch erkannt — Verwarnung", 0xFEE75C),
             _ => ("ℹ️ Moderation", 0x5865F2),
         };
 
@@ -441,10 +443,59 @@ impl ChatPipeline {
             // weiter, wie Python (enforce gibt das auto_ban-Resultat zurück).
         }
 
-        // Schritt 6: Scam-Pitch (Z. 1597–1601) — Detektor handelt intern.
+        // Schritt 6: Scam-Pitch (Z. 1597–1601) — Detektor sendet Chat-Warnung intern.
+        // Nachricht löschen + Timeout sind Aufgabe der Pipeline.
         let pitch = p.scam_pitch.observe(event).await;
-        if pitch != PitchDecision::None {
-            debug!(channel = %channel_login, chatter = %chatter_login, ?pitch, "Scam-Pitch-Entscheidung");
+        match &pitch {
+            PitchDecision::StrongTimeout { .. } => {
+                debug!(channel = %channel_login, chatter = %chatter_login, "Scam-Pitch: StrongTimeout → Delete + Timeout");
+                self.execute_auto_ban(event, &channel_login, false, "Scam-Pitch erkannt", None, "")
+                    .await;
+                if !event.chatter_user_id.is_empty()
+                    && event.chatter_user_id != event.broadcaster_user_id
+                    && !event.is_mod_or_broadcaster()
+                {
+                    if let Err(e) = p
+                        .api
+                        .timeout_user(
+                            &event.broadcaster_user_id,
+                            &event.chatter_user_id,
+                            600,
+                            "Account-Takeover-Verdacht / wiederholter Service-Pitch",
+                        )
+                        .await
+                    {
+                        debug!("Pitch-Timeout fehlgeschlagen: {e}");
+                    }
+                    p.alerter.send(
+                        "scam_pitch_timeout",
+                        &channel_login,
+                        &chatter_login,
+                        &event.chatter_user_id,
+                        event.text(),
+                        "",
+                    );
+                }
+            }
+            PitchDecision::PublicWarn { .. } => {
+                debug!(channel = %channel_login, chatter = %chatter_login, "Scam-Pitch: PublicWarn → Delete");
+                self.execute_auto_ban(event, &channel_login, false, "Scam-Pitch erkannt", None, "")
+                    .await;
+                if !event.chatter_user_id.is_empty()
+                    && event.chatter_user_id != event.broadcaster_user_id
+                    && !event.is_mod_or_broadcaster()
+                {
+                    p.alerter.send(
+                        "scam_pitch_warn",
+                        &channel_login,
+                        &chatter_login,
+                        &event.chatter_user_id,
+                        event.text(),
+                        "",
+                    );
+                }
+            }
+            PitchDecision::Hint | PitchDecision::None => {}
         }
 
         // Schritt 7: Spam-Score + Auto-Ban (Z. 1602–1737)
@@ -761,13 +812,14 @@ mod tests {
 
     #[test]
     fn alert_titel_mapping() {
-        // Titel exakt aus moderation.py Z. 916–921 — hier nur das Mapping
-        // dokumentierend getestet (die Sendfunktion ist fire-and-forget).
+        // Titel-Mapping dokumentierend getestet (Sendfunktion ist fire-and-forget).
         for (kind, expected) in [
             ("ban", "🔨 Ban ausgeführt"),
             ("global_ban", "🚫 Global-Ban ausgeführt"),
             ("sus_invite", "⚠️ Verdächtiger Discord-Link"),
             ("sus_spam", "👀 Verdächtige Nachricht"),
+            ("scam_pitch_timeout", "🛡️ Account-Takeover erkannt — Quarantäne (reversibel)"),
+            ("scam_pitch_warn", "⚠️ Scam-Pitch erkannt — Verwarnung"),
             ("anderes", "ℹ️ Moderation"),
         ] {
             let (title, _) = match kind {
@@ -775,6 +827,8 @@ mod tests {
                 "global_ban" => ("🚫 Global-Ban ausgeführt", 0xED4245),
                 "sus_invite" => ("⚠️ Verdächtiger Discord-Link", 0xFEE75C),
                 "sus_spam" => ("👀 Verdächtige Nachricht", 0xFEE75C),
+                "scam_pitch_timeout" => ("🛡️ Account-Takeover erkannt — Quarantäne (reversibel)", 0xFEE75C),
+                "scam_pitch_warn" => ("⚠️ Scam-Pitch erkannt — Verwarnung", 0xFEE75C),
                 _ => ("ℹ️ Moderation", 0x5865F2),
             };
             assert_eq!(title, expected);
