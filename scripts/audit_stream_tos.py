@@ -92,6 +92,20 @@ def _parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--vod-only",
+        action="store_true",
+        help=(
+            "Keinen Live-Mitschnitt anlegen; nach Stream-Ende das Twitch-VOD herunterladen "
+            "und pruefen (geringere Serverlast, kein laufendes ffmpeg waehrend des Streams)"
+        ),
+    )
+    parser.add_argument(
+        "--vod-wait-seconds",
+        type=float,
+        default=120.0,
+        help="Wartezeit nach Stream-Ende bevor das VOD abgerufen wird; Standard: 120 Sekunden",
+    )
+    parser.add_argument(
         "--record-format",
         default=os.getenv("STREAM_AUDIT_RECORD_FORMAT") or youtube_archive.DEFAULT_RECORD_FORMAT,
         help="yt-dlp-Format fuer Mitschnitt/VOD-Download; Standard: max. 720p",
@@ -496,11 +510,13 @@ async def _record_channel_loop(args: argparse.Namespace, source: str) -> None:
 
     poll_seconds = max(15.0, float(args.poll_seconds))
     first_poll = True
+    session_notified = False
     print(f"Watch-Record aktiv: {source} | Poll={poll_seconds:.0f}s", flush=True)
     while True:
         live = await asyncio.to_thread(_is_channel_live, login)
         if not live:
             first_poll = False
+            session_notified = False
             await asyncio.sleep(poll_seconds)
             continue
         # Lief der Stream schon beim Watcher-Start, fehlt der Anfang -> spaeter VOD bevorzugen
@@ -515,7 +531,9 @@ async def _record_channel_loop(args: argparse.Namespace, source: str) -> None:
             continue
         media_path = recordings_dir / f"{login}-{datetime.now().strftime('%Y%m%d-%H%M%S')}.mp4"
         print(f"{login}: live -> Mitschnitt startet ({media_path.name})", flush=True)
-        await _notify_status_safe(args, f"Aufnahme gestartet: {login}")
+        if not session_notified:
+            await _notify_status_safe(args, f"Aufnahme gestartet: {login}")
+            session_notified = True
         record_start = time.monotonic()
         try:
             await asyncio.to_thread(
@@ -528,10 +546,112 @@ async def _record_channel_loop(args: argparse.Namespace, source: str) -> None:
             print(f"WARN Mitschnitt {login}: {exc}", flush=True)
             await asyncio.sleep(poll_seconds)
             continue
+        session_notified = False
         recorded_wall = time.monotonic() - record_start
         print(f"{login}: Stream zu Ende ({recorded_wall / 60:.0f} min aufgenommen)", flush=True)
         _spawn_processing(media_path, prefer_vod=partial or recorded_wall < 120.0)
         await asyncio.sleep(poll_seconds)
+
+
+async def _vod_channel_loop(args: argparse.Namespace, source: str) -> None:
+    """Pollt den Kanal; nach Stream-Ende wird das VOD heruntergeladen und geprueft."""
+    login = _channel_login_from_source(source)
+    if not login:
+        raise AuditError(f"VOD-only braucht Twitch-Login oder Kanal-URL: {source}")
+    processed_vods: set[str] = set()
+    was_live = False
+    session_notified = False
+    poll_seconds = max(15.0, float(args.poll_seconds))
+    vod_wait = max(30.0, float(args.vod_wait_seconds))
+    print(f"VOD-only Watch aktiv: {source} | Poll={poll_seconds:.0f}s", flush=True)
+    while True:
+        live = await asyncio.to_thread(_is_channel_live, login)
+        if live:
+            if not session_notified:
+                print(f"{login}: Stream live erkannt, warte auf Stream-Ende fuer VOD-Download", flush=True)
+                await _notify_status_safe(args, f"Stream live: {login} - VOD wird nach Ende heruntergeladen")
+                session_notified = True
+            was_live = True
+            await asyncio.sleep(poll_seconds)
+            continue
+        if was_live:
+            was_live = False
+            session_notified = False
+            print(f"{login}: Stream beendet, warte {vod_wait:.0f}s auf VOD-Verfuegbarkeit", flush=True)
+            await asyncio.sleep(vod_wait)
+            vod_url = await asyncio.to_thread(resolve_latest_vod_url, login)
+            if not vod_url:
+                print(f"WARN {login}: kein VOD abrufbar nach Stream-Ende", flush=True)
+                await asyncio.sleep(poll_seconds)
+                continue
+            if vod_url in processed_vods:
+                print(f"{login}: VOD bereits verarbeitet ({vod_url})", flush=True)
+                await asyncio.sleep(poll_seconds)
+                continue
+            processed_vods.add(vod_url)
+            print(f"{login}: lade VOD {vod_url}", flush=True)
+            await _notify_status_safe(args, f"VOD-Download gestartet: {login} ({vod_url})")
+            output_dir = args.output_dir / "recordings" / login
+            output_dir.mkdir(parents=True, exist_ok=True)
+            vod_path = output_dir / f"{login}-vod-{datetime.now().strftime('%Y%m%d-%H%M%S')}.mp4"
+            try:
+                media = await asyncio.to_thread(
+                    youtube_archive.download_vod_video,
+                    vod_url,
+                    vod_path,
+                    record_format=args.record_format,
+                )
+                print(f"{login}: VOD geladen ({media})", flush=True)
+            except AuditError as exc:
+                print(f"WARN {login}: VOD-Download fehlgeschlagen: {exc}", flush=True)
+                await _notify_status_safe(args, f"VOD-Download fehlgeschlagen: {login}: {exc}")
+                await asyncio.sleep(poll_seconds)
+                continue
+            try:
+                report, _json_path, markdown_path = await audit_source(
+                    str(vod_path),
+                    authorized=args.authorized,
+                    source_kind="file",
+                    chunk_seconds=args.chunk_seconds,
+                    transcriber_engine=args.transcriber,
+                    llm_provider=args.llm_provider,
+                    allow_remote_transcription=args.allow_remote_transcription,
+                    allow_remote_llm=args.allow_remote_llm,
+                    output_dir=args.output_dir,
+                )
+                print(
+                    f"VOD-Audit fertig ({login}): {len(report.findings)} Fundstelle(n) | {markdown_path}",
+                    flush=True,
+                )
+                if args.discord_dm and report.findings:
+                    sent = await notify_findings_discord_dm(
+                        vod_url,
+                        report.findings,
+                        discord_user_id=args.discord_user_id,
+                        source_url=vod_url,
+                    )
+                    if not sent:
+                        print("WARN Discord-Bot konnte VOD-DM nicht senden", flush=True)
+                await _notify_status_safe(
+                    args,
+                    f"VOD-Audit {login}: {len(report.findings)} Fundstelle(n) | {markdown_path.name}",
+                )
+            except AuditError as exc:
+                print(f"WARN {login}: VOD-Audit fehlgeschlagen: {exc}", flush=True)
+            finally:
+                vod_path.unlink(missing_ok=True)
+        await asyncio.sleep(poll_seconds)
+
+
+async def _run_vod_watch(args: argparse.Namespace) -> int:
+    if not args.authorized:
+        raise AuditError("VOD-only Watch nur mit --authorized erlaubt")
+    print(
+        f"VOD-only Watch aktiv fuer {len(args.source)} Kanal/Kanaele | Ctrl+C beendet",
+        flush=True,
+    )
+    await asyncio.gather(*(_vod_channel_loop(args, source) for source in args.source))
+    return 0
 
 
 async def _run_record_watch(args: argparse.Namespace) -> int:
@@ -555,8 +675,11 @@ async def _run_record_watch(args: argparse.Namespace) -> int:
 
 
 async def _run(args: argparse.Namespace) -> int:
-    if args.watch_record and args.watch_live:
-        raise AuditError("--watch-record und --watch-live schliessen sich aus")
+    modes = sum([bool(args.watch_record), bool(args.watch_live), bool(args.vod_only)])
+    if modes > 1:
+        raise AuditError("--watch-record, --watch-live und --vod-only schliessen sich gegenseitig aus")
+    if args.vod_only:
+        return await _run_vod_watch(args)
     if args.watch_record:
         return await _run_record_watch(args)
     if args.watch_live:
