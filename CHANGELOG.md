@@ -1,3 +1,11 @@
+## #166 — Discord-Link-Meldungen nur noch für echte Partner
+
+**Ausgangslage:** Der automatische Discord-Namens-Matcher schickte für jeden Streamer in `twitch_streamers` eine "Kein Discord-Match"-Meldung, sobald kein passender Discord-Account gefunden wurde — also auch für Kanäle, die zufällig oder per Monitoring in die Tabelle gerutscht sind, ohne je Partner zu sein.
+
+**Was wurde geändert:** Die Datenquelle des Matchers (`list_unlinked_streamers` / `list_unlinked`) filtert jetzt per `INNER JOIN twitch_partners` auf aktive Partner (nicht departnered, nicht admin-archived). Kanäle ohne Partnereintrag erscheinen gar nicht erst in der Kandidatenliste.
+
+**Ergebnis:** Meldungen und Auto-Link-Versuche passieren ausschließlich für Streamer, die tatsächlich aktiv als Partner geführt werden. Rein gescrapte oder beigetretene Kanäle bleiben still.
+
 ## #165 — Partnerkriterium: nur noch OAuth zählt, archivierte Kanäle raus
 
 **Ausgangslage:** Drei Kanäle (xoralle, yorganson, yqmaa) waren in der DB längst als archiviert markiert (`admin_archived_at` gesetzt), standen aber trotzdem noch als aktive Partner drin — weil die View `twitch_partners_all_state` das Archiv-Datum bei der Berechnung von `is_partner_active` schlicht ignorierte. Resultat: der GlobalBanSweep versuchte bei jedem Zyklus, in diesen Kanälen zu bannen, bekam 403 (Bot kein Mod), schrieb nichts in den Ledger, und startete beim nächsten Lauf von vorne. Gleichzeitig wurden Kanäle, die der Bot nur per Admin-Manualverifizierung eingetragen hatte (ohne dass der Streamer den Bot selbst autorisiert hat), genauso behandelt wie echte OAuth-Partner — obwohl der Bot dort keine Handlungsfähigkeit hat.

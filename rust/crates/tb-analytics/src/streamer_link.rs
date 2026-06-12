@@ -18,13 +18,13 @@ pub struct UnlinkedStreamer {
     pub is_monitored_only: i32,
 }
 
-/// Alle nicht-archivierten Streamer ohne Discord-Verknüpfung.
+/// Aktive Partner ohne Discord-Verknüpfung.
 ///
-/// Ein Streamer gilt als unverknüpft wenn weder die gespiegelte Spalte in
-/// `twitch_streamers` noch die Identity-Wahrheit in
-/// `twitch_streamer_identities` eine `discord_user_id` führt.
-/// `is_monitored_only` wird mitgegeben, damit der Matcher rein gescrapte
-/// Kanäle nie automatisch verknüpft, sondern nur vorschlägt.
+/// Nur Streamer, die in `twitch_partners` als aktiver Partner geführt werden
+/// (nicht departnered, nicht admin-archived), werden zurückgegeben.
+/// Rein gescrapte Kanäle oder allgemeine `twitch_streamers`-Einträge ohne
+/// Partnerstatus erscheinen hier nicht — der Matcher soll nur echte Partner
+/// automatisch verknüpfen und darüber berichten.
 pub async fn list_unlinked(pool: &PgPool) -> Result<Vec<UnlinkedStreamer>, sqlx::Error> {
     sqlx::query_as(
         r#"
@@ -32,6 +32,10 @@ pub async fn list_unlinked(pool: &PgPool) -> Result<Vec<UnlinkedStreamer>, sqlx:
                COALESCE(NULLIF(s.twitch_user_id, ''), i.twitch_user_id) AS twitch_user_id,
                COALESCE(s.is_monitored_only, 0)                         AS is_monitored_only
           FROM twitch_streamers s
+         INNER JOIN twitch_partners tp
+            ON tp.twitch_login = s.twitch_login
+           AND tp.departnered_at IS NULL
+           AND tp.admin_archived_at IS NULL
           LEFT JOIN twitch_streamer_identities i
             ON i.twitch_user_id = s.twitch_user_id
          WHERE (s.discord_user_id IS NULL OR s.discord_user_id = '')
