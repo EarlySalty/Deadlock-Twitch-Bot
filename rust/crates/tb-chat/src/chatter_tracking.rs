@@ -9,13 +9,16 @@
 //!   is_first_time_streamer, confirmed_first_ever BLEIBT NULL/unverändert)
 //! - `twitch_chatter_rollup` — Upsert (total_messages++, total_sessions++ wenn neue Session)
 //!
-//! Gate-Reihenfolge identisch zum Python-Code (Z. 2119–2202):
+//! Gate-Reihenfolge:
 //! 1. Channel-Login vorhanden
-//! 2. Partner-Gate (`_is_partner_channel_for_chat_tracking` — Partner ODER monitored-only)
-//! 3. Chatter-Login vorhanden (sonst: nur Health-Heartbeat)
-//! 4. Known-Bot-Filter (sonst: nur Health-Heartbeat)
-//! 5. Session-Resolver (`twitch_stream_sessions` offene Session, 60s-Cache — bot.py Z. 2168)
-//! 6. Target-Game-Gate (`twitch_live_state`, Fallback offene Session — moderation.py Z. 2008–2080)
+//! 2. Chatter-Login vorhanden (sonst: nur Health-Heartbeat)
+//! 3. Known-Bot-Filter (sonst: nur Health-Heartbeat)
+//! 4. Session-Resolver (`twitch_stream_sessions` offene Session, 60s-Cache)
+//! 5. Target-Game-Gate (`twitch_live_state`, Fallback offene Session)
+//!
+//! Kein Partner-Gate: Daten werden für alle Kanäle gesammelt, in denen der Bot
+//! aktiv ist. Die Trennung Partner/Nicht-Partner erfolgt beim Abfragen, nicht
+//! schon beim Schreiben.
 //!
 //! Der Raw-Aktivitäts-Zähler für Promos (`_record_raw_chat_message`,
 //! moderation.py Z. 2173) lebt in [`crate::promos::PromoEngine::record_raw_message`]
@@ -89,20 +92,6 @@ impl ChatterTracker {
             return;
         }
 
-        // Gate 2: Partner-Gate (Partner ODER monitored-only — bot.py Z. 746–753).
-        // Blockiert OHNE Health-Write (Python Z. 2130–2141).
-        match self.passes_partner_gate(&login).await {
-            Ok(true) => {}
-            Ok(false) => {
-                debug!(channel = %login, "chatter_tracking: partner gate blocked — skip");
-                return;
-            }
-            Err(e) => {
-                warn!(channel = %login, "chatter_tracking: partner gate DB-Fehler — {e}");
-                return;
-            }
-        }
-
         let now = Utc::now();
         let ts_iso = iso_seconds(&now);
         let chatter_login = event.chatter_user_login.to_lowercase();
@@ -167,35 +156,6 @@ impl ChatterTracker {
                 "chatter_tracking: insert fehlgeschlagen — {e}"
             );
         }
-    }
-
-    /// Partner-Gate: aktiver Partner ODER monitored-only (bot.py Z. 746–753).
-    async fn passes_partner_gate(&self, login: &str) -> Result<bool, sqlx::Error> {
-        let is_partner = sqlx::query_scalar::<_, i32>(
-            "SELECT COALESCE(is_partner_active, 0) \
-             FROM twitch_streamers_partner_state \
-             WHERE LOWER(twitch_login) = $1",
-        )
-        .bind(login)
-        .fetch_optional(&self.pool)
-        .await?
-        .unwrap_or(0);
-
-        if is_partner != 0 {
-            return Ok(true);
-        }
-
-        let is_monitored = sqlx::query_scalar::<_, i32>(
-            "SELECT COALESCE(is_monitored_only, 0) \
-             FROM twitch_streamers \
-             WHERE LOWER(twitch_login) = $1",
-        )
-        .bind(login)
-        .fetch_optional(&self.pool)
-        .await?
-        .unwrap_or(0);
-
-        Ok(is_monitored != 0)
     }
 
     /// Offene Session via `twitch_stream_sessions` (bot.py Z. 2168–2190).

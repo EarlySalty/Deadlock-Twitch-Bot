@@ -249,8 +249,7 @@ impl GlobalBanSweeper {
                 continue;
             };
 
-            // Selbstschutz: Ziel == Broadcaster
-            let bot_id = self.api.bot_user_id().await;
+            // Selbstschutz: Ziel == Broadcaster (moderator_id kommt intern aus ban_user)
             if target_id == broadcaster_id {
                 continue;
             }
@@ -295,8 +294,6 @@ impl GlobalBanSweeper {
                     );
                 }
             }
-            // bot_id nur zur Compilation genutzt (kein Selbst-Ban, s.o.)
-            let _ = bot_id;
         }
 
         count

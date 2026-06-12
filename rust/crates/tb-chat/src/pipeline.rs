@@ -407,14 +407,9 @@ impl ChatPipeline {
             .classify(&channel_login, &event.broadcaster_user_id)
             .await;
 
-        // Schritt 4: Non-Partner/Monitored-Only — nur Datensammlung (Z. 1575–1585)
+        // Schritt 4: Non-Partner — nur Datensammlung, keine Moderation/Promos
         if !class.is_partner {
             p.tracker.track(event).await;
-            if class.is_monitored_only {
-                // Python bumpt den Raw-Zähler in _track_chat_health nach dem
-                // Partner-Gate (monitored-only passiert es) — moderation.py Z. 2173.
-                p.promos.record_raw_message(&channel_login).await;
-            }
             return;
         }
 

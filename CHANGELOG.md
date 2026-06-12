@@ -1,3 +1,15 @@
+## #197 — Chatter-Tracking: Partner-Gate entfernt + Refactoring-Relikt in GlobalBanSweep bereinigt
+
+**Ausgangslage:** Chatter-Daten (Chat-Nachrichten, Session-Chatters, Rollup) wurden im Rust-Bot nur für aktive Partner-Kanäle gespeichert — alle anderen Kanäle wurden still ignoriert. Gleichzeitig gab es in der Global-Ban-Sweep-Logik einen toten API-Call, der aus einem unvollständigen Refactor stammte.
+
+**Was wurde geändert:**
+
+- Chatter-Tracking schreibt jetzt für **alle Kanäle**, in denen der Bot aktiv ist — kein Partner-Gate mehr beim Speichern. Die Trennung Partner/Nicht-Partner erfolgt beim Abfragen der Daten, nicht beim Schreiben.
+- Pipeline: das Legacy-`is_monitored_only`-Flag entfernt; Non-Partner-Kanäle werden jetzt einheitlich behandelt (Datensammlung, keine Moderation/Promos).
+- GlobalBanSweep: doppelten `bot_user_id()`-Call entfernt. Die `moderator_id` für Helix-Ban-Calls wird intern in `ban_user()` gesetzt — der externe Vorab-Abruf war ein Überbleibsel aus einer früheren API-Schicht, nie verwendet, mit `let _ = bot_id` kaschiert.
+
+**Wie es jetzt funktioniert:** Jede Chat-Nachricht in einem Bot-bekannten Kanal landet in `twitch_chat_messages`, `twitch_session_chatters` und `twitch_chatter_rollup` — sofern eine offene Stream-Session existiert und Deadlock live ist. GlobalBanSweep ruft `bot_user_id()` genau einmal pro Ban-Call auf (intern in der Helix-Schicht), nicht mehr doppelt.
+
 ## #196 — Lurker-Tax und Promo-Engine: 5 Python/Rust-Portfehler behoben
 
 **Ausgangslage:** Beim Python→Rust-Port der Chat-Promo-Engine haben sich 5 semantische Bugs eingeschlichen, die alle stumm blieben — kein Crash, kein Test-Fail, aber falsches Verhalten.
