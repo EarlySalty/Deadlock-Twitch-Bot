@@ -1369,10 +1369,14 @@ impl PromoEngine {
                     .replace("{login}", &target_login);
                 let _ = self.api.send_message(channel_id, &text).await;
 
-                let mut ts_state = self.targeted_state.lock().await;
-                ts_state.channel_last_targeted.insert(login.to_string(), now);
-                ts_state.channel_last_type.insert(login.to_string(), "user".to_string());
-                ts_state.user_last_pitched.insert((login.to_string(), target_login), now);
+                {
+                    let mut ts_state = self.targeted_state.lock().await;
+                    ts_state.channel_last_targeted.insert(login.to_string(), now);
+                    ts_state.channel_last_type.insert(login.to_string(), "user".to_string());
+                    ts_state.user_last_pitched.insert((login.to_string(), target_login), now);
+                }
+                // Promo-Slot belegen — Python: mark(channel_login, now, reason="targeted_promo").
+                self.mark_promo_sent(login, now, "targeted_promo", Utc::now().timestamp() as f64).await;
 
                 return true;
             }
@@ -1396,6 +1400,8 @@ impl PromoEngine {
             ts_state.channel_last_targeted.insert(login.to_string(), now);
             ts_state.channel_last_type.insert(login.to_string(), "global".to_string());
         }
+        // Promo-Slot belegen — Python: mark(channel_login, now, reason="targeted_promo").
+        self.mark_promo_sent(login, now, "targeted_promo", Utc::now().timestamp() as f64).await;
 
         true
     }

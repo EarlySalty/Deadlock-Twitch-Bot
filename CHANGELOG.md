@@ -1,3 +1,11 @@
+## #189 — Targeted-Promo belegt jetzt den globalen Promo-Cooldown (Rust)
+
+**Problem:** Nach einer Targeted-Promo (personalisierter Discord-Pitch an einen Chatter) hat der Rust-Bot unmittelbar danach noch eine normale Chat-Promo gesendet. Im schlimmsten Fall zwei Ankündigungen innerhalb von Sekunden.
+
+**Ursache:** Der Rust-Port von `maybe_send_targeted_promo` hat den Promo-Slot nicht markiert. Python ruft nach jeder Targeted-Promo `_mark_promo_sent` auf — das setzt `last_promo_sent`, resettet den Roh-Nachrichten-Zähler auf 0 und persistiert den Cooldown in die DB. Im Rust-Port fehlte dieser Aufruf komplett: `last_promo_sent` blieb `None`, also konnte der nächste Loop-Tick sofort wieder eine Activity- oder Viewer-Spike-Promo rausschicken.
+
+**Fix:** Beide Pfade in `maybe_send_targeted_promo` (User-targeted und Global-Preset) rufen jetzt nach dem erfolgreichen Send `mark_promo_sent` auf — identisches Verhalten wie Python.
+
 ## #188 — Werbung kommt frühestens 10 Minuten nach Stream-Start
 
 **Problem:** Der Bot hat Discord-Promos teilweise direkt beim Go-Live gepostet — als erste Nachricht im Chat, bevor überhaupt jemand geschrieben hat. Das wirkt roboterhaft und ist schlechtes Timing.
