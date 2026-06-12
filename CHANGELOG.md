@@ -1,3 +1,13 @@
+## #191 — Werbefrei-Plan und Entitlement-Check in Rust nachgezogen
+
+**Problem:** Streamer mit einem bezahlten „Werbefrei"-Plan (z. B. `chat_quiet`, `bundle_werbefrei_analyse` usw.) haben in Rust trotzdem Promos bekommen, wenn der Dashboard-Toggle `promo_disabled` nicht explizit aktiviert war. Python prüft zwei Bedingungen: die `promo_disabled`-Spalte UND ob der aktive Plan das Entitlement `chat.promos.disable` trägt. Rust hat nur die Spalte geprüft.
+
+**Warum das passiert:** `promo_disabled` ist ein manueller Dashboard-Toggle, der erst nach dem Kauf aktiv gesetzt werden muss. Wer das nie angefasst hat, hatte `promo_disabled=0` — aber der Werbefrei-Plan schützte ihn trotzdem in Python, weil das Entitlement unabhängig vom Toggle geprüft wird. In Rust fehlte dieser zweite Pfad.
+
+**Fix:** Rust liest jetzt zusätzlich `manual_plan_id` (kanonisch) und `plan_name` (Legacy) aus `streamer_plans`. Beide Spalten werden gegen alle Plan-IDs gecheckt, die `chat.promos.disable` tragen (aus `catalog.py` abgeleitet: `chat_quiet`, `bundle_chat_quiet_raid_boost`, `bundle_analysis_raid_boost`, `bundle_werbefrei_analyse`, `bundle_komplett` plus Legacy-Namen wie `werbefrei`/`quiet`). Bei DB-Fehler bleibt das Fail-open-Verhalten.
+
+Außerdem: beim Start bereinigt die Promo-Engine jetzt die `twitch_promo_cooldowns`-Tabelle von Einträgen die älter als 24 Stunden sind — wie Python es in `_restore_promo_cooldowns` macht (war bisher nicht aufgerufen).
+
 ## #190 — Zwei weitere Promo-Port-Bugs in Rust behoben
 
 **Problem 1 — Scam-Warnung vergaß ihren Seed-Timer nach Neustart:** Die Scam-Warnung benutzt einen Verzögerungs-Mechanismus: beim ersten Auftauchen eines Channels wird der Timer auf "vor 100 Minuten" gesetzt, damit die Warnung frühestens nach 20 Minuten kommen kann (statt sofort nach dem Neustart). Im Rust-Port wurde dieser Seed-Wert zwar in den In-Memory-State geschrieben, aber nicht in die DB persistiert — nach jedem Neustart fehlte der Eintrag, der Timer startete wieder von null, und die 20-Minuten-Initialverzögerung lief jedes Mal erneut ab. Python schreibt den Seed via `_persist_scam_warning_ts` sofort weg. Fix: Rust tut dasselbe — Seed wird direkt nach dem Setzen per `save_promo_cooldown` in `twitch_promo_cooldowns` geschrieben, und die DashMap-Ref wird vorher freigegeben (Rust-Async-Constraint: kein Shard-Lock über einen `.await`-Punkt halten).

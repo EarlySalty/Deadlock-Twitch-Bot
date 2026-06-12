@@ -497,6 +497,25 @@ impl PartnerChannelCheck for AlwaysPartner {
     }
 }
 
+/// Prüft ob ein Plan-Key (canonical oder Legacy) das Entitlement chat.promos.disable trägt.
+/// Port von catalog.py:PLAN_ENTITLEMENTS_MAP + LEGACY_PLAN_NAME_TO_ID_MAP.
+fn plan_id_has_promos_disable(plan_id: &str) -> bool {
+    matches!(
+        plan_id.to_lowercase().as_str(),
+        // Kanonische Plan-IDs mit chat.promos.disable (catalog.py).
+        "chat_quiet"
+        | "bundle_chat_quiet_raid_boost"
+        | "bundle_analysis_raid_boost"
+        | "bundle_werbefrei_analyse"
+        | "bundle_komplett"
+        // Legacy-Namen die auf diese Plans mappen (LEGACY_PLAN_NAME_TO_ID_MAP).
+        | "werbefrei"
+        | "quiet"
+        | "chat_quiet_bundle"
+        | "bundle"
+    )
+}
+
 impl PromoEngine {
     /// Erzeugt eine neue PromoEngine. Default-Impls: StaticInviteResolver,
     /// AlwaysPartner, RandomPresetPicker — Orchestrator setzt produktive Impls
@@ -607,6 +626,8 @@ impl PromoEngine {
     /// Startet den 60s-periodischen Loop (promos.py:1452).
     pub fn spawn_periodic_loop(self: Arc<Self>) {
         tokio::spawn(async move {
+            // Stale Einträge vor dem Laden bereinigen (promos.py:944).
+            self.cleanup_stale_promo_cooldowns().await;
             // Cooldowns aus DB laden (promos.py:1452: _restore_promo_cooldowns).
             self.restore_promo_cooldowns().await;
 
@@ -1575,10 +1596,14 @@ impl PromoEngine {
     }
 
     /// Plan-Flag-Check (promos.py:1061: `_promo_blocked_by_plan_or_flag`).
-    /// Fail-open bei DB-Fehler. streamer_plans.promo_disabled = integer (prod schema).
+    /// Prüft promo_disabled-Spalte UND Plan-Entitlement chat.promos.disable
+    /// (aus manual_plan_id / legacy plan_name, Parität mit Python).
+    /// Fail-open bei DB-Fehler.
     async fn promo_blocked_by_plan_or_flag(&self, login: &str) -> bool {
-        let row: Option<(Option<i32>,)> = sqlx::query_as(
-            "SELECT COALESCE(promo_disabled, 0)
+        let row: Option<(Option<i32>, Option<String>, Option<String>)> = sqlx::query_as(
+            "SELECT COALESCE(promo_disabled, 0),
+                    COALESCE(manual_plan_id, ''),
+                    COALESCE(plan_name, '')
                FROM streamer_plans
               WHERE LOWER(COALESCE(twitch_login,'')) = $1
               LIMIT 1",
@@ -1591,8 +1616,18 @@ impl PromoEngine {
 
         match row {
             None => false, // Fail-open.
-            Some((Some(v),)) => v != 0,
-            Some((None,)) => false,
+            Some((promo_disabled, manual_plan_id, plan_name)) => {
+                if promo_disabled.unwrap_or(0) != 0 {
+                    return true;
+                }
+                // Entitlement-Pfad: manual_plan_id hat Vorrang, Fallback auf plan_name.
+                let effective_id = manual_plan_id
+                    .as_deref()
+                    .filter(|s| !s.is_empty())
+                    .or(plan_name.as_deref().filter(|s| !s.is_empty()))
+                    .unwrap_or("");
+                plan_id_has_promos_disable(effective_id)
+            }
         }
     }
 
