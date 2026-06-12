@@ -103,12 +103,14 @@ SELECT
         WHEN base.is_verified = 1
              AND COALESCE(base.manual_partner_opt_out, 0) = 0
              AND COALESCE(base.is_monitored_only, 0) = 0
+             AND base.archived_at IS NULL
         THEN 1 ELSE 0
     END AS is_partner,
     CASE
         WHEN base.is_verified = 1
              AND COALESCE(base.manual_partner_opt_out, 0) = 0
              AND COALESCE(base.is_monitored_only, 0) = 0
+             AND base.archived_at IS NULL
         THEN 1 ELSE 0
     END AS is_partner_active,
     base.live_ping_role_id,

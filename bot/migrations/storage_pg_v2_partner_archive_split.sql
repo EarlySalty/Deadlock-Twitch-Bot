@@ -77,6 +77,9 @@ SELECT
     CASE
         WHEN p.status = 'active'
              AND COALESCE(p.manual_partner_opt_out, 0) = 0
+             AND COALESCE(p.technical_pause_reason, '') = ''
+             AND p.admin_archived_at IS NULL
+             AND COALESCE(p.raid_bot_enabled, 0) = 1
         THEN 1 ELSE 0
     END AS is_partner_active,
     p.live_ping_role_id,

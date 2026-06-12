@@ -1,3 +1,11 @@
+## #165 — Partnerkriterium: nur noch OAuth zählt, archivierte Kanäle raus
+
+**Ausgangslage:** Drei Kanäle (xoralle, yorganson, yqmaa) waren in der DB längst als archiviert markiert (`admin_archived_at` gesetzt), standen aber trotzdem noch als aktive Partner drin — weil die View `twitch_partners_all_state` das Archiv-Datum bei der Berechnung von `is_partner_active` schlicht ignorierte. Resultat: der GlobalBanSweep versuchte bei jedem Zyklus, in diesen Kanälen zu bannen, bekam 403 (Bot kein Mod), schrieb nichts in den Ledger, und startete beim nächsten Lauf von vorne. Gleichzeitig wurden Kanäle, die der Bot nur per Admin-Manualverifizierung eingetragen hatte (ohne dass der Streamer den Bot selbst autorisiert hat), genauso behandelt wie echte OAuth-Partner — obwohl der Bot dort keine Handlungsfähigkeit hat.
+
+**Was wurde geändert:** Die View `twitch_partners_all_state` berechnet `is_partner_active` jetzt mit zwei zusätzlichen Bedingungen: `admin_archived_at IS NULL` (archivierte Kanäle fliegen raus) und `raid_bot_enabled = 1` (nur Kanäle, die aktiv OAuth-autorisiert haben, gelten als Partner). Das `manual_verified`-System bleibt als Datensatz erhalten, bestimmt aber nicht mehr die Partnerschaft. Einziger Weg in den aktiven Partnerstatus: Twitch-OAuth-Flow abschließen.
+
+**Ergebnis:** GlobalBanSweep läuft ohne 403-Rauschen. Chat-Sub-Reconcile läuft jetzt über 23 statt 45 Kanäle — alle mit echtem OAuth-Grant und `channel:bot`-Scope. Kein Retry-Spam für Kanäle, bei denen der Bot sowieso nicht handlungsfähig ist.
+
 ## #164 — EventSub: Chat-Nachrichten erreichen Rust jetzt in Echtzeit
 
 **Ausgangslage:** Seit dem Chat-Cutover (Welle B, 12.6.) liest Rust `channel.chat.message` und `channel.chat.notification` als Webhook-Subscriptions. Die bestehende Python-Bridge (8765) proxyt Twitch-Webhooks an Rust weiter — hatte aber diese beiden Typen nicht auf der Weiterleitungsliste. Die Bridge antwortete Twitch mit 204 und meldete intern „Dispatch completed", schickte die Nachricht aber nie an Rust durch. Einzige Kompensation war der 15-Sekunden-Poll-Loop: Chat-Events kamen mit bis zu 15 Sekunden Verzögerung an.
