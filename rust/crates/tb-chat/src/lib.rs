@@ -23,16 +23,32 @@
 //! [`global_ban_sweep`] (Offline-Sweep-Executor).
 
 pub mod api;
+pub mod channel_classifier;
+pub mod chatter_tracking;
 pub mod commands;
+pub mod fun_responses;
 pub mod global_ban_sweep;
+pub mod global_chatter_ban;
+pub mod mention_scoring;
 pub mod moderation;
+pub mod pipeline;
 pub mod promos;
 pub mod scam_pitch;
 pub mod spam_filter;
+pub mod sus_invite;
 pub mod token;
 pub mod types;
 
 pub use api::{BanOutcome, ChatApi};
+pub use channel_classifier::{ChannelClass, ChannelClassifier};
+pub use chatter_tracking::ChatterTracker;
+pub use fun_responses::FunResponses;
+pub use global_chatter_ban::GlobalChatterBanEnforcer;
+pub use mention_scoring::{score_mention_patterns, MentionResolver, WHITELISTED_BOTS};
+pub use pipeline::{
+    ChatPipeline, ChatPipelineParts, ModAlerter, PgHelixMentionResolver, ReviewLog,
+};
+pub use sus_invite::{SusInviteCheck, SusInviteHit};
 pub use commands::{
     AutobanEntry, CommandEngine, DiscordLinkPort, InvitePort, LastAutobanStore, RaidCommandPort,
     RaidStatusInfo, SuperModPort,

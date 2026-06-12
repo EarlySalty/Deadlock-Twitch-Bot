@@ -559,14 +559,15 @@ impl PromoEngine {
 
         let now = Instant::now();
 
-        // Aktivität aufzeichnen (promos.py:730 + 550).
+        // Aktivität aufzeichnen (promos.py:730). Der Raw-Count läuft separat
+        // über [`Self::record_raw_message`] — Python bumpt ihn in
+        // `_track_chat_health` für ALLE partner-getrackten Nachrichten
+        // (inkl. "!"-Commands), nicht nur im Promo-Pfad (moderation.py:2173).
         {
             let state_ref = self.channel_states.entry(login.clone()).or_insert_with(|| Mutex::new(ChannelState::new()));
             let mut state = state_ref.lock().await;
             state.last_accessed = now;
             self.record_promo_activity_inner(&mut state, &chatter, now);
-            state.raw_msg_count_since_promo += 1;
-            state.last_raw_chat_message_ts = Some(now);
         }
 
         // Doppelsend-Lock (promos.py:798).
@@ -576,6 +577,29 @@ impl PromoEngine {
         // maybe_send_promo_with_stats (promos.py:1281).
         let channel_id = event.broadcaster_user_id.clone();
         self.maybe_send_promo_with_stats(&login, &channel_id, now).await;
+    }
+
+    /// Raw-Chat-Aktivität aufzeichnen — Port von `_record_raw_chat_message`
+    /// (promos.py:550, aufgerufen aus `_track_chat_health`, moderation.py:2173).
+    ///
+    /// Zählt JEDE partner-getrackte Nachricht inkl. "!"-Commands — der Zähler
+    /// gated Promos gegen tote Chats (`raw_msg_count_since_promo`,
+    /// `last_raw_chat_message_ts`). Die Pipeline ruft das im Track-Schritt auf,
+    /// exakt an der Python-Stelle (nach Partner-Gate, vor Session-/Game-Gate).
+    pub async fn record_raw_message(&self, broadcaster_login: &str) {
+        let login = broadcaster_login.to_lowercase();
+        if login.is_empty() {
+            return;
+        }
+        let now = Instant::now();
+        let state_ref = self
+            .channel_states
+            .entry(login)
+            .or_insert_with(|| Mutex::new(ChannelState::new()));
+        let mut state = state_ref.lock().await;
+        state.last_accessed = now;
+        state.raw_msg_count_since_promo += 1;
+        state.last_raw_chat_message_ts = Some(now);
     }
 
     /// Startet den 60s-periodischen Loop (promos.py:1452).

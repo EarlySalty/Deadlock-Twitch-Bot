@@ -27,6 +27,7 @@
 //!   PORT                          — optional, default 8776
 
 mod auto_raid;
+mod chat_wiring;
 mod confirm_resolver;
 mod eventsub_hooks;
 mod oauth_followups;
@@ -190,6 +191,11 @@ async fn main() {
                 None
             }
         };
+    // Welle B Phase 1: Bot-Token booten + ChatApi bauen (TB_CHAT_ENABLED=1).
+    // Muss VOR der Hooks-Komposition passieren, damit die OAuth-Followup-
+    // Begrüßung den nativen Send statt des Python-Umwegs (8779) nutzt.
+    let chat_api_handle = chat_wiring::try_build_api(helix.as_ref().clone()).await;
+
     // Raid-Verdrahtung: mit Manager + Helix + Krypto-Key sind alle vier
     // Raid-Kopplungen echt (Auto-Raid, Arrival, Score-Refresh, Blacklist-Guard).
     let suppression = Arc::new(std::sync::Mutex::new(ManualRaidSuppression::new()));
@@ -231,6 +237,7 @@ async fn main() {
                     pool.clone(),
                     helix_client.clone(),
                     followup_relay,
+                    chat_api_handle.as_ref().map(|h| h.api.clone()),
                 );
                 if partner_setup.is_none() {
                     tracing::warn!(
@@ -406,6 +413,24 @@ async fn main() {
             })
         }
         _ => Arc::new(NoopEventSubHooks),
+    };
+    // Welle B Phase 2: Pipeline auf der gebooteten ChatApi aufbauen. Wrappt
+    // die Hooks, damit channel.chat.message in die tb-chat-Pipeline läuft;
+    // startet Token-Loop, Promo-Loop, Global-Ban-Sweeper und den
+    // 30-min-Subscription-Reconcile.
+    let eventsub_hooks: Arc<dyn EventSubHooks> = match chat_api_handle {
+        Some(handle) => {
+            let runtime = chat_wiring::build_runtime(
+                handle,
+                pool.clone(),
+                manual_raid_port.clone(),
+                eventsub_hooks.clone(),
+            )
+            .await;
+            runtime.start_background(subscription_manager.clone());
+            runtime.hooks.clone()
+        }
+        None => eventsub_hooks,
     };
     // Go-Live-Enrichment: gezielter /channels-Lookup beim stream.online-Event
     // (sprachfilter-frei) — nur mit HelixClient verfügbar.

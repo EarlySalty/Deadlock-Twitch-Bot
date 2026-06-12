@@ -2160,6 +2160,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sqlx",
+ "tb-chat",
  "tb-config",
  "tb-crypto",
  "tb-db",

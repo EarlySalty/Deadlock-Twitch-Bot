@@ -399,3 +399,46 @@ das meiste kannst du entfernen." Konsequenz für die Migration:
   `TB_CHAT_ENABLED=1` → Scope-Validate des Bot-Tokens loggen → Chat-Subs für
   Partner anlegen → Begrüßungs-Delegation (oauth_followups::LegacyChatGreeter)
   auf nativen Send umstellen. Rollback: Drop-in weg, Worker-Restart.
+
+## Stand 12.6. früh — Welle B: CHAT-FLIP VOLLZOGEN (nativer Chat LIVE)
+
+- **Flip 12.6. 05:21–05:23 nach Prozedur:** Worker-Drop-in
+  `TWITCH_RUST_CHAT_TAKEOVER=1` (20-rust-takeover.conf) + Worker-Restart →
+  Python loggt „Rust-Chat-Takeover aktiv … Python startet ihn nicht (inkl.
+  Bot-Token-Refresh-Ownership)" → Rust-Drop-in `10-chat.conf`
+  (`TB_CHAT_ENABLED=1`) + tb-bot-Restart. Boot-Beweis im Journal:
+  Env-Access-Token tot → Refresh-Boot → `Bot-Token validiert
+  login=deutschedeadlockcommunity` → 92 Subscriptions erstellt
+  (46×chat.message + 46×chat.notification), via Helix-API verifiziert:
+  **alle 46 chat.message-Subs `enabled`** (Challenge über die 8765-Bridge).
+  403 für Kanäle ohne `channel:bot`-Grant (z. B. xoralle) = erwarteter
+  Scope-Filter, wie der Python-Join.
+- **Restbausteine vor dem Flip fertiggestellt:** chatter_tracking (inkl.
+  Raw-Chat-Insert `twitch_chat_messages` + `twitch_raw_chat_ingest_health`-
+  Heartbeat mit TEXT-ISO-Sekunden — Python-Format; Session-Resolver über
+  offene `twitch_stream_sessions` mit 60s-Cache), channel_classifier,
+  global_chatter_ban (Decision-only; Aktion läuft wie Python über
+  auto_ban_and_cleanup), fun_responses (Flag default AUS wie Python),
+  sus_invite (Decision-only → Pipeline schreibt Review-TSV + Discord-Alert),
+  mention_scoring (+PgHelixMentionResolver 600s/6h-Caches), pipeline.rs
+  (15 Schritte exakt nach bot.py Z. 1510–1827, Zwei-Pass-Spam-Evaluierung
+  für den @host-Bonus, Lazy-Eskalatoren nur bei hartem Signal), ReviewLog
+  (TSV nach logs/twitch_autobans.log / twitch_suspicious.log — Admin-
+  Dashboard parst die!), ModAlerter (Discord via 8899). 241 Tests grün.
+- **Composition:** bin/tb-bot/src/chat_wiring.rs — Phase 1 (try_build_api:
+  Token-Boot + HelixChatClient) VOR der Hooks-Komposition, damit die
+  OAuth-Followup-Begrüßung nativ sendet (NativeChatGreeter ersetzt
+  LegacyChatGreeter wenn Chat an); Phase 2 (build_runtime) wrappt die
+  EventSub-Hooks (ChatHooks) und startet Token-Loop, Promo-Loop,
+  GlobalBanSweeper und den 30-min-Chat-Sub-Reconcile (= Python-Join).
+- **Bewusste Flip-Lücken (dokumentiert):** VoiceReaction + Engagement-Feed
+  erst mit der Engagement-Phase (war in Beobachtung); !title außerhalb
+  Scope; Helix-Chatters-Polling (Lurker-Quelle) offen; `user:bot`-Scope
+  fehlt in der Grant-Liste des Bot-Tokens (Warnung geloggt) — die Subs
+  laufen trotzdem, bei Problemen Re-Auth mit erweitertem Scope-Set.
+- **Beobachten:** 3 einzelne Token-Refreshes beim Boot (vermutlich
+  Sweeper-Backlog über den 401-Retry-Pfad — kein Sturm, danach Ruhe);
+  erster echter Raw-Chat-Insert nach Flip (Verifikation lief um ~5:30,
+  nachts kaum Chat-Aufkommen).
+- **Rollback:** `10-chat.conf` löschen + `TWITCH_RUST_CHAT_TAKEOVER`-Zeile
+  aus dem Worker-Drop-in entfernen → beide Services neu starten.

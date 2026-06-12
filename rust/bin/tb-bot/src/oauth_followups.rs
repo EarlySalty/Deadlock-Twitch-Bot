@@ -179,6 +179,38 @@ impl LegacyChatGreeter {
     }
 }
 
+/// Nativer Greeter (nach Chat-Cutover): sendet direkt über die tb-chat-API
+/// mit dem Bot-Token — der Python-Umweg über 8779 entfällt.
+pub struct NativeChatGreeter {
+    api: Arc<dyn tb_chat::ChatApi>,
+}
+
+impl NativeChatGreeter {
+    pub fn new(api: Arc<dyn tb_chat::ChatApi>) -> Self {
+        Self { api }
+    }
+}
+
+#[async_trait]
+impl ChatGreeterPort for NativeChatGreeter {
+    async fn send_partner_chat_message(
+        &self,
+        twitch_login: &str,
+        message: &str,
+    ) -> Result<bool, String> {
+        let Some(broadcaster_id) = self.api.resolve_user_id(twitch_login).await? else {
+            return Err(format!("Login {twitch_login} nicht auflösbar"));
+        };
+        match self.api.send_message(&broadcaster_id, message).await? {
+            tb_chat::SendOutcome::Sent => Ok(true),
+            other => {
+                tracing::warn!(login = %twitch_login, ?other, "Begrüßung nicht zugestellt");
+                Ok(false)
+            }
+        }
+    }
+}
+
 #[async_trait]
 impl ChatGreeterPort for LegacyChatGreeter {
     async fn send_partner_chat_message(
@@ -226,8 +258,14 @@ pub fn build_partner_setup_service(
     pool: PgPool,
     helix: HelixClient,
     relay: Option<BrokerRelay>,
+    native_chat: Option<Arc<dyn tb_chat::ChatApi>>,
 ) -> Option<Arc<PartnerSetupService>> {
-    let greeter = LegacyChatGreeter::from_env()?;
+    // Nach dem Chat-Cutover begrüßt der native Bot direkt; ohne aktiven
+    // Chat (TB_CHAT_ENABLED=0) bleibt der Legacy-Weg über Python 8779.
+    let greeter: Arc<dyn ChatGreeterPort> = match native_chat {
+        Some(api) => Arc::new(NativeChatGreeter::new(api)),
+        None => Arc::new(LegacyChatGreeter::from_env()?),
+    };
     let bot_user_id = std::env::var("TWITCH_BOT_USER_ID")
         .ok()
         .map(|v| v.trim().to_string())
@@ -241,7 +279,7 @@ pub fn build_partner_setup_service(
         pool,
         Arc::new(BrokerDiscordDirectory::from_env(relay)),
         Arc::new(HelixModeratorInstaller::new(helix)),
-        Arc::new(greeter),
+        greeter,
         bot_user_id,
     )))
 }

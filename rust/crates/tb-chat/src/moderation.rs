@@ -896,6 +896,18 @@ impl OutboundSuppressionCheck for OutboundSuppressionStore {
     }
 }
 
+#[async_trait]
+impl crate::promos::OutboundSuppressionCheck for OutboundSuppressionStore {
+    /// Promo-Mute-Brücke: der Promo-Pfad prüft die `promo`-Suppression
+    /// (Python: `_get_outbound_chat_suppression(login, "promo")` vor jedem
+    /// Promo-Send). Aktiver Eintrag = Kanal ist stumm.
+    async fn is_muted(&self, channel_login: &str) -> bool {
+        self.check_suppression(channel_login, "promo")
+            .await
+            .is_some()
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------

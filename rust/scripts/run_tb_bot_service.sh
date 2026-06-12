@@ -56,6 +56,11 @@ export TB_INTERNAL_API_LEGACY_FALLBACK_URL="${TB_INTERNAL_API_LEGACY_FALLBACK_UR
 # von deutschedeadlockcommunity — Python löst sie zur Laufzeit aus dem
 # Chat-Token auf, Rust besitzt den Chat-Token (noch) nicht.
 export TWITCH_BOT_USER_ID="${TWITCH_BOT_USER_ID:-1422558159}"
+# Chat-Cutover-Gate (Welle B): 1 = nativer Chat-Bot (Pipeline, Promos,
+# Global-Ban-Sweep, Commands). Flip-Prozedur: rust/docs/04-cutover-plan.md —
+# IMMER zuerst den Python-Chat ausschalten (TWITCH_RUST_CHAT_TAKEOVER=1 im
+# Worker-Drop-in), sonst Dual-Refresh-Race auf dem Bot-Token.
+export TB_CHAT_ENABLED="${TB_CHAT_ENABLED:-0}"
 export RUST_LOG="${RUST_LOG:-info}"
 
 exec "$ROOT_DIR/rust/target/release/tb-bot"

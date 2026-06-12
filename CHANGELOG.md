@@ -1,3 +1,21 @@
+## #160 — Chat-Bot komplett auf Rust umgestellt (Welle B: Cutover vollzogen)
+
+**Ausgangslage:** Der Twitch-Chat (Moderation, Spam-Filter, Commands, Promos, Chatter-Tracking) lief als letzter großer Brocken noch im Python-Worker — inklusive der Hoheit über das Bot-Token. Der Rust-Bot bediente bereits Monitoring, Raids und die interne API, musste für jede Chat-Aktion aber den Umweg über Python nehmen.
+
+**Was wurde geändert:**
+
+- Die komplette Chat-Verarbeitung läuft jetzt nativ im Rust-Bot. Statt einer dauerhaften WebSocket-Verbindung wie im alten Bot abonniert der neue Bot Chat-Nachrichten als Webhook-Events über die bestehende EventSub-Strecke — „einem Kanal beitreten" heißt jetzt: eine Subscription anlegen. Beim Umschalten wurden 46 Partner-Kanäle abonniert und alle Subscriptions von Twitch bestätigt.
+- Die Nachrichten-Pipeline arbeitet jede eingehende Nachricht in derselben festen Reihenfolge ab wie vorher: eigene Nachrichten verwerfen → bekannte Service-Bots nur zählen → Kanal einordnen (Partner / nur beobachtet / Deadlock live?) → globale Bannliste prüfen → Scam-Anschreiben erkennen → Spam bewerten → verdächtige Discord-Links flaggen → Spaß-Antworten → Chatter zählen → Promos → Commands.
+- Der Spam-Filter eskaliert exakt wie bisher: Konto jünger als 90 Tage und Erstnachricht zählen nur dann als Verdachtspunkte, wenn bereits ein hartes Signal (bekannte Spam-Domain oder -Marke) vorliegt — eine harmlose erste Nachricht eines neuen Zuschauers kann also weiterhin nicht zum Bann führen. Ab 3 Punkten wird gebannt, bei hartem Signal darunter nur gelöscht.
+- Bans, Timeouts und Lösch-Aktionen laufen über einen einzigen gemeinsamen Pfad — egal ob Spam-Filter, globale Bannliste oder Sweep sie auslösen. Dadurch greifen Chat-Hinweis (sofern nicht per !silentban stumm geschaltet), Review-Protokoll und Discord-Alert an die Moderatoren überall identisch.
+- Das Chatter-Tracking schreibt weiter dieselben Daten (wer chattet wann in welcher Session, Erstkontakt-Erkennung, Roh-Nachrichten für die Analytics) — inklusive des Gesundheits-Heartbeats, den das Admin-Dashboard zur Überwachung der Chat-Erfassung liest.
+- Die Bot-Token-Verwaltung ist mit umgezogen: Der Rust-Bot validiert das Token beim Start, erneuert es bei Bedarf sofort über das Refresh-Token und hält es im 30-Minuten-Takt frisch. Der Wechsel passierte atomar — erst Python-Chat aus, dann Rust-Chat an — damit sich nie zwei Prozesse um dasselbe Token streiten.
+- Die Begrüßung nach einer Partner-Autorisierung sendet jetzt direkt der Rust-Bot statt über den Python-Umweg.
+
+**Wie es jetzt funktioniert:** Twitch liefert jede Chat-Nachricht als signiertes Webhook-Event, der Bot prüft die Signatur, arbeitet die Pipeline ab und handelt bei Treffern sofort (löschen, bannen, warnen, antworten). Alle 30 Minuten gleicht er die Kanal-Abonnements mit der Partnerliste ab — neue Partner werden so automatisch „betreten". Kanäle, die den Bot nicht autorisiert haben, werden sauber übersprungen statt Fehler zu werfen. Für Streamer und Zuschauer ändert sich am Verhalten nichts — Commands, Moderation und Promos funktionieren wie gewohnt, nur schneller und aus einem Guss.
+
+**Bewusst noch beim Alten:** !title (Titel-Generator) und die Engagement-Funktionen folgen in einer eigenen Phase.
+
 ## #159 — Sicherheitsseite: Responsible Disclosure, Meldeformular + Opus-Analyse
 
 **Ausgangslage:** Die `/twitch/sicherheit`-Seite endete mit einem knappen Einzeiler „Hinweise willkommen, bitte vertraulich melden". Kein klarer Rahmen, wer was darf, und kein direkter Meldeweg — wer eine Lücke gefunden hat, musste selbst herausfinden, wie er sie loswird.
