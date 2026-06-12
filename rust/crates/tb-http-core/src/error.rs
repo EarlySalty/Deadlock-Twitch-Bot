@@ -102,6 +102,19 @@ impl ApiError {
         }
     }
 
+    /// 500 Internal Server Error mit routenspezifischer Nachricht — Parität zu
+    /// Pythons `_json_error("internal_error", 500, <message>)`.
+    pub fn internal_with(message: &'static str) -> Self {
+        Self {
+            status: StatusCode::INTERNAL_SERVER_ERROR,
+            body: ApiErrorBody {
+                error: "internal_error",
+                message,
+            },
+            dyn_body: None,
+        }
+    }
+
     /// 404 Not Found.
     pub fn not_found() -> Self {
         Self {

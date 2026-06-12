@@ -22,6 +22,7 @@ pub use handlers::eventsub::EventSubDispatcherExt;
 pub use handlers::legacy_proxy::{LegacyProxy, LegacyProxyExt};
 pub use handlers::raid::{ManualRaidExt, ManualRaidPort};
 pub use handlers::raid_oauth::{RaidOAuthExt, RaidOAuthPort};
+pub use handlers::stats_native::{EventSubStatsExt, EventSubStatsSource};
 pub use idempotency::IdempotencyState;
 
 /// Baut den axum-Router für alle internen Endpoints.
@@ -30,9 +31,12 @@ pub use idempotency::IdempotencyState;
 /// `helix` wird als `Extension<Arc<Option<HelixClient>>>` eingesetzt.
 /// `dispatcher` bedient `POST /eventsub/dispatch`; `None` → 503 (Bridge puffert).
 /// `raid_oauth` bedient die `/raid/*`-OAuth-Strecke; `None` → 503.
+/// `eventsub_stats` bedient die EventSub-Sektion von `GET /stats`; `None` →
+/// Sektion wie bei Pythons Exception-Catch (s. `stats_native`).
 /// `legacy_proxy` reicht unbekannte Routen an die Legacy-Python-API weiter;
 /// `None` → unbekannte Routen antworten 404 (Strangler-Fig, s. `legacy_proxy`).
 /// `loopback_only` + `internal_auth` werden als Layer gestapelt.
+#[allow(clippy::too_many_arguments)]
 pub fn build_internal_router(
     pool: PgPool,
     token: String,
@@ -40,12 +44,13 @@ pub fn build_internal_router(
     dispatcher: Option<Arc<EventSubDispatcher>>,
     manual_raid: Option<Arc<dyn handlers::raid::ManualRaidPort>>,
     raid_oauth: Option<Arc<dyn handlers::raid_oauth::RaidOAuthPort>>,
+    eventsub_stats: Option<Arc<dyn handlers::stats_native::EventSubStatsSource>>,
     legacy_proxy: Option<Arc<LegacyProxy>>,
 ) -> Router {
     use handlers::{
         chat_command, discord_invite, eventsub, global_ban, healthz, market_share, raid,
-        raid_blacklist, raid_oauth as oauth, self_explainer_log, streamer_link, streamers,
-        telemetry_routes,
+        raid_blacklist, raid_oauth as oauth, self_explainer_log, session_detail, stats_native,
+        streamer_analytics_native, streamer_link, streamers, telemetry_routes,
     };
 
     let base = INTERNAL_API_BASE_PATH; // "/internal/twitch/v1"
@@ -159,22 +164,24 @@ pub fn build_internal_router(
             &format!("{base}/live/link-click"),
             post(telemetry_routes::live_link_click_handler),
         )
-        // Analytics-Reads (Welle B). Nur /analytics/comparison ist nativ —
-        // Shape im Live-Diff gegen Python 8779 verifiziert.
-        // BEWUSST NICHT nativ (Live-Diff zeigte echte Shape-Lücken):
-        // - GET /stats — Python liefert {tracked:{top,hourly,weekday},
-        //   category, avg_viewers_all, avg_viewers_tracked}; der Rust-Handler
-        //   eine andere Aggregation. Der Dashboard-Split-Mode liest exakt
-        //   die Python-Felder.
-        // - GET /analytics/streamer/:login — Python delegiert an
-        //   AnalyticsBackendExtended.get_comprehensive_analytics; der
-        //   Rust-Handler baut nur {stats, recent_sessions}.
-        // - GET /sessions/:session_id — Python macht SELECT * plus
-        //   berechnete Felder (retention_5m/10m/20m, dropoff_label,
-        //   start/end_viewers, …); dem Rust-Port fehlen ~15 Felder.
+        // Analytics-Reads (Welle A-Rest, 12.6. nativ): /stats, /analytics/
+        // streamer/:login und /sessions/:session_id sind shape-genaue Neuports
+        // nach den zeilengenauen Python-Verträgen (die früheren Versuche in
+        // streamers.rs waren shape-inkompatibel und bleiben unregistriert).
+        // /stats: EventSub-Sektion via EventSubStatsSource-Port (tb-bot);
+        // /sessions: dynamischer SELECT-*-Mapper (Python _row_to_dict-Parität).
         .route(
             &format!("{base}/analytics/comparison"),
             get(streamers::analytics_comparison_handler),
+        )
+        .route(&format!("{base}/stats"), get(stats_native::stats_handler))
+        .route(
+            &format!("{base}/analytics/streamer/:login"),
+            get(streamer_analytics_native::streamer_analytics_native_handler),
+        )
+        .route(
+            &format!("{base}/sessions/:session_id"),
+            get(session_detail::session_detail_handler),
         )
         // Streamer-Endpoints: kompletter /streamers-Baum läuft bewusst über
         // den Legacy-Fallback-Proxy zum Python-Worker, bis Partner-Lifecycle
@@ -196,6 +203,9 @@ pub fn build_internal_router(
         .layer(Extension(EventSubDispatcherExt(dispatcher)))
         .layer(Extension(handlers::raid::ManualRaidExt(manual_raid)))
         .layer(Extension(handlers::raid_oauth::RaidOAuthExt(raid_oauth)))
+        .layer(Extension(handlers::stats_native::EventSubStatsExt(
+            eventsub_stats,
+        )))
         .layer(Extension(idempotency::IdempotencyState::new()))
         .layer(Extension(LegacyProxyExt(legacy_proxy)))
         .layer(Extension(ExpectedToken(token.clone())))

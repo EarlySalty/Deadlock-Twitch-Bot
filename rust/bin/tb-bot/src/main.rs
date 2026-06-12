@@ -537,6 +537,10 @@ async fn main() {
         Some(dispatcher),
         manual_raid_port,
         raid_oauth_port,
+        // EventSub-Sektion von GET /stats: noch nicht an den Rust-
+        // SubscriptionManager verdrahtet — Verhalten wie Pythons
+        // Exception-Catch (s. stats_native).
+        None,
         legacy_proxy,
     );
 

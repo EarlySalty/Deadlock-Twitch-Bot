@@ -296,3 +296,38 @@ Fehler dort teuer/sichtbar sind — und Stripe bzw. die DB-Queue ohnehin Retry-S
   aus (betrifft Re-Auth über Dashboard 8765 + /streamers-Verify-Pfade).
 - **Nebenbefund:** `bot/billing/catalog.py:21` — Kommentar sagt
   „45-day free trial", Konstante ist 30. Laufzeitwert 30 ist korrekt.
+
+## Stand 12.6. spät — Analytics-Triple nativ (/stats, /analytics/streamer, /sessions)
+
+- **Drei Routen nativ** (Worktree-Drafts von Sonnet-Agents + hartes Review +
+  Live-Diff): `handlers/session_detail.rs` (dynamischer SELECT-*-Mapper —
+  künftige Spalten kommen wie in Pythons `_row_to_dict` automatisch mit),
+  `handlers/stats_native.rs`, `handlers/streamer_analytics_native.rs`.
+  Die alten shape-inkompatiblen Versuche in `streamers.rs` bleiben
+  unregistriert (Referenz).
+- **Verifikation:** sessions/:id 4 echte Prod-Sessions + 404/400 = 0 Diffs.
+  /stats nach Fixrunde: Top-Level-Keymenge identisch, monetization +
+  eventsub-DB-Teile 0 Diffs, verbleibende Diffs = Live-Daten-Drift zwischen
+  den Requests. analytics/streamer: beide Empty-Varianten byte-gleich.
+- **Review-Funde in den Drafts (Typ-Drift-Klasse, vor dem Commit gefixt):**
+  (a) Partner-State-View liefert INTEGER/TEXT — bool/DateTime-Decode schlug
+  still fehl (`unwrap_or(None)`) → alle `is_partner=0`; (b) Monetization-
+  Cutoff als String gegen TIMESTAMPTZ gebunden → Sektion fehlte still
+  (sqlx sendet konkretes TEXT, psycopg „unknown"); (c) Agent-Test-DDLs waren
+  NICHT prod-treu (BOOLEAN/TIMESTAMPTZ statt INTEGER/TEXT) und versteckten
+  beides — DDLs korrigiert; (d) /stats-Vertrag des Extraktor-Agents enthielt
+  4 Fremd-Sektionen, echte Quelle ist `_dashboard_stats` (tracked/category/
+  avg_* + eventsub + monetization, je try/except).
+- **Zwei Python-Prod-Bugs dokumentiert:**
+  (1) `analytics/streamer` crasht in Python seit der Postgres-Migration für
+  jeden Streamer MIT Daten — `TIME(s.started_at)` in
+  `backend_extended.py:_get_session_list` ist SQLite-Syntax →
+  `{"error":"Internal error","empty":true}`; das Streamer-Dashboard zeigte
+  deshalb nie Analytics. Der native Port repariert das.
+  (2) Pythons Monetization-subs-Query `is_gift=1` gegen die BOOLEAN-Spalte
+  schlägt fehl → subs immer 0; Rust nutzt `is_gift IS TRUE` (bewusste
+  Abweichung, liefert echte Werte).
+- **EventSub-`active_*`-Listen:** kommen aus In-Process-State — Python 8779
+  liefert seit dem Takeover Stales, Rust leere Listen bis der
+  `EventSubStatsSource`-Port an den SubscriptionManager verdrahtet ist
+  (Followup). Die DB-Capacity-Teile sind paritätisch.

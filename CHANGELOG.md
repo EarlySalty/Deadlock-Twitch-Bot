@@ -1,3 +1,11 @@
+## #155 — Streamer-Analytics repariert + drei Analytics-Routen nativ in Rust
+
+**Ausgangslage:** Die Analytics-Ansicht im Streamer-Dashboard war für jeden Streamer mit Daten kaputt — und zwar schon seit der Umstellung der Datenbank auf Postgres: Die zentrale Session-Abfrage nutzte eine SQLite-Funktion (`TIME(...)`), die Postgres nicht kennt. Jede Anfrage endete mit „Internal error", das Dashboard zeigte dauerhaft „keine Daten". Zusätzlich standen drei interne Lese-Routen (/stats, Streamer-Analytics, Session-Detail) noch auf dem Python-Umweg, weil frühere Rust-Versuche die Antwort-Struktur nicht exakt trafen.
+
+**Was wurde geändert:** Alle drei Routen sind jetzt shape-genau nativ in Rust — gebaut aus zeilengenauen Verträgen gegen den Python-Quelltext und gegen die laufende Python-API mit echten Produktionsdaten verglichen. Die Session-Detail-Route liest wie Python dynamisch alle Spalten (künftige Felder kommen automatisch mit). Die Stats-Route liefert exakt die Python-Sektionen inklusive Monetization (Werbepausen mit Viewer-Drop-Berechnung, Hype Trains, Bits, Subs). Beim Vergleich flogen zwei weitere schlafende Python-Bugs auf: Die Sub-Geschenk-Zählung verglich ein Ja/Nein-Feld mit einer Zahl (schlug still fehl, Subs waren immer 0 — in Rust korrekt umgesetzt), und der Verifikations-Status der Partner wurde in einem früheren Rust-Entwurf durch einen Typ-Fehler still verschluckt (alle Partner erschienen als unverifiziert — vor dem Release gefixt).
+
+**Wie es jetzt funktioniert:** Streamer öffnen ihr Dashboard → die Analytics laden wieder echte Daten (Sessions, Retention, Chat-Aktivität, Vergleich mit ähnlichen Kanälen). Verifiziert wurde mit echten Produktions-Sessions: Session-Details sind feldgenau identisch zur Python-Antwort, die Stats-Aggregate ebenso; nur die Live-Zähler unterscheiden sich um die Sekunden zwischen zwei Abfragen.
+
 ## #154 — Sicherheitskonzept: Passwortmanager als Phishing-Schutz
 
 **Ausgangslage:** Der Abschnitt zur menschlichen Schutzebene nannte den Passwortmanager bisher nur als Speicher für lange, einzigartige Passwörter. Sein vielleicht stärkster Effekt fehlte: Er ist selbst ein Phishing-Schutz.
