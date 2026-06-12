@@ -8,6 +8,7 @@ pub mod overview;
 pub mod raids;
 pub mod streamers;
 pub mod ads_schedule;
+pub mod category_leaderboard;
 pub mod loyalty_curve;
 pub mod lurker_analysis;
 pub mod raid_analytics;

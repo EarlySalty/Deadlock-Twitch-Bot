@@ -1,3 +1,12 @@
+## #184 — Category-Leaderboard nativ in Rust
+
+**Ausgangslage:** Der Category-Leaderboard-Endpoint lief noch über den Fallback-Proxy.
+
+**Was wurde portiert:**
+- `GET /twitch/api/v2/category-leaderboard`: Rangliste aller Streamer aus `twitch_stats_category` nach Durchschnitts- oder Peak-Viewer. Optionaler `tier`-Filter (starter/rising/established/featured/top) wird Rust-seitig auf den avg_vc-Wert angewendet. `exclude_external=1` begrenzt auf Streamer unter 100 Ø-Viewern via `HAVING AVG <= 100`. Gibt die eigene Position immer zurück, auch wenn sie außerhalb des `limit`-Fensters liegt. `yourTier` wird aus dem avg_vc der Ergebnismenge berechnet (Fallback auf twitch_stream_sessions wenn der Streamer nicht in den Category-Daten ist).
+
+**Technisch:** Ein SQL-Query mit bedingtem `HAVING`-Clause, Rest in Rust. `BOOL_OR(is_partner)` fasst das Partner-Flag per Streamer zusammen. Tier-Klassifikation als reine Funktion (`< 15`, `< 50`, `< 150`, `< 500`, else `top`).
+
 ## #183 — Lurker-Analysis nativ in Rust
 
 **Ausgangslage:** Der Lurker-Analysis-Endpoint lief noch über den Fallback-Proxy.
