@@ -1,10 +1,12 @@
-## #161 — EventSub 403-Spam gestoppt (xoralle, berserkkoo)
+## #161 — Chat-EventSub-Reconcile: `channel:bot`-Scope-Gate nachgerüstet (Python-Parität)
 
-**Ausgangslage:** Für Kanäle, bei denen der Bot-Account gebannt wurde oder der Streamer externe EventSub-Subscriptions gesperrt hat, schlägt Twitch mit HTTP 403 zurück. Der Reconciler lief alle 30 Minuten durch alle Partner-Kanäle und versuchte es jedes Mal erneut — mit demselben Ergebnis. Das erzeugte konstante Warn-Logs und löste stündlich Discord-Alerts aus, obwohl kein Code-Bug vorlag.
+**Ausgangslage:** Der Rust-Chat-Reconciler versuchte alle 30 Minuten, `channel.chat.message`- und `channel.chat.notification`-Subscriptions für ALLE aktiven Partner-Kanäle anzulegen — ohne zu prüfen, ob der Streamer dem Bot überhaupt die `channel:bot`-Berechtigung erteilt hat. Twitch lehnt solche Subscription-Versuche mit HTTP 403 ab. Für xoralle und berserkkoo (kein `channel:bot`-Grant) erzeugte das alle 30 min konstante Warn-Logs und löste stündliche Discord-Alerts aus.
 
-**Was wurde geändert:** Der `SubscriptionManager` führt jetzt ein In-Memory-Set `perm_failed`. Beim ersten 403 wird der betroffene `(sub_type, broadcaster_id)`-Schlüssel dort eingetragen und eine einmalige Warn-Meldung geloggt ("Bot gebannt oder Kanal gesperrt — kein weiterer Retry bis Neustart"). Alle folgenden Reconcile-Läufe skippen diesen Eintrag lautlos auf Debug-Level. Beim Bot-Neustart wird einmal erneut versucht — bleibt das 403, landet der Kanal wieder im Set.
+**Was war das Python-Verhalten:** `join_partner_channels()` jointe `twitch_raid_auth` per INNER JOIN und prüfte danach `"channel:bot" in scopes` — Kanäle ohne Grant wurden still übersprungen, nie erst versucht.
 
-**Jetzt:** xoralle und berserkkoo werden beim nächsten Reconcile-Lauf (spätestens in 30 min) ein letztes Mal mit Warn-Log quittiert und danach aus dem Alert-Radar verschwinden, solange der Bot-Account in diesen Kanälen gebannt bleibt.
+**Was wurde geändert:** Die Reconcile-Query joiniert jetzt `twitch_raid_auth` und filtert auf `scopes LIKE '%channel:bot%'` sowie `needs_reauth = FALSE` — exakt die Python-Logik. Nur Kanäle, die dem Bot die Chat-Berechtigung explizit erteilt haben, werden für Chat-Subscriptions berücksichtigt. Als zweite Sicherheitsschicht trägt der `SubscriptionManager` trotzdem aufgetretene 403-Fehler in ein In-Memory-`perm_failed`-Set ein, damit auch unerwartete Randfälle (Grant zwischenzeitlich widerrufen, Bot gebannt) nicht endlos retryed werden.
+
+**Jetzt:** Startup und jeder weitere Reconcile laufen sauber durch — `ok=45 failed=0`, kein 403-Warn, kein Alert-Spam.
 
 ## #160 — Chat-Bot komplett auf Rust umgestellt (Welle B: Cutover vollzogen)
 

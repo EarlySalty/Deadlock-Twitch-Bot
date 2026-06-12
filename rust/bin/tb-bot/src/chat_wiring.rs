@@ -262,8 +262,10 @@ impl ChatRuntime {
 
 /// „Join" im Webhook-Modell: für jeden Partner- und Monitored-Kanal die
 /// `channel.chat.message`/`channel.chat.notification`-Subscriptions sicherstellen.
-/// Kanäle ohne `channel:bot`-Autorisierung schlagen einzeln fehl (Log) —
-/// identisch zum Python-Scope-Filter-Verhalten beim Join.
+/// Nur Kanäle mit erteiltem `channel:bot`-Scope erhalten Chat-Subscriptions —
+/// Python-Parität: `join_partner_channels()` filtert via INNER JOIN auf
+/// `twitch_raid_auth` + `"channel:bot" in scopes`. Kanäle ohne Grant werden
+/// nie erst versucht, wodurch das 403-Rauschen entfällt.
 async fn reconcile_chat_subscriptions(
     manager: &SubscriptionManager,
     pool: &PgPool,
@@ -272,11 +274,11 @@ async fn reconcile_chat_subscriptions(
     let rows: Vec<(String, String)> = match sqlx::query_as(
         "SELECT LOWER(ps.twitch_login), ps.twitch_user_id \
          FROM twitch_streamers_partner_state ps \
-         WHERE ps.is_partner_active = 1 AND COALESCE(ps.twitch_user_id, '') <> '' \
-         UNION \
-         SELECT LOWER(s.twitch_login), s.twitch_user_id \
-         FROM twitch_streamers s \
-         WHERE COALESCE(s.is_monitored_only, 0) = 1 AND COALESCE(s.twitch_user_id, '') <> ''",
+         JOIN twitch_raid_auth ra ON ra.twitch_user_id = ps.twitch_user_id \
+         WHERE ps.is_partner_active = 1 \
+           AND COALESCE(ps.twitch_user_id, '') <> '' \
+           AND ra.needs_reauth = FALSE \
+           AND ra.scopes LIKE '%channel:bot%'",
     )
     .fetch_all(pool)
     .await
