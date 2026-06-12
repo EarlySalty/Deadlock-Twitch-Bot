@@ -47,5 +47,9 @@ export DASHBOARD_PORT="${DASHBOARD_PORT:-8769}"
 # Legal-Overrides liegen relativ zum Repo-Root (WorkingDirectory der Unit).
 export TB_LEGAL_PAGES_PATH="${TB_LEGAL_PAGES_PATH:-$ROOT_DIR/data/admin_dashboard/legal_pages.json}"
 export RUST_LOG="${RUST_LOG:-info}"
+# Welle D: Strangler-Fallback — nicht portierte Dashboard-Routen gehen an
+# Python (8765) weiter. Leer setzen ("") deaktiviert den Proxy (404 statt
+# Weiterleitung). Wird erst wirksam, wenn Caddy v2-Pfade auf 8769 flippt.
+export TB_DASHBOARD_LEGACY_FALLBACK_URL="${TB_DASHBOARD_LEGACY_FALLBACK_URL:-http://127.0.0.1:8765}"
 
 exec "$ROOT_DIR/rust/target/release/tb-dashboard"

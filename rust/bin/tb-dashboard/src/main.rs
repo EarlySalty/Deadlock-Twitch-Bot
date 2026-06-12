@@ -33,7 +33,41 @@ async fn main() {
 
     let addr = SocketAddr::from(([127, 0, 0, 1], port));
     let token = settings.internal_api.token.clone();
-    let app = build_router(pool, token);
+    let mut app = build_router(pool.clone(), token);
+
+    // Welle D: Strangler-Fallback-Proxy → Python (8765) für noch nicht
+    // portierte Dashboard-Routen. Ohne konfigurierte URL bleibt der Proxy
+    // aus und unbekannte Pfade antworten wie bisher mit 404.
+    let fallback_url = std::env::var("TB_DASHBOARD_LEGACY_FALLBACK_URL")
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
+    let proxy_ext = match &fallback_url {
+        Some(url) => {
+            app = app.fallback(tb_dashboard_api::proxy::dashboard_fallback_handler);
+            tracing::info!("Strangler-Fallback-Proxy aktiv → {url}");
+            tb_dashboard_api::proxy::DashboardProxyExt(Some(std::sync::Arc::new(
+                tb_dashboard_api::proxy::DashboardLegacyProxy::new(url.clone()),
+            )))
+        }
+        None => tb_dashboard_api::proxy::DashboardProxyExt(None),
+    };
+    app = app.layer(axum::Extension(proxy_ext));
+
+    // Welle D: Session-Auth (Fernet) — Partner-/Admin-Level für native
+    // v2-Routen. Ohne Key bleibt der Extractor fail-closed (Localhost/None).
+    match tb_dashboard_api::DashboardAuthState::fernet_key_from_env() {
+        Some(key) => {
+            let auth_state = tb_dashboard_api::DashboardAuthState::new(pool.clone(), key);
+            app = app.layer(axum::Extension(auth_state));
+            tracing::info!("Dashboard-Session-Auth aktiv (Fernet-Key geladen)");
+        }
+        None => {
+            tracing::warn!(
+                "SESSIONS_ENCRYPTION_KEY fehlt — Partner-/Admin-Session-Auth deaktiviert"
+            );
+        }
+    }
 
     tracing::info!("tb-dashboard lauscht auf {addr}");
     let listener = tokio::net::TcpListener::bind(addr)

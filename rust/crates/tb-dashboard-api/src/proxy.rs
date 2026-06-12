@@ -93,6 +93,11 @@ impl DashboardLegacyProxy {
         let base_url = base_url.into().trim_end_matches('/').to_string();
         let client = reqwest::Client::builder()
             .timeout(UPSTREAM_TIMEOUT)
+            // KRITISCH: 3xx 1:1 an den Client durchreichen. reqwest folgt
+            // Redirects sonst selbst — Login-Flows (302 → Twitch-OAuth bzw.
+            // /analyse) lieferten dann die Zielseite statt des Redirects,
+            // inklusive Folge-Requests an EXTERNE Hosts (SSRF-Risiko).
+            .redirect(reqwest::redirect::Policy::none())
             .build()
             .expect("reqwest-Client-Builder darf nicht fehlschlagen");
         Self { base_url, client }
@@ -550,6 +555,47 @@ mod tests {
             val["x_forwarded_host"].as_str().unwrap_or(""),
             "dashboard.example.com",
             "x-forwarded-host muss transparent durchgereicht werden"
+        );
+    }
+
+    // ─── 8b. Redirects werden 1:1 durchgereicht (nicht verfolgt) ──────────
+    //
+    // Login-Flows antworten mit 302 (→ Twitch-OAuth oder /analyse). Der Proxy
+    // muss den Redirect samt Location an den Client geben — reqwest darf ihm
+    // NICHT selbst folgen (sonst bekommt der Client die Zielseite als 200,
+    // bei externen Locations inkl. ausgehender Requests = SSRF-Risiko).
+
+    #[tokio::test]
+    async fn redirect_wird_durchgereicht_nicht_verfolgt() {
+        let mock_server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/twitch/auth/login"))
+            .respond_with(
+                ResponseTemplate::new(302)
+                    .append_header("location", "https://id.twitch.tv/oauth2/authorize?x=1"),
+            )
+            .mount(&mock_server)
+            .await;
+
+        let app = make_fallback_router(Some(Arc::new(DashboardLegacyProxy::new(
+            mock_server.uri(),
+        ))));
+        let resp = app
+            .oneshot(
+                axum::http::Request::builder()
+                    .uri("/twitch/auth/login")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::FOUND);
+        assert_eq!(
+            resp.headers()
+                .get("location")
+                .and_then(|v| v.to_str().ok()),
+            Some("https://id.twitch.tv/oauth2/authorize?x=1"),
+            "Location muss unverändert beim Client ankommen"
         );
     }
 

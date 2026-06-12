@@ -525,6 +525,18 @@ das meiste kannst du entfernen." Konsequenz für die Migration:
   - 78 Tests grün (inkl. DB-Integration + Refresh-Roundtrip). Nebenbei
     Test-DDL-Drift in den Bans-Handler-Tests gefixt (`event_type`-Spalte +
     `twitch_partners_all_state` fehlten — Query war ihnen davongelaufen).
-- **Nächste Schritte Welle D:** Wiring in tb-dashboard (8769): AuthState +
-  Fallback-Proxy registrieren (`with_connect_info` ist dort schon aktiv),
-  dann v2-Routen wellenweise nativ nach /tmp/welle-d-vertraege/.
+- **Wiring VOLLZOGEN (gleicher Tag):** tb-dashboard (8769) registriert jetzt
+  `DashboardAuthState` (Fernet-Key aus Env, fail-closed ohne Key) und den
+  Fallback-Proxy (`TB_DASHBOARD_LEGACY_FALLBACK_URL`, Default 8765 im
+  Run-Skript; leer = aus). **Zweiter kritischer Proxy-Fund beim Live-Test:**
+  reqwest folgt Redirects per Default — der Proxy lieferte für den
+  Login-302 die ZIELSEITE als 200 aus und folgte sogar externen Locations
+  (id.twitch.tv → SAN-421; SSRF-Risiko). Fix: `redirect::Policy::none()`,
+  3xx gehen 1:1 samt Location an den Client. Auch diese Falle im
+  bestehenden tb-internal-api-Proxy (8776→8779) gegenprüfen. Live nach Fix
+  byte-äquivalent zu Python: extern-Host → 302 Twitch-OAuth, loopback →
+  302 /analyse (Bypass wie heute), unbekannter Pfad → aiohttp-404.
+- **Nächste Schritte Welle D:** Caddy-Flip der v2-Pfade auf 8769 erst mit
+  der ersten nativen Routen-Welle; v2-Routen wellenweise nativ nach
+  /tmp/welle-d-vertraege/ (auth_sessions.md fehlt in /tmp — bei Bedarf neu
+  extrahieren).
