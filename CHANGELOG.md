@@ -1,3 +1,11 @@
+## #164 — EventSub: Chat-Nachrichten erreichen Rust jetzt in Echtzeit
+
+**Ausgangslage:** Seit dem Chat-Cutover (Welle B, 12.6.) liest Rust `channel.chat.message` und `channel.chat.notification` als Webhook-Subscriptions. Die bestehende Python-Bridge (8765) proxyt Twitch-Webhooks an Rust weiter — hatte aber diese beiden Typen nicht auf der Weiterleitungsliste. Die Bridge antwortete Twitch mit 204 und meldete intern „Dispatch completed", schickte die Nachricht aber nie an Rust durch. Einzige Kompensation war der 15-Sekunden-Poll-Loop: Chat-Events kamen mit bis zu 15 Sekunden Verzögerung an.
+
+**Was wurde geändert:** Zwei parallele Fixes. Erstens: Die Bridge leitet `channel.chat.message` und `channel.chat.notification` jetzt explizit an Rust weiter (sofortiger Fix, kein Infrastruktur-Umbau). Zweitens: Neuer nativer EventSub-Webhook-Empfänger in Rust (`WebhookReceiver`, Port 8786, gatedt via `TWITCH_WEBHOOK_SECRET`-Env) — wenn aktiv, ersetzt er den Python-Bridge-Hop komplett durch direkten In-Process-Dispatch mit HMAC-SHA256-Signaturprüfung. Der Receiver antwortet bei Dispatch-Fehler mit 503, damit Twitch die Nachricht automatisch wiederholt.
+
+**Wie es jetzt funktioniert:** Bridge leitet chat.message/notification weiter → Rust empfängt sie im bestehenden Dispatcher-Stack in Echtzeit statt mit 15s Verzögerung. Der native Receiver ist deployed, aber erst aktiv wenn Caddy auf Port 8786 umgeleitet und das Secret gesetzt ist — Rollout ohne Breaking Change.
+
 ## #163 — EventSub: 429- und 401-Fehler stumm schalten
 
 **Ausgangslage:** Die Fehlerbehandlung beim EventSub-Subscription-Erstellen kannte nur einen Sonderfall: HTTP 403 (Bot gebannt / Kanal gesperrt). Alle anderen HTTP-Fehler — darunter 429 (Rate-Limit) und 401 (App-Token abgelaufen) — landeten im gleichen warn!-Zweig. Da der Chat-Reconcile-Loop alle 30 Minuten für alle ~48 aktiven Partner-Kanäle läuft, würde ein temporäres Rate-Limit oder ein kurzzeitig ungültiger App-Token dieselbe Spam-Flut im Discord auslösen wie der 403-Bug, der diese Audit-Runde ausgelöst hat.

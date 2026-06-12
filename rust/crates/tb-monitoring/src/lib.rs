@@ -35,6 +35,8 @@ pub mod stats;
 pub mod stream;
 pub mod subscriptions;
 pub mod telemetry;
+pub mod webhook_receiver;
+pub use webhook_receiver::WebhookReceiver;
 
 pub use announce::{
     AnnounceConfigStore, AnnouncementSettings, AnnouncementTransport, BrokerAnnouncementSink,

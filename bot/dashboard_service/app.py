@@ -501,6 +501,12 @@ def build_dashboard_service_app(
             "channel.shoutout.receive",
             "channel.channel_points_automatic_reward_redemption.add",
             "channel.channel_points_custom_reward_redemption.add",
+            # Welle B (Chat-Cutover 12.6.): der native Rust-Chat liest
+            # channel.chat.message/.notification als Webhook-Subs — die Bridge
+            # muss sie an 8776 durchreichen, sonst lehnt der Webhook-Server sie
+            # mit "ohne registrierten Callback" ab und Twitch bekommt Fehler.
+            "channel.chat.message",
+            "channel.chat.notification",
         )
 
         def _build_forwarded_eventsub_condition(

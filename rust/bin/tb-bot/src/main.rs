@@ -471,6 +471,37 @@ async fn main() {
         Arc::new(tb_monitoring::epoch_clock),
     ));
 
+    // Nativer EventSub-Webhook-Empfänger (12.6.): eigener Loopback-Listener,
+    // Caddy proxyt /twitch/eventsub/callback hierher — ersetzt die
+    // Python-Bridge-Strecke (8765 → HTTP-Hop → 8776), die Notifications auf
+    // stillen Pfaden verlor. Signatur = Auth; Dedup = persistenter Guard.
+    if let Ok(secret) = std::env::var("TWITCH_WEBHOOK_SECRET") {
+        let secret = secret.trim().to_string();
+        if !secret.is_empty() {
+            let receiver_port: u16 = std::env::var("TB_EVENTSUB_RECEIVER_PORT")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(8786);
+            let receiver =
+                Arc::new(tb_monitoring::WebhookReceiver::new(secret, dispatcher.clone()));
+            let router = receiver.router();
+            tokio::spawn(async move {
+                let addr = SocketAddr::from(([127, 0, 0, 1], receiver_port));
+                match tokio::net::TcpListener::bind(addr).await {
+                    Ok(listener) => {
+                        tracing::info!("EventSub-Webhook-Empfänger lauscht auf {addr}");
+                        if let Err(e) = axum::serve(listener, router).await {
+                            tracing::error!("EventSub-Webhook-Empfänger beendet: {e}");
+                        }
+                    }
+                    Err(e) => {
+                        tracing::error!("EventSub-Webhook-Empfänger: Bind-Fehler {addr}: {e}")
+                    }
+                }
+            });
+        }
+    }
+
     // Poll-Loop: das Cutover-Gate. Default AUS — Python bleibt alleiniger
     // Live-Writer, bis der Flip (04-cutover-plan) explizit erfolgt.
     let poll_enabled = std::env::var("TB_MONITORING_POLL_ENABLED")
