@@ -442,3 +442,42 @@ das meiste kannst du entfernen." Konsequenz für die Migration:
   nachts kaum Chat-Aufkommen).
 - **Rollback:** `10-chat.conf` löschen + `TWITCH_RUST_CHAT_TAKEOVER`-Zeile
   aus dem Worker-Drop-in entfernen → beide Services neu starten.
+
+## Stand 12.6. mittags — Webhook-Eingang nativ (Fix nach Chat-Flip)
+
+- **Befund („schau obs geht dann fixen"):** Nach dem Chat-Flip kam 9h lang
+  KEIN Chat-Event an. Dreistufige Ursache: (1) Die 8765-Bridge hatte keine
+  Callbacks für `channel.chat.message`/`.notification` registriert →
+  „ohne registrierten Callback abgelehnt" + HTTP 503 → Twitch-Retries.
+  (2) Nach Registrierungs-Fix (23 statt 21 Typen) ackte die Bridge mit 204,
+  verschluckte die Events aber weiter auf einem stillen Pfad — reproduziert
+  mit lokal signierter Notification: 204, kein Forward, keine Outbox, kein
+  Fehler-Log. (3) Die Bridge meldete sogar „Dispatch completed" für frische
+  stream.online-Events, die NIE im Rust ankamen — die gesamte
+  Bridge-Zustellung war still tot und wurde nur vom 15s-Poll-Loop kaschiert.
+- **Fix (Architektur statt Flicken):** Nativer EventSub-Empfänger
+  `tb-monitoring::webhook_receiver` — HMAC-SHA256-Verify (konstantzeitig),
+  Challenge-Echo, Revocation-Log, direkter In-Process-Dispatch (kein
+  HTTP-Hop). Eigener Loopback-Listener im tb-bot (TB_EVENTSUB_RECEIVER_PORT,
+  Default 8786). Caddy: dedizierter `@eventsub_callback`-Matcher VOR dem
+  8765-Block → 8786 (Backup `Caddyfile.bak-eventsub-cutover`, nach Edit
+  `docker restart caddy`). Damit laufen ALLE EventSub-Typen nativ — die
+  Python-Bridge ist aus der Zustellkette raus (Rollback: Caddy-Block
+  entfernen).
+- **E2E-Beweis über die echte öffentliche Strecke:** Test-Sub auf den
+  Bot-eigenen Kanal (broadcaster=bot=1422558159; bleibt als permanenter
+  E2E-Kanal bestehen) → Challenge „beantwortet" im Journal → Bot-Send in
+  eigenen Kanal → „Notification angenommen broadcaster=
+  deutschedeadlockcommunity" mit echter Twitch-msg_id. Bad-Sig → 403.
+- **Warum kein organischer Chat-Beweis:** Live-Check 13:10: von 46 Partnern
+  mit Chat-Sub genau 1 live (Project Zomboid, 1 Viewer). live_state führt
+  ~129 „live"-Einträge — größtenteils stale (separates Monitoring-Thema,
+  beobachten). Organischer Raw-Chat-Beweis steht aus bis zur Prime-Time.
+- **Nebenbefunde:** (a) Die alte Bot-Kanal-Test-Sub wurde von Twitch nach
+  der Bridge-Ära revoked — Revocations landen künftig sichtbar im
+  Receiver-Log. (b) Debug-Drop-in (RUST_LOG tb_monitoring::dispatch,tb_chat)
+  bleibt bis zur organischen Bestätigung aktiv, dann entfernen.
+  (c) Python-Bridge-Registrierungs-Fix (23 Typen) bleibt als
+  Rollback-Fallback im Code. (d) Boot-Token-Refreshes pro Prozessstart
+  normal; Per-Send-Refresh-Verdacht von 12:04 war Folge der häufigen
+  Service-Restarts der Parallel-Session.
