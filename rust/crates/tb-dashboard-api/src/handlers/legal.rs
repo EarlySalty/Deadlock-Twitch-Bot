@@ -1358,6 +1358,128 @@ async fn send_security_report_dm(
     }
 }
 
+/// Blockierender Teil der Opus-Analyse — läuft in spawn_blocking.
+fn run_opus_analysis_blocking(
+    title: String,
+    description: String,
+    contact: String,
+) -> Result<String, String> {
+    let contact_line = if contact.is_empty() {
+        "—".to_string()
+    } else {
+        contact
+    };
+    let prompt = format!(
+        "Du bist ein Security-Analyst für das Deadlock-Twitch-Bot-Repo unter \
+         /home/naniadm/Documents/Deadlock-Twitch-Bot.\n\n\
+         Ein externer White-Hat hat folgende Schwachstelle gemeldet:\n\
+         Titel: {title}\n\
+         Kontakt: {contact_line}\n\
+         Report:\n{description}\n\n\
+         Aufgaben:\n\
+         1. Lies den relevanten Code im Repo und prüfe, ob die beschriebene Lücke \
+         real ist.\n\
+         2. Bewerte: echte Lücke oder Fehlalarm? Begründe ausführlich anhand \
+         konkreter Stellen im Code.\n\
+         3. Falls echte Lücke: schätze Schweregrad (Low / Medium / High / Critical) \
+         und erkläre das Angriffsszenario.\n\
+         4. Falls die Lücke sicher fixbar ist (kein risikoreicher Eingriff): \
+         repariere den Bug und erstelle einen Commit (kein Push).\n\
+         5. Fasse alles für eine Discord-DM zusammen — maximal 1800 Zeichen, \
+         klar strukturiert mit Bewertung, Begründung und Fix-Status.\n\
+         Antworte NUR mit dem DM-Text, keine weitere Präambel.",
+    );
+
+    let output = std::process::Command::new("/home/naniadm/.local/bin/claude")
+        .args(["-p", "--model", "opus", "--dangerously-skip-permissions"])
+        .arg(&prompt)
+        .current_dir("/home/naniadm/Documents/Deadlock-Twitch-Bot")
+        .output()
+        .map_err(|e| format!("claude CLI start: {e}"))?;
+
+    if output.status.success() {
+        let text = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        if text.is_empty() {
+            Err("Opus hat keinen Output geliefert".into())
+        } else {
+            Ok(text)
+        }
+    } else {
+        Err(String::from_utf8_lossy(&output.stderr).trim().to_string())
+    }
+}
+
+/// Sendet die Opus-Analyse als Discord-DM nach Abschluss.
+async fn send_analysis_dm(token: &str, analysis: &str) {
+    let client = match reqwest::Client::builder()
+        .timeout(Duration::from_secs(10))
+        .build()
+    {
+        Ok(c) => c,
+        Err(e) => {
+            tracing::warn!("Opus-DM client: {e}");
+            return;
+        }
+    };
+    let auth = format!("Bot {token}");
+    let send_result = client
+        .post("https://discord.com/api/v10/users/@me/channels")
+        .header("Authorization", &auth)
+        .json(&serde_json::json!({"recipient_id": DISCORD_OWNER_USER_ID}))
+        .send()
+        .await;
+    let dm_resp: serde_json::Value = match send_result {
+        Ok(r) => match r.json().await {
+            Ok(v) => v,
+            Err(e) => {
+                tracing::warn!("Opus-DM kanal JSON: {e}");
+                return;
+            }
+        },
+        Err(e) => {
+            tracing::warn!("Opus-DM kanal: {e}");
+            return;
+        }
+    };
+    let Some(channel_id) = dm_resp["id"].as_str() else {
+        tracing::warn!("Opus-DM: kein channel_id");
+        return;
+    };
+    let header_line = "🔍 **Opus Security-Analyse**\n\n";
+    let max_body = 2000 - header_line.len();
+    let body: String = analysis.chars().take(max_body).collect();
+    let content = format!("{header_line}{body}");
+    if let Err(e) = client
+        .post(format!(
+            "https://discord.com/api/v10/channels/{channel_id}/messages"
+        ))
+        .header("Authorization", &auth)
+        .json(&serde_json::json!({"content": content}))
+        .send()
+        .await
+    {
+        tracing::warn!("Opus-DM senden: {e}");
+    }
+}
+
+/// Startet die Opus-Analyse als Hintergrundtask — blockiert die HTTP-Response nicht.
+fn spawn_opus_analysis(title: String, description: String, contact: String, token: String) {
+    tokio::spawn(async move {
+        let t = title.clone();
+        let result =
+            tokio::task::spawn_blocking(move || run_opus_analysis_blocking(title, description, contact))
+                .await;
+        match result {
+            Ok(Ok(analysis)) => {
+                tracing::info!(title = %t, "Opus-Analyse abgeschlossen, sende DM");
+                send_analysis_dm(&token, &analysis).await;
+            }
+            Ok(Err(e)) => tracing::warn!(title = %t, error = %e, "Opus-Analyse fehlgeschlagen"),
+            Err(e) => tracing::warn!(title = %t, error = %e, "spawn_blocking panic"),
+        }
+    });
+}
+
 fn render_report_result(ok: bool, msg: &str) -> Response {
     let (class, heading) = if ok {
         ("msg-ok", "Report eingegangen")
@@ -1400,9 +1522,15 @@ pub async fn security_report_handler(Form(form): Form<SecurityReportForm>) -> Re
         );
     }
 
+    let discord_token = std::env::var("DISCORD_TOKEN").unwrap_or_default();
+
     match send_security_report_dm(&title, &description, &contact).await {
         Ok(()) => {
-            tracing::info!(title = %title, "Security Report eingegangen und als DM weitergeleitet");
+            tracing::info!(title = %title, "Security Report eingegangen, starte Opus-Analyse");
+            // Opus analysiert und fixt ggf. den Bug im Hintergrund — non-blocking.
+            if !discord_token.is_empty() {
+                spawn_opus_analysis(title, description, contact, discord_token);
+            }
             render_report_result(
                 true,
                 "Report eingegangen — danke. Wir schauen uns das an und melden uns bei Rückfragen.",

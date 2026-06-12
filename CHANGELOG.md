@@ -1,4 +1,4 @@
-## #159 — Sicherheitsseite: Responsible Disclosure + Security-Report-Formular
+## #159 — Sicherheitsseite: Responsible Disclosure, Meldeformular + Opus-Analyse
 
 **Ausgangslage:** Die `/twitch/sicherheit`-Seite endete mit einem knappen Einzeiler „Hinweise willkommen, bitte vertraulich melden". Kein klarer Rahmen, wer was darf, und kein direkter Meldeweg — wer eine Lücke gefunden hat, musste selbst herausfinden, wie er sie loswird.
 
@@ -6,7 +6,9 @@
 
 Erstens ein vollständiger *Security Testing & Responsible Disclosure*-Abschnitt: White-Hat-Testing ist jetzt ausdrücklich erlaubt. Die Regeln stehen klar da — kein Schaden, keine Datenexfiltration, kein Social Engineering gegen Nutzer, dafür Pflicht zu einem reproduzierbaren Report. Wer sich daran hält, hat keine Konsequenzen zu befürchten; DoS, Backdoors und echte Exfiltration fallen ausdrücklich nicht darunter.
 
-Zweitens ein eingebettetes Meldeformular direkt auf der Seite: Kurztitel, detaillierter Reproduktionsweg (Pflichtfeld, mindestens 100 Zeichen), optionaler Kontakt. Die Hinweisbox macht explizit klar, dass nur echte, selbst geprüfte Lücken erwartet werden — keine KI-Halluzinationen, keine Vermutungen ohne Eigenprüfung. Nach dem Absenden sendet der Rust-Handler (`tb-dashboard`, Port 8769) direkt über die Discord-HTTP-API eine DM an den Bot-Eigentümer — kein Umweg über Python-Cogs, kein Zwischen-Service. Der Kanal wird pro Anfrage frisch geöffnet; der `DISCORD_TOKEN` wird aus der Infisical-Umgebung gelesen, die beim Service-Start bereits geladen ist.
+Zweitens ein eingebettetes Meldeformular direkt auf der Seite: Kurztitel, detaillierter Reproduktionsweg (Pflichtfeld, mindestens 100 Zeichen), optionaler Kontakt. Die Hinweisbox macht explizit klar, dass nur echte, selbst geprüfte Lücken erwartet werden — keine KI-Halluzinationen, keine Vermutungen ohne Eigenprüfung. Nach dem Absenden sendet der Rust-Handler (`tb-dashboard`, Port 8769) direkt über die Discord-HTTP-API eine DM an den Bot-Eigentümer — kein Umweg über Python-Cogs, kein Zwischen-Service.
+
+Drittens ein lokaler Opus-Analyse-Flow: Sobald die Eingangs-DM raus ist, startet `tb-dashboard` im Hintergrund einen `tokio::spawn`-Task, der via `spawn_blocking` das Claude-CLI (`claude -p --model opus --dangerously-skip-permissions`) headless aufruft. Opus liest den Report, prüft den relevanten Code im Repo auf die beschriebene Lücke, bewertet Schweregrad und Echtheit, und committet einen Fix falls sicher möglich. Das Ergebnis kommt als zweite Discord-DM mit dem vollständigen Analysebericht. Die HTTP-Response geht sofort zurück — der Nutzer wartet nicht auf Opus.
 
 ## #158 — Spam-Bot-Bans werden jetzt im Live-Ban-Feed sichtbar
 
