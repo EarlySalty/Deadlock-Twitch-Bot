@@ -1,0 +1,21 @@
+[package]
+name = "tb-chat"
+version = "0.1.0"
+edition.workspace = true
+
+[dependencies]
+async-trait = { workspace = true }
+chrono      = { workspace = true }
+rand        = { workspace = true }
+reqwest     = { workspace = true }
+serde       = { workspace = true }
+serde_json  = { workspace = true }
+sqlx        = { workspace = true }
+tokio       = { workspace = true, features = ["time", "sync"] }
+tracing     = { workspace = true }
+tb-domain   = { workspace = true }
+tb-transport-twitch = { workspace = true }
+
+[dev-dependencies]
+tokio    = { workspace = true, features = ["rt-multi-thread", "macros"] }
+wiremock = { workspace = true }

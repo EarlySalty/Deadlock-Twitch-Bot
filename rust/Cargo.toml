@@ -13,6 +13,7 @@ members = [
     "crates/tb-raid",
     "crates/tb-http-core",
     "crates/tb-analytics",
+    "crates/tb-chat",
     "crates/tb-dashboard-api",
     "crates/tb-internal-api",
     "bin/tb-dashboard",
@@ -60,6 +61,7 @@ tb-monitoring = { path = "crates/tb-monitoring" }
 tb-raid = { path = "crates/tb-raid" }
 tb-http-core     = { path = "crates/tb-http-core" }
 tb-analytics     = { path = "crates/tb-analytics" }
+tb-chat          = { path = "crates/tb-chat" }
 tb-dashboard-api = { path = "crates/tb-dashboard-api" }
 tb-internal-api  = { path = "crates/tb-internal-api" }
 url = "2"
