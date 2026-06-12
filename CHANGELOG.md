@@ -1,3 +1,17 @@
+## #192 — Python-Bot abgeschaltet: Rust übernimmt alle verbleibenden API-Routen nativ
+
+**Ausgangslage:** Trotz vollständiger Chat-, Monitoring- und Raid-Übernahme durch Rust lief der Python-Prozess noch weiter — einzig wegen 5 interner API-Routen die kein Rust-Pendant hatten und über den Legacy-Proxy an Python auf Port 8779 weitergeleitet wurden. Das hieß: Python brauchte Speicher, startete voll durch und hätte einen API-Fehler auf 8779 produziert sobald die Route gerufen wird.
+
+**Was umgestellt wurde:** Alle 5 noch proxied Routen haben jetzt native Rust-Handler:
+- `GET /debug/observability` und `GET /debug/chatters/:login`: liefern leere JSON-Antworten (diese Routen zeigten Python-in-Process-State der ohnehin nicht mehr relevant ist)
+- `POST /eventsub/processing/requeue`: antwortet mit `ok: true` (Rust verarbeitet Events direkt in der Pipeline, kein manuelles Requeue nötig)
+- `POST /streamers/:login/chat-action`: gibt 503 zurück mit Erklärung — der Bot-OAuth-Token liegt in tb-bot und ist aus tb-internal-api nicht erreichbar; die Route ist bis zur Bot-Token-Bridge bewusst offen
+- `POST /raid/requirements` (Login im JSON-Body): gibt 503 zurück — Discord-DM-Versand braucht den Discord-Bot der nicht mehr in Python läuft; zu implementieren via Master-Broker (8770)
+
+Danach: `deadlock-twitch-bot.service` (Python) gestoppt und deaktiviert. Port 8779 ist geschlossen.
+
+**Ergebnis:** Nur noch ein Bot-Prozess (`deadlock-twitch-bot-rust.service` auf 8776). Unbekannte Routen gehen nicht mehr an Python, sondern liefern jetzt einen sauberen 404 statt 502 Gateway-Fehler. Zwei Routen (chat-action, raid-requirements) sind bewusst 503 bis die Bot-Token-Bridge bzw. Discord-DM via Broker gebaut ist.
+
 ## #191 — Werbefrei-Plan und Entitlement-Check in Rust nachgezogen
 
 **Problem:** Streamer mit einem bezahlten „Werbefrei"-Plan (z. B. `chat_quiet`, `bundle_werbefrei_analyse` usw.) haben in Rust trotzdem Promos bekommen, wenn der Dashboard-Toggle `promo_disabled` nicht explizit aktiviert war. Python prüft zwei Bedingungen: die `promo_disabled`-Spalte UND ob der aktive Plan das Entitlement `chat.promos.disable` trägt. Rust hat nur die Spalte geprüft.

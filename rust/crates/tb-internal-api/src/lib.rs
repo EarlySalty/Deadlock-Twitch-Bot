@@ -48,9 +48,9 @@ pub fn build_internal_router(
     legacy_proxy: Option<Arc<LegacyProxy>>,
 ) -> Router {
     use handlers::{
-        chat_command, discord_invite, eventsub, global_ban, healthz, market_share, raid,
-        raid_blacklist, raid_oauth as oauth, self_explainer_log, session_detail, stats_native,
-        streamer_analytics_native, streamer_link, streamers, telemetry_routes,
+        chat_command, discord_invite, eventsub, global_ban, healthz, market_share, python_stubs,
+        raid, raid_blacklist, raid_oauth as oauth, self_explainer_log, session_detail,
+        stats_native, streamer_analytics_native, streamer_link, streamers, telemetry_routes,
     };
 
     let base = INTERNAL_API_BASE_PATH; // "/internal/twitch/v1"
@@ -189,12 +189,34 @@ pub fn build_internal_router(
             &format!("{base}/sessions/:session_id"),
             get(session_detail::session_detail_handler),
         )
+        // Stubs für ehemalige Python-only-Routen — Python läuft nicht mehr.
+        // observability + chatters: leere Antworten (Python-in-Process-State entfällt).
+        // eventsub/requeue: Rust verarbeitet nativ, kein manuelles Requeue nötig.
+        // chat-action + raid/requirements: 503 bis Bot-Token-Bridge / Discord-DM via
+        // Master-Broker (8770) implementiert ist.
+        .route(
+            &format!("{base}/debug/observability"),
+            get(python_stubs::observability_handler),
+        )
+        .route(
+            &format!("{base}/debug/chatters/:login"),
+            get(python_stubs::chatters_debug_handler),
+        )
+        .route(
+            &format!("{base}/eventsub/processing/requeue"),
+            post(python_stubs::eventsub_requeue_handler),
+        )
+        .route(
+            &format!("{base}/streamers/:login/chat-action"),
+            post(python_stubs::chat_action_handler),
+        )
+        // Login kommt im POST-Body {"login": "..."}, kein Pfad-Parameter.
+        .route(
+            &format!("{base}/raid/requirements"),
+            post(python_stubs::raid_requirements_handler),
+        )
         // Streamer-CRUD: vollständig nativ portiert.
-        // Ausnahme: POST /streamers/:login/chat-action braucht den live
-        // rotierten Bot-Token des Python-Chats → bleibt im Fallback-Proxy.
         // verify mode=clear/failed liefert 503 (Partner-Lifecycle nicht portiert).
-        // Ebenfalls proxied: GET /debug/observability + /debug/chatters/:login
-        // (Python-In-Process-Bot-State) und POST /eventsub/processing/requeue.
         .route(
             &format!("{base}/streamers"),
             get(streamers::list_handler).post(streamers::add_handler),

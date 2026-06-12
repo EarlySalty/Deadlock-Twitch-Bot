@@ -15,4 +15,5 @@ pub mod stats_native;
 pub mod streamer_analytics_native;
 pub mod streamer_link;
 pub mod streamers;
+pub mod python_stubs;
 pub mod telemetry_routes;
