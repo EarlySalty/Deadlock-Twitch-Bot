@@ -1,3 +1,15 @@
+## #185 — Category-Comparison nativ in Rust
+
+**Ausgangslage:** Der Category-Comparison-Endpoint lief noch über den Fallback-Proxy. Er ist der komplexeste Performance-Endpoint: 9 SQL-Queries, Python-seitige Percentile-Berechnung und eine Peer-Group-Analyse.
+
+**Was wurde portiert:**
+- `GET /twitch/api/v2/category-comparison`: Vergleicht den eigenen Kanal mit dem Category-Durchschnitt und zeigt Perzentile für alle vier Kernmetriken (Ø-Viewer, Peak, 10-Minuten-Retention, Chat-Health).
+- **Percentile-Berechnung** komplett in Rust repliziert: Formel `(below + 0.5 * equal) / total * 100` — identisch zur Python-Referenz `_percentile_of` und genauer als Postgresʼ `PERCENT_RANK()` bei vielen gleichen Werten.
+- **Peer-Group-Analyse** (`_get_peer_group_stats`): Stuft den eigenen Streamer in eine Tier-Klasse ein (starter/rising/established/featured/top, Grenzen: 15/50/150/500 Ø-Viewer), holt Session-Metriken aller Peers via `= ANY($1::text[])`, berechnet Median und Peer-Percentile.
+- `exclude_external=1` filtert Streamer über 100 Ø-Viewern aus der Percentile-Basis heraus (per `HAVING AVG <= 100` auf die jeweiligen Queries), die Peer-Group-Berechnung bleibt davon unberührt.
+
+**Technisch:** 9 Queries, davon Q1/Q2 deine eigenen Tracked- und Session-Stats, Q3 alle Kategorie-Avgs (Basis für Peer-Group + Percentile), Q4–Q8 die sortierten Listen für Peak/Ret/Chat-Percentile, Q9 Peer-Session-Metriken via Array-Bind. `partition_point` in Rust liefert exakte `below`/`equal`-Splits ohne vollständige Sortierung des Arrays.
+
 ## #184 — Category-Leaderboard nativ in Rust
 
 **Ausgangslage:** Der Category-Leaderboard-Endpoint lief noch über den Fallback-Proxy.
