@@ -110,8 +110,8 @@ class ClipFetcher(commands.Cog):
                     # Record fetch history
                     with transaction() as conn:
                         conn.execute(
-                            "INSERT INTO twitch_streamers (twitch_login) VALUES (%s) "
-                            "ON CONFLICT (twitch_login) DO NOTHING",
+                            "INSERT INTO twitch_streamers (twitch_login, is_monitored_only) VALUES (%s, 1) "
+                            "ON CONFLICT (twitch_login) DO UPDATE SET is_monitored_only = COALESCE(twitch_streamers.is_monitored_only, 1)",
                             (streamer,),
                         )
                         conn.execute(
@@ -144,8 +144,8 @@ class ClipFetcher(commands.Cog):
                     # Record error in fetch history
                     with transaction() as conn:
                         conn.execute(
-                            "INSERT INTO twitch_streamers (twitch_login) VALUES (%s) "
-                            "ON CONFLICT (twitch_login) DO NOTHING",
+                            "INSERT INTO twitch_streamers (twitch_login, is_monitored_only) VALUES (%s, 1) "
+                            "ON CONFLICT (twitch_login) DO UPDATE SET is_monitored_only = COALESCE(twitch_streamers.is_monitored_only, 1)",
                             (streamer,),
                         )
                         conn.execute(

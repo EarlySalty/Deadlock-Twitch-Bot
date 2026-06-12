@@ -70,8 +70,8 @@ class ClipManager:
                 # Sicherstellen dass Streamer in twitch_streamers existiert (FK-Anforderung).
                 # Race Condition: Scout kann Streamer löschen während ClipFetcher läuft.
                 conn.execute(
-                    "INSERT INTO twitch_streamers (twitch_login, twitch_user_id) VALUES (%s, %s) "
-                    "ON CONFLICT (twitch_login) DO NOTHING",
+                    "INSERT INTO twitch_streamers (twitch_login, twitch_user_id, is_monitored_only) VALUES (%s, %s, 1) "
+                    "ON CONFLICT (twitch_login) DO UPDATE SET is_monitored_only = COALESCE(twitch_streamers.is_monitored_only, 1)",
                     (streamer_login, twitch_user_id),
                 )
 
