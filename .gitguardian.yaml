@@ -9,7 +9,7 @@
 # und website/src/components/sections/Security.tsx auf.
 version: 2
 secret:
-  ignored-matches:
+  ignored_matches:
     - name: "Demo verschlüsselter Access-Token (Format-Beispiel, Wegwerf-Schlüssel)"
       match: "01027631cc1a318fc855cd096f414d4eb9140a1efaabbe7033619b7376eb2ade6399c5600e0bde49e5a9a314708da992a6e6c430146335861b9766631c795c9379b40f03da76d94ee642ec"
     - name: "Demo verschlüsselter Refresh-Token (Format-Beispiel, Wegwerf-Schlüssel)"
