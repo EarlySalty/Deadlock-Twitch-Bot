@@ -1,3 +1,15 @@
+## #187 — Category-Timings nativ in Rust
+
+**Ausgangslage:** Der Category-Timings-Endpoint lief noch über den Fallback-Proxy. Python lud alle Viewer-Count-Rohdaten in den Speicher und berechnete Mediane in Python.
+
+**Was wurde portiert:**
+- `GET /twitch/api/v2/category-timings?days=30&source=category`: Outlier-resistente Stunden- und Wochentags-Verteilung der gesamten Kategorie. Methode: Median der Streamer-Mediane ("Median of Medians") + P25/P75-Konfidenzband.
+- Statt alle Rohdaten zu laden: Postgres `PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY viewer_count)` direkt per `(streamer, hour)` — reduziert die übertragenen Zeilen von N×Samples auf max. 24×Streamer-Anzahl.
+- P25/P75 mit Python-kompatibler "exclusive"-Quartil-Methode: virtueller Index `(len+1)*q - 1` (0-basiert). Für count < 4 Sonderfall: count=1 → gleicher Wert, count 2-3 → min/max.
+- `source=tracked` liest aus `twitch_stats_tracked`, Default aus `twitch_stats_category`.
+
+**Technisch:** 2 SQL-Queries (hour + DOW), rest reine Rust-Arithmetik. `total_streamers` aus dem Union der Ergebnis-Sets beider Queries.
+
 ## #186 — Audience-Demographics nativ in Rust
 
 **Ausgangslage:** Der aufwändigste Audience-Endpoint lief noch über den Fallback-Proxy. Er enthält eine eigene Engagement-Berechnung, gewichtete Peak-Hour-Analyse und eine 5-Kategorie-Viewer-Klassifikation.
