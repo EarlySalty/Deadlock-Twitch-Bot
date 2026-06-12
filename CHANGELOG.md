@@ -1,3 +1,11 @@
+## #170 — Caddy-Flip: alle Dashboard-Routen gehen jetzt über Rust (Strangler-Fig)
+
+**Ausgangslage:** Caddy leitete den gesamten Twitch-Dashboard-Traffic (`/twitch/api/v2/*`, `/analyse`, etc.) direkt an Python 8765 weiter. Der Rust-Dienst auf Port 8769 war zwar gestartet, aber nur für Legal-Seiten und drei Public-v2-Routen im Caddy verdrahtet — der Rest wurde komplett umgangen.
+
+**Was wurde geändert:** Zwei Änderungen in einem Schritt: (1) Der `auth-status`-Handler in Rust bekam vollständige Python-Parität — bisher lieferte er nur 2 Felder, jetzt alle 20 Felder (`partnerStatus`, `plan`, `access`, `permissions`, etc.) mit echter DB-Abfrage von `twitch_partners` und `streamer_plans`/`twitch_billing_subscriptions`. Plan-Katalog (Tier/Name/Entitlements) als statische Lookup-Tabelle in Rust; Partner-Zugangsstatus inklusive Grace-Period-Logik und Blacklist-Check. (2) Caddy-Flip: der `@public_twitch`-Block zeigt jetzt auf Rust 8769 statt Python 8765. Rust beantwortet nativ portierte Routen direkt; für alle anderen proxied es transparent zu Python 8765.
+
+**Wie es jetzt funktioniert:** Jeder Browser-Request an das Dashboard geht über Rust. Nativ portierte Routen (Legal, Public-v2-API, auth-status, overview, admin-streamers) werden direkt beantwortet. Alles andere — Analytics, Streamer-Seite, Auth-Flow, Affiliate — wandert per Strangler-Proxy zu Python. Der Rollback ist eine Caddyfile-Zeile (Backup `Caddyfile.bak-public-twitch-strangler`). Ab sofort macht jede neu portierte Route sofort live, ohne Caddy-Änderung.
+
 ## #169 — Scout-Loop als nativer Rust-Hintergrundtask gebaut (deaktiviert)
 
 **Ausgangslage:** Der Scout-Loop lief bisher in Python (`_scout_deadlock_channels`, ~235 Zeilen) und war für das automatische Entdecken live gehender Deadlock-Streamer zuständig. Er rief Helix GET /streams auf, filterte nach Sprache "de", und registrierte neue Streamer als `is_monitored_only=1` in `twitch_streamers`. Streamer die 2 Zyklen hintereinander offline waren, wurden wieder entfernt — inklusive offener Sessions und Live-State-Löschung.

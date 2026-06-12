@@ -9,6 +9,8 @@ pub mod global_ban;
 pub mod market;
 pub mod network;
 pub mod overview;
+pub mod partner_access;
+pub mod plan;
 pub mod raid_blacklist;
 pub mod raids;
 pub mod self_explainer_log;
