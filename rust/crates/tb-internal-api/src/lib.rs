@@ -112,6 +112,12 @@ pub fn build_internal_router(
             &format!("{base}/streamers/link-candidates"),
             get(streamer_link::list_handler),
         )
+        // Monitoring-only Streamer anlegen (Clip-Fetcher, Cron-Jobs).
+        // is_monitored_only=1, kein Helix-Lookup, kein Partner-Eintrag.
+        .route(
+            &format!("{base}/streamers/monitoring"),
+            post(streamers::add_monitored_handler),
+        )
         // Markt-Dominanz fürs Admin-Dashboard: nativer GET-Read auf
         // twitch_stats_category; das Python-Dashboard (8765) proxied
         // /twitch/api/v2/market-share hierher.

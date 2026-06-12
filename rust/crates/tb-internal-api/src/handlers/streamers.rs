@@ -265,6 +265,48 @@ pub async fn add_handler(
     }
 }
 
+/// `POST /internal/twitch/v1/streamers/monitoring`
+///
+/// Body: `{"login": "..."}`, optional `"twitch_user_id": "..."`
+/// Legt einen `is_monitored_only = 1`-Eintrag an (Clip-Fetcher, Cron-Jobs).
+/// Kein Helix-Lookup, kein Partner-Eintrag. Idempotent.
+pub async fn add_monitored_handler(
+    auth: AuthLevel,
+    State(pool): State<PgPool>,
+    Json(body): Json<serde_json::Value>,
+) -> Result<impl IntoResponse, ApiError> {
+    if !auth.is_privileged() {
+        return Err(ApiError::unauthorized());
+    }
+
+    let raw = body
+        .get("login")
+        .or_else(|| body.get("twitch_login"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+
+    let login = match normalize_twitch_login(&raw) {
+        Some(l) => l,
+        None => return Err(ApiError::bad_request("invalid or missing login")),
+    };
+
+    let user_id = body
+        .get("twitch_user_id")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+        .map(str::to_string);
+
+    db::add_monitored_streamer(&pool, &login, user_id.as_deref())
+        .await
+        .map_err(|e| {
+            tracing::error!("add_monitored_streamer DB-Fehler: {e}");
+            ApiError::internal()
+        })?;
+
+    Ok((StatusCode::OK, Json(serde_json::json!({"ok": true, "login": login}))))
+}
+
 /// `DELETE /internal/twitch/v1/streamers/:login`
 pub async fn remove_handler(
     auth: AuthLevel,

@@ -422,6 +422,13 @@ class BaseInternalHttpClient:
             message="Bot internal API returned an invalid streamers payload.",
         )
 
+    async def add_monitored_streamer(self, login: str, twitch_user_id: str | None = None) -> None:
+        await self._request_json(
+            "POST",
+            f"{self.api_base_path}/streamers/monitoring",
+            payload={"login": login, "twitch_user_id": twitch_user_id or ""},
+        )
+
     async def add_streamer(self, login: str, *, require_link: bool = False) -> str:
         payload = await self._request_json(
             "POST",

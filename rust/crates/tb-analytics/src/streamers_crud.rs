@@ -178,6 +178,36 @@ pub async fn add_streamer(
     Ok(AddStreamerResult::Added)
 }
 
+// ── POST /streamers/monitoring ────────────────────────────────────────────────
+
+/// Legt einen reinen Monitoring-Eintrag an (`is_monitored_only = 1`).
+///
+/// Wird von Clip-Fetchern und anderen Systemen genutzt, die einen Streamer
+/// als Nebeneffekt in `twitch_streamers` registrieren müssen (FK-Anforderung),
+/// ohne ihn als echten Partner zu behandeln.
+/// Bestehende Einträge mit `is_monitored_only IS NULL` werden auf 1 gesetzt;
+/// Einträge mit `is_monitored_only = 0` (echte Partner) bleiben unverändert.
+pub async fn add_monitored_streamer(
+    pool: &PgPool,
+    login: &str,
+    twitch_user_id: Option<&str>,
+) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        r#"
+        INSERT INTO twitch_streamers (twitch_login, twitch_user_id, is_monitored_only)
+        VALUES ($1, $2, 1)
+        ON CONFLICT (twitch_login) DO UPDATE SET
+            twitch_user_id    = COALESCE(twitch_streamers.twitch_user_id, EXCLUDED.twitch_user_id),
+            is_monitored_only = COALESCE(twitch_streamers.is_monitored_only, 1)
+        "#,
+    )
+    .bind(login)
+    .bind(twitch_user_id)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
 // ── DELETE /streamers/{login} (Remove) ───────────────────────────────────────
 
 /// Ergebnis von `remove_streamer`.
