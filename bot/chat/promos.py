@@ -40,6 +40,7 @@ from .constants import (
     PROMO_NEW_CHATTERS_MIN,
     PROMO_OVERALL_COOLDOWN_MIN,
     PROMO_SEEN_CHATTER_MAX_AGE_SEC,
+    PROMO_STREAM_START_DELAY_MIN,
     PROMO_VIEWER_SPIKE_COOLDOWN_MIN,
     PROMO_VIEWER_SPIKE_ENABLED,
     PROMO_VIEWER_SPIKE_MIN_CHAT_SILENCE_SEC,
@@ -75,6 +76,41 @@ def _sanitize_log_value(value: object | None) -> str:
 
 
 class PromoMixin:
+    def _stream_start_delay_ok(self, login: str) -> bool:
+        """True, wenn der Stream schon mindestens PROMO_STREAM_START_DELAY_MIN läuft.
+
+        Verhindert, dass die erste Promo direkt beim Go-Live rausgeht. Fail-open
+        (True) wenn die DB nicht antwortet oder kein Eintrag vorhanden ist.
+        """
+        delay_sec = float(PROMO_STREAM_START_DELAY_MIN) * 60.0
+        if delay_sec <= 0:
+            return True
+        try:
+            row = _pg_query_one(
+                """
+                SELECT last_started_at
+                  FROM twitch_live_state
+                 WHERE LOWER(streamer_login) = LOWER(%s)
+                   AND is_live = 1
+                 LIMIT 1
+                """,
+                (login,),
+            )
+            if row is None:
+                return True
+            started_at_raw = row["last_started_at"] if hasattr(row, "keys") else row[0]
+            if not started_at_raw:
+                return True
+            started_at_str = str(started_at_raw).replace("Z", "+00:00")
+            started_at = datetime.fromisoformat(started_at_str)
+            if started_at.tzinfo is None:
+                started_at = started_at.replace(tzinfo=UTC)
+            age_sec = (datetime.now(UTC) - started_at).total_seconds()
+            return age_sec >= delay_sec
+        except Exception:
+            log.debug("stream_start_delay check fehlgeschlagen für %s", login, exc_info=True)
+            return True
+
     def _promo_channel_allowed(self, login: str) -> bool:
         if not PROMO_MESSAGES:
             return False
@@ -1281,6 +1317,8 @@ class PromoMixin:
     async def _maybe_send_promo_with_stats(self, login: str, channel_id: str, now: float) -> bool:
         if not self._promo_channel_allowed(login):
             return False
+        if not self._stream_start_delay_ok(login):
+            return False
         if not self._overall_promo_ready(login, now):
             return False
         if not self._promo_activity_ready(login, now):
@@ -1307,6 +1345,8 @@ class PromoMixin:
         if not PROMO_VIEWER_SPIKE_ENABLED:
             return False
         if not self._promo_channel_allowed(login):
+            return False
+        if not self._stream_start_delay_ok(login):
             return False
         if not self._overall_promo_ready(login, now):
             return False
@@ -1502,7 +1542,7 @@ class PromoMixin:
                     # erst wenn seit der letzten Promo genug frische Chat-Aktivität da
                     # war (kein Werben direkt beim Session-Start, gleiche Schwellen wie
                     # der Stats-Pfad).
-                    if self._overall_promo_ready(login, now) and self._promo_activity_ready(
+                    if self._stream_start_delay_ok(login) and self._overall_promo_ready(login, now) and self._promo_activity_ready(
                         login, now
                     ):
                         invite, _ = await self._get_promo_invite(login)
@@ -1541,6 +1581,8 @@ class PromoMixin:
         interval_sec = max(_PROMO_INTERVAL_MIN * 60, self._overall_promo_cooldown_sec())
         for login, broadcaster_id in live_channels:
             if not is_partner_channel_for_chat_tracking(login):
+                continue
+            if not self._stream_start_delay_ok(login):
                 continue
             last = self._last_promo_sent.get(login)
             if last is None:

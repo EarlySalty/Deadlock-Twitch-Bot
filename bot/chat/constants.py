@@ -183,6 +183,7 @@ PROMO_VIEWER_SPIKE_MIN_SESSIONS: int = 3
 # Neue Chatter-Bedingung: Promo nur senden, wenn genug "neue" Chatter seit letzter Promo da sind
 PROMO_NEW_CHATTERS_MIN: int = 2        # mind. 2 neue Chatter im Aktivitätsfenster
 PROMO_SEEN_CHATTER_MAX_AGE_SEC: int = 7200  # nach 2h gilt ein Chatter wieder als "neu"
+PROMO_STREAM_START_DELAY_MIN: int = 10  # keine Promo in den ersten N Minuten nach Go-Live
 PROMO_VIEWER_SPIKE_SESSION_SAMPLE_LIMIT: int = 20
 PROMO_VIEWER_SPIKE_STATS_SAMPLE_LIMIT: int = 240
 PROMO_VIEWER_SPIKE_MIN_STATS_SAMPLES: int = 40

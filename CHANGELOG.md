@@ -1,3 +1,11 @@
+## #188 — Werbung kommt frühestens 10 Minuten nach Stream-Start
+
+**Problem:** Der Bot hat Discord-Promos teilweise direkt beim Go-Live gepostet — als erste Nachricht im Chat, bevor überhaupt jemand geschrieben hat. Das wirkt roboterhaft und ist schlechtes Timing.
+
+**Was geändert wurde:** Beide Promo-Engines (Python und Rust) prüfen jetzt vor jeder Werbung, wie lange der Stream bereits live ist. Dazu wird `last_started_at` aus `twitch_live_state` gelesen — der Zeitstempel, den Twitch beim Online-Event schickt. Ist der Stream noch keine 10 Minuten alt, blockiert das Gate alle Promo-Pfade: Chat-Aktivitäts-Promos, Viewer-Spike-Promos, Targeted-Promos und die Scam-Warnung. Die Schwelle gilt für beide Engines identisch. Bei DB-Fehler oder fehlendem Eintrag läuft der Bot wie bisher weiter (fail-open), damit ein Infrastruktur-Problem nicht dauerhaft alle Werbung unterbindet.
+
+**Ergebnis:** Die erste Promo in einem Stream-Channel erscheint frühestens nach 10 Minuten — und erst dann, wenn auch die bestehenden Aktivitätsschwellen erfüllt sind (mind. 16 Roh-Nachrichten, 3 Messages im Aktivitätsfenster usw.). Kein Kaltstart-Spam mehr.
+
 ## #187 — Category-Timings nativ in Rust
 
 **Ausgangslage:** Der Category-Timings-Endpoint lief noch über den Fallback-Proxy. Python lud alle Viewer-Count-Rohdaten in den Speicher und berechnete Mediane in Python.

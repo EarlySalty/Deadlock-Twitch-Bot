@@ -121,6 +121,8 @@ const LURKER_TAX_MIN_WATCHTIME_MINUTES: f64 = 240.0;
 const LURKER_TAX_MAX_MENTIONS: usize = 2;
 /// MiniMax-Timeout in Sekunden (targeted_promo.py:37: _MINIMAX_TIMEOUT_SEC).
 const MINIMAX_TIMEOUT_SEC: u64 = 5;
+/// Keine Promo in den ersten N Minuten nach Go-Live (constants.py: PROMO_STREAM_START_DELAY_MIN).
+const PROMO_STREAM_START_DELAY_MIN: u64 = 10;
 
 // ---------------------------------------------------------------------------
 // Promo-Texte — exakt aus constants.py:114–152
@@ -695,7 +697,7 @@ impl PromoEngine {
                 (ready, invite)
             };
 
-            if overall_ready {
+            if overall_ready && self.stream_start_delay_ok(login).await {
                 let (invite, _is_specific) = self.invite_resolver.resolve_invite(login).await;
 
                 // Scam-Warning-Slot (promos.py:1466).
@@ -732,6 +734,11 @@ impl PromoEngine {
     async fn maybe_send_promo_with_stats(&self, login: &str, channel_id: &str, now: Instant) -> bool {
         // Guard: Channel-Allowlist.
         if !self.promo_channel_allowed_db(login).await {
+            return false;
+        }
+
+        // Guard: Stream-Start-Verzögerung (≥10 min nach Go-Live).
+        if !self.stream_start_delay_ok(login).await {
             return false;
         }
 
@@ -1106,6 +1113,11 @@ impl PromoEngine {
 
         // Channel-Allowlist.
         if !self.promo_channel_allowed_db(login).await {
+            return;
+        }
+
+        // Guard: Stream-Start-Verzögerung (≥10 min nach Go-Live).
+        if !self.stream_start_delay_ok(login).await {
             return;
         }
 
@@ -1487,6 +1499,37 @@ impl PromoEngine {
             .collect::<HashSet<_>>()
             .into_iter()
             .collect()
+    }
+
+    /// Stream-Start-Verzögerung prüfen (constants.py: PROMO_STREAM_START_DELAY_MIN = 10 min).
+    /// Verhindert Promos direkt beim Go-Live. Fail-open (true) bei DB-Fehler oder fehlendem Eintrag.
+    /// twitch_live_state.last_started_at = TEXT (RFC3339/ISO).
+    async fn stream_start_delay_ok(&self, login: &str) -> bool {
+        const DELAY_SECS: i64 = (PROMO_STREAM_START_DELAY_MIN * 60) as i64;
+        if DELAY_SECS == 0 {
+            return true;
+        }
+        let row: Option<(Option<String>,)> = sqlx::query_as(
+            "SELECT last_started_at FROM twitch_live_state
+              WHERE LOWER(streamer_login) = LOWER($1)
+                AND is_live = 1
+              LIMIT 1",
+        )
+        .bind(login)
+        .fetch_optional(&self.pool)
+        .await
+        .ok()
+        .flatten();
+
+        let Some((Some(started_at_str),)) = row else {
+            return true; // fail-open
+        };
+        let normalized = started_at_str.replace('Z', "+00:00");
+        let Ok(started_at) = chrono::DateTime::parse_from_rfc3339(&normalized) else {
+            return true; // fail-open
+        };
+        let age_secs = (Utc::now() - started_at.with_timezone(&Utc)).num_seconds();
+        age_secs >= DELAY_SECS
     }
 
     /// Kanal-Allowlist + Partner-State-Check (promos.py:78: `_promo_channel_allowed`).
