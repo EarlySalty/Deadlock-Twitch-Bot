@@ -1,3 +1,21 @@
+## #196 — Lurker-Tax und Promo-Engine: 5 Python/Rust-Portfehler behoben
+
+**Ausgangslage:** Beim Python→Rust-Port der Chat-Promo-Engine haben sich 5 semantische Bugs eingeschlichen, die alle stumm blieben — kein Crash, kein Test-Fail, aber falsches Verhalten.
+
+**Was wurde geändert:**
+
+- **Lurker-Tax ohne Bezahlplan** (kritisch): `maybe_send_lurker_tax_reminder` prüfte in Rust nur das Feature-Flag `lurker_tax_enabled`, nicht ob der Streamer überhaupt das passende Abo hat. Jetzt wird geprüft: Plan-Entitlement `chat.lurker_tax` (nur in `raid_boost` und höher) + Scope `moderator:read:chatters` im Auth-Store. Ohne beides wird die Erinnerung übersprungen.
+
+- **Lurker-Tax für aktive Chatter** (mittel): Die SQL-Abfrage für Live-Kandidaten filterte in Rust nicht auf `messages = 0`. Chatter, die in der laufenden Session bereits geschrieben hatten, konnten als Lurker getaggt werden. Jetzt wird die Live-Kandidaten-CTE wie in Python auf echte Lurker eingeschränkt (`messages = 0` + `seen_via_chatters_api = TRUE`).
+
+- **Promo-Text Wiederholung** (mittel): Die Anti-Repeat-Logik wählte in jeder Runde aus dem gefilterten Pool, schrieb den gewählten Text aber nie zurück. Folge: der gleiche Text wurde immer wieder gesendet. Nach der Auswahl wird der Template-String jetzt in `last_promo_text` gespeichert.
+
+- **Cooldown-Verbrauch bei Send-Fehler** (mittel): Wenn `send_announcement` fehlschlug, wurde der Promo-Cooldown trotzdem belegt — nächster Versuch erst nach der vollen Cooldown-Zeit. Python gibt bei `not ok` sofort `False` zurück, ohne `_mark_promo_sent` aufzurufen. Rust tut das jetzt auch.
+
+- **Targeted-Promo Timeout-Fallback immer erster Preset** (low): Bei MiniMax-Timeout wählte Rust immer `presets[0]` statt zufällig. Das `choose()`-Ergebnis wurde mit `.map(|_| ())` weggeworfen. Jetzt: `presets.choose(&mut rng).unwrap_or(&presets[0])`.
+
+**Wie es jetzt funktioniert:** Lurker-Tax feuert nur noch für Streamer mit aktivem Abo und richtigen Scopes. Promo-Texte werden korrekt rotiert. Fehlgeschlagene Sends verbrauchen keinen Cooldown-Slot mehr. Targeted-Promos bei KI-Timeout sind jetzt gleichmäßig verteilt.
+
 ## #195 — Streamer-Link-Matcher: Rust-Implementierung im tb-bot
 
 **Ausgangslage:** Der automatische Twitch↔Discord-Abgleich lief als Python-Cog im Discord-Bot (StreamerLinkMatcher) und sendete alle 6h ein Discord-Embed — auch wenn keine neuen unverknüpften Streamer vorhanden waren.

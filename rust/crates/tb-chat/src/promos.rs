@@ -497,6 +497,14 @@ impl PartnerChannelCheck for AlwaysPartner {
     }
 }
 
+/// Prüft ob ein Plan-Key das Entitlement `chat.lurker_tax` trägt (catalog.py:PLAN_ENTITLEMENTS_MAP).
+fn plan_id_has_lurker_tax(plan_id: &str) -> bool {
+    !matches!(
+        plan_id.to_lowercase().as_str(),
+        "raid_free" | "free" | "chat_quiet" | "werbefrei" | "quiet" | ""
+    )
+}
+
 /// Prüft ob ein Plan-Key (canonical oder Legacy) das Entitlement chat.promos.disable trägt.
 /// Port von catalog.py:PLAN_ENTITLEMENTS_MAP + LEGACY_PLAN_NAME_TO_ID_MAP.
 fn plan_id_has_promos_disable(plan_id: &str) -> bool {
@@ -817,6 +825,8 @@ impl PromoEngine {
         let sent = self.api.send_announcement(channel_id, &text, "purple").await.unwrap_or(false);
         if !sent {
             debug!(login, "Promo-Announcement nicht gesendet (Drop/Fehler)");
+            // Cooldown NICHT verbrauchen bei Failed-Send (promos.py:1096: if not ok: return False).
+            return false;
         }
 
         // Promo markieren (promos.py:879).
@@ -861,8 +871,18 @@ impl PromoEngine {
             pool
         };
 
-        let mut rng = rand::thread_rng();
-        let template = pool.choose(&mut rng).copied().unwrap_or("{invite}");
+        let template = {
+            let mut rng = rand::thread_rng();
+            pool.choose(&mut rng).copied().unwrap_or("{invite}")
+        };
+
+        // Anti-Repeat zurückschreiben (promos.py:975: last_map[login] = chosen).
+        {
+            let state_ref = self.channel_states.entry(login.to_string()).or_insert_with(|| Mutex::new(ChannelState::new()));
+            let mut state = state_ref.lock().await;
+            state.last_promo_text = Some(template.to_string());
+        }
+
         template.replace("{invite}", invite)
     }
 
@@ -1263,9 +1283,11 @@ impl PromoEngine {
         }
 
         // Lurker-Tax-Settings prüfen (promos.py:1357: _load_lurker_tax_settings).
-        // streamer_plans.lurker_tax_enabled = integer (prod schema)
-        let settings: Option<(Option<i32>,)> = sqlx::query_as(
-            "SELECT p.lurker_tax_enabled
+        // streamer_plans: lurker_tax_enabled=integer, manual_plan_id=text, plan_name=text (prod schema)
+        let settings: Option<(Option<i32>, Option<String>, Option<String>)> = sqlx::query_as(
+            "SELECT p.lurker_tax_enabled,
+                    COALESCE(p.manual_plan_id, ''),
+                    COALESCE(p.plan_name, '')
                FROM streamer_plans p
               WHERE LOWER(COALESCE(p.twitch_login,'')) = $1
               LIMIT 1",
@@ -1276,8 +1298,37 @@ impl PromoEngine {
         .ok()
         .flatten();
 
-        let enabled = settings.and_then(|(v,)| v).unwrap_or(0) != 0;
+        let (enabled, manual_plan_id, plan_name) = match settings {
+            Some((v, m, p)) => (v.unwrap_or(0) != 0, m.unwrap_or_default(), p.unwrap_or_default()),
+            None => return,
+        };
         if !enabled {
+            return;
+        }
+
+        // is_paid_plan: Plan muss chat.lurker_tax-Entitlement haben (promos.py:1406).
+        let effective_plan = if !manual_plan_id.is_empty() { &manual_plan_id } else { &plan_name };
+        if !plan_id_has_lurker_tax(effective_plan) {
+            return;
+        }
+
+        // has_moderator_read_chatters: Scope muss im Auth-Store vorliegen (promos.py:1410).
+        // Prüft twitch_raid_auth.scopes für diesen Streamer.
+        let auth_scopes: Option<(Option<String>,)> = sqlx::query_as(
+            "SELECT scopes FROM twitch_raid_auth
+              WHERE LOWER(COALESCE(twitch_login,'')) = $1
+              LIMIT 1",
+        )
+        .bind(login.to_lowercase())
+        .fetch_optional(&self.pool)
+        .await
+        .ok()
+        .flatten();
+        let scopes_raw = auth_scopes.and_then(|(s,)| s).unwrap_or_default();
+        let has_chatters_scope = scopes_raw
+            .split_whitespace()
+            .any(|s| s.eq_ignore_ascii_case("moderator:read:chatters"));
+        if !has_chatters_scope {
             return;
         }
 
@@ -1318,6 +1369,8 @@ impl PromoEngine {
                    JOIN twitch_live_state ls ON ls.streamer_login = $1 AND ls.active_session_id = sc.session_id
                   WHERE LOWER(sc.streamer_login) = LOWER($1)
                     AND sc.last_seen_at >= NOW() - INTERVAL '{freshness} minutes'
+                    AND COALESCE(sc.messages, 0) = 0
+                    AND sc.seen_via_chatters_api = TRUE
                )
                SELECT hl.chatter_login
                  FROM historical_lurks hl
@@ -1390,8 +1443,7 @@ impl PromoEngine {
                 .await
                 .unwrap_or_else(|_| {
                     let mut rng = rand::thread_rng();
-                    presets.choose(&mut rng).map(|_| ()).unwrap();
-                    &presets[0]
+                    presets.choose(&mut rng).unwrap_or(&presets[0])
                 });
 
                 let text = preset.text
