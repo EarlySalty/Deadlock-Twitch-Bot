@@ -7,5 +7,8 @@ pub mod network;
 pub mod overview;
 pub mod raids;
 pub mod streamers;
+pub mod performance;
+pub mod rankings;
+pub mod session_detail;
 pub mod spa;
 pub mod system;

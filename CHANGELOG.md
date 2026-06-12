@@ -1,3 +1,11 @@
+## #175 — Rankings + Session-Detail-Endpoints nativ in Rust
+
+**Ausgangslage:** `GET /twitch/api/v2/rankings` (Streamer-Rangliste) und `GET /twitch/api/v2/session/{id}` + `session/{id}/events` liefen noch über den Legacy-Proxy an Python 8765.
+
+**Was wurde geändert:** `rankings` wird jetzt direkt in Postgres abgefragt — drei SQL-Varianten je nach `?metric=viewers|retention|growth`, jeweils als separate Query statt als String-Erweiterung, damit der Compiler jeden Bind-Parameter-Typ prüfen kann. `exclude_external=1` fügt `HAVING AVG(avg_viewers) <= 100` hinzu (Threshold wie in Python). `session/{id}` liest die Session-Row aus `twitch_stream_sessions`, ergänzt bot-bereinigte Chatter-Stats (10 bekannte Bots ausgeschlossen via NOT IN), Viewer-Timeline und Top-20-Chatters. Wenn `twitch_session_chatters` keine Daten für die Session hat, wird auf die aggregierten Werte aus der Session-Row zurückgefallen. `session/{id}/events` liefert Channel-Updates im Session-Zeitfenster aus `twitch_channel_updates`.
+
+**Wie es jetzt funktioniert:** Alle drei Endpoints antworten mit 200. Partner-Isolierung ist aktiv: ein `DashboardAuthLevel::Partner`-Cookie sieht nur eigene Sessions. Nicht-existierende IDs geben 404 statt 500.
+
 ## #174 — Performance-Analytics-Endpoints nativ in Rust (tb-dashboard-api 8769)
 
 **Ausgangslage:** Die vier Analytics-Endpoints `monthly-stats`, `weekly-stats`, `hourly-heatmap` und `calendar-heatmap` wurden über den Legacy-Proxy an Python 8765 weitergeleitet. Ein erster Port-Versuch scheiterte mit HTTP 500: sqlx übergab den Zeitstempel als formatierten String, Postgres verweigerte den Vergleich mit der `TIMESTAMPTZ`-Spalte (`operator does not exist: timestamp with time zone >= text`).

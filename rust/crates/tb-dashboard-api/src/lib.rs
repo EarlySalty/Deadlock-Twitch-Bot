@@ -49,7 +49,7 @@ pub fn build_public_router(pool: PgPool) -> Router {
 /// Auth-Level wird per Extension eingesetzt — `AuthLevel` als `FromRequestParts`
 /// liest den Token selbst aus der Extension.
 pub fn build_authed_router(pool: PgPool, token: String) -> Router {
-    use handlers::{auth_status, overview, spa, streamers};
+    use handlers::{auth_status, overview, performance, rankings, session_detail, spa, streamers};
 
     Router::new()
         .route(
@@ -61,6 +61,35 @@ pub fn build_authed_router(pool: PgPool, token: String) -> Router {
             get(streamers::streamers_handler),
         )
         .route("/twitch/api/v2/overview", get(overview::overview_handler))
+        // Performance-Analytics (lesen aus twitch_stream_sessions in Postgres)
+        .route(
+            "/twitch/api/v2/monthly-stats",
+            get(performance::monthly_stats_handler),
+        )
+        .route(
+            "/twitch/api/v2/weekly-stats",
+            get(performance::weekly_stats_handler),
+        )
+        .route(
+            "/twitch/api/v2/hourly-heatmap",
+            get(performance::hourly_heatmap_handler),
+        )
+        .route(
+            "/twitch/api/v2/calendar-heatmap",
+            get(performance::calendar_heatmap_handler),
+        )
+        .route(
+            "/twitch/api/v2/rankings",
+            get(rankings::rankings_handler),
+        )
+        .route(
+            "/twitch/api/v2/session/:id",
+            get(session_detail::session_detail_handler),
+        )
+        .route(
+            "/twitch/api/v2/session/:id/events",
+            get(session_detail::session_events_handler),
+        )
         // SPA: Haupt-HTML + statische Assets
         .route("/analyse", get(spa::analyse_handler))
         .route("/analyse/*path", get(spa::analyse_assets_handler))
