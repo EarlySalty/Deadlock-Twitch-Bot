@@ -455,6 +455,10 @@ impl ModerationEngine {
                 // In-Memory + DB speichern
                 self.persist_autoban_record(channel_login, chatter_id, chatter_login, content)
                     .await;
+                // Öffentliche recent-bans-Statistik speisen (Port von
+                // moderation.py:_record_autoban_db_event). Spam-Inhalt als Feed-Grund.
+                self.record_ban_event_db(broadcaster_id, chatter_login, chatter_id, content)
+                    .await;
 
                 // Chat-Notice (nur wenn nicht silent)
                 // Port: moderation.py Z. 238–239
@@ -533,6 +537,42 @@ impl ModerationEngine {
         {
             // DB-Fehler sind nicht fatal — In-Memory ist primäre Quelle
             debug!("persist_autoban_record DB-Fehler: {e} (ts={ts_str})");
+        }
+    }
+
+    /// Best-effort-Protokoll eines Auto-Bans in `twitch_ban_events`, damit die
+    /// öffentliche `recent-bans`-Statistik die echte Spam-/Viewer-Bot-Moderation
+    /// widerspiegelt (sonst zeigt der Live-Ban-Feed praktisch nichts).
+    ///
+    /// Port von `moderation.py:_record_autoban_db_event`. Der Spam-Inhalt dient als
+    /// Feed-Grund (`reason`, gekürzt auf 300 Zeichen). DB-Fehler dürfen den Ban-Flow
+    /// niemals unterbrechen. `event_type = 'ban'` wird vom recent-bans-Filter erwartet.
+    async fn record_ban_event_db(
+        &self,
+        broadcaster_id: &str,
+        chatter_login: &str,
+        chatter_id: &str,
+        reason: &str,
+    ) {
+        let reason_trunc: String = reason.trim().chars().take(300).collect();
+        let reason_opt = (!reason_trunc.is_empty()).then_some(reason_trunc);
+        let login_norm = chatter_login.trim().to_lowercase();
+        let login_opt = (!login_norm.is_empty()).then_some(login_norm);
+
+        if let Err(e) = sqlx::query(
+            r#"INSERT INTO twitch_ban_events
+                   (twitch_user_id, event_type, target_login, target_id, reason, received_at)
+               VALUES ($1, 'ban', $2, $3, $4, $5)"#,
+        )
+        .bind(broadcaster_id)
+        .bind(login_opt)
+        .bind(chatter_id)
+        .bind(reason_opt)
+        .bind(Utc::now())
+        .execute(&self.pool)
+        .await
+        {
+            debug!("record_ban_event_db DB-Fehler: {e}");
         }
     }
 }

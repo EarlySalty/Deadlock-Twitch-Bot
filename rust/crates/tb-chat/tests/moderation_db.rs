@@ -72,6 +72,25 @@ async fn apply_ddl(pool: &PgPool) {
     .execute(pool)
     .await
     .unwrap();
+
+    // twitch_ban_events: Prod-Tabelle, die die öffentliche recent-bans-Statistik speist.
+    sqlx::query(
+        r#"CREATE TABLE IF NOT EXISTS twitch_ban_events (
+            id BIGSERIAL PRIMARY KEY,
+            session_id INTEGER,
+            twitch_user_id TEXT NOT NULL,
+            event_type TEXT NOT NULL,
+            target_login TEXT,
+            target_id TEXT,
+            moderator_login TEXT,
+            reason TEXT,
+            ends_at TEXT,
+            received_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )"#,
+    )
+    .execute(pool)
+    .await
+    .unwrap();
 }
 
 // ---------------------------------------------------------------------------
@@ -157,6 +176,21 @@ async fn autoban_schreibt_in_db() {
     assert_eq!(channel, "testkanal");
     assert_eq!(chatter_login, "spammer42");
     assert_eq!(content.as_deref(), Some("Spam-Inhalt hier"));
+
+    // Auto-Ban muss zusätzlich die öffentliche recent-bans-Statistik speisen:
+    // ein 'ban'-Event in twitch_ban_events mit Spam-Inhalt als Grund.
+    let (uid, ev_type, target, reason): (String, String, Option<String>, Option<String>) =
+        sqlx::query_as(
+            "SELECT twitch_user_id, event_type, target_login, reason \
+             FROM twitch_ban_events LIMIT 1",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(uid, "broadcaster-id");
+    assert_eq!(ev_type, "ban");
+    assert_eq!(target.as_deref(), Some("spammer42"));
+    assert_eq!(reason.as_deref(), Some("Spam-Inhalt hier"));
 }
 
 #[tokio::test]
