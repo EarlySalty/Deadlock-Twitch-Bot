@@ -1,3 +1,11 @@
+## #162 — EventSub-Wartung: Stale-Cleanup + Core-Sub-Reconcile beim Start
+
+**Ausgangslage:** Die Rust-Migration hatte zwei stille Lücken beim EventSub-Lifecycle. Erstens: `cleanup_stale()` existierte im Code, wurde aber nie aufgerufen — veraltete Twitch-Subscriptions für Partner die ausgetreten sind blieben dauerhaft bei Twitch liegen und fraßen Subscription-Slots. Zweitens: `ensure_core_subscriptions()` (stream.online, stream.offline, channel.update) wurde ebenfalls nie aufgerufen — Kanäle die nach der Rust-Migration neu hinzukamen hatten nur einen Teil ihrer Subs, weil Python die ursprünglichen angelegt hatte und Rust das einfach voraussetzte.
+
+**Was wurde geändert:** Neuer Background-Task `subscription_maintenance_loop` startet direkt beim Bot-Start und läuft danach alle 6 Stunden. Er lädt alle aktiven Partner-IDs aus der DB, ruft `cleanup_stale()` auf (löscht Subs für nicht mehr aktive Kanäle), und ruft `ensure_core_subscriptions()` für alle aktiven Partner auf (erstellt fehlende stream.online/offline/channel.update-Subs nach).
+
+**Beim ersten Start** wurden sofort 2 stale Subs gelöscht und mehrere fehlende Core-Subs für neu hinzugekommene Kanäle (certifiedtoeguzzler, jckydl, xoralle) angelegt.
+
 ## #161 — Chat-EventSub-Reconcile: `channel:bot`-Scope-Gate nachgerüstet (Python-Parität)
 
 **Ausgangslage:** Der Rust-Chat-Reconciler versuchte alle 30 Minuten, `channel.chat.message`- und `channel.chat.notification`-Subscriptions für ALLE aktiven Partner-Kanäle anzulegen — ohne zu prüfen, ob der Streamer dem Bot überhaupt die `channel:bot`-Berechtigung erteilt hat. Twitch lehnt solche Subscription-Versuche mit HTTP 403 ab. Für xoralle und berserkkoo (kein `channel:bot`-Grant) erzeugte das alle 30 min konstante Warn-Logs und löste stündliche Discord-Alerts aus.

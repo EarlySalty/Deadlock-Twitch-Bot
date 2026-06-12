@@ -181,6 +181,17 @@ async fn main() {
                 ));
                 manager.rehydrate().await;
                 tracing::info!("EventSub-Subscription-Verwaltung aktiv (Webhook-Modus)");
+                // Startup-Cleanup + periodischer Core-Sub-Reconcile:
+                // Python führte beim Webhook-Start _cleanup_old_eventsub_subscriptions
+                // aus und stelle stream.online/offline/channel.update für alle aktiven
+                // Partner sicher. Rust macht das hier als Background-Task.
+                {
+                    let m = manager.clone();
+                    let p = pool.clone();
+                    tokio::spawn(async move {
+                        subscription_maintenance_loop(m, p).await;
+                    });
+                }
                 Some(manager)
             }
             _ => {
@@ -583,4 +594,62 @@ async fn main() {
     )
     .await
     .unwrap();
+}
+
+/// Startup-Cleanup + periodischer Core-Sub-Reconcile (alle 6h).
+///
+/// Python-Äquivalent: `_cleanup_old_eventsub_subscriptions` (Webhook-Start)
+/// + `_subscribe_core_eventsub_webhooks` (per-Kanal bei Webhook-Start).
+///
+/// Läuft einmal beim Start und danach jede 6h:
+/// 1. Aktive Partner-User-IDs aus DB laden
+/// 2. `cleanup_stale` — veraltete Twitch-Subs für entfernte Partner löschen
+/// 3. `ensure_core_subscriptions` — stream.online/offline/channel.update für
+///    alle aktiven Partner sicherstellen (fängt neue Kanäle + revoked Subs)
+async fn subscription_maintenance_loop(
+    manager: std::sync::Arc<tb_monitoring::SubscriptionManager>,
+    pool: sqlx::PgPool,
+) {
+    const INTERVAL: std::time::Duration = std::time::Duration::from_secs(6 * 60 * 60);
+    let mut tick = tokio::time::interval(INTERVAL);
+    tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    loop {
+        tick.tick().await;
+        let rows: Vec<(String, String)> = match sqlx::query_as(
+            "SELECT LOWER(twitch_login), twitch_user_id \
+             FROM twitch_streamers_partner_state \
+             WHERE is_partner_active = 1 AND COALESCE(twitch_user_id, '') <> '' \
+             UNION \
+             SELECT LOWER(twitch_login), twitch_user_id \
+             FROM twitch_streamers \
+             WHERE COALESCE(is_monitored_only, 0) = 1 AND COALESCE(twitch_user_id, '') <> ''",
+        )
+        .fetch_all(&pool)
+        .await
+        {
+            Ok(r) => r,
+            Err(e) => {
+                tracing::warn!("sub-maintenance: Partner-Query fehlgeschlagen: {e}");
+                continue;
+            }
+        };
+
+        let active_ids: std::collections::HashSet<String> =
+            rows.iter().map(|(_, uid)| uid.clone()).collect();
+
+        let deleted = manager.cleanup_stale(&active_ids).await;
+        tracing::debug!(deleted, "sub-maintenance: Stale-Cleanup abgeschlossen");
+
+        let mut ensured = 0usize;
+        for (login, uid) in &rows {
+            manager.ensure_core_subscriptions(uid, login).await;
+            ensured += 1;
+        }
+        tracing::info!(
+            kanäle = rows.len(),
+            ensured,
+            deleted,
+            "sub-maintenance: Core-Sub-Reconcile abgeschlossen"
+        );
+    }
 }
