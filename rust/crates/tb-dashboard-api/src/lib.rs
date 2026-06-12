@@ -49,7 +49,7 @@ pub fn build_public_router(pool: PgPool) -> Router {
 /// Auth-Level wird per Extension eingesetzt — `AuthLevel` als `FromRequestParts`
 /// liest den Token selbst aus der Extension.
 pub fn build_authed_router(pool: PgPool, token: String) -> Router {
-    use handlers::{auth_status, overview, streamers};
+    use handlers::{auth_status, overview, spa, streamers};
 
     Router::new()
         .route(
@@ -61,6 +61,9 @@ pub fn build_authed_router(pool: PgPool, token: String) -> Router {
             get(streamers::streamers_handler),
         )
         .route("/twitch/api/v2/overview", get(overview::overview_handler))
+        // SPA: Haupt-HTML + statische Assets
+        .route("/analyse", get(spa::analyse_handler))
+        .route("/analyse/*path", get(spa::analyse_assets_handler))
         .with_state(pool)
         .layer(Extension(ExpectedToken(token)))
 }

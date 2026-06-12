@@ -1,3 +1,11 @@
+## #172 — Analytics-Dashboard nativ in Rust: SPA-Serving für `/analyse`
+
+**Ausgangslage:** Die Route `/analyse` (Dashboard-HTML + alle statischen Assets wie JS/CSS/Icons) lief bislang über den Legacy-Proxy an Python 8765. Jedes Dashboard-Seitenaufruf war ein Umweg durch Python, obwohl die Auth-Logik und der Auth-Status schon nativ in Rust liefen.
+
+**Was wurde geändert:** Der Rust-Service 8769 serviert `/analyse` und `/analyse/*` jetzt vollständig selbst. Der Handler liest `bot/analytics/dashboard_v2/dist/index.html`, ersetzt den Vite-internen Asset-Prefix (`/twitch/dashboard-v2/` → `/analyse/`), injiziert ein `<script>`-Tag mit dem Runtime-Config-Objekt (`apiBase`, `demoMode`, `allowedDemoProfiles`) direkt vor `</head>` — und gibt die fertige HTML-Seite aus. Assets (JS, CSS, SVG, Fonts) werden direkt aus dem `dist/`-Verzeichnis gelesen, mit MIME-Type-Mapping pro Extension.
+
+**Sicherheit:** Jedes Pfad-Segment wird vor dem Dateizugriff einzeln geprüft — leere Segmente, `.`, `..` und Backslashes werden abgelehnt (Path-Traversal-Schutz, identisch zur Python-Implementierung). Der Dist-Pfad ist über die Env-Variable `DASHBOARD_V2_DIST_PATH` konfigurierbar. Auth-Flow: nicht eingeloggt → Redirect zum Login; Partner ohne Analytics-Freigabe → Redirect zum Legacy-Landing; Admin/Localhost → direkter Zugriff.
+
 ## #171 — Scam-Pitch: Nachricht löschen + Timeout bei Erkennung
 
 **Ausgangslage:** Der Scam-Pitch-Detektor erkannte verdächtige Service-Angebote im Chat (Viewer-Kauf, Design-Spam, Account-Takeover-Verdacht) und sendete eine Warn-Nachricht — aber die ursprüngliche Spam-Nachricht blieb sichtbar, und bei einem `StrongTimeout`-Signal (wiederholter oder eskalierter Pitch) wurde kein Timeout ausgelöst. Das Ergebnis: Chat-Warnung erschien, der Spammer-Text stand weiter im Chat.
