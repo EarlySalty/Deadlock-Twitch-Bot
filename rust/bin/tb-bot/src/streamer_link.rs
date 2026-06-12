@@ -60,7 +60,14 @@ pub struct StreamerLinkConfig {
 }
 
 impl StreamerLinkConfig {
-    pub fn from_env(state_path: PathBuf) -> Self {
+    pub fn from_env() -> Self {
+        let state_path = std::env::var("STREAMER_LINK_STATE_PATH")
+            .map(PathBuf::from)
+            .unwrap_or_else(|_| {
+                PathBuf::from(
+                    "/home/naniadm/Documents/Deadlock-Bots/data/streamer_link_state.json",
+                )
+            });
         Self {
             notify_channel_id: env_u64("STREAMER_LINK_NOTIFY_CHANNEL_ID", 1374364800817303632),
             streamer_role_id: env_u64("STREAMER_ROLE_ID", 1313624729466441769),

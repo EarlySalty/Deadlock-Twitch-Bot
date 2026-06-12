@@ -619,9 +619,7 @@ async fn main() {
     // Streamer-Link-Matcher: verknüpft neue Twitch-Partner mit ihrem Discord-Account.
     // Läuft alle 6h, ist still wenn keine neuen Kandidaten vorhanden.
     if let Ok(sl_relay) = BrokerRelay::new(&settings.broker) {
-        let sl_config = Arc::new(streamer_link::StreamerLinkConfig::from_env(
-            std::path::PathBuf::from("data/streamer_link_state.json"),
-        ));
+        let sl_config = Arc::new(streamer_link::StreamerLinkConfig::from_env());
         let sl_pool = pool.clone();
         let sl_base = format!("http://127.0.0.1:{port}");
         let sl_token = settings.internal_api.token.clone();
