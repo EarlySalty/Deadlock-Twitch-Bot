@@ -1,3 +1,11 @@
+## #194 — Viewer-Spike-Promo: Silence-Check bei fehlendem Chat-History-Eintrag korrigiert
+
+**Problem:** Wenn ein Channel noch nie eine Chat-Nachricht hatte (kein `last_raw_chat_message_ts`-Eintrag im In-Memory-State), hat der Viewer-Spike-Promo-Guard in Rust den Channel als „nicht still genug" eingestuft und die Promo geblockt. In Python gilt: kein Chat-Aktivitäts-Timestamp = kein aktiver Chat = Silence gilt als erfüllt (die Bedingung prüft explizit `if activity_age_sec is not None`).
+
+**Ursache:** Rust's `is_some_and(pred)` liefert bei `None` immer `false` — „kein Timestamp vorhanden" wurde als „Bedingung nicht erfüllt" gewertet. Python's `if x is not None and x < threshold` entspricht semantisch `map_or(true, |x| x < threshold)` — also: kein Wert → Guard durchgelassen.
+
+**Fix:** Ein-Zeilen-Änderung in `maybe_send_viewer_spike_promo`: `is_some_and(|t| age >= threshold)` → `map_or(true, |t| age >= threshold)`. Betrifft nur den Silence-Guard für den Viewer-Spike-Pfad — alle anderen Promo-Pfade nutzen andere Guards ohne dieses Muster.
+
 ## #193 — Bugfixes: category-comparison + audience-demographics
 
 **Was war kaputt:**
