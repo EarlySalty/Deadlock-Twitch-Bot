@@ -23,6 +23,7 @@
 
 pub mod announce;
 pub mod dispatch;
+pub mod scout;
 pub mod exp_sessions;
 pub mod guard;
 pub mod handlers;
@@ -69,3 +70,4 @@ pub use subscriptions::{
     SubscriptionTransport,
 };
 pub use telemetry::{HypeTrainPhase, TelemetryStore};
+pub use scout::{build_scout_task, ScoutTask};

@@ -27,6 +27,8 @@
 //!   PORT                          — optional, default 8776
 //!   TB_CLIP_FETCHER_ENABLED       — "1" startet den Clip-Fetch-Task (default aus;
 //!                                   benötigt Helix-Client)
+//!   TB_SCOUT_ENABLED              — "1" startet den Scout-Task für live Deadlock-DE-Streams
+//!                                   (default aus; benötigt Helix-Client)
 
 mod auto_raid;
 mod chat_wiring;
@@ -594,6 +596,23 @@ async fn main() {
     if let Some(ref h) = *helix {
         tb_social_media::build_clip_fetch_task(pool.clone(), std::sync::Arc::new(h.clone()))
             .start_if_enabled();
+    }
+
+    // Scout-Task: entdeckt live Deadlock-Streamer und registriert sie als monitoring-only.
+    // Deaktiviert bis TB_SCOUT_ENABLED=1 gesetzt ist.
+    if let Some(ref h) = *helix {
+        let scout_game =
+            std::env::var("TWITCH_TARGET_GAME_NAME").unwrap_or_else(|_| "Deadlock".to_string());
+        let scout_lang_filters: Vec<String> = std::env::var("TWITCH_LANGUAGE_FILTERS")
+            .map(|v| v.split(',').map(str::to_string).collect())
+            .unwrap_or_default();
+        tb_monitoring::build_scout_task(
+            pool.clone(),
+            std::sync::Arc::new(h.clone()),
+            scout_game,
+            scout_lang_filters,
+        )
+        .start_if_enabled();
     }
 
     let addr = SocketAddr::from(([127, 0, 0, 1], port));

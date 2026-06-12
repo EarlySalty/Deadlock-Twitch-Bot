@@ -1,3 +1,11 @@
+## #169 — Scout-Loop als nativer Rust-Hintergrundtask gebaut (deaktiviert)
+
+**Ausgangslage:** Der Scout-Loop lief bisher in Python (`_scout_deadlock_channels`, ~235 Zeilen) und war für das automatische Entdecken live gehender Deadlock-Streamer zuständig. Er rief Helix GET /streams auf, filterte nach Sprache "de", und registrierte neue Streamer als `is_monitored_only=1` in `twitch_streamers`. Streamer die 2 Zyklen hintereinander offline waren, wurden wieder entfernt — inklusive offener Sessions und Live-State-Löschung.
+
+**Was wurde geändert:** Der Scout-Loop ist jetzt vollständig in Rust als `tb-monitoring::scout` portiert. Architektur: `ScoutRepository` kapselt alle DB-Zugriffe (load, upsert, session-close, live-state-delete, sicheres delete mit `is_monitored_only=1`-Guard), `ScoutTask` hält den Absent-Cycle-Counter im Arbeitsspeicher als transiente `HashMap<String, u32>`. Der Counter ist bewusst nicht persistent — verloren beim Neustart heißt höchstens 2 Zyklen länger warten, kein Datenverlust. Gestartet mit `TB_SCOUT_ENABLED=1`, 30s Anlaufverzögerung, 90s Intervall zwischen Zyklen. Mehrere `TWITCH_LANGUAGE_FILTERS` werden als separate Helix-Requests ausgeführt.
+
+**Wie es jetzt funktioniert:** Jeder Zyklus: Game-ID über Helix auflösen → Streams je Sprache holen → neue Logins in `twitch_streamers` mit `is_monitored_only=1` eintragen → Absent-Zähler hochzählen für alle die diesmal nicht live sind → bei ≥2 aufeinanderfolgenden Fehltreffen: Sessions schließen, Live-State löschen, DB-Zeile entfernen (Safety-Guard: nur `is_monitored_only=1`-Einträge werden gelöscht, Partner bleiben immer unberührt). Der Task ist standardmäßig deaktiviert.
+
 ## #168 — Clip-Fetcher als nativer Rust-Hintergrundtask gebaut (deaktiviert)
 
 **Ausgangslage:** Der Clip-Fetcher lief bisher ausschließlich in Python als Discord-Cog — ein Konzept, das an den Discord-Bot-Lifecycle gebunden ist und keine klare Trennung zwischen HTTP-Aufrufen, Datenbankzugriffen und Scheduling kennt. Außerdem schrieben `clip_fetcher.py` und `clip_manager.py` Streamer ohne `is_monitored_only=1` in die DB, wodurch diese versehentlich als Discord-Link-Kandidaten auftauchten (wurde separat in #166 gefixt, Python-Seite bereits korrigiert).
