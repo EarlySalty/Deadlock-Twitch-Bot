@@ -7,6 +7,7 @@ pub mod network;
 pub mod overview;
 pub mod raids;
 pub mod streamers;
+pub mod audience;
 pub mod follower_funnel;
 pub mod performance;
 pub mod rankings;

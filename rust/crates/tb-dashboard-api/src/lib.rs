@@ -49,7 +49,7 @@ pub fn build_public_router(pool: PgPool) -> Router {
 /// Auth-Level wird per Extension eingesetzt — `AuthLevel` als `FromRequestParts`
 /// liest den Token selbst aus der Extension.
 pub fn build_authed_router(pool: PgPool, token: String) -> Router {
-    use handlers::{auth_status, follower_funnel, overview, performance, rankings, session_detail, spa, streamers};
+    use handlers::{audience, auth_status, follower_funnel, overview, performance, rankings, session_detail, spa, streamers};
 
     Router::new()
         .route(
@@ -85,6 +85,14 @@ pub fn build_authed_router(pool: PgPool, token: String) -> Router {
         .route(
             "/twitch/api/v2/follower-funnel",
             get(follower_funnel::follower_funnel_handler),
+        )
+        .route(
+            "/twitch/api/v2/tag-analysis",
+            get(audience::tag_analysis_handler),
+        )
+        .route(
+            "/twitch/api/v2/viewer-overlap",
+            get(audience::viewer_overlap_handler),
         )
         .route(
             "/twitch/api/v2/session/:id",

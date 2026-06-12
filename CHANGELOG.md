@@ -1,3 +1,11 @@
+## #177 — Tag-Analysis + Viewer-Overlap nativ in Rust
+
+**Ausgangslage:** `GET /twitch/api/v2/tag-analysis` und `viewer-overlap` liefen über den Proxy. `tag-analysis` war in Python schon ein leerer Stub.
+
+**Was wurde geändert:** `tag-analysis` gibt direkt `[]` zurück (Parität zum Python-Stub). `viewer-overlap` berechnet Jaccard-Overlap via `twitch_chatter_rollup` — Python hatte N+1-Queries für die Totals der Partner-Streamer; in Rust nutzen wir eine einzige CTE die alle Totals in einem Durchgang aggregiert. Bot-Exclusion (10 bekannte Bots) läuft auf beiden JOIN-Seiten und auf dem Total-Aggregat.
+
+**Wie es jetzt funktioniert:** Beide Endpoints antworten mit 200. Wenn die Rollup-Tabelle keine Daten hat (neuer Streamer, noch kein Rollup-Job gelaufen), kommt `[]` zurück — identisch zu Python.
+
 ## #176 — Follower-Funnel nativ in Rust (tb-dashboard-api 8769)
 
 **Ausgangslage:** `GET /twitch/api/v2/follower-funnel` lief über den Legacy-Proxy. Der Endpoint berechnet Follower-Conversion aus mehreren verknüpften Quellen und war wegen der Komplexität noch nicht portiert.
