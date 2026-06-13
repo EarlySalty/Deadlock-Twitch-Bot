@@ -179,18 +179,27 @@ impl HelixClient {
         &self,
         logins: &[&str],
     ) -> Result<std::collections::HashMap<String, TwitchUser>, HelixError> {
-        if logins.is_empty() {
-            return Ok(std::collections::HashMap::new());
+        let mut out = std::collections::HashMap::new();
+        // Helix /users akzeptiert max. 100 login-Parameter pro Request — größere
+        // Listen müssen gechunkt werden (Python batcht ebenso), sonst lehnt Twitch ab.
+        for chunk in logins.chunks(100) {
+            let params: Vec<(&str, &str)> = chunk
+                .iter()
+                .map(|l| l.trim())
+                .filter(|l| !l.is_empty())
+                .map(|l| ("login", l))
+                .collect();
+            if params.is_empty() {
+                continue;
+            }
+            let builder = self.get("/users").await?;
+            let resp = builder.query(&params).send().await?;
+            let body: HelixUsersResponse = check_status_and_json(resp).await?;
+            for u in body.data {
+                out.insert(u.login.to_lowercase(), u);
+            }
         }
-        let params: Vec<(&str, &str)> = logins.iter().map(|l| ("login", *l)).collect();
-        let builder = self.get("/users").await?;
-        let resp = builder.query(&params).send().await?;
-        let body: HelixUsersResponse = check_status_and_json(resp).await?;
-        Ok(body
-            .data
-            .into_iter()
-            .map(|u| (u.login.to_lowercase(), u))
-            .collect())
+        Ok(out)
     }
 }
 
