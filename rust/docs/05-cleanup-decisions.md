@@ -98,3 +98,25 @@ Monitoring-Cutover gehen Game-Transitions als Spalten/Beziehung ins Haupt-Sessio
 Python löscht bei **jedem** `claim` alle abgelaufenen Guard-Rows (`DELETE … WHERE expires_at <= now`)
 — unnötiger Write-Traffic pro Event. Die Korrektheit steckt allein im konditionalen Upsert.
 Rust: `claim` ist ein einzelner Upsert, die GC läuft als periodischer `sweep_expired` im Poll-Loop.
+
+## 14. External-Recruitment-Follow-ups bei Raid-Arrival → bewusst auf Phase 6g zurückgestellt
+
+`arrival_confirmation.rs` berechnet bei der Bestätigung einer Raid-Ankunft fünf Folge-Flags
+(`should_delete_external_recruitment_blacklist_pending`, `should_persist_confirmed_external_recruitment_raid`,
+`should_schedule_external_recruitment_blacklist_pending`, `should_send_partner_raid_message`,
+`should_send_recruitment_message`). Der Wiring-Adapter in `bin/tb-bot/src/raid_arrival_wiring.rs`
+**konsumiert sie noch nicht** — das Port-Audit (13.6.) hat das korrekt als „tote Flags" markiert.
+
+**Warum bewusst offen:** Die dahinterliegenden Effekte sind das External-/Partner-Recruitment-Subsystem
+(Python `raid_arrival_runtime.py:265-268,337-363,403-416` → `record_confirmed_external_recruitment_raid`
+auf `twitch_confirmed_external_recruitment_raids`, `delete/maybe_schedule_external_recruitment_blacklist_pending`
+auf `twitch_external_recruitment_blacklist_pending` inkl. Bot-Ban-Check-Scheduler, sowie
+`send_partner_raid_message`/`send_recruitment_message` via Broker). In Rust existiert von dieser
+Infrastruktur **nichts** außer den Flags. Laut Cutover-Plan ist „6g Recruitment" bis zur Outreach-Phase
+**pausiert** — auch auf der Python-Seite läuft das Recruitment-Anhängsel derzeit nicht.
+
+**Entscheidung:** Die Flags bleiben gesetzt-aber-inert, bis Phase 6g die Recruitment-Schicht (Daten-Stores
++ Broker-Messaging) nativ baut. Das ad-hoc gegen reverse-engineerte Python-Schemas vorzuziehen wäre gegen
+die bewusste Staffelung. **Beim Bau von 6g zu schließen:** die drei Daten-Effekte (delete/persist/schedule)
+zuerst (frühes Abbrechen bei `record … == None` wie Python Z.354), die zwei Messaging-Effekte über den
+Master-Broker. Bis dahin ist diese Zurückstellung hier die Single Source of Truth.
