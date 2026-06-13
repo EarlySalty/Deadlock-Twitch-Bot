@@ -150,9 +150,34 @@ impl BrokerAnnouncementSink {
         }
     }
 
-    fn fresh_token() -> String {
-        // Python: secrets.token_hex(8) → 16 Hex-Zeichen.
-        uuid::Uuid::new_v4().simple().to_string()[..16].to_string()
+    /// Stabiler Tracking-Token. Zuerst der von der DB durchgereichte
+    /// `previous_tracking_token` (Carry-forward), sonst deterministisch aus der
+    /// Stream-Identität — 1:1 zu Python `_build_live_announcement_tracking_token`:
+    /// `sha256(login|stream_id|started_at|title)[:16]`. Über Retries UND Prozess-
+    /// Neustarts hinweg stabil → Idempotenz gegen Doppel-Postings (vorher zufälliges
+    /// UUID, das im Fenster Send-Timeout/Neustart die Absicherung verlor).
+    fn tracking_token(request: &AnnounceLiveRequest) -> String {
+        if let Some(prev) = request
+            .previous_tracking_token
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+        {
+            return prev.to_string();
+        }
+        use sha2::{Digest, Sha256};
+        let raw = format!(
+            "{}|{}|{}|{}",
+            request.login.trim().to_lowercase(),
+            request.stream_id.as_deref().unwrap_or("").trim(),
+            request.started_at_iso.as_deref().unwrap_or("").trim(),
+            request.stream.title.trim(),
+        );
+        Sha256::digest(raw.as_bytes())
+            .iter()
+            .take(8)
+            .map(|b| format!("{b:02x}"))
+            .collect()
     }
 
     /// Rollen-ID aus einer Mention wie `<@&123>` (Python `_extract_role_id_from_mention`).
@@ -175,7 +200,7 @@ impl AnnouncementSink for BrokerAnnouncementSink {
             let retry = self.retry.lock().expect("retry lock");
             match retry.get(&login) {
                 Some(state) => (state.tracking_token.clone(), state.render_now),
-                None => (Self::fresh_token(), Utc::now()),
+                None => (Self::tracking_token(&request), Utc::now()),
             }
         };
         let config = self.configs.load(&login).await;

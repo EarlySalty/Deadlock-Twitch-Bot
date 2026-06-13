@@ -342,6 +342,15 @@ impl EventSubDispatcher {
                     .store_first_message_event(user_id, &context.broadcaster_login, event, now)
                     .await
             }
+            // Channel-Points-Redemptions (Python eventsub_mixin.py:2477-2493): die
+            // Insert-Funktion existierte, wurde aber nie verdrahtet → Telemetrie ging
+            // still verloren, weil der native Receiver die geteilte Callback-URL bedient.
+            "channel.channel_points_automatic_reward_redemption.add"
+            | "channel.channel_points_custom_reward_redemption.add" => {
+                self.telemetry
+                    .store_channel_points_event(user_id, event, now)
+                    .await
+            }
             other => {
                 tracing::debug!(sub_type = other, "EventSub: kein Handler für Sub-Typ");
                 return false;
