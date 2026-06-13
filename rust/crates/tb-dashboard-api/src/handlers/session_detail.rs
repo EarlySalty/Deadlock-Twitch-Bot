@@ -309,12 +309,75 @@ pub async fn session_events_handler(
         vec![]
     };
 
+    // Raids im Session-Fenster: eingehend (arrival_tracking) + ausgehend
+    // (raid_history), UNION ALL nach Zeit sortiert (Port api_v2.py:2388-2427).
+    // viewer_count ist INTEGER -> ::bigint, sonst stiller Decode-Fehler.
+    let streamer_lower = streamer_login.to_lowercase();
+    let raids: Vec<serde_json::Value> = sqlx::query(
+        r#"
+        SELECT detected_at AS at, from_broadcaster_login AS channel,
+               viewer_count::bigint AS viewers, 'incoming' AS direction
+          FROM twitch_raid_arrival_tracking
+         WHERE LOWER(to_broadcaster_login) = $1
+           AND detected_at BETWEEN $2 AND COALESCE($3, NOW())
+        UNION ALL
+        SELECT executed_at AS at, to_broadcaster_login AS channel,
+               viewer_count::bigint AS viewers, 'outgoing' AS direction
+          FROM twitch_raid_history
+         WHERE LOWER(from_broadcaster_login) = $1
+           AND executed_at BETWEEN $2 AND COALESCE($3, NOW())
+        ORDER BY 1
+        "#,
+    )
+    .bind(&streamer_lower)
+    .bind(started_at)
+    .bind(ended_at)
+    .fetch_all(&pool)
+    .await
+    .unwrap_or_default()
+    .iter()
+    .map(|r| {
+        json!({
+            "at": r.try_get::<chrono::DateTime<chrono::Utc>, _>("at").map(|t| t.to_rfc3339()).unwrap_or_default(),
+            "channel": r.try_get::<Option<String>, _>("channel").ok().flatten().unwrap_or_default(),
+            "viewers": r.try_get::<Option<i64>, _>("viewers").ok().flatten().unwrap_or(0),
+            "direction": r.try_get::<String, _>("direction").unwrap_or_default(),
+        })
+    })
+    .collect();
+
+    // Follows pro Minute im Session-Fenster (Port api_v2.py:2429-2456).
+    let follows: Vec<serde_json::Value> = sqlx::query(
+        r#"
+        SELECT DATE_TRUNC('minute', followed_at::timestamptz) AS minute, COUNT(*) AS cnt
+          FROM twitch_follow_events
+         WHERE LOWER(streamer_login) = $1
+           AND followed_at::timestamptz BETWEEN $2 AND COALESCE($3, NOW())
+         GROUP BY 1
+         ORDER BY 1
+        "#,
+    )
+    .bind(&streamer_lower)
+    .bind(started_at)
+    .bind(ended_at)
+    .fetch_all(&pool)
+    .await
+    .unwrap_or_default()
+    .iter()
+    .map(|r| {
+        json!({
+            "minute": r.try_get::<chrono::DateTime<chrono::Utc>, _>("minute").map(|t| t.to_rfc3339()).unwrap_or_default(),
+            "count": r.try_get::<i64, _>("cnt").unwrap_or(0),
+        })
+    })
+    .collect();
+
     Json(json!({
         "sessionId": session_id,
         "streamerLogin": streamer_login,
         "channelUpdates": channel_updates,
-        "raids": [],
-        "follows": [],
+        "raids": raids,
+        "follows": follows,
     }))
     .into_response()
 }
