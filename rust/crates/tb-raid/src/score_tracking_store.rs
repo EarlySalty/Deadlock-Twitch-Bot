@@ -55,8 +55,9 @@ impl ScoreTrackingStore {
     }
 
     /// Trägt einen bestätigten Partner-Raid ein. Leere `to_broadcaster_id` →
-    /// `None` (wie Python). `deadlock_continued_*`/`resolved_*` starten NULL
-    /// (werden später beim Auflösen gesetzt). Liefert die neue `id`.
+    /// `None` (wie Python). Bei Deadlock-Raids starten `deadlock_continued_*`/
+    /// `resolved_*` NULL (werden später beim Auflösen gesetzt); Nicht-Deadlock-Raids
+    /// werden sofort als aufgelöst eingetragen. Liefert die neue `id`.
     pub async fn track_confirmed(
         &self,
         input: &TrackConfirmedInput,
@@ -64,6 +65,24 @@ impl ScoreTrackingStore {
         if input.to_broadcaster_id.trim().is_empty() {
             return Ok(None);
         }
+        // Nicht-Deadlock-Raids (was_deadlock_at_raid=false) werden sofort als
+        // aufgelöst eingetragen (Dauer 0, Grund "not_deadlock_at_raid") — Python
+        // partner_raid_score_tracking.py:421-481. Sonst NULL (späteres Auflösen).
+        let (continued_until, continued_sec, resolved_at, resolution_reason): (
+            Option<&str>,
+            Option<i32>,
+            Option<&str>,
+            Option<&str>,
+        ) = if input.was_deadlock_at_raid {
+            (None, None, None, None)
+        } else {
+            (
+                Some(input.confirmed_at.as_str()),
+                Some(0),
+                Some(input.confirmed_at.as_str()),
+                Some("not_deadlock_at_raid"),
+            )
+        };
         let id: (i32,) = sqlx::query_as(
             r#"
             INSERT INTO twitch_partner_raid_score_tracking (
@@ -74,10 +93,12 @@ impl ScoreTrackingStore {
                 target_stream_started_at, score_last_computed_at,
                 final_score, base_score, duration_score, time_pattern_score,
                 readiness_score, fairness_score, new_partner_multiplier,
-                raid_boost_multiplier, today_received_raids, was_deadlock_at_raid
+                raid_boost_multiplier, today_received_raids, was_deadlock_at_raid,
+                deadlock_continued_until, deadlock_continued_sec, resolved_at, resolution_reason
             ) VALUES (
                 $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11,
-                $12, $13, $14, $15, $16, $17, $18, $19, $20, $21
+                $12, $13, $14, $15, $16, $17, $18, $19, $20, $21,
+                $22, $23, $24, $25
             )
             RETURNING id
             "#,
@@ -109,6 +130,10 @@ impl ScoreTrackingStore {
         .bind(input.raid_boost_multiplier)
         .bind(input.today_received_raids)
         .bind(i32::from(input.was_deadlock_at_raid))
+        .bind(continued_until)
+        .bind(continued_sec)
+        .bind(resolved_at)
+        .bind(resolution_reason)
         .fetch_one(&self.pool)
         .await?;
         Ok(Some(i64::from(id.0)))

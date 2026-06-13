@@ -315,8 +315,10 @@ impl RaidArrivalSink for RaidArrivalSinkImpl {
                     classification: decision.classification.clone().unwrap_or_default(),
                     confirmation_signals: signal_type.to_string(),
                     primary_signal: signal_type.to_string(),
-                    correlation_status: "confirmed".to_string(),
-                    correlation_detail: decision.suppression_reason.clone(),
+                    // Python raid_arrival_runtime.py:302: confirm-pending-Pfad schreibt
+                    // "matched_pending" (nicht "confirmed") und correlation_detail=None.
+                    correlation_status: "matched_pending".to_string(),
+                    correlation_detail: None,
                     source_resolution: decision.source_resolution.clone(),
                     raid_history_id: None,
                     raid_history_executed_at: None,
