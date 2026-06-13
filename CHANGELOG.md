@@ -1,3 +1,11 @@
+## #204 — Lurker-Erinnerung pingt jeden ruhigen Zuschauer nur noch einmal pro Stream
+
+**Ausgangslage:** Die Lurker-Steuer-Erinnerung (der freundliche @-Ping an ruhige Stammzuschauer mit Discord-Hinweis) konnte denselben Zuschauer im Lauf eines Streams mehrfach anpingen — das wirkte wie Spam.
+
+**Was geändert wurde:** Pro Stream merkt sich der Bot jetzt, wen er schon erwähnt hat, und überspringt diese Zuschauer beim nächsten Mal. Stattdessen rücken die nächsten ruhigen Zuschauer nach. Beim nächsten Stream (neue Session) ist die Liste wieder leer.
+
+**Wie es funktioniert:** Beim Senden wird die Erinnerung an die jeweils ranghöchsten noch-nie-in-diesem-Stream-erwähnten Lurker geschickt (maximal zwei pro Erinnerung). Der Bot holt dafür mehr Kandidaten als er erwähnt, filtert die bereits Erwähnten heraus und kappt erst dann. Die Merkliste wird nur bei einer tatsächlich erfolgreich gesendeten Erinnerung ergänzt und beim Stream-Wechsel automatisch zurückgesetzt.
+
 ## #203 — !clip funktioniert wieder nativ
 
 **Ausgangslage:** Seit der Umstellung auf das neue System war der Chat-Command `!clip` kaputt — jeder Aufruf endete mit einer Fehlermeldung statt einem Clip. Die eigentliche Clip-Erstellung war beim Umzug noch nicht nachgebaut.

@@ -139,7 +139,7 @@ Noch offen:
 - `/stats` vier Sektionen (retention/chat/discovery/content_performance) — großer zweiter DB-Block aus `leaderboard.py:1135-1256`.
 - `verify` Nicht-Partner-Promote (`promote_streamer_to_partner` + `backfill_tracked_stats_from_category`) — Lifecycle-Port; bis dahin verifiziert verify nur aktive Partner.
 - Targeted-Promo-Presets 1:1 (Texte/IDs/Tags + Tag-Struktur `&'static str`→Slice).
-- Lurker-Tax Per-Session-Mention-Dedup (session-keyed State) + Bot-Token-Scope-Fallback (TokenManager-Scope-Injektion).
+- Lurker-Tax Bot-Token-Scope-Fallback (TokenManager-Scope-Injektion) — der Per-Session-Mention-Dedup ist ✅ erledigt (13.6.).
 - Spam-Filter periodischer Reload-Loop (ArcSwap + 120s-Task) — Self-Learning greift sonst erst nach Neustart.
 - `channel.ban` Bot-Selbst-Timeout-Erkennung (TimeoutGuard + Bot-ID ins Dispatch durchreichen).
 - Ad-Viewer-Drop Vorzeichen/Fenster-Rework (5-Min-Mittel vor/nach statt Punkt/Min-während).
