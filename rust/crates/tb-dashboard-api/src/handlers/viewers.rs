@@ -733,15 +733,20 @@ pub async fn viewer_detail_handler(
         hour_counts[h] += c;
         dow_counts[d] += c;
     }
-    let mut peak_hours: Vec<i64> = (0..24).collect();
+    // Python api_viewers.py:541-543: ohne Roh-Chat → peakHours=[] und mostActiveDay="N/A"
+    // (nicht künstlich [0,1,2]+Sonntag aus lauter Nullen).
+    let mut peak_hours: Vec<i64> = (0..24).filter(|&h| hour_counts[h as usize] > 0).collect();
     peak_hours.sort_by_key(|&h| std::cmp::Reverse(hour_counts[h as usize]));
     let peak_hours: Vec<i64> = peak_hours.into_iter().take(3).collect();
 
     let dow_names = ["Sonntag","Montag","Dienstag","Mittwoch","Donnerstag","Freitag","Samstag"];
-    let most_active_day = dow_counts.iter().enumerate()
-        .max_by_key(|(_, c)| *c)
-        .map(|(i, _)| dow_names[i])
-        .unwrap_or("N/A");
+    // Python max() liefert bei Gleichstand den ERSTEN Tag → position() statt max_by_key.
+    let max_dow = *dow_counts.iter().max().unwrap_or(&0);
+    let most_active_day = if max_dow == 0 {
+        "N/A"
+    } else {
+        dow_names[dow_counts.iter().position(|&c| c == max_dow).unwrap_or(0)]
+    };
 
     // Trend
     let trend = if activity_timeline.len() >= 4 {

@@ -651,13 +651,14 @@ fn generate_insights(
     // Trend-Analyse: letzte 7 Einträge der Retention-Timeline (backend_extended.py:712–730)
     if retention_timeline.len() >= 7 {
         let n = retention_timeline.len();
+        // Python backend_extended.py:738,741: Trend basiert auf retention_10m.
         let recent: Vec<f64> = retention_timeline[n - 7..]
             .iter()
-            .map(|e| e.retention_5m)
+            .map(|e| e.retention_10m)
             .collect();
         let older: Vec<f64> = retention_timeline[..n - 7]
             .iter()
-            .map(|e| e.retention_5m)
+            .map(|e| e.retention_10m)
             .collect();
 
         let recent_avg = if !recent.is_empty() {

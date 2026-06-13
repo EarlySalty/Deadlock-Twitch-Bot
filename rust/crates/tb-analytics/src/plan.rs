@@ -65,30 +65,41 @@ pub fn plan_entitlements(plan_id: &str) -> &'static [&'static str] {
             "chat.promos.disable",
             "raid.priority",
         ],
-        "analysis_dashboard"
-        | "bundle_analysis_raid_boost"
-        | "analytics_trial" => &[
-            "analytics.ai_mini",
+        "analysis_dashboard" => &[
             "analytics.basic",
+            "analytics.ai_full",
             "analytics.extended",
             "chat.lurker_tax",
-            "raid.priority",
         ],
-        "bundle_werbefrei_analyse" => &[
-            "analytics.ai_mini",
+        "bundle_analysis_raid_boost" => &[
             "analytics.basic",
+            "analytics.ai_full",
             "analytics.extended",
             "chat.lurker_tax",
             "chat.promos.disable",
             "raid.priority",
+        ],
+        "bundle_werbefrei_analyse" => &[
+            "analytics.basic",
+            "analytics.ai_full",
+            "analytics.extended",
+            "chat.lurker_tax",
+            "chat.promos.disable",
         ],
         "bundle_komplett" => &[
             "analytics.ai_mini",
             "analytics.basic",
+            "analytics.ai_full",
             "analytics.extended",
             "chat.lurker_tax",
             "chat.promos.disable",
             "raid.priority",
+        ],
+        "analytics_trial" => &[
+            "analytics.ai_mini",
+            "analytics.basic",
+            "analytics.extended",
+            "chat.lurker_tax",
         ],
         _ => &[],
     }
@@ -192,7 +203,12 @@ pub async fn resolve_plan_snapshot(
                 .as_deref()
                 .map(is_expired_timestamp)
                 .unwrap_or(false);
-            if !expired && pid != "raid_free" {
+            // Ein aktiver (nicht abgelaufener) expliziter Override ist terminal —
+            // auch ein bewusster Admin-Downgrade auf raid_free sperrt den Billing-
+            // Fallthrough (Python repository.py: jeder aktive Override gewinnt).
+            // Der äußere Guard hat „explizit gesetzt" bereits sichergestellt; ein
+            // leerer manual_plan_id (→ raid_free) kommt hier gar nicht an.
+            if !expired {
                 return Ok(PlanSnapshot::from_plan(
                     pid,
                     "manual_override",

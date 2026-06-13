@@ -190,18 +190,23 @@ pub async fn list_handler(
                 r.manual_partner_opt_out.unwrap_or(0),
                 r.technical_pause_reason.as_deref(),
             );
-            // Abgeleiteter Anzeige-Status
-            let display_status = if r.is_live != 0 {
-                "live"
-            } else if r.is_verified != 0 {
-                "verified"
-            } else {
-                ps
+            // Abgeleiteter Anzeige-Status — Python admin_streamer_queries.py:358-375:
+            // Lifecycle-Status hat Vorrang vor live/verified, Endfallback "offline".
+            let display_status = match ps {
+                "blocked" | "non_partner" | "departnered" | "archived" | "token_error" => ps,
+                _ if r.is_live != 0 => "live",
+                _ if r.is_verified != 0 => "verified",
+                _ => "offline",
             };
 
             AdminStreamerItem {
                 login: r.twitch_login.clone(),
-                display_name: r.twitch_login, // kein separates display_name in DB
+                // Python: discord_display_name bevorzugt, sonst Login.
+                display_name: r
+                    .discord_display_name
+                    .clone()
+                    .filter(|s| !s.trim().is_empty())
+                    .unwrap_or_else(|| r.twitch_login.clone()),
                 twitch_user_id: r.twitch_user_id,
                 discord_user_id: r.discord_user_id,
                 discord_display_name: r.discord_display_name,
@@ -233,7 +238,7 @@ pub async fn list_handler(
                 missing_scopes: snap.missing_scopes,
                 oauth_authorized_at: r.authorized_at.map(fmt_dt),
                 promo_disabled: r.promo_disabled.unwrap_or(0) != 0,
-                notes: r.promo_message, // list zeigt promo_message als notes
+                notes: r.manual_plan_notes, // Python: manual_plan_notes als notes
                 technical_pause_reason: r.technical_pause_reason,
                 operational_state: r.operational_state,
                 status: display_status.to_string(),

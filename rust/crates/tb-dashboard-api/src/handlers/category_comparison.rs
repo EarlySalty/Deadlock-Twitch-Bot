@@ -249,10 +249,11 @@ pub async fn category_comparison_handler(
     let peak_percentile = percentile_of(&peak_sorted, your_peak as f64);
     let ret_percentile  = percentile_of(&ret_sorted, your_ret);
     let chat_percentile = percentile_of(&chat_sorted, your_chat);
-    // Rang von oben: Anzahl Streamer mit strikt höherem avg als deiner + 1
-    let below_equal = sorted_avgs.partition_point(|&v| v <= your_avg);
+    // Rang exakt wie Python (api_performance.py:1016): category_total -
+    // int(avg_percentile/100 * category_total) — inkl. Integer-Trunkierung, damit
+    // der Rang auch bei Zwischenwerten (your_avg strikt zwischen zwei Peers) stimmt.
     let category_rank = if category_total > 0 {
-        (category_total - below_equal + 1) as i64
+        (category_total as i64) - ((avg_percentile as f64 / 100.0 * category_total as f64) as i64)
     } else { 0 };
 
     // ── Peer group (no threshold — same as Python _get_peer_group_stats) ─────

@@ -116,6 +116,12 @@ pub async fn retention_curve_handler(
             // Drop-Events: wo Median > 10 % fällt (Python-Parität)
             let mut drop_events: Vec<serde_json::Value> = vec![];
             let mut avg_watch_min: Option<i32> = None;
+            // Python prüft ab curve[0]: schon die erste Minute kann < 0.5 Retention haben.
+            if let Some(first) = curve.first() {
+                if first["median_retention"].as_f64().unwrap_or(0.0) < 0.5 {
+                    avg_watch_min = Some(first["minute"].as_i64().unwrap_or(0) as i32);
+                }
+            }
             for i in 1..curve.len() {
                 let prev_ret = curve[i-1]["median_retention"].as_f64().unwrap_or(0.0);
                 let cur_ret = curve[i]["median_retention"].as_f64().unwrap_or(0.0);
@@ -136,12 +142,26 @@ pub async fn retention_curve_handler(
                 }
             }
 
-            // Sessions-Count: letzte 50 aus DB (rows.len() entspricht nicht sessions, sondern minutes)
+            // Echte Session-Anzahl (Python sessions_used = len(recent_sessions), ≤50) —
+            // rows sind Minuten-Aggregate, nicht Sessions.
+            let sessions_used: i64 = sqlx::query_scalar(
+                r#"SELECT COUNT(*) FROM (
+                       SELECT id FROM twitch_stream_sessions
+                       WHERE LOWER(streamer_login) = $1 AND started_at >= $2 AND ended_at IS NOT NULL
+                       ORDER BY started_at DESC LIMIT 50
+                   ) s"#,
+            )
+            .bind(&streamer)
+            .bind(since)
+            .fetch_one(&pool)
+            .await
+            .unwrap_or(0);
+
             Json(json!({
                 "retention_curve": curve,
                 "drop_events": drop_events,
                 "avg_watch_duration_min": avg_watch_min,
-                "sessions_used": rows.len().min(50),
+                "sessions_used": sessions_used,
                 "window_days": days,
             })).into_response()
         }
