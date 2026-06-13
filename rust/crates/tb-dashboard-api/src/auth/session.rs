@@ -580,6 +580,7 @@ mod integration_tests {
     /// Gibt base64-urlsafe-String zurück (wie Python `fernet.encrypt()` output).
     fn make_test_fernet_payload(json: &str) -> Vec<u8> {
         use std::process::Command;
+        let payload_literal = format!("\"{}\"", json.replace('"', "\\\""));
         let script = format!(
             r#"
 from cryptography.fernet import Fernet
@@ -590,7 +591,7 @@ payload = {}
 print(f.encrypt(payload.encode()).decode(), end='')
 "#,
             test_fernet_key(),
-            format!("\"{}\"", json.replace('"', "\\\""))
+            payload_literal
         );
         let out = Command::new("python3")
             .arg("-c")

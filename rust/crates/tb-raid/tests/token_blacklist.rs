@@ -55,6 +55,19 @@ async fn pool_in_schema(dsn: &str, schema: &str) -> PgPool {
     .execute(&pool)
     .await
     .unwrap();
+    // add_to_blacklist setzt im selben Tx den Raid-Lockout (raid_enabled=FALSE,
+    // needs_reauth=TRUE). Prod-Typen: raid_enabled/needs_reauth sind BOOLEAN.
+    sqlx::query(
+        "CREATE TABLE twitch_raid_auth (
+            twitch_user_id TEXT PRIMARY KEY,
+            twitch_login TEXT,
+            raid_enabled BOOLEAN DEFAULT TRUE,
+            needs_reauth BOOLEAN DEFAULT FALSE
+        )",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
     pool
 }
 

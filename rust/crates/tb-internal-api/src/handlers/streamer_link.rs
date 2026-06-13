@@ -156,7 +156,32 @@ mod tests {
         .await
         .expect("DDL twitch_streamer_identities");
 
+        // Partner-Gate: list_unlinked INNER JOINt twitch_partners (aktive Partner)
+        // — 1:1 zu Python pg.py:4154. Ohne diese Tabelle bleibt jede Liste leer.
+        sqlx::query(
+            r#"
+            CREATE TABLE twitch_partners (
+                twitch_login      TEXT PRIMARY KEY,
+                departnered_at    TEXT,
+                admin_archived_at TEXT
+            )
+            "#,
+        )
+        .execute(&pool)
+        .await
+        .expect("DDL twitch_partners");
+
         pool
+    }
+
+    /// Markiert `login` als aktiven Partner (departnered/archived = NULL), damit
+    /// der INNER JOIN den Streamer als Link-Kandidaten durchlässt.
+    async fn insert_active_partner(pool: &PgPool, login: &str) {
+        sqlx::query("INSERT INTO twitch_partners (twitch_login) VALUES ($1)")
+            .bind(login)
+            .execute(pool)
+            .await
+            .expect("insert active partner");
     }
 
     fn make_router(pool: PgPool, token: &str) -> Router {
@@ -232,6 +257,7 @@ mod tests {
         .execute(&pool)
         .await
         .unwrap();
+        insert_active_partner(&pool, "nanigami").await;
 
         let app = make_router(pool, "secret");
         let base = INTERNAL_API_BASE_PATH;
@@ -265,6 +291,8 @@ mod tests {
         .execute(&pool)
         .await
         .unwrap();
+        // Aktiver Partner: nur die discord_user_id blendet aus, nicht das Gate.
+        insert_active_partner(&pool, "already_linked").await;
 
         let app = make_router(pool, "secret");
         let base = INTERNAL_API_BASE_PATH;
@@ -290,6 +318,7 @@ mod tests {
             .execute(&pool)
             .await
             .unwrap();
+        insert_active_partner(&pool, "kein_uid").await;
 
         let app = make_router(pool, "secret");
         let base = INTERNAL_API_BASE_PATH;
@@ -326,6 +355,7 @@ mod tests {
         .execute(&pool)
         .await
         .unwrap();
+        insert_active_partner(&pool, "nur_monitor").await;
 
         let app = make_router(pool, "secret");
         let base = INTERNAL_API_BASE_PATH;

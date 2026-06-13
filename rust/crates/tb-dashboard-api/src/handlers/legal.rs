@@ -1655,10 +1655,13 @@ mod tests {
     /// Seiten nach /tmp/rust_legal_<slug>.html. Gegenstück auf Python-Seite:
     /// `_DashboardLegalMixin._render_legal_page` mit identischen Footer-Links.
     /// Ausführen mit `cargo test -p tb-dashboard-api -- --ignored --nocapture`.
+    /// Ein Render-Fall: Slug, Footer-Links (Pfad → Label), Impressum-Flag.
+    type LegalPageCase = (&'static str, &'static [(&'static str, &'static str)], bool);
+
     #[test]
     #[ignore]
     fn dump_rendered_pages_fuer_live_diff() {
-        let cases: [(&str, &[(&str, &str)], bool); 4] = [
+        let cases: [LegalPageCase; 4] = [
             (
                 "impressum",
                 &[

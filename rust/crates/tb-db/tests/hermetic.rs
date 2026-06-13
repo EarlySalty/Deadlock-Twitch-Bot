@@ -47,6 +47,18 @@ async fn pool_connects_and_pings() {
 async fn migrations_create_tracking_table_and_touch_nothing_else() {
     let dsn = skip_without_db!();
     let pool = tb_db::connect(&cfg(dsn)).await.expect("connect");
+    // Voraussetzung wie in Prod: die Stats-Tabellen werden von Python angelegt,
+    // bevor die Rust-Migrationen laufen. Die Leaderboard-Index-Migration
+    // (20260612120000) setzt sie via CREATE INDEX voraus. Minimal-Stubs mit der
+    // indizierten `streamer`-Spalte genügen, um den Lauf prod-treu abzubilden.
+    for table in ["twitch_stats_tracked", "twitch_stats_category"] {
+        sqlx::query(&format!(
+            "CREATE TABLE IF NOT EXISTS {table} (streamer TEXT)"
+        ))
+        .execute(&pool)
+        .await
+        .unwrap();
+    }
     tb_db::run_migrations(&pool).await.expect("migrate");
     // sqlx-Tracking-Tabelle existiert, getrennt vom Python-`schema_version`.
     let exists: bool = sqlx::query_scalar(

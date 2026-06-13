@@ -2273,13 +2273,17 @@ mod db_tests {
                 is_partner_active INTEGER DEFAULT 0,
                 archived_at TEXT
             )"#,
-            // streamer_plans — promo_disabled=integer, lurker_tax_enabled=integer, promo_message=text
+            // streamer_plans — promo_disabled=integer, lurker_tax_enabled=integer,
+            // promo_message=text, manual_plan_id/plan_name=text (Entitlement-Pfad
+            // von promo_blocked_by_plan_or_flag + lurker_settings_db).
             r#"CREATE TABLE streamer_plans (
                 twitch_user_id TEXT PRIMARY KEY,
                 twitch_login TEXT,
                 promo_disabled INTEGER DEFAULT 0,
                 lurker_tax_enabled INTEGER DEFAULT 0,
-                promo_message TEXT
+                promo_message TEXT,
+                manual_plan_id TEXT,
+                plan_name TEXT
             )"#,
             // twitch_streamer_identities — twitch_user_id=text, twitch_login=text
             r#"CREATE TABLE twitch_streamer_identities (

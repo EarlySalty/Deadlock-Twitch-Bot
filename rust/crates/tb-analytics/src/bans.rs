@@ -108,7 +108,14 @@ mod tests {
             .connect(dsn)
             .await
             .expect("connect test-db");
-        sqlx::query(&format!("CREATE SCHEMA IF NOT EXISTS {schema}"))
+        // Hermetisch: Schema zuerst verwerfen, damit Alt-Tabellen aus früheren
+        // Läufen (z. B. ohne event_type) nicht via CREATE TABLE IF NOT EXISTS
+        // überleben und die Query mit fehlenden Spalten brechen lassen.
+        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
+            .execute(&pool)
+            .await
+            .expect("Schema droppen fehlgeschlagen");
+        sqlx::query(&format!("CREATE SCHEMA {schema}"))
             .execute(&pool)
             .await
             .expect("Schema anlegen fehlgeschlagen");

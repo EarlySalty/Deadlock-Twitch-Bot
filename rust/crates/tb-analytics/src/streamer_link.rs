@@ -131,7 +131,32 @@ mod tests {
         .await
         .expect("DDL twitch_streamer_identities");
 
+        // Partner-Gate: list_unlinked INNER JOINt twitch_partners (aktive Partner,
+        // departnered_at/admin_archived_at IS NULL) — 1:1 zu Python pg.py:4154.
+        sqlx::query(
+            r#"
+            CREATE TABLE twitch_partners (
+                twitch_login      TEXT PRIMARY KEY,
+                departnered_at    TEXT,
+                admin_archived_at TEXT
+            )
+            "#,
+        )
+        .execute(&pool)
+        .await
+        .expect("DDL twitch_partners");
+
         pool
+    }
+
+    /// Markiert `login` als aktiven Partner (departnered/archived = NULL), damit
+    /// der INNER JOIN den Streamer als Kandidaten durchlässt.
+    async fn insert_active_partner(pool: &PgPool, login: &str) {
+        sqlx::query("INSERT INTO twitch_partners (twitch_login) VALUES ($1)")
+            .bind(login)
+            .execute(pool)
+            .await
+            .expect("insert active partner");
     }
 
     #[tokio::test]
@@ -155,6 +180,7 @@ mod tests {
         .execute(&pool)
         .await
         .expect("insert");
+        insert_active_partner(&pool, "streamer_a").await;
 
         let rows = list_unlinked(&pool).await.expect("list_unlinked");
         assert_eq!(rows.len(), 1);
@@ -177,6 +203,9 @@ mod tests {
         .execute(&pool)
         .await
         .expect("insert");
+        // Aktiver Partner: der Streamer wird NUR durch die discord_user_id
+        // ausgeblendet, nicht durch ein fehlendes Partner-Match.
+        insert_active_partner(&pool, "verknuepft").await;
 
         let rows = list_unlinked(&pool).await.expect("list_unlinked");
         assert!(rows.is_empty(), "verknüpfter Streamer darf nicht erscheinen");
@@ -205,6 +234,7 @@ mod tests {
         .execute(&pool)
         .await
         .expect("insert identity");
+        insert_active_partner(&pool, "identity_linked").await;
 
         let rows = list_unlinked(&pool).await.expect("list_unlinked");
         assert!(
@@ -226,6 +256,8 @@ mod tests {
         .execute(&pool)
         .await
         .expect("insert archiviert");
+        // Aktiver Partner: nur archived_at blendet aus, nicht das Partner-Gate.
+        insert_active_partner(&pool, "alt_archiv").await;
 
         let rows = list_unlinked(&pool).await.expect("list_unlinked");
         assert!(rows.is_empty(), "archivierter Streamer darf nicht erscheinen");
@@ -244,6 +276,7 @@ mod tests {
         .execute(&pool)
         .await
         .expect("insert monitored");
+        insert_active_partner(&pool, "monitor_streamer").await;
 
         let rows = list_unlinked(&pool).await.expect("list_unlinked");
         assert_eq!(rows.len(), 1);
@@ -266,6 +299,7 @@ mod tests {
         .execute(&pool)
         .await
         .expect("insert is_monitored_only=1");
+        insert_active_partner(&pool, "nur_monitor").await;
 
         let rows = list_unlinked(&pool).await.expect("list_unlinked");
         assert_eq!(rows.len(), 1);
@@ -285,6 +319,7 @@ mod tests {
         .execute(&pool)
         .await
         .expect("insert ohne uid");
+        insert_active_partner(&pool, "kein_uid").await;
 
         let rows = list_unlinked(&pool).await.expect("list_unlinked");
         assert_eq!(rows.len(), 1);
@@ -303,6 +338,7 @@ mod tests {
                 .execute(&pool)
                 .await
                 .expect("insert");
+            insert_active_partner(&pool, login).await;
         }
 
         let rows = list_unlinked(&pool).await.expect("list_unlinked");
@@ -326,8 +362,34 @@ mod tests {
         .execute(&pool)
         .await
         .expect("insert leer discord_user_id");
+        insert_active_partner(&pool, "leer_discord").await;
 
         let rows = list_unlinked(&pool).await.expect("list_unlinked");
         assert_eq!(rows.len(), 1, "leerer discord_user_id-String gilt als unverknüpft");
+    }
+
+    #[tokio::test]
+    async fn ohne_aktiven_partner_wird_ausgeblendet() {
+        let dsn = db_dsn_or_skip!();
+        let pool = make_pool(&dsn, "test_sl_kein_partner").await;
+
+        // Unverknüpfter Streamer, aber KEIN (bzw. departnerter) Partner-Eintrag →
+        // der INNER JOIN auf twitch_partners filtert ihn raus.
+        sqlx::query("INSERT INTO twitch_streamers (twitch_login) VALUES ($1)")
+            .bind("kein_partner")
+            .execute(&pool)
+            .await
+            .expect("insert streamer");
+        sqlx::query(
+            "INSERT INTO twitch_partners (twitch_login, departnered_at) VALUES ($1, $2)",
+        )
+        .bind("kein_partner")
+        .bind("2026-01-01 00:00:00")
+        .execute(&pool)
+        .await
+        .expect("insert departnerter partner");
+
+        let rows = list_unlinked(&pool).await.expect("list_unlinked");
+        assert!(rows.is_empty(), "Streamer ohne aktiven Partner darf nicht erscheinen");
     }
 }
