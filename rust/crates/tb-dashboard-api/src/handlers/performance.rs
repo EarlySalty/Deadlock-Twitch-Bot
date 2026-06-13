@@ -86,9 +86,9 @@ pub async fn monthly_stats_handler(
             EXTRACT(YEAR  FROM s.started_at)::integer AS year,
             EXTRACT(MONTH FROM s.started_at)::integer AS month,
             SUM(s.avg_viewers * s.duration_seconds / 3600.0) AS hours_watched,
-            SUM(s.duration_seconds / 3600.0) AS airtime,
+            SUM(s.duration_seconds / 3600.0)::float8 AS airtime,
             AVG(s.avg_viewers) AS avg_viewers,
-            MAX(s.peak_viewers) AS peak_viewers,
+            MAX(s.peak_viewers)::bigint AS peak_viewers,
             SUM(CASE WHEN s.follower_delta IS NOT NULL
                      AND NOT (s.followers_end = 0 AND s.followers_start > 0)
                      THEN s.follower_delta ELSE 0 END) AS follower_delta,

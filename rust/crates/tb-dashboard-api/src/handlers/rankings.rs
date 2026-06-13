@@ -90,7 +90,7 @@ pub async fn rankings_handler(
             r#"SELECT s.streamer_login,
                       SUM(CASE WHEN s.follower_delta IS NOT NULL
                                AND NOT (s.followers_end = 0 AND s.followers_start > 0)
-                               THEN s.follower_delta ELSE 0 END) AS value
+                               THEN s.follower_delta ELSE 0 END)::float8 AS value
                FROM twitch_stream_sessions s
                WHERE s.started_at >= $1 AND s.ended_at IS NOT NULL
                GROUP BY s.streamer_login
@@ -103,7 +103,7 @@ pub async fn rankings_handler(
             r#"SELECT s.streamer_login,
                       SUM(CASE WHEN s.follower_delta IS NOT NULL
                                AND NOT (s.followers_end = 0 AND s.followers_start > 0)
-                               THEN s.follower_delta ELSE 0 END) AS value
+                               THEN s.follower_delta ELSE 0 END)::float8 AS value
                FROM twitch_stream_sessions s
                WHERE s.started_at >= $1 AND s.ended_at IS NOT NULL
                GROUP BY s.streamer_login

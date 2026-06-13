@@ -73,7 +73,7 @@ pub async fn follower_funnel_handler(
     let stats = sqlx::query(
         r#"SELECT
                COUNT(*) AS session_count,
-               COALESCE(SUM(s.duration_seconds), 0) AS total_duration,
+               COALESCE(SUM(s.duration_seconds), 0)::float8 AS total_duration,
                AVG(s.avg_viewers) AS avg_viewers,
                SUM(CASE WHEN s.follower_delta IS NOT NULL
                         AND NOT (s.followers_end = 0 AND s.followers_start > 0)

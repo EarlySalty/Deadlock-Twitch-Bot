@@ -218,9 +218,9 @@ pub async fn raid_retention_handler(
 
     let base_rows = sqlx::query(
         r#"SELECT raid_id, from_broadcaster_login, to_broadcaster_login,
-                  viewer_count_sent, executed_at, target_session_id,
-                  chatters_at_plus5m, chatters_at_plus15m, chatters_at_plus30m,
-                  new_chatters, known_from_raider
+                  viewer_count_sent::bigint AS viewer_count_sent, executed_at, target_session_id,
+                  chatters_at_plus5m::bigint AS chatters_at_plus5m, chatters_at_plus15m::bigint AS chatters_at_plus15m, chatters_at_plus30m::bigint AS chatters_at_plus30m,
+                  new_chatters::bigint AS new_chatters, known_from_raider::bigint AS known_from_raider
            FROM twitch_raid_retention
            WHERE executed_at >= $1 AND LOWER(from_broadcaster_login) = $2
            ORDER BY executed_at DESC LIMIT 100"#,
@@ -379,7 +379,7 @@ pub async fn raid_analytics_handler(
 
     // 1. Outgoing raids aus twitch_raid_retention (bereits berechnete Metriken)
     let retention_rows = sqlx::query(
-        r#"SELECT rr.raid_id, rh.from_broadcaster_login, rr.viewer_count_sent,
+        r#"SELECT rr.raid_id, rh.from_broadcaster_login, rr.viewer_count_sent::bigint AS viewer_count_sent,
                   rr.executed_at, rr.target_session_id, rr.to_broadcaster_login
            FROM twitch_raid_retention rr
            JOIN twitch_raid_history rh ON rh.id = rr.raid_id AND rh.executed_at = rr.executed_at
@@ -557,7 +557,7 @@ pub async fn raid_analytics_handler(
 
     // 6. Incoming raids (twitch_raid_arrival_tracking) — N+1 für Session-Lookup + Timeline
     let incoming_raw = sqlx::query(
-        r#"SELECT detected_at, from_broadcaster_login, viewer_count,
+        r#"SELECT detected_at, from_broadcaster_login, viewer_count::bigint AS viewer_count,
                   classification, confirmation_signals, unraid_seen
            FROM twitch_raid_arrival_tracking
            WHERE LOWER(to_broadcaster_login) = $1 AND detected_at >= $2
@@ -598,7 +598,7 @@ pub async fn raid_analytics_handler(
                 let raid_minute = sess_start.map(|ss| ((det - ss).num_seconds() / 60) as i32).unwrap_or(0).max(0);
 
                 let tl_rows = sqlx::query(
-                    "SELECT minutes_from_start, viewer_count FROM twitch_session_viewers WHERE session_id = $1 ORDER BY minutes_from_start",
+                    "SELECT minutes_from_start, viewer_count::bigint AS viewer_count FROM twitch_session_viewers WHERE session_id = $1 ORDER BY minutes_from_start",
                 )
                 .bind(session_id)
                 .fetch_all(&pool).await.unwrap_or_default();

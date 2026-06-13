@@ -80,7 +80,7 @@ pub async fn category_comparison_handler(
 
     // ── Q1: Your tracked stats ──────────────────────────────────────────────
     let tracked_row = sqlx::query(
-        "SELECT AVG(viewer_count) AS avg_vc, MAX(viewer_count) AS peak_vc
+        "SELECT AVG(viewer_count)::float8 AS avg_vc, MAX(viewer_count)::float8 AS peak_vc
          FROM twitch_stats_tracked
          WHERE ts_utc >= $1 AND LOWER(streamer) = $2"
     ).bind(since).bind(&streamer).fetch_optional(&pool).await.ok().flatten();
@@ -94,7 +94,7 @@ pub async fn category_comparison_handler(
     // ── Q2: Your session stats ──────────────────────────────────────────────
     let sess_row = sqlx::query(r#"
         SELECT AVG(avg_viewers) AS avg_v,
-               MAX(peak_viewers) AS peak_v,
+               MAX(peak_viewers)::float8 AS peak_v,
                AVG(retention_10m) AS ret10,
                AVG(CASE WHEN avg_viewers > 0 THEN unique_chatters * 100.0 / avg_viewers ELSE 0 END) AS chat_h
         FROM twitch_stream_sessions
@@ -113,7 +113,7 @@ pub async fn category_comparison_handler(
 
     // ── Q3: All category avgs (unfiltered — needed for peer group + percentile base) ─
     let all_avgs_rows = sqlx::query(
-        "SELECT streamer, AVG(viewer_count) AS avg_vc FROM twitch_stats_category
+        "SELECT streamer, AVG(viewer_count)::float8 AS avg_vc FROM twitch_stats_category
          WHERE ts_utc >= $1 GROUP BY streamer ORDER BY avg_vc"
     ).bind(since).fetch_all(&pool).await.unwrap_or_default();
 
@@ -138,7 +138,7 @@ pub async fn category_comparison_handler(
     // ── Q4: Category peak avg (with optional threshold) ─────────────────────
     let cat_avg_peak: f64 = if exclude_external {
         sqlx::query(
-            "SELECT AVG(max_vc) AS r FROM (
+            "SELECT AVG(max_vc)::float8 AS r FROM (
                  SELECT MAX(viewer_count) AS max_vc FROM twitch_stats_category
                  WHERE ts_utc >= $1 GROUP BY streamer HAVING AVG(viewer_count) <= $2
              ) s"
@@ -147,7 +147,7 @@ pub async fn category_comparison_handler(
         .and_then(|r| r.try_get::<Option<f64>, _>("r").ok().flatten()).unwrap_or(0.0)
     } else {
         sqlx::query(
-            "SELECT AVG(max_vc) AS r FROM (
+            "SELECT AVG(max_vc)::float8 AS r FROM (
                  SELECT MAX(viewer_count) AS max_vc FROM twitch_stats_category
                  WHERE ts_utc >= $1 GROUP BY streamer
              ) s"
@@ -233,12 +233,12 @@ pub async fn category_comparison_handler(
     // ── Q8: Peak sorted list ─────────────────────────────────────────────────
     let peak_sorted: Vec<f64> = if exclude_external {
         sqlx::query(
-            "SELECT MAX(viewer_count) AS peak FROM twitch_stats_category
+            "SELECT MAX(viewer_count)::float8 AS peak FROM twitch_stats_category
              WHERE ts_utc >= $1 GROUP BY streamer HAVING AVG(viewer_count) <= $2 ORDER BY peak"
         ).bind(since).bind(EXTERNAL_REACH_AVG_THRESHOLD).fetch_all(&pool).await
     } else {
         sqlx::query(
-            "SELECT MAX(viewer_count) AS peak FROM twitch_stats_category
+            "SELECT MAX(viewer_count)::float8 AS peak FROM twitch_stats_category
              WHERE ts_utc >= $1 GROUP BY streamer ORDER BY peak"
         ).bind(since).fetch_all(&pool).await
     }.unwrap_or_default().iter()
@@ -274,7 +274,7 @@ pub async fn category_comparison_handler(
             let peer_rows = sqlx::query(r#"
                 SELECT LOWER(streamer_login) AS login,
                        AVG(avg_viewers) AS avg_v,
-                       MAX(peak_viewers) AS peak_v,
+                       MAX(peak_viewers)::float8 AS peak_v,
                        AVG(retention_10m) AS ret10,
                        AVG(CASE WHEN avg_viewers > 0 THEN unique_chatters * 100.0 / avg_viewers ELSE 0 END) AS chat_h
                 FROM twitch_stream_sessions

@@ -302,7 +302,7 @@ pub async fn audience_demographics_handler(
 
     // ── Q5: Viewer-Sample (twitch_session_viewers) ────────────────────────────
     let vsamp = sqlx::query(
-        "SELECT COUNT(*) AS cnt, COALESCE(SUM(GREATEST(sv.viewer_count,0)),0) AS vm
+        "SELECT COUNT(*) AS cnt, COALESCE(SUM(GREATEST(sv.viewer_count,0)),0)::float8 AS vm
          FROM twitch_session_viewers sv
          JOIN twitch_stream_sessions s ON s.id = sv.session_id
          WHERE s.started_at >= $1 AND LOWER(s.streamer_login) = $2 AND s.ended_at IS NOT NULL"

@@ -156,9 +156,9 @@ pub async fn session_detail_handler(
         }
     } else {
         (
-            row.try_get::<i64, _>("unique_chatters").unwrap_or(0),
-            row.try_get::<i64, _>("first_time_chatters").unwrap_or(0),
-            row.try_get::<i64, _>("returning_chatters").unwrap_or(0),
+            row.try_get::<i32, _>("unique_chatters").unwrap_or(0) as i64,
+            row.try_get::<i32, _>("first_time_chatters").unwrap_or(0) as i64,
+            row.try_get::<i32, _>("returning_chatters").unwrap_or(0) as i64,
         )
     };
 

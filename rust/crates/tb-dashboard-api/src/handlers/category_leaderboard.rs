@@ -74,8 +74,8 @@ pub async fn category_leaderboard_handler(
         let order = if sort_peak { "peak_vc DESC" } else { "avg_vc DESC" };
         format!(r#"
             SELECT c.streamer,
-                   AVG(c.viewer_count)  AS avg_vc,
-                   MAX(c.viewer_count)  AS peak_vc,
+                   AVG(c.viewer_count)::float8  AS avg_vc,
+                   MAX(c.viewer_count)::float8  AS peak_vc,
                    BOOL_OR(c.is_partner) AS is_partner
             FROM twitch_stats_category c
             WHERE c.ts_utc >= $1
@@ -87,8 +87,8 @@ pub async fn category_leaderboard_handler(
         let order = if sort_peak { "peak_vc DESC" } else { "avg_vc DESC" };
         format!(r#"
             SELECT c.streamer,
-                   AVG(c.viewer_count)  AS avg_vc,
-                   MAX(c.viewer_count)  AS peak_vc,
+                   AVG(c.viewer_count)::float8  AS avg_vc,
+                   MAX(c.viewer_count)::float8  AS peak_vc,
                    BOOL_OR(c.is_partner) AS is_partner
             FROM twitch_stats_category c
             WHERE c.ts_utc >= $1
