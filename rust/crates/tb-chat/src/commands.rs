@@ -158,6 +158,26 @@ pub struct AutobanEntry {
     pub login: String,
 }
 
+/// Port für die Clip-Erstellung (`!clip`). Löst den Broadcaster-Token selbst auf
+/// und ruft Helix `POST /clips`. Optional — ist kein Port gesetzt, antwortet
+/// `!clip` mit einem Migrations-Hinweis (der Composition-Root setzt ihn nur, wenn
+/// Helix-Client und Krypto-Key vorhanden sind).
+#[async_trait]
+pub trait ClipPort: Send + Sync {
+    async fn create_clip(&self, broadcaster_user_id: &str, broadcaster_login: &str) -> ClipOutcome;
+}
+
+/// Ergebnis eines `!clip`-Versuchs (Port von `commands.py:284-408`).
+#[derive(Debug, Clone)]
+pub enum ClipOutcome {
+    /// Clip erstellt — fertige Clip-URL.
+    Created { url: String },
+    /// Keine gültige Broadcaster-Autorisierung (`clips:edit` fehlt / nicht verbunden).
+    OAuthMissing,
+    /// Twitch-Fehler oder kein Clip zurück.
+    Failed,
+}
+
 // ---------------------------------------------------------------------------
 // Interne Partner-Row (aus twitch_streamers_partner_state)
 // ---------------------------------------------------------------------------
@@ -187,6 +207,8 @@ pub struct CommandEngine {
     invite: Arc<dyn InvitePort>,
     super_mod: Arc<dyn SuperModPort>,
     autoban: Arc<dyn LastAutobanStore>,
+    /// Optionaler Clip-Port (`!clip`). `None` → Migrations-Hinweis.
+    clip: Option<Arc<dyn ClipPort>>,
     /// In-memory Cooldown-Tabelle für `!invite`.
     /// `bot.py:781` — 1h pro (channel_login, chatter_login).
     invite_cooldowns: Mutex<HashMap<(String, String), Instant>>,
@@ -210,8 +232,16 @@ impl CommandEngine {
             invite,
             super_mod,
             autoban,
+            clip: None,
             invite_cooldowns: Mutex::new(HashMap::new()),
         }
+    }
+
+    /// Setzt den optionalen Clip-Port (`!clip`). Builder-Style, damit der
+    /// Konstruktor und die Tests unverändert bleiben.
+    pub fn set_clip_port(mut self, clip: Arc<dyn ClipPort>) -> Self {
+        self.clip = Some(clip);
+        self
     }
 
     /// Verarbeitet eine eingehende Chat-Nachricht.
@@ -753,21 +783,48 @@ impl CommandEngine {
             raw_title.to_string()
         };
 
-        // Clip-Erstellung (Helix POST /clips + Broadcaster-Token) ist noch nicht
-        // nativ portiert — siehe 05-cleanup-decisions.md. Ehrliche Meldung statt
-        // "in 10 Sekunden nochmal" (das würde nie klappen, der User probiert sonst
-        // wiederholt vergeblich).
-        tracing::info!(
-            channel = %event.broadcaster_user_login,
-            broadcaster_id = %partner.twitch_user_id,
-            title = %title,
-            "!clip angefordert — ClipPort noch nicht implementiert"
-        );
-        self.reply(
-            event,
-            "Die Clip-Erstellung wird gerade auf das neue System umgestellt und ist kurz nicht verfügbar.",
-        )
-        .await;
+        let Some(clip_port) = &self.clip else {
+            // Kein Clip-Port verdrahtet (z. B. ohne Helix/Krypto) → ehrlicher Hinweis
+            // statt "in 10 Sekunden nochmal" (das würde nie klappen).
+            self.reply(
+                event,
+                "Die Clip-Erstellung wird gerade auf das neue System umgestellt und ist kurz nicht verfügbar.",
+            )
+            .await;
+            return;
+        };
+
+        match clip_port
+            .create_clip(&partner.twitch_user_id, &partner.twitch_login)
+            .await
+        {
+            ClipOutcome::Created { url } => {
+                let suffix = if title.is_empty() {
+                    String::new()
+                } else {
+                    format!(" – \"{title}\"")
+                };
+                self.reply(
+                    event,
+                    &format!("🎬 Clip erstellt{suffix} (ca. letzte 60s): {url}"),
+                )
+                .await;
+            }
+            ClipOutcome::OAuthMissing => {
+                self.reply(
+                    event,
+                    "Für Clips fehlt die Autorisierung — der Streamer muss den Bot einmal per !raid_enable verbinden.",
+                )
+                .await;
+            }
+            ClipOutcome::Failed => {
+                self.reply(
+                    event,
+                    "Clip konnte nicht erstellt werden. Bitte in ein paar Sekunden nochmal.",
+                )
+                .await;
+            }
+        }
     }
 
     // -----------------------------------------------------------------------

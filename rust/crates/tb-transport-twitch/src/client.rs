@@ -171,6 +171,23 @@ impl HelixClient {
             .header("Authorization", format!("Bearer {user_token}"))
     }
 
+    /// Erstellt einen Clip aus dem aktuellen Stream-Buffer (Helix `POST /clips`).
+    ///
+    /// Braucht ein **User-Token mit `clips:edit`-Scope** (i. d. R. der Broadcaster).
+    /// Titel/Dauer akzeptiert Helix hier nicht — der Clip kommt aus dem Live-Buffer
+    /// (~letzte 30 s); der Titel wird nur in der Chat-Antwort verwendet.
+    /// `Ok(None)` = Twitch lieferte kein Clip-Objekt zurück.
+    pub async fn create_clip(
+        &self,
+        broadcaster_id: &str,
+        user_token: &str,
+    ) -> Result<Option<ClipInfo>, HelixError> {
+        let path = format!("/clips?broadcaster_id={broadcaster_id}&has_delay=false");
+        let resp = self.post_with_user_token(&path, user_token).send().await?;
+        let body: HelixClipsResponse = check_status_and_json(resp).await?;
+        Ok(body.data.into_iter().next())
+    }
+
     /// Holt Twitch-User-Infos für eine Liste von Logins.
     ///
     /// Gibt eine Map `login (lowercase) → TwitchUser` zurück.
@@ -230,6 +247,19 @@ pub struct TwitchUser {
 #[derive(Debug, serde::Deserialize)]
 struct HelixUsersResponse {
     pub data: Vec<TwitchUser>,
+}
+
+/// Clip-Daten aus `POST /clips` (Helix liefert id + edit_url).
+#[derive(Debug, serde::Deserialize)]
+pub struct ClipInfo {
+    pub id: String,
+    #[serde(default)]
+    pub edit_url: String,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct HelixClipsResponse {
+    data: Vec<ClipInfo>,
 }
 
 #[cfg(test)]

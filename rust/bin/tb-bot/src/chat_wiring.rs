@@ -20,8 +20,8 @@ use std::time::Duration;
 use serde_json::Value;
 use sqlx::PgPool;
 use tb_chat::commands::{
-    AutobanEntry, CommandEngine, DiscordLinkPort, InvitePort, LastAutobanStore, RaidCommandPort,
-    RaidStatusInfo, SuperModPort,
+    AutobanEntry, ClipOutcome, ClipPort, CommandEngine, DiscordLinkPort, InvitePort,
+    LastAutobanStore, RaidCommandPort, RaidStatusInfo, SuperModPort,
 };
 use tb_chat::moderation::{HelixChatClient, ModerationEngine, OutboundSuppressionStore};
 use tb_chat::promos::{InviteResolver, PartnerChannelCheck, PromoEngine};
@@ -34,7 +34,9 @@ use tb_chat::{
     GlobalBanSweeper, GlobalChatterBanEnforcer, ModAlerter, PartnerRoster, PgHelixMentionResolver,
     ReviewLog, SusInviteCheck,
 };
+use tb_crypto::FieldCipher;
 use tb_monitoring::{EventSubHooks, SubscriptionManager};
+use tb_raid::RaidAuthStore;
 use tb_transport_twitch::HelixClient;
 
 /// Reconcile-Intervall für Chat-Subscriptions (Python: periodischer
@@ -43,6 +45,71 @@ const CHAT_SUB_RECONCILE_INTERVAL: Duration = Duration::from_secs(30 * 60);
 
 /// Fallback-Env für den globalen Discord-Invite (chat_command.rs / promos.py).
 const PROMO_DISCORD_INVITE_ENV: &str = "PROMO_DISCORD_INVITE";
+
+// ---------------------------------------------------------------------------
+// Clip-Port (!clip)
+// ---------------------------------------------------------------------------
+
+/// Adapter für den `!clip`-Command: löst den Broadcaster-Token aus dem
+/// verschlüsselten `twitch_raid_auth`-Store auf und ruft Helix `POST /clips`.
+/// Nur Broadcaster-Token (Pythons Primärpfad; der Bot-Token hat kein `clips:edit`).
+struct ChatClipAdapter {
+    helix: Arc<HelixClient>,
+    auth_store: RaidAuthStore,
+}
+
+#[async_trait::async_trait]
+impl ClipPort for ChatClipAdapter {
+    async fn create_clip(&self, broadcaster_user_id: &str, _broadcaster_login: &str) -> ClipOutcome {
+        let tokens = match self.auth_store.load_decrypted(broadcaster_user_id).await {
+            Ok(Some(t)) => t,
+            Ok(None) => return ClipOutcome::OAuthMissing,
+            Err(error) => {
+                tracing::warn!(%error, "!clip: Broadcaster-Token-Load fehlgeschlagen");
+                return ClipOutcome::Failed;
+            }
+        };
+        match self
+            .helix
+            .create_clip(broadcaster_user_id, &tokens.access_token)
+            .await
+        {
+            Ok(Some(clip)) => {
+                let url = if !clip.id.is_empty() {
+                    format!("https://clips.twitch.tv/{}", clip.id)
+                } else {
+                    clip.edit_url
+                };
+                if url.is_empty() {
+                    ClipOutcome::Failed
+                } else {
+                    ClipOutcome::Created { url }
+                }
+            }
+            Ok(None) => ClipOutcome::Failed,
+            Err(error) => {
+                tracing::warn!(%error, "!clip: Helix POST /clips fehlgeschlagen");
+                ClipOutcome::Failed
+            }
+        }
+    }
+}
+
+/// Baut den optionalen Clip-Port — nur mit Helix-Client UND Krypto-Key.
+/// Ohne beides bleibt `!clip` beim Migrations-Hinweis (kein Crash).
+pub fn build_clip_port(
+    helix: Option<Arc<HelixClient>>,
+    cipher: Option<Arc<FieldCipher>>,
+    pool: PgPool,
+) -> Option<Arc<dyn ClipPort>> {
+    match (helix, cipher) {
+        (Some(helix), Some(cipher)) => Some(Arc::new(ChatClipAdapter {
+            helix,
+            auth_store: RaidAuthStore::new(pool, cipher),
+        })),
+        _ => None,
+    }
+}
 
 // ---------------------------------------------------------------------------
 // Öffentlicher Einstieg
@@ -143,6 +210,7 @@ pub async fn build_runtime(
     handle: ChatApiHandle,
     pool: PgPool,
     manual_raid: Option<Arc<dyn tb_internal_api::ManualRaidPort>>,
+    clip_port: Option<Arc<dyn ClipPort>>,
     inner_hooks: Arc<dyn EventSubHooks>,
 ) -> ChatRuntime {
     let ChatApiHandle {
@@ -168,7 +236,7 @@ pub async fn build_runtime(
             .set_partner_check(Arc::new(DbPartnerCheck { pool: pool.clone() })),
     );
 
-    let commands = Arc::new(CommandEngine::new(
+    let mut command_engine = CommandEngine::new(
         pool.clone(),
         Arc::clone(&api),
         Arc::new(RaidCommandAdapter {
@@ -181,7 +249,11 @@ pub async fn build_runtime(
         Arc::new(EngineAutobanStore {
             engine: Arc::clone(&moderation),
         }),
-    ));
+    );
+    if let Some(cp) = clip_port {
+        command_engine = command_engine.set_clip_port(cp);
+    }
+    let commands = Arc::new(command_engine);
 
     let review_log_dir =
         std::env::var("TB_CHAT_REVIEW_LOG_DIR").unwrap_or_else(|_| "logs".to_string());

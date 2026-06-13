@@ -9,7 +9,7 @@ pub mod streams;
 pub mod token;
 pub mod user_token;
 
-pub use client::{HelixClient, HelixConfig, HelixError, TwitchUser};
+pub use client::{ClipInfo, HelixClient, HelixConfig, HelixError, TwitchUser};
 pub use eventsub::{CreateOutcome, EventSubSubscription};
 pub use chat::{parse_created_at, BanOutcome, HelixUserInfo, SendOutcome};
 pub use moderation::AddModeratorOutcome;
