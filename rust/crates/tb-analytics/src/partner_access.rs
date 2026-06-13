@@ -5,7 +5,33 @@
 //! Liefert alle Felder die auth-status für die `access`- und `permissions`-
 //! Sektionen braucht, ohne dabei den Auth-Level oder die Session zu kennen.
 
+use chrono::{DateTime, NaiveDateTime, TimeZone, Utc};
 use sqlx::PgPool;
+
+/// Port von `_parse_access_state_datetime` (api_v2.py Z. 898–914): toleranter
+/// ISO-Parser (`Z`→`+00:00`, naive Zeit → UTC). Parse-Fehler → `None`.
+fn parse_access_state_datetime(raw: &str) -> Option<DateTime<Utc>> {
+    let text = raw.trim();
+    if text.is_empty() {
+        return None;
+    }
+    let normalized = text.replace('Z', "+00:00");
+    if let Ok(dt) = DateTime::parse_from_rfc3339(&normalized) {
+        return Some(dt.with_timezone(&Utc));
+    }
+    // Naive Varianten ohne Offset → als UTC interpretieren (wie Python).
+    for fmt in [
+        "%Y-%m-%dT%H:%M:%S%.f",
+        "%Y-%m-%dT%H:%M:%S",
+        "%Y-%m-%d %H:%M:%S%.f",
+        "%Y-%m-%d %H:%M:%S",
+    ] {
+        if let Ok(naive) = NaiveDateTime::parse_from_str(text, fmt) {
+            return Some(Utc.from_utc_datetime(&naive));
+        }
+    }
+    None
+}
 
 // ── Status-Konstanten ───────────────────────────────────────────────────────
 
@@ -191,12 +217,16 @@ pub async fn load_partner_access_state(
         let error_count = bl.error_count.unwrap_or(0);
         let role_removed = bl.role_removed.unwrap_or(false);
 
-        // grace_active: grace_expires_at in der Zukunft und Rolle nicht entfernt
-        let grace_active = !grace_raw.is_empty() && !role_removed;
+        // Python _parse_access_state_datetime: ISO parsen (Z→+00:00, naive→UTC).
+        let grace_parsed = parse_access_state_datetime(&grace_raw);
+        // token_error_grace_expires_at wird gesetzt, sobald der Timestamp parst —
+        // unabhängig von grace_active (Python api_v2.py:1069-1071).
+        token_error_grace_expires_at = grace_parsed.map(|dt| dt.to_rfc3339());
 
-        if grace_active {
-            token_error_grace_expires_at = Some(grace_raw.clone());
-        }
+        // grace_active: nur wenn die Frist in der ZUKUNFT liegt und die Rolle nicht
+        // entfernt wurde (Python Z.1043-1047). Ohne den >now()-Check blieb eine
+        // abgelaufene Frist „aktiv" und sperrte den Streamer dauerhaft aus den Analytics.
+        let grace_active = grace_parsed.is_some_and(|dt| dt > Utc::now()) && !role_removed;
 
         // Python api_v2.py:1045-1057: token_error setzen wenn grace aktiv
         let not_hard_blocked = !matches!(
