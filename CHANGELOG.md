@@ -1,3 +1,14 @@
+## #202 — Nachgebaute Features: Werbetexte, Personality-Panel, Ad-Drop, Discord-Scope
+
+**Ausgangslage:** Ein paar Punkte aus dem Audit waren keine schnellen Korrekturen, sondern echte Nachbauten. Die abgeschlossenen:
+
+- **Discord-Werbetexte wieder korrekt.** Die im Hintergrund vorgeschlagenen Promo-Texte (die der Bot passend zum Chat-Kontext auswählt) wichen vom hinterlegten Set ab — falsche Texte, falsche Stichwörter für die Auswahl. Jetzt 1:1 wie vorgesehen, mit den richtigen Schlagwörtern.
+- **Personality-Panel im Zuschauer-Detail zurück.** Die Einordnung, worüber ein Zuschauer typischerweise schreibt (Hype, Frage, Feedback, Game-Talk, …), fehlte komplett. Jetzt werden bis zu 2000 Nachrichten des Viewers ausgewertet und der häufigste Typ samt Verteilung angezeigt.
+- **Werbe-Drop-Auswertung mit richtigem Vorzeichen.** Die Kennzahl „Viewer-Verlust durch Werbung" verglich vorher einen Einzelpunkt mit dem Tief während der Ad und kam mit umgekehrtem Vorzeichen heraus. Jetzt: 5-Minuten-Mittel vor der Werbung gegen 5-Minuten-Mittel nach der Werbung, korrekt vorzeichenrichtig — und die „schlimmsten Ads" sind richtig sortiert.
+- **Discord-Aktions-Berechtigung nachgezogen (intern).** Zwei interne Routen (Discord-Flag/Profil setzen) prüften eine konfigurierbare Berechtigungs-Allowlist nicht; jetzt tun sie es, wie die übrigen Routen.
+
+**Wie es jetzt funktioniert:** Diese Punkte entsprechen wieder der Vorgänger-Version. Ein paar größere Nachbauten (u. a. die native Clip-Erstellung und das automatische Verifizieren neuer Streamer) sind bewusst als eigene, sorgfältig zu bauende Einheiten zurückgestellt — intern als Backlog dokumentiert, damit nichts gehetzt mit neuen Fehlern reinkommt.
+
 ## #201 — Port-Audit: Restliche Abweichungen aus dem Backlog behoben
 
 **Ausgangslage:** Nach den großen Fehlern (#199) blieb aus dem Port-Audit ein Backlog kleinerer Abweichungen — einzeln meist unauffällig, in Summe aber spürbar in Analyse-Zahlen, Moderation und internen Abläufen. Behoben, gruppiert nach Bereich:

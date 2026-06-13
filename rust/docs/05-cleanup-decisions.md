@@ -130,7 +130,9 @@ Token, correlation_status, Nicht-Deadlock-Raid-Auflösung, get_users-Chunking u.
 Folgendes ist **bewusst offen** — entweder echte Feature-Ports (kein Backlog-Cleanup)
 oder bewusste Nicht-Fixes:
 
-**Größere Feature-Ports (eigene Arbeit, nicht „Bugfix"):**
+**Größere Feature-Ports (eigene Arbeit, nicht „Bugfix"):** — ✅ ERLEDIGT 13.6.:
+Targeted-Promo-Presets (1:1), Ad-Viewer-Drop-Rework, Discord-Action-Scope-Guard,
+viewer-detail.personality (`classify_message` portiert). Noch offen:
 - `viewer-detail.personality` — braucht den `_classify_message`-Port (war per #180 schon bewusst `null`).
 - `/stats` vier Sektionen (retention/chat/discovery/content_performance) — großer zweiter DB-Block aus `leaderboard.py:1135-1256`.
 - `verify` Nicht-Partner-Promote (`promote_streamer_to_partner` + `backfill_tracked_stats_from_category`) — Lifecycle-Port; bis dahin verifiziert verify nur aktive Partner.
