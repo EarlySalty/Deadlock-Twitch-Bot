@@ -14,6 +14,13 @@
 //!   (`CONSECUTIVE_FAILURE_WINDOW_HOURS`) → Counter +1; sonst Reset auf 1.
 //!   Neuer Eintrag → Grace-Period 7 Tage (`GRACE_PERIOD_DAYS`).
 //! - **clear**: nach erfolgreichem Refresh den Eintrag löschen.
+//! - **add** schreibt zusätzlich den Sofort-Lockout auf `twitch_raid_auth`
+//!   (`raid_enabled=FALSE, needs_reauth=TRUE`) — Port von Python
+//!   `_mark_reauth_required`, das `add_to_blacklist` **unbedingt ab dem ersten
+//!   Fehler** aufruft. Ohne das bliebe der widerrufene Token bis `error_count>=3`
+//!   nutzbar. Der Partner-Mirror + Discord-Hinweis (Python `_disable_raid_bot`,
+//!   erst ab `error_count>=3`) gehört in die Partner-/Broker-Schicht und bleibt
+//!   hier bewusst offen.
 
 use chrono::{DateTime, Duration, SecondsFormat, Utc};
 use sqlx::PgPool;
@@ -183,6 +190,24 @@ impl TokenBlacklistStore {
                 .await?;
             }
         }
+
+        // Sofort-Lockout (Python add_to_blacklist -> _mark_reauth_required, unbedingt
+        // ab dem ersten invalid_grant): raid_enabled=FALSE gated load_decrypted, der
+        // Token wird ab sofort nicht mehr geladen/refresht; needs_reauth=TRUE
+        // signalisiert dem Dashboard die nötige Neu-Autorisierung. twitch_login wird
+        // wie in Python nur bei nicht-leerem Hint überschrieben.
+        sqlx::query(
+            "UPDATE twitch_raid_auth
+                SET raid_enabled = FALSE,
+                    needs_reauth = TRUE,
+                    twitch_login = COALESCE(NULLIF($1, ''), twitch_login)
+              WHERE twitch_user_id = $2",
+        )
+        .bind(twitch_login.trim().to_lowercase())
+        .bind(twitch_user_id)
+        .execute(&mut *tx)
+        .await?;
+
         tx.commit().await?;
         Ok(())
     }
