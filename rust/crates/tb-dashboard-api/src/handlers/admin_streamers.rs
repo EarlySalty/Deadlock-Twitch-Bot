@@ -218,7 +218,13 @@ pub async fn list_handler(
                 last_seen_at: r.last_seen_at,
                 last_game: r.last_game,
                 last_stream_at: r.last_stream_at.map(fmt_dt),
-                plan_id: r.billing_plan_id.or(r.manual_plan_id),
+                // Python admin_streamer_queries.py:397-402: manual_plan_id ZUERST
+                // (Admin-Override), dann billing; leere/Whitespace-Werte = None.
+                plan_id: r
+                    .manual_plan_id
+                    .filter(|s| !s.trim().is_empty())
+                    .or(r.billing_plan_id.filter(|s| !s.trim().is_empty()))
+                    .map(|s| s.trim().to_string()),
                 billing_status: r.billing_status,
                 oauth_connected: snap.connected,
                 oauth_needs_reauth: snap.needs_reauth,
