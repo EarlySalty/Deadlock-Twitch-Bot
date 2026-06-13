@@ -1,3 +1,24 @@
+## #201 — Port-Audit: Restliche Abweichungen aus dem Backlog behoben
+
+**Ausgangslage:** Nach den großen Fehlern (#199) blieb aus dem Port-Audit ein Backlog kleinerer Abweichungen — einzeln meist unauffällig, in Summe aber spürbar in Analyse-Zahlen, Moderation und internen Abläufen. Behoben, gruppiert nach Bereich:
+
+**Analyse-Dashboard:**
+- **Plan-Berechtigungen wieder korrekt.** Die Zuordnung „welcher Plan schaltet welches Feature frei" wich beim Umzug ab: zahlende Erweitert-/Analyse-Kunden wurden beim KI-Modell heruntergestuft, bei einem Bundle wurde die Werbung trotz bezahltem Werbefrei-Anteil nicht abgeschaltet, und ein paar Pläne bekamen einen Raid-Boost ohne Berechtigung. Jetzt 1:1 wie vorgesehen. Außerdem: ein manueller Admin-Downgrade auf den Gratis-Plan wird wieder respektiert, statt von einem noch laufenden Abo überschrieben zu werden.
+- **Kategorie-Rang exakt.** Der angezeigte Rang im Kategorie-Vergleich nutzte eine Näherung und stimmte nur, wenn der eigene Schnitt zufällig genau einem anderen Wert entsprach. Jetzt exakt nach der ursprünglichen Formel.
+- **Viewer-Detail ohne Chat ehrlich.** Hatte ein Zuschauer nie geschrieben, zeigte das Profil Schein-Werte (Stunden 0–2, „Sonntag") statt leerer Aktivität. Jetzt: keine Stunden, „N/A".
+- **Retention-Kurve:** „verwendete Sessions" zählte fälschlich Minuten-Zeilen statt Sessions; die durchschnittliche Watch-Dauer übersprang die allererste Minute.
+- **Admin-Streamerliste:** Status-Anzeige hat jetzt die richtige Reihenfolge (gesperrt/abgemeldet vor „live"), Anzeigename fällt auf den Discord-Namen zurück, Notiz zeigt die Admin-Notiz statt der Werbenachricht.
+
+**Moderation & Chat:**
+- Ein bereits gebannter Spammer, der erneut auffällt, erzeugt keinen doppelten Ban-Eintrag in der öffentlichen Statistik und keine wiederholte Chat-Notice mehr.
+- Eine ungünstig kodierte Verdachts-Nachricht kann den Moderations-Pfad nicht mehr zum Absturz bringen (Zeichen- statt Byte-Kürzung im Log).
+- Die Lurker-Erinnerung berechnet die „stille Zeit" robust (keine negativen Werte mehr, die die Schwelle verfälschen).
+- `!clip` antwortet ehrlich („wird gerade umgestellt") statt „in 10 Sekunden nochmal" — die Clip-Erstellung wird noch nativ nachgezogen.
+
+**Intern (robuster, ohne sichtbaren Effekt):** Channel-Points-Einlösungen werden wieder als Telemetrie gespeichert; Live-Ankündigungen nutzen einen über Neustarts stabilen Idempotenz-Schlüssel (keine Doppel-Postings mehr im Neustart-Fenster); bestätigte Raids auf nicht-Deadlock-Ziele werden korrekt sofort aufgelöst; User-Abfragen an Twitch werden auf 100er-Pakete aufgeteilt (API-Limit).
+
+**Wie es jetzt funktioniert:** Alle genannten Stellen entsprechen wieder der ausgereiften Vorgänger-Version. Die wenigen verbliebenen Punkte (größere Feature-Nachbauten wie die volle Clip-Erstellung sowie bewusst belassene Verbesserungen gegenüber dem Original) sind intern als Backlog dokumentiert.
+
 ## #200 — 30-Tage-Analyse-Trial + Bezahlschranke für erweiterte Auswertungen
 
 **Ausgangslage:** Die erweiterten Analyse-Seiten (Zuschauer-Demografie, Insights, Kategorie-Vergleich, Bestenliste, Timings, Viewer-Profile, Audience-Sharing, Follower-Trichter) waren im umgestellten Dashboard versehentlich für jeden eingeloggten Streamer offen — die Bezahlschranke, die es vorher gab, war beim Port verloren gegangen. Gleichzeitig fehlte ein einfacher Weg, die erweiterten Auswertungen unverbindlich zu testen.
