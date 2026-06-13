@@ -132,11 +132,12 @@ oder bewusste Nicht-Fixes:
 
 **Größere Feature-Ports (eigene Arbeit, nicht „Bugfix"):** — ✅ ERLEDIGT 13.6.:
 Targeted-Promo-Presets (1:1), Ad-Viewer-Drop-Rework, Discord-Action-Scope-Guard,
-viewer-detail.personality (`classify_message` portiert). Noch offen:
+viewer-detail.personality (`classify_message`), **!clip nativ** (Helix `POST /clips`
++ Broadcaster-Token via RaidAuthStore; Bot-Fallback bewusst weg, da kein `clips:edit`).
+Noch offen:
 - `viewer-detail.personality` — braucht den `_classify_message`-Port (war per #180 schon bewusst `null`).
 - `/stats` vier Sektionen (retention/chat/discovery/content_performance) — großer zweiter DB-Block aus `leaderboard.py:1135-1256`.
 - `verify` Nicht-Partner-Promote (`promote_streamer_to_partner` + `backfill_tracked_stats_from_category`) — Lifecycle-Port; bis dahin verifiziert verify nur aktive Partner.
-- `!clip` voller Helix-Port (`POST /clips` + Broadcaster-Token + ClipPort-Trait) — Meldung ist ehrlich gemacht, Erstellung folgt.
 - Targeted-Promo-Presets 1:1 (Texte/IDs/Tags + Tag-Struktur `&'static str`→Slice).
 - Lurker-Tax Per-Session-Mention-Dedup (session-keyed State) + Bot-Token-Scope-Fallback (TokenManager-Scope-Injektion).
 - Spam-Filter periodischer Reload-Loop (ArcSwap + 120s-Task) — Self-Learning greift sonst erst nach Neustart.

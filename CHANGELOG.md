@@ -1,3 +1,11 @@
+## #203 — !clip funktioniert wieder nativ
+
+**Ausgangslage:** Seit der Umstellung auf das neue System war der Chat-Command `!clip` kaputt — jeder Aufruf endete mit einer Fehlermeldung statt einem Clip. Die eigentliche Clip-Erstellung war beim Umzug noch nicht nachgebaut.
+
+**Was geändert wurde:** Der komplette Clip-Ablauf läuft jetzt nativ. Tippt jemand `!clip` (optional mit einem Titel), erstellt der Bot über die Twitch-API einen Clip aus dem aktuellen Stream-Buffer (ungefähr die letzten Sekunden) und postet den fertigen Clip-Link in den Chat.
+
+**Wie es funktioniert:** Für die Clip-Erstellung braucht Twitch eine Autorisierung mit Clip-Recht – die kommt vom Broadcaster selbst (über die bestehende Bot-Verbindung, die der Streamer per `!raid_enable` eingerichtet hat). Der Bot entschlüsselt diesen Zugang, ruft damit die Clip-Erstellung auf und gibt den Link zurück. Ist der Streamer (noch) nicht verbunden, kommt ein klarer Hinweis, sich einmal per `!raid_enable` zu verbinden, statt einer nichtssagenden Fehlermeldung. Titel/Länge legt Twitch beim Buffer-Clip selbst fest; der angegebene Titel erscheint in der Chat-Antwort.
+
 ## #202 — Nachgebaute Features: Werbetexte, Personality-Panel, Ad-Drop, Discord-Scope
 
 **Ausgangslage:** Ein paar Punkte aus dem Audit waren keine schnellen Korrekturen, sondern echte Nachbauten. Die abgeschlossenen:
