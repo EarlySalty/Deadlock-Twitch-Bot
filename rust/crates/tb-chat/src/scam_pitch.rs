@@ -339,7 +339,11 @@ pub enum PitchDecision {
     Hint,
     /// Öffentliche Warnung (WARNING_PUBLIC). Text enthält die fertige Chat-Nachricht.
     PublicWarn { text: String },
-    /// Starke Warnung + Timeout (WARNING_STRONG).
+    /// Erster WARNING_STRONG-Treffer: nur öffentliche Warnung, **kein** Timeout,
+    /// **kein** Delete — Python warnt hier nur (service_pitch_warning.py Z. 983–1030).
+    StrongWarn { text: String },
+    /// Timeout bei Eskalation (wiederholter Pitch trotz Cooldown). Kein Delete —
+    /// Python timeoutet hier 600 s ohne zu löschen.
     StrongTimeout { text: String, duration: Duration },
 }
 
@@ -1013,20 +1017,9 @@ impl ScamPitchDetector {
                 "🛡️ @{chatter_login} Timeout (10m) wegen wiederholter Service-Pitches/Spam. \
                  Empfehlung: User bannen."
             );
-            // Timeout via ChatApi (UNSICHER: Python versucht channel.timeout ODER timeout_user,
-            // service_pitch_warning.py Z. 942–952)
-            if let Err(e) = self
-                .api
-                .timeout_user(
-                    &event.broadcaster_user_id,
-                    &chatter_id,
-                    600,
-                    "Service-Pitch / Spam Escalation",
-                )
-                .await
-            {
-                debug!("Escalation-Timeout fehlgeschlagen: {e}");
-            }
+            // Den 600-s-Timeout führt die Pipeline einmalig auf StrongTimeout aus
+            // (kein Doppel-Timeout mehr; Mod-/Broadcaster-Guard greift dort).
+            // Python timeoutet hier ebenfalls 600 s, ohne die Nachricht zu löschen.
             self.log_warning(
                 &channel_login,
                 &chatter_login,
@@ -1075,10 +1068,10 @@ impl ScamPitchDetector {
                     st.first_seen.remove(&bucket_key);
 
                     if severity == "WARNING_STRONG" {
-                        PitchDecision::StrongTimeout {
-                            text: warning_text,
-                            duration: Duration::from_secs(600),
-                        }
+                        // Python (Z. 983–1030): erster Strong-Treffer warnt nur
+                        // öffentlich — kein Delete, kein Timeout. Der Timeout kommt
+                        // erst im Eskalationszweig (wiederholter Pitch trotz Cooldown).
+                        PitchDecision::StrongWarn { text: warning_text }
                     } else {
                         PitchDecision::PublicWarn { text: warning_text }
                     }
@@ -2352,9 +2345,9 @@ mod tests {
         let det = make_detector(Some(10)).await; // 10 Tage alt → neu
         let event = make_event("chan", "spammer", "ima pull up with my crew bro");
         let result = det.observe(&event).await;
-        // crew_threat(5) + new_account(+2) = 7 → PUBLIC, quick_action_eligible → PublicWarn oder StrongTimeout
+        // crew_threat(5) + new_account(+2) = 7 → PUBLIC, quick_action_eligible → PublicWarn oder StrongWarn (erster Treffer, kein Timeout)
         assert!(
-            matches!(result, PitchDecision::PublicWarn { .. } | PitchDecision::StrongTimeout { .. }),
+            matches!(result, PitchDecision::PublicWarn { .. } | PitchDecision::StrongWarn { .. }),
             "Erwartet Public/Strong, bekam: {result:?}"
         );
     }

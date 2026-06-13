@@ -12,7 +12,7 @@
 //! 3. Kanal-Klassifizierung (1559–1572)
 //! 4. Non-Partner/Monitored-Only: nur Tracking (1575–1585)
 //! 5. Global-Chatter-Ban (1589–1595)
-//! 6. Scam-Pitch-Warnung (1597–1601) — Detektor sendet Chat-Warnung intern; Pipeline löscht Nachricht + führt Timeout (StrongTimeout) aus
+//! 6. Scam-Pitch-Warnung (1597–1601) — Detektor sendet Chat-Warnung intern; Pipeline löscht NIE (wie Python) und timeoutet nur bei Eskalation (StrongTimeout)
 //! 7. Spam-Score + Auto-Ban (1602–1737)
 //! 8. Sus-Discord-Invite (1741–1743)
 //! 9. Fun-Responses, nur wenn Deadlock live (1745–1750)
@@ -439,13 +439,12 @@ impl ChatPipeline {
         }
 
         // Schritt 6: Scam-Pitch (Z. 1597–1601) — Detektor sendet Chat-Warnung intern.
-        // Nachricht löschen + Timeout sind Aufgabe der Pipeline.
+        // Wie Python wird NIE gelöscht; ein Timeout erfolgt nur bei Eskalation
+        // (StrongTimeout). Erst-Warnung (StrongWarn/PublicWarn) ist nicht-destruktiv.
         let pitch = p.scam_pitch.observe(event).await;
         match &pitch {
             PitchDecision::StrongTimeout { .. } => {
-                debug!(channel = %channel_login, chatter = %chatter_login, "Scam-Pitch: StrongTimeout → Delete + Timeout");
-                self.execute_auto_ban(event, &channel_login, false, "Scam-Pitch erkannt", None, "")
-                    .await;
+                debug!(channel = %channel_login, chatter = %chatter_login, "Scam-Pitch: StrongTimeout (Eskalation) → Timeout (kein Delete)");
                 if !event.chatter_user_id.is_empty()
                     && event.chatter_user_id != event.broadcaster_user_id
                     && !event.is_mod_or_broadcaster()
@@ -472,10 +471,8 @@ impl ChatPipeline {
                     );
                 }
             }
-            PitchDecision::PublicWarn { .. } => {
-                debug!(channel = %channel_login, chatter = %chatter_login, "Scam-Pitch: PublicWarn → Delete");
-                self.execute_auto_ban(event, &channel_login, false, "Scam-Pitch erkannt", None, "")
-                    .await;
+            PitchDecision::StrongWarn { .. } | PitchDecision::PublicWarn { .. } => {
+                debug!(channel = %channel_login, chatter = %chatter_login, "Scam-Pitch: Warnung (kein Delete/Timeout, wie Python)");
                 if !event.chatter_user_id.is_empty()
                     && event.chatter_user_id != event.broadcaster_user_id
                     && !event.is_mod_or_broadcaster()
