@@ -871,11 +871,8 @@ impl ScamPitchDetector {
             return PitchDecision::None;
         }
 
-        // Schritt 6: Follower-Check (Z. 847–856)
-        let (is_low_target, follower_count) = {
-            let mut st = self.state.lock().await;
-            self.get_follower_hint(&mut st, &channel_login, now)
-        };
+        // Schritt 6: Follower-Check (Z. 847–856) — Lazy-DB-Load bei Cache-Miss.
+        let (is_low_target, follower_count) = self.follower_hint(&channel_login, now).await;
         if !is_low_target {
             return PitchDecision::None;
         }
@@ -1150,35 +1147,76 @@ impl ScamPitchDetector {
         }
     }
 
-    /// Schritt 6: Follower-Hint aus In-Memory-Cache + DB.
-    /// service_pitch_warning.py Z. 700–746
-    fn get_follower_hint(
-        &self,
-        st: &mut State,
-        channel_login: &str,
-        now: f64,
-    ) -> (bool, Option<i32>) {
+    /// Schritt 6: Follower-Hint mit Lazy-DB-Load bei Cache-Miss.
+    ///
+    /// Python (service_pitch_warning.py Z. 700–746) liest bei Cache-Miss synchron
+    /// `readonly_connection()`; hier laden wir async und cachen das Ergebnis. Großer
+    /// Kanal (> MAX_FOLLOWERS) → kein Low-Target (von Service-Pitch-Warnungen
+    /// ausgenommen); sonst — inkl. unbekannt/keine Session-Daten (None) — gilt der
+    /// Kanal als klein. Vorher gab der Cache-Miss immer „assume small" zurück, weil
+    /// `pre_warm_follower_cache` nirgends aufgerufen wurde → der Follower-Gate war
+    /// faktisch aus und große Kanäle bekamen Warnungen/Timeouts.
+    async fn follower_hint(&self, channel_login: &str, now: f64) -> (bool, Option<i32>) {
         let login = channel_login.trim_start_matches('#').to_lowercase();
         if login.is_empty() {
             return (true, None);
         }
-        if let Some(&(ts, fc)) = st.follower_cache.get(&login) {
-            if now - ts <= FOLLOWER_CACHE_TTL_SEC {
-                return if fc.map(|c| c > MAX_FOLLOWERS).unwrap_or(false) {
-                    (false, fc)
-                } else {
-                    (true, fc)
-                };
+        // Frischen Cache-Wert nutzen, wenn vorhanden.
+        {
+            let st = self.state.lock().await;
+            if let Some(&(ts, fc)) = st.follower_cache.get(&login) {
+                if now - ts <= FOLLOWER_CACHE_TTL_SEC {
+                    return Self::derive_low_target(fc);
+                }
             }
         }
-        // Cache-Miss: synchroner DB-Aufruf nicht möglich aus sync-Kontext.
-        // Rückgabe: assume small (wie Python bei None).
-        // Der Aufrufer muss pre-warm oder den Wert aus einem async-Kontext laden.
-        // UNSICHER: Python ruft hier synchron `readonly_connection()` auf;
-        // hier wird der Cache-Miss als „unbekannt → assume small" behandelt.
-        // Der Orchestrator sollte `pre_warm_follower_cache` vor dem ersten observe() aufrufen.
-        debug!(channel = %login, "Follower-Cache Miss — assume small");
-        (true, None)
+        // Cache-Miss → einmalig aus der DB laden und cachen (Python: synchroner Read).
+        let fc = self.load_follower_count(&login).await;
+        {
+            let mut st = self.state.lock().await;
+            st.follower_cache.insert(login.clone(), (now, fc));
+        }
+        debug!(channel = %login, followers = ?fc, "Follower-Hint aus DB geladen");
+        Self::derive_low_target(fc)
+    }
+
+    /// Großer Kanal (> MAX_FOLLOWERS) → kein Low-Target; sonst (auch None) klein.
+    fn derive_low_target(fc: Option<i32>) -> (bool, Option<i32>) {
+        if fc.map(|c| c > MAX_FOLLOWERS).unwrap_or(false) {
+            (false, fc)
+        } else {
+            (true, fc)
+        }
+    }
+
+    /// Letzte bekannte Follower-Zahl eines Kanals aus der DB (oder None bei
+    /// fehlenden Session-Daten). service_pitch_warning.py Z. 714–729.
+    /// Prod-Typen: followers_end/followers_start = INTEGER.
+    ///
+    /// Hot-Path-Schutz: Der Lookup läuft in der Chat-Pipeline (einmal pro Kanal je
+    /// Cache-TTL). Er ist mit 3 s gebounded und **fail-open** (None = „assume small"),
+    /// damit ein DB-Hiccup die Pipeline nicht stallt.
+    async fn load_follower_count(&self, login: &str) -> Option<i32> {
+        let query = sqlx::query_scalar::<_, Option<i32>>(
+            r#"
+            SELECT COALESCE(followers_end, followers_start)
+              FROM twitch_stream_sessions
+             WHERE streamer_login = $1
+               AND COALESCE(followers_end, followers_start) IS NOT NULL
+             ORDER BY COALESCE(ended_at, started_at) DESC
+             LIMIT 1
+            "#,
+        )
+        .bind(login)
+        .fetch_optional(&self.pool);
+
+        match tokio::time::timeout(std::time::Duration::from_secs(3), query).await {
+            Ok(res) => res.unwrap_or(None).flatten(),
+            Err(_) => {
+                tracing::warn!(channel = %login, "Follower-Lookup Timeout — fail-open (assume small)");
+                None
+            }
+        }
     }
 
     /// Befüllt den Follower-Cache aus der DB (async, vom Orchestrator aufzurufen).
@@ -1195,23 +1233,8 @@ impl ScamPitchDetector {
         if login.is_empty() {
             return;
         }
-        // service_pitch_warning.py Z. 714–729
-        // Prod-Typen: followers_end/followers_start = INTEGER, ended_at/started_at = TIMESTAMPTZ
-        let result: Option<i32> = sqlx::query_scalar(
-            r#"
-            SELECT COALESCE(followers_end, followers_start)
-              FROM twitch_stream_sessions
-             WHERE streamer_login = $1
-               AND COALESCE(followers_end, followers_start) IS NOT NULL
-             ORDER BY COALESCE(ended_at, started_at) DESC
-             LIMIT 1
-            "#,
-        )
-        .bind(&login)
-        .fetch_optional(&self.pool)
-        .await
-        .unwrap_or(None)
-        .flatten();
+        // service_pitch_warning.py Z. 714–729 — gemeinsame Query via load_follower_count.
+        let result = self.load_follower_count(&login).await;
 
         let now = self.state.lock().await.now();
         let mut st = self.state.lock().await;
