@@ -30,7 +30,7 @@
 //!
 //! **Sliding-Refresh (Parität zu Python):** Beide Session-Typen werden bei
 //! Aktivität verlängert (`expires_at = now + TTL`), persistiert wird erst ab
-//! >1800s Drift (services.py:222-231, auth_mixin.py:989-1003). Dafür wird der
+//! über 1800 s Drift (services.py:222-231, auth_mixin.py:989-1003). Dafür wird der
 //! Payload mit aktualisiertem `expires_at` neu Fernet-verschlüsselt.
 //!
 //! Der Fernet-Key kommt aus Env-Var `SESSIONS_ENCRYPTION_KEY` (Infisical lädt

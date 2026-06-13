@@ -1148,7 +1148,7 @@ impl PromoEngine {
             let has_raw = state.raw_msg_count_since_promo > 0;
             // Python: activity_age_sec is None → kein Chat → Silence gilt als OK (promos.py:1355).
             // Rust `is_some_and` würde None als false werten → geblockt. Korrekt: None → true.
-            let silent = state.last_raw_chat_message_ts.map_or(true, |t| {
+            let silent = state.last_raw_chat_message_ts.is_none_or(|t| {
                 now.duration_since(t).as_secs() >= PROMO_VIEWER_SPIKE_MIN_CHAT_SILENCE_SEC
             });
             let spike_ok = state.last_promo_viewer_spike.is_none_or(|t| {

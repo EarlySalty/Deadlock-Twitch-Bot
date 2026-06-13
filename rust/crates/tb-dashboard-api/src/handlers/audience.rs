@@ -71,7 +71,7 @@ pub async fn viewer_overlap_handler(
         Some(s) => s.to_lowercase(),
         None => return (StatusCode::BAD_REQUEST, Json(json!({"error":"Streamer required"}))).into_response(),
     };
-    let limit = params.limit.unwrap_or(20).max(5).min(50) as i64;
+    let limit = params.limit.unwrap_or(20).clamp(5, 50) as i64;
 
     // Bot-Exclusion: $1 = base_streamer, $2 = base_streamer (für !=), $3..$N+2 = Bots (c1),
     // $N+3..$2N+2 = Bots (c2), $2N+3 = limit.

@@ -196,7 +196,7 @@ pub async fn follower_funnel_handler(
     };
 
     let avg_session_mins = if total_duration > 0.0 { total_duration / session_count.max(1) as f64 / 60.0 } else { 0.0 };
-    let avg_time_to_follow = (avg_session_mins * 0.4).max(5.0).min(45.0);
+    let avg_time_to_follow = (avg_session_mins * 0.4).clamp(5.0, 45.0);
 
     let raid_followers = (raid_viewers as f64 * 0.05) as i64;
     let raid_followers = raid_followers.min(gained_for_conv);

@@ -63,7 +63,7 @@ async fn recalculate_raid_chat_metrics(
     let bot_not_in_sc: Vec<String> = (3..=bots.len() + 2)
         .map(|i| format!("${i}"))
         .collect();
-    let ret_sql = format!(
+    let ret_sql = String::from(
         r#"WITH raid_inputs AS (
                SELECT CAST(r.raid_id AS BIGINT) AS raid_id,
                       COALESCE(r.executed_at_key, '') AS executed_at_key,

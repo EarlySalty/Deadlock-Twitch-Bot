@@ -8,7 +8,7 @@
 //! - None       → Redirect → /twitch/auth/login?next=%2Fanalyse
 //! - Admin/Localhost → immer erlaubt
 //! - Partner    → landing_access_allowed? → analytics_access_allowed?
-//!               (bei false → Redirect → /twitch/dashboard)
+//!   (bei false → Redirect → /twitch/dashboard)
 //!
 //! Dist-Pfad: Env `DASHBOARD_V2_DIST_PATH`, Default `bot/analytics/dashboard_v2/dist`
 //! (relativ zum WorkingDirectory des Service = Repo-Root).

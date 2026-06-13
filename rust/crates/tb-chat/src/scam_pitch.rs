@@ -1398,10 +1398,6 @@ impl SpamAiReviewer {
         }
     }
 
-    fn now(&self) -> f64 {
-        self.epoch.elapsed().as_secs_f64()
-    }
-
     /// Startet ggf. einen AI-Review-Task (fire-and-forget).
     ///
     /// Trigger: `spam_score > 0` AND review_worthwhile AND Cooldown nicht aktiv.
