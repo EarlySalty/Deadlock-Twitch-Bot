@@ -452,21 +452,23 @@ impl ModerationEngine {
 
         match &outcome {
             BanOutcome::Banned | BanOutcome::AlreadyBanned => {
-                // In-Memory + DB speichern
+                // In-Memory immer (beide Pfade).
                 self.persist_autoban_record(channel_login, chatter_id, chatter_login, content)
                     .await;
-                // Öffentliche recent-bans-Statistik speisen (Port von
-                // moderation.py:_record_autoban_db_event). Spam-Inhalt als Feed-Grund.
-                self.record_ban_event_db(broadcaster_id, chatter_login, chatter_id, content)
-                    .await;
 
-                // Chat-Notice (nur wenn nicht silent)
-                // Port: moderation.py Z. 238–239
-                if !silent {
-                    let notice = notice_text
-                        .map(|t| t.replace("{login}", chatter_login))
-                        .unwrap_or_else(|| NOTICE_SPAM_BAN.replace("{login}", chatter_login));
-                    let _ = self.api.send_message(broadcaster_id, &notice).await;
+                // Nur ein FRISCHER Ban speist die öffentliche recent-bans-Statistik
+                // und sendet die Chat-Notice. Re-Detektion eines bereits gebannten
+                // Spammers (AlreadyBanned/400) unterdrückt beides — wie Python
+                // (moderation.py:1812-1843), sonst Doppel-Events + wiederholte Notices.
+                if matches!(outcome, BanOutcome::Banned) {
+                    self.record_ban_event_db(broadcaster_id, chatter_login, chatter_id, content)
+                        .await;
+                    if !silent {
+                        let notice = notice_text
+                            .map(|t| t.replace("{login}", chatter_login))
+                            .unwrap_or_else(|| NOTICE_SPAM_BAN.replace("{login}", chatter_login));
+                        let _ = self.api.send_message(broadcaster_id, &notice).await;
+                    }
                 }
                 true
             }

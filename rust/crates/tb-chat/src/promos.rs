@@ -1347,7 +1347,11 @@ impl PromoEngine {
             r#"WITH historical_lurks AS (
                 SELECT sc.chatter_login,
                        COUNT(DISTINCT sc.session_id) AS prior_lurk_sessions,
-                       SUM(EXTRACT(EPOCH FROM (sc.last_seen_at - sc.first_message_at)) / 60.0) AS estimated_lurk_minutes
+                       COALESCE(SUM(CASE
+                                WHEN sc.first_message_at IS NULL OR sc.last_seen_at IS NULL THEN 0
+                                WHEN sc.last_seen_at <= sc.first_message_at THEN 0
+                                ELSE EXTRACT(EPOCH FROM (sc.last_seen_at - sc.first_message_at)) / 60.0
+                             END), 0) AS estimated_lurk_minutes
                   FROM twitch_session_chatters sc
                   JOIN twitch_stream_sessions s ON s.id = sc.session_id
                  WHERE LOWER(sc.streamer_login) = LOWER($1)

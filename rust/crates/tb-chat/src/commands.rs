@@ -753,9 +753,10 @@ impl CommandEngine {
             raw_title.to_string()
         };
 
-        // UNSICHER: Clip-API (create_clip) fehlt im ChatApi-Trait.
-        // Für vollständigen Port wird ein ClipPort-Trait benötigt.
-        // Bis dahin: Fehlerantwort — commands.py:187.
+        // Clip-Erstellung (Helix POST /clips + Broadcaster-Token) ist noch nicht
+        // nativ portiert — siehe 05-cleanup-decisions.md. Ehrliche Meldung statt
+        // "in 10 Sekunden nochmal" (das würde nie klappen, der User probiert sonst
+        // wiederholt vergeblich).
         tracing::info!(
             channel = %event.broadcaster_user_login,
             broadcaster_id = %partner.twitch_user_id,
@@ -764,7 +765,7 @@ impl CommandEngine {
         );
         self.reply(
             event,
-            "Clip konnte nicht erstellt werden. Bitte in 10 Sekunden nochmal versuchen.",
+            "Die Clip-Erstellung wird gerade auf das neue System umgestellt und ist kurz nicht verfügbar.",
         )
         .await;
     }

@@ -123,7 +123,9 @@ impl SusInviteCheck {
             "Sus Discord-Invite in #{} von {}: {}",
             channel_login,
             chatter_login,
-            &content[..content.len().min(200)]
+            // Zeichen-basiert kürzen (Python content[:200]); Byte-Slice könnte an
+            // einer Multibyte-Grenze panischen.
+            content.chars().take(200).collect::<String>()
         );
 
         Some(SusInviteHit {
