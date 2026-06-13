@@ -97,6 +97,30 @@ impl PollHooks for SubscriptionPollHooks {
     }
 }
 
+/// Sprachfilter fürs Kategorie-Sampling/Scout. Python hartkodiert
+/// `TWITCH_LANGUAGE="de de-de de-at de-ch"` (core/constants.py); hier ist ein
+/// Env-Override via `TWITCH_LANGUAGE_FILTERS` erlaubt, aber leer/ungesetzt fällt
+/// auf den deutschen Default zurück — **nicht** auf „alle Sprachen", sonst landet
+/// das Kategorie-Sample sprachgemischt in den Stats (Port-Bug bis 13.6.).
+fn language_filters_from_env() -> Vec<String> {
+    let parsed: Vec<String> = std::env::var("TWITCH_LANGUAGE_FILTERS")
+        .map(|v| {
+            v.split(',')
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .collect()
+        })
+        .unwrap_or_default();
+    if parsed.is_empty() {
+        ["de", "de-de", "de-at", "de-ch"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect()
+    } else {
+        parsed
+    }
+}
+
 #[tokio::main]
 async fn main() {
     tracing_subscriber::fmt::init();
@@ -554,9 +578,7 @@ async fn main() {
                     }),
                     None => Arc::new(tb_monitoring::NoopPollHooks),
                 };
-                let language_filters: Vec<String> = std::env::var("TWITCH_LANGUAGE_FILTERS")
-                    .map(|v| v.split(',').map(str::to_string).collect())
-                    .unwrap_or_default();
+                let language_filters: Vec<String> = language_filters_from_env();
                 let source: Arc<dyn StreamSource> = Arc::new(HelixStreamSource {
                     helix: helix_client,
                 });
@@ -604,9 +626,7 @@ async fn main() {
     if let Some(ref h) = *helix {
         let scout_game =
             std::env::var("TWITCH_TARGET_GAME_NAME").unwrap_or_else(|_| "Deadlock".to_string());
-        let scout_lang_filters: Vec<String> = std::env::var("TWITCH_LANGUAGE_FILTERS")
-            .map(|v| v.split(',').map(str::to_string).collect())
-            .unwrap_or_default();
+        let scout_lang_filters: Vec<String> = language_filters_from_env();
         tb_monitoring::build_scout_task(
             pool.clone(),
             std::sync::Arc::new(h.clone()),
