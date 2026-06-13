@@ -1,3 +1,25 @@
+## #199 — Port-Audit: Schwung stiller Fehler aus der Rust-Umstellung behoben
+
+**Ausgangslage:** Ein systematischer Audit hat den auf Rust umgestellten Bot Funktion für Funktion gegen die alte Python-Version gestellt. Dabei kamen mehrere Fehler ans Licht, die seit der Umstellung still mitliefen — nichts ist abgestürzt, deshalb fielen sie im Alltag kaum auf, aber Zahlen und Verhalten wichen ab.
+
+**Analyse-Dashboard zeigte teils Nullen.** Auf mehreren Auswertungsseiten (Kategorie-Vergleich, Bestenliste, Zuschauer-Demografie, Raid-Auswertung, Ranglisten nach Wachstum, Follower-Trichter, Monatsstatistik) standen Kennzahlen dauerhaft auf 0 oder zeigten für jeden dieselbe „Starter"-Stufe — obwohl die Daten in der Datenbank lagen. Ursache: Beim Umzug wurden Ganzzahl-Werte (Zuschauerzahlen, Peaks, Summen) intern im falschen Zahlenformat ausgelesen; die Datenbank lieferte einen Lesefehler, der still verschluckt und durch eine 0 ersetzt wurde. Statt das zu kaschieren, werden die Werte jetzt im korrekten Format gelesen — die Seiten zeigen wieder echte Zahlen und Ranglisten-Stufen.
+
+**Bots wurden als Zuschauer mitgezählt.** Im Zuschauer-Verzeichnis und den Cross-Channel-Auswertungen sollte eine feste Liste bekannter Chat-Bots herausgefiltert werden. Durch einen Logikfehler in der Filterbedingung griff der Ausschluss nie — Bots tauchten als normale Zuschauer auf und verfälschten die Zahlen. Der Filter schließt sie jetzt wieder zuverlässig aus.
+
+**Events-Tab einer Stream-Session war leer.** In der Detailansicht einer einzelnen Session blieben die Listen „Raids" und „Follows" immer leer, weil sie beim Port nie befüllt wurden. Jetzt werden eingehende und ausgehende Raids sowie die Follows pro Minute innerhalb des Stream-Fensters wieder angezeigt.
+
+**Scam-/Service-Pitch-Warnung war zu aggressiv.** Beim ersten Treffer hat der Bot die Nachricht sofort gelöscht und einen 10-Minuten-Timeout gesetzt. Das konnte gelegentlich legitime Nutzer treffen, die knapp über der Schwelle lagen. Jetzt gilt wie vorgesehen: Der erste Treffer ergibt nur eine öffentliche Warnung — kein Löschen, kein Timeout. Ein Timeout kommt erst, wenn jemand trotz laufender Warn-Sperre erneut einen Pitch nachlegt. Gelöscht wird in keinem Fall.
+
+**Große Kanäle bekamen fälschlich Scam-Warnungen.** Die Warnung soll etablierte Kanäle ab einer gewissen Follower-Zahl ausnehmen. Diese Ausnahme war praktisch deaktiviert (die Follower-Zahl wurde nie nachgeschlagen, jeder Kanal galt als „klein"). Jetzt wird die letzte bekannte Follower-Zahl wieder herangezogen; große Kanäle sind ausgenommen. Der Nachschlag ist abgesichert, damit ein Datenbank-Hänger den Chat nie ausbremst.
+
+**Streamer blieb nach abgelaufener Gnadenfrist ausgesperrt.** Nach einem Twitch-Anmelde-Fehler gibt es eine Gnadenfrist, in der der Analyse-Zugang eingeschränkt ist. Eine längst abgelaufene Frist wurde weiter als „aktiv" behandelt — der Streamer kam dauerhaft nicht mehr ins Analyse-Dashboard, obwohl er längst hätte freigegeben sein müssen. Jetzt wird geprüft, ob die Frist wirklich noch in der Zukunft liegt; danach ist der Zugang wieder offen.
+
+**Token-Sperre nach Autorisierungs-Entzug.** Wenn die Twitch-Autorisierung eines Streamers widerrufen ist, nimmt der Bot den toten Token jetzt sofort aus dem Betrieb und markiert „Neu-Verbinden nötig", statt ihn weiter erfolglos zu erneuern.
+
+**Kategorie-Statistik wieder deutschsprachig.** Das kategorieweite Sampling über alle Deadlock-Streams lief ohne Sprachfilter und mischte nicht-deutsche Streams in die Statistik. Der Filter ist wieder fest auf die deutschsprachigen Varianten gesetzt.
+
+**So funktioniert es jetzt:** Alle genannten Stellen verhalten sich wieder wie in der ausgereiften Python-Version — gleiche Funktionalität, aber an einer Stelle (Follower-Nachschlag) zusätzlich gegen Datenbank-Hänger abgesichert. Die Zahlen im Dashboard stimmen wieder, die Moderation greift zurückhaltender und nur dort, wo sie soll.
+
 ## #198 — Tote Refactoring-Relikte entfernt: promos.rs, scam_pitch.rs, auto_raid.rs
 
 **Ausgangslage:** Drei weitere Reste aus früheren Umbauphasen hatten sich im Code gehalten — toter Code, der mit `let _ =` vor Compiler-Warnungen kaschiert wurde.
