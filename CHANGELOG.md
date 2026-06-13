@@ -1,3 +1,19 @@
+## #205 — Bezahlschranke ließ zahlende Kunden nicht durch, !clip-Token läuft jetzt nach, Events-Zeitleiste wieder sichtbar
+
+**Ausgangslage:** Drei Nachwehen aus der Rust-Umstellung, die erst beim genauen Gegenprüfen auffielen:
+
+- Die in #200 wiederhergestellte Bezahlschranke prüfte intern gegen erfundene Plan-Namen (`analytics_pro`/`analytics_extended`) statt gegen die echten verkauften Pläne (`analysis_dashboard` und die Bundles). Folge: Genau die zahlenden Kunden — und das 30-Tage-Onboarding-Geschenk — wurden ausgesperrt, während nur der manuell gestartete Trial durchkam. Die Schranke wirkte also praktisch umgekehrt.
+- Der native `!clip` (#203) nutzte den Broadcaster-Token nur roh: War er abgelaufen, scheiterte der Clip mit Fehler, obwohl er sich hätte erneuern lassen. Zusätzlich war der Token-Zugriff an „Raids aktiviert" gekoppelt — ein Streamer mit abgeschalteten Raids bekam fälschlich „OAuth fehlt", obwohl er autorisiert war.
+- Im Analyse-Dashboard blieb die Ereignis-Zeitleiste einer Stream-Session (Titel-/Kategorie-Wechsel, Raids, Follower-Verlauf) leer, weil die Daten unter anderen Schlüsseln geliefert wurden, als die Oberfläche sie erwartete.
+
+**Was geändert wurde:**
+
+- Die Bezahlschranke fragt jetzt den echten Plan-Katalog ab — dieselbe Quelle, die auch die Features freischaltet. Wer einen erweiterten Plan oder einen laufenden Trial hat, kommt durch; alle anderen sehen die klare „Plan nötig"-Antwort. Die Ablaufprüfung akzeptiert zusätzlich reine Datumsangaben und Zeiten ohne Zeitzonen-Angabe, statt sie als ungültig zu verwerfen.
+- `!clip` holt den Token jetzt über den regulären Weg mit automatischer Erneuerung bei Ablauf und ohne Raid-Kopplung — wie schon in der Vorgänger-Version. Streamer mit deaktivierten Raids können wieder clippen, abgelaufene Tokens werden vor dem Clip aufgefrischt.
+- Die Ereignis-Zeitleiste liefert ihre Felder wieder unter den Namen, die die Oberfläche ausliest — Titel-/Spiel-Wechsel, Raids und Follower-pro-Minute erscheinen wieder.
+
+**Wie es funktioniert:** Die Schranke ruft pro erweiterte Seite dieselbe Katalog-Prüfung auf, die der Rest des Systems für Plan-Rechte nutzt — eine einzige Wahrheitsquelle statt einer zweiten, von Hand gepflegten Liste, die mit der Zeit auseinanderlief. Beim Ablaufdatum wird ein reines Datum als Tagesende (UTC) gewertet, ein „Z" bzw. ein fehlender Zeitzonen-Teil sauber als UTC interpretiert. Für `!clip` entschlüsselt der Bot den Broadcaster-Zugang, prüft die Restlaufzeit (5-Minuten-Puffer) und erneuert den Token bei Bedarf serialisiert über ein DB-Lock, bevor er die Clip-Erstellung aufruft; die Raid-an/aus-Einstellung steuert nur noch Raids, nicht mehr den Clip-Zugriff. Die Zeitleiste benennt ihre Datenfelder jetzt exakt so, wie die Auswertungs-Oberfläche sie liest.
+
 ## #204 — Lurker-Erinnerung pingt jeden ruhigen Zuschauer nur noch einmal pro Stream
 
 **Ausgangslage:** Die Lurker-Steuer-Erinnerung (der freundliche @-Ping an ruhige Stammzuschauer mit Discord-Hinweis) konnte denselben Zuschauer im Lauf eines Streams mehrfach anpingen — das wirkte wie Spam.

@@ -55,11 +55,9 @@ pub fn require_owner(
     }
 }
 
-/// Prüft ob `login` das `analytics.extended`-Entitlement hat.
-///
-/// Liest `manual_plan_id` und `manual_plan_expires_at` aus `streamer_plans`.
-/// Plan-IDs mit Entitlement: `analytics_pro`, `analytics_extended`
-/// (muss mit Python-`_KNOWN_BILLING_PLAN_IDS` synchron gehalten werden).
+/// Prüft ob `login` das `analytics.extended`-Entitlement hat — über
+/// [`tb_analytics::plan::plan_is_extended`], das die echten Plan-IDs aus
+/// `catalog.py` kennt (analysis_dashboard, die Bundles, analytics_trial).
 ///
 /// Admin überspringt die Prüfung (bypass).
 pub async fn require_extended_plan(
@@ -99,8 +97,11 @@ pub async fn has_extended_entitlement(pool: &PgPool, login: &str) -> bool {
     match row {
         None => false,
         Some((plan_id, expires_at)) => {
-            let plan = plan_id.as_deref().unwrap_or("");
-            if !EXTENDED_PLAN_IDS.contains(&plan) {
+            let plan = plan_id.as_deref().unwrap_or("").trim();
+            // Echte Entitlement-Prüfung (Python `_plan_has_entitlement`) statt einer
+            // hartkodierten Liste — bleibt automatisch mit catalog.py synchron und
+            // erkennt die real verkauften Pläne (analysis_dashboard, Bundles, Trial).
+            if !tb_analytics::plan::plan_is_extended(plan) {
                 false
             } else {
                 match expires_at.as_deref() {
@@ -143,16 +144,28 @@ pub async fn extended_gate(pool: &PgPool, auth: &DashboardAuthLevel) -> Option<R
     }
 }
 
-/// Parst ein ISO-Ablaufdatum (TEXT, Python `isoformat`) und prüft, ob es in der
-/// Zukunft liegt. `Z` wird zu `+00:00` normalisiert.
+/// Parst ein Ablaufdatum (TEXT) und prüft, ob es in der Zukunft liegt. Wie Python
+/// (`_parse_plan_override_datetime`): reines Datum `YYYY-MM-DD` → Tagesende UTC,
+/// `Z`→`+00:00`, offset-lose Zeit → als UTC interpretiert. Nicht parsbar → false.
 fn expiry_in_future(raw: &str) -> bool {
-    let normalized = raw.trim().replace('Z', "+00:00");
-    chrono::DateTime::parse_from_rfc3339(&normalized)
-        .map(|dt| dt > chrono::Utc::now())
-        .unwrap_or(false)
+    let text = raw.trim();
+    if text.is_empty() {
+        return false;
+    }
+    // Reines Datum (YYYY-MM-DD) → Ende des Tages UTC (Python: + "T23:59:59+00:00").
+    let normalized = if text.len() == 10 && text.as_bytes().get(4) == Some(&b'-') {
+        format!("{text}T23:59:59+00:00")
+    } else {
+        text.replace('Z', "+00:00")
+    };
+    if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(&normalized) {
+        return dt > chrono::Utc::now();
+    }
+    // Offset-lose ISO-Zeit → als UTC interpretieren.
+    for fmt in ["%Y-%m-%dT%H:%M:%S%.f", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%d %H:%M:%S"] {
+        if let Ok(naive) = chrono::NaiveDateTime::parse_from_str(text, fmt) {
+            return naive.and_utc() > chrono::Utc::now();
+        }
+    }
+    false
 }
-
-/// Plan-IDs, die das `analytics.extended`-Entitlement tragen — inkl. des
-/// 30-Tage-Trials (`analytics_trial`, über `manual_plan_expires_at` befristet).
-/// Muss mit Python-`_KNOWN_BILLING_PLAN_IDS`/`catalog` synchron gehalten werden.
-const EXTENDED_PLAN_IDS: &[&str] = &["analytics_pro", "analytics_extended", "analytics_trial"];

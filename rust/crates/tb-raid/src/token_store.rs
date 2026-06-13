@@ -60,7 +60,10 @@ impl RaidAuthStore {
         Self { pool, cipher }
     }
 
-    /// Lädt und entschlüsselt die Tokens eines raid-aktivierten Streamers.
+    /// Lädt und entschlüsselt die Tokens eines **raid-aktivierten** Streamers
+    /// (`raid_enabled IS TRUE`). Port von Python `get_valid_token` (auth.py:1567,
+    /// raid-Pfad). Für API-Nutzungen, die auch bei `raid_enabled=0` greifen
+    /// müssen (z. B. `!clip`), siehe [`load_decrypted_unrestricted`].
     ///
     /// `None` wenn: keine Zeile, `raid_enabled` falsch, oder der **Access-Token**
     /// nicht entschlüsselbar ist (Python: kein nutzbares Token → kein Refresh).
@@ -70,17 +73,48 @@ impl RaidAuthStore {
         &self,
         twitch_user_id: &str,
     ) -> Result<Option<RaidTokens>, sqlx::Error> {
-        let row: Option<RaidAuthRow> = sqlx::query_as(
+        self.load_inner(twitch_user_id, true).await
+    }
+
+    /// Wie [`load_decrypted`], aber **ohne** `raid_enabled`-Gate. Port von Python
+    /// `get_tokens_for_user` (auth.py:1378), das laut Docstring „bewusst auch
+    /// genutzt wird, wenn raid_enabled=0 (Chat-Bot/Moderation)" — etwa für
+    /// `!clip`, das einem Streamer auch dann gehört, wenn er Raids deaktiviert
+    /// hat. `needs_reauth` wird über das Rückgabefeld vom Aufrufer geprüft.
+    pub async fn load_decrypted_unrestricted(
+        &self,
+        twitch_user_id: &str,
+    ) -> Result<Option<RaidTokens>, sqlx::Error> {
+        self.load_inner(twitch_user_id, false).await
+    }
+
+    /// Gemeinsamer Lese-/Entschlüsselungspfad. `require_raid_enabled` steuert
+    /// nur die `WHERE`-Klausel — alles andere ist identisch.
+    async fn load_inner(
+        &self,
+        twitch_user_id: &str,
+        require_raid_enabled: bool,
+    ) -> Result<Option<RaidTokens>, sqlx::Error> {
+        // Zwei statische Statements statt format!() — keine SQL-Konkatenation.
+        let sql = if require_raid_enabled {
             r#"
             SELECT twitch_login, access_token_enc, refresh_token_enc,
                    enc_version, token_expires_at, needs_reauth
             FROM twitch_raid_auth
             WHERE twitch_user_id = $1 AND raid_enabled IS TRUE
-            "#,
-        )
-        .bind(twitch_user_id)
-        .fetch_optional(&self.pool)
-        .await?;
+            "#
+        } else {
+            r#"
+            SELECT twitch_login, access_token_enc, refresh_token_enc,
+                   enc_version, token_expires_at, needs_reauth
+            FROM twitch_raid_auth
+            WHERE twitch_user_id = $1
+            "#
+        };
+        let row: Option<RaidAuthRow> = sqlx::query_as(sql)
+            .bind(twitch_user_id)
+            .fetch_optional(&self.pool)
+            .await?;
         let Some(row) = row else {
             return Ok(None);
         };

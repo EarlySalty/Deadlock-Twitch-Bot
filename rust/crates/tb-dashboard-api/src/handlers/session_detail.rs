@@ -298,9 +298,9 @@ pub async fn session_events_handler(
                 .map(|t| t.to_rfc3339())
                 .unwrap_or_default();
             json!({
-                "recordedAt": at,
+                "at": at,
                 "title": r.try_get::<String, _>("title").unwrap_or_default(),
-                "gameName": r.try_get::<String, _>("game_name").unwrap_or_default(),
+                "game": r.try_get::<String, _>("game_name").unwrap_or_default(),
                 "language": r.try_get::<String, _>("language").unwrap_or_default(),
             })
         })
@@ -375,9 +375,9 @@ pub async fn session_events_handler(
     Json(json!({
         "sessionId": session_id,
         "streamerLogin": streamer_login,
-        "channelUpdates": channel_updates,
+        "channel_updates": channel_updates,
         "raids": raids,
-        "follows": follows,
+        "follows_per_minute": follows,
     }))
     .into_response()
 }

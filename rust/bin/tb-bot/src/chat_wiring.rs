@@ -36,8 +36,10 @@ use tb_chat::{
 };
 use tb_crypto::FieldCipher;
 use tb_monitoring::{EventSubHooks, SubscriptionManager};
-use tb_raid::RaidAuthStore;
+use tb_raid::{RaidAuthStore, RaidTokenRefresher, TokenBlacklistStore, TokenProvider};
 use tb_transport_twitch::HelixClient;
+
+use crate::raid_adapters::HelixTokenClient;
 
 /// Reconcile-Intervall für Chat-Subscriptions (Python: periodischer
 /// Channel-Join alle 30 Minuten, connection.py).
@@ -50,18 +52,25 @@ const PROMO_DISCORD_INVITE_ENV: &str = "PROMO_DISCORD_INVITE";
 // Clip-Port (!clip)
 // ---------------------------------------------------------------------------
 
-/// Adapter für den `!clip`-Command: löst den Broadcaster-Token aus dem
-/// verschlüsselten `twitch_raid_auth`-Store auf und ruft Helix `POST /clips`.
+/// Adapter für den `!clip`-Command: holt einen **gültigen** Broadcaster-Token
+/// (mit Auto-Refresh bei Ablauf, ohne `raid_enabled`-Gate — wie Python
+/// `get_tokens_for_user`, auth.py:1378) und ruft Helix `POST /clips`.
 /// Nur Broadcaster-Token (Pythons Primärpfad; der Bot-Token hat kein `clips:edit`).
 struct ChatClipAdapter {
     helix: Arc<HelixClient>,
-    auth_store: RaidAuthStore,
+    token_provider: Arc<TokenProvider>,
 }
 
 #[async_trait::async_trait]
 impl ClipPort for ChatClipAdapter {
     async fn create_clip(&self, broadcaster_user_id: &str, _broadcaster_login: &str) -> ClipOutcome {
-        let tokens = match self.auth_store.load_decrypted(broadcaster_user_id).await {
+        // Ungated + Auto-Refresh: Streamer mit deaktivierten Raids dürfen clippen,
+        // und ein abgelaufener Token wird erneuert statt 401 zu produzieren.
+        let access_token = match self
+            .token_provider
+            .get_valid_token_unrestricted(broadcaster_user_id, chrono::Utc::now())
+            .await
+        {
             Ok(Some(t)) => t,
             Ok(None) => return ClipOutcome::OAuthMissing,
             Err(error) => {
@@ -71,7 +80,7 @@ impl ClipPort for ChatClipAdapter {
         };
         match self
             .helix
-            .create_clip(broadcaster_user_id, &tokens.access_token)
+            .create_clip(broadcaster_user_id, &access_token)
             .await
         {
             Ok(Some(clip)) => {
@@ -97,18 +106,38 @@ impl ClipPort for ChatClipAdapter {
 
 /// Baut den optionalen Clip-Port — nur mit Helix-Client UND Krypto-Key.
 /// Ohne beides bleibt `!clip` beim Migrations-Hinweis (kein Crash).
+///
+/// Konstruiert einen eigenen [`TokenProvider`] (Store + Refresher + Blacklist),
+/// damit `!clip` einen abgelaufenen Broadcaster-Token selbst erneuern kann —
+/// unabhängig davon, ob die Raid-Strecke nativ läuft. `redirect_uri` ist hier
+/// belanglos (der Refresh-Grant braucht sie nicht; nur `exchange_code` täte es).
 pub fn build_clip_port(
     helix: Option<Arc<HelixClient>>,
     cipher: Option<Arc<FieldCipher>>,
     pool: PgPool,
 ) -> Option<Arc<dyn ClipPort>> {
-    match (helix, cipher) {
-        (Some(helix), Some(cipher)) => Some(Arc::new(ChatClipAdapter {
-            helix,
-            auth_store: RaidAuthStore::new(pool, cipher),
-        })),
-        _ => None,
-    }
+    let (Some(helix), Some(cipher)) = (helix, cipher) else {
+        return None;
+    };
+    let blacklist = Arc::new(TokenBlacklistStore::new(pool.clone()));
+    let refresher = RaidTokenRefresher::new(
+        pool.clone(),
+        cipher.clone(),
+        Arc::new(HelixTokenClient {
+            helix: (*helix).clone(),
+            redirect_uri: std::env::var("TWITCH_RAID_REDIRECT_URI").unwrap_or_default(),
+        }),
+        blacklist.clone(),
+    );
+    let token_provider = Arc::new(TokenProvider::new(
+        RaidAuthStore::new(pool, cipher),
+        refresher,
+        blacklist,
+    ));
+    Some(Arc::new(ChatClipAdapter {
+        helix,
+        token_provider,
+    }))
 }
 
 // ---------------------------------------------------------------------------

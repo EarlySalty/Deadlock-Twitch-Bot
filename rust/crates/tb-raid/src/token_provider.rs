@@ -37,12 +37,36 @@ impl TokenProvider {
         }
     }
 
-    /// Holt einen gültigen Access-Token, erneuert ihn bei Ablauf. `None`, wenn
-    /// geblacklistet, im Cooldown, keine Zeile, `needs_reauth`, oder Refresh scheitert.
+    /// Holt einen gültigen Access-Token für den **Raid-Pfad** (`raid_enabled IS
+    /// TRUE`), erneuert ihn bei Ablauf. `None`, wenn geblacklistet, im Cooldown,
+    /// keine Zeile, `needs_reauth`, oder Refresh scheitert.
     pub async fn get_valid_token(
         &self,
         twitch_user_id: &str,
         now: DateTime<Utc>,
+    ) -> Result<Option<String>, sqlx::Error> {
+        self.resolve(twitch_user_id, now, true).await
+    }
+
+    /// Wie [`get_valid_token`], aber **ohne** `raid_enabled`-Gate — Port von
+    /// Python `get_tokens_for_user` (auth.py:1378). Für `!clip` & Co., die auch
+    /// bei deaktivierten Raids den Broadcaster-Token nutzen dürfen.
+    pub async fn get_valid_token_unrestricted(
+        &self,
+        twitch_user_id: &str,
+        now: DateTime<Utc>,
+    ) -> Result<Option<String>, sqlx::Error> {
+        self.resolve(twitch_user_id, now, false).await
+    }
+
+    /// Gemeinsamer „gültig holen, sonst refreshen"-Pfad. `require_raid_enabled`
+    /// wählt nur die Lesevariante des Stores; Blacklist/Cooldown/needs_reauth/
+    /// Refresh sind identisch. Der Re-Read nach Refresh nutzt dieselbe Variante.
+    async fn resolve(
+        &self,
+        twitch_user_id: &str,
+        now: DateTime<Utc>,
+        require_raid_enabled: bool,
     ) -> Result<Option<String>, sqlx::Error> {
         if self.blacklist.is_blacklisted(twitch_user_id).await
             || self.blacklist.has_recent_failure(twitch_user_id).await
@@ -50,7 +74,7 @@ impl TokenProvider {
             return Ok(None);
         }
 
-        let Some(tokens) = self.store.load_decrypted(twitch_user_id).await? else {
+        let Some(tokens) = self.load(twitch_user_id, require_raid_enabled).await? else {
             return Ok(None);
         };
         if tokens.needs_reauth {
@@ -76,12 +100,24 @@ impl TokenProvider {
             RefreshOutcome::Refreshed => {
                 // Neu geschriebenen Token zurücklesen (entschlüsselt).
                 Ok(self
-                    .store
-                    .load_decrypted(twitch_user_id)
+                    .load(twitch_user_id, require_raid_enabled)
                     .await?
                     .map(|t| t.access_token))
             }
             RefreshOutcome::Blacklisted | RefreshOutcome::Skipped => Ok(None),
+        }
+    }
+
+    /// Lese-Variante je nach `raid_enabled`-Anforderung (Helper für `resolve`).
+    async fn load(
+        &self,
+        twitch_user_id: &str,
+        require_raid_enabled: bool,
+    ) -> Result<Option<crate::token_store::RaidTokens>, sqlx::Error> {
+        if require_raid_enabled {
+            self.store.load_decrypted(twitch_user_id).await
+        } else {
+            self.store.load_decrypted_unrestricted(twitch_user_id).await
         }
     }
 }
