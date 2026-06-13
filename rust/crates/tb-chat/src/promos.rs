@@ -119,6 +119,9 @@ const LURKER_TAX_MIN_PRIOR_SESSIONS: i64 = 3;
 const LURKER_TAX_MIN_WATCHTIME_MINUTES: f64 = 240.0;
 /// Lurker-Tax: max 2 @mentions (promos.py:65).
 const LURKER_TAX_MAX_MENTIONS: usize = 2;
+/// Mehr Kandidaten holen als am Ende erwähnt werden, damit nach dem Per-Session-
+/// Dedup die nächstrangigen Lurker nachrücken (promos.py: fetch > MAX, dann kappen).
+const LURKER_TAX_CANDIDATE_FETCH: i64 = 25;
 /// MiniMax-Timeout in Sekunden (targeted_promo.py:37: _MINIMAX_TIMEOUT_SEC).
 const MINIMAX_TIMEOUT_SEC: u64 = 5;
 /// Keine Promo in den ersten N Minuten nach Go-Live (constants.py: PROMO_STREAM_START_DELAY_MIN).
@@ -413,6 +416,10 @@ struct ChannelState {
     seen_chatters: HashMap<String, Instant>,
     /// Letzter Zugriff auf diesen State (für Prune) — promos.py:1452.
     last_accessed: Instant,
+    /// Per-Session bereits per Lurker-Tax erwähnte Logins `(session_id, set)`
+    /// (promos.py:564-584). Bei Session-Wechsel zurückgesetzt — verhindert, dass
+    /// derselbe ruhige Zuschauer mehrfach pro Session gepingt wird.
+    lurker_mentions: (i64, HashSet<String>),
 }
 
 impl ChannelState {
@@ -430,6 +437,7 @@ impl ChannelState {
             last_raw_chat_message_ts: None,
             seen_chatters: HashMap::new(),
             last_accessed: Instant::now(),
+            lurker_mentions: (0, HashSet::new()),
         }
     }
 }
@@ -1326,18 +1334,68 @@ impl PromoEngine {
             return;
         }
 
-        // Kandidaten holen und Text bauen (promos.py:408).
+        // Kandidaten holen (promos.py:408).
         let candidates = self.get_lurker_tax_candidates(login).await;
         if candidates.is_empty() {
             return;
         }
 
-        let text = self.build_lurker_tax_text(&candidates);
-        let _ = self.api.send_message(channel_id, &text).await;
+        // Aktive Session-ID fürs Per-Session-Dedup.
+        let session_id: i64 = sqlx::query_scalar::<_, Option<i64>>(
+            "SELECT active_session_id FROM twitch_live_state WHERE streamer_login = $1",
+        )
+        .bind(login)
+        .fetch_optional(&self.pool)
+        .await
+        .ok()
+        .flatten()
+        .flatten()
+        .unwrap_or(0);
+
+        // Bereits in dieser Session erwähnte Lurker rausfiltern, dann auf MAX kappen
+        // (nächstrangige rücken nach). Set wird bei Session-Wechsel geräumt.
+        let selected: Vec<String> = {
+            let state_ref = self
+                .channel_states
+                .entry(login.to_string())
+                .or_insert_with(|| Mutex::new(ChannelState::new()));
+            let mut state = state_ref.lock().await;
+            if state.lurker_mentions.0 != session_id {
+                state.lurker_mentions = (session_id, HashSet::new());
+            }
+            candidates
+                .iter()
+                .filter(|c| !state.lurker_mentions.1.contains(*c))
+                .take(LURKER_TAX_MAX_MENTIONS)
+                .cloned()
+                .collect()
+        };
+        if selected.is_empty() {
+            return;
+        }
+
+        let text = self.build_lurker_tax_text(&selected);
+        // Nur bei erfolgreichem Send merken + Cooldown belegen (Python: if ok).
+        if !matches!(
+            self.api.send_message(channel_id, &text).await,
+            Ok(crate::types::SendOutcome::Sent)
+        ) {
+            return;
+        }
+        {
+            let state_ref = self
+                .channel_states
+                .entry(login.to_string())
+                .or_insert_with(|| Mutex::new(ChannelState::new()));
+            let mut state = state_ref.lock().await;
+            if state.lurker_mentions.0 == session_id {
+                state.lurker_mentions.1.extend(selected.iter().cloned());
+            }
+        }
 
         // Promo-Slot belegen (promos.py:1357 — lurker_tax nutzt overall-Cooldown).
         self.mark_promo_sent(login, now, "lurker_tax", Utc::now().timestamp() as f64).await;
-        info!(login, "Lurker-Tax-Erinnerung gesendet ({} Mentions)", candidates.len());
+        info!(login, "Lurker-Tax-Erinnerung gesendet ({} Mentions)", selected.len());
     }
 
     /// Lurker-Tax-Kandidaten aus DB (promos.py:408: `_get_lurker_tax_candidates`).
@@ -1383,7 +1441,7 @@ impl PromoEngine {
         .bind(login)
         .bind(LURKER_TAX_MIN_PRIOR_SESSIONS)
         .bind(LURKER_TAX_MIN_WATCHTIME_MINUTES)
-        .bind(LURKER_TAX_MAX_MENTIONS as i64)
+        .bind(LURKER_TAX_CANDIDATE_FETCH)
         .fetch_all(&self.pool)
         .await
         .unwrap_or_default();
