@@ -1011,6 +1011,7 @@ impl RaidOAuthPort for TbRaidOAuthImpl {
                 let uid = twitch_user_id.clone();
                 let login = twitch_login.clone();
                 let access_token = token_response.access_token.clone();
+                let trial_pool = self.pool.clone();
                 tokio::spawn(async move {
                     setup
                         .complete_setup_for_streamer(
@@ -1020,6 +1021,10 @@ impl RaidOAuthPort for TbRaidOAuthImpl {
                             state_discord_user_id.as_deref(),
                         )
                         .await;
+                    // „Mitbringsel": neuer Partner bekommt beim Onboarding den
+                    // einmaligen 30-Tage-Analytics-Trial. Idempotent über
+                    // trial_ever_granted; überschreibt keinen Bezahlplan.
+                    tb_analytics::trial::grant_trial_at_onboarding(&trial_pool, &uid, &login).await;
                 });
             }
             (Some(setup), true) => {

@@ -192,8 +192,8 @@ pub async fn viewer_profiles_handler(
     State(pool): State<PgPool>,
     Query(params): Query<ProfilesQuery>,
 ) -> impl IntoResponse {
-    if let Err(e) = require_auth(&auth) {
-        return e.into_response();
+    if let Some(resp) = crate::auth::extended_gate(&pool, &auth).await {
+        return resp;
     }
     let streamer = match params.streamer.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
         Some(s) => s.to_lowercase(),
@@ -315,8 +315,8 @@ pub async fn audience_sharing_handler(
     State(pool): State<PgPool>,
     Query(params): Query<SharingQuery>,
 ) -> impl IntoResponse {
-    if let Err(e) = require_auth(&auth) {
-        return e.into_response();
+    if let Some(resp) = crate::auth::extended_gate(&pool, &auth).await {
+        return resp;
     }
     let streamer = match params.streamer.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
         Some(s) => s.to_lowercase(),
@@ -667,8 +667,8 @@ pub async fn audience_insights_handler(
     State(pool): State<PgPool>,
     Query(params): Query<InsightsQuery>,
 ) -> impl IntoResponse {
-    if let Err(e) = require_auth(&auth) {
-        return e.into_response();
+    if let Some(resp) = crate::auth::extended_gate(&pool, &auth).await {
+        return resp;
     }
     let streamer = match params.streamer.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
         Some(s) => s.to_lowercase(),

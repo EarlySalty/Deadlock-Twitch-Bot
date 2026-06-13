@@ -22,3 +22,4 @@ pub mod system_errors;
 pub mod system_eventsub;
 pub mod system_health;
 pub mod telemetry_routes;
+pub mod trial;

@@ -1,3 +1,16 @@
+## #200 — 30-Tage-Analyse-Trial + Bezahlschranke für erweiterte Auswertungen
+
+**Ausgangslage:** Die erweiterten Analyse-Seiten (Zuschauer-Demografie, Insights, Kategorie-Vergleich, Bestenliste, Timings, Viewer-Profile, Audience-Sharing, Follower-Trichter) waren im umgestellten Dashboard versehentlich für jeden eingeloggten Streamer offen — die Bezahlschranke, die es vorher gab, war beim Port verloren gegangen. Gleichzeitig fehlte ein einfacher Weg, die erweiterten Auswertungen unverbindlich zu testen.
+
+**Was geändert wurde:**
+
+- **Bezahlschranke greift wieder.** Die erweiterten Auswertungen brauchen einen passenden Plan oder einen laufenden Trial. Ohne beides kommt eine klare „Plan nötig"-Antwort statt der vollen Daten. Admins und lokale Zugriffe sind ausgenommen.
+- **30-Tage-Trial zum Selbst-Freischalten.** Jeder Streamer kann sich im Dashboard auf der Preis-/Plan-Seite einmalig einen 30-Tage-Gratis-Test der erweiterten Analyse holen. Während der 30 Tage sind alle erweiterten Seiten offen, danach greift wieder die Schranke.
+- **Mitbringsel beim Onboarding.** Neue Partner bekommen den 30-Tage-Trial automatisch beim ersten Verbinden — als Willkommens-Geschenk, ohne etwas tun zu müssen.
+- **Einmalig pro Streamer.** Der Trial lässt sich pro Streamer genau einmal aktivieren — egal ob automatisch beim Onboarding oder per Button. Wer bereits einen bezahlten Plan hat, bekommt keinen Trial aufgedrängt.
+
+**Wie es funktioniert:** Beim Klick auf „Trial starten" — oder automatisch beim Onboarding — wird ein 30-Tage-Plan mit Ablaufdatum gesetzt und ein unveränderlicher Merker „Trial schon vergeben" gespeichert; der verhindert Mehrfach-Nutzung. Vor jeder erweiterten Seite prüft die Schranke, ob ein gültiger Plan oder ein noch laufender Trial vorliegt — ist das Ablaufdatum überschritten, ist die Seite wieder gesperrt. Die Trial-Logik selbst gab es schon in der alten Version (inkl. Ausschluss bei bestehendem Bezahlplan); neu ist, dass der Trial neuen Partnern direkt beim Onboarding geschenkt wird, und dass die Schranke jetzt auch im umgestellten Dashboard wirkt. Der „Trial starten"-Button im Dashboard spricht jetzt direkt den nativen Endpoint an.
+
 ## #199 — Port-Audit: Schwung stiller Fehler aus der Rust-Umstellung behoben
 
 **Ausgangslage:** Ein systematischer Audit hat den auf Rust umgestellten Bot Funktion für Funktion gegen die alte Python-Version gestellt. Dabei kamen mehrere Fehler ans Licht, die seit der Umstellung still mitliefen — nichts ist abgestürzt, deshalb fielen sie im Alltag kaum auf, aber Zahlen und Verhalten wichen ab.

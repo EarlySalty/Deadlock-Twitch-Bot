@@ -6,7 +6,6 @@
 
 use axum::{
     extract::{Query, State},
-    http::StatusCode,
     response::IntoResponse,
     Json,
 };
@@ -82,8 +81,8 @@ pub async fn category_timings_handler(
     State(pool): State<PgPool>,
     Query(params): Query<TimingsQuery>,
 ) -> impl IntoResponse {
-    if matches!(auth, DashboardAuthLevel::None) {
-        return (StatusCode::UNAUTHORIZED, Json(json!({"error":"unauthorized"}))).into_response();
+    if let Some(resp) = crate::auth::extended_gate(&pool, &auth).await {
+        return resp;
     }
     let days = params.days.unwrap_or(30).clamp(7, 90) as i64;
     let use_tracked = params.source.as_deref() == Some("tracked");

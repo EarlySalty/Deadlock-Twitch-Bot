@@ -2,8 +2,8 @@
 //!
 //! Port von `bot/analytics/api_audience.py:_api_v2_follower_funnel` (Z.541–750).
 //! Berechnet Follower-Conversion-Funnel aus Sessions, Chatter-Tracking, Follow-Events
-//! und Raid-History. Python nutzt `_require_extended_plan` — wir ignorieren den Plan-Gate
-//! (kein Plan-Konzept in tb-dashboard-auth; Auth-Level-Check reicht).
+//! und Raid-History. Wie Python (`_require_extended_plan`) hinter dem
+//! Extended-Plan-/Trial-Gate (`crate::auth::extended_gate`).
 
 use axum::{
     extract::{Query, State},
@@ -44,22 +44,14 @@ fn clamp(v: i32, min: i32, max: i32) -> i32 {
     v.max(min).min(max)
 }
 
-fn require_auth(auth: &DashboardAuthLevel) -> Result<(), (StatusCode, Json<serde_json::Value>)> {
-    if matches!(auth, DashboardAuthLevel::None) {
-        Err((StatusCode::UNAUTHORIZED, Json(json!({"error":"unauthorized","message":"not authenticated"}))))
-    } else {
-        Ok(())
-    }
-}
-
 /// `GET /twitch/api/v2/follower-funnel?streamer=&days=30`
 pub async fn follower_funnel_handler(
     auth: DashboardAuthLevel,
     State(pool): State<PgPool>,
     Query(params): Query<FunnelQuery>,
 ) -> impl IntoResponse {
-    if let Err(e) = require_auth(&auth) {
-        return e.into_response();
+    if let Some(resp) = crate::auth::extended_gate(&pool, &auth).await {
+        return resp;
     }
 
     let streamer = match params.streamer.as_deref().map(str::trim).filter(|s| !s.is_empty()) {

@@ -53,8 +53,8 @@ pub async fn category_leaderboard_handler(
     State(pool): State<PgPool>,
     Query(params): Query<LeaderboardQuery>,
 ) -> impl IntoResponse {
-    if matches!(auth, DashboardAuthLevel::None) {
-        return (StatusCode::UNAUTHORIZED, Json(json!({"error":"unauthorized"}))).into_response();
+    if let Some(resp) = crate::auth::extended_gate(&pool, &auth).await {
+        return resp;
     }
     let streamer_lower = params.streamer.as_deref()
         .map(str::trim).filter(|s| !s.is_empty())

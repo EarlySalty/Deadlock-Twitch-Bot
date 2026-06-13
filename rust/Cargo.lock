@@ -2171,6 +2171,7 @@ dependencies = [
  "tb-db",
  "tb-error",
  "tokio",
+ "tracing",
 ]
 
 [[package]]

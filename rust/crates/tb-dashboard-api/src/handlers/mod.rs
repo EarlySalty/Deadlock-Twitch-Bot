@@ -2,6 +2,7 @@
 pub mod admin_streamers;
 pub mod auth_status;
 pub mod bans;
+pub mod billing;
 pub mod legal;
 pub mod network;
 pub mod overview;
