@@ -454,6 +454,26 @@ pub async fn archive_handler(
     }
 }
 
+/// Discord-Action-Scope-Guard (Python `_enforce_discord_action_scope`, app.py:817-845).
+/// discord-flag/profile tragen weder guild/channel/role im Body → bei gesetzter
+/// Allowlist schlägt die Prüfung via None ∉ Allowlist als 403 durch (deny-by-default,
+/// wie link-click). Die interne API ist loopback-only; das ist Defense-in-depth.
+fn enforce_discord_action_scope() -> Result<(), ApiError> {
+    use super::telemetry_routes::{
+        enforce_scope_allowlist, parse_allowlist_ids, ENV_ALLOWED_CHANNEL_IDS,
+        ENV_ALLOWED_GUILD_IDS, ENV_ALLOWED_ROLE_IDS,
+    };
+    for (env, key) in [
+        (ENV_ALLOWED_GUILD_IDS, "guild_id"),
+        (ENV_ALLOWED_CHANNEL_IDS, "channel_id"),
+        (ENV_ALLOWED_ROLE_IDS, "role_id"),
+    ] {
+        enforce_scope_allowlist(None, &parse_allowlist_ids(env), key)
+            .map_err(|_| ApiError::forbidden())?;
+    }
+    Ok(())
+}
+
 /// `POST /internal/twitch/v1/streamers/:login/discord-flag`
 ///
 /// Body (Python/snake_case): `{"is_on_discord": true}`
@@ -474,6 +494,8 @@ pub async fn discord_flag_handler(
         Some(l) => l,
         None => return Err(ApiError::bad_request("invalid login")),
     };
+
+    enforce_discord_action_scope()?;
 
     let enabled = match body.parse_enabled() {
         Some(v) => v,
@@ -514,6 +536,8 @@ pub async fn discord_profile_handler(
         Some(l) => l,
         None => return Err(ApiError::bad_request("invalid login")),
     };
+
+    enforce_discord_action_scope()?;
 
     // discord_user_id: trimmen, leer → None; nicht-numerisch → 400
     // Python: discord_id_clean = (discord_user_id or "").strip()

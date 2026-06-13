@@ -266,74 +266,75 @@ pub struct PromoPreset {
     pub tags: &'static str,
 }
 
-/// 5 globale Presets (promo_presets.py: type="global").
+/// 5 globale Presets — 1:1 zu `bot/chat/promo_presets.py` (IDs/Texte/Tags stabil,
+/// damit die MiniMax-Auswahl dieselben Schlagwörter sieht).
 pub fn global_presets() -> Vec<PromoPreset> {
     vec![
         PromoPreset {
-            id: "global_community",
+            id: "g_competitive",
             preset_type: PresetType::Global,
-            text: "Hier ist unsere Community für alle Deadlock-Spieler: {invite}",
-            tags: "community, einladung",
+            text: "Kein Bock mehr auf Solo-Queue-Grief? Such dir feste Mates in unserer deutschen Deadlock-Community! {invite} 🔫",
+            tags: "ranked, mmr, solo_queue, competitive, mates",
         },
         PromoPreset {
-            id: "global_competitive",
+            id: "g_community",
             preset_type: PresetType::Global,
-            text: "Competitive Deadlock-Spieler gesucht — Discord: {invite}",
-            tags: "competitive, ranked",
+            text: "Bock auf Inhouses oder kleine Turniere? Wir organisieren regelmäßig Events – schau gerne vorbei: {invite} 🏆",
+            tags: "inhouse, events, tournament, community, fun",
         },
         PromoPreset {
-            id: "global_inhouse",
+            id: "g_new_to_deadlock",
             preset_type: PresetType::Global,
-            text: "Nächste Inhouse-Runde kommt — Infos auf Discord: {invite}",
-            tags: "inhouse, event",
+            text: "Neu in Deadlock? Unsere Community hat Guides, Tipps und Leute die gerne helfen: {invite} 📚",
+            tags: "new_player, beginner, guide, help, learning",
         },
         PromoPreset {
-            id: "global_new_faces",
+            id: "g_meta",
             preset_type: PresetType::Global,
-            text: "Viele neue Gesichter heute — willkommen! Discord: {invite}",
-            tags: "hype, willkommen",
+            text: "Patch-Diskussionen, Tier-Listen, Meta-Talks – alles bei uns auf Discord: {invite}",
+            tags: "meta, patch, tierlist, discussion, build",
         },
         PromoPreset {
-            id: "global_guides",
+            id: "g_chill",
             preset_type: PresetType::Global,
-            text: "Guides und Meta-Diskussionen auf Discord: {invite}",
-            tags: "guides, meta",
+            text: "Wer nach dem Stream noch Deadlock zockt und ne Community sucht – wir sind auf Discord: {invite} 👀",
+            tags: "chill, after_stream, looking_for_group, casual",
         },
     ]
 }
 
-/// 5 user-spezifische Presets (promo_presets.py: type="user"). Enthalten `{login}`.
+/// 5 user-spezifische Presets — 1:1 zu `promo_presets.py` (type="user"). Enthalten `{login}`.
 pub fn user_presets() -> Vec<PromoPreset> {
     vec![
         PromoPreset {
-            id: "user_duo",
+            id: "u_welcome",
             preset_type: PresetType::User,
-            text: "@{login} du wirkst wie jemand der gerne Duo spielt — Discord: {invite}",
-            tags: "duo, social",
+            text: "@{login} Willkommen! Falls du noch eine deutsche Deadlock-Community suchst – hier entlang: {invite} 🎮",
+            tags: "new, first_time, welcome, lurker",
         },
         PromoPreset {
-            id: "user_ranked",
+            id: "u_mates",
             preset_type: PresetType::User,
-            text: "@{login} falls du rank pushen willst — bei uns sind gute Leute: {invite}",
-            tags: "ranked, competitive",
+            text: "@{login} Falls du Mates zum Zocken suchst, in unserer Community wirst du fündig: {invite}",
+            tags: "looking_for_group, mates, team, duo, party",
         },
         PromoPreset {
-            id: "user_welcome",
+            id: "u_lurker_viewer",
             preset_type: PresetType::User,
-            text: "@{login} schön, dass du dabei bist! Community Discord: {invite}",
-            tags: "willkommen, community",
+            text: "@{login} Regelmäßig dabei? 👀 Falls du über Deadlock reden willst, komm gerne auf unseren Discord: {invite}",
+            tags: "lurker, regular_viewer, silent, watcher",
         },
         PromoPreset {
-            id: "user_event",
+            id: "u_ranked_grind",
             preset_type: PresetType::User,
-            text: "@{login} wir haben Turniere und Events — Discord: {invite}",
-            tags: "turnier, event",
+            text: "@{login} Ranked-Grind solo macht keinen Spaß – bei uns findest du Leute für den Duo-Queue: {invite} 🔫",
+            tags: "ranked, competitive, grind, duo, elo",
         },
         PromoPreset {
-            id: "user_tips",
+            id: "u_new_player",
             preset_type: PresetType::User,
-            text: "@{login} falls du Tipps oder Guides suchst: {invite}",
-            tags: "guides, tipps",
+            text: "@{login} Neu in Deadlock? Unsere Community hilft gerne beim Einstieg – schau mal vorbei: {invite} 📚",
+            tags: "new_player, beginner, help, learning, guide",
         },
     ]
 }

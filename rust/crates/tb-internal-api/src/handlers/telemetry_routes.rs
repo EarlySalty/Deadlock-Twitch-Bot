@@ -46,11 +46,11 @@ const TWITCH_BUTTON_LABEL: &str = "Auf Twitch ansehen";
 const ENV_NOTIFY_CHANNEL_ID: &str = "TWITCH_NOTIFY_CHANNEL_ID";
 
 /// Env-Variable für die Guild-ID-Allowlist (Parität zu `_allowed_guild_ids`).
-const ENV_ALLOWED_GUILD_IDS: &str = "TWITCH_INTERNAL_API_ALLOWED_GUILD_IDS";
+pub(crate) const ENV_ALLOWED_GUILD_IDS: &str = "TWITCH_INTERNAL_API_ALLOWED_GUILD_IDS";
 /// Env-Variable für die Channel-ID-Allowlist (Parität zu `_allowed_channel_ids`).
-const ENV_ALLOWED_CHANNEL_IDS: &str = "TWITCH_INTERNAL_API_ALLOWED_CHANNEL_IDS";
+pub(crate) const ENV_ALLOWED_CHANNEL_IDS: &str = "TWITCH_INTERNAL_API_ALLOWED_CHANNEL_IDS";
 /// Env-Variable für die Role-ID-Allowlist (Parität zu `_allowed_role_ids`).
-const ENV_ALLOWED_ROLE_IDS: &str = "TWITCH_INTERNAL_API_ALLOWED_ROLE_IDS";
+pub(crate) const ENV_ALLOWED_ROLE_IDS: &str = "TWITCH_INTERNAL_API_ALLOWED_ROLE_IDS";
 
 // ── Hilfs-Typen ───────────────────────────────────────────────────────────────
 
@@ -192,7 +192,7 @@ fn normalize_tracking_token(
 /// Parst eine kommagetrennte Liste positiver Integer-IDs aus einer Env-Variable.
 /// Parität zu `parse_allowlist_ids` in `bot/internal_api/policy.py`.
 /// Gibt `None` zurück wenn die Env-Variable nicht gesetzt ist (= kein Filter).
-fn parse_allowlist_ids(env_name: &str) -> Option<std::collections::HashSet<i64>> {
+pub(crate) fn parse_allowlist_ids(env_name: &str) -> Option<std::collections::HashSet<i64>> {
     let raw = std::env::var(env_name).ok()?;
     let raw = raw.trim().to_string();
     // Env-Variable gesetzt (auch wenn leer) → fail-closed deny-all
@@ -213,7 +213,7 @@ fn parse_allowlist_ids(env_name: &str) -> Option<std::collections::HashSet<i64>>
 
 /// Prüft ob ein Integer-Wert in einer optionalen Allowlist enthalten ist.
 /// `None` Allowlist = kein Filter (wie Python: `if allowed is None: return`).
-fn enforce_scope_allowlist(
+pub(crate) fn enforce_scope_allowlist(
     value_opt: Option<i64>,
     allowed: &Option<std::collections::HashSet<i64>>,
     key: &str,

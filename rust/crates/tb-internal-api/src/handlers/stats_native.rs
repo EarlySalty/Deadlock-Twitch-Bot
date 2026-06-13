@@ -854,14 +854,28 @@ async fn fetch_monetization(pool: &PgPool) -> Result<Value, BoxError> {
 
         if let Some(ad_minute) = ad_minute_opt {
             if let Some(tl) = timeline_map.get(&sid) {
-                let dur_mins = (dur_secs / 60) as i32;
-                let before = tl.iter().filter(|(m, _)| *m < ad_minute).max_by_key(|(m, _)| *m).map(|(_, v)| *v);
-                let after = tl.iter().filter(|(m, _)| *m >= ad_minute && *m <= ad_minute + dur_mins).min_by(|(_, a), (_, b)| a.cmp(b)).map(|(_, v)| *v);
-                if let (Some(bv), Some(av)) = (before, after) {
-                    if bv > 0 {
-                        let drop = (bv - av) as f64 / bv as f64 * 100.0;
+                // Python dashboard_metrics_mixin.py:124-147: 5-Min-Mittel VOR der Ad
+                // und 5-Min-Mittel NACH Ad-Ende, signierter Drop (negativ bei Verlust).
+                let duration_min = dur_secs as f64 / 60.0;
+                let ad_min_f = ad_minute as f64;
+                let post_start = ad_min_f + duration_min;
+                let pre_vals: Vec<f64> = tl
+                    .iter()
+                    .filter(|(m, _)| (ad_min_f - 5.0) <= *m as f64 && (*m as f64) < ad_min_f)
+                    .map(|(_, v)| *v as f64)
+                    .collect();
+                let post_vals: Vec<f64> = tl
+                    .iter()
+                    .filter(|(m, _)| post_start <= *m as f64 && (*m as f64) < post_start + 5.0)
+                    .map(|(_, v)| *v as f64)
+                    .collect();
+                if !pre_vals.is_empty() && !post_vals.is_empty() {
+                    let pre_avg = pre_vals.iter().sum::<f64>() / pre_vals.len() as f64;
+                    if pre_avg > 0.0 {
+                        let post_avg = post_vals.iter().sum::<f64>() / post_vals.len() as f64;
+                        let drop = (post_avg - pre_avg) / pre_avg * 100.0;
                         let drop_rounded = (drop * 10.0).round() / 10.0;
-                        drop_pcts.push(drop_rounded);
+                        drop_pcts.push(drop); // ungerundet mitteln (wie Python)
                         worst_ads_data.push((started_at_str, dur_secs, drop_rounded, is_auto));
                     }
                 }
@@ -876,7 +890,8 @@ async fn fetch_monetization(pool: &PgPool) -> Result<Value, BoxError> {
         json!((avg * 10.0).round() / 10.0)
     };
 
-    worst_ads_data.sort_by(|a, b| b.2.partial_cmp(&a.2).unwrap_or(std::cmp::Ordering::Equal));
+    // Python sortiert aufsteigend nach drop_pct (negativster Drop = schlimmste Ad zuerst).
+    worst_ads_data.sort_by(|a, b| a.2.partial_cmp(&b.2).unwrap_or(std::cmp::Ordering::Equal));
     let worst_ads: Vec<Value> = worst_ads_data.into_iter().take(5).map(|(started_at, duration_s, drop_pct, is_automatic)| {
         json!({ "started_at": started_at, "duration_s": duration_s, "drop_pct": drop_pct, "is_automatic": is_automatic })
     }).collect();
