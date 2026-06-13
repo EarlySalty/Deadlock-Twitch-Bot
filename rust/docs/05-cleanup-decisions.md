@@ -120,3 +120,35 @@ Infrastruktur **nichts** außer den Flags. Laut Cutover-Plan ist „6g Recruitme
 die bewusste Staffelung. **Beim Bau von 6g zu schließen:** die drei Daten-Effekte (delete/persist/schedule)
 zuerst (frühes Abbrechen bei `record … == None` wie Python Z.354), die zwei Messaging-Effekte über den
 Master-Broker. Bis dahin ist diese Zurückstellung hier die Single Source of Truth.
+
+## 15. Port-Audit-Backlog (13.6.) — bewusst zurückgestellt bzw. nicht gefixt
+
+Aus dem Port-Audit (`docs/audit/2026-06-13-...md`) sind die meisten Med/Low-Befunde
+gefixt (Welle 1–4: Entitlements, Admin-Präzedenz, Percentile, Retention, Panic,
+Doppel-Ban-Event, Lurker-SQL, channel.points-Telemetrie, deterministischer Announce-
+Token, correlation_status, Nicht-Deadlock-Raid-Auflösung, get_users-Chunking u.a.).
+Folgendes ist **bewusst offen** — entweder echte Feature-Ports (kein Backlog-Cleanup)
+oder bewusste Nicht-Fixes:
+
+**Größere Feature-Ports (eigene Arbeit, nicht „Bugfix"):**
+- `viewer-detail.personality` — braucht den `_classify_message`-Port (war per #180 schon bewusst `null`).
+- `/stats` vier Sektionen (retention/chat/discovery/content_performance) — großer zweiter DB-Block aus `leaderboard.py:1135-1256`.
+- `verify` Nicht-Partner-Promote (`promote_streamer_to_partner` + `backfill_tracked_stats_from_category`) — Lifecycle-Port; bis dahin verifiziert verify nur aktive Partner.
+- `!clip` voller Helix-Port (`POST /clips` + Broadcaster-Token + ClipPort-Trait) — Meldung ist ehrlich gemacht, Erstellung folgt.
+- Targeted-Promo-Presets 1:1 (Texte/IDs/Tags + Tag-Struktur `&'static str`→Slice).
+- Lurker-Tax Per-Session-Mention-Dedup (session-keyed State) + Bot-Token-Scope-Fallback (TokenManager-Scope-Injektion).
+- Spam-Filter periodischer Reload-Loop (ArcSwap + 120s-Task) — Self-Learning greift sonst erst nach Neustart.
+- `channel.ban` Bot-Selbst-Timeout-Erkennung (TimeoutGuard + Bot-ID ins Dispatch durchreichen).
+- Ad-Viewer-Drop Vorzeichen/Fenster-Rework (5-Min-Mittel vor/nach statt Punkt/Min-während).
+- Score-Snapshot zur Sendezeit einfrieren (`PendingRaid`-Feld + Plumbing) statt frisch zur Confirm-Zeit.
+- iapi `discord-flag`/`discord-profile` Scope-Guard — Helfer-Refactor (`enforce_scope_allowlist` crate-weit); **niedriges Praxis-Risiko**, da die interne API 8776 loopback-only ist (UFW + Loopback-Middleware).
+- Helix-GET-Retry (3× Backoff bei 5xx/Netz) — querschnittliche Änderung am `get()→send()`-Muster aller Caller.
+
+**Bewusste Nicht-Fixes (Rust besser als Python):**
+- `rankings ORDER BY value DESC NULLS LAST` — Python lässt es weg → Postgres-Default `NULLS FIRST` setzt NULL-Werte (keine Daten) an die Spitze des Wachstums-Rankings. Rusts `NULLS LAST` ist korrekt; **nicht** auf Pythons Quirk zurückgebaut.
+
+**Marginale Kosmetik (near-zero Impact, zurückgestellt):**
+Scam-Warntext-Whitespace, Banker's- vs. Half-away-Rundung, EventSub-AVG-2-Dezimal-Rundung,
+Byte- vs. Codepoint-Längenprüfung bei link-click-Text, Float-`channel_id`-Trunkierung,
+p95-Utilization-Index-Methode, diverse Tie-Break-/Timing-Edge-Cases (retention `type:"unknown"`-
+ad_break-Klassifizierung, telemetry `a or b or 0`-Kette, viewer-directory sort=first_seen).
