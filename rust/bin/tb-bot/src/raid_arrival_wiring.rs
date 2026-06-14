@@ -12,17 +12,20 @@ use std::sync::{Arc, Mutex};
 use chrono::Utc;
 use sqlx::PgPool;
 use tb_raid::{
-    classify_partner_raid_arrival, decide_blacklist_action, serialize_confirmation_signals,
-    ArrivalConfirmationService, ArrivalSignalContext, ArrivalTrackingStore, BlacklistScheduleAction,
-    ConfirmedExternalRecruitmentRaid, ExternalRecruitmentStore, ManualRaidSuppression, PendingRaid,
-    PendingRaidStore, RaidArrivalSink, RaidBlacklistStore, RaidHistoryStore, RecordArrivalInput,
-    ScoreTrackingStore, EXTERNAL_RECRUITMENT_BLACKLIST_GRACE_SECONDS,
-    EXTERNAL_RECRUITMENT_RAID_LIMIT,
+    build_partner_raid_message, classify_partner_raid_arrival, decide_blacklist_action,
+    serialize_confirmation_signals, ArrivalConfirmationService, ArrivalSignalContext,
+    ArrivalTrackingStore, BlacklistScheduleAction, ConfirmedExternalRecruitmentRaid,
+    ExternalRecruitmentStore, ManualRaidSuppression, PendingRaid, PendingRaidStore, RaidArrivalSink,
+    RaidBlacklistStore, RaidHistoryStore, RecordArrivalInput, ScoreTrackingStore,
+    EXTERNAL_RECRUITMENT_BLACKLIST_GRACE_SECONDS, EXTERNAL_RECRUITMENT_RAID_LIMIT,
 };
 
 use crate::confirm_resolver::{ConfirmContext, ConfirmResolver};
 use crate::partner_lookup::{is_target_partner, known_source, PrefetchedLookups};
 use crate::score_refresh::ScoreRefreshResolver;
+// Trait muss im Scope sein, damit OutboundSuppressionStore::check_suppression
+// (B3-2d Partner-Raid-Suppression-Gate) aufrufbar ist.
+use tb_chat::moderation::OutboundSuppressionCheck;
 
 /// Recent-Fenster für Sekundär-Signale (Python
 /// `recent_raid_arrival_ttl_seconds = 600`, raid_state_store.py:16).
@@ -78,6 +81,15 @@ pub struct RaidArrivalSinkImpl {
     raid_history: RaidHistoryStore,
     score_refresh: ScoreRefreshResolver,
     confirm_resolver: ConfirmResolver,
+    /// Chat-Send-Port für die Partner-Raid-Dankesnachricht (B3-2d). `None`,
+    /// wenn kein Bot-Token gebootet wurde — dann wird nicht gesendet (Python
+    /// `get_chat_bot()` → None, partner_raid_delivery.py:233).
+    chat_api: Option<Arc<dyn tb_chat::ChatApi>>,
+    /// DB-Chat-Suppression-Store (NICHT die In-Memory-Manual-Suppression):
+    /// blockt die Partner-Raid-Message, wenn der Ziel-Channel sie für die
+    /// Source `partner_raid` unterdrückt hat (Python
+    /// `lookup_outbound_chat_suppression`, partner_raid_delivery.py:239).
+    outbound_suppression: Option<Arc<tb_chat::moderation::OutboundSuppressionStore>>,
     /// Verwaiste Chat-Notifications, vom Sweeper periodisch promotet
     /// (Python `orphan_chat_raid_notifications` in `raid_state_store.py`).
     orphans: Mutex<std::collections::HashMap<String, OrphanChatNotification>>,
@@ -89,6 +101,8 @@ impl RaidArrivalSinkImpl {
         pending: Arc<Mutex<PendingRaidStore>>,
         suppression: Arc<Mutex<ManualRaidSuppression>>,
         target_game_lower: &str,
+        chat_api: Option<Arc<dyn tb_chat::ChatApi>>,
+        outbound_suppression: Option<Arc<tb_chat::moderation::OutboundSuppressionStore>>,
     ) -> Self {
         Self {
             arrival_store: ArrivalTrackingStore::new(pool.clone()),
@@ -101,6 +115,8 @@ impl RaidArrivalSinkImpl {
             pool,
             pending,
             suppression,
+            chat_api,
+            outbound_suppression,
             orphans: Mutex::new(std::collections::HashMap::new()),
         }
     }
@@ -349,6 +365,150 @@ impl RaidArrivalSinkImpl {
             known_source: known_source(&self.pool, from_id, from_login).await,
         }
     }
+
+    /// Partner-Raid-Dankesnachricht an den Ziel-Channel (B3-2d). Port von
+    /// `send_partner_raid_message` (partner_raid_delivery.py:224) inkl. des
+    /// vorgelagerten `silent_raid`-Gates (raid_arrival_runtime.py:395-409).
+    ///
+    /// Reihenfolge exakt wie Python:
+    /// 1. `silent_raid`-Gate ZUERST (runtime_core.py:408 `_lookup_silent_raid_enabled`):
+    ///    aktive Partner-Zeile des Ziels, Spalte `silent_raid` — wenn gesetzt,
+    ///    gar nicht senden.
+    /// 2. DB-Chat-Suppression (partner_raid_delivery.py:239
+    ///    `lookup_outbound_chat_suppression`, source `partner_raid`).
+    /// 3. `received_raid_count` (partner_raid_delivery.py:252
+    ///    `count_received_network_raids`, raid_metrics_store.py:46-52).
+    /// 4. Nachricht bauen (`build_partner_raid_message`).
+    /// 5. 5 s Delay (partner_raid_delivery.py:21 `delay_seconds=5.0`), dann
+    ///    senden — NICHT-BLOCKIEREND via `tokio::spawn`, damit
+    ///    `confirm_pending_raid` nicht 5 s blockiert.
+    ///
+    /// Reads (1–3) und Message-Build (4) laufen SYNCHRON vor dem spawn; nur
+    /// `sleep` + `send` liegen im spawn.
+    async fn send_partner_raid_message(
+        &self,
+        from_broadcaster_login: &str,
+        to_broadcaster_login: &str,
+        to_broadcaster_id: &str,
+        viewer_count: i32,
+    ) {
+        // Ohne Bot-Token kein Send-Port (Python get_chat_bot() → None).
+        let Some(chat_api) = self.chat_api.clone() else {
+            tracing::debug!("Chat-API nicht verfügbar für Partner-Raid-Nachricht");
+            return;
+        };
+
+        // 1. silent_raid-Gate ZUERST (raid_arrival_runtime.py:395 +
+        //    runtime_core.py:408): aktive Partner-Zeile des Ziels prüfen.
+        match sqlx::query_scalar::<_, bool>(
+            "SELECT COALESCE(silent_raid, 0) <> 0 FROM twitch_partners \
+             WHERE LOWER(twitch_login) = LOWER($1) AND status = 'active' LIMIT 1",
+        )
+        .bind(to_broadcaster_login)
+        .fetch_optional(&self.pool)
+        .await
+        {
+            Ok(Some(true)) => {
+                // Python raid_arrival_runtime.py:396 — Nachricht unterdrückt.
+                tracing::debug!(
+                    from = %from_broadcaster_login,
+                    to = %to_broadcaster_login,
+                    "Partner-Raid-Nachricht unterdrückt (silent_raid)"
+                );
+                return;
+            }
+            // Keine Zeile oder silent_raid=0 → weiter (Python: bool(0) → False).
+            Ok(_) => {}
+            Err(error) => {
+                // Python schluckt Lookup-Fehler und gibt False zurück → weiter.
+                tracing::debug!(
+                    %error,
+                    to = %to_broadcaster_login,
+                    "silent_raid-Lookup fehlgeschlagen — sende trotzdem"
+                );
+            }
+        }
+
+        // 2. DB-Chat-Suppression (partner_raid_delivery.py:239): wenn der
+        //    Ziel-Channel die Source `partner_raid` unterdrückt hat → skip.
+        if let Some(suppression) = self.outbound_suppression.as_ref() {
+            if let Some(entry) = suppression
+                .check_suppression(to_broadcaster_login, "partner_raid")
+                .await
+            {
+                tracing::info!(
+                    to = %to_broadcaster_login,
+                    reason_code = %entry.reason_code,
+                    until = %entry.suppressed_until,
+                    "Partner-Raid-Nachricht übersprungen (gespeicherte Chat-Suppression)"
+                );
+                return;
+            }
+        }
+
+        // 3. received_raid_count (partner_raid_delivery.py:252 +
+        //    raid_metrics_store.py:46): erfolgreiche eingegangene Netzwerk-Raids
+        //    des Ziels zählen; Python klemmt <= 0 auf 1.
+        let received_raid_count = match sqlx::query_scalar::<_, i64>(
+            "SELECT COUNT(*) FROM twitch_raid_history \
+             WHERE to_broadcaster_id = $1 AND COALESCE(success, FALSE) IS TRUE",
+        )
+        .bind(to_broadcaster_id)
+        .fetch_one(&self.pool)
+        .await
+        {
+            Ok(count) if count > 0 => count,
+            // count <= 0 → 1 (partner_raid_delivery.py:253-254).
+            Ok(_) => 1,
+            Err(error) => {
+                tracing::debug!(
+                    %error,
+                    to = %to_broadcaster_login,
+                    "count_received_network_raids fehlgeschlagen — fällt auf 1 zurück"
+                );
+                1
+            }
+        };
+
+        // 4. Nachricht bauen (build_partner_raid_message, raid_messaging.rs:28).
+        let message = build_partner_raid_message(
+            from_broadcaster_login,
+            to_broadcaster_login,
+            viewer_count,
+            received_raid_count,
+        );
+
+        // 5. 5 s Delay (partner_raid_delivery.py:21 delay_seconds=5.0), dann
+        //    senden — NICHT-BLOCKIEREND (Vorbild: Werbefrei-Pitch in
+        //    chat_wiring.rs). confirm_pending_raid darf nicht 5 s warten.
+        let to_broadcaster_id = to_broadcaster_id.to_string();
+        let to_broadcaster_login = to_broadcaster_login.to_string();
+        tokio::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+            match chat_api.send_message(&to_broadcaster_id, &message).await {
+                Ok(tb_chat::types::SendOutcome::Sent) => tracing::info!(
+                    to = %to_broadcaster_login,
+                    "Partner-Raid-Nachricht gesendet"
+                ),
+                Ok(tb_chat::types::SendOutcome::Dropped { code, message }) => tracing::debug!(
+                    to = %to_broadcaster_login,
+                    %code,
+                    drop_message = %message,
+                    "Partner-Raid-Nachricht von Twitch verworfen"
+                ),
+                Ok(tb_chat::types::SendOutcome::HttpError { status, .. }) => tracing::debug!(
+                    to = %to_broadcaster_login,
+                    status,
+                    "Partner-Raid-Nachricht-Send: HTTP-Fehler"
+                ),
+                Err(error) => tracing::debug!(
+                    %error,
+                    to = %to_broadcaster_login,
+                    "Partner-Raid-Nachricht-Send fehlgeschlagen"
+                ),
+            }
+        });
+    }
 }
 
 #[async_trait::async_trait]
@@ -532,6 +692,22 @@ impl RaidArrivalSink for RaidArrivalSinkImpl {
                     tracing::error!(%error, "Confirm-Resolver fehlgeschlagen");
                 }
             }
+        }
+
+        // 4b. Partner-Raid-Dankesnachricht an den Ziel-Channel (B3-2d). Python
+        // raid_arrival_runtime.py:395-409: silent_raid-Gate, dann bei
+        // should_send_partner_raid_message die Nachricht senden. Der Versand
+        // (silent_raid/Suppression/Count-Reads synchron, sleep+send im spawn)
+        // steckt in send_partner_raid_message. (Recruitment-Message ist im
+        // nativen Helix-Modell nicht möglich — bewusst NICHT portiert.)
+        if decision.should_send_partner_raid_message {
+            self.send_partner_raid_message(
+                from_broadcaster_login,
+                to_broadcaster_login,
+                to_broadcaster_id,
+                viewer_count,
+            )
+            .await;
         }
 
         // 5. Externe Recruitment-Raids: bestätigten Raid persistieren und bei
@@ -850,8 +1026,14 @@ mod tests {
             .store(PendingRaid::new("src", "200"));
 
         let suppression = Arc::new(Mutex::new(tb_raid::ManualRaidSuppression::new()));
-        let sink =
-            RaidArrivalSinkImpl::new(pool.clone(), pending_store.clone(), suppression, "deadlock");
+        let sink = RaidArrivalSinkImpl::new(
+            pool.clone(),
+            pending_store.clone(),
+            suppression,
+            "deadlock",
+            None,
+            None,
+        );
         sink.confirm_pending_raid("channel.raid", "200", "dst", "src", Some("100"), 42)
             .await;
 
@@ -885,8 +1067,14 @@ mod tests {
             .unwrap()
             .store(PendingRaid::new("src", "200"));
         let suppression = Arc::new(Mutex::new(tb_raid::ManualRaidSuppression::new()));
-        let sink =
-            RaidArrivalSinkImpl::new(pool.clone(), pending_store.clone(), suppression, "deadlock");
+        let sink = RaidArrivalSinkImpl::new(
+            pool.clone(),
+            pending_store.clone(),
+            suppression,
+            "deadlock",
+            None,
+            None,
+        );
         sink.confirm_pending_raid("channel.raid", "200", "dst", "src", Some("100"), 42)
             .await;
 

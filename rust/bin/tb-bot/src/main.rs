@@ -464,6 +464,13 @@ async fn main() {
                 pending.clone(),
                 suppression.clone(),
                 &target_game.to_lowercase(),
+                // B3-2d: Chat-Send-Port + DB-Chat-Suppression für die
+                // Partner-Raid-Dankesnachricht durchreichen. chat_api ist None,
+                // wenn kein Bot-Token gebootet wurde (Python get_chat_bot()→None).
+                chat_api_handle.as_ref().map(|h| h.api.clone()),
+                Some(Arc::new(
+                    tb_chat::moderation::OutboundSuppressionStore::new(pool.clone()),
+                )),
             ));
 
             // Orphan-Sweeper: promotet channel.chat.notification ohne
