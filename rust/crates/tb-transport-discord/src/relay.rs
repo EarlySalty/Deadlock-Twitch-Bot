@@ -293,6 +293,34 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn akzeptiert_numerische_message_id_vom_rust_broker() {
+        // Regression: Der Rust-dl-broker liefert message_id als u64-Zahl (nicht
+        // als String wie das alte Python-master_broker). Ohne tolerantes Decoding
+        // scheiterte resp.json() mit „error decoding response body" → announce_live
+        // gab None zurück → message_id nie persistiert → Doppel-Live-Ping.
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/internal/master/v1/discord/send-rich-message"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "ok": true,
+                "request_id": "r-1",
+                "idempotency_key": "send-abc",
+                "cached": false,
+                "result": { "channel_id": 123_i64, "message_id": 1_402_558_159_123_456_789_i64 },
+                "error": serde_json::Value::Null
+            })))
+            .mount(&server)
+            .await;
+
+        let relay = BrokerRelay::new(&test_config(&server.uri())).unwrap();
+        let result = relay
+            .send_rich_message(sample_send_payload())
+            .await
+            .unwrap();
+        assert_eq!(result.result.message_id, "1402558159123456789");
+    }
+
+    #[tokio::test]
     async fn idempotency_key_header_vorhanden() {
         let server = MockServer::start().await;
         // Prüft, dass der Header gesetzt ist (Wert deterministisch — kein exakter Match nötig)

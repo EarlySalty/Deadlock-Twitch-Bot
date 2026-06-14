@@ -32,7 +32,28 @@ pub struct SendResult {
 /// Inneres Ergebnis-Objekt der Broker-Antwort.
 #[derive(Debug, Deserialize)]
 pub struct SendResultInner {
+    /// Discord-message_id. Der Broker liefert sie je nach Implementierung als
+    /// String (Python-master_broker) oder als u64-Zahl (Rust-dl-broker); beide
+    /// Formen werden akzeptiert, damit ein Cross-Repo-Drift die Live-Pings nicht
+    /// still bricht (sonst: Decode-Fehler → kein gespeichertes message_id →
+    /// Doppel-Ping bei jedem Poll).
+    #[serde(deserialize_with = "deserialize_id_as_string")]
     pub message_id: String,
+}
+
+/// Decodiert eine Discord-Snowflake-ID als String, egal ob das JSON sie als
+/// String oder als (vorzeichenlose) Ganzzahl liefert.
+fn deserialize_id_as_string<'de, D>(deserializer: D) -> Result<String, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    match serde_json::Value::deserialize(deserializer)? {
+        serde_json::Value::String(s) => Ok(s),
+        serde_json::Value::Number(n) => Ok(n.to_string()),
+        other => Err(serde::de::Error::custom(format!(
+            "message_id muss String oder Zahl sein, war {other}"
+        ))),
+    }
 }
 
 /// Einheitlicher Fehlertyp für Discord-Transport.
