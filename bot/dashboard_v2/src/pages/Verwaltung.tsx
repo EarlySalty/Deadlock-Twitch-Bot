@@ -4,6 +4,7 @@ import { fetchInternalHome } from '@/api/home';
 import { useAuthStatus } from '@/hooks/useAnalytics';
 import { PREVIEW_HOME_ROUTE, isPreviewModeEnabled } from '@/preview/routes';
 import { AIEngagementSection } from '@/components/verwaltung/AIEngagementSection';
+import { SilentNotificationsSection } from '@/components/verwaltung/SilentNotificationsSection';
 import {
   ArrowLeft,
   ArrowRight,
@@ -325,6 +326,8 @@ export function VerwaltungPage() {
             Profiländerungen direkt auf Twitch vornehmen. Daten werden beim nächsten Login synchronisiert.
           </div>
         </motion.section>
+
+        <SilentNotificationsSection />
 
         <AIEngagementSection />
 

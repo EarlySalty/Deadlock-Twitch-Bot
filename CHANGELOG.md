@@ -1,3 +1,11 @@
+## #216 — Stille Ban-/Raid-Hinweise jetzt auch im Dashboard schaltbar
+
+**Ausgangslage:** Ob der Bot eine Chat-Notiz postet, wenn er jemanden automatisch bannt oder einen Raid auslöst, ließ sich bisher nur per Chat-Befehl (`!silentban` / `!silentraid`) umschalten. Wer das lieber in Ruhe im Dashboard einstellen wollte, hatte dort keine Möglichkeit.
+
+**Was geändert wurde:** Im Streamer-Dashboard unter „Verwaltung" gibt es jetzt zwei Schalter — „Auto-Ban-Hinweise stummschalten" und „Raid-Hinweise stummschalten". Sie sind eins zu eins mit den Chat-Befehlen verbunden: Was du im Dashboard umlegst, gilt sofort auch für den Chat-Befehl und umgekehrt — es ist dieselbe Einstellung.
+
+**Wie es funktioniert:** Die Schalter lesen und schreiben genau denselben Schaltzustand am Partner-Datensatz, den auch `!silentban`/`!silentraid` umschalten — daher gibt es keine zweite, abweichende Einstellung, sondern eine einzige Quelle. Beim Öffnen der Seite wird der aktuelle Stand geladen; ein Umlegen speichert sofort (und rollt bei einem Fehler sichtbar zurück). Die Einstellung gilt immer für deinen eigenen Kanal — erkannt über deine Dashboard-Anmeldung, ohne dass du etwas eingeben musst.
+
 ## #215 — Interne Diagnose-Schnittstelle für den Support-Bot
 
 **Ausgangslage:** Meldet ein Streamer im Discord-Support ein Problem mit der Twitch-Anbindung („der Bot kommt nicht in meinen Stream", „ich habe autorisiert, aber es steht auf inaktiv"), konnte der Support-Bot bisher nur allgemeine Hinweise geben — er kannte den echten Autorisierungs-Status des Fragenden nicht.
