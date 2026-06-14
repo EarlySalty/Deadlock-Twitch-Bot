@@ -22,7 +22,9 @@ pub use handlers::eventsub::EventSubDispatcherExt;
 pub use handlers::legacy_proxy::{LegacyProxy, LegacyProxyExt};
 pub use handlers::raid::{ManualRaidExt, ManualRaidPort};
 pub use handlers::raid_oauth::{RaidOAuthExt, RaidOAuthPort};
-pub use handlers::stats_native::{EventSubStatsExt, EventSubStatsSource};
+pub use handlers::stats_native::{
+    EventSubCurrentSnapshot, EventSubStatsExt, EventSubStatsSource,
+};
 pub use idempotency::IdempotencyState;
 
 /// Baut den axum-Router für alle internen Endpoints.

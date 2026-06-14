@@ -1,3 +1,11 @@
+## #211 — Admin-Statistik zeigt wieder die Live-EventSub-Auslastung
+
+**Ausgangslage (rein intern/Admin):** Die `/stats`-Übersicht im Admin-Bereich hat eine EventSub-Sektion (wie viele Twitch-Abos der Bot aktuell hält, aufgeschlüsselt nach Typ und Kanal). Beim Umzug war diese Live-Sektion nicht mehr an die neue Abo-Verwaltung angeschlossen — sie blieb leer, nur die historischen Kapazitäts-Werte aus der Datenbank waren da.
+
+**Was geändert wurde:** Die EventSub-Sektion wird wieder live aus der aktiven Abo-Verwaltung gefüllt: aktuelle Abo-Anzahl, belegte Slots, plus Aufschlüsselung nach Abo-Typ und nach Kanal (mit Login).
+
+**Wie es funktioniert:** Der Bot betreibt die Twitch-Abos im Webhook-Modus (keine WebSocket-Listener — die entsprechenden Felder bleiben daher bewusst 0). Für die Live-Sektion zählt er das aktuell getrackte Abo-Set aus, gruppiert es nach Typ und nach Broadcaster, löst die Kanal-Logins per Sammel-Abfrage auf und liefert das in genau der Form, die das Admin-Dashboard erwartet. Ohne aktive Abo-Verwaltung (z. B. ohne Twitch-Anbindung) bleibt es beim bisherigen DB-Block.
+
 ## #210 — Kostenlose „Tagesform": dein letzter Stream gratis, Verlauf & Coaching im Plan
 
 **Ausgangslage:** Bisher sah jeder Streamer das komplette Analyse-Dashboard mit voller Historie kostenlos — der eigentliche Mehrwert (Entwicklung über Zeit, Coaching) war damit gratis, und es gab kaum einen Grund, einen Plan zu buchen. Gleichzeitig ist eine einzelne Tageszahl ohne Vergleich wenig wert: „heute 23 Ø Zuschauer" sagt nichts, solange man nicht weiß, ob das über oder unter dem eigenen Schnitt liegt.

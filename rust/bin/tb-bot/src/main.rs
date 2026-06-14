@@ -35,6 +35,7 @@ mod chat_wiring;
 mod streamer_link;
 mod confirm_resolver;
 mod eventsub_hooks;
+mod eventsub_stats_adapter;
 mod oauth_followups;
 mod offline_side_effects;
 mod partner_lookup;
@@ -669,6 +670,16 @@ async fn main() {
             tracing::info!("Legacy-Fallback aktiv: unbekannte interne-API-Routen → {url}");
             Arc::new(tb_internal_api::LegacyProxy::new(url))
         });
+    // EventSub-Sektion von GET /stats: Live-`current`-Snapshot aus dem nativen
+    // SubscriptionManager (Webhook-Modus). Ohne Manager (kein Helix) → None,
+    // dann bleibt nur der DB-Capacity-Block (wie bisher).
+    let eventsub_stats: Option<Arc<dyn tb_internal_api::EventSubStatsSource>> =
+        subscription_manager.as_ref().map(|mgr| {
+            Arc::new(eventsub_stats_adapter::ManagerEventSubStats::new(
+                mgr.clone(),
+                pool.clone(),
+            )) as Arc<dyn tb_internal_api::EventSubStatsSource>
+        });
     let app = build_internal_router(
         pool,
         token,
@@ -676,10 +687,7 @@ async fn main() {
         Some(dispatcher),
         manual_raid_port,
         raid_oauth_port,
-        // EventSub-Sektion von GET /stats: noch nicht an den Rust-
-        // SubscriptionManager verdrahtet — Verhalten wie Pythons
-        // Exception-Catch (s. stats_native).
-        None,
+        eventsub_stats,
         legacy_proxy,
     );
 

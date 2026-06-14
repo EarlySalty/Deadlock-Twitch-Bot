@@ -333,6 +333,18 @@ impl SubscriptionManager {
         deleted
     }
 
+    /// Aktuell getrackte EventSub-Subscriptions als `(sub_type, broadcaster_id)`-
+    /// Paare — Live-Quelle für die `current`-Sektion von `GET /stats` (Webhook-
+    /// Modus; ersetzt Pythons WS-In-Process-State).
+    pub fn tracked_pairs(&self) -> Vec<(String, String)> {
+        self.tracked
+            .lock()
+            .expect("tracked lock")
+            .iter()
+            .cloned()
+            .collect()
+    }
+
     /// Kapazitäts-Snapshot fürs Admin-Dashboard. Webhook-Modus: keine
     /// WS-Listener — Listener-Felder 0, `used_slots` = getrackte Subs.
     pub async fn record_capacity_snapshot(&self, trigger: &str) {
