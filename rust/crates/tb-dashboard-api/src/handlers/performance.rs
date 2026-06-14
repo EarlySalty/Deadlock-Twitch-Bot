@@ -158,9 +158,9 @@ pub async fn weekly_stats_handler(
         SELECT
             EXTRACT(DOW FROM s.started_at)::integer AS weekday,
             COUNT(*) AS stream_count,
-            AVG(s.duration_seconds / 3600.0) AS avg_hours,
+            AVG(s.duration_seconds / 3600.0)::float8 AS avg_hours,
             AVG(s.avg_viewers) AS avg_viewers,
-            AVG(s.peak_viewers) AS avg_peak,
+            AVG(s.peak_viewers)::float8 AS avg_peak,
             SUM(CASE WHEN s.follower_delta IS NOT NULL
                      AND NOT (s.followers_end = 0 AND s.followers_start > 0)
                      THEN s.follower_delta ELSE 0 END) AS total_followers
@@ -224,7 +224,7 @@ pub async fn hourly_heatmap_handler(
             EXTRACT(HOUR FROM s.started_at)::integer AS hour,
             COUNT(*) AS stream_count,
             AVG(s.avg_viewers) AS avg_viewers,
-            AVG(s.peak_viewers) AS avg_peak
+            AVG(s.peak_viewers)::float8 AS avg_peak
         FROM twitch_stream_sessions s
         WHERE s.started_at >= $1
           AND s.ended_at IS NOT NULL
