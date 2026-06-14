@@ -39,6 +39,9 @@ mod eventsub_stats_adapter;
 mod oauth_followups;
 mod offline_side_effects;
 mod partner_lookup;
+// Slice 1: Datenschicht ohne Aufrufer — Wiring folgt in Slice 2.
+#[allow(dead_code)]
+mod partner_recruit;
 mod raid_adapters;
 mod raid_arrival_wiring;
 mod raid_oauth_impl;
