@@ -3,6 +3,12 @@
 use sqlx::PgPool;
 
 /// Aggregierte Metriken für einen Zeitraum.
+///
+/// Felder spiegeln Pythons `_calculate_overview_metrics` (session-abgeleitete
+/// Teilmenge — die chatter-basierten Felder uniqueChatters/engagement folgen
+/// separat, da sie Joins auf twitch_session_chatters + Bot-Filter brauchen).
+/// Retention-Werte sind hier als Rohbruch (LEAST(1.0,..)) aggregiert; das *100
+/// macht der Aufrufer (wie Python).
 #[derive(Debug, sqlx::FromRow)]
 pub struct OverviewMetricsRow {
     pub avg_avg_viewers: Option<f64>,
@@ -10,6 +16,10 @@ pub struct OverviewMetricsRow {
     pub total_hours_watched: Option<f64>,
     pub total_airtime_hours: Option<f64>,
     pub total_followers: Option<i64>,
+    pub gained_followers: Option<i64>,
+    pub avg_retention_10m: Option<f64>,
+    pub retention_sample_count: Option<i64>,
+    pub follower_valid_count: Option<i64>,
     pub session_count: Option<i64>,
 }
 
@@ -35,6 +45,26 @@ pub async fn overview_metrics(
                     THEN s.follower_delta
                     ELSE 0
                 END)::BIGINT                                          AS total_followers,
+            COALESCE(SUM(CASE
+                    WHEN s.follower_delta > 0
+                     AND NOT (s.followers_end = 0 AND s.followers_start > 0)
+                    THEN s.follower_delta
+                    ELSE 0
+                END), 0)::BIGINT                                      AS gained_followers,
+            AVG(CASE
+                    WHEN s.avg_viewers >= 3 AND s.peak_viewers > 0
+                    THEN LEAST(1.0, s.retention_10m)
+                    ELSE NULL
+                END)::FLOAT8                                          AS avg_retention_10m,
+            COUNT(CASE
+                    WHEN s.avg_viewers >= 3 AND s.peak_viewers > 0 AND s.retention_10m IS NOT NULL
+                    THEN 1
+                END)::BIGINT                                          AS retention_sample_count,
+            COUNT(CASE
+                    WHEN s.follower_delta IS NOT NULL
+                     AND NOT (s.followers_end = 0 AND s.followers_start > 0)
+                    THEN 1
+                END)::BIGINT                                          AS follower_valid_count,
             COUNT(*)                                                  AS session_count
         FROM twitch_stream_sessions s
         WHERE s.started_at >= $1::TIMESTAMPTZ
@@ -93,6 +123,12 @@ mod tests {
             .execute(&pool)
             .await
             .expect("search_path setzen fehlgeschlagen");
+        // Tabelle frisch anlegen, damit Schema-Änderungen (neue Spalten) auch im
+        // persistenten Test-Container greifen (IF NOT EXISTS würde sie überspringen).
+        sqlx::query("DROP TABLE IF EXISTS twitch_stream_sessions")
+            .execute(&pool)
+            .await
+            .expect("DROP fehlgeschlagen");
         sqlx::query(
             r#"
             CREATE TABLE IF NOT EXISTS twitch_stream_sessions (
@@ -105,7 +141,8 @@ mod tests {
                 duration_seconds BIGINT,
                 follower_delta   BIGINT,
                 followers_start  BIGINT,
-                followers_end    BIGINT
+                followers_end    BIGINT,
+                retention_10m    REAL
             )
             "#,
         )
@@ -149,10 +186,10 @@ mod tests {
             r#"
             INSERT INTO twitch_stream_sessions
                 (streamer_login, started_at, ended_at, avg_viewers, peak_viewers,
-                 duration_seconds, follower_delta, followers_start, followers_end)
+                 duration_seconds, follower_delta, followers_start, followers_end, retention_10m)
             VALUES
                 ('streamer_x', NOW() - INTERVAL '1 day', NOW() - INTERVAL '23 hours',
-                 100.0, 200, 3600, 5, 1000, 1005)
+                 100.0, 200, 3600, 5, 1000, 1005, 0.5)
             "#,
         )
         .execute(&pool)
@@ -171,5 +208,10 @@ mod tests {
             .expect("Sollte Metriken liefern");
         assert_eq!(metrics.session_count, Some(1));
         assert!((metrics.avg_avg_viewers.unwrap() - 100.0).abs() < 0.001);
+        // Neue session-abgeleitete Felder.
+        assert_eq!(metrics.gained_followers, Some(5));
+        assert_eq!(metrics.follower_valid_count, Some(1));
+        assert_eq!(metrics.retention_sample_count, Some(1));
+        assert!((metrics.avg_retention_10m.unwrap() - 0.5).abs() < 0.001);
     }
 }

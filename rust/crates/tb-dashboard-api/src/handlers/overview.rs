@@ -53,6 +53,17 @@ pub struct OverviewSummary {
     pub followers_delta: i64,
     #[serde(rename = "totalSessions")]
     pub total_sessions: i64,
+    // Session-abgeleitete Felder (Python _calculate_overview_metrics):
+    #[serde(rename = "followersGained")]
+    pub followers_gained: i64,
+    #[serde(rename = "followersPerHour")]
+    pub followers_per_hour: f64,
+    #[serde(rename = "followersGainedPerHour")]
+    pub followers_gained_per_hour: f64,
+    #[serde(rename = "retention10m")]
+    pub retention_10m: f64,
+    #[serde(rename = "retentionReliable")]
+    pub retention_reliable: bool,
 }
 
 /// `GET /twitch/api/v2/overview?streamer=<login>[&days=30]`
@@ -95,13 +106,25 @@ pub async fn overview_handler(
     Ok(Json(OverviewResponse::Data(OverviewData {
         streamer: params.streamer,
         days,
-        summary: OverviewSummary {
-            avg_viewers: metrics.avg_avg_viewers.unwrap_or(0.0),
-            peak_viewers: metrics.max_peak_viewers.unwrap_or(0),
-            total_hours_watched: metrics.total_hours_watched.unwrap_or(0.0),
-            total_airtime: metrics.total_airtime_hours.unwrap_or(0.0),
-            followers_delta: metrics.total_followers.unwrap_or(0),
-            total_sessions: metrics.session_count.unwrap_or(0),
+        summary: {
+            let airtime = metrics.total_airtime_hours.unwrap_or(0.0);
+            let total_followers = metrics.total_followers.unwrap_or(0);
+            let gained = metrics.gained_followers.unwrap_or(0);
+            let per_hour = |n: i64| if airtime > 0.0 { n as f64 / airtime } else { 0.0 };
+            OverviewSummary {
+                avg_viewers: metrics.avg_avg_viewers.unwrap_or(0.0),
+                peak_viewers: metrics.max_peak_viewers.unwrap_or(0),
+                total_hours_watched: metrics.total_hours_watched.unwrap_or(0.0),
+                total_airtime: airtime,
+                followers_delta: total_followers,
+                total_sessions: metrics.session_count.unwrap_or(0),
+                followers_gained: gained,
+                followers_per_hour: per_hour(total_followers),
+                followers_gained_per_hour: per_hour(gained),
+                // Python: float(avg_retention_10m)*100 (Rohbruch -> Prozent).
+                retention_10m: metrics.avg_retention_10m.unwrap_or(0.0) * 100.0,
+                retention_reliable: metrics.retention_sample_count.unwrap_or(0) >= 3,
+            }
         },
     })))
 }
@@ -174,7 +197,8 @@ mod tests {
                 duration_seconds BIGINT,
                 follower_delta   BIGINT,
                 followers_start  BIGINT,
-                followers_end    BIGINT
+                followers_end    BIGINT,
+                retention_10m    REAL
             )
             "#,
         )
@@ -244,10 +268,10 @@ mod tests {
             r#"
             INSERT INTO twitch_stream_sessions
                 (streamer_login, started_at, ended_at, avg_viewers, peak_viewers,
-                 duration_seconds, follower_delta, followers_start, followers_end)
+                 duration_seconds, follower_delta, followers_start, followers_end, retention_10m)
             VALUES
                 ('streamer_x', NOW() - INTERVAL '1 day', NOW() - INTERVAL '23 hours',
-                 100.0, 200, 3600, 5, 1000, 1005)
+                 100.0, 200, 3600, 5, 1000, 1005, 0.6)
             "#,
         )
         .execute(&pool)
@@ -263,5 +287,9 @@ mod tests {
         let v: serde_json::Value = serde_json::from_slice(&b).unwrap();
         assert!((v["summary"]["avgViewers"].as_f64().unwrap() - 100.0).abs() < 0.001);
         assert_eq!(v["summary"]["totalSessions"], 1);
+        // Neue session-abgeleitete Summary-Felder.
+        assert_eq!(v["summary"]["followersGained"], 5);
+        assert!((v["summary"]["retention10m"].as_f64().unwrap() - 60.0).abs() < 0.01);
+        assert_eq!(v["summary"]["retentionReliable"], false); // nur 1 Sample (<3)
     }
 }
