@@ -1270,6 +1270,291 @@ pub async fn events_payload(
     serde_json::Value::Object(payload)
 }
 
+// ---------------------------------------------------------------------------
+// Report-Snapshot: Raw-Dumps + Orchestrierung (Python report_builder.py
+// `_raw_chat_payload` / `_raw_session_chatters` / `_raw_event_rows` /
+// `build_post_stream_snapshot`)
+// ---------------------------------------------------------------------------
+
+/// Schema-Version des Snapshots (Python `POST_STREAM_REPORT_SCHEMA_VERSION`).
+pub const POST_STREAM_REPORT_SCHEMA_VERSION: &str = "post_stream_report_v2";
+pub const REPORT_VARIANT_COMPACT: &str = "compact";
+pub const REPORT_VARIANT_FULL: &str = "full";
+/// Längen-Limit pro Roh-Chatnachricht im FULL-Dump (Python `MAX_FULL_CHAT_MESSAGE_CHARS`).
+const MAX_FULL_CHAT_MESSAGE_CHARS: usize = 500;
+
+/// Roh-Chat-Payload für die FULL-Variante (Python `_raw_chat_payload`). Jede
+/// geladene Nachricht normalisiert + auf 500 Zeichen begrenzt. Reine Funktion.
+pub fn raw_chat_payload(messages: &[ChatMessageRow]) -> serde_json::Value {
+    let rows: Vec<serde_json::Value> = messages
+        .iter()
+        .map(|row| {
+            serde_json::json!({
+                "ts": row.message_ts.as_deref().unwrap_or(""),
+                "author": row.chatter_login,
+                "text": clean_prompt_message(&row.content, MAX_FULL_CHAT_MESSAGE_CHARS),
+            })
+        })
+        .collect();
+    serde_json::json!({
+        "included_messages": messages.len(),
+        "truncated": false,
+        "messages": rows,
+    })
+}
+
+/// Roh-Zeilen einer Session-gebundenen Tabelle als JSON-Array (Python
+/// `_safe_fetchall_dicts` → `[]` bei Fehler). `to_jsonb(row)` reicht die DB-Typen
+/// 1:1 durch (wie Pythons raw row dict); `order_col` bestimmt die Reihenfolge.
+async fn raw_rows_by_session(
+    pool: &PgPool,
+    inner_sql: &str,
+    order_col: &str,
+    session_id: i64,
+) -> serde_json::Value {
+    let sql = format!(
+        "SELECT COALESCE(jsonb_agg(to_jsonb(t) ORDER BY t.{order_col}), '[]'::jsonb) FROM ({inner_sql}) t"
+    );
+    sqlx::query_scalar::<_, serde_json::Value>(&sql)
+        .bind(session_id)
+        .fetch_one(pool)
+        .await
+        .unwrap_or_else(|_| serde_json::json!([]))
+}
+
+/// Wie `raw_rows_by_session`, aber für die Zeitfenster-Events (3 Binds:
+/// twitch_user_id + start/end als `::timestamptz`).
+async fn raw_rows_between(
+    pool: &PgPool,
+    inner_sql: &str,
+    order_col: &str,
+    user_id: &str,
+    start: &str,
+    end: &str,
+) -> serde_json::Value {
+    let sql = format!(
+        "SELECT COALESCE(jsonb_agg(to_jsonb(t) ORDER BY t.{order_col}), '[]'::jsonb) FROM ({inner_sql}) t"
+    );
+    sqlx::query_scalar::<_, serde_json::Value>(&sql)
+        .bind(user_id)
+        .bind(start)
+        .bind(end)
+        .fetch_one(pool)
+        .await
+        .unwrap_or_else(|_| serde_json::json!([]))
+}
+
+/// Roh-Event-Zeilen für die FULL-Variante (Python `_raw_event_rows`). Jede
+/// Gruppe degradiert bei Fehler einzeln zu `[]`. follows/channel_updates/
+/// shoutouts nur bei twitch_user_id + started_at.
+pub async fn raw_event_rows(
+    pool: &PgPool,
+    session: &ReportSession,
+    registry: &ReportRegistry,
+) -> serde_json::Value {
+    let session_id = session.id;
+    let twitch_user_id = registry.twitch_user_id.as_deref().unwrap_or("").to_string();
+    let mut raw = serde_json::Map::new();
+
+    raw.insert(
+        "subscriptions".into(),
+        raw_rows_by_session(
+            pool,
+            "SELECT event_type, user_login, tier, is_gift, gifter_login, cumulative_months, \
+                    streak_months, message, total_gifted, received_at \
+             FROM twitch_subscription_events WHERE session_id = $1",
+            "received_at",
+            session_id,
+        )
+        .await,
+    );
+    raw.insert(
+        "bits".into(),
+        raw_rows_by_session(
+            pool,
+            "SELECT donor_login, amount, message, received_at \
+             FROM twitch_bits_events WHERE session_id = $1",
+            "received_at",
+            session_id,
+        )
+        .await,
+    );
+    raw.insert(
+        "channel_points".into(),
+        raw_rows_by_session(
+            pool,
+            "SELECT user_login, reward_title, reward_cost, user_input, redeemed_at \
+             FROM twitch_channel_points_events WHERE session_id = $1",
+            "redeemed_at",
+            session_id,
+        )
+        .await,
+    );
+    raw.insert(
+        "hype_trains".into(),
+        raw_rows_by_session(
+            pool,
+            "SELECT started_at, ended_at, duration_seconds, level, total_progress, event_phase \
+             FROM twitch_hype_train_events WHERE session_id = $1",
+            "started_at",
+            session_id,
+        )
+        .await,
+    );
+    raw.insert(
+        "ad_breaks".into(),
+        raw_rows_by_session(
+            pool,
+            "SELECT duration_seconds, is_automatic, started_at \
+             FROM twitch_ad_break_events WHERE session_id = $1",
+            "started_at",
+            session_id,
+        )
+        .await,
+    );
+    raw.insert(
+        "moderation".into(),
+        raw_rows_by_session(
+            pool,
+            "SELECT event_type, target_login, moderator_login, reason, ends_at, received_at \
+             FROM twitch_ban_events WHERE session_id = $1",
+            "received_at",
+            session_id,
+        )
+        .await,
+    );
+
+    let started = session.started_at.as_deref().filter(|s| !s.is_empty());
+    if !twitch_user_id.is_empty() {
+        if let Some(start) = started {
+            let end = session
+                .ended_at
+                .clone()
+                .filter(|s| !s.is_empty())
+                .unwrap_or_else(|| chrono::Utc::now().to_rfc3339());
+            raw.insert(
+                "follows".into(),
+                raw_rows_between(
+                    pool,
+                    "SELECT follower_login, follower_id, followed_at FROM twitch_follow_events \
+                     WHERE twitch_user_id = $1 AND followed_at BETWEEN $2::timestamptz AND $3::timestamptz",
+                    "followed_at",
+                    &twitch_user_id,
+                    start,
+                    &end,
+                )
+                .await,
+            );
+            raw.insert(
+                "channel_updates".into(),
+                raw_rows_between(
+                    pool,
+                    "SELECT title, game_name, language, recorded_at FROM twitch_channel_updates \
+                     WHERE twitch_user_id = $1 AND recorded_at BETWEEN $2::timestamptz AND $3::timestamptz",
+                    "recorded_at",
+                    &twitch_user_id,
+                    start,
+                    &end,
+                )
+                .await,
+            );
+            raw.insert(
+                "shoutouts".into(),
+                raw_rows_between(
+                    pool,
+                    "SELECT direction, other_broadcaster_login, moderator_login, viewer_count, received_at \
+                     FROM twitch_shoutout_events \
+                     WHERE twitch_user_id = $1 AND received_at BETWEEN $2::timestamptz AND $3::timestamptz",
+                    "received_at",
+                    &twitch_user_id,
+                    start,
+                    &end,
+                )
+                .await,
+            );
+        }
+    }
+
+    serde_json::Value::Object(raw)
+}
+
+/// Roh-Session-Chatter (Python `_raw_session_chatters`). Spalten umbenannt
+/// (chatter_login→login, chatter_id→id); `to_jsonb` liefert dieselben Typen wie
+/// Pythons `_iso`/`bool`/`_as_int` (Zeit timestamptz→ISO, BOOLEAN→bool, INTEGER→Zahl).
+pub async fn raw_session_chatters(pool: &PgPool, session_id: i64) -> serde_json::Value {
+    sqlx::query_scalar::<_, serde_json::Value>(
+        "SELECT COALESCE(jsonb_agg(to_jsonb(t) ORDER BY t.messages DESC, t.last_seen_at DESC), '[]'::jsonb) \
+         FROM ( \
+             SELECT chatter_login AS login, chatter_id AS id, first_message_at, messages, \
+                    is_first_time_streamer, seen_via_chatters_api, last_seen_at \
+             FROM twitch_session_chatters WHERE session_id = $1 \
+         ) t",
+    )
+    .bind(session_id)
+    .fetch_one(pool)
+    .await
+    .unwrap_or_else(|_| serde_json::json!([]))
+}
+
+/// Baut den strukturierten v2-Snapshot für die Post-Stream-Analyse (Python
+/// `build_post_stream_snapshot`). `{}` bei fehlender Session. FULL-Variante hängt
+/// raw_data an (Roh-Chat/Chatter/Buckets/volle Viewer-Kurve/Roh-Events).
+pub async fn build_post_stream_snapshot(
+    pool: &PgPool,
+    session_id: i64,
+    variant_in: &str,
+) -> serde_json::Value {
+    let full = variant_in.to_lowercase() == REPORT_VARIANT_FULL;
+    let variant = if full { REPORT_VARIANT_FULL } else { REPORT_VARIANT_COMPACT };
+
+    let Some(session) = load_session(pool, session_id).await else {
+        return serde_json::json!({}); // Python: leeres Dict, Aufrufer bricht ab
+    };
+    let streamer = session.streamer_login.as_deref().unwrap_or("").trim().to_lowercase();
+    let registry = load_registry(pool, &streamer).await;
+    let messages = load_messages(pool, session_id).await;
+    let minute_buckets = chat_minute_buckets(pool, session_id).await;
+    let top = top_chatters(pool, session_id).await;
+
+    let mut snapshot = serde_json::Map::new();
+    snapshot.insert("schema_version".into(), serde_json::json!(POST_STREAM_REPORT_SCHEMA_VERSION));
+    snapshot.insert("report_variant".into(), serde_json::json!(variant));
+    snapshot.insert("session".into(), session_payload(&session, &registry));
+    snapshot.insert("metrics".into(), core_metrics(&session));
+    snapshot.insert(
+        "viewer_curve".into(),
+        serde_json::Value::Array(viewer_curve(pool, session_id, Some(120)).await),
+    );
+    snapshot.insert("chat".into(), chat_digest(&messages, &minute_buckets, top));
+    snapshot.insert("audience".into(), viewer_presence(pool, session_id).await);
+    snapshot.insert("events".into(), events_payload(pool, &session, &registry).await);
+    snapshot.insert("comparisons".into(), comparison_payload(pool, &session).await);
+    snapshot.insert(
+        "model_input_policy".into(),
+        serde_json::json!({
+            "raw_db_rows_used": true,
+            "raw_chat_full_dump_sent_to_model": full,
+            "reason": "Compact aggregates all available DB rows before prompting; full variant also attaches raw-heavy chat rows for A/B quality testing.",
+        }),
+    );
+
+    if full {
+        let raw_chat = raw_chat_payload(&messages);
+        let sess_chatters = raw_session_chatters(pool, session_id).await;
+        let vc_full = serde_json::Value::Array(viewer_curve(pool, session_id, None).await);
+        let raw_events = raw_event_rows(pool, &session, &registry).await;
+        let mut raw_data = serde_json::Map::new();
+        raw_data.insert("chat_messages".into(), raw_chat);
+        raw_data.insert("session_chatters".into(), sess_chatters);
+        raw_data.insert("minute_buckets".into(), serde_json::Value::Array(minute_buckets));
+        raw_data.insert("viewer_curve_full".into(), vc_full);
+        raw_data.insert("events".into(), raw_events);
+        snapshot.insert("raw_data".into(), serde_json::Value::Object(raw_data));
+    }
+
+    serde_json::Value::Object(snapshot)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1885,5 +2170,79 @@ mod tests {
         let ev3 = events_payload(&pool, &session, &ReportRegistry::default()).await;
         assert!(ev3.get("follows").is_none());
         assert!(ev3.get("shoutouts").is_none());
+    }
+
+    #[test]
+    fn raw_chat_payload_pure() {
+        let msgs = vec![
+            ChatMessageRow {
+                content: "  hallo   welt  ".into(),
+                chatter_login: "alice".into(),
+                message_ts: Some("2026-06-10T18:00:00+00".into()),
+                minute: None,
+            },
+            ChatMessageRow {
+                content: "x".repeat(600),
+                chatter_login: String::new(),
+                message_ts: None,
+                minute: None,
+            },
+        ];
+        let payload = raw_chat_payload(&msgs);
+        assert_eq!(payload["included_messages"], 2);
+        assert_eq!(payload["truncated"], false);
+        assert_eq!(payload["messages"][0]["author"], "alice");
+        assert_eq!(payload["messages"][0]["text"], "hallo welt"); // Whitespace kollabiert
+        assert_eq!(payload["messages"][0]["ts"], "2026-06-10T18:00:00+00");
+        // 600 Zeichen → auf 500 gekürzt mit "...".
+        let text1 = payload["messages"][1]["text"].as_str().unwrap();
+        assert_eq!(text1.chars().count(), 500);
+        assert!(text1.ends_with("..."));
+        assert_eq!(payload["messages"][1]["author"], ""); // leerer Login
+        assert_eq!(payload["messages"][1]["ts"], ""); // None → ""
+    }
+
+    #[tokio::test]
+    async fn build_snapshot_compact_und_full() {
+        // Nur sessions+streamers existieren; alle übrigen Loader degradieren
+        // graceful (leer/unavailable) — der Test prüft die Orchestrierungs-Struktur.
+        let Some(pool) = core_pool_or_skip("t6k_post_stream_snap").await else { return };
+        sqlx::query(
+            "INSERT INTO twitch_stream_sessions \
+             (id, streamer_login, started_at, ended_at, duration_seconds, avg_viewers, \
+              peak_viewers, follower_delta, unique_chatters, stream_title) \
+             VALUES (1,'streamer','2026-06-10T18:00:00+00','2026-06-10T20:00:00+00',7200,12.5,40,7,30,'Deadlock')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query("INSERT INTO twitch_streamers (twitch_login, twitch_user_id) VALUES ('streamer','987')")
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        let compact = build_post_stream_snapshot(&pool, 1, "compact").await;
+        assert_eq!(compact["schema_version"], "post_stream_report_v2");
+        assert_eq!(compact["report_variant"], "compact");
+        assert_eq!(compact["session"]["twitch_user_id"], "987"); // Registry verdrahtet
+        assert_eq!(compact["metrics"]["peak_viewers"], 40);
+        assert_eq!(compact["model_input_policy"]["raw_chat_full_dump_sent_to_model"], false);
+        assert!(compact.get("raw_data").is_none());
+        // events graceful: Tabellen fehlen → unavailable; follows versucht (user_id da) → 0.
+        assert_eq!(compact["events"]["subscriptions"]["unavailable"], true);
+        assert_eq!(compact["events"]["follows"], 0);
+
+        let full = build_post_stream_snapshot(&pool, 1, "FULL").await; // case-insensitiv
+        assert_eq!(full["report_variant"], "full");
+        assert_eq!(full["model_input_policy"]["raw_chat_full_dump_sent_to_model"], true);
+        let raw = &full["raw_data"];
+        assert_eq!(raw["chat_messages"]["truncated"], false);
+        assert!(raw["chat_messages"]["messages"].is_array());
+        assert!(raw["session_chatters"].is_array()); // Tabelle fehlt → []
+        assert!(raw["viewer_curve_full"].is_array());
+        assert!(raw["events"]["subscriptions"].is_array()); // [] graceful
+
+        // Unbekannte Session → {}.
+        assert_eq!(build_post_stream_snapshot(&pool, 999, "compact").await, serde_json::json!({}));
     }
 }
