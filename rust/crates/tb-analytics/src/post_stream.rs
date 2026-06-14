@@ -649,7 +649,7 @@ pub fn chat_digest(
 /// Vollständige Session-Zeile für den Report-Builder (Python `_load_session`,
 /// alle dort selektierten Spalten). Numerik/Zeit werden per
 /// `::int8`/`::float8`/`::text` deterministisch dekodiert (sqlx soll nie raten).
-#[derive(Debug, Clone, sqlx::FromRow)]
+#[derive(Debug, Clone, Default, sqlx::FromRow)]
 pub struct ReportSession {
     pub id: i64,
     pub streamer_login: Option<String>,
@@ -761,6 +761,10 @@ fn parse_ts(raw: &str) -> Option<chrono::DateTime<chrono::FixedOffset>> {
 
 fn round2(value: f64) -> f64 {
     (value * 100.0).round() / 100.0
+}
+
+fn round4(value: f64) -> f64 {
+    (value * 10_000.0).round() / 10_000.0
 }
 
 /// Baut den `session`-Block des Snapshots (Python `_session_payload`). Fehlt
@@ -1025,6 +1029,245 @@ pub async fn viewer_presence(pool: &PgPool, session_id: i64) -> serde_json::Valu
         "max_present_min": max_present_min.unwrap_or(0.0),
         "most_present_viewers": most_present,
     })
+}
+
+// ---------------------------------------------------------------------------
+// Report-Snapshot: Vergleich + Events (Python report_builder.py
+// `_comparison_payload` / `_events_payload`)
+// ---------------------------------------------------------------------------
+
+/// Baseline der letzten 5 abgeschlossenen Sessions + Deltas zur aktuellen
+/// (Python `_comparison_payload`). `follower_delta` wird im Baseline-Mittel
+/// genullt, wenn er verdächtig aussieht (`followers_end=0 AND followers_start>0`).
+/// `numeric` per `::float8`. Aktuelle Werte = `core_metrics`-Logik (avg gerundet).
+pub async fn comparison_payload(pool: &PgPool, session: &ReportSession) -> serde_json::Value {
+    let streamer = session.streamer_login.as_deref().unwrap_or("").to_lowercase();
+    let session_id = session.id;
+    let agg = sqlx::query_as::<
+        _,
+        (
+            Option<i64>,
+            Option<f64>,
+            Option<f64>,
+            Option<f64>,
+            Option<f64>,
+            Option<f64>,
+            Option<f64>,
+            Option<f64>,
+        ),
+    >(
+        "SELECT COUNT(*)::int8 AS sessions, \
+                ROUND(AVG(avg_viewers)::numeric, 2)::float8 AS avg_viewers, \
+                ROUND(AVG(peak_viewers)::numeric, 2)::float8 AS peak_viewers, \
+                ROUND(AVG(unique_chatters)::numeric, 2)::float8 AS unique_chatters, \
+                ROUND(AVG(first_time_chatters)::numeric, 2)::float8 AS first_time_chatters, \
+                ROUND(AVG(returning_chatters)::numeric, 2)::float8 AS returning_chatters, \
+                ROUND(AVG(dropoff_pct)::numeric, 4)::float8 AS dropoff_pct, \
+                ROUND(AVG(follower_delta)::numeric, 2)::float8 AS follower_delta \
+           FROM ( \
+                 SELECT avg_viewers, peak_viewers, unique_chatters, first_time_chatters, \
+                        returning_chatters, dropoff_pct, \
+                        CASE WHEN follower_delta IS NOT NULL \
+                             AND NOT (followers_end = 0 AND followers_start > 0) \
+                             THEN follower_delta ELSE NULL END AS follower_delta \
+                   FROM twitch_stream_sessions \
+                  WHERE LOWER(streamer_login) = LOWER($1) \
+                    AND id <> $2 \
+                    AND ended_at IS NOT NULL \
+                  ORDER BY ended_at DESC \
+                  LIMIT 5 \
+           ) recent",
+    )
+    .bind(&streamer)
+    .bind(session_id)
+    .fetch_optional(pool)
+    .await
+    .ok()
+    .flatten();
+
+    let (sessions, b_avg, b_peak, b_unique, b_first, b_returning, b_dropoff, b_follower) =
+        agg.unwrap_or((Some(0), None, None, None, None, None, None, None));
+    let b_avg = b_avg.unwrap_or(0.0);
+    let b_peak = b_peak.unwrap_or(0.0);
+    let b_unique = b_unique.unwrap_or(0.0);
+    let b_first = b_first.unwrap_or(0.0);
+    let b_returning = b_returning.unwrap_or(0.0);
+    let b_dropoff = b_dropoff.unwrap_or(0.0);
+    let b_follower = b_follower.unwrap_or(0.0);
+
+    // current = _core_metrics(session): avg gerundet (round2), Rest roh wie dort.
+    let c_avg = round2(session.avg_viewers.unwrap_or(0.0));
+    let c_peak = session.peak_viewers.unwrap_or(0) as f64;
+    let c_unique = session.unique_chatters.unwrap_or(0) as f64;
+    let c_first = session.first_time_chatters.unwrap_or(0) as f64;
+    let c_returning = session.returning_chatters.unwrap_or(0) as f64;
+    let c_dropoff = session.dropoff_pct.unwrap_or(0.0);
+    let c_follower = session.follower_delta.unwrap_or(0) as f64;
+
+    serde_json::json!({
+        "recent_5_session_baseline": {
+            "sessions": sessions.unwrap_or(0),
+            "avg_viewers": b_avg,
+            "peak_viewers": b_peak,
+            "unique_chatters": b_unique,
+            "first_time_chatters": b_first,
+            "returning_chatters": b_returning,
+            "dropoff_pct": b_dropoff,
+            "follower_delta": b_follower,
+        },
+        "delta_vs_recent_5": {
+            "avg_viewers": round2(c_avg - b_avg),
+            "peak_viewers": round2(c_peak - b_peak),
+            "unique_chatters": round2(c_unique - b_unique),
+            "first_time_chatters": round2(c_first - b_first),
+            "returning_chatters": round2(c_returning - b_returning),
+            "dropoff_pct": round4(c_dropoff - b_dropoff),
+            "follower_delta": round2(c_follower - b_follower),
+        },
+    })
+}
+
+/// Zähl-/Aggregat-Query mit graceful 0 bei Fehler (Python `_safe_scalar` →
+/// `None` → `_as_int` → 0). Für die Zeitfenster-Events (follows etc.).
+async fn safe_count_between(pool: &PgPool, sql: &str, user_id: &str, start: &str, end: &str) -> i64 {
+    sqlx::query_scalar::<_, i64>(sql)
+        .bind(user_id)
+        .bind(start)
+        .bind(end)
+        .fetch_one(pool)
+        .await
+        .unwrap_or(0)
+}
+
+/// Event-Zähler einer Session (Python `_events_payload`). Jede der 6 Count-
+/// Queries degradiert bei Fehler einzeln zu `{"unavailable": true}`. Die 3
+/// Zeitfenster-Queries (follows/channel_updates/shoutouts) laufen nur bei
+/// vorhandener `twitch_user_id` + `started_at` und liefern 0 bei Fehler.
+pub async fn events_payload(
+    pool: &PgPool,
+    session: &ReportSession,
+    registry: &ReportRegistry,
+) -> serde_json::Value {
+    let session_id = session.id;
+    let twitch_user_id = registry.twitch_user_id.as_deref().unwrap_or("").to_string();
+    let mut payload = serde_json::Map::new();
+
+    // subscriptions — reiner Count.
+    match sqlx::query_scalar::<_, i64>(
+        "SELECT COUNT(*)::int8 FROM twitch_subscription_events WHERE session_id = $1",
+    )
+    .bind(session_id)
+    .fetch_one(pool)
+    .await
+    {
+        Ok(n) => payload.insert("subscriptions".into(), serde_json::json!(n)),
+        Err(_) => payload.insert("subscriptions".into(), serde_json::json!({"unavailable": true})),
+    };
+
+    // bits_events — count + amount.
+    match sqlx::query_as::<_, (i64, i64)>(
+        "SELECT COUNT(*)::int8, COALESCE(SUM(amount), 0)::int8 FROM twitch_bits_events WHERE session_id = $1",
+    )
+    .bind(session_id)
+    .fetch_one(pool)
+    .await
+    {
+        Ok((c, a)) => payload.insert("bits_events".into(), serde_json::json!({"count": c, "amount": a})),
+        Err(_) => payload.insert("bits_events".into(), serde_json::json!({"unavailable": true})),
+    };
+
+    // channel_points — reiner Count.
+    match sqlx::query_scalar::<_, i64>(
+        "SELECT COUNT(*)::int8 FROM twitch_channel_points_events WHERE session_id = $1",
+    )
+    .bind(session_id)
+    .fetch_one(pool)
+    .await
+    {
+        Ok(n) => payload.insert("channel_points".into(), serde_json::json!(n)),
+        Err(_) => payload.insert("channel_points".into(), serde_json::json!({"unavailable": true})),
+    };
+
+    // hype_trains — count + max_level.
+    match sqlx::query_as::<_, (i64, i64)>(
+        "SELECT COUNT(*)::int8, COALESCE(MAX(level), 0)::int8 FROM twitch_hype_train_events WHERE session_id = $1",
+    )
+    .bind(session_id)
+    .fetch_one(pool)
+    .await
+    {
+        Ok((c, m)) => payload.insert("hype_trains".into(), serde_json::json!({"count": c, "max_level": m})),
+        Err(_) => payload.insert("hype_trains".into(), serde_json::json!({"unavailable": true})),
+    };
+
+    // ad_breaks — count + duration_seconds.
+    match sqlx::query_as::<_, (i64, i64)>(
+        "SELECT COUNT(*)::int8, COALESCE(SUM(duration_seconds), 0)::int8 FROM twitch_ad_break_events WHERE session_id = $1",
+    )
+    .bind(session_id)
+    .fetch_one(pool)
+    .await
+    {
+        Ok((c, d)) => payload.insert("ad_breaks".into(), serde_json::json!({"count": c, "duration_seconds": d})),
+        Err(_) => payload.insert("ad_breaks".into(), serde_json::json!({"unavailable": true})),
+    };
+
+    // moderation_events — Count über twitch_ban_events.
+    match sqlx::query_scalar::<_, i64>(
+        "SELECT COUNT(*)::int8 FROM twitch_ban_events WHERE session_id = $1",
+    )
+    .bind(session_id)
+    .fetch_one(pool)
+    .await
+    {
+        Ok(n) => payload.insert("moderation_events".into(), serde_json::json!(n)),
+        Err(_) => payload.insert("moderation_events".into(), serde_json::json!({"unavailable": true})),
+    };
+
+    // Zeitfenster-Events nur bei twitch_user_id UND (nicht-leerem) started_at.
+    let started = session.started_at.as_deref().filter(|s| !s.is_empty());
+    if !twitch_user_id.is_empty() {
+        if let Some(start) = started {
+            // ended_at oder jetzt (Python `ended_at or datetime.now(UTC)`).
+            let end = session
+                .ended_at
+                .clone()
+                .filter(|s| !s.is_empty())
+                .unwrap_or_else(|| chrono::Utc::now().to_rfc3339());
+            let follows = safe_count_between(
+                pool,
+                "SELECT COUNT(*)::int8 FROM twitch_follow_events \
+                 WHERE twitch_user_id = $1 AND followed_at BETWEEN $2::timestamptz AND $3::timestamptz",
+                &twitch_user_id,
+                start,
+                &end,
+            )
+            .await;
+            payload.insert("follows".into(), serde_json::json!(follows));
+            let updates = safe_count_between(
+                pool,
+                "SELECT COUNT(*)::int8 FROM twitch_channel_updates \
+                 WHERE twitch_user_id = $1 AND recorded_at BETWEEN $2::timestamptz AND $3::timestamptz",
+                &twitch_user_id,
+                start,
+                &end,
+            )
+            .await;
+            payload.insert("channel_updates".into(), serde_json::json!(updates));
+            let shoutouts = safe_count_between(
+                pool,
+                "SELECT COUNT(*)::int8 FROM twitch_shoutout_events \
+                 WHERE twitch_user_id = $1 AND received_at BETWEEN $2::timestamptz AND $3::timestamptz",
+                &twitch_user_id,
+                start,
+                &end,
+            )
+            .await;
+            payload.insert("shoutouts".into(), serde_json::json!(shoutouts));
+        }
+    }
+
+    serde_json::Value::Object(payload)
 }
 
 #[cfg(test)]
@@ -1524,5 +1767,123 @@ mod tests {
         assert_eq!(empty["unique_tracked_viewers"], 0);
         assert_eq!(empty["avg_present_min"], 0.0);
         assert!(empty["most_present_viewers"].as_array().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn comparison_payload_baseline_und_deltas() {
+        let Some(pool) = core_pool_or_skip("t6i_post_stream_cmp").await else { return };
+        // 3 'x'-Sessions (id4 mit follower_delta-Reset → genullt im Mittel), 1 'y' (anderer Streamer).
+        sqlx::query(
+            "INSERT INTO twitch_stream_sessions \
+             (id, streamer_login, ended_at, avg_viewers, peak_viewers, unique_chatters, \
+              first_time_chatters, returning_chatters, dropoff_pct, follower_delta, \
+              followers_start, followers_end) VALUES \
+             (1,'x','2026-06-09T20:00:00+00',10.0,20,30,5,25,0.10,4,100,104), \
+             (2,'x','2026-06-08T20:00:00+00',20.0,40,50,15,35,0.20,8,104,112), \
+             (4,'x','2026-06-07T20:00:00+00',15.0,30,40,10,30,0.15,999,50,0), \
+             (3,'y','2026-06-08T20:00:00+00',99.0,99,99,99,99,0.99,99,1,100)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        let session = ReportSession {
+            id: 10,
+            streamer_login: Some("X".into()),
+            avg_viewers: Some(30.0),
+            peak_viewers: Some(60),
+            unique_chatters: Some(70),
+            first_time_chatters: Some(20),
+            returning_chatters: Some(50),
+            dropoff_pct: Some(0.30),
+            follower_delta: Some(10),
+            ..Default::default()
+        };
+        let cmp = comparison_payload(&pool, &session).await;
+        let base = &cmp["recent_5_session_baseline"];
+        assert_eq!(base["sessions"], 3); // 'y' ausgeschlossen, current id=10 ausgeschlossen
+        assert_eq!(base["avg_viewers"], 15.0); // AVG(10,20,15)
+        // follower_delta: id4 genullt (end=0,start=50>0) → AVG(4,8)=6.0, NICHT (4+8+999)/3.
+        assert_eq!(base["follower_delta"], 6.0);
+        let delta = &cmp["delta_vs_recent_5"];
+        assert_eq!(delta["avg_viewers"], 15.0); // 30-15
+        assert_eq!(delta["peak_viewers"], 30.0); // 60-30
+        assert_eq!(delta["dropoff_pct"], 0.15); // 0.30-0.15 (round4)
+        assert_eq!(delta["follower_delta"], 4.0); // 10-6
+    }
+
+    async fn events_pool_or_skip(schema: &str) -> Option<PgPool> {
+        let dsn = std::env::var("TB_TEST_DATABASE_URL").ok()?;
+        let pool = PgPoolOptions::new().max_connections(1).connect(&dsn).await.unwrap();
+        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE")).execute(&pool).await.unwrap();
+        sqlx::query(&format!("CREATE SCHEMA {schema}")).execute(&pool).await.unwrap();
+        sqlx::query(&format!("SET search_path TO {schema}")).execute(&pool).await.unwrap();
+        for ddl in [
+            "CREATE TABLE twitch_subscription_events (session_id BIGINT)",
+            "CREATE TABLE twitch_bits_events (session_id BIGINT, amount INTEGER)",
+            "CREATE TABLE twitch_channel_points_events (session_id BIGINT)",
+            "CREATE TABLE twitch_hype_train_events (session_id BIGINT, level INTEGER)",
+            "CREATE TABLE twitch_ad_break_events (session_id BIGINT, duration_seconds INTEGER)",
+            "CREATE TABLE twitch_ban_events (session_id BIGINT)",
+            "CREATE TABLE twitch_follow_events (twitch_user_id TEXT, followed_at TIMESTAMPTZ)",
+            "CREATE TABLE twitch_channel_updates (twitch_user_id TEXT, recorded_at TIMESTAMPTZ)",
+            "CREATE TABLE twitch_shoutout_events (twitch_user_id TEXT, received_at TIMESTAMPTZ)",
+        ] {
+            sqlx::query(ddl).execute(&pool).await.unwrap();
+        }
+        Some(pool)
+    }
+
+    #[tokio::test]
+    async fn events_payload_counts_between_und_unavailable() {
+        let Some(pool) = events_pool_or_skip("t6j_post_stream_events").await else { return };
+        sqlx::query("INSERT INTO twitch_subscription_events (session_id) VALUES (1),(1),(1)").execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO twitch_bits_events (session_id, amount) VALUES (1,100),(1,50)").execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO twitch_channel_points_events (session_id) VALUES (1)").execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO twitch_hype_train_events (session_id, level) VALUES (1,2),(1,5)").execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO twitch_ad_break_events (session_id, duration_seconds) VALUES (1,60),(1,30)").execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO twitch_ban_events (session_id) VALUES (1)").execute(&pool).await.unwrap();
+        // follows: 2 im Fenster (18:00–20:00), 1 außerhalb (nächster Tag).
+        sqlx::query(
+            "INSERT INTO twitch_follow_events (twitch_user_id, followed_at) VALUES \
+             ('42','2026-06-10T18:30:00+00'),('42','2026-06-10T19:00:00+00'),('42','2026-06-11T00:00:00+00')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query("INSERT INTO twitch_channel_updates (twitch_user_id, recorded_at) VALUES ('42','2026-06-10T18:30:00+00')").execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO twitch_shoutout_events (twitch_user_id, received_at) VALUES ('42','2026-06-10T18:30:00+00')").execute(&pool).await.unwrap();
+
+        let session = ReportSession {
+            id: 1,
+            streamer_login: Some("x".into()),
+            started_at: Some("2026-06-10T18:00:00+00".into()),
+            ended_at: Some("2026-06-10T20:00:00+00".into()),
+            ..Default::default()
+        };
+        let registry = ReportRegistry { twitch_user_id: Some("42".into()), ..Default::default() };
+
+        let ev = events_payload(&pool, &session, &registry).await;
+        assert_eq!(ev["subscriptions"], 3);
+        assert_eq!(ev["bits_events"]["count"], 2);
+        assert_eq!(ev["bits_events"]["amount"], 150);
+        assert_eq!(ev["channel_points"], 1);
+        assert_eq!(ev["hype_trains"]["count"], 2);
+        assert_eq!(ev["hype_trains"]["max_level"], 5);
+        assert_eq!(ev["ad_breaks"]["duration_seconds"], 90);
+        assert_eq!(ev["moderation_events"], 1);
+        assert_eq!(ev["follows"], 2); // 1 außerhalb des Fensters gefiltert
+        assert_eq!(ev["channel_updates"], 1);
+        assert_eq!(ev["shoutouts"], 1);
+
+        // unavailable-Pfad: Tabelle entfernen → {"unavailable": true}.
+        sqlx::query("DROP TABLE twitch_ban_events").execute(&pool).await.unwrap();
+        let ev2 = events_payload(&pool, &session, &registry).await;
+        assert_eq!(ev2["moderation_events"]["unavailable"], true);
+        assert_eq!(ev2["subscriptions"], 3); // andere Queries unbeeinflusst
+
+        // Ohne twitch_user_id → keine Zeitfenster-Keys.
+        let ev3 = events_payload(&pool, &session, &ReportRegistry::default()).await;
+        assert!(ev3.get("follows").is_none());
+        assert!(ev3.get("shoutouts").is_none());
     }
 }
