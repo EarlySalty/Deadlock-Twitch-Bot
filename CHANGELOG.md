@@ -1,3 +1,13 @@
+## #214 — Texte: echte Umlaute statt Ersatzschreibung
+
+**Ausgangslage:** In einigen nutzersichtbaren Texten standen Umlaut-Ersatzschreibungen (ae/oe/ue/ss) statt echtem ä/ö/ü/ß — entstanden, weil Texte mal mit, mal ohne echte Umlaute getippt wurden. Betroffen waren u. a. das Affiliate-Portal (Login-Hinweise, Formularfelder, Steuer- und Auszahlungstexte), die Dashboard-Vorschau auf der Startseite und die Twitch-Ansage, die bei einem Raid im Chat erscheint („Auf Twitch ansehen fuer mehr Action!").
+
+**Was geändert wurde:** Alle betroffenen Anzeigetexte nutzen jetzt echte Umlaute. Dasselbe gilt für die internen Admin-Bereiche (Dialoge, Hinweise, Schaltflächen-Beschriftungen).
+
+**Wie es funktioniert:** Reine Schreibweisen-Korrektur ohne Logik- oder Ablaufänderung. Die Umlaute wurden gezielt pro Wort im jeweiligen Anzeigetext ersetzt, damit englische Begriffe, technische Bezeichner und Befehlsnamen unangetastet bleiben. Die Korrekturen auf der Website werden mit dem nächsten Frontend-Build sichtbar, die Raid-Ansage mit dem nächsten Neustart des Bots.
+
+**Betroffen:** Affiliates im Partner-Portal, Besucher der Startseite und Zuschauer, die eine Raid-Ansage im Chat sehen.
+
 ## #213 — Mod-Befehle antworten wieder, wenn jemand ohne Rechte sie tippt
 
 **Ausgangslage:** Mehrere Chat-Befehle sind nur für Broadcaster und Mods gedacht — `!raid`, `!raid_enable`, `!uban`, `!silentban`, `!silentraid`. Tippte sie jemand ohne Berechtigung, passierte beim Umzug auf das neue System einfach gar nichts: keine Aktion, aber auch keine Rückmeldung. Für den Nutzer wirkte das, als wäre der Bot kaputt oder der Befehl nicht vorhanden.
