@@ -13,7 +13,7 @@ use sqlx::PgPool;
 use tb_analytics::overview::{
     overview_chat_per_100, overview_chatter_metrics, overview_metrics,
     overview_monetization_counts, overview_network_stats, overview_session_count,
-    OverviewMonetization, OverviewNetworkStats,
+    overview_sessions, OverviewMonetization, OverviewNetworkStats, OverviewSession,
 };
 use tb_http_core::{ApiError, AuthLevel};
 
@@ -44,6 +44,7 @@ pub struct OverviewData {
     pub scores: HealthScores,
     pub findings: Vec<Finding>,
     pub actions: Vec<ActionItem>,
+    pub sessions: Vec<OverviewSession>,
     pub network: OverviewNetwork,
 }
 
@@ -340,6 +341,11 @@ pub async fn overview_handler(
         .await
         .map_err(|_| ApiError::internal())?;
 
+    // Sessions-Liste (jüngste 50).
+    let sessions = overview_sessions(&pool, &since, login_ref, 50)
+        .await
+        .map_err(|_| ApiError::internal())?;
+
     let airtime = metrics.total_airtime_hours.unwrap_or(0.0);
     let total_followers = metrics.total_followers.unwrap_or(0);
     let gained = metrics.gained_followers.unwrap_or(0);
@@ -407,6 +413,7 @@ pub async fn overview_handler(
         scores,
         findings,
         actions,
+        sessions,
         summary: OverviewSummary {
             avg_viewers: metrics.avg_avg_viewers.unwrap_or(0.0),
             peak_viewers: metrics.max_peak_viewers.unwrap_or(0),
@@ -504,8 +511,16 @@ mod tests {
                 follower_delta   BIGINT,
                 followers_start  BIGINT,
                 followers_end    BIGINT,
+                retention_5m     REAL,
                 retention_10m    REAL,
-                unique_chatters  BIGINT
+                retention_20m    REAL,
+                dropoff_pct      REAL,
+                start_viewers    BIGINT,
+                end_viewers      BIGINT,
+                unique_chatters  BIGINT,
+                first_time_chatters BIGINT,
+                returning_chatters  BIGINT,
+                stream_title     TEXT
             )
             "#,
         )
@@ -519,7 +534,8 @@ mod tests {
                 chatter_login         TEXT,
                 chatter_id            TEXT,
                 messages              INTEGER DEFAULT 0,
-                seen_via_chatters_api BOOLEAN DEFAULT FALSE
+                seen_via_chatters_api BOOLEAN DEFAULT FALSE,
+                is_first_time_streamer BOOLEAN DEFAULT FALSE
             )
             "#,
         )
@@ -637,7 +653,7 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(res.status(), StatusCode::OK);
-        let b = axum::body::to_bytes(res.into_body(), 1024).await.unwrap();
+        let b = axum::body::to_bytes(res.into_body(), 16384).await.unwrap();
         let v: serde_json::Value = serde_json::from_slice(&b).unwrap();
         assert!((v["summary"]["avgViewers"].as_f64().unwrap() - 100.0).abs() < 0.001);
         assert_eq!(v["summary"]["totalSessions"], 1);
@@ -669,6 +685,12 @@ mod tests {
         assert_eq!(v["findings"][2]["type"], "pos");
         // Actions: keine (Samples <3, fph nicht <1).
         assert_eq!(v["actions"].as_array().unwrap().len(), 0);
+        // Sessions-Liste: 1 Session, alice als einziger Nicht-Bot-Chatter (returning).
+        assert_eq!(v["sessions"].as_array().unwrap().len(), 1);
+        assert_eq!(v["sessions"][0]["id"], 1);
+        assert!((v["sessions"][0]["retention10m"].as_f64().unwrap() - 60.0).abs() < 0.01);
+        assert_eq!(v["sessions"][0]["uniqueChatters"], 1);
+        assert_eq!(v["sessions"][0]["peakViewers"], 200);
     }
 
     #[test]

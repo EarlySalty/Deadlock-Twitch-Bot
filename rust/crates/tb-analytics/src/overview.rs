@@ -1,5 +1,7 @@
 //! Query für `GET /twitch/api/v2/overview` (Admin).
 
+use chrono::{NaiveDate, NaiveTime};
+use serde::Serialize;
 use sqlx::PgPool;
 
 /// Aggregierte Metriken für einen Zeitraum.
@@ -409,6 +411,171 @@ pub async fn overview_chat_per_100(
     Ok(row.0.unwrap_or(0.0))
 }
 
+/// Eine Session-Zeile der Overview-Sessions-Liste (Python `_get_sessions`).
+#[derive(Debug, Clone, Serialize)]
+pub struct OverviewSession {
+    pub id: i64,
+    pub date: String,
+    #[serde(rename = "startTime")]
+    pub start_time: String,
+    pub duration: i64,
+    #[serde(rename = "startViewers")]
+    pub start_viewers: i64,
+    #[serde(rename = "peakViewers")]
+    pub peak_viewers: i64,
+    #[serde(rename = "endViewers")]
+    pub end_viewers: i64,
+    #[serde(rename = "avgViewers")]
+    pub avg_viewers: f64,
+    #[serde(rename = "retention5m")]
+    pub retention_5m: f64,
+    #[serde(rename = "retention10m")]
+    pub retention_10m: f64,
+    #[serde(rename = "retention20m")]
+    pub retention_20m: f64,
+    #[serde(rename = "dropoffPct")]
+    pub dropoff_pct: f64,
+    #[serde(rename = "uniqueChatters")]
+    pub unique_chatters: i64,
+    #[serde(rename = "firstTimeChatters")]
+    pub first_time_chatters: i64,
+    #[serde(rename = "returningChatters")]
+    pub returning_chatters: i64,
+    #[serde(rename = "followersStart")]
+    pub followers_start: i64,
+    #[serde(rename = "followersEnd")]
+    pub followers_end: i64,
+    pub title: String,
+}
+
+#[derive(sqlx::FromRow)]
+struct SessionRaw {
+    id: i64,
+    start_date: NaiveDate,
+    start_time: NaiveTime,
+    duration_seconds: Option<i64>,
+    start_viewers: Option<i64>,
+    peak_viewers: Option<i64>,
+    end_viewers: Option<i64>,
+    avg_viewers: Option<f64>,
+    retention_5m: Option<f64>,
+    retention_10m: Option<f64>,
+    retention_20m: Option<f64>,
+    dropoff_pct: Option<f64>,
+    unique_chatters: Option<i64>,
+    first_time_chatters: Option<i64>,
+    returning_chatters: Option<i64>,
+    followers_start: Option<i64>,
+    followers_end: Option<i64>,
+    title: Option<String>,
+}
+
+/// Liste der jüngsten Sessions mit Metriken (Python `_get_sessions`, LIMIT 50).
+/// Chatter-Zähler Bot-gefiltert mit Presence-Fallback auf die Legacy-Spalten;
+/// Retention hart auf [0,1] geklemmt und *100; dropoff *100.
+pub async fn overview_sessions(
+    pool: &PgPool,
+    since: &str,
+    streamer_login: Option<&str>,
+    limit: i64,
+) -> Result<Vec<OverviewSession>, sqlx::Error> {
+    let bots: Vec<String> = KNOWN_CHAT_BOTS.iter().map(|b| b.to_string()).collect();
+    let raws: Vec<SessionRaw> = sqlx::query_as(
+        r#"
+        WITH base_sessions AS (
+            SELECT s.id, s.started_at, s.duration_seconds, s.start_viewers, s.peak_viewers,
+                   s.end_viewers, s.avg_viewers, s.retention_5m, s.retention_10m, s.retention_20m,
+                   s.dropoff_pct, s.unique_chatters, s.first_time_chatters, s.returning_chatters,
+                   s.followers_start, s.followers_end, s.stream_title
+            FROM twitch_stream_sessions s
+            WHERE s.started_at >= $1::TIMESTAMPTZ AND s.ended_at IS NOT NULL
+              AND ($2::TEXT IS NULL OR LOWER(s.streamer_login) = LOWER($2))
+            ORDER BY s.started_at DESC
+            LIMIT $3
+        ),
+        filtered_chatters AS (
+            SELECT sc.session_id,
+                COUNT(DISTINCT CASE WHEN sc.messages > 0
+                    THEN COALESCE(NULLIF(sc.chatter_login, ''), sc.chatter_id) END) AS unique_chatters,
+                COUNT(DISTINCT CASE WHEN sc.messages > 0
+                    AND LOWER(COALESCE(CAST(sc.is_first_time_streamer AS TEXT), '0')) IN ('1','t','true')
+                    THEN COALESCE(NULLIF(sc.chatter_login, ''), sc.chatter_id) END) AS first_time_chatters,
+                COUNT(DISTINCT CASE WHEN sc.messages > 0
+                    AND LOWER(COALESCE(CAST(sc.is_first_time_streamer AS TEXT), '0')) NOT IN ('1','t','true')
+                    THEN COALESCE(NULLIF(sc.chatter_login, ''), sc.chatter_id) END) AS returning_chatters
+            FROM twitch_session_chatters sc
+            JOIN base_sessions bs ON bs.id = sc.session_id
+            WHERE (sc.chatter_login IS NULL OR sc.chatter_login = ''
+                   OR LOWER(sc.chatter_login) <> ALL($4))
+            GROUP BY sc.session_id
+        ),
+        session_chatter_presence AS (
+            SELECT sc.session_id, 1 AS has_any_chatters
+            FROM twitch_session_chatters sc
+            JOIN base_sessions bs ON bs.id = sc.session_id
+            GROUP BY sc.session_id
+        )
+        SELECT
+            bs.id AS id,
+            CAST(bs.started_at AS DATE) AS start_date,
+            CAST(bs.started_at AS TIME) AS start_time,
+            bs.duration_seconds::BIGINT AS duration_seconds,
+            bs.start_viewers::BIGINT AS start_viewers,
+            bs.peak_viewers::BIGINT AS peak_viewers,
+            bs.end_viewers::BIGINT AS end_viewers,
+            bs.avg_viewers::FLOAT8 AS avg_viewers,
+            COALESCE(bs.retention_5m, 0)::FLOAT8 AS retention_5m,
+            COALESCE(bs.retention_10m, 0)::FLOAT8 AS retention_10m,
+            COALESCE(bs.retention_20m, 0)::FLOAT8 AS retention_20m,
+            COALESCE(bs.dropoff_pct, 0)::FLOAT8 AS dropoff_pct,
+            (CASE WHEN scp.has_any_chatters = 1 THEN COALESCE(fc.unique_chatters, 0)
+                  ELSE COALESCE(bs.unique_chatters, 0) END)::BIGINT AS unique_chatters,
+            (CASE WHEN scp.has_any_chatters = 1 THEN COALESCE(fc.first_time_chatters, 0)
+                  ELSE COALESCE(bs.first_time_chatters, 0) END)::BIGINT AS first_time_chatters,
+            (CASE WHEN scp.has_any_chatters = 1 THEN COALESCE(fc.returning_chatters, 0)
+                  ELSE COALESCE(bs.returning_chatters, 0) END)::BIGINT AS returning_chatters,
+            COALESCE(bs.followers_start, 0)::BIGINT AS followers_start,
+            COALESCE(bs.followers_end, 0)::BIGINT AS followers_end,
+            COALESCE(bs.stream_title, '') AS title
+        FROM base_sessions bs
+        LEFT JOIN filtered_chatters fc ON fc.session_id = bs.id
+        LEFT JOIN session_chatter_presence scp ON scp.session_id = bs.id
+        ORDER BY bs.started_at DESC
+        "#,
+    )
+    .bind(since)
+    .bind(streamer_login)
+    .bind(limit)
+    .bind(&bots)
+    .fetch_all(pool)
+    .await?;
+
+    let clamp_pct = |v: f64| v.clamp(0.0, 1.0) * 100.0;
+    Ok(raws
+        .into_iter()
+        .map(|r| OverviewSession {
+            id: r.id,
+            date: r.start_date.to_string(),
+            start_time: r.start_time.to_string(),
+            duration: r.duration_seconds.unwrap_or(0),
+            start_viewers: r.start_viewers.unwrap_or(0),
+            peak_viewers: r.peak_viewers.unwrap_or(0),
+            end_viewers: r.end_viewers.unwrap_or(0),
+            avg_viewers: r.avg_viewers.unwrap_or(0.0),
+            retention_5m: clamp_pct(r.retention_5m.unwrap_or(0.0)),
+            retention_10m: clamp_pct(r.retention_10m.unwrap_or(0.0)),
+            retention_20m: clamp_pct(r.retention_20m.unwrap_or(0.0)),
+            dropoff_pct: r.dropoff_pct.unwrap_or(0.0) * 100.0,
+            unique_chatters: r.unique_chatters.unwrap_or(0),
+            first_time_chatters: r.first_time_chatters.unwrap_or(0),
+            returning_chatters: r.returning_chatters.unwrap_or(0),
+            followers_start: r.followers_start.unwrap_or(0),
+            followers_end: r.followers_end.unwrap_or(0),
+            title: r.title.unwrap_or_default(),
+        })
+        .collect())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -451,8 +618,16 @@ mod tests {
                 follower_delta   BIGINT,
                 followers_start  BIGINT,
                 followers_end    BIGINT,
+                retention_5m     REAL,
                 retention_10m    REAL,
-                unique_chatters  BIGINT
+                retention_20m    REAL,
+                dropoff_pct      REAL,
+                start_viewers    BIGINT,
+                end_viewers      BIGINT,
+                unique_chatters  BIGINT,
+                first_time_chatters BIGINT,
+                returning_chatters  BIGINT,
+                stream_title     TEXT
             )
             "#,
         )
@@ -470,7 +645,8 @@ mod tests {
                 chatter_login         TEXT,
                 chatter_id            TEXT,
                 messages              INTEGER DEFAULT 0,
-                seen_via_chatters_api BOOLEAN DEFAULT FALSE
+                seen_via_chatters_api BOOLEAN DEFAULT FALSE,
+                is_first_time_streamer BOOLEAN DEFAULT FALSE
             )
             "#,
         )
@@ -640,5 +816,60 @@ mod tests {
         // Ohne Streamer -> alles 0.
         let agg = overview_network_stats(&pool, since, None).await.unwrap();
         assert_eq!((agg.sent, agg.sent_viewers, agg.received), (0, 0, 0));
+    }
+
+    #[tokio::test]
+    async fn sessions_liste_felder_und_chatter_split() {
+        let dsn = match test_dsn() {
+            Some(d) => d,
+            None => {
+                eprintln!("SKIP: TB_TEST_DATABASE_URL nicht gesetzt");
+                return;
+            }
+        };
+        let pool = make_pool(&dsn, "test_overview_sessions").await;
+        sqlx::query(
+            r#"
+            INSERT INTO twitch_stream_sessions
+                (id, streamer_login, started_at, ended_at, avg_viewers, peak_viewers,
+                 duration_seconds, retention_5m, retention_10m, retention_20m, dropoff_pct,
+                 start_viewers, end_viewers, followers_start, followers_end, stream_title)
+            VALUES (2, 'streamer_x', NOW() - INTERVAL '1 day', NOW() - INTERVAL '22 hours',
+                    50.0, 100, 7200, 0.7, 0.6, 0.5, 0.1, 10, 40, 1000, 1010, 'Test Titel')
+            "#,
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            r#"
+            INSERT INTO twitch_session_chatters (session_id, chatter_login, chatter_id, messages, is_first_time_streamer)
+            VALUES (2, 'alice', 'a1', 3, TRUE),
+                   (2, 'carol', 'c1', 2, FALSE),
+                   (2, 'streamlabs', 'sl', 9, FALSE)
+            "#,
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let since = "2000-01-01T00:00:00+00:00";
+        let list = overview_sessions(&pool, since, Some("streamer_x"), 50).await.unwrap();
+        assert_eq!(list.len(), 1);
+        let s = &list[0];
+        assert_eq!(s.id, 2);
+        assert_eq!(s.peak_viewers, 100);
+        assert_eq!(s.start_viewers, 10);
+        assert_eq!(s.end_viewers, 40);
+        assert!((s.retention_10m - 60.0).abs() < 0.01);
+        assert!((s.retention_5m - 70.0).abs() < 0.01);
+        assert!((s.retention_20m - 50.0).abs() < 0.01);
+        assert!((s.dropoff_pct - 10.0).abs() < 0.01);
+        assert_eq!(s.unique_chatters, 2, "alice+carol (streamlabs=Bot raus)");
+        assert_eq!(s.first_time_chatters, 1, "alice");
+        assert_eq!(s.returning_chatters, 1, "carol");
+        assert_eq!(s.title, "Test Titel");
+        assert_eq!(s.followers_start, 1000);
+        assert_eq!(s.followers_end, 1010);
     }
 }
