@@ -346,6 +346,201 @@ pub async fn stream_report_rate_handler(
     }
 }
 
+// ─── A/B-Vote (GET own+totals, POST upsert) ─────────────────────────────────
+
+#[derive(Deserialize)]
+pub struct AbVoteQuery {
+    pub streamer: Option<String>,
+    pub session_id: Option<String>,
+}
+
+#[derive(Deserialize)]
+pub struct AbVoteBody {
+    pub session_id: Option<serde_json::Value>,
+    pub streamer: Option<String>,
+    pub winner: Option<String>,
+    pub comment: Option<String>,
+}
+
+/// Stimmen-Aggregat einer Session als `{compact, full, gleich}` (Python `agg`),
+/// fehlende Sieger bleiben 0.
+async fn ab_vote_totals(pool: &PgPool, session_id: i64) -> serde_json::Value {
+    let mut agg = serde_json::Map::new();
+    agg.insert("compact".into(), json!(0));
+    agg.insert("full".into(), json!(0));
+    agg.insert("gleich".into(), json!(0));
+    let rows = sqlx::query_as::<_, (Option<String>, i64)>(
+        "SELECT winner, COUNT(*)::int8 AS n FROM twitch_stream_report_ab_votes \
+         WHERE session_id = $1 GROUP BY winner",
+    )
+    .bind(session_id)
+    .fetch_all(pool)
+    .await
+    .unwrap_or_default();
+    for (winner, n) in rows {
+        if let Some(w) = winner {
+            agg.insert(w, json!(n));
+        }
+    }
+    serde_json::Value::Object(agg)
+}
+
+/// UPSERT einer A/B-Stimme (Python INSERT … ON CONFLICT (session_id, voted_by)).
+async fn upsert_ab_vote(
+    pool: &PgPool,
+    session_id: i64,
+    streamer: &str,
+    winner: &str,
+    comment: Option<&str>,
+    voted_by: &str,
+) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "INSERT INTO twitch_stream_report_ab_votes \
+         (session_id, streamer_login, winner, comment, voted_by, updated_at) \
+         VALUES ($1, $2, $3, $4, $5, NOW()) \
+         ON CONFLICT (session_id, voted_by) \
+         DO UPDATE SET winner = EXCLUDED.winner, comment = EXCLUDED.comment, updated_at = NOW()",
+    )
+    .bind(session_id)
+    .bind(streamer)
+    .bind(winner)
+    .bind(comment)
+    .bind(voted_by)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+/// `GET /twitch/api/v2/stream-report/ab-vote` — eigene Stimme + Aggregat.
+/// `voted_by` ist hier NUR der Partner-Login (Python: kein auth_level-Fallback),
+/// Admin/Localhost sehen daher kein `own_vote`.
+pub async fn stream_report_ab_vote_get(
+    auth: DashboardAuthLevel,
+    State(pool): State<PgPool>,
+    Query(q): Query<AbVoteQuery>,
+) -> impl IntoResponse {
+    let streamer = q.streamer.unwrap_or_default().trim().to_lowercase();
+    let session_id: Option<i64> = q
+        .session_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty() && s.chars().all(|c| c.is_ascii_digit()))
+        .and_then(|s| s.parse().ok());
+    if streamer.is_empty() || session_id.is_none() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({"error": "streamer und session_id erforderlich"})),
+        )
+            .into_response();
+    }
+    if matches!(auth, DashboardAuthLevel::None) {
+        return (StatusCode::UNAUTHORIZED, Json(json!({"error": "unauthorized"}))).into_response();
+    }
+    let session_id = session_id.unwrap();
+    let _ = tb_analytics::post_stream::ensure_report_ab_columns(&pool).await;
+
+    let own_json = if let Some(vb) = owner_login(&auth) {
+        match sqlx::query_as::<_, (Option<String>, Option<String>, Option<String>)>(
+            "SELECT winner, comment, updated_at::text FROM twitch_stream_report_ab_votes \
+             WHERE session_id = $1 AND voted_by = $2 LIMIT 1",
+        )
+        .bind(session_id)
+        .bind(&vb)
+        .fetch_optional(&pool)
+        .await
+        .ok()
+        .flatten()
+        {
+            Some((winner, comment, updated_at)) => json!({
+                "winner": winner,
+                "comment": comment,
+                "updated_at": updated_at.unwrap_or_default(),
+            }),
+            None => serde_json::Value::Null,
+        }
+    } else {
+        serde_json::Value::Null
+    };
+
+    let totals = ab_vote_totals(&pool, session_id).await;
+    Json(json!({"session_id": session_id, "own_vote": own_json, "totals": totals})).into_response()
+}
+
+/// `POST /twitch/api/v2/stream-report/ab-vote` — Stimme abgeben/ändern.
+pub async fn stream_report_ab_vote_post(
+    auth: DashboardAuthLevel,
+    State(pool): State<PgPool>,
+    body: axum::body::Bytes,
+) -> impl IntoResponse {
+    let parsed: AbVoteBody = match serde_json::from_slice(&body) {
+        Ok(v) => v,
+        Err(_) => {
+            return (StatusCode::BAD_REQUEST, Json(json!({"error": "invalid JSON"}))).into_response();
+        }
+    };
+
+    let session_id: Option<i64> = match &parsed.session_id {
+        Some(serde_json::Value::Number(n)) => n.as_i64(),
+        Some(serde_json::Value::String(s)) => {
+            let t = s.trim();
+            if !t.is_empty() && t.chars().all(|c| c.is_ascii_digit()) {
+                t.parse().ok()
+            } else {
+                None
+            }
+        }
+        _ => None,
+    };
+    let streamer = parsed.streamer.unwrap_or_default().trim().to_lowercase();
+    let (Some(session_id), false) = (session_id, streamer.is_empty()) else {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({"error": "session_id und streamer erforderlich"})),
+        )
+            .into_response();
+    };
+
+    let winner = parsed.winner.unwrap_or_default().trim().to_lowercase();
+    if !matches!(winner.as_str(), "compact" | "full" | "gleich") {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({"error": "winner muss 'compact', 'full' oder 'gleich' sein"})),
+        )
+            .into_response();
+    }
+
+    // comment: trim + auf 500 Zeichen (Python `.strip()[:500]`).
+    let comment: String = parsed
+        .comment
+        .unwrap_or_default()
+        .trim()
+        .chars()
+        .take(500)
+        .collect();
+
+    let voted_by = match &auth {
+        DashboardAuthLevel::Partner { twitch_login, .. } => twitch_login.trim().to_lowercase(),
+        DashboardAuthLevel::Admin => "admin".to_string(),
+        DashboardAuthLevel::Localhost => "localhost".to_string(),
+        DashboardAuthLevel::None => {
+            return (StatusCode::UNAUTHORIZED, Json(json!({"error": "unauthorized"}))).into_response();
+        }
+    };
+
+    let _ = tb_analytics::post_stream::ensure_report_ab_columns(&pool).await;
+    let comment_opt = if comment.is_empty() { None } else { Some(comment.as_str()) };
+    if let Err(e) = upsert_ab_vote(&pool, session_id, &streamer, &winner, comment_opt, &voted_by).await {
+        tracing::error!(error = %e, "PostStream AB-Vote: Speichern fehlgeschlagen");
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({"error": "Abstimmung konnte nicht gespeichert werden"})),
+        )
+            .into_response();
+    }
+    let totals = ab_vote_totals(&pool, session_id).await;
+    Json(json!({"ok": true, "winner": winner, "totals": totals})).into_response()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -395,5 +590,37 @@ mod tests {
         )
         .fetch_one(&pool).await.unwrap();
         assert_eq!(count2, 2);
+    }
+
+    #[tokio::test]
+    async fn ab_vote_upsert_und_totals() {
+        let Some(pool) = pool_or_skip("t7c_post_stream_abvote").await else { return };
+        tb_analytics::post_stream::ensure_report_ab_columns(&pool).await.unwrap();
+
+        upsert_ab_vote(&pool, 1, "streamer", "compact", Some("a"), "voter1").await.unwrap();
+        upsert_ab_vote(&pool, 1, "streamer", "full", None, "voter2").await.unwrap();
+        upsert_ab_vote(&pool, 1, "streamer", "compact", None, "voter3").await.unwrap();
+
+        let totals = ab_vote_totals(&pool, 1).await;
+        assert_eq!(totals["compact"], 2);
+        assert_eq!(totals["full"], 1);
+        assert_eq!(totals["gleich"], 0); // Default-Key bleibt 0
+
+        // voter1 ändert die Stimme → ON CONFLICT UPDATE (kein Duplikat).
+        upsert_ab_vote(&pool, 1, "streamer", "gleich", None, "voter1").await.unwrap();
+        let totals2 = ab_vote_totals(&pool, 1).await;
+        assert_eq!(totals2["compact"], 1); // voter1 weg von compact
+        assert_eq!(totals2["gleich"], 1);
+        let count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*)::int8 FROM twitch_stream_report_ab_votes WHERE session_id=1",
+        )
+        .fetch_one(&pool).await.unwrap();
+        assert_eq!(count, 3); // 3 Voter, keine Duplikate
+
+        // Fremde Session bleibt leer → alle 0.
+        let empty = ab_vote_totals(&pool, 999).await;
+        assert_eq!(empty["compact"], 0);
+        assert_eq!(empty["full"], 0);
+        assert_eq!(empty["gleich"], 0);
     }
 }
