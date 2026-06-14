@@ -103,6 +103,117 @@ pub async fn overview_session_count(
     Ok(row.0)
 }
 
+/// Bekannte Chat-Bot-Logins (Python `KNOWN_CHAT_BOTS`, core/chat_bots.py) —
+/// werden aus Chatter-Zählungen gefiltert. Kleingeschrieben.
+pub const KNOWN_CHAT_BOTS: &[&str] = &[
+    "botrix",
+    "deutschedeadlockcommunity",
+    "fossabot",
+    "moobot",
+    "nightbot",
+    "pretzelrocks",
+    "soundalerts",
+    "streamelements",
+    "streamlabs",
+    "wizebot",
+];
+
+/// Chatter-abgeleitete Overview-Metriken (Bot-gefiltert).
+#[derive(Debug, Default, Clone, Copy)]
+pub struct OverviewChatterMetrics {
+    /// Fenster-distinkte Chatter mit ≥1 Nachricht + Legacy-Aggregat für
+    /// Sessions ohne Per-Chatter-Zeilen (Python total_unique_chatters).
+    pub unique_chatters: i64,
+    /// Distinkte aktive Chatter (≥1 Nachricht), Tracked-Teil (Python active_chatters).
+    pub active_chatters: i64,
+    /// Distinkte Zuschauer (Nachricht ODER via Chatters-API gesehen).
+    pub unique_viewers: i64,
+    /// active_chatters / unique_viewers * 100, 2 Nachkommastellen (Python engagement_rate).
+    pub engagement_rate: f64,
+}
+
+/// Berechnet die chatter-basierten Overview-Metriken über
+/// `twitch_session_chatters` (Bot-gefiltert, Python `_calculate_overview_metrics`-
+/// Teilmenge: distinct_tracked + legacy_unique + active_chatters + distinct_viewers).
+pub async fn overview_chatter_metrics(
+    pool: &PgPool,
+    since: &str,
+    streamer_login: Option<&str>,
+) -> Result<OverviewChatterMetrics, sqlx::Error> {
+    let bots: Vec<String> = KNOWN_CHAT_BOTS.iter().map(|b| b.to_string()).collect();
+
+    // distinct_tracked == active_chatters: distinkte Chatter mit ≥1 Nachricht.
+    let (active,): (i64,) = sqlx::query_as(
+        r#"
+        SELECT COUNT(DISTINCT COALESCE(NULLIF(sc.chatter_login, ''), sc.chatter_id))::BIGINT
+        FROM twitch_session_chatters sc
+        JOIN twitch_stream_sessions s ON s.id = sc.session_id
+        WHERE s.started_at >= $1::TIMESTAMPTZ
+          AND s.ended_at IS NOT NULL
+          AND ($2::TEXT IS NULL OR LOWER(s.streamer_login) = LOWER($2))
+          AND sc.messages > 0
+          AND (sc.chatter_login IS NULL OR sc.chatter_login = ''
+               OR LOWER(sc.chatter_login) <> ALL($3))
+        "#,
+    )
+    .bind(since)
+    .bind(streamer_login)
+    .bind(&bots)
+    .fetch_one(pool)
+    .await?;
+
+    // legacy_unique: Alt-Sessions ohne Per-Chatter-Zeilen.
+    let (legacy,): (i64,) = sqlx::query_as(
+        r#"
+        SELECT COALESCE(SUM(s.unique_chatters), 0)::BIGINT
+        FROM twitch_stream_sessions s
+        WHERE s.started_at >= $1::TIMESTAMPTZ
+          AND s.ended_at IS NOT NULL
+          AND ($2::TEXT IS NULL OR LOWER(s.streamer_login) = LOWER($2))
+          AND NOT EXISTS (
+              SELECT 1 FROM twitch_session_chatters sc WHERE sc.session_id = s.id
+          )
+        "#,
+    )
+    .bind(since)
+    .bind(streamer_login)
+    .fetch_one(pool)
+    .await?;
+
+    // distinct_viewers: Nachricht ODER via Chatters-API gesehen.
+    let (viewers,): (i64,) = sqlx::query_as(
+        r#"
+        SELECT COUNT(DISTINCT COALESCE(NULLIF(sc.chatter_login, ''), sc.chatter_id))::BIGINT
+        FROM twitch_session_chatters sc
+        JOIN twitch_stream_sessions s ON s.id = sc.session_id
+        WHERE s.started_at >= $1::TIMESTAMPTZ
+          AND s.ended_at IS NOT NULL
+          AND ($2::TEXT IS NULL OR LOWER(s.streamer_login) = LOWER($2))
+          AND (sc.messages > 0 OR COALESCE(sc.seen_via_chatters_api, FALSE) IS TRUE)
+          AND (sc.chatter_login IS NULL OR sc.chatter_login = ''
+               OR LOWER(sc.chatter_login) <> ALL($3))
+        "#,
+    )
+    .bind(since)
+    .bind(streamer_login)
+    .bind(&bots)
+    .fetch_one(pool)
+    .await?;
+
+    let engagement_rate = if viewers > 0 {
+        ((active as f64 / viewers as f64) * 100.0 * 100.0).round() / 100.0
+    } else {
+        0.0
+    };
+
+    Ok(OverviewChatterMetrics {
+        unique_chatters: active + legacy,
+        active_chatters: active,
+        unique_viewers: viewers,
+        engagement_rate,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -145,14 +256,33 @@ mod tests {
                 follower_delta   BIGINT,
                 followers_start  BIGINT,
                 followers_end    BIGINT,
-                retention_10m    REAL
+                retention_10m    REAL,
+                unique_chatters  BIGINT
             )
             "#,
         )
         .execute(&pool)
         .await
         .expect("DDL fehlgeschlagen");
-        // Tabelle leeren damit Wiederholungsläufe nicht alte Daten sehen
+        sqlx::query("DROP TABLE IF EXISTS twitch_session_chatters")
+            .execute(&pool)
+            .await
+            .expect("DROP chatters fehlgeschlagen");
+        sqlx::query(
+            r#"
+            CREATE TABLE twitch_session_chatters (
+                session_id            BIGINT NOT NULL,
+                chatter_login         TEXT,
+                chatter_id            TEXT,
+                messages              INTEGER DEFAULT 0,
+                seen_via_chatters_api BOOLEAN DEFAULT FALSE
+            )
+            "#,
+        )
+        .execute(&pool)
+        .await
+        .expect("DDL chatters fehlgeschlagen");
+        // Tabellen leeren damit Wiederholungsläufe nicht alte Daten sehen
         sqlx::query("TRUNCATE twitch_stream_sessions")
             .execute(&pool)
             .await
@@ -216,5 +346,48 @@ mod tests {
         assert_eq!(metrics.follower_valid_count, Some(1));
         assert_eq!(metrics.retention_sample_count, Some(1));
         assert!((metrics.avg_retention_10m.unwrap() - 0.5).abs() < 0.001);
+    }
+
+    #[tokio::test]
+    async fn chatter_metrics_bot_gefiltert_und_engagement() {
+        let dsn = match test_dsn() {
+            Some(d) => d,
+            None => {
+                eprintln!("SKIP: TB_TEST_DATABASE_URL nicht gesetzt");
+                return;
+            }
+        };
+        let pool = make_pool(&dsn, "test_overview_chatter").await;
+        sqlx::query(
+            r#"
+            INSERT INTO twitch_stream_sessions
+                (id, streamer_login, started_at, ended_at, avg_viewers, peak_viewers, duration_seconds)
+            VALUES (1, 'streamer_x', NOW() - INTERVAL '1 day', NOW() - INTERVAL '23 hours', 100.0, 200, 3600)
+            "#,
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            r#"
+            INSERT INTO twitch_session_chatters (session_id, chatter_login, chatter_id, messages, seen_via_chatters_api)
+            VALUES
+                (1, 'alice', 'a1', 3, FALSE),       -- aktiver Chatter + Viewer
+                (1, 'streamlabs', 'sl', 9, FALSE),  -- Bot → gefiltert
+                (1, 'bob', 'b2', 0, TRUE)           -- nur via API gesehen → Viewer, nicht aktiv
+            "#,
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let since = "2000-01-01T00:00:00+00:00";
+        let m = overview_chatter_metrics(&pool, since, Some("streamer_x"))
+            .await
+            .unwrap();
+        assert_eq!(m.active_chatters, 1, "nur alice aktiv (streamlabs=Bot)");
+        assert_eq!(m.unique_viewers, 2, "alice + bob (bob via API), streamlabs=Bot raus");
+        assert_eq!(m.unique_chatters, 1, "1 tracked + 0 legacy (Session hat Chatter-Zeilen)");
+        assert!((m.engagement_rate - 50.0).abs() < 0.001, "1/2*100");
     }
 }

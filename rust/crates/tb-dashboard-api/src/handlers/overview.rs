@@ -10,7 +10,7 @@ use axum::{
 use chrono::{Duration, Utc};
 use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
-use tb_analytics::overview::{overview_metrics, overview_session_count};
+use tb_analytics::overview::{overview_chatter_metrics, overview_metrics, overview_session_count};
 use tb_http_core::{ApiError, AuthLevel};
 
 #[derive(Deserialize)]
@@ -71,6 +71,15 @@ pub struct OverviewSummary {
     pub followers_trend: Option<f64>,
     #[serde(rename = "retentionTrend")]
     pub retention_trend: Option<f64>,
+    // Chatter-abgeleitete Felder (Bot-gefiltert, Python _calculate_overview_metrics).
+    #[serde(rename = "uniqueChatters")]
+    pub unique_chatters: i64,
+    #[serde(rename = "activeChatters")]
+    pub active_chatters: i64,
+    #[serde(rename = "uniqueViewers")]
+    pub unique_viewers: i64,
+    #[serde(rename = "engagementRate")]
+    pub engagement_rate: f64,
 }
 
 /// Python `calc_trend`: None wenn prev 0/fehlt, sonst gerundete Prozent-Differenz.
@@ -124,6 +133,11 @@ pub async fn overview_handler(
         .await
         .map_err(|_| ApiError::internal())?;
 
+    // Chatter-abgeleitete Metriken (Bot-gefiltert).
+    let chatter = overview_chatter_metrics(&pool, &since, login_ref)
+        .await
+        .map_err(|_| ApiError::internal())?;
+
     let airtime = metrics.total_airtime_hours.unwrap_or(0.0);
     let total_followers = metrics.total_followers.unwrap_or(0);
     let gained = metrics.gained_followers.unwrap_or(0);
@@ -168,6 +182,10 @@ pub async fn overview_handler(
             avg_viewers_trend,
             followers_trend,
             retention_trend,
+            unique_chatters: chatter.unique_chatters,
+            active_chatters: chatter.active_chatters,
+            unique_viewers: chatter.unique_viewers,
+            engagement_rate: chatter.engagement_rate,
         },
     })))
 }
@@ -241,14 +259,29 @@ mod tests {
                 follower_delta   BIGINT,
                 followers_start  BIGINT,
                 followers_end    BIGINT,
-                retention_10m    REAL
+                retention_10m    REAL,
+                unique_chatters  BIGINT
             )
             "#,
         )
         .execute(&pool)
         .await
         .expect("DDL fehlgeschlagen");
-        // Tabelle leeren damit Wiederholungsläufe nicht alte Daten sehen
+        sqlx::query(
+            r#"
+            CREATE TABLE IF NOT EXISTS twitch_session_chatters (
+                session_id            BIGINT NOT NULL,
+                chatter_login         TEXT,
+                chatter_id            TEXT,
+                messages              INTEGER DEFAULT 0,
+                seen_via_chatters_api BOOLEAN DEFAULT FALSE
+            )
+            "#,
+        )
+        .execute(&pool)
+        .await
+        .expect("DDL chatters fehlgeschlagen");
+        // Tabellen leeren damit Wiederholungsläufe nicht alte Daten sehen
         sqlx::query("TRUNCATE twitch_stream_sessions")
             .execute(&pool)
             .await
@@ -310,11 +343,20 @@ mod tests {
         sqlx::query(
             r#"
             INSERT INTO twitch_stream_sessions
-                (streamer_login, started_at, ended_at, avg_viewers, peak_viewers,
+                (id, streamer_login, started_at, ended_at, avg_viewers, peak_viewers,
                  duration_seconds, follower_delta, followers_start, followers_end, retention_10m)
             VALUES
-                ('streamer_x', NOW() - INTERVAL '1 day', NOW() - INTERVAL '23 hours',
+                (1, 'streamer_x', NOW() - INTERVAL '1 day', NOW() - INTERVAL '23 hours',
                  100.0, 200, 3600, 5, 1000, 1005, 0.6)
+            "#,
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            r#"
+            INSERT INTO twitch_session_chatters (session_id, chatter_login, chatter_id, messages, seen_via_chatters_api)
+            VALUES (1, 'alice', 'a1', 3, FALSE), (1, 'nightbot', 'nb', 7, FALSE), (1, 'bob', 'b2', 0, TRUE)
             "#,
         )
         .execute(&pool)
@@ -334,5 +376,10 @@ mod tests {
         assert_eq!(v["summary"]["followersGained"], 5);
         assert!((v["summary"]["retention10m"].as_f64().unwrap() - 60.0).abs() < 0.01);
         assert_eq!(v["summary"]["retentionReliable"], false); // nur 1 Sample (<3)
+        // Chatter-Felder (nightbot=Bot raus, bob nur via API).
+        assert_eq!(v["summary"]["activeChatters"], 1);
+        assert_eq!(v["summary"]["uniqueViewers"], 2);
+        assert_eq!(v["summary"]["uniqueChatters"], 1);
+        assert!((v["summary"]["engagementRate"].as_f64().unwrap() - 50.0).abs() < 0.001);
     }
 }
