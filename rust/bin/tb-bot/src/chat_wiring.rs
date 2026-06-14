@@ -24,7 +24,7 @@ use tb_chat::commands::{
     LastAutobanStore, RaidCommandPort, RaidStatusInfo, SuperModPort,
 };
 use tb_chat::moderation::{
-    HelixChatClient, ModerationEngine, OutboundSuppressionStore, TimeoutGuard,
+    HelixChatClient, ModerationEngine, OutboundSuppressionStore, TimeoutGuard, WERBEFREI_PITCH_MSG,
 };
 use tb_chat::promos::{InviteResolver, PartnerChannelCheck, PromoEngine};
 use tb_chat::timeout_tracking::{CombinedSuppression, TimeoutTrackingChatApi};
@@ -363,6 +363,8 @@ pub async fn build_runtime(
         hooks: Arc::new(ChatHooks {
             inner: inner_hooks,
             pipeline,
+            timeout_guard: Arc::clone(&timeout_guard),
+            api: Arc::clone(&api),
         }),
         token_manager,
         promos,
@@ -479,6 +481,10 @@ async fn ensure_autoban_log_table(pool: &PgPool) {
 struct ChatHooks {
     inner: Arc<dyn EventSubHooks>,
     pipeline: Arc<ChatPipeline>,
+    /// Für den Werbefrei-Pitch beim Go-Live (Slice B): hält den geteilten
+    /// TimeoutGuard (SET-Seite in Slice A verdrahtet) + den dekorierten ChatApi.
+    timeout_guard: Arc<TimeoutGuard>,
+    api: Arc<dyn ChatApi>,
 }
 
 #[async_trait::async_trait]
@@ -493,6 +499,38 @@ impl EventSubHooks for ChatHooks {
     }
     async fn on_stream_went_live(&self, twitch_user_id: &str, login: &str) {
         self.inner.on_stream_went_live(twitch_user_id, login).await;
+
+        // Werbefrei-Pitch (Slice B, Python eventsub_mixin.py:1523-1555): War der
+        // Bot in diesem Kanal getimed-outed (TimeoutGuard-SET via Slice A), ist
+        // beim Stream-Start ein Pitch fällig → 90 s nach Go-Live einmalig die
+        // Werbefrei-Nachricht als Announcement (blau) senden. consume_* setzt
+        // zugleich den Pitch-Cooldown, ist also idempotent pro Stream-Start.
+        if self.timeout_guard.consume_stream_start_pitch(login) {
+            let api = Arc::clone(&self.api);
+            let broadcaster_id = twitch_user_id.to_string();
+            let login = login.to_string();
+            tokio::spawn(async move {
+                tokio::time::sleep(std::time::Duration::from_secs(90)).await;
+                match api
+                    .send_announcement(&broadcaster_id, WERBEFREI_PITCH_MSG, "blue")
+                    .await
+                {
+                    Ok(true) => tracing::info!(
+                        login = %login,
+                        "Werbefrei-Pitch nach Stream-Start gesendet"
+                    ),
+                    Ok(false) => tracing::debug!(
+                        login = %login,
+                        "Werbefrei-Pitch nicht zugestellt (Announcement abgelehnt)"
+                    ),
+                    Err(error) => tracing::debug!(
+                        %error,
+                        login = %login,
+                        "Werbefrei-Pitch-Send fehlgeschlagen"
+                    ),
+                }
+            });
+        }
     }
     async fn on_score_refresh(
         &self,
