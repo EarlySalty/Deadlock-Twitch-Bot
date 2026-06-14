@@ -49,8 +49,8 @@ impl std::fmt::Display for LlmProviderUnavailable {
 impl std::error::Error for LlmProviderUnavailable {}
 
 /// Entfernt MiniMax-`<think>…</think>`-Reasoning-Blöcke (case-insensitive,
-/// über Zeilen hinweg, non-greedy).
-fn strip_think(text: &str) -> String {
+/// über Zeilen hinweg, non-greedy). Auch von [`crate::soul_store`] genutzt.
+pub(crate) fn strip_think(text: &str) -> String {
     static RE: OnceLock<Regex> = OnceLock::new();
     let re = RE.get_or_init(|| Regex::new(r"(?is)<think>.*?</think>").expect("valide Regex"));
     re.replace_all(text, "").into_owned()
@@ -288,10 +288,6 @@ impl EngagementMinimaxClient {
         max_output_tokens: i64,
         max_answer_len: usize,
     ) -> Result<ChatResponse, GenerateError> {
-        let api_key = self.api_key.as_deref().ok_or_else(|| {
-            GenerateError::Unavailable(LlmProviderUnavailable("MINIMAX_API_KEY not set".to_string()))
-        })?;
-
         let mut messages = vec![serde_json::json!({"role": "system", "content": system_prompt})];
         for turn in history {
             // Sprecher in den Content falten statt ins name-Feld: MiniMax verlangt
@@ -303,19 +299,61 @@ impl EngagementMinimaxClient {
             };
             messages.push(serde_json::json!({"role": turn.role, "content": content}));
         }
+        let (raw_text, prompt_tokens, completion_tokens, latency_ms) = self
+            .post_completion(serde_json::Value::Array(messages), max_output_tokens, 0.7)
+            .await?;
+        let text = process_response_text(&raw_text, max_answer_len);
+        Ok(ChatResponse {
+            text,
+            model: self.model.clone(),
+            prompt_tokens,
+            completion_tokens,
+            latency_ms,
+        })
+    }
+
+    /// Roher Completion-Call (system + user) → getrimmter Antwort-Text OHNE
+    /// [`process_response_text`] — für Jobs wie die Soul-Reflexion.
+    pub async fn raw_completion(
+        &self,
+        system: &str,
+        user: &str,
+        max_output_tokens: i64,
+        temperature: f64,
+    ) -> Result<String, GenerateError> {
+        let messages = serde_json::json!([
+            {"role": "system", "content": system},
+            {"role": "user", "content": user},
+        ]);
+        let (raw_text, _, _, _) = self
+            .post_completion(messages, max_output_tokens, temperature)
+            .await?;
+        Ok(raw_text)
+    }
+
+    /// POST an `/chat/completions`; gibt (Roh-Text, prompt_tokens,
+    /// completion_tokens, Latenz) zurück. Gemeinsame Basis von [`Self::generate`]
+    /// und [`Self::raw_completion`].
+    async fn post_completion(
+        &self,
+        messages: serde_json::Value,
+        max_output_tokens: i64,
+        temperature: f64,
+    ) -> Result<(String, Option<i64>, Option<i64>, i64), GenerateError> {
+        let api_key = self.api_key.as_deref().ok_or_else(|| {
+            GenerateError::Unavailable(LlmProviderUnavailable("MINIMAX_API_KEY not set".to_string()))
+        })?;
         let body = serde_json::json!({
             "model": self.model,
             "messages": messages,
             "max_tokens": max_output_tokens,
-            "temperature": 0.7,
+            "temperature": temperature,
         });
-
         let client = reqwest::Client::builder()
             .timeout(self.timeout)
             .build()
             .map_err(|e| GenerateError::Http(e.to_string()))?;
         let url = format!("{}/chat/completions", self.base_url.trim_end_matches('/'));
-
         let started = std::time::Instant::now();
         let resp = client
             .post(&url)
@@ -331,7 +369,6 @@ impl EngagementMinimaxClient {
             .await
             .map_err(|e| GenerateError::Http(e.to_string()))?;
         let latency_ms = started.elapsed().as_millis() as i64;
-
         let raw_text = payload
             .get("choices")
             .and_then(serde_json::Value::as_array)
@@ -342,8 +379,6 @@ impl EngagementMinimaxClient {
             .unwrap_or("")
             .trim()
             .to_string();
-        let text = process_response_text(&raw_text, max_answer_len);
-
         let usage = payload.get("usage");
         let prompt_tokens = usage
             .and_then(|u| u.get("prompt_tokens"))
@@ -351,14 +386,7 @@ impl EngagementMinimaxClient {
         let completion_tokens = usage
             .and_then(|u| u.get("completion_tokens"))
             .and_then(serde_json::Value::as_i64);
-
-        Ok(ChatResponse {
-            text,
-            model: self.model.clone(),
-            prompt_tokens,
-            completion_tokens,
-            latency_ms,
-        })
+        Ok((raw_text, prompt_tokens, completion_tokens, latency_ms))
     }
 }
 
