@@ -364,7 +364,7 @@ pub async fn build_runtime(
             inner: inner_hooks,
             pipeline,
             timeout_guard: Arc::clone(&timeout_guard),
-            api: Arc::clone(&api),
+            promos: Arc::clone(&promos),
         }),
         token_manager,
         promos,
@@ -481,10 +481,11 @@ async fn ensure_autoban_log_table(pool: &PgPool) {
 struct ChatHooks {
     inner: Arc<dyn EventSubHooks>,
     pipeline: Arc<ChatPipeline>,
-    /// Für den Werbefrei-Pitch beim Go-Live (Slice B): hält den geteilten
-    /// TimeoutGuard (SET-Seite in Slice A verdrahtet) + den dekorierten ChatApi.
+    /// Für den Werbefrei-Pitch beim Go-Live: der geteilte TimeoutGuard
+    /// (SET-Seite armiert den Pitch) + die PromoEngine, über die der Pitch
+    /// gesendet wird (Suppression-Check + Promo-Cooldown, Python-Parität).
     timeout_guard: Arc<TimeoutGuard>,
-    api: Arc<dyn ChatApi>,
+    promos: Arc<PromoEngine>,
 }
 
 #[async_trait::async_trait]
@@ -500,34 +501,26 @@ impl EventSubHooks for ChatHooks {
     async fn on_stream_went_live(&self, twitch_user_id: &str, login: &str) {
         self.inner.on_stream_went_live(twitch_user_id, login).await;
 
-        // Werbefrei-Pitch (Slice B, Python eventsub_mixin.py:1523-1555): War der
-        // Bot in diesem Kanal getimed-outed (TimeoutGuard-SET via Slice A), ist
-        // beim Stream-Start ein Pitch fällig → 90 s nach Go-Live einmalig die
-        // Werbefrei-Nachricht als Announcement (blau) senden. consume_* setzt
-        // zugleich den Pitch-Cooldown, ist also idempotent pro Stream-Start.
+        // Werbefrei-Pitch (Python eventsub_mixin.py:1523-1555): War der Bot in
+        // diesem Kanal getimed-outed (TimeoutGuard-SET), ist beim Stream-Start
+        // ein Pitch fällig → 90 s nach Go-Live einmalig senden. consume_* setzt
+        // zugleich den Pitch-Cooldown, ist also idempotent pro Stream-Start. Der
+        // Send läuft über die PromoEngine (Suppression-Check + Promo-Cooldown),
+        // damit ein gemuteter Kanal verschont bleibt und nicht direkt danach eine
+        // reguläre Promo feuert (Python-Parität source="promo" + mark_promo_sent).
         if self.timeout_guard.consume_stream_start_pitch(login) {
-            let api = Arc::clone(&self.api);
+            let promos = Arc::clone(&self.promos);
             let broadcaster_id = twitch_user_id.to_string();
             let login = login.to_string();
             tokio::spawn(async move {
                 tokio::time::sleep(std::time::Duration::from_secs(90)).await;
-                match api
-                    .send_announcement(&broadcaster_id, WERBEFREI_PITCH_MSG, "blue")
+                if promos
+                    .send_timeout_pitch(&broadcaster_id, &login, WERBEFREI_PITCH_MSG)
                     .await
                 {
-                    Ok(true) => tracing::info!(
-                        login = %login,
-                        "Werbefrei-Pitch nach Stream-Start gesendet"
-                    ),
-                    Ok(false) => tracing::debug!(
-                        login = %login,
-                        "Werbefrei-Pitch nicht zugestellt (Announcement abgelehnt)"
-                    ),
-                    Err(error) => tracing::debug!(
-                        %error,
-                        login = %login,
-                        "Werbefrei-Pitch-Send fehlgeschlagen"
-                    ),
+                    tracing::info!(login = %login, "Werbefrei-Pitch nach Stream-Start gesendet");
+                } else {
+                    tracing::debug!(login = %login, "Werbefrei-Pitch nicht gesendet (Suppression/Drop)");
                 }
             });
         }

@@ -824,6 +824,35 @@ impl PromoEngine {
         true
     }
 
+    /// Werbefrei-Pitch beim Go-Live senden (Python `eventsub_mixin.py:1523-1555`
+    /// → `_send_announcement(source="promo")` + `_mark_promo_sent(reason="timeout_pitch")`).
+    ///
+    /// Anders als ein direkter `api.send_announcement` läuft der Pitch hier durch
+    /// die Outbound-Promo-Suppression (wird unterdrückt, wenn der Kanal gerade
+    /// gemutet ist) UND belegt bei Erfolg den Promo-Cooldown — sonst könnte
+    /// unmittelbar danach eine reguläre Promo feuern (Doppel-Werbung). `message`
+    /// ist der fertige Pitch-Text, gesendet als blaues Announcement.
+    pub async fn send_timeout_pitch(&self, channel_id: &str, login: &str, message: &str) -> bool {
+        // Suppression-Check (Python source="promo").
+        if self.suppression.is_muted(login).await {
+            debug!(login, "Werbefrei-Pitch unterdrückt (Outbound-Promo-Suppression)");
+            return false;
+        }
+        let sent = self
+            .api
+            .send_announcement(channel_id, message, "blue")
+            .await
+            .unwrap_or(false);
+        if !sent {
+            debug!(login, "Werbefrei-Pitch nicht gesendet (Drop/Fehler)");
+            return false;
+        }
+        // Promo-Cooldown belegen (Python `_mark_promo_sent(reason="timeout_pitch")`).
+        self.mark_promo_sent(login, Instant::now(), "timeout_pitch", Utc::now().timestamp() as f64)
+            .await;
+        true
+    }
+
     /// Promo-Text bauen (promos.py:945: `_build_promo_text`).
     async fn build_promo_text(&self, login: &str, invite: &str, reason: &str) -> String {
         // 1. Globalen Promo-Override aus DB prüfen (UNSICHER: promo_mode-Schema).
@@ -2064,6 +2093,54 @@ mod tests {
             Arc::new(MockApi::default()),
             Arc::new(NoopSuppressionCheck),
         )
+    }
+
+    struct AlwaysMuted;
+    #[async_trait]
+    impl OutboundSuppressionCheck for AlwaysMuted {
+        async fn is_muted(&self, _channel_login: &str) -> bool {
+            true
+        }
+    }
+
+    fn dummy_pool() -> PgPool {
+        use sqlx::postgres::PgPoolOptions;
+        PgPoolOptions::new()
+            .max_connections(1)
+            .connect_lazy("postgres://localhost/nonexistent")
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn timeout_pitch_unterdrueckt_bei_suppression() {
+        // Kanal gemutet → Pitch wird NICHT gesendet (Suppression-Gate, Python source="promo").
+        let api = Arc::new(MockApi::default());
+        let engine = PromoEngine::new(dummy_pool(), api.clone(), Arc::new(AlwaysMuted));
+        let sent = engine.send_timeout_pitch("123", "login", "PITCH").await;
+        assert!(!sent, "gemuteter Kanal darf keinen Pitch bekommen");
+        assert!(api.announcements.lock().await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn timeout_pitch_sendet_blau_und_belegt_cooldown() {
+        // Nicht gemutet → blaues Announcement + Promo-Cooldown belegt (kein Doppel-Promo danach).
+        let api = Arc::new(MockApi::default());
+        let engine = PromoEngine::new(dummy_pool(), api.clone(), Arc::new(NoopSuppressionCheck));
+        let sent = engine.send_timeout_pitch("123", "login", "PITCH-MSG").await;
+        assert!(sent);
+        {
+            let anns = api.announcements.lock().await;
+            assert_eq!(anns.len(), 1);
+            assert_eq!(anns[0].1, "PITCH-MSG");
+            assert_eq!(anns[0].2, "blue");
+        }
+        // Cooldown belegt → overall_promo_ready_inner ist jetzt false.
+        let state_ref = engine.channel_states.get("login").expect("ChannelState belegt");
+        let state = state_ref.lock().await;
+        assert!(
+            !engine.overall_promo_ready_inner(&state, Instant::now()),
+            "Promo-Cooldown muss nach dem Pitch belegt sein"
+        );
     }
 }
 
