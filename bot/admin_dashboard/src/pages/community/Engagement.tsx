@@ -510,7 +510,7 @@ export default function EngagementPage() {
         title={confirmState?.nextEnabled ? 'Engagement aktivieren?' : 'Engagement deaktivieren?'}
         description={
           confirmState
-            ? `${confirmState.login} wird ${confirmState.nextEnabled ? 'fuer AI-Engagement aktiviert' : 'fuer AI-Engagement deaktiviert'}.`
+            ? `${confirmState.login} wird ${confirmState.nextEnabled ? 'für AI-Engagement aktiviert' : 'für AI-Engagement deaktiviert'}.`
             : ''
         }
         confirmLabel={confirmState?.nextEnabled ? 'Aktivieren' : 'Deaktivieren'}

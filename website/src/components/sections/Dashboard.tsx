@@ -46,16 +46,16 @@ const TABS = [
       ["Chatters", "63", "starke Basis"],
     ],
     signals: [
-      "Der schnelle Daily Check-in fuer Performance und Richtung.",
-      "Macht auffaellige Veraenderungen sichtbar, bevor man Details liest.",
-      "Perfekter Startpunkt fuer alle anderen Analytics-Tabs.",
+      "Der schnelle Daily Check-in für Performance und Richtung.",
+      "Macht auffällige Veränderungen sichtbar, bevor man Details liest.",
+      "Perfekter Startpunkt für alle anderen Analytics-Tabs.",
     ],
   },
   {
     id: "chat",
     label: "Chat",
     Icon: MessageSquare,
-    teaser: "Chat-Tiefe, Aktivitaet und Wiederkehrer statt nur Message Count.",
+    teaser: "Chat-Tiefe, Aktivität und Wiederkehrer statt nur Message Count.",
     title: "Chat als echte Community lesen",
     description:
       "Hier wird sichtbar, wann der Chat wirklich lebt, wie tief die Gespräche gehen und ob aus Aktivität echte Bindung entsteht.",
@@ -67,7 +67,7 @@ const TABS = [
     signals: [
       "Peak-Momente und Tageszeit-Signale werden sofort lesbar.",
       "Neue und wiederkehrende Chatter lassen sich klar trennen.",
-      "Hilft, Unterhaltung statt nur Aktivitaet zu bewerten.",
+      "Hilft, Unterhaltung statt nur Aktivität zu bewerten.",
     ],
   },
   {
@@ -99,7 +99,7 @@ const TABS = [
       "Der Viewer-Tab macht Wiederkehrer, Dormant Viewer und besonders wertvolle Community-Profile sichtbar.",
     stats: [
       ["Wiederkehrer", "58%", "mehrfach aktiv"],
-      ["Dormant", "24", "rueckholbar"],
+      ["Dormant", "24", "rückholbar"],
       ["High Value", "19", "Chat + Watchtime"],
     ],
     signals: [
@@ -132,7 +132,7 @@ const TABS = [
     label: "Coaching",
     Icon: GraduationCap,
     teaser: "Analytics wird in konkrete nächste Schritte übersetzt.",
-    title: "Coaching macht Analytics handlungsfaehig",
+    title: "Coaching macht Analytics handlungsfähig",
     description:
       "Der Coaching-Tab verdichtet Daten in priorisierte Empfehlungen für Timing, Titel, Retention, Community und Netzwerk.",
     stats: [
@@ -189,7 +189,7 @@ export function Dashboard() {
         <SectionHeading
           badge="Analytics"
           title="Analytics auf einem neuen Level"
-          subtitle="13 spezialisierte Tabs fuer jeden Aspekt deines Streams. Chat, Audience, Viewer, Wachstum und Coaching greifen direkt ineinander statt isoliert nebeneinander zu stehen."
+          subtitle="13 spezialisierte Tabs für jeden Aspekt deines Streams. Chat, Audience, Viewer, Wachstum und Coaching greifen direkt ineinander statt isoliert nebeneinander zu stehen."
         />
 
         {/* Live Demo iframe */}

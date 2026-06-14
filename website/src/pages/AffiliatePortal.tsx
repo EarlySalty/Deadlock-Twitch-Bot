@@ -105,7 +105,7 @@ const EMPTY_READINESS: GutschriftReadiness = {
 
 const COUNTRIES = [
   { value: "DE", label: "Deutschland" },
-  { value: "AT", label: "Oesterreich" },
+  { value: "AT", label: "Österreich" },
   { value: "CH", label: "Schweiz" },
   { value: "NL", label: "Niederlande" },
   { value: "BE", label: "Belgien" },
@@ -117,7 +117,7 @@ const COUNTRIES = [
 ];
 
 const TABS: { id: Tab; label: string; icon: typeof LayoutDashboard }[] = [
-  { id: "overview", label: "Uebersicht", icon: LayoutDashboard },
+  { id: "overview", label: "Übersicht", icon: LayoutDashboard },
   { id: "streamers", label: "Streamer", icon: Users },
   { id: "commissions", label: "Provisionen", icon: Receipt },
   { id: "gutschriften", label: "Gutschriften", icon: FileText },
@@ -188,9 +188,9 @@ function profileErrorText(code: string): string {
     case "invalid_json":
       return "Die Daten konnten nicht gelesen werden.";
     case "invalid_payload":
-      return "Das Profilformular ist ungueltig.";
+      return "Das Profilformular ist ungültig.";
     case "invalid_ust_status":
-      return "Bitte waehle einen gueltigen USt-Status.";
+      return "Bitte wähle einen gültigen USt-Status.";
     case "not_found":
       return "Affiliate-Profil nicht gefunden.";
     default:
@@ -201,7 +201,7 @@ function profileErrorText(code: string): string {
 function claimErrorText(code: string): string {
   switch (code) {
     case "invalid_login":
-      return "Bitte gib einen gueltigen Twitch-Login ein.";
+      return "Bitte gib einen gültigen Twitch-Login ein.";
     case "already_claimed":
       return "Dieser Streamer wurde bereits beansprucht.";
     case "streamer_already_registered":
@@ -426,10 +426,10 @@ export default function AffiliatePortal() {
             <div className="flex items-start gap-3">
               <AlertCircle size={18} className="text-[#ffb067] mt-0.5 shrink-0" />
               <p className="text-xs leading-relaxed text-[#d7e5f0]">
-                Steuerhinweis: Du bist selbst fuer die steuerliche Behandlung
-                deiner Provisionen verantwortlich. Verbinde spaeter Stripe,
+                Steuerhinweis: Du bist selbst für die steuerliche Behandlung
+                deiner Provisionen verantwortlich. Verbinde später Stripe,
                 damit Auszahlungen automatisch an dein Auszahlungs-Konto gehen
-                koennen.
+                können.
               </p>
             </div>
           </div>
@@ -495,9 +495,9 @@ export default function AffiliatePortal() {
         {tab === "overview" && (
           <div className="space-y-6">
             <SectionCard>
-              <h2 className="text-2xl font-bold font-[Sora]">Uebersicht</h2>
+              <h2 className="text-2xl font-bold font-[Sora]">Übersicht</h2>
               <p className="mt-3 text-sm leading-relaxed text-[#9bb3c5]">
-                Willkommen zurueck
+                Willkommen zurück
                 {profile?.display_name ? `, ${profile.display_name}` : ""}. Hier
                 verwaltest du deine beanspruchten Streamer, deine Provisionen
                 und die automatische Gutschrift-Erstellung.
@@ -509,14 +509,14 @@ export default function AffiliatePortal() {
             {needsNextSteps && (
               <SectionCard>
                 <h3 className="text-sm font-semibold text-[#9bb3c5] uppercase tracking-wider">
-                  Deine naechsten Schritte
+                  Deine nächsten Schritte
                 </h3>
                 <div className="mt-4 space-y-3">
                   {claims.length === 0 && (
                     <ActionHint
                       icon={<Users size={18} className="text-[#06B6D4] mt-0.5 shrink-0" />}
                       title="Ersten Streamer beanspruchen"
-                      text="Oeffne den Tab Streamer und beanspruche einen Channel per Twitch-Login. Ab dann bekommst du 30% auf jede Zahlung dieses Streamers."
+                      text="Öffne den Tab Streamer und beanspruche einen Channel per Twitch-Login. Ab dann bekommst du 30% auf jede Zahlung dieses Streamers."
                     />
                   )}
                   {!stripeConnected && (
@@ -527,15 +527,15 @@ export default function AffiliatePortal() {
                           className="text-[#A855F7] mt-0.5 shrink-0"
                         />
                       }
-                      title="Stripe fuer automatische Auszahlungen verbinden"
-                      text="Ohne Stripe werden Provisionen nur bis 50,00 EUR gespeichert. Alles darueber verfaellt, bis dein Konto verbunden ist."
+                      title="Stripe für automatische Auszahlungen verbinden"
+                      text="Ohne Stripe werden Provisionen nur bis 50,00 EUR gespeichert. Alles darüber verfällt, bis dein Konto verbunden ist."
                     />
                   )}
                   {!readiness.can_generate && (
                     <ActionHint
                       icon={<ShieldCheck size={18} className="text-[#f5b642] mt-0.5 shrink-0" />}
-                      title="Steuer- und Adressdaten vervollstaendigen"
-                      text="Pflege im Tab Einstellungen deine Adresse, Kontakt-E-Mail und steuerlichen Angaben, damit Gutschriften automatisch erstellt werden koennen."
+                      title="Steuer- und Adressdaten vervollständigen"
+                      text="Pflege im Tab Einstellungen deine Adresse, Kontakt-E-Mail und steuerlichen Angaben, damit Gutschriften automatisch erstellt werden können."
                     />
                   )}
                 </div>
@@ -554,7 +554,7 @@ export default function AffiliatePortal() {
                 icon={<Clock size={20} />}
               />
               <StatCard
-                label="Uebertragen"
+                label="Übertragen"
                 value={formatCents(transferredCents)}
                 icon={<ArrowRightLeft size={20} />}
               />
@@ -606,8 +606,8 @@ export default function AffiliatePortal() {
             <SectionCard>
               <h2 className="text-2xl font-bold font-[Sora]">Streamer</h2>
               <p className="mt-3 text-sm leading-relaxed text-[#9bb3c5]">
-                Beanspruche Streamer ueber ihren Twitch-Login. Sobald ein
-                Streamer dir zugeordnet ist, erhaeltst du 30% Provision auf jede
+                Beanspruche Streamer über ihren Twitch-Login. Sobald ein
+                Streamer dir zugeordnet ist, erhältst du 30% Provision auf jede
                 Zahlung dieses Accounts.
               </p>
             </SectionCard>
@@ -881,8 +881,8 @@ export default function AffiliatePortal() {
             <SectionCard>
               <h2 className="text-2xl font-bold font-[Sora]">Einstellungen</h2>
               <p className="mt-3 text-sm leading-relaxed text-[#9bb3c5]">
-                Pflege hier deine verschluesselten Profil-, Adress- und
-                Steuerdaten fuer die automatische Gutschrift-Erstellung.
+                Pflege hier deine verschlüsselten Profil-, Adress- und
+                Steuerdaten für die automatische Gutschrift-Erstellung.
               </p>
             </SectionCard>
 
@@ -896,19 +896,19 @@ export default function AffiliatePortal() {
                       Adresse
                     </h3>
                     <p className="mt-2 text-sm leading-relaxed text-[#9bb3c5]">
-                      Diese Daten werden verschluesselt gespeichert und fuer die
-                      automatische Gutschrift-Erstellung benoetigt.
+                      Diese Daten werden verschlüsselt gespeichert und für die
+                      automatische Gutschrift-Erstellung benötigt.
                     </p>
                   </div>
                   <div className="rounded-xl border border-[rgba(16,183,173,0.22)] bg-[rgba(16,183,173,0.08)] px-4 py-3 text-sm text-[#d8f8f4] max-w-md">
-                    Diese Daten werden verschluesselt gespeichert und fuer die
-                    automatische Gutschrift-Erstellung benoetigt.
+                    Diese Daten werden verschlüsselt gespeichert und für die
+                    automatische Gutschrift-Erstellung benötigt.
                   </div>
                 </div>
 
                 <div className="mt-6 grid grid-cols-1 md:grid-cols-2 gap-4">
                   <InputField
-                    label="Vollstaendiger Name"
+                    label="Vollständiger Name"
                     value={settingsForm.full_name}
                     onChange={(value) => updateForm("full_name", value)}
                   />
@@ -919,7 +919,7 @@ export default function AffiliatePortal() {
                     onChange={(value) => updateForm("email", value)}
                   />
                   <InputField
-                    label="Strasse"
+                    label="Straße"
                     value={settingsForm.address_line1}
                     onChange={(value) => updateForm("address_line1", value)}
                   />
@@ -1149,7 +1149,7 @@ function ReadinessCard({
           </h3>
           <p className="mt-2 text-sm leading-relaxed text-[#9bb3c5]">
             {readiness.can_generate
-              ? "Dein Profil ist bereit fuer die automatische Gutschrift-Erstellung."
+              ? "Dein Profil ist bereit für die automatische Gutschrift-Erstellung."
               : "Dein Profil blockiert aktuell die automatische Gutschrift-Erstellung."}
           </p>
         </div>
@@ -1194,7 +1194,7 @@ function StripeCard({ profile }: { profile: AffiliateProfile | null }) {
       </h3>
       <div className="space-y-4">
         <p className="text-sm leading-relaxed text-[#9bb3c5]">
-          Auszahlungen laufen automatisch ueber Stripe Connect auf dein
+          Auszahlungen laufen automatisch über Stripe Connect auf dein
           verbundenes Auszahlungs-Konto.
         </p>
         {connected ? (
@@ -1204,8 +1204,8 @@ function StripeCard({ profile }: { profile: AffiliateProfile | null }) {
               <span className="font-medium">Verbunden</span>
             </div>
             <p className="text-sm leading-relaxed text-[#9bb3c5]">
-              Neue Provisionen koennen automatisch fuer Auszahlungen
-              verarbeitet werden, sobald Stripe Transfers ausloest.
+              Neue Provisionen können automatisch für Auszahlungen
+              verarbeitet werden, sobald Stripe Transfers auslöst.
             </p>
           </div>
         ) : (
@@ -1216,7 +1216,7 @@ function StripeCard({ profile }: { profile: AffiliateProfile | null }) {
             </div>
             <p className="text-sm leading-relaxed text-[#9bb3c5]">
               Ohne Stripe werden Provisionen nur bis 50,00 EUR gespeichert.
-              Sobald weitere Provisionen darueber hinaus anfallen, verfallen
+              Sobald weitere Provisionen darüber hinaus anfallen, verfallen
               sie, bis du Stripe verbunden hast.
             </p>
             <button

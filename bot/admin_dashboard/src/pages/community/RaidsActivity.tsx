@@ -243,7 +243,7 @@ export default function RaidsActivityPage() {
       <section className="space-y-6">
         <PageHeader
           title="Raids"
-          description="Konfiguration und Aktivitaet der Raid-Mechanik."
+          description="Konfiguration und Aktivität der Raid-Mechanik."
           primaryAction={
             <button className="admin-button admin-button-secondary" onClick={() => void configQuery.refetch()}>
               <RefreshCw className="h-4 w-4" />
@@ -262,7 +262,7 @@ export default function RaidsActivityPage() {
     <section className="space-y-6">
       <PageHeader
         title="Raids"
-        description="Konfiguration und Aktivitaet der Raid-Mechanik."
+        description="Konfiguration und Aktivität der Raid-Mechanik."
         primaryAction={
           <button
             className="admin-button admin-button-secondary"

@@ -20,7 +20,7 @@ type ToastState = {
 function summarizeGenerateResult(result: { results?: Array<{ ok?: boolean; action?: string; status?: string }> }) {
   const entries = result.results ?? [];
   if (!entries.length) {
-    return 'Keine faelligen Gutschriften fuer diesen Affiliate gefunden.';
+    return 'Keine fälligen Gutschriften für diesen Affiliate gefunden.';
   }
 
   const createdCount = entries.filter((entry) => entry.ok && entry.action !== 'existing').length;
@@ -159,7 +159,7 @@ export function AffiliateDetailPanel({ login, onClose }: AffiliateDetailPanelPro
               <p className="text-xs font-semibold uppercase tracking-[0.2em] text-text-secondary">Readiness</p>
               <p className="mt-2 text-sm leading-6 text-text-secondary">
                 {readiness.canGenerate
-                  ? 'Das Profil ist fuer die automatische Gutschrift-Erstellung vorbereitet.'
+                  ? 'Das Profil ist für die automatische Gutschrift-Erstellung vorbereitet.'
                   : 'Das Profil blockiert aktuell die automatische Gutschrift-Erstellung.'}
               </p>
             </div>
@@ -321,8 +321,8 @@ export function AffiliateDetailPanel({ login, onClose }: AffiliateDetailPanelPro
 
       <ConfirmDialog
         open={confirmGenerate}
-        title="Gutschrift fuer diesen Affiliate generieren?"
-        description="Es werden alle faelligen Gutschriften fuer diesen Affiliate erzeugt und, falls moeglich, direkt versendet."
+        title="Gutschrift für diesen Affiliate generieren?"
+        description="Es werden alle fälligen Gutschriften für diesen Affiliate erzeugt und, falls möglich, direkt versendet."
         confirmLabel="Jetzt generieren"
         busy={generateMutation.isPending}
         onConfirm={() => {

@@ -323,7 +323,7 @@ export default function BotControlPage() {
               <div>
                 <p className="text-sm font-semibold text-white">Editor folgt in Schritt 5 (Content & Comms)</p>
                 <p className="mt-2 text-sm leading-6 text-text-secondary">
-                  Ueber `fetchConfigOverview()` ist aktuell kein belastbarer Default-Snapshot fuer Live-Announcements verfuegbar.
+                  Über `fetchConfigOverview()` ist aktuell kein belastbarer Default-Snapshot für Live-Announcements verfügbar.
                 </p>
               </div>
             </div>
@@ -334,8 +334,8 @@ export default function BotControlPage() {
       <ConfirmDialog
         open={confirmReloadOpen}
         title="Bot reloaden?"
-        description="Der Reload stoesst den Legacy-Reload fuer alle Cogs an. Laufende Tasks koennen kurz unterbrochen werden."
-        confirmLabel="Reload ausfuehren"
+        description="Der Reload stößt den Legacy-Reload für alle Cogs an. Laufende Tasks können kurz unterbrochen werden."
+        confirmLabel="Reload ausführen"
         cancelLabel="Abbrechen"
         tone="danger"
         busy={reloadMutation.isPending}
@@ -346,7 +346,7 @@ export default function BotControlPage() {
             setToast({
               open: true,
               tone: result.ok ? 'success' : 'error',
-              message: result.message || 'Reload ausgefuehrt.',
+              message: result.message || 'Reload ausgeführt.',
             });
             if (result.ok) {
               setConfirmReloadOpen(false);

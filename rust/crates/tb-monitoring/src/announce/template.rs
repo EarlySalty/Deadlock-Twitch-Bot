@@ -101,7 +101,7 @@ impl Default for AnnouncementConfig {
             image_url_template: String::new(),
             image_ratio: "16:9".to_string(),
             cache_buster: true,
-            footer_text_template: "Auf Twitch ansehen fuer mehr Action!".to_string(),
+            footer_text_template: "Auf Twitch ansehen für mehr Action!".to_string(),
             footer_icon_mode: "twitch".to_string(),
             footer_timestamp_mode: "started_at".to_string(),
             button_enabled: true,

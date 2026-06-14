@@ -257,7 +257,7 @@ export default function AuditLogPage() {
         />
       </div>
 
-      <Section title="Filter" hint="Zeitraum, Quellen und Freitext fuer Target, Actor oder Beschreibung.">
+      <Section title="Filter" hint="Zeitraum, Quellen und Freitext für Target, Actor oder Beschreibung.">
         <div className="space-y-5">
           <div className="space-y-3">
             <p className="text-xs font-semibold uppercase tracking-[0.18em] text-text-secondary">Sources</p>

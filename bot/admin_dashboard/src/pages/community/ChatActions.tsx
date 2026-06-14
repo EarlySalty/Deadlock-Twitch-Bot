@@ -156,7 +156,7 @@ export default function ChatActionsPage() {
                 <p className="text-xs font-semibold uppercase tracking-[0.18em] text-text-secondary">Streamer</p>
                 <div className="mt-3">
                   <SearchInput
-                    placeholder="Streamer suchen und auswaehlen …"
+                    placeholder="Streamer suchen und auswählen …"
                     defaultValue={pickerValue}
                     onDebouncedChange={(value) => {
                       setPickerValue(value);
@@ -279,7 +279,7 @@ export default function ChatActionsPage() {
 
             <div className="flex flex-wrap items-center justify-between gap-3">
               <div className="text-sm text-text-secondary">
-                {selectedStreamer ? `Ziel: ${selectedStreamer.displayName || selectedStreamer.login}` : 'Bitte zuerst einen Streamer auswaehlen.'}
+                {selectedStreamer ? `Ziel: ${selectedStreamer.displayName || selectedStreamer.login}` : 'Bitte zuerst einen Streamer auswählen.'}
               </div>
               <button
                 type="button"
@@ -337,8 +337,8 @@ export default function ChatActionsPage() {
         title="Chat-Aktion senden?"
         description={
           selectedLogin
-            ? `${mode} wird an ${selectedLogin} gesendet. Bitte Nachricht und Zielchannel noch einmal pruefen.`
-            : 'Bitte zuerst einen Streamer auswaehlen.'
+            ? `${mode} wird an ${selectedLogin} gesendet. Bitte Nachricht und Zielchannel noch einmal prüfen.`
+            : 'Bitte zuerst einen Streamer auswählen.'
         }
         confirmLabel="Senden"
         busy={partnerChatMutation.isPending}

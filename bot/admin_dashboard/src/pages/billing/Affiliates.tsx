@@ -312,7 +312,7 @@ export function Affiliates() {
       <ConfirmDialog
         open={confirmGenerateAll}
         title="Alle faelligen Gutschriften generieren?"
-        description="Es werden alle aktuell faelligen Gutschriften erzeugt und, falls moeglich, direkt versendet."
+        description="Es werden alle aktuell fälligen Gutschriften erzeugt und, falls möglich, direkt versendet."
         confirmLabel="Jetzt generieren"
         busy={generateMutation.isPending}
         onConfirm={() => {

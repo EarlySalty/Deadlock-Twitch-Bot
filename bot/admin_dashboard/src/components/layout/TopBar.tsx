@@ -214,7 +214,7 @@ export function TopBar({ auth }: TopBarProps) {
               {streamersQuery.isLoading && !streamersQuery.data ? (
                 <div className="px-3 py-3 text-sm text-text-secondary">Streamer werden geladen …</div>
               ) : streamersQuery.isError ? (
-                <div className="px-3 py-3 text-sm text-text-secondary">Suche ist gerade nicht verfuegbar.</div>
+                <div className="px-3 py-3 text-sm text-text-secondary">Suche ist gerade nicht verfügbar.</div>
               ) : matches.length ? (
                 <div className="space-y-1">
                   {matches.map((row, index) => (

@@ -73,7 +73,7 @@ export default function AnnouncementsPage() {
     <section className="space-y-6">
       <PageHeader
         title="Announcements"
-        description="Bearbeitet den globalen Announcement-Text fuer den Bot. Timing und Modus bleiben in den bestehenden Bot-Control-Flows."
+        description="Bearbeitet den globalen Announcement-Text für den Bot. Timing und Modus bleiben in den bestehenden Bot-Control-Flows."
         primaryAction={
           <button
             className="admin-button admin-button-secondary"
@@ -87,7 +87,7 @@ export default function AnnouncementsPage() {
       />
 
       <div className="grid gap-6 xl:grid-cols-[1.1fr_0.9fr]">
-        <Section title="Editor" hint="Direkter Text-Body fuer den globalen Announcement-Modus.">
+        <Section title="Editor" hint="Direkter Text-Body für den globalen Announcement-Modus.">
           <label className="block space-y-3">
             <span className="text-sm font-medium text-white">Body</span>
             <textarea

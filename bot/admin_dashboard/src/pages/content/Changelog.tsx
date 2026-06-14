@@ -56,7 +56,7 @@ export default function ChangelogPage() {
     <section className="space-y-6">
       <PageHeader
         title="Changelog"
-        description="Erfasst neue Internal-Home-Changelog-Eintraege. Falls Verlauf verfuegbar ist, werden die letzten Eintraege darunter gespiegelt."
+        description="Erfasst neue Internal-Home-Changelog-Einträge. Falls Verlauf verfügbar ist, werden die letzten Einträge darunter gespiegelt."
         primaryAction={
           <button
             className="admin-button admin-button-secondary"
@@ -78,7 +78,7 @@ export default function ChangelogPage() {
                 value={title}
                 onChange={(event) => setTitle(event.target.value)}
                 className="admin-input"
-                placeholder="Kurzueberschrift"
+                placeholder="Kurzüberschrift"
               />
             </label>
 
@@ -105,7 +105,7 @@ export default function ChangelogPage() {
           </div>
         </Section>
 
-        <Section title="Preview" hint="Vorschau des naechsten Changelog-Eintrags.">
+        <Section title="Preview" hint="Vorschau des nächsten Changelog-Eintrags.">
           <div className="rounded-[1.5rem] border border-white/10 bg-slate-950/35 p-5">
             <div className="space-y-4">
               <div>
@@ -124,10 +124,10 @@ export default function ChangelogPage() {
         </Section>
       </div>
 
-      <Section title="History" hint="Die letzten 20 Internal-Home-Changelog-Eintraege, sofern das Backend sie im Home-Payload liefert.">
+      <Section title="History" hint="Die letzten 20 Internal-Home-Changelog-Einträge, sofern das Backend sie im Home-Payload liefert.">
         {history.length === 0 ? (
           <div className="rounded-[1.5rem] border border-dashed border-white/10 bg-white/[0.02] p-5 text-sm text-text-secondary">
-            Kein Verlauf verfuegbar.
+            Kein Verlauf verfügbar.
           </div>
         ) : (
           <div className="space-y-4">
