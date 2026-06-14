@@ -12,11 +12,12 @@ use std::sync::{Arc, Mutex};
 use chrono::Utc;
 use sqlx::PgPool;
 use tb_raid::{
-    build_partner_raid_message, classify_partner_raid_arrival, decide_blacklist_action,
-    serialize_confirmation_signals, ArrivalConfirmationService, ArrivalSignalContext,
-    ArrivalTrackingStore, BlacklistScheduleAction, ConfirmedExternalRecruitmentRaid,
-    ExternalRecruitmentStore, ManualRaidSuppression, PendingRaid, PendingRaidStore, RaidArrivalSink,
-    RaidBlacklistStore, RaidHistoryStore, RecordArrivalInput, ScoreTrackingStore,
+    build_partner_raid_message, build_recruitment_message, classify_partner_raid_arrival,
+    decide_blacklist_action, plan_recruitment_delivery, serialize_confirmation_signals,
+    ArrivalConfirmationService, ArrivalSignalContext, ArrivalTrackingStore, BlacklistScheduleAction,
+    ConfirmedExternalRecruitmentRaid, ExternalRecruitmentStore, ManualRaidSuppression, PendingRaid,
+    PendingRaidStore, RaidArrivalSink, RaidBlacklistStore, RaidHistoryStore, RecordArrivalInput,
+    RecruitmentDeliveryConfig, RecruitmentDeliveryRequest, ScoreTrackingStore,
     EXTERNAL_RECRUITMENT_BLACKLIST_GRACE_SECONDS, EXTERNAL_RECRUITMENT_RAID_LIMIT,
 };
 
@@ -400,33 +401,13 @@ impl RaidArrivalSinkImpl {
 
         // 1. silent_raid-Gate ZUERST (raid_arrival_runtime.py:395 +
         //    runtime_core.py:408): aktive Partner-Zeile des Ziels prüfen.
-        match sqlx::query_scalar::<_, bool>(
-            "SELECT COALESCE(silent_raid, 0) <> 0 FROM twitch_partners \
-             WHERE LOWER(twitch_login) = LOWER($1) AND status = 'active' LIMIT 1",
-        )
-        .bind(to_broadcaster_login)
-        .fetch_optional(&self.pool)
-        .await
-        {
-            Ok(Some(true)) => {
-                // Python raid_arrival_runtime.py:396 — Nachricht unterdrückt.
-                tracing::debug!(
-                    from = %from_broadcaster_login,
-                    to = %to_broadcaster_login,
-                    "Partner-Raid-Nachricht unterdrückt (silent_raid)"
-                );
-                return;
-            }
-            // Keine Zeile oder silent_raid=0 → weiter (Python: bool(0) → False).
-            Ok(_) => {}
-            Err(error) => {
-                // Python schluckt Lookup-Fehler und gibt False zurück → weiter.
-                tracing::debug!(
-                    %error,
-                    to = %to_broadcaster_login,
-                    "silent_raid-Lookup fehlgeschlagen — sende trotzdem"
-                );
-            }
+        if self.target_silent_raid(to_broadcaster_login).await {
+            tracing::debug!(
+                from = %from_broadcaster_login,
+                to = %to_broadcaster_login,
+                "Partner-Raid-Nachricht unterdrückt (silent_raid)"
+            );
+            return;
         }
 
         // 2. DB-Chat-Suppression (partner_raid_delivery.py:239): wenn der
@@ -505,6 +486,163 @@ impl RaidArrivalSinkImpl {
                     %error,
                     to = %to_broadcaster_login,
                     "Partner-Raid-Nachricht-Send fehlgeschlagen"
+                ),
+            }
+        });
+    }
+
+    /// silent_raid-Lookup für den Ziel-Channel (Python `_lookup_silent_raid_enabled`,
+    /// runtime_core.py:408): aktive Partner-Zeile, Spalte `silent_raid`. Keine
+    /// Zeile / Lookup-Fehler → `false` (Python schluckt Fehler → False). Für
+    /// externe Recruitment-Ziele (kein aktiver Partner-Eintrag) stets `false`.
+    async fn target_silent_raid(&self, to_broadcaster_login: &str) -> bool {
+        match sqlx::query_scalar::<_, bool>(
+            "SELECT COALESCE(silent_raid, 0) <> 0 FROM twitch_partners \
+             WHERE LOWER(twitch_login) = LOWER($1) AND status = 'active' LIMIT 1",
+        )
+        .bind(to_broadcaster_login)
+        .fetch_optional(&self.pool)
+        .await
+        {
+            Ok(Some(true)) => true,
+            Ok(_) => false,
+            Err(error) => {
+                tracing::debug!(
+                    %error,
+                    to = %to_broadcaster_login,
+                    "silent_raid-Lookup fehlgeschlagen — als nicht-silent behandelt"
+                );
+                false
+            }
+        }
+    }
+
+    /// Recruitment-Nachricht an einen extern geraideten Nicht-Partner-Channel
+    /// (B3, Recruitment-Teil). Port von `send_recruitment_message_now`
+    /// (recruitment_messaging.py:494) inkl. silent_raid-Gate
+    /// (raid_arrival_runtime.py:395; für externe Ziele stets vacuous).
+    ///
+    /// `total_recruitment_raid_count` ist der bereits persistierte Count aus dem
+    /// `record_confirmed_raid`-Schritt (Python `confirmed_external_raid_count`).
+    ///
+    /// Reihenfolge wie Python: silent_raid → Suppression(source=recruitment) →
+    /// recent_raids-Count → plan_recruitment_delivery (followers_total=None, da
+    /// invite_variant nur ungenutzte Metadaten beeinflusst) → Nachricht bauen →
+    /// 15 s Delay-spawn → send; bei erfolgreichem Send (Sent) wird der verzögerte
+    /// Bot-Ban-Check geplant (recruitment_messaging.py:678, 3600 s).
+    async fn send_recruitment_message(
+        &self,
+        from_broadcaster_login: &str,
+        to_broadcaster_login: &str,
+        to_broadcaster_id: &str,
+        total_recruitment_raid_count: i64,
+    ) {
+        let Some(chat_api) = self.chat_api.clone() else {
+            tracing::debug!("Chat-API nicht verfügbar für Recruitment-Nachricht");
+            return;
+        };
+
+        if self.target_silent_raid(to_broadcaster_login).await {
+            tracing::debug!(
+                to = %to_broadcaster_login,
+                "Recruitment-Nachricht unterdrückt (silent_raid)"
+            );
+            return;
+        }
+
+        if let Some(suppression) = self.outbound_suppression.as_ref() {
+            if let Some(entry) = suppression
+                .check_suppression(to_broadcaster_login, "recruitment")
+                .await
+            {
+                tracing::info!(
+                    to = %to_broadcaster_login,
+                    reason_code = %entry.reason_code,
+                    until = %entry.suppressed_until,
+                    "Recruitment-Nachricht übersprungen (gespeicherte Chat-Suppression)"
+                );
+                return;
+            }
+        }
+
+        // recent_raids: erfolgreiche eingegangene Raids des Ziels in den letzten
+        // 24 h (recruitment_messaging.py:803). Lookup-Fehler → 0 (Python-Default).
+        let recent_raid_count = sqlx::query_scalar::<_, i64>(
+            "SELECT COUNT(*) FROM twitch_raid_history \
+             WHERE to_broadcaster_id = $1 AND COALESCE(success, FALSE) IS TRUE \
+               AND executed_at > NOW() - INTERVAL '1 day'",
+        )
+        .bind(to_broadcaster_id)
+        .fetch_one(&self.pool)
+        .await
+        .unwrap_or(0);
+
+        // followers_total = None: beeinflusst in Python nur invite_variant, das
+        // weder in die Nachricht noch in persistierten Zustand einfließt.
+        let request = RecruitmentDeliveryRequest {
+            from_broadcaster_login: from_broadcaster_login.to_string(),
+            to_broadcaster_login: to_broadcaster_login.to_string(),
+            target_id: Some(to_broadcaster_id.to_string()),
+            recent_raid_count,
+            total_recruitment_raid_count: Some(total_recruitment_raid_count),
+            followers_total: None,
+            chat_bot_available: true,
+            outbound_chat_suppressed: false,
+        };
+        let plan = plan_recruitment_delivery(&request, &RecruitmentDeliveryConfig::default());
+        if !plan.should_deliver() {
+            tracing::info!(
+                to = %to_broadcaster_login,
+                reason = plan.reason.unwrap_or("blocked"),
+                "Recruitment-Nachricht übersprungen"
+            );
+            return;
+        }
+        let Some(message_variant) = plan.message_variant else {
+            return;
+        };
+
+        let message = build_recruitment_message(message_variant, to_broadcaster_login);
+
+        let pool = self.pool.clone();
+        let to_broadcaster_id = to_broadcaster_id.to_string();
+        let to_broadcaster_login = to_broadcaster_login.to_string();
+        tokio::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_secs(15)).await;
+            match chat_api.send_message(&to_broadcaster_id, &message).await {
+                Ok(tb_chat::types::SendOutcome::Sent) => {
+                    tracing::info!(to = %to_broadcaster_login, "Recruitment-Nachricht gesendet");
+                    if let Err(error) = ExternalRecruitmentStore::new(pool)
+                        .schedule_bot_ban_check(
+                            &to_broadcaster_id,
+                            &to_broadcaster_login,
+                            "recruitment",
+                            3600,
+                        )
+                        .await
+                    {
+                        tracing::debug!(
+                            %error,
+                            to = %to_broadcaster_login,
+                            "schedule_external_target_ban_check fehlgeschlagen"
+                        );
+                    }
+                }
+                Ok(tb_chat::types::SendOutcome::Dropped { code, message }) => tracing::debug!(
+                    to = %to_broadcaster_login,
+                    %code,
+                    drop_message = %message,
+                    "Recruitment-Nachricht von Twitch verworfen"
+                ),
+                Ok(tb_chat::types::SendOutcome::HttpError { status, .. }) => tracing::debug!(
+                    to = %to_broadcaster_login,
+                    status,
+                    "Recruitment-Nachricht-Send: HTTP-Fehler"
+                ),
+                Err(error) => tracing::debug!(
+                    %error,
+                    to = %to_broadcaster_login,
+                    "Recruitment-Nachricht-Send fehlgeschlagen"
                 ),
             }
         });
@@ -698,8 +836,8 @@ impl RaidArrivalSink for RaidArrivalSinkImpl {
         // raid_arrival_runtime.py:395-409: silent_raid-Gate, dann bei
         // should_send_partner_raid_message die Nachricht senden. Der Versand
         // (silent_raid/Suppression/Count-Reads synchron, sleep+send im spawn)
-        // steckt in send_partner_raid_message. (Recruitment-Message ist im
-        // nativen Helix-Modell nicht möglich — bewusst NICHT portiert.)
+        // steckt in send_partner_raid_message. Der gegenseitig ausschließende
+        // Recruitment-Pfad (should_send_recruitment_message) folgt in Schritt 5b.
         if decision.should_send_partner_raid_message {
             self.send_partner_raid_message(
                 from_broadcaster_login,
@@ -783,6 +921,21 @@ impl RaidArrivalSink for RaidArrivalSinkImpl {
                         }
                     }
                 }
+            }
+
+            // 5b. Recruitment-Nachricht an den externen Ziel-Channel (B3,
+            // Recruitment-Teil). Python raid_arrival_runtime.py:410: bei
+            // should_send_recruitment_message (= is_external = should_persist)
+            // mit dem soeben persistierten Count senden. silent_raid/Suppression/
+            // recent-Count/Plan/Delay/Send + Ban-Check stecken in der Methode.
+            if decision.should_send_recruitment_message {
+                self.send_recruitment_message(
+                    from_broadcaster_login,
+                    to_broadcaster_login,
+                    to_broadcaster_id,
+                    count,
+                )
+                .await;
             }
         }
     }
@@ -997,7 +1150,7 @@ mod tests {
             .await
             .unwrap();
         for ddl in [
-            "CREATE TABLE twitch_partners (twitch_user_id TEXT, twitch_login TEXT, status TEXT)",
+            "CREATE TABLE twitch_partners (twitch_user_id TEXT, twitch_login TEXT, status TEXT, silent_raid INTEGER DEFAULT 0)",
             "CREATE TABLE twitch_streamer_identities (twitch_user_id TEXT, twitch_login TEXT)",
             "CREATE TABLE twitch_live_state (twitch_user_id TEXT PRIMARY KEY, last_started_at TEXT, last_game TEXT, active_session_id BIGINT)",
             "CREATE TABLE twitch_raid_history (id BIGSERIAL PRIMARY KEY, from_broadcaster_id TEXT, from_broadcaster_login TEXT, to_broadcaster_id TEXT, to_broadcaster_login TEXT, executed_at TIMESTAMPTZ, success BOOLEAN)",
@@ -1084,5 +1237,33 @@ mod tests {
                 .await
                 .unwrap();
         assert_eq!(track_cnt, 0, "kein Partner-Ziel -> kein Score-Tracking");
+    }
+
+    #[tokio::test]
+    async fn target_silent_raid_aktiver_partner_vs_extern() {
+        let pool = setup("t6e_silent_raid").await;
+        sqlx::query(
+            "INSERT INTO twitch_partners (twitch_user_id, twitch_login, status, silent_raid) \
+             VALUES ('300','silentpartner','active',1)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO twitch_partners (twitch_user_id, twitch_login, status, silent_raid) \
+             VALUES ('301','loudpartner','active',0)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        let pending_store = Arc::new(Mutex::new(PendingRaidStore::new()));
+        let suppression = Arc::new(Mutex::new(tb_raid::ManualRaidSuppression::new()));
+        let sink =
+            RaidArrivalSinkImpl::new(pool.clone(), pending_store, suppression, "deadlock", None, None);
+        // aktiver Partner mit silent_raid=1 → true; mit 0 → false; externer
+        // Kanal ohne (aktiven) Partner-Eintrag → false (keine Zeile).
+        assert!(sink.target_silent_raid("silentpartner").await);
+        assert!(!sink.target_silent_raid("loudpartner").await);
+        assert!(!sink.target_silent_raid("externer_kanal").await);
     }
 }
