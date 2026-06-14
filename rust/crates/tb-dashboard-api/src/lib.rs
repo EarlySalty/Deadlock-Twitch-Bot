@@ -52,12 +52,22 @@ pub fn build_public_router(pool: PgPool) -> Router {
 /// Auth-Level wird per Extension eingesetzt — `AuthLevel` als `FromRequestParts`
 /// liest den Token selbst aus der Extension.
 pub fn build_authed_router(pool: PgPool, token: String) -> Router {
-    use handlers::{ads_schedule, audience, audience_demographics, auth_status, billing, category_comparison, category_leaderboard, category_timings, follower_funnel, loyalty_curve, lurker_analysis, overview, performance, raid_analytics, rankings, retention_curve, session_detail, silent_settings, spa, streamers, title_performance, viewer_timeline, viewers};
+    use handlers::{ads_schedule, audience, audience_demographics, auth_status, billing, category_comparison, category_leaderboard, category_timings, follower_funnel, internal_home, loyalty_curve, lurker_analysis, overview, performance, raid_analytics, rankings, retention_curve, session_detail, silent_settings, spa, streamers, title_performance, viewer_timeline, viewers};
 
     Router::new()
         .route(
             "/twitch/api/v2/auth-status",
             get(auth_status::auth_status_handler),
+        )
+        // Internal-Home: gebündelte Dashboard-Startseite (Profil, KPIs, Bot-Events,
+        // Changelog). GET liest, POST legt einen Changelog-Eintrag an (Admin-only).
+        .route(
+            "/twitch/api/v2/internal-home",
+            get(internal_home::get_handler),
+        )
+        .route(
+            "/twitch/api/v2/internal-home/changelog",
+            post(internal_home::changelog_handler),
         )
         // Streamer-Selbstbedienung: Silent-Notification-Flags (sync zu !silentban/
         // !silentraid). GET liest, POST setzt beide Flags auf twitch_partners.

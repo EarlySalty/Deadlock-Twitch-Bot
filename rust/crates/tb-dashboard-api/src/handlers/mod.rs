@@ -20,6 +20,7 @@ pub mod viewer_timeline;
 pub mod viewers;
 pub mod audience;
 pub mod follower_funnel;
+pub mod internal_home;
 pub mod performance;
 pub mod rankings;
 pub mod retention_curve;

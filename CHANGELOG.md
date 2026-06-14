@@ -1,3 +1,11 @@
+## #220 — Dashboard-Startseite läuft wieder (nativ statt über Python)
+
+**Ausgangslage:** Die interne Dashboard-Startseite (mit Status-Übersicht, letzten Streams, Bot-Aktivität und der „Was gibt's Neues"-Liste) wurde noch von einem alten Python-Dienst geliefert, während das übrige Dashboard schon auf dem neuen System läuft. Beim Abschalten des Python-Dienstes im Zuge der Umstellung fiel diese eine Seite aus — sie lieferte nur noch einen Fehler (502), weil das neue System sie mangels eigener Umsetzung bislang nur an das nun tote Python weiterreichte. Damit war auch das Einspielen neuer Changelog-Einträge blockiert.
+
+**Was geändert wurde:** Die komplette Startseite samt Changelog-Verwaltung ist jetzt direkt im neuen System umgesetzt — kein Umweg über den alten Python-Dienst mehr.
+
+**Wie es funktioniert:** Die Seite baut ihre Antwort jetzt selbst aus den vorhandenen Daten zusammen: Profil/Status, Kennzahlen und letzte Streams aus den Session-Daten, OAuth-/Partner-Status, Live-Status, sowie eine Aktivitätsliste aus Ban-/Raid-Verlauf und den lokalen Auto-Ban-/Service-Warn-Logs (zusammengeführt, nach Zeit sortiert, gekappt). Jeder Datenblock ist einzeln fehlertolerant — fällt eine Quelle aus, bleibt der Block leer statt die ganze Seite zu kippen. Die Rechte greifen wie zuvor: nur Admin/lokaler Zugriff sehen interne IDs und dürfen Changelog-Einträge anlegen; ein normaler Streamer sieht nur seinen eigenen Kanal. Weil die Seite jetzt nativ registriert ist, übernimmt sie automatisch — der bisherige Weiterleitungs-Umweg greift nur noch für noch nicht umgestellte Pfade.
+
 ## #219 — Sammelfix: weitere Regressionen aus dem Rust-Umbau
 
 **Ausgangslage:** Beim Umbau der Bot-Logik von Python auf Rust wurde mehrfach die eigentliche Funktion korrekt übernommen, aber eine vorgelagerte Schutzbedingung ging verloren — dieselbe Fehlerklasse wie beim Re-Auth-Hinweis (#218). Ein Stück-für-Stück-Abgleich gegen die alte Python-Version hat sieben solcher Fälle aufgedeckt und bestätigt. Behoben:
