@@ -7,6 +7,8 @@
 //! Orchestrator + Output-Parser — das schwere Demo-Parsing steckt im Binary,
 //! sodass der Rust-Port dieselben `boon`-Subkommandos via Subprocess aufruft.
 //!
-//! Slices (bottom-up): [`deadlock_client`] (Match-History/Metadata-API).
+//! Slices (bottom-up): [`deadlock_client`] (Match-History/Metadata-API),
+//! [`demo_downloader`] (Demo-Download + bz2-Entpacken + lokaler Cache).
 
 pub mod deadlock_client;
+pub mod demo_downloader;
