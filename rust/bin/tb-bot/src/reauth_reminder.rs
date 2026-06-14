@@ -54,8 +54,9 @@ impl ReauthReminder {
     }
 
     /// Bei Go-Live aufzurufen. Liefert `true`, wenn ein Reminder gesendet wurde.
-    /// Kein Reminder, wenn der Partner voll autorisiert ist, gerade erst
-    /// erinnert wurde, oder kein gültiger Send-Pfad existiert.
+    /// Kein Reminder, wenn der Kanal nie autorisiert war (keine Auth-Zeile),
+    /// voll autorisiert ist, gerade erst erinnert wurde, oder kein gültiger
+    /// Send-Pfad existiert.
     pub async fn maybe_remind(&self, broadcaster_id: &str, login: &str) -> bool {
         let broadcaster_id = broadcaster_id.trim();
         let login = login.trim().to_lowercase();
@@ -63,9 +64,11 @@ impl ReauthReminder {
             return false;
         }
 
-        // Voll autorisiert → kein Reminder (Python `_is_fully_authed`).
+        // Reminder nur, wenn eine `twitch_raid_auth`-Zeile existiert UND eine
+        // Re-Auth verlangt. Fehlende Zeile = nie autorisiert (z. B. reiner
+        // `is_monitored_only`-Scout-Kanal) → kein Reminder.
         let row = self.load_needs_reauth(broadcaster_id).await;
-        if classify_fully_authed(row) {
+        if !should_remind(row) {
             return false;
         }
 
@@ -137,6 +140,17 @@ fn classify_fully_authed(row: Option<Option<bool>>) -> bool {
     matches!(row, Some(Some(false)))
 }
 
+/// Reminder-Gate: senden nur, wenn eine `twitch_raid_auth`-Zeile EXISTIERT und
+/// nicht voll autorisiert ist. Eine fehlende Zeile (`None`) heißt „nie
+/// autorisiert" — z. B. ein reiner `is_monitored_only`-Scout-Kanal, der nie
+/// etwas mit dem Raid-/Stats-Bot zu tun hatte; für den gibt es nichts zu
+/// RE-autorisieren. Im Python lag dieser Schutz in der Aufruf-Topologie
+/// (`_handle_stream_went_live`-Gates); beim nativen Port fiel er weg, sodass
+/// fremde Streamer beim Go-Live fälschlich die Erinnerung bekamen.
+fn should_remind(row: Option<Option<bool>>) -> bool {
+    row.is_some() && !classify_fully_authed(row)
+}
+
 /// Dedupe-Entscheidung: senden, wenn noch nie gesendet oder das Fenster
 /// abgelaufen ist.
 fn should_send(last: Option<Instant>, now: Instant, window: Duration) -> bool {
@@ -160,6 +174,20 @@ mod tests {
         assert!(!classify_fully_authed(Some(None)));
         // Keine Zeile → nicht fully authed.
         assert!(!classify_fully_authed(None));
+    }
+
+    #[test]
+    fn should_remind_nur_bei_bestehender_reauth_zeile() {
+        // Regression (sagetheman_): keine Zeile = nie autorisiert (z. B. reiner
+        // is_monitored_only-Kanal) → KEIN Reminder. Genau dieser Fall hat den
+        // Fehl-Reminder an Fremd-Streamer ausgelöst.
+        assert!(!should_remind(None));
+        // Zeile da, voll autorisiert (needs_reauth = false) → kein Reminder.
+        assert!(!should_remind(Some(Some(false))));
+        // Zeile da, needs_reauth = true → Reminder (echter Re-Auth-Fall).
+        assert!(should_remind(Some(Some(true))));
+        // Zeile da, needs_reauth = NULL → Reminder (Python-Parität: nicht fully authed).
+        assert!(should_remind(Some(None)));
     }
 
     #[test]
