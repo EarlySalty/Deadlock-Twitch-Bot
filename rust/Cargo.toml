@@ -18,6 +18,7 @@ members = [
     "crates/tb-internal-api",
     "crates/tb-social-media",
     "crates/tb-highlight",
+    "crates/tb-engagement",
     "bin/tb-dashboard",
     "bin/tb-bot",
 ]
@@ -72,6 +73,7 @@ tb-dashboard-api = { path = "crates/tb-dashboard-api" }
 tb-internal-api  = { path = "crates/tb-internal-api" }
 tb-social-media  = { path = "crates/tb-social-media" }
 tb-highlight     = { path = "crates/tb-highlight" }
+tb-engagement    = { path = "crates/tb-engagement" }
 url = "2"
 regex = "1"
 unicode-normalization = "0.1"
