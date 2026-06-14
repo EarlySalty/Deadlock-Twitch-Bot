@@ -72,6 +72,10 @@ pub fn build_internal_router(
             get(discord_invite::handler),
         )
         .route(
+            &format!("{base}/streamer-invites"),
+            get(discord_invite::list_all_handler),
+        )
+        .route(
             &format!("{base}/chat/command"),
             post(chat_command::handler),
         )
