@@ -39,8 +39,6 @@ mod eventsub_stats_adapter;
 mod oauth_followups;
 mod offline_side_effects;
 mod partner_lookup;
-// Slice 1: Datenschicht ohne Aufrufer — Wiring folgt in Slice 2.
-#[allow(dead_code)]
 mod partner_recruit;
 mod raid_adapters;
 mod raid_arrival_wiring;
@@ -94,6 +92,28 @@ use wiring::{
 struct SubscriptionPollHooks {
     manager: Arc<SubscriptionManager>,
     pool: sqlx::PgPool,
+    /// ChatApi für den Partner-Recruiting-Outreach; `None` ohne Bot-Token.
+    chat_api: Option<Arc<dyn tb_chat::ChatApi>>,
+    /// Letzter Recruiting-Durchlauf (interne 30-min-Drosselung, Python
+    /// `_last_recruit_check`).
+    recruit_last_check: std::sync::Mutex<Option<std::time::Instant>>,
+}
+
+impl SubscriptionPollHooks {
+    /// `true` wenn der Recruiting-Durchlauf fällig ist (≥ 30 min seit dem
+    /// letzten) und stempelt zugleich neu. Python `_run_partner_recruit`-Guard.
+    fn recruit_due(&self) -> bool {
+        let now = std::time::Instant::now();
+        let mut guard = self.recruit_last_check.lock().unwrap();
+        let due = match *guard {
+            Some(last) => now.duration_since(last) >= std::time::Duration::from_secs(1800),
+            None => true,
+        };
+        if due {
+            *guard = Some(now);
+        }
+        due
+    }
 }
 
 #[async_trait::async_trait]
@@ -176,22 +196,34 @@ impl PollHooks for SubscriptionPollHooks {
         changed
     }
 
-    /// Tick-Abschluss: fällige Partner-Raid-Score-Refreshes aus Poll-Transitions
-    /// anwenden (zusätzlich zum 300s-Voll-Reconcile, damit Scores ohne bis zu
-    /// 5 min Verzögerung aktuell sind). (category_streams/Partner-Recruiting folgt
-    /// separat.)
+    /// Tick-Abschluss: Partner-Recruiting-Outreach aus dem category_streams-Sample
+    /// dieses Ticks (Python `_run_partner_recruit`) + fällige Partner-Raid-Score-
+    /// Refreshes aus Poll-Transitions (zusätzlich zum 300s-Voll-Reconcile).
     async fn after_tick(&self, report: tb_monitoring::TickReport) {
-        if report.score_refreshes.is_empty() {
-            return;
+        // Partner-Recruiting: intern auf 30 min gedrosselt; die schwere Arbeit
+        // (Kandidaten-Query + Sends mit 60s-Throttle) läuft gespawnt, damit der
+        // Tick nicht blockiert. Nur mit gebootetem Bot-Token (chat_api Some).
+        if let Some(chat_api) = self.chat_api.clone() {
+            if self.recruit_due() {
+                let pool = self.pool.clone();
+                let category_streams = report.category_streams;
+                tokio::spawn(async move {
+                    partner_recruit::run_partner_recruit(&pool, &chat_api, &category_streams).await;
+                });
+            }
         }
-        let pairs: Vec<(String, String)> = report
-            .score_refreshes
-            .iter()
-            .map(|s| (s.twitch_user_id.clone(), s.login.clone()))
-            .collect();
-        let resolver = ScoreRefreshResolver::new(self.pool.clone());
-        if let Err(e) = resolver.refresh_scores(&pairs, chrono::Utc::now()).await {
-            tracing::warn!("after_tick: Score-Refresh fehlgeschlagen: {e}");
+
+        // Fällige Partner-Raid-Score-Refreshes anwenden.
+        if !report.score_refreshes.is_empty() {
+            let pairs: Vec<(String, String)> = report
+                .score_refreshes
+                .iter()
+                .map(|s| (s.twitch_user_id.clone(), s.login.clone()))
+                .collect();
+            let resolver = ScoreRefreshResolver::new(self.pool.clone());
+            if let Err(e) = resolver.refresh_scores(&pairs, chrono::Utc::now()).await {
+                tracing::warn!("after_tick: Score-Refresh fehlgeschlagen: {e}");
+            }
         }
     }
 }
@@ -347,6 +379,11 @@ async fn main() {
     // Muss VOR der Hooks-Komposition passieren, damit die OAuth-Followup-
     // Begrüßung den nativen Send statt des Python-Umwegs (8779) nutzt.
     let chat_api_handle = chat_wiring::try_build_api(helix.as_ref().clone()).await;
+    // ChatApi-Clone für den Partner-Recruiting-Outreach FRÜH ziehen — das Handle
+    // wird weiter unten (Pipeline-Aufbau) konsumiert und ist bei der
+    // SubscriptionPollHooks-Konstruktion sonst nicht mehr im Scope.
+    let recruit_chat_api: Option<Arc<dyn tb_chat::ChatApi>> =
+        chat_api_handle.as_ref().map(|h| h.api.clone());
 
     // Raid-Verdrahtung: mit Manager + Helix + Krypto-Key sind alle vier
     // Raid-Kopplungen echt (Auto-Raid, Arrival, Score-Refresh, Blacklist-Guard).
@@ -730,6 +767,8 @@ async fn main() {
                     Some(manager) => Arc::new(SubscriptionPollHooks {
                         manager: manager.clone(),
                         pool: pool.clone(),
+                        chat_api: recruit_chat_api.clone(),
+                        recruit_last_check: std::sync::Mutex::new(None),
                     }),
                     None => Arc::new(tb_monitoring::NoopPollHooks),
                 };

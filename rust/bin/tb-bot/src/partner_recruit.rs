@@ -6,7 +6,25 @@
 //! Outreach-Record + Message-Template. Die Orchestrierung (`run_partner_recruit`
 //! + Send via ChatApi) + Verdrahtung in den Monitoring-Tick folgt als Slice 2.
 
+use std::collections::HashMap;
+use std::sync::Arc;
+use std::time::Duration;
+
 use sqlx::PgPool;
+use tb_chat::moderation::{OutboundSuppressionCheck, OutboundSuppressionStore};
+use tb_chat::types::SendOutcome;
+use tb_chat::ChatApi;
+use tb_monitoring::StreamSnapshot;
+use tb_raid::ExternalRecruitmentStore;
+
+/// Maximale Outreach-Sends pro Tag über alle Ticks (Python `RECRUIT_MAX_PER_DAY`).
+pub const RECRUIT_MAX_PER_DAY: i64 = 8;
+/// Maximale Sends pro Prüfzyklus (Python `RECRUIT_MAX_PER_TICK`).
+pub const RECRUIT_MAX_PER_TICK: usize = 3;
+/// Pause zwischen Sends innerhalb eines Ticks (Python `RECRUIT_THROTTLE_SECONDS`).
+pub const RECRUIT_THROTTLE_SECONDS: u64 = 60;
+/// Verzögerter Bot-Ban-Check nach erfolgreichem Outreach (wie Recruitment-Message).
+const RECRUIT_BAN_CHECK_DELAY_SECONDS: i64 = 3600;
 
 /// Zeitraum für die Erkennung (Python `RECRUIT_LOOKBACK_DAYS`).
 pub const RECRUIT_LOOKBACK_DAYS: i64 = 28;
@@ -115,6 +133,158 @@ pub async fn record_outreach(pool: &PgPool, login: &str, user_id: &str, success:
     .await;
     if let Err(error) = res {
         tracing::debug!(%error, login, "record_outreach fehlgeschlagen");
+    }
+}
+
+/// Wählt die zu kontaktierenden Live-Kandidaten (Python-Auswahllogik in
+/// `_run_partner_recruit`): nur aktuell live (im category_streams-Snapshot),
+/// mit user_id, gedeckelt auf `min(max_per_tick, remaining_today)`. Pure.
+pub fn select_outreach_targets<'a>(
+    candidates: &'a [RecruitCandidate],
+    category_streams: &'a [StreamSnapshot],
+    remaining_today: i64,
+    max_per_tick: usize,
+) -> Vec<(&'a str, &'a str)> {
+    let mut live: HashMap<String, &StreamSnapshot> = HashMap::new();
+    for stream in category_streams {
+        let login = stream.user_login.to_lowercase();
+        if !login.is_empty() {
+            live.insert(login, stream);
+        }
+    }
+    let max_sends = max_per_tick.min(remaining_today.max(0) as usize);
+    let mut targets: Vec<(&str, &str)> = Vec::new();
+    for cand in candidates {
+        if targets.len() >= max_sends {
+            break;
+        }
+        let Some(stream) = live.get(&cand.streamer) else {
+            continue;
+        };
+        if stream.user_id.is_empty() {
+            continue;
+        }
+        targets.push((cand.streamer.as_str(), stream.user_id.as_str()));
+    }
+    targets
+}
+
+/// Sendet eine Outreach-Nachricht an einen Kandidaten (Python
+/// `_send_partner_outreach`, OHNE IRC-Follow/Join und OHNE die ausgeschlossene
+/// Voice-Reaction-Konversation). Suppression-Check (source=recruitment) →
+/// ChatApi-Send → record_outreach (Cooldown auch bei Fehlschlag) → bei Erfolg
+/// verzögerter Bot-Ban-Check.
+async fn send_partner_outreach(
+    pool: &PgPool,
+    chat_api: &Arc<dyn ChatApi>,
+    login: &str,
+    user_id: &str,
+) {
+    if OutboundSuppressionStore::new(pool.clone())
+        .check_suppression(login, "recruitment")
+        .await
+        .is_some()
+    {
+        tracing::info!(login, "PartnerRecruit: Outreach übersprungen (Chat-Suppression)");
+        return;
+    }
+
+    let message = build_outreach_message(login);
+    let success = matches!(
+        chat_api.send_message(user_id, &message).await,
+        Ok(SendOutcome::Sent)
+    );
+    record_outreach(pool, login, user_id, success).await;
+
+    if success {
+        if let Err(error) = ExternalRecruitmentStore::new(pool.clone())
+            .schedule_bot_ban_check(user_id, login, "recruitment", RECRUIT_BAN_CHECK_DELAY_SECONDS)
+            .await
+        {
+            tracing::debug!(%error, login, "PartnerRecruit: Ban-Check-Schedule fehlgeschlagen");
+        }
+        tracing::info!(login, "PartnerRecruit: Outreach gesendet");
+    } else {
+        tracing::warn!(login, "PartnerRecruit: Outreach fehlgeschlagen");
+    }
+}
+
+/// Haupt-Entry-Point (Python `_run_partner_recruit`): erkennt Kandidaten,
+/// respektiert das Tageslimit, sendet an aktuell live Kandidaten (max pro Tick,
+/// 60 s Throttle dazwischen). Wird vom Monitoring-after_tick gespawnt; die
+/// 30-min-Drosselung liegt beim Aufrufer.
+pub async fn run_partner_recruit(
+    pool: &PgPool,
+    chat_api: &Arc<dyn ChatApi>,
+    category_streams: &[StreamSnapshot],
+) {
+    let candidates = detect_recruit_candidates(pool).await;
+    if candidates.is_empty() {
+        return;
+    }
+    let sent_today = count_outreach_sent_today(pool).await;
+    let remaining_today = RECRUIT_MAX_PER_DAY - sent_today;
+    if remaining_today <= 0 {
+        tracing::info!(sent_today, "PartnerRecruit: Tageslimit erreicht");
+        return;
+    }
+
+    let targets = select_outreach_targets(
+        &candidates,
+        category_streams,
+        remaining_today,
+        RECRUIT_MAX_PER_TICK,
+    );
+    for (i, (login, user_id)) in targets.iter().enumerate() {
+        if i > 0 {
+            tokio::time::sleep(Duration::from_secs(RECRUIT_THROTTLE_SECONDS)).await;
+        }
+        send_partner_outreach(pool, chat_api, login, user_id).await;
+    }
+    if !targets.is_empty() {
+        tracing::info!(count = targets.len(), "PartnerRecruit: Outreach-Tick abgeschlossen");
+    }
+}
+
+#[cfg(test)]
+mod pure_tests {
+    use super::*;
+
+    fn snap(login: &str, user_id: &str) -> StreamSnapshot {
+        StreamSnapshot {
+            user_login: login.into(),
+            user_id: user_id.into(),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn select_targets_live_filter_cap_und_remaining() {
+        let candidates = vec![
+            RecruitCandidate { streamer: "live_a".into(), distinct_days: 5 },
+            RecruitCandidate { streamer: "offline_b".into(), distinct_days: 5 },
+            RecruitCandidate { streamer: "live_c".into(), distinct_days: 5 },
+        ];
+        let streams = vec![snap("Live_A", "111"), snap("Live_C", "333"), snap("ohne_id", "")];
+
+        // offline_b nicht live → raus; ohne_id leere user_id (nicht Kandidat) → egal.
+        let t = select_outreach_targets(&candidates, &streams, 5, 3);
+        assert_eq!(t, vec![("live_a", "111"), ("live_c", "333")]);
+
+        // max_per_tick = 1 → nur der erste Kandidat in Reihenfolge.
+        let t1 = select_outreach_targets(&candidates, &streams, 5, 1);
+        assert_eq!(t1, vec![("live_a", "111")]);
+
+        // remaining_today 0 → keine Sends.
+        assert!(select_outreach_targets(&candidates, &streams, 0, 3).is_empty());
+    }
+
+    #[test]
+    fn select_targets_leere_user_id_kandidat_uebersprungen() {
+        // Kandidat ist live, aber sein Stream-Snapshot hat keine user_id.
+        let candidates = vec![RecruitCandidate { streamer: "noid".into(), distinct_days: 5 }];
+        let streams = vec![snap("noid", "")];
+        assert!(select_outreach_targets(&candidates, &streams, 5, 3).is_empty());
     }
 }
 
