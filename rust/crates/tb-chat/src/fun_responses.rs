@@ -30,7 +30,7 @@ use crate::types::ChatMessageEvent;
 /// Zufällig gewählt via Modulo-Index.
 const THANKS_REPLIES: &[&str] = &[
     "Danke, ich wusste ja, dass ich gut bin. WiltedRose",
-    "Oh stop it, you :relaxed:",
+    "Ach hör auf, sonst werd ich noch rot. WiltedRose",
 ];
 
 /// Trigger-Wörter für den Danke-Check (bot.py Z. 865).
