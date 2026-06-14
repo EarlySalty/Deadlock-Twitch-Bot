@@ -16,6 +16,7 @@ pub mod deadlock_patches;
 pub mod deadlock_stats;
 pub mod deadlock_wiki;
 pub mod minimax_chat;
+pub mod persona;
 pub mod pipeline;
 pub mod rhythm;
 pub mod types;
