@@ -2060,6 +2060,139 @@ pub async fn trigger_post_stream_analysis(
     }
 }
 
+// ---------------------------------------------------------------------------
+// Scheduled Jobs (Python api_post_stream.py `backfill_post_stream_reports` /
+// `retry_failed_reports`). Sleeps zwischen Triggern = Rate-Limit gegen die KI-API.
+// ---------------------------------------------------------------------------
+
+/// Backfill beim Bot-Start (Python `backfill_post_stream_reports`): generiert
+/// Reports für die letzten N abgeschlossenen Sessions OHNE done-Report je aktivem
+/// Partner. 2s-Pause zwischen Triggern.
+pub async fn backfill_post_stream_reports(pool: &PgPool, sessions_per_streamer: i64) {
+    let _ = ensure_report_ab_columns(pool).await;
+
+    let streamers: Vec<String> = match sqlx::query_scalar::<_, String>(
+        "SELECT LOWER(t.twitch_login) AS streamer_login \
+         FROM twitch_streamers_partner_state t \
+         WHERE t.is_partner_active = 1 \
+         ORDER BY t.twitch_login",
+    )
+    .fetch_all(pool)
+    .await
+    {
+        Ok(rows) => rows.into_iter().map(|s| s.trim().to_lowercase()).collect(),
+        Err(e) => {
+            tracing::warn!(error = %e, "PostStream Backfill: Partner-Liste konnte nicht geladen werden");
+            return;
+        }
+    };
+
+    let mut total = 0u32;
+    for streamer in streamers {
+        let session_ids: Vec<i64> = match sqlx::query_scalar::<_, i64>(
+            "SELECT s.id FROM twitch_stream_sessions s \
+             WHERE s.streamer_login = $1 AND s.ended_at IS NOT NULL \
+               AND NOT EXISTS ( \
+                   SELECT 1 FROM twitch_stream_ai_reports r \
+                    WHERE r.session_id = s.id AND r.status = 'done' \
+               ) \
+             ORDER BY s.ended_at DESC LIMIT $2",
+        )
+        .bind(&streamer)
+        .bind(sessions_per_streamer)
+        .fetch_all(pool)
+        .await
+        {
+            Ok(ids) => ids,
+            Err(e) => {
+                tracing::warn!(error = %e, streamer = %streamer, "PostStream Backfill: Session-Lookup fehlgeschlagen");
+                continue;
+            }
+        };
+
+        for session_id in session_ids {
+            trigger_post_stream_analysis(pool, &streamer, Some(session_id)).await;
+            total += 1;
+            tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+        }
+    }
+    tracing::info!(total, "PostStream Backfill: abgeschlossen");
+}
+
+/// Periodischer Retry (Python `retry_failed_reports`, alle 30 min): (1) markiert
+/// >10 min festgesteckte pending-Einträge als failed, (2) lädt failed Reports
+/// aktiver Partner mit retry_count<3, (3) erhöht retry_count, (4) re-triggert je
+/// Session (3s-Pause).
+pub async fn retry_failed_reports(pool: &PgPool) {
+    // 1. Stuck-Pending-Cleanup (>10 min in pending → failed).
+    match sqlx::query_scalar::<_, i64>(
+        "UPDATE twitch_stream_ai_reports \
+         SET status='failed', \
+             error='stuck pending — automatisch nach 10 Minuten abgebrochen', \
+             finished_at=NOW() \
+         WHERE status='pending' AND started_at < NOW() - INTERVAL '10 minutes' \
+         RETURNING id",
+    )
+    .fetch_all(pool)
+    .await
+    {
+        Ok(ids) if !ids.is_empty() => {
+            tracing::info!(count = ids.len(), "PostStream Retry: stuck-pending → failed");
+        }
+        Ok(_) => {}
+        Err(e) => tracing::warn!(error = %e, "PostStream Retry: Stuck-Pending-Cleanup fehlgeschlagen"),
+    }
+
+    // 2. Sessions mit failed Reports (retry_count<3) + aktivem Partner.
+    let sessions: Vec<(String, i64)> = match sqlx::query_as::<_, (String, i64)>(
+        "SELECT DISTINCT r.streamer_login, r.session_id \
+         FROM twitch_stream_ai_reports r \
+         JOIN twitch_streamers_partner_state p ON LOWER(p.twitch_login) = LOWER(r.streamer_login) \
+         WHERE r.status='failed' AND r.retry_count < 3 AND p.is_partner_active = 1 \
+         ORDER BY r.session_id DESC",
+    )
+    .fetch_all(pool)
+    .await
+    {
+        Ok(rows) => rows.into_iter().map(|(s, id)| (s.trim().to_lowercase(), id)).collect(),
+        Err(e) => {
+            tracing::warn!(error = %e, "PostStream Retry: Session-Lookup fehlgeschlagen");
+            return;
+        }
+    };
+
+    if sessions.is_empty() {
+        return;
+    }
+
+    // 3. retry_count erhöhen (distinkte session_ids), damit nicht ewig wiederholt wird.
+    let session_ids: Vec<i64> = {
+        let mut ids: Vec<i64> = sessions.iter().map(|(_, id)| *id).collect();
+        ids.sort_unstable();
+        ids.dedup();
+        ids
+    };
+    if let Err(e) = sqlx::query(
+        "UPDATE twitch_stream_ai_reports SET retry_count = retry_count + 1 \
+         WHERE status='failed' AND retry_count < 3 AND session_id = ANY($1)",
+    )
+    .bind(&session_ids)
+    .execute(pool)
+    .await
+    {
+        tracing::warn!(error = %e, "PostStream Retry: retry_count-Update fehlgeschlagen");
+    }
+
+    // 4. Re-trigger je Session (3s-Pause).
+    let mut total = 0u32;
+    for (streamer, session_id) in sessions {
+        trigger_post_stream_analysis(pool, &streamer, Some(session_id)).await;
+        total += 1;
+        tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+    }
+    tracing::info!(total, "PostStream Retry: abgeschlossen");
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2900,5 +3033,82 @@ mod tests {
         let count3: i64 = sqlx::query_scalar("SELECT COUNT(*)::int8 FROM twitch_stream_ai_reports WHERE session_id=1")
             .fetch_one(&pool).await.unwrap();
         assert_eq!(count3, 2);
+    }
+
+    #[tokio::test]
+    async fn backfill_nur_sessions_ohne_done_report() {
+        let Some(pool) = core_pool_or_skip("t6n_post_stream_backfill").await else { return };
+        ensure_report_ab_columns(&pool).await.unwrap();
+        sqlx::query("CREATE TABLE twitch_streamers_partner_state (twitch_login TEXT, is_partner_active INTEGER)")
+            .execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO twitch_streamers_partner_state (twitch_login, is_partner_active) VALUES ('streamer',1)")
+            .execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO twitch_streamers (twitch_login, twitch_user_id) VALUES ('streamer','987')")
+            .execute(&pool).await.unwrap();
+        // Session 1 (ohne done-Report) + Session 2 (mit done-Report).
+        sqlx::query(
+            "INSERT INTO twitch_stream_sessions (id, streamer_login, started_at, ended_at, duration_seconds, avg_viewers, peak_viewers, follower_delta) VALUES \
+             (1,'streamer','2026-06-10T18:00:00+00','2026-06-10T20:00:00+00',7200,10.0,30,5), \
+             (2,'streamer','2026-06-09T18:00:00+00','2026-06-09T20:00:00+00',7200,10.0,30,5)",
+        )
+        .execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO twitch_stream_ai_reports (session_id, streamer_login, model, status, report_variant) VALUES (2,'streamer','minimax','done','compact')")
+            .execute(&pool).await.unwrap();
+
+        backfill_post_stream_reports(&pool, 5).await;
+
+        // Session 1 wurde getriggert → 2 done-Reports.
+        let s1: i64 = sqlx::query_scalar("SELECT COUNT(*)::int8 FROM twitch_stream_ai_reports WHERE session_id=1 AND status='done'")
+            .fetch_one(&pool).await.unwrap();
+        assert_eq!(s1, 2);
+        // Session 2 hatte schon einen done-Report → NOT EXISTS filtert sie → unverändert (1).
+        let s2: i64 = sqlx::query_scalar("SELECT COUNT(*)::int8 FROM twitch_stream_ai_reports WHERE session_id=2")
+            .fetch_one(&pool).await.unwrap();
+        assert_eq!(s2, 1);
+    }
+
+    #[tokio::test]
+    async fn retry_stuck_cleanup_und_requeue() {
+        let Some(pool) = core_pool_or_skip("t6o_post_stream_retry").await else { return };
+        ensure_report_ab_columns(&pool).await.unwrap();
+        sqlx::query("CREATE TABLE twitch_streamers_partner_state (twitch_login TEXT, is_partner_active INTEGER)")
+            .execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO twitch_streamers_partner_state (twitch_login, is_partner_active) VALUES ('streamer',1)")
+            .execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO twitch_streamers (twitch_login, twitch_user_id) VALUES ('streamer','987')")
+            .execute(&pool).await.unwrap();
+        sqlx::query(
+            "INSERT INTO twitch_stream_sessions (id, streamer_login, started_at, ended_at, duration_seconds, avg_viewers, peak_viewers, follower_delta) \
+             VALUES (1,'streamer','2026-06-10T18:00:00+00','2026-06-10T20:00:00+00',7200,10.0,30,5)",
+        )
+        .execute(&pool).await.unwrap();
+        // failed Report (Partner aktiv) für Session 1, retry_count 0.
+        sqlx::query("INSERT INTO twitch_stream_ai_reports (session_id, streamer_login, model, status, report_variant, retry_count) VALUES (1,'streamer','minimax','failed','compact',0)")
+            .execute(&pool).await.unwrap();
+        // Stuck pending (>10 min) für 'ghost' (kein Partner) → wird nur gecleaned, nicht retried.
+        sqlx::query(
+            "INSERT INTO twitch_stream_ai_reports (session_id, streamer_login, model, status, report_variant, started_at) \
+             VALUES (99,'ghost','minimax','pending','compact', NOW() - INTERVAL '20 minutes')",
+        )
+        .execute(&pool).await.unwrap();
+
+        retry_failed_reports(&pool).await;
+
+        // Stuck pending → failed mit Marker-Error.
+        let (ghost_status, ghost_err): (String, Option<String>) = sqlx::query_as(
+            "SELECT status, error FROM twitch_stream_ai_reports WHERE session_id=99",
+        )
+        .fetch_one(&pool).await.unwrap();
+        assert_eq!(ghost_status, "failed");
+        assert!(ghost_err.unwrap().contains("stuck pending"));
+
+        // Original-failed-Report: retry_count auf 1 erhöht.
+        let rc: i32 = sqlx::query_scalar("SELECT retry_count FROM twitch_stream_ai_reports WHERE session_id=1 AND status='failed'")
+            .fetch_one(&pool).await.unwrap();
+        assert_eq!(rc, 1);
+        // Re-Trigger erzeugte neue done-Reports (failed ist nicht done/pending → kein Skip).
+        let done: i64 = sqlx::query_scalar("SELECT COUNT(*)::int8 FROM twitch_stream_ai_reports WHERE session_id=1 AND status='done'")
+            .fetch_one(&pool).await.unwrap();
+        assert_eq!(done, 2);
     }
 }
