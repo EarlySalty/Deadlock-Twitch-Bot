@@ -8,7 +8,9 @@
 //! sodass der Rust-Port dieselben `boon`-Subkommandos via Subprocess aufruft.
 //!
 //! Slices (bottom-up): [`deadlock_client`] (Match-History/Metadata-API),
-//! [`demo_downloader`] (Demo-Download + bz2-Entpacken + lokaler Cache).
+//! [`demo_downloader`] (Demo-Download + bz2-Entpacken + lokaler Cache),
+//! [`boon`] (Subprocess-Wrapper + Output-Parser des Demo-Parser-Binaries).
 
+pub mod boon;
 pub mod deadlock_client;
 pub mod demo_downloader;
