@@ -136,6 +136,32 @@ impl RaidHistoryStore {
 
         Ok(rows.into_iter().map(|(id,)| id).collect())
     }
+
+    /// Jüngste erfolgreiche Raid-History-Referenz `(id, executed_at)` für ein
+    /// Quelle→Ziel-Paar (Python `load_recent_raid_history_reference`). Verknüpft
+    /// einen bestätigten Arrival mit dem tatsächlich ausgeführten Raid-Eintrag.
+    pub async fn find_recent_reference(
+        &self,
+        from_broadcaster_login: &str,
+        to_broadcaster_id: &str,
+    ) -> Result<Option<(i64, Option<DateTime<Utc>>)>, sqlx::Error> {
+        let row: Option<(i64, Option<DateTime<Utc>>)> = sqlx::query_as(
+            r#"
+            SELECT id, executed_at
+            FROM twitch_raid_history
+            WHERE LOWER(from_broadcaster_login) = $1
+              AND to_broadcaster_id = $2
+              AND COALESCE(success, FALSE) IS TRUE
+            ORDER BY executed_at DESC
+            LIMIT 1
+            "#,
+        )
+        .bind(from_broadcaster_login.trim().to_lowercase())
+        .bind(to_broadcaster_id.trim())
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(row)
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -193,6 +219,51 @@ mod tests {
         .unwrap();
 
         pool
+    }
+
+    #[tokio::test]
+    async fn find_recent_reference_picks_latest_successful() {
+        if std::env::var("TB_TEST_DATABASE_URL").is_err() {
+            eprintln!("SKIP: TB_TEST_DATABASE_URL nicht gesetzt");
+            return;
+        }
+        let pool = setup_db("rh_recent_ref").await;
+        let store = RaidHistoryStore::new(pool.clone());
+
+        // Kein Eintrag → None.
+        assert!(store
+            .find_recent_reference("Caster", "to_1")
+            .await
+            .unwrap()
+            .is_none());
+
+        // Zwei erfolgreiche (vor 2h, vor 1h) + ein fehlgeschlagener (jetzt).
+        sqlx::query(
+            "INSERT INTO twitch_raid_history \
+             (from_broadcaster_id, from_broadcaster_login, to_broadcaster_id, to_broadcaster_login, executed_at, success) \
+             VALUES \
+             ('f','caster','to_1','victim', NOW() - INTERVAL '2 hours', TRUE), \
+             ('f','caster','to_1','victim', NOW() - INTERVAL '1 hour',  TRUE), \
+             ('f','caster','to_1','victim', NOW(),                      FALSE)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        // Case-insensitiver Login-Match; jüngster ERFOLGREICHER (vor 1h), nicht
+        // der fehlgeschlagene (jetzt).
+        let r = store.find_recent_reference("CASTER", "to_1").await.unwrap();
+        assert!(r.is_some());
+        let (id, executed_at) = r.unwrap();
+        assert!(id > 0);
+        assert!(executed_at.is_some());
+
+        // Anderes Ziel → None.
+        assert!(store
+            .find_recent_reference("caster", "to_2")
+            .await
+            .unwrap()
+            .is_none());
     }
 
     fn sample_input() -> RecordRaidInput {

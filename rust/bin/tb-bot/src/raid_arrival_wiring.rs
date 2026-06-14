@@ -15,12 +15,14 @@ use tb_raid::{
     classify_partner_raid_arrival, decide_blacklist_action, serialize_confirmation_signals,
     ArrivalConfirmationService, ArrivalSignalContext, ArrivalTrackingStore, BlacklistScheduleAction,
     ConfirmedExternalRecruitmentRaid, ExternalRecruitmentStore, ManualRaidSuppression, PendingRaid,
-    PendingRaidStore, RaidArrivalSink, RaidBlacklistStore, RecordArrivalInput, ScoreTrackingStore,
-    EXTERNAL_RECRUITMENT_BLACKLIST_GRACE_SECONDS, EXTERNAL_RECRUITMENT_RAID_LIMIT,
+    PendingRaidStore, RaidArrivalSink, RaidBlacklistStore, RaidHistoryStore, RecordArrivalInput,
+    ScoreTrackingStore, EXTERNAL_RECRUITMENT_BLACKLIST_GRACE_SECONDS,
+    EXTERNAL_RECRUITMENT_RAID_LIMIT,
 };
 
 use crate::confirm_resolver::{ConfirmContext, ConfirmResolver};
 use crate::partner_lookup::{is_target_partner, known_source, PrefetchedLookups};
+use crate::score_refresh::ScoreRefreshResolver;
 
 /// Recent-Fenster für Sekundär-Signale (Python
 /// `recent_raid_arrival_ttl_seconds = 600`, raid_state_store.py:16).
@@ -73,6 +75,8 @@ pub struct RaidArrivalSinkImpl {
     score_tracking: ScoreTrackingStore,
     external_recruitment: ExternalRecruitmentStore,
     blacklist: RaidBlacklistStore,
+    raid_history: RaidHistoryStore,
+    score_refresh: ScoreRefreshResolver,
     confirm_resolver: ConfirmResolver,
     /// Verwaiste Chat-Notifications, vom Sweeper periodisch promotet
     /// (Python `orphan_chat_raid_notifications` in `raid_state_store.py`).
@@ -91,6 +95,8 @@ impl RaidArrivalSinkImpl {
             score_tracking: ScoreTrackingStore::new(pool.clone()),
             external_recruitment: ExternalRecruitmentStore::new(pool.clone()),
             blacklist: RaidBlacklistStore::new(pool.clone()),
+            raid_history: RaidHistoryStore::new(pool.clone()),
+            score_refresh: ScoreRefreshResolver::new(pool.clone()),
             confirm_resolver: ConfirmResolver::new(pool.clone(), target_game_lower),
             pool,
             pending,
@@ -418,6 +424,27 @@ impl RaidArrivalSink for RaidArrivalSinkImpl {
             }
         }
 
+        // 2c. Python raid_arrival_runtime.py:272 — jüngste erfolgreiche
+        // Raid-History-Referenz laden, um den bestätigten Arrival mit dem
+        // tatsächlich ausgeführten Raid-Eintrag zu verknüpfen.
+        let (raid_history_id, raid_history_executed_at) =
+            if decision.should_load_recent_raid_history_reference {
+                match self
+                    .raid_history
+                    .find_recent_reference(from_broadcaster_login, to_broadcaster_id)
+                    .await
+                {
+                    Ok(Some((id, executed_at))) => (Some(id), executed_at),
+                    Ok(None) => (None, None),
+                    Err(error) => {
+                        tracing::debug!(%error, "find_recent_reference fehlgeschlagen");
+                        (None, None)
+                    }
+                }
+            } else {
+                (None, None)
+            };
+
         // 3. Bei Partner-Ziel: Arrival-Tracking schreiben.
         if decision.target_is_partner {
             if let Err(e) = self
@@ -436,8 +463,8 @@ impl RaidArrivalSink for RaidArrivalSinkImpl {
                     correlation_status: "matched_pending".to_string(),
                     correlation_detail: None,
                     source_resolution: decision.source_resolution.clone(),
-                    raid_history_id: None,
-                    raid_history_executed_at: None,
+                    raid_history_id,
+                    raid_history_executed_at,
                     unraid_seen: false,
                 })
                 .await
@@ -447,6 +474,29 @@ impl RaidArrivalSink for RaidArrivalSinkImpl {
                     from = %from_broadcaster_login,
                     to = %to_broadcaster_login,
                     "Arrival-Tracking-Insert (confirm_pending_raid) fehlgeschlagen"
+                );
+            }
+        }
+
+        // 4a. Python raid_arrival_runtime.py:374 — nach einem eingehenden,
+        // bestätigten Partner-Raid den Partner-Score-Cache des Ziels auffrischen
+        // (sonst veraltet er, wenn keine Online/Offline-Events kamen).
+        if decision.should_refresh_partner_score_cache {
+            if let Err(error) = self
+                .score_refresh
+                .refresh_scores(
+                    &[(
+                        to_broadcaster_id.to_string(),
+                        to_broadcaster_login.to_string(),
+                    )],
+                    Utc::now(),
+                )
+                .await
+            {
+                tracing::debug!(
+                    %error,
+                    to = %to_broadcaster_login,
+                    "refresh_partner_score_cache fehlgeschlagen"
                 );
             }
         }
