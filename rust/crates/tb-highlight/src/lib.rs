@@ -20,3 +20,4 @@ pub mod demo_analyzer;
 pub mod demo_downloader;
 pub mod event_detector;
 pub mod state;
+pub mod twitch_vod;

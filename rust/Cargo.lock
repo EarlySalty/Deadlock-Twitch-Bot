@@ -2426,6 +2426,7 @@ name = "tb-highlight"
 version = "0.1.0"
 dependencies = [
  "bzip2-rs",
+ "chrono",
  "regex",
  "reqwest",
  "serde_json",
