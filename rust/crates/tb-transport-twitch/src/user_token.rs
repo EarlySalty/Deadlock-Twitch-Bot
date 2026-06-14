@@ -13,6 +13,14 @@ use serde::Deserialize;
 
 use crate::client::HelixClient;
 
+/// Python-Parität (raid/auth.py `save_auth`: `expires_in or 3600`): fehlt
+/// `expires_in` in der Twitch-Antwort, gilt 3600 s. Ohne diesen Default würde
+/// ein fehlendes Feld zu 0 deserialisiert → `token_expires_at = now` → der
+/// frisch persistierte Partner-Token wäre sofort (hinter dem 300-s-Puffer) stale.
+fn default_expires_in() -> i64 {
+    3600
+}
+
 /// Antwort des Token-Endpoints (Refresh-Pfad).
 #[derive(Debug, Clone, Deserialize)]
 pub struct UserTokenResponse {
@@ -20,7 +28,7 @@ pub struct UserTokenResponse {
     pub access_token: String,
     #[serde(default)]
     pub refresh_token: String,
-    #[serde(default)]
+    #[serde(default = "default_expires_in")]
     pub expires_in: i64,
     #[serde(default)]
     pub scope: Vec<String>,
@@ -242,6 +250,19 @@ mod tests {
         assert_eq!(result.refresh_token, "neu-ref");
         assert_eq!(result.expires_in, 14000);
         assert_eq!(result.scope, vec!["channel:manage:raids".to_string()]);
+    }
+
+    #[test]
+    fn expires_in_default_3600_bei_fehlendem_feld() {
+        // Python-Parität (save_auth: `expires_in or 3600`): fehlt das Feld, gilt 3600 s
+        // statt 0 (sonst wäre der frisch persistierte Token sofort stale).
+        let r: UserTokenResponse =
+            serde_json::from_str(r#"{"access_token":"a","refresh_token":"r","scope":[]}"#).unwrap();
+        assert_eq!(r.expires_in, 3600);
+        // Vorhandenes Feld bleibt unverändert.
+        let r2: UserTokenResponse =
+            serde_json::from_str(r#"{"access_token":"a","expires_in":14000}"#).unwrap();
+        assert_eq!(r2.expires_in, 14000);
     }
 
     #[tokio::test]

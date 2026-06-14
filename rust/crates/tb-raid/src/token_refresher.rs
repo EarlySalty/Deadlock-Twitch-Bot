@@ -240,7 +240,9 @@ impl RaidTokenRefresher {
             return Ok(RefreshOutcome::Skipped);
         };
 
-        let expires_at = now + Duration::seconds(response.expires_in);
+        // Floor gegen literal-0/negativ aus der Twitch-Antwort (fehlendes Feld
+        // fängt bereits der serde-Default 3600 ab) — sonst sofort-stale-Token.
+        let expires_at = now + Duration::seconds(response.expires_in.max(60));
         let result = sqlx::query(
             r#"
             UPDATE twitch_raid_auth

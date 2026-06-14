@@ -969,7 +969,7 @@ impl RaidOAuthPort for TbRaidOAuthImpl {
             twitch_login: twitch_login.clone(),
             access_token: token_response.access_token.clone(),
             refresh_token: token_response.refresh_token.clone(),
-            expires_in: token_response.expires_in.max(1),
+            expires_in: token_response.expires_in.max(60),
             granted_scopes: granted,
             resolved_scope_profile: state_info.scope_profile.clone(),
             activate_raid_features: true,
