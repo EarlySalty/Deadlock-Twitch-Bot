@@ -386,6 +386,12 @@ impl SubscriptionManager {
                     // App-Token abgelaufen/ungültig: TokenManager übernimmt Refresh.
                     // debug! — betrifft alle Kanäle gleichzeitig, würde sonst 48× spammen.
                     tracing::debug!(sub_type, login, "EventSub 401: App-Token temporär ungültig");
+                } else if msg.contains("400") {
+                    // Kanal für diesen Sub-Typ nicht berechtigt (z. B. hype_train
+                    // braucht Affiliate/Partner-Tier) oder Scope-Edge-Case. Python
+                    // fängt das in den broadcaster_subs still auf debug ab — nächster
+                    // Reconcile-Zyklus versucht es erneut, falls sich die Lage ändert.
+                    tracing::debug!(sub_type, login, "EventSub 400: Kanal nicht berechtigt — Retry nächster Zyklus");
                 } else {
                     tracing::warn!(%error, sub_type, login, "EventSub: Subscription fehlgeschlagen");
                 }
