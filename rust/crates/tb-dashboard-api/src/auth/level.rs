@@ -152,6 +152,10 @@ pub(crate) fn extract_cookie<'a>(parts: &'a Parts, name: &str) -> Option<&'a str
     None
 }
 
+/// Twitch-Logins mit Admin-Zugriff (wie Discord-Admin / Localhost).
+/// Spiegelt Python `_TWITCH_ADMIN_LOGINS` (api_v2.py:464), kleingeschrieben.
+const TWITCH_ADMIN_LOGINS: &[&str] = &["earlysalty"];
+
 /// Axum-Extractor für `DashboardAuthLevel`.
 ///
 /// Benötigt `DashboardAuthState` als Extension im Router.
@@ -190,6 +194,12 @@ where
         if let Some(session_id) = extract_cookie(parts, "twitch_dash_session") {
             if !session_id.is_empty() {
                 if let Ok(Some(partner)) = state.load_partner_session(session_id).await {
+                    // Admin-Login-Promotion (Python api_v2.py:1339-1342): loggt sich
+                    // ein Admin per Twitch-OAuth statt Discord ein, bekommt er
+                    // Admin-Rechte (canViewAllStreamers), nicht nur Partner.
+                    if TWITCH_ADMIN_LOGINS.contains(&partner.twitch_login.trim().to_lowercase().as_str()) {
+                        return Ok(DashboardAuthLevel::Admin);
+                    }
                     return Ok(DashboardAuthLevel::Partner {
                         twitch_login: partner.twitch_login,
                         twitch_user_id: partner.twitch_user_id,
