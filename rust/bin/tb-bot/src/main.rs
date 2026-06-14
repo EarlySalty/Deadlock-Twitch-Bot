@@ -723,6 +723,21 @@ async fn main() {
         }
     }
 
+    // Post-Stream-A/B-Reports (B11): Backfill der letzten Sessions ohne done-
+    // Report beim Start + periodischer Retry fehlgeschlagener Reports (alle
+    // 30 min nach 1800s Startverzögerung). Wie Python in runtime_bootstrap als
+    // Background-Tasks gespawnt; beide partner-scoped und best-effort.
+    {
+        let backfill_pool = pool.clone();
+        tokio::spawn(async move {
+            tb_analytics::post_stream::backfill_post_stream_reports(&backfill_pool, 3).await;
+        });
+        tokio::spawn(tb_analytics::post_stream::schedule_report_retry_job(
+            pool.clone(),
+            1800,
+        ));
+    }
+
     // Poll-Loop: das Cutover-Gate. Default AUS — Python bleibt alleiniger
     // Live-Writer, bis der Flip (04-cutover-plan) explizit erfolgt.
     let poll_enabled = std::env::var("TB_MONITORING_POLL_ENABLED")

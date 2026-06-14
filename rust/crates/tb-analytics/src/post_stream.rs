@@ -2193,6 +2193,17 @@ pub async fn retry_failed_reports(pool: &PgPool) {
     tracing::info!(total, "PostStream Retry: abgeschlossen");
 }
 
+/// Periodischer Retry-Job (Python `schedule_report_retry_job`): wartet
+/// `start_delay_s`, dann ruft alle 30 min `retry_failed_reports`. Als tokio-Task
+/// starten (läuft endlos, schluckt eigene Fehler).
+pub async fn schedule_report_retry_job(pool: PgPool, start_delay_s: u64) {
+    tokio::time::sleep(std::time::Duration::from_secs(start_delay_s)).await;
+    loop {
+        retry_failed_reports(&pool).await;
+        tokio::time::sleep(std::time::Duration::from_secs(1800)).await;
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
