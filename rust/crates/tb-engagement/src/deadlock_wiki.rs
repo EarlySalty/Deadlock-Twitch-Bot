@@ -10,7 +10,8 @@
 //! `deadlock_patches` als Grundlage.
 
 use std::collections::HashMap;
-use std::sync::OnceLock;
+use std::sync::{Mutex, OnceLock};
+use std::time::{Duration, Instant};
 
 use regex::Regex;
 
@@ -194,6 +195,184 @@ pub fn trim_extract(extract: &str) -> String {
     }
 }
 
+const ASSETS_BASE_DEFAULT: &str = "https://assets.deadlock-api.com";
+const WIKI_API_DEFAULT: &str = "https://deadlock.wiki/api.php";
+const USER_AGENT: &str = "deadlock-twitch-bot/1.0 (engagement-grounding)";
+const INDEX_TTL: Duration = Duration::from_secs(12 * 3600);
+const PAGE_TTL: Duration = Duration::from_secs(3600);
+const HTTP_TIMEOUT: Duration = Duration::from_secs(8);
+
+struct IndexCache {
+    entities: Vec<Entity>,
+    loaded_at: Option<Instant>,
+}
+
+/// Deadlock-Wissens-Grounding mit Entity-Index- (12h) und Wiki-Page-Cache (1h).
+/// Hält die Caches selbst (statt Python-Modul-Globals); eine Instanz wird im
+/// Pipeline-Setup geteilt. Basis-URLs sind injizierbar (Tests).
+pub struct DeadlockWiki {
+    assets_base: String,
+    wiki_api: String,
+    index: Mutex<IndexCache>,
+    pages: Mutex<HashMap<String, (Instant, String)>>,
+    http: reqwest::Client,
+}
+
+impl Default for DeadlockWiki {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl DeadlockWiki {
+    /// Mit den produktiven Endpunkten.
+    pub fn new() -> Self {
+        Self::with_bases(ASSETS_BASE_DEFAULT, WIKI_API_DEFAULT)
+    }
+
+    /// Mit expliziten Basis-URLs (Tests).
+    pub fn with_bases(assets_base: &str, wiki_api: &str) -> Self {
+        let http = reqwest::Client::builder()
+            .timeout(HTTP_TIMEOUT)
+            .user_agent(USER_AGENT)
+            .build()
+            .unwrap_or_else(|_| reqwest::Client::new());
+        Self {
+            assets_base: assets_base.trim_end_matches('/').to_string(),
+            wiki_api: wiki_api.to_string(),
+            index: Mutex::new(IndexCache { entities: Vec::new(), loaded_at: None }),
+            pages: Mutex::new(HashMap::new()),
+            http,
+        }
+    }
+
+    async fn fetch_json(
+        &self,
+        url: &str,
+        params: &[(&str, &str)],
+    ) -> Result<serde_json::Value, reqwest::Error> {
+        self.http
+            .get(url)
+            .query(params)
+            .send()
+            .await?
+            .error_for_status()?
+            .json()
+            .await
+    }
+
+    async fn load_entity_index(&self) -> Result<Vec<Entity>, reqwest::Error> {
+        let heroes = self
+            .fetch_json(&format!("{}/v2/heroes", self.assets_base), &[("only_active", "true")])
+            .await?;
+        let items = self
+            .fetch_json(&format!("{}/v2/items", self.assets_base), &[])
+            .await?;
+        let heroes = heroes.as_array().cloned().unwrap_or_default();
+        let items = items.as_array().cloned().unwrap_or_default();
+        Ok(build_entity_index(&heroes, &items))
+    }
+
+    /// Lädt den Entity-Index, falls Cache leer/abgelaufen. Netzfehler → alter
+    /// (ggf. leerer) Index bleibt (Grounding bleibt dann aus).
+    pub async fn ensure_index(&self) {
+        {
+            let cache = self.index.lock().unwrap_or_else(|p| p.into_inner());
+            if !cache.entities.is_empty()
+                && cache.loaded_at.is_some_and(|t| t.elapsed() < INDEX_TTL)
+            {
+                return;
+            }
+        }
+        let fresh = match self.load_entity_index().await {
+            Ok(f) => f,
+            Err(_) => {
+                tracing::warn!("DeadlockWiki: Entity-Index konnte nicht geladen werden");
+                return;
+            }
+        };
+        if !fresh.is_empty() {
+            let mut cache = self.index.lock().unwrap_or_else(|p| p.into_inner());
+            cache.entities = fresh;
+            cache.loaded_at = Some(Instant::now());
+        }
+    }
+
+    /// Erkennt den spezifischsten Helden/Item im Text gegen den aktuellen Index.
+    pub fn detect(&self, text: &str) -> Option<(String, EntityKind)> {
+        let cache = self.index.lock().unwrap_or_else(|p| p.into_inner());
+        detect_entity(&cache.entities, text)
+    }
+
+    /// Holt den (getrimmten) Wiki-Extract zu einem Titel; 1h gecacht.
+    /// Netzfehler/leer → None.
+    pub async fn fetch_wiki_extract(&self, title: &str) -> Option<String> {
+        let key = title.to_lowercase();
+        {
+            let cache = self.pages.lock().unwrap_or_else(|p| p.into_inner());
+            if let Some((loaded, trimmed)) = cache.get(&key) {
+                if loaded.elapsed() < PAGE_TTL {
+                    return if trimmed.is_empty() { None } else { Some(trimmed.clone()) };
+                }
+            }
+        }
+        let data = self
+            .fetch_json(
+                &self.wiki_api,
+                &[
+                    ("action", "query"),
+                    ("prop", "extracts"),
+                    ("explaintext", "1"),
+                    ("redirects", "1"),
+                    ("format", "json"),
+                    ("titles", title),
+                ],
+            )
+            .await
+            .ok()?;
+        let extract = data
+            .get("query")
+            .and_then(|q| q.get("pages"))
+            .and_then(serde_json::Value::as_object)
+            .and_then(|pages| {
+                pages
+                    .values()
+                    .find_map(|page| page.get("extract").and_then(serde_json::Value::as_str))
+            })
+            .unwrap_or("");
+        let trimmed = trim_extract(extract);
+        {
+            let mut cache = self.pages.lock().unwrap_or_else(|p| p.into_inner());
+            cache.insert(key, (Instant::now(), trimmed.clone()));
+        }
+        if trimmed.is_empty() {
+            None
+        } else {
+            Some(trimmed)
+        }
+    }
+
+    /// System-Prompt-Fragment mit belegten Deadlock-Fakten — oder "" wenn nichts
+    /// erkannt / kein Wiki-Beleg (Python `build_grounding_fragment`).
+    pub async fn build_grounding_fragment(&self, message_text: &str) -> String {
+        self.ensure_index().await;
+        let hit = self.detect(message_text);
+        let Some((name, kind)) = hit else {
+            return String::new();
+        };
+        let Some(extract) = self.fetch_wiki_extract(&name).await else {
+            return String::new();
+        };
+        format!(
+            "Beleg aus dem Deadlock-Wiki (offizielle Quelle). Wenn du in deiner Antwort etwas \
+             über '{name}' sagst, stütze dich AUSSCHLIESSLICH auf diese Fakten — nichts dazu \
+             erfinden, nichts aus dem Gedächtnis ergänzen. Stehen Details (Zahlen, Effekte) hier \
+             nicht drin, sag das nicht, sondern bleib allgemein.\n[{label}: {name}]\n{extract}",
+            label = kind.label(),
+        )
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -260,5 +439,73 @@ mod tests {
         let cut = trim_extract(&long);
         assert!(cut.chars().count() <= MAX_EXTRACT_CHARS);
         assert!(cut.ends_with('…'));
+    }
+
+    use wiremock::matchers::{method, path, query_param};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    async fn mount_assets(server: &MockServer, heroes: serde_json::Value, items: serde_json::Value) {
+        Mock::given(method("GET"))
+            .and(path("/v2/heroes"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(heroes))
+            .mount(server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/v2/items"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(items))
+            .mount(server)
+            .await;
+    }
+
+    #[tokio::test]
+    async fn grounding_fragment_end_to_end() {
+        let server = MockServer::start().await;
+        mount_assets(&server, json!([{"name": "Haze"}]), json!([])).await;
+        Mock::given(method("GET"))
+            .and(path("/api.php"))
+            .and(query_param("action", "query"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "query": {"pages": {"123": {"extract": "Haze ist ein Hero mit Bullet-Dance."}}}
+            })))
+            .mount(&server)
+            .await;
+
+        let wiki = DeadlockWiki::with_bases(&server.uri(), &format!("{}/api.php", server.uri()));
+        let frag = wiki.build_grounding_fragment("erzähl mir was über haze").await;
+        assert!(frag.contains("[Held: Haze]"));
+        assert!(frag.contains("Bullet-Dance"));
+        assert!(frag.contains("Beleg aus dem Deadlock-Wiki"));
+    }
+
+    #[tokio::test]
+    async fn grounding_leer_ohne_entity() {
+        let server = MockServer::start().await;
+        mount_assets(&server, json!([{"name": "Haze"}]), json!([])).await;
+        let wiki = DeadlockWiki::with_bases(&server.uri(), &format!("{}/api.php", server.uri()));
+        // Kein bekannter Held/Item im Text → leeres Fragment.
+        assert_eq!(wiki.build_grounding_fragment("hallo zusammen wie gehts").await, "");
+    }
+
+    #[tokio::test]
+    async fn index_cache_nur_einmal_geladen() {
+        let server = MockServer::start().await;
+        // expect(1): Assets werden nur EINMAL geholt trotz zweier ensure_index.
+        Mock::given(method("GET"))
+            .and(path("/v2/heroes"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!([{"name": "Haze"}])))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/v2/items"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!([])))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let wiki = DeadlockWiki::with_bases(&server.uri(), &format!("{}/api.php", server.uri()));
+        wiki.ensure_index().await;
+        wiki.ensure_index().await; // aus dem Cache
+        assert_eq!(wiki.detect("haze ist stark").map(|(n, _)| n), Some("Haze".to_string()));
+        server.verify().await;
     }
 }
