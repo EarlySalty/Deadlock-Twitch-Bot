@@ -214,6 +214,63 @@ pub async fn overview_chatter_metrics(
     })
 }
 
+/// Raid-Netzwerk-Kachel des Overviews (Python `_get_network_stats`).
+#[derive(Debug, Default, Clone, Copy)]
+pub struct OverviewNetworkStats {
+    /// Erfolgreiche ausgehende Raids im Zeitraum.
+    pub sent: i64,
+    /// Summe der mitgenommenen Zuschauer (viewer_count) der ausgehenden Raids.
+    pub sent_viewers: i64,
+    /// Erfolgreiche eingehende Raids im Zeitraum.
+    pub received: i64,
+}
+
+/// Zählt erfolgreiche ein-/ausgehende Raids für die Netzwerk-Kachel.
+/// Ohne `streamer_login` (Aggregat über alle) → alles 0 (wie Python).
+pub async fn overview_network_stats(
+    pool: &PgPool,
+    since: &str,
+    streamer_login: Option<&str>,
+) -> Result<OverviewNetworkStats, sqlx::Error> {
+    let Some(login) = streamer_login else {
+        return Ok(OverviewNetworkStats::default());
+    };
+
+    let (sent, sent_viewers): (i64, i64) = sqlx::query_as(
+        r#"
+        SELECT COUNT(*)::BIGINT, COALESCE(SUM(viewer_count), 0)::BIGINT
+        FROM twitch_raid_history
+        WHERE LOWER(from_broadcaster_login) = LOWER($1)
+          AND executed_at >= $2::TIMESTAMPTZ
+          AND COALESCE(success, FALSE) IS TRUE
+        "#,
+    )
+    .bind(login)
+    .bind(since)
+    .fetch_one(pool)
+    .await?;
+
+    let (received,): (i64,) = sqlx::query_as(
+        r#"
+        SELECT COUNT(*)::BIGINT
+        FROM twitch_raid_history
+        WHERE LOWER(to_broadcaster_login) = LOWER($1)
+          AND executed_at >= $2::TIMESTAMPTZ
+          AND COALESCE(success, FALSE) IS TRUE
+        "#,
+    )
+    .bind(login)
+    .bind(since)
+    .fetch_one(pool)
+    .await?;
+
+    Ok(OverviewNetworkStats {
+        sent,
+        sent_viewers,
+        received,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -282,6 +339,24 @@ mod tests {
         .execute(&pool)
         .await
         .expect("DDL chatters fehlgeschlagen");
+        sqlx::query("DROP TABLE IF EXISTS twitch_raid_history")
+            .execute(&pool)
+            .await
+            .expect("DROP raid_history fehlgeschlagen");
+        sqlx::query(
+            r#"
+            CREATE TABLE twitch_raid_history (
+                from_broadcaster_login TEXT,
+                to_broadcaster_login   TEXT,
+                viewer_count           BIGINT,
+                success                BOOLEAN,
+                executed_at            TIMESTAMPTZ
+            )
+            "#,
+        )
+        .execute(&pool)
+        .await
+        .expect("DDL raid_history fehlgeschlagen");
         // Tabellen leeren damit Wiederholungsläufe nicht alte Daten sehen
         sqlx::query("TRUNCATE twitch_stream_sessions")
             .execute(&pool)
@@ -389,5 +464,39 @@ mod tests {
         assert_eq!(m.unique_viewers, 2, "alice + bob (bob via API), streamlabs=Bot raus");
         assert_eq!(m.unique_chatters, 1, "1 tracked + 0 legacy (Session hat Chatter-Zeilen)");
         assert!((m.engagement_rate - 50.0).abs() < 0.001, "1/2*100");
+    }
+
+    #[tokio::test]
+    async fn network_stats_zaehlt_nur_erfolgreiche_raids() {
+        let dsn = match test_dsn() {
+            Some(d) => d,
+            None => {
+                eprintln!("SKIP: TB_TEST_DATABASE_URL nicht gesetzt");
+                return;
+            }
+        };
+        let pool = make_pool(&dsn, "test_overview_network").await;
+        sqlx::query(
+            r#"
+            INSERT INTO twitch_raid_history (from_broadcaster_login, to_broadcaster_login, viewer_count, success, executed_at)
+            VALUES
+                ('streamer_x', 'partner_a', 40, TRUE,  NOW() - INTERVAL '1 hour'),  -- sent ok
+                ('streamer_x', 'partner_b', 10, FALSE, NOW() - INTERVAL '2 hours'), -- sent gescheitert -> ignoriert
+                ('partner_c',  'streamer_x', 5, TRUE,  NOW() - INTERVAL '3 hours')  -- received ok
+            "#,
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let since = "2000-01-01T00:00:00+00:00";
+        let n = overview_network_stats(&pool, since, Some("streamer_x")).await.unwrap();
+        assert_eq!(n.sent, 1, "nur der erfolgreiche ausgehende Raid");
+        assert_eq!(n.sent_viewers, 40);
+        assert_eq!(n.received, 1);
+
+        // Ohne Streamer -> alles 0.
+        let agg = overview_network_stats(&pool, since, None).await.unwrap();
+        assert_eq!((agg.sent, agg.sent_viewers, agg.received), (0, 0, 0));
     }
 }

@@ -10,7 +10,9 @@ use axum::{
 use chrono::{Duration, Utc};
 use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
-use tb_analytics::overview::{overview_chatter_metrics, overview_metrics, overview_session_count};
+use tb_analytics::overview::{
+    overview_chatter_metrics, overview_metrics, overview_network_stats, overview_session_count,
+};
 use tb_http_core::{ApiError, AuthLevel};
 
 #[derive(Deserialize)]
@@ -37,6 +39,16 @@ pub struct OverviewData {
     pub streamer: Option<String>,
     pub days: i64,
     pub summary: OverviewSummary,
+    pub network: OverviewNetwork,
+}
+
+/// Raid-Netzwerk-Kachel (Python `_get_network_stats`).
+#[derive(Serialize)]
+pub struct OverviewNetwork {
+    pub sent: i64,
+    #[serde(rename = "sentViewers")]
+    pub sent_viewers: i64,
+    pub received: i64,
 }
 
 #[derive(Serialize)]
@@ -138,6 +150,11 @@ pub async fn overview_handler(
         .await
         .map_err(|_| ApiError::internal())?;
 
+    // Raid-Netzwerk-Kachel.
+    let net = overview_network_stats(&pool, &since, login_ref)
+        .await
+        .map_err(|_| ApiError::internal())?;
+
     let airtime = metrics.total_airtime_hours.unwrap_or(0.0);
     let total_followers = metrics.total_followers.unwrap_or(0);
     let gained = metrics.gained_followers.unwrap_or(0);
@@ -186,6 +203,11 @@ pub async fn overview_handler(
             active_chatters: chatter.active_chatters,
             unique_viewers: chatter.unique_viewers,
             engagement_rate: chatter.engagement_rate,
+        },
+        network: OverviewNetwork {
+            sent: net.sent,
+            sent_viewers: net.sent_viewers,
+            received: net.received,
         },
     })))
 }
@@ -281,6 +303,20 @@ mod tests {
         .execute(&pool)
         .await
         .expect("DDL chatters fehlgeschlagen");
+        sqlx::query(
+            r#"
+            CREATE TABLE IF NOT EXISTS twitch_raid_history (
+                from_broadcaster_login TEXT,
+                to_broadcaster_login   TEXT,
+                viewer_count           BIGINT,
+                success                BOOLEAN,
+                executed_at            TIMESTAMPTZ
+            )
+            "#,
+        )
+        .execute(&pool)
+        .await
+        .expect("DDL raid_history fehlgeschlagen");
         // Tabellen leeren damit Wiederholungsläufe nicht alte Daten sehen
         sqlx::query("TRUNCATE twitch_stream_sessions")
             .execute(&pool)
@@ -362,6 +398,16 @@ mod tests {
         .execute(&pool)
         .await
         .unwrap();
+        sqlx::query(
+            r#"
+            INSERT INTO twitch_raid_history (from_broadcaster_login, to_broadcaster_login, viewer_count, success, executed_at)
+            VALUES ('streamer_x', 'p_a', 30, TRUE, NOW() - INTERVAL '1 hour'),
+                   ('p_b', 'streamer_x', 5, TRUE, NOW() - INTERVAL '2 hours')
+            "#,
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
 
         let res = make_router(pool, "tok")
             .oneshot(admin_req("tok", "streamer_x"))
@@ -381,5 +427,9 @@ mod tests {
         assert_eq!(v["summary"]["uniqueViewers"], 2);
         assert_eq!(v["summary"]["uniqueChatters"], 1);
         assert!((v["summary"]["engagementRate"].as_f64().unwrap() - 50.0).abs() < 0.001);
+        // Netzwerk-Kachel.
+        assert_eq!(v["network"]["sent"], 1);
+        assert_eq!(v["network"]["sentViewers"], 30);
+        assert_eq!(v["network"]["received"], 1);
     }
 }
