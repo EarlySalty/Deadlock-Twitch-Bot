@@ -2423,6 +2423,7 @@ dependencies = [
  "regex",
  "reqwest",
  "serde_json",
+ "sqlx",
  "tokio",
  "wiremock",
 ]
