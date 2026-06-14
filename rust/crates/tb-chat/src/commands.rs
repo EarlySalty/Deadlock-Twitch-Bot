@@ -212,6 +212,8 @@ pub struct CommandEngine {
     /// In-memory Cooldown-Tabelle für `!invite`.
     /// `bot.py:781` — 1h pro (channel_login, chatter_login).
     invite_cooldowns: Mutex<HashMap<(String, String), Instant>>,
+    /// Rate-Limiter für `!title` (B11): 5/600s pro streamer:source.
+    title_rate_limiter: Arc<crate::title_ai::TitleRateLimiter>,
 }
 
 impl CommandEngine {
@@ -234,6 +236,7 @@ impl CommandEngine {
             autoban,
             clip: None,
             invite_cooldowns: Mutex::new(HashMap::new()),
+            title_rate_limiter: Arc::new(crate::title_ai::TitleRateLimiter::default()),
         }
     }
 
@@ -350,7 +353,10 @@ impl CommandEngine {
             }
             // !title / !titel: bewusst nicht portiert — KI-Abhängigkeit außerhalb Scope.
             // Handle als false → Pipeline fährt fort.
-            "!title" | "!titel" => false,
+            "!title" | "!titel" => {
+                self.cmd_title(event, args).await;
+                true
+            }
             // !lurkersteuer_off: UNSICHER — streamer_plans-Schreibpfad nicht portiert.
             "!lurkersteuer_off" | "!lurkersteuer_aus" | "!lurker_tax_off" => false,
             _ => false,
@@ -460,6 +466,153 @@ impl CommandEngine {
                 "reply_plain send fehlgeschlagen"
             );
         }
+    }
+
+    /// `!title <keywords> [--live]` — generiert einen Stream-Titel via MiniMax
+    /// (B11). Port von `cmd_title` (chat/commands.py:770). MOD-ONLY.
+    ///
+    /// Schickt erst die Ack, dann läuft die schwere Arbeit (DB-Reads,
+    /// steam_lookup, MiniMax-Call) in einem `tokio::spawn`, damit ein langsamer
+    /// LLM-Call die Chat-Pipeline nicht blockiert. Die Antwort geht direkt über
+    /// die geklonte `ChatApi`.
+    async fn cmd_title(&self, event: &ChatMessageEvent, args: &str) {
+        // Nur Broadcaster/Mods (Python: stiller Return für andere).
+        if !event.is_mod_or_broadcaster() {
+            return;
+        }
+        let raw_args = args.trim();
+        if raw_args.is_empty() {
+            self.reply_plain(event, "Verwendung: !title <keywords>  — z.B.: !title ranked solo grind")
+                .await;
+            return;
+        }
+        let include_live = raw_args.contains("--live");
+        let keywords = raw_args.replace("--live", "");
+        let keywords = keywords.trim().to_string();
+        if keywords.is_empty() {
+            self.reply_plain(event, "Bitte Keywords angeben, z.B.: !title ranked solo grind")
+                .await;
+            return;
+        }
+
+        self.reply_plain(event, "Generiere deinen Titel, einen Moment...").await;
+
+        let pool = self.pool.clone();
+        let api = Arc::clone(&self.api);
+        let rate_limiter = Arc::clone(&self.title_rate_limiter);
+        let streamer_id = event.broadcaster_user_id.clone();
+        let channel = event.broadcaster_user_login.clone();
+
+        tokio::spawn(async move {
+            // Streamer-Existenz + discord_user_id. broadcaster_user_id ist die
+            // twitch_user_id des Streamers (= der Kanal). Python sucht über den
+            // Login; hier direkt über die schon bekannte ID.
+            let row: Option<(Option<String>,)> = sqlx::query_as(
+                "SELECT discord_user_id::text FROM twitch_streamers WHERE twitch_user_id = $1 LIMIT 1",
+            )
+            .bind(&streamer_id)
+            .fetch_optional(&pool)
+            .await
+            .ok()
+            .flatten();
+            let Some((discord_raw,)) = row else {
+                let _ = api
+                    .send_message(&streamer_id, "Streamer nicht gefunden – bitte Onboarding prüfen.")
+                    .await;
+                return;
+            };
+            let discord_id = discord_raw.and_then(|s| s.trim().parse::<i64>().ok());
+
+            // title_db: History + eigener AVG + Community-Knowledge.
+            let history = crate::title_db::get_streamer_title_history(&pool, &streamer_id, 30).await;
+            let own_avg = crate::title_db::get_streamer_avg_viewers(&pool, &streamer_id).await;
+            let knowledge = crate::title_db::get_top_knowledge_titles(&pool, 30).await;
+
+            // Pro History-Item relative_perf + engagement_rate (Python cmd_title:823).
+            let prompt_history: Vec<crate::title_ai::PromptHistoryItem> = history
+                .iter()
+                .map(|h| {
+                    let avg = h.avg_viewers.unwrap_or(0.0);
+                    let followers = h.followers_start.unwrap_or(1).max(1) as f64;
+                    let relative_perf = if own_avg > 0.0 { avg / own_avg } else { 0.0 };
+                    crate::title_ai::PromptHistoryItem {
+                        title: h.title.clone(),
+                        relative_perf: Some(relative_perf),
+                        engagement_rate: Some(avg / followers),
+                    }
+                })
+                .collect();
+            let prompt_knowledge: Vec<crate::title_ai::PromptKnowledgeItem> = knowledge
+                .into_iter()
+                .map(|k| crate::title_ai::PromptKnowledgeItem {
+                    title: k.title,
+                    normalized_score: k.normalized_score,
+                })
+                .collect();
+
+            // steam_lookup (Rang + optional Live) — sync, daher off-Thread.
+            let mut rank_display: Option<String> = None;
+            let mut live: Option<crate::title_ai::PromptLiveState> = None;
+            if let Some(did) = discord_id {
+                let db_path = crate::steam_lookup::steam_db_path();
+                let db_path2 = db_path.clone();
+                let rank = tokio::task::spawn_blocking(move || {
+                    crate::steam_lookup::get_rank_for_discord_user(&db_path, did)
+                })
+                .await
+                .ok()
+                .flatten();
+                rank_display = rank.map(|r| r.rank_display);
+                if include_live {
+                    let live_res = tokio::task::spawn_blocking(move || {
+                        crate::steam_lookup::get_live_state_for_discord_user(&db_path2, did)
+                    })
+                    .await
+                    .ok()
+                    .flatten();
+                    live = live_res.map(|l| crate::title_ai::PromptLiveState {
+                        hero: l.hero,
+                        party_hint: l.party_hint,
+                    });
+                }
+            }
+
+            let result = crate::title_ai::generate_title(
+                &rate_limiter,
+                &streamer_id,
+                &keywords,
+                &prompt_history,
+                &prompt_knowledge,
+                rank_display.as_deref(),
+                live.as_ref(),
+                "chat",
+            )
+            .await;
+
+            let reply = match result {
+                Ok(r) => {
+                    let primary = if r.primary.is_empty() {
+                        "Kein Titel generiert".to_string()
+                    } else {
+                        r.primary
+                    };
+                    let alt_str = if r.alternatives.is_empty() {
+                        String::new()
+                    } else {
+                        format!(" | Alternativen: {}", r.alternatives.join(" | "))
+                    };
+                    format!("Titel: {primary}{alt_str}")
+                }
+                Err(crate::title_ai::GenerateTitleError::RateLimit(e)) => format!(
+                    "Bitte warte noch {} Sekunden vor der nächsten Anfrage.",
+                    e.retry_after
+                ),
+                Err(_) => "Fehler beim Generieren. Bitte später erneut versuchen.".to_string(),
+            };
+            if let Err(e) = api.send_message(&streamer_id, &reply).await {
+                tracing::warn!(channel = %channel, err = %e, "!title-Antwort-Send fehlgeschlagen");
+            }
+        });
     }
 
     // -----------------------------------------------------------------------
