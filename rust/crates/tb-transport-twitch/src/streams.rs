@@ -271,6 +271,48 @@ impl HelixClient {
         let body: FollowersResponse = resp.json().await?;
         Ok(body.total)
     }
+
+    /// Die jüngsten Archiv-VODs eines Kanals (`type=archive`) mit den Feldern,
+    /// die der Highlight-Clipper braucht (id/created_at/duration). Best-effort:
+    /// leerer Login oder non-200 → leere Liste.
+    pub async fn get_archive_videos(
+        &self,
+        user_id: &str,
+        first: u32,
+    ) -> Result<Vec<ArchiveVideo>, HelixError> {
+        let user_id = user_id.trim();
+        if user_id.is_empty() {
+            return Ok(Vec::new());
+        }
+        let first = first.to_string();
+        let resp = self
+            .get("/videos")
+            .await?
+            .query(&[("user_id", user_id), ("type", "archive"), ("first", first.as_str())])
+            .send()
+            .await?;
+        if !resp.status().is_success() {
+            return Ok(Vec::new());
+        }
+        #[derive(Deserialize)]
+        struct VideosResponse {
+            #[serde(default)]
+            data: Vec<ArchiveVideo>,
+        }
+        let body: VideosResponse = resp.json().await?;
+        Ok(body.data)
+    }
+}
+
+/// Ein Archiv-VOD (Teilmenge der Helix-`/videos`-Felder).
+#[derive(Debug, Clone, Deserialize)]
+pub struct ArchiveVideo {
+    #[serde(default)]
+    pub id: String,
+    #[serde(default)]
+    pub created_at: String,
+    #[serde(default)]
+    pub duration: String,
 }
 
 #[cfg(test)]
@@ -389,5 +431,29 @@ mod tests {
             .await;
         let total = client.get_followers_total("42").await.unwrap();
         assert_eq!(total, None);
+    }
+
+    #[tokio::test]
+    async fn archive_videos_parst_felder() {
+        let server = MockServer::start().await;
+        let client = client_with(&server).await;
+        Mock::given(method("GET"))
+            .and(path("/helix/videos"))
+            .and(query_param("user_id", "42"))
+            .and(query_param("type", "archive"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "data": [
+                    {"id": "v1", "created_at": "2026-06-09T18:00:00Z", "duration": "2h3m4s"},
+                    {"id": "v2", "created_at": "2026-06-08T18:00:00Z", "duration": "47m"}
+                ]
+            })))
+            .mount(&server)
+            .await;
+        let vods = client.get_archive_videos("42", 20).await.unwrap();
+        assert_eq!(vods.len(), 2);
+        assert_eq!(vods[0].id, "v1");
+        assert_eq!(vods[0].duration, "2h3m4s");
+        // Leerer Login → keine Anfrage, leere Liste.
+        assert!(client.get_archive_videos("  ", 20).await.unwrap().is_empty());
     }
 }
