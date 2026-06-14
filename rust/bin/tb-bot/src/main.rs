@@ -913,12 +913,12 @@ async fn subscription_maintenance_loop(
     tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     loop {
         tick.tick().await;
-        let rows: Vec<(String, String)> = match sqlx::query_as(
-            "SELECT LOWER(twitch_login), twitch_user_id \
+        let rows: Vec<(String, String, i32)> = match sqlx::query_as(
+            "SELECT LOWER(twitch_login), twitch_user_id, 1 AS is_partner \
              FROM twitch_streamers_partner_state \
              WHERE is_partner_active = 1 AND COALESCE(twitch_user_id, '') <> '' \
              UNION \
-             SELECT LOWER(twitch_login), twitch_user_id \
+             SELECT LOWER(twitch_login), twitch_user_id, 0 AS is_partner \
              FROM twitch_streamers \
              WHERE COALESCE(is_monitored_only, 0) = 1 AND COALESCE(twitch_user_id, '') <> ''",
         )
@@ -933,16 +933,25 @@ async fn subscription_maintenance_loop(
         };
 
         let active_ids: std::collections::HashSet<String> =
-            rows.iter().map(|(_, uid)| uid.clone()).collect();
+            rows.iter().map(|(_, uid, _)| uid.clone()).collect();
 
         let deleted = manager.cleanup_stale(&active_ids).await;
         tracing::debug!(deleted, "sub-maintenance: Stale-Cleanup abgeschlossen");
 
         let mut ensured = 0usize;
         let mut telemetry_ensured = 0usize;
-        for (login, uid) in &rows {
+        for (login, uid, is_partner) in &rows {
             manager.ensure_core_subscriptions(uid, login).await;
             ensured += 1;
+
+            // channel.raid (Arrival) proaktiv pro Partner abonnieren — Python
+            // (eventsub_mixin.py:2666) subscribt channel.raid für ALLE Streamer,
+            // damit eingehende/manuelle Raids erkannt werden, unabhängig von
+            // eigenen Outgoing-Raids. Partner-only: die Raid-Dankesnachricht ist
+            // partner-gebunden, monitored-only Kanäle haben keinen Konsumenten.
+            if *is_partner == 1 {
+                manager.ensure_raid_subscription(uid, login).await;
+            }
 
             // Broadcaster-Telemetrie-Subs (B9): nur mit gültigem Broadcaster-
             // Token + dessen Scopes. needs_reauth/blacklist → still überspringen.
