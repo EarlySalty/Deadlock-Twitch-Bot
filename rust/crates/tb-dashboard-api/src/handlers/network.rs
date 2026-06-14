@@ -34,6 +34,19 @@ pub struct NetworkResponse {
     pub streamers: Vec<NetworkStreamerJson>,
 }
 
+/// Prüft, ob ein `sqlx::Error` auf eine fehlende Relation (View/Tabelle) zurückgeht.
+///
+/// Postgres meldet das mit SQLSTATE `42P01` (`undefined_table`). Genau dieser Fall
+/// wird vom Python-Vorbild abgefangen: dort probt `_load_network_sync` zuerst, ob die
+/// View `twitch_streamers_partner_state` existiert, und liefert bei fehlender View
+/// graceful `{"streamers": []}` statt eines 500ers.
+fn ist_fehlende_relation(e: &sqlx::Error) -> bool {
+    e.as_database_error()
+        .and_then(|db| db.code())
+        .map(|code| code == "42P01")
+        .unwrap_or(false)
+}
+
 /// `GET /twitch/api/v2/public/network`
 pub async fn network_handler(State(pool): State<PgPool>) -> impl IntoResponse {
     match network_streamers(&pool).await {
@@ -41,6 +54,13 @@ pub async fn network_handler(State(pool): State<PgPool>) -> impl IntoResponse {
             let resp = NetworkResponse {
                 streamers: rows.into_iter().map(NetworkStreamerJson::from).collect(),
             };
+            (StatusCode::OK, Json(resp)).into_response()
+        }
+        // Fehlende View/Tabelle → graceful leeres Ergebnis (Python-Parität):
+        // 200 mit `{"streamers": []}` statt 500.
+        Err(e) if ist_fehlende_relation(&e) => {
+            tracing::warn!("network: Relation fehlt, liefere leeres Ergebnis: {e}");
+            let resp = NetworkResponse { streamers: vec![] };
             (StatusCode::OK, Json(resp)).into_response()
         }
         Err(e) => {
@@ -201,5 +221,43 @@ mod tests {
             .find(|s| s["login"] == "offuser")
             .unwrap();
         assert_eq!(offline["is_live"], false, "is_live muss bool false sein");
+    }
+
+    /// Fehlende View → graceful: 200 mit `{"streamers": []}` statt 500 (Python-Parität).
+    /// Wir löschen die View nach dem Setup, sodass der Query gegen eine fehlende Relation läuft.
+    #[tokio::test]
+    async fn network_fehlende_view_liefert_leer_200() {
+        let dsn = db_dsn_or_skip!();
+        let pool = make_pool(&dsn, "api_network_missing").await;
+
+        // View entfernen → der Endpoint-Query findet `twitch_streamers_partner_state` nicht.
+        sqlx::query("DROP VIEW IF EXISTS twitch_streamers_partner_state")
+            .execute(&pool)
+            .await
+            .expect("View droppen");
+
+        let app = build_public_router(pool);
+        let req = Request::builder()
+            .uri("/twitch/api/v2/public/network")
+            .body(axum::body::Body::empty())
+            .unwrap();
+        let resp = app.oneshot(req).await.unwrap();
+
+        assert_eq!(
+            resp.status(),
+            StatusCode::OK,
+            "fehlende View muss graceful 200 liefern, nicht 500"
+        );
+        let body = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert!(json.get("streamers").is_some(), "Feld 'streamers' fehlt");
+        assert!(json["streamers"].as_array().unwrap().is_empty());
+    }
+
+    /// Reiner Logik-Test ohne DB: ein Nicht-Datenbank-Fehler ist keine fehlende Relation.
+    #[test]
+    fn ist_fehlende_relation_false_fuer_nicht_db_fehler() {
+        assert!(!super::ist_fehlende_relation(&sqlx::Error::RowNotFound));
+        assert!(!super::ist_fehlende_relation(&sqlx::Error::PoolClosed));
     }
 }
