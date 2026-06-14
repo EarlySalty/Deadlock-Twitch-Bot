@@ -15,8 +15,8 @@ use tb_raid::{
     classify_partner_raid_arrival, decide_blacklist_action, serialize_confirmation_signals,
     ArrivalConfirmationService, ArrivalSignalContext, ArrivalTrackingStore, BlacklistScheduleAction,
     ConfirmedExternalRecruitmentRaid, ExternalRecruitmentStore, ManualRaidSuppression, PendingRaid,
-    PendingRaidStore, RaidArrivalSink, RecordArrivalInput, ScoreTrackingStore,
-    EXTERNAL_RECRUITMENT_BLACKLIST_GRACE_SECONDS,
+    PendingRaidStore, RaidArrivalSink, RaidBlacklistStore, RecordArrivalInput, ScoreTrackingStore,
+    EXTERNAL_RECRUITMENT_BLACKLIST_GRACE_SECONDS, EXTERNAL_RECRUITMENT_RAID_LIMIT,
 };
 
 use crate::confirm_resolver::{ConfirmContext, ConfirmResolver};
@@ -72,6 +72,7 @@ pub struct RaidArrivalSinkImpl {
     arrival_store: ArrivalTrackingStore,
     score_tracking: ScoreTrackingStore,
     external_recruitment: ExternalRecruitmentStore,
+    blacklist: RaidBlacklistStore,
     confirm_resolver: ConfirmResolver,
     /// Verwaiste Chat-Notifications, vom Sweeper periodisch promotet
     /// (Python `orphan_chat_raid_notifications` in `raid_state_store.py`).
@@ -89,11 +90,96 @@ impl RaidArrivalSinkImpl {
             arrival_store: ArrivalTrackingStore::new(pool.clone()),
             score_tracking: ScoreTrackingStore::new(pool.clone()),
             external_recruitment: ExternalRecruitmentStore::new(pool.clone()),
+            blacklist: RaidBlacklistStore::new(pool.clone()),
             confirm_resolver: ConfirmResolver::new(pool.clone(), target_game_lower),
             pool,
             pending,
             suppression,
             orphans: Mutex::new(std::collections::HashMap::new()),
+        }
+    }
+
+    /// Verarbeitet fällige verzögerte Recruitment-Blacklists (Grace abgelaufen):
+    /// trägt das Ziel tatsächlich in die Raid-Blacklist ein, sofern es nicht
+    /// bereits gelistet oder (wieder) Partner ist; danach wird das Pending
+    /// aufgeräumt. Python `process_due_external_recruitment_blacklist_pending`
+    /// (raid_blacklist.py:296). Wird vom Maintenance-Task in `main.rs` periodisch
+    /// aufgerufen.
+    pub async fn process_due_recruitment_blacklists(&self) {
+        let due = match self.external_recruitment.load_due_blacklist_pending().await {
+            Ok(rows) => rows,
+            Err(error) => {
+                tracing::debug!(%error, "load_due_blacklist_pending fehlgeschlagen");
+                return;
+            }
+        };
+
+        for entry in due {
+            // Bereits gelistet → nur das Pending aufräumen.
+            match self
+                .blacklist
+                .is_blacklisted(Some(&entry.target_id), &entry.target_login)
+                .await
+            {
+                Ok(true) => {
+                    self.cleanup_blacklist_pending(&entry.target_id).await;
+                    continue;
+                }
+                Ok(false) => {}
+                Err(error) => {
+                    tracing::debug!(
+                        %error, target = %entry.target_login,
+                        "is_blacklisted-Check (due) fehlgeschlagen"
+                    );
+                    continue;
+                }
+            }
+
+            // Partner-Ziele sind ausgenommen.
+            if is_target_partner(&self.pool, &entry.target_id, &entry.target_login).await {
+                self.cleanup_blacklist_pending(&entry.target_id).await;
+                continue;
+            }
+
+            let reason = format!(
+                "confirmed_external_recruitment_limit_grace_expired: count={} limit={} threshold_reached_at={}",
+                entry.confirmed_raid_count,
+                EXTERNAL_RECRUITMENT_RAID_LIMIT,
+                entry.threshold_reached_at.to_rfc3339(),
+            );
+            if let Err(error) = self
+                .blacklist
+                .add(
+                    Some(&entry.target_id),
+                    &entry.target_login,
+                    &reason,
+                    Utc::now(),
+                )
+                .await
+            {
+                // Pending NICHT löschen → der nächste Lauf versucht es erneut.
+                tracing::error!(
+                    %error, target = %entry.target_login,
+                    "add_to_blacklist (Recruitment-Grace abgelaufen) fehlgeschlagen"
+                );
+                continue;
+            }
+            tracing::info!(
+                target = %entry.target_login,
+                count = entry.confirmed_raid_count,
+                "Externes Recruitment-Ziel nach Grace auf die Raid-Blacklist gesetzt"
+            );
+            self.cleanup_blacklist_pending(&entry.target_id).await;
+        }
+    }
+
+    async fn cleanup_blacklist_pending(&self, target_id: &str) {
+        if let Err(error) = self
+            .external_recruitment
+            .delete_blacklist_pending(target_id)
+            .await
+        {
+            tracing::debug!(%error, "delete_blacklist_pending (Cleanup) fehlgeschlagen");
         }
     }
 

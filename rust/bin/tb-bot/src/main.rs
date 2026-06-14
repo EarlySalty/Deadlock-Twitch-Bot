@@ -477,6 +477,22 @@ async fn main() {
                 });
             }
 
+            // Recruitment-Blacklist-Maintenance: trägt verzögerte externe
+            // Recruitment-Ziele nach Ablauf der 48h-Grace tatsächlich in die
+            // Raid-Blacklist ein (Python
+            // process_due_external_recruitment_blacklist_pending, periodischer Tick).
+            {
+                let due_sink = sink.clone();
+                tokio::spawn(async move {
+                    let mut tick = tokio::time::interval(std::time::Duration::from_secs(300));
+                    tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+                    loop {
+                        tick.tick().await;
+                        due_sink.process_due_recruitment_blacklists().await;
+                    }
+                });
+            }
+
             // Periodischer Voll-Refresh aller Partner-Raid-Scores (Python
             // maybe_schedule_partner_raid_score_reconciliation, Intervall
             // 300 s): fängt Partner, deren Online/Offline-Events verpasst
