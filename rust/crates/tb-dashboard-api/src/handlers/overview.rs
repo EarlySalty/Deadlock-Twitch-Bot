@@ -45,7 +45,17 @@ pub struct OverviewData {
     pub findings: Vec<Finding>,
     pub actions: Vec<ActionItem>,
     pub sessions: Vec<OverviewSession>,
+    pub correlations: Correlations,
     pub network: OverviewNetwork,
+    #[serde(rename = "dataQuality")]
+    pub data_quality: DataQuality,
+}
+
+/// Python `{"botFilterApplied": True}`.
+#[derive(Serialize)]
+pub struct DataQuality {
+    #[serde(rename = "botFilterApplied")]
+    pub bot_filter_applied: bool,
 }
 
 /// Health-Scores (Python `_calculate_health_scores`), je 0–100.
@@ -220,6 +230,56 @@ fn generate_actions(
     out
 }
 
+/// Metrik-Korrelationen (Python `_calculate_correlations`).
+#[derive(Serialize)]
+pub struct Correlations {
+    #[serde(rename = "durationVsViewers")]
+    pub duration_vs_viewers: f64,
+    #[serde(rename = "chatVsRetention")]
+    pub chat_vs_retention: f64,
+}
+
+/// Pearson-Korrelation, auf 2 Nachkommastellen gerundet (Python `corr`).
+/// <2 Werte oder konstante Reihe (Nenner 0) → 0.
+fn pearson(a: &[f64], b: &[f64]) -> f64 {
+    if a.len() < 2 {
+        return 0.0;
+    }
+    let n = a.len() as f64;
+    let mean_a = a.iter().sum::<f64>() / n;
+    let mean_b = b.iter().sum::<f64>() / n;
+    let num: f64 = a
+        .iter()
+        .zip(b.iter())
+        .map(|(x, y)| (x - mean_a) * (y - mean_b))
+        .sum();
+    let den_a = a.iter().map(|x| (x - mean_a).powi(2)).sum::<f64>().sqrt();
+    let den_b = b.iter().map(|y| (y - mean_b).powi(2)).sum::<f64>().sqrt();
+    if den_a == 0.0 || den_b == 0.0 {
+        return 0.0;
+    }
+    ((num / (den_a * den_b)) * 100.0).round() / 100.0
+}
+
+/// Korrelationen über die Sessions-Liste (Python `_calculate_correlations`).
+/// <3 Sessions → beide 0.
+fn calculate_correlations(sessions: &[OverviewSession]) -> Correlations {
+    if sessions.len() < 3 {
+        return Correlations {
+            duration_vs_viewers: 0.0,
+            chat_vs_retention: 0.0,
+        };
+    }
+    let durations: Vec<f64> = sessions.iter().map(|s| s.duration as f64).collect();
+    let viewers: Vec<f64> = sessions.iter().map(|s| s.avg_viewers).collect();
+    let chatters: Vec<f64> = sessions.iter().map(|s| s.unique_chatters as f64).collect();
+    let retention: Vec<f64> = sessions.iter().map(|s| s.retention_10m).collect();
+    Correlations {
+        duration_vs_viewers: pearson(&durations, &viewers),
+        chat_vs_retention: pearson(&chatters, &retention),
+    }
+}
+
 /// Raid-Netzwerk-Kachel (Python `_get_network_stats`).
 #[derive(Serialize)]
 pub struct OverviewNetwork {
@@ -345,6 +405,7 @@ pub async fn overview_handler(
     let sessions = overview_sessions(&pool, &since, login_ref, 50)
         .await
         .map_err(|_| ApiError::internal())?;
+    let correlations = calculate_correlations(&sessions);
 
     let airtime = metrics.total_airtime_hours.unwrap_or(0.0);
     let total_followers = metrics.total_followers.unwrap_or(0);
@@ -414,6 +475,10 @@ pub async fn overview_handler(
         findings,
         actions,
         sessions,
+        correlations,
+        data_quality: DataQuality {
+            bot_filter_applied: true,
+        },
         summary: OverviewSummary {
             avg_viewers: metrics.avg_avg_viewers.unwrap_or(0.0),
             peak_viewers: metrics.max_peak_viewers.unwrap_or(0),
@@ -691,6 +756,10 @@ mod tests {
         assert!((v["sessions"][0]["retention10m"].as_f64().unwrap() - 60.0).abs() < 0.01);
         assert_eq!(v["sessions"][0]["uniqueChatters"], 1);
         assert_eq!(v["sessions"][0]["peakViewers"], 200);
+        // Correlations: nur 1 Session (<3) → 0. dataQuality-Konstante.
+        assert_eq!(v["correlations"]["durationVsViewers"], 0.0);
+        assert_eq!(v["correlations"]["chatVsRetention"], 0.0);
+        assert_eq!(v["dataQuality"]["botFilterApplied"], true);
     }
 
     #[test]
@@ -734,5 +803,34 @@ mod tests {
         assert_eq!(f2.len(), 2); // 2x info (Retention+Chat), follower_valid=0 → kein Follower-Finding
         assert!(f2.iter().all(|x| x.kind == "info"));
         assert!(generate_actions(80.0, 1, 50.0, 1, 0.2, 0).is_empty());
+    }
+
+    #[test]
+    fn correlations_pearson() {
+        // perfekt positiv / negativ / konstant.
+        assert!((pearson(&[1.0, 2.0, 3.0], &[10.0, 20.0, 30.0]) - 1.0).abs() < 1e-9);
+        assert!((pearson(&[1.0, 2.0, 3.0], &[30.0, 20.0, 10.0]) + 1.0).abs() < 1e-9);
+        assert_eq!(pearson(&[1.0, 1.0, 1.0], &[1.0, 2.0, 3.0]), 0.0); // konstante Reihe → Nenner 0
+
+        fn sess(duration: i64, avg: f64, chatters: i64, ret: f64) -> OverviewSession {
+            OverviewSession {
+                id: 0, date: String::new(), start_time: String::new(),
+                duration, start_viewers: 0, peak_viewers: 0, end_viewers: 0,
+                avg_viewers: avg, retention_5m: 0.0, retention_10m: ret, retention_20m: 0.0,
+                dropoff_pct: 0.0, unique_chatters: chatters, first_time_chatters: 0,
+                returning_chatters: 0, followers_start: 0, followers_end: 0, title: String::new(),
+            }
+        }
+        // <3 Sessions → beide 0.
+        let c0 = calculate_correlations(&[sess(1, 1.0, 1, 1.0), sess(2, 2.0, 2, 2.0)]);
+        assert_eq!((c0.duration_vs_viewers, c0.chat_vs_retention), (0.0, 0.0));
+        // duration↑viewers↑ = +1, chatters↑retention↓ = -1.
+        let c = calculate_correlations(&[
+            sess(1, 10.0, 1, 30.0),
+            sess(2, 20.0, 2, 20.0),
+            sess(3, 30.0, 3, 10.0),
+        ]);
+        assert!((c.duration_vs_viewers - 1.0).abs() < 1e-9);
+        assert!((c.chat_vs_retention + 1.0).abs() < 1e-9);
     }
 }
