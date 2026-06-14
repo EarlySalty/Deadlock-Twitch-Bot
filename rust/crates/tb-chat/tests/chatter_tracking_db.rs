@@ -189,6 +189,7 @@ fn make_event(broadcaster_login: &str, chatter_login: &str) -> ChatMessageEvent 
         },
         badges: vec![],
         color: String::new(),
+        ..Default::default()
     }
 }
 

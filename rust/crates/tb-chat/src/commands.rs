@@ -1434,6 +1434,7 @@ mod tests {
             },
             badges,
             color: String::new(),
+            ..Default::default()
         }
     }
 
@@ -1519,6 +1520,7 @@ mod tests {
             },
             badges: vec![],
             color: String::new(),
+            ..Default::default()
         };
         assert!(event.is_broadcaster());
     }

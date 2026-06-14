@@ -197,6 +197,7 @@ mod tests {
             message: ChatMessageBody { text: text.to_string(), fragments: vec![] },
             badges: vec![],
             color: String::new(),
+            ..Default::default()
         }
     }
 

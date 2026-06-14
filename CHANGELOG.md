@@ -1,3 +1,11 @@
+## #207 — Multi-Stream / Shared Chat: Bot arbeitet jetzt im richtigen Kanal
+
+**Ausgangslage:** Bei Twitch „Shared Chat" teilen sich mehrere Streamer einen gemeinsamen Chat (typisch bei Multi-Streams/Kollabs — eine Nachricht erscheint dann in allen beteiligten Kanälen). Twitch markiert jede solche Nachricht mit ihrem echten Herkunfts-Kanal. Beim Umzug auf das neue System wurde dieses Feld komplett ignoriert: Der Bot hielt jede Nachricht für eine aus dem Kanal, auf den er gerade lauscht (den Host), statt aus dem Kanal, in dem sie wirklich geschrieben wurde. In der Vorgänger-Version war das korrekt — die Funktion ist beim Port verloren gegangen.
+
+**Was geändert wurde:** Der Bot liest jetzt den Quell-Kanal jeder Nachricht und behandelt sie konsequent in dessen Kontext — wie früher. Moderation, Chat-Statistik, Commands und Werbung laufen damit wieder im richtigen Kanal. Wer kein Shared Chat nutzt, merkt nichts: Für normale Nachrichten ändert sich nichts.
+
+**Wie es funktioniert:** Sobald Twitch eine Nachricht als „stammt aus einem anderen Kanal der Session" kennzeichnet, normalisiert der Bot sie ganz am Anfang der Verarbeitung einmalig auf diesen Quell-Kanal — Kanal-ID, Kanal-Name und die Nachrichten-ID für Mod-Aktionen. Ab da arbeiten alle weiteren Schritte (Klassifizierung, Ban-Liste, Scam-/Spam-Prüfung, Zählung, Commands, Werbung) automatisch im richtigen Kanal, ohne dass jede Stelle das einzeln wissen muss. Was vorher schiefging: Ein Ban oder Timeout hätte den falschen Kanal getroffen (mit einer Nachrichten-ID, die es dort gar nicht gibt → ging ins Leere oder traf den Falschen), fremde Zuschauer wären als eigene Chatter gezählt worden, und Commands wie `!clip`/`!raid` sowie die Werbe-Logik wären im Host- statt im Quell-Kanal gelaufen.
+
 ## #206 — Analyse-Dashboard rechnet ehrlicher: Unique-Zahlen entdoppelt, keine erfundenen Werte mehr, Geschätztes als geschätzt markiert
 
 **Ausgangslage:** Beim genauen Nachrechnen der Analyse-Werte fielen mehrere Stellen auf, an denen Zahlen entweder falsch gerechnet, im Fehlerfall durch Beispieldaten ersetzt oder geschätzt-aber-als-gemessen dargestellt wurden:

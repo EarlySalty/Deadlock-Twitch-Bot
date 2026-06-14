@@ -85,6 +85,7 @@ fn make_event(chatter_login: &str, chatter_id: &str) -> ChatMessageEvent {
         },
         badges: vec![],
         color: String::new(),
+        ..Default::default()
     }
 }
 

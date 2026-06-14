@@ -384,6 +384,15 @@ impl ChatPipeline {
     pub async fn handle(&self, event: &ChatMessageEvent) {
         let p = &self.parts;
 
+        // Twitch Shared Chat: Stammt die Nachricht aus einem fremden Quell-Kanal
+        // der Session, wird das Event EINMAL hier auf diesen Quell-Kanal
+        // normalisiert (wie Python bot.py:1505) — danach arbeiten alle folgenden
+        // Schritte (Klassifizierung, Global-Ban, Scam, Spam, Tracking, Promos,
+        // Commands) automatisch im richtigen Kanal statt im Host-Abonnement.
+        // Ohne Shared Chat ist das ein geliehener No-op (kein Klon).
+        let normalized = event.with_effective_channel();
+        let event = &*normalized;
+
         // Schritt 0: Echo-/Self-Filter (bot.py Z. 1528–1532)
         if event.chatter_user_id == p.bot_user_id {
             return;

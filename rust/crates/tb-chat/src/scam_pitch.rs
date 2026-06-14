@@ -1789,6 +1789,7 @@ mod tests {
             },
             badges: vec![],
             color: String::new(),
+            ..Default::default()
         }
     }
 

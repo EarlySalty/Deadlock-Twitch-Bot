@@ -227,6 +227,7 @@ mod tests {
             message: ChatMessageBody { text: text.to_string(), fragments: vec![] },
             badges,
             color: String::new(),
+            ..Default::default()
         }
     }
 
@@ -361,6 +362,7 @@ mod db_tests {
             message: ChatMessageBody { text: text.to_string(), fragments: vec![] },
             badges: vec![],
             color: String::new(),
+            ..Default::default()
         }
     }
 
