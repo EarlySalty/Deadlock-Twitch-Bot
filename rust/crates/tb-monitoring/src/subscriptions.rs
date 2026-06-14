@@ -30,10 +30,12 @@ pub const CORE_SUBSCRIPTIONS: [(&str, &str); 3] = [
 /// (Z. 1623). Werden nur angelegt, wenn der Token den jeweiligen Scope trägt.
 /// Die zugehörigen Events verarbeitet der Dispatcher bereits (`store_telemetry`).
 ///
-/// Die Moderator-Subscriptions (channel.ban/unban/shoutout/follow/moderate)
-/// fehlen bewusst: sie brauchen den **Bot-Token**, der während des Strangler-
-/// Cutovers noch vom Python-Chat-Prozess refresht wird — ein zweiter Refresher
-/// würde die Refresh-Token-Rotation beider Prozesse gegenseitig invalidieren.
+/// `channel.moderate` wird separat im Chat-Sub-Reconcile (`chat_wiring.rs`) mit
+/// dem **Rust-Bot-Token** angelegt (`ensure_moderator_subscription`) — es speist
+/// den `BlacklistRaidGuard`. Das ist möglich, seit der Python-Chat-Prozess
+/// abgeschaltet ist und Rust den Bot-Token allein refresht (kein Dual-Refresh-
+/// Race mehr). Die übrigen Moderator-Subs (channel.ban/unban/shoutout/follow)
+/// werden derzeit nicht gebraucht und bleiben weg.
 pub const BROADCASTER_TELEMETRY_SUBSCRIPTIONS: [(&str, &str, &str); 12] = [
     ("channel.cheer", "1", "bits:read"),
     ("channel.bits.use", "1", "bits:read"),
@@ -234,6 +236,34 @@ impl SubscriptionManager {
                 .await;
         }
         ok
+    }
+
+    /// `channel.moderate`-Subscription für einen Partner-Kanal, in dem der Bot
+    /// Moderator ist (Port von `eventsub_mixin.py:1711`). Condition
+    /// `{broadcaster_user_id, moderator_user_id: <bot>}`, Auth = **Bot-User-Token**
+    /// (braucht `channel:moderate`-Scope). Speist den `BlacklistRaidGuard`, der
+    /// manuelle Raids auf Blacklist-Ziele abbricht. Ist der Bot kein Moderator im
+    /// Kanal, liefert Twitch 403 → `perm_failed` (kein Retry-Spam).
+    pub async fn ensure_moderator_subscription(
+        &self,
+        broadcaster_id: &str,
+        bot_user_id: &str,
+        bot_token: &str,
+        login: &str,
+    ) -> bool {
+        let condition = serde_json::json!({
+            "broadcaster_user_id": broadcaster_id.trim(),
+            "moderator_user_id": bot_user_id.trim(),
+        });
+        self.ensure_subscription_with_condition(
+            "channel.moderate",
+            "1",
+            condition,
+            broadcaster_id,
+            login,
+            Some(bot_token),
+        )
+        .await
     }
 
     /// Broadcaster-Telemetrie-Subs (Bits/Subs/Hype/Ads/Channel-Points) für einen

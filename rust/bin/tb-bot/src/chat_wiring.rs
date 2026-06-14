@@ -393,12 +393,13 @@ impl ChatRuntime {
         };
         let pool = self.pool.clone();
         let bot_user_id = self.bot_user_id.clone();
+        let token_manager = Arc::clone(&self.token_manager);
         tokio::spawn(async move {
             let mut tick = tokio::time::interval(CHAT_SUB_RECONCILE_INTERVAL);
             tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
             loop {
                 tick.tick().await;
-                reconcile_chat_subscriptions(&manager, &pool, &bot_user_id).await;
+                reconcile_chat_subscriptions(&manager, &pool, &bot_user_id, &token_manager).await;
             }
         });
     }
@@ -414,6 +415,7 @@ async fn reconcile_chat_subscriptions(
     manager: &SubscriptionManager,
     pool: &PgPool,
     bot_user_id: &str,
+    token_manager: &BotTokenManager,
 ) {
     let rows: Vec<(String, String)> = match sqlx::query_as(
         "SELECT LOWER(ps.twitch_login), ps.twitch_user_id \
@@ -452,6 +454,34 @@ async fn reconcile_chat_subscriptions(
         failed,
         "chat-sub-reconcile abgeschlossen"
     );
+
+    // channel.moderate pro Partner-Kanal (Python eventsub_mixin.py:1711) — speist
+    // den BlacklistRaidGuard (bricht manuelle Raids auf Blacklist-Ziele ab). Auth =
+    // Bot-User-Token mit channel:moderate-Scope, Condition {broadcaster, moderator:bot}.
+    // Möglich, seit Rust den Bot-Token allein refresht (Python-Chat abgeschaltet).
+    // Kanäle ohne Bot-Moderator → 403 → perm_failed (kein Retry-Spam).
+    let scopes = token_manager.scopes().await;
+    if !scopes.iter().any(|s| s == "channel:moderate") {
+        tracing::debug!("channel.moderate-Reconcile übersprungen: Bot-Token ohne channel:moderate-Scope");
+        return;
+    }
+    let bot_token = match token_manager.access_token().await {
+        Ok(t) => t,
+        Err(e) => {
+            tracing::warn!("channel.moderate-Reconcile: Bot-Token nicht verfügbar: {e}");
+            return;
+        }
+    };
+    let mut mod_ok = 0usize;
+    for (login, broadcaster_id) in &rows {
+        if manager
+            .ensure_moderator_subscription(broadcaster_id, bot_user_id, &bot_token, login)
+            .await
+        {
+            mod_ok += 1;
+        }
+    }
+    tracing::info!(kanäle = rows.len(), mod_ok, "channel.moderate-Reconcile abgeschlossen");
 }
 
 /// `tb_chat_autoban_log` ist eine neue Rust-Tabelle (nicht im Python-Schema) —
