@@ -80,6 +80,23 @@ def _get_minimax_client() -> Any:
     )
 
 
+def _track_minimax_completion(completion: Any, *, purpose: str) -> None:
+    """Schreibt einen MiniMax-Call ins gemeinsame Usage-Ledger (best-effort, wirft nie)."""
+    try:
+        import sys
+        _d = os.path.expanduser("~/Documents/.claude/minimax-usage")
+        if _d not in sys.path:
+            sys.path.insert(0, _d)
+        import minimax_usage as _mmu
+        usage = getattr(completion, "usage", None)
+        tokens_in = int(getattr(usage, "prompt_tokens", 0) or 0)
+        tokens_out = int(getattr(usage, "completion_tokens", 0) or 0)
+        _mmu.record(source="twitch-bot", tokens_in=tokens_in, tokens_out=tokens_out,
+                    model=MINIMAX_MODEL, purpose=purpose, success=True)
+    except Exception:
+        pass
+
+
 def _emoji_ratio(titles: list[dict]) -> float:
     if not titles:
         return 0.0
@@ -323,6 +340,7 @@ async def generate_title(
         temperature=0.35,
         max_tokens=2000,
     )
+    _track_minimax_completion(completion, purpose="title")
     raw = completion.choices[0].message.content
     return _sanitize_title_result(
         parse_title_response(raw),
@@ -371,6 +389,7 @@ ANTWORT-FORMAT (JSON):
         temperature=0.5,
         max_tokens=1500,
     )
+    _track_minimax_completion(completion, purpose="title-insight")
     raw = completion.choices[0].message.content
     try:
         data = json.loads(_strip_code_fence(raw))

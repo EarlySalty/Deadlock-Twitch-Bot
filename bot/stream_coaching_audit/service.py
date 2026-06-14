@@ -265,6 +265,20 @@ async def _detect_llm_findings_minimax(segments: Sequence[AuditSegment]) -> list
             max_tokens=1200,
             temperature=0.0,
         )
+        # Verbrauch ins gemeinsame MiniMax-Ledger (best-effort, wirft nie).
+        try:
+            import sys
+            _d = os.path.expanduser("~/Documents/.claude/minimax-usage")
+            if _d not in sys.path:
+                sys.path.insert(0, _d)
+            import minimax_usage as _mmu
+            _usage = getattr(response, "usage", None)
+            _mmu.record(source="twitch-bot",
+                        tokens_in=int(getattr(_usage, "prompt_tokens", 0) or 0),
+                        tokens_out=int(getattr(_usage, "completion_tokens", 0) or 0),
+                        model=model, purpose="coaching-audit", success=True)
+        except Exception:
+            pass
         raw = response.choices[0].message.content if response.choices else ""
         payload = _extract_json_object(raw or "")
         by_id = {segment.segment_id: segment for segment in batch}

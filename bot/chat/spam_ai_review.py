@@ -161,6 +161,20 @@ async def _call_minimax(content: str) -> dict | None:
             max_tokens=200,
             temperature=0.0,
         )
+        # Verbrauch ins gemeinsame MiniMax-Ledger (best-effort, wirft nie).
+        try:
+            import sys, os as _os
+            _d = _os.path.expanduser("~/Documents/.claude/minimax-usage")
+            if _d not in sys.path:
+                sys.path.insert(0, _d)
+            import minimax_usage as _mmu
+            _usage = getattr(response, "usage", None)
+            _mmu.record(source="twitch-bot",
+                        tokens_in=int(getattr(_usage, "prompt_tokens", 0) or 0),
+                        tokens_out=int(getattr(_usage, "completion_tokens", 0) or 0),
+                        model="MiniMax-M3", purpose="spam-review", success=True)
+        except Exception:
+            pass
         raw = (response.choices[0].message.content or "").strip() if response.choices else ""
         raw = re.sub(r"<think>.*?</think>", "", raw, flags=re.DOTALL | re.IGNORECASE).strip()
         m = re.search(r"\{.*\}", raw, re.DOTALL)

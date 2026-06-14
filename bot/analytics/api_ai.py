@@ -22,6 +22,28 @@ from ..storage import pg as storage
 
 log = logging.getLogger("TwitchStreams.AnalyticsV2.AI")
 
+
+def _track_minimax_completion(completion: Any, *, purpose: str, model: str = "MiniMax-M3", success: bool = True) -> None:
+    """Schreibt einen MiniMax-Call (OpenAI-kompatibles completion-Objekt) ins Ledger.
+
+    Best-effort: liest usage.prompt_tokens/usage.completion_tokens, wirft nie und
+    blockiert den Aufrufer nicht. Wird von allen analytics-MiniMax-Pfaden genutzt.
+    """
+    try:
+        import sys
+        _d = os.path.expanduser("~/Documents/.claude/minimax-usage")
+        if _d not in sys.path:
+            sys.path.insert(0, _d)
+        import minimax_usage as _mmu
+        usage = getattr(completion, "usage", None)
+        tokens_in = int(getattr(usage, "prompt_tokens", 0) or 0)
+        tokens_out = int(getattr(usage, "completion_tokens", 0) or 0)
+        _mmu.record(source="twitch-bot", tokens_in=tokens_in, tokens_out=tokens_out,
+                    model=model, purpose=purpose, success=success)
+    except Exception:
+        pass
+
+
 _anthropic_client = None
 _minimax_client = None
 _DOW_NAMES = ["So", "Mo", "Di", "Mi", "Do", "Fr", "Sa"]
@@ -893,6 +915,7 @@ Vollständige Viewer-Metriken nur für Einträge ohne diesen Hinweis verwenden."
                 temperature=0.5,
                 max_tokens=60000,
             )
+            _track_minimax_completion(completion, purpose="analytics", model=MINIMAX_MODEL)
             raw = ""
             choices = getattr(completion, "choices", None) or []
             if choices:
@@ -960,6 +983,7 @@ Vollständige Viewer-Metriken nur für Einträge ohne diesen Hinweis verwenden."
             temperature=0.5,
             max_tokens=4000,
         )
+        _track_minimax_completion(completion, purpose="analytics-chat", model=MINIMAX_MODEL)
         choices = getattr(completion, "choices", None) or []
         if not choices:
             return ""

@@ -22,7 +22,7 @@ from ..social_media.settings import external_llm_consent
 from .chat_social_graph_loader import load_chat_social_graph_payload
 from .error_utils import analytics_internal_error_response
 from .raw_chat_status import build_raw_chat_status
-from .api_ai import _get_minimax_client, MINIMAX_MODEL
+from .api_ai import _get_minimax_client, MINIMAX_MODEL, _track_minimax_completion
 
 log = logging.getLogger("TwitchStreams.AnalyticsV2")
 
@@ -1081,6 +1081,7 @@ Hier sind die Nachrichten:
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0.1,
             )
+            _track_minimax_completion(response, purpose="chat-deep-analysis", model=MINIMAX_MODEL)
             content = response.choices[0].message.content
             
             # Extract JSON object

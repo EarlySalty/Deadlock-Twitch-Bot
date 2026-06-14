@@ -2,7 +2,7 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-CONFIG_FILE="${INFISICAL_CONFIG_FILE:-$HOME/.config/deadlock-twitch-bot/infisical.env}"
+CONFIG_FILE="${INFISICAL_CONFIG_FILE:-$HOME/.config/deadlock-twitch-bot/infisical.conf}"
 
 if [[ ! -f "$CONFIG_FILE" ]]; then
   echo "Missing Infisical config: $CONFIG_FILE" >&2
@@ -12,6 +12,16 @@ fi
 set -a
 source "$CONFIG_FILE"
 set +a
+
+if [[ -n "${CREDENTIALS_DIRECTORY:-}" && -f "$CREDENTIALS_DIRECTORY/infisical-token" ]]; then
+  INFISICAL_SERVICE_TOKEN="$(<"$CREDENTIALS_DIRECTORY/infisical-token")"
+  export INFISICAL_SERVICE_TOKEN
+fi
+
+if [[ -z "${INFISICAL_SERVICE_TOKEN:-}" ]]; then
+  echo "INFISICAL_SERVICE_TOKEN nicht gesetzt — weder in $CONFIG_FILE noch via systemd-creds." >&2
+  exit 1
+fi
 
 if [[ -x "$ROOT_DIR/.venv/bin/python" ]]; then
   PYTHON_BIN="${PYTHON_BIN:-$ROOT_DIR/.venv/bin/python}"

@@ -20,6 +20,7 @@ from .api_ai import (
     _get_async_client,
     _get_minimax_client,
     _plan_ai_model,
+    _track_minimax_completion,
 )
 from .error_utils import analytics_internal_error_response
 from .post_stream import (
@@ -240,6 +241,7 @@ async def _call_minimax(prompt: str) -> str:
         ),
         timeout=180,
     )
+    _track_minimax_completion(completion, purpose="post-stream-report", model=MINIMAX_MODEL)
     choices = getattr(completion, "choices", None) or []
     if not choices:
         return ""

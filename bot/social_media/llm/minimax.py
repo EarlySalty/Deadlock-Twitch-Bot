@@ -110,6 +110,17 @@ class MiniMaxProvider:
         usage = getattr(response, "usage", None)
         prompt_tokens = int(getattr(usage, "prompt_tokens", 0) or 0)
         completion_tokens = int(getattr(usage, "completion_tokens", 0) or 0)
+        # Verbrauch ins gemeinsame MiniMax-Ledger (best-effort, wirft nie).
+        try:
+            import sys
+            _d = os.path.expanduser("~/Documents/.claude/minimax-usage")
+            if _d not in sys.path:
+                sys.path.insert(0, _d)
+            import minimax_usage as _mmu
+            _mmu.record(source="twitch-bot", tokens_in=prompt_tokens, tokens_out=completion_tokens,
+                        model=self.model, purpose="social-media", success=True)
+        except Exception:
+            pass
         cost_estimate = (
             (prompt_tokens / 1000.0) * _INPUT_USD_PER_1K
             + (completion_tokens / 1000.0) * _OUTPUT_USD_PER_1K

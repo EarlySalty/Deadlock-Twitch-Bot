@@ -140,6 +140,18 @@ class EngagementMinimaxClient:
         completion_tokens = (
             getattr(response.usage, "completion_tokens", None) if response.usage else None
         )
+        # Verbrauch ins gemeinsame MiniMax-Ledger (best-effort, wirft nie).
+        try:
+            import sys
+            _d = os.path.expanduser("~/Documents/.claude/minimax-usage")
+            if _d not in sys.path:
+                sys.path.insert(0, _d)
+            import minimax_usage as _mmu
+            _mmu.record(source="twitch-bot", tokens_in=prompt_tokens or 0,
+                        tokens_out=completion_tokens or 0, model=self._model,
+                        purpose="engagement", success=True)
+        except Exception:
+            pass
 
         return ChatResponse(
             text=text,
