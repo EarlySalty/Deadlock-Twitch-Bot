@@ -19,4 +19,5 @@ pub mod minimax_chat;
 pub mod persona;
 pub mod pipeline;
 pub mod rhythm;
+pub mod style_examples;
 pub mod types;
