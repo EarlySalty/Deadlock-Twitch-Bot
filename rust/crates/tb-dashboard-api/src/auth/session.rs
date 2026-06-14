@@ -306,6 +306,57 @@ impl DashboardAuthState {
         Ok(Some(partner))
     }
 
+    /// `true` wenn der Partner **aktiv** geführt ist — Port von Python
+    /// `_resolve_partner_active_status` (auth_mixin.py:782-831): active =
+    /// `status='active'` UND `manual_partner_opt_out=0` UND
+    /// `technical_pause_reason NOT IN (blocked,bot_banned,token_error,token_error_expired)`.
+    /// Keine Zeile ODER DB-Fehler → `false` (passive) — 1:1 Python (gibt dort
+    /// „passive" zurück). Der `partner_status_gate` nutzt das für active-only-Routen.
+    pub async fn is_partner_active(&self, login: &str, user_id: &str) -> bool {
+        let login = login.trim().to_lowercase();
+        let user_id = user_id.trim();
+        if login.is_empty() && user_id.is_empty() {
+            return false;
+        }
+        let row: Result<Option<(i32,)>, _> = sqlx::query_as(
+            r#"
+            SELECT CASE
+                WHEN COALESCE(p.status, '') = 'active'
+                     AND COALESCE(p.manual_partner_opt_out, 0) = 0
+                     AND LOWER(COALESCE(p.technical_pause_reason, '')) NOT IN
+                         ('blocked', 'bot_banned', 'token_error', 'token_error_expired')
+                THEN 1 ELSE 0
+            END AS is_active
+            FROM twitch_partners p
+            WHERE LOWER(COALESCE(p.technical_pause_reason, '')) <> 'blocked'
+              AND (
+                  LOWER(p.twitch_login) = $1
+                  OR ($2 <> '' AND p.twitch_user_id = $2)
+              )
+            ORDER BY CASE
+                WHEN COALESCE(p.status, '') = 'active' THEN 0
+                WHEN COALESCE(p.status, '') = 'archived' THEN 1
+                WHEN COALESCE(p.status, '') = 'departnered' THEN 2
+                ELSE 3
+            END,
+            COALESCE(p.departnered_at, p.admin_archived_at, p.partnered_at) DESC
+            LIMIT 1
+            "#,
+        )
+        .bind(&login)
+        .bind(user_id)
+        .fetch_optional(&self.pool)
+        .await;
+        match row {
+            Ok(Some((is_active,))) => is_active == 1,
+            Ok(None) => false,
+            Err(error) => {
+                debug!(%error, "is_partner_active-Query fehlgeschlagen → passive");
+                false
+            }
+        }
+    }
+
     /// Lädt einen nicht-abgelaufenen Session-Row und entschlüsselt den Payload.
     ///
     /// Gibt `None` zurück wenn nicht gefunden, abgelaufen oder Entschlüsselung fehlschlägt.

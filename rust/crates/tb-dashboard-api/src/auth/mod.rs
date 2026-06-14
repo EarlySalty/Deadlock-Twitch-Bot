@@ -23,6 +23,7 @@
 
 pub mod fernet;
 pub mod level;
+pub mod partner_gate;
 pub mod session;
 
 // ---------------------------------------------------------------------------

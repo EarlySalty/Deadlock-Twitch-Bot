@@ -196,6 +196,7 @@ pub fn build_authed_router(pool: PgPool, token: String) -> Router {
         .route("/analyse/*path", get(spa::analyse_assets_handler))
         .with_state(pool)
         .layer(Extension(ExpectedToken(token)))
+        .layer(axum::middleware::from_fn(crate::auth::partner_gate::partner_status_gate))
 }
 
 /// Baut den Router für Admin-System-Endpoints.
