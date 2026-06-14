@@ -2431,6 +2431,7 @@ dependencies = [
  "reqwest",
  "rusqlite",
  "serde_json",
+ "sqlx",
  "tokio",
  "tracing",
  "wiremock",

@@ -16,6 +16,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
 
 use rusqlite::OpenFlags;
+use sqlx::PgPool;
 
 /// Steam64-Basis-Offset (account_id = steam64 − BASE).
 pub const STEAM64_BASE: i64 = 76561197960265728;
@@ -96,6 +97,55 @@ pub fn load_manual_steamids(path: &Path) -> BTreeMap<String, String> {
         result.insert(k, json_to_str(&v));
     }
     result
+}
+
+/// Aktive Partner mit hinterlegter Discord-User-ID aus Postgres (Python
+/// `_query_partner_streamers`). `discord_user_id` ist TEXT → wie Pythons `int()`
+/// geparst; nicht-parsebare Zeilen werden verworfen.
+pub async fn query_partner_streamers(pool: &PgPool) -> Vec<(String, i64)> {
+    let rows = sqlx::query_as::<_, (String, String)>(
+        "SELECT twitch_login, discord_user_id \
+         FROM twitch_streamers_partner_state \
+         WHERE is_partner_active = 1 AND discord_user_id IS NOT NULL \
+         ORDER BY twitch_login",
+    )
+    .fetch_all(pool)
+    .await;
+    match rows {
+        Ok(rows) => rows
+            .into_iter()
+            .filter_map(|(login, discord)| {
+                discord.trim().parse::<i64>().ok().map(|id| (login, id))
+            })
+            .collect(),
+        Err(e) => {
+            tracing::error!(error = %e, "HighlightClipper: Partner-Query fehlgeschlagen");
+            Vec::new()
+        }
+    }
+}
+
+/// Voller Orchestrator: Partner aus Postgres holen, Discord-IDs über die
+/// Steam-SQLite zu account_ids auflösen, manuelle Overrides anwenden (Python
+/// `_get_partner_streamers`). Die blockierende SQLite-Abfrage läuft in
+/// `spawn_blocking`, um den async-Runtime nicht zu blockieren.
+pub async fn get_partner_streamers(
+    pool: &PgPool,
+    steam_db_path: &Path,
+    steamids_json_path: &Path,
+) -> Vec<(String, String)> {
+    let rows = query_partner_streamers(pool).await;
+    let discord_ids: Vec<i64> = rows.iter().map(|(_, id)| *id).collect();
+    let discord_to_account = if discord_ids.is_empty() {
+        HashMap::new()
+    } else {
+        let db = steam_db_path.to_path_buf();
+        tokio::task::spawn_blocking(move || load_steam_account_ids(&db, &discord_ids))
+            .await
+            .unwrap_or_default()
+    };
+    let manual = load_manual_steamids(steamids_json_path);
+    combine_partners(&rows, &discord_to_account, manual)
 }
 
 /// Kombiniert Partner-Zeilen, SQLite-Auflösung und manuelle Overrides zu einer
@@ -235,5 +285,96 @@ mod tests {
                 ("nani".to_string(), "999".to_string()),
             ]
         );
+    }
+}
+
+#[cfg(test)]
+mod db_tests {
+    use super::*;
+    use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
+    use std::path::PathBuf;
+    use std::str::FromStr;
+
+    async fn make_pool(schema: &str) -> Option<PgPool> {
+        let dsn = std::env::var("TB_TEST_DATABASE_URL").ok()?;
+        let admin = PgPoolOptions::new().max_connections(1).connect(&dsn).await.unwrap();
+        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE")).execute(&admin).await.unwrap();
+        sqlx::query(&format!("CREATE SCHEMA {schema}")).execute(&admin).await.unwrap();
+        admin.close().await;
+        let opts = PgConnectOptions::from_str(&dsn).unwrap().options([("search_path", schema)]);
+        let pool = PgPoolOptions::new().max_connections(2).connect_with(opts).await.unwrap();
+        sqlx::query(
+            "CREATE TABLE twitch_streamers_partner_state \
+             (twitch_login TEXT, discord_user_id TEXT, is_partner_active INTEGER)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        Some(pool)
+    }
+
+    fn fresh_dir(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(name);
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[tokio::test]
+    async fn query_partner_streamers_filtert_und_parst() {
+        let Some(pool) = make_pool("t9bii_partner_query").await else { return };
+        sqlx::query(
+            "INSERT INTO twitch_streamers_partner_state VALUES \
+             ('nani', '12345', 1), \
+             ('inactive', '999', 0), \
+             ('nodiscord', NULL, 1), \
+             ('badid', 'notanumber', 1)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        // Nur 'nani': aktiv + parsebare Discord-ID. Andere fallen raus.
+        assert_eq!(query_partner_streamers(&pool).await, vec![("nani".to_string(), 12345)]);
+    }
+
+    #[tokio::test]
+    async fn get_partner_streamers_voller_pfad() {
+        let Some(pool) = make_pool("t9bii_partner_full").await else { return };
+        sqlx::query(
+            "INSERT INTO twitch_streamers_partner_state VALUES \
+             ('nani', '12345', 1), ('zoe', '67890', 1)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let dir = fresh_dir("tb_hl_partners_full");
+        // SQLite: nani (12345) → account_id 5; zoe nicht hinterlegt.
+        let db = dir.join("deadlock.sqlite3");
+        {
+            let conn = rusqlite::Connection::open(&db).unwrap();
+            conn.execute_batch(
+                "CREATE TABLE steam_links (user_id INTEGER, steam_id TEXT, primary_account INTEGER);",
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO steam_links VALUES (12345, ?1, 1)",
+                [(STEAM64_BASE + 5).to_string()],
+            )
+            .unwrap();
+        }
+        // Manueller Override ergänzt zoe.
+        let json = dir.join("steamids.json");
+        std::fs::write(&json, r#"{"zoe": "4242"}"#).unwrap();
+
+        let out = get_partner_streamers(&pool, &db, &json).await;
+        assert_eq!(
+            out,
+            vec![
+                ("nani".to_string(), "5".to_string()),
+                ("zoe".to_string(), "4242".to_string()),
+            ]
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
