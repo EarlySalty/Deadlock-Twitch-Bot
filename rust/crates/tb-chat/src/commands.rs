@@ -393,6 +393,31 @@ impl CommandEngine {
         .unwrap_or(None)
     }
 
+    /// Channel-Classifier-Parität (`channel_classifier.rs`): ein Kanal ist nur
+    /// dann Partner, wenn `is_partner_active = 1` UND er NICHT `is_monitored_only`
+    /// ist. Ein reiner Scout-/Monitoring-Kanal (z. B. sagetheman_) ist KEIN
+    /// Partner — anders als `get_partner`, das `is_monitored_only` nicht prüft.
+    async fn is_partner_channel(&self, channel_login: &str) -> bool {
+        let normalized = Self::normalize_channel_login(channel_login);
+        let row = sqlx::query_as::<_, (i64,)>(
+            r#"
+            SELECT COUNT(*)
+            FROM twitch_streamers_partner_state ps
+            WHERE LOWER(ps.twitch_login) = $1
+              AND ps.is_partner_active = 1
+              AND NOT EXISTS (
+                  SELECT 1 FROM twitch_streamers s
+                  WHERE LOWER(s.twitch_login) = LOWER(ps.twitch_login)
+                    AND COALESCE(s.is_monitored_only, 0) = 1
+              )
+            "#,
+        )
+        .bind(normalized)
+        .fetch_one(&self.pool)
+        .await;
+        matches!(row, Ok((n,)) if n > 0)
+    }
+
     /// `analytics/legacy_token.py:14` — `needs_reauth == FALSE` → vollständig
     /// autorisiert.
     ///
@@ -949,6 +974,14 @@ impl CommandEngine {
     async fn cmd_invite(&self, event: &ChatMessageEvent) {
         // Exact-Match: nur "!invite" ohne Argumente — bot.py:784
         if event.text().trim().to_lowercase() != "!invite" {
+            return;
+        }
+
+        // Partner-Gate: !invite ist in Python nur im Partner-Block erreichbar
+        // (bot.py:1816), NICHT über die Whitelist-Bot-Verzweigung. Ohne diesen
+        // Gate könnte ein gewhitelisteter Bot mit "!invite" eine Antwort auf einem
+        // reinen monitored-only Kanal auslösen (breiterer Scope als Python).
+        if !self.is_partner_channel(&event.broadcaster_user_login).await {
             return;
         }
 

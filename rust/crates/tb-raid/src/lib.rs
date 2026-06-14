@@ -46,6 +46,7 @@ pub mod raid_blacklist;
 pub mod raid_executor;
 pub mod raid_history_store;
 pub mod raid_messaging;
+pub mod recruitment_messaging;
 pub mod scope_profiles;
 pub mod score_store;
 pub mod score_tracking_store;
@@ -71,6 +72,11 @@ pub use arrival_tracking_store::{
 };
 pub use auth_writer::{AuthWriteError, AuthWriter, NewAuth};
 pub use raid_messaging::build_partner_raid_message;
+pub use recruitment_messaging::{
+    build_recruitment_message, plan_recruitment_delivery, RecruitmentDeliveryConfig,
+    RecruitmentDeliveryPlan, RecruitmentDeliveryRequest, RecruitmentDeliveryStatus,
+    RecruitmentInviteVariant, RecruitmentMessageVariant,
+};
 pub use external_recruitment_store::{
     decide_blacklist_action, BlacklistScheduleAction, ConfirmedExternalRecruitmentRaid,
     DueBlacklistPending, DueBotBanCheck, ExternalRecruitmentStore,

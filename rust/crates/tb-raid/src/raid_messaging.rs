@@ -6,9 +6,10 @@
 //! folgt als eigene Slice, sobald der Chat-Send-Pfad in den Arrival-Sink
 //! eingefädelt ist.
 //!
-//! Bewusst NICHT enthalten: die Recruitment-Nachrichten an externe
-//! Nicht-Partner-Channels — deren Versand ist im nativen Helix-Modell nicht
-//! möglich (Bot ist dort nicht autorisiert; der Python-Pfad nutzt IRC-Join).
+//! Die Recruitment-Nachrichten an extern geraidete Nicht-Partner-Channels
+//! liegen im Schwestermodul `recruitment_messaging` (gleiches Send-Modell wie
+//! hier: Versand über `ChatApi`; lehnt Twitch einen nicht autorisierten
+//! externen Channel ab, ist das ein gracefuler `Dropped`-Ausgang).
 
 /// Singular/Plural für die Viewer-Anzahl (Python `_viewer_word`).
 fn viewer_word(viewer_count: i32) -> &'static str {
