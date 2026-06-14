@@ -26,8 +26,9 @@ pub async fn loyalty_curve_handler(
     State(pool): State<PgPool>,
     Query(params): Query<LoyaltyQuery>,
 ) -> impl IntoResponse {
-    if matches!(auth, DashboardAuthLevel::None) {
-        return (StatusCode::UNAUTHORIZED, Json(json!({"error":"unauthorized"}))).into_response();
+    // Python _api_v2_loyalty_curve: _require_v2_auth + _require_extended_plan.
+    if let Some(resp) = crate::auth::extended_gate(&pool, &auth).await {
+        return resp;
     }
 
     let streamer = match params.streamer.as_deref().map(str::trim).filter(|s| !s.is_empty()) {

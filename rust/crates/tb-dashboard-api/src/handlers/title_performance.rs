@@ -30,14 +30,6 @@ fn clamp(v: i32, min: i32, max: i32) -> i32 {
     v.max(min).min(max)
 }
 
-fn require_auth(auth: &DashboardAuthLevel) -> Result<(), (StatusCode, Json<serde_json::Value>)> {
-    if matches!(auth, DashboardAuthLevel::None) {
-        Err((StatusCode::UNAUTHORIZED, Json(json!({"error":"unauthorized","message":"not authenticated"}))))
-    } else {
-        Ok(())
-    }
-}
-
 /// Python `_extract_title_keywords` — Stop-Word-Filter + 3+-Zeichen-Wörter, max 5.
 fn extract_title_keywords(title: &str) -> Vec<String> {
     const STOP_WORDS: &[&str] = &[
@@ -65,8 +57,9 @@ pub async fn title_performance_handler(
     State(pool): State<PgPool>,
     Query(params): Query<TitleQuery>,
 ) -> impl IntoResponse {
-    if let Err(e) = require_auth(&auth) {
-        return e.into_response();
+    // Python _api_v2_title_performance: _require_v2_auth + _require_extended_plan.
+    if let Some(resp) = crate::auth::extended_gate(&pool, &auth).await {
+        return resp;
     }
 
     let streamer = match params.streamer.as_deref().map(str::trim).filter(|s| !s.is_empty()) {

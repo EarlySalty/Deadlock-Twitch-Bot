@@ -65,8 +65,12 @@ pub async fn category_comparison_handler(
     State(pool): State<PgPool>,
     Query(params): Query<ComparisonQuery>,
 ) -> impl IntoResponse {
-    if let Some(resp) = crate::auth::extended_gate(&pool, &auth).await {
-        return resp;
+    // Python _api_v2_category_comparison ruft NUR _require_v2_auth (KEIN
+    // _require_extended_plan) — also reiner Authentifizierungs-Check, kein
+    // Plan-Gate. (Rust hatte hier fälschlich extended_gate → 403 für
+    // authentifizierte Nicht-Extended-Partner.)
+    if matches!(auth, DashboardAuthLevel::None) {
+        return (StatusCode::UNAUTHORIZED, Json(json!({"error":"unauthorized"}))).into_response();
     }
     let streamer = match params.streamer.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
         Some(s) => s.to_lowercase(),

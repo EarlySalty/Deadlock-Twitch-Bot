@@ -41,8 +41,9 @@ pub async fn lurker_analysis_handler(
     State(pool): State<PgPool>,
     Query(params): Query<LurkerQuery>,
 ) -> impl IntoResponse {
-    if matches!(auth, DashboardAuthLevel::None) {
-        return (StatusCode::UNAUTHORIZED, Json(json!({"error":"unauthorized"}))).into_response();
+    // Python api_overview.py:1759 _require_extended_plan (Paywall-Feature).
+    if let Some(resp) = crate::auth::extended_gate(&pool, &auth).await {
+        return resp;
     }
     let streamer = match params.streamer.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
         Some(s) => s.to_lowercase(),
@@ -111,8 +112,11 @@ pub async fn lurker_analysis_handler(
             return Json(json!({"dataAvailable":false,"message":"Keine Daten für den Zeitraum"})).into_response();
         }
         Err(e) => {
+            // Python api_overview.py:1779 fängt jede Exception und liefert bewusst
+            // 200 + dataAvailable:false (das Frontend wertet dataAvailable aus und
+            // bräche bei 500). Fehler wird geloggt, aber nicht als 500 propagiert.
             tracing::error!("lurker-analysis agg-Fehler: {e}");
-            return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error":"internal_error"}))).into_response();
+            return Json(json!({"dataAvailable":false,"message":"Keine Daten verfügbar"})).into_response();
         }
     };
 
