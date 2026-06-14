@@ -2224,6 +2224,7 @@ version = "0.1.0"
 dependencies = [
  "chrono",
  "regex",
+ "reqwest",
  "serde",
  "serde_json",
  "sha2",
@@ -2233,6 +2234,7 @@ dependencies = [
  "tb-error",
  "tokio",
  "tracing",
+ "wiremock",
 ]
 
 [[package]]

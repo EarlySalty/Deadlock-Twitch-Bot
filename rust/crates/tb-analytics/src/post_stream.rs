@@ -308,10 +308,238 @@ pub fn normalize_word_groups(value: &serde_json::Value) -> Vec<WordGroup> {
     out
 }
 
+// ---------------------------------------------------------------------------
+// KI-Aufruf + Modellwahl (Python `_call_minimax` / `_call_claude` / `_plan_ai_model`)
+// ---------------------------------------------------------------------------
+
+/// OpenAI-kompatibler MiniMax-Endpoint (Python `MINIMAX_BASE_URL`).
+const MINIMAX_BASE_URL: &str = "https://api.minimax.io/v1";
+const MINIMAX_MODEL: &str = "MiniMax-M3";
+/// Anthropic-Messages-API-Basis (der SDK-Default-Host).
+const ANTHROPIC_BASE_URL: &str = "https://api.anthropic.com";
+const CLAUDE_MODEL: &str = "claude-opus-4-6";
+const ANTHROPIC_VERSION: &str = "2023-06-01";
+
+/// Plan-basiertes KI-Modell (Python `_plan_ai_model`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AiModel {
+    /// Claude Opus — Entitlement `analytics.ai_full`.
+    Opus,
+    /// MiniMax — Entitlement `analytics.ai_mini` (oder Default-Fallback).
+    Minimax,
+}
+
+/// Wählt das KI-Modell anhand der Plan-Entitlements (Python `_plan_ai_model`):
+/// `analytics.ai_full` → Opus, `analytics.ai_mini` → MiniMax, sonst `None`.
+pub async fn plan_ai_model(pool: &PgPool, streamer: &str) -> Option<AiModel> {
+    // Nur Login (kein user_id) → der Trial-Auto-Grant in resolve_plan_snapshot
+    // bleibt aus (braucht beides), reine Lese-Auflösung.
+    let snapshot = crate::plan::resolve_plan_snapshot(pool, streamer, "").await.ok()?;
+    if snapshot.entitlements.contains(&"analytics.ai_full") {
+        Some(AiModel::Opus)
+    } else if snapshot.entitlements.contains(&"analytics.ai_mini") {
+        Some(AiModel::Minimax)
+    } else {
+        None
+    }
+}
+
+fn resolve_minimax_key() -> Option<String> {
+    for name in ["MINIMAX_TOKEN_PLAN_KEY", "MINIMAX_API_KEY", "MINMAX"] {
+        if let Ok(value) = std::env::var(name) {
+            let trimmed = value.trim();
+            if !trimmed.is_empty() {
+                return Some(trimmed.to_string());
+            }
+        }
+    }
+    None
+}
+
+fn resolve_anthropic_key() -> Option<String> {
+    std::env::var("ANTHROPIC_API_KEY")
+        .ok()
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty())
+}
+
+#[derive(serde::Deserialize)]
+struct MinimaxResponse {
+    choices: Vec<MinimaxChoice>,
+}
+#[derive(serde::Deserialize)]
+struct MinimaxChoice {
+    message: MinimaxMessage,
+}
+#[derive(serde::Deserialize)]
+struct MinimaxMessage {
+    content: Option<String>,
+}
+
+/// MiniMax-Chat-Completion für den Post-Stream-Report (Python `_call_minimax`:
+/// temp 0.3, max_tokens 16000, Timeout 180s). Liefert `choices[0].message.content`.
+pub async fn call_minimax(base_url: &str, api_key: &str, prompt: &str) -> Result<String, String> {
+    let url = format!("{}/chat/completions", base_url.trim_end_matches('/'));
+    let body = serde_json::json!({
+        "model": MINIMAX_MODEL,
+        "messages": [{"role": "user", "content": prompt}],
+        "temperature": 0.3,
+        "max_tokens": 16000,
+    });
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(180))
+        .build()
+        .map_err(|e| e.to_string())?;
+    let resp = client
+        .post(&url)
+        .bearer_auth(api_key)
+        .json(&body)
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+    if !resp.status().is_success() {
+        return Err(format!("HTTP {}", resp.status()));
+    }
+    let parsed: MinimaxResponse = resp.json().await.map_err(|e| e.to_string())?;
+    Ok(parsed
+        .choices
+        .into_iter()
+        .next()
+        .and_then(|c| c.message.content)
+        .unwrap_or_default())
+}
+
+#[derive(serde::Deserialize)]
+struct ClaudeResponse {
+    content: Vec<ClaudeBlock>,
+}
+#[derive(serde::Deserialize)]
+struct ClaudeBlock {
+    #[serde(default)]
+    text: Option<String>,
+}
+
+/// Claude/Anthropic-Messages-Call (Python `_call_claude`: max_tokens 6000).
+/// `POST {base_url}/v1/messages` mit `x-api-key` + `anthropic-version`. Liefert
+/// `content[0].text`.
+pub async fn call_claude(base_url: &str, api_key: &str, prompt: &str) -> Result<String, String> {
+    let url = format!("{}/v1/messages", base_url.trim_end_matches('/'));
+    let body = serde_json::json!({
+        "model": CLAUDE_MODEL,
+        "max_tokens": 6000,
+        "messages": [{"role": "user", "content": prompt}],
+    });
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(240))
+        .build()
+        .map_err(|e| e.to_string())?;
+    let resp = client
+        .post(&url)
+        .header("x-api-key", api_key)
+        .header("anthropic-version", ANTHROPIC_VERSION)
+        .json(&body)
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+    if !resp.status().is_success() {
+        return Err(format!("HTTP {}", resp.status()));
+    }
+    let parsed: ClaudeResponse = resp.json().await.map_err(|e| e.to_string())?;
+    Ok(parsed
+        .content
+        .into_iter()
+        .next()
+        .and_then(|b| b.text)
+        .unwrap_or_default())
+}
+
+/// Verarbeitet die KI-Antwort zu Wortgruppen (Python-Pfad nach `call_ai`):
+/// JSON extrahieren → muss mit `[` beginnen (1:1 Python — wegen des
+/// `{}`-vor-`[]`-Verhaltens von `extract_json_object` praktisch nie erfüllt für
+/// Arrays von Objekten, daher meist leer) → parsen → normalisieren.
+pub fn process_word_group_response(raw: &str) -> Vec<WordGroup> {
+    let Some(extracted) = extract_json_object(raw) else {
+        return Vec::new();
+    };
+    if !extracted.starts_with('[') {
+        return Vec::new();
+    }
+    let Some(value) = loads_ai_json(&extracted) else {
+        return Vec::new();
+    };
+    normalize_word_groups(&value)
+}
+
+/// Erzeugt die thematischen Wortgruppen via KI (Python `_generate_word_groups`).
+/// Leere Nachrichten / fehlender Key / KI-Fehler → leere Liste.
+pub async fn generate_word_groups(model: AiModel, messages: &[String]) -> Vec<WordGroup> {
+    if messages.is_empty() {
+        return Vec::new();
+    }
+    let prompt = build_word_group_prompt(messages.len(), messages);
+    let raw = match model {
+        AiModel::Minimax => {
+            let Some(key) = resolve_minimax_key() else {
+                return Vec::new();
+            };
+            call_minimax(MINIMAX_BASE_URL, &key, &prompt).await.unwrap_or_default()
+        }
+        AiModel::Opus => {
+            let Some(key) = resolve_anthropic_key() else {
+                return Vec::new();
+            };
+            call_claude(ANTHROPIC_BASE_URL, &key, &prompt).await.unwrap_or_default()
+        }
+    };
+    process_word_group_response(&raw)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use sqlx::postgres::PgPoolOptions;
+
+    #[tokio::test]
+    async fn call_minimax_liefert_content() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+        let server = MockServer::start().await;
+        let body = serde_json::json!({"choices": [{"message": {"content": "ANTWORT"}}]});
+        Mock::given(method("POST"))
+            .and(path("/chat/completions"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(body))
+            .mount(&server)
+            .await;
+        let out = call_minimax(&server.uri(), "k", "prompt").await.unwrap();
+        assert_eq!(out, "ANTWORT");
+    }
+
+    #[tokio::test]
+    async fn call_claude_header_und_content() {
+        use wiremock::matchers::{header, method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+        let server = MockServer::start().await;
+        let body = serde_json::json!({"content": [{"type": "text", "text": "CLAUDE-ANTWORT"}]});
+        Mock::given(method("POST"))
+            .and(path("/v1/messages"))
+            .and(header("x-api-key", "secret"))
+            .and(header("anthropic-version", ANTHROPIC_VERSION))
+            .respond_with(ResponseTemplate::new(200).set_body_json(body))
+            .mount(&server)
+            .await;
+        let out = call_claude(&server.uri(), "secret", "prompt").await.unwrap();
+        assert_eq!(out, "CLAUDE-ANTWORT");
+    }
+
+    #[test]
+    fn process_word_group_response_faithful_leer() {
+        // Array von Objekten → extract liefert (wegen {}-vor-[]) das innere
+        // Objekt → starts_with('[') false → leer (1:1 Python-Bug).
+        let raw = "[{\"group_name\": \"Lob\", \"keywords\": [\"gg\"], \"message_count\": 3}]";
+        assert!(process_word_group_response(raw).is_empty());
+        // Reines Objekt → ebenfalls leer (kein Array).
+        assert!(process_word_group_response("{\"x\": 1}").is_empty());
+    }
 
     #[test]
     fn extract_json_object_faithful_objekt_zuerst_und_think() {

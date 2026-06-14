@@ -8,6 +8,7 @@ sqlx       = { workspace = true }
 serde      = { workspace = true }
 serde_json = { workspace = true }
 regex      = { workspace = true }
+reqwest    = { workspace = true }
 chrono     = { workspace = true }
 sha2       = { workspace = true }
 tracing    = { workspace = true }
@@ -17,3 +18,4 @@ tb-error   = { workspace = true }
 tokio      = { workspace = true }
 tb-config  = { workspace = true }
 tb-db      = { workspace = true }
+wiremock   = { workspace = true }
