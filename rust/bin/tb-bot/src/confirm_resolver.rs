@@ -110,16 +110,20 @@ impl ConfirmResolver {
             confirmed_at: now.to_rfc3339_opts(SecondsFormat::Secs, false),
             target_session_id,
             target_stream_started_at,
+            // Ohne Score-Cache-Zeile schreibt Python (_score_payload({})) feste
+            // neutrale Defaults statt NULL — sonst verzerren NULLs die AVG-
+            // Aggregationen über das Tracking. final/base=0.0, *_score=0.5,
+            // multipliers=1.0, today=0. score_last_computed_at bleibt NULL.
             score_last_computed_at: snapshot.as_ref().map(|s| s.last_computed_at.clone()),
-            final_score: snapshot.as_ref().map(|s| s.final_score),
-            base_score: snapshot.as_ref().map(|s| s.base_score),
-            duration_score: snapshot.as_ref().map(|s| s.duration_score),
-            time_pattern_score: snapshot.as_ref().map(|s| s.time_pattern_score),
-            readiness_score: snapshot.as_ref().map(|s| s.readiness_score),
-            fairness_score: snapshot.as_ref().map(|s| s.fairness_score),
-            new_partner_multiplier: snapshot.as_ref().map(|s| s.new_partner_multiplier),
-            raid_boost_multiplier: snapshot.as_ref().map(|s| s.raid_boost_multiplier),
-            today_received_raids: snapshot.as_ref().map(|s| s.today_received_raids),
+            final_score: Some(snapshot.as_ref().map(|s| s.final_score).unwrap_or(0.0)),
+            base_score: Some(snapshot.as_ref().map(|s| s.base_score).unwrap_or(0.0)),
+            duration_score: Some(snapshot.as_ref().map(|s| s.duration_score).unwrap_or(0.5)),
+            time_pattern_score: Some(snapshot.as_ref().map(|s| s.time_pattern_score).unwrap_or(0.5)),
+            readiness_score: Some(snapshot.as_ref().map(|s| s.readiness_score).unwrap_or(0.5)),
+            fairness_score: Some(snapshot.as_ref().map(|s| s.fairness_score).unwrap_or(0.5)),
+            new_partner_multiplier: Some(snapshot.as_ref().map(|s| s.new_partner_multiplier).unwrap_or(1.0)),
+            raid_boost_multiplier: Some(snapshot.as_ref().map(|s| s.raid_boost_multiplier).unwrap_or(1.0)),
+            today_received_raids: Some(snapshot.as_ref().map(|s| s.today_received_raids).unwrap_or(0)),
             was_deadlock_at_raid: was_deadlock,
         })
     }
