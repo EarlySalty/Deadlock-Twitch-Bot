@@ -35,6 +35,7 @@ pub mod pipeline;
 pub mod promos;
 pub mod scam_pitch;
 pub mod spam_filter;
+pub mod steam_lookup;
 pub mod sus_invite;
 pub mod timeout_tracking;
 pub mod title_db;
