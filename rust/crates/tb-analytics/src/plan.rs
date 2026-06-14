@@ -184,6 +184,14 @@ pub async fn resolve_plan_snapshot(
         return Ok(PlanSnapshot::from_plan("raid_free", "default_basic", None));
     }
 
+    // 24h-Grace-Auto-Grant des Analytics-Trials VOR der Auflösung (Python
+    // `_resolve_plan_for_request` ruft `_billing_check_and_grant_trial_eligibility`
+    // vor `_resolve_plan_snapshot_for_refs`). Nur bei user_id UND login; Fehler
+    // werden intern geschluckt. Idempotent über `trial_ever_granted`.
+    if !user_id.is_empty() && !login.is_empty() {
+        crate::trial::check_and_grant_trial_eligibility(pool, user_id, &login).await;
+    }
+
     // ── Manual Override ─────────────────────────────────────────────────────
     // Python load_manual_override matcht twitch_user_id ODER twitch_login und
     // priorisiert den user_id-Treffer (CASE-ORDER). Ein nur per user_id (mit
