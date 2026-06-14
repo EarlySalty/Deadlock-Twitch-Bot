@@ -18,7 +18,7 @@ use crate::inbox_runtime::{ClockFn, HandlerError, InboxHandler};
 use crate::live_state::LiveStateStore;
 use crate::poller::source::ChannelInfoSource;
 use crate::sessions::SessionTracker;
-use crate::stream::iso_seconds;
+use crate::stream::{iso_seconds, StreamSnapshot};
 use crate::telemetry::TelemetryStore;
 
 /// Business-Effect-TTL (Python: 7 Tage).
@@ -133,6 +133,47 @@ impl MonitoringEventHandler {
             )
             .await
             .map_err(|e| Box::new(e) as HandlerError)?;
+
+        // Session sofort bei stream.online eroeffnen statt erst beim naechsten
+        // Poll-Tick: sonst geht der gesamte Go-Live-Chat (bis poll_interval +
+        // negativem Session-Cache) still verloren, weil Chatter ohne offene
+        // Session verworfen werden. Idempotent: run_business_effect_once
+        // (message_id) + start_session advisory-lock/AlreadyOpen verhindern eine
+        // Doppel-Session gegen den Poll-Pfad; fehlende Felder (Titel/Game/
+        // Viewer) backfillt der erste Poll via adopt_incomplete. Live-State
+        // steht bereits (oben), damit der Chat-Game-Gate ihn lesen kann.
+        run_business_effect_once(
+            &self.guard,
+            work.message_id.as_deref(),
+            "stream_online_session",
+            epoch,
+            || async {
+                let snapshot = StreamSnapshot {
+                    id: stream_id.map(str::to_string),
+                    started_at: started_at.map(str::to_string),
+                    ..Default::default()
+                };
+                if let Some(session_id) = self
+                    .tracker
+                    .ensure_session(
+                        &login,
+                        &snapshot,
+                        None,
+                        Some(work.broadcaster_id.as_str()),
+                        now,
+                    )
+                    .await
+                {
+                    tracing::info!(
+                        login = %login,
+                        session_id,
+                        "EventSub stream.online: Session sofort eroeffnet"
+                    );
+                }
+                Ok(())
+            },
+        )
+        .await?;
 
         // Go-Live-Enrichment: Kategorie/Titel sofort per gezieltem
         // /channels-Lookup setzen (sprachfilter-frei, kein Helix-Lag wie bei

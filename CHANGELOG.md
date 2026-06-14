@@ -1,3 +1,14 @@
+## #209 — Chat ab Stream-Start wird vollständig erfasst (Go-Live-Lücke geschlossen)
+
+**Ausgangslage:** Wenn ein Streamer live ging, begann die Chat- und Zuschauer-Erfassung erst, sobald der reguläre Status-Abruf den Kanal das nächste Mal einsammelte — bis zu rund 15 Sekunden später, plus ein kurzes Nachwirken eines Zwischenspeichers. Genau in diesem Fenster direkt nach Stream-Start wurden Chat-Nachrichten still verworfen, weil noch keine „offene Session" existierte, der sie zugeordnet werden konnten. Folge: Die allerersten Chatter eines Streams fehlten in den Zahlen — die Community wirkte etwas kleiner oder später aktiv, als sie tatsächlich war.
+
+**Was geändert wurde:**
+
+- Die Stream-Session wird jetzt **sofort beim Go-Live-Signal** eröffnet, nicht erst beim nächsten Status-Tick. Damit hat jede Nachricht ab der ersten Sekunde eine Session, der sie zugeordnet wird.
+- Eine frisch eröffnete Session ohne Messwerte zeigt im Dashboard jetzt „noch keine Daten" statt einer irreführenden 0 (z. B. 0 % Retention), bis die ersten Messpunkte vorliegen.
+
+**Wie es funktioniert:** Das Go-Live-Ereignis löst — neben dem schon bestehenden Setzen des Live-Status — direkt das Anlegen der Session aus. Eine Doppel-Anlage gegen den parallel laufenden Status-Abruf ist zweifach verhindert: ein Einmal-pro-Ereignis-Riegel und eine Sperre pro Kanal, die bei bereits offener Session keine zweite anlegt, sondern die vorhandene weiterführt. Fehlende Felder (Titel, Spiel, Zuschauerzahl) trägt der erste reguläre Abruf nach. Im Dashboard werden leere Messwerte als „kein Wert" statt als 0 durchgereicht, sodass eine echte 0 von „noch nichts gemessen" unterscheidbar bleibt.
+
 ## #208 — Analyse: „Erste Nachricht je"-Markierung wird wieder gesetzt
 
 **Ausgangslage:** Wenn ein Zuschauer zum allerersten Mal in einem Stream etwas schreibt, hält der Bot das doppelt fest: als eigenes Ereignis und als Markierung am Zuschauer der laufenden Session (Grundlage für „neue vs. wiederkehrende Chatter" in der Auswertung). Beim Umzug auf das neue System ging der zweite Teil verloren — das Ereignis wurde geschrieben, die Session-Markierung aber nicht. Still, ohne Fehler.

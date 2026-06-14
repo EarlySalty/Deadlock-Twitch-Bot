@@ -206,11 +206,14 @@ pub async fn session_detail_handler(
         "startViewers": row.try_get::<i32, _>("start_viewers").unwrap_or(0),
         "peakViewers": row.try_get::<i32, _>("peak_viewers").unwrap_or(0),
         "endViewers": row.try_get::<i32, _>("end_viewers").unwrap_or(0),
-        "avgViewers": row.try_get::<f64, _>("avg_viewers").unwrap_or(0.0),
-        "retention5m": row.try_get::<f64, _>("retention_5m").map(|v| v * 100.0).unwrap_or(0.0),
-        "retention10m": row.try_get::<f64, _>("retention_10m").map(|v| v * 100.0).unwrap_or(0.0),
-        "retention20m": row.try_get::<f64, _>("retention_20m").map(|v| v * 100.0).unwrap_or(0.0),
-        "dropoffPct": row.try_get::<f64, _>("dropoff_pct").map(|v| v * 100.0).unwrap_or(0.0),
+        // NULL (Session ohne Viewer-Samples, z. B. frisch bei stream.online
+        // eroeffnet) bleibt JSON null statt 0.0 -> Frontend kann "noch keine
+        // Daten" von einer echten 0 unterscheiden.
+        "avgViewers": row.try_get::<Option<f64>, _>("avg_viewers").ok().flatten(),
+        "retention5m": row.try_get::<Option<f64>, _>("retention_5m").ok().flatten().map(|v| v * 100.0),
+        "retention10m": row.try_get::<Option<f64>, _>("retention_10m").ok().flatten().map(|v| v * 100.0),
+        "retention20m": row.try_get::<Option<f64>, _>("retention_20m").ok().flatten().map(|v| v * 100.0),
+        "dropoffPct": row.try_get::<Option<f64>, _>("dropoff_pct").ok().flatten().map(|v| v * 100.0),
         "uniqueChatters": unique_chatters,
         "firstTimeChatters": first_time_chatters,
         "returningChatters": returning_chatters,
