@@ -1308,11 +1308,6 @@ class _AnalyticsOverviewMixin:
             column_expr="sc.chatter_login",
             placeholder="%s",
         )
-        rollup_bot_clause, rollup_bot_params = build_known_chat_bot_not_in_clause(
-            column_expr="chatter_login",
-            placeholder="%s",
-        )
-
         row = conn.execute(  # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
             f"""
             WITH filtered_session_chatters AS (
@@ -1386,7 +1381,8 @@ class _AnalyticsOverviewMixin:
                         ) * 100.0 / NULLIF(s.peak_viewers, 0)
                     )
                     ELSE NULL
-                END) as chat_per_100
+                END) as chat_per_100,
+                COUNT(DISTINCT s.id) as session_count
             FROM twitch_stream_sessions s
             LEFT JOIN filtered_session_chatters fsc ON fsc.session_id = s.id
             LEFT JOIN session_chatter_presence scp ON scp.session_id = s.id
@@ -1426,23 +1422,39 @@ class _AnalyticsOverviewMixin:
         ).fetchone()
         gained_followers = int(gained_row[0]) if gained_row and gained_row[0] else 0
 
-        # True unique chatters from rollup table (not SUM of per-session counts)
-        unique_chatters_sum = int(row[9]) if row[9] else 0
-        if streamer:
-            true_unique = conn.execute(  # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
-                f"""
-                SELECT COUNT(DISTINCT chatter_login)
-                FROM twitch_chatter_rollup
-                WHERE LOWER(streamer_login) = %s
-                  AND {rollup_bot_clause}
+        # True window-distinct unique chatters: dedupe across tracked sessions (per-chatter rows),
+        # plus the legacy aggregate for older sessions that have no per-chatter rows. Avoids both
+        # the SUM-of-per-session double-count (a chatter in N sessions counted N times) and the
+        # all-time rollup that ignored the selected time window.
+        distinct_tracked = conn.execute(  # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
+            f"""
+            SELECT COUNT(DISTINCT COALESCE(NULLIF(sc.chatter_login, ''), sc.chatter_id))
+            FROM twitch_session_chatters sc
+            JOIN twitch_stream_sessions s ON s.id = sc.session_id
+            WHERE s.started_at >= %s
+              AND s.ended_at IS NOT NULL
+              AND (COALESCE(%s, '') = '' OR LOWER(s.streamer_login) = %s)
+              AND sc.messages > 0
+              AND {session_bot_clause}
             """,
-                [streamer.lower(), *rollup_bot_params],
-            ).fetchone()
-            unique_chatters = (
-                int(true_unique[0]) if true_unique and true_unique[0] else unique_chatters_sum
-            )
-        else:
-            unique_chatters = unique_chatters_sum
+            [since_date, streamer_login, streamer_login, *session_bot_params],
+        ).fetchone()
+        legacy_unique = conn.execute(
+            """
+            SELECT COALESCE(SUM(s.unique_chatters), 0)
+            FROM twitch_stream_sessions s
+            WHERE s.started_at >= %s
+              AND s.ended_at IS NOT NULL
+              AND (COALESCE(%s, '') = '' OR LOWER(s.streamer_login) = %s)
+              AND NOT EXISTS (
+                  SELECT 1 FROM twitch_session_chatters sc WHERE sc.session_id = s.id
+              )
+            """,
+            [since_date, streamer_login, streamer_login],
+        ).fetchone()
+        unique_chatters = (
+            int(distinct_tracked[0]) if distinct_tracked and distinct_tracked[0] else 0
+        ) + (int(legacy_unique[0]) if legacy_unique and legacy_unique[0] else 0)
 
         # Sample counts for data quality gating
         sample_row = conn.execute(
@@ -1526,6 +1538,7 @@ class _AnalyticsOverviewMixin:
             "unique_viewers": distinct_viewers,
             "engagement_rate": round(engagement_rate, 2),
             "chat_per_100": float(row[10]) if row[10] else 0,
+            "session_count": int(row[11]) if row[11] else 0,
             "retention_sample_count": retention_sample_count,
             "chat_sample_count": chat_sample_count,
             "follower_valid_count": follower_valid_count,
@@ -1731,7 +1744,7 @@ class _AnalyticsOverviewMixin:
         }
 
     async def _api_v2_lurker_analysis(self, request: web.Request) -> web.Response:
-        """Return basic lurker metrics for a streamer or fall back to demo data."""
+        """Return basic lurker metrics for a streamer, or an honest empty state on error."""
         self._require_v2_auth(request)
         self._require_extended_plan(request)
 
@@ -1753,11 +1766,13 @@ class _AnalyticsOverviewMixin:
             return web.json_response(payload, status=200)
         except Exception:
             log.exception("Error in lurker analysis API")
-            from .demo_data import get_lurker_analysis
-
-            demo = get_lurker_analysis()
-            demo["message"] = "Fallback: Demo-Daten wegen Fehler"
-            return web.json_response(demo, status=200)
+            return web.json_response(
+                {
+                    "dataAvailable": False,
+                    "message": "Lurker-Daten momentan nicht verfügbar",
+                },
+                status=200,
+            )
 
     def _load_lurker_analysis(self, streamer: str, since_date: str) -> dict[str, Any]:
         with storage.readonly_connection() as conn:

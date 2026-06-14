@@ -629,7 +629,10 @@ def _comparison_payload(conn: Any, session: dict[str, Any]) -> dict[str, Any]:
                ROUND(AVG(follower_delta)::numeric, 2) AS follower_delta
           FROM (
                 SELECT avg_viewers, peak_viewers, unique_chatters, first_time_chatters,
-                       returning_chatters, dropoff_pct, follower_delta
+                       returning_chatters, dropoff_pct,
+                       CASE WHEN follower_delta IS NOT NULL
+                            AND NOT (followers_end = 0 AND followers_start > 0)
+                            THEN follower_delta ELSE NULL END AS follower_delta
                   FROM twitch_stream_sessions
                  WHERE LOWER(streamer_login) = LOWER(%s)
                    AND id <> %s

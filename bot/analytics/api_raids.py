@@ -32,7 +32,10 @@ class _AnalyticsRaidsMixin:
         self._require_extended_plan(request)
 
         streamer = request.query.get("streamer", "").strip().lower()
-        days = min(max(int(request.query.get("days", "30")), 7), 365)
+        try:
+            days = min(max(int(request.query.get("days", "30")), 7), 365)
+        except (TypeError, ValueError):
+            return web.json_response({"error": "days must be an integer"}, status=400)
 
         if not streamer:
             return web.json_response({"error": "Streamer required"}, status=400)

@@ -739,6 +739,10 @@ class _AnalyticsAudienceMixin:
                             "raidEvents": raid_count,
                             "uniqueViewersMethod": unique_viewers_method,
                             "botFilterApplied": True,
+                            # Not measured directly: time-to-follow is derived from session
+                            # length, and the raid/organic split uses a fixed raid-conversion
+                            # assumption. Surface them as estimates so the UI can mark them.
+                            "estimatedFields": ["avgTimeToFollow", "followersBySource"],
                         },
                     }
                 )

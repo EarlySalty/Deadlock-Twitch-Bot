@@ -185,7 +185,7 @@ class _OverviewPlaceholderParityConn:
         if "ORDER BY s.started_at DESC" in sql_text and "LIMIT %s" in sql_text:
             return _PlaceholderParityCursor([])
         if "AVG(s.avg_viewers) as avg_avg_viewers" in sql_text:
-            return _PlaceholderParityCursor([(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)])
+            return _PlaceholderParityCursor([(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)])
         if "SUM(CASE WHEN s.follower_delta > 0" in sql_text:
             return _PlaceholderParityCursor([(0,)])
         if "FROM twitch_chatter_rollup" in sql_text:
@@ -193,6 +193,8 @@ class _OverviewPlaceholderParityConn:
         if "COUNT(CASE" in sql_text and "retention_10m" in sql_text:
             return _PlaceholderParityCursor([(0, 0, 0)])
         if "SELECT COUNT(DISTINCT COALESCE(NULLIF(sc.chatter_login, ''), sc.chatter_id))" in sql_text:
+            return _PlaceholderParityCursor([(0,)])
+        if "COALESCE(SUM(s.unique_chatters), 0)" in sql_text:
             return _PlaceholderParityCursor([(0,)])
         raise AssertionError(f"Unexpected SQL in placeholder parity test: {sql[:200]}")
 

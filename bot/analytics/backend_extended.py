@@ -137,7 +137,9 @@ class AnalyticsBackendExtended:
                         AVG(s.retention_20m) as avg_ret_20m,
                         AVG(s.dropoff_pct) as avg_dropoff,
                         AVG(s.peak_viewers) as avg_peak,
-                        SUM(COALESCE(s.follower_delta, 0)) as total_followers,
+                        SUM(CASE WHEN s.follower_delta IS NOT NULL
+                             AND NOT (s.followers_end = 0 AND s.followers_start > 0)
+                             THEN s.follower_delta ELSE 0 END) as total_followers,
                         COUNT(*) as session_count,
                         SUM(s.duration_seconds) as total_duration_sec,
                         AVG(s.unique_chatters) as avg_unique_chatters,
@@ -161,7 +163,9 @@ class AnalyticsBackendExtended:
                         AVG(s.retention_20m) as avg_ret_20m,
                         AVG(s.dropoff_pct) as avg_dropoff,
                         AVG(s.peak_viewers) as avg_peak,
-                        SUM(COALESCE(s.follower_delta, 0)) as total_followers,
+                        SUM(CASE WHEN s.follower_delta IS NOT NULL
+                             AND NOT (s.followers_end = 0 AND s.followers_start > 0)
+                             THEN s.follower_delta ELSE 0 END) as total_followers,
                         COUNT(*) as session_count,
                         SUM(s.duration_seconds) as total_duration_sec,
                         AVG(s.unique_chatters) as avg_unique_chatters,
@@ -259,7 +263,9 @@ class AnalyticsBackendExtended:
                     SELECT
                         AVG(s.retention_5m) as avg_ret_5m,
                         AVG(s.peak_viewers) as avg_peak,
-                        SUM(COALESCE(s.follower_delta, 0)) as total_followers,
+                        SUM(CASE WHEN s.follower_delta IS NOT NULL
+                             AND NOT (s.followers_end = 0 AND s.followers_start > 0)
+                             THEN s.follower_delta ELSE 0 END) as total_followers,
                         AVG(CASE WHEN s.avg_viewers > 0 THEN (s.unique_chatters * 100.0 / s.avg_viewers) ELSE 0 END) as chat_per_100
                     FROM twitch_stream_sessions s
                     WHERE s.started_at >= %s AND s.started_at < %s
@@ -274,7 +280,9 @@ class AnalyticsBackendExtended:
                     SELECT
                         AVG(s.retention_5m) as avg_ret_5m,
                         AVG(s.peak_viewers) as avg_peak,
-                        SUM(COALESCE(s.follower_delta, 0)) as total_followers,
+                        SUM(CASE WHEN s.follower_delta IS NOT NULL
+                             AND NOT (s.followers_end = 0 AND s.followers_start > 0)
+                             THEN s.follower_delta ELSE 0 END) as total_followers,
                         AVG(CASE WHEN s.avg_viewers > 0 THEN (s.unique_chatters * 100.0 / s.avg_viewers) ELSE 0 END) as chat_per_100
                     FROM twitch_stream_sessions s
                     WHERE s.started_at >= %s AND s.started_at < %s

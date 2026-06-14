@@ -1,3 +1,25 @@
+## #206 — Analyse-Dashboard rechnet ehrlicher: Unique-Zahlen entdoppelt, keine erfundenen Werte mehr, Geschätztes als geschätzt markiert
+
+**Ausgangslage:** Beim genauen Nachrechnen der Analyse-Werte fielen mehrere Stellen auf, an denen Zahlen entweder falsch gerechnet, im Fehlerfall durch Beispieldaten ersetzt oder geschätzt-aber-als-gemessen dargestellt wurden:
+
+- Die "Unique Chatter" über einen Zeitraum wurden aus den einzelnen Streams aufsummiert — wer an mehreren Streams teilnahm, zählte mehrfach. Im Streamer-Detail kam die Zahl zudem aus einer Gesamt-Historie ohne Zeitfilter, also unabhängig vom gewählten Zeitraum.
+- Der Health-Score-Teilwert "Monetarisierung" teilte intern immer durch 1 statt durch die echte Stream-Anzahl und war dadurch bei mehreren Streams zu hoch.
+- Die Lurker-Auswertung fiel bei einem internen Fehler still auf Demo-Beispieldaten zurück — man sah dann plausible, aber erfundene Zahlen, ohne es zu merken.
+- Der Follower-Trichter zeigte "durchschnittliche Zeit bis Follow" und die Aufteilung "organisch vs. Raid" als harte Werte, obwohl beide nur geschätzt sind.
+- Ein kurzer Mess-Aussetzer beim Follower-Stand (die API liefert zwischendurch 0) verfälschte an zwei weiteren Stellen den Follower-Vergleich nach unten.
+- Eine ungültige Zeitraum-Angabe in der Raid-Auswertung führte zu einem harten Serverfehler statt einer sauberen Rückmeldung.
+
+**Was geändert wurde:**
+
+- Unique-Chatter werden jetzt echt entdoppelt: eindeutig über alle Streams des Zeitraums, plus der gespeicherte Alt-Bestand für ältere Streams ohne Einzeldaten. Kein Mehrfachzählen wiederkehrender Zuschauer mehr, und es zählt nur noch der gewählte Zeitraum.
+- Der Monetarisierungs-Score wird durch die tatsächliche Anzahl der Streams normiert.
+- Die Lurker-Auswertung zeigt im Fehlerfall einen ehrlichen Leerzustand ("momentan nicht verfügbar") statt Beispieldaten.
+- Geschätzte Felder (Zeit bis Follow, Quellen-Split) sind jetzt als geschätzt markiert, damit die Oberfläche sie entsprechend kennzeichnen kann.
+- Der Follower-Aussetzer-Filter, der an anderen Stellen längst greift, wird jetzt auch im Stream-Vergleich und im Stream-Bericht angewandt.
+- Ungültige Zeitraum-Angaben liefern eine klare Rückmeldung statt eines Serverfehlers.
+
+**Wie es funktioniert:** Für die Unique-Chatter zählt das System die eindeutigen Schreiber über alle Streams des Zeitraums in einem Durchgang (jeder Mensch genau einmal) und addiert für Alt-Streams, zu denen keine Einzel-Chatter-Daten mehr existieren, deren gespeicherte Gesamtzahl dazu — so geht weder Historie verloren noch wird doppelt gezählt. Der Monetarisierungs-Score teilt die gewichteten Ereignisse (Subs, Bits, Hype-Trains) durch die echte Stream-Anzahl im Zeitraum statt wie bisher durch eine feste 1. Geschätzte Werte tragen jetzt eine Markierung, aus der die Oberfläche ein "≈/geschätzt" machen kann; gemessene Werte bleiben unmarkiert. Der Follower-Aussetzer (Endstand 0 bei vorher positivem Stand = kurzer API-Hänger) wird beim Mitteln und Summieren als unbekannt behandelt und zieht den Vergleich nicht mehr als großer negativer Ausschlag nach unten.
+
 ## #205 — Bezahlschranke ließ zahlende Kunden nicht durch, !clip-Token läuft jetzt nach, Events-Zeitleiste wieder sichtbar
 
 **Ausgangslage:** Drei Nachwehen aus der Rust-Umstellung, die erst beim genauen Gegenprüfen auffielen:
