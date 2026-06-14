@@ -636,6 +636,186 @@ pub fn chat_digest(
     })
 }
 
+// ---------------------------------------------------------------------------
+// Report-Snapshot: Session-Core (Python report_builder.py
+// `_load_session` / `_load_registry` / `_session_payload` / `_core_metrics`)
+// ---------------------------------------------------------------------------
+
+/// Vollständige Session-Zeile für den Report-Builder (Python `_load_session`,
+/// alle dort selektierten Spalten). Numerik/Zeit werden per
+/// `::int8`/`::float8`/`::text` deterministisch dekodiert (sqlx soll nie raten).
+#[derive(Debug, Clone, sqlx::FromRow)]
+pub struct ReportSession {
+    pub id: i64,
+    pub streamer_login: Option<String>,
+    pub stream_id: Option<String>,
+    pub started_at: Option<String>,
+    pub ended_at: Option<String>,
+    pub duration_seconds: Option<i64>,
+    pub start_viewers: Option<i64>,
+    pub peak_viewers: Option<i64>,
+    pub end_viewers: Option<i64>,
+    pub avg_viewers: Option<f64>,
+    pub samples: Option<i64>,
+    pub retention_5m: Option<f64>,
+    pub retention_10m: Option<f64>,
+    pub retention_20m: Option<f64>,
+    pub dropoff_pct: Option<f64>,
+    pub dropoff_label: Option<String>,
+    pub unique_chatters: Option<i64>,
+    pub first_time_chatters: Option<i64>,
+    pub returning_chatters: Option<i64>,
+    pub followers_start: Option<i64>,
+    pub followers_end: Option<i64>,
+    pub follower_delta: Option<i64>,
+    pub stream_title: Option<String>,
+    pub language: Option<String>,
+    pub is_mature: Option<bool>,
+    pub tags: Option<String>,
+    pub had_deadlock_in_session: Option<bool>,
+    pub game_name: Option<String>,
+}
+
+/// Registry-Zeile eines Streamers (Python `_load_registry`).
+#[derive(Debug, Clone, Default, sqlx::FromRow)]
+pub struct ReportRegistry {
+    pub twitch_user_id: Option<String>,
+    pub discord_user_id: Option<String>,
+    pub discord_display_name: Option<String>,
+    pub is_monitored_only: Option<bool>,
+}
+
+/// Lädt die volle Session-Zeile (Python `_load_session`). `None`, wenn die
+/// Session nicht existiert (Python: leeres Dict → Aufrufer `build_post_stream_snapshot`
+/// bricht mit `{}` ab) oder die Query fehlschlägt.
+pub async fn load_session(pool: &PgPool, session_id: i64) -> Option<ReportSession> {
+    sqlx::query_as::<_, ReportSession>(
+        "SELECT id::int8 AS id, \
+                streamer_login, \
+                stream_id::text AS stream_id, \
+                started_at::text AS started_at, \
+                ended_at::text AS ended_at, \
+                duration_seconds::int8 AS duration_seconds, \
+                start_viewers::int8 AS start_viewers, \
+                peak_viewers::int8 AS peak_viewers, \
+                end_viewers::int8 AS end_viewers, \
+                avg_viewers::float8 AS avg_viewers, \
+                samples::int8 AS samples, \
+                retention_5m::float8 AS retention_5m, \
+                retention_10m::float8 AS retention_10m, \
+                retention_20m::float8 AS retention_20m, \
+                dropoff_pct::float8 AS dropoff_pct, \
+                dropoff_label, \
+                unique_chatters::int8 AS unique_chatters, \
+                first_time_chatters::int8 AS first_time_chatters, \
+                returning_chatters::int8 AS returning_chatters, \
+                followers_start::int8 AS followers_start, \
+                followers_end::int8 AS followers_end, \
+                follower_delta::int8 AS follower_delta, \
+                stream_title, \
+                language, \
+                is_mature::bool AS is_mature, \
+                tags, \
+                had_deadlock_in_session::bool AS had_deadlock_in_session, \
+                game_name \
+         FROM twitch_stream_sessions \
+         WHERE id = $1",
+    )
+    .bind(session_id)
+    .fetch_optional(pool)
+    .await
+    .ok()
+    .flatten()
+}
+
+/// Lädt die Streamer-Registry per Login (Python `_load_registry` via
+/// `_safe_fetchone_dict` → bei Fehler/keinem Treffer leeres Registry).
+pub async fn load_registry(pool: &PgPool, streamer: &str) -> ReportRegistry {
+    sqlx::query_as::<_, ReportRegistry>(
+        "SELECT twitch_user_id::text AS twitch_user_id, \
+                discord_user_id::text AS discord_user_id, \
+                discord_display_name, \
+                is_monitored_only::bool AS is_monitored_only \
+         FROM twitch_streamers \
+         WHERE LOWER(twitch_login) = LOWER($1) \
+         LIMIT 1",
+    )
+    .bind(streamer)
+    .fetch_optional(pool)
+    .await
+    .ok()
+    .flatten()
+    .unwrap_or_default()
+}
+
+/// RFC3339-Parse mit `Z`→`+00:00`-Normalisierung (für den Dauer-Fallback).
+fn parse_ts(raw: &str) -> Option<chrono::DateTime<chrono::FixedOffset>> {
+    let norm = raw.trim().replace('Z', "+00:00");
+    chrono::DateTime::parse_from_rfc3339(&norm).ok()
+}
+
+fn round2(value: f64) -> f64 {
+    (value * 100.0).round() / 100.0
+}
+
+/// Baut den `session`-Block des Snapshots (Python `_session_payload`). Fehlt
+/// `duration_seconds` (≤0), wird sie aus started_at/ended_at abgeleitet, sofern
+/// beide als Zeitstempel parsen (Python: `isinstance(..., datetime)`).
+pub fn session_payload(session: &ReportSession, registry: &ReportRegistry) -> serde_json::Value {
+    let mut duration_seconds = session.duration_seconds.unwrap_or(0);
+    if duration_seconds <= 0 {
+        if let (Some(s), Some(e)) = (session.started_at.as_deref(), session.ended_at.as_deref()) {
+            if let (Some(sd), Some(ed)) = (parse_ts(s), parse_ts(e)) {
+                duration_seconds = (ed - sd).num_seconds().max(0);
+            }
+        }
+    }
+    // Python: `stream_title or title or ""` — es gibt keine Spalte `title`,
+    // also gewinnt ein nicht-leerer stream_title, sonst "".
+    let title = session
+        .stream_title
+        .as_deref()
+        .filter(|s| !s.is_empty())
+        .unwrap_or("");
+    serde_json::json!({
+        "id": session.id,
+        "streamer_login": session.streamer_login.as_deref().unwrap_or("").to_lowercase(),
+        "twitch_user_id": registry.twitch_user_id.as_deref().unwrap_or(""),
+        "stream_id": session.stream_id.as_deref().unwrap_or(""),
+        "started_at": session.started_at.as_deref().unwrap_or(""),
+        "ended_at": session.ended_at.as_deref().unwrap_or(""),
+        "duration_seconds": duration_seconds,
+        "duration_min": (duration_seconds / 60).max(1),
+        "title": title,
+        "game_name": session.game_name.as_deref().unwrap_or(""),
+        "language": session.language.as_deref().unwrap_or(""),
+        "tags": session.tags.as_deref().unwrap_or(""),
+        "had_deadlock_in_session": session.had_deadlock_in_session.unwrap_or(false),
+    })
+}
+
+/// Baut den `metrics`-Block des Snapshots (Python `_core_metrics`).
+pub fn core_metrics(session: &ReportSession) -> serde_json::Value {
+    serde_json::json!({
+        "start_viewers": session.start_viewers.unwrap_or(0),
+        "end_viewers": session.end_viewers.unwrap_or(0),
+        "avg_viewers": round2(session.avg_viewers.unwrap_or(0.0)),
+        "peak_viewers": session.peak_viewers.unwrap_or(0),
+        "samples": session.samples.unwrap_or(0),
+        "retention_5m": session.retention_5m.unwrap_or(0.0),
+        "retention_10m": session.retention_10m.unwrap_or(0.0),
+        "retention_20m": session.retention_20m.unwrap_or(0.0),
+        "dropoff_pct": session.dropoff_pct.unwrap_or(0.0),
+        "dropoff_label": session.dropoff_label.as_deref().unwrap_or(""),
+        "unique_chatters": session.unique_chatters.unwrap_or(0),
+        "first_time_chatters": session.first_time_chatters.unwrap_or(0),
+        "returning_chatters": session.returning_chatters.unwrap_or(0),
+        "followers_start": session.followers_start.unwrap_or(0),
+        "followers_end": session.followers_end.unwrap_or(0),
+        "follower_delta": session.follower_delta.unwrap_or(0),
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -847,5 +1027,142 @@ mod tests {
 
         // Unbekannte Session → None.
         assert!(load_session_chat_data(&pool, 999).await.is_none());
+    }
+
+    async fn core_pool_or_skip(schema: &str) -> Option<PgPool> {
+        let dsn = std::env::var("TB_TEST_DATABASE_URL").ok()?;
+        let pool = PgPoolOptions::new().max_connections(1).connect(&dsn).await.unwrap();
+        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE")).execute(&pool).await.unwrap();
+        sqlx::query(&format!("CREATE SCHEMA {schema}")).execute(&pool).await.unwrap();
+        sqlx::query(&format!("SET search_path TO {schema}")).execute(&pool).await.unwrap();
+        sqlx::query(
+            "CREATE TABLE twitch_stream_sessions (\
+             id BIGINT PRIMARY KEY, streamer_login TEXT, stream_id TEXT, \
+             started_at TIMESTAMPTZ, ended_at TIMESTAMPTZ, duration_seconds INTEGER, \
+             start_viewers INTEGER, peak_viewers INTEGER, end_viewers INTEGER, \
+             avg_viewers DOUBLE PRECISION, samples INTEGER, \
+             retention_5m DOUBLE PRECISION, retention_10m DOUBLE PRECISION, \
+             retention_20m DOUBLE PRECISION, dropoff_pct DOUBLE PRECISION, dropoff_label TEXT, \
+             unique_chatters INTEGER, first_time_chatters INTEGER, returning_chatters INTEGER, \
+             followers_start INTEGER, followers_end INTEGER, follower_delta INTEGER, \
+             stream_title TEXT, language TEXT, is_mature BOOLEAN, tags TEXT, \
+             had_deadlock_in_session BOOLEAN, game_name TEXT)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "CREATE TABLE twitch_streamers (twitch_login TEXT, twitch_user_id TEXT, \
+             discord_user_id TEXT, discord_display_name TEXT, is_monitored_only BOOLEAN)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        Some(pool)
+    }
+
+    #[tokio::test]
+    async fn laedt_session_core_und_registry() {
+        let Some(pool) = core_pool_or_skip("t6f_post_stream_core").await else { return };
+        sqlx::query(
+            "INSERT INTO twitch_stream_sessions \
+             (id, streamer_login, stream_id, started_at, ended_at, duration_seconds, \
+              start_viewers, peak_viewers, end_viewers, avg_viewers, samples, \
+              retention_5m, retention_10m, retention_20m, dropoff_pct, dropoff_label, \
+              unique_chatters, first_time_chatters, returning_chatters, \
+              followers_start, followers_end, follower_delta, stream_title, language, \
+              is_mature, tags, had_deadlock_in_session, game_name) \
+             VALUES (1,'streamer','778899','2026-06-10T18:00:00+00','2026-06-10T20:00:00+00',7200, \
+              10,40,25,12.5,12,0.8,0.7,0.5,12.5,'leicht',30,8,22,100,107,7,'Deadlock Ranked','de', \
+              FALSE,'gaming',TRUE,'Deadlock')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO twitch_streamers (twitch_login, twitch_user_id, discord_user_id, \
+             discord_display_name, is_monitored_only) \
+             VALUES ('streamer','987','555','Anzeigename',FALSE)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let s = load_session(&pool, 1).await.expect("session vorhanden");
+        assert_eq!(s.streamer_login.as_deref(), Some("streamer"));
+        assert_eq!(s.duration_seconds, Some(7200));
+        assert_eq!(s.avg_viewers, Some(12.5));
+        assert_eq!(s.peak_viewers, Some(40));
+        assert_eq!(s.follower_delta, Some(7));
+        assert_eq!(s.had_deadlock_in_session, Some(true));
+
+        let reg = load_registry(&pool, "STREAMER").await; // Login case-insensitiv
+        assert_eq!(reg.twitch_user_id.as_deref(), Some("987"));
+        assert_eq!(reg.is_monitored_only, Some(false));
+
+        // Verdrahtung session_payload/core_metrics mit echten DB-Zeilen.
+        let sp = session_payload(&s, &reg);
+        assert_eq!(sp["twitch_user_id"], "987");
+        assert_eq!(sp["streamer_login"], "streamer");
+        assert_eq!(sp["duration_min"], 120);
+        assert_eq!(sp["title"], "Deadlock Ranked");
+        let cm = core_metrics(&s);
+        assert_eq!(cm["avg_viewers"], 12.5);
+        assert_eq!(cm["returning_chatters"], 22);
+
+        // Unbekannte Session → None, unbekannter Streamer → leeres Registry.
+        assert!(load_session(&pool, 999).await.is_none());
+        assert!(load_registry(&pool, "niemand").await.twitch_user_id.is_none());
+    }
+
+    #[test]
+    fn session_payload_dauer_fallback_und_core_metrics() {
+        let session = ReportSession {
+            id: 5,
+            streamer_login: Some("StreamerX".to_string()),
+            stream_id: Some("99887".to_string()),
+            started_at: Some("2026-06-10T18:00:00+00:00".to_string()),
+            ended_at: Some("2026-06-10T20:00:00+00:00".to_string()),
+            duration_seconds: Some(0), // ≤0 → Fallback aus Zeitstempeln
+            start_viewers: Some(10),
+            peak_viewers: Some(40),
+            end_viewers: Some(25),
+            avg_viewers: Some(17.004), // round2 → 17.0
+            samples: Some(12),
+            retention_5m: Some(0.8),
+            retention_10m: Some(0.7),
+            retention_20m: Some(0.5),
+            dropoff_pct: Some(12.5),
+            dropoff_label: Some("leicht".to_string()),
+            unique_chatters: Some(30),
+            first_time_chatters: Some(8),
+            returning_chatters: Some(22),
+            followers_start: Some(100),
+            followers_end: Some(107),
+            follower_delta: Some(7),
+            stream_title: Some(String::new()), // leer → title ""
+            language: Some("de".to_string()),
+            is_mature: Some(false),
+            tags: Some("gaming".to_string()),
+            had_deadlock_in_session: Some(true),
+            game_name: Some("Deadlock".to_string()),
+        };
+        let registry = ReportRegistry {
+            twitch_user_id: Some("4242".to_string()),
+            ..Default::default()
+        };
+        let sp = session_payload(&session, &registry);
+        assert_eq!(sp["id"], 5);
+        assert_eq!(sp["streamer_login"], "streamerx"); // lowercased
+        assert_eq!(sp["twitch_user_id"], "4242");
+        assert_eq!(sp["duration_seconds"], 7200); // 2h aus Fallback
+        assert_eq!(sp["duration_min"], 120);
+        assert_eq!(sp["title"], ""); // leerer stream_title → ""
+        assert_eq!(sp["had_deadlock_in_session"], true);
+
+        let cm = core_metrics(&session);
+        assert_eq!(cm["avg_viewers"], 17.0); // round2
+        assert_eq!(cm["start_viewers"], 10);
+        assert_eq!(cm["dropoff_label"], "leicht");
     }
 }
