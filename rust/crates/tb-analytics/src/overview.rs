@@ -31,6 +31,7 @@ pub async fn overview_metrics(
     pool: &PgPool,
     since: &str,
     streamer_login: Option<&str>,
+    until: Option<&str>,
 ) -> Result<Option<OverviewMetricsRow>, sqlx::Error> {
     sqlx::query_as(
         r#"
@@ -70,10 +71,12 @@ pub async fn overview_metrics(
         WHERE s.started_at >= $1::TIMESTAMPTZ
           AND s.ended_at IS NOT NULL
           AND ($2::TEXT IS NULL OR LOWER(s.streamer_login) = LOWER($2))
+          AND ($3::TEXT IS NULL OR s.started_at < $3::TIMESTAMPTZ)
         "#,
     )
     .bind(since)
     .bind(streamer_login)
+    .bind(until)
     .fetch_optional(pool)
     .await
 }
@@ -202,7 +205,7 @@ mod tests {
             .unwrap();
         assert_eq!(count, 1);
 
-        let metrics = overview_metrics(&pool, since, Some("streamer_x"))
+        let metrics = overview_metrics(&pool, since, Some("streamer_x"), None)
             .await
             .unwrap()
             .expect("Sollte Metriken liefern");

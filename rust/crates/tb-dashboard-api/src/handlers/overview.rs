@@ -64,6 +64,21 @@ pub struct OverviewSummary {
     pub retention_10m: f64,
     #[serde(rename = "retentionReliable")]
     pub retention_reliable: bool,
+    // Trends ggü. Vorperiode (None = kein verlässlicher Vergleich), Python calc_trend.
+    #[serde(rename = "avgViewersTrend")]
+    pub avg_viewers_trend: Option<f64>,
+    #[serde(rename = "followersTrend")]
+    pub followers_trend: Option<f64>,
+    #[serde(rename = "retentionTrend")]
+    pub retention_trend: Option<f64>,
+}
+
+/// Python `calc_trend`: None wenn prev 0/fehlt, sonst gerundete Prozent-Differenz.
+fn calc_trend(curr: f64, prev: f64) -> Option<f64> {
+    if prev == 0.0 {
+        return None;
+    }
+    Some(((curr - prev) / prev.abs() * 100.0 * 10.0).round() / 10.0)
 }
 
 /// `GET /twitch/api/v2/overview?streamer=<login>[&days=30]`
@@ -98,33 +113,61 @@ pub async fn overview_handler(
         }));
     }
 
-    let metrics = overview_metrics(&pool, &since, login_ref)
+    let metrics = overview_metrics(&pool, &since, login_ref, None)
         .await
         .map_err(|_| ApiError::internal())?
         .ok_or_else(ApiError::internal)?;
 
+    // Vorperiode [now-2*days, since) für Trend-Pfeile (Python _get_overview_data_sync).
+    let prev_since = (Utc::now() - Duration::days(days * 2)).to_rfc3339();
+    let prev = overview_metrics(&pool, &prev_since, login_ref, Some(&since))
+        .await
+        .map_err(|_| ApiError::internal())?;
+
+    let airtime = metrics.total_airtime_hours.unwrap_or(0.0);
+    let total_followers = metrics.total_followers.unwrap_or(0);
+    let gained = metrics.gained_followers.unwrap_or(0);
+    let curr_ret = metrics.avg_retention_10m.unwrap_or(0.0) * 100.0;
+    let curr_ret_sample = metrics.retention_sample_count.unwrap_or(0);
+    let per_hour = |n: i64| if airtime > 0.0 { n as f64 / airtime } else { 0.0 };
+
+    let prev_avg = prev.as_ref().and_then(|p| p.avg_avg_viewers).unwrap_or(0.0);
+    let prev_fol = prev.as_ref().and_then(|p| p.total_followers).unwrap_or(0);
+    let prev_ret = prev.as_ref().and_then(|p| p.avg_retention_10m).unwrap_or(0.0) * 100.0;
+    let prev_ret_sample = prev.as_ref().and_then(|p| p.retention_sample_count).unwrap_or(0);
+
+    let avg_viewers_trend = calc_trend(metrics.avg_avg_viewers.unwrap_or(0.0), prev_avg);
+    // Python: bei |curr|<5 UND |prev|<5 unterdrücken, sonst auf ±999 kappen.
+    let followers_trend = if total_followers.abs() < 5 && prev_fol.abs() < 5 {
+        None
+    } else {
+        calc_trend(total_followers as f64, prev_fol as f64).map(|v| v.clamp(-999.0, 999.0))
+    };
+    // Python: nur wenn beide Perioden ≥3 Retention-Samples und prev>0.
+    let retention_trend = if curr_ret_sample >= 3 && prev_ret_sample >= 3 && prev_ret > 0.0 {
+        calc_trend(curr_ret, prev_ret)
+    } else {
+        None
+    };
+
     Ok(Json(OverviewResponse::Data(OverviewData {
         streamer: params.streamer,
         days,
-        summary: {
-            let airtime = metrics.total_airtime_hours.unwrap_or(0.0);
-            let total_followers = metrics.total_followers.unwrap_or(0);
-            let gained = metrics.gained_followers.unwrap_or(0);
-            let per_hour = |n: i64| if airtime > 0.0 { n as f64 / airtime } else { 0.0 };
-            OverviewSummary {
-                avg_viewers: metrics.avg_avg_viewers.unwrap_or(0.0),
-                peak_viewers: metrics.max_peak_viewers.unwrap_or(0),
-                total_hours_watched: metrics.total_hours_watched.unwrap_or(0.0),
-                total_airtime: airtime,
-                followers_delta: total_followers,
-                total_sessions: metrics.session_count.unwrap_or(0),
-                followers_gained: gained,
-                followers_per_hour: per_hour(total_followers),
-                followers_gained_per_hour: per_hour(gained),
-                // Python: float(avg_retention_10m)*100 (Rohbruch -> Prozent).
-                retention_10m: metrics.avg_retention_10m.unwrap_or(0.0) * 100.0,
-                retention_reliable: metrics.retention_sample_count.unwrap_or(0) >= 3,
-            }
+        summary: OverviewSummary {
+            avg_viewers: metrics.avg_avg_viewers.unwrap_or(0.0),
+            peak_viewers: metrics.max_peak_viewers.unwrap_or(0),
+            total_hours_watched: metrics.total_hours_watched.unwrap_or(0.0),
+            total_airtime: airtime,
+            followers_delta: total_followers,
+            total_sessions: metrics.session_count.unwrap_or(0),
+            followers_gained: gained,
+            followers_per_hour: per_hour(total_followers),
+            followers_gained_per_hour: per_hour(gained),
+            retention_10m: curr_ret,
+            retention_reliable: curr_ret_sample >= 3,
+            avg_viewers_trend,
+            followers_trend,
+            retention_trend,
         },
     })))
 }
