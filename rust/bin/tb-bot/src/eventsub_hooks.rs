@@ -30,6 +30,7 @@ use crate::offline_side_effects::OfflineSideEffects;
 use crate::partner_lookup::{
     is_target_partner, known_source, resolve_active_partner_id_by_login, PrefetchedLookups,
 };
+use crate::reauth_reminder::ReauthReminder;
 use crate::score_refresh::ScoreRefreshResolver;
 
 fn event_str<'a>(event: &'a Value, key: &str) -> &'a str {
@@ -267,6 +268,9 @@ pub struct RaidEventSubHooks {
     pub side_effects: OfflineSideEffects,
     pub arrival: RaidArrivalCoordinator,
     pub guard: BlacklistRaidGuard,
+    /// Go-Live-ReAuth-Reminder (B11); `None`, wenn kein nativer Chat-Send-Pfad
+    /// gebootet ist (TB_CHAT_ENABLED≠1).
+    pub reauth_reminder: Option<Arc<ReauthReminder>>,
 }
 
 #[async_trait::async_trait]
@@ -275,6 +279,12 @@ impl EventSubHooks for RaidEventSubHooks {
         self.manager
             .ensure_offline_subscription(twitch_user_id, login)
             .await;
+        // Go-Live-Followup (B11): Partner mit needs_reauth einmalig im Chat
+        // an die fällige Re-Authentifizierung erinnern. Best-effort, eigener
+        // Dedupe-Guard — der stream.offline-Sub-Pfad bleibt davon unberührt.
+        if let Some(reminder) = &self.reauth_reminder {
+            reminder.maybe_remind(twitch_user_id, login).await;
+        }
     }
 
     async fn on_score_refresh(

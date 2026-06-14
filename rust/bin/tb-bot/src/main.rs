@@ -42,6 +42,7 @@ mod partner_lookup;
 mod raid_adapters;
 mod raid_arrival_wiring;
 mod raid_oauth_impl;
+mod reauth_reminder;
 mod score_refresh;
 mod wiring;
 
@@ -72,6 +73,7 @@ use tb_transport_twitch::{HelixClient, HelixConfig};
 
 use auto_raid::OfflineRaidHandler;
 use eventsub_hooks::{BlacklistRaidGuard, RaidArrivalCoordinator, RaidEventSubHooks};
+use reauth_reminder::ReauthReminder;
 use offline_side_effects::OfflineSideEffects;
 use raid_adapters::{
     HelixFallbackStreams, HelixRaidApi, HelixTokenClient, ManagerArrivalReadiness,
@@ -551,8 +553,19 @@ async fn main() {
             manual_raid_port = Some(Arc::new(ManualRaidAdapter {
                 handler: offline.clone(),
             }));
+            // Go-Live-ReAuth-Reminder (B11): braucht den nativen Chat-Send-Pfad.
+            // chat_api_handle ist hier noch in Scope (wird erst unten von der
+            // Pipeline konsumiert) — gleiches Durchreich-Muster wie partner_setup.
+            let reauth_reminder = chat_api_handle
+                .as_ref()
+                .map(|h| Arc::new(ReauthReminder::new(pool.clone(), h.api.clone())));
             tracing::info!(
-                "Raid-EventSub-Hooks aktiv (Auto-Raid, Arrival, Score-Refresh, Blacklist-Guard)"
+                "Raid-EventSub-Hooks aktiv (Auto-Raid, Arrival, Score-Refresh, Blacklist-Guard{})",
+                if reauth_reminder.is_some() {
+                    ", ReAuth-Reminder"
+                } else {
+                    ""
+                }
             );
             Arc::new(RaidEventSubHooks {
                 manager: manager.clone(),
@@ -562,6 +575,7 @@ async fn main() {
                 side_effects: OfflineSideEffects::new(pool.clone()),
                 arrival,
                 guard: blacklist_guard,
+                reauth_reminder,
             })
         }
         (Some(manager), _, cipher) => {

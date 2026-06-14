@@ -1,0 +1,201 @@
+//! Go-Live-ReAuth-Chat-Reminder (B11, Go-Live-Followup-Teil).
+//!
+//! Port von `monitoring.py::_maybe_send_reauth_chat_reminder` plus dem
+//! `needs_reauth`-Zweig in `eventsub_mixin.py::_handle_stream_went_live`
+//! (Z. 1561–1591): Geht ein Partner live, dessen Token re-authentifiziert
+//! werden muss (`twitch_raid_auth.needs_reauth`), bekommt er einmalig pro
+//! Stream-Start eine freundliche Erinnerung in seinen Twitch-Chat.
+//!
+//! Diese Followup-Wirkung fiel unter dem nativen Monitoring-Takeover aus:
+//! der Rust-Go-Live-Hook legte nur die stream.offline-Subscription an und
+//! schickte keine Re-Auth-Erinnerung mehr — betroffene Streamer verloren
+//! ihre Autorisierung still, ohne beim Live-Gehen erinnert zu werden.
+//!
+//! Bewusst NICHT in dieser Slice: Werbefrei-Pitch (`consume_stream_start_pitch`,
+//! braucht den Timeout-Guard) und der event-getriebene Chat-Join (läuft nativ
+//! über die Sub-Reconcile-Schleife). Diese bleiben eigene Einheiten.
+
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
+
+use sqlx::PgPool;
+use tb_chat::ChatApi;
+use tb_transport_twitch::SendOutcome;
+
+/// Dedupe-Fenster pro Broadcaster. Python dedupt primär über die `stream_id`
+/// (genau ein Reminder pro Stream-Start) mit 300-s-Fallback-Guard. Der native
+/// Pfad hat im Hook keine `stream_id`, dedupt aber bereits message_id-basiert
+/// über die durable Processing-Inbox — dieses Zeitfenster schützt nur noch
+/// gegen Webhook-Retries/Doppel-Trigger; zwei echte Stream-Starts liegen weiter
+/// auseinander und bekommen je einen Reminder (= Python-Verhalten).
+const REMINDER_DEDUPE_WINDOW: Duration = Duration::from_secs(300);
+
+/// Exakter Text aus `monitoring.py::_reauth_chat_reminder_text` — bewusst
+/// byte-identisch (inkl. der ASCII-Schreibweise „Fuer"), damit die nativ
+/// gesendete Chat-Nachricht 1:1 der Python-Variante entspricht (Parität).
+const REAUTH_REMINDER_TEXT: &str = "Kurze Erinnerung: Fuer den Raid-/Stats-Bot fehlt noch die neue Twitch-Autorisierung. Bitte im Dashboard einloggen und Twitch neu verbinden. Falls du die DM brauchst: Der Re-Auth-Link wurde dir bereits auf Discord geschickt.";
+
+/// Sendet beim Go-Live einmalig eine Re-Auth-Erinnerung an Partner mit
+/// `needs_reauth`. Hält ein In-Memory-Dedupe pro Broadcaster.
+pub struct ReauthReminder {
+    pool: PgPool,
+    chat: Arc<dyn ChatApi>,
+    last_sent: Mutex<HashMap<String, Instant>>,
+}
+
+impl ReauthReminder {
+    pub fn new(pool: PgPool, chat: Arc<dyn ChatApi>) -> Self {
+        Self {
+            pool,
+            chat,
+            last_sent: Mutex::new(HashMap::new()),
+        }
+    }
+
+    /// Bei Go-Live aufzurufen. Liefert `true`, wenn ein Reminder gesendet wurde.
+    /// Kein Reminder, wenn der Partner voll autorisiert ist, gerade erst
+    /// erinnert wurde, oder kein gültiger Send-Pfad existiert.
+    pub async fn maybe_remind(&self, broadcaster_id: &str, login: &str) -> bool {
+        let broadcaster_id = broadcaster_id.trim();
+        let login = login.trim().to_lowercase();
+        if broadcaster_id.is_empty() || login.is_empty() {
+            return false;
+        }
+
+        // Voll autorisiert → kein Reminder (Python `_is_fully_authed`).
+        let row = self.load_needs_reauth(broadcaster_id).await;
+        if classify_fully_authed(row) {
+            return false;
+        }
+
+        // Dedupe-Guard VOR dem Senden setzen (Python: race-condition-Fix gegen
+        // gleichzeitige Trigger-Pfade).
+        {
+            let mut guard = self.last_sent.lock().expect("reauth dedupe lock");
+            let now = Instant::now();
+            if !should_send(guard.get(broadcaster_id).copied(), now, REMINDER_DEDUPE_WINDOW) {
+                return false;
+            }
+            guard.insert(broadcaster_id.to_string(), now);
+        }
+
+        match self
+            .chat
+            .send_message(broadcaster_id, REAUTH_REMINDER_TEXT)
+            .await
+        {
+            Ok(SendOutcome::Sent) => {
+                tracing::info!(
+                    login = %login,
+                    broadcaster_id,
+                    "ReAuth-Reminder bei Go-Live in den Chat gesendet"
+                );
+                true
+            }
+            Ok(other) => {
+                tracing::debug!(
+                    login = %login,
+                    ?other,
+                    "ReAuth-Reminder nicht zugestellt (Drop/HTTP-Fehler)"
+                );
+                false
+            }
+            Err(error) => {
+                tracing::debug!(%error, login = %login, "ReAuth-Reminder-Send fehlgeschlagen");
+                false
+            }
+        }
+    }
+
+    /// Liest `needs_reauth` für den Broadcaster. `Option<Option<bool>>`:
+    /// äußeres `None` = keine Zeile, inneres `None` = SQL-NULL. Fehler werden
+    /// (wie Python) zu „nicht voll autorisiert" verschluckt → `Some(Some(true))`.
+    async fn load_needs_reauth(&self, broadcaster_id: &str) -> Option<Option<bool>> {
+        match sqlx::query_scalar::<_, Option<bool>>(
+            "SELECT needs_reauth FROM twitch_raid_auth WHERE twitch_user_id = $1",
+        )
+        .bind(broadcaster_id)
+        .fetch_optional(&self.pool)
+        .await
+        {
+            Ok(row) => row,
+            Err(error) => {
+                tracing::debug!(%error, broadcaster_id, "needs_reauth-Check fehlgeschlagen");
+                // Python fällt bei Exception auf „nicht fully authed" → wir
+                // liefern einen Wert, der genau das ergibt.
+                Some(Some(true))
+            }
+        }
+    }
+}
+
+/// Python `_is_fully_authed`: Zeile muss existieren UND `needs_reauth == 0`.
+/// Boolean-Spalte → fully authed nur bei explizit `false`; NULL, `true` oder
+/// fehlende Zeile gelten als „nicht voll autorisiert".
+fn classify_fully_authed(row: Option<Option<bool>>) -> bool {
+    matches!(row, Some(Some(false)))
+}
+
+/// Dedupe-Entscheidung: senden, wenn noch nie gesendet oder das Fenster
+/// abgelaufen ist.
+fn should_send(last: Option<Instant>, now: Instant, window: Duration) -> bool {
+    match last {
+        None => true,
+        Some(prev) => now.duration_since(prev) >= window,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn fully_authed_nur_bei_explizit_false() {
+        // Voll autorisiert: Zeile da, needs_reauth = false.
+        assert!(classify_fully_authed(Some(Some(false))));
+        // needs_reauth = true → nicht fully authed.
+        assert!(!classify_fully_authed(Some(Some(true))));
+        // NULL → nicht fully authed (Python `None == 0` ist False).
+        assert!(!classify_fully_authed(Some(None)));
+        // Keine Zeile → nicht fully authed.
+        assert!(!classify_fully_authed(None));
+    }
+
+    #[test]
+    fn dedupe_fenster() {
+        let now = Instant::now();
+        // Noch nie gesendet → senden.
+        assert!(should_send(None, now, REMINDER_DEDUPE_WINDOW));
+        // Gerade gesendet → unterdrücken.
+        assert!(!should_send(Some(now), now, REMINDER_DEDUPE_WINDOW));
+        // Innerhalb des Fensters → unterdrücken.
+        assert!(!should_send(
+            Some(now - Duration::from_secs(120)),
+            now,
+            REMINDER_DEDUPE_WINDOW
+        ));
+        // Genau am Fensterrand → senden.
+        assert!(should_send(
+            Some(now - Duration::from_secs(300)),
+            now,
+            REMINDER_DEDUPE_WINDOW
+        ));
+        // Lange her → senden.
+        assert!(should_send(
+            Some(now - Duration::from_secs(3600)),
+            now,
+            REMINDER_DEDUPE_WINDOW
+        ));
+    }
+
+    #[test]
+    fn reminder_text_ist_python_paritaet() {
+        // Byte-identisch zu monitoring.py::_reauth_chat_reminder_text.
+        assert!(REAUTH_REMINDER_TEXT.starts_with("Kurze Erinnerung: Fuer den Raid-/Stats-Bot"));
+        assert!(REAUTH_REMINDER_TEXT.contains("Bitte im Dashboard einloggen und Twitch neu verbinden."));
+        assert!(REAUTH_REMINDER_TEXT.ends_with("auf Discord geschickt."));
+        // ASCII-Parität: keine echten Umlaute im gesendeten Text.
+        assert!(REAUTH_REMINDER_TEXT.is_ascii());
+    }
+}
