@@ -8,16 +8,56 @@
 
 use std::path::{Path, PathBuf};
 
+use async_trait::async_trait;
 use chrono::DateTime;
 use regex::Regex;
 
 use crate::config::{FFMPEG_PATH, MAX_DISCORD_FILE_MB};
+
+/// Zugriff auf die Twitch-Helix-Daten, die der Highlight-Clipper braucht
+/// (User-Lookup + Archiv-VODs). Wird vom tb-bot mit dem echten Twitch-Client
+/// implementiert; die Crate bleibt dadurch frei vom Helix-Stack.
+#[async_trait]
+pub trait TwitchVodApi: Send + Sync {
+    /// User-Objekt (mind. `id`) für einen Login, oder None.
+    async fn get_user_info(&self, login: &str) -> Option<serde_json::Value>;
+    /// Die jüngsten Archiv-VODs eines Kanals (je `vod` mind. `id`/`created_at`/`duration`).
+    async fn get_archive_videos(&self, channel_id: &str, first: u32) -> Vec<serde_json::Value>;
+}
 
 /// Treffer der VOD-Suche: VOD-ID + Startzeitpunkt (Unix-Sekunden).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VodMatch {
     pub vod_id: String,
     pub vod_started_at: i64,
+}
+
+/// Twitch-Channel-ID (= User-ID) zu einem Login (Python `get_channel_id`).
+/// Leere/fehlende ID → None.
+pub async fn get_channel_id(api: &dyn TwitchVodApi, login: &str) -> Option<String> {
+    let user = api.get_user_info(login).await?;
+    let id = match user.get("id") {
+        Some(serde_json::Value::String(s)) => s.trim().to_string(),
+        Some(serde_json::Value::Number(n)) => n.to_string(),
+        _ => String::new(),
+    };
+    if id.is_empty() {
+        None
+    } else {
+        Some(id)
+    }
+}
+
+/// Sucht ein Archiv-VOD, das das Match-Zeitfenster abdeckt (Python
+/// `find_vod_for_match`): Archiv-VODs holen + [`select_vod_for_match`].
+pub async fn find_vod_for_match(
+    api: &dyn TwitchVodApi,
+    channel_id: &str,
+    match_start_unix: i64,
+    match_duration_s: i64,
+) -> Option<VodMatch> {
+    let vods = api.get_archive_videos(channel_id, 20).await;
+    select_vod_for_match(&vods, match_start_unix, match_duration_s)
 }
 
 /// Wählt das erste Archiv-VOD, das das Match-Zeitfenster vollständig abdeckt.
@@ -363,5 +403,44 @@ mod tests {
         assert!(cmd.contains(&"scale=-2:720".to_string()));
         assert!(cmd.contains(&"libx264".to_string()));
         assert!(cmd.contains(&"/clips/c.compressed.mp4".to_string()));
+    }
+
+    struct MockApi {
+        user: Option<serde_json::Value>,
+        vods: Vec<serde_json::Value>,
+    }
+
+    #[async_trait]
+    impl TwitchVodApi for MockApi {
+        async fn get_user_info(&self, _login: &str) -> Option<serde_json::Value> {
+            self.user.clone()
+        }
+        async fn get_archive_videos(&self, _channel_id: &str, _first: u32) -> Vec<serde_json::Value> {
+            self.vods.clone()
+        }
+    }
+
+    #[tokio::test]
+    async fn channel_id_aus_user_info() {
+        let api = MockApi { user: Some(json!({"id": "12345"})), vods: vec![] };
+        assert_eq!(get_channel_id(&api, "nani").await, Some("12345".to_string()));
+        // Numerische ID wird zu String.
+        let api_num = MockApi { user: Some(json!({"id": 678})), vods: vec![] };
+        assert_eq!(get_channel_id(&api_num, "nani").await, Some("678".to_string()));
+        // Leere ID / kein User → None.
+        let api_empty = MockApi { user: Some(json!({"id": ""})), vods: vec![] };
+        assert_eq!(get_channel_id(&api_empty, "nani").await, None);
+        let api_none = MockApi { user: None, vods: vec![] };
+        assert_eq!(get_channel_id(&api_none, "nani").await, None);
+    }
+
+    #[tokio::test]
+    async fn find_vod_nutzt_archive_und_select() {
+        let api = MockApi {
+            user: None,
+            vods: vec![json!({"id": "222", "created_at": "2021-05-01T00:00:00Z", "duration": "2h"})],
+        };
+        let m = find_vod_for_match(&api, "ch", 1619827200 + 3600, 600).await;
+        assert_eq!(m, Some(VodMatch { vod_id: "222".into(), vod_started_at: 1619827200 }));
     }
 }

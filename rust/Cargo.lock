@@ -2425,6 +2425,7 @@ dependencies = [
 name = "tb-highlight"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "bzip2-rs",
  "chrono",
  "regex",
