@@ -461,6 +461,158 @@ ANTWORT-FORMAT (JSON, kein Markdown drumherum):
     )
 }
 
+// ---------------------------------------------------------------------------
+// MiniMax-HTTP-Call (Python `generate_title` + `_get_minimax_client`)
+// ---------------------------------------------------------------------------
+
+/// Fehler beim Generieren eines Titels.
+#[derive(Debug)]
+pub enum GenerateTitleError {
+    /// Rate-Limit überschritten (Python `RateLimitExceeded`).
+    RateLimit(RateLimitExceeded),
+    /// Kein MiniMax-Key in der Umgebung (Python `LLMSecretNotFoundError`).
+    NoApiKey,
+    /// HTTP-/Decode-Fehler beim MiniMax-Call.
+    Http(String),
+}
+
+#[derive(serde::Deserialize)]
+struct ChatResponse {
+    choices: Vec<ChatChoice>,
+}
+
+#[derive(serde::Deserialize)]
+struct ChatChoice {
+    message: ChatMessage,
+}
+
+#[derive(serde::Deserialize)]
+struct ChatMessage {
+    content: Option<String>,
+}
+
+/// MiniMax-Key aus der Umgebung (Python `_load_secret`-Reihenfolge):
+/// MINIMAX_TOKEN_PLAN_KEY → MINIMAX_API_KEY → MINMAX, erster nicht-leerer.
+pub fn resolve_minimax_key() -> Option<String> {
+    for name in ["MINIMAX_TOKEN_PLAN_KEY", "MINIMAX_API_KEY", "MINMAX"] {
+        if let Ok(value) = std::env::var(name) {
+            let trimmed = value.trim();
+            if !trimmed.is_empty() {
+                return Some(trimmed.to_string());
+            }
+        }
+    }
+    None
+}
+
+/// Python `_DDC_PENTEST_DISABLE_RATE_LIMITS`: Rate-Limits aus, wenn die Env-Var
+/// auf einen „wahren" Wert gesetzt ist.
+fn pentest_disable_rate_limits() -> bool {
+    std::env::var("DDC_PENTEST_DISABLE_RATE_LIMITS")
+        .map(|v| !matches!(v.trim().to_lowercase().as_str(), "" | "0" | "false" | "no" | "off"))
+        .unwrap_or(false)
+}
+
+async fn minimax_chat_completion(
+    base_url: &str,
+    api_key: &str,
+    prompt: &str,
+    temperature: f64,
+    max_tokens: u32,
+) -> Result<String, String> {
+    let url = format!("{}/chat/completions", base_url.trim_end_matches('/'));
+    let body = serde_json::json!({
+        "model": MINIMAX_MODEL,
+        "messages": [{"role": "user", "content": prompt}],
+        "temperature": temperature,
+        "max_tokens": max_tokens,
+    });
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(240))
+        .build()
+        .map_err(|e| e.to_string())?;
+    let resp = client
+        .post(&url)
+        .bearer_auth(api_key)
+        .json(&body)
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+    if !resp.status().is_success() {
+        return Err(format!("HTTP {}", resp.status()));
+    }
+    let parsed: ChatResponse = resp.json().await.map_err(|e| e.to_string())?;
+    Ok(parsed
+        .choices
+        .into_iter()
+        .next()
+        .and_then(|c| c.message.content)
+        .unwrap_or_default())
+}
+
+/// Kern von `generate_title` mit injizierbarem `base_url` + `api_key` (für Tests).
+/// emoji_ratio → Prompt → MiniMax-POST → parse → sanitize.
+#[allow(clippy::too_many_arguments)]
+pub async fn generate_title_with(
+    base_url: &str,
+    api_key: &str,
+    keywords: &str,
+    title_history: &[PromptHistoryItem],
+    knowledge_titles: &[PromptKnowledgeItem],
+    rank_display: Option<&str>,
+    live_state: Option<&PromptLiveState>,
+) -> Result<TitleResult, GenerateTitleError> {
+    let titles: Vec<&str> = title_history.iter().map(|h| h.title.as_str()).collect();
+    let ratio = emoji_ratio(&titles);
+    let prompt = build_title_prompt(
+        keywords,
+        title_history,
+        knowledge_titles,
+        rank_display,
+        ratio,
+        live_state,
+    );
+    let raw = minimax_chat_completion(base_url, api_key, &prompt, 0.35, 2000)
+        .await
+        .map_err(GenerateTitleError::Http)?;
+    Ok(sanitize_title_result(
+        parse_title_response(&raw),
+        keywords,
+        rank_display,
+    ))
+}
+
+/// Generiert einen Stream-Titel via MiniMax (Python `generate_title`).
+/// Reihenfolge wie Python: Rate-Limit zuerst, dann Key-Resolve, dann Call.
+#[allow(clippy::too_many_arguments)]
+pub async fn generate_title(
+    rate_limiter: &TitleRateLimiter,
+    streamer_id: &str,
+    keywords: &str,
+    title_history: &[PromptHistoryItem],
+    knowledge_titles: &[PromptKnowledgeItem],
+    rank_display: Option<&str>,
+    live_state: Option<&PromptLiveState>,
+    source: &str,
+) -> Result<TitleResult, GenerateTitleError> {
+    if !pentest_disable_rate_limits() {
+        rate_limiter
+            .check_and_record(streamer_id, source)
+            .map_err(GenerateTitleError::RateLimit)?;
+    }
+    let api_key = resolve_minimax_key().ok_or(GenerateTitleError::NoApiKey)?;
+    generate_title_with(
+        MINIMAX_BASE_URL,
+        &api_key,
+        keywords,
+        title_history,
+        knowledge_titles,
+        rank_display,
+        live_state,
+    )
+    .await
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -611,5 +763,44 @@ mod tests {
         assert!(p.contains("Aktuelle Live-Daten: Hero=Haze, Party=solo"));
         // Top-Referenzen sind nach Perf sortiert: "Stark" (2.0) vor "Schwach" (0.5).
         assert!(p.find("Stark").unwrap() < p.find("Schwach").unwrap());
+    }
+
+    #[tokio::test]
+    async fn generate_title_with_end_to_end() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        let body = serde_json::json!({
+            "choices": [{"message": {"content":
+                "{\"primary_title\":\"Ranked Grind\",\"alternatives\":[\"Alt Eins\"],\"title_analysis\":[]}"}}]
+        });
+        Mock::given(method("POST"))
+            .and(path("/chat/completions"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(body))
+            .mount(&server)
+            .await;
+
+        let result = generate_title_with(&server.uri(), "fakekey", "ranked", &[], &[], None, None)
+            .await
+            .unwrap();
+        assert_eq!(result.primary, "Ranked Grind");
+        assert_eq!(result.alternatives, vec!["Alt Eins".to_string()]);
+    }
+
+    #[tokio::test]
+    async fn generate_title_with_http_fehler() {
+        use wiremock::matchers::method;
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(500))
+            .mount(&server)
+            .await;
+        let err = generate_title_with(&server.uri(), "k", "x", &[], &[], None, None)
+            .await
+            .unwrap_err();
+        assert!(matches!(err, GenerateTitleError::Http(_)));
     }
 }
