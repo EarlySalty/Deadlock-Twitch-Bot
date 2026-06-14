@@ -2383,6 +2383,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "tb-highlight"
+version = "0.1.0"
+dependencies = [
+ "reqwest",
+ "serde_json",
+ "tokio",
+ "tracing",
+ "wiremock",
+]
+
+[[package]]
 name = "tb-http-core"
 version = "0.1.0"
 dependencies = [
