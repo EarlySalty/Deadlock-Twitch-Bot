@@ -34,6 +34,7 @@ pub mod auth_writer;
 pub mod auto_raid_pipeline;
 pub mod candidate_selection;
 pub mod eligibility;
+pub mod external_recruitment_store;
 pub mod manual_suppression;
 pub mod oauth_flow;
 pub mod offline_eligibility;
@@ -68,6 +69,11 @@ pub use arrival_tracking_store::{
     serialize_confirmation_signals, ArrivalTrackingStore, RecordArrivalInput,
 };
 pub use auth_writer::{AuthWriteError, AuthWriter, NewAuth};
+pub use external_recruitment_store::{
+    ConfirmedExternalRecruitmentRaid, DueBlacklistPending, DueBotBanCheck,
+    ExternalRecruitmentStore, EXTERNAL_RECRUITMENT_BLACKLIST_GRACE_SECONDS,
+    EXTERNAL_RECRUITMENT_RAID_LIMIT,
+};
 pub use auto_raid_pipeline::{
     ArrivalReadiness, AutoRaidPipeline, AutoRaidPipelineOutcome, AutoRaidRequest,
     FallbackStreamSource,
