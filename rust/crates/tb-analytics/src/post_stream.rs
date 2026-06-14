@@ -1765,6 +1765,301 @@ pub async fn generate_report_v2(model: AiModel, snapshot: &serde_json::Value) ->
     process_report_v2_response(&raw, snapshot)
 }
 
+// ---------------------------------------------------------------------------
+// Persistenz + Trigger-Orchestrierung (Python api_post_stream.py
+// `_ensure_report_ab_columns` / `trigger_post_stream_analysis`)
+// ---------------------------------------------------------------------------
+
+impl AiModel {
+    /// String-Repräsentation für die DB-Spalte `model` (Python `AI_MODEL_OPUS`/
+    /// `AI_MODEL_MINIMAX`).
+    pub fn as_str(self) -> &'static str {
+        match self {
+            AiModel::Opus => "opus",
+            AiModel::Minimax => "minimax",
+        }
+    }
+}
+
+/// Legt die AI-Report-Tabellen/-Spalten/-Indizes idempotent an (Python
+/// `_ensure_report_ab_columns`). Alle Statements sind `IF NOT EXISTS`.
+pub async fn ensure_report_ab_columns(pool: &PgPool) -> Result<(), sqlx::Error> {
+    let statements: [&str; 15] = [
+        "CREATE TABLE IF NOT EXISTS twitch_chat_word_groups (\
+            id BIGSERIAL PRIMARY KEY, session_id BIGINT NOT NULL, streamer_login TEXT NOT NULL, \
+            group_name TEXT NOT NULL, keywords TEXT[] NOT NULL, message_count INT DEFAULT 0, \
+            created_at TIMESTAMPTZ DEFAULT NOW())",
+        "CREATE TABLE IF NOT EXISTS twitch_stream_ai_reports (\
+            id BIGSERIAL PRIMARY KEY, session_id BIGINT NOT NULL, streamer_login TEXT NOT NULL, \
+            model TEXT NOT NULL, generated_at TIMESTAMPTZ DEFAULT NOW(), status TEXT DEFAULT 'pending', \
+            schema_version TEXT DEFAULT 'post_stream_report_v1', report_variant TEXT DEFAULT 'compact', \
+            input_snapshot_json JSONB, prompt_version TEXT, started_at TIMESTAMPTZ DEFAULT NOW(), \
+            finished_at TIMESTAMPTZ, retry_count INTEGER DEFAULT 0, report_json JSONB, \
+            word_groups_json JSONB, error TEXT)",
+        "ALTER TABLE twitch_stream_ai_reports ADD COLUMN IF NOT EXISTS schema_version TEXT DEFAULT 'post_stream_report_v1'",
+        "ALTER TABLE twitch_stream_ai_reports ADD COLUMN IF NOT EXISTS report_variant TEXT DEFAULT 'compact'",
+        "ALTER TABLE twitch_stream_ai_reports ADD COLUMN IF NOT EXISTS input_snapshot_json JSONB",
+        "ALTER TABLE twitch_stream_ai_reports ADD COLUMN IF NOT EXISTS prompt_version TEXT",
+        "ALTER TABLE twitch_stream_ai_reports ADD COLUMN IF NOT EXISTS started_at TIMESTAMPTZ DEFAULT NOW()",
+        "ALTER TABLE twitch_stream_ai_reports ADD COLUMN IF NOT EXISTS finished_at TIMESTAMPTZ",
+        "ALTER TABLE twitch_stream_ai_reports ADD COLUMN IF NOT EXISTS retry_count INTEGER DEFAULT 0",
+        "CREATE INDEX IF NOT EXISTS idx_stream_ai_reports_session_variant \
+            ON twitch_stream_ai_reports (session_id, report_variant, generated_at DESC)",
+        "CREATE INDEX IF NOT EXISTS idx_stream_ai_reports_streamer \
+            ON twitch_stream_ai_reports (streamer_login, generated_at DESC)",
+        "CREATE TABLE IF NOT EXISTS twitch_stream_report_ratings (\
+            id BIGSERIAL PRIMARY KEY, session_id BIGINT NOT NULL, streamer_login TEXT NOT NULL, \
+            report_variant TEXT NOT NULL DEFAULT 'compact', \
+            rating TEXT NOT NULL CHECK (rating IN ('gut', 'schlecht', 'neutral')), \
+            comment TEXT, rated_by TEXT NOT NULL, created_at TIMESTAMPTZ DEFAULT NOW(), \
+            updated_at TIMESTAMPTZ DEFAULT NOW(), UNIQUE (session_id, report_variant, rated_by))",
+        "CREATE TABLE IF NOT EXISTS twitch_stream_report_ab_votes (\
+            id BIGSERIAL PRIMARY KEY, session_id BIGINT NOT NULL, streamer_login TEXT NOT NULL, \
+            winner TEXT NOT NULL CHECK (winner IN ('compact', 'full', 'gleich')), \
+            comment TEXT, voted_by TEXT NOT NULL, created_at TIMESTAMPTZ DEFAULT NOW(), \
+            updated_at TIMESTAMPTZ DEFAULT NOW(), UNIQUE (session_id, voted_by))",
+        "CREATE INDEX IF NOT EXISTS idx_ab_votes_session ON twitch_stream_report_ab_votes (session_id)",
+        "CREATE INDEX IF NOT EXISTS idx_ab_votes_streamer ON twitch_stream_report_ab_votes (streamer_login)",
+    ];
+    for stmt in statements {
+        sqlx::query(stmt).execute(pool).await?;
+    }
+    Ok(())
+}
+
+/// Eine Wortgruppe als JSON (für snapshot["word_groups"] + word_groups_json).
+fn word_group_value(g: &WordGroup) -> serde_json::Value {
+    serde_json::json!({
+        "group_name": g.group_name,
+        "keywords": g.keywords,
+        "message_count": g.message_count,
+    })
+}
+
+fn word_groups_to_json(groups: &[WordGroup]) -> serde_json::Value {
+    serde_json::Value::Array(groups.iter().map(word_group_value).collect())
+}
+
+/// DELETE + Re-INSERT der Wortgruppen einer Session (Python: Transaction in
+/// `trigger_post_stream_analysis`). Atomar.
+async fn persist_word_groups(
+    pool: &PgPool,
+    session_id: i64,
+    streamer: &str,
+    word_groups: &[WordGroup],
+) -> Result<(), sqlx::Error> {
+    let mut tx = pool.begin().await?;
+    sqlx::query("DELETE FROM twitch_chat_word_groups WHERE session_id = $1")
+        .bind(session_id)
+        .execute(&mut *tx)
+        .await?;
+    for g in word_groups {
+        sqlx::query(
+            "INSERT INTO twitch_chat_word_groups \
+             (session_id, streamer_login, group_name, keywords, message_count) \
+             VALUES ($1, $2, $3, $4, $5)",
+        )
+        .bind(session_id)
+        .bind(streamer)
+        .bind(&g.group_name)
+        .bind(g.keywords.as_slice())
+        .bind(g.message_count as i32)
+        .execute(&mut *tx)
+        .await?;
+    }
+    tx.commit().await?;
+    Ok(())
+}
+
+/// INSERT eines pending-Reports, liefert die neue id (Python INSERT … RETURNING).
+async fn insert_pending_report(
+    pool: &PgPool,
+    session_id: i64,
+    streamer: &str,
+    model: AiModel,
+    variant: &str,
+    snapshot: &serde_json::Value,
+) -> Result<i64, sqlx::Error> {
+    let snapshot_json = serde_json::to_string(snapshot).unwrap_or_else(|_| "{}".to_string());
+    let id: i64 = sqlx::query_scalar(
+        "INSERT INTO twitch_stream_ai_reports \
+         (session_id, streamer_login, model, status, schema_version, report_variant, \
+          input_snapshot_json, prompt_version, started_at) \
+         VALUES ($1, $2, $3, 'pending', $4, $5, $6::jsonb, $7, NOW()) \
+         RETURNING id",
+    )
+    .bind(session_id)
+    .bind(streamer)
+    .bind(model.as_str())
+    .bind(POST_STREAM_REPORT_SCHEMA_VERSION)
+    .bind(variant)
+    .bind(snapshot_json)
+    .bind(REPORT_PROMPT_VERSION)
+    .fetch_one(pool)
+    .await?;
+    Ok(id)
+}
+
+/// UPDATE eines Reports auf `done` mit report_json + word_groups_json.
+async fn finalize_report(
+    pool: &PgPool,
+    report_id: i64,
+    report: &serde_json::Value,
+    word_groups_json: &serde_json::Value,
+) -> Result<(), sqlx::Error> {
+    let report_json = serde_json::to_string(report).unwrap_or_else(|_| "{}".to_string());
+    let wg_json = serde_json::to_string(word_groups_json).unwrap_or_else(|_| "[]".to_string());
+    sqlx::query(
+        "UPDATE twitch_stream_ai_reports \
+         SET status='done', report_json=$1::jsonb, word_groups_json=$2::jsonb, \
+             generated_at=NOW(), finished_at=NOW(), error=NULL \
+         WHERE id=$3",
+    )
+    .bind(report_json)
+    .bind(wg_json)
+    .bind(report_id)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+/// UPDATE eines Reports auf `failed` mit Fehlertext (Python `str(exc)[:500]`).
+async fn mark_report_failed(pool: &PgPool, report_id: i64, err: &str) -> Result<(), sqlx::Error> {
+    let truncated: String = err.chars().take(500).collect();
+    sqlx::query(
+        "UPDATE twitch_stream_ai_reports SET status='failed', finished_at=NOW(), error=$1 WHERE id=$2",
+    )
+    .bind(truncated)
+    .bind(report_id)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+/// Triggert nach Stream-Ende eine planbasierte A/B-Post-Stream-Analyse (Python
+/// `trigger_post_stream_analysis`). Modell aus Plan (Default Minimax), Session-
+/// Lookup wenn keine ID, Wortgruppen-AI + Persistenz, dann pro Variante
+/// (compact/full) Snapshot → pending-Insert → Report-AI → done. Idempotent über
+/// die existing-done/pending-Prüfung.
+pub async fn trigger_post_stream_analysis(
+    pool: &PgPool,
+    streamer_login: &str,
+    session_id: Option<i64>,
+) {
+    let streamer = streamer_login.trim().to_lowercase();
+    if streamer.is_empty() {
+        return;
+    }
+
+    // Plan-basiertes Modell (Default Minimax wie Python `or AI_MODEL_MINIMAX`).
+    let model = plan_ai_model(pool, &streamer).await.unwrap_or(AiModel::Minimax);
+
+    // Session-Lookup, wenn keine ID übergeben (letzte abgeschlossene Session).
+    let session_id = match session_id {
+        Some(id) => id,
+        None => match sqlx::query_scalar::<_, i64>(
+            "SELECT id FROM twitch_stream_sessions \
+             WHERE streamer_login = $1 AND ended_at IS NOT NULL \
+             ORDER BY ended_at DESC LIMIT 1",
+        )
+        .bind(&streamer)
+        .fetch_optional(pool)
+        .await
+        {
+            Ok(Some(id)) => id,
+            Ok(None) => {
+                tracing::info!(streamer = %streamer, "PostStream: keine abgeschlossene Session");
+                return;
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, streamer = %streamer, "PostStream: Session-Lookup fehlgeschlagen");
+                return;
+            }
+        },
+    };
+
+    // Report-Tabellen sicherstellen (best-effort).
+    let _ = ensure_report_ab_columns(pool).await;
+
+    // Wortgruppen (nur bei vorhandenen Nachrichten).
+    let messages = load_session_chat_data(pool, session_id)
+        .await
+        .map(|d| d.messages)
+        .unwrap_or_default();
+    let word_groups = if messages.is_empty() {
+        Vec::new()
+    } else {
+        generate_word_groups(model, &messages).await
+    };
+
+    if !word_groups.is_empty() {
+        if let Err(e) = persist_word_groups(pool, session_id, &streamer, &word_groups).await {
+            tracing::warn!(error = %e, "PostStream: Wortgruppen-Insert fehlgeschlagen");
+        }
+    }
+    let word_groups_json = word_groups_to_json(&word_groups);
+
+    let mut created_any = false;
+    for variant in [REPORT_VARIANT_COMPACT, REPORT_VARIANT_FULL] {
+        // Existierenden done/pending-Report überspringen (Idempotenz).
+        let existing = sqlx::query_scalar::<_, i64>(
+            "SELECT id FROM twitch_stream_ai_reports \
+             WHERE session_id = $1 AND streamer_login = $2 \
+               AND COALESCE(report_variant, 'compact') = $3 \
+               AND status IN ('done', 'pending') LIMIT 1",
+        )
+        .bind(session_id)
+        .bind(&streamer)
+        .bind(variant)
+        .fetch_optional(pool)
+        .await
+        .ok()
+        .flatten();
+        if existing.is_some() {
+            continue;
+        }
+
+        // Snapshot bauen; leer → überspringen (Python: raise → kein report_id).
+        let mut snapshot = build_post_stream_snapshot(pool, session_id, variant).await;
+        if snapshot.as_object().map_or(true, |o| o.is_empty()) {
+            tracing::warn!(variant, session_id, "PostStream: kein Snapshot");
+            continue;
+        }
+        if !word_groups.is_empty() {
+            if let Some(obj) = snapshot.as_object_mut() {
+                obj.insert("word_groups".into(), word_groups_json.clone());
+            }
+        }
+
+        let _ = ensure_report_ab_columns(pool).await;
+        let report_id =
+            match insert_pending_report(pool, session_id, &streamer, model, variant, &snapshot).await {
+                Ok(id) => id,
+                Err(e) => {
+                    tracing::warn!(error = %e, variant, "PostStream: Report-Insert fehlgeschlagen");
+                    continue;
+                }
+            };
+
+        // generate_report_v2 wirft nie (Fallback bei KI-Fehler) → normalerweise done.
+        let report = generate_report_v2(model, &snapshot).await;
+        match finalize_report(pool, report_id, &report, &word_groups_json).await {
+            Ok(()) => {
+                created_any = true;
+                tracing::info!(variant, session_id, "PostStream: Analyse abgeschlossen");
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, variant, "PostStream: Report-UPDATE fehlgeschlagen");
+                let _ = mark_report_failed(pool, report_id, &e.to_string()).await;
+            }
+        }
+    }
+
+    if !created_any {
+        tracing::debug!(session_id, "PostStream: keine neuen A/B-Reports erstellt");
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2513,5 +2808,97 @@ mod tests {
         let r2 = process_report_v2_response("nur text ohne json", &snapshot);
         assert_eq!(r2["vergleich"]["trend"], "zu wenig Daten");
         assert_eq!(r2["audience"]["chat_rate_einordnung"], "keine Daten");
+    }
+
+    #[tokio::test]
+    async fn persist_word_groups_idempotent() {
+        let Some(pool) = core_pool_or_skip("t6m_post_stream_wg").await else { return };
+        ensure_report_ab_columns(&pool).await.unwrap();
+        let groups = vec![
+            WordGroup { group_name: "Lob".into(), keywords: vec!["gg".into(), "nice".into()], message_count: 5 },
+            WordGroup { group_name: "Kritik".into(), keywords: vec!["trash".into()], message_count: 2 },
+        ];
+        persist_word_groups(&pool, 1, "streamer", &groups).await.unwrap();
+        let count: i64 = sqlx::query_scalar("SELECT COUNT(*)::int8 FROM twitch_chat_word_groups WHERE session_id=1")
+            .fetch_one(&pool).await.unwrap();
+        assert_eq!(count, 2);
+        let (name, kw, mc): (String, Vec<String>, i32) = sqlx::query_as(
+            "SELECT group_name, keywords, message_count FROM twitch_chat_word_groups \
+             WHERE session_id=1 ORDER BY message_count DESC LIMIT 1",
+        )
+        .fetch_one(&pool).await.unwrap();
+        assert_eq!(name, "Lob");
+        assert_eq!(kw, vec!["gg".to_string(), "nice".to_string()]); // TEXT[]
+        assert_eq!(mc, 5);
+        // Erneut → DELETE+INSERT → weiterhin 2 (nicht 4).
+        persist_word_groups(&pool, 1, "streamer", &groups).await.unwrap();
+        let count2: i64 = sqlx::query_scalar("SELECT COUNT(*)::int8 FROM twitch_chat_word_groups WHERE session_id=1")
+            .fetch_one(&pool).await.unwrap();
+        assert_eq!(count2, 2);
+    }
+
+    #[tokio::test]
+    async fn trigger_persistiert_ab_reports() {
+        let Some(pool) = core_pool_or_skip("t6l_post_stream_trigger").await else { return };
+        sqlx::query(
+            "INSERT INTO twitch_stream_sessions \
+             (id, streamer_login, started_at, ended_at, duration_seconds, avg_viewers, \
+              peak_viewers, follower_delta, unique_chatters) \
+             VALUES (1,'streamer','2026-06-10T18:00:00+00','2026-06-10T20:00:00+00',7200,12.5,40,7,30)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query("INSERT INTO twitch_streamers (twitch_login, twitch_user_id) VALUES ('streamer','987')")
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        trigger_post_stream_analysis(&pool, "Streamer", Some(1)).await;
+
+        // 2 done-Reports (compact + full).
+        let count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*)::int8 FROM twitch_stream_ai_reports WHERE session_id=1 AND status='done'",
+        )
+        .fetch_one(&pool).await.unwrap();
+        assert_eq!(count, 2);
+        let variants: Vec<String> = sqlx::query_scalar(
+            "SELECT report_variant FROM twitch_stream_ai_reports WHERE session_id=1 ORDER BY report_variant",
+        )
+        .fetch_all(&pool).await.unwrap();
+        assert_eq!(variants, vec!["compact".to_string(), "full".to_string()]);
+        // model = Default Minimax (kein Plan).
+        let model: String = sqlx::query_scalar(
+            "SELECT model FROM twitch_stream_ai_reports WHERE report_variant='compact' AND session_id=1",
+        )
+        .fetch_one(&pool).await.unwrap();
+        assert_eq!(model, "minimax");
+        // schema_version content-agnostisch (gilt für Fallback UND echten Report).
+        let sv: Option<String> = sqlx::query_scalar(
+            "SELECT report_json->>'schema_version' FROM twitch_stream_ai_reports \
+             WHERE report_variant='full' AND session_id=1",
+        )
+        .fetch_one(&pool).await.unwrap();
+        assert_eq!(sv.as_deref(), Some("post_stream_report_v2"));
+        // input_snapshot_json + prompt_version gesetzt.
+        let (has_snap, pv): (bool, Option<String>) = sqlx::query_as(
+            "SELECT input_snapshot_json IS NOT NULL, prompt_version FROM twitch_stream_ai_reports \
+             WHERE report_variant='compact' AND session_id=1",
+        )
+        .fetch_one(&pool).await.unwrap();
+        assert!(has_snap);
+        assert_eq!(pv.as_deref(), Some("post_stream_report_v3_twitch_2026-05-01"));
+
+        // Idempotenz: erneut → existing done → skip, weiterhin 2.
+        trigger_post_stream_analysis(&pool, "streamer", Some(1)).await;
+        let count2: i64 = sqlx::query_scalar("SELECT COUNT(*)::int8 FROM twitch_stream_ai_reports WHERE session_id=1")
+            .fetch_one(&pool).await.unwrap();
+        assert_eq!(count2, 2);
+
+        // None-Pfad: resolved auf letzte ended Session (id 1) → existing → skip, weiterhin 2.
+        trigger_post_stream_analysis(&pool, "streamer", None).await;
+        let count3: i64 = sqlx::query_scalar("SELECT COUNT(*)::int8 FROM twitch_stream_ai_reports WHERE session_id=1")
+            .fetch_one(&pool).await.unwrap();
+        assert_eq!(count3, 2);
     }
 }
