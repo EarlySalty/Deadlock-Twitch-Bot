@@ -52,7 +52,7 @@ pub fn build_public_router(pool: PgPool) -> Router {
 /// Auth-Level wird per Extension eingesetzt — `AuthLevel` als `FromRequestParts`
 /// liest den Token selbst aus der Extension.
 pub fn build_authed_router(pool: PgPool, token: String) -> Router {
-    use handlers::{ads_schedule, audience, audience_demographics, auth_status, billing, category_comparison, category_leaderboard, category_timings, follower_funnel, internal_home, loyalty_curve, lurker_analysis, overview, performance, raid_analytics, rankings, retention_curve, session_detail, silent_settings, spa, streamers, title_performance, viewer_timeline, viewers};
+    use handlers::{ads_schedule, audience, audience_demographics, auth_status, billing, category_comparison, category_leaderboard, category_timings, follower_funnel, internal_home, loyalty_curve, lurker_analysis, overview, performance, raid_analytics, rankings, retention_curve, session_detail, silent_settings, spa, stream_report, streamers, title_performance, viewer_timeline, viewers};
 
     Router::new()
         .route(
@@ -80,6 +80,12 @@ pub fn build_authed_router(pool: PgPool, token: String) -> Router {
             get(streamers::streamers_handler),
         )
         .route("/twitch/api/v2/overview", get(overview::overview_handler))
+        // Post-Stream-A/B-Report (B11): liest twitch_stream_ai_reports für die
+        // Dashboard-Anzeige (Partner → eigener Login, Admin/Localhost → frei).
+        .route(
+            "/twitch/api/v2/stream-report",
+            get(stream_report::stream_report_handler),
+        )
         // Performance-Analytics (lesen aus twitch_stream_sessions in Postgres)
         .route(
             "/twitch/api/v2/monthly-stats",

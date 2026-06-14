@@ -27,5 +27,6 @@ pub mod retention_curve;
 pub mod session_detail;
 pub mod silent_settings;
 pub mod spa;
+pub mod stream_report;
 pub mod title_performance;
 pub mod system;
