@@ -6,9 +6,10 @@
 //! 2. **Admin** — Cookie `master_dash_session` ist gültig in der DB
 //!    (Discord-Admin-Session, Typ `discord_admin`)
 //! 3. **Partner** — Cookie `twitch_dash_session` ist gültig in der DB
-//!    (Twitch-OAuth-Session, Typ `twitch`) UND nicht in `twitch_token_blacklist`
-//!    UND in `twitch_partners` vorhanden (gleiche WHERE-Bedingung wie Python
-//!    `_is_partner_allowed`, `auth_mixin.py:741-780`)
+//!    (Twitch-OAuth-Session, Typ `twitch`) UND in `twitch_partners` vorhanden
+//!    (gleiche WHERE-Bedingung wie Python `_is_partner_allowed`,
+//!    `auth_mixin.py:741-780`). KEINE `twitch_token_blacklist`-Prüfung — ein
+//!    token_error-Blacklist-Eintrag sperrt den Dashboard-Zugang nicht.
 //! 4. **None** — alles andere
 //!
 //! UNSICHER: Hinter Reverse-Proxy (Caddy) ist `peer_ip` immer 127.0.0.1.

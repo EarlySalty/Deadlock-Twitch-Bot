@@ -21,7 +21,9 @@
 //! Partner-Gate (auth_mixin.py:741-780):
 //! - `twitch_partners.technical_pause_reason <> 'blocked'` (case-insensitive)
 //! - Login oder User-ID muss matchen
-//! - Blacklist: `twitch_token_blacklist` (Spalten: twitch_user_id, twitch_login)
+//! - KEINE `twitch_token_blacklist`-Prüfung: Python gated die Session nur über
+//!   `twitch_partners`; ein Blacklist-Eintrag (token_error) wirkt auf den
+//!   partner_status/die Gnadenfrist, nicht auf den Dashboard-Zugang.
 //!
 //! **Bewusste Abweichung von Python:** Python prüft das Partner-Gate nur beim
 //! OAuth-Login (auth_mixin.py:1355); wir prüfen es bei JEDEM Request (mit 5s-Cache).
@@ -200,8 +202,9 @@ impl DashboardAuthState {
     /// Kaskade:
     /// 1. Session aus `dashboard_sessions` laden (Typ `twitch`)
     /// 2. `twitch_login` + `twitch_user_id` aus dem entschlüsselten Payload lesen
-    /// 3. Partner-Gate prüfen (`twitch_partners`, auth_mixin.py:741-780)
-    /// 4. Blacklist prüfen (`twitch_token_blacklist`)
+    /// 3. Partner-Gate prüfen (`twitch_partners`, auth_mixin.py:741-780) — KEINE
+    ///    `twitch_token_blacklist`-Prüfung (die beeinflusst nur partner_status/Grace,
+    ///    nicht die Session-Gültigkeit; Python-Parität).
     pub async fn load_partner_session(
         &self,
         session_id: &str,
@@ -281,24 +284,13 @@ impl DashboardAuthState {
             return Ok(None);
         };
 
-        // Blacklist prüfen (twitch_token_blacklist, auth_mixin.py context)
-        let blacklisted: bool = sqlx::query_scalar(
-            r#"
-            SELECT EXISTS(
-                SELECT 1 FROM twitch_token_blacklist
-                WHERE twitch_user_id = $1 OR LOWER(twitch_login) = LOWER($2)
-            )
-            "#,
-        )
-        .bind(&db_user_id)
-        .bind(&db_login)
-        .fetch_one(&self.pool)
-        .await?;
-
-        if blacklisted {
-            debug!("Partner {} ist in token_blacklist — kein Zugriff", db_login);
-            return Ok(None);
-        }
+        // KEINE twitch_token_blacklist-Prüfung hier: Python `_is_partner_allowed`
+        // (auth_mixin.py:741-780) gated die Session-Gültigkeit ausschließlich über
+        // `twitch_partners`. Ein Blacklist-Eintrag (i.d.R. nur token_error-bedingt)
+        // beeinflusst den partner_status/die Gnadenfrist — NICHT den Dashboard-
+        // Zugang. Der frühere EXISTS-Check sperrte solche Partner fälschlich komplett
+        // aus (DashboardAuthLevel::None → Login-Redirect), statt sie wie Python
+        // einzulassen und nur den Re-Auth-Hinweis anzuzeigen.
 
         let partner = PartnerSession {
             twitch_login: db_login,
