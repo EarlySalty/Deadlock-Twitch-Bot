@@ -504,6 +504,34 @@ LIMIT 1"#,
     sqlx::query_as(&sql).bind(login).fetch_optional(pool).await
 }
 
+/// Findet den Twitch-Login zu einer Discord-User-ID (kanonische Lookup-Quelle).
+///
+/// Spiegelt die Lookup-Logik des Raid-OAuth-Pfads: die jüngste manuelle
+/// Verifizierung bzw. Erstellung gewinnt. `None` = kein verknüpfter Account.
+/// Nur lesend; ein Statement gegen die Partner-State-View.
+pub async fn login_for_discord_user(
+    pool: &sqlx::PgPool,
+    discord_user_id: &str,
+) -> Result<Option<String>, sqlx::Error> {
+    let row: Option<(Option<String>,)> = sqlx::query_as(
+        r#"
+        SELECT twitch_login
+        FROM twitch_streamers_partner_state
+        WHERE discord_user_id = $1
+        ORDER BY
+            CASE WHEN manual_verified_at IS NULL THEN 1 ELSE 0 END,
+            manual_verified_at DESC,
+            CASE WHEN created_at IS NULL THEN 1 ELSE 0 END,
+            created_at DESC
+        LIMIT 1
+        "#,
+    )
+    .bind(discord_user_id)
+    .fetch_optional(pool)
+    .await?;
+    Ok(row.and_then(|(login,)| login))
+}
+
 /// Holt Statistik-Aggregat und letzte 10 Sessions für einen Streamer.
 ///
 /// Beide Queries laufen sequentiell auf derselben Verbindung.

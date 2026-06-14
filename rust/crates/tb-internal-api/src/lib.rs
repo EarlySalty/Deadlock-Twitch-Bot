@@ -52,9 +52,10 @@ pub fn build_internal_router(
     legacy_proxy: Option<Arc<LegacyProxy>>,
 ) -> Router {
     use handlers::{
-        chat_command, discord_invite, eventsub, global_ban, healthz, market_share, python_stubs,
-        raid, raid_blacklist, raid_oauth as oauth, self_explainer_log, session_detail,
-        stats_native, streamer_analytics_native, streamer_link, streamers, telemetry_routes,
+        chat_command, diagnose, discord_invite, eventsub, global_ban, healthz, market_share,
+        python_stubs, raid, raid_blacklist, raid_oauth as oauth, self_explainer_log,
+        session_detail, stats_native, streamer_analytics_native, streamer_link, streamers,
+        telemetry_routes,
     };
 
     let base = INTERNAL_API_BASE_PATH; // "/internal/twitch/v1"
@@ -94,6 +95,8 @@ pub fn build_internal_router(
             &format!("{base}/globalban/check"),
             get(global_ban::check_handler),
         )
+        // Read-only Auth/Scope-Diagnose zu einer Discord-User-ID (Self-Service-Support).
+        .route(&format!("{base}/diagnose"), get(diagnose::handler))
         // Raid-Blacklist: nativer Port der bislang an Python 8779 proxied
         // CRUD-Routen. Distinkte Pfade je Methode → kein 405-vs-Fallback-
         // Konflikt. Login via tb_domain::normalize_twitch_login kanonisiert;

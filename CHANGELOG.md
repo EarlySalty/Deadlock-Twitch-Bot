@@ -1,3 +1,11 @@
+## #215 — Interne Diagnose-Schnittstelle für den Support-Bot
+
+**Ausgangslage:** Meldet ein Streamer im Discord-Support ein Problem mit der Twitch-Anbindung („der Bot kommt nicht in meinen Stream", „ich habe autorisiert, aber es steht auf inaktiv"), konnte der Support-Bot bisher nur allgemeine Hinweise geben — er kannte den echten Autorisierungs-Status des Fragenden nicht.
+
+**Was wurde geändert:** Es gibt eine neue, rein lesende interne Schnittstelle, die zu einer Discord-ID den Twitch-Status des betreffenden Streamers liefert: ist der Account verbunden, fehlen Berechtigungen, ist eine Neu-Autorisierung nötig, ist er aktiv. Sie gibt keine Tokens oder Geheimnisse aus, ändert nichts und ist nur über den abgesicherten internen Zugang (Loopback + interner Token) erreichbar.
+
+**Wie es funktioniert:** Die Schnittstelle schlägt die Discord-ID auf den verknüpften Twitch-Account nach und stellt den Status aus den vorhandenen Partner-/OAuth-Daten zusammen — dieselbe Logik, die auch die Verwaltungsseite nutzt (vorhandene/fehlende Scopes, Neu-Autorisierung, Partner-/Live-Status). Der Discord-Support-Bot kann damit einem Streamer konkret sagen, was bei seiner Anbindung klemmt, statt zu raten.
+
 ## #214 — Texte: echte Umlaute statt Ersatzschreibung
 
 **Ausgangslage:** In einigen nutzersichtbaren Texten standen Umlaut-Ersatzschreibungen (ae/oe/ue/ss) statt echtem ä/ö/ü/ß — entstanden, weil Texte mal mit, mal ohne echte Umlaute getippt wurden. Betroffen waren u. a. das Affiliate-Portal (Login-Hinweise, Formularfelder, Steuer- und Auszahlungstexte), die Dashboard-Vorschau auf der Startseite und die Twitch-Ansage, die bei einem Raid im Chat erscheint („Auf Twitch ansehen fuer mehr Action!").
