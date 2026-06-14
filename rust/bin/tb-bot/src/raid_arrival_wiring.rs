@@ -12,9 +12,11 @@ use std::sync::{Arc, Mutex};
 use chrono::Utc;
 use sqlx::PgPool;
 use tb_raid::{
-    classify_partner_raid_arrival, serialize_confirmation_signals, ArrivalConfirmationService,
-    ArrivalSignalContext, ArrivalTrackingStore, ManualRaidSuppression, PendingRaid,
+    classify_partner_raid_arrival, decide_blacklist_action, serialize_confirmation_signals,
+    ArrivalConfirmationService, ArrivalSignalContext, ArrivalTrackingStore, BlacklistScheduleAction,
+    ConfirmedExternalRecruitmentRaid, ExternalRecruitmentStore, ManualRaidSuppression, PendingRaid,
     PendingRaidStore, RaidArrivalSink, RecordArrivalInput, ScoreTrackingStore,
+    EXTERNAL_RECRUITMENT_BLACKLIST_GRACE_SECONDS,
 };
 
 use crate::confirm_resolver::{ConfirmContext, ConfirmResolver};
@@ -51,6 +53,16 @@ fn orphan_key(to_broadcaster_id: &str, from_broadcaster_login: &str) -> String {
     )
 }
 
+/// Prozessweit eindeutige Flow-ID, wenn das Pending keine trägt (Python
+/// `_next_flow_id`). Da das Pending beim Confirm gepoppt wird, kann derselbe
+/// Raid nicht doppelt bestätigt werden — Zähler + Millis genügen.
+fn next_flow_id(prefix: &str) -> String {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+    let n = COUNTER.fetch_add(1, Ordering::Relaxed);
+    format!("{prefix}-{}-{n}", Utc::now().timestamp_millis())
+}
+
 // ─── Adapter ────────────────────────────────────────────────────────────────
 
 pub struct RaidArrivalSinkImpl {
@@ -59,6 +71,7 @@ pub struct RaidArrivalSinkImpl {
     suppression: Arc<Mutex<ManualRaidSuppression>>,
     arrival_store: ArrivalTrackingStore,
     score_tracking: ScoreTrackingStore,
+    external_recruitment: ExternalRecruitmentStore,
     confirm_resolver: ConfirmResolver,
     /// Verwaiste Chat-Notifications, vom Sweeper periodisch promotet
     /// (Python `orphan_chat_raid_notifications` in `raid_state_store.py`).
@@ -75,6 +88,7 @@ impl RaidArrivalSinkImpl {
         Self {
             arrival_store: ArrivalTrackingStore::new(pool.clone()),
             score_tracking: ScoreTrackingStore::new(pool.clone()),
+            external_recruitment: ExternalRecruitmentStore::new(pool.clone()),
             confirm_resolver: ConfirmResolver::new(pool.clone(), target_game_lower),
             pool,
             pending,
@@ -302,6 +316,22 @@ impl RaidArrivalSink for RaidArrivalSinkImpl {
             return;
         };
 
+        // 2b. Python raid_arrival_runtime.py:265 — ein Partner-Ziel darf nie auf
+        // der externen Recruitment-Blacklist stehen: evtl. wartendes Pending löschen.
+        if decision.should_delete_external_recruitment_blacklist_pending {
+            if let Err(error) = self
+                .external_recruitment
+                .delete_blacklist_pending(to_broadcaster_id)
+                .await
+            {
+                tracing::error!(
+                    %error,
+                    to = %to_broadcaster_login,
+                    "delete_external_recruitment_blacklist_pending fehlgeschlagen"
+                );
+            }
+        }
+
         // 3. Bei Partner-Ziel: Arrival-Tracking schreiben.
         if decision.target_is_partner {
             if let Err(e) = self
@@ -364,6 +394,82 @@ impl RaidArrivalSink for RaidArrivalSinkImpl {
                 }
                 Err(error) => {
                     tracing::error!(%error, "Confirm-Resolver fehlgeschlagen");
+                }
+            }
+        }
+
+        // 5. Externe Recruitment-Raids: bestätigten Raid persistieren und bei
+        // Schwellenüberschreitung die verzögerte Blacklist planen. Python
+        // raid_arrival_runtime.py:338. (Partner-Track in Schritt 4 und externer
+        // Recruitment-Pfad schließen sich gegenseitig aus — follow_up_kind.)
+        if decision.should_persist_confirmed_external_recruitment_raid {
+            let raid_flow_id = decision
+                .pending_raid
+                .raid_flow_id
+                .clone()
+                .unwrap_or_else(|| next_flow_id("raid-arrival"));
+            let count = match self
+                .external_recruitment
+                .record_confirmed_raid(&ConfirmedExternalRecruitmentRaid {
+                    raid_flow_id: Some(raid_flow_id.clone()),
+                    from_broadcaster_id: from_broadcaster_id.map(str::to_string),
+                    from_broadcaster_login: from_broadcaster_login.to_string(),
+                    to_broadcaster_id: to_broadcaster_id.to_string(),
+                    to_broadcaster_login: to_broadcaster_login.to_string(),
+                    viewer_count,
+                    confirmation_signal: Some(signal_type.to_string()),
+                })
+                .await
+            {
+                Ok(count) => count,
+                // Python: konnte nicht persistiert werden → externen Follow-up
+                // (Schedule + spätere Recruitment-Message) überspringen.
+                Err(error) => {
+                    tracing::error!(
+                        %error,
+                        to = %to_broadcaster_login,
+                        "record_confirmed_external_recruitment_raid fehlgeschlagen; externer Follow-up übersprungen"
+                    );
+                    return;
+                }
+            };
+
+            if decision.should_schedule_external_recruitment_blacklist_pending {
+                match decide_blacklist_action(count, decision.target_is_partner) {
+                    BlacklistScheduleAction::None => {}
+                    BlacklistScheduleAction::Delete => {
+                        if let Err(error) = self
+                            .external_recruitment
+                            .delete_blacklist_pending(to_broadcaster_id)
+                            .await
+                        {
+                            tracing::error!(
+                                %error,
+                                to = %to_broadcaster_login,
+                                "delete_blacklist_pending (Ziel ist Partner) fehlgeschlagen"
+                            );
+                        }
+                    }
+                    BlacklistScheduleAction::Schedule => {
+                        let count_i32 = i32::try_from(count).unwrap_or(i32::MAX);
+                        if let Err(error) = self
+                            .external_recruitment
+                            .schedule_blacklist_pending(
+                                to_broadcaster_id,
+                                to_broadcaster_login,
+                                count_i32,
+                                Some(&raid_flow_id),
+                                EXTERNAL_RECRUITMENT_BLACKLIST_GRACE_SECONDS,
+                            )
+                            .await
+                        {
+                            tracing::error!(
+                                %error,
+                                to = %to_broadcaster_login,
+                                "schedule_external_recruitment_blacklist_pending fehlgeschlagen"
+                            );
+                        }
+                    }
                 }
             }
         }

@@ -70,9 +70,9 @@ pub use arrival_tracking_store::{
 };
 pub use auth_writer::{AuthWriteError, AuthWriter, NewAuth};
 pub use external_recruitment_store::{
-    ConfirmedExternalRecruitmentRaid, DueBlacklistPending, DueBotBanCheck,
-    ExternalRecruitmentStore, EXTERNAL_RECRUITMENT_BLACKLIST_GRACE_SECONDS,
-    EXTERNAL_RECRUITMENT_RAID_LIMIT,
+    decide_blacklist_action, BlacklistScheduleAction, ConfirmedExternalRecruitmentRaid,
+    DueBlacklistPending, DueBotBanCheck, ExternalRecruitmentStore,
+    EXTERNAL_RECRUITMENT_BLACKLIST_GRACE_SECONDS, EXTERNAL_RECRUITMENT_RAID_LIMIT,
 };
 pub use auto_raid_pipeline::{
     ArrivalReadiness, AutoRaidPipeline, AutoRaidPipelineOutcome, AutoRaidRequest,

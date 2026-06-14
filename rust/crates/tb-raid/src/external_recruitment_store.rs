@@ -52,6 +52,36 @@ pub struct DueBotBanCheck {
     pub source: String,
 }
 
+/// Aktion für die verzögerte Blacklist nach einem bestätigten externen
+/// Recruitment-Raid.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BlacklistScheduleAction {
+    /// Schwelle nicht erreicht → nichts tun.
+    None,
+    /// Ziel ist (wieder) Partner → vorhandenes Pending entfernen (Partner dürfen
+    /// nie auf die Blacklist).
+    Delete,
+    /// Schwelle erreicht, kein Partner → verzögert einplanen.
+    Schedule,
+}
+
+/// Entscheidet die Blacklist-Aktion nach einem bestätigten externen
+/// Recruitment-Raid. Python: `maybe_schedule_external_recruitment_blacklist_pending`
+/// (raid_blacklist.py:240) — unter der Schwelle passiert nichts; ein Partner-Ziel
+/// führt zum Löschen eines evtl. vorhandenen Pendings; sonst wird eingeplant.
+pub fn decide_blacklist_action(
+    confirmed_raid_count: i64,
+    target_is_partner: bool,
+) -> BlacklistScheduleAction {
+    if confirmed_raid_count < EXTERNAL_RECRUITMENT_RAID_LIMIT {
+        BlacklistScheduleAction::None
+    } else if target_is_partner {
+        BlacklistScheduleAction::Delete
+    } else {
+        BlacklistScheduleAction::Schedule
+    }
+}
+
 /// Datenzugriff für die externe-Recruitment-Blacklist-Pipeline.
 pub struct ExternalRecruitmentStore {
     pool: PgPool,
@@ -408,6 +438,18 @@ mod tests {
                 return;
             }
         };
+    }
+
+    #[test]
+    fn blacklist_action_threshold_and_partner() {
+        // Unter der Schwelle (4) passiert nie etwas.
+        assert_eq!(decide_blacklist_action(0, false), BlacklistScheduleAction::None);
+        assert_eq!(decide_blacklist_action(3, false), BlacklistScheduleAction::None);
+        assert_eq!(decide_blacklist_action(3, true), BlacklistScheduleAction::None);
+        // Ab der Schwelle: Partner → Delete, sonst → Schedule.
+        assert_eq!(decide_blacklist_action(4, false), BlacklistScheduleAction::Schedule);
+        assert_eq!(decide_blacklist_action(9, false), BlacklistScheduleAction::Schedule);
+        assert_eq!(decide_blacklist_action(4, true), BlacklistScheduleAction::Delete);
     }
 
     #[tokio::test]
