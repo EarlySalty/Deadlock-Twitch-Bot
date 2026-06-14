@@ -15,7 +15,7 @@
 
 use axum::{
     extract::{Path, State},
-    http::{header, StatusCode},
+    http::{header, HeaderMap, StatusCode},
     response::{IntoResponse, Redirect, Response},
 };
 use sqlx::PgPool;
@@ -29,6 +29,14 @@ const LOGIN_URL: &str = "/twitch/auth/login?next=%2Fanalyse";
 const LEGACY_DASHBOARD_URL: &str = "/twitch/dashboard";
 const DEFAULT_DIST_PATH: &str = "bot/analytics/dashboard_v2/dist";
 
+/// Literal-Fallback-Hostname des Admin-Dashboards.
+///
+/// Python: letzter Kandidat in `_configured_admin_dashboard_host`
+/// (`api_v2.py:938-949`) ist `https://admin.deutsche-deadlock-community.de`,
+/// und `_configured_admin_dashboard_host` liefert bei leerer Kette ebenfalls
+/// genau diesen Hostnamen zurück.
+const ADMIN_DASHBOARD_HOST_DEFAULT: &str = "admin.deutsche-deadlock-community.de";
+
 /// Inline-Script das die React-App über apiBase und demoMode informiert.
 /// Python: `_dashboard_runtime_script` + `_inject_dashboard_runtime_config`.
 const RUNTIME_SCRIPT: &str = concat!(
@@ -40,7 +48,19 @@ const RUNTIME_SCRIPT: &str = concat!(
 // ── Handler ─────────────────────────────────────────────────────────────────
 
 /// `GET /analyse` — Haupt-HTML mit injizierten Runtime-Daten.
-pub async fn analyse_handler(auth: DashboardAuthLevel, State(pool): State<PgPool>) -> Response {
+pub async fn analyse_handler(
+    headers: HeaderMap,
+    auth: DashboardAuthLevel,
+    State(pool): State<PgPool>,
+) -> Response {
+    // Admin-Host-Gate VOR der Auth-Prüfung (Python:
+    // `_serve_dashboard_v2` ruft zuerst `_admin_dashboard_host_page_gate`,
+    // `api_overview.py:544-546`). Wenn der Request auf dem Admin-Host
+    // landet, liefern wir 404 — nutzerseitige Dashboard-Seiten bleiben
+    // strikt vom Admin-Host fern.
+    if let Some(r) = admin_dashboard_host_page_gate(&headers) {
+        return r;
+    }
     if let Some(r) = check_spa_auth(&auth, &pool).await {
         return r;
     }
@@ -71,10 +91,17 @@ pub async fn analyse_handler(auth: DashboardAuthLevel, State(pool): State<PgPool
 
 /// `GET /analyse/{path:.*}` — statische Assets aus dist/.
 pub async fn analyse_assets_handler(
+    headers: HeaderMap,
     auth: DashboardAuthLevel,
     State(pool): State<PgPool>,
     Path(asset_path): Path<String>,
 ) -> Response {
+    // Admin-Host-Gate VOR der Auth-Prüfung (Python:
+    // `_serve_dashboard_v2_assets` ruft zuerst `_admin_dashboard_host_page_gate`,
+    // `api_overview.py:809-811`).
+    if let Some(r) = admin_dashboard_host_page_gate(&headers) {
+        return r;
+    }
     if let Some(r) = check_spa_auth(&auth, &pool).await {
         return r;
     }
@@ -120,6 +147,150 @@ async fn check_spa_auth(auth: &DashboardAuthLevel, pool: &PgPool) -> Option<Resp
             None
         }
     }
+}
+
+// ── Admin-Host-Gate ───────────────────────────────────────────────────────────
+
+/// Hält nutzerseitige Dashboard-Seiten strikt vom Admin-Host fern.
+///
+/// Python: `_admin_dashboard_host_page_gate` (`api_overview.py:357-371`).
+/// Liefert `Some(404)` wenn der `Host`-Header dem konfigurierten
+/// Admin-Dashboard-Host entspricht, sonst `None` (Request läuft weiter).
+///
+/// Topologie-Hinweis: Hinter Caddy erreicht der `/analyse`-Vhost diesen
+/// Handler nur, wenn Caddy den entsprechenden Host hierher proxyt. Auf dem
+/// regulären Nutzer-Vhost ist der Gate ein No-op (Host != Admin-Host), greift
+/// aber treu, falls jemand `/analyse` über den Admin-Host aufruft.
+fn admin_dashboard_host_page_gate(headers: &HeaderMap) -> Option<Response> {
+    if is_admin_dashboard_host_request(headers) {
+        // Keep user-facing dashboard pages strictly off the admin host.
+        return Some((StatusCode::NOT_FOUND, "Not found.").into_response());
+    }
+    None
+}
+
+/// `true` wenn der `Host`-Header dem konfigurierten Admin-Dashboard-Host
+/// entspricht.
+///
+/// Python: `_is_admin_dashboard_host_request` (`api_v2.py:951-955`):
+/// normalisierter Host-Header == `_configured_admin_dashboard_host()`.
+/// Leerer Host → `false`.
+fn is_admin_dashboard_host_request(headers: &HeaderMap) -> bool {
+    let request_host = normalize_host_header(
+        headers
+            .get(header::HOST)
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or(""),
+    );
+    if request_host.is_empty() {
+        return false;
+    }
+    request_host == configured_admin_dashboard_host()
+}
+
+/// Liefert den konfigurierten Admin-Dashboard-Hostnamen (lowercased).
+///
+/// Python: `_configured_admin_dashboard_host` (`api_v2.py:938-949`).
+/// Kandidatenkette in Reihenfolge:
+/// 1. Env `TWITCH_ADMIN_PUBLIC_URL`
+/// 2. Env `MASTER_DASHBOARD_PUBLIC_URL`
+/// 3. (Python: `self._discord_admin_redirect_uri` — im Code nie gesetzt, also
+///    immer leer; entfällt nativ)
+/// 4. Literal `https://admin.deutsche-deadlock-community.de`
+///
+/// Jeder Kandidat wird wie eine Origin/URL geparst; der erste mit nicht-leerem
+/// Hostnamen gewinnt. Bei kompletter Leere → `ADMIN_DASHBOARD_HOST_DEFAULT`.
+fn configured_admin_dashboard_host() -> String {
+    let env_candidates = [
+        std::env::var("TWITCH_ADMIN_PUBLIC_URL").ok(),
+        std::env::var("MASTER_DASHBOARD_PUBLIC_URL").ok(),
+        Some(format!("https://{ADMIN_DASHBOARD_HOST_DEFAULT}")),
+    ];
+    for candidate in env_candidates.into_iter().flatten() {
+        let host = host_from_origin_like(&candidate);
+        if !host.is_empty() {
+            return host;
+        }
+    }
+    ADMIN_DASHBOARD_HOST_DEFAULT.to_string()
+}
+
+/// Extrahiert den Hostnamen aus einem Origin-/URL-artigen String (lowercased).
+///
+/// Python: `_host_from_origin_like` (`api_v2.py:923-936`). Fügt `https://`
+/// hinzu, wenn kein Schema vorhanden ist, und parst den Hostnamen. Fällt auf
+/// `normalize_host_header` zurück, wenn das Parsen keinen Host liefert.
+fn host_from_origin_like(raw_value: &str) -> String {
+    let value = raw_value.trim();
+    if value.is_empty() {
+        return String::new();
+    }
+    let candidate = if value.contains("://") {
+        value.to_string()
+    } else {
+        format!("https://{value}")
+    };
+    let host = parse_url_hostname(&candidate);
+    if !host.is_empty() {
+        return host;
+    }
+    normalize_host_header(value)
+}
+
+/// Normalisiert einen `Host`-Header zum reinen Hostnamen (lowercased, ohne
+/// Port, ohne IPv6-Brackets).
+///
+/// Python: `_normalize_host_header` (`api_v2.py:908-921`). Nimmt das erste
+/// Komma-getrennte Token (wie ein `X-Forwarded`-Stil-Header), prefixt `//`
+/// wenn kein Schema vorhanden ist, und liest den Hostnamen.
+fn normalize_host_header(raw_value: &str) -> String {
+    let value = raw_value.trim();
+    if value.is_empty() {
+        return String::new();
+    }
+    let token = value.split(',').next().unwrap_or("").trim();
+    if token.is_empty() {
+        return String::new();
+    }
+    let candidate = if token.contains("://") {
+        token.to_string()
+    } else {
+        format!("//{token}")
+    };
+    parse_url_hostname(&candidate)
+}
+
+/// Liest den Hostnamen aus einem URL-artigen String (lowercased, ohne Port,
+/// ohne IPv6-Brackets). Entspricht Pythons `urlsplit(...).hostname`.
+fn parse_url_hostname(candidate: &str) -> String {
+    // Schema/Authority abtrennen: nach "//" beginnt die Authority.
+    let after_scheme = match candidate.find("//") {
+        Some(idx) => &candidate[idx + 2..],
+        None => candidate,
+    };
+    // Authority endet beim ersten /, ? oder #.
+    let authority = after_scheme
+        .split(['/', '?', '#'])
+        .next()
+        .unwrap_or("")
+        .trim();
+    if authority.is_empty() {
+        return String::new();
+    }
+    // Userinfo abtrennen (user:pass@host).
+    let host_port = authority.rsplit('@').next().unwrap_or(authority);
+    // IPv6-Literal in Brackets: [::1]:8080 → ::1
+    if let Some(start) = host_port.strip_prefix('[') {
+        if let Some(end) = start.find(']') {
+            return start[..end].to_lowercase();
+        }
+    }
+    // IPv4/DNS: host:port — Port abtrennen (genau ein Doppelpunkt).
+    let host = match host_port.rsplit_once(':') {
+        Some((h, port)) if !port.is_empty() && port.chars().all(|c| c.is_ascii_digit()) => h,
+        _ => host_port,
+    };
+    host.to_lowercase()
 }
 
 // ── Asset-Serving ─────────────────────────────────────────────────────────────
@@ -172,5 +343,108 @@ fn mime_for_path(path: &std::path::Path) -> &'static str {
         Some("txt") => "text/plain; charset=utf-8",
         Some("webmanifest") => "application/manifest+json",
         _ => "application/octet-stream",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn host_header_normalisierung() {
+        // Reiner Hostname bleibt.
+        assert_eq!(normalize_host_header("example.com"), "example.com");
+        // Port wird entfernt.
+        assert_eq!(normalize_host_header("example.com:8769"), "example.com");
+        // Lowercased.
+        assert_eq!(normalize_host_header("Example.COM"), "example.com");
+        // Erstes Komma-Token (X-Forwarded-Stil).
+        assert_eq!(
+            normalize_host_header("first.example.com, second.example.com"),
+            "first.example.com"
+        );
+        // Leer bleibt leer.
+        assert_eq!(normalize_host_header(""), "");
+        assert_eq!(normalize_host_header("   "), "");
+        // IPv6 in Brackets mit Port.
+        assert_eq!(normalize_host_header("[::1]:8080"), "::1");
+    }
+
+    #[test]
+    fn origin_zu_host() {
+        // Mit Schema.
+        assert_eq!(
+            host_from_origin_like("https://admin.deutsche-deadlock-community.de"),
+            "admin.deutsche-deadlock-community.de"
+        );
+        // Ohne Schema → https:// wird ergänzt.
+        assert_eq!(
+            host_from_origin_like("admin.deutsche-deadlock-community.de"),
+            "admin.deutsche-deadlock-community.de"
+        );
+        // Mit Pfad und Port.
+        assert_eq!(
+            host_from_origin_like("https://admin.example.com:443/path?q=1"),
+            "admin.example.com"
+        );
+        // Leer bleibt leer.
+        assert_eq!(host_from_origin_like(""), "");
+    }
+
+    #[test]
+    fn admin_host_default_erkannt() {
+        // Ohne gesetzte Env-Variablen entspricht der Default-Hostname dem
+        // Literal aus der Python-Kandidatenkette.
+        // Hinweis: setzt KEINE Env-Variablen, um andere Tests nicht zu
+        // beeinflussen — verlässt sich auf den Literal-Fallback.
+        let mut admin = HeaderMap::new();
+        admin.insert(
+            header::HOST,
+            "admin.deutsche-deadlock-community.de".parse().unwrap(),
+        );
+        assert!(is_admin_dashboard_host_request(&admin));
+
+        // Mit Port am Admin-Host greift der Gate ebenfalls.
+        let mut admin_port = HeaderMap::new();
+        admin_port.insert(
+            header::HOST,
+            "admin.deutsche-deadlock-community.de:443".parse().unwrap(),
+        );
+        assert!(is_admin_dashboard_host_request(&admin_port));
+    }
+
+    #[test]
+    fn nicht_admin_host_abgelehnt() {
+        // Regulärer Nutzer-Host → kein Admin-Host.
+        let mut user = HeaderMap::new();
+        user.insert(header::HOST, "deutsche-deadlock-community.de".parse().unwrap());
+        assert!(!is_admin_dashboard_host_request(&user));
+
+        // Localhost → kein Admin-Host.
+        let mut local = HeaderMap::new();
+        local.insert(header::HOST, "localhost:8769".parse().unwrap());
+        assert!(!is_admin_dashboard_host_request(&local));
+
+        // Fehlender Host-Header → false.
+        let empty = HeaderMap::new();
+        assert!(!is_admin_dashboard_host_request(&empty));
+    }
+
+    #[test]
+    fn gate_liefert_404_nur_auf_admin_host() {
+        // Admin-Host → 404-Gate greift.
+        let mut admin = HeaderMap::new();
+        admin.insert(
+            header::HOST,
+            "admin.deutsche-deadlock-community.de".parse().unwrap(),
+        );
+        let resp = admin_dashboard_host_page_gate(&admin);
+        assert!(resp.is_some());
+        assert_eq!(resp.unwrap().status(), StatusCode::NOT_FOUND);
+
+        // Nutzer-Host → kein Gate, Request läuft weiter.
+        let mut user = HeaderMap::new();
+        user.insert(header::HOST, "deutsche-deadlock-community.de".parse().unwrap());
+        assert!(admin_dashboard_host_page_gate(&user).is_none());
     }
 }
