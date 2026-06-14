@@ -613,6 +613,138 @@ pub async fn generate_title(
     .await
 }
 
+// ───────────────────────────────────────────────────────────────────────────
+// Wöchentliche Insight-Analyse (Python `generate_insight`).
+// ───────────────────────────────────────────────────────────────────────────
+
+/// Eine Titel-Zeile für die Insight-Analyse (Python `title_history`-Dict).
+pub struct InsightHistoryItem {
+    pub title: String,
+    pub relative_perf: f64,
+    pub engagement_rate: f64,
+}
+
+/// Ergebnis der wöchentlichen Insight-Analyse (Python `generate_insight`-Return).
+#[derive(Debug, Clone)]
+pub struct InsightResult {
+    pub strengths: String,
+    pub weaknesses: String,
+    pub patterns: String,
+    pub recommendations: String,
+    pub raw: serde_json::Value,
+}
+
+const INSIGHT_PROMPT_TEMPLATE: &str = r#"Analysiere die Stream-Titel-Performance dieses Deadlock-Streamers für {period_label}.
+
+TITEL-HISTORY (relative_perf = avg_viewers / eigener_durchschnitt):
+{history_lines}
+
+Identifiziere:
+1. Was läuft gut (Stärken)
+2. Was läuft schlecht (Schwächen)
+3. Erkannte Muster (z.B. "Titles mit Rang performen besser")
+4. Genau 3 konkrete Handlungsempfehlungen
+
+ANTWORT-FORMAT (JSON):
+{
+  "strengths": "<Freitext>",
+  "weaknesses": "<Freitext>",
+  "patterns": "<Freitext>",
+  "recommendations": ["<Empfehlung 1>", "<Empfehlung 2>", "<Empfehlung 3>"]
+}"#;
+
+fn build_insight_prompt(history: &[InsightHistoryItem], period_label: &str) -> String {
+    let history_lines = history
+        .iter()
+        .take(40)
+        .map(|t| {
+            format!(
+                "  - \"{}\" (relative Perf: {}, Engagement: {})",
+                t.title,
+                format_metric(Some(t.relative_perf), 2),
+                format_metric(Some(t.engagement_rate), 3)
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    INSIGHT_PROMPT_TEMPLATE
+        .replace("{period_label}", period_label)
+        .replace("{history_lines}", &history_lines)
+}
+
+fn value_to_plain(v: &serde_json::Value) -> String {
+    match v {
+        serde_json::Value::String(s) => s.clone(),
+        other => other.to_string(),
+    }
+}
+
+/// Parst die KI-Antwort zur Insight (Python `generate_insight`-Parsing):
+/// strip-code-fence → JSON-Objekt → strengths/weaknesses/patterns +
+/// recommendations (Liste → „• "-Bullets der ersten 3, sonst `str`). Kein
+/// Objekt / Parse-Fehler → `None`.
+fn parse_insight_response(raw: &str) -> Option<InsightResult> {
+    let stripped = strip_code_fence(raw);
+    let data: serde_json::Value = serde_json::from_str(&stripped).ok()?;
+    if !data.is_object() {
+        return None;
+    }
+    let recommendations = match data.get("recommendations") {
+        Some(serde_json::Value::Array(arr)) => arr
+            .iter()
+            .take(3)
+            .map(|r| format!("• {}", value_to_plain(r)))
+            .collect::<Vec<_>>()
+            .join("\n"),
+        Some(other) => value_to_plain(other),
+        None => String::new(),
+    };
+    let field = |k: &str| {
+        data.get(k)
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string()
+    };
+    Some(InsightResult {
+        strengths: field("strengths"),
+        weaknesses: field("weaknesses"),
+        patterns: field("patterns"),
+        recommendations,
+        raw: data,
+    })
+}
+
+/// Insight-Analyse mit injizierbarem `base_url`/`api_key` (für Tests). Leere
+/// History / HTTP-Fehler / Parse-Fehler → `None`.
+pub async fn generate_insight_with(
+    base_url: &str,
+    api_key: &str,
+    history: &[InsightHistoryItem],
+    period_label: &str,
+) -> Option<InsightResult> {
+    if history.is_empty() {
+        return None;
+    }
+    let prompt = build_insight_prompt(history, period_label);
+    let raw = minimax_chat_completion(base_url, api_key, &prompt, 0.5, 1500)
+        .await
+        .ok()?;
+    parse_insight_response(&raw)
+}
+
+/// Wöchentliche Insight-Analyse via MiniMax (Python `generate_insight`).
+/// Leere History / fehlender Key / Fehler → `None`.
+pub async fn generate_insight(
+    history: &[InsightHistoryItem],
+    period_label: &str,
+) -> Option<InsightResult> {
+    if history.is_empty() {
+        return None;
+    }
+    let key = resolve_minimax_key()?;
+    generate_insight_with(MINIMAX_BASE_URL, &key, history, period_label).await
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -802,5 +934,59 @@ mod tests {
             .await
             .unwrap_err();
         assert!(matches!(err, GenerateTitleError::Http(_)));
+    }
+
+    #[tokio::test]
+    async fn generate_insight_with_parst_recommendations() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        let body = serde_json::json!({
+            "choices": [{"message": {"content":
+                "```json\n{\"strengths\":\"stark\",\"weaknesses\":\"schwach\",\"patterns\":\"muster\",\"recommendations\":[\"a\",\"b\",\"c\",\"d\"]}\n```"}}]
+        });
+        Mock::given(method("POST"))
+            .and(path("/chat/completions"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(body))
+            .mount(&server)
+            .await;
+
+        let history = vec![InsightHistoryItem {
+            title: "T".into(),
+            relative_perf: 1.2,
+            engagement_rate: 0.05,
+        }];
+        let r = generate_insight_with(&server.uri(), "k", &history, "01.06. – 28.06.2026")
+            .await
+            .unwrap();
+        assert_eq!(r.strengths, "stark");
+        assert_eq!(r.patterns, "muster");
+        // 4 Recs → erste 3, je „• "-Prefix.
+        assert_eq!(r.recommendations, "• a\n• b\n• c");
+        assert_eq!(r.raw["weaknesses"], "schwach"); // raw bleibt vollständig
+    }
+
+    #[tokio::test]
+    async fn generate_insight_with_leer_und_parsefehler() {
+        use wiremock::matchers::method;
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        // Leere History → None ohne HTTP-Call.
+        assert!(generate_insight_with("http://unused", "k", &[], "p").await.is_none());
+
+        // Kein JSON → None.
+        let server = MockServer::start().await;
+        let body = serde_json::json!({"choices": [{"message": {"content": "kein json hier"}}]});
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(body))
+            .mount(&server)
+            .await;
+        let history = vec![InsightHistoryItem {
+            title: "T".into(),
+            relative_perf: 1.0,
+            engagement_rate: 0.1,
+        }];
+        assert!(generate_insight_with(&server.uri(), "k", &history, "p").await.is_none());
     }
 }

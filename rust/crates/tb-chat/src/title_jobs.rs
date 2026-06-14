@@ -8,10 +8,11 @@
 use std::collections::HashMap;
 use std::time::Duration;
 
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 use regex::Regex;
 use sqlx::PgPool;
 
+use crate::title_ai::{generate_insight, InsightHistoryItem};
 use crate::title_db;
 
 /// Score-Schwelle, ab der ein Titel in die Knowledge-Base aufgenommen wird
@@ -169,6 +170,135 @@ pub async fn schedule_nightly_knowledge_job(pool: PgPool, start_delay_s: u64) {
     }
 }
 
+// ───────────────────────────────────────────────────────────────────────────
+// Wöchentlicher Insight-Job (Python `insight_job.py`).
+// ───────────────────────────────────────────────────────────────────────────
+
+/// Eine Session-Zeile der Insight-Historie (Python `_fetch_history_for_period`).
+struct HistorySession {
+    title: String,
+    avg_viewers: f64,
+    followers_start: Option<i64>,
+}
+
+/// Aktive Partner-IDs (Python `_fetch_active_partner_ids`).
+async fn fetch_active_partner_ids(pool: &PgPool) -> Vec<String> {
+    sqlx::query_scalar::<_, String>(
+        "SELECT twitch_user_id FROM twitch_streamers_partner_state WHERE is_partner_active = 1",
+    )
+    .fetch_all(pool)
+    .await
+    .unwrap_or_default()
+}
+
+/// Titel-Historie eines Streamers im Zeitraum (Python `_fetch_history_for_period`).
+async fn fetch_history_for_period(
+    pool: &PgPool,
+    streamer_id: &str,
+    start: DateTime<Utc>,
+    end: DateTime<Utc>,
+) -> Vec<HistorySession> {
+    sqlx::query_as::<_, (String, f64, Option<i64>)>(
+        "SELECT s.stream_title, s.avg_viewers::float8, s.followers_start::int8 \
+         FROM twitch_stream_sessions s \
+         JOIN twitch_streamers t ON LOWER(t.twitch_login) = LOWER(s.streamer_login) \
+         WHERE t.twitch_user_id = $1 \
+           AND s.started_at BETWEEN $2 AND $3 \
+           AND s.stream_title IS NOT NULL AND s.stream_title != '' \
+           AND s.avg_viewers IS NOT NULL \
+         ORDER BY s.started_at DESC",
+    )
+    .bind(streamer_id)
+    .bind(start)
+    .bind(end)
+    .fetch_all(pool)
+    .await
+    .unwrap_or_default()
+    .into_iter()
+    .map(|(title, avg_viewers, followers_start)| HistorySession {
+        title,
+        avg_viewers,
+        followers_start,
+    })
+    .collect()
+}
+
+/// Reichert Sessions mit relative_perf + engagement_rate an (Python
+/// `_enrich_with_scores`): überspringt `own_avg<=0` oder fehlende/0-followers_start.
+fn enrich_with_scores(sessions: &[HistorySession], own_avg: f64) -> Vec<InsightHistoryItem> {
+    let mut out = Vec::new();
+    for s in sessions {
+        let Some(fs) = s.followers_start.filter(|&f| f != 0) else {
+            continue;
+        };
+        if own_avg <= 0.0 {
+            continue;
+        }
+        out.push(InsightHistoryItem {
+            title: s.title.clone(),
+            relative_perf: s.avg_viewers / own_avg,
+            engagement_rate: s.avg_viewers / fs as f64,
+        });
+    }
+    out
+}
+
+/// Wöchentlicher Insight-Job (Python `run_insight_job`): pro aktivem Partner die
+/// 28-Tage-Titel-Historie (≥3 Sessions) scoren, KI-Insight erzeugen + speichern.
+pub async fn run_insight_job(pool: &PgPool) {
+    let now = Utc::now();
+    let period_start = now - chrono::Duration::days(28);
+    let partner_ids = fetch_active_partner_ids(pool).await;
+    tracing::info!(partners = partner_ids.len(), "title_generator: insight job start");
+
+    for streamer_id in partner_ids {
+        let sessions = fetch_history_for_period(pool, &streamer_id, period_start, now).await;
+        if sessions.len() < 3 {
+            continue;
+        }
+        let own_avg = title_db::get_streamer_avg_viewers(pool, &streamer_id).await;
+        let enriched = enrich_with_scores(&sessions, own_avg);
+        if enriched.is_empty() {
+            continue;
+        }
+        let period_label = format!(
+            "{} – {}",
+            period_start.format("%d.%m."),
+            now.format("%d.%m.%Y")
+        );
+        let Some(result) = generate_insight(&enriched, &period_label).await else {
+            continue;
+        };
+        let _ = title_db::insert_insight(
+            pool,
+            &streamer_id,
+            period_start,
+            now,
+            &result.strengths,
+            &result.weaknesses,
+            &result.patterns,
+            &result.recommendations,
+            &result.raw,
+        )
+        .await;
+        tracing::info!(streamer_id, "title_generator: insight saved");
+        tokio::time::sleep(Duration::from_secs(2)).await;
+    }
+    tracing::info!("title_generator: insight job done");
+}
+
+/// Periodischer Job: wöchentlich `run_insight_job` (Python
+/// `schedule_weekly_insight_job`). Als tokio-Task starten (läuft endlos).
+pub async fn schedule_weekly_insight_job(pool: PgPool, start_delay_s: u64) {
+    if start_delay_s > 0 {
+        tokio::time::sleep(Duration::from_secs(start_delay_s)).await;
+    }
+    loop {
+        run_insight_job(&pool).await;
+        tokio::time::sleep(Duration::from_secs(7 * 86400)).await;
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -204,6 +334,7 @@ mod tests {
         let pool = PgPoolOptions::new().max_connections(4).connect_with(opts).await.unwrap();
         for ddl in [
             "CREATE TABLE twitch_streamers (twitch_user_id TEXT, twitch_login TEXT)",
+            "CREATE TABLE twitch_streamers_partner_state (twitch_user_id TEXT, is_partner_active INTEGER)",
             "CREATE TABLE twitch_stream_sessions (streamer_login TEXT, stream_title TEXT, \
              avg_viewers DOUBLE PRECISION, followers_start INTEGER, started_at TIMESTAMPTZ)",
             "CREATE TABLE title_generator_knowledge (\
@@ -259,5 +390,52 @@ mod tests {
         let count2: i64 = sqlx::query_scalar("SELECT COUNT(*)::int8 FROM title_generator_knowledge")
             .fetch_one(&pool).await.unwrap();
         assert_eq!(count2, 2);
+    }
+
+    #[test]
+    fn enrich_filtert_null_followers_und_own_avg() {
+        let sessions = vec![
+            HistorySession { title: "a".into(), avg_viewers: 50.0, followers_start: Some(100) },
+            HistorySession { title: "b".into(), avg_viewers: 40.0, followers_start: None }, // gefiltert
+            HistorySession { title: "c".into(), avg_viewers: 30.0, followers_start: Some(0) }, // 0 gefiltert
+        ];
+        let e = enrich_with_scores(&sessions, 40.0);
+        assert_eq!(e.len(), 1);
+        assert_eq!(e[0].title, "a");
+        assert_eq!(e[0].relative_perf, 1.25); // 50/40
+        assert_eq!(e[0].engagement_rate, 0.5); // 50/100
+        // own_avg <= 0 → alles gefiltert.
+        assert!(enrich_with_scores(&sessions, 0.0).is_empty());
+    }
+
+    #[tokio::test]
+    async fn insight_loader_partner_und_historie() {
+        let Some(pool) = make_pool("t6e_title_insight_loader").await else { return };
+        sqlx::query(
+            "INSERT INTO twitch_streamers_partner_state (twitch_user_id, is_partner_active) VALUES \
+             ('900',1),('901',0)",
+        )
+        .execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO twitch_streamers (twitch_user_id, twitch_login) VALUES ('900','foo'),('901','bar')")
+            .execute(&pool).await.unwrap();
+        sqlx::query(
+            "INSERT INTO twitch_stream_sessions (streamer_login, stream_title, avg_viewers, followers_start, started_at) VALUES \
+             ('foo','t1',50.0,100,NOW() - INTERVAL '2 days'), \
+             ('foo','t2',40.0,100,NOW() - INTERVAL '5 days'), \
+             ('foo','t3',30.0,100,NOW() - INTERVAL '40 days'), \
+             ('foo','',20.0,100,NOW() - INTERVAL '1 days')",
+        )
+        .execute(&pool).await.unwrap();
+
+        // Nur aktiver Partner 900 (901 inaktiv).
+        let partners = fetch_active_partner_ids(&pool).await;
+        assert_eq!(partners, vec!["900".to_string()]);
+
+        // 28d-Fenster: t1,t2 drin; t3 (40d) raus; leerer Titel raus → 2.
+        let now = Utc::now();
+        let history = fetch_history_for_period(&pool, "900", now - chrono::Duration::days(28), now).await;
+        assert_eq!(history.len(), 2);
+        assert_eq!(history[0].title, "t1"); // DESC nach started_at
+        assert_eq!(history[0].avg_viewers, 50.0);
     }
 }
