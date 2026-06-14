@@ -60,10 +60,18 @@ pub fn unix_now() -> i64 {
         .as_secs() as i64
 }
 
+/// Python-Parität: fehlt `expires_in` in der Twitch-Antwort, gilt 3600 s.
+fn default_expires_in() -> u64 {
+    3600
+}
+
 /// Rohe Twitch-Token-Response (nur benötigte Felder).
 #[derive(Debug, Deserialize)]
 struct TokenResponse {
     access_token: String,
+    /// Lebensdauer in Sekunden. Lässt Twitch das Feld weg, fällt serde auf
+    /// 3600 zurück (statt das Parsen mit "missing field" abzubrechen).
+    #[serde(default = "default_expires_in")]
     expires_in: u64,
 }
 
@@ -151,5 +159,23 @@ mod tests {
         let token = AppToken::new("tok".to_string(), 3600, 1_000_000);
         // expiry = 1_003_600; jetzt = 1_003_539; Delta = 61 > 60 → noch gültig
         assert!(!token.needs_refresh(1_003_539));
+    }
+
+    #[test]
+    fn token_response_expires_in_default_3600() {
+        // Fehlt `expires_in`, fällt serde auf 3600 zurück (Python-Parität)
+        // statt das Parsen mit "missing field" abzubrechen.
+        let parsed: TokenResponse =
+            serde_json::from_str(r#"{"access_token":"abc"}"#).unwrap();
+        assert_eq!(parsed.access_token, "abc");
+        assert_eq!(parsed.expires_in, 3600);
+    }
+
+    #[test]
+    fn token_response_expires_in_wird_uebernommen() {
+        // Ist das Feld vorhanden, gilt der gelieferte Wert.
+        let parsed: TokenResponse =
+            serde_json::from_str(r#"{"access_token":"abc","expires_in":7200}"#).unwrap();
+        assert_eq!(parsed.expires_in, 7200);
     }
 }
