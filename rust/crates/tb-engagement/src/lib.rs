@@ -12,6 +12,7 @@
 //! Pipeline-Helfer in [`pipeline`] (Pre-Filter + Kostenrechnung).
 
 pub mod conversation;
+pub mod deadlock_stats;
 pub mod deadlock_wiki;
 pub mod minimax_chat;
 pub mod pipeline;
