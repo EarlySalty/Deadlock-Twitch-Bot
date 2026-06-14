@@ -174,6 +174,29 @@ impl AuthWriter {
         .bind(uid)
         .execute(&mut *tx)
         .await?;
+
+        // Token-Blacklist-Eintrag entfernen (Python: save_auth ruft
+        // token_error_handler.remove_from_blacklist). Ohne dies bleibt ein wegen
+        // invalid_grant (error_count ≥ 3) blacklisteter Streamer nach erfolgreicher
+        // Re-Autorisierung DAUERHAFT gesperrt: der Blacklist-Check in get_valid_token
+        // greift vor allem anderen und liefert None. Zuerst den Partner-Pause-Grund
+        // 'token_error' aufheben, dann den Blacklist-Eintrag löschen.
+        sqlx::query(
+            "UPDATE twitch_partners
+                SET technical_pause_reason = CASE
+                        WHEN LOWER(COALESCE(technical_pause_reason, '')) = 'token_error' THEN NULL
+                        ELSE technical_pause_reason
+                    END
+              WHERE twitch_user_id = $1",
+        )
+        .bind(uid)
+        .execute(&mut *tx)
+        .await?;
+        sqlx::query("DELETE FROM twitch_token_blacklist WHERE twitch_user_id = $1")
+            .bind(uid)
+            .execute(&mut *tx)
+            .await?;
+
         tx.commit().await?;
         Ok(())
     }

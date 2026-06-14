@@ -59,6 +59,25 @@ async fn pool_in_schema(dsn: &str, schema: &str) -> PgPool {
     .execute(&pool)
     .await
     .unwrap();
+    // remove_from_blacklist (in store_new_auth) räumt diese beiden Tabellen mit auf.
+    sqlx::query(
+        "CREATE TABLE twitch_token_blacklist (
+            twitch_user_id TEXT PRIMARY KEY, twitch_login TEXT, error_message TEXT,
+            error_count INTEGER DEFAULT 1, first_error_at TEXT, last_error_at TEXT,
+            grace_expires_at TEXT
+        )",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "CREATE TABLE twitch_partners (
+            twitch_user_id TEXT, technical_pause_reason TEXT
+        )",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
     pool
 }
 
@@ -162,4 +181,56 @@ async fn bestehendes_raid_enabled_bleibt_bei_reauth_erhalten() {
     .unwrap();
     assert!(enabled, "bestehendes raid_enabled erhalten");
     assert!(!needs, "needs_reauth nach Re-Auth zurückgesetzt");
+}
+
+#[tokio::test]
+async fn reauth_entfernt_blacklist_und_loest_token_error_pause() {
+    let pool = pool_or_skip!("t6a_authwrite_unblock");
+    let writer = AuthWriter::new(pool.clone(), cipher());
+
+    // Ausgangslage: wegen invalid_grant blacklisteter + technisch pausierter Partner.
+    sqlx::query("INSERT INTO twitch_token_blacklist (twitch_user_id, twitch_login) VALUES ('42', 'drag')")
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query(
+        "INSERT INTO twitch_partners (twitch_user_id, technical_pause_reason) VALUES ('42', 'token_error')",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    // Fremder Partner mit anderem Pause-Grund bleibt unangetastet.
+    sqlx::query(
+        "INSERT INTO twitch_partners (twitch_user_id, technical_pause_reason) VALUES ('99', 'bot_banned')",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    // Erfolgreiche Re-Autorisierung.
+    writer
+        .store_new_auth(&base_auth("42", true), Utc::now())
+        .await
+        .unwrap();
+
+    // Blacklist-Eintrag entfernt.
+    let bl: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM twitch_token_blacklist WHERE twitch_user_id='42'")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(bl, 0, "Blacklist-Eintrag nach Re-Auth gelöscht");
+
+    // technical_pause_reason='token_error' aufgehoben, fremder Grund unverändert.
+    let pause: Option<String> =
+        sqlx::query_scalar("SELECT technical_pause_reason FROM twitch_partners WHERE twitch_user_id='42'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(pause, None, "token_error-Pause aufgehoben");
+    let other: Option<String> =
+        sqlx::query_scalar("SELECT technical_pause_reason FROM twitch_partners WHERE twitch_user_id='99'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(other.as_deref(), Some("bot_banned"), "fremder Pause-Grund unangetastet");
 }
