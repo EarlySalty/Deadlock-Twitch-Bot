@@ -275,18 +275,26 @@ impl CommandEngine {
             "!raid_enable" | "!raidbot" => {
                 if event.is_mod_or_broadcaster() {
                     self.cmd_raid_enable(event).await;
+                } else {
+                    self.reply(event, "Nur der Broadcaster oder Mods können den Twitch-Bot steuern.")
+                        .await;
                 }
                 true
             }
             "!uban" | "!unban" => {
                 if event.is_mod_or_broadcaster() {
                     self.cmd_uban(event).await;
+                } else {
+                    self.reply(event, "Nur der Broadcaster oder Mods.").await;
                 }
                 true
             }
             "!raid" | "!traid" => {
                 if event.is_mod_or_broadcaster() {
                     self.cmd_raid(event).await;
+                } else {
+                    self.reply(event, "Nur Broadcaster oder Mods können !raid benutzen.")
+                        .await;
                 }
                 true
             }
@@ -297,12 +305,18 @@ impl CommandEngine {
             "!silentban" => {
                 if event.is_mod_or_broadcaster() {
                     self.cmd_silentban(event).await;
+                } else {
+                    self.reply(event, "Nur der Broadcaster oder Mods können den Bot steuern.")
+                        .await;
                 }
                 true
             }
             "!silentraid" => {
                 if event.is_mod_or_broadcaster() {
                     self.cmd_silentraid(event).await;
+                } else {
+                    self.reply(event, "Nur der Broadcaster oder Mods können den Bot steuern.")
+                        .await;
                 }
                 true
             }

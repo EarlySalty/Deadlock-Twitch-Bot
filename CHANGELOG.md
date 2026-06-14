@@ -1,3 +1,11 @@
+## #213 — Mod-Befehle antworten wieder, wenn jemand ohne Rechte sie tippt
+
+**Ausgangslage:** Mehrere Chat-Befehle sind nur für Broadcaster und Mods gedacht — `!raid`, `!raid_enable`, `!uban`, `!silentban`, `!silentraid`. Tippte sie jemand ohne Berechtigung, passierte beim Umzug auf das neue System einfach gar nichts: keine Aktion, aber auch keine Rückmeldung. Für den Nutzer wirkte das, als wäre der Bot kaputt oder der Befehl nicht vorhanden.
+
+**Was geändert wurde:** Tippt jemand ohne Mod-/Broadcaster-Rechte einen dieser Befehle, antwortet der Bot jetzt wieder mit einem klaren Hinweis („Nur der Broadcaster oder Mods können …") — wie in der Vorgänger-Version.
+
+**Wie es funktioniert:** Bei jedem dieser Befehle prüft der Bot zuerst die Rechte des Absenders (Mod- oder Broadcaster-Abzeichen). Fehlen sie, wird die Aktion nicht ausgeführt und stattdessen eine kurze Ablehnung in den Chat geschrieben, adressiert an die Person, die den Befehl getippt hat. Die eigentliche Funktion bleibt unverändert geschützt.
+
 ## #212 — Discord-Profil setzen vergibt wieder die Streamer-Rolle (Admin-Aktion)
 
 **Ausgangslage (Admin-Aktion):** Wenn im Admin-Bereich das Discord-Profil eines Streamers gesetzt wird (Discord-ID + Anzeigename), passierten in der Vorgänger-Version zwei Dinge mehr, die beim Umzug verloren gingen: die Twitch-User-ID des Streamers wurde aufgelöst und mitgespeichert, und der Streamer bekam automatisch die Discord-Streamer-Rolle. Der neue Handler schrieb nur die Discord-Felder in die Datenbank — keine Rollen-Vergabe, keine ID-Auflösung.
