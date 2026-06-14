@@ -11,7 +11,8 @@ use chrono::{Duration, Utc};
 use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
 use tb_analytics::overview::{
-    overview_chatter_metrics, overview_metrics, overview_network_stats, overview_session_count,
+    overview_chatter_metrics, overview_metrics, overview_monetization_counts,
+    overview_network_stats, overview_session_count, OverviewMonetization, OverviewNetworkStats,
 };
 use tb_http_core::{ApiError, AuthLevel};
 
@@ -39,7 +40,78 @@ pub struct OverviewData {
     pub streamer: Option<String>,
     pub days: i64,
     pub summary: OverviewSummary,
+    pub scores: HealthScores,
     pub network: OverviewNetwork,
+}
+
+/// Health-Scores (Python `_calculate_health_scores`), je 0–100.
+#[derive(Serialize)]
+pub struct HealthScores {
+    pub total: i64,
+    pub reach: i64,
+    pub retention: i64,
+    pub engagement: i64,
+    pub growth: i64,
+    pub monetization: i64,
+    pub network: i64,
+}
+
+/// Berechnet die Health-Scores exakt nach Python `_calculate_health_scores`.
+/// `int()`-Truncation = `as i64` (positive Werte); `min(100,..)`/`max(0,..)`
+/// wie Python. `category_percentile=None` → avg_viewers/5-Fallback (Reach).
+#[allow(clippy::too_many_arguments)]
+fn calculate_health_scores(
+    avg_viewers: f64,
+    retention_10m_pct: f64,
+    retention_sample_count: i64,
+    engagement_rate: f64,
+    chat_sample_count: i64,
+    followers_per_hour: f64,
+    session_count: i64,
+    category_percentile: Option<f64>,
+    mon: OverviewMonetization,
+    net: OverviewNetworkStats,
+) -> HealthScores {
+    let reach = match category_percentile {
+        Some(p) => ((20.0 + p * 80.0) as i64).min(100),
+        None => ((avg_viewers / 5.0) as i64).min(100),
+    };
+    let retention = if retention_sample_count < 3 {
+        50
+    } else {
+        ((retention_10m_pct * 1.5) as i64).min(100)
+    };
+    let engagement = if chat_sample_count < 3 {
+        50
+    } else {
+        ((engagement_rate * 5.0) as i64).min(100)
+    };
+    let growth = ((followers_per_hour.max(0.0) * 20.0) as i64).min(100);
+    let monetization = {
+        let sc = session_count.max(1);
+        let weighted = mon.sub_events * 3 + mon.bits_events + mon.hype_trains * 5;
+        (((weighted as f64 / sc as f64) * 10.0) as i64).clamp(0, 100)
+    };
+    let network = {
+        let total = net.sent + net.received;
+        let reciprocity = net.sent.min(net.received) * 10;
+        (total * 8 + reciprocity).clamp(0, 100)
+    };
+    let total = (reach as f64 * 0.2
+        + retention as f64 * 0.25
+        + engagement as f64 * 0.2
+        + growth as f64 * 0.15
+        + monetization as f64 * 0.1
+        + network as f64 * 0.1) as i64;
+    HealthScores {
+        total,
+        reach,
+        retention,
+        engagement,
+        growth,
+        monetization,
+        network,
+    }
 }
 
 /// Raid-Netzwerk-Kachel (Python `_get_network_stats`).
@@ -155,6 +227,9 @@ pub async fn overview_handler(
         .await
         .map_err(|_| ApiError::internal())?;
 
+    // Monetarisierungs-Events (fehlende Tabellen → 0).
+    let mon = overview_monetization_counts(&pool, &since, login_ref).await;
+
     let airtime = metrics.total_airtime_hours.unwrap_or(0.0);
     let total_followers = metrics.total_followers.unwrap_or(0);
     let gained = metrics.gained_followers.unwrap_or(0);
@@ -181,9 +256,23 @@ pub async fn overview_handler(
         None
     };
 
+    let scores = calculate_health_scores(
+        metrics.avg_avg_viewers.unwrap_or(0.0),
+        curr_ret,
+        curr_ret_sample,
+        chatter.engagement_rate,
+        metrics.chat_sample_count.unwrap_or(0),
+        per_hour(total_followers),
+        metrics.session_count.unwrap_or(0),
+        None, // category_percentile noch nicht erhoben → avg_viewers/5-Fallback
+        mon,
+        net,
+    );
+
     Ok(Json(OverviewResponse::Data(OverviewData {
         streamer: params.streamer,
         days,
+        scores,
         summary: OverviewSummary {
             avg_viewers: metrics.avg_avg_viewers.unwrap_or(0.0),
             peak_viewers: metrics.max_peak_viewers.unwrap_or(0),
@@ -431,5 +520,36 @@ mod tests {
         assert_eq!(v["network"]["sent"], 1);
         assert_eq!(v["network"]["sentViewers"], 30);
         assert_eq!(v["network"]["received"], 1);
+        // Health-Scores: reach=avg/5=20, retention/engagement=50 (sample<3),
+        // growth=min(100, fph*20)=100 (5 Follower / 1h), monetization=0 (keine
+        // Event-Tabellen), network: total=2*8 + recip=10 = 26.
+        assert_eq!(v["scores"]["reach"], 20);
+        assert_eq!(v["scores"]["retention"], 50);
+        assert_eq!(v["scores"]["engagement"], 50);
+        assert_eq!(v["scores"]["growth"], 100);
+        assert_eq!(v["scores"]["monetization"], 0);
+        assert_eq!(v["scores"]["network"], 26);
+        assert_eq!(v["scores"]["total"], 44);
+    }
+
+    #[test]
+    fn health_scores_formel_exakt() {
+        // category_percentile gesetzt → reach = 20 + 0.5*80 = 60.
+        let s = calculate_health_scores(
+            100.0, 40.0, 5, 12.0, 5, 2.0, 4,
+            Some(0.5),
+            OverviewMonetization { sub_events: 2, bits_events: 0, hype_trains: 1 },
+            OverviewNetworkStats { sent: 3, received: 1, sent_viewers: 0 },
+        );
+        assert_eq!(s.reach, 60);
+        assert_eq!(s.retention, 60); // min(100, 40*1.5)
+        assert_eq!(s.engagement, 60); // min(100, 12*5)
+        assert_eq!(s.growth, 40); // min(100, 2*20)
+        // weighted = 2*3 + 0 + 1*5 = 11; sc=max(1,4)=4; (11/4)*10=27.5 -> 27.
+        assert_eq!(s.monetization, 27);
+        // total=3+1=4; recip=min(3,1)*10=10; 4*8+10=42.
+        assert_eq!(s.network, 42);
+        // total = 60*.2+60*.25+60*.2+40*.15+27*.1+42*.1 = 12+15+12+6+2.7+4.2=51.9 -> 51.
+        assert_eq!(s.total, 51);
     }
 }

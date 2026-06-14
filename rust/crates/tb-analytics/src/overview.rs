@@ -19,6 +19,7 @@ pub struct OverviewMetricsRow {
     pub gained_followers: Option<i64>,
     pub avg_retention_10m: Option<f64>,
     pub retention_sample_count: Option<i64>,
+    pub chat_sample_count: Option<i64>,
     pub follower_valid_count: Option<i64>,
     pub session_count: Option<i64>,
 }
@@ -61,6 +62,10 @@ pub async fn overview_metrics(
                     WHEN s.avg_viewers >= 3 AND s.peak_viewers > 0 AND s.retention_10m IS NOT NULL
                     THEN 1
                 END)::BIGINT                                          AS retention_sample_count,
+            COUNT(CASE
+                    WHEN s.avg_viewers >= 3 AND s.peak_viewers > 0 AND s.unique_chatters IS NOT NULL
+                    THEN 1
+                END)::BIGINT                                          AS chat_sample_count,
             COUNT(CASE
                     WHEN s.follower_delta IS NOT NULL
                      AND NOT (s.followers_end = 0 AND s.followers_start > 0)
@@ -269,6 +274,83 @@ pub async fn overview_network_stats(
         sent_viewers,
         received,
     })
+}
+
+/// Monetarisierungs-Event-Zähler für den Monetization-Health-Score
+/// (Python `_get_monetization_event_counts`). Die Event-Tabellen existieren
+/// nicht überall — fehlende Tabelle/Spalte je Query → 0 (Python try/except).
+#[derive(Debug, Default, Clone, Copy)]
+pub struct OverviewMonetization {
+    pub sub_events: i64,
+    pub bits_events: i64,
+    pub hype_trains: i64,
+}
+
+/// Zählt Sub-/Bits-/Hype-Train-Events im Zeitraum. Ohne Streamer → 0.
+pub async fn overview_monetization_counts(
+    pool: &PgPool,
+    since: &str,
+    streamer_login: Option<&str>,
+) -> OverviewMonetization {
+    let Some(login) = streamer_login else {
+        return OverviewMonetization::default();
+    };
+
+    let sub_events: i64 = sqlx::query_as::<_, (i64,)>(
+        r#"
+        SELECT COUNT(*)::BIGINT
+        FROM twitch_subscription_events e
+        LEFT JOIN twitch_stream_sessions s ON s.id = e.session_id
+        LEFT JOIN twitch_live_state l ON l.twitch_user_id = e.twitch_user_id
+        WHERE e.received_at >= $1::TIMESTAMPTZ
+          AND LOWER(COALESCE(s.streamer_login, l.streamer_login, '')) = LOWER($2)
+        "#,
+    )
+    .bind(since)
+    .bind(login)
+    .fetch_one(pool)
+    .await
+    .map(|(c,)| c)
+    .unwrap_or(0);
+
+    let bits_events: i64 = sqlx::query_as::<_, (i64,)>(
+        r#"
+        SELECT COUNT(*)::BIGINT
+        FROM twitch_bits_events e
+        LEFT JOIN twitch_stream_sessions s ON s.id = e.session_id
+        LEFT JOIN twitch_live_state l ON l.twitch_user_id = e.twitch_user_id
+        WHERE e.received_at >= $1::TIMESTAMPTZ
+          AND LOWER(COALESCE(s.streamer_login, l.streamer_login, '')) = LOWER($2)
+        "#,
+    )
+    .bind(since)
+    .bind(login)
+    .fetch_one(pool)
+    .await
+    .map(|(c,)| c)
+    .unwrap_or(0);
+
+    let hype_trains: i64 = sqlx::query_as::<_, (i64,)>(
+        r#"
+        SELECT COUNT(*)::BIGINT
+        FROM twitch_hype_train_events h
+        LEFT JOIN twitch_stream_sessions s ON s.id = h.session_id
+        WHERE h.started_at >= $1::TIMESTAMPTZ AND h.ended_at IS NOT NULL
+          AND LOWER(COALESCE(s.streamer_login, '')) = LOWER($2)
+        "#,
+    )
+    .bind(since)
+    .bind(login)
+    .fetch_one(pool)
+    .await
+    .map(|(c,)| c)
+    .unwrap_or(0);
+
+    OverviewMonetization {
+        sub_events,
+        bits_events,
+        hype_trains,
+    }
 }
 
 #[cfg(test)]
