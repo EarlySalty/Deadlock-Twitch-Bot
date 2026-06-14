@@ -2429,6 +2429,7 @@ dependencies = [
  "chrono",
  "regex",
  "reqwest",
+ "rusqlite",
  "serde_json",
  "tokio",
  "tracing",
