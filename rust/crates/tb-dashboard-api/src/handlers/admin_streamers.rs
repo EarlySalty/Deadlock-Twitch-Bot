@@ -78,7 +78,13 @@ pub struct AdminStreamerDetailResponse {
     pub login: String,
     pub display_name: String,
     pub twitch_user_id: Option<String>,
+    pub verified: bool,
+    pub archived: bool,
+    pub archived_at: Option<String>,
+    pub created_at: Option<String>,
+    pub is_live: bool,
     pub partner_status: String,
+    pub plan_id: Option<String>,
     pub stats: StreamerStats,
     pub sessions: Vec<StreamerSession>,
     pub settings: StreamerSettings,
@@ -89,10 +95,17 @@ pub struct AdminStreamerDetailResponse {
 #[serde(rename_all = "camelCase")]
 pub struct StreamerStats {
     pub total_sessions: i64,
-    pub total_duration_seconds: i64,
+    /// `round(SUM(duration_seconds)/3600, 2)` — Python `totalWatchHours`
+    /// (gerundete Stunden, nicht rohe Sekunden).
+    pub total_watch_hours: f64,
     pub avg_viewers: f64,
     pub peak_viewers: i64,
     pub follower_delta: i64,
+    /// Aus dem Live-State der Streamer-Row (nicht dem Session-Aggregat).
+    pub viewer_count: i64,
+    pub last_seen_at: Option<String>,
+    pub last_started_at: Option<String>,
+    pub last_game: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -303,17 +316,58 @@ pub async fn detail_handler(
         })
         .collect();
 
+    // Abgeleitete Top-Level-Felder VOR dem Response-Bau berechnen — `settings`
+    // moved unten dieselben row-Felder, daher hier klonen/borgen (Python
+    // _admin_streamer_detail_payload Z. 458-494).
+    let display_name = row
+        .discord_display_name
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+        .unwrap_or_else(|| row.twitch_login.clone());
+    let verified = row.is_verified != 0;
+    let is_live = row.is_live != 0;
+    let archived = row.archived_at.as_deref().is_some_and(|s| !s.trim().is_empty());
+    let archived_at = row.archived_at.clone();
+    let created_at = row.created_at.clone();
+    // planId = manual_plan_id || billing_plan_id || plan_name (erster nicht-leerer).
+    let plan_id = [&row.manual_plan_id, &row.billing_plan_id, &row.plan_name]
+        .into_iter()
+        .filter_map(|f| f.as_deref().map(str::trim).filter(|s| !s.is_empty()))
+        .next()
+        .map(str::to_string);
+    // totalWatchHours: gerundete Stunden aus dem Sekunden-Aggregat (round 2).
+    let total_watch_hours =
+        ((stats_row.total_duration_seconds as f64 / 3600.0) * 100.0).round() / 100.0;
+    // viewerCount/lastSeenAt/lastStartedAt/lastGame stammen aus dem Live-State der
+    // Streamer-Row (nicht dem Session-Aggregat) — settings nutzt sie nicht, daher move.
+    let viewer_count = row.last_viewer_count.unwrap_or(0) as i64;
+    let last_seen_at = row.last_seen_at.clone();
+    let last_started_at = row.last_started_at.clone();
+    let last_game = row.last_game.clone();
+
     Ok(Json(AdminStreamerDetailResponse {
         login: row.twitch_login.clone(),
-        display_name: row.twitch_login,
-        twitch_user_id: row.twitch_user_id,
+        display_name,
+        twitch_user_id: row.twitch_user_id.clone(),
+        verified,
+        archived,
+        archived_at,
+        created_at,
+        is_live,
         partner_status: ps.to_string(),
+        plan_id,
         stats: StreamerStats {
             total_sessions: stats_row.total_sessions,
-            total_duration_seconds: stats_row.total_duration_seconds,
+            total_watch_hours,
             avg_viewers: stats_row.avg_viewers,
             peak_viewers: stats_row.peak_viewers,
             follower_delta: stats_row.follower_delta,
+            viewer_count,
+            last_seen_at,
+            last_started_at,
+            last_game,
         },
         sessions,
         settings: StreamerSettings {
@@ -630,7 +684,19 @@ mod tests {
         let b = axum::body::to_bytes(res.into_body(), 8192).await.unwrap();
         let v: serde_json::Value = serde_json::from_slice(&b).unwrap();
         assert_eq!(v["login"], "bekannter");
-        assert!(v["stats"].is_object());
+        // Top-Level-Felder (Python-Parität _admin_streamer_detail_payload):
+        assert_eq!(v["displayName"], "bekannter"); // kein discord_display_name → Login
+        assert_eq!(v["verified"], false);
+        assert_eq!(v["archived"], false);
+        assert_eq!(v["isLive"], false);
+        assert!(v["planId"].is_null()); // kein Plan gesetzt
+        assert!(!v["createdAt"].is_null()); // created_at = NOW()
+        // Stats: totalWatchHours statt totalDurationSeconds; Live-State-Felder vorhanden.
+        assert_eq!(v["stats"]["totalWatchHours"], 0.0);
+        assert!(v["stats"].get("totalDurationSeconds").is_none());
+        assert_eq!(v["stats"]["viewerCount"], 0);
+        assert!(v["stats"].as_object().unwrap().contains_key("lastSeenAt"));
+        assert!(v["stats"].as_object().unwrap().contains_key("lastGame"));
         assert!(v["sessions"].is_array());
         assert!(v["settings"].is_object());
         assert!(v["oauth"].is_object());
