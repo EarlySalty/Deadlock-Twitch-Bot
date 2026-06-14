@@ -312,6 +312,155 @@ pub fn sanitize_title_result(
     }
 }
 
+// ---------------------------------------------------------------------------
+// Prompt-Bau (Python `build_title_prompt`)
+// ---------------------------------------------------------------------------
+
+/// History-Eintrag fürs Prompt (mit den im Command berechneten Metriken
+/// `relative_perf` / `engagement_rate`).
+#[derive(Debug, Clone)]
+pub struct PromptHistoryItem {
+    pub title: String,
+    pub relative_perf: Option<f64>,
+    pub engagement_rate: Option<f64>,
+}
+
+/// Community-Benchmark fürs Prompt.
+#[derive(Debug, Clone)]
+pub struct PromptKnowledgeItem {
+    pub title: String,
+    pub normalized_score: Option<f64>,
+}
+
+/// Live-Daten fürs Prompt (Hero/Party).
+#[derive(Debug, Clone)]
+pub struct PromptLiveState {
+    pub hero: Option<String>,
+    pub party_hint: Option<String>,
+}
+
+fn lines_or_default(lines: Vec<String>) -> String {
+    if lines.is_empty() {
+        "  (keine Daten)".to_string()
+    } else {
+        lines.join("\n")
+    }
+}
+
+fn history_line(item: &PromptHistoryItem) -> String {
+    format!(
+        "  - \"{}\" (relative Perf: {}, Engagement: {})",
+        item.title,
+        format_metric(item.relative_perf, 2),
+        format_metric(item.engagement_rate, 3),
+    )
+}
+
+/// Baut das MiniMax-Prompt (Python `build_title_prompt`). Sortiert die History
+/// nach (relative_perf, engagement_rate) absteigend für die Top-Referenzen.
+///
+/// Hinweis: Für `Hero`/`Party` greift bei `None` der Python-Default
+/// (`unbekannt`/`solo`) — der `.get(key, default)` in Python war für genau
+/// diesen Fall gedacht (Live-Feld vorhanden aber leer).
+pub fn build_title_prompt(
+    keywords: &str,
+    title_history: &[PromptHistoryItem],
+    knowledge_titles: &[PromptKnowledgeItem],
+    rank_display: Option<&str>,
+    emoji_ratio: f64,
+    live_state: Option<&PromptLiveState>,
+) -> String {
+    let emoji_rule = if emoji_ratio >= 0.3 {
+        "Verwende maximal einen Emoji und nur dann, wenn der Streamer bereits Emojis in seinen Titeln nutzt."
+    } else {
+        "Verwende KEINE Emojis im Titel."
+    };
+
+    let mut sorted: Vec<&PromptHistoryItem> = title_history.iter().collect();
+    sorted.sort_by(|a, b| {
+        let ka = (a.relative_perf.unwrap_or(0.0), a.engagement_rate.unwrap_or(0.0));
+        let kb = (b.relative_perf.unwrap_or(0.0), b.engagement_rate.unwrap_or(0.0));
+        kb.partial_cmp(&ka).unwrap_or(std::cmp::Ordering::Equal)
+    });
+
+    let top_reference_lines =
+        lines_or_default(sorted.iter().take(8).map(|t| history_line(t)).collect());
+    let history_lines =
+        lines_or_default(title_history.iter().take(20).map(history_line).collect());
+    let benchmark_lines = lines_or_default(
+        knowledge_titles
+            .iter()
+            .take(20)
+            .map(|t| {
+                format!(
+                    "  - \"{}\" (Score: {})",
+                    t.title,
+                    format_metric(t.normalized_score, 2)
+                )
+            })
+            .collect(),
+    );
+
+    let rank_line = rank_display
+        .map(|rd| format!("\nStreamer-Rang: {rd}"))
+        .unwrap_or_default();
+    let live_line = live_state
+        .map(|ls| {
+            format!(
+                "\nAktuelle Live-Daten: Hero={}, Party={}",
+                ls.hero.as_deref().unwrap_or("unbekannt"),
+                ls.party_hint.as_deref().unwrap_or("solo"),
+            )
+        })
+        .unwrap_or_default();
+    let canonical_ranks = CANONICAL_RANK_NAMES.join(", ");
+
+    format!(
+        r#"Du bist ein Twitch-Stream-Titel-Experte für das Spiel Deadlock.
+
+AUFGABE:
+1. Analysiere die letzten Stream-Titel des Streamers (mit Performance-Metriken).
+2. Generiere EINEN optimalen Stream-Titel basierend auf den angegebenen Keywords.
+3. Gib zusätzlich 2 Alternativen an.
+4. Bewerte kurz die 3 schlechtesten eigenen Titel (max. 1 Satz je Titel).
+
+KEYWORDS (Intent des Streamers heute): {keywords}{rank_line}{live_line}
+
+BESTE EIGENE REFERENZEN (priorisieren, zuerst daran orientieren):
+{top_reference_lines}
+
+EIGENE TITEL-HISTORY (relative_perf = avg_viewers / eigener_durchschnitt):
+{history_lines}
+
+COMMUNITY BENCHMARKS (beste Deadlock-Titel nach normalisiertem Score):
+{benchmark_lines}
+
+REGELN:
+- Der Titel soll vollständig und einladend sein - kein reiner Keyword-Dump.
+- Passe dich stilistisch zuerst den BESTEN EIGENEN REFERENZEN an, erst danach den Community-Benchmarks.
+- Erfinde möglichst wenig neu. Bevorzuge bekannte Formulierungsbausteine, Satzrhythmus und Tonalität aus den Referenzen.
+- Wenn Keywords ungewohnt sind, formuliere konservativ statt kreativ.
+- {emoji_rule}
+- Halte den Titel unter 140 Zeichen.
+- Verwende Rangbegriffe nur, wenn sie explizit in den Keywords oder in "Streamer-Rang" stehen.
+- Erfinde niemals Ränge, Skill-Stufen oder Match-Kontext.
+- Deadlock-Ränge heißen nur: {canonical_ranks}.
+- Schreibe Keywords nicht in andere Begriffe um. Beispiel: "Asc 2" bleibt "Asc 2" und wird NICHT zu "Ascension Rank 2" oder ähnlichem erweitert.
+- Vermeide generische Füllphrasen wie "heute ist es soweit", "endlich soweit" oder ähnliche Trailer-Sätze.
+- Die Performance-Scores basieren auf Viewer-Zahlen als Proxy (keine echten CTR-Daten).
+
+ANTWORT-FORMAT (JSON, kein Markdown drumherum):
+{{
+  "primary_title": "<optimaler Titel>",
+  "alternatives": ["<Alternative 1>", "<Alternative 2>"],
+  "title_analysis": [
+    {{"title": "<schlechtester eigener Titel>", "score": <1-10>, "feedback": "<1 Satz>"}},
+    ...
+  ]
+}}"#
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -424,5 +573,43 @@ mod tests {
         };
         let result = sanitize_title_result(parsed, "ranked", None);
         assert_eq!(result.primary, "Fallback Titel");
+    }
+
+    #[test]
+    fn prompt_emoji_regel_und_keine_daten_fallback() {
+        let p = build_title_prompt("ranked grind", &[], &[], None, 0.0, None);
+        assert!(p.contains("Verwende KEINE Emojis im Titel."));
+        assert!(p.contains("KEYWORDS (Intent des Streamers heute): ranked grind\n"));
+        assert!(p.contains("  (keine Daten)"));
+        assert!(p.contains("Deadlock-Ränge heißen nur: Obscurus, Seeker"));
+
+        let p2 = build_title_prompt("x", &[], &[], None, 0.5, None);
+        assert!(p2.contains("Verwende maximal einen Emoji"));
+    }
+
+    #[test]
+    fn prompt_rank_live_und_top_sortierung() {
+        let hist = vec![
+            PromptHistoryItem {
+                title: "Schwach".into(),
+                relative_perf: Some(0.5),
+                engagement_rate: Some(0.1),
+            },
+            PromptHistoryItem {
+                title: "Stark".into(),
+                relative_perf: Some(2.0),
+                engagement_rate: Some(0.3),
+            },
+        ];
+        let live = PromptLiveState {
+            hero: Some("Haze".into()),
+            party_hint: None,
+        };
+        let p = build_title_prompt("ranked", &hist, &[], Some("Archon 3"), 0.0, Some(&live));
+        assert!(p.contains("Streamer-Rang: Archon 3"));
+        // party_hint None → Python-Default "solo".
+        assert!(p.contains("Aktuelle Live-Daten: Hero=Haze, Party=solo"));
+        // Top-Referenzen sind nach Perf sortiert: "Stark" (2.0) vor "Schwach" (0.5).
+        assert!(p.find("Stark").unwrap() < p.find("Schwach").unwrap());
     }
 }
