@@ -208,6 +208,27 @@ impl TokenBlacklistStore {
         .execute(&mut *tx)
         .await?;
 
+        // Partner-Mirror (Python _mark_reauth_required -> set_partner_raid_bot_enabled +
+        // twitch_partners-UPDATE): ohne diesen Spiegel bleibt der Partner nach
+        // invalid_grant auf raid_bot_enabled=1 / ohne technical_pause_reason, und
+        // Dashboard-/Analytics-Gates, die auf 'token_error' reagieren, greifen nicht.
+        // Guards wie Python: manueller Opt-out und 'bot_banned' werden NICHT
+        // überschrieben. Die Gegenrichtung (Re-Auth) hebt 'token_error' in
+        // auth_writer::store_new_auth wieder auf.
+        sqlx::query(
+            "UPDATE twitch_partners
+                SET technical_pause_reason = CASE
+                        WHEN COALESCE(manual_partner_opt_out, 0) = 1 THEN technical_pause_reason
+                        WHEN LOWER(COALESCE(technical_pause_reason, '')) = 'bot_banned' THEN technical_pause_reason
+                        ELSE 'token_error'
+                    END,
+                    raid_bot_enabled = 0
+              WHERE twitch_user_id = $1",
+        )
+        .bind(twitch_user_id)
+        .execute(&mut *tx)
+        .await?;
+
         tx.commit().await?;
         Ok(())
     }

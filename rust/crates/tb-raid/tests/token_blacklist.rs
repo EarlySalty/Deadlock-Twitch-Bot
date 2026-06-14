@@ -68,6 +68,19 @@ async fn pool_in_schema(dsn: &str, schema: &str) -> PgPool {
     .execute(&pool)
     .await
     .unwrap();
+    // add_to_blacklist spiegelt den Pause-Grund in twitch_partners.
+    sqlx::query(
+        "CREATE TABLE twitch_partners (
+            twitch_user_id TEXT,
+            twitch_login TEXT,
+            technical_pause_reason TEXT,
+            raid_bot_enabled INTEGER DEFAULT 1,
+            manual_partner_opt_out INTEGER DEFAULT 0
+        )",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
     pool
 }
 
@@ -170,4 +183,50 @@ async fn clear_loescht_den_eintrag() {
         .await
         .unwrap();
     assert_eq!(count, 0);
+}
+
+#[tokio::test]
+async fn add_spiegelt_token_error_in_partner_mit_guards() {
+    let pool = pool_or_skip!("t6b_bl_mirror");
+    let store = TokenBlacklistStore::new(pool.clone());
+
+    // Drei Partner: normal, manueller Opt-out, bot_banned.
+    sqlx::query(
+        "INSERT INTO twitch_partners (twitch_user_id, twitch_login, technical_pause_reason, raid_bot_enabled, manual_partner_opt_out)
+         VALUES ('42','drag',NULL,1,0), ('77','optout',NULL,1,1), ('88','banned','bot_banned',1,0)",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    store.add_to_blacklist("42", "drag", "boom").await;
+    store.add_to_blacklist("77", "optout", "boom").await;
+    store.add_to_blacklist("88", "banned", "boom").await;
+
+    let row = |uid: &'static str| {
+        let pool = pool.clone();
+        async move {
+            sqlx::query_as::<_, (Option<String>, i32)>(
+                "SELECT technical_pause_reason, raid_bot_enabled FROM twitch_partners WHERE twitch_user_id=$1",
+            )
+            .bind(uid)
+            .fetch_one(&pool)
+            .await
+            .unwrap()
+        }
+    };
+
+    // Normaler Partner: token_error gesetzt, raid_bot_enabled=0.
+    let (reason, enabled) = row("42").await;
+    assert_eq!(reason.as_deref(), Some("token_error"));
+    assert_eq!(enabled, 0);
+
+    // Manueller Opt-out: Pause-Grund unangetastet (Guard), aber raid_bot_enabled=0.
+    let (reason, enabled) = row("77").await;
+    assert_eq!(reason, None, "manueller Opt-out überschreibt nicht auf token_error");
+    assert_eq!(enabled, 0);
+
+    // bot_banned: Pause-Grund bleibt bot_banned (Guard).
+    let (reason, _) = row("88").await;
+    assert_eq!(reason.as_deref(), Some("bot_banned"), "bot_banned bleibt erhalten");
 }
