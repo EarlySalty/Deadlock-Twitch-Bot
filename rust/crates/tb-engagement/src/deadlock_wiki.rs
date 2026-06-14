@@ -60,8 +60,9 @@ fn is_word_char(c: char) -> bool {
 }
 
 /// Wortgrenzen-Suche ohne Lookaround (mirror von `(?<!\w)needle(?!\w)`): `needle`
-/// kommt vor, wenn es weder von einem Wortzeichen umgeben ist.
-fn word_boundary_contains(haystack: &str, needle: &str) -> bool {
+/// kommt vor, wenn es weder von einem Wortzeichen umgeben ist. Auch von
+/// [`crate::deadlock_patches`] genutzt.
+pub(crate) fn word_boundary_contains(haystack: &str, needle: &str) -> bool {
     if needle.is_empty() {
         return false;
     }
