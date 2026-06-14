@@ -723,10 +723,12 @@ async fn main() {
         }
     }
 
-    // Post-Stream-A/B-Reports (B11): Backfill der letzten Sessions ohne done-
-    // Report beim Start + periodischer Retry fehlgeschlagener Reports (alle
-    // 30 min nach 1800s Startverzögerung). Wie Python in runtime_bootstrap als
-    // Background-Tasks gespawnt; beide partner-scoped und best-effort.
+    // Post-Stream-A/B-Reports (B11) + Title-Generator-Jobs: vier best-effort-
+    // Background-Tasks, in Python (runtime_bootstrap) gemeinsam im `if cog.api:`-
+    // Block gespawnt — gleiches An/Aus-Gate. Backfill der letzten Sessions ohne
+    // done-Report beim Start, Retry fehlgeschlagener Reports (alle 30 min nach
+    // 1800s), nächtlicher Knowledge-Job (nach 300s, dann täglich) und
+    // wöchentlicher Insight-Job (nach 600s, dann alle 7 Tage).
     {
         let backfill_pool = pool.clone();
         tokio::spawn(async move {
@@ -735,6 +737,14 @@ async fn main() {
         tokio::spawn(tb_analytics::post_stream::schedule_report_retry_job(
             pool.clone(),
             1800,
+        ));
+        tokio::spawn(tb_chat::title_jobs::schedule_nightly_knowledge_job(
+            pool.clone(),
+            300,
+        ));
+        tokio::spawn(tb_chat::title_jobs::schedule_weekly_insight_job(
+            pool.clone(),
+            600,
         ));
     }
 
