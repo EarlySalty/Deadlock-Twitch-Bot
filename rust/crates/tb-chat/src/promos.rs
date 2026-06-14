@@ -100,10 +100,6 @@ const PROMO_RUNTIME_STATE_MAX_AGE_SEC: u64 = 86400;
 const PROMO_RUNTIME_PRUNE_INTERVAL_SEC: u64 = 60;
 /// Fallback-Discord-Invite (constants.py: PROMO_DISCORD_INVITE).
 const PROMO_DISCORD_INVITE: &str = "https://discord.gg/z5TfVHuQq2";
-/// Scam-Warning-Cooldown in Minuten (constants.py: SCAM_WARNING_COOLDOWN_MIN).
-const SCAM_WARNING_COOLDOWN_MIN: u64 = 120;
-/// Scam-Warning-Anfangsverzögerung in Minuten (constants.py: SCAM_WARNING_INITIAL_DELAY_MIN).
-const SCAM_WARNING_INITIAL_DELAY_MIN: u64 = 20;
 /// Stammgast: mind. 10 Messages in 30 Tagen (targeted_promo.py:33–34).
 const STAMMGAST_MIN_MESSAGES: i64 = 10;
 const STAMMGAST_DAYS: i64 = 30;
@@ -198,14 +194,6 @@ fn activity_promo_messages() -> Vec<&'static str> {
     pool.extend(promo_messages_community());
     pool.extend(promo_messages_growth());
     pool
-}
-
-/// Scam-Warning-Texte (constants.py:236–246).
-fn scam_warning_texts() -> Vec<&'static str> {
-    vec![
-        "⚠️ Achtung: „Deadlock Discord Deutschland\" und „Deadlock German Competitiv HUB\" sind NICHT unsere Server und könnten Fake/Scam sein. Unser einziger offizieller Discord: {invite}",
-        "⚠️ Vorsicht vor „Deadlock Discord Deutschland\" und „Deadlock German Competitiv HUB\" – das sind nicht wir und könnte Scam sein. Offizieller Discord: {invite}",
-    ]
 }
 
 // ---------------------------------------------------------------------------
@@ -398,16 +386,12 @@ struct ChannelState {
     chatter_dedupe: HashMap<String, Instant>,
     /// Letzter gesendeter Promo-Text (Anti-Repeat) — promos.py:975.
     last_promo_text: Option<String>,
-    /// Letzter gesendeter Scam-Warning-Text (Anti-Repeat) — promos.py:121.
-    last_scam_warning_text: Option<String>,
     /// Monotonic-Timestamp letzte Promo — promos.py:1046.
     last_promo_sent: Option<Instant>,
     /// Monotonic-Timestamp letzter Attempt — promos.py:1046.
     last_promo_attempt: Option<Instant>,
     /// Monotonic-Timestamp letzter Viewer-Spike — promos.py:1046.
     last_promo_viewer_spike: Option<Instant>,
-    /// Monotonic-Timestamp letzte Scam-Warning — promos.py:1046.
-    last_scam_warning_sent: Option<Instant>,
     /// Roh-Nachrichten seit letzter Promo — promos.py:550.
     raw_msg_count_since_promo: usize,
     /// Letztes Chat-Event-Timestamp (für Spike-Silence-Check) — promos.py:550.
@@ -428,11 +412,9 @@ impl ChannelState {
             activity: VecDeque::with_capacity(64),
             chatter_dedupe: HashMap::new(),
             last_promo_text: None,
-            last_scam_warning_text: None,
             last_promo_sent: None,
             last_promo_attempt: None,
             last_promo_viewer_spike: None,
-            last_scam_warning_sent: None,
             raw_msg_count_since_promo: 0,
             last_raw_chat_message_ts: None,
             seen_chatters: HashMap::new(),
@@ -751,11 +733,6 @@ impl PromoEngine {
             if overall_ready && activity_ready && self.stream_start_delay_ok(login).await {
                 let (invite, _is_specific) = self.invite_resolver.resolve_invite(login).await;
 
-                // Scam-Warning-Slot (promos.py:1466).
-                if self.maybe_send_scam_warning(login, channel_id, &invite, now, "promo").await {
-                    continue;
-                }
-
                 // Targeted-Promo-Slot (targeted_promo.py:198).
                 let active_chatters = self.get_active_chatters(login).await;
                 if self.maybe_send_targeted_promo(login, channel_id, &invite, &active_chatters, now).await {
@@ -825,12 +802,6 @@ impl PromoEngine {
         }
         // Invite-Auflösung (promos.py:1096).
         let (invite, is_specific) = self.invite_resolver.resolve_invite(login).await;
-
-        // Scam-Warning-Slot (promos.py:1096).
-        if (reason == "promo" || reason == "chat_activity")
-            && self.maybe_send_scam_warning(login, channel_id, &invite, now, reason).await {
-                return true;
-            }
 
         // Promo-Text bauen (promos.py:945).
         let text = self.build_promo_text(login, &invite, reason).await;
@@ -1052,111 +1023,6 @@ impl PromoEngine {
             None => true,
             Some(last) => now.duration_since(last).as_secs() >= PROMO_ATTEMPT_COOLDOWN_MIN * 60,
         }
-    }
-
-    /// Scam-Warning-Fälligkeit (promos.py:981: `_scam_warning_due`).
-    fn scam_warning_due_inner(&self, state: &ChannelState, now: Instant, reason: &str) -> bool {
-        // Nur bei "promo" oder "chat_activity".
-        if reason != "promo" && reason != "chat_activity" {
-            return false;
-        }
-
-        match state.last_scam_warning_sent {
-            None => {
-                // Allererster Aufruf: Seed setzen (Timer gesät, return false).
-                // Effekt: Warnung wird fällig nach ≈20 Min (promos.py:981).
-                // Wir geben false zurück — das Seed-Setzen passiert im Aufrufer.
-                false
-            }
-            Some(last) => {
-                now.duration_since(last).as_secs() >= SCAM_WARNING_COOLDOWN_MIN * 60
-            }
-        }
-    }
-
-    /// Scam-Warning senden (promos.py:1032: `_maybe_send_scam_warning`).
-    /// Gibt true zurück wenn gesendet (Slot verbraucht).
-    async fn maybe_send_scam_warning(
-        &self,
-        login: &str,
-        channel_id: &str,
-        invite: &str,
-        now: Instant,
-        reason: &str,
-    ) -> bool {
-        // Seed-Phase: wenn noch nie eine Scam-Warning gesendet wurde, Timer initialisieren
-        // und in DB persistieren damit er Neustarts überlebt (promos.py:981: _persist_scam_warning_ts).
-        let seed_wall_ts: Option<f64> = {
-            let state_ref = self.channel_states.entry(login.to_string()).or_insert_with(|| Mutex::new(ChannelState::new()));
-            let mut state = state_ref.lock().await;
-            if state.last_scam_warning_sent.is_none() {
-                let initial_delay = Duration::from_secs(SCAM_WARNING_COOLDOWN_MIN * 60)
-                    - Duration::from_secs(SCAM_WARNING_INITIAL_DELAY_MIN * 60);
-                state.last_scam_warning_sent = now.checked_sub(initial_delay);
-                Some((Utc::now().timestamp() as f64) - initial_delay.as_secs_f64())
-            } else {
-                None
-            }
-        }; // DashMap-Ref und MutexGuard hier freigegeben — async-safe
-        if let Some(wall_ts) = seed_wall_ts {
-            self.save_promo_cooldown(login, "scam_warning", wall_ts).await;
-            return false;
-        }
-
-        // Fälligkeit prüfen.
-        let should_send = {
-            let state_ref = self.channel_states.entry(login.to_string()).or_insert_with(|| Mutex::new(ChannelState::new()));
-            let state = state_ref.lock().await;
-            self.scam_warning_due_inner(&state, now, reason)
-        };
-
-        if !should_send {
-            return false;
-        }
-
-        // Text bauen (Anti-Repeat, promos.py:1032).
-        let text = {
-            let state_ref = self.channel_states.entry(login.to_string()).or_insert_with(|| Mutex::new(ChannelState::new()));
-            let state = state_ref.lock().await;
-            let texts = scam_warning_texts();
-            let pool: Vec<&str> = if let Some(ref last) = state.last_scam_warning_text {
-                let filtered: Vec<&str> = texts.iter().copied().filter(|t| *t != last.as_str()).collect();
-                if filtered.is_empty() { texts } else { filtered }
-            } else {
-                texts
-            };
-            let mut rng = rand::thread_rng();
-            let template = pool.choose(&mut rng).copied().unwrap_or(scam_warning_texts()[0]);
-            template.replace("{invite}", invite)
-        };
-
-        // Announcement senden (promos.py:1084: `if not warned: return False`).
-        // Send-Ergebnis MUSS geprüft werden — sonst werden Promo-Slot, Scam-Cooldown
-        // und Anti-Repeat-State auch bei gedroppter/fehlgeschlagener Announcement
-        // (AutoMod-Drop, Rate-Limit, Mod-Timeout) verbraucht, obwohl im Chat nichts ankam.
-        let warned = self
-            .api
-            .send_announcement(channel_id, &text, "orange")
-            .await
-            .unwrap_or(false);
-        if !warned {
-            return false;
-        }
-
-        let wall_ts = Utc::now().timestamp() as f64;
-
-        // Markieren (promos.py:1032).
-        self.mark_promo_sent(login, now, reason, wall_ts).await;
-        {
-            let state_ref = self.channel_states.entry(login.to_string()).or_insert_with(|| Mutex::new(ChannelState::new()));
-            let mut state = state_ref.lock().await;
-            state.last_scam_warning_sent = Some(now);
-            state.last_scam_warning_text = Some(text);
-        }
-        self.save_promo_cooldown(login, "scam_warning", wall_ts).await;
-
-        info!(login, "Scam-Warning gesendet");
-        true
     }
 
     /// Viewer-Spike-Promo (promos.py:1306: `_maybe_send_viewer_spike_promo`).
@@ -1837,10 +1703,6 @@ impl PromoEngine {
                         state.last_promo_viewer_spike = mono_restored;
                     }
                 }
-                "scam_warning"
-                    if state.last_scam_warning_sent.is_none() => {
-                        state.last_scam_warning_sent = mono_restored;
-                    }
                 _ => {}
             }
         }
@@ -2059,42 +1921,6 @@ mod tests {
 
         let ready = engine.overall_promo_ready_inner(&state, now);
         assert!(ready, "91 min ≥ 90 min → ready");
-    }
-
-    // -----------------------------------------------------------------------
-    // Scam-Warning-Seeding und Cooldown
-    // -----------------------------------------------------------------------
-
-    #[tokio::test]
-    async fn scam_warning_erster_aufruf_gibt_false() {
-        let engine = make_engine_no_db();
-        let state = ChannelState::new();
-        let now = Instant::now();
-        // Kein last_scam_warning_sent → Seed-Fall → false.
-        let due = engine.scam_warning_due_inner(&state, now, "promo");
-        assert!(!due, "Erster Aufruf → Seed, kein Senden");
-    }
-
-    #[tokio::test]
-    async fn scam_warning_fällig_nach_120_min() {
-        let engine = make_engine_no_db();
-        let mut state = ChannelState::new();
-        let now = Instant::now();
-        state.last_scam_warning_sent = now.checked_sub(Duration::from_secs(121 * 60));
-
-        let due = engine.scam_warning_due_inner(&state, now, "promo");
-        assert!(due, "121 min ≥ 120 min → fällig");
-    }
-
-    #[tokio::test]
-    async fn scam_warning_nicht_fällig_für_viewer_spike() {
-        let engine = make_engine_no_db();
-        let mut state = ChannelState::new();
-        let now = Instant::now();
-        state.last_scam_warning_sent = now.checked_sub(Duration::from_secs(200 * 60));
-
-        let due = engine.scam_warning_due_inner(&state, now, "viewer_spike");
-        assert!(!due, "viewer_spike → niemals Scam-Warning");
     }
 
     // -----------------------------------------------------------------------

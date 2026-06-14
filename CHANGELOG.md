@@ -1,3 +1,11 @@
+## #217 — Warnung vor fremden Discord-Servern entfernt
+
+**Ausgangslage:** Der Bot hatte zwei feste Warn-Ansagen, die im Chat vor zwei fremden, nicht zu uns gehörenden Discord-Servern warnten („das könnte Fake/Scam sein, unser einziger offizieller Discord ist …"). Diese Warnungen liefen im selben Takt wie die normalen Discord-Promos: Nach Stream-Start gab es eine Anlaufzeit, danach wurde die Warnung im fälligen Promo-Slot bevorzugt vor einer normalen Promo gepostet und danach für rund zwei Stunden gesperrt, bevor sie erneut kommen durfte.
+
+**Was geändert wurde:** Beide Warntexte und die komplette Logik dahinter sind raus — der Bot postet diese Server-Warnungen nicht mehr.
+
+**Wie es funktioniert:** Im periodischen Promo-Slot belegte die Warnung bisher den ersten Platz: War sie fällig, ging sie raus und die normale Promo wurde für diesen Durchlauf übersprungen. Dieser Vorrang-Schritt fällt jetzt weg, dadurch greifen in einem fälligen Slot direkt wieder die regulären Discord-Promos. Der zugehörige eigene Sperr-/Anlauf-Timer und sein Speichern in der Datenbank entfallen ebenfalls; alte gespeicherte Warn-Sperren werden beim Start einfach ignoriert. Die übrige Promo- und Moderationslogik (inkl. der davon unabhängigen Scam-Pitch-Erkennung gegen Account-Übernahmen) bleibt unverändert.
+
 ## #216 — Stille Ban-/Raid-Hinweise jetzt auch im Dashboard schaltbar
 
 **Ausgangslage:** Ob der Bot eine Chat-Notiz postet, wenn er jemanden automatisch bannt oder einen Raid auslöst, ließ sich bisher nur per Chat-Befehl (`!silentban` / `!silentraid`) umschalten. Wer das lieber in Ruhe im Dashboard einstellen wollte, hatte dort keine Möglichkeit.

@@ -45,6 +45,7 @@ pub mod pending_raids;
 pub mod raid_blacklist;
 pub mod raid_executor;
 pub mod raid_history_store;
+pub mod raid_messaging;
 pub mod scope_profiles;
 pub mod score_store;
 pub mod score_tracking_store;
@@ -69,6 +70,7 @@ pub use arrival_tracking_store::{
     serialize_confirmation_signals, ArrivalTrackingStore, RecordArrivalInput,
 };
 pub use auth_writer::{AuthWriteError, AuthWriter, NewAuth};
+pub use raid_messaging::build_partner_raid_message;
 pub use external_recruitment_store::{
     decide_blacklist_action, BlacklistScheduleAction, ConfirmedExternalRecruitmentRaid,
     DueBlacklistPending, DueBotBanCheck, ExternalRecruitmentStore,
