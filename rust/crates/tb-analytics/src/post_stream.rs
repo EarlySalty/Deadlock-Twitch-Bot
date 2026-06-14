@@ -920,6 +920,113 @@ pub async fn top_chatters(pool: &PgPool, session_id: i64) -> serde_json::Value {
     )
 }
 
+// ---------------------------------------------------------------------------
+// Report-Snapshot: Viewer (Python report_builder.py `_viewer_curve` / `_viewer_presence`)
+// ---------------------------------------------------------------------------
+
+/// Viewer-Kurve einer Session (Python `_viewer_curve`). `max_points=None` →
+/// volle Kurve (raw_data.viewer_curve_full); `Some(n)` → Step-Sampling
+/// (`rows[::step][:n]`, step=max(1,len/n)), aber nur wenn len>n. Jede Zeile als
+/// `serde_json::Value`, da direkt in den Snapshot eingebettet.
+pub async fn viewer_curve(
+    pool: &PgPool,
+    session_id: i64,
+    max_points: Option<usize>,
+) -> Vec<serde_json::Value> {
+    let rows = sqlx::query_as::<_, (Option<i64>, Option<i64>)>(
+        "SELECT minutes_from_start::int8 AS minutes_from_start, \
+                viewer_count::int8 AS viewer_count \
+         FROM twitch_session_viewers \
+         WHERE session_id = $1 \
+         ORDER BY ts_utc",
+    )
+    .bind(session_id)
+    .fetch_all(pool)
+    .await
+    .unwrap_or_default();
+
+    let selected: Vec<(Option<i64>, Option<i64>)> = match max_points {
+        Some(mp) if rows.len() > mp => {
+            let step = (rows.len() / mp).max(1);
+            rows.into_iter().step_by(step).take(mp).collect()
+        }
+        _ => rows,
+    };
+
+    selected
+        .into_iter()
+        .map(|(minute, viewer_count)| {
+            serde_json::json!({
+                "minute": minute.unwrap_or(0),
+                "viewer_count": viewer_count.unwrap_or(0),
+            })
+        })
+        .collect()
+}
+
+/// Viewer-Präsenz aus 30-Sekunden-Ticks (Python `_viewer_presence`).
+/// `ticks * 0.5` = Präsenz-Minuten. CTE aggregiert pro Viewer; äußere Query →
+/// unique/avg/max, dazu Top-25 nach Tick-Zahl. `numeric` per `::float8` für
+/// sqlx-Decode. Gibt das `audience`-Snapshot-Objekt zurück.
+pub async fn viewer_presence(pool: &PgPool, session_id: i64) -> serde_json::Value {
+    let agg = sqlx::query_as::<_, (Option<i64>, Option<f64>, Option<f64>)>(
+        "WITH per_viewer AS ( \
+             SELECT viewer_login, COUNT(*)::int8 AS ticks \
+               FROM twitch_viewer_presence_ticks \
+              WHERE session_id = $1 \
+              GROUP BY viewer_login \
+         ) \
+         SELECT COUNT(*)::int8 AS unique_viewers, \
+                ROUND(AVG(ticks * 0.5)::numeric, 2)::float8 AS avg_present_min, \
+                ROUND(MAX(ticks * 0.5)::numeric, 2)::float8 AS max_present_min \
+           FROM per_viewer",
+    )
+    .bind(session_id)
+    .fetch_optional(pool)
+    .await
+    .ok()
+    .flatten();
+    let (unique_viewers, avg_present_min, max_present_min) = agg.unwrap_or((Some(0), None, None));
+
+    // ORDER BY COUNT(*) DESC entspricht dem Python-Alias `ticks DESC` (ticks wird
+    // hier nicht ausgegeben, nur present_min daraus).
+    let top_rows =
+        sqlx::query_as::<_, (Option<String>, Option<f64>, Option<String>, Option<String>)>(
+            "SELECT viewer_login, \
+                    ROUND((COUNT(*) * 0.5)::numeric, 2)::float8 AS present_min, \
+                    MIN(tick_at)::text AS first_seen_at, \
+                    MAX(tick_at)::text AS last_seen_at \
+               FROM twitch_viewer_presence_ticks \
+              WHERE session_id = $1 \
+              GROUP BY viewer_login \
+              ORDER BY COUNT(*) DESC \
+              LIMIT 25",
+        )
+        .bind(session_id)
+        .fetch_all(pool)
+        .await
+        .unwrap_or_default();
+
+    let most_present: Vec<serde_json::Value> = top_rows
+        .into_iter()
+        .map(|(login, present_min, first_at, last_at)| {
+            serde_json::json!({
+                "login": login, // Python: kein COALESCE → null möglich
+                "present_min": present_min.unwrap_or(0.0),
+                "first_seen_at": first_at.unwrap_or_default(),
+                "last_seen_at": last_at.unwrap_or_default(),
+            })
+        })
+        .collect();
+
+    serde_json::json!({
+        "unique_tracked_viewers": unique_viewers.unwrap_or(0),
+        "avg_present_min": avg_present_min.unwrap_or(0.0),
+        "max_present_min": max_present_min.unwrap_or(0.0),
+        "most_present_viewers": most_present,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1331,5 +1438,91 @@ mod tests {
         assert_eq!(digest["question_examples"].as_array().unwrap().len(), 1);
         // Peak-Minute nach messages: 2 vor 1.
         assert_eq!(digest["messages_per_minute_peaks"][0]["messages"], 2);
+    }
+
+    async fn viewer_pool_or_skip(schema: &str) -> Option<PgPool> {
+        let dsn = std::env::var("TB_TEST_DATABASE_URL").ok()?;
+        let pool = PgPoolOptions::new().max_connections(1).connect(&dsn).await.unwrap();
+        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE")).execute(&pool).await.unwrap();
+        sqlx::query(&format!("CREATE SCHEMA {schema}")).execute(&pool).await.unwrap();
+        sqlx::query(&format!("SET search_path TO {schema}")).execute(&pool).await.unwrap();
+        sqlx::query(
+            "CREATE TABLE twitch_session_viewers (session_id BIGINT, minutes_from_start INTEGER, \
+             viewer_count INTEGER, ts_utc TIMESTAMPTZ)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "CREATE TABLE twitch_viewer_presence_ticks (session_id BIGINT, viewer_login TEXT, \
+             tick_at TIMESTAMPTZ)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        Some(pool)
+    }
+
+    #[tokio::test]
+    async fn viewer_curve_sampling_und_presence() {
+        let Some(pool) = viewer_pool_or_skip("t6h_post_stream_viewer").await else { return };
+        sqlx::query(
+            "INSERT INTO twitch_session_viewers (session_id, minutes_from_start, viewer_count, ts_utc) VALUES \
+             (1,0,10,'2026-06-10T18:00:00+00'), \
+             (1,1,20,'2026-06-10T18:01:00+00'), \
+             (1,2,30,'2026-06-10T18:02:00+00'), \
+             (1,3,40,'2026-06-10T18:03:00+00'), \
+             (1,4,50,'2026-06-10T18:04:00+00')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        // max_points=None → volle Kurve.
+        let full = viewer_curve(&pool, 1, None).await;
+        assert_eq!(full.len(), 5);
+        assert_eq!(full[0]["minute"], 0);
+        assert_eq!(full[0]["viewer_count"], 10);
+        assert_eq!(full[4]["minute"], 4);
+
+        // max_points=2, 5 Zeilen → step=2 → Indizes 0,2.
+        let sampled = viewer_curve(&pool, 1, Some(2)).await;
+        assert_eq!(sampled.len(), 2);
+        assert_eq!(sampled[0]["minute"], 0);
+        assert_eq!(sampled[1]["minute"], 2);
+
+        // max_points=120 ≥ len → alle 5 (kein Sampling).
+        assert_eq!(viewer_curve(&pool, 1, Some(120)).await.len(), 5);
+
+        // Präsenz: alice 4 Ticks, bob 2, carol 1.
+        sqlx::query(
+            "INSERT INTO twitch_viewer_presence_ticks (session_id, viewer_login, tick_at) VALUES \
+             (1,'alice','2026-06-10T18:00:00+00'), \
+             (1,'alice','2026-06-10T18:00:30+00'), \
+             (1,'alice','2026-06-10T18:01:00+00'), \
+             (1,'alice','2026-06-10T18:01:30+00'), \
+             (1,'bob','2026-06-10T18:00:00+00'), \
+             (1,'bob','2026-06-10T18:00:30+00'), \
+             (1,'carol','2026-06-10T18:00:00+00')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let presence = viewer_presence(&pool, 1).await;
+        assert_eq!(presence["unique_tracked_viewers"], 3);
+        // avg(2.0,1.0,0.5)=3.5/3=1.1667 → round2 1.17; max=2.0 (alice 4*0.5).
+        assert_eq!(presence["avg_present_min"], 1.17);
+        assert_eq!(presence["max_present_min"], 2.0);
+        let top = presence["most_present_viewers"].as_array().unwrap();
+        assert_eq!(top[0]["login"], "alice");
+        assert_eq!(top[0]["present_min"], 2.0);
+        assert_eq!(top.len(), 3);
+
+        // Leere Session → 0-Werte, leere Liste.
+        let empty = viewer_presence(&pool, 999).await;
+        assert_eq!(empty["unique_tracked_viewers"], 0);
+        assert_eq!(empty["avg_present_min"], 0.0);
+        assert!(empty["most_present_viewers"].as_array().unwrap().is_empty());
     }
 }
