@@ -271,6 +271,9 @@ pub struct RaidEventSubHooks {
     /// Go-Live-ReAuth-Reminder (B11); `None`, wenn kein nativer Chat-Send-Pfad
     /// gebootet ist (TB_CHAT_ENABLED≠1).
     pub reauth_reminder: Option<Arc<ReauthReminder>>,
+    /// Pool für die Post-Stream-Analyse (B11), die in `on_stream_offline`
+    /// fire-and-forget getriggert wird.
+    pub pool: PgPool,
 }
 
 #[async_trait::async_trait]
@@ -332,6 +335,19 @@ impl EventSubHooks for RaidEventSubHooks {
         self.offline
             .handle_streamer_offline(twitch_user_id, login)
             .await;
+
+        // Post-Stream-Analyse (B11): fire-and-forget wie Python `create_task`,
+        // damit der KI-schwere A/B-Trigger den sequenziellen EventSub-Dispatcher
+        // nicht blockiert. Der Login (lowercased) genügt — der Trigger sucht die
+        // letzte abgeschlossene Session selbst (im stream_offline_state-Effekt
+        // wurde sie bereits finalisiert).
+        if let Some(login) = login.map(str::trim).filter(|l| !l.is_empty()) {
+            let pool = self.pool.clone();
+            let streamer = login.to_lowercase();
+            tokio::spawn(async move {
+                tb_analytics::post_stream::trigger_post_stream_analysis(&pool, &streamer, None).await;
+            });
+        }
     }
 
     async fn on_channel_raid(&self, event: &Value, _message_id: Option<&str>) {

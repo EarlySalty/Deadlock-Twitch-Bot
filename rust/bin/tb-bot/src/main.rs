@@ -623,6 +623,7 @@ async fn main() {
                 arrival,
                 guard: blacklist_guard,
                 reauth_reminder,
+                pool: pool.clone(),
             })
         }
         (Some(manager), _, cipher) => {
