@@ -7,6 +7,7 @@
 //! ([`build_baseline_system_prompt`] + [`SOUL`]). Der reqwest-Client folgt in 3b.
 
 use std::sync::OnceLock;
+use std::time::Duration;
 
 use regex::Regex;
 
@@ -216,9 +217,170 @@ sagen') und niemals dir was zusammenspinnen."
     )
 }
 
+/// Fehler beim Modell-Aufruf — beide Varianten mappt die Pipeline auf
+/// `PROVIDER_ERROR` (Python: `LLMProviderUnavailable` vs. generische Exception).
+#[derive(Debug)]
+pub enum GenerateError {
+    /// Kein API-Key gesetzt.
+    Unavailable(LlmProviderUnavailable),
+    /// Request/Parse fehlgeschlagen (Netzwerk, non-2xx, ungültiger Body).
+    Http(String),
+}
+
+impl std::fmt::Display for GenerateError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            GenerateError::Unavailable(e) => write!(f, "{e}"),
+            GenerateError::Http(e) => write!(f, "MiniMax-Call fehlgeschlagen: {e}"),
+        }
+    }
+}
+
+impl std::error::Error for GenerateError {}
+
+/// Async-Client für MiniMax M3 über den OpenAI-kompatiblen `/chat/completions`-
+/// Endpunkt (Port von `EngagementMinimaxClient`).
+pub struct EngagementMinimaxClient {
+    api_key: Option<String>,
+    base_url: String,
+    model: String,
+    timeout: Duration,
+}
+
+impl EngagementMinimaxClient {
+    /// Baut den Client; `None`-Parameter ziehen aus Env bzw. Defaults. Key:
+    /// `MINIMAX_TOKEN_PLAN_KEY` → `MINIMAX_API_KEY`. Base-URL: `MINIMAX_BASE_URL`
+    /// → [`DEFAULT_BASE_URL`]. Modell: `ENGAGEMENT_MINIMAX_MODEL` → [`DEFAULT_MODEL`].
+    pub fn new(
+        api_key: Option<String>,
+        base_url: Option<String>,
+        model: Option<String>,
+        timeout: Option<Duration>,
+    ) -> Self {
+        let api_key = api_key
+            .filter(|k| !k.is_empty())
+            .or_else(|| nonempty_env("MINIMAX_TOKEN_PLAN_KEY"))
+            .or_else(|| nonempty_env("MINIMAX_API_KEY"));
+        let base_url = base_url
+            .filter(|u| !u.is_empty())
+            .or_else(|| nonempty_env("MINIMAX_BASE_URL"))
+            .unwrap_or_else(|| DEFAULT_BASE_URL.to_string());
+        let model = model
+            .filter(|m| !m.is_empty())
+            .or_else(|| nonempty_env("ENGAGEMENT_MINIMAX_MODEL"))
+            .unwrap_or_else(|| DEFAULT_MODEL.to_string());
+        Self {
+            api_key,
+            base_url,
+            model,
+            timeout: timeout.unwrap_or_else(|| Duration::from_secs(30)),
+        }
+    }
+
+    /// Generiert eine Chat-Antwort. `messages = [system] + history` (Sprecher
+    /// wird in den Content gefaltet, s. Insight), `temperature=0.7`. Die
+    /// Rohantwort läuft durch [`process_response_text`]; `text == None` =
+    /// Schweigen.
+    pub async fn generate(
+        &self,
+        system_prompt: &str,
+        history: &[ChatMessage],
+        max_output_tokens: i64,
+        max_answer_len: usize,
+    ) -> Result<ChatResponse, GenerateError> {
+        let api_key = self.api_key.as_deref().ok_or_else(|| {
+            GenerateError::Unavailable(LlmProviderUnavailable("MINIMAX_API_KEY not set".to_string()))
+        })?;
+
+        let mut messages = vec![serde_json::json!({"role": "system", "content": system_prompt})];
+        for turn in history {
+            // Sprecher in den Content falten statt ins name-Feld: MiniMax verlangt
+            // über alle Messages konsistente name-Werte (Fehler 2013), was bei
+            // Multi-User-Chat bricht.
+            let content = match &turn.name {
+                Some(name) => format!("{name}: {}", turn.content),
+                None => turn.content.clone(),
+            };
+            messages.push(serde_json::json!({"role": turn.role, "content": content}));
+        }
+        let body = serde_json::json!({
+            "model": self.model,
+            "messages": messages,
+            "max_tokens": max_output_tokens,
+            "temperature": 0.7,
+        });
+
+        let client = reqwest::Client::builder()
+            .timeout(self.timeout)
+            .build()
+            .map_err(|e| GenerateError::Http(e.to_string()))?;
+        let url = format!("{}/chat/completions", self.base_url.trim_end_matches('/'));
+
+        let started = std::time::Instant::now();
+        let resp = client
+            .post(&url)
+            .header("Authorization", format!("Bearer {api_key}"))
+            .json(&body)
+            .send()
+            .await
+            .map_err(|e| GenerateError::Http(e.to_string()))?
+            .error_for_status()
+            .map_err(|e| GenerateError::Http(e.to_string()))?;
+        let payload: serde_json::Value = resp
+            .json()
+            .await
+            .map_err(|e| GenerateError::Http(e.to_string()))?;
+        let latency_ms = started.elapsed().as_millis() as i64;
+
+        let raw_text = payload
+            .get("choices")
+            .and_then(serde_json::Value::as_array)
+            .and_then(|a| a.first())
+            .and_then(|c| c.get("message"))
+            .and_then(|m| m.get("content"))
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("")
+            .trim()
+            .to_string();
+        let text = process_response_text(&raw_text, max_answer_len);
+
+        let usage = payload.get("usage");
+        let prompt_tokens = usage
+            .and_then(|u| u.get("prompt_tokens"))
+            .and_then(serde_json::Value::as_i64);
+        let completion_tokens = usage
+            .and_then(|u| u.get("completion_tokens"))
+            .and_then(serde_json::Value::as_i64);
+
+        Ok(ChatResponse {
+            text,
+            model: self.model.clone(),
+            prompt_tokens,
+            completion_tokens,
+            latency_ms,
+        })
+    }
+}
+
+/// Env-Var nur wenn gesetzt UND nicht leer (mirror von Pythons `or`-Kette).
+fn nonempty_env(var: &str) -> Option<String> {
+    std::env::var(var).ok().filter(|v| !v.is_empty())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use wiremock::matchers::{body_string_contains, method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    fn client_for(server: &MockServer) -> EngagementMinimaxClient {
+        EngagementMinimaxClient::new(
+            Some("test-key".to_string()),
+            Some(server.uri()),
+            Some("MiniMax-M3".to_string()),
+            None,
+        )
+    }
 
     #[test]
     fn sanitize_collapse_und_command_strip() {
@@ -258,5 +420,77 @@ mod tests {
         assert!(p.contains("Twitch-Chat von nani")); // Streamer interpoliert
         assert!(p.contains(SILENT_MARKER)); // Silent-Marker
         assert!(p.contains("ü ö ä ß")); // echte Umlaute erhalten
+    }
+
+    fn history() -> Vec<ChatMessage> {
+        vec![ChatMessage {
+            role: "user".to_string(),
+            content: "bebop auf der lane?".to_string(),
+            name: Some("chatter1".to_string()),
+        }]
+    }
+
+    #[tokio::test]
+    async fn generate_parst_antwort_und_tokens() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/chat/completions"))
+            // Sprecher in den Content gefaltet:
+            .and(body_string_contains("chatter1: bebop auf der lane?"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "choices": [{"message": {"content": "klar, bebop ist stark"}}],
+                "usage": {"prompt_tokens": 42, "completion_tokens": 7}
+            })))
+            .mount(&server)
+            .await;
+
+        let client = client_for(&server);
+        let resp = client
+            .generate("system", &history(), 500, 480)
+            .await
+            .unwrap();
+        assert_eq!(resp.text.as_deref(), Some("klar, bebop ist stark"));
+        assert_eq!(resp.prompt_tokens, Some(42));
+        assert_eq!(resp.completion_tokens, Some(7));
+        assert_eq!(resp.model, "MiniMax-M3");
+    }
+
+    #[tokio::test]
+    async fn generate_silent_marker_gibt_none() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/chat/completions"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "choices": [{"message": {"content": "<think>nix</think> <silent>"}}],
+                "usage": {"prompt_tokens": 10, "completion_tokens": 1}
+            })))
+            .mount(&server)
+            .await;
+
+        let resp = client_for(&server)
+            .generate("system", &history(), 500, 480)
+            .await
+            .unwrap();
+        assert_eq!(resp.text, None);
+        assert_eq!(resp.completion_tokens, Some(1)); // Tokens trotzdem da
+    }
+
+    #[tokio::test]
+    async fn generate_ohne_key_unavailable() {
+        let client = EngagementMinimaxClient::new(
+            Some(String::new()), // leer → kein Key (Env hier ignoriert)
+            Some("http://127.0.0.1:1".to_string()),
+            Some("MiniMax-M3".to_string()),
+            None,
+        );
+        // Nur valide, wenn keine Env-Keys gesetzt sind (Testprozess i.d.R. ohne).
+        if std::env::var("MINIMAX_TOKEN_PLAN_KEY").is_err()
+            && std::env::var("MINIMAX_API_KEY").is_err()
+        {
+            match client.generate("s", &[], 500, 480).await {
+                Err(GenerateError::Unavailable(_)) => {}
+                other => panic!("erwartete Unavailable, war {other:?}"),
+            }
+        }
     }
 }
