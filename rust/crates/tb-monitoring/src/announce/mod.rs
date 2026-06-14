@@ -6,6 +6,6 @@ pub mod template;
 
 pub use sink::{
     AnnounceConfigStore, AnnouncementSettings, AnnouncementTransport, BrokerAnnouncementSink,
-    NoVodPreview, VodPreviewSource,
+    LivePingRoleProvider, NoVodPreview, VodPreviewSource,
 };
 pub use template::{AnnouncementConfig, RenderedAnnouncement};

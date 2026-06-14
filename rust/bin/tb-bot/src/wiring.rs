@@ -4,11 +4,12 @@
 use std::sync::Arc;
 
 use serde_json::Value;
+use sqlx::PgPool;
 use tb_monitoring::poller::source::{ChannelInfo, ChannelInfoSource, SourceError, StreamSource};
 use tb_monitoring::sessions::tracker::FollowerCountSource;
 use tb_monitoring::{
-    AnnouncementTransport, EventSubHooks, RemoteSubscription, StreamSnapshot, SubscriptionManager,
-    SubscriptionTransport, VodPreviewSource,
+    AnnouncementTransport, EventSubHooks, LivePingRoleProvider, RemoteSubscription, StreamSnapshot,
+    SubscriptionManager, SubscriptionTransport, VodPreviewSource,
 };
 use tb_transport_discord::{BrokerRelay, DiscordBackend, EditRichMessage, SendRichMessage};
 use tb_transport_twitch::eventsub::CreateOutcome;
@@ -297,5 +298,89 @@ impl AnnouncementTransport for BrokerAnnouncementTransport {
             })
             .await?;
         Ok(())
+    }
+}
+
+/// Auto-Anlage der Live-Ping-Rolle via Master-Broker (Port von Python
+/// `embeds_mixin._ensure_live_ping_role`). Wird vom [`BrokerAnnouncementSink`]
+/// aufgerufen, wenn ein Partner mit aktiviertem Live-Ping aber ohne gesetzte
+/// `live_ping_role_id` live geht: legt eine mentionable Rolle „<login> ist live"
+/// an und persistiert die ID am aktiven Partner.
+pub struct LivePingRoleAuto {
+    pub relay: Arc<BrokerRelay>,
+    pub pool: PgPool,
+    pub guild_id: u64,
+}
+
+/// Rollenname wie Python `_sanitize_live_ping_role_name`
+/// (`embeds_mixin.py:79-86`): nur `[A-Za-z0-9 _-]` behalten, Whitespace
+/// kollabieren, leer → "STREAMER", Suffix " ist live", auf 100 Zeichen cappen.
+fn sanitize_live_ping_role_name(login: &str) -> String {
+    let filtered: String = login
+        .trim()
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric() || *c == ' ' || *c == '_' || *c == '-')
+        .collect();
+    let mut cleaned = filtered.split_whitespace().collect::<Vec<_>>().join(" ");
+    if cleaned.is_empty() {
+        cleaned = "STREAMER".to_string();
+    }
+    let name = format!("{cleaned} ist live");
+    name.chars().take(100).collect()
+}
+
+#[async_trait::async_trait]
+impl LivePingRoleProvider for LivePingRoleAuto {
+    async fn ensure_role(&self, login: &str, _twitch_user_id: &str) -> Option<i64> {
+        let name = sanitize_live_ping_role_name(login);
+        let reason = format!("Auto-created Twitch live ping role for {login}");
+        let role_id = match self
+            .relay
+            .create_role(self.guild_id, &name, true, &reason)
+            .await
+        {
+            Ok(id) if id > 0 => id,
+            Ok(_) => {
+                tracing::warn!(login, "Live-Ping-Rolle angelegt, aber role_id == 0");
+                return None;
+            }
+            Err(error) => {
+                tracing::warn!(%error, login, "Auto-Anlage der Live-Ping-Rolle fehlgeschlagen");
+                return None;
+            }
+        };
+
+        let role_id_i64 = role_id as i64;
+        let updated = sqlx::query(
+            r#"
+            UPDATE twitch_partners
+               SET live_ping_role_id = $1
+             WHERE id = (
+                   SELECT id FROM twitch_partners
+                    WHERE LOWER(twitch_login) = LOWER($2)
+                      AND status = 'active'
+                    ORDER BY id DESC
+                    LIMIT 1
+             )
+            "#,
+        )
+        .bind(role_id_i64)
+        .bind(login)
+        .execute(&self.pool)
+        .await;
+        match updated {
+            Ok(result) if result.rows_affected() > 0 => {}
+            Ok(_) => {
+                tracing::warn!(
+                    login,
+                    "Live-Ping-Rolle angelegt, aber kein aktiver Partner zum Persistieren gefunden"
+                );
+            }
+            Err(error) => {
+                tracing::warn!(%error, login, "Live-Ping-role_id konnte nicht persistiert werden");
+            }
+        }
+
+        Some(role_id_i64)
     }
 }

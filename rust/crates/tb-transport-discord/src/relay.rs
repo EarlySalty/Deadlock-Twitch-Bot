@@ -14,6 +14,7 @@ const SEND_PATH: &str = "/internal/master/v1/discord/send-rich-message";
 const EDIT_PATH: &str = "/internal/master/v1/discord/edit-rich-message";
 const RESOLVE_USER_PATH: &str = "/internal/master/v1/discord/resolve-user";
 const ADD_ROLE_PATH: &str = "/internal/master/v1/discord/member/add-role";
+const CREATE_ROLE_PATH: &str = "/internal/master/v1/discord/role/create";
 const MEMBERS_PATH: &str = "/internal/master/v1/discord/members";
 const TIMEOUT: Duration = Duration::from_secs(10);
 const RETRY_WAIT: Duration = Duration::from_secs(2);
@@ -80,6 +81,42 @@ struct AddRoleRequest {
     user_id: u64,
     role_id: u64,
     reason: String,
+}
+
+#[derive(serde::Serialize)]
+struct CreateRoleRequest {
+    guild_id: String,
+    name: String,
+    mentionable: bool,
+    reason: String,
+}
+
+/// Antwort auf `POST /discord/role/create`. `role_id` kann je nach Broker-
+/// Serialisierung als JSON-Number ODER als String (große Snowflakes)
+/// ankommen — beides wird auf u64 normalisiert.
+#[derive(serde::Deserialize)]
+struct CreateRoleResponse {
+    #[serde(deserialize_with = "deserialize_u64_flexible")]
+    role_id: u64,
+}
+
+/// Akzeptiert eine u64 sowohl als JSON-Number als auch als dezimalen String.
+fn deserialize_u64_flexible<'de, D>(deserializer: D) -> Result<u64, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    use serde::de::Error;
+    use serde::Deserialize as _;
+    match serde_json::Value::deserialize(deserializer)? {
+        serde_json::Value::Number(n) => n
+            .as_u64()
+            .ok_or_else(|| D::Error::custom("role_id ist keine gültige u64")),
+        serde_json::Value::String(s) => s
+            .trim()
+            .parse::<u64>()
+            .map_err(|_| D::Error::custom("role_id-String ist keine gültige u64")),
+        _ => Err(D::Error::custom("role_id hat unerwarteten Typ")),
+    }
 }
 
 impl BrokerRelay {
@@ -188,6 +225,35 @@ impl BrokerRelay {
         }
         Ok(())
     }
+
+    /// Legt eine Discord-Rolle über den Broker an
+    /// (`POST /discord/role/create`) und liefert die neue `role_id`.
+    pub async fn create_role(
+        &self,
+        guild_id: u64,
+        name: &str,
+        mentionable: bool,
+        reason: &str,
+    ) -> Result<u64, DiscordError> {
+        let payload = CreateRoleRequest {
+            guild_id: guild_id.to_string(),
+            name: name.to_string(),
+            mentionable,
+            reason: reason.to_string(),
+        };
+        let key = Self::idempotency_key("create-role", &payload);
+        let resp = self
+            .post_with_retry(CREATE_ROLE_PATH, &payload, &key)
+            .await?;
+        if !resp.status().is_success() {
+            let status = resp.status().as_u16();
+            let body = resp.text().await.unwrap_or_default();
+            return Err(DiscordError::BrokerError { status, body });
+        }
+        let parsed: CreateRoleResponse = resp.json().await?;
+        Ok(parsed.role_id)
+    }
+
     /// Holt alle nicht-Bot-Guild-Member vom Broker (loopback, kein Token).
     /// `GET /internal/master/v1/discord/members`
     pub async fn list_members(&self) -> Result<Vec<GuildMember>, DiscordError> {
@@ -451,6 +517,56 @@ mod tests {
         assert_eq!(body["user_id"], 2);
         assert_eq!(body["role_id"], 3);
         assert_eq!(body["reason"], "Twitch-Bot erfolgreich autorisiert");
+    }
+
+    #[tokio::test]
+    async fn create_role_parst_role_id_als_string() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/internal/master/v1/discord/role/create"))
+            .and(header("X-Internal-Token", "test-token"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "guild_id": "1",
+                "role_id": "1313624729466441769",
+                "name": "foo ist live"
+            })))
+            .mount(&server)
+            .await;
+
+        let relay = BrokerRelay::new(&test_config(&server.uri())).unwrap();
+        let role_id = relay
+            .create_role(1, "foo ist live", true, "Auto-created")
+            .await
+            .unwrap();
+        assert_eq!(role_id, 1313624729466441769);
+
+        let received = server.received_requests().await.unwrap();
+        let body: serde_json::Value = serde_json::from_slice(&received[0].body).unwrap();
+        assert_eq!(body["guild_id"], "1");
+        assert_eq!(body["name"], "foo ist live");
+        assert_eq!(body["mentionable"], true);
+        assert_eq!(body["reason"], "Auto-created");
+    }
+
+    #[tokio::test]
+    async fn create_role_parst_role_id_als_number() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/internal/master/v1/discord/role/create"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "guild_id": "1",
+                "role_id": 42u64,
+                "name": "bar ist live"
+            })))
+            .mount(&server)
+            .await;
+
+        let relay = BrokerRelay::new(&test_config(&server.uri())).unwrap();
+        let role_id = relay
+            .create_role(1, "bar ist live", true, "Auto-created")
+            .await
+            .unwrap();
+        assert_eq!(role_id, 42);
     }
 
     #[tokio::test]

@@ -84,7 +84,7 @@ use raid_arrival_wiring::RaidArrivalSinkImpl;
 use score_refresh::ScoreRefreshResolver;
 use wiring::{
     BrokerAnnouncementTransport, HelixFollowerSource, HelixStreamSource,
-    HelixSubscriptionTransport, HelixVodPreview, SubscriptionEventSubHooks,
+    HelixSubscriptionTransport, HelixVodPreview, LivePingRoleAuto, SubscriptionEventSubHooks,
 };
 
 /// Hooks des Poll-Loops: Go-Live → stream.offline-Subscription (wie EventSub),
@@ -740,6 +740,25 @@ async fn main() {
                             let vod: Arc<dyn VodPreviewSource> = Arc::new(HelixVodPreview {
                                 helix: helix_client.clone(),
                             });
+                            // Auto-Anlage der Live-Ping-Rolle nur verdrahten, wenn
+                            // eine Ziel-Guild bekannt ist (STREAMER_GUILD_ID →
+                            // MAIN_GUILD_ID, Muster aus oauth_followups.rs). Sonst
+                            // bleibt der Provider None → Warn-Fallback im Sink.
+                            let live_ping_role_provider: Option<
+                                Arc<dyn tb_monitoring::LivePingRoleProvider>,
+                            > = std::env::var("STREAMER_GUILD_ID")
+                                .ok()
+                                .or_else(|| std::env::var("MAIN_GUILD_ID").ok())
+                                .and_then(|v| v.trim().parse::<u64>().ok())
+                                .filter(|&g| g > 0)
+                                .map(|guild_id| {
+                                    Arc::new(LivePingRoleAuto {
+                                        relay: Arc::new(relay.clone()),
+                                        pool: pool.clone(),
+                                        guild_id,
+                                    })
+                                        as Arc<dyn tb_monitoring::LivePingRoleProvider>
+                                });
                             Arc::new(BrokerAnnouncementSink::new(
                                 Arc::new(BrokerAnnouncementTransport { relay }),
                                 AnnounceConfigStore::new(pool.clone()),
@@ -750,6 +769,7 @@ async fn main() {
                                     ref_code: std::env::var("TWITCH_DISCORD_REF_CODE").ok(),
                                     target_game: target_game.clone(),
                                 },
+                                live_ping_role_provider,
                             ))
                         }
                         Err(e) => {

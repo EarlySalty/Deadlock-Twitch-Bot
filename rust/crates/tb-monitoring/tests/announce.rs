@@ -11,7 +11,7 @@ use tb_monitoring::poller::hooks::{
 use tb_monitoring::poller::source::SourceError;
 use tb_monitoring::{
     AnnounceConfigStore, AnnouncementSettings, AnnouncementTransport, BrokerAnnouncementSink,
-    NoVodPreview, StreamSnapshot, TrackedEntry,
+    LivePingRoleProvider, NoVodPreview, StreamSnapshot, TrackedEntry,
 };
 
 mod support;
@@ -70,7 +70,35 @@ impl AnnouncementTransport for StubTransport {
     }
 }
 
+/// Stub des Live-Ping-Rollen-Providers: liefert eine konfigurierte Rollen-ID
+/// zurück und merkt sich die `ensure_role`-Aufrufe (login, twitch_user_id),
+/// damit der Sink-Pfad (Auto-Anlage beim Go-Live) ohne Discord/Broker prüfbar ist.
+#[derive(Default)]
+struct StubRoleProvider {
+    role_id: Option<i64>,
+    calls: Mutex<Vec<(String, String)>>,
+}
+
+#[async_trait::async_trait]
+impl LivePingRoleProvider for StubRoleProvider {
+    async fn ensure_role(&self, login: &str, twitch_user_id: &str) -> Option<i64> {
+        self.calls
+            .lock()
+            .unwrap()
+            .push((login.to_string(), twitch_user_id.to_string()));
+        self.role_id
+    }
+}
+
 fn sink_with(pool: &sqlx::PgPool, transport: Arc<StubTransport>) -> BrokerAnnouncementSink {
+    sink_with_provider(pool, transport, None)
+}
+
+fn sink_with_provider(
+    pool: &sqlx::PgPool,
+    transport: Arc<StubTransport>,
+    live_ping_role_provider: Option<Arc<dyn LivePingRoleProvider>>,
+) -> BrokerAnnouncementSink {
     BrokerAnnouncementSink::new(
         transport,
         AnnounceConfigStore::new(pool.clone()),
@@ -81,6 +109,7 @@ fn sink_with(pool: &sqlx::PgPool, transport: Arc<StubTransport>) -> BrokerAnnoun
             ref_code: Some("dc".to_string()),
             target_game: "Deadlock".to_string(),
         },
+        live_ping_role_provider,
     )
 }
 
@@ -116,6 +145,15 @@ fn live_request(login: &str) -> AnnounceLiveRequest {
         started_at_iso: Some("2026-06-09T17:30:00+00:00".to_string()),
         active_session_id: Some(1),
     }
+}
+
+/// Live-Ping aktiviert, aber noch KEINE Rollen-ID gesetzt → triggert im Sink
+/// den Auto-Anlage-Pfad (Provider) bzw. den Warn-Fallback ohne Provider.
+fn live_request_no_role(login: &str) -> AnnounceLiveRequest {
+    let mut req = live_request(login);
+    req.entry.live_ping_role_id = None;
+    req.entry.live_ping_enabled = true;
+    req
 }
 
 #[tokio::test]
@@ -206,4 +244,54 @@ async fn end_announcement_editiert_offline_embed() {
     let view = view_spec.as_ref().expect("Link-Button");
     assert_eq!(view["type"], "link_button");
     assert_eq!(view["url"], "https://www.twitch.tv/drag?ref=dc");
+}
+
+#[tokio::test]
+async fn live_ping_auto_anlage_nutzt_provider_rolle() {
+    let pool = pool_or_skip!("t4e_liveping_auto");
+    let transport = Arc::new(StubTransport::default());
+    let provider = Arc::new(StubRoleProvider {
+        role_id: Some(424242),
+        ..Default::default()
+    });
+    let sink = sink_with_provider(&pool, transport.clone(), Some(provider.clone()));
+
+    let result = sink
+        .announce_live(live_request_no_role("drag"))
+        .await
+        .expect("gesendet");
+
+    // Provider wurde mit login + twitch_user_id aufgerufen.
+    let calls = provider.calls.lock().unwrap();
+    assert_eq!(calls.as_slice(), &[("drag".to_string(), "42".to_string())]);
+    // Frisch angelegte Rolle landet im Ping-Text und in allowed_role_ids.
+    assert!(result.notification_text.contains("<@&424242>"));
+    let sends = transport.sends.lock().unwrap();
+    let (_, _, _, roles, _) = &sends[0];
+    assert!(roles.contains(&424242));
+}
+
+#[tokio::test]
+async fn live_ping_ohne_provider_faellt_auf_warn_zurueck() {
+    let pool = pool_or_skip!("t4e_liveping_nofallback");
+    let transport = Arc::new(StubTransport::default());
+    // Provider liefert None (z. B. Discord-Anlage scheitert) → kein Rollen-Ping.
+    let provider = Arc::new(StubRoleProvider {
+        role_id: None,
+        ..Default::default()
+    });
+    let sink = sink_with_provider(&pool, transport.clone(), Some(provider.clone()));
+
+    let result = sink
+        .announce_live(live_request_no_role("drag"))
+        .await
+        .expect("gesendet");
+
+    assert_eq!(provider.calls.lock().unwrap().len(), 1);
+    // Nur Alert-Mention, KEIN Rollen-Ping (kein zusätzliches <@&…> über 777).
+    assert!(result.notification_text.starts_with("<@&777>"));
+    assert!(!result.notification_text.contains("<@&424242>"));
+    let sends = transport.sends.lock().unwrap();
+    let (_, _, _, roles, _) = &sends[0];
+    assert!(!roles.iter().any(|&r| r != 777));
 }

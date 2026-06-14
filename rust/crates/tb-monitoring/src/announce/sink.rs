@@ -56,6 +56,19 @@ pub trait VodPreviewSource: Send + Sync {
     async fn latest_preview(&self, twitch_user_id: Option<&str>, login: &str) -> Option<String>;
 }
 
+/// Auto-Anlage der Live-Ping-Rolle, wenn ein Partner mit `live_ping_enabled`
+/// aber ohne `live_ping_role_id` live geht (Python
+/// `embeds_mixin._ensure_live_ping_role`). Die konkrete Impl liegt im
+/// Composition-Root (`tb-bot`): Discord-Rolle via Master-Broker anlegen und
+/// die ID in `twitch_partners.live_ping_role_id` persistieren.
+///
+/// `tb-monitoring` bleibt damit frei von Discord-/Broker-Wissen — der Port
+/// liefert nur die fertige Rollen-ID zurück (`None` = nicht anlegbar).
+#[async_trait::async_trait]
+pub trait LivePingRoleProvider: Send + Sync {
+    async fn ensure_role(&self, login: &str, twitch_user_id: &str) -> Option<i64>;
+}
+
 /// Quelle ohne VOD-Vorschau.
 pub struct NoVodPreview;
 
@@ -122,6 +135,7 @@ pub struct BrokerAnnouncementSink {
     configs: AnnounceConfigStore,
     vod: Arc<dyn VodPreviewSource>,
     settings: AnnouncementSettings,
+    live_ping_role_provider: Option<Arc<dyn LivePingRoleProvider>>,
     retry: Mutex<HashMap<String, RetryState>>,
 }
 
@@ -131,12 +145,14 @@ impl BrokerAnnouncementSink {
         configs: AnnounceConfigStore,
         vod: Arc<dyn VodPreviewSource>,
         settings: AnnouncementSettings,
+        live_ping_role_provider: Option<Arc<dyn LivePingRoleProvider>>,
     ) -> Self {
         Self {
             transport,
             configs,
             vod,
             settings,
+            live_ping_role_provider,
             retry: Mutex::new(HashMap::new()),
         }
     }
@@ -224,16 +240,32 @@ impl AnnouncementSink for BrokerAnnouncementSink {
                 }
                 mention_text = format!("<@&{role_id}>");
             } else if request.entry.live_ping_enabled {
-                // Live-Ping aktiviert, aber keine Rollen-ID gesetzt → der Ping
-                // fiele sonst STILL weg. Python (embeds_mixin.py:_ensure_live_ping_role)
-                // legte die Rolle beim Go-Live automatisch an; diese Auto-Erstellung
-                // ist im Rust-Port noch nicht portiert (braucht Discord-Guild-Write).
-                // Bis dahin den Ausfall sichtbar machen, damit die role_id im
-                // Dashboard nachgepflegt werden kann statt unbemerkt zu fehlen.
-                tracing::warn!(
-                    login = %login,
-                    "Live-Ping aktiviert, aber live_ping_role_id fehlt — Rollen-Ping übersprungen (role_id im Dashboard setzen)"
-                );
+                // Live-Ping aktiviert, aber keine Rollen-ID gesetzt. Python
+                // (embeds_mixin.py:_ensure_live_ping_role) legte die Rolle beim
+                // Go-Live automatisch an. Ist ein Provider verdrahtet, holen wir
+                // hier die (ggf. frisch angelegte + persistierte) Rollen-ID und
+                // verwenden den Ping sofort. Ohne Provider bleibt der Fallback:
+                // den Ausfall sichtbar machen, damit die role_id im Dashboard
+                // nachgepflegt werden kann statt unbemerkt zu fehlen.
+                let twitch_user_id = request.entry.twitch_user_id.as_deref().unwrap_or("");
+                let created = match &self.live_ping_role_provider {
+                    Some(provider) => provider.ensure_role(&login, twitch_user_id).await,
+                    None => None,
+                };
+                match created {
+                    Some(role_id) if role_id > 0 => {
+                        if !allowed_role_ids.contains(&role_id) {
+                            allowed_role_ids.push(role_id);
+                        }
+                        mention_text = format!("<@&{role_id}>");
+                    }
+                    _ => {
+                        tracing::warn!(
+                            login = %login,
+                            "Live-Ping aktiviert, aber live_ping_role_id fehlt — Rollen-Ping übersprungen (role_id im Dashboard setzen)"
+                        );
+                    }
+                }
             }
         }
 

@@ -41,7 +41,7 @@ pub use webhook_receiver::WebhookReceiver;
 
 pub use announce::{
     AnnounceConfigStore, AnnouncementSettings, AnnouncementTransport, BrokerAnnouncementSink,
-    NoVodPreview, VodPreviewSource,
+    LivePingRoleProvider, NoVodPreview, VodPreviewSource,
 };
 pub use dispatch::{DispatchOutcome, EventSubDispatcher, EventSubHooks, NoopEventSubHooks};
 pub use exp_sessions::{ExpSessionStore, ExpSessionTracker};
