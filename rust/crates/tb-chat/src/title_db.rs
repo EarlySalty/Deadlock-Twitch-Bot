@@ -140,6 +140,101 @@ pub async fn get_top_knowledge_titles(pool: &PgPool, limit: i64) -> Vec<Knowledg
     }
 }
 
+// ───────────────────────────────────────────────────────────────────────────
+// Schreib-Seite: gespeist von den Hintergrundjobs (knowledge_job/insight_job).
+// ───────────────────────────────────────────────────────────────────────────
+
+/// Anzahl aufgezeichneter Sessions eines Streamers (Python
+/// `get_streamer_session_count`). Kein aufgelöster Login → 0.
+pub async fn get_streamer_session_count(pool: &PgPool, streamer_id: &str) -> i64 {
+    let Some(login) = resolve_streamer_login(pool, streamer_id).await else {
+        return 0;
+    };
+    sqlx::query_scalar::<_, i64>(
+        "SELECT COUNT(*)::int8 FROM twitch_stream_sessions WHERE LOWER(streamer_login) = $1",
+    )
+    .bind(&login)
+    .fetch_one(pool)
+    .await
+    .unwrap_or(0)
+}
+
+/// Knowledge-Eintrag upserten (Python `upsert_knowledge_entry`): bei Konflikt
+/// (title, game_context) bleibt der höhere Score (`GREATEST`), und `quality_tier`
+/// richtet sich nach dem EINGEHENDEN Score (>2.0→3, >1.5→2, sonst 1). Bei einem
+/// frischen INSERT bleibt `quality_tier` auf dem Default 1 (Python-Verhalten:
+/// nur der UPDATE-Pfad setzt den Tier).
+#[allow(clippy::too_many_arguments)]
+pub async fn upsert_knowledge_entry(
+    pool: &PgPool,
+    title: &str,
+    keywords: &[String],
+    relative_perf: f64,
+    engagement_rate: f64,
+    history_weight: f64,
+    normalized_score: f64,
+    streamer_size: &str,
+    source_streamer: &str,
+) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "INSERT INTO title_generator_knowledge \
+         (title, keywords, relative_perf, engagement_rate, history_weight, \
+          normalized_score, streamer_size, source_streamer) \
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8) \
+         ON CONFLICT (title, game_context) \
+         DO UPDATE SET \
+             normalized_score = GREATEST(title_generator_knowledge.normalized_score, EXCLUDED.normalized_score), \
+             quality_tier = CASE WHEN EXCLUDED.normalized_score > 2.0 THEN 3 \
+                                 WHEN EXCLUDED.normalized_score > 1.5 THEN 2 \
+                                 ELSE 1 END",
+    )
+    .bind(title)
+    .bind(keywords)
+    .bind(relative_perf)
+    .bind(engagement_rate)
+    .bind(history_weight)
+    .bind(normalized_score)
+    .bind(streamer_size)
+    .bind(source_streamer)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+/// Wöchentlichen Insight-Datensatz speichern (Python `insert_insight`).
+/// `raw_response` als JSON-Text → `::jsonb` (= Python `json.dumps`).
+#[allow(clippy::too_many_arguments)]
+pub async fn insert_insight(
+    pool: &PgPool,
+    streamer_id: &str,
+    period_start: DateTime<Utc>,
+    period_end: DateTime<Utc>,
+    strengths: &str,
+    weaknesses: &str,
+    patterns: &str,
+    recommendations: &str,
+    raw_response: &serde_json::Value,
+) -> Result<(), sqlx::Error> {
+    let raw = serde_json::to_string(raw_response).unwrap_or_else(|_| "{}".to_string());
+    sqlx::query(
+        "INSERT INTO title_generator_insights \
+         (streamer_id, period_start, period_end, strengths, weaknesses, \
+          patterns, recommendations, raw_response) \
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb)",
+    )
+    .bind(streamer_id)
+    .bind(period_start)
+    .bind(period_end)
+    .bind(strengths)
+    .bind(weaknesses)
+    .bind(patterns)
+    .bind(recommendations)
+    .bind(raw)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -249,5 +344,92 @@ mod tests {
         );
         assert_eq!(titles[0].quality_tier, Some(3));
         assert_eq!(titles[1].title, "Mittel");
+    }
+
+    #[tokio::test]
+    async fn session_count_ueber_login_aufgeloest() {
+        let pool = pool_or_skip!("t6e_title_session_count");
+        sqlx::query("INSERT INTO twitch_streamers (twitch_user_id, twitch_login) VALUES ('900','StreamerX')")
+            .execute(&pool).await.unwrap();
+        sqlx::query(
+            "INSERT INTO twitch_stream_sessions (streamer_login, stream_title, avg_viewers, peak_viewers, followers_start, started_at) VALUES \
+             ('streamerx','a',10.0,20,100,'2026-06-10T18:00:00+00'), \
+             ('streamerx','b',20.0,30,100,'2026-06-11T18:00:00+00'), \
+             ('streamerx','c',30.0,40,100,'2026-06-12T18:00:00+00')",
+        )
+        .execute(&pool).await.unwrap();
+        assert_eq!(get_streamer_session_count(&pool, "900").await, 3);
+        assert_eq!(get_streamer_session_count(&pool, "404").await, 0); // unbekannte ID
+    }
+
+    #[tokio::test]
+    async fn upsert_knowledge_greatest_und_tier() {
+        let pool = pool_or_skip!("t6e_title_knowledge_upsert");
+        // Volle Tabelle (Minimal-Variante aus pool_in_schema hat nicht alle Spalten/UNIQUE).
+        sqlx::query("DROP TABLE title_generator_knowledge").execute(&pool).await.unwrap();
+        sqlx::query(
+            "CREATE TABLE title_generator_knowledge (\
+             id SERIAL PRIMARY KEY, title TEXT NOT NULL, keywords TEXT[] DEFAULT '{}', \
+             game_context TEXT NOT NULL DEFAULT 'deadlock', relative_perf FLOAT NOT NULL, \
+             engagement_rate FLOAT NOT NULL, history_weight FLOAT NOT NULL DEFAULT 1.0, \
+             normalized_score FLOAT NOT NULL, \
+             streamer_size TEXT CHECK (streamer_size IN ('small','medium','large')), \
+             source_streamer TEXT, \
+             quality_tier SMALLINT NOT NULL DEFAULT 1 CHECK (quality_tier IN (1,2,3)), \
+             UNIQUE (title, game_context))",
+        )
+        .execute(&pool).await.unwrap();
+        let kw = vec!["ranked".to_string(), "grind".to_string()];
+
+        // 1. Frischer INSERT: Score 1.5, quality_tier bleibt Default 1.
+        upsert_knowledge_entry(&pool, "X", &kw, 1.2, 0.05, 1.0, 1.5, "small", "s1").await.unwrap();
+        let (score, tier): (f64, i32) = sqlx::query_as(
+            "SELECT normalized_score::float8, quality_tier::int4 FROM title_generator_knowledge WHERE title='X'",
+        ).fetch_one(&pool).await.unwrap();
+        assert_eq!(score, 1.5);
+        assert_eq!(tier, 1); // INSERT-Pfad setzt keinen Tier
+
+        // 2. Konflikt mit niedrigerem Score 1.3 → GREATEST behält 1.5, Tier = CASE(1.3) = 1.
+        upsert_knowledge_entry(&pool, "X", &kw, 1.0, 0.04, 1.0, 1.3, "small", "s2").await.unwrap();
+        let (score2, tier2): (f64, i32) = sqlx::query_as(
+            "SELECT normalized_score::float8, quality_tier::int4 FROM title_generator_knowledge WHERE title='X'",
+        ).fetch_one(&pool).await.unwrap();
+        assert_eq!(score2, 1.5); // GREATEST(1.5, 1.3)
+        assert_eq!(tier2, 1);
+
+        // 3. Konflikt mit höherem Score 2.5 → Score 2.5, Tier = CASE(2.5) = 3.
+        upsert_knowledge_entry(&pool, "X", &kw, 2.0, 0.1, 1.0, 2.5, "large", "s3").await.unwrap();
+        let (score3, tier3): (f64, i32) = sqlx::query_as(
+            "SELECT normalized_score::float8, quality_tier::int4 FROM title_generator_knowledge WHERE title='X'",
+        ).fetch_one(&pool).await.unwrap();
+        assert_eq!(score3, 2.5);
+        assert_eq!(tier3, 3);
+
+        // Keine Duplikate (UNIQUE title, game_context).
+        let count: i64 = sqlx::query_scalar("SELECT COUNT(*)::int8 FROM title_generator_knowledge")
+            .fetch_one(&pool).await.unwrap();
+        assert_eq!(count, 1);
+    }
+
+    #[tokio::test]
+    async fn insert_insight_persistiert() {
+        let pool = pool_or_skip!("t6e_title_insight");
+        sqlx::query(
+            "CREATE TABLE title_generator_insights (\
+             id SERIAL PRIMARY KEY, streamer_id TEXT NOT NULL, generated_at TIMESTAMPTZ DEFAULT NOW(), \
+             period_start TIMESTAMPTZ NOT NULL, period_end TIMESTAMPTZ NOT NULL, \
+             strengths TEXT, weaknesses TEXT, patterns TEXT, recommendations TEXT, raw_response JSONB)",
+        )
+        .execute(&pool).await.unwrap();
+        let start = chrono::DateTime::parse_from_rfc3339("2026-05-17T00:00:00+00:00").unwrap().with_timezone(&Utc);
+        let end = chrono::DateTime::parse_from_rfc3339("2026-06-14T00:00:00+00:00").unwrap().with_timezone(&Utc);
+        let raw = serde_json::json!({"k": "v"});
+        insert_insight(&pool, "900", start, end, "stark", "schwach", "muster", "empfehlung", &raw).await.unwrap();
+        let (sid, strengths, raw_k): (String, Option<String>, Option<String>) = sqlx::query_as(
+            "SELECT streamer_id, strengths, raw_response->>'k' FROM title_generator_insights WHERE streamer_id='900'",
+        ).fetch_one(&pool).await.unwrap();
+        assert_eq!(sid, "900");
+        assert_eq!(strengths.as_deref(), Some("stark"));
+        assert_eq!(raw_k.as_deref(), Some("v")); // JSONB korrekt gespeichert
     }
 }
