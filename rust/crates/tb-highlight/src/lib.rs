@@ -19,3 +19,4 @@ pub mod deadlock_client;
 pub mod demo_analyzer;
 pub mod demo_downloader;
 pub mod event_detector;
+pub mod state;
