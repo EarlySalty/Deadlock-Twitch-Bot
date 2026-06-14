@@ -9,9 +9,18 @@
 //! Das ungenutzte `_score_events_with_demo` (kein Caller in Python) wird nicht
 //! portiert.
 
-use crate::config::{CLIP_POST_ROLL_SECONDS, CLIP_PRE_ROLL_SECONDS, MAX_CLIP_SECONDS};
-use crate::event_detector::HighlightEvent;
-use crate::state::{is_match_processed, HighlightState};
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+
+use sqlx::PgPool;
+
+use crate::config::{
+    CLIPS_DIR, CLIP_POST_ROLL_SECONDS, CLIP_PRE_ROLL_SECONDS, MAX_CLIP_SECONDS, STATE_PATH,
+};
+use crate::event_detector::{detect_events, HighlightEvent};
+use crate::state::{is_match_processed, mark_match_processed, HighlightState};
+use crate::twitch_vod::TwitchVodApi;
+use crate::{deadlock_client, demo_analyzer, demo_downloader, highlight_sender, partners, twitch_vod};
 
 /// Ein zu verarbeitendes Match (gefiltert + normalisiert aus der Match-History).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -86,6 +95,231 @@ fn as_int(value: Option<&serde_json::Value>) -> Option<i64> {
         Some(serde_json::Value::String(s)) => s.trim().parse::<i64>().ok(),
         Some(serde_json::Value::Bool(b)) => Some(i64::from(*b)),
         _ => None,
+    }
+}
+
+/// Laufzeit-Konfiguration des Highlight-Clippers (Pfade + Endpoints, alle
+/// injizierbar). [`Self::new`] füllt alles außer den extern aufzulösenden
+/// `boon`- und `yt-dlp`-Binärpfaden aus den Modul-Konstanten.
+#[derive(Debug, Clone)]
+pub struct HighlightClipperConfig {
+    pub boon_path: PathBuf,
+    pub yt_dlp_path: PathBuf,
+    pub steam_db_path: PathBuf,
+    pub steamids_json_path: PathBuf,
+    pub clips_dir: PathBuf,
+    pub demo_cache_dir: PathBuf,
+    pub state_path: PathBuf,
+    pub highlight_api_url: String,
+    pub deadlock_api_base: String,
+}
+
+impl HighlightClipperConfig {
+    /// Baut die Konfiguration mit Default-Pfaden; nur `boon`/`yt-dlp` müssen
+    /// (vom Aufrufer aufgelöst) übergeben werden.
+    pub fn new(boon_path: PathBuf, yt_dlp_path: PathBuf) -> Self {
+        Self {
+            boon_path,
+            yt_dlp_path,
+            steam_db_path: PathBuf::from(partners::STEAM_DB_DEFAULT),
+            steamids_json_path: PathBuf::from(partners::STEAMIDS_JSON_DEFAULT),
+            clips_dir: PathBuf::from(CLIPS_DIR),
+            demo_cache_dir: PathBuf::from(demo_downloader::DEMO_CACHE_DIR),
+            state_path: PathBuf::from(STATE_PATH),
+            highlight_api_url: highlight_sender::HIGHLIGHT_API_URL.to_string(),
+            deadlock_api_base: deadlock_client::DEADLOCK_API_BASE.to_string(),
+        }
+    }
+}
+
+/// Der Highlight-Clipper-Worker: hält Postgres-Pool, Twitch-API-Implementierung
+/// und Konfiguration. Ein Durchlauf = [`Self::run_once`] (Python `_run_once`);
+/// der Poll-Loop-Lifecycle wird beim Wiring in tb-bot aufgesetzt.
+pub struct HighlightClipperWorker {
+    pool: PgPool,
+    api: Arc<dyn TwitchVodApi>,
+    config: HighlightClipperConfig,
+}
+
+impl HighlightClipperWorker {
+    pub fn new(pool: PgPool, api: Arc<dyn TwitchVodApi>, config: HighlightClipperConfig) -> Self {
+        Self { pool, api, config }
+    }
+
+    /// Ein vollständiger Durchlauf über alle aktiven Partner.
+    pub async fn run_once(&self) {
+        let streamers = partners::get_partner_streamers(
+            &self.pool,
+            &self.config.steam_db_path,
+            &self.config.steamids_json_path,
+        )
+        .await;
+        if streamers.is_empty() {
+            tracing::info!("HighlightClipper: Keine aktiven Partner mit Steam-ID gefunden");
+            return;
+        }
+        tracing::info!(count = streamers.len(), "HighlightClipper: Partner werden verarbeitet");
+
+        let mut state = crate::state::load_state(&self.config.state_path);
+        let now = chrono::Utc::now().timestamp();
+
+        for (login, account_id_str) in streamers {
+            let Ok(account_id) = account_id_str.parse::<i64>() else {
+                continue;
+            };
+            self.process_streamer(&mut state, &login, account_id, now).await;
+        }
+    }
+
+    async fn process_streamer(
+        &self,
+        state: &mut HighlightState,
+        login: &str,
+        account_id: i64,
+        now: i64,
+    ) {
+        let matches =
+            deadlock_client::get_match_history(&self.config.deadlock_api_base, account_id, 10)
+                .await
+                .unwrap_or_default();
+        let recent = filter_recent_matches(&matches, state, login, now);
+        if recent.is_empty() {
+            return;
+        }
+
+        let channel_id = match twitch_vod::get_channel_id(self.api.as_ref(), login).await {
+            Some(c) => c,
+            None => {
+                tracing::warn!(login, "HighlightClipper: Kein Twitch-Channel");
+                return;
+            }
+        };
+
+        for m in &recent {
+            let clip_dir = self
+                .config
+                .clips_dir
+                .join(login)
+                .join(m.match_id.to_string());
+            if std::fs::create_dir_all(&clip_dir).is_err() {
+                continue;
+            }
+            self.process_match(state, login, account_id, m, &channel_id, &clip_dir)
+                .await;
+            let _ = std::fs::remove_dir_all(&clip_dir);
+        }
+    }
+
+    async fn process_match(
+        &self,
+        state: &mut HighlightState,
+        login: &str,
+        account_id: i64,
+        m: &RecentMatch,
+        channel_id: &str,
+        clip_dir: &Path,
+    ) {
+        let match_id = m.match_id;
+        let match_info =
+            deadlock_client::get_match_metadata(&self.config.deadlock_api_base, match_id)
+                .await
+                .unwrap_or_else(|_| serde_json::json!({}));
+        let hero_id = get_hero_id(account_id, &match_info);
+        let mut events: Vec<HighlightEvent> = Vec::new();
+
+        // Demo-First: Events direkt aus dem Replay lesen.
+        if let Some(demo_path) = demo_downloader::get_demo_path(
+            &self.config.deadlock_api_base,
+            &self.config.demo_cache_dir,
+            match_id,
+        )
+        .await
+        {
+            let moments = demo_analyzer::detect_all_events(
+                &self.config.boon_path,
+                &demo_path,
+                hero_id.unwrap_or(0),
+                login,
+            )
+            .await;
+            let clutch = moments.iter().filter(|mm| mm.is_clutch).count();
+            tracing::info!(
+                login,
+                match_id,
+                kills = moments.len(),
+                clutch,
+                "HighlightClipper: Demo analysiert"
+            );
+            events = demo_analyzer::moments_to_events(&moments, 2);
+            demo_downloader::cleanup_demo(&self.config.demo_cache_dir, match_id);
+        }
+
+        // Fallback auf API-Erkennung, wenn die Demo nichts liefert.
+        if events.is_empty() {
+            let api_events = detect_events(account_id, &match_info);
+            if !api_events.is_empty() {
+                tracing::info!(login, "HighlightClipper: Demo-Analyse leer, nutze API-Fallback");
+                events = api_events;
+            }
+        }
+
+        let vod = match twitch_vod::find_vod_for_match(
+            self.api.as_ref(),
+            channel_id,
+            m.start_time,
+            m.match_duration_s,
+        )
+        .await
+        {
+            Some(v) => v,
+            None => {
+                tracing::warn!(login, match_id, "HighlightClipper: Kein VOD gefunden");
+                let _ = mark_match_processed(state, &self.config.state_path, login, match_id);
+                return;
+            }
+        };
+
+        let vod_offset_s = m.start_time - vod.vod_started_at;
+        let mut clip_paths: Vec<String> = Vec::new();
+        let mut clip_events: Vec<HighlightEvent> = Vec::new();
+
+        for (idx, event) in events.iter().enumerate() {
+            let (clip_start, clip_end) = compute_clip_window(vod_offset_s, event);
+            let output_path = clip_dir.join(format!(
+                "{:02}_{}_{}.mp4",
+                idx + 1,
+                event.event_type.as_str(),
+                event.game_time_s
+            ));
+            let ok = twitch_vod::download_clip(
+                &self.config.yt_dlp_path,
+                &vod.vod_id,
+                clip_start,
+                clip_end,
+                &output_path,
+            )
+            .await;
+            if !ok {
+                continue;
+            }
+            clip_paths.push(output_path.to_string_lossy().into_owned());
+            clip_events.push(event.clone());
+        }
+
+        if clip_paths.is_empty() {
+            tracing::warn!(login, match_id, "HighlightClipper: Keine Clips erstellt");
+        } else {
+            highlight_sender::send_highlight_to_channel(
+                &self.config.highlight_api_url,
+                login,
+                match_id,
+                &clip_events,
+                &clip_paths,
+            )
+            .await;
+        }
+
+        let _ = mark_match_processed(state, &self.config.state_path, login, match_id);
     }
 }
 
