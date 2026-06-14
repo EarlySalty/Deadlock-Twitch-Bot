@@ -176,23 +176,33 @@ const ACTIVE_BILLING_STATUSES: [&str; 3] = ["active", "trialing", "past_due"];
 pub async fn resolve_plan_snapshot(
     pool: &PgPool,
     login: &str,
+    user_id: &str,
 ) -> Result<PlanSnapshot, sqlx::Error> {
     let login = login.trim().to_lowercase();
-    if login.is_empty() {
+    let user_id = user_id.trim();
+    if login.is_empty() && user_id.is_empty() {
         return Ok(PlanSnapshot::from_plan("raid_free", "default_basic", None));
     }
 
     // ── Manual Override ─────────────────────────────────────────────────────
+    // Python load_manual_override matcht twitch_user_id ODER twitch_login und
+    // priorisiert den user_id-Treffer (CASE-ORDER). Ein nur per user_id (mit
+    // abweichendem/leerem Login) eingetragener Override wurde sonst nicht
+    // gefunden → Streamer verlor seinen bezahlten/gecompten Plan.
     let manual: Option<ManualOverrideRow> = sqlx::query_as(
         r#"
         SELECT manual_plan_id, manual_plan_expires_at::text
         FROM streamer_plans
-        WHERE LOWER(twitch_login) = LOWER($1)
-        ORDER BY manual_plan_updated_at DESC NULLS LAST
+        WHERE LOWER(COALESCE(twitch_login, '')) = LOWER($1)
+           OR ($2 <> '' AND TRIM(COALESCE(twitch_user_id, '')) = $2)
+        ORDER BY
+            CASE WHEN $2 <> '' AND TRIM(COALESCE(twitch_user_id, '')) = $2 THEN 0 ELSE 1 END,
+            manual_plan_updated_at DESC NULLS LAST
         LIMIT 1
         "#,
     )
     .bind(&login)
+    .bind(user_id)
     .fetch_optional(pool)
     .await?;
 
@@ -222,17 +232,21 @@ pub async fn resolve_plan_snapshot(
     }
 
     // ── Stripe-Abo ──────────────────────────────────────────────────────────
+    // customer_reference kann Login ODER twitch_user_id sein — beide prüfen,
+    // sonst bleibt ein per user_id referenziertes Stripe-Abo unsichtbar.
     let billing: Option<BillingRow> = sqlx::query_as(
         r#"
         SELECT plan_id, current_period_end::text
         FROM twitch_billing_subscriptions
-        WHERE LOWER(customer_reference) = LOWER($1)
-          AND status = ANY($2)
+        WHERE (LOWER(customer_reference) = LOWER($1)
+               OR ($2 <> '' AND LOWER(customer_reference) = LOWER($2)))
+          AND status = ANY($3)
         ORDER BY updated_at DESC
         LIMIT 1
         "#,
     )
     .bind(&login)
+    .bind(user_id)
     .bind(&ACTIVE_BILLING_STATUSES[..])
     .fetch_optional(pool)
     .await?;

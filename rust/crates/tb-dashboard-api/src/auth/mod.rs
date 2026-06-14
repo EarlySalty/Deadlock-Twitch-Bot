@@ -68,48 +68,26 @@ pub async fn require_extended_plan(
     if auth.is_privileged() {
         return Ok(());
     }
-    if has_extended_entitlement(pool, login).await {
+    // AuthLevel-Pfad kennt keine twitch_user_id → login-only (leerer user_id;
+    // der Resolver-Guard `$2 <> ''` verhindert Falsch-Matches).
+    if has_extended_entitlement(pool, login, "").await {
         Ok(())
     } else {
         Err(ApiError::plan_required())
     }
 }
 
-/// `true` wenn `login` einen aktiven Extended-Plan ODER einen laufenden 30-Tage-
-/// Trial (`analytics_trial`) hat. Liest `manual_plan_id` + `manual_plan_expires_at`
-/// aus `streamer_plans`; abgelaufene Pläne/Trials zählen nicht. Bei DB-Fehler
+/// `true` wenn der Streamer einen aktiven Extended-Plan, ein aktives Stripe-Abo
+/// ODER einen laufenden 30-Tage-Trial hat. Nutzt denselben Resolver wie das
+/// Dashboard (`resolve_plan_snapshot`), damit Manual-Override UND Stripe-Abo
+/// (und der `user_id`-Match) berücksichtigt werden — die frühere verkürzte
+/// streamer_plans-Login-Query sperrte zahlende Stripe-Kunden ohne Manual-Eintrag
+/// fälschlich mit 403 aus. Ablauf wird im Resolver geprüft. Bei DB-Fehler
 /// `false` (fail-closed — kein versehentlicher Gratis-Zugang).
-pub async fn has_extended_entitlement(pool: &PgPool, login: &str) -> bool {
-    let row: Option<(Option<String>, Option<String>)> = sqlx::query_as(
-        r#"
-        SELECT manual_plan_id, manual_plan_expires_at
-        FROM streamer_plans
-        WHERE LOWER(twitch_login) = LOWER($1)
-        LIMIT 1
-        "#,
-    )
-    .bind(login)
-    .fetch_optional(pool)
-    .await
-    .ok()
-    .flatten();
-
-    match row {
-        None => false,
-        Some((plan_id, expires_at)) => {
-            let plan = plan_id.as_deref().unwrap_or("").trim();
-            // Echte Entitlement-Prüfung (Python `_plan_has_entitlement`) statt einer
-            // hartkodierten Liste — bleibt automatisch mit catalog.py synchron und
-            // erkennt die real verkauften Pläne (analysis_dashboard, Bundles, Trial).
-            if !tb_analytics::plan::plan_is_extended(plan) {
-                false
-            } else {
-                match expires_at.as_deref() {
-                    None => true, // kein Ablaufdatum = unbegrenzt
-                    Some(s) => expiry_in_future(s),
-                }
-            }
-        }
+pub async fn has_extended_entitlement(pool: &PgPool, login: &str, user_id: &str) -> bool {
+    match tb_analytics::plan::resolve_plan_snapshot(pool, login, user_id).await {
+        Ok(snapshot) => tb_analytics::plan::plan_is_extended(snapshot.plan_id),
+        Err(_) => false,
     }
 }
 
@@ -125,8 +103,8 @@ pub async fn extended_gate(pool: &PgPool, auth: &DashboardAuthLevel) -> Option<R
         DashboardAuthLevel::None => Some(
             (StatusCode::UNAUTHORIZED, Json(json!({"error": "unauthorized"}))).into_response(),
         ),
-        DashboardAuthLevel::Partner { twitch_login, .. } => {
-            if has_extended_entitlement(pool, twitch_login).await {
+        DashboardAuthLevel::Partner { twitch_login, twitch_user_id } => {
+            if has_extended_entitlement(pool, twitch_login, twitch_user_id).await {
                 None
             } else {
                 Some(
@@ -144,28 +122,3 @@ pub async fn extended_gate(pool: &PgPool, auth: &DashboardAuthLevel) -> Option<R
     }
 }
 
-/// Parst ein Ablaufdatum (TEXT) und prüft, ob es in der Zukunft liegt. Wie Python
-/// (`_parse_plan_override_datetime`): reines Datum `YYYY-MM-DD` → Tagesende UTC,
-/// `Z`→`+00:00`, offset-lose Zeit → als UTC interpretiert. Nicht parsbar → false.
-fn expiry_in_future(raw: &str) -> bool {
-    let text = raw.trim();
-    if text.is_empty() {
-        return false;
-    }
-    // Reines Datum (YYYY-MM-DD) → Ende des Tages UTC (Python: + "T23:59:59+00:00").
-    let normalized = if text.len() == 10 && text.as_bytes().get(4) == Some(&b'-') {
-        format!("{text}T23:59:59+00:00")
-    } else {
-        text.replace('Z', "+00:00")
-    };
-    if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(&normalized) {
-        return dt > chrono::Utc::now();
-    }
-    // Offset-lose ISO-Zeit → als UTC interpretieren.
-    for fmt in ["%Y-%m-%dT%H:%M:%S%.f", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%d %H:%M:%S"] {
-        if let Ok(naive) = chrono::NaiveDateTime::parse_from_str(text, fmt) {
-            return naive.and_utc() > chrono::Utc::now();
-        }
-    }
-    false
-}

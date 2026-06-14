@@ -192,7 +192,7 @@ async fn partner_response(pool: &PgPool, login: &str, user_id: &str) -> Response
             }
         });
 
-    let plan = tb_analytics::plan::resolve_plan_snapshot(pool, login)
+    let plan = tb_analytics::plan::resolve_plan_snapshot(pool, login, user_id)
         .await
         .ok()
         .map(|p| {
