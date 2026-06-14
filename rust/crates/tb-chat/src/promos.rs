@@ -719,6 +719,18 @@ impl PromoEngine {
                 continue;
             }
 
+            // Partner-Gate (promos.py:1524/1533: is_partner_channel_for_chat_tracking).
+            // Gilt für die gesamte Iteration (Lurker-Tax UND Scam/Targeted/Activity/Spike):
+            // Kanäle, die zwar live + promo_disabled=0 sind, im Chat-Tracking aber nicht als
+            // Partner gelten, dürfen KEINE periodischen Promos/Lurker-Tax/Scam-Warnungen erhalten.
+            if !self
+                .partner_check
+                .is_partner_channel_for_chat_tracking(login)
+                .await
+            {
+                continue;
+            }
+
             // Lurker-Tax (promos.py:1357 — eigener Pfad, vor Doppelsend-Lock).
             self.maybe_send_lurker_tax_reminder(login, channel_id, now).await;
 
@@ -1118,8 +1130,18 @@ impl PromoEngine {
             template.replace("{invite}", invite)
         };
 
-        // Announcement senden (promos.py:1032, color="orange").
-        let _ = self.api.send_announcement(channel_id, &text, "orange").await;
+        // Announcement senden (promos.py:1084: `if not warned: return False`).
+        // Send-Ergebnis MUSS geprüft werden — sonst werden Promo-Slot, Scam-Cooldown
+        // und Anti-Repeat-State auch bei gedroppter/fehlgeschlagener Announcement
+        // (AutoMod-Drop, Rate-Limit, Mod-Timeout) verbraucht, obwohl im Chat nichts ankam.
+        let warned = self
+            .api
+            .send_announcement(channel_id, &text, "orange")
+            .await
+            .unwrap_or(false);
+        if !warned {
+            return false;
+        }
 
         let wall_ts = Utc::now().timestamp() as f64;
 
@@ -1505,7 +1527,14 @@ impl PromoEngine {
                 let text = preset.text
                     .replace("{invite}", invite)
                     .replace("{login}", &target_login);
-                let _ = self.api.send_message(channel_id, &text).await;
+                // Python targeted_promo.py:264: `if not ok: return False` — bei nicht
+                // zugestelltem Send keine State-Mutation/keinen Cooldown verbrennen.
+                if !matches!(
+                    self.api.send_message(channel_id, &text).await,
+                    Ok(crate::types::SendOutcome::Sent)
+                ) {
+                    return false;
+                }
 
                 {
                     let mut ts_state = self.targeted_state.lock().await;
@@ -1531,7 +1560,15 @@ impl PromoEngine {
 
         let text = preset.text.replace("{invite}", invite).replace("{login}", "");
         // Global → Announcement, color="purple" (promo_presets.py).
-        let _ = self.api.send_announcement(channel_id, &text, "purple").await;
+        // Python targeted_promo.py:264: `if not ok: return False` — Send-Ergebnis prüfen.
+        if !self
+            .api
+            .send_announcement(channel_id, &text, "purple")
+            .await
+            .unwrap_or(false)
+        {
+            return false;
+        }
 
         {
             let mut ts_state = self.targeted_state.lock().await;
