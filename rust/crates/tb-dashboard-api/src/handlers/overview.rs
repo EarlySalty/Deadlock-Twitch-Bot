@@ -11,7 +11,7 @@ use chrono::{Duration, Utc};
 use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
 use tb_analytics::overview::{
-    overview_chat_per_100, overview_chatter_metrics, overview_metrics,
+    overview_category_rank, overview_chat_per_100, overview_chatter_metrics, overview_metrics,
     overview_monetization_counts, overview_network_stats, overview_session_count,
     overview_sessions, OverviewMonetization, OverviewNetworkStats, OverviewSession,
 };
@@ -49,6 +49,10 @@ pub struct OverviewData {
     pub network: OverviewNetwork,
     #[serde(rename = "dataQuality")]
     pub data_quality: DataQuality,
+    #[serde(rename = "categoryRank", skip_serializing_if = "Option::is_none")]
+    pub category_rank: Option<i64>,
+    #[serde(rename = "categoryTotal", skip_serializing_if = "Option::is_none")]
+    pub category_total: Option<i64>,
 }
 
 /// Python `{"botFilterApplied": True}`.
@@ -396,6 +400,11 @@ pub async fn overview_handler(
     // Monetarisierungs-Events (fehlende Tabellen → 0).
     let mon = overview_monetization_counts(&pool, &since, login_ref).await;
 
+    // Kategorie-Perzentil/Rang (speist Reach-Score + categoryRank/Total).
+    let category = overview_category_rank(&pool, &since, login_ref)
+        .await
+        .map_err(|_| ApiError::internal())?;
+
     // Chatter pro 100 Peak-Viewer (für Chat-Insights/Actions).
     let chat_per_100 = overview_chat_per_100(&pool, &since, login_ref)
         .await
@@ -441,7 +450,7 @@ pub async fn overview_handler(
         metrics.chat_sample_count.unwrap_or(0),
         per_hour(total_followers),
         metrics.session_count.unwrap_or(0),
-        None, // category_percentile noch nicht erhoben → avg_viewers/5-Fallback
+        category.map(|c| c.percentile), // Reach: Perzentil sonst avg_viewers/5-Fallback
         mon,
         net,
     );
@@ -479,6 +488,8 @@ pub async fn overview_handler(
         data_quality: DataQuality {
             bot_filter_applied: true,
         },
+        category_rank: category.map(|c| c.rank),
+        category_total: category.map(|c| c.total),
         summary: OverviewSummary {
             avg_viewers: metrics.avg_avg_viewers.unwrap_or(0.0),
             peak_viewers: metrics.max_peak_viewers.unwrap_or(0),

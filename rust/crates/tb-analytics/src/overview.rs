@@ -576,6 +576,72 @@ pub async fn overview_sessions(
         .collect())
 }
 
+/// Kategorie-Perzentil/Rang eines Streamers (Python `_get_category_percentiles`
+/// + `_percentile_of` + Rank-Berechnung). `percentile` speist den Reach-Score,
+/// `rank`/`total` die categoryRank/categoryTotal-Felder.
+#[derive(Debug, Clone, Copy)]
+pub struct CategoryRank {
+    pub percentile: f64,
+    pub rank: i64,
+    pub total: i64,
+}
+
+/// Liefert Perzentil/Rang aus `twitch_stats_category` (per-Streamer AVG der
+/// Viewer, ts_utc = TEXT-ISO). Ohne Streamer, fehlende Tabelle, leere Daten
+/// oder Streamer nicht in den Kategorie-Daten → `None`.
+pub async fn overview_category_rank(
+    pool: &PgPool,
+    since: &str,
+    streamer_login: Option<&str>,
+) -> Result<Option<CategoryRank>, sqlx::Error> {
+    let Some(login) = streamer_login else {
+        return Ok(None);
+    };
+    let login = login.to_lowercase();
+    // ts_utc ist TEXT (ISO) → lexikografischer Vergleich gegen den ISO-`since`
+    // (wie Python). Fehlende Tabelle → None.
+    let rows: Vec<(String, f64)> = match sqlx::query_as(
+        r#"
+        SELECT streamer, AVG(viewer_count)::FLOAT8 AS avg_vc
+        FROM twitch_stats_category
+        WHERE ts_utc >= $1
+        GROUP BY streamer
+        ORDER BY avg_vc
+        "#,
+    )
+    .bind(since)
+    .fetch_all(pool)
+    .await
+    {
+        Ok(r) => r,
+        Err(_) => return Ok(None),
+    };
+    if rows.is_empty() {
+        return Ok(None);
+    }
+    let total = rows.len() as i64;
+    // streamer_map: bei Lowercase-Kollision gewinnt die letzte Zeile (Python-Dict).
+    let Some(value) = rows
+        .iter()
+        .rev()
+        .find(|(s, _)| s.to_lowercase() == login)
+        .map(|(_, a)| *a)
+    else {
+        return Ok(None);
+    };
+    // _percentile_of: (below + 0.5*equal) / n.
+    let below = rows.iter().filter(|(_, v)| *v < value).count() as f64;
+    let equal = rows.iter().filter(|(_, v)| *v == value).count() as f64;
+    let percentile = (below + 0.5 * equal) / rows.len() as f64;
+    // Rank = total - int(percentile * total) (1 = best).
+    let rank = total - (percentile * total as f64) as i64;
+    Ok(Some(CategoryRank {
+        percentile,
+        rank,
+        total,
+    }))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -671,6 +737,22 @@ mod tests {
         .execute(&pool)
         .await
         .expect("DDL raid_history fehlgeschlagen");
+        sqlx::query("DROP TABLE IF EXISTS twitch_stats_category")
+            .execute(&pool)
+            .await
+            .expect("DROP stats_category fehlgeschlagen");
+        sqlx::query(
+            r#"
+            CREATE TABLE twitch_stats_category (
+                ts_utc       TEXT,
+                streamer     TEXT,
+                viewer_count INTEGER
+            )
+            "#,
+        )
+        .execute(&pool)
+        .await
+        .expect("DDL stats_category fehlgeschlagen");
         // Tabellen leeren damit Wiederholungsläufe nicht alte Daten sehen
         sqlx::query("TRUNCATE twitch_stream_sessions")
             .execute(&pool)
@@ -871,5 +953,40 @@ mod tests {
         assert_eq!(s.title, "Test Titel");
         assert_eq!(s.followers_start, 1000);
         assert_eq!(s.followers_end, 1010);
+    }
+
+    #[tokio::test]
+    async fn category_rank_perzentil_und_rang() {
+        let dsn = match test_dsn() {
+            Some(d) => d,
+            None => {
+                eprintln!("SKIP: TB_TEST_DATABASE_URL nicht gesetzt");
+                return;
+            }
+        };
+        let pool = make_pool(&dsn, "test_overview_category").await;
+        sqlx::query(
+            r#"
+            INSERT INTO twitch_stats_category (ts_utc, streamer, viewer_count) VALUES
+                ('2026-06-14T08:00:00+00:00', 'streamer_x', 50),
+                ('2026-06-14T08:00:00+00:00', 'a', 10),
+                ('2026-06-14T08:00:00+00:00', 'b', 30),
+                ('2026-06-14T08:00:00+00:00', 'c', 90)
+            "#,
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let since = "2000-01-01T00:00:00+00:00";
+        // sorted_avgs=[10,30,50,90]; streamer_x=50: below=2, equal=1 → (2+0.5)/4=0.625.
+        // rank = 4 - int(0.625*4) = 4 - 2 = 2.
+        let c = overview_category_rank(&pool, since, Some("streamer_x")).await.unwrap().unwrap();
+        assert!((c.percentile - 0.625).abs() < 1e-9);
+        assert_eq!(c.rank, 2);
+        assert_eq!(c.total, 4);
+        // Unbekannter Streamer / kein Streamer → None.
+        assert!(overview_category_rank(&pool, since, Some("nobody")).await.unwrap().is_none());
+        assert!(overview_category_rank(&pool, since, None).await.unwrap().is_none());
     }
 }
