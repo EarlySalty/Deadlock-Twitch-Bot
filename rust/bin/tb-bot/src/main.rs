@@ -740,25 +740,31 @@ async fn main() {
                             let vod: Arc<dyn VodPreviewSource> = Arc::new(HelixVodPreview {
                                 helix: helix_client.clone(),
                             });
-                            // Auto-Anlage der Live-Ping-Rolle nur verdrahten, wenn
-                            // eine Ziel-Guild bekannt ist (STREAMER_GUILD_ID →
-                            // MAIN_GUILD_ID, Muster aus oauth_followups.rs). Sonst
-                            // bleibt der Provider None → Warn-Fallback im Sink.
-                            let live_ping_role_provider: Option<
-                                Arc<dyn tb_monitoring::LivePingRoleProvider>,
-                            > = std::env::var("STREAMER_GUILD_ID")
+                            // Ziel-Guild der Live-Ping-Rolle: Env-Override
+                            // (STREAMER_GUILD_ID → MAIN_GUILD_ID) oder Default auf
+                            // die Haupt-Community-Guild — identisch zu streamer_link.rs,
+                            // wo Discord-Rollen-Operationen bereits auf diese Guild
+                            // defaulten. Ohne Default wäre die Auto-Anlage still aus,
+                            // sobald die Env-Var fehlt; der Notify-Channel liegt ohnehin
+                            // in dieser Guild, also wird die Rolle dort angelegt.
+                            let live_ping_guild_id = std::env::var("STREAMER_GUILD_ID")
                                 .ok()
                                 .or_else(|| std::env::var("MAIN_GUILD_ID").ok())
                                 .and_then(|v| v.trim().parse::<u64>().ok())
                                 .filter(|&g| g > 0)
-                                .map(|guild_id| {
-                                    Arc::new(LivePingRoleAuto {
-                                        relay: Arc::new(relay.clone()),
-                                        pool: pool.clone(),
-                                        guild_id,
-                                    })
-                                        as Arc<dyn tb_monitoring::LivePingRoleProvider>
-                                });
+                                .unwrap_or(1_289_721_245_281_292_288);
+                            tracing::info!(
+                                guild_id = live_ping_guild_id,
+                                "Live-Ping-Rollen-Auto-Anlage verdrahtet"
+                            );
+                            let live_ping_role_provider: Option<
+                                Arc<dyn tb_monitoring::LivePingRoleProvider>,
+                            > = Some(Arc::new(LivePingRoleAuto {
+                                relay: Arc::new(relay.clone()),
+                                pool: pool.clone(),
+                                guild_id: live_ping_guild_id,
+                            })
+                                as Arc<dyn tb_monitoring::LivePingRoleProvider>);
                             Arc::new(BrokerAnnouncementSink::new(
                                 Arc::new(BrokerAnnouncementTransport { relay }),
                                 AnnounceConfigStore::new(pool.clone()),
