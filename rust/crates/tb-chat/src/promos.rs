@@ -488,11 +488,27 @@ impl PartnerChannelCheck for AlwaysPartner {
     }
 }
 
-/// Prüft ob ein Plan-Key das Entitlement `chat.lurker_tax` trägt (catalog.py:PLAN_ENTITLEMENTS_MAP).
+/// Prüft ob ein Plan-Key (kanonisch oder Legacy) das Entitlement `chat.lurker_tax`
+/// trägt — echte Whitelist analog `plan_id_has_promos_disable` (Port von
+/// catalog.py:PLAN_ENTITLEMENTS_MAP + LEGACY_PLAN_NAME_TO_ID_MAP). Unbekannte/leere
+/// Plan-Keys tragen das Entitlement NICHT — vorher war es eine inverse Liste mit
+/// Default=true, wodurch Lurker auf Plänen ohne Tax-Entitlement namentlich
+/// öffentlich getaxt wurden.
 fn plan_id_has_lurker_tax(plan_id: &str) -> bool {
-    !matches!(
+    matches!(
         plan_id.to_lowercase().as_str(),
-        "raid_free" | "free" | "chat_quiet" | "werbefrei" | "quiet" | ""
+        // Kanonische Plan-IDs mit chat.lurker_tax (catalog.py).
+        "raid_boost"
+        | "bundle_chat_quiet_raid_boost"
+        | "analysis_dashboard"
+        | "bundle_analysis_raid_boost"
+        | "bundle_werbefrei_analyse"
+        | "bundle_komplett"
+        | "analytics_trial"
+        // Legacy-Namen die auf diese Plans mappen (LEGACY_PLAN_NAME_TO_ID_MAP).
+        | "chat_quiet_bundle" // → bundle_chat_quiet_raid_boost
+        | "analysis"          // → analysis_dashboard
+        | "bundle"            // → bundle_analysis_raid_boost
     )
 }
 
@@ -2141,6 +2157,32 @@ mod tests {
             !engine.overall_promo_ready_inner(&state, Instant::now()),
             "Promo-Cooldown muss nach dem Pitch belegt sein"
         );
+    }
+
+    #[test]
+    fn lurker_tax_nur_fuer_berechtigte_plaene() {
+        // Plans MIT chat.lurker_tax (catalog.py + Legacy-Aliase).
+        for p in [
+            "raid_boost",
+            "bundle_chat_quiet_raid_boost",
+            "analysis_dashboard",
+            "bundle_analysis_raid_boost",
+            "bundle_werbefrei_analyse",
+            "bundle_komplett",
+            "analytics_trial",
+            "chat_quiet_bundle",
+            "analysis",
+            "bundle",
+            "RAID_BOOST", // Case-Insensitivität
+        ] {
+            assert!(plan_id_has_lurker_tax(p), "{p} sollte Lurker-Tax tragen");
+        }
+        // Plans OHNE chat.lurker_tax — dürfen NICHT taxen (Regression: vorher Default=true).
+        for p in [
+            "", "free", "raid_free", "chat_quiet", "werbefrei", "quiet", "basic", "unbekannt",
+        ] {
+            assert!(!plan_id_has_lurker_tax(p), "{p} darf KEIN Lurker-Tax tragen");
+        }
     }
 }
 
