@@ -101,6 +101,7 @@ fn to_snapshot(stream: HelixStream) -> StreamSnapshot {
     StreamSnapshot {
         id: Some(stream.id).filter(|i| !i.is_empty()),
         user_login: stream.user_login,
+        user_id: stream.user_id,
         user_name: stream.user_name,
         title: stream.title,
         game_name: stream.game_name,

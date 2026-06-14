@@ -10,6 +10,8 @@ pub struct StreamSnapshot {
     /// Helix-Stream-ID (pro Broadcast eindeutig).
     pub id: Option<String>,
     pub user_login: String,
+    /// Helix `user_id` des Broadcasters (für Partner-Recruiting-Outreach-Send).
+    pub user_id: String,
     /// Anzeigename (Helix `user_name`) — für Embeds/Offline-Posting.
     pub user_name: String,
     pub title: String,

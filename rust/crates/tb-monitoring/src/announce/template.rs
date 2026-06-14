@@ -630,6 +630,7 @@ mod tests {
         let now = parse_dt_utc("2026-06-09T18:00:00Z").unwrap();
         let stream = StreamSnapshot {
             user_login: "drag".to_string(),
+            user_id: "0".to_string(),
             user_name: "Drag".to_string(),
             title: "Ranked Grind".to_string(),
             game_name: "Deadlock".to_string(),

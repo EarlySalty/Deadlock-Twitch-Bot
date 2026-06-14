@@ -100,6 +100,7 @@ fn live_request(login: &str) -> AnnounceLiveRequest {
         stream: StreamSnapshot {
             id: Some("s-1".to_string()),
             user_login: login.to_string(),
+            user_id: "0".to_string(),
             user_name: "Drag".to_string(),
             title: "Ranked Grind".to_string(),
             game_name: "Deadlock".to_string(),

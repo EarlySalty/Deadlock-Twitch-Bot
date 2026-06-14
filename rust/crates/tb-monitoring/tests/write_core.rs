@@ -57,6 +57,7 @@ fn deadlock_stream(stream_id: &str, login: &str, viewers: i32) -> StreamSnapshot
     StreamSnapshot {
         id: Some(stream_id.to_string()),
         user_login: login.to_string(),
+        user_id: "0".to_string(),
         user_name: login.to_uppercase(),
         title: "Ranked Grind".to_string(),
         game_name: "Deadlock".to_string(),

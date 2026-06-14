@@ -250,6 +250,7 @@ async fn stream_offline_finalisiert_session_mit_throttle() {
     let stream = StreamSnapshot {
         id: Some("s-1".to_string()),
         user_login: "drag".to_string(),
+        user_id: "0".to_string(),
         game_name: "Deadlock".to_string(),
         viewer_count: 5,
         started_at: Some((Utc::now() - Duration::minutes(30)).to_rfc3339()),

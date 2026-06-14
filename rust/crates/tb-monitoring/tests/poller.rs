@@ -121,6 +121,7 @@ fn live_stream(login: &str, user_id: &str, stream_id: &str, viewers: i32) -> Str
     StreamSnapshot {
         id: Some(stream_id.to_string()),
         user_login: login.to_string(),
+        user_id: "0".to_string(),
         user_name: login.to_uppercase(),
         title: "Ranked".to_string(),
         game_name: "Deadlock".to_string(),
