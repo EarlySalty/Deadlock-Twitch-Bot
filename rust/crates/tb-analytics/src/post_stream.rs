@@ -516,11 +516,16 @@ const TOPIC_KEYWORDS: [(&str, &[&str]); 5] = [
 ];
 const MAX_CHAT_EXAMPLES: usize = 80;
 
-/// Eine Chat-Nachricht für den Digest (aus `_load_messages`).
+/// Eine geladene Chat-Nachricht (Python `_load_messages`-Zeile). Speist sowohl
+/// `chat_digest` (content/chatter_login/minute) als auch `_raw_chat_payload`
+/// (message_ts/chatter_login/content, Slice 3b-v). `minute` ist in diesem Pfad
+/// stets `None` (Python `_minute_from_row`: nur gesetzt, wenn die Zeile bereits
+/// eine vorberechnete Minute trägt — die DB-Loader liefern keine).
 #[derive(Debug, Clone)]
-pub struct DigestMessage {
+pub struct ChatMessageRow {
     pub content: String,
     pub chatter_login: String,
+    pub message_ts: Option<String>,
     pub minute: Option<i64>,
 }
 
@@ -528,7 +533,7 @@ pub struct DigestMessage {
 /// (Python `_chat_digest`). `minute_buckets` + `top_chatters` werden
 /// durchgereicht (Struktur stammt aus den DB-Loadern, Slice 3b). Reine Funktion.
 pub fn chat_digest(
-    messages: &[DigestMessage],
+    messages: &[ChatMessageRow],
     minute_buckets: &[serde_json::Value],
     top_chatters: serde_json::Value,
 ) -> serde_json::Value {
@@ -816,15 +821,115 @@ pub fn core_metrics(session: &ReportSession) -> serde_json::Value {
     })
 }
 
+// ---------------------------------------------------------------------------
+// Report-Snapshot: Chat-Loader (Python report_builder.py
+// `_load_messages` / `_chat_minute_buckets` / `_top_chatters`)
+// ---------------------------------------------------------------------------
+
+/// Lädt die Non-Command-Chatnachrichten einer Session (Python `_load_messages`,
+/// `_safe_fetchall_dicts` → bei Fehler leer). `content`-Filter (non-null,
+/// length>1) gilt — anders als bei den Buckets/Top-Chattern. `minute` bleibt
+/// `None` (kein vorberechneter Wert in der Zeile).
+pub async fn load_messages(pool: &PgPool, session_id: i64) -> Vec<ChatMessageRow> {
+    sqlx::query_as::<_, (Option<String>, Option<String>, Option<String>)>(
+        "SELECT chatter_login, message_ts::text, content \
+         FROM twitch_chat_messages \
+         WHERE session_id = $1 \
+           AND COALESCE(is_command, FALSE) = FALSE \
+           AND content IS NOT NULL \
+           AND length(content) > 1 \
+         ORDER BY message_ts",
+    )
+    .bind(session_id)
+    .fetch_all(pool)
+    .await
+    .unwrap_or_default()
+    .into_iter()
+    .map(|(chatter_login, message_ts, content)| ChatMessageRow {
+        content: content.unwrap_or_default(),
+        chatter_login: chatter_login.unwrap_or_default(),
+        message_ts,
+        minute: None,
+    })
+    .collect()
+}
+
+/// Minuten-Buckets der Chataktivität relativ zu `started_at` (Python
+/// `_chat_minute_buckets`). Zählt ALLE Non-Command-Messages (ohne Längen-/Null-
+/// Content-Filter); Zeilen ohne ableitbare Minute werden verworfen. Jede Zeile
+/// als `serde_json::Value`, da `chat_digest` sie unverändert durchreicht.
+pub async fn chat_minute_buckets(pool: &PgPool, session_id: i64) -> Vec<serde_json::Value> {
+    sqlx::query_as::<_, (Option<i64>, Option<i64>, Option<i64>)>(
+        "SELECT FLOOR(EXTRACT(EPOCH FROM (m.message_ts - s.started_at)) / 60)::int8 AS minute, \
+                COUNT(*)::int8 AS messages, \
+                COUNT(DISTINCT m.chatter_login)::int8 AS chatters \
+         FROM twitch_chat_messages m \
+         JOIN twitch_stream_sessions s ON s.id = m.session_id \
+         WHERE m.session_id = $1 \
+           AND COALESCE(m.is_command, FALSE) = FALSE \
+         GROUP BY minute \
+         ORDER BY minute",
+    )
+    .bind(session_id)
+    .fetch_all(pool)
+    .await
+    .unwrap_or_default()
+    .into_iter()
+    .filter_map(|(minute, messages, chatters)| {
+        let minute = minute?; // Python: if row.get("minute") is not None
+        Some(serde_json::json!({
+            "minute": minute,
+            "messages": messages.unwrap_or(0),
+            "chatters": chatters.unwrap_or(0),
+        }))
+    })
+    .collect()
+}
+
+/// Top-20-Chatter einer Session nach Message-Zahl (Python `_top_chatters`).
+/// Leerer/`NULL`-Login → `'unknown'`; zählt alle Non-Command-Messages. Gibt ein
+/// JSON-Array zurück (von `chat_digest` durchgereicht).
+pub async fn top_chatters(pool: &PgPool, session_id: i64) -> serde_json::Value {
+    let rows = sqlx::query_as::<_, (Option<String>, Option<i64>, Option<String>, Option<String>)>(
+        "SELECT COALESCE(NULLIF(chatter_login, ''), 'unknown') AS chatter_login, \
+                COUNT(*)::int8 AS messages, \
+                MIN(message_ts)::text AS first_message_at, \
+                MAX(message_ts)::text AS last_message_at \
+         FROM twitch_chat_messages \
+         WHERE session_id = $1 \
+           AND COALESCE(is_command, FALSE) = FALSE \
+         GROUP BY COALESCE(NULLIF(chatter_login, ''), 'unknown') \
+         ORDER BY messages DESC \
+         LIMIT 20",
+    )
+    .bind(session_id)
+    .fetch_all(pool)
+    .await
+    .unwrap_or_default();
+    serde_json::Value::Array(
+        rows.into_iter()
+            .map(|(login, messages, first_at, last_at)| {
+                serde_json::json!({
+                    "login": login.unwrap_or_else(|| "unknown".to_string()),
+                    "messages": messages.unwrap_or(0),
+                    "first_message_at": first_at.unwrap_or_default(),
+                    "last_message_at": last_at.unwrap_or_default(),
+                })
+            })
+            .collect(),
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use sqlx::postgres::PgPoolOptions;
 
-    fn msg(content: &str, author: &str, minute: Option<i64>) -> DigestMessage {
-        DigestMessage {
+    fn msg(content: &str, author: &str, minute: Option<i64>) -> ChatMessageRow {
+        ChatMessageRow {
             content: content.to_string(),
             chatter_login: author.to_string(),
+            message_ts: None,
             minute,
         }
     }
@@ -1164,5 +1269,67 @@ mod tests {
         assert_eq!(cm["avg_viewers"], 17.0); // round2
         assert_eq!(cm["start_viewers"], 10);
         assert_eq!(cm["dropoff_label"], "leicht");
+    }
+
+    #[tokio::test]
+    async fn laedt_chat_loader_und_digest_wiring() {
+        // pool_or_skip legt twitch_stream_sessions (mit started_at) +
+        // twitch_chat_messages an — genau die zwei Tabellen, die die Chat-Loader brauchen.
+        let Some(pool) = pool_or_skip("t6g_post_stream_chat").await else { return };
+        sqlx::query(
+            "INSERT INTO twitch_stream_sessions \
+             (id, streamer_login, started_at, ended_at, duration_seconds, avg_viewers, peak_viewers, follower_delta) \
+             VALUES (1,'s','2026-06-10T18:00:00+00','2026-06-10T19:00:00+00',3600,5.0,10,2)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO twitch_chat_messages (session_id, content, is_command, message_ts, chatter_login) VALUES \
+             (1,'gg nice', FALSE, '2026-06-10T18:00:30+00','alice'), \
+             (1,'!cmd', TRUE, '2026-06-10T18:00:40+00','bob'), \
+             (1,'x', FALSE, '2026-06-10T18:00:50+00','bob'), \
+             (1,'trash schlecht', FALSE, '2026-06-10T18:02:10+00','bob'), \
+             (1,'wie geht das?', FALSE, '2026-06-10T18:02:20+00','carol'), \
+             (1,NULL, FALSE, '2026-06-10T18:03:00+00','dave')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        // load_messages: Command (!cmd), zu kurz ('x') und NULL gefiltert → 3 echte.
+        let messages = load_messages(&pool, 1).await;
+        assert_eq!(messages.len(), 3);
+        assert_eq!(messages[0].content, "gg nice"); // nach message_ts sortiert
+        assert_eq!(messages[0].chatter_login, "alice");
+        assert!(messages[0].message_ts.is_some());
+        assert!(messages[0].minute.is_none()); // immer None in diesem Pfad
+
+        // Buckets: KEIN Längen-/Null-Content-Filter → 'x' UND die NULL-Message zählen.
+        // Minute 0: gg nice + x = 2; Minute 2: trash + wie = 2; Minute 3: NULL-Message = 1.
+        let buckets = chat_minute_buckets(&pool, 1).await;
+        assert_eq!(buckets.len(), 3);
+        assert_eq!(buckets[0]["minute"], 0);
+        assert_eq!(buckets[0]["messages"], 2);
+        assert_eq!(buckets[0]["chatters"], 2); // alice, bob
+        assert_eq!(buckets[1]["minute"], 2);
+        assert_eq!(buckets[2]["minute"], 3);
+        assert_eq!(buckets[2]["messages"], 1);
+
+        // Top-Chatter: bob hat die meisten Non-Command (x + trash = 2) → vorn.
+        let top = top_chatters(&pool, 1).await;
+        let arr = top.as_array().unwrap();
+        assert_eq!(arr[0]["login"], "bob");
+        assert_eq!(arr[0]["messages"], 2);
+        assert!(arr.iter().any(|c| c["login"] == "dave")); // NULL-Content-Author zählt
+
+        // End-to-End: Loader speisen das fertige chat_digest.
+        let digest = chat_digest(&messages, &buckets, top);
+        assert_eq!(digest["total_messages"], 3);
+        // minute aus der Zeile = None → null im Beispiel.
+        assert_eq!(digest["representative_examples"][0]["minute"], serde_json::Value::Null);
+        assert_eq!(digest["question_examples"].as_array().unwrap().len(), 1);
+        // Peak-Minute nach messages: 2 vor 1.
+        assert_eq!(digest["messages_per_minute_peaks"][0]["messages"], 2);
     }
 }
