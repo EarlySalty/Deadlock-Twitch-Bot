@@ -12,4 +12,5 @@
 //! Pipeline-Helfer in [`pipeline`] (Pre-Filter + Kostenrechnung).
 
 pub mod pipeline;
+pub mod rhythm;
 pub mod types;
