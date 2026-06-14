@@ -23,8 +23,11 @@ use tb_chat::commands::{
     AutobanEntry, ClipOutcome, ClipPort, CommandEngine, DiscordLinkPort, InvitePort,
     LastAutobanStore, RaidCommandPort, RaidStatusInfo, SuperModPort,
 };
-use tb_chat::moderation::{HelixChatClient, ModerationEngine, OutboundSuppressionStore};
+use tb_chat::moderation::{
+    HelixChatClient, ModerationEngine, OutboundSuppressionStore, TimeoutGuard,
+};
 use tb_chat::promos::{InviteResolver, PartnerChannelCheck, PromoEngine};
+use tb_chat::timeout_tracking::{CombinedSuppression, TimeoutTrackingChatApi};
 use tb_chat::scam_pitch::{AccountAgePort, ScamPitchDetector, SpamAiReviewer};
 use tb_chat::spam_filter::{LearnedPatterns, SpamFilter};
 use tb_chat::token::BotTokenManager;
@@ -248,6 +251,19 @@ pub async fn build_runtime(
         token_manager,
     } = handle;
 
+    // TimeoutGuard verdrahten: zählt eigene Bot-Timeouts (Drop-Code
+    // sender_banned/sender_timedout) und schaltet bei 2/Tag bzw. 5/Woche für
+    // 7 Tage stumm (Port: timeout_guard.py). Die ChatApi wird EINMAL dekoriert,
+    // BEVOR sie an die Komponenten verteilt wird — so läuft jeder ausgehende
+    // send_message (Moderation/Promos/Commands/Scam-Pitch/Fun/Pipeline/
+    // Mention-Resolver) durch das Tracking.
+    let timeout_guard = Arc::new(TimeoutGuard::new());
+    let api: Arc<dyn ChatApi> = Arc::new(TimeoutTrackingChatApi::new(
+        api,
+        Arc::clone(&timeout_guard),
+        pool.clone(),
+    ));
+
     ensure_autoban_log_table(&pool).await;
 
     // Lern-Muster einmalig laden (Python lädt sie beim Bot-Start).
@@ -258,7 +274,15 @@ pub async fn build_runtime(
         .unwrap_or_default();
 
     let moderation = Arc::new(ModerationEngine::new(Arc::clone(&api), pool.clone()));
-    let suppression = Arc::new(OutboundSuppressionStore::new(pool.clone()));
+    // Promo-Suppression kombiniert die bestehende DB-Suppression
+    // (twitch_outbound_chat_suppressions, Quelle "promo") mit dem In-Memory-
+    // TimeoutGuard: der Promo-Pfad sendet weder in DB-stummgeschaltete noch in
+    // per Bot-Timeout stummgeschaltete Kanäle (Port: promos.py:1137 prüft
+    // timeout_guard.is_muted vor jedem Promo-Send).
+    let suppression = Arc::new(CombinedSuppression::new(
+        Arc::new(OutboundSuppressionStore::new(pool.clone())),
+        Arc::clone(&timeout_guard),
+    ));
     let promos = Arc::new(
         PromoEngine::new(pool.clone(), Arc::clone(&api), suppression)
             .set_invite_resolver(Arc::new(DbInviteResolver { pool: pool.clone() }))

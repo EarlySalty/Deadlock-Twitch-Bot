@@ -36,6 +36,7 @@ pub mod promos;
 pub mod scam_pitch;
 pub mod spam_filter;
 pub mod sus_invite;
+pub mod timeout_tracking;
 pub mod token;
 pub mod types;
 
@@ -63,6 +64,7 @@ pub use promos::{
     StaticInviteResolver,
 };
 pub use scam_pitch::{AccountAgePort, PitchDecision, ScamPitchDetector, SpamAiReviewer};
+pub use timeout_tracking::{is_bot_timeout_drop, CombinedSuppression, TimeoutTrackingChatApi};
 pub use spam_filter::{LearnedPatterns, SpamAction, SpamContext, SpamFilter, SpamVerdict};
 pub use token::{BotTokenManager, TokenError};
 pub use types::{ChatMessageEvent, SendOutcome};
