@@ -223,3 +223,177 @@ pub async fn stream_report_handler(
     }
     Json(payload).into_response()
 }
+
+#[derive(Deserialize)]
+pub struct RateBody {
+    pub session_id: Option<serde_json::Value>,
+    pub streamer: Option<String>,
+    pub variant: Option<String>,
+    pub rating: Option<String>,
+    pub comment: Option<String>,
+}
+
+/// UPSERT einer Report-Bewertung (Python INSERT … ON CONFLICT DO UPDATE).
+async fn upsert_rating(
+    pool: &PgPool,
+    session_id: i64,
+    streamer: &str,
+    variant: &str,
+    rating: &str,
+    comment: Option<&str>,
+    rated_by: &str,
+) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "INSERT INTO twitch_stream_report_ratings \
+         (session_id, streamer_login, report_variant, rating, comment, rated_by, updated_at) \
+         VALUES ($1, $2, $3, $4, $5, $6, NOW()) \
+         ON CONFLICT (session_id, report_variant, rated_by) \
+         DO UPDATE SET rating = EXCLUDED.rating, comment = EXCLUDED.comment, updated_at = NOW()",
+    )
+    .bind(session_id)
+    .bind(streamer)
+    .bind(variant)
+    .bind(rating)
+    .bind(comment)
+    .bind(rated_by)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+/// `POST /twitch/api/v2/stream-report/rate` (Python `_api_v2_stream_report_rate`).
+pub async fn stream_report_rate_handler(
+    auth: DashboardAuthLevel,
+    State(pool): State<PgPool>,
+    body: axum::body::Bytes,
+) -> impl IntoResponse {
+    let parsed: RateBody = match serde_json::from_slice(&body) {
+        Ok(v) => v,
+        Err(_) => {
+            return (StatusCode::BAD_REQUEST, Json(json!({"error": "invalid JSON"}))).into_response();
+        }
+    };
+
+    // session_id: Zahl oder Ziffern-String (Python body.get + str().isdigit()).
+    let session_id: Option<i64> = match &parsed.session_id {
+        Some(serde_json::Value::Number(n)) => n.as_i64(),
+        Some(serde_json::Value::String(s)) => {
+            let t = s.trim();
+            if !t.is_empty() && t.chars().all(|c| c.is_ascii_digit()) {
+                t.parse().ok()
+            } else {
+                None
+            }
+        }
+        _ => None,
+    };
+    let Some(session_id) = session_id else {
+        return (StatusCode::BAD_REQUEST, Json(json!({"error": "session_id required"}))).into_response();
+    };
+
+    let streamer = parsed.streamer.unwrap_or_default().trim().to_lowercase();
+    if streamer.is_empty() {
+        return (StatusCode::BAD_REQUEST, Json(json!({"error": "streamer required"}))).into_response();
+    }
+
+    let mut variant = parsed.variant.unwrap_or_default().trim().to_lowercase();
+    if !matches!(variant.as_str(), VARIANT_COMPACT | VARIANT_FULL) {
+        variant = VARIANT_COMPACT.to_string();
+    }
+
+    let rating = parsed.rating.unwrap_or_default().trim().to_lowercase();
+    if !matches!(rating.as_str(), "gut" | "schlecht" | "neutral") {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({"error": "rating must be 'gut', 'schlecht' or 'neutral'"})),
+        )
+            .into_response();
+    }
+
+    // comment: trim + auf 1000 Zeichen kürzen (Python `.strip()[:1000]`).
+    let comment: String = parsed
+        .comment
+        .unwrap_or_default()
+        .trim()
+        .chars()
+        .take(1000)
+        .collect();
+
+    // rated_by: Partner-Login, sonst Auth-Level-Name (Python
+    // `twitch_login or auth_level or "unknown"`); None → 401.
+    let rated_by = match &auth {
+        DashboardAuthLevel::Partner { twitch_login, .. } => twitch_login.trim().to_lowercase(),
+        DashboardAuthLevel::Admin => "admin".to_string(),
+        DashboardAuthLevel::Localhost => "localhost".to_string(),
+        DashboardAuthLevel::None => {
+            return (StatusCode::UNAUTHORIZED, Json(json!({"error": "unauthorized"}))).into_response();
+        }
+    };
+
+    let _ = tb_analytics::post_stream::ensure_report_ab_columns(&pool).await;
+    let comment_opt = if comment.is_empty() { None } else { Some(comment.as_str()) };
+    match upsert_rating(&pool, session_id, &streamer, &variant, &rating, comment_opt, &rated_by).await
+    {
+        Ok(()) => Json(json!({"ok": true, "rating": rating, "comment": comment})).into_response(),
+        Err(e) => {
+            tracing::error!(error = %e, "PostStream Rating: Speichern fehlgeschlagen");
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error": "Bewertung konnte nicht gespeichert werden"})),
+            )
+                .into_response()
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use sqlx::postgres::PgPoolOptions;
+
+    async fn pool_or_skip(schema: &str) -> Option<PgPool> {
+        let dsn = std::env::var("TB_TEST_DATABASE_URL").ok()?;
+        let pool = PgPoolOptions::new().max_connections(1).connect(&dsn).await.unwrap();
+        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE")).execute(&pool).await.unwrap();
+        sqlx::query(&format!("CREATE SCHEMA {schema}")).execute(&pool).await.unwrap();
+        sqlx::query(&format!("SET search_path TO {schema}")).execute(&pool).await.unwrap();
+        Some(pool)
+    }
+
+    #[tokio::test]
+    async fn upsert_rating_on_conflict() {
+        let Some(pool) = pool_or_skip("t7b_post_stream_rating").await else { return };
+        tb_analytics::post_stream::ensure_report_ab_columns(&pool).await.unwrap();
+
+        upsert_rating(&pool, 1, "streamer", "compact", "gut", Some("top"), "rater").await.unwrap();
+        let (rating, comment): (String, Option<String>) = sqlx::query_as(
+            "SELECT rating, comment FROM twitch_stream_report_ratings \
+             WHERE session_id=1 AND report_variant='compact' AND rated_by='rater'",
+        )
+        .fetch_one(&pool).await.unwrap();
+        assert_eq!(rating, "gut");
+        assert_eq!(comment.as_deref(), Some("top"));
+
+        // Erneut (anderer Wert, comment None) → ON CONFLICT UPDATE, weiterhin 1 Zeile.
+        upsert_rating(&pool, 1, "streamer", "compact", "schlecht", None, "rater").await.unwrap();
+        let count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*)::int8 FROM twitch_stream_report_ratings WHERE session_id=1",
+        )
+        .fetch_one(&pool).await.unwrap();
+        assert_eq!(count, 1);
+        let (rating2, comment2): (String, Option<String>) = sqlx::query_as(
+            "SELECT rating, comment FROM twitch_stream_report_ratings WHERE session_id=1 AND rated_by='rater'",
+        )
+        .fetch_one(&pool).await.unwrap();
+        assert_eq!(rating2, "schlecht"); // aktualisiert
+        assert_eq!(comment2, None); // None überschreibt vorhandenen Kommentar
+
+        // Anderer rated_by → eigene Zeile (UNIQUE pro session/variant/rated_by).
+        upsert_rating(&pool, 1, "streamer", "compact", "neutral", None, "anderer").await.unwrap();
+        let count2: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*)::int8 FROM twitch_stream_report_ratings WHERE session_id=1",
+        )
+        .fetch_one(&pool).await.unwrap();
+        assert_eq!(count2, 2);
+    }
+}

@@ -86,6 +86,10 @@ pub fn build_authed_router(pool: PgPool, token: String) -> Router {
             "/twitch/api/v2/stream-report",
             get(stream_report::stream_report_handler),
         )
+        .route(
+            "/twitch/api/v2/stream-report/rate",
+            post(stream_report::stream_report_rate_handler),
+        )
         // Performance-Analytics (lesen aus twitch_stream_sessions in Postgres)
         .route(
             "/twitch/api/v2/monthly-stats",
