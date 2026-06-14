@@ -229,6 +229,17 @@ async fn main() {
         std::process::exit(1);
     });
 
+    // Native sqlx-Migrationen anwenden (idempotent, CREATE ... IF NOT EXISTS).
+    // Gegen das bestehende Prod-Schema no-op außer fehlenden Indizes/Tabellen;
+    // Python bleibt im Strangler-Betrieb Schema-Owner. Fehler werden geloggt,
+    // brechen den Bot aber NICHT ab. Abschaltbar via TB_DB_MIGRATE=0.
+    if std::env::var("TB_DB_MIGRATE").as_deref() != Ok("0") {
+        match tb_db::run_migrations(&pool).await {
+            Ok(()) => tracing::info!("DB-Migrationen angewendet (oder bereits aktuell)"),
+            Err(e) => tracing::warn!("DB-Migrationen fehlgeschlagen (übersprungen): {e}"),
+        }
+    }
+
     let port: u16 = std::env::var("PORT")
         .ok()
         .and_then(|v| v.parse().ok())

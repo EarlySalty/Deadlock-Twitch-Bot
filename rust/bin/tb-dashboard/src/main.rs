@@ -23,6 +23,15 @@ async fn main() {
         std::process::exit(1);
     });
 
+    // Native sqlx-Migrationen anwenden (idempotent). Fehler werden geloggt,
+    // brechen das Dashboard aber NICHT ab. Abschaltbar via TB_DB_MIGRATE=0.
+    if std::env::var("TB_DB_MIGRATE").as_deref() != Ok("0") {
+        match tb_db::run_migrations(&pool).await {
+            Ok(()) => tracing::info!("DB-Migrationen angewendet (oder bereits aktuell)"),
+            Err(e) => tracing::warn!("DB-Migrationen fehlgeschlagen (übersprungen): {e}"),
+        }
+    }
+
     // Startzeit-Timestamp so früh wie möglich setzen
     let _ = tb_dashboard_api::process_info::uptime_secs();
 
