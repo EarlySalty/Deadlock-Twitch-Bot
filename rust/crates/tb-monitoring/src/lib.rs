@@ -58,7 +58,7 @@ pub use live_state::{
 };
 pub use poller::{
     AnnouncementSink, NoopAnnouncementSink, NoopPollHooks, PollConfig, PollEngine, PollHooks,
-    PollIntervalStore, StreamSource, TrackedEntry, TrackedStore,
+    PollIntervalStore, ScoreRefresh, StreamSource, TickReport, TrackedEntry, TrackedStore,
 };
 pub use sessions::{
     FollowerCountSource, NewSession, NoFollowerSource, SessionStore, SessionTracker, StartOutcome,

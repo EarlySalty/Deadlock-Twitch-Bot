@@ -84,9 +84,11 @@ use wiring::{
     HelixSubscriptionTransport, HelixVodPreview, SubscriptionEventSubHooks,
 };
 
-/// Go-Live-Hook des Poll-Loops → stream.offline-Subscription (wie EventSub).
+/// Hooks des Poll-Loops: Go-Live → stream.offline-Subscription (wie EventSub),
+/// Auto-Archiv/Entarchiv inaktiver Partner und Score-Refreshes pro Tick.
 struct SubscriptionPollHooks {
     manager: Arc<SubscriptionManager>,
+    pool: sqlx::PgPool,
 }
 
 #[async_trait::async_trait]
@@ -95,6 +97,97 @@ impl PollHooks for SubscriptionPollHooks {
         self.manager
             .ensure_offline_subscription(twitch_user_id, login)
             .await;
+    }
+
+    /// Inaktiver Partner (> N Tage kein Deadlock-Stream) → archivieren.
+    /// Mirror von Python `set_streamer_archive_state(archived=True)`:
+    /// `admin_archived_at` im aktiven `twitch_partners`-Eintrag + `archived_at`
+    /// in `twitch_streamers`. Ohne diesen Sink blieben Karteileichen sichtbar.
+    async fn on_auto_archive(&self, login: &str) -> bool {
+        let mut changed = false;
+        match sqlx::query(
+            "UPDATE twitch_partners SET admin_archived_at = NOW() \
+             WHERE LOWER(twitch_login) = LOWER($1) AND admin_archived_at IS NULL",
+        )
+        .bind(login)
+        .execute(&self.pool)
+        .await
+        {
+            Ok(r) => changed |= r.rows_affected() > 0,
+            Err(e) => {
+                tracing::warn!(login, "auto-archive (twitch_partners) fehlgeschlagen: {e}");
+                return false;
+            }
+        }
+        match sqlx::query(
+            "UPDATE twitch_streamers SET archived_at = NOW() \
+             WHERE LOWER(twitch_login) = LOWER($1) AND archived_at IS NULL",
+        )
+        .bind(login)
+        .execute(&self.pool)
+        .await
+        {
+            Ok(r) => changed |= r.rows_affected() > 0,
+            Err(e) => tracing::warn!(login, "auto-archive (twitch_streamers) fehlgeschlagen: {e}"),
+        }
+        if changed {
+            tracing::info!(login, "Partner automatisch archiviert (inaktiv)");
+        }
+        changed
+    }
+
+    /// Archivierter Partner streamt wieder Deadlock → entarchivieren
+    /// (`set_streamer_archive_state(archived=False)`).
+    async fn on_auto_unarchive(&self, login: &str) -> bool {
+        let mut changed = false;
+        match sqlx::query(
+            "UPDATE twitch_partners SET admin_archived_at = NULL \
+             WHERE LOWER(twitch_login) = LOWER($1) AND admin_archived_at IS NOT NULL",
+        )
+        .bind(login)
+        .execute(&self.pool)
+        .await
+        {
+            Ok(r) => changed |= r.rows_affected() > 0,
+            Err(e) => {
+                tracing::warn!(login, "auto-unarchive (twitch_partners) fehlgeschlagen: {e}");
+                return false;
+            }
+        }
+        match sqlx::query(
+            "UPDATE twitch_streamers SET archived_at = NULL \
+             WHERE LOWER(twitch_login) = LOWER($1) AND archived_at IS NOT NULL",
+        )
+        .bind(login)
+        .execute(&self.pool)
+        .await
+        {
+            Ok(r) => changed |= r.rows_affected() > 0,
+            Err(e) => tracing::warn!(login, "auto-unarchive (twitch_streamers) fehlgeschlagen: {e}"),
+        }
+        if changed {
+            tracing::info!(login, "Partner automatisch entarchiviert (wieder Deadlock live)");
+        }
+        changed
+    }
+
+    /// Tick-Abschluss: fällige Partner-Raid-Score-Refreshes aus Poll-Transitions
+    /// anwenden (zusätzlich zum 300s-Voll-Reconcile, damit Scores ohne bis zu
+    /// 5 min Verzögerung aktuell sind). (category_streams/Partner-Recruiting folgt
+    /// separat.)
+    async fn after_tick(&self, report: tb_monitoring::TickReport) {
+        if report.score_refreshes.is_empty() {
+            return;
+        }
+        let pairs: Vec<(String, String)> = report
+            .score_refreshes
+            .iter()
+            .map(|s| (s.twitch_user_id.clone(), s.login.clone()))
+            .collect();
+        let resolver = ScoreRefreshResolver::new(self.pool.clone());
+        if let Err(e) = resolver.refresh_scores(&pairs, chrono::Utc::now()).await {
+            tracing::warn!("after_tick: Score-Refresh fehlgeschlagen: {e}");
+        }
     }
 }
 
@@ -583,6 +676,7 @@ async fn main() {
                 let poll_hooks: Arc<dyn PollHooks> = match &subscription_manager {
                     Some(manager) => Arc::new(SubscriptionPollHooks {
                         manager: manager.clone(),
+                        pool: pool.clone(),
                     }),
                     None => Arc::new(tb_monitoring::NoopPollHooks),
                 };
