@@ -353,6 +353,62 @@ pub async fn overview_monetization_counts(
     }
 }
 
+/// Chatter pro 100 Peak-Viewer, über Sessions gemittelt (Python `chat_per_100`
+/// aus `_calculate_overview_metrics`). Pro Session: distinkte Chatter (Bot-
+/// gefiltert) ODER Legacy-`unique_chatters`, gedeckelt bei 100, gegated avg>=3
+/// & peak>0. Kein Sample → 0.
+pub async fn overview_chat_per_100(
+    pool: &PgPool,
+    since: &str,
+    streamer_login: Option<&str>,
+) -> Result<f64, sqlx::Error> {
+    let bots: Vec<String> = KNOWN_CHAT_BOTS.iter().map(|b| b.to_string()).collect();
+    let row: (Option<f64>,) = sqlx::query_as(
+        r#"
+        WITH fsc AS (
+            SELECT sc.session_id,
+                   COUNT(DISTINCT CASE WHEN sc.messages > 0
+                        THEN COALESCE(NULLIF(sc.chatter_login, ''), sc.chatter_id) END) AS unique_chatters
+            FROM twitch_session_chatters sc
+            JOIN twitch_stream_sessions s ON s.id = sc.session_id
+            WHERE s.started_at >= $1::TIMESTAMPTZ AND s.ended_at IS NOT NULL
+              AND ($2::TEXT IS NULL OR LOWER(s.streamer_login) = LOWER($2))
+              AND (sc.chatter_login IS NULL OR sc.chatter_login = ''
+                   OR LOWER(sc.chatter_login) <> ALL($3))
+            GROUP BY sc.session_id
+        ),
+        scp AS (
+            SELECT sc.session_id, 1 AS has_any_chatters
+            FROM twitch_session_chatters sc
+            JOIN twitch_stream_sessions s ON s.id = sc.session_id
+            WHERE s.started_at >= $1::TIMESTAMPTZ AND s.ended_at IS NOT NULL
+              AND ($2::TEXT IS NULL OR LOWER(s.streamer_login) = LOWER($2))
+            GROUP BY sc.session_id
+        )
+        SELECT AVG(CASE
+                WHEN s.avg_viewers >= 3 AND s.peak_viewers > 0
+                THEN LEAST(
+                    100.0,
+                    (CASE WHEN scp.has_any_chatters = 1 THEN COALESCE(fsc.unique_chatters, 0)
+                          ELSE COALESCE(s.unique_chatters, 0) END) * 100.0 / NULLIF(s.peak_viewers, 0)
+                )
+                ELSE NULL
+            END)::FLOAT8
+        FROM twitch_stream_sessions s
+        LEFT JOIN fsc ON fsc.session_id = s.id
+        LEFT JOIN scp ON scp.session_id = s.id
+        WHERE s.started_at >= $1::TIMESTAMPTZ AND s.ended_at IS NOT NULL
+          AND ($2::TEXT IS NULL OR LOWER(s.streamer_login) = LOWER($2))
+        "#,
+    )
+    .bind(since)
+    .bind(streamer_login)
+    .bind(&bots)
+    .fetch_one(pool)
+    .await?;
+    Ok(row.0.unwrap_or(0.0))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -546,6 +602,10 @@ mod tests {
         assert_eq!(m.unique_viewers, 2, "alice + bob (bob via API), streamlabs=Bot raus");
         assert_eq!(m.unique_chatters, 1, "1 tracked + 0 legacy (Session hat Chatter-Zeilen)");
         assert!((m.engagement_rate - 50.0).abs() < 0.001, "1/2*100");
+
+        // chat_per_100: 1 distinkter Chatter / 200 Peak * 100 = 0.5.
+        let cp100 = overview_chat_per_100(&pool, since, Some("streamer_x")).await.unwrap();
+        assert!((cp100 - 0.5).abs() < 0.001, "1 Chatter / 200 Peak");
     }
 
     #[tokio::test]

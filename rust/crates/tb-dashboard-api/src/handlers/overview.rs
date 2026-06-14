@@ -11,8 +11,9 @@ use chrono::{Duration, Utc};
 use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
 use tb_analytics::overview::{
-    overview_chatter_metrics, overview_metrics, overview_monetization_counts,
-    overview_network_stats, overview_session_count, OverviewMonetization, OverviewNetworkStats,
+    overview_chat_per_100, overview_chatter_metrics, overview_metrics,
+    overview_monetization_counts, overview_network_stats, overview_session_count,
+    OverviewMonetization, OverviewNetworkStats,
 };
 use tb_http_core::{ApiError, AuthLevel};
 
@@ -41,6 +42,8 @@ pub struct OverviewData {
     pub days: i64,
     pub summary: OverviewSummary,
     pub scores: HealthScores,
+    pub findings: Vec<Finding>,
+    pub actions: Vec<ActionItem>,
     pub network: OverviewNetwork,
 }
 
@@ -112,6 +115,108 @@ fn calculate_health_scores(
         monetization,
         network,
     }
+}
+
+const RETENTION_LOW: f64 = 40.0;
+const RETENTION_HIGH: f64 = 65.0;
+const CHAT_LOW: f64 = 5.0;
+const CHAT_HIGH: f64 = 30.0;
+
+/// Ein Insight/Finding (Python `_generate_insights`).
+#[derive(Serialize)]
+pub struct Finding {
+    #[serde(rename = "type")]
+    pub kind: &'static str,
+    pub title: &'static str,
+    pub text: String,
+}
+
+/// Eine Handlungsempfehlung (Python `_generate_actions`).
+#[derive(Serialize)]
+pub struct ActionItem {
+    pub tag: &'static str,
+    pub text: &'static str,
+    pub priority: &'static str,
+}
+
+/// Findings exakt nach Python `_generate_insights` (Texte 1:1, inkl. der
+/// ASCII-Schreibweise der Quelle — Byte-Parität zum proxied Python beim v2-Flip).
+#[allow(clippy::too_many_arguments)]
+fn generate_insights(
+    ret_10m_pct: f64,
+    retention_sample_count: i64,
+    chat_100: f64,
+    chat_sample_count: i64,
+    followers_per_hour: f64,
+    gained_followers_per_hour: f64,
+    follower_valid_count: i64,
+    total_followers: i64,
+) -> Vec<Finding> {
+    let mut out = Vec::new();
+    // Retention
+    if retention_sample_count < 3 {
+        out.push(Finding { kind: "info", title: "Retention-Daten unzureichend",
+            text: "Zu wenige Sessions mit >=3 Viewern fur aussagekraftige Retention-Werte.".into() });
+    } else if ret_10m_pct < RETENTION_LOW {
+        out.push(Finding { kind: "neg", title: "Niedrige Retention",
+            text: format!("10-Min Retention bei {ret_10m_pct:.1}%. Verbessere den Stream-Einstieg.") });
+    } else if ret_10m_pct > RETENTION_HIGH {
+        out.push(Finding { kind: "pos", title: "Starke Retention",
+            text: format!("Exzellente {ret_10m_pct:.1}% Retention. Dein Content fesselt!") });
+    }
+    // Chat
+    if chat_sample_count < 3 {
+        out.push(Finding { kind: "info", title: "Chat-Daten unzureichend",
+            text: "Zu wenige Sessions mit >=3 Viewern fur aussagekraftige Chat-Metriken.".into() });
+    } else if chat_100 < CHAT_LOW {
+        out.push(Finding { kind: "warn", title: "Niedrige Chat-Aktivitat",
+            text: format!("Nur {chat_100:.1} Chatter/100 Peak-Viewer (Proxy). Mehr Interaktion fordern!") });
+    } else if chat_100 > CHAT_HIGH {
+        out.push(Finding { kind: "pos", title: "Aktive Community",
+            text: format!("{chat_100:.1} Chatter/100 Peak-Viewer (Proxy) - sehr engagiert!") });
+    }
+    // Followers
+    if follower_valid_count > 0 {
+        if followers_per_hour < 0.0 {
+            out.push(Finding { kind: "neg", title: "Follower-Verlust",
+                text: format!("Netto {followers_per_hour:.2} Follower/Stunde ({total_followers:+} gesamt). Gewonnen: {gained_followers_per_hour:.2}/h. Unfollows uberwiegen.") });
+        } else if followers_per_hour < 0.5 {
+            out.push(Finding { kind: "warn", title: "Langsames Follower-Wachstum",
+                text: format!("Nur {followers_per_hour:.2} Follower/Stunde. Regelmaig an Follows erinnern!") });
+        } else if followers_per_hour > 3.0 {
+            out.push(Finding { kind: "pos", title: "Starkes Wachstum",
+                text: format!("{followers_per_hour:.1} Follower/Stunde - ausgezeichnet!") });
+        }
+    }
+    out
+}
+
+/// Actions exakt nach Python `_generate_actions`.
+fn generate_actions(
+    ret_10m_pct: f64,
+    retention_sample_count: i64,
+    chat_100: f64,
+    chat_sample_count: i64,
+    followers_per_hour: f64,
+    follower_valid_count: i64,
+) -> Vec<ActionItem> {
+    let mut out = Vec::new();
+    if retention_sample_count >= 3 && ret_10m_pct < RETENTION_LOW {
+        out.push(ActionItem { tag: "Retention",
+            text: "Starte mit einem starken Hook in den ersten 2 Minuten.", priority: "high" });
+    }
+    if chat_sample_count >= 3 && chat_100 < CHAT_LOW {
+        out.push(ActionItem { tag: "Engagement",
+            text: "Stelle alle 5-10 Minuten eine direkte Frage an den Chat.", priority: "medium" });
+    }
+    if follower_valid_count > 0 && followers_per_hour < 0.0 {
+        out.push(ActionItem { tag: "Growth",
+            text: "Follower-Verlust! Prufe ob Content-Wechsel oder lange Pausen Unfollows verursachen.", priority: "high" });
+    } else if follower_valid_count > 0 && followers_per_hour < 1.0 {
+        out.push(ActionItem { tag: "Growth",
+            text: "Erinnere alle 20-30 Minuten an Follow mit konkretem Grund.", priority: "medium" });
+    }
+    out
 }
 
 /// Raid-Netzwerk-Kachel (Python `_get_network_stats`).
@@ -230,6 +335,11 @@ pub async fn overview_handler(
     // Monetarisierungs-Events (fehlende Tabellen → 0).
     let mon = overview_monetization_counts(&pool, &since, login_ref).await;
 
+    // Chatter pro 100 Peak-Viewer (für Chat-Insights/Actions).
+    let chat_per_100 = overview_chat_per_100(&pool, &since, login_ref)
+        .await
+        .map_err(|_| ApiError::internal())?;
+
     let airtime = metrics.total_airtime_hours.unwrap_or(0.0);
     let total_followers = metrics.total_followers.unwrap_or(0);
     let gained = metrics.gained_followers.unwrap_or(0);
@@ -269,10 +379,34 @@ pub async fn overview_handler(
         net,
     );
 
+    let chat_sample = metrics.chat_sample_count.unwrap_or(0);
+    let follower_valid = metrics.follower_valid_count.unwrap_or(0);
+    let fph = per_hour(total_followers);
+    let findings = generate_insights(
+        curr_ret,
+        curr_ret_sample,
+        chat_per_100,
+        chat_sample,
+        fph,
+        per_hour(gained),
+        follower_valid,
+        total_followers,
+    );
+    let actions = generate_actions(
+        curr_ret,
+        curr_ret_sample,
+        chat_per_100,
+        chat_sample,
+        fph,
+        follower_valid,
+    );
+
     Ok(Json(OverviewResponse::Data(OverviewData {
         streamer: params.streamer,
         days,
         scores,
+        findings,
+        actions,
         summary: OverviewSummary {
             avg_viewers: metrics.avg_avg_viewers.unwrap_or(0.0),
             peak_viewers: metrics.max_peak_viewers.unwrap_or(0),
@@ -530,6 +664,11 @@ mod tests {
         assert_eq!(v["scores"]["monetization"], 0);
         assert_eq!(v["scores"]["network"], 26);
         assert_eq!(v["scores"]["total"], 44);
+        // Findings: Retention-Sample<3 (info), Chat-Sample<3 (info), fph=5>3 (pos).
+        assert_eq!(v["findings"].as_array().unwrap().len(), 3);
+        assert_eq!(v["findings"][2]["type"], "pos");
+        // Actions: keine (Samples <3, fph nicht <1).
+        assert_eq!(v["actions"].as_array().unwrap().len(), 0);
     }
 
     #[test]
@@ -551,5 +690,27 @@ mod tests {
         assert_eq!(s.network, 42);
         // total = 60*.2+60*.25+60*.2+40*.15+27*.1+42*.1 = 12+15+12+6+2.7+4.2=51.9 -> 51.
         assert_eq!(s.total, 51);
+    }
+
+    #[test]
+    fn insights_und_actions_regeln() {
+        // Niedrige Retention/Chat + Follower-Verlust, alle Samples >=3.
+        let f = generate_insights(30.0, 5, 2.0, 5, -1.0, 0.0, 1, -10);
+        assert_eq!(f.len(), 3);
+        assert_eq!(f[0].kind, "neg"); // Retention
+        assert_eq!(f[1].kind, "warn"); // Chat
+        assert_eq!(f[2].kind, "neg"); // Follower-Verlust
+        let a = generate_actions(30.0, 5, 2.0, 5, -1.0, 1);
+        assert_eq!(a.len(), 3);
+        assert_eq!(a[0].tag, "Retention");
+        assert_eq!(a[1].tag, "Engagement");
+        assert_eq!(a[2].tag, "Growth");
+        assert_eq!(a[2].priority, "high");
+
+        // Zu wenig Samples → info-Findings, keine Actions.
+        let f2 = generate_insights(80.0, 1, 50.0, 1, 0.2, 0.2, 0, 0);
+        assert_eq!(f2.len(), 2); // 2x info (Retention+Chat), follower_valid=0 → kein Follower-Finding
+        assert!(f2.iter().all(|x| x.kind == "info"));
+        assert!(generate_actions(80.0, 1, 50.0, 1, 0.2, 0).is_empty());
     }
 }
