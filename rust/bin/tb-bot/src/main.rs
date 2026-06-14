@@ -680,6 +680,13 @@ async fn main() {
                 pool.clone(),
             )) as Arc<dyn tb_internal_api::EventSubStatsSource>
         });
+    // Discord-Streamer-Rollen-Sync für POST …/discord-profile (Master-Broker).
+    // Frischer Relay aus der Broker-Config; ohne Relay loggt der Port nur einen
+    // Hinweis (best-effort, wie Python `sync_streamer_role`).
+    let discord_role: Option<Arc<dyn tb_internal_api::DiscordRolePort>> = Some(Arc::new(
+        oauth_followups::BrokerDiscordDirectory::from_env(BrokerRelay::new(&settings.broker).ok()),
+    )
+        as Arc<dyn tb_internal_api::DiscordRolePort>);
     let app = build_internal_router(
         pool,
         token,
@@ -688,6 +695,7 @@ async fn main() {
         manual_raid_port,
         raid_oauth_port,
         eventsub_stats,
+        discord_role,
         legacy_proxy,
     );
 

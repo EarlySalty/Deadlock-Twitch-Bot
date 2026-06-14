@@ -595,8 +595,12 @@ pub async fn set_discord_profile(
     discord_user_id: Option<&str>,
     discord_display_name: Option<&str>,
     mark_member: bool,
+    twitch_user_id: Option<&str>,
 ) -> Result<bool, sqlx::Error> {
     let is_on_discord: i32 = if mark_member { 1 } else { 0 };
+    // Aufgelöste Twitch-User-ID (Python `resolved_user_id`) — wird, sofern
+    // vorhanden, auf der Streamer-Zeile nachgetragen (nur wenn dort noch leer).
+    let resolved_uid: Option<&str> = twitch_user_id.map(str::trim).filter(|s| !s.is_empty());
 
     // Deduplizierung: Andere Identity-Einträge mit gleicher discord_user_id nullen
     if let Some(did) = discord_user_id {
@@ -654,13 +658,15 @@ pub async fn set_discord_profile(
         return Ok(true);
     }
 
-    // Non-Partner-Pfad: twitch_streamers
+    // Non-Partner-Pfad: twitch_streamers. twitch_user_id wird nachgetragen, wenn
+    // dort noch leer (Python `upsert_non_partner_streamer` mit resolved_user_id).
     let streamer_rows = sqlx::query(
         r#"
         UPDATE twitch_streamers
         SET discord_user_id = COALESCE($2, discord_user_id),
             discord_display_name = COALESCE($3, discord_display_name),
-            is_on_discord = $4
+            is_on_discord = $4,
+            twitch_user_id = COALESCE(NULLIF(twitch_user_id, ''), $5)
         WHERE LOWER(twitch_login) = LOWER($1)
           AND archived_at IS NULL
         "#,
@@ -669,11 +675,32 @@ pub async fn set_discord_profile(
     .bind(discord_user_id)
     .bind(discord_display_name)
     .bind(is_on_discord)
+    .bind(resolved_uid)
     .execute(pool)
     .await?
     .rows_affected();
 
     Ok(streamer_rows > 0)
+}
+
+/// Twitch-User-ID eines Streamers aus `twitch_raid_auth` (Port von Python
+/// `_dashboard_load_twitch_user_id_from_raid_auth_sync`). `None`, wenn keine
+/// Zeile existiert oder die ID leer ist.
+pub async fn load_twitch_user_id_from_raid_auth(
+    pool: &PgPool,
+    login: &str,
+) -> Result<Option<String>, sqlx::Error> {
+    let row: Option<(Option<String>,)> = sqlx::query_as(
+        "SELECT twitch_user_id FROM twitch_raid_auth
+          WHERE LOWER(twitch_login) = LOWER($1) LIMIT 1",
+    )
+    .bind(login)
+    .fetch_optional(pool)
+    .await?;
+    Ok(row
+        .and_then(|(uid,)| uid)
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty()))
 }
 
 // ── GET /stats ────────────────────────────────────────────────────────────────
@@ -1464,13 +1491,14 @@ mod tests {
             Some("123456789"),
             Some("TestName"),
             true,
+            Some("uid999"),
         )
         .await
         .unwrap();
         assert!(ok);
 
-        let row: (Option<String>, Option<String>, Option<i32>) = sqlx::query_as(
-            "SELECT discord_user_id, discord_display_name, is_on_discord FROM twitch_streamers WHERE LOWER(twitch_login) = 'profileuser'",
+        let row: (Option<String>, Option<String>, Option<i32>, Option<String>) = sqlx::query_as(
+            "SELECT discord_user_id, discord_display_name, is_on_discord, twitch_user_id FROM twitch_streamers WHERE LOWER(twitch_login) = 'profileuser'",
         )
         .fetch_one(&pool)
         .await
@@ -1478,6 +1506,8 @@ mod tests {
         assert_eq!(row.0.as_deref(), Some("123456789"));
         assert_eq!(row.1.as_deref(), Some("TestName"));
         assert_eq!(row.2, Some(1));
+        // twitch_user_id wird nachgetragen, weil die Streamer-Zeile noch keine hatte.
+        assert_eq!(row.3.as_deref(), Some("uid999"));
     }
 
     #[tokio::test]

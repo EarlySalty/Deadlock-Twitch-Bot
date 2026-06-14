@@ -65,6 +65,20 @@ use tb_domain::normalize_twitch_login;
 use tb_http_core::{ApiError, AuthLevel};
 use tb_transport_twitch::HelixClient;
 
+// ── Discord-Rollen-Port ───────────────────────────────────────────────────────
+
+/// Port für den Discord-Streamer-Rollen-Sync (Python `sync_streamer_role`).
+/// Echte Impl in tb-bot über den Master-Broker; Fehler werden dort geloggt,
+/// nie propagiert (Python-Parität: best-effort, kein Abbruch).
+#[async_trait::async_trait]
+pub trait DiscordRolePort: Send + Sync {
+    async fn grant_streamer_role(&self, discord_user_id: &str, reason: &str);
+}
+
+/// Router-Extension-Wrapper für [`DiscordRolePort`] (`None` = kein Sync).
+#[derive(Clone)]
+pub struct DiscordRoleExt(pub Option<Arc<dyn DiscordRolePort>>);
+
 // ── Response-Typen ────────────────────────────────────────────────────────────
 
 #[derive(Serialize)]
@@ -525,6 +539,8 @@ pub async fn discord_flag_handler(
 pub async fn discord_profile_handler(
     auth: AuthLevel,
     State(pool): State<PgPool>,
+    Extension(helix): Extension<Arc<Option<HelixClient>>>,
+    Extension(role_ext): Extension<DiscordRoleExt>,
     Path(raw_login): Path<String>,
     Json(body): Json<DiscordProfileRequest>,
 ) -> Result<impl IntoResponse, ApiError> {
@@ -568,21 +584,47 @@ pub async fn discord_profile_handler(
             }
         });
 
+    // twitch_user_id auflösen wie Python (_dashboard_save_discord_profile):
+    // erst aus twitch_raid_auth, sonst über Helix `GET /users`.
+    let mut twitch_user_id = db::load_twitch_user_id_from_raid_auth(&pool, &login)
+        .await
+        .unwrap_or(None);
+    if twitch_user_id.is_none() {
+        if let Some(h) = helix.as_ref() {
+            if let Ok(users) = h.get_users(&[login.as_str()]).await {
+                twitch_user_id = users
+                    .values()
+                    .next()
+                    .map(|u| u.id.clone())
+                    .filter(|s| !s.is_empty());
+            }
+        }
+    }
+
     match db::set_discord_profile(
         &pool,
         &login,
         discord_user_id.as_deref(),
         discord_display_name.as_deref(),
         body.mark_member,
+        twitch_user_id.as_deref(),
     )
     .await
     {
-        Ok(true) => Ok(Json(OkLoginMessageResponse {
-            ok: true,
-            login: login.clone(),
-            message: "updated".to_string(),
-        })
-        .into_response()),
+        Ok(true) => {
+            // Discord-Streamer-Rolle setzen (Python `sync_streamer_role`) —
+            // best-effort, Fehler werden in der Port-Impl geloggt, nie propagiert.
+            if let (Some(did), Some(port)) = (discord_user_id.as_deref(), role_ext.0.as_ref()) {
+                port.grant_streamer_role(did, &format!("Discord-Profil für {login} gesetzt"))
+                    .await;
+            }
+            Ok(Json(OkLoginMessageResponse {
+                ok: true,
+                login: login.clone(),
+                message: "updated".to_string(),
+            })
+            .into_response())
+        }
         Ok(false) => Err(ApiError::not_found()),
         Err(e) => {
             tracing::error!("set_discord_profile DB-Fehler: {e}");
@@ -940,6 +982,7 @@ mod tests {
             )
             .with_state(pool)
             .layer(Extension(helix))
+            .layer(Extension(DiscordRoleExt(None)))
             .layer(Extension(ExpectedToken(token.to_string())))
             .layer(middleware::from_fn_with_state(
                 token.to_string(),

@@ -100,6 +100,15 @@ impl DiscordDirectoryPort for BrokerDiscordDirectory {
     }
 }
 
+/// Gleiche Broker-Mechanik für den internen-API-Pfad (`POST …/discord-profile`):
+/// leitet auf die bestehende [`DiscordDirectoryPort`]-Impl weiter.
+#[async_trait]
+impl tb_internal_api::DiscordRolePort for BrokerDiscordDirectory {
+    async fn grant_streamer_role(&self, discord_user_id: &str, reason: &str) {
+        <Self as DiscordDirectoryPort>::grant_streamer_role(self, discord_user_id, reason).await
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Moderator via Helix
 // ---------------------------------------------------------------------------

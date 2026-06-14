@@ -63,7 +63,9 @@ pub struct StreamerInviteEntry {
 /// das in seine sqlite, damit die Join-Quellen-Klassifikation Streamer-Invites
 /// erkennt (die Zuordnung liegt sonst nur in dieser Postgres-DB).
 pub async fn list_all_handler(State(pool): State<PgPool>) -> Result<impl IntoResponse, ApiError> {
-    let rows: Vec<(String, i64, String, String, Option<String>, Option<String>)> = sqlx::query_as(
+    // (streamer_login, guild_id, invite_code, invite_url, created_at, last_sent_at)
+    type InviteRow = (String, i64, String, String, Option<String>, Option<String>);
+    let rows: Vec<InviteRow> = sqlx::query_as(
         "SELECT streamer_login, guild_id, invite_code, invite_url, created_at, last_sent_at
          FROM twitch_streamer_invites ORDER BY streamer_login",
     )

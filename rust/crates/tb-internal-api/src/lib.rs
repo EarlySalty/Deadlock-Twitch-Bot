@@ -25,6 +25,7 @@ pub use handlers::raid_oauth::{RaidOAuthExt, RaidOAuthPort};
 pub use handlers::stats_native::{
     EventSubCurrentSnapshot, EventSubStatsExt, EventSubStatsSource,
 };
+pub use handlers::streamers::{DiscordRoleExt, DiscordRolePort};
 pub use idempotency::IdempotencyState;
 
 /// Baut den axum-Router für alle internen Endpoints.
@@ -47,6 +48,7 @@ pub fn build_internal_router(
     manual_raid: Option<Arc<dyn handlers::raid::ManualRaidPort>>,
     raid_oauth: Option<Arc<dyn handlers::raid_oauth::RaidOAuthPort>>,
     eventsub_stats: Option<Arc<dyn handlers::stats_native::EventSubStatsSource>>,
+    discord_role: Option<Arc<dyn handlers::streamers::DiscordRolePort>>,
     legacy_proxy: Option<Arc<LegacyProxy>>,
 ) -> Router {
     use handlers::{
@@ -256,6 +258,7 @@ pub fn build_internal_router(
         .layer(Extension(handlers::stats_native::EventSubStatsExt(
             eventsub_stats,
         )))
+        .layer(Extension(handlers::streamers::DiscordRoleExt(discord_role)))
         .layer(Extension(idempotency::IdempotencyState::new()))
         .layer(Extension(LegacyProxyExt(legacy_proxy)))
         .layer(Extension(ExpectedToken(token.clone())))

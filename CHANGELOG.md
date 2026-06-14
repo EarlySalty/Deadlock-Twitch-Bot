@@ -1,3 +1,11 @@
+## #212 — Discord-Profil setzen vergibt wieder die Streamer-Rolle (Admin-Aktion)
+
+**Ausgangslage (Admin-Aktion):** Wenn im Admin-Bereich das Discord-Profil eines Streamers gesetzt wird (Discord-ID + Anzeigename), passierten in der Vorgänger-Version zwei Dinge mehr, die beim Umzug verloren gingen: die Twitch-User-ID des Streamers wurde aufgelöst und mitgespeichert, und der Streamer bekam automatisch die Discord-Streamer-Rolle. Der neue Handler schrieb nur die Discord-Felder in die Datenbank — keine Rollen-Vergabe, keine ID-Auflösung.
+
+**Was geändert wurde:** Beim Setzen des Discord-Profils löst der Bot die Twitch-User-ID jetzt wieder auf und trägt sie nach (falls noch keine hinterlegt war), und er vergibt dem Streamer automatisch die Discord-Streamer-Rolle.
+
+**Wie es funktioniert:** Die User-ID wird wie früher in zwei Stufen ermittelt — zuerst aus dem vorhandenen Autorisierungs-Datensatz des Streamers, und falls dort nichts steht, über eine Twitch-API-Abfrage anhand des Logins. Diese ID wird auf der Streamer-Zeile ergänzt, sofern dort noch keine stand (bestehende IDs bleiben unangetastet). Ist eine Discord-ID angegeben, weist der Bot anschließend über den Discord-Broker die Streamer-Rolle zu — als Nebeneffekt, der den eigentlichen Speichervorgang nie blockiert (schlägt die Rollen-Vergabe fehl, wird das nur protokolliert). Ohne erreichbaren Broker bleibt der Speichervorgang trotzdem erfolgreich.
+
 ## #211 — Admin-Statistik zeigt wieder die Live-EventSub-Auslastung
 
 **Ausgangslage (rein intern/Admin):** Die `/stats`-Übersicht im Admin-Bereich hat eine EventSub-Sektion (wie viele Twitch-Abos der Bot aktuell hält, aufgeschlüsselt nach Typ und Kanal). Beim Umzug war diese Live-Sektion nicht mehr an die neue Abo-Verwaltung angeschlossen — sie blieb leer, nur die historischen Kapazitäts-Werte aus der Datenbank waren da.
