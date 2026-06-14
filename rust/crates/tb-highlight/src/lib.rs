@@ -22,3 +22,4 @@ pub mod event_detector;
 pub mod highlight_sender;
 pub mod state;
 pub mod twitch_vod;
+pub mod worker;
