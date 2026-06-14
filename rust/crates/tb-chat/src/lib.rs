@@ -37,6 +37,7 @@ pub mod scam_pitch;
 pub mod spam_filter;
 pub mod sus_invite;
 pub mod timeout_tracking;
+pub mod title_db;
 pub mod token;
 pub mod types;
 
