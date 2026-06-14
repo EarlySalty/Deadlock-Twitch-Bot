@@ -22,6 +22,9 @@
 
 use std::sync::OnceLock;
 
+use std::sync::Arc;
+
+use arc_swap::ArcSwap;
 use regex::Regex;
 use sqlx::PgPool;
 use unicode_normalization::UnicodeNormalization;
@@ -438,16 +441,31 @@ impl LearnedPatterns {
 
 /// Zweistufiger Spam-Score-Filter.
 ///
-/// Hält die gecachten gelernten Muster; ist `Clone`-fähig für Arc-Sharing.
-#[derive(Clone)]
+/// Hält die gelernten Muster in einem `ArcSwap` (lock-freier Hot-Reload);
+/// wird über `Arc<SpamFilter>` geteilt, daher kein `Clone` nötig.
 pub struct SpamFilter {
-    learned: LearnedPatterns,
+    /// Gelernte Muster, lock-frei austauschbar (ArcSwap). Ein Hintergrund-Task
+    /// (chat_wiring) lädt sie periodisch neu — analog zum Python-Cache mit TTL
+    /// 120 s (spam_ai_review.py), der pro Nachricht load_learned_patterns()
+    /// aufrief und nach jedem Lernschritt invalidiert wurde. Ohne Reload griffen
+    /// neu gelernte Spam-/Safe-Muster im nativen Betrieb erst nach Bot-Neustart.
+    learned: ArcSwap<LearnedPatterns>,
 }
 
 impl SpamFilter {
     /// Erstellt einen neuen Filter mit vorgeladenen gelernten Mustern.
     pub fn new(learned: LearnedPatterns) -> Self {
-        Self { learned }
+        Self {
+            learned: ArcSwap::from_pointee(learned),
+        }
+    }
+
+    /// Lädt die gelernten Muster neu aus der DB und tauscht sie atomar aus.
+    /// Wird vom periodischen Reload-Task aufgerufen (Ziel: neu gelernte Muster
+    /// greifen innerhalb der TTL statt erst nach Neustart).
+    pub async fn reload(&self, pool: &PgPool) {
+        let fresh = LearnedPatterns::load(pool).await;
+        self.learned.store(Arc::new(fresh));
     }
 
     /// Berechnet Spam-Score und trifft Aktionsentscheidung.
@@ -584,8 +602,9 @@ impl SpamFilter {
         // Schritt 6+7: Gelernte Muster (moderation.py Z. 542–562)
         // Erst alle Phrasen prüfen (break bei erstem Treffer),
         // dann alle Fragmente (break bei erstem Treffer).
+        let learned = self.learned.load();
         let mut learned_phrase_hit = false;
-        for lp in &self.learned.spam {
+        for lp in &learned.spam {
             if lp.pattern_type != "phrase" {
                 continue;
             }
@@ -601,7 +620,7 @@ impl SpamFilter {
             }
         }
         if !learned_phrase_hit {
-            for lp in &self.learned.spam {
+            for lp in &learned.spam {
                 if lp.pattern_type == "phrase" {
                     continue;
                 }
@@ -621,7 +640,7 @@ impl SpamFilter {
         // Schritt 8: Negativ-Scoring (moderation.py Z. 566–585)
         // NUR wenn hits > 0 UND kein hartes Signal.
         if hits > 0 && !has_hard_spam_signal(&reasons) {
-            for sp in &self.learned.safe {
+            for sp in &learned.safe {
                 let spat = sp.pattern.to_lowercase();
                 if spat.len() < 4 {
                     continue;
@@ -1169,6 +1188,36 @@ mod db_tests {
         let v = f.evaluate("kaufe views günstig", &SpamContext::default());
         assert_eq!(v.score, 2);
         assert!(v.matched.iter().any(|r| r.starts_with("Learned-Phrase")));
+    }
+
+    #[tokio::test]
+    async fn reload_uebernimmt_neu_gelernte_muster_ohne_neubau() {
+        let pool = pool_or_skip!("sf_reload");
+        create_learned_tables(&pool).await;
+
+        // Filter startet mit leeren Mustern.
+        let f = SpamFilter::new(LearnedPatterns::load(&pool).await);
+        let before = f.evaluate("kaufe views günstig", &SpamContext::default());
+        assert!(
+            !before.matched.iter().any(|r| r.starts_with("Learned-Phrase")),
+            "vor dem Lernen kein Learned-Phrase-Treffer"
+        );
+
+        // Muster wird gelernt (DB-Insert) ...
+        sqlx::query(
+            "INSERT INTO twitch_auto_learned_spam_patterns (pattern, pattern_type) VALUES ($1, $2)",
+        )
+        .bind("kaufe views")
+        .bind("phrase")
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        // ... und greift nach reload() OHNE neuen Filter (atomarer ArcSwap).
+        f.reload(&pool).await;
+        let after = f.evaluate("kaufe views günstig", &SpamContext::default());
+        assert_eq!(after.score, 2);
+        assert!(after.matched.iter().any(|r| r.starts_with("Learned-Phrase")));
     }
 
     #[tokio::test]

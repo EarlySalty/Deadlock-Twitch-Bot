@@ -287,6 +287,23 @@ pub async fn build_runtime(
     let review_log_dir =
         std::env::var("TB_CHAT_REVIEW_LOG_DIR").unwrap_or_else(|_| "logs".to_string());
 
+    // Spam-Filter halten, damit ein Hintergrund-Task die gelernten Muster
+    // periodisch neu laden kann (Python-Cache-TTL 120 s). Ohne Reload griffen
+    // KI-neu-gelernte Spam-/Safe-Muster im nativen Betrieb erst nach Neustart.
+    let spam_filter = Arc::new(SpamFilter::new(learned));
+    {
+        let spam_filter = Arc::clone(&spam_filter);
+        let pool = pool.clone();
+        tokio::spawn(async move {
+            let mut tick = tokio::time::interval(Duration::from_secs(120));
+            tick.tick().await; // erster Tick feuert sofort — überspringen (frisch geladen)
+            loop {
+                tick.tick().await;
+                spam_filter.reload(&pool).await;
+            }
+        });
+    }
+
     let pipeline = Arc::new(ChatPipeline::new(ChatPipelineParts {
         bot_user_id: bot_user_id.clone(),
         api: Arc::clone(&api),
@@ -301,7 +318,7 @@ pub async fn build_runtime(
             }),
             pool.clone(),
         )),
-        spam_filter: Arc::new(SpamFilter::new(learned)),
+        spam_filter: Arc::clone(&spam_filter),
         ai_reviewer: Arc::new(SpamAiReviewer::new(pool.clone(), http.clone())),
         moderation,
         sus_invite: Arc::new(SusInviteCheck::new(pool.clone())),
