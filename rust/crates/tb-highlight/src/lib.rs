@@ -7,10 +7,14 @@
 //! Orchestrator + Output-Parser — das schwere Demo-Parsing steckt im Binary,
 //! sodass der Rust-Port dieselben `boon`-Subkommandos via Subprocess aufruft.
 //!
-//! Slices (bottom-up): [`deadlock_client`] (Match-History/Metadata-API),
-//! [`demo_downloader`] (Demo-Download + bz2-Entpacken + lokaler Cache),
-//! [`boon`] (Subprocess-Wrapper + Output-Parser des Demo-Parser-Binaries).
+//! Slices (bottom-up): [`config`] (Konstanten), [`deadlock_client`]
+//! (Match-History/Metadata-API), [`demo_downloader`] (Demo-Download +
+//! bz2-Entpacken + lokaler Cache), [`boon`] (Subprocess-Wrapper + Output-Parser
+//! des Demo-Parser-Binaries), [`event_detector`] (API-basierte Event-Erkennung
+//! + geteilter [`event_detector::HighlightEvent`]-Typ).
 
 pub mod boon;
+pub mod config;
 pub mod deadlock_client;
 pub mod demo_downloader;
+pub mod event_detector;
