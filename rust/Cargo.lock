@@ -2294,6 +2294,7 @@ dependencies = [
  "tb-config",
  "tb-crypto",
  "tb-db",
+ "tb-highlight",
  "tb-internal-api",
  "tb-monitoring",
  "tb-raid",

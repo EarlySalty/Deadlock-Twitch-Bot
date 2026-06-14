@@ -84,7 +84,8 @@ use raid_arrival_wiring::RaidArrivalSinkImpl;
 use score_refresh::ScoreRefreshResolver;
 use wiring::{
     BrokerAnnouncementTransport, HelixFollowerSource, HelixStreamSource,
-    HelixSubscriptionTransport, HelixVodPreview, LivePingRoleAuto, SubscriptionEventSubHooks,
+    HelixSubscriptionTransport, HelixVodPreview, HelixVodSource, LivePingRoleAuto,
+    SubscriptionEventSubHooks,
 };
 
 /// Hooks des Poll-Loops: Go-Live → stream.offline-Subscription (wie EventSub),
@@ -746,6 +747,35 @@ async fn main() {
             pool.clone(),
             600,
         ));
+    }
+
+    // Highlight-Clipper (Port von bot/highlight_clipper): pollt aktive Partner
+    // auf neue Deadlock-Matches, schneidet Highlight-Clips aus dem Twitch-VOD und
+    // postet sie über den lokalen Relay. In Python via `_hc_start` bedingungslos
+    // AN; hier an die Helix-Verfügbarkeit gebunden (ohne Helix kein VOD-Lookup).
+    // boon- und yt-dlp-Pfade relativ zum Service-WorkingDirectory (Repo-Root).
+    if let Some(helix_client) = helix.as_ref().clone() {
+        let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+        let hc_config = tb_highlight::worker::HighlightClipperConfig::new(
+            cwd.join("tools/boon"),
+            cwd.join(".venv/bin/yt-dlp"),
+        );
+        let hc_worker = tb_highlight::worker::HighlightClipperWorker::new(
+            pool.clone(),
+            Arc::new(HelixVodSource { helix: helix_client }),
+            hc_config,
+        );
+        tokio::spawn(async move {
+            loop {
+                hc_worker.run_once().await;
+                tokio::time::sleep(std::time::Duration::from_secs(
+                    tb_highlight::config::POLL_INTERVAL_SECONDS,
+                ))
+                .await;
+            }
+        });
+    } else {
+        tracing::warn!("HighlightClipper: kein HelixClient — Worker nicht gestartet");
     }
 
     // Poll-Loop: das Cutover-Gate. Default AUS — Python bleibt alleiniger

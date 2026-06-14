@@ -177,6 +177,37 @@ impl FollowerCountSource for HelixFollowerSource {
     }
 }
 
+/// Helix-Adapter für den Highlight-Clipper: liefert User-Info + Archiv-VODs
+/// (implementiert [`tb_highlight::twitch_vod::TwitchVodApi`] über den App-Token).
+pub struct HelixVodSource {
+    pub helix: HelixClient,
+}
+
+#[async_trait::async_trait]
+impl tb_highlight::twitch_vod::TwitchVodApi for HelixVodSource {
+    async fn get_user_info(&self, login: &str) -> Option<serde_json::Value> {
+        let users = self.helix.get_users(&[login]).await.ok()?;
+        let user = users.get(&login.to_lowercase())?;
+        Some(serde_json::json!({ "id": user.id.clone() }))
+    }
+
+    async fn get_archive_videos(&self, channel_id: &str, first: u32) -> Vec<serde_json::Value> {
+        self.helix
+            .get_archive_videos(channel_id, first)
+            .await
+            .unwrap_or_default()
+            .into_iter()
+            .map(|v| {
+                serde_json::json!({
+                    "id": v.id,
+                    "created_at": v.created_at,
+                    "duration": v.duration,
+                })
+            })
+            .collect()
+    }
+}
+
 /// Helix-Adapter fürs VOD-Vorschaubild des Offline-Embeds.
 pub struct HelixVodPreview {
     pub helix: HelixClient,
