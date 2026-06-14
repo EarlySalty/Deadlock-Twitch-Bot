@@ -204,8 +204,8 @@ class _DummyOverviewOffload(_AnalyticsOverviewMixin):
     def _require_v2_auth(self, request):
         return None
 
-    def _get_overview_data_sync(self, streamer: str | None, days: int):
-        return {"streamer": streamer, "days": days, "ok": True}
+    def _get_overview_data_sync(self, streamer: str | None, days: int, window: str = "full"):
+        return {"streamer": streamer, "days": days, "window": window, "ok": True}
 
     def _require_extended_plan(self, request):
         return None
@@ -651,7 +651,7 @@ class DashboardSecurityRegressionTests(unittest.IsolatedAsyncioTestCase):
             payload = await handler._get_overview_data("streamer_one", 30)
 
         self.assertEqual(payload, expected)
-        mocked_loader.assert_called_once_with("streamer_one", 30)
+        mocked_loader.assert_called_once_with("streamer_one", 30, "full")
         mocked_to_thread.assert_awaited_once()
         self.assertIs(mocked_to_thread.await_args.args[0], mocked_loader)
 

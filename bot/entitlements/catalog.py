@@ -64,7 +64,10 @@ PLAN_DISPLAY_NAME_MAP: Final[dict[str, str]] = {
 }
 
 PLAN_ENTITLEMENTS_MAP: Final[dict[str, frozenset[str]]] = {
-    "raid_free": frozenset(),
+    # analytics.daily = kostenlose "Tagesform" (Snapshot des letzten Streams).
+    # Paid-Plaene brauchen es nicht zusaetzlich: analytics.basic/extended geben
+    # ohnehin den vollen Verlauf frei.
+    "raid_free": frozenset({"analytics.daily"}),
     "chat_quiet": frozenset({"chat.promos.disable"}),
     "raid_boost": frozenset(
         {

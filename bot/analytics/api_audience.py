@@ -425,14 +425,17 @@ class _AnalyticsAudienceMixin:
 
         streamer = request.query.get("streamer", "").strip() or None
         days = min(max(int(request.query.get("days", "30")), 7), 365)
+        window = self._resolve_read_window(request)
 
         if not streamer:
             return web.json_response({"error": "Streamer required"}, status=400)
 
         try:
             with storage.transaction() as conn:
-                since_date = (datetime.now(UTC) - timedelta(days=days)).isoformat()
-                prev_since_date = (datetime.now(UTC) - timedelta(days=days * 2)).isoformat()
+                # Free "Tagesform" beschneidet auf den letzten Stream; paid = volles Fenster.
+                since_date, prev_since_date = self._window_since_dates(
+                    conn, streamer.lower(), days, window
+                )
 
                 # Current period
                 current_sessions = conn.execute(

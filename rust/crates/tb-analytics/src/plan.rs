@@ -50,7 +50,10 @@ pub fn plan_is_extended(plan_id: &str) -> bool {
 /// Entitlements aus Plan-ID (Python: `PLAN_ENTITLEMENTS_MAP`).
 pub fn plan_entitlements(plan_id: &str) -> &'static [&'static str] {
     match plan_id {
-        "raid_free" => &[],
+        // analytics.daily = kostenlose "Tagesform" (Snapshot des letzten Streams).
+        // Paid-Plaene brauchen es nicht zusaetzlich: sie bekommen via
+        // analytics.basic/extended ohnehin den vollen Verlauf.
+        "raid_free" => &["analytics.daily"],
         "chat_quiet" => &["chat.promos.disable"],
         "raid_boost" => &[
             "analytics.ai_mini",

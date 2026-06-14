@@ -667,6 +667,66 @@ class AnalyticsV2Mixin(
                 content_type="application/json",
             )
 
+    def _resolve_read_window(self, request: web.Request) -> str:
+        """Return 'full' or 'last_stream' for Tagesform endpoints.
+
+        Unlike _require_extended_plan this never blocks — it narrows the time
+        window. Free (analytics.daily only) sees just the latest stream; any
+        paid analytics plan (analytics.basic or analytics.extended) gets the
+        full rolling window. Admins/localhost/no-streamer-context get 'full'.
+        """
+        streamer = (
+            request.query.get("streamer")
+            or request.match_info.get("streamer")
+            or request.query.get("login")
+            or ""
+        ).strip().lower()
+        if not streamer:
+            session = self._get_dashboard_session(request)
+            if session:
+                streamer = str(session.get("twitch_login") or "").strip().lower()
+        if not streamer:
+            return "full"
+        if self._get_auth_level(request) in ("localhost", "admin"):
+            return "full"
+        snapshot = _resolve_plan_snapshot_for_login(streamer)
+        plan_id = snapshot.get("plan_id")
+        if _plan_has_entitlement(plan_id, "analytics.basic") or _plan_has_entitlement(
+            plan_id, _ANALYTICS_EXTENDED_ENTITLEMENT
+        ):
+            return "full"
+        return "last_stream"
+
+    @staticmethod
+    def _window_since_dates(
+        conn, streamer_login: str | None, days: int, window: str
+    ) -> tuple[str, str]:
+        """Return (since_date, prev_since_date) for a read window.
+
+        'last_stream' clamps since_date to the latest session's start (only the
+        most recent stream is in range) and empties the previous-period window
+        (prev == since) so single-stream trends are suppressed. 'full' keeps the
+        rolling now-days / now-2*days windows.
+        """
+        if window == "last_stream":
+            latest = conn.execute(
+                """
+                SELECT MAX(s.started_at)
+                FROM twitch_stream_sessions s
+                WHERE s.ended_at IS NOT NULL
+                  AND (COALESCE(%s, '') = '' OR LOWER(s.streamer_login) = %s)
+                """,
+                [streamer_login, streamer_login],
+            ).fetchone()[0]
+            if latest:
+                since = latest.isoformat() if hasattr(latest, "isoformat") else str(latest)
+            else:
+                since = (datetime.now(UTC) - timedelta(days=days)).isoformat()
+            return since, since
+        since = (datetime.now(UTC) - timedelta(days=days)).isoformat()
+        prev = (datetime.now(UTC) - timedelta(days=days * 2)).isoformat()
+        return since, prev
+
     # Reusable SQL: filter out sessions where Twitch API returned 0 followers (missing token)
     _FOLLOWER_DELTA_SUM = """SUM(CASE WHEN s.follower_delta IS NOT NULL
          AND NOT (s.followers_end = 0 AND s.followers_start > 0)

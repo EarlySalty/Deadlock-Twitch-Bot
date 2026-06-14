@@ -967,24 +967,35 @@ class _AnalyticsOverviewMixin:
 
         streamer = request.query.get("streamer", "").strip() or None
         days = min(max(int(request.query.get("days", "30")), 7), 365)
+        window = self._resolve_read_window(request)
 
         try:
-            data = await self._get_overview_data(streamer, days)
+            data = await self._get_overview_data(streamer, days, window)
+            if isinstance(data, dict):
+                data["window"] = window
+                data["windowLimited"] = window == "last_stream"
             return web.json_response(data)
         except Exception:
             log.exception("Error in overview API")
             return analytics_internal_error_response()
 
-    async def _get_overview_data(self, streamer: str | None, days: int) -> dict[str, Any]:
-        return await asyncio.to_thread(self._get_overview_data_sync, streamer, days)
+    async def _get_overview_data(
+        self, streamer: str | None, days: int, window: str = "full"
+    ) -> dict[str, Any]:
+        return await asyncio.to_thread(self._get_overview_data_sync, streamer, days, window)
 
-    def _get_overview_data_sync(self, streamer: str | None, days: int) -> dict[str, Any]:
+    def _get_overview_data_sync(
+        self, streamer: str | None, days: int, window: str = "full"
+    ) -> dict[str, Any]:
         """Get comprehensive overview data for the dashboard."""
         with storage.readonly_connection() as conn:
-            since_date = (datetime.now(UTC) - timedelta(days=days)).isoformat()
-            prev_since_date = (datetime.now(UTC) - timedelta(days=days * 2)).isoformat()
-
             streamer_login = streamer.lower() if streamer else None
+            # Free "Tagesform" (window=last_stream) sieht nur den letzten Stream;
+            # paid bekommt das volle Fenster. Trends werden bei last_stream durch
+            # ein leeres Vorperioden-Fenster unterdrueckt.
+            since_date, prev_since_date = self._window_since_dates(
+                conn, streamer_login, days, window
+            )
 
             # Check data exists
             count = conn.execute(
