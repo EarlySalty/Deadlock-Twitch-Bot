@@ -91,7 +91,8 @@ pub async fn pool_in_schema(schema: &str) -> Option<PgPool> {
         )",
         "CREATE TABLE twitch_session_chatters (
             session_id BIGINT NOT NULL, streamer_login TEXT NOT NULL,
-            chatter_login TEXT NOT NULL, is_first_time_streamer BOOLEAN DEFAULT FALSE
+            chatter_login TEXT NOT NULL, is_first_time_streamer BOOLEAN DEFAULT FALSE,
+            confirmed_first_ever BOOLEAN DEFAULT FALSE
         )",
         "CREATE TABLE twitch_stats_tracked (
             ts_utc TIMESTAMPTZ, streamer TEXT, viewer_count INTEGER,

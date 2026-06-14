@@ -1,3 +1,11 @@
+## #208 — Analyse: „Erste Nachricht je"-Markierung wird wieder gesetzt
+
+**Ausgangslage:** Wenn ein Zuschauer zum allerersten Mal in einem Stream etwas schreibt, hält der Bot das doppelt fest: als eigenes Ereignis und als Markierung am Zuschauer der laufenden Session (Grundlage für „neue vs. wiederkehrende Chatter" in der Auswertung). Beim Umzug auf das neue System ging der zweite Teil verloren — das Ereignis wurde geschrieben, die Session-Markierung aber nicht. Still, ohne Fehler.
+
+**Was geändert wurde:** Beide Schreibvorgänge laufen wieder gemeinsam und unteilbar (in einer Transaktion): der Ereignis-Eintrag plus das Flag „erste Nachricht je bestätigt" am passenden Session-Zuschauer.
+
+**Wie es funktioniert:** Trifft das `user_first_message`-Event ein, schreibt der Bot den Eintrag und setzt in derselben Transaktion die Markierung für den Zuschauer der aktuell offenen Session des Streamers. Die Session wird dabei direkt in der Update-Abfrage ermittelt; gibt es gerade keine offene Session, bleibt es beim reinen Ereignis-Eintrag (kein Fehler, keine falsche Markierung).
+
 ## #207 — Multi-Stream / Shared Chat: Bot arbeitet jetzt im richtigen Kanal
 
 **Ausgangslage:** Bei Twitch „Shared Chat" teilen sich mehrere Streamer einen gemeinsamen Chat (typisch bei Multi-Streams/Kollabs — eine Nachricht erscheint dann in allen beteiligten Kanälen). Twitch markiert jede solche Nachricht mit ihrem echten Herkunfts-Kanal. Beim Umzug auf das neue System wurde dieses Feld komplett ignoriert: Der Bot hielt jede Nachricht für eine aus dem Kanal, auf den er gerade lauscht (den Host), statt aus dem Kanal, in dem sie wirklich geschrieben wurde. In der Vorgänger-Version war das korrekt — die Funktion ist beim Port verloren gegangen.

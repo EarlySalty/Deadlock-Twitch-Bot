@@ -534,3 +534,71 @@ async fn source_states_by_logins_liefert_login_map() {
 
     assert!(store.source_states_by_logins(&[]).await.unwrap().is_empty());
 }
+
+#[tokio::test]
+async fn first_message_setzt_confirmed_first_ever_auf_session_chatter() {
+    let pool = pool_or_skip!("t4b_first_msg");
+    let store = tb_monitoring::TelemetryStore::new(pool.clone());
+
+    // Offene Session + ein Session-Chatter (noch nicht confirmed).
+    let session_id: i64 = sqlx::query_scalar(
+        "INSERT INTO twitch_stream_sessions (streamer_login, started_at)
+         VALUES ('drag', NOW()) RETURNING id",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO twitch_session_chatters (session_id, streamer_login, chatter_login)
+         VALUES ($1, 'drag', 'viewer1')",
+    )
+    .bind(session_id)
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    // first_message-Event (Login wird klein geschrieben → matcht 'viewer1').
+    let event = serde_json::json!({
+        "chatter_user_login": "Viewer1",
+        "chatter_user_id": "42",
+        "message_id": "m1",
+        "message": {"text": "hallo"}
+    });
+    store
+        .store_first_message_event("bid", "drag", &event, Utc::now())
+        .await
+        .expect("first_message gespeichert");
+
+    let cnt: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM twitch_first_message_events WHERE chatter_login = 'viewer1'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(cnt, 1, "first_message_events-Zeile erwartet");
+
+    let confirmed: bool = sqlx::query_scalar(
+        "SELECT confirmed_first_ever FROM twitch_session_chatters
+          WHERE session_id = $1 AND chatter_login = 'viewer1'",
+    )
+    .bind(session_id)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert!(confirmed, "confirmed_first_ever muss nach first_message TRUE sein");
+
+    // Ohne offene Session: kein Update, aber auch kein Fehler (Subquery → NULL).
+    sqlx::query("UPDATE twitch_stream_sessions SET ended_at = NOW() WHERE id = $1")
+        .bind(session_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+    let event2 = serde_json::json!({
+        "chatter_user_login": "viewer2", "chatter_user_id": "43",
+        "message_id": "m2", "message": {"text": "hi"}
+    });
+    store
+        .store_first_message_event("bid", "drag", &event2, Utc::now())
+        .await
+        .expect("first_message ohne offene Session darf nicht fehlschlagen");
+}

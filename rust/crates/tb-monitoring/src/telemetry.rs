@@ -388,7 +388,11 @@ impl TelemetryStore {
         event: &Value,
         now: DateTime<Utc>,
     ) -> Result<(), sqlx::Error> {
-        let chatter_login = str_lower(event, &["chatter_user_login", "user_login"]);
+        // Python (eventsub_mixin.py:2437) bricht ohne Chatter-Login ab — kein Leer-Insert.
+        let chatter_login = match str_lower(event, &["chatter_user_login", "user_login"]) {
+            Some(c) if !c.is_empty() => c,
+            _ => return Ok(()),
+        };
         let chatter_id = str_field(event, &["chatter_user_id", "user_id"]);
         let message_id = str_field(event, &["message_id"]);
         let message_text = event
@@ -398,6 +402,9 @@ impl TelemetryStore {
             .map(str::trim)
             .filter(|t| !t.is_empty())
             .map(str::to_string);
+
+        // Python schreibt Insert + Session-Flag in EINER Transaktion (atomar).
+        let mut tx = self.pool.begin().await?;
         sqlx::query(
             "INSERT INTO twitch_first_message_events
                 (streamer_login, broadcaster_id, chatter_login, chatter_id,
@@ -406,13 +413,35 @@ impl TelemetryStore {
         )
         .bind(broadcaster_login)
         .bind(broadcaster_user_id)
-        .bind(chatter_login)
+        .bind(&chatter_login)
         .bind(chatter_id)
         .bind(message_id)
         .bind(message_text)
         .bind(now)
-        .execute(&self.pool)
+        .execute(&mut *tx)
         .await?;
+
+        // confirmed_first_ever auf dem Session-Chatter setzen (Python
+        // eventsub_mixin.py:2461-2469) — nur wenn eine offene Session existiert.
+        // Der Session-Lookup steckt als Subquery im UPDATE: ohne offene Session
+        // liefert sie NULL → keine Zeile getroffen (= Pythons `if session_id`).
+        sqlx::query(
+            "UPDATE twitch_session_chatters
+                SET confirmed_first_ever = TRUE
+              WHERE chatter_login = $1
+                AND session_id = (
+                    SELECT id FROM twitch_stream_sessions
+                     WHERE streamer_login = $2 AND ended_at IS NULL
+                     ORDER BY started_at DESC
+                     LIMIT 1
+                )",
+        )
+        .bind(&chatter_login)
+        .bind(broadcaster_login)
+        .execute(&mut *tx)
+        .await?;
+
+        tx.commit().await?;
         Ok(())
     }
 
