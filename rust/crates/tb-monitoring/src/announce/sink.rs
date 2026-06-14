@@ -223,6 +223,17 @@ impl AnnouncementSink for BrokerAnnouncementSink {
                     allowed_role_ids.push(role_id);
                 }
                 mention_text = format!("<@&{role_id}>");
+            } else if request.entry.live_ping_enabled {
+                // Live-Ping aktiviert, aber keine Rollen-ID gesetzt → der Ping
+                // fiele sonst STILL weg. Python (embeds_mixin.py:_ensure_live_ping_role)
+                // legte die Rolle beim Go-Live automatisch an; diese Auto-Erstellung
+                // ist im Rust-Port noch nicht portiert (braucht Discord-Guild-Write).
+                // Bis dahin den Ausfall sichtbar machen, damit die role_id im
+                // Dashboard nachgepflegt werden kann statt unbemerkt zu fehlen.
+                tracing::warn!(
+                    login = %login,
+                    "Live-Ping aktiviert, aber live_ping_role_id fehlt — Rollen-Ping übersprungen (role_id im Dashboard setzen)"
+                );
             }
         }
 
