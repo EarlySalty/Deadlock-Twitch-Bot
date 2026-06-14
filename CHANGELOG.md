@@ -1,3 +1,15 @@
+## #210 — Kostenlose „Tagesform": dein letzter Stream gratis, Verlauf & Coaching im Plan
+
+**Ausgangslage:** Bisher sah jeder Streamer das komplette Analyse-Dashboard mit voller Historie kostenlos — der eigentliche Mehrwert (Entwicklung über Zeit, Coaching) war damit gratis, und es gab kaum einen Grund, einen Plan zu buchen. Gleichzeitig ist eine einzelne Tageszahl ohne Vergleich wenig wert: „heute 23 Ø Zuschauer" sagt nichts, solange man nicht weiß, ob das über oder unter dem eigenen Schnitt liegt.
+
+**Was geändert wurde:**
+
+- **Kostenlos** gibt es jetzt die **„Tagesform"**: die ehrlichen Kennzahlen deines letzten Streams (Ø-/Peak-Zuschauer, neue Follower, Retention, Watchtime, Chatter) — ein sauberer Schnappschuss nach jedem Stream.
+- **Im Plan** (mit 30 Tagen Gratis-Test) liegt die **Entwicklung über Zeit**: Wachstumskurve über alle Streams, Stammzuschauer-Verlauf, Retention-Trend, Wochen-/Monatsvergleich — plus Coaching und Post-Stream-Bericht.
+- Kein Abo-Zwang, jederzeit kündbar, und dein Verlauf wird ab Tag 1 mitgezeichnet — beim Freischalten ist deine komplette Historie sofort da.
+
+**Wie es funktioniert:** Die Analyse-Endpunkte erkennen serverseitig, ob ein Plan den vollen Verlauf freischaltet. Ohne Plan wird das Zeitfenster auf den letzten Stream begrenzt — statt alles zu sperren —, und das Dashboard zeigt die Tagesform genau dieses einen Streams plus eine Vorschau auf den gesperrten Verlauf-Bereich. Die Verlauf- und Coaching-Auswertungen bleiben dem Plan vorbehalten. Bezahlmodell und Preise sind unverändert; es verschiebt sich nur, was kostenlos sichtbar ist.
+
 ## #209 — Chat ab Stream-Start wird vollständig erfasst (Go-Live-Lücke geschlossen)
 
 **Ausgangslage:** Wenn ein Streamer live ging, begann die Chat- und Zuschauer-Erfassung erst, sobald der reguläre Status-Abruf den Kanal das nächste Mal einsammelte — bis zu rund 15 Sekunden später, plus ein kurzes Nachwirken eines Zwischenspeichers. Genau in diesem Fenster direkt nach Stream-Start wurden Chat-Nachrichten still verworfen, weil noch keine „offene Session" existierte, der sie zugeordnet werden konnten. Folge: Die allerersten Chatter eines Streams fehlten in den Zahlen — die Community wirkte etwas kleiner oder später aktiv, als sie tatsächlich war.

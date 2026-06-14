@@ -14,6 +14,7 @@ export interface StreamSession {
   retention20m: number;
   dropoffPct: number;
   totalChatterSessions: number;
+  uniqueChatters: number; // tatsaechlich vom Backend (_get_sessions) geliefertes Feld
   firstTimeChatters: number;
   returningChatters: number;
   followersStart: number;

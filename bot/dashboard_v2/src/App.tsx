@@ -3,6 +3,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { Header } from '@/components/layout/Header';
 import { TabNavigation, type TabId } from '@/components/layout/TabNavigation';
 import { Overview } from '@/pages/Overview';
+import { Tagesform } from '@/pages/Tagesform';
 import { Sessions } from '@/pages/Sessions';
 import { SocialMediaAdminDashboard } from '@/pages/SocialMediaAdmin';
 import { Monetization } from '@/pages/Monetization';
@@ -20,6 +21,7 @@ import { PlanProvider } from '@/context/PlanContext';
 import { TrialBanner } from '@/components/banners/TrialBanner';
 import { TrialExpiryModal } from '@/components/modals/TrialExpiryModal';
 import { useStreamerList, useAuthStatus } from '@/hooks/useAnalytics';
+import { usePlan } from '@/context/PlanContext';
 import type { TimeRange } from '@/types/analytics';
 import {
   PREVIEW_ANALYTICS_ROUTE,
@@ -101,6 +103,29 @@ function normalizePathname(pathname: string): string {
 
 function InternalHome() {
   return <InternalHomeLanding />;
+}
+
+/**
+ * Wählt zwischen Tagesform (Free) und Overview (Paid/Admin/Demo).
+ * Muss innerhalb von PlanProvider gerendert werden.
+ */
+interface OverviewOrTagesformProps {
+  streamer: string | null;
+  days: import('@/types/analytics').TimeRange;
+  onSessionClick: (sessionId: number) => void;
+}
+
+function OverviewOrTagesform({ streamer, days, onSessionClick }: OverviewOrTagesformProps) {
+  const { hasFullAccess, hasEntitlement } = usePlan();
+  const hasPaidAnalytics =
+    hasFullAccess ||
+    hasEntitlement('analytics.basic') ||
+    hasEntitlement('analytics.extended');
+
+  if (hasPaidAnalytics) {
+    return <Overview streamer={streamer} days={days} onSessionClick={onSessionClick} />;
+  }
+  return <Tagesform streamer={streamer} days={days} onSessionClick={onSessionClick} />;
 }
 
 function AnalyticsDashboard() {
@@ -291,7 +316,7 @@ function AnalyticsDashboard() {
 
           {/* Tab Content */}
           {activeTab === 'overview' && (
-            <Overview
+            <OverviewOrTagesform
               streamer={streamer}
               days={days}
               onSessionClick={handleSessionClick}
