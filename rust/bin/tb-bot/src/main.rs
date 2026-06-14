@@ -305,7 +305,7 @@ async fn main() {
             (Some(secret), Some(callback_url), Some(helix_client)) => {
                 let manager = Arc::new(SubscriptionManager::new(
                     Arc::new(HelixSubscriptionTransport {
-                        helix: helix_client,
+                        helix: helix_client.clone(),
                     }),
                     SubscriptionConfig {
                         callback_url,
@@ -318,12 +318,14 @@ async fn main() {
                 // Startup-Cleanup + periodischer Core-Sub-Reconcile:
                 // Python führte beim Webhook-Start _cleanup_old_eventsub_subscriptions
                 // aus und stelle stream.online/offline/channel.update für alle aktiven
-                // Partner sicher. Rust macht das hier als Background-Task.
+                // Partner sicher. Rust macht das hier als Background-Task. Zusätzlich
+                // die Broadcaster-Telemetrie-Subs (B9), sofern der Krypto-Key da ist.
                 {
                     let m = manager.clone();
                     let p = pool.clone();
+                    let telemetry_auth = build_telemetry_sub_auth(pool.clone(), helix_client);
                     tokio::spawn(async move {
-                        subscription_maintenance_loop(m, p).await;
+                        subscription_maintenance_loop(m, p, telemetry_auth).await;
                     });
                 }
                 Some(manager)
@@ -846,9 +848,44 @@ async fn main() {
 /// 2. `cleanup_stale` — veraltete Twitch-Subs für entfernte Partner löschen
 /// 3. `ensure_core_subscriptions` — stream.online/offline/channel.update für
 ///    alle aktiven Partner sicherstellen (fängt neue Kanäle + revoked Subs)
+/// Baut die Auth-Bausteine für die Broadcaster-Telemetrie-Subs (B9):
+/// `TokenProvider` für den Broadcaster-User-Token (refresht bei Ablauf) +
+/// `RaidAuthStore` für dessen Scopes. `None`, wenn `DB_MASTER_KEY_V1` fehlt —
+/// dann macht der Reconcile-Loop nur die App-Token-Core-Subs. Der Broadcaster-
+/// Token-Refresh gehört in Rust ohnehin dem Raid-Pfad (kein Dual-Refresh).
+fn build_telemetry_sub_auth(
+    pool: sqlx::PgPool,
+    helix_client: tb_transport_twitch::HelixClient,
+) -> Option<(Arc<TokenProvider>, RaidAuthStore)> {
+    let cipher = Arc::new(FieldCipher::from_env().ok()?);
+    let redirect_uri = std::env::var("TWITCH_RAID_REDIRECT_URI")
+        .ok()
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty())
+        .unwrap_or_else(|| "https://deutsche-deadlock-community.de/callback/twitch".to_string());
+    let token_blacklist = Arc::new(TokenBlacklistStore::new(pool.clone()));
+    let refresher = RaidTokenRefresher::new(
+        pool.clone(),
+        cipher.clone(),
+        Arc::new(HelixTokenClient {
+            helix: helix_client,
+            redirect_uri,
+        }),
+        token_blacklist.clone(),
+    );
+    let raid_auth = RaidAuthStore::new(pool.clone(), cipher.clone());
+    let token_provider = Arc::new(TokenProvider::new(
+        RaidAuthStore::new(pool, cipher),
+        refresher,
+        token_blacklist,
+    ));
+    Some((token_provider, raid_auth))
+}
+
 async fn subscription_maintenance_loop(
     manager: std::sync::Arc<tb_monitoring::SubscriptionManager>,
     pool: sqlx::PgPool,
+    telemetry_auth: Option<(Arc<TokenProvider>, RaidAuthStore)>,
 ) {
     const INTERVAL: std::time::Duration = std::time::Duration::from_secs(6 * 60 * 60);
     let mut tick = tokio::time::interval(INTERVAL);
@@ -881,13 +918,35 @@ async fn subscription_maintenance_loop(
         tracing::debug!(deleted, "sub-maintenance: Stale-Cleanup abgeschlossen");
 
         let mut ensured = 0usize;
+        let mut telemetry_ensured = 0usize;
         for (login, uid) in &rows {
             manager.ensure_core_subscriptions(uid, login).await;
             ensured += 1;
+
+            // Broadcaster-Telemetrie-Subs (B9): nur mit gültigem Broadcaster-
+            // Token + dessen Scopes. needs_reauth/blacklist → still überspringen.
+            if let Some((token_provider, raid_auth)) = &telemetry_auth {
+                match token_provider
+                    .get_valid_token_unrestricted(uid, chrono::Utc::now())
+                    .await
+                {
+                    Ok(Some(token)) => {
+                        let scopes = raid_auth.get_scopes(uid).await.unwrap_or_default();
+                        telemetry_ensured += manager
+                            .ensure_broadcaster_telemetry_subscriptions(uid, login, &token, &scopes)
+                            .await;
+                    }
+                    Ok(None) => {}
+                    Err(e) => {
+                        tracing::debug!(uid = %uid, "sub-maintenance: Telemetrie-Token-Lookup fehlgeschlagen: {e}");
+                    }
+                }
+            }
         }
         tracing::info!(
             kanäle = rows.len(),
             ensured,
+            telemetry_ensured,
             deleted,
             "sub-maintenance: Core-Sub-Reconcile abgeschlossen"
         );

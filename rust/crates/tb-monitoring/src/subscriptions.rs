@@ -24,6 +24,39 @@ pub const CORE_SUBSCRIPTIONS: [(&str, &str); 3] = [
     ("channel.update", "2"),
 ];
 
+/// Broadcaster-Telemetrie-Subscriptions: (Typ, Version, benötigter Scope).
+/// Brauchen den **Broadcaster-User-Token** (verschlüsselter `twitch_raid_auth`-
+/// Store), nicht den App-Token — Port von `eventsub_mixin.py` `broadcaster_subs`
+/// (Z. 1623). Werden nur angelegt, wenn der Token den jeweiligen Scope trägt.
+/// Die zugehörigen Events verarbeitet der Dispatcher bereits (`store_telemetry`).
+///
+/// Die Moderator-Subscriptions (channel.ban/unban/shoutout/follow/moderate)
+/// fehlen bewusst: sie brauchen den **Bot-Token**, der während des Strangler-
+/// Cutovers noch vom Python-Chat-Prozess refresht wird — ein zweiter Refresher
+/// würde die Refresh-Token-Rotation beider Prozesse gegenseitig invalidieren.
+pub const BROADCASTER_TELEMETRY_SUBSCRIPTIONS: [(&str, &str, &str); 12] = [
+    ("channel.cheer", "1", "bits:read"),
+    ("channel.bits.use", "1", "bits:read"),
+    ("channel.hype_train.begin", "1", "channel:read:hype_train"),
+    ("channel.hype_train.progress", "1", "channel:read:hype_train"),
+    ("channel.hype_train.end", "1", "channel:read:hype_train"),
+    ("channel.subscribe", "1", "channel:read:subscriptions"),
+    ("channel.subscription.gift", "1", "channel:read:subscriptions"),
+    ("channel.subscription.message", "1", "channel:read:subscriptions"),
+    ("channel.subscription.end", "1", "channel:read:subscriptions"),
+    ("channel.ad_break.begin", "1", "channel:read:ads"),
+    (
+        "channel.channel_points_automatic_reward_redemption.add",
+        "2",
+        "channel:read:redemptions",
+    ),
+    (
+        "channel.channel_points_custom_reward_redemption.add",
+        "1",
+        "channel:read:redemptions",
+    ),
+];
+
 /// Eine bei Twitch registrierte Subscription (Transport-neutrale Sicht).
 #[derive(Debug, Clone)]
 pub struct RemoteSubscription {
@@ -37,7 +70,8 @@ pub struct RemoteSubscription {
 /// Port zum Subscription-Backend (Helix-Adapter lebt in `tb-bot`).
 #[async_trait::async_trait]
 pub trait SubscriptionTransport: Send + Sync {
-    /// Anlegen; `true` = existierte bereits (409-as-success).
+    /// Anlegen; `true` = existierte bereits (409-as-success). `bearer_override`
+    /// = Some(User-/Broadcaster-Token) für Telemetrie-Subs; `None` = App-Token.
     async fn create(
         &self,
         sub_type: &str,
@@ -45,6 +79,7 @@ pub trait SubscriptionTransport: Send + Sync {
         condition: &Value,
         callback: &str,
         secret: &str,
+        bearer_override: Option<&str>,
     ) -> Result<bool, SourceError>;
     async fn list(&self) -> Result<Vec<RemoteSubscription>, SourceError>;
     async fn delete(&self, id: &str) -> Result<(), SourceError>;
@@ -188,10 +223,70 @@ impl SubscriptionManager {
                 "user_id": bot_user_id,
             });
             ok &= self
-                .ensure_subscription_with_condition(sub_type, "1", condition, broadcaster_id, login)
+                .ensure_subscription_with_condition(
+                    sub_type,
+                    "1",
+                    condition,
+                    broadcaster_id,
+                    login,
+                    None,
+                )
                 .await;
         }
         ok
+    }
+
+    /// Broadcaster-Telemetrie-Subs (Bits/Subs/Hype/Ads/Channel-Points) für einen
+    /// Partner sicherstellen — Port von `eventsub_mixin.py` Schritt 3 (Z. 1599).
+    /// `token` ist der Broadcaster-User-Token, `scopes` dessen DB-Scopes; ein
+    /// Sub wird nur versucht, wenn der Scope vorhanden ist (oder die Scope-Liste
+    /// leer/unbekannt ist — dann alle versuchen, wie Python). Liefert die Anzahl
+    /// sichergestellter Subs (getrackt oder neu erstellt).
+    pub async fn ensure_broadcaster_telemetry_subscriptions(
+        &self,
+        broadcaster_id: &str,
+        login: &str,
+        token: &str,
+        scopes: &[String],
+    ) -> usize {
+        let broadcaster_id = broadcaster_id.trim();
+        if broadcaster_id.is_empty() || token.trim().is_empty() {
+            return 0;
+        }
+        let scope_set: HashSet<String> = scopes
+            .iter()
+            .map(|s| s.trim().to_lowercase())
+            .filter(|s| !s.is_empty())
+            .collect();
+        let condition = serde_json::json!({ "broadcaster_user_id": broadcaster_id });
+        let mut ensured = 0;
+        for (sub_type, version, required_scope) in BROADCASTER_TELEMETRY_SUBSCRIPTIONS {
+            // Scope-Filter (Python: `if token_scopes and required_scope not in token_scopes`):
+            // bei bekannter Scope-Liste fehlende Scopes überspringen.
+            if !scope_set.is_empty() && !scope_set.contains(required_scope) {
+                tracing::debug!(
+                    sub_type,
+                    login,
+                    required_scope,
+                    "Telemetrie-Sub übersprungen: Token-Scope fehlt"
+                );
+                continue;
+            }
+            if self
+                .ensure_subscription_with_condition(
+                    sub_type,
+                    version,
+                    condition.clone(),
+                    broadcaster_id,
+                    login,
+                    Some(token),
+                )
+                .await
+            {
+                ensured += 1;
+            }
+        }
+        ensured
     }
 
     async fn ensure_subscription_with_key(
@@ -203,8 +298,15 @@ impl SubscriptionManager {
         login: &str,
     ) -> bool {
         let condition = serde_json::json!({ condition_key: broadcaster_id.trim() });
-        self.ensure_subscription_with_condition(sub_type, version, condition, broadcaster_id, login)
-            .await
+        self.ensure_subscription_with_condition(
+            sub_type,
+            version,
+            condition,
+            broadcaster_id,
+            login,
+            None,
+        )
+        .await
     }
 
     async fn ensure_subscription_with_condition(
@@ -214,6 +316,7 @@ impl SubscriptionManager {
         condition: serde_json::Value,
         broadcaster_id: &str,
         login: &str,
+        bearer_override: Option<&str>,
     ) -> bool {
         let broadcaster_id = broadcaster_id.trim();
         if broadcaster_id.is_empty() {
@@ -240,6 +343,7 @@ impl SubscriptionManager {
                 &condition,
                 &self.config.callback_url,
                 &self.config.secret,
+                bearer_override,
             )
             .await
         {

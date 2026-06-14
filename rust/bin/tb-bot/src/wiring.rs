@@ -28,11 +28,17 @@ impl SubscriptionTransport for HelixSubscriptionTransport {
         condition: &Value,
         callback: &str,
         secret: &str,
+        bearer_override: Option<&str>,
     ) -> Result<bool, SourceError> {
         let outcome = self
             .helix
             .create_eventsub_webhook_subscription(
-                sub_type, version, condition, callback, secret, None,
+                sub_type,
+                version,
+                condition,
+                callback,
+                secret,
+                bearer_override,
             )
             .await?;
         Ok(outcome == CreateOutcome::AlreadyExists)

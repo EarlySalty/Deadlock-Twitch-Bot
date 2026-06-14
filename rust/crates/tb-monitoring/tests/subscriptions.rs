@@ -26,6 +26,8 @@ macro_rules! pool_or_skip {
 struct StubTransport {
     creates: Mutex<Vec<(String, String)>>,
     conditions: Mutex<Vec<(String, serde_json::Value)>>,
+    /// (sub_type, bearer_override) — prüft den Telemetrie-Token-Pfad.
+    bearers: Mutex<Vec<(String, Option<String>)>>,
     deletes: Mutex<Vec<String>>,
     listing: Mutex<Vec<RemoteSubscription>>,
 }
@@ -39,6 +41,7 @@ impl SubscriptionTransport for StubTransport {
         condition: &serde_json::Value,
         _callback: &str,
         _secret: &str,
+        bearer_override: Option<&str>,
     ) -> Result<bool, SourceError> {
         let bid = condition
             .get("broadcaster_user_id")
@@ -53,6 +56,10 @@ impl SubscriptionTransport for StubTransport {
             .lock()
             .unwrap()
             .push((sub_type.to_string(), condition.clone()));
+        self.bearers
+            .lock()
+            .unwrap()
+            .push((sub_type.to_string(), bearer_override.map(str::to_string)));
         Ok(false)
     }
     async fn list(&self) -> Result<Vec<RemoteSubscription>, SourceError> {
@@ -175,4 +182,78 @@ async fn raid_subscription_nutzt_to_broadcaster_condition_und_dedup() {
     assert!(manager.ensure_raid_subscription("777", "ziel").await);
     assert_eq!(transport.conditions.lock().unwrap().len(), 1);
     assert!(!manager.ensure_raid_subscription(" ", "x").await);
+}
+
+#[tokio::test]
+async fn broadcaster_telemetry_subs_scope_gefiltert_und_mit_bearer() {
+    let pool = pool_or_skip!("t9_subs_telemetry");
+    let transport = Arc::new(StubTransport::default());
+    let manager = SubscriptionManager::new(
+        transport.clone(),
+        SubscriptionConfig {
+            callback_url: "https://cb/x".to_string(),
+            secret: "geheim".to_string(),
+        },
+        CapacitySnapshotStore::new(pool.clone()),
+    );
+
+    // Token hat nur bits:read + channel:read:subscriptions → 2 Bits-Subs
+    // (cheer/bits.use) + 4 Subscription-Subs werden angelegt, Hype/Ads/Points
+    // mangels Scope übersprungen.
+    let scopes = vec![
+        "bits:read".to_string(),
+        "channel:read:subscriptions".to_string(),
+    ];
+    let ensured = manager
+        .ensure_broadcaster_telemetry_subscriptions("555", "partner", "BROADCASTERTOKEN", &scopes)
+        .await;
+    assert_eq!(ensured, 6);
+
+    let creates = transport.creates.lock().unwrap().clone();
+    let mut types: Vec<&str> = creates
+        .iter()
+        .filter(|(_, bid)| bid == "555")
+        .map(|(t, _)| t.as_str())
+        .collect();
+    types.sort_unstable();
+    assert_eq!(
+        types,
+        vec![
+            "channel.bits.use",
+            "channel.cheer",
+            "channel.subscribe",
+            "channel.subscription.end",
+            "channel.subscription.gift",
+            "channel.subscription.message",
+        ]
+    );
+    // Hype-Train wurde mangels Scope nicht versucht.
+    assert!(!creates.iter().any(|(t, _)| t.starts_with("channel.hype_train")));
+
+    // Jeder Telemetrie-Create lief mit dem Broadcaster-Token als Bearer.
+    let bearers = transport.bearers.lock().unwrap().clone();
+    assert!(bearers
+        .iter()
+        .all(|(_, b)| b.as_deref() == Some("BROADCASTERTOKEN")));
+
+    // Zweiter Aufruf: alles getrackt → kein neuer Create.
+    let again = manager
+        .ensure_broadcaster_telemetry_subscriptions("555", "partner", "BROADCASTERTOKEN", &scopes)
+        .await;
+    assert_eq!(again, 6);
+    assert_eq!(transport.creates.lock().unwrap().len(), 6);
+
+    // Leerer Token / leere ID → kein Create.
+    assert_eq!(
+        manager
+            .ensure_broadcaster_telemetry_subscriptions("555", "p", "  ", &scopes)
+            .await,
+        0
+    );
+    assert_eq!(
+        manager
+            .ensure_broadcaster_telemetry_subscriptions(" ", "p", "tok", &scopes)
+            .await,
+        0
+    );
 }
