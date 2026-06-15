@@ -302,6 +302,45 @@ impl HelixClient {
         let body: VideosResponse = resp.json().await?;
         Ok(body.data)
     }
+
+    /// Subscription-Übersicht eines Broadcasters via `GET /subscriptions`
+    /// (`total`/`points` aus der Wurzel, Datenquelle des Block-6-Snapshot-
+    /// Pollers). Braucht ein **User-Token** des Broadcasters.
+    ///
+    /// Port: `twitch_api.py:get_broadcaster_subscriptions_result`.
+    /// Scope: `channel:read:subscriptions`.
+    pub async fn get_broadcaster_subscriptions(
+        &self,
+        broadcaster_id: &str,
+        user_token: &str,
+    ) -> Result<BroadcasterSubscriptions, HelixError> {
+        let resp = self
+            .get_with_user_token("/subscriptions", user_token)
+            .query(&[("broadcaster_id", broadcaster_id), ("first", "1")])
+            .send()
+            .await?;
+        check_status_and_json(resp).await
+    }
+
+    /// Werbe-Schedule eines Broadcasters via `GET /channels/ads` (`data[0]`).
+    /// Braucht ein **User-Token** des Broadcasters. `Ok(None)` = leeres
+    /// `data`-Array (Helix lieferte keinen Schedule).
+    ///
+    /// Port: `twitch_api.py:get_ad_schedule_result`.
+    /// Scope: `channel:read:ads`.
+    pub async fn get_ad_schedule(
+        &self,
+        broadcaster_id: &str,
+        user_token: &str,
+    ) -> Result<Option<AdSchedule>, HelixError> {
+        let resp = self
+            .get_with_user_token("/channels/ads", user_token)
+            .query(&[("broadcaster_id", broadcaster_id)])
+            .send()
+            .await?;
+        let body: AdScheduleResponse = check_status_and_json(resp).await?;
+        Ok(body.data.into_iter().next())
+    }
 }
 
 /// Ein Archiv-VOD (Teilmenge der Helix-`/videos`-Felder).
@@ -315,10 +354,95 @@ pub struct ArchiveVideo {
     pub duration: String,
 }
 
+/// Ein einzelner Abonnent aus `GET /subscriptions`.
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct Subscription {
+    #[serde(default)]
+    pub user_id: String,
+    #[serde(default)]
+    pub user_login: String,
+    #[serde(default)]
+    pub user_name: String,
+    /// `"1000"` / `"2000"` / `"3000"` (Tier 1/2/3).
+    #[serde(default)]
+    pub tier: String,
+    #[serde(default)]
+    pub is_gift: bool,
+}
+
+/// Antwort auf `GET /subscriptions` (Datenquelle des Block-6-Snapshot-Pollers).
+///
+/// `total`/`points` stehen im Wurzel-Objekt (nicht je Eintrag); der Poller
+/// schreibt beide. Port: `mixin.py:_collect_subs_for_user`.
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct BroadcasterSubscriptions {
+    #[serde(default)]
+    pub data: Vec<Subscription>,
+    /// Gesamtzahl aktiver Subs (Wurzel-Feld der Helix-Antwort).
+    #[serde(default)]
+    pub total: i64,
+    /// Sub-Punkte des Channels (Wurzel-Feld).
+    #[serde(default)]
+    pub points: i64,
+}
+
+/// Antwort auf `GET /channels/ads` (`data[0]`).
+///
+/// Felder wie vom Snapshot-Poller geschrieben (Port: `mixin.py:889–894`). Die
+/// Zeit-Felder kommen von Helix als Unix-Sekunden-Zahl ODER als String —
+/// beides wird tolerant zu `Option<String>` geparst (analog `_safe_time_text`);
+/// die Normalisierung zu ISO-8601 macht der Poller (separates Ticket).
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct AdSchedule {
+    /// Sekunden bis zur nächsten geplanten Werbung.
+    #[serde(default)]
+    pub duration: i64,
+    #[serde(default, deserialize_with = "deserialize_string_or_number")]
+    pub next_ad_at: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_string_or_number")]
+    pub last_ad_at: Option<String>,
+    /// Verbleibende Preroll-freie Zeit in Sekunden.
+    #[serde(default)]
+    pub preroll_free_time: i64,
+    #[serde(default)]
+    pub snooze_count: i64,
+    #[serde(default, deserialize_with = "deserialize_string_or_number")]
+    pub snooze_refresh_at: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct AdScheduleResponse {
+    #[serde(default)]
+    data: Vec<AdSchedule>,
+}
+
+/// Deserialisiert ein Helix-Zeitfeld, das als String **oder** als Zahl kommen
+/// kann (Unix-Sekunden), zu `Option<String>`. `null`/leerer String → `None`.
+fn deserialize_string_or_number<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    use serde_json::Value;
+    let value = Option::<Value>::deserialize(deserializer)?;
+    Ok(match value {
+        None | Some(Value::Null) => None,
+        Some(Value::String(s)) => {
+            let trimmed = s.trim();
+            if trimmed.is_empty() {
+                None
+            } else {
+                Some(trimmed.to_string())
+            }
+        }
+        Some(Value::Number(n)) => Some(n.to_string()),
+        Some(other) => Some(other.to_string()),
+    })
+}
+
 #[cfg(test)]
 mod tests {
-    use crate::client::{HelixClient, HelixConfig};
-    use wiremock::matchers::{method, path, query_param};
+    use crate::client::{HelixClient, HelixConfig, HelixError};
+    use wiremock::matchers::{header, method, path, query_param};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
     async fn client_with(server: &MockServer) -> HelixClient {
@@ -455,5 +579,97 @@ mod tests {
         assert_eq!(vods[0].duration, "2h3m4s");
         // Leerer Login → keine Anfrage, leere Liste.
         assert!(client.get_archive_videos("  ", 20).await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn subscriptions_parst_total_und_points() {
+        let server = MockServer::start().await;
+        let client = client_with(&server).await;
+        Mock::given(method("GET"))
+            .and(path("/helix/subscriptions"))
+            .and(query_param("broadcaster_id", "42"))
+            .and(header("Authorization", "Bearer user-tok"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "data": [
+                    {"user_id": "9", "user_login": "fan", "user_name": "Fan",
+                     "tier": "1000", "is_gift": false}
+                ],
+                "total": 137,
+                "points": 152
+            })))
+            .mount(&server)
+            .await;
+        let subs = client
+            .get_broadcaster_subscriptions("42", "user-tok")
+            .await
+            .unwrap();
+        assert_eq!(subs.total, 137);
+        assert_eq!(subs.points, 152);
+        assert_eq!(subs.data.len(), 1);
+        assert_eq!(subs.data[0].tier, "1000");
+    }
+
+    #[tokio::test]
+    async fn subscriptions_403_ergibt_status_fehler() {
+        let server = MockServer::start().await;
+        let client = client_with(&server).await;
+        Mock::given(method("GET"))
+            .and(path("/helix/subscriptions"))
+            .respond_with(ResponseTemplate::new(403))
+            .mount(&server)
+            .await;
+        let err = client
+            .get_broadcaster_subscriptions("42", "user-tok")
+            .await
+            .unwrap_err();
+        assert!(matches!(err, HelixError::Status { status: 403 }), "{err:?}");
+    }
+
+    #[tokio::test]
+    async fn ad_schedule_parst_felder_inkl_zahl_timestamps() {
+        let server = MockServer::start().await;
+        let client = client_with(&server).await;
+        // Helix liefert die Zeit-Felder hier als Unix-Sekunden-Zahl.
+        Mock::given(method("GET"))
+            .and(path("/helix/channels/ads"))
+            .and(query_param("broadcaster_id", "42"))
+            .and(header("Authorization", "Bearer user-tok"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "data": [{
+                    "next_ad_at": 1750000000,
+                    "last_ad_at": 1749990000,
+                    "duration": 60,
+                    "preroll_free_time": 90,
+                    "snooze_count": 2,
+                    "snooze_refresh_at": "2026-06-15T12:00:00Z"
+                }]
+            })))
+            .mount(&server)
+            .await;
+        let ad = client
+            .get_ad_schedule("42", "user-tok")
+            .await
+            .unwrap()
+            .expect("data[0] vorhanden");
+        assert_eq!(ad.duration, 60);
+        assert_eq!(ad.preroll_free_time, 90);
+        assert_eq!(ad.snooze_count, 2);
+        assert_eq!(ad.next_ad_at.as_deref(), Some("1750000000"));
+        assert_eq!(ad.snooze_refresh_at.as_deref(), Some("2026-06-15T12:00:00Z"));
+    }
+
+    #[tokio::test]
+    async fn ad_schedule_leeres_data_ergibt_none() {
+        let server = MockServer::start().await;
+        let client = client_with(&server).await;
+        Mock::given(method("GET"))
+            .and(path("/helix/channels/ads"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(serde_json::json!({"data": []})),
+            )
+            .mount(&server)
+            .await;
+        let ad = client.get_ad_schedule("42", "user-tok").await.unwrap();
+        assert!(ad.is_none());
     }
 }

@@ -23,6 +23,11 @@ pub enum HelixError {
     Http(#[from] reqwest::Error),
     #[error("Helix-Status {status}")]
     Status { status: u16 },
+    /// 403 auf `/chat/chatters` — der angefragte Account ist kein Moderator
+    /// (bzw. der Token hat `moderator:read:chatters` nicht). Eigener Zweig,
+    /// damit der Poller einen Mod-Self-Heal anstoßen kann (Block-6).
+    #[error("kein Moderator im Ziel-Channel (403)")]
+    NotModerator,
 }
 
 /// Konfiguration für den HelixClient.
