@@ -28,7 +28,7 @@ use tower_http::cors::CorsLayer;
 /// (`api_public.py:52-58`). Authed/Admin-Routen bleiben ohne CORS-Header,
 /// sonst wäre die Token-API cross-origin per Browser ansprechbar.
 pub fn build_public_router(pool: PgPool) -> Router {
-    use handlers::{bans, network, raids};
+    use handlers::{bans, network, raids, social_media};
 
     Router::new()
         .route(
@@ -43,6 +43,9 @@ pub fn build_public_router(pool: PgPool) -> Router {
             "/twitch/api/v2/public/network",
             get(network::network_handler),
         )
+        // Social-Media Rechtstexte — öffentlich für die Plattform-OAuth-Reviews.
+        .route("/social-media/terms", get(social_media::terms_handler))
+        .route("/social-media/privacy", get(social_media::privacy_handler))
         .with_state(pool)
         .layer(CorsLayer::permissive())
 }
@@ -52,13 +55,15 @@ pub fn build_public_router(pool: PgPool) -> Router {
 /// Auth-Level wird per Extension eingesetzt — `AuthLevel` als `FromRequestParts`
 /// liest den Token selbst aus der Extension.
 pub fn build_authed_router(pool: PgPool, token: String) -> Router {
-    use handlers::{ads_schedule, audience, audience_demographics, auth_status, billing, category_comparison, category_leaderboard, category_timings, engagement_settings, follower_funnel, internal_home, loyalty_curve, lurker_analysis, overview, performance, raid_analytics, rankings, retention_curve, session_detail, silent_settings, spa, stream_report, streamers, title_performance, viewer_timeline, viewers};
+    use handlers::{ads_schedule, audience, audience_demographics, auth_status, billing, category_comparison, category_leaderboard, category_timings, engagement_settings, follower_funnel, internal_home, loyalty_curve, lurker_analysis, overview, performance, raid_analytics, rankings, retention_curve, session_detail, silent_settings, social_media, spa, stream_report, streamers, title_performance, viewer_timeline, viewers};
 
     Router::new()
         .route(
             "/twitch/api/v2/auth-status",
             get(auth_status::auth_status_handler),
         )
+        // Social-Media-Dashboard-SPA (Auth erforderlich).
+        .route("/social-media", get(social_media::index_handler))
         // Internal-Home: gebündelte Dashboard-Startseite (Profil, KPIs, Bot-Events,
         // Changelog). GET liest, POST legt einen Changelog-Eintrag an (Admin-only).
         .route(
