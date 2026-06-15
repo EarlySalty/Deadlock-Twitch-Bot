@@ -28,6 +28,10 @@ fn round0(v: f64) -> f64 {
     v.round()
 }
 
+fn round2(v: f64) -> f64 {
+    (v * 100.0).round() / 100.0
+}
+
 /// Pearson-Korrelation (Python `_pearson`, Populations-Std mit `/n`).
 /// Liefert 0.0 bei < 3 Werten oder konstanter Reihe (Std = 0).
 fn pearson(x: &[f64], y: &[f64]) -> f64 {
@@ -1108,6 +1112,125 @@ pub async fn chat_concentration(
     }))
 }
 
+/// Raid-Netzwerk (Python `_raid_network`): Sende-/Empfangs-Bilanz der Raids,
+/// Partner-Reziprozität (mutual/sentOnly/receivedOnly) und Aggregate.
+pub async fn raid_network(
+    pool: &PgPool,
+    streamer: &str,
+    since: DateTime<Utc>,
+) -> Result<Value, sqlx::Error> {
+    // Gesendete Raids je Ziel.
+    let sent: Vec<(String, i64, Option<f64>, Option<i64>)> = sqlx::query_as(
+        "SELECT LOWER(to_broadcaster_login), COUNT(*)::bigint, AVG(viewer_count)::float8, SUM(viewer_count)::bigint \
+           FROM twitch_raid_history \
+          WHERE LOWER(from_broadcaster_login) = $1 AND executed_at >= $2 AND COALESCE(success, FALSE) IS TRUE \
+          GROUP BY LOWER(to_broadcaster_login) \
+          ORDER BY COUNT(*) DESC",
+    )
+    .bind(streamer)
+    .bind(since)
+    .fetch_all(pool)
+    .await?;
+
+    // Empfangene Raids je Quelle.
+    let received: Vec<(String, i64, Option<f64>, Option<i64>)> = sqlx::query_as(
+        "SELECT LOWER(from_broadcaster_login), COUNT(*)::bigint, AVG(viewer_count)::float8, SUM(viewer_count)::bigint \
+           FROM twitch_raid_history \
+          WHERE LOWER(to_broadcaster_login) = $1 AND executed_at >= $2 AND COALESCE(success, FALSE) IS TRUE \
+          GROUP BY LOWER(from_broadcaster_login) \
+          ORDER BY COUNT(*) DESC",
+    )
+    .bind(streamer)
+    .bind(since)
+    .fetch_all(pool)
+    .await?;
+
+    // (count, avgViewers[Value: round1 ODER Int-0 via Truthiness], totalViewers).
+    let to_map = |rows: &[(String, i64, Option<f64>, Option<i64>)]| -> HashMap<String, (i64, Value, i64)> {
+        rows.iter()
+            .map(|(login, count, avg, total)| {
+                (login.clone(), (*count, retention_value(*avg), total.unwrap_or(0)))
+            })
+            .collect()
+    };
+    let sent_map = to_map(&sent);
+    let recv_map = to_map(&received);
+
+    let mut all_partners: HashSet<&String> = HashSet::new();
+    all_partners.extend(sent_map.keys());
+    all_partners.extend(recv_map.keys());
+
+    // (sortkey = sent+recv, reciprocity, Partner-JSON).
+    let mut entries: Vec<(i64, &'static str, Value)> = Vec::new();
+    for p in &all_partners {
+        let s = sent_map.get(*p);
+        let r = recv_map.get(*p);
+        let s_count = s.map_or(0, |x| x.0);
+        let r_count = r.map_or(0, |x| x.0);
+        let s_avg = s.map_or(json!(0), |x| x.1.clone());
+        let r_avg = r.map_or(json!(0), |x| x.1.clone());
+        let reciprocity = if s_count > 0 && r_count > 0 {
+            "mutual"
+        } else if s_count > 0 {
+            "sentOnly"
+        } else {
+            "receivedOnly"
+        };
+        entries.push((
+            s_count + r_count,
+            reciprocity,
+            json!({
+                "login": p,
+                "sentCount": s_count,
+                "sentAvgViewers": s_avg,
+                "receivedCount": r_count,
+                "receivedAvgViewers": r_avg,
+                "reciprocity": reciprocity,
+                "balance": r_count - s_count,
+            }),
+        ));
+    }
+    // Stabiler Sort absteigend nach Gesamt-Raids (Ties = Set-Order, frei wie Python).
+    entries.sort_by(|a, b| b.0.cmp(&a.0));
+
+    let total_sent: i64 = sent_map.values().map(|x| x.0).sum();
+    let total_recv: i64 = recv_map.values().map(|x| x.0).sum();
+    let total_sent_v: i64 = sent_map.values().map(|x| x.2).sum();
+    let total_recv_v: i64 = recv_map.values().map(|x| x.2).sum();
+    let mutual = entries.iter().filter(|e| e.1 == "mutual").count();
+    let total_partners = entries.len();
+    let partners: Vec<&Value> = entries.iter().take(15).map(|e| &e.2).collect();
+
+    let avg_sent = if total_sent > 0 {
+        json!(round1(total_sent_v as f64 / total_sent as f64))
+    } else {
+        json!(0)
+    };
+    let avg_recv = if total_recv > 0 {
+        json!(round1(total_recv_v as f64 / total_recv as f64))
+    } else {
+        json!(0)
+    };
+    let reciprocity_ratio = if total_sent > 0 {
+        json!(round2(total_recv as f64 / total_sent as f64))
+    } else {
+        json!(0)
+    };
+
+    Ok(json!({
+        "totalSent": total_sent,
+        "totalReceived": total_recv,
+        "totalSentViewers": total_sent_v,
+        "totalReceivedViewers": total_recv_v,
+        "avgSentViewers": avg_sent,
+        "avgReceivedViewers": avg_recv,
+        "reciprocityRatio": reciprocity_ratio,
+        "mutualPartners": mutual,
+        "totalPartners": total_partners,
+        "partners": partners,
+    }))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1557,5 +1680,63 @@ mod tests {
         assert_eq!(v["ownOneTimerPct"], 25.0);
         // Peer rival: 3/5 One-Timer = 60 %.
         assert_eq!(v["avgPeerOneTimerPct"], 60.0);
+    }
+
+    #[tokio::test]
+    async fn raid_network_berechnet() {
+        let Some(pool) = make_pool("t_coach_raid").await else { return };
+        sqlx::query("CREATE TABLE twitch_raid_history (from_broadcaster_login TEXT, to_broadcaster_login TEXT, viewer_count INTEGER, executed_at TIMESTAMPTZ, success BOOLEAN)")
+            .execute(&pool).await.unwrap();
+        // nani → partnera ×2 (100,200), → partnerb ×1 (50). nani ← partnera (80), ← partnerc (40).
+        // Plus ein success=FALSE-Raid → muss gefiltert werden.
+        sqlx::query(
+            "INSERT INTO twitch_raid_history (from_broadcaster_login, to_broadcaster_login, viewer_count, executed_at, success) VALUES \
+            ('nani','partnera', 100, NOW()-INTERVAL '1 day', TRUE), \
+            ('nani','partnera', 200, NOW()-INTERVAL '1 day', TRUE), \
+            ('nani','partnerb', 50,  NOW()-INTERVAL '1 day', TRUE), \
+            ('partnera','nani', 80,  NOW()-INTERVAL '1 day', TRUE), \
+            ('partnerc','nani', 40,  NOW()-INTERVAL '1 day', TRUE), \
+            ('nani','partnerx', 999, NOW()-INTERVAL '1 day', FALSE)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let v = raid_network(&pool, "nani", Utc::now() - chrono::Duration::days(30))
+            .await
+            .unwrap();
+
+        // success=FALSE-Raid raus → totalSent 3, nicht 4.
+        assert_eq!(v["totalSent"], 3);
+        assert_eq!(v["totalReceived"], 2);
+        assert_eq!(v["totalSentViewers"], 350);
+        assert_eq!(v["totalReceivedViewers"], 120);
+        assert_eq!(v["avgSentViewers"], 116.7); // 350/3
+        assert_eq!(v["avgReceivedViewers"], 60.0);
+        assert_eq!(v["reciprocityRatio"], 0.67); // 2/3
+        assert_eq!(v["mutualPartners"], 1);
+        assert_eq!(v["totalPartners"], 3);
+
+        // partnera = höchste Gesamt-Raids (3) → erster, mutual.
+        assert_eq!(v["partners"][0]["login"], "partnera");
+        assert_eq!(v["partners"][0]["reciprocity"], "mutual");
+        assert_eq!(v["partners"][0]["sentCount"], 2);
+        assert_eq!(v["partners"][0]["receivedCount"], 1);
+        assert_eq!(v["partners"][0]["balance"], -1);
+        assert_eq!(v["partners"][0]["sentAvgViewers"], 150.0);
+        assert_eq!(v["partners"][0]["receivedAvgViewers"], 80.0);
+
+        // partnerb (sentOnly) / partnerc (receivedOnly) — Tie, daher per login finden.
+        let arr = v["partners"].as_array().unwrap();
+        let pb = arr.iter().find(|p| p["login"] == "partnerb").unwrap();
+        assert_eq!(pb["reciprocity"], "sentOnly");
+        assert_eq!(pb["sentAvgViewers"], 50.0);
+        assert_eq!(pb["receivedAvgViewers"], 0); // fehlt → Int-0
+        let pc = arr.iter().find(|p| p["login"] == "partnerc").unwrap();
+        assert_eq!(pc["reciprocity"], "receivedOnly");
+        assert_eq!(pc["sentAvgViewers"], 0); // fehlt → Int-0
+        assert_eq!(pc["receivedAvgViewers"], 40.0);
+        // partnerx (success=FALSE) nicht vorhanden.
+        assert!(arr.iter().all(|p| p["login"] != "partnerx"));
     }
 }
