@@ -38,6 +38,41 @@ async fn ensure_ai_table(pool: &PgPool) -> Result<(), sqlx::Error> {
     Ok(())
 }
 
+/// Persistiert eine KI-Analyse (Python: `INSERT INTO ai_analyses … RETURNING id`,
+/// best-effort). `model_name` ist der echte Modellname (`claude-opus-4-6` /
+/// `MiniMax-M3`), NICHT die `opus`/`minimax`-Kennung. Bei jedem Fehler `None`
+/// (mirror Pythons `try/except` mit `log.warning` — blockiert die Antwort nie).
+#[allow(clippy::too_many_arguments)]
+pub async fn save_analysis(
+    pool: &PgPool,
+    streamer: &str,
+    days: i64,
+    model_name: &str,
+    generated_at: DateTime<Utc>,
+    data_snapshot: &Value,
+    points: &Value,
+) -> Option<i64> {
+    if ensure_ai_table(pool).await.is_err() {
+        return None;
+    }
+    // JSONB normalisiert Whitespace → Input-Serialisierung egal.
+    let snapshot_text = data_snapshot.to_string();
+    let points_text = points.to_string();
+    sqlx::query_scalar::<_, i64>(
+        "INSERT INTO ai_analyses (streamer, days, model, generated_at, data_snapshot, points) \
+         VALUES ($1, $2, $3, $4, $5::jsonb, $6::jsonb) RETURNING id",
+    )
+    .bind(streamer)
+    .bind(days)
+    .bind(model_name)
+    .bind(generated_at)
+    .bind(snapshot_text)
+    .bind(points_text)
+    .fetch_one(pool)
+    .await
+    .ok()
+}
+
 fn count_priority(points: &Value, priority: &str) -> i64 {
     points
         .as_array()
@@ -125,6 +160,29 @@ mod tests {
         assert_eq!(arr[1]["kritischCount"], 2);
         assert_eq!(arr[1]["hochCount"], 1);
         assert_eq!(arr[1]["dataSnapshot"]["x"], 1);
+    }
+
+    #[tokio::test]
+    async fn save_analysis_persistiert() {
+        let Some(pool) = make_pool("t_aih_save").await else { return };
+        let id = save_analysis(
+            &pool,
+            "nani",
+            30,
+            "claude-opus-4-6",
+            Utc::now(),
+            &json!({"k": "v"}),
+            &json!([{"priority": "kritisch"}]),
+        )
+        .await;
+        assert!(id.is_some());
+        // Über load_ai_history gegenlesen: model claude → opus-Alias, snapshot da.
+        let v = load_ai_history(&pool, "nani", 5).await.unwrap();
+        let arr = v.as_array().unwrap();
+        assert_eq!(arr.len(), 1);
+        assert_eq!(arr[0]["model"], "opus");
+        assert_eq!(arr[0]["dataSnapshot"]["k"], "v");
+        assert_eq!(arr[0]["kritischCount"], 1);
     }
 
     #[tokio::test]

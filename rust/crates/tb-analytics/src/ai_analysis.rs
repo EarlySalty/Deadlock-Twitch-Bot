@@ -6,10 +6,45 @@
 //! Call + In-Memory-State + Persistenz folgen in späteren Slices.
 
 use serde_json::Value;
+use sqlx::PgPool;
 
 /// KI-Modell-Kennungen (Python `AI_MODEL_OPUS`/`AI_MODEL_MINIMAX`).
 pub const AI_MODEL_OPUS: &str = "opus";
 pub const AI_MODEL_MINIMAX: &str = "minimax";
+
+/// Echte Modellnamen (Python `CLAUDE_MODEL`/`MINIMAX_MODEL`), wie sie in
+/// `ai_analyses.model` persistiert werden.
+pub const CLAUDE_MODEL: &str = "claude-opus-4-6";
+pub const MINIMAX_MODEL: &str = "MiniMax-M3";
+
+/// Modellname für die Persistenz: `opus` → Claude, sonst MiniMax (1:1 Python
+/// `CLAUDE_MODEL if ai_model == AI_MODEL_OPUS else MINIMAX_MODEL`).
+pub fn model_name_for(ai_model: &str) -> &'static str {
+    if ai_model == AI_MODEL_OPUS {
+        CLAUDE_MODEL
+    } else {
+        MINIMAX_MODEL
+    }
+}
+
+/// Reine Modellwahl aus Entitlements (Python `_plan_ai_model`-Logik):
+/// `analytics.ai_full` → Opus, sonst `analytics.ai_mini` → MiniMax, sonst keins.
+pub fn model_for_entitlements(entitlements: &[&str]) -> Option<&'static str> {
+    if entitlements.contains(&"analytics.ai_full") {
+        Some(AI_MODEL_OPUS)
+    } else if entitlements.contains(&"analytics.ai_mini") {
+        Some(AI_MODEL_MINIMAX)
+    } else {
+        None
+    }
+}
+
+/// Plan-abhängiges KI-Modell eines Streamers (Python `_plan_ai_model`):
+/// Plan-Snapshot (login-only) → Entitlements → Modellwahl.
+pub async fn plan_ai_model(pool: &PgPool, streamer: &str) -> Result<Option<&'static str>, sqlx::Error> {
+    let snapshot = crate::plan::resolve_plan_snapshot(pool, streamer, "").await?;
+    Ok(model_for_entitlements(&snapshot.entitlements))
+}
 
 /// Erstes vollständiges JSON-Array aus `text` (string-aware: `]` innerhalb von
 /// Strings wird übersprungen). `None`, wenn das Array nicht terminiert ist
@@ -166,5 +201,21 @@ mod tests {
         );
         // Gar nichts.
         assert_eq!(parse_ai_analysis_points("kaputt"), Vec::<Value>::new());
+    }
+
+    #[test]
+    fn modellwahl_und_name() {
+        // ai_full hat Vorrang vor ai_mini.
+        assert_eq!(model_for_entitlements(&["analytics.ai_full"]), Some("opus"));
+        assert_eq!(model_for_entitlements(&["analytics.ai_mini"]), Some("minimax"));
+        assert_eq!(
+            model_for_entitlements(&["analytics.ai_full", "analytics.ai_mini"]),
+            Some("opus")
+        );
+        assert_eq!(model_for_entitlements(&["analytics.basic"]), None);
+        assert_eq!(model_for_entitlements(&[]), None);
+        // Persistenz-Modellname.
+        assert_eq!(model_name_for("opus"), "claude-opus-4-6");
+        assert_eq!(model_name_for("minimax"), "MiniMax-M3");
     }
 }
