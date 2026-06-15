@@ -1231,6 +1231,196 @@ pub async fn raid_network(
     }))
 }
 
+/// Peer-Vergleich (Python `_peer_comparison`): Multi-Metrik-Tabelle aller
+/// Streamer mit ≥ 3 Sessions, eigener Rang je Metrik, ähnliche vs.
+/// aspirationale Peers und Abstand zum nächsthöheren Streamer.
+pub async fn peer_comparison(
+    pool: &PgPool,
+    streamer: &str,
+    since: DateTime<Utc>,
+) -> Result<Value, sqlx::Error> {
+    // Numerische Felder (gerundet) für Logik + vorgebaute JSON (Int-0-Truthiness).
+    struct Peer {
+        login: String,
+        entry: Value,
+        avg_viewers: f64,
+        avg_chatters: f64,
+        retention5m: f64,
+        title_variety: f64,
+        max_peak: i64,
+        sessions: i64,
+    }
+    fn metric_value(p: &Peer, metric: &str) -> f64 {
+        match metric {
+            "avgViewers" => p.avg_viewers,
+            "maxPeak" => p.max_peak as f64,
+            "avgChatters" => p.avg_chatters,
+            "retention5m" => p.retention5m,
+            "titleVariety" => p.title_variety,
+            "sessions" => p.sessions as f64,
+            _ => 0.0,
+        }
+    }
+
+    #[allow(clippy::type_complexity)]
+    let all_rows: Vec<(
+        String,
+        i64,
+        Option<f64>,
+        Option<i32>,
+        Option<f64>,
+        Option<f64>,
+        Option<f64>,
+        Option<f64>,
+        Option<i64>,
+        i64,
+    )> = sqlx::query_as(
+        "SELECT s.streamer_login, COUNT(*)::bigint, AVG(s.avg_viewers)::float8, \
+                MAX(s.peak_viewers), AVG(s.duration_seconds / 3600.0)::float8, \
+                AVG(s.unique_chatters)::float8, AVG(s.retention_5m)::float8, \
+                SUM(s.duration_seconds / 3600.0)::float8, \
+                SUM(CASE WHEN s.follower_delta > 0 THEN s.follower_delta ELSE 0 END)::bigint, \
+                COUNT(DISTINCT s.stream_title)::bigint \
+           FROM twitch_stream_sessions s \
+          WHERE s.started_at >= $1 AND s.duration_seconds > 300 AND s.ended_at IS NOT NULL \
+          GROUP BY s.streamer_login \
+         HAVING COUNT(*) >= 3 \
+          ORDER BY 3 DESC",
+    )
+    .bind(since)
+    .fetch_all(pool)
+    .await?;
+
+    let mut peers: Vec<Peer> = Vec::new();
+    let mut own_index: Option<usize> = None;
+    for (i, r) in all_rows.iter().enumerate() {
+        let (login, sessions, avg_v, max_peak, avg_hours, avg_chat, avg_ret, total_hours, follows, unique_titles) =
+            r;
+        let sessions = *sessions;
+        let unique_t = *unique_titles;
+
+        let avg_viewers = round1(avg_v.unwrap_or(0.0));
+        let avg_chatters = round1(avg_chat.unwrap_or(0.0));
+        let retention5m = round1(avg_ret.unwrap_or(0.0) * 100.0);
+        let max_peak_i = max_peak.unwrap_or(0) as i64;
+        let title_variety = if sessions > 0 && unique_t != 0 {
+            round1(unique_t as f64 / sessions as f64 * 100.0)
+        } else {
+            0.0
+        };
+
+        // JSON-Werte: Int-0 bei Falsy (= Pythons `round(x or 0, 1)`).
+        let retention5m_json = match avg_ret {
+            Some(v) if *v != 0.0 => json!(round1(v * 100.0)),
+            _ => json!(0),
+        };
+        let title_variety_json = if sessions > 0 && unique_t != 0 {
+            json!(title_variety)
+        } else {
+            json!(0)
+        };
+        let entry = json!({
+            "login": login,
+            "sessions": sessions,
+            "avgViewers": retention_value(*avg_v),
+            "maxPeak": max_peak_i,
+            "avgHours": retention_value(*avg_hours),
+            "avgChatters": retention_value(*avg_chat),
+            "retention5m": retention5m_json,
+            "totalHours": retention_value(*total_hours),
+            "followsGained": follows.unwrap_or(0),
+            "uniqueTitles": unique_t,
+            "titleVariety": title_variety_json,
+        });
+
+        if login == streamer {
+            own_index = Some(i);
+        }
+        peers.push(Peer {
+            login: login.clone(),
+            entry,
+            avg_viewers,
+            avg_chatters,
+            retention5m,
+            title_variety,
+            max_peak: max_peak_i,
+            sessions,
+        });
+    }
+
+    let total = peers.len();
+
+    // Pro-Metrik-Rang (nur wenn eigener Streamer dabei).
+    let mut metrics_ranked = serde_json::Map::new();
+    if own_index.is_some() {
+        for metric in ["avgViewers", "maxPeak", "avgChatters", "retention5m", "titleVariety", "sessions"] {
+            let mut ordered: Vec<&Peer> = peers.iter().collect();
+            ordered.sort_by(|a, b| {
+                metric_value(b, metric)
+                    .partial_cmp(&metric_value(a, metric))
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            });
+            for (j, p) in ordered.iter().enumerate() {
+                if p.login == streamer {
+                    metrics_ranked.insert(
+                        metric.to_string(),
+                        json!({ "rank": j + 1, "total": total, "value": p.entry[metric].clone() }),
+                    );
+                    break;
+                }
+            }
+        }
+    }
+
+    // Ähnliche (±50 %) vs. aspirationale (1.5×–4×) Peers.
+    let mut similar: Vec<&Value> = Vec::new();
+    let mut aspirational: Vec<&Value> = Vec::new();
+    if let Some(oi) = own_index {
+        let own_avg = peers[oi].avg_viewers;
+        for p in &peers {
+            if p.login == streamer {
+                continue;
+            }
+            let pv = p.avg_viewers;
+            if own_avg * 0.5 <= pv && pv <= own_avg * 1.5 {
+                similar.push(&p.entry);
+            } else if own_avg * 1.5 < pv && pv <= own_avg * 4.0 {
+                aspirational.push(&p.entry);
+            }
+        }
+    }
+
+    // Abstand zum nächsthöheren (peers[own_rank-2] = peers[own_index-1]).
+    let gap: Value = match own_index {
+        Some(oi) if oi >= 1 => {
+            let nxt = &peers[oi - 1];
+            let own = &peers[oi];
+            json!({
+                "login": nxt.login,
+                "avgViewersDiff": round1(nxt.avg_viewers - own.avg_viewers),
+                "chatDiff": round1(nxt.avg_chatters - own.avg_chatters),
+                "retentionDiff": round1(nxt.retention5m - own.retention5m),
+            })
+        }
+        _ => Value::Null,
+    };
+
+    let own_data = own_index.map_or(Value::Null, |oi| peers[oi].entry.clone());
+    let own_rank = own_index.map_or(0, |oi| oi + 1);
+    let similar_out: Vec<&Value> = similar.into_iter().take(5).collect();
+    let aspirational_out: Vec<&Value> = aspirational.into_iter().take(5).collect();
+
+    Ok(json!({
+        "ownData": own_data,
+        "ownRank": own_rank,
+        "totalStreamers": total,
+        "similarPeers": similar_out,
+        "aspirationalPeers": aspirational_out,
+        "metricsRanked": Value::Object(metrics_ranked),
+        "gapToNext": gap,
+    }))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1247,7 +1437,7 @@ mod tests {
             .unwrap()
             .options([("search_path", schema), ("timezone", "UTC")]);
         let pool = PgPoolOptions::new().max_connections(2).connect_with(opts).await.unwrap();
-        sqlx::query("CREATE TABLE twitch_stream_sessions (id BIGSERIAL PRIMARY KEY, streamer_login TEXT, started_at TIMESTAMPTZ, duration_seconds INTEGER, avg_viewers REAL, follower_delta INTEGER, stream_title TEXT, peak_viewers INTEGER, unique_chatters INTEGER, retention_5m REAL, tags TEXT)")
+        sqlx::query("CREATE TABLE twitch_stream_sessions (id BIGSERIAL PRIMARY KEY, streamer_login TEXT, started_at TIMESTAMPTZ, ended_at TIMESTAMPTZ, duration_seconds INTEGER, avg_viewers REAL, follower_delta INTEGER, stream_title TEXT, peak_viewers INTEGER, unique_chatters INTEGER, retention_5m REAL, tags TEXT)")
             .execute(&pool).await.unwrap();
         Some(pool)
     }
@@ -1738,5 +1928,63 @@ mod tests {
         assert_eq!(pc["receivedAvgViewers"], 40.0);
         // partnerx (success=FALSE) nicht vorhanden.
         assert!(arr.iter().all(|p| p["login"] != "partnerx"));
+    }
+
+    #[tokio::test]
+    async fn peer_comparison_berechnet() {
+        let Some(pool) = make_pool("t_coach_peer").await else { return };
+        // 4 Streamer je 3 Sessions (HAVING>=3). avg_v: alpha150, gamma60, nani50, beta20.
+        // nani 3 distinct titles → titleVariety 100; andere 1 → 33.3.
+        sqlx::query(
+            "INSERT INTO twitch_stream_sessions (streamer_login, started_at, ended_at, duration_seconds, avg_viewers, peak_viewers, unique_chatters, retention_5m, follower_delta, stream_title) VALUES \
+            ('nani',  NOW()-INTERVAL '1 day', NOW(), 7200, 50,  100, 10, 0.5,  5, 't1'), \
+            ('nani',  NOW()-INTERVAL '2 day', NOW(), 7200, 50,  100, 10, 0.5,  5, 't2'), \
+            ('nani',  NOW()-INTERVAL '3 day', NOW(), 7200, 50,  100, 10, 0.5,  5, 't3'), \
+            ('alpha', NOW()-INTERVAL '1 day', NOW(), 7200, 150, 300, 30, 0.6, 10, 'a'), \
+            ('alpha', NOW()-INTERVAL '2 day', NOW(), 7200, 150, 300, 30, 0.6, 10, 'a'), \
+            ('alpha', NOW()-INTERVAL '3 day', NOW(), 7200, 150, 300, 30, 0.6, 10, 'a'), \
+            ('gamma', NOW()-INTERVAL '1 day', NOW(), 7200, 60,  120, 12, 0.55, 6, 'g'), \
+            ('gamma', NOW()-INTERVAL '2 day', NOW(), 7200, 60,  120, 12, 0.55, 6, 'g'), \
+            ('gamma', NOW()-INTERVAL '3 day', NOW(), 7200, 60,  120, 12, 0.55, 6, 'g'), \
+            ('beta',  NOW()-INTERVAL '1 day', NOW(), 7200, 20,  40,  5,  0.4,  2, 'b'), \
+            ('beta',  NOW()-INTERVAL '2 day', NOW(), 7200, 20,  40,  5,  0.4,  2, 'b'), \
+            ('beta',  NOW()-INTERVAL '3 day', NOW(), 7200, 20,  40,  5,  0.4,  2, 'b')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let v = peer_comparison(&pool, "nani", Utc::now() - chrono::Duration::days(30))
+            .await
+            .unwrap();
+
+        // Sortiert avg_v DESC: alpha, gamma, nani, beta → nani Rang 3 von 4.
+        assert_eq!(v["ownRank"], 3);
+        assert_eq!(v["totalStreamers"], 4);
+        assert_eq!(v["ownData"]["login"], "nani");
+        assert_eq!(v["ownData"]["avgViewers"], 50.0);
+        assert_eq!(v["ownData"]["retention5m"], 50.0); // 0.5*100
+        assert_eq!(v["ownData"]["titleVariety"], 100.0); // 3/3
+        assert_eq!(v["ownData"]["maxPeak"], 100);
+        assert_eq!(v["ownData"]["uniqueTitles"], 3);
+
+        // Ähnlich (25..75): gamma(60). Aspirational (75..200): alpha(150).
+        assert_eq!(v["similarPeers"].as_array().unwrap().len(), 1);
+        assert_eq!(v["similarPeers"][0]["login"], "gamma");
+        assert_eq!(v["aspirationalPeers"].as_array().unwrap().len(), 1);
+        assert_eq!(v["aspirationalPeers"][0]["login"], "alpha");
+
+        // Gap zum nächsthöheren (gamma, Rang 2).
+        assert_eq!(v["gapToNext"]["login"], "gamma");
+        assert_eq!(v["gapToNext"]["avgViewersDiff"], 10.0); // 60-50
+        assert_eq!(v["gapToNext"]["chatDiff"], 2.0); // 12-10
+        assert_eq!(v["gapToNext"]["retentionDiff"], 5.0); // 55-50
+
+        // Pro-Metrik-Rang.
+        assert_eq!(v["metricsRanked"]["avgViewers"]["rank"], 3);
+        assert_eq!(v["metricsRanked"]["avgViewers"]["value"], 50.0);
+        assert_eq!(v["metricsRanked"]["avgViewers"]["total"], 4);
+        // titleVariety: nani 100 ist Höchstwert → Rang 1.
+        assert_eq!(v["metricsRanked"]["titleVariety"]["rank"], 1);
     }
 }
