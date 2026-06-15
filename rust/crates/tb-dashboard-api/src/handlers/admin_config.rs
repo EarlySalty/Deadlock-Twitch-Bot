@@ -9,8 +9,13 @@
 //! über `AuthLevel::is_privileged`. updated_by = "admin" (Rust-Auth ohne
 //! Discord-User-ID, = Pythons Fallback).
 
-use axum::{extract::State, response::IntoResponse, Json};
+use axum::{
+    extract::{Query, State},
+    response::IntoResponse,
+    Json,
+};
 use chrono::SecondsFormat;
+use serde::Deserialize;
 use serde_json::{json, Value};
 use sqlx::PgPool;
 use tb_http_core::{ApiError, AuthLevel};
@@ -18,6 +23,7 @@ use tb_http_core::{ApiError, AuthLevel};
 use tb_analytics::admin_config::{
     bulk_update_partner_flags, load_streamer_config_snapshots, parse_admin_scope, PartnerFlagUpdate,
 };
+use tb_analytics::promo_mode::{evaluate_global_promo_mode, load_global_promo_mode};
 
 /// Boolean-Coercion für Admin-Payloads (Python `_admin_normalize_bool`):
 /// echte bools, `0`/`1` (int/float), Strings `1/true/yes/on` bzw. `0/false/no/off`.
@@ -64,6 +70,48 @@ fn scope_or_error(payload: &Value) -> Result<String, ApiError> {
 
 fn now_iso() -> String {
     chrono::Utc::now().to_rfc3339_opts(SecondsFormat::Micros, false)
+}
+
+#[derive(Debug, Deserialize)]
+pub struct OverviewQuery {
+    pub scope: Option<String>,
+}
+
+/// `GET /twitch/api/admin/config/overview` — Aggregat-Read der Admin-Config:
+/// ausgewerteter Promo-Modus + Raid-/Chat-Flag-Snapshots (Python
+/// `_api_admin_config_overview`). `announcements` spiegelt die Promo-Config,
+/// `csrfToken`/`csrf_token` sind `null` (CSRF im Rust-Dashboard nicht portiert).
+///
+/// Der Python-Snapshot-Loader baut zusätzlich changelog/raid_history, die der
+/// Overview-Endpoint aber NICHT in seine Antwort übernimmt — daher hier weggelassen.
+pub async fn config_overview_handler(
+    auth: AuthLevel,
+    State(pool): State<PgPool>,
+    Query(params): Query<OverviewQuery>,
+) -> Result<impl IntoResponse, ApiError> {
+    if !auth.is_privileged() {
+        return Err(ApiError::unauthorized());
+    }
+    let scope = parse_admin_scope(params.scope.as_deref()).ok_or_else(|| {
+        ApiError::bad_request_with_body(json!({
+            "error": "invalid_scope",
+            "message": "scope muss 'active' oder 'all' sein.",
+        }))
+    })?;
+
+    let promo_config = load_global_promo_mode(&pool).await.map_err(db_error)?;
+    let evaluation = evaluate_global_promo_mode(&promo_config.to_json(), None);
+    let snaps = load_streamer_config_snapshots(&pool, &scope).await.map_err(db_error)?;
+
+    Ok(Json(json!({
+        "promo": evaluation.to_json(),
+        "raids": snaps.raid_snapshot(),
+        "chat": snaps.chat_snapshot(),
+        // announcements = Promo-Config-Sub-Objekt (Python promo.get("config", {})).
+        "announcements": evaluation.config.to_json(),
+        "csrfToken": Value::Null,
+        "csrf_token": Value::Null,
+    })))
 }
 
 /// `POST /twitch/api/admin/config/raids` — Raid-/Live-Ping-Flags netzweit setzen.
@@ -259,6 +307,28 @@ mod tests {
         let v: i32 = sqlx::query_scalar("SELECT raid_bot_enabled FROM twitch_partners WHERE twitch_user_id='a'")
             .fetch_one(&pool).await.unwrap();
         assert_eq!(v, 1);
+    }
+
+    #[tokio::test]
+    async fn overview_aggregiert_promo_raids_chat() {
+        let Some(pool) = make_pool("t_acfg_overview").await else { return };
+        // scope=None → active. load_global_promo_mode legt seine Tabelle selbst an.
+        let r = config_overview_handler(AuthLevel::Admin, State(pool.clone()), Query(OverviewQuery { scope: None })).await;
+        let (s, j) = body_json(r).await;
+        assert_eq!(s, StatusCode::OK);
+        assert_eq!(j["promo"]["status"], "standard"); // Default ohne gesetzten Modus
+        assert_eq!(j["raids"]["totalManagedStreamers"], 1);
+        assert_eq!(j["chat"]["totalManagedStreamers"], 1);
+        assert!(j["announcements"].is_object());
+        assert!(j["csrfToken"].is_null());
+        assert!(j["csrf_token"].is_null());
+
+        // unauth → 401, bad scope → 400.
+        let (s, _) = body_json(config_overview_handler(AuthLevel::None, State(pool.clone()), Query(OverviewQuery { scope: None })).await).await;
+        assert_eq!(s, StatusCode::UNAUTHORIZED);
+        let (s, j) = body_json(config_overview_handler(AuthLevel::Admin, State(pool), Query(OverviewQuery { scope: Some("bogus".into()) })).await).await;
+        assert_eq!(s, StatusCode::BAD_REQUEST);
+        assert_eq!(j["error"], "invalid_scope");
     }
 
     #[tokio::test]

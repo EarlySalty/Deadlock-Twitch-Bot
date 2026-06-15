@@ -380,6 +380,10 @@ pub fn build_admin_config_router(pool: PgPool, token: String) -> Router {
 
     Router::new()
         .route(
+            "/twitch/api/admin/config/overview",
+            get(admin_config::config_overview_handler),
+        )
+        .route(
             "/twitch/api/admin/config/promo",
             post(admin_promo_mode::set_promo_handler),
         )
