@@ -336,6 +336,21 @@ impl EngagementMinimaxClient {
         Ok(raw_text)
     }
 
+    /// Completion über ein vollständiges `messages`-Array (system + history +
+    /// user) → getrimmter Antwort-Text. Für Multi-Turn-Calls wie den KI-Folgechat
+    /// (`client.chat.completions.create(messages=…)`).
+    pub async fn messages_completion(
+        &self,
+        messages: serde_json::Value,
+        max_output_tokens: i64,
+        temperature: f64,
+    ) -> Result<String, GenerateError> {
+        let (raw_text, _, _, _) = self
+            .post_completion(messages, max_output_tokens, temperature)
+            .await?;
+        Ok(raw_text)
+    }
+
     /// POST an `/chat/completions`; gibt (Roh-Text, prompt_tokens,
     /// completion_tokens, Latenz) zurück. Gemeinsame Basis von [`Self::generate`]
     /// und [`Self::raw_completion`].

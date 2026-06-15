@@ -9,6 +9,7 @@ pub mod admin_roadmap;
 pub mod admin_promo_mode;
 pub mod admin_streamers;
 pub mod ai_analysis;
+pub mod ai_chat;
 pub mod ai_history;
 pub mod auth_status;
 pub mod bans;
