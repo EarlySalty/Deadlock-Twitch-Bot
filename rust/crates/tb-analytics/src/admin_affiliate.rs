@@ -170,6 +170,161 @@ pub async fn load_affiliates_list(pool: &PgPool) -> Result<Value, sqlx::Error> {
     }
 }
 
+// ── Gutschriften-Liste ────────────────────────────────────────────────────────
+
+/// Deutsche Monatsnamen (Index 1–12; 0 = leer). ASCII „Maerz" wie Python.
+const MONTH_LABELS: [&str; 13] = [
+    "", "Januar", "Februar", "Maerz", "April", "Mai", "Juni", "Juli", "August", "September",
+    "Oktober", "November", "Dezember",
+];
+
+#[derive(sqlx::FromRow)]
+struct GutschriftRow {
+    id: i64,
+    affiliate_twitch_login: Option<String>,
+    period_year: i64,
+    period_month: i64,
+    gutschrift_number: Option<String>,
+    net_amount_cents: i64,
+    vat_amount_cents: i64,
+    gross_amount_cents: i64,
+    commission_ids: Option<String>,
+    affiliate_ust_status: Option<String>,
+    email_error: Option<String>,
+    pdf_generated_at: Option<String>,
+    email_sent_at: Option<String>,
+    created_at: Option<String>,
+    has_pdf: Option<i64>,
+    display_name: Option<String>,
+    is_active: i64,
+    ust_status: Option<String>,
+    has_pii: i64,
+}
+
+/// Status-Ableitung (Python `_status_from_row`).
+fn gutschrift_status(r: &GutschriftRow) -> &'static str {
+    if r.pdf_generated_at.as_deref().filter(|s| !s.is_empty()).is_none() {
+        "blocked"
+    } else if r.email_error.as_deref().map(|s| !s.trim().is_empty()).unwrap_or(false) {
+        "email_failed"
+    } else if r.email_sent_at.as_deref().filter(|s| !s.is_empty()).is_some() {
+        "emailed"
+    } else {
+        "generated"
+    }
+}
+
+/// §19-UStG-Hinweis bei Kleinunternehmern (Python `_note_text`).
+fn gutschrift_note_text(ust_status: Option<&str>) -> &'static str {
+    if ust_status.unwrap_or("").trim().eq_ignore_ascii_case("kleinunternehmer") {
+        "Gemäß § 19 UStG wird keine Umsatzsteuer berechnet."
+    } else {
+        ""
+    }
+}
+
+/// commission_ids-JSON-String → Liste von ints (Python `_commission_ids_from_row`).
+fn parse_commission_ids(raw: Option<&str>) -> Vec<i64> {
+    let raw = raw.unwrap_or("").trim();
+    if raw.is_empty() {
+        return Vec::new();
+    }
+    match serde_json::from_str::<Value>(raw) {
+        Ok(Value::Array(arr)) => arr
+            .iter()
+            .filter_map(|v| v.as_i64().or_else(|| v.as_str().and_then(|s| s.trim().parse().ok())))
+            .collect(),
+        _ => Vec::new(),
+    }
+}
+
+fn gutschrift_payload(r: GutschriftRow) -> Value {
+    let commission_ids = parse_commission_ids(r.commission_ids.as_deref());
+    let period_label = if r.period_year >= 2000 && (1..=12).contains(&r.period_month) {
+        format!("{} {}", MONTH_LABELS[r.period_month as usize], r.period_year)
+    } else {
+        String::new()
+    };
+    let status = gutschrift_status(&r);
+    let note_text = gutschrift_note_text(r.affiliate_ust_status.as_deref());
+    let download_path = if r.id > 0 {
+        Some(format!("/twitch/api/admin/affiliates/gutschriften/{}/pdf", r.id))
+    } else {
+        None
+    };
+    let ust = r.ust_status.unwrap_or_default().trim().to_string();
+    json!({
+        "id": r.id,
+        "period_year": r.period_year,
+        "period_month": r.period_month,
+        "period_label": period_label,
+        "gutschrift_number": r.gutschrift_number.unwrap_or_default(),
+        "status": status,
+        "net_amount_cents": r.net_amount_cents,
+        "vat_amount_cents": r.vat_amount_cents,
+        "gross_amount_cents": r.gross_amount_cents,
+        "commission_count": commission_ids.len(),
+        "commission_ids": commission_ids,
+        "note_text": note_text,
+        "last_error": r.email_error.unwrap_or_default(),
+        "generated_at": r.pdf_generated_at,
+        "emailed_at": r.email_sent_at,
+        "created_at": r.created_at,
+        "download_path": download_path,
+        "has_pdf": r.has_pdf.is_some(),
+        "affiliate_login": r.affiliate_twitch_login.unwrap_or_default().trim(),
+        "display_name": r.display_name,
+        "active": r.is_active != 0,
+        "ust_status": if ust.is_empty() { "unknown".to_string() } else { ust },
+        "has_pii": r.has_pii != 0,
+    })
+}
+
+const GUTSCHRIFT_COLUMNS: &str = "\
+    g.id::bigint AS id, g.affiliate_twitch_login AS affiliate_twitch_login, \
+    g.period_year::bigint AS period_year, g.period_month::bigint AS period_month, \
+    g.gutschrift_number AS gutschrift_number, g.net_amount_cents::bigint AS net_amount_cents, \
+    g.vat_amount_cents::bigint AS vat_amount_cents, g.gross_amount_cents::bigint AS gross_amount_cents, \
+    g.commission_ids AS commission_ids, g.affiliate_ust_status AS affiliate_ust_status, \
+    g.email_error AS email_error, g.pdf_generated_at AS pdf_generated_at, \
+    g.email_sent_at AS email_sent_at, g.created_at AS created_at, \
+    (CASE WHEN g.pdf_blob IS NOT NULL THEN 1 ELSE NULL END)::bigint AS has_pdf, \
+    a.display_name AS display_name, a.is_active::bigint AS is_active";
+
+const GUTSCHRIFT_ORDER: &str = "ORDER BY g.period_year DESC, g.period_month DESC, g.id DESC";
+
+/// Globale Gutschriften-Liste (Python `load_admin_affiliate_gutschriften`).
+/// Zwei-stufiger Fallback: mit affiliate_pii → ohne PII → leer.
+pub async fn load_affiliate_gutschriften(pool: &PgPool) -> Result<Value, sqlx::Error> {
+    let full_sql = format!(
+        "SELECT {GUTSCHRIFT_COLUMNS}, COALESCE(pii.ust_status, 'unknown') AS ust_status, \
+                (CASE WHEN pii.twitch_login IS NOT NULL THEN 1 ELSE 0 END)::bigint AS has_pii \
+         FROM affiliate_gutschriften g \
+         JOIN affiliate_accounts a ON a.twitch_login = g.affiliate_twitch_login \
+         LEFT JOIN affiliate_pii pii ON pii.twitch_login = g.affiliate_twitch_login {GUTSCHRIFT_ORDER}"
+    );
+    let rows = match sqlx::query_as::<_, GutschriftRow>(&full_sql).fetch_all(pool).await {
+        Ok(rows) => rows,
+        Err(e) if !is_missing_schema_error(&e) => return Err(e),
+        Err(_) => {
+            let no_pii_sql = format!(
+                "SELECT {GUTSCHRIFT_COLUMNS}, 'unknown' AS ust_status, 0::bigint AS has_pii \
+                 FROM affiliate_gutschriften g \
+                 JOIN affiliate_accounts a ON a.twitch_login = g.affiliate_twitch_login {GUTSCHRIFT_ORDER}"
+            );
+            match sqlx::query_as::<_, GutschriftRow>(&no_pii_sql).fetch_all(pool).await {
+                Ok(rows) => rows,
+                Err(e) if is_missing_schema_error(&e) => return Ok(json!({ "gutschriften": [], "count": 0 })),
+                Err(e) => return Err(e),
+            }
+        }
+    };
+
+    let documents: Vec<Value> = rows.into_iter().map(gutschrift_payload).collect();
+    let count = documents.len();
+    Ok(json!({ "gutschriften": documents, "count": count }))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -254,6 +409,60 @@ mod tests {
         let Some(pool) = connect("t_aff_list_empty").await else { return };
         let v = load_affiliates_list(&pool).await.unwrap();
         assert_eq!(v["affiliates"], json!([]));
+    }
+
+    #[test]
+    fn pure_helfer() {
+        assert_eq!(parse_commission_ids(Some("[1, 2, \"3\"]")), vec![1, 2, 3]);
+        assert_eq!(parse_commission_ids(Some("kein json")), Vec::<i64>::new());
+        assert_eq!(parse_commission_ids(None), Vec::<i64>::new());
+        assert_eq!(gutschrift_note_text(Some("Kleinunternehmer")), "Gemäß § 19 UStG wird keine Umsatzsteuer berechnet.");
+        assert_eq!(gutschrift_note_text(Some("regular")), "");
+    }
+
+    async fn with_gutschrift_tables(pool: &PgPool) {
+        for ddl in [
+            "CREATE TABLE affiliate_accounts (twitch_login TEXT PRIMARY KEY, display_name TEXT, is_active INTEGER NOT NULL DEFAULT 1, created_at TEXT)",
+            "CREATE TABLE affiliate_pii (twitch_login TEXT PRIMARY KEY, ust_status TEXT NOT NULL DEFAULT 'unknown')",
+            "CREATE TABLE affiliate_gutschriften (id BIGSERIAL PRIMARY KEY, gutschrift_number TEXT, affiliate_twitch_login TEXT, period_year INTEGER, period_month INTEGER, net_amount_cents INTEGER, vat_amount_cents INTEGER, gross_amount_cents INTEGER, affiliate_ust_status TEXT, email_error TEXT, pdf_blob BYTEA, pdf_generated_at TEXT, email_sent_at TEXT, commission_ids TEXT, created_at TEXT)",
+        ] {
+            sqlx::query(ddl).execute(pool).await.unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn gutschriften_liste_payload() {
+        let Some(pool) = connect("t_aff_gut").await else { return };
+        with_gutschrift_tables(&pool).await;
+        sqlx::query("INSERT INTO affiliate_accounts (twitch_login, display_name, is_active, created_at) VALUES ('nani','Nani',1,'2026-06-01T00:00:00+00:00')").execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO affiliate_pii (twitch_login, ust_status) VALUES ('nani','kleinunternehmer')").execute(&pool).await.unwrap();
+        // PDF generiert + Email versendet → status 'emailed'; pdf_blob gesetzt → has_pdf.
+        sqlx::query("INSERT INTO affiliate_gutschriften (gutschrift_number, affiliate_twitch_login, period_year, period_month, net_amount_cents, vat_amount_cents, gross_amount_cents, affiliate_ust_status, pdf_blob, pdf_generated_at, email_sent_at, commission_ids, created_at) VALUES ('GS-2026-06-001','nani',2026,6,1000,0,1000,'kleinunternehmer',E'\\\\x00','2026-06-30T00:00:00+00:00','2026-07-01T00:00:00+00:00','[10, 11]','2026-06-30T00:00:00+00:00')")
+            .execute(&pool).await.unwrap();
+
+        let v = load_affiliate_gutschriften(&pool).await.unwrap();
+        assert_eq!(v["count"], 1);
+        let g = &v["gutschriften"][0];
+        assert_eq!(g["gutschrift_number"], "GS-2026-06-001");
+        assert_eq!(g["period_label"], "Juni 2026");
+        assert_eq!(g["status"], "emailed");
+        assert_eq!(g["has_pdf"], true);
+        assert_eq!(g["commission_count"], 2);
+        assert_eq!(g["commission_ids"], json!([10, 11]));
+        assert!(g["note_text"].as_str().unwrap().contains("§ 19"));
+        assert_eq!(g["download_path"], "/twitch/api/admin/affiliates/gutschriften/1/pdf");
+        assert_eq!(g["affiliate_login"], "nani");
+        assert_eq!(g["display_name"], "Nani");
+        assert_eq!(g["ust_status"], "kleinunternehmer");
+        assert_eq!(g["has_pii"], true);
+    }
+
+    #[tokio::test]
+    async fn gutschriften_ohne_tabellen_leer() {
+        let Some(pool) = connect("t_aff_gut_empty").await else { return };
+        let v = load_affiliate_gutschriften(&pool).await.unwrap();
+        assert_eq!(v["count"], 0);
+        assert_eq!(v["gutschriften"], json!([]));
     }
 
     #[tokio::test]

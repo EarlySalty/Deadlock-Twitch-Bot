@@ -54,6 +54,23 @@ pub async fn list_handler(
     }
 }
 
+/// `GET /twitch/api/admin/affiliates/gutschriften` — alle Gutschriften (Admin).
+pub async fn gutschriften_handler(
+    auth: AuthLevel,
+    State(pool): State<PgPool>,
+) -> Result<impl IntoResponse, ApiError> {
+    if !auth.is_privileged() {
+        return Err(ApiError::unauthorized());
+    }
+    match tb_analytics::admin_affiliate::load_affiliate_gutschriften(&pool).await {
+        Ok(v) => Ok(Json(v)),
+        Err(e) => {
+            tracing::error!("affiliate-gutschriften SELECT-Fehler: {e}");
+            Err(ApiError::internal())
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -111,5 +128,16 @@ mod tests {
         let (s, j) = body_json(list_handler(AuthLevel::Admin, State(pool)).await).await;
         assert_eq!(s, StatusCode::OK);
         assert_eq!(j["affiliates"], serde_json::json!([]));
+    }
+
+    #[tokio::test]
+    async fn gutschriften_unauth_und_leer() {
+        let Some(pool) = make_pool("t_affh_gut").await else { return };
+        let (s, _) = body_json(gutschriften_handler(AuthLevel::None, State(pool.clone())).await).await;
+        assert_eq!(s, StatusCode::UNAUTHORIZED);
+        let (s, j) = body_json(gutschriften_handler(AuthLevel::Admin, State(pool)).await).await;
+        assert_eq!(s, StatusCode::OK);
+        assert_eq!(j["count"], 0);
+        assert_eq!(j["gutschriften"], serde_json::json!([]));
     }
 }
