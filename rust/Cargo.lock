@@ -2550,6 +2550,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "tb-llm"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "chrono",
+ "reqwest",
+ "serde_json",
+ "sqlx",
+ "tokio",
+ "tracing",
+ "wiremock",
+]
+
+[[package]]
 name = "tb-monitoring"
 version = "0.1.0"
 dependencies = [
