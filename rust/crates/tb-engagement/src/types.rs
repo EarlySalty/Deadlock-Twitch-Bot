@@ -6,6 +6,11 @@
 pub enum Decision {
     /// Modell hat geantwortet, Text geht in den Chat.
     Spoke,
+    /// Modell hat geantwortet, aber der Output-Modus ist `shadow`: der Text
+    /// wurde erzeugt und gestaged/markiert, geht aber NICHT in den Twitch-Chat
+    /// (für späteres Discord-Review). Kein Python-Pendant — neue Funktion aus
+    /// dem Block-19-Grillme (Engagement-KI mit Shadow-Modus).
+    Shadowed,
     /// Bewusst still (Pre-Filter, leere Modellantwort, Starter-Repeat).
     Silent,
     /// Anti-Burst-Sperre.
@@ -26,12 +31,52 @@ impl Decision {
     pub fn as_str(self) -> &'static str {
         match self {
             Decision::Spoke => "spoke",
+            Decision::Shadowed => "shadowed",
             Decision::Silent => "silent",
             Decision::AntiBurst => "anti_burst",
             Decision::FloodGuard => "flood_guard",
             Decision::Optout => "optout",
             Decision::Disabled => "disabled",
             Decision::ProviderError => "provider_error",
+        }
+    }
+}
+
+/// Output-Modus der Engagement-KI eines Channels — drei klare Zustände.
+///
+/// Neu aus dem Block-19-Grillme (Python kannte nur `enabled` als bool). Steuert,
+/// was mit einer erzeugten KI-Antwort passiert. **Default ist [`Off`](Self::Off)**
+/// (der deaktivierte Zustand): Dashboard-Toggle und Shadow→Discord-Auslieferung
+/// kommen in separaten Tickets.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum OutputMode {
+    /// Kein KI-Output: die Pipeline erzeugt erst gar keine Antwort (no-op).
+    #[default]
+    Off,
+    /// Antwort wird erzeugt und gestaged/markiert, aber NICHT in den Chat
+    /// gesendet (für späteres Discord-Review).
+    Shadow,
+    /// Antwort wird normal in den Twitch-Chat gesendet.
+    Live,
+}
+
+impl OutputMode {
+    /// String-Repräsentation für die DB-Spalte `output_mode`.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            OutputMode::Off => "off",
+            OutputMode::Shadow => "shadow",
+            OutputMode::Live => "live",
+        }
+    }
+
+    /// Parst den DB-Wert. Unbekannte/leere Werte fallen sicher auf
+    /// [`Off`](Self::Off) zurück (fail-safe: im Zweifel kein Output).
+    pub fn from_db(value: &str) -> Self {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "live" => OutputMode::Live,
+            "shadow" => OutputMode::Shadow,
+            _ => OutputMode::Off,
         }
     }
 }
@@ -44,6 +89,8 @@ pub struct EngagementSettings {
     pub steam_id: Option<String>,
     pub persona_override: Option<String>,
     pub tabu_topics: Vec<String>,
+    /// Output-Modus der KI-Antwort (`off`/`shadow`/`live`). Default `off`.
+    pub output_mode: OutputMode,
 }
 
 /// Eine eingehende Chat-Nachricht, die die Pipeline bewertet.
@@ -60,7 +107,16 @@ pub struct IncomingMessage {
 #[derive(Debug, Clone, PartialEq)]
 pub struct HandleResult {
     pub decision: Decision,
+    /// Text, der in den Twitch-Chat gesendet werden soll. Nur im `live`-Modus
+    /// gesetzt — der tb-bot-Sendepfad sendet ausschließlich, wenn dieses Feld
+    /// belegt ist. Im `shadow`-Modus bleibt es bewusst `None` (siehe
+    /// [`shadow_text`](Self::shadow_text)).
     pub response_text: Option<String>,
+    /// Erzeugte KI-Antwort, die im `shadow`-Modus NICHT gesendet, sondern
+    /// gestaged/markiert wird (für späteres Discord-Review). Getrennt von
+    /// [`response_text`](Self::response_text), damit der bestehende
+    /// tb-bot-Sendepfad shadow-Antworten nie versehentlich in den Chat schickt.
+    pub shadow_text: Option<String>,
     pub model: Option<String>,
     pub prompt_tokens: Option<i64>,
     pub completion_tokens: Option<i64>,
@@ -74,6 +130,7 @@ impl HandleResult {
         Self {
             decision,
             response_text: None,
+            shadow_text: None,
             model: None,
             prompt_tokens: None,
             completion_tokens: None,
@@ -90,6 +147,7 @@ mod tests {
     #[test]
     fn decision_strings() {
         assert_eq!(Decision::Spoke.as_str(), "spoke");
+        assert_eq!(Decision::Shadowed.as_str(), "shadowed");
         assert_eq!(Decision::AntiBurst.as_str(), "anti_burst");
         assert_eq!(Decision::ProviderError.as_str(), "provider_error");
     }
@@ -99,6 +157,33 @@ mod tests {
         let r = HandleResult::new(Decision::Disabled);
         assert_eq!(r.decision, Decision::Disabled);
         assert!(r.response_text.is_none());
+        assert!(r.shadow_text.is_none());
         assert!(r.referenced_thread_ids.is_none());
+    }
+
+    #[test]
+    fn output_mode_default_ist_off() {
+        // Default-AUS-Garantie aus dem Grillme: ohne explizite Config kein Output.
+        assert_eq!(OutputMode::default(), OutputMode::Off);
+    }
+
+    #[test]
+    fn output_mode_roundtrip_db_string() {
+        for m in [OutputMode::Off, OutputMode::Shadow, OutputMode::Live] {
+            assert_eq!(OutputMode::from_db(m.as_str()), m);
+        }
+        assert_eq!(OutputMode::Off.as_str(), "off");
+        assert_eq!(OutputMode::Shadow.as_str(), "shadow");
+        assert_eq!(OutputMode::Live.as_str(), "live");
+    }
+
+    #[test]
+    fn output_mode_from_db_failsafe_off() {
+        // Unbekannte/leere/grossgeschriebene Werte → fail-safe Off (kein Output).
+        assert_eq!(OutputMode::from_db(""), OutputMode::Off);
+        assert_eq!(OutputMode::from_db("   "), OutputMode::Off);
+        assert_eq!(OutputMode::from_db("bogus"), OutputMode::Off);
+        assert_eq!(OutputMode::from_db("LIVE"), OutputMode::Live);
+        assert_eq!(OutputMode::from_db("  Shadow "), OutputMode::Shadow);
     }
 }
