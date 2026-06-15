@@ -641,6 +641,106 @@ pub async fn cross_community(
     }))
 }
 
+/// Einzel-Tags aus gruppierten Tag-Strings (Python `_split_tags_from_rows`).
+/// Split auf `,` `;` `|`, getrimmt + lowercase, leere raus → Set.
+fn split_tags_from_rows(tag_strings: &[String]) -> HashSet<String> {
+    let mut tags = HashSet::new();
+    for raw in tag_strings {
+        for part in raw.split(|c| c == ',' || c == ';' || c == '|') {
+            let cleaned = part.trim().to_lowercase();
+            if !cleaned.is_empty() {
+                tags.insert(cleaned);
+            }
+        }
+    }
+    tags
+}
+
+/// Tag-Optimierung (Python `_tag_optimization`): eigene Tag-Kombinationen,
+/// beste Kategorie-Tags, fehlende High-Performer und eigene Underperformer.
+pub async fn tag_optimization(
+    pool: &PgPool,
+    streamer: &str,
+    since: DateTime<Utc>,
+) -> Result<Value, sqlx::Error> {
+    // 1) Eigene Tag-Kombinationen.
+    let your_rows: Vec<(String, Option<f64>, i64)> = sqlx::query_as(
+        "SELECT s.tags, AVG(s.avg_viewers)::float8, COUNT(*)::bigint \
+           FROM twitch_stream_sessions s \
+          WHERE s.streamer_login = $1 AND s.started_at >= $2 \
+            AND s.tags IS NOT NULL AND s.tags != '' \
+          GROUP BY s.tags \
+          ORDER BY 2 DESC",
+    )
+    .bind(streamer)
+    .bind(since)
+    .fetch_all(pool)
+    .await?;
+
+    // (tags, gerundete avgViewers, usageCount) — Basis für Output + Avg/Underperf.
+    let your_data: Vec<(String, f64, i64)> = your_rows
+        .iter()
+        .map(|(tags, avg, cnt)| (tags.clone(), round1(avg.unwrap_or(0.0)), *cnt))
+        .collect();
+    let your_tags: Vec<Value> = your_data
+        .iter()
+        .map(|(t, a, c)| json!({ "tags": t, "avgViewers": a, "usageCount": c }))
+        .collect();
+    let your_individual =
+        split_tags_from_rows(&your_rows.iter().map(|r| r.0.clone()).collect::<Vec<_>>());
+
+    // 2) Beste Kategorie-Tags (alle Streamer, COUNT≥3).
+    let cat_rows: Vec<(String, Option<f64>, i64)> = sqlx::query_as(
+        "SELECT s.tags, AVG(s.avg_viewers)::float8, COUNT(DISTINCT s.streamer_login)::bigint \
+           FROM twitch_stream_sessions s \
+          WHERE s.started_at >= $1 \
+            AND s.tags IS NOT NULL AND s.tags != '' \
+          GROUP BY s.tags \
+         HAVING COUNT(*) >= 3 \
+          ORDER BY 2 DESC \
+          LIMIT 15",
+    )
+    .bind(since)
+    .fetch_all(pool)
+    .await?;
+
+    let cat_tags: Vec<Value> = cat_rows
+        .iter()
+        .map(|(tags, avg, scnt)| {
+            json!({ "tags": tags, "avgViewers": round1(avg.unwrap_or(0.0)), "streamerCount": scnt })
+        })
+        .collect();
+    let cat_individual =
+        split_tags_from_rows(&cat_rows.iter().map(|r| r.0.clone()).collect::<Vec<_>>());
+
+    // 3) Fehlende High-Performer (Set-Iteration → Reihenfolge frei wie Python).
+    let missing: Vec<&String> = cat_individual
+        .iter()
+        .filter(|t| !your_individual.contains(*t))
+        .take(10)
+        .collect();
+
+    // 4) Underperformer: eigene Tags unter 80 % des eigenen Schnitts.
+    let underperforming: Vec<&String> = if !your_data.is_empty() {
+        let your_avg = your_data.iter().map(|(_, a, _)| *a).sum::<f64>() / your_data.len() as f64;
+        your_data
+            .iter()
+            .filter(|(_, a, _)| *a < your_avg * 0.8)
+            .map(|(t, _, _)| t)
+            .take(5)
+            .collect()
+    } else {
+        Vec::new()
+    };
+
+    Ok(json!({
+        "yourTags": your_tags,
+        "categoryBestTags": cat_tags,
+        "missingHighPerformers": missing,
+        "underperformingTags": underperforming,
+    }))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -655,7 +755,7 @@ mod tests {
         admin.close().await;
         let opts = PgConnectOptions::from_str(&dsn).unwrap().options([("search_path", schema)]);
         let pool = PgPoolOptions::new().max_connections(2).connect_with(opts).await.unwrap();
-        sqlx::query("CREATE TABLE twitch_stream_sessions (id BIGSERIAL PRIMARY KEY, streamer_login TEXT, started_at TIMESTAMPTZ, duration_seconds INTEGER, avg_viewers REAL, follower_delta INTEGER, stream_title TEXT, peak_viewers INTEGER, unique_chatters INTEGER, retention_5m REAL)")
+        sqlx::query("CREATE TABLE twitch_stream_sessions (id BIGSERIAL PRIMARY KEY, streamer_login TEXT, started_at TIMESTAMPTZ, duration_seconds INTEGER, avg_viewers REAL, follower_delta INTEGER, stream_title TEXT, peak_viewers INTEGER, unique_chatters INTEGER, retention_5m REAL, tags TEXT)")
             .execute(&pool).await.unwrap();
         Some(pool)
     }
@@ -902,5 +1002,57 @@ mod tests {
         assert_eq!(v["totalUniqueChatters"], 0);
         assert_eq!(v["chatterSources"], json!([]));
         assert_eq!(v["ecosystemSummary"], "Keine Chatter-Daten verfuegbar.");
+    }
+
+    #[test]
+    fn split_tags_from_rows_trennt_und_normalisiert() {
+        let set = split_tags_from_rows(&[
+            "Deadlock, German ;Chill".to_string(),
+            "deadlock|PvP".to_string(),
+            "".to_string(),
+        ]);
+        // dedup case-insensitiv, getrimmt, leere weg.
+        assert!(set.contains("deadlock"));
+        assert!(set.contains("german"));
+        assert!(set.contains("chill"));
+        assert!(set.contains("pvp"));
+        assert_eq!(set.len(), 4);
+    }
+
+    #[tokio::test]
+    async fn tag_optimization_berechnet() {
+        let Some(pool) = make_pool("t_coach_tags").await else { return };
+        sqlx::query(
+            "INSERT INTO twitch_stream_sessions (streamer_login, started_at, duration_seconds, avg_viewers, tags) VALUES \
+            ('nani',  NOW()-INTERVAL '1 day', 7200, 90,  'Deadlock,German'), \
+            ('nani',  NOW()-INTERVAL '1 day', 7200, 110, 'Deadlock,German'), \
+            ('nani',  NOW()-INTERVAL '1 day', 7200, 20,  'Deadlock,Chill'), \
+            ('other', NOW()-INTERVAL '1 day', 7200, 200, 'Deadlock,Pro'), \
+            ('other', NOW()-INTERVAL '1 day', 7200, 200, 'Deadlock,Pro'), \
+            ('other', NOW()-INTERVAL '1 day', 7200, 200, 'Deadlock,Pro')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let v = tag_optimization(&pool, "nani", Utc::now() - chrono::Duration::days(30))
+            .await
+            .unwrap();
+
+        // Eigene Tags nach avg DESC: "Deadlock,German" (100) vor "Deadlock,Chill" (20).
+        assert_eq!(v["yourTags"][0]["tags"], "Deadlock,German");
+        assert_eq!(v["yourTags"][0]["avgViewers"], 100.0);
+        assert_eq!(v["yourTags"][0]["usageCount"], 2);
+        assert_eq!(v["yourTags"][1]["tags"], "Deadlock,Chill");
+
+        // Kategorie: nur "Deadlock,Pro" (other, COUNT 3) erfüllt HAVING>=3.
+        assert_eq!(v["categoryBestTags"][0]["tags"], "Deadlock,Pro");
+        assert_eq!(v["categoryBestTags"][0]["streamerCount"], 1);
+
+        // Fehlend: "pro" (deadlock kennt nani schon). Einziges Element → deterministisch.
+        assert_eq!(v["missingHighPerformers"], json!(["pro"]));
+
+        // Underperformer: your_avg=(100+20)/2=60, Schwelle 48 → nur "Deadlock,Chill".
+        assert_eq!(v["underperformingTags"], json!(["Deadlock,Chill"]));
     }
 }
