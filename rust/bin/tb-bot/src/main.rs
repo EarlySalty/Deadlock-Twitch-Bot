@@ -858,24 +858,14 @@ async fn main() {
         let reports = tb_social_media::report_dispatcher::ReportDispatcher::new(pool.clone());
         tokio::spawn(async move { reports.run().await });
 
-        // Enrichment: LLM-Dispatcher (Consent aus Settings) + optionaler
-        // OpenAI-Whisper-Transcriber. Ohne OPENAI_API_KEY bleibt der Transcriber
-        // None → Transkription wird übersprungen (1:1 wie ein fehlender Key).
+        // Enrichment: LLM-Dispatcher (Consent aus Settings). Transkription ist
+        // entfernt (B15-OFF-transcription: OpenAI-Whisper raus, kein Ersatz) —
+        // der Enrichment-Worker läuft ohne Transcriber, die Transkriptions-Stage
+        // wird übersprungen (None-Pfad).
         let llm: Arc<dyn tb_social_media::enrich_pipeline::EnrichmentLlm> =
             Arc::new(tb_social_media::llm_dispatch::LlmDispatcher::new(pool.clone()));
-        let mut enrichment =
+        let enrichment =
             tb_social_media::enrichment_worker::EnrichmentWorker::new(pool.clone(), llm);
-        match tb_social_media::whisper::OpenAiTranscriber::from_env() {
-            Some(transcriber) => {
-                enrichment = enrichment.with_transcriber(Arc::new(transcriber));
-                tracing::info!("Social-Media-Enrichment: OpenAI-Whisper-Transcriber aktiv");
-            }
-            None => {
-                tracing::info!(
-                    "Social-Media-Enrichment: kein OPENAI_API_KEY — Transkription übersprungen"
-                );
-            }
-        }
         tokio::spawn(async move { enrichment.run().await });
 
         // Upload + Insights brauchen den Field-Cipher (verschlüsselte
