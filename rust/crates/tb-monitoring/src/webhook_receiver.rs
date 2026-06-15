@@ -41,6 +41,10 @@ const MSG_TYPE_VERIFICATION: &str = "webhook_callback_verification";
 const MSG_TYPE_REVOCATION: &str = "revocation";
 const MSG_TYPE_NOTIFICATION: &str = "notification";
 
+/// Maximales Nachrichten-Alter in Sekunden (Replay-Fenster, Python
+/// `_MAX_MESSAGE_AGE_SECONDS`). Älter ODER weiter als das in der Zukunft → 403.
+const MAX_MESSAGE_AGE_SECONDS: i64 = 600;
+
 /// EventSub-Webhook-Empfänger: verifiziert Signaturen und dispatcht direkt.
 pub struct WebhookReceiver {
     secret: String,
@@ -100,6 +104,20 @@ pub fn verify_eventsub_signature(
     mac.verify_slice(&expected).is_ok()
 }
 
+/// Zweite Replay-Schranke neben dem Message-ID-Guard (B18-1/65.2): ist der
+/// Twitch-Timestamp älter als [`MAX_MESSAGE_AGE_SECONDS`] oder mehr als dieses
+/// Fenster in der Zukunft (Skew), wird die Nachricht abgelehnt. Unparsebare
+/// Timestamps gelten als zu alt (fail-closed, wie Python `_is_message_too_old`).
+fn is_timestamp_too_old(timestamp: &str, now: chrono::DateTime<chrono::Utc>) -> bool {
+    let Ok(parsed) = chrono::DateTime::parse_from_rfc3339(timestamp) else {
+        return true;
+    };
+    let age = now.signed_duration_since(parsed.with_timezone(&chrono::Utc));
+    // Akzeptiert wird nur das Fenster [-600s, +600s]: alles außerhalb ist zu
+    // alt (Replay) oder zu weit in der Zukunft (Skew).
+    !(-MAX_MESSAGE_AGE_SECONDS..=MAX_MESSAGE_AGE_SECONDS).contains(&age.num_seconds())
+}
+
 fn header<'h>(headers: &'h HeaderMap, name: &str) -> &'h str {
     headers
         .get(name)
@@ -127,6 +145,18 @@ async fn handle_callback(
             message_id,
             sub_type = %header_sub_type,
             "eventsub_receiver: Signatur ungültig — abgelehnt"
+        );
+        return StatusCode::FORBIDDEN.into_response();
+    }
+
+    // Replay-Schranke: Timestamp-Alter prüfen (zweite Linie neben dem
+    // Message-ID-Dedup im Dispatcher). Vor dem Dispatch, nach der Signatur.
+    if is_timestamp_too_old(timestamp, chrono::Utc::now()) {
+        tracing::warn!(
+            message_id,
+            timestamp,
+            sub_type = %header_sub_type,
+            "eventsub_receiver: Nachricht zu alt/Zukunfts-Skew — abgelehnt (Replay-Schutz)"
         );
         return StatusCode::FORBIDDEN.into_response();
     }
@@ -210,6 +240,38 @@ mod tests {
         mac.update(timestamp.as_bytes());
         mac.update(body);
         format!("sha256={}", hex::encode(mac.finalize().into_bytes()))
+    }
+
+    #[test]
+    fn timestamp_replay_fenster() {
+        use chrono::{Duration, Utc};
+        let now = Utc::now();
+        let iso = |dt: chrono::DateTime<Utc>| dt.to_rfc3339();
+
+        // Frisch → akzeptiert.
+        assert!(!is_timestamp_too_old(&iso(now), now));
+        assert!(!is_timestamp_too_old(&iso(now - Duration::seconds(599)), now));
+        // Genau am Limit (600s) → noch akzeptiert (Python: nur > 600 lehnt ab).
+        assert!(!is_timestamp_too_old(&iso(now - Duration::seconds(600)), now));
+        // Älter als 600s → abgelehnt.
+        assert!(is_timestamp_too_old(&iso(now - Duration::seconds(601)), now));
+        assert!(is_timestamp_too_old(&iso(now - Duration::seconds(3600)), now));
+        // Zukunfts-Skew jenseits -600s → abgelehnt.
+        assert!(!is_timestamp_too_old(&iso(now + Duration::seconds(600)), now));
+        assert!(is_timestamp_too_old(&iso(now + Duration::seconds(601)), now));
+        // Unparsebar → abgelehnt (Fail-closed, wie Python).
+        assert!(is_timestamp_too_old("", now));
+        assert!(is_timestamp_too_old("nicht-ein-timestamp", now));
+    }
+
+    #[test]
+    fn timestamp_twitch_format_geparst() {
+        use chrono::{TimeZone, Utc};
+        // Twitch-Realformat: RFC3339 mit Sub-Sekunden + Z.
+        let base = Utc.with_ymd_and_hms(2026, 6, 12, 10, 0, 0).unwrap();
+        let ts = "2026-06-12T10:00:00.7726011Z";
+        assert!(!is_timestamp_too_old(ts, base + chrono::Duration::seconds(60)));
+        assert!(is_timestamp_too_old(ts, base + chrono::Duration::seconds(700)));
     }
 
     #[test]

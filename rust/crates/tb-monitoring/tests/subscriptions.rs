@@ -26,6 +26,8 @@ macro_rules! pool_or_skip {
 struct StubTransport {
     creates: Mutex<Vec<(String, String)>>,
     conditions: Mutex<Vec<(String, serde_json::Value)>>,
+    /// (sub_type, version) — prüft den Versions-Pfad (z. B. channel.follow v2).
+    versions: Mutex<Vec<(String, String)>>,
     /// (sub_type, bearer_override) — prüft den Telemetrie-Token-Pfad.
     bearers: Mutex<Vec<(String, Option<String>)>>,
     deletes: Mutex<Vec<String>>,
@@ -37,12 +39,16 @@ impl SubscriptionTransport for StubTransport {
     async fn create(
         &self,
         sub_type: &str,
-        _version: &str,
+        version: &str,
         condition: &serde_json::Value,
         _callback: &str,
         _secret: &str,
         bearer_override: Option<&str>,
     ) -> Result<bool, SourceError> {
+        self.versions
+            .lock()
+            .unwrap()
+            .push((sub_type.to_string(), version.to_string()));
         let bid = condition
             .get("broadcaster_user_id")
             .and_then(serde_json::Value::as_str)
@@ -253,6 +259,143 @@ async fn broadcaster_telemetry_subs_scope_gefiltert_und_mit_bearer() {
     assert_eq!(
         manager
             .ensure_broadcaster_telemetry_subscriptions(" ", "p", "tok", &scopes)
+            .await,
+        0
+    );
+}
+
+#[tokio::test]
+async fn first_message_sub_nutzt_bot_token_und_user_id_condition() {
+    let pool = pool_or_skip!("b5_subs_first_message");
+    let transport = Arc::new(StubTransport::default());
+    let manager = SubscriptionManager::new(
+        transport.clone(),
+        SubscriptionConfig {
+            callback_url: "https://cb/x".to_string(),
+            secret: "geheim".to_string(),
+        },
+        CapacitySnapshotStore::new(pool.clone()),
+    );
+
+    // channel.chat.user_first_message: Condition {broadcaster_user_id, user_id:<bot>},
+    // Auth = Bot-Token (Python eventsub_mixin.py:2692).
+    assert!(
+        manager
+            .ensure_first_message_subscription("555", "BOTID", "BOTTOKEN", "partner")
+            .await
+    );
+    let conditions = transport.conditions.lock().unwrap().clone();
+    assert_eq!(conditions.len(), 1);
+    assert_eq!(conditions[0].0, "channel.chat.user_first_message");
+    assert_eq!(
+        conditions[0].1,
+        serde_json::json!({ "broadcaster_user_id": "555", "user_id": "BOTID" })
+    );
+    drop(conditions);
+
+    let bearers = transport.bearers.lock().unwrap().clone();
+    assert_eq!(bearers, vec![("channel.chat.user_first_message".to_string(), Some("BOTTOKEN".to_string()))]);
+    drop(bearers);
+
+    // Zweiter Aufruf: getrackt → kein neuer Create.
+    assert!(
+        manager
+            .ensure_first_message_subscription("555", "BOTID", "BOTTOKEN", "partner")
+            .await
+    );
+    assert_eq!(transport.creates.lock().unwrap().len(), 1);
+
+    // Leere ID / leerer Bot-Token / leere Bot-ID → kein Create.
+    assert!(!manager.ensure_first_message_subscription(" ", "BOTID", "BOTTOKEN", "p").await);
+    assert!(!manager.ensure_first_message_subscription("555", "BOTID", "  ", "p").await);
+    assert!(!manager.ensure_first_message_subscription("555", " ", "BOTTOKEN", "p").await);
+    assert_eq!(transport.creates.lock().unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn moderator_telemetry_subs_scope_gefiltert_mit_bot_token_und_moderator_id() {
+    let pool = pool_or_skip!("b5_subs_mod_telemetry");
+    let transport = Arc::new(StubTransport::default());
+    let manager = SubscriptionManager::new(
+        transport.clone(),
+        SubscriptionConfig {
+            callback_url: "https://cb/x".to_string(),
+            secret: "geheim".to_string(),
+        },
+        CapacitySnapshotStore::new(pool.clone()),
+    );
+
+    // Bot-Token mit moderator:read:followers + moderator:manage:banned_users →
+    // channel.follow + channel.ban + channel.unban, KEIN shoutout (Scope fehlt).
+    let scopes = vec![
+        "moderator:read:followers".to_string(),
+        "moderator:manage:banned_users".to_string(),
+    ];
+    let ensured = manager
+        .ensure_moderator_telemetry_subscriptions("555", "BOTID", "BOTTOKEN", &scopes, "partner")
+        .await;
+    assert_eq!(ensured, 3);
+
+    let creates = transport.creates.lock().unwrap().clone();
+    let mut types: Vec<&str> = creates
+        .iter()
+        .filter(|(_, bid)| bid == "555")
+        .map(|(t, _)| t.as_str())
+        .collect();
+    types.sort_unstable();
+    assert_eq!(types, vec!["channel.ban", "channel.follow", "channel.unban"]);
+    // Shoutout mangels Scope nicht versucht.
+    assert!(!creates.iter().any(|(t, _)| t.starts_with("channel.shoutout")));
+    drop(creates);
+
+    // Alle Condition tragen broadcaster_user_id + moderator_user_id:<bot>.
+    let conditions = transport.conditions.lock().unwrap().clone();
+    for (sub_type, condition) in &conditions {
+        assert_eq!(
+            condition,
+            &serde_json::json!({ "broadcaster_user_id": "555", "moderator_user_id": "BOTID" }),
+            "{sub_type} hat falsche Condition"
+        );
+    }
+    drop(conditions);
+
+    // channel.follow nutzt Version 2 (Twitch-Vertrag).
+    let versions = transport.versions.lock().unwrap().clone();
+    let follow_version = versions
+        .iter()
+        .find(|(t, _)| t == "channel.follow")
+        .map(|(_, v)| v.as_str());
+    assert_eq!(follow_version, Some("2"));
+    drop(versions);
+
+    // Jeder Create lief mit dem Bot-Token als Bearer.
+    let bearers = transport.bearers.lock().unwrap().clone();
+    assert!(bearers.iter().all(|(_, b)| b.as_deref() == Some("BOTTOKEN")));
+    drop(bearers);
+
+    // Zweiter Aufruf: getrackt → kein neuer Create.
+    let again = manager
+        .ensure_moderator_telemetry_subscriptions("555", "BOTID", "BOTTOKEN", &scopes, "partner")
+        .await;
+    assert_eq!(again, 3);
+    assert_eq!(transport.creates.lock().unwrap().len(), 3);
+
+    // Leere ID / leerer Token / leere Bot-ID → kein Create.
+    assert_eq!(
+        manager
+            .ensure_moderator_telemetry_subscriptions(" ", "BOTID", "BOTTOKEN", &scopes, "p")
+            .await,
+        0
+    );
+    assert_eq!(
+        manager
+            .ensure_moderator_telemetry_subscriptions("555", "BOTID", "  ", &scopes, "p")
+            .await,
+        0
+    );
+    assert_eq!(
+        manager
+            .ensure_moderator_telemetry_subscriptions("555", " ", "BOTTOKEN", &scopes, "p")
             .await,
         0
     );

@@ -574,11 +574,17 @@ async fn main() {
                     tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
                     loop {
                         tick.tick().await;
+                        // partner_ops-1: auf `is_partner_active` keyen statt auf
+                        // `status='active'` (View-Superset). `status='active'`
+                        // umfasst auch departured/pausierte Partner, deren
+                        // Operational-Flag aus ist — die Python-Score-Roster
+                        // filtert auf `COALESCE(is_partner_active,0)=1`
+                        // (partner_scores.py:439), nicht den View-Status.
                         let partners: Result<Vec<(String, String)>, _> = sqlx::query_as(
                             r#"
                             SELECT twitch_user_id, twitch_login
-                            FROM twitch_partners_all_state
-                            WHERE status = 'active'
+                            FROM twitch_streamers_partner_state
+                            WHERE is_partner_active = 1
                               AND COALESCE(twitch_user_id, '') <> ''
                             "#,
                         )

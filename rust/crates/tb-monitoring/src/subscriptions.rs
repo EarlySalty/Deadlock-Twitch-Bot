@@ -34,8 +34,8 @@ pub const CORE_SUBSCRIPTIONS: [(&str, &str); 3] = [
 /// dem **Rust-Bot-Token** angelegt (`ensure_moderator_subscription`) — es speist
 /// den `BlacklistRaidGuard`. Das ist möglich, seit der Python-Chat-Prozess
 /// abgeschaltet ist und Rust den Bot-Token allein refresht (kein Dual-Refresh-
-/// Race mehr). Die übrigen Moderator-Subs (channel.ban/unban/shoutout/follow)
-/// werden derzeit nicht gebraucht und bleiben weg.
+/// Race mehr). Die Daten-Moderator-Subs (channel.follow/ban/unban/shoutout) legt
+/// [`SubscriptionManager::ensure_moderator_telemetry_subscriptions`] an (B5-02).
 pub const BROADCASTER_TELEMETRY_SUBSCRIPTIONS: [(&str, &str, &str); 12] = [
     ("channel.cheer", "1", "bits:read"),
     ("channel.bits.use", "1", "bits:read"),
@@ -57,6 +57,21 @@ pub const BROADCASTER_TELEMETRY_SUBSCRIPTIONS: [(&str, &str, &str); 12] = [
         "1",
         "channel:read:redemptions",
     ),
+];
+
+/// Moderator-Daten-Telemetrie-Subscriptions: (Typ, Version, benötigter Scope).
+/// Brauchen einen **Moderator-User-Token** (bevorzugt der Rust-Bot-Token) und
+/// tragen in der Condition `moderator_user_id` — Port von `eventsub_mixin.py`
+/// `moderator_subs` (Z. 1704, ohne `channel.moderate`, das der Chat-Reconcile
+/// als Guard-Quelle separat anlegt). `channel.follow` braucht Version 2. Die
+/// zugehörigen Events verarbeitet der Dispatcher bereits (Follower-Funnel,
+/// Ban-Analytics, Shoutouts).
+pub const MODERATOR_TELEMETRY_SUBSCRIPTIONS: [(&str, &str, &str); 5] = [
+    ("channel.ban", "1", "moderator:manage:banned_users"),
+    ("channel.unban", "1", "moderator:manage:banned_users"),
+    ("channel.shoutout.create", "1", "moderator:manage:shoutouts"),
+    ("channel.shoutout.receive", "1", "moderator:manage:shoutouts"),
+    ("channel.follow", "2", "moderator:read:followers"),
 ];
 
 /// Eine bei Twitch registrierte Subscription (Transport-neutrale Sicht).
@@ -310,6 +325,98 @@ impl SubscriptionManager {
                     broadcaster_id,
                     login,
                     Some(token),
+                )
+                .await
+            {
+                ensured += 1;
+            }
+        }
+        ensured
+    }
+
+    /// `channel.chat.user_first_message`-Subscription für einen Partner (B5-01):
+    /// erkennt, wenn ein Chatter zum ersten Mal überhaupt im Kanal schreibt
+    /// (First-Message-Funnel). Condition `{broadcaster_user_id, user_id: <bot>}`,
+    /// Auth = **Bot-User-Token** (braucht `user:read:chat`) — Port von
+    /// `eventsub_mixin.py:2692`. Ohne Bot-Token/Bot-ID kein Versuch.
+    pub async fn ensure_first_message_subscription(
+        &self,
+        broadcaster_id: &str,
+        bot_user_id: &str,
+        bot_token: &str,
+        login: &str,
+    ) -> bool {
+        let broadcaster_id = broadcaster_id.trim();
+        let bot_user_id = bot_user_id.trim();
+        if broadcaster_id.is_empty() || bot_user_id.is_empty() || bot_token.trim().is_empty() {
+            return false;
+        }
+        let condition = serde_json::json!({
+            "broadcaster_user_id": broadcaster_id,
+            "user_id": bot_user_id,
+        });
+        self.ensure_subscription_with_condition(
+            "channel.chat.user_first_message",
+            "1",
+            condition,
+            broadcaster_id,
+            login,
+            Some(bot_token),
+        )
+        .await
+    }
+
+    /// Moderator-Daten-Telemetrie-Subs (follow/ban/unban/shoutout) für einen
+    /// Partner sicherstellen — Port von `eventsub_mixin.py` `moderator_subs`
+    /// (Z. 1704, B5-02). `bot_token` ist der Moderator-User-Token (der Rust-Bot
+    /// ist Moderator im Kanal), `bot_user_id` füllt `moderator_user_id` der
+    /// Condition, `scopes` sind die Bot-Token-Scopes; ein Sub wird nur versucht,
+    /// wenn der Scope vorhanden ist (oder die Scope-Liste leer/unbekannt ist).
+    /// Ist der Bot kein Moderator im Kanal, liefert Twitch 403 → `perm_failed`
+    /// (kein Retry-Spam). Liefert die Anzahl sichergestellter Subs.
+    pub async fn ensure_moderator_telemetry_subscriptions(
+        &self,
+        broadcaster_id: &str,
+        bot_user_id: &str,
+        bot_token: &str,
+        scopes: &[String],
+        login: &str,
+    ) -> usize {
+        let broadcaster_id = broadcaster_id.trim();
+        let bot_user_id = bot_user_id.trim();
+        if broadcaster_id.is_empty() || bot_user_id.is_empty() || bot_token.trim().is_empty() {
+            return 0;
+        }
+        let scope_set: HashSet<String> = scopes
+            .iter()
+            .map(|s| s.trim().to_lowercase())
+            .filter(|s| !s.is_empty())
+            .collect();
+        let condition = serde_json::json!({
+            "broadcaster_user_id": broadcaster_id,
+            "moderator_user_id": bot_user_id,
+        });
+        let mut ensured = 0;
+        for (sub_type, version, required_scope) in MODERATOR_TELEMETRY_SUBSCRIPTIONS {
+            // Scope-Filter (Python: `if required_scope not in bot_scopes`):
+            // bei bekannter Scope-Liste fehlende Scopes überspringen.
+            if !scope_set.is_empty() && !scope_set.contains(required_scope) {
+                tracing::debug!(
+                    sub_type,
+                    login,
+                    required_scope,
+                    "Moderator-Telemetrie-Sub übersprungen: Bot-Token-Scope fehlt"
+                );
+                continue;
+            }
+            if self
+                .ensure_subscription_with_condition(
+                    sub_type,
+                    version,
+                    condition.clone(),
+                    broadcaster_id,
+                    login,
+                    Some(bot_token),
                 )
                 .await
             {
