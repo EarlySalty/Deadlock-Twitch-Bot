@@ -24,6 +24,7 @@
 //! - `retention`   — Publication-Status (published_all ↔ pending).
 //! - `clip_queue`  — Upload-Queue (`twitch_clips_upload_queue`).
 //! - `clip_templates` — Beschreibungs-Templates + Last-Hashtags.
+//! - `clip_analytics` — Analytics-Summary fürs Dashboard.
 //!
 //! # Deaktiviert
 //! Der Clip-Fetcher-Task ist **standardmäßig deaktiviert** und wird nicht in
@@ -31,6 +32,7 @@
 //! Env-Var setzen + `ClipFetchTask::start_if_enabled()` aufrufen.
 
 pub mod clip;
+pub mod clip_analytics;
 pub mod clip_queue;
 pub mod clip_templates;
 pub mod correction;
