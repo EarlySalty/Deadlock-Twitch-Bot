@@ -9,6 +9,11 @@
 use chrono::{DateTime, Datelike, Duration, Timelike, Utc};
 use sqlx::{PgPool, Row};
 
+use crate::analytics::{get_existing_report, insert_report, SocialMediaReportRecord};
+use crate::llm_dispatch::LlmDispatcher;
+
+const REPORT_SYSTEM_PROMPT: &str = "Du schreibst operative Social-Media-Performance-Reports fuer deutsche Streamer.\n\nRegeln:\n- Antworte ausschliesslich auf Deutsch.\n- Gib valides Markdown ohne Codeblock-Zaun aus.\n- Erfinde keine Fakten, nutze nur die gelieferten Zahlen.\n- Sei konkret und knapp: TL;DR, staerkste Muster, schwache Muster, 3 Massnahmen.\n- Wenn Daten lueckig sind, benenne die Luecke offen.\n";
+
 /// Aggregierte Performance eines Clips über alle Plattformen.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ClipPerformance {
@@ -415,6 +420,203 @@ pub fn fallback_admin_report(period: &Period, streamers: &[StreamerPerformance],
     )
 }
 
+/// Nach Score absteigend sortierte Top-N-Clips.
+fn ranked_clips(clips: &[ClipPerformance], n: usize) -> Vec<ClipPerformance> {
+    let mut ranked = clips.to_vec();
+    ranked.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+    ranked.truncate(n);
+    ranked
+}
+
+/// Gerendertes Report-Ergebnis (LLM-Markdown oder Fallback).
+struct Rendered {
+    content: String,
+    model: Option<String>,
+}
+
+/// Generiert und persistiert Phase-3-Reports (Port von
+/// `SocialMediaReportWriter`). LLM-Markdown via Dispatcher; bei Fehler/leer
+/// deterministischer Fallback.
+pub struct SocialMediaReportWriter {
+    pool: PgPool,
+    dispatcher: LlmDispatcher,
+}
+
+impl SocialMediaReportWriter {
+    pub fn new(pool: PgPool) -> Self {
+        Self { dispatcher: LlmDispatcher::new(pool.clone()), pool }
+    }
+
+    pub fn with_dispatcher(mut self, dispatcher: LlmDispatcher) -> Self {
+        self.dispatcher = dispatcher;
+        self
+    }
+
+    /// Wochenreport eines Streamers (kind=streamer, 7d-Bucket).
+    pub async fn write_streamer_report(
+        &self,
+        streamer_login: &str,
+        period_start: Option<DateTime<Utc>>,
+        period_end: Option<DateTime<Utc>>,
+        force: bool,
+    ) -> Result<SocialMediaReportRecord, sqlx::Error> {
+        let period = coerce_period(period_start, period_end, PeriodKind::Week);
+        let (start_iso, end_iso) = (period.start.to_rfc3339(), period.end.to_rfc3339());
+        if !force {
+            if let Some(existing) = get_existing_report(&self.pool, "streamer", &start_iso, &end_iso, Some(streamer_login)).await {
+                return Ok(existing);
+            }
+        }
+        let clips = load_clip_performance(&self.pool, "7d", &start_iso, &end_iso, Some(streamer_login)).await;
+        let rendered = self.render_streamer_report(streamer_login, &period, &clips).await;
+        insert_report(&self.pool, "streamer", Some(streamer_login), &start_iso, &end_iso, &rendered.content, rendered.model.as_deref()).await
+    }
+
+    /// Monatlicher Cross-Streamer-Report (kind=cross, 30d-Bucket).
+    pub async fn write_cross_report(
+        &self,
+        period_start: Option<DateTime<Utc>>,
+        period_end: Option<DateTime<Utc>>,
+        force: bool,
+    ) -> Result<SocialMediaReportRecord, sqlx::Error> {
+        let period = coerce_period(period_start, period_end, PeriodKind::Month);
+        let (start_iso, end_iso) = (period.start.to_rfc3339(), period.end.to_rfc3339());
+        if !force {
+            if let Some(existing) = get_existing_report(&self.pool, "cross", &start_iso, &end_iso, None).await {
+                return Ok(existing);
+            }
+        }
+        let clips = load_clip_performance(&self.pool, "30d", &start_iso, &end_iso, None).await;
+        let rendered = self.render_cross_report(&period, &clips).await;
+        insert_report(&self.pool, "cross", None, &start_iso, &end_iso, &rendered.content, rendered.model.as_deref()).await
+    }
+
+    /// Admin-Wochenreport über die gesamte Pipeline (kind=admin, 7d-Bucket).
+    pub async fn write_admin_weekly_report(
+        &self,
+        period_start: Option<DateTime<Utc>>,
+        period_end: Option<DateTime<Utc>>,
+        force: bool,
+    ) -> Result<SocialMediaReportRecord, sqlx::Error> {
+        let period = coerce_period(period_start, period_end, PeriodKind::Week);
+        let (start_iso, end_iso) = (period.start.to_rfc3339(), period.end.to_rfc3339());
+        if !force {
+            if let Some(existing) = get_existing_report(&self.pool, "admin", &start_iso, &end_iso, None).await {
+                return Ok(existing);
+            }
+        }
+        let clips = load_clip_performance(&self.pool, "7d", &start_iso, &end_iso, None).await;
+        let rendered = self.render_admin_report(&period, &clips).await;
+        insert_report(&self.pool, "admin", None, &start_iso, &end_iso, &rendered.content, rendered.model.as_deref()).await
+    }
+
+    async fn render_streamer_report(&self, streamer_login: &str, period: &Period, clips: &[ClipPerformance]) -> Rendered {
+        if clips.is_empty() {
+            return Rendered {
+                content: fallback_no_data_report(
+                    &format!("# Wochenreport · {streamer_login}"),
+                    period,
+                    "Fuer diesen Zeitraum liegen noch keine Phase-3-Analytics vor.",
+                ),
+                model: None,
+            };
+        }
+        let ranked = ranked_clips(clips, clips.len());
+        let top: Vec<ClipPerformance> = ranked.iter().take(5).cloned().collect();
+        let bottom: Vec<ClipPerformance> = ranked[ranked.len().saturating_sub(5)..].to_vec();
+        let totals = aggregate_totals(clips);
+        let prompt = format!(
+            "Erstelle einen Wochenreport fuer @{streamer_login}.\n\
+             Zeitraum: {period}\n\
+             Clips mit verwertbaren Daten: {n}\n\
+             Gesamtwerte: Views={views}, Likes={likes}, Kommentare={comments}, Shares={shares}, WatchTimeSekunden={wts}\n\
+             Durchschnittliche Engagement-Rate: {er}\n\n\
+             Top 5 Clips:\n{top_list}\n\n\
+             Bottom 5 Clips:\n{bottom_list}\n\n\
+             Struktur:\n- Titelzeile\n- TL;DR (2 Saetze)\n- Abschnitt 'Top 5'\n- Abschnitt 'Bottom 5'\n- Abschnitt 'Massnahmen naechste Woche' mit genau 3 Bulletpoints\n",
+            period = format_period(period),
+            n = clips.len(),
+            views = totals.views,
+            likes = totals.likes,
+            comments = totals.comments,
+            shares = totals.shares,
+            wts = totals.watch_time_seconds,
+            er = fmt_pct(totals.engagement_rate),
+            top_list = format_clip_list(&top),
+            bottom_list = format_clip_list(&bottom),
+        );
+        self.render_with_llm(&prompt, fallback_streamer_report(streamer_login, period, &top, &bottom, &totals)).await
+    }
+
+    async fn render_cross_report(&self, period: &Period, clips: &[ClipPerformance]) -> Rendered {
+        if clips.is_empty() {
+            return Rendered {
+                content: fallback_no_data_report(
+                    "# Monatsreport · Cross-Streamer",
+                    period,
+                    "Keine 30d-Analytics im ausgewaehlten Zeitraum gefunden.",
+                ),
+                model: None,
+            };
+        }
+        let streamers = aggregate_streamers(clips);
+        let prompt = format!(
+            "Erstelle einen monatlichen Cross-Streamer-Report.\n\
+             Zeitraum: {period}\n\
+             Streamer mit Daten: {n}\n\
+             Top Streamer nach Views:\n{streamer_list}\n\n\
+             Top Clips plattformuebergreifend:\n{clip_list}\n\n\
+             Struktur:\n- Titel\n- Gesamtbild\n- Gewinner / Verlierer\n- 3 konkrete Hebel fuer die naechsten 30 Tage\n",
+            period = format_period(period),
+            n = streamers.len(),
+            streamer_list = format_streamer_list(streamers.iter().take(8).cloned().collect::<Vec<_>>().as_slice()),
+            clip_list = format_clip_list(&ranked_clips(clips, 8)),
+        );
+        self.render_with_llm(&prompt, fallback_cross_report(period, &streamers, clips)).await
+    }
+
+    async fn render_admin_report(&self, period: &Period, clips: &[ClipPerformance]) -> Rendered {
+        if clips.is_empty() {
+            return Rendered {
+                content: fallback_no_data_report(
+                    "# Admin-Wochenreport · Social Media",
+                    period,
+                    "Es gibt noch keine verwertbaren Analytics-Snapshots fuer den Wochenversand.",
+                ),
+                model: None,
+            };
+        }
+        let streamers = aggregate_streamers(clips);
+        let top_clips = ranked_clips(clips, 6);
+        let prompt = format!(
+            "Erstelle einen Admin-Wochenreport fuer die gesamte Social-Media-Pipeline.\n\
+             Zeitraum: {period}\n\
+             Streamer-Ranking:\n{streamer_list}\n\n\
+             Top Clips:\n{clip_list}\n\n\
+             Struktur:\n- Titel\n- Executive Summary\n- Auffaellige Streamer\n- Risiko-/Problemzonen\n- 3 Admin-Aktionen fuer die kommende Woche\n",
+            period = format_period(period),
+            streamer_list = format_streamer_list(streamers.iter().take(10).cloned().collect::<Vec<_>>().as_slice()),
+            clip_list = format_clip_list(&top_clips),
+        );
+        self.render_with_llm(&prompt, fallback_admin_report(period, &streamers, &top_clips)).await
+    }
+
+    /// Ruft den LLM-Dispatcher; bei Fehler oder leerem Output → Fallback-Markdown.
+    async fn render_with_llm(&self, prompt: &str, fallback: String) -> Rendered {
+        match self.dispatcher.generate_text(REPORT_SYSTEM_PROMPT, prompt, 1400, 0.2).await {
+            Ok(resp) => {
+                let content = resp.content.trim().to_string();
+                if content.is_empty() {
+                    Rendered { content: fallback, model: None }
+                } else {
+                    Rendered { content, model: Some(format!("{}:{}", resp.provider, resp.model)) }
+                }
+            }
+            Err(_) => Rendered { content: fallback, model: None },
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -491,6 +693,7 @@ mod tests {
         for ddl in [
             "CREATE TABLE twitch_clips_social_media (id SERIAL PRIMARY KEY, streamer_login TEXT, clip_title TEXT, clip_url TEXT, created_at TIMESTAMPTZ DEFAULT NOW(), game_name TEXT, discarded_at TIMESTAMPTZ)",
             "CREATE TABLE twitch_clips_social_analytics (id SERIAL PRIMARY KEY, clip_id INTEGER, platform TEXT, bucket TEXT, views INTEGER, likes INTEGER, comments INTEGER, shares INTEGER, watch_time_seconds INTEGER, ctr_percent NUMERIC(5,2), engagement_rate NUMERIC(5,2), provider TEXT, synced_at TIMESTAMPTZ)",
+            "CREATE TABLE social_media_reports (id SERIAL PRIMARY KEY, kind TEXT NOT NULL, streamer_login TEXT, period_start TIMESTAMPTZ NOT NULL, period_end TIMESTAMPTZ NOT NULL, content_md TEXT NOT NULL, model TEXT, created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP)",
         ] {
             sqlx::query(ddl).execute(&pool).await.unwrap();
         }
@@ -520,5 +723,37 @@ mod tests {
         // score = 300 + 30*4 + 0 + 0 + mean(10,20)*15 = 300+120+225 = 645.
         assert_eq!(cp.score, 645.0);
         assert_eq!(cp.title, "Mein Clip");
+    }
+
+    #[tokio::test]
+    async fn write_streamer_report_fallback_und_idempotenz() {
+        let Some(pool) = make_pool("t_sm_report_write").await else { return };
+        // Ollama auf toten Port → render_with_llm scheitert sofort → Fallback-Pfad.
+        std::env::set_var("OLLAMA_HOST", "127.0.0.1:59999");
+        let writer = SocialMediaReportWriter::new(pool.clone());
+        let start = DateTime::parse_from_rfc3339("2026-06-08T00:00:00+00:00").unwrap().with_timezone(&Utc);
+        let end = DateTime::parse_from_rfc3339("2026-06-15T00:00:00+00:00").unwrap().with_timezone(&Utc);
+
+        // Keine Analytics → No-Data-Fallback (LLM nicht erreichbar im Test).
+        let r1 = writer.write_streamer_report("nani", Some(start), Some(end), false).await.unwrap();
+        assert_eq!(r1.kind, "streamer");
+        assert_eq!(r1.streamer_login.as_deref(), Some("nani"));
+        assert_eq!(r1.model, None);
+        assert!(r1.content_md.contains("keine Phase-3-Analytics"));
+
+        // Idempotent: zweiter Lauf ohne force liefert denselben Datensatz.
+        let r2 = writer.write_streamer_report("nani", Some(start), Some(end), false).await.unwrap();
+        assert_eq!(r2.id, r1.id);
+        let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM social_media_reports").fetch_one(&pool).await.unwrap();
+        assert_eq!(count, 1);
+
+        // Mit Analytics im Zeitraum + force → Fallback-Wochenreport (Top 5 etc.).
+        let c: i32 = sqlx::query_scalar("INSERT INTO twitch_clips_social_media (streamer_login, clip_title) VALUES ('nani', 'Hot Clip') RETURNING id").fetch_one(&pool).await.unwrap();
+        sqlx::query("INSERT INTO twitch_clips_social_analytics (clip_id, platform, bucket, views, likes, engagement_rate, provider, synced_at) VALUES ($1, 'tiktok', '7d', 500, 50, 12.0, 'ok', '2026-06-10T12:00:00+00:00')").bind(c).execute(&pool).await.unwrap();
+        let r3 = writer.write_streamer_report("nani", Some(start), Some(end), true).await.unwrap();
+        assert_ne!(r3.id, r1.id); // force → neue Zeile
+        assert!(r3.content_md.contains("## Top 5"));
+        assert!(r3.content_md.contains("## Massnahmen naechste Woche"));
+        assert!(r3.content_md.contains("Hot Clip"));
     }
 }

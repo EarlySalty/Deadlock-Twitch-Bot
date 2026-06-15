@@ -379,6 +379,43 @@ impl LlmDispatcher {
         }
         Err(last_error.unwrap_or_else(|| LlmError::ProviderError("Alle LLM-Provider fehlgeschlagen".to_string())))
     }
+
+    /// Freitext erzeugen (Consent-Gate + Fallback-Chain wie `generate`); für
+    /// Report-Markdown genutzt.
+    pub async fn generate_text(
+        &self,
+        system_prompt: &str,
+        user_prompt: &str,
+        max_tokens: i64,
+        temperature: f64,
+    ) -> Result<LlmTextResponse, LlmError> {
+        let mut chosen = self.resolve_provider_name();
+        if EXTERNAL_PROVIDERS.contains(&chosen.as_str()) && !self.resolve_consent().await {
+            tracing::warn!(provider = %chosen, "Externer LLM-Provider ohne Consent → Fallback auf Ollama");
+            chosen = DEFAULT_LOCAL.to_string();
+        }
+
+        let mut last_error = None;
+        for candidate in candidate_chain(&chosen) {
+            let provider = match self.instantiate(&candidate) {
+                Ok(p) => p,
+                Err(e) => {
+                    tracing::info!(provider = %candidate, error = %e, "Provider nicht verfügbar");
+                    last_error = Some(e);
+                    continue;
+                }
+            };
+            match provider.generate_text(system_prompt, user_prompt, max_tokens, temperature).await {
+                Ok(resp) => return Ok(resp),
+                Err(e) => {
+                    tracing::warn!(provider = %candidate, error = %e, "Provider-Textfehler");
+                    last_error = Some(e);
+                    continue;
+                }
+            }
+        }
+        Err(last_error.unwrap_or_else(|| LlmError::ProviderError("Alle LLM-Provider fehlgeschlagen".to_string())))
+    }
 }
 
 /// Kandidaten-Kette: primär, dann Ollama-Fallback (Python `_candidate_chain`).
