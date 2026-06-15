@@ -34,6 +34,7 @@
 //! - `clip_templates` — Beschreibungs-Templates + Last-Hashtags.
 //! - `clip_analytics` — Analytics-Summary fürs Dashboard.
 //! - `analytics`    — Clip-Statistik-Persistenz (`twitch_clips_social_analytics`).
+//! - `insights_worker` — Pollt Plattform-Statistiken (24h/7d/30d).
 //!
 //! # Deaktiviert
 //! Der Clip-Fetcher-Task ist **standardmäßig deaktiviert** und wird nicht in
@@ -52,6 +53,7 @@ pub mod credentials;
 pub mod enrich_pipeline;
 pub mod enrichment;
 pub mod enrichment_worker;
+pub mod insights_worker;
 pub mod layout;
 pub mod llm;
 pub mod llm_dispatch;
