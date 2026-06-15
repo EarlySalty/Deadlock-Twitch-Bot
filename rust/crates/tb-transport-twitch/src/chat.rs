@@ -106,6 +106,37 @@ struct AnnouncementPayload<'a> {
     color: &'a str,
 }
 
+/// Ein einzelner Chatter aus `GET /chat/chatters` (Datenquelle des
+/// Lurker-/Snapshot-Pollers, Block 6).
+///
+/// Port: `twitch_api.py:get_chatters_result` — die Daten-Items tragen
+/// `user_id`/`user_login`/`user_name`.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct Chatter {
+    #[serde(default)]
+    pub user_id: String,
+    #[serde(default)]
+    pub user_login: String,
+    #[serde(default)]
+    pub user_name: String,
+}
+
+/// Cursor-Pagination-Block einer Helix-Antwort.
+#[derive(Debug, Default, Deserialize)]
+struct ChattersPagination {
+    #[serde(default)]
+    cursor: Option<String>,
+}
+
+/// Eine Seite von `GET /chat/chatters`.
+#[derive(Debug, Deserialize)]
+struct ChattersPage {
+    #[serde(default)]
+    data: Vec<Chatter>,
+    #[serde(default)]
+    pagination: ChattersPagination,
+}
+
 // ---------------------------------------------------------------------------
 // HelixClient-Erweiterung
 // ---------------------------------------------------------------------------
@@ -392,6 +423,62 @@ impl HelixClient {
         }
         let parsed: UsersResponse = resp.json().await.map_err(HelixError::Http)?;
         Ok(parsed.data.into_iter().next())
+    }
+
+    /// Alle Chatter eines Channels via `GET /chat/chatters` (Cursor-Pagination
+    /// über sämtliche Seiten, `first=1000`). Datenquelle für den Block-6-Lurker-
+    /// Poller.
+    ///
+    /// `broadcaster_id == moderator_id`, wenn der Streamer selbst seinen Chat
+    /// abfragt. 403 → [`HelixError::NotModerator`] (Trigger für Mod-Self-Heal im
+    /// oberen Layer); sonstiges non-200 → [`HelixError::Status`].
+    ///
+    /// Port: `twitch_api.py:get_chatters_result`.
+    /// Scope: `moderator:read:chatters`.
+    pub async fn get_chatters(
+        &self,
+        broadcaster_id: &str,
+        moderator_id: &str,
+        user_token: &str,
+    ) -> Result<Vec<Chatter>, HelixError> {
+        let url = format!("{}/chat/chatters", self.helix_config().helix_base);
+        let mut out: Vec<Chatter> = Vec::new();
+        let mut after: Option<String> = None;
+        loop {
+            let mut params: Vec<(&str, String)> = vec![
+                ("broadcaster_id", broadcaster_id.to_string()),
+                ("moderator_id", moderator_id.to_string()),
+                ("first", "1000".to_string()),
+            ];
+            if let Some(cursor) = &after {
+                params.push(("after", cursor.clone()));
+            }
+            let resp = self
+                .http_client()
+                .get(&url)
+                .header("Client-Id", &self.helix_config().client_id)
+                .header("Authorization", format!("Bearer {user_token}"))
+                .query(&params)
+                .send()
+                .await?;
+
+            let status = resp.status().as_u16();
+            if status == 403 {
+                return Err(HelixError::NotModerator);
+            }
+            if status != 200 {
+                return Err(HelixError::Status { status });
+            }
+
+            let page: ChattersPage = resp.json().await.map_err(HelixError::Http)?;
+            let empty = page.data.is_empty();
+            out.extend(page.data);
+            after = page.pagination.cursor;
+            if after.is_none() || empty {
+                break;
+            }
+        }
+        Ok(out)
     }
 }
 
@@ -800,5 +887,83 @@ mod tests {
             .await;
         let user = client.get_user_by_login("nobody", "tok").await.unwrap();
         assert!(user.is_none());
+    }
+
+    // -----------------------------------------------------------------------
+    // get_chatters
+    // -----------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn get_chatters_folgt_cursor_ueber_zwei_seiten() {
+        let server = MockServer::start().await;
+        let client = mock_client(&server).await;
+        // Seite 1: Cursor gesetzt → Poller fragt nach.
+        Mock::given(method("GET"))
+            .and(path("/helix/chat/chatters"))
+            .and(query_param("broadcaster_id", "111"))
+            .and(query_param("moderator_id", "111"))
+            .and(header("Authorization", "Bearer bot-tok"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "data": [
+                    {"user_id": "1", "user_login": "alice", "user_name": "Alice"},
+                    {"user_id": "2", "user_login": "bob", "user_name": "Bob"}
+                ],
+                "pagination": {"cursor": "page2"}
+            })))
+            .up_to_n_times(1)
+            .mount(&server)
+            .await;
+        // Seite 2: per Cursor; kein weiterer Cursor → Ende.
+        Mock::given(method("GET"))
+            .and(path("/helix/chat/chatters"))
+            .and(query_param("after", "page2"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "data": [
+                    {"user_id": "3", "user_login": "carol", "user_name": "Carol"}
+                ],
+                "pagination": {}
+            })))
+            .mount(&server)
+            .await;
+
+        let chatters = client.get_chatters("111", "111", "bot-tok").await.unwrap();
+        assert_eq!(chatters.len(), 3, "beide Seiten zusammengeführt");
+        assert_eq!(chatters[0].user_login, "alice");
+        assert_eq!(chatters[2].user_login, "carol");
+    }
+
+    #[tokio::test]
+    async fn get_chatters_403_ergibt_not_moderator() {
+        let server = MockServer::start().await;
+        let client = mock_client(&server).await;
+        Mock::given(method("GET"))
+            .and(path("/helix/chat/chatters"))
+            .respond_with(ResponseTemplate::new(403).set_body_string("forbidden"))
+            .mount(&server)
+            .await;
+        let err = client
+            .get_chatters("111", "999", "bot-tok")
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(err, HelixError::NotModerator),
+            "403 muss NotModerator sein, war {err:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn get_chatters_500_ergibt_status_fehler() {
+        let server = MockServer::start().await;
+        let client = mock_client(&server).await;
+        Mock::given(method("GET"))
+            .and(path("/helix/chat/chatters"))
+            .respond_with(ResponseTemplate::new(500))
+            .mount(&server)
+            .await;
+        let err = client
+            .get_chatters("111", "111", "bot-tok")
+            .await
+            .unwrap_err();
+        assert!(matches!(err, HelixError::Status { status: 500 }), "{err:?}");
     }
 }

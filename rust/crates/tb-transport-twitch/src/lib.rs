@@ -11,8 +11,10 @@ pub mod user_token;
 
 pub use client::{ClipInfo, HelixClient, HelixConfig, HelixError, TwitchUser};
 pub use eventsub::{CreateOutcome, EventSubSubscription};
-pub use chat::{parse_created_at, BanOutcome, HelixUserInfo, SendOutcome};
+pub use chat::{parse_created_at, BanOutcome, Chatter, HelixUserInfo, SendOutcome};
 pub use moderation::AddModeratorOutcome;
-pub use streams::{HelixChannelInfo, HelixStream};
+pub use streams::{
+    AdSchedule, BroadcasterSubscriptions, HelixChannelInfo, HelixStream, Subscription,
+};
 pub use token::{AppToken, TokenError};
 pub use user_token::{TokenOwner, UserTokenError, UserTokenResponse};
