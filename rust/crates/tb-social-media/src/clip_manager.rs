@@ -10,6 +10,7 @@
 use serde_json::{json, Value};
 use sqlx::{PgPool, Row};
 
+use crate::clip_queue::queue_upload;
 use crate::layout::apply_default_layout;
 use crate::retention::refresh_clip_publication_status;
 
@@ -140,6 +141,79 @@ pub async fn mark_clip_uploaded(pool: &PgPool, clip_db_id: i32, platforms: &[Str
     true
 }
 
+/// Stats eines Batch-Uploads (Python-Dict {queued, skipped, errors}).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BatchUploadStats {
+    pub queued: i64,
+    pub skipped: i64,
+    pub errors: i64,
+}
+
+fn parse_json_strings(raw: Option<&str>) -> Vec<String> {
+    raw.and_then(|s| serde_json::from_str::<Vec<String>>(s).ok()).unwrap_or_default()
+}
+
+/// Reiht alle noch nicht hochgeladenen Clips eines Streamers je Plattform in die
+/// Upload-Queue ein (Python `batch_upload_all_new`). Wendet — falls gewünscht und
+/// die Clip-Beschreibung leer ist — das Default-Streamer-Template an
+/// (Platzhalter {{title}}/{{streamer}}/{{game}}). `skipped` bleibt 0 (mirror).
+pub async fn batch_upload_all_new(pool: &PgPool, streamer_login: &str, platforms: &[String], apply_default_template: bool) -> BatchUploadStats {
+    let mut stats = BatchUploadStats { queued: 0, skipped: 0, errors: 0 };
+
+    let default_template: Option<(String, Vec<String>)> = if apply_default_template {
+        sqlx::query_as::<_, (String, Option<String>)>(
+            "SELECT description_template, hashtags FROM clip_templates_streamer WHERE streamer_login = $1 AND is_default = 1 LIMIT 1",
+        )
+        .bind(streamer_login)
+        .fetch_optional(pool)
+        .await
+        .ok()
+        .flatten()
+        .map(|(desc, tags)| (desc, parse_json_strings(tags.as_deref())))
+    } else {
+        None
+    };
+
+    for platform in platforms {
+        let col = match platform.as_str() {
+            "tiktok" => "uploaded_tiktok",
+            "youtube" => "uploaded_youtube",
+            "instagram" => "uploaded_instagram",
+            _ => continue,
+        };
+        let clips: Vec<(i32, Option<String>, Option<String>, Option<String>, Option<String>, Option<String>)> = sqlx::query_as(&format!(
+            "SELECT id, clip_title, streamer_login, game_name, custom_description, hashtags \
+             FROM twitch_clips_social_media WHERE streamer_login = $1 AND {col} = 0 ORDER BY created_at DESC"
+        ))
+        .bind(streamer_login)
+        .fetch_all(pool)
+        .await
+        .unwrap_or_default();
+
+        for (id, clip_title, clip_streamer, game_name, custom_description, hashtags_str) in clips {
+            let description_empty = custom_description.as_deref().map(str::is_empty).unwrap_or(true);
+            let (description, hashtags): (Option<String>, Vec<String>) = match &default_template {
+                Some((tmpl_desc, tmpl_tags)) if description_empty => {
+                    let game_disp = game_name.as_deref().filter(|s| !s.is_empty()).unwrap_or("Unknown");
+                    let desc = tmpl_desc
+                        .replace("{{title}}", clip_title.as_deref().unwrap_or(""))
+                        .replace("{{streamer}}", clip_streamer.as_deref().unwrap_or(""))
+                        .replace("{{game}}", game_disp);
+                    let game_no_space = game_disp.replace(' ', "");
+                    let tags = tmpl_tags.iter().map(|t| t.replace("{{game}}", &game_no_space)).collect();
+                    (Some(desc), tags)
+                }
+                _ => (custom_description.clone(), parse_json_strings(hashtags_str.as_deref())),
+            };
+            match queue_upload(pool, id, platform, clip_title.as_deref(), description.as_deref(), Some(&hashtags), None, 0).await {
+                Ok(_) => stats.queued += 1,
+                Err(_) => stats.errors += 1,
+            }
+        }
+    }
+    stats
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -156,10 +230,11 @@ mod tests {
         let pool = PgPoolOptions::new().max_connections(3).connect_with(opts).await.unwrap();
         for ddl in [
             "CREATE TABLE twitch_streamers (twitch_login TEXT PRIMARY KEY, twitch_user_id TEXT)",
-            "CREATE TABLE twitch_clips_social_media (id SERIAL PRIMARY KEY, clip_id TEXT UNIQUE, clip_url TEXT, clip_title TEXT, clip_thumbnail_url TEXT, streamer_login TEXT, twitch_user_id TEXT, created_at TEXT, duration_seconds DOUBLE PRECISION, view_count INTEGER DEFAULT 0, game_name TEXT, status TEXT DEFAULT 'pending', source_kind TEXT, upload_local_path TEXT, local_file_path TEXT, retention_until TIMESTAMPTZ DEFAULT (NOW() + INTERVAL '14 days'), discarded_at TIMESTAMPTZ, layout_override_json JSONB, uploaded_tiktok INTEGER DEFAULT 0, uploaded_youtube INTEGER DEFAULT 0, uploaded_instagram INTEGER DEFAULT 0, tiktok_uploaded_at TEXT, youtube_uploaded_at TEXT, instagram_uploaded_at TEXT)",
+            "CREATE TABLE twitch_clips_social_media (id SERIAL PRIMARY KEY, clip_id TEXT UNIQUE, clip_url TEXT, clip_title TEXT, clip_thumbnail_url TEXT, streamer_login TEXT, twitch_user_id TEXT, created_at TEXT, duration_seconds DOUBLE PRECISION, view_count INTEGER DEFAULT 0, game_name TEXT, custom_description TEXT, hashtags TEXT, status TEXT DEFAULT 'pending', source_kind TEXT, upload_local_path TEXT, local_file_path TEXT, retention_until TIMESTAMPTZ DEFAULT (NOW() + INTERVAL '14 days'), discarded_at TIMESTAMPTZ, layout_override_json JSONB, uploaded_tiktok INTEGER DEFAULT 0, uploaded_youtube INTEGER DEFAULT 0, uploaded_instagram INTEGER DEFAULT 0, tiktok_uploaded_at TEXT, youtube_uploaded_at TEXT, instagram_uploaded_at TEXT)",
             "CREATE TABLE social_media_streamer_layout (streamer_login TEXT PRIMARY KEY, layout_json JSONB NOT NULL, cam_enabled BOOLEAN NOT NULL DEFAULT TRUE, mode TEXT NOT NULL DEFAULT 'pip', updated_at TIMESTAMPTZ DEFAULT NOW(), updated_by TEXT)",
-            "CREATE TABLE twitch_clips_upload_queue (id SERIAL PRIMARY KEY, clip_id INTEGER, platform TEXT, status TEXT DEFAULT 'pending')",
+            "CREATE TABLE twitch_clips_upload_queue (id SERIAL PRIMARY KEY, clip_id INTEGER, platform TEXT, status TEXT DEFAULT 'pending', priority INTEGER DEFAULT 0, title TEXT, description TEXT, hashtags TEXT, scheduled_at TEXT, attempts INTEGER DEFAULT 0, last_error TEXT, last_attempt_at TEXT, created_at TEXT DEFAULT CURRENT_TIMESTAMP, completed_at TEXT)",
             "CREATE TABLE social_media_platform_auth (id SERIAL PRIMARY KEY, platform TEXT, streamer_login TEXT, enabled INTEGER DEFAULT 1)",
+            "CREATE TABLE clip_templates_streamer (id SERIAL PRIMARY KEY, streamer_login TEXT, template_name TEXT, description_template TEXT, hashtags TEXT, is_default INTEGER DEFAULT 0, created_at TEXT DEFAULT CURRENT_TIMESTAMP, updated_at TEXT DEFAULT CURRENT_TIMESTAMP)",
         ] {
             sqlx::query(ddl).execute(&pool).await.unwrap();
         }
@@ -211,5 +286,32 @@ mod tests {
         assert!(at.is_some());
         // tiktok einzige aktive Plattform + jetzt hochgeladen → published_all.
         assert_eq!(status, "published_all");
+    }
+
+    #[tokio::test]
+    async fn batch_upload_template_und_custom() {
+        let Some(pool) = make_pool("t_sm_batch").await else { return };
+        // Default-Template für nani.
+        sqlx::query("INSERT INTO clip_templates_streamer (streamer_login, template_name, description_template, hashtags, is_default) VALUES ('nani', 'def', 'Clip: {{title}} ({{game}})', '[\"#{{game}}\", \"#deadlock\"]', 1)").execute(&pool).await.unwrap();
+        // Clip A: leere Beschreibung → Template greift.
+        let a: i32 = sqlx::query_scalar("INSERT INTO twitch_clips_social_media (clip_id, streamer_login, clip_title, game_name, created_at) VALUES ('a', 'nani', 'Toller Clip', 'Dead Lock', '2026-06-10') RETURNING id").fetch_one(&pool).await.unwrap();
+        // Clip B: eigene Beschreibung + hashtags → Template NICHT greifen.
+        let b: i32 = sqlx::query_scalar("INSERT INTO twitch_clips_social_media (clip_id, streamer_login, clip_title, custom_description, hashtags, created_at) VALUES ('b', 'nani', 'B', 'Eigene Beschr', '[\"#own\"]', '2026-06-09') RETURNING id").fetch_one(&pool).await.unwrap();
+        // Clip C: schon hochgeladen → nicht eingereiht.
+        sqlx::query("INSERT INTO twitch_clips_social_media (clip_id, streamer_login, uploaded_tiktok, created_at) VALUES ('c', 'nani', 1, '2026-06-08')").execute(&pool).await.unwrap();
+
+        let stats = batch_upload_all_new(&pool, "nani", &["tiktok".into()], true).await;
+        assert_eq!(stats.queued, 2);
+        assert_eq!(stats.errors, 0);
+        assert_eq!(stats.skipped, 0);
+
+        // A: Template substituiert ({{game}} → "Dead Lock" in Desc, "DeadLock" in Hashtag).
+        let (desc_a, tags_a): (Option<String>, Option<String>) = sqlx::query_as("SELECT description, hashtags FROM twitch_clips_upload_queue WHERE clip_id = $1").bind(a).fetch_one(&pool).await.unwrap();
+        assert_eq!(desc_a.as_deref(), Some("Clip: Toller Clip (Dead Lock)"));
+        assert_eq!(tags_a.as_deref(), Some("[\"#DeadLock\",\"#deadlock\"]"));
+        // B: eigene Beschreibung + hashtags.
+        let (desc_b, tags_b): (Option<String>, Option<String>) = sqlx::query_as("SELECT description, hashtags FROM twitch_clips_upload_queue WHERE clip_id = $1").bind(b).fetch_one(&pool).await.unwrap();
+        assert_eq!(desc_b.as_deref(), Some("Eigene Beschr"));
+        assert_eq!(tags_b.as_deref(), Some("[\"#own\"]"));
     }
 }

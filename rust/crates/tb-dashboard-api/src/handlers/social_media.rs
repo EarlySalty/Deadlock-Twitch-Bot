@@ -31,7 +31,7 @@ use tb_social_media::settings::{coerce_bool, get_auto_approve_settings, set_auto
 use tb_social_media::analytics::{list_clip_analytics, list_reports, ClipAnalyticsSnapshot, SocialMediaReportRecord};
 use tb_social_media::clip_analytics::get_analytics_summary;
 use tb_social_media::credentials::{CredentialManager, PlatformStatus};
-use tb_social_media::clip_manager::{get_clips_for_dashboard, mark_clip_uploaded, register_manual_upload, ManualUploadError};
+use tb_social_media::clip_manager::{batch_upload_all_new, get_clips_for_dashboard, mark_clip_uploaded, register_manual_upload, ManualUploadError};
 use tb_social_media::video_processor::VideoProcessor;
 use tb_social_media::clip_queue::queue_upload;
 use tb_social_media::clip_templates::{
@@ -732,6 +732,41 @@ pub async fn queue_upload_handler(
         }
     }
     Json(json!({ "queued": queued })).into_response()
+}
+
+/// POST-Body von `…/api/batch-upload`.
+#[derive(Debug, Deserialize)]
+pub struct BatchUploadBody {
+    pub streamer: Option<String>,
+    #[serde(default)]
+    pub platforms: Value,
+    pub apply_default_template: Option<bool>,
+}
+
+/// `POST /social-media/api/batch-upload` — alle neuen Clips eines Streamers einreihen.
+pub async fn batch_upload_handler(auth: DashboardAuthLevel, State(pool): State<PgPool>, Query(qs): Query<StreamerQuery>, Json(body): Json<BatchUploadBody>) -> Response {
+    if let Err(e) = require_auth(&auth) {
+        return e;
+    }
+    let requested = body.streamer.as_deref().or(qs.streamer.as_deref());
+    // required=true: Admin muss streamer angeben.
+    let scope = match resolve_streamer_scope(&auth, requested, true) {
+        Ok(s) => s,
+        Err(e) => return e,
+    };
+    let streamer = scope.unwrap_or_default();
+    let platforms: Vec<String> = body.platforms.as_array().map(|a| a.iter().filter_map(|x| x.as_str().map(String::from)).collect()).unwrap_or_default();
+    if platforms.is_empty() {
+        return (StatusCode::BAD_REQUEST, Json(json!({ "error": "platforms are required" }))).into_response();
+    }
+    let apply_default_template = body.apply_default_template.unwrap_or(true);
+    let stats = batch_upload_all_new(&pool, &streamer, &platforms, apply_default_template).await;
+    Json(json!({
+        "success": true,
+        "stats": { "queued": stats.queued, "skipped": stats.skipped, "errors": stats.errors },
+        "message": format!("Queued {} clips, {} errors", stats.queued, stats.errors),
+    }))
+    .into_response()
 }
 
 /// POST-Body von `…/api/mark-uploaded`.
@@ -2326,5 +2361,34 @@ mod tests {
             assert_eq!(resp.status(), StatusCode::CONFLICT);
         }
         let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[tokio::test]
+    async fn batch_upload_handler_paths() {
+        let Some(pool) = make_pool("t_dash_sm_batch").await else { return };
+        sqlx::query("INSERT INTO twitch_clips_social_media (clip_id, streamer_login, clip_title, created_at) VALUES ('a', 'nani', 'A', '2026-06-10')").execute(&pool).await.unwrap();
+
+        // Admin mit streamer + tiktok → 1 eingereiht.
+        let resp = batch_upload_handler(
+            DashboardAuthLevel::Admin,
+            State(pool.clone()),
+            Query(StreamerQuery { streamer: None }),
+            Json(BatchUploadBody { streamer: Some("nani".into()), platforms: json!(["tiktok"]), apply_default_template: None }),
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::OK);
+        let v = body_json(resp).await;
+        assert_eq!(v["success"], true);
+        assert_eq!(v["stats"]["queued"], 1);
+
+        // platforms leer → 400.
+        let resp = batch_upload_handler(DashboardAuthLevel::Admin, State(pool.clone()), Query(StreamerQuery { streamer: None }), Json(BatchUploadBody { streamer: Some("nani".into()), platforms: json!([]), apply_default_template: None })).await;
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+        // Admin ohne streamer (required) → 400.
+        let resp = batch_upload_handler(DashboardAuthLevel::Admin, State(pool.clone()), Query(StreamerQuery { streamer: None }), Json(BatchUploadBody { streamer: None, platforms: json!(["tiktok"]), apply_default_template: None })).await;
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+        // Partner cross-account → 403.
+        let resp = batch_upload_handler(partner("nani"), State(pool.clone()), Query(StreamerQuery { streamer: None }), Json(BatchUploadBody { streamer: Some("other".into()), platforms: json!(["tiktok"]), apply_default_template: None })).await;
+        assert_eq!(resp.status(), StatusCode::FORBIDDEN);
     }
 }
