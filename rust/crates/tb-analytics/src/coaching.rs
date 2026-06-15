@@ -546,6 +546,101 @@ pub async fn duration_analysis(
     }))
 }
 
+/// Cross-Community-Analyse (Python `_cross_community`): geteilte Chatter mit
+/// anderen Streamern, Anteil „isolierter" (nur eigener Channel) Zuschauer und
+/// eine Ökosystem-Einordnung.
+pub async fn cross_community(
+    pool: &PgPool,
+    streamer: &str,
+    since: DateTime<Utc>,
+) -> Result<Value, sqlx::Error> {
+    // 1) Eigene Unique-Chatter.
+    let total_unique: i64 = sqlx::query_scalar(
+        "SELECT COUNT(DISTINCT chatter_login)::bigint FROM twitch_chatter_rollup \
+          WHERE streamer_login = $1 AND last_seen_at >= $2",
+    )
+    .bind(streamer)
+    .bind(since)
+    .fetch_one(pool)
+    .await?;
+
+    if total_unique == 0 {
+        return Ok(json!({
+            "totalUniqueChatters": 0,
+            "chatterSources": [],
+            "isolatedChatters": 0,
+            "isolatedPercentage": 0,
+            "ecosystemSummary": "Keine Chatter-Daten verfuegbar.",
+        }));
+    }
+
+    // 2) Geteilte Chatter je anderem Streamer ($1/$2 mehrfach referenziert).
+    let shared: Vec<(String, i64)> = sqlx::query_as(
+        "SELECT c2.streamer_login, COUNT(DISTINCT c1.chatter_login)::bigint \
+           FROM twitch_chatter_rollup c1 \
+           JOIN twitch_chatter_rollup c2 \
+             ON c1.chatter_login = c2.chatter_login \
+            AND c2.streamer_login != $1 \
+            AND c2.last_seen_at >= $2 \
+          WHERE c1.streamer_login = $1 AND c1.last_seen_at >= $2 \
+          GROUP BY c2.streamer_login \
+          ORDER BY 2 DESC \
+          LIMIT 15",
+    )
+    .bind(streamer)
+    .bind(since)
+    .fetch_all(pool)
+    .await?;
+
+    let sources: Vec<Value> = shared
+        .iter()
+        .map(|(source, count)| {
+            json!({
+                "sourceStreamer": source,
+                "sharedChatters": count,
+                "percentage": round1(*count as f64 / total_unique as f64 * 100.0),
+            })
+        })
+        .collect();
+
+    // 3) Chatter, die auch anderswo auftauchen → isoliert = Rest.
+    let shared_count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(DISTINCT c1.chatter_login)::bigint \
+           FROM twitch_chatter_rollup c1 \
+          WHERE c1.streamer_login = $1 AND c1.last_seen_at >= $2 \
+            AND EXISTS ( \
+              SELECT 1 FROM twitch_chatter_rollup c2 \
+               WHERE c2.chatter_login = c1.chatter_login \
+                 AND c2.streamer_login != $1 \
+                 AND c2.last_seen_at >= $2 \
+            )",
+    )
+    .bind(streamer)
+    .bind(since)
+    .fetch_one(pool)
+    .await?;
+
+    let isolated = total_unique - shared_count;
+    let isolated_pct = round1(isolated as f64 / total_unique as f64 * 100.0);
+
+    // Schwellen-Vergleich auf dem GERUNDETEN Wert (1:1 Python).
+    let summary = if isolated_pct > 60.0 {
+        "Deine Community ist stark eigenstaendig - die meisten Chatter sind nur in deinem Channel aktiv."
+    } else if isolated_pct > 30.0 {
+        "Gute Mischung: Ein Teil deiner Zuschauer kommt aus der Deadlock-Community, viele sind aber deine eigenen."
+    } else {
+        "Dein Channel profitiert stark vom Community-Oekoystem. Viele Zuschauer kennst du aus anderen Channels."
+    };
+
+    Ok(json!({
+        "totalUniqueChatters": total_unique,
+        "chatterSources": sources,
+        "isolatedChatters": isolated,
+        "isolatedPercentage": isolated_pct,
+        "ecosystemSummary": summary,
+    }))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -750,5 +845,62 @@ mod tests {
         assert_eq!(v["currentAvgHours"], 1.5);
         // Konstante Dauer → sx=0 → Korrelation 0.
         assert_eq!(v["correlation"], 0.0);
+    }
+
+    async fn make_rollup_pool(schema: &str) -> Option<PgPool> {
+        let pool = make_pool(schema).await?;
+        sqlx::query("CREATE TABLE twitch_chatter_rollup (streamer_login TEXT NOT NULL, chatter_login TEXT NOT NULL, first_seen_at TIMESTAMPTZ NOT NULL, last_seen_at TIMESTAMPTZ NOT NULL, PRIMARY KEY (streamer_login, chatter_login))")
+            .execute(&pool).await.unwrap();
+        Some(pool)
+    }
+
+    #[tokio::test]
+    async fn cross_community_berechnet() {
+        let Some(pool) = make_rollup_pool("t_coach_cross").await else { return };
+        // nani: a,b,c,d (4 unique). rivalx teilt a,b. rivaly teilt a.
+        // → shared_count {a,b}=2, isolated=2 → 50 % → "Gute Mischung".
+        sqlx::query(
+            "INSERT INTO twitch_chatter_rollup (streamer_login, chatter_login, first_seen_at, last_seen_at) VALUES \
+            ('nani','a', NOW()-INTERVAL '2 day', NOW()-INTERVAL '1 day'), \
+            ('nani','b', NOW()-INTERVAL '2 day', NOW()-INTERVAL '1 day'), \
+            ('nani','c', NOW()-INTERVAL '2 day', NOW()-INTERVAL '1 day'), \
+            ('nani','d', NOW()-INTERVAL '2 day', NOW()-INTERVAL '1 day'), \
+            ('rivalx','a', NOW()-INTERVAL '2 day', NOW()-INTERVAL '1 day'), \
+            ('rivalx','b', NOW()-INTERVAL '2 day', NOW()-INTERVAL '1 day'), \
+            ('rivaly','a', NOW()-INTERVAL '2 day', NOW()-INTERVAL '1 day')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let v = cross_community(&pool, "nani", Utc::now() - chrono::Duration::days(30))
+            .await
+            .unwrap();
+
+        assert_eq!(v["totalUniqueChatters"], 4);
+        // Quellen nach geteilten Chattern DESC: rivalx (2) vor rivaly (1).
+        assert_eq!(v["chatterSources"].as_array().unwrap().len(), 2);
+        assert_eq!(v["chatterSources"][0]["sourceStreamer"], "rivalx");
+        assert_eq!(v["chatterSources"][0]["sharedChatters"], 2);
+        assert_eq!(v["chatterSources"][0]["percentage"], 50.0);
+        assert_eq!(v["chatterSources"][1]["sharedChatters"], 1);
+        assert_eq!(v["chatterSources"][1]["percentage"], 25.0);
+        assert_eq!(v["isolatedChatters"], 2);
+        assert_eq!(v["isolatedPercentage"], 50.0);
+        assert_eq!(
+            v["ecosystemSummary"],
+            "Gute Mischung: Ein Teil deiner Zuschauer kommt aus der Deadlock-Community, viele sind aber deine eigenen."
+        );
+    }
+
+    #[tokio::test]
+    async fn cross_community_leer() {
+        let Some(pool) = make_rollup_pool("t_coach_cross_empty").await else { return };
+        let v = cross_community(&pool, "nani", Utc::now() - chrono::Duration::days(30))
+            .await
+            .unwrap();
+        assert_eq!(v["totalUniqueChatters"], 0);
+        assert_eq!(v["chatterSources"], json!([]));
+        assert_eq!(v["ecosystemSummary"], "Keine Chatter-Daten verfuegbar.");
     }
 }
