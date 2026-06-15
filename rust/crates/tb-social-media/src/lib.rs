@@ -32,6 +32,7 @@
 //! - `retention_worker` — Cleanup-Loop für abgelaufene Clips.
 //! - `clip_queue`  — Upload-Queue (`twitch_clips_upload_queue`).
 //! - `clip_templates` — Beschreibungs-Templates + Last-Hashtags.
+//! - `clip_manager`  — manueller Upload + Dashboard-Clip-Liste.
 //! - `clip_analytics` — Analytics-Summary fürs Dashboard.
 //! - `analytics`    — Clip-Statistik-Persistenz (`twitch_clips_social_analytics`).
 //! - `insights_worker` — Pollt Plattform-Statistiken (24h/7d/30d).
@@ -48,6 +49,7 @@ pub mod approval;
 pub mod approval_worker;
 pub mod clip;
 pub mod clip_analytics;
+pub mod clip_manager;
 pub mod clip_queue;
 pub mod clip_templates;
 pub mod correction;
