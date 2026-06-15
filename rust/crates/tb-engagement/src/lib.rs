@@ -17,6 +17,7 @@ pub mod deadlock_patches;
 pub mod deadlock_stats;
 pub mod deadlock_wiki;
 pub mod global_sentiment;
+pub mod lurker_signal;
 pub mod match_context;
 pub mod minimax_chat;
 pub mod persona;
