@@ -13,6 +13,7 @@ pub mod audience_demographics;
 pub mod category_comparison;
 pub mod category_timings;
 pub mod category_leaderboard;
+pub mod engagement_settings;
 pub mod loyalty_curve;
 pub mod lurker_analysis;
 pub mod raid_analytics;
