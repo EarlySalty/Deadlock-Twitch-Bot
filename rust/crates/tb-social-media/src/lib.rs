@@ -35,6 +35,7 @@
 //! - `clip_analytics` — Analytics-Summary fürs Dashboard.
 //! - `analytics`    — Clip-Statistik-Persistenz (`twitch_clips_social_analytics`).
 //! - `insights_worker` — Pollt Plattform-Statistiken (24h/7d/30d).
+//! - `report_writer` — Report-Aggregation + Markdown (social_media_reports).
 //!
 //! # Deaktiviert
 //! Der Clip-Fetcher-Task ist **standardmäßig deaktiviert** und wird nicht in
@@ -60,6 +61,7 @@ pub mod llm_dispatch;
 pub mod oauth;
 pub mod refresh_worker;
 pub mod rendering;
+pub mod report_writer;
 pub mod retention;
 pub mod retention_worker;
 pub mod schema;
