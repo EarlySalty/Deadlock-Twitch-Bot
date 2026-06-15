@@ -22,14 +22,22 @@
 //! - GET /sessions/:session_id: Python liefert `SELECT *` plus berechnete
 //!   Felder (`retention_5m/10m/20m`, `dropoff_label`, `start/end_viewers`,
 //!   `samples`, …) — dem Rust-Port fehlen ~15 Felder (Live-Diff 11.6.).
-//! - GET /streamers + alle Mutationen (POST/DELETE /streamers,
-//!   verify/archive/discord-flag/discord-profile): brauchen den
-//!   Partner-Lifecycle (`promote_streamer_to_partner` /
-//!   `departner_active_partner`) + Discord-Bridge (Rollen-Sync, DMs).
-//!   verify mode=clear/failed departnern in Python KOMPLETT — der native
-//!   Handler antwortet dafür ehrlich 503. GET teilt den Pfad mit POST
-//!   (axum: Pfad-Match vor Methoden-Match → nativer GET würde POST mit
-//!   405 statt Proxy-Fallback beantworten — kein Teil-Flip möglich).
+//!
+//! Streamer-CRUD + Partner-Lifecycle (Block 10, nativ):
+//! - DELETE /streamers/:login departnert aktive Partner voll
+//!   (`departner_active_partner`: Status→departnered, Identity-Upsert,
+//!   Raid-Auth-Disable) und entfernt die Discord-Streamer-Rolle.
+//! - POST /streamers/:login/verify (permanent/temp) promotet via
+//!   `promote_streamer_to_partner`, backfillt Kategorie-Stats und vergibt die
+//!   Rolle; clear/failed departnern (clear_verification) und entziehen die Rolle.
+//! - POST /streamers/:login/archive liefert kontextspezifische Meldungen
+//!   (archiviert/ent-archiviert/blockiert/entsperrt/…).
+//! - POST /streamers trägt require_link + next_link_check_at (now+30d) nach und
+//!   backfillt Kategorie-Stats.
+//!
+//! Discord-DMs sind per B10-Direktive ("keine Discord-DMs mehr") GEDROPPT
+//! (Verify-Erfolgs-/Fehler-DM): die Meldungen reduzieren sich auf Rollen-Sync.
+//! Lifecycle-DB-Logik liegt in [`crate::streamer_lifecycle`].
 //!
 //! POST /streamers/:login/chat-action ist seit der Bot-Token-Bridge (F3) nativ:
 //! der Handler (python_stubs::chat_action_handler) sendet über den
@@ -42,16 +50,18 @@
 //! - Bestandskonsumenten (Python-Client) senden snake_case-Bodies.
 //! - Felder mit Underscores akzeptieren via `#[serde(alias)]` auch camelCase.
 //! - Kein Idempotency-Caching (kommt mit dem geteilten Idempotenz-Layer).
-//! - Discord-Nebeneffekte (Rollen-Sync, EventSub): deferred bis Schritt 5/6.
+//! - Discord-Rollen-Sync: best-effort über [`DiscordRolePort`] (grant/revoke);
+//!   EventSub-Supervisor-Trigger: Handoff (kein Port → tb-bot-Wiring nötig).
 //!
 //! archive-mode-Semantik:
 //! - Python gibt NIEMALS 400 für unbekannte mode-Werte — unbekannte Werte
-//!   fallen durch auf "toggle". ArchiveMode::parse ist deshalb infallibel.
+//!   fallen durch auf "toggle". Die Meldung ist kontextabhängig (s.
+//!   `lifecycle::archive_with_message`).
 //!
 //! verify-mode-Semantik:
-//! - permanent/temp aktualisieren aktive Partner; clear/failed → 503
-//!   (Lifecycle nicht portiert); unbekannte Modi → 200 "Unbekannter Modus"
-//!   (Python-Parität, KEIN Permanent-Fallback).
+//! - permanent/temp promoten + backfillen + Rolle vergeben; clear/failed
+//!   departnern (clear_verification) + Rolle entziehen; unbekannte Modi → 200
+//!   "Unbekannter Modus" (Python-Parität, KEIN Permanent-Fallback).
 
 use axum::{
     extract::{Path, Query, State},
@@ -63,6 +73,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 use sqlx::PgPool;
 use std::sync::Arc;
+use crate::streamer_lifecycle as lifecycle;
 use tb_analytics::streamers_crud as db;
 use tb_domain::normalize_twitch_login;
 use tb_http_core::{ApiError, AuthLevel};
@@ -75,7 +86,13 @@ use tb_transport_twitch::HelixClient;
 /// nie propagiert (Python-Parität: best-effort, kein Abbruch).
 #[async_trait::async_trait]
 pub trait DiscordRolePort: Send + Sync {
+    /// Vergibt die Streamer-Rolle (Python `sync_streamer_role(should_have_role=True)`).
     async fn grant_streamer_role(&self, discord_user_id: &str, reason: &str);
+
+    /// Entfernt die Streamer-Rolle (Python `sync_streamer_role(should_have_role=False)`).
+    /// Default-Impl no-op, damit bestehende Test-Doubles nicht brechen; die
+    /// echte tb-bot-Impl entzieht die Rolle über den Master-Broker.
+    async fn revoke_streamer_role(&self, _discord_user_id: &str, _reason: &str) {}
 }
 
 /// Router-Extension-Wrapper für [`DiscordRolePort`] (`None` = kein Sync).
@@ -308,6 +325,13 @@ pub async fn add_handler(
         }
     };
 
+    // require_link aus dem Body (Python `_cmd_add(login, require_link)`,
+    // Default false). Akzeptiert bool/Zahl/String wie der übrige Body.
+    let require_link = parse_bool_loose(
+        body.get("require_link")
+            .or_else(|| body.get("require_discord_link")),
+    );
+
     use db::AddStreamerResult;
     match db::add_streamer(&pool, &login, user_id.as_deref()).await {
         Ok(AddStreamerResult::AlreadyExists) => Ok((
@@ -315,15 +339,45 @@ pub async fn add_handler(
             Json(json!({"ok": true, "login": login, "message": "already_active_partner"})),
         )
             .into_response()),
-        Ok(AddStreamerResult::Added) => Ok((
-            StatusCode::CREATED,
-            Json(json!({"ok": true, "login": login, "message": format!("{login} hinzugefügt")})),
-        )
-            .into_response()),
+        Ok(AddStreamerResult::Added) => {
+            // require_link + next_link_check_at (now+30d) nachtragen und
+            // Kategorie-Stats backfillen (Python `_cmd_add`: upsert_non_partner_streamer
+            // + backfill_tracked_stats_from_category). Beide best-effort über
+            // die native Lifecycle-Schicht; Fehler werden geloggt, nicht propagiert.
+            if let Err(e) = lifecycle::backfill_require_link(&pool, &login, require_link).await {
+                tracing::warn!("backfill_require_link für {login} fehlgeschlagen: {e}");
+            }
+            let copied = lifecycle::backfill_tracked_stats_from_category(&pool, &login)
+                .await
+                .unwrap_or(0);
+            let suffix = if copied > 0 {
+                format!(" ({copied} historische Datenpunkte übernommen)")
+            } else {
+                String::new()
+            };
+            Ok((
+                StatusCode::CREATED,
+                Json(json!({"ok": true, "login": login, "message": format!("{login} hinzugefügt{suffix}")})),
+            )
+                .into_response())
+        }
         Err(e) => {
             tracing::error!("add_streamer DB-Fehler: {e}");
             Err(ApiError::internal())
         }
+    }
+}
+
+/// Parst einen losen Bool-Wert (bool/Zahl/String) wie Pythons `_parse_bool`;
+/// fehlend/null/unbekannt → `false`.
+fn parse_bool_loose(value: Option<&serde_json::Value>) -> bool {
+    match value {
+        Some(serde_json::Value::Bool(b)) => *b,
+        Some(serde_json::Value::Number(n)) => n.as_i64().unwrap_or(0) != 0,
+        Some(serde_json::Value::String(s)) => {
+            matches!(s.trim().to_lowercase().as_str(), "true" | "1" | "yes" | "on")
+        }
+        _ => false,
     }
 }
 
@@ -370,9 +424,24 @@ pub async fn add_monitored_handler(
 }
 
 /// `DELETE /internal/twitch/v1/streamers/:login`
+///
+/// Voller Departner-Lifecycle (Parität Python `_cmd_remove`, `admin.py:256`):
+/// 1. Aktiven Partner departnern (`departner_active_partner`): Status →
+///    `departnered`, Identity-Upsert, Raid-Auth-Disable.
+/// 2. War kein aktiver Partner da: Streamer-Zeile archivieren/löschen wie bisher.
+/// 3. `twitch_live_state`-Zeile löschen (idempotent).
+/// 4. Bei departnertem Partner mit Discord-ID: Streamer-Rolle entfernen
+///    (best-effort über [`DiscordRolePort`]) und Meldung
+///    `"{login} operativ deaktiviert (Streamer-Rolle entfernt)"`.
+///
+/// Migrations-Bug-Fix (vorher 1:1 mitgeschleppt): der alte Pfad setzte nur
+/// `twitch_streamers.archived_at` und ließ `twitch_partners` aktiv — ein
+/// entfernter Partner blieb in der Partner-Wahrheit aktiv (Raid-Bot lief weiter,
+/// Discord-Rolle blieb). Test `remove_departnert_aktiven_partner` lockt das ein.
 pub async fn remove_handler(
     auth: AuthLevel,
     State(pool): State<PgPool>,
+    Extension(role_ext): Extension<DiscordRoleExt>,
     Path(raw_login): Path<String>,
 ) -> Result<impl IntoResponse, ApiError> {
     if !auth.is_privileged() {
@@ -384,35 +453,89 @@ pub async fn remove_handler(
         None => return Err(ApiError::bad_request("invalid login")),
     };
 
-    use db::RemoveStreamerResult;
-    match db::remove_streamer(&pool, &login).await {
-        Ok(RemoveStreamerResult::NotFound) => Err(ApiError::not_found()),
-        Ok(RemoveStreamerResult::Archived) => Ok(Json(OkLoginMessageResponse {
-            ok: true,
-            login,
-            message: "archiviert".to_string(),
-        })
-        .into_response()),
-        Ok(RemoveStreamerResult::Deleted) => Ok(Json(OkLoginMessageResponse {
-            ok: true,
-            login,
-            message: "gelöscht".to_string(),
-        })
-        .into_response()),
-        Err(e) => {
-            tracing::error!("remove_streamer DB-Fehler: {e}");
-            Err(ApiError::internal())
+    // Schritt 1: aktiven Partner departnern (Status-Wechsel + Raid-Auth-Disable).
+    let departnered = lifecycle::departner_active_partner(&pool, &login, false)
+        .await
+        .map_err(|e| {
+            tracing::error!("departner_active_partner DB-Fehler: {e}");
+            ApiError::internal()
+        })?;
+
+    // Schritt 2: ohne aktiven Partner → Streamer-Zeile archivieren/löschen.
+    let removed_streamer = if departnered.is_none() {
+        use db::RemoveStreamerResult;
+        match db::remove_streamer(&pool, &login).await {
+            Ok(RemoveStreamerResult::NotFound) => false,
+            Ok(_) => true,
+            Err(e) => {
+                tracing::error!("remove_streamer DB-Fehler: {e}");
+                return Err(ApiError::internal());
+            }
         }
+    } else {
+        // remove_streamer löscht twitch_live_state mit; im Departner-Pfad
+        // holen wir das separat nach (Python: explizites DELETE in _cmd_remove).
+        lifecycle::clear_live_state(&pool, &login).await.map_err(|e| {
+            tracing::error!("clear_live_state DB-Fehler: {e}");
+            ApiError::internal()
+        })?;
+        true
+    };
+
+    // Schritt 3: Antwort nach Python `_cmd_remove`.
+    if let Some(outcome) = departnered {
+        let mut role_note = String::new();
+        if let (Some(did), Some(port)) = (outcome.discord_user_id.as_deref(), role_ext.0.as_ref()) {
+            port.revoke_streamer_role(did, "Streamer als Partner deaktiviert")
+                .await;
+            role_note = " (Streamer-Rolle entfernt)".to_string();
+        }
+        return Ok(Json(OkLoginMessageResponse {
+            ok: true,
+            login: login.clone(),
+            message: format!("{login} operativ deaktiviert{role_note}"),
+        })
+        .into_response());
     }
+
+    if removed_streamer {
+        return Ok(Json(OkLoginMessageResponse {
+            ok: true,
+            login: login.clone(),
+            message: format!("{login} entfernt"),
+        })
+        .into_response());
+    }
+
+    // Python: "{login} war nicht gespeichert" → 404 (interne API-Konvention).
+    Err(ApiError::not_found())
 }
 
 /// `POST /internal/twitch/v1/streamers/:login/verify`
 ///
 /// Body: `{"mode": "permanent"|"temp"|"clear"|"failed"}` — Default: "permanent".
-/// Parität Python: mode-Wert kommt aus Body, Default ist "permanent".
+/// Voller nativer Verify-Lifecycle (Parität Python `_dashboard_verify` /
+/// `_dashboard_verify_storage_step`, `streamer_admin_mixin.py:291/475`):
+///
+/// - `permanent`/`temp`: Streamer (oder aktiven Partner) zum Partner promoten
+///   (`promote_streamer_to_partner`), Kategorie-Stats backfillen, Streamer-Rolle
+///   vergeben. Ohne auflösbare `twitch_user_id` → "{login} ist nicht gespeichert".
+///   Meldung: `"{login} dauerhaft verifiziert"` bzw. `"… für 30 Tage verifiziert"`
+///   + `"(N historische Datenpunkte übernommen)"` + `"(Streamer-Rolle vergeben)"`.
+/// - `clear`: departnern (`clear_verification=True`), Rolle entfernen, KEINE DM.
+///   Meldung: `"Verifizierung für {login} zurückgesetzt (keine DM versendet) …"`.
+/// - `failed`: departnern, Rolle entfernen. Die Python-Fehler-DM ist per
+///   B10-Direktive ("keine Discord-DMs mehr") bewusst gedroppt — die Meldung
+///   reduziert sich auf den Rollen-Entzug.
+/// - unbekannter Modus → "Unbekannter Modus" (200, keine Mutation).
+///
+/// Alle Geschäftsfälle antworten 200 `{ok, login, message}` (Python-Parität).
+/// DMs (`_notify_verification_success`, Fehler-DM) sind per B10-Direktive raus.
 pub async fn verify_handler(
     auth: AuthLevel,
     State(pool): State<PgPool>,
+    Extension(helix): Extension<Arc<Option<HelixClient>>>,
+    Extension(role_ext): Extension<DiscordRoleExt>,
     Path(raw_login): Path<String>,
     body: Option<Json<VerifyRequest>>,
 ) -> Result<impl IntoResponse, ApiError> {
@@ -433,9 +556,6 @@ pub async fn verify_handler(
         })
         .unwrap_or_else(|| "permanent".to_string());
 
-    use db::VerifyStreamerResult;
-    // Python (`streamers.py:169`): IMMER 200 {ok, login, message} für alle
-    // Geschäftsfälle — auch "nicht gespeichert" und "Unbekannter Modus".
     let ok_message = |message: String| {
         Json(OkLoginMessageResponse {
             ok: true,
@@ -444,27 +564,116 @@ pub async fn verify_handler(
         })
         .into_response()
     };
-    match db::verify_streamer(&pool, &login, &mode).await {
-        Ok(VerifyStreamerResult::Verified) => {
-            // Python base_msg (`streamer_admin_mixin.py:341-345`).
-            let message = if mode == "temp" {
+
+    let internal = |e: sqlx::Error, ctx: &str| {
+        tracing::error!("verify_handler {ctx} DB-Fehler: {e}");
+        ApiError::internal()
+    };
+
+    match mode.as_str() {
+        "permanent" | "temp" => {
+            let payload = lifecycle::VerificationPayload::for_mode(&mode)
+                .ok_or_else(ApiError::internal)?; // permanent/temp sind immer Some
+            let source = lifecycle::load_verify_source(&pool, &login, helix.as_ref().as_ref())
+                .await
+                .map_err(|e| internal(e, "load_verify_source"))?;
+            let Some(source) = source.filter(|s| s.twitch_user_id_present()) else {
+                return Ok(ok_message(format!("{login} ist nicht gespeichert")));
+            };
+
+            lifecycle::promote_streamer_to_partner(
+                &pool,
+                &login,
+                &source.twitch_user_id,
+                source.discord_user_id.as_deref(),
+                source.discord_display_name.as_deref(),
+                if source.discord_user_id.is_some() { 1 } else { 0 },
+                &payload,
+            )
+            .await
+            .map_err(|e| internal(e, "promote"))?;
+
+            let copied = lifecycle::backfill_tracked_stats_from_category(&pool, &login)
+                .await
+                .map_err(|e| internal(e, "backfill"))?;
+
+            let base = if mode == "temp" {
                 format!("{login} für 30 Tage verifiziert")
             } else {
                 format!("{login} dauerhaft verifiziert")
             };
-            Ok(ok_message(message))
+            let mut notes: Vec<String> = Vec::new();
+            if copied > 0 {
+                notes.push(format!("({copied} historische Datenpunkte übernommen)"));
+            }
+            // Streamer-Rolle vergeben (best-effort).
+            if let (Some(did), Some(port)) =
+                (source.discord_user_id.as_deref(), role_ext.0.as_ref())
+            {
+                port.grant_streamer_role(
+                    did,
+                    "Streamer-Verifizierung über Dashboard bestätigt",
+                )
+                .await;
+                notes.push("(Streamer-Rolle vergeben)".to_string());
+            }
+            let merged = notes.join(" ");
+            Ok(ok_message(format!("{base} {merged}").trim().to_string()))
         }
-        Ok(VerifyStreamerResult::NotAPartner) => {
-            Ok(ok_message(format!("{login} ist nicht gespeichert")))
+        "clear" => {
+            let outcome = lifecycle::departner_active_partner(&pool, &login, true)
+                .await
+                .map_err(|e| internal(e, "departner_clear"))?;
+            let Some(outcome) = outcome else {
+                return Ok(ok_message(format!("{login} ist nicht gespeichert")));
+            };
+            let role_note = revoke_role_note(
+                &role_ext,
+                outcome.discord_user_id.as_deref(),
+                "Streamer-Verifizierung über Dashboard entfernt",
+            )
+            .await;
+            let msg = format!(
+                "Verifizierung für {login} zurückgesetzt (keine DM versendet) {role_note}"
+            );
+            Ok(ok_message(msg.trim().to_string()))
         }
-        Ok(VerifyStreamerResult::UnknownMode) => Ok(ok_message("Unbekannter Modus".to_string())),
-        // clear/failed departnern in Python komplett (Partner-Lifecycle +
-        // Discord-DM) — nativ nicht portiert, ehrlicher 503 statt Halb-Aktion.
-        Ok(VerifyStreamerResult::RequiresPartnerLifecycle) => Err(ApiError::unavailable()),
-        Err(e) => {
-            tracing::error!("verify_streamer DB-Fehler: {e}");
-            Err(ApiError::internal())
+        "failed" => {
+            let outcome = lifecycle::departner_active_partner(&pool, &login, true)
+                .await
+                .map_err(|e| internal(e, "departner_failed"))?;
+            let Some(outcome) = outcome else {
+                return Ok(ok_message(format!("{login} ist nicht gespeichert")));
+            };
+            // Python sendet hier zusätzlich eine Fehler-DM — per B10-Direktive
+            // ("keine Discord-DMs mehr") gedroppt. Nur der Rollen-Entzug bleibt.
+            let role_note = revoke_role_note(
+                &role_ext,
+                outcome.discord_user_id.as_deref(),
+                "Streamer-Verifizierung über Dashboard fehlgeschlagen",
+            )
+            .await;
+            Ok(ok_message(
+                format!("{login}: Verifizierung fehlgeschlagen {role_note}")
+                    .trim()
+                    .to_string(),
+            ))
         }
+        _ => Ok(ok_message("Unbekannter Modus".to_string())),
+    }
+}
+
+/// Entfernt best-effort die Streamer-Rolle und gibt die Python-Notiz zurück.
+async fn revoke_role_note(
+    role_ext: &DiscordRoleExt,
+    discord_user_id: Option<&str>,
+    reason: &str,
+) -> String {
+    if let (Some(did), Some(port)) = (discord_user_id, role_ext.0.as_ref()) {
+        port.revoke_streamer_role(did, reason).await;
+        "(Streamer-Rolle entfernt)".to_string()
+    } else {
+        String::new()
     }
 }
 
@@ -498,19 +707,21 @@ pub async fn archive_handler(
         })
         .unwrap_or_else(|| "toggle".to_string());
 
-    // Infallible parse — unbekannte Werte → Toggle, kein 400
-    let mode = db::ArchiveMode::parse(&mode_str);
-
-    match db::archive_streamer(&pool, &login, mode).await {
-        Ok(true) => Ok(Json(OkLoginMessageResponse {
+    // Kontextspezifische Meldung + Mutation in einem (Python `_dashboard_archive_sync`):
+    // 'X archiviert' / 'X ent-archiviert' / 'X dauerhaft blockiert' / 'X entsperrt' /
+    // 'X ist bereits archiviert (seit …)' / 'X reaktiviert' usw.
+    use lifecycle::ArchiveOutcome;
+    match lifecycle::archive_with_message(&pool, &login, &mode_str).await {
+        Ok(ArchiveOutcome::Done(message)) => Ok(Json(OkLoginMessageResponse {
             ok: true,
             login: login.clone(),
-            message: "updated".to_string(),
+            message,
         })
         .into_response()),
-        Ok(false) => Err(ApiError::not_found()),
+        // Python: nicht gespeichert → ValueError → 4xx. Interne API: 404.
+        Ok(ArchiveOutcome::NotStored) => Err(ApiError::not_found()),
         Err(e) => {
-            tracing::error!("archive_streamer DB-Fehler: {e}");
+            tracing::error!("archive_with_message DB-Fehler: {e}");
             Err(ApiError::internal())
         }
     }
@@ -896,6 +1107,8 @@ mod tests {
                 is_on_discord       INTEGER DEFAULT 0,
                 is_verified         INTEGER DEFAULT 0,
                 is_monitored_only   INTEGER DEFAULT 0,
+                require_discord_link INTEGER DEFAULT 0,
+                next_link_check_at  TEXT,
                 created_at          TIMESTAMPTZ DEFAULT NOW(),
                 archived_at         TIMESTAMPTZ
             )
@@ -913,8 +1126,10 @@ mod tests {
                 discord_user_id     TEXT,
                 discord_display_name TEXT,
                 is_on_discord       INTEGER DEFAULT 0,
-                created_at          TIMESTAMPTZ DEFAULT NOW(),
-                updated_at          TIMESTAMPTZ DEFAULT NOW()
+                -- TEXT wie Prod (Python schreibt ISO-Strings; der Lifecycle bindet
+                -- created_at/updated_at als ISO-String, nicht NOW()).
+                created_at          TEXT,
+                updated_at          TEXT
             )
             "#,
         )
@@ -934,17 +1149,23 @@ mod tests {
         .await
         .expect("DDL twitch_live_state");
 
+        // Timestamp-Spalten TEXT wie Prod (Python schreibt ISO-Strings) —
+        // der Lifecycle dekodiert admin_archived_at/departnered_at als String.
         sqlx::query(
             r#"
             CREATE TABLE IF NOT EXISTS twitch_partners (
-                id                       SERIAL PRIMARY KEY,
+                id                       BIGINT PRIMARY KEY,
                 twitch_login             TEXT NOT NULL,
                 twitch_user_id           TEXT,
                 status                   TEXT DEFAULT 'active',
+                require_discord_link     INTEGER DEFAULT 0,
+                next_link_check_at       TEXT,
                 manual_verified_permanent INTEGER DEFAULT 0,
-                manual_verified_at       TIMESTAMPTZ,
-                manual_verified_until    TIMESTAMPTZ,
-                admin_archived_at        TIMESTAMPTZ,
+                manual_verified_at       TEXT,
+                manual_verified_until    TEXT,
+                partnered_at             TEXT DEFAULT CURRENT_TIMESTAMP,
+                admin_archived_at        TEXT,
+                departnered_at           TEXT,
                 technical_pause_reason   TEXT,
                 manual_partner_opt_out   INTEGER DEFAULT 0,
                 raid_bot_enabled         INTEGER DEFAULT 1
@@ -954,6 +1175,18 @@ mod tests {
         .execute(&pool)
         .await
         .expect("DDL twitch_partners");
+
+        // Stats-Tabellen für den Kategorie-Backfill (Verify/Add-Pfad).
+        for ddl in [
+            r#"CREATE TABLE IF NOT EXISTS twitch_stats_category (
+                ts_utc TIMESTAMPTZ, streamer TEXT, viewer_count INTEGER,
+                is_partner INTEGER, game_name TEXT, stream_title TEXT, tags TEXT )"#,
+            r#"CREATE TABLE IF NOT EXISTS twitch_stats_tracked (
+                ts_utc TIMESTAMPTZ, streamer TEXT, viewer_count INTEGER,
+                is_partner INTEGER, game_name TEXT, stream_title TEXT, tags TEXT )"#,
+        ] {
+            sqlx::query(ddl).execute(&pool).await.expect("DDL stats");
+        }
 
         for ddl in [
             r#"CREATE TABLE IF NOT EXISTS twitch_partners_all_state (
@@ -1103,6 +1336,196 @@ mod tests {
         );
         let resp = app.oneshot(req).await.unwrap();
         assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    }
+
+    /// Aktiver Partner anlegen (mit Identity für Discord-Daten + Raid-Auth).
+    async fn seed_active_partner(pool: &PgPool, login: &str, uid: &str) {
+        sqlx::query(
+            "INSERT INTO twitch_partners (id, twitch_login, twitch_user_id, status, manual_verified_permanent)
+             VALUES (1, $1, $2, 'active', 1)",
+        )
+        .bind(login)
+        .bind(uid)
+        .execute(pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO twitch_streamer_identities (twitch_user_id, twitch_login, discord_user_id, discord_display_name, is_on_discord)
+             VALUES ($1, $2, '555', 'Name', 1)",
+        )
+        .bind(uid)
+        .bind(login)
+        .execute(pool)
+        .await
+        .unwrap();
+        sqlx::query("INSERT INTO twitch_raid_auth (twitch_user_id, twitch_login, raid_enabled) VALUES ($1, $2, TRUE)")
+            .bind(uid)
+            .bind(login)
+            .execute(pool)
+            .await
+            .unwrap();
+    }
+
+    /// DELETE departnert einen aktiven Partner (Status→departnered, Raid-Auth aus)
+    /// statt nur twitch_streamers zu archivieren — der Block-10-Lifecycle-Fix.
+    #[tokio::test]
+    async fn remove_departnert_aktiven_partner() {
+        let dsn = db_dsn_or_skip!();
+        let pool = make_pool(&dsn, "test_sh_remove_departner").await;
+        seed_active_partner(&pool, "drag", "42").await;
+        let app = make_router(pool.clone(), "secret");
+        let base = INTERNAL_API_BASE_PATH;
+        let req = loopback_req("DELETE", &format!("{base}/streamers/drag"), "", Some("secret"));
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let j = json_body(resp).await;
+        assert_eq!(j["ok"], true);
+        assert!(
+            j["message"].as_str().unwrap().contains("operativ deaktiviert"),
+            "Python-Meldung _cmd_remove, war='{}'",
+            j["message"]
+        );
+
+        let (status, raid): (Option<String>, Option<bool>) = sqlx::query_as(
+            "SELECT p.status, a.raid_enabled FROM twitch_partners p
+             LEFT JOIN twitch_raid_auth a ON a.twitch_user_id = p.twitch_user_id
+             WHERE p.id = 1",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(status.as_deref(), Some("departnered"));
+        assert_eq!(raid, Some(false), "raid-auth disabled beim Departnern");
+    }
+
+    /// verify mode=clear departnert nativ (vorher: 503). Antwortet 200 mit Meldung.
+    #[tokio::test]
+    async fn verify_clear_departnert_statt_503() {
+        let dsn = db_dsn_or_skip!();
+        let pool = make_pool(&dsn, "test_sh_verify_clear").await;
+        seed_active_partner(&pool, "drag", "42").await;
+        let app = make_router(pool.clone(), "secret");
+        let base = INTERNAL_API_BASE_PATH;
+        let req = loopback_req(
+            "POST",
+            &format!("{base}/streamers/drag/verify"),
+            r#"{"mode":"clear"}"#,
+            Some("secret"),
+        );
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK, "clear ist nativ, kein 503 mehr");
+        let j = json_body(resp).await;
+        assert!(
+            j["message"].as_str().unwrap().contains("zurückgesetzt"),
+            "war='{}'",
+            j["message"]
+        );
+
+        let (status, mvp): (Option<String>, Option<i32>) = sqlx::query_as(
+            "SELECT status, manual_verified_permanent FROM twitch_partners WHERE id = 1",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(status.as_deref(), Some("departnered"));
+        assert_eq!(mvp, Some(0), "clear_verification → permanent zurückgesetzt");
+    }
+
+    /// verify mode=permanent promotet einen Nicht-Partner zum aktiven Partner.
+    #[tokio::test]
+    async fn verify_permanent_promotet_nicht_partner() {
+        let dsn = db_dsn_or_skip!();
+        let pool = make_pool(&dsn, "test_sh_verify_promote").await;
+        // Nicht-Partner in twitch_streamers mit twitch_user_id.
+        sqlx::query("INSERT INTO twitch_streamers (twitch_login, twitch_user_id) VALUES ('newbie', '321')")
+            .execute(&pool)
+            .await
+            .unwrap();
+        let app = make_router(pool.clone(), "secret");
+        let base = INTERNAL_API_BASE_PATH;
+        let req = loopback_req(
+            "POST",
+            &format!("{base}/streamers/newbie/verify"),
+            r#"{"mode":"permanent"}"#,
+            Some("secret"),
+        );
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let j = json_body(resp).await;
+        assert!(
+            j["message"].as_str().unwrap().contains("dauerhaft verifiziert"),
+            "war='{}'",
+            j["message"]
+        );
+
+        let (status, mvp): (Option<String>, Option<i32>) = sqlx::query_as(
+            "SELECT status, manual_verified_permanent FROM twitch_partners WHERE LOWER(twitch_login) = 'newbie'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(status.as_deref(), Some("active"), "promoted");
+        assert_eq!(mvp, Some(1));
+    }
+
+    /// verify mode=permanent für unbekannten Login (keine user_id auflösbar) →
+    /// "nicht gespeichert" (200), keine Promotion.
+    #[tokio::test]
+    async fn verify_permanent_unbekannt_gibt_nicht_gespeichert() {
+        let dsn = db_dsn_or_skip!();
+        let pool = make_pool(&dsn, "test_sh_verify_unknown_login").await;
+        let app = make_router(pool, "secret");
+        let base = INTERNAL_API_BASE_PATH;
+        let req = loopback_req(
+            "POST",
+            &format!("{base}/streamers/niemand/verify"),
+            r#"{"mode":"permanent"}"#,
+            Some("secret"),
+        );
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let j = json_body(resp).await;
+        assert!(j["message"].as_str().unwrap().contains("nicht gespeichert"));
+    }
+
+    /// verify unbekannter Modus → 200 "Unbekannter Modus", keine Mutation.
+    #[tokio::test]
+    async fn verify_unbekannter_modus_gibt_200() {
+        let dsn = db_dsn_or_skip!();
+        let pool = make_pool(&dsn, "test_sh_verify_badmode").await;
+        let app = make_router(pool, "secret");
+        let base = INTERNAL_API_BASE_PATH;
+        let req = loopback_req(
+            "POST",
+            &format!("{base}/streamers/drag/verify"),
+            r#"{"mode":"quatsch"}"#,
+            Some("secret"),
+        );
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let j = json_body(resp).await;
+        assert_eq!(j["message"], "Unbekannter Modus");
+    }
+
+    /// archive eines aktiven Partners liefert die kontextspezifische Meldung
+    /// "{login} archiviert" statt generisch "updated".
+    #[tokio::test]
+    async fn archive_aktiver_partner_liefert_kontext_meldung() {
+        let dsn = db_dsn_or_skip!();
+        let pool = make_pool(&dsn, "test_sh_archive_msg").await;
+        seed_active_partner(&pool, "drag", "42").await;
+        let app = make_router(pool, "secret");
+        let base = INTERNAL_API_BASE_PATH;
+        let req = loopback_req(
+            "POST",
+            &format!("{base}/streamers/drag/archive"),
+            r#"{"mode":"archive"}"#,
+            Some("secret"),
+        );
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let j = json_body(resp).await;
+        assert_eq!(j["message"], "drag archiviert");
     }
 
     // ── POST /streamers/:login/archive ───────────────────────────────────────
