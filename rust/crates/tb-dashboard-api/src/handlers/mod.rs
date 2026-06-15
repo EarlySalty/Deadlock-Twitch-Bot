@@ -26,6 +26,7 @@ pub mod category_timings;
 pub mod category_leaderboard;
 pub mod chat_analytics;
 pub mod chat_content_analysis;
+pub mod chat_deep_minimax;
 pub mod chat_hype_timeline;
 pub mod chat_social_graph;
 pub mod coaching;

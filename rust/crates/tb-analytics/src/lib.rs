@@ -15,6 +15,7 @@ pub mod bans;
 pub mod category_activity;
 pub mod chat_analytics;
 pub mod chat_analytics_lexicon;
+pub mod chat_deep_minimax;
 pub mod chat_content_analysis;
 pub mod chat_content_lexicon;
 pub mod chat_hype_timeline;
