@@ -488,48 +488,12 @@ impl PartnerChannelCheck for AlwaysPartner {
     }
 }
 
-/// Prüft ob ein Plan-Key (kanonisch oder Legacy) das Entitlement `chat.lurker_tax`
-/// trägt — echte Whitelist analog `plan_id_has_promos_disable` (Port von
-/// catalog.py:PLAN_ENTITLEMENTS_MAP + LEGACY_PLAN_NAME_TO_ID_MAP). Unbekannte/leere
-/// Plan-Keys tragen das Entitlement NICHT — vorher war es eine inverse Liste mit
-/// Default=true, wodurch Lurker auf Plänen ohne Tax-Entitlement namentlich
-/// öffentlich getaxt wurden.
-fn plan_id_has_lurker_tax(plan_id: &str) -> bool {
-    matches!(
-        plan_id.to_lowercase().as_str(),
-        // Kanonische Plan-IDs mit chat.lurker_tax (catalog.py).
-        "raid_boost"
-        | "bundle_chat_quiet_raid_boost"
-        | "analysis_dashboard"
-        | "bundle_analysis_raid_boost"
-        | "bundle_werbefrei_analyse"
-        | "bundle_komplett"
-        | "analytics_trial"
-        // Legacy-Namen die auf diese Plans mappen (LEGACY_PLAN_NAME_TO_ID_MAP).
-        | "chat_quiet_bundle" // → bundle_chat_quiet_raid_boost
-        | "analysis"          // → analysis_dashboard
-        | "bundle"            // → bundle_analysis_raid_boost
-    )
-}
-
-/// Prüft ob ein Plan-Key (canonical oder Legacy) das Entitlement chat.promos.disable trägt.
-/// Port von catalog.py:PLAN_ENTITLEMENTS_MAP + LEGACY_PLAN_NAME_TO_ID_MAP.
-fn plan_id_has_promos_disable(plan_id: &str) -> bool {
-    matches!(
-        plan_id.to_lowercase().as_str(),
-        // Kanonische Plan-IDs mit chat.promos.disable (catalog.py).
-        "chat_quiet"
-        | "bundle_chat_quiet_raid_boost"
-        | "bundle_analysis_raid_boost"
-        | "bundle_werbefrei_analyse"
-        | "bundle_komplett"
-        // Legacy-Namen die auf diese Plans mappen (LEGACY_PLAN_NAME_TO_ID_MAP).
-        | "werbefrei"
-        | "quiet"
-        | "chat_quiet_bundle"
-        | "bundle"
-    )
-}
+// Plan-Entitlement-Auflösung (chat.lurker_tax / chat.promos.disable) läuft über
+// `tb_analytics::plan::resolve_plan_snapshot` — die volle Snapshot-Resolution
+// (Manual-Override mit Ablauf-Gate via `manual_plan_expires_at`, Bundles, Legacy-
+// Aliase, Stripe-Abo-Fallback). Das ersetzt die frühere statische Plan-Whitelist:
+// sie kannte keinen Plan-Ablauf, sodass abgelaufene Werbefrei-/Lurker-Tax-Pläne
+// weiterwirkten. Single Source of Truth ist jetzt `tb_analytics::plan`.
 
 impl PromoEngine {
     /// Erzeugt eine neue PromoEngine. Default-Impls: StaticInviteResolver,
@@ -1227,12 +1191,11 @@ impl PromoEngine {
             return;
         }
 
-        // Lurker-Tax-Settings prüfen (promos.py:1357: _load_lurker_tax_settings).
-        // streamer_plans: lurker_tax_enabled=integer, manual_plan_id=text, plan_name=text (prod schema)
-        let settings: Option<(Option<i32>, Option<String>, Option<String>)> = sqlx::query_as(
+        // Lurker-Tax-Settings prüfen (promos.py:193: _load_lurker_tax_settings).
+        // streamer_plans.lurker_tax_enabled = integer (Opt-in-Flag, default 0).
+        let settings: Option<(Option<i32>, Option<String>)> = sqlx::query_as(
             "SELECT p.lurker_tax_enabled,
-                    COALESCE(p.manual_plan_id, ''),
-                    COALESCE(p.plan_name, '')
+                    COALESCE(p.twitch_user_id, '')
                FROM streamer_plans p
               WHERE LOWER(COALESCE(p.twitch_login,'')) = $1
               LIMIT 1",
@@ -1243,17 +1206,34 @@ impl PromoEngine {
         .ok()
         .flatten();
 
-        let (enabled, manual_plan_id, plan_name) = match settings {
-            Some((v, m, p)) => (v.unwrap_or(0) != 0, m.unwrap_or_default(), p.unwrap_or_default()),
+        let (enabled, plan_user_id) = match settings {
+            Some((v, uid)) => (v.unwrap_or(0) != 0, uid.unwrap_or_default()),
             None => return,
         };
         if !enabled {
             return;
         }
 
-        // is_paid_plan: Plan muss chat.lurker_tax-Entitlement haben (promos.py:1406).
-        let effective_plan = if !manual_plan_id.is_empty() { &manual_plan_id } else { &plan_name };
-        if !plan_id_has_lurker_tax(effective_plan) {
+        // is_paid_plan: effektiver Plan muss chat.lurker_tax-Entitlement haben
+        // (promos.py:355). Volle Snapshot-Resolution → abgelaufene Pläne taxen
+        // nicht mehr. user_id (aus streamer_plans oder identities) priorisiert
+        // den Override-Match.
+        let user_id = if !plan_user_id.is_empty() {
+            plan_user_id
+        } else {
+            sqlx::query_scalar::<_, Option<String>>(
+                "SELECT twitch_user_id FROM twitch_streamer_identities
+                  WHERE LOWER(twitch_login) = $1 LIMIT 1",
+            )
+            .bind(login.to_lowercase())
+            .fetch_optional(&self.pool)
+            .await
+            .ok()
+            .flatten()
+            .flatten()
+            .unwrap_or_default()
+        };
+        if !self.lurker_tax_is_paid_plan(login, &user_id).await {
             return;
         }
 
@@ -1663,39 +1643,64 @@ impl PromoEngine {
         }
     }
 
-    /// Plan-Flag-Check (promos.py:1061: `_promo_blocked_by_plan_or_flag`).
-    /// Prüft promo_disabled-Spalte UND Plan-Entitlement chat.promos.disable
-    /// (aus manual_plan_id / legacy plan_name, Parität mit Python).
-    /// Fail-open bei DB-Fehler.
+    /// Plan-Flag-Check (promos.py:1097: `_promo_blocked_by_plan_or_flag`).
+    ///
+    /// Zwei Gründe blockieren Bot-Werbung dauerhaft:
+    /// 1. `streamer_plans.promo_disabled = 1` (harte Abschaltung).
+    /// 2. Der effektive Plan trägt das Entitlement `chat.promos.disable`.
+    ///
+    /// Der Entitlement-Pfad läuft über die VOLLE Snapshot-Resolution
+    /// (`tb_analytics::plan::resolve_plan_snapshot`, Port von Pythons
+    /// `resolve_plan_snapshot_for_refs`): respektiert `manual_plan_expires_at`
+    /// (abgelaufene Pläne fallen auf `raid_free` zurück), löst Bundles/Legacy-
+    /// Namen auf kanonische IDs auf und zieht den Stripe-Abo-Fallback heran.
+    /// Damit werden Pläne, die Promo abschalten, nicht fälschlich ignoriert —
+    /// und umgekehrt schaltet ein abgelaufener Werbefrei-Plan die Werbung wieder
+    /// frei (vorher: statische Whitelist ohne Ablauf-Gate).
+    ///
+    /// Fail-open bei DB-Fehler (Infra-Issues blockieren nicht alle Promos).
+    /// Wie Python wird per Login referenziert (leerer user_id) — der periodische
+    /// Pfad iteriert ohnehin nur über aufgelöste Live-Kanäle.
     async fn promo_blocked_by_plan_or_flag(&self, login: &str) -> bool {
-        let row: Option<(Option<i32>, Option<String>, Option<String>)> = sqlx::query_as(
-            "SELECT COALESCE(promo_disabled, 0),
-                    COALESCE(manual_plan_id, ''),
-                    COALESCE(plan_name, '')
+        let normalized = login.trim().to_lowercase();
+        if normalized.is_empty() {
+            return false;
+        }
+
+        // 1. Harte promo_disabled-Spalte (greift vor jeder Override-Auswertung).
+        let promo_disabled: Option<(Option<i32>,)> = sqlx::query_as(
+            "SELECT COALESCE(promo_disabled, 0)
                FROM streamer_plans
               WHERE LOWER(COALESCE(twitch_login,'')) = $1
               LIMIT 1",
         )
-        .bind(login.to_lowercase())
+        .bind(&normalized)
         .fetch_optional(&self.pool)
         .await
         .ok()
         .flatten();
-
-        match row {
-            None => false, // Fail-open.
-            Some((promo_disabled, manual_plan_id, plan_name)) => {
-                if promo_disabled.unwrap_or(0) != 0 {
-                    return true;
-                }
-                // Entitlement-Pfad: manual_plan_id hat Vorrang, Fallback auf plan_name.
-                let effective_id = manual_plan_id
-                    .as_deref()
-                    .filter(|s| !s.is_empty())
-                    .or(plan_name.as_deref().filter(|s| !s.is_empty()))
-                    .unwrap_or("");
-                plan_id_has_promos_disable(effective_id)
+        if let Some((flag,)) = promo_disabled {
+            if flag.unwrap_or(0) != 0 {
+                return true;
             }
+        }
+
+        // 2. Entitlement-Pfad über volle Plan-Snapshot-Resolution.
+        match tb_analytics::plan::resolve_plan_snapshot(&self.pool, &normalized, "").await {
+            Ok(snapshot) => snapshot.entitlements.contains(&"chat.promos.disable"),
+            Err(_) => false, // Fail-open.
+        }
+    }
+
+    /// Lurker-Tax `is_paid_plan`-Gate (promos.py:355: der Plan muss das
+    /// Entitlement `chat.lurker_tax` tragen). Nutzt die volle Snapshot-Resolution,
+    /// damit abgelaufene Pläne (`manual_plan_expires_at` in der Vergangenheit) das
+    /// kostenpflichtige Lurker-Tax-Feature NICHT mehr freischalten.
+    /// `user_id` priorisiert den Override-Match (CASE-Order in der Resolution).
+    async fn lurker_tax_is_paid_plan(&self, login: &str, user_id: &str) -> bool {
+        match tb_analytics::plan::resolve_plan_snapshot(&self.pool, login, user_id).await {
+            Ok(snapshot) => snapshot.entitlements.contains(&"chat.lurker_tax"),
+            Err(_) => false,
         }
     }
 
@@ -2169,31 +2174,10 @@ mod tests {
         );
     }
 
-    #[test]
-    fn lurker_tax_nur_fuer_berechtigte_plaene() {
-        // Plans MIT chat.lurker_tax (catalog.py + Legacy-Aliase).
-        for p in [
-            "raid_boost",
-            "bundle_chat_quiet_raid_boost",
-            "analysis_dashboard",
-            "bundle_analysis_raid_boost",
-            "bundle_werbefrei_analyse",
-            "bundle_komplett",
-            "analytics_trial",
-            "chat_quiet_bundle",
-            "analysis",
-            "bundle",
-            "RAID_BOOST", // Case-Insensitivität
-        ] {
-            assert!(plan_id_has_lurker_tax(p), "{p} sollte Lurker-Tax tragen");
-        }
-        // Plans OHNE chat.lurker_tax — dürfen NICHT taxen (Regression: vorher Default=true).
-        for p in [
-            "", "free", "raid_free", "chat_quiet", "werbefrei", "quiet", "basic", "unbekannt",
-        ] {
-            assert!(!plan_id_has_lurker_tax(p), "{p} darf KEIN Lurker-Tax tragen");
-        }
-    }
+    // Plan-Entitlement-Mapping (chat.lurker_tax / chat.promos.disable inkl.
+    // Legacy-Aliase + Bundles) wird zentral in `tb_analytics::plan` gepflegt und
+    // getestet. Das Lurker-Tax-/Promo-Gating hier deckt das Verhalten end-to-end
+    // über `resolve_plan_snapshot` ab (siehe db_tests, inkl. Plan-Ablauf).
 }
 
 // ---------------------------------------------------------------------------
@@ -2266,8 +2250,9 @@ mod db_tests {
                 archived_at TEXT
             )"#,
             // streamer_plans — promo_disabled=integer, lurker_tax_enabled=integer,
-            // promo_message=text, manual_plan_id/plan_name=text (Entitlement-Pfad
-            // von promo_blocked_by_plan_or_flag + lurker_settings_db).
+            // promo_message=text, manual_plan_id/plan_name=text. Die Plan-Resolution
+            // läuft über tb_analytics::plan::resolve_plan_snapshot — die braucht
+            // manual_plan_expires_at (Ablauf-Gate) + manual_plan_updated_at (CASE-Order).
             r#"CREATE TABLE streamer_plans (
                 twitch_user_id TEXT PRIMARY KEY,
                 twitch_login TEXT,
@@ -2275,7 +2260,21 @@ mod db_tests {
                 lurker_tax_enabled INTEGER DEFAULT 0,
                 promo_message TEXT,
                 manual_plan_id TEXT,
+                manual_plan_expires_at TIMESTAMPTZ,
+                manual_plan_updated_at TIMESTAMPTZ,
+                manual_plan_notes TEXT,
+                trial_ever_granted INTEGER DEFAULT 0,
+                first_login_at TIMESTAMPTZ,
                 plan_name TEXT
+            )"#,
+            // twitch_billing_subscriptions — Stripe-Abo-Fallback der Plan-Resolution
+            // (resolve_plan_snapshot Schritt 2). status=text, current_period_end=TIMESTAMPTZ.
+            r#"CREATE TABLE twitch_billing_subscriptions (
+                customer_reference TEXT NOT NULL,
+                plan_id TEXT,
+                status TEXT,
+                current_period_end TIMESTAMPTZ,
+                updated_at TIMESTAMPTZ DEFAULT NOW()
             )"#,
             // twitch_streamer_identities — twitch_user_id=text, twitch_login=text
             r#"CREATE TABLE twitch_streamer_identities (
@@ -2524,6 +2523,101 @@ mod db_tests {
 
         let blocked = engine.promo_blocked_by_plan_or_flag("erlaubt").await;
         assert!(!blocked, "promo_disabled=0 → nicht blockiert");
+    }
+
+    // -----------------------------------------------------------------------
+    // promos-engine-6: Volle Plan-Snapshot-Resolution
+    // (Plan-Ablauf via manual_plan_expires_at + chat.promos.disable-Entitlement)
+    // -----------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn promo_disable_entitlement_blockiert_bei_aktivem_plan() {
+        // Aktiver chat_quiet-Override (kein Ablauf) → chat.promos.disable greift.
+        // User-Betonung: Pläne die Promo abschalten dürfen NICHT ignoriert werden.
+        let pool = pool_or_skip!("promo_entitlement_aktiv");
+        let engine = make_engine(pool.clone());
+
+        sqlx::query(
+            "INSERT INTO streamer_plans (twitch_user_id, twitch_login, manual_plan_id)
+             VALUES ('uq1', 'werbefreikanal', 'chat_quiet')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let blocked = engine.promo_blocked_by_plan_or_flag("werbefreikanal").await;
+        assert!(blocked, "aktiver chat_quiet → chat.promos.disable → blockiert");
+    }
+
+    #[tokio::test]
+    async fn promo_disable_entitlement_blockiert_bei_zukuenftigem_ablauf() {
+        // manual_plan_expires_at in der Zukunft → Plan effektiv → blockiert.
+        let pool = pool_or_skip!("promo_entitlement_zukunft");
+        let engine = make_engine(pool.clone());
+
+        sqlx::query(
+            "INSERT INTO streamer_plans (twitch_user_id, twitch_login, manual_plan_id, manual_plan_expires_at)
+             VALUES ('uq2', 'zukunftkanal', 'bundle_komplett', NOW() + INTERVAL '30 days')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let blocked = engine.promo_blocked_by_plan_or_flag("zukunftkanal").await;
+        assert!(blocked, "nicht abgelaufenes bundle_komplett → chat.promos.disable → blockiert");
+    }
+
+    #[tokio::test]
+    async fn abgelaufener_promo_disable_plan_blockiert_nicht() {
+        // manual_plan_expires_at in der Vergangenheit → Plan NICHT effektiv →
+        // fällt auf raid_free zurück → KEINE chat.promos.disable → nicht blockiert.
+        let pool = pool_or_skip!("promo_entitlement_abgelaufen");
+        let engine = make_engine(pool.clone());
+
+        sqlx::query(
+            "INSERT INTO streamer_plans (twitch_user_id, twitch_login, manual_plan_id, manual_plan_expires_at)
+             VALUES ('uq3', 'abgelaufenkanal', 'chat_quiet', NOW() - INTERVAL '1 day')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let blocked = engine.promo_blocked_by_plan_or_flag("abgelaufenkanal").await;
+        assert!(!blocked, "abgelaufener chat_quiet → Plan nicht effektiv → nicht blockiert");
+    }
+
+    #[tokio::test]
+    async fn lurker_tax_is_paid_plan_respektiert_ablauf() {
+        // Aktiver raid_boost → chat.lurker_tax → is_paid_plan true.
+        // Abgelaufener raid_boost → raid_free → is_paid_plan false.
+        let pool = pool_or_skip!("promo_lurker_paid_plan");
+        let engine = make_engine(pool.clone());
+
+        sqlx::query(
+            "INSERT INTO twitch_streamer_identities (twitch_user_id, twitch_login)
+             VALUES ('upaid', 'paidkanal'), ('uexp', 'expkanal')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO streamer_plans (twitch_user_id, twitch_login, manual_plan_id, manual_plan_expires_at)
+             VALUES
+               ('upaid', 'paidkanal', 'raid_boost', NOW() + INTERVAL '10 days'),
+               ('uexp',  'expkanal',  'raid_boost', NOW() - INTERVAL '1 day')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        assert!(
+            engine.lurker_tax_is_paid_plan("paidkanal", "upaid").await,
+            "aktiver raid_boost → chat.lurker_tax → is_paid_plan"
+        );
+        assert!(
+            !engine.lurker_tax_is_paid_plan("expkanal", "uexp").await,
+            "abgelaufener raid_boost → raid_free → kein is_paid_plan"
+        );
     }
 
     // -----------------------------------------------------------------------
