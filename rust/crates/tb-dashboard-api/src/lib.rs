@@ -273,6 +273,10 @@ pub fn build_authed_router(pool: PgPool, token: String) -> Router {
             get(exp_analytics::exp_overview_handler),
         )
         .route(
+            "/twitch/api/v2/exp/game-breakdown",
+            get(exp_analytics::exp_game_breakdown_handler),
+        )
+        .route(
             "/twitch/api/v2/audience-demographics",
             get(audience_demographics::audience_demographics_handler),
         )

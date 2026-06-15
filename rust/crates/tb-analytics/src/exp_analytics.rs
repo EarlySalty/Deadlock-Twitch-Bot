@@ -59,6 +59,41 @@ pub async fn load_exp_overview(pool: &PgPool, streamer: &str, days: i64) -> Resu
     }))
 }
 
+/// Per-Game-Aggregat je Streamer (Python `_load_exp_game_breakdown_payload`).
+/// Gibt ein JSON-Array zurück (sortiert nach Ø-Viewern absteigend).
+pub async fn load_exp_game_breakdown(pool: &PgPool, streamer: &str, days: i64) -> Result<Value, sqlx::Error> {
+    let since = since_iso(days);
+    let streamer = streamer.to_lowercase();
+    let rows: Vec<(String, i64, Option<f64>, Option<i64>, Option<f64>, Option<f64>)> = sqlx::query_as(
+        "SELECT COALESCE(game_name, '') AS game_name, COUNT(*)::bigint AS sessions, \
+                COALESCE(AVG(avg_viewers), 0)::float8 AS avg_v, COALESCE(MAX(peak_viewers), 0)::bigint AS peak_v, \
+                COALESCE(AVG(duration_min), 0)::float8 AS avg_dur, COALESCE(AVG(follower_delta), 0)::float8 AS avg_fd \
+         FROM exp_sessions \
+         WHERE LOWER(streamer) = $1 AND started_at >= $2 AND ended_at IS NOT NULL \
+         GROUP BY game_name ORDER BY avg_v DESC",
+    )
+    .bind(&streamer)
+    .bind(&since)
+    .fetch_all(pool)
+    .await?;
+
+    let items: Vec<Value> = rows
+        .into_iter()
+        .map(|(game, sessions, avg, peak, dur, fdelta)| {
+            let game = if game.is_empty() { "(unbekannt)".to_string() } else { game };
+            json!({
+                "game": game,
+                "sessions": sessions,
+                "avgViewers": round1(avg.unwrap_or(0.0)),
+                "peakViewers": peak.unwrap_or(0),
+                "avgDurationMin": round1(dur.unwrap_or(0.0)),
+                "avgFollowerDelta": round1(fdelta.unwrap_or(0.0)),
+            })
+        })
+        .collect();
+    Ok(Value::Array(items))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -75,12 +110,42 @@ mod tests {
         let pool = PgPoolOptions::new().max_connections(2).connect_with(opts).await.unwrap();
         sqlx::query(
             "CREATE TABLE exp_sessions (streamer TEXT, started_at TEXT, ended_at TEXT, game_name TEXT, \
-             peak_viewers INTEGER, avg_viewers REAL, duration_min REAL)",
+             peak_viewers INTEGER, avg_viewers REAL, duration_min REAL, follower_delta INTEGER)",
         )
         .execute(&pool)
         .await
         .unwrap();
         Some(pool)
+    }
+
+    #[tokio::test]
+    async fn game_breakdown_array_sortiert() {
+        let Some(pool) = make_pool("t_exp_gb").await else { return };
+        sqlx::query("INSERT INTO exp_sessions (streamer, started_at, ended_at, game_name, peak_viewers, avg_viewers, duration_min, follower_delta) VALUES \
+            ('nani','2026-06-10T00:00:00+00:00','2026-06-10T02:00:00+00:00','CS2',60,50,120,2), \
+            ('nani','2026-06-11T00:00:00+00:00','2026-06-11T02:00:00+00:00','Deadlock',300,200,90,10), \
+            ('nani','2026-06-12T00:00:00+00:00','2026-06-12T02:00:00+00:00','Deadlock',100,100,90,4), \
+            ('nani','2026-06-13T00:00:00+00:00',NULL,'Deadlock',999,999,1,1)")
+            .execute(&pool).await.unwrap();
+
+        let v = load_exp_game_breakdown(&pool, "nani", 3650).await.unwrap();
+        let arr = v.as_array().unwrap();
+        assert_eq!(arr.len(), 2); // 2 Spiele (laufende ignoriert)
+        // Sortiert nach avgViewers DESC → Deadlock (Ø 150) vor CS2 (50).
+        assert_eq!(arr[0]["game"], "Deadlock");
+        assert_eq!(arr[0]["sessions"], 2);
+        assert_eq!(arr[0]["avgViewers"], 150.0);
+        assert_eq!(arr[0]["peakViewers"], 300); // MAX
+        assert_eq!(arr[0]["avgFollowerDelta"], 7.0); // (10+4)/2
+        assert_eq!(arr[1]["game"], "CS2");
+    }
+
+    #[tokio::test]
+    async fn game_breakdown_leeres_game_unbekannt() {
+        let Some(pool) = make_pool("t_exp_gb_unknown").await else { return };
+        sqlx::query("INSERT INTO exp_sessions (streamer, started_at, ended_at, game_name, avg_viewers) VALUES ('nani','2026-06-10T00:00:00+00:00','2026-06-10T02:00:00+00:00',NULL,30)").execute(&pool).await.unwrap();
+        let v = load_exp_game_breakdown(&pool, "nani", 3650).await.unwrap();
+        assert_eq!(v[0]["game"], "(unbekannt)");
     }
 
     #[tokio::test]

@@ -50,6 +50,32 @@ pub async fn exp_overview_handler(
     }
 }
 
+/// `GET /twitch/api/v2/exp/game-breakdown?streamer=&days=30`
+pub async fn exp_game_breakdown_handler(
+    auth: DashboardAuthLevel,
+    State(pool): State<PgPool>,
+    Query(params): Query<ExpQuery>,
+) -> impl IntoResponse {
+    if let Some(resp) = crate::auth::extended_gate(&pool, &auth).await {
+        return resp;
+    }
+    let streamer = match params.streamer.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+        Some(s) => s.to_lowercase(),
+        None => {
+            return (StatusCode::BAD_REQUEST, Json(json!({ "error": "streamer parameter required" }))).into_response();
+        }
+    };
+    let days = params.days.unwrap_or(30).clamp(1, 365) as i64;
+
+    match tb_analytics::exp_analytics::load_exp_game_breakdown(&pool, &streamer, days).await {
+        Ok(v) => Json(v).into_response(),
+        Err(e) => {
+            tracing::error!("exp/game-breakdown SELECT-Fehler: {e}");
+            (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": "internal" }))).into_response()
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
