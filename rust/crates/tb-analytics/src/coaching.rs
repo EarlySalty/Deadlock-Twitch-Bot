@@ -883,6 +883,82 @@ pub async fn retention_coaching(
     }))
 }
 
+/// Doppel-Stream-Erkennung (Python `_double_stream_detection`): Tage mit
+/// mehreren Sessions, plus Vergleich der Tages-Ø-Viewer von Einzel- vs.
+/// Doppel-Stream-Tagen. `date` als ISO-String (= `_sanitize_coaching_payload`,
+/// das `date.isoformat()` anwendet).
+pub async fn double_stream_detection(
+    pool: &PgPool,
+    streamer: &str,
+    since: DateTime<Utc>,
+) -> Result<Value, sqlx::Error> {
+    // 1) Doppel-Stream-Tage.
+    let rows: Vec<(chrono::NaiveDate, i64, Option<f64>)> = sqlx::query_as(
+        "SELECT DATE(started_at), COUNT(*)::bigint, AVG(avg_viewers)::float8 \
+           FROM twitch_stream_sessions \
+          WHERE streamer_login = $1 AND started_at >= $2 AND duration_seconds > 300 \
+          GROUP BY 1 \
+         HAVING COUNT(*) > 1 \
+          ORDER BY 1 DESC",
+    )
+    .bind(streamer)
+    .bind(since)
+    .fetch_all(pool)
+    .await?;
+
+    let occurrences: Vec<Value> = rows
+        .iter()
+        .map(|(date, count, avg)| {
+            json!({
+                "date": date.to_string(),
+                "sessionCount": count,
+                "avgViewers": round1(avg.unwrap_or(0.0)),
+            })
+        })
+        .collect();
+
+    // 2) Tages-Ø der Einzel-Stream-Tage.
+    let single_avg: Option<f64> = sqlx::query_scalar(
+        "SELECT AVG(day_avg)::float8 FROM ( \
+            SELECT DATE(started_at) AS d, AVG(avg_viewers) AS day_avg \
+              FROM twitch_stream_sessions \
+             WHERE streamer_login = $1 AND started_at >= $2 AND duration_seconds > 300 \
+             GROUP BY d \
+            HAVING COUNT(*) = 1 \
+         ) sub",
+    )
+    .bind(streamer)
+    .bind(since)
+    .fetch_one(pool)
+    .await?;
+
+    // 3) Tages-Ø der Doppel-Stream-Tage.
+    let double_avg: Option<f64> = sqlx::query_scalar(
+        "SELECT AVG(day_avg)::float8 FROM ( \
+            SELECT DATE(started_at) AS d, AVG(avg_viewers) AS day_avg \
+              FROM twitch_stream_sessions \
+             WHERE streamer_login = $1 AND started_at >= $2 AND duration_seconds > 300 \
+             GROUP BY d \
+            HAVING COUNT(*) > 1 \
+         ) sub",
+    )
+    .bind(streamer)
+    .bind(since)
+    .fetch_one(pool)
+    .await?;
+
+    let count = occurrences.len();
+    let shown: Vec<&Value> = occurrences.iter().take(10).collect();
+
+    Ok(json!({
+        "detected": count > 0,
+        "count": count,
+        "occurrences": shown,
+        "singleDayAvg": retention_value(single_avg),
+        "doubleDayAvg": retention_value(double_avg),
+    }))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -895,7 +971,9 @@ mod tests {
         sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE")).execute(&admin).await.unwrap();
         sqlx::query(&format!("CREATE SCHEMA {schema}")).execute(&admin).await.unwrap();
         admin.close().await;
-        let opts = PgConnectOptions::from_str(&dsn).unwrap().options([("search_path", schema)]);
+        let opts = PgConnectOptions::from_str(&dsn)
+            .unwrap()
+            .options([("search_path", schema), ("timezone", "UTC")]);
         let pool = PgPoolOptions::new().max_connections(2).connect_with(opts).await.unwrap();
         sqlx::query("CREATE TABLE twitch_stream_sessions (id BIGSERIAL PRIMARY KEY, streamer_login TEXT, started_at TIMESTAMPTZ, duration_seconds INTEGER, avg_viewers REAL, follower_delta INTEGER, stream_title TEXT, peak_viewers INTEGER, unique_chatters INTEGER, retention_5m REAL, tags TEXT)")
             .execute(&pool).await.unwrap();
@@ -1255,5 +1333,34 @@ mod tests {
         assert_eq!(v["criticalDropoffMinute"], 5);
         // Top-Performer = other: 200/200 = 100 % bei Minute 0.
         assert_eq!(v["topPerformerCurve"][0], json!({ "minute": 0, "avgViewerPct": 100.0 }));
+    }
+
+    #[tokio::test]
+    async fn double_stream_detection_berechnet() {
+        let Some(pool) = make_pool("t_coach_double").await else { return };
+        // 2026-06-10: 2 Sessions (avg 40/60 → Tages-Ø 50) = Doppel-Stream-Tag.
+        // 2026-06-11: 1 Session (avg 30) = Einzel-Tag.
+        sqlx::query(
+            "INSERT INTO twitch_stream_sessions (streamer_login, started_at, duration_seconds, avg_viewers) VALUES \
+            ('nani', TIMESTAMPTZ '2026-06-10 12:00:00+00', 7200, 40), \
+            ('nani', TIMESTAMPTZ '2026-06-10 20:00:00+00', 7200, 60), \
+            ('nani', TIMESTAMPTZ '2026-06-11 18:00:00+00', 7200, 30)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let v = double_stream_detection(&pool, "nani", Utc::now() - chrono::Duration::days(365))
+            .await
+            .unwrap();
+
+        assert_eq!(v["detected"], true);
+        assert_eq!(v["count"], 1);
+        assert_eq!(v["occurrences"][0]["date"], "2026-06-10");
+        assert_eq!(v["occurrences"][0]["sessionCount"], 2);
+        assert_eq!(v["occurrences"][0]["avgViewers"], 50.0);
+        // Tages-Ø: Einzel-Tag 30, Doppel-Tag 50.
+        assert_eq!(v["singleDayAvg"], 30.0);
+        assert_eq!(v["doubleDayAvg"], 50.0);
     }
 }
