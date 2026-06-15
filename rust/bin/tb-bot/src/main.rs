@@ -778,6 +778,80 @@ async fn main() {
         tracing::warn!("HighlightClipper: kein HelixClient — Worker nicht gestartet");
     }
 
+    // Social-Media-Posting-Pipeline (Port von bot/social_media): sechs
+    // Hintergrund-Worker. In Python (bootstrap) bedingungslos instanziiert
+    // (`if services.api`) → hier ebenso bedingungslos gespawnt; jeder Worker hat
+    // ein eigenes Intervall + Initial-Delay und ist still, solange keine Arbeit
+    // ansteht (keine onboardeten Plattformen / keine pending Clips). An/Aus wird
+    // datengetrieben über `social_media_settings` gesteuert (Consent +
+    // Auto-Approve je Plattform) — identisch zu Python.
+    {
+        // Cipher-freie Worker: Retention-Cleanup, Approval-Queue, Report-Dispatcher.
+        let retention = tb_social_media::retention_worker::RetentionWorker::new(pool.clone());
+        tokio::spawn(async move { retention.run().await });
+        let approval = tb_social_media::approval_worker::ApprovalWorker::new(pool.clone());
+        tokio::spawn(async move { approval.run().await });
+        let reports = tb_social_media::report_dispatcher::ReportDispatcher::new(pool.clone());
+        tokio::spawn(async move { reports.run().await });
+
+        // Enrichment: LLM-Dispatcher (Consent aus Settings) + optionaler
+        // OpenAI-Whisper-Transcriber. Ohne OPENAI_API_KEY bleibt der Transcriber
+        // None → Transkription wird übersprungen (1:1 wie ein fehlender Key).
+        let llm: Arc<dyn tb_social_media::enrich_pipeline::EnrichmentLlm> =
+            Arc::new(tb_social_media::llm_dispatch::LlmDispatcher::new(pool.clone()));
+        let mut enrichment =
+            tb_social_media::enrichment_worker::EnrichmentWorker::new(pool.clone(), llm);
+        match tb_social_media::whisper::OpenAiTranscriber::from_env() {
+            Some(transcriber) => {
+                enrichment = enrichment.with_transcriber(Arc::new(transcriber));
+                tracing::info!("Social-Media-Enrichment: OpenAI-Whisper-Transcriber aktiv");
+            }
+            None => {
+                tracing::info!(
+                    "Social-Media-Enrichment: kein OPENAI_API_KEY — Transkription übersprungen"
+                );
+            }
+        }
+        tokio::spawn(async move { enrichment.run().await });
+
+        // Upload + Insights brauchen den Field-Cipher (verschlüsselte
+        // Plattform-Tokens). Fehlt DB_MASTER_KEY_V1, laufen nur die cipher-freien
+        // Worker — die Token-abhängigen bleiben aus statt zu paniken.
+        match tb_crypto::FieldCipher::from_env() {
+            Ok(cipher) => {
+                let cipher = Arc::new(cipher);
+                let cwd =
+                    std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+                let upload_creds = tb_social_media::credentials::CredentialManager::new(
+                    pool.clone(),
+                    cipher.clone(),
+                );
+                // yt-dlp wie beim Highlight-Clipper aus dem venv (systemd-PATH
+                // enthält ~/.local/bin nicht); clips_dir = Python-Default data/clips.
+                let upload = tb_social_media::upload_worker::UploadWorker::new(
+                    pool.clone(),
+                    upload_creds,
+                )
+                .with_yt_dlp(cwd.join(".venv/bin/yt-dlp").to_string_lossy().into_owned());
+                tokio::spawn(async move { upload.run().await });
+
+                let insights_creds =
+                    tb_social_media::credentials::CredentialManager::new(pool.clone(), cipher);
+                let insights = tb_social_media::insights_worker::InsightsWorker::new(
+                    pool.clone(),
+                    insights_creds,
+                );
+                tokio::spawn(async move { insights.run().await });
+            }
+            Err(e) => {
+                tracing::warn!(
+                    "Social-Media Upload/Insights: kein Field-Cipher ({e}) — Worker aus"
+                );
+            }
+        }
+        tracing::info!("Social-Media-Pipeline-Worker gestartet (6 Loops)");
+    }
+
     // Poll-Loop: das Cutover-Gate. Default AUS — Python bleibt alleiniger
     // Live-Writer, bis der Flip (04-cutover-plan) explizit erfolgt.
     let poll_enabled = std::env::var("TB_MONITORING_POLL_ENABLED")
@@ -890,11 +964,15 @@ async fn main() {
         None
     };
 
-    // Clip-Fetch-Task: gebaut aber standardmäßig deaktiviert (TB_CLIP_FETCHER_ENABLED≠1).
-    // Setzt Helix-Client voraus — ohne ihn kein Start, auch wenn Env-Var gesetzt.
+    // Clip-Fetch-Task: füttert die Social-Media-Pipeline mit neuen Twitch-Clips
+    // aktiver Partner (alle 6h). In Python (ClipFetcher.__init__) bedingungslos
+    // AN; hier — wie der Highlight-Clipper — an die Helix-Verfügbarkeit gebunden
+    // (ohne Helix keine Clip-Reads). Auto-Uploads bleiben datengetrieben über
+    // social_media_settings (Consent + Auto-Approve) gegated, 1:1 zu Python.
     if let Some(ref h) = *helix {
-        tb_social_media::build_clip_fetch_task(pool.clone(), std::sync::Arc::new(h.clone()))
-            .start_if_enabled();
+        tb_social_media::build_clip_fetch_task(pool.clone(), std::sync::Arc::new(h.clone())).start();
+    } else {
+        tracing::warn!("clip_fetch: kein HelixClient — Clip-Fetcher nicht gestartet");
     }
 
     // Scout-Task: entdeckt live Deadlock-Streamer und registriert sie als monitoring-only.

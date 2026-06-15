@@ -11,9 +11,9 @@ const INITIAL_DELAY: Duration = Duration::from_secs(60);
 
 /// Periodischer Hintergrund-Task für den Clip-Fetcher.
 ///
-/// **Standardmäßig deaktiviert** — wird erst durch `TB_CLIP_FETCHER_ENABLED=1`
-/// gestartet. So kann der Code in Production deployt werden bevor die Funktion
-/// live geht.
+/// In Python (`ClipFetcher.__init__`) bedingungslos gestartet (always-on, 6h).
+/// [`start`](Self::start) spiegelt das; [`start_if_enabled`](Self::start_if_enabled)
+/// bleibt als gegateter Einstieg für den Vor-Cutover-Zustand erhalten.
 pub struct ClipFetchTask {
     service: Arc<ClipFetchService>,
     interval: Duration,
@@ -27,6 +27,16 @@ impl ClipFetchTask {
             interval: DEFAULT_INTERVAL,
             initial_delay: INITIAL_DELAY,
         }
+    }
+
+    /// Startet den Task bedingungslos (1:1 zu Pythons always-on-ClipFetcher).
+    pub fn start(self) {
+        tracing::info!(
+            "clip_fetch: Task startet (Intervall={}s, InitialDelay={}s)",
+            self.interval.as_secs(),
+            self.initial_delay.as_secs(),
+        );
+        tokio::spawn(self.run());
     }
 
     /// Startet den Task, falls `TB_CLIP_FETCHER_ENABLED=1` gesetzt ist.

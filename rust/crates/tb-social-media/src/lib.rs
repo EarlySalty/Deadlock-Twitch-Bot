@@ -40,10 +40,14 @@
 //! - `report_writer` — Report-Aggregation + Markdown (social_media_reports).
 //! - `report_dispatcher` — wöchentlicher Admin-Report-Generator (DM=B10 aus).
 //!
-//! # Deaktiviert
-//! Der Clip-Fetcher-Task ist **standardmäßig deaktiviert** und wird nicht in
-//! `tb-bot` gestartet bis die Social-Media-Pipeline bereit ist. Aktivierung:
-//! Env-Var setzen + `ClipFetchTask::start_if_enabled()` aufrufen.
+//! # Live
+//! Seit dem Pipeline-Cutover startet `tb-bot` den Clip-Fetcher **bedingungslos**
+//! (`ClipFetchTask::start`, sobald ein Helix-Client vorhanden ist) gemeinsam mit
+//! den sechs Pipeline-Workern (Upload/Retention/Enrichment/Approval-Queue/
+//! Insights/Report-Dispatcher) — 1:1 zu Pythons `runtime_bootstrap`. Auto-Uploads
+//! bleiben datengetrieben über `social_media_settings` (Consent + Auto-Approve je
+//! Plattform) gegated. `start_if_enabled` (Env-Gate `TB_CLIP_FETCHER_ENABLED`)
+//! bleibt als Pre-Cutover-Einstieg erhalten.
 
 pub mod analytics;
 pub mod approval;
