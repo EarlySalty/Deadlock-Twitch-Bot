@@ -7,11 +7,15 @@
 //! Die Keyword-Listen sind exakt aus der Python-Quelle generiert
 //! ([`crate::chat_analytics_lexicon`]).
 
-use chrono::{DateTime, Utc};
-use serde_json::Value;
+use std::collections::{HashMap, HashSet};
+
+use chrono::{DateTime, Duration, Timelike, Utc};
+use chrono_tz::Tz;
+use serde_json::{json, Value};
 use sqlx::PgPool;
 
 use crate::chat_analytics_lexicon::*;
+use crate::engagement_metrics::{calculate_engagement, percentile_of, quantile, EngagementInputs};
 use crate::raw_chat_status::{build_raw_chat_status, Scope};
 
 const KNOWN_CHAT_BOTS: &[&str] = &[
@@ -281,6 +285,344 @@ pub async fn load_chat_analytics_snapshot(
     })
 }
 
+fn round1(v: f64) -> f64 {
+    (v * 10.0).round() / 10.0
+}
+fn round2(v: f64) -> f64 {
+    (v * 100.0).round() / 100.0
+}
+fn round3(v: f64) -> f64 {
+    (v * 1000.0).round() / 1000.0
+}
+
+fn emit_iso(dt: DateTime<Utc>) -> String {
+    use chrono::SecondsFormat;
+    if dt.timestamp_subsec_nanos() == 0 {
+        dt.to_rfc3339_opts(SecondsFormat::Secs, false)
+    } else {
+        dt.to_rfc3339_opts(SecondsFormat::Micros, false)
+    }
+}
+
+/// Zielzeitzone auflösen (Python `_resolve_target_timezone`): IANA-Name → (Tz, Name),
+/// leer/„UTC"/unbekannt → (UTC, "UTC").
+fn resolve_target_timezone(requested: Option<&str>) -> (Tz, String) {
+    let tz_name = requested.unwrap_or("UTC").trim();
+    if tz_name.is_empty() || tz_name.eq_ignore_ascii_case("UTC") {
+        return (Tz::UTC, "UTC".to_string());
+    }
+    match tz_name.parse::<Tz>() {
+        Ok(tz) => (tz, tz_name.to_string()),
+        Err(_) => (Tz::UTC, "UTC".to_string()),
+    }
+}
+
+/// Lädt + aggregiert die chat-analytics (Python `_api_v2_chat_analytics`-Body).
+pub async fn load_chat_analytics_payload(
+    pool: &PgPool,
+    streamer: &str,
+    days: i64,
+    timezone: Option<&str>,
+) -> Result<Value, sqlx::Error> {
+    let since = Utc::now() - Duration::days(days);
+    let (target_tz, timezone_name) = resolve_target_timezone(timezone);
+    let snap = load_chat_analytics_snapshot(pool, streamer, since).await?;
+
+    let session_count = snap.session_count;
+    let total_duration_seconds = snap.total_duration_seconds;
+    let avg_viewers = snap.avg_viewers.unwrap_or(0.0);
+    let viewer_minutes_fallback = snap.viewer_minutes_fallback;
+
+    let viewer_sample_count = snap.viewer_sample_count;
+    let viewer_minutes = if viewer_sample_count > 0 {
+        snap.viewer_minutes_samples
+    } else {
+        viewer_minutes_fallback
+    };
+    let viewer_minutes_has_real_samples = viewer_sample_count > 0;
+
+    // Pro-Session Message-Density (Nachrichten je 100 Viewer-Minuten).
+    let mut density: Vec<f64> = Vec::new();
+    for (_id, msg_count, vmin) in &snap.session_benchmark_rows {
+        if *vmin <= 0.0 {
+            continue;
+        }
+        density.push((*msg_count as f64 / *vmin) * 100.0);
+    }
+
+    // Nachrichten-Durchlauf: Klassifikation, Stunden-Histogramm, distinct Chatter.
+    let total_messages = snap.all_messages.len() as i64;
+    let mut command_messages = 0i64;
+    let mut distinct: HashSet<String> = HashSet::new();
+    let mut type_counts: HashMap<&'static str, i64> = HashMap::new();
+    let mut type_order: Vec<&'static str> = Vec::new();
+    let mut hour_counts: HashMap<u32, i64> = HashMap::new();
+    for m in &snap.all_messages {
+        let content = m.content.as_deref().unwrap_or("");
+        if m.is_command.unwrap_or(false) {
+            command_messages += 1;
+        }
+        let key = m
+            .chatter_login
+            .as_deref()
+            .filter(|s| !s.is_empty())
+            .or_else(|| m.chatter_id.as_deref().filter(|s| !s.is_empty()));
+        if let Some(k) = key {
+            distinct.insert(k.to_string());
+        }
+        let mt = classify_message(content);
+        if !type_counts.contains_key(mt) {
+            type_order.push(mt);
+        }
+        *type_counts.entry(mt).or_insert(0) += 1;
+        let hour = m.message_ts.with_timezone(&target_tz).hour();
+        *hour_counts.entry(hour).or_insert(0) += 1;
+    }
+    let distinct_from_messages = distinct.len() as i64;
+
+    // Chatter-Einträge.
+    let mut has_first_flag_data = false;
+    for c in &snap.chatter_rows {
+        if c.has_first_flag != 0 {
+            has_first_flag_data = true;
+        }
+    }
+    let mut tracked_unique_viewers = snap.chatter_rows.len() as i64;
+    let sessions_with_chat = snap.sessions_with_chat;
+
+    let mut active_chatters_count =
+        snap.chatter_rows.iter().filter(|c| c.active_flag != 0).count() as i64;
+    let mut lurker_count = snap
+        .chatter_rows
+        .iter()
+        .filter(|c| c.active_flag == 0 && c.lurker_flag != 0)
+        .count() as i64;
+    let mut chatters_api_seen =
+        snap.chatter_rows.iter().filter(|c| c.seen_flag != 0).count() as i64;
+    let total_messages_per_user: i64 =
+        snap.chatter_rows.iter().map(|c| c.total_messages.unwrap_or(0)).sum();
+    let mut avg_messages_per_chatter = if active_chatters_count > 0 {
+        round1(total_messages_per_user as f64 / active_chatters_count as f64)
+    } else {
+        0.0
+    };
+
+    let seen_before_count =
+        snap.chatter_rows.iter().filter(|c| c.seen_before != 0).count() as i64;
+    let n_chatters = snap.chatter_rows.len();
+    let cold_rollup = n_chatters > 0 && (seen_before_count as f64 / n_chatters as f64) < 0.1;
+    let loyal_session_threshold: i64 = if days <= 7 {
+        2
+    } else if days <= 30 {
+        3
+    } else if days <= 90 {
+        8
+    } else {
+        12
+    };
+
+    let mut first_time_chatters = 0i64;
+    let mut returning_viewers = 0i64;
+    let mut core_loyal_viewers = 0i64;
+    let mut silent_core_loyal_viewers = 0i64;
+    for c in &snap.chatter_rows {
+        let active = c.active_flag != 0;
+        let lurker = c.lurker_flag != 0;
+        let seen = c.seen_flag != 0;
+        let seen_before = c.seen_before != 0;
+        let has_login = c.chatter_login.as_deref().filter(|s| !s.is_empty()).is_some();
+        let is_first = if cold_rollup {
+            c.session_count < 2
+        } else if has_first_flag_data && c.has_first_flag != 0 {
+            let mut f = c.first_time_flag != 0;
+            if !f && lurker && !seen_before {
+                f = true;
+            }
+            f
+        } else if has_login {
+            !seen_before
+        } else {
+            true
+        };
+        let is_returning = !is_first;
+        if active && is_first {
+            first_time_chatters += 1;
+        }
+        if is_returning {
+            returning_viewers += 1;
+            if c.session_count >= loyal_session_threshold && (active || lurker || seen) {
+                core_loyal_viewers += 1;
+                if !active {
+                    silent_core_loyal_viewers += 1;
+                }
+            }
+        }
+    }
+
+    // Override: keine aktiven Chatter, aber Message-Daten vorhanden.
+    if active_chatters_count == 0 && distinct_from_messages > 0 {
+        active_chatters_count = distinct_from_messages;
+        first_time_chatters = distinct_from_messages;
+        returning_viewers = 0;
+        core_loyal_viewers = 0;
+        silent_core_loyal_viewers = 0;
+        lurker_count = 0;
+        chatters_api_seen = 0;
+        tracked_unique_viewers = distinct_from_messages;
+        avg_messages_per_chatter = 0.0;
+    }
+
+    let unique_chatters = active_chatters_count;
+    first_time_chatters = first_time_chatters.min(unique_chatters);
+    let returning_chatters = (unique_chatters - first_time_chatters).max(0);
+    let total_unique_viewers =
+        if tracked_unique_viewers > 0 { tracked_unique_viewers } else { unique_chatters };
+    let lurker_ratio = if total_unique_viewers > 0 {
+        round3(lurker_count as f64 / total_unique_viewers as f64)
+    } else {
+        0.0
+    };
+    let total_minutes = if total_duration_seconds > 0.0 { total_duration_seconds / 60.0 } else { 0.0 };
+    let messages_per_minute = if total_minutes > 0.0 { total_messages as f64 / total_minutes } else { 0.0 };
+    let chatter_return_rate =
+        if unique_chatters > 0 { (returning_chatters as f64 / unique_chatters as f64) * 100.0 } else { 0.0 };
+    let core_loyal_viewer_rate = if total_unique_viewers > 0 {
+        (core_loyal_viewers as f64 / total_unique_viewers as f64) * 100.0
+    } else {
+        0.0
+    };
+    let mut density_sorted = density.clone();
+    density_sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let benchmark_sessions = density_sorted.len() as i64;
+
+    let engagement = calculate_engagement(&EngagementInputs {
+        total_messages,
+        active_chatters: active_chatters_count as usize,
+        tracked_chat_accounts: total_unique_viewers as usize,
+        chatters_api_seen: chatters_api_seen as usize,
+        viewer_minutes,
+        viewer_minutes_has_real_samples,
+        avg_viewers,
+        session_count,
+        sessions_with_chat,
+    });
+
+    let (mp100_percentile, mp100_median, mp100_p25, mp100_p75): (Value, Value, Value, Value) =
+        match engagement.messages_per_100_viewer_minutes {
+            Some(mp100) if benchmark_sessions > 0 => (
+                json!(round1(percentile_of(&density_sorted, mp100) * 100.0)),
+                json!(round2(quantile(&density_sorted, 0.5))),
+                json!(round2(quantile(&density_sorted, 0.25))),
+                json!(round2(quantile(&density_sorted, 0.75))),
+            ),
+            _ => (Value::Null, Value::Null, Value::Null, Value::Null),
+        };
+
+    let chat_session_coverage_ratio = engagement.chat_session_coverage;
+    let chat_session_coverage_pct = round1(chat_session_coverage_ratio * 100.0);
+
+    let confidence = if engagement.method == "no_data" {
+        "very_low"
+    } else if chat_session_coverage_ratio >= 0.7 && total_messages >= 500 && session_count >= 10 {
+        "high"
+    } else if chat_session_coverage_ratio >= 0.4 && total_messages >= 150 && session_count >= 5 {
+        "medium"
+    } else {
+        "low"
+    };
+
+    // messageTypes: nach count absteigend, Gleichstand → Erst-Auftreten (Counter.most_common).
+    let mut message_types: Vec<(&'static str, i64)> =
+        type_order.iter().map(|t| (*t, type_counts[t])).collect();
+    message_types.sort_by(|a, b| b.1.cmp(&a.1));
+    let message_types_json: Vec<Value> = message_types
+        .iter()
+        .map(|(t, v)| {
+            let pct = if total_messages > 0 {
+                json!(round1(*v as f64 / total_messages as f64 * 100.0))
+            } else {
+                json!(0)
+            };
+            json!({ "type": t, "count": v, "percentage": pct })
+        })
+        .collect();
+
+    let top_chatters_json: Vec<Value> = snap
+        .top_chatters
+        .iter()
+        .map(|t| {
+            let loyalty = round1((t.sessions as f64 / session_count.max(1) as f64 * 100.0).min(100.0));
+            json!({
+                "login": t.chatter_key,
+                "totalMessages": t.messages,
+                "totalSessions": t.sessions,
+                "firstSeen": emit_iso(t.first_seen),
+                "lastSeen": emit_iso(t.last_seen),
+                "loyaltyScore": loyalty,
+            })
+        })
+        .collect();
+
+    let hourly_activity: Vec<Value> =
+        (0..24u32).map(|h| json!({ "hour": h, "count": hour_counts.get(&h).copied().unwrap_or(0) })).collect();
+
+    Ok(json!({
+        "totalMessages": total_messages,
+        "totalChatterSessions": unique_chatters,
+        "uniqueChatters": unique_chatters,
+        "totalTrackedViewers": total_unique_viewers,
+        "firstTimeChatters": first_time_chatters,
+        "returningChatters": returning_chatters,
+        "returningTrackedViewers": returning_viewers,
+        "coreLoyalViewers": core_loyal_viewers,
+        "silentCoreLoyalViewers": silent_core_loyal_viewers,
+        "coreLoyalViewerRate": round1(core_loyal_viewer_rate),
+        "loyaltySessionThreshold": loyal_session_threshold,
+        "messagesPerMinute": round2(messages_per_minute),
+        "chatterReturnRate": round1(chatter_return_rate),
+        "chatPenetrationPct": engagement.chat_penetration_pct,
+        "chatPenetrationReliable": engagement.chat_penetration_reliable,
+        "messagesPer100ViewerMinutes": engagement.messages_per_100_viewer_minutes,
+        "messagesPer100ViewerMinutesPercentile": mp100_percentile,
+        "messagesPer100ViewerMinutesMedian": mp100_median,
+        "messagesPer100ViewerMinutesP25": mp100_p25,
+        "messagesPer100ViewerMinutesP75": mp100_p75,
+        "messagesPer100ViewerMinutesBenchmarkSessions": benchmark_sessions,
+        "viewerMinutes": engagement.viewer_minutes,
+        "legacyInteractionActivePerAvgViewer": engagement.legacy_interaction_active_per_avg_viewer,
+        "interactionRateActivePerViewer": engagement.chat_penetration_pct,
+        "interactionRateActivePerAvgViewer": engagement.legacy_interaction_active_per_avg_viewer,
+        "interactionRateReliable": engagement.chat_penetration_reliable,
+        "commandMessages": command_messages,
+        "nonCommandMessages": (total_messages - command_messages).max(0),
+        "lurkerRatio": lurker_ratio,
+        "lurkerCount": lurker_count,
+        "activeChatters": active_chatters_count,
+        "activeRatio": engagement.active_ratio,
+        "avgMessagesPerChatter": avg_messages_per_chatter,
+        "timezone": timezone_name,
+        "topChatters": top_chatters_json,
+        "messageTypes": message_types_json,
+        "hourlyActivity": hourly_activity,
+        "dataQuality": {
+            "method": engagement.method,
+            "coverage": round3(chat_session_coverage_ratio),
+            "sampleCount": total_messages,
+            "confidence": confidence,
+            "sessions": session_count,
+            "sessionsWithChat": sessions_with_chat,
+            "chatSessionCoverage": chat_session_coverage_pct,
+            "chattersCoverage": engagement.chatters_coverage,
+            "chattersApiCoverage": engagement.chatters_coverage,
+            "passiveViewerSamples": engagement.passive_viewer_samples,
+            "viewerSampleCount": viewer_sample_count,
+            "viewerMinutesSource": if viewer_minutes_has_real_samples { "real_samples" } else { "low_coverage" },
+            "botFilterApplied": true,
+        },
+        "rawChatStatus": snap.raw_chat_status,
+    }))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -363,5 +705,47 @@ mod tests {
         // viewer_minutes_samples = 40+60 = 100.
         assert_eq!(snap.viewer_minutes_samples, 100.0);
         assert_eq!(snap.session_benchmark_rows.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn payload_aggregiert() {
+        let Some(pool) = make_pool("t_ca_payload").await else { return };
+        sqlx::query("INSERT INTO twitch_stream_sessions (id, streamer_login, started_at, ended_at, duration_seconds, avg_viewers) VALUES (1,'nani',NOW()-INTERVAL '1 day',NOW()-INTERVAL '1 day'+INTERVAL '2 hours',7200,50)")
+            .execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO twitch_session_chatters (session_id, streamer_login, chatter_login, messages, seen_via_chatters_api) VALUES (1,'nani','viewer',5,TRUE)")
+            .execute(&pool).await.unwrap();
+        for (c, cmd) in [("hallo zusammen", false), ("!uptime", true), ("haze ist op", false), ("lol haha", false)] {
+            sqlx::query("INSERT INTO twitch_chat_messages (session_id, streamer_login, chatter_login, content, is_command, message_ts) VALUES (1,'nani','viewer',$1,$2,'2026-06-14 18:30:00+00')")
+                .bind(c).bind(cmd).execute(&pool).await.unwrap();
+        }
+        let v = load_chat_analytics_payload(&pool, "nani", 30, Some("UTC")).await.unwrap();
+        assert_eq!(v["totalMessages"], 4);
+        assert_eq!(v["commandMessages"], 1);
+        assert_eq!(v["nonCommandMessages"], 3);
+        assert_eq!(v["timezone"], "UTC");
+        assert_eq!(v["loyaltySessionThreshold"], 3); // days=30
+        // hourlyActivity: 24 Buckets, Stunde 18 = 4 Nachrichten (alle 18:30 UTC).
+        assert_eq!(v["hourlyActivity"].as_array().unwrap().len(), 24);
+        assert_eq!(v["hourlyActivity"][18]["count"], 4);
+        // messageTypes vorhanden + dataQuality-Struktur.
+        assert!(v["messageTypes"].as_array().unwrap().len() >= 1);
+        assert_eq!(v["dataQuality"]["botFilterApplied"], true);
+        assert_eq!(v["dataQuality"]["sampleCount"], 4);
+        assert_eq!(v["topChatters"][0]["totalMessages"], 4);
+        assert_eq!(v["rawChatStatus"]["available"], true);
+    }
+
+    #[tokio::test]
+    async fn tz_histogramm_verschiebt_stunde() {
+        let Some(pool) = make_pool("t_ca_tz").await else { return };
+        sqlx::query("INSERT INTO twitch_stream_sessions (id, streamer_login, started_at, ended_at, duration_seconds, avg_viewers) VALUES (1,'nani',NOW()-INTERVAL '1 day',NOW(),3600,10)")
+            .execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO twitch_chat_messages (session_id, streamer_login, chatter_login, content, is_command, message_ts) VALUES (1,'nani','v','hi',FALSE,'2026-06-14 23:30:00+00')")
+            .execute(&pool).await.unwrap();
+        // 23:30 UTC → Europe/Berlin (Sommerzeit +2) = 01:30 → Stunde 1.
+        let v = load_chat_analytics_payload(&pool, "nani", 30, Some("Europe/Berlin")).await.unwrap();
+        assert_eq!(v["timezone"], "Europe/Berlin");
+        assert_eq!(v["hourlyActivity"][1]["count"], 1);
+        assert_eq!(v["hourlyActivity"][23]["count"], 0);
     }
 }

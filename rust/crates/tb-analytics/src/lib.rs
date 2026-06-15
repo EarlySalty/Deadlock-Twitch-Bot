@@ -2,6 +2,8 @@
 //!
 //! Jede Funktion nimmt einen `&PgPool` entgegen und gibt typisierte Structs zurück.
 //! Kein HTTP, kein Serde-JSON — nur reine Query-Logik.
+// Für große json!-Antworten (chat-analytics ~40 Felder + verschachteltes dataQuality).
+#![recursion_limit = "256"]
 
 pub mod admin_affiliate;
 pub mod admin_billing;
