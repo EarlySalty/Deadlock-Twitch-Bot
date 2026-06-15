@@ -436,6 +436,9 @@ impl DiscordDirectoryPort for Recorder {
     async fn grant_streamer_role(&self, discord_user_id: &str, reason: &str) {
         self.log(format!("role:{discord_user_id}:{reason}"));
     }
+    async fn revoke_streamer_role(&self, discord_user_id: &str, reason: &str) {
+        self.log(format!("revoke:{discord_user_id}:{reason}"));
+    }
 }
 
 #[async_trait]
@@ -633,4 +636,37 @@ async fn backfill_ist_idempotent() {
     .await
     .unwrap();
     assert_eq!(tracked, 2, "NOT-EXISTS-Guard verhindert Duplikate");
+}
+
+// ---------------------------------------------------------------------------
+// B10: revoke_streamer_role-Port (ohne DB)
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn revoke_streamer_role_ruft_port_und_loggt() {
+    let recorder = Recorder::default();
+    DiscordDirectoryPort::revoke_streamer_role(&recorder, "12345", "Partner deautorisiert").await;
+    assert_eq!(
+        recorder.calls(),
+        vec!["revoke:12345:Partner deautorisiert".to_string()]
+    );
+}
+
+/// Eine Implementierung, die `revoke_streamer_role` NICHT überschreibt, nutzt
+/// den Default (No-op-Log) — kein Panic, kein Hard-Fail.
+struct GrantOnly;
+
+#[async_trait]
+impl DiscordDirectoryPort for GrantOnly {
+    async fn resolve_display_name(&self, _discord_user_id: &str) -> Option<String> {
+        None
+    }
+    async fn grant_streamer_role(&self, _discord_user_id: &str, _reason: &str) {}
+}
+
+#[tokio::test]
+async fn revoke_streamer_role_default_ist_noop() {
+    let port = GrantOnly;
+    // Darf nicht panicken; Default-Impl ist ein reines Debug-Log.
+    DiscordDirectoryPort::revoke_streamer_role(&port, "999", "egal").await;
 }

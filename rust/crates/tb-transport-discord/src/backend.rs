@@ -22,6 +22,28 @@ pub struct EditRichMessage {
     pub view_spec: Option<serde_json::Value>,
 }
 
+/// Payload für `/internal/master/v1/discord/send-dm` (Token-Lifecycle-DMs).
+/// Der Broker-Endpunkt nimmt ausschließlich `user_id` + Text-`content`
+/// entgegen (kein Embed) und öffnet selbst den DM-Channel.
+#[derive(Debug, Clone, Serialize)]
+pub struct SendUserDm {
+    pub user_id: u64,
+    pub content: String,
+}
+
+/// Payload für eine Embed-Nachricht in den Alert-Channel. Nutzt denselben
+/// Broker-Endpunkt wie [`SendRichMessage`] (`send-rich-message`), wird aber als
+/// eigene, abgegrenzte Aktion modelliert (kein `view_spec`, keine
+/// Rollen-Mentions außer einer optionalen Allowlist).
+#[derive(Debug, Clone, Serialize)]
+pub struct SendAlertEmbed {
+    pub channel_id: i64,
+    pub content: Option<String>,
+    pub embed: serde_json::Value,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub allowed_role_ids: Vec<i64>,
+}
+
 /// Antwort des Brokers auf `send-rich-message`.
 #[derive(Debug, Deserialize)]
 pub struct SendResult {
@@ -76,4 +98,22 @@ pub trait DiscordBackend: Send + Sync {
 
     /// Bearbeitet eine bestehende Rich-Message.
     async fn edit_rich_message(&self, payload: EditRichMessage) -> Result<(), DiscordError>;
+
+    /// Sendet dem Streamer eine Direktnachricht (Token-Lifecycle-DMs). Der
+    /// Broker öffnet den DM-Channel selbst und liefert die `message_id`.
+    async fn send_user_dm(&self, payload: SendUserDm) -> Result<SendResult, DiscordError>;
+
+    /// Sendet ein Embed in den Alert-Channel und liefert die `message_id`.
+    async fn send_alert_embed(&self, payload: SendAlertEmbed)
+        -> Result<SendResult, DiscordError>;
+
+    /// Entfernt eine Rolle von einem Guild-Mitglied
+    /// (`POST /discord/member/remove-role`).
+    async fn remove_member_role(
+        &self,
+        guild_id: u64,
+        user_id: u64,
+        role_id: u64,
+        reason: &str,
+    ) -> Result<(), DiscordError>;
 }

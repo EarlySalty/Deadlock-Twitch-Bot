@@ -3,7 +3,10 @@
 //! Sendet Nachrichten via POST mit deterministischem Idempotency-Key
 //! und einfacher Retry-Logik (max. 2 Versuche bei Timeout).
 
-use crate::backend::{DiscordBackend, DiscordError, EditRichMessage, SendResult, SendRichMessage};
+use crate::backend::{
+    DiscordBackend, DiscordError, EditRichMessage, SendAlertEmbed, SendResult, SendRichMessage,
+    SendUserDm,
+};
 use reqwest::Client;
 use sha2::{Digest, Sha256};
 use std::sync::Arc;
@@ -14,7 +17,9 @@ const SEND_PATH: &str = "/internal/master/v1/discord/send-rich-message";
 const EDIT_PATH: &str = "/internal/master/v1/discord/edit-rich-message";
 const RESOLVE_USER_PATH: &str = "/internal/master/v1/discord/resolve-user";
 const ADD_ROLE_PATH: &str = "/internal/master/v1/discord/member/add-role";
+const REMOVE_ROLE_PATH: &str = "/internal/master/v1/discord/member/remove-role";
 const CREATE_ROLE_PATH: &str = "/internal/master/v1/discord/role/create";
+const SEND_DM_PATH: &str = "/internal/master/v1/discord/send-dm";
 const MEMBERS_PATH: &str = "/internal/master/v1/discord/members";
 const TIMEOUT: Duration = Duration::from_secs(10);
 const RETRY_WAIT: Duration = Duration::from_secs(2);
@@ -226,6 +231,34 @@ impl BrokerRelay {
         Ok(())
     }
 
+    /// Entfernt einem Guild-Mitglied eine Rolle
+    /// (`POST /discord/member/remove-role`, idempotent auf Broker-Seite).
+    /// Gleiche Payload-Form wie [`add_member_role`](Self::add_member_role).
+    pub async fn remove_member_role(
+        &self,
+        guild_id: u64,
+        user_id: u64,
+        role_id: u64,
+        reason: &str,
+    ) -> Result<(), DiscordError> {
+        let payload = AddRoleRequest {
+            guild_id,
+            user_id,
+            role_id,
+            reason: reason.to_string(),
+        };
+        let key = Self::idempotency_key("remove-role", &payload);
+        let resp = self
+            .post_with_retry(REMOVE_ROLE_PATH, &payload, &key)
+            .await?;
+        if !resp.status().is_success() {
+            let status = resp.status().as_u16();
+            let body = resp.text().await.unwrap_or_default();
+            return Err(DiscordError::BrokerError { status, body });
+        }
+        Ok(())
+    }
+
     /// Legt eine Discord-Rolle über den Broker an
     /// (`POST /discord/role/create`) und liefert die neue `role_id`.
     pub async fn create_role(
@@ -308,6 +341,45 @@ impl DiscordBackend for BrokerRelay {
             return Err(DiscordError::BrokerError { status, body });
         }
         Ok(())
+    }
+
+    async fn send_user_dm(&self, payload: SendUserDm) -> Result<SendResult, DiscordError> {
+        let key = Self::idempotency_key("send-dm", &payload);
+        let resp = self.post_with_retry(SEND_DM_PATH, &payload, &key).await?;
+
+        if !resp.status().is_success() {
+            let status = resp.status().as_u16();
+            let body = resp.text().await.unwrap_or_default();
+            return Err(DiscordError::BrokerError { status, body });
+        }
+        let result: SendResult = resp.json().await?;
+        Ok(result)
+    }
+
+    async fn send_alert_embed(
+        &self,
+        payload: SendAlertEmbed,
+    ) -> Result<SendResult, DiscordError> {
+        let key = Self::idempotency_key("alert-embed", &payload);
+        let resp = self.post_with_retry(SEND_PATH, &payload, &key).await?;
+
+        if !resp.status().is_success() {
+            let status = resp.status().as_u16();
+            let body = resp.text().await.unwrap_or_default();
+            return Err(DiscordError::BrokerError { status, body });
+        }
+        let result: SendResult = resp.json().await?;
+        Ok(result)
+    }
+
+    async fn remove_member_role(
+        &self,
+        guild_id: u64,
+        user_id: u64,
+        role_id: u64,
+        reason: &str,
+    ) -> Result<(), DiscordError> {
+        BrokerRelay::remove_member_role(self, guild_id, user_id, role_id, reason).await
     }
 }
 
@@ -567,6 +639,176 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(role_id, 42);
+    }
+
+    #[tokio::test]
+    async fn send_user_dm_sendet_payload_und_idempotency_key() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/internal/master/v1/discord/send-dm"))
+            .and(header("X-Internal-Token", "test-token"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "ok": true,
+                "result": { "user_id": 42, "channel_id": 7, "message_id": "dm-1" }
+            })))
+            .mount(&server)
+            .await;
+
+        let relay = BrokerRelay::new(&test_config(&server.uri())).unwrap();
+        let payload = SendUserDm {
+            user_id: 42,
+            content: "Token-Fehler — bitte neu verbinden.".to_string(),
+        };
+        let result = relay.send_user_dm(payload).await.unwrap();
+        assert!(result.ok);
+        assert_eq!(result.result.message_id, "dm-1");
+
+        let received = server.received_requests().await.unwrap();
+        assert_eq!(received.len(), 1);
+        assert!(received[0].headers.contains_key("x-idempotency-key"));
+        let body: serde_json::Value = serde_json::from_slice(&received[0].body).unwrap();
+        assert_eq!(body["user_id"], 42);
+        assert_eq!(body["content"], "Token-Fehler — bitte neu verbinden.");
+    }
+
+    #[tokio::test]
+    async fn send_alert_embed_sendet_rich_message_payload() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/internal/master/v1/discord/send-rich-message"))
+            .and(header("X-Internal-Token", "test-token"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "ok": true,
+                "result": { "message_id": "alert-9" }
+            })))
+            .mount(&server)
+            .await;
+
+        let relay = BrokerRelay::new(&test_config(&server.uri())).unwrap();
+        let payload = SendAlertEmbed {
+            channel_id: 555,
+            content: Some("@here".to_string()),
+            embed: serde_json::json!({"title": "Alert", "description": "Etwas ist kaputt"}),
+            allowed_role_ids: vec![],
+        };
+        let result = relay.send_alert_embed(payload).await.unwrap();
+        assert_eq!(result.result.message_id, "alert-9");
+
+        let received = server.received_requests().await.unwrap();
+        assert_eq!(received.len(), 1);
+        assert!(received[0].headers.contains_key("x-idempotency-key"));
+        let body: serde_json::Value = serde_json::from_slice(&received[0].body).unwrap();
+        assert_eq!(body["channel_id"], 555);
+        assert_eq!(body["content"], "@here");
+        assert_eq!(body["embed"]["title"], "Alert");
+        // Leere Allowlist wird weggelassen (skip_serializing_if).
+        assert!(body.get("allowed_role_ids").is_none());
+    }
+
+    #[tokio::test]
+    async fn remove_member_role_sendet_payload() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/internal/master/v1/discord/member/remove-role"))
+            .and(header("X-Internal-Token", "test-token"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "ok": true,
+                "result": { "guild_id": 1, "user_id": 2, "role_id": 3 }
+            })))
+            .mount(&server)
+            .await;
+
+        let relay = BrokerRelay::new(&test_config(&server.uri())).unwrap();
+        DiscordBackend::remove_member_role(&relay, 1, 2, 3, "Partner deautorisiert")
+            .await
+            .unwrap();
+        let received = server.received_requests().await.unwrap();
+        assert!(received[0].headers.contains_key("x-idempotency-key"));
+        let body: serde_json::Value = serde_json::from_slice(&received[0].body).unwrap();
+        assert_eq!(body["guild_id"], 1);
+        assert_eq!(body["user_id"], 2);
+        assert_eq!(body["role_id"], 3);
+        assert_eq!(body["reason"], "Partner deautorisiert");
+    }
+
+    #[test]
+    fn add_und_remove_role_haben_unterschiedliche_idempotency_keys() {
+        // Gleiche Felder, aber unterschiedliche Aktion → unterschiedlicher Key,
+        // damit der Broker add/remove nicht als denselben idempotenten Vorgang
+        // dedupliziert.
+        let payload = AddRoleRequest {
+            guild_id: 1,
+            user_id: 2,
+            role_id: 3,
+            reason: "r".to_string(),
+        };
+        let add = BrokerRelay::idempotency_key("add-role", &payload);
+        let remove = BrokerRelay::idempotency_key("remove-role", &payload);
+        assert_ne!(add, remove);
+    }
+
+    #[tokio::test]
+    async fn alert_embed_loest_keinen_dm_aus() {
+        // Negativ-Guard: Nicht-DM-Aktionen (hier: Alert-Embed, stellvertretend
+        // für die bewusst gedroppten Approval-/Social-/Clip-DMs) dürfen NIE den
+        // send-dm-Endpunkt treffen. send-dm ist allein dem Token-Lifecycle-DM
+        // vorbehalten (`send_user_dm`).
+        let server = MockServer::start().await;
+        // send-dm explizit verboten: 0 erwartete Treffer.
+        Mock::given(method("POST"))
+            .and(path("/internal/master/v1/discord/send-dm"))
+            .respond_with(ResponseTemplate::new(200))
+            .expect(0)
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/internal/master/v1/discord/send-rich-message"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "ok": true,
+                "result": { "message_id": "x" }
+            })))
+            .mount(&server)
+            .await;
+
+        let relay = BrokerRelay::new(&test_config(&server.uri())).unwrap();
+        relay
+            .send_alert_embed(SendAlertEmbed {
+                channel_id: 1,
+                content: None,
+                embed: serde_json::json!({"title": "Approval"}),
+                allowed_role_ids: vec![],
+            })
+            .await
+            .unwrap();
+        // server.verify() bestätigt: send-dm-Mock wurde 0-mal getroffen.
+        server.verify().await;
+    }
+
+    #[tokio::test]
+    async fn headless_noop_neue_aktionen_geben_ok() {
+        use crate::noop::HeadlessNoop;
+        let noop = HeadlessNoop;
+        let dm = noop
+            .send_user_dm(SendUserDm {
+                user_id: 1,
+                content: "x".to_string(),
+            })
+            .await
+            .unwrap();
+        assert!(dm.ok);
+        let alert = noop
+            .send_alert_embed(SendAlertEmbed {
+                channel_id: 1,
+                content: None,
+                embed: serde_json::Value::Null,
+                allowed_role_ids: vec![],
+            })
+            .await
+            .unwrap();
+        assert!(alert.ok);
+        DiscordBackend::remove_member_role(&noop, 1, 2, 3, "x")
+            .await
+            .unwrap();
     }
 
     #[tokio::test]
