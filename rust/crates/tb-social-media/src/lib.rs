@@ -21,6 +21,8 @@
 //! - `llm`         — LLM-Typen + Prompt-Bau + Output-Parsing.
 //! - `llm_dispatch` — LLM-Provider (Ollama) + consent-gated Dispatcher.
 //! - `enrich_pipeline` — Orchestrator (transcribe→correct→LLM→save).
+//! - `retention`   — Publication-Status (published_all ↔ pending).
+//! - `clip_queue`  — Upload-Queue (`twitch_clips_upload_queue`).
 //!
 //! # Deaktiviert
 //! Der Clip-Fetcher-Task ist **standardmäßig deaktiviert** und wird nicht in
@@ -28,6 +30,7 @@
 //! Env-Var setzen + `ClipFetchTask::start_if_enabled()` aufrufen.
 
 pub mod clip;
+pub mod clip_queue;
 pub mod correction;
 pub mod credentials;
 pub mod enrich_pipeline;
@@ -37,6 +40,7 @@ pub mod llm_dispatch;
 pub mod oauth;
 pub mod refresh_worker;
 pub mod rendering;
+pub mod retention;
 pub mod schema;
 pub mod seed_vocab;
 pub mod settings;
