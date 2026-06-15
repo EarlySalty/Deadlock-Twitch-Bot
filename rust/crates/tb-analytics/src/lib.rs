@@ -10,6 +10,8 @@ pub mod admin_config;
 pub mod admin_streamers;
 pub mod bans;
 pub mod category_activity;
+pub mod chat_content_analysis;
+pub mod chat_content_lexicon;
 pub mod chat_hype_timeline;
 pub mod chat_social_graph;
 pub mod exp_analytics;
