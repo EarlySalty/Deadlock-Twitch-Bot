@@ -24,6 +24,10 @@ fn round3(v: f64) -> f64 {
     (v * 1000.0).round() / 1000.0
 }
 
+fn round0(v: f64) -> f64 {
+    v.round()
+}
+
 /// Pearson-Korrelation (Python `_pearson`, Populations-Std mit `/n`).
 /// Liefert 0.0 bei < 3 Werten oder konstanter Reihe (Std = 0).
 fn pearson(x: &[f64], y: &[f64]) -> f64 {
@@ -959,6 +963,151 @@ pub async fn double_stream_detection(
     }))
 }
 
+/// Chat-Konzentration & Loyalität (Python `_chat_concentration`): Loyalty-
+/// Buckets, Top-Chatter mit kumulativem Anteil, HHI-Konzentrationsindex und
+/// One-Timer-Quote vs. Peers.
+pub async fn chat_concentration(
+    pool: &PgPool,
+    streamer: &str,
+    since: DateTime<Utc>,
+) -> Result<Value, sqlx::Error> {
+    // 1) Loyalty-Buckets nach Session-Anzahl.
+    let buckets_raw: Vec<(String, i64, Option<i64>)> = sqlx::query_as(
+        "SELECT CASE \
+                  WHEN total_sessions = 1 THEN 'oneTimer' \
+                  WHEN total_sessions BETWEEN 2 AND 3 THEN 'casual' \
+                  WHEN total_sessions BETWEEN 4 AND 10 THEN 'regular' \
+                  ELSE 'loyal' END, \
+                COUNT(*)::bigint, \
+                SUM(total_messages)::bigint \
+           FROM twitch_chatter_rollup \
+          WHERE streamer_login = $1 AND last_seen_at >= $2 \
+          GROUP BY 1",
+    )
+    .bind(streamer)
+    .bind(since)
+    .fetch_all(pool)
+    .await?;
+
+    let total_chatters = {
+        let s: i64 = buckets_raw.iter().map(|r| r.1).sum();
+        if s == 0 { 1 } else { s }
+    };
+    let total_msgs = {
+        let s: i64 = buckets_raw.iter().map(|r| r.2.unwrap_or(0)).sum();
+        if s == 0 { 1 } else { s }
+    };
+
+    let mut buckets = serde_json::Map::new();
+    let mut own_one_timer_pct: Value = json!(0);
+    for (bucket, cnt, msgs) in &buckets_raw {
+        let pct = round1(*cnt as f64 / total_chatters as f64 * 100.0);
+        buckets.insert(
+            bucket.clone(),
+            json!({ "count": cnt, "pct": pct, "messages": msgs.unwrap_or(0) }),
+        );
+        if bucket == "oneTimer" {
+            own_one_timer_pct = json!(pct);
+        }
+    }
+
+    // 2) Top-Chatter + kumulativer Anteil.
+    let top: Vec<(String, i64, i64)> = sqlx::query_as(
+        "SELECT chatter_login, total_messages::bigint, total_sessions::bigint \
+           FROM twitch_chatter_rollup \
+          WHERE streamer_login = $1 AND last_seen_at >= $2 \
+          ORDER BY total_messages DESC \
+          LIMIT 15",
+    )
+    .bind(streamer)
+    .bind(since)
+    .fetch_all(pool)
+    .await?;
+
+    // (login, messages, sessions, sharePct, cumulativePct) — share gerundet,
+    // cumulative summiert die GERUNDETEN shares (1:1 Python).
+    let mut top_chatters: Vec<(String, i64, i64, f64, f64)> = Vec::new();
+    let mut cumulative = 0.0;
+    for (login, messages, sessions) in &top {
+        let share = round1(*messages as f64 / total_msgs as f64 * 100.0);
+        cumulative += share;
+        top_chatters.push((login.clone(), *messages, *sessions, share, round1(cumulative)));
+    }
+
+    // HHI: leeres top → Integer-0 (Pythons leere sum() = int), sonst float.
+    let concentration_index: Value = if top.is_empty() {
+        json!(0)
+    } else {
+        let hhi: f64 = top
+            .iter()
+            .map(|(_, m, _)| {
+                let x = *m as f64 / total_msgs as f64;
+                x * x
+            })
+            .sum::<f64>()
+            * 10000.0;
+        json!(round0(hhi))
+    };
+
+    let top1_pct: Value = top_chatters.first().map_or(json!(0), |c| json!(c.3));
+    let top3_pct: Value = if top_chatters.len() >= 3 {
+        json!(top_chatters[2].4)
+    } else {
+        top1_pct.clone()
+    };
+
+    // 3) Peer-Vergleich: One-Timer-Quote.
+    let peer_loyalty: Vec<(String, i64, Option<i64>)> = sqlx::query_as(
+        "SELECT streamer_login, COUNT(*)::bigint, \
+                SUM(CASE WHEN total_sessions = 1 THEN 1 ELSE 0 END)::bigint \
+           FROM twitch_chatter_rollup \
+          WHERE last_seen_at >= $1 \
+          GROUP BY streamer_login \
+         HAVING COUNT(*) >= 5",
+    )
+    .bind(since)
+    .fetch_all(pool)
+    .await?;
+
+    let peer_pcts: Vec<f64> = peer_loyalty
+        .iter()
+        .filter(|r| r.0 != streamer && r.1 > 0)
+        .map(|r| round1(r.2.unwrap_or(0) as f64 / r.1 as f64 * 100.0))
+        .collect();
+    let avg_peer_one_timer: Value = if !peer_pcts.is_empty() {
+        json!(round1(peer_pcts.iter().sum::<f64>() / peer_pcts.len() as f64))
+    } else {
+        json!(0)
+    };
+
+    let top_chatters_json: Vec<Value> = top_chatters
+        .iter()
+        .take(10)
+        .map(|(l, m, s, sh, cu)| {
+            json!({
+                "login": l,
+                "messages": m,
+                "sessions": s,
+                "sharePct": sh,
+                "cumulativePct": cu,
+            })
+        })
+        .collect();
+
+    Ok(json!({
+        "totalChatters": total_chatters,
+        "totalMessages": total_msgs,
+        "msgsPerChatter": round1(total_msgs as f64 / total_chatters as f64),
+        "loyaltyBuckets": Value::Object(buckets),
+        "topChatters": top_chatters_json,
+        "concentrationIndex": concentration_index,
+        "top1Pct": top1_pct,
+        "top3Pct": top3_pct,
+        "ownOneTimerPct": own_one_timer_pct,
+        "avgPeerOneTimerPct": avg_peer_one_timer,
+    }))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1169,7 +1318,7 @@ mod tests {
 
     async fn make_rollup_pool(schema: &str) -> Option<PgPool> {
         let pool = make_pool(schema).await?;
-        sqlx::query("CREATE TABLE twitch_chatter_rollup (streamer_login TEXT NOT NULL, chatter_login TEXT NOT NULL, first_seen_at TIMESTAMPTZ NOT NULL, last_seen_at TIMESTAMPTZ NOT NULL, PRIMARY KEY (streamer_login, chatter_login))")
+        sqlx::query("CREATE TABLE twitch_chatter_rollup (streamer_login TEXT NOT NULL, chatter_login TEXT NOT NULL, first_seen_at TIMESTAMPTZ NOT NULL, last_seen_at TIMESTAMPTZ NOT NULL, total_messages INTEGER DEFAULT 0, total_sessions INTEGER DEFAULT 0, PRIMARY KEY (streamer_login, chatter_login))")
             .execute(&pool).await.unwrap();
         Some(pool)
     }
@@ -1362,5 +1511,51 @@ mod tests {
         // Tages-Ø: Einzel-Tag 30, Doppel-Tag 50.
         assert_eq!(v["singleDayAvg"], 30.0);
         assert_eq!(v["doubleDayAvg"], 50.0);
+    }
+
+    #[tokio::test]
+    async fn chat_concentration_berechnet() {
+        let Some(pool) = make_rollup_pool("t_coach_conc").await else { return };
+        // nani: 4 Chatter, je 1 pro Bucket. msgs 100/50/30/20 = 200.
+        // rival: 5 Chatter, 3 One-Timer → 60 % (Peer mit COUNT>=5).
+        sqlx::query(
+            "INSERT INTO twitch_chatter_rollup (streamer_login, chatter_login, first_seen_at, last_seen_at, total_messages, total_sessions) VALUES \
+            ('nani','a', NOW()-INTERVAL '2 day', NOW()-INTERVAL '1 day', 100, 1), \
+            ('nani','b', NOW()-INTERVAL '2 day', NOW()-INTERVAL '1 day', 50,  2), \
+            ('nani','c', NOW()-INTERVAL '2 day', NOW()-INTERVAL '1 day', 30,  5), \
+            ('nani','d', NOW()-INTERVAL '2 day', NOW()-INTERVAL '1 day', 20,  15), \
+            ('rival','r1', NOW()-INTERVAL '2 day', NOW()-INTERVAL '1 day', 10, 1), \
+            ('rival','r2', NOW()-INTERVAL '2 day', NOW()-INTERVAL '1 day', 10, 1), \
+            ('rival','r3', NOW()-INTERVAL '2 day', NOW()-INTERVAL '1 day', 10, 1), \
+            ('rival','r4', NOW()-INTERVAL '2 day', NOW()-INTERVAL '1 day', 10, 2), \
+            ('rival','r5', NOW()-INTERVAL '2 day', NOW()-INTERVAL '1 day', 10, 4)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let v = chat_concentration(&pool, "nani", Utc::now() - chrono::Duration::days(30))
+            .await
+            .unwrap();
+
+        assert_eq!(v["totalChatters"], 4);
+        assert_eq!(v["totalMessages"], 200);
+        assert_eq!(v["msgsPerChatter"], 50.0);
+        // Buckets: je 1 Chatter = 25 %.
+        assert_eq!(v["loyaltyBuckets"]["oneTimer"]["count"], 1);
+        assert_eq!(v["loyaltyBuckets"]["oneTimer"]["pct"], 25.0);
+        assert_eq!(v["loyaltyBuckets"]["oneTimer"]["messages"], 100);
+        // Top-Chatter nach Nachrichten: a(100,50%) b(50,25%) c(30,15%) d(20,10%).
+        assert_eq!(v["topChatters"][0]["login"], "a");
+        assert_eq!(v["topChatters"][0]["sharePct"], 50.0);
+        assert_eq!(v["topChatters"][0]["cumulativePct"], 50.0);
+        assert_eq!(v["topChatters"][2]["cumulativePct"], 90.0);
+        // HHI = (0.25+0.0625+0.0225+0.01)*10000 = 3450.
+        assert_eq!(v["concentrationIndex"], 3450.0);
+        assert_eq!(v["top1Pct"], 50.0);
+        assert_eq!(v["top3Pct"], 90.0);
+        assert_eq!(v["ownOneTimerPct"], 25.0);
+        // Peer rival: 3/5 One-Timer = 60 %.
+        assert_eq!(v["avgPeerOneTimerPct"], 60.0);
     }
 }
