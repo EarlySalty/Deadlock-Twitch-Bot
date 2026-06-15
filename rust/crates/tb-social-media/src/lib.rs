@@ -18,6 +18,7 @@
 //! - `correction`  — Fuzzy-Transkript-Korrektur gegen das Vokabular.
 //! - `seed_vocab`  — Initial-Vokabular (Slang + Deadlock-API).
 //! - `enrichment`  — Clip-Enrichment-Persistenz (`social_media_clip_enrichment`).
+//! - `enrichment_worker` — Background-Loop, der pending Clips anreichert.
 //! - `approval`    — Approval-Workflow (State-Maschine + queue-on-approve).
 //! - `layout`      — Clip-Compositing-Layout (`social_media_streamer_layout`).
 //! - `video_processor` — FFmpeg-Wrapper (9:16-Konvertierung + Compositing).
@@ -46,6 +47,7 @@ pub mod correction;
 pub mod credentials;
 pub mod enrich_pipeline;
 pub mod enrichment;
+pub mod enrichment_worker;
 pub mod layout;
 pub mod llm;
 pub mod llm_dispatch;

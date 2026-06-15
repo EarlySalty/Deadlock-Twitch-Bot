@@ -271,6 +271,24 @@ pub async fn save_llm_output(
     Ok(())
 }
 
+/// Clip-IDs, die Enrichment brauchen (Python `iter_pending_enrichments`):
+/// nicht verworfen, mit lokaler Datei, ohne Enrichment-Zeile ODER Status
+/// `pending`/`failed` — neueste zuerst.
+pub async fn iter_pending_enrichments(pool: &PgPool, limit: i64) -> Vec<i32> {
+    sqlx::query_scalar::<_, i32>(
+        "SELECT c.id FROM twitch_clips_social_media c \
+         LEFT JOIN social_media_clip_enrichment e ON e.clip_db_id = c.id \
+         WHERE c.discarded_at IS NULL \
+           AND COALESCE(c.upload_local_path, c.local_file_path) IS NOT NULL \
+           AND (e.status IS NULL OR e.status IN ('pending', 'failed')) \
+         ORDER BY c.created_at DESC LIMIT $1",
+    )
+    .bind(limit.max(1))
+    .fetch_all(pool)
+    .await
+    .unwrap_or_default()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
