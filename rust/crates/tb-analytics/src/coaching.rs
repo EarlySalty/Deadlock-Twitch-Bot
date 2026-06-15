@@ -1935,6 +1935,75 @@ pub fn build_recommendations(data: &Value) -> Vec<Value> {
     recs
 }
 
+/// Vollständige Coaching-Daten (Python `CoachingEngine.get_coaching_data`):
+/// Session-Count-Guard, dann alle 12 Analysen + Empfehlungen + aiSummary.
+/// `streamer` wird im Output original (nur getrimmt) echot, intern für Queries
+/// kleingeschrieben.
+pub async fn get_coaching_data(
+    pool: &PgPool,
+    streamer: &str,
+    days: i64,
+) -> Result<Value, sqlx::Error> {
+    let streamer_login = streamer.to_lowercase();
+    let since = Utc::now() - chrono::Duration::days(days);
+
+    let count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*)::bigint FROM twitch_stream_sessions \
+          WHERE streamer_login = $1 AND started_at >= $2",
+    )
+    .bind(&streamer_login)
+    .bind(since)
+    .fetch_one(pool)
+    .await?;
+
+    if count == 0 {
+        return Ok(json!({
+            "streamer": streamer,
+            "days": days,
+            "empty": true,
+            "aiSummary": null,
+        }));
+    }
+
+    let efficiency_v = efficiency(pool, &streamer_login, since).await?;
+    let title_v = title_analysis(pool, &streamer_login, since).await?;
+    let schedule_v = schedule_optimizer(pool, &streamer_login, since).await?;
+    let duration_v = duration_analysis(pool, &streamer_login, since).await?;
+    let cross_v = cross_community(pool, &streamer_login, since).await?;
+    let tag_v = tag_optimization(pool, &streamer_login, since).await?;
+    let retention_v = retention_coaching(pool, &streamer_login, since).await?;
+    let double_v = double_stream_detection(pool, &streamer_login, since).await?;
+    let concentration_v = chat_concentration(pool, &streamer_login, since).await?;
+    let raid_v = raid_network(pool, &streamer_login, since).await?;
+    let peer_v = peer_comparison(pool, &streamer_login, since).await?;
+    let competition_v = competition_density(pool, &streamer_login, since).await?;
+
+    let mut result = json!({
+        "streamer": streamer,
+        "days": days,
+        "empty": false,
+        "efficiency": efficiency_v,
+        "titleAnalysis": title_v,
+        "scheduleOptimizer": schedule_v,
+        "durationAnalysis": duration_v,
+        "crossCommunity": cross_v,
+        "tagOptimization": tag_v,
+        "retentionCoaching": retention_v,
+        "doubleStreamDetection": double_v,
+        "chatConcentration": concentration_v,
+        "raidNetwork": raid_v,
+        "peerComparison": peer_v,
+        "competitionDensity": competition_v,
+    });
+
+    // recommendations konsumiert die 12 Analysen (ohne recommendations/aiSummary).
+    let recommendations = build_recommendations(&result);
+    result["recommendations"] = Value::Array(recommendations);
+    result["aiSummary"] = Value::Null;
+
+    Ok(result)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2603,5 +2672,56 @@ mod tests {
     fn build_recommendations_leer() {
         // Leere Daten → keine Regel feuert.
         assert!(build_recommendations(&json!({})).is_empty());
+    }
+
+    /// Pool mit ALLEN Tabellen, die get_coaching_data anfasst.
+    async fn make_full_pool(schema: &str) -> Option<PgPool> {
+        let pool = make_pool(schema).await?;
+        sqlx::query("CREATE TABLE twitch_stats_category (id BIGSERIAL PRIMARY KEY, ts_utc TIMESTAMPTZ, streamer TEXT, viewer_count INTEGER)").execute(&pool).await.unwrap();
+        sqlx::query("CREATE TABLE twitch_chatter_rollup (streamer_login TEXT NOT NULL, chatter_login TEXT NOT NULL, first_seen_at TIMESTAMPTZ NOT NULL, last_seen_at TIMESTAMPTZ NOT NULL, total_messages INTEGER DEFAULT 0, total_sessions INTEGER DEFAULT 0, PRIMARY KEY (streamer_login, chatter_login))").execute(&pool).await.unwrap();
+        sqlx::query("CREATE TABLE twitch_session_viewers (session_id BIGINT NOT NULL, ts_utc TIMESTAMPTZ NOT NULL, minutes_from_start INTEGER, viewer_count INTEGER NOT NULL, PRIMARY KEY(session_id, ts_utc))").execute(&pool).await.unwrap();
+        sqlx::query("CREATE TABLE twitch_raid_history (from_broadcaster_login TEXT, to_broadcaster_login TEXT, viewer_count INTEGER, executed_at TIMESTAMPTZ, success BOOLEAN)").execute(&pool).await.unwrap();
+        Some(pool)
+    }
+
+    #[tokio::test]
+    async fn get_coaching_data_leer() {
+        let Some(pool) = make_pool("t_coach_assembly_empty").await else { return };
+        // Keine Sessions → empty-Guard.
+        let v = get_coaching_data(&pool, "Nani", 30).await.unwrap();
+        assert_eq!(v["streamer"], "Nani"); // Original-Case echot
+        assert_eq!(v["days"], 30);
+        assert_eq!(v["empty"], true);
+        assert_eq!(v["aiSummary"], Value::Null);
+        // Keine Analyse-Keys im empty-Fall.
+        assert!(v.get("efficiency").is_none());
+    }
+
+    #[tokio::test]
+    async fn get_coaching_data_voll() {
+        let Some(pool) = make_full_pool("t_coach_assembly_full").await else { return };
+        // Eine nani-Session (lowercase in DB) → count>0, empty:false.
+        sqlx::query(
+            "INSERT INTO twitch_stream_sessions (streamer_login, started_at, ended_at, duration_seconds, avg_viewers, peak_viewers, retention_5m) VALUES \
+            ('nani', NOW()-INTERVAL '1 day', NOW(), 7200, 50, 100, 0.5)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        // Eingabe in Original-Case "Nani" → intern lowercase-Match.
+        let v = get_coaching_data(&pool, "Nani", 30).await.unwrap();
+        assert_eq!(v["streamer"], "Nani");
+        assert_eq!(v["empty"], false);
+        // Alle 12 Analyse-Keys + recommendations + aiSummary vorhanden.
+        for key in [
+            "efficiency", "titleAnalysis", "scheduleOptimizer", "durationAnalysis",
+            "crossCommunity", "tagOptimization", "retentionCoaching", "doubleStreamDetection",
+            "chatConcentration", "raidNetwork", "peerComparison", "competitionDensity",
+        ] {
+            assert!(v.get(key).is_some(), "Key {key} fehlt");
+        }
+        assert!(v["recommendations"].is_array());
+        assert_eq!(v["aiSummary"], Value::Null);
     }
 }
