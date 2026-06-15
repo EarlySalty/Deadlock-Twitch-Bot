@@ -78,6 +78,13 @@ pub fn build_authed_router(pool: PgPool, token: String) -> Router {
             get(social_media::streamer_layout_get_handler).put(social_media::streamer_layout_put_handler),
         )
         .route("/social-media/api/admin/clips/:clip_db_id/layout", axum::routing::put(social_media::clip_layout_put_handler))
+        // Vocab-CRUD (Admin): Liste/Upsert, Löschen, Seed.
+        .route(
+            "/social-media/api/admin/vocab",
+            get(social_media::vocab_list_handler).post(social_media::vocab_upsert_handler),
+        )
+        .route("/social-media/api/admin/vocab/seed", post(social_media::vocab_seed_handler))
+        .route("/social-media/api/admin/vocab/:term", axum::routing::delete(social_media::vocab_delete_handler))
         // Internal-Home: gebündelte Dashboard-Startseite (Profil, KPIs, Bot-Events,
         // Changelog). GET liest, POST legt einen Changelog-Eintrag an (Admin-only).
         .route(

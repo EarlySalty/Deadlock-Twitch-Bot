@@ -30,6 +30,8 @@ use tb_social_media::layout::{
     default_streamer_layout, get_clip_effective_layout, get_streamer_layout, set_clip_layout_override,
     upsert_streamer_layout, StreamerLayout,
 };
+use tb_social_media::seed_vocab::seed_vocab;
+use tb_social_media::vocab::{delete_vocab_entry, list_vocab, upsert_vocab_entry, VocabEntry};
 use tb_social_media::rendering::{render_dashboard, render_privacy, render_terms};
 
 use crate::auth::level::DashboardAuthLevel;
@@ -536,6 +538,112 @@ pub async fn clip_layout_put_handler(
     .into_response()
 }
 
+/// Serialisiert einen Vocab-Eintrag (Python `entry.to_dict()`).
+fn vocab_entry_json(e: &VocabEntry) -> Value {
+    json!({
+        "term": e.term,
+        "canonical": e.canonical,
+        "category": e.category,
+        "source": e.source,
+        "aliases": e.aliases,
+        "weight": e.weight,
+        "updated_at": e.updated_at,
+    })
+}
+
+fn json_i64(value: Option<&Value>) -> Option<i64> {
+    value.and_then(|v| v.as_i64().or_else(|| v.as_str().and_then(|s| s.trim().parse().ok())))
+}
+
+/// `?page=&page_size=&category=&q=` für die Vocab-Liste.
+#[derive(Debug, Deserialize)]
+pub struct VocabListQuery {
+    pub page: Option<String>,
+    pub page_size: Option<String>,
+    pub category: Option<String>,
+    pub q: Option<String>,
+}
+
+/// `GET /social-media/api/admin/vocab` — paginierte Vokabel-Liste (Admin).
+pub async fn vocab_list_handler(auth: DashboardAuthLevel, State(pool): State<PgPool>, Query(q): Query<VocabListQuery>) -> Response {
+    if let Err(e) = require_admin(&auth) {
+        return e;
+    }
+    let page = match q.page.as_deref().unwrap_or("1").parse::<i64>() {
+        Ok(n) => n.max(1),
+        Err(_) => return (StatusCode::BAD_REQUEST, Json(json!({ "error": "invalid_pagination" }))).into_response(),
+    };
+    let page_size = match q.page_size.as_deref().unwrap_or("50").parse::<i64>() {
+        Ok(n) => n.clamp(1, 200),
+        Err(_) => return (StatusCode::BAD_REQUEST, Json(json!({ "error": "invalid_pagination" }))).into_response(),
+    };
+    let category = q.category.as_deref().filter(|s| !s.is_empty());
+    let query = q.q.as_deref().filter(|s| !s.is_empty());
+    let offset = (page - 1) * page_size;
+    let (entries, total) = list_vocab(&pool, category, query, page_size, offset).await;
+    let items: Vec<Value> = entries.iter().map(vocab_entry_json).collect();
+    Json(json!({ "items": items, "total": total, "page": page, "page_size": page_size })).into_response()
+}
+
+/// `POST /social-media/api/admin/vocab` — Vokabel anlegen/aktualisieren (Admin).
+pub async fn vocab_upsert_handler(auth: DashboardAuthLevel, State(pool): State<PgPool>, Json(payload): Json<Value>) -> Response {
+    if let Err(e) = require_admin(&auth) {
+        return e;
+    }
+    if !payload.is_object() {
+        return (StatusCode::BAD_REQUEST, Json(json!({ "error": "invalid_payload" }))).into_response();
+    }
+    let term = payload.get("term").and_then(Value::as_str).unwrap_or("");
+    let canonical = payload.get("canonical").and_then(Value::as_str).unwrap_or("");
+    let category = payload.get("category").and_then(Value::as_str).unwrap_or("");
+    let source = payload.get("source").and_then(Value::as_str).filter(|s| !s.is_empty()).unwrap_or("manual");
+    let aliases: Vec<String> = payload
+        .get("aliases")
+        .and_then(Value::as_array)
+        .map(|a| a.iter().filter_map(|x| x.as_str().map(String::from)).collect())
+        .unwrap_or_default();
+    let weight = json_i64(payload.get("weight")).filter(|n| *n != 0).unwrap_or(1) as i32;
+
+    match upsert_vocab_entry(&pool, term, canonical, category, source, &aliases, weight).await {
+        Ok(entry) => Json(vocab_entry_json(&entry)).into_response(),
+        Err(e) => (StatusCode::BAD_REQUEST, Json(json!({ "error": "invalid_vocab", "message": e.to_string() }))).into_response(),
+    }
+}
+
+/// `DELETE /social-media/api/admin/vocab/:term` — Vokabel löschen (Admin).
+pub async fn vocab_delete_handler(auth: DashboardAuthLevel, State(pool): State<PgPool>, Path(term): Path<String>) -> Response {
+    if let Err(e) = require_admin(&auth) {
+        return e;
+    }
+    let term = term.trim();
+    if term.is_empty() {
+        return (StatusCode::BAD_REQUEST, Json(json!({ "error": "term_required" }))).into_response();
+    }
+    match delete_vocab_entry(&pool, term).await {
+        Ok(true) => StatusCode::NO_CONTENT.into_response(),
+        Ok(false) => (StatusCode::NOT_FOUND, Json(json!({ "error": "vocab_not_found" }))).into_response(),
+        Err(e) => (StatusCode::BAD_REQUEST, Json(json!({ "error": "invalid_term", "message": e.to_string() }))).into_response(),
+    }
+}
+
+/// `POST /social-media/api/admin/vocab/seed` — Vokabular seeden (Admin).
+/// Body optional: `{include_slang, include_api}` (Default beide true).
+pub async fn vocab_seed_handler(auth: DashboardAuthLevel, State(pool): State<PgPool>, body: String) -> Response {
+    if let Err(e) = require_admin(&auth) {
+        return e;
+    }
+    let (mut include_slang, mut include_api) = (true, true);
+    if !body.trim().is_empty() {
+        if let Ok(Value::Object(map)) = serde_json::from_str::<Value>(&body) {
+            include_slang = map.get("include_slang").and_then(Value::as_bool).unwrap_or(true);
+            include_api = map.get("include_api").and_then(Value::as_bool).unwrap_or(true);
+        }
+    }
+    let (written, skipped) = seed_vocab(&pool, include_slang, include_api).await;
+    // Legacy-Frontend nutzt {inserted, updated}.
+    Json(json!({ "inserted": written, "updated": written, "written": written, "skipped": skipped })).into_response()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -613,6 +721,7 @@ mod tests {
             "CREATE TABLE clip_templates_global (id SERIAL PRIMARY KEY, template_name TEXT UNIQUE, description_template TEXT, hashtags TEXT, category TEXT, usage_count INTEGER DEFAULT 0, created_at TEXT DEFAULT CURRENT_TIMESTAMP, created_by TEXT)",
             "CREATE TABLE twitch_streamers (twitch_login TEXT PRIMARY KEY, twitch_user_id TEXT)",
             "CREATE TABLE social_media_streamer_layout (streamer_login TEXT PRIMARY KEY, layout_json JSONB NOT NULL, cam_enabled BOOLEAN NOT NULL DEFAULT TRUE, mode TEXT NOT NULL DEFAULT 'pip', updated_at TIMESTAMPTZ DEFAULT NOW(), updated_by TEXT)",
+            "CREATE TABLE deadlock_vocab (term TEXT PRIMARY KEY, canonical TEXT NOT NULL, category TEXT NOT NULL, source TEXT NOT NULL DEFAULT 'manual', aliases JSONB NOT NULL DEFAULT '[]'::jsonb, weight INTEGER NOT NULL DEFAULT 1, updated_at TIMESTAMPTZ DEFAULT NOW())",
         ] {
             sqlx::query(ddl).execute(&pool).await.unwrap();
         }
@@ -840,5 +949,55 @@ mod tests {
         // Nicht existierender Clip → 404.
         let resp = clip_layout_put_handler(DashboardAuthLevel::Admin, State(pool.clone()), Path("99999".into()), Json(json!({}))).await;
         assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn vocab_crud_und_seed() {
+        let Some(pool) = make_pool("t_dash_sm_vocab").await else { return };
+
+        // Upsert: gültiger Eintrag (Kategorie hero).
+        let resp = vocab_upsert_handler(
+            DashboardAuthLevel::Admin,
+            State(pool.clone()),
+            Json(json!({ "term": "Haze", "canonical": "Haze", "category": "hero", "aliases": ["hayz"], "weight": 3 })),
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::OK);
+        let v = body_json(resp).await;
+        assert_eq!(v["term"], "haze"); // normalisiert
+        assert_eq!(v["weight"], 3);
+
+        // Ungültige Kategorie → 400 invalid_vocab.
+        let resp = vocab_upsert_handler(DashboardAuthLevel::Admin, State(pool.clone()), Json(json!({ "term": "x", "canonical": "X", "category": "bogus" }))).await;
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+        // Nicht-Objekt-Body → 400 invalid_payload.
+        let resp = vocab_upsert_handler(DashboardAuthLevel::Admin, State(pool.clone()), Json(json!([1, 2]))).await;
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+
+        // List: findet den Eintrag.
+        let resp = vocab_list_handler(DashboardAuthLevel::Admin, State(pool.clone()), Query(VocabListQuery { page: None, page_size: None, category: None, q: None })).await;
+        let v = body_json(resp).await;
+        assert_eq!(v["total"], 1);
+        assert_eq!(v["items"][0]["term"], "haze");
+        // Ungültige Pagination → 400.
+        let resp = vocab_list_handler(DashboardAuthLevel::Admin, State(pool.clone()), Query(VocabListQuery { page: Some("abc".into()), page_size: None, category: None, q: None })).await;
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+
+        // Delete: vorhanden → 204, dann → 404.
+        let resp = vocab_delete_handler(DashboardAuthLevel::Admin, State(pool.clone()), Path("haze".into())).await;
+        assert_eq!(resp.status(), StatusCode::NO_CONTENT);
+        let resp = vocab_delete_handler(DashboardAuthLevel::Admin, State(pool.clone()), Path("haze".into())).await;
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+
+        // Seed nur Slang (include_api=false → kein Netzwerk) → 25 geschrieben.
+        let resp = vocab_seed_handler(DashboardAuthLevel::Admin, State(pool.clone()), "{\"include_api\": false}".to_string()).await;
+        assert_eq!(resp.status(), StatusCode::OK);
+        let v = body_json(resp).await;
+        assert_eq!(v["written"], 25);
+        assert_eq!(v["inserted"], 25);
+
+        // Partner → 403 (admin-only).
+        let resp = vocab_list_handler(partner("nani"), State(pool.clone()), Query(VocabListQuery { page: None, page_size: None, category: None, q: None })).await;
+        assert_eq!(resp.status(), StatusCode::FORBIDDEN);
     }
 }
