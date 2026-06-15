@@ -11,9 +11,8 @@
 //! wortgleich gespiegelt (catch-all → Default): heute 0, und falls die Spalte je
 //! ergänzt wird, leuchten Python und Rust identisch auf. ads + hype_train filtern
 //! dagegen über JOIN auf `twitch_stream_sessions.streamer_login` und funktionieren.
-//!
-//! **Teil 1: Aggregate (ads/hype/bits/subs) + leere Drop-Strukturen** (= Pythons
-//! Output ohne Ad-Viewer-Daten). Das per-Ad-Viewer-Drop-Windowing folgt als Teil 2.
+
+use std::collections::{HashMap, HashSet};
 
 use chrono::{DateTime, Duration, Utc};
 use serde_json::{json, Value};
@@ -38,35 +37,283 @@ struct DropAnalysis {
 
 const POSITION_BUCKETS: [&str; 4] = ["early_0_30m", "mid_30_60m", "late_60_90m", "endgame_90m"];
 const DURATION_BUCKETS: [&str; 4] = ["30s", "60s", "90s", "120s_plus"];
+// Labels für best_ad_time bzw. die position-Empfehlung (unterschiedlicher Wortlaut!).
+const POSITION_LABELS_SLOT: [&str; 4] = ["ersten 30 Min", "Min 30-60", "Min 60-90", "nach Min 90"];
+const POSITION_LABELS_RECO: [&str; 4] =
+    ["in den ersten 30 Min", "zwischen Min 30-60", "zwischen Min 60-90", "nach Min 90"];
+const DURATION_LABELS: [&str; 4] = ["30s", "60s", "90s", "120s+"];
 
-fn empty_impact(buckets: &[&str], value_key: &str) -> Value {
+fn mean(values: &[f64]) -> f64 {
+    values.iter().sum::<f64>() / values.len() as f64
+}
+
+/// Python `_avg`: round1(mean) oder null bei leer.
+fn avg_round1(values: &[f64]) -> Value {
+    if values.is_empty() {
+        Value::Null
+    } else {
+        json!(round1(mean(values)))
+    }
+}
+
+/// {bucket: {value_key, count}}-Map (leerer Bucket → value_key null, count 0).
+fn impact_map(names: &[&str], data: &[Vec<f64>; 4], value_key: &str) -> Value {
     let mut m = serde_json::Map::new();
-    for b in buckets {
-        m.insert(b.to_string(), json!({ value_key: Value::Null, "count": 0 }));
+    for (i, name) in names.iter().enumerate() {
+        m.insert(
+            name.to_string(),
+            json!({ value_key: avg_round1(&data[i]), "count": data[i].len() }),
+        );
     }
     Value::Object(m)
 }
 
-impl DropAnalysis {
-    /// Leere Analyse — entspricht Pythons Output ohne Ad-Viewer-Daten.
-    fn empty() -> Self {
-        DropAnalysis {
-            avg_viewer_drop_pct: Value::Null,
-            worst_ads: Vec::new(),
-            position_impact: empty_impact(&POSITION_BUCKETS, "avg_drop"),
-            duration_impact: empty_impact(&DURATION_BUCKETS, "avg_drop"),
-            auto_vs_manual: json!({
-                "auto_avg_drop": Value::Null,
-                "manual_avg_drop": Value::Null,
-                "auto_count": 0,
-                "manual_count": 0,
-            }),
-            best_ad_time: Value::Null,
-            avg_recovery_min: Value::Null,
-            recovery_by_duration: empty_impact(&DURATION_BUCKETS, "avg_recovery_min"),
-            recommendations: Vec::new(),
+/// Index des nicht-leeren Buckets mit kleinstem Mittelwert (Gleichstand → niedrigster Index).
+fn min_mean_index(data: &[Vec<f64>; 4]) -> Option<usize> {
+    let mut best: Option<(usize, f64)> = None;
+    for (i, d) in data.iter().enumerate() {
+        if d.is_empty() {
+            continue;
+        }
+        let m = mean(d);
+        if best.map_or(true, |(_, bm)| m < bm) {
+            best = Some((i, m));
         }
     }
+    best.map(|(i, _)| i)
+}
+
+/// Index des nicht-leeren Buckets mit größtem Mittelwert (Gleichstand → niedrigster Index).
+fn max_mean_index(data: &[Vec<f64>; 4]) -> Option<usize> {
+    let mut worst: Option<(usize, f64)> = None;
+    for (i, d) in data.iter().enumerate() {
+        if d.is_empty() {
+            continue;
+        }
+        let m = mean(d);
+        if worst.map_or(true, |(_, wm)| m > wm) {
+            worst = Some((i, m));
+        }
+    }
+    worst.map(|(i, _)| i)
+}
+
+/// Per-Ad-Viewer-Drop-Analyse: lädt die letzten 200 Ad-Breaks + die Viewer-Timeline
+/// ihrer Sessions und berechnet je Ad den Viewer-Drop (Ø 3 Min vor Ad vs. 2 Min nach
+/// Ad-Ende), Recovery-Zeit, Positions-/Dauer-Buckets + abgeleitete Empfehlungen.
+/// Ohne Ad-/Timeline-Daten ergeben sich automatisch die leeren Default-Strukturen.
+async fn compute_drop_analysis(
+    pool: &PgPool,
+    streamer: &str,
+    cutoff: DateTime<Utc>,
+) -> Result<DropAnalysis, sqlx::Error> {
+    type AdRow = (i64, i64, DateTime<Utc>, Option<i32>, Option<bool>, Option<DateTime<Utc>>);
+    let ad_rows: Vec<AdRow> = sqlx::query_as(
+        "SELECT a.id::bigint, a.session_id::bigint, a.started_at, a.duration_seconds, a.is_automatic, s.started_at \
+           FROM twitch_ad_break_events a \
+           JOIN twitch_stream_sessions s ON s.id = a.session_id \
+          WHERE a.started_at >= $1 AND a.session_id IS NOT NULL AND ($2 = '' OR LOWER(s.streamer_login) = $2) \
+          ORDER BY a.started_at DESC LIMIT 200",
+    )
+    .bind(cutoff)
+    .bind(streamer)
+    .fetch_all(pool)
+    .await?;
+
+    // Viewer-Timeline je Session (nur wenn Ads vorhanden — wie Pythons `if ad_rows`).
+    let mut timeline_map: HashMap<i64, Vec<(f64, f64)>> = HashMap::new();
+    if !ad_rows.is_empty() {
+        let mut seen: HashSet<i64> = HashSet::new();
+        let mut session_ids: Vec<i64> = Vec::new();
+        for r in &ad_rows {
+            if seen.insert(r.1) {
+                session_ids.push(r.1);
+            }
+        }
+        if !session_ids.is_empty() {
+            let viewer_rows: Vec<(i64, Option<i32>, i32)> = sqlx::query_as(
+                "SELECT session_id::bigint, minutes_from_start, viewer_count \
+                   FROM twitch_session_viewers WHERE session_id = ANY($1) \
+                  ORDER BY session_id, minutes_from_start",
+            )
+            .bind(&session_ids)
+            .fetch_all(pool)
+            .await?;
+            for (sid, minute, vc) in viewer_rows {
+                timeline_map.entry(sid).or_default().push((minute.unwrap_or(0) as f64, vc as f64));
+            }
+        }
+    }
+
+    let mut drop_pcts: Vec<f64> = Vec::new();
+    let mut worst_ads: Vec<(f64, Value)> = Vec::new();
+    let mut position: [Vec<f64>; 4] = Default::default();
+    let mut duration: [Vec<f64>; 4] = Default::default();
+    let mut auto_drops: Vec<f64> = Vec::new();
+    let mut manual_drops: Vec<f64> = Vec::new();
+    let mut recovery_times: Vec<f64> = Vec::new();
+    let mut duration_recovery: [Vec<f64>; 4] = Default::default();
+
+    for (_id, session_id, started_at, duration_seconds, is_automatic, session_start) in &ad_rows {
+        // Python `float(ad.duration_seconds or 30)`: None/0 → 30.
+        let duration_seconds =
+            duration_seconds.map(|d| d as f64).filter(|d| *d != 0.0).unwrap_or(30.0);
+        // str(None)→fromisoformat-Fehler→continue.
+        let Some(session_start) = session_start else { continue };
+        let minutes_into = (*started_at - *session_start).num_milliseconds() as f64 / 60_000.0;
+        let Some(timeline) = timeline_map.get(session_id) else { continue };
+        if timeline.is_empty() {
+            continue;
+        }
+        let duration_minutes = duration_seconds / 60.0;
+        let pre: Vec<f64> = timeline
+            .iter()
+            .filter(|(m, _)| (minutes_into - 3.0) <= *m && *m < minutes_into)
+            .map(|(_, v)| *v)
+            .collect();
+        let post_start = minutes_into + duration_minutes;
+        let post: Vec<f64> = timeline
+            .iter()
+            .filter(|(m, _)| post_start <= *m && *m < post_start + 2.0)
+            .map(|(_, v)| *v)
+            .collect();
+        if pre.is_empty() || post.is_empty() {
+            continue;
+        }
+        let pre_avg = mean(&pre);
+        if pre_avg <= 0.0 {
+            continue;
+        }
+        let drop = (pre_avg - mean(&post)) / pre_avg * 100.0;
+        drop_pcts.push(drop);
+
+        // Recovery: erstes Timeline-Sample nach Ad-Ende mit >= 95 % des Pre-Schnitts.
+        let mut sorted_tl = timeline.clone();
+        sorted_tl.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+        let mut recovery_min: Option<f64> = None;
+        for (minute, viewers) in &sorted_tl {
+            if *minute > post_start && *viewers >= pre_avg * 0.95 {
+                recovery_min = Some(round1(minute - post_start));
+                break;
+            }
+        }
+        let di = if duration_seconds <= 35.0 {
+            0
+        } else if duration_seconds <= 65.0 {
+            1
+        } else if duration_seconds <= 100.0 {
+            2
+        } else {
+            3
+        };
+        if let Some(rm) = recovery_min {
+            recovery_times.push(rm);
+            duration_recovery[di].push(rm);
+        }
+
+        let is_auto = is_automatic.unwrap_or(false);
+        let drop_pct_round = round1(drop);
+        worst_ads.push((
+            drop_pct_round,
+            json!({
+                "started_at": started_at.format("%Y-%m-%d %H:%M").to_string(),
+                "duration_s": duration_seconds as i64,
+                "drop_pct": drop_pct_round,
+                "is_automatic": is_auto,
+                "min_into_stream": round1(minutes_into),
+                "recovery_min": recovery_min.map(|v| json!(v)).unwrap_or(Value::Null),
+            }),
+        ));
+
+        let pi = if minutes_into < 30.0 {
+            0
+        } else if minutes_into < 60.0 {
+            1
+        } else if minutes_into < 90.0 {
+            2
+        } else {
+            3
+        };
+        position[pi].push(drop);
+        duration[di].push(drop);
+        if is_auto {
+            auto_drops.push(drop);
+        } else {
+            manual_drops.push(drop);
+        }
+    }
+
+    let avg_viewer_drop_pct =
+        if drop_pcts.is_empty() { Value::Null } else { json!(round1(mean(&drop_pcts))) };
+
+    // Top-5 nach drop_pct absteigend (stabil → Gleichstand behält Ad-Reihenfolge).
+    worst_ads.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
+    let worst_ads_json: Vec<Value> = worst_ads.into_iter().take(5).map(|(_, j)| j).collect();
+
+    let auto_vs_manual = json!({
+        "auto_avg_drop": avg_round1(&auto_drops),
+        "manual_avg_drop": avg_round1(&manual_drops),
+        "auto_count": auto_drops.len(),
+        "manual_count": manual_drops.len(),
+    });
+
+    let best_ad_time = match (min_mean_index(&position), max_mean_index(&position)) {
+        (Some(best), Some(worst)) => Value::String(format!(
+            "Nach {} (Ø -{:.1}% statt -{:.1}% {})",
+            POSITION_LABELS_SLOT[best],
+            mean(&position[best]),
+            mean(&position[worst]),
+            POSITION_LABELS_SLOT[worst]
+        )),
+        _ => Value::Null,
+    };
+
+    let avg_recovery_min =
+        if recovery_times.is_empty() { Value::Null } else { json!(round1(mean(&recovery_times))) };
+
+    let mut recommendations: Vec<String> = Vec::new();
+    if let Some(best) = min_mean_index(&duration) {
+        recommendations.push(format!(
+            "{}-Ads verursachen den geringsten Drop (Ø {:.1}%)",
+            DURATION_LABELS[best],
+            mean(&duration[best])
+        ));
+    }
+    if !auto_drops.is_empty() && !manual_drops.is_empty() {
+        let auto_avg = mean(&auto_drops);
+        let manual_avg = mean(&manual_drops);
+        if manual_avg < auto_avg * 0.7 {
+            recommendations.push(format!(
+                "Manuelle Ads verlieren {:.0}% weniger Viewer als automatische",
+                (auto_avg - manual_avg) / auto_avg * 100.0
+            ));
+        }
+    }
+    if let Some(best) = min_mean_index(&position) {
+        recommendations.push(format!(
+            "Beste Ad-Zeit: {} (Ø {:.1}% Drop)",
+            POSITION_LABELS_RECO[best],
+            mean(&position[best])
+        ));
+    }
+    if !recovery_times.is_empty() {
+        recommendations.push(format!(
+            "Ø Recovery-Zeit: {:.1} Minuten nach Ad-Ende",
+            mean(&recovery_times)
+        ));
+    }
+
+    Ok(DropAnalysis {
+        avg_viewer_drop_pct,
+        worst_ads: worst_ads_json,
+        position_impact: impact_map(&POSITION_BUCKETS, &position, "avg_drop"),
+        duration_impact: impact_map(&DURATION_BUCKETS, &duration, "avg_drop"),
+        auto_vs_manual,
+        best_ad_time,
+        avg_recovery_min,
+        recovery_by_duration: impact_map(&DURATION_BUCKETS, &duration_recovery, "avg_recovery_min"),
+        recommendations,
+    })
 }
 
 /// Lädt die Monetization-Übersicht (Python `load_monetization_payload`).
@@ -94,7 +341,7 @@ pub async fn load_monetization_payload(
         .fetch_one(pool)
         .await?;
 
-    let analysis = DropAnalysis::empty();
+    let analysis = compute_drop_analysis(pool, streamer, cutoff).await?;
 
     let ads = json!({
         "total": total_ads,
@@ -208,6 +455,8 @@ mod tests {
             .execute(&pool).await.unwrap();
         sqlx::query("CREATE TABLE twitch_hype_train_events (id BIGSERIAL PRIMARY KEY, session_id BIGINT, level INTEGER, duration_seconds INTEGER, started_at TIMESTAMPTZ, ended_at TIMESTAMPTZ)")
             .execute(&pool).await.unwrap();
+        sqlx::query("CREATE TABLE twitch_session_viewers (session_id BIGINT, ts_utc TIMESTAMPTZ, minutes_from_start INTEGER, viewer_count INTEGER)")
+            .execute(&pool).await.unwrap();
         Some(pool)
     }
 
@@ -243,6 +492,46 @@ mod tests {
         assert_eq!(v["bits"], json!({ "total": 0, "cheer_events": 0 }));
         assert_eq!(v["subs"], json!({ "total_events": 0, "gifted": 0 }));
         assert_eq!(v["window_days"], 30);
+    }
+
+    #[tokio::test]
+    async fn drop_analysis_berechnet() {
+        let Some(pool) = make_pool("t_mon_drop").await else { return };
+        // Session + 1 manueller 60s-Ad, 10 Min in den Stream (feste Timestamps → minutes_into=10.0).
+        sqlx::query("INSERT INTO twitch_stream_sessions (id, streamer_login, started_at) VALUES (1,'nani','2026-06-14 12:00:00+00')")
+            .execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO twitch_ad_break_events (session_id, duration_seconds, is_automatic, started_at) VALUES (1,60,FALSE,'2026-06-14 12:10:00+00')")
+            .execute(&pool).await.unwrap();
+        // Timeline: pre (Min 7-9)=100, während/post (Min 10-12)=50, Recovery bei Min 13=95.
+        for (m, vc) in [(7, 100), (8, 100), (9, 100), (10, 50), (11, 50), (12, 50), (13, 95)] {
+            sqlx::query("INSERT INTO twitch_session_viewers (session_id, ts_utc, minutes_from_start, viewer_count) VALUES (1, NOW(), $1, $2)")
+                .bind(m as i32).bind(vc as i32).execute(&pool).await.unwrap();
+        }
+
+        let v = load_monetization_payload(&pool, "nani", 3650).await.unwrap();
+        let ads = &v["ads"];
+        // drop = (100-50)/100*100 = 50.0
+        assert_eq!(ads["avg_viewer_drop_pct"], 50.0);
+        let w = &ads["worst_ads"][0];
+        assert_eq!(w["started_at"], "2026-06-14 12:10");
+        assert_eq!(w["duration_s"], 60);
+        assert_eq!(w["drop_pct"], 50.0);
+        assert_eq!(w["is_automatic"], false);
+        assert_eq!(w["min_into_stream"], 10.0);
+        assert_eq!(w["recovery_min"], 2.0); // Min 13 − post_start 11
+        // Buckets: Position early, Dauer 60s.
+        assert_eq!(ads["position_impact"]["early_0_30m"], json!({ "avg_drop": 50.0, "count": 1 }));
+        assert_eq!(ads["position_impact"]["mid_30_60m"], json!({ "avg_drop": Value::Null, "count": 0 }));
+        assert_eq!(ads["duration_impact"]["60s"], json!({ "avg_drop": 50.0, "count": 1 }));
+        assert_eq!(ads["auto_vs_manual"], json!({ "auto_avg_drop": Value::Null, "manual_avg_drop": 50.0, "auto_count": 0, "manual_count": 1 }));
+        assert_eq!(ads["avg_recovery_min"], 2.0);
+        assert_eq!(ads["recovery_by_duration"]["60s"], json!({ "avg_recovery_min": 2.0, "count": 1 }));
+        assert_eq!(ads["best_ad_time"], "Nach ersten 30 Min (Ø -50.0% statt -50.0% ersten 30 Min)");
+        assert_eq!(ads["recommendations"], json!([
+            "60s-Ads verursachen den geringsten Drop (Ø 50.0%)",
+            "Beste Ad-Zeit: in den ersten 30 Min (Ø 50.0% Drop)",
+            "Ø Recovery-Zeit: 2.0 Minuten nach Ad-Ende"
+        ]));
     }
 
     #[tokio::test]
