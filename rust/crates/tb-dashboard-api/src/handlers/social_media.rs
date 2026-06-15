@@ -12,7 +12,7 @@
 //! [`resolve_streamer_scope`]-Helfer.
 
 use axum::{
-    extract::{Path, Query, State},
+    extract::{Multipart, Path, Query, State},
     http::StatusCode,
     response::{Html, IntoResponse, Response},
     Json,
@@ -31,7 +31,8 @@ use tb_social_media::settings::{coerce_bool, get_auto_approve_settings, set_auto
 use tb_social_media::analytics::{list_clip_analytics, list_reports, ClipAnalyticsSnapshot, SocialMediaReportRecord};
 use tb_social_media::clip_analytics::get_analytics_summary;
 use tb_social_media::credentials::{CredentialManager, PlatformStatus};
-use tb_social_media::clip_manager::{get_clips_for_dashboard, mark_clip_uploaded};
+use tb_social_media::clip_manager::{get_clips_for_dashboard, mark_clip_uploaded, register_manual_upload, ManualUploadError};
+use tb_social_media::video_processor::VideoProcessor;
 use tb_social_media::clip_queue::queue_upload;
 use tb_social_media::clip_templates::{
     apply_template_to_clip, create_streamer_template, get_global_templates, get_last_hashtags, get_streamer_templates,
@@ -389,17 +390,22 @@ fn require_admin(auth: &DashboardAuthLevel) -> Result<(), Response> {
     }
 }
 
-/// Validiert einen Slug (`[A-Za-z0-9_-]+`, nicht leer) — Python
-/// `_normalize_safe_slug`. Fehler als Plaintext-400 (wie web.HTTPBadRequest).
-fn normalize_safe_slug(raw: Option<&str>, field: &str) -> Result<String, Response> {
+/// Slug-Validierung (`[A-Za-z0-9_-]+`, nicht leer) — liefert die Fehlermeldung
+/// (Python `_normalize_safe_slug`).
+fn slug_message(raw: Option<&str>, field: &str) -> Result<String, String> {
     let value = raw.unwrap_or("").trim().to_string();
     if value.is_empty() {
-        return Err((StatusCode::BAD_REQUEST, format!("{field} is required")).into_response());
+        return Err(format!("{field} is required"));
     }
     if !value.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-') {
-        return Err((StatusCode::BAD_REQUEST, format!("{field} must match [A-Za-z0-9_-]+")).into_response());
+        return Err(format!("{field} must match [A-Za-z0-9_-]+"));
     }
     Ok(value)
+}
+
+/// Wie [`slug_message`], Fehler als Plaintext-400 (wie web.HTTPBadRequest).
+fn normalize_safe_slug(raw: Option<&str>, field: &str) -> Result<String, Response> {
+    slug_message(raw, field).map_err(|m| (StatusCode::BAD_REQUEST, m).into_response())
 }
 
 async fn ensure_streamer_exists(pool: &PgPool, slug: &str) -> bool {
@@ -435,6 +441,128 @@ fn parse_layout_request(payload: &Value) -> Result<StreamerLayout, Response> {
     let cam_enabled = payload.get("cam_enabled").and_then(Value::as_bool);
     let mode = payload.get("mode").and_then(Value::as_str);
     StreamerLayout::from_value(lp, cam_enabled, mode).map_err(|e| invalid_layout(e.to_string()))
+}
+
+const UPLOAD_MAX_BYTES: usize = 200 * 1024 * 1024;
+const UPLOAD_MAX_DURATION_SECONDS: f64 = 300.0;
+
+/// MP4-Magic: enthält das `ftyp`-Box-Kennzeichen in den ersten 64 Bytes.
+fn has_mp4_header(bytes: &[u8]) -> bool {
+    bytes.get(..bytes.len().min(64)).map(|h| h.windows(4).any(|w| w == b"ftyp")).unwrap_or(false)
+}
+
+/// Verarbeitet einen hochgeladenen Clip (Validierung + Speichern + Registrierung).
+/// `base_dir` injizierbar (Tests). Liefert die 201-Antwort oder eine Fehler-Response.
+async fn process_uploaded_clip(
+    pool: &PgPool,
+    base_dir: &str,
+    streamer_raw: Option<&str>,
+    clip_id_raw: Option<&str>,
+    title: Option<&str>,
+    bytes: &[u8],
+) -> Result<Value, Response> {
+    if bytes.len() > UPLOAD_MAX_BYTES {
+        return Err((StatusCode::PAYLOAD_TOO_LARGE, "Uploaded file too large").into_response());
+    }
+    let streamer_login = slug_message(streamer_raw, "streamer_login")
+        .map_err(|m| (StatusCode::BAD_REQUEST, Json(json!({ "error": "invalid_streamer_login", "message": m }))).into_response())?
+        .to_lowercase();
+    if !ensure_streamer_exists(pool, &streamer_login).await {
+        return Err((StatusCode::NOT_FOUND, Json(json!({ "error": "unknown_streamer" }))).into_response());
+    }
+    let clip_id = match clip_id_raw.filter(|s| !s.is_empty()) {
+        Some(raw) => normalize_safe_slug(Some(raw), "clip_id")?, // Slug-Fehler → Plaintext-400
+        None => tb_crypto::random_hex_token(16),
+    };
+    let upload_dir = format!("{base_dir}/{streamer_login}");
+    let final_path = format!("{upload_dir}/{clip_id}.mp4");
+    if std::path::Path::new(&final_path).exists() {
+        return Err((StatusCode::CONFLICT, Json(json!({ "error": "duplicate_clip_id" }))).into_response());
+    }
+
+    if tokio::fs::create_dir_all(&upload_dir).await.is_err() {
+        return Err((StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": "upload_failed" }))).into_response());
+    }
+    let temp_path = format!("{upload_dir}/{clip_id}.upload.tmp");
+    if tokio::fs::write(&temp_path, bytes).await.is_err() {
+        let _ = tokio::fs::remove_file(&temp_path).await;
+        return Err((StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": "upload_failed" }))).into_response());
+    }
+
+    // Validierung (ftyp + ffprobe-Dauer).
+    let validation = async {
+        if !has_mp4_header(bytes) {
+            return Err((StatusCode::UNSUPPORTED_MEDIA_TYPE, "Only MP4 uploads are supported").into_response());
+        }
+        let info = VideoProcessor::default()
+            .get_video_info(&temp_path)
+            .await
+            .map_err(|_| (StatusCode::UNSUPPORTED_MEDIA_TYPE, "Uploaded file is not a valid MP4 video").into_response())?;
+        if info.duration <= 0.0 {
+            return Err((StatusCode::BAD_REQUEST, "Uploaded MP4 must have a positive duration").into_response());
+        }
+        if info.duration > UPLOAD_MAX_DURATION_SECONDS {
+            return Err((StatusCode::BAD_REQUEST, "Uploaded MP4 must be 300 seconds or shorter").into_response());
+        }
+        Ok(info.duration)
+    }
+    .await;
+    let duration = match validation {
+        Ok(d) => d,
+        Err(resp) => {
+            let _ = tokio::fs::remove_file(&temp_path).await;
+            return Err(resp);
+        }
+    };
+
+    if tokio::fs::rename(&temp_path, &final_path).await.is_err() {
+        let _ = tokio::fs::remove_file(&temp_path).await;
+        return Err((StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": "upload_failed" }))).into_response());
+    }
+
+    match register_manual_upload(pool, &clip_id, &streamer_login, title, &final_path, duration).await {
+        Ok((clip_db_id, retention_until)) => Ok(json!({ "clip_db_id": clip_db_id, "clip_id": clip_id, "retention_until": retention_until })),
+        Err(ManualUploadError::AlreadyExists) => {
+            let _ = tokio::fs::remove_file(&final_path).await;
+            Err((StatusCode::CONFLICT, Json(json!({ "error": "duplicate_clip_id" }))).into_response())
+        }
+        Err(ManualUploadError::UnknownStreamer) => {
+            let _ = tokio::fs::remove_file(&final_path).await;
+            Err((StatusCode::NOT_FOUND, Json(json!({ "error": "unknown_streamer" }))).into_response())
+        }
+        Err(ManualUploadError::Db(_)) => {
+            let _ = tokio::fs::remove_file(&final_path).await;
+            Err((StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": "upload_failed" }))).into_response())
+        }
+    }
+}
+
+/// `POST /social-media/api/clips/upload` — Multipart-Datei-Upload (Admin).
+pub async fn upload_clip_handler(auth: DashboardAuthLevel, State(pool): State<PgPool>, mut multipart: Multipart) -> Response {
+    if let Err(e) = require_admin(&auth) {
+        return e;
+    }
+    let mut bytes: Option<Vec<u8>> = None;
+    let mut streamer_login: Option<String> = None;
+    let mut clip_id: Option<String> = None;
+    let mut title: Option<String> = None;
+    while let Ok(Some(field)) = multipart.next_field().await {
+        match field.name().map(str::to_string).as_deref() {
+            Some("file") => bytes = field.bytes().await.ok().map(|b| b.to_vec()),
+            Some("streamer_login") => streamer_login = field.text().await.ok(),
+            Some("clip_id") => clip_id = field.text().await.ok(),
+            Some("title") => title = field.text().await.ok(),
+            _ => {}
+        }
+    }
+    let Some(bytes) = bytes else {
+        return (StatusCode::BAD_REQUEST, Json(json!({ "error": "file is required" }))).into_response();
+    };
+    let title = title.map(|t| t.trim().to_string()).filter(|t| !t.is_empty());
+    match process_uploaded_clip(&pool, "data/clips/uploads", streamer_login.as_deref(), clip_id.as_deref(), title.as_deref(), &bytes).await {
+        Ok(payload) => (StatusCode::CREATED, Json(payload)).into_response(),
+        Err(resp) => resp,
+    }
 }
 
 /// `?streamer_login=` für die Layout-GET-Route.
@@ -1572,7 +1700,7 @@ mod tests {
         let opts = PgConnectOptions::from_str(&dsn).unwrap().options([("search_path", schema)]);
         let pool = PgPoolOptions::new().max_connections(2).connect_with(opts).await.unwrap();
         for ddl in [
-            "CREATE TABLE twitch_clips_social_media (id SERIAL PRIMARY KEY, clip_id TEXT, clip_url TEXT, clip_thumbnail_url TEXT, streamer_login TEXT, status TEXT DEFAULT 'pending', created_at TEXT, duration_seconds DOUBLE PRECISION, view_count INTEGER, clip_title TEXT, game_name TEXT, source_kind TEXT DEFAULT 'twitch', upload_local_path TEXT, custom_description TEXT, hashtags TEXT, layout_override_json JSONB, retention_until TIMESTAMPTZ, discarded_at TIMESTAMPTZ, uploaded_tiktok INTEGER DEFAULT 0, uploaded_youtube INTEGER DEFAULT 0, uploaded_instagram INTEGER DEFAULT 0, tiktok_uploaded_at TEXT, youtube_uploaded_at TEXT, instagram_uploaded_at TEXT)",
+            "CREATE TABLE twitch_clips_social_media (id SERIAL PRIMARY KEY, clip_id TEXT UNIQUE, clip_url TEXT, clip_thumbnail_url TEXT, streamer_login TEXT, twitch_user_id TEXT, status TEXT DEFAULT 'pending', created_at TEXT, duration_seconds DOUBLE PRECISION, view_count INTEGER, clip_title TEXT, game_name TEXT, source_kind TEXT DEFAULT 'twitch', upload_local_path TEXT, local_file_path TEXT, custom_description TEXT, hashtags TEXT, layout_override_json JSONB, retention_until TIMESTAMPTZ, discarded_at TIMESTAMPTZ, uploaded_tiktok INTEGER DEFAULT 0, uploaded_youtube INTEGER DEFAULT 0, uploaded_instagram INTEGER DEFAULT 0, tiktok_uploaded_at TEXT, youtube_uploaded_at TEXT, instagram_uploaded_at TEXT)",
             "CREATE TABLE social_media_clip_enrichment (clip_db_id INTEGER PRIMARY KEY, transcript_raw TEXT, transcript_corrected TEXT, transcript_segments JSONB, transcript_lang TEXT, detected_terms JSONB DEFAULT '[]'::jsonb, title_youtube TEXT, title_tiktok TEXT, title_instagram TEXT, description_youtube TEXT, description_tiktok TEXT, description_instagram TEXT, hashtags_youtube JSONB DEFAULT '[]'::jsonb, hashtags_tiktok JSONB DEFAULT '[]'::jsonb, hashtags_instagram JSONB DEFAULT '[]'::jsonb, llm_provider TEXT, llm_model TEXT, cost_usd_estimate NUMERIC(10,6), status TEXT DEFAULT 'pending', error_message TEXT, started_at TIMESTAMPTZ, completed_at TIMESTAMPTZ, edited_by TEXT, updated_at TIMESTAMPTZ DEFAULT NOW())",
             "CREATE TABLE social_media_clip_approval (clip_db_id INTEGER PRIMARY KEY, state TEXT NOT NULL DEFAULT 'awaiting_approval', approved_platforms JSONB NOT NULL DEFAULT '[]'::jsonb, approver_user_id TEXT, decided_at TIMESTAMPTZ, dm_message_id TEXT, dm_channel_id TEXT, last_sent_at TIMESTAMPTZ)",
             "CREATE TABLE twitch_clips_upload_queue (id SERIAL PRIMARY KEY, clip_id INTEGER, platform TEXT, status TEXT DEFAULT 'pending', priority INTEGER DEFAULT 0, title TEXT, description TEXT, hashtags TEXT, scheduled_at TEXT, attempts INTEGER DEFAULT 0, last_error TEXT, last_attempt_at TEXT, created_at TEXT DEFAULT CURRENT_TIMESTAMP, completed_at TEXT)",
@@ -2154,5 +2282,49 @@ mod tests {
         assert_eq!(mark_uploaded_handler(DashboardAuthLevel::Admin, State(pool.clone()), Query(StreamerQuery { streamer: None }), Json(mark_body(Some(clip), json!([])))).await.status(), StatusCode::BAD_REQUEST);
         // Partner mit fremdem Clip → 403.
         assert_eq!(mark_uploaded_handler(partner("other"), State(pool.clone()), Query(StreamerQuery { streamer: None }), Json(mark_body(Some(clip), json!(["tiktok"])))).await.status(), StatusCode::FORBIDDEN);
+    }
+
+    /// Erzeugt eine winzige gültige MP4 via ffmpeg; None wenn ffmpeg fehlt.
+    async fn tiny_mp4() -> Option<Vec<u8>> {
+        let path = std::env::temp_dir().join("tb_upload_test_src.mp4");
+        let out = tokio::process::Command::new("ffmpeg")
+            .args(["-f", "lavfi", "-i", "testsrc=duration=1:size=128x128:rate=10", "-pix_fmt", "yuv420p", "-y", &path.to_string_lossy()])
+            .output()
+            .await
+            .ok()?;
+        if !out.status.success() {
+            return None;
+        }
+        tokio::fs::read(&path).await.ok()
+    }
+
+    #[tokio::test]
+    async fn upload_clip_validierung() {
+        let Some(pool) = make_pool("t_dash_sm_upload").await else { return };
+        sqlx::query("INSERT INTO twitch_streamers (twitch_login, twitch_user_id) VALUES ('nani', '1')").execute(&pool).await.unwrap();
+        let base = std::env::temp_dir().join("tb_upload_test_dash").to_string_lossy().into_owned();
+        let _ = std::fs::remove_dir_all(&base);
+
+        // Ungültiger Streamer-Slug → 400.
+        let resp = process_uploaded_clip(&pool, &base, Some("bad slug!"), None, None, b"xxxx").await.unwrap_err();
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+        // Unbekannter Streamer → 404.
+        let resp = process_uploaded_clip(&pool, &base, Some("ghost"), None, None, b"xxxxftypisom").await.unwrap_err();
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+        // Bekannter Streamer, aber keine MP4 (kein ftyp) → 415.
+        let resp = process_uploaded_clip(&pool, &base, Some("nani"), Some("c1"), None, b"not a video at all").await.unwrap_err();
+        assert_eq!(resp.status(), StatusCode::UNSUPPORTED_MEDIA_TYPE);
+
+        // Happy-Path mit echter MP4 (best-effort, nur wenn ffmpeg da).
+        if let Some(mp4) = tiny_mp4().await {
+            let payload = process_uploaded_clip(&pool, &base, Some("nani"), Some("good1"), Some("Mein Clip"), &mp4).await.unwrap();
+            assert!(payload["clip_db_id"].as_i64().unwrap() > 0);
+            assert_eq!(payload["clip_id"], "good1");
+            assert!(std::path::Path::new(&format!("{base}/nani/good1.mp4")).exists());
+            // Duplikat → 409.
+            let resp = process_uploaded_clip(&pool, &base, Some("nani"), Some("good1"), None, &mp4).await.unwrap_err();
+            assert_eq!(resp.status(), StatusCode::CONFLICT);
+        }
+        let _ = std::fs::remove_dir_all(&base);
     }
 }

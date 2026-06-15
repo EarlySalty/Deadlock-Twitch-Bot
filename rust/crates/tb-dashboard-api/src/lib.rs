@@ -75,6 +75,11 @@ pub fn build_authed_router(pool: PgPool, token: String) -> Router {
         .route("/social-media/api/analytics", get(social_media::stats_handler))
         .route("/social-media/api/upload", post(social_media::queue_upload_handler))
         .route("/social-media/api/mark-uploaded", post(social_media::mark_uploaded_handler))
+        // Multipart-Datei-Upload — eigenes 201MB-Body-Limit (Default ist 2MB).
+        .route(
+            "/social-media/api/clips/upload",
+            post(social_media::upload_clip_handler).layer(axum::extract::DefaultBodyLimit::max(201 * 1024 * 1024)),
+        )
         // Templates: globale + Streamer-Listen (GET), anlegen + anwenden (POST).
         .route("/social-media/api/templates/global", get(social_media::templates_global_handler))
         .route("/social-media/api/templates/streamer", get(social_media::templates_streamer_handler).post(social_media::create_template_handler))
