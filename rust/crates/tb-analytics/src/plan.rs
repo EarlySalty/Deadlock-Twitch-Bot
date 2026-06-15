@@ -108,22 +108,52 @@ pub fn plan_entitlements(plan_id: &str) -> &'static [&'static str] {
     }
 }
 
-/// Normalisiert eine Plan-ID auf den kanonischen Wert.
+/// Normalisiert eine Plan-ID strikt-kanonisch auf einen bekannten Plan.
 ///
-/// Python: `normalize_plan_id` / `LEGACY_PLAN_NAME_TO_ID_MAP`
+/// Spiegelt Python `catalog.py:normalize_plan_id` (Zeile 138-140):
+/// nur Whitespace trimmen, dann **exakter, case-sensitiver** Abgleich gegen
+/// `KNOWN_PLAN_IDS`; sonst Fallback `raid_free`. KEIN Lowercasing, KEINE
+/// Legacy-Aliase — die liegen in Python in `normalize_plan_id_from_legacy_name`
+/// (nur vom Raid-Subsystem `partner_scores.py` genutzt, nicht in der
+/// Entitlement-DB-Auflösung).
+///
+/// Die zuvor hier eingebaute case-insensitive/Legacy-Normalisierung war eine
+/// Migrations-Divergenz: sie hätte z. B. `"Raid_Boost"` oder `"analysis"` an
+/// DB-Resolution-Stellen akzeptiert, wo Python sie auf `raid_free` (Billing)
+/// bzw. ganz aus dem Override (Manual) wirft. Test-Gate: siehe `tests`.
 fn normalize_plan_id(raw: &str) -> &'static str {
-    match raw.trim().to_lowercase().as_str() {
-        "free" | "raid_free" => "raid_free",
-        "werbefrei" | "quiet" | "chat_quiet" => "chat_quiet",
+    match raw.trim() {
+        "raid_free" => "raid_free",
+        "chat_quiet" => "chat_quiet",
         "raid_boost" => "raid_boost",
-        "chat_quiet_bundle" | "bundle_chat_quiet_raid_boost" => "bundle_chat_quiet_raid_boost",
-        "analysis" | "analysis_dashboard" => "analysis_dashboard",
-        "bundle" | "bundle_analysis_raid_boost" => "bundle_analysis_raid_boost",
+        "bundle_chat_quiet_raid_boost" => "bundle_chat_quiet_raid_boost",
+        "analysis_dashboard" => "analysis_dashboard",
+        "bundle_analysis_raid_boost" => "bundle_analysis_raid_boost",
         "bundle_werbefrei_analyse" => "bundle_werbefrei_analyse",
         "bundle_komplett" => "bundle_komplett",
         "analytics_trial" => "analytics_trial",
         _ => "raid_free",
     }
+}
+
+/// Kanonische Plan-IDs (Python `KNOWN_PLAN_IDS`).
+const KNOWN_PLAN_IDS: [&str; 9] = [
+    "raid_free",
+    "chat_quiet",
+    "raid_boost",
+    "bundle_chat_quiet_raid_boost",
+    "analysis_dashboard",
+    "bundle_analysis_raid_boost",
+    "bundle_werbefrei_analyse",
+    "bundle_komplett",
+    "analytics_trial",
+];
+
+/// `true`, wenn `raw` (nur whitespace-getrimmt) ein bekannter kanonischer Plan
+/// ist. Spiegelt Python `manual_override_from_row` (repository.py:82):
+/// `if plan_id not in KNOWN_PLAN_IDS: return None`.
+fn is_known_plan_id(raw: &str) -> bool {
+    KNOWN_PLAN_IDS.contains(&raw.trim())
 }
 
 // ── Ergebnis-Typ ────────────────────────────────────────────────────────────
@@ -215,9 +245,14 @@ pub async fn resolve_plan_snapshot(
     .await?;
 
     if let Some(row) = manual {
-        let pid_raw = row.manual_plan_id.as_deref().unwrap_or("").trim().to_lowercase();
-        let pid = normalize_plan_id(&pid_raw);
-        if pid != "raid_free" || pid_raw == "raid_free" {
+        let pid_raw = row.manual_plan_id.as_deref().unwrap_or("");
+        // Strikt-kanonisch wie Python `manual_override_from_row` (repository.py:82):
+        // ein `manual_plan_id`, der NICHT in KNOWN_PLAN_IDS liegt (Case-Mismatch,
+        // Legacy-Alias, Tippfehler), macht den Override ungültig → Fall-Through zu
+        // Billing/Default. Vorher normalisierte Rust hier lowercased + Legacy-Aliase
+        // und behandelte Müll als raid_free-Override (Migrations-Divergenz).
+        if is_known_plan_id(pid_raw) {
+            let pid = normalize_plan_id(pid_raw);
             // Ablauf prüfen
             let expired = row
                 .manual_plan_expires_at
@@ -227,8 +262,6 @@ pub async fn resolve_plan_snapshot(
             // Ein aktiver (nicht abgelaufener) expliziter Override ist terminal —
             // auch ein bewusster Admin-Downgrade auf raid_free sperrt den Billing-
             // Fallthrough (Python repository.py: jeder aktive Override gewinnt).
-            // Der äußere Guard hat „explizit gesetzt" bereits sichergestellt; ein
-            // leerer manual_plan_id (→ raid_free) kommt hier gar nicht an.
             if !expired {
                 return Ok(PlanSnapshot::from_plan(
                     pid,
@@ -260,8 +293,9 @@ pub async fn resolve_plan_snapshot(
     .await?;
 
     if let Some(row) = billing {
-        let pid_raw = row.plan_id.as_deref().unwrap_or("").trim().to_lowercase();
-        let pid = normalize_plan_id(&pid_raw);
+        // Strikt-kanonisch wie Python `load_billing_subscription` (repository.py:186):
+        // `normalize_plan_id(plan_id, default="raid_free")` ohne Lowercasing/Legacy.
+        let pid = normalize_plan_id(row.plan_id.as_deref().unwrap_or("raid_free"));
         return Ok(PlanSnapshot::from_plan(pid, "billing_subscription", row.current_period_end));
     }
 
@@ -290,4 +324,74 @@ fn is_expired_timestamp(raw: &str) -> bool {
         }
     }
     false
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ── normalize_plan_id: strikt-kanonisch (Python catalog.py:138-140) ─────
+
+    #[test]
+    fn normalize_akzeptiert_alle_kanonischen_ids() {
+        for id in KNOWN_PLAN_IDS {
+            assert_eq!(normalize_plan_id(id), id, "kanonische ID muss erhalten bleiben: {id}");
+        }
+    }
+
+    #[test]
+    fn normalize_trimmt_whitespace() {
+        // Python `str(...).strip()` trimmt vor dem KNOWN_PLAN_IDS-Abgleich.
+        assert_eq!(normalize_plan_id("  raid_boost  "), "raid_boost");
+        assert_eq!(normalize_plan_id("\tanalysis_dashboard\n"), "analysis_dashboard");
+    }
+
+    #[test]
+    fn normalize_ist_case_sensitive() {
+        // Python lowercased NICHT in normalize_plan_id → Case-Mismatch fällt auf raid_free.
+        assert_eq!(normalize_plan_id("Raid_Boost"), "raid_free");
+        assert_eq!(normalize_plan_id("ANALYSIS_DASHBOARD"), "raid_free");
+        assert_eq!(normalize_plan_id("Chat_Quiet"), "raid_free");
+    }
+
+    #[test]
+    fn normalize_lehnt_legacy_aliase_ab() {
+        // Legacy-Aliase (free/werbefrei/quiet/analysis/bundle/chat_quiet_bundle)
+        // gehören in Python NUR zu normalize_plan_id_from_legacy_name (Raid-
+        // Subsystem), NICHT zur Entitlement-DB-Auflösung → hier kein Mapping.
+        for alias in ["free", "werbefrei", "quiet", "analysis", "bundle", "chat_quiet_bundle"] {
+            assert_eq!(
+                normalize_plan_id(alias),
+                "raid_free",
+                "Legacy-Alias darf in DB-Resolution nicht aufgelöst werden: {alias}"
+            );
+        }
+    }
+
+    #[test]
+    fn normalize_unbekannt_faellt_auf_raid_free() {
+        assert_eq!(normalize_plan_id(""), "raid_free");
+        assert_eq!(normalize_plan_id("garbage"), "raid_free");
+        assert_eq!(normalize_plan_id("premium_max"), "raid_free");
+    }
+
+    // ── is_known_plan_id: Manual-Override-Gate (Python repository.py:82) ─────
+
+    #[test]
+    fn known_plan_id_nur_fuer_kanonische_ids() {
+        assert!(is_known_plan_id("raid_free"));
+        assert!(is_known_plan_id("analytics_trial"));
+        assert!(is_known_plan_id("  bundle_komplett  ")); // trim wie Python
+    }
+
+    #[test]
+    fn known_plan_id_false_fuer_case_mismatch_und_legacy() {
+        // Diese Werte machen einen Manual-Override in Python ungültig (→ None,
+        // Fall-Through zu Billing) statt ihn als raid_free zu honorieren.
+        assert!(!is_known_plan_id("Raid_Boost"));
+        assert!(!is_known_plan_id("analysis"));
+        assert!(!is_known_plan_id("free"));
+        assert!(!is_known_plan_id(""));
+        assert!(!is_known_plan_id("garbage"));
+    }
 }
