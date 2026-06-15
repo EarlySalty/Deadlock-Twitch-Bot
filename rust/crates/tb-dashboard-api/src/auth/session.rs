@@ -54,6 +54,72 @@ pub struct PartnerSession {
     pub twitch_user_id: String,
 }
 
+/// Ergebnis einer Session-Erstellung: die Session-ID (Cookie-Wert) und das an
+/// die Session gebundene CSRF-Token (für `X-CSRF-Token` bei Write-Actions).
+#[derive(Debug, Clone)]
+pub struct SessionCreation {
+    /// Opaker 32-Byte-CSPRNG-Wert (url-safe), wandert in das Session-Cookie.
+    pub session_id: String,
+    /// Sessiongebundenes CSRF-Token (im verschlüsselten Payload gespeichert).
+    pub csrf_token: String,
+}
+
+/// `SameSite`-Politik eines Session-Cookies.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SameSite {
+    /// `SameSite=Lax` — Standard für Session-Cookies (Python: services.py:62).
+    Lax,
+    /// `SameSite=Strict` — strenger, für hochsensible Cookies.
+    Strict,
+}
+
+impl SameSite {
+    fn as_str(self) -> &'static str {
+        match self {
+            SameSite::Lax => "Lax",
+            SameSite::Strict => "Strict",
+        }
+    }
+}
+
+/// Baut einen `Set-Cookie`-Header-Wert für eine Dashboard-Session.
+///
+/// Setzt die sicherheitsrelevanten Flags wie das Python-Pendant
+/// (`services.py:53-63`): `HttpOnly` (kein JS-Zugriff → XSS kann das Cookie nicht
+/// stehlen), `Secure` (nur über HTTPS, abhängig vom Request), `SameSite=Lax`
+/// (CSRF-Grundschutz), `Path=/`, `Max-Age=<ttl>`. `secure` wird vom Aufrufer aus
+/// dem Request abgeleitet (Python: `_is_secure_request`) — hinter dem HTTPS-Proxy
+/// `true`, im lokalen HTTP-Test `false`.
+pub fn build_session_cookie(
+    name: &str,
+    value: &str,
+    secure: bool,
+    same_site: SameSite,
+    max_age_secs: u64,
+) -> String {
+    let mut cookie = format!(
+        "{name}={value}; Path=/; Max-Age={max_age_secs}; HttpOnly; SameSite={}",
+        same_site.as_str()
+    );
+    if secure {
+        cookie.push_str("; Secure");
+    }
+    cookie
+}
+
+/// Baut einen `Set-Cookie`-Header-Wert, der eine Session-Cookie **löscht**
+/// (Logout). `Max-Age=0` + leerer Wert (Python: `clear_session_cookie`).
+pub fn clear_session_cookie(name: &str, secure: bool, same_site: SameSite) -> String {
+    let mut cookie = format!(
+        "{name}=; Path=/; Max-Age=0; HttpOnly; SameSite={}",
+        same_site.as_str()
+    );
+    if secure {
+        cookie.push_str("; Secure");
+    }
+    cookie
+}
+
 /// Cache-Eintrag (Session-Payload + expires_at für Cache-Invalidierung).
 #[derive(Debug, Clone)]
 struct CacheEntry<T: Clone> {
@@ -102,6 +168,22 @@ const CACHE_TTL_SECS: u64 = 5;
 const ADMIN_SESSION_TTL_SECS: u64 = 14 * 24 * 3600;
 /// Partner-Session-TTL beim Sliding-Refresh (Python: server_v2.py:183, min. 6h).
 const PARTNER_SESSION_TTL_SECS: u64 = 6 * 3600;
+
+/// TTL einer **neu erstellten** Twitch-Partner-Session — hartkodiert 6 Stunden.
+///
+/// Block-11-Entscheidung: KEIN Env-Override (`SESSION_TTL_SECONDS` o. ä.). Python
+/// erlaubte eine Konfiguration mit Mindestwert 6h (`server_v2.py:183`); im Rust-
+/// Cutover ist der Wert fixiert, damit die Session-Lebensdauer nicht versehentlich
+/// hochgedreht werden kann. Deckt sich mit dem Default und dem Sliding-Refresh-TTL.
+pub const SESSION_CREATE_TTL_SECS: u64 = 6 * 3600;
+
+/// Cookie-Name der Twitch-Partner-Session (Python: `server_v2.py:185`).
+pub const PARTNER_COOKIE_NAME: &str = "twitch_dash_session";
+/// Cookie-Name der Discord-Admin-Session (Python: state_store.py:18).
+pub const ADMIN_COOKIE_NAME: &str = "master_dash_session";
+
+/// Länge der Session-ID/CSRF-Zufallsbytes (Python: `secrets.token_urlsafe(32)`).
+const SESSION_ID_BYTES: usize = 32;
 /// Refresh wird erst persistiert wenn die Verlängerung diesen Drift übersteigt
 /// (Python: services.py:224 / auth_mixin.py:994 — identische Schwelle).
 const REFRESH_PERSIST_DRIFT_SECS: f64 = 1800.0;
@@ -137,6 +219,150 @@ impl DashboardAuthState {
     /// Gibt `None` zurück wenn die Env-Var nicht gesetzt ist.
     pub fn fernet_key_from_env() -> Option<String> {
         std::env::var("SESSIONS_ENCRYPTION_KEY").ok()
+    }
+
+    /// Legt eine **neue Twitch-Partner-Session** beim OAuth-Login an
+    /// (Pendant zu Python `DashboardSessionService.create`, services.py:236-258).
+    ///
+    /// Ablauf:
+    /// 1. `session_id` = 32-Byte-CSPRNG, url-safe (Python `secrets.token_urlsafe(32)`).
+    /// 2. Sessiongebundenes `csrf_token` = 32-Byte-CSPRNG (Härtung über Python hinaus,
+    ///    Block-11-Entscheidung — Python ließ CSRF leer).
+    /// 3. Payload (`twitch_login`, `twitch_user_id`, `display_name`, `is_partner`,
+    ///    `csrf_token`, `created_at`, `expires_at = now + 6h`) Fernet-verschlüsseln
+    ///    und in `dashboard_sessions` (Typ `twitch`) persistieren.
+    ///
+    /// TTL ist hartkodiert 6h ([`SESSION_CREATE_TTL_SECS`]) — kein Env-Override.
+    /// Bei DB-Fehler `Err`: anders als der Sliding-Refresh (Komfort) ist das Anlegen
+    /// der Session der Login selbst — ohne persistierte Session kann sich der User
+    /// nicht anmelden, also fail-closed statt stiller Erfolg.
+    pub async fn create_partner_session(
+        &self,
+        twitch_login: &str,
+        twitch_user_id: &str,
+        display_name: &str,
+    ) -> Result<SessionCreation, sqlx::Error> {
+        let now = unix_now();
+        let session_id = tb_crypto::random_urlsafe_token(SESSION_ID_BYTES);
+        let csrf_token = tb_crypto::random_urlsafe_token(SESSION_ID_BYTES);
+        let expires_at = now as f64 + SESSION_CREATE_TTL_SECS as f64;
+        let display = if display_name.trim().is_empty() {
+            twitch_login
+        } else {
+            display_name
+        };
+
+        let payload = serde_json::json!({
+            "twitch_login": twitch_login,
+            "twitch_user_id": twitch_user_id,
+            "display_name": display,
+            "is_partner": true,
+            "csrf_token": csrf_token,
+            "created_at": now as f64,
+            "expires_at": expires_at,
+        });
+
+        self.persist_new_session(&session_id, "twitch", &payload, now as f64, expires_at)
+            .await?;
+
+        Ok(SessionCreation { session_id, csrf_token })
+    }
+
+    /// Legt eine **neue Discord-Admin-Session** an (Pendant zu Python
+    /// auth_mixin.py:1548-1583). Gleiche Mechanik wie [`Self::create_partner_session`],
+    /// Session-Typ `discord_admin`, Payload mit `auth_type`/`user_id`/`display_name`.
+    /// Admin-TTL hartkodiert wie der Partner-Wert (6h) — der Sliding-Refresh dehnt
+    /// aktive Admin-Sessions weiter auf 14 Tage (Python-Parität), aber die Erstellung
+    /// startet konservativ bei 6h.
+    pub async fn create_admin_session(
+        &self,
+        user_id: &str,
+        display_name: &str,
+    ) -> Result<SessionCreation, sqlx::Error> {
+        let now = unix_now();
+        let session_id = tb_crypto::random_urlsafe_token(SESSION_ID_BYTES);
+        let csrf_token = tb_crypto::random_urlsafe_token(SESSION_ID_BYTES);
+        let expires_at = now as f64 + SESSION_CREATE_TTL_SECS as f64;
+
+        let payload = serde_json::json!({
+            "auth_type": "discord_admin",
+            "user_id": user_id,
+            "display_name": display_name,
+            "csrf_token": csrf_token,
+            "created_at": now as f64,
+            "last_seen_at": now as f64,
+            "expires_at": expires_at,
+        });
+
+        self.persist_new_session(&session_id, "discord_admin", &payload, now as f64, expires_at)
+            .await?;
+
+        Ok(SessionCreation { session_id, csrf_token })
+    }
+
+    /// Verschlüsselt einen frischen Session-Payload und schreibt ihn in
+    /// `dashboard_sessions`. Gemeinsame Logik von Partner- und Admin-Erstellung.
+    async fn persist_new_session(
+        &self,
+        session_id: &str,
+        session_type: &str,
+        payload: &serde_json::Value,
+        created_at: f64,
+        expires_at: f64,
+    ) -> Result<(), sqlx::Error> {
+        let token = fernet::encrypt(&self.fernet_key, payload.to_string().as_bytes())
+            .map_err(|e| sqlx::Error::Encode(Box::new(SessionEncryptError(e.to_string()))))?;
+
+        sqlx::query(
+            r#"
+            INSERT INTO dashboard_sessions
+                (session_id, session_type, payload_enc, created_at, expires_at)
+            VALUES ($1, $2, $3, $4, $5)
+            ON CONFLICT (session_id) DO UPDATE SET
+                payload_enc = EXCLUDED.payload_enc,
+                expires_at  = EXCLUDED.expires_at
+            "#,
+        )
+        .bind(session_id)
+        .bind(session_type)
+        .bind(token.as_bytes())
+        .bind(created_at)
+        .bind(expires_at)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    /// Validiert ein CSRF-Token gegen die Session — konstant-zeitlicher Vergleich.
+    ///
+    /// Lädt den Session-Payload (Partner `twitch` oder Admin `discord_admin`),
+    /// liest das gespeicherte `csrf_token` und vergleicht es timing-sicher mit dem
+    /// vom Client präsentierten Wert. Gibt `true` nur bei exaktem Match zurück.
+    /// Fehlende Session, fehlendes Token-Feld oder leeres präsentiertes Token →
+    /// `false` (fail-closed). DB-Fehler werden hochgereicht.
+    pub async fn validate_csrf(
+        &self,
+        session_id: &str,
+        session_type: &str,
+        presented_token: &str,
+    ) -> Result<bool, sqlx::Error> {
+        if presented_token.is_empty() {
+            return Ok(false);
+        }
+        let now = unix_now();
+        let Some(payload) = self
+            .fetch_session_payload(session_id, session_type, now)
+            .await?
+        else {
+            return Ok(false);
+        };
+        let stored = payload.get("csrf_token").and_then(|v| v.as_str());
+        Ok(match stored {
+            Some(stored) if !stored.is_empty() => {
+                tb_crypto::constant_time_eq(stored.as_bytes(), presented_token.as_bytes())
+            }
+            _ => false,
+        })
     }
 
     /// Prüft ob eine `discord_admin`-Session gültig ist.
@@ -483,6 +709,21 @@ impl DashboardAuthState {
     }
 }
 
+/// Fehler-Wrapper, um einen Fernet-Encrypt-Fehler als `sqlx::Error::Encode` zu
+/// transportieren (die Session-Erstellung gibt `sqlx::Error` zurück, damit der
+/// Aufrufer nur einen Fehlertyp behandeln muss). Die Klartext-Nachricht enthält
+/// KEINE Secrets — nur die Fernet-Fehlerart (z. B. ungültige Key-Länge).
+#[derive(Debug)]
+struct SessionEncryptError(String);
+
+impl std::fmt::Display for SessionEncryptError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Session-Payload-Verschlüsselung fehlgeschlagen: {}", self.0)
+    }
+}
+
+impl std::error::Error for SessionEncryptError {}
+
 /// Prüft das `expires_at`-Feld im entschlüsselten Payload (Python prüft es
 /// zusätzlich zur DB-Spalte; fehlt das Feld, gilt die Session als abgelaufen —
 /// identisch zu Pythons `float(session.get("expires_at", 0.0)) <= now`).
@@ -594,6 +835,54 @@ mod tests {
         std::env::remove_var("SESSIONS_ENCRYPTION_KEY");
         let key = DashboardAuthState::fernet_key_from_env();
         assert_eq!(key, None);
+    }
+
+    // ── F5: Cookie-Builder ──────────────────────────────────────────────────
+
+    #[test]
+    fn session_cookie_traegt_security_flags() {
+        let c = build_session_cookie(
+            PARTNER_COOKIE_NAME,
+            "abc123",
+            true,
+            SameSite::Lax,
+            SESSION_CREATE_TTL_SECS,
+        );
+        assert!(c.starts_with("twitch_dash_session=abc123"));
+        assert!(c.contains("HttpOnly"), "HttpOnly muss gesetzt sein");
+        assert!(c.contains("Secure"), "Secure muss bei secure=true gesetzt sein");
+        assert!(c.contains("SameSite=Lax"));
+        assert!(c.contains("Path=/"));
+        assert!(c.contains("Max-Age=21600"), "6h-TTL = 21600s");
+    }
+
+    #[test]
+    fn session_cookie_ohne_secure_bei_http() {
+        // Lokaler HTTP-Request (kein HTTPS-Proxy) → kein Secure-Flag, sonst
+        // würde der Browser das Cookie über http:// nie senden.
+        let c = build_session_cookie(PARTNER_COOKIE_NAME, "v", false, SameSite::Lax, 21600);
+        assert!(!c.contains("Secure"), "kein Secure bei secure=false");
+        assert!(c.contains("HttpOnly"));
+    }
+
+    #[test]
+    fn session_cookie_samesite_strict() {
+        let c = build_session_cookie("x", "y", true, SameSite::Strict, 60);
+        assert!(c.contains("SameSite=Strict"));
+    }
+
+    #[test]
+    fn clear_cookie_setzt_max_age_null() {
+        let c = clear_session_cookie(PARTNER_COOKIE_NAME, true, SameSite::Lax);
+        assert!(c.contains("twitch_dash_session=;"));
+        assert!(c.contains("Max-Age=0"));
+        assert!(c.contains("HttpOnly"));
+    }
+
+    #[test]
+    fn session_create_ttl_ist_sechs_stunden() {
+        // Block-11: hartkodiert, kein Env-Override.
+        assert_eq!(SESSION_CREATE_TTL_SECS, 6 * 3600);
     }
 }
 
@@ -843,5 +1132,99 @@ print(f.encrypt(payload.encode()).decode(), end='')
             .execute(&pool)
             .await
             .unwrap();
+    }
+
+    /// F5/F6 End-to-End: Partner-Session erstellen → Cookie-ID lädt die Session
+    /// zurück (Round-Trip ver-/entschlüsselt) → CSRF-Token validiert nur exakt.
+    #[tokio::test]
+    async fn partner_session_create_roundtrip_und_csrf() {
+        let Some(pool) = maybe_pool().await else { return; };
+
+        sqlx::query(
+            r#"
+            CREATE TABLE IF NOT EXISTS dashboard_sessions (
+                session_id   TEXT NOT NULL PRIMARY KEY,
+                session_type TEXT NOT NULL,
+                payload_enc  BYTEA NOT NULL,
+                created_at   DOUBLE PRECISION NOT NULL,
+                expires_at   DOUBLE PRECISION NOT NULL
+            )
+            "#,
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        // Partner-Row, damit load_partner_session das Gate passiert.
+        sqlx::query(
+            "INSERT INTO twitch_partners (twitch_login, twitch_user_id, status)
+             VALUES ($1, $2, 'active')
+             ON CONFLICT DO NOTHING",
+        )
+        .bind("csrftest_user")
+        .bind("777001")
+        .execute(&pool)
+        .await
+        .ok();
+
+        let state = DashboardAuthState::new(pool.clone(), test_fernet_key());
+        let created = state
+            .create_partner_session("csrftest_user", "777001", "CSRF Tester")
+            .await
+            .expect("Session-Erstellung muss klappen");
+
+        // Round-Trip: Cookie-ID lädt die verschlüsselte Session zurück.
+        let loaded = state
+            .load_partner_session(&created.session_id)
+            .await
+            .expect("Laden darf nicht fehlschlagen")
+            .expect("Session muss existieren");
+        assert_eq!(loaded.twitch_login, "csrftest_user");
+
+        // DB-Spalte expires_at muss ~6h in der Zukunft liegen (hartkodierte TTL).
+        let db_expires: f64 = sqlx::query_scalar(
+            "SELECT expires_at FROM dashboard_sessions WHERE session_id = $1",
+        )
+        .bind(&created.session_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        let now = unix_now() as f64;
+        assert!(
+            (db_expires - (now + 6.0 * 3600.0)).abs() < 120.0,
+            "TTL muss ~6h sein, ist {}",
+            db_expires - now
+        );
+
+        // CSRF: korrektes Token akzeptiert.
+        assert!(state
+            .validate_csrf(&created.session_id, "twitch", &created.csrf_token)
+            .await
+            .unwrap());
+        // CSRF: falsches Token abgelehnt.
+        assert!(!state
+            .validate_csrf(&created.session_id, "twitch", "falsch")
+            .await
+            .unwrap());
+        // CSRF: leeres Token abgelehnt.
+        assert!(!state
+            .validate_csrf(&created.session_id, "twitch", "")
+            .await
+            .unwrap());
+        // CSRF: unbekannte Session abgelehnt.
+        assert!(!state
+            .validate_csrf("nicht-existent-xyz", "twitch", &created.csrf_token)
+            .await
+            .unwrap());
+
+        sqlx::query("DELETE FROM dashboard_sessions WHERE session_id = $1")
+            .bind(&created.session_id)
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("DELETE FROM twitch_partners WHERE twitch_login = 'csrftest_user'")
+            .execute(&pool)
+            .await
+            .ok();
     }
 }

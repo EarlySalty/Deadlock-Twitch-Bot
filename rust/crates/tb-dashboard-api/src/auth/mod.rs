@@ -24,6 +24,7 @@
 pub mod fernet;
 pub mod level;
 pub mod partner_gate;
+pub mod security;
 pub mod session;
 
 // ---------------------------------------------------------------------------
