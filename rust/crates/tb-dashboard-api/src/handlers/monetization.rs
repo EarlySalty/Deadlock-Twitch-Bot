@@ -62,8 +62,8 @@ mod tests {
         let pool = PgPoolOptions::new().max_connections(2).connect_with(opts).await.unwrap();
         sqlx::query("CREATE TABLE twitch_stream_sessions (id BIGSERIAL PRIMARY KEY, streamer_login TEXT, started_at TIMESTAMPTZ)").execute(&pool).await.unwrap();
         sqlx::query("CREATE TABLE twitch_ad_break_events (id BIGSERIAL PRIMARY KEY, session_id BIGINT, duration_seconds INTEGER, is_automatic BOOLEAN DEFAULT FALSE, started_at TIMESTAMPTZ)").execute(&pool).await.unwrap();
-        sqlx::query("CREATE TABLE twitch_bits_events (id BIGSERIAL PRIMARY KEY, amount INTEGER, received_at TIMESTAMPTZ)").execute(&pool).await.unwrap();
-        sqlx::query("CREATE TABLE twitch_subscription_events (id BIGSERIAL PRIMARY KEY, is_gift BOOLEAN DEFAULT FALSE, received_at TIMESTAMPTZ)").execute(&pool).await.unwrap();
+        sqlx::query("CREATE TABLE twitch_bits_events (id BIGSERIAL PRIMARY KEY, session_id BIGINT, amount INTEGER, received_at TIMESTAMPTZ)").execute(&pool).await.unwrap();
+        sqlx::query("CREATE TABLE twitch_subscription_events (id BIGSERIAL PRIMARY KEY, session_id BIGINT, is_gift BOOLEAN DEFAULT FALSE, received_at TIMESTAMPTZ)").execute(&pool).await.unwrap();
         sqlx::query("CREATE TABLE twitch_hype_train_events (id BIGSERIAL PRIMARY KEY, session_id BIGINT, level INTEGER, duration_seconds INTEGER, started_at TIMESTAMPTZ, ended_at TIMESTAMPTZ)").execute(&pool).await.unwrap();
         Some(pool)
     }

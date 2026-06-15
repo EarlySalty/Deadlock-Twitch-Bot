@@ -4,13 +4,15 @@
 //! Aggregiert über das Zeitfenster: Ad-Breaks (Anzahl/auto/manuell/Dauer +
 //! Viewer-Drop-Analyse je Ad), Hype-Trains, Bits und Subs.
 //!
-//! **1:1-Hinweis:** Pythons bits/subs-Queries filtern über eine direkte Spalte
-//! `streamer_login`, die in keiner Schema-Variante (Migration, Legacy, Rust-Writer)
-//! existiert — plus subs vergleicht `is_gift=1` gegen eine BOOLEAN-Spalte. Beide
-//! Queries scheitern daher und liefern via try/except den Default 0. Das wird hier
-//! wortgleich gespiegelt (catch-all → Default): heute 0, und falls die Spalte je
-//! ergänzt wird, leuchten Python und Rust identisch auf. ads + hype_train filtern
-//! dagegen über JOIN auf `twitch_stream_sessions.streamer_login` und funktionieren.
+//! **Migrations-Fix (bits/subs):** Pythons bits/subs-Queries filtern über eine
+//! direkte Spalte `streamer_login`, die durch die Schema-Umstellung des Rust-
+//! Cutovers nicht mehr existiert (subs vergleicht zudem `is_gift=1` gegen die jetzt
+//! BOOLEAN-Spalte) — in Python scheitern sie still und liefern immer 0. Die
+//! beabsichtigte Funktion ist eindeutig (Bits/Subs je Streamer im Fenster), daher
+//! hier korrigiert statt 1:1 den Defekt zu spiegeln: Filter über JOIN auf
+//! `twitch_stream_sessions.streamer_login` per `session_id` — genau wie ads +
+//! hype_train im selben Loader — und `is_gift` als BOOLEAN. Gleiche Funktion, echte
+//! Zahlen statt 0. Der catch-all bleibt als defensiver Fallback (Tabelle fehlt).
 
 use std::collections::{HashMap, HashSet};
 
@@ -385,11 +387,12 @@ pub async fn load_monetization_payload(
         }
     };
 
-    // --- Bits (Spalte streamer_login fehlt → Query scheitert → Default 0; 1:1 zu Python). ---
+    // --- Bits (Migrations-Fix: Streamer-Filter via session_id-JOIN statt fehlender Spalte). ---
     let bits = match sqlx::query_as::<_, (Option<i64>, i64)>(
-        "SELECT SUM(amount)::bigint, COUNT(*)::bigint \
-           FROM twitch_bits_events \
-          WHERE received_at >= $1 AND ($2 = '' OR LOWER(streamer_login) = $2)",
+        "SELECT SUM(b.amount)::bigint, COUNT(*)::bigint \
+           FROM twitch_bits_events b \
+           LEFT JOIN twitch_stream_sessions s ON s.id = b.session_id \
+          WHERE b.received_at >= $1 AND ($2 = '' OR LOWER(s.streamer_login) = $2)",
     )
     .bind(cutoff)
     .bind(streamer)
@@ -403,11 +406,12 @@ pub async fn load_monetization_payload(
         }
     };
 
-    // --- Subs (streamer_login fehlt + is_gift=1 gegen BOOLEAN → scheitert → Default 0; 1:1). ---
+    // --- Subs (Migrations-Fix: session_id-JOIN + is_gift als BOOLEAN). ---
     let subs = match sqlx::query_as::<_, (i64, Option<i64>)>(
-        "SELECT COUNT(*)::bigint, SUM(CASE WHEN is_gift=1 THEN 1 ELSE 0 END)::bigint \
-           FROM twitch_subscription_events \
-          WHERE received_at >= $1 AND ($2 = '' OR LOWER(streamer_login) = $2)",
+        "SELECT COUNT(*)::bigint, SUM(CASE WHEN su.is_gift THEN 1 ELSE 0 END)::bigint \
+           FROM twitch_subscription_events su \
+           LEFT JOIN twitch_stream_sessions s ON s.id = su.session_id \
+          WHERE su.received_at >= $1 AND ($2 = '' OR LOWER(s.streamer_login) = $2)",
     )
     .bind(cutoff)
     .bind(streamer)
@@ -488,10 +492,33 @@ mod tests {
         assert_eq!(v["hype_train"]["avg_level"], 4.0); // (3+5)/2
         assert_eq!(v["hype_train"]["max_level"], 5);
         assert_eq!(v["hype_train"]["avg_duration_s"], 450.0); // (300+600)/2
-        // bits/subs: streamer_login fehlt → graceful Default 0.
+        // keine bits/subs-Zeilen → 0.
         assert_eq!(v["bits"], json!({ "total": 0, "cheer_events": 0 }));
         assert_eq!(v["subs"], json!({ "total_events": 0, "gifted": 0 }));
         assert_eq!(v["window_days"], 30);
+    }
+
+    #[tokio::test]
+    async fn bits_subs_zaehlen_via_session() {
+        let Some(pool) = make_pool("t_mon_bitssubs").await else { return };
+        // Migrations-Fix: Filter läuft über session_id → s.streamer_login (wie ads/hype).
+        sqlx::query("INSERT INTO twitch_stream_sessions (id, streamer_login, started_at) VALUES (1,'nani',NOW()-INTERVAL '2 hours'),(2,'other',NOW()-INTERVAL '2 hours')")
+            .execute(&pool).await.unwrap();
+        // nani: 2 Bits (100+50), 3 Subs (1 gift); other: 1 Bit (999) — darf NICHT zählen.
+        sqlx::query("INSERT INTO twitch_bits_events (session_id, amount, received_at) VALUES (1,100,NOW()-INTERVAL '1 hour'),(1,50,NOW()-INTERVAL '30 min'),(2,999,NOW()-INTERVAL '1 hour')")
+            .execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO twitch_subscription_events (session_id, is_gift, received_at) VALUES (1,FALSE,NOW()-INTERVAL '1 hour'),(1,TRUE,NOW()-INTERVAL '50 min'),(1,FALSE,NOW()-INTERVAL '40 min'),(2,TRUE,NOW()-INTERVAL '1 hour')")
+            .execute(&pool).await.unwrap();
+
+        // Mit Streamer-Filter: nur nani.
+        let v = load_monetization_payload(&pool, "nani", 30).await.unwrap();
+        assert_eq!(v["bits"], json!({ "total": 150, "cheer_events": 2 }));
+        assert_eq!(v["subs"], json!({ "total_events": 3, "gifted": 1 }));
+
+        // Ohne Filter: alles.
+        let all = load_monetization_payload(&pool, "", 30).await.unwrap();
+        assert_eq!(all["bits"], json!({ "total": 1149, "cheer_events": 3 }));
+        assert_eq!(all["subs"], json!({ "total_events": 4, "gifted": 2 }));
     }
 
     #[tokio::test]
