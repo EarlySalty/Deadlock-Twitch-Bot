@@ -15,6 +15,7 @@
 //! - `refresh_worker` — periodischer Auto-Refresh ablaufender Tokens.
 //! - `rendering`   — HTML-Template-Rendering (Dashboard/Terms/Privacy).
 //! - `vocab`       — Deadlock-Vokabular-CRUD (`deadlock_vocab`).
+//! - `correction`  — Fuzzy-Transkript-Korrektur gegen das Vokabular.
 //!
 //! # Deaktiviert
 //! Der Clip-Fetcher-Task ist **standardmäßig deaktiviert** und wird nicht in
@@ -22,6 +23,7 @@
 //! Env-Var setzen + `ClipFetchTask::start_if_enabled()` aufrufen.
 
 pub mod clip;
+pub mod correction;
 pub mod credentials;
 pub mod oauth;
 pub mod refresh_worker;
