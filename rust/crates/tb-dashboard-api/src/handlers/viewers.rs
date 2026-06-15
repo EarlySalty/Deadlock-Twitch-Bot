@@ -21,6 +21,25 @@ const KNOWN_CHAT_BOTS: &[&str] = &[
     "pretzelrocks", "soundalerts", "streamlabs", "streamelements", "wizebot",
 ];
 
+/// Viewer-Exklusionsliste: statische Known-Bots **plus** der Streamer selbst.
+///
+/// Port von `api_viewers.py::_collect_viewer_exclusion_logins`, das in den
+/// Exklusions-Set immer den eigenen Streamer-Login legt (Z.33). Ohne diesen
+/// Self-Ausschluss zählt ein Streamer, der im eigenen Chat schreibt, als
+/// eigener Viewer in Directory/Segments. Die dynamischen Bot-Accounts
+/// (chat-/raid-bot-Login) deckt `KNOWN_CHAT_BOTS` bereits ab; sie sind in
+/// diesem Crate nicht aus der Bot-Config greifbar.
+///
+/// `streamer` wird klein geschrieben erwartet (Aufrufer normalisieren bereits).
+fn viewer_exclusion_logins(streamer: &str) -> Vec<String> {
+    let mut logins: Vec<String> = KNOWN_CHAT_BOTS.iter().map(|s| s.to_string()).collect();
+    let own = streamer.to_lowercase();
+    if !own.is_empty() && !logins.contains(&own) {
+        logins.push(own);
+    }
+    logins
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Shared: classify_viewer (identisch zu viewer_timeline.rs)
 // ─────────────────────────────────────────────────────────────────────────────
@@ -293,7 +312,8 @@ async fn fetch_window_viewer_rows(
     streamer: &str,
     since: DateTime<Utc>,
 ) -> Result<Vec<ViewerRow>, sqlx::Error> {
-    let bots: Vec<String> = KNOWN_CHAT_BOTS.iter().map(|s| s.to_string()).collect();
+    // Streamer-Self- + Bot-Exklusion (Python: _collect_viewer_exclusion_logins).
+    let excluded = viewer_exclusion_logins(streamer);
     let rows = sqlx::query(
         r#"SELECT LOWER(sc.chatter_login) AS chatter_login,
                   COUNT(DISTINCT sc.session_id) AS total_sessions,
@@ -309,7 +329,7 @@ async fn fetch_window_viewer_rows(
     )
     .bind(streamer)
     .bind(since)
-    .bind(&bots)
+    .bind(&excluded)
     .fetch_all(pool)
     .await?;
 
@@ -1137,4 +1157,107 @@ pub async fn viewer_segments_handler(
             "topSharedChannels": top_shared,
         },
     })).into_response()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use sqlx::postgres::PgPoolOptions;
+
+    // ── Reine Logik: Self- + Bot-Exklusionsliste ────────────────────────────
+    #[test]
+    fn exclusion_list_enthaelt_streamer_und_bots() {
+        let logins = viewer_exclusion_logins("MyStreamer");
+        assert!(logins.contains(&"mystreamer".to_string()),
+            "Streamer-Self-Login muss in der Exklusionsliste stehen");
+        assert!(logins.contains(&"nightbot".to_string()),
+            "Known-Bots müssen erhalten bleiben");
+    }
+
+    #[test]
+    fn exclusion_list_kein_doppelter_streamer() {
+        // Streamer-Login der zufällig ein bekannter Bot ist → nicht doppelt.
+        let logins = viewer_exclusion_logins("nightbot");
+        let count = logins.iter().filter(|l| *l == "nightbot").count();
+        assert_eq!(count, 1, "Login darf nicht doppelt erscheinen");
+    }
+
+    #[test]
+    fn exclusion_list_leerer_streamer_nur_bots() {
+        let logins = viewer_exclusion_logins("");
+        assert!(!logins.iter().any(|l| l.is_empty()),
+            "Leerer Streamer darf keinen Leer-Eintrag erzeugen");
+        assert!(logins.contains(&"wizebot".to_string()));
+    }
+
+    // ── DB-Regression (env-gated): Bot + Streamer fallen nach Aggregation raus ─
+    fn test_dsn() -> Option<String> {
+        std::env::var("TB_TEST_DATABASE_URL").ok()
+    }
+
+    macro_rules! db_dsn_or_skip {
+        () => {
+            match test_dsn() {
+                Some(d) => d,
+                None => {
+                    if std::env::var("TB_TEST_REQUIRE_DB").as_deref() == Ok("1") {
+                        panic!("TB_TEST_REQUIRE_DB=1 gesetzt, aber TB_TEST_DATABASE_URL fehlt");
+                    }
+                    eprintln!("SKIP: TB_TEST_DATABASE_URL nicht gesetzt");
+                    return;
+                }
+            }
+        };
+    }
+
+    /// Prod-treues Schema: chatter-/streamer-Logins TEXT, messages INTEGER.
+    async fn make_pool(dsn: &str, schema: &str) -> PgPool {
+        let pool = PgPoolOptions::new().max_connections(1).connect(dsn).await.unwrap();
+        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE")).execute(&pool).await.unwrap();
+        sqlx::query(&format!("CREATE SCHEMA {schema}")).execute(&pool).await.unwrap();
+        sqlx::query(&format!("SET search_path TO {schema}")).execute(&pool).await.unwrap();
+        sqlx::query(
+            r#"CREATE TABLE twitch_stream_sessions (
+                   id BIGSERIAL PRIMARY KEY,
+                   streamer_login TEXT NOT NULL,
+                   started_at TIMESTAMPTZ,
+                   ended_at TIMESTAMPTZ
+               )"#,
+        ).execute(&pool).await.unwrap();
+        sqlx::query(
+            r#"CREATE TABLE twitch_session_chatters (
+                   session_id BIGINT NOT NULL,
+                   chatter_login TEXT NOT NULL,
+                   streamer_login TEXT NOT NULL,
+                   messages INTEGER DEFAULT 0
+               )"#,
+        ).execute(&pool).await.unwrap();
+        pool
+    }
+
+    #[tokio::test]
+    async fn fetch_window_excludes_bot_and_self() {
+        let dsn = db_dsn_or_skip!();
+        let pool = make_pool(&dsn, "viewers_self_excl").await;
+
+        sqlx::query(
+            "INSERT INTO twitch_stream_sessions (id, streamer_login, started_at, ended_at) \
+             VALUES (1, 'host', NOW() - INTERVAL '1 day', NOW())",
+        ).execute(&pool).await.unwrap();
+        // echter Viewer + Bot (nightbot) + der Streamer selbst im eigenen Chat
+        sqlx::query(
+            "INSERT INTO twitch_session_chatters (session_id, chatter_login, streamer_login, messages) \
+             VALUES (1, 'realviewer', 'host', 5), \
+                    (1, 'nightbot',   'host', 99), \
+                    (1, 'host',       'host', 42)",
+        ).execute(&pool).await.unwrap();
+
+        let since = Utc::now() - chrono::Duration::days(30);
+        let rows = fetch_window_viewer_rows(&pool, "host", since).await.unwrap();
+
+        let logins: Vec<&str> = rows.iter().map(|r| r.login.as_str()).collect();
+        assert!(logins.contains(&"realviewer"), "Echter Viewer muss bleiben");
+        assert!(!logins.contains(&"nightbot"), "Bot-Login darf nicht auftauchen");
+        assert!(!logins.contains(&"host"), "Streamer-Self-Login darf nicht auftauchen");
+    }
 }
