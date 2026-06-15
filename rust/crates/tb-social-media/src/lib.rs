@@ -11,7 +11,8 @@
 //! - `settings`    — Key/Value-Settings (`social_media_settings`, Consent +
 //!   Auto-Approve je Plattform).
 //! - `credentials` — verschlüsselte Plattform-OAuth-Credentials (Lese-Pfad).
-//! - `oauth`       — Multi-Plattform-OAuth-Flow (Authorize-URLs + State).
+//! - `oauth`       — Multi-Plattform-OAuth-Flow (Authorize/Callback/Refresh).
+//! - `refresh_worker` — periodischer Auto-Refresh ablaufender Tokens.
 //!
 //! # Deaktiviert
 //! Der Clip-Fetcher-Task ist **standardmäßig deaktiviert** und wird nicht in
@@ -21,6 +22,7 @@
 pub mod clip;
 pub mod credentials;
 pub mod oauth;
+pub mod refresh_worker;
 pub mod schema;
 pub mod settings;
 

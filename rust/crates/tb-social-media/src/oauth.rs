@@ -355,6 +355,74 @@ impl OAuthManager {
             .await?;
         Ok(())
     }
+
+    /// Erneuert einen Access-Token (Python `refresh_token`). Nur TikTok/YouTube
+    /// (Instagram-Token sind langlebig, kein Refresh).
+    pub async fn refresh_token(
+        &self,
+        platform: &str,
+        refresh_token: &str,
+        client_id: &str,
+        client_secret: &str,
+    ) -> Result<RefreshedTokens, OAuthError> {
+        match platform {
+            "tiktok" => self.refresh_tiktok(refresh_token, client_id, client_secret).await,
+            "youtube" => self.refresh_youtube(refresh_token, client_id, client_secret).await,
+            other => Err(OAuthError::UnknownPlatform(other.to_string())),
+        }
+    }
+
+    async fn refresh_tiktok(&self, refresh_token: &str, client_key: &str, client_secret: &str) -> Result<RefreshedTokens, OAuthError> {
+        // TikTok-Refresh nutzt JSON-Body (anders als der Form-Exchange).
+        let resp = self
+            .http
+            .post(&self.token_urls.tiktok)
+            .json(&serde_json::json!({
+                "client_key": client_key,
+                "client_secret": client_secret,
+                "grant_type": "refresh_token",
+                "refresh_token": refresh_token,
+            }))
+            .send()
+            .await
+            .map_err(|e| OAuthError::Exchange { platform: "tiktok-refresh", detail: e.to_string() })?;
+        let data: serde_json::Value = resp.json().await.map_err(|e| OAuthError::Exchange { platform: "tiktok-refresh", detail: e.to_string() })?;
+        if data.get("error").is_some() {
+            return Err(OAuthError::Exchange { platform: "tiktok-refresh", detail: error_detail(&data) });
+        }
+        let d = data.get("data").cloned().unwrap_or(serde_json::Value::Null);
+        Ok(RefreshedTokens {
+            access_token: str_field(&d, "access_token"),
+            refresh_token: opt_field(&d, "refresh_token"),
+            expires_at: Utc::now() + Duration::seconds(d.get("expires_in").and_then(serde_json::Value::as_i64).unwrap_or(0)),
+        })
+    }
+
+    async fn refresh_youtube(&self, refresh_token: &str, client_id: &str, client_secret: &str) -> Result<RefreshedTokens, OAuthError> {
+        let data = self
+            .post_token("youtube-refresh", &self.token_urls.youtube, &[
+                ("client_id", client_id),
+                ("client_secret", client_secret),
+                ("refresh_token", refresh_token),
+                ("grant_type", "refresh_token"),
+            ])
+            .await?;
+        if data.get("error").is_some() {
+            return Err(OAuthError::Exchange { platform: "youtube-refresh", detail: error_detail(&data) });
+        }
+        Ok(RefreshedTokens {
+            access_token: str_field(&data, "access_token"),
+            refresh_token: None, // YouTube liefert beim Refresh keinen neuen.
+            expires_at: Utc::now() + Duration::seconds(data.get("expires_in").and_then(serde_json::Value::as_i64).unwrap_or(0)),
+        })
+    }
+}
+
+/// Neue Tokens aus einem Refresh (Python `new_tokens`).
+pub struct RefreshedTokens {
+    pub access_token: String,
+    pub refresh_token: Option<String>,
+    pub expires_at: DateTime<Utc>,
 }
 
 /// Normalisiert eine Redirect-URI für den Vergleich (trim + lowercase Schema/Host).
