@@ -376,12 +376,20 @@ pub fn build_admin_streamers_router(pool: PgPool, token: String) -> Router {
 
 /// Baut den Router für Admin-Config-Endpoints (Schreib-Seite).
 pub fn build_admin_config_router(pool: PgPool, token: String) -> Router {
-    use handlers::admin_promo_mode;
+    use handlers::{admin_config, admin_promo_mode};
 
     Router::new()
         .route(
             "/twitch/api/admin/config/promo",
             post(admin_promo_mode::set_promo_handler),
+        )
+        .route(
+            "/twitch/api/admin/config/raids",
+            post(admin_config::config_raids_handler),
+        )
+        .route(
+            "/twitch/api/admin/config/chat",
+            post(admin_config::config_chat_handler),
         )
         .with_state(pool)
         .layer(Extension(ExpectedToken(token)))
