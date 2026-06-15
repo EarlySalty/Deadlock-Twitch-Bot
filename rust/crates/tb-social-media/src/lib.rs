@@ -14,6 +14,7 @@
 //! - `oauth`       — Multi-Plattform-OAuth-Flow (Authorize/Callback/Refresh).
 //! - `refresh_worker` — periodischer Auto-Refresh ablaufender Tokens.
 //! - `rendering`   — HTML-Template-Rendering (Dashboard/Terms/Privacy).
+//! - `vocab`       — Deadlock-Vokabular-CRUD (`deadlock_vocab`).
 //!
 //! # Deaktiviert
 //! Der Clip-Fetcher-Task ist **standardmäßig deaktiviert** und wird nicht in
@@ -27,6 +28,7 @@ pub mod refresh_worker;
 pub mod rendering;
 pub mod schema;
 pub mod settings;
+pub mod vocab;
 
 pub use clip::{
     repository::ClipRepository,
