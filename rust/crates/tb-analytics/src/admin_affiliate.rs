@@ -96,6 +96,80 @@ async fn stats_inner(pool: &PgPool, month_start_iso: &str) -> Result<Value, sqlx
     }))
 }
 
+/// Eine Zeile der Affiliate-Liste.
+type ListRow = (
+    Option<String>, // twitch_login
+    Option<String>, // display_name
+    i64,            // is_active
+    Option<String>, // created_at
+    i64,            // total_claims
+    i64,            // total_provision_cents
+    Option<String>, // last_claim_at
+    Option<String>, // ust_status
+    i64,            // has_pii
+);
+
+const LIST_CLAIM_COMM_JOINS: &str = "\
+    LEFT JOIN (SELECT affiliate_twitch_login, COUNT(*) AS total_claims, MAX(claimed_at) AS last_claim_at \
+               FROM affiliate_streamer_claims GROUP BY affiliate_twitch_login) claim_stats \
+      ON claim_stats.affiliate_twitch_login = a.twitch_login \
+    LEFT JOIN (SELECT affiliate_twitch_login, \
+                      SUM(CASE WHEN status IN ('pending', 'transferred') THEN commission_cents ELSE 0 END) AS total_provision \
+               FROM affiliate_commissions GROUP BY affiliate_twitch_login) comm_stats \
+      ON comm_stats.affiliate_twitch_login = a.twitch_login \
+    ORDER BY a.created_at DESC";
+
+fn map_list_rows(rows: Vec<ListRow>) -> Value {
+    let affiliates: Vec<Value> = rows
+        .into_iter()
+        .map(|(login, display_name, is_active, created_at, total_claims, total_provision_cents, last_claim_at, ust_status, has_pii)| {
+            let ust = ust_status.unwrap_or_default().trim().to_string();
+            json!({
+                "login": login.unwrap_or_default().trim(),
+                "display_name": display_name,
+                "active": is_active != 0,
+                "total_claims": total_claims,
+                "total_provision": cents_to_amount(total_provision_cents),
+                "created_at": created_at,
+                "last_claim_at": last_claim_at,
+                "ust_status": if ust.is_empty() { "unknown".to_string() } else { ust },
+                "has_pii": has_pii != 0,
+            })
+        })
+        .collect();
+    json!({ "affiliates": affiliates })
+}
+
+/// Affiliate-Liste mit Claims- + Provisions-Summen (Python `load_admin_affiliates_list`).
+/// Zwei-stufiger Fallback: Vollquery (mit affiliate_pii) → ohne PII → leer.
+pub async fn load_affiliates_list(pool: &PgPool) -> Result<Value, sqlx::Error> {
+    let full_sql = format!(
+        "SELECT a.twitch_login, a.display_name, a.is_active::bigint, a.created_at, \
+                COALESCE(claim_stats.total_claims, 0)::bigint, COALESCE(comm_stats.total_provision, 0)::bigint, \
+                claim_stats.last_claim_at, COALESCE(pii.ust_status, 'unknown'), \
+                (CASE WHEN pii.twitch_login IS NOT NULL THEN 1 ELSE 0 END)::bigint \
+         FROM affiliate_accounts a \
+         LEFT JOIN affiliate_pii pii ON pii.twitch_login = a.twitch_login {LIST_CLAIM_COMM_JOINS}"
+    );
+    match sqlx::query_as::<_, ListRow>(&full_sql).fetch_all(pool).await {
+        Ok(rows) => return Ok(map_list_rows(rows)),
+        Err(e) if !is_missing_schema_error(&e) => return Err(e),
+        Err(_) => {} // fehlendes Schema (z. B. affiliate_pii) → Fallback ohne PII.
+    }
+
+    let no_pii_sql = format!(
+        "SELECT a.twitch_login, a.display_name, a.is_active::bigint, a.created_at, \
+                COALESCE(claim_stats.total_claims, 0)::bigint, COALESCE(comm_stats.total_provision, 0)::bigint, \
+                claim_stats.last_claim_at, 'unknown', 0::bigint \
+         FROM affiliate_accounts a {LIST_CLAIM_COMM_JOINS}"
+    );
+    match sqlx::query_as::<_, ListRow>(&no_pii_sql).fetch_all(pool).await {
+        Ok(rows) => Ok(map_list_rows(rows)),
+        Err(e) if is_missing_schema_error(&e) => Ok(json!({ "affiliates": [] })),
+        Err(e) => Err(e),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -114,13 +188,72 @@ mod tests {
 
     async fn with_tables(pool: &PgPool) {
         for ddl in [
-            "CREATE TABLE affiliate_accounts (twitch_login TEXT PRIMARY KEY, is_active INTEGER NOT NULL DEFAULT 1)",
+            "CREATE TABLE affiliate_accounts (twitch_login TEXT PRIMARY KEY, display_name TEXT, is_active INTEGER NOT NULL DEFAULT 1, created_at TEXT)",
+            "CREATE TABLE affiliate_pii (twitch_login TEXT PRIMARY KEY, ust_status TEXT NOT NULL DEFAULT 'unknown')",
             "CREATE TABLE affiliate_streamer_claims (id BIGSERIAL PRIMARY KEY, affiliate_twitch_login TEXT, claimed_at TEXT)",
             "CREATE TABLE affiliate_commissions (id BIGSERIAL PRIMARY KEY, affiliate_twitch_login TEXT, commission_cents INTEGER, status TEXT, created_at TEXT)",
             "CREATE TABLE affiliate_gutschriften (id BIGSERIAL PRIMARY KEY, affiliate_twitch_login TEXT, gross_amount_cents INTEGER, pdf_generated_at TEXT, email_sent_at TEXT)",
         ] {
             sqlx::query(ddl).execute(pool).await.unwrap();
         }
+    }
+
+    #[tokio::test]
+    async fn list_aggregiert_und_pii() {
+        let Some(pool) = connect("t_aff_list").await else { return };
+        with_tables(&pool).await;
+        sqlx::query("INSERT INTO affiliate_accounts (twitch_login, display_name, is_active, created_at) VALUES ('nani','Nani',1,'2026-06-01T00:00:00+00:00'), ('foo',NULL,0,'2026-05-01T00:00:00+00:00')").execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO affiliate_pii (twitch_login, ust_status) VALUES ('nani','kleinunternehmer')").execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO affiliate_streamer_claims (affiliate_twitch_login, claimed_at) VALUES ('nani','2026-06-10T00:00:00+00:00'), ('nani','2026-06-12T00:00:00+00:00')").execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO affiliate_commissions (affiliate_twitch_login, commission_cents, status, created_at) VALUES ('nani', 2000, 'pending', '2026-06-05T00:00:00+00:00'), ('nani', 999, 'refunded', '2026-06-06T00:00:00+00:00')").execute(&pool).await.unwrap();
+
+        let v = load_affiliates_list(&pool).await.unwrap();
+        let items = v["affiliates"].as_array().unwrap();
+        assert_eq!(items.len(), 2);
+        // ORDER BY created_at DESC → nani (Juni) zuerst.
+        let nani = &items[0];
+        assert_eq!(nani["login"], "nani");
+        assert_eq!(nani["display_name"], "Nani");
+        assert_eq!(nani["active"], true);
+        assert_eq!(nani["total_claims"], 2);
+        assert_eq!(nani["total_provision"], 20.0); // refunded ausgeschlossen
+        assert_eq!(nani["last_claim_at"], "2026-06-12T00:00:00+00:00");
+        assert_eq!(nani["ust_status"], "kleinunternehmer");
+        assert_eq!(nani["has_pii"], true);
+        // foo: kein PII, inaktiv, keine Claims/Provision.
+        let foo = &items[1];
+        assert_eq!(foo["active"], false);
+        assert!(foo["display_name"].is_null());
+        assert_eq!(foo["total_claims"], 0);
+        assert_eq!(foo["total_provision"], 0.0);
+        assert_eq!(foo["ust_status"], "unknown");
+        assert_eq!(foo["has_pii"], false);
+    }
+
+    #[tokio::test]
+    async fn list_ohne_pii_tabelle_fallback() {
+        let Some(pool) = connect("t_aff_list_nopii").await else { return };
+        // Nur die Kern-Tabellen, KEIN affiliate_pii → Fallback-Query.
+        for ddl in [
+            "CREATE TABLE affiliate_accounts (twitch_login TEXT PRIMARY KEY, display_name TEXT, is_active INTEGER NOT NULL DEFAULT 1, created_at TEXT)",
+            "CREATE TABLE affiliate_streamer_claims (id BIGSERIAL PRIMARY KEY, affiliate_twitch_login TEXT, claimed_at TEXT)",
+            "CREATE TABLE affiliate_commissions (id BIGSERIAL PRIMARY KEY, affiliate_twitch_login TEXT, commission_cents INTEGER, status TEXT, created_at TEXT)",
+        ] {
+            sqlx::query(ddl).execute(&pool).await.unwrap();
+        }
+        sqlx::query("INSERT INTO affiliate_accounts (twitch_login, is_active, created_at) VALUES ('nani',1,'2026-06-01T00:00:00+00:00')").execute(&pool).await.unwrap();
+        let v = load_affiliates_list(&pool).await.unwrap();
+        let items = v["affiliates"].as_array().unwrap();
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0]["ust_status"], "unknown"); // Fallback ohne PII
+        assert_eq!(items[0]["has_pii"], false);
+    }
+
+    #[tokio::test]
+    async fn list_ohne_tabellen_leer() {
+        let Some(pool) = connect("t_aff_list_empty").await else { return };
+        let v = load_affiliates_list(&pool).await.unwrap();
+        assert_eq!(v["affiliates"], json!([]));
     }
 
     #[tokio::test]

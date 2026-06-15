@@ -395,6 +395,10 @@ pub fn build_admin_config_router(pool: PgPool, token: String) -> Router {
             get(admin_affiliate::stats_handler),
         )
         .route(
+            "/twitch/api/admin/affiliates",
+            get(admin_affiliate::list_handler),
+        )
+        .route(
             "/twitch/api/admin/billing/subscriptions",
             get(admin_billing::subscriptions_handler),
         )

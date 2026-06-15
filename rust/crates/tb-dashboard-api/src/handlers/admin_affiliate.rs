@@ -37,6 +37,23 @@ pub async fn stats_handler(
     }
 }
 
+/// `GET /twitch/api/admin/affiliates` — Affiliate-Liste mit Claims/Provisionen (Admin).
+pub async fn list_handler(
+    auth: AuthLevel,
+    State(pool): State<PgPool>,
+) -> Result<impl IntoResponse, ApiError> {
+    if !auth.is_privileged() {
+        return Err(ApiError::unauthorized());
+    }
+    match tb_analytics::admin_affiliate::load_affiliates_list(&pool).await {
+        Ok(v) => Ok(Json(v)),
+        Err(e) => {
+            tracing::error!("affiliate-list SELECT-Fehler: {e}");
+            Err(ApiError::internal())
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -83,5 +100,16 @@ mod tests {
         assert_eq!(s, StatusCode::OK);
         assert_eq!(j["total_affiliates"], 0);
         assert_eq!(j["total_provision"], 0.0);
+    }
+
+    #[tokio::test]
+    async fn list_unauth_und_leer() {
+        let Some(pool) = make_pool("t_affh_list").await else { return };
+        let (s, _) = body_json(list_handler(AuthLevel::None, State(pool.clone())).await).await;
+        assert_eq!(s, StatusCode::UNAUTHORIZED);
+        // ohne Tabellen → {affiliates: []}.
+        let (s, j) = body_json(list_handler(AuthLevel::Admin, State(pool)).await).await;
+        assert_eq!(s, StatusCode::OK);
+        assert_eq!(j["affiliates"], serde_json::json!([]));
     }
 }
