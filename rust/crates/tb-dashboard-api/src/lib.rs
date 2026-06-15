@@ -374,14 +374,28 @@ pub fn build_admin_streamers_router(pool: PgPool, token: String) -> Router {
         .layer(Extension(ExpectedToken(token)))
 }
 
+/// Baut den Router für Admin-Config-Endpoints (Schreib-Seite).
+pub fn build_admin_config_router(pool: PgPool, token: String) -> Router {
+    use handlers::admin_promo_mode;
+
+    Router::new()
+        .route(
+            "/twitch/api/admin/config/promo",
+            post(admin_promo_mode::set_promo_handler),
+        )
+        .with_state(pool)
+        .layer(Extension(ExpectedToken(token)))
+}
+
 /// Zusammengeführter Router: public + authed + admin-system + admin-streamers
-/// + Legal-Seiten (HTML, statuslos).
+/// + admin-config + Legal-Seiten (HTML, statuslos).
 ///
 /// CORS nur auf dem Public-Sub-Router (s. oben).
 pub fn build_router(pool: PgPool, token: String) -> Router {
     build_public_router(pool.clone())
         .merge(build_authed_router(pool.clone(), token.clone()))
         .merge(build_admin_system_router(pool.clone(), token.clone()))
-        .merge(build_admin_streamers_router(pool, token))
+        .merge(build_admin_streamers_router(pool.clone(), token.clone()))
+        .merge(build_admin_config_router(pool, token))
         .merge(handlers::legal::build_legal_router())
 }
