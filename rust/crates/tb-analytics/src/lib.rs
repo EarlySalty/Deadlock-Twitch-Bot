@@ -13,6 +13,7 @@ pub mod category_activity;
 pub mod exp_analytics;
 pub mod global_ban;
 pub mod market;
+pub mod monetization;
 pub mod network;
 pub mod overview;
 pub mod partner_access;

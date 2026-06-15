@@ -12,6 +12,7 @@ pub mod auth_status;
 pub mod bans;
 pub mod billing;
 pub mod legal;
+pub mod monetization;
 pub mod network;
 pub mod overview;
 pub mod raids;
