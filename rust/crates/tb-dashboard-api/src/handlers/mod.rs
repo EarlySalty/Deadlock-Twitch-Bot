@@ -15,6 +15,7 @@ pub mod auth_login;
 pub mod auth_status;
 pub mod bans;
 pub mod billing;
+pub mod billing_webhook;
 pub mod legal;
 pub mod monetization;
 pub mod network;

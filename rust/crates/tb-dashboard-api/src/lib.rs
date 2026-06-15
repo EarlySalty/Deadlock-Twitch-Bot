@@ -21,6 +21,7 @@ pub use auth::session::{
     PARTNER_COOKIE_NAME, SESSION_CREATE_TTL_SECS,
 };
 pub use handlers::auth_login::{oauth_login_config_from_env, OAuthLoginConfig};
+pub use handlers::billing_webhook::{stripe_webhook_config_from_env, StripeWebhookConfig};
 
 use axum::{
     routing::{get, post},
@@ -546,13 +547,33 @@ pub fn build_auth_router() -> Router {
         .route("/twitch/auth/logout", get(auth_login::logout_handler))
 }
 
-/// Zusammengeführter Router: public + auth (Login) + authed + admin-system +
-/// admin-streamers + admin-config + Legal-Seiten (HTML, statuslos).
+/// Baut den Router für den nativen Stripe-Webhook (B2-P0).
+///
+/// `POST /twitch/api/billing/stripe/webhook` — unauthentifiziert (Stripe ist der
+/// Aufrufer; die `Stripe-Signature`-HMAC IST die Authentifizierung). NATIV
+/// registriert (vor dem Strangler-Fallback), damit der umsatzkritische Pfad
+/// nicht mehr in den toten Python-Service (502) läuft. Die `StripeWebhookConfig`
+/// (Webhook-Secret + optionaler Stripe-Client) kommt als globale Extension aus
+/// der `tb-dashboard`-main; fehlt sie, liefert der Handler 503.
+pub fn build_billing_webhook_router(pool: PgPool) -> Router {
+    use handlers::billing_webhook;
+
+    Router::new()
+        .route(
+            "/twitch/api/billing/stripe/webhook",
+            post(billing_webhook::stripe_webhook_handler),
+        )
+        .with_state(pool)
+}
+
+/// Zusammengeführter Router: public + auth (Login) + billing-webhook + authed +
+/// admin-system + admin-streamers + admin-config + Legal-Seiten (HTML, statuslos).
 ///
 /// CORS nur auf dem Public-Sub-Router (s. oben).
 pub fn build_router(pool: PgPool, token: String) -> Router {
     build_public_router(pool.clone())
         .merge(build_auth_router())
+        .merge(build_billing_webhook_router(pool.clone()))
         .merge(build_authed_router(pool.clone(), token.clone()))
         .merge(build_admin_system_router(pool.clone(), token.clone()))
         .merge(build_admin_streamers_router(pool.clone(), token.clone()))
