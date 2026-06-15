@@ -16,6 +16,7 @@
 //! - `rendering`   — HTML-Template-Rendering (Dashboard/Terms/Privacy).
 //! - `vocab`       — Deadlock-Vokabular-CRUD (`deadlock_vocab`).
 //! - `correction`  — Fuzzy-Transkript-Korrektur gegen das Vokabular.
+//! - `seed_vocab`  — Initial-Vokabular (Slang + Deadlock-API).
 //!
 //! # Deaktiviert
 //! Der Clip-Fetcher-Task ist **standardmäßig deaktiviert** und wird nicht in
@@ -29,6 +30,7 @@ pub mod oauth;
 pub mod refresh_worker;
 pub mod rendering;
 pub mod schema;
+pub mod seed_vocab;
 pub mod settings;
 pub mod vocab;
 
