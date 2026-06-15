@@ -20,6 +20,7 @@
 //! - `enrichment`  — Clip-Enrichment-Persistenz (`social_media_clip_enrichment`).
 //! - `llm`         — LLM-Typen + Prompt-Bau + Output-Parsing.
 //! - `llm_dispatch` — LLM-Provider (Ollama) + consent-gated Dispatcher.
+//! - `enrich_pipeline` — Orchestrator (transcribe→correct→LLM→save).
 //!
 //! # Deaktiviert
 //! Der Clip-Fetcher-Task ist **standardmäßig deaktiviert** und wird nicht in
@@ -29,6 +30,7 @@
 pub mod clip;
 pub mod correction;
 pub mod credentials;
+pub mod enrich_pipeline;
 pub mod enrichment;
 pub mod llm;
 pub mod llm_dispatch;
