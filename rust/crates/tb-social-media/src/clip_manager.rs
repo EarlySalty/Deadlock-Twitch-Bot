@@ -11,6 +11,7 @@ use serde_json::{json, Value};
 use sqlx::{PgPool, Row};
 
 use crate::layout::apply_default_layout;
+use crate::retention::refresh_clip_publication_status;
 
 #[derive(Debug, thiserror::Error)]
 pub enum ManualUploadError {
@@ -112,6 +113,33 @@ pub async fn get_clips_for_dashboard(
         .collect()
 }
 
+/// Markiert einen Clip auf den gegebenen Plattformen als hochgeladen (manuell);
+/// unbekannte Plattformen werden übersprungen. Liefert `false` bei DB-Fehler.
+/// Frischt anschließend den Publication-Status auf.
+pub async fn mark_clip_uploaded(pool: &PgPool, clip_db_id: i32, platforms: &[String], manual: bool) -> bool {
+    let now = chrono::Utc::now().to_rfc3339();
+    let updates = async {
+        let mut tx = pool.begin().await?;
+        for platform in platforms {
+            let sql = match platform.as_str() {
+                "tiktok" => "UPDATE twitch_clips_social_media SET uploaded_tiktok = 1, tiktok_uploaded_at = $1 WHERE id = $2",
+                "youtube" => "UPDATE twitch_clips_social_media SET uploaded_youtube = 1, youtube_uploaded_at = $1 WHERE id = $2",
+                "instagram" => "UPDATE twitch_clips_social_media SET uploaded_instagram = 1, instagram_uploaded_at = $1 WHERE id = $2",
+                _ => continue,
+            };
+            sqlx::query(sql).bind(&now).bind(clip_db_id).execute(&mut *tx).await?;
+        }
+        tx.commit().await
+    }
+    .await;
+    if updates.is_err() {
+        return false;
+    }
+    tracing::info!(clip_db_id, ?platforms, manual, "Clip als hochgeladen markiert");
+    refresh_clip_publication_status(pool, clip_db_id).await;
+    true
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -128,9 +156,10 @@ mod tests {
         let pool = PgPoolOptions::new().max_connections(3).connect_with(opts).await.unwrap();
         for ddl in [
             "CREATE TABLE twitch_streamers (twitch_login TEXT PRIMARY KEY, twitch_user_id TEXT)",
-            "CREATE TABLE twitch_clips_social_media (id SERIAL PRIMARY KEY, clip_id TEXT UNIQUE, clip_url TEXT, clip_title TEXT, clip_thumbnail_url TEXT, streamer_login TEXT, twitch_user_id TEXT, created_at TEXT, duration_seconds DOUBLE PRECISION, view_count INTEGER DEFAULT 0, game_name TEXT, status TEXT DEFAULT 'pending', source_kind TEXT, upload_local_path TEXT, local_file_path TEXT, retention_until TIMESTAMPTZ DEFAULT (NOW() + INTERVAL '14 days'), layout_override_json JSONB)",
+            "CREATE TABLE twitch_clips_social_media (id SERIAL PRIMARY KEY, clip_id TEXT UNIQUE, clip_url TEXT, clip_title TEXT, clip_thumbnail_url TEXT, streamer_login TEXT, twitch_user_id TEXT, created_at TEXT, duration_seconds DOUBLE PRECISION, view_count INTEGER DEFAULT 0, game_name TEXT, status TEXT DEFAULT 'pending', source_kind TEXT, upload_local_path TEXT, local_file_path TEXT, retention_until TIMESTAMPTZ DEFAULT (NOW() + INTERVAL '14 days'), discarded_at TIMESTAMPTZ, layout_override_json JSONB, uploaded_tiktok INTEGER DEFAULT 0, uploaded_youtube INTEGER DEFAULT 0, uploaded_instagram INTEGER DEFAULT 0, tiktok_uploaded_at TEXT, youtube_uploaded_at TEXT, instagram_uploaded_at TEXT)",
             "CREATE TABLE social_media_streamer_layout (streamer_login TEXT PRIMARY KEY, layout_json JSONB NOT NULL, cam_enabled BOOLEAN NOT NULL DEFAULT TRUE, mode TEXT NOT NULL DEFAULT 'pip', updated_at TIMESTAMPTZ DEFAULT NOW(), updated_by TEXT)",
             "CREATE TABLE twitch_clips_upload_queue (id SERIAL PRIMARY KEY, clip_id INTEGER, platform TEXT, status TEXT DEFAULT 'pending')",
+            "CREATE TABLE social_media_platform_auth (id SERIAL PRIMARY KEY, platform TEXT, streamer_login TEXT, enabled INTEGER DEFAULT 1)",
         ] {
             sqlx::query(ddl).execute(&pool).await.unwrap();
         }
@@ -166,5 +195,21 @@ mod tests {
         // Pending-Upload erhöht den Zähler.
         sqlx::query("INSERT INTO twitch_clips_upload_queue (clip_id, platform, status) VALUES ($1, 'tiktok', 'pending')").bind(id).execute(&pool).await.unwrap();
         assert_eq!(get_clips_for_dashboard(&pool, Some("nani"), None, 50).await[0]["pending_uploads"], 1);
+    }
+
+    #[tokio::test]
+    async fn mark_uploaded_setzt_flags_und_refresh() {
+        let Some(pool) = make_pool("t_sm_mark_uploaded").await else { return };
+        // tiktok ist die einzige aktive Plattform für nani.
+        sqlx::query("INSERT INTO social_media_platform_auth (platform, streamer_login) VALUES ('tiktok', 'nani')").execute(&pool).await.unwrap();
+        let clip: i32 = sqlx::query_scalar("INSERT INTO twitch_clips_social_media (clip_id, streamer_login) VALUES ('m1', 'nani') RETURNING id").fetch_one(&pool).await.unwrap();
+
+        // tiktok markieren (+ unbekannte Plattform wird übersprungen).
+        assert!(mark_clip_uploaded(&pool, clip, &["tiktok".into(), "snapchat".into()], true).await);
+        let (up, at, status): (i32, Option<String>, String) = sqlx::query_as("SELECT uploaded_tiktok, tiktok_uploaded_at, status FROM twitch_clips_social_media WHERE id = $1").bind(clip).fetch_one(&pool).await.unwrap();
+        assert_eq!(up, 1);
+        assert!(at.is_some());
+        // tiktok einzige aktive Plattform + jetzt hochgeladen → published_all.
+        assert_eq!(status, "published_all");
     }
 }

@@ -31,7 +31,7 @@ use tb_social_media::settings::{coerce_bool, get_auto_approve_settings, set_auto
 use tb_social_media::analytics::{list_clip_analytics, list_reports, ClipAnalyticsSnapshot, SocialMediaReportRecord};
 use tb_social_media::clip_analytics::get_analytics_summary;
 use tb_social_media::credentials::{CredentialManager, PlatformStatus};
-use tb_social_media::clip_manager::get_clips_for_dashboard;
+use tb_social_media::clip_manager::{get_clips_for_dashboard, mark_clip_uploaded};
 use tb_social_media::clip_queue::queue_upload;
 use tb_social_media::clip_templates::{
     apply_template_to_clip, create_streamer_template, get_global_templates, get_last_hashtags, get_streamer_templates,
@@ -604,6 +604,47 @@ pub async fn queue_upload_handler(
         }
     }
     Json(json!({ "queued": queued })).into_response()
+}
+
+/// POST-Body von `…/api/mark-uploaded`.
+#[derive(Debug, Deserialize)]
+pub struct MarkUploadedBody {
+    pub clip_id: Option<Value>,
+    #[serde(default)]
+    pub platforms: Value,
+    pub streamer: Option<String>,
+}
+
+/// `POST /social-media/api/mark-uploaded` — Clip manuell als hochgeladen markieren.
+pub async fn mark_uploaded_handler(
+    auth: DashboardAuthLevel,
+    State(pool): State<PgPool>,
+    Query(q): Query<StreamerQuery>,
+    Json(body): Json<MarkUploadedBody>,
+) -> Response {
+    if let Err(e) = require_auth(&auth) {
+        return e;
+    }
+    let clip_id = normalize_id(body.clip_id.as_ref());
+    let platforms: Vec<String> = body.platforms.as_array().map(|a| a.iter().filter_map(|x| x.as_str().map(String::from)).collect()).unwrap_or_default();
+    let (Some(clip_id), false) = (clip_id, platforms.is_empty()) else {
+        return (StatusCode::BAD_REQUEST, Json(json!({ "error": "clip_id and platforms are required" }))).into_response();
+    };
+    let requested = body.streamer.as_deref().or(q.streamer.as_deref());
+    let scope = match resolve_streamer_scope(&auth, requested, false) {
+        Ok(s) => s,
+        Err(e) => return e,
+    };
+    if let Some(streamer) = &scope {
+        if !clip_owned_by_streamer(&pool, clip_id, streamer).await {
+            return (StatusCode::FORBIDDEN, Json(json!({ "error": "forbidden: clip does not belong to authenticated streamer" }))).into_response();
+        }
+    }
+    if mark_clip_uploaded(&pool, clip_id, &platforms, true).await {
+        Json(json!({ "success": true, "message": "Clip marked as uploaded" })).into_response()
+    } else {
+        (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": "Failed to mark clip as uploaded" }))).into_response()
+    }
 }
 
 /// Serialisiert einen Vocab-Eintrag (Python `entry.to_dict()`).
@@ -1428,7 +1469,7 @@ mod tests {
         let opts = PgConnectOptions::from_str(&dsn).unwrap().options([("search_path", schema)]);
         let pool = PgPoolOptions::new().max_connections(2).connect_with(opts).await.unwrap();
         for ddl in [
-            "CREATE TABLE twitch_clips_social_media (id SERIAL PRIMARY KEY, clip_id TEXT, clip_url TEXT, clip_thumbnail_url TEXT, streamer_login TEXT, status TEXT DEFAULT 'pending', created_at TEXT, duration_seconds DOUBLE PRECISION, view_count INTEGER, clip_title TEXT, game_name TEXT, source_kind TEXT DEFAULT 'twitch', upload_local_path TEXT, custom_description TEXT, hashtags TEXT, layout_override_json JSONB, retention_until TIMESTAMPTZ, discarded_at TIMESTAMPTZ, uploaded_tiktok INTEGER DEFAULT 0, uploaded_youtube INTEGER DEFAULT 0, uploaded_instagram INTEGER DEFAULT 0)",
+            "CREATE TABLE twitch_clips_social_media (id SERIAL PRIMARY KEY, clip_id TEXT, clip_url TEXT, clip_thumbnail_url TEXT, streamer_login TEXT, status TEXT DEFAULT 'pending', created_at TEXT, duration_seconds DOUBLE PRECISION, view_count INTEGER, clip_title TEXT, game_name TEXT, source_kind TEXT DEFAULT 'twitch', upload_local_path TEXT, custom_description TEXT, hashtags TEXT, layout_override_json JSONB, retention_until TIMESTAMPTZ, discarded_at TIMESTAMPTZ, uploaded_tiktok INTEGER DEFAULT 0, uploaded_youtube INTEGER DEFAULT 0, uploaded_instagram INTEGER DEFAULT 0, tiktok_uploaded_at TEXT, youtube_uploaded_at TEXT, instagram_uploaded_at TEXT)",
             "CREATE TABLE social_media_clip_enrichment (clip_db_id INTEGER PRIMARY KEY, transcript_raw TEXT, transcript_corrected TEXT, transcript_segments JSONB, transcript_lang TEXT, detected_terms JSONB DEFAULT '[]'::jsonb, title_youtube TEXT, title_tiktok TEXT, title_instagram TEXT, description_youtube TEXT, description_tiktok TEXT, description_instagram TEXT, hashtags_youtube JSONB DEFAULT '[]'::jsonb, hashtags_tiktok JSONB DEFAULT '[]'::jsonb, hashtags_instagram JSONB DEFAULT '[]'::jsonb, llm_provider TEXT, llm_model TEXT, cost_usd_estimate NUMERIC(10,6), status TEXT DEFAULT 'pending', error_message TEXT, started_at TIMESTAMPTZ, completed_at TIMESTAMPTZ, edited_by TEXT, updated_at TIMESTAMPTZ DEFAULT NOW())",
             "CREATE TABLE social_media_clip_approval (clip_db_id INTEGER PRIMARY KEY, state TEXT NOT NULL DEFAULT 'awaiting_approval', approved_platforms JSONB NOT NULL DEFAULT '[]'::jsonb, approver_user_id TEXT, decided_at TIMESTAMPTZ, dm_message_id TEXT, dm_channel_id TEXT, last_sent_at TIMESTAMPTZ)",
             "CREATE TABLE twitch_clips_upload_queue (id SERIAL PRIMARY KEY, clip_id INTEGER, platform TEXT, status TEXT DEFAULT 'pending', priority INTEGER DEFAULT 0, title TEXT, description TEXT, hashtags TEXT, scheduled_at TEXT, attempts INTEGER DEFAULT 0, last_error TEXT, last_attempt_at TEXT, created_at TEXT DEFAULT CURRENT_TIMESTAMP, completed_at TEXT)",
@@ -1974,5 +2015,29 @@ mod tests {
         assert_eq!(enabled, 0);
         // disconnect: ungültige Plattform → 400.
         assert_eq!(oauth_disconnect_handler(DashboardAuthLevel::Admin, State(pool.clone()), Path("snap".into()), Query(StreamerQuery { streamer: None })).await.status(), StatusCode::BAD_REQUEST);
+    }
+
+    fn mark_body(clip_id: Option<i32>, platforms: Value) -> MarkUploadedBody {
+        MarkUploadedBody { clip_id: clip_id.map(|c| json!(c)), platforms, streamer: None }
+    }
+
+    #[tokio::test]
+    async fn mark_uploaded_handler_paths() {
+        let Some(pool) = make_pool("t_dash_sm_mark").await else { return };
+        sqlx::query("INSERT INTO social_media_platform_auth (platform, streamer_login) VALUES ('tiktok', 'nani')").execute(&pool).await.unwrap();
+        let clip: i32 = sqlx::query_scalar("INSERT INTO twitch_clips_social_media (clip_id, streamer_login) VALUES ('c1', 'nani') RETURNING id").fetch_one(&pool).await.unwrap();
+
+        // Erfolg.
+        let resp = mark_uploaded_handler(DashboardAuthLevel::Admin, State(pool.clone()), Query(StreamerQuery { streamer: None }), Json(mark_body(Some(clip), json!(["tiktok"])))).await;
+        assert_eq!(resp.status(), StatusCode::OK);
+        assert_eq!(body_json(resp).await["success"], true);
+        let up: i32 = sqlx::query_scalar("SELECT uploaded_tiktok FROM twitch_clips_social_media WHERE id = $1").bind(clip).fetch_one(&pool).await.unwrap();
+        assert_eq!(up, 1);
+
+        // Fehlende clip_id → 400, leere platforms → 400.
+        assert_eq!(mark_uploaded_handler(DashboardAuthLevel::Admin, State(pool.clone()), Query(StreamerQuery { streamer: None }), Json(mark_body(None, json!(["tiktok"])))).await.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(mark_uploaded_handler(DashboardAuthLevel::Admin, State(pool.clone()), Query(StreamerQuery { streamer: None }), Json(mark_body(Some(clip), json!([])))).await.status(), StatusCode::BAD_REQUEST);
+        // Partner mit fremdem Clip → 403.
+        assert_eq!(mark_uploaded_handler(partner("other"), State(pool.clone()), Query(StreamerQuery { streamer: None }), Json(mark_body(Some(clip), json!(["tiktok"])))).await.status(), StatusCode::FORBIDDEN);
     }
 }
