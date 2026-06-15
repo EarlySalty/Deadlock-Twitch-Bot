@@ -25,7 +25,7 @@ use sqlx::postgres::PgRow;
 use sqlx::{PgPool, Postgres, QueryBuilder, Row};
 use tb_crypto::FieldCipher;
 use tb_social_media::approval::{get_approval_record, handle_decision, serialize_approval_record, ApprovalError};
-use tb_social_media::enrichment::{ensure_enrichment_row, get_enrichment, EnrichmentRecord};
+use tb_social_media::enrichment::{ensure_enrichment_row, get_enrichment, update_manual_edit, EnrichmentRecord};
 use tb_social_media::retention::mark_clip_discarded;
 use tb_social_media::settings::{coerce_bool, get_auto_approve_settings, set_auto_approve_settings, AutoApprove};
 use tb_social_media::analytics::{list_clip_analytics, list_reports, ClipAnalyticsSnapshot, SocialMediaReportRecord};
@@ -1086,6 +1086,109 @@ fn report_record_json(r: &SocialMediaReportRecord) -> Value {
     })
 }
 
+/// Liest ein title/description-Feld aus dem Payload (Python-Semantik):
+/// fehlt → `None` (skip), `null` → `Some(None)` (clear), String → trim-or-null,
+/// sonst → 400 invalid_field.
+fn parse_string_field<'a>(payload: &'a Value, field: &str) -> Result<Option<Option<&'a str>>, Response> {
+    match payload.get(field) {
+        None => Ok(None),
+        Some(Value::Null) => Ok(Some(None)),
+        Some(Value::String(s)) => {
+            let t = s.trim();
+            Ok(Some(if t.is_empty() { None } else { Some(t) }))
+        }
+        Some(_) => Err((StatusCode::BAD_REQUEST, Json(json!({ "error": "invalid_field", "field": field }))).into_response()),
+    }
+}
+
+/// Hashtag-Liste normalisieren (Python `_normalize_hashtag_list`): `#`-Präfix,
+/// dedupliziert (case-insensitiv), leere übersprungen. fehlt/null → `None`,
+/// nicht-Liste → 400.
+fn parse_hashtag_field(payload: &Value, field: &str) -> Result<Option<Vec<String>>, Response> {
+    match payload.get(field) {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::Array(arr)) => {
+            let mut seen = std::collections::HashSet::new();
+            let mut cleaned = Vec::new();
+            for entry in arr {
+                let token = entry.as_str().map(|s| s.trim().to_string()).unwrap_or_default();
+                if token.is_empty() {
+                    continue;
+                }
+                let token = if token.starts_with('#') { token } else { format!("#{}", token.trim_start_matches('#')) };
+                if seen.insert(token.to_lowercase()) {
+                    cleaned.push(token);
+                }
+            }
+            Ok(Some(cleaned))
+        }
+        Some(_) => Err((StatusCode::BAD_REQUEST, format!("{field} must be a list")).into_response()),
+    }
+}
+
+/// `PUT /social-media/api/admin/clips/:clip_db_id/enrichment` — Edits speichern (Admin).
+pub async fn enrichment_put_handler(auth: DashboardAuthLevel, State(pool): State<PgPool>, Path(raw): Path<String>, body: String) -> Response {
+    if let Err(e) = require_admin(&auth) {
+        return e;
+    }
+    let Some(clip_db_id) = normalize_id(Some(&Value::String(raw))) else {
+        return invalid_clip_db_id();
+    };
+    if load_clip_row(&pool, clip_db_id).await.is_none() {
+        return clip_not_found();
+    }
+    let payload: Value = match serde_json::from_str(&body) {
+        Ok(v) => v,
+        Err(_) => return invalid_json(),
+    };
+    if !payload.is_object() {
+        return invalid_payload();
+    }
+    macro_rules! field {
+        ($name:literal) => {
+            match parse_string_field(&payload, $name) {
+                Ok(v) => v,
+                Err(e) => return e,
+            }
+        };
+    }
+    macro_rules! tags {
+        ($name:literal) => {
+            match parse_hashtag_field(&payload, $name) {
+                Ok(v) => v,
+                Err(e) => return e,
+            }
+        };
+    }
+    // Python-Reihenfolge: erst title/description (invalid_field), dann hashtags.
+    let ty = field!("title_youtube");
+    let tt = field!("title_tiktok");
+    let ti = field!("title_instagram");
+    let dy = field!("description_youtube");
+    let dt = field!("description_tiktok");
+    let di = field!("description_instagram");
+    let hy = tags!("hashtags_youtube");
+    let ht = tags!("hashtags_tiktok");
+    let hi = tags!("hashtags_instagram");
+    let result = update_manual_edit(
+        &pool,
+        clip_db_id,
+        None, // edited_by: Admin/Localhost ohne User-ID im Rust-Auth-Modell
+        ty, tt, ti, dy, dt, di,
+        hy.as_deref(),
+        ht.as_deref(),
+        hi.as_deref(),
+    )
+    .await;
+    if result.is_err() {
+        return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": "save_failed" }))).into_response();
+    }
+    match get_enrichment(&pool, clip_db_id).await {
+        Some(r) => Json(enrichment_record_json(&r)).into_response(),
+        None => Json(json!({})).into_response(),
+    }
+}
+
 /// `GET /social-media/api/admin/clips/:clip_db_id/enrichment` — Enrichment (Admin).
 pub async fn enrichment_get_handler(auth: DashboardAuthLevel, State(pool): State<PgPool>, Path(raw): Path<String>) -> Response {
     if let Err(e) = require_admin(&auth) {
@@ -1954,6 +2057,18 @@ mod tests {
         // Fehlerpfade: nicht existierender Clip → 404, Partner → 403.
         assert_eq!(enrichment_get_handler(DashboardAuthLevel::Admin, State(pool.clone()), Path("99999".into())).await.status(), StatusCode::NOT_FOUND);
         assert_eq!(reports_list_handler(partner("nani"), State(pool.clone()), Query(ReportsQuery { kind: None, streamer: None, limit: None })).await.status(), StatusCode::FORBIDDEN);
+
+        // enrichment-PUT: Titel setzen + hashtags (#-Präfix/dedup).
+        let resp = enrichment_put_handler(DashboardAuthLevel::Admin, State(pool.clone()), Path(clip.to_string()), "{\"title_youtube\":\"YT\",\"hashtags_youtube\":[\"a\",\"#a\",\"b\"]}".into()).await;
+        assert_eq!(resp.status(), StatusCode::OK);
+        let v = body_json(resp).await;
+        assert_eq!(v["title_youtube"], "YT");
+        assert_eq!(v["hashtags_youtube"], json!(["#a", "#b"])); // #-Präfix + dedup
+        // ungültiges Feld (Zahl) → 400 invalid_field.
+        let resp = enrichment_put_handler(DashboardAuthLevel::Admin, State(pool.clone()), Path(clip.to_string()), "{\"title_youtube\":5}".into()).await;
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+        // nicht existierender Clip → 404.
+        assert_eq!(enrichment_put_handler(DashboardAuthLevel::Admin, State(pool.clone()), Path("99999".into()), "{}".into()).await.status(), StatusCode::NOT_FOUND);
     }
 
     #[tokio::test]

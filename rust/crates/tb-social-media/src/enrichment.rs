@@ -289,6 +289,65 @@ pub async fn iter_pending_enrichments(pool: &PgPool, limit: i64) -> Vec<i32> {
     .unwrap_or_default()
 }
 
+/// Speichert manuelle Enrichment-Edits aus dem Admin-UI (Python
+/// `update_manual_edit`). title/description-Felder nutzen `Option<Option<&str>>`:
+/// `None` = unverändert lassen, `Some(None)` = auf NULL setzen, `Some(Some(v))`
+/// = Wert setzen. hashtags: `None` = unverändert, `Some(list)` = setzen.
+#[allow(clippy::too_many_arguments)]
+pub async fn update_manual_edit(
+    pool: &PgPool,
+    clip_db_id: i32,
+    edited_by: Option<&str>,
+    title_youtube: Option<Option<&str>>,
+    title_tiktok: Option<Option<&str>>,
+    title_instagram: Option<Option<&str>>,
+    description_youtube: Option<Option<&str>>,
+    description_tiktok: Option<Option<&str>>,
+    description_instagram: Option<Option<&str>>,
+    hashtags_youtube: Option<&[String]>,
+    hashtags_tiktok: Option<&[String]>,
+    hashtags_instagram: Option<&[String]>,
+) -> Result<(), sqlx::Error> {
+    // Zeile sicherstellen.
+    sqlx::query(
+        "INSERT INTO social_media_clip_enrichment (clip_db_id, status, updated_at, edited_by) \
+         VALUES ($1, $2, CURRENT_TIMESTAMP, $3) ON CONFLICT (clip_db_id) DO NOTHING",
+    )
+    .bind(clip_db_id)
+    .bind(STATUS_PENDING)
+    .bind(edited_by)
+    .execute(pool)
+    .await?;
+
+    let mut qb = QueryBuilder::<Postgres>::new("UPDATE social_media_clip_enrichment SET updated_at = CURRENT_TIMESTAMP, edited_by = ");
+    qb.push_bind(edited_by.map(str::to_string));
+    for (col, value) in [
+        ("title_youtube", title_youtube),
+        ("title_tiktok", title_tiktok),
+        ("title_instagram", title_instagram),
+        ("description_youtube", description_youtube),
+        ("description_tiktok", description_tiktok),
+        ("description_instagram", description_instagram),
+    ] {
+        if let Some(v) = value {
+            qb.push(", ").push(col).push(" = ").push_bind(v.map(str::to_string));
+        }
+    }
+    for (col, value) in [
+        ("hashtags_youtube", hashtags_youtube),
+        ("hashtags_tiktok", hashtags_tiktok),
+        ("hashtags_instagram", hashtags_instagram),
+    ] {
+        if let Some(list) = value {
+            qb.push(", ").push(col).push(" = ").push_bind(serde_json::to_string(list).unwrap_or_else(|_| "[]".to_string())).push("::jsonb");
+        }
+    }
+
+    qb.push(" WHERE clip_db_id = ").push_bind(clip_db_id);
+    qb.build().execute(pool).await?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -371,5 +430,25 @@ mod tests {
         let r = get_enrichment(&pool, 1).await.unwrap();
         assert_eq!(r.status, "done");
         assert_eq!(r.error_message.as_deref(), Some("boom")); // unverändert
+    }
+
+    #[tokio::test]
+    async fn manual_edit_sentinel() {
+        let Some(pool) = make_pool("t_sm_enrich_edit").await else { return };
+        // Edit 1: YT + TT-Titel setzen, hashtags_youtube setzen (Zeile via INSERT angelegt).
+        update_manual_edit(&pool, 1, Some("admin"), Some(Some("YT")), Some(Some("TT")), None, None, None, None, Some(&["#a".into(), "#b".into()]), None, None).await.unwrap();
+        let r = get_enrichment(&pool, 1).await.unwrap();
+        assert_eq!(r.title_youtube.as_deref(), Some("YT"));
+        assert_eq!(r.title_tiktok.as_deref(), Some("TT"));
+        assert_eq!(r.edited_by.as_deref(), Some("admin"));
+        assert_eq!(r.hashtags_youtube, vec!["#a".to_string(), "#b".to_string()]);
+
+        // Edit 2: title_tiktok auf NULL (Some(None)), title_youtube unverändert (None).
+        update_manual_edit(&pool, 1, Some("admin2"), None, Some(None), None, None, None, None, None, None, None).await.unwrap();
+        let r = get_enrichment(&pool, 1).await.unwrap();
+        assert_eq!(r.title_youtube.as_deref(), Some("YT")); // unverändert (None=skip)
+        assert!(r.title_tiktok.is_none()); // geleert (Some(None))
+        assert_eq!(r.edited_by.as_deref(), Some("admin2")); // edited_by immer gesetzt
+        assert_eq!(r.hashtags_youtube, vec!["#a".to_string(), "#b".to_string()]); // unverändert
     }
 }
