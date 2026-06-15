@@ -5,9 +5,15 @@
 //!
 //! Status: stats portiert; list/detail/gutschriften folgen als Teil 2+.
 
-use axum::{extract::State, response::IntoResponse, Json};
+use axum::{
+    extract::{Path, State},
+    response::IntoResponse,
+    Json,
+};
 use chrono::{Datelike, DateTime, SecondsFormat, Utc};
+use serde_json::json;
 use sqlx::PgPool;
+use tb_analytics::admin_affiliate::ToggleError;
 use tb_http_core::{ApiError, AuthLevel};
 
 /// Monatsanfang (1. des aktuellen Monats, 00:00 UTC) als ISO-String — Python
@@ -66,6 +72,28 @@ pub async fn gutschriften_handler(
         Ok(v) => Ok(Json(v)),
         Err(e) => {
             tracing::error!("affiliate-gutschriften SELECT-Fehler: {e}");
+            Err(ApiError::internal())
+        }
+    }
+}
+
+/// `POST /twitch/api/admin/affiliates/:login/toggle` — is_active flippen (Admin).
+pub async fn toggle_handler(
+    auth: AuthLevel,
+    State(pool): State<PgPool>,
+    Path(login_raw): Path<String>,
+) -> Result<impl IntoResponse, ApiError> {
+    if !auth.is_privileged() {
+        return Err(ApiError::unauthorized());
+    }
+    let Some(login) = tb_domain::login::normalize_twitch_login(&login_raw) else {
+        return Err(ApiError::bad_request_with_body(json!({ "error": "invalid_login" })));
+    };
+    match tb_analytics::admin_affiliate::toggle_affiliate(&pool, &login).await {
+        Ok(v) => Ok(Json(v)),
+        Err(ToggleError::NotFound) => Err(ApiError::not_found()),
+        Err(ToggleError::Db(e)) => {
+            tracing::error!("affiliate-toggle Fehler: {e}");
             Err(ApiError::internal())
         }
     }
@@ -139,5 +167,27 @@ mod tests {
         assert_eq!(s, StatusCode::OK);
         assert_eq!(j["count"], 0);
         assert_eq!(j["gutschriften"], serde_json::json!([]));
+    }
+
+    #[tokio::test]
+    async fn toggle_auth_invalid_notfound_happy() {
+        let Some(pool) = make_pool("t_affh_toggle").await else { return };
+        // unauth → 401.
+        let (s, _) = body_json(toggle_handler(AuthLevel::None, State(pool.clone()), Path("nani".into())).await).await;
+        assert_eq!(s, StatusCode::UNAUTHORIZED);
+        // ungültiger Login → 400.
+        let (s, j) = body_json(toggle_handler(AuthLevel::Admin, State(pool.clone()), Path("!!!".into())).await).await;
+        assert_eq!(s, StatusCode::BAD_REQUEST);
+        assert_eq!(j["error"], "invalid_login");
+        // unbekannt (kein Schema) → 404.
+        let (s, _) = body_json(toggle_handler(AuthLevel::Admin, State(pool.clone()), Path("ghostuser".into())).await).await;
+        assert_eq!(s, StatusCode::NOT_FOUND);
+        // happy: Tabelle + Zeile → 200, active false.
+        sqlx::query("CREATE TABLE affiliate_accounts (twitch_login TEXT PRIMARY KEY, is_active INTEGER NOT NULL DEFAULT 1, updated_at TEXT)").execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO affiliate_accounts (twitch_login, is_active) VALUES ('nani', 1)").execute(&pool).await.unwrap();
+        let (s, j) = body_json(toggle_handler(AuthLevel::Admin, State(pool), Path("nani".into())).await).await;
+        assert_eq!(s, StatusCode::OK);
+        assert_eq!(j["login"], "nani");
+        assert_eq!(j["active"], false);
     }
 }

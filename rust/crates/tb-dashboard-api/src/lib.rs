@@ -403,6 +403,10 @@ pub fn build_admin_config_router(pool: PgPool, token: String) -> Router {
             get(admin_affiliate::gutschriften_handler),
         )
         .route(
+            "/twitch/api/admin/affiliates/:login/toggle",
+            post(admin_affiliate::toggle_handler),
+        )
+        .route(
             "/twitch/api/admin/billing/subscriptions",
             get(admin_billing::subscriptions_handler),
         )

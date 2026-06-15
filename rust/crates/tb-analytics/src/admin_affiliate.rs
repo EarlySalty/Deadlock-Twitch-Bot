@@ -7,6 +7,7 @@
 //!
 //! Quellen-Status: stats portiert; list/detail/gutschriften folgen als Teil 2+.
 
+use chrono::{SecondsFormat, Utc};
 use serde_json::{json, Value};
 use sqlx::PgPool;
 
@@ -325,6 +326,50 @@ pub async fn load_affiliate_gutschriften(pool: &PgPool) -> Result<Value, sqlx::E
     Ok(json!({ "gutschriften": documents, "count": count }))
 }
 
+// ── Toggle (Write) ────────────────────────────────────────────────────────────
+
+/// Fehler beim Affiliate-Toggle (Python: `AdminAffiliateNotFoundError` → 404).
+#[derive(Debug)]
+pub enum ToggleError {
+    /// Kein Konto (oder fehlendes Schema) → 404.
+    NotFound,
+    Db(sqlx::Error),
+}
+
+/// Flippt `is_active` eines Affiliates (Python `toggle_admin_affiliate`).
+/// Fehlende Zeile oder fehlendes Schema → [`ToggleError::NotFound`].
+pub async fn toggle_affiliate(pool: &PgPool, login: &str) -> Result<Value, ToggleError> {
+    let current: Option<i32> = match sqlx::query_scalar::<_, i32>(
+        "SELECT is_active FROM affiliate_accounts WHERE twitch_login = $1",
+    )
+    .bind(login)
+    .fetch_optional(pool)
+    .await
+    {
+        Ok(v) => v,
+        Err(e) if is_missing_schema_error(&e) => return Err(ToggleError::NotFound),
+        Err(e) => return Err(ToggleError::Db(e)),
+    };
+    let Some(current) = current else {
+        return Err(ToggleError::NotFound);
+    };
+
+    // Python: new_status = 0 if current else 1.
+    let new_status: i32 = if current != 0 { 0 } else { 1 };
+    let now = Utc::now().to_rfc3339_opts(SecondsFormat::Micros, false);
+    if let Err(e) = sqlx::query("UPDATE affiliate_accounts SET is_active = $1, updated_at = $2 WHERE twitch_login = $3")
+        .bind(new_status)
+        .bind(&now)
+        .bind(login)
+        .execute(pool)
+        .await
+    {
+        return Err(if is_missing_schema_error(&e) { ToggleError::NotFound } else { ToggleError::Db(e) });
+    }
+
+    Ok(json!({ "login": login, "active": new_status != 0 }))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -463,6 +508,35 @@ mod tests {
         let v = load_affiliate_gutschriften(&pool).await.unwrap();
         assert_eq!(v["count"], 0);
         assert_eq!(v["gutschriften"], json!([]));
+    }
+
+    #[tokio::test]
+    async fn toggle_flippt_und_not_found() {
+        let Some(pool) = connect("t_aff_toggle").await else { return };
+        sqlx::query("CREATE TABLE affiliate_accounts (twitch_login TEXT PRIMARY KEY, is_active INTEGER NOT NULL DEFAULT 1, updated_at TEXT)").execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO affiliate_accounts (twitch_login, is_active) VALUES ('nani', 1)").execute(&pool).await.unwrap();
+
+        // 1 → 0.
+        let v = toggle_affiliate(&pool, "nani").await.unwrap();
+        assert_eq!(v["login"], "nani");
+        assert_eq!(v["active"], false);
+        let stored: i32 = sqlx::query_scalar("SELECT is_active FROM affiliate_accounts WHERE twitch_login='nani'").fetch_one(&pool).await.unwrap();
+        assert_eq!(stored, 0);
+        let ts: Option<String> = sqlx::query_scalar("SELECT updated_at FROM affiliate_accounts WHERE twitch_login='nani'").fetch_one(&pool).await.unwrap();
+        assert!(ts.is_some(), "updated_at gesetzt");
+
+        // 0 → 1.
+        let v = toggle_affiliate(&pool, "nani").await.unwrap();
+        assert_eq!(v["active"], true);
+
+        // unbekannter Login → NotFound.
+        assert!(matches!(toggle_affiliate(&pool, "ghost").await, Err(ToggleError::NotFound)));
+    }
+
+    #[tokio::test]
+    async fn toggle_fehlendes_schema_not_found() {
+        let Some(pool) = connect("t_aff_toggle_empty").await else { return };
+        assert!(matches!(toggle_affiliate(&pool, "nani").await, Err(ToggleError::NotFound)));
     }
 
     #[tokio::test]
