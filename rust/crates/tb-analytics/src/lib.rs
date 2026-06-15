@@ -5,6 +5,7 @@
 
 pub mod admin_affiliate;
 pub mod admin_billing;
+pub mod affiliate_pii;
 pub mod admin_config;
 pub mod admin_streamers;
 pub mod bans;
