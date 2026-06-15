@@ -25,6 +25,7 @@ pub mod internal_home;
 pub mod performance;
 pub mod rankings;
 pub mod retention_curve;
+pub mod self_explainer;
 pub mod session_detail;
 pub mod silent_settings;
 pub mod social_media;

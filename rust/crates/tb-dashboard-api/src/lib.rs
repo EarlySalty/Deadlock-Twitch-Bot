@@ -28,12 +28,17 @@ use tower_http::cors::CorsLayer;
 /// (`api_public.py:52-58`). Authed/Admin-Routen bleiben ohne CORS-Header,
 /// sonst wäre die Token-API cross-origin per Browser ansprechbar.
 pub fn build_public_router(pool: PgPool) -> Router {
-    use handlers::{bans, network, raids, social_media};
+    use handlers::{bans, network, raids, self_explainer, social_media};
 
     Router::new()
         .route(
             "/twitch/api/v2/public/recent-bans",
             get(bans::recent_bans_handler),
+        )
+        // Frage-Box auf /streamer: erklärt den Bot grounded (öffentlich, rate-limitiert).
+        .route(
+            "/twitch/api/v2/self-explainer/ask",
+            post(self_explainer::self_explainer_ask),
         )
         .route(
             "/twitch/api/v2/public/recent-raids",
