@@ -29,6 +29,26 @@ use tb_crypto::{aad, FieldCipher};
 
 use crate::util::mask_log_identifier as mask;
 
+/// Proaktiver Wartungs-Puffer: ein Token wird im Hintergrund refresht, sobald
+/// er **weniger als 2 Stunden** gültig ist (Python `refresh_all_tokens`,
+/// auth.py Z. 1072: `now_ts < expires_ts - 7200` → überspringen). So läuft kein
+/// Token im Nutzungspfad ab, statt erst bei Bedarf (mit Latenz) erneuert zu
+/// werden.
+pub const PROACTIVE_REFRESH_BUFFER_SECONDS: i64 = 7200;
+
+/// Entscheidet, ob ein Token im Hintergrund-Sweep refresht werden soll —
+/// reine Logik (Python `refresh_all_tokens`-Schleife, auth.py Z. 1067–1073).
+///
+/// `true`, wenn die Ablaufzeit fehlt (forcierter Refresh, Python „Invalid
+/// expiry date … forcing refresh") ODER der Token in weniger als
+/// [`PROACTIVE_REFRESH_BUFFER_SECONDS`] abläuft.
+pub fn is_refresh_due(expires_at: Option<DateTime<Utc>>, now: DateTime<Utc>) -> bool {
+    match expires_at {
+        None => true,
+        Some(exp) => now >= exp - Duration::seconds(PROACTIVE_REFRESH_BUFFER_SECONDS),
+    }
+}
+
 /// Twitch-Token-Antwort (`/oauth2/token`).
 #[derive(Debug, Clone)]
 pub struct TokenResponse {
@@ -270,6 +290,92 @@ impl RaidTokenRefresher {
         self.blacklist.clear_failure_count(twitch_user_id).await;
         Ok(RefreshOutcome::Refreshed)
     }
+
+    /// Proaktiver Hintergrund-Sweep: refresht alle raid-aktivierten Tokens, die
+    /// in weniger als [`PROACTIVE_REFRESH_BUFFER_SECONDS`] ablaufen — Port von
+    /// `RaidAuthManager.refresh_all_tokens` (auth.py Z. 1007–1166).
+    ///
+    /// Ablauf je Zeile (1:1 zu Python):
+    /// 1. Kandidaten-Query: `raid_enabled IS TRUE AND needs_reauth IS NOT TRUE`.
+    /// 2. Geblacklistet / Recent-Failure-Cooldown → überspringen
+    ///    (in [`Self::refresh_and_store`] vor dem Lock erneut geprüft).
+    /// 3. Kein Refresh-Token entschlüsselbar → überspringen (kein Refresh möglich).
+    /// 4. Nicht fällig ([`is_refresh_due`] = false) → überspringen.
+    /// 5. Sonst [`Self::refresh_and_store`] (Advisory-Lock, Double-Check,
+    ///    verschlüsseltes Zurückschreiben). Erfolg zählt mit.
+    ///
+    /// Sequenziell mit kleinem Delay zwischen Refreshes — wie Python, um
+    /// Twitch-Rate-Limit-Spikes zu vermeiden. Liefert die Anzahl erfolgreich
+    /// erneuerter Tokens. Fehler einzelner Streamer brechen den Sweep nicht ab.
+    pub async fn refresh_all_due(&self, now: DateTime<Utc>) -> Result<u64, sqlx::Error> {
+        type Candidate = (String, Option<String>, Option<Vec<u8>>, Option<i32>, Option<DateTime<Utc>>);
+        let rows: Vec<Candidate> = sqlx::query_as(
+            r#"
+            SELECT twitch_user_id, twitch_login, refresh_token_enc, enc_version, token_expires_at
+            FROM twitch_raid_auth
+            WHERE raid_enabled IS TRUE
+              AND needs_reauth IS NOT TRUE
+            "#,
+        )
+        .fetch_all(&self.pool)
+        .await?;
+
+        let mut refreshed = 0u64;
+        for (user_id, login, refresh_enc, enc_version, expires_at) in rows {
+            let login = login.unwrap_or_default();
+
+            // Geblacklistet/Cooldown vorab (Python prüft das vor dem Refresh).
+            if self.blacklist.is_blacklisted(&user_id).await
+                || self.blacklist.has_recent_failure(&user_id).await
+            {
+                continue;
+            }
+
+            // Refresh-Token entschlüsseln; ohne ihn ist kein Refresh möglich.
+            let enc_v = i64::from(enc_version.unwrap_or(1));
+            let refresh_aad = aad::raid_auth("refresh_token", &user_id, enc_v);
+            let Some(refresh_token) = refresh_enc
+                .as_deref()
+                .filter(|b| !b.is_empty())
+                .and_then(|b| self.cipher.decrypt_field(b, &refresh_aad).ok())
+                .filter(|t| !t.is_empty())
+            else {
+                tracing::warn!(
+                    user = %mask(&user_id),
+                    "Hintergrund-Refresh übersprungen: kein entschlüsselbarer Refresh-Token"
+                );
+                continue;
+            };
+
+            // Noch nicht fällig (> 2 h gültig) → nichts tun.
+            if !is_refresh_due(expires_at, now) {
+                continue;
+            }
+            if expires_at.is_none() {
+                tracing::warn!(user = %mask(&login), "Ungültige Ablaufzeit — erzwinge Refresh");
+            }
+
+            match self
+                .refresh_and_store(&user_id, &login, &refresh_token, now)
+                .await
+            {
+                Ok(RefreshOutcome::Refreshed) => {
+                    refreshed += 1;
+                    // Kleines Delay gegen Rate-Limit-Spikes (Python sleep 0.5 s).
+                    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                }
+                Ok(RefreshOutcome::Blacklisted | RefreshOutcome::Skipped) => {}
+                Err(error) => {
+                    tracing::error!(%error, user = %mask(&login), "Hintergrund-Refresh fehlgeschlagen");
+                }
+            }
+        }
+
+        if refreshed > 0 {
+            tracing::debug!(refreshed, "Wartung: Hintergrund-Token-Refresh abgeschlossen");
+        }
+        Ok(refreshed)
+    }
 }
 
 /// blake2s-Key-Paar für `pg_advisory_xact_lock` — byte-identisch zu Python
@@ -293,6 +399,32 @@ mod tests {
         assert_eq!(advisory_lock_pair("42"), advisory_lock_pair("42"));
         // Verschiedene User → (praktisch immer) verschiedene Paare.
         assert_ne!(advisory_lock_pair("42"), advisory_lock_pair("43"));
+    }
+
+    #[test]
+    fn is_refresh_due_fenster_von_2_stunden() {
+        let now = chrono::DateTime::parse_from_rfc3339("2026-06-15T12:00:00+00:00")
+            .unwrap()
+            .with_timezone(&Utc);
+
+        // Läuft in 3 h ab → noch NICHT fällig (> 2 h Puffer).
+        let in_3h = now + Duration::hours(3);
+        assert!(!is_refresh_due(Some(in_3h), now));
+
+        // Läuft in 1 h ab → fällig (< 2 h).
+        let in_1h = now + Duration::hours(1);
+        assert!(is_refresh_due(Some(in_1h), now));
+
+        // Genau auf der Grenze (exakt 2 h) → fällig (>= Schwelle).
+        let in_2h = now + Duration::seconds(PROACTIVE_REFRESH_BUFFER_SECONDS);
+        assert!(is_refresh_due(Some(in_2h), now));
+
+        // Bereits abgelaufen → fällig.
+        let past = now - Duration::hours(1);
+        assert!(is_refresh_due(Some(past), now));
+
+        // Keine Ablaufzeit → forcierter Refresh (Python: forcing refresh).
+        assert!(is_refresh_due(None, now));
     }
 
     #[test]

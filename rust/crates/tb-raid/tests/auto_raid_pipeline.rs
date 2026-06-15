@@ -12,10 +12,10 @@ use sqlx::PgPool;
 use tb_crypto::{aad, FieldCipher, KID};
 use tb_raid::{
     ArrivalReadiness, AutoRaidPipeline, AutoRaidPipelineOutcome, AutoRaidRequest,
-    FairnessCandidate, FallbackStreamSource, OnlineCandidate, PendingRaidStore, RaidApi,
-    RaidAuthStore, RaidBlacklistStore, RaidExecutor, RaidHistoryStore, RaidTokenRefresher,
-    RefreshError, ScoreStore, StreamData, StrikesStore, TokenBlacklistStore, TokenOwnerInfo, TokenProvider,
-    TokenResponse, TwitchTokenClient,
+    FairnessCandidate, FallbackStreamSource, FollowerEnricher, OnlineCandidate, PendingRaidStore,
+    RaidApi, RaidAuthStore, RaidBlacklistStore, RaidExecutor, RaidHistoryStore, RaidTokenRefresher,
+    RefreshError, ScoreStore, StreamData, StrikesStore, TokenBlacklistStore, TokenOwnerInfo,
+    TokenProvider, TokenResponse, TwitchTokenClient, FOLLOWERS_UNKNOWN,
 };
 
 const TEST_KEY_HEX: &str = "0f0e0d0c0b0a09080706050403020100ffeeddccbbaa99887766554433221100";
@@ -220,6 +220,22 @@ impl FallbackStreamSource for StubFallback {
     }
 }
 
+/// Follower-Enricher-Stub: setzt `followers_total` aus einer user_id→Zahl-Map.
+/// Fehlende IDs bleiben auf ihrem Sentinel (best-effort wie Helix).
+struct StubFollowerEnricher {
+    followers_by_id: HashMap<String, i32>,
+}
+#[async_trait::async_trait]
+impl FollowerEnricher for StubFollowerEnricher {
+    async fn enrich(&self, pool: &mut [FairnessCandidate]) {
+        for candidate in pool.iter_mut() {
+            if let Some(total) = self.followers_by_id.get(candidate.user_id.trim()) {
+                candidate.followers_total = *total;
+            }
+        }
+    }
+}
+
 // ── Aufbau ──
 
 struct Harness {
@@ -233,6 +249,15 @@ fn build(
     pool: &PgPool,
     errors_by_target: HashMap<String, String>,
     fallback_streams: Vec<FairnessCandidate>,
+) -> Harness {
+    build_with_followers(pool, errors_by_target, fallback_streams, HashMap::new())
+}
+
+fn build_with_followers(
+    pool: &PgPool,
+    errors_by_target: HashMap<String, String>,
+    fallback_streams: Vec<FairnessCandidate>,
+    followers_by_id: HashMap<String, i32>,
 ) -> Harness {
     let cipher = Arc::new(FieldCipher::from_hex_key(TEST_KEY_HEX, KID).unwrap());
     let token_blacklist = Arc::new(TokenBlacklistStore::new(pool.clone()));
@@ -267,6 +292,7 @@ fn build(
         Some(Arc::new(StubFallback {
             streams: fallback_streams,
         })),
+        Some(Arc::new(StubFollowerEnricher { followers_by_id })),
         Some(tb_raid::OutreachBoostStore::new(pool.clone())),
     );
     Harness {
@@ -464,6 +490,41 @@ async fn blacklist_und_quelle_werden_nie_geraidet() {
         .await;
     assert_eq!(outcome, AutoRaidPipelineOutcome::NoTarget);
     assert!(h.api.calls.lock().unwrap().is_empty(), "kein API-Aufruf");
+}
+
+#[tokio::test]
+async fn fallback_follower_anreicherung_entscheidet_tie_break() {
+    // Zwei DE-Fallback-Streams, gleiche Raids (0) + gleiche Viewer: die
+    // 3. Tie-Break-Ebene (Follower) muss entscheiden. Beide starten auf dem
+    // FOLLOWERS_UNKNOWN-Sentinel; der Enricher füllt echte Zahlen — der
+    // follower-ärmere Kandidat (Python-konform) gewinnt, NICHT der zuerst
+    // einsortierte oder früher gestartete.
+    let pool = pool_or_skip!("t6w_pipe_follower_tiebreak");
+    seed_source_token(&pool, "100").await;
+
+    // Gleiche Viewer + gleiche Startzeit → nur Follower trennt sie.
+    let mut gross = fairness("300", "viele_follower");
+    gross.viewer_count = 5;
+    gross.followers_total = FOLLOWERS_UNKNOWN;
+    let mut klein = fairness("400", "wenig_follower");
+    klein.viewer_count = 5;
+    klein.followers_total = FOLLOWERS_UNKNOWN;
+
+    // 300 hat 9000 Follower, 400 nur 100 → 400 gewinnt nach Anreicherung.
+    let followers: HashMap<String, i32> =
+        [("300".to_string(), 9000), ("400".to_string(), 100)].into();
+    let h = build_with_followers(&pool, HashMap::new(), vec![gross, klein], followers);
+
+    let outcome = h.pipeline.run(&request(vec![])).await;
+    assert_eq!(
+        outcome,
+        AutoRaidPipelineOutcome::Started {
+            target_login: "wenig_follower".to_string(),
+            is_partner_raid: false,
+        },
+        "follower-ärmerer Kandidat gewinnt den Tie-Break (Python-Parität)"
+    );
+    assert_eq!(h.api.calls.lock().unwrap().clone(), vec!["400"]);
 }
 
 #[tokio::test]

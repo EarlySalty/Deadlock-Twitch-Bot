@@ -3,10 +3,11 @@
 
 use std::sync::Arc;
 
+use tb_monitoring::sessions::tracker::FollowerCountSource;
 use tb_monitoring::SubscriptionManager;
 use tb_raid::{
-    ArrivalReadiness, FairnessCandidate, FallbackStreamSource, RaidApi, RefreshError,
-    TokenOwnerInfo, TokenResponse, TwitchTokenClient,
+    ArrivalReadiness, FairnessCandidate, FallbackStreamSource, FollowerEnricher, RaidApi,
+    RefreshError, TokenOwnerInfo, TokenResponse, TwitchTokenClient, FOLLOWERS_UNKNOWN,
 };
 use tb_transport_twitch::{HelixClient, HelixStream, UserTokenError};
 
@@ -41,17 +42,48 @@ impl RaidApi for HelixRaidApi {
 }
 
 /// Wandelt einen Helix-Stream in einen Fairness-Kandidaten des DE-Fallbacks.
-/// Follower werden hier bewusst nicht geholt (bis zu 50 Streams → 50 Calls);
-/// der Fairness-Tie-Break fällt dann auf `started_at` zurück.
+/// Follower werden hier bewusst NICHT geholt (bis zu 50 Streams → 50 Calls) —
+/// `followers_total` startet auf [`FOLLOWERS_UNKNOWN`] und wird erst für den
+/// **gefilterten** Pool per [`HelixFollowerEnricher`] angereichert (Python
+/// `attach_followers_totals` auf dem Pool). Bleibt die Zahl unbekannt, sortiert
+/// der Kandidat ans Ende — statt sie mit `0` an die Spitze zu ziehen.
 fn to_fairness_candidate(stream: HelixStream) -> FairnessCandidate {
     FairnessCandidate {
         user_id: stream.user_id,
         user_login: stream.user_login.trim().to_lowercase(),
         viewer_count: stream.viewer_count as i32,
-        followers_total: 0,
+        followers_total: FOLLOWERS_UNKNOWN,
         started_at: Some(stream.started_at)
             .filter(|s| !s.trim().is_empty())
             .unwrap_or_else(|| STARTED_AT_SENTINEL.to_string()),
+    }
+}
+
+/// Follower-Anreicherung für den gefilterten Fallback-Pool (Python
+/// `attach_followers_totals`). Best-effort über den App-Token; ein Kandidat
+/// ohne abrufbare Zahl behält den [`FOLLOWERS_UNKNOWN`]-Sentinel.
+pub struct HelixFollowerEnricher {
+    pub followers: Arc<dyn FollowerCountSource>,
+}
+
+#[async_trait::async_trait]
+impl FollowerEnricher for HelixFollowerEnricher {
+    async fn enrich(&self, pool: &mut [FairnessCandidate]) {
+        for candidate in pool.iter_mut() {
+            let user_id = candidate.user_id.trim();
+            let uid = if user_id.is_empty() {
+                None
+            } else {
+                Some(user_id)
+            };
+            if let Some(total) = self
+                .followers
+                .follower_total(uid, &candidate.user_login)
+                .await
+            {
+                candidate.followers_total = total;
+            }
+        }
     }
 }
 

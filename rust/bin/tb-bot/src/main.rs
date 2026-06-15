@@ -479,6 +479,44 @@ async fn main() {
                 }),
                 token_blacklist.clone(),
             );
+
+            // Proaktiver Hintergrund-Token-Refresh (Python `refresh_all_tokens`,
+            // periodische Wartung): refresht alle raid-aktivierten Tokens, die
+            // in < 2 h ablaufen — verhindert Token-Ablauf im Nutzungspfad statt
+            // erst bei Bedarf (mit Latenz) zu erneuern. Eigene Refresher-Instanz
+            // (nur Arc-Clones), damit der `token_provider` `cipher` weiter
+            // konsumieren kann; cross-process über denselben Advisory-Lock
+            // serialisiert wie der reaktive Pfad.
+            {
+                let maintenance_refresher = RaidTokenRefresher::new(
+                    pool.clone(),
+                    cipher.clone(),
+                    Arc::new(HelixTokenClient {
+                        helix: helix_client.clone(),
+                        redirect_uri: raid_redirect_uri.clone(),
+                    }),
+                    token_blacklist.clone(),
+                );
+                tokio::spawn(async move {
+                    let mut tick = tokio::time::interval(std::time::Duration::from_secs(300));
+                    tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+                    loop {
+                        tick.tick().await;
+                        match maintenance_refresher.refresh_all_due(chrono::Utc::now()).await {
+                            Ok(refreshed) if refreshed > 0 => tracing::info!(
+                                refreshed,
+                                "Proaktiver Token-Refresh: Tokens erneuert"
+                            ),
+                            Ok(_) => {}
+                            Err(error) => tracing::error!(
+                                %error,
+                                "Proaktiver Token-Refresh fehlgeschlagen"
+                            ),
+                        }
+                    }
+                });
+            }
+
             let token_provider = Arc::new(TokenProvider::new(
                 RaidAuthStore::new(pool.clone(), cipher),
                 refresher,
@@ -504,6 +542,9 @@ async fn main() {
                 }),
                 Some(Arc::new(HelixFallbackStreams {
                     helix: helix_client.clone(),
+                })),
+                Some(Arc::new(raid_adapters::HelixFollowerEnricher {
+                    followers: followers.clone(),
                 })),
                 Some(OutreachBoostStore::new(pool.clone())),
             );

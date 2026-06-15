@@ -33,7 +33,8 @@ use crate::raid_history_store::RaidHistoryStore;
 use crate::score_store::{PartnerRaidScoreRow, ScoreStore};
 use crate::strikes_store::StrikesStore;
 use crate::target_resolution::{
-    resolve_boost_target, resolve_fallback_target, resolve_partner_target, ResolvedTarget,
+    filter_fallback_pool, resolve_boost_target, resolve_partner_target, select_fallback_from_pool,
+    ResolvedTarget,
 };
 use crate::util::{parse_iso_utc, unix_now};
 
@@ -64,6 +65,20 @@ pub trait FallbackStreamSource: Send + Sync {
 #[async_trait::async_trait]
 pub trait ArrivalReadiness: Send + Sync {
     async fn ensure_ready(&self, to_broadcaster_id: &str, to_broadcaster_login: &str) -> bool;
+}
+
+/// Port: reichert den gefilterten Fallback-Pool mit echten Follower-Zahlen an
+/// (Python `attach_followers_totals(pool)` in `select_fairest_candidate`,
+/// candidate_selection.py Z. 377–378). Ohne diese Anreicherung bleibt die
+/// 3. Tie-Break-Ebene (Follower) tot, weil alle Kandidaten auf dem
+/// [`FOLLOWERS_UNKNOWN`](crate::candidate_selection::FOLLOWERS_UNKNOWN)-Sentinel
+/// stehen. Best-effort: ein Kandidat ohne abrufbare Zahl behält den Sentinel
+/// und sortiert ans Ende.
+#[async_trait::async_trait]
+pub trait FollowerEnricher: Send + Sync {
+    /// Setzt `followers_total` jedes Kandidaten auf die echte Helix-Zahl,
+    /// sofern abrufbar. Nicht-ermittelbare Kandidaten bleiben unverändert.
+    async fn enrich(&self, pool: &mut [FairnessCandidate]);
 }
 
 /// Eingabe eines Pipeline-Laufs.
@@ -109,6 +124,10 @@ pub struct AutoRaidPipeline {
     pending: Arc<Mutex<PendingRaidStore>>,
     readiness: Arc<dyn ArrivalReadiness>,
     fallback: Option<Arc<dyn FallbackStreamSource>>,
+    /// Follower-Anreicherung für den Fallback-Pool (Python
+    /// `attach_followers_totals`) — `None` lässt die Follower-Tie-Break-Ebene
+    /// auf dem Sentinel (degradiert auf `started_at`, wie ohne Helix-Follower).
+    follower_enricher: Option<Arc<dyn FollowerEnricher>>,
     /// Outreach-Boost-Ziele (Phase 6g) — `None` deaktiviert den Boost-Pfad.
     outreach: Option<OutreachBoostStore>,
 }
@@ -124,6 +143,7 @@ impl AutoRaidPipeline {
         pending: Arc<Mutex<PendingRaidStore>>,
         readiness: Arc<dyn ArrivalReadiness>,
         fallback: Option<Arc<dyn FallbackStreamSource>>,
+        follower_enricher: Option<Arc<dyn FollowerEnricher>>,
         outreach: Option<OutreachBoostStore>,
     ) -> Self {
         Self {
@@ -135,6 +155,7 @@ impl AutoRaidPipeline {
             pending,
             readiness,
             fallback,
+            follower_enricher,
             outreach,
         }
     }
@@ -381,14 +402,14 @@ impl AutoRaidPipeline {
                 }
             };
 
-        resolve_fallback_target(
-            streams,
-            &recent_targets,
-            &received_raids_by_id,
-            blacklist_ids,
-            blacklist_logins,
-            exclude_ids,
-        )
+        // Filter → Follower-Anreicherung (nur auf dem gefilterten Pool, nicht
+        // allen 50 Streams) → Tie-Break. Python: `attach_followers_totals(pool)`
+        // vor der Sortierung in `select_fairest_candidate`.
+        let mut pool = filter_fallback_pool(streams, blacklist_ids, blacklist_logins, exclude_ids);
+        if let Some(enricher) = &self.follower_enricher {
+            enricher.enrich(&mut pool).await;
+        }
+        select_fallback_from_pool(&pool, &recent_targets, &received_raids_by_id)
     }
 
     /// Holt die Kategorie-Streams einmalig (lazy, über Versuche gecacht —
