@@ -17,6 +17,11 @@ use std::sync::Arc;
 use sqlx::PgPool;
 use tb_crypto::{aad, FieldCipher};
 
+/// Login des Engagement-Sende-Accounts (Smoke-Account; per Code, keine Env —
+/// mirror von `sender_auth.SENDER_LOGIN`). Der IRC-Reader nutzt ihn als
+/// Echo-Guard (eigene Nachrichten überspringen).
+pub const SENDER_LOGIN: &str = "iamspyingthroughtyourcam";
+
 /// Twitch-Token-Endpoint (Refresh-Grant). Per `with_token_url` injizierbar.
 const DEFAULT_TOKEN_URL: &str = "https://id.twitch.tv/oauth2/token";
 /// 5 min vor Ablauf proaktiv refreshen (Python `_REFRESH_SKEW_SECONDS`).

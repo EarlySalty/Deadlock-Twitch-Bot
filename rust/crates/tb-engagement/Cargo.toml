@@ -11,7 +11,7 @@ serde_json = { workspace = true }
 sqlx       = { workspace = true }
 tracing    = { workspace = true }
 rand       = { workspace = true }
-tokio      = { workspace = true, features = ["time", "rt"] }
+tokio      = { workspace = true, features = ["time", "rt", "net", "io-util"] }
 tb-crypto  = { workspace = true }
 
 [dev-dependencies]

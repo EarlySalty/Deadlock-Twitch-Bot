@@ -38,6 +38,7 @@ use tb_chat::{
     ReviewLog, SusInviteCheck,
 };
 use tb_crypto::FieldCipher;
+use tb_engagement::irc_reader::EngagementIrcReader;
 use tb_engagement::minimax_chat::EngagementMinimaxClient;
 use tb_engagement::pipeline::EngagementPipeline;
 use tb_engagement::sender_auth::SenderAuthStore;
@@ -396,6 +397,13 @@ pub async fn build_runtime(
         );
     }
     tb_engagement::background::spawn_all(pool.clone());
+
+    // IRC-Reader: zweiter Chat-Input für `irc_read`-Kanäle (einwilligende
+    // Streamer OHNE EventSub-`channel:bot`). Disjunkte Kanal-Menge zum
+    // EventSub-Pfad → kein Doppel-Processing. No-op, wenn keine irc_read-Kanäle.
+    tokio::spawn(
+        EngagementIrcReader::new(pool.clone(), Arc::clone(&engagement), stealth.clone()).run(),
+    );
 
     tracing::info!("Nativer Chat-Bot verdrahtet — Pipeline aktiv (TB_CHAT_ENABLED=1)");
     ChatRuntime {
