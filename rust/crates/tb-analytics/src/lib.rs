@@ -3,6 +3,7 @@
 //! Jede Funktion nimmt einen `&PgPool` entgegen und gibt typisierte Structs zurück.
 //! Kein HTTP, kein Serde-JSON — nur reine Query-Logik.
 
+pub mod admin_affiliate;
 pub mod admin_billing;
 pub mod admin_config;
 pub mod admin_streamers;
