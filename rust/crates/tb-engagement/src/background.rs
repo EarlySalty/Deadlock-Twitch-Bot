@@ -7,16 +7,23 @@
 //! ist best-effort. Der Stream-Transkript-Loop (Audio-Capture + Whisper-STT)
 //! folgt separat, sobald das STT-Subsystem in Rust existiert.
 
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
+use chrono::Utc;
 use sqlx::PgPool;
 
+use crate::audio_capture::AudioCapturer;
 use crate::channel_background::ChannelBackground;
 use crate::global_sentiment::GlobalSentiment;
 use crate::match_context::MatchContext;
 use crate::minimax_chat::EngagementMinimaxClient;
 use crate::soul_store::SoulStore;
+use crate::stream_transcripts::{
+    transcript_capture_seconds, transcript_poll_interval_seconds, transcript_quality,
+    StreamTranscriptSegment, StreamTranscripts,
+};
 use crate::threads::Threads;
+use crate::transcribe::OpenAiTranscriber;
 
 const THREAD_EXTRACTOR_INTERVAL: f64 = 15.0 * 60.0;
 const MATCH_POLLER_INTERVAL: f64 = 30.0;
@@ -26,7 +33,16 @@ const CONVERSATION_KEEP_PER_CHANNEL: i64 = 500;
 const GLOBAL_SENTIMENT_INTERVAL: f64 = 20.0 * 60.0;
 const SOUL_ANCHOR_INTERVAL: f64 = 3.0 * 60.0 * 60.0;
 const CHANNEL_PROFILE_INTERVAL: f64 = 4.0 * 60.0 * 60.0;
+const TRANSCRIPT_TRIM_INTERVAL: Duration = Duration::from_secs(15 * 60);
 const AI_TIMEOUT: Duration = Duration::from_secs(180);
+
+/// `ENGAGEMENT_STREAM_TRANSCRIPTS_ENABLED` (Default an). Aus → kein Capture.
+fn stream_transcripts_enabled() -> bool {
+    match std::env::var("ENGAGEMENT_STREAM_TRANSCRIPTS_ENABLED") {
+        Ok(v) => !matches!(v.trim().to_lowercase().as_str(), "" | "0" | "false" | "no" | "off"),
+        Err(_) => true,
+    }
+}
 
 /// Aktive Engagement-Channels samt steam_id.
 async fn load_enabled_channels(pool: &PgPool) -> Vec<(String, Option<String>)> {
@@ -96,6 +112,60 @@ async fn run_channel_profile_once(pool: &PgPool, minimax: &EngagementMinimaxClie
     ChannelBackground::new(pool.clone()).rebuild_all_channel_profiles(minimax).await;
 }
 
+/// Captured + transkribiert einen Stream-Ausschnitt eines Channels und legt das
+/// Segment ab (Port von `_transcribe_capture`). Best-effort; Workdir wird immer
+/// aufgeräumt.
+async fn run_transcribe_capture(
+    pool: &PgPool,
+    channel: &str,
+    capturer: &AudioCapturer,
+    transcriber: &OpenAiTranscriber,
+) {
+    let capture = match capturer
+        .capture(channel, transcript_capture_seconds().max(0) as u64, &transcript_quality(), None)
+        .await
+    {
+        Ok(c) => c,
+        Err(error) => {
+            tracing::debug!(channel, %error, "stream-transcript: Capture fehlgeschlagen");
+            return;
+        }
+    };
+    let transcription = transcriber.transcribe_clip(&capture.media_path).await;
+    capture.cleanup().await; // entspricht Pythons finally
+    let result = match transcription {
+        Ok(r) => r,
+        Err(error) => {
+            tracing::debug!(channel, %error, "stream-transcript: Transkription fehlgeschlagen");
+            return;
+        }
+    };
+
+    let text = result.text.split_whitespace().collect::<Vec<_>>().join(" ");
+    if text.is_empty() {
+        return;
+    }
+    // Dauer: Modell → Capture-Ist → Capture-Soll (Python `or`-Kette).
+    let duration = if result.duration_seconds > 0.0 {
+        result.duration_seconds
+    } else if capture.actual_duration_seconds > 0.0 {
+        capture.actual_duration_seconds
+    } else {
+        capture.requested_duration_seconds as f64
+    };
+    let ended_at = Utc::now();
+    let started_at = ended_at - chrono::Duration::seconds(duration.max(1.0) as i64);
+    let segment = StreamTranscriptSegment {
+        channel_login: channel.to_string(),
+        started_at,
+        ended_at,
+        text,
+        engine: result.engine,
+        model: Some(result.model).filter(|m| !m.is_empty()),
+    };
+    let _ = StreamTranscripts::new(pool.clone()).append_segment(&segment).await;
+}
+
 fn ai_client() -> EngagementMinimaxClient {
     EngagementMinimaxClient::new(None, None, None, Some(AI_TIMEOUT))
 }
@@ -162,7 +232,39 @@ pub async fn schedule_channel_profile(pool: PgPool) {
     }
 }
 
-/// Spawnt alle sieben Background-Loops als tokio-Tasks (Python `ensure_started`).
+/// Stream-Transkript-Loop (Port von `_run_stream_transcript_loop`): pro
+/// enabled Channel ein streamlink-Capture + OpenAI-Whisper-Transkription, dazu
+/// periodisches Trimmen. Aus (Env-Flag) oder ohne `OPENAI_API_KEY` → still im
+/// Poll-Takt warten und retryen.
+pub async fn schedule_stream_transcripts(pool: PgPool) {
+    let capturer = AudioCapturer::from_env();
+    let mut transcriber: Option<OpenAiTranscriber> = None;
+    let mut last_trim: Option<Instant> = None;
+    loop {
+        if stream_transcripts_enabled() {
+            if transcriber.is_none() {
+                transcriber = OpenAiTranscriber::from_env();
+            }
+            match &transcriber {
+                Some(t) => {
+                    for (channel, _steam) in load_enabled_channels(&pool).await {
+                        run_transcribe_capture(&pool, &channel, &capturer, t).await;
+                    }
+                    if last_trim.map_or(true, |t| t.elapsed() >= TRANSCRIPT_TRIM_INTERVAL) {
+                        last_trim = Some(Instant::now());
+                        let _ = StreamTranscripts::new(pool.clone()).trim_segments(None, None).await;
+                    }
+                }
+                None => tracing::debug!(
+                    "stream-transcripts: kein OPENAI_API_KEY — Transcriber nicht verfügbar"
+                ),
+            }
+        }
+        jittered_sleep(transcript_poll_interval_seconds()).await;
+    }
+}
+
+/// Spawnt alle acht Background-Loops als tokio-Tasks (Python `ensure_started`).
 pub fn spawn_all(pool: PgPool) {
     tokio::spawn(schedule_thread_extractor(pool.clone()));
     tokio::spawn(schedule_match_poller(pool.clone()));
@@ -170,10 +272,12 @@ pub fn spawn_all(pool: PgPool) {
     tokio::spawn(schedule_conversation_trim(pool.clone()));
     tokio::spawn(schedule_global_sentiment(pool.clone()));
     tokio::spawn(schedule_soul_anchor(pool.clone()));
-    tokio::spawn(schedule_channel_profile(pool));
+    tokio::spawn(schedule_channel_profile(pool.clone()));
+    tokio::spawn(schedule_stream_transcripts(pool));
     tracing::info!(
         "Engagement-Background-Jobs gestartet (thread-extractor=15min, match-poller=30s, \
-         auto-closer=1h, conv-trim=24h, global-sentiment=20min, soul-anchor=3h, channel-profile=4h)"
+         auto-closer=1h, conv-trim=24h, global-sentiment=20min, soul-anchor=3h, \
+         channel-profile=4h, stream-transcripts=poll)"
     );
 }
 
