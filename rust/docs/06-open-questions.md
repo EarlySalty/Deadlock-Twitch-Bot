@@ -54,3 +54,12 @@ Blocker. Erledigte Entscheidungen stehen unter „Geklärt".
 8. **`system/query` (Raw-SQL-Admin-Endpoint).** Soll Rust diesen Endpoint überhaupt 1:1 nachbauen?
    Empfehlung: Read-only-Guard + Statement-Whitelist statt freier SQL-Ausführung. Sicherheits-Review
    vor Phase 9.
+
+## LLM-Layer (tb-llm, Phase 0)
+
+9. **Anthropic-Tokens im MiniMax-Usage-Ledger?** Das Python-Orakel verbucht **nur MiniMax**-Tokens
+   ins geteilte Ledger; der Anthropic-/Opus-Pfad schreibt dort nichts. `tb-llm` verbucht aktuell
+   auch den Anthropic-Verbrauch (mit Anthropic-Modellnamen unterscheidbar), damit der gesamte
+   LLM-Verbrauch dieses Bots an einer Stelle messbar ist. Falls das Ledger strikt MiniMax-only
+   bleiben soll (z. B. weil eine 5h-Budget-Logik nur MiniMax-Tokens meint), den Anthropic-`record`
+   in `crates/tb-llm/src/anthropic.rs` entfernen. → User-Entscheid.
