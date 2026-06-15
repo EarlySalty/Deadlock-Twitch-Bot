@@ -324,6 +324,94 @@ pub async fn title_analysis(
     }))
 }
 
+/// Schedule-Optimizer (Python `_schedule_optimizer`): Konkurrenz-Heatmap der
+/// Kategorie (Wochentag×Stunde), eigene Slots und „Sweet Spots" (viel
+/// Kategorie-Publikum bei wenig Konkurrenz).
+pub async fn schedule_optimizer(
+    pool: &PgPool,
+    streamer: &str,
+    since: DateTime<Utc>,
+) -> Result<Value, sqlx::Error> {
+    // 1) Konkurrenz-Heatmap je Wochentag/Stunde (UTC).
+    let competition: Vec<(i32, i32, i64, Option<f64>)> = sqlx::query_as(
+        "SELECT EXTRACT(DOW FROM (ts_utc AT TIME ZONE 'UTC'))::int, \
+                EXTRACT(HOUR FROM (ts_utc AT TIME ZONE 'UTC'))::int, \
+                COUNT(DISTINCT streamer)::bigint, \
+                AVG(viewer_count)::float8 \
+           FROM twitch_stats_category \
+          WHERE ts_utc >= $1 \
+          GROUP BY 1, 2",
+    )
+    .bind(since)
+    .fetch_all(pool)
+    .await?;
+
+    // Zelle = (weekday, hour, competitors, categoryViewers[gerundet]). Die
+    // Rundung passiert VOR der Opportunity-Rechnung — exakt wie Python, das
+    // `cell["categoryViewers"]` (bereits gerundet) weiterverwendet.
+    let cells: Vec<(i32, i32, i64, f64)> = competition
+        .iter()
+        .map(|(w, h, c, v)| (*w, *h, *c, round1(v.unwrap_or(0.0))))
+        .collect();
+
+    let heatmap: Vec<Value> = cells
+        .iter()
+        .map(|(w, h, c, v)| {
+            json!({ "weekday": w, "hour": h, "competitors": c, "categoryViewers": v })
+        })
+        .collect();
+
+    // 2) Eigene Stream-Slots.
+    let your_slots: Vec<(i32, i32, i64)> = sqlx::query_as(
+        "SELECT EXTRACT(DOW FROM (started_at AT TIME ZONE 'UTC'))::int, \
+                EXTRACT(HOUR FROM (started_at AT TIME ZONE 'UTC'))::int, \
+                COUNT(*)::bigint \
+           FROM twitch_stream_sessions \
+          WHERE streamer_login = $1 AND started_at >= $2 \
+          GROUP BY 1, 2 \
+          ORDER BY 3 DESC",
+    )
+    .bind(streamer)
+    .bind(since)
+    .fetch_all(pool)
+    .await?;
+
+    let current_slots: Vec<Value> = your_slots
+        .iter()
+        .map(|(w, h, cnt)| json!({ "weekday": w, "hour": h, "count": cnt }))
+        .collect();
+
+    // 3) Sweet Spots: viel Kategorie-Publikum pro Konkurrent.
+    let mut sweet: Vec<(i32, i32, i64, f64, f64)> = cells
+        .iter()
+        .map(|(w, h, c, v)| {
+            let opportunity = if *c > 0 { v / *c as f64 } else { *v };
+            (*w, *h, *c, *v, round1(opportunity))
+        })
+        .collect();
+    // Stabiler Sort (wie Pythons Timsort) absteigend nach opportunityScore.
+    sweet.sort_by(|a, b| b.4.partial_cmp(&a.4).unwrap_or(std::cmp::Ordering::Equal));
+    let sweet_spots: Vec<Value> = sweet
+        .iter()
+        .take(15)
+        .map(|(w, h, c, v, o)| {
+            json!({
+                "weekday": w,
+                "hour": h,
+                "categoryViewers": v,
+                "competitors": c,
+                "opportunityScore": o,
+            })
+        })
+        .collect();
+
+    Ok(json!({
+        "sweetSpots": sweet_spots,
+        "yourCurrentSlots": current_slots,
+        "competitionHeatmap": heatmap,
+    }))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -432,5 +520,53 @@ mod tests {
         let missing = v["yourMissingPatterns"].as_array().unwrap();
         assert!(missing.iter().any(|w| w == "pro"));
         assert!(missing.iter().any(|w| w == "gameplay"));
+    }
+
+    #[tokio::test]
+    async fn schedule_optimizer_berechnet() {
+        let Some(pool) = make_pool("t_coach_sched").await else { return };
+        sqlx::query("CREATE TABLE twitch_stats_category (id BIGSERIAL PRIMARY KEY, ts_utc TIMESTAMPTZ, streamer TEXT, viewer_count INTEGER)")
+            .execute(&pool).await.unwrap();
+        // Slot A (Stunde 14): 2 Konkurrenten Ø(100,200)=150 → opportunity 75.
+        // Slot B (Stunde 20): 1 Konkurrent 500 → opportunity 500 (= bester).
+        sqlx::query(
+            "INSERT INTO twitch_stats_category (ts_utc, streamer, viewer_count) VALUES \
+            (TIMESTAMPTZ '2026-06-08 14:00:00+00', 'sx', 100), \
+            (TIMESTAMPTZ '2026-06-08 14:00:00+00', 'sy', 200), \
+            (TIMESTAMPTZ '2026-06-09 20:00:00+00', 'sx', 500)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO twitch_stream_sessions (streamer_login, started_at, duration_seconds, avg_viewers, follower_delta) VALUES \
+            ('nani', TIMESTAMPTZ '2026-06-08 14:30:00+00', 7200, 40, 0)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let v = schedule_optimizer(&pool, "nani", Utc::now() - chrono::Duration::days(365))
+            .await
+            .unwrap();
+
+        // Heatmap: 2 Zellen.
+        assert_eq!(v["competitionHeatmap"].as_array().unwrap().len(), 2);
+        // Bester Sweet Spot = Slot B (Stunde 20, opportunity 500).
+        assert_eq!(v["sweetSpots"][0]["hour"], 20);
+        assert_eq!(v["sweetSpots"][0]["opportunityScore"], 500.0);
+        assert_eq!(v["sweetSpots"][0]["competitors"], 1);
+        // Slot A in Heatmap: categoryViewers 150, 2 Konkurrenten.
+        let slot_a = v["competitionHeatmap"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|c| c["hour"] == 14)
+            .unwrap();
+        assert_eq!(slot_a["categoryViewers"], 150.0);
+        assert_eq!(slot_a["competitors"], 2);
+        // Eigener Slot: Stunde 14, 1 Stream.
+        assert_eq!(v["yourCurrentSlots"][0]["hour"], 14);
+        assert_eq!(v["yourCurrentSlots"][0]["count"], 1);
     }
 }
