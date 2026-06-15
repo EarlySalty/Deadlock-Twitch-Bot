@@ -47,6 +47,63 @@ impl DispatchOutcome {
     }
 }
 
+/// Demux-Klassen einer `channel.chat.notification` nach `notice_type`
+/// (Foundation B8-00). Sub-Klassen speisen die Sub-Telemetrie (B8-01),
+/// Raid/Unraid die Raid-Korrelation (B7). Port von
+/// `bot/chat/bot.py::event_chat_notification` +
+/// `_build_subscription_event_from_chat_notification`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ChatNotificationKind {
+    /// `notice_type=sub` → channel.subscribe-Äquivalent.
+    Sub,
+    /// `notice_type=resub` → channel.subscription.message-Äquivalent.
+    Resub,
+    /// `notice_type=sub_gift` → channel.subscription.gift (Einzel-Geschenk).
+    SubGift,
+    /// `notice_type=community_sub_gift` → channel.subscription.gift (Batch).
+    CommunitySubGift,
+    /// `notice_type=raid` → Raid-Arrival (Ziel-seitig, B7-01).
+    Raid,
+    /// `notice_type=unraid` → Raid-Withdraw (B7-02 / Source-Self-Unraid B7-03).
+    Unraid,
+}
+
+impl ChatNotificationKind {
+    /// `true` für Sub/Resub/Gift-Klassen (Sub-Telemetrie, B8-01).
+    pub fn is_subscription(self) -> bool {
+        matches!(
+            self,
+            Self::Sub | Self::Resub | Self::SubGift | Self::CommunitySubGift
+        )
+    }
+
+    /// `true` für Raid/Unraid-Klassen (Raid-Korrelation, B7).
+    pub fn is_raid(self) -> bool {
+        matches!(self, Self::Raid | Self::Unraid)
+    }
+}
+
+/// Klassifiziert einen `channel.chat.notification`-`notice_type`. Der
+/// `shared_chat_`-Präfix wird wie in Python entfernt (Shared-Chat-Sessions
+/// spiegeln dieselben Notices). Unbekannte Typen → `None` (sauberes Ignorieren,
+/// kein Panic). Port von `_subscription_notice_eventsub_type` (raid/bot.py) +
+/// dem raid/unraid-Zweig in `event_chat_notification` (chat/bot.py).
+pub fn classify_chat_notification(notice_type: &str) -> Option<ChatNotificationKind> {
+    let normalized = notice_type.trim().to_lowercase();
+    let normalized = normalized
+        .strip_prefix("shared_chat_")
+        .unwrap_or(&normalized);
+    match normalized {
+        "sub" => Some(ChatNotificationKind::Sub),
+        "resub" => Some(ChatNotificationKind::Resub),
+        "sub_gift" => Some(ChatNotificationKind::SubGift),
+        "community_sub_gift" => Some(ChatNotificationKind::CommunitySubGift),
+        "raid" => Some(ChatNotificationKind::Raid),
+        "unraid" => Some(ChatNotificationKind::Unraid),
+        _ => None,
+    }
+}
+
 /// Hooks zu Nachbar-Subsystemen für EventSub-getriebene Effekte.
 #[async_trait::async_trait]
 pub trait EventSubHooks: Send + Sync {
@@ -70,6 +127,27 @@ pub trait EventSubHooks: Send + Sync {
     /// `channel.chat.message` (Welle B: nativer Chat-Bot — Moderation,
     /// Commands, Promos). Default no-op bis zur Chat-Verdrahtung.
     async fn on_chat_message(&self, _event: &Value, _message_id: Option<&str>) {}
+
+    /// Routing-Punkt B8-00: `channel.chat.notification` mit Sub/Resub/Gift-
+    /// `notice_type` (Sub-Telemetrie-Fallback, B8-01). `kind` ist die
+    /// klassifizierte Sub-Klasse, `event` der rohe Notification-Event-Body.
+    /// Default no-op bis B8-01 die Telemetrie-Persistenz verdrahtet.
+    async fn on_chat_subscription_notification(
+        &self,
+        _kind: ChatNotificationKind,
+        _event: &Value,
+        _message_id: Option<&str>,
+    ) {
+    }
+
+    /// Routing-Punkt B8-00: `channel.chat.notification` mit `notice_type=raid`
+    /// (Raid-Arrival am Ziel, B7-01). Default no-op bis B7 die Korrelation
+    /// verdrahtet.
+    async fn on_chat_raid_notification(&self, _event: &Value, _message_id: Option<&str>) {}
+
+    /// Routing-Punkt B8-00: `channel.chat.notification` mit `notice_type=unraid`
+    /// (Raid-Withdraw / Source-Self-Unraid, B7-02/B7-03). Default no-op bis B7.
+    async fn on_chat_unraid_notification(&self, _event: &Value, _message_id: Option<&str>) {}
 }
 
 /// Hooks ohne Wirkung (bis zur Verdrahtung in 4f).
@@ -245,6 +323,11 @@ impl EventSubDispatcher {
                 self.hooks.on_chat_message(&context.event, message_id).await;
                 outcome.processed = true;
             }
+            "channel.chat.notification" => {
+                outcome.processed = self
+                    .route_chat_notification(message_id, &context.event)
+                    .await;
+            }
             "channel.moderate" => {
                 self.hooks
                     .on_channel_moderate(
@@ -260,6 +343,45 @@ impl EventSubDispatcher {
             }
         }
         Ok(outcome)
+    }
+
+    /// Demux einer `channel.chat.notification` nach `notice_type` (B8-00).
+    /// Liest `notice_type` aus dem Event-Body, klassifiziert und routet an den
+    /// passenden Hook: Sub/Resub/Gift → Sub-Telemetrie (B8-01), Raid/Unraid →
+    /// Raid-Korrelation (B7). Unbekannter/fehlender `notice_type` wird sauber
+    /// ignoriert (kein Panic). `true` = bekannte Klasse geroutet.
+    ///
+    /// Foundation-Hinweis: Die Hook-Ziele sind bis B8-01/B7 Default-No-ops —
+    /// dieser Zweig baut nur den Demux + die Routing-Punkte, nicht die volle
+    /// Telemetrie-/Korrelations-Persistenz.
+    async fn route_chat_notification(&self, message_id: Option<&str>, event: &Value) -> bool {
+        let notice_type = event
+            .get("notice_type")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        let Some(kind) = classify_chat_notification(notice_type) else {
+            tracing::debug!(
+                notice_type,
+                "channel.chat.notification: unbekannter notice_type ignoriert"
+            );
+            return false;
+        };
+        match kind {
+            ChatNotificationKind::Raid => {
+                self.hooks.on_chat_raid_notification(event, message_id).await;
+            }
+            ChatNotificationKind::Unraid => {
+                self.hooks
+                    .on_chat_unraid_notification(event, message_id)
+                    .await;
+            }
+            sub_kind => {
+                self.hooks
+                    .on_chat_subscription_notification(sub_kind, event, message_id)
+                    .await;
+            }
+        }
+        true
     }
 
     /// Telemetrie-Insert; Fehler werden (wie Pythons Inline-Callbacks)
@@ -371,7 +493,61 @@ fn epoch_to_datetime(epoch: f64) -> DateTime<Utc> {
 
 #[cfg(test)]
 mod tests {
-    use super::extract_context;
+    use super::{classify_chat_notification, extract_context, ChatNotificationKind};
+
+    #[test]
+    fn classify_chat_notification_demuxt_nach_notice_type() {
+        // Sub/Resub/Gift-Klassen → Sub-Telemetrie (B8-01).
+        assert_eq!(
+            classify_chat_notification("sub"),
+            Some(ChatNotificationKind::Sub)
+        );
+        assert_eq!(
+            classify_chat_notification("resub"),
+            Some(ChatNotificationKind::Resub)
+        );
+        assert_eq!(
+            classify_chat_notification("sub_gift"),
+            Some(ChatNotificationKind::SubGift)
+        );
+        assert_eq!(
+            classify_chat_notification("community_sub_gift"),
+            Some(ChatNotificationKind::CommunitySubGift)
+        );
+        // Raid/Unraid → Raid-Korrelation (B7).
+        assert_eq!(
+            classify_chat_notification("raid"),
+            Some(ChatNotificationKind::Raid)
+        );
+        assert_eq!(
+            classify_chat_notification("unraid"),
+            Some(ChatNotificationKind::Unraid)
+        );
+
+        // Klassen-Gruppierung (Routing-Weichen).
+        assert!(ChatNotificationKind::Sub.is_subscription());
+        assert!(!ChatNotificationKind::Sub.is_raid());
+        assert!(ChatNotificationKind::Raid.is_raid());
+        assert!(!ChatNotificationKind::Raid.is_subscription());
+    }
+
+    #[test]
+    fn classify_chat_notification_normalisiert_und_ignoriert_unbekanntes() {
+        // shared_chat_-Präfix wird entfernt (Python-Parität), Case egal.
+        assert_eq!(
+            classify_chat_notification("SHARED_CHAT_SUB"),
+            Some(ChatNotificationKind::Sub)
+        );
+        assert_eq!(
+            classify_chat_notification("  shared_chat_raid  "),
+            Some(ChatNotificationKind::Raid)
+        );
+        // Unbekannter / leerer notice_type → None (sauberes Ignorieren, kein Panic).
+        assert_eq!(classify_chat_notification("announcement"), None);
+        assert_eq!(classify_chat_notification(""), None);
+        assert_eq!(classify_chat_notification("   "), None);
+    }
+
 
     #[test]
     fn extract_context_flach_und_geschachtelt() {

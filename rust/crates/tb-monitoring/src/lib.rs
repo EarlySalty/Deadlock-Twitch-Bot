@@ -44,7 +44,10 @@ pub use announce::{
     AnnounceConfigStore, AnnouncementSettings, AnnouncementTransport, BrokerAnnouncementSink,
     LivePingRoleProvider, NoVodPreview, VodPreviewSource,
 };
-pub use dispatch::{DispatchOutcome, EventSubDispatcher, EventSubHooks, NoopEventSubHooks};
+pub use dispatch::{
+    classify_chat_notification, ChatNotificationKind, DispatchOutcome, EventSubDispatcher,
+    EventSubHooks, NoopEventSubHooks,
+};
 pub use exp_sessions::{ExpSessionStore, ExpSessionTracker};
 pub use guard::{GuardKind, GuardStore};
 pub use handlers::MonitoringEventHandler;

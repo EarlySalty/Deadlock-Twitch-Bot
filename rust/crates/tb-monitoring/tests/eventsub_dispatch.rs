@@ -9,10 +9,12 @@ use sqlx::PgPool;
 use tb_monitoring::poller::source::{ChannelInfo, ChannelInfoSource, SourceError};
 use tb_monitoring::sessions::store::SessionStore;
 use tb_monitoring::{
-    epoch_clock, EventSubDispatcher, EventSubHooks, ExpSessionStore, ExpSessionTracker, GuardStore,
-    HypeTrainPhase, InboxRuntime, InboxRuntimeHandle, LiveStateStore, MonitoringEventHandler,
-    NoFollowerSource, ProcessingInboxStore, SessionTracker, StreamSnapshot, TelemetryStore,
+    epoch_clock, ChatNotificationKind, EventSubDispatcher, EventSubHooks, ExpSessionStore,
+    ExpSessionTracker, GuardStore, HypeTrainPhase, InboxRuntime, InboxRuntimeHandle, LiveStateStore,
+    MonitoringEventHandler, NoFollowerSource, ProcessingInboxStore, SessionTracker, StreamSnapshot,
+    TelemetryStore,
 };
+use std::sync::Mutex;
 
 mod support;
 
@@ -32,6 +34,10 @@ struct RecordingHooks {
     score_refresh: AtomicU64,
     stream_offline: AtomicU64,
     channel_raid: AtomicU64,
+    chat_raid: AtomicU64,
+    chat_unraid: AtomicU64,
+    /// Klassifizierte Sub-Notifications (in Reihenfolge des Eintreffens).
+    chat_sub_kinds: Mutex<Vec<ChatNotificationKind>>,
 }
 
 #[async_trait::async_trait]
@@ -52,6 +58,24 @@ impl EventSubHooks for RecordingHooks {
     }
     async fn on_stream_offline(&self, _twitch_user_id: &str, _login: Option<&str>) {
         self.stream_offline.fetch_add(1, Ordering::SeqCst);
+    }
+    async fn on_chat_subscription_notification(
+        &self,
+        kind: ChatNotificationKind,
+        _event: &serde_json::Value,
+        _message_id: Option<&str>,
+    ) {
+        self.chat_sub_kinds.lock().unwrap().push(kind);
+    }
+    async fn on_chat_raid_notification(&self, _event: &serde_json::Value, _message_id: Option<&str>) {
+        self.chat_raid.fetch_add(1, Ordering::SeqCst);
+    }
+    async fn on_chat_unraid_notification(
+        &self,
+        _event: &serde_json::Value,
+        _message_id: Option<&str>,
+    ) {
+        self.chat_unraid.fetch_add(1, Ordering::SeqCst);
     }
 }
 
@@ -403,6 +427,79 @@ async fn telemetrie_und_channel_update_und_raid_hook() {
     assert!(outcome.ok && !outcome.processed && !outcome.queued);
 
     runtime.shutdown().await;
+}
+
+/// B8-00: `channel.chat.notification` demuxt nach `notice_type` an die
+/// Routing-Punkte — sub/resub/sub_gift/community_sub_gift → Sub-Hook,
+/// raid/unraid → Raid-Hooks; unbekannter notice_type wird sauber ignoriert
+/// (kein Panic, nicht „processed"). Foundation für B8-01 (Sub-Telemetrie) und
+/// B7 (Raid-Korrelation).
+#[tokio::test]
+async fn chat_notification_demuxt_nach_notice_type() {
+    let pool = pool_or_skip!("t4d_chat_notification");
+    let hooks = Arc::new(RecordingHooks::default());
+    let (dispatcher, runtime, _store) = build_stack(&pool, hooks.clone());
+
+    // notice_type=sub → Sub-Hook (B8-01), processed.
+    let sub = serde_json::json!({
+        "subscription": {"type": "channel.chat.notification"},
+        "event": {"broadcaster_user_id": "42", "notice_type": "sub",
+                   "chatter_user_login": "fan", "sub": {"sub_tier": "1000"}}
+    });
+    let outcome = dispatcher
+        .dispatch("channel.chat.notification", Some("cn-sub"), &sub)
+        .await
+        .unwrap();
+    assert!(outcome.processed && !outcome.queued);
+
+    // raid + unraid → Raid-Hooks (B7).
+    for (mid, notice) in [("cn-raid", "raid"), ("cn-unraid", "unraid")] {
+        let body = serde_json::json!({
+            "subscription": {"type": "channel.chat.notification"},
+            "event": {"broadcaster_user_id": "42", "notice_type": notice}
+        });
+        let outcome = dispatcher
+            .dispatch("channel.chat.notification", Some(mid), &body)
+            .await
+            .unwrap();
+        assert!(outcome.processed, "{notice} muss geroutet werden");
+    }
+
+    // community_sub_gift → Sub-Hook (Batch-Geschenk).
+    let community = serde_json::json!({
+        "subscription": {"type": "channel.chat.notification"},
+        "event": {"broadcaster_user_id": "42", "notice_type": "community_sub_gift",
+                   "community_sub_gift": {"total": 5, "sub_tier": "1000"}}
+    });
+    dispatcher
+        .dispatch("channel.chat.notification", Some("cn-comm"), &community)
+        .await
+        .unwrap();
+
+    // Unbekannter notice_type → kein Panic, nicht processed.
+    let unknown = serde_json::json!({
+        "subscription": {"type": "channel.chat.notification"},
+        "event": {"broadcaster_user_id": "42", "notice_type": "announcement"}
+    });
+    let outcome = dispatcher
+        .dispatch("channel.chat.notification", Some("cn-unknown"), &unknown)
+        .await
+        .unwrap();
+    assert!(outcome.ok && !outcome.processed && !outcome.queued);
+
+    runtime.shutdown().await;
+
+    assert_eq!(hooks.chat_raid.load(Ordering::SeqCst), 1);
+    assert_eq!(hooks.chat_unraid.load(Ordering::SeqCst), 1);
+    let sub_kinds = hooks.chat_sub_kinds.lock().unwrap().clone();
+    assert_eq!(
+        sub_kinds,
+        vec![
+            ChatNotificationKind::Sub,
+            ChatNotificationKind::CommunitySubGift
+        ],
+        "Sub-Notices in Reihenfolge an den Sub-Routing-Punkt"
+    );
 }
 
 // ── Hype-Train NULL-Bug (started_at nicht parsebar) ──────────────────────────
