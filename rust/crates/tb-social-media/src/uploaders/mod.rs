@@ -11,6 +11,7 @@ use async_trait::async_trait;
 use serde_json::Value;
 
 pub mod tiktok;
+pub mod youtube;
 
 #[derive(Debug, thiserror::Error)]
 pub enum UploadError {
