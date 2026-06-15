@@ -10,10 +10,16 @@
 //! IRC-Zeilen-Parser und die DB-Upserts. Der async-Verbindungs-Loop +
 //! Channel-Tracking + Wiring folgen separat.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use chrono::{DateTime, Utc};
 use sqlx::PgPool;
+use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
+use tokio::net::TcpStream;
+use tokio::sync::mpsc;
 
 /// Known-Chat-Bots (chat_bots.py Z. 8–19). Lokale Kopie wie in den anderen Crates.
 const KNOWN_CHAT_BOTS: &[&str] = &[
@@ -175,6 +181,234 @@ pub async fn upsert_names_batch(
     (inserts, updates)
 }
 
+// ---- Async-Tracker (Verbindungs-Loop + dynamisches Channel-Tracking) -------
+//
+// HINWEIS zum An/Aus-Zustand: In Python ist `experimental_irc_lurker_enabled`
+// hartcodiert `False` (runtime_bootstrap.py) und wird NIE auf True gesetzt — der
+// Tracker startet dort nie. Dieser Port baut das Feature vollständig (runnable),
+// wird in tb-bot aber bewusst NICHT gespawnt → 1:1-Parität (dauerhaft aus). Zum
+// Aktivieren müsste ein Aufrufer eine Instanz bauen, `track_channel` füttern und
+// `run()` spawnen (Bot-User-Token + `user:read:chat`-Scope vorausgesetzt).
+
+const IRC_HOST: &str = "irc.chat.twitch.tv";
+const IRC_PORT: u16 = 6667;
+const NAMES_POLL_SECONDS: u64 = 120;
+const CONNECT_BACKOFF_SECONDS: u64 = 30;
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// Klassifizierung einer getrackten Quelle (nur Metadaten; die Datensammlung
+/// läuft für alle Kanäle).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TrackMode {
+    Partner,
+    Category,
+}
+
+/// Laufzeit-Kommando an den Verbindungs-Loop (JOIN/PART eines Kanals).
+enum Cmd {
+    Join(String),
+    Part(String),
+}
+
+/// Experimenteller IRC-Lurker-Tracker. Erst nach `run()` aktiv; `track_channel`
+/// kann jederzeit (auch vor `run`) Kanäle setzen.
+pub struct IrcLurkerTracker {
+    pool: PgPool,
+    /// Vom Aufrufer übergeben (API-Parität zu Python `IRCLurkerTracker`), aber
+    /// vom Twitch-IRC-Protokoll ungenutzt — Login läuft über PASS/NICK.
+    #[allow(dead_code)]
+    client_id: String,
+    access_token: String,
+    nick: String,
+    authenticated: bool,
+    channels: Arc<Mutex<HashSet<String>>>,
+    partner_channels: Arc<Mutex<HashSet<String>>>,
+    chatters: Arc<Mutex<HashMap<String, HashSet<String>>>>,
+    cmd_tx: mpsc::UnboundedSender<Cmd>,
+    cmd_rx: Mutex<Option<mpsc::UnboundedReceiver<Cmd>>>,
+}
+
+impl IrcLurkerTracker {
+    /// `nick`/`access_token` leer → anonymer `justinfan`-Login (nur lokale Tests);
+    /// produktiv: Bot-Login + User-Token (mirror `IRCLurkerTracker.__init__`).
+    pub fn new(pool: PgPool, client_id: String, access_token: String, nick: Option<String>) -> Self {
+        let nick_norm = nick.map(|n| n.trim().to_lowercase()).filter(|n| !n.is_empty());
+        let authenticated = !access_token.is_empty() && nick_norm.is_some();
+        let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
+        Self {
+            pool,
+            client_id,
+            access_token,
+            nick: nick_norm.unwrap_or_else(|| "justinfan12345".to_string()),
+            authenticated,
+            channels: Arc::new(Mutex::new(HashSet::new())),
+            partner_channels: Arc::new(Mutex::new(HashSet::new())),
+            chatters: Arc::new(Mutex::new(HashMap::new())),
+            cmd_tx,
+            cmd_rx: Mutex::new(Some(cmd_rx)),
+        }
+    }
+
+    /// Fügt einen Kanal zur Verfolgung hinzu (Python `track_channel`). Bei
+    /// laufender Verbindung wird er sofort gejoint.
+    pub fn track_channel(&self, channel: &str, mode: TrackMode) {
+        let channel = channel.trim().to_lowercase().trim_start_matches('#').to_string();
+        if channel.is_empty() {
+            return;
+        }
+        self.channels.lock().unwrap().insert(channel.clone());
+        {
+            let mut partner = self.partner_channels.lock().unwrap();
+            match mode {
+                TrackMode::Partner => {
+                    partner.insert(channel.clone());
+                }
+                TrackMode::Category => {
+                    partner.remove(&channel);
+                    self.chatters.lock().unwrap().remove(&channel);
+                }
+            }
+        }
+        let _ = self.cmd_tx.send(Cmd::Join(channel));
+    }
+
+    /// Entfernt einen Kanal (Python `untrack_channel`).
+    pub fn untrack_channel(&self, channel: &str) {
+        let channel = channel.trim().to_lowercase().trim_start_matches('#').to_string();
+        if !self.channels.lock().unwrap().remove(&channel) {
+            return;
+        }
+        self.partner_channels.lock().unwrap().remove(&channel);
+        self.chatters.lock().unwrap().remove(&channel);
+        let _ = self.cmd_tx.send(Cmd::Part(channel));
+    }
+
+    /// Aktuell beobachtete Chatter eines Kanals (Python `get_chatters`).
+    pub fn get_chatters(&self, channel: &str) -> HashSet<String> {
+        let channel = channel.trim().to_lowercase();
+        self.chatters.lock().unwrap().get(&channel).cloned().unwrap_or_default()
+    }
+
+    /// Verbindungs-Loop mit Auto-Reconnect. Läuft bis zum Programmende.
+    pub async fn run(&self) {
+        let Some(mut rx) = self.cmd_rx.lock().unwrap().take() else {
+            tracing::warn!("IRC-Lurker: run() bereits aktiv");
+            return;
+        };
+        loop {
+            match self.connect().await {
+                Some((reader, writer)) => self.serve(reader, writer, &mut rx).await,
+                None => tokio::time::sleep(Duration::from_secs(CONNECT_BACKOFF_SECONDS)).await,
+            }
+        }
+    }
+
+    async fn connect(&self) -> Option<(BufReader<OwnedReadHalf>, OwnedWriteHalf)> {
+        let stream = TcpStream::connect((IRC_HOST, IRC_PORT)).await.ok()?;
+        let (rd, mut wr) = stream.into_split();
+        if self.authenticated {
+            let clean = self.access_token.replace("oauth:", "");
+            wr.write_all(format!("PASS oauth:{clean}\r\n").as_bytes()).await.ok()?;
+        }
+        wr.write_all(format!("NICK {}\r\n", self.nick).as_bytes()).await.ok()?;
+        wr.write_all(b"CAP REQ :twitch.tv/membership twitch.tv/commands\r\n").await.ok()?;
+        wr.flush().await.ok()?;
+
+        let mut reader = BufReader::new(rd);
+        let mut line = String::new();
+        loop {
+            line.clear();
+            let n = match tokio::time::timeout(CONNECT_TIMEOUT, reader.read_line(&mut line)).await {
+                Ok(Ok(n)) => n,
+                _ => return None,
+            };
+            if n == 0 {
+                return None;
+            }
+            let msg = line.trim_end();
+            if msg.starts_with(":tmi.twitch.tv 001") {
+                tracing::info!(authenticated = self.authenticated, nick = %self.nick, "IRC-Lurker verbunden");
+                return Some((reader, wr));
+            }
+            if msg.starts_with("PING") {
+                pong(&mut wr, msg).await;
+            }
+        }
+    }
+
+    async fn serve(&self, mut reader: BufReader<OwnedReadHalf>, mut writer: OwnedWriteHalf, rx: &mut mpsc::UnboundedReceiver<Cmd>) {
+        for ch in self.channels.lock().unwrap().iter() {
+            let _ = writer.write_all(format!("JOIN #{ch}\r\n").as_bytes()).await;
+        }
+        let _ = writer.flush().await;
+        let mut poll = tokio::time::interval(Duration::from_secs(NAMES_POLL_SECONDS));
+        poll.tick().await; // erster Tick sofort — überspringen.
+
+        let mut line = String::new();
+        loop {
+            line.clear();
+            tokio::select! {
+                res = reader.read_line(&mut line) => {
+                    match res {
+                        Ok(0) | Err(_) => break,
+                        Ok(_) => self.handle_line(line.trim_end(), &mut writer).await,
+                    }
+                }
+                _ = poll.tick() => {
+                    let chans: Vec<String> = self.channels.lock().unwrap().iter().cloned().collect();
+                    for ch in chans {
+                        let _ = writer.write_all(format!("NAMES #{ch}\r\n").as_bytes()).await;
+                    }
+                    let _ = writer.flush().await;
+                }
+                Some(cmd) = rx.recv() => match cmd {
+                    Cmd::Join(ch) => { let _ = writer.write_all(format!("JOIN #{ch}\r\n").as_bytes()).await; let _ = writer.flush().await; }
+                    Cmd::Part(ch) => { let _ = writer.write_all(format!("PART #{ch}\r\n").as_bytes()).await; let _ = writer.flush().await; }
+                }
+            }
+        }
+    }
+
+    async fn handle_line(&self, msg: &str, writer: &mut OwnedWriteHalf) {
+        if msg.is_empty() {
+            return;
+        }
+        if msg.starts_with("PING") {
+            pong(writer, msg).await;
+            return;
+        }
+        let now = Utc::now();
+        if let Some((nick, channel)) = parse_join(msg) {
+            let (channel, nick) = (channel.to_lowercase(), nick.to_lowercase());
+            self.chatters.lock().unwrap().entry(channel.clone()).or_default().insert(nick.clone());
+            upsert_chatter_seen(&self.pool, &channel, &nick, now).await;
+        } else if let Some((nick, channel)) = parse_part(msg) {
+            let (channel, nick) = (channel.to_lowercase(), nick.to_lowercase());
+            if let Some(set) = self.chatters.lock().unwrap().get_mut(&channel) {
+                set.remove(&nick);
+            }
+        } else if let Some((channel, nicks)) = parse_names(msg) {
+            let channel = channel.to_lowercase();
+            let nicks_lower: Vec<String> = nicks.iter().map(|n| n.to_lowercase()).collect();
+            // NAMES nur für Partner-Kanäle im Speicher halten (RAM-Schonung).
+            if self.partner_channels.lock().unwrap().contains(&channel) {
+                self.chatters.lock().unwrap().insert(channel.clone(), nicks_lower.iter().cloned().collect());
+            } else {
+                self.chatters.lock().unwrap().remove(&channel);
+            }
+            upsert_names_batch(&self.pool, &channel, &nicks_lower, now).await;
+        }
+    }
+}
+
+/// Antwortet auf einen IRC-PING.
+async fn pong(writer: &mut OwnedWriteHalf, ping: &str) {
+    let reply = ping.replacen("PING", "PONG", 1);
+    let _ = writer.write_all(reply.as_bytes()).await;
+    let _ = writer.write_all(b"\r\n").await;
+    let _ = writer.flush().await;
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -254,6 +488,30 @@ mod tests {
         upsert_chatter_seen(&pool, "nani", "StreamElements", later).await;
         let n3: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM twitch_session_chatters").fetch_one(&pool).await.unwrap();
         assert_eq!(n3, 4);
+    }
+
+    #[tokio::test]
+    async fn track_untrack_und_auth_flag() {
+        let Some(pool) = make_pool("t_irc_lurker_track").await else { return };
+        // Authentifiziert: Token + Nick → kein justinfan.
+        let auth = IrcLurkerTracker::new(pool.clone(), "cid".into(), "tok".into(), Some("MyBot".into()));
+        assert!(auth.authenticated);
+        assert_eq!(auth.nick, "mybot");
+        // Anonym: leerer Token → justinfan, nicht authentifiziert.
+        let t = IrcLurkerTracker::new(pool, "cid".into(), String::new(), None);
+        assert!(!t.authenticated);
+        assert_eq!(t.nick, "justinfan12345");
+
+        t.track_channel("#Nani", TrackMode::Partner);
+        t.track_channel("someCat", TrackMode::Category);
+        assert!(t.channels.lock().unwrap().contains("nani"));
+        assert!(t.partner_channels.lock().unwrap().contains("nani"));
+        assert!(t.channels.lock().unwrap().contains("somecat"));
+        assert!(!t.partner_channels.lock().unwrap().contains("somecat")); // category ≠ partner
+
+        t.untrack_channel("nani");
+        assert!(!t.channels.lock().unwrap().contains("nani"));
+        assert!(!t.partner_channels.lock().unwrap().contains("nani"));
     }
 
     #[tokio::test]
