@@ -25,9 +25,11 @@ cbc          = { workspace = true }
 base64       = { workspace = true }
 async-trait  = { workspace = true }
 rand         = { workspace = true }
-tb-analytics = { workspace = true }
-tb-error     = { workspace = true }
-tb-http-core = { workspace = true }
+tb-analytics  = { workspace = true }
+tb-error      = { workspace = true }
+tb-http-core  = { workspace = true }
+tb-crypto     = { workspace = true }
+tb-engagement = { workspace = true }
 
 [dev-dependencies]
 tokio     = { workspace = true }

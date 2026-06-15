@@ -14,15 +14,19 @@
 //!
 //! Der OAuth-Onboarding-Teil (sender-auth/callback) folgt separat.
 
+use std::sync::Arc;
+
 use axum::{
     extract::{Query, State},
     http::StatusCode,
-    response::{IntoResponse, Response},
+    response::{Html, IntoResponse, Response},
     Json,
 };
 use serde::Deserialize;
 use serde_json::{json, Value};
 use sqlx::{postgres::PgRow, PgPool, Postgres, QueryBuilder, Row};
+use tb_crypto::FieldCipher;
+use tb_engagement::sender_auth::{SenderAuthStore, SENDER_LOGIN};
 
 use crate::auth::level::DashboardAuthLevel;
 
@@ -414,6 +418,113 @@ async fn update_settings(
     qb.push(" WHERE channel_login = ").push_bind(channel);
     qb.build().execute(pool).await?;
     Ok(())
+}
+
+// === OAuth-Onboarding des Engagement-Sende-Accounts (Smoke-Account) ===
+
+/// Baut den SenderAuthStore aus Env (DB_MASTER_KEY_V1 + TWITCH_CLIENT_ID/SECRET).
+/// `None`, wenn Krypto-Key oder App-Credentials fehlen.
+fn build_sender_store(pool: PgPool) -> Option<SenderAuthStore> {
+    let cipher = Arc::new(FieldCipher::from_env().ok()?);
+    SenderAuthStore::from_env(pool, cipher)
+}
+
+/// `GET …/engagement/sender-auth` — Admin-only: erzeugt den Authorize-Link für
+/// den Sende-Account (Port von `_handle_sender_auth_start`).
+pub async fn sender_auth_start_handler(
+    auth: DashboardAuthLevel,
+    State(pool): State<PgPool>,
+) -> Response {
+    let actor = match resolve_actor(&auth, &pool).await {
+        Ok(a) => a,
+        Err(resp) => return resp,
+    };
+    if !actor.admin {
+        return err(StatusCode::FORBIDDEN, "Nur Admins dürfen den Sende-Account autorisieren.");
+    }
+    let Some(store) = build_sender_store(pool) else {
+        return err(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "Sende-Account-Setup nicht verfügbar (DB_MASTER_KEY_V1/TWITCH_CLIENT_ID fehlt).",
+        );
+    };
+    match store.build_authorize_url().await {
+        Ok(url) => Json(json!({
+            "authorizeUrl": url,
+            "senderLogin": SENDER_LOGIN,
+            "hint": "In einem separaten Browser/Inkognito als der Sende-Account einloggen, \
+                     dann diesen Link öffnen und Authorize klicken.",
+        }))
+        .into_response(),
+        Err(error) => {
+            tracing::error!(%error, "engagement sender-auth: Link-Erzeugung fehlgeschlagen");
+            err(StatusCode::INTERNAL_SERVER_ERROR, "Link-Erzeugung fehlgeschlagen.")
+        }
+    }
+}
+
+#[derive(Deserialize, Default)]
+pub struct CallbackQuery {
+    #[serde(default)]
+    pub code: String,
+    #[serde(default)]
+    pub state: String,
+    #[serde(default)]
+    pub error: String,
+}
+
+/// `GET …/engagement/sender-callback` + `/callback/engagement-sender` —
+/// öffentlicher OAuth-Callback (Sicherheit über den State-Token; keine
+/// Session-Auth). Port von `_handle_sender_auth_callback`. Liefert eine
+/// HTML-Seite.
+pub async fn sender_auth_callback_handler(
+    State(pool): State<PgPool>,
+    Query(q): Query<CallbackQuery>,
+) -> Response {
+    if !q.error.is_empty() {
+        return page("Autorisierung abgebrochen", &format!("Twitch meldete: {}", esc(&q.error)), StatusCode::BAD_REQUEST);
+    }
+    if q.code.is_empty() || q.state.is_empty() {
+        return page("Ungültige Anfrage", "Code oder State fehlt.", StatusCode::BAD_REQUEST);
+    }
+    let Some(store) = build_sender_store(pool) else {
+        return page(
+            "Setup nicht verfügbar",
+            "Krypto-Key oder App-Credentials fehlen auf dem Dashboard-Dienst.",
+            StatusCode::INTERNAL_SERVER_ERROR,
+        );
+    };
+    match store.handle_callback(&q.code, &q.state).await {
+        Ok(result) => page(
+            "Sende-Account verbunden ✓",
+            &format!(
+                "Der Engagement-Account <b>{}</b> ist jetzt autorisiert. \
+                 Du kannst dieses Fenster schließen.",
+                esc(&result.login)
+            ),
+            StatusCode::OK,
+        ),
+        Err(error) => {
+            tracing::error!(%error, "engagement sender-auth callback fehlgeschlagen");
+            page("Autorisierung fehlgeschlagen", &esc(&error), StatusCode::BAD_REQUEST)
+        }
+    }
+}
+
+/// Minimale HTML-Antwortseite (mirror von Pythons `_page`).
+fn page(title: &str, body: &str, status: StatusCode) -> Response {
+    let html = format!(
+        "<!doctype html><html><head><meta charset='utf-8'><title>{t}</title></head>\
+         <body style='font-family:sans-serif;max-width:560px;margin:40px auto'>\
+         <h2>{t}</h2><p>{body}</p></body></html>",
+        t = esc(title)
+    );
+    (status, Html(html)).into_response()
+}
+
+/// Minimales HTML-Escaping für eingebettete dynamische Strings.
+fn esc(s: &str) -> String {
+    s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;")
 }
 
 #[cfg(test)]

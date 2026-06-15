@@ -94,6 +94,22 @@ pub fn build_authed_router(pool: PgPool, token: String) -> Router {
             "/twitch/api/v2/engagement/log",
             get(engagement_settings::get_log_handler),
         )
+        // Onboarding des Engagement-Sende-Accounts (Smoke-Account): start =
+        // Admin-only Authorize-Link, callback = öffentlich (Security via
+        // State-Token). /callback/engagement-sender ist die in der Twitch-App
+        // registrierte Redirect-URI (Caddy-Pfad-Freigabe nötig).
+        .route(
+            "/twitch/api/v2/engagement/sender-auth",
+            get(engagement_settings::sender_auth_start_handler),
+        )
+        .route(
+            "/twitch/api/v2/engagement/sender-callback",
+            get(engagement_settings::sender_auth_callback_handler),
+        )
+        .route(
+            "/callback/engagement-sender",
+            get(engagement_settings::sender_auth_callback_handler),
+        )
         .route(
             "/twitch/api/v2/streamers",
             get(streamers::streamers_handler),
