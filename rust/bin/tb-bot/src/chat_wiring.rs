@@ -320,7 +320,7 @@ pub async fn build_runtime(
         }),
         Arc::new(DbDiscordLink { pool: pool.clone() }),
         Arc::new(DbInvitePort { pool: pool.clone() }),
-        Arc::new(NoopSuperMod),
+        Arc::new(DbSuperMod { pool: pool.clone() }),
         Arc::new(EngineAutobanStore {
             engine: Arc::clone(&moderation),
         }),
@@ -879,13 +879,30 @@ impl InvitePort for DbInvitePort {
     }
 }
 
-/// Super-Mod-Prüfung — Engagement-Phase steht aus, bis dahin niemand.
-struct NoopSuperMod;
+/// Super-Mod-Prüfung via `twitch_admin_roles` (Port von
+/// `engagement.admin.is_super_mod`): ein User mit `role = 'super_mod'` darf
+/// Engagement in jedem Kanal toggeln — auch ohne Twitch-Mod-Status. Leere
+/// Actor-ID oder DB-/Verbindungsfehler → `false` (graceful, mirror von Pythons
+/// `if not twitch_user_id`).
+struct DbSuperMod {
+    pool: PgPool,
+}
 
 #[async_trait::async_trait]
-impl SuperModPort for NoopSuperMod {
-    async fn is_super_mod(&self, _actor_id: &str) -> bool {
-        false
+impl SuperModPort for DbSuperMod {
+    async fn is_super_mod(&self, actor_id: &str) -> bool {
+        if actor_id.is_empty() {
+            return false;
+        }
+        sqlx::query_scalar::<_, i32>(
+            "SELECT 1 FROM twitch_admin_roles \
+             WHERE twitch_user_id = $1 AND role = 'super_mod' LIMIT 1",
+        )
+        .bind(actor_id)
+        .fetch_optional(&self.pool)
+        .await
+        .unwrap_or(None)
+        .is_some()
     }
 }
 
