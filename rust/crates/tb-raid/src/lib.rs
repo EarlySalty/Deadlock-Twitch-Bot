@@ -84,12 +84,13 @@ pub use external_recruitment_store::{
     EXTERNAL_RECRUITMENT_BLACKLIST_GRACE_SECONDS, EXTERNAL_RECRUITMENT_RAID_LIMIT,
 };
 pub use auto_raid_pipeline::{
-    ArrivalReadiness, AutoRaidPipeline, AutoRaidPipelineOutcome, AutoRaidRequest,
-    FallbackStreamSource,
+    ArrivalReadiness, AutoRaidPipeline, AutoRaidPipelineOutcome, AutoRaidRequest, FallbackStreamSource,
+    FollowerEnricher,
 };
 pub use candidate_selection::{
     is_retryable_raid_error, select_by_score, select_fairest, FairnessCandidate, ScoredCandidate,
-    SelectionReason, SelectionResult, DAILY_RAID_SOFT_CAP, PARTNER_SCORE_THRESHOLD,
+    SelectionReason, SelectionResult, DAILY_RAID_SOFT_CAP, FOLLOWERS_UNKNOWN,
+    PARTNER_SCORE_THRESHOLD,
 };
 pub use eligibility::{
     classify_eligibility, filter_eligible, is_deadlock_eligible, is_recent_deadlock,
@@ -132,8 +133,8 @@ pub use signal_correlation::{
 pub use state_store::{RaidOAuthState, StateStore};
 pub use strikes_store::StrikesStore;
 pub use target_resolution::{
-    resolve_boost_target, resolve_fallback_target, resolve_partner_target, PartnerResolution,
-    PartnerResolutionStats, ResolvedTarget,
+    filter_fallback_pool, resolve_boost_target, resolve_fallback_target, resolve_partner_target,
+    select_fallback_from_pool, PartnerResolution, PartnerResolutionStats, ResolvedTarget,
 };
 pub use token_blacklist::TokenBlacklistStore;
 pub use token_lifecycle::{
@@ -141,8 +142,9 @@ pub use token_lifecycle::{
 };
 pub use token_provider::TokenProvider;
 pub use token_refresher::{
-    advisory_lock_pair, RaidTokenRefresher, RefreshError, RefreshOutcome, TokenBlacklist,
-    TokenOwnerInfo, TokenResponse, TwitchTokenClient,
+    advisory_lock_pair, is_refresh_due, RaidTokenRefresher, RefreshError, RefreshOutcome,
+    TokenBlacklist, TokenOwnerInfo, TokenResponse, TwitchTokenClient,
+    PROACTIVE_REFRESH_BUFFER_SECONDS,
 };
 pub use token_store::{RaidAuthStore, RaidTokens};
 pub use util::parse_iso_utc;

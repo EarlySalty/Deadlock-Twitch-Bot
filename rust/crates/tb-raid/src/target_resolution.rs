@@ -147,16 +147,19 @@ pub fn resolve_partner_target(
     }
 }
 
-/// Fallback-Pfad (DE-Deadlock-Kategorie): filtert + wählt per `select_fairest`.
-pub fn resolve_fallback_target(
+/// Filtert die Fallback-Streams (Blacklist/Exclude) zum auswahlfähigen Pool.
+///
+/// Getrennt von der Auswahl, damit die Composition-Root den Pool **nach** dem
+/// Filter mit echten Follower-Zahlen anreichern kann (Python
+/// `attach_followers_totals(pool)`), bevor [`select_fallback_from_pool`] den
+/// Tie-Break entscheidet.
+pub fn filter_fallback_pool(
     streams: &[FairnessCandidate],
-    recent_targets: &HashSet<String>,
-    received_raids_by_id: &HashMap<String, i32>,
     blacklist_ids: &HashSet<String>,
     blacklist_logins: &HashSet<String>,
     exclude_ids: &HashSet<String>,
-) -> Option<ResolvedTarget> {
-    let pool: Vec<FairnessCandidate> = streams
+) -> Vec<FairnessCandidate> {
+    streams
         .iter()
         .filter(|s| {
             !is_filtered(
@@ -168,10 +171,18 @@ pub fn resolve_fallback_target(
             )
         })
         .cloned()
-        .collect();
+        .collect()
+}
 
+/// Wählt aus einem bereits gefilterten (und ggf. follower-angereicherten) Pool
+/// das fairste Ziel per `select_fairest`.
+pub fn select_fallback_from_pool(
+    pool: &[FairnessCandidate],
+    recent_targets: &HashSet<String>,
+    received_raids_by_id: &HashMap<String, i32>,
+) -> Option<ResolvedTarget> {
     let candidates_count = pool.len() as i32;
-    select_fairest(&pool, recent_targets, received_raids_by_id).map(|chosen| ResolvedTarget {
+    select_fairest(pool, recent_targets, received_raids_by_id).map(|chosen| ResolvedTarget {
         user_id: chosen.user_id.trim().to_string(),
         user_login: chosen.user_login.trim().to_lowercase(),
         started_at: Some(chosen.started_at.clone())
@@ -180,6 +191,21 @@ pub fn resolve_fallback_target(
         is_outreach_boost: false,
         candidates_count,
     })
+}
+
+/// Fallback-Pfad (DE-Deadlock-Kategorie): filtert + wählt per `select_fairest`.
+/// Convenience-Wrapper über [`filter_fallback_pool`] + [`select_fallback_from_pool`]
+/// (ohne Follower-Anreicherung — die läuft im Pipeline-Pfad mit Helix-Zugang).
+pub fn resolve_fallback_target(
+    streams: &[FairnessCandidate],
+    recent_targets: &HashSet<String>,
+    received_raids_by_id: &HashMap<String, i32>,
+    blacklist_ids: &HashSet<String>,
+    blacklist_logins: &HashSet<String>,
+    exclude_ids: &HashSet<String>,
+) -> Option<ResolvedTarget> {
+    let pool = filter_fallback_pool(streams, blacklist_ids, blacklist_logins, exclude_ids);
+    select_fallback_from_pool(&pool, recent_targets, received_raids_by_id)
 }
 
 /// Boost-Pfad (Python `execute` Z. 144–178): Outreach-Empfänger unter den

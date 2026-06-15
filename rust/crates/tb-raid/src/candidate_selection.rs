@@ -23,6 +23,16 @@ pub const DAILY_RAID_SOFT_CAP: i32 = 2;
 /// gelten (Python `partner_score_threshold = 0.05`, Z. 74).
 pub const PARTNER_SCORE_THRESHOLD: f64 = 0.05;
 
+/// Sentinel für unbekannte/nicht-angereicherte Follower-Zahlen — sortiert in
+/// allen Tie-Break-Pfaden ans **Ende** (niedrigere Follower-Zahlen gewinnen).
+///
+/// Python defaultet nicht-angereicherte `followers_total` auf `10**9`
+/// (`_fallback_sort_key`/`_sort_key`: `_safe_int(..., 10**9)`). Eine echte
+/// Follower-Zahl überschreibt diesen Sentinel; bleibt sie unbekannt (Helix
+/// liefert nichts), landet der Kandidat hinter allen mit bekannten Zahlen —
+/// statt sie wie ein Default von `0` an die Spitze zu ziehen.
+pub const FOLLOWERS_UNKNOWN: i32 = 1_000_000_000;
+
 // ---------------------------------------------------------------------------
 // Kandidaten-Typen
 // ---------------------------------------------------------------------------
@@ -61,6 +71,8 @@ pub struct FairnessCandidate {
     pub user_id: String,
     pub user_login: String,
     pub viewer_count: i32,
+    /// Follower-Gesamtzahl (Tie-Break-Ebene 3). [`FOLLOWERS_UNKNOWN`], solange
+    /// nicht angereichert — sortiert dann ans Ende (Python-Default `10**9`).
     pub followers_total: i32,
     /// Startzeit als ISO-8601-String (Sentinel: `"9999-99-99"` wie Python).
     pub started_at: String,
@@ -578,5 +590,23 @@ mod tests {
         ];
         let result = select_fairest(&candidates, &HashSet::new(), &HashMap::new()).unwrap();
         assert_eq!(result.user_id, "uid_b");
+    }
+
+    #[test]
+    fn fairest_unbekannte_follower_sortieren_ans_ende() {
+        // Bei gleichen Raids + Viewern entscheidet die Follower-Zahl. Ein
+        // Kandidat mit unbekannten Followern (Sentinel) muss HINTER einem mit
+        // bekannter — selbst höherer — Zahl landen (Python-Default 10**9).
+        let mut bekannt = make_fairness("uid_bekannt", 50, 9999);
+        bekannt.followers_total = 9999;
+        let mut unbekannt = make_fairness("uid_unbekannt", 50, 0);
+        unbekannt.followers_total = FOLLOWERS_UNKNOWN;
+
+        let candidates = vec![unbekannt, bekannt];
+        let result = select_fairest(&candidates, &HashSet::new(), &HashMap::new()).unwrap();
+        assert_eq!(
+            result.user_id, "uid_bekannt",
+            "bekannte Follower-Zahl gewinnt gegen unbekannten Sentinel"
+        );
     }
 }
