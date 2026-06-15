@@ -43,6 +43,7 @@ pub mod self_explainer_log;
 pub mod streamer_link;
 pub mod streamers;
 pub mod streamers_crud;
+pub mod stripe;
 pub mod system_database;
 pub mod system_errors;
 pub mod system_eventsub;
