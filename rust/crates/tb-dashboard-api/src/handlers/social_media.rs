@@ -26,6 +26,9 @@ use sqlx::{PgPool, Postgres, QueryBuilder, Row};
 use tb_crypto::FieldCipher;
 use tb_social_media::approval::{get_approval_record, handle_decision, serialize_approval_record, ApprovalError};
 use tb_social_media::enrichment::{ensure_enrichment_row, get_enrichment, update_manual_edit, EnrichmentRecord};
+use tb_social_media::enrich_pipeline::{ClipEnrichmentPipeline, PipelineError, Transcriber};
+use tb_social_media::llm_dispatch::LlmDispatcher;
+use tb_social_media::whisper::OpenAiTranscriber;
 use tb_social_media::retention::mark_clip_discarded;
 use tb_social_media::settings::{coerce_bool, get_auto_approve_settings, set_auto_approve_settings, AutoApprove};
 use tb_social_media::analytics::{list_clip_analytics, list_reports, ClipAnalyticsSnapshot, SocialMediaReportRecord};
@@ -1409,6 +1412,55 @@ pub async fn enrichment_get_handler(auth: DashboardAuthLevel, State(pool): State
     Json(enrichment_record_json(&record)).into_response()
 }
 
+/// `POST /social-media/api/admin/clips/:clip_db_id/enrichment/run` — Enrichment
+/// manuell anstoßen (Admin). Optionaler Body `{ "force": true }` reichert auch
+/// bereits fertige Clips neu an. Baut Transcriber (OpenAI-Whisper) + LLM-Dispatcher
+/// inline aus Env/Settings — fehlt der OpenAI-Key, läuft die Pipeline ohne
+/// Transkription weiter (1:1 wie Python).
+pub async fn enrichment_run_handler(auth: DashboardAuthLevel, State(pool): State<PgPool>, Path(raw): Path<String>, body: String) -> Response {
+    if let Err(e) = require_admin(&auth) {
+        return e;
+    }
+    let Some(clip_db_id) = normalize_id(Some(&Value::String(raw))) else {
+        return invalid_clip_db_id();
+    };
+    if load_clip_row(&pool, clip_db_id).await.is_none() {
+        return clip_not_found();
+    }
+    // Optionaler Body: ungültiges/leeres JSON → force=false (Python schluckt Fehler).
+    let force = serde_json::from_str::<Value>(&body)
+        .ok()
+        .and_then(|v| v.get("force").map(coerce_bool))
+        .unwrap_or(false);
+
+    let transcriber = OpenAiTranscriber::from_env();
+    let llm = LlmDispatcher::new(pool.clone());
+    let pipeline = ClipEnrichmentPipeline::new(pool.clone());
+    let outcome = match pipeline
+        .run(clip_db_id, transcriber.as_ref().map(|t| t as &dyn Transcriber), &llm, force)
+        .await
+    {
+        Ok(o) => o,
+        Err(PipelineError::ClipNotFound(_)) => return clip_not_found(),
+    };
+
+    let enrichment = match get_enrichment(&pool, clip_db_id).await {
+        Some(r) => enrichment_record_json(&r),
+        None => json!({}),
+    };
+    Json(json!({
+        "clip_db_id": clip_db_id,
+        "outcome": {
+            "status": outcome.status,
+            "provider": outcome.provider,
+            "model": outcome.model,
+            "error_message": outcome.error_message,
+        },
+        "enrichment": enrichment,
+    }))
+    .into_response()
+}
+
 /// `GET /social-media/api/admin/analytics/clips/:clip_db_id` — Analytics (Admin).
 pub async fn clip_analytics_get_handler(auth: DashboardAuthLevel, State(pool): State<PgPool>, Path(raw): Path<String>) -> Response {
     if let Err(e) = require_admin(&auth) {
@@ -2274,6 +2326,32 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
         // nicht existierender Clip → 404.
         assert_eq!(enrichment_put_handler(DashboardAuthLevel::Admin, State(pool.clone()), Path("99999".into()), "{}".into()).await.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn enrichment_run_skips_without_transcriber_and_llm() {
+        let Some(pool) = make_pool("t_dash_sm_enrich_run").await else { return };
+        std::env::set_var("OLLAMA_HOST", "127.0.0.1:59999"); // LLM → Fallback (schnell, deterministisch)
+
+        // Clip ohne Video-Pfad → Transkription übersprungen; LLM scheitert →
+        // Pipeline endet bei skipped_no_key.
+        let clip: i32 = sqlx::query_scalar("INSERT INTO twitch_clips_social_media (clip_id, streamer_login) VALUES ('r', 'nani') RETURNING id").fetch_one(&pool).await.unwrap();
+
+        let resp = enrichment_run_handler(DashboardAuthLevel::Admin, State(pool.clone()), Path(clip.to_string()), String::new()).await;
+        assert_eq!(resp.status(), StatusCode::OK);
+        let v = body_json(resp).await;
+        assert_eq!(v["clip_db_id"], clip);
+        assert_eq!(v["outcome"]["status"], "skipped_no_key");
+        assert_eq!(v["enrichment"]["clip_db_id"], clip);
+
+        // force im Body wird akzeptiert (kein Parse-Fehler) → weiterhin OK.
+        let resp = enrichment_run_handler(DashboardAuthLevel::Admin, State(pool.clone()), Path(clip.to_string()), "{\"force\":true}".into()).await;
+        assert_eq!(resp.status(), StatusCode::OK);
+
+        // Fehlerpfade: ungültige ID → 400, fehlender Clip → 404, Partner → 403.
+        assert_eq!(enrichment_run_handler(DashboardAuthLevel::Admin, State(pool.clone()), Path("x".into()), String::new()).await.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(enrichment_run_handler(DashboardAuthLevel::Admin, State(pool.clone()), Path("99999".into()), String::new()).await.status(), StatusCode::NOT_FOUND);
+        assert_eq!(enrichment_run_handler(partner("nani"), State(pool.clone()), Path(clip.to_string()), String::new()).await.status(), StatusCode::FORBIDDEN);
     }
 
     #[tokio::test]
