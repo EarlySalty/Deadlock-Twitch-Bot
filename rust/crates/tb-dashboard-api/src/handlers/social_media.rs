@@ -44,6 +44,7 @@ use tb_social_media::layout::{
 use tb_social_media::seed_vocab::seed_vocab;
 use tb_social_media::vocab::{delete_vocab_entry, list_vocab, upsert_vocab_entry, VocabEntry};
 use tb_social_media::rendering::{render_dashboard, render_privacy, render_terms};
+use tb_social_media::report_writer::SocialMediaReportWriter;
 
 use crate::auth::level::DashboardAuthLevel;
 
@@ -1081,6 +1082,38 @@ pub struct ReportsQuery {
     pub limit: Option<String>,
 }
 
+/// `POST /social-media/api/admin/reports/run` — Ad-hoc-Report erzeugen (Admin).
+pub async fn reports_run_handler(auth: DashboardAuthLevel, State(pool): State<PgPool>, body: String) -> Response {
+    if let Err(e) = require_admin(&auth) {
+        return e;
+    }
+    let payload: Value = match serde_json::from_str(&body) {
+        Ok(v) => v,
+        Err(_) => return invalid_json(),
+    };
+    if !payload.is_object() {
+        return invalid_payload();
+    }
+    let kind = payload.get("kind").and_then(Value::as_str).unwrap_or("").trim().to_lowercase();
+    let streamer = payload.get("streamer").and_then(Value::as_str).map(|s| s.trim().to_lowercase()).filter(|s| !s.is_empty());
+    if !matches!(kind.as_str(), "streamer" | "cross") {
+        return (StatusCode::BAD_REQUEST, Json(json!({ "error": "invalid_kind" }))).into_response();
+    }
+    if kind == "streamer" && streamer.is_none() {
+        return (StatusCode::BAD_REQUEST, Json(json!({ "error": "streamer_required" }))).into_response();
+    }
+    let writer = SocialMediaReportWriter::new(pool.clone());
+    let result = if kind == "streamer" {
+        writer.write_streamer_report(streamer.as_deref().unwrap_or(""), None, None, true).await
+    } else {
+        writer.write_cross_report(None, None, true).await
+    };
+    match result {
+        Ok(report) => Json(report_record_json(&report)).into_response(),
+        Err(_) => (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": "report_generation_failed" }))).into_response(),
+    }
+}
+
 /// `GET /social-media/api/admin/reports` — Report-Liste (Admin).
 pub async fn reports_list_handler(auth: DashboardAuthLevel, State(pool): State<PgPool>, Query(q): Query<ReportsQuery>) -> Response {
     if let Err(e) = require_admin(&auth) {
@@ -1767,5 +1800,32 @@ mod tests {
         // Fehlerpfade: nicht existierender Clip → 404, Partner → 403.
         assert_eq!(enrichment_get_handler(DashboardAuthLevel::Admin, State(pool.clone()), Path("99999".into())).await.status(), StatusCode::NOT_FOUND);
         assert_eq!(reports_list_handler(partner("nani"), State(pool.clone()), Query(ReportsQuery { kind: None, streamer: None, limit: None })).await.status(), StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn reports_run_kinds() {
+        let Some(pool) = make_pool("t_dash_sm_reports_run").await else { return };
+        std::env::set_var("OLLAMA_HOST", "127.0.0.1:59999"); // LLM → Fallback (schnell)
+
+        // kind=streamer → erzeugt einen Streamer-Report (No-Data-Fallback).
+        let resp = reports_run_handler(DashboardAuthLevel::Admin, State(pool.clone()), "{\"kind\":\"streamer\",\"streamer\":\"nani\"}".into()).await;
+        assert_eq!(resp.status(), StatusCode::OK);
+        let v = body_json(resp).await;
+        assert_eq!(v["kind"], "streamer");
+        assert_eq!(v["streamer_login"], "nani");
+        assert!(v["id"].is_number());
+
+        // kind=cross → Cross-Report.
+        let resp = reports_run_handler(DashboardAuthLevel::Admin, State(pool.clone()), "{\"kind\":\"cross\"}".into()).await;
+        assert_eq!(body_json(resp).await["kind"], "cross");
+
+        // ungültiger kind → 400 invalid_kind.
+        let resp = reports_run_handler(DashboardAuthLevel::Admin, State(pool.clone()), "{\"kind\":\"admin\"}".into()).await;
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+        // streamer ohne streamer-Feld → 400 streamer_required.
+        let resp = reports_run_handler(DashboardAuthLevel::Admin, State(pool.clone()), "{\"kind\":\"streamer\"}".into()).await;
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+        // Partner → 403.
+        assert_eq!(reports_run_handler(partner("nani"), State(pool.clone()), "{\"kind\":\"cross\"}".into()).await.status(), StatusCode::FORBIDDEN);
     }
 }
