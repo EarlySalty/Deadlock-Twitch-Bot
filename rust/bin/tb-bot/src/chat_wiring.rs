@@ -631,33 +631,64 @@ async fn reconcile_chat_subscriptions(
         "chat-sub-reconcile abgeschlossen"
     );
 
-    // channel.moderate pro Partner-Kanal (Python eventsub_mixin.py:1711) — speist
-    // den BlacklistRaidGuard (bricht manuelle Raids auf Blacklist-Ziele ab). Auth =
-    // Bot-User-Token mit channel:moderate-Scope, Condition {broadcaster, moderator:bot}.
+    // Bot-Token-Subs pro Partner-Kanal (alle brauchen den Bot-User-Token):
+    //  - channel.moderate (Guard-Quelle für den BlacklistRaidGuard, eventsub_mixin.py:1711)
+    //  - channel.chat.user_first_message (First-Message-Funnel, B5-01, :2692)
+    //  - channel.follow/ban/unban/shoutout (Daten-Telemetrie, B5-02, moderator_subs :1704)
     // Möglich, seit Rust den Bot-Token allein refresht (Python-Chat abgeschaltet).
-    // Kanäle ohne Bot-Moderator → 403 → perm_failed (kein Retry-Spam).
+    // Kanäle ohne Bot-Moderator → 403 → perm_failed (kein Retry-Spam). Scope-Filter
+    // pro Sub-Typ greift in den Manager-Methoden (fehlt der Scope → übersprungen).
     let scopes = token_manager.scopes().await;
-    if !scopes.iter().any(|s| s == "channel:moderate") {
-        tracing::debug!("channel.moderate-Reconcile übersprungen: Bot-Token ohne channel:moderate-Scope");
-        return;
-    }
     let bot_token = match token_manager.access_token().await {
         Ok(t) => t,
         Err(e) => {
-            tracing::warn!("channel.moderate-Reconcile: Bot-Token nicht verfügbar: {e}");
+            tracing::warn!("Bot-Token-Sub-Reconcile: Bot-Token nicht verfügbar: {e}");
             return;
         }
     };
+
+    let has_moderate = scopes.iter().any(|s| s == "channel:moderate");
+    if !has_moderate {
+        tracing::debug!("channel.moderate-Reconcile übersprungen: Bot-Token ohne channel:moderate-Scope");
+    }
     let mut mod_ok = 0usize;
+    let mut first_msg_ok = 0usize;
+    let mut mod_telemetry = 0usize;
     for (login, broadcaster_id) in &rows {
-        if manager
-            .ensure_moderator_subscription(broadcaster_id, bot_user_id, &bot_token, login)
-            .await
+        if has_moderate
+            && manager
+                .ensure_moderator_subscription(broadcaster_id, bot_user_id, &bot_token, login)
+                .await
         {
             mod_ok += 1;
         }
+        // B5-01: First-Message-Subscription (braucht user:read:chat — der Bot
+        // hat denselben Token wie für die Chat-Subs, der Scope ist also gegeben).
+        if manager
+            .ensure_first_message_subscription(broadcaster_id, bot_user_id, &bot_token, login)
+            .await
+        {
+            first_msg_ok += 1;
+        }
+        // B5-02: Moderator-Daten-Telemetrie (follow/ban/unban/shoutout). Scope-
+        // Filter in der Methode überspringt fehlende Scopes still.
+        mod_telemetry += manager
+            .ensure_moderator_telemetry_subscriptions(
+                broadcaster_id,
+                bot_user_id,
+                &bot_token,
+                &scopes,
+                login,
+            )
+            .await;
     }
-    tracing::info!(kanäle = rows.len(), mod_ok, "channel.moderate-Reconcile abgeschlossen");
+    tracing::info!(
+        kanäle = rows.len(),
+        mod_ok,
+        first_msg_ok,
+        mod_telemetry,
+        "Bot-Token-Sub-Reconcile abgeschlossen"
+    );
 }
 
 /// `tb_chat_autoban_log` ist eine neue Rust-Tabelle (nicht im Python-Schema) —

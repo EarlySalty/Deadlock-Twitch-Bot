@@ -154,6 +154,15 @@ impl PollEngine {
     /// Ein kompletter Poll-Durchlauf. Fehler einzelner Phasen brechen den
     /// Tick nicht ab (wie Python: log + weiter).
     pub async fn tick(&self) {
+        // Circuit-Breaker (B18-3): bei gesperrter Helix-App-Auth den ganzen Tick
+        // überspringen, statt mit garantiert erfolglosen Requests Rate-Limits zu
+        // verbrennen. Backoff übernimmt der Cooldown der Quelle (Python `_tick`
+        // bricht hier ebenfalls ab — monitoring.py:1207).
+        if self.source.is_auth_blocked() {
+            tracing::debug!("Poll-Tick übersprungen: Helix-App-Auth gesperrt (Circuit-Breaker)");
+            return;
+        }
+
         let category_id = self.ensure_category_id().await;
 
         let (tracked, partner_logins) = match self.tracked.load().await {
@@ -714,4 +723,101 @@ fn epoch_now() -> f64 {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs_f64())
         .unwrap_or(0.0)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    use sqlx::postgres::PgPoolOptions;
+
+    use super::*;
+    use crate::exp_sessions::{ExpSessionStore, ExpSessionTracker};
+    use crate::poller::hooks::{NoopAnnouncementSink, NoopPollHooks};
+    use crate::sessions::tracker::NoFollowerSource;
+
+    /// Quelle mit Auth-Block-Schalter: zählt jeden Helix-Aufruf, damit der Test
+    /// beweisen kann, dass bei `is_auth_blocked == true` keiner stattfindet.
+    struct BlockableSource {
+        blocked: bool,
+        helix_calls: AtomicU64,
+    }
+
+    #[async_trait::async_trait]
+    impl StreamSource for BlockableSource {
+        async fn streams_by_logins(
+            &self,
+            _logins: &[String],
+            _language: Option<&str>,
+        ) -> Result<Vec<StreamSnapshot>, crate::poller::source::SourceError> {
+            self.helix_calls.fetch_add(1, Ordering::SeqCst);
+            Ok(Vec::new())
+        }
+        async fn streams_by_category(
+            &self,
+            _category_id: &str,
+            _language: Option<&str>,
+            _limit: usize,
+        ) -> Result<Vec<StreamSnapshot>, crate::poller::source::SourceError> {
+            self.helix_calls.fetch_add(1, Ordering::SeqCst);
+            Ok(Vec::new())
+        }
+        async fn category_id(
+            &self,
+            _game_name: &str,
+        ) -> Result<Option<String>, crate::poller::source::SourceError> {
+            self.helix_calls.fetch_add(1, Ordering::SeqCst);
+            Ok(Some("g1".to_string()))
+        }
+        fn is_auth_blocked(&self) -> bool {
+            self.blocked
+        }
+    }
+
+    /// Engine mit lazy-Pool (verbindet NIE, weil der Tick vor jedem DB-Zugriff
+    /// abbricht) auf der gegebenen Quelle.
+    fn engine_on(source: Arc<BlockableSource>) -> PollEngine {
+        // connect_lazy stellt erst beim ersten Query eine Verbindung her — im
+        // Auth-Block-Pfad passiert das nie, daher braucht der Test keine DB.
+        let pool = PgPoolOptions::new()
+            .connect_lazy("postgres://invalid:invalid@127.0.0.1:1/none")
+            .expect("lazy pool");
+        let tracker = Arc::new(SessionTracker::new(
+            SessionStore::new(pool.clone()),
+            LiveStateStore::new(pool.clone()),
+            ExpSessionTracker::new(ExpSessionStore::new(pool.clone())),
+            Arc::new(NoFollowerSource),
+            "Deadlock",
+        ));
+        PollEngine::new(
+            source,
+            TrackedStore::new(pool.clone()),
+            LiveStateStore::new(pool.clone()),
+            SessionStore::new(pool.clone()),
+            tracker,
+            StatsStore::new(pool.clone()),
+            GuardStore::new(pool.clone()),
+            Arc::new(NoopAnnouncementSink),
+            Arc::new(NoopPollHooks),
+            PollIntervalStore::new(pool.clone()),
+            PollConfig::default(),
+        )
+    }
+
+    #[tokio::test]
+    async fn auth_blocked_ueberspringt_tick_ohne_helix_oder_db() {
+        let source = Arc::new(BlockableSource {
+            blocked: true,
+            helix_calls: AtomicU64::new(0),
+        });
+        let engine = engine_on(Arc::clone(&source));
+        // Würde der Guard fehlen, käme hier ein Helix- ODER DB-Zugriff (auf den
+        // ungültigen Lazy-Pool → Panic/Fehler). Der Tick muss sauber zurückkehren.
+        engine.tick().await;
+        assert_eq!(
+            source.helix_calls.load(Ordering::SeqCst),
+            0,
+            "bei Auth-Block darf kein Helix-Request laufen"
+        );
+    }
 }

@@ -24,6 +24,15 @@ pub trait StreamSource: Send + Sync {
 
     /// game_id der Ziel-Kategorie (`/search/categories`).
     async fn category_id(&self, game_name: &str) -> Result<Option<String>, SourceError>;
+
+    /// Circuit-Breaker: ist die Helix-App-Auth aktuell gesperrt (z. B. nach
+    /// `invalid_client`-Antwort, 15-Min-Cooldown)? Dann überspringt der
+    /// Poll-Tick alle Helix-Requests, statt erfolglos zu pollen — Port von
+    /// Pythons `api.is_auth_blocked()`-Guard im `_tick` (monitoring.py:1207).
+    /// Default `false`: Quellen ohne App-Token-Lifecycle sind nie blockiert.
+    fn is_auth_blocked(&self) -> bool {
+        false
+    }
 }
 
 /// Kanal-Metadaten für das Go-Live-Enrichment (Helix `/channels`).
