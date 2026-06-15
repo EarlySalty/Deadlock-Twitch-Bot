@@ -6,12 +6,12 @@ edition.workspace = true
 [dependencies]
 chrono     = { workspace = true }
 regex      = { workspace = true }
-reqwest    = { workspace = true }
+reqwest    = { workspace = true, features = ["multipart"] }
 serde_json = { workspace = true }
 sqlx       = { workspace = true }
 tracing    = { workspace = true }
 rand       = { workspace = true }
-tokio      = { workspace = true, features = ["time", "rt", "net", "io-util"] }
+tokio      = { workspace = true, features = ["time", "rt", "net", "io-util", "process", "fs"] }
 tb-crypto  = { workspace = true }
 
 [dev-dependencies]
