@@ -384,6 +384,116 @@ async fn ungueltige_identitaet_wird_abgewiesen() {
 }
 
 // ---------------------------------------------------------------------------
+// B11-PR-7: Hard-Pause-Guard (technical_pause_reason in {blocked, bot_banned})
+// ---------------------------------------------------------------------------
+
+/// Python `reactivate_partner_after_valid_auth` (`partner_registry.py:1366`):
+/// Hard-Kills dürfen durch einen OAuth-Followup NICHT reaktiviert werden.
+/// Der Followup ruft hier `promote_streamer_to_partner` — ohne den Guard würde
+/// `technical_pause_reason = NULL` (Z.581) den Bann bedingungslos aufheben.
+#[tokio::test]
+async fn hard_pause_blocked_wird_nicht_reaktiviert() {
+    let pool = pool_or_skip!("ps_hardpause_blocked");
+    sqlx::query(
+        "INSERT INTO twitch_partners (twitch_user_id, twitch_login, status,
+            manual_partner_opt_out, raid_bot_enabled, technical_pause_reason)
+         VALUES ('1001', 'gebannt', 'active', 1, 0, 'blocked')",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let result = {
+        let mut tx = pool.begin().await.unwrap();
+        let r = promote_streamer_to_partner(&mut tx, &default_args("gebannt", "1001"), chrono::Utc::now())
+            .await
+            .unwrap();
+        tx.commit().await.unwrap();
+        r
+    };
+    assert!(!result.reactivated, "Hard-Kill blockiert Reaktivierung");
+    assert_eq!(result.hard_pause_reason.as_deref(), Some("blocked"));
+
+    // Pause-Grund + Deaktivierung bleiben unangetastet.
+    let (pause, opt_out, raid): (Option<String>, i32, i32) = sqlx::query_as(
+        "SELECT technical_pause_reason, manual_partner_opt_out, raid_bot_enabled
+         FROM twitch_partners WHERE twitch_user_id = '1001'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(pause.as_deref(), Some("blocked"), "Pause-Grund bewahrt");
+    assert_eq!((opt_out, raid), (1, 0), "Deaktivierung bewahrt");
+}
+
+#[tokio::test]
+async fn hard_pause_bot_banned_case_insensitive() {
+    let pool = pool_or_skip!("ps_hardpause_botbanned");
+    sqlx::query(
+        "INSERT INTO twitch_partners (twitch_user_id, twitch_login, status,
+            manual_partner_opt_out, raid_bot_enabled, technical_pause_reason)
+         VALUES ('1002', 'killed', 'active', 1, 0, '  Bot_Banned ')",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let result = {
+        let mut tx = pool.begin().await.unwrap();
+        let r = promote_streamer_to_partner(&mut tx, &default_args("killed", "1002"), chrono::Utc::now())
+            .await
+            .unwrap();
+        tx.commit().await.unwrap();
+        r
+    };
+    assert!(!result.reactivated, "bot_banned (case/whitespace) blockiert");
+    assert_eq!(result.hard_pause_reason.as_deref(), Some("bot_banned"));
+
+    let pause: Option<String> = sqlx::query_scalar(
+        "SELECT technical_pause_reason FROM twitch_partners WHERE twitch_user_id = '1002'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(pause.as_deref(), Some("  Bot_Banned "), "Original-Grund unverändert");
+}
+
+#[tokio::test]
+async fn weiche_pause_wird_normal_reaktiviert() {
+    // token_error o.ä. sind KEINE Hard-Kills → Promotion läuft, Pause wird aufgehoben.
+    let pool = pool_or_skip!("ps_softpause");
+    sqlx::query(
+        "INSERT INTO twitch_partners (twitch_user_id, twitch_login, status,
+            manual_partner_opt_out, raid_bot_enabled, technical_pause_reason)
+         VALUES ('1003', 'tokenweg', 'active', 1, 0, 'token_error')",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let result = {
+        let mut tx = pool.begin().await.unwrap();
+        let r = promote_streamer_to_partner(&mut tx, &default_args("tokenweg", "1003"), chrono::Utc::now())
+            .await
+            .unwrap();
+        tx.commit().await.unwrap();
+        r
+    };
+    assert!(result.reactivated, "weiche Pause → Reaktivierung");
+    assert_eq!(result.hard_pause_reason, None);
+
+    let (pause, opt_out, raid): (Option<String>, i32, i32) = sqlx::query_as(
+        "SELECT technical_pause_reason, manual_partner_opt_out, raid_bot_enabled
+         FROM twitch_partners WHERE twitch_user_id = '1003'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(pause, None, "Pause aufgehoben");
+    assert_eq!((opt_out, raid), (0, 1), "voll reaktiviert");
+}
+
+// ---------------------------------------------------------------------------
 // record_first_login
 // ---------------------------------------------------------------------------
 
