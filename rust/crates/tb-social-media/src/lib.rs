@@ -13,6 +13,7 @@
 //! - `credentials` — verschlüsselte Plattform-OAuth-Credentials (Lese-Pfad).
 //! - `oauth`       — Multi-Plattform-OAuth-Flow (Authorize/Callback/Refresh).
 //! - `refresh_worker` — periodischer Auto-Refresh ablaufender Tokens.
+//! - `rendering`   — HTML-Template-Rendering (Dashboard/Terms/Privacy).
 //!
 //! # Deaktiviert
 //! Der Clip-Fetcher-Task ist **standardmäßig deaktiviert** und wird nicht in
@@ -23,6 +24,7 @@ pub mod clip;
 pub mod credentials;
 pub mod oauth;
 pub mod refresh_worker;
+pub mod rendering;
 pub mod schema;
 pub mod settings;
 
