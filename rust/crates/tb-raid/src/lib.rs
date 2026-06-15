@@ -56,6 +56,7 @@ pub mod state_store;
 pub mod strikes_store;
 pub mod target_resolution;
 pub mod token_blacklist;
+pub mod token_lifecycle;
 pub mod token_provider;
 pub mod token_refresher;
 pub mod token_store;
@@ -135,6 +136,9 @@ pub use target_resolution::{
     PartnerResolutionStats, ResolvedTarget,
 };
 pub use token_blacklist::TokenBlacklistStore;
+pub use token_lifecycle::{
+    NotifyOutcome, TokenLifecycleNotifier, TokenLifecycleReactor, TOKEN_ERROR_CHANNEL_ID,
+};
 pub use token_provider::TokenProvider;
 pub use token_refresher::{
     advisory_lock_pair, RaidTokenRefresher, RefreshError, RefreshOutcome, TokenBlacklist,

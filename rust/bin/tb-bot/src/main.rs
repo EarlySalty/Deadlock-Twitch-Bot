@@ -45,6 +45,7 @@ mod raid_arrival_wiring;
 mod raid_oauth_impl;
 mod reauth_reminder;
 mod score_refresh;
+mod token_lifecycle_wiring;
 mod wiring;
 
 use std::net::SocketAddr;
@@ -995,6 +996,12 @@ async fn main() {
         )
         .start_if_enabled();
     }
+
+    // Token-Lifecycle-Reaktionen (Block 4): Admin-Embed + User-DM bei
+    // Token-Fehler (1×/Streamer), 7-Tage-Grace-Sweep mit Rollen-Entzug
+    // (stündlich) und Blacklist-Cleanup >30 Tage (3,5 h) — alles über den
+    // F4-Master-Broker, da der Twitch-Bot keinen Discord-Zugang hat.
+    token_lifecycle_wiring::spawn_token_lifecycle_schedulers(pool.clone(), &settings.broker);
 
     // Streamer-Link-Matcher: verknüpft neue Twitch-Partner mit ihrem Discord-Account.
     // Läuft alle 6h, ist still wenn keine neuen Kandidaten vorhanden.
