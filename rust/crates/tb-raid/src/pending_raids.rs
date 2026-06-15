@@ -8,6 +8,7 @@
 //! |-----------------------------|-----------------------------|-------------------------|
 //! | from_broadcaster_login      | from_broadcaster_login      | String                  |
 //! | to_broadcaster_id           | to_broadcaster_id           | String                  |
+//! | target_stream_data          | target_stream_data          | Option<serde_json::Value> |
 //! | registered_ts               | registered_ts               | f64 (Unix-Sekunden)     |
 //! | is_partner_raid             | is_partner_raid             | bool                    |
 //! | registered_viewer_count     | registered_viewer_count     | i32                     |
@@ -20,6 +21,8 @@
 //! | signal_observations         | signal_observations         | HashMap<String, HashMap<String, String>> |
 
 use std::collections::HashMap;
+
+use serde::{Deserialize, Serialize};
 
 use crate::util::unix_now;
 
@@ -56,12 +59,19 @@ pub fn normalize_pending_raid_key(
 ///
 /// Port von `PendingRaid` (pending_raids.py Z. 98–112).
 /// `signal_observations` ist eine Map `signal_type → {field → value}`.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PendingRaid {
     /// Login-Name des Quell-Streamers (normalisiert).
     pub from_broadcaster_login: String,
     /// Broadcaster-ID des Ziel-Kanals (getrimmt).
     pub to_broadcaster_id: String,
+    /// Eingefrorener Ziel-Stream-Snapshot zur Raid-Sendezeit (z. B. `_partner_score`).
+    ///
+    /// Port von `PendingRaid.target_stream_data` (pending_raids.py Z. 102). Python hält hier
+    /// ein freies `dict[str, Any]` (nur falls Mapping, sonst `None`); in Rust als beliebiger
+    /// JSON-Wert. Wird bei der Arrival-Bestätigung dem frischen DB-Score vorgezogen.
+    #[serde(default)]
+    pub target_stream_data: Option<serde_json::Value>,
     /// Unix-Timestamp (Sekunden), wann der Raid registriert wurde.
     pub registered_ts: f64,
     /// Ob der Quell-Kanal als Partner-Kanal bekannt ist.
@@ -94,6 +104,7 @@ impl PendingRaid {
         Self {
             from_broadcaster_login: normalize_broadcaster_login(&from_broadcaster_login.into()),
             to_broadcaster_id: to_broadcaster_id.into().trim().to_string(),
+            target_stream_data: None,
             registered_ts: unix_now(),
             is_partner_raid: false,
             registered_viewer_count: 0,
@@ -264,6 +275,20 @@ impl PendingRaidStore {
             .collect()
     }
 
+    /// Read-only-Iteration über alle Einträge als `(&key, &PendingRaid)`.
+    ///
+    /// Port von `PendingRaidStore.iter_entries` (pending_raids.py Z. 306) — ohne
+    /// Mutation. Genutzt vom Source-Unraid-Cancel-Pfad, der alle Raids eines
+    /// Quell-Streamers finden muss, ohne den Store zu verändern.
+    pub fn iter(&self) -> impl Iterator<Item = (&(String, String), &PendingRaid)> {
+        self.raids.iter()
+    }
+
+    /// Read-only-Iteration über alle Raids (`&PendingRaid`), ohne Keys.
+    pub fn values(&self) -> impl Iterator<Item = &PendingRaid> {
+        self.raids.values()
+    }
+
     /// Anzahl aktuell ausstehender Raids.
     pub fn len(&self) -> usize {
         self.raids.len()
@@ -414,5 +439,72 @@ mod tests {
         assert_eq!(removed.len(), 1);
         assert_eq!(removed[0].to_broadcaster_id, "old_target");
         assert_eq!(s.len(), 1);
+    }
+
+    // --- B7-05: target_stream_data ---
+
+    #[test]
+    fn pending_raid_new_target_stream_data_default_none() {
+        let raid = PendingRaid::new("src", "dst");
+        assert!(raid.target_stream_data.is_none());
+    }
+
+    #[test]
+    fn pending_raid_target_stream_data_round_trip() {
+        let mut raid = PendingRaid::new("src", "dst");
+        raid.target_stream_data = Some(serde_json::json!({
+            "_partner_score": { "final_score": 12.5, "base_score": 10.0 },
+            "viewer_count": 42,
+        }));
+
+        let json = serde_json::to_string(&raid).expect("serialize");
+        let back: PendingRaid = serde_json::from_str(&json).expect("deserialize");
+
+        assert_eq!(back.from_broadcaster_login, "src");
+        assert_eq!(back.to_broadcaster_id, "dst");
+        assert_eq!(back.target_stream_data, raid.target_stream_data);
+        // Python-Zugriff: target_stream_data.get("_partner_score").get("final_score")
+        let tsd = back.target_stream_data.expect("target_stream_data present");
+        assert_eq!(tsd["_partner_score"]["final_score"], serde_json::json!(12.5));
+    }
+
+    // --- B7-08: read-only Iterations-API ---
+
+    #[test]
+    fn store_values_liefert_alle_eintraege() {
+        let mut s = PendingRaidStore::new();
+        s.store(PendingRaid::new("src_a", "tgt_1"));
+        s.store(PendingRaid::new("src_b", "tgt_2"));
+
+        let mut froms: Vec<String> = s.values().map(|r| r.from_broadcaster_login.clone()).collect();
+        froms.sort();
+        assert_eq!(froms, vec!["src_a".to_string(), "src_b".to_string()]);
+        assert_eq!(s.values().count(), s.len());
+    }
+
+    #[test]
+    fn store_iter_liefert_key_und_raid() {
+        let mut s = PendingRaidStore::new();
+        s.store(PendingRaid::new("src_a", "tgt_1"));
+        s.store(PendingRaid::new("src_b", "tgt_2"));
+
+        let mut keys: Vec<(String, String)> = s.iter().map(|(k, _)| k.clone()).collect();
+        keys.sort();
+        assert_eq!(
+            keys,
+            vec![
+                ("tgt_1".to_string(), "src_a".to_string()),
+                ("tgt_2".to_string(), "src_b".to_string()),
+            ]
+        );
+        // Source-Unraid-Cancel-Pfad: über &PendingRaid filtern, ohne Mutation
+        let from_src_a: Vec<&PendingRaid> = s
+            .iter()
+            .filter(|(_, r)| r.from_broadcaster_login == "src_a")
+            .map(|(_, r)| r)
+            .collect();
+        assert_eq!(from_src_a.len(), 1);
+        assert_eq!(from_src_a[0].to_broadcaster_id, "tgt_1");
+        assert_eq!(s.iter().count(), s.len());
     }
 }
