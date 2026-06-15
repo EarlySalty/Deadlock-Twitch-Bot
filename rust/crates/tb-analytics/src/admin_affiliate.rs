@@ -373,6 +373,40 @@ pub async fn toggle_affiliate(pool: &PgPool, login: &str) -> Result<Value, Toggl
     Ok(json!({ "login": login, "active": new_status != 0 }))
 }
 
+/// Lädt das gespeicherte PDF einer Gutschrift (Python
+/// `load_admin_affiliate_gutschrift_pdf` + `AffiliateGutschriftService.get_pdf`).
+/// Gibt `(Dateiname-Basis, PDF-Bytes)` zurück, oder `None` wenn die Gutschrift
+/// fehlt, kein PDF gespeichert ist oder das Schema fehlt. Reiner Read des
+/// `pdf_blob`-BYTEA (kein Generieren). Der Login-Round-Trip aus Python ist
+/// redundant (id ist PK) und wird zur Einzelabfrage zusammengezogen.
+pub async fn load_gutschrift_pdf(
+    pool: &PgPool,
+    gutschrift_id: i64,
+) -> Result<Option<(String, Vec<u8>)>, sqlx::Error> {
+    let row: Option<(Option<Vec<u8>>, Option<String>)> = match sqlx::query_as(
+        "SELECT pdf_blob, gutschrift_number FROM affiliate_gutschriften WHERE id = $1",
+    )
+    .bind(gutschrift_id)
+    .fetch_optional(pool)
+    .await
+    {
+        Ok(v) => v,
+        Err(e) if is_missing_schema_error(&e) => return Ok(None),
+        Err(e) => return Err(e),
+    };
+    let Some((blob, number)) = row else {
+        return Ok(None);
+    };
+    let Some(blob) = blob.filter(|b| !b.is_empty()) else {
+        return Ok(None); // kein gespeichertes PDF
+    };
+    let filename_base = number
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| format!("gutschrift-{gutschrift_id}"));
+    Ok(Some((filename_base, blob)))
+}
+
 // ── Detail (Read mit PII-Readiness) ───────────────────────────────────────────
 
 /// Fehler beim Affiliate-Detail-Laden.
@@ -694,6 +728,29 @@ mod tests {
     async fn toggle_fehlendes_schema_not_found() {
         let Some(pool) = connect("t_aff_toggle_empty").await else { return };
         assert!(matches!(toggle_affiliate(&pool, "nani").await, Err(ToggleError::NotFound)));
+    }
+
+    #[tokio::test]
+    async fn pdf_download_und_none_faelle() {
+        let Some(pool) = connect("t_aff_pdf").await else { return };
+        // fehlendes Schema → None.
+        assert!(load_gutschrift_pdf(&pool, 1).await.unwrap().is_none());
+
+        sqlx::query("CREATE TABLE affiliate_gutschriften (id BIGSERIAL PRIMARY KEY, gutschrift_number TEXT, pdf_blob BYTEA)").execute(&pool).await.unwrap();
+        // mit PDF → (filename, bytes).
+        sqlx::query("INSERT INTO affiliate_gutschriften (id, gutschrift_number, pdf_blob) VALUES (5, 'GS-2026-06-001', E'\\\\x255044462d')").execute(&pool).await.unwrap();
+        // ohne PDF → None.
+        sqlx::query("INSERT INTO affiliate_gutschriften (id, gutschrift_number, pdf_blob) VALUES (6, 'GS-2026-06-002', NULL)").execute(&pool).await.unwrap();
+        // ohne Nummer → Fallback-Dateiname.
+        sqlx::query("INSERT INTO affiliate_gutschriften (id, gutschrift_number, pdf_blob) VALUES (7, NULL, E'\\\\x255044')").execute(&pool).await.unwrap();
+
+        let (name, bytes) = load_gutschrift_pdf(&pool, 5).await.unwrap().unwrap();
+        assert_eq!(name, "GS-2026-06-001");
+        assert_eq!(bytes, vec![0x25, 0x50, 0x44, 0x46, 0x2d]); // %PDF-
+        assert!(load_gutschrift_pdf(&pool, 6).await.unwrap().is_none()); // NULL-Blob
+        assert!(load_gutschrift_pdf(&pool, 99).await.unwrap().is_none()); // fehlende Zeile
+        let (name7, _) = load_gutschrift_pdf(&pool, 7).await.unwrap().unwrap();
+        assert_eq!(name7, "gutschrift-7"); // Fallback
     }
 
     #[tokio::test]

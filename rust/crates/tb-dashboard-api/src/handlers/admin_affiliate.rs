@@ -7,7 +7,8 @@
 
 use axum::{
     extract::{Path, State},
-    response::IntoResponse,
+    http::{header, HeaderValue, StatusCode},
+    response::{IntoResponse, Response},
     Json,
 };
 use chrono::{Datelike, DateTime, SecondsFormat, Utc};
@@ -74,6 +75,43 @@ pub async fn gutschriften_handler(
         Err(e) => {
             tracing::error!("affiliate-gutschriften SELECT-Fehler: {e}");
             Err(ApiError::internal())
+        }
+    }
+}
+
+/// `GET /twitch/api/admin/affiliates/gutschriften/:gutschrift_id/pdf` —
+/// gespeichertes Gutschrift-PDF herunterladen (Admin). Streamt das `pdf_blob`-
+/// BYTEA als `application/pdf` (kein Generieren).
+pub async fn gutschrift_pdf_handler(
+    auth: AuthLevel,
+    State(pool): State<PgPool>,
+    Path(id_raw): Path<String>,
+) -> Response {
+    if !auth.is_privileged() {
+        return ApiError::unauthorized().into_response();
+    }
+    let invalid = || ApiError::bad_request_with_body(json!({ "error": "invalid_gutschrift_id" })).into_response();
+    let id: i64 = match id_raw.trim().parse() {
+        Ok(n) if n > 0 => n,
+        _ => return invalid(),
+    };
+
+    match tb_analytics::admin_affiliate::load_gutschrift_pdf(&pool, id).await {
+        Ok(Some((name, bytes))) => {
+            let filename = name.replace('"', "");
+            let mut resp = (StatusCode::OK, bytes).into_response();
+            let headers = resp.headers_mut();
+            headers.insert(header::CONTENT_TYPE, HeaderValue::from_static("application/pdf"));
+            let disposition = format!("attachment; filename=\"{filename}.pdf\"");
+            if let Ok(value) = HeaderValue::from_str(&disposition) {
+                headers.insert(header::CONTENT_DISPOSITION, value);
+            }
+            resp
+        }
+        Ok(None) => ApiError::not_found().into_response(),
+        Err(e) => {
+            tracing::error!("affiliate-gutschrift-pdf Fehler: {e}");
+            ApiError::internal().into_response()
         }
     }
 }
@@ -202,6 +240,18 @@ mod tests {
         assert_eq!(s, StatusCode::OK);
         assert_eq!(j["count"], 0);
         assert_eq!(j["gutschriften"], serde_json::json!([]));
+    }
+
+    #[tokio::test]
+    async fn pdf_auth_invalid_notfound() {
+        let Some(pool) = make_pool("t_affh_pdf").await else { return };
+        // unauth → 401.
+        assert_eq!(gutschrift_pdf_handler(AuthLevel::None, State(pool.clone()), Path("5".into())).await.status(), StatusCode::UNAUTHORIZED);
+        // ungültige ID → 400.
+        assert_eq!(gutschrift_pdf_handler(AuthLevel::Admin, State(pool.clone()), Path("0".into())).await.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(gutschrift_pdf_handler(AuthLevel::Admin, State(pool.clone()), Path("abc".into())).await.status(), StatusCode::BAD_REQUEST);
+        // kein Schema/keine Gutschrift → 404.
+        assert_eq!(gutschrift_pdf_handler(AuthLevel::Admin, State(pool), Path("5".into())).await.status(), StatusCode::NOT_FOUND);
     }
 
     #[tokio::test]
