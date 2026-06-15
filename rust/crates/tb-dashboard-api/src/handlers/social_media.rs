@@ -21,8 +21,12 @@ use std::sync::Arc;
 
 use serde::Deserialize;
 use serde_json::{json, Value};
-use sqlx::PgPool;
+use sqlx::postgres::PgRow;
+use sqlx::{PgPool, Postgres, QueryBuilder, Row};
 use tb_crypto::FieldCipher;
+use tb_social_media::approval::{get_approval_record, serialize_approval_record};
+use tb_social_media::enrichment::get_enrichment;
+use tb_social_media::retention::mark_clip_discarded;
 use tb_social_media::clip_analytics::get_analytics_summary;
 use tb_social_media::credentials::{CredentialManager, PlatformStatus};
 use tb_social_media::clip_manager::get_clips_for_dashboard;
@@ -741,6 +745,235 @@ pub async fn platforms_status_handler(auth: DashboardAuthLevel, State(pool): Sta
     Json(json!({ "platforms": platforms })).into_response()
 }
 
+const CLIP_COLUMNS: &str = "id, clip_id, clip_url, clip_title, clip_thumbnail_url, streamer_login, \
+    created_at, duration_seconds, view_count, game_name, status, source_kind, upload_local_path, \
+    retention_until::text AS retention_until, discarded_at::text AS discarded_at, \
+    layout_override_json::text AS layout_override_json, uploaded_tiktok, uploaded_youtube, uploaded_instagram";
+
+/// Geladene Clip-Zeile (für `_serialize_clip_record`).
+struct ClipRow {
+    id: i32,
+    clip_id: Option<String>,
+    clip_url: Option<String>,
+    clip_title: Option<String>,
+    clip_thumbnail_url: Option<String>,
+    streamer_login: Option<String>,
+    created_at: Option<String>,
+    duration_seconds: Option<f64>,
+    view_count: Option<i32>,
+    game_name: Option<String>,
+    status: Option<String>,
+    source_kind: Option<String>,
+    upload_local_path: Option<String>,
+    retention_until: Option<String>,
+    discarded_at: Option<String>,
+    layout_override_json: Option<String>,
+    uploaded_tiktok: Option<i32>,
+    uploaded_youtube: Option<i32>,
+    uploaded_instagram: Option<i32>,
+}
+
+fn row_to_clip(r: &PgRow) -> ClipRow {
+    ClipRow {
+        id: r.try_get("id").unwrap_or(0),
+        clip_id: r.try_get("clip_id").unwrap_or(None),
+        clip_url: r.try_get("clip_url").unwrap_or(None),
+        clip_title: r.try_get("clip_title").unwrap_or(None),
+        clip_thumbnail_url: r.try_get("clip_thumbnail_url").unwrap_or(None),
+        streamer_login: r.try_get("streamer_login").unwrap_or(None),
+        created_at: r.try_get("created_at").unwrap_or(None),
+        duration_seconds: r.try_get("duration_seconds").unwrap_or(None),
+        view_count: r.try_get("view_count").unwrap_or(None),
+        game_name: r.try_get("game_name").unwrap_or(None),
+        status: r.try_get("status").unwrap_or(None),
+        source_kind: r.try_get("source_kind").unwrap_or(None),
+        upload_local_path: r.try_get("upload_local_path").unwrap_or(None),
+        retention_until: r.try_get("retention_until").unwrap_or(None),
+        discarded_at: r.try_get("discarded_at").unwrap_or(None),
+        layout_override_json: r.try_get("layout_override_json").unwrap_or(None),
+        uploaded_tiktok: r.try_get("uploaded_tiktok").unwrap_or(None),
+        uploaded_youtube: r.try_get("uploaded_youtube").unwrap_or(None),
+        uploaded_instagram: r.try_get("uploaded_instagram").unwrap_or(None),
+    }
+}
+
+async fn load_clip_row(pool: &PgPool, clip_db_id: i32) -> Option<ClipRow> {
+    let row = sqlx::query(&format!("SELECT {CLIP_COLUMNS} FROM twitch_clips_social_media WHERE id = $1 LIMIT 1"))
+        .bind(clip_db_id)
+        .fetch_optional(pool)
+        .await
+        .ok()
+        .flatten()?;
+    Some(row_to_clip(&row))
+}
+
+/// Baut den Clip-Detail-JSON inkl. Effective-Layout, Enrichment-Summary und
+/// Approval (Python `_serialize_clip_record`).
+async fn serialize_clip_record(pool: &PgPool, row: &ClipRow) -> Value {
+    let layout_override = row
+        .layout_override_json
+        .as_deref()
+        .filter(|s| !s.is_empty())
+        .and_then(|s| serde_json::from_str::<Value>(s).ok())
+        .unwrap_or(Value::Null);
+    let effective_layout = get_clip_effective_layout(pool, row.id).await.to_override_json();
+
+    let (enrichment_status, enrichment_summary) = match get_enrichment(pool, row.id).await {
+        Some(e) => {
+            // Dedup youtube→tiktok→instagram, erste 5.
+            let mut seen = std::collections::HashSet::new();
+            let mut top: Vec<String> = Vec::new();
+            for tag in e.hashtags_youtube.iter().chain(&e.hashtags_tiktok).chain(&e.hashtags_instagram) {
+                if seen.insert(tag.clone()) {
+                    top.push(tag.clone());
+                    if top.len() == 5 {
+                        break;
+                    }
+                }
+            }
+            (json!(e.status), json!({ "top_hashtags": top, "provider": e.llm_provider }))
+        }
+        None => (Value::Null, Value::Null),
+    };
+    let approval = match get_approval_record(pool, row.id).await {
+        Some(rec) => serialize_approval_record(&rec),
+        None => Value::Null,
+    };
+
+    json!({
+        "clip_db_id": row.id,
+        "clip_id": row.clip_id,
+        "clip_url": row.clip_url,
+        "title": row.clip_title,
+        "thumbnail_url": row.clip_thumbnail_url,
+        "streamer_login": row.streamer_login,
+        "created_at": row.created_at,
+        "duration_seconds": row.duration_seconds,
+        "view_count": row.view_count,
+        "game_name": row.game_name,
+        "status": row.status,
+        "source_kind": row.source_kind,
+        "upload_local_path": row.upload_local_path,
+        "retention_until": row.retention_until,
+        "discarded_at": row.discarded_at,
+        "platform_status": {
+            "tiktok": row.uploaded_tiktok.unwrap_or(0) != 0,
+            "youtube": row.uploaded_youtube.unwrap_or(0) != 0,
+            "instagram": row.uploaded_instagram.unwrap_or(0) != 0,
+        },
+        "layout_override": layout_override,
+        "effective_layout": effective_layout,
+        "enrichment_status": enrichment_status,
+        "enrichment_summary": enrichment_summary,
+        "approval": approval,
+    })
+}
+
+fn invalid_clip_db_id() -> Response {
+    (StatusCode::BAD_REQUEST, Json(json!({ "error": "invalid_clip_db_id" }))).into_response()
+}
+
+fn clip_not_found() -> Response {
+    (StatusCode::NOT_FOUND, Json(json!({ "error": "clip_not_found" }))).into_response()
+}
+
+fn invalid_pagination() -> Response {
+    (StatusCode::BAD_REQUEST, Json(json!({ "error": "invalid_pagination" }))).into_response()
+}
+
+/// `?page=&page_size=&status=&streamer=` für die Admin-Clip-Liste.
+#[derive(Debug, Deserialize)]
+pub struct AdminClipsQuery {
+    pub page: Option<String>,
+    pub page_size: Option<String>,
+    pub status: Option<String>,
+    pub streamer: Option<String>,
+}
+
+fn push_clips_where(qb: &mut QueryBuilder<Postgres>, streamer: Option<&str>, status: Option<&str>) {
+    if let Some(s) = streamer {
+        qb.push(" AND LOWER(streamer_login) = LOWER(");
+        qb.push_bind(s.to_string());
+        qb.push(")");
+    }
+    if let Some(st) = status {
+        if st == "discarded" {
+            qb.push(" AND discarded_at IS NOT NULL");
+        } else {
+            qb.push(" AND LOWER(status) = LOWER(");
+            qb.push_bind(st.to_string());
+            qb.push(")");
+        }
+    }
+}
+
+/// `GET /social-media/api/admin/clips` — paginierte Clip-Liste (Admin).
+pub async fn admin_clips_handler(auth: DashboardAuthLevel, State(pool): State<PgPool>, Query(q): Query<AdminClipsQuery>) -> Response {
+    if let Err(e) = require_admin(&auth) {
+        return e;
+    }
+    let page = match q.page.as_deref().unwrap_or("1").parse::<i64>() {
+        Ok(n) => n.max(1),
+        Err(_) => return invalid_pagination(),
+    };
+    let page_size = match q.page_size.as_deref().unwrap_or("20").parse::<i64>() {
+        Ok(n) => n.clamp(1, 100),
+        Err(_) => return invalid_pagination(),
+    };
+    let status = q.status.as_deref().map(|s| s.trim().to_lowercase()).filter(|s| !s.is_empty());
+    let streamer = q.streamer.as_deref().map(|s| s.trim().to_lowercase()).filter(|s| !s.is_empty());
+    let offset = (page - 1) * page_size;
+
+    let mut qb_total = QueryBuilder::<Postgres>::new("SELECT COUNT(*) FROM twitch_clips_social_media WHERE 1=1");
+    push_clips_where(&mut qb_total, streamer.as_deref(), status.as_deref());
+    let total: i64 = qb_total.build_query_scalar().fetch_one(&pool).await.unwrap_or(0);
+
+    let mut qb = QueryBuilder::<Postgres>::new(&format!("SELECT {CLIP_COLUMNS} FROM twitch_clips_social_media WHERE 1=1"));
+    push_clips_where(&mut qb, streamer.as_deref(), status.as_deref());
+    qb.push(" ORDER BY created_at DESC, id DESC LIMIT ");
+    qb.push_bind(page_size);
+    qb.push(" OFFSET ");
+    qb.push_bind(offset);
+    let rows = qb.build().fetch_all(&pool).await.unwrap_or_default();
+
+    let mut items: Vec<Value> = Vec::with_capacity(rows.len());
+    for r in &rows {
+        items.push(serialize_clip_record(&pool, &row_to_clip(r)).await);
+    }
+    Json(json!({ "items": items, "page": page, "page_size": page_size, "total": total })).into_response()
+}
+
+/// `GET /social-media/api/admin/clips/:clip_db_id` — Clip-Detail (Admin).
+pub async fn admin_clip_detail_handler(auth: DashboardAuthLevel, State(pool): State<PgPool>, Path(raw): Path<String>) -> Response {
+    if let Err(e) = require_admin(&auth) {
+        return e;
+    }
+    let Some(clip_db_id) = normalize_id(Some(&Value::String(raw))) else {
+        return invalid_clip_db_id();
+    };
+    match load_clip_row(&pool, clip_db_id).await {
+        Some(clip) => Json(serialize_clip_record(&pool, &clip).await).into_response(),
+        None => clip_not_found(),
+    }
+}
+
+/// `POST /social-media/api/admin/clips/:clip_db_id/discard` — Clip verwerfen (Admin).
+pub async fn admin_clip_discard_handler(auth: DashboardAuthLevel, State(pool): State<PgPool>, Path(raw): Path<String>) -> Response {
+    if let Err(e) = require_admin(&auth) {
+        return e;
+    }
+    let Some(clip_db_id) = normalize_id(Some(&Value::String(raw))) else {
+        return invalid_clip_db_id();
+    };
+    if !mark_clip_discarded(&pool, clip_db_id).await {
+        return clip_not_found();
+    }
+    match load_clip_row(&pool, clip_db_id).await {
+        Some(clip) => Json(serialize_clip_record(&pool, &clip).await).into_response(),
+        None => Json(json!({ "clip_db_id": clip_db_id, "discarded": true })).into_response(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -812,7 +1045,9 @@ mod tests {
         let opts = PgConnectOptions::from_str(&dsn).unwrap().options([("search_path", schema)]);
         let pool = PgPoolOptions::new().max_connections(2).connect_with(opts).await.unwrap();
         for ddl in [
-            "CREATE TABLE twitch_clips_social_media (id SERIAL PRIMARY KEY, clip_id TEXT, streamer_login TEXT, status TEXT DEFAULT 'pending', created_at TEXT, clip_title TEXT, game_name TEXT, custom_description TEXT, hashtags TEXT, layout_override_json JSONB)",
+            "CREATE TABLE twitch_clips_social_media (id SERIAL PRIMARY KEY, clip_id TEXT, clip_url TEXT, clip_thumbnail_url TEXT, streamer_login TEXT, status TEXT DEFAULT 'pending', created_at TEXT, duration_seconds DOUBLE PRECISION, view_count INTEGER, clip_title TEXT, game_name TEXT, source_kind TEXT DEFAULT 'twitch', upload_local_path TEXT, custom_description TEXT, hashtags TEXT, layout_override_json JSONB, retention_until TIMESTAMPTZ, discarded_at TIMESTAMPTZ, uploaded_tiktok INTEGER DEFAULT 0, uploaded_youtube INTEGER DEFAULT 0, uploaded_instagram INTEGER DEFAULT 0)",
+            "CREATE TABLE social_media_clip_enrichment (clip_db_id INTEGER PRIMARY KEY, transcript_raw TEXT, transcript_corrected TEXT, transcript_segments JSONB, transcript_lang TEXT, detected_terms JSONB DEFAULT '[]'::jsonb, title_youtube TEXT, title_tiktok TEXT, title_instagram TEXT, description_youtube TEXT, description_tiktok TEXT, description_instagram TEXT, hashtags_youtube JSONB DEFAULT '[]'::jsonb, hashtags_tiktok JSONB DEFAULT '[]'::jsonb, hashtags_instagram JSONB DEFAULT '[]'::jsonb, llm_provider TEXT, llm_model TEXT, cost_usd_estimate NUMERIC(10,6), status TEXT DEFAULT 'pending', error_message TEXT, started_at TIMESTAMPTZ, completed_at TIMESTAMPTZ, edited_by TEXT, updated_at TIMESTAMPTZ DEFAULT NOW())",
+            "CREATE TABLE social_media_clip_approval (clip_db_id INTEGER PRIMARY KEY, state TEXT NOT NULL DEFAULT 'awaiting_approval', approved_platforms JSONB NOT NULL DEFAULT '[]'::jsonb, approver_user_id TEXT, decided_at TIMESTAMPTZ, dm_message_id TEXT, dm_channel_id TEXT, last_sent_at TIMESTAMPTZ)",
             "CREATE TABLE twitch_clips_upload_queue (id SERIAL PRIMARY KEY, clip_id INTEGER, platform TEXT, status TEXT DEFAULT 'pending', priority INTEGER DEFAULT 0, title TEXT, description TEXT, hashtags TEXT, scheduled_at TEXT, attempts INTEGER DEFAULT 0, last_error TEXT, last_attempt_at TEXT, created_at TEXT DEFAULT CURRENT_TIMESTAMP, completed_at TEXT)",
             "CREATE TABLE clip_templates_streamer (id SERIAL PRIMARY KEY, streamer_login TEXT, template_name TEXT, description_template TEXT, hashtags TEXT, is_default INTEGER DEFAULT 0, created_at TEXT DEFAULT CURRENT_TIMESTAMP, updated_at TEXT DEFAULT CURRENT_TIMESTAMP, UNIQUE (streamer_login, template_name))",
             "CREATE TABLE clip_templates_global (id SERIAL PRIMARY KEY, template_name TEXT UNIQUE, description_template TEXT, hashtags TEXT, category TEXT, usage_count INTEGER DEFAULT 0, created_at TEXT DEFAULT CURRENT_TIMESTAMP, created_by TEXT)",
@@ -1165,5 +1400,53 @@ mod tests {
         // Partner mit fremdem Clip → 403.
         let resp = queue_upload_handler(partner("other"), State(pool.clone()), Query(StreamerQuery { streamer: None }), Json(queue_body(clip, json!(["tiktok"])))).await;
         assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+    }
+
+    fn clips_query(status: Option<&str>) -> AdminClipsQuery {
+        AdminClipsQuery { page: None, page_size: None, status: status.map(String::from), streamer: None }
+    }
+
+    #[tokio::test]
+    async fn admin_clips_list_detail_discard() {
+        let Some(pool) = make_pool("t_dash_sm_admin_clips").await else { return };
+        // Clip A: tiktok hochgeladen, mit Enrichment + Approval.
+        let a: i32 = sqlx::query_scalar("INSERT INTO twitch_clips_social_media (clip_id, streamer_login, clip_title, status, created_at, uploaded_tiktok) VALUES ('a', 'nani', 'Clip A', 'ready', '2026-06-10', 1) RETURNING id").fetch_one(&pool).await.unwrap();
+        sqlx::query("INSERT INTO social_media_clip_enrichment (clip_db_id, status, llm_provider, hashtags_youtube, hashtags_tiktok) VALUES ($1, 'done', 'ollama', '[\"a\",\"b\"]'::jsonb, '[\"b\",\"c\"]'::jsonb)").bind(a).execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO social_media_clip_approval (clip_db_id, state) VALUES ($1, 'approved')").bind(a).execute(&pool).await.unwrap();
+        // Clip B: verworfen.
+        sqlx::query("INSERT INTO twitch_clips_social_media (clip_id, streamer_login, status, created_at, discarded_at) VALUES ('b', 'nani', 'discarded', '2026-06-09', NOW())").execute(&pool).await.unwrap();
+
+        // Liste: total 2, neuester (A) zuerst.
+        let resp = admin_clips_handler(DashboardAuthLevel::Admin, State(pool.clone()), Query(clips_query(None))).await;
+        let v = body_json(resp).await;
+        assert_eq!(v["total"], 2);
+        assert_eq!(v["items"][0]["clip_db_id"], a);
+
+        // Status-Filter "discarded" → nur B.
+        let resp = admin_clips_handler(DashboardAuthLevel::Admin, State(pool.clone()), Query(clips_query(Some("discarded")))).await;
+        assert_eq!(body_json(resp).await["total"], 1);
+
+        // Detail von A: Merge aus Enrichment + Approval + platform_status + effective_layout.
+        let resp = admin_clip_detail_handler(DashboardAuthLevel::Admin, State(pool.clone()), Path(a.to_string())).await;
+        let v = body_json(resp).await;
+        assert_eq!(v["enrichment_status"], "done");
+        assert_eq!(v["enrichment_summary"]["top_hashtags"], json!(["a", "b", "c"])); // dedup
+        assert_eq!(v["enrichment_summary"]["provider"], "ollama");
+        assert_eq!(v["platform_status"]["tiktok"], true);
+        assert_eq!(v["platform_status"]["youtube"], false);
+        assert_eq!(v["approval"]["state"], "approved");
+        assert!(v["effective_layout"]["version"] == 1);
+
+        // Discard von A → discarded_at gesetzt im zurückgegebenen Record.
+        let resp = admin_clip_discard_handler(DashboardAuthLevel::Admin, State(pool.clone()), Path(a.to_string())).await;
+        assert_eq!(resp.status(), StatusCode::OK);
+        assert!(!body_json(resp).await["discarded_at"].is_null());
+
+        // Fehlerpfade.
+        assert_eq!(admin_clip_detail_handler(DashboardAuthLevel::Admin, State(pool.clone()), Path("abc".into())).await.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(admin_clip_detail_handler(DashboardAuthLevel::Admin, State(pool.clone()), Path("99999".into())).await.status(), StatusCode::NOT_FOUND);
+        assert_eq!(admin_clip_discard_handler(DashboardAuthLevel::Admin, State(pool.clone()), Path("99999".into())).await.status(), StatusCode::NOT_FOUND);
+        // Partner → 403.
+        assert_eq!(admin_clips_handler(partner("nani"), State(pool.clone()), Query(clips_query(None))).await.status(), StatusCode::FORBIDDEN);
     }
 }
