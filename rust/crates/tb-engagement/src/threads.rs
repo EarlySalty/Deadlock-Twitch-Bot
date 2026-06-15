@@ -9,7 +9,31 @@
 //! (`extract_threads`) folgt in 15b.
 
 use chrono::{DateTime, Utc};
+use serde_json::Value;
 use sqlx::PgPool;
+
+use crate::minimax_chat::{ChatMessage, EngagementMinimaxClient};
+
+const EXTRACTOR_SYSTEM_PROMPT: &str = "Du bist ein Konversations-Analyst für einen Twitch-Chat. Lies die folgenden \
+Chat-Nachrichten und identifiziere Konversations-Fäden, die für einen späteren \
+Follow-up wertvoll sein könnten — Dinge mit echtem zwischenmenschlichem Wert: \
+anstehende Ereignisse (OP, Reise, Prüfung), kürzliche Erlebnisse die \
+nachgefragt werden könnten, oder klare Dauerinteressen (Lieblings-Hero, Hobby).\n\
+\n\
+Antworte AUSSCHLIESSLICH als JSON-Array (kein Markdown, kein Vortext). Jeder \
+Eintrag hat die Felder: twitch_user_id, twitch_login, thread_type \
+(\"upcoming_event\"|\"recent_experience\"|\"recurring_interest\"|\"life_status\"), \
+summary (knapp, max 80 Zeichen), due_at_iso (YYYY-MM-DD, optional, nur wenn ein \
+konkretes Datum genannt wurde).\n\
+\n\
+Wenn nichts mit echtem Wert identifizierbar ist, antworte mit []. Erfinde nichts.";
+
+const THREAD_TYPES: &[&str] = &[
+    "upcoming_event",
+    "recent_experience",
+    "recurring_interest",
+    "life_status",
+];
 
 /// Ein Konversations-Faden.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -171,13 +195,191 @@ impl Threads {
         .await;
         CloseCounts { open_to_due, awaiting_to_closed, open_to_closed }
     }
+
+    async fn load_recent_user_turns(
+        &self,
+        channel_login: &str,
+        hours: i32,
+        limit: i64,
+    ) -> Vec<(String, Option<String>, String, DateTime<Utc>)> {
+        sqlx::query_as::<_, (String, Option<String>, String, DateTime<Utc>)>(
+            "SELECT twitch_user_id, twitch_login, content, ts \
+             FROM twitch_engagement_conversation \
+             WHERE channel_login = $1 AND role = 'user' AND twitch_user_id IS NOT NULL \
+               AND ts > NOW() - make_interval(hours => $2) \
+             ORDER BY ts DESC LIMIT $3",
+        )
+        .bind(channel_login)
+        .bind(hours)
+        .bind(limit)
+        .fetch_all(&self.pool)
+        .await
+        .unwrap_or_default()
+    }
+
+    /// Insert nur, wenn kein offener Thread mit gleichem (user, channel, type,
+    /// LOWER(summary)) existiert. `true` = neu eingefügt.
+    async fn upsert_thread(
+        &self,
+        uid: &str,
+        login: &str,
+        channel: &str,
+        ttype: &str,
+        summary: &str,
+        due_at: Option<DateTime<Utc>>,
+    ) -> Result<bool, sqlx::Error> {
+        let existing: Option<i64> = sqlx::query_scalar(
+            "SELECT id FROM twitch_user_threads \
+             WHERE twitch_user_id = $1 AND COALESCE(channel_login, '') = $2 \
+               AND thread_type = $3 AND LOWER(summary) = LOWER($4) \
+               AND status IN ('open', 'follow_up_due', 'awaiting_response') LIMIT 1",
+        )
+        .bind(uid)
+        .bind(channel)
+        .bind(ttype)
+        .bind(summary)
+        .fetch_optional(&self.pool)
+        .await?;
+        if existing.is_some() {
+            return Ok(false);
+        }
+        sqlx::query(
+            "INSERT INTO twitch_user_threads \
+             (twitch_user_id, twitch_login, channel_login, thread_type, summary, due_at, \
+              status, created_at, updated_at) \
+             VALUES ($1, $2, $3, $4, $5, $6, 'open', NOW(), NOW())",
+        )
+        .bind(uid)
+        .bind(login)
+        .bind(channel)
+        .bind(ttype)
+        .bind(summary)
+        .bind(due_at)
+        .execute(&self.pool)
+        .await?;
+        Ok(true)
+    }
+
+    /// Thread-Extractor (Hintergrund-Job): jüngste User-Turns → MiniMax-JSON →
+    /// upsert. Liefert die Anzahl neu eingefügter Threads.
+    pub async fn extract_threads(
+        &self,
+        channel_login: &str,
+        minimax: &EngagementMinimaxClient,
+        hours: i32,
+        limit: i64,
+    ) -> i64 {
+        let rows = self.load_recent_user_turns(channel_login, hours, limit).await;
+        if rows.is_empty() {
+            return 0;
+        }
+        let lines: Vec<String> = rows
+            .iter()
+            .rev()
+            .map(|(uid, login, content, ts)| {
+                format!(
+                    "[{}] ({uid}|{}): {content}",
+                    ts.format("%Y-%m-%dT%H:%M:%S"),
+                    login.as_deref().unwrap_or_default()
+                )
+            })
+            .collect();
+        let user_prompt = format!(
+            "Channel: {channel_login}\nZeitfenster: letzte {hours} Stunden\n\n{}\n",
+            lines.join("\n")
+        );
+
+        let response = match minimax
+            .generate(
+                EXTRACTOR_SYSTEM_PROMPT,
+                &[ChatMessage { role: "user".to_string(), content: user_prompt, name: None }],
+                800,
+                480,
+            )
+            .await
+        {
+            Ok(r) => r,
+            Err(_) => return 0,
+        };
+        let Some(text) = response.text else {
+            return 0;
+        };
+        let cleaned = strip_codeblock(&text);
+        let Ok(items) = serde_json::from_str::<Value>(&cleaned) else {
+            return 0;
+        };
+        let Some(arr) = items.as_array() else {
+            return 0;
+        };
+
+        let mut inserted = 0;
+        for item in arr {
+            let uid = item.get("twitch_user_id").and_then(Value::as_str).unwrap_or("").trim();
+            let login = item.get("twitch_login").and_then(Value::as_str).unwrap_or("").trim();
+            let ttype = item.get("thread_type").and_then(Value::as_str).unwrap_or("").trim();
+            let summary = item.get("summary").and_then(Value::as_str).unwrap_or("").trim();
+            if uid.is_empty() || login.is_empty() || ttype.is_empty() || summary.is_empty() {
+                continue;
+            }
+            if !THREAD_TYPES.contains(&ttype) {
+                continue;
+            }
+            let due_at = item
+                .get("due_at_iso")
+                .and_then(Value::as_str)
+                .filter(|s| !s.is_empty())
+                .and_then(parse_iso_date);
+            let summary_trunc: String = summary.chars().take(80).collect();
+            if self
+                .upsert_thread(uid, login, channel_login, ttype, &summary_trunc, due_at)
+                .await
+                .unwrap_or(false)
+            {
+                inserted += 1;
+            }
+        }
+        inserted
+    }
+}
+
+/// Entfernt ```/```json-Codeblock-Hüllen (Python `_strip_codeblock`).
+fn strip_codeblock(text: &str) -> String {
+    let cleaned = text.trim();
+    if !cleaned.starts_with("```") {
+        return cleaned.to_string();
+    }
+    let cleaned = cleaned.trim_start_matches('`');
+    let cleaned = if cleaned.to_lowercase().starts_with("json") {
+        &cleaned[4..]
+    } else {
+        cleaned
+    };
+    let cleaned = cleaned.strip_suffix("```").unwrap_or(cleaned);
+    cleaned.trim().to_string()
+}
+
+/// Parst `due_at_iso` (YYYY-MM-DD oder ISO-Datetime) zu UTC; sonst None.
+fn parse_iso_date(s: &str) -> Option<DateTime<Utc>> {
+    if let Ok(dt) = DateTime::parse_from_rfc3339(s) {
+        return Some(dt.with_timezone(&Utc));
+    }
+    if let Ok(ndt) = chrono::NaiveDateTime::parse_from_str(s, "%Y-%m-%dT%H:%M:%S") {
+        return Some(ndt.and_utc());
+    }
+    if let Ok(d) = chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d") {
+        return Some(d.and_hms_opt(0, 0, 0)?.and_utc());
+    }
+    None
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
     use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
     use std::str::FromStr;
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
 
     fn thread(status: &str, ttype: &str, summary: &str) -> Thread {
         Thread {
@@ -228,7 +430,65 @@ mod tests {
         .execute(&pool)
         .await
         .unwrap();
+        sqlx::query(
+            "CREATE TABLE twitch_engagement_conversation (\
+             id BIGSERIAL PRIMARY KEY, channel_login TEXT, role TEXT, twitch_user_id TEXT, \
+             twitch_login TEXT, content TEXT, ts TIMESTAMPTZ NOT NULL DEFAULT NOW())",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
         Some(pool)
+    }
+
+    #[test]
+    fn strip_codeblock_und_parse_date() {
+        assert_eq!(strip_codeblock("```json\n[1,2]\n```"), "[1,2]");
+        assert_eq!(strip_codeblock("```[1]```"), "[1]");
+        assert_eq!(strip_codeblock("[3]"), "[3]"); // ohne Fence unverändert
+        assert!(parse_iso_date("2024-01-15").is_some());
+        assert!(parse_iso_date("kein datum").is_none());
+    }
+
+    #[tokio::test]
+    async fn extract_threads_und_dedup() {
+        let Some(pool) = make_pool("t_eng_threads_extract").await else { return };
+        sqlx::query(
+            "INSERT INTO twitch_engagement_conversation (channel_login, role, twitch_user_id, twitch_login, content) \
+             VALUES ('nani','user','u1','user','ich hab morgen OP')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let server = MockServer::start().await;
+        // Modell liefert ein JSON-Array.
+        Mock::given(method("POST"))
+            .and(path("/chat/completions"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "choices": [{"message": {"content":
+                    "[{\"twitch_user_id\":\"u1\",\"twitch_login\":\"user\",\"thread_type\":\"upcoming_event\",\"summary\":\"OP morgen\"}]"
+                }}]
+            })))
+            .mount(&server)
+            .await;
+        let minimax = EngagementMinimaxClient::new(
+            Some("k".to_string()),
+            Some(server.uri()),
+            Some("m".to_string()),
+            None,
+        );
+
+        let t = Threads::new(pool.clone());
+        let n = t.extract_threads("nani", &minimax, 6, 80).await;
+        assert_eq!(n, 1);
+        // Zweiter Lauf: gleicher Thread existiert offen → Dedup, 0 neu.
+        let n2 = t.extract_threads("nani", &minimax, 6, 80).await;
+        assert_eq!(n2, 0);
+        // Der Thread ist offen und ladbar.
+        let open = t.load_open_threads_for_user("u1", "nani", 5).await;
+        assert_eq!(open.len(), 1);
+        assert_eq!(open[0].summary, "OP morgen");
     }
 
     #[tokio::test]
