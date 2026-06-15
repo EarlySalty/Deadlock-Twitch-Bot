@@ -127,6 +127,40 @@ pub async fn load_exp_game_transitions(pool: &PgPool, streamer: &str, days: i64)
     Ok(Value::Array(items))
 }
 
+/// Wachstumskurven je Spiel (Python `_load_exp_growth_curves_payload`):
+/// Ø-Viewer pro 5-Minuten-Bucket aus `exp_snapshots` JOIN `exp_sessions`.
+/// JSON-Array, sortiert nach game_name + Minuten-Bucket.
+pub async fn load_exp_growth_curves(pool: &PgPool, streamer: &str, days: i64) -> Result<Value, sqlx::Error> {
+    let since = since_iso(days);
+    let streamer = streamer.to_lowercase();
+    let rows: Vec<(String, i64, Option<f64>, i64)> = sqlx::query_as(
+        "SELECT COALESCE(es.game_name, '(unbekannt)') AS game_name, \
+                (FLOOR(sn.minutes_from_start / 5) * 5)::bigint AS minute_bucket, \
+                COALESCE(AVG(sn.viewer_count), 0)::float8 AS avg_v, COUNT(*)::bigint AS samples \
+         FROM exp_snapshots sn JOIN exp_sessions es ON es.id = sn.exp_session_id \
+         WHERE LOWER(es.streamer) = $1 AND es.started_at >= $2 \
+           AND sn.minutes_from_start IS NOT NULL AND sn.minutes_from_start >= 0 AND sn.minutes_from_start <= 360 \
+         GROUP BY game_name, minute_bucket ORDER BY game_name, minute_bucket",
+    )
+    .bind(&streamer)
+    .bind(&since)
+    .fetch_all(pool)
+    .await?;
+
+    let items: Vec<Value> = rows
+        .into_iter()
+        .map(|(game, bucket, avg, samples)| {
+            json!({
+                "game": game,
+                "minuteFromStart": bucket,
+                "avgViewers": round1(avg.unwrap_or(0.0)),
+                "sampleCount": samples,
+            })
+        })
+        .collect();
+    Ok(Value::Array(items))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -142,7 +176,7 @@ mod tests {
         let opts = PgConnectOptions::from_str(&dsn).unwrap().options([("search_path", schema)]);
         let pool = PgPoolOptions::new().max_connections(2).connect_with(opts).await.unwrap();
         sqlx::query(
-            "CREATE TABLE exp_sessions (streamer TEXT, started_at TEXT, ended_at TEXT, game_name TEXT, \
+            "CREATE TABLE exp_sessions (id BIGSERIAL PRIMARY KEY, streamer TEXT, started_at TEXT, ended_at TEXT, game_name TEXT, \
              peak_viewers INTEGER, avg_viewers REAL, duration_min REAL, follower_delta INTEGER)",
         )
         .execute(&pool)
@@ -179,6 +213,25 @@ mod tests {
         sqlx::query("INSERT INTO exp_sessions (streamer, started_at, ended_at, game_name, avg_viewers) VALUES ('nani','2026-06-10T00:00:00+00:00','2026-06-10T02:00:00+00:00',NULL,30)").execute(&pool).await.unwrap();
         let v = load_exp_game_breakdown(&pool, "nani", 3650).await.unwrap();
         assert_eq!(v[0]["game"], "(unbekannt)");
+    }
+
+    #[tokio::test]
+    async fn growth_curves_buckets() {
+        let Some(pool) = make_pool("t_exp_gc").await else { return };
+        sqlx::query("CREATE TABLE exp_snapshots (exp_session_id BIGINT, ts_utc TEXT, viewer_count INTEGER, minutes_from_start REAL)").execute(&pool).await.unwrap();
+        let session_id: i64 = sqlx::query_scalar("INSERT INTO exp_sessions (streamer, started_at, game_name) VALUES ('nani','2026-06-10T00:00:00+00:00','Deadlock') RETURNING id").fetch_one(&pool).await.unwrap();
+        // Snapshots Minute 2.0 + 3.0 → Bucket 0; Minute 12.0 → Bucket 10.
+        sqlx::query("INSERT INTO exp_snapshots (exp_session_id, ts_utc, viewer_count, minutes_from_start) VALUES ($1,'t',100,3.0), ($1,'t',150,12.0), ($1,'t',200,2.0)")
+            .bind(session_id).execute(&pool).await.unwrap();
+
+        let v = load_exp_growth_curves(&pool, "nani", 3650).await.unwrap();
+        let arr = v.as_array().unwrap();
+        assert_eq!(arr.len(), 2);
+        assert_eq!(arr[0]["game"], "Deadlock");
+        assert_eq!(arr[0]["minuteFromStart"], 0); // Minute 2 + 3 → Bucket 0
+        assert_eq!(arr[0]["avgViewers"], 150.0); // (100+200)/2
+        assert_eq!(arr[0]["sampleCount"], 2);
+        assert_eq!(arr[1]["minuteFromStart"], 10); // Minute 12 → Bucket 10
     }
 
     #[tokio::test]
