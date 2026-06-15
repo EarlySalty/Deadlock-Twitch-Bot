@@ -2559,14 +2559,18 @@ dependencies = [
 name = "tb-social-media"
 version = "0.1.0"
 dependencies = [
+ "base64",
  "chrono",
  "serde",
  "serde_json",
+ "sha2",
  "sqlx",
  "tb-crypto",
  "tb-transport-twitch",
+ "thiserror 1.0.69",
  "tokio",
  "tracing",
+ "url",
 ]
 
 [[package]]
