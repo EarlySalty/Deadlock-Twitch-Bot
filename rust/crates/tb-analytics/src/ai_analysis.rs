@@ -324,6 +324,163 @@ pub fn extract_text_response(value: &Value) -> String {
     }
 }
 
+/// Formatiert einen Wert wie Pythons `f"{value}"` (Float → repr „40.0", Integer
+/// → „2", String unverändert); fehlend → „0" (Pythons `.get(k, 0)`-Default).
+fn fmt_val(v: Option<&Value>) -> String {
+    match v {
+        Some(Value::Number(n)) => {
+            if n.is_f64() {
+                format!("{:?}", n.as_f64().unwrap())
+            } else {
+                n.to_string()
+            }
+        }
+        Some(Value::String(s)) => s.clone(),
+        Some(Value::Bool(b)) => if *b { "True" } else { "False" }.to_string(),
+        None | Some(Value::Null) => "0".to_string(),
+        Some(other) => other.to_string(),
+    }
+}
+
+/// `json.dumps(ctx.get(key, []), ensure_ascii=False)`. Hinweis: serde_json
+/// serialisiert kompakt (`{"k":1}`), Python mit `, `/`: `-Trennern und in
+/// Insertion-Order — der Prompt-Text weicht hier minimal ab, was NUR den an das
+/// LLM gesendeten Prompt betrifft (nicht-deterministische Antwort → nicht
+/// beobachtbar in der API-Antwort).
+fn dumps_array(ctx: &Value, key: &str) -> String {
+    match ctx.get(key) {
+        Some(v) => serde_json::to_string(v).unwrap_or_else(|_| "[]".to_string()),
+        None => "[]".to_string(),
+    }
+}
+
+/// Statischer Prompt-Abschluss (Antwortformat + Beispiel-Array + Regeln),
+/// 1:1 Python (escaped `{{`/`}}` → literale Klammern).
+const PROMPT_TAIL: &str = r#"
+
+---
+Antworte NUR als JSON Array mit exakt 10 Objekten. Kein Markdown, kein Text außerhalb des JSON.
+
+[
+  {
+    "number": 1,
+    "priority": "kritisch",
+    "title": "Titel (max 8 Wörter)",
+    "analysis": "Tiefenanalyse 3-5 Sätze mit konkreten Zahlen aus den Daten.",
+    "action": "Konkrete Handlungsempfehlung: Was, wann, wie oft, wie messen.",
+    "expectedImpact": "Realistischer erwarteter Effekt basierend auf den Daten."
+  }
+]
+
+Gültige priority-Werte: "kritisch", "hoch", "mittel"
+Punkte 1-3: kritisch | Punkte 4-7: hoch | Punkte 8-10: mittel
+
+DATENHINWEIS: Spiele mit "(Viewer-Daten unvollständig)" haben kein Viewer-Sampling –
+avg_viewers/peak dort sind Initialwerte bei Stream-Start, nicht repräsentativ.
+Vollständige Viewer-Metriken nur für Einträge ohne diesen Hinweis verwenden."#;
+
+/// Baut den KI-Analyse-Prompt (Port von `_build_ai_analysis_prompt`): KPI-
+/// Übersicht + Top/Schwächste/Letzte Sessions + Wochentag + Kategorien +
+/// Multi-Game-Zeilen + Follower-Trend, dann das 10-Punkte-Antwortformat. Hängt
+/// optional den `user_context` an.
+pub fn build_ai_analysis_prompt(
+    streamer: &str,
+    days: i64,
+    ctx: &Value,
+    game_filter: &str,
+    user_context: &str,
+) -> String {
+    let s = ctx.get("summary").cloned().unwrap_or_else(|| json!({}));
+    let mode_label = if game_filter == "deadlock" {
+        "Nur Deadlock-Sessions"
+    } else {
+        "Alle gespielten Kategorien"
+    };
+
+    // Kategorien-Performance (exp); leer → Hinweis-Objekt.
+    let game_section = match ctx.get("gamePerformance").and_then(Value::as_array) {
+        Some(arr) if !arr.is_empty() => serde_json::to_string(&Value::Array(arr.clone())).unwrap_or_else(|_| "[]".to_string()),
+        _ => serde_json::to_string(&json!([{"note": "Keine Kategorie-Daten vorhanden (exp_sessions leer)"}])).unwrap_or_else(|_| "[]".to_string()),
+    };
+
+    // Multi-Game-Zeilen (Deadlock-Gesamt + Per-Game-Breakdown).
+    let dl = ctx.get("deadlockSummary").cloned().unwrap_or_else(|| json!({}));
+    let mut multi_lines = vec![format!(
+        "Deadlock (gesamt): {} Sessions | {}h | Ø {} Viewer | Peak {} | +{} Follower",
+        fmt_val(dl.get("sessionCount")),
+        fmt_val(dl.get("totalHours")),
+        fmt_val(dl.get("avgViewers")),
+        fmt_val(dl.get("peakViewers")),
+        fmt_val(dl.get("followersGained")),
+    )];
+    if let Some(gb) = ctx.get("gameBreakdown").and_then(Value::as_array) {
+        for g in gb {
+            let quality = if g.get("hasFullData").and_then(Value::as_bool).unwrap_or(false) {
+                ""
+            } else {
+                " (Viewer-Daten unvollständig)"
+            };
+            multi_lines.push(format!(
+                "  {}: {} Sessions | {}h | Ø {} Viewer | Peak {} | +{} Follower | zuletzt {}{}",
+                fmt_val(g.get("game")),
+                fmt_val(g.get("sessions")),
+                fmt_val(g.get("totalHours")),
+                fmt_val(g.get("avgViewers")),
+                fmt_val(g.get("peakViewers")),
+                fmt_val(g.get("followersGained")),
+                fmt_val(g.get("lastPlayed")),
+                quality,
+            ));
+        }
+    }
+    let multi = multi_lines.join("\n");
+
+    let sc = fmt_val(s.get("streamCount"));
+    let th = fmt_val(s.get("totalHours"));
+    let av = fmt_val(s.get("avgViewers"));
+    let pv = fmt_val(s.get("peakViewers"));
+    let fg = fmt_val(s.get("followersGained"));
+    let ret = fmt_val(s.get("avgRetention10m"));
+    let dp = fmt_val(s.get("avgDropoffPct"));
+    let ch = fmt_val(s.get("avgChatters"));
+    let best = dumps_array(ctx, "bestSessions");
+    let worst = dumps_array(ctx, "worstSessions");
+    let recent = dumps_array(ctx, "recentSessions");
+    let weekday = dumps_array(ctx, "weekdayPerformance");
+    let trend = dumps_array(ctx, "weeklyTrend");
+
+    let mut prompt = format!(
+        "Du bist ein Experte für Twitch-Streaming-Analytik und Wachstumsstrategie.\n\n\
+Analysiere die Streaming-Daten des Kanals **{streamer}** (letzte {days} Tage, Modus: {mode_label}) und erstelle einen TIEFEN, DATEN-BASIERTEN 10-Punkte-Verbesserungsplan.\n\n\
+REGELN:\n\
+- Referenziere IMMER konkrete Zahlen aus den Daten\n\
+- Keine generischen Ratschläge\n\
+- Erkläre das WARUM hinter jedem Pattern\n\
+- Priorisiere nach maximalem Impact (#1 = wichtigster Hebel)\n\
+- Zeige sowohl Chancen als auch Risiken auf\n\n\
+=== KPI ÜBERSICHT ===\n\
+Streams: {sc} | Gesamtzeit: {th}h\n\
+Ø Viewer: {av} | Peak: {pv}\n\
+Follower gewonnen: +{fg}\n\
+Ø 10-Min-Retention: {ret}% | Ø Dropoff: {dp}%\n\
+Ø Aktive Chatter: {ch}\n\n\
+=== TOP 5 STREAMS (Ø Viewer) ===\n{best}\n\n\
+=== SCHWÄCHSTE 5 STREAMS ===\n{worst}\n\n\
+=== LETZTE 20 SESSIONS ===\n{recent}\n\n\
+=== WOCHENTAG-PERFORMANCE ===\n{weekday}\n\n\
+=== KATEGORIEN-PERFORMANCE ===\n{game_section}\n\n\
+=== ALLE GESTREAMTEN SPIELE (inkl. Nicht-Deadlock) ===\n{multi}\n\n\
+=== WÖCHENTLICHER FOLLOWER-TREND ===\n{trend}"
+    );
+    prompt.push_str(PROMPT_TAIL);
+    if !user_context.is_empty() {
+        prompt.push_str(&format!(
+            "\n\n=== STREAMER-KONTEXT ===\nDer Streamer hat folgende eigene Eindrücke/Fragen mitgegeben: {user_context}"
+        ));
+    }
+    prompt
+}
+
 /// Erstes vollständiges JSON-Array aus `text` (string-aware: `]` innerhalb von
 /// Strings wird übersprungen). `None`, wenn das Array nicht terminiert ist
 /// (abgeschnittene Antwort). Port von `_extract_json_array`.
@@ -600,5 +757,39 @@ mod tests {
         let v = collect_ai_context(&pool, "nani", since, "deadlock").await.unwrap();
         assert_eq!(v["summary"]["streamCount"], 1);
         assert_eq!(v["summary"]["avgViewers"], 50.0);
+    }
+
+    #[test]
+    fn build_prompt_kpi_und_floats() {
+        let ctx = json!({
+            "summary": {"streamCount": 2, "totalHours": 3.0, "avgViewers": 40.0, "peakViewers": 100,
+                        "followersGained": 25, "avgRetention10m": 70.0, "avgDropoffPct": 15.0, "avgChatters": 9},
+            "gamePerformance": [],
+            "deadlockSummary": {"sessionCount": 1, "totalHours": 2.0, "avgViewers": 50.0, "peakViewers": 100, "followersGained": 20},
+            "gameBreakdown": [
+                {"game": "Deadlock", "sessions": 1, "totalHours": 2.0, "avgViewers": 50.0, "peakViewers": 100, "followersGained": 20, "lastPlayed": "2026-06-10", "hasFullData": true},
+                {"game": "Just Chatting", "sessions": 1, "totalHours": 1.0, "avgViewers": 30.0, "peakViewers": 60, "followersGained": 5, "lastPlayed": "2026-06-11", "hasFullData": false}
+            ],
+            "bestSessions": [], "worstSessions": [], "recentSessions": [], "weekdayPerformance": [], "weeklyTrend": []
+        });
+
+        let p = build_ai_analysis_prompt("nani", 30, &ctx, "all", "");
+        assert!(p.contains("Kanals **nani** (letzte 30 Tage, Modus: Alle gespielten Kategorien)"));
+        // Float-Repr (40.0, nicht 40) + Integer (2).
+        assert!(p.contains("Streams: 2 | Gesamtzeit: 3.0h"));
+        assert!(p.contains("Ø Viewer: 40.0 | Peak: 100"));
+        // Leere gamePerformance → Hinweis-Objekt.
+        assert!(p.contains("Keine Kategorie-Daten vorhanden (exp_sessions leer)"));
+        // Multi-Game-Zeilen + Qualitätshinweis bei hasFullData=false.
+        assert!(p.contains("Deadlock (gesamt): 1 Sessions | 2.0h | Ø 50.0 Viewer | Peak 100 | +20 Follower"));
+        assert!(p.contains("Just Chatting: 1 Sessions | 1.0h | Ø 30.0 Viewer | Peak 60 | +5 Follower | zuletzt 2026-06-11 (Viewer-Daten unvollständig)"));
+        // Statischer Abschluss + kein user_context-Block.
+        assert!(p.contains("Antworte NUR als JSON Array mit exakt 10 Objekten"));
+        assert!(!p.contains("STREAMER-KONTEXT"));
+
+        // Mit user_context + deadlock-Modus.
+        let p2 = build_ai_analysis_prompt("nani", 7, &ctx, "deadlock", "Mehr Action gewünscht");
+        assert!(p2.contains("Modus: Nur Deadlock-Sessions"));
+        assert!(p2.ends_with("=== STREAMER-KONTEXT ===\nDer Streamer hat folgende eigene Eindrücke/Fragen mitgegeben: Mehr Action gewünscht"));
     }
 }
