@@ -741,6 +741,148 @@ pub async fn tag_optimization(
     }))
 }
 
+/// Normalisierte Viewer-Kurve (Python `_build_viewer_curve`): pro 5-Minuten-
+/// Marke der Ø-Anteil `viewer_count / peak * 100` über die Sessions. Rückgabe =
+/// `(minute, gerundeter Prozentwert)` für 0,5,…,60.
+async fn build_viewer_curve(
+    pool: &PgPool,
+    session_ids: &[i64],
+    peak_viewers: &[i64],
+) -> Result<Vec<(i32, f64)>, sqlx::Error> {
+    if session_ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    let pairs: Vec<(i64, i64)> = session_ids
+        .iter()
+        .zip(peak_viewers.iter())
+        .map(|(s, p)| (*s, *p))
+        .collect();
+    let ids: Vec<i64> = pairs.iter().map(|(s, _)| *s).collect();
+
+    let rows: Vec<(i64, Option<i32>, i32)> = sqlx::query_as(
+        "SELECT session_id, minutes_from_start, viewer_count \
+           FROM twitch_session_viewers \
+          WHERE session_id = ANY($1) AND minutes_from_start <= 60 \
+          ORDER BY session_id, minutes_from_start",
+    )
+    .bind(&ids)
+    .fetch_all(pool)
+    .await?;
+
+    let peak_map: HashMap<i64, i64> = pairs.into_iter().collect();
+    let mut by_minute: HashMap<i32, Vec<f64>> = HashMap::new();
+    for (sid, minute, vc) in &rows {
+        // NULL-Minuten landen in Python in by_minute[None] → nie gelesen (curve
+        // fragt nur 0..60 ab); hier überspringen = identische Kurve.
+        let Some(minute) = minute else { continue };
+        let peak = peak_map.get(sid).copied().unwrap_or(1);
+        if peak > 0 {
+            by_minute
+                .entry(*minute)
+                .or_default()
+                .push(*vc as f64 / peak as f64 * 100.0);
+        }
+    }
+
+    let mut curve: Vec<(i32, f64)> = Vec::new();
+    let mut m = 0;
+    while m <= 60 {
+        let avg = match by_minute.get(&m) {
+            Some(vals) if !vals.is_empty() => vals.iter().sum::<f64>() / vals.len() as f64,
+            _ => 0.0,
+        };
+        curve.push((m, round1(avg)));
+        m += 5;
+    }
+    Ok(curve)
+}
+
+fn curve_to_json(curve: &[(i32, f64)]) -> Vec<Value> {
+    curve
+        .iter()
+        .map(|(m, pct)| json!({ "minute": m, "avgViewerPct": pct }))
+        .collect()
+}
+
+/// `round(avg, 1) if avg else 0` — Pythons Truthiness (None ODER 0.0 → Int-0).
+fn retention_value(avg: Option<f64>) -> Value {
+    match avg {
+        Some(v) if v != 0.0 => json!(round1(v)),
+        _ => json!(0),
+    }
+}
+
+/// Retention-Coaching (Python `_retention_coaching`): 5-Min-Retention vs.
+/// Kategorie, eigene + Top-Performer-Viewer-Kurve und die kritische Abfall-
+/// Minute (erster 5-Min-Schritt mit > 10 % Verlust).
+pub async fn retention_coaching(
+    pool: &PgPool,
+    streamer: &str,
+    since: DateTime<Utc>,
+) -> Result<Value, sqlx::Error> {
+    let your_avg: Option<f64> = sqlx::query_scalar(
+        "SELECT AVG(retention_5m)::float8 FROM twitch_stream_sessions \
+          WHERE streamer_login = $1 AND started_at >= $2 AND retention_5m IS NOT NULL",
+    )
+    .bind(streamer)
+    .bind(since)
+    .fetch_one(pool)
+    .await?;
+
+    let cat_avg: Option<f64> = sqlx::query_scalar(
+        "SELECT AVG(retention_5m)::float8 FROM twitch_stream_sessions \
+          WHERE started_at >= $1 AND retention_5m IS NOT NULL",
+    )
+    .bind(since)
+    .fetch_one(pool)
+    .await?;
+
+    // Eigene Kurve: jüngste 20 Sessions mit peak > 0.
+    let your_sessions: Vec<(i64, i32)> = sqlx::query_as(
+        "SELECT s.id, s.peak_viewers FROM twitch_stream_sessions s \
+          WHERE s.streamer_login = $1 AND s.started_at >= $2 AND s.peak_viewers > 0 \
+          ORDER BY s.started_at DESC LIMIT 20",
+    )
+    .bind(streamer)
+    .bind(since)
+    .fetch_all(pool)
+    .await?;
+    let your_ids: Vec<i64> = your_sessions.iter().map(|(id, _)| *id).collect();
+    let your_peaks: Vec<i64> = your_sessions.iter().map(|(_, p)| *p as i64).collect();
+    let your_curve = build_viewer_curve(pool, &your_ids, &your_peaks).await?;
+
+    // Top-Performer-Kurve: beste 20 fremder Sessions nach avg_viewers.
+    let top_sessions: Vec<(i64, i32)> = sqlx::query_as(
+        "SELECT s.id, s.peak_viewers FROM twitch_stream_sessions s \
+          WHERE s.started_at >= $1 AND s.streamer_login != $2 AND s.peak_viewers > 0 \
+          ORDER BY s.avg_viewers DESC LIMIT 20",
+    )
+    .bind(since)
+    .bind(streamer)
+    .fetch_all(pool)
+    .await?;
+    let top_ids: Vec<i64> = top_sessions.iter().map(|(id, _)| *id).collect();
+    let top_peaks: Vec<i64> = top_sessions.iter().map(|(_, p)| *p as i64).collect();
+    let top_curve = build_viewer_curve(pool, &top_ids, &top_peaks).await?;
+
+    // Kritische Abfall-Minute: erster Schritt unter 90 % des Vorwerts.
+    let mut critical_minute = 0;
+    for i in 1..your_curve.len() {
+        if your_curve[i].1 < your_curve[i - 1].1 * 0.9 {
+            critical_minute = your_curve[i].0;
+            break;
+        }
+    }
+
+    Ok(json!({
+        "your5mRetention": retention_value(your_avg),
+        "category5mRetention": retention_value(cat_avg),
+        "yourViewerCurve": curve_to_json(&your_curve),
+        "topPerformerCurve": curve_to_json(&top_curve),
+        "criticalDropoffMinute": critical_minute,
+    }))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1054,5 +1196,64 @@ mod tests {
 
         // Underperformer: your_avg=(100+20)/2=60, Schwelle 48 → nur "Deadlock,Chill".
         assert_eq!(v["underperformingTags"], json!(["Deadlock,Chill"]));
+    }
+
+    #[tokio::test]
+    async fn retention_coaching_berechnet() {
+        let Some(pool) = make_pool("t_coach_ret").await else { return };
+        sqlx::query("CREATE TABLE twitch_session_viewers (session_id BIGINT NOT NULL, ts_utc TIMESTAMPTZ NOT NULL, minutes_from_start INTEGER, viewer_count INTEGER NOT NULL, PRIMARY KEY(session_id, ts_utc))")
+            .execute(&pool).await.unwrap();
+
+        // nani: retention 80 (peak 100) + 90 (peak 0) → AVG 85.
+        let nani_id: i64 = sqlx::query_scalar(
+            "INSERT INTO twitch_stream_sessions (streamer_login, started_at, retention_5m, peak_viewers, avg_viewers) \
+             VALUES ('nani', NOW()-INTERVAL '1 day', 80, 100, 40) RETURNING id",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO twitch_stream_sessions (streamer_login, started_at, retention_5m, peak_viewers, avg_viewers) \
+             VALUES ('nani', NOW()-INTERVAL '2 day', 90, 0, 30)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        // other: retention 70 (peak 200) → cat AVG (80+90+70)/3 = 80.
+        let other_id: i64 = sqlx::query_scalar(
+            "INSERT INTO twitch_stream_sessions (streamer_login, started_at, retention_5m, peak_viewers, avg_viewers) \
+             VALUES ('other', NOW()-INTERVAL '1 day', 70, 200, 500) RETURNING id",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+
+        // Viewer-Timeline: nani fällt min0=100 % → min5=50 % (kritischer Drop).
+        sqlx::query(
+            "INSERT INTO twitch_session_viewers (session_id, ts_utc, minutes_from_start, viewer_count) VALUES \
+            ($1, TIMESTAMPTZ '2026-06-14 12:00:00+00', 0, 100), \
+            ($1, TIMESTAMPTZ '2026-06-14 12:05:00+00', 5, 50), \
+            ($2, TIMESTAMPTZ '2026-06-14 12:00:00+00', 0, 200)",
+        )
+        .bind(nani_id)
+        .bind(other_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let v = retention_coaching(&pool, "nani", Utc::now() - chrono::Duration::days(30))
+            .await
+            .unwrap();
+
+        assert_eq!(v["your5mRetention"], 85.0);
+        assert_eq!(v["category5mRetention"], 80.0);
+        // Kurve: 13 Marken (0,5,..,60).
+        assert_eq!(v["yourViewerCurve"].as_array().unwrap().len(), 13);
+        assert_eq!(v["yourViewerCurve"][0], json!({ "minute": 0, "avgViewerPct": 100.0 }));
+        assert_eq!(v["yourViewerCurve"][1], json!({ "minute": 5, "avgViewerPct": 50.0 }));
+        // 50 < 100*0.9=90 → kritischer Drop bei Minute 5.
+        assert_eq!(v["criticalDropoffMinute"], 5);
+        // Top-Performer = other: 200/200 = 100 % bei Minute 0.
+        assert_eq!(v["topPerformerCurve"][0], json!({ "minute": 0, "avgViewerPct": 100.0 }));
     }
 }
