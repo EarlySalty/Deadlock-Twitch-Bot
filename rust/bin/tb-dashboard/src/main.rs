@@ -94,6 +94,22 @@ async fn main() {
         }
     }
 
+    // P0 (B2): Nativer Stripe-Webhook (Quelle der Wahrheit fürs Bezahlt-Sein).
+    // Ohne STRIPE_WEBHOOK_SECRET bleibt er aus → der Webhook-Pfad liefert 503
+    // (statt in den toten Python-Proxy zu fallen). Secret aus Env (Infisical),
+    // nie geloggt.
+    match tb_dashboard_api::stripe_webhook_config_from_env() {
+        Some(config) => {
+            app = app.layer(axum::Extension(config));
+            tracing::info!("Nativer Stripe-Webhook aktiv");
+        }
+        None => {
+            tracing::warn!(
+                "STRIPE_WEBHOOK_SECRET fehlt — nativer Stripe-Webhook deaktiviert (503)"
+            );
+        }
+    }
+
     tracing::info!("tb-dashboard lauscht auf {addr}");
     let listener = tokio::net::TcpListener::bind(addr)
         .await

@@ -1,0 +1,861 @@
+//! Anwendung verifizierter Stripe-Webhook-Events auf den Plan-/Entitlement-Zustand.
+//!
+//! Wert-identischer Port von
+//! `bot/dashboard/billing/billing_mixin.py:_billing_apply_webhook_event`
+//! (plus `_billing_subscription_payload_from_object`,
+//! `_billing_upsert_subscription_state`, `_billing_sync_plan_to_streamer_plans`,
+//! `_billing_plan_name_from_id`).
+//!
+//! **Quelle der Wahrheit fürs Bezahlt-Sein** (Grillme Block 2A): Stripe meldet
+//! Subscription-Lifecycle-Events; dieser Code schreibt sie nach
+//! `twitch_billing_subscriptions` (Roh-Abo-Zustand) und spiegelt den effektiven
+//! Plan nach `streamer_plans` (`plan_name`/`expires_at`).
+//!
+//! Die HTTP-/Signatur-Schicht (Roh-Body, `Stripe-Signature`,
+//! [`super::webhook_sig::verify_signature`], Event-Dedup) liegt im Dashboard-
+//! Handler; hier ist nur die idempotente Zustands-Anwendung pro bereits
+//! deduplizierter Event-Payload.
+
+use chrono::{DateTime, Utc};
+use serde_json::Value;
+use sqlx::PgPool;
+
+use crate::billing::normalize_billing_cycle;
+
+/// Ergebnis-Aktion der Event-Anwendung (stabile Strings, Python-Parität — werden
+/// in der JSON-Antwort des Handlers gespiegelt).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WebhookAction {
+    /// `event_type` war leer.
+    IgnoredMissingType,
+    /// `customer.subscription.*` → Abo-Zustand aktualisiert.
+    SubscriptionStateUpdated,
+    /// `checkout.session.completed` (mode=subscription) → Abo erfasst.
+    CheckoutSubscriptionRecorded,
+    /// `checkout.session.completed` mit anderem `mode` → ignoriert.
+    CheckoutIgnoredNonSubscription,
+    /// `invoice.payment_succeeded` mit Subscription → Zahlung erfasst.
+    InvoicePaymentRecorded,
+    /// `invoice.payment_failed` mit Subscription → `past_due` gesetzt.
+    InvoiceFailureRecorded,
+    /// Invoice-Event ohne `subscription` → ignoriert.
+    InvoiceIgnoredWithoutSubscription,
+    /// Unbekannter/nicht unterstützter Event-Typ → No-op.
+    IgnoredUnsupportedEvent,
+}
+
+impl WebhookAction {
+    /// Stabiler Status-String (identisch zu Pythons Rückgabewerten).
+    pub fn as_str(self) -> &'static str {
+        match self {
+            WebhookAction::IgnoredMissingType => "ignored_missing_type",
+            WebhookAction::SubscriptionStateUpdated => "subscription_state_updated",
+            WebhookAction::CheckoutSubscriptionRecorded => "checkout_subscription_recorded",
+            WebhookAction::CheckoutIgnoredNonSubscription => "checkout_ignored_non_subscription",
+            WebhookAction::InvoicePaymentRecorded => "invoice_payment_recorded",
+            WebhookAction::InvoiceFailureRecorded => "invoice_failure_recorded",
+            WebhookAction::InvoiceIgnoredWithoutSubscription => "invoice_ignored_without_subscription",
+            WebhookAction::IgnoredUnsupportedEvent => "ignored_unsupported_event",
+        }
+    }
+}
+
+/// Aus einer Stripe-Subscription extrahierter Roh-Zustand.
+///
+/// Port von `_billing_subscription_payload_from_object`. Felder sind bereits
+/// normalisiert (getrimmte Strings, ISO-8601-Zeitstempel, `cycle_months` ≥ 1).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SubscriptionState {
+    pub stripe_subscription_id: String,
+    pub stripe_customer_id: String,
+    pub customer_reference: String,
+    pub status: String,
+    pub plan_id: String,
+    pub cycle_months: i32,
+    pub quantity: i32,
+    pub current_period_start: Option<String>,
+    pub current_period_end: Option<String>,
+    pub cancel_at_period_end: bool,
+    pub canceled_at: Option<String>,
+    pub ended_at: Option<String>,
+    pub last_event_id: String,
+}
+
+/// `plan_id` (Stripe-/Katalog-seitig) → `streamer_plans.plan_name`.
+///
+/// 1:1 `_billing_plan_name_from_id`: nur drei Pläne mappen auf einen
+/// Nicht-Frei-Namen, alles andere fällt auf `"free"`. (Bewusst KEINE
+/// Voll-Auflösung des Katalogs — diese Engführung ist das Python-Orakel.)
+pub fn plan_name_from_id(plan_id: &str) -> &'static str {
+    match plan_id.trim() {
+        "raid_boost" => "raid_boost",
+        "analysis_dashboard" => "analysis",
+        "bundle_analysis_raid_boost" => "bundle",
+        _ => "free",
+    }
+}
+
+/// `serde_json`-Helfer: getrimmter String an `obj[key]` (sonst `""`).
+fn str_field(obj: &Value, key: &str) -> String {
+    obj.get(key)
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .trim()
+        .to_string()
+}
+
+/// Epoch-Sekunden (`obj[key]`) → ISO-8601-UTC, analog `_billing_epoch_to_iso`.
+/// `<= 0`, fehlend oder nicht-numerisch → `None`.
+fn epoch_to_iso(obj: &Value, key: &str) -> Option<String> {
+    let epoch = obj.get(key).and_then(value_as_i64).unwrap_or(0);
+    if epoch <= 0 {
+        return None;
+    }
+    DateTime::<Utc>::from_timestamp(epoch, 0).map(|dt| dt.to_rfc3339())
+}
+
+/// Liest einen i64 aus Zahl ODER numerischem String (Stripe liefert Epochs als
+/// JSON-Zahl; Metadaten-Felder kommen als String).
+fn value_as_i64(v: &Value) -> Option<i64> {
+    if let Some(n) = v.as_i64() {
+        return Some(n);
+    }
+    if let Some(f) = v.as_f64() {
+        return Some(f as i64);
+    }
+    v.as_str().and_then(|s| s.trim().parse::<i64>().ok())
+}
+
+/// Extrahiert den Abo-Zustand aus einem Stripe-Subscription-Objekt.
+///
+/// Port von `_billing_subscription_payload_from_object`. `plan_id` wird in der
+/// Python-Reihenfolge aufgelöst: Subscription-`metadata.plan_id` →
+/// `price.metadata.plan_id` → `price.lookup_key`.
+pub fn subscription_payload_from_object(sub: &Value) -> SubscriptionState {
+    let metadata = sub.get("metadata").cloned().unwrap_or(Value::Null);
+    let items_data = sub
+        .get("items")
+        .and_then(|i| i.get("data"))
+        .and_then(Value::as_array);
+    let first_item = items_data
+        .and_then(|arr| arr.first())
+        .cloned()
+        .unwrap_or(Value::Null);
+    let price = first_item.get("price").cloned().unwrap_or(Value::Null);
+    let price_metadata = price.get("metadata").cloned().unwrap_or(Value::Null);
+    let recurring = price.get("recurring").cloned().unwrap_or(Value::Null);
+
+    let interval = str_field(&recurring, "interval");
+    let interval_count = recurring
+        .get("interval_count")
+        .and_then(value_as_i64)
+        .unwrap_or(1);
+    // Python: cycle_months = interval_count if interval == "month" else 1.
+    let cycle_months = if interval == "month" {
+        i32::try_from(interval_count).unwrap_or(1)
+    } else {
+        1
+    };
+    let quantity = first_item
+        .get("quantity")
+        .and_then(value_as_i64)
+        .and_then(|q| i32::try_from(q).ok())
+        .unwrap_or(1);
+
+    // plan_id: metadata.plan_id → price.metadata.plan_id → price.lookup_key.
+    let plan_id = {
+        let from_meta = str_field(&metadata, "plan_id");
+        if !from_meta.is_empty() {
+            from_meta
+        } else {
+            let from_price_meta = str_field(&price_metadata, "plan_id");
+            if !from_price_meta.is_empty() {
+                from_price_meta
+            } else {
+                str_field(&price, "lookup_key")
+            }
+        }
+    };
+
+    SubscriptionState {
+        stripe_subscription_id: str_field(sub, "id"),
+        stripe_customer_id: str_field(sub, "customer"),
+        customer_reference: str_field(&metadata, "customer_reference"),
+        status: {
+            let s = str_field(sub, "status");
+            if s.is_empty() { "unknown".to_string() } else { s }
+        },
+        plan_id,
+        cycle_months,
+        quantity,
+        current_period_start: epoch_to_iso(sub, "current_period_start"),
+        current_period_end: epoch_to_iso(sub, "current_period_end"),
+        cancel_at_period_end: sub
+            .get("cancel_at_period_end")
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
+        canceled_at: epoch_to_iso(sub, "canceled_at"),
+        ended_at: epoch_to_iso(sub, "ended_at"),
+        last_event_id: String::new(),
+    }
+}
+
+/// UPSERT in `twitch_billing_subscriptions` mit Merge gegen den Bestand
+/// (Port von `_billing_upsert_subscription_state`).
+///
+/// Leere/`None`-Felder fallen auf den bestehenden Wert zurück, nie auf eine
+/// Überschreibung mit Leer — so überschreiben dünne Events (z. B.
+/// `invoice.payment_succeeded` mit nur Status) keine vollen Abo-Daten.
+async fn upsert_subscription_state(
+    tx: &mut sqlx::PgConnection,
+    state: &SubscriptionState,
+) -> Result<(), sqlx::Error> {
+    let sub_id = state.stripe_subscription_id.trim();
+    if sub_id.is_empty() {
+        return Ok(());
+    }
+
+    let existing: Option<ExistingRow> = sqlx::query_as(
+        r#"SELECT
+               stripe_customer_id, customer_reference, status, plan_id, cycle_months,
+               quantity, current_period_start, current_period_end, cancel_at_period_end,
+               canceled_at, ended_at, last_event_id
+           FROM twitch_billing_subscriptions
+           WHERE stripe_subscription_id = $1"#,
+    )
+    .bind(sub_id)
+    .fetch_optional(&mut *tx)
+    .await?;
+    let existing = existing.unwrap_or_default();
+
+    let merge = |new: &str, old: &Option<String>| -> Option<String> {
+        let n = new.trim();
+        if !n.is_empty() {
+            return Some(n.to_string());
+        }
+        old.as_deref().map(str::trim).filter(|s| !s.is_empty()).map(str::to_string)
+    };
+
+    let final_customer_id = merge(&state.stripe_customer_id, &existing.stripe_customer_id);
+    let final_customer_reference = merge(&state.customer_reference, &existing.customer_reference);
+    let final_status = {
+        let s = state.status.trim();
+        if !s.is_empty() {
+            s.to_string()
+        } else {
+            existing
+                .status
+                .as_deref()
+                .map(str::trim)
+                .filter(|v| !v.is_empty())
+                .unwrap_or("unknown")
+                .to_string()
+        }
+    };
+    let final_plan_id = merge(&state.plan_id, &existing.plan_id);
+    // cycle_months: neuer Wert falls > 0, sonst Bestand, mind. 1.
+    let final_cycle_months = {
+        let candidate = if state.cycle_months != 0 {
+            state.cycle_months
+        } else {
+            existing.cycle_months.unwrap_or(1)
+        };
+        candidate.max(1)
+    };
+    // quantity: neuer Wert falls > 0, sonst Bestand, geklemmt auf [1, 24].
+    let final_quantity = {
+        let candidate = if state.quantity != 0 {
+            state.quantity
+        } else {
+            existing.quantity.unwrap_or(1)
+        };
+        candidate.clamp(1, 24)
+    };
+    // Zeit-/Flag-Felder: None → Bestand übernehmen.
+    let final_period_start = state
+        .current_period_start
+        .clone()
+        .or(existing.current_period_start);
+    let final_period_end = state
+        .current_period_end
+        .clone()
+        .or(existing.current_period_end);
+    // cancel_at_period_end: Event setzt immer explizit (bool); Python merget nur
+    // bei None — die Subscription-/Checkout-Pfade liefern aber stets einen Wert.
+    let final_cancel = i32::from(state.cancel_at_period_end);
+    let final_canceled_at = state.canceled_at.clone().or(existing.canceled_at);
+    let final_ended_at = state.ended_at.clone().or(existing.ended_at);
+    let final_last_event_id = merge(&state.last_event_id, &existing.last_event_id);
+    let updated_at = Utc::now().to_rfc3339();
+
+    sqlx::query(
+        r#"INSERT INTO twitch_billing_subscriptions (
+               stripe_subscription_id, stripe_customer_id, customer_reference, status,
+               plan_id, cycle_months, quantity, current_period_start, current_period_end,
+               cancel_at_period_end, canceled_at, ended_at, last_event_id, updated_at
+           ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
+           ON CONFLICT (stripe_subscription_id) DO UPDATE SET
+               stripe_customer_id = EXCLUDED.stripe_customer_id,
+               customer_reference = EXCLUDED.customer_reference,
+               status = EXCLUDED.status,
+               plan_id = EXCLUDED.plan_id,
+               cycle_months = EXCLUDED.cycle_months,
+               quantity = EXCLUDED.quantity,
+               current_period_start = EXCLUDED.current_period_start,
+               current_period_end = EXCLUDED.current_period_end,
+               cancel_at_period_end = EXCLUDED.cancel_at_period_end,
+               canceled_at = EXCLUDED.canceled_at,
+               ended_at = EXCLUDED.ended_at,
+               last_event_id = EXCLUDED.last_event_id,
+               updated_at = EXCLUDED.updated_at"#,
+    )
+    .bind(sub_id)
+    .bind(final_customer_id)
+    .bind(final_customer_reference)
+    .bind(&final_status)
+    .bind(final_plan_id)
+    .bind(final_cycle_months)
+    .bind(final_quantity)
+    .bind(final_period_start)
+    .bind(final_period_end)
+    .bind(final_cancel)
+    .bind(final_canceled_at)
+    .bind(final_ended_at)
+    .bind(final_last_event_id)
+    .bind(&updated_at)
+    .execute(&mut *tx)
+    .await?;
+    Ok(())
+}
+
+#[derive(Default, sqlx::FromRow)]
+struct ExistingRow {
+    stripe_customer_id: Option<String>,
+    customer_reference: Option<String>,
+    status: Option<String>,
+    plan_id: Option<String>,
+    cycle_months: Option<i32>,
+    quantity: Option<i32>,
+    current_period_start: Option<String>,
+    current_period_end: Option<String>,
+    #[allow(dead_code)]
+    cancel_at_period_end: Option<i32>,
+    canceled_at: Option<String>,
+    ended_at: Option<String>,
+    last_event_id: Option<String>,
+}
+
+/// Spiegelt den Abo-Plan nach `streamer_plans` (Port von
+/// `_billing_sync_plan_to_streamer_plans`).
+///
+/// `customer_reference` ist ein Twitch-Login; er wird über die View
+/// `twitch_streamers_partner_state` auf `twitch_user_id` aufgelöst, dann nach
+/// `streamer_plans` (Konflikt auf `twitch_user_id`) geschrieben. Aktiv
+/// (`active`/`trialing`) → gemappter Plan-Name, sonst `free`. `expires_at` wird
+/// auf `NULL` gesetzt (Billing-Abo läuft, kein manuelles Ablaufdatum).
+async fn sync_plan_to_streamer_plans(
+    tx: &mut sqlx::PgConnection,
+    customer_reference: &str,
+    plan_id: &str,
+    status: &str,
+) -> Result<(), sqlx::Error> {
+    let reference = customer_reference.trim();
+    if reference.is_empty() {
+        return Ok(());
+    }
+    let is_active = matches!(status.trim(), "active" | "trialing");
+    let effective_plan = if is_active {
+        plan_name_from_id(plan_id)
+    } else {
+        "free"
+    };
+
+    sqlx::query(
+        r#"INSERT INTO streamer_plans (twitch_user_id, twitch_login, plan_name, expires_at)
+           SELECT twitch_user_id, twitch_login, $1, NULL
+           FROM twitch_streamers_partner_state
+           WHERE LOWER(twitch_login) = LOWER($2)
+           ON CONFLICT (twitch_user_id) DO UPDATE SET
+               plan_name = EXCLUDED.plan_name,
+               expires_at = EXCLUDED.expires_at"#,
+    )
+    .bind(effective_plan)
+    .bind(reference)
+    .execute(&mut *tx)
+    .await?;
+    Ok(())
+}
+
+/// Wendet ein bereits verifiziertes und dedupliziertes Event auf den Zustand an.
+///
+/// 1:1 `_billing_apply_webhook_event`. Für `checkout.session.completed`
+/// (mode=subscription) muss die volle Subscription vom Aufrufer nachgeladen und
+/// als `retrieved_subscription` übergeben werden (analog Pythons
+/// `stripe.Subscription.retrieve` mit `expand=items.data.price`); ist sie `None`,
+/// wird nur der dünne Checkout-Zustand (`status=active` + Metadaten) erfasst.
+///
+/// `event_object` ist das `data.object` des Events.
+pub async fn apply_event(
+    tx: &mut sqlx::PgConnection,
+    event_id: &str,
+    event_type: &str,
+    event_object: &Value,
+    retrieved_subscription: Option<&Value>,
+) -> Result<WebhookAction, sqlx::Error> {
+    let event_name = event_type.trim();
+    if event_name.is_empty() {
+        return Ok(WebhookAction::IgnoredMissingType);
+    }
+
+    if let Some(_suffix) = event_name.strip_prefix("customer.subscription.") {
+        let mut payload = subscription_payload_from_object(event_object);
+        payload.last_event_id = event_id.to_string();
+        upsert_subscription_state(tx, &payload).await?;
+        sync_plan_to_streamer_plans(tx, &payload.customer_reference, &payload.plan_id, &payload.status)
+            .await?;
+        return Ok(WebhookAction::SubscriptionStateUpdated);
+    }
+
+    if event_name == "checkout.session.completed" {
+        let mode = str_field(event_object, "mode");
+        if mode != "subscription" {
+            return Ok(WebhookAction::CheckoutIgnoredNonSubscription);
+        }
+        let metadata = event_object.get("metadata").cloned().unwrap_or(Value::Null);
+        // customer_reference: metadata.customer_reference → client_reference_id.
+        let customer_reference = {
+            let from_meta = str_field(&metadata, "customer_reference");
+            if !from_meta.is_empty() {
+                from_meta
+            } else {
+                str_field(event_object, "client_reference_id")
+            }
+        };
+
+        // Dünner Basis-Zustand aus der Checkout-Session.
+        let mut payload = SubscriptionState {
+            stripe_subscription_id: str_field(event_object, "subscription"),
+            stripe_customer_id: str_field(event_object, "customer"),
+            customer_reference: customer_reference.clone(),
+            status: "active".to_string(),
+            plan_id: str_field(&metadata, "plan_id"),
+            cycle_months: i32::try_from(normalize_billing_cycle(
+                metadata
+                    .get("cycle_months")
+                    .and_then(value_as_i64)
+                    .and_then(|c| u32::try_from(c).ok())
+                    .unwrap_or(1),
+            ))
+            .unwrap_or(1),
+            quantity: metadata
+                .get("quantity")
+                .and_then(value_as_i64)
+                .and_then(|q| i32::try_from(q).ok())
+                .filter(|q| *q >= 1)
+                .unwrap_or(1),
+            cancel_at_period_end: false,
+            last_event_id: event_id.to_string(),
+            ..SubscriptionState::default()
+        };
+
+        // Volle Subscription nachladen (vom Aufrufer) → überschreibt den dünnen
+        // Zustand, aber customer_reference aus der Session bleibt Fallback.
+        if !payload.stripe_subscription_id.is_empty() {
+            if let Some(sub) = retrieved_subscription {
+                let mut sub_payload = subscription_payload_from_object(sub);
+                if sub_payload.customer_reference.trim().is_empty() {
+                    sub_payload.customer_reference = customer_reference.clone();
+                }
+                sub_payload.last_event_id = event_id.to_string();
+                payload = sub_payload;
+            }
+        }
+
+        upsert_subscription_state(tx, &payload).await?;
+        sync_plan_to_streamer_plans(tx, &payload.customer_reference, &payload.plan_id, &payload.status)
+            .await?;
+        // TODO(affiliate): Pythons checkout-Pfad gewährt `bonus_months` (annual)
+        // aus der Subscription-Metadata via manual_plan_expires_at — separater
+        // Bonus-/Affiliate-Hook (Block 2B), hier bewusst NICHT gebaut.
+        return Ok(WebhookAction::CheckoutSubscriptionRecorded);
+    }
+
+    if event_name == "invoice.payment_succeeded" {
+        let subscription_id = str_field(event_object, "subscription");
+        if subscription_id.is_empty() {
+            return Ok(WebhookAction::InvoiceIgnoredWithoutSubscription);
+        }
+        let state = SubscriptionState {
+            stripe_subscription_id: subscription_id,
+            stripe_customer_id: str_field(event_object, "customer"),
+            status: "active".to_string(),
+            last_event_id: event_id.to_string(),
+            ..SubscriptionState::default()
+        };
+        upsert_subscription_state(tx, &state).await?;
+        // TODO(affiliate, Block 2B): Pythons Pfad ruft hier
+        // `_affiliate_process_commission` (30 % Provision bei Zahlung) auf —
+        // SEPARATES Ticket. Hook-Punkt: amount_paid/currency/invoice_id/period_*
+        // stehen im event_object bereit.
+        return Ok(WebhookAction::InvoicePaymentRecorded);
+    }
+
+    if event_name == "invoice.payment_failed" {
+        let subscription_id = str_field(event_object, "subscription");
+        if subscription_id.is_empty() {
+            return Ok(WebhookAction::InvoiceIgnoredWithoutSubscription);
+        }
+        let state = SubscriptionState {
+            stripe_subscription_id: subscription_id,
+            stripe_customer_id: str_field(event_object, "customer"),
+            status: "past_due".to_string(),
+            last_event_id: event_id.to_string(),
+            ..SubscriptionState::default()
+        };
+        upsert_subscription_state(tx, &state).await?;
+        return Ok(WebhookAction::InvoiceFailureRecorded);
+    }
+
+    Ok(WebhookAction::IgnoredUnsupportedEvent)
+}
+
+/// Idempotenter Dedup-Insert in `twitch_billing_events`.
+///
+/// Gibt `Ok(true)` zurück, wenn das Event NEU war (Insert erfolgreich),
+/// `Ok(false)` bei Duplikat (`stripe_event_id` schon vorhanden — Stripe-Replay).
+/// Port der Dedup-Logik aus `routes_billing.py:api_billing_stripe_webhook`.
+pub async fn record_event_once(
+    tx: &mut sqlx::PgConnection,
+    event_id: &str,
+    event_type: &str,
+    object_id: &str,
+    livemode: bool,
+    payload: &str,
+) -> Result<bool, sqlx::Error> {
+    if event_id.trim().is_empty() {
+        // Ohne Event-ID keine Dedup möglich → wie Python: trotzdem anwenden.
+        return Ok(true);
+    }
+    let received_at = Utc::now().to_rfc3339();
+    let result = sqlx::query(
+        r#"INSERT INTO twitch_billing_events
+               (stripe_event_id, event_type, object_id, received_at, livemode, payload)
+           VALUES ($1, $2, $3, $4, $5, $6)
+           ON CONFLICT (stripe_event_id) DO NOTHING"#,
+    )
+    .bind(event_id)
+    .bind(event_type)
+    .bind(object_id)
+    .bind(&received_at)
+    .bind(i32::from(livemode))
+    .bind(payload)
+    .execute(&mut *tx)
+    .await?;
+    Ok(result.rows_affected() == 1)
+}
+
+/// Stellt die beiden Webhook-Tabellen sicher (idempotent). In Prod von der
+/// Baseline-Migration angelegt; hier defensiv für ältere/leere Schemata —
+/// spiegelt `_billing_ensure_storage_tables` (nur die Event-Tabelle relevant).
+pub async fn ensure_event_table(pool: &PgPool) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        r#"CREATE TABLE IF NOT EXISTS twitch_billing_events (
+               stripe_event_id TEXT PRIMARY KEY,
+               event_type TEXT NOT NULL,
+               object_id TEXT,
+               received_at TEXT NOT NULL,
+               livemode INTEGER NOT NULL DEFAULT 0,
+               payload TEXT NOT NULL
+           )"#,
+    )
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    // ── Plan-Name-Mapping (Geld-kritisch: nur 3 Pläne ≠ free) ───────────────
+    #[test]
+    fn plan_name_map_matches_python_oracle() {
+        assert_eq!(plan_name_from_id("raid_boost"), "raid_boost");
+        assert_eq!(plan_name_from_id("analysis_dashboard"), "analysis");
+        assert_eq!(plan_name_from_id("bundle_analysis_raid_boost"), "bundle");
+        // Alles andere → free (auch sonst bezahlte Pläne — Python-Engführung).
+        assert_eq!(plan_name_from_id("chat_quiet"), "free");
+        assert_eq!(plan_name_from_id("bundle_komplett"), "free");
+        assert_eq!(plan_name_from_id("raid_free"), "free");
+        assert_eq!(plan_name_from_id(""), "free");
+        assert_eq!(plan_name_from_id("  raid_boost  "), "raid_boost");
+    }
+
+    // ── Subscription-Payload-Extraktion ─────────────────────────────────────
+    #[test]
+    fn payload_extraction_full_object() {
+        let sub = json!({
+            "id": "sub_123",
+            "customer": "cus_abc",
+            "status": "active",
+            "metadata": { "customer_reference": "streamerlogin", "plan_id": "raid_boost" },
+            "current_period_start": 1_700_000_000,
+            "current_period_end": 1_702_000_000,
+            "cancel_at_period_end": true,
+            "items": { "data": [ {
+                "quantity": 1,
+                "price": {
+                    "lookup_key": "deadlock_raid_boost_1m_net_v2",
+                    "recurring": { "interval": "month", "interval_count": 1 },
+                    "metadata": {}
+                }
+            } ] }
+        });
+        let state = subscription_payload_from_object(&sub);
+        assert_eq!(state.stripe_subscription_id, "sub_123");
+        assert_eq!(state.stripe_customer_id, "cus_abc");
+        assert_eq!(state.customer_reference, "streamerlogin");
+        assert_eq!(state.status, "active");
+        assert_eq!(state.plan_id, "raid_boost");
+        assert_eq!(state.cycle_months, 1);
+        assert_eq!(state.quantity, 1);
+        assert!(state.cancel_at_period_end);
+        assert!(state.current_period_start.is_some());
+        assert!(state.current_period_end.is_some());
+    }
+
+    #[test]
+    fn payload_plan_id_resolution_order() {
+        // metadata.plan_id leer → price.metadata.plan_id.
+        let sub = json!({
+            "id": "sub_1", "customer": "c", "status": "active", "metadata": {},
+            "items": { "data": [ { "price": {
+                "metadata": { "plan_id": "analysis_dashboard" },
+                "lookup_key": "ignored_key",
+                "recurring": { "interval": "year", "interval_count": 1 }
+            } } ] }
+        });
+        let state = subscription_payload_from_object(&sub);
+        assert_eq!(state.plan_id, "analysis_dashboard");
+        // interval != month → cycle 1.
+        assert_eq!(state.cycle_months, 1);
+
+        // beide metadata leer → lookup_key.
+        let sub2 = json!({
+            "id": "s", "status": "active", "metadata": {},
+            "items": { "data": [ { "price": {
+                "metadata": {}, "lookup_key": "fallback_key",
+                "recurring": { "interval": "month", "interval_count": 12 }
+            } } ] }
+        });
+        let state2 = subscription_payload_from_object(&sub2);
+        assert_eq!(state2.plan_id, "fallback_key");
+        assert_eq!(state2.cycle_months, 12);
+    }
+
+    #[test]
+    fn payload_empty_status_defaults_unknown() {
+        let sub = json!({ "id": "s", "metadata": {} });
+        let state = subscription_payload_from_object(&sub);
+        assert_eq!(state.status, "unknown");
+        assert_eq!(state.cycle_months, 1);
+        assert_eq!(state.quantity, 1);
+        assert!(state.current_period_end.is_none());
+    }
+
+    #[test]
+    fn epoch_to_iso_handles_zero_and_missing() {
+        let obj = json!({ "a": 0, "b": 1_700_000_000_i64 });
+        assert!(epoch_to_iso(&obj, "a").is_none());
+        assert!(epoch_to_iso(&obj, "missing").is_none());
+        assert!(epoch_to_iso(&obj, "b").is_some());
+    }
+
+    #[test]
+    fn action_status_strings_match_python() {
+        assert_eq!(WebhookAction::IgnoredMissingType.as_str(), "ignored_missing_type");
+        assert_eq!(
+            WebhookAction::SubscriptionStateUpdated.as_str(),
+            "subscription_state_updated"
+        );
+        assert_eq!(
+            WebhookAction::CheckoutSubscriptionRecorded.as_str(),
+            "checkout_subscription_recorded"
+        );
+        assert_eq!(
+            WebhookAction::CheckoutIgnoredNonSubscription.as_str(),
+            "checkout_ignored_non_subscription"
+        );
+        assert_eq!(WebhookAction::InvoicePaymentRecorded.as_str(), "invoice_payment_recorded");
+        assert_eq!(WebhookAction::InvoiceFailureRecorded.as_str(), "invoice_failure_recorded");
+        assert_eq!(
+            WebhookAction::InvoiceIgnoredWithoutSubscription.as_str(),
+            "invoice_ignored_without_subscription"
+        );
+        assert_eq!(
+            WebhookAction::IgnoredUnsupportedEvent.as_str(),
+            "ignored_unsupported_event"
+        );
+    }
+
+    // ── DB-Integration (skip ohne TB_TEST_DATABASE_URL) ─────────────────────
+    use sqlx::postgres::PgPoolOptions;
+
+    async fn pool_or_skip(schema: &str) -> Option<PgPool> {
+        let dsn = std::env::var("TB_TEST_DATABASE_URL").ok()?;
+        let pool = PgPoolOptions::new().max_connections(1).connect(&dsn).await.unwrap();
+        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE")).execute(&pool).await.unwrap();
+        sqlx::query(&format!("CREATE SCHEMA {schema}")).execute(&pool).await.unwrap();
+        sqlx::query(&format!("SET search_path TO {schema}")).execute(&pool).await.unwrap();
+        // Minimal-Schema: Abo-Tabelle, Event-Tabelle, Plan-Tabelle + Login-View-Ersatz.
+        sqlx::query(
+            r#"CREATE TABLE twitch_billing_subscriptions (
+                   stripe_subscription_id TEXT PRIMARY KEY,
+                   stripe_customer_id TEXT, customer_reference TEXT,
+                   status TEXT NOT NULL DEFAULT 'unknown', plan_id TEXT,
+                   cycle_months INTEGER NOT NULL DEFAULT 1, quantity INTEGER NOT NULL DEFAULT 1,
+                   current_period_start TEXT, current_period_end TEXT,
+                   cancel_at_period_end INTEGER NOT NULL DEFAULT 0,
+                   canceled_at TEXT, ended_at TEXT, last_event_id TEXT, updated_at TEXT NOT NULL
+               )"#,
+        ).execute(&pool).await.unwrap();
+        sqlx::query(
+            r#"CREATE TABLE streamer_plans (
+                   twitch_user_id TEXT PRIMARY KEY, twitch_login TEXT,
+                   plan_name TEXT NOT NULL DEFAULT 'free', expires_at TEXT
+               )"#,
+        ).execute(&pool).await.unwrap();
+        // Die View ist in Prod read-only; im Test als Tabelle für den Login→UID-Join.
+        sqlx::query(
+            r#"CREATE TABLE twitch_streamers_partner_state (
+                   twitch_login TEXT, twitch_user_id TEXT
+               )"#,
+        ).execute(&pool).await.unwrap();
+        ensure_event_table(&pool).await.unwrap();
+        Some(pool)
+    }
+
+    async fn sub_row(pool: &PgPool, sub_id: &str) -> Option<(String, Option<String>, Option<String>)> {
+        sqlx::query_as::<_, (String, Option<String>, Option<String>)>(
+            "SELECT status, plan_id, last_event_id FROM twitch_billing_subscriptions WHERE stripe_subscription_id = $1",
+        )
+        .bind(sub_id)
+        .fetch_optional(pool)
+        .await
+        .unwrap()
+    }
+
+    #[tokio::test]
+    async fn subscription_created_sets_plan() {
+        let Some(pool) = pool_or_skip("wh_sub_created").await else { return };
+        sqlx::query("INSERT INTO twitch_streamers_partner_state (twitch_login, twitch_user_id) VALUES ('streamerlogin','42')")
+            .execute(&pool).await.unwrap();
+        let event_object = json!({
+            "id": "sub_777", "customer": "cus_x", "status": "active",
+            "metadata": { "customer_reference": "streamerlogin", "plan_id": "raid_boost" },
+            "items": { "data": [ { "quantity": 1, "price": {
+                "recurring": { "interval": "month", "interval_count": 1 }, "metadata": {}
+            } } ] }
+        });
+        let mut tx = pool.acquire().await.unwrap();
+        let action = apply_event(&mut tx, "evt_1", "customer.subscription.created", &event_object, None)
+            .await.unwrap();
+        assert_eq!(action, WebhookAction::SubscriptionStateUpdated);
+        drop(tx);
+
+        let row = sub_row(&pool, "sub_777").await.unwrap();
+        assert_eq!(row.0, "active");
+        assert_eq!(row.1.as_deref(), Some("raid_boost"));
+        assert_eq!(row.2.as_deref(), Some("evt_1"));
+        // streamer_plans synchronisiert: raid_boost → plan_name "raid_boost".
+        let plan: (String, Option<String>) = sqlx::query_as(
+            "SELECT plan_name, expires_at FROM streamer_plans WHERE twitch_user_id = '42'",
+        ).fetch_one(&pool).await.unwrap();
+        assert_eq!(plan.0, "raid_boost");
+        assert!(plan.1.is_none());
+    }
+
+    #[tokio::test]
+    async fn subscription_deleted_clears_plan_to_free() {
+        let Some(pool) = pool_or_skip("wh_sub_deleted").await else { return };
+        sqlx::query("INSERT INTO twitch_streamers_partner_state (twitch_login, twitch_user_id) VALUES ('login2','7')")
+            .execute(&pool).await.unwrap();
+        // Erst aktiv setzen.
+        let active = json!({
+            "id": "sub_d", "customer": "c", "status": "active",
+            "metadata": { "customer_reference": "login2", "plan_id": "raid_boost" },
+            "items": { "data": [ { "price": { "recurring": { "interval": "month", "interval_count": 1 } } } ] }
+        });
+        let mut tx = pool.acquire().await.unwrap();
+        apply_event(&mut tx, "e1", "customer.subscription.created", &active, None).await.unwrap();
+        drop(tx);
+        // Dann löschen (status canceled) → free.
+        let deleted = json!({
+            "id": "sub_d", "customer": "c", "status": "canceled",
+            "metadata": { "customer_reference": "login2", "plan_id": "raid_boost" },
+            "items": { "data": [ { "price": { "recurring": { "interval": "month", "interval_count": 1 } } } ] }
+        });
+        let mut tx = pool.acquire().await.unwrap();
+        apply_event(&mut tx, "e2", "customer.subscription.deleted", &deleted, None).await.unwrap();
+        drop(tx);
+        let plan: (String,) = sqlx::query_as("SELECT plan_name FROM streamer_plans WHERE twitch_user_id = '7'")
+            .fetch_one(&pool).await.unwrap();
+        assert_eq!(plan.0, "free");
+    }
+
+    #[tokio::test]
+    async fn dedup_prevents_double_apply() {
+        let Some(pool) = pool_or_skip("wh_dedup").await else { return };
+        let mut tx = pool.acquire().await.unwrap();
+        let first = record_event_once(&mut tx, "evt_dup", "customer.subscription.updated", "sub_z", false, "{}")
+            .await.unwrap();
+        assert!(first, "erstes Event ist neu");
+        let second = record_event_once(&mut tx, "evt_dup", "customer.subscription.updated", "sub_z", false, "{}")
+            .await.unwrap();
+        assert!(!second, "Replay desselben event_id ist Duplikat");
+    }
+
+    #[tokio::test]
+    async fn unknown_event_type_is_noop() {
+        let Some(pool) = pool_or_skip("wh_unknown").await else { return };
+        let mut tx = pool.acquire().await.unwrap();
+        let action = apply_event(&mut tx, "e", "customer.created", &json!({"id": "x"}), None)
+            .await.unwrap();
+        assert_eq!(action, WebhookAction::IgnoredUnsupportedEvent);
+        let action2 = apply_event(&mut tx, "e", "", &json!({}), None).await.unwrap();
+        assert_eq!(action2, WebhookAction::IgnoredMissingType);
+    }
+
+    #[tokio::test]
+    async fn invoice_failed_sets_past_due_without_overwriting_plan() {
+        let Some(pool) = pool_or_skip("wh_invoice_failed").await else { return };
+        // Vorab volles Abo.
+        let active = json!({
+            "id": "sub_inv", "customer": "c", "status": "active",
+            "metadata": { "customer_reference": "l", "plan_id": "raid_boost" },
+            "items": { "data": [ { "price": { "recurring": { "interval": "month", "interval_count": 1 } } } ] }
+        });
+        let mut tx = pool.acquire().await.unwrap();
+        apply_event(&mut tx, "e1", "customer.subscription.created", &active, None).await.unwrap();
+        drop(tx);
+        // invoice.payment_failed (dünn) → status past_due, plan_id bleibt.
+        let invoice = json!({ "id": "in_1", "subscription": "sub_inv", "customer": "c" });
+        let mut tx = pool.acquire().await.unwrap();
+        let action = apply_event(&mut tx, "e2", "invoice.payment_failed", &invoice, None).await.unwrap();
+        assert_eq!(action, WebhookAction::InvoiceFailureRecorded);
+        drop(tx);
+        let row = sub_row(&pool, "sub_inv").await.unwrap();
+        assert_eq!(row.0, "past_due");
+        assert_eq!(row.1.as_deref(), Some("raid_boost"), "dünnes Event darf plan_id nicht löschen");
+    }
+
+    #[tokio::test]
+    async fn invoice_without_subscription_ignored() {
+        let Some(pool) = pool_or_skip("wh_invoice_nosub").await else { return };
+        let mut tx = pool.acquire().await.unwrap();
+        let action = apply_event(&mut tx, "e", "invoice.payment_succeeded", &json!({"id": "in"}), None)
+            .await.unwrap();
+        assert_eq!(action, WebhookAction::InvoiceIgnoredWithoutSubscription);
+    }
+}
