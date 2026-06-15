@@ -2388,6 +2388,7 @@ name = "tb-crypto"
 version = "0.1.0"
 dependencies = [
  "aes-gcm",
+ "base64",
  "hex",
  "rand 0.8.6",
  "serde_json",

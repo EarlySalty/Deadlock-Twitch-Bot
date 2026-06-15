@@ -9,4 +9,4 @@ pub mod field;
 pub mod token;
 
 pub use field::{FieldCipher, KEY_SIZE, KID, NONCE_SIZE, VERSION};
-pub use token::random_hex_token;
+pub use token::{constant_time_eq, random_hex_token, random_urlsafe_token};

@@ -6,6 +6,7 @@ edition.workspace = true
 [dependencies]
 tb-error.workspace = true
 aes-gcm.workspace = true
+base64.workspace = true
 hex.workspace = true
 rand.workspace = true
 zeroize.workspace = true

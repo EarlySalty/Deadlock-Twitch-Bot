@@ -12,7 +12,11 @@ pub mod process_info;
 pub mod proxy;
 
 pub use auth::level::DashboardAuthLevel;
-pub use auth::session::DashboardAuthState;
+pub use auth::security::{require_internal, RateLimiter};
+pub use auth::session::{
+    build_session_cookie, clear_session_cookie, DashboardAuthState, SameSite, SessionCreation,
+    ADMIN_COOKIE_NAME, PARTNER_COOKIE_NAME, SESSION_CREATE_TTL_SECS,
+};
 
 use axum::{
     routing::{get, post},
