@@ -25,6 +25,15 @@ pub fn social_media(
     format!("social_media_platform_auth|{column}|{platform}|{row}|{enc_version}")
 }
 
+/// `engagement_sender|<column>|<twitch_user_id>`
+///
+/// AAD des Engagement-Sende-Accounts (Smoke-Account). Anders als [`raid_auth`]
+/// **ohne** `enc_version`-Suffix — byte-identisch zu `sender_auth._access_aad`
+/// / `_refresh_aad` (Python `f"{PLATFORM}|{column}|{user_id}"`).
+pub fn engagement_sender(column: &str, twitch_user_id: &str) -> String {
+    format!("engagement_sender|{column}|{twitch_user_id}")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -46,6 +55,18 @@ mod tests {
         assert_eq!(
             social_media("client_secret", "youtube", Some("dragskope"), 1),
             "social_media_platform_auth|client_secret|youtube|dragskope|1"
+        );
+    }
+
+    #[test]
+    fn engagement_sender_aad_matches_python_format() {
+        assert_eq!(
+            engagement_sender("access_token", "987654"),
+            "engagement_sender|access_token|987654"
+        );
+        assert_eq!(
+            engagement_sender("refresh_token", "987654"),
+            "engagement_sender|refresh_token|987654"
         );
     }
 }
