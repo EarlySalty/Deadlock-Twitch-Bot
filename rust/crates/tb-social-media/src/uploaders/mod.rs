@@ -10,6 +10,7 @@ use std::path::Path;
 use async_trait::async_trait;
 use serde_json::Value;
 
+pub mod instagram;
 pub mod tiktok;
 pub mod youtube;
 
@@ -23,6 +24,8 @@ pub enum UploadError {
     Request(String),
     #[error("api error: {0}")]
     Api(String),
+    #[error("not implemented: {0}")]
+    NotImplemented(String),
     #[error("io: {0}")]
     Io(#[from] std::io::Error),
 }
