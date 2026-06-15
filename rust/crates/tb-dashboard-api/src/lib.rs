@@ -376,12 +376,16 @@ pub fn build_admin_streamers_router(pool: PgPool, token: String) -> Router {
 
 /// Baut den Router für Admin-Config-Endpoints (Schreib-Seite).
 pub fn build_admin_config_router(pool: PgPool, token: String) -> Router {
-    use handlers::{admin_config, admin_promo_mode};
+    use handlers::{admin_announcements, admin_config, admin_promo_mode};
 
     Router::new()
         .route(
             "/twitch/api/admin/config/overview",
             get(admin_config::config_overview_handler),
+        )
+        .route(
+            "/twitch/api/admin/announcements",
+            get(admin_announcements::get_handler).post(admin_announcements::save_handler),
         )
         .route(
             "/twitch/api/admin/config/promo",
