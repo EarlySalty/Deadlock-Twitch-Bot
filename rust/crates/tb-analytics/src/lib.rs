@@ -14,6 +14,7 @@ pub mod chat_content_analysis;
 pub mod chat_content_lexicon;
 pub mod chat_hype_timeline;
 pub mod chat_social_graph;
+pub mod engagement_metrics;
 pub mod exp_analytics;
 pub mod global_ban;
 pub mod market;

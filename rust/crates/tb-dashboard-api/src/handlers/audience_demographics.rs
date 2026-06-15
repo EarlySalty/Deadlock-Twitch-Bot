@@ -17,6 +17,7 @@ use sqlx::{PgPool, Row};
 use std::collections::HashMap;
 
 use crate::auth::level::DashboardAuthLevel;
+use tb_analytics::engagement_metrics::{calculate_engagement, quantile, EngagementInputs};
 
 const PEAK_SESSION_WINDOW: i64 = 30;
 const PEAK_HALF_LIFE_SESSIONS: f64 = 8.0;
@@ -26,83 +27,8 @@ const KNOWN_CHAT_BOTS: &[&str] = &[
     "pretzelrocks", "soundalerts", "streamlabs", "streamelements", "wizebot",
 ];
 
-// ─── Engagement ────────────────────────────────────────────────────────────────
-
-struct EngagementInputs {
-    total_messages: i64,
-    active_chatters: usize,
-    tracked_chat_accounts: usize,
-    chatters_api_seen: usize,
-    viewer_minutes: f64,
-    viewer_minutes_has_real_samples: bool,
-    avg_viewers: f64,
-    session_count: i64,
-    sessions_with_chat: i64,
-}
-
-struct EngagementOutputs {
-    chat_penetration_pct: Option<f64>,
-    chat_penetration_reliable: bool,
-    messages_per_100_viewer_minutes: Option<f64>,
-    viewer_minutes: f64,
-    legacy_interaction_active_per_avg_viewer: Option<f64>,
-    passive_viewer_samples: i64,
-    chatters_coverage: f64,
-    method: &'static str,
-    chat_session_coverage: f64,
-}
-
-fn safe_ratio(num: f64, den: f64) -> f64 {
-    if den <= 0.0 { 0.0 } else { num / den }
-}
-
-fn calculate_engagement(inp: &EngagementInputs) -> EngagementOutputs {
-    let tracked = inp.tracked_chat_accounts as f64;
-    let active = inp.active_chatters as f64;
-    let api_seen = inp.chatters_api_seen as f64;
-    let msgs = inp.total_messages.max(0) as f64;
-    let vm = inp.viewer_minutes.max(0.0);
-    let avg_v = inp.avg_viewers.max(0.0);
-    let sessions = inp.session_count.max(0) as f64;
-    let chat_sess = inp.sessions_with_chat.max(0) as f64;
-
-    let passive = ((tracked as i64) - (inp.active_chatters as i64)).max(0);
-    let chatters_coverage = safe_ratio(api_seen, tracked);
-    let active_ratio = safe_ratio(active, tracked);
-    let chat_penetration_pct = if tracked > 0.0 { Some((active_ratio * 100.0 * 10.0).round() / 10.0) } else { None };
-    let messages_per_100 = if vm > 0.0 { Some((msgs / vm * 100.0 * 100.0).round() / 100.0) } else { None };
-    let legacy = if avg_v > 0.0 { Some((active / avg_v * 100.0 * 10.0).round() / 10.0) } else { None };
-    let reliable = passive >= 1 && chatters_coverage >= 0.2;
-    let has_data = tracked > 0.0 || active > 0.0 || msgs > 0.0 || vm > 0.0;
-    let method: &'static str = if !has_data { "no_data" }
-        else if reliable && inp.viewer_minutes_has_real_samples { "real_samples" }
-        else { "low_coverage" };
-
-    EngagementOutputs {
-        chat_penetration_pct,
-        chat_penetration_reliable: reliable,
-        messages_per_100_viewer_minutes: messages_per_100,
-        viewer_minutes: (vm * 100.0).round() / 100.0,
-        legacy_interaction_active_per_avg_viewer: legacy,
-        passive_viewer_samples: passive,
-        chatters_coverage: (chatters_coverage * 1000.0).round() / 1000.0,
-        method,
-        chat_session_coverage: (safe_ratio(chat_sess, sessions) * 1000.0).round() / 1000.0,
-    }
-}
-
-// ─── Quantile (lineare Interpolation, wie Python _quantile) ──────────────────
-
-fn quantile(sorted: &[f64], q: f64) -> f64 {
-    if sorted.is_empty() { return 0.0; }
-    if sorted.len() == 1 { return sorted[0]; }
-    let pos = q.clamp(0.0, 1.0) * (sorted.len() - 1) as f64;
-    let lo = pos.floor() as usize;
-    let hi = pos.ceil() as usize;
-    if lo == hi { return sorted[lo]; }
-    let frac = pos - lo as f64;
-    sorted[lo] + (sorted[hi] - sorted[lo]) * frac
-}
+// Engagement-Berechnung + Quantile leben jetzt in tb_analytics::engagement_metrics
+// (geteilt mit chat-analytics; siehe `use` oben).
 
 // ─── Sprach-Label ────────────────────────────────────────────────────────────
 
