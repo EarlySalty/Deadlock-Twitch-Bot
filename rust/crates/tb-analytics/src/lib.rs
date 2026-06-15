@@ -13,6 +13,7 @@ pub mod admin_streamers;
 pub mod ai_analysis;
 pub mod ai_history;
 pub mod bans;
+pub mod billing;
 pub mod category_activity;
 pub mod chat_analytics;
 pub mod chat_analytics_lexicon;
