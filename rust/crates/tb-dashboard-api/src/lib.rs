@@ -94,6 +94,13 @@ pub fn build_authed_router(pool: PgPool, token: String) -> Router {
         .route("/social-media/api/admin/clips", get(social_media::admin_clips_handler))
         .route("/social-media/api/admin/clips/:clip_db_id", get(social_media::admin_clip_detail_handler))
         .route("/social-media/api/admin/clips/:clip_db_id/discard", post(social_media::admin_clip_discard_handler))
+        // Approval-State + Entscheidung, Auto-Approve-Settings (Admin).
+        .route("/social-media/api/admin/approval/:clip_db_id", get(social_media::approval_get_handler))
+        .route("/social-media/api/admin/approval/:clip_db_id/decision", post(social_media::approval_decision_handler))
+        .route(
+            "/social-media/api/admin/settings/auto-approve",
+            get(social_media::auto_approve_get_handler).put(social_media::auto_approve_put_handler),
+        )
         // Internal-Home: gebündelte Dashboard-Startseite (Profil, KPIs, Bot-Events,
         // Changelog). GET liest, POST legt einen Changelog-Eintrag an (Admin-only).
         .route(

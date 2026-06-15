@@ -24,9 +24,10 @@ use serde_json::{json, Value};
 use sqlx::postgres::PgRow;
 use sqlx::{PgPool, Postgres, QueryBuilder, Row};
 use tb_crypto::FieldCipher;
-use tb_social_media::approval::{get_approval_record, serialize_approval_record};
+use tb_social_media::approval::{get_approval_record, handle_decision, serialize_approval_record, ApprovalError};
 use tb_social_media::enrichment::get_enrichment;
 use tb_social_media::retention::mark_clip_discarded;
+use tb_social_media::settings::{coerce_bool, get_auto_approve_settings, set_auto_approve_settings, AutoApprove};
 use tb_social_media::clip_analytics::get_analytics_summary;
 use tb_social_media::credentials::{CredentialManager, PlatformStatus};
 use tb_social_media::clip_manager::get_clips_for_dashboard;
@@ -974,6 +975,121 @@ pub async fn admin_clip_discard_handler(auth: DashboardAuthLevel, State(pool): S
     }
 }
 
+fn invalid_payload() -> Response {
+    (StatusCode::BAD_REQUEST, Json(json!({ "error": "invalid_payload" }))).into_response()
+}
+
+fn invalid_json() -> Response {
+    (StatusCode::BAD_REQUEST, Json(json!({ "error": "invalid_json" }))).into_response()
+}
+
+/// Filtert eine Plattform-Liste (Python `_normalize_platform_list`): nur
+/// youtube/tiktok/instagram, dedupliziert; nicht-Liste (≠ null) → 400.
+fn normalize_platform_list(value: Option<&Value>) -> Result<Vec<String>, Response> {
+    match value {
+        None | Some(Value::Null) => Ok(Vec::new()),
+        Some(Value::Array(arr)) => {
+            let mut seen = std::collections::HashSet::new();
+            let mut cleaned = Vec::new();
+            for entry in arr {
+                let token = entry.as_str().map(|s| s.trim().to_lowercase()).unwrap_or_default();
+                if matches!(token.as_str(), "youtube" | "tiktok" | "instagram") && seen.insert(token.clone()) {
+                    cleaned.push(token);
+                }
+            }
+            Ok(cleaned)
+        }
+        Some(_) => Err((StatusCode::BAD_REQUEST, "platforms must be a list").into_response()),
+    }
+}
+
+/// `GET /social-media/api/admin/approval/:clip_db_id` — Approval-State (Admin).
+pub async fn approval_get_handler(auth: DashboardAuthLevel, State(pool): State<PgPool>, Path(raw): Path<String>) -> Response {
+    if let Err(e) = require_admin(&auth) {
+        return e;
+    }
+    let Some(clip_db_id) = normalize_id(Some(&Value::String(raw))) else {
+        return invalid_clip_db_id();
+    };
+    if load_clip_row(&pool, clip_db_id).await.is_none() {
+        return clip_not_found();
+    }
+    let approval = match get_approval_record(&pool, clip_db_id).await {
+        Some(r) => serialize_approval_record(&r),
+        None => Value::Null,
+    };
+    Json(json!({ "clip_db_id": clip_db_id, "approval": approval })).into_response()
+}
+
+/// `POST /social-media/api/admin/approval/:clip_db_id/decision` — Entscheidung (Admin).
+pub async fn approval_decision_handler(auth: DashboardAuthLevel, State(pool): State<PgPool>, Path(raw): Path<String>, body: String) -> Response {
+    if let Err(e) = require_admin(&auth) {
+        return e;
+    }
+    let Some(clip_db_id) = normalize_id(Some(&Value::String(raw))) else {
+        return invalid_clip_db_id();
+    };
+    if load_clip_row(&pool, clip_db_id).await.is_none() {
+        return clip_not_found();
+    }
+    let payload: Value = match serde_json::from_str(&body) {
+        Ok(v) => v,
+        Err(_) => return invalid_json(),
+    };
+    if !payload.is_object() {
+        return invalid_payload();
+    }
+    let decision = payload.get("decision").and_then(Value::as_str).unwrap_or("").trim().to_lowercase();
+    let platforms = match normalize_platform_list(payload.get("platforms")) {
+        Ok(p) => p,
+        Err(e) => return e,
+    };
+    match handle_decision(&pool, clip_db_id, &decision, &platforms, None).await {
+        Ok(record) => {
+            let clip = match load_clip_row(&pool, clip_db_id).await {
+                Some(c) => serialize_clip_record(&pool, &c).await,
+                None => Value::Null,
+            };
+            Json(json!({ "clip_db_id": clip_db_id, "approval": serialize_approval_record(&record), "clip": clip })).into_response()
+        }
+        Err(ApprovalError::Db(_)) => (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": "approval_decision_failed" }))).into_response(),
+        Err(e) => (StatusCode::BAD_REQUEST, Json(json!({ "error": "invalid_decision", "message": e.to_string() }))).into_response(),
+    }
+}
+
+/// `GET /social-media/api/admin/settings/auto-approve` — Auto-Approve-Flags (Admin).
+pub async fn auto_approve_get_handler(auth: DashboardAuthLevel, State(pool): State<PgPool>) -> Response {
+    if let Err(e) = require_admin(&auth) {
+        return e;
+    }
+    let s = get_auto_approve_settings(&pool).await;
+    Json(json!({ "youtube": s.youtube, "tiktok": s.tiktok, "instagram": s.instagram })).into_response()
+}
+
+/// `PUT /social-media/api/admin/settings/auto-approve` — Auto-Approve setzen (Admin).
+pub async fn auto_approve_put_handler(auth: DashboardAuthLevel, State(pool): State<PgPool>, body: String) -> Response {
+    if let Err(e) = require_admin(&auth) {
+        return e;
+    }
+    let payload: Value = match serde_json::from_str(&body) {
+        Ok(v) => v,
+        Err(_) => return invalid_json(),
+    };
+    if !payload.is_object() {
+        return invalid_payload();
+    }
+    // Fehlende Keys → false (kein Merge, mirror Python).
+    let values = AutoApprove {
+        youtube: payload.get("youtube").map(coerce_bool).unwrap_or(false),
+        tiktok: payload.get("tiktok").map(coerce_bool).unwrap_or(false),
+        instagram: payload.get("instagram").map(coerce_bool).unwrap_or(false),
+    };
+    match set_auto_approve_settings(&pool, values, None).await {
+        Ok(r) => Json(json!({ "youtube": r.youtube, "tiktok": r.tiktok, "instagram": r.instagram })).into_response(),
+        Err(_) => (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": "db" }))).into_response(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1054,6 +1170,7 @@ mod tests {
             "CREATE TABLE twitch_streamers (twitch_login TEXT PRIMARY KEY, twitch_user_id TEXT)",
             "CREATE TABLE social_media_streamer_layout (streamer_login TEXT PRIMARY KEY, layout_json JSONB NOT NULL, cam_enabled BOOLEAN NOT NULL DEFAULT TRUE, mode TEXT NOT NULL DEFAULT 'pip', updated_at TIMESTAMPTZ DEFAULT NOW(), updated_by TEXT)",
             "CREATE TABLE deadlock_vocab (term TEXT PRIMARY KEY, canonical TEXT NOT NULL, category TEXT NOT NULL, source TEXT NOT NULL DEFAULT 'manual', aliases JSONB NOT NULL DEFAULT '[]'::jsonb, weight INTEGER NOT NULL DEFAULT 1, updated_at TIMESTAMPTZ DEFAULT NOW())",
+            "CREATE TABLE social_media_settings (key TEXT PRIMARY KEY, value JSONB, updated_at TIMESTAMPTZ, updated_by TEXT)",
         ] {
             sqlx::query(ddl).execute(&pool).await.unwrap();
         }
@@ -1448,5 +1565,45 @@ mod tests {
         assert_eq!(admin_clip_discard_handler(DashboardAuthLevel::Admin, State(pool.clone()), Path("99999".into())).await.status(), StatusCode::NOT_FOUND);
         // Partner → 403.
         assert_eq!(admin_clips_handler(partner("nani"), State(pool.clone()), Query(clips_query(None))).await.status(), StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn approval_und_auto_approve() {
+        let Some(pool) = make_pool("t_dash_sm_approval").await else { return };
+        let clip: i32 = sqlx::query_scalar("INSERT INTO twitch_clips_social_media (clip_id, streamer_login, status) VALUES ('a', 'nani', 'awaiting_approval') RETURNING id").fetch_one(&pool).await.unwrap();
+        sqlx::query("INSERT INTO social_media_clip_enrichment (clip_db_id, title_tiktok) VALUES ($1, 'TT')").bind(clip).execute(&pool).await.unwrap();
+
+        // approval-get vor Entscheidung → approval null.
+        let resp = approval_get_handler(DashboardAuthLevel::Admin, State(pool.clone()), Path(clip.to_string())).await;
+        assert!(body_json(resp).await["approval"].is_null());
+
+        // decision approve mit tiktok → state approved + Queue.
+        let resp = approval_decision_handler(DashboardAuthLevel::Admin, State(pool.clone()), Path(clip.to_string()), "{\"decision\":\"approve\",\"platforms\":[\"tiktok\"]}".into()).await;
+        assert_eq!(resp.status(), StatusCode::OK);
+        let v = body_json(resp).await;
+        assert_eq!(v["approval"]["state"], "approved");
+        assert_eq!(v["approval"]["approved_platforms"], json!(["tiktok"]));
+        assert!(!v["clip"].is_null());
+
+        // decision approve ohne Plattform + ohne Auto-Approve → 400 invalid_decision.
+        let resp = approval_decision_handler(DashboardAuthLevel::Admin, State(pool.clone()), Path(clip.to_string()), "{\"decision\":\"approve\",\"platforms\":[]}".into()).await;
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+        // platforms kein Array → 400.
+        let resp = approval_decision_handler(DashboardAuthLevel::Admin, State(pool.clone()), Path(clip.to_string()), "{\"decision\":\"approve\",\"platforms\":\"tiktok\"}".into()).await;
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+
+        // auto-approve get (Defaults false) → put → get.
+        let resp = auto_approve_get_handler(DashboardAuthLevel::Admin, State(pool.clone())).await;
+        let v = body_json(resp).await;
+        assert_eq!(v, json!({ "youtube": false, "tiktok": false, "instagram": false }));
+        let resp = auto_approve_put_handler(DashboardAuthLevel::Admin, State(pool.clone()), "{\"youtube\":true,\"tiktok\":\"on\"}".into()).await;
+        let v = body_json(resp).await;
+        assert_eq!(v, json!({ "youtube": true, "tiktok": true, "instagram": false })); // missing instagram → false
+        let resp = auto_approve_get_handler(DashboardAuthLevel::Admin, State(pool.clone())).await;
+        assert_eq!(body_json(resp).await["youtube"], true);
+
+        // Partner → 403, invalid clip → 400.
+        assert_eq!(auto_approve_get_handler(partner("nani"), State(pool.clone())).await.status(), StatusCode::FORBIDDEN);
+        assert_eq!(approval_get_handler(DashboardAuthLevel::Admin, State(pool.clone()), Path("abc".into())).await.status(), StatusCode::BAD_REQUEST);
     }
 }
