@@ -27,6 +27,7 @@
 //! - `llm_dispatch` — LLM-Provider (Ollama) + consent-gated Dispatcher.
 //! - `enrich_pipeline` — Orchestrator (transcribe→correct→LLM→save).
 //! - `retention`   — Publication-Status (published_all ↔ pending).
+//! - `retention_worker` — Cleanup-Loop für abgelaufene Clips.
 //! - `clip_queue`  — Upload-Queue (`twitch_clips_upload_queue`).
 //! - `clip_templates` — Beschreibungs-Templates + Last-Hashtags.
 //! - `clip_analytics` — Analytics-Summary fürs Dashboard.
@@ -52,6 +53,7 @@ pub mod oauth;
 pub mod refresh_worker;
 pub mod rendering;
 pub mod retention;
+pub mod retention_worker;
 pub mod schema;
 pub mod seed_vocab;
 pub mod settings;
