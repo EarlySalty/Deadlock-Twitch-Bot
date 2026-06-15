@@ -33,12 +33,14 @@
 //! - `clip_queue`  — Upload-Queue (`twitch_clips_upload_queue`).
 //! - `clip_templates` — Beschreibungs-Templates + Last-Hashtags.
 //! - `clip_analytics` — Analytics-Summary fürs Dashboard.
+//! - `analytics`    — Clip-Statistik-Persistenz (`twitch_clips_social_analytics`).
 //!
 //! # Deaktiviert
 //! Der Clip-Fetcher-Task ist **standardmäßig deaktiviert** und wird nicht in
 //! `tb-bot` gestartet bis die Social-Media-Pipeline bereit ist. Aktivierung:
 //! Env-Var setzen + `ClipFetchTask::start_if_enabled()` aufrufen.
 
+pub mod analytics;
 pub mod approval;
 pub mod approval_worker;
 pub mod clip;
