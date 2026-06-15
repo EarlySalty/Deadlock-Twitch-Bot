@@ -30,8 +30,11 @@
 //!   Handler antwortet dafür ehrlich 503. GET teilt den Pfad mit POST
 //!   (axum: Pfad-Match vor Methoden-Match → nativer GET würde POST mit
 //!   405 statt Proxy-Fallback beantworten — kein Teil-Flip möglich).
-//! - POST /streamers/:login/chat-action: braucht den live rotierten
-//!   Bot-Token des Python-Chats.
+//!
+//! POST /streamers/:login/chat-action ist seit der Bot-Token-Bridge (F3) nativ:
+//! der Handler (python_stubs::chat_action_handler) sendet über den
+//! [`ChatActionPort`] mit dem live rotierten Bot-User-Token; ohne Port (Chat aus)
+//! antwortet er 503.
 //!
 //! Alle Endpoints: `auth.is_privileged()` → 401.
 //!
@@ -78,6 +81,51 @@ pub trait DiscordRolePort: Send + Sync {
 /// Router-Extension-Wrapper für [`DiscordRolePort`] (`None` = kein Sync).
 #[derive(Clone)]
 pub struct DiscordRoleExt(pub Option<Arc<dyn DiscordRolePort>>);
+
+// ── Chat-Action-Port (Bot-Token-Bridge) ────────────────────────────────────────
+
+/// Ergebnis eines `POST /streamers/:login/chat-action`.
+///
+/// Trennt sauber zwischen zugestellt, von Twitch verworfen (`is_sent=false`,
+/// z. B. Stummschaltung/Channel-Settings) und Fehler. Der Drop-Fall wird NIE
+/// als Erfolg gefälscht — Python-Parität (`mixin.py:_dashboard_partner_chat_action`
+/// liefert in dem Fall die „konnte nicht gesendet werden"-Meldung).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ChatActionResult {
+    /// Nachricht/Ankündigung zugestellt. `label` = menschenlesbare Bestätigung.
+    Sent { label: String },
+    /// Twitch hat verworfen (z. B. `channel_settings`, `sender_banned`).
+    Dropped { code: String, message: String },
+    /// Broadcaster-User-ID zu diesem Login nicht auflösbar.
+    UnknownChannel,
+    /// Senden schlug fehl (HTTP-Fehler/Token nicht verfügbar). `reason` ist
+    /// log-tauglich (enthält NIE den Token).
+    Failed { reason: String },
+}
+
+/// Port für die Owner-Chat-Action: sendet über den live rotierten Bot-User-Token.
+///
+/// Echte Impl in tb-bot (Composition-Root), die den Broadcaster-Login zur
+/// User-ID auflöst und je nach `mode` (`message`/`action`/`announcement`) via
+/// `ChatApi::send_message`/`send_announcement` mit dem aktuellen Bot-Token sendet.
+/// `None` als Router-Extension (Chat aus / Token nicht gebootet) → Handler
+/// antwortet 503 statt stumm zu scheitern.
+#[async_trait::async_trait]
+pub trait ChatActionPort: Send + Sync {
+    /// `mode` ∈ {`message`, `action`, `announcement`} (unbekannt → `message`),
+    /// `color` für Announcements (unbekannt → `purple`), `message` ist nicht leer.
+    async fn send_chat_action(
+        &self,
+        login: &str,
+        mode: &str,
+        color: &str,
+        message: &str,
+    ) -> ChatActionResult;
+}
+
+/// Router-Extension-Wrapper für [`ChatActionPort`] (`None` = Chat-Send aus → 503).
+#[derive(Clone)]
+pub struct ChatActionExt(pub Option<Arc<dyn ChatActionPort>>);
 
 // ── Response-Typen ────────────────────────────────────────────────────────────
 

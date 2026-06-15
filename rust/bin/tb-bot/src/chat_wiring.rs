@@ -166,6 +166,132 @@ async fn build_engagement_stealth(pool: PgPool) -> Option<Arc<StealthSender>> {
 }
 
 // ---------------------------------------------------------------------------
+// Chat-Action-Port (Bot-Token-Bridge) — POST /streamers/:login/chat-action
+// ---------------------------------------------------------------------------
+
+use tb_chat::types::SendOutcome;
+use tb_internal_api::{ChatActionPort, ChatActionResult};
+
+/// Erlaubte Chat-Action-Modi (Python `_CHAT_ACTION_MODES`, live.py).
+/// Unbekannte Werte fallen auf `message` zurück (Python-Parität).
+const CHAT_ACTION_MODES: &[&str] = &["message", "action", "announcement"];
+/// Erlaubte Announcement-Farben (Python `_CHAT_ANNOUNCEMENT_COLORS`).
+const CHAT_ANNOUNCEMENT_COLORS: &[&str] = &["blue", "green", "orange", "purple", "primary"];
+
+/// Bridge zwischen der internen API und dem nativen Chat-Send: sendet die
+/// Owner-Chat-Action über den live rotierten Bot-User-Token ([`ChatApi`], das
+/// den Token intern via [`BotTokenManager`] bezieht und bei 401 erneuert).
+///
+/// Broadcaster-Auflösung wie Python (`mixin.py:_dashboard_partner_chat_action`):
+/// zuerst `twitch_partners_all_state.twitch_user_id`, sonst Helix-Login-Lookup.
+struct ChatActionAdapter {
+    api: Arc<dyn ChatApi>,
+    pool: PgPool,
+}
+
+impl ChatActionAdapter {
+    /// Broadcaster-User-ID zum Login: DB-Primärpfad, Helix-Fallback.
+    async fn resolve_broadcaster_id(&self, login: &str) -> Option<String> {
+        let row: Option<(Option<String>,)> = sqlx::query_as(
+            "SELECT twitch_user_id FROM twitch_partners_all_state \
+             WHERE LOWER(twitch_login) = $1 LIMIT 1",
+        )
+        .bind(login.to_lowercase())
+        .fetch_optional(&self.pool)
+        .await
+        .unwrap_or(None);
+        if let Some((Some(id),)) = row {
+            let id = id.trim().to_string();
+            if !id.is_empty() {
+                return Some(id);
+            }
+        }
+        // Fallback: Helix-Login-Lookup über den Bot-Token (resolve_user_id).
+        match self.api.resolve_user_id(login).await {
+            Ok(Some(id)) if !id.trim().is_empty() => Some(id),
+            _ => None,
+        }
+    }
+}
+
+#[async_trait::async_trait]
+impl ChatActionPort for ChatActionAdapter {
+    async fn send_chat_action(
+        &self,
+        login: &str,
+        mode: &str,
+        color: &str,
+        message: &str,
+    ) -> ChatActionResult {
+        // Modus/Farbe normalisieren (Python: unbekannt → message/purple).
+        let mode = if CHAT_ACTION_MODES.contains(&mode) {
+            mode
+        } else {
+            "message"
+        };
+        let color = if CHAT_ANNOUNCEMENT_COLORS.contains(&color) {
+            color
+        } else {
+            "purple"
+        };
+
+        let Some(broadcaster_id) = self.resolve_broadcaster_id(login).await else {
+            return ChatActionResult::UnknownChannel;
+        };
+
+        // Python: Action-Modus prefixt "/me " (Slash-Command im Chat).
+        let send_text = if mode == "action" {
+            format!("/me {message}")
+        } else {
+            message.to_string()
+        };
+
+        if mode == "announcement" {
+            match self
+                .api
+                .send_announcement(&broadcaster_id, &send_text, color)
+                .await
+            {
+                Ok(true) => ChatActionResult::Sent {
+                    label: format!("Announcement an {login} gesendet"),
+                },
+                Ok(false) => ChatActionResult::Failed {
+                    reason: "announcement not accepted".to_string(),
+                },
+                Err(reason) => ChatActionResult::Failed { reason },
+            }
+        } else {
+            match self.api.send_message(&broadcaster_id, &send_text).await {
+                Ok(SendOutcome::Sent) => {
+                    let label = if mode == "action" { "Action" } else { "Nachricht" };
+                    ChatActionResult::Sent {
+                        label: format!("{label} an {login} gesendet"),
+                    }
+                }
+                Ok(SendOutcome::Dropped { code, message }) => {
+                    ChatActionResult::Dropped { code, message }
+                }
+                Ok(SendOutcome::HttpError { status, .. }) => ChatActionResult::Failed {
+                    reason: format!("helix http {status}"),
+                },
+                Err(reason) => ChatActionResult::Failed { reason },
+            }
+        }
+    }
+}
+
+/// Baut den [`ChatActionPort`] aus der gebooteten [`ChatApi`] + Pool. `None`,
+/// wenn der native Chat aus ist (kein Bot-Token gebootet) → der Handler
+/// antwortet dann 503 statt stumm zu scheitern.
+pub fn build_chat_action_port(
+    chat_api: Option<Arc<dyn ChatApi>>,
+    pool: PgPool,
+) -> Option<Arc<dyn ChatActionPort>> {
+    let api = chat_api?;
+    Some(Arc::new(ChatActionAdapter { api, pool }))
+}
+
+// ---------------------------------------------------------------------------
 // Öffentlicher Einstieg
 // ---------------------------------------------------------------------------
 
