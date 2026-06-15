@@ -98,6 +98,34 @@ impl DiscordDirectoryPort for BrokerDiscordDirectory {
             ),
         }
     }
+
+    async fn revoke_streamer_role(&self, discord_user_id: &str, reason: &str) {
+        let Some(ref relay) = self.relay else {
+            tracing::warn!("Streamer-Rollen-Entzug übersprungen: kein BrokerRelay konfiguriert");
+            return;
+        };
+        let Some(guild_id) = self.guild_id else {
+            tracing::warn!(
+                "Streamer-Rollen-Entzug übersprungen: STREAMER_GUILD_ID/MAIN_GUILD_ID nicht gesetzt"
+            );
+            return;
+        };
+        let Ok(user_id) = discord_user_id.parse::<u64>() else {
+            return;
+        };
+        // B10: Fehler NUR loggen, kein Hard-Fail.
+        match relay
+            .remove_member_role(guild_id, user_id, self.role_id, reason)
+            .await
+        {
+            Ok(()) => tracing::info!(
+                "Streamer role removed from {discord_user_id} in guild {guild_id}"
+            ),
+            Err(e) => tracing::warn!(
+                "Streamer-Rollen-Entzug für {discord_user_id} fehlgeschlagen: {e}"
+            ),
+        }
+    }
 }
 
 /// Gleiche Broker-Mechanik für den internen-API-Pfad (`POST …/discord-profile`):

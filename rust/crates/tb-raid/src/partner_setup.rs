@@ -677,6 +677,19 @@ pub trait DiscordDirectoryPort: Send + Sync {
     /// Python `sync_streamer_role(should_have_role=True)` — Fehler werden
     /// von der Implementierung geloggt, nie propagiert.
     async fn grant_streamer_role(&self, discord_user_id: &str, reason: &str);
+
+    /// Python `sync_streamer_role(should_have_role=False)`: entzieht die
+    /// Streamer-Rolle wieder (Departner/Deautorisierung). Fehler werden NUR
+    /// geloggt, nie propagiert — kein Hard-Fail (B10).
+    ///
+    /// Default: No-op mit Warnung. Implementierungen ohne Broker-Anbindung
+    /// (Tests, interne-API-Pfad) müssen das nicht überschreiben; der
+    /// Broker-Adapter ([`BrokerDiscordDirectory`] im tb-bot-Bin) tut es.
+    async fn revoke_streamer_role(&self, discord_user_id: &str, _reason: &str) {
+        tracing::debug!(
+            "revoke_streamer_role für {discord_user_id} ist in dieser DiscordDirectoryPort-Implementierung ein No-op"
+        );
+    }
 }
 
 /// Moderator-Einsetzung via Helix (Python `complete_setup` Schritt 4).
