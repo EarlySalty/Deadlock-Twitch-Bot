@@ -38,6 +38,11 @@ use tb_chat::{
     ReviewLog, SusInviteCheck,
 };
 use tb_crypto::FieldCipher;
+use tb_engagement::minimax_chat::EngagementMinimaxClient;
+use tb_engagement::pipeline::EngagementPipeline;
+use tb_engagement::sender_auth::SenderAuthStore;
+use tb_engagement::stealth_sender::StealthSender;
+use tb_engagement::types::IncomingMessage;
 use tb_monitoring::{EventSubHooks, SubscriptionManager};
 use tb_raid::{RaidAuthStore, RaidTokenRefresher, TokenBlacklistStore, TokenProvider};
 use tb_transport_twitch::HelixClient;
@@ -141,6 +146,22 @@ pub fn build_clip_port(
         helix,
         token_provider,
     }))
+}
+
+/// Baut den Engagement-Stealth-Sender (Smoke-Account) — nur mit Krypto-Key UND
+/// App-Credentials. Fehlt eins, gibt es keinen Sende-Account und die AI-Antwort
+/// wird verworfen (`None`), exakt wie Pythons Fallback. Liest den bereits live
+/// onboardeten Token aus `twitch_engagement_sender_auth` (Tabelle wird hier
+/// idempotent angelegt).
+async fn build_engagement_stealth(pool: PgPool) -> Option<Arc<StealthSender>> {
+    let cipher = Arc::new(FieldCipher::from_env().ok()?);
+    let client_id = std::env::var("TWITCH_CLIENT_ID")
+        .ok()
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty())?;
+    let auth = SenderAuthStore::from_env(pool, cipher)?;
+    auth.ensure_table().await;
+    Some(Arc::new(StealthSender::new(Arc::new(auth), client_id)))
 }
 
 // ---------------------------------------------------------------------------
@@ -358,6 +379,24 @@ pub async fn build_runtime(
     let sweeper = Arc::new(GlobalBanSweeper::new(pool.clone(), Arc::clone(&api)));
     let roster = Arc::new(DbPartnerRoster { pool: pool.clone() });
 
+    // Engagement-Layer (KI-Stammgast): läuft pro Partner-Message als eigene
+    // Gate-Kaskade + MiniMax-Call und antwortet ausschließlich über den
+    // separaten Smoke-Account (stealth_sender), nie über die Bot-Identität.
+    // Die sieben Background-Jobs (Thread-Extractor, Match-Poller, …) laufen
+    // unabhängig vom Sende-Account (Python `ensure_started`).
+    let engagement = Arc::new(EngagementPipeline::with_defaults(
+        pool.clone(),
+        EngagementMinimaxClient::new(None, None, None, None),
+    ));
+    let stealth = build_engagement_stealth(pool.clone()).await;
+    if stealth.is_none() {
+        tracing::warn!(
+            "Engagement: kein Stealth-Sender (DB_MASTER_KEY_V1/TWITCH_CLIENT_ID fehlt) — \
+             AI-Antworten werden verworfen, Background-Jobs laufen trotzdem"
+        );
+    }
+    tb_engagement::background::spawn_all(pool.clone());
+
     tracing::info!("Nativer Chat-Bot verdrahtet — Pipeline aktiv (TB_CHAT_ENABLED=1)");
     ChatRuntime {
         hooks: Arc::new(ChatHooks {
@@ -365,6 +404,9 @@ pub async fn build_runtime(
             pipeline,
             timeout_guard: Arc::clone(&timeout_guard),
             promos: Arc::clone(&promos),
+            engagement,
+            stealth,
+            bot_user_id: bot_user_id.clone(),
         }),
         token_manager,
         promos,
@@ -516,6 +558,48 @@ struct ChatHooks {
     /// gesendet wird (Suppression-Check + Promo-Cooldown, Python-Parität).
     timeout_guard: Arc<TimeoutGuard>,
     promos: Arc<PromoEngine>,
+    /// KI-Engagement-Pipeline (läuft pro Message) + Smoke-Account-Sender.
+    engagement: Arc<EngagementPipeline>,
+    stealth: Option<Arc<StealthSender>>,
+    /// User-ID des zentralen Bots — eigene Nachrichten überspringen das
+    /// Engagement (Python `event_message`: `message.echo` → return).
+    bot_user_id: String,
+}
+
+impl ChatHooks {
+    /// Spawnt die Engagement-Verarbeitung als eigenständige Task, damit der
+    /// MiniMax-Call (bis ~5s) die Moderations-Pipeline nicht blockiert (entspricht
+    /// twitchios Task-pro-Event). Antwortet das Modell, geht der Text über den
+    /// Smoke-Account in den Chat — nie über die zentrale Bot-Identität.
+    fn spawn_engagement(&self, event: &ChatMessageEvent) {
+        // Eigene (zentrale) Bot-Nachrichten überspringen.
+        if event.chatter_user_id == self.bot_user_id {
+            return;
+        }
+        let engagement = Arc::clone(&self.engagement);
+        let stealth = self.stealth.clone();
+        let broadcaster_id = event.broadcaster_user_id.clone();
+        let msg = IncomingMessage {
+            channel_login: event.broadcaster_user_login.to_lowercase(),
+            twitch_user_id: event.chatter_user_id.clone(),
+            twitch_login: event.chatter_user_login.clone(),
+            content: event.message.text.clone(),
+            message_id: Some(event.message_id.clone()),
+        };
+        tokio::spawn(async move {
+            let result = engagement.handle(&msg).await;
+            let Some(text) = result.response_text else {
+                return;
+            };
+            match &stealth {
+                Some(sender) if sender.send(&broadcaster_id, &text).await.is_none() => {
+                    tracing::info!("Engagement: kein Sende-Account onboarded, AI-Antwort verworfen");
+                }
+                Some(_) => {}
+                None => tracing::debug!("Engagement: Stealth-Sender nicht verfügbar, Antwort verworfen"),
+            }
+        });
+    }
 }
 
 #[async_trait::async_trait]
@@ -571,7 +655,10 @@ impl EventSubHooks for ChatHooks {
     async fn on_chat_message(&self, event: &Value, message_id: Option<&str>) {
         self.inner.on_chat_message(event, message_id).await;
         match serde_json::from_value::<ChatMessageEvent>(event.clone()) {
-            Ok(chat_event) => self.pipeline.handle(&chat_event).await,
+            Ok(chat_event) => {
+                self.pipeline.handle(&chat_event).await;
+                self.spawn_engagement(&chat_event);
+            }
             Err(e) => tracing::warn!("chat.message nicht deserialisierbar: {e}"),
         }
     }

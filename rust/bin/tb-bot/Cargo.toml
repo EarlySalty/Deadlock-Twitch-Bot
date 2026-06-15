@@ -31,6 +31,7 @@ tb-transport-twitch = { workspace = true }
 tb-social-media          = { workspace = true }
 tb-analytics             = { workspace = true }
 tb-highlight             = { workspace = true }
+tb-engagement            = { workspace = true }
 strsim                   = { workspace = true }
 unicode-normalization    = { workspace = true }
 
