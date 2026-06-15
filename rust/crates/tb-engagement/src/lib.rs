@@ -14,6 +14,7 @@
 pub mod audio_capture;
 pub mod background;
 pub mod channel_background;
+pub mod claude_chat;
 pub mod conversation;
 pub mod deadlock_patches;
 pub mod deadlock_stats;

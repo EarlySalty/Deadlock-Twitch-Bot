@@ -46,6 +46,44 @@ pub async fn plan_ai_model(pool: &PgPool, streamer: &str) -> Result<Option<&'sta
     Ok(model_for_entitlements(&snapshot.entitlements))
 }
 
+/// Extrahiert Text aus einer LLM-Antwort (Port von `_extract_text_response`).
+/// String → getrimmt; Array von Content-Blocks → deren Text-Felder mit `\n`
+/// verbunden + getrimmt (Claude `messages.content`); sonst best-effort.
+pub fn extract_text_response(value: &Value) -> String {
+    match value {
+        Value::Null => String::new(),
+        Value::String(s) => s.trim().to_string(),
+        Value::Array(items) => {
+            let mut parts: Vec<String> = Vec::new();
+            for item in items {
+                match item {
+                    Value::String(s) => parts.push(s.clone()),
+                    // dict-Block: type==text & text, sonst content (1:1 Python).
+                    Value::Object(o) => {
+                        let text = o.get("text").and_then(Value::as_str).filter(|s| !s.is_empty());
+                        if o.get("type").and_then(Value::as_str) == Some("text") {
+                            if let Some(t) = text {
+                                parts.push(t.to_string());
+                                continue;
+                            }
+                        }
+                        if let Some(c) = o.get("content").and_then(Value::as_str).filter(|s| !s.is_empty()) {
+                            parts.push(c.to_string());
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            parts.into_iter().filter(|p| !p.is_empty()).collect::<Vec<_>>().join("\n").trim().to_string()
+        }
+        Value::Object(o) => match o.get("text").and_then(Value::as_str).filter(|s| !s.is_empty()) {
+            Some(t) => t.trim().to_string(),
+            None => value.to_string().trim().to_string(),
+        },
+        other => other.to_string().trim().to_string(),
+    }
+}
+
 /// Erstes vollständiges JSON-Array aus `text` (string-aware: `]` innerhalb von
 /// Strings wird übersprungen). `None`, wenn das Array nicht terminiert ist
 /// (abgeschnittene Antwort). Port von `_extract_json_array`.
@@ -217,5 +255,26 @@ mod tests {
         // Persistenz-Modellname.
         assert_eq!(model_name_for("opus"), "claude-opus-4-6");
         assert_eq!(model_name_for("minimax"), "MiniMax-M3");
+    }
+
+    #[test]
+    fn extract_text_response_faelle() {
+        // String → getrimmt (MiniMax-Content).
+        assert_eq!(extract_text_response(&json!("  hallo  ")), "hallo");
+        // Claude content-Blocks → text-Felder mit \n.
+        assert_eq!(
+            extract_text_response(&json!([
+                {"type": "text", "text": "Zeile 1"},
+                {"type": "text", "text": "Zeile 2"}
+            ])),
+            "Zeile 1\nZeile 2"
+        );
+        // content-Fallback bei Nicht-text-Block.
+        assert_eq!(
+            extract_text_response(&json!([{"type": "tool", "content": "X"}])),
+            "X"
+        );
+        // Null → leer.
+        assert_eq!(extract_text_response(&Value::Null), "");
     }
 }
