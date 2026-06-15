@@ -370,8 +370,10 @@ pub async fn viewer_directory_handler(
     State(pool): State<PgPool>,
     Query(params): Query<DirectoryQuery>,
 ) -> impl IntoResponse {
-    if matches!(auth, DashboardAuthLevel::None) {
-        return (StatusCode::UNAUTHORIZED, Json(json!({"error":"unauthorized"}))).into_response();
+    // Python: _require_v2_auth + _require_extended_plan (Paywall-Feature).
+    // extended_gate deckt beides ab: None→401, Free-Partner→403, Admin/Localhost→pass.
+    if let Some(resp) = crate::auth::extended_gate(&pool, &auth).await {
+        return resp;
     }
     let streamer = match params.streamer.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
         Some(s) => s.to_lowercase(),
@@ -616,8 +618,10 @@ pub async fn viewer_detail_handler(
     State(pool): State<PgPool>,
     Query(params): Query<DetailQuery>,
 ) -> impl IntoResponse {
-    if matches!(auth, DashboardAuthLevel::None) {
-        return (StatusCode::UNAUTHORIZED, Json(json!({"error":"unauthorized"}))).into_response();
+    // Python: _require_v2_auth + _require_extended_plan (Paywall-Feature).
+    // extended_gate deckt beides ab: None→401, Free-Partner→403, Admin/Localhost→pass.
+    if let Some(resp) = crate::auth::extended_gate(&pool, &auth).await {
+        return resp;
     }
     let streamer = match params.streamer.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
         Some(s) => s.to_lowercase(),
@@ -938,8 +942,10 @@ pub async fn viewer_segments_handler(
     State(pool): State<PgPool>,
     Query(params): Query<SegmentsQuery>,
 ) -> impl IntoResponse {
-    if matches!(auth, DashboardAuthLevel::None) {
-        return (StatusCode::UNAUTHORIZED, Json(json!({"error":"unauthorized"}))).into_response();
+    // Python: _require_v2_auth + _require_extended_plan (Paywall-Feature).
+    // extended_gate deckt beides ab: None→401, Free-Partner→403, Admin/Localhost→pass.
+    if let Some(resp) = crate::auth::extended_gate(&pool, &auth).await {
+        return resp;
     }
     let streamer = match params.streamer.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
         Some(s) => s.to_lowercase(),
@@ -1259,5 +1265,101 @@ mod tests {
         assert!(logins.contains(&"realviewer"), "Echter Viewer muss bleiben");
         assert!(!logins.contains(&"nightbot"), "Bot-Login darf nicht auftauchen");
         assert!(!logins.contains(&"host"), "Streamer-Self-Login darf nicht auftauchen");
+    }
+
+    // ── Plan-Gate-Verdrahtung (env-gated) ───────────────────────────────────
+    // Python ruft in jedem dieser Endpoints _require_v2_auth UND
+    // _require_extended_plan. Vor dem Fix prüfte Rust nur None→401 und ließ
+    // einen Free-Partner durch (Paywall umgangen). Ein Partner ohne Plan
+    // (leere streamer_plans/twitch_billing_subscriptions) muss 403 erhalten.
+    /// Schema mit nur den Plan-Tabellen — Partner ohne Eintrag löst raid_free
+    /// (= nicht extended) aus, also 403. twitch_user_id leer lassen, damit der
+    /// Trial-Grant-Pfad (braucht user_id+login) nicht anspringt.
+    async fn make_plan_pool(dsn: &str, schema: &str) -> PgPool {
+        let pool = PgPoolOptions::new().max_connections(1).connect(dsn).await.unwrap();
+        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE")).execute(&pool).await.unwrap();
+        sqlx::query(&format!("CREATE SCHEMA {schema}")).execute(&pool).await.unwrap();
+        sqlx::query(&format!("SET search_path TO {schema}")).execute(&pool).await.unwrap();
+        sqlx::query(
+            r#"CREATE TABLE streamer_plans (
+                   twitch_user_id TEXT,
+                   twitch_login TEXT,
+                   manual_plan_id TEXT,
+                   manual_plan_expires_at TEXT,
+                   manual_plan_updated_at TIMESTAMPTZ
+               )"#,
+        ).execute(&pool).await.unwrap();
+        sqlx::query(
+            r#"CREATE TABLE twitch_billing_subscriptions (
+                   customer_reference TEXT,
+                   plan_id TEXT,
+                   status TEXT,
+                   current_period_end TEXT,
+                   updated_at TIMESTAMPTZ
+               )"#,
+        ).execute(&pool).await.unwrap();
+        pool
+    }
+
+    fn free_partner() -> DashboardAuthLevel {
+        DashboardAuthLevel::Partner {
+            twitch_login: "freeloader".to_string(),
+            twitch_user_id: String::new(),
+        }
+    }
+
+    #[tokio::test]
+    async fn viewer_directory_gates_free_partner() {
+        let dsn = db_dsn_or_skip!();
+        let pool = make_plan_pool(&dsn, "viewers_gate_dir").await;
+        let resp = viewer_directory_handler(
+            free_partner(),
+            State(pool),
+            Query(DirectoryQuery {
+                streamer: Some("host".into()),
+                sort: None,
+                order: None,
+                filter: None,
+                search: None,
+                page: None,
+                per_page: None,
+                days: None,
+            }),
+        )
+        .await
+        .into_response();
+        assert_eq!(resp.status(), StatusCode::FORBIDDEN, "Free-Partner muss 403 erhalten");
+    }
+
+    #[tokio::test]
+    async fn viewer_detail_gates_free_partner() {
+        let dsn = db_dsn_or_skip!();
+        let pool = make_plan_pool(&dsn, "viewers_gate_det").await;
+        let resp = viewer_detail_handler(
+            free_partner(),
+            State(pool),
+            Query(DetailQuery {
+                streamer: Some("host".into()),
+                login: Some("someviewer".into()),
+                days: None,
+            }),
+        )
+        .await
+        .into_response();
+        assert_eq!(resp.status(), StatusCode::FORBIDDEN, "Free-Partner muss 403 erhalten");
+    }
+
+    #[tokio::test]
+    async fn viewer_segments_gates_free_partner() {
+        let dsn = db_dsn_or_skip!();
+        let pool = make_plan_pool(&dsn, "viewers_gate_seg").await;
+        let resp = viewer_segments_handler(
+            free_partner(),
+            State(pool),
+            Query(SegmentsQuery { streamer: Some("host".into()), days: None }),
+        )
+        .await
+        .into_response();
+        assert_eq!(resp.status(), StatusCode::FORBIDDEN, "Free-Partner muss 403 erhalten");
     }
 }
