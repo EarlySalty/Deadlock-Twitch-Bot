@@ -94,6 +94,39 @@ pub async fn load_exp_game_breakdown(pool: &PgPool, streamer: &str, days: i64) -
     Ok(Value::Array(items))
 }
 
+/// Game-Switch-Events je Streamer (Python `_load_exp_game_transitions_payload`).
+/// JSON-Array, Top 50 nach Häufigkeit. `avgViewersAfter`/`viewerDelta` sind in
+/// Python hartcodiert `0.0` (1:1 übernommen).
+pub async fn load_exp_game_transitions(pool: &PgPool, streamer: &str, days: i64) -> Result<Value, sqlx::Error> {
+    let since = since_iso(days);
+    let streamer = streamer.to_lowercase();
+    let rows: Vec<(String, String, i64, Option<f64>)> = sqlx::query_as(
+        "SELECT COALESCE(from_game, '(unbekannt)') AS from_game, COALESCE(to_game, '(unbekannt)') AS to_game, \
+                COUNT(*)::bigint AS cnt, COALESCE(AVG(viewer_count), 0)::float8 AS avg_v \
+         FROM exp_game_transitions WHERE LOWER(streamer) = $1 AND ts_utc >= $2 \
+         GROUP BY from_game, to_game ORDER BY cnt DESC LIMIT 50",
+    )
+    .bind(&streamer)
+    .bind(&since)
+    .fetch_all(pool)
+    .await?;
+
+    let items: Vec<Value> = rows
+        .into_iter()
+        .map(|(from_game, to_game, count, avg)| {
+            json!({
+                "fromGame": from_game,
+                "toGame": to_game,
+                "count": count,
+                "avgViewersBefore": round1(avg.unwrap_or(0.0)),
+                "avgViewersAfter": 0.0,
+                "viewerDelta": 0.0,
+            })
+        })
+        .collect();
+    Ok(Value::Array(items))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -146,6 +179,30 @@ mod tests {
         sqlx::query("INSERT INTO exp_sessions (streamer, started_at, ended_at, game_name, avg_viewers) VALUES ('nani','2026-06-10T00:00:00+00:00','2026-06-10T02:00:00+00:00',NULL,30)").execute(&pool).await.unwrap();
         let v = load_exp_game_breakdown(&pool, "nani", 3650).await.unwrap();
         assert_eq!(v[0]["game"], "(unbekannt)");
+    }
+
+    #[tokio::test]
+    async fn game_transitions_array() {
+        let Some(pool) = make_pool("t_exp_tr").await else { return };
+        sqlx::query("CREATE TABLE exp_game_transitions (streamer TEXT, ts_utc TEXT, from_game TEXT, to_game TEXT, viewer_count INTEGER)").execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO exp_game_transitions (streamer, ts_utc, from_game, to_game, viewer_count) VALUES \
+            ('nani','2026-06-10T00:00:00+00:00','CS2','Deadlock',100), \
+            ('nani','2026-06-11T00:00:00+00:00','CS2','Deadlock',200), \
+            ('nani','2026-06-12T00:00:00+00:00',NULL,'Deadlock',40)")
+            .execute(&pool).await.unwrap();
+
+        let v = load_exp_game_transitions(&pool, "nani", 3650).await.unwrap();
+        let arr = v.as_array().unwrap();
+        assert_eq!(arr.len(), 2); // (CS2→Deadlock) + (NULL→Deadlock)
+        // Häufigster: CS2→Deadlock (2x), Ø-before (100+200)/2=150.
+        assert_eq!(arr[0]["fromGame"], "CS2");
+        assert_eq!(arr[0]["toGame"], "Deadlock");
+        assert_eq!(arr[0]["count"], 2);
+        assert_eq!(arr[0]["avgViewersBefore"], 150.0);
+        assert_eq!(arr[0]["avgViewersAfter"], 0.0); // hartcodiert
+        assert_eq!(arr[0]["viewerDelta"], 0.0);
+        // NULL from_game → "(unbekannt)".
+        assert_eq!(arr[1]["fromGame"], "(unbekannt)");
     }
 
     #[tokio::test]
