@@ -18,7 +18,6 @@ use crate::analytics::{upsert_clip_analytics, ClipAnalyticsUpsert, BUCKETS, PLAT
 use crate::credentials::{CredentialManager, SocialMediaCredentials};
 use crate::uploaders::instagram::InstagramUploader;
 use crate::uploaders::tiktok::TikTokUploader;
-use crate::uploaders::youtube::YouTubeUploader;
 use crate::uploaders::PlatformUploader;
 
 const INTERVAL_SECS: u64 = 30 * 60;
@@ -50,7 +49,7 @@ fn success_delay(bucket: &str) -> chrono::Duration {
 /// credential_manager.
 fn resolve_insights_client(platform: &str, creds: &SocialMediaCredentials) -> Option<Arc<dyn PlatformUploader>> {
     match platform {
-        "youtube" => Some(Arc::new(YouTubeUploader::new(creds.access_token.clone()))),
+        "youtube" => Some(Arc::new(crate::upload_worker::youtube_uploader(creds))),
         "tiktok" => Some(Arc::new(TikTokUploader::new(creds.access_token.clone()))),
         "instagram" => {
             let uid = creds.platform_user_id.as_deref().filter(|s| !s.is_empty())?;

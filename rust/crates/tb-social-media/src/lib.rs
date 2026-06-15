@@ -23,7 +23,6 @@
 //! - `approval_worker` — Queue-Seite: freigegebene Clips einreihen.
 //! - `layout`      — Clip-Compositing-Layout (`social_media_streamer_layout`).
 //! - `video_processor` — FFmpeg-Wrapper (9:16-Konvertierung + Compositing).
-//! - `whisper`      — OpenAI-Whisper-Transcriber (impl enrich_pipeline::Transcriber).
 //! - `uploaders`    — Plattform-Uploader (TikTok/YouTube/Instagram).
 //! - `upload_worker` — Queue-Verarbeitung (download→convert→upload→status).
 //! - `llm`         — LLM-Typen + Prompt-Bau + Output-Parsing.
@@ -80,7 +79,6 @@ pub mod upload_worker;
 pub mod uploaders;
 pub mod video_processor;
 pub mod vocab;
-pub mod whisper;
 
 pub use clip::{
     repository::ClipRepository,
