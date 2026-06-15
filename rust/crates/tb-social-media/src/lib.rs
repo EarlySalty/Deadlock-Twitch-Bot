@@ -7,9 +7,10 @@
 //! - `clip::task`       — Tokio-Hintergrundtask (Gate: TB_CLIP_FETCHER_ENABLED=1)
 //!
 //! Sowie die Anfänge der vollen Posting-Pipeline (Port von `bot/social_media/`):
-//! - `schema`   — idempotente Tabellen-Erstellung (Port von `storage.py`).
-//! - `settings` — Key/Value-Settings (`social_media_settings`, Consent +
+//! - `schema`      — idempotente Tabellen-Erstellung (Port von `storage.py`).
+//! - `settings`    — Key/Value-Settings (`social_media_settings`, Consent +
 //!   Auto-Approve je Plattform).
+//! - `credentials` — verschlüsselte Plattform-OAuth-Credentials (Lese-Pfad).
 //!
 //! # Deaktiviert
 //! Der Clip-Fetcher-Task ist **standardmäßig deaktiviert** und wird nicht in
@@ -17,6 +18,7 @@
 //! Env-Var setzen + `ClipFetchTask::start_if_enabled()` aufrufen.
 
 pub mod clip;
+pub mod credentials;
 pub mod schema;
 pub mod settings;
 
