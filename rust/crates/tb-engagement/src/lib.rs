@@ -22,5 +22,6 @@ pub mod persona;
 pub mod pipeline;
 pub mod rhythm;
 pub mod soul_store;
+pub mod stream_transcripts;
 pub mod style_examples;
 pub mod types;
