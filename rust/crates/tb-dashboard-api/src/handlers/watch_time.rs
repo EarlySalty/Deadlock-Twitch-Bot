@@ -5,8 +5,9 @@
 //! Lesefenster die Sichtbarkeit (Free → nur letzter Stream). `streamer` Pflicht,
 //! `days` 7..365.
 //!
-//! **Teil 1: Fenster fest „full"** — die plan-abhängige Auflösung (Free →
-//! `last_stream`) folgt als Teil 2.
+//! Lesefenster (Python `_resolve_read_window`): Localhost/Admin → `full`; sonst
+//! entscheidet der Plan des **abgefragten** Streamers — `analytics.basic` oder
+//! `analytics.extended` → `full`, sonst (Free `analytics.daily`) → `last_stream`.
 
 use axum::{
     extract::{Query, State},
@@ -28,6 +29,27 @@ pub struct WatchTimeQuery {
     pub days: Option<i32>,
 }
 
+/// Pures Fenster-Mapping anhand der Plan-Entitlements (Python `_plan_has_entitlement`).
+fn window_for_entitlements(entitlements: &[&str]) -> &'static str {
+    if entitlements.contains(&"analytics.basic") || entitlements.contains(&"analytics.extended") {
+        "full"
+    } else {
+        "last_stream"
+    }
+}
+
+/// Lesefenster auflösen: Localhost/Admin → `full`; sonst Plan des Streamers prüfen.
+/// Bei Plan-Lookup-Fehler konservativ `last_stream` (nie mehr Daten zeigen als erlaubt).
+async fn resolve_read_window(pool: &PgPool, auth: &DashboardAuthLevel, streamer: &str) -> &'static str {
+    if matches!(auth, DashboardAuthLevel::Localhost | DashboardAuthLevel::Admin) {
+        return "full";
+    }
+    match tb_analytics::plan::resolve_plan_snapshot(pool, streamer, "").await {
+        Ok(snap) => window_for_entitlements(&snap.entitlements),
+        Err(_) => "last_stream",
+    }
+}
+
 /// `GET /twitch/api/v2/watch-time-distribution?streamer=&days=30`
 pub async fn watch_time_distribution_handler(
     auth: DashboardAuthLevel,
@@ -45,7 +67,7 @@ pub async fn watch_time_distribution_handler(
         }
     };
     let days = params.days.unwrap_or(30).clamp(7, 365) as i64;
-    let window = "full"; // Teil 2: plan-abhängig (Free → "last_stream").
+    let window = resolve_read_window(&pool, &auth, &streamer).await;
 
     match tb_analytics::watch_time::load_watch_time_distribution(&pool, &streamer, days, window).await {
         Ok(v) => Json(v).into_response(),
@@ -74,6 +96,14 @@ mod tests {
         sqlx::query("CREATE TABLE twitch_session_chatters (session_id BIGINT, chatter_login TEXT, chatter_id TEXT, first_message_at TIMESTAMPTZ, last_seen_at TIMESTAMPTZ)").execute(&pool).await.unwrap();
         sqlx::query("CREATE TABLE twitch_chat_messages (id BIGSERIAL PRIMARY KEY, session_id BIGINT, chatter_login TEXT, chatter_id TEXT, message_ts TIMESTAMPTZ)").execute(&pool).await.unwrap();
         Some(pool)
+    }
+
+    #[test]
+    fn fenster_mapping() {
+        assert_eq!(window_for_entitlements(&["analytics.daily", "analytics.basic"]), "full");
+        assert_eq!(window_for_entitlements(&["analytics.extended"]), "full");
+        assert_eq!(window_for_entitlements(&["analytics.daily"]), "last_stream"); // Free
+        assert_eq!(window_for_entitlements(&[]), "last_stream");
     }
 
     #[tokio::test]
