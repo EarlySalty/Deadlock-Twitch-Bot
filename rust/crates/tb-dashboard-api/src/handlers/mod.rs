@@ -41,5 +41,6 @@ pub mod silent_settings;
 pub mod social_media;
 pub mod spa;
 pub mod stream_report;
+pub mod tag_analysis;
 pub mod title_performance;
 pub mod system;
