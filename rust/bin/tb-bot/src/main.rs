@@ -385,6 +385,12 @@ async fn main() {
     // SubscriptionPollHooks-Konstruktion sonst nicht mehr im Scope.
     let recruit_chat_api: Option<Arc<dyn tb_chat::ChatApi>> =
         chat_api_handle.as_ref().map(|h| h.api.clone());
+    // Bot-Token-Bridge (F3): ChatApi-Clone für die Owner-Chat-Action der
+    // internen API (POST /streamers/:login/chat-action). Früh gezogen, da das
+    // Handle weiter unten beim Pipeline-Aufbau konsumiert wird. Der Send läuft
+    // über den live rotierten Bot-User-Token (ChatApi → BotTokenManager).
+    let chat_action_api: Option<Arc<dyn tb_chat::ChatApi>> =
+        chat_api_handle.as_ref().map(|h| h.api.clone());
 
     // Raid-Verdrahtung: mit Manager + Helix + Krypto-Key sind alle vier
     // Raid-Kopplungen echt (Auto-Raid, Arrival, Score-Refresh, Blacklist-Guard).
@@ -1033,6 +1039,11 @@ async fn main() {
         oauth_followups::BrokerDiscordDirectory::from_env(BrokerRelay::new(&settings.broker).ok()),
     )
         as Arc<dyn tb_internal_api::DiscordRolePort>);
+    // Bot-Token-Bridge (F3): Owner-Chat-Action sendet über den live rotierten
+    // Bot-User-Token. `None`, wenn der native Chat aus ist (kein Token gebootet)
+    // → der Handler antwortet 503 statt stumm zu scheitern.
+    let chat_action: Option<Arc<dyn tb_internal_api::ChatActionPort>> =
+        chat_wiring::build_chat_action_port(chat_action_api, pool.clone());
     let app = build_internal_router(
         pool,
         token,
@@ -1042,6 +1053,7 @@ async fn main() {
         raid_oauth_port,
         eventsub_stats,
         discord_role,
+        chat_action,
         legacy_proxy,
     );
 
