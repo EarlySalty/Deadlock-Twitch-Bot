@@ -118,18 +118,6 @@ async fn load_clip_context(pool: &PgPool, clip_db_id: i32) -> Option<ClipContext
     })
 }
 
-/// Setzt den Clip in `social_media_clip_approval` auf `awaiting_approval`
-/// (best-effort; volle approval-Logik = eigener Slice).
-async fn mark_clip_awaiting_approval(pool: &PgPool, clip_db_id: i32) {
-    let _ = sqlx::query(
-        "INSERT INTO social_media_clip_approval (clip_db_id, state) VALUES ($1, 'awaiting_approval') \
-         ON CONFLICT (clip_db_id) DO NOTHING",
-    )
-    .bind(clip_db_id)
-    .execute(pool)
-    .await;
-}
-
 /// Orchestriert die Clip-Enrichment.
 pub struct ClipEnrichmentPipeline {
     pool: PgPool,
@@ -235,7 +223,7 @@ impl ClipEnrichmentPipeline {
         )
         .await;
         let _ = update_enrichment_status(&self.pool, clip_db_id, STATUS_DONE, Some(None), None, Some(Some(now_iso()))).await;
-        mark_clip_awaiting_approval(&self.pool, clip_db_id).await;
+        crate::approval::mark_clip_awaiting_approval(&self.pool, clip_db_id).await;
 
         Ok(Self::done_outcome(clip_db_id, Some(response.provider), Some(response.model)))
     }
@@ -284,7 +272,7 @@ mod tests {
         for ddl in [
             "CREATE TABLE twitch_clips_social_media (id SERIAL PRIMARY KEY, clip_id TEXT, streamer_login TEXT, clip_title TEXT, duration_seconds DOUBLE PRECISION, game_name TEXT, upload_local_path TEXT, local_file_path TEXT)",
             "CREATE TABLE social_media_clip_enrichment (clip_db_id INTEGER PRIMARY KEY, transcript_raw TEXT, transcript_corrected TEXT, transcript_segments JSONB, transcript_lang TEXT, detected_terms JSONB DEFAULT '[]'::jsonb, title_youtube TEXT, title_tiktok TEXT, title_instagram TEXT, description_youtube TEXT, description_tiktok TEXT, description_instagram TEXT, hashtags_youtube JSONB DEFAULT '[]'::jsonb, hashtags_tiktok JSONB DEFAULT '[]'::jsonb, hashtags_instagram JSONB DEFAULT '[]'::jsonb, llm_provider TEXT, llm_model TEXT, cost_usd_estimate NUMERIC(10,6), status TEXT NOT NULL DEFAULT 'pending', error_message TEXT, started_at TIMESTAMPTZ, completed_at TIMESTAMPTZ, edited_by TEXT, updated_at TIMESTAMPTZ DEFAULT NOW())",
-            "CREATE TABLE social_media_clip_approval (clip_db_id INTEGER PRIMARY KEY, state TEXT NOT NULL DEFAULT 'awaiting_approval')",
+            "CREATE TABLE social_media_clip_approval (clip_db_id INTEGER PRIMARY KEY, state TEXT NOT NULL DEFAULT 'awaiting_approval', approved_platforms JSONB NOT NULL DEFAULT '[]'::jsonb, approver_user_id TEXT, decided_at TIMESTAMPTZ, dm_message_id TEXT, dm_channel_id TEXT, last_sent_at TIMESTAMPTZ)",
             "CREATE TABLE deadlock_vocab (term TEXT PRIMARY KEY, canonical TEXT NOT NULL, category TEXT NOT NULL, source TEXT NOT NULL DEFAULT 'manual', aliases JSONB NOT NULL DEFAULT '[]'::jsonb, weight INTEGER NOT NULL DEFAULT 1, updated_at TIMESTAMPTZ DEFAULT NOW())",
         ] {
             sqlx::query(ddl).execute(&pool).await.unwrap();

@@ -18,6 +18,7 @@
 //! - `correction`  — Fuzzy-Transkript-Korrektur gegen das Vokabular.
 //! - `seed_vocab`  — Initial-Vokabular (Slang + Deadlock-API).
 //! - `enrichment`  — Clip-Enrichment-Persistenz (`social_media_clip_enrichment`).
+//! - `approval`    — Approval-Workflow (State-Maschine + queue-on-approve).
 //! - `llm`         — LLM-Typen + Prompt-Bau + Output-Parsing.
 //! - `llm_dispatch` — LLM-Provider (Ollama) + consent-gated Dispatcher.
 //! - `enrich_pipeline` — Orchestrator (transcribe→correct→LLM→save).
@@ -31,6 +32,7 @@
 //! `tb-bot` gestartet bis die Social-Media-Pipeline bereit ist. Aktivierung:
 //! Env-Var setzen + `ClipFetchTask::start_if_enabled()` aufrufen.
 
+pub mod approval;
 pub mod clip;
 pub mod clip_analytics;
 pub mod clip_queue;
