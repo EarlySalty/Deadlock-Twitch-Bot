@@ -20,6 +20,8 @@ tracing      = { workspace = true }
 chrono       = { workspace = true }
 sha2         = { workspace = true }
 url          = { workspace = true }
+# UUID → str (Block-10-Serializer-Parität, json_default).
+uuid         = { workspace = true }
 tb-analytics        = { workspace = true }
 tb-domain           = { workspace = true }
 tb-error            = { workspace = true }

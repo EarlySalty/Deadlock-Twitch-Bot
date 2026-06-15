@@ -141,7 +141,7 @@ pub async fn handler(
         missing_scopes: snap.missing_scopes,
         granted_scope_count: snap.granted_scopes.len(),
         required_scope_count: admin_streamers::REQUIRED_SCOPES.len(),
-        authorized_at: row.authorized_at.map(|d| d.to_rfc3339()),
+        authorized_at: row.authorized_at.map(crate::security::datetime_to_iso),
         partner_status: pstatus.to_string(),
         is_partner_active: row.is_partner_active != 0,
         is_verified: row.is_verified != 0,

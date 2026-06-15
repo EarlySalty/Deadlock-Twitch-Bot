@@ -152,14 +152,12 @@ struct InsightEntry {
 /// - mit Mikros:  `"2026-06-12T14:30:00.123456+00:00"`
 ///
 /// Python `datetime.isoformat()` verhält sich identisch (ab Python 3.6+).
+///
+/// Delegiert an den kanonischen Serializer (Block 10,
+/// `crate::security::datetime_to_iso`) — eine Quelle der Wahrheit.
 #[cfg(test)]
 fn format_python_isoformat(dt: chrono::DateTime<Utc>) -> String {
-    let micros = dt.timestamp_subsec_micros();
-    if micros == 0 {
-        dt.format("%Y-%m-%dT%H:%M:%S+00:00").to_string()
-    } else {
-        format!("{}.{:06}+00:00", dt.format("%Y-%m-%dT%H:%M:%S"), micros)
-    }
+    crate::security::datetime_to_iso(dt)
 }
 
 // ── follower_delta Existenz-Check ─────────────────────────────────────────────

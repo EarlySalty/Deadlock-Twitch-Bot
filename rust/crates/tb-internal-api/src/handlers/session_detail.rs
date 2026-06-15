@@ -49,14 +49,9 @@ use tb_http_core::{ApiError, AuthLevel};
 ///
 /// Referenz: `bot/internal_api/policy.py:18–27` (`json_default`).
 pub fn ts_to_iso(dt: DateTime<Utc>) -> String {
-    let micros = dt.timestamp_subsec_micros();
-    if micros == 0 {
-        // "2026-06-12T14:30:00+00:00"
-        dt.format("%Y-%m-%dT%H:%M:%S+00:00").to_string()
-    } else {
-        // "2026-06-12T14:30:00.123456+00:00"
-        dt.format("%Y-%m-%dT%H:%M:%S%.6f+00:00").to_string()
-    }
+    // Kanonischer Serializer (Block 10): eine Quelle der Wahrheit für die
+    // datetime→isoformat-Parität (`crate::security::datetime_to_iso`).
+    crate::security::datetime_to_iso(dt)
 }
 
 // ── Dynamischer Row→JSON-Mapper ───────────────────────────────────────────────
