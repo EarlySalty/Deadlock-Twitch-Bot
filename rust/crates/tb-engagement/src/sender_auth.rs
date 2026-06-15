@@ -574,6 +574,38 @@ mod tests {
         assert!(url.contains(&format!("state={token}")));
     }
 
+    /// senderauth-03: `oauth_state_tokens.expires_at` wird durchgängig als
+    /// TIMESTAMPTZ geführt (Migration-Baseline) und hier konsistent geschrieben
+    /// (`persist_state` bindet `DateTime<Utc>`) und gelesen (`consume_state` liest
+    /// `DateTime<Utc>`). Gegenstück zum Python-TEXT/ISO-String — der Round-Trip
+    /// muss ohne Decode-Fehler funktionieren und Ablauf korrekt auswerten.
+    #[tokio::test]
+    async fn expires_at_timestamptz_roundtrip_und_ablauf() {
+        let Some(pool) = make_pool("t_eng_sender_expts").await else { return };
+        let s = store(pool.clone());
+
+        // (1) Gültiger State (in der Zukunft) → consume_state == true, Zeile weg.
+        let future = Utc::now() + Duration::seconds(600);
+        s.persist_state("valid-state", future).await.unwrap();
+        // Die Spalte ist echtes TIMESTAMPTZ: typisiertes Lesen als DateTime<Utc>
+        // gelingt (kein TEXT/ISO-Parsing nötig).
+        let stored: (DateTime<Utc>,) =
+            sqlx::query_as("SELECT expires_at FROM oauth_state_tokens WHERE state_token = 'valid-state'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert!(stored.0 > Utc::now());
+        assert!(s.consume_state("valid-state").await, "frischer State ist gültig");
+        let remaining: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM oauth_state_tokens")
+            .fetch_one(&pool).await.unwrap();
+        assert_eq!(remaining, 0, "consume löscht den State");
+
+        // (2) Abgelaufener State (in der Vergangenheit) → consume_state == false.
+        let past = Utc::now() - Duration::seconds(10);
+        s.persist_state("expired-state", past).await.unwrap();
+        assert!(!s.consume_state("expired-state").await, "abgelaufener State wird abgewiesen");
+    }
+
     #[tokio::test]
     async fn callback_speichert_token() {
         let Some(pool) = make_pool("t_eng_sender_cb").await else { return };

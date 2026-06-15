@@ -307,6 +307,20 @@ impl EngagementMinimaxClient {
         let (raw_text, prompt_tokens, completion_tokens, latency_ms) = self
             .post_completion(serde_json::Value::Array(messages), max_output_tokens, 0.7)
             .await?;
+
+        // Verbrauch ins gemeinsame MiniMax-Usage-Ledger (Parität zu Pythons
+        // `minimax_usage.record(...)`-Seiteneffekt). Best-effort — `record`
+        // verschluckt jeden DB-Fehler intern und kippt den Call nie. Tokens auch
+        // bei `<silent>` verbuchen, denn verbraucht sind sie ohnehin.
+        tb_llm::ledger::record(
+            "engagement",
+            &self.model,
+            prompt_tokens.unwrap_or(0),
+            completion_tokens.unwrap_or(0),
+            true,
+        )
+        .await;
+
         let text = process_response_text(&raw_text, max_answer_len);
         Ok(ChatResponse {
             text,
@@ -415,6 +429,22 @@ fn nonempty_env(var: &str) -> Option<String> {
     std::env::var(var).ok().filter(|v| !v.is_empty())
 }
 
+/// Biegt das geteilte MiniMax-Usage-Ledger auf eine Prozess-Temp-DB um, BEVOR
+/// irgendein `generate()` (und damit der gecachte Ledger-Pool) initialisiert
+/// wird. Damit verschmutzt KEIN Test (auch nicht die DB-gegateten Pipeline-Tests)
+/// den echten `~/.claude/.../ledger.db`. Läuft genau einmal pro Prozess (`Once`),
+/// weil der Ledger-Pool ein prozessweiter `OnceCell` ist und den Pfad nur beim
+/// ersten Zugriff liest.
+#[cfg(test)]
+pub(crate) fn redirect_ledger_to_temp() {
+    static INIT: std::sync::Once = std::sync::Once::new();
+    INIT.call_once(|| {
+        let mut p = std::env::temp_dir();
+        p.push(format!("tb_eng_minimax_ledger_{}.db", std::process::id()));
+        std::env::set_var("MINIMAX_USAGE_DB", p);
+    });
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -428,6 +458,14 @@ mod tests {
             Some("MiniMax-M3".to_string()),
             None,
         )
+    }
+
+    /// Stabiler Temp-Ledger-Pfad dieses Test-Prozesses (gleich wie in
+    /// [`super::redirect_ledger_to_temp`]).
+    fn ledger_temp_path() -> std::path::PathBuf {
+        let mut p = std::env::temp_dir();
+        p.push(format!("tb_eng_minimax_ledger_{}.db", std::process::id()));
+        p
     }
 
     #[test]
@@ -480,6 +518,7 @@ mod tests {
 
     #[tokio::test]
     async fn generate_parst_antwort_und_tokens() {
+        redirect_ledger_to_temp();
         let server = MockServer::start().await;
         Mock::given(method("POST"))
             .and(path("/chat/completions"))
@@ -505,6 +544,7 @@ mod tests {
 
     #[tokio::test]
     async fn generate_silent_marker_gibt_none() {
+        redirect_ledger_to_temp();
         let server = MockServer::start().await;
         Mock::given(method("POST"))
             .and(path("/chat/completions"))
@@ -521,6 +561,51 @@ mod tests {
             .unwrap();
         assert_eq!(resp.text, None);
         assert_eq!(resp.completion_tokens, Some(1)); // Tokens trotzdem da
+    }
+
+    /// `generate()` verbucht den echten Token-Verbrauch best-effort im geteilten
+    /// MiniMax-Usage-Ledger (`source='twitch-bot'`, `purpose='engagement'`) —
+    /// Parität zu Pythons `minimax_usage.record(...)`-Seiteneffekt. Geprüft wird
+    /// die Zeile mit den für diesen Test eindeutigen Token-Zahlen (777/333), damit
+    /// die Assertion unabhängig von parallel laufenden `generate()`-Tests im selben
+    /// (Temp-)Ledger ist.
+    #[tokio::test]
+    async fn generate_verbucht_usage_im_ledger() {
+        redirect_ledger_to_temp();
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/chat/completions"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "choices": [{"message": {"content": "klar"}}],
+                "usage": {"prompt_tokens": 777, "completion_tokens": 333}
+            })))
+            .mount(&server)
+            .await;
+
+        client_for(&server)
+            .generate("system", &history(), 500, 480)
+            .await
+            .unwrap();
+
+        // Direkt gegen die Temp-Ledger-SQLite prüfen: genau eine Zeile mit den für
+        // diesen Test eindeutigen Token-Zahlen, source/purpose/model korrekt.
+        let pool = sqlx::sqlite::SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect(&format!("sqlite://{}", ledger_temp_path().display()))
+            .await
+            .expect("Ledger-SQLite öffnen");
+        let row: (String, Option<String>, Option<String>) = sqlx::query_as(
+            "SELECT source, purpose, model FROM minimax_usage \
+             WHERE tokens_in = 777 AND tokens_out = 333 \
+             ORDER BY id DESC LIMIT 1",
+        )
+        .fetch_one(&pool)
+        .await
+        .expect("Ledger-Zeile mit 777/333 vorhanden");
+        assert_eq!(row.0, "twitch-bot");
+        assert_eq!(row.1.as_deref(), Some("engagement"));
+        assert_eq!(row.2.as_deref(), Some("MiniMax-M3"));
+        pool.close().await;
     }
 
     #[tokio::test]

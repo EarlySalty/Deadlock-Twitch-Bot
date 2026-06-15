@@ -2479,6 +2479,7 @@ dependencies = [
  "serde_json",
  "sqlx",
  "tb-crypto",
+ "tb-llm",
  "tokio",
  "tracing",
  "wiremock",

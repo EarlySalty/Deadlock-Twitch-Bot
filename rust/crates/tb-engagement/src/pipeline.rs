@@ -473,6 +473,9 @@ mod tests {
 
     #[tokio::test]
     async fn spoke_voller_pfad() {
+        // Ledger auf Temp umbiegen, damit der MiniMax-Call den echten Usage-Ledger
+        // nicht anfasst (greift nur, wenn dieser DB-Test überhaupt läuft).
+        crate::minimax_chat::redirect_ledger_to_temp();
         let Some(pool) = make_pool("t_eng_pipe_spoke").await else { return };
         sqlx::query("INSERT INTO twitch_engagement_settings (channel_login, enabled) VALUES ('nani', TRUE)").execute(&pool).await.unwrap();
         sqlx::query("INSERT INTO twitch_streamers_partner_state (twitch_login, is_partner_active) VALUES ('nani', 1)").execute(&pool).await.unwrap();
