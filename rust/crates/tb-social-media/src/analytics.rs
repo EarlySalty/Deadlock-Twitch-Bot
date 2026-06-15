@@ -147,6 +147,113 @@ pub async fn list_clip_analytics(pool: &PgPool, clip_db_id: i32) -> Vec<ClipAnal
         .collect()
 }
 
+/// Ein gespeicherter Social-Media-Report.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SocialMediaReportRecord {
+    pub id: i32,
+    pub kind: String,
+    pub streamer_login: Option<String>,
+    pub period_start: String,
+    pub period_end: String,
+    pub content_md: String,
+    pub model: Option<String>,
+    pub created_at: Option<String>,
+}
+
+type ReportRow = (i32, String, Option<String>, String, String, String, Option<String>, Option<String>);
+
+fn opt_str(value: Option<String>) -> Option<String> {
+    value.map(|s| s.trim().to_string()).filter(|s| !s.is_empty())
+}
+
+fn row_to_report(r: ReportRow) -> SocialMediaReportRecord {
+    SocialMediaReportRecord {
+        id: r.0,
+        kind: r.1,
+        streamer_login: opt_str(r.2),
+        period_start: r.3,
+        period_end: r.4,
+        content_md: r.5,
+        model: opt_str(r.6),
+        created_at: opt_str(r.7),
+    }
+}
+
+const REPORT_COLUMNS: &str = "id, kind, streamer_login, period_start::text, period_end::text, \
+    content_md, model, created_at::text";
+
+/// Listet Reports, optional nach Art/Streamer gefiltert (neueste zuerst).
+pub async fn list_reports(
+    pool: &PgPool,
+    kind: Option<&str>,
+    streamer_login: Option<&str>,
+    limit: i64,
+) -> Vec<SocialMediaReportRecord> {
+    let rows: Vec<ReportRow> = sqlx::query_as(&format!(
+        "SELECT {REPORT_COLUMNS} FROM social_media_reports \
+          WHERE ($1::text IS NULL OR kind = $1) \
+            AND ($2::text IS NULL OR LOWER(COALESCE(streamer_login, '')) = LOWER($2)) \
+          ORDER BY period_end DESC, created_at DESC, id DESC LIMIT $3"
+    ))
+    .bind(kind)
+    .bind(streamer_login)
+    .bind(limit.clamp(1, 100))
+    .fetch_all(pool)
+    .await
+    .unwrap_or_default();
+    rows.into_iter().map(row_to_report).collect()
+}
+
+/// Sucht einen vorhandenen Report für denselben Zeitraum (Idempotenz-Check).
+pub async fn get_existing_report(
+    pool: &PgPool,
+    kind: &str,
+    period_start: &str,
+    period_end: &str,
+    streamer_login: Option<&str>,
+) -> Option<SocialMediaReportRecord> {
+    let row: Option<ReportRow> = sqlx::query_as(&format!(
+        "SELECT {REPORT_COLUMNS} FROM social_media_reports \
+          WHERE kind = $1 AND period_start = $2::timestamptz AND period_end = $3::timestamptz \
+            AND (streamer_login = $4 OR (streamer_login IS NULL AND $4::text IS NULL)) \
+          ORDER BY created_at DESC, id DESC LIMIT 1"
+    ))
+    .bind(kind)
+    .bind(period_start)
+    .bind(period_end)
+    .bind(streamer_login)
+    .fetch_optional(pool)
+    .await
+    .ok()
+    .flatten();
+    row.map(row_to_report)
+}
+
+/// Legt einen Report an und liefert den gespeicherten Datensatz.
+pub async fn insert_report(
+    pool: &PgPool,
+    kind: &str,
+    streamer_login: Option<&str>,
+    period_start: &str,
+    period_end: &str,
+    content_md: &str,
+    model: Option<&str>,
+) -> Result<SocialMediaReportRecord, sqlx::Error> {
+    let row: ReportRow = sqlx::query_as(&format!(
+        "INSERT INTO social_media_reports (kind, streamer_login, period_start, period_end, content_md, model) \
+         VALUES ($1, $2, $3::timestamptz, $4::timestamptz, $5, $6) RETURNING {REPORT_COLUMNS}"
+    ))
+    .bind(kind)
+    .bind(streamer_login)
+    .bind(period_start)
+    .bind(period_end)
+    .bind(content_md)
+    .bind(model)
+    .fetch_one(pool)
+    .await?;
+    Ok(row_to_report(row))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -231,5 +338,52 @@ mod tests {
         assert_eq!(snaps[0].bucket, "24h");
         assert_eq!(snaps[1].bucket, "7d");
         assert_eq!(snaps[1].views, 0); // Retry-Fall ohne Metriken
+    }
+
+    async fn make_reports_pool(schema: &str) -> Option<PgPool> {
+        let dsn = std::env::var("TB_TEST_DATABASE_URL").ok()?;
+        let admin = PgPoolOptions::new().max_connections(1).connect(&dsn).await.unwrap();
+        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE")).execute(&admin).await.unwrap();
+        sqlx::query(&format!("CREATE SCHEMA {schema}")).execute(&admin).await.unwrap();
+        admin.close().await;
+        let opts = PgConnectOptions::from_str(&dsn).unwrap().options([("search_path", schema)]);
+        let pool = PgPoolOptions::new().max_connections(3).connect_with(opts).await.unwrap();
+        sqlx::query(
+            "CREATE TABLE social_media_reports (id SERIAL PRIMARY KEY, kind TEXT NOT NULL, streamer_login TEXT, \
+             period_start TIMESTAMPTZ NOT NULL, period_end TIMESTAMPTZ NOT NULL, content_md TEXT NOT NULL, \
+             model TEXT, created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        Some(pool)
+    }
+
+    #[tokio::test]
+    async fn report_insert_get_list() {
+        let Some(pool) = make_reports_pool("t_sm_reports").await else { return };
+        let (ps, pe) = ("2026-06-01T00:00:00+00:00", "2026-06-08T00:00:00+00:00");
+        // Insert streamer-spezifisch.
+        let rec = insert_report(&pool, "weekly", Some("nani"), ps, pe, "# Report", Some("minimax")).await.unwrap();
+        assert_eq!(rec.kind, "weekly");
+        assert_eq!(rec.streamer_login.as_deref(), Some("nani"));
+        assert_eq!(rec.content_md, "# Report");
+        assert!(rec.created_at.is_some());
+
+        // get_existing trifft denselben Zeitraum (timestamptz-Gleichheit, formatunabhängig).
+        let found = get_existing_report(&pool, "weekly", ps, pe, Some("nani")).await;
+        assert_eq!(found.map(|r| r.id), Some(rec.id));
+        // Anderer Streamer → kein Treffer.
+        assert!(get_existing_report(&pool, "weekly", ps, pe, Some("other")).await.is_none());
+        // Globaler Report (streamer NULL) separat.
+        insert_report(&pool, "weekly", None, ps, pe, "# Global", None).await.unwrap();
+        let global = get_existing_report(&pool, "weekly", ps, pe, None).await.unwrap();
+        assert_eq!(global.streamer_login, None);
+        assert_eq!(global.model, None);
+
+        // list: ohne Filter beide, kind-Filter greift, streamer-Filter greift.
+        assert_eq!(list_reports(&pool, None, None, 20).await.len(), 2);
+        assert_eq!(list_reports(&pool, Some("weekly"), Some("nani"), 20).await.len(), 1);
+        assert_eq!(list_reports(&pool, Some("monthly"), None, 20).await.len(), 0);
     }
 }
