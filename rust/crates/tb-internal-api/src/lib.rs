@@ -6,6 +6,7 @@
 
 pub mod handlers;
 pub mod idempotency;
+pub mod security;
 
 use axum::{
     middleware,
@@ -14,7 +15,7 @@ use axum::{
 };
 use sqlx::PgPool;
 use std::sync::Arc;
-use tb_http_core::{internal_auth, loopback_only, ExpectedToken, INTERNAL_API_BASE_PATH};
+use tb_http_core::{ExpectedToken, INTERNAL_API_BASE_PATH};
 use tb_monitoring::EventSubDispatcher;
 use tb_transport_twitch::HelixClient;
 
@@ -29,6 +30,10 @@ pub use handlers::streamers::{
     ChatActionExt, ChatActionPort, ChatActionResult, DiscordRoleExt, DiscordRolePort,
 };
 pub use idempotency::IdempotencyState;
+pub use security::{
+    enforce_internal_api_runtime, RuntimeHardeningError, INTERNAL_API_PORT,
+    MASTER_API_RESERVED_PORT, ROLE_TWITCH_WORKER,
+};
 
 /// Baut den axum-Router für alle internen Endpoints.
 ///
@@ -270,6 +275,13 @@ pub fn build_internal_router(
         .layer(Extension(idempotency::IdempotencyState::new()))
         .layer(Extension(LegacyProxyExt(legacy_proxy)))
         .layer(Extension(ExpectedToken(token.clone())))
-        .layer(middleware::from_fn_with_state(token, internal_auth))
-        .layer(middleware::from_fn(loopback_only))
+        // Auth + Loopback-Guard sind die Block-10-gehärteten Varianten:
+        // - Token-Vergleich trimmt beide Seiten + lehnt leer ab (Python-Parität).
+        // - Loopback-Guard prüft Origin-Header UND Peer-IP (nicht nur Peer-IP).
+        // (tb-http-core::internal_auth/loopback_only bleiben für das Dashboard.)
+        .layer(middleware::from_fn_with_state(
+            token,
+            security::internal_api_auth_guard,
+        ))
+        .layer(middleware::from_fn(security::internal_api_loopback_guard))
 }

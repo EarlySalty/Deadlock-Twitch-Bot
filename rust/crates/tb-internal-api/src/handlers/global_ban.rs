@@ -18,7 +18,6 @@ use axum::{
     response::IntoResponse,
     Json,
 };
-use chrono::DateTime;
 use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
 use tb_analytics::global_ban as db;
@@ -215,7 +214,7 @@ pub async fn list_handler(
             chatter_id: e.chatter_id,
             reason: e.reason,
             added_by: e.added_by,
-            added_at: e.added_at.map(|dt: DateTime<_>| dt.to_rfc3339()),
+            added_at: e.added_at.map(crate::security::datetime_to_iso),
         })
         .collect();
 
