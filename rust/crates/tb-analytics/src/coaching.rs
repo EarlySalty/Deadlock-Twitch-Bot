@@ -1421,6 +1421,146 @@ pub async fn peer_comparison(
     }))
 }
 
+/// Wochentags-Kürzel (Python `weekday_names`, Index = EXTRACT(DOW), So=0).
+const WEEKDAY_NAMES: &[&str] = &["So", "Mo", "Di", "Mi", "Do", "Fr", "Sa"];
+
+/// Konkurrenz-Dichte (Python `_competition_density`): aktive Streamer +
+/// Kategorie-Ø je Stunde/Wochentag, eigene Performance als Overlay, plus die
+/// besten Gelegenheits-Stunden (Ø-Viewer pro Konkurrent).
+pub async fn competition_density(
+    pool: &PgPool,
+    streamer: &str,
+    since: DateTime<Utc>,
+) -> Result<Value, sqlx::Error> {
+    // 1) Stündliche Dichte (alle Streamer, abgeschlossene Sessions).
+    let density: Vec<(i32, i64, Option<f64>, Option<f64>)> = sqlx::query_as(
+        "SELECT EXTRACT(HOUR FROM (s.started_at AT TIME ZONE 'UTC'))::int, \
+                COUNT(DISTINCT s.streamer_login)::bigint, \
+                AVG(s.avg_viewers)::float8, AVG(s.peak_viewers)::float8 \
+           FROM twitch_stream_sessions s \
+          WHERE s.started_at >= $1 AND s.duration_seconds > 300 AND s.ended_at IS NOT NULL \
+          GROUP BY 1 \
+          ORDER BY 1",
+    )
+    .bind(since)
+    .fetch_all(pool)
+    .await?;
+
+    // 2) Eigene Performance je Stunde (KEIN ended_at-Filter, 1:1 Python).
+    let own_hours: Vec<(i32, i64, Option<f64>, Option<f64>, Option<f64>)> = sqlx::query_as(
+        "SELECT EXTRACT(HOUR FROM (s.started_at AT TIME ZONE 'UTC'))::int, \
+                COUNT(*)::bigint, AVG(s.avg_viewers)::float8, \
+                AVG(s.peak_viewers)::float8, AVG(s.unique_chatters)::float8 \
+           FROM twitch_stream_sessions s \
+          WHERE s.streamer_login = $1 AND s.started_at >= $2 AND s.duration_seconds > 300 \
+          GROUP BY 1 \
+          ORDER BY 1",
+    )
+    .bind(streamer)
+    .bind(since)
+    .fetch_all(pool)
+    .await?;
+
+    let mut own_map: HashMap<i32, Value> = HashMap::new();
+    for (hour, cnt, avg_v, avg_peak, avg_chat) in &own_hours {
+        own_map.insert(
+            *hour,
+            json!({
+                "count": cnt,
+                "avgViewers": retention_value(*avg_v),
+                "avgPeak": retention_value(*avg_peak),
+                "avgChatters": retention_value(*avg_chat),
+            }),
+        );
+    }
+
+    let mut hourly: Vec<Value> = Vec::new();
+    let mut opp_values: Vec<f64> = Vec::new();
+    for (hour, streamers, avg_v_opt, avg_p_opt) in &density {
+        // opp nutzt den GERUNDETEN avg_v (1:1 Python).
+        let avg_v_num = round1(avg_v_opt.unwrap_or(0.0));
+        let (opp_num, opp_json) = if *streamers > 0 {
+            let o = round2(avg_v_num / *streamers as f64);
+            (o, json!(o))
+        } else {
+            (0.0, json!(0))
+        };
+        hourly.push(json!({
+            "hour": hour,
+            "activeStreamers": streamers,
+            "avgViewers": retention_value(*avg_v_opt),
+            "avgPeak": retention_value(*avg_p_opt),
+            "opportunityScore": opp_json,
+            "yourData": own_map.get(hour).cloned().unwrap_or(Value::Null),
+        }));
+        opp_values.push(opp_num);
+    }
+
+    // 3) Dichte je Wochentag.
+    let weekday_density: Vec<(i32, i64, Option<f64>)> = sqlx::query_as(
+        "SELECT EXTRACT(DOW FROM (s.started_at AT TIME ZONE 'UTC'))::int, \
+                COUNT(DISTINCT s.streamer_login)::bigint, AVG(s.avg_viewers)::float8 \
+           FROM twitch_stream_sessions s \
+          WHERE s.started_at >= $1 AND s.duration_seconds > 300 AND s.ended_at IS NOT NULL \
+          GROUP BY 1 \
+          ORDER BY 1",
+    )
+    .bind(since)
+    .fetch_all(pool)
+    .await?;
+
+    // 4) Eigene Performance je Wochentag.
+    let own_weekdays: Vec<(i32, i64, Option<f64>, Option<f64>)> = sqlx::query_as(
+        "SELECT EXTRACT(DOW FROM (s.started_at AT TIME ZONE 'UTC'))::int, \
+                COUNT(*)::bigint, AVG(s.avg_viewers)::float8, AVG(s.peak_viewers)::float8 \
+           FROM twitch_stream_sessions s \
+          WHERE s.streamer_login = $1 AND s.started_at >= $2 AND s.duration_seconds > 300 \
+          GROUP BY 1",
+    )
+    .bind(streamer)
+    .bind(since)
+    .fetch_all(pool)
+    .await?;
+
+    let mut own_wd_map: HashMap<i32, Value> = HashMap::new();
+    for (wd, cnt, avg_v, avg_peak) in &own_weekdays {
+        own_wd_map.insert(
+            *wd,
+            json!({
+                "count": cnt,
+                "avgViewers": retention_value(*avg_v),
+                "avgPeak": retention_value(*avg_peak),
+            }),
+        );
+    }
+
+    let weekly: Vec<Value> = weekday_density
+        .iter()
+        .map(|(wd, streamers, avg_v)| {
+            json!({
+                "weekday": wd,
+                "weekdayLabel": WEEKDAY_NAMES.get(*wd as usize).copied().unwrap_or(""),
+                "activeStreamers": streamers,
+                "avgViewers": retention_value(*avg_v),
+                "yourData": own_wd_map.get(wd).cloned().unwrap_or(Value::Null),
+            })
+        })
+        .collect();
+
+    // Sweet Spots: stabiler Sort nach opportunityScore DESC, Top 5.
+    let mut idx: Vec<usize> = (0..hourly.len()).collect();
+    idx.sort_by(|&a, &b| {
+        opp_values[b].partial_cmp(&opp_values[a]).unwrap_or(std::cmp::Ordering::Equal)
+    });
+    let sweet_spots: Vec<Value> = idx.iter().take(5).map(|&i| hourly[i].clone()).collect();
+
+    Ok(json!({
+        "hourly": hourly,
+        "weekly": weekly,
+        "sweetSpots": sweet_spots,
+    }))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1986,5 +2126,58 @@ mod tests {
         assert_eq!(v["metricsRanked"]["avgViewers"]["total"], 4);
         // titleVariety: nani 100 ist Höchstwert → Rang 1.
         assert_eq!(v["metricsRanked"]["titleVariety"]["rank"], 1);
+    }
+
+    #[tokio::test]
+    async fn competition_density_berechnet() {
+        let Some(pool) = make_pool("t_coach_compdens").await else { return };
+        // Alle am 2026-06-10. Stunde 14: nani(50)+other(100) → 2 Streamer, Ø75.
+        // Stunde 20: nur nani(80) → 1 Streamer, Ø80 (bester Sweet Spot).
+        sqlx::query(
+            "INSERT INTO twitch_stream_sessions (streamer_login, started_at, ended_at, duration_seconds, avg_viewers, peak_viewers, unique_chatters) VALUES \
+            ('nani',  TIMESTAMPTZ '2026-06-10 14:00:00+00', NOW(), 7200, 50,  100, 10), \
+            ('other', TIMESTAMPTZ '2026-06-10 14:00:00+00', NOW(), 7200, 100, 200, 20), \
+            ('nani',  TIMESTAMPTZ '2026-06-10 20:00:00+00', NOW(), 7200, 80,  150, 12)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let v = competition_density(&pool, "nani", Utc::now() - chrono::Duration::days(365))
+            .await
+            .unwrap();
+
+        // Stündlich: 2 Buckets (14, 20), nach Stunde sortiert.
+        let hourly = v["hourly"].as_array().unwrap();
+        assert_eq!(hourly.len(), 2);
+        assert_eq!(hourly[0]["hour"], 14);
+        assert_eq!(hourly[0]["activeStreamers"], 2);
+        assert_eq!(hourly[0]["avgViewers"], 75.0); // (50+100)/2
+        assert_eq!(hourly[0]["opportunityScore"], 37.5); // 75/2
+        assert_eq!(hourly[0]["yourData"]["count"], 1);
+        assert_eq!(hourly[0]["yourData"]["avgViewers"], 50.0);
+        assert_eq!(hourly[1]["hour"], 20);
+        assert_eq!(hourly[1]["opportunityScore"], 80.0); // 80/1
+
+        // Sweet Spots: Stunde 20 (80) vor Stunde 14 (37.5).
+        assert_eq!(v["sweetSpots"][0]["hour"], 20);
+        assert_eq!(v["sweetSpots"][1]["hour"], 14);
+
+        // Wochentag: ein Bucket (2026-06-10), 2 aktive Streamer.
+        let weekly = v["weekly"].as_array().unwrap();
+        assert_eq!(weekly.len(), 1);
+        assert_eq!(weekly[0]["activeStreamers"], 2);
+        assert_eq!(weekly[0]["avgViewers"], 76.7); // (50+100+80)/3
+        // Label = WEEKDAY_NAMES[DOW(2026-06-10)] (So=0).
+        use chrono::Datelike;
+        let dow = chrono::NaiveDate::from_ymd_opt(2026, 6, 10)
+            .unwrap()
+            .weekday()
+            .num_days_from_sunday();
+        assert_eq!(weekly[0]["weekday"], dow);
+        assert_eq!(weekly[0]["weekdayLabel"], WEEKDAY_NAMES[dow as usize]);
+        // yourData: nani 2 Sessions an dem Tag, Ø(50,80)=65.
+        assert_eq!(weekly[0]["yourData"]["count"], 2);
+        assert_eq!(weekly[0]["yourData"]["avgViewers"], 65.0);
     }
 }
