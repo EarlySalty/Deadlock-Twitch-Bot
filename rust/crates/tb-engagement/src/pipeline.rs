@@ -29,7 +29,7 @@ use crate::stream_state::StreamState;
 use crate::stream_transcripts::{segments_to_prompt_fragment, StreamTranscripts};
 use crate::style_examples::StyleExamples;
 use crate::threads::{threads_to_prompt_fragment, Threads};
-use crate::types::{Decision, HandleResult, IncomingMessage};
+use crate::types::{Decision, HandleResult, IncomingMessage, OutputMode};
 
 /// Billiger Pre-Filter ohne Modell-Call: Nachrichten, auf die ein Zuschauer nie
 /// antworten würde, fliegen sofort raus (Python `_should_skip_trigger`).
@@ -181,6 +181,14 @@ impl EngagementPipeline {
             Some(s) if s.enabled => s,
             _ => return HandleResult::new(Decision::Disabled),
         };
+        // Output-Modus-Gate (Block-19-Grillme): `off` = no-op, gar kein KI-Output
+        // erzeugen — vor dem teuren Modell-Call abbrechen. Default ist `off`,
+        // damit die Engagement-KI ohne expliziten Dashboard-Toggle stumm bleibt.
+        // `shadow`/`live` laufen weiter; die Verzweigung "senden vs. staging"
+        // passiert nach erfolgreicher Generierung am Ende von handle_inner.
+        if settings.output_mode == OutputMode::Off {
+            return HandleResult::new(Decision::Disabled);
+        }
         if !gate::is_operational_partner(&self.pool, &msg.channel_login).await {
             return HandleResult::new(Decision::Disabled);
         }
@@ -346,6 +354,27 @@ impl EngagementPipeline {
             }
         }
 
+        // --- Output-Modus-Verzweigung (Block-19-Grillme) ---
+        // `shadow`: die Antwort wurde erzeugt, geht aber NICHT in den Chat. Damit
+        // der Live-Kontext nicht verfälscht wird, lösen wir KEINE Sende-Seiten-
+        // effekte aus (kein note_bot_post, kein assistant-Turn im Buffer, keine
+        // Thread-Referenzierung) — der Bot hat ja nichts gesagt. Der Text wird
+        // über das Decision-Log (response_text-Spalte) gestaged; das Discord-
+        // Review-Ticket holt ihn dort ab. response_text (= Sendesignal für
+        // tb-bot) bleibt bewusst None, shadow_text trägt den Text.
+        if settings.output_mode == OutputMode::Shadow {
+            return HandleResult {
+                decision: Decision::Shadowed,
+                shadow_text: Some(text),
+                model: Some(response.model),
+                prompt_tokens: response.prompt_tokens,
+                completion_tokens: response.completion_tokens,
+                latency_ms: Some(response.latency_ms),
+                ..HandleResult::new(Decision::Shadowed)
+            };
+        }
+
+        // `live`: normal senden — Sende-Seiteneffekte ausführen.
         self.rhythm.note_bot_post(&msg.channel_login, Utc::now());
         let _ = self.conversation.append_assistant_turn(&msg.channel_login, &text).await;
 
@@ -361,6 +390,7 @@ impl EngagementPipeline {
         HandleResult {
             decision: Decision::Spoke,
             response_text: Some(text),
+            shadow_text: None,
             model: Some(response.model),
             prompt_tokens: response.prompt_tokens,
             completion_tokens: response.completion_tokens,
@@ -423,7 +453,7 @@ mod tests {
         let opts = PgConnectOptions::from_str(&dsn).unwrap().options([("search_path", schema)]);
         let pool = PgPoolOptions::new().max_connections(3).connect_with(opts).await.unwrap();
         for ddl in [
-            "CREATE TABLE twitch_engagement_settings (channel_login TEXT PRIMARY KEY, enabled BOOLEAN NOT NULL DEFAULT FALSE, steam_id TEXT, persona_override TEXT, tabu_topics TEXT[])",
+            "CREATE TABLE twitch_engagement_settings (channel_login TEXT PRIMARY KEY, enabled BOOLEAN NOT NULL DEFAULT FALSE, steam_id TEXT, persona_override TEXT, tabu_topics TEXT[], output_mode TEXT NOT NULL DEFAULT 'off')",
             "CREATE TABLE twitch_streamers_partner_state (twitch_login TEXT, is_partner_active INTEGER)",
             "CREATE TABLE twitch_live_state (twitch_user_id TEXT PRIMARY KEY, streamer_login TEXT NOT NULL, is_live INTEGER DEFAULT 0, last_game TEXT)",
             "CREATE TABLE twitch_user_engagement_optout (twitch_user_id TEXT PRIMARY KEY, opted_out_at TIMESTAMPTZ DEFAULT NOW())",
@@ -477,7 +507,8 @@ mod tests {
         // nicht anfasst (greift nur, wenn dieser DB-Test überhaupt läuft).
         crate::minimax_chat::redirect_ledger_to_temp();
         let Some(pool) = make_pool("t_eng_pipe_spoke").await else { return };
-        sqlx::query("INSERT INTO twitch_engagement_settings (channel_login, enabled) VALUES ('nani', TRUE)").execute(&pool).await.unwrap();
+        // output_mode='live' → senden (Default wäre 'off' = no-op).
+        sqlx::query("INSERT INTO twitch_engagement_settings (channel_login, enabled, output_mode) VALUES ('nani', TRUE, 'live')").execute(&pool).await.unwrap();
         sqlx::query("INSERT INTO twitch_streamers_partner_state (twitch_login, is_partner_active) VALUES ('nani', 1)").execute(&pool).await.unwrap();
         sqlx::query("INSERT INTO twitch_live_state (twitch_user_id, streamer_login, is_live, last_game) VALUES ('1','nani',1,'Deadlock')").execute(&pool).await.unwrap();
 
@@ -495,6 +526,7 @@ mod tests {
         let r = pipe.handle(&msg()).await;
         assert_eq!(r.decision, Decision::Spoke);
         assert_eq!(r.response_text.as_deref(), Some("klar haze ist stark grad"));
+        assert!(r.shadow_text.is_none(), "live setzt shadow_text nicht");
         // User- + Assistant-Turn persistiert.
         let n: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM twitch_engagement_conversation")
             .fetch_one(&pool).await.unwrap();
@@ -505,10 +537,74 @@ mod tests {
         assert_eq!(dec, "spoke");
     }
 
+    /// output_mode='shadow': die Antwort wird ERZEUGT, aber NICHT gesendet
+    /// (response_text leer → tb-bot sendet nicht). Der Text steht in shadow_text
+    /// und wird ins Decision-Log (response_text-Spalte) gestaged. KEINE
+    /// Sende-Seiteneffekte: der assistant-Turn landet NICHT im Buffer (nur der
+    /// user-Turn), damit der Live-Kontext nicht verfälscht wird.
+    #[tokio::test]
+    async fn shadow_erzeugt_aber_sendet_nicht() {
+        crate::minimax_chat::redirect_ledger_to_temp();
+        let Some(pool) = make_pool("t_eng_pipe_shadow").await else { return };
+        sqlx::query("INSERT INTO twitch_engagement_settings (channel_login, enabled, output_mode) VALUES ('nani', TRUE, 'shadow')").execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO twitch_streamers_partner_state (twitch_login, is_partner_active) VALUES ('nani', 1)").execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO twitch_live_state (twitch_user_id, streamer_login, is_live, last_game) VALUES ('1','nani',1,'Deadlock')").execute(&pool).await.unwrap();
+
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/chat/completions"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "choices": [{"message": {"content": "shadow-antwort nur fuer review"}}],
+                "usage": {"prompt_tokens": 100, "completion_tokens": 8}
+            })))
+            .mount(&server)
+            .await;
+
+        let pipe = pipeline_with(pool.clone(), &server.uri());
+        let r = pipe.handle(&msg()).await;
+        assert_eq!(r.decision, Decision::Shadowed);
+        // Kein Sendesignal für tb-bot.
+        assert!(r.response_text.is_none(), "shadow darf response_text NICHT setzen (kein Senden)");
+        assert_eq!(r.shadow_text.as_deref(), Some("shadow-antwort nur fuer review"));
+        // Nur der user-Turn im Buffer — KEIN assistant-Turn (Bot hat nichts gesagt).
+        let n: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM twitch_engagement_conversation")
+            .fetch_one(&pool).await.unwrap();
+        assert_eq!(n, 1, "shadow appended keinen assistant-Turn");
+        // Decision='shadowed' geloggt, Text als Staging in response_text-Spalte.
+        let row: (String, Option<String>) = sqlx::query_as("SELECT decision, response_text FROM twitch_engagement_log LIMIT 1")
+            .fetch_one(&pool).await.unwrap();
+        assert_eq!(row.0, "shadowed");
+        assert_eq!(row.1.as_deref(), Some("shadow-antwort nur fuer review"));
+    }
+
+    /// output_mode='off' bei enabled=TRUE: no-op. Kein MiniMax-Call (Mock würde
+    /// sonst zünden), kein Output, Decision=Disabled → kein Log-Eintrag.
+    #[tokio::test]
+    async fn off_ist_noop_kein_call() {
+        let Some(pool) = make_pool("t_eng_pipe_off").await else { return };
+        sqlx::query("INSERT INTO twitch_engagement_settings (channel_login, enabled, output_mode) VALUES ('nani', TRUE, 'off')").execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO twitch_streamers_partner_state (twitch_login, is_partner_active) VALUES ('nani', 1)").execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO twitch_live_state (twitch_user_id, streamer_login, is_live, last_game) VALUES ('1','nani',1,'Deadlock')").execute(&pool).await.unwrap();
+
+        // MiniMax-URI ist tot (127.0.0.1:1): würde der Pfad MiniMax erreichen,
+        // wäre es ProviderError statt Disabled. Disabled beweist den frühen Abbruch.
+        let pipe = pipeline_with(pool.clone(), "http://127.0.0.1:1");
+        let r = pipe.handle(&msg()).await;
+        assert_eq!(r.decision, Decision::Disabled);
+        assert!(r.response_text.is_none() && r.shadow_text.is_none());
+        // Kein user-Turn (Abbruch vor dem Buffer-Append) und kein Log.
+        let conv: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM twitch_engagement_conversation")
+            .fetch_one(&pool).await.unwrap();
+        assert_eq!(conv, 0);
+        let logs: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM twitch_engagement_log")
+            .fetch_one(&pool).await.unwrap();
+        assert_eq!(logs, 0, "Disabled wird nicht geloggt");
+    }
+
     #[tokio::test]
     async fn silent_bei_skip_trigger() {
         let Some(pool) = make_pool("t_eng_pipe_silent").await else { return };
-        sqlx::query("INSERT INTO twitch_engagement_settings (channel_login, enabled) VALUES ('nani', TRUE)").execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO twitch_engagement_settings (channel_login, enabled, output_mode) VALUES ('nani', TRUE, 'live')").execute(&pool).await.unwrap();
         sqlx::query("INSERT INTO twitch_streamers_partner_state (twitch_login, is_partner_active) VALUES ('nani', 1)").execute(&pool).await.unwrap();
         sqlx::query("INSERT INTO twitch_live_state (twitch_user_id, streamer_login, is_live, last_game) VALUES ('1','nani',1,'Deadlock')").execute(&pool).await.unwrap();
 

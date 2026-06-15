@@ -7,27 +7,47 @@
 
 use sqlx::PgPool;
 
-use crate::types::{Decision, EngagementSettings, HandleResult};
+use crate::types::{Decision, EngagementSettings, HandleResult, OutputMode};
 
-/// Lädt die Engagement-Settings eines Channels (Python `_sync_load_settings`).
+/// Roh-Zeile von `twitch_engagement_settings` in Select-Reihenfolge
+/// (channel_login, enabled, steam_id, persona_override, tabu_topics, output_mode).
+type SettingsRow = (
+    String,
+    bool,
+    Option<String>,
+    Option<String>,
+    Option<Vec<String>>,
+    Option<String>,
+);
+
+/// Lädt die Engagement-Settings eines Channels (Python `_sync_load_settings`,
+/// erweitert um die additive Spalte `output_mode`).
+///
+/// `output_mode` kommt aus der Migration mit `NOT NULL DEFAULT 'off'`; ein
+/// fehlender/unbekannter Wert fällt über [`OutputMode::from_db`] fail-safe auf
+/// `off` zurück (kein Output im Zweifel).
 pub async fn load_settings(pool: &PgPool, channel_login: &str) -> Option<EngagementSettings> {
-    let row: Option<(String, bool, Option<String>, Option<String>, Option<Vec<String>>)> =
-        sqlx::query_as(
-            "SELECT channel_login, enabled, steam_id, persona_override, tabu_topics \
+    let row: Option<SettingsRow> = sqlx::query_as(
+        "SELECT channel_login, enabled, steam_id, persona_override, tabu_topics, output_mode \
              FROM twitch_engagement_settings WHERE channel_login = $1",
-        )
-        .bind(channel_login)
-        .fetch_optional(pool)
-        .await
-        .ok()
-        .flatten();
-    row.map(|(channel_login, enabled, steam_id, persona_override, tabu_topics)| EngagementSettings {
-        channel_login,
-        enabled,
-        steam_id,
-        persona_override,
-        tabu_topics: tabu_topics.unwrap_or_default(),
-    })
+    )
+    .bind(channel_login)
+    .fetch_optional(pool)
+    .await
+    .ok()
+    .flatten();
+    row.map(
+        |(channel_login, enabled, steam_id, persona_override, tabu_topics, output_mode)| {
+            EngagementSettings {
+                channel_login,
+                enabled,
+                steam_id,
+                persona_override,
+                tabu_topics: tabu_topics.unwrap_or_default(),
+                output_mode: OutputMode::from_db(output_mode.as_deref().unwrap_or("off")),
+            }
+        },
+    )
 }
 
 /// Hat sich der User vom Engagement abgemeldet? (Python `_sync_is_opted_out`).
@@ -65,6 +85,11 @@ pub async fn is_operational_partner(pool: &PgPool, channel_login: &str) -> bool 
 }
 
 /// Schreibt eine Engagement-Entscheidung ins Log (Python `_sync_log_decision`).
+///
+/// Der in die `response_text`-Spalte geschriebene Text ist im `live`-Modus
+/// [`HandleResult::response_text`] (der gesendete Text) und im `shadow`-Modus
+/// [`HandleResult::shadow_text`] (der erzeugte, aber nicht gesendete Text). So
+/// findet das Discord-Review-Ticket den gestagten Shadow-Output direkt im Log.
 #[allow(clippy::too_many_arguments)]
 pub async fn log_decision(
     pool: &PgPool,
@@ -73,6 +98,7 @@ pub async fn log_decision(
     result: &HandleResult,
     cost_usd: Option<f64>,
 ) {
+    let logged_text = result.response_text.as_deref().or(result.shadow_text.as_deref());
     let _ = sqlx::query(
         "INSERT INTO twitch_engagement_log \
          (channel_login, triggered_by_msg_id, decision, response_text, referenced_thread_ids, \
@@ -82,7 +108,7 @@ pub async fn log_decision(
     .bind(channel_login)
     .bind(triggered_by_msg_id)
     .bind(result.decision.as_str())
-    .bind(result.response_text.as_deref())
+    .bind(logged_text)
     .bind(result.referenced_thread_ids.as_deref())
     .bind(result.model.as_deref().unwrap_or(""))
     .bind(result.prompt_tokens.map(|t| t as i32))
@@ -115,7 +141,8 @@ mod tests {
         sqlx::query(
             "CREATE TABLE twitch_engagement_settings (\
              channel_login TEXT PRIMARY KEY, enabled BOOLEAN NOT NULL DEFAULT FALSE, \
-             steam_id TEXT, persona_override TEXT, tabu_topics TEXT[])",
+             steam_id TEXT, persona_override TEXT, tabu_topics TEXT[], \
+             output_mode TEXT NOT NULL DEFAULT 'off')",
         )
         .execute(&pool).await.unwrap();
         sqlx::query("CREATE TABLE twitch_user_engagement_optout (twitch_user_id TEXT PRIMARY KEY, opted_out_at TIMESTAMPTZ DEFAULT NOW())")
@@ -146,7 +173,15 @@ mod tests {
         assert!(s.enabled);
         assert_eq!(s.steam_id.as_deref(), Some("123"));
         assert_eq!(s.tabu_topics, vec!["politik".to_string(), "religion".to_string()]);
+        // output_mode kommt aus dem Spalten-Default → off (kein Output ohne Toggle).
+        assert_eq!(s.output_mode, OutputMode::Off);
         assert!(load_settings(&pool, "unbekannt").await.is_none());
+
+        // Explizit gesetzter Modus wird gelesen.
+        sqlx::query("INSERT INTO twitch_engagement_settings (channel_login, enabled, output_mode) VALUES ('livech', TRUE, 'live'), ('shadowch', TRUE, 'shadow')")
+            .execute(&pool).await.unwrap();
+        assert_eq!(load_settings(&pool, "livech").await.unwrap().output_mode, OutputMode::Live);
+        assert_eq!(load_settings(&pool, "shadowch").await.unwrap().output_mode, OutputMode::Shadow);
 
         assert!(is_opted_out(&pool, "u_out").await);
         assert!(!is_opted_out(&pool, "u_in").await);
@@ -163,6 +198,7 @@ mod tests {
         let result = HandleResult {
             decision: Decision::Spoke,
             response_text: Some("antwort".to_string()),
+            shadow_text: None,
             model: Some("MiniMax-M3".to_string()),
             prompt_tokens: Some(42),
             completion_tokens: Some(7),
