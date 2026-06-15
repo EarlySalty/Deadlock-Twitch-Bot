@@ -74,7 +74,9 @@ use tb_transport_discord::BrokerRelay;
 use tb_transport_twitch::{HelixClient, HelixConfig};
 
 use auto_raid::OfflineRaidHandler;
-use eventsub_hooks::{BlacklistRaidGuard, RaidArrivalCoordinator, RaidEventSubHooks};
+use eventsub_hooks::{
+    BlacklistRaidGuard, RaidArrivalCoordinator, RaidEventSubHooks, RaidTrackingResolverAdapter,
+};
 use reauth_reminder::ReauthReminder;
 use offline_side_effects::OfflineSideEffects;
 use raid_adapters::{
@@ -322,13 +324,21 @@ async fn main() {
         }),
         None => Arc::new(NoFollowerSource),
     };
-    let tracker = Arc::new(SessionTracker::new(
-        SessionStore::new(pool.clone()),
-        live_state.clone(),
-        ExpSessionTracker::new(ExpSessionStore::new(pool.clone())),
-        followers.clone(),
-        &target_game,
-    ));
+    let tracker = Arc::new(
+        SessionTracker::new(
+            SessionStore::new(pool.clone()),
+            live_state.clone(),
+            ExpSessionTracker::new(ExpSessionStore::new(pool.clone())),
+            followers.clone(),
+            &target_game,
+        )
+        // B7 raid-scores-tracking-1: offene Partner-Raid-Score-Tracking-Zeilen
+        // der Session beim Finalize auflösen (entkoppelt via Port → tb-raid).
+        .with_raid_resolver(Arc::new(RaidTrackingResolverAdapter::new(
+            pool.clone(),
+            &target_game,
+        ))),
+    );
     tracker.rehydrate().await;
 
     let webhook_secret = std::env::var("TWITCH_WEBHOOK_SECRET")

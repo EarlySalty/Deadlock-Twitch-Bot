@@ -53,6 +53,20 @@ async fn pool_in_schema(dsn: &str, schema: &str) -> PgPool {
             resolved_at TEXT, resolution_reason TEXT, raid_history_executed_at TIMESTAMPTZ,
             readiness_score DOUBLE PRECISION, fairness_score DOUBLE PRECISION )",
     ).execute(&pool).await.unwrap();
+    sqlx::query(
+        "CREATE TABLE twitch_stream_sessions (id BIGSERIAL PRIMARY KEY, streamer_login TEXT, \
+         started_at TIMESTAMPTZ, ended_at TIMESTAMPTZ)",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "CREATE TABLE twitch_channel_updates (twitch_user_id TEXT, title TEXT, game_name TEXT, \
+         language TEXT, recorded_at TIMESTAMPTZ)",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
     pool
 }
 
@@ -103,4 +117,134 @@ async fn track_schreibt_zeile_mit_int_deadlock_flag_und_leere_id_none() {
     .await
     .unwrap();
     assert!(resolved.is_none());
+}
+
+/// Insert-Helfer für eine offene (resolved_at NULL) Tracking-Zeile.
+#[allow(clippy::too_many_arguments)]
+async fn insert_open_row(
+    pool: &PgPool,
+    to_id: &str,
+    to_login: &str,
+    confirmed_at: &str,
+    target_session_id: Option<i32>,
+    target_stream_started_at: Option<&str>,
+    was_deadlock: i32,
+) -> i32 {
+    sqlx::query_scalar(
+        "INSERT INTO twitch_partner_raid_score_tracking \
+         (to_broadcaster_id, to_broadcaster_login, confirmed_at, target_session_id, \
+          target_stream_started_at, was_deadlock_at_raid) \
+         VALUES ($1,$2,$3,$4,$5,$6) RETURNING id",
+    )
+    .bind(to_id)
+    .bind(to_login)
+    .bind(confirmed_at)
+    .bind(target_session_id)
+    .bind(target_stream_started_at)
+    .bind(was_deadlock)
+    .fetch_one(pool)
+    .await
+    .unwrap()
+}
+
+#[tokio::test]
+async fn resolve_setzt_offene_zeile_auf_resolved() {
+    let pool = pool_or_skip!("t6e_resolve");
+    let store = ScoreTrackingStore::new(pool.clone());
+
+    let started: chrono::DateTime<Utc> = "2026-06-15T18:00:00+00:00".parse().unwrap();
+    let ended: chrono::DateTime<Utc> = "2026-06-15T22:00:00+00:00".parse().unwrap();
+    sqlx::query("INSERT INTO twitch_stream_sessions (id, streamer_login, started_at, ended_at) VALUES (1,'dst',$1,$2)")
+        .bind(started).bind(ended).execute(&pool).await.unwrap();
+
+    // Deadlock-Raid um 18:30, kein Nicht-Deadlock-Channel-Update → session_ended.
+    let row_id = insert_open_row(
+        &pool, "200", "dst", "2026-06-15T18:30:00+00:00", Some(1), None, 1,
+    )
+    .await;
+    // Fremde Session-Zeile bleibt unangetastet.
+    let other_id = insert_open_row(
+        &pool, "999", "other", "2026-06-15T18:30:00+00:00", Some(2), None, 1,
+    )
+    .await;
+
+    let resolved = store
+        .resolve_for_session(Some("200"), "dst", Some(1), Some(ended), "deadlock")
+        .await;
+    assert_eq!(resolved, 1, "genau die Session-1-Zeile aufgelöst");
+
+    let (resolved_at, reason, secs): (Option<String>, Option<String>, Option<i32>) =
+        sqlx::query_as(
+            "SELECT resolved_at, resolution_reason, deadlock_continued_sec \
+             FROM twitch_partner_raid_score_tracking WHERE id=$1",
+        )
+        .bind(row_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert!(resolved_at.is_some(), "resolved_at gesetzt");
+    assert_eq!(reason.as_deref(), Some("session_ended"));
+    // 18:30 → 22:00 = 3.5h = 12600s.
+    assert_eq!(secs, Some(12600));
+
+    let other_resolved: Option<String> = sqlx::query_scalar(
+        "SELECT resolved_at FROM twitch_partner_raid_score_tracking WHERE id=$1",
+    )
+    .bind(other_id)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert!(other_resolved.is_none(), "fremde Session bleibt offen");
+}
+
+#[tokio::test]
+async fn resolve_deadlock_endet_an_non_deadlock_channel_update() {
+    let pool = pool_or_skip!("t6e_resolve_update");
+    let store = ScoreTrackingStore::new(pool.clone());
+
+    let started: chrono::DateTime<Utc> = "2026-06-15T18:00:00+00:00".parse().unwrap();
+    let ended: chrono::DateTime<Utc> = "2026-06-15T22:00:00+00:00".parse().unwrap();
+    sqlx::query("INSERT INTO twitch_stream_sessions (id, streamer_login, started_at, ended_at) VALUES (1,'dst',$1,$2)")
+        .bind(started).bind(ended).execute(&pool).await.unwrap();
+    let row_id = insert_open_row(
+        &pool, "200", "dst", "2026-06-15T18:30:00+00:00", Some(1), None, 1,
+    )
+    .await;
+
+    // Wechsel auf Nicht-Deadlock um 19:00 → resolution_dt = 19:00.
+    let update_ts: chrono::DateTime<Utc> = "2026-06-15T19:00:00+00:00".parse().unwrap();
+    sqlx::query("INSERT INTO twitch_channel_updates (twitch_user_id, game_name, recorded_at) VALUES ('200','Just Chatting',$1)")
+        .bind(update_ts).execute(&pool).await.unwrap();
+
+    let resolved = store
+        .resolve_for_session(Some("200"), "dst", Some(1), Some(ended), "deadlock")
+        .await;
+    assert_eq!(resolved, 1);
+
+    let (reason, secs): (Option<String>, Option<i32>) = sqlx::query_as(
+        "SELECT resolution_reason, deadlock_continued_sec \
+         FROM twitch_partner_raid_score_tracking WHERE id=$1",
+    )
+    .bind(row_id)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(reason.as_deref(), Some("channel_update_non_deadlock"));
+    // 18:30 → 19:00 = 1800s (nicht bis Session-Ende).
+    assert_eq!(secs, Some(1800));
+}
+
+#[tokio::test]
+async fn resolve_ohne_session_id_oder_ended_macht_nichts() {
+    let pool = pool_or_skip!("t6e_resolve_noop");
+    let store = ScoreTrackingStore::new(pool.clone());
+    let ended: chrono::DateTime<Utc> = "2026-06-15T22:00:00+00:00".parse().unwrap();
+    assert_eq!(
+        store.resolve_for_session(Some("200"), "dst", None, Some(ended), "deadlock").await,
+        0
+    );
+    assert_eq!(
+        store.resolve_for_session(Some("200"), "dst", Some(1), None, "deadlock").await,
+        0
+    );
 }

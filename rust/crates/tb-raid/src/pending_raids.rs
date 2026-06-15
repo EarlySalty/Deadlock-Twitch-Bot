@@ -289,6 +289,31 @@ impl PendingRaidStore {
         self.raids.values()
     }
 
+    /// Storniert alle ausstehenden Raids eines Quell-Streamers (B7-03,
+    /// Source-Self-Unraid). Einziges Match-Kriterium ist
+    /// `from_broadcaster_login` (normalisiert) — wie Python
+    /// `cancel_pending_raids_for_source_unraid` (raid_tracking_runtime.py
+    /// Z. 160–220). Nutzt die [`Self::iter`]-API zum read-only Sammeln der
+    /// Treffer-Keys (kein Borrow-Konflikt mit `pop`) und entfernt sie dann.
+    /// Fremde Pendings bleiben unangetastet. Gibt die entfernten Raids zurück.
+    pub fn cancel_from_source(&mut self, from_broadcaster_login: &str) -> Vec<PendingRaid> {
+        let normalized_from = normalize_broadcaster_login(from_broadcaster_login);
+        if normalized_from.is_empty() {
+            return vec![];
+        }
+        let matching_keys: Vec<(String, String)> = self
+            .iter()
+            .filter(|(_, raid)| {
+                normalize_broadcaster_login(&raid.from_broadcaster_login) == normalized_from
+            })
+            .map(|(key, _)| key.clone())
+            .collect();
+        matching_keys
+            .into_iter()
+            .filter_map(|(to_id, from)| self.pop(&to_id, Some(&from)))
+            .collect()
+    }
+
     /// Anzahl aktuell ausstehender Raids.
     pub fn len(&self) -> usize {
         self.raids.len()
@@ -480,6 +505,38 @@ mod tests {
         froms.sort();
         assert_eq!(froms, vec!["src_a".to_string(), "src_b".to_string()]);
         assert_eq!(s.values().count(), s.len());
+    }
+
+    // --- B7-03: Source-Self-Unraid-Cancel über iter() ---
+
+    #[test]
+    fn cancel_from_source_storniert_nur_eigene_quelle() {
+        let mut s = PendingRaidStore::new();
+        // Zwei Auto-Raids desselben Quell-Streamers auf verschiedene Ziele.
+        s.store(PendingRaid::new("Raider", "tgt_1"));
+        s.store(PendingRaid::new("raider", "tgt_2"));
+        // Fremder Quell-Streamer bleibt unangetastet.
+        s.store(PendingRaid::new("anderer", "tgt_3"));
+
+        // Unnormalisierter Input trifft trotzdem (trim + lowercase).
+        let canceled = s.cancel_from_source("  RAIDER  ");
+        assert_eq!(canceled.len(), 2, "beide Raids der Quelle storniert");
+        let mut targets: Vec<String> =
+            canceled.iter().map(|r| r.to_broadcaster_id.clone()).collect();
+        targets.sort();
+        assert_eq!(targets, vec!["tgt_1".to_string(), "tgt_2".to_string()]);
+
+        // Fremder Pending bleibt im Store.
+        assert_eq!(s.len(), 1);
+        assert!(s.get("tgt_3", Some("anderer")).is_some());
+    }
+
+    #[test]
+    fn cancel_from_source_leerer_login_macht_nichts() {
+        let mut s = PendingRaidStore::new();
+        s.store(PendingRaid::new("raider", "tgt_1"));
+        assert!(s.cancel_from_source("   ").is_empty());
+        assert_eq!(s.len(), 1, "kein Pending entfernt bei leerem Login");
     }
 
     #[test]

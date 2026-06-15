@@ -6,7 +6,9 @@ use std::sync::{Arc, Mutex};
 
 use tb_raid::arrival_runtime::{RaidArrivalRuntime, RaidArrivalSink};
 use tb_raid::pending_raids::PendingRaid;
-use tb_raid::signal_correlation::{RaidArrivalInput, RaidSignalCorrelationService};
+use tb_raid::signal_correlation::{
+    ChatNotificationInput, ChatUnraidInput, RaidArrivalInput, RaidSignalCorrelationService,
+};
 
 #[derive(Default)]
 struct RecordingSink {
@@ -168,5 +170,77 @@ async fn kein_pending_kein_manual_dispatcht_nichts() {
     assert!(
         sink.names().is_empty(),
         "no_pending ohne Manual → leerer Plan"
+    );
+}
+
+// --- B7-01: chat.notification-Raidmeldung → Arrival-Pfad genau 1× ---
+
+fn chat_notification_input(pending: Option<PendingRaid>, from: &str) -> ChatNotificationInput {
+    ChatNotificationInput {
+        to_broadcaster_id: "200".into(),
+        to_broadcaster_login: "dst".into(),
+        from_broadcaster_login: from.into(),
+        from_broadcaster_id: Some("100".into()),
+        viewer_count: 42,
+        message_id: Some("msg-1".into()),
+        event_timestamp: None,
+        pending_raid: pending,
+        recent_arrival_present: false,
+    }
+}
+
+#[tokio::test]
+async fn chat_notification_match_confirmt_genau_einmal() {
+    // Eingehende chat.notification-Raidmeldung mit passendem Pending → der
+    // Arrival-Pfad (confirm_pending_raid) wird genau 1× dispatcht.
+    let plan = RaidSignalCorrelationService
+        .plan_chat_notification(chat_notification_input(Some(PendingRaid::new("src", "200")), "src"));
+    let sink = Arc::new(RecordingSink::default());
+    RaidArrivalRuntime::new(sink.clone())
+        .execute_plan(&plan)
+        .await;
+
+    let names = sink.names();
+    let confirms = names.iter().filter(|n| n.as_str() == "confirm_pending_raid").count();
+    assert_eq!(confirms, 1, "chat.notification-Match → genau 1× confirm");
+    assert!(!names.contains(&"store_orphan_chat_notification".to_string()));
+}
+
+#[tokio::test]
+async fn chat_notification_ohne_pending_ist_orphan_kein_confirm() {
+    let plan = RaidSignalCorrelationService
+        .plan_chat_notification(chat_notification_input(None, "src"));
+    let sink = Arc::new(RecordingSink::default());
+    RaidArrivalRuntime::new(sink.clone())
+        .execute_plan(&plan)
+        .await;
+
+    let names = sink.names();
+    assert!(names.contains(&"store_orphan_chat_notification".to_string()));
+    assert!(
+        !names.contains(&"confirm_pending_raid".to_string()),
+        "Orphan → kein confirm"
+    );
+}
+
+#[tokio::test]
+async fn chat_unraid_bestaetigt_keinen_raid() {
+    // Unraid bestätigt nie einen Raid — nur diagnostische Observation, nie confirm.
+    let plan = RaidSignalCorrelationService.plan_chat_unraid(ChatUnraidInput {
+        to_broadcaster_id: "200".into(),
+        to_broadcaster_login: "dst".into(),
+        from_broadcaster_login: "src".into(),
+        from_broadcaster_id: Some("100".into()),
+        pending_raid: Some(PendingRaid::new("src", "200")),
+        recent_arrival_present: false,
+        event_timestamp: None,
+    });
+    let sink = Arc::new(RecordingSink::default());
+    RaidArrivalRuntime::new(sink.clone())
+        .execute_plan(&plan)
+        .await;
+    assert!(
+        !sink.names().contains(&"confirm_pending_raid".to_string()),
+        "Unraid → niemals confirm"
     );
 }

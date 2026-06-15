@@ -19,6 +19,8 @@ use chrono::Utc;
 use serde_json::Value;
 use sqlx::PgPool;
 use tb_monitoring::{EventSubHooks, LiveStateStore, SubscriptionManager};
+use tb_raid::pending_raids::normalize_broadcaster_login;
+use tb_raid::signal_correlation::{ChatNotificationInput, ChatUnraidInput};
 use tb_raid::{
     classify_partner_raid_arrival, PendingRaidStore, RaidArrivalInput, RaidArrivalRuntime,
     RaidBlacklistStore, RaidSignalCorrelationService, RaidSignalOutcome, TokenProvider,
@@ -147,6 +149,170 @@ impl RaidArrivalCoordinator {
             );
         }
     }
+
+    /// Ziel-seitige `channel.chat.notification`-Raidmeldung (notice_type=raid,
+    /// B7-01). Sekundärpfad zum `channel.raid`-Webhook: `broadcaster_*` ist das
+    /// Ziel, `raid.user_*` die Quelle. Pending nachschlagen → Plan über
+    /// `plan_chat_notification` → ausführen (Orphan/Mismatch/Match werden in den
+    /// Plan-Actions abgehandelt). Port von `on_chat_raid_notification`
+    /// (raid_arrival_runtime.py Z. 534–614).
+    pub async fn handle_chat_raid_notification(&self, event: &Value, message_id: Option<&str>) {
+        let to_id = event_str(event, "broadcaster_user_id").to_string();
+        let to_login = event_str(event, "broadcaster_user_login").to_lowercase();
+        // Quelle (Raider) sitzt im `raid`-Sub-Objekt (Twitch chat.notification).
+        let raid = event.get("raid");
+        let from_login = raid
+            .map(|r| event_str(r, "user_login"))
+            .unwrap_or("")
+            .to_lowercase();
+        let from_id = raid
+            .map(|r| event_str(r, "user_id"))
+            .filter(|s| !s.is_empty())
+            .map(str::to_string);
+        let viewer_count = raid
+            .and_then(|r| r.get("viewer_count"))
+            .and_then(Value::as_i64)
+            .unwrap_or(0) as i32;
+
+        if to_id.is_empty() || from_login.is_empty() {
+            tracing::debug!(
+                to = %to_login,
+                from = %from_login,
+                "chat.notification-Raid ohne Ziel-ID/Quell-Login ignoriert"
+            );
+            return;
+        }
+        tracing::info!(from = %from_login, to = %to_login, viewer_count, "EventSub: chat.notification raid");
+
+        let pending = self
+            .pending
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .get(&to_id, Some(&from_login))
+            .cloned();
+
+        let plan = RaidSignalCorrelationService.plan_chat_notification(ChatNotificationInput {
+            to_broadcaster_id: to_id,
+            to_broadcaster_login: to_login,
+            from_broadcaster_login: from_login.clone(),
+            from_broadcaster_id: from_id,
+            viewer_count,
+            message_id: message_id.map(str::to_string),
+            event_timestamp: None,
+            pending_raid: pending,
+            recent_arrival_present: false,
+        });
+
+        let outcome = plan.outcome.clone();
+        self.runtime.execute_plan(&plan).await;
+
+        if outcome == RaidSignalOutcome::PendingMismatch {
+            tracing::warn!(
+                expected = plan
+                    .pending_raid
+                    .as_ref()
+                    .map(|p| p.from_broadcaster_login.as_str())
+                    .unwrap_or("?"),
+                actual = %from_login,
+                "chat.notification-Raid-Mismatch: Quelle passt nicht zum Pending"
+            );
+        }
+    }
+
+    /// `channel.chat.notification`-Unraidmeldung (notice_type=unraid, B7-02/03).
+    /// Verzweigt wie Pythons Chat-Bot-Routing (bot.py Z. 1883–1926):
+    ///
+    /// - **Source-Self-Unraid** (Unraider == Kanal-Inhaber): der Quell-Streamer
+    ///   bricht seine eigene Raid-Sequenz ab → ausstehende Auto-Raids dieses
+    ///   Quell-Streamers stornieren (B7-03, [`Self::cancel_pending_for_source`]).
+    /// - **Ziel-seitiges Unraid** (sonst): diagnostisch über `plan_chat_unraid`
+    ///   am vorhandenen Pending vermerken (kein Mismatch-/Confirm-Pfad).
+    pub async fn handle_chat_unraid_notification(&self, event: &Value, message_id: Option<&str>) {
+        let broadcaster_id = event_str(event, "broadcaster_user_id").to_string();
+        let broadcaster_login = event_str(event, "broadcaster_user_login").to_lowercase();
+        // Unraider = chatter (chat.notification). Fällt der auf den Kanal-Inhaber,
+        // ist es ein Source-Self-Unraid.
+        let from_login = event_str(event, "chatter_user_login").to_lowercase();
+        let from_id = Some(event_str(event, "chatter_user_id"))
+            .filter(|s| !s.is_empty())
+            .map(str::to_string);
+
+        if broadcaster_id.is_empty() || broadcaster_login.is_empty() {
+            return;
+        }
+
+        // Source-Self-Unraid: Unraider-Login == Kanal-Inhaber UND (ID unbekannt
+        // oder gleich). Python bot.py Z. 1898–1918.
+        let is_source_self = !from_login.is_empty()
+            && from_login == broadcaster_login
+            && from_id
+                .as_deref()
+                .map(|id| id == broadcaster_id)
+                .unwrap_or(true);
+        if is_source_self {
+            let canceled = self.cancel_pending_for_source(&broadcaster_login, message_id);
+            if canceled == 0 {
+                tracing::info!(
+                    source = %broadcaster_login,
+                    message_id = message_id.unwrap_or("n/a"),
+                    "Source-Self-Unraid ohne ausstehenden Auto-Raid"
+                );
+            }
+            return;
+        }
+
+        // Ziel-seitiges Unraid: nur diagnostisch am Pending vermerken.
+        let pending = self
+            .pending
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .get(&broadcaster_id, Some(&from_login))
+            .cloned();
+        let plan = RaidSignalCorrelationService.plan_chat_unraid(ChatUnraidInput {
+            to_broadcaster_id: broadcaster_id,
+            to_broadcaster_login: broadcaster_login.clone(),
+            from_broadcaster_login: from_login.clone(),
+            from_broadcaster_id: from_id,
+            pending_raid: pending,
+            recent_arrival_present: false,
+            event_timestamp: None,
+        });
+        self.runtime.execute_plan(&plan).await;
+        tracing::info!(
+            from = %from_login,
+            to = %broadcaster_login,
+            "chat.notification unraid ohne bestätigten Raid beobachtet"
+        );
+    }
+
+    /// Storniert alle ausstehenden Auto-Raids eines Quell-Streamers (B7-03,
+    /// Source-Self-Unraid) über die B7-`iter()`-basierte Store-API
+    /// ([`PendingRaidStore::cancel_from_source`]) und loggt die Treffer. Port von
+    /// `cancel_pending_raids_for_source_unraid` (raid_tracking_runtime.py Z. 160–220).
+    fn cancel_pending_for_source(
+        &self,
+        from_broadcaster_login: &str,
+        message_id: Option<&str>,
+    ) -> usize {
+        let normalized_from = normalize_broadcaster_login(from_broadcaster_login);
+        if normalized_from.is_empty() {
+            return 0;
+        }
+        let canceled = self
+            .pending
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .cancel_from_source(&normalized_from);
+        for raid in &canceled {
+            tracing::info!(
+                source = %normalized_from,
+                target_id = %raid.to_broadcaster_id,
+                message_id = message_id.unwrap_or("n/a"),
+                "Ausstehender Auto-Raid durch Source-Unraid storniert"
+            );
+        }
+        canceled.len()
+    }
 }
 
 // ─── channel.moderate → Blacklist-Raid-Guard ────────────────────────────────
@@ -257,6 +423,47 @@ impl BlacklistRaidGuard {
     }
 }
 
+// ─── Session-Finalize → Raid-Score-Tracking-Resolve (B7) ─────────────────────
+
+/// Verdrahtet den [`tb_monitoring::RaidTrackingResolver`]-Port gegen den
+/// tb-raid-Score-Tracking-Store. Beim Session-Finalize werden die offenen
+/// Deadlock-Raid-Zeilen der Session aufgelöst (sonst bleiben sie dauerhaft
+/// `resolved_at IS NULL`). Reicht das Ziel-Spiel durch (Python `_target_game_lower`).
+pub struct RaidTrackingResolverAdapter {
+    store: tb_raid::ScoreTrackingStore,
+    target_game_lower: String,
+}
+
+impl RaidTrackingResolverAdapter {
+    pub fn new(pool: PgPool, target_game: &str) -> Self {
+        Self {
+            store: tb_raid::ScoreTrackingStore::new(pool),
+            target_game_lower: target_game.trim().to_lowercase(),
+        }
+    }
+}
+
+#[async_trait::async_trait]
+impl tb_monitoring::RaidTrackingResolver for RaidTrackingResolverAdapter {
+    async fn resolve_for_session(
+        &self,
+        twitch_user_id: Option<&str>,
+        streamer_login: &str,
+        session_id: i64,
+        session_ended_at: chrono::DateTime<Utc>,
+    ) -> i64 {
+        self.store
+            .resolve_for_session(
+                twitch_user_id,
+                streamer_login,
+                Some(session_id),
+                Some(session_ended_at),
+                &self.target_game_lower,
+            )
+            .await
+    }
+}
+
 // ─── Hook-Bündel ─────────────────────────────────────────────────────────────
 
 /// Vollständige EventSub-Hooks (Monitoring → Raid).
@@ -356,5 +563,17 @@ impl EventSubHooks for RaidEventSubHooks {
 
     async fn on_channel_moderate(&self, broadcaster_id: &str, login: &str, event: &Value) {
         self.guard.handle(broadcaster_id, login, event).await;
+    }
+
+    async fn on_chat_raid_notification(&self, event: &Value, message_id: Option<&str>) {
+        self.arrival
+            .handle_chat_raid_notification(event, message_id)
+            .await;
+    }
+
+    async fn on_chat_unraid_notification(&self, event: &Value, message_id: Option<&str>) {
+        self.arrival
+            .handle_chat_unraid_notification(event, message_id)
+            .await;
     }
 }
