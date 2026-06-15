@@ -7,8 +7,8 @@
 //! und limitiert. Jede Quelle ist einzeln fehlertolerant (fehlendes Schema →
 //! Quelle übersprungen), 1:1 zu Pythons try/except je Loader.
 //!
-//! **Quellen-Status:** promo + roadmap + legal + streamer_history + manual_plan
-//! portiert; billing-Quellen folgen als Teil 3.
+//! **Quellen:** promo, roadmap, legal, streamer_history, manual_plan, billing
+//! (Webhook-Events mit Abo-Tabelle als Fallback) — alle sechs portiert.
 //!
 //! CSRF irrelevant (GET); Admin über `AuthLevel::is_privileged`.
 
@@ -369,6 +369,176 @@ async fn manual_plan_entries(pool: &PgPool) -> Result<Vec<Value>, sqlx::Error> {
     Ok(entries)
 }
 
+/// Mappt einen Stripe-Event-Typ auf (action, description) (Python `_map_billing_action`).
+fn map_billing_action(event_type: &str) -> (String, String) {
+    let n = event_type.trim().to_lowercase();
+    let known = match n.as_str() {
+        "checkout.session.completed" => Some(("checkout_completed", "Stripe-Checkout fuer ein Abo abgeschlossen.")),
+        "customer.subscription.created" => Some(("subscription_created", "Stripe-Abo erstellt.")),
+        "customer.subscription.updated" => Some(("subscription_updated", "Stripe-Abo aktualisiert.")),
+        "customer.subscription.deleted" => Some(("subscription_canceled", "Stripe-Abo beendet.")),
+        "invoice.payment_succeeded" => Some(("invoice_paid", "Abo-Zahlung erfolgreich verbucht.")),
+        "invoice.payment_failed" => Some(("invoice_failed", "Abo-Zahlung fehlgeschlagen.")),
+        _ => None,
+    };
+    match known {
+        Some((a, d)) => (a.to_string(), d.to_string()),
+        None => {
+            let fallback = if n.is_empty() { "billing_event".to_string() } else { n.replace('.', "_") };
+            let label = if n.is_empty() { "unknown" } else { n.as_str() };
+            (fallback, format!("Billing-Event {label} verarbeitet."))
+        }
+    }
+}
+
+/// Extrahiert Ziel + Detail-Metadaten aus dem Stripe-Event-Payload
+/// (Python `_extract_billing_target`).
+fn extract_billing_target(event_payload: &Value, object_id: &str) -> (Option<String>, Value) {
+    let object_record = event_payload.get("data").and_then(|d| d.get("object")).filter(|o| o.is_object());
+    let get_str = |key: &str| -> String {
+        object_record.and_then(|o| o.get(key)).and_then(Value::as_str).unwrap_or("").trim().to_string()
+    };
+    let metadata = object_record.and_then(|o| o.get("metadata")).filter(|m| m.is_object());
+    let meta_str = |key: &str| -> String {
+        metadata.and_then(|m| m.get(key)).and_then(Value::as_str).unwrap_or("").trim().to_string()
+    };
+
+    let customer_reference = {
+        let cr = meta_str("customer_reference");
+        if !cr.is_empty() {
+            cr
+        } else {
+            let crid = get_str("client_reference_id");
+            if !crid.is_empty() { crid } else { get_str("customer_email") }
+        }
+    };
+    let subscription_id = {
+        let sub = get_str("subscription");
+        if !sub.is_empty() {
+            sub
+        } else {
+            let id = get_str("id");
+            if !id.is_empty() { id } else { object_id.trim().to_string() }
+        }
+    };
+    let plan_id = meta_str("plan_id");
+    let status = get_str("status").to_lowercase();
+
+    let details = json!({
+        "customerReference": opt(&customer_reference),
+        "subscriptionId": opt(&subscription_id),
+        "planId": opt(&plan_id),
+        "status": opt(&status),
+    });
+    let target = if !customer_reference.is_empty() {
+        Some(customer_reference)
+    } else if !subscription_id.is_empty() {
+        Some(subscription_id)
+    } else if !object_id.trim().is_empty() {
+        Some(object_id.trim().to_string())
+    } else {
+        None
+    };
+    (target, details)
+}
+
+/// Stripe-Webhook-Events (Python `_load_billing_event_entries`).
+async fn billing_event_entries(pool: &PgPool) -> Result<Vec<Value>, sqlx::Error> {
+    type Row = (Option<String>, Option<String>, Option<String>, Option<String>, Option<i32>, Option<String>);
+    let rows: Vec<Row> = sqlx::query_as(
+        "SELECT stripe_event_id, event_type, object_id, received_at, livemode, payload \
+         FROM twitch_billing_events ORDER BY received_at DESC",
+    )
+    .fetch_all(pool)
+    .await?;
+
+    let mut entries = Vec::new();
+    for (event_id, event_type, object_id, received_at, livemode, payload) in rows {
+        let event_id = event_id.unwrap_or_default().trim().to_string();
+        let event_type = event_type.unwrap_or_default().trim().to_string();
+        let object_id = object_id.unwrap_or_default().trim().to_string();
+        let livemode = livemode.unwrap_or(0) != 0;
+        let payload_text = payload.unwrap_or_default();
+        let event_payload: Value = serde_json::from_str(payload_text.trim()).unwrap_or_else(|_| json!({}));
+
+        let (target, details) = extract_billing_target(&event_payload, &object_id);
+        let (action, description) = map_billing_action(&event_type);
+        let mut metadata = json!({ "eventType": opt(&event_type), "objectId": opt(&object_id), "livemode": livemode });
+        if let (Some(m), Some(d)) = (metadata.as_object_mut(), details.as_object()) {
+            for (k, v) in d {
+                m.insert(k.clone(), v.clone());
+            }
+        }
+        let id = if !event_id.is_empty() { event_id } else { object_id.clone() };
+        if let Some(e) = make_entry(format!("billing:{id}"), "billing", &action, None, target.as_deref(), received_at.as_deref(), description, Some(metadata)) {
+            entries.push(e);
+        }
+    }
+    Ok(entries)
+}
+
+/// Abo-Statusänderungen als Fallback, wenn keine Webhook-Events vorliegen
+/// (Python `_load_billing_subscription_entries`).
+async fn billing_subscription_entries(pool: &PgPool) -> Result<Vec<Value>, sqlx::Error> {
+    type Row = (
+        Option<String>, // stripe_subscription_id
+        Option<String>, // customer_reference
+        Option<String>, // status
+        Option<String>, // plan_id
+        Option<String>, // current_period_end
+        Option<String>, // canceled_at
+        Option<String>, // ended_at
+        Option<String>, // updated_at
+    );
+    let rows: Vec<Row> = sqlx::query_as(
+        "SELECT stripe_subscription_id, customer_reference, status, plan_id, current_period_end, \
+                canceled_at, ended_at, updated_at \
+         FROM twitch_billing_subscriptions WHERE updated_at IS NOT NULL ORDER BY updated_at DESC",
+    )
+    .fetch_all(pool)
+    .await?;
+
+    let mut entries = Vec::new();
+    for (sub_id, cust_ref, status, plan_id, cpe, canceled_at, ended_at, updated_at) in rows {
+        let subscription_id = sub_id.unwrap_or_default().trim().to_string();
+        let customer_reference = cust_ref.unwrap_or_default().trim().to_string();
+        let status = status.unwrap_or_default().trim().to_lowercase();
+        let plan_id = plan_id.unwrap_or_default().trim().to_string();
+        let updated_raw = updated_at.unwrap_or_default();
+        let label = if !customer_reference.is_empty() { customer_reference.clone() } else { subscription_id.clone() };
+
+        let is_canceled = ended_at.as_deref().is_some_and(|s| !s.is_empty())
+            || canceled_at.as_deref().is_some_and(|s| !s.is_empty())
+            || matches!(status.as_str(), "canceled" | "cancelled" | "incomplete_expired");
+        let (action, description): (&str, String) = if is_canceled {
+            ("subscription_canceled", format!("Abo fuer {label} beendet oder gekuendigt."))
+        } else {
+            let status_label = if status.is_empty() { "unknown" } else { status.as_str() };
+            ("subscription_updated", format!("Abo-Status fuer {label} auf {status_label} aktualisiert."))
+        };
+        let target = if !customer_reference.is_empty() {
+            Some(customer_reference.clone())
+        } else if !subscription_id.is_empty() {
+            Some(subscription_id.clone())
+        } else {
+            None
+        };
+        let metadata = json!({
+            "subscriptionId": opt(&subscription_id),
+            "customerReference": opt(&customer_reference),
+            "status": opt(&status),
+            "planId": opt(&plan_id),
+            "currentPeriodEnd": coerce_iso(cpe.as_deref()),
+            "canceledAt": coerce_iso(canceled_at.as_deref()),
+            "endedAt": coerce_iso(ended_at.as_deref()),
+        });
+        if let Some(e) = make_entry(format!("billing:{subscription_id}:{updated_raw}"), "billing", action, None, target.as_deref(), Some(updated_raw.as_str()), description, Some(metadata)) {
+            entries.push(e);
+        }
+    }
+    Ok(entries)
+}
+
 // ── Aggregation ───────────────────────────────────────────────────────────────
 
 fn combine_and_filter(
@@ -494,6 +664,27 @@ pub async fn handler(
             }
         }
     }
+    // billing: Webhook-Events haben Vorrang; nur ohne sie die Abo-Tabelle (Fallback).
+    let billing_events = match billing_event_entries(&pool).await {
+        Ok(es) => es,
+        Err(e) if is_missing_schema_error(&e) => Vec::new(),
+        Err(e) => {
+            tracing::error!("audit-log billing-events fehlgeschlagen: {e}");
+            return Err(ApiError::internal());
+        }
+    };
+    if !billing_events.is_empty() {
+        entries.extend(billing_events);
+    } else {
+        match billing_subscription_entries(&pool).await {
+            Ok(es) => entries.extend(es),
+            Err(e) if is_missing_schema_error(&e) => {}
+            Err(e) => {
+                tracing::error!("audit-log billing-subscriptions fehlgeschlagen: {e}");
+                return Err(ApiError::internal());
+            }
+        }
+    }
     // promo (DB, tabellen-erzeugend) + Datei-Quellen.
     entries.extend(promo_entries(&pool).await);
     entries.extend(roadmap_entries().await);
@@ -519,6 +710,8 @@ mod tests {
         for ddl in [
             "CREATE TABLE twitch_partners (id BIGSERIAL PRIMARY KEY, twitch_user_id TEXT, twitch_login TEXT, added_by TEXT, manual_verified_at TEXT, partnered_at TEXT, admin_archived_at TEXT, departnered_at TEXT, status TEXT, technical_pause_reason TEXT)",
             "CREATE TABLE streamer_plans (twitch_login TEXT PRIMARY KEY, twitch_user_id TEXT, manual_plan_id TEXT, manual_plan_expires_at TEXT, manual_plan_notes TEXT, manual_plan_updated_at TEXT)",
+            "CREATE TABLE twitch_billing_events (stripe_event_id TEXT PRIMARY KEY, event_type TEXT, object_id TEXT, received_at TEXT, livemode INTEGER, payload TEXT)",
+            "CREATE TABLE twitch_billing_subscriptions (stripe_subscription_id TEXT PRIMARY KEY, customer_reference TEXT, status TEXT, plan_id TEXT, current_period_end TEXT, canceled_at TEXT, ended_at TEXT, updated_at TEXT)",
         ] {
             sqlx::query(ddl).execute(&pool).await.unwrap();
         }
@@ -568,6 +761,68 @@ mod tests {
         assert_eq!(entries[0]["metadata"]["planId"], "raid_extended");
         assert_eq!(entries[0]["metadata"]["notes"], "VIP");
         assert_eq!(entries[0]["target"], "nani");
+    }
+
+    #[test]
+    fn map_billing_action_bekannt_und_fallback() {
+        assert_eq!(map_billing_action("customer.subscription.deleted").0, "subscription_canceled");
+        assert_eq!(map_billing_action("invoice.payment_succeeded").0, "invoice_paid");
+        // unbekannt → fallback mit Punkt→Unterstrich.
+        let (a, d) = map_billing_action("custom.weird.event");
+        assert_eq!(a, "custom_weird_event");
+        assert!(d.contains("custom.weird.event"));
+        // leer → billing_event / unknown.
+        let (a, d) = map_billing_action("");
+        assert_eq!(a, "billing_event");
+        assert!(d.contains("unknown"));
+    }
+
+    #[test]
+    fn extract_billing_target_aus_payload() {
+        let payload = json!({
+            "data": { "object": {
+                "id": "sub_123",
+                "status": "ACTIVE",
+                "metadata": { "customer_reference": "nani", "plan_id": "raid_plus" }
+            }}
+        });
+        let (target, details) = extract_billing_target(&payload, "evt_obj");
+        assert_eq!(target.as_deref(), Some("nani")); // customer_reference hat Vorrang
+        assert_eq!(details["subscriptionId"], "sub_123");
+        assert_eq!(details["planId"], "raid_plus");
+        assert_eq!(details["status"], "active"); // lowercased
+        // ohne data.object → target fällt auf object_id.
+        let (target, _d) = extract_billing_target(&json!({}), "evt_obj");
+        assert_eq!(target.as_deref(), Some("evt_obj"));
+    }
+
+    #[tokio::test]
+    async fn billing_event_entry_aus_db() {
+        let Some(pool) = make_pool("t_audit_be").await else { return };
+        sqlx::query("INSERT INTO twitch_billing_events (stripe_event_id, event_type, object_id, received_at, livemode, payload) VALUES ('evt_1','customer.subscription.created','obj_1','2026-04-01T00:00:00Z',1,'{\"data\":{\"object\":{\"id\":\"sub_9\",\"metadata\":{\"customer_reference\":\"nani\"}}}}')")
+            .execute(&pool).await.unwrap();
+        let entries = billing_event_entries(&pool).await.unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0]["action"], "subscription_created");
+        assert_eq!(entries[0]["target"], "nani");
+        assert_eq!(entries[0]["metadata"]["livemode"], true);
+        assert_eq!(entries[0]["metadata"]["eventType"], "customer.subscription.created");
+        assert_eq!(entries[0]["metadata"]["subscriptionId"], "sub_9");
+    }
+
+    #[tokio::test]
+    async fn billing_subscription_canceled_vs_updated() {
+        let Some(pool) = make_pool("t_audit_bs").await else { return };
+        sqlx::query("INSERT INTO twitch_billing_subscriptions (stripe_subscription_id, customer_reference, status, updated_at) VALUES ('sub_a','nani','active','2026-04-02T00:00:00Z')")
+            .execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO twitch_billing_subscriptions (stripe_subscription_id, customer_reference, status, ended_at, updated_at) VALUES ('sub_b','foo','canceled','2026-04-01T00:00:00Z','2026-04-03T00:00:00Z')")
+            .execute(&pool).await.unwrap();
+        let entries = billing_subscription_entries(&pool).await.unwrap();
+        assert_eq!(entries.len(), 2);
+        let a = entries.iter().find(|e| e["metadata"]["subscriptionId"] == "sub_a").unwrap();
+        assert_eq!(a["action"], "subscription_updated");
+        let b = entries.iter().find(|e| e["metadata"]["subscriptionId"] == "sub_b").unwrap();
+        assert_eq!(b["action"], "subscription_canceled");
     }
 
     fn entry(ts: &str, source: &str) -> Value {
