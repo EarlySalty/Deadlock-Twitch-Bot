@@ -22,6 +22,7 @@
 //! - `layout`      — Clip-Compositing-Layout (`social_media_streamer_layout`).
 //! - `video_processor` — FFmpeg-Wrapper (9:16-Konvertierung + Compositing).
 //! - `uploaders`    — Plattform-Uploader (TikTok/YouTube/Instagram).
+//! - `upload_worker` — Queue-Verarbeitung (download→convert→upload→status).
 //! - `llm`         — LLM-Typen + Prompt-Bau + Output-Parsing.
 //! - `llm_dispatch` — LLM-Provider (Ollama) + consent-gated Dispatcher.
 //! - `enrich_pipeline` — Orchestrator (transcribe→correct→LLM→save).
@@ -54,6 +55,7 @@ pub mod retention;
 pub mod schema;
 pub mod seed_vocab;
 pub mod settings;
+pub mod upload_worker;
 pub mod uploaders;
 pub mod video_processor;
 pub mod vocab;
