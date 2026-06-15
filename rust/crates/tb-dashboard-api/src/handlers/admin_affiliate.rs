@@ -13,7 +13,8 @@ use axum::{
 use chrono::{Datelike, DateTime, SecondsFormat, Utc};
 use serde_json::json;
 use sqlx::PgPool;
-use tb_analytics::admin_affiliate::ToggleError;
+use tb_analytics::admin_affiliate::{DetailError, ToggleError};
+use tb_crypto::FieldCipher;
 use tb_http_core::{ApiError, AuthLevel};
 
 /// Monatsanfang (1. des aktuellen Monats, 00:00 UTC) als ISO-String — Python
@@ -72,6 +73,40 @@ pub async fn gutschriften_handler(
         Ok(v) => Ok(Json(v)),
         Err(e) => {
             tracing::error!("affiliate-gutschriften SELECT-Fehler: {e}");
+            Err(ApiError::internal())
+        }
+    }
+}
+
+/// `GET /twitch/api/admin/affiliates/:login` — Affiliate-Detail (Admin).
+/// Inkl. PII-Readiness (entschlüsselt verschlüsselte Stammdaten via Field-Cipher).
+pub async fn detail_handler(
+    auth: AuthLevel,
+    State(pool): State<PgPool>,
+    Path(login_raw): Path<String>,
+) -> Result<impl IntoResponse, ApiError> {
+    if !auth.is_privileged() {
+        return Err(ApiError::unauthorized());
+    }
+    let Some(login) = tb_domain::login::normalize_twitch_login(&login_raw) else {
+        return Err(ApiError::bad_request_with_body(json!({ "error": "invalid_login" })));
+    };
+    let cipher = match FieldCipher::from_env() {
+        Ok(c) => c,
+        Err(e) => {
+            tracing::error!("affiliate-detail: kein Field-Cipher ({e})");
+            return Err(ApiError::internal());
+        }
+    };
+    match tb_analytics::admin_affiliate::load_affiliate_detail(&pool, &cipher, &login).await {
+        Ok(v) => Ok(Json(v)),
+        Err(DetailError::NotFound) => Err(ApiError::not_found()),
+        Err(DetailError::Db(e)) => {
+            tracing::error!("affiliate-detail DB-Fehler: {e}");
+            Err(ApiError::internal())
+        }
+        Err(DetailError::Decrypt(s)) => {
+            tracing::error!("affiliate-detail PII-Decrypt-Fehler: {s}");
             Err(ApiError::internal())
         }
     }
@@ -167,6 +202,16 @@ mod tests {
         assert_eq!(s, StatusCode::OK);
         assert_eq!(j["count"], 0);
         assert_eq!(j["gutschriften"], serde_json::json!([]));
+    }
+
+    #[tokio::test]
+    async fn detail_unauth_und_invalid_login() {
+        let Some(pool) = make_pool("t_affh_detail").await else { return };
+        let (s, _) = body_json(detail_handler(AuthLevel::None, State(pool.clone()), Path("nani".into())).await).await;
+        assert_eq!(s, StatusCode::UNAUTHORIZED);
+        let (s, j) = body_json(detail_handler(AuthLevel::Admin, State(pool), Path("!!!".into())).await).await;
+        assert_eq!(s, StatusCode::BAD_REQUEST);
+        assert_eq!(j["error"], "invalid_login");
     }
 
     #[tokio::test]

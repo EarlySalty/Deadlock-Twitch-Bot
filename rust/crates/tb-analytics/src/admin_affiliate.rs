@@ -10,6 +10,9 @@
 use chrono::{SecondsFormat, Utc};
 use serde_json::{json, Value};
 use sqlx::PgPool;
+use tb_crypto::FieldCipher;
+
+use crate::affiliate_pii::{build_readiness, load_affiliate_pii, PiiError};
 
 /// Provisions-Status, die als Umsatz zählen (Python `_AFFILIATE_REVENUE_STATUSES`).
 const REVENUE_STATUSES: &str = "'pending', 'transferred'";
@@ -370,6 +373,160 @@ pub async fn toggle_affiliate(pool: &PgPool, login: &str) -> Result<Value, Toggl
     Ok(json!({ "login": login, "active": new_status != 0 }))
 }
 
+// ── Detail (Read mit PII-Readiness) ───────────────────────────────────────────
+
+/// Fehler beim Affiliate-Detail-Laden.
+#[derive(Debug)]
+pub enum DetailError {
+    /// Kein Konto (oder fehlendes Schema) → 404.
+    NotFound,
+    Db(sqlx::Error),
+    Decrypt(String),
+}
+
+fn round2(value: f64) -> f64 {
+    (value * 100.0).round() / 100.0
+}
+
+/// Volles Affiliate-Detail (Python `load_admin_affiliate_detail`): Konto + Claims
+/// (mit Provisions-Summen) + Statistik + PII-Readiness + Gutschrift-Summary.
+pub async fn load_affiliate_detail(
+    pool: &PgPool,
+    cipher: &FieldCipher,
+    login: &str,
+) -> Result<Value, DetailError> {
+    type Account = (
+        Option<String>, // twitch_login
+        Option<String>, // display_name
+        i32,            // is_active
+        Option<String>, // created_at
+        Option<String>, // email
+        Option<String>, // stripe_connect_status
+        Option<String>, // stripe_account_id
+        Option<String>, // updated_at
+    );
+    let account: Option<Account> = match sqlx::query_as(
+        "SELECT twitch_login, display_name, is_active, created_at, email, \
+                stripe_connect_status, stripe_account_id, updated_at \
+         FROM affiliate_accounts WHERE twitch_login = $1",
+    )
+    .bind(login)
+    .fetch_optional(pool)
+    .await
+    {
+        Ok(v) => v,
+        Err(e) if is_missing_schema_error(&e) => return Err(DetailError::NotFound),
+        Err(e) => return Err(DetailError::Db(e)),
+    };
+    let Some((twitch_login, display_name, is_active, created_at, email, stripe_status, stripe_account_id, updated_at)) =
+        account
+    else {
+        return Err(DetailError::NotFound);
+    };
+
+    // Claims mit Provisions-Summe je Claim (nur Umsatz-Status).
+    let claim_rows: Vec<(i64, Option<String>, Option<String>, i64, i64)> = sqlx::query_as(
+        "SELECT c.id::bigint, c.claimed_streamer_login, c.claimed_at, \
+                COALESCE(SUM(co.commission_cents), 0)::bigint, COUNT(co.id)::bigint \
+         FROM affiliate_streamer_claims c \
+         LEFT JOIN affiliate_commissions co \
+           ON co.affiliate_twitch_login = c.affiliate_twitch_login \
+          AND co.streamer_login = c.claimed_streamer_login \
+          AND co.status IN ('pending', 'transferred') \
+         WHERE c.affiliate_twitch_login = $1 \
+         GROUP BY c.id, c.claimed_streamer_login, c.claimed_at \
+         ORDER BY c.claimed_at DESC",
+    )
+    .bind(login)
+    .fetch_all(pool)
+    .await
+    .map_err(DetailError::Db)?;
+
+    let total_claims: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM affiliate_streamer_claims WHERE affiliate_twitch_login = $1")
+            .bind(login)
+            .fetch_one(pool)
+            .await
+            .map_err(DetailError::Db)?;
+
+    let (total_provision_cents, active_customers): (i64, i64) = sqlx::query_as(
+        "SELECT COALESCE(SUM(commission_cents), 0)::bigint, COUNT(DISTINCT streamer_login)::bigint \
+         FROM affiliate_commissions WHERE affiliate_twitch_login = $1 AND status IN ('pending', 'transferred')",
+    )
+    .bind(login)
+    .fetch_one(pool)
+    .await
+    .map_err(DetailError::Db)?;
+
+    let pii = load_affiliate_pii(pool, cipher, login).await.map_err(|e| match e {
+        PiiError::Db(e) => DetailError::Db(e),
+        PiiError::Decrypt(s) => DetailError::Decrypt(s),
+    })?;
+    let readiness = build_readiness(&pii);
+
+    let (gut_count, gut_total_cents): (i64, i64) = sqlx::query_as(
+        "SELECT COUNT(*)::bigint, COALESCE(SUM(gross_amount_cents), 0)::bigint \
+         FROM affiliate_gutschriften WHERE affiliate_twitch_login = $1",
+    )
+    .bind(login)
+    .fetch_one(pool)
+    .await
+    .map_err(DetailError::Db)?;
+
+    // Stripe-Account-ID maskieren (>12 Zeichen → erste 8 … letzte 4).
+    let stripe_id = stripe_account_id.unwrap_or_default();
+    let masked = if stripe_id.chars().count() > 12 {
+        let chars: Vec<char> = stripe_id.chars().collect();
+        let first: String = chars[..8].iter().collect();
+        let last: String = chars[chars.len() - 4..].iter().collect();
+        format!("{first}...{last}")
+    } else {
+        stripe_id
+    };
+
+    let claims: Vec<Value> = claim_rows
+        .into_iter()
+        .map(|(id, customer, claimed_at, comm_cents, comm_count)| {
+            json!({
+                "id": id,
+                "customer_login": customer.unwrap_or_default().trim(),
+                "claimed_at": claimed_at,
+                "commission_cents": comm_cents,
+                "commission_count": comm_count,
+            })
+        })
+        .collect();
+
+    let avg_provision = if total_claims > 0 {
+        round2((total_provision_cents as f64 / total_claims.max(1) as f64) / 100.0)
+    } else {
+        0.0
+    };
+
+    Ok(json!({
+        "affiliate": {
+            "login": twitch_login.unwrap_or_default().trim(),
+            "display_name": display_name,
+            "active": is_active != 0,
+            "created_at": created_at,
+            "email": email,
+            "stripe_connect_status": stripe_status,
+            "stripe_account_id": if masked.is_empty() { Value::Null } else { json!(masked) },
+            "updated_at": updated_at,
+        },
+        "claims": claims,
+        "stats": {
+            "total_claims": total_claims,
+            "total_provision": cents_to_amount(total_provision_cents),
+            "avg_provision": avg_provision,
+            "active_customers": active_customers,
+        },
+        "ust_status": pii.ust_status,
+        "pii_readiness": readiness,
+        "gutschriften_summary": { "count": gut_count, "total_gross_cents": gut_total_cents },
+    }))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -537,6 +694,49 @@ mod tests {
     async fn toggle_fehlendes_schema_not_found() {
         let Some(pool) = connect("t_aff_toggle_empty").await else { return };
         assert!(matches!(toggle_affiliate(&pool, "nani").await, Err(ToggleError::NotFound)));
+    }
+
+    #[tokio::test]
+    async fn detail_vollstaendig_und_not_found() {
+        let Some(pool) = connect("t_aff_detail").await else { return };
+        let cipher = FieldCipher::from_hex_key(&"ab".repeat(32), "v1").unwrap();
+        for ddl in [
+            "CREATE TABLE affiliate_accounts (twitch_login TEXT PRIMARY KEY, display_name TEXT, is_active INTEGER NOT NULL DEFAULT 1, created_at TEXT, email TEXT, stripe_connect_status TEXT, stripe_account_id TEXT, updated_at TEXT)",
+            "CREATE TABLE affiliate_pii (twitch_login TEXT PRIMARY KEY, full_name_enc BYTEA, email_enc BYTEA, address_line1_enc BYTEA, address_city_enc BYTEA, address_zip_enc BYTEA, tax_id_enc BYTEA, address_country TEXT, ust_status TEXT, updated_at TEXT)",
+            "CREATE TABLE affiliate_streamer_claims (id BIGSERIAL PRIMARY KEY, affiliate_twitch_login TEXT, claimed_streamer_login TEXT, claimed_at TEXT)",
+            "CREATE TABLE affiliate_commissions (id BIGSERIAL PRIMARY KEY, affiliate_twitch_login TEXT, streamer_login TEXT, commission_cents INTEGER, status TEXT)",
+            "CREATE TABLE affiliate_gutschriften (id BIGSERIAL PRIMARY KEY, affiliate_twitch_login TEXT, gross_amount_cents INTEGER)",
+        ] {
+            sqlx::query(ddl).execute(&pool).await.unwrap();
+        }
+        sqlx::query("INSERT INTO affiliate_accounts (twitch_login, display_name, is_active, email, stripe_connect_status, stripe_account_id) VALUES ('nani','Nani',1,'a@b.de','active','acct_1234567890XY')").execute(&pool).await.unwrap();
+        // PII vollständig → can_generate.
+        let enc = |field: &str, v: &str| cipher.encrypt_field(v, &format!("affiliate_pii|{field}|nani")).unwrap();
+        sqlx::query("INSERT INTO affiliate_pii (twitch_login, full_name_enc, email_enc, address_line1_enc, address_city_enc, address_zip_enc, tax_id_enc, address_country, ust_status) VALUES ('nani',$1,$2,$3,$4,$5,$6,'DE','kleinunternehmer')")
+            .bind(enc("full_name","Nani M")).bind(enc("email","a@b.de")).bind(enc("address_line1","Str 1"))
+            .bind(enc("address_city","Ort")).bind(enc("address_zip","12345")).bind(enc("tax_id","DE123"))
+            .execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO affiliate_streamer_claims (affiliate_twitch_login, claimed_streamer_login, claimed_at) VALUES ('nani','streamerx','2026-06-01T00:00:00+00:00')").execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO affiliate_commissions (affiliate_twitch_login, streamer_login, commission_cents, status) VALUES ('nani','streamerx',2000,'pending')").execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO affiliate_gutschriften (affiliate_twitch_login, gross_amount_cents) VALUES ('nani',1500)").execute(&pool).await.unwrap();
+
+        let v = load_affiliate_detail(&pool, &cipher, "nani").await.unwrap();
+        assert_eq!(v["affiliate"]["login"], "nani");
+        assert_eq!(v["affiliate"]["email"], "a@b.de"); // Plaintext aus accounts
+        assert_eq!(v["affiliate"]["stripe_account_id"], "acct_123...90XY"); // maskiert (>12)
+        assert_eq!(v["claims"].as_array().unwrap().len(), 1);
+        assert_eq!(v["claims"][0]["commission_cents"], 2000);
+        assert_eq!(v["stats"]["total_claims"], 1);
+        assert_eq!(v["stats"]["total_provision"], 20.0);
+        assert_eq!(v["stats"]["avg_provision"], 20.0);
+        assert_eq!(v["stats"]["active_customers"], 1);
+        assert_eq!(v["ust_status"], "kleinunternehmer");
+        assert_eq!(v["pii_readiness"]["can_generate"], true);
+        assert_eq!(v["gutschriften_summary"]["count"], 1);
+        assert_eq!(v["gutschriften_summary"]["total_gross_cents"], 1500);
+
+        // unbekannt → NotFound.
+        assert!(matches!(load_affiliate_detail(&pool, &cipher, "ghost").await, Err(DetailError::NotFound)));
     }
 
     #[tokio::test]
