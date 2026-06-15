@@ -20,6 +20,7 @@
 //! - `enrichment`  — Clip-Enrichment-Persistenz (`social_media_clip_enrichment`).
 //! - `enrichment_worker` — Background-Loop, der pending Clips anreichert.
 //! - `approval`    — Approval-Workflow (State-Maschine + queue-on-approve).
+//! - `approval_worker` — Queue-Seite: freigegebene Clips einreihen.
 //! - `layout`      — Clip-Compositing-Layout (`social_media_streamer_layout`).
 //! - `video_processor` — FFmpeg-Wrapper (9:16-Konvertierung + Compositing).
 //! - `uploaders`    — Plattform-Uploader (TikTok/YouTube/Instagram).
@@ -39,6 +40,7 @@
 //! Env-Var setzen + `ClipFetchTask::start_if_enabled()` aufrufen.
 
 pub mod approval;
+pub mod approval_worker;
 pub mod clip;
 pub mod clip_analytics;
 pub mod clip_queue;
