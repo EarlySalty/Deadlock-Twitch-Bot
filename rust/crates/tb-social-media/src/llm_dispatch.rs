@@ -68,7 +68,7 @@ impl LlmProvider for OllamaProvider {
     async fn generate(&self, request: &LlmRequest) -> Result<LlmResponse, LlmError> {
         let prompt = render_user_prompt(request);
         let text = self.generate_text(SYSTEM_PROMPT, &prompt, 600, self.temperature).await?;
-        parse_llm_payload(&text.content, "ollama", &self.model, Some(0.0))
+        parse_llm_payload(&text.content, "ollama", &self.model, text.cost_usd_estimate)
     }
 
     async fn generate_text(&self, system_prompt: &str, user_prompt: &str, max_tokens: i64, temperature: f64) -> Result<LlmTextResponse, LlmError> {
@@ -109,8 +109,191 @@ impl LlmProvider for OllamaProvider {
         if content.trim().is_empty() {
             return Err(LlmError::ProviderError("Ollama returned empty response".to_string()));
         }
-        Ok(LlmTextResponse { content, provider: "ollama".to_string(), model: self.model.clone() })
+        // Lokales LLM hat keine Per-Call-Kosten (0.0 als Marker).
+        Ok(LlmTextResponse { content, provider: "ollama".to_string(), model: self.model.clone(), cost_usd_estimate: Some(0.0) })
     }
+}
+
+/// Token-basierte USD-Kostenschätzung (gerundet auf 6 Nachkommastellen).
+fn estimate_cost(prompt_tokens: i64, completion_tokens: i64, input_rate: f64, output_rate: f64) -> f64 {
+    let raw = (prompt_tokens as f64 / 1000.0) * input_rate + (completion_tokens as f64 / 1000.0) * output_rate;
+    (raw * 1_000_000.0).round() / 1_000_000.0
+}
+
+fn env_rate(var: &str, default: f64) -> f64 {
+    std::env::var(var).ok().and_then(|v| v.trim().parse::<f64>().ok()).filter(|r| *r >= 0.0).unwrap_or(default)
+}
+
+const MINIMAX_DEFAULT_BASE: &str = "https://api.minimax.io/v1";
+const MINIMAX_DEFAULT_MODEL: &str = "MiniMax-M3";
+const CLAUDE_DEFAULT_BASE: &str = "https://api.anthropic.com/v1/messages";
+const CLAUDE_DEFAULT_MODEL: &str = "claude-haiku-4-5-20251001";
+const EXTERNAL_TIMEOUT_SECONDS: u64 = 60;
+
+fn external_http() -> reqwest::Client {
+    reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(EXTERNAL_TIMEOUT_SECONDS))
+        .build()
+        .unwrap_or_default()
+}
+
+/// MiniMax-Provider (extern, OpenAI-kompatibles chat/completions).
+pub struct MiniMaxProvider {
+    model: String,
+    base_url: String,
+    api_key: String,
+    temperature: f64,
+    http: reqwest::Client,
+}
+
+impl MiniMaxProvider {
+    /// Aus Env; `MINIMAX_API_KEY` Pflicht → sonst Unavailable.
+    pub fn from_env() -> Result<Self, LlmError> {
+        let api_key = nonempty_env("MINIMAX_API_KEY").ok_or_else(|| LlmError::ProviderUnavailable("MINIMAX_API_KEY not set".to_string()))?;
+        Ok(Self {
+            model: nonempty_env("MINIMAX_MODEL").unwrap_or_else(|| MINIMAX_DEFAULT_MODEL.to_string()),
+            base_url: nonempty_env("MINIMAX_BASE_URL").unwrap_or_else(|| MINIMAX_DEFAULT_BASE.to_string()),
+            api_key,
+            temperature: 0.4,
+            http: external_http(),
+        })
+    }
+
+    pub fn new(model: String, base_url: String, api_key: String, temperature: f64) -> Self {
+        Self { model, base_url, api_key, temperature, http: external_http() }
+    }
+}
+
+#[async_trait]
+impl LlmProvider for MiniMaxProvider {
+    fn name(&self) -> &str {
+        "minimax"
+    }
+
+    async fn generate(&self, request: &LlmRequest) -> Result<LlmResponse, LlmError> {
+        let prompt = render_user_prompt(request);
+        let text = self.generate_text(SYSTEM_PROMPT, &prompt, 600, self.temperature).await?;
+        parse_llm_payload(&text.content, "minimax", &self.model, text.cost_usd_estimate)
+    }
+
+    async fn generate_text(&self, system_prompt: &str, user_prompt: &str, max_tokens: i64, temperature: f64) -> Result<LlmTextResponse, LlmError> {
+        let mut body = serde_json::json!({
+            "model": self.model,
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+            "temperature": temperature,
+            "max_tokens": max_tokens,
+        });
+        if system_prompt.to_lowercase().contains("strict json") {
+            body["response_format"] = serde_json::json!({"type": "json_object"});
+        }
+        let url = format!("{}/chat/completions", self.base_url.trim_end_matches('/'));
+        let resp = self
+            .http
+            .post(&url)
+            .header("Authorization", format!("Bearer {}", self.api_key))
+            .json(&body)
+            .send()
+            .await
+            .map_err(|e| LlmError::ProviderError(format!("MiniMax error: {e}")))?
+            .error_for_status()
+            .map_err(|e| LlmError::ProviderError(format!("MiniMax error: {e}")))?;
+        let payload: Value = resp.json().await.map_err(|e| LlmError::ProviderError(format!("MiniMax JSON: {e}")))?;
+        let content = payload
+            .get("choices").and_then(Value::as_array).and_then(|a| a.first())
+            .and_then(|c| c.get("message")).and_then(|m| m.get("content")).and_then(Value::as_str)
+            .unwrap_or("").to_string();
+        if content.trim().is_empty() {
+            return Err(LlmError::ProviderError("MiniMax returned empty content".to_string()));
+        }
+        let usage = payload.get("usage");
+        let pt = usage.and_then(|u| u.get("prompt_tokens")).and_then(Value::as_i64).unwrap_or(0);
+        let ct = usage.and_then(|u| u.get("completion_tokens")).and_then(Value::as_i64).unwrap_or(0);
+        let cost = estimate_cost(pt, ct, env_rate("MINIMAX_PRICE_INPUT_PER_1K", 0.0006), env_rate("MINIMAX_PRICE_OUTPUT_PER_1K", 0.0024));
+        Ok(LlmTextResponse { content, provider: "minimax".to_string(), model: self.model.clone(), cost_usd_estimate: Some(cost) })
+    }
+}
+
+/// Claude-Haiku-Provider (extern, Anthropic Messages-API).
+pub struct ClaudeHaikuProvider {
+    model: String,
+    base_url: String,
+    api_key: String,
+    temperature: f64,
+    http: reqwest::Client,
+}
+
+impl ClaudeHaikuProvider {
+    /// Aus Env; `ANTHROPIC_API_KEY` Pflicht → sonst Unavailable.
+    pub fn from_env() -> Result<Self, LlmError> {
+        let api_key = nonempty_env("ANTHROPIC_API_KEY").ok_or_else(|| LlmError::ProviderUnavailable("ANTHROPIC_API_KEY not set".to_string()))?;
+        Ok(Self {
+            model: nonempty_env("ANTHROPIC_HAIKU_MODEL").unwrap_or_else(|| CLAUDE_DEFAULT_MODEL.to_string()),
+            base_url: CLAUDE_DEFAULT_BASE.to_string(),
+            api_key,
+            temperature: 0.4,
+            http: external_http(),
+        })
+    }
+
+    pub fn new(model: String, base_url: String, api_key: String, temperature: f64) -> Self {
+        Self { model, base_url, api_key, temperature, http: external_http() }
+    }
+}
+
+#[async_trait]
+impl LlmProvider for ClaudeHaikuProvider {
+    fn name(&self) -> &str {
+        "claude_haiku"
+    }
+
+    async fn generate(&self, request: &LlmRequest) -> Result<LlmResponse, LlmError> {
+        let prompt = render_user_prompt(request);
+        let text = self.generate_text(SYSTEM_PROMPT, &prompt, 600, self.temperature).await?;
+        parse_llm_payload(&text.content, "claude_haiku", &self.model, text.cost_usd_estimate)
+    }
+
+    async fn generate_text(&self, system_prompt: &str, user_prompt: &str, max_tokens: i64, temperature: f64) -> Result<LlmTextResponse, LlmError> {
+        let body = serde_json::json!({
+            "model": self.model,
+            "max_tokens": max_tokens,
+            "temperature": temperature,
+            "system": system_prompt,
+            "messages": [{"role": "user", "content": user_prompt}],
+        });
+        let resp = self
+            .http
+            .post(&self.base_url)
+            .header("x-api-key", &self.api_key)
+            .header("anthropic-version", "2023-06-01")
+            .json(&body)
+            .send()
+            .await
+            .map_err(|e| LlmError::ProviderError(format!("Claude error: {e}")))?
+            .error_for_status()
+            .map_err(|e| LlmError::ProviderError(format!("Claude error: {e}")))?;
+        let payload: Value = resp.json().await.map_err(|e| LlmError::ProviderError(format!("Claude JSON: {e}")))?;
+        // content ist ein Array von Blocks; Text-Blocks konkatenieren.
+        let content: String = payload
+            .get("content").and_then(Value::as_array)
+            .map(|blocks| blocks.iter().filter_map(|b| b.get("text").and_then(Value::as_str)).collect::<String>())
+            .unwrap_or_default();
+        if content.trim().is_empty() {
+            return Err(LlmError::ProviderError("Claude returned empty content".to_string()));
+        }
+        let usage = payload.get("usage");
+        let pt = usage.and_then(|u| u.get("input_tokens")).and_then(Value::as_i64).unwrap_or(0);
+        let ct = usage.and_then(|u| u.get("output_tokens")).and_then(Value::as_i64).unwrap_or(0);
+        let cost = estimate_cost(pt, ct, env_rate("CLAUDE_HAIKU_PRICE_INPUT_PER_1K", 0.001), env_rate("CLAUDE_HAIKU_PRICE_OUTPUT_PER_1K", 0.005));
+        Ok(LlmTextResponse { content, provider: "claude_haiku".to_string(), model: self.model.clone(), cost_usd_estimate: Some(cost) })
+    }
+}
+
+/// Env-Var nur wenn gesetzt + nicht leer.
+fn nonempty_env(var: &str) -> Option<String> {
+    std::env::var(var).ok().filter(|v| !v.is_empty())
 }
 
 /// Wählt + ruft den passenden Provider (Python `LLMDispatcher`).
@@ -153,12 +336,13 @@ impl LlmDispatcher {
             .unwrap_or_else(|| DEFAULT_LOCAL.to_string())
     }
 
-    /// Instanziiert einen Provider; unbekannt/noch-nicht-gebaut → Unavailable.
+    /// Instanziiert einen Provider; fehlende Keys → Unavailable (→ Fallback).
     fn instantiate(&self, name: &str) -> Result<Box<dyn LlmProvider>, LlmError> {
         match name {
             "ollama" => Ok(Box::new(OllamaProvider::from_env())),
-            // minimax/claude_haiku folgen in E2c → bis dahin Fallback auf Ollama.
-            other => Err(LlmError::ProviderUnavailable(format!("Unknown/unbuilt LLM provider: {other}"))),
+            "minimax" => Ok(Box::new(MiniMaxProvider::from_env()?)),
+            "claude_haiku" => Ok(Box::new(ClaudeHaikuProvider::from_env()?)),
+            other => Err(LlmError::ProviderUnavailable(format!("Unknown LLM provider: {other}"))),
         }
     }
 
@@ -241,6 +425,45 @@ mod tests {
             .mount(&server).await;
         let provider = OllamaProvider::new("m".into(), server.uri(), 0.4);
         assert!(matches!(provider.generate(&LlmRequest::default()).await, Err(LlmError::ProviderError(_))));
+    }
+
+    fn inner_json() -> &'static str {
+        "{\"youtube\":{\"title\":\"YT\",\"description\":\"d\",\"hashtags\":[\"haze\"]},\"tiktok\":{\"title\":\"TK\",\"description\":\"d\",\"hashtags\":[]},\"instagram\":{\"title\":\"IG\",\"description\":\"d\",\"hashtags\":[]}}"
+    }
+
+    #[tokio::test]
+    async fn minimax_generate_und_cost() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST")).and(path("/chat/completions"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "choices": [{"message": {"content": inner_json()}}],
+                "usage": {"prompt_tokens": 1000, "completion_tokens": 1000}
+            })))
+            .mount(&server).await;
+        let p = MiniMaxProvider::new("MiniMax-M3".into(), server.uri(), "k".into(), 0.4);
+        let resp = p.generate(&LlmRequest::default()).await.unwrap();
+        assert_eq!(resp.provider, "minimax");
+        assert_eq!(resp.youtube.title.as_deref(), Some("YT"));
+        // Cost: 1000/1000*0.0006 + 1000/1000*0.0024 = 0.003 (Default-Raten, env-frei).
+        if std::env::var("MINIMAX_PRICE_INPUT_PER_1K").is_err() {
+            assert_eq!(resp.cost_usd_estimate, Some(0.003));
+        }
+    }
+
+    #[tokio::test]
+    async fn claude_generate_konkateniert_textblocks() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST")).and(path("/messages"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "content": [{"type": "text", "text": inner_json()}],
+                "usage": {"input_tokens": 100, "output_tokens": 50}
+            })))
+            .mount(&server).await;
+        let p = ClaudeHaikuProvider::new("claude-haiku".into(), format!("{}/messages", server.uri()), "k".into(), 0.4);
+        let resp = p.generate(&LlmRequest::default()).await.unwrap();
+        assert_eq!(resp.provider, "claude_haiku");
+        assert_eq!(resp.youtube.title.as_deref(), Some("YT"));
+        assert!(resp.cost_usd_estimate.is_some());
     }
 
     #[test]

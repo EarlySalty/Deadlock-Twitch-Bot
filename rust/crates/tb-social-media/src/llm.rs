@@ -59,6 +59,7 @@ pub struct LlmTextResponse {
     pub content: String,
     pub provider: String,
     pub model: String,
+    pub cost_usd_estimate: Option<f64>,
 }
 
 // ---------- Prompts ----------
