@@ -46,6 +46,9 @@ pub fn build_public_router(pool: PgPool) -> Router {
         // Social-Media Rechtstexte — öffentlich für die Plattform-OAuth-Reviews.
         .route("/social-media/terms", get(social_media::terms_handler))
         .route("/social-media/privacy", get(social_media::privacy_handler))
+        // OAuth-Callback — öffentlich (Provider-Redirect, Security via State-Token).
+        .route("/social-media/oauth/callback", get(social_media::oauth_callback_handler))
+        .route("/social-media/oauth/callback/:platform", get(social_media::oauth_callback_handler))
         .with_state(pool)
         .layer(CorsLayer::permissive())
 }
@@ -106,6 +109,9 @@ pub fn build_authed_router(pool: PgPool, token: String) -> Router {
         .route("/social-media/api/admin/analytics/clips/:clip_db_id", get(social_media::clip_analytics_get_handler))
         .route("/social-media/api/admin/reports", get(social_media::reports_list_handler))
         .route("/social-media/api/admin/reports/run", post(social_media::reports_run_handler))
+        // OAuth-Start + Disconnect (Auth erforderlich).
+        .route("/social-media/oauth/start/:platform", get(social_media::oauth_start_handler))
+        .route("/social-media/oauth/disconnect/:platform", post(social_media::oauth_disconnect_handler))
         // Internal-Home: gebündelte Dashboard-Startseite (Profil, KPIs, Bot-Events,
         // Changelog). GET liest, POST legt einen Changelog-Eintrag an (Admin-only).
         .route(

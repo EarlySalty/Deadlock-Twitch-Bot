@@ -37,6 +37,7 @@ use tb_social_media::clip_templates::{
     apply_template_to_clip, create_streamer_template, get_global_templates, get_last_hashtags, get_streamer_templates,
     GlobalTemplate, StreamerTemplate,
 };
+use tb_social_media::oauth::{OAuthError, OAuthManager};
 use tb_social_media::layout::{
     default_streamer_layout, get_clip_effective_layout, get_streamer_layout, set_clip_layout_override,
     upsert_streamer_layout, StreamerLayout,
@@ -1245,6 +1246,117 @@ pub async fn auto_approve_put_handler(auth: DashboardAuthLevel, State(pool): Sta
     }
 }
 
+/// Öffentliche Dashboard-Origin für die OAuth-Redirect-URIs. Konfigurierbar
+/// (`SOCIAL_MEDIA_PUBLIC_ORIGIN`), Default = Python-Fallback. (Statt Pythons
+/// Request-Header-Ableitung — gleicher Effekt: die bei den Plattformen
+/// registrierte Callback-Basis.)
+fn oauth_public_origin() -> String {
+    std::env::var("SOCIAL_MEDIA_PUBLIC_ORIGIN")
+        .ok()
+        .map(|s| s.trim().trim_end_matches('/').to_string())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "https://admin.deutsche-deadlock-community.de".to_string())
+}
+
+/// Internes Dashboard-Redirect-Ziel (Python `_dashboard_url`).
+fn dashboard_url(key: &str, value: &str) -> String {
+    format!("/social-media?{key}={value}")
+}
+
+/// 302-Redirect (Python `web.HTTPFound`).
+fn redirect_found(url: &str) -> Response {
+    (StatusCode::FOUND, [(axum::http::header::LOCATION, url.to_string())]).into_response()
+}
+
+/// Baut den OAuthManager inline aus dem Master-Key.
+fn build_oauth_manager(pool: PgPool) -> Option<OAuthManager> {
+    let cipher = Arc::new(FieldCipher::from_env().ok()?);
+    Some(OAuthManager::new(pool, cipher))
+}
+
+fn is_supported_platform(p: &str) -> bool {
+    matches!(p, "tiktok" | "youtube" | "instagram")
+}
+
+/// `GET /social-media/oauth/start/:platform` — OAuth-Flow starten (Redirect).
+pub async fn oauth_start_handler(auth: DashboardAuthLevel, State(pool): State<PgPool>, Path(platform): Path<String>, Query(q): Query<StreamerQuery>) -> Response {
+    let scope = match resolve_streamer_scope(&auth, q.streamer.as_deref(), false) {
+        Ok(s) => s,
+        Err(e) => return e,
+    };
+    if !is_supported_platform(&platform) {
+        return (StatusCode::BAD_REQUEST, "Invalid platform").into_response();
+    }
+    let Some(mgr) = build_oauth_manager(pool) else {
+        return redirect_found(&dashboard_url("oauth_error", "oauth_start_failed"));
+    };
+    let redirect_uri = format!("{}/social-media/oauth/callback/{}", oauth_public_origin(), platform);
+    match mgr.generate_auth_url(&platform, scope.as_deref(), &redirect_uri).await {
+        Ok(auth_url) => redirect_found(&auth_url),
+        Err(_) => redirect_found(&dashboard_url("oauth_error", "oauth_start_failed")),
+    }
+}
+
+/// `?code=&state=&error=` für den OAuth-Callback.
+#[derive(Debug, Deserialize)]
+pub struct OAuthCallbackQuery {
+    pub code: Option<String>,
+    pub state: Option<String>,
+    pub error: Option<String>,
+}
+
+/// `GET /social-media/oauth/callback[/:platform]` — Provider-Callback (öffentlich,
+/// Security über den State-Token).
+pub async fn oauth_callback_handler(State(pool): State<PgPool>, platform: Option<Path<String>>, Query(q): Query<OAuthCallbackQuery>) -> Response {
+    if q.error.as_deref().map(|s| !s.is_empty()).unwrap_or(false) {
+        return redirect_found(&dashboard_url("oauth_error", "provider_error"));
+    }
+    let (code, state) = match (
+        q.code.as_deref().filter(|s| !s.is_empty()),
+        q.state.as_deref().filter(|s| !s.is_empty()),
+    ) {
+        (Some(c), Some(s)) => (c, s),
+        _ => return (StatusCode::BAD_REQUEST, "Missing code or state").into_response(),
+    };
+    let expected_platform = platform.as_ref().map(|p| p.trim().to_lowercase()).filter(|s| !s.is_empty());
+    let callback_redirect_uri = expected_platform.as_ref().map(|p| format!("{}/social-media/oauth/callback/{}", oauth_public_origin(), p));
+    let Some(mgr) = build_oauth_manager(pool) else {
+        return redirect_found(&dashboard_url("oauth_error", "callback_failed"));
+    };
+    match mgr.handle_callback(code, state, expected_platform.as_deref(), callback_redirect_uri.as_deref()).await {
+        Ok(result) => {
+            let platform = if is_supported_platform(&result.platform) { result.platform } else { "unknown".to_string() };
+            redirect_found(&dashboard_url("oauth_success", &platform))
+        }
+        Err(OAuthError::StateInvalid | OAuthError::RedirectMismatch) => redirect_found(&dashboard_url("oauth_error", "invalid_callback")),
+        Err(OAuthError::Exchange { .. }) => redirect_found(&dashboard_url("oauth_error", "token_exchange_failed")),
+        Err(_) => redirect_found(&dashboard_url("oauth_error", "callback_failed")),
+    }
+}
+
+/// `POST /social-media/oauth/disconnect/:platform` — Plattform trennen.
+pub async fn oauth_disconnect_handler(auth: DashboardAuthLevel, State(pool): State<PgPool>, Path(platform): Path<String>, Query(q): Query<StreamerQuery>) -> Response {
+    let scope = match resolve_streamer_scope(&auth, q.streamer.as_deref(), false) {
+        Ok(s) => s,
+        Err(e) => return e,
+    };
+    if !is_supported_platform(&platform) {
+        return (StatusCode::BAD_REQUEST, Json(json!({ "error": "Invalid platform" }))).into_response();
+    }
+    let result = sqlx::query(
+        "UPDATE social_media_platform_auth SET enabled = 0 \
+         WHERE platform = $1 AND (streamer_login = $2 OR (streamer_login IS NULL AND $2::text IS NULL))",
+    )
+    .bind(&platform)
+    .bind(scope.as_deref())
+    .execute(&pool)
+    .await;
+    match result {
+        Ok(_) => Json(json!({ "success": true })).into_response(),
+        Err(_) => (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": "disconnect_failed" }))).into_response(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1328,6 +1440,7 @@ mod tests {
             "CREATE TABLE social_media_settings (key TEXT PRIMARY KEY, value JSONB, updated_at TIMESTAMPTZ, updated_by TEXT)",
             "CREATE TABLE twitch_clips_social_analytics (id SERIAL PRIMARY KEY, clip_id INTEGER, platform TEXT, bucket TEXT, views INTEGER, likes INTEGER, comments INTEGER, shares INTEGER, watch_time_seconds INTEGER, ctr_percent NUMERIC(5,2), engagement_rate NUMERIC(5,2), provider TEXT, synced_at TIMESTAMPTZ, next_pull_at TIMESTAMPTZ)",
             "CREATE TABLE social_media_reports (id SERIAL PRIMARY KEY, kind TEXT NOT NULL, streamer_login TEXT, period_start TIMESTAMPTZ NOT NULL, period_end TIMESTAMPTZ NOT NULL, content_md TEXT NOT NULL, model TEXT, created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP)",
+            "CREATE TABLE social_media_platform_auth (id SERIAL PRIMARY KEY, platform TEXT, streamer_login TEXT, enabled INTEGER DEFAULT 1)",
         ] {
             sqlx::query(ddl).execute(&pool).await.unwrap();
         }
@@ -1827,5 +1940,39 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
         // Partner → 403.
         assert_eq!(reports_run_handler(partner("nani"), State(pool.clone()), "{\"kind\":\"cross\"}".into()).await.status(), StatusCode::FORBIDDEN);
+    }
+
+    fn location(resp: &Response) -> String {
+        resp.headers().get(axum::http::header::LOCATION).and_then(|v| v.to_str().ok()).unwrap_or("").to_string()
+    }
+
+    #[tokio::test]
+    async fn oauth_start_callback_disconnect() {
+        let Some(pool) = make_pool("t_dash_sm_oauth").await else { return };
+
+        // start: ungültige Plattform → 400.
+        assert_eq!(oauth_start_handler(DashboardAuthLevel::Admin, State(pool.clone()), Path("snapchat".into()), Query(StreamerQuery { streamer: None })).await.status(), StatusCode::BAD_REQUEST);
+        // start: gültige Plattform → 302 (Auth-URL oder oauth_error-Redirect, je nach Env).
+        assert_eq!(oauth_start_handler(DashboardAuthLevel::Admin, State(pool.clone()), Path("tiktok".into()), Query(StreamerQuery { streamer: None })).await.status(), StatusCode::FOUND);
+        // start: None-Auth → 401, Partner-Cross-Account → 403.
+        assert_eq!(oauth_start_handler(DashboardAuthLevel::None, State(pool.clone()), Path("tiktok".into()), Query(StreamerQuery { streamer: None })).await.status(), StatusCode::UNAUTHORIZED);
+        assert_eq!(oauth_start_handler(partner("nani"), State(pool.clone()), Path("tiktok".into()), Query(StreamerQuery { streamer: Some("other".into()) })).await.status(), StatusCode::FORBIDDEN);
+
+        // callback: error-Param → 302 provider_error.
+        let resp = oauth_callback_handler(State(pool.clone()), None, Query(OAuthCallbackQuery { code: None, state: None, error: Some("access_denied".into()) })).await;
+        assert_eq!(resp.status(), StatusCode::FOUND);
+        assert!(location(&resp).contains("oauth_error=provider_error"));
+        // callback: fehlender code/state → 400.
+        assert_eq!(oauth_callback_handler(State(pool.clone()), None, Query(OAuthCallbackQuery { code: None, state: None, error: None })).await.status(), StatusCode::BAD_REQUEST);
+
+        // disconnect: setzt enabled=0 (kein Cipher nötig).
+        sqlx::query("INSERT INTO social_media_platform_auth (platform, streamer_login, enabled) VALUES ('tiktok', 'nani', 1)").execute(&pool).await.unwrap();
+        let resp = oauth_disconnect_handler(DashboardAuthLevel::Admin, State(pool.clone()), Path("tiktok".into()), Query(StreamerQuery { streamer: Some("nani".into()) })).await;
+        assert_eq!(resp.status(), StatusCode::OK);
+        assert_eq!(body_json(resp).await["success"], true);
+        let enabled: i32 = sqlx::query_scalar("SELECT enabled FROM social_media_platform_auth WHERE platform='tiktok' AND streamer_login='nani'").fetch_one(&pool).await.unwrap();
+        assert_eq!(enabled, 0);
+        // disconnect: ungültige Plattform → 400.
+        assert_eq!(oauth_disconnect_handler(DashboardAuthLevel::Admin, State(pool.clone()), Path("snap".into()), Query(StreamerQuery { streamer: None })).await.status(), StatusCode::BAD_REQUEST);
     }
 }
