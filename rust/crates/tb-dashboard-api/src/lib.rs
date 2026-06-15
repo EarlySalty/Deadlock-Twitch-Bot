@@ -101,6 +101,10 @@ pub fn build_authed_router(pool: PgPool, token: String) -> Router {
             "/social-media/api/admin/settings/auto-approve",
             get(social_media::auto_approve_get_handler).put(social_media::auto_approve_put_handler),
         )
+        // Enrichment-Detail, Clip-Analytics, Report-Liste (Admin, lesend).
+        .route("/social-media/api/admin/clips/:clip_db_id/enrichment", get(social_media::enrichment_get_handler))
+        .route("/social-media/api/admin/analytics/clips/:clip_db_id", get(social_media::clip_analytics_get_handler))
+        .route("/social-media/api/admin/reports", get(social_media::reports_list_handler))
         // Internal-Home: gebündelte Dashboard-Startseite (Profil, KPIs, Bot-Events,
         // Changelog). GET liest, POST legt einen Changelog-Eintrag an (Admin-only).
         .route(

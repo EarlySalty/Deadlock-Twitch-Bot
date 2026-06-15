@@ -25,9 +25,10 @@ use sqlx::postgres::PgRow;
 use sqlx::{PgPool, Postgres, QueryBuilder, Row};
 use tb_crypto::FieldCipher;
 use tb_social_media::approval::{get_approval_record, handle_decision, serialize_approval_record, ApprovalError};
-use tb_social_media::enrichment::get_enrichment;
+use tb_social_media::enrichment::{ensure_enrichment_row, get_enrichment, EnrichmentRecord};
 use tb_social_media::retention::mark_clip_discarded;
 use tb_social_media::settings::{coerce_bool, get_auto_approve_settings, set_auto_approve_settings, AutoApprove};
+use tb_social_media::analytics::{list_clip_analytics, list_reports, ClipAnalyticsSnapshot, SocialMediaReportRecord};
 use tb_social_media::clip_analytics::get_analytics_summary;
 use tb_social_media::credentials::{CredentialManager, PlatformStatus};
 use tb_social_media::clip_manager::get_clips_for_dashboard;
@@ -979,6 +980,127 @@ fn invalid_payload() -> Response {
     (StatusCode::BAD_REQUEST, Json(json!({ "error": "invalid_payload" }))).into_response()
 }
 
+/// Serialisiert einen Enrichment-Datensatz (Python `_serialize_enrichment_record`).
+fn enrichment_record_json(e: &EnrichmentRecord) -> Value {
+    json!({
+        "clip_db_id": e.clip_db_id,
+        "transcript_raw": e.transcript_raw,
+        "transcript_corrected": e.transcript_corrected,
+        "transcript_segments": e.transcript_segments,
+        "transcript_lang": e.transcript_lang,
+        "detected_terms": e.detected_terms,
+        "title_youtube": e.title_youtube,
+        "title_tiktok": e.title_tiktok,
+        "title_instagram": e.title_instagram,
+        "description_youtube": e.description_youtube,
+        "description_tiktok": e.description_tiktok,
+        "description_instagram": e.description_instagram,
+        "hashtags_youtube": e.hashtags_youtube,
+        "hashtags_tiktok": e.hashtags_tiktok,
+        "hashtags_instagram": e.hashtags_instagram,
+        "llm_provider": e.llm_provider,
+        "llm_model": e.llm_model,
+        "cost_usd_estimate": e.cost_usd_estimate,
+        "status": e.status,
+        "error_message": e.error_message,
+        "started_at": e.started_at,
+        "completed_at": e.completed_at,
+        "edited_by": e.edited_by,
+        "updated_at": e.updated_at,
+    })
+}
+
+/// Serialisiert einen Analytics-Snapshot (Python `_serialize_clip_analytics_record`).
+fn clip_analytics_json(a: &ClipAnalyticsSnapshot) -> Value {
+    json!({
+        "clip_db_id": a.clip_db_id,
+        "platform": a.platform,
+        "bucket": a.bucket,
+        "views": a.views,
+        "likes": a.likes,
+        "comments": a.comments,
+        "shares": a.shares,
+        "watch_time_seconds": a.watch_time_seconds,
+        "ctr_percent": a.ctr_percent,
+        "engagement_rate": a.engagement_rate,
+        "provider": a.provider,
+        "synced_at": a.synced_at,
+        "next_pull_at": a.next_pull_at,
+    })
+}
+
+/// Serialisiert einen Report-Datensatz (Python `_serialize_report_record`).
+fn report_record_json(r: &SocialMediaReportRecord) -> Value {
+    json!({
+        "id": r.id,
+        "kind": r.kind,
+        "streamer_login": r.streamer_login,
+        "period_start": r.period_start,
+        "period_end": r.period_end,
+        "content_md": r.content_md,
+        "model": r.model,
+        "created_at": r.created_at,
+    })
+}
+
+/// `GET /social-media/api/admin/clips/:clip_db_id/enrichment` — Enrichment (Admin).
+pub async fn enrichment_get_handler(auth: DashboardAuthLevel, State(pool): State<PgPool>, Path(raw): Path<String>) -> Response {
+    if let Err(e) = require_admin(&auth) {
+        return e;
+    }
+    let Some(clip_db_id) = normalize_id(Some(&Value::String(raw))) else {
+        return invalid_clip_db_id();
+    };
+    if load_clip_row(&pool, clip_db_id).await.is_none() {
+        return clip_not_found();
+    }
+    let record = ensure_enrichment_row(&pool, clip_db_id).await;
+    Json(enrichment_record_json(&record)).into_response()
+}
+
+/// `GET /social-media/api/admin/analytics/clips/:clip_db_id` — Analytics (Admin).
+pub async fn clip_analytics_get_handler(auth: DashboardAuthLevel, State(pool): State<PgPool>, Path(raw): Path<String>) -> Response {
+    if let Err(e) = require_admin(&auth) {
+        return e;
+    }
+    let Some(clip_db_id) = normalize_id(Some(&Value::String(raw))) else {
+        return invalid_clip_db_id();
+    };
+    if load_clip_row(&pool, clip_db_id).await.is_none() {
+        return clip_not_found();
+    }
+    let items: Vec<Value> = list_clip_analytics(&pool, clip_db_id).await.iter().map(clip_analytics_json).collect();
+    Json(json!({ "clip_db_id": clip_db_id, "items": items })).into_response()
+}
+
+/// `?kind=&streamer=&limit=` für die Report-Liste.
+#[derive(Debug, Deserialize)]
+pub struct ReportsQuery {
+    pub kind: Option<String>,
+    pub streamer: Option<String>,
+    pub limit: Option<String>,
+}
+
+/// `GET /social-media/api/admin/reports` — Report-Liste (Admin).
+pub async fn reports_list_handler(auth: DashboardAuthLevel, State(pool): State<PgPool>, Query(q): Query<ReportsQuery>) -> Response {
+    if let Err(e) = require_admin(&auth) {
+        return e;
+    }
+    let kind = q.kind.as_deref().map(|s| s.trim().to_lowercase()).filter(|s| !s.is_empty());
+    if let Some(k) = &kind {
+        if !matches!(k.as_str(), "streamer" | "cross" | "admin") {
+            return (StatusCode::BAD_REQUEST, Json(json!({ "error": "invalid_kind" }))).into_response();
+        }
+    }
+    let streamer = q.streamer.as_deref().map(|s| s.trim().to_lowercase()).filter(|s| !s.is_empty());
+    let limit = match q.limit.as_deref().unwrap_or("20").parse::<i64>() {
+        Ok(n) => n.clamp(1, 20),
+        Err(_) => return (StatusCode::BAD_REQUEST, Json(json!({ "error": "invalid_limit" }))).into_response(),
+    };
+    let items: Vec<Value> = list_reports(&pool, kind.as_deref(), streamer.as_deref(), limit).await.iter().map(report_record_json).collect();
+    Json(json!({ "items": items })).into_response()
+}
+
 fn invalid_json() -> Response {
     (StatusCode::BAD_REQUEST, Json(json!({ "error": "invalid_json" }))).into_response()
 }
@@ -1171,6 +1293,8 @@ mod tests {
             "CREATE TABLE social_media_streamer_layout (streamer_login TEXT PRIMARY KEY, layout_json JSONB NOT NULL, cam_enabled BOOLEAN NOT NULL DEFAULT TRUE, mode TEXT NOT NULL DEFAULT 'pip', updated_at TIMESTAMPTZ DEFAULT NOW(), updated_by TEXT)",
             "CREATE TABLE deadlock_vocab (term TEXT PRIMARY KEY, canonical TEXT NOT NULL, category TEXT NOT NULL, source TEXT NOT NULL DEFAULT 'manual', aliases JSONB NOT NULL DEFAULT '[]'::jsonb, weight INTEGER NOT NULL DEFAULT 1, updated_at TIMESTAMPTZ DEFAULT NOW())",
             "CREATE TABLE social_media_settings (key TEXT PRIMARY KEY, value JSONB, updated_at TIMESTAMPTZ, updated_by TEXT)",
+            "CREATE TABLE twitch_clips_social_analytics (id SERIAL PRIMARY KEY, clip_id INTEGER, platform TEXT, bucket TEXT, views INTEGER, likes INTEGER, comments INTEGER, shares INTEGER, watch_time_seconds INTEGER, ctr_percent NUMERIC(5,2), engagement_rate NUMERIC(5,2), provider TEXT, synced_at TIMESTAMPTZ, next_pull_at TIMESTAMPTZ)",
+            "CREATE TABLE social_media_reports (id SERIAL PRIMARY KEY, kind TEXT NOT NULL, streamer_login TEXT, period_start TIMESTAMPTZ NOT NULL, period_end TIMESTAMPTZ NOT NULL, content_md TEXT NOT NULL, model TEXT, created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP)",
         ] {
             sqlx::query(ddl).execute(&pool).await.unwrap();
         }
@@ -1605,5 +1729,43 @@ mod tests {
         // Partner → 403, invalid clip → 400.
         assert_eq!(auto_approve_get_handler(partner("nani"), State(pool.clone())).await.status(), StatusCode::FORBIDDEN);
         assert_eq!(approval_get_handler(DashboardAuthLevel::Admin, State(pool.clone()), Path("abc".into())).await.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn enrichment_analytics_reports_get() {
+        let Some(pool) = make_pool("t_dash_sm_reads").await else { return };
+        let clip: i32 = sqlx::query_scalar("INSERT INTO twitch_clips_social_media (clip_id, streamer_login) VALUES ('a', 'nani') RETURNING id").fetch_one(&pool).await.unwrap();
+
+        // enrichment-get: ensure_enrichment_row legt pending an.
+        let resp = enrichment_get_handler(DashboardAuthLevel::Admin, State(pool.clone()), Path(clip.to_string())).await;
+        assert_eq!(resp.status(), StatusCode::OK);
+        let v = body_json(resp).await;
+        assert_eq!(v["clip_db_id"], clip);
+        assert_eq!(v["status"], "pending");
+        assert_eq!(v["hashtags_youtube"], json!([])); // leere Liste, nicht null
+
+        // analytics-get: zwei Snapshots.
+        sqlx::query("INSERT INTO twitch_clips_social_analytics (clip_id, platform, bucket, views, likes, engagement_rate, provider, synced_at) VALUES ($1, 'tiktok', '24h', 100, 10, 12.5, 'tiktok_open_api_v2', NOW())").bind(clip).execute(&pool).await.unwrap();
+        let resp = clip_analytics_get_handler(DashboardAuthLevel::Admin, State(pool.clone()), Path(clip.to_string())).await;
+        let v = body_json(resp).await;
+        assert_eq!(v["clip_db_id"], clip);
+        assert_eq!(v["items"].as_array().unwrap().len(), 1);
+        assert_eq!(v["items"][0]["views"], 100);
+        assert_eq!(v["items"][0]["engagement_rate"], 12.5);
+
+        // reports-list: insert + Filter.
+        sqlx::query("INSERT INTO social_media_reports (kind, streamer_login, period_start, period_end, content_md) VALUES ('streamer', 'nani', NOW()-INTERVAL '7 days', NOW(), '# R')").execute(&pool).await.unwrap();
+        let resp = reports_list_handler(DashboardAuthLevel::Admin, State(pool.clone()), Query(ReportsQuery { kind: None, streamer: None, limit: None })).await;
+        assert_eq!(body_json(resp).await["items"].as_array().unwrap().len(), 1);
+        // invalid_kind → 400.
+        let resp = reports_list_handler(DashboardAuthLevel::Admin, State(pool.clone()), Query(ReportsQuery { kind: Some("bogus".into()), streamer: None, limit: None })).await;
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+        // invalid_limit → 400.
+        let resp = reports_list_handler(DashboardAuthLevel::Admin, State(pool.clone()), Query(ReportsQuery { kind: None, streamer: None, limit: Some("x".into()) })).await;
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+
+        // Fehlerpfade: nicht existierender Clip → 404, Partner → 403.
+        assert_eq!(enrichment_get_handler(DashboardAuthLevel::Admin, State(pool.clone()), Path("99999".into())).await.status(), StatusCode::NOT_FOUND);
+        assert_eq!(reports_list_handler(partner("nani"), State(pool.clone()), Query(ReportsQuery { kind: None, streamer: None, limit: None })).await.status(), StatusCode::FORBIDDEN);
     }
 }
