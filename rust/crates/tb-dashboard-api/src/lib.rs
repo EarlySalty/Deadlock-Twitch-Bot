@@ -68,6 +68,9 @@ pub fn build_authed_router(pool: PgPool, token: String) -> Router {
         .route("/social-media/api/stats", get(social_media::stats_handler))
         .route("/social-media/api/clips", get(social_media::clips_handler))
         .route("/social-media/api/last-hashtags", get(social_media::last_hashtags_handler))
+        // Templates: Streamer-Template anlegen + Template auf Clip anwenden.
+        .route("/social-media/api/templates/streamer", post(social_media::create_template_handler))
+        .route("/social-media/api/templates/apply", post(social_media::apply_template_handler))
         // Internal-Home: gebündelte Dashboard-Startseite (Profil, KPIs, Bot-Events,
         // Changelog). GET liest, POST legt einen Changelog-Eintrag an (Admin-only).
         .route(

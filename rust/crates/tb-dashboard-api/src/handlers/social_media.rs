@@ -18,11 +18,11 @@ use axum::{
     Json,
 };
 use serde::Deserialize;
-use serde_json::json;
+use serde_json::{json, Value};
 use sqlx::PgPool;
 use tb_social_media::clip_analytics::get_analytics_summary;
 use tb_social_media::clip_manager::get_clips_for_dashboard;
-use tb_social_media::clip_templates::get_last_hashtags;
+use tb_social_media::clip_templates::{apply_template_to_clip, create_streamer_template, get_last_hashtags};
 use tb_social_media::rendering::{render_dashboard, render_privacy, render_terms};
 
 use crate::auth::level::DashboardAuthLevel;
@@ -175,6 +175,131 @@ pub async fn last_hashtags_handler(auth: DashboardAuthLevel, State(pool): State<
     Json(json!({ "hashtags": hashtags })).into_response()
 }
 
+/// Spiegelt Pythons `_require_auth` (None-Auth → 401), für Endpoints, deren
+/// erste Prüfung NICHT die Scope-Auflösung ist (z.B. apply: clip_id zuerst).
+fn require_auth(auth: &DashboardAuthLevel) -> Result<(), Response> {
+    if matches!(auth, DashboardAuthLevel::None) {
+        Err(unauthorized())
+    } else {
+        Ok(())
+    }
+}
+
+/// User-gelieferte ID → positive i32 (Python `_normalize_clip_id`; akzeptiert
+/// Zahl oder numerischen String).
+fn normalize_id(value: Option<&Value>) -> Option<i32> {
+    let n = value?.as_i64().or_else(|| value?.as_str().and_then(|s| s.trim().parse::<i64>().ok()))?;
+    if n > 0 && n <= i32::MAX as i64 {
+        Some(n as i32)
+    } else {
+        None
+    }
+}
+
+async fn clip_owned_by_streamer(pool: &PgPool, clip_id: i32, streamer: &str) -> bool {
+    sqlx::query_scalar::<_, i32>(
+        "SELECT 1 FROM twitch_clips_social_media WHERE id = $1 AND LOWER(streamer_login) = LOWER($2) LIMIT 1",
+    )
+    .bind(clip_id)
+    .bind(streamer)
+    .fetch_optional(pool)
+    .await
+    .ok()
+    .flatten()
+    .is_some()
+}
+
+async fn streamer_template_owned(pool: &PgPool, template_id: i32, streamer: &str) -> bool {
+    sqlx::query_scalar::<_, i32>(
+        "SELECT 1 FROM clip_templates_streamer WHERE id = $1 AND LOWER(streamer_login) = LOWER($2) LIMIT 1",
+    )
+    .bind(template_id)
+    .bind(streamer)
+    .fetch_optional(pool)
+    .await
+    .ok()
+    .flatten()
+    .is_some()
+}
+
+/// POST-Body von `…/templates/streamer`.
+#[derive(Debug, Deserialize)]
+pub struct CreateTemplateBody {
+    pub streamer: Option<String>,
+    pub template_name: Option<String>,
+    pub description: Option<String>,
+    #[serde(default)]
+    pub hashtags: Vec<String>,
+    #[serde(default)]
+    pub is_default: bool,
+}
+
+/// `POST /social-media/api/templates/streamer` — Streamer-Template anlegen/aktualisieren.
+pub async fn create_template_handler(auth: DashboardAuthLevel, State(pool): State<PgPool>, Json(body): Json<CreateTemplateBody>) -> Response {
+    if let Err(e) = require_auth(&auth) {
+        return e;
+    }
+    // required=true: Admin muss `streamer` mitgeben, Partner bekommt eigenen.
+    let scope = match resolve_streamer_scope(&auth, body.streamer.as_deref(), true) {
+        Ok(s) => s,
+        Err(e) => return e,
+    };
+    let streamer = scope.unwrap_or_default();
+    let name = body.template_name.unwrap_or_default();
+    let description = body.description.unwrap_or_default();
+    if name.is_empty() || description.is_empty() {
+        return (StatusCode::BAD_REQUEST, Json(json!({ "error": "template_name and description are required" }))).into_response();
+    }
+    match create_streamer_template(&pool, &streamer, &name, &description, &body.hashtags, body.is_default).await {
+        Ok(template_id) => Json(json!({ "success": true, "template_id": template_id, "message": "Template created/updated successfully" })).into_response(),
+        Err(_) => (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": "template_create_failed" }))).into_response(),
+    }
+}
+
+/// POST-Body von `…/templates/apply`.
+#[derive(Debug, Deserialize)]
+pub struct ApplyTemplateBody {
+    pub clip_id: Option<Value>,
+    pub template_id: Option<Value>,
+    #[serde(default)]
+    pub is_global: bool,
+    pub streamer: Option<String>,
+}
+
+/// `POST /social-media/api/templates/apply` — Template auf einen Clip anwenden.
+pub async fn apply_template_handler(
+    auth: DashboardAuthLevel,
+    State(pool): State<PgPool>,
+    Query(q): Query<StreamerQuery>,
+    Json(body): Json<ApplyTemplateBody>,
+) -> Response {
+    if let Err(e) = require_auth(&auth) {
+        return e;
+    }
+    let (Some(clip_id), Some(template_id)) = (normalize_id(body.clip_id.as_ref()), normalize_id(body.template_id.as_ref())) else {
+        return (StatusCode::BAD_REQUEST, Json(json!({ "error": "clip_id and template_id are required" }))).into_response();
+    };
+    // Streamer aus Body, sonst Query.
+    let requested = body.streamer.as_deref().or(q.streamer.as_deref());
+    let scope = match resolve_streamer_scope(&auth, requested, false) {
+        Ok(s) => s,
+        Err(e) => return e,
+    };
+    if let Some(streamer) = &scope {
+        if !clip_owned_by_streamer(&pool, clip_id, streamer).await {
+            return (StatusCode::FORBIDDEN, Json(json!({ "error": "forbidden: clip does not belong to authenticated streamer" }))).into_response();
+        }
+        if !body.is_global && !streamer_template_owned(&pool, template_id, streamer).await {
+            return (StatusCode::FORBIDDEN, Json(json!({ "error": "forbidden: template does not belong to authenticated streamer" }))).into_response();
+        }
+    }
+    if apply_template_to_clip(&pool, clip_id, template_id, body.is_global).await {
+        Json(json!({ "success": true, "message": "Template applied successfully" })).into_response()
+    } else {
+        (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": "Failed to apply template" }))).into_response()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -235,18 +360,24 @@ mod tests {
         assert!(parse_limit(Some("abc")).is_err());
     }
 
-    async fn make_pool() -> Option<sqlx::PgPool> {
+    async fn make_pool(schema: &str) -> Option<sqlx::PgPool> {
         use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
         use std::str::FromStr;
         let dsn = std::env::var("TB_TEST_DATABASE_URL").ok()?;
         let admin = PgPoolOptions::new().max_connections(1).connect(&dsn).await.unwrap();
-        sqlx::query("DROP SCHEMA IF EXISTS t_dash_sm CASCADE").execute(&admin).await.unwrap();
-        sqlx::query("CREATE SCHEMA t_dash_sm").execute(&admin).await.unwrap();
+        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE")).execute(&admin).await.unwrap();
+        sqlx::query(&format!("CREATE SCHEMA {schema}")).execute(&admin).await.unwrap();
         admin.close().await;
-        let opts = PgConnectOptions::from_str(&dsn).unwrap().options([("search_path", "t_dash_sm")]);
+        let opts = PgConnectOptions::from_str(&dsn).unwrap().options([("search_path", schema)]);
         let pool = PgPoolOptions::new().max_connections(2).connect_with(opts).await.unwrap();
-        sqlx::query("CREATE TABLE twitch_clips_social_media (id SERIAL PRIMARY KEY, clip_id TEXT, streamer_login TEXT, status TEXT DEFAULT 'pending', created_at TEXT)").execute(&pool).await.unwrap();
-        sqlx::query("CREATE TABLE twitch_clips_upload_queue (id SERIAL PRIMARY KEY, clip_id INTEGER, platform TEXT, status TEXT)").execute(&pool).await.unwrap();
+        for ddl in [
+            "CREATE TABLE twitch_clips_social_media (id SERIAL PRIMARY KEY, clip_id TEXT, streamer_login TEXT, status TEXT DEFAULT 'pending', created_at TEXT, clip_title TEXT, game_name TEXT, custom_description TEXT, hashtags TEXT)",
+            "CREATE TABLE twitch_clips_upload_queue (id SERIAL PRIMARY KEY, clip_id INTEGER, platform TEXT, status TEXT)",
+            "CREATE TABLE clip_templates_streamer (id SERIAL PRIMARY KEY, streamer_login TEXT, template_name TEXT, description_template TEXT, hashtags TEXT, is_default INTEGER DEFAULT 0, created_at TEXT DEFAULT CURRENT_TIMESTAMP, updated_at TEXT DEFAULT CURRENT_TIMESTAMP, UNIQUE (streamer_login, template_name))",
+            "CREATE TABLE clip_templates_global (id SERIAL PRIMARY KEY, template_name TEXT UNIQUE, description_template TEXT, hashtags TEXT, category TEXT, usage_count INTEGER DEFAULT 0, created_at TEXT DEFAULT CURRENT_TIMESTAMP, created_by TEXT)",
+        ] {
+            sqlx::query(ddl).execute(&pool).await.unwrap();
+        }
         Some(pool)
     }
 
@@ -257,7 +388,7 @@ mod tests {
 
     #[tokio::test]
     async fn clips_handler_liste_und_limit() {
-        let Some(pool) = make_pool().await else { return };
+        let Some(pool) = make_pool("t_dash_sm_clips").await else { return };
         sqlx::query("INSERT INTO twitch_clips_social_media (clip_id, streamer_login, status, created_at) VALUES ('c1', 'nani', 'pending', '2026-06-10')").execute(&pool).await.unwrap();
 
         // Happy-Path: Admin sieht den Clip.
@@ -287,6 +418,80 @@ mod tests {
             partner("nani"),
             State(pool.clone()),
             Query(ClipsQuery { streamer: Some("other".into()), status: None, limit: None }),
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn create_template_handler_validierung() {
+        let Some(pool) = make_pool("t_dash_sm_tpl_create").await else { return };
+        // Partner legt eigenes Template an.
+        let resp = create_template_handler(
+            partner("nani"),
+            State(pool.clone()),
+            Json(CreateTemplateBody { streamer: None, template_name: Some("Default".into()), description: Some("Desc {{title}}".into()), hashtags: vec!["deadlock".into()], is_default: true }),
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::OK);
+        let v = body_json(resp).await;
+        assert_eq!(v["success"], true);
+        let tid = v["template_id"].as_i64().unwrap();
+        let row: (String, String, i32) = sqlx::query_as("SELECT streamer_login, template_name, is_default FROM clip_templates_streamer WHERE id = $1").bind(tid as i32).fetch_one(&pool).await.unwrap();
+        assert_eq!(row, ("nani".to_string(), "Default".to_string(), 1));
+
+        // Fehlende description → 400.
+        let resp = create_template_handler(
+            partner("nani"),
+            State(pool.clone()),
+            Json(CreateTemplateBody { streamer: None, template_name: Some("X".into()), description: None, hashtags: vec![], is_default: false }),
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+
+        // Admin ohne streamer (required) → 400.
+        let resp = create_template_handler(
+            DashboardAuthLevel::Admin,
+            State(pool.clone()),
+            Json(CreateTemplateBody { streamer: None, template_name: Some("X".into()), description: Some("Y".into()), hashtags: vec![], is_default: false }),
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn apply_template_handler_ownership() {
+        let Some(pool) = make_pool("t_dash_sm_tpl_apply").await else { return };
+        let clip: i32 = sqlx::query_scalar("INSERT INTO twitch_clips_social_media (clip_id, streamer_login, clip_title, game_name) VALUES ('c1', 'nani', 'Titel', 'Deadlock') RETURNING id").fetch_one(&pool).await.unwrap();
+        let tpl: i32 = sqlx::query_scalar("INSERT INTO clip_templates_streamer (streamer_login, template_name, description_template, hashtags) VALUES ('nani', 'T', 'Beschr {{title}}', '[\"a\"]') RETURNING id").fetch_one(&pool).await.unwrap();
+
+        // Partner wendet eigenes Template auf eigenen Clip an → success.
+        let resp = apply_template_handler(
+            partner("nani"),
+            State(pool.clone()),
+            Query(StreamerQuery { streamer: None }),
+            Json(ApplyTemplateBody { clip_id: Some(json!(clip)), template_id: Some(json!(tpl)), is_global: false, streamer: None }),
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::OK);
+        assert_eq!(body_json(resp).await["success"], true);
+
+        // Fehlende IDs → 400.
+        let resp = apply_template_handler(
+            partner("nani"),
+            State(pool.clone()),
+            Query(StreamerQuery { streamer: None }),
+            Json(ApplyTemplateBody { clip_id: None, template_id: Some(json!(tpl)), is_global: false, streamer: None }),
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+
+        // Fremder Clip (Partner other besitzt clip nicht) → 403.
+        let resp = apply_template_handler(
+            partner("other"),
+            State(pool.clone()),
+            Query(StreamerQuery { streamer: None }),
+            Json(ApplyTemplateBody { clip_id: Some(json!(clip)), template_id: Some(json!(tpl)), is_global: false, streamer: None }),
         )
         .await;
         assert_eq!(resp.status(), StatusCode::FORBIDDEN);
