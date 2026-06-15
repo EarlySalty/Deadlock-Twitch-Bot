@@ -2,9 +2,11 @@
 //! ensure → sample → finalize, mit In-Memory-Cache der offenen Sessions
 //! (Start-Rehydrierung aus der DB) und den dünnen `exp_*`-Hooks.
 //!
-//! Nicht portierte Python-Seiteneffekte des Finalize (bewusst, siehe
-//! Plan-Doc „Cutover-Kopplungen"): Partner-Raid-Score-Tracking-Resolve
-//! (Raid-Subsystem, Phase 6) und IRC-Lurker-Experiment-Finalize (Chat).
+//! Nicht portierter Python-Seiteneffekt des Finalize: IRC-Lurker-Experiment-
+//! Finalize (Chat). Das Partner-Raid-Score-Tracking-Resolve (Raid-Subsystem,
+//! B7 `raid-scores-tracking-1`) läuft jetzt über den entkoppelten
+//! [`RaidTrackingResolver`]-Port — die Composition-Root verdrahtet ihn gegen
+//! `tb-raid`, sodass tb-monitoring nicht an die Raid-Tabellen koppelt.
 
 use std::collections::HashMap;
 use std::sync::Mutex;
@@ -35,11 +37,44 @@ impl FollowerCountSource for NoFollowerSource {
     }
 }
 
+/// Löst beim Session-Finalize die offenen Partner-Raid-Score-Tracking-Zeilen der
+/// Session auf (B7 `raid-scores-tracking-1`). Entkoppelt tb-monitoring von den
+/// Raid-Tabellen — die echte Impl in der Composition-Root delegiert an
+/// `tb_raid::ScoreTrackingStore::resolve_for_session`. Best-effort: liefert die
+/// Anzahl aufgelöster Zeilen, schluckt Fehler (wie Python).
+#[async_trait::async_trait]
+pub trait RaidTrackingResolver: Send + Sync {
+    async fn resolve_for_session(
+        &self,
+        twitch_user_id: Option<&str>,
+        streamer_login: &str,
+        session_id: i64,
+        session_ended_at: DateTime<Utc>,
+    ) -> i64;
+}
+
+/// Resolver ohne Wirkung (Wiring-Default ohne Raid-Subsystem, Tests).
+pub struct NoRaidTrackingResolver;
+
+#[async_trait::async_trait]
+impl RaidTrackingResolver for NoRaidTrackingResolver {
+    async fn resolve_for_session(
+        &self,
+        _twitch_user_id: Option<&str>,
+        _streamer_login: &str,
+        _session_id: i64,
+        _session_ended_at: DateTime<Utc>,
+    ) -> i64 {
+        0
+    }
+}
+
 pub struct SessionTracker {
     store: SessionStore,
     live_state: LiveStateStore,
     exp: ExpSessionTracker,
     followers: std::sync::Arc<dyn FollowerCountSource>,
+    raid_resolver: std::sync::Arc<dyn RaidTrackingResolver>,
     target_game_lower: String,
     cache: Mutex<HashMap<String, i64>>,
 }
@@ -57,9 +92,20 @@ impl SessionTracker {
             live_state,
             exp,
             followers,
+            raid_resolver: std::sync::Arc::new(NoRaidTrackingResolver),
             target_game_lower: target_game.trim().to_lowercase(),
             cache: Mutex::new(HashMap::new()),
         }
+    }
+
+    /// Verdrahtet den Raid-Score-Tracking-Resolver (Composition-Root, B7).
+    /// Ohne diesen Aufruf bleibt der No-op-Resolver aktiv.
+    pub fn with_raid_resolver(
+        mut self,
+        resolver: std::sync::Arc<dyn RaidTrackingResolver>,
+    ) -> Self {
+        self.raid_resolver = resolver;
+        self
     }
 
     /// Cache aus offenen DB-Sessions neu aufbauen (Prozess-Start).
@@ -342,6 +388,15 @@ impl SessionTracker {
         }
 
         self.drop_cached(&login, session_id);
+
+        // Partner-Raid-Score-Tracking auflösen (B7 raid-scores-tracking-1):
+        // sonst bleiben Deadlock-Raid-Zeilen dauerhaft offen (resolved_at NULL).
+        // Reihenfolge wie Python: nach erfolgreichem Finalize, vor dem exp-Hook
+        // unkritisch — best-effort, blockiert den Finalize nicht.
+        self.raid_resolver
+            .resolve_for_session(twitch_user_id.as_deref(), &login, session_id, now)
+            .await;
+
         self.exp
             .on_session_finalize(&login, follower_delta, now)
             .await;

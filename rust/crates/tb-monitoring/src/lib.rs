@@ -65,7 +65,8 @@ pub use poller::{
     PollIntervalStore, ScoreRefresh, StreamSource, TickReport, TrackedEntry, TrackedStore,
 };
 pub use sessions::{
-    FollowerCountSource, NewSession, NoFollowerSource, SessionStore, SessionTracker, StartOutcome,
+    FollowerCountSource, NewSession, NoFollowerSource, NoRaidTrackingResolver,
+    RaidTrackingResolver, SessionStore, SessionTracker, StartOutcome,
 };
 pub use stats::{StatsSample, StatsStore};
 pub use stream::StreamSnapshot;

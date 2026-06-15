@@ -10,4 +10,7 @@ pub use store::{
     FinalizeSource, FinalizeUpdate, NewSession, OpenSession, OrphanCandidate, SessionStore,
     StartOutcome,
 };
-pub use tracker::{FollowerCountSource, NoFollowerSource, SessionTracker};
+pub use tracker::{
+    FollowerCountSource, NoFollowerSource, NoRaidTrackingResolver, RaidTrackingResolver,
+    SessionTracker,
+};

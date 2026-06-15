@@ -796,6 +796,28 @@ impl EventSubHooks for ChatHooks {
             Err(e) => tracing::warn!("chat.message nicht deserialisierbar: {e}"),
         }
     }
+
+    // B7: chat.notification-Raid/Unraid an die Raid-Schicht durchreichen (der
+    // Demux in tb-monitoring klassifiziert vorab nach notice_type). Sub-Telemetrie
+    // (B8-01) bleibt vorerst der Default-No-op des inneren Hooks.
+    async fn on_chat_raid_notification(&self, event: &Value, message_id: Option<&str>) {
+        self.inner.on_chat_raid_notification(event, message_id).await;
+    }
+    async fn on_chat_unraid_notification(&self, event: &Value, message_id: Option<&str>) {
+        self.inner
+            .on_chat_unraid_notification(event, message_id)
+            .await;
+    }
+    async fn on_chat_subscription_notification(
+        &self,
+        kind: tb_monitoring::ChatNotificationKind,
+        event: &Value,
+        message_id: Option<&str>,
+    ) {
+        self.inner
+            .on_chat_subscription_notification(kind, event, message_id)
+            .await;
+    }
 }
 
 // ---------------------------------------------------------------------------
