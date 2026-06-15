@@ -23,6 +23,7 @@ pub mod category_activity;
 pub mod category_comparison;
 pub mod category_timings;
 pub mod category_leaderboard;
+pub mod chat_content_analysis;
 pub mod chat_hype_timeline;
 pub mod chat_social_graph;
 pub mod engagement_settings;
