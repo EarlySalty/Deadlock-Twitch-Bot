@@ -9,6 +9,7 @@ pub mod affiliate_pii;
 pub mod admin_config;
 pub mod admin_streamers;
 pub mod bans;
+pub mod category_activity;
 pub mod global_ban;
 pub mod market;
 pub mod network;

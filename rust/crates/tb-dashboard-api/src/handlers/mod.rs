@@ -18,6 +18,7 @@ pub mod raids;
 pub mod streamers;
 pub mod ads_schedule;
 pub mod audience_demographics;
+pub mod category_activity;
 pub mod category_comparison;
 pub mod category_timings;
 pub mod category_leaderboard;
