@@ -85,6 +85,8 @@ pub fn build_authed_router(pool: PgPool, token: String) -> Router {
         )
         .route("/social-media/api/admin/vocab/seed", post(social_media::vocab_seed_handler))
         .route("/social-media/api/admin/vocab/:term", axum::routing::delete(social_media::vocab_delete_handler))
+        // Plattform-Verbindungsstatus (verschlüsselte Credentials).
+        .route("/social-media/api/platforms/status", get(social_media::platforms_status_handler))
         // Internal-Home: gebündelte Dashboard-Startseite (Profil, KPIs, Bot-Events,
         // Changelog). GET liest, POST legt einen Changelog-Eintrag an (Admin-only).
         .route(

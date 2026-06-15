@@ -17,10 +17,14 @@ use axum::{
     response::{Html, IntoResponse, Response},
     Json,
 };
+use std::sync::Arc;
+
 use serde::Deserialize;
 use serde_json::{json, Value};
 use sqlx::PgPool;
+use tb_crypto::FieldCipher;
 use tb_social_media::clip_analytics::get_analytics_summary;
+use tb_social_media::credentials::{CredentialManager, PlatformStatus};
 use tb_social_media::clip_manager::get_clips_for_dashboard;
 use tb_social_media::clip_templates::{
     apply_template_to_clip, create_streamer_template, get_global_templates, get_last_hashtags, get_streamer_templates,
@@ -644,6 +648,43 @@ pub async fn vocab_seed_handler(auth: DashboardAuthLevel, State(pool): State<PgP
     Json(json!({ "inserted": written, "updated": written, "written": written, "skipped": skipped })).into_response()
 }
 
+/// Baut den CredentialManager inline aus dem Master-Key (Pattern wie
+/// engagement::build_sender_store). `None`, wenn kein Key im Env.
+fn build_credential_manager(pool: PgPool) -> Option<CredentialManager> {
+    let cipher = Arc::new(FieldCipher::from_env().ok()?);
+    Some(CredentialManager::new(pool, cipher))
+}
+
+/// Serialisiert einen Plattform-Status. Bei aktivem Streamer-Scope + globalem
+/// Fallback werden username/user_id maskiert (Python-Logik).
+fn platform_status_json(s: &PlatformStatus, has_scope: bool) -> Value {
+    let mask = has_scope && s.uses_global_fallback;
+    json!({
+        "platform": s.platform,
+        "connected": s.connected,
+        "username": if mask { Value::Null } else { json!(s.username) },
+        "user_id": if mask { Value::Null } else { json!(s.user_id) },
+        "expires_at": s.expires_at,
+        "expired": s.expired,
+        "uses_global_fallback": s.uses_global_fallback,
+    })
+}
+
+/// `GET /social-media/api/platforms/status` — Verbindungsstatus je Plattform.
+pub async fn platforms_status_handler(auth: DashboardAuthLevel, State(pool): State<PgPool>, Query(q): Query<StreamerQuery>) -> Response {
+    let scope = match resolve_streamer_scope(&auth, q.streamer.as_deref(), false) {
+        Ok(s) => s,
+        Err(e) => return e,
+    };
+    let Some(cred_mgr) = build_credential_manager(pool) else {
+        return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": "platform_status_failed" }))).into_response();
+    };
+    let has_scope = scope.is_some();
+    let statuses = cred_mgr.get_all_platforms_status(scope.as_deref()).await;
+    let platforms: Vec<Value> = statuses.iter().map(|s| platform_status_json(s, has_scope)).collect();
+    Json(json!({ "platforms": platforms })).into_response()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -999,5 +1040,40 @@ mod tests {
         // Partner → 403 (admin-only).
         let resp = vocab_list_handler(partner("nani"), State(pool.clone()), Query(VocabListQuery { page: None, page_size: None, category: None, q: None })).await;
         assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+    }
+
+    #[test]
+    fn platform_status_masking() {
+        let status = PlatformStatus {
+            platform: "tiktok".into(),
+            connected: true,
+            username: Some("nani".into()),
+            user_id: Some("42".into()),
+            expires_at: None,
+            expired: false,
+            scopes: None,
+            uses_global_fallback: true,
+        };
+        // Scope + globaler Fallback → maskiert.
+        let v = platform_status_json(&status, true);
+        assert!(v["username"].is_null());
+        assert!(v["user_id"].is_null());
+        assert_eq!(v["uses_global_fallback"], true);
+        // Scope, aber kein Fallback → sichtbar.
+        let mut own = status.clone();
+        own.uses_global_fallback = false;
+        let v = platform_status_json(&own, true);
+        assert_eq!(v["username"], "nani");
+        // Kein Scope (Admin) → trotz Fallback sichtbar.
+        let v = platform_status_json(&status, false);
+        assert_eq!(v["username"], "nani");
+    }
+
+    #[tokio::test]
+    async fn platforms_status_none_auth_401() {
+        let Some(pool) = make_pool("t_dash_sm_platforms").await else { return };
+        // None-Auth → 401 vor dem Cipher-Aufbau (kein Secret nötig).
+        let resp = platforms_status_handler(DashboardAuthLevel::None, State(pool.clone()), Query(StreamerQuery { streamer: None })).await;
+        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
     }
 }
