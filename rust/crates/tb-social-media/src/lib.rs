@@ -19,6 +19,7 @@
 //! - `seed_vocab`  — Initial-Vokabular (Slang + Deadlock-API).
 //! - `enrichment`  — Clip-Enrichment-Persistenz (`social_media_clip_enrichment`).
 //! - `approval`    — Approval-Workflow (State-Maschine + queue-on-approve).
+//! - `layout`      — Clip-Compositing-Layout (`social_media_streamer_layout`).
 //! - `llm`         — LLM-Typen + Prompt-Bau + Output-Parsing.
 //! - `llm_dispatch` — LLM-Provider (Ollama) + consent-gated Dispatcher.
 //! - `enrich_pipeline` — Orchestrator (transcribe→correct→LLM→save).
@@ -41,6 +42,7 @@ pub mod correction;
 pub mod credentials;
 pub mod enrich_pipeline;
 pub mod enrichment;
+pub mod layout;
 pub mod llm;
 pub mod llm_dispatch;
 pub mod oauth;
