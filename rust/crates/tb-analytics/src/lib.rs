@@ -10,6 +10,7 @@ pub mod admin_billing;
 pub mod affiliate_pii;
 pub mod admin_config;
 pub mod admin_streamers;
+pub mod ai_history;
 pub mod bans;
 pub mod category_activity;
 pub mod chat_analytics;

@@ -1,0 +1,116 @@
+//! Handler für `GET /twitch/api/v2/ai/history`.
+//!
+//! Port von `bot/analytics/api_ai.py:_api_v2_ai_history`. Auth: eingeloggt; der
+//! **abgefragte Streamer** braucht einen AI-Plan (`analytics.ai_mini`/`ai_full`),
+//! sonst 403 — außer Localhost/Admin. `streamer` Pflicht, `limit` 1..50 (Default 20).
+
+use axum::{
+    extract::{Query, State},
+    http::StatusCode,
+    response::IntoResponse,
+    Json,
+};
+use serde::Deserialize;
+use serde_json::json;
+use sqlx::PgPool;
+
+use crate::auth::level::DashboardAuthLevel;
+
+#[derive(Deserialize)]
+pub struct AiHistoryQuery {
+    #[serde(default)]
+    pub streamer: Option<String>,
+    #[serde(default)]
+    pub limit: Option<i32>,
+}
+
+/// AI-Modell des Streamer-Plans (Python `_plan_ai_model`): ai_full→opus, ai_mini→minimax, sonst None.
+async fn ai_plan_model(pool: &PgPool, streamer: &str) -> Option<&'static str> {
+    match tb_analytics::plan::resolve_plan_snapshot(pool, streamer, "").await {
+        Ok(s) if s.entitlements.contains(&"analytics.ai_full") => Some("opus"),
+        Ok(s) if s.entitlements.contains(&"analytics.ai_mini") => Some("minimax"),
+        _ => None,
+    }
+}
+
+/// `GET /twitch/api/v2/ai/history?streamer=&limit=20`
+pub async fn ai_history_handler(
+    auth: DashboardAuthLevel,
+    State(pool): State<PgPool>,
+    Query(params): Query<AiHistoryQuery>,
+) -> impl IntoResponse {
+    if matches!(auth, DashboardAuthLevel::None) {
+        return (StatusCode::UNAUTHORIZED, Json(json!({ "error": "unauthorized" }))).into_response();
+    }
+    let streamer = match params.streamer.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+        Some(s) => s.to_lowercase(),
+        None => {
+            return (StatusCode::BAD_REQUEST, Json(json!({ "error": "streamer parameter required" }))).into_response();
+        }
+    };
+    // AI-Plan-Gate: Localhost/Admin bypass; sonst muss der Streamer einen AI-Plan haben.
+    let privileged = matches!(auth, DashboardAuthLevel::Localhost | DashboardAuthLevel::Admin);
+    if !privileged && ai_plan_model(&pool, &streamer).await.is_none() {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(json!({
+                "error": "plan_required",
+                "required_entitlements": ["analytics.ai_mini", "analytics.ai_full"],
+            })),
+        )
+            .into_response();
+    }
+    let limit = params.limit.unwrap_or(20).clamp(1, 50) as i64;
+
+    match tb_analytics::ai_history::load_ai_history(&pool, &streamer, limit).await {
+        Ok(v) => Json(v).into_response(),
+        Err(e) => {
+            tracing::error!("ai/history Fehler: {e}");
+            (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": "internal" }))).into_response()
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
+    use std::str::FromStr;
+
+    async fn make_pool(schema: &str) -> Option<PgPool> {
+        let dsn = std::env::var("TB_TEST_DATABASE_URL").ok()?;
+        let admin = PgPoolOptions::new().max_connections(1).connect(&dsn).await.unwrap();
+        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE")).execute(&admin).await.unwrap();
+        sqlx::query(&format!("CREATE SCHEMA {schema}")).execute(&admin).await.unwrap();
+        admin.close().await;
+        let opts = PgConnectOptions::from_str(&dsn).unwrap().options([("search_path", schema)]);
+        Some(PgPoolOptions::new().max_connections(2).connect_with(opts).await.unwrap())
+    }
+
+    #[tokio::test]
+    async fn streamer_pflicht_400() {
+        let Some(pool) = make_pool("t_aih_h1").await else { return };
+        let resp = ai_history_handler(
+            DashboardAuthLevel::Localhost,
+            State(pool),
+            Query(AiHistoryQuery { streamer: None, limit: None }),
+        )
+        .await
+        .into_response();
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn localhost_bypass_200() {
+        let Some(pool) = make_pool("t_aih_h2").await else { return };
+        // Localhost bypasst das AI-Plan-Gate → 200 (leere Historie).
+        let resp = ai_history_handler(
+            DashboardAuthLevel::Localhost,
+            State(pool),
+            Query(AiHistoryQuery { streamer: Some("nani".into()), limit: Some(10) }),
+        )
+        .await
+        .into_response();
+        assert_eq!(resp.status(), StatusCode::OK);
+    }
+}

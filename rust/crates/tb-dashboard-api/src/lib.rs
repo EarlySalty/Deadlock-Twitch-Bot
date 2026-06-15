@@ -63,7 +63,7 @@ pub fn build_public_router(pool: PgPool) -> Router {
 /// Auth-Level wird per Extension eingesetzt — `AuthLevel` als `FromRequestParts`
 /// liest den Token selbst aus der Extension.
 pub fn build_authed_router(pool: PgPool, token: String) -> Router {
-    use handlers::{ads_schedule, audience, audience_demographics, auth_status, billing, category_activity, category_comparison, category_leaderboard, category_timings, chat_analytics, chat_content_analysis, chat_hype_timeline, chat_social_graph, engagement_settings, exp_analytics, follower_funnel, internal_home, loyalty_curve, lurker_analysis, monetization, overview, performance, raid_analytics, rankings, retention_curve, session_detail, silent_settings, social_media, spa, stream_report, streamers, tag_analysis, title_performance, viewer_timeline, viewers, watch_time};
+    use handlers::{ads_schedule, ai_history, audience, audience_demographics, auth_status, billing, category_activity, category_comparison, category_leaderboard, category_timings, chat_analytics, chat_content_analysis, chat_hype_timeline, chat_social_graph, engagement_settings, exp_analytics, follower_funnel, internal_home, loyalty_curve, lurker_analysis, monetization, overview, performance, raid_analytics, rankings, retention_curve, session_detail, silent_settings, social_media, spa, stream_report, streamers, tag_analysis, title_performance, viewer_timeline, viewers, watch_time};
 
     Router::new()
         .route(
@@ -311,6 +311,10 @@ pub fn build_authed_router(pool: PgPool, token: String) -> Router {
         .route(
             "/twitch/api/v2/chat-analytics",
             get(chat_analytics::chat_analytics_handler),
+        )
+        .route(
+            "/twitch/api/v2/ai/history",
+            get(ai_history::ai_history_handler),
         )
         .route(
             "/twitch/api/v2/audience-demographics",
