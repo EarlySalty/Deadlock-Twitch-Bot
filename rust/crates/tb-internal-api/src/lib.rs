@@ -7,6 +7,7 @@
 pub mod handlers;
 pub mod idempotency;
 pub mod security;
+pub mod streamer_lifecycle;
 
 use axum::{
     middleware,
@@ -235,8 +236,9 @@ pub fn build_internal_router(
             &format!("{base}/raid/requirements"),
             post(python_stubs::raid_requirements_handler),
         )
-        // Streamer-CRUD: vollständig nativ portiert.
-        // verify mode=clear/failed liefert 503 (Partner-Lifecycle nicht portiert).
+        // Streamer-CRUD: vollständig nativ portiert inkl. Partner-Lifecycle
+        // (Block 10): DELETE departnert, verify promotet/departnert + Rollen-Sync,
+        // archive liefert Kontext-Meldungen, add backfillt require_link + Stats.
         .route(
             &format!("{base}/streamers"),
             get(streamers::list_handler).post(streamers::add_handler),
