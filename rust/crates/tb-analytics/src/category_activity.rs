@@ -16,6 +16,13 @@ type AggRow = (String, i32, Option<f64>, Option<i64>, i64);
 
 type Bucket = HashMap<i32, (Option<f64>, Option<i64>, i64)>;
 
+/// Auf 1 Nachkommastelle runden — spiegelt Pythons `_float_or_none` (`round(x, 1)`),
+/// das die avg-Werte vor der JSON-Ausgabe rundet. Gleiches Idiom wie in
+/// `exp_analytics`/`monetization`.
+fn round1(value: f64) -> f64 {
+    (value * 10.0).round() / 10.0
+}
+
 fn agg_sql(extract: &str) -> String {
     format!(
         "WITH source_rows AS ( \
@@ -66,8 +73,8 @@ fn build_point(bucket_key: &str, bucket: i32, label: String, category: &Bucket, 
     let mut obj = Map::new();
     obj.insert(bucket_key.to_string(), json!(bucket));
     obj.insert("label".to_string(), json!(label));
-    obj.insert("categoryAvg".to_string(), json!(cat.and_then(|c| c.0)));
-    obj.insert("trackedAvg".to_string(), json!(trk.and_then(|c| c.0)));
+    obj.insert("categoryAvg".to_string(), json!(cat.and_then(|c| c.0).map(round1)));
+    obj.insert("trackedAvg".to_string(), json!(trk.and_then(|c| c.0).map(round1)));
     obj.insert("categoryPeak".to_string(), json!(cat.and_then(|c| c.1)));
     obj.insert("trackedPeak".to_string(), json!(trk.and_then(|c| c.1)));
     obj.insert("categorySamples".to_string(), json!(cat.map(|c| c.2).unwrap_or(0)));
@@ -152,6 +159,18 @@ mod tests {
         let h3 = v["hourly"].as_array().unwrap().iter().find(|p| p["hour"] == 3).unwrap();
         assert!(h3["trackedAvg"].is_null());
         assert_eq!(h3["trackedSamples"], 0);
+    }
+
+    #[tokio::test]
+    async fn avg_wird_auf_1_nachkommastelle_gerundet() {
+        let Some(pool) = make_pool("t_catact_round").await else { return };
+        // Nicht-glatter Schnitt: (10+10+11)/3 = 10.333… → muss als 10.3 ausgegeben werden
+        // (Python _float_or_none → round(x, 1)); ohne Rundung käme 10.333333… raus.
+        sqlx::query("INSERT INTO twitch_stats_tracked (ts_utc, streamer, viewer_count) VALUES ((NOW()::date + TIME '10:00'),'a',10),((NOW()::date + TIME '10:00'),'b',10),((NOW()::date + TIME '10:00'),'c',11)")
+            .execute(&pool).await.unwrap();
+        let v = load_category_activity_series(&pool, 30).await.unwrap();
+        let h10 = v["hourly"].as_array().unwrap().iter().find(|p| p["hour"] == 10).unwrap();
+        assert_eq!(h10["trackedAvg"], 10.3);
     }
 
     #[tokio::test]
