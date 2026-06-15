@@ -68,6 +68,9 @@ pub fn build_authed_router(pool: PgPool, token: String) -> Router {
         .route("/social-media/api/stats", get(social_media::stats_handler))
         .route("/social-media/api/clips", get(social_media::clips_handler))
         .route("/social-media/api/last-hashtags", get(social_media::last_hashtags_handler))
+        // Analytics-Ansicht (identisch zu stats) + Queue-Upload.
+        .route("/social-media/api/analytics", get(social_media::stats_handler))
+        .route("/social-media/api/upload", post(social_media::queue_upload_handler))
         // Templates: globale + Streamer-Listen (GET), anlegen + anwenden (POST).
         .route("/social-media/api/templates/global", get(social_media::templates_global_handler))
         .route("/social-media/api/templates/streamer", get(social_media::templates_streamer_handler).post(social_media::create_template_handler))

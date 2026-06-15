@@ -26,6 +26,7 @@ use tb_crypto::FieldCipher;
 use tb_social_media::clip_analytics::get_analytics_summary;
 use tb_social_media::credentials::{CredentialManager, PlatformStatus};
 use tb_social_media::clip_manager::get_clips_for_dashboard;
+use tb_social_media::clip_queue::queue_upload;
 use tb_social_media::clip_templates::{
     apply_template_to_clip, create_streamer_template, get_global_templates, get_last_hashtags, get_streamer_templates,
     GlobalTemplate, StreamerTemplate,
@@ -542,6 +543,61 @@ pub async fn clip_layout_put_handler(
     .into_response()
 }
 
+/// POST-Body von `…/api/upload` (Queue-Upload). `platforms` ist Array ODER
+/// der String `"all"`.
+#[derive(Debug, Deserialize)]
+pub struct QueueUploadBody {
+    pub clip_id: Option<Value>,
+    #[serde(default)]
+    pub platforms: Value,
+    pub title: Option<String>,
+    pub description: Option<String>,
+    pub hashtags: Option<Vec<String>>,
+    #[serde(default)]
+    pub priority: i32,
+    pub streamer: Option<String>,
+}
+
+/// `POST /social-media/api/upload` — Clip auf eine oder mehrere Plattformen in
+/// die Upload-Queue legen.
+pub async fn queue_upload_handler(
+    auth: DashboardAuthLevel,
+    State(pool): State<PgPool>,
+    Query(q): Query<StreamerQuery>,
+    Json(body): Json<QueueUploadBody>,
+) -> Response {
+    if let Err(e) = require_auth(&auth) {
+        return e;
+    }
+    let Some(clip_id) = normalize_id(body.clip_id.as_ref()) else {
+        return (StatusCode::BAD_REQUEST, Json(json!({ "error": "clip_id required" }))).into_response();
+    };
+    let requested = body.streamer.as_deref().or(q.streamer.as_deref());
+    let scope = match resolve_streamer_scope(&auth, requested, false) {
+        Ok(s) => s,
+        Err(e) => return e,
+    };
+    if let Some(streamer) = &scope {
+        if !clip_owned_by_streamer(&pool, clip_id, streamer).await {
+            return (StatusCode::FORBIDDEN, Json(json!({ "error": "forbidden: clip does not belong to authenticated streamer" }))).into_response();
+        }
+    }
+    // platforms: Array oder "all".
+    let platforms: Vec<String> = match &body.platforms {
+        Value::String(s) if s == "all" => ["tiktok", "youtube", "instagram"].iter().map(|p| p.to_string()).collect(),
+        Value::Array(a) => a.iter().filter_map(|x| x.as_str().map(String::from)).collect(),
+        _ => Vec::new(),
+    };
+    let mut queued: Vec<Value> = Vec::new();
+    for platform in &platforms {
+        match queue_upload(&pool, clip_id, platform, body.title.as_deref(), body.description.as_deref(), body.hashtags.as_deref(), None, body.priority).await {
+            Ok(queue_id) => queued.push(json!({ "platform": platform, "queue_id": queue_id })),
+            Err(_) => queued.push(json!({ "platform": platform, "error": "queue_failed" })),
+        }
+    }
+    Json(json!({ "queued": queued })).into_response()
+}
+
 /// Serialisiert einen Vocab-Eintrag (Python `entry.to_dict()`).
 fn vocab_entry_json(e: &VocabEntry) -> Value {
     json!({
@@ -757,7 +813,7 @@ mod tests {
         let pool = PgPoolOptions::new().max_connections(2).connect_with(opts).await.unwrap();
         for ddl in [
             "CREATE TABLE twitch_clips_social_media (id SERIAL PRIMARY KEY, clip_id TEXT, streamer_login TEXT, status TEXT DEFAULT 'pending', created_at TEXT, clip_title TEXT, game_name TEXT, custom_description TEXT, hashtags TEXT, layout_override_json JSONB)",
-            "CREATE TABLE twitch_clips_upload_queue (id SERIAL PRIMARY KEY, clip_id INTEGER, platform TEXT, status TEXT)",
+            "CREATE TABLE twitch_clips_upload_queue (id SERIAL PRIMARY KEY, clip_id INTEGER, platform TEXT, status TEXT DEFAULT 'pending', priority INTEGER DEFAULT 0, title TEXT, description TEXT, hashtags TEXT, scheduled_at TEXT, attempts INTEGER DEFAULT 0, last_error TEXT, last_attempt_at TEXT, created_at TEXT DEFAULT CURRENT_TIMESTAMP, completed_at TEXT)",
             "CREATE TABLE clip_templates_streamer (id SERIAL PRIMARY KEY, streamer_login TEXT, template_name TEXT, description_template TEXT, hashtags TEXT, is_default INTEGER DEFAULT 0, created_at TEXT DEFAULT CURRENT_TIMESTAMP, updated_at TEXT DEFAULT CURRENT_TIMESTAMP, UNIQUE (streamer_login, template_name))",
             "CREATE TABLE clip_templates_global (id SERIAL PRIMARY KEY, template_name TEXT UNIQUE, description_template TEXT, hashtags TEXT, category TEXT, usage_count INTEGER DEFAULT 0, created_at TEXT DEFAULT CURRENT_TIMESTAMP, created_by TEXT)",
             "CREATE TABLE twitch_streamers (twitch_login TEXT PRIMARY KEY, twitch_user_id TEXT)",
@@ -1075,5 +1131,39 @@ mod tests {
         // None-Auth → 401 vor dem Cipher-Aufbau (kein Secret nötig).
         let resp = platforms_status_handler(DashboardAuthLevel::None, State(pool.clone()), Query(StreamerQuery { streamer: None })).await;
         assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    fn queue_body(clip_id: i32, platforms: Value) -> QueueUploadBody {
+        QueueUploadBody { clip_id: Some(json!(clip_id)), platforms, title: None, description: None, hashtags: None, priority: 0, streamer: None }
+    }
+
+    #[tokio::test]
+    async fn queue_upload_handler_paths() {
+        let Some(pool) = make_pool("t_dash_sm_queue").await else { return };
+        let clip: i32 = sqlx::query_scalar("INSERT INTO twitch_clips_social_media (clip_id, streamer_login) VALUES ('c1', 'nani') RETURNING id").fetch_one(&pool).await.unwrap();
+
+        // Admin, eine Plattform → ein queue_id.
+        let resp = queue_upload_handler(DashboardAuthLevel::Admin, State(pool.clone()), Query(StreamerQuery { streamer: None }), Json(queue_body(clip, json!(["tiktok"])))).await;
+        assert_eq!(resp.status(), StatusCode::OK);
+        let v = body_json(resp).await;
+        assert_eq!(v["queued"].as_array().unwrap().len(), 1);
+        assert_eq!(v["queued"][0]["platform"], "tiktok");
+        assert!(v["queued"][0]["queue_id"].is_number());
+
+        // "all" → 3 Plattformen.
+        let resp = queue_upload_handler(DashboardAuthLevel::Admin, State(pool.clone()), Query(StreamerQuery { streamer: None }), Json(queue_body(clip, json!("all")))).await;
+        assert_eq!(body_json(resp).await["queued"].as_array().unwrap().len(), 3);
+
+        // Ungültige Plattform → error queue_failed (kein Crash).
+        let resp = queue_upload_handler(DashboardAuthLevel::Admin, State(pool.clone()), Query(StreamerQuery { streamer: None }), Json(queue_body(clip, json!(["snapchat"])))).await;
+        assert_eq!(body_json(resp).await["queued"][0]["error"], "queue_failed");
+
+        // Fehlende clip_id → 400.
+        let resp = queue_upload_handler(DashboardAuthLevel::Admin, State(pool.clone()), Query(StreamerQuery { streamer: None }), Json(QueueUploadBody { clip_id: None, platforms: json!(["tiktok"]), title: None, description: None, hashtags: None, priority: 0, streamer: None })).await;
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+
+        // Partner mit fremdem Clip → 403.
+        let resp = queue_upload_handler(partner("other"), State(pool.clone()), Query(StreamerQuery { streamer: None }), Json(queue_body(clip, json!(["tiktok"])))).await;
+        assert_eq!(resp.status(), StatusCode::FORBIDDEN);
     }
 }
