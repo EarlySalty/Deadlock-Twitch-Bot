@@ -11,12 +11,16 @@ pub mod process_info;
 /// Strangler-Fig-Fallback-Proxy (→ Python 8765), siehe Modul-Doku.
 pub mod proxy;
 
+pub use auth::csrf::csrf_protect;
 pub use auth::level::DashboardAuthLevel;
+pub use auth::oauth_login::{HelixOAuthClient, TwitchIdentity, TwitchOAuthClient};
 pub use auth::security::{require_internal, RateLimiter};
 pub use auth::session::{
-    build_session_cookie, clear_session_cookie, DashboardAuthState, SameSite, SessionCreation,
-    ADMIN_COOKIE_NAME, PARTNER_COOKIE_NAME, SESSION_CREATE_TTL_SECS,
+    build_session_cookie, clear_session_cookie, DashboardAuthState, OAuthLoginState, SameSite,
+    SessionCreation, ADMIN_COOKIE_NAME, OAUTH_STATE_SESSION_TYPE, OAUTH_STATE_TTL_SECS,
+    PARTNER_COOKIE_NAME, SESSION_CREATE_TTL_SECS,
 };
+pub use handlers::auth_login::{oauth_login_config_from_env, OAuthLoginConfig};
 
 use axum::{
     routing::{get, post},
@@ -527,12 +531,28 @@ pub fn build_admin_config_router(pool: PgPool, token: String) -> Router {
         .layer(Extension(ExpectedToken(token)))
 }
 
-/// Zusammengeführter Router: public + authed + admin-system + admin-streamers
-/// + admin-config + Legal-Seiten (HTML, statuslos).
+/// Baut den Router für den nativen Twitch-OAuth-Dashboard-Login (B3-2).
+///
+/// Die drei GET-Routen werden NATIV registriert (vor dem Strangler-Proxy-
+/// Fallback) und greifen damit, statt in den toten Python-Service (502) zu
+/// fallen. `DashboardAuthState` + `OAuthLoginConfig` kommen als globale
+/// Extensions aus der `tb-dashboard`-main (s. dort).
+pub fn build_auth_router() -> Router {
+    use handlers::auth_login;
+
+    Router::new()
+        .route("/twitch/auth/login", get(auth_login::login_handler))
+        .route("/twitch/auth/callback", get(auth_login::callback_handler))
+        .route("/twitch/auth/logout", get(auth_login::logout_handler))
+}
+
+/// Zusammengeführter Router: public + auth (Login) + authed + admin-system +
+/// admin-streamers + admin-config + Legal-Seiten (HTML, statuslos).
 ///
 /// CORS nur auf dem Public-Sub-Router (s. oben).
 pub fn build_router(pool: PgPool, token: String) -> Router {
     build_public_router(pool.clone())
+        .merge(build_auth_router())
         .merge(build_authed_router(pool.clone(), token.clone()))
         .merge(build_admin_system_router(pool.clone(), token.clone()))
         .merge(build_admin_streamers_router(pool.clone(), token.clone()))

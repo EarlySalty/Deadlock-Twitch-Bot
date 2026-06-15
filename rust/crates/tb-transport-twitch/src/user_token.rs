@@ -88,6 +88,10 @@ fn is_invalid_grant(status: u16, body: &str) -> bool {
 pub struct TokenOwner {
     pub id: String,
     pub login: String,
+    /// Anzeigename (Python `display_name`, Fallback auf `login`). Wird vom
+    /// Dashboard-Login für den Session-Display gebraucht.
+    #[serde(default)]
+    pub display_name: String,
 }
 
 #[derive(Deserialize)]
@@ -207,9 +211,15 @@ impl HelixClient {
                 "invalid user payload in response".to_string(),
             ));
         }
+        let display_name = if owner.display_name.trim().is_empty() {
+            owner.login.trim().to_string()
+        } else {
+            owner.display_name.trim().to_string()
+        };
         Ok(TokenOwner {
             id: owner.id.trim().to_string(),
             login: owner.login.trim().to_lowercase(),
+            display_name,
         })
     }
 }
