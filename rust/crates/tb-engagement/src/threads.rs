@@ -359,6 +359,17 @@ fn strip_codeblock(text: &str) -> String {
 }
 
 /// Parst `due_at_iso` (YYYY-MM-DD oder ISO-Datetime) zu UTC; sonst None.
+///
+/// **Timezone-Angleichung (bewusste Divergenz zu Python):** Pythons
+/// `datetime.fromisoformat("YYYY-MM-DD")` liefert ein *naives* Datetime ohne
+/// `tzinfo`. Beim Binden gegen die `TIMESTAMPTZ`-Spalte `due_at` interpretiert
+/// psycopg dieses naive Mitternacht in der **Session-Zeitzone der DB-Verbindung**
+/// (typischerweise Europe/Berlin) — `"2024-01-15"` landet also als
+/// `2024-01-14T23:00:00Z` (Winter), eine Stunde zu früh im `due_at <= NOW()`-
+/// Cron-Vergleich. Das ist ein latenter, locale-abhängiger Migrationsbug. Hier
+/// wird stattdessen jede zeitzonenlose Eingabe **explizit als UTC** verankert
+/// (date-only → UTC-Mitternacht, naive Datetime → UTC) — deterministisch,
+/// unabhängig von der DB-Session-TZ.
 fn parse_iso_date(s: &str) -> Option<DateTime<Utc>> {
     if let Ok(dt) = DateTime::parse_from_rfc3339(s) {
         return Some(dt.with_timezone(&Utc));
@@ -448,6 +459,29 @@ mod tests {
         assert_eq!(strip_codeblock("[3]"), "[3]"); // ohne Fence unverändert
         assert!(parse_iso_date("2024-01-15").is_some());
         assert!(parse_iso_date("kein datum").is_none());
+    }
+
+    /// Lockt die Timezone-Angleichung: zeitzonenlose Eingaben werden EXPLIZIT als
+    /// UTC verankert (nicht als Session-TZ-naive wie Python). Verhindert eine
+    /// Regression auf das locale-abhängige `due_at`-Verhalten.
+    #[test]
+    fn parse_iso_date_verankert_naive_eingaben_als_utc() {
+        use chrono::TimeZone;
+        // Date-only → UTC-Mitternacht (nicht Berlin-Mitternacht = 23:00Z).
+        assert_eq!(
+            parse_iso_date("2024-01-15"),
+            Some(Utc.with_ymd_and_hms(2024, 1, 15, 0, 0, 0).unwrap())
+        );
+        // Naive Datetime (kein Offset) → als UTC interpretiert.
+        assert_eq!(
+            parse_iso_date("2024-01-15T08:30:00"),
+            Some(Utc.with_ymd_and_hms(2024, 1, 15, 8, 30, 0).unwrap())
+        );
+        // Expliziter Offset bleibt korrekt nach UTC umgerechnet.
+        assert_eq!(
+            parse_iso_date("2024-01-15T08:30:00+02:00"),
+            Some(Utc.with_ymd_and_hms(2024, 1, 15, 6, 30, 0).unwrap())
+        );
     }
 
     #[tokio::test]

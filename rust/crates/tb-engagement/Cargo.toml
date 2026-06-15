@@ -13,7 +13,12 @@ tracing    = { workspace = true }
 rand       = { workspace = true }
 tokio      = { workspace = true, features = ["time", "rt", "net", "io-util", "process", "fs"] }
 tb-crypto  = { workspace = true }
+tb-llm     = { workspace = true }
 
 [dev-dependencies]
 tokio    = { workspace = true, features = ["rt-multi-thread", "macros"] }
 wiremock = { workspace = true }
+# Dev-only SQLite-Zugriff, um den Ledger-Seiteneffekt von `generate()` direkt in
+# der Temp-DB zu verifizieren (gleiche sqlx-Version, nur das sqlite-Feature, das
+# tb-llm im Graphen ohnehin aktiviert).
+sqlx     = { version = "0.8", default-features = false, features = ["sqlite", "runtime-tokio"] }

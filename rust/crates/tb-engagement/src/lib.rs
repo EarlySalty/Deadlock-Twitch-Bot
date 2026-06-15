@@ -12,6 +12,7 @@
 //! Pipeline-Helfer in [`pipeline`] (Pre-Filter + Kostenrechnung).
 
 pub mod audio_capture;
+pub mod auto_off;
 pub mod background;
 pub mod channel_background;
 pub mod claude_chat;
