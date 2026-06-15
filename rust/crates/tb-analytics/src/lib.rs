@@ -18,6 +18,7 @@ pub mod network;
 pub mod overview;
 pub mod partner_access;
 pub mod plan;
+pub mod raw_chat_status;
 pub mod tag_analysis;
 pub mod watch_time;
 pub mod post_stream;
