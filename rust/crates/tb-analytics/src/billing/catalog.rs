@@ -386,6 +386,80 @@ impl BillingPlan {
     }
 }
 
+/// Formatiert Cent als deutschen EUR-String (`199` → `"1,99 EUR"`).
+///
+/// Port von `billing_plans.py:format_eur_cents` (negative Werte → `0`).
+pub fn format_eur_cents(cents: i64) -> String {
+    let cents = cents.max(0);
+    let euros = cents / 100;
+    let remainder = cents % 100;
+    format!("{euros},{remainder:02} EUR")
+}
+
+/// Zyklus-Label (`1` → `"30 Tage"`, sonst `"{n} Monate"`).
+///
+/// Port von `billing_plans.py:billing_cycle_label`.
+pub fn cycle_label(cycle_months: u32) -> String {
+    if cycle_months == 1 {
+        "30 Tage".to_string()
+    } else {
+        format!("{cycle_months} Monate")
+    }
+}
+
+/// Baut die `build_billing_catalog`-JSON-Struktur für einen Zyklus.
+///
+/// Wert-identischer Port von `billing_plans.py:build_billing_catalog`. Liefert
+/// `currency`/`tax_mode`/`gross_available`/`cycle_*`/`discount_percent`/`plans`.
+/// Die `payment`-Sektion und plan-spezifische Felder (`is_current`,
+/// `stripe_price_id`, `checkout_available`) werden in der HTTP-Schicht ergänzt
+/// (analog Python `api_billing_catalog`).
+pub fn catalog_json(cycle_months: u32) -> serde_json::Value {
+    let cycle = normalize_billing_cycle(cycle_months);
+    let cycle_lbl = cycle_label(cycle);
+    let plans: Vec<serde_json::Value> = BILLING_PLANS
+        .iter()
+        .map(|plan| {
+            let price = plan.price_for_cycle(cycle);
+            serde_json::json!({
+                "id": plan.id,
+                "name": plan.name,
+                "tier": plan.tier,
+                "badge": plan.badge,
+                "description": plan.description,
+                "recommended": plan.recommended,
+                "monthly_net_cents": plan.monthly_net_cents,
+                "entitlements": plan.entitlements,
+                "features": plan.features,
+                "price": {
+                    "cycle_months": price.cycle_months,
+                    "cycle_label": cycle_lbl,
+                    "subtotal_net_cents": price.subtotal_net_cents,
+                    "discount_percent": price.discount_percent,
+                    "discount_cents": price.discount_cents,
+                    "total_net_cents": price.total_net_cents,
+                    "effective_monthly_net_cents": price.effective_monthly_net_cents,
+                    "subtotal_net_label": format_eur_cents(price.subtotal_net_cents as i64),
+                    "total_net_label": format_eur_cents(price.total_net_cents as i64),
+                    "effective_monthly_net_label": format_eur_cents(
+                        price.effective_monthly_net_cents as i64,
+                    ),
+                },
+            })
+        })
+        .collect();
+
+    serde_json::json!({
+        "currency": "EUR",
+        "tax_mode": "net_only",
+        "gross_available": false,
+        "cycle_months": cycle,
+        "cycle_label": cycle_lbl,
+        "discount_percent": if cycle > 1 { cycle_discount_percent(cycle) } else { 0 },
+        "plans": plans,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -506,6 +580,57 @@ mod tests {
                 plan.id
             );
         }
+    }
+
+    #[test]
+    fn format_eur_cents_matches_python() {
+        assert_eq!(format_eur_cents(0), "0,00 EUR");
+        assert_eq!(format_eur_cents(199), "1,99 EUR");
+        assert_eq!(format_eur_cents(349), "3,49 EUR");
+        assert_eq!(format_eur_cents(2388), "23,88 EUR");
+        assert_eq!(format_eur_cents(5), "0,05 EUR");
+        // Negativ → 0 (Python: max(int(cents), 0)).
+        assert_eq!(format_eur_cents(-50), "0,00 EUR");
+    }
+
+    #[test]
+    fn cycle_label_matches_python() {
+        assert_eq!(cycle_label(1), "30 Tage");
+        assert_eq!(cycle_label(12), "12 Monate");
+        assert_eq!(cycle_label(3), "3 Monate");
+    }
+
+    #[test]
+    fn catalog_json_shape_and_values() {
+        let cat = catalog_json(1);
+        assert_eq!(cat["currency"], "EUR");
+        assert_eq!(cat["tax_mode"], "net_only");
+        assert_eq!(cat["gross_available"], false);
+        assert_eq!(cat["cycle_months"], 1);
+        assert_eq!(cat["cycle_label"], "30 Tage");
+        assert_eq!(cat["discount_percent"], 0);
+        let plans = cat["plans"].as_array().unwrap();
+        assert_eq!(plans.len(), 8);
+        // Erster Plan = raid_free (kostenlos).
+        assert_eq!(plans[0]["id"], "raid_free");
+        assert_eq!(plans[0]["price"]["total_net_cents"], 0);
+        assert_eq!(plans[0]["price"]["total_net_label"], "0,00 EUR");
+        // chat_quiet → 1,99 EUR.
+        let chat_quiet = plans.iter().find(|p| p["id"] == "chat_quiet").unwrap();
+        assert_eq!(chat_quiet["price"]["total_net_cents"], 199);
+        assert_eq!(chat_quiet["price"]["total_net_label"], "1,99 EUR");
+        assert_eq!(chat_quiet["tier"], "basic");
+        assert_eq!(chat_quiet["price"]["cycle_label"], "30 Tage");
+        // 12-Monats-Zyklus: subtotal = monthly*12, kein Rabatt (0%).
+        let cat12 = catalog_json(12);
+        assert_eq!(cat12["cycle_months"], 12);
+        assert_eq!(cat12["cycle_label"], "12 Monate");
+        let cq12 = cat12["plans"].as_array().unwrap().iter().find(|p| p["id"] == "chat_quiet").unwrap();
+        assert_eq!(cq12["price"]["subtotal_net_cents"], 2388);
+        assert_eq!(cq12["price"]["total_net_cents"], 2388);
+        assert_eq!(cq12["price"]["total_net_label"], "23,88 EUR");
+        // Unbekannter Zyklus fällt auf 1 zurück.
+        assert_eq!(catalog_json(7)["cycle_months"], 1);
     }
 
     #[test]
