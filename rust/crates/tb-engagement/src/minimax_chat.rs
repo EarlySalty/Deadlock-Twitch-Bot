@@ -277,6 +277,11 @@ impl EngagementMinimaxClient {
         }
     }
 
+    /// Das gelockte Modell (für Logging/Persistenz).
+    pub fn model(&self) -> &str {
+        &self.model
+    }
+
     /// Generiert eine Chat-Antwort. `messages = [system] + history` (Sprecher
     /// wird in den Content gefaltet, s. Insight), `temperature=0.7`. Die
     /// Rohantwort läuft durch [`process_response_text`]; `text == None` =
