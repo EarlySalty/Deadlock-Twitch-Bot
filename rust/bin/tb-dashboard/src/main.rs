@@ -78,6 +78,22 @@ async fn main() {
         }
     }
 
+    // P0 (B3-2): Nativer Twitch-OAuth-Login. Ohne TWITCH_CLIENT_ID/SECRET +
+    // TWITCH_DASHBOARD_AUTH_REDIRECT_URI bleibt er aus → /twitch/auth/* liefert
+    // 503 (statt in den toten Python-Proxy zu fallen). Secrets aus Env (Infisical),
+    // nie geloggt.
+    match tb_dashboard_api::oauth_login_config_from_env() {
+        Some(config) => {
+            app = app.layer(axum::Extension(config));
+            tracing::info!("Nativer Twitch-OAuth-Login aktiv");
+        }
+        None => {
+            tracing::warn!(
+                "Twitch-OAuth-Login-Config fehlt (TWITCH_CLIENT_ID/SECRET/REDIRECT_URI) — nativer Login deaktiviert"
+            );
+        }
+    }
+
     tracing::info!("tb-dashboard lauscht auf {addr}");
     let listener = tokio::net::TcpListener::bind(addr)
         .await

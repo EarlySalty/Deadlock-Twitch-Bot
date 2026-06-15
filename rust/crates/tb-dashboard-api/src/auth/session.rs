@@ -48,7 +48,7 @@ use tracing::{debug, warn};
 use super::fernet;
 
 /// Payload einer geladenen Twitch-Partner-Session.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct PartnerSession {
     pub twitch_login: String,
     pub twitch_user_id: String,
@@ -62,6 +62,20 @@ pub struct SessionCreation {
     pub session_id: String,
     /// Sessiongebundenes CSRF-Token (im verschlüsselten Payload gespeichert).
     pub csrf_token: String,
+}
+
+/// Persistierter Zustand eines laufenden Twitch-OAuth-Login-Flows
+/// (Python `auth_login` state_payload, auth_mixin.py:1239-1244). Überbrückt den
+/// Authorize-Request und den Callback (über Prozess-/Restart-Grenzen hinweg) und
+/// bindet die exakte beim Authorize verwendete `redirect_uri` (Twitch verlangt
+/// beim Code-Tausch dieselbe URI) sowie das normalisierte Post-Login-Ziel.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OAuthLoginState {
+    /// Whitelist-validiertes Post-Login-Redirect-Ziel (z. B. `/twitch/dashboard`).
+    pub next_path: String,
+    /// Beim Authorize verwendete Redirect-URI — muss beim Code-Tausch exakt
+    /// wiederholt werden, sonst lehnt Twitch ab.
+    pub redirect_uri: String,
 }
 
 /// `SameSite`-Politik eines Session-Cookies.
@@ -181,6 +195,16 @@ pub const SESSION_CREATE_TTL_SECS: u64 = 6 * 3600;
 pub const PARTNER_COOKIE_NAME: &str = "twitch_dash_session";
 /// Cookie-Name der Discord-Admin-Session (Python: state_store.py:18).
 pub const ADMIN_COOKIE_NAME: &str = "master_dash_session";
+
+/// Session-Typ der kurzlebigen OAuth-Login-State-Rows in `dashboard_sessions`
+/// (Python: `state_store.py:12`, `_OAUTH_STATE_TYPE_TWITCH = "oauth_state:twitch"`).
+/// Der CSRF-State des Twitch-OAuth-Login-Flows wird als eigene Row mit diesem Typ
+/// abgelegt — atomar einmal verbraucht (DELETE … RETURNING) beim Callback.
+pub const OAUTH_STATE_SESSION_TYPE: &str = "oauth_state:twitch";
+
+/// Gültigkeit eines OAuth-Login-State-Tokens (Python: `server_v2.py:189`,
+/// `_oauth_state_ttl_seconds = 600`). Hartkodiert — kein Env-Override.
+pub const OAUTH_STATE_TTL_SECS: u64 = 600;
 
 /// Länge der Session-ID/CSRF-Zufallsbytes (Python: `secrets.token_urlsafe(32)`).
 const SESSION_ID_BYTES: usize = 32;
@@ -331,6 +355,156 @@ impl DashboardAuthState {
         .execute(&self.pool)
         .await?;
         Ok(())
+    }
+
+    /// Persistiert einen frischen OAuth-Login-State (Pendant zu Python
+    /// `save_twitch_oauth_state`, state_store.py:103-113). Ablage als eigene Row
+    /// in `dashboard_sessions` mit Typ [`OAUTH_STATE_SESSION_TYPE`], TTL
+    /// [`OAUTH_STATE_TTL_SECS`]. Der Payload trägt `next_path`, `redirect_uri` und
+    /// `created_at` (Fernet-verschlüsselt wie jede Session). Bei DB-Fehler `Err` —
+    /// ohne persistierten State darf der Login nicht starten (fail-closed).
+    pub async fn save_oauth_login_state(
+        &self,
+        state_token: &str,
+        state: &OAuthLoginState,
+    ) -> Result<(), sqlx::Error> {
+        let now = unix_now();
+        let expires_at = now as f64 + OAUTH_STATE_TTL_SECS as f64;
+        let payload = serde_json::json!({
+            "next_path": state.next_path,
+            "redirect_uri": state.redirect_uri,
+            "created_at": now as f64,
+            "expires_at": expires_at,
+        });
+        self.persist_new_session(
+            state_token,
+            OAUTH_STATE_SESSION_TYPE,
+            &payload,
+            now as f64,
+            expires_at,
+        )
+        .await
+    }
+
+    /// Verbraucht einen OAuth-Login-State atomar und einmalig (Pendant zu Python
+    /// `consume_twitch_oauth_state` → `pop_session`, single-use `DELETE … RETURNING`).
+    /// Ein zweiter Aufruf mit demselben Token liefert `None` (Replay-Schutz). Nur
+    /// nicht-abgelaufene Tokens (`expires_at > now`) werden zurückgegeben; der
+    /// Payload wird entschlüsselt und in [`OAuthLoginState`] geparst. Fehlt/kaputt
+    /// → `None` (fail-closed), DB-Fehler → `Err`.
+    pub async fn consume_oauth_login_state(
+        &self,
+        state_token: &str,
+    ) -> Result<Option<OAuthLoginState>, sqlx::Error> {
+        let now = unix_now();
+        let row: Option<(Vec<u8>,)> = sqlx::query_as(
+            r#"
+            DELETE FROM dashboard_sessions
+            WHERE session_id = $1
+              AND session_type = $2
+              AND expires_at > $3
+            RETURNING payload_enc
+            "#,
+        )
+        .bind(state_token)
+        .bind(OAUTH_STATE_SESSION_TYPE)
+        .bind(now as f64)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        let Some((payload_enc,)) = row else {
+            return Ok(None);
+        };
+        let plaintext = match fernet::decrypt(&self.fernet_key, &encode_b64(&payload_enc), None) {
+            Ok(p) => p,
+            Err(e) => {
+                warn!("OAuth-State-Decrypt fehlgeschlagen: {e}");
+                return Ok(None);
+            }
+        };
+        let payload: serde_json::Value = match serde_json::from_slice(&plaintext) {
+            Ok(v) => v,
+            Err(e) => {
+                warn!("OAuth-State-JSON ungültig: {e}");
+                return Ok(None);
+            }
+        };
+        // Defensiver TTL-Re-Check im Payload (Python: auth_mixin.py:1324).
+        if payload_expired(&payload, now) {
+            return Ok(None);
+        }
+        let next_path = payload
+            .get("next_path")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        let redirect_uri = payload
+            .get("redirect_uri")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        if redirect_uri.is_empty() {
+            return Ok(None);
+        }
+        Ok(Some(OAuthLoginState { next_path, redirect_uri }))
+    }
+
+    /// Schlägt den kanonischen `twitch_partners`-Eintrag für einen Login bzw.
+    /// User-ID nach (Pendant zu Python `_is_partner_allowed`, auth_mixin.py:741-780).
+    /// Liefert `(twitch_login, twitch_user_id)` aus der DB, wenn ein nicht-`blocked`
+    /// Partner existiert; bevorzugt `active` vor `archived`/`departnered`. Dient als
+    /// Partner-Gate beim OAuth-Login — kein Treffer → kein Dashboard-Zugang (403).
+    pub async fn find_partner_for_login(
+        &self,
+        login: &str,
+        user_id: &str,
+    ) -> Result<Option<PartnerSession>, sqlx::Error> {
+        let login = login.trim().to_lowercase();
+        let user_id = user_id.trim();
+        if login.is_empty() && user_id.is_empty() {
+            return Ok(None);
+        }
+        let row: Option<(String, String)> = sqlx::query_as(
+            r#"
+            SELECT p.twitch_login, p.twitch_user_id
+            FROM twitch_partners p
+            WHERE LOWER(COALESCE(p.technical_pause_reason, '')) <> 'blocked'
+              AND (
+                  LOWER(p.twitch_login) = LOWER($1)
+                  OR ($2 <> '' AND p.twitch_user_id = $2)
+              )
+            ORDER BY CASE
+                WHEN COALESCE(p.status, '') = 'active' THEN 0
+                WHEN COALESCE(p.status, '') = 'archived' THEN 1
+                WHEN COALESCE(p.status, '') = 'departnered' THEN 2
+                ELSE 3
+            END,
+            COALESCE(p.departnered_at, p.admin_archived_at, p.partnered_at) DESC
+            LIMIT 1
+            "#,
+        )
+        .bind(&login)
+        .bind(user_id)
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(row.map(|(twitch_login, twitch_user_id)| PartnerSession {
+            twitch_login,
+            twitch_user_id,
+        }))
+    }
+
+    /// Invalidiert eine Session beim Logout: löscht die Row aus `dashboard_sessions`
+    /// und entfernt den Partner-Cache-Eintrag (Pendant zu Python `auth_logout` →
+    /// `delete_session`, routes_entry.py:225). Idempotent — ein leerer/unbekannter
+    /// `session_id` ist ein No-Op. DB-Fehler werden nur als Debug geloggt; der
+    /// Logout-Erfolg hängt nicht am DB-Delete (das Cookie wird ohnehin gelöscht).
+    pub async fn invalidate_session(&self, session_id: &str) {
+        if session_id.is_empty() {
+            return;
+        }
+        self.delete_session(session_id).await;
+        let mut cache = self.partner_cache.lock().await;
+        cache.entries.remove(session_id);
     }
 
     /// Validiert ein CSRF-Token gegen die Session — konstant-zeitlicher Vergleich.
@@ -1223,6 +1397,180 @@ print(f.encrypt(payload.encode()).decode(), end='')
             .await
             .unwrap();
         sqlx::query("DELETE FROM twitch_partners WHERE twitch_login = 'csrftest_user'")
+            .execute(&pool)
+            .await
+            .ok();
+    }
+
+    async fn ensure_sessions_table(pool: &PgPool) {
+        sqlx::query(
+            r#"
+            CREATE TABLE IF NOT EXISTS dashboard_sessions (
+                session_id   TEXT NOT NULL PRIMARY KEY,
+                session_type TEXT NOT NULL,
+                payload_enc  BYTEA NOT NULL,
+                created_at   DOUBLE PRECISION NOT NULL,
+                expires_at   DOUBLE PRECISION NOT NULL
+            )
+            "#,
+        )
+        .execute(pool)
+        .await
+        .unwrap();
+    }
+
+    /// B3-1: OAuth-Login-State persistieren → genau EINMAL konsumieren
+    /// (Replay-Schutz). Zweiter Consume liefert None.
+    #[tokio::test]
+    async fn oauth_login_state_single_use() {
+        let Some(pool) = maybe_pool().await else { return; };
+        ensure_sessions_table(&pool).await;
+        let state = DashboardAuthState::new(pool.clone(), test_fernet_key());
+
+        let token = format!("st-{}", unix_now());
+        let login_state = OAuthLoginState {
+            next_path: "/twitch/stats".to_string(),
+            redirect_uri: "https://x.test/twitch/auth/callback".to_string(),
+        };
+        state.save_oauth_login_state(&token, &login_state).await.unwrap();
+
+        // Erster Consume liefert den State zurück.
+        let got = state.consume_oauth_login_state(&token).await.unwrap();
+        assert_eq!(got, Some(login_state));
+        // Zweiter Consume (Replay) → None.
+        let again = state.consume_oauth_login_state(&token).await.unwrap();
+        assert_eq!(again, None);
+    }
+
+    /// B3-1: Unbekannter/abgelaufener State → None (KEIN Login möglich).
+    #[tokio::test]
+    async fn oauth_login_state_unbekannt_und_abgelaufen_geben_none() {
+        let Some(pool) = maybe_pool().await else { return; };
+        ensure_sessions_table(&pool).await;
+        let state = DashboardAuthState::new(pool.clone(), test_fernet_key());
+
+        // Unbekannt.
+        assert_eq!(state.consume_oauth_login_state("gibt-es-nicht").await.unwrap(), None);
+
+        // Abgelaufen: Row mit expires_at in der Vergangenheit direkt einschleusen.
+        let token = format!("st-exp-{}", unix_now());
+        let now = unix_now() as f64;
+        let fernet_bytes = make_test_fernet_payload(
+            r#"{"next_path":"/analyse","redirect_uri":"https://x.test/cb","expires_at":1.0}"#,
+        );
+        sqlx::query(
+            "INSERT INTO dashboard_sessions (session_id, session_type, payload_enc, created_at, expires_at)
+             VALUES ($1, $2, $3, $4, $5)",
+        )
+        .bind(&token)
+        .bind(OAUTH_STATE_SESSION_TYPE)
+        .bind(fernet_bytes)
+        .bind(now - 700.0)
+        .bind(now - 1.0)
+        .execute(&pool)
+        .await
+        .unwrap();
+        assert_eq!(state.consume_oauth_login_state(&token).await.unwrap(), None);
+
+        sqlx::query("DELETE FROM dashboard_sessions WHERE session_id = $1")
+            .bind(&token)
+            .execute(&pool)
+            .await
+            .ok();
+    }
+
+    /// B3-2-Gate: aktiver Partner wird gefunden; unbekannter Login nicht.
+    #[tokio::test]
+    async fn find_partner_for_login_findet_aktiven_partner() {
+        let Some(pool) = maybe_pool().await else { return; };
+        ensure_sessions_table(&pool).await;
+        let state = DashboardAuthState::new(pool.clone(), test_fernet_key());
+
+        sqlx::query(
+            "INSERT INTO twitch_partners (twitch_login, twitch_user_id, status)
+             VALUES ($1, $2, 'active')
+             ON CONFLICT DO NOTHING",
+        )
+        .bind("gatetest_user")
+        .bind("888001")
+        .execute(&pool)
+        .await
+        .ok();
+
+        let found = state.find_partner_for_login("GateTest_User", "").await.unwrap();
+        assert_eq!(
+            found,
+            Some(PartnerSession {
+                twitch_login: "gatetest_user".to_string(),
+                twitch_user_id: "888001".to_string(),
+            })
+        );
+        // Unbekannter Login → None (→ 403 im Callback).
+        let none = state.find_partner_for_login("kein_partner_xyz", "").await.unwrap();
+        assert_eq!(none, None);
+
+        sqlx::query("DELETE FROM twitch_partners WHERE twitch_login = 'gatetest_user'")
+            .execute(&pool)
+            .await
+            .ok();
+    }
+
+    /// B3-2-Gate: `technical_pause_reason='blocked'` → kein Treffer (Hard-Kill).
+    #[tokio::test]
+    async fn find_partner_for_login_blocked_wird_abgelehnt() {
+        let Some(pool) = maybe_pool().await else { return; };
+        ensure_sessions_table(&pool).await;
+        let state = DashboardAuthState::new(pool.clone(), test_fernet_key());
+
+        sqlx::query(
+            "INSERT INTO twitch_partners (twitch_login, twitch_user_id, status, technical_pause_reason)
+             VALUES ($1, $2, 'active', 'blocked')
+             ON CONFLICT DO NOTHING",
+        )
+        .bind("blocked_user")
+        .bind("888002")
+        .execute(&pool)
+        .await
+        .ok();
+
+        assert_eq!(state.find_partner_for_login("blocked_user", "").await.unwrap(), None);
+
+        sqlx::query("DELETE FROM twitch_partners WHERE twitch_login = 'blocked_user'")
+            .execute(&pool)
+            .await
+            .ok();
+    }
+
+    /// Logout: invalidate_session löscht die Row → load_partner_session → None.
+    #[tokio::test]
+    async fn invalidate_session_loescht_partner_session() {
+        let Some(pool) = maybe_pool().await else { return; };
+        ensure_sessions_table(&pool).await;
+
+        sqlx::query(
+            "INSERT INTO twitch_partners (twitch_login, twitch_user_id, status)
+             VALUES ($1, $2, 'active')
+             ON CONFLICT DO NOTHING",
+        )
+        .bind("logout_user")
+        .bind("888003")
+        .execute(&pool)
+        .await
+        .ok();
+
+        let state = DashboardAuthState::new(pool.clone(), test_fernet_key());
+        let created = state
+            .create_partner_session("logout_user", "888003", "Logout Tester")
+            .await
+            .unwrap();
+        // Session ist ladbar.
+        assert!(state.load_partner_session(&created.session_id).await.unwrap().is_some());
+
+        // Logout invalidiert.
+        state.invalidate_session(&created.session_id).await;
+        assert!(state.load_partner_session(&created.session_id).await.unwrap().is_none());
+
+        sqlx::query("DELETE FROM twitch_partners WHERE twitch_login = 'logout_user'")
             .execute(&pool)
             .await
             .ok();

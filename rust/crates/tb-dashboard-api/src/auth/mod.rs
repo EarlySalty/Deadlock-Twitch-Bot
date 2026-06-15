@@ -21,8 +21,10 @@
 //! async fn handler(auth: DashboardAuthLevel) -> impl IntoResponse { ... }
 //! ```
 
+pub mod csrf;
 pub mod fernet;
 pub mod level;
+pub mod oauth_login;
 pub mod partner_gate;
 pub mod security;
 pub mod session;
