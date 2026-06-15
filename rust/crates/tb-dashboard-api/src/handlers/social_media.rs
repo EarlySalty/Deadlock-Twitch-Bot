@@ -12,7 +12,7 @@
 //! [`resolve_streamer_scope`]-Helfer.
 
 use axum::{
-    extract::{Query, State},
+    extract::{Path, Query, State},
     http::StatusCode,
     response::{Html, IntoResponse, Response},
     Json,
@@ -25,6 +25,10 @@ use tb_social_media::clip_manager::get_clips_for_dashboard;
 use tb_social_media::clip_templates::{
     apply_template_to_clip, create_streamer_template, get_global_templates, get_last_hashtags, get_streamer_templates,
     GlobalTemplate, StreamerTemplate,
+};
+use tb_social_media::layout::{
+    default_streamer_layout, get_clip_effective_layout, get_streamer_layout, set_clip_layout_override,
+    upsert_streamer_layout, StreamerLayout,
 };
 use tb_social_media::rendering::{render_dashboard, render_privacy, render_terms};
 
@@ -360,6 +364,178 @@ pub async fn apply_template_handler(
     }
 }
 
+/// Spiegelt Pythons `_require_admin`: nur Localhost/Admin; Partner → 403,
+/// None → 401.
+fn require_admin(auth: &DashboardAuthLevel) -> Result<(), Response> {
+    match auth {
+        DashboardAuthLevel::Localhost | DashboardAuthLevel::Admin => Ok(()),
+        DashboardAuthLevel::Partner { .. } => Err(forbidden("Admin access required.")),
+        DashboardAuthLevel::None => Err(unauthorized()),
+    }
+}
+
+/// Validiert einen Slug (`[A-Za-z0-9_-]+`, nicht leer) — Python
+/// `_normalize_safe_slug`. Fehler als Plaintext-400 (wie web.HTTPBadRequest).
+fn normalize_safe_slug(raw: Option<&str>, field: &str) -> Result<String, Response> {
+    let value = raw.unwrap_or("").trim().to_string();
+    if value.is_empty() {
+        return Err((StatusCode::BAD_REQUEST, format!("{field} is required")).into_response());
+    }
+    if !value.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-') {
+        return Err((StatusCode::BAD_REQUEST, format!("{field} must match [A-Za-z0-9_-]+")).into_response());
+    }
+    Ok(value)
+}
+
+async fn ensure_streamer_exists(pool: &PgPool, slug: &str) -> bool {
+    sqlx::query_scalar::<_, i32>("SELECT 1 FROM twitch_streamers WHERE LOWER(twitch_login) = LOWER($1) LIMIT 1")
+        .bind(slug)
+        .fetch_optional(pool)
+        .await
+        .ok()
+        .flatten()
+        .is_some()
+}
+
+async fn clip_exists(pool: &PgPool, clip_db_id: i32) -> bool {
+    sqlx::query_scalar::<_, i32>("SELECT 1 FROM twitch_clips_social_media WHERE id = $1 LIMIT 1")
+        .bind(clip_db_id)
+        .fetch_optional(pool)
+        .await
+        .ok()
+        .flatten()
+        .is_some()
+}
+
+fn invalid_layout(message: String) -> Response {
+    (StatusCode::BAD_REQUEST, Json(json!({ "error": "invalid_layout", "message": message }))).into_response()
+}
+
+/// Parst den Layout-PUT-Body (Python `_parse_layout_request`): `layout` ist
+/// Pflicht, `cam_enabled`/`mode` überschreiben optional.
+fn parse_layout_request(payload: &Value) -> Result<StreamerLayout, Response> {
+    let Some(lp) = payload.get("layout").filter(|v| !v.is_null()) else {
+        return Err(invalid_layout("layout is required".to_string()));
+    };
+    let cam_enabled = payload.get("cam_enabled").and_then(Value::as_bool);
+    let mode = payload.get("mode").and_then(Value::as_str);
+    StreamerLayout::from_value(lp, cam_enabled, mode).map_err(|e| invalid_layout(e.to_string()))
+}
+
+/// `?streamer_login=` für die Layout-GET-Route.
+#[derive(Debug, Deserialize)]
+pub struct StreamerLoginQuery {
+    pub streamer_login: Option<String>,
+}
+
+/// `GET /social-media/api/admin/streamer-layout` — Default-Layout eines Streamers (Admin).
+pub async fn streamer_layout_get_handler(auth: DashboardAuthLevel, State(pool): State<PgPool>, Query(q): Query<StreamerLoginQuery>) -> Response {
+    if let Err(e) = require_admin(&auth) {
+        return e;
+    }
+    let slug = match normalize_safe_slug(q.streamer_login.as_deref(), "streamer_login") {
+        Ok(s) => s.to_lowercase(),
+        Err(e) => return e,
+    };
+    if !ensure_streamer_exists(&pool, &slug).await {
+        return (StatusCode::NOT_FOUND, Json(json!({ "error": "unknown_streamer" }))).into_response();
+    }
+    let stored = get_streamer_layout(&pool, &slug).await;
+    let layout = stored.clone().unwrap_or_else(default_streamer_layout);
+    let (updated_at, updated_by) = if stored.is_some() {
+        sqlx::query_as::<_, (Option<String>, Option<String>)>(
+            "SELECT updated_at::text, updated_by FROM social_media_streamer_layout WHERE LOWER(streamer_login) = LOWER($1) LIMIT 1",
+        )
+        .bind(&slug)
+        .fetch_optional(&pool)
+        .await
+        .ok()
+        .flatten()
+        .unwrap_or((None, None))
+    } else {
+        (None, None)
+    };
+    Json(json!({
+        "streamer_login": slug,
+        "layout": layout.to_override_json(),
+        "cam_enabled": layout.cam_enabled,
+        "mode": layout.mode,
+        "is_default": stored.is_none(),
+        "updated_at": updated_at,
+        "updated_by": updated_by,
+    }))
+    .into_response()
+}
+
+/// `PUT /social-media/api/admin/streamer-layout` — Default-Layout setzen (Admin).
+pub async fn streamer_layout_put_handler(auth: DashboardAuthLevel, State(pool): State<PgPool>, Json(payload): Json<Value>) -> Response {
+    if let Err(e) = require_admin(&auth) {
+        return e;
+    }
+    let slug = match normalize_safe_slug(payload.get("streamer_login").and_then(Value::as_str), "streamer_login") {
+        Ok(s) => s.to_lowercase(),
+        Err(e) => return e,
+    };
+    if !ensure_streamer_exists(&pool, &slug).await {
+        return (StatusCode::NOT_FOUND, Json(json!({ "error": "unknown_streamer" }))).into_response();
+    }
+    let layout = match parse_layout_request(&payload) {
+        Ok(l) => l,
+        Err(e) => return e,
+    };
+    // updated_by: Admin/Localhost tragen im Rust-Auth-Modell keine User-ID.
+    let _ = upsert_streamer_layout(&pool, &slug, &layout, None).await;
+    Json(json!({
+        "streamer_login": slug,
+        "layout": layout.to_override_json(),
+        "cam_enabled": layout.cam_enabled,
+        "mode": layout.mode,
+    }))
+    .into_response()
+}
+
+/// `PUT /social-media/api/admin/clips/{clip_db_id}/layout` — Clip-Override (Admin).
+pub async fn clip_layout_put_handler(
+    auth: DashboardAuthLevel,
+    State(pool): State<PgPool>,
+    Path(clip_db_id_raw): Path<String>,
+    Json(payload): Json<Value>,
+) -> Response {
+    if let Err(e) = require_admin(&auth) {
+        return e;
+    }
+    let Some(clip_db_id) = normalize_id(Some(&Value::String(clip_db_id_raw))) else {
+        return (StatusCode::BAD_REQUEST, Json(json!({ "error": "invalid_clip_db_id" }))).into_response();
+    };
+    if !clip_exists(&pool, clip_db_id).await {
+        return (StatusCode::NOT_FOUND, Json(json!({ "error": "clip_not_found" }))).into_response();
+    }
+
+    // `layout` fehlt/null → Override löschen.
+    let Some(layout_payload) = payload.get("layout").filter(|v| !v.is_null()) else {
+        let _ = set_clip_layout_override(&pool, clip_db_id, None).await;
+        let effective = get_clip_effective_layout(&pool, clip_db_id).await;
+        return Json(json!({
+            "clip_db_id": clip_db_id,
+            "layout_override": Value::Null,
+            "effective_layout": effective.to_override_json(),
+        }))
+        .into_response();
+    };
+    let layout = match StreamerLayout::from_value(layout_payload, None, None) {
+        Ok(l) => l,
+        Err(e) => return invalid_layout(e.to_string()),
+    };
+    let _ = set_clip_layout_override(&pool, clip_db_id, Some(&layout)).await;
+    let effective = get_clip_effective_layout(&pool, clip_db_id).await;
+    Json(json!({
+        "clip_db_id": clip_db_id,
+        "layout_override": layout.to_override_json(),
+        "effective_layout": effective.to_override_json(),
+    }))
+    .into_response()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -431,10 +607,12 @@ mod tests {
         let opts = PgConnectOptions::from_str(&dsn).unwrap().options([("search_path", schema)]);
         let pool = PgPoolOptions::new().max_connections(2).connect_with(opts).await.unwrap();
         for ddl in [
-            "CREATE TABLE twitch_clips_social_media (id SERIAL PRIMARY KEY, clip_id TEXT, streamer_login TEXT, status TEXT DEFAULT 'pending', created_at TEXT, clip_title TEXT, game_name TEXT, custom_description TEXT, hashtags TEXT)",
+            "CREATE TABLE twitch_clips_social_media (id SERIAL PRIMARY KEY, clip_id TEXT, streamer_login TEXT, status TEXT DEFAULT 'pending', created_at TEXT, clip_title TEXT, game_name TEXT, custom_description TEXT, hashtags TEXT, layout_override_json JSONB)",
             "CREATE TABLE twitch_clips_upload_queue (id SERIAL PRIMARY KEY, clip_id INTEGER, platform TEXT, status TEXT)",
             "CREATE TABLE clip_templates_streamer (id SERIAL PRIMARY KEY, streamer_login TEXT, template_name TEXT, description_template TEXT, hashtags TEXT, is_default INTEGER DEFAULT 0, created_at TEXT DEFAULT CURRENT_TIMESTAMP, updated_at TEXT DEFAULT CURRENT_TIMESTAMP, UNIQUE (streamer_login, template_name))",
             "CREATE TABLE clip_templates_global (id SERIAL PRIMARY KEY, template_name TEXT UNIQUE, description_template TEXT, hashtags TEXT, category TEXT, usage_count INTEGER DEFAULT 0, created_at TEXT DEFAULT CURRENT_TIMESTAMP, created_by TEXT)",
+            "CREATE TABLE twitch_streamers (twitch_login TEXT PRIMARY KEY, twitch_user_id TEXT)",
+            "CREATE TABLE social_media_streamer_layout (streamer_login TEXT PRIMARY KEY, layout_json JSONB NOT NULL, cam_enabled BOOLEAN NOT NULL DEFAULT TRUE, mode TEXT NOT NULL DEFAULT 'pip', updated_at TIMESTAMPTZ DEFAULT NOW(), updated_by TEXT)",
         ] {
             sqlx::query(ddl).execute(&pool).await.unwrap();
         }
@@ -587,5 +765,80 @@ mod tests {
         // None-Auth → 401.
         let resp = templates_global_handler(DashboardAuthLevel::None, State(pool.clone()), Query(CategoryQuery { category: None })).await;
         assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    fn valid_layout() -> Value {
+        json!({
+            "version": 1,
+            "source": {"width": 1920, "height": 1080},
+            "game_crop": {"x": 0, "y": 0, "w": 1080, "h": 1080},
+            "cam_crop": {"x": 1500, "y": 50, "w": 380, "h": 380},
+            "cam_position": {"x": 0, "y": 0, "w": 1080, "h": 540}
+        })
+    }
+
+    #[tokio::test]
+    async fn streamer_layout_get_put() {
+        let Some(pool) = make_pool("t_dash_sm_layout").await else { return };
+        sqlx::query("INSERT INTO twitch_streamers (twitch_login, twitch_user_id) VALUES ('nani', '1')").execute(&pool).await.unwrap();
+
+        // GET ohne gespeichertes Layout → Default + is_default true.
+        let resp = streamer_layout_get_handler(DashboardAuthLevel::Admin, State(pool.clone()), Query(StreamerLoginQuery { streamer_login: Some("nani".into()) })).await;
+        assert_eq!(resp.status(), StatusCode::OK);
+        let v = body_json(resp).await;
+        assert_eq!(v["is_default"], true);
+        assert_eq!(v["mode"], "pip");
+
+        // PUT setzt ein Layout (mode stacked).
+        let resp = streamer_layout_put_handler(
+            DashboardAuthLevel::Admin,
+            State(pool.clone()),
+            Json(json!({ "streamer_login": "nani", "layout": valid_layout(), "mode": "stacked", "cam_enabled": false })),
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::OK);
+        assert_eq!(body_json(resp).await["mode"], "stacked");
+
+        // GET jetzt → is_default false, mode stacked.
+        let resp = streamer_layout_get_handler(DashboardAuthLevel::Admin, State(pool.clone()), Query(StreamerLoginQuery { streamer_login: Some("nani".into()) })).await;
+        let v = body_json(resp).await;
+        assert_eq!(v["is_default"], false);
+        assert_eq!(v["mode"], "stacked");
+        assert_eq!(v["cam_enabled"], false);
+
+        // Unbekannter Streamer → 404.
+        let resp = streamer_layout_get_handler(DashboardAuthLevel::Admin, State(pool.clone()), Query(StreamerLoginQuery { streamer_login: Some("ghost".into()) })).await;
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+        // Partner → 403.
+        let resp = streamer_layout_get_handler(partner("nani"), State(pool.clone()), Query(StreamerLoginQuery { streamer_login: Some("nani".into()) })).await;
+        assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+        // PUT ohne layout-Key → 400 invalid_layout.
+        let resp = streamer_layout_put_handler(DashboardAuthLevel::Admin, State(pool.clone()), Json(json!({ "streamer_login": "nani" }))).await;
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn clip_layout_put_set_und_clear() {
+        let Some(pool) = make_pool("t_dash_sm_clip_layout").await else { return };
+        let clip: i32 = sqlx::query_scalar("INSERT INTO twitch_clips_social_media (clip_id, streamer_login) VALUES ('c1', 'nani') RETURNING id").fetch_one(&pool).await.unwrap();
+
+        // Override setzen.
+        let resp = clip_layout_put_handler(DashboardAuthLevel::Admin, State(pool.clone()), Path(clip.to_string()), Json(json!({ "layout": valid_layout() }))).await;
+        assert_eq!(resp.status(), StatusCode::OK);
+        let v = body_json(resp).await;
+        assert!(!v["layout_override"].is_null());
+        assert!(v["effective_layout"]["version"] == 1);
+
+        // Override löschen (layout null).
+        let resp = clip_layout_put_handler(DashboardAuthLevel::Admin, State(pool.clone()), Path(clip.to_string()), Json(json!({ "layout": Value::Null }))).await;
+        assert_eq!(resp.status(), StatusCode::OK);
+        assert!(body_json(resp).await["layout_override"].is_null());
+
+        // Ungültige clip_db_id (Pfad) → 400.
+        let resp = clip_layout_put_handler(DashboardAuthLevel::Admin, State(pool.clone()), Path("abc".into()), Json(json!({}))).await;
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+        // Nicht existierender Clip → 404.
+        let resp = clip_layout_put_handler(DashboardAuthLevel::Admin, State(pool.clone()), Path("99999".into()), Json(json!({}))).await;
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
     }
 }

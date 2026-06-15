@@ -72,6 +72,12 @@ pub fn build_authed_router(pool: PgPool, token: String) -> Router {
         .route("/social-media/api/templates/global", get(social_media::templates_global_handler))
         .route("/social-media/api/templates/streamer", get(social_media::templates_streamer_handler).post(social_media::create_template_handler))
         .route("/social-media/api/templates/apply", post(social_media::apply_template_handler))
+        // Layout-CRUD (Admin): Streamer-Default + Clip-Override.
+        .route(
+            "/social-media/api/admin/streamer-layout",
+            get(social_media::streamer_layout_get_handler).put(social_media::streamer_layout_put_handler),
+        )
+        .route("/social-media/api/admin/clips/:clip_db_id/layout", axum::routing::put(social_media::clip_layout_put_handler))
         // Internal-Home: gebündelte Dashboard-Startseite (Profil, KPIs, Bot-Events,
         // Changelog). GET liest, POST legt einen Changelog-Eintrag an (Admin-only).
         .route(
