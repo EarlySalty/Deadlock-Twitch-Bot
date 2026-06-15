@@ -15,9 +15,9 @@
 //! Variante werden dieselben Operationen direkt über Traits aufgerufen — kein
 //! Loop-Gefahr, da der Orchestrator die Verdrahtung übernimmt.
 //!
-//! Nicht portiert (bewusst außerhalb des Welle-B-Scopes):
-//! - `!title` / `!titel` — komplexe KI-Generierung, eigene DB-Tabellen.
-//! - `!lurkersteuer_off` — UNSICHER, plan_id-Lookup + Feature-Flag.
+//! `!lurkersteuer_off` setzt `streamer_plans.lurker_tax_enabled = 0` (nur
+//! Broadcaster, nur bei Plänen mit Entitlement `chat.lurker_tax`). Die
+//! Plan-Auflösung läuft über `tb_analytics::plan::resolve_plan_snapshot`.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -357,8 +357,12 @@ impl CommandEngine {
                 self.cmd_title(event, args).await;
                 true
             }
-            // !lurkersteuer_off: UNSICHER — streamer_plans-Schreibpfad nicht portiert.
-            "!lurkersteuer_off" | "!lurkersteuer_aus" | "!lurker_tax_off" => false,
+            // !lurkersteuer_off — commands.py:535: Broadcaster schaltet die
+            // Lurker-Steuer dauerhaft ab (Schreibpfad streamer_plans.lurker_tax_enabled).
+            "!lurkersteuer_off" | "!lurkersteuer_aus" | "!lurker_tax_off" => {
+                self.cmd_lurkersteuer_off(event).await;
+                true
+            }
             _ => false,
         }
     }
@@ -1003,9 +1007,12 @@ impl CommandEngine {
                 .await;
             }
             ClipOutcome::OAuthMissing => {
+                // commands.py:341 — "OAuth fehlt. Bitte einmal ... autorisieren".
+                // Der `!raid_enable`-Verweis ist tot ("in oder raus") und entfällt;
+                // der Auth-Link läuft heute über Website-/Streamer-Flow, nicht Chat.
                 self.reply(
                     event,
-                    "Für Clips fehlt die Autorisierung — der Streamer muss den Bot einmal per !raid_enable verbinden.",
+                    "OAuth fehlt. Der Streamer muss den Bot einmal autorisieren, dann klappt der Clip.",
                 )
                 .await;
             }
@@ -1013,6 +1020,105 @@ impl CommandEngine {
                 self.reply(
                     event,
                     "Clip konnte nicht erstellt werden. Bitte in ein paar Sekunden nochmal.",
+                )
+                .await;
+            }
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // !lurkersteuer_off — commands.py:535
+    // -----------------------------------------------------------------------
+
+    /// Deaktiviert die Lurker-Steuer dauerhaft für den aktuellen Kanal
+    /// (`streamer_plans.lurker_tax_enabled = 0`).
+    ///
+    /// Ablauf wie `commands.py:539`:
+    /// 1. Nur der Broadcaster darf abschalten.
+    /// 2. Kanal muss als Partner registriert sein.
+    /// 3. `is_paid_plan`-Gate: nur Pläne mit Entitlement `chat.lurker_tax`
+    ///    (volle Snapshot-Resolution → abgelaufene Pläne zählen nicht). Lurker-Tax
+    ///    ist Opt-in und default deaktiviert (Grillme Block 1/9) — der Off-Befehl
+    ///    setzt das DB-Flag, der Toggle-Dashboard-Pfad ist ein eigenes Ticket.
+    async fn cmd_lurkersteuer_off(&self, event: &ChatMessageEvent) {
+        if !event.is_broadcaster() {
+            self.reply(
+                event,
+                "Nur der Broadcaster kann die Lurker Steuer dauerhaft deaktivieren.",
+            )
+            .await;
+            return;
+        }
+
+        let partner = match self.get_partner(&event.broadcaster_user_login).await {
+            Some(p) => p,
+            None => {
+                self.reply(event, "Dieser Kanal ist nicht als Partner registriert.")
+                    .await;
+                return;
+            }
+        };
+
+        // is_paid_plan: effektiver Plan muss chat.lurker_tax tragen (commands.py:566).
+        let is_paid_plan = tb_analytics::plan::resolve_plan_snapshot(
+            &self.pool,
+            &partner.twitch_login,
+            &partner.twitch_user_id,
+        )
+        .await
+        .map(|s| s.entitlements.contains(&"chat.lurker_tax"))
+        .unwrap_or(false);
+        if !is_paid_plan {
+            self.reply(
+                event,
+                "Die Lurker Steuer ist nur in bezahlten Plänen verfügbar.",
+            )
+            .await;
+            return;
+        }
+
+        // Schreibpfad — commands.py:585: lurker_tax_enabled = 0. Vorzustand für die
+        // Antwort prüfen (war sie überhaupt an?).
+        let was_enabled: bool = sqlx::query_scalar::<_, Option<i32>>(
+            "SELECT lurker_tax_enabled FROM streamer_plans
+              WHERE LOWER(COALESCE(twitch_login, '')) = LOWER($1) LIMIT 1",
+        )
+        .bind(&partner.twitch_login)
+        .fetch_optional(&self.pool)
+        .await
+        .ok()
+        .flatten()
+        .flatten()
+        .map(|v| v != 0)
+        .unwrap_or(false);
+
+        let updated = sqlx::query(
+            "UPDATE streamer_plans
+                SET lurker_tax_enabled = 0
+              WHERE LOWER(COALESCE(twitch_login, '')) = LOWER($1)",
+        )
+        .bind(&partner.twitch_login)
+        .execute(&self.pool)
+        .await;
+
+        match updated {
+            Ok(res) if res.rows_affected() > 0 => {
+                if was_enabled {
+                    self.reply(
+                        event,
+                        "Lurker Steuer deaktiviert. Im Abo-Bereich kannst du sie später wieder aktivieren.",
+                    )
+                    .await;
+                } else {
+                    self.reply(event, "Lurker Steuer ist bereits deaktiviert.")
+                        .await;
+                }
+                tracing::info!(login = %partner.twitch_login, "Lurker-Steuer per Chat deaktiviert");
+            }
+            _ => {
+                self.reply(
+                    event,
+                    "Lurker Steuer konnte gerade nicht deaktiviert werden.",
                 )
                 .await;
             }
@@ -1422,16 +1528,6 @@ impl CommandEngine {
 //
 // `handle()` gibt `false` für "!title" / "!titel" — Pipeline fährt fort.
 // Erweiterbar über künftigen `TitlePort`-Trait.
-
-// ---------------------------------------------------------------------------
-// LÜCKE: !lurkersteuer_off (commands.py:535)
-// ---------------------------------------------------------------------------
-//
-// UNSICHER-Status aus Vertrag:
-// - Schreibpfad auf `streamer_plans.lurker_tax_enabled` benötigt plan_id-Lookup.
-// - Zwei SQL-Abfragen über `twitch_streamer_identities` → `streamer_plans`.
-// - Feature-Flag `SUBSCRIPTION_PLANS_ENABLED=True` ist in Prod an, aber
-//   tatsächliche Nutzung durch Streamer mit paid plan unklar.
 
 #[cfg(test)]
 mod tests {
@@ -1894,6 +1990,35 @@ mod tests {
                 target_stream_started_at TIMESTAMPTZ,
                 candidates_count INTEGER
             )"#,
+            // streamer_plans — Plan-Resolution + lurker_tax_enabled-Schreibpfad
+            // (!lurkersteuer_off). manual_plan_expires_at = Ablauf-Gate der
+            // resolve_plan_snapshot.
+            r#"CREATE TABLE streamer_plans (
+                twitch_user_id TEXT PRIMARY KEY,
+                twitch_login TEXT,
+                plan_name TEXT,
+                lurker_tax_enabled INTEGER DEFAULT 0,
+                promo_disabled INTEGER DEFAULT 0,
+                manual_plan_id TEXT,
+                manual_plan_expires_at TIMESTAMPTZ,
+                manual_plan_updated_at TIMESTAMPTZ,
+                manual_plan_notes TEXT,
+                trial_ever_granted INTEGER DEFAULT 0,
+                first_login_at TIMESTAMPTZ
+            )"#,
+            // twitch_streamer_identities — user_id/login-Mapping für Plan-Refs
+            r#"CREATE TABLE twitch_streamer_identities (
+                twitch_user_id TEXT PRIMARY KEY,
+                twitch_login TEXT
+            )"#,
+            // twitch_billing_subscriptions — Stripe-Abo-Fallback der Plan-Resolution
+            r#"CREATE TABLE twitch_billing_subscriptions (
+                customer_reference TEXT NOT NULL,
+                plan_id TEXT,
+                status TEXT,
+                current_period_end TIMESTAMPTZ,
+                updated_at TIMESTAMPTZ DEFAULT NOW()
+            )"#,
         ] {
             sqlx::query(ddl).execute(pool).await.unwrap();
         }
@@ -2198,5 +2323,129 @@ mod tests {
             count_first, count_second,
             "Zweiter !invite muss durch Cooldown blockiert werden"
         );
+    }
+
+    // -----------------------------------------------------------------------
+    // chat-commands-tokens-06: !lurkersteuer_off
+    // -----------------------------------------------------------------------
+
+    /// Legt Partner + paid-plan-Streamer (raid_boost → chat.lurker_tax) an.
+    async fn seed_lurker_partner(pool: &PgPool, lurker_tax_enabled: i32, paid: bool) {
+        sqlx::query(
+            "INSERT INTO twitch_streamers_partner_state (twitch_login, twitch_user_id, is_partner_active, raid_bot_enabled)
+             VALUES ('testchannel', 'bc123', 1, 1)",
+        )
+        .execute(pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO twitch_streamer_identities (twitch_user_id, twitch_login)
+             VALUES ('bc123', 'testchannel')",
+        )
+        .execute(pool)
+        .await
+        .unwrap();
+        let plan = if paid { "raid_boost" } else { "raid_free" };
+        sqlx::query(
+            "INSERT INTO streamer_plans (twitch_user_id, twitch_login, manual_plan_id, lurker_tax_enabled)
+             VALUES ('bc123', 'testchannel', $1, $2)",
+        )
+        .bind(plan)
+        .bind(lurker_tax_enabled)
+        .execute(pool)
+        .await
+        .unwrap();
+    }
+
+    #[tokio::test]
+    async fn lurkersteuer_off_setzt_flag_false_bei_paid_plan() {
+        let pool = pool_or_skip!("cmd_lurker_off_paid");
+        apply_ddl(&pool).await;
+        let api = MockApi::new();
+        let engine = make_engine_with_pool(pool.clone(), api.clone());
+        seed_lurker_partner(&pool, 1, true).await;
+
+        let event = make_event("!lurkersteuer_off", false, true);
+        let handled = engine.handle(&event).await;
+        assert!(handled, "!lurkersteuer_off muss als Command behandelt werden");
+
+        let enabled: i32 = sqlx::query_scalar(
+            "SELECT lurker_tax_enabled FROM streamer_plans WHERE twitch_user_id = 'bc123'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(enabled, 0, "lurker_tax_enabled muss 0 sein");
+
+        let msg = api.last_message().await.unwrap();
+        assert!(msg.contains("deaktiviert"), "Meldung: {msg}");
+    }
+
+    #[tokio::test]
+    async fn lurkersteuer_off_alias_lurker_tax_off() {
+        let pool = pool_or_skip!("cmd_lurker_off_alias");
+        apply_ddl(&pool).await;
+        let api = MockApi::new();
+        let engine = make_engine_with_pool(pool.clone(), api.clone());
+        seed_lurker_partner(&pool, 1, true).await;
+
+        let handled = engine.handle(&make_event("!lurker_tax_off", false, true)).await;
+        assert!(handled, "Alias !lurker_tax_off muss greifen");
+
+        let enabled: i32 = sqlx::query_scalar(
+            "SELECT lurker_tax_enabled FROM streamer_plans WHERE twitch_user_id = 'bc123'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(enabled, 0);
+    }
+
+    #[tokio::test]
+    async fn lurkersteuer_off_nur_broadcaster() {
+        let pool = pool_or_skip!("cmd_lurker_off_nichtbc");
+        apply_ddl(&pool).await;
+        let api = MockApi::new();
+        let engine = make_engine_with_pool(pool.clone(), api.clone());
+        seed_lurker_partner(&pool, 1, true).await;
+
+        // Mod, aber nicht Broadcaster → Ablehnung, Flag bleibt 1.
+        let handled = engine.handle(&make_event("!lurkersteuer_off", true, false)).await;
+        assert!(handled);
+
+        let enabled: i32 = sqlx::query_scalar(
+            "SELECT lurker_tax_enabled FROM streamer_plans WHERE twitch_user_id = 'bc123'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(enabled, 1, "Nicht-Broadcaster darf nicht deaktivieren");
+
+        let msg = api.last_message().await.unwrap();
+        assert!(msg.to_lowercase().contains("broadcaster"), "Meldung: {msg}");
+    }
+
+    #[tokio::test]
+    async fn lurkersteuer_off_nur_bei_paid_plan() {
+        let pool = pool_or_skip!("cmd_lurker_off_free");
+        apply_ddl(&pool).await;
+        let api = MockApi::new();
+        let engine = make_engine_with_pool(pool.clone(), api.clone());
+        // raid_free → kein chat.lurker_tax → Ablehnung.
+        seed_lurker_partner(&pool, 1, false).await;
+
+        let handled = engine.handle(&make_event("!lurkersteuer_off", false, true)).await;
+        assert!(handled);
+
+        let enabled: i32 = sqlx::query_scalar(
+            "SELECT lurker_tax_enabled FROM streamer_plans WHERE twitch_user_id = 'bc123'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(enabled, 1, "Free-Plan darf den Schreibpfad nicht auslösen");
+
+        let msg = api.last_message().await.unwrap();
+        assert!(msg.contains("bezahlten"), "Meldung: {msg}");
     }
 }
