@@ -242,49 +242,59 @@ fn parse_commission_ids(raw: Option<&str>) -> Vec<i64> {
     }
 }
 
-fn gutschrift_payload(r: GutschriftRow) -> Value {
+/// Basis-Metadaten einer Gutschrift (Python `_row_to_metadata`, OHNE die
+/// Konto-/PII-Join-Felder). Von der for-login-Liste direkt genutzt; die globale
+/// Liste hängt die Join-Felder an.
+fn gutschrift_base_value(r: &GutschriftRow) -> Value {
     let commission_ids = parse_commission_ids(r.commission_ids.as_deref());
     let period_label = if r.period_year >= 2000 && (1..=12).contains(&r.period_month) {
         format!("{} {}", MONTH_LABELS[r.period_month as usize], r.period_year)
     } else {
         String::new()
     };
-    let status = gutschrift_status(&r);
-    let note_text = gutschrift_note_text(r.affiliate_ust_status.as_deref());
     let download_path = if r.id > 0 {
         Some(format!("/twitch/api/admin/affiliates/gutschriften/{}/pdf", r.id))
     } else {
         None
     };
-    let ust = r.ust_status.unwrap_or_default().trim().to_string();
     json!({
         "id": r.id,
         "period_year": r.period_year,
         "period_month": r.period_month,
         "period_label": period_label,
-        "gutschrift_number": r.gutschrift_number.unwrap_or_default(),
-        "status": status,
+        "gutschrift_number": r.gutschrift_number.clone().unwrap_or_default(),
+        "status": gutschrift_status(r),
         "net_amount_cents": r.net_amount_cents,
         "vat_amount_cents": r.vat_amount_cents,
         "gross_amount_cents": r.gross_amount_cents,
         "commission_count": commission_ids.len(),
         "commission_ids": commission_ids,
-        "note_text": note_text,
-        "last_error": r.email_error.unwrap_or_default(),
+        "note_text": gutschrift_note_text(r.affiliate_ust_status.as_deref()),
+        "last_error": r.email_error.clone().unwrap_or_default(),
         "generated_at": r.pdf_generated_at,
         "emailed_at": r.email_sent_at,
         "created_at": r.created_at,
         "download_path": download_path,
         "has_pdf": r.has_pdf.is_some(),
-        "affiliate_login": r.affiliate_twitch_login.unwrap_or_default().trim(),
-        "display_name": r.display_name,
-        "active": r.is_active != 0,
-        "ust_status": if ust.is_empty() { "unknown".to_string() } else { ust },
-        "has_pii": r.has_pii != 0,
     })
 }
 
-const GUTSCHRIFT_COLUMNS: &str = "\
+/// Globale Liste: Basis-Metadaten + Konto-/PII-Join-Felder.
+fn gutschrift_payload(r: GutschriftRow) -> Value {
+    let mut value = gutschrift_base_value(&r);
+    if let Some(obj) = value.as_object_mut() {
+        let ust = r.ust_status.unwrap_or_default().trim().to_string();
+        obj.insert("affiliate_login".to_string(), json!(r.affiliate_twitch_login.unwrap_or_default().trim()));
+        obj.insert("display_name".to_string(), json!(r.display_name));
+        obj.insert("active".to_string(), json!(r.is_active != 0));
+        obj.insert("ust_status".to_string(), json!(if ust.is_empty() { "unknown".to_string() } else { ust }));
+        obj.insert("has_pii".to_string(), json!(r.has_pii != 0));
+    }
+    value
+}
+
+/// Nur die `g.*`-Spalten (für GutschriftRow); Konto-/PII-Felder hängt der Aufrufer an.
+const GUTSCHRIFT_G_COLUMNS: &str = "\
     g.id::bigint AS id, g.affiliate_twitch_login AS affiliate_twitch_login, \
     g.period_year::bigint AS period_year, g.period_month::bigint AS period_month, \
     g.gutschrift_number AS gutschrift_number, g.net_amount_cents::bigint AS net_amount_cents, \
@@ -292,8 +302,10 @@ const GUTSCHRIFT_COLUMNS: &str = "\
     g.commission_ids AS commission_ids, g.affiliate_ust_status AS affiliate_ust_status, \
     g.email_error AS email_error, g.pdf_generated_at AS pdf_generated_at, \
     g.email_sent_at AS email_sent_at, g.created_at AS created_at, \
-    (CASE WHEN g.pdf_blob IS NOT NULL THEN 1 ELSE NULL END)::bigint AS has_pdf, \
-    a.display_name AS display_name, a.is_active::bigint AS is_active";
+    (CASE WHEN g.pdf_blob IS NOT NULL THEN 1 ELSE NULL END)::bigint AS has_pdf";
+
+const GUTSCHRIFT_ACCOUNT_COLUMNS: &str =
+    "a.display_name AS display_name, a.is_active::bigint AS is_active";
 
 const GUTSCHRIFT_ORDER: &str = "ORDER BY g.period_year DESC, g.period_month DESC, g.id DESC";
 
@@ -301,7 +313,7 @@ const GUTSCHRIFT_ORDER: &str = "ORDER BY g.period_year DESC, g.period_month DESC
 /// Zwei-stufiger Fallback: mit affiliate_pii → ohne PII → leer.
 pub async fn load_affiliate_gutschriften(pool: &PgPool) -> Result<Value, sqlx::Error> {
     let full_sql = format!(
-        "SELECT {GUTSCHRIFT_COLUMNS}, COALESCE(pii.ust_status, 'unknown') AS ust_status, \
+        "SELECT {GUTSCHRIFT_G_COLUMNS}, {GUTSCHRIFT_ACCOUNT_COLUMNS}, COALESCE(pii.ust_status, 'unknown') AS ust_status, \
                 (CASE WHEN pii.twitch_login IS NOT NULL THEN 1 ELSE 0 END)::bigint AS has_pii \
          FROM affiliate_gutschriften g \
          JOIN affiliate_accounts a ON a.twitch_login = g.affiliate_twitch_login \
@@ -312,7 +324,7 @@ pub async fn load_affiliate_gutschriften(pool: &PgPool) -> Result<Value, sqlx::E
         Err(e) if !is_missing_schema_error(&e) => return Err(e),
         Err(_) => {
             let no_pii_sql = format!(
-                "SELECT {GUTSCHRIFT_COLUMNS}, 'unknown' AS ust_status, 0::bigint AS has_pii \
+                "SELECT {GUTSCHRIFT_G_COLUMNS}, {GUTSCHRIFT_ACCOUNT_COLUMNS}, 'unknown' AS ust_status, 0::bigint AS has_pii \
                  FROM affiliate_gutschriften g \
                  JOIN affiliate_accounts a ON a.twitch_login = g.affiliate_twitch_login {GUTSCHRIFT_ORDER}"
             );
@@ -327,6 +339,106 @@ pub async fn load_affiliate_gutschriften(pool: &PgPool) -> Result<Value, sqlx::E
     let documents: Vec<Value> = rows.into_iter().map(gutschrift_payload).collect();
     let count = documents.len();
     Ok(json!({ "gutschriften": documents, "count": count }))
+}
+
+/// Volle Gutschrift-Summary für einen Affiliate (Python
+/// `_admin_affiliate_gutschriften_summary` mit affiliate_login). Fehlendes Schema
+/// → Nullwerte.
+async fn gutschrift_summary_for(pool: &PgPool, login: &str) -> Result<Value, sqlx::Error> {
+    let res: Result<(i64, i64, i64, Option<String>, Option<String>), sqlx::Error> = sqlx::query_as(
+        "SELECT COUNT(*)::bigint, COALESCE(SUM(gross_amount_cents), 0)::bigint, \
+                COALESCE(SUM(CASE WHEN pdf_generated_at IS NOT NULL AND email_sent_at IS NULL THEN 1 ELSE 0 END), 0)::bigint, \
+                MAX(pdf_generated_at), MAX(email_sent_at) \
+         FROM affiliate_gutschriften WHERE affiliate_twitch_login = $1",
+    )
+    .bind(login)
+    .fetch_one(pool)
+    .await;
+    match res {
+        Ok((total, total_cents, pending_email, last_generated, last_emailed)) => Ok(json!({
+            "total_gutschriften": total,
+            "total_gutschrift_amount_cents": total_cents,
+            "total_gutschrift_amount": cents_to_amount(total_cents),
+            "pending_email_gutschriften": pending_email,
+            "last_generated_at": last_generated,
+            "last_emailed_at": last_emailed,
+        })),
+        Err(e) if is_missing_schema_error(&e) => Ok(json!({
+            "total_gutschriften": 0,
+            "total_gutschrift_amount_cents": 0,
+            "total_gutschrift_amount": 0.0,
+            "pending_email_gutschriften": 0,
+            "last_generated_at": Value::Null,
+            "last_emailed_at": Value::Null,
+        })),
+        Err(e) => Err(e),
+    }
+}
+
+/// Fehler beim for-login-Gutschriften-Read.
+#[derive(Debug)]
+pub enum ForLoginError {
+    NotFound,
+    Db(sqlx::Error),
+    Decrypt(String),
+}
+
+/// Gutschriften eines Affiliates inkl. Konto + PII-Readiness + Summary (Python
+/// `load_admin_affiliate_gutschriften_for_login`). Kein Konto/Schema → NotFound.
+pub async fn load_gutschriften_for_login(
+    pool: &PgPool,
+    cipher: &FieldCipher,
+    login: &str,
+) -> Result<Value, ForLoginError> {
+    type Account = (Option<String>, Option<String>, i32, Option<String>, Option<String>);
+    let account: Option<Account> = match sqlx::query_as(
+        "SELECT twitch_login, display_name, is_active, created_at, updated_at \
+         FROM affiliate_accounts WHERE twitch_login = $1",
+    )
+    .bind(login)
+    .fetch_optional(pool)
+    .await
+    {
+        Ok(v) => v,
+        Err(e) if is_missing_schema_error(&e) => return Err(ForLoginError::NotFound),
+        Err(e) => return Err(ForLoginError::Db(e)),
+    };
+    let Some((twitch_login, display_name, is_active, created_at, updated_at)) = account else {
+        return Err(ForLoginError::NotFound);
+    };
+
+    let pii = load_affiliate_pii(pool, cipher, login).await.map_err(|e| match e {
+        PiiError::Db(e) => ForLoginError::Db(e),
+        PiiError::Decrypt(s) => ForLoginError::Decrypt(s),
+    })?;
+    let readiness = build_readiness(&pii);
+    let summary = gutschrift_summary_for(pool, login).await.map_err(ForLoginError::Db)?;
+
+    // Gutschriften des Affiliates (nur g.*; Join-Felder als Dummies → base_value ignoriert sie).
+    let list_sql = format!(
+        "SELECT {GUTSCHRIFT_G_COLUMNS}, NULL::text AS display_name, 0::bigint AS is_active, \
+                NULL::text AS ust_status, 0::bigint AS has_pii \
+         FROM affiliate_gutschriften g WHERE g.affiliate_twitch_login = $1 {GUTSCHRIFT_ORDER}"
+    );
+    let documents = match sqlx::query_as::<_, GutschriftRow>(&list_sql).bind(login).fetch_all(pool).await {
+        Ok(rows) => rows.iter().map(gutschrift_base_value).collect::<Vec<_>>(),
+        Err(e) if is_missing_schema_error(&e) => Vec::new(), // Python: list_for_affiliate missing-schema → []
+        Err(e) => return Err(ForLoginError::Db(e)),
+    };
+
+    Ok(json!({
+        "affiliate": {
+            "login": twitch_login.unwrap_or_default().trim(),
+            "display_name": display_name,
+            "active": is_active != 0,
+            "created_at": created_at,
+            "updated_at": updated_at,
+        },
+        "ust_status": if pii.ust_status.trim().is_empty() { "unknown".to_string() } else { pii.ust_status.clone() },
+        "readiness": readiness,
+        "gutschriften_summary": summary,
+        "gutschriften": documents,
+    }))
 }
 
 // ── Toggle (Write) ────────────────────────────────────────────────────────────
@@ -728,6 +840,39 @@ mod tests {
     async fn toggle_fehlendes_schema_not_found() {
         let Some(pool) = connect("t_aff_toggle_empty").await else { return };
         assert!(matches!(toggle_affiliate(&pool, "nani").await, Err(ToggleError::NotFound)));
+    }
+
+    #[tokio::test]
+    async fn for_login_gutschriften_und_not_found() {
+        let Some(pool) = connect("t_aff_forlogin").await else { return };
+        let cipher = FieldCipher::from_hex_key(&"ab".repeat(32), "v1").unwrap();
+        for ddl in [
+            "CREATE TABLE affiliate_accounts (twitch_login TEXT PRIMARY KEY, display_name TEXT, is_active INTEGER NOT NULL DEFAULT 1, created_at TEXT, updated_at TEXT)",
+            "CREATE TABLE affiliate_pii (twitch_login TEXT PRIMARY KEY, full_name_enc BYTEA, email_enc BYTEA, address_line1_enc BYTEA, address_city_enc BYTEA, address_zip_enc BYTEA, tax_id_enc BYTEA, address_country TEXT, ust_status TEXT, updated_at TEXT)",
+            "CREATE TABLE affiliate_gutschriften (id BIGSERIAL PRIMARY KEY, gutschrift_number TEXT, affiliate_twitch_login TEXT, period_year INTEGER, period_month INTEGER, net_amount_cents INTEGER, vat_amount_cents INTEGER, gross_amount_cents INTEGER, affiliate_ust_status TEXT, email_error TEXT, pdf_blob BYTEA, pdf_generated_at TEXT, email_sent_at TEXT, commission_ids TEXT, created_at TEXT)",
+        ] {
+            sqlx::query(ddl).execute(&pool).await.unwrap();
+        }
+        sqlx::query("INSERT INTO affiliate_accounts (twitch_login, display_name, is_active) VALUES ('nani','Nani',1)").execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO affiliate_pii (twitch_login, ust_status) VALUES ('nani','kleinunternehmer')").execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO affiliate_gutschriften (gutschrift_number, affiliate_twitch_login, period_year, period_month, net_amount_cents, vat_amount_cents, gross_amount_cents, pdf_blob, pdf_generated_at, created_at) VALUES ('GS-2026-06-001','nani',2026,6,1000,0,1000,E'\\\\x25','2026-06-30T00:00:00+00:00','2026-06-30T00:00:00+00:00')").execute(&pool).await.unwrap();
+
+        let v = load_gutschriften_for_login(&pool, &cipher, "nani").await.unwrap();
+        assert_eq!(v["affiliate"]["login"], "nani");
+        assert_eq!(v["affiliate"]["display_name"], "Nani");
+        assert_eq!(v["ust_status"], "kleinunternehmer");
+        assert!(v["readiness"]["blockers"].is_array()); // unvollständig (kein full_name) → blockers
+        assert_eq!(v["gutschriften_summary"]["total_gutschriften"], 1);
+        assert_eq!(v["gutschriften_summary"]["last_generated_at"], "2026-06-30T00:00:00+00:00");
+        let docs = v["gutschriften"].as_array().unwrap();
+        assert_eq!(docs.len(), 1);
+        assert_eq!(docs[0]["gutschrift_number"], "GS-2026-06-001");
+        assert_eq!(docs[0]["period_label"], "Juni 2026");
+        assert_eq!(docs[0]["has_pdf"], true);
+        // for-login-Items haben KEINE Join-Felder (affiliate_login/has_pii).
+        assert!(docs[0].get("affiliate_login").is_none());
+
+        assert!(matches!(load_gutschriften_for_login(&pool, &cipher, "ghost").await, Err(ForLoginError::NotFound)));
     }
 
     #[tokio::test]

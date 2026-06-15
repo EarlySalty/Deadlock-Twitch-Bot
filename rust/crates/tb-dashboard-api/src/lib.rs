@@ -407,6 +407,10 @@ pub fn build_admin_config_router(pool: PgPool, token: String) -> Router {
             get(admin_affiliate::gutschrift_pdf_handler),
         )
         .route(
+            "/twitch/api/admin/affiliates/:login/gutschriften",
+            get(admin_affiliate::gutschriften_for_login_handler),
+        )
+        .route(
             "/twitch/api/admin/affiliates/:login/toggle",
             post(admin_affiliate::toggle_handler),
         )

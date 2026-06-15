@@ -14,7 +14,7 @@ use axum::{
 use chrono::{Datelike, DateTime, SecondsFormat, Utc};
 use serde_json::json;
 use sqlx::PgPool;
-use tb_analytics::admin_affiliate::{DetailError, ToggleError};
+use tb_analytics::admin_affiliate::{DetailError, ForLoginError, ToggleError};
 use tb_crypto::FieldCipher;
 use tb_http_core::{ApiError, AuthLevel};
 
@@ -150,6 +150,40 @@ pub async fn detail_handler(
     }
 }
 
+/// `GET /twitch/api/admin/affiliates/:login/gutschriften` — Gutschriften eines
+/// Affiliates inkl. Konto + PII-Readiness + Summary (Admin).
+pub async fn gutschriften_for_login_handler(
+    auth: AuthLevel,
+    State(pool): State<PgPool>,
+    Path(login_raw): Path<String>,
+) -> Result<impl IntoResponse, ApiError> {
+    if !auth.is_privileged() {
+        return Err(ApiError::unauthorized());
+    }
+    let Some(login) = tb_domain::login::normalize_twitch_login(&login_raw) else {
+        return Err(ApiError::bad_request_with_body(json!({ "error": "invalid_login" })));
+    };
+    let cipher = match FieldCipher::from_env() {
+        Ok(c) => c,
+        Err(e) => {
+            tracing::error!("affiliate-gutschriften-for-login: kein Field-Cipher ({e})");
+            return Err(ApiError::internal());
+        }
+    };
+    match tb_analytics::admin_affiliate::load_gutschriften_for_login(&pool, &cipher, &login).await {
+        Ok(v) => Ok(Json(v)),
+        Err(ForLoginError::NotFound) => Err(ApiError::not_found()),
+        Err(ForLoginError::Db(e)) => {
+            tracing::error!("affiliate-gutschriften-for-login DB-Fehler: {e}");
+            Err(ApiError::internal())
+        }
+        Err(ForLoginError::Decrypt(s)) => {
+            tracing::error!("affiliate-gutschriften-for-login PII-Decrypt-Fehler: {s}");
+            Err(ApiError::internal())
+        }
+    }
+}
+
 /// `POST /twitch/api/admin/affiliates/:login/toggle` — is_active flippen (Admin).
 pub async fn toggle_handler(
     auth: AuthLevel,
@@ -252,6 +286,16 @@ mod tests {
         assert_eq!(gutschrift_pdf_handler(AuthLevel::Admin, State(pool.clone()), Path("abc".into())).await.status(), StatusCode::BAD_REQUEST);
         // kein Schema/keine Gutschrift → 404.
         assert_eq!(gutschrift_pdf_handler(AuthLevel::Admin, State(pool), Path("5".into())).await.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn for_login_unauth_und_invalid() {
+        let Some(pool) = make_pool("t_affh_forlogin").await else { return };
+        let (s, _) = body_json(gutschriften_for_login_handler(AuthLevel::None, State(pool.clone()), Path("nani".into())).await).await;
+        assert_eq!(s, StatusCode::UNAUTHORIZED);
+        let (s, j) = body_json(gutschriften_for_login_handler(AuthLevel::Admin, State(pool), Path("!!!".into())).await).await;
+        assert_eq!(s, StatusCode::BAD_REQUEST);
+        assert_eq!(j["error"], "invalid_login");
     }
 
     #[tokio::test]
