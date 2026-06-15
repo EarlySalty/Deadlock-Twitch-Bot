@@ -27,6 +27,7 @@ pub mod scout;
 pub mod exp_sessions;
 pub mod guard;
 pub mod handlers;
+pub mod irc_lurker;
 pub mod inbox_runtime;
 pub mod inbox_store;
 pub mod live_state;
