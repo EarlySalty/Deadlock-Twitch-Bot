@@ -547,6 +547,42 @@ pub fn build_auth_router() -> Router {
         .route("/twitch/auth/logout", get(auth_login::logout_handler))
 }
 
+/// Baut den Router für die Entry-/Redirect-Routen + die Admin-SPA + den
+/// Forward-Auth-Endpoint (B1-ENTRY / B1-ADMIN-SPA / B1-ADMIN-FORWARD-AUTH).
+///
+/// Diese Routen werden NATIV registriert (vor dem Strangler-Proxy-Fallback),
+/// damit der Admin-Host nativ lädt (kein 502 vom toten Python 8765 mehr). Der
+/// `DashboardAuthLevel`-Extractor liest `DashboardAuthState` aus der globalen
+/// Extension (in der `tb-dashboard`-main injiziert); ohne sie sind alle Requests
+/// `None`/`Localhost` (fail-closed) — Admin-SPA + forward_auth liefern dann 401.
+///
+/// **Scope:** NUR Host + Auth + SPA-Shell + Entry-Redirects. Die Admin-Schreib-
+/// Aktionen (add_streamer/verify/archive/discord_flag/manual-plan) sind separate
+/// Folge-Tickets (B1-ADD-STREAMER/B1-VERIFY/B1-ARCHIVE/B1-DISCORD-LINK/
+/// B1-MANUAL-PLAN) und hier bewusst NICHT enthalten.
+pub fn build_entry_admin_router() -> Router {
+    use handlers::{admin_spa, forward_auth};
+
+    Router::new()
+        // Forward-Auth für Caddys forward_auth auf dem Admin-Host.
+        .route(
+            "/twitch/auth/validate",
+            get(forward_auth::validate_admin_session),
+        )
+        // Entry-/Redirect-Routen.
+        .route("/", get(admin_spa::root_handler))
+        .route("/twitch", get(admin_spa::twitch_index_handler))
+        .route("/twitch/", get(admin_spa::twitch_index_handler))
+        .route("/twitch/stats", get(admin_spa::dashboard_redirect_handler))
+        .route("/twitch/dashboards", get(admin_spa::dashboard_redirect_handler))
+        .route("/twitch/dashboads", get(admin_spa::dashboard_redirect_handler))
+        .route("/dashboards", get(admin_spa::dashboard_redirect_handler))
+        .route("/dashboads", get(admin_spa::dashboard_redirect_handler))
+        // Admin-SPA: Shell + Deep-Link-Fallback + Assets.
+        .route("/twitch/admin", get(admin_spa::admin_index_handler))
+        .route("/twitch/admin/*path", get(admin_spa::admin_path_handler))
+}
+
 /// Baut den Router für den nativen Stripe-Webhook (B2-P0).
 ///
 /// `POST /twitch/api/billing/stripe/webhook` — unauthentifiziert (Stripe ist der
@@ -573,6 +609,7 @@ pub fn build_billing_webhook_router(pool: PgPool) -> Router {
 pub fn build_router(pool: PgPool, token: String) -> Router {
     build_public_router(pool.clone())
         .merge(build_auth_router())
+        .merge(build_entry_admin_router())
         .merge(build_billing_webhook_router(pool.clone()))
         .merge(build_authed_router(pool.clone(), token.clone()))
         .merge(build_admin_system_router(pool.clone(), token.clone()))
