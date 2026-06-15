@@ -1,0 +1,167 @@
+<div class="hero">
+  <div>
+    <p class="eyebrow">Admin</p>
+    <h1>Roadmap</h1>
+    <p class="lead">Feature-Planung verwalten – Drag &amp; Drop zwischen den Spalten um den Status zu ändern.</p>
+  </div>
+</div>
+
+<div id="kanban-root">
+  <div class="kanban-board">
+    <div class="kanban-col col-planned" id="col-planned" data-status="planned"
+         ondragover="event.preventDefault();this.classList.add('drag-over')"
+         ondragleave="this.classList.remove('drag-over')"
+         ondrop="handleDrop(event,'planned')">
+      <div class="kanban-col-header">
+        <span class="kanban-col-title">Geplant</span>
+        <span class="kanban-count" id="cnt-planned">0</span>
+      </div>
+      <div id="cards-planned"></div>
+    </div>
+    <div class="kanban-col col-in_progress" id="col-in_progress" data-status="in_progress"
+         ondragover="event.preventDefault();this.classList.add('drag-over')"
+         ondragleave="this.classList.remove('drag-over')"
+         ondrop="handleDrop(event,'in_progress')">
+      <div class="kanban-col-header">
+        <span class="kanban-col-title">In Arbeit</span>
+        <span class="kanban-count" id="cnt-in_progress">0</span>
+      </div>
+      <div id="cards-in_progress"></div>
+    </div>
+    <div class="kanban-col col-done" id="col-done" data-status="done"
+         ondragover="event.preventDefault();this.classList.add('drag-over')"
+         ondragleave="this.classList.remove('drag-over')"
+         ondrop="handleDrop(event,'done')">
+      <div class="kanban-col-header">
+        <span class="kanban-col-title">Fertig</span>
+        <span class="kanban-count" id="cnt-done">0</span>
+      </div>
+      <div id="cards-done"></div>
+    </div>
+  </div>
+</div>
+
+<div class="add-item-form" id="add-form">
+  <h3>Neues Feature hinzufügen</h3>
+  <div class="form-row">
+    <label>Titel<input type="text" id="new-title" placeholder="Feature-Titel" /></label>
+    <label>Status
+      <select id="new-status">
+        <option value="planned">Geplant</option>
+        <option value="in_progress">In Arbeit</option>
+        <option value="done">Fertig</option>
+      </select>
+    </label>
+    <label>Priorität (höher = oben)<input type="number" id="new-priority" value="0" style="width:100%" /></label>
+  </div>
+  <label>Beschreibung (optional)<textarea id="new-desc" rows="2" placeholder="Kurze Beschreibung..."></textarea></label>
+  <div class="form-actions">
+    <button class="btn" onclick="addItem()">Hinzufügen</button>
+    <span id="add-status" style="font-size:.85rem;color:var(--muted)"></span>
+  </div>
+</div>
+
+<script>
+let dragId = null;
+const STATUSES = ['planned','in_progress','done'];
+
+async function loadRoadmap() {
+  try {
+    const res = await fetch('/twitch/api/v2/roadmap');
+    const data = await res.json();
+    STATUSES.forEach(s => {
+      const container = document.getElementById('cards-' + s);
+      const count = document.getElementById('cnt-' + s);
+      const items = data[s] || [];
+      count.textContent = items.length;
+      container.innerHTML = '';
+      if (items.length === 0) {
+        container.innerHTML = '<div class="kanban-empty">Keine Einträge</div>';
+        return;
+      }
+      items.forEach(item => container.appendChild(makeCard(item)));
+    });
+  } catch(e) {
+    console.error('Roadmap laden fehlgeschlagen', e);
+  }
+}
+
+function makeCard(item) {
+  const card = document.createElement('div');
+  card.className = 'kanban-card';
+  card.draggable = true;
+  card.dataset.id = item.id;
+  card.innerHTML = `
+    <button class="kanban-card-delete" title="Löschen" onclick="deleteItem(${item.id})">✕</button>
+    <p class="kanban-card-title">${escHtml(item.title)}</p>
+    ${item.description ? `<p class="kanban-card-desc">${escHtml(item.description)}</p>` : ''}
+  `;
+  card.addEventListener('dragstart', () => {
+    dragId = item.id;
+    card.classList.add('dragging');
+  });
+  card.addEventListener('dragend', () => card.classList.remove('dragging'));
+  return card;
+}
+
+function escHtml(str) {
+  return String(str || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+async function handleDrop(event, newStatus) {
+  event.preventDefault();
+  event.currentTarget.classList.remove('drag-over');
+  if (!dragId) return;
+  const id = dragId;
+  dragId = null;
+  try {
+    const res = await fetch('/twitch/api/v2/roadmap/' + id, {
+      method: 'PATCH',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({status: newStatus})
+    });
+    if (!res.ok) throw new Error(await res.text());
+    loadRoadmap();
+  } catch(e) {
+    console.error('Drag-Drop Fehler', e);
+    loadRoadmap();
+  }
+}
+
+async function deleteItem(id) {
+  if (!confirm('Eintrag wirklich löschen?')) return;
+  try {
+    await fetch('/twitch/api/v2/roadmap/' + id, { method: 'DELETE' });
+    loadRoadmap();
+  } catch(e) { console.error(e); }
+}
+
+async function addItem() {
+  const title = document.getElementById('new-title').value.trim();
+  if (!title) { alert('Titel fehlt'); return; }
+  const status = document.getElementById('new-status').value;
+  const priority = parseInt(document.getElementById('new-priority').value) || 0;
+  const desc = document.getElementById('new-desc').value.trim();
+  const statusEl = document.getElementById('add-status');
+  try {
+    statusEl.textContent = 'Speichern...';
+    const res = await fetch('/twitch/api/v2/roadmap', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({title, status, priority, description: desc || null})
+    });
+    if (!res.ok) throw new Error(await res.text());
+    document.getElementById('new-title').value = '';
+    document.getElementById('new-desc').value = '';
+    document.getElementById('new-priority').value = '0';
+    statusEl.textContent = 'Gespeichert!';
+    setTimeout(() => statusEl.textContent = '', 2000);
+    loadRoadmap();
+  } catch(e) {
+    statusEl.textContent = 'Fehler: ' + e.message;
+    console.error(e);
+  }
+}
+
+loadRoadmap();
+</script>
