@@ -21,6 +21,7 @@ pub use auth::session::{
     PARTNER_COOKIE_NAME, SESSION_CREATE_TTL_SECS,
 };
 pub use handlers::auth_login::{oauth_login_config_from_env, OAuthLoginConfig};
+pub use handlers::billing_page::{billing_page_config_from_env, BillingPageConfig};
 pub use handlers::billing_webhook::{stripe_webhook_config_from_env, StripeWebhookConfig};
 
 use axum::{
@@ -602,6 +603,51 @@ pub fn build_billing_webhook_router(pool: PgPool) -> Router {
         .with_state(pool)
 }
 
+/// Baut den Router für den nativen Abo-/Billing-Bezahlpfad (Block 2A).
+///
+/// Routen werden NATIV (vor dem Strangler-Fallback) registriert, damit der
+/// umsatzkritische Pfad nicht in den toten Python-Service (502) läuft:
+/// - `GET /twitch/abbo` (+ `/abo`/`/abos`) → 301 auf `/twitch/pricing`.
+/// - `GET /twitch/abbo/bezahlen` → Stripe-Checkout-Session + 302 zur hosted URL.
+/// - `GET|POST /twitch/abbo/kündigen` → Stripe-Customer-Portal / cancel_at_period_end.
+/// - `GET /twitch/api/billing/catalog` (+ `/v2/`) → Plan-Katalog + aktueller Plan.
+/// - `GET /twitch/api/billing/readiness` → Stripe-Readiness (keine Secrets).
+///
+/// `DashboardAuthLevel` kommt aus der globalen `DashboardAuthState`-Extension
+/// (Login-Gate). `BillingPageConfig` (Stripe-Client + Public-Origin) wird als
+/// globale Extension in der `tb-dashboard`-main injiziert; fehlt sie, leiten
+/// Checkout/Cancel mit `reason=...` um (kein 500), Katalog/Readiness melden
+/// `checkout_ready=false`.
+pub fn build_billing_page_router(pool: PgPool) -> Router {
+    use handlers::billing_page;
+
+    Router::new()
+        .route("/twitch/abbo", get(billing_page::abbo_redirect_handler))
+        .route("/twitch/abo", get(billing_page::abbo_redirect_handler))
+        .route("/twitch/abos", get(billing_page::abbo_redirect_handler))
+        .route(
+            "/twitch/abbo/bezahlen",
+            get(billing_page::checkout_start_handler),
+        )
+        .route(
+            "/twitch/abbo/kündigen",
+            get(billing_page::cancel_handler).post(billing_page::cancel_handler),
+        )
+        .route(
+            "/twitch/api/billing/catalog",
+            get(billing_page::catalog_handler),
+        )
+        .route(
+            "/twitch/api/v2/billing/catalog",
+            get(billing_page::catalog_handler),
+        )
+        .route(
+            "/twitch/api/billing/readiness",
+            get(billing_page::readiness_handler),
+        )
+        .with_state(pool)
+}
+
 /// Zusammengeführter Router: public + auth (Login) + billing-webhook + authed +
 /// admin-system + admin-streamers + admin-config + Legal-Seiten (HTML, statuslos).
 ///
@@ -611,6 +657,7 @@ pub fn build_router(pool: PgPool, token: String) -> Router {
         .merge(build_auth_router())
         .merge(build_entry_admin_router())
         .merge(build_billing_webhook_router(pool.clone()))
+        .merge(build_billing_page_router(pool.clone()))
         .merge(build_authed_router(pool.clone(), token.clone()))
         .merge(build_admin_system_router(pool.clone(), token.clone()))
         .merge(build_admin_streamers_router(pool.clone(), token.clone()))

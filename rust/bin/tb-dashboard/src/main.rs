@@ -110,6 +110,22 @@ async fn main() {
         }
     }
 
+    // P0 (B2-2A): Nativer Abo-/Billing-Bezahlpfad (Checkout/Cancel/Katalog).
+    // Ohne STRIPE_SECRET_KEY bleibt der Stripe-Client aus → Checkout/Cancel
+    // leiten auf die Pricing-Seite mit reason=... um (kein 500), Katalog/
+    // Readiness melden checkout_ready=false. Secret aus Env (Infisical), nie geloggt.
+    match tb_dashboard_api::billing_page_config_from_env() {
+        Some(config) => {
+            app = app.layer(axum::Extension(config));
+            tracing::info!("Nativer Abo-/Billing-Bezahlpfad aktiv");
+        }
+        None => {
+            tracing::warn!(
+                "STRIPE_SECRET_KEY fehlt — nativer Checkout/Cancel deaktiviert (Redirect mit reason)"
+            );
+        }
+    }
+
     tracing::info!("tb-dashboard lauscht auf {addr}");
     let listener = tokio::net::TcpListener::bind(addr)
         .await
