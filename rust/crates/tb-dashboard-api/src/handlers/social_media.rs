@@ -30,6 +30,8 @@ use tb_social_media::retention::mark_clip_discarded;
 use tb_social_media::settings::{coerce_bool, get_auto_approve_settings, set_auto_approve_settings, AutoApprove};
 use tb_social_media::analytics::{list_clip_analytics, list_reports, ClipAnalyticsSnapshot, SocialMediaReportRecord};
 use tb_social_media::clip_analytics::get_analytics_summary;
+use tb_social_media::{ClipFetchService, ClipRepository, HelixClipSource};
+use tb_transport_twitch::{HelixClient, HelixConfig};
 use tb_social_media::credentials::{CredentialManager, PlatformStatus};
 use tb_social_media::clip_manager::{batch_upload_all_new, get_clips_for_dashboard, mark_clip_uploaded, register_manual_upload, ManualUploadError};
 use tb_social_media::video_processor::VideoProcessor;
@@ -732,6 +734,46 @@ pub async fn queue_upload_handler(
         }
     }
     Json(json!({ "queued": queued })).into_response()
+}
+
+/// Baut den Clip-Fetcher inline aus den Twitch-App-Credentials (`None`, wenn
+/// nicht konfiguriert → 503).
+fn build_clip_fetch_service(pool: PgPool, limit: u32) -> Option<ClipFetchService> {
+    let client_id = std::env::var("TWITCH_CLIENT_ID").ok().filter(|s| !s.is_empty())?;
+    let client_secret = std::env::var("TWITCH_CLIENT_SECRET").ok().filter(|s| !s.is_empty())?;
+    let helix = HelixClient::new(HelixConfig::new(client_id, client_secret)).ok()?;
+    let source = HelixClipSource::new(Arc::new(helix));
+    Some(ClipFetchService::new(ClipRepository::new(pool), source).with_clip_limit(limit))
+}
+
+/// POST-Body von `…/api/fetch-clips`.
+#[derive(Debug, Deserialize)]
+pub struct FetchClipsBody {
+    pub streamer: Option<String>,
+    pub limit: Option<i64>,
+    #[allow(dead_code)] // days wird vom Rust-Helix-Fetcher (Recent-Window) nicht genutzt
+    pub days: Option<i64>,
+}
+
+/// `POST /social-media/api/fetch-clips` — manuell aktuelle Twitch-Clips holen.
+pub async fn fetch_clips_handler(auth: DashboardAuthLevel, State(pool): State<PgPool>, Json(body): Json<FetchClipsBody>) -> Response {
+    if let Err(e) = require_auth(&auth) {
+        return e;
+    }
+    // required=true: Admin muss streamer angeben.
+    let scope = match resolve_streamer_scope(&auth, body.streamer.as_deref(), true) {
+        Ok(s) => s,
+        Err(e) => return e,
+    };
+    let streamer = scope.unwrap_or_default();
+    let limit = body.limit.filter(|n| *n > 0).unwrap_or(20).clamp(1, 100) as u32;
+
+    let Some(service) = build_clip_fetch_service(pool, limit) else {
+        return (StatusCode::SERVICE_UNAVAILABLE, Json(json!({ "error": "twitch_api_unavailable", "message": "Clip-Fetch ist derzeit nicht verfügbar." }))).into_response();
+    };
+    let result = service.fetch_for_streamer(&streamer).await;
+    let clips_found = result.clips_found.max(0);
+    Json(json!({ "success": true, "clips_found": clips_found, "message": format!("Fetched {clips_found} clips") })).into_response()
 }
 
 /// POST-Body von `…/api/batch-upload`.
@@ -2390,5 +2432,16 @@ mod tests {
         // Partner cross-account → 403.
         let resp = batch_upload_handler(partner("nani"), State(pool.clone()), Query(StreamerQuery { streamer: None }), Json(BatchUploadBody { streamer: Some("other".into()), platforms: json!(["tiktok"]), apply_default_template: None })).await;
         assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn fetch_clips_auth_pfade() {
+        let Some(pool) = make_pool("t_dash_sm_fetch").await else { return };
+        // None-Auth → 401 (vor Scope/Helix).
+        assert_eq!(fetch_clips_handler(DashboardAuthLevel::None, State(pool.clone()), Json(FetchClipsBody { streamer: Some("nani".into()), limit: None, days: None })).await.status(), StatusCode::UNAUTHORIZED);
+        // Admin ohne streamer (required) → 400.
+        assert_eq!(fetch_clips_handler(DashboardAuthLevel::Admin, State(pool.clone()), Json(FetchClipsBody { streamer: None, limit: None, days: None })).await.status(), StatusCode::BAD_REQUEST);
+        // Partner cross-account → 403.
+        assert_eq!(fetch_clips_handler(partner("nani"), State(pool.clone()), Json(FetchClipsBody { streamer: Some("other".into()), limit: None, days: None })).await.status(), StatusCode::FORBIDDEN);
     }
 }

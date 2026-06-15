@@ -27,6 +27,12 @@ impl ClipFetchService {
         }
     }
 
+    /// Überschreibt die Clip-Anzahl pro Fetch (für den manuellen Dashboard-Fetch).
+    pub fn with_clip_limit(mut self, limit: u32) -> Self {
+        self.clip_limit = limit.max(1);
+        self
+    }
+
     /// Fetcht Clips für einen einzelnen Streamer und schreibt Verlaufseintrag.
     pub async fn fetch_for_streamer(&self, login: &str) -> StreamerFetchResult {
         let started = Instant::now();

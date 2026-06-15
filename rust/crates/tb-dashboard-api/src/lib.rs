@@ -76,6 +76,7 @@ pub fn build_authed_router(pool: PgPool, token: String) -> Router {
         .route("/social-media/api/upload", post(social_media::queue_upload_handler))
         .route("/social-media/api/mark-uploaded", post(social_media::mark_uploaded_handler))
         .route("/social-media/api/batch-upload", post(social_media::batch_upload_handler))
+        .route("/social-media/api/fetch-clips", post(social_media::fetch_clips_handler))
         // Multipart-Datei-Upload — eigenes 201MB-Body-Limit (Default ist 2MB).
         .route(
             "/social-media/api/clips/upload",
