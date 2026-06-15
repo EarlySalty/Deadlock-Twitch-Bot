@@ -4,6 +4,7 @@
 //! Kein Auth, kein Loopback-Gate bei public-Routen — explizit `CORS: *`.
 //! Auth-Routen nutzen `AuthLevel`-Extractor aus tb-http-core.
 
+pub mod ai_state;
 pub mod auth;
 pub mod handlers;
 pub mod process_info;
