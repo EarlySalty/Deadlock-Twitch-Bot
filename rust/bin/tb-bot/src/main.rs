@@ -1111,6 +1111,21 @@ async fn main() {
         legacy_proxy,
     );
 
+    // Block 10: Split-Deployment-Härtung vor dem Bind. `role = None` liest die
+    // Runtime-Rolle aus der Umgebung (kombiniertes Deployment: tb-bot fährt die
+    // interne API selbst). Bei Fehlkonfiguration sauberer Abbruch (Log + exit),
+    // kein Panic im Prod-Pfad. Härtung ist via TWITCH_RUNTIME_ENFORCE=0
+    // abschaltbar (Python-Parität).
+    match tb_internal_api::enforce_internal_api_runtime(None, port) {
+        Ok(role) => {
+            tracing::info!(runtime_role = %role, port, "Internal-API Runtime-Härtung bestanden");
+        }
+        Err(e) => {
+            tracing::error!("Internal-API Runtime-Härtung verletzt: {e}");
+            std::process::exit(1);
+        }
+    }
+
     tracing::info!("tb-bot lauscht auf {addr}");
     let listener = tokio::net::TcpListener::bind(addr)
         .await

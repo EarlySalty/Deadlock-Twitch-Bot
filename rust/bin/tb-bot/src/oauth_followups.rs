@@ -135,6 +135,10 @@ impl tb_internal_api::DiscordRolePort for BrokerDiscordDirectory {
     async fn grant_streamer_role(&self, discord_user_id: &str, reason: &str) {
         <Self as DiscordDirectoryPort>::grant_streamer_role(self, discord_user_id, reason).await
     }
+
+    async fn revoke_streamer_role(&self, discord_user_id: &str, reason: &str) {
+        <Self as DiscordDirectoryPort>::revoke_streamer_role(self, discord_user_id, reason).await
+    }
 }
 
 // ---------------------------------------------------------------------------
