@@ -5,8 +5,9 @@
 //! Komma-Liste, max. 5 je Session, dedupliziert) Median-Statistiken über
 //! Viewer/Retention/Follower/Dauer + häufigste Streaming-Stunde.
 //!
-//! **Teil 1: nur das `tags`-Array; `peerBenchmark` ist hier `null`** (das
-//! `_get_peer_group_stats`-Peer-Benchmark folgt als Teil 2).
+//! `peerBenchmark` (nur bei gesetztem `streamer`) liefert den Tier-basierten
+//! Peer-Median für Viewer + Retention (Port von `_get_peer_group_stats`,
+//! reduziert auf die beiden vom Endpoint ausgegebenen Felder).
 
 use std::collections::HashMap;
 
@@ -81,8 +82,103 @@ fn best_time_slot(hours: &[i32]) -> String {
     format!("{best_hour:02}:00")
 }
 
+/// Peer-Group-Tier anhand des Durchschnitts-Viewer-Werts (Python `_get_tier`).
+/// 0=starter(<15) 1=rising(<50) 2=established(<150) 3=featured(<500) 4=top.
+fn tier_of(avg: f64) -> u8 {
+    if avg < 15.0 {
+        0
+    } else if avg < 50.0 {
+        1
+    } else if avg < 150.0 {
+        2
+    } else if avg < 500.0 {
+        3
+    } else {
+        4
+    }
+}
+
+/// Peer-Benchmark für einen Streamer (Python `_get_peer_group_stats`, reduziert
+/// auf die beiden Felder, die `tag-analysis-extended` ausgibt:
+/// `peerAvg.avgViewers` + `peerAvg.retention10m`). `None`, wenn keine
+/// Kategorie-/Session-Daten vorliegen oder der Streamer keiner Peer-Group zuzuordnen ist.
+async fn load_peer_benchmark(
+    pool: &PgPool,
+    streamer_login: &str,
+    since: DateTime<Utc>,
+) -> Result<Option<Value>, sqlx::Error> {
+    let login = streamer_login.to_lowercase();
+
+    // 1. Durchschnitts-Viewer aller Streamer der Kategorie.
+    let avgs: Vec<(String, Option<f64>)> = sqlx::query_as(
+        "SELECT streamer, AVG(viewer_count)::float8 FROM twitch_stats_category \
+         WHERE ts_utc >= $1 GROUP BY streamer",
+    )
+    .bind(since)
+    .fetch_all(pool)
+    .await?;
+    if avgs.is_empty() {
+        return Ok(None);
+    }
+    let mut streamer_avgs: HashMap<String, f64> = HashMap::new();
+    for (s, avg) in avgs {
+        if let Some(a) = avg {
+            streamer_avgs.insert(s.to_lowercase(), a);
+        }
+    }
+
+    // 2. Eigener Schnitt — Fallback aus den Sessions, wenn nicht in Kategorie-Daten.
+    let my_avg = match streamer_avgs.get(&login).copied() {
+        Some(a) => a,
+        None => {
+            let row: Option<(Option<f64>,)> = sqlx::query_as(
+                "SELECT AVG(avg_viewers)::float8 FROM twitch_stream_sessions \
+                 WHERE LOWER(streamer_login) = $1 AND started_at >= $2 AND ended_at IS NOT NULL",
+            )
+            .bind(&login)
+            .bind(since)
+            .fetch_optional(pool)
+            .await?;
+            match row.and_then(|(a,)| a) {
+                Some(a) => a,
+                None => return Ok(None),
+            }
+        }
+    };
+
+    // 3. Peers im selben Tier.
+    let my_tier = tier_of(my_avg);
+    let peer_logins: Vec<String> = streamer_avgs
+        .iter()
+        .filter(|(_, &a)| tier_of(a) == my_tier)
+        .map(|(s, _)| s.clone())
+        .collect();
+    if peer_logins.is_empty() {
+        return Ok(None);
+    }
+
+    // 4. Session-Metriken je Peer (nur avg_viewers + retention_10m nötig).
+    let metrics: Vec<(Option<f64>, Option<f64>)> = sqlx::query_as(
+        "SELECT AVG(s.avg_viewers)::float8, AVG(s.retention_10m)::float8 \
+         FROM twitch_stream_sessions s \
+         WHERE LOWER(s.streamer_login) = ANY($1) AND s.started_at >= $2 AND s.ended_at IS NOT NULL \
+         GROUP BY LOWER(s.streamer_login)",
+    )
+    .bind(&peer_logins)
+    .bind(since)
+    .fetch_all(pool)
+    .await?;
+
+    let avg_viewers_list: Vec<f64> = metrics.iter().filter_map(|(v, _)| *v).collect();
+    let retention_list: Vec<f64> = metrics.iter().filter_map(|(_, r)| *r).collect();
+
+    Ok(Some(json!({
+        "avgViewers": round1(median(&avg_viewers_list)),
+        "retention10m": round1(median(&retention_list) * 100.0),
+    })))
+}
+
 /// Lädt die erweiterte Tag-Analyse (Python `_load_tag_analysis_extended_payload_sync`).
-/// `peer_benchmark` ist in Teil 1 immer `null`.
 pub async fn load_tag_analysis_extended(
     pool: &PgPool,
     streamer: Option<&str>,
@@ -163,7 +259,13 @@ pub async fn load_tag_analysis_extended(
         })
         .collect();
 
-    Ok(json!({ "tags": tags, "peerBenchmark": Value::Null }))
+    // peerBenchmark nur bei gesetztem streamer (Python `if streamer_login`).
+    let peer_benchmark = match streamer {
+        Some(login) => load_peer_benchmark(pool, login, since).await?.unwrap_or(Value::Null),
+        None => Value::Null,
+    };
+
+    Ok(json!({ "tags": tags, "peerBenchmark": peer_benchmark }))
 }
 
 #[cfg(test)]
@@ -204,6 +306,10 @@ mod tests {
         .execute(&pool)
         .await
         .unwrap();
+        sqlx::query("CREATE TABLE twitch_stats_category (streamer TEXT, viewer_count INTEGER, ts_utc TIMESTAMPTZ)")
+            .execute(&pool)
+            .await
+            .unwrap();
         Some(pool)
     }
 
@@ -232,6 +338,27 @@ mod tests {
         assert_eq!(dl["bestTimeSlot"], "20:00");
         assert_eq!(dl["categoryRank"], 1);
         assert_eq!(dl["trend"], "stable");
+    }
+
+    #[tokio::test]
+    async fn peer_benchmark_tier_median() {
+        let Some(pool) = make_pool("t_tagx_peer").await else { return };
+        // Kategorie-Schnitte: nani=75, peer1=80 (beide "established" 50..150),
+        // peer2=10 (starter, anderes Tier → ausgeschlossen).
+        for (s, vc) in [("nani", 75), ("peer1", 80), ("peer2", 10)] {
+            sqlx::query("INSERT INTO twitch_stats_category (streamer, viewer_count, ts_utc) VALUES ($1, $2, NOW() - INTERVAL '1 hour')")
+                .bind(s).bind(vc).execute(&pool).await.unwrap();
+        }
+        // Session-Metriken je Peer: nani avg=100/ret=0.5, peer1 avg=200/ret=0.6.
+        for (s, avg, ret) in [("nani", 100.0f32, 0.5f32), ("peer1", 200.0, 0.6)] {
+            sqlx::query("INSERT INTO twitch_stream_sessions (streamer_login, tags, avg_viewers, retention_10m, duration_seconds, started_at, ended_at) VALUES ($1, 'X', $2, $3, 3600, NOW() - INTERVAL '2 hours', NOW())")
+                .bind(s).bind(avg).bind(ret).execute(&pool).await.unwrap();
+        }
+        let v = load_tag_analysis_extended(&pool, Some("nani"), 30, 20).await.unwrap();
+        let pb = &v["peerBenchmark"];
+        assert!(!pb.is_null());
+        assert_eq!(pb["avgViewers"], 150.0); // median(100,200)
+        assert_eq!(pb["retention10m"], 55.0); // median(0.5,0.6)*100
     }
 
     #[tokio::test]
