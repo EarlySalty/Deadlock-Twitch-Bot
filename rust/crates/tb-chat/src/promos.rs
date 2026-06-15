@@ -916,11 +916,21 @@ impl PromoEngine {
         template.replace("{invite}", invite)
     }
 
-    /// Globalen Promo-Override laden (UNSICHER: Tabellen-Schema promo_mode nicht gelesen).
-    async fn load_global_promo_message(&self, _invite: &str) -> Option<String> {
-        // UNSICHER: Schema der promo_mode-Tabellen nicht aus Python gelesen.
-        // Hier Stub: immer None (kein globaler Override).
-        None
+    /// Globalen Promo-Override laden (promos.py `_load_global_promo_message` +
+    /// `_build_promo_text`-Schritt 1). Lädt die Singleton-Config aus
+    /// `twitch_global_promo_modes`, wertet sie gegen die aktuelle Zeit aus und
+    /// gibt — wenn der `custom_event`-Modus aktiv ist — den formatierten
+    /// Event-Text zurück (`{invite}` ersetzt). DB-/Auswertungs-Fehler → None
+    /// (kein Override, fällt auf Streamer-/Pool-Promo zurück).
+    async fn load_global_promo_message(&self, invite: &str) -> Option<String> {
+        let config = tb_analytics::promo_mode::load_global_promo_mode(&self.pool).await.ok()?;
+        let evaluation = tb_analytics::promo_mode::evaluate_global_promo_mode(&config.to_json(), None);
+        let message = evaluation.active_message?;
+        let message = message.trim();
+        if message.is_empty() {
+            return None;
+        }
+        Some(message.replace("{invite}", invite))
     }
 
     /// Streamer-spezifische Promo laden (promos.py:945, streamer_plans.promo_message).
