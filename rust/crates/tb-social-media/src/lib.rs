@@ -6,12 +6,17 @@
 //! - `clip::service`    — Orchestrierung eines Fetch-Laufs
 //! - `clip::task`       — Tokio-Hintergrundtask (Gate: TB_CLIP_FETCHER_ENABLED=1)
 //!
+//! Sowie die Anfänge der vollen Posting-Pipeline (Port von `bot/social_media/`):
+//! - `settings` — Key/Value-Settings (`social_media_settings`, Consent +
+//!   Auto-Approve je Plattform).
+//!
 //! # Deaktiviert
-//! Der Task ist **standardmäßig deaktiviert** und wird nicht in `tb-bot` gestartet
-//! bis die Social-Media-Pipeline bereit ist. Aktivierung: Env-Var setzen +
-//! `ClipFetchTask::start_if_enabled()` aufrufen.
+//! Der Clip-Fetcher-Task ist **standardmäßig deaktiviert** und wird nicht in
+//! `tb-bot` gestartet bis die Social-Media-Pipeline bereit ist. Aktivierung:
+//! Env-Var setzen + `ClipFetchTask::start_if_enabled()` aufrufen.
 
 pub mod clip;
+pub mod settings;
 
 pub use clip::{
     repository::ClipRepository,
