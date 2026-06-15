@@ -7,8 +7,8 @@
 //! und limitiert. Jede Quelle ist einzeln fehlertolerant (fehlendes Schema →
 //! Quelle übersprungen), 1:1 zu Pythons try/except je Loader.
 //!
-//! **Quellen-Status:** promo + roadmap + legal portiert (dieser Commit);
-//! streamer_history + manual_plan + billing folgen als Teil 2/3.
+//! **Quellen-Status:** promo + roadmap + legal + streamer_history + manual_plan
+//! portiert; billing-Quellen folgen als Teil 3.
 //!
 //! CSRF irrelevant (GET); Admin über `AuthLevel::is_privileged`.
 
@@ -200,6 +200,175 @@ async fn legal_entries() -> Vec<Value> {
     out
 }
 
+/// `Value::Null` für leere Strings, sonst der String (Python `x or None`).
+fn opt(s: &str) -> Value {
+    if s.is_empty() {
+        Value::Null
+    } else {
+        json!(s)
+    }
+}
+
+/// `true` wenn der DB-Fehler auf fehlendes Schema deutet (Python
+/// `_is_missing_schema_error`) → Quelle wird übersprungen statt 500.
+fn is_missing_schema_error(e: &sqlx::Error) -> bool {
+    let s = e.to_string().to_lowercase();
+    ["does not exist", "no such table", "undefined table", "no such column", "undefined column"]
+        .iter()
+        .any(|m| s.contains(m))
+}
+
+/// Partner-Lifecycle-Events (Python `_load_streamer_history_entries`). Erzeugt je
+/// Zeile bis zu vier Einträge (added/restore, verify, archive, remove) anhand der
+/// gesetzten Zeitstempel. `prior_inactive` (chronologisch über ORDER BY befüllt)
+/// unterscheidet erstes Hinzufügen von Re-Aktivierung.
+async fn streamer_history_entries(pool: &PgPool) -> Result<Vec<Value>, sqlx::Error> {
+    type Row = (
+        Option<String>, // id::text
+        Option<String>, // twitch_user_id
+        Option<String>, // twitch_login
+        Option<String>, // added_by
+        Option<String>, // manual_verified_at
+        Option<String>, // partnered_at
+        Option<String>, // admin_archived_at
+        Option<String>, // departnered_at
+        Option<String>, // status
+        Option<String>, // technical_pause_reason
+    );
+    let rows: Vec<Row> = sqlx::query_as(
+        "SELECT p.id::text, p.twitch_user_id, p.twitch_login, p.added_by, p.manual_verified_at, \
+                p.partnered_at, p.admin_archived_at, p.departnered_at, p.status, p.technical_pause_reason \
+         FROM twitch_partners p \
+         ORDER BY COALESCE(p.partnered_at, p.departnered_at, p.admin_archived_at, p.manual_verified_at, '') ASC, p.id ASC",
+    )
+    .fetch_all(pool)
+    .await?;
+
+    let mut prior_inactive: BTreeSet<String> = BTreeSet::new();
+    let mut entries = Vec::new();
+    for (id, uid, login, added_by, manual_verified_at, partnered_at, admin_archived_at, departnered_at, status, pause_reason) in rows {
+        let row_id = id.unwrap_or_default().trim().to_string();
+        let twitch_user_id = uid.unwrap_or_default().trim().to_string();
+        let twitch_login = login.unwrap_or_default().trim().to_string();
+        let identity = if !twitch_user_id.is_empty() {
+            twitch_user_id.clone()
+        } else {
+            twitch_login.to_lowercase()
+        };
+        let added_by = added_by.map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
+        let status = status.unwrap_or_default().trim().to_lowercase();
+        let pause_reason = pause_reason.unwrap_or_default().trim().to_lowercase();
+        let target: Option<String> = if !twitch_login.is_empty() {
+            Some(twitch_login.clone())
+        } else if !twitch_user_id.is_empty() {
+            Some(twitch_user_id.clone())
+        } else {
+            None
+        };
+        let label = if !twitch_login.is_empty() { twitch_login.clone() } else { twitch_user_id.clone() };
+
+        if let Some(ts) = partnered_at.as_deref().filter(|s| !s.is_empty()) {
+            let is_restore = !identity.is_empty() && prior_inactive.contains(&identity);
+            let action = if is_restore { "restore" } else { "added" };
+            let description = if is_restore {
+                format!("Streamer {label} wurde wieder aktiviert.")
+            } else {
+                format!("Streamer {label} wurde hinzugefuegt.")
+            };
+            let metadata = json!({ "partnerId": row_id, "status": opt(&status), "twitchUserId": opt(&twitch_user_id) });
+            if let Some(e) = make_entry(format!("streamer_history:{row_id}:{action}"), "streamer_history", action, added_by.as_deref(), target.as_deref(), Some(ts), description, Some(metadata)) {
+                entries.push(e);
+            }
+        }
+        if let Some(ts) = manual_verified_at.as_deref().filter(|s| !s.is_empty()) {
+            let metadata = json!({ "partnerId": row_id, "twitchUserId": opt(&twitch_user_id) });
+            if let Some(e) = make_entry(format!("streamer_history:{row_id}:verify"), "streamer_history", "verify", None, target.as_deref(), Some(ts), format!("Streamer {label} wurde verifiziert."), Some(metadata)) {
+                entries.push(e);
+            }
+        }
+        if let Some(ts) = admin_archived_at.as_deref().filter(|s| !s.is_empty()) {
+            let metadata = json!({ "partnerId": row_id, "twitchUserId": opt(&twitch_user_id), "status": opt(&status) });
+            if let Some(e) = make_entry(format!("streamer_history:{row_id}:archive"), "streamer_history", "archive", None, target.as_deref(), Some(ts), format!("Streamer {label} wurde archiviert."), Some(metadata)) {
+                entries.push(e);
+            }
+        }
+        if let Some(ts) = departnered_at.as_deref().filter(|s| !s.is_empty()) {
+            if status == "departnered" {
+                let metadata = json!({ "partnerId": row_id, "twitchUserId": opt(&twitch_user_id) });
+                if let Some(e) = make_entry(format!("streamer_history:{row_id}:remove"), "streamer_history", "remove", None, target.as_deref(), Some(ts), format!("Streamer {label} wurde entfernt oder departnert."), Some(metadata)) {
+                    entries.push(e);
+                }
+            }
+        }
+
+        if !identity.is_empty() && (status != "active" || !pause_reason.is_empty()) {
+            prior_inactive.insert(identity);
+        }
+    }
+    Ok(entries)
+}
+
+/// Manuelle Plan-Overrides (Python `_load_manual_plan_entries`).
+async fn manual_plan_entries(pool: &PgPool) -> Result<Vec<Value>, sqlx::Error> {
+    type Row = (
+        Option<String>, // twitch_user_id
+        Option<String>, // twitch_login
+        Option<String>, // manual_plan_id
+        Option<String>, // manual_plan_expires_at
+        Option<String>, // manual_plan_notes
+        Option<String>, // manual_plan_updated_at
+    );
+    let rows: Vec<Row> = sqlx::query_as(
+        "SELECT twitch_user_id, twitch_login, manual_plan_id, manual_plan_expires_at, manual_plan_notes, manual_plan_updated_at \
+         FROM streamer_plans WHERE manual_plan_updated_at IS NOT NULL ORDER BY manual_plan_updated_at DESC",
+    )
+    .fetch_all(pool)
+    .await?;
+
+    let mut entries = Vec::new();
+    for (uid, login, plan_id, expires_at, notes, updated_at) in rows {
+        let twitch_user_id = uid.unwrap_or_default().trim().to_string();
+        let twitch_login = login.unwrap_or_default().trim().to_string();
+        let manual_plan_id = plan_id.unwrap_or_default().trim().to_string();
+        let notes = notes.unwrap_or_default().trim().to_string();
+        let updated_raw = updated_at.unwrap_or_default();
+        let label = if !twitch_login.is_empty() { twitch_login.clone() } else { twitch_user_id.clone() };
+        let target: Option<String> = if !twitch_login.is_empty() {
+            Some(twitch_login.clone())
+        } else if !twitch_user_id.is_empty() {
+            Some(twitch_user_id.clone())
+        } else {
+            None
+        };
+        let id_key = if !twitch_user_id.is_empty() { twitch_user_id.clone() } else { twitch_login.clone() };
+
+        let (action, description) = if !manual_plan_id.is_empty() {
+            ("plan_override", format!("Manueller Plan fuer {label} auf {manual_plan_id} gesetzt."))
+        } else {
+            ("plan_override_cleared", format!("Manueller Plan-Override fuer {label} entfernt."))
+        };
+        let metadata = json!({
+            "planId": opt(&manual_plan_id),
+            "expiresAt": coerce_iso(expires_at.as_deref()),
+            "notes": opt(&notes),
+            "twitchUserId": opt(&twitch_user_id),
+        });
+        if let Some(e) = make_entry(
+            format!("manual_plan:{id_key}:{updated_raw}"),
+            "manual_plan",
+            action,
+            None,
+            target.as_deref(),
+            Some(updated_raw.as_str()),
+            description,
+            Some(metadata),
+        ) {
+            entries.push(e);
+        }
+    }
+    Ok(entries)
+}
+
 // ── Aggregation ───────────────────────────────────────────────────────────────
 
 fn combine_and_filter(
@@ -311,6 +480,21 @@ pub async fn handler(
     let source_filters = normalize_source_filters(&sources);
 
     let mut entries: Vec<Value> = Vec::new();
+    // DB-Quellen: fehlendes Schema → Quelle überspringen, sonst 500 (Python try/except).
+    for result in [
+        streamer_history_entries(&pool).await,
+        manual_plan_entries(&pool).await,
+    ] {
+        match result {
+            Ok(es) => entries.extend(es),
+            Err(e) if is_missing_schema_error(&e) => {}
+            Err(e) => {
+                tracing::error!("audit-log DB-Quelle fehlgeschlagen: {e}");
+                return Err(ApiError::internal());
+            }
+        }
+    }
+    // promo (DB, tabellen-erzeugend) + Datei-Quellen.
     entries.extend(promo_entries(&pool).await);
     entries.extend(roadmap_entries().await);
     entries.extend(legal_entries().await);
@@ -321,6 +505,70 @@ pub async fn handler(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
+    use std::str::FromStr;
+
+    async fn make_pool(schema: &str) -> Option<PgPool> {
+        let dsn = std::env::var("TB_TEST_DATABASE_URL").ok()?;
+        let admin = PgPoolOptions::new().max_connections(1).connect(&dsn).await.unwrap();
+        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE")).execute(&admin).await.unwrap();
+        sqlx::query(&format!("CREATE SCHEMA {schema}")).execute(&admin).await.unwrap();
+        admin.close().await;
+        let opts = PgConnectOptions::from_str(&dsn).unwrap().options([("search_path", schema)]);
+        let pool = PgPoolOptions::new().max_connections(2).connect_with(opts).await.unwrap();
+        for ddl in [
+            "CREATE TABLE twitch_partners (id BIGSERIAL PRIMARY KEY, twitch_user_id TEXT, twitch_login TEXT, added_by TEXT, manual_verified_at TEXT, partnered_at TEXT, admin_archived_at TEXT, departnered_at TEXT, status TEXT, technical_pause_reason TEXT)",
+            "CREATE TABLE streamer_plans (twitch_login TEXT PRIMARY KEY, twitch_user_id TEXT, manual_plan_id TEXT, manual_plan_expires_at TEXT, manual_plan_notes TEXT, manual_plan_updated_at TEXT)",
+        ] {
+            sqlx::query(ddl).execute(&pool).await.unwrap();
+        }
+        Some(pool)
+    }
+
+    #[tokio::test]
+    async fn streamer_history_added_und_verify() {
+        let Some(pool) = make_pool("t_audit_sh").await else { return };
+        sqlx::query("INSERT INTO twitch_partners (twitch_user_id, twitch_login, added_by, partnered_at, manual_verified_at, status) VALUES ('100','nani','admin','2026-02-01T00:00:00Z','2026-02-02T00:00:00Z','active')")
+            .execute(&pool).await.unwrap();
+        let entries = streamer_history_entries(&pool).await.unwrap();
+        let actions: Vec<&str> = entries.iter().map(|e| e["action"].as_str().unwrap()).collect();
+        assert!(actions.contains(&"added") && actions.contains(&"verify"));
+        let added = entries.iter().find(|e| e["action"] == "added").unwrap();
+        assert_eq!(added["target"], "nani");
+        assert_eq!(added["actor"], "admin");
+        assert_eq!(added["metadata"]["twitchUserId"], "100");
+    }
+
+    #[tokio::test]
+    async fn streamer_history_restore_und_remove() {
+        let Some(pool) = make_pool("t_audit_restore").await else { return };
+        // Gleiche Identität: erst departnered (älter) → remove, dann re-partnered (neuer) → restore.
+        sqlx::query("INSERT INTO twitch_partners (twitch_user_id, twitch_login, departnered_at, status) VALUES ('200','foo','2026-01-01T00:00:00Z','departnered')")
+            .execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO twitch_partners (twitch_user_id, twitch_login, partnered_at, status) VALUES ('200','foo','2026-02-01T00:00:00Z','active')")
+            .execute(&pool).await.unwrap();
+        let entries = streamer_history_entries(&pool).await.unwrap();
+        let actions: Vec<&str> = entries.iter().map(|e| e["action"].as_str().unwrap()).collect();
+        assert!(actions.contains(&"remove"));
+        assert!(actions.contains(&"restore"), "prior_inactive → restore statt added");
+        assert!(!actions.contains(&"added"));
+    }
+
+    #[tokio::test]
+    async fn manual_plan_set_und_cleared() {
+        let Some(pool) = make_pool("t_audit_mp").await else { return };
+        sqlx::query("INSERT INTO streamer_plans (twitch_login, twitch_user_id, manual_plan_id, manual_plan_updated_at, manual_plan_notes) VALUES ('nani','100','raid_extended','2026-03-01T00:00:00Z','VIP')")
+            .execute(&pool).await.unwrap();
+        // Ohne manual_plan_updated_at → ignoriert (WHERE NOT NULL).
+        sqlx::query("INSERT INTO streamer_plans (twitch_login, twitch_user_id, manual_plan_id) VALUES ('bar','101','x')")
+            .execute(&pool).await.unwrap();
+        let entries = manual_plan_entries(&pool).await.unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0]["action"], "plan_override");
+        assert_eq!(entries[0]["metadata"]["planId"], "raid_extended");
+        assert_eq!(entries[0]["metadata"]["notes"], "VIP");
+        assert_eq!(entries[0]["target"], "nani");
+    }
 
     fn entry(ts: &str, source: &str) -> Value {
         make_entry(
