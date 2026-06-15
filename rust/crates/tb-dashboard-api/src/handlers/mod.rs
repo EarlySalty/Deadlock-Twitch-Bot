@@ -43,5 +43,6 @@ pub mod social_media;
 pub mod spa;
 pub mod stream_report;
 pub mod tag_analysis;
+pub mod watch_time;
 pub mod title_performance;
 pub mod system;

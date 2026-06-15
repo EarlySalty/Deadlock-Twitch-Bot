@@ -19,6 +19,7 @@ pub mod overview;
 pub mod partner_access;
 pub mod plan;
 pub mod tag_analysis;
+pub mod watch_time;
 pub mod post_stream;
 pub mod promo_mode;
 pub mod raid_blacklist;
