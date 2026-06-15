@@ -11,6 +11,7 @@
 //! Aufbau bottom-up in Teil-Slices; Slice 1 (hier): Kern-[`types`] + die reinen
 //! Pipeline-Helfer in [`pipeline`] (Pre-Filter + Kostenrechnung).
 
+pub mod audio_capture;
 pub mod background;
 pub mod channel_background;
 pub mod conversation;
