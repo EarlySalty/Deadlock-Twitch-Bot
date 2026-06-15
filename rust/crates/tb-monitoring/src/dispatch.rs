@@ -10,6 +10,7 @@
 //! - `channel.raid` / `channel.moderate` → [`EventSubHooks`] (Raid-Subsystem,
 //!   Phase 6 — Cutover-Kopplung, siehe Plan-Doc).
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use chrono::{DateTime, TimeZone, Utc};
@@ -24,6 +25,69 @@ pub const MESSAGE_DEDUP_TTL_SECONDS: f64 = 600.0;
 
 /// Sub-Typen, die über die durable Inbox verarbeitet werden.
 pub const CORE_DELIVERY_TYPES: [&str; 3] = ["stream.online", "stream.offline", "channel.update"];
+
+/// EventSub-Typen mit registriertem Handler — das Rust-Strukturäquivalent zu
+/// Pythons `set_callback`-Registry (`_has_callback`). Genau diese Typen routet
+/// [`EventSubDispatcher::route`] nicht in den „unbekannt"-Zweig; jeder andere
+/// Typ würde still verworfen. Quelle: Pythons `bridged_eventsub_types`
+/// (dashboard_service/app.py) + die Webhook-`set_callback`-Registrierungen
+/// (eventsub_core_callbacks/eventsub_mixin). `channel.moderate` ist ergänzt,
+/// weil die Rust-`route` ihn behandelt (Raid-Blacklist-Guard) — Python hat ihn
+/// via `set_callback` ebenfalls registriert.
+pub const REGISTERED_SUB_TYPES: [&str; 25] = [
+    // Core (Inbox)
+    "stream.online",
+    "stream.offline",
+    "channel.update",
+    // Hook-geroutet
+    "channel.raid",
+    "channel.moderate",
+    "channel.chat.message",
+    "channel.chat.notification",
+    // Telemetrie
+    "channel.follow",
+    "channel.subscribe",
+    "channel.subscription.gift",
+    "channel.subscription.message",
+    "channel.subscription.end",
+    "channel.ad_break.begin",
+    "channel.cheer",
+    "channel.bits.use",
+    "channel.hype_train.begin",
+    "channel.hype_train.progress",
+    "channel.hype_train.end",
+    "channel.ban",
+    "channel.unban",
+    "channel.shoutout.create",
+    "channel.shoutout.receive",
+    "channel.chat.user_first_message",
+    "channel.channel_points_automatic_reward_redemption.add",
+    "channel.channel_points_custom_reward_redemption.add",
+];
+
+/// `true`, wenn für `sub_type` ein Handler existiert (normalisiert: getrimmt +
+/// kleingeschrieben, wie [`extract_context`]). Strukturäquivalent zu Pythons
+/// `_has_callback` — der Pre-Dispatch-Readiness-Check (65.3) lehnt Typen ohne
+/// Handler ab, statt sie still in den „unbekannt"-Zweig laufen zu lassen.
+pub fn has_registered_handler(sub_type: &str) -> bool {
+    let normalized = sub_type.trim().to_lowercase();
+    !normalized.is_empty() && REGISTERED_SUB_TYPES.contains(&normalized.as_str())
+}
+
+/// Pre-Dispatch-Readiness-Gate (Python `_assert_dispatch_ready`): warum eine
+/// Notification VOR dem Dispatch abgelehnt wurde. Beide Varianten führen in
+/// Python wie hier zu HTTP 503 (Twitch retryt).
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum DispatchNotReady {
+    /// Notification-Dispatch ist (noch/aktuell) deaktiviert — Python
+    /// `_notification_dispatch_active == False`.
+    #[error("eventsub notification dispatch inactive")]
+    DispatchInactive,
+    /// Kein Handler für diesen Sub-Typ registriert — Python
+    /// `EventSubCallbackNotRegistered`.
+    #[error("eventsub callback not registered: {0}")]
+    CallbackNotRegistered(String),
+}
 
 /// Antwort des Dispatch-Endpoints (Bridge wertet `ok` aus).
 #[derive(Debug, Clone, serde::Serialize)]
@@ -216,6 +280,12 @@ pub struct EventSubDispatcher {
     telemetry: TelemetryStore,
     hooks: Arc<dyn EventSubHooks>,
     clock: ClockFn,
+    /// Notification-Dispatch-Schalter (Python `_notification_dispatch_active`).
+    /// Anders als Python (Default `False`, an im Bridge-Setup) startet der
+    /// native Receiver aktiv: er hat keinen separaten Bridge-Aktivierungs-
+    /// Schritt — der lauffähige An-Zustand ist „aktiv". Der Aus-Pfad bleibt für
+    /// geordnetes Pausieren/Herunterfahren erhalten.
+    dispatch_active: AtomicBool,
 }
 
 impl EventSubDispatcher {
@@ -232,7 +302,37 @@ impl EventSubDispatcher {
             telemetry,
             hooks,
             clock,
+            dispatch_active: AtomicBool::new(true),
         }
+    }
+
+    /// Schaltet die Notification-Annahme um (Python
+    /// `activate_/deactivate_notification_dispatch`). `false` → das
+    /// Readiness-Gate lehnt anschließend alle Notifications mit 503 ab.
+    pub fn set_dispatch_active(&self, active: bool) {
+        self.dispatch_active.store(active, Ordering::Release);
+    }
+
+    /// `true`, solange Notifications angenommen werden.
+    pub fn is_dispatch_active(&self) -> bool {
+        self.dispatch_active.load(Ordering::Acquire)
+    }
+
+    /// Pre-Dispatch-Readiness-Gate (Python `_assert_dispatch_ready`, 65.3):
+    /// prüft VOR jedem Dispatch (a) ob die Annahme aktiv ist und (b) ob für den
+    /// Sub-Typ ein Handler registriert ist. Schlägt das fehl, lehnt der Receiver
+    /// mit HTTP 503 ab (Twitch retryt) — statt die Notification still in den
+    /// „unbekannt"-Zweig laufen zu lassen.
+    pub fn ensure_dispatch_ready(&self, sub_type: &str) -> Result<(), DispatchNotReady> {
+        if !self.is_dispatch_active() {
+            return Err(DispatchNotReady::DispatchInactive);
+        }
+        if !has_registered_handler(sub_type) {
+            return Err(DispatchNotReady::CallbackNotRegistered(
+                sub_type.trim().to_string(),
+            ));
+        }
+        Ok(())
     }
 
     /// Verarbeitet einen Bridge-Dispatch. `Err` = Annahme fehlgeschlagen
@@ -493,7 +593,36 @@ fn epoch_to_datetime(epoch: f64) -> DateTime<Utc> {
 
 #[cfg(test)]
 mod tests {
-    use super::{classify_chat_notification, extract_context, ChatNotificationKind};
+    use super::{
+        classify_chat_notification, extract_context, has_registered_handler, ChatNotificationKind,
+        REGISTERED_SUB_TYPES,
+    };
+
+    #[test]
+    fn has_registered_handler_kennt_alle_gerouteten_typen() {
+        // Jeder registrierte Typ wird erkannt (Strukturäquivalent _has_callback).
+        for sub_type in REGISTERED_SUB_TYPES {
+            assert!(has_registered_handler(sub_type), "{sub_type} fehlt im Gate");
+        }
+        // Normalisierung: Trim + Lowercase (wie extract_context).
+        assert!(has_registered_handler("  Stream.Online  "));
+        assert!(has_registered_handler("CHANNEL.RAID"));
+        // Unbekannt / leer → kein Handler.
+        assert!(!has_registered_handler("channel.unbekannt"));
+        assert!(!has_registered_handler(""));
+        assert!(!has_registered_handler("   "));
+    }
+
+    #[test]
+    fn registry_ist_duplikatfrei() {
+        // Eine doppelte Listung würde das Gate nicht brechen, wäre aber ein
+        // Pflege-Smell — hier eingelockt.
+        let mut sorted = REGISTERED_SUB_TYPES.to_vec();
+        let len = sorted.len();
+        sorted.sort_unstable();
+        sorted.dedup();
+        assert_eq!(sorted.len(), len, "REGISTERED_SUB_TYPES enthält Duplikate");
+    }
 
     #[test]
     fn classify_chat_notification_demuxt_nach_notice_type() {

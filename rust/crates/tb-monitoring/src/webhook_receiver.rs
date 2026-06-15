@@ -202,6 +202,19 @@ async fn handle_callback(
                 .filter(|t| !t.is_empty())
                 .unwrap_or(header_sub_type.as_str())
                 .to_string();
+            // Readiness-Gate VOR dem Dispatch (Python `_assert_dispatch_ready`,
+            // 65.3): Annahme aktiv? Handler für diesen Sub-Typ registriert?
+            // Beide Fehler → 503 (Twitch retryt), statt die Notification still
+            // in den „unbekannt"-Zweig laufen zu lassen.
+            if let Err(reason) = receiver.dispatcher.ensure_dispatch_ready(&sub_type) {
+                tracing::warn!(
+                    sub_type,
+                    message_id,
+                    %reason,
+                    "eventsub_receiver: Notification vor Dispatch abgelehnt (Readiness-Gate)"
+                );
+                return StatusCode::SERVICE_UNAVAILABLE.into_response();
+            }
             match receiver
                 .dispatcher
                 .dispatch(&sub_type, Some(message_id), &parsed)
