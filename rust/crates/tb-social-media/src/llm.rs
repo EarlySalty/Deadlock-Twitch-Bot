@@ -43,14 +43,14 @@ pub struct LlmRequest {
 }
 
 /// Plattform-spezifische LLM-Antwort.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct LlmResponse {
     pub youtube: PlatformEnrichment,
     pub tiktok: PlatformEnrichment,
     pub instagram: PlatformEnrichment,
     pub provider: String,
     pub model: String,
-    pub cost_usd_estimate: Option<i64>,
+    pub cost_usd_estimate: Option<f64>,
 }
 
 /// Freitext-Antwort (für generate_text-Provider).
@@ -260,7 +260,7 @@ fn find_json_object(text: &str) -> Result<String, LlmError> {
 }
 
 /// Parst die Roh-LLM-Ausgabe in eine [`LlmResponse`] (Python `parse_llm_payload`).
-pub fn parse_llm_payload(raw_text: &str, provider: &str, model: &str, cost: Option<i64>) -> Result<LlmResponse, LlmError> {
+pub fn parse_llm_payload(raw_text: &str, provider: &str, model: &str, cost: Option<f64>) -> Result<LlmResponse, LlmError> {
     let json_text = find_json_object(raw_text)?;
     let payload: Value = serde_json::from_str(&json_text)
         .map_err(|e| LlmError::ProviderError(format!("invalid JSON from LLM: {e}")))?;

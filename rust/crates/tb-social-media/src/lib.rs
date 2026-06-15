@@ -19,6 +19,7 @@
 //! - `seed_vocab`  — Initial-Vokabular (Slang + Deadlock-API).
 //! - `enrichment`  — Clip-Enrichment-Persistenz (`social_media_clip_enrichment`).
 //! - `llm`         — LLM-Typen + Prompt-Bau + Output-Parsing.
+//! - `llm_dispatch` — LLM-Provider (Ollama) + consent-gated Dispatcher.
 //!
 //! # Deaktiviert
 //! Der Clip-Fetcher-Task ist **standardmäßig deaktiviert** und wird nicht in
@@ -30,6 +31,7 @@ pub mod correction;
 pub mod credentials;
 pub mod enrichment;
 pub mod llm;
+pub mod llm_dispatch;
 pub mod oauth;
 pub mod refresh_worker;
 pub mod rendering;
