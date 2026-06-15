@@ -19,7 +19,7 @@ use crate::clip_queue::{get_upload_queue, update_upload_status, UploadQueueItem}
 use crate::credentials::{CredentialManager, SocialMediaCredentials};
 use crate::uploaders::instagram::InstagramUploader;
 use crate::uploaders::tiktok::TikTokUploader;
-use crate::uploaders::youtube::YouTubeUploader;
+use crate::uploaders::youtube::{YouTubeRefreshCreds, YouTubeUploader, GOOGLE_TOKEN_URL};
 use crate::uploaders::{PlatformUploader, UploadError};
 use crate::video_processor::{VideoProcessor, VideoProcessorError};
 
@@ -57,7 +57,7 @@ fn build_uploader(platform: &str, creds: &SocialMediaCredentials) -> Option<Arc<
             if !has_client_id || creds.access_token.is_empty() {
                 return None;
             }
-            Some(Arc::new(YouTubeUploader::new(creds.access_token.clone())))
+            Some(Arc::new(youtube_uploader(creds)))
         }
         "instagram" => {
             let user_id = creds.platform_user_id.as_deref().filter(|s| !s.is_empty())?;
@@ -67,6 +67,27 @@ fn build_uploader(platform: &str, creds: &SocialMediaCredentials) -> Option<Arc<
             Some(Arc::new(InstagramUploader::new(creds.access_token.clone(), user_id.to_string())))
         }
         _ => None,
+    }
+}
+
+/// Baut den YouTube-Uploader und hängt — falls die Credentials Refresh-Token +
+/// Client-ID + Client-Secret tragen — die inline 401-Selbstheilung an
+/// (uploaders-1). Ohne vollständige Refresh-Daten bleibt es beim reinen
+/// Access-Token (Refresh dann nur proaktiv über den refresh_worker).
+pub(crate) fn youtube_uploader(creds: &SocialMediaCredentials) -> YouTubeUploader {
+    let uploader = YouTubeUploader::new(creds.access_token.clone());
+    match (
+        creds.refresh_token.as_deref().filter(|s| !s.is_empty()),
+        creds.client_id.as_deref().filter(|s| !s.is_empty()),
+        creds.client_secret.as_deref().filter(|s| !s.is_empty()),
+    ) {
+        (Some(refresh_token), Some(client_id), Some(client_secret)) => uploader.with_refresh(YouTubeRefreshCreds {
+            refresh_token: refresh_token.to_string(),
+            client_id: client_id.to_string(),
+            client_secret: client_secret.to_string(),
+            token_url: GOOGLE_TOKEN_URL.to_string(),
+        }),
+        _ => uploader,
     }
 }
 

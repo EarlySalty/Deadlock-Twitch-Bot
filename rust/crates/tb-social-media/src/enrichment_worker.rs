@@ -1,10 +1,10 @@
 //! Enrichment-Worker (Port von `bot/social_media/enrichment_worker.py`).
 //!
-//! Reichert pending Clips im Hintergrund per Transkription + Vokabel-Korrektur +
-//! LLM an. Holt batchweise die offenen Clips und schickt sie durch die
-//! [`ClipEnrichmentPipeline`]. Transcriber + LLM werden injiziert — die echte
-//! OpenAI-Whisper-Transcriber-Impl kommt erst beim Cutover-Wiring; ohne
-//! Transcriber wird die Transkription übersprungen (1:1 wie ein fehlender Key).
+//! Reichert pending Clips im Hintergrund per Vokabel-Korrektur + LLM an. Holt
+//! batchweise die offenen Clips und schickt sie durch die
+//! [`ClipEnrichmentPipeline`]. Der Transcriber bleibt injizierbar, wird aber per
+//! Grillme-Entscheidung (Block 15) NICHT gesetzt — Transkription ist deaktiviert
+//! (kein OpenAI), die Stage wird übersprungen. LLM wird injiziert.
 //! An/Aus 1:1: dauerhaft an, Intervall 90s, Batch 3.
 
 use std::sync::Arc;
@@ -41,7 +41,9 @@ impl EnrichmentWorker {
         }
     }
 
-    /// Setzt den (echten) Transcriber (Cutover-Wiring).
+    /// Setzt einen Transcriber. Aktuell ungenutzt (Transkription per
+    /// Grillme-Entscheidung deaktiviert), bleibt als Infra-Anker für einen
+    /// späteren nicht-OpenAI-Transkriptionsweg.
     pub fn with_transcriber(mut self, transcriber: Arc<dyn Transcriber>) -> Self {
         self.transcriber = Some(transcriber);
         self
