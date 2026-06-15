@@ -20,6 +20,29 @@ fn round1(v: f64) -> f64 {
     (v * 10.0).round() / 10.0
 }
 
+fn round3(v: f64) -> f64 {
+    (v * 1000.0).round() / 1000.0
+}
+
+/// Pearson-Korrelation (Python `_pearson`, Populations-Std mit `/n`).
+/// Liefert 0.0 bei < 3 Werten oder konstanter Reihe (Std = 0).
+fn pearson(x: &[f64], y: &[f64]) -> f64 {
+    let n = x.len();
+    if n < 3 {
+        return 0.0;
+    }
+    let nf = n as f64;
+    let mx = x.iter().sum::<f64>() / nf;
+    let my = y.iter().sum::<f64>() / nf;
+    let sx = (x.iter().map(|xi| (xi - mx).powi(2)).sum::<f64>() / nf).sqrt();
+    let sy = (y.iter().map(|yi| (yi - my).powi(2)).sum::<f64>() / nf).sqrt();
+    if sx == 0.0 || sy == 0.0 {
+        return 0.0;
+    }
+    let cov = x.iter().zip(y.iter()).map(|(xi, yi)| (xi - mx) * (yi - my)).sum::<f64>() / nf;
+    cov / (sx * sy)
+}
+
 /// p85-Schwelle (Python `sorted[max(0, int(len*0.85)-1)]`).
 fn p85_threshold(sorted: &[f64]) -> f64 {
     let idx = ((sorted.len() as f64 * 0.85) as usize).saturating_sub(1);
@@ -412,6 +435,117 @@ pub async fn schedule_optimizer(
     }))
 }
 
+/// Dauer-Buckets (Python `buckets_def`): Label + [lo, hi) Sekunden.
+const DURATION_BUCKETS: &[(&str, i32, i32)] = &[
+    ("< 1h", 0, 3600),
+    ("1-2h", 3600, 7200),
+    ("2-3h", 7200, 10800),
+    ("3-4h", 10800, 14400),
+    ("4-5h", 14400, 18000),
+    ("5h+", 18000, 999999),
+];
+
+/// Dauer-Analyse (Python `_duration_analysis`): Stream-Performance je
+/// Längen-Bucket, optimale Länge (höchste Ø-Viewer bei ≥ 2 Streams) und
+/// Korrelation Dauer↔Viewer.
+pub async fn duration_analysis(
+    pool: &PgPool,
+    streamer: &str,
+    since: DateTime<Utc>,
+) -> Result<Value, sqlx::Error> {
+    let rows: Vec<(i32, Option<f64>, Option<i32>, Option<f64>)> = sqlx::query_as(
+        "SELECT s.duration_seconds, s.avg_viewers::float8, s.unique_chatters, s.retention_5m::float8 \
+           FROM twitch_stream_sessions s \
+          WHERE s.streamer_login = $1 AND s.started_at >= $2 \
+            AND s.duration_seconds > 300",
+    )
+    .bind(streamer)
+    .bind(since)
+    .fetch_all(pool)
+    .await?;
+
+    if rows.is_empty() {
+        return Ok(json!({
+            "buckets": [],
+            "optimalLabel": "",
+            "currentAvgHours": 0,
+            "correlation": 0,
+        }));
+    }
+
+    let mut buckets: Vec<Value> = Vec::new();
+    // (label, streamCount, gerundete avgViewers) — Basis für die Optimal-Wahl.
+    let mut meta: Vec<(&str, usize, f64)> = Vec::new();
+    for (label, lo, hi) in DURATION_BUCKETS {
+        let subset: Vec<&(i32, Option<f64>, Option<i32>, Option<f64>)> =
+            rows.iter().filter(|r| *lo <= r.0 && r.0 < *hi).collect();
+        if subset.is_empty() {
+            buckets.push(json!({
+                "label": label,
+                "streamCount": 0,
+                "avgViewers": 0,
+                "avgChatters": 0,
+                "avgRetention5m": 0,
+                "efficiencyRatio": 0,
+            }));
+            meta.push((label, 0, 0.0));
+            continue;
+        }
+        let len = subset.len() as f64;
+        let avg_v = subset.iter().map(|r| r.1.unwrap_or(0.0)).sum::<f64>() / len;
+        let avg_c = subset.iter().map(|r| r.2.unwrap_or(0) as f64).sum::<f64>() / len;
+        let ret_vals: Vec<f64> = subset.iter().filter_map(|r| r.3).collect();
+        let avg_ret = if !ret_vals.is_empty() {
+            ret_vals.iter().sum::<f64>() / ret_vals.len() as f64
+        } else {
+            0.0
+        };
+        let avg_dur = subset.iter().map(|r| r.0 as f64).sum::<f64>() / len;
+        // 1:1 Pythons Literal-Ausdruck (avg_dur kürzt sich raus, fp-identisch).
+        let eff = if avg_dur > 0.0 {
+            (avg_v * avg_dur / 3600.0) / (avg_dur / 3600.0)
+        } else {
+            0.0
+        };
+        let av_rounded = round1(avg_v);
+        buckets.push(json!({
+            "label": label,
+            "streamCount": subset.len(),
+            "avgViewers": av_rounded,
+            "avgChatters": round1(avg_c),
+            "avgRetention5m": round1(avg_ret),
+            "efficiencyRatio": round1(eff),
+        }));
+        meta.push((label, subset.len(), av_rounded));
+    }
+
+    // Optimaler Bucket: höchste (gerundete) avgViewers bei ≥ 2 Streams.
+    // Python `max(..., key=...)` nimmt das ERSTE Maximum → nur bei striktem
+    // Größer ersetzen, Bucket-Reihenfolge bleibt erhalten.
+    let mut optimal = "";
+    let mut best = f64::NEG_INFINITY;
+    for (label, count, av) in &meta {
+        if *count >= 2 && *av > best {
+            best = *av;
+            optimal = label;
+        }
+    }
+
+    let total_dur: i64 = rows.iter().map(|r| r.0 as i64).sum();
+    let current_avg = total_dur as f64 / rows.len() as f64 / 3600.0;
+
+    let durations: Vec<f64> = rows.iter().map(|r| r.0 as f64).collect();
+    let viewers: Vec<f64> = rows.iter().map(|r| r.1.unwrap_or(0.0)).collect();
+    let correlation = pearson(&durations, &viewers);
+
+    Ok(json!({
+        "buckets": buckets,
+        "optimalLabel": optimal,
+        "currentAvgHours": round1(current_avg),
+        "correlation": round3(correlation),
+    }))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -426,7 +560,7 @@ mod tests {
         admin.close().await;
         let opts = PgConnectOptions::from_str(&dsn).unwrap().options([("search_path", schema)]);
         let pool = PgPoolOptions::new().max_connections(2).connect_with(opts).await.unwrap();
-        sqlx::query("CREATE TABLE twitch_stream_sessions (id BIGSERIAL PRIMARY KEY, streamer_login TEXT, started_at TIMESTAMPTZ, duration_seconds INTEGER, avg_viewers REAL, follower_delta INTEGER, stream_title TEXT, peak_viewers INTEGER, unique_chatters INTEGER)")
+        sqlx::query("CREATE TABLE twitch_stream_sessions (id BIGSERIAL PRIMARY KEY, streamer_login TEXT, started_at TIMESTAMPTZ, duration_seconds INTEGER, avg_viewers REAL, follower_delta INTEGER, stream_title TEXT, peak_viewers INTEGER, unique_chatters INTEGER, retention_5m REAL)")
             .execute(&pool).await.unwrap();
         Some(pool)
     }
@@ -568,5 +702,53 @@ mod tests {
         // Eigener Slot: Stunde 14, 1 Stream.
         assert_eq!(v["yourCurrentSlots"][0]["hour"], 14);
         assert_eq!(v["yourCurrentSlots"][0]["count"], 1);
+    }
+
+    #[test]
+    fn pearson_perfekt_und_zu_klein() {
+        // Perfekt positiv korreliert → 1.0.
+        let r = pearson(&[1.0, 2.0, 3.0, 4.0], &[2.0, 4.0, 6.0, 8.0]);
+        assert!((r - 1.0).abs() < 1e-9, "r = {r}");
+        // < 3 Werte → 0.0.
+        assert_eq!(pearson(&[1.0, 2.0], &[1.0, 2.0]), 0.0);
+        // Konstante Reihe (Std 0) → 0.0.
+        assert_eq!(pearson(&[5.0, 5.0, 5.0], &[1.0, 2.0, 3.0]), 0.0);
+    }
+
+    #[tokio::test]
+    async fn duration_analysis_berechnet() {
+        let Some(pool) = make_pool("t_coach_dur").await else { return };
+        // 3 Streams im "1-2h"-Bucket (5400s): avg_v 40/50/60→50, chatters→12,
+        // retention 80/NULL/90→85. Konstante Dauer → Korrelation 0.
+        sqlx::query(
+            "INSERT INTO twitch_stream_sessions (streamer_login, started_at, duration_seconds, avg_viewers, unique_chatters, retention_5m) VALUES \
+            ('nani', NOW()-INTERVAL '1 day', 5400, 40, 10, 80), \
+            ('nani', NOW()-INTERVAL '1 day', 5400, 50, 12, NULL), \
+            ('nani', NOW()-INTERVAL '1 day', 5400, 60, 14, 90)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let v = duration_analysis(&pool, "nani", Utc::now() - chrono::Duration::days(30))
+            .await
+            .unwrap();
+
+        let bucket = v["buckets"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|b| b["label"] == "1-2h")
+            .unwrap();
+        assert_eq!(bucket["streamCount"], 3);
+        assert_eq!(bucket["avgViewers"], 50.0);
+        assert_eq!(bucket["avgChatters"], 12.0);
+        assert_eq!(bucket["avgRetention5m"], 85.0); // NULL ignoriert
+        assert_eq!(bucket["efficiencyRatio"], 50.0);
+
+        assert_eq!(v["optimalLabel"], "1-2h");
+        assert_eq!(v["currentAvgHours"], 1.5);
+        // Konstante Dauer → sx=0 → Korrelation 0.
+        assert_eq!(v["correlation"], 0.0);
     }
 }
