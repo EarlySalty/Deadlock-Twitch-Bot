@@ -22,7 +22,10 @@ use serde_json::{json, Value};
 use sqlx::PgPool;
 use tb_social_media::clip_analytics::get_analytics_summary;
 use tb_social_media::clip_manager::get_clips_for_dashboard;
-use tb_social_media::clip_templates::{apply_template_to_clip, create_streamer_template, get_last_hashtags};
+use tb_social_media::clip_templates::{
+    apply_template_to_clip, create_streamer_template, get_global_templates, get_last_hashtags, get_streamer_templates,
+    GlobalTemplate, StreamerTemplate,
+};
 use tb_social_media::rendering::{render_dashboard, render_privacy, render_terms};
 
 use crate::auth::level::DashboardAuthLevel;
@@ -220,6 +223,63 @@ async fn streamer_template_owned(pool: &PgPool, template_id: i32, streamer: &str
     .ok()
     .flatten()
     .is_some()
+}
+
+/// `?category=` für die globalen Templates.
+#[derive(Debug, Deserialize)]
+pub struct CategoryQuery {
+    pub category: Option<String>,
+}
+
+/// Serialisiert ein globales Template wie Pythons `dict(row)` (hashtags als
+/// Liste, DB-Spaltennamen).
+fn global_template_json(t: &GlobalTemplate) -> Value {
+    json!({
+        "id": t.id,
+        "template_name": t.template_name,
+        "description_template": t.description_template,
+        "hashtags": t.hashtags,
+        "category": t.category,
+        "usage_count": t.usage_count,
+        "created_at": t.created_at,
+        "created_by": t.created_by,
+    })
+}
+
+/// Serialisiert ein Streamer-Template wie Python; `is_default` bleibt **int
+/// (0/1)** wie die DB-Spalte (Python konvertiert NICHT zu bool).
+fn streamer_template_json(t: &StreamerTemplate) -> Value {
+    json!({
+        "id": t.id,
+        "streamer_login": t.streamer_login,
+        "template_name": t.template_name,
+        "description_template": t.description_template,
+        "hashtags": t.hashtags,
+        "is_default": i32::from(t.is_default),
+        "created_at": t.created_at,
+        "updated_at": t.updated_at,
+    })
+}
+
+/// `GET /social-media/api/templates/global` — globale Templates (optional nach Kategorie).
+pub async fn templates_global_handler(auth: DashboardAuthLevel, State(pool): State<PgPool>, Query(q): Query<CategoryQuery>) -> Response {
+    if let Err(e) = require_auth(&auth) {
+        return e;
+    }
+    let templates = get_global_templates(&pool, q.category.as_deref()).await;
+    let list: Vec<Value> = templates.iter().map(global_template_json).collect();
+    Json(json!({ "templates": list })).into_response()
+}
+
+/// `GET /social-media/api/templates/streamer` — Templates des (scope-)Streamers.
+pub async fn templates_streamer_handler(auth: DashboardAuthLevel, State(pool): State<PgPool>, Query(q): Query<StreamerQuery>) -> Response {
+    let scope = match resolve_streamer_scope(&auth, q.streamer.as_deref(), false) {
+        Ok(s) => s,
+        Err(e) => return e,
+    };
+    let templates = get_streamer_templates(&pool, scope.as_deref().unwrap_or("")).await;
+    let list: Vec<Value> = templates.iter().map(streamer_template_json).collect();
+    Json(json!({ "templates": list })).into_response()
 }
 
 /// POST-Body von `…/templates/streamer`.
@@ -495,5 +555,37 @@ mod tests {
         )
         .await;
         assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn templates_get_handler_shapes() {
+        let Some(pool) = make_pool("t_dash_sm_tpl_get").await else { return };
+        // Globale Templates (eines mit Kategorie).
+        sqlx::query("INSERT INTO clip_templates_global (template_name, description_template, hashtags, category, usage_count) VALUES ('G1', 'd', '[\"a\",\"b\"]', 'gaming', 5), ('G2', 'd', '[]', NULL, 1)").execute(&pool).await.unwrap();
+        // Streamer-Templates für nani (eines default).
+        sqlx::query("INSERT INTO clip_templates_streamer (streamer_login, template_name, description_template, hashtags, is_default) VALUES ('nani', 'S1', 'd', '[\"x\"]', 1), ('nani', 'S2', 'd', '[]', 0)").execute(&pool).await.unwrap();
+
+        // global: alle 2, hashtags als Array.
+        let resp = templates_global_handler(DashboardAuthLevel::Admin, State(pool.clone()), Query(CategoryQuery { category: None })).await;
+        let v = body_json(resp).await;
+        assert_eq!(v["templates"].as_array().unwrap().len(), 2);
+        let g1 = &v["templates"][0]; // usage_count DESC → G1 (5) zuerst
+        assert_eq!(g1["template_name"], "G1");
+        assert_eq!(g1["hashtags"], json!(["a", "b"]));
+        // Kategorie-Filter.
+        let resp = templates_global_handler(DashboardAuthLevel::Admin, State(pool.clone()), Query(CategoryQuery { category: Some("gaming".into()) })).await;
+        assert_eq!(body_json(resp).await["templates"].as_array().unwrap().len(), 1);
+
+        // streamer: Partner nani sieht 2, is_default als int (1/0), default zuerst.
+        let resp = templates_streamer_handler(partner("nani"), State(pool.clone()), Query(StreamerQuery { streamer: None })).await;
+        let v = body_json(resp).await;
+        assert_eq!(v["templates"].as_array().unwrap().len(), 2);
+        assert_eq!(v["templates"][0]["template_name"], "S1"); // is_default DESC
+        assert_eq!(v["templates"][0]["is_default"], 1); // int, nicht true
+        assert_eq!(v["templates"][1]["is_default"], 0);
+
+        // None-Auth → 401.
+        let resp = templates_global_handler(DashboardAuthLevel::None, State(pool.clone()), Query(CategoryQuery { category: None })).await;
+        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
     }
 }
