@@ -8,6 +8,24 @@ use chrono::{DateTime, Utc};
 use serde::Serialize;
 use sqlx::PgPool;
 
+/// Status-Konstante für departnerte Partner (Python `PARTNER_STATUS_DEPARTNERED`).
+const STATUS_DEPARTNERED: &str = "departnered";
+
+/// ISO-8601-Zeitstempel exakt wie Pythons `_now_iso()` (`datetime.now(UTC).isoformat()`):
+/// `+00:00`-Offset, Mikrosekunden nur wenn ungleich Null. `to_rfc3339()` würde
+/// abweichen (Nanosekunden-Suffix), deshalb das explizite Format — die
+/// Zielspalten in `twitch_partners` sind in Prod `TEXT` (Python schreibt
+/// ISO-Strings), kein `NOW()`.
+fn now_iso() -> String {
+    let dt = Utc::now();
+    let micros = dt.timestamp_subsec_micros();
+    if micros == 0 {
+        dt.format("%Y-%m-%dT%H:%M:%S+00:00").to_string()
+    } else {
+        format!("{}.{:06}+00:00", dt.format("%Y-%m-%dT%H:%M:%S"), micros)
+    }
+}
+
 // ── GET /streamers ────────────────────────────────────────────────────────────
 
 /// Eine Zeile der Admin-Streamer-Liste — Feldnamen sind der JSON-Vertrag
@@ -276,10 +294,9 @@ pub enum VerifyStreamerResult {
     Verified,
     /// Kein aktiver Partner-Eintrag — Python: "<login> ist nicht gespeichert".
     NotAPartner,
-    /// mode "clear"/"failed" — braucht `departner_active_partner`
-    /// (Status-Wechsel + Identity-Upsert + Raid-Auth-Disable + ggf.
-    /// Discord-Failure-DM). KEINE Mutation: eine halbe Departner-Semantik
-    /// wäre gefährlicher als gar keine.
+    /// mode "clear"/"failed" — laufen über [`departner_streamer`], nicht über
+    /// diese Funktion. Der Handler verzweigt vorher; diese Funktion sieht die
+    /// Departner-Modi nicht mehr.
     RequiresPartnerLifecycle,
     /// Unbekannter Modus — Python antwortet 200 "Unbekannter Modus",
     /// ebenfalls ohne Mutation (KEIN Permanent-Fallback!).
@@ -289,9 +306,8 @@ pub enum VerifyStreamerResult {
 /// Verifikations-Modi auf `twitch_partners` (Python `_dashboard_verify_storage_step`):
 /// - mode "permanent" → `manual_verified_permanent = 1, manual_verified_at = NOW()`
 /// - mode "temp"      → befristet: `manual_verified_at = NOW(), manual_verified_until = NOW()+30d`
-/// - mode "clear" / "failed" → [`VerifyStreamerResult::RequiresPartnerLifecycle`],
-///   denn Python departnert hier KOMPLETT (`departner_active_partner` mit
-///   `clear_verification=True`) — dieser Lifecycle ist noch nicht portiert.
+/// - mode "clear" / "failed" → [`VerifyStreamerResult::RequiresPartnerLifecycle`]
+///   (Marker; die Departnerung selbst macht [`departner_streamer`]).
 /// - alles andere → [`VerifyStreamerResult::UnknownMode`] (Python-Parität).
 ///
 /// Teilport: Python promotet bei permanent/temp auch Nicht-Partner via
@@ -340,6 +356,183 @@ pub async fn verify_streamer(
     } else {
         Ok(VerifyStreamerResult::NotAPartner)
     }
+}
+
+// ── Departnerung (verify mode "clear"/"failed") ───────────────────────────────
+
+/// Aktiver Partner für die Departnerung — minimale Projektion (Identität +
+/// Discord-Daten). Discord-Felder leben in Prod in `twitch_streamer_identities`,
+/// nicht auf `twitch_partners`, daher LEFT JOIN.
+#[derive(Debug, Clone, sqlx::FromRow)]
+struct DepartnerPartnerRow {
+    id: i64,
+    twitch_login: String,
+    twitch_user_id: Option<String>,
+    discord_user_id: Option<String>,
+    discord_display_name: Option<String>,
+    is_on_discord: Option<i32>,
+}
+
+/// Ergebnis einer Departnerung — trägt die Discord-Daten des departnerten
+/// Partners, damit der Aufrufer (Handler) das **Discord-Rollen-Removal**
+/// anstoßen kann. `tb-dashboard-api` hat aber keinen Broker/Rollen-Port (das
+/// Removal läuft in Prod über den Master-Broker), daher bleibt die Rolle hier
+/// ein bewusster Handoff: Die DB-Departnerung ist vollständig, das Rollen-Removal
+/// gehört in den tb-bot-/tb-internal-api-Pfad.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DepartnerOutcome {
+    pub twitch_login: String,
+    pub twitch_user_id: Option<String>,
+    pub discord_user_id: Option<String>,
+    pub discord_display_name: Option<String>,
+}
+
+/// Departnert einen aktiven Partner — native Parität zu Pythons
+/// `departner_active_partner` (`partner_registry.py:1130`) im Dashboard-/Admin-
+/// Verify-Pfad für die Modi `clear`/`failed` (`streamer_admin_mixin.py:354/369`).
+///
+/// Beide Modi rufen im Python-Orakel `departner_active_partner(..., clear_verification=True)`
+/// mit identischen DB-Operationen auf (`disable_raid_auth=True`,
+/// `restore_non_partner=False`); der Unterschied ist nur die Antwort-Meldung
+/// (`failed` versendete zusätzlich eine Fehler-DM, per B10-Direktive gedroppt).
+/// Deshalb deckt EINE Funktion beide Modi ab.
+///
+/// Schritte (Reihenfolge wie Python):
+/// 1. Aktiven Partner laden — `None` wenn keiner aktiv ist (Handler: "nicht gespeichert").
+/// 2. Identity-Upsert (Discord-Daten erhalten).
+/// 3. `twitch_partners`: `status='departnered'`, `departnered_at=now`,
+///    `admin_archived_at=NULL`, Verify-Felder zurücksetzen (`clear_verification=True`).
+/// 4. Raid-Auth deaktivieren (`raid_enabled=FALSE`).
+/// 5. Engagement-Settings deaktivieren (best-effort wie Python — Tabelle kann fehlen).
+///
+/// Gibt `Ok(None)` zurück, wenn kein aktiver Partner existiert.
+pub async fn departner_streamer(
+    pool: &PgPool,
+    login: &str,
+) -> Result<Option<DepartnerOutcome>, sqlx::Error> {
+    // p.id ist in Prod `bigint`; das Test-DDL nutzt `SERIAL` (INT4). ::BIGINT
+    // hält das i64-Decode in beiden Welten konsistent (Repo-Typ-Drift-Konvention).
+    let Some(row) = sqlx::query_as::<_, DepartnerPartnerRow>(
+        r#"
+        SELECT p.id::BIGINT, p.twitch_login, p.twitch_user_id,
+               i.discord_user_id, i.discord_display_name, i.is_on_discord
+          FROM twitch_partners p
+          LEFT JOIN twitch_streamer_identities i
+            ON i.twitch_user_id = p.twitch_user_id
+         WHERE LOWER(p.twitch_login) = LOWER($1)
+           AND COALESCE(p.status, '') = 'active'
+         ORDER BY p.id DESC
+         LIMIT 1
+        "#,
+    )
+    .bind(login)
+    .fetch_optional(pool)
+    .await?
+    else {
+        return Ok(None);
+    };
+
+    let normalized_login = row.twitch_login.to_lowercase();
+    let normalized_user_id = row
+        .twitch_user_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string);
+    let discord_user_id = row
+        .discord_user_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string);
+    let discord_display_name = row
+        .discord_display_name
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string);
+    let is_on_discord = row.is_on_discord.unwrap_or(0);
+    let departnered_at = now_iso();
+
+    // Schritt 2: Identity-Upsert (nur mit twitch_user_id; Discord-Daten erhalten).
+    if let Some(uid) = normalized_user_id.as_deref() {
+        sqlx::query(
+            r#"
+            INSERT INTO twitch_streamer_identities (
+                twitch_user_id, twitch_login, discord_user_id,
+                discord_display_name, is_on_discord, created_at, updated_at
+            ) VALUES ($1, $2, $3, $4, $5, $6, $6)
+            ON CONFLICT (twitch_user_id) DO UPDATE SET
+                twitch_login         = EXCLUDED.twitch_login,
+                discord_user_id      = COALESCE(EXCLUDED.discord_user_id, twitch_streamer_identities.discord_user_id),
+                discord_display_name = COALESCE(EXCLUDED.discord_display_name, twitch_streamer_identities.discord_display_name),
+                is_on_discord        = EXCLUDED.is_on_discord,
+                updated_at           = EXCLUDED.updated_at
+            "#,
+        )
+        .bind(uid)
+        .bind(&normalized_login)
+        .bind(discord_user_id.as_deref())
+        .bind(discord_display_name.as_deref())
+        .bind(is_on_discord)
+        .bind(&departnered_at)
+        .execute(pool)
+        .await?;
+    }
+
+    // Schritt 3: Partner departnern + Verify zurücksetzen (clear_verification=True).
+    sqlx::query(
+        r#"
+        UPDATE twitch_partners
+        SET status = $1,
+            departnered_at = $2,
+            admin_archived_at = NULL,
+            manual_verified_permanent = 0,
+            manual_verified_until = NULL,
+            manual_verified_at = NULL,
+            twitch_login = $3,
+            twitch_user_id = $4
+        WHERE id = $5
+        "#,
+    )
+    .bind(STATUS_DEPARTNERED)
+    .bind(&departnered_at)
+    .bind(&normalized_login)
+    .bind(normalized_user_id.as_deref())
+    .bind(row.id)
+    .execute(pool)
+    .await?;
+
+    // Schritt 4: Raid-Auth deaktivieren (Python disable_raid_auth=True default).
+    sqlx::query(
+        r#"
+        UPDATE twitch_raid_auth
+        SET raid_enabled = FALSE,
+            twitch_login = $1
+        WHERE twitch_user_id = $2
+           OR LOWER(twitch_login) = LOWER($1)
+        "#,
+    )
+    .bind(&normalized_login)
+    .bind(normalized_user_id.as_deref())
+    .execute(pool)
+    .await?;
+
+    // Schritt 5: Engagement-Layer abschalten — best-effort wie Python
+    // (Tabelle kann in manchen Umgebungen fehlen; Fehler ignorieren).
+    let _ = sqlx::query(
+        "UPDATE twitch_engagement_settings SET enabled = FALSE WHERE LOWER(channel_login) = LOWER($1)",
+    )
+    .bind(&normalized_login)
+    .execute(pool)
+    .await;
+
+    Ok(Some(DepartnerOutcome {
+        twitch_login: normalized_login,
+        twitch_user_id: normalized_user_id,
+        discord_user_id,
+        discord_display_name,
+    }))
 }
 
 // ── POST /streamers/{login}/archive ──────────────────────────────────────────
@@ -1044,8 +1237,9 @@ mod tests {
                 discord_user_id     TEXT,
                 discord_display_name TEXT,
                 is_on_discord       INTEGER DEFAULT 0,
-                created_at          TIMESTAMPTZ DEFAULT NOW(),
-                updated_at          TIMESTAMPTZ DEFAULT NOW()
+                -- TEXT wie Prod (Python schreibt ISO-Strings via CURRENT_TIMESTAMP-Default)
+                created_at          TEXT DEFAULT CURRENT_TIMESTAMP,
+                updated_at          TEXT DEFAULT CURRENT_TIMESTAMP
             )
             "#,
         )
@@ -1077,6 +1271,7 @@ mod tests {
                 manual_verified_at       TEXT,
                 manual_verified_until    TEXT,
                 admin_archived_at        TEXT,
+                departnered_at           TEXT,
                 technical_pause_reason   TEXT,
                 manual_partner_opt_out   INTEGER DEFAULT 0,
                 raid_bot_enabled         INTEGER DEFAULT 1
@@ -1154,7 +1349,19 @@ mod tests {
         .expect("DDL twitch_stream_sessions");
 
         sqlx::query(
-            "TRUNCATE twitch_streamers, twitch_streamer_identities, twitch_live_state, twitch_partners, twitch_partners_all_state, twitch_raid_auth, twitch_stream_sessions RESTART IDENTITY",
+            r#"
+            CREATE TABLE IF NOT EXISTS twitch_engagement_settings (
+                channel_login TEXT PRIMARY KEY,
+                enabled       BOOLEAN NOT NULL DEFAULT FALSE
+            )
+            "#,
+        )
+        .execute(&pool)
+        .await
+        .expect("DDL twitch_engagement_settings");
+
+        sqlx::query(
+            "TRUNCATE twitch_streamers, twitch_streamer_identities, twitch_live_state, twitch_partners, twitch_partners_all_state, twitch_raid_auth, twitch_stream_sessions, twitch_engagement_settings RESTART IDENTITY",
         )
         .execute(&pool)
         .await
@@ -1339,10 +1546,10 @@ mod tests {
         assert!(matches!(result, VerifyStreamerResult::NotAPartner));
     }
 
-    // Python departnert bei clear/failed KOMPLETT (departner_active_partner) —
-    // bis der Lifecycle portiert ist, darf hier NICHTS mutiert werden.
+    // verify_streamer selbst departnert NICHT (das macht departner_streamer) —
+    // es liefert für clear/failed nur den Marker, ohne zu mutieren.
     #[tokio::test]
-    async fn verify_clear_und_failed_mutieren_nichts() {
+    async fn verify_clear_und_failed_liefern_lifecycle_marker_ohne_mutation() {
         let dsn = db_dsn_or_skip!();
         let pool = make_pool(&dsn, "test_sc_verify_lifecycle").await;
         sqlx::query(
@@ -1367,7 +1574,7 @@ mod tests {
             );
         }
 
-        // Verifikation und Status sind unangetastet.
+        // verify_streamer mutiert hier nicht; Status/Verify unverändert.
         let row: (Option<i32>, Option<String>) = sqlx::query_as(
             "SELECT manual_verified_permanent, status FROM twitch_partners
              WHERE twitch_login = 'lifecycleuser'",
@@ -1375,8 +1582,96 @@ mod tests {
         .fetch_one(&pool)
         .await
         .unwrap();
-        assert_eq!(row.0, Some(1), "Verifikation darf nicht angefasst werden");
+        assert_eq!(row.0, Some(1), "verify_streamer fasst clear/failed nicht an");
         assert_eq!(row.1.as_deref(), Some("active"), "kein Halb-Departner");
+    }
+
+    // departner_streamer macht die echte Departnerung (Python
+    // departner_active_partner mit clear_verification=True): Status→departnered,
+    // Verify-Reset, Raid-Auth disable, Identity-Upsert, Engagement disable.
+    #[tokio::test]
+    async fn departner_streamer_departnert_und_setzt_verify_zurueck() {
+        let dsn = db_dsn_or_skip!();
+        let pool = make_pool(&dsn, "test_sc_departner").await;
+
+        sqlx::query(
+            "INSERT INTO twitch_partners
+                (twitch_login, twitch_user_id, status, manual_verified_permanent, manual_verified_at, admin_archived_at)
+             VALUES ('departnerme', '42', 'active', 1, '2026-01-01T00:00:00+00:00', '2026-01-01T00:00:00+00:00')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO twitch_streamer_identities
+                (twitch_user_id, twitch_login, discord_user_id, discord_display_name, is_on_discord)
+             VALUES ('42', 'departnerme', '999', 'Drag', 1)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO twitch_raid_auth (twitch_user_id, twitch_login, raid_enabled) VALUES ('42', 'departnerme', TRUE)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO twitch_engagement_settings (channel_login, enabled) VALUES ('departnerme', TRUE)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let outcome = departner_streamer(&pool, "DepartnerMe")
+            .await
+            .unwrap()
+            .expect("aktiver Partner muss departnert werden");
+        assert_eq!(outcome.twitch_login, "departnerme");
+        assert_eq!(outcome.twitch_user_id.as_deref(), Some("42"));
+        assert_eq!(outcome.discord_user_id.as_deref(), Some("999"));
+        assert_eq!(outcome.discord_display_name.as_deref(), Some("Drag"));
+
+        // twitch_partners: departnered, Verify zurückgesetzt, admin_archived_at genullt.
+        let p: (Option<String>, Option<String>, Option<i32>, Option<String>, Option<String>) =
+            sqlx::query_as(
+                "SELECT status, departnered_at, manual_verified_permanent, manual_verified_at, admin_archived_at
+                   FROM twitch_partners WHERE twitch_login = 'departnerme'",
+            )
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(p.0.as_deref(), Some("departnered"));
+        assert!(p.1.is_some(), "departnered_at gesetzt");
+        assert_eq!(p.2, Some(0), "manual_verified_permanent zurückgesetzt");
+        assert!(p.3.is_none(), "manual_verified_at genullt");
+        assert!(p.4.is_none(), "admin_archived_at genullt");
+
+        // Raid-Auth disabled.
+        let raid: Option<bool> = sqlx::query_scalar(
+            "SELECT raid_enabled FROM twitch_raid_auth WHERE twitch_user_id = '42'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(raid, Some(false), "raid_enabled disabled");
+
+        // Engagement disabled.
+        let eng: Option<bool> = sqlx::query_scalar(
+            "SELECT enabled FROM twitch_engagement_settings WHERE channel_login = 'departnerme'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(eng, Some(false), "engagement disabled");
+    }
+
+    #[tokio::test]
+    async fn departner_streamer_gibt_none_ohne_aktiven_partner() {
+        let dsn = db_dsn_or_skip!();
+        let pool = make_pool(&dsn, "test_sc_departner_none").await;
+        let res = departner_streamer(&pool, "niemand").await.unwrap();
+        assert!(res.is_none(), "kein aktiver Partner → None");
     }
 
     // Python: unbekannte Modi → "Unbekannter Modus" OHNE Mutation — der alte
