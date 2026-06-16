@@ -403,6 +403,133 @@ async fn moderator_telemetry_subs_scope_gefiltert_mit_bot_token_und_moderator_id
     );
 }
 
+// ── B8-07-RECONCILE: Passive-Lurker-Gate vor dem Chat-Subscribe ──────────────
+
+#[tokio::test]
+async fn chat_subscribe_passiver_lurker_schreibt_state_statt_zu_subscriben() {
+    let pool = pool_or_skip!("b8_07_chat_lurker");
+    let transport = Arc::new(StubTransport::default());
+    let manager = SubscriptionManager::new(
+        transport.clone(),
+        SubscriptionConfig {
+            callback_url: "https://cb/x".to_string(),
+            secret: "geheim".to_string(),
+        },
+        CapacitySnapshotStore::new(pool.clone()),
+    );
+
+    // Monitored-only-Kanal OHNE Partner-State und OHNE Raid-Auth → passiver Lurker.
+    sqlx::query(
+        "INSERT INTO twitch_streamers (twitch_login, twitch_user_id, is_monitored_only) \
+         VALUES ('lurker', '900', 1)",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    // Treffer → kein Subscribe-Versuch, State = passive_lurker.
+    assert!(
+        !manager
+            .ensure_chat_subscriptions("900", "BOTID", "lurker")
+            .await
+    );
+    assert!(
+        transport.creates.lock().unwrap().is_empty(),
+        "passiver Lurker darf keinen Subscribe-Versuch auslösen"
+    );
+
+    // Beide Chat-Sub-Typen tragen den Lurker-State + Detail (1:1 Python).
+    let states = manager.chat_subscription_states("lurker");
+    let mut keys: Vec<&str> = states.iter().map(|(t, _, _)| t.as_str()).collect();
+    keys.sort_unstable();
+    assert_eq!(keys, vec!["channel.chat.message", "channel.chat.notification"]);
+    for (_, state, detail) in &states {
+        assert_eq!(state, tb_chat::PASSIVE_LURKER_STATE);
+        assert_eq!(detail.as_deref(), Some(tb_chat::PASSIVE_LURKER_DETAIL));
+    }
+}
+
+#[tokio::test]
+async fn chat_subscribe_aktiver_partner_subscribed_normal() {
+    let pool = pool_or_skip!("b8_07_chat_partner");
+    let transport = Arc::new(StubTransport::default());
+    let manager = SubscriptionManager::new(
+        transport.clone(),
+        SubscriptionConfig {
+            callback_url: "https://cb/x".to_string(),
+            secret: "geheim".to_string(),
+        },
+        CapacitySnapshotStore::new(pool.clone()),
+    );
+
+    // Monitored-only, ABER aktiver Partner → kein Lurker (is_partner_active=1).
+    sqlx::query(
+        "INSERT INTO twitch_streamers (twitch_login, twitch_user_id, is_monitored_only) \
+         VALUES ('partner', '901', 1)",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO twitch_streamers_partner_state \
+            (twitch_login, twitch_user_id, is_partner_active) \
+         VALUES ('partner', '901', 1)",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    // Kein Lurker → normaler Subscribe (beide Chat-Sub-Typen).
+    assert!(
+        manager
+            .ensure_chat_subscriptions("901", "BOTID", "partner")
+            .await
+    );
+    let creates = transport.creates.lock().unwrap().clone();
+    let mut types: Vec<&str> = creates.iter().map(|(t, _)| t.as_str()).collect();
+    types.sort_unstable();
+    assert_eq!(types, vec!["channel.chat.message", "channel.chat.notification"]);
+    // Kein Lurker-State geschrieben.
+    assert!(manager.chat_subscription_states("partner").is_empty());
+}
+
+#[tokio::test]
+async fn chat_subscribe_lurker_mit_raid_auth_subscribed_normal() {
+    let pool = pool_or_skip!("b8_07_chat_raidauth");
+    let transport = Arc::new(StubTransport::default());
+    let manager = SubscriptionManager::new(
+        transport.clone(),
+        SubscriptionConfig {
+            callback_url: "https://cb/x".to_string(),
+            secret: "geheim".to_string(),
+        },
+        CapacitySnapshotStore::new(pool.clone()),
+    );
+
+    // Monitored-only, kein Partner, ABER Raid-Auth vorhanden → kein Lurker.
+    sqlx::query(
+        "INSERT INTO twitch_streamers (twitch_login, twitch_user_id, is_monitored_only) \
+         VALUES ('raider', '902', 1)",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO twitch_raid_auth (twitch_user_id, twitch_login) VALUES ('902', 'raider')",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    assert!(
+        manager
+            .ensure_chat_subscriptions("902", "BOTID", "raider")
+            .await
+    );
+    assert_eq!(transport.creates.lock().unwrap().len(), 2);
+    assert!(manager.chat_subscription_states("raider").is_empty());
+}
+
 /// Manuell vorrückbare Test-Uhr (Epoch-Sekunden) für die Capacity-Throttle-Fenster.
 fn fake_clock() -> (Arc<AtomicU64>, tb_monitoring::ClockFn) {
     let now = Arc::new(AtomicU64::new(0));

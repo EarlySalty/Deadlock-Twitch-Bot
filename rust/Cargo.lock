@@ -2579,6 +2579,7 @@ dependencies = [
  "serde_json",
  "sha2",
  "sqlx",
+ "tb-chat",
  "tb-transport-twitch",
  "thiserror 1.0.69",
  "tokio",
