@@ -729,6 +729,11 @@ pub async fn archive_handler(
         .into_response()),
         // Python: nicht gespeichert → ValueError → 4xx. Interne API: 404.
         Ok(ArchiveOutcome::NotStored) => Err(ApiError::not_found()),
+        // History-Zeile vorhanden, aber nicht reaktivierbar (departnert / kein
+        // aktiver Partner) → Python `ValueError` → 400 mit Parität-Meldung.
+        Ok(ArchiveOutcome::Conflict(message)) => Err(ApiError::bad_request_with_body(
+            serde_json::json!({ "error": "bad_request", "message": message }),
+        )),
         Err(e) => {
             tracing::error!("archive_with_message DB-Fehler: {e}");
             Err(ApiError::internal())
