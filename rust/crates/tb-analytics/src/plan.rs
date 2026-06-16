@@ -233,7 +233,9 @@ impl PlanSnapshot {
     }
 
     /// Default-Snapshot (`raid_free`, kein Override/Abo) mit Fallback-Ref.
-    fn default_basic(fallback_ref: &str) -> Self {
+    /// Öffentlich, damit Konsumenten (z.B. Billing-Page-Fail-Safe) den
+    /// kanonischen raid_free-Snapshot bauen, ohne das Feld-Set zu duplizieren.
+    pub fn default_basic(fallback_ref: &str) -> Self {
         Self::from_plan(
             "raid_free",
             "default_basic",

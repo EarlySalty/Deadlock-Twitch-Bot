@@ -371,16 +371,14 @@ pub async fn catalog_handler(
         .await
         .unwrap_or_else(|_| {
             // Fail-safe: raid_free. resolve_plan_snapshot liefert das ohnehin als
-            // Default; nur DB-Fehler landen hier.
-            tb_analytics::plan::PlanSnapshot {
-                plan_id: "raid_free",
-                plan_name: "Free",
-                tier: "free",
-                is_extended: false,
-                entitlements: vec!["analytics.daily"],
-                expires_at: None,
-                source: "default_basic",
-            }
+            // Default; nur DB-Fehler landen hier. Kanonischer Konstruktor (statt
+            // Literal), damit künftige PlanSnapshot-Felder hier nicht brechen.
+            let fallback_ref = if !twitch_login.is_empty() {
+                twitch_login.clone()
+            } else {
+                twitch_user_id.clone()
+            };
+            tb_analytics::plan::PlanSnapshot::default_basic(&fallback_ref)
         });
     let current_plan_id = current.plan_id;
 
