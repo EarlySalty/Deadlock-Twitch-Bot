@@ -64,6 +64,20 @@ const CLIP_TITLE_FALLBACKS: &[&str] = &[
     "Clip it!",
 ];
 
+/// Statuszeile für `!raid_status` (`commands.py:120–125`).
+///
+/// `!raid_enable` entfällt (Grillme Block 8 — „in oder raus"): die Auto-Raid-
+/// Teilnahme hängt am Partner-Status, nicht an einem Chat-Auth-Befehl. Frühere
+/// Hinweise „aktiviere mit !raid_enable" zeigten auf einen nicht mehr
+/// existierenden Befehl und sind hier entfernt.
+fn raid_status_line(raid_enabled: Option<bool>) -> &'static str {
+    match raid_enabled {
+        None => "❌ Nicht autorisiert (OAuth fehlt) | Der Streamer muss den Twitch-Bot einmal autorisieren.",
+        Some(true) => "✅ Aktiv | Auto-Raids sind aktiviert.",
+        Some(false) => "🛑 Deaktiviert.",
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Integrations-Traits — müssen vom Orchestrator verdrahtet werden
 // ---------------------------------------------------------------------------
@@ -275,15 +289,9 @@ impl CommandEngine {
                 self.cmd_raid_status(event).await;
                 true
             }
-            "!raid_enable" | "!raidbot" => {
-                if event.is_mod_or_broadcaster() {
-                    self.cmd_raid_enable(event).await;
-                } else {
-                    self.reply(event, "Nur der Broadcaster oder Mods können den Twitch-Bot steuern.")
-                        .await;
-                }
-                true
-            }
+            // !raid_enable / !raidbot entfällt — Grillme Block 8 ("in oder raus"):
+            // Partner-Status ersetzt das Opt-in; es gibt keinen Chat-Auth-Befehl mehr.
+            // Aliase fallen damit in `_ => false` (keine Command-Behandlung).
             "!uban" | "!unban" => {
                 if event.is_mod_or_broadcaster() {
                     self.cmd_uban(event).await;
@@ -719,11 +727,7 @@ impl CommandEngine {
         };
 
         // Status-String — commands.py:120–125
-        let status = match info.raid_enabled {
-            None => "❌ Nicht autorisiert (OAuth fehlt) | Anforderung: Twitch-Bot autorisieren mit !raid_enable.".to_string(),
-            Some(true) => "✅ Aktiv | Auto-Raids sind aktiviert.".to_string(),
-            Some(false) => "🛑 Deaktiviert | Aktiviere mit !raid_enable.".to_string(),
-        };
+        let status = raid_status_line(info.raid_enabled);
 
         // Statistik-Anhang — commands.py:124
         let stats_part = if info.total_raids > 0 {
@@ -750,86 +754,6 @@ impl CommandEngine {
 
         let msg = format!("{status}{stats_part}{last_part}");
         self.reply_plain(event, &msg).await;
-    }
-
-    // -----------------------------------------------------------------------
-    // !raid_enable / !raidbot — commands.py:52
-    // -----------------------------------------------------------------------
-
-    async fn cmd_raid_enable(&self, event: &ChatMessageEvent) {
-        let partner = match self.get_partner(&event.broadcaster_user_login).await {
-            Some(p) => p,
-            None => {
-                self.reply(
-                    event,
-                    "Dieser Kanal ist nicht als Partner registriert. Kontaktiere einen Admin für Details.",
-                )
-                .await;
-                return;
-            }
-        };
-
-        // Prod-Schema: twitch_raid_auth.raid_enabled = boolean
-        let auth_row = sqlx::query_as::<_, (Option<bool>,)>(
-            "SELECT raid_enabled FROM twitch_raid_auth WHERE twitch_user_id = $1",
-        )
-        .bind(&partner.twitch_user_id)
-        .fetch_optional(&self.pool)
-        .await
-        .unwrap_or(None);
-
-        match auth_row {
-            None => {
-                // Noch nie autorisiert — commands.py:77
-                // UNSICHER: auth_url-Generierung nicht im Trait abgebildet.
-                self.reply(
-                    event,
-                    "OAuth fehlt – Anforderung: Twitch-Bot autorisieren (Pflicht für Streamer-Partner). Kontaktiere einen Admin für den Auth-Link.",
-                )
-                .await;
-            }
-            Some((Some(true),)) => {
-                // commands.py:87
-                self.reply(
-                    event,
-                    "✅ Auto-Raid ist bereits aktiviert! Der Twitch-Bot raidet automatisch andere Partner, wenn du offline gehst.",
-                )
-                .await;
-            }
-            Some(_) => {
-                // raid_enabled=false → aktivieren — commands.py:80–88
-                let result = sqlx::query(
-                    "UPDATE twitch_raid_auth SET raid_enabled = TRUE WHERE twitch_user_id = $1",
-                )
-                .bind(&partner.twitch_user_id)
-                .execute(&self.pool)
-                .await;
-
-                if let Err(e) = result {
-                    tracing::error!(
-                        channel = %event.broadcaster_user_login,
-                        err = %e,
-                        "raid_enable UPDATE fehlgeschlagen"
-                    );
-                    return;
-                }
-
-                // partner_registry.py:1773 — raid_bot_enabled = 1
-                let _ = sqlx::query(
-                    "UPDATE twitch_partners SET raid_bot_enabled = 1, twitch_login = $2 WHERE twitch_user_id = $1",
-                )
-                .bind(&partner.twitch_user_id)
-                .bind(&partner.twitch_login)
-                .execute(&self.pool)
-                .await;
-
-                self.reply(
-                    event,
-                    "✅ Auto-Raid aktiviert! Wenn du offline gehst, raidet der Twitch-Bot automatisch den Partner mit der kürzesten Stream-Zeit.",
-                )
-                .await;
-            }
-        }
     }
 
     // -----------------------------------------------------------------------
@@ -886,11 +810,8 @@ impl CommandEngine {
         let partner = match self.get_partner(&event.broadcaster_user_login).await {
             Some(p) => p,
             None => {
-                self.reply(
-                    event,
-                    "Dieser Kanal ist nicht als Partner registriert. Bitte erst mit !raid_enable verifizieren.",
-                )
-                .await;
+                self.reply(event, "Dieser Kanal ist nicht als Partner registriert.")
+                    .await;
                 return;
             }
         };
@@ -2214,53 +2135,43 @@ mod tests {
         assert!(msg.contains("nicht als Partner registriert"), "Meldung: {msg}");
     }
 
-    #[tokio::test]
-    async fn raid_enable_kein_auth_row() {
-        let pool = pool_or_skip!("cmd_raid_enable_kein_auth");
-        apply_ddl(&pool).await;
-        let api = MockApi::new();
-
-        sqlx::query(
-            "INSERT INTO twitch_streamers_partner_state (twitch_login, twitch_user_id, is_partner_active, raid_bot_enabled) VALUES ('testchannel', 'bc123', 1, 0)",
-        )
-        .execute(&pool)
-        .await
-        .unwrap();
-
-        let engine = make_engine_with_pool(pool.clone(), api.clone());
-        let event = make_event("!raid_enable", true, false);
-        engine.handle(&event).await;
-
-        let msg = api.last_message().await.unwrap();
-        assert!(msg.contains("OAuth fehlt"), "Meldung: {msg}");
+    // !raid_enable / !raidbot entfällt (Grillme Block 8 — „in oder raus"). Die
+    // Statuszeile und der gedroppte Befehl dürfen keinen toten !raid_enable-
+    // Hinweis mehr ausgeben.
+    #[test]
+    fn raid_status_line_ohne_toten_raid_enable_hinweis() {
+        for state in [None, Some(true), Some(false)] {
+            let line = raid_status_line(state);
+            assert!(
+                !line.contains("!raid_enable"),
+                "Statuszeile für {state:?} verweist auf gedroppten Befehl: {line}"
+            );
+        }
+        assert!(raid_status_line(Some(true)).contains("Aktiv"));
+        assert!(raid_status_line(Some(false)).contains("Deaktiviert"));
+        assert!(raid_status_line(None).contains("Nicht autorisiert"));
     }
 
     #[tokio::test]
-    async fn raid_enable_bereits_aktiv() {
-        let pool = pool_or_skip!("cmd_raid_enable_aktiv");
+    async fn raid_enable_ist_kein_befehl_mehr() {
+        let pool = pool_or_skip!("cmd_raid_enable_entfaellt");
         apply_ddl(&pool).await;
         let api = MockApi::new();
-
-        sqlx::query(
-            "INSERT INTO twitch_streamers_partner_state (twitch_login, twitch_user_id, is_partner_active, raid_bot_enabled) VALUES ('testchannel', 'bc123', 1, 1)",
-        )
-        .execute(&pool)
-        .await
-        .unwrap();
-
-        sqlx::query(
-            "INSERT INTO twitch_raid_auth (twitch_user_id, twitch_login, raid_enabled) VALUES ('bc123', 'testchannel', TRUE)",
-        )
-        .execute(&pool)
-        .await
-        .unwrap();
-
         let engine = make_engine_with_pool(pool.clone(), api.clone());
-        let event = make_event("!raid_enable", true, false);
-        engine.handle(&event).await;
 
-        let msg = api.last_message().await.unwrap();
-        assert!(msg.contains("bereits aktiviert"), "Meldung: {msg}");
+        for cmd in ["!raid_enable", "!raidbot"] {
+            let event = make_event(cmd, true, false);
+            // !raid_enable fällt in `_ => false` — keine Command-Behandlung.
+            assert!(
+                !engine.handle(&event).await,
+                "{cmd} sollte kein Befehl sein"
+            );
+        }
+        assert_eq!(
+            api.message_count().await,
+            0,
+            "gedroppter Befehl darf keine Chat-Antwort senden"
+        );
     }
 
     #[tokio::test]
