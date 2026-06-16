@@ -25,15 +25,17 @@ impl OfflineSideEffects {
         Self { pool }
     }
 
-    /// Führt alle Seiteneffekte best-effort aus (Fehler werden nur geloggt).
-    pub async fn run(&self, broadcaster_id: &str, login: &str) {
+    /// Engagement-Auto-Off (Python `eventsub_mixin.py`:1861): koppelt den
+    /// Engagement-Layer ans Stream-Leben. Läuft VOR dem Offline-Throttle, damit
+    /// das Engagement auch bei einem gedrosselten Duplikat-Offline ausgeht.
+    ///
+    /// Case-sensitiv, KEIN Lowercasing — Python bindet `channel_login` roh ins
+    /// `WHERE` (siehe tb_engagement::auto_off).
+    pub async fn run_engagement_auto_off(&self, login: &str) {
         let login = login.trim();
         if login.is_empty() {
             return;
         }
-
-        // Engagement-Auto-Off: case-sensitiv, KEIN Lowercasing — Python bindet
-        // `channel_login` roh ins `WHERE` (siehe tb_engagement::auto_off).
         match tb_engagement::auto_off::auto_disable_on_offline(&self.pool, login).await {
             Ok(changed) if changed > 0 => {
                 tracing::info!(streamer = %login, "Engagement auto-deaktiviert (Stream offline)");
@@ -43,18 +45,23 @@ impl OfflineSideEffects {
                 tracing::error!(%error, streamer = %login, "Engagement-Auto-Off fehlgeschlagen");
             }
         }
+    }
 
-        // Global-Ban-Sweep: lowercased Login (Python `login_lower`,
-        // eventsub_mixin.py:1908) als Schlüssel auf `broadcaster_login`.
+    /// Global-Ban-Sweep einplanen (Python `eventsub_mixin.py`:1908): läuft NACH
+    /// dem bestandenen Throttle, VOR der State-Finalisierung. Lowercased Login
+    /// (Python `login_lower`) als Schlüssel auf `broadcaster_login`.
+    pub async fn run_global_ban_sweep(&self, broadcaster_id: &str, login: &str) {
+        let login = login.trim();
         let broadcaster_id = broadcaster_id.trim();
-        if !broadcaster_id.is_empty() {
-            let login_lower = login.to_lowercase();
-            if let Err(error) = self
-                .schedule_global_ban_sweep(&login_lower, broadcaster_id)
-                .await
-            {
-                tracing::error!(%error, streamer = %login_lower, "Global-Ban-Sweep nicht planbar");
-            }
+        if login.is_empty() || broadcaster_id.is_empty() {
+            return;
+        }
+        let login_lower = login.to_lowercase();
+        if let Err(error) = self
+            .schedule_global_ban_sweep(&login_lower, broadcaster_id)
+            .await
+        {
+            tracing::error!(%error, streamer = %login_lower, "Global-Ban-Sweep nicht planbar");
         }
     }
 
@@ -137,7 +144,8 @@ mod tests {
         .unwrap();
 
         let fx = OfflineSideEffects::new(pool.clone());
-        fx.run("42", "Drag").await;
+        fx.run_engagement_auto_off("Drag").await;
+        fx.run_global_ban_sweep("42", "Drag").await;
 
         let enabled: bool = sqlx::query_scalar(
             "SELECT enabled FROM twitch_engagement_settings WHERE channel_login='Drag'",
@@ -159,7 +167,8 @@ mod tests {
         assert!(in_future, "Sweep ~1h in der Zukunft");
 
         // Zweiter Offline-Trigger: UPSERT statt Fehler, Engagement bleibt aus.
-        fx.run("42", "drag").await;
+        fx.run_engagement_auto_off("drag").await;
+        fx.run_global_ban_sweep("42", "drag").await;
         let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM twitch_global_ban_sweep_due")
             .fetch_one(&pool)
             .await
@@ -183,7 +192,8 @@ mod tests {
         let fx = OfflineSideEffects::new(pool.clone());
 
         // Abweichende Schreibweise → Engagement-Zeile bleibt aktiv.
-        fx.run("7", "mixedcase").await;
+        fx.run_engagement_auto_off("mixedcase").await;
+        fx.run_global_ban_sweep("7", "mixedcase").await;
         let still_enabled: bool = sqlx::query_scalar(
             "SELECT enabled FROM twitch_engagement_settings WHERE channel_login='MixedCase'",
         )
@@ -201,7 +211,7 @@ mod tests {
         assert!(sweep_exists, "Sweep unter gelowercastem Login geplant");
 
         // Exakter Login → Engagement wird deaktiviert.
-        fx.run("7", "MixedCase").await;
+        fx.run_engagement_auto_off("MixedCase").await;
         let now_disabled: bool = sqlx::query_scalar(
             "SELECT NOT enabled FROM twitch_engagement_settings WHERE channel_login='MixedCase'",
         )

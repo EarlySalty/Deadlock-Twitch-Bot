@@ -64,10 +64,16 @@ const PROMO_DISCORD_INVITE_ENV: &str = "PROMO_DISCORD_INVITE";
 /// Adapter für den `!clip`-Command: holt einen **gültigen** Broadcaster-Token
 /// (mit Auto-Refresh bei Ablauf, ohne `raid_enabled`-Gate — wie Python
 /// `get_tokens_for_user`, auth.py:1378) und ruft Helix `POST /clips`.
-/// Nur Broadcaster-Token (Pythons Primärpfad; der Bot-Token hat kein `clips:edit`).
+///
+/// Fällt der Broadcaster-Token aus (`Ok(None)`), wird wie Python
+/// (`commands.py`:322-337) der Bot-eigene Token als Fallback verwendet; erst
+/// wenn auch der fehlt, gibt es `OAuthMissing`. Der Bot-Token wird dem
+/// Broadcaster zwar nicht zugeschrieben — Python nimmt ihn dennoch als letzten
+/// Versuch (Scope-Vorbehalt `clips:edit` siehe Python-Kommentar).
 struct ChatClipAdapter {
     helix: Arc<HelixClient>,
     token_provider: Arc<TokenProvider>,
+    bot_token: Arc<BotTokenManager>,
 }
 
 #[async_trait::async_trait]
@@ -81,7 +87,17 @@ impl ClipPort for ChatClipAdapter {
             .await
         {
             Ok(Some(t)) => t,
-            Ok(None) => return ClipOutcome::OAuthMissing,
+            // Fallback: Bot-eigenen Token verwenden (Python `commands.py`:322-337).
+            Ok(None) => match self.bot_token.get_valid_token(false).await {
+                Ok(t) => {
+                    tracing::debug!("!clip: nutze Bot-Token als Fallback");
+                    t
+                }
+                Err(error) => {
+                    tracing::debug!(%error, "!clip: Bot-Token-Fallback nicht verfügbar");
+                    return ClipOutcome::OAuthMissing;
+                }
+            },
             Err(error) => {
                 tracing::warn!(%error, "!clip: Broadcaster-Token-Load fehlgeschlagen");
                 return ClipOutcome::Failed;
@@ -120,10 +136,15 @@ impl ClipPort for ChatClipAdapter {
 /// damit `!clip` einen abgelaufenen Broadcaster-Token selbst erneuern kann —
 /// unabhängig davon, ob die Raid-Strecke nativ läuft. `redirect_uri` ist hier
 /// belanglos (der Refresh-Grant braucht sie nicht; nur `exchange_code` täte es).
+///
+/// `bot_token` ist der live rotierte Bot-User-Token (aus [`ChatApiHandle`]) und
+/// dient als Fallback, wenn der Broadcaster keinen Token hinterlegt hat — 1:1
+/// zum Python-Pfad (`commands.py`:322-337).
 pub fn build_clip_port(
     helix: Option<Arc<HelixClient>>,
     cipher: Option<Arc<FieldCipher>>,
     pool: PgPool,
+    bot_token: Arc<BotTokenManager>,
 ) -> Option<Arc<dyn ClipPort>> {
     let (Some(helix), Some(cipher)) = (helix, cipher) else {
         return None;
@@ -146,6 +167,7 @@ pub fn build_clip_port(
     Some(Arc::new(ChatClipAdapter {
         helix,
         token_provider,
+        bot_token,
     }))
 }
 
@@ -301,6 +323,14 @@ pub struct ChatApiHandle {
     pub api: Arc<dyn ChatApi>,
     pub bot_user_id: String,
     token_manager: Arc<BotTokenManager>,
+}
+
+impl ChatApiHandle {
+    /// Live rotierter Bot-User-Token-Manager — vom `!clip`-Fallback genutzt,
+    /// bevor das Handle in die Pipeline verbaut wird.
+    pub fn bot_token_manager(&self) -> Arc<BotTokenManager> {
+        Arc::clone(&self.token_manager)
+    }
 }
 
 /// Gebaute Chat-Laufzeit — `hooks` ersetzt die bisherigen EventSub-Hooks,

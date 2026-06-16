@@ -533,12 +533,29 @@ impl EventSubHooks for RaidEventSubHooks {
         }
     }
 
-    async fn on_stream_offline(&self, twitch_user_id: &str, login: Option<&str>) {
-        // Reihenfolge wie Python: erst die Seiteneffekte (Engagement-Off,
-        // Global-Ban-Sweep), dann der Auto-Raid.
+    async fn on_stream_offline_engagement(&self, _twitch_user_id: &str, login: Option<&str>) {
+        // Engagement-Auto-Off VOR dem Throttle (Python `eventsub_mixin.py`:1861):
+        // feuert auch bei einem als Duplikat gedrosselten Offline, damit der
+        // Engagement-Layer ans Stream-Leben gekoppelt bleibt.
         if let Some(login) = login.map(str::trim).filter(|l| !l.is_empty()) {
-            self.side_effects.run(twitch_user_id, login).await;
+            self.side_effects.run_engagement_auto_off(login).await;
         }
+    }
+
+    async fn on_stream_offline_global_ban(&self, twitch_user_id: &str, login: Option<&str>) {
+        // Global-Ban-Sweep NACH bestandenem Throttle, VOR State-Finalize
+        // (Python `eventsub_mixin.py`:1908).
+        if let Some(login) = login.map(str::trim).filter(|l| !l.is_empty()) {
+            self.side_effects
+                .run_global_ban_sweep(twitch_user_id, login)
+                .await;
+        }
+    }
+
+    async fn on_stream_offline(&self, twitch_user_id: &str, login: Option<&str>) {
+        // Engagement-Off und Global-Ban-Sweep liefen bereits früher (siehe
+        // on_stream_offline_engagement / on_stream_offline_global_ban). Hier nur
+        // noch der Auto-Raid + Post-Stream-Analyse nach State-Finalize.
         self.offline
             .handle_streamer_offline(twitch_user_id, login)
             .await;
