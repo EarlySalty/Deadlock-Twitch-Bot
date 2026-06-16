@@ -345,9 +345,9 @@ mod tests {
                 stream_title          TEXT,
                 notification_text     TEXT,
                 language              TEXT,
-                is_mature             BOOLEAN DEFAULT FALSE,
+                is_mature             INTEGER DEFAULT 0,
                 tags                  TEXT,
-                had_deadlock_in_session BOOLEAN DEFAULT FALSE,
+                had_deadlock_in_session INTEGER DEFAULT 0,
                 game_name             TEXT,
                 notes                 TEXT
             )"#,
@@ -543,9 +543,9 @@ mod tests {
         .bind(10_i32)
         .bind("Test Stream Titel")
         .bind("de")
-        .bind(false)
+        .bind(0_i32) // is_mature (INTEGER 0/1 im Prod-Schema, kein BOOLEAN)
         .bind("deadlock,fps")
-        .bind(true)
+        .bind(1_i32) // had_deadlock_in_session (INTEGER 0/1)
         .bind("Deadlock")
         .bind("Notiz")
         .fetch_one(&pool)
@@ -603,8 +603,8 @@ mod tests {
         assert_eq!(s["duration_seconds"], 3600);
         assert_eq!(s["peak_viewers"], 200);
         assert_eq!(s["avg_viewers"], 150.5);
-        assert_eq!(s["is_mature"], false);
-        assert_eq!(s["had_deadlock_in_session"], true);
+        assert_eq!(s["is_mature"], 0);
+        assert_eq!(s["had_deadlock_in_session"], 1);
         assert_eq!(s["game_name"], "Deadlock");
         assert_eq!(s["language"], "de");
         assert_eq!(s["tags"], "deadlock,fps");
@@ -693,8 +693,8 @@ mod tests {
         assert_eq!(s["unique_chatters"], 0);
         assert_eq!(s["first_time_chatters"], 0);
         assert_eq!(s["returning_chatters"], 0);
-        assert_eq!(s["is_mature"], false);
-        assert_eq!(s["had_deadlock_in_session"], false);
+        assert_eq!(s["is_mature"], 0);
+        assert_eq!(s["had_deadlock_in_session"], 0);
 
         // Leere Arrays
         assert_eq!(j["timeline"].as_array().unwrap().len(), 0);

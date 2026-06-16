@@ -334,7 +334,7 @@ fn build_top_sql(table: &str, is_tracked: bool, streamer_filter: bool) -> String
                CAST(AVG(viewer_count) AS DOUBLE PRECISION) AS avg_viewers,
                CAST(MAX(viewer_count) AS BIGINT)           AS max_viewers,
                CAST(COUNT(*) AS BIGINT)                    AS samples,
-               MAX(CASE WHEN is_partner THEN 1 ELSE 0 END) AS is_partner
+               MAX(CASE WHEN is_partner <> 0 THEN 1 ELSE 0 END) AS is_partner
           FROM {table}
          WHERE ts_utc >= NOW() - INTERVAL '30 days'
 {streamer_cond}{partition_filter}           AND (
@@ -751,7 +751,7 @@ async fn fetch_monetization(pool: &PgPool) -> Result<Value, BoxError> {
     let ad_row = sqlx::query(
         r#"
         SELECT CAST(COUNT(*) AS BIGINT) AS total_ads,
-               CAST(SUM(CASE WHEN is_automatic IS TRUE THEN 1 ELSE 0 END) AS BIGINT) AS auto_ads,
+               CAST(SUM(CASE WHEN is_automatic <> 0 THEN 1 ELSE 0 END) AS BIGINT) AS auto_ads,
                CAST(AVG(duration_seconds) AS DOUBLE PRECISION) AS avg_duration,
                CAST(COUNT(DISTINCT session_id) AS BIGINT) AS sessions_with_ads
           FROM twitch_ad_break_events
@@ -850,7 +850,9 @@ async fn fetch_monetization(pool: &PgPool) -> Result<Value, BoxError> {
         };
 
         let dur_secs = row_i64(r, "duration_seconds");
-        let is_auto = r.try_get::<Option<bool>, _>("is_automatic").ok().flatten().unwrap_or(false);
+        // `is_automatic` ist im Prod-Schema INTEGER (0/1) — als Option<i32> dekodieren,
+        // ein `try_get::<bool>` würde gegen int4 mit einem Decode-Fehler scheitern.
+        let is_auto = r.try_get::<Option<i32>, _>("is_automatic").ok().flatten().unwrap_or(0) != 0;
 
         if let Some(ad_minute) = ad_minute_opt {
             if let Some(tl) = timeline_map.get(&sid) {
@@ -946,14 +948,13 @@ async fn fetch_monetization(pool: &PgPool) -> Result<Value, BoxError> {
     };
 
     // Q20 — Subscriptions-Events (`dashboard_metrics_mixin.py:187–202`).
-    // Bewusste Abweichung (Bugfix): Python vergleicht `is_gift=1` gegen die
-    // BOOLEAN-Spalte — das schlägt auf Postgres fehl und die subs-Zahlen sind
-    // in Python deshalb immer 0. Rust nutzt `is_gift IS TRUE` und liefert
-    // echte Werte.
+    // `twitch_subscription_events.is_gift` ist im Prod-Schema INTEGER (0/1).
+    // Ein `IS TRUE` würde Postgres gegen int4 mit einem Typfehler abweisen —
+    // daher der Integer-Vergleich `<> 0` (deckt Pythons `is_gift=1` korrekt ab).
     let (subs_total, subs_gifted) = match sqlx::query(
         r#"
         SELECT CAST(COUNT(*) AS BIGINT) AS total_events,
-               CAST(SUM(CASE WHEN is_gift IS TRUE THEN 1 ELSE 0 END) AS BIGINT) AS gifted
+               CAST(SUM(CASE WHEN is_gift <> 0 THEN 1 ELSE 0 END) AS BIGINT) AS gifted
           FROM twitch_subscription_events
          WHERE received_at >= $1
         "#,
@@ -1982,16 +1983,18 @@ mod tests {
             manual_verified_until TEXT
         )"#).execute(&pool).await.expect("DDL partner_state");
 
+        // Prod-Schema: is_partner ist INTEGER (0/1), nicht BOOLEAN — Fixture spiegelt das,
+        // sonst maskiert sie den int4/bool-Typ-Drift im Aggregat-SQL.
         sqlx::query(r#"CREATE TABLE twitch_stats_tracked (
             id BIGSERIAL PRIMARY KEY, streamer TEXT NOT NULL,
             viewer_count INTEGER NOT NULL DEFAULT 0,
-            is_partner BOOLEAN NOT NULL DEFAULT FALSE, ts_utc TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            is_partner INTEGER NOT NULL DEFAULT 0, ts_utc TIMESTAMPTZ NOT NULL DEFAULT NOW()
         )"#).execute(&pool).await.expect("DDL stats_tracked");
 
         sqlx::query(r#"CREATE TABLE twitch_stats_category (
             id BIGSERIAL PRIMARY KEY, streamer TEXT NOT NULL,
             viewer_count INTEGER NOT NULL DEFAULT 0,
-            is_partner BOOLEAN NOT NULL DEFAULT FALSE, ts_utc TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            is_partner INTEGER NOT NULL DEFAULT 0, ts_utc TIMESTAMPTZ NOT NULL DEFAULT NOW()
         )"#).execute(&pool).await.expect("DDL stats_category");
 
         sqlx::query(r#"CREATE TABLE twitch_stream_sessions (
@@ -2024,7 +2027,7 @@ mod tests {
 
         sqlx::query(r#"CREATE TABLE twitch_ad_break_events (
             id BIGSERIAL PRIMARY KEY, session_id BIGINT, started_at TIMESTAMPTZ,
-            duration_seconds INTEGER, is_automatic BOOLEAN
+            duration_seconds INTEGER, is_automatic INTEGER DEFAULT 0
         )"#).execute(&pool).await.expect("DDL ad_break");
 
         sqlx::query(r#"CREATE TABLE twitch_session_viewers (
@@ -2041,7 +2044,7 @@ mod tests {
         )"#).execute(&pool).await.expect("DDL bits");
 
         sqlx::query(r#"CREATE TABLE twitch_subscription_events (
-            id BIGSERIAL PRIMARY KEY, is_gift BOOLEAN, received_at TIMESTAMPTZ
+            id BIGSERIAL PRIMARY KEY, is_gift INTEGER DEFAULT 0, received_at TIMESTAMPTZ
         )"#).execute(&pool).await.expect("DDL subscription_events");
 
         sqlx::query(r#"CREATE TABLE twitch_subscriptions_snapshot (
@@ -2074,7 +2077,7 @@ mod tests {
         sqlx::query("INSERT INTO twitch_streamers_partner_state (twitch_login, is_partner_active, manual_verified_permanent) VALUES ('helmi', 1, 1), ('dragscope', 1, 0)")
             .execute(&pool).await.unwrap();
 
-        sqlx::query("INSERT INTO twitch_stats_tracked (streamer, viewer_count, is_partner, ts_utc) VALUES ('helmi', 100, TRUE, NOW()), ('helmi', 200, TRUE, NOW()), ('dragscope', 50, FALSE, NOW())")
+        sqlx::query("INSERT INTO twitch_stats_tracked (streamer, viewer_count, is_partner, ts_utc) VALUES ('helmi', 100, 1, NOW()), ('helmi', 200, 1, NOW()), ('dragscope', 50, 0, NOW())")
             .execute(&pool).await.unwrap();
 
         let hf = HourFilter::None;
@@ -2101,7 +2104,7 @@ mod tests {
         sqlx::query("INSERT INTO twitch_streamers_partner_state (twitch_login, is_partner_active) VALUES ('helmi', 1)")
             .execute(&pool).await.unwrap();
 
-        sqlx::query("INSERT INTO twitch_stats_tracked (streamer, viewer_count, is_partner, ts_utc) VALUES ('helmi', 120, TRUE, NOW())")
+        sqlx::query("INSERT INTO twitch_stats_tracked (streamer, viewer_count, is_partner, ts_utc) VALUES ('helmi', 120, 1, NOW())")
             .execute(&pool).await.unwrap();
 
         let hf = HourFilter::None;
@@ -2174,7 +2177,7 @@ mod tests {
 
         sqlx::query("INSERT INTO twitch_streamers_partner_state (twitch_login, is_partner_active, manual_verified_permanent) VALUES ('helmi', 1, 1)")
             .execute(&pool).await.unwrap();
-        sqlx::query("INSERT INTO twitch_stats_tracked (streamer, viewer_count, is_partner, ts_utc) VALUES ('helmi', 19, TRUE, NOW()), ('helmi', 15, TRUE, NOW())")
+        sqlx::query("INSERT INTO twitch_stats_tracked (streamer, viewer_count, is_partner, ts_utc) VALUES ('helmi', 19, 1, NOW()), ('helmi', 15, 1, NOW())")
             .execute(&pool).await.unwrap();
 
         let hf = HourFilter::None;
