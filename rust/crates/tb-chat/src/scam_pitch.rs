@@ -125,6 +125,8 @@ const STATE_PRUNE_INTERVAL_SEC: f64 = 60.0;
 const MINIMAX_BASE_URL: &str = "https://api.minimax.io/v1";
 /// Modell-ID (spam_ai_review.py Z. 148).
 const MINIMAX_MODEL: &str = "MiniMax-M3";
+/// Ledger-Zweck dieses Calls (spam_ai_review.py Z. 175: `purpose="spam-review"`).
+const MINIMAX_PURPOSE: &str = "spam-review";
 /// Review-Cooldown pro (channel, user) in Sekunden (spam_ai_review.py Z. 79).
 const REVIEW_COOLDOWN_SEC: f64 = 300.0;
 /// Prune-Grenze für den Cooldown-Cache (spam_ai_review.py Z. 80).
@@ -1633,6 +1635,22 @@ struct AiReview {
     reason: Option<String>,
 }
 
+/// Liest `usage.prompt_tokens` / `usage.completion_tokens` aus der MiniMax-Antwort.
+///
+/// Fehlende oder negative Werte werden auf `0` geklemmt — Parität zu Pythons
+/// `int(getattr(_usage, "prompt_tokens", 0) or 0)` (spam_ai_review.py Z. 173–174)
+/// und zur Clamp-Logik in [`tb_llm::ledger::record`].
+fn usage_tokens(resp: &serde_json::Value) -> (i64, i64) {
+    let field = |name: &str| {
+        resp.get("usage")
+            .and_then(|u| u.get(name))
+            .and_then(serde_json::Value::as_i64)
+            .unwrap_or(0)
+            .max(0)
+    };
+    (field("prompt_tokens"), field("completion_tokens"))
+}
+
 /// Ruft MiniMax M3 auf und gibt das geparste Ergebnis zurück.
 /// spam_ai_review.py Z. 144–176
 async fn call_minimax(
@@ -1663,6 +1681,13 @@ async fn call_minimax(
         .ok()?;
 
     let json: serde_json::Value = resp.json().await.ok()?;
+
+    // Verbrauch ins gemeinsame MiniMax-Ledger (best-effort, wirft nie) —
+    // spam_ai_review.py Z. 164–176. Verbucht direkt nach der Antwort, damit der
+    // Token-Verbrauch auch dann zählt, wenn die JSON-Extraktion unten scheitert.
+    let (tokens_in, tokens_out) = usage_tokens(&json);
+    tb_llm::ledger::record(MINIMAX_PURPOSE, MINIMAX_MODEL, tokens_in, tokens_out, true).await;
+
     let raw = json["choices"][0]["message"]["content"]
         .as_str()
         .unwrap_or("")
@@ -2015,6 +2040,33 @@ mod tests {
         // 15 Tokens → nicht benign
         let content = "hey how are you doing today bro and what are you up to right now man";
         assert!(!is_benign_social_checkin(content, &f, &p));
+    }
+
+    // ── MiniMax-Usage-Ledger (B9-BUILD-minimax-usage-ledger) ──────────────────
+    #[test]
+    fn usage_tokens_liest_prompt_und_completion() {
+        // spam_ai_review.py Z. 172–175: prompt_tokens / completion_tokens aus usage.
+        let resp = serde_json::json!({
+            "choices": [{ "message": { "content": "{}" } }],
+            "usage": { "prompt_tokens": 123, "completion_tokens": 45 }
+        });
+        assert_eq!(usage_tokens(&resp), (123, 45));
+    }
+
+    #[test]
+    fn usage_tokens_fehlend_ist_null() {
+        // Kein usage-Objekt → (0, 0), wie Pythons `getattr(..., 0) or 0`.
+        let resp = serde_json::json!({ "choices": [] });
+        assert_eq!(usage_tokens(&resp), (0, 0));
+    }
+
+    #[test]
+    fn usage_tokens_clampt_negativ_auf_null() {
+        // Defensiv: negative Werte landen nicht im Ledger (Parität zu ledger::record).
+        let resp = serde_json::json!({
+            "usage": { "prompt_tokens": -7, "completion_tokens": -1 }
+        });
+        assert_eq!(usage_tokens(&resp), (0, 0));
     }
 
     // ── has_high_confidence_single_message_signal ─────────────────────────────
