@@ -7,7 +7,7 @@
 use std::str::FromStr;
 use std::sync::Arc;
 
-use chrono::{Duration, Utc};
+use chrono::{Duration, DurationRound, TimeDelta, Utc};
 use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
 use sqlx::PgPool;
 use tb_crypto::{aad, FieldCipher, KID};
@@ -177,7 +177,10 @@ async fn refresht_nur_faellige_tokens() {
 #[tokio::test]
 async fn ueberspringt_raid_disabled_und_needs_reauth() {
     let pool = pool_or_skip!("t7_bg_skip");
-    let now = Utc::now();
+    // Auf Mikrosekunden trunkieren: Postgres `TIMESTAMPTZ` speichert nur µs,
+    // chrono::Utc::now() liefert ns. Ohne Trunkierung scheitert der exakte
+    // `assert_eq!`-Vergleich unten an den verlorenen Nanosekunden.
+    let now = Utc::now().duration_trunc(TimeDelta::microseconds(1)).unwrap();
     let due = now + Duration::minutes(30);
 
     // Beide fällig, aber je ein Ausschlusskriterium.
