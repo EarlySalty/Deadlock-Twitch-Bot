@@ -29,6 +29,7 @@ pub mod commands;
 pub mod fun_responses;
 pub mod global_ban_sweep;
 pub mod global_chatter_ban;
+pub mod lurker_policy;
 pub mod mention_scoring;
 pub mod moderation;
 pub mod pipeline;
@@ -52,6 +53,7 @@ pub use global_chatter_ban::GlobalChatterBanEnforcer;
 pub use mention_scoring::{score_mention_patterns, MentionResolver, WHITELISTED_BOTS};
 pub use pipeline::{
     ChatPipeline, ChatPipelineParts, ModAlerter, PgHelixMentionResolver, ReviewLog,
+    SCAM_PITCH_TIMEOUT_REASON,
 };
 pub use sus_invite::{SusInviteCheck, SusInviteHit};
 pub use commands::{
@@ -59,6 +61,10 @@ pub use commands::{
     RaidStatusInfo, SuperModPort,
 };
 pub use global_ban_sweep::{GlobalBanSweeper, PartnerRoster};
+pub use lurker_policy::{
+    is_passive_lurker_channel, should_attempt_runtime_heal, PASSIVE_LURKER_DETAIL,
+    PASSIVE_LURKER_STATE,
+};
 pub use moderation::{
     AutoBanRequest, ChannelGuardPort, HelixChatClient, ModerationEngine, OutboundSuppressionCheck,
     OutboundSuppressionStore, TimeoutGuard,

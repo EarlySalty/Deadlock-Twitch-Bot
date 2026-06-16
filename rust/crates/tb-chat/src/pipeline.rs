@@ -58,6 +58,19 @@ use crate::spam_filter::{SpamAction, SpamContext, SpamFilter, SPAM_MIN_MATCHES};
 use crate::sus_invite::SusInviteCheck;
 use crate::types::ChatMessageEvent;
 
+/// Twitch-Timeout-Reason für die Scam-Pitch-Eskalation (StrongTimeout).
+///
+/// **Bewusste Divergenz zum Python-Orakel** (Grillme-Entscheidung
+/// `scam-pitch-spam-review-5`, 2026-06-15: „Timeout-Reason → Rust akzeptieren
+/// (klarer)"). Python übergibt `"Service-Pitch / Spam Escalation"`
+/// (`service_pitch_warning.py:944`); der Rust-Wortlaut benennt zusätzlich den
+/// Account-Takeover-Verdacht und ist damit für den Moderator aussagekräftiger.
+/// Dieser String ist die kanonische Quelle — ein späterer blinder Parity-Pass
+/// darf ihn NICHT auf den Python-Wortlaut zurücksetzen (Regression-Guard:
+/// Test `scam_pitch_timeout_reason_ist_bewusst_klarer_als_python`).
+pub const SCAM_PITCH_TIMEOUT_REASON: &str =
+    "Account-Takeover-Verdacht / wiederholter Service-Pitch";
+
 // ---------------------------------------------------------------------------
 // Review-Log — TSV-Dateien, die das Admin-Dashboard parst
 // ---------------------------------------------------------------------------
@@ -464,7 +477,7 @@ impl ChatPipeline {
                             &event.broadcaster_user_id,
                             &event.chatter_user_id,
                             600,
-                            "Account-Takeover-Verdacht / wiederholter Service-Pitch",
+                            SCAM_PITCH_TIMEOUT_REASON,
                         )
                         .await
                     {
@@ -834,5 +847,24 @@ mod tests {
             };
             assert_eq!(title, expected);
         }
+    }
+
+    /// Regression-Guard für die Grillme-Entscheidung `scam-pitch-spam-review-5`
+    /// (2026-06-15): Der Scam-Pitch-Eskalations-Timeout nutzt bewusst einen
+    /// **klareren** Reason als Python (`"Service-Pitch / Spam Escalation"`).
+    /// Dieser Test lockt den akzeptierten Wortlaut ein, damit ein späterer
+    /// blinder „Parity mit Python"-Pass ihn nicht versehentlich zurücksetzt.
+    #[test]
+    fn scam_pitch_timeout_reason_ist_bewusst_klarer_als_python() {
+        const PYTHON_REASON: &str = "Service-Pitch / Spam Escalation";
+        assert_eq!(
+            SCAM_PITCH_TIMEOUT_REASON,
+            "Account-Takeover-Verdacht / wiederholter Service-Pitch",
+        );
+        assert_ne!(
+            SCAM_PITCH_TIMEOUT_REASON, PYTHON_REASON,
+            "Rust-Reason ist die akzeptierte, klarere Variante (Grillme-Entscheidung) \
+             und darf NICHT auf den Python-Wortlaut zurückgesetzt werden",
+        );
     }
 }
