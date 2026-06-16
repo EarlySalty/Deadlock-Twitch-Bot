@@ -6,13 +6,13 @@
 //!
 //! **Migrations-Fix (bits/subs):** Pythons bits/subs-Queries filtern über eine
 //! direkte Spalte `streamer_login`, die durch die Schema-Umstellung des Rust-
-//! Cutovers nicht mehr existiert (subs vergleicht zudem `is_gift=1` gegen die jetzt
-//! BOOLEAN-Spalte) — in Python scheitern sie still und liefern immer 0. Die
-//! beabsichtigte Funktion ist eindeutig (Bits/Subs je Streamer im Fenster), daher
+//! Cutovers nicht mehr existiert — in Python scheitern sie still und liefern immer 0.
+//! Die beabsichtigte Funktion ist eindeutig (Bits/Subs je Streamer im Fenster), daher
 //! hier korrigiert statt 1:1 den Defekt zu spiegeln: Filter über JOIN auf
 //! `twitch_stream_sessions.streamer_login` per `session_id` — genau wie ads +
-//! hype_train im selben Loader — und `is_gift` als BOOLEAN. Gleiche Funktion, echte
-//! Zahlen statt 0. Der catch-all bleibt als defensiver Fallback (Tabelle fehlt).
+//! hype_train im selben Loader. `is_gift`/`is_automatic` sind im echten Schema
+//! INTEGER (0/1), daher `= 1` an der DB-Grenze statt boolescher Auswertung. Gleiche
+//! Funktion, echte Zahlen statt 0. Der catch-all bleibt defensiver Fallback (Tabelle fehlt).
 
 use std::collections::{HashMap, HashSet};
 
@@ -109,7 +109,8 @@ async fn compute_drop_analysis(
     streamer: &str,
     cutoff: DateTime<Utc>,
 ) -> Result<DropAnalysis, sqlx::Error> {
-    type AdRow = (i64, i64, DateTime<Utc>, Option<i32>, Option<bool>, Option<DateTime<Utc>>);
+    // is_automatic: echtes Schema = INTEGER (0/1), daher Option<i32> dekodieren.
+    type AdRow = (i64, i64, DateTime<Utc>, Option<i32>, Option<i32>, Option<DateTime<Utc>>);
     let ad_rows: Vec<AdRow> = sqlx::query_as(
         "SELECT a.id::bigint, a.session_id::bigint, a.started_at, a.duration_seconds, a.is_automatic, s.started_at \
            FROM twitch_ad_break_events a \
@@ -213,7 +214,7 @@ async fn compute_drop_analysis(
             duration_recovery[di].push(rm);
         }
 
-        let is_auto = is_automatic.unwrap_or(false);
+        let is_auto = is_automatic.map_or(false, |v| v != 0);
         let drop_pct_round = round1(drop);
         worst_ads.push((
             drop_pct_round,
@@ -331,7 +332,7 @@ pub async fn load_monetization_payload(
     let (total_ads, auto_ads, avg_duration, sessions_with_ads): (i64, i64, Option<f64>, i64) =
         sqlx::query_as(
             "SELECT COUNT(*)::bigint, \
-                    COALESCE(SUM(CASE WHEN a.is_automatic IS TRUE THEN 1 ELSE 0 END), 0)::bigint, \
+                    COALESCE(SUM(CASE WHEN a.is_automatic = 1 THEN 1 ELSE 0 END), 0)::bigint, \
                     AVG(a.duration_seconds)::float8, \
                     COUNT(DISTINCT a.session_id)::bigint \
                FROM twitch_ad_break_events a \
@@ -406,9 +407,9 @@ pub async fn load_monetization_payload(
         }
     };
 
-    // --- Subs (Migrations-Fix: session_id-JOIN + is_gift als BOOLEAN). ---
+    // --- Subs (Migrations-Fix: session_id-JOIN + is_gift INTEGER 0/1 → `= 1`). ---
     let subs = match sqlx::query_as::<_, (i64, Option<i64>)>(
-        "SELECT COUNT(*)::bigint, SUM(CASE WHEN su.is_gift THEN 1 ELSE 0 END)::bigint \
+        "SELECT COUNT(*)::bigint, SUM(CASE WHEN su.is_gift = 1 THEN 1 ELSE 0 END)::bigint \
            FROM twitch_subscription_events su \
            LEFT JOIN twitch_stream_sessions s ON s.id = su.session_id \
           WHERE su.received_at >= $1 AND ($2 = '' OR LOWER(s.streamer_login) = $2)",
@@ -450,12 +451,12 @@ mod tests {
         let pool = PgPoolOptions::new().max_connections(2).connect_with(opts).await.unwrap();
         sqlx::query("CREATE TABLE twitch_stream_sessions (id BIGSERIAL PRIMARY KEY, streamer_login TEXT, started_at TIMESTAMPTZ)")
             .execute(&pool).await.unwrap();
-        sqlx::query("CREATE TABLE twitch_ad_break_events (id BIGSERIAL PRIMARY KEY, session_id BIGINT, duration_seconds INTEGER, is_automatic BOOLEAN DEFAULT FALSE, started_at TIMESTAMPTZ)")
+        sqlx::query("CREATE TABLE twitch_ad_break_events (id BIGSERIAL PRIMARY KEY, session_id BIGINT, duration_seconds INTEGER, is_automatic INTEGER DEFAULT 0, started_at TIMESTAMPTZ)")
             .execute(&pool).await.unwrap();
-        // Live-Schema: bits/subs OHNE streamer_login, subs.is_gift BOOLEAN.
+        // Live-Schema: bits/subs OHNE streamer_login, subs.is_gift INTEGER (0/1).
         sqlx::query("CREATE TABLE twitch_bits_events (id BIGSERIAL PRIMARY KEY, session_id BIGINT, amount INTEGER, received_at TIMESTAMPTZ)")
             .execute(&pool).await.unwrap();
-        sqlx::query("CREATE TABLE twitch_subscription_events (id BIGSERIAL PRIMARY KEY, session_id BIGINT, is_gift BOOLEAN DEFAULT FALSE, received_at TIMESTAMPTZ)")
+        sqlx::query("CREATE TABLE twitch_subscription_events (id BIGSERIAL PRIMARY KEY, session_id BIGINT, is_gift INTEGER DEFAULT 0, received_at TIMESTAMPTZ)")
             .execute(&pool).await.unwrap();
         sqlx::query("CREATE TABLE twitch_hype_train_events (id BIGSERIAL PRIMARY KEY, session_id BIGINT, level INTEGER, duration_seconds INTEGER, started_at TIMESTAMPTZ, ended_at TIMESTAMPTZ)")
             .execute(&pool).await.unwrap();
@@ -470,7 +471,7 @@ mod tests {
         sqlx::query("INSERT INTO twitch_stream_sessions (streamer_login, started_at) VALUES ('nani', NOW() - INTERVAL '2 hours')")
             .execute(&pool).await.unwrap();
         // 3 Ads: 2 auto (60s/60s), 1 manuell (30s).
-        sqlx::query("INSERT INTO twitch_ad_break_events (session_id, duration_seconds, is_automatic, started_at) VALUES (1,60,TRUE,NOW()-INTERVAL '1 hour'),(1,60,TRUE,NOW()-INTERVAL '50 min'),(1,30,FALSE,NOW()-INTERVAL '40 min')")
+        sqlx::query("INSERT INTO twitch_ad_break_events (session_id, duration_seconds, is_automatic, started_at) VALUES (1,60,1,NOW()-INTERVAL '1 hour'),(1,60,1,NOW()-INTERVAL '50 min'),(1,30,0,NOW()-INTERVAL '40 min')")
             .execute(&pool).await.unwrap();
         sqlx::query("INSERT INTO twitch_hype_train_events (session_id, level, duration_seconds, started_at, ended_at) VALUES (1,3,300,NOW()-INTERVAL '1 hour',NOW()-INTERVAL '55 min'),(1,5,600,NOW()-INTERVAL '30 min',NOW()-INTERVAL '20 min')")
             .execute(&pool).await.unwrap();
@@ -507,7 +508,7 @@ mod tests {
         // nani: 2 Bits (100+50), 3 Subs (1 gift); other: 1 Bit (999) — darf NICHT zählen.
         sqlx::query("INSERT INTO twitch_bits_events (session_id, amount, received_at) VALUES (1,100,NOW()-INTERVAL '1 hour'),(1,50,NOW()-INTERVAL '30 min'),(2,999,NOW()-INTERVAL '1 hour')")
             .execute(&pool).await.unwrap();
-        sqlx::query("INSERT INTO twitch_subscription_events (session_id, is_gift, received_at) VALUES (1,FALSE,NOW()-INTERVAL '1 hour'),(1,TRUE,NOW()-INTERVAL '50 min'),(1,FALSE,NOW()-INTERVAL '40 min'),(2,TRUE,NOW()-INTERVAL '1 hour')")
+        sqlx::query("INSERT INTO twitch_subscription_events (session_id, is_gift, received_at) VALUES (1,0,NOW()-INTERVAL '1 hour'),(1,1,NOW()-INTERVAL '50 min'),(1,0,NOW()-INTERVAL '40 min'),(2,1,NOW()-INTERVAL '1 hour')")
             .execute(&pool).await.unwrap();
 
         // Mit Streamer-Filter: nur nani.
@@ -527,7 +528,7 @@ mod tests {
         // Session + 1 manueller 60s-Ad, 10 Min in den Stream (feste Timestamps → minutes_into=10.0).
         sqlx::query("INSERT INTO twitch_stream_sessions (id, streamer_login, started_at) VALUES (1,'nani','2026-06-14 12:00:00+00')")
             .execute(&pool).await.unwrap();
-        sqlx::query("INSERT INTO twitch_ad_break_events (session_id, duration_seconds, is_automatic, started_at) VALUES (1,60,FALSE,'2026-06-14 12:10:00+00')")
+        sqlx::query("INSERT INTO twitch_ad_break_events (session_id, duration_seconds, is_automatic, started_at) VALUES (1,60,0,'2026-06-14 12:10:00+00')")
             .execute(&pool).await.unwrap();
         // Timeline: pre (Min 7-9)=100, während/post (Min 10-12)=50, Recovery bei Min 13=95.
         for (m, vc) in [(7, 100), (8, 100), (9, 100), (10, 50), (11, 50), (12, 50), (13, 95)] {

@@ -45,18 +45,18 @@ pub async fn market_share_series(
         r#"
         SELECT
             to_timestamp(floor(extract(epoch FROM ts_utc) / $1) * $1) AS bucket,
-            (SUM(viewer_count) FILTER (WHERE is_partner))::FLOAT8
+            (SUM(viewer_count) FILTER (WHERE is_partner = 1))::FLOAT8
                 / NULLIF(COUNT(DISTINCT ts_utc), 0)                   AS partner_viewers,
             SUM(viewer_count)::FLOAT8
                 / NULLIF(COUNT(DISTINCT ts_utc), 0)                   AS total_viewers,
-            (COUNT(*) FILTER (WHERE is_partner))::FLOAT8
+            (COUNT(*) FILTER (WHERE is_partner = 1))::FLOAT8
                 / NULLIF(COUNT(DISTINCT ts_utc), 0)                   AS partner_streams,
             COUNT(*)::FLOAT8
                 / NULLIF(COUNT(DISTINCT ts_utc), 0)                   AS total_streams
         FROM twitch_stats_category
         WHERE ts_utc >= $2
           AND ($3::BOOL IS FALSE
-               OR is_partner
+               OR is_partner = 1
                OR language = 'de'
                OR (language IS NULL
                    AND (ts_utc < '2026-06-10T00:00:00+00'
@@ -85,7 +85,7 @@ pub async fn partner_roster(
     .await?;
     let seen: (i64,) = sqlx::query_as(
         "SELECT COUNT(DISTINCT LOWER(streamer)) FROM twitch_stats_category
-          WHERE is_partner AND ts_utc >= $1",
+          WHERE is_partner = 1 AND ts_utc >= $1",
     )
     .bind(since)
     .fetch_one(pool)
@@ -114,7 +114,7 @@ pub async fn market_current_tick(pool: &PgPool) -> Result<Vec<MarketStreamRow>, 
             ts_utc,
             streamer,
             viewer_count,
-            COALESCE(is_partner, FALSE)                            AS is_partner,
+            (COALESCE(is_partner, 0) = 1)                          AS is_partner,
             (language = 'de'
              OR (language IS NULL
                  AND (tags ILIKE '%deutsch%' OR tags ILIKE '%german%'))) AS is_german,
@@ -179,7 +179,7 @@ mod tests {
                 ts_utc       TIMESTAMPTZ NOT NULL,
                 streamer     TEXT NOT NULL,
                 viewer_count INTEGER,
-                is_partner   BOOLEAN DEFAULT FALSE,
+                is_partner   INTEGER DEFAULT 0,
                 game_name    TEXT,
                 stream_title TEXT,
                 tags         TEXT,
@@ -207,7 +207,7 @@ mod tests {
             .bind(ts)
             .bind(streamer)
             .bind(viewers)
-            .bind(partner)
+            .bind(*partner as i32)
             .bind(tags)
             .bind(language)
             .execute(pool)
