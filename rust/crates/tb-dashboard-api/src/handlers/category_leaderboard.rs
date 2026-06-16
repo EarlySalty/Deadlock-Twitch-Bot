@@ -76,7 +76,7 @@ pub async fn category_leaderboard_handler(
             SELECT c.streamer,
                    AVG(c.viewer_count)::float8  AS avg_vc,
                    MAX(c.viewer_count)::float8  AS peak_vc,
-                   BOOL_OR(c.is_partner) AS is_partner
+                   BOOL_OR(c.is_partner <> 0) AS is_partner
             FROM twitch_stats_category c
             WHERE c.ts_utc >= $1
             GROUP BY c.streamer
@@ -89,7 +89,7 @@ pub async fn category_leaderboard_handler(
             SELECT c.streamer,
                    AVG(c.viewer_count)::float8  AS avg_vc,
                    MAX(c.viewer_count)::float8  AS peak_vc,
-                   BOOL_OR(c.is_partner) AS is_partner
+                   BOOL_OR(c.is_partner <> 0) AS is_partner
             FROM twitch_stats_category c
             WHERE c.ts_utc >= $1
             GROUP BY c.streamer
