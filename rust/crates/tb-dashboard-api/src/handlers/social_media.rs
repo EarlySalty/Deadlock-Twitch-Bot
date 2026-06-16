@@ -130,8 +130,19 @@ fn render_index(auth: &DashboardAuthLevel) -> Result<String, Response> {
     Ok(render_dashboard(&label, &data))
 }
 
+/// Twitch-Login-Redirect-Ziel der unauthentifizierten HTML-Index-Seite
+/// (B15-FIX-index-redirect / finding social_media-2).
+const SOCIAL_MEDIA_LOGIN_URL: &str = "/twitch/auth/login?next=%2Fsocial-media";
+
 /// `GET /social-media` — Dashboard-SPA (Auth erforderlich).
+///
+/// B15-FIX-index-redirect: Unauthentifiziert liefert die **HTML-Seite** keinen
+/// 401-JSON mehr, sondern einen 302-Redirect auf den Twitch-Login (Browser-UX,
+/// Python-Parität). Die JSON-Daten-Endpoints behalten ihr 401 (kein Redirect).
 pub async fn index_handler(auth: DashboardAuthLevel) -> Response {
+    if matches!(auth, DashboardAuthLevel::None) {
+        return axum::response::Redirect::to(SOCIAL_MEDIA_LOGIN_URL).into_response();
+    }
     match render_index(&auth) {
         Ok(html) => Html(html).into_response(),
         Err(resp) => resp,
@@ -394,6 +405,26 @@ fn require_admin(auth: &DashboardAuthLevel) -> Result<(), Response> {
     }
 }
 
+/// Actor-ID für die Audit-Felder `updated_by`/`edited_by` (B15-FIX-audit-fields).
+///
+/// Spiegelt Pythons `_get_editor_user_id` (dashboard.py:173-188): liest die
+/// Session-User-ID. Reihenfolge dort: `discord_user_id` → `user_id` →
+/// `twitch_user_id`. Im Rust-Auth-Modell trägt nur die Partner-Session eine
+/// User-ID (`twitch_user_id`); Localhost hat keine (→ `None`, wie Python). Die
+/// Discord-Admin-ID liegt im Session-Payload, wird aber im `Admin`-Unit-Variant
+/// nicht mitgeführt — für die aktuell admin-only Schreibpfade ist das NULL (=
+/// Python-Localhost-Verhalten); ein künftiger Partner-Schreibpfad erbt korrekt
+/// die `twitch_user_id`.
+fn editor_user_id(auth: &DashboardAuthLevel) -> Option<String> {
+    match auth {
+        DashboardAuthLevel::Partner { twitch_user_id, .. } => {
+            let id = twitch_user_id.trim();
+            (!id.is_empty()).then(|| id.to_string())
+        }
+        _ => None,
+    }
+}
+
 /// Slug-Validierung (`[A-Za-z0-9_-]+`, nicht leer) — liefert die Fehlermeldung
 /// (Python `_normalize_safe_slug`).
 fn slug_message(raw: Option<&str>, field: &str) -> Result<String, String> {
@@ -450,9 +481,48 @@ fn parse_layout_request(payload: &Value) -> Result<StreamerLayout, Response> {
 const UPLOAD_MAX_BYTES: usize = 200 * 1024 * 1024;
 const UPLOAD_MAX_DURATION_SECONDS: f64 = 300.0;
 
-/// MP4-Magic: enthält das `ftyp`-Box-Kennzeichen in den ersten 64 Bytes.
-fn has_mp4_header(bytes: &[u8]) -> bool {
-    bytes.get(..bytes.len().min(64)).map(|h| h.windows(4).any(|w| w == b"ftyp")).unwrap_or(false)
+/// Echter MIME-Check über die ISO-BMFF-`ftyp`-Box (B15-FIX-mime).
+///
+/// libmagic erkennt `video/mp4` strukturiert: die erste Box ist `ftyp`, ihr
+/// Tag steht an Offset 4 (nach der 4-Byte-Boxgröße), gefolgt vom Major-Brand
+/// (Offset 8). Diese Funktion bildet das nach (statt nur „ftyp irgendwo in den
+/// ersten 64 Bytes") und liefert den erkannten MIME-Typ:
+/// - `video/mp4` für ISO-/MP4-Brands (`isom`, `mp4*`, `iso*`, `avc1`, `dash`, `M4V `)
+/// - `video/quicktime` für den QuickTime-Brand `qt  `
+///
+/// Python akzeptiert nur `{video/mp4, application/mp4}` (libmagic); wir bleiben
+/// gleich streng (QuickTime wird mit-erkannt, aber von [`is_accepted_mp4_mime`]
+/// abgelehnt → identische Allowlist).
+fn detect_mp4_mime(bytes: &[u8]) -> Option<&'static str> {
+    // Mindestens Boxgröße(4) + "ftyp"(4) + Major-Brand(4).
+    if bytes.len() < 12 || &bytes[4..8] != b"ftyp" {
+        return None;
+    }
+    let brand = &bytes[8..12];
+    match brand {
+        b"qt  " => Some("video/quicktime"),
+        b"M4V " | b"M4A " | b"M4P " | b"M4B " => Some("video/mp4"),
+        _ => {
+            // isom, iso2, iso4-6, mp41/mp42, avc1, dash, mmp4, … → MP4-Familie.
+            let b = brand;
+            if b.starts_with(b"iso")
+                || b.starts_with(b"mp4")
+                || b == b"isom"
+                || b == b"avc1"
+                || b == b"dash"
+                || b == b"mmp4"
+            {
+                Some("video/mp4")
+            } else {
+                None
+            }
+        }
+    }
+}
+
+/// Python-Allowlist (`{video/mp4, application/mp4}`); QuickTime/andere → false.
+fn is_accepted_mp4_mime(mime: &str) -> bool {
+    matches!(mime, "video/mp4" | "application/mp4")
 }
 
 /// Verarbeitet einen hochgeladenen Clip (Validierung + Speichern + Registrierung).
@@ -493,10 +563,15 @@ async fn process_uploaded_clip(
         return Err((StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": "upload_failed" }))).into_response());
     }
 
-    // Validierung (ftyp + ffprobe-Dauer).
+    // Validierung (B15-FIX: echter MIME-Check via ftyp-Box + ffprobe-Dauer).
     let validation = async {
-        if !has_mp4_header(bytes) {
-            return Err((StatusCode::UNSUPPORTED_MEDIA_TYPE, "Only MP4 uploads are supported").into_response());
+        // libmagic-Parität: MIME aus der ftyp-Box ableiten, gegen die Allowlist
+        // {video/mp4, application/mp4} prüfen. Kein gültiges MP4-Brand → 415.
+        match detect_mp4_mime(bytes) {
+            Some(mime) if is_accepted_mp4_mime(mime) => {}
+            _ => {
+                return Err((StatusCode::UNSUPPORTED_MEDIA_TYPE, "Only MP4 uploads are supported").into_response());
+            }
         }
         let info = VideoProcessor::default()
             .get_video_info(&temp_path)
@@ -630,8 +705,9 @@ pub async fn streamer_layout_put_handler(auth: DashboardAuthLevel, State(pool): 
         Ok(l) => l,
         Err(e) => return e,
     };
-    // updated_by: Admin/Localhost tragen im Rust-Auth-Modell keine User-ID.
-    let _ = upsert_streamer_layout(&pool, &slug, &layout, None).await;
+    // updated_by (B15-FIX): Session-Actor (Partner→twitch_user_id, sonst NULL).
+    let actor = editor_user_id(&auth);
+    let _ = upsert_streamer_layout(&pool, &slug, &layout, actor.as_deref()).await;
     Json(json!({
         "streamer_login": slug,
         "layout": layout.to_override_json(),
@@ -1380,7 +1456,7 @@ pub async fn enrichment_put_handler(auth: DashboardAuthLevel, State(pool): State
     let result = update_manual_edit(
         &pool,
         clip_db_id,
-        None, // edited_by: Admin/Localhost ohne User-ID im Rust-Auth-Modell
+        editor_user_id(&auth).as_deref(), // edited_by (B15-FIX): Session-Actor statt NULL
         ty, tt, ti, dy, dt, di,
         hy.as_deref(),
         ht.as_deref(),
@@ -1600,7 +1676,9 @@ pub async fn approval_decision_handler(auth: DashboardAuthLevel, State(pool): St
         Ok(p) => p,
         Err(e) => return e,
     };
-    match handle_decision(&pool, clip_db_id, &decision, &platforms, None).await {
+    // user_id (B15-FIX): Session-Actor für das Approval-Audit (sonst NULL).
+    let actor = editor_user_id(&auth);
+    match handle_decision(&pool, clip_db_id, &decision, &platforms, actor.as_deref()).await {
         Ok(record) => {
             let clip = match load_clip_row(&pool, clip_db_id).await {
                 Some(c) => serialize_clip_record(&pool, &c).await,
@@ -1640,7 +1718,9 @@ pub async fn auto_approve_put_handler(auth: DashboardAuthLevel, State(pool): Sta
         tiktok: payload.get("tiktok").map(coerce_bool).unwrap_or(false),
         instagram: payload.get("instagram").map(coerce_bool).unwrap_or(false),
     };
-    match set_auto_approve_settings(&pool, values, None).await {
+    // updated_by (B15-FIX): Session-Actor (sonst NULL, wie Python-Localhost).
+    let actor = editor_user_id(&auth);
+    match set_auto_approve_settings(&pool, values, actor.as_deref()).await {
         Ok(r) => Json(json!({ "youtube": r.youtube, "tiktok": r.tiktok, "instagram": r.instagram })).into_response(),
         Err(_) => (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": "db" }))).into_response(),
     }
@@ -1762,13 +1842,53 @@ mod tests {
     use super::*;
 
     fn partner(login: &str) -> DashboardAuthLevel {
-        DashboardAuthLevel::Partner { twitch_login: login.to_string(), twitch_user_id: "1".to_string() }
+        DashboardAuthLevel::Partner { twitch_login: login.to_string(), twitch_user_id: "1".to_string(), display_name: String::new() }
     }
 
     #[test]
     fn html_escape_zeichen() {
         assert_eq!(html_escape("a&b<c>\"'"), "a&amp;b&lt;c&gt;&quot;&#x27;");
         assert_eq!(html_escape("nani_123"), "nani_123");
+    }
+
+    #[test]
+    fn mp4_mime_erkennung_und_allowlist() {
+        // B15-FIX: ftyp-Box an Offset 4 + Major-Brand → MIME.
+        let mp4 = b"\x00\x00\x00\x18ftypisom....";
+        assert_eq!(detect_mp4_mime(mp4), Some("video/mp4"));
+        assert!(is_accepted_mp4_mime(detect_mp4_mime(mp4).unwrap()));
+        // mp42-Brand → video/mp4.
+        assert_eq!(detect_mp4_mime(b"\x00\x00\x00\x18ftypmp42...."), Some("video/mp4"));
+        // QuickTime-Brand → video/quicktime, aber NICHT akzeptiert (Allowlist).
+        assert_eq!(detect_mp4_mime(b"\x00\x00\x00\x18ftypqt  ...."), Some("video/quicktime"));
+        assert!(!is_accepted_mp4_mime("video/quicktime"));
+        // ftyp NICHT an Offset 4 (nur irgendwo enthalten) → kein MP4 (strenger
+        // als der alte Substring-Check).
+        assert_eq!(detect_mp4_mime(b"xxxxxxxxftypisom"), None);
+        // Zu kurz / Klartext → None.
+        assert_eq!(detect_mp4_mime(b"not a video at all"), None);
+        assert_eq!(detect_mp4_mime(b"short"), None);
+    }
+
+    #[test]
+    fn editor_actor_aus_partner_session() {
+        // B15-FIX: Partner → twitch_user_id; Admin/Localhost/None → None.
+        let p = DashboardAuthLevel::Partner {
+            twitch_login: "nani".into(),
+            twitch_user_id: "777".into(),
+            display_name: "NaNi".into(),
+        };
+        assert_eq!(editor_user_id(&p).as_deref(), Some("777"));
+        assert_eq!(editor_user_id(&DashboardAuthLevel::Admin), None);
+        assert_eq!(editor_user_id(&DashboardAuthLevel::Localhost), None);
+        assert_eq!(editor_user_id(&DashboardAuthLevel::None), None);
+        // Leere/whitespace user_id → None.
+        let empty = DashboardAuthLevel::Partner {
+            twitch_login: "x".into(),
+            twitch_user_id: "  ".into(),
+            display_name: String::new(),
+        };
+        assert_eq!(editor_user_id(&empty), None);
     }
 
     #[test]
@@ -1796,6 +1916,21 @@ mod tests {
         assert!(html.contains("@nani"));
         // None → Fehler.
         assert!(render_index(&DashboardAuthLevel::None).is_err());
+    }
+
+    #[tokio::test]
+    async fn index_unauth_redirectet_zum_login() {
+        // B15-FIX-index-redirect: None → 302/303-Redirect, kein 401-JSON.
+        let resp = index_handler(DashboardAuthLevel::None).await;
+        assert!(
+            resp.status().is_redirection(),
+            "unauth HTML-Index muss redirecten, war {}",
+            resp.status()
+        );
+        assert_eq!(
+            resp.headers().get(axum::http::header::LOCATION).unwrap(),
+            SOCIAL_MEDIA_LOGIN_URL
+        );
     }
 
     #[tokio::test]

@@ -52,6 +52,10 @@ use super::fernet;
 pub struct PartnerSession {
     pub twitch_login: String,
     pub twitch_user_id: String,
+    /// Twitch-`display_name` aus dem Helix-`/users`-Snapshot vom Login (im
+    /// verschlüsselten Session-Payload, Python `session["display_name"]`,
+    /// auth_mixin.py:906). Leer → Login-Fallback (Python api_v2.py:1826).
+    pub display_name: String,
 }
 
 /// Ergebnis einer Session-Erstellung: die Session-ID (Cookie-Wert) und das an
@@ -205,6 +209,10 @@ pub const OAUTH_STATE_SESSION_TYPE: &str = "oauth_state:twitch";
 /// Gültigkeit eines OAuth-Login-State-Tokens (Python: `server_v2.py:189`,
 /// `_oauth_state_ttl_seconds = 600`). Hartkodiert — kein Env-Override.
 pub const OAUTH_STATE_TTL_SECS: u64 = 600;
+
+/// Session-Typ der Partner-Einmal-Login-State-Rows (B3-8, Python
+/// `state_store.py`, `"oauth_state:partner_login"`). Atomar einmal verbraucht.
+pub const PARTNER_LOGIN_STATE_TYPE: &str = "oauth_state:partner_login";
 
 /// Länge der Session-ID/CSRF-Zufallsbytes (Python: `secrets.token_urlsafe(32)`).
 const SESSION_ID_BYTES: usize = 32;
@@ -449,6 +457,82 @@ impl DashboardAuthState {
         Ok(Some(OAuthLoginState { next_path, redirect_uri }))
     }
 
+    /// Persistiert einen Partner-Einmal-Login-State (B3-8). `state_id` = `sid` aus
+    /// dem HMAC-Token; Payload trägt `next_path` + den Ziel-`login` (welcher
+    /// Partner sich anmeldet). TTL via `ttl_secs`.
+    pub async fn save_partner_login_state(
+        &self,
+        state_id: &str,
+        login: &str,
+        next_path: &str,
+        ttl_secs: u64,
+    ) -> Result<(), sqlx::Error> {
+        let now = unix_now();
+        let expires_at = now as f64 + ttl_secs as f64;
+        let payload = serde_json::json!({
+            "login": login,
+            "next_path": next_path,
+            "created_at": now as f64,
+            "expires_at": expires_at,
+        });
+        self.persist_new_session(
+            state_id,
+            PARTNER_LOGIN_STATE_TYPE,
+            &payload,
+            now as f64,
+            expires_at,
+        )
+        .await
+    }
+
+    /// Verbraucht einen Partner-Login-State atomar + einmalig (DELETE … RETURNING,
+    /// Replay-Schutz). Liefert `(login, next_path)` zurück; ein zweiter Aufruf
+    /// oder ein abgelaufener State → `None`.
+    pub async fn consume_partner_login_state(
+        &self,
+        state_id: &str,
+    ) -> Result<Option<(String, String)>, sqlx::Error> {
+        let now = unix_now();
+        let row: Option<(Vec<u8>,)> = sqlx::query_as(
+            r#"
+            DELETE FROM dashboard_sessions
+            WHERE session_id = $1
+              AND session_type = $2
+              AND expires_at > $3
+            RETURNING payload_enc
+            "#,
+        )
+        .bind(state_id)
+        .bind(PARTNER_LOGIN_STATE_TYPE)
+        .bind(now as f64)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        let Some((payload_enc,)) = row else {
+            return Ok(None);
+        };
+        let plaintext = match fernet::decrypt(&self.fernet_key, &encode_b64(&payload_enc), None) {
+            Ok(p) => p,
+            Err(e) => {
+                warn!("Partner-Login-State-Decrypt fehlgeschlagen: {e}");
+                return Ok(None);
+            }
+        };
+        let payload: serde_json::Value = match serde_json::from_slice(&plaintext) {
+            Ok(v) => v,
+            Err(e) => {
+                warn!("Partner-Login-State-JSON ungültig: {e}");
+                return Ok(None);
+            }
+        };
+        if payload_expired(&payload, now) {
+            return Ok(None);
+        }
+        let login = payload.get("login").and_then(|v| v.as_str()).unwrap_or("").to_string();
+        let next_path = payload.get("next_path").and_then(|v| v.as_str()).unwrap_or("").to_string();
+        Ok(Some((login, next_path)))
+    }
+
     /// Schlägt den kanonischen `twitch_partners`-Eintrag für einen Login bzw.
     /// User-ID nach (Pendant zu Python `_is_partner_allowed`, auth_mixin.py:741-780).
     /// Liefert `(twitch_login, twitch_user_id)` aus der DB, wenn ein nicht-`blocked`
@@ -490,6 +574,9 @@ impl DashboardAuthState {
         Ok(row.map(|(twitch_login, twitch_user_id)| PartnerSession {
             twitch_login,
             twitch_user_id,
+            // Login-Gate (vor Session-Erstellung) kennt keinen display_name; der
+            // echte Helix-Snapshot landet erst beim create_partner_session-Payload.
+            display_name: String::new(),
         }))
     }
 
@@ -650,6 +737,14 @@ impl DashboardAuthState {
             .unwrap_or("")
             .trim()
             .to_string();
+        // display_name aus dem Login-Snapshot (Python api_v2.py:1826: session
+        // display_name → sonst Login). Wird unten in die PartnerSession übernommen.
+        let display_name = payload
+            .get("display_name")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .trim()
+            .to_string();
 
         if login.is_empty() && user_id.is_empty() {
             return Ok(None);
@@ -695,6 +790,7 @@ impl DashboardAuthState {
         let partner = PartnerSession {
             twitch_login: db_login,
             twitch_user_id: db_user_id,
+            display_name,
         };
 
         {
@@ -990,9 +1086,11 @@ mod tests {
         let ps = PartnerSession {
             twitch_login: "testuser".into(),
             twitch_user_id: "12345".into(),
+            display_name: "TestUser".into(),
         };
         assert_eq!(ps.twitch_login, "testuser");
         assert_eq!(ps.twitch_user_id, "12345");
+        assert_eq!(ps.display_name, "TestUser");
     }
 
     #[test]
@@ -1503,6 +1601,8 @@ print(f.encrypt(payload.encode()).decode(), end='')
             Some(PartnerSession {
                 twitch_login: "gatetest_user".to_string(),
                 twitch_user_id: "888001".to_string(),
+                // find_partner_for_login (Login-Gate) trägt keinen display_name.
+                display_name: String::new(),
             })
         );
         // Unbekannter Login → None (→ 403 im Callback).

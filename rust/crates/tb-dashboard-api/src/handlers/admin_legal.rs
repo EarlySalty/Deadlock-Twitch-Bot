@@ -7,8 +7,8 @@
 //! `<repo>/data/admin_dashboard/legal_pages.json`, als Dict pro Slug. Fehlt ein
 //! Eintrag, liefert GET den eingebetteten Default-Titel + -Body.
 //!
-//! CSRF wird — wie im übrigen Rust-Dashboard etabliert — nicht geprüft; Admin
-//! über `AuthLevel::is_privileged`. updated_by = "admin" (Pythons Fallback).
+//! Admin über `AuthLevel::is_privileged`; CSRF erzwingt der `csrf_protect`-Layer
+//! des admin_config_routers (B3-7). updated_by = "admin" (Pythons Fallback).
 
 use std::path::{Path, PathBuf};
 

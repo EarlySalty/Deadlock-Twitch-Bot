@@ -62,7 +62,7 @@ async fn resolve_actor(auth: &DashboardAuthLevel, pool: &PgPool) -> Result<Actor
             actor_login: None,
             admin: true,
         }),
-        DashboardAuthLevel::Partner { twitch_login, twitch_user_id } => {
+        DashboardAuthLevel::Partner { twitch_login, twitch_user_id, .. } => {
             let admin = is_super_mod(pool, twitch_user_id).await;
             Ok(Actor {
                 actor_id: Some(twitch_user_id.clone()),
