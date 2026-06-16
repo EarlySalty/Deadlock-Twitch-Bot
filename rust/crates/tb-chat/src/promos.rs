@@ -2260,8 +2260,8 @@ mod db_tests {
                 lurker_tax_enabled INTEGER DEFAULT 0,
                 promo_message TEXT,
                 manual_plan_id TEXT,
-                manual_plan_expires_at TIMESTAMPTZ,
-                manual_plan_updated_at TIMESTAMPTZ,
+                manual_plan_expires_at TEXT,
+                manual_plan_updated_at TEXT,
                 manual_plan_notes TEXT,
                 trial_ever_granted INTEGER DEFAULT 0,
                 first_login_at TIMESTAMPTZ,
@@ -2556,8 +2556,11 @@ mod db_tests {
         let engine = make_engine(pool.clone());
 
         sqlx::query(
+            // manual_plan_expires_at = TEXT (Prod-Schema): ISO-8601-String wie Python
+            // (`datetime.isoformat()`), den der Resolver parst — kein timestamptz-Cast.
             "INSERT INTO streamer_plans (twitch_user_id, twitch_login, manual_plan_id, manual_plan_expires_at)
-             VALUES ('uq2', 'zukunftkanal', 'bundle_komplett', NOW() + INTERVAL '30 days')",
+             VALUES ('uq2', 'zukunftkanal', 'bundle_komplett',
+                     to_char((NOW() + INTERVAL '30 days') AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS+00:00'))"
         )
         .execute(&pool)
         .await
@@ -2575,8 +2578,10 @@ mod db_tests {
         let engine = make_engine(pool.clone());
 
         sqlx::query(
+            // manual_plan_expires_at = TEXT (Prod-Schema): ISO-8601-String wie Python.
             "INSERT INTO streamer_plans (twitch_user_id, twitch_login, manual_plan_id, manual_plan_expires_at)
-             VALUES ('uq3', 'abgelaufenkanal', 'chat_quiet', NOW() - INTERVAL '1 day')",
+             VALUES ('uq3', 'abgelaufenkanal', 'chat_quiet',
+                     to_char((NOW() - INTERVAL '1 day') AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS+00:00'))"
         )
         .execute(&pool)
         .await
@@ -2601,10 +2606,13 @@ mod db_tests {
         .await
         .unwrap();
         sqlx::query(
+            // manual_plan_expires_at = TEXT (Prod-Schema): ISO-8601-String wie Python.
             "INSERT INTO streamer_plans (twitch_user_id, twitch_login, manual_plan_id, manual_plan_expires_at)
              VALUES
-               ('upaid', 'paidkanal', 'raid_boost', NOW() + INTERVAL '10 days'),
-               ('uexp',  'expkanal',  'raid_boost', NOW() - INTERVAL '1 day')",
+               ('upaid', 'paidkanal', 'raid_boost',
+                to_char((NOW() + INTERVAL '10 days') AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS+00:00')),
+               ('uexp',  'expkanal',  'raid_boost',
+                to_char((NOW() - INTERVAL '1 day') AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS+00:00'))"
         )
         .execute(&pool)
         .await
