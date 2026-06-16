@@ -249,12 +249,16 @@ mod tests {
         sqlx::query("INSERT INTO twitch_partner_raid_scores (twitch_user_id, final_score, today_received_raids, last_computed_at)
                      VALUES ('200', 0.87, 3, 'gestern')")
             .execute(&pool).await.unwrap();
-        // Erfolgreicher Raid 100->200 vor confirmed_at.
+        // Erfolgreicher Raid 100->200 vor confirmed_at. executed_at relativ zur
+        // simulierten `now` (nicht Wall-Clock-NOW()) — sonst hängt der Test am
+        // Kalender: der Resolver filtert `executed_at <= now`, und ein echtes
+        // NOW() liegt nach dem 2026-06-10-Stichtag.
         sqlx::query(
             "INSERT INTO twitch_raid_history (from_broadcaster_id, from_broadcaster_login,
                      to_broadcaster_id, to_broadcaster_login, executed_at, success)
-                     VALUES ('100', 'src', '200', 'dst', NOW() - INTERVAL '1 minute', TRUE)",
+                     VALUES ('100', 'src', '200', 'dst', $1, TRUE)",
         )
+        .bind(now - chrono::Duration::minutes(1))
         .execute(&pool)
         .await
         .unwrap();
