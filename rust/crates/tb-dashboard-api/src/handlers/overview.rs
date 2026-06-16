@@ -29,6 +29,9 @@ fn default_days() -> i64 {
     30
 }
 
+// Untagged-Serde-Enum: die große `Data`-Variante ist gewollt (1:1-JSON-Shape);
+// Boxen würde die untagged-Serialisierung verkomplizieren ohne Laufzeitnutzen.
+#[allow(clippy::large_enum_variant)]
 #[derive(Serialize)]
 #[serde(untagged)]
 pub enum OverviewResponse {
@@ -40,6 +43,11 @@ pub enum OverviewResponse {
 pub struct OverviewData {
     pub streamer: Option<String>,
     pub days: i64,
+    /// Lesefenster (`"full"`/`"last_stream"`, Python `data["window"]`).
+    pub window: &'static str,
+    /// `true` bei der kostenlosen Tagesform (Python `data["windowLimited"]`).
+    #[serde(rename = "windowLimited")]
+    pub window_limited: bool,
     pub summary: OverviewSummary,
     pub scores: HealthScores,
     pub findings: Vec<Finding>,
@@ -344,6 +352,107 @@ fn calc_trend(curr: f64, prev: f64) -> Option<f64> {
     Some(((curr - prev) / prev.abs() * 100.0 * 10.0).round() / 10.0)
 }
 
+/// Lesefenster der Overview-Antwort (B16-FIX-OVERVIEW-WINDOW).
+///
+/// `Full` = klassisches Rolling-Window (`now-days` .. jetzt) mit Vorperiode für
+/// Trends. `LastStream` = kostenlose „Tagesform": nur der letzte beendete Stream,
+/// keine Vorperiode (Trends unterdrückt). Spiegelt Pythons String-Werte
+/// `"full"`/`"last_stream"` (`api_v2.py:670-733`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WindowMode {
+    Full,
+    LastStream,
+}
+
+impl WindowMode {
+    fn as_str(self) -> &'static str {
+        match self {
+            WindowMode::Full => "full",
+            WindowMode::LastStream => "last_stream",
+        }
+    }
+}
+
+/// Entscheidet das Lesefenster anhand des Plans (Python `_resolve_read_window`,
+/// api_v2.py:670-698).
+///
+/// - Kein Streamer-Kontext → `Full`.
+/// - Privilegiert (Localhost/Admin) → `Full` (Bypass).
+/// - Streamer mit `analytics.basic` ODER `analytics.extended` → `Full`.
+/// - Sonst (Free, nur `analytics.daily`) → `LastStream` (harte Server-Erzwingung;
+///   der Client kann das Fenster NICHT überschreiben — Paywall-Durchsetzung).
+async fn resolve_read_window(
+    pool: &PgPool,
+    privileged: bool,
+    streamer: Option<&str>,
+) -> WindowMode {
+    let Some(login) = streamer.map(str::trim).filter(|s| !s.is_empty()) else {
+        return WindowMode::Full;
+    };
+    if privileged {
+        return WindowMode::Full;
+    }
+    match tb_analytics::plan::resolve_plan_snapshot(pool, login, "").await {
+        Ok(snapshot) => {
+            let ents = tb_analytics::plan::plan_entitlements(snapshot.plan_id);
+            if ents.contains(&"analytics.basic") || ents.contains(&"analytics.extended") {
+                WindowMode::Full
+            } else {
+                WindowMode::LastStream
+            }
+        }
+        // Plan unbekannt/DB-Fehler → fail-closed auf die kostenlose Tagesform.
+        Err(_) => WindowMode::LastStream,
+    }
+}
+
+/// Löst `window` in `(since, prev_since)` (RFC3339) auf (Python
+/// `_window_since_dates`, api_v2.py:701-733).
+///
+/// - `LastStream`: `since = MAX(started_at)` der beendeten Sessions des Streamers
+///   (Fallback `now-days` wenn keine), `prev_since = since` → leeres
+///   Vorperioden-Fenster → Trends unterdrückt.
+/// - `Full`: `since = now-days`, `prev_since = now-2*days`.
+async fn window_since_dates(
+    pool: &PgPool,
+    streamer: Option<&str>,
+    days: i64,
+    window: WindowMode,
+) -> (String, String) {
+    let full = || {
+        let since = (Utc::now() - Duration::days(days)).to_rfc3339();
+        let prev = (Utc::now() - Duration::days(days * 2)).to_rfc3339();
+        (since, prev)
+    };
+    match window {
+        WindowMode::Full => full(),
+        WindowMode::LastStream => {
+            let login = streamer.unwrap_or("");
+            let latest: Option<chrono::DateTime<Utc>> = sqlx::query_scalar(
+                "SELECT MAX(s.started_at) \
+                 FROM twitch_stream_sessions s \
+                 WHERE s.ended_at IS NOT NULL \
+                   AND (COALESCE($1, '') = '' OR LOWER(s.streamer_login) = $1)",
+            )
+            .bind(login)
+            .fetch_optional(pool)
+            .await
+            .ok()
+            .flatten();
+            match latest {
+                Some(ts) => {
+                    let since = ts.to_rfc3339();
+                    (since.clone(), since) // prev == since → keine Trends
+                }
+                None => {
+                    let since = (Utc::now() - Duration::days(days)).to_rfc3339();
+                    (since.clone(), since)
+                }
+            }
+        }
+    }
+}
+
 /// `GET /twitch/api/v2/overview?streamer=<login>[&days=30]`
 pub async fn overview_handler(
     auth: AuthLevel,
@@ -356,13 +465,18 @@ pub async fn overview_handler(
 
     // days: clip to [7, 365]
     let days = params.days.clamp(7, 365);
-    let since = (Utc::now() - Duration::days(days)).to_rfc3339();
     let login = params
         .streamer
         .as_deref()
         .map(|s| s.trim().to_lowercase())
         .filter(|s| !s.is_empty());
     let login_ref = login.as_deref();
+
+    // B16-FIX-OVERVIEW-WINDOW: Lesefenster serverseitig auflösen. Free-Streamer
+    // ohne analytics.basic/extended bekommen die „Tagesform" (last_stream); der
+    // Client kann das Fenster nicht überschreiben (Paywall-Durchsetzung).
+    let window = resolve_read_window(&pool, auth.is_privileged(), login_ref).await;
+    let (since, prev_since) = window_since_dates(&pool, login_ref, days, window).await;
 
     // Existenz-Check
     let count = overview_session_count(&pool, &since, login_ref)
@@ -381,8 +495,8 @@ pub async fn overview_handler(
         .map_err(|_| ApiError::internal())?
         .ok_or_else(ApiError::internal)?;
 
-    // Vorperiode [now-2*days, since) für Trend-Pfeile (Python _get_overview_data_sync).
-    let prev_since = (Utc::now() - Duration::days(days * 2)).to_rfc3339();
+    // Vorperiode [prev_since, since) für Trend-Pfeile (Python _get_overview_data_sync).
+    // Bei last_stream ist prev_since == since → leeres Fenster → keine Trends.
     let prev = overview_metrics(&pool, &prev_since, login_ref, Some(&since))
         .await
         .map_err(|_| ApiError::internal())?;
@@ -480,6 +594,8 @@ pub async fn overview_handler(
     Ok(Json(OverviewResponse::Data(OverviewData {
         streamer: params.streamer,
         days,
+        window: window.as_str(),
+        window_limited: window == WindowMode::LastStream,
         scores,
         findings,
         actions,
@@ -733,6 +849,9 @@ mod tests {
         let v: serde_json::Value = serde_json::from_slice(&b).unwrap();
         assert!((v["summary"]["avgViewers"].as_f64().unwrap() - 100.0).abs() < 0.001);
         assert_eq!(v["summary"]["totalSessions"], 1);
+        // B16-FIX-OVERVIEW-WINDOW: Admin-Token → volles Fenster, nicht limitiert.
+        assert_eq!(v["window"], "full");
+        assert_eq!(v["windowLimited"], false);
         // Neue session-abgeleitete Summary-Felder.
         assert_eq!(v["summary"]["followersGained"], 5);
         assert!((v["summary"]["retention10m"].as_f64().unwrap() - 60.0).abs() < 0.01);
@@ -843,5 +962,50 @@ mod tests {
         ]);
         assert!((c.duration_vs_viewers - 1.0).abs() < 1e-9);
         assert!((c.chat_vs_retention + 1.0).abs() < 1e-9);
+    }
+
+    // ── B16-FIX-OVERVIEW-WINDOW ───────────────────────────────────────────────
+
+    #[test]
+    fn window_mode_string() {
+        assert_eq!(WindowMode::Full.as_str(), "full");
+        assert_eq!(WindowMode::LastStream.as_str(), "last_stream");
+    }
+
+    /// Privilegiert ODER kein Streamer → Full; ohne DB-Plan (fail-closed) →
+    /// LastStream. Streamer-Plan-Pfad ist DB-gated und separat abgedeckt.
+    #[tokio::test]
+    async fn resolve_window_privilegiert_und_kein_streamer() {
+        let dsn = db_dsn_or_skip!();
+        let pool = make_pool(&dsn, "test_overview_window_resolve").await;
+        // Privilegiert → Full, egal welcher Streamer.
+        assert_eq!(resolve_read_window(&pool, true, Some("nani")).await, WindowMode::Full);
+        // Kein Streamer-Kontext → Full.
+        assert_eq!(resolve_read_window(&pool, false, None).await, WindowMode::Full);
+        // Nicht privilegiert + unbekannter Streamer (kein Plan) → LastStream.
+        assert_eq!(resolve_read_window(&pool, false, Some("ghost_free")).await, WindowMode::LastStream);
+    }
+
+    /// `window_since_dates(LastStream)` → since = MAX(started_at) der beendeten
+    /// Session, prev == since (keine Trends). Full → since != prev.
+    #[tokio::test]
+    async fn window_since_last_stream() {
+        let dsn = db_dsn_or_skip!();
+        let pool = make_pool(&dsn, "test_overview_window_since").await;
+        sqlx::query(
+            "INSERT INTO twitch_stream_sessions (id, streamer_login, started_at, ended_at) \
+             VALUES (1, 'nani', '2026-01-01T10:00:00Z', '2026-01-01T12:00:00Z'), \
+                    (2, 'nani', '2026-02-01T10:00:00Z', '2026-02-01T12:00:00Z'), \
+                    (3, 'nani', '2026-03-01T10:00:00Z', NULL)", // laufend → ignoriert
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        let (since, prev) = window_since_dates(&pool, Some("nani"), 30, WindowMode::LastStream).await;
+        assert_eq!(since, prev, "last_stream: prev == since (keine Trends)");
+        assert!(since.starts_with("2026-02-01"), "MAX(started_at) der beendeten Sessions, war {since}");
+        // Full: prev liegt vor since.
+        let (fs, fp) = window_since_dates(&pool, Some("nani"), 30, WindowMode::Full).await;
+        assert!(fp < fs, "full: prev_since vor since");
     }
 }

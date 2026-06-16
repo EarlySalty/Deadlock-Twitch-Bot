@@ -1305,6 +1305,7 @@ mod tests {
         DashboardAuthLevel::Partner {
             twitch_login: "freeloader".to_string(),
             twitch_user_id: String::new(),
+            display_name: String::new(),
         }
     }
 

@@ -117,6 +117,7 @@ mod tests {
         let resp = validate_admin_session(DashboardAuthLevel::Partner {
             twitch_login: "somepartner".into(),
             twitch_user_id: "12345".into(),
+            display_name: String::new(),
         })
         .await;
         assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);

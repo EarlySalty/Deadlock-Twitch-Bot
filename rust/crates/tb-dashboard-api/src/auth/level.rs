@@ -29,7 +29,12 @@ pub enum DashboardAuthLevel {
     /// Gültige `master_dash_session`-Cookie (Discord-Admin).
     Admin,
     /// Gültige `twitch_dash_session`-Cookie + Partner in DB + nicht blacklisted.
-    Partner { twitch_login: String, twitch_user_id: String },
+    Partner {
+        twitch_login: String,
+        twitch_user_id: String,
+        /// Twitch-`display_name` aus dem Login-Snapshot (leer → Login-Fallback).
+        display_name: String,
+    },
     /// Nicht authentifiziert.
     None,
 }
@@ -204,6 +209,7 @@ where
                     return Ok(DashboardAuthLevel::Partner {
                         twitch_login: partner.twitch_login,
                         twitch_user_id: partner.twitch_user_id,
+                        display_name: partner.display_name,
                     });
                 }
             }
@@ -271,7 +277,8 @@ mod tests {
         assert_eq!(
             DashboardAuthLevel::Partner {
                 twitch_login: "x".into(),
-                twitch_user_id: "1".into()
+                twitch_user_id: "1".into(),
+                display_name: "X".into()
             }
             .as_str(),
             "partner"
@@ -285,7 +292,8 @@ mod tests {
         assert!(DashboardAuthLevel::Admin.is_privileged());
         assert!(!DashboardAuthLevel::Partner {
             twitch_login: "x".into(),
-            twitch_user_id: "1".into()
+            twitch_user_id: "1".into(),
+            display_name: "X".into()
         }
         .is_privileged());
         assert!(!DashboardAuthLevel::None.is_privileged());

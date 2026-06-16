@@ -277,6 +277,7 @@ mod tests {
         let resp = admin_index_handler(DashboardAuthLevel::Partner {
             twitch_login: "p".into(),
             twitch_user_id: "1".into(),
+            display_name: String::new(),
         })
         .await;
         assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);

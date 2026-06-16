@@ -21,6 +21,7 @@ pub async fn start_trial_handler(
         DashboardAuthLevel::Partner {
             twitch_user_id,
             twitch_login,
+            ..
         } => (twitch_user_id, twitch_login),
         _ => {
             return (

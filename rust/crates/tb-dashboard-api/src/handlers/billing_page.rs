@@ -475,6 +475,7 @@ fn customer_reference_for(auth: &DashboardAuthLevel) -> Option<String> {
         DashboardAuthLevel::Partner {
             twitch_login,
             twitch_user_id,
+            ..
         } => {
             let login = twitch_login.trim();
             if !login.is_empty() {
@@ -496,6 +497,7 @@ fn login_and_user_id(auth: &DashboardAuthLevel) -> (String, String) {
         DashboardAuthLevel::Partner {
             twitch_login,
             twitch_user_id,
+            ..
         } => (twitch_login.clone(), twitch_user_id.clone()),
         _ => (String::new(), String::new()),
     }
@@ -567,6 +569,7 @@ mod tests {
         DashboardAuthLevel::Partner {
             twitch_login: login.to_string(),
             twitch_user_id: uid.to_string(),
+            display_name: String::new(),
         }
     }
 

@@ -11,7 +11,8 @@
 //! plus `internal_home_result_or_default` in Python).
 //!
 //! Bewusste Abweichungen ggü. Python (siehe Report):
-//! - `display_name` = resolved_login (Rust-Auth trägt keinen display_name).
+//! - `display_name` = echter Twitch-display_name aus dem Login-Session-Snapshot
+//!   (B16-FIX-INTERNALHOME-DISPLAYNAME), Fallback auf resolved_login wenn leer.
 //! - Logfile-Kandidaten: nur `logs/<datei>` relativ zum CWD (= Repo-Root),
 //!   nicht die zusätzlichen `log_path`/Sibling-Kandidaten von Python.
 //! - Rate-Limit / CSRF-Origin-Check NICHT portiert (Python-spezifische Hooks).
@@ -120,9 +121,13 @@ fn resolve_identity(
         DashboardAuthLevel::Partner {
             twitch_login,
             twitch_user_id,
+            display_name,
         } => {
             let own_login = twitch_login.trim().to_lowercase();
             let own_user_id = twitch_user_id.trim().to_string();
+            // Echter Twitch-display_name aus dem Login-Snapshot; leer → Login-
+            // Fallback (Python api_v2.py:1826: session display_name → twitch_login).
+            let own_display = display_name.trim().to_string();
             if !override_login.is_empty() {
                 if override_login != own_login {
                     return Err(forbidden_json(
@@ -130,10 +135,16 @@ fn resolve_identity(
                         "Only admin sessions may view another streamer's profile.",
                     ));
                 }
+                // Eigener Login als Override → echter display_name bleibt erhalten.
+                let display = if own_display.is_empty() {
+                    override_login.clone()
+                } else {
+                    own_display
+                };
                 return Ok(ResolvedIdentity {
-                    twitch_login: override_login.clone(),
+                    twitch_login: override_login,
                     twitch_user_id: String::new(),
-                    display_name: override_login,
+                    display_name: display,
                 });
             }
             if own_login.is_empty() && own_user_id.is_empty() {
@@ -142,10 +153,15 @@ fn resolve_identity(
                     "The dashboard session must be bound to a Twitch streamer account.",
                 ));
             }
-            let display = if own_login.is_empty() {
+            let login_fallback = if own_login.is_empty() {
                 own_user_id.clone()
             } else {
                 own_login.clone()
+            };
+            let display = if own_display.is_empty() {
+                login_fallback
+            } else {
+                own_display
             };
             Ok(ResolvedIdentity {
                 twitch_login: own_login,
@@ -2083,4 +2099,40 @@ async fn create_changelog_entry(
 
     tx.commit().await?;
     Ok(serialize_changelog_entry(&row))
+}
+
+#[cfg(test)]
+mod identity_tests {
+    //! B16-FIX-INTERNALHOME-DISPLAYNAME: `resolve_identity` muss den echten
+    //! Twitch-display_name aus der Partner-Session liefern (nicht den Login).
+    use super::*;
+
+    fn partner(login: &str, display: &str) -> DashboardAuthLevel {
+        DashboardAuthLevel::Partner {
+            twitch_login: login.into(),
+            twitch_user_id: "42".into(),
+            display_name: display.into(),
+        }
+    }
+
+    #[test]
+    fn partner_eigener_display_name() {
+        let id = resolve_identity(&partner("nani", "NaNiAdm"), &None).unwrap();
+        assert_eq!(id.twitch_login, "nani");
+        assert_eq!(id.display_name, "NaNiAdm");
+    }
+
+    #[test]
+    fn partner_leerer_display_name_faellt_auf_login() {
+        let id = resolve_identity(&partner("nani", "  "), &None).unwrap();
+        assert_eq!(id.display_name, "nani");
+    }
+
+    #[test]
+    fn partner_eigener_override_behaelt_display_name() {
+        // Override == eigener Login → echter display_name bleibt erhalten.
+        let id = resolve_identity(&partner("nani", "NaNiAdm"), &Some("NANI".into())).unwrap();
+        assert_eq!(id.twitch_login, "nani");
+        assert_eq!(id.display_name, "NaNiAdm");
+    }
 }

@@ -26,6 +26,7 @@ pub mod fernet;
 pub mod level;
 pub mod oauth_login;
 pub mod partner_gate;
+pub mod partner_login;
 pub mod security;
 pub mod session;
 
@@ -101,28 +102,45 @@ pub async fn has_extended_entitlement(pool: &PgPool, login: &str, user_id: &str)
 /// - Localhost/Admin → durchgelassen (Bypass, wie Python `_require_extended_plan`)
 /// - Partner → braucht aktiven Extended-Plan oder laufenden Trial
 /// - None → 401
+///
+/// Response-Shapes B16-FIX-SHAPE-PARITY (Python `_require_v2_auth` /
+/// `_require_extended_plan`): 401 trägt den vollen Message-Text + `loginUrl`,
+/// 403 trägt `error=plan_required` + `required_entitlements`.
 pub async fn extended_gate(pool: &PgPool, auth: &DashboardAuthLevel) -> Option<Response> {
     match auth {
         DashboardAuthLevel::Localhost | DashboardAuthLevel::Admin => None,
-        DashboardAuthLevel::None => Some(
-            (StatusCode::UNAUTHORIZED, Json(json!({"error": "unauthorized"}))).into_response(),
-        ),
-        DashboardAuthLevel::Partner { twitch_login, twitch_user_id } => {
+        DashboardAuthLevel::None => Some(unauthorized_v2_response()),
+        DashboardAuthLevel::Partner { twitch_login, twitch_user_id, .. } => {
             if has_extended_entitlement(pool, twitch_login, twitch_user_id).await {
                 None
             } else {
-                Some(
-                    (
-                        StatusCode::FORBIDDEN,
-                        Json(json!({
-                            "error": "plan_required",
-                            "message": "Erweiterte Analytics erfordern einen Plan oder den 30-Tage-Trial.",
-                        })),
-                    )
-                        .into_response(),
-                )
+                Some(plan_required_response())
             }
         }
     }
+}
+
+/// 401-Body wie Python `_require_v2_auth` (api_v2.py:1258-1262).
+pub fn unauthorized_v2_response() -> Response {
+    (
+        StatusCode::UNAUTHORIZED,
+        Json(json!({
+            "error": "Authentication required. Use Twitch login, an admin token, or access from localhost.",
+            "loginUrl": "/twitch/auth/login?next=%2Fanalyse",
+        })),
+    )
+        .into_response()
+}
+
+/// 403-Body wie Python `_require_extended_plan` (api_v2.py:656-664).
+pub fn plan_required_response() -> Response {
+    (
+        StatusCode::FORBIDDEN,
+        Json(json!({
+            "error": "plan_required",
+            "required_entitlements": ["analytics.extended"],
+        })),
+    )
+        .into_response()
 }
 

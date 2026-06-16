@@ -40,7 +40,15 @@ pub async fn ai_history_handler(
     Query(params): Query<AiHistoryQuery>,
 ) -> impl IntoResponse {
     if matches!(auth, DashboardAuthLevel::None) {
-        return (StatusCode::UNAUTHORIZED, Json(json!({ "error": "unauthorized" }))).into_response();
+        // Python-Parität (api_v2.py:1258-1262): voller Message-Text + loginUrl.
+        return (
+            StatusCode::UNAUTHORIZED,
+            Json(json!({
+                "error": "Authentication required. Use Twitch login, an admin token, or access from localhost.",
+                "loginUrl": "/twitch/auth/login?next=%2Fanalyse",
+            })),
+        )
+            .into_response();
     }
     let streamer = match params.streamer.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
         Some(s) => s.to_lowercase(),
@@ -66,7 +74,15 @@ pub async fn ai_history_handler(
         Ok(v) => Json(v).into_response(),
         Err(e) => {
             tracing::error!("ai/history Fehler: {e}");
-            (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": "internal" }))).into_response()
+            // Python `analytics_internal_error_response` (error_utils.py:5-17).
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({
+                    "error": "Analytics-Daten konnten nicht geladen werden.",
+                    "code": "analytics_request_failed",
+                })),
+            )
+                .into_response()
         }
     }
 }
@@ -98,6 +114,28 @@ mod tests {
         .await
         .into_response();
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    }
+
+    /// B16-FIX-AIHISTORY-ERRORSHAPE: 401-Body trägt vollen Message-Text + loginUrl
+    /// (Python api_v2.py:1258-1262), nicht das alte `{"error":"unauthorized"}`.
+    #[tokio::test]
+    async fn unauth_401_python_shape() {
+        let Some(pool) = make_pool("t_aih_h_401").await else { return };
+        let resp = ai_history_handler(
+            DashboardAuthLevel::None,
+            State(pool),
+            Query(AiHistoryQuery { streamer: Some("nani".into()), limit: None }),
+        )
+        .await
+        .into_response();
+        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+        let bytes = axum::body::to_bytes(resp.into_body(), 65536).await.unwrap();
+        let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(
+            body["error"],
+            "Authentication required. Use Twitch login, an admin token, or access from localhost."
+        );
+        assert_eq!(body["loginUrl"], "/twitch/auth/login?next=%2Fanalyse");
     }
 
     #[tokio::test]

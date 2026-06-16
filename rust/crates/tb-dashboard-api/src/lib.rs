@@ -74,7 +74,7 @@ pub fn build_public_router(pool: PgPool) -> Router {
 /// Auth-Level wird per Extension eingesetzt — `AuthLevel` als `FromRequestParts`
 /// liest den Token selbst aus der Extension.
 pub fn build_authed_router(pool: PgPool, token: String) -> Router {
-    use handlers::{ads_schedule, ai_analysis, ai_chat, ai_history, audience, audience_demographics, auth_status, billing, category_activity, category_comparison, category_leaderboard, category_timings, chat_analytics, chat_content_analysis, chat_deep_minimax, chat_hype_timeline, chat_social_graph, coaching, engagement_settings, exp_analytics, follower_funnel, internal_home, loyalty_curve, lurker_analysis, monetization, overview, performance, raid_analytics, rankings, retention_curve, session_detail, silent_settings, social_media, spa, stream_report, streamers, tag_analysis, title_performance, viewer_timeline, viewers, watch_time};
+    use handlers::{ads_schedule, ai_analysis, ai_chat, ai_history, audience, audience_demographics, auth_status, billing, category_activity, category_comparison, category_leaderboard, category_timings, chat_analytics, chat_content_analysis, chat_deep_minimax, chat_hype_timeline, chat_social_graph, coaching, engagement_settings, exp_analytics, follower_funnel, internal_home, loyalty_curve, lurker_analysis, lurker_tax_settings, monetization, overview, performance, raid_analytics, rankings, retention_curve, session_detail, silent_settings, social_media, spa, stream_report, streamers, tag_analysis, title_performance, viewer_timeline, viewers, watch_time};
 
     Router::new()
         .route(
@@ -158,6 +158,13 @@ pub fn build_authed_router(pool: PgPool, token: String) -> Router {
         .route(
             "/twitch/api/v2/streamer/silent-settings",
             get(silent_settings::get_handler).post(silent_settings::post_handler),
+        )
+        // Streamer-Selbstbedienung: Lurker-Steuer-Toggle (B9, sync zu
+        // !lurkersteuer_off). Default deaktiviert, alle Partner. Spalte
+        // streamer_plans.lurker_tax_enabled.
+        .route(
+            "/twitch/api/v2/streamer/lurker-tax-settings",
+            get(lurker_tax_settings::get_handler).post(lurker_tax_settings::post_handler),
         )
         // AI-Engagement-Dashboard: Admin/Super-Mod sieht alle Kanäle, Partner nur
         // den eigenen. settings (Liste), toggle (an/aus), update (steam/persona/
@@ -531,6 +538,10 @@ pub fn build_admin_config_router(pool: PgPool, token: String) -> Router {
         )
         .with_state(pool)
         .layer(Extension(ExpectedToken(token)))
+        // B3-7: CSRF-Schutz auf alle Admin-JSON-Writes (announcements/legal/roadmap/
+        // promo/config-POST). Die Middleware lässt GET/HEAD durch, prüft Writes
+        // gegen das sessiongebundene Token (Localhost-Bypass für interne Tools).
+        .layer(axum::middleware::from_fn(crate::auth::csrf::csrf_protect))
 }
 
 /// Baut den Router für den nativen Twitch-OAuth-Dashboard-Login (B3-2).
@@ -546,6 +557,25 @@ pub fn build_auth_router() -> Router {
         .route("/twitch/auth/login", get(auth_login::login_handler))
         .route("/twitch/auth/callback", get(auth_login::callback_handler))
         .route("/twitch/auth/logout", get(auth_login::logout_handler))
+}
+
+/// Baut den Router für den Partner-Einmal-Login via HMAC One-Time-Token (B3-8).
+///
+/// - `POST /twitch/auth/partner/link` — Admin/Localhost stellt einen Einmal-Link
+///   für einen Partner aus (HMAC-Token, State persistiert).
+/// - `POST /twitch/auth/partner/login` — verbraucht den Token (atomar einmalig),
+///   legt die Partner-Session an + setzt das Cookie + 302 ins Dashboard.
+///
+/// `DashboardAuthState`/`OAuthLoginConfig` kommen als globale Extensions aus der
+/// `tb-dashboard`-main. Das HMAC-Secret (`TWITCH_PARTNER_TOKEN`) liest der Handler
+/// aus dem Prozess-Env (Infisical); fehlt es, liefern beide Routen 503.
+pub fn build_partner_login_router(pool: PgPool) -> Router {
+    use handlers::partner_login;
+
+    Router::new()
+        .route("/twitch/auth/partner/link", post(partner_login::link_handler))
+        .route("/twitch/auth/partner/login", post(partner_login::login_handler))
+        .with_state(pool)
 }
 
 /// Baut den Router für die Entry-/Redirect-Routen + die Admin-SPA + den
@@ -655,6 +685,8 @@ pub fn build_billing_page_router(pool: PgPool) -> Router {
 pub fn build_router(pool: PgPool, token: String) -> Router {
     build_public_router(pool.clone())
         .merge(build_auth_router())
+        .merge(build_partner_login_router(pool.clone()))
+        .merge(handlers::demo::build_demo_router())
         .merge(build_entry_admin_router())
         .merge(build_billing_webhook_router(pool.clone()))
         .merge(build_billing_page_router(pool.clone()))
@@ -663,4 +695,60 @@ pub fn build_router(pool: PgPool, token: String) -> Router {
         .merge(build_admin_streamers_router(pool.clone(), token.clone()))
         .merge(build_admin_config_router(pool, token))
         .merge(handlers::legal::build_legal_router())
+}
+
+#[cfg(test)]
+mod csrf_wiring_tests {
+    //! B3-7: Verifiziert, dass der CSRF-Layer auf dem Admin-Config-Router liegt.
+    //! DB-env-gated über `TB_TEST_DATABASE_URL` (echter PgPool nötig).
+    use super::*;
+    use axum::body::Body;
+    use axum::http::{Request, StatusCode};
+    use sqlx::postgres::PgPoolOptions;
+    use tower::ServiceExt;
+
+    async fn pool() -> Option<PgPool> {
+        let dsn = std::env::var("TB_TEST_DATABASE_URL").ok()?;
+        PgPoolOptions::new().max_connections(1).connect(&dsn).await.ok()
+    }
+
+    /// Nicht-Loopback-POST auf einen Admin-Write ohne CSRF-Token → 403 vom Layer
+    /// (fail-closed, da keine DashboardAuthState-Extension). Beweist: Layer greift.
+    #[tokio::test]
+    async fn admin_write_ohne_csrf_403() {
+        let Some(pool) = pool().await else { return };
+        let app = build_admin_config_router(pool, "tok".into());
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/twitch/api/admin/announcements")
+                    .header("host", "dashboard.example.com")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+    }
+
+    /// GET passiert den CSRF-Layer (Safe-Methode); ohne Auth liefert der Handler
+    /// 401, aber NICHT das CSRF-403 — beweist, dass GET nicht vom Layer geblockt wird.
+    #[tokio::test]
+    async fn admin_read_passiert_csrf_layer() {
+        let Some(pool) = pool().await else { return };
+        let app = build_admin_config_router(pool, "tok".into());
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri("/twitch/api/admin/announcements")
+                    .header("host", "dashboard.example.com")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+    }
 }

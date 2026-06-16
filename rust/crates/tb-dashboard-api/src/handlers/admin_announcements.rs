@@ -6,8 +6,8 @@
 //! POST überschreibt **nur** die `custom_message` (Modus/Zeitfenster/is_enabled
 //! bleiben erhalten) und validiert + speichert via `save_global_promo_mode`.
 //!
-//! CSRF wird — wie im übrigen Rust-Dashboard etabliert — nicht geprüft; Admin
-//! über `AuthLevel::is_privileged`. updated_by = "admin" (Pythons Fallback).
+//! Admin über `AuthLevel::is_privileged`; CSRF erzwingt der `csrf_protect`-Layer
+//! des admin_config_routers (B3-7). updated_by = "admin" (Pythons Fallback).
 
 use axum::{extract::State, response::IntoResponse, Json};
 use serde_json::{json, Value};

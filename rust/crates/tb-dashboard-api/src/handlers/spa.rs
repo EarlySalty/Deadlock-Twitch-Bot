@@ -119,6 +119,7 @@ async fn check_spa_auth(auth: &DashboardAuthLevel, pool: &PgPool) -> Option<Resp
         DashboardAuthLevel::Partner {
             twitch_login,
             twitch_user_id,
+            ..
         } => {
             let access =
                 tb_analytics::partner_access::load_partner_access_state(pool, twitch_login, twitch_user_id)
@@ -295,7 +296,8 @@ fn parse_url_hostname(candidate: &str) -> String {
 
 // ── Asset-Serving ─────────────────────────────────────────────────────────────
 
-fn dist_root() -> PathBuf {
+/// Dist-Wurzel des Dashboard-Builds (von `/analyse` und `/twitch/demo` geteilt).
+pub(crate) fn dist_root() -> PathBuf {
     let base = std::env::var("DASHBOARD_V2_DIST_PATH")
         .unwrap_or_else(|_| DEFAULT_DIST_PATH.to_string());
     PathBuf::from(base)
@@ -305,7 +307,7 @@ fn dist_root() -> PathBuf {
 ///
 /// Jedes Segment wird gegen `.`, `..` und `\` geprüft (Python-Parität).
 /// Symlink-Angriffe sind bei eigenem Build-Output kein reales Angriffsszenario.
-async fn serve_asset(raw_path: &str) -> Response {
+pub(crate) async fn serve_asset(raw_path: &str) -> Response {
     let dist = dist_root();
 
     // Segmentweise Validierung — verhindert Path-Traversal
