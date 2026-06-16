@@ -9,6 +9,8 @@ tb-config = { workspace = true }
 tb-domain = { workspace = true }
 sqlx = { workspace = true }
 thiserror = { workspace = true }
+# Retry-Backoff braucht tokio::time::sleep im Prod-Pfad.
+tokio = { workspace = true, features = ["time"] }
 
 [dev-dependencies]
-tokio = { workspace = true }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time"] }
