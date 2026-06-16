@@ -30,6 +30,7 @@ use axum::{
 use serde_json::{json, Value};
 use sqlx::PgPool;
 
+use tb_analytics::affiliate_commission::{process_commission, InvoicePayment};
 use tb_analytics::stripe::webhook_apply::{apply_event, record_event_once};
 use tb_analytics::stripe::{verify_signature, StripeClient, DEFAULT_TOLERANCE_SECONDS};
 
@@ -214,7 +215,99 @@ async fn process_event(
     };
 
     tx.commit().await?;
+
+    // Affiliate-Provision (30 %): NACH dem Commit, mit eigenem Pool/Advisory-Lock
+    // (Python `affiliate_mixin._affiliate_process_commission` läuft ebenfalls
+    // außerhalb der Webhook-DB-Transaktion). Nur für frische
+    // `invoice.payment_succeeded`-Events; bei Replays hat `process_commission`
+    // ohnehin seine eigene Idempotenz (UNIQUE auf stripe_event_id). Fehler werden
+    // wie in Python geschluckt (Logeintrag), damit Stripe kein Retry auslöst.
+    if is_new && event_type.trim() == "invoice.payment_succeeded" {
+        if let Some(fields) = InvoiceFields::from_object(event_object) {
+            let invoice = InvoicePayment {
+                stripe_event_id: event_id,
+                stripe_customer_id: &fields.customer,
+                amount_paid_cents: fields.amount_paid_cents,
+                currency: &fields.currency,
+                invoice_id: &fields.invoice_id,
+                period_start: &fields.period_start,
+                period_end: &fields.period_end,
+            };
+            match process_commission(pool, config.client.as_deref(), &invoice).await {
+                Ok(outcome) => tracing::info!(
+                    event_id,
+                    outcome = outcome.as_str(),
+                    "affiliate commission processed"
+                ),
+                Err(error) => {
+                    tracing::error!(%error, event_id, "affiliate commission processing failed")
+                }
+            }
+        }
+    }
+
     Ok((!is_new, action))
+}
+
+/// Aus dem Invoice-Event-Objekt gelöste, besessene Provisions-Felder
+/// (Python `_affiliate_process_commission`): `amount_paid`/`currency`/`id`
+/// (Invoice) direkt, Abrechnungszeitraum aus `lines.data[0].period.{start,end}`
+/// (Unix-Epochs → ISO-8601). Owned, weil [`InvoicePayment`] geliehene Strings
+/// erwartet und die ISO-Strings hier erst erzeugt werden.
+struct InvoiceFields {
+    customer: String,
+    amount_paid_cents: i64,
+    currency: String,
+    invoice_id: String,
+    period_start: String,
+    period_end: String,
+}
+
+impl InvoiceFields {
+    /// `None`, wenn kein Customer am Event hängt (ohne Customer keine Zuordnung).
+    fn from_object(obj: &Value) -> Option<Self> {
+        let customer = str_field(obj, "customer");
+        if customer.is_empty() {
+            return None;
+        }
+        let amount_paid_cents = obj.get("amount_paid").and_then(Value::as_i64).unwrap_or(0);
+        let currency = {
+            let c = str_field(obj, "currency");
+            if c.is_empty() {
+                "eur".to_string()
+            } else {
+                c
+            }
+        };
+        // Abrechnungszeitraum aus der ersten Invoice-Line (Python `lines.data[0].period`).
+        let period = obj
+            .get("lines")
+            .and_then(|l| l.get("data"))
+            .and_then(Value::as_array)
+            .and_then(|d| d.first())
+            .and_then(|line| line.get("period"));
+        let period_iso = |key: &str| {
+            period
+                .and_then(|p| p.get(key))
+                .and_then(Value::as_i64)
+                .and_then(epoch_to_iso)
+                .unwrap_or_default()
+        };
+        Some(Self {
+            customer,
+            amount_paid_cents,
+            currency,
+            invoice_id: str_field(obj, "id"),
+            period_start: period_iso("start"),
+            period_end: period_iso("end"),
+        })
+    }
+}
+
+/// Unix-Epoch (Sekunden) → ISO-8601-String (UTC). `None` bei ungültigem Wert.
+fn epoch_to_iso(epoch: i64) -> Option<String> {
+    chrono::DateTime::<chrono::Utc>::from_timestamp(epoch, 0)
+        .map(|dt| dt.to_rfc3339_opts(chrono::SecondsFormat::Secs, false))
 }
 
 /// Lädt für `checkout.session.completed` (mode=subscription) die volle
@@ -367,6 +460,29 @@ mod tests {
                    received_at TEXT NOT NULL, livemode INTEGER NOT NULL DEFAULT 0, payload TEXT NOT NULL
                )"#,
         ).execute(&pool).await.unwrap();
+        // Affiliate-Provisions-Tabellen (für den invoice.payment_succeeded-Hook).
+        sqlx::query(
+            r#"CREATE TABLE affiliate_streamer_claims (
+                   affiliate_twitch_login TEXT, claimed_streamer_login TEXT
+               )"#,
+        ).execute(&pool).await.unwrap();
+        sqlx::query(
+            r#"CREATE TABLE affiliate_accounts (
+                   twitch_login TEXT PRIMARY KEY, stripe_account_id TEXT
+               )"#,
+        ).execute(&pool).await.unwrap();
+        sqlx::query(
+            r#"CREATE TABLE affiliate_commissions (
+                   id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+                   affiliate_twitch_login TEXT NOT NULL, streamer_login TEXT NOT NULL,
+                   stripe_event_id TEXT UNIQUE NOT NULL, stripe_invoice_id TEXT,
+                   stripe_customer_id TEXT, stripe_transfer_id TEXT,
+                   brutto_cents INTEGER NOT NULL, commission_cents INTEGER NOT NULL,
+                   currency TEXT NOT NULL DEFAULT 'eur', status TEXT NOT NULL DEFAULT 'pending',
+                   period_start TEXT, period_end TEXT, created_at TEXT NOT NULL,
+                   transferred_at TEXT, error_message TEXT
+               )"#,
+        ).execute(&pool).await.unwrap();
         Some(pool)
     }
 
@@ -461,5 +577,80 @@ mod tests {
         let payload = br#"{}"#;
         let resp = stripe_webhook_handler(State(pool.clone()), None, headers_with(Some("t=1,v1=ab")), Bytes::from_static(payload)).await.into_response();
         assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
+    }
+
+    // ── Affiliate-Provisions-Hook (B2-P1) ────────────────────────────────────
+
+    #[test]
+    fn invoice_fields_aus_event_objekt() {
+        // amount_paid/currency/id direkt, Zeitraum aus lines.data[0].period.
+        let obj: Value = serde_json::json!({
+            "id": "in_1",
+            "customer": "cus_1",
+            "amount_paid": 1000,
+            "currency": "eur",
+            "lines": { "data": [ { "period": { "start": 1_700_000_000, "end": 1_702_000_000 } } ] }
+        });
+        let f = InvoiceFields::from_object(&obj).expect("Customer vorhanden → Some");
+        assert_eq!(f.customer, "cus_1");
+        assert_eq!(f.amount_paid_cents, 1000);
+        assert_eq!(f.currency, "eur");
+        assert_eq!(f.invoice_id, "in_1");
+        assert!(f.period_start.starts_with("2023-"));
+        assert!(f.period_end.starts_with("2023-"));
+    }
+
+    #[test]
+    fn invoice_fields_ohne_customer_ist_none() {
+        let obj: Value = serde_json::json!({ "id": "in_x", "amount_paid": 500 });
+        assert!(InvoiceFields::from_object(&obj).is_none());
+    }
+
+    #[tokio::test]
+    async fn invoice_payment_verbucht_affiliate_provision() {
+        let Some(pool) = pool_or_skip("h_invoice_commission").await else { return };
+        // Abo verknüpft Customer→Streamer, Streamer ist von einem Affiliate geworben.
+        sqlx::query("INSERT INTO twitch_billing_subscriptions (stripe_subscription_id, stripe_customer_id, twitch_login, updated_at) VALUES ('sub_c','cus_c','StreamerX','now')")
+            .execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO affiliate_streamer_claims (affiliate_twitch_login, claimed_streamer_login) VALUES ('aff1','streamerx')")
+            .execute(&pool).await.unwrap();
+        let payload = br#"{"id":"evt_inv","type":"invoice.payment_succeeded","livemode":false,"data":{"object":{"id":"in_42","customer":"cus_c","subscription":"sub_c","amount_paid":1000,"currency":"eur","lines":{"data":[{"period":{"start":1700000000,"end":1702000000}}]}}}}"#;
+        let ts = chrono::Utc::now().timestamp();
+        let resp = stripe_webhook_handler(
+            State(pool.clone()),
+            Some(Extension(cfg())),
+            headers_with(Some(&sign(payload, ts, SECRET))),
+            Bytes::from_static(payload),
+        )
+        .await
+        .into_response();
+        assert_eq!(resp.status(), StatusCode::OK);
+        // 30 % von 1000 = 300, pending (kein Connect-Konto).
+        let (status, commission): (String, i64) = sqlx::query_as(
+            "SELECT status, commission_cents FROM affiliate_commissions WHERE stripe_event_id='evt_inv'",
+        ).fetch_one(&pool).await.unwrap();
+        assert_eq!(status, "pending");
+        assert_eq!(commission, 300);
+    }
+
+    #[tokio::test]
+    async fn invoice_replay_verbucht_keine_doppelte_provision() {
+        let Some(pool) = pool_or_skip("h_invoice_replay_commission").await else { return };
+        sqlx::query("INSERT INTO twitch_billing_subscriptions (stripe_subscription_id, stripe_customer_id, twitch_login, updated_at) VALUES ('sub_r','cus_r','StreamerY','now')")
+            .execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO affiliate_streamer_claims (affiliate_twitch_login, claimed_streamer_login) VALUES ('aff2','streamery')")
+            .execute(&pool).await.unwrap();
+        let payload = br#"{"id":"evt_inv_r","type":"invoice.payment_succeeded","livemode":false,"data":{"object":{"id":"in_r","customer":"cus_r","subscription":"sub_r","amount_paid":1000,"currency":"eur","lines":{"data":[{"period":{"start":1700000000,"end":1702000000}}]}}}}"#;
+        let ts = chrono::Utc::now().timestamp();
+        let header = sign(payload, ts, SECRET);
+        let r1 = stripe_webhook_handler(State(pool.clone()), Some(Extension(cfg())), headers_with(Some(&header)), Bytes::from_static(payload)).await.into_response();
+        assert_eq!(r1.status(), StatusCode::OK);
+        // Replay: Webhook-Dedup verhindert den 2. process_commission-Aufruf;
+        // selbst ohne das wäre die UNIQUE auf stripe_event_id idempotent.
+        let r2 = stripe_webhook_handler(State(pool.clone()), Some(Extension(cfg())), headers_with(Some(&header)), Bytes::from_static(payload)).await.into_response();
+        assert_eq!(r2.status(), StatusCode::OK);
+        let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM affiliate_commissions WHERE stripe_event_id='evt_inv_r'")
+            .fetch_one(&pool).await.unwrap();
+        assert_eq!(count, 1, "genau eine Provisions-Zeile trotz Replay");
     }
 }
