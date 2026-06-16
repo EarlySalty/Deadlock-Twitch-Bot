@@ -430,6 +430,14 @@ pub fn build_authed_router(pool: PgPool, token: String) -> Router {
         .with_state(pool)
         .layer(Extension(ExpectedToken(token)))
         .layer(axum::middleware::from_fn(crate::auth::partner_gate::partner_status_gate))
+        // CSRF auf allen Write-Actions des authed-Routers (Grillme-Direktive
+        // "CSRF auf allen Write-Actions"). Header-basierter csrf_protect lässt
+        // GET/HEAD + Localhost (interne Loopback-Tools, z. B. Changelog-Spiegelung)
+        // passieren, verlangt sonst den X-CSRF-Token; schützt lurker-tax/
+        // engagement-mode/silent + social-media-/billing-Writes. Body-CSRF-Forms
+        // (manual-plan) liegen im separaten build_admin_legacy_forms_router und
+        // sind daher NICHT betroffen.
+        .layer(axum::middleware::from_fn(crate::auth::csrf::csrf_protect))
 }
 
 /// Baut den Router für Admin-System-Endpoints.
