@@ -31,6 +31,20 @@ use crate::security::datetime_to_iso;
 
 const STATUS_ACTIVE: &str = "active";
 const STATUS_DEPARTNERED: &str = "departnered";
+/// Legacy-Status für administrativ archivierte Partner (Python
+/// `_LEGACY_PARTNER_STATUS_ARCHIVED`). Wird nur noch im History-/Reactivate-Pfad
+/// gelesen; aktive Pfade schreiben `departnered`.
+const STATUS_ARCHIVED: &str = "archived";
+
+/// `departnered` oder `archived` — die beiden inaktiven Partner-Status, aus
+/// denen `reactivate_partner` zurückholen kann (Python
+/// `_is_inactive_partner_status`).
+fn is_inactive_partner_status(status: Option<&str>) -> bool {
+    matches!(
+        status.map(|s| s.trim().to_lowercase()).as_deref(),
+        Some(STATUS_DEPARTNERED) | Some(STATUS_ARCHIVED)
+    )
+}
 
 /// ISO-8601-Zeitstempel exakt wie Pythons `_now_iso()` (UTC, `+00:00`).
 fn now_iso() -> String {
@@ -513,6 +527,178 @@ pub async fn promote_streamer_to_partner(
     Ok(())
 }
 
+// ── Reactivate aus History (Python `reactivate_partner`) ───────────────────────
+
+/// Ergebnis einer Reaktivierung — die (normalisierte) Identität des wieder
+/// aktiven Partners. Parität zum Python-Rückgabewert (`twitch_login` +
+/// `twitch_user_id`); der Aufrufer braucht nur die Identität.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReactivateOutcome {
+    pub twitch_login: String,
+    pub twitch_user_id: Option<String>,
+}
+
+/// Jüngste Partner-Historienzeile (egal welcher Status) für die Reaktivierung.
+/// `latest=True` in Python ordnet nach `COALESCE(departnered_at, partnered_at)`
+/// DESC, dann `id` DESC.
+#[derive(sqlx::FromRow)]
+struct HistoryPartnerRow {
+    id: i64,
+    twitch_login: String,
+    twitch_user_id: Option<String>,
+    status: Option<String>,
+}
+
+/// Holt einen departnerten/archivierten Partner aus der History zurück —
+/// Parität zu `reactivate_partner` (`partner_registry.py:1283`).
+///
+/// Ablauf wie Python:
+/// 1. Ist bereits ein Partner `status='active'` → No-op, dessen Identität
+///    zurückgeben (kein erneutes Promoten).
+/// 2. Sonst jüngste Historienzeile laden. Fehlt sie oder ist ihr Status nicht
+///    inaktiv (`departnered`/`archived`) → `None` (nichts zu reaktivieren).
+/// 3. Die Zeile auf `status='active'` flippen: `departnered_at`,
+///    `admin_archived_at`, `technical_pause_reason` nullen, `partnered_at=now`,
+///    `manual_partner_opt_out=0`, `manual_verified_at` auf `now` falls leer.
+///    Alle übrigen Partner-Spalten (`silent_*`, `live_ping_*`,
+///    `raid_bot_enabled`, `require_discord_link`, Verify-permanent/until) bleiben
+///    auf der Zeile erhalten — Python liest sie aus der Historienzeile und
+///    schreibt sie unverändert zurück; auf derselben Zeile ist das ein No-Touch.
+/// 4. Nur wenn der alte Status `archived` (nicht `departnered`) war: Raid-Auth
+///    wiederherstellen (`raid_enabled=TRUE`), aber nur wenn `needs_reauth`
+///    nicht gesetzt ist (sonst bleibt die Auth deaktiviert).
+pub async fn reactivate_partner(
+    pool: &PgPool,
+    login: &str,
+) -> Result<Option<ReactivateOutcome>, sqlx::Error> {
+    // 1. Bereits aktiv → No-op.
+    if let Some(active) = load_active_partner(pool, login).await? {
+        return Ok(Some(ReactivateOutcome {
+            twitch_login: active.twitch_login.to_lowercase(),
+            twitch_user_id: clean_opt(active.twitch_user_id),
+        }));
+    }
+
+    // 2. Jüngste Historienzeile (egal welcher Status).
+    let history: Option<HistoryPartnerRow> = sqlx::query_as(
+        r#"
+        SELECT id, twitch_login, twitch_user_id, status
+          FROM twitch_partners
+         WHERE LOWER(twitch_login) = LOWER($1)
+         ORDER BY COALESCE(departnered_at, partnered_at, '') DESC, id DESC
+         LIMIT 1
+        "#,
+    )
+    .bind(login)
+    .fetch_optional(pool)
+    .await?;
+
+    let Some(history) = history else {
+        return Ok(None);
+    };
+    if !is_inactive_partner_status(history.status.as_deref()) {
+        return Ok(None);
+    }
+
+    let normalized_login = history.twitch_login.to_lowercase();
+    let normalized_user_id = clean_opt(history.twitch_user_id);
+    let was_departnered = history
+        .status
+        .as_deref()
+        .map(|s| s.trim().to_lowercase() == STATUS_DEPARTNERED)
+        .unwrap_or(false);
+    let partnered_at = now_iso();
+
+    // 3. Zeile reaktivieren — Konfig-Spalten bleiben unangetastet (No-Touch auf
+    //    derselben Zeile entspricht Pythons "Werte aus der Zeile zurückschreiben").
+    sqlx::query(
+        r#"
+        UPDATE twitch_partners
+        SET status = $1,
+            departnered_at = NULL,
+            admin_archived_at = NULL,
+            technical_pause_reason = NULL,
+            manual_partner_opt_out = 0,
+            manual_verified_at = COALESCE(NULLIF(manual_verified_at, ''), $2),
+            partnered_at = $2
+        WHERE id = $3
+        "#,
+    )
+    .bind(STATUS_ACTIVE)
+    .bind(&partnered_at)
+    .bind(history.id)
+    .execute(pool)
+    .await?;
+
+    // 4. Raid-Auth nur beim archived→active-Übergang wiederherstellen.
+    if !was_departnered {
+        restore_raid_auth_for_reactivated_partner(
+            pool,
+            &normalized_login,
+            normalized_user_id.as_deref(),
+        )
+        .await?;
+    }
+
+    Ok(Some(ReactivateOutcome {
+        twitch_login: normalized_login,
+        twitch_user_id: normalized_user_id,
+    }))
+}
+
+/// Reaktiviert die Raid-Auth (`raid_enabled=TRUE`) eines zurückgeholten
+/// Partners — Parität zu `_restore_raid_auth_for_reactivated_partner`
+/// (`partner_registry.py:63`). Reaktiviert NUR, wenn eine Auth-Zeile existiert
+/// und deren `needs_reauth` nicht gesetzt ist (ein abgelaufener Token darf nicht
+/// stillschweigend wieder scharf geschaltet werden).
+async fn restore_raid_auth_for_reactivated_partner(
+    pool: &PgPool,
+    login: &str,
+    user_id: Option<&str>,
+) -> Result<(), sqlx::Error> {
+    let uid = user_id.unwrap_or("");
+    if login.is_empty() && uid.is_empty() {
+        return Ok(());
+    }
+
+    let needs_reauth: Option<Option<bool>> = sqlx::query_scalar(
+        r#"
+        SELECT needs_reauth
+          FROM twitch_raid_auth
+         WHERE ($1 <> '' AND twitch_user_id = $1)
+            OR ($2 <> '' AND LOWER(twitch_login) = LOWER($2))
+         LIMIT 1
+        "#,
+    )
+    .bind(uid)
+    .bind(login)
+    .fetch_optional(pool)
+    .await?;
+
+    // Keine Auth-Zeile → nichts zu tun (Python `return False`).
+    let Some(needs_reauth) = needs_reauth else {
+        return Ok(());
+    };
+    if needs_reauth.unwrap_or(false) {
+        return Ok(());
+    }
+
+    sqlx::query(
+        r#"
+        UPDATE twitch_raid_auth
+        SET raid_enabled = TRUE,
+            twitch_login = COALESCE(NULLIF($2, ''), twitch_login)
+        WHERE ($1 <> '' AND twitch_user_id = $1)
+           OR ($2 <> '' AND LOWER(twitch_login) = LOWER($2))
+        "#,
+    )
+    .bind(uid)
+    .bind(login)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
 // ── Stats-Backfill (Python `backfill_tracked_stats_from_category`) ─────────────
 
 /// Kopiert historische Kategorie-Stats idempotent nach `twitch_stats_tracked` —
@@ -595,8 +781,13 @@ pub async fn backfill_require_link(
 pub enum ArchiveOutcome {
     /// Aktion ausgeführt (oder No-op mit Statusmeldung), `String` = Python-Meldung.
     Done(String),
-    /// Kein Partner-Datensatz vorhanden (Python: "ist nicht gespeichert" → 4xx).
+    /// Weder aktiv noch in der History gespeichert (Python: "ist nicht
+    /// gespeichert" → 4xx).
     NotStored,
+    /// History-Zeile vorhanden, aber nicht archiviert reaktivierbar (departnert
+    /// statt nur archiviert / kein aktiver Partner). Python wirft hier einen
+    /// `ValueError` mit dieser Meldung → 4xx-Konflikt, `String` = Python-Meldung.
+    Conflict(String),
 }
 
 /// Aktueller Archiv-/Block-Zustand eines aktiven Partners für die Meldung.
@@ -608,12 +799,12 @@ struct ArchiveStateRow {
 
 /// Führt die Archiv-/Block-Mutation aus und liefert die kontextspezifische
 /// Python-Meldung — Parität zu `_dashboard_archive_sync`
-/// (`streamer_admin_mixin.py:58`) für den **aktiven Partner**.
+/// (`streamer_admin_mixin.py:58`).
 ///
-/// Der History-/Reactivate-Pfad für bereits departnerte/archivierte Partner
-/// (`reactivate_partner`) ist `storage-partner-registry-6` → Block 11; hier wird
-/// ein nicht aktiver Partner als [`ArchiveOutcome::NotStored`] behandelt (die
-/// bestehende Toggle-Mutation greift mangels aktiver Zeile ohnehin nicht).
+/// Ohne aktiven Partner greift der History-Pfad (`reactivate_partner`): eine
+/// `archived`-Historienzeile wird beim Unarchive/Toggle reaktiviert, eine
+/// `departnered`-Zeile als [`ArchiveOutcome::Conflict`] gemeldet (Python
+/// `ValueError`), gar keine Zeile als [`ArchiveOutcome::NotStored`].
 pub async fn archive_with_message(
     pool: &PgPool,
     login: &str,
@@ -646,6 +837,13 @@ pub async fn archive_with_message(
     .await?;
 
     let Some(state) = state else {
+        // Kein aktiver Partner — History-Pfad (Python `if not active_row and
+        // history_row`). Nur für die Archive-/Unarchive-/Toggle-Modi relevant;
+        // der Block-Pfad gegen eine reine History-Zeile bleibt (wie bisher)
+        // unbehandelt und fällt unten auf NotStored.
+        if !matches!(desired, "block" | "unblock" | "toggle_block") {
+            return archive_history_path(pool, login, desired).await;
+        }
         return Ok(ArchiveOutcome::NotStored);
     };
 
@@ -720,6 +918,84 @@ pub async fn archive_with_message(
     }
 }
 
+/// History-Pfad von [`archive_with_message`] (Python `if not active_row and
+/// history_row`): ohne aktiven Partner über die jüngste Historienzeile
+/// entscheiden.
+///
+/// - Status `archived`:
+///   - `desired == "archive"` → "ist bereits archiviert (seit …)" (No-op).
+///   - sonst `reactivate_partner` → "ent-archiviert" (unarchive) bzw.
+///     "reaktiviert" (toggle).
+/// - Status `departnered` → [`ArchiveOutcome::Conflict`] ("ist departnered und
+///   nicht nur archiviert").
+/// - keine Historienzeile → [`ArchiveOutcome::NotStored`].
+async fn archive_history_path(
+    pool: &PgPool,
+    login: &str,
+    desired: &str,
+) -> Result<ArchiveOutcome, sqlx::Error> {
+    #[derive(sqlx::FromRow)]
+    struct Row {
+        status: Option<String>,
+        admin_archived_at: Option<String>,
+        departnered_at: Option<String>,
+    }
+
+    let row: Option<Row> = sqlx::query_as(
+        r#"
+        SELECT status, admin_archived_at, departnered_at
+          FROM twitch_partners
+         WHERE LOWER(twitch_login) = LOWER($1)
+         ORDER BY COALESCE(departnered_at, partnered_at, '') DESC, id DESC
+         LIMIT 1
+        "#,
+    )
+    .bind(login)
+    .fetch_optional(pool)
+    .await?;
+
+    let Some(row) = row else {
+        return Ok(ArchiveOutcome::NotStored);
+    };
+
+    let status = row.status.as_deref().map(str::trim).unwrap_or("");
+    if status.eq_ignore_ascii_case(STATUS_ARCHIVED) {
+        if desired == "archive" {
+            let since = row
+                .admin_archived_at
+                .as_deref()
+                .or(row.departnered_at.as_deref())
+                .map(str::trim)
+                .filter(|s| !s.is_empty());
+            return Ok(ArchiveOutcome::Done(match since {
+                Some(s) => format!("{login} ist bereits archiviert (seit {s})"),
+                None => format!("{login} ist bereits archiviert"),
+            }));
+        }
+        // reaktivieren; bei Fehlschlag Python-ValueError-Parität als Conflict.
+        if reactivate_partner(pool, login).await?.is_none() {
+            return Ok(ArchiveOutcome::Conflict(format!(
+                "{login} konnte nicht reaktiviert werden"
+            )));
+        }
+        return Ok(ArchiveOutcome::Done(if desired == "unarchive" {
+            format!("{login} ent-archiviert")
+        } else {
+            format!("{login} reaktiviert")
+        }));
+    }
+
+    // Nicht-leerer, nicht-aktiver Status (z. B. `departnered`) → Konflikt.
+    if !status.is_empty() && !status.eq_ignore_ascii_case(STATUS_ACTIVE) {
+        return Ok(ArchiveOutcome::Conflict(format!(
+            "{login} ist departnered und nicht nur archiviert"
+        )));
+    }
+    Ok(ArchiveOutcome::Conflict(format!(
+        "{login} ist kein aktiver Partner"
+    )))
+}
+
 // ── Live-State löschen (Python `_cmd_remove`-DELETE) ───────────────────────────
 
 /// Löscht die `twitch_live_state`-Zeile eines Logins (idempotent) — der
@@ -784,6 +1060,10 @@ mod tests {
                 manual_verified_at TEXT,
                 manual_partner_opt_out INTEGER DEFAULT 0,
                 raid_bot_enabled INTEGER DEFAULT 0,
+                silent_ban INTEGER DEFAULT 0,
+                silent_raid INTEGER DEFAULT 0,
+                live_ping_role_id BIGINT,
+                live_ping_enabled INTEGER DEFAULT 1,
                 partnered_at TEXT DEFAULT CURRENT_TIMESTAMP,
                 admin_archived_at TEXT,
                 departnered_at TEXT,
@@ -1052,5 +1332,186 @@ mod tests {
         assert!(clear.manual_verified_at.is_none());
 
         assert!(VerificationPayload::for_mode("quatsch").is_none());
+    }
+
+    // ── reactivate_partner (Python `reactivate_partner`) ───────────────────────
+
+    /// Legt eine inaktive Partner-Historienzeile mit gegebenem Status an
+    /// (`departnered`/`archived`) inkl. erhaltener Konfig-Spalten.
+    async fn insert_history_partner(pool: &PgPool, id: i64, login: &str, uid: &str, status: &str) {
+        sqlx::query(
+            "INSERT INTO twitch_partners
+                (id, twitch_login, twitch_user_id, status, departnered_at,
+                 admin_archived_at, technical_pause_reason, manual_partner_opt_out,
+                 silent_ban, live_ping_enabled, manual_verified_permanent, manual_verified_at)
+             VALUES ($1, $2, $3, $4, '2026-01-01T00:00:00+00:00',
+                     '2026-01-01T00:00:00+00:00', 'blocked', 1, 1, 0, 1, NULL)",
+        )
+        .bind(id)
+        .bind(login)
+        .bind(uid)
+        .bind(status)
+        .execute(pool)
+        .await
+        .expect("insert history partner");
+    }
+
+    #[tokio::test]
+    async fn reactivate_holt_archivierten_partner_zurueck_und_restored_raid() {
+        let dsn = db_dsn_or_skip!();
+        let pool = make_pool(&dsn, "test_lc_reactivate_archived").await;
+        insert_history_partner(&pool, 1, "back", "42", STATUS_ARCHIVED).await;
+        // Auth-Zeile ohne needs_reauth → muss reaktiviert werden.
+        sqlx::query("INSERT INTO twitch_raid_auth (twitch_user_id, twitch_login, raid_enabled, needs_reauth) VALUES ('42', 'back', FALSE, FALSE)")
+            .execute(&pool).await.unwrap();
+
+        let out = reactivate_partner(&pool, "back")
+            .await
+            .unwrap()
+            .expect("muss reaktivieren");
+        assert_eq!(out.twitch_login, "back");
+        assert_eq!(out.twitch_user_id.as_deref(), Some("42"));
+
+        #[derive(sqlx::FromRow)]
+        struct State {
+            status: Option<String>,
+            departnered_at: Option<String>,
+            admin_archived_at: Option<String>,
+            technical_pause_reason: Option<String>,
+            manual_partner_opt_out: Option<i32>,
+            silent_ban: Option<i32>,
+        }
+        let s: State = sqlx::query_as(
+            "SELECT status, departnered_at, admin_archived_at, technical_pause_reason, manual_partner_opt_out, silent_ban FROM twitch_partners WHERE id = 1",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(s.status.as_deref(), Some("active"));
+        assert!(s.departnered_at.is_none(), "departnered_at genullt");
+        assert!(s.admin_archived_at.is_none(), "admin_archived_at genullt");
+        assert!(s.technical_pause_reason.is_none(), "technical_pause_reason genullt");
+        assert_eq!(s.manual_partner_opt_out, Some(0), "opt_out zurückgesetzt");
+        assert_eq!(s.silent_ban, Some(1), "Konfig-Spalte silent_ban bleibt erhalten");
+
+        // archived → active ⇒ Raid-Auth wiederhergestellt.
+        let raid: Option<bool> = sqlx::query_scalar(
+            "SELECT raid_enabled FROM twitch_raid_auth WHERE twitch_user_id = '42'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(raid, Some(true), "archived→active restored raid auth");
+    }
+
+    #[tokio::test]
+    async fn reactivate_archived_aber_needs_reauth_laesst_raid_aus() {
+        let dsn = db_dsn_or_skip!();
+        let pool = make_pool(&dsn, "test_lc_reactivate_needsreauth").await;
+        insert_history_partner(&pool, 1, "back", "42", STATUS_ARCHIVED).await;
+        sqlx::query("INSERT INTO twitch_raid_auth (twitch_user_id, twitch_login, raid_enabled, needs_reauth) VALUES ('42', 'back', FALSE, TRUE)")
+            .execute(&pool).await.unwrap();
+
+        reactivate_partner(&pool, "back").await.unwrap().expect("reaktiviert");
+
+        let raid: Option<bool> = sqlx::query_scalar(
+            "SELECT raid_enabled FROM twitch_raid_auth WHERE twitch_user_id = '42'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(raid, Some(false), "needs_reauth → raid bleibt aus");
+    }
+
+    #[tokio::test]
+    async fn reactivate_departnerten_partner_ohne_raid_restore() {
+        let dsn = db_dsn_or_skip!();
+        let pool = make_pool(&dsn, "test_lc_reactivate_departnered").await;
+        insert_history_partner(&pool, 1, "back", "42", STATUS_DEPARTNERED).await;
+        sqlx::query("INSERT INTO twitch_raid_auth (twitch_user_id, twitch_login, raid_enabled, needs_reauth) VALUES ('42', 'back', FALSE, FALSE)")
+            .execute(&pool).await.unwrap();
+
+        let out = reactivate_partner(&pool, "back").await.unwrap().expect("reaktiviert");
+        assert_eq!(out.twitch_login, "back");
+
+        let status: Option<String> =
+            sqlx::query_scalar("SELECT status FROM twitch_partners WHERE id = 1")
+                .fetch_one(&pool).await.unwrap();
+        assert_eq!(status.as_deref(), Some("active"));
+
+        // departnered → active ⇒ Raid-Auth NICHT angefasst.
+        let raid: Option<bool> = sqlx::query_scalar(
+            "SELECT raid_enabled FROM twitch_raid_auth WHERE twitch_user_id = '42'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(raid, Some(false), "departnered→active berührt raid auth nicht");
+    }
+
+    #[tokio::test]
+    async fn reactivate_bei_aktivem_partner_ist_noop() {
+        let dsn = db_dsn_or_skip!();
+        let pool = make_pool(&dsn, "test_lc_reactivate_active_noop").await;
+        insert_active_partner(&pool, 1, "drag", "42").await;
+
+        let out = reactivate_partner(&pool, "drag").await.unwrap().expect("liefert Identität");
+        assert_eq!(out.twitch_login, "drag");
+        assert_eq!(out.twitch_user_id.as_deref(), Some("42"));
+
+        // status bleibt active, keine Mutation.
+        let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM twitch_partners WHERE status = 'active'")
+            .fetch_one(&pool).await.unwrap();
+        assert_eq!(count, 1);
+    }
+
+    #[tokio::test]
+    async fn reactivate_ohne_historie_gibt_none() {
+        let dsn = db_dsn_or_skip!();
+        let pool = make_pool(&dsn, "test_lc_reactivate_none").await;
+        let res = reactivate_partner(&pool, "ghost").await.unwrap();
+        assert!(res.is_none());
+    }
+
+    #[tokio::test]
+    async fn archive_history_path_reaktiviert_archivierten() {
+        let dsn = db_dsn_or_skip!();
+        let pool = make_pool(&dsn, "test_lc_archive_hist_reactivate").await;
+        insert_history_partner(&pool, 1, "back", "42", STATUS_ARCHIVED).await;
+
+        // toggle ohne aktiven Partner → reaktiviert.
+        let out = archive_with_message(&pool, "back", "toggle").await.unwrap();
+        assert_eq!(out, ArchiveOutcome::Done("back reaktiviert".into()));
+
+        let status: Option<String> =
+            sqlx::query_scalar("SELECT status FROM twitch_partners WHERE id = 1")
+                .fetch_one(&pool).await.unwrap();
+        assert_eq!(status.as_deref(), Some("active"));
+
+        // unarchive-Variante liefert die "ent-archiviert"-Meldung.
+        insert_history_partner(&pool, 2, "back2", "43", STATUS_ARCHIVED).await;
+        let out2 = archive_with_message(&pool, "back2", "unarchive").await.unwrap();
+        assert_eq!(out2, ArchiveOutcome::Done("back2 ent-archiviert".into()));
+    }
+
+    #[tokio::test]
+    async fn archive_history_path_departnered_ist_conflict() {
+        let dsn = db_dsn_or_skip!();
+        let pool = make_pool(&dsn, "test_lc_archive_hist_conflict").await;
+        insert_history_partner(&pool, 1, "gone", "42", STATUS_DEPARTNERED).await;
+
+        let out = archive_with_message(&pool, "gone", "unarchive").await.unwrap();
+        assert_eq!(
+            out,
+            ArchiveOutcome::Conflict("gone ist departnered und nicht nur archiviert".into())
+        );
+    }
+
+    #[tokio::test]
+    async fn archive_history_path_ohne_zeile_ist_notstored() {
+        let dsn = db_dsn_or_skip!();
+        let pool = make_pool(&dsn, "test_lc_archive_hist_notstored").await;
+        let out = archive_with_message(&pool, "nobody", "toggle").await.unwrap();
+        assert_eq!(out, ArchiveOutcome::NotStored);
     }
 }
