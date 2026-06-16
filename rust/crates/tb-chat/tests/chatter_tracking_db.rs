@@ -375,7 +375,7 @@ async fn non_deadlock_game_wird_ignoriert() {
     // Offene Session existiert — der Skip muss am GAME-Gate passieren, nicht am Session-Gate
     open_session(&pool, "wronggame", 400).await;
 
-    let tracker = ChatterTracker::new(pool.clone());
+    let tracker = ChatterTracker::with_persist_all_games(pool.clone(), false);
     let event = make_event("wronggame", "einchatter");
     tracker.track(&event).await;
 

@@ -27,7 +27,9 @@ use tb_chat::moderation::{
     HelixChatClient, ModerationEngine, OutboundSuppressionStore, TimeoutGuard, WERBEFREI_PITCH_MSG,
 };
 use tb_chat::promos::{InviteResolver, PartnerChannelCheck, PromoEngine};
-use tb_chat::timeout_tracking::{CombinedSuppression, TimeoutTrackingChatApi};
+use tb_chat::timeout_tracking::{
+    BotBannedChannelHandler, CombinedSuppression, TimeoutTrackingChatApi,
+};
 use tb_chat::scam_pitch::{AccountAgePort, ScamPitchDetector, SpamAiReviewer};
 use tb_chat::spam_filter::{LearnedPatterns, SpamFilter};
 use tb_chat::token::BotTokenManager;
@@ -421,6 +423,7 @@ pub async fn build_runtime(
     pool: PgPool,
     manual_raid: Option<Arc<dyn tb_internal_api::ManualRaidPort>>,
     clip_port: Option<Arc<dyn ClipPort>>,
+    bot_ban_handler: Option<Arc<dyn BotBannedChannelHandler>>,
     inner_hooks: Arc<dyn EventSubHooks>,
 ) -> ChatRuntime {
     let ChatApiHandle {
@@ -436,11 +439,10 @@ pub async fn build_runtime(
     // send_message (Moderation/Promos/Commands/Scam-Pitch/Fun/Pipeline/
     // Mention-Resolver) durch das Tracking.
     let timeout_guard = Arc::new(TimeoutGuard::new());
-    let api: Arc<dyn ChatApi> = Arc::new(TimeoutTrackingChatApi::new(
-        api,
-        Arc::clone(&timeout_guard),
-        pool.clone(),
-    ));
+    let api: Arc<dyn ChatApi> = Arc::new(
+        TimeoutTrackingChatApi::new(api, Arc::clone(&timeout_guard), pool.clone())
+            .with_bot_ban_handler(bot_ban_handler),
+    );
 
     ensure_autoban_log_table(&pool).await;
 

@@ -138,7 +138,8 @@ pub use target_resolution::{
 };
 pub use token_blacklist::TokenBlacklistStore;
 pub use token_lifecycle::{
-    NotifyOutcome, TokenLifecycleNotifier, TokenLifecycleReactor, TOKEN_ERROR_CHANNEL_ID,
+    BotBannedOutcome, NotifyOutcome, TokenLifecycleNotifier, TokenLifecycleReactor,
+    TOKEN_ERROR_CHANNEL_ID,
 };
 pub use token_provider::TokenProvider;
 pub use token_refresher::{

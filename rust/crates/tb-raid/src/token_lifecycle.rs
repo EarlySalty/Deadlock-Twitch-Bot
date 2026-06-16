@@ -130,6 +130,25 @@ pub fn user_dm_reminder_text(twitch_login: &str, reauth_url: &str) -> String {
     )
 }
 
+/// User-DM-Text bei Kanal-seitigem Bot-Ban (Python `_send_user_dm_bot_banned`).
+/// Der technische `error_message` fließt bewusst NICHT in die DM (verwirrt den
+/// Streamer) — er bleibt im Blacklist-`reason` und in den Logs erhalten.
+pub fn user_dm_bot_banned_text(twitch_login: &str, _error_message: &str) -> String {
+    format!(
+        "⚠️ **Twitch Bot – in deinem Channel blockiert**\n\n\
+         Der Bot wurde in **{twitch_login}** gebannt oder als Moderator entfernt. \
+         Solange das so ist, pausieren Auto-Raid, Chat-Schutz und Analytics für \
+         deinen Kanal.\n\n\
+         **So holst du ihn zurück** – schick diese beiden Befehle in deinem eigenen \
+         Twitch-Chat:\n\
+         1️⃣ Ban aufheben: `/unban deutschedeadlockcommunity`\n\
+         2️⃣ Wieder zum Mod machen: `/mod deutschedeadlockcommunity`\n\n\
+         Sobald das erledigt ist, läuft alles von allein wieder an – du musst sonst \
+         nichts weiter tun. War der Ban Absicht, kannst du diese Nachricht einfach \
+         ignorieren."
+    )
+}
+
 /// Python-Parität für `_get_discord_user_id`: nur rein numerische IDs zählen.
 pub fn sanitize_discord_user_id(raw: Option<&str>) -> Option<String> {
     let trimmed = raw.unwrap_or("").trim();
@@ -143,6 +162,18 @@ pub fn sanitize_discord_user_id(raw: Option<&str>) -> Option<String> {
 /// Schneidet einen String auf höchstens `max` Zeichen (char-sicher).
 fn truncate_chars(s: &str, max: usize) -> String {
     s.chars().take(max).collect()
+}
+
+fn bot_banned_blacklist_reason(error_message: &str) -> String {
+    let compact = error_message.replace('\n', " ");
+    let trimmed = compact.trim();
+    if trimmed.is_empty() {
+        return "chat_bot_banned_in_channel".to_string();
+    }
+    format!(
+        "chat_bot_banned_in_channel: {}",
+        truncate_chars(trimmed, 180)
+    )
 }
 
 // ---------------------------------------------------------------------------
@@ -164,6 +195,17 @@ impl NotifyOutcome {
     fn any_sent(&self) -> bool {
         self.admin_sent || self.user_dm_sent
     }
+}
+
+/// Ergebnis einer Kanal-seitigen Bot-Ban-Reaktion.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct BotBannedOutcome {
+    /// Auth-/Partner-State wurde auf technischen Opt-out gesetzt.
+    pub opt_out_marked: bool,
+    /// Recovery-DM wurde ueber den Notifier-Port zugestellt.
+    pub user_dm_sent: bool,
+    /// Vorher existierte bereits ein `bot_banned`-Blacklist-Grund.
+    pub already_flagged: bool,
 }
 
 /// Token-Lifecycle-Reaktor: bindet `twitch_token_blacklist` an den Discord-Port.
@@ -414,6 +456,88 @@ impl<N: TokenLifecycleNotifier> TokenLifecycleReactor<N> {
         }
     }
 
+    /// Kanal-seitiger Bot-Ban (Python `handle_bot_banned_channel`):
+    /// Raid fuer diesen Partner technisch deaktivieren, Bot-Ban-Blacklist setzen
+    /// und dem Streamer genau einmal eine Recovery-DM senden.
+    pub async fn handle_bot_banned_channel(
+        &self,
+        twitch_user_id: &str,
+        twitch_login: &str,
+        error_message: &str,
+    ) -> BotBannedOutcome {
+        let already_flagged = match self
+            .mark_bot_banned_inner(twitch_user_id, twitch_login, error_message)
+            .await
+        {
+            Ok(already_flagged) => already_flagged,
+            Err(error) => {
+                tracing::warn!(%error, user = %mask(twitch_user_id), "Bot-Ban-Opt-out fehlgeschlagen");
+                return BotBannedOutcome::default();
+            }
+        };
+        if already_flagged {
+            return BotBannedOutcome {
+                already_flagged: true,
+                ..Default::default()
+            };
+        }
+
+        let discord_user_id = self.discord_user_id_for(twitch_user_id, twitch_login).await;
+        let user_dm_sent = if let Some(ref did) = discord_user_id {
+            let text = user_dm_bot_banned_text(twitch_login, error_message);
+            self.notifier.send_user_dm(did, &text).await
+        } else {
+            false
+        };
+
+        tracing::info!(
+            user = %mask(twitch_login),
+            user_dm = user_dm_sent,
+            "Bot-Ban-Opt-out verarbeitet"
+        );
+        BotBannedOutcome {
+            opt_out_marked: true,
+            user_dm_sent,
+            already_flagged: false,
+        }
+    }
+
+    /// Stündlicher Restore-Sweep für technische Bot-Ban-Pausen. Selektiert nur
+    /// `technical_pause_reason='bot_banned'` und delegiert die Sicherheitslogik
+    /// an [`Self::restore_bot_banned_channel`].
+    pub async fn restore_ready_bot_banned_channels(&self) -> u64 {
+        let rows: Vec<(String, String)> = match sqlx::query_as(
+            r#"
+            SELECT DISTINCT
+                   ra.twitch_user_id,
+                   COALESCE(NULLIF(LOWER(ra.twitch_login), ''), LOWER(p.twitch_login), '') AS twitch_login
+              FROM twitch_raid_auth ra
+              JOIN twitch_partners p
+                ON p.twitch_user_id = ra.twitch_user_id
+                OR LOWER(p.twitch_login) = LOWER(ra.twitch_login)
+             WHERE COALESCE(ra.needs_reauth, TRUE) = FALSE
+               AND LOWER(COALESCE(p.technical_pause_reason, '')) = 'bot_banned'
+            "#,
+        )
+        .fetch_all(&self.pool)
+        .await
+        {
+            Ok(rows) => rows,
+            Err(error) => {
+                tracing::warn!(%error, "Bot-Ban-Restore-Sweep: DB-Query fehlgeschlagen");
+                return 0;
+            }
+        };
+
+        let mut restored = 0u64;
+        for (uid, login) in rows {
+            if self.restore_bot_banned_channel(&uid, &login).await {
+                restored += 1;
+            }
+        }
+        restored
+    }
+
     // -- DB-Helfer --------------------------------------------------------
 
     async fn is_notified(&self, twitch_user_id: &str) -> Result<bool, sqlx::Error> {
@@ -520,6 +644,98 @@ impl<N: TokenLifecycleNotifier> TokenLifecycleReactor<N> {
             .await?;
         tx.commit().await?;
         Ok(())
+    }
+
+    /// Markiert einen Kanal als Bot-Ban-Opt-out. Rueckgabe `true` bedeutet:
+    /// vor dem Update war bereits ein `bot_banned`-Grund vorhanden, also keine
+    /// erneute DM-Reaktion.
+    async fn mark_bot_banned_inner(
+        &self,
+        twitch_user_id: &str,
+        twitch_login: &str,
+        error_message: &str,
+    ) -> Result<bool, sqlx::Error> {
+        let login_hint = twitch_login.trim().to_lowercase();
+        if login_hint.is_empty() {
+            return Ok(true);
+        }
+        let target_id = twitch_user_id.trim();
+        let target_id = (!target_id.is_empty()).then_some(target_id);
+        let reason = bot_banned_blacklist_reason(error_message);
+        let added_at = Self::iso(Utc::now());
+
+        let mut tx = self.pool.begin().await?;
+        let existing_reason: Option<Option<String>> = sqlx::query_scalar(
+            "SELECT reason FROM twitch_raid_blacklist WHERE LOWER(target_login) = LOWER($1) LIMIT 1",
+        )
+        .bind(&login_hint)
+        .fetch_optional(&mut *tx)
+        .await?;
+        let already_flagged = existing_reason
+            .flatten()
+            .map(|reason| reason.to_lowercase().contains("bot_banned"))
+            .unwrap_or(false);
+
+        if let Some(tid) = target_id {
+            sqlx::query(
+                "DELETE FROM twitch_raid_blacklist
+                  WHERE target_id = $1 AND LOWER(target_login) <> $2",
+            )
+            .bind(tid)
+            .bind(&login_hint)
+            .execute(&mut *tx)
+            .await?;
+        }
+        sqlx::query(
+            r#"
+            INSERT INTO twitch_raid_blacklist (target_id, target_login, reason, added_at)
+            VALUES ($1, $2, $3, $4)
+            ON CONFLICT (target_login) DO UPDATE SET
+                target_id = COALESCE(EXCLUDED.target_id, twitch_raid_blacklist.target_id),
+                reason = EXCLUDED.reason,
+                added_at = EXCLUDED.added_at
+            "#,
+        )
+        .bind(target_id)
+        .bind(&login_hint)
+        .bind(&reason)
+        .bind(&added_at)
+        .execute(&mut *tx)
+        .await?;
+
+        if already_flagged {
+            tx.commit().await?;
+            return Ok(true);
+        }
+
+        sqlx::query(
+            r#"
+            UPDATE twitch_raid_auth
+               SET raid_enabled = FALSE,
+                   twitch_login = COALESCE(NULLIF($1, ''), twitch_login)
+             WHERE twitch_user_id = $2
+            "#,
+        )
+        .bind(&login_hint)
+        .bind(twitch_user_id)
+        .execute(&mut *tx)
+        .await?;
+        sqlx::query(
+            r#"
+            UPDATE twitch_partners
+               SET technical_pause_reason = 'bot_banned',
+                   raid_bot_enabled = 0,
+                   twitch_login = COALESCE(NULLIF($1, ''), twitch_login)
+             WHERE twitch_user_id = $2
+                OR LOWER(twitch_login) = LOWER($1)
+            "#,
+        )
+        .bind(&login_hint)
+        .bind(twitch_user_id)
+        .execute(&mut *tx)
+        .await?;
+        tx.commit().await?;
+        Ok(false)
     }
 
     /// Kern von `restore_bot_banned_channel`: nur restaurieren, wenn die Auth-Zeile
@@ -730,6 +946,20 @@ mod tests {
     }
 
     #[test]
+    fn bot_banned_dm_nennt_kanal_und_recovery_schritte() {
+        let text = user_dm_bot_banned_text("foo", "sender_banned");
+        // Personalisiert auf den betroffenen Kanal.
+        assert!(text.contains("foo"));
+        // Beide konkreten Recovery-Befehle mit dem Bot-Account.
+        assert!(text.contains("/unban deutschedeadlockcommunity"));
+        assert!(text.contains("/mod deutschedeadlockcommunity"));
+        // Der technische error_message gehört NICHT in die User-DM.
+        assert!(!text.contains("sender_banned"));
+        // Platzhalter ist ersetzt.
+        assert_ne!(text, "Platzhalter");
+    }
+
+    #[test]
     fn reminder_dm_referenziert_grace_dauer() {
         let text = user_dm_reminder_text("foo", DEFAULT_REAUTH_URL);
         assert!(text.contains(&GRACE_PERIOD_DAYS.to_string()));
@@ -819,7 +1049,8 @@ mod tests {
             "CREATE TABLE twitch_raid_auth (
                 twitch_user_id text PRIMARY KEY, twitch_login text,
                 raid_enabled boolean DEFAULT true, needs_reauth boolean DEFAULT false)",
-            "CREATE TABLE twitch_raid_blacklist (target_login text, reason text)",
+            "CREATE TABLE twitch_raid_blacklist (
+                target_id text, target_login text PRIMARY KEY, reason text, added_at text)",
         ] {
             sqlx::query(ddl).execute(&pool).await.unwrap();
         }
@@ -996,6 +1227,98 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(raid, Some(true));
+    }
+
+    #[tokio::test]
+    async fn handle_bot_banned_channel_markiert_optout_und_dedupt_dm() {
+        let Some(_) = test_db_url() else {
+            eprintln!("SKIP: TB_TEST_DATABASE_URL nicht gesetzt");
+            return;
+        };
+        let pool = setup_db("tl_bot_banned").await;
+        sqlx::query("INSERT INTO twitch_partners (twitch_user_id, twitch_login, technical_pause_reason, raid_bot_enabled) VALUES ('500', 'banme', NULL, 1)")
+            .execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO twitch_raid_auth (twitch_user_id, twitch_login, raid_enabled, needs_reauth) VALUES ('500', 'banme', true, false)")
+            .execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO twitch_streamer_identities (twitch_user_id, twitch_login, discord_user_id) VALUES ('500', 'banme', '999')")
+            .execute(&pool).await.unwrap();
+
+        let notifier = Arc::new(CountingNotifier::default());
+        let reactor = TokenLifecycleReactor::new(pool.clone(), notifier.clone());
+
+        let outcome = reactor
+            .handle_bot_banned_channel("500", "banme", "sender_banned")
+            .await;
+        assert!(outcome.opt_out_marked);
+        assert!(outcome.user_dm_sent);
+        assert!(!outcome.already_flagged);
+        assert_eq!(notifier.user_dms.load(Ordering::SeqCst), 1);
+
+        let (raid_enabled, needs_reauth): (Option<bool>, Option<bool>) = sqlx::query_as(
+            "SELECT raid_enabled, needs_reauth FROM twitch_raid_auth WHERE twitch_user_id = '500'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(raid_enabled, Some(false));
+        assert_eq!(needs_reauth, Some(false));
+        let (pause, partner_enabled): (Option<String>, Option<i32>) = sqlx::query_as(
+            "SELECT technical_pause_reason, raid_bot_enabled FROM twitch_partners WHERE twitch_user_id = '500'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(pause.as_deref(), Some("bot_banned"));
+        assert_eq!(partner_enabled, Some(0));
+        let reason: Option<String> = sqlx::query_scalar(
+            "SELECT reason FROM twitch_raid_blacklist WHERE target_login = 'banme'",
+        )
+        .fetch_optional(&pool)
+        .await
+        .unwrap();
+        assert!(
+            reason.as_deref().unwrap_or_default().contains("bot_banned"),
+            "Blacklist-Reason muss Dedup-Marker tragen"
+        );
+
+        let duplicate = reactor
+            .handle_bot_banned_channel("500", "banme", "sender_banned again")
+            .await;
+        assert!(duplicate.already_flagged);
+        assert!(!duplicate.user_dm_sent);
+        assert_eq!(notifier.user_dms.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn restore_sweep_hebt_nur_bot_banned_auf() {
+        let Some(_) = test_db_url() else {
+            eprintln!("SKIP: TB_TEST_DATABASE_URL nicht gesetzt");
+            return;
+        };
+        let pool = setup_db("tl_restore_sweep").await;
+        sqlx::query("INSERT INTO twitch_partners (twitch_user_id, twitch_login, technical_pause_reason, raid_bot_enabled) VALUES ('600', 'ready', 'bot_banned', 0), ('601', 'blocked', 'blocked', 0)")
+            .execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO twitch_raid_auth (twitch_user_id, twitch_login, raid_enabled, needs_reauth) VALUES ('600', 'ready', false, false), ('601', 'blocked', false, false)")
+            .execute(&pool).await.unwrap();
+
+        let notifier = Arc::new(CountingNotifier::default());
+        let reactor = TokenLifecycleReactor::new(pool.clone(), notifier);
+        assert_eq!(reactor.restore_ready_bot_banned_channels().await, 1);
+
+        let ready_reason: Option<String> = sqlx::query_scalar(
+            "SELECT technical_pause_reason FROM twitch_partners WHERE twitch_user_id = '600'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        let blocked_reason: Option<String> = sqlx::query_scalar(
+            "SELECT technical_pause_reason FROM twitch_partners WHERE twitch_user_id = '601'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(ready_reason, None);
+        assert_eq!(blocked_reason.as_deref(), Some("blocked"));
     }
 
     #[tokio::test]

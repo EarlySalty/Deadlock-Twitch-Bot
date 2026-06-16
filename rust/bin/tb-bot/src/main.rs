@@ -741,6 +741,10 @@ async fn main() {
                 pool.clone(),
                 manual_raid_port.clone(),
                 clip_port,
+                Some(token_lifecycle_wiring::build_bot_ban_handler(
+                    pool.clone(),
+                    &settings.broker,
+                )),
                 eventsub_hooks.clone(),
             )
             .await;

@@ -53,9 +53,61 @@ pub fn is_bot_timeout_drop(outcome: &SendOutcome) -> Option<&str> {
     }
 }
 
+/// Interner Grund fuer einen Kanal-seitigen Bot-Ban.
+///
+/// `sender_timedout` bleibt bewusst TimeoutGuard-only; der Bot-Ban-Lifecycle
+/// reagiert nur auf `sender_banned` oder HTTP-Fehlerkoerper, die klar nach
+/// Kanal-Ban aussehen.
+pub fn bot_banned_reason(outcome: &SendOutcome) -> Option<String> {
+    match outcome {
+        SendOutcome::Dropped { code, message } if code == "sender_banned" => {
+            Some(reason_with_detail("chat_bot_banned_in_channel", message))
+        }
+        SendOutcome::HttpError { status, body } if looks_like_bot_banned_error(*status, body) => {
+            Some(reason_with_detail(&format!("chat_bot_banned_in_channel_http_{status}"), body))
+        }
+        _ => None,
+    }
+}
+
+fn looks_like_bot_banned_error(status: u16, text: &str) -> bool {
+    let lowered = text.to_lowercase();
+    if lowered.contains("user is banned") || lowered.contains("sender is banned") {
+        return true;
+    }
+    matches!(status, 400 | 401 | 403) && lowered.contains("ban")
+}
+
+fn reason_with_detail(code: &str, detail: &str) -> String {
+    let compact = detail.replace('\n', " ");
+    let trimmed = compact.trim();
+    if trimmed.is_empty() {
+        return code.to_string();
+    }
+    let snippet: String = trimmed.chars().take(180).collect();
+    format!("{code}: {snippet}")
+}
+
 // ---------------------------------------------------------------------------
 // TimeoutTrackingChatApi — ChatApi-Decorator
 // ---------------------------------------------------------------------------
+
+/// Signal aus `tb-chat`, wenn Twitch meldet, dass der Bot in einem Kanal
+/// gebannt ist. Die Reaktion gehoert in den Composition-Root (`tb-bot`) und
+/// weiter in `tb-raid`; `tb-chat` kennt diese Crate bewusst nicht.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BotBannedChannelSignal {
+    pub broadcaster_id: String,
+    pub broadcaster_login: String,
+    pub reason: String,
+}
+
+/// Port fuer den Bot-Ban-Lifecycle. Best-effort: Implementierungen duerfen
+/// Fehler loggen und sollen den Chat-Sendepfad nicht abbrechen.
+#[async_trait]
+pub trait BotBannedChannelHandler: Send + Sync {
+    async fn on_bot_banned_channel(&self, signal: BotBannedChannelSignal);
+}
 
 /// [`ChatApi`]-Decorator, der ausgehende Bot-Timeouts an den [`TimeoutGuard`]
 /// meldet.
@@ -70,12 +122,27 @@ pub struct TimeoutTrackingChatApi {
     inner: Arc<dyn ChatApi>,
     guard: Arc<TimeoutGuard>,
     pool: PgPool,
+    bot_ban_handler: Option<Arc<dyn BotBannedChannelHandler>>,
 }
 
 impl TimeoutTrackingChatApi {
     /// Erstellt einen neuen Decorator.
     pub fn new(inner: Arc<dyn ChatApi>, guard: Arc<TimeoutGuard>, pool: PgPool) -> Self {
-        Self { inner, guard, pool }
+        Self {
+            inner,
+            guard,
+            pool,
+            bot_ban_handler: None,
+        }
+    }
+
+    /// Verdrahtet optional den Bot-Ban-Lifecycle-Port.
+    pub fn with_bot_ban_handler(
+        mut self,
+        handler: Option<Arc<dyn BotBannedChannelHandler>>,
+    ) -> Self {
+        self.bot_ban_handler = handler;
+        self
     }
 
     /// Löst `broadcaster_id` → `login` auf (kanonische Identitäts-Tabelle).
@@ -110,12 +177,29 @@ impl ChatApi for TimeoutTrackingChatApi {
         // Nur im seltenen Bot-Timeout-Drop-Fall die DB für die id→login-Auflösung
         // bemühen (moderation.py:1535–1538).
         if let Ok(outcome) = &result {
-            if is_bot_timeout_drop(outcome).is_some() {
+            let timeout_drop = is_bot_timeout_drop(outcome).is_some();
+            let bot_ban_reason = bot_banned_reason(outcome);
+            if timeout_drop || bot_ban_reason.is_some() {
                 match self.resolve_login(broadcaster_id).await {
-                    Some(login) => self.guard.record_timeout(&login),
+                    Some(login) => {
+                        if timeout_drop {
+                            self.guard.record_timeout(&login);
+                        }
+                        if let (Some(handler), Some(reason)) =
+                            (self.bot_ban_handler.as_ref(), bot_ban_reason)
+                        {
+                            handler
+                                .on_bot_banned_channel(BotBannedChannelSignal {
+                                    broadcaster_id: broadcaster_id.to_string(),
+                                    broadcaster_login: login,
+                                    reason,
+                                })
+                                .await;
+                        }
+                    }
                     None => debug!(
-                        "Bot-Timeout-Drop, aber kein Login für broadcaster_id={broadcaster_id} \
-                         auflösbar — record_timeout übersprungen"
+                        "Bot-Timeout/Ban-Signal, aber kein Login für broadcaster_id={broadcaster_id} \
+                         auflösbar — Tracking übersprungen"
                     ),
                 }
             }
@@ -323,6 +407,35 @@ mod tests {
             message: String::new(),
         };
         assert_eq!(is_bot_timeout_drop(&o), Some("sender_banned"));
+    }
+
+    #[test]
+    fn bot_banned_reason_erkennt_sender_banned_drop() {
+        let o = SendOutcome::Dropped {
+            code: "sender_banned".into(),
+            message: "Sender is banned".into(),
+        };
+        let reason = bot_banned_reason(&o).expect("sender_banned muss Bot-Ban signalisieren");
+        assert!(reason.contains("bot_banned"));
+    }
+
+    #[test]
+    fn bot_banned_reason_ignoriert_sender_timedout_drop() {
+        let o = SendOutcome::Dropped {
+            code: "sender_timedout".into(),
+            message: "Sender is timed out".into(),
+        };
+        assert_eq!(bot_banned_reason(&o), None);
+    }
+
+    #[test]
+    fn bot_banned_reason_erkennt_401_user_is_banned() {
+        let o = SendOutcome::HttpError {
+            status: 401,
+            body: "user is banned".into(),
+        };
+        let reason = bot_banned_reason(&o).expect("401 mit Ban-Body muss Bot-Ban signalisieren");
+        assert!(reason.contains("http_401"));
     }
 
     #[test]
