@@ -21,6 +21,7 @@ unicode-normalization = { workspace = true }
 tb-domain   = { workspace = true }
 tb-analytics = { workspace = true }
 tb-transport-twitch = { workspace = true }
+tb-llm      = { workspace = true }
 
 [dev-dependencies]
 tokio    = { workspace = true, features = ["rt-multi-thread", "macros"] }
