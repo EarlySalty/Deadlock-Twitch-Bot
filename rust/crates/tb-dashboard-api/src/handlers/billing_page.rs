@@ -410,6 +410,28 @@ pub async fn catalog_handler(
         "expires_at": current.expires_at,
         "source": current.source,
     });
+
+    // B2-P1: Rechnungsempfänger-Profil (persistiert + Stripe-Customer-Prefill) für
+    // die UI-Vorbelegung. Die Stripe-Customer-ID kommt aus dem aktiven Abo-Record;
+    // ohne Config/Customer-ID liefert resolve_profile nur das persistierte/Default-
+    // Profil (kein Stripe-Call).
+    let stripe_customer_id = active_customer_record(&pool, &twitch_login, &twitch_user_id,
+            &customer_reference_for(&auth).unwrap_or_default())
+        .await
+        .ok()
+        .flatten()
+        .map(|rec| rec.stripe_customer_id)
+        .filter(|id| !id.is_empty());
+    let (profile, imported_fields) = crate::handlers::billing_profile::resolve_profile(
+        &pool,
+        &auth,
+        config.as_ref().map(|Extension(c)| c),
+        stripe_customer_id.as_deref(),
+    )
+    .await;
+    payload["billing_profile"] = profile;
+    payload["billing_profile_imported_fields"] = json!(imported_fields);
+
     payload["payment"] = json!({
         "provider": "stripe",
         "catalog_path": "/twitch/api/billing/catalog",
@@ -781,6 +803,17 @@ mod tests {
                    trial_ever_granted INTEGER DEFAULT 0, first_login_at TEXT
                )"#,
         ).execute(&pool).await.unwrap();
+        // B2-P1: Rechnungsprofil-Tabelle (Katalog liest sie für die UI-Vorbelegung).
+        sqlx::query(
+            r#"CREATE TABLE twitch_billing_profiles (
+                   customer_reference TEXT PRIMARY KEY,
+                   recipient_name TEXT NOT NULL DEFAULT '', recipient_email TEXT NOT NULL DEFAULT '',
+                   company_name TEXT NOT NULL DEFAULT '', street_line1 TEXT NOT NULL DEFAULT '',
+                   postal_code TEXT NOT NULL DEFAULT '', city TEXT NOT NULL DEFAULT '',
+                   country_code TEXT NOT NULL DEFAULT '', vat_id TEXT NOT NULL DEFAULT '',
+                   updated_at TEXT NOT NULL DEFAULT ''
+               )"#,
+        ).execute(&pool).await.unwrap();
         Some(pool)
     }
 
@@ -894,6 +927,11 @@ mod tests {
         assert_eq!(raid_boost["is_current"], false);
         assert!(raid_boost["stripe_price_id"].is_string());
         assert_eq!(raid_boost["checkout_available"], true);
+        // B2-P1: Katalog liefert das Rechnungsprofil (Default — noch nichts
+        // persistiert; recipient_name fällt auf den Login zurück, country=DE).
+        assert_eq!(v["billing_profile"]["customer_reference"], "login");
+        assert_eq!(v["billing_profile"]["country_code"], "DE");
+        assert!(v["billing_profile_imported_fields"].is_array());
     }
 
     /// Katalog ohne Auth → 401 auth_required.

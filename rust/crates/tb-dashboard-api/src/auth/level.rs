@@ -162,6 +162,20 @@ pub(crate) fn extract_cookie<'a>(parts: &'a Parts, name: &str) -> Option<&'a str
 /// Spiegelt Python `_TWITCH_ADMIN_LOGINS` (api_v2.py:464), kleingeschrieben.
 const TWITCH_ADMIN_LOGINS: &[&str] = &["earlysalty"];
 
+/// Macht aus einer geladenen Partner-Session das Auth-Level: Admin-Login-Promotion
+/// (Python api_v2.py:1339-1342) — loggt sich ein Admin per Twitch-OAuth statt
+/// Discord ein, bekommt er Admin-Rechte (canViewAllStreamers), sonst Partner.
+fn partner_or_admin(partner: crate::auth::session::PartnerSession) -> DashboardAuthLevel {
+    if TWITCH_ADMIN_LOGINS.contains(&partner.twitch_login.trim().to_lowercase().as_str()) {
+        return DashboardAuthLevel::Admin;
+    }
+    DashboardAuthLevel::Partner {
+        twitch_login: partner.twitch_login,
+        twitch_user_id: partner.twitch_user_id,
+        display_name: partner.display_name,
+    }
+}
+
 /// Axum-Extractor für `DashboardAuthLevel`.
 ///
 /// Benötigt `DashboardAuthState` als Extension im Router.
@@ -200,17 +214,29 @@ where
         if let Some(session_id) = extract_cookie(parts, "twitch_dash_session") {
             if !session_id.is_empty() {
                 if let Ok(Some(partner)) = state.load_partner_session(session_id).await {
-                    // Admin-Login-Promotion (Python api_v2.py:1339-1342): loggt sich
-                    // ein Admin per Twitch-OAuth statt Discord ein, bekommt er
-                    // Admin-Rechte (canViewAllStreamers), nicht nur Partner.
-                    if TWITCH_ADMIN_LOGINS.contains(&partner.twitch_login.trim().to_lowercase().as_str()) {
-                        return Ok(DashboardAuthLevel::Admin);
-                    }
-                    return Ok(DashboardAuthLevel::Partner {
-                        twitch_login: partner.twitch_login,
-                        twitch_user_id: partner.twitch_user_id,
-                        display_name: partner.display_name,
-                    });
+                    return Ok(partner_or_admin(partner));
+                }
+            }
+        }
+
+        // Partner-Access-Session: twitch_dash_session_partner (B3-9). Durable
+        // Session nach Einmal-Login; überdauert die kurzlebige twitch_dash_session.
+        // Konsumiert wie Python `_get_partner_access_session` (api_v2.py:1349-1352)
+        // NACH dem Dashboard-Session-Check, mit Fingerprint-Bindung gegen den
+        // Request-User-Agent.
+        if let Some(session_id) =
+            extract_cookie(parts, crate::auth::session::PARTNER_ACCESS_COOKIE_NAME)
+        {
+            if !session_id.is_empty() {
+                let user_agent = parts
+                    .headers
+                    .get(axum::http::header::USER_AGENT)
+                    .and_then(|v| v.to_str().ok())
+                    .unwrap_or("");
+                if let Ok(Some(partner)) =
+                    state.load_partner_access_session(session_id, user_agent).await
+                {
+                    return Ok(partner_or_admin(partner));
                 }
             }
         }

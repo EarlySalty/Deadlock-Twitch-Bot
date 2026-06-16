@@ -1,0 +1,501 @@
+//! Admin Manual-Plan-Override (B2-P1-admin-manual-plan, Block 2B/16).
+//!
+//! Port von `bot/dashboard/live/live.py:admin_manual_plan_save/clear` +
+//! `bot/dashboard/billing/billing_mixin.py:_billing_admin_set_manual_plan` /
+//! `_billing_admin_clear_manual_plan` (Zeilen 1412-1543).
+//!
+//! Zwei Form-POST-Routen, die der Admin aus der Streamer-Detail-Ansicht aufruft:
+//! - `POST /twitch/admin/manual-plan`        — Override setzen (login, plan_id,
+//!   expires_at, notes)
+//! - `POST /twitch/admin/manual-plan/clear`  — Override entfernen (login)
+//!
+//! **Vertrag (Python-Parität):** Der Legacy-Admin-Client (`submitLegacyAction`,
+//! `client.ts`) sendet `application/x-www-form-urlencoded` inkl. `csrf_token` im
+//! Body und folgt dem Redirect; er liest den `?ok=`/`?err=`-Query der finalen URL.
+//! Daher antworten beide Handler mit `302` auf `/twitch/admin?ok=…` bzw. `?err=…`
+//! (statt JSON). Auth: Admin/Localhost; CSRF wird gegen das sessiongebundene
+//! Token aus dem Form-Body geprüft (Localhost-Bypass wie überall).
+//!
+//! Geschrieben wird `streamer_plans` (Spalten `manual_plan_id`,
+//! `manual_plan_expires_at`, `manual_plan_notes`, `manual_plan_updated_at`),
+//! aufgelöst über die `twitch_user_id` aus der View
+//! `twitch_streamers_partner_state`.
+
+use axum::{
+    extract::{Extension, RawForm, State},
+    response::{IntoResponse, Redirect, Response},
+};
+use sqlx::PgPool;
+
+use crate::auth::level::DashboardAuthLevel;
+use crate::auth::session::{DashboardAuthState, ADMIN_COOKIE_NAME, PARTNER_COOKIE_NAME};
+
+/// Maximale Notizlänge (Python `notes_value[:1000]`).
+const MAX_NOTES_LEN: usize = 1000;
+
+/// Ziel-Pfad für alle Redirects (Python `default_path="/twitch/admin"`).
+const ADMIN_PATH: &str = "/twitch/admin";
+
+/// `POST /twitch/admin/manual-plan` — manuellen Plan-Override setzen.
+pub async fn save_handler(
+    auth: DashboardAuthLevel,
+    config: Option<Extension<DashboardAuthState>>,
+    State(pool): State<PgPool>,
+    headers: axum::http::HeaderMap,
+    RawForm(body): RawForm,
+) -> Response {
+    let form = parse_form(&body);
+    if let Some(resp) = gate(&auth, config.as_ref(), &headers, &form).await {
+        return resp;
+    }
+
+    let login = form_get(&form, "login").trim().to_string();
+    let plan_id = form_get(&form, "plan_id").trim().to_string();
+    let expires_at = form_get(&form, "expires_at").trim().to_string();
+    let notes = form_get(&form, "notes").trim().to_string();
+
+    match set_manual_plan(&pool, &login, &plan_id, &expires_at, &notes).await {
+        Ok(effective_plan_id) => redirect_ok(&format!(
+            "Manueller Plan für {login} gesetzt ({effective_plan_id})"
+        )),
+        Err(err) => redirect_err(&err.user_message(&login)),
+    }
+}
+
+/// `POST /twitch/admin/manual-plan/clear` — manuellen Plan-Override entfernen.
+pub async fn clear_handler(
+    auth: DashboardAuthLevel,
+    config: Option<Extension<DashboardAuthState>>,
+    State(pool): State<PgPool>,
+    headers: axum::http::HeaderMap,
+    RawForm(body): RawForm,
+) -> Response {
+    let form = parse_form(&body);
+    if let Some(resp) = gate(&auth, config.as_ref(), &headers, &form).await {
+        return resp;
+    }
+
+    let login = form_get(&form, "login").trim().to_string();
+    match clear_manual_plan(&pool, &login).await {
+        Ok(effective_plan_id) => redirect_ok(&format!(
+            "Manueller Override für {login} entfernt ({effective_plan_id})"
+        )),
+        Err(err) => redirect_err(&err.user_message(&login)),
+    }
+}
+
+// ── Auth + CSRF-Gate ─────────────────────────────────────────────────────────
+
+/// Admin-Auth (Localhost/Admin) + CSRF aus dem Form-Body. Gibt `Some(redirect)`
+/// zurück, wenn der Request abzulehnen ist, sonst `None`.
+async fn gate(
+    auth: &DashboardAuthLevel,
+    config: Option<&Extension<DashboardAuthState>>,
+    headers: &axum::http::HeaderMap,
+    form: &[(String, String)],
+) -> Option<Response> {
+    if !auth.is_privileged() {
+        return Some(redirect_err("Nicht autorisiert."));
+    }
+    // Localhost braucht kein CSRF (interner Loopback, Python-Parität).
+    if matches!(auth, DashboardAuthLevel::Localhost) {
+        return None;
+    }
+    // Admin (Cookie-Session): CSRF-Token aus dem Form-Body gegen die Session prüfen.
+    let presented = form_get(form, "csrf_token").trim().to_string();
+    let Some(Extension(state)) = config else {
+        // Kein Auth-State → kein Validierungspfad → fail-closed.
+        return Some(redirect_err("CSRF-Prüfung nicht verfügbar."));
+    };
+    let (cookie, session_type) = csrf_cookie(headers);
+    let Some(cookie) = cookie else {
+        return Some(redirect_err("Sitzung fehlt."));
+    };
+    let valid = state
+        .validate_csrf(&cookie, session_type, &presented)
+        .await
+        .unwrap_or(false);
+    if valid {
+        None
+    } else {
+        Some(redirect_err("Ungültiges CSRF-Token."))
+    }
+}
+
+/// Wählt Session-Cookie + -Typ für die CSRF-Validierung (Admin vor Partner).
+fn csrf_cookie(headers: &axum::http::HeaderMap) -> (Option<String>, &'static str) {
+    let cookie_header = headers
+        .get(axum::http::header::COOKIE)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+    let read = |name: &str| -> Option<String> {
+        cookie_header.split(';').find_map(|pair| {
+            let pair = pair.trim();
+            pair.split_once('=')
+                .filter(|(k, _)| k.trim() == name)
+                .map(|(_, v)| v.trim().to_string())
+        })
+    };
+    if let Some(c) = read(ADMIN_COOKIE_NAME).filter(|s| !s.is_empty()) {
+        (Some(c), "discord_admin")
+    } else {
+        (read(PARTNER_COOKIE_NAME).filter(|s| !s.is_empty()), "twitch")
+    }
+}
+
+// ── DB-Logik ─────────────────────────────────────────────────────────────────
+
+/// Fehlerfälle (Python `ValueError`-Codes → Nutzer-Texte).
+#[derive(Debug)]
+enum ManualPlanError {
+    LoginRequired,
+    UnknownPlanId,
+    UnknownStreamer,
+    UserIdMissing,
+    SaveFailed,
+}
+
+impl ManualPlanError {
+    fn user_message(&self, login: &str) -> String {
+        let login_label = if login.is_empty() { "—" } else { login };
+        match self {
+            Self::LoginRequired => "Bitte einen Twitch-Login angeben".to_string(),
+            Self::UnknownPlanId => "Unbekannte Plan-ID".to_string(),
+            Self::UnknownStreamer => format!("Streamer {login_label} nicht gefunden"),
+            Self::UserIdMissing => format!("Für {login_label} fehlt die Twitch User-ID"),
+            Self::SaveFailed => "Manueller Plan konnte nicht gespeichert werden".to_string(),
+        }
+    }
+}
+
+/// Setzt den manuellen Plan-Override; gibt die effektive Plan-ID zurück.
+async fn set_manual_plan(
+    pool: &PgPool,
+    login: &str,
+    plan_id: &str,
+    expires_at: &str,
+    notes: &str,
+) -> Result<String, ManualPlanError> {
+    let normalized_login = login.trim().to_lowercase();
+    if normalized_login.is_empty() {
+        return Err(ManualPlanError::LoginRequired);
+    }
+    // Python `_billing_normalize_plan_id`: nur Plan-IDs aus dem Billing-Katalog
+    // (`_BILLING_PLANS`) sind gültig. `find_plan` liefert die kanonische
+    // `&'static str`-ID (exakter Match, kein Lowercasing — Python-Parität).
+    let normalized_plan_id = tb_analytics::billing::find_plan(plan_id.trim())
+        .map(|plan| plan.id)
+        .ok_or(ManualPlanError::UnknownPlanId)?;
+    let expires_at_iso = parse_datetime_value(expires_at);
+    let notes_value: String = notes.trim().chars().take(MAX_NOTES_LEN).collect();
+    let updated_at_iso = now_iso();
+
+    let (twitch_user_id, canonical_login) = resolve_streamer(pool, &normalized_login).await?;
+
+    // Upsert-Identität (Python INSERT … ON CONFLICT) + Override-Update.
+    sqlx::query(
+        r#"
+        INSERT INTO streamer_plans (twitch_user_id, twitch_login)
+        VALUES ($1, $2)
+        ON CONFLICT (twitch_user_id) DO UPDATE SET twitch_login = EXCLUDED.twitch_login
+        "#,
+    )
+    .bind(&twitch_user_id)
+    .bind(&canonical_login)
+    .execute(pool)
+    .await
+    .map_err(|e| {
+        tracing::error!("manual_plan upsert identity Fehler: {e}");
+        ManualPlanError::SaveFailed
+    })?;
+
+    sqlx::query(
+        r#"
+        UPDATE streamer_plans
+        SET twitch_login = $1,
+            manual_plan_id = $2,
+            manual_plan_expires_at = $3,
+            manual_plan_notes = $4,
+            manual_plan_updated_at = $5
+        WHERE twitch_user_id = $6
+        "#,
+    )
+    .bind(&canonical_login)
+    .bind(normalized_plan_id)
+    .bind(expires_at_iso.as_deref())
+    .bind(&notes_value)
+    .bind(&updated_at_iso)
+    .bind(&twitch_user_id)
+    .execute(pool)
+    .await
+    .map_err(|e| {
+        tracing::error!("manual_plan update Fehler: {e}");
+        ManualPlanError::SaveFailed
+    })?;
+
+    Ok(effective_plan_id(pool, &canonical_login, &twitch_user_id).await)
+}
+
+/// Entfernt den manuellen Plan-Override; gibt die effektive Plan-ID zurück.
+async fn clear_manual_plan(pool: &PgPool, login: &str) -> Result<String, ManualPlanError> {
+    let normalized_login = login.trim().to_lowercase();
+    if normalized_login.is_empty() {
+        return Err(ManualPlanError::LoginRequired);
+    }
+    let updated_at_iso = now_iso();
+    let (twitch_user_id, canonical_login) = resolve_streamer(pool, &normalized_login).await?;
+
+    sqlx::query(
+        r#"
+        UPDATE streamer_plans
+        SET manual_plan_id = NULL,
+            manual_plan_expires_at = NULL,
+            manual_plan_notes = '',
+            manual_plan_updated_at = $1
+        WHERE twitch_user_id = $2
+        "#,
+    )
+    .bind(&updated_at_iso)
+    .bind(&twitch_user_id)
+    .execute(pool)
+    .await
+    .map_err(|e| {
+        tracing::error!("manual_plan clear Fehler: {e}");
+        ManualPlanError::SaveFailed
+    })?;
+
+    Ok(effective_plan_id(pool, &canonical_login, &twitch_user_id).await)
+}
+
+/// Löst `(twitch_user_id, canonical_login)` aus `twitch_streamers_partner_state`.
+async fn resolve_streamer(
+    pool: &PgPool,
+    normalized_login: &str,
+) -> Result<(String, String), ManualPlanError> {
+    let row: Option<(Option<String>, Option<String>)> = sqlx::query_as(
+        r#"
+        SELECT twitch_user_id, twitch_login
+        FROM twitch_streamers_partner_state
+        WHERE LOWER(twitch_login) = LOWER($1)
+        LIMIT 1
+        "#,
+    )
+    .bind(normalized_login)
+    .fetch_optional(pool)
+    .await
+    .map_err(|e| {
+        tracing::error!("manual_plan streamer lookup Fehler: {e}");
+        ManualPlanError::SaveFailed
+    })?;
+
+    let Some((user_id, db_login)) = row else {
+        return Err(ManualPlanError::UnknownStreamer);
+    };
+    let twitch_user_id = user_id.unwrap_or_default().trim().to_string();
+    if twitch_user_id.is_empty() {
+        return Err(ManualPlanError::UserIdMissing);
+    }
+    let canonical_login = db_login
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| normalized_login.to_string());
+    Ok((twitch_user_id, canonical_login))
+}
+
+/// Effektive Plan-ID nach dem Schreiben (Python liest sie aus den Plan-Rows). Wir
+/// nutzen den kanonischen Resolver; bei Fehler `raid_free` (Python-Fallback).
+async fn effective_plan_id(pool: &PgPool, login: &str, user_id: &str) -> String {
+    match tb_analytics::plan::resolve_plan_snapshot(pool, login, user_id).await {
+        Ok(snapshot) => snapshot.plan_id.to_string(),
+        Err(_) => "raid_free".to_string(),
+    }
+}
+
+// ── Hilfsfunktionen ──────────────────────────────────────────────────────────
+
+/// Parst `application/x-www-form-urlencoded` in Key/Value-Paare.
+fn parse_form(body: &[u8]) -> Vec<(String, String)> {
+    url::form_urlencoded::parse(body)
+        .map(|(k, v)| (k.into_owned(), v.into_owned()))
+        .collect()
+}
+
+fn form_get<'a>(form: &'a [(String, String)], key: &str) -> &'a str {
+    form.iter()
+        .find(|(k, _)| k == key)
+        .map(|(_, v)| v.as_str())
+        .unwrap_or("")
+}
+
+/// ISO-8601-UTC-Zeitstempel (Python `datetime.now(UTC).isoformat()`).
+fn now_iso() -> String {
+    chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Micros, false)
+}
+
+/// Parst einen Datums-/Zeit-Eingabewert auf einen ISO-UTC-String, sonst `None`.
+///
+/// Port von `entitlements/repository.py:parse_datetime_value`: ein reines
+/// `YYYY-MM-DD` wird auf `…T23:59:59+00:00` (Tagesende UTC) gehoben; `Z` →
+/// `+00:00`; ungültig/leer → `None`.
+fn parse_datetime_value(raw: &str) -> Option<String> {
+    let text = raw.trim();
+    if text.is_empty() {
+        return None;
+    }
+    // Reines Datum (YYYY-MM-DD) → Tagesende UTC.
+    let bytes = text.as_bytes();
+    let date_only = text.len() == 10 && bytes[4] == b'-' && bytes[7] == b'-';
+    let candidate = if date_only {
+        format!("{text}T23:59:59+00:00")
+    } else {
+        text.replace('Z', "+00:00")
+    };
+    chrono::DateTime::parse_from_rfc3339(&candidate)
+        .ok()
+        .map(|dt| {
+            dt.with_timezone(&chrono::Utc)
+                .to_rfc3339_opts(chrono::SecondsFormat::Micros, false)
+        })
+}
+
+fn redirect_to(query_key: &str, message: &str) -> Response {
+    let encoded: String = url::form_urlencoded::byte_serialize(message.as_bytes()).collect();
+    Redirect::to(&format!("{ADMIN_PATH}?{query_key}={encoded}")).into_response()
+}
+
+fn redirect_ok(message: &str) -> Response {
+    redirect_to("ok", message)
+}
+
+fn redirect_err(message: &str) -> Response {
+    redirect_to("err", message)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_datetime_date_only_wird_tagesende() {
+        let iso = parse_datetime_value("2026-12-31").unwrap();
+        assert!(iso.starts_with("2026-12-31T23:59:59"));
+        assert!(iso.ends_with("+00:00"));
+    }
+
+    #[test]
+    fn parse_datetime_full_und_z_normalisiert() {
+        let iso = parse_datetime_value("2026-06-15T10:00:00Z").unwrap();
+        assert!(iso.starts_with("2026-06-15T10:00:00"));
+        assert_eq!(parse_datetime_value(""), None);
+        assert_eq!(parse_datetime_value("kaputt"), None);
+    }
+
+    #[test]
+    fn form_parse_und_get() {
+        let form = parse_form(b"login=Nani&plan_id=raid_boost&notes=hi%20there");
+        assert_eq!(form_get(&form, "login"), "Nani");
+        assert_eq!(form_get(&form, "plan_id"), "raid_boost");
+        assert_eq!(form_get(&form, "notes"), "hi there");
+        assert_eq!(form_get(&form, "fehlt"), "");
+    }
+
+    #[test]
+    fn redirect_kodiert_message() {
+        let resp = redirect_ok("Plan für nani gesetzt (raid_boost)");
+        assert_eq!(resp.status(), axum::http::StatusCode::SEE_OTHER);
+        let loc = resp.headers().get("location").unwrap().to_str().unwrap();
+        assert!(loc.starts_with("/twitch/admin?ok="));
+        assert!(loc.contains("raid_boost"));
+    }
+
+    #[test]
+    fn error_messages_parität() {
+        assert_eq!(
+            ManualPlanError::UnknownStreamer.user_message("nani"),
+            "Streamer nani nicht gefunden"
+        );
+        assert_eq!(
+            ManualPlanError::LoginRequired.user_message(""),
+            "Bitte einen Twitch-Login angeben"
+        );
+        assert_eq!(ManualPlanError::UnknownPlanId.user_message(""), "Unbekannte Plan-ID");
+    }
+
+    // ── DB-Logik (env-gated über TB_TEST_DATABASE_URL) ──────────────────────
+    use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
+    use std::str::FromStr;
+
+    async fn make_pool(schema: &str) -> Option<PgPool> {
+        let dsn = std::env::var("TB_TEST_DATABASE_URL").ok()?;
+        let admin = PgPoolOptions::new().max_connections(1).connect(&dsn).await.unwrap();
+        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE")).execute(&admin).await.unwrap();
+        sqlx::query(&format!("CREATE SCHEMA {schema}")).execute(&admin).await.unwrap();
+        admin.close().await;
+        let opts = PgConnectOptions::from_str(&dsn).unwrap().options([("search_path", schema)]);
+        let pool = PgPoolOptions::new().max_connections(2).connect_with(opts).await.unwrap();
+        // Minimal-Schema: View-Ersatz als Tabelle (Lookup-Quelle) + streamer_plans
+        // + twitch_billing_subscriptions (resolve_plan_snapshot liest beide).
+        for ddl in [
+            "CREATE TABLE twitch_streamers_partner_state (twitch_user_id TEXT, twitch_login TEXT)",
+            "CREATE TABLE streamer_plans (twitch_user_id TEXT PRIMARY KEY, twitch_login TEXT, \
+                 manual_plan_id TEXT, manual_plan_expires_at TEXT, manual_plan_notes TEXT DEFAULT '', \
+                 manual_plan_updated_at TEXT)",
+            "CREATE TABLE twitch_billing_subscriptions (stripe_subscription_id TEXT PRIMARY KEY, \
+                 customer_reference TEXT, status TEXT, plan_id TEXT, updated_at TEXT, \
+                 current_period_end TEXT, cancel_at_period_end INTEGER DEFAULT 0)",
+        ] {
+            sqlx::query(ddl).execute(&pool).await.unwrap();
+        }
+        sqlx::query("INSERT INTO twitch_streamers_partner_state (twitch_user_id, twitch_login) VALUES ('42', 'NaniStream')")
+            .execute(&pool).await.unwrap();
+        Some(pool)
+    }
+
+    #[tokio::test]
+    async fn set_dann_clear_schreibt_streamer_plans() {
+        let Some(pool) = make_pool("t_manplan").await else { return };
+
+        // SET: gültiger bezahlter Plan + Ablaufdatum.
+        let plan = set_manual_plan(&pool, "nanistream", "analysis_dashboard", "2026-12-31", "VIP")
+            .await
+            .expect("set ok");
+        // Effektiver Plan = der manuell gesetzte (aktiv, nicht abgelaufen).
+        assert_eq!(plan, "analysis_dashboard");
+
+        let row: (Option<String>, Option<String>, Option<String>) = sqlx::query_as(
+            "SELECT manual_plan_id, manual_plan_notes, manual_plan_expires_at FROM streamer_plans WHERE twitch_user_id='42'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(row.0.as_deref(), Some("analysis_dashboard"));
+        assert_eq!(row.1.as_deref(), Some("VIP"));
+        assert!(row.2.unwrap().starts_with("2026-12-31T23:59:59"));
+
+        // CLEAR: Override entfernen → effektiver Plan fällt auf raid_free.
+        let plan = clear_manual_plan(&pool, "nanistream").await.expect("clear ok");
+        assert_eq!(plan, "raid_free");
+        let cleared: (Option<String>, Option<String>) = sqlx::query_as(
+            "SELECT manual_plan_id, manual_plan_notes FROM streamer_plans WHERE twitch_user_id='42'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert!(cleared.0.is_none());
+        assert_eq!(cleared.1.as_deref(), Some(""));
+    }
+
+    #[tokio::test]
+    async fn set_unbekannter_streamer_fehler() {
+        let Some(pool) = make_pool("t_manplan_unknown").await else { return };
+        let err = set_manual_plan(&pool, "gibtsnicht", "raid_boost", "", "").await.unwrap_err();
+        assert!(matches!(err, ManualPlanError::UnknownStreamer));
+    }
+
+    #[tokio::test]
+    async fn set_unbekannte_plan_id_fehler() {
+        let Some(pool) = make_pool("t_manplan_badplan").await else { return };
+        let err = set_manual_plan(&pool, "nanistream", "Premium_XXL", "", "").await.unwrap_err();
+        assert!(matches!(err, ManualPlanError::UnknownPlanId));
+    }
+}
