@@ -493,10 +493,13 @@ pub async fn apply_event(
             ..SubscriptionState::default()
         };
         upsert_subscription_state(tx, &state).await?;
-        // TODO(affiliate, Block 2B): Pythons Pfad ruft hier
-        // `_affiliate_process_commission` (30 % Provision bei Zahlung) auf —
-        // SEPARATES Ticket. Hook-Punkt: amount_paid/currency/invoice_id/period_*
-        // stehen im event_object bereit.
+        // Affiliate-Provision (30 % bei Zahlung): wert-identisch in
+        // [`crate::affiliate_commission::process_commission`] portiert. Wie Pythons
+        // Webhook-Route wird sie NICHT hier (in der DB-Transaktion) aufgerufen,
+        // sondern vom Webhook-Handler NACH `apply_event` mit eigenem Pool/Lock +
+        // Stripe-Client — die nötigen Felder (amount_paid/currency/invoice_id/
+        // period_start/period_end aus `lines.data[0].period`) stehen im
+        // event_object bereit. Wiring liegt in `tb-dashboard-api` (siehe handoff).
         return Ok(WebhookAction::InvoicePaymentRecorded);
     }
 

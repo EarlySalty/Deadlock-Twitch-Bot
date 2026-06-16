@@ -71,6 +71,21 @@ fn deserialize_tax_bundle(raw: &str) -> (String, String) {
     (normalized.to_string(), String::new())
 }
 
+/// (tax_id, vat_id) → Klartext-Bundle (Python `_serialize_tax_bundle`).
+///
+/// Ohne vat_id wird nur die rohe tax_id gespeichert; mit vat_id ein kompaktes
+/// JSON `{"tax_id":...,"vat_id":...}` (ASCII, ohne Whitespace) — exakt das
+/// Format, das [`deserialize_tax_bundle`] wieder erwartet.
+fn serialize_tax_bundle(tax_id: &str, vat_id: &str) -> String {
+    let tax = tax_id.trim();
+    let vat = vat_id.trim();
+    if vat.is_empty() {
+        return tax.to_string();
+    }
+    // serde_json::json! erzeugt ASCII + separators (",",":") (compact).
+    json!({ "tax_id": tax, "vat_id": vat }).to_string()
+}
+
 /// Entschlüsselte PII-Stammdaten (Python `AffiliatePII`-Payload).
 #[derive(Debug, Clone)]
 pub struct PiiPayload {
@@ -191,6 +206,179 @@ pub async fn load_affiliate_pii(
         ust_status: normalize_ust_status(&r.ust_status.unwrap_or_default()),
         updated_at: r.updated_at,
     })
+}
+
+/// Teil-Update der PII (Python `save_pii(data: dict)`).
+///
+/// **Semantik mirror Pythons `field in payload`-Idiom:** `None` = Feld NICHT im
+/// Payload → bestehender Wert bleibt; `Some(value)` = Feld gesetzt (auch leerer
+/// String → Spalte wird geleert). So überschreibt ein partielles Profil-Update
+/// nie versehentlich nicht-mitgeschickte Felder.
+#[derive(Debug, Default, Clone)]
+pub struct PiiInput {
+    pub full_name: Option<String>,
+    pub email: Option<String>,
+    pub address_line1: Option<String>,
+    pub address_city: Option<String>,
+    pub address_zip: Option<String>,
+    pub tax_id: Option<String>,
+    pub vat_id: Option<String>,
+    pub address_country: Option<String>,
+    pub ust_status: Option<String>,
+}
+
+/// Roh-Bestand (verschlüsselte Blobs + Klar-Spalten) für den Save-Merge.
+#[derive(sqlx::FromRow)]
+struct PiiExistingRow {
+    full_name_enc: Option<Vec<u8>>,
+    email_enc: Option<Vec<u8>>,
+    address_line1_enc: Option<Vec<u8>>,
+    address_city_enc: Option<Vec<u8>>,
+    address_zip_enc: Option<Vec<u8>>,
+    tax_id_enc: Option<Vec<u8>>,
+    address_country: Option<String>,
+    ust_status: Option<String>,
+}
+
+/// Verschlüsselt einen Klartext-Feldwert oder gibt den Bestand zurück (Python
+/// `save_pii`-Schleife): Feld nicht im Payload → Bestand; leer → `None`; sonst
+/// AES-GCM-verschlüsseln mit feld-/login-gebundener AAD.
+fn encrypt_or_keep(
+    cipher: &FieldCipher,
+    value: Option<&String>,
+    existing: Option<Vec<u8>>,
+    field: &str,
+    login: &str,
+) -> Result<Option<Vec<u8>>, PiiError> {
+    match value {
+        None => Ok(existing),
+        Some(v) if v.trim().is_empty() => Ok(None),
+        Some(v) => cipher
+            .encrypt_field(v.trim(), &pii_aad(field, login))
+            .map(Some)
+            .map_err(|e| PiiError::Decrypt(e.to_string())),
+    }
+}
+
+/// Persistiert (UPSERT) die verschlüsselte PII eines Affiliates (Python `save_pii`).
+///
+/// `login` muss bereits normalisiert sein (AAD-Bindung, identisch zu
+/// [`load_affiliate_pii`]). Klartext-Felder werden vor dem Schreiben AES-GCM-
+/// verschlüsselt; nicht im [`PiiInput`] gesetzte Felder behalten ihren Bestand.
+/// `updated_at` wird stets neu gesetzt (UTC-ISO-8601).
+pub async fn save_affiliate_pii(
+    pool: &PgPool,
+    cipher: &FieldCipher,
+    login: &str,
+    input: &PiiInput,
+) -> Result<(), PiiError> {
+    let existing: Option<PiiExistingRow> = sqlx::query_as(
+        "SELECT full_name_enc, email_enc, address_line1_enc, address_city_enc, address_zip_enc, \
+                tax_id_enc, address_country, ust_status \
+         FROM affiliate_pii WHERE twitch_login = $1",
+    )
+    .bind(login)
+    .fetch_optional(pool)
+    .await
+    .map_err(PiiError::Db)?;
+
+    // Encrypted Stamm-Felder mergen (Bestand-Fallback bei fehlendem Key).
+    let take = |b: &Option<PiiExistingRow>, f: fn(&PiiExistingRow) -> &Option<Vec<u8>>| {
+        b.as_ref().and_then(|r| f(r).clone())
+    };
+    let full_name_enc =
+        encrypt_or_keep(cipher, input.full_name.as_ref(), take(&existing, |r| &r.full_name_enc), "full_name", login)?;
+    let email_enc =
+        encrypt_or_keep(cipher, input.email.as_ref(), take(&existing, |r| &r.email_enc), "email", login)?;
+    let address_line1_enc = encrypt_or_keep(
+        cipher, input.address_line1.as_ref(), take(&existing, |r| &r.address_line1_enc), "address_line1", login)?;
+    let address_city_enc = encrypt_or_keep(
+        cipher, input.address_city.as_ref(), take(&existing, |r| &r.address_city_enc), "address_city", login)?;
+    let address_zip_enc = encrypt_or_keep(
+        cipher, input.address_zip.as_ref(), take(&existing, |r| &r.address_zip_enc), "address_zip", login)?;
+
+    // Tax-Bundle (tax_id + vat_id) zusammenführen — Bestand entschlüsseln, mit
+    // gesetzten Keys überschreiben, neu serialisieren/verschlüsseln (Python:
+    // _normalize_tax_bundle + _serialize_tax_bundle).
+    let existing_tax_blob = take(&existing, |r| &r.tax_id_enc);
+    let tax_id_enc = if input.tax_id.is_some() || input.vat_id.is_some() {
+        let (mut tax, mut vat) = match &existing_tax_blob {
+            Some(b) if !b.is_empty() => {
+                let raw = cipher
+                    .decrypt_field(b, &pii_aad("tax_id", login))
+                    .map_err(|e| PiiError::Decrypt(e.to_string()))?;
+                deserialize_tax_bundle(&raw)
+            }
+            _ => (String::new(), String::new()),
+        };
+        if let Some(v) = &input.tax_id {
+            tax = v.trim().to_string();
+        }
+        if let Some(v) = &input.vat_id {
+            vat = v.trim().to_string();
+        }
+        let serialized = serialize_tax_bundle(&tax, &vat);
+        if serialized.is_empty() {
+            None
+        } else {
+            Some(
+                cipher
+                    .encrypt_field(&serialized, &pii_aad("tax_id", login))
+                    .map_err(|e| PiiError::Decrypt(e.to_string()))?,
+            )
+        }
+    } else {
+        existing_tax_blob
+    };
+
+    // Klar-Spalten: gesetzt → normalisieren; sonst Bestand; sonst Default.
+    let address_country = match &input.address_country {
+        Some(v) => normalize_country(v),
+        None => existing
+            .as_ref()
+            .and_then(|r| r.address_country.as_deref())
+            .map(normalize_country)
+            .unwrap_or_else(|| "DE".to_string()),
+    };
+    let ust_status = match &input.ust_status {
+        Some(v) => normalize_ust_status(v),
+        None => existing
+            .as_ref()
+            .and_then(|r| r.ust_status.as_deref())
+            .map(normalize_ust_status)
+            .unwrap_or_else(|| "unknown".to_string()),
+    };
+    let updated_at = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Micros, false);
+
+    sqlx::query(
+        "INSERT INTO affiliate_pii (twitch_login, full_name_enc, email_enc, address_line1_enc, \
+             address_city_enc, address_zip_enc, tax_id_enc, address_country, ust_status, updated_at) \
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) \
+         ON CONFLICT (twitch_login) DO UPDATE SET \
+             full_name_enc = excluded.full_name_enc, \
+             email_enc = excluded.email_enc, \
+             address_line1_enc = excluded.address_line1_enc, \
+             address_city_enc = excluded.address_city_enc, \
+             address_zip_enc = excluded.address_zip_enc, \
+             tax_id_enc = excluded.tax_id_enc, \
+             address_country = excluded.address_country, \
+             ust_status = excluded.ust_status, \
+             updated_at = excluded.updated_at",
+    )
+    .bind(login)
+    .bind(full_name_enc)
+    .bind(email_enc)
+    .bind(address_line1_enc)
+    .bind(address_city_enc)
+    .bind(address_zip_enc)
+    .bind(tax_id_enc)
+    .bind(&address_country)
+    .bind(&ust_status)
+    .bind(&updated_at)
+    .execute(pool)
+    .await
+    .map_err(PiiError::Db)?;
+    Ok(())
 }
 
 /// Fehlende Pflichtfelder für die Gutschrift-Generierung (Python `missing_gutschrift_fields`).
@@ -354,5 +542,105 @@ mod tests {
         assert_eq!(pii.ust_status, "unknown");
         assert_eq!(pii.address_country, "DE");
         assert!(pii.full_name.is_empty());
+    }
+
+    // ── Save-Pfad (B2-P1-affiliate-pii-write) ───────────────────────────────
+
+    #[test]
+    fn tax_bundle_serialize_roundtrip() {
+        // Ohne vat_id → rohe tax_id.
+        assert_eq!(serialize_tax_bundle("DE123", ""), "DE123");
+        assert_eq!(serialize_tax_bundle("", ""), "");
+        // Mit vat_id → kompaktes JSON, das deserialize wieder versteht.
+        let s = serialize_tax_bundle("DE1", "DE9");
+        assert_eq!(s, r#"{"tax_id":"DE1","vat_id":"DE9"}"#);
+        assert_eq!(deserialize_tax_bundle(&s), ("DE1".to_string(), "DE9".to_string()));
+    }
+
+    fn input_full() -> PiiInput {
+        PiiInput {
+            full_name: Some("Nani Mustermann".into()),
+            email: Some("a@b.de".into()),
+            address_line1: Some("Str 1".into()),
+            address_city: Some("Ort".into()),
+            address_zip: Some("12345".into()),
+            tax_id: Some("DE1".into()),
+            vat_id: Some("DE9".into()),
+            address_country: Some("de".into()),
+            ust_status: Some("REGELBESTEUERT".into()),
+        }
+    }
+
+    #[tokio::test]
+    async fn save_then_load_round_trip() {
+        let Some(pool) = connect("t_pii_save").await else { return };
+        let cipher = test_cipher();
+        let login = "nani";
+        save_affiliate_pii(&pool, &cipher, login, &input_full()).await.unwrap();
+
+        let pii = load_affiliate_pii(&pool, &cipher, login).await.unwrap();
+        assert_eq!(pii.full_name, "Nani Mustermann");
+        assert_eq!(pii.email, "a@b.de");
+        assert_eq!(pii.address_zip, "12345");
+        assert_eq!(pii.tax_id, "DE1");
+        assert_eq!(pii.vat_id, "DE9");
+        assert_eq!(pii.address_country, "DE"); // upper-normalisiert
+        assert_eq!(pii.ust_status, "regelbesteuert"); // lower-normalisiert
+        assert!(pii.updated_at.is_some());
+        // Readiness vollständig.
+        assert_eq!(build_readiness(&pii)["can_generate"], true);
+    }
+
+    #[tokio::test]
+    async fn partial_update_behaelt_ungesetzte_felder() {
+        let Some(pool) = connect("t_pii_partial").await else { return };
+        let cipher = test_cipher();
+        let login = "nani";
+        save_affiliate_pii(&pool, &cipher, login, &input_full()).await.unwrap();
+
+        // Nur email ändern; alle anderen Felder None → Bestand bleibt.
+        let patch = PiiInput { email: Some("neu@b.de".into()), ..PiiInput::default() };
+        save_affiliate_pii(&pool, &cipher, login, &patch).await.unwrap();
+
+        let pii = load_affiliate_pii(&pool, &cipher, login).await.unwrap();
+        assert_eq!(pii.email, "neu@b.de"); // geändert
+        assert_eq!(pii.full_name, "Nani Mustermann"); // unverändert
+        assert_eq!(pii.tax_id, "DE1"); // tax-bundle unverändert
+        assert_eq!(pii.vat_id, "DE9");
+        assert_eq!(pii.ust_status, "regelbesteuert");
+    }
+
+    #[tokio::test]
+    async fn leeres_feld_leert_spalte() {
+        let Some(pool) = connect("t_pii_clear").await else { return };
+        let cipher = test_cipher();
+        let login = "nani";
+        save_affiliate_pii(&pool, &cipher, login, &input_full()).await.unwrap();
+
+        // address_line1 explizit leeren (Some("")) → Spalte NULL.
+        let patch = PiiInput { address_line1: Some(String::new()), ..PiiInput::default() };
+        save_affiliate_pii(&pool, &cipher, login, &patch).await.unwrap();
+
+        let pii = load_affiliate_pii(&pool, &cipher, login).await.unwrap();
+        assert!(pii.address_line1.is_empty());
+        assert!(missing_gutschrift_fields(&pii).contains(&"address_line1".to_string()));
+        // andere bleiben.
+        assert_eq!(pii.address_city, "Ort");
+    }
+
+    #[tokio::test]
+    async fn vat_id_entfernen_faellt_auf_rohe_tax_id() {
+        let Some(pool) = connect("t_pii_vat").await else { return };
+        let cipher = test_cipher();
+        let login = "nani";
+        save_affiliate_pii(&pool, &cipher, login, &input_full()).await.unwrap();
+
+        // vat_id leeren → Bundle = nur tax_id (roh, kein JSON).
+        let patch = PiiInput { vat_id: Some(String::new()), ..PiiInput::default() };
+        save_affiliate_pii(&pool, &cipher, login, &patch).await.unwrap();
+
+        let pii = load_affiliate_pii(&pool, &cipher, login).await.unwrap();
+        assert_eq!(pii.tax_id, "DE1");
+        assert!(pii.vat_id.is_empty());
     }
 }
