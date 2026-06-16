@@ -610,7 +610,7 @@ mod tests {
     async fn invoice_payment_verbucht_affiliate_provision() {
         let Some(pool) = pool_or_skip("h_invoice_commission").await else { return };
         // Abo verknüpft Customer→Streamer, Streamer ist von einem Affiliate geworben.
-        sqlx::query("INSERT INTO twitch_billing_subscriptions (stripe_subscription_id, stripe_customer_id, twitch_login, updated_at) VALUES ('sub_c','cus_c','StreamerX','now')")
+        sqlx::query("INSERT INTO twitch_billing_subscriptions (stripe_subscription_id, stripe_customer_id, customer_reference, updated_at) VALUES ('sub_c','cus_c','StreamerX','now')")
             .execute(&pool).await.unwrap();
         sqlx::query("INSERT INTO affiliate_streamer_claims (affiliate_twitch_login, claimed_streamer_login) VALUES ('aff1','streamerx')")
             .execute(&pool).await.unwrap();
@@ -625,8 +625,9 @@ mod tests {
         .await
         .into_response();
         assert_eq!(resp.status(), StatusCode::OK);
-        // 30 % von 1000 = 300, pending (kein Connect-Konto).
-        let (status, commission): (String, i64) = sqlx::query_as(
+        // 30 % von 1000 = 300, pending (kein Connect-Konto). `commission_cents` ist
+        // INTEGER (INT4, echtes Schema) → als i32 dekodieren.
+        let (status, commission): (String, i32) = sqlx::query_as(
             "SELECT status, commission_cents FROM affiliate_commissions WHERE stripe_event_id='evt_inv'",
         ).fetch_one(&pool).await.unwrap();
         assert_eq!(status, "pending");
@@ -636,7 +637,7 @@ mod tests {
     #[tokio::test]
     async fn invoice_replay_verbucht_keine_doppelte_provision() {
         let Some(pool) = pool_or_skip("h_invoice_replay_commission").await else { return };
-        sqlx::query("INSERT INTO twitch_billing_subscriptions (stripe_subscription_id, stripe_customer_id, twitch_login, updated_at) VALUES ('sub_r','cus_r','StreamerY','now')")
+        sqlx::query("INSERT INTO twitch_billing_subscriptions (stripe_subscription_id, stripe_customer_id, customer_reference, updated_at) VALUES ('sub_r','cus_r','StreamerY','now')")
             .execute(&pool).await.unwrap();
         sqlx::query("INSERT INTO affiliate_streamer_claims (affiliate_twitch_login, claimed_streamer_login) VALUES ('aff2','streamery')")
             .execute(&pool).await.unwrap();
