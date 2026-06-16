@@ -141,6 +141,12 @@ pub async fn pool_in_schema(schema: &str) -> Option<PgPool> {
             is_monitored_only INTEGER DEFAULT 0,
             archived_at TIMESTAMPTZ
         )",
+        // Raid-Auth-Store: Existenz einer Zeile = has_raid_auth (B8-07-RECONCILE).
+        "CREATE TABLE twitch_raid_auth (
+            twitch_user_id TEXT PRIMARY KEY,
+            twitch_login   TEXT,
+            needs_reauth   BOOLEAN NOT NULL DEFAULT FALSE
+        )",
         "CREATE TABLE twitch_global_settings (
             setting_key TEXT PRIMARY KEY,
             setting_value TEXT NOT NULL,

@@ -8,12 +8,13 @@
 //! bestehende Subscriptions liefern unabhängig vom Ersteller weiter an
 //! dieselbe Callback-URL (Cutover-Kopplung, siehe Plan-Doc).
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 
 use chrono::{DateTime, Duration, Utc};
 use serde_json::Value;
 use sqlx::PgPool;
+use tb_chat::{is_passive_lurker_channel, PASSIVE_LURKER_DETAIL, PASSIVE_LURKER_STATE};
 
 use crate::inbox_runtime::{epoch_clock, ClockFn};
 use crate::poller::source::SourceError;
@@ -66,6 +67,12 @@ where
         },
         Err(_) => default,
     }
+}
+
+/// Normalisiert einen Kanal-Login wie Pythons `_record_chat_subscription_state`:
+/// trimmen, Kleinschreibung, führendes `#` entfernen.
+fn normalize_login(login: &str) -> String {
+    login.trim().to_lowercase().trim_start_matches('#').to_string()
 }
 
 /// Core-Subscriptions des Monitorings: (Typ, Version).
@@ -169,16 +176,32 @@ struct CapacityThrottle {
     last_cleanup: Option<f64>,
 }
 
+/// Persistierter Subscription-State-Eintrag eines Kanals (Port von Pythons
+/// `_channel_subscription_state[login][sub_type]`): aktuell nur der
+/// Passive-Lurker-Marker, der den Subscribe-Versuch ersetzt.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct SubscriptionState {
+    state: &'static str,
+    detail: Option<&'static str>,
+}
+
 pub struct SubscriptionManager {
     transport: Arc<dyn SubscriptionTransport>,
     config: SubscriptionConfig,
     capacity: CapacitySnapshotStore,
+    /// DB-Pool für DB-gestützte Reconcile-Entscheidungen (Passive-Lurker-Gate,
+    /// B8-07). Geteilt mit dem `CapacitySnapshotStore` — derselbe Prod-Pool.
+    pool: PgPool,
     /// In-Memory-Tracking (Typ, broadcaster_user_id) — wie Pythons
     /// `_eventsub_has_sub`, beim Start via [`Self::rehydrate`] gefüllt.
     tracked: Mutex<HashSet<(String, String)>>,
     /// Permanent-Fehler (Typ, broadcaster_user_id): 403 = Bot gebannt oder
     /// Kanal sperrt externe Subs. Kein Retry bis Neustart.
     perm_failed: Mutex<HashSet<(String, String)>>,
+    /// Subscription-State pro Kanal (login → sub_type → State) — Port von Pythons
+    /// `_channel_subscription_state`. Hält den Passive-Lurker-Marker für die
+    /// Join-Diagnose, ohne einen Subscribe-Versuch zu starten (B8-07).
+    subscription_state: Mutex<HashMap<String, HashMap<String, SubscriptionState>>>,
     /// Drosselung der periodischen Capacity-Zeitreihe (B5-08).
     capacity_throttle: Mutex<CapacityThrottle>,
     /// Monotone Uhr (Epoch-Sek.) für die Throttle-Fenster — in Tests injizierbar.
@@ -191,12 +214,15 @@ impl SubscriptionManager {
         config: SubscriptionConfig,
         capacity: CapacitySnapshotStore,
     ) -> Self {
+        let pool = capacity.pool().clone();
         Self {
             transport,
             config,
             capacity,
+            pool,
             tracked: Mutex::new(HashSet::new()),
             perm_failed: Mutex::new(HashSet::new()),
+            subscription_state: Mutex::new(HashMap::new()),
             capacity_throttle: Mutex::new(CapacityThrottle::default()),
             clock: Arc::new(epoch_clock),
         }
@@ -306,8 +332,27 @@ impl SubscriptionManager {
         bot_user_id: &str,
         login: &str,
     ) -> bool {
+        const CHAT_SUB_TYPES: [&str; 2] = ["channel.chat.message", "channel.chat.notification"];
+
+        // Passive-Lurker-Gate (B8-07, Python `connection.py:1237`/`:1532`):
+        // monitored-only Kanäle ohne Partner-State und ohne Raid-Auth sind ein
+        // Endzustand — kein Subscribe-Versuch, stattdessen den Lurker-State
+        // schreiben (sonst pro Reconcile-Zyklus wiederkehrende Fehlversuche).
+        if self.is_passive_lurker(broadcaster_id, login).await {
+            for sub_type in CHAT_SUB_TYPES {
+                self.record_subscription_state(
+                    login,
+                    sub_type,
+                    PASSIVE_LURKER_STATE,
+                    Some(PASSIVE_LURKER_DETAIL),
+                );
+            }
+            tracing::debug!(login, "Chat-Reconcile: passiver Lurker — Subscribe übersprungen");
+            return false;
+        }
+
         let mut ok = true;
-        for sub_type in ["channel.chat.message", "channel.chat.notification"] {
+        for sub_type in CHAT_SUB_TYPES {
             let condition = serde_json::json!({
                 "broadcaster_user_id": broadcaster_id,
                 "user_id": bot_user_id,
@@ -324,6 +369,125 @@ impl SubscriptionManager {
                 .await;
         }
         ok
+    }
+
+    /// `true`, wenn der Kanal ein passiver Lurker ist — monitored-only **und**
+    /// kein aktiver Partner **und** ohne Raid-Auth. Lädt die drei Flags aus
+    /// `twitch_streamers`, `twitch_streamers_partner_state` und `twitch_raid_auth`
+    /// (gematcht über `twitch_user_id` ODER `LOWER(twitch_login)`, wie Pythons
+    /// `_load_chat_join_channel_state`) und wertet [`is_passive_lurker_channel`]
+    /// aus. DB-Fehler werden defensiv als „kein Lurker" behandelt (Python fängt
+    /// dort still ab und versucht zu joinen).
+    async fn is_passive_lurker(&self, broadcaster_id: &str, login: &str) -> bool {
+        let target_id = broadcaster_id.trim();
+        let normalized_login = normalize_login(login);
+        if target_id.is_empty() && normalized_login.is_empty() {
+            return false;
+        }
+
+        let is_monitored_only: bool = sqlx::query_scalar(
+            "SELECT COALESCE(is_monitored_only, 0) <> 0 FROM twitch_streamers \
+             WHERE ($1 <> '' AND twitch_user_id = $1) \
+                OR ($2 <> '' AND LOWER(twitch_login) = $2) \
+             LIMIT 1",
+        )
+        .bind(target_id)
+        .bind(&normalized_login)
+        .fetch_optional(&self.pool)
+        .await
+        .unwrap_or_else(|error| {
+            tracing::debug!(%error, login, "Lurker-Gate: is_monitored_only nicht ladbar");
+            None
+        })
+        .unwrap_or(false);
+
+        // Kein monitored-only → niemals Lurker; die beiden Folge-Queries sparen.
+        if !is_monitored_only {
+            return false;
+        }
+
+        let is_partner_active: bool = sqlx::query_scalar(
+            "SELECT COALESCE(is_partner_active, 0) <> 0 \
+             FROM twitch_streamers_partner_state \
+             WHERE ($1 <> '' AND twitch_user_id = $1) \
+                OR ($2 <> '' AND LOWER(twitch_login) = $2) \
+             ORDER BY is_partner_active DESC LIMIT 1",
+        )
+        .bind(target_id)
+        .bind(&normalized_login)
+        .fetch_optional(&self.pool)
+        .await
+        .unwrap_or_else(|error| {
+            tracing::debug!(%error, login, "Lurker-Gate: is_partner_active nicht ladbar");
+            None
+        })
+        .unwrap_or(false);
+
+        let has_raid_auth: bool = sqlx::query_scalar(
+            "SELECT EXISTS( \
+                SELECT 1 FROM twitch_raid_auth \
+                WHERE ($1 <> '' AND twitch_user_id = $1) \
+                   OR ($2 <> '' AND LOWER(twitch_login) = $2) \
+             )",
+        )
+        .bind(target_id)
+        .bind(&normalized_login)
+        .fetch_one(&self.pool)
+        .await
+        .unwrap_or_else(|error| {
+            tracing::debug!(%error, login, "Lurker-Gate: has_raid_auth nicht ladbar");
+            false
+        });
+
+        is_passive_lurker_channel(is_monitored_only, is_partner_active, has_raid_auth)
+    }
+
+    /// Schreibt den Subscription-State eines Kanals (Port von Pythons
+    /// `_record_chat_subscription_state`). Leerer Login/Sub-Typ → No-op.
+    fn record_subscription_state(
+        &self,
+        login: &str,
+        sub_type: &str,
+        state: &'static str,
+        detail: Option<&'static str>,
+    ) {
+        let normalized_login = normalize_login(login);
+        if normalized_login.is_empty() || sub_type.is_empty() {
+            return;
+        }
+        self.subscription_state
+            .lock()
+            .expect("subscription_state lock")
+            .entry(normalized_login)
+            .or_default()
+            .insert(sub_type.to_string(), SubscriptionState { state, detail });
+    }
+
+    /// Subscription-States eines Kanals als `(sub_type, state, detail)`-Tripel —
+    /// Diagnose-Quelle für die Join-Entscheidung (Port von Pythons
+    /// `get_channel_subscription_state`).
+    pub fn chat_subscription_states(
+        &self,
+        login: &str,
+    ) -> Vec<(String, String, Option<String>)> {
+        let normalized_login = normalize_login(login);
+        self.subscription_state
+            .lock()
+            .expect("subscription_state lock")
+            .get(&normalized_login)
+            .map(|states| {
+                states
+                    .iter()
+                    .map(|(sub_type, entry)| {
+                        (
+                            sub_type.clone(),
+                            entry.state.to_string(),
+                            entry.detail.map(str::to_string),
+                        )
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
     }
 
     /// `channel.moderate`-Subscription für einen Partner-Kanal, in dem der Bot
@@ -745,6 +909,12 @@ pub struct CapacitySnapshotStore {
 impl CapacitySnapshotStore {
     pub fn new(pool: PgPool) -> Self {
         Self { pool }
+    }
+
+    /// Pool-Handle für andere DB-gestützte Helfer im selben Crate
+    /// (z. B. das Passive-Lurker-Gate des [`SubscriptionManager`]).
+    pub(crate) fn pool(&self) -> &PgPool {
+        &self.pool
     }
 
     pub async fn record(
