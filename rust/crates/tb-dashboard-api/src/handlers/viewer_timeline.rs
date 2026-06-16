@@ -105,8 +105,10 @@ pub async fn viewer_timeline_handler(
     State(pool): State<PgPool>,
     Query(params): Query<ViewerTimelineQuery>,
 ) -> impl IntoResponse {
-    if matches!(auth, DashboardAuthLevel::None) {
-        return (StatusCode::UNAUTHORIZED, Json(json!({"error":"unauthorized"}))).into_response();
+    // Python: _require_v2_auth + _require_extended_plan (Paywall-Feature).
+    // extended_gate deckt beides ab: None→401, Free-Partner→403, Admin/Localhost→pass.
+    if let Some(resp) = crate::auth::extended_gate(&pool, &auth).await {
+        return resp;
     }
 
     let streamer = streamer_raw.trim().to_lowercase();
@@ -356,8 +358,10 @@ pub async fn viewer_timeline_profile_handler(
     State(pool): State<PgPool>,
     Query(params): Query<ViewerProfileQuery>,
 ) -> impl IntoResponse {
-    if matches!(auth, DashboardAuthLevel::None) {
-        return (StatusCode::UNAUTHORIZED, Json(json!({"error":"unauthorized"}))).into_response();
+    // Python: _require_v2_auth + _require_extended_plan (Paywall-Feature).
+    // extended_gate deckt beides ab: None→401, Free-Partner→403, Admin/Localhost→pass.
+    if let Some(resp) = crate::auth::extended_gate(&pool, &auth).await {
+        return resp;
     }
 
     let streamer = streamer_raw.trim().to_lowercase();
@@ -457,5 +461,104 @@ pub async fn viewer_timeline_profile_handler(
                 "total_sessions": total_sessions,
             })).into_response()
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use sqlx::postgres::PgPoolOptions;
+
+    // ── Plan-Gate-Verdrahtung (env-gated) ───────────────────────────────────
+    // Python ruft hier _require_v2_auth UND _require_extended_plan. Vor dem Fix
+    // prüfte Rust nur None→401, ein Free-Partner umging die Paywall. Ein Partner
+    // ohne Plan muss 403 erhalten. twitch_user_id leer → Trial-Grant-Pfad
+    // (braucht user_id+login) springt nicht an, leere Plan-Tabellen → raid_free.
+    fn test_dsn() -> Option<String> {
+        std::env::var("TB_TEST_DATABASE_URL").ok()
+    }
+
+    macro_rules! db_dsn_or_skip {
+        () => {
+            match test_dsn() {
+                Some(d) => d,
+                None => {
+                    if std::env::var("TB_TEST_REQUIRE_DB").as_deref() == Ok("1") {
+                        panic!("TB_TEST_REQUIRE_DB=1 gesetzt, aber TB_TEST_DATABASE_URL fehlt");
+                    }
+                    eprintln!("SKIP: TB_TEST_DATABASE_URL nicht gesetzt");
+                    return;
+                }
+            }
+        };
+    }
+
+    async fn make_plan_pool(dsn: &str, schema: &str) -> PgPool {
+        let pool = PgPoolOptions::new().max_connections(1).connect(dsn).await.unwrap();
+        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE")).execute(&pool).await.unwrap();
+        sqlx::query(&format!("CREATE SCHEMA {schema}")).execute(&pool).await.unwrap();
+        sqlx::query(&format!("SET search_path TO {schema}")).execute(&pool).await.unwrap();
+        sqlx::query(
+            r#"CREATE TABLE streamer_plans (
+                   twitch_user_id TEXT,
+                   twitch_login TEXT,
+                   manual_plan_id TEXT,
+                   manual_plan_expires_at TEXT,
+                   manual_plan_updated_at TIMESTAMPTZ
+               )"#,
+        ).execute(&pool).await.unwrap();
+        sqlx::query(
+            r#"CREATE TABLE twitch_billing_subscriptions (
+                   customer_reference TEXT,
+                   plan_id TEXT,
+                   status TEXT,
+                   current_period_end TEXT,
+                   updated_at TIMESTAMPTZ
+               )"#,
+        ).execute(&pool).await.unwrap();
+        pool
+    }
+
+    fn free_partner() -> DashboardAuthLevel {
+        DashboardAuthLevel::Partner {
+            twitch_login: "freeloader".to_string(),
+            twitch_user_id: String::new(),
+        }
+    }
+
+    #[tokio::test]
+    async fn viewer_timeline_gates_free_partner() {
+        let dsn = db_dsn_or_skip!();
+        let pool = make_plan_pool(&dsn, "timeline_gate_session").await;
+        let resp = viewer_timeline_handler(
+            free_partner(),
+            Path("host".to_string()),
+            State(pool),
+            Query(ViewerTimelineQuery {
+                session_id: Some(1),
+                min_present_min: None,
+                segment: None,
+                search: None,
+                limit: None,
+            }),
+        )
+        .await
+        .into_response();
+        assert_eq!(resp.status(), StatusCode::FORBIDDEN, "Free-Partner muss 403 erhalten");
+    }
+
+    #[tokio::test]
+    async fn viewer_timeline_profile_gates_free_partner() {
+        let dsn = db_dsn_or_skip!();
+        let pool = make_plan_pool(&dsn, "timeline_gate_profile").await;
+        let resp = viewer_timeline_profile_handler(
+            free_partner(),
+            Path("host".to_string()),
+            State(pool),
+            Query(ViewerProfileQuery { login: Some("someviewer".into()) }),
+        )
+        .await
+        .into_response();
+        assert_eq!(resp.status(), StatusCode::FORBIDDEN, "Free-Partner muss 403 erhalten");
     }
 }

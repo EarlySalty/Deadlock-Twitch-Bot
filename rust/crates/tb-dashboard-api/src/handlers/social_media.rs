@@ -26,9 +26,8 @@ use sqlx::{PgPool, Postgres, QueryBuilder, Row};
 use tb_crypto::FieldCipher;
 use tb_social_media::approval::{get_approval_record, handle_decision, serialize_approval_record, ApprovalError};
 use tb_social_media::enrichment::{ensure_enrichment_row, get_enrichment, update_manual_edit, EnrichmentRecord};
-use tb_social_media::enrich_pipeline::{ClipEnrichmentPipeline, PipelineError, Transcriber};
+use tb_social_media::enrich_pipeline::{ClipEnrichmentPipeline, PipelineError};
 use tb_social_media::llm_dispatch::LlmDispatcher;
-use tb_social_media::whisper::OpenAiTranscriber;
 use tb_social_media::retention::mark_clip_discarded;
 use tb_social_media::settings::{coerce_bool, get_auto_approve_settings, set_auto_approve_settings, AutoApprove};
 use tb_social_media::analytics::{list_clip_analytics, list_reports, ClipAnalyticsSnapshot, SocialMediaReportRecord};
@@ -1414,9 +1413,10 @@ pub async fn enrichment_get_handler(auth: DashboardAuthLevel, State(pool): State
 
 /// `POST /social-media/api/admin/clips/:clip_db_id/enrichment/run` — Enrichment
 /// manuell anstoßen (Admin). Optionaler Body `{ "force": true }` reichert auch
-/// bereits fertige Clips neu an. Baut Transcriber (OpenAI-Whisper) + LLM-Dispatcher
-/// inline aus Env/Settings — fehlt der OpenAI-Key, läuft die Pipeline ohne
-/// Transkription weiter (1:1 wie Python).
+/// bereits fertige Clips neu an. Baut den LLM-Dispatcher inline. Transkription
+/// ist per Grillme-Entscheidung (Block 15) deaktiviert — es wird KEIN Transcriber
+/// injiziert (tb-social-media hat das whisper/OpenAI-Modul entfernt), die Pipeline
+/// läuft ohne Transkription weiter.
 pub async fn enrichment_run_handler(auth: DashboardAuthLevel, State(pool): State<PgPool>, Path(raw): Path<String>, body: String) -> Response {
     if let Err(e) = require_admin(&auth) {
         return e;
@@ -1433,11 +1433,10 @@ pub async fn enrichment_run_handler(auth: DashboardAuthLevel, State(pool): State
         .and_then(|v| v.get("force").map(coerce_bool))
         .unwrap_or(false);
 
-    let transcriber = OpenAiTranscriber::from_env();
     let llm = LlmDispatcher::new(pool.clone());
     let pipeline = ClipEnrichmentPipeline::new(pool.clone());
     let outcome = match pipeline
-        .run(clip_db_id, transcriber.as_ref().map(|t| t as &dyn Transcriber), &llm, force)
+        .run(clip_db_id, None, &llm, force)
         .await
     {
         Ok(o) => o,
