@@ -1270,6 +1270,13 @@ fn encode_b64(raw: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Mutex;
+
+    /// Serialisiert die Tests, die `SESSIONS_ENCRYPTION_KEY` per
+    /// `set_var`/`remove_var` anfassen. Ohne den Lock racet ein Test, der die
+    /// Var setzt, mit einem, der sie entfernt und `None` erwartet → flaky.
+    /// Konvention wie in `tb-llm` (`keys.rs`/`ledger.rs`).
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
 
     #[test]
     fn unix_now_ist_realistisch() {
@@ -1376,6 +1383,7 @@ mod tests {
 
     #[test]
     fn fernet_key_from_env_liest_env_var() {
+        let _env_guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
         // Nur wenn gesetzt — wir setzen eine Testvariable
         std::env::set_var("SESSIONS_ENCRYPTION_KEY", "testkey123");
         let key = DashboardAuthState::fernet_key_from_env();
@@ -1385,6 +1393,7 @@ mod tests {
 
     #[test]
     fn fernet_key_from_env_fehlt_gibt_none() {
+        let _env_guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
         std::env::remove_var("SESSIONS_ENCRYPTION_KEY");
         let key = DashboardAuthState::fernet_key_from_env();
         assert_eq!(key, None);
