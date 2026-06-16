@@ -124,6 +124,12 @@ pub trait PollHooks: Send + Sync {
 
     /// Tick-Abschluss: Score-Refreshes + Kategorie-Sample.
     async fn after_tick(&self, _report: TickReport) {}
+
+    /// Jeder Poll-Tick: Gelegenheit, die EventSub-Capacity-Zeitreihe zu schreiben
+    /// (B5-08). Die Drosselung (Sample-Intervall + Retention) liegt im Adapter
+    /// bzw. im `SubscriptionManager`; der Engine ruft nur taktgebend auf. Default
+    /// no-op (Setups ohne Subscription-Manager schreiben keine Zeitreihe).
+    async fn on_capacity_tick(&self) {}
 }
 
 /// Hooks ohne Wirkung (bis 4d/4f verdrahten).

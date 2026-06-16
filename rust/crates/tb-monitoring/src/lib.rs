@@ -75,4 +75,4 @@ pub use subscriptions::{
     SubscriptionTransport,
 };
 pub use telemetry::{HypeTrainPhase, TelemetryStore};
-pub use scout::{build_scout_task, ScoutTask};
+pub use scout::{build_scout_task, NoopScoutChatSink, ScoutChatSink, ScoutTask};
