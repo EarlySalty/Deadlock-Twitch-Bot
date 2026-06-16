@@ -17,17 +17,15 @@ use serde_json::json;
 use sqlx::{PgPool, Row};
 
 use crate::auth::level::DashboardAuthLevel;
+use crate::query_int::parse_bounded_query_int;
 
 #[derive(Deserialize)]
 pub struct RetentionQuery {
     #[serde(default)]
     pub streamer: Option<String>,
+    // Rohwert: nicht-numerisches `days` → Python-konformes 400-JSON, siehe query_int.
     #[serde(default)]
-    pub days: Option<i32>,
-}
-
-fn clamp(v: i32, min: i32, max: i32) -> i32 {
-    v.max(min).min(max)
+    pub days: Option<String>,
 }
 
 /// `GET /twitch/api/v2/retention-curve?streamer=&days=30`
@@ -41,12 +39,16 @@ pub async fn retention_curve_handler(
         return resp;
     }
 
+    // days VOR streamer-Pflicht (Python-Reihenfolge in _api_v2_retention_curve).
+    let days = match parse_bounded_query_int(params.days.as_deref(), "days", 30, 7, 365) {
+        Ok(d) => d,
+        Err(resp) => return resp.into_response(),
+    };
     let streamer = match params.streamer.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
         Some(s) => s.to_lowercase(),
         None => return (StatusCode::BAD_REQUEST, Json(json!({"error":"Streamer required"}))).into_response(),
     };
-    let days = clamp(params.days.unwrap_or(30), 7, 365);
-    let since: DateTime<Utc> = Utc::now() - Duration::days(days as i64);
+    let since: DateTime<Utc> = Utc::now() - Duration::days(days);
 
     // Letzte 50 Sessions wie Python; Viewer-Retention per Minute normalisiert auf peak_viewers,
     // dann PERCENTILE_CONT für p25/p50/p75.

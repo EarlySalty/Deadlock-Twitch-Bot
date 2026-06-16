@@ -16,6 +16,7 @@ use sqlx::{PgPool, Row};
 use std::collections::HashMap;
 
 use crate::auth::level::DashboardAuthLevel;
+use crate::query_int::parse_bounded_query_int;
 
 /// Median des sortierten Slice (exakt wie Python `statistics.median`).
 fn median_sorted(sorted: &[f64]) -> Option<f64> {
@@ -71,7 +72,8 @@ fn round1(v: f64) -> f64 { (v * 10.0).round() / 10.0 }
 
 #[derive(Deserialize)]
 pub struct TimingsQuery {
-    pub days: Option<i32>,
+    // Rohwert: nicht-numerisches `days` → Python-konformes 400-JSON, siehe query_int.
+    pub days: Option<String>,
     pub source: Option<String>,
 }
 
@@ -84,7 +86,10 @@ pub async fn category_timings_handler(
     if let Some(resp) = crate::auth::extended_gate(&pool, &auth).await {
         return resp;
     }
-    let days = params.days.unwrap_or(30).clamp(7, 90) as i64;
+    let days = match parse_bounded_query_int(params.days.as_deref(), "days", 30, 7, 90) {
+        Ok(d) => d,
+        Err(resp) => return resp.into_response(),
+    };
     let use_tracked = params.source.as_deref() == Some("tracked");
     let since: DateTime<Utc> = Utc::now() - Duration::days(days);
 

@@ -15,13 +15,15 @@ use serde_json::json;
 use sqlx::PgPool;
 
 use crate::auth::level::DashboardAuthLevel;
+use crate::query_int::parse_bounded_query_int;
 
 #[derive(Deserialize)]
 pub struct MonetizationQuery {
     #[serde(default)]
     pub streamer: Option<String>,
+    // Rohwert: nicht-numerisches `days` → Python-konformes 400-JSON, siehe query_int.
     #[serde(default)]
-    pub days: Option<i32>,
+    pub days: Option<String>,
 }
 
 /// `GET /twitch/api/v2/monetization?streamer=&days=30`
@@ -35,7 +37,10 @@ pub async fn monetization_handler(
     }
     // streamer: getrimmt + kleingeschrieben, "" wenn fehlend (Python `.strip().lower()`).
     let streamer = params.streamer.as_deref().unwrap_or("").trim().to_lowercase();
-    let days = params.days.unwrap_or(30).clamp(7, 90) as i64;
+    let days = match parse_bounded_query_int(params.days.as_deref(), "days", 30, 7, 90) {
+        Ok(d) => d,
+        Err(resp) => return resp.into_response(),
+    };
 
     match tb_analytics::monetization::load_monetization_payload(&pool, &streamer, days).await {
         Ok(v) => Json(v).into_response(),
@@ -80,5 +85,21 @@ mod tests {
         .await
         .into_response();
         assert_eq!(resp.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn nicht_numerische_days_400_python_shape() {
+        let Some(pool) = make_pool("t_mon_handler_400").await else { return };
+        let resp = monetization_handler(
+            DashboardAuthLevel::Localhost,
+            State(pool),
+            Query(MonetizationQuery { streamer: None, days: Some("nope".into()) }),
+        )
+        .await
+        .into_response();
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(body, json!({ "error": "days must be an integer" }));
     }
 }
