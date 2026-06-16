@@ -1701,23 +1701,43 @@ mod callback_tests {
     }
 
     async fn make_pool(dsn: &str, schema: &str) -> PgPool {
-        let pool = sqlx::postgres::PgPoolOptions::new()
+        // Schema auf einer Wegwerf-Verbindung anlegen.
+        let admin = sqlx::postgres::PgPoolOptions::new()
             .max_connections(1)
             .connect(dsn)
             .await
-            .expect("connect");
+            .expect("connect admin");
         sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
-            .execute(&pool)
+            .execute(&admin)
             .await
             .unwrap();
         sqlx::query(&format!("CREATE SCHEMA {schema}"))
-            .execute(&pool)
+            .execute(&admin)
             .await
             .unwrap();
-        sqlx::query(&format!("SET search_path TO {schema}"))
-            .execute(&pool)
+        admin.close().await;
+
+        // search_path via after_connect auf JEDER Verbindung setzen, nicht nur
+        // einmalig per `SET`. Der oauth_callback-Schreibpfad (AuthWriter::store_new_auth)
+        // oeffnet eine EIGENE Transaktions-Verbindung via `pool.begin()`; ein einmaliges
+        // `SET search_path` auf der Pool-Connection greift dort nicht, die Transaktion
+        // laeuft gegen `public` und sieht die Test-Tabellen nicht -> "relation does not
+        // exist" -> Handler verschluckt den Fehler in eine generische 500 statt 200.
+        let schema_owned = schema.to_string();
+        let pool = sqlx::postgres::PgPoolOptions::new()
+            .max_connections(1)
+            .after_connect(move |conn, _| {
+                let schema = schema_owned.clone();
+                Box::pin(async move {
+                    sqlx::query(&format!("SET search_path TO {schema}"))
+                        .execute(conn)
+                        .await?;
+                    Ok(())
+                })
+            })
+            .connect(dsn)
             .await
-            .unwrap();
+            .expect("connect pool mit search_path");
         // Prod-treue Typen (TIMESTAMPTZ/BOOLEAN wie twitch_analytics).
         sqlx::query(
             r#"
@@ -1753,6 +1773,35 @@ mod callback_tests {
                 redirect_uri    TEXT,
                 pkce_verifier   TEXT,
                 expires_at      TIMESTAMPTZ
+            )
+            "#,
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        // AuthWriter::store_new_auth raeumt im selben Transaktions-Block den
+        // Token-Error-Zustand auf (Partner-Pause-Grund + Blacklist). Fehlen diese
+        // Tabellen, bricht die Transaktion mit "relation does not exist" ab und der
+        // Handler liefert statt 200 eine generische 500. Nur die vom Schreibpfad
+        // beruehrten Spalten, prod-treu typisiert.
+        sqlx::query(
+            r#"
+            CREATE TABLE twitch_partners (
+                twitch_user_id          TEXT NOT NULL,
+                technical_pause_reason  TEXT
+            )
+            "#,
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            r#"
+            CREATE TABLE twitch_token_blacklist (
+                twitch_user_id  TEXT NOT NULL,
+                twitch_login    TEXT NOT NULL,
+                first_error_at  TEXT NOT NULL,
+                last_error_at   TEXT NOT NULL
             )
             "#,
         )
