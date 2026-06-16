@@ -153,6 +153,15 @@ pub struct OkLoginMessageResponse {
     pub message: String,
 }
 
+/// Antwort-Shape von `GET /streamers`.
+///
+/// B10-VERIFY (`streamers-crud-6`): Python liefert die blanke JSON-Liste
+/// (`server._json_response(items)`); Rust wrappt sie bewusst in
+/// `{ok, streamers}`. Der einzige Live-Konsument (`http_client.get_streamers`)
+/// toleriert beide Shapes (`isinstance list` ODER `payload["streamers"]`).
+/// Grillme-Block-10-Entscheid: Wrapper-Shape als gewollte Abweichung
+/// festschreiben (Selbstbeschreibung des Erfolgs-Status). Der Test
+/// `list_returns_200` lockt `{ok:true, streamers:[…]}` ein.
 #[derive(Serialize)]
 pub struct StreamersListResponse {
     pub ok: bool,
@@ -775,19 +784,50 @@ pub async fn discord_flag_handler(
         None => return Err(ApiError::bad_request("is_on_discord is required")),
     };
 
-    match db::set_discord_flag(&pool, &login, enabled).await {
-        Ok(true) => Ok(Json(OkLoginMessageResponse {
+    let updated = db::set_discord_flag(&pool, &login, enabled)
+        .await
+        .map_err(|e| {
+            tracing::error!("set_discord_flag DB-Fehler: {e}");
+            ApiError::internal()
+        })?;
+
+    // B10-FIX (`streamers-crud-7`): Python behandelt einen aktiven Partner OHNE
+    // auflösbare `twitch_user_id`/Identity-Zeile als Erfolg (No-Op, `partner=True`)
+    // und scheitert nur, wenn weder Partner- noch Streamer-Row existiert. Rusts
+    // `UPDATE...FROM`-Join über `twitch_streamer_identities` greift bei fehlender
+    // Identity nicht (0 Rows), wodurch der Handler fälschlich 404 lieferte. Bei
+    // No-Op fragen wir daher gezielt nach, ob ein aktiver Partner existiert, und
+    // melden dann denselben Erfolg wie Python.
+    let succeeded = updated || active_partner_exists(&pool, &login).await.map_err(|e| {
+        tracing::error!("active_partner_exists DB-Fehler: {e}");
+        ApiError::internal()
+    })?;
+
+    if succeeded {
+        Ok(Json(OkLoginMessageResponse {
             ok: true,
             login: login.clone(),
             message: "updated".to_string(),
         })
-        .into_response()),
-        Ok(false) => Err(ApiError::not_found()),
-        Err(e) => {
-            tracing::error!("set_discord_flag DB-Fehler: {e}");
-            Err(ApiError::internal())
-        }
+        .into_response())
+    } else {
+        Err(ApiError::not_found())
     }
+}
+
+/// Prüft, ob ein aktiver Partner (`status = 'active'`) mit diesem Login existiert.
+/// Spiegelt Pythons `load_active_partner`-Treffer für den Discord-Flag-No-Op-Pfad.
+async fn active_partner_exists(pool: &PgPool, login: &str) -> Result<bool, sqlx::Error> {
+    let row = sqlx::query_scalar::<_, i32>(
+        "SELECT 1 FROM twitch_partners \
+         WHERE LOWER(twitch_login) = LOWER($1) \
+           AND COALESCE(status, '') = 'active' \
+         LIMIT 1",
+    )
+    .bind(login)
+    .fetch_optional(pool)
+    .await?;
+    Ok(row.is_some())
 }
 
 /// `POST /internal/twitch/v1/streamers/:login/discord-profile`
@@ -1316,6 +1356,9 @@ mod tests {
         let resp = app.oneshot(req).await.unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
         let j = json_body(resp).await;
+        // B10-VERIFY (`streamers-crud-6`): bewusste Abweichung vom Python-
+        // Vertrag — Objekt-Wrapper `{ok, streamers}`, KEINE blanke Top-Level-Liste.
+        assert!(j.is_object(), "Antwort ist Objekt-Wrapper, keine blanke Liste");
         assert_eq!(j["ok"], true);
         assert!(j["streamers"].is_array());
     }
@@ -1669,6 +1712,65 @@ mod tests {
         );
         let resp = app.oneshot(req).await.unwrap();
         assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    }
+
+    /// B10-FIX (`streamers-crud-7`): Aktiver Partner OHNE auflösbare
+    /// `twitch_user_id`/Identity-Zeile ist in Python ein Erfolg (No-Op-Update,
+    /// `partner=True`) — nur wenn weder Partner noch Streamer-Row existiert
+    /// scheitert es. Rusts reiner `UPDATE...FROM`-Join über
+    /// `twitch_streamer_identities` greift hier nicht und lieferte fälschlich 404.
+    /// Erwartung: 200, ohne dass eine Identity-Zeile angelegt wird.
+    #[tokio::test]
+    async fn discord_flag_partner_ohne_identity_gibt_200() {
+        let dsn = db_dsn_or_skip!();
+        let pool = make_pool(&dsn, "test_sh_dflag_partner_no_id").await;
+        // Aktiver Partner mit twitch_user_id, aber OHNE Identity-Zeile.
+        sqlx::query(
+            "INSERT INTO twitch_partners (id, twitch_login, twitch_user_id, status) \
+             VALUES (1, 'partnerx', '999', 'active')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        let app = make_router(pool, "secret");
+        let base = INTERNAL_API_BASE_PATH;
+        let req = loopback_req(
+            "POST",
+            &format!("{base}/streamers/partnerx/discord-flag"),
+            r#"{"is_on_discord":true}"#,
+            Some("secret"),
+        );
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let j = json_body(resp).await;
+        assert_eq!(j["ok"], true);
+    }
+
+    /// B10-FIX-Gegenprobe: Aktiver Partner OHNE jegliche `twitch_user_id` (NULL)
+    /// ist in Python ebenfalls Erfolg — der Identity-Pfad wird übersprungen.
+    #[tokio::test]
+    async fn discord_flag_partner_ohne_userid_gibt_200() {
+        let dsn = db_dsn_or_skip!();
+        let pool = make_pool(&dsn, "test_sh_dflag_partner_null_uid").await;
+        sqlx::query(
+            "INSERT INTO twitch_partners (id, twitch_login, twitch_user_id, status) \
+             VALUES (1, 'partnery', NULL, 'active')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        let app = make_router(pool, "secret");
+        let base = INTERNAL_API_BASE_PATH;
+        let req = loopback_req(
+            "POST",
+            &format!("{base}/streamers/partnery/discord-flag"),
+            r#"{"is_on_discord":false}"#,
+            Some("secret"),
+        );
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let j = json_body(resp).await;
+        assert_eq!(j["ok"], true);
     }
 
     // ── POST /streamers (add) ────────────────────────────────────────────────
