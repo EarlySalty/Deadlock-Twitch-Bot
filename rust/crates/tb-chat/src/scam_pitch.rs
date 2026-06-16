@@ -1330,8 +1330,13 @@ impl ScamPitchDetector {
         );
     }
 
-    /// Log-Eintrag in Datei.
-    /// service_pitch_warning.py Z. 748–776
+    /// Forensischer Audit-Trail: tab-separierte Zeile in `twitch_service_warnings.log`.
+    ///
+    /// Port von `service_pitch_warning.py` Z. 748–776 (`_record_service_warning`):
+    /// Python schreibt die Warnung zusätzlich zum Logger in eine Datei, damit sie
+    /// auch ohne aktives Log-Level erhalten bleibt. Grillme Z. 226
+    /// (`scam-pitch-spam-review-3` BUILD) hält diesen Trail fest. Wir spiegeln
+    /// beides: `debug!`-Tracing (für Live-Tail) **und** Datei-Append (forensisch).
     #[allow(clippy::too_many_arguments)]
     fn log_warning(
         &self,
@@ -1346,30 +1351,86 @@ impl ScamPitchDetector {
         reasons: &[String],
         content: &str,
     ) {
-        let ts = Utc::now().to_rfc3339();
-        let follower_text = follower_count
-            .map(|c| c.to_string())
-            .unwrap_or_else(|| "-".to_string());
-        let reason_text = if reasons.is_empty() {
-            "-".to_string()
-        } else {
-            reasons.join(",")
-        };
-        let safe_content: String = content
-            .replace('\n', " ")
-            .trim()
-            .chars()
-            .take(350)
-            .collect();
-        // Tab-separated log (Z. 768–773)
-        debug!(
-            target: "service_warnings",
-            "{ts}\t{severity}\t{channel_login}\t{}\t{}\tage_days={account_age_safe}\t\
-             followers={follower_text}\tscore={score}\tmsgs={msg_count}\t{reason_text}\t{safe_content}",
-            if chatter_login.is_empty() { "-" } else { chatter_login },
-            if chatter_id.is_empty() { "-" } else { chatter_id },
+        let line = format_service_warning_line(
+            &Utc::now().to_rfc3339(),
+            severity,
+            channel_login,
+            chatter_login,
+            chatter_id,
+            account_age_safe,
+            follower_count,
+            score,
+            msg_count,
+            reasons,
+            content,
         );
+        // Live-Tail über Tracing (Z. 768–773).
+        debug!(target: "service_warnings", "{line}");
+        // Forensischer Datei-Trail (Z. 762–774). Fehler schlucken wie Python
+        // (`except Exception: log.debug`) — ein Log-Schreibfehler darf die
+        // Moderation nicht abbrechen.
+        if let Err(e) = append_service_warning(&line) {
+            debug!(target: "service_warnings", "Konnte Service-Warnung nicht in Datei schreiben: {e}");
+        }
     }
+}
+
+/// Verzeichnis für den Service-Warning-Trail. `logs/` relativ zum CWD (gleiche
+/// Konvention wie `tb-dashboard-api::read_log_tail`); per
+/// `TWITCH_SERVICE_WARNING_LOG_DIR` überschreibbar (Tests, abweichendes Deploy).
+fn service_warning_log_dir() -> std::path::PathBuf {
+    std::env::var_os("TWITCH_SERVICE_WARNING_LOG_DIR")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| std::path::PathBuf::from("logs"))
+}
+
+/// Hängt eine vorformatierte Zeile (ohne Zeilenumbruch) an
+/// `<dir>/twitch_service_warnings.log` an. Legt das Verzeichnis bei Bedarf an
+/// (`mkdir(parents=True)` in Python Z. 763).
+fn append_service_warning(line: &str) -> std::io::Result<()> {
+    use std::io::Write;
+    let dir = service_warning_log_dir();
+    std::fs::create_dir_all(&dir)?;
+    let path = dir.join("twitch_service_warnings.log");
+    let mut file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)?;
+    writeln!(file, "{line}")
+}
+
+/// Baut die tab-separierte Audit-Zeile (ohne Zeilenumbruch).
+/// Reine Funktion → unabhängig vom Datei-/Tracing-Pfad testbar.
+/// Format identisch zu `service_pitch_warning.py` Z. 768–773.
+#[allow(clippy::too_many_arguments)]
+fn format_service_warning_line(
+    ts: &str,
+    severity: &str,
+    channel_login: &str,
+    chatter_login: &str,
+    chatter_id: &str,
+    account_age_safe: i64,
+    follower_count: Option<i32>,
+    score: i32,
+    msg_count: usize,
+    reasons: &[String],
+    content: &str,
+) -> String {
+    let follower_text = follower_count
+        .map(|c| c.to_string())
+        .unwrap_or_else(|| "-".to_string());
+    let reason_text = if reasons.is_empty() {
+        "-".to_string()
+    } else {
+        reasons.join(",")
+    };
+    let safe_content: String = content.replace('\n', " ").trim().chars().take(350).collect();
+    let chatter_login = if chatter_login.is_empty() { "-" } else { chatter_login };
+    let chatter_id = if chatter_id.is_empty() { "-" } else { chatter_id };
+    format!(
+        "{ts}\t{severity}\t{channel_login}\t{chatter_login}\t{chatter_id}\tage_days={account_age_safe}\t\
+         followers={follower_text}\tscore={score}\tmsgs={msg_count}\t{reason_text}\t{safe_content}"
+    )
 }
 
 // ── SpamAiReviewer ────────────────────────────────────────────────────────────
@@ -2453,5 +2514,80 @@ mod tests {
         // Nach genug Msgs könnte HINT kommen; das genaue Verhalten hängt von
         // window-scoring ab. Wir testen nur: kein panic.
         let _ = det;
+    }
+
+    // ── Forensischer Audit-Trail (scam-pitch-spam-review-3 / Grillme Z. 226) ──
+
+    #[test]
+    fn service_warning_line_format_matcht_python() {
+        // Erwartet exakt das Tab-Format aus service_pitch_warning.py Z. 768–773.
+        let line = format_service_warning_line(
+            "2026-06-16T12:00:00+00:00",
+            "WARNING_PUBLIC",
+            "chan",
+            "spammer",
+            "999",
+            42,
+            Some(150),
+            7,
+            3,
+            &["a".to_string(), "b".to_string()],
+            "hallo welt",
+        );
+        assert_eq!(
+            line,
+            "2026-06-16T12:00:00+00:00\tWARNING_PUBLIC\tchan\tspammer\t999\tage_days=42\t\
+             followers=150\tscore=7\tmsgs=3\ta,b\thallo welt"
+        );
+    }
+
+    #[test]
+    fn service_warning_line_leere_felder_werden_strich() {
+        // Leerer chatter_login/-id -> "-"; keine Follower -> "-"; keine Reasons -> "-".
+        let line = format_service_warning_line(
+            "T", "HINT", "chan", "", "", -1, None, 4, 2, &[], "x",
+        );
+        assert_eq!(
+            line,
+            "T\tHINT\tchan\t-\t-\tage_days=-1\tfollowers=-\tscore=4\tmsgs=2\t-\tx"
+        );
+    }
+
+    #[test]
+    fn service_warning_content_einzeilig_und_gekuerzt() {
+        // Newlines werden zu Spaces, getrimmt, auf 350 Zeichen begrenzt.
+        let raw = format!("  zeile1\nzeile2  {}", "y".repeat(400));
+        let line = format_service_warning_line(
+            "T", "HINT", "c", "u", "1", 0, None, 1, 1, &[], &raw,
+        );
+        let content = line.rsplit('\t').next().unwrap();
+        assert!(!content.contains('\n'));
+        assert!(content.starts_with("zeile1 zeile2"));
+        assert_eq!(content.chars().count(), 350);
+    }
+
+    #[test]
+    fn append_service_warning_schreibt_datei() {
+        // Append in ein isoliertes Temp-Verzeichnis (kein Prod-Pfad, kein neues Crate-Dep).
+        let dir = std::env::temp_dir().join(format!(
+            "tb_chat_swtest_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        // Nur in diesem Test gesetzt; sonst nutzt keine Crate-Logik diese Variable.
+        std::env::set_var("TWITCH_SERVICE_WARNING_LOG_DIR", &dir);
+
+        append_service_warning("zeile-a").unwrap();
+        append_service_warning("zeile-b").unwrap();
+
+        let path = dir.join("twitch_service_warnings.log");
+        let body = std::fs::read_to_string(&path).unwrap();
+        assert_eq!(body, "zeile-a\nzeile-b\n");
+
+        std::env::remove_var("TWITCH_SERVICE_WARNING_LOG_DIR");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

@@ -64,6 +64,17 @@ const CLIP_TITLE_FALLBACKS: &[&str] = &[
     "Clip it!",
 ];
 
+/// `!clip`-Antwort wenn keine Broadcaster-/Bot-Autorisierung vorliegt.
+/// Wortlaut an `commands.py:341` angeglichen; der tote `!raid_enable`-Verweis
+/// bleibt draußen (Grillme `chat-commands-tokens-07` / Block 8 „in oder raus").
+const CLIP_OAUTH_MISSING_REPLY: &str =
+    "OAuth fehlt. Bitte den Bot einmal autorisieren, dann klappt der Clip.";
+
+/// `!clip`-Antwort bei fehlgeschlagener Helix-Erstellung.
+/// Wortlaut an `commands.py:383–384` angeglichen.
+const CLIP_FAILED_REPLY: &str =
+    "Clip konnte nicht erstellt werden. Bitte in 10 Sekunden nochmal versuchen.";
+
 /// Statuszeile für `!raid_status` (`commands.py:120–125`).
 ///
 /// `!raid_enable` entfällt (Grillme Block 8 — „in oder raus"): die Auto-Raid-
@@ -928,21 +939,10 @@ impl CommandEngine {
                 .await;
             }
             ClipOutcome::OAuthMissing => {
-                // commands.py:341 — "OAuth fehlt. Bitte einmal ... autorisieren".
-                // Der `!raid_enable`-Verweis ist tot ("in oder raus") und entfällt;
-                // der Auth-Link läuft heute über Website-/Streamer-Flow, nicht Chat.
-                self.reply(
-                    event,
-                    "OAuth fehlt. Der Streamer muss den Bot einmal autorisieren, dann klappt der Clip.",
-                )
-                .await;
+                self.reply(event, CLIP_OAUTH_MISSING_REPLY).await;
             }
             ClipOutcome::Failed => {
-                self.reply(
-                    event,
-                    "Clip konnte nicht erstellt werden. Bitte in ein paar Sekunden nochmal.",
-                )
-                .await;
+                self.reply(event, CLIP_FAILED_REPLY).await;
             }
         }
     }
@@ -1700,6 +1700,21 @@ mod tests {
     fn clip_fallback_titel_vollständigkeit() {
         // commands.py:181 — 5 Fallbacks
         assert_eq!(CLIP_TITLE_FALLBACKS.len(), 5);
+    }
+
+    #[test]
+    fn clip_fehler_oauth_texte_an_python_angeglichen() {
+        // chat-commands-tokens-07: !clip-Fehler-/OAuth-Wortlaut an Python.
+        // Failed exakt wie commands.py:383–384.
+        assert_eq!(
+            CLIP_FAILED_REPLY,
+            "Clip konnte nicht erstellt werden. Bitte in 10 Sekunden nochmal versuchen."
+        );
+        // OAuth: Python-Kern ("OAuth fehlt. Bitte ... autorisieren"), aber der
+        // tote `!raid_enable`-Verweis bleibt draußen (Grillme Block 8).
+        assert!(CLIP_OAUTH_MISSING_REPLY.starts_with("OAuth fehlt. Bitte"));
+        assert!(CLIP_OAUTH_MISSING_REPLY.contains("autorisieren"));
+        assert!(!CLIP_OAUTH_MISSING_REPLY.contains("!raid_enable"));
     }
 
     #[test]
