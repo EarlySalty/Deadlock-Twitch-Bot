@@ -551,7 +551,10 @@ impl<N: TokenLifecycleNotifier> TokenLifecycleReactor<N> {
         }
 
         // Liegt überhaupt ein technischer Bot-Ban vor? (Partner-Pause-Reason.)
-        let partner: Option<(Option<bool>, Option<String>)> = sqlx::query_as(
+        // `manual_partner_opt_out` ist in `twitch_partners` ein INTEGER-Flag
+        // (DEFAULT 0, Python liest es als `bool(...)`) — daher als i32 dekodieren
+        // und gegen 0 prüfen. Ein bool-Decode würde am int4-Spaltentyp scheitern.
+        let partner: Option<(Option<i32>, Option<String>)> = sqlx::query_as(
             r#"
             SELECT manual_partner_opt_out, technical_pause_reason
             FROM twitch_partners
@@ -565,7 +568,10 @@ impl<N: TokenLifecycleNotifier> TokenLifecycleReactor<N> {
         .fetch_optional(&mut *tx)
         .await?;
         let (manual_opt_out, pause_reason) = match partner {
-            Some((m, r)) => (m.unwrap_or(false), r.unwrap_or_default().trim().to_lowercase()),
+            Some((m, r)) => (
+                m.unwrap_or(0) != 0,
+                r.unwrap_or_default().trim().to_lowercase(),
+            ),
             None => (false, String::new()),
         };
         if pause_reason != "bot_banned" {
