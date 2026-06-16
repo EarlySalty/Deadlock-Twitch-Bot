@@ -120,7 +120,7 @@ pub async fn list_streamers(
 /// Ergebnis von `add_streamer`.
 #[derive(Debug)]
 pub enum AddStreamerResult {
-    /// Streamer war bereits aktiv (archived_at IS NULL).
+    /// Streamer war bereits in der Identitätstabelle vorhanden.
     AlreadyExists,
     /// Erfolgreich hinzugefügt oder user_id aktualisiert.
     Added,
@@ -129,8 +129,8 @@ pub enum AddStreamerResult {
 /// Fügt einen Streamer in `twitch_streamers` ein (upsert).
 ///
 /// Entspricht dem Python-Pfad in `upsert_non_partner_streamer`:
-/// - Wenn bereits aktiv (archived_at IS NULL): `AlreadyExists` zurückgeben.
-/// - Sonst: INSERT mit `is_monitored_only = 0`, ON CONFLICT DO UPDATE user_id.
+/// - Wenn bereits vorhanden: `AlreadyExists` zurückgeben.
+/// - Sonst: INSERT, ON CONFLICT DO UPDATE user_id.
 ///
 /// `twitch_streamer_identities` wird nur befüllt wenn `user_id` bekannt ist.
 pub async fn add_streamer(
@@ -141,12 +141,11 @@ pub async fn add_streamer(
     let login = login.to_lowercase();
 
     // Prüfen ob bereits aktiv (`SELECT 1` ist INT4 — als i32 dekodieren)
-    let exists: Option<(i32,)> = sqlx::query_as(
-        "SELECT 1 FROM twitch_streamers WHERE LOWER(twitch_login) = LOWER($1) AND archived_at IS NULL",
-    )
-    .bind(&login)
-    .fetch_optional(pool)
-    .await?;
+    let exists: Option<(i32,)> =
+        sqlx::query_as("SELECT 1 FROM twitch_streamers WHERE LOWER(twitch_login) = LOWER($1)")
+            .bind(&login)
+            .fetch_optional(pool)
+            .await?;
 
     if exists.is_some() {
         return Ok(AddStreamerResult::AlreadyExists);
@@ -158,14 +157,10 @@ pub async fn add_streamer(
         INSERT INTO twitch_streamers (
             twitch_login,
             twitch_user_id,
-            is_on_discord,
-            is_monitored_only,
             created_at
-        ) VALUES ($1, $2, 0, 0, NOW())
+        ) VALUES ($1, $2, NOW())
         ON CONFLICT (twitch_login) DO UPDATE SET
-            twitch_user_id = COALESCE(EXCLUDED.twitch_user_id, twitch_streamers.twitch_user_id),
-            archived_at = NULL,
-            is_monitored_only = 0
+            twitch_user_id = COALESCE(EXCLUDED.twitch_user_id, twitch_streamers.twitch_user_id)
         "#,
     )
     .bind(&login)
@@ -202,13 +197,11 @@ pub async fn add_streamer(
 
 // ── POST /streamers/monitoring ────────────────────────────────────────────────
 
-/// Legt einen reinen Monitoring-Eintrag an (`is_monitored_only = 1`).
+/// Legt einen reinen Monitoring-Eintrag an.
 ///
 /// Wird von Clip-Fetchern und anderen Systemen genutzt, die einen Streamer
 /// als Nebeneffekt in `twitch_streamers` registrieren müssen (FK-Anforderung),
 /// ohne ihn als echten Partner zu behandeln.
-/// Bestehende Einträge mit `is_monitored_only IS NULL` werden auf 1 gesetzt;
-/// Einträge mit `is_monitored_only = 0` (echte Partner) bleiben unverändert.
 pub async fn add_monitored_streamer(
     pool: &PgPool,
     login: &str,
@@ -216,11 +209,10 @@ pub async fn add_monitored_streamer(
 ) -> Result<(), sqlx::Error> {
     sqlx::query(
         r#"
-        INSERT INTO twitch_streamers (twitch_login, twitch_user_id, is_monitored_only)
-        VALUES ($1, $2, 1)
+        INSERT INTO twitch_streamers (twitch_login, twitch_user_id)
+        VALUES ($1, $2)
         ON CONFLICT (twitch_login) DO UPDATE SET
-            twitch_user_id    = COALESCE(twitch_streamers.twitch_user_id, EXCLUDED.twitch_user_id),
-            is_monitored_only = COALESCE(twitch_streamers.is_monitored_only, 1)
+            twitch_user_id = COALESCE(twitch_streamers.twitch_user_id, EXCLUDED.twitch_user_id)
         "#,
     )
     .bind(login)
@@ -235,9 +227,9 @@ pub async fn add_monitored_streamer(
 /// Ergebnis von `remove_streamer`.
 #[derive(Debug)]
 pub enum RemoveStreamerResult {
-    /// Aktiver Eintrag archiviert (archived_at gesetzt, twitch_live_state gelöscht).
+    /// Aktiver Partner-Eintrag archiviert (admin_archived_at gesetzt, twitch_live_state gelöscht).
     Archived,
-    /// Kein aktiver Eintrag — direktes DELETE (war nie aktiv oder bereits archiviert).
+    /// Kein Partner-Eintrag — direktes DELETE aus `twitch_streamers`.
     Deleted,
     /// Login unbekannt.
     NotFound,
@@ -246,8 +238,8 @@ pub enum RemoveStreamerResult {
 /// Entfernt/departnert einen Streamer.
 ///
 /// Entspricht dem Python-Pfad in `_cmd_remove`:
-/// 1. UPDATE archived_at = NOW() WHERE archived_at IS NULL (aktiver Eintrag)
-/// 2. Wenn kein Update: DELETE (war nie aktiv)
+/// 1. UPDATE twitch_partners.admin_archived_at = NOW() (aktiver Partner)
+/// 2. Wenn kein Partner-Eintrag existiert: DELETE aus `twitch_streamers`
 /// 3. DELETE FROM twitch_live_state
 pub async fn remove_streamer(
     pool: &PgPool,
@@ -255,9 +247,13 @@ pub async fn remove_streamer(
 ) -> Result<RemoveStreamerResult, sqlx::Error> {
     let login = login.to_lowercase();
 
-    // Schritt 1: Aktiven Eintrag archivieren
+    // Schritt 1: Aktiven Partner archivieren
     let updated = sqlx::query(
-        "UPDATE twitch_streamers SET archived_at = NOW() WHERE LOWER(twitch_login) = LOWER($1) AND archived_at IS NULL",
+        "UPDATE twitch_partners \
+         SET admin_archived_at = NOW() \
+         WHERE LOWER(twitch_login) = LOWER($1) \
+           AND COALESCE(status, 'active') = 'active' \
+           AND admin_archived_at IS NULL",
     )
     .bind(&login)
     .execute(pool)
@@ -266,12 +262,19 @@ pub async fn remove_streamer(
     let result = if updated.rows_affected() > 0 {
         RemoveStreamerResult::Archived
     } else {
-        // Schritt 2: Falls nichts archiviert wurde, direktes DELETE
-        let deleted =
-            sqlx::query("DELETE FROM twitch_streamers WHERE LOWER(twitch_login) = LOWER($1)")
-                .bind(&login)
-                .execute(pool)
-                .await?;
+        // Schritt 2: Nur Streamer ohne Partner-Eintrag direkt löschen.
+        let deleted = sqlx::query(
+            "DELETE FROM twitch_streamers \
+             WHERE LOWER(twitch_login) = LOWER($1) \
+               AND NOT EXISTS ( \
+                   SELECT 1 FROM twitch_partners p \
+                   WHERE p.twitch_user_id = twitch_streamers.twitch_user_id \
+                      OR LOWER(p.twitch_login) = LOWER(twitch_streamers.twitch_login) \
+               )",
+        )
+        .bind(&login)
+        .execute(pool)
+        .await?;
 
         if deleted.rows_affected() > 0 {
             RemoveStreamerResult::Deleted
@@ -723,9 +726,8 @@ pub async fn archive_streamer(
 
 /// Setzt `is_on_discord` für einen Streamer.
 ///
-/// Dual-Pfad (PostgreSQL-spezifisch: `UPDATE ... FROM`):
-/// - Aktiver Partner (`twitch_partners.status = 'active'`): Update via `twitch_streamer_identities`
-/// - Non-Partner: Update in `twitch_streamers`
+/// Quelle ist `twitch_streamer_identities`; `twitch_streamers` liefert nur die
+/// Twitch-User-ID zum Login.
 ///
 /// Gibt `false` zurück wenn Login unbekannt.
 pub async fn set_discord_flag(
@@ -735,53 +737,52 @@ pub async fn set_discord_flag(
 ) -> Result<bool, sqlx::Error> {
     let val: i32 = if is_on_discord { 1 } else { 0 };
 
-    // Partner-Pfad: über twitch_streamer_identities (PostgreSQL UPDATE...FROM)
-    let partner_rows = sqlx::query(
-        r#"
-        UPDATE twitch_streamer_identities si
-        SET is_on_discord = $2,
-            updated_at = NOW()
-        FROM twitch_partners p
-        WHERE p.twitch_user_id = si.twitch_user_id
-          AND LOWER(p.twitch_login) = LOWER($1)
-          AND COALESCE(p.status, '') = 'active'
-        "#,
+    let target: Option<(String, Option<String>)> = sqlx::query_as(
+        "SELECT twitch_login, twitch_user_id \
+         FROM twitch_streamers \
+         WHERE LOWER(twitch_login) = LOWER($1) \
+         LIMIT 1",
     )
     .bind(login)
-    .bind(val)
-    .execute(pool)
-    .await?
-    .rows_affected();
+    .fetch_optional(pool)
+    .await?;
 
-    if partner_rows > 0 {
-        return Ok(true);
+    let Some((target_login, Some(uid))) = target else {
+        return Ok(false);
+    };
+    let uid = uid.trim();
+    if uid.is_empty() {
+        return Ok(false);
     }
 
-    // Non-Partner-Pfad: twitch_streamers direkt
-    let streamer_rows = sqlx::query(
+    let rows = sqlx::query(
         r#"
-        UPDATE twitch_streamers
-        SET is_on_discord = $2
-        WHERE LOWER(twitch_login) = LOWER($1)
-          AND archived_at IS NULL
+        INSERT INTO twitch_streamer_identities (
+            twitch_user_id, twitch_login, is_on_discord, created_at, updated_at
+        )
+        VALUES ($1, LOWER($2), $3, NOW(), NOW())
+        ON CONFLICT (twitch_user_id) DO UPDATE SET
+            twitch_login = EXCLUDED.twitch_login,
+            is_on_discord = EXCLUDED.is_on_discord,
+            updated_at = NOW()
         "#,
     )
-    .bind(login)
+    .bind(uid)
+    .bind(&target_login)
     .bind(val)
     .execute(pool)
     .await?
     .rows_affected();
 
-    Ok(streamer_rows > 0)
+    Ok(rows > 0)
 }
 
 // ── POST /streamers/{login}/discord-profile ───────────────────────────────────
 
 /// Setzt Discord-User-ID + Display-Name für einen Streamer.
 ///
-/// Dual-Pfad (PostgreSQL-spezifisch: `UPDATE ... FROM`):
-/// - Aktiver Partner: Update `twitch_streamer_identities` (nach Deduplizierung)
-/// - Non-Partner: Update `twitch_streamers`
+/// Schreibt in `twitch_streamer_identities`; `twitch_streamers` liefert nur die
+/// Twitch-User-ID zum Login und wird bei bekannter ID nachgetragen.
 ///
 /// Deduplizierung: Andere Identity-Einträge mit gleicher `discord_user_id` werden genullt.
 ///
@@ -799,51 +800,74 @@ pub async fn set_discord_profile(
     // vorhanden, auf der Streamer-Zeile nachgetragen (nur wenn dort noch leer).
     let resolved_uid: Option<&str> = twitch_user_id.map(str::trim).filter(|s| !s.is_empty());
 
+    if let Some(uid) = resolved_uid {
+        sqlx::query(
+            "UPDATE twitch_streamers \
+             SET twitch_user_id = COALESCE(NULLIF(twitch_user_id, ''), $2) \
+             WHERE LOWER(twitch_login) = LOWER($1)",
+        )
+        .bind(login)
+        .bind(uid)
+        .execute(pool)
+        .await?;
+    }
+
+    let target: Option<(String, Option<String>)> = sqlx::query_as(
+        "SELECT twitch_login, twitch_user_id \
+         FROM twitch_streamers \
+         WHERE LOWER(twitch_login) = LOWER($1) \
+         LIMIT 1",
+    )
+    .bind(login)
+    .fetch_optional(pool)
+    .await?;
+
+    let Some((target_login, Some(uid))) = target else {
+        return Ok(false);
+    };
+    let uid = uid.trim();
+    if uid.is_empty() {
+        return Ok(false);
+    }
+
     // Deduplizierung: Andere Identity-Einträge mit gleicher discord_user_id nullen
     if let Some(did) = discord_user_id {
         if !did.is_empty() {
-            let target_uid: Option<(Option<String>,)> = sqlx::query_as(
-                "SELECT twitch_user_id FROM twitch_streamers WHERE LOWER(twitch_login) = LOWER($1)",
+            sqlx::query(
+                r#"
+                UPDATE twitch_streamer_identities
+                SET discord_user_id = NULL,
+                    discord_display_name = NULL,
+                    is_on_discord = 0,
+                    updated_at = NOW()
+                WHERE discord_user_id = $1
+                  AND twitch_user_id <> $2
+                "#,
             )
-            .bind(login)
-            .fetch_optional(pool)
+            .bind(did)
+            .bind(uid)
+            .execute(pool)
             .await?;
-
-            if let Some((Some(uid),)) = target_uid {
-                sqlx::query(
-                    r#"
-                    UPDATE twitch_streamer_identities
-                    SET discord_user_id = NULL,
-                        discord_display_name = NULL,
-                        is_on_discord = 0,
-                        updated_at = NOW()
-                    WHERE discord_user_id = $1
-                      AND twitch_user_id <> $2
-                    "#,
-                )
-                .bind(did)
-                .bind(&uid)
-                .execute(pool)
-                .await?;
-            }
         }
     }
 
-    // Partner-Pfad: twitch_streamer_identities (PostgreSQL UPDATE...FROM)
-    let partner_rows = sqlx::query(
+    let rows = sqlx::query(
         r#"
-        UPDATE twitch_streamer_identities si
-        SET discord_user_id = COALESCE($2, si.discord_user_id),
-            discord_display_name = COALESCE($3, si.discord_display_name),
-            is_on_discord = $4,
+        INSERT INTO twitch_streamer_identities (
+            twitch_user_id, twitch_login, discord_user_id, discord_display_name,
+            is_on_discord, created_at, updated_at
+        )
+        VALUES ($1, LOWER($2), $3, $4, $5, NOW(), NOW())
+        ON CONFLICT (twitch_user_id) DO UPDATE SET
+            twitch_login = EXCLUDED.twitch_login,
+            discord_user_id = COALESCE(EXCLUDED.discord_user_id, twitch_streamer_identities.discord_user_id),
+            discord_display_name = COALESCE(EXCLUDED.discord_display_name, twitch_streamer_identities.discord_display_name),
+            is_on_discord = EXCLUDED.is_on_discord,
             updated_at = NOW()
-        FROM twitch_partners p
-        WHERE p.twitch_user_id = si.twitch_user_id
-          AND LOWER(p.twitch_login) = LOWER($1)
-          AND COALESCE(p.status, '') = 'active'
         "#,
     )
-    .bind(login)
+    .bind(uid)
+    .bind(&target_login)
     .bind(discord_user_id)
     .bind(discord_display_name)
     .bind(is_on_discord)
@@ -851,33 +875,7 @@ pub async fn set_discord_profile(
     .await?
     .rows_affected();
 
-    if partner_rows > 0 {
-        return Ok(true);
-    }
-
-    // Non-Partner-Pfad: twitch_streamers. twitch_user_id wird nachgetragen, wenn
-    // dort noch leer (Python `upsert_non_partner_streamer` mit resolved_user_id).
-    let streamer_rows = sqlx::query(
-        r#"
-        UPDATE twitch_streamers
-        SET discord_user_id = COALESCE($2, discord_user_id),
-            discord_display_name = COALESCE($3, discord_display_name),
-            is_on_discord = $4,
-            twitch_user_id = COALESCE(NULLIF(twitch_user_id, ''), $5)
-        WHERE LOWER(twitch_login) = LOWER($1)
-          AND archived_at IS NULL
-        "#,
-    )
-    .bind(login)
-    .bind(discord_user_id)
-    .bind(discord_display_name)
-    .bind(is_on_discord)
-    .bind(resolved_uid)
-    .execute(pool)
-    .await?
-    .rows_affected();
-
-    Ok(streamer_rows > 0)
+    Ok(rows > 0)
 }
 
 /// Twitch-User-ID eines Streamers aus `twitch_raid_auth` (Port von Python
@@ -1182,9 +1180,7 @@ mod tests {
                 Some(d) => d,
                 None => {
                     if std::env::var("TB_TEST_REQUIRE_DB").as_deref() == Ok("1") {
-                        panic!(
-                            "TB_TEST_REQUIRE_DB=1 ist gesetzt, aber TB_TEST_DATABASE_URL fehlt"
-                        );
+                        panic!("TB_TEST_REQUIRE_DB=1 ist gesetzt, aber TB_TEST_DATABASE_URL fehlt");
                     }
                     eprintln!("SKIP: TB_TEST_DATABASE_URL nicht gesetzt");
                     return;
@@ -1219,13 +1215,7 @@ mod tests {
             CREATE TABLE IF NOT EXISTS twitch_streamers (
                 twitch_login        TEXT PRIMARY KEY,
                 twitch_user_id      TEXT,
-                discord_user_id     TEXT,
-                discord_display_name TEXT,
-                is_on_discord       INTEGER DEFAULT 0,
-                is_verified         INTEGER DEFAULT 0,
-                is_monitored_only   INTEGER DEFAULT 0,
-                created_at          TIMESTAMPTZ DEFAULT NOW(),
-                archived_at         TIMESTAMPTZ
+                created_at          TIMESTAMPTZ DEFAULT NOW()
             )
             "#,
         )
@@ -1471,15 +1461,15 @@ mod tests {
 
         add_streamer(&pool, "testuser", None).await.unwrap();
         let result = remove_streamer(&pool, "testuser").await.unwrap();
-        assert!(matches!(result, RemoveStreamerResult::Archived));
+        assert!(matches!(result, RemoveStreamerResult::Deleted));
 
-        let archived: Option<String> = sqlx::query_scalar(
-            "SELECT archived_at::text FROM twitch_streamers WHERE twitch_login='testuser'",
+        let count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM twitch_streamers WHERE twitch_login='testuser'",
         )
         .fetch_one(&pool)
         .await
         .unwrap();
-        assert!(archived.is_some(), "archiviert statt gelistet");
+        assert_eq!(count, 0, "reiner Streamer wird gelöscht");
     }
 
     #[tokio::test]
@@ -1503,7 +1493,9 @@ mod tests {
         .await
         .unwrap();
 
-        let result = verify_streamer(&pool, "testpartner", "permanent").await.unwrap();
+        let result = verify_streamer(&pool, "testpartner", "permanent")
+            .await
+            .unwrap();
         assert!(matches!(result, VerifyStreamerResult::Verified));
 
         let row: (Option<i32>,) = sqlx::query_as(
@@ -1546,7 +1538,9 @@ mod tests {
         let dsn = db_dsn_or_skip!();
         let pool = make_pool(&dsn, "test_sc_verify_nap").await;
 
-        let result = verify_streamer(&pool, "niemand", "permanent").await.unwrap();
+        let result = verify_streamer(&pool, "niemand", "permanent")
+            .await
+            .unwrap();
         assert!(matches!(result, VerifyStreamerResult::NotAPartner));
     }
 
@@ -1586,7 +1580,11 @@ mod tests {
         .fetch_one(&pool)
         .await
         .unwrap();
-        assert_eq!(row.0, Some(1), "verify_streamer fasst clear/failed nicht an");
+        assert_eq!(
+            row.0,
+            Some(1),
+            "verify_streamer fasst clear/failed nicht an"
+        );
         assert_eq!(row.1.as_deref(), Some("active"), "kein Halb-Departner");
     }
 
@@ -1765,12 +1763,14 @@ mod tests {
         let dsn = db_dsn_or_skip!();
         let pool = make_pool(&dsn, "test_sc_discord_flag").await;
 
-        add_streamer(&pool, "testuser", None).await.unwrap();
+        add_streamer(&pool, "testuser", Some("uid_flag"))
+            .await
+            .unwrap();
         let ok = set_discord_flag(&pool, "testuser", true).await.unwrap();
         assert!(ok);
 
         let row: (Option<i32>,) = sqlx::query_as(
-            "SELECT is_on_discord FROM twitch_streamers WHERE LOWER(twitch_login) = 'testuser'",
+            "SELECT is_on_discord FROM twitch_streamer_identities WHERE twitch_user_id = 'uid_flag'",
         )
         .fetch_one(&pool)
         .await
@@ -1797,7 +1797,10 @@ mod tests {
         assert!(ok);
 
         let row: (Option<String>, Option<String>, Option<i32>, Option<String>) = sqlx::query_as(
-            "SELECT discord_user_id, discord_display_name, is_on_discord, twitch_user_id FROM twitch_streamers WHERE LOWER(twitch_login) = 'profileuser'",
+            "SELECT i.discord_user_id, i.discord_display_name, i.is_on_discord, s.twitch_user_id \
+             FROM twitch_streamer_identities i \
+             JOIN twitch_streamers s ON s.twitch_user_id = i.twitch_user_id \
+             WHERE LOWER(s.twitch_login) = 'profileuser'",
         )
         .fetch_one(&pool)
         .await

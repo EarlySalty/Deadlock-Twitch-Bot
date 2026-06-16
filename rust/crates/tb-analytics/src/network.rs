@@ -2,7 +2,7 @@
 //!
 //! `twitch_streamers_partner_state` ist eine VIEW (in der Migration angelegt via
 //! `DROP VIEW IF EXISTS … CREATE VIEW …`). Sie projiziert `twitch_login` und
-//! `is_partner_active` (INTEGER 0/1) aus `twitch_streamers`.
+//! `is_partner_active` aus `twitch_partners` (einzige Wahrheitsquelle für Partner-Status).
 
 use sqlx::PgPool;
 

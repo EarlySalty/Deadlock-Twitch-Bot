@@ -1,3 +1,19 @@
+## #225 — Schema-Cleanup: twitch_streamers auf reine Identitätstabelle reduziert + is_partner BOOLEAN-Fix
+
+**Ausgangslage:** `twitch_streamers` enthielt seit der SQLite-Migration mehrere Felder die dort konzeptionell nicht hingehörten: `is_monitored_only` als Flag für "in Streamers aber kein Partner", `discord_user_id` obwohl das bereits vollständig in `twitch_streamer_identities` lag, und `archived_at` als Dashboard-Flag für Partner. Das führte immer wieder zu der falschen Annahme, `twitch_streamers ≈ twitch_partners` — zuletzt konkret in den Stats-Logging-Queries, die `is_partner` als `INTEGER` (0/1) statt als `BOOLEAN` behandelten und damit 6 Fehler/Minute in Prod produzierten. Dazu fehlte eine saubere Abbildung für Opt-out-Streamer und hard-gebannte Kanäle.
+
+**Was geändert wurde:** `twitch_streamers` ist jetzt eine reine Identitätstabelle mit genau drei Feldern: `twitch_login`, `twitch_user_id`, `created_at`. Alle abgeleiteten Informationen kommen aus den richtigen Tabellen. Neu dazu kommt `twitch_exclusions` für Opt-out- und Ban-Fälle. Alle Stats-Queries, Analytics und der gesamte Monitoring-Code wurden auf die neue Schemastruktur umgestellt. Der `is_partner`-BOOLEAN-Fehler in Stats, Market-Queries und Test-Fixtures ist behoben.
+
+**Wie es jetzt läuft:** Ob ein Streamer "nur Monitored" ist ergibt sich nicht mehr aus einem Flag sondern aus der Abwesenheit eines Eintrags in `twitch_partners` — das ist strukturell korrekt und kann nicht mehr aus dem Takt geraten. Opt-out (`fr4gm1nt`, `snaqeu`) und Ban (`skifahrertv`) sind in `twitch_exclusions` migriert: Opt-out ist reversibel (Reaktivierung setzt `reactivated_at`), Ban ist permanent. Die Discord-ID kommt in allen Pfaden ausschließlich aus `twitch_streamer_identities` und bleibt dort auch erhalten wenn ein Partner opt-out geht.
+
+## #224 — Migrationen 20260616–20260617 nachgeführt (Baseline-Konflikt behoben)
+
+**Ausgangslage:** Die Baseline-Migration enthielt ein `ALTER TABLE` auf einer komprimierten TimescaleDB-Hypertable, das auf Prod mit SQLSTATE 0A000 fehlschlug und alle nachfolgenden 7 Migrationen blockierte — sie blieben im Tracking unregistriert und wurden nicht angewendet.
+
+**Was geändert wurde:** Baseline und Observability-Migration wurden manuell in `_sqlx_migrations` mit korrektem SHA-384-Checksum eingetragen. Alle 7 ausstehenden Migrationen (20260616–20260617) liefen danach sauber durch.
+
+**Wie es jetzt läuft:** Prod hat 10 Migrationen registriert, keine Ausstehenden.
+
 ## #223 — Bot-Ban im Kanal: automatische Pause, Anleitung per DM, Selbstheilung
 
 **Ausgangslage:** Wird der Bot in einem Partner-Kanal gebannt oder als Moderator entfernt, kann er dort nichts mehr tun — Auto-Raid, Chat-Schutz und Analytics laufen ins Leere. In der alten Python-Version erkannte der Bot diesen Fall, schaltete den Kanal sauber auf Pause, schickte dem Streamer eine DM mit konkreter Anleitung zur Behebung und hob die Pause automatisch wieder auf, sobald der Bot zurück war. Beim Umbau auf das neue System (Rust-Cutover) fehlte diese komplette Reaktion: Ein Kanal-Ban blieb unbemerkt, der Streamer bekam keinen Hinweis, und selbst nach einer Entsperrung blieb die Pause hängen.

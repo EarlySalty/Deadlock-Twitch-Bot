@@ -309,8 +309,8 @@ async fn poll_intervall_aus_settings_mit_clamp() {
 async fn monitored_only_kanal_wird_getrackt_aber_nicht_als_partner() {
     let pool = pool_or_skip!("t4c_monitored_only");
     sqlx::query(
-        "INSERT INTO twitch_streamers (twitch_login, twitch_user_id, is_monitored_only)
-         VALUES ('lurker', '77', 1)",
+        "INSERT INTO twitch_streamers (twitch_login, twitch_user_id)
+         VALUES ('lurker', '77')",
     )
     .execute(&pool)
     .await

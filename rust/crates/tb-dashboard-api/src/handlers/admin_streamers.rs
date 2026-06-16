@@ -339,7 +339,10 @@ pub async fn detail_handler(
         .unwrap_or_else(|| row.twitch_login.clone());
     let verified = row.is_verified != 0;
     let is_live = row.is_live != 0;
-    let archived = row.archived_at.as_deref().is_some_and(|s| !s.trim().is_empty());
+    let archived = row
+        .archived_at
+        .as_deref()
+        .is_some_and(|s| !s.trim().is_empty());
     let archived_at = row.archived_at.clone();
     let created_at = row.created_at.clone();
     // planId = manual_plan_id || billing_plan_id || plan_name (erster nicht-leerer).
@@ -500,17 +503,17 @@ pub async fn verify_handler(
         tracing::error!("verify_streamer Fehler für {login}: {e}");
         ApiError::internal()
     })? {
-        VerifyStreamerResult::Verified => {
-            Ok(Json(json!({ "ok": true, "login": login, "mode": mode, "status": "verified" })))
-        }
+        VerifyStreamerResult::Verified => Ok(Json(
+            json!({ "ok": true, "login": login, "mode": mode, "status": "verified" }),
+        )),
         VerifyStreamerResult::NotAPartner => Err(ApiError::not_found()),
         // clear/failed werden oben abgefangen; dieser Marker erreicht den Handler
         // hier nie. Defensiv auf den Departner-Pfad mappen (kein toter no-op).
         VerifyStreamerResult::RequiresPartnerLifecycle => Err(ApiError::internal()),
         // Python antwortet bei unbekanntem Modus 200 ohne Mutation.
-        VerifyStreamerResult::UnknownMode => {
-            Ok(Json(json!({ "ok": false, "login": login, "mode": mode, "status": "unknown_mode" })))
-        }
+        VerifyStreamerResult::UnknownMode => Ok(Json(
+            json!({ "ok": false, "login": login, "mode": mode, "status": "unknown_mode" }),
+        )),
     }
 }
 
@@ -598,7 +601,9 @@ pub async fn discord_flag_handler(
             ApiError::internal()
         })?;
     if changed {
-        Ok(Json(json!({ "ok": true, "login": login, "isOnDiscord": is_on_discord })))
+        Ok(Json(
+            json!({ "ok": true, "login": login, "isOnDiscord": is_on_discord }),
+        ))
     } else {
         Err(ApiError::not_found())
     }
@@ -633,9 +638,7 @@ mod tests {
                 Some(d) => d,
                 None => {
                     if std::env::var("TB_TEST_REQUIRE_DB").as_deref() == Ok("1") {
-                        panic!(
-                            "TB_TEST_REQUIRE_DB=1 ist gesetzt, aber TB_TEST_DATABASE_URL fehlt"
-                        );
+                        panic!("TB_TEST_REQUIRE_DB=1 ist gesetzt, aber TB_TEST_DATABASE_URL fehlt");
                     }
                     eprintln!("SKIP: TB_TEST_DATABASE_URL nicht gesetzt");
                     return;
@@ -888,7 +891,7 @@ mod tests {
         assert_eq!(v["isLive"], false);
         assert!(v["planId"].is_null()); // kein Plan gesetzt
         assert!(!v["createdAt"].is_null()); // created_at = NOW()
-        // Stats: totalWatchHours statt totalDurationSeconds; Live-State-Felder vorhanden.
+                                            // Stats: totalWatchHours statt totalDurationSeconds; Live-State-Felder vorhanden.
         assert_eq!(v["stats"]["totalWatchHours"], 0.0);
         assert!(v["stats"].get("totalDurationSeconds").is_none());
         assert_eq!(v["stats"]["viewerCount"], 0);
@@ -923,10 +926,8 @@ mod tests {
         sqlx::query(
             r#"
             CREATE TABLE IF NOT EXISTS twitch_streamers (
-                twitch_login TEXT PRIMARY KEY, twitch_user_id TEXT, discord_user_id TEXT,
-                discord_display_name TEXT, is_on_discord INTEGER DEFAULT 0,
-                is_monitored_only INTEGER DEFAULT 0, created_at TIMESTAMPTZ DEFAULT NOW(),
-                archived_at TIMESTAMPTZ
+                twitch_login TEXT PRIMARY KEY, twitch_user_id TEXT,
+                created_at TIMESTAMPTZ DEFAULT NOW()
             )
             "#,
         )
@@ -1197,7 +1198,7 @@ mod tests {
         let dsn = db_dsn_or_skip!();
         let pool = make_write_pool(&dsn, "test_admin_h_discord_flag").await;
         sqlx::query(
-            "INSERT INTO twitch_streamers (twitch_login) VALUES ('df')",
+            "INSERT INTO twitch_streamers (twitch_login, twitch_user_id) VALUES ('df', 'uid_df')",
         )
         .execute(&pool)
         .await
@@ -1211,11 +1212,12 @@ mod tests {
         .await;
         let v = json_of(r).await;
         assert_eq!(v["isOnDiscord"], true);
-        let flag: (Option<i32>,) =
-            sqlx::query_as("SELECT is_on_discord FROM twitch_streamers WHERE twitch_login='df'")
-                .fetch_one(&pool)
-                .await
-                .unwrap();
+        let flag: (Option<i32>,) = sqlx::query_as(
+            "SELECT is_on_discord FROM twitch_streamer_identities WHERE twitch_user_id='uid_df'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
         assert_eq!(flag.0, Some(1));
     }
 
@@ -1239,7 +1241,10 @@ mod tests {
         assert!(body_bool(br#"{"x":"on"}"#, "x", false));
         assert!(!body_bool(br#"{"x":0}"#, "x", true));
         assert!(body_bool(br#"{}"#, "x", true)); // fehlt → default
-        assert_eq!(body_str(br#"{"mode":" temp "}"#, "mode").as_deref(), Some("temp"));
+        assert_eq!(
+            body_str(br#"{"mode":" temp "}"#, "mode").as_deref(),
+            Some("temp")
+        );
         assert!(body_str(br#"{"mode":"  "}"#, "mode").is_none()); // nur-Whitespace
         assert!(body_str(br#"not json"#, "mode").is_none());
     }

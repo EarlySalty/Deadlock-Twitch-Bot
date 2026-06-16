@@ -8,7 +8,7 @@
 //! Quellen:
 //! - `is_partner_channel_for_chat_tracking` → `twitch_streamers_partner_state.is_partner_active`
 //!   (partner_utils.py Z. 153–181; in bot.py L746 überschrieben: monitored-only → True)
-//! - `_is_monitored_only` → `twitch_streamers.is_monitored_only` (bot.py Z. 222–223)
+//! - `_is_monitored_only` → `twitch_streamers` ohne `twitch_partners`-Eintrag
 //! - `_is_deadlock_live` → `_is_target_game_live_for_chat` via `twitch_live_state`
 //!   (bot.py Z. 755–761, moderation.py Z. 2008–2080)
 //!
@@ -71,11 +71,7 @@ impl ChannelClassifier {
     }
 
     /// Klassifiziert einen Channel. Ergebnis wird 60s gecacht.
-    pub async fn classify(
-        &self,
-        broadcaster_login: &str,
-        _broadcaster_id: &str,
-    ) -> ChannelClass {
+    pub async fn classify(&self, broadcaster_login: &str, _broadcaster_id: &str) -> ChannelClass {
         let login = broadcaster_login.to_lowercase();
         let now_secs = Utc::now().timestamp();
 
@@ -99,18 +95,21 @@ impl ChannelClassifier {
     }
 
     async fn classify_from_db(&self, login: &str) -> ChannelClass {
-        // --- is_monitored_only (bot.py Z. 222–223, twitch_streamers.is_monitored_only = integer) ---
-        let is_monitored_only = sqlx::query_scalar::<_, i32>(
-            "SELECT COALESCE(is_monitored_only, 0) \
-             FROM twitch_streamers \
-             WHERE LOWER(twitch_login) = $1",
+        // --- is_monitored_only: Streamer ohne Partner-Eintrag ---
+        let is_monitored_only = sqlx::query_scalar::<_, bool>(
+            "SELECT NOT EXISTS ( \
+                 SELECT 1 FROM twitch_partners p \
+                 WHERE p.twitch_user_id = s.twitch_user_id \
+                    OR LOWER(p.twitch_login) = LOWER(s.twitch_login) \
+             ) \
+             FROM twitch_streamers s \
+             WHERE LOWER(s.twitch_login) = $1",
         )
         .bind(login)
         .fetch_optional(&self.pool)
         .await
         .unwrap_or(None)
-        .unwrap_or(0)
-            != 0;
+        .unwrap_or(false);
 
         // --- is_partner_channel_for_chat_tracking (partner_utils.py Z. 153–181)
         //     bot.py Z. 746–753: monitored-only → True für Tracking-Gate, aber KEIN Partner

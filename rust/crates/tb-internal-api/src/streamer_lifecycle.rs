@@ -383,7 +383,12 @@ pub async fn load_verify_source(
 
     // Fallback: aktiver Partner.
     if let Some(p) = load_active_partner(pool, login).await? {
-        if let Some(uid) = p.twitch_user_id.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+        if let Some(uid) = p
+            .twitch_user_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+        {
             return Ok(Some(VerifySource {
                 twitch_user_id: uid.to_string(),
                 discord_user_id: clean_opt(p.discord_user_id),
@@ -746,9 +751,9 @@ pub async fn backfill_tracked_stats_from_category(
 /// (`partner_registry.py:563`), aufgerufen aus `_cmd_add`
 /// (`admin.py:233`, `next_link_check_at = now + 30 Tage`).
 ///
-/// Der Add-Pfad legt die Streamer-Zeile bereits via
+/// Der Add-Pfad legt die Streamer-/Partnerzeilen bereits via
 /// `tb_analytics::streamers_crud::add_streamer` an; dieser Helfer trägt nur die
-/// beiden Link-Lifecycle-Spalten nach (idempotent, nur auf der aktiven Zeile).
+/// beiden Link-Lifecycle-Spalten auf der aktiven Partnerzeile nach.
 pub async fn backfill_require_link(
     pool: &PgPool,
     login: &str,
@@ -759,11 +764,13 @@ pub async fn backfill_require_link(
     let require_int: i32 = if require_link { 1 } else { 0 };
     sqlx::query(
         r#"
-        UPDATE twitch_streamers
+        UPDATE twitch_partners
         SET require_discord_link = $2,
             next_link_check_at = $3
         WHERE LOWER(twitch_login) = LOWER($1)
-          AND archived_at IS NULL
+          AND COALESCE(status, 'active') = 'active'
+          AND admin_archived_at IS NULL
+          AND departnered_at IS NULL
         "#,
     )
     .bind(&normalized)
@@ -900,7 +907,9 @@ pub async fn archive_with_message(
         }
         "unarchive" => {
             if !currently_archived {
-                return Ok(ArchiveOutcome::Done(format!("{login} ist nicht archiviert")));
+                return Ok(ArchiveOutcome::Done(format!(
+                    "{login} ist nicht archiviert"
+                )));
             }
             archive_streamer(pool, login, ArchiveMode::Unarchive).await?;
             Ok(ArchiveOutcome::Done(format!("{login} ent-archiviert")))
@@ -1073,14 +1082,7 @@ mod tests {
             r#"CREATE TABLE twitch_streamers (
                 twitch_login TEXT PRIMARY KEY,
                 twitch_user_id TEXT,
-                discord_user_id TEXT,
-                discord_display_name TEXT,
-                is_on_discord INTEGER DEFAULT 0,
-                require_discord_link INTEGER DEFAULT 0,
-                next_link_check_at TEXT,
-                is_monitored_only INTEGER DEFAULT 0,
-                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-                archived_at TEXT
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP
             )"#,
             r#"CREATE TABLE twitch_streamer_identities (
                 twitch_user_id TEXT PRIMARY KEY,
@@ -1159,13 +1161,18 @@ mod tests {
         assert_eq!(status.as_deref(), Some("departnered"));
         assert!(departnered_at.is_some());
         // clear_verification=false → Verify-Flag bleibt erhalten.
-        assert_eq!(mvp, Some(1), "ohne clear_verification bleibt verify erhalten");
+        assert_eq!(
+            mvp,
+            Some(1),
+            "ohne clear_verification bleibt verify erhalten"
+        );
 
-        let raid_enabled: Option<bool> =
-            sqlx::query_scalar("SELECT raid_enabled FROM twitch_raid_auth WHERE twitch_user_id = '42'")
-                .fetch_one(&pool)
-                .await
-                .unwrap();
+        let raid_enabled: Option<bool> = sqlx::query_scalar(
+            "SELECT raid_enabled FROM twitch_raid_auth WHERE twitch_user_id = '42'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
         assert_eq!(raid_enabled, Some(false), "raid-auth disabled");
 
         // Identity-Upsert hat stattgefunden.
@@ -1204,7 +1211,9 @@ mod tests {
     async fn departner_ohne_aktiven_partner_gibt_none() {
         let dsn = db_dsn_or_skip!();
         let pool = make_pool(&dsn, "test_lc_departner_none").await;
-        let res = departner_active_partner(&pool, "niemand", false).await.unwrap();
+        let res = departner_active_partner(&pool, "niemand", false)
+            .await
+            .unwrap();
         assert!(res.is_none());
     }
 
@@ -1214,7 +1223,13 @@ mod tests {
         let pool = make_pool(&dsn, "test_lc_promote_insert").await;
         let payload = VerificationPayload::for_mode("permanent").unwrap();
         promote_streamer_to_partner(
-            &pool, "newpartner", "777", Some("555"), Some("Name"), 1, &payload,
+            &pool,
+            "newpartner",
+            "777",
+            Some("555"),
+            Some("Name"),
+            1,
+            &payload,
         )
         .await
         .unwrap();
@@ -1286,11 +1301,15 @@ mod tests {
         .await
         .unwrap();
 
-        let copied = backfill_tracked_stats_from_category(&pool, "cat").await.unwrap();
+        let copied = backfill_tracked_stats_from_category(&pool, "cat")
+            .await
+            .unwrap();
         assert_eq!(copied, 2);
 
         // Zweiter Lauf kopiert nichts mehr (idempotent).
-        let copied2 = backfill_tracked_stats_from_category(&pool, "cat").await.unwrap();
+        let copied2 = backfill_tracked_stats_from_category(&pool, "cat")
+            .await
+            .unwrap();
         assert_eq!(copied2, 0);
     }
 
@@ -1298,15 +1317,23 @@ mod tests {
     async fn backfill_require_link_setzt_spalten() {
         let dsn = db_dsn_or_skip!();
         let pool = make_pool(&dsn, "test_lc_require_link").await;
-        sqlx::query("INSERT INTO twitch_streamers (twitch_login, twitch_user_id) VALUES ('linkme', '12')")
-            .execute(&pool)
-            .await
-            .unwrap();
+        sqlx::query(
+            "INSERT INTO twitch_streamers (twitch_login, twitch_user_id) VALUES ('linkme', '12')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO twitch_partners (id, twitch_login, twitch_user_id, status) VALUES (1, 'linkme', '12', 'active')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
 
         backfill_require_link(&pool, "linkme", true).await.unwrap();
 
         let (req, next): (Option<i32>, Option<String>) = sqlx::query_as(
-            "SELECT require_discord_link, next_link_check_at FROM twitch_streamers WHERE twitch_login = 'linkme'",
+            "SELECT require_discord_link, next_link_check_at FROM twitch_partners WHERE twitch_login = 'linkme'",
         )
         .fetch_one(&pool)
         .await
@@ -1390,9 +1417,16 @@ mod tests {
         assert_eq!(s.status.as_deref(), Some("active"));
         assert!(s.departnered_at.is_none(), "departnered_at genullt");
         assert!(s.admin_archived_at.is_none(), "admin_archived_at genullt");
-        assert!(s.technical_pause_reason.is_none(), "technical_pause_reason genullt");
+        assert!(
+            s.technical_pause_reason.is_none(),
+            "technical_pause_reason genullt"
+        );
         assert_eq!(s.manual_partner_opt_out, Some(0), "opt_out zurückgesetzt");
-        assert_eq!(s.silent_ban, Some(1), "Konfig-Spalte silent_ban bleibt erhalten");
+        assert_eq!(
+            s.silent_ban,
+            Some(1),
+            "Konfig-Spalte silent_ban bleibt erhalten"
+        );
 
         // archived → active ⇒ Raid-Auth wiederhergestellt.
         let raid: Option<bool> = sqlx::query_scalar(
@@ -1412,7 +1446,10 @@ mod tests {
         sqlx::query("INSERT INTO twitch_raid_auth (twitch_user_id, twitch_login, raid_enabled, needs_reauth) VALUES ('42', 'back', FALSE, TRUE)")
             .execute(&pool).await.unwrap();
 
-        reactivate_partner(&pool, "back").await.unwrap().expect("reaktiviert");
+        reactivate_partner(&pool, "back")
+            .await
+            .unwrap()
+            .expect("reaktiviert");
 
         let raid: Option<bool> = sqlx::query_scalar(
             "SELECT raid_enabled FROM twitch_raid_auth WHERE twitch_user_id = '42'",
@@ -1431,12 +1468,17 @@ mod tests {
         sqlx::query("INSERT INTO twitch_raid_auth (twitch_user_id, twitch_login, raid_enabled, needs_reauth) VALUES ('42', 'back', FALSE, FALSE)")
             .execute(&pool).await.unwrap();
 
-        let out = reactivate_partner(&pool, "back").await.unwrap().expect("reaktiviert");
+        let out = reactivate_partner(&pool, "back")
+            .await
+            .unwrap()
+            .expect("reaktiviert");
         assert_eq!(out.twitch_login, "back");
 
         let status: Option<String> =
             sqlx::query_scalar("SELECT status FROM twitch_partners WHERE id = 1")
-                .fetch_one(&pool).await.unwrap();
+                .fetch_one(&pool)
+                .await
+                .unwrap();
         assert_eq!(status.as_deref(), Some("active"));
 
         // departnered → active ⇒ Raid-Auth NICHT angefasst.
@@ -1446,7 +1488,11 @@ mod tests {
         .fetch_one(&pool)
         .await
         .unwrap();
-        assert_eq!(raid, Some(false), "departnered→active berührt raid auth nicht");
+        assert_eq!(
+            raid,
+            Some(false),
+            "departnered→active berührt raid auth nicht"
+        );
     }
 
     #[tokio::test]
@@ -1455,13 +1501,19 @@ mod tests {
         let pool = make_pool(&dsn, "test_lc_reactivate_active_noop").await;
         insert_active_partner(&pool, 1, "drag", "42").await;
 
-        let out = reactivate_partner(&pool, "drag").await.unwrap().expect("liefert Identität");
+        let out = reactivate_partner(&pool, "drag")
+            .await
+            .unwrap()
+            .expect("liefert Identität");
         assert_eq!(out.twitch_login, "drag");
         assert_eq!(out.twitch_user_id.as_deref(), Some("42"));
 
         // status bleibt active, keine Mutation.
-        let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM twitch_partners WHERE status = 'active'")
-            .fetch_one(&pool).await.unwrap();
+        let count: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM twitch_partners WHERE status = 'active'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
         assert_eq!(count, 1);
     }
 
@@ -1485,12 +1537,16 @@ mod tests {
 
         let status: Option<String> =
             sqlx::query_scalar("SELECT status FROM twitch_partners WHERE id = 1")
-                .fetch_one(&pool).await.unwrap();
+                .fetch_one(&pool)
+                .await
+                .unwrap();
         assert_eq!(status.as_deref(), Some("active"));
 
         // unarchive-Variante liefert die "ent-archiviert"-Meldung.
         insert_history_partner(&pool, 2, "back2", "43", STATUS_ARCHIVED).await;
-        let out2 = archive_with_message(&pool, "back2", "unarchive").await.unwrap();
+        let out2 = archive_with_message(&pool, "back2", "unarchive")
+            .await
+            .unwrap();
         assert_eq!(out2, ArchiveOutcome::Done("back2 ent-archiviert".into()));
     }
 
@@ -1500,7 +1556,9 @@ mod tests {
         let pool = make_pool(&dsn, "test_lc_archive_hist_conflict").await;
         insert_history_partner(&pool, 1, "gone", "42", STATUS_DEPARTNERED).await;
 
-        let out = archive_with_message(&pool, "gone", "unarchive").await.unwrap();
+        let out = archive_with_message(&pool, "gone", "unarchive")
+            .await
+            .unwrap();
         assert_eq!(
             out,
             ArchiveOutcome::Conflict("gone ist departnered und nicht nur archiviert".into())
@@ -1511,7 +1569,9 @@ mod tests {
     async fn archive_history_path_ohne_zeile_ist_notstored() {
         let dsn = db_dsn_or_skip!();
         let pool = make_pool(&dsn, "test_lc_archive_hist_notstored").await;
-        let out = archive_with_message(&pool, "nobody", "toggle").await.unwrap();
+        let out = archive_with_message(&pool, "nobody", "toggle")
+            .await
+            .unwrap();
         assert_eq!(out, ArchiveOutcome::NotStored);
     }
 }

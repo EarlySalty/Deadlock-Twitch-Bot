@@ -412,12 +412,15 @@ async fn stats_batch_inserts() {
         .unwrap();
     store.log_category(ts, &[sample("c", false)]).await.unwrap();
 
-    let tracked: Vec<(String, i32)> =
+    let tracked: Vec<(String, bool)> =
         sqlx::query_as("SELECT streamer, is_partner FROM twitch_stats_tracked ORDER BY streamer")
             .fetch_all(&pool)
             .await
             .unwrap();
-    assert_eq!(tracked, vec![("a".to_string(), 1), ("b".to_string(), 0)]);
+    assert_eq!(
+        tracked,
+        vec![("a".to_string(), true), ("b".to_string(), false)]
+    );
     let category: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM twitch_stats_category")
         .fetch_one(&pool)
         .await
@@ -583,7 +586,10 @@ async fn first_message_setzt_confirmed_first_ever_auf_session_chatter() {
     .fetch_one(&pool)
     .await
     .unwrap();
-    assert!(confirmed, "confirmed_first_ever muss nach first_message TRUE sein");
+    assert!(
+        confirmed,
+        "confirmed_first_ever muss nach first_message TRUE sein"
+    );
 
     // Ohne offene Session: kein Update, aber auch kein Fehler (Subquery → NULL).
     sqlx::query("UPDATE twitch_stream_sessions SET ended_at = NOW() WHERE id = $1")

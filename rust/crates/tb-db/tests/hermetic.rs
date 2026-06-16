@@ -63,7 +63,9 @@ fn cfg_single(dsn: String) -> DbConfig {
 #[tokio::test]
 async fn run_migrations_builds_full_schema_on_fresh_db() {
     let admin_dsn = skip_without_db!();
-    let admin = tb_db::connect(&cfg(admin_dsn.clone())).await.expect("admin connect");
+    let admin = tb_db::connect(&cfg(admin_dsn.clone()))
+        .await
+        .expect("admin connect");
 
     let nanos = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -92,11 +94,18 @@ async fn run_migrations_builds_full_schema_on_fresh_db() {
 
     // Migration zweimal -> Idempotenz gegen das frisch gebaute Vollschema.
     tb_db::run_migrations(&pool).await.expect("migrate (1st)");
-    tb_db::run_migrations(&pool).await.expect("migrate (2nd, idempotent)");
+    tb_db::run_migrations(&pool)
+        .await
+        .expect("migrate (2nd, idempotent)");
 
     let scalar_i64 = |sql: &'static str| {
         let pool = pool.clone();
-        async move { sqlx::query_scalar::<_, i64>(sql).fetch_one(&pool).await.unwrap() }
+        async move {
+            sqlx::query_scalar::<_, i64>(sql)
+                .fetch_one(&pool)
+                .await
+                .unwrap()
+        }
     };
 
     // ~60+ Tabellen (volles Storage-Schema + social_media + engagement + exp).
@@ -129,7 +138,10 @@ async fn run_migrations_builds_full_schema_on_fresh_db() {
          WHERE hypertable_name = 'twitch_observability_events' AND compression_enabled",
     )
     .await;
-    assert_eq!(hypertable, 1, "observability-Hypertable mit Compression fehlt");
+    assert_eq!(
+        hypertable, 1,
+        "observability-Hypertable mit Compression fehlt"
+    );
 
     // Raid-Identity-FKs (aus dem Repair-Pfad).
     let raid_fks = scalar_i64(
@@ -137,7 +149,10 @@ async fn run_migrations_builds_full_schema_on_fresh_db() {
          AND conname LIKE '%raid_history_ref%'",
     )
     .await;
-    assert_eq!(raid_fks, 2, "beide raid_history-Referenz-FKs müssen existieren");
+    assert_eq!(
+        raid_fks, 2,
+        "beide raid_history-Referenz-FKs müssen existieren"
+    );
 
     // Token-Lifecycle-Spalten.
     let token_cols = scalar_i64(
@@ -145,7 +160,10 @@ async fn run_migrations_builds_full_schema_on_fresh_db() {
          AND column_name IN ('grace_expires_at', 'user_dm_sent', 'reminder_sent', 'role_removed')",
     )
     .await;
-    assert_eq!(token_cols, 4, "alle 4 Token-Lifecycle-Spalten müssen existieren");
+    assert_eq!(
+        token_cols, 4,
+        "alle 4 Token-Lifecycle-Spalten müssen existieren"
+    );
 
     // social_media Phase 0: oauth consumed_at + Index.
     let consumed = scalar_i64(
@@ -215,10 +233,7 @@ async fn row_structs_map_real_columns() {
         "CREATE TABLE IF NOT EXISTS twitch_streamers (
             twitch_login TEXT PRIMARY KEY,
             twitch_user_id TEXT,
-            discord_user_id TEXT,
-            is_on_discord INTEGER DEFAULT 0,
-            created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-            is_monitored_only INTEGER DEFAULT 0
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP
         )",
     )
     .execute(&pool)
@@ -245,7 +260,7 @@ async fn row_structs_map_real_columns() {
         .execute(&pool).await.unwrap();
 
     let s: TwitchStreamerRow =
-        sqlx::query_as("SELECT twitch_login, twitch_user_id, discord_user_id, is_on_discord, created_at, is_monitored_only FROM twitch_streamers WHERE twitch_login = 'dragskope'")
+        sqlx::query_as("SELECT twitch_login, twitch_user_id, created_at FROM twitch_streamers WHERE twitch_login = 'dragskope'")
             .fetch_one(&pool).await.unwrap();
     assert_eq!(s.twitch_login, "dragskope");
     assert_eq!(s.twitch_user_id.as_deref(), Some("42"));

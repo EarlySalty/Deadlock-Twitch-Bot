@@ -72,7 +72,11 @@ where
 /// Normalisiert einen Kanal-Login wie Pythons `_record_chat_subscription_state`:
 /// trimmen, Kleinschreibung, führendes `#` entfernen.
 fn normalize_login(login: &str) -> String {
-    login.trim().to_lowercase().trim_start_matches('#').to_string()
+    login
+        .trim()
+        .to_lowercase()
+        .trim_start_matches('#')
+        .to_string()
 }
 
 /// Core-Subscriptions des Monitorings: (Typ, Version).
@@ -98,12 +102,28 @@ pub const BROADCASTER_TELEMETRY_SUBSCRIPTIONS: [(&str, &str, &str); 12] = [
     ("channel.cheer", "1", "bits:read"),
     ("channel.bits.use", "1", "bits:read"),
     ("channel.hype_train.begin", "1", "channel:read:hype_train"),
-    ("channel.hype_train.progress", "1", "channel:read:hype_train"),
+    (
+        "channel.hype_train.progress",
+        "1",
+        "channel:read:hype_train",
+    ),
     ("channel.hype_train.end", "1", "channel:read:hype_train"),
     ("channel.subscribe", "1", "channel:read:subscriptions"),
-    ("channel.subscription.gift", "1", "channel:read:subscriptions"),
-    ("channel.subscription.message", "1", "channel:read:subscriptions"),
-    ("channel.subscription.end", "1", "channel:read:subscriptions"),
+    (
+        "channel.subscription.gift",
+        "1",
+        "channel:read:subscriptions",
+    ),
+    (
+        "channel.subscription.message",
+        "1",
+        "channel:read:subscriptions",
+    ),
+    (
+        "channel.subscription.end",
+        "1",
+        "channel:read:subscriptions",
+    ),
     ("channel.ad_break.begin", "1", "channel:read:ads"),
     (
         "channel.channel_points_automatic_reward_redemption.add",
@@ -128,7 +148,11 @@ pub const MODERATOR_TELEMETRY_SUBSCRIPTIONS: [(&str, &str, &str); 5] = [
     ("channel.ban", "1", "moderator:manage:banned_users"),
     ("channel.unban", "1", "moderator:manage:banned_users"),
     ("channel.shoutout.create", "1", "moderator:manage:shoutouts"),
-    ("channel.shoutout.receive", "1", "moderator:manage:shoutouts"),
+    (
+        "channel.shoutout.receive",
+        "1",
+        "moderator:manage:shoutouts",
+    ),
     ("channel.follow", "2", "moderator:read:followers"),
 ];
 
@@ -347,7 +371,10 @@ impl SubscriptionManager {
                     Some(PASSIVE_LURKER_DETAIL),
                 );
             }
-            tracing::debug!(login, "Chat-Reconcile: passiver Lurker — Subscribe übersprungen");
+            tracing::debug!(
+                login,
+                "Chat-Reconcile: passiver Lurker — Subscribe übersprungen"
+            );
             return false;
         }
 
@@ -386,9 +413,14 @@ impl SubscriptionManager {
         }
 
         let is_monitored_only: bool = sqlx::query_scalar(
-            "SELECT COALESCE(is_monitored_only, 0) <> 0 FROM twitch_streamers \
-             WHERE ($1 <> '' AND twitch_user_id = $1) \
-                OR ($2 <> '' AND LOWER(twitch_login) = $2) \
+            "SELECT TRUE FROM twitch_streamers s \
+             WHERE (($1 <> '' AND s.twitch_user_id = $1) \
+                OR ($2 <> '' AND LOWER(s.twitch_login) = $2)) \
+               AND NOT EXISTS ( \
+                   SELECT 1 FROM twitch_partners p \
+                   WHERE p.twitch_user_id = s.twitch_user_id \
+                      OR LOWER(p.twitch_login) = LOWER(s.twitch_login) \
+               ) \
              LIMIT 1",
         )
         .bind(target_id)
@@ -466,10 +498,7 @@ impl SubscriptionManager {
     /// Subscription-States eines Kanals als `(sub_type, state, detail)`-Tripel —
     /// Diagnose-Quelle für die Join-Entscheidung (Port von Pythons
     /// `get_channel_subscription_state`).
-    pub fn chat_subscription_states(
-        &self,
-        login: &str,
-    ) -> Vec<(String, String, Option<String>)> {
+    pub fn chat_subscription_states(&self, login: &str) -> Vec<(String, String, Option<String>)> {
         let normalized_login = normalize_login(login);
         self.subscription_state
             .lock()
@@ -755,7 +784,11 @@ impl SubscriptionManager {
                 } else if msg.contains("429") {
                     // Rate-Limit: transient, nächster Reconcile-Zyklus versucht erneut.
                     // debug! statt warn! — sonst gleicher Spam wie 403 (48 Kanäle × 30 min).
-                    tracing::debug!(sub_type, login, "EventSub 429: Rate-Limit — Retry nächster Zyklus");
+                    tracing::debug!(
+                        sub_type,
+                        login,
+                        "EventSub 429: Rate-Limit — Retry nächster Zyklus"
+                    );
                 } else if msg.contains("401") {
                     // App-Token abgelaufen/ungültig: TokenManager übernimmt Refresh.
                     // debug! — betrifft alle Kanäle gleichzeitig, würde sonst 48× spammen.
@@ -765,7 +798,11 @@ impl SubscriptionManager {
                     // braucht Affiliate/Partner-Tier) oder Scope-Edge-Case. Python
                     // fängt das in den broadcaster_subs still auf debug ab — nächster
                     // Reconcile-Zyklus versucht es erneut, falls sich die Lage ändert.
-                    tracing::debug!(sub_type, login, "EventSub 400: Kanal nicht berechtigt — Retry nächster Zyklus");
+                    tracing::debug!(
+                        sub_type,
+                        login,
+                        "EventSub 400: Kanal nicht berechtigt — Retry nächster Zyklus"
+                    );
                 } else {
                     tracing::warn!(%error, sub_type, login, "EventSub: Subscription fehlgeschlagen");
                 }

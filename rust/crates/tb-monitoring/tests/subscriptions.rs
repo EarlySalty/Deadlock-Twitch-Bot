@@ -236,7 +236,9 @@ async fn broadcaster_telemetry_subs_scope_gefiltert_und_mit_bearer() {
         ]
     );
     // Hype-Train wurde mangels Scope nicht versucht.
-    assert!(!creates.iter().any(|(t, _)| t.starts_with("channel.hype_train")));
+    assert!(!creates
+        .iter()
+        .any(|(t, _)| t.starts_with("channel.hype_train")));
 
     // Jeder Telemetrie-Create lief mit dem Broadcaster-Token als Bearer.
     let bearers = transport.bearers.lock().unwrap().clone();
@@ -296,7 +298,13 @@ async fn first_message_sub_nutzt_bot_token_und_user_id_condition() {
     drop(conditions);
 
     let bearers = transport.bearers.lock().unwrap().clone();
-    assert_eq!(bearers, vec![("channel.chat.user_first_message".to_string(), Some("BOTTOKEN".to_string()))]);
+    assert_eq!(
+        bearers,
+        vec![(
+            "channel.chat.user_first_message".to_string(),
+            Some("BOTTOKEN".to_string())
+        )]
+    );
     drop(bearers);
 
     // Zweiter Aufruf: getrackt → kein neuer Create.
@@ -308,9 +316,21 @@ async fn first_message_sub_nutzt_bot_token_und_user_id_condition() {
     assert_eq!(transport.creates.lock().unwrap().len(), 1);
 
     // Leere ID / leerer Bot-Token / leere Bot-ID → kein Create.
-    assert!(!manager.ensure_first_message_subscription(" ", "BOTID", "BOTTOKEN", "p").await);
-    assert!(!manager.ensure_first_message_subscription("555", "BOTID", "  ", "p").await);
-    assert!(!manager.ensure_first_message_subscription("555", " ", "BOTTOKEN", "p").await);
+    assert!(
+        !manager
+            .ensure_first_message_subscription(" ", "BOTID", "BOTTOKEN", "p")
+            .await
+    );
+    assert!(
+        !manager
+            .ensure_first_message_subscription("555", "BOTID", "  ", "p")
+            .await
+    );
+    assert!(
+        !manager
+            .ensure_first_message_subscription("555", " ", "BOTTOKEN", "p")
+            .await
+    );
     assert_eq!(transport.creates.lock().unwrap().len(), 1);
 }
 
@@ -345,9 +365,14 @@ async fn moderator_telemetry_subs_scope_gefiltert_mit_bot_token_und_moderator_id
         .map(|(t, _)| t.as_str())
         .collect();
     types.sort_unstable();
-    assert_eq!(types, vec!["channel.ban", "channel.follow", "channel.unban"]);
+    assert_eq!(
+        types,
+        vec!["channel.ban", "channel.follow", "channel.unban"]
+    );
     // Shoutout mangels Scope nicht versucht.
-    assert!(!creates.iter().any(|(t, _)| t.starts_with("channel.shoutout")));
+    assert!(!creates
+        .iter()
+        .any(|(t, _)| t.starts_with("channel.shoutout")));
     drop(creates);
 
     // Alle Condition tragen broadcaster_user_id + moderator_user_id:<bot>.
@@ -372,7 +397,9 @@ async fn moderator_telemetry_subs_scope_gefiltert_mit_bot_token_und_moderator_id
 
     // Jeder Create lief mit dem Bot-Token als Bearer.
     let bearers = transport.bearers.lock().unwrap().clone();
-    assert!(bearers.iter().all(|(_, b)| b.as_deref() == Some("BOTTOKEN")));
+    assert!(bearers
+        .iter()
+        .all(|(_, b)| b.as_deref() == Some("BOTTOKEN")));
     drop(bearers);
 
     // Zweiter Aufruf: getrackt → kein neuer Create.
@@ -420,8 +447,8 @@ async fn chat_subscribe_passiver_lurker_schreibt_state_statt_zu_subscriben() {
 
     // Monitored-only-Kanal OHNE Partner-State und OHNE Raid-Auth → passiver Lurker.
     sqlx::query(
-        "INSERT INTO twitch_streamers (twitch_login, twitch_user_id, is_monitored_only) \
-         VALUES ('lurker', '900', 1)",
+        "INSERT INTO twitch_streamers (twitch_login, twitch_user_id) \
+         VALUES ('lurker', '900')",
     )
     .execute(&pool)
     .await
@@ -442,7 +469,10 @@ async fn chat_subscribe_passiver_lurker_schreibt_state_statt_zu_subscriben() {
     let states = manager.chat_subscription_states("lurker");
     let mut keys: Vec<&str> = states.iter().map(|(t, _, _)| t.as_str()).collect();
     keys.sort_unstable();
-    assert_eq!(keys, vec!["channel.chat.message", "channel.chat.notification"]);
+    assert_eq!(
+        keys,
+        vec!["channel.chat.message", "channel.chat.notification"]
+    );
     for (_, state, detail) in &states {
         assert_eq!(state, tb_chat::PASSIVE_LURKER_STATE);
         assert_eq!(detail.as_deref(), Some(tb_chat::PASSIVE_LURKER_DETAIL));
@@ -462,10 +492,17 @@ async fn chat_subscribe_aktiver_partner_subscribed_normal() {
         CapacitySnapshotStore::new(pool.clone()),
     );
 
-    // Monitored-only, ABER aktiver Partner → kein Lurker (is_partner_active=1).
+    // Streamer mit aktivem Partner → kein Lurker.
     sqlx::query(
-        "INSERT INTO twitch_streamers (twitch_login, twitch_user_id, is_monitored_only) \
-         VALUES ('partner', '901', 1)",
+        "INSERT INTO twitch_streamers (twitch_login, twitch_user_id) \
+         VALUES ('partner', '901')",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO twitch_partners (twitch_user_id, twitch_login, status) \
+         VALUES ('901', 'partner', 'active')",
     )
     .execute(&pool)
     .await
@@ -488,7 +525,10 @@ async fn chat_subscribe_aktiver_partner_subscribed_normal() {
     let creates = transport.creates.lock().unwrap().clone();
     let mut types: Vec<&str> = creates.iter().map(|(t, _)| t.as_str()).collect();
     types.sort_unstable();
-    assert_eq!(types, vec!["channel.chat.message", "channel.chat.notification"]);
+    assert_eq!(
+        types,
+        vec!["channel.chat.message", "channel.chat.notification"]
+    );
     // Kein Lurker-State geschrieben.
     assert!(manager.chat_subscription_states("partner").is_empty());
 }
@@ -508,8 +548,8 @@ async fn chat_subscribe_lurker_mit_raid_auth_subscribed_normal() {
 
     // Monitored-only, kein Partner, ABER Raid-Auth vorhanden → kein Lurker.
     sqlx::query(
-        "INSERT INTO twitch_streamers (twitch_login, twitch_user_id, is_monitored_only) \
-         VALUES ('raider', '902', 1)",
+        "INSERT INTO twitch_streamers (twitch_login, twitch_user_id) \
+         VALUES ('raider', '902')",
     )
     .execute(&pool)
     .await

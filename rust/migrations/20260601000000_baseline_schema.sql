@@ -54,25 +54,16 @@ CREATE OR REPLACE FUNCTION public.sync_twitch_streamer_identity_from_streamers()
                 INSERT INTO twitch_streamer_identities (
                     twitch_user_id,
                     twitch_login,
-                    discord_user_id,
-                    discord_display_name,
-                    is_on_discord,
                     created_at,
                     updated_at
                 ) VALUES (
                     NEW.twitch_user_id,
                     LOWER(NEW.twitch_login),
-                    NEW.discord_user_id,
-                    NEW.discord_display_name,
-                    COALESCE(NEW.is_on_discord, 0),
                     CURRENT_TIMESTAMP::text,
                     CURRENT_TIMESTAMP::text
                 )
                 ON CONFLICT (twitch_user_id) DO UPDATE SET
                     twitch_login = EXCLUDED.twitch_login,
-                    discord_user_id = COALESCE(EXCLUDED.discord_user_id, twitch_streamer_identities.discord_user_id),
-                    discord_display_name = COALESCE(EXCLUDED.discord_display_name, twitch_streamer_identities.discord_display_name),
-                    is_on_discord = COALESCE(EXCLUDED.is_on_discord, twitch_streamer_identities.is_on_discord),
                     updated_at = CURRENT_TIMESTAMP::text;
             END IF;
             RETURN NEW;
@@ -1451,7 +1442,7 @@ CREATE TABLE IF NOT EXISTS public.twitch_stats_category (
     ts_utc text,
     streamer text,
     viewer_count integer,
-    is_partner integer DEFAULT 0,
+    is_partner boolean DEFAULT false,
     game_name text,
     stream_title text,
     tags text
@@ -1461,7 +1452,7 @@ CREATE TABLE IF NOT EXISTS public.twitch_stats_tracked (
     ts_utc text,
     streamer text,
     viewer_count integer,
-    is_partner integer DEFAULT 0,
+    is_partner boolean DEFAULT false,
     game_name text,
     stream_title text,
     tags text
@@ -1523,12 +1514,16 @@ CREATE TABLE IF NOT EXISTS public.twitch_streamer_invites (
 CREATE TABLE IF NOT EXISTS public.twitch_streamers (
     twitch_login text NOT NULL,
     twitch_user_id text,
-    discord_user_id text,
-    discord_display_name text,
-    is_on_discord integer DEFAULT 0,
-    created_at text DEFAULT CURRENT_TIMESTAMP,
-    archived_at text,
-    is_monitored_only integer DEFAULT 0
+    created_at text DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS public.twitch_exclusions (
+    twitch_user_id text PRIMARY KEY,
+    kind text NOT NULL,
+    reason text,
+    excluded_at timestamp with time zone DEFAULT now() NOT NULL,
+    reactivated_at timestamp with time zone,
+    CONSTRAINT twitch_exclusions_kind_check CHECK ((kind = ANY (ARRAY['opt_out'::text, 'banned'::text])))
 );
 
 CREATE OR REPLACE VIEW public.twitch_streamers_partner_state AS
@@ -2646,7 +2641,7 @@ DROP TRIGGER IF EXISTS trg_twitch_partners_sync_identity ON public.twitch_partne
 CREATE TRIGGER trg_twitch_partners_sync_identity AFTER INSERT OR UPDATE OF twitch_login, twitch_user_id, status ON public.twitch_partners FOR EACH ROW EXECUTE FUNCTION public.sync_twitch_streamer_identity_from_partners();
 
 DROP TRIGGER IF EXISTS trg_twitch_streamers_sync_identity ON public.twitch_streamers;
-CREATE TRIGGER trg_twitch_streamers_sync_identity AFTER INSERT OR UPDATE OF twitch_login, twitch_user_id, discord_user_id, discord_display_name, is_on_discord ON public.twitch_streamers FOR EACH ROW EXECUTE FUNCTION public.sync_twitch_streamer_identity_from_streamers();
+CREATE TRIGGER trg_twitch_streamers_sync_identity AFTER INSERT OR UPDATE OF twitch_login, twitch_user_id ON public.twitch_streamers FOR EACH ROW EXECUTE FUNCTION public.sync_twitch_streamer_identity_from_streamers();
 
 DO $do$ BEGIN
     ALTER TABLE public.social_media_clip_approval
@@ -2724,4 +2719,3 @@ DO $do$ BEGIN
 EXCEPTION WHEN duplicate_object OR duplicate_table
     OR invalid_table_definition OR feature_not_supported THEN NULL;
 END $do$;
-

@@ -60,10 +60,18 @@ async fn prod_owner_tables_match_contract() {
         streamers.get("twitch_user_id").map(String::as_str),
         Some("text")
     );
-    assert_eq!(
-        streamers.get("is_on_discord").map(String::as_str),
-        Some("integer")
-    );
+    for removed in [
+        "discord_user_id",
+        "discord_display_name",
+        "is_on_discord",
+        "is_monitored_only",
+        "archived_at",
+    ] {
+        assert!(
+            !streamers.contains_key(removed),
+            "{removed} darf nicht mehr auf twitch_streamers liegen"
+        );
+    }
 
     let partners = column_types(&pool, "twitch_partners").await;
     assert_eq!(partners.get("id").map(String::as_str), Some("bigint"));

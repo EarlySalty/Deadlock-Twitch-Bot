@@ -9,8 +9,10 @@ use tb_analytics::streamers::{active_streamers, StreamerListRow};
 use tb_http_core::{ApiError, AuthLevel};
 
 #[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct StreamerJson {
     pub login: String,
+    pub is_partner: bool,
     pub is_live: bool,
     pub viewer_count: i32,
 }
@@ -19,15 +21,11 @@ impl From<StreamerListRow> for StreamerJson {
     fn from(r: StreamerListRow) -> Self {
         Self {
             login: r.twitch_login,
+            is_partner: true,
             is_live: r.is_live != 0,
             viewer_count: r.viewer_count,
         }
     }
-}
-
-#[derive(Serialize)]
-pub struct StreamersResponse {
-    pub streamers: Vec<StreamerJson>,
 }
 
 /// `GET /twitch/api/v2/streamers`
@@ -41,9 +39,9 @@ pub async fn streamers_handler(
     let rows = active_streamers(&pool)
         .await
         .map_err(|_| ApiError::internal())?;
-    Ok(Json(StreamersResponse {
-        streamers: rows.into_iter().map(StreamerJson::from).collect(),
-    }))
+    Ok(Json(
+        rows.into_iter().map(StreamerJson::from).collect::<Vec<_>>(),
+    ))
 }
 
 #[cfg(test)]
@@ -73,9 +71,7 @@ mod tests {
                 Some(d) => d,
                 None => {
                     if std::env::var("TB_TEST_REQUIRE_DB").as_deref() == Ok("1") {
-                        panic!(
-                            "TB_TEST_REQUIRE_DB=1 ist gesetzt, aber TB_TEST_DATABASE_URL fehlt"
-                        );
+                        panic!("TB_TEST_REQUIRE_DB=1 ist gesetzt, aber TB_TEST_DATABASE_URL fehlt");
                     }
                     eprintln!("SKIP: TB_TEST_DATABASE_URL nicht gesetzt");
                     return;
@@ -189,7 +185,10 @@ mod tests {
         assert_eq!(res.status(), StatusCode::OK);
         let b = axum::body::to_bytes(res.into_body(), 1024).await.unwrap();
         let v: serde_json::Value = serde_json::from_slice(&b).unwrap();
-        assert!(v["streamers"].is_array());
-        assert_eq!(v["streamers"][0]["login"], "nani");
+        assert!(v.is_array());
+        assert_eq!(v[0]["login"], "nani");
+        assert_eq!(v[0]["isPartner"], true);
+        assert_eq!(v[0]["isLive"], false);
+        assert_eq!(v[0]["viewerCount"], 0);
     }
 }

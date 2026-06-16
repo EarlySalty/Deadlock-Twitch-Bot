@@ -320,7 +320,16 @@ const CTE_PARTNER_STATE: &str = r#", partner_state AS (
         silent_raid, is_monitored_only, is_verified, is_partner_active, live_ping_enabled, status,
         technical_pause_reason, operational_state
     FROM (
-        SELECT s.*,
+        SELECT s.twitch_login, s.twitch_user_id, s.require_discord_link, s.discord_user_id,
+            s.discord_display_name, s.is_on_discord, s.manual_partner_opt_out, s.created_at,
+            s.archived_at, s.raid_bot_enabled, s.silent_ban, s.silent_raid,
+            CASE WHEN NOT EXISTS (
+                SELECT 1 FROM twitch_partners p
+                WHERE p.twitch_user_id = s.twitch_user_id
+                   OR LOWER(p.twitch_login) = LOWER(s.twitch_login)
+            ) THEN 1 ELSE 0 END AS is_monitored_only,
+            s.is_verified, s.is_partner_active, s.live_ping_enabled, s.status,
+            s.technical_pause_reason, s.operational_state,
             ROW_NUMBER() OVER (
                 PARTITION BY LOWER(s.twitch_login)
                 ORDER BY

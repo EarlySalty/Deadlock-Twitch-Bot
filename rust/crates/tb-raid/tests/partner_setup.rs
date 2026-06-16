@@ -98,12 +98,7 @@ async fn apply_ddl(pool: &PgPool) {
             id BIGSERIAL PRIMARY KEY,
             twitch_login TEXT UNIQUE NOT NULL,
             twitch_user_id TEXT,
-            created_at TIMESTAMPTZ DEFAULT NOW(),
-            discord_user_id TEXT,
-            discord_display_name TEXT,
-            is_on_discord INTEGER DEFAULT 0,
-            archived_at TIMESTAMPTZ,
-            is_monitored_only INTEGER DEFAULT 0
+            created_at TIMESTAMPTZ DEFAULT NOW()
         )"#,
         r#"CREATE TABLE streamer_plans (
             twitch_user_id TEXT PRIMARY KEY,
@@ -174,8 +169,15 @@ async fn promote(pool: &PgPool, args: &PromotePartnerArgs) {
 async fn erst_promotion_legt_partner_an_und_loescht_quelle() {
     let pool = pool_or_skip!("ps_insert");
     sqlx::query(
-        "INSERT INTO twitch_streamers (twitch_login, twitch_user_id, discord_user_id, discord_display_name)
-         VALUES ('neuling', '111', '999000', 'Quell-Name')",
+        "INSERT INTO twitch_streamers (twitch_login, twitch_user_id)
+         VALUES ('neuling', '111')",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO twitch_streamer_identities (twitch_user_id, twitch_login, discord_user_id, discord_display_name)
+         VALUES ('111', 'neuling', '999000', 'Quell-Name')",
     )
     .execute(&pool)
     .await
@@ -222,11 +224,12 @@ async fn erst_promotion_legt_partner_an_und_loescht_quelle() {
     assert_eq!(on_discord, Some(1));
 
     // clear_source: Quelle gelöscht.
-    let remaining: i64 =
-        sqlx::query_scalar("SELECT COUNT(*)::bigint FROM twitch_streamers WHERE twitch_user_id = '111'")
-            .fetch_one(&pool)
-            .await
-            .unwrap();
+    let remaining: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*)::bigint FROM twitch_streamers WHERE twitch_user_id = '111'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
     assert_eq!(remaining, 0);
 }
 
@@ -269,7 +272,11 @@ async fn re_promotion_bewahrt_partner_einstellungen() {
     .unwrap();
     assert_eq!(row.0, 1, "silent_ban bewahrt");
     assert_eq!(row.1, 1, "silent_raid bewahrt");
-    assert_eq!(row.2, Some(1313624729466441769), "live_ping_role_id bewahrt");
+    assert_eq!(
+        row.2,
+        Some(1313624729466441769),
+        "live_ping_role_id bewahrt"
+    );
     assert_eq!(row.3, 0, "live_ping_enabled bewahrt");
     assert_eq!(row.4, 1, "require_discord_link bewahrt");
     assert_eq!(row.5.as_deref(), Some("admin"));
@@ -349,28 +356,34 @@ async fn identity_upsert_coalesce_bewahrt_bestehende_werte() {
 #[tokio::test]
 async fn related_tables_werden_normalisiert() {
     let pool = pool_or_skip!("ps_related");
-    sqlx::query("INSERT INTO twitch_raid_auth (twitch_user_id, twitch_login) VALUES ('666', 'altname')")
-        .execute(&pool)
-        .await
-        .unwrap();
-    sqlx::query("INSERT INTO twitch_live_state (twitch_user_id, streamer_login) VALUES ('666', 'altname')")
-        .execute(&pool)
-        .await
-        .unwrap();
+    sqlx::query(
+        "INSERT INTO twitch_raid_auth (twitch_user_id, twitch_login) VALUES ('666', 'altname')",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO twitch_live_state (twitch_user_id, streamer_login) VALUES ('666', 'altname')",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
 
     promote(&pool, &default_args("NeuName", "666")).await;
 
-    let auth_login: String =
-        sqlx::query_scalar("SELECT twitch_login FROM twitch_raid_auth WHERE twitch_user_id = '666'")
-            .fetch_one(&pool)
-            .await
-            .unwrap();
+    let auth_login: String = sqlx::query_scalar(
+        "SELECT twitch_login FROM twitch_raid_auth WHERE twitch_user_id = '666'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
     assert_eq!(auth_login, "neuname");
-    let live_login: String =
-        sqlx::query_scalar("SELECT streamer_login FROM twitch_live_state WHERE twitch_user_id = '666'")
-            .fetch_one(&pool)
-            .await
-            .unwrap();
+    let live_login: String = sqlx::query_scalar(
+        "SELECT streamer_login FROM twitch_live_state WHERE twitch_user_id = '666'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
     assert_eq!(live_login, "neuname");
 }
 
@@ -405,9 +418,13 @@ async fn hard_pause_blocked_wird_nicht_reaktiviert() {
 
     let result = {
         let mut tx = pool.begin().await.unwrap();
-        let r = promote_streamer_to_partner(&mut tx, &default_args("gebannt", "1001"), chrono::Utc::now())
-            .await
-            .unwrap();
+        let r = promote_streamer_to_partner(
+            &mut tx,
+            &default_args("gebannt", "1001"),
+            chrono::Utc::now(),
+        )
+        .await
+        .unwrap();
         tx.commit().await.unwrap();
         r
     };
@@ -440,13 +457,20 @@ async fn hard_pause_bot_banned_case_insensitive() {
 
     let result = {
         let mut tx = pool.begin().await.unwrap();
-        let r = promote_streamer_to_partner(&mut tx, &default_args("killed", "1002"), chrono::Utc::now())
-            .await
-            .unwrap();
+        let r = promote_streamer_to_partner(
+            &mut tx,
+            &default_args("killed", "1002"),
+            chrono::Utc::now(),
+        )
+        .await
+        .unwrap();
         tx.commit().await.unwrap();
         r
     };
-    assert!(!result.reactivated, "bot_banned (case/whitespace) blockiert");
+    assert!(
+        !result.reactivated,
+        "bot_banned (case/whitespace) blockiert"
+    );
     assert_eq!(result.hard_pause_reason.as_deref(), Some("bot_banned"));
 
     let pause: Option<String> = sqlx::query_scalar(
@@ -455,7 +479,11 @@ async fn hard_pause_bot_banned_case_insensitive() {
     .fetch_one(&pool)
     .await
     .unwrap();
-    assert_eq!(pause.as_deref(), Some("  Bot_Banned "), "Original-Grund unverändert");
+    assert_eq!(
+        pause.as_deref(),
+        Some("  Bot_Banned "),
+        "Original-Grund unverändert"
+    );
 }
 
 #[tokio::test]
@@ -473,9 +501,13 @@ async fn weiche_pause_wird_normal_reaktiviert() {
 
     let result = {
         let mut tx = pool.begin().await.unwrap();
-        let r = promote_streamer_to_partner(&mut tx, &default_args("tokenweg", "1003"), chrono::Utc::now())
-            .await
-            .unwrap();
+        let r = promote_streamer_to_partner(
+            &mut tx,
+            &default_args("tokenweg", "1003"),
+            chrono::Utc::now(),
+        )
+        .await
+        .unwrap();
         tx.commit().await.unwrap();
         r
     };
@@ -501,19 +533,21 @@ async fn weiche_pause_wird_normal_reaktiviert() {
 async fn first_login_coalesce_bewahrt_ersten_timestamp() {
     let pool = pool_or_skip!("ps_firstlogin");
     record_first_login(&pool, "888", "kanal").await;
-    let first: Option<String> =
-        sqlx::query_scalar("SELECT first_login_at FROM streamer_plans WHERE twitch_user_id = '888'")
-            .fetch_one(&pool)
-            .await
-            .unwrap();
+    let first: Option<String> = sqlx::query_scalar(
+        "SELECT first_login_at FROM streamer_plans WHERE twitch_user_id = '888'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
     assert!(first.is_some());
 
     record_first_login(&pool, "888", "kanal").await;
-    let second: Option<String> =
-        sqlx::query_scalar("SELECT first_login_at FROM streamer_plans WHERE twitch_user_id = '888'")
-            .fetch_one(&pool)
-            .await
-            .unwrap();
+    let second: Option<String> = sqlx::query_scalar(
+        "SELECT first_login_at FROM streamer_plans WHERE twitch_user_id = '888'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
     assert_eq!(first, second, "COALESCE bewahrt den ersten Timestamp");
 }
 
@@ -653,7 +687,10 @@ async fn complete_setup_voller_ablauf() {
         .await;
 
     let calls = recorder.calls();
-    assert!(calls.contains(&"mod:903:botid".to_string()), "Moderator-Schritt: {calls:?}");
+    assert!(
+        calls.contains(&"mod:903:botid".to_string()),
+        "Moderator-Schritt: {calls:?}"
+    );
     let chat_calls: Vec<_> = calls.iter().filter(|c| c.starts_with("chat:")).collect();
     assert_eq!(chat_calls.len(), 3, "drei Begrüßungsnachrichten: {calls:?}");
     assert!(chat_calls[0].contains("Deadlock Chatbot Guard verbunden"));
@@ -665,11 +702,12 @@ async fn complete_setup_voller_ablauf() {
             .await
             .unwrap();
     assert_eq!(status, "active");
-    let first: Option<String> =
-        sqlx::query_scalar("SELECT first_login_at FROM streamer_plans WHERE twitch_user_id = '903'")
-            .fetch_one(&pool)
-            .await
-            .unwrap();
+    let first: Option<String> = sqlx::query_scalar(
+        "SELECT first_login_at FROM streamer_plans WHERE twitch_user_id = '903'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
     assert!(first.is_some());
 }
 
@@ -687,7 +725,9 @@ async fn complete_setup_ohne_bot_id_ueberspringt_mod_und_chat() {
 
     let calls = recorder.calls();
     assert!(
-        !calls.iter().any(|c| c.starts_with("mod:") || c.starts_with("chat:")),
+        !calls
+            .iter()
+            .any(|c| c.starts_with("mod:") || c.starts_with("chat:")),
         "ohne Bot-ID weder Moderator noch Chat: {calls:?}"
     );
     // Partner-Sync + first_login liefen trotzdem (Python: früher Return NACH Schritt 1+2).

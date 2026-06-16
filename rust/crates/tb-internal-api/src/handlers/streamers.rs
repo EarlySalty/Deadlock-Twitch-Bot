@@ -63,6 +63,7 @@
 //!   departnern (clear_verification) + Rolle entziehen; unbekannte Modi → 200
 //!   "Unbekannter Modus" (Python-Parität, KEIN Permanent-Fallback).
 
+use crate::streamer_lifecycle as lifecycle;
 use axum::{
     extract::{Path, Query, State},
     http::StatusCode,
@@ -73,7 +74,6 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 use sqlx::PgPool;
 use std::sync::Arc;
-use crate::streamer_lifecycle as lifecycle;
 use tb_analytics::streamers_crud as db;
 use tb_domain::normalize_twitch_login;
 use tb_http_core::{ApiError, AuthLevel};
@@ -223,7 +223,11 @@ pub struct DiscordProfileRequest {
     #[serde(default, alias = "discordDisplayName")]
     pub discord_display_name: Option<String>,
     /// Default true — wie Python: server._parse_bool(body.get("mark_member", body.get("member_flag")), default=True)
-    #[serde(default = "default_mark_member", alias = "markMember", alias = "member_flag")]
+    #[serde(
+        default = "default_mark_member",
+        alias = "markMember",
+        alias = "member_flag"
+    )]
     pub mark_member: bool,
 }
 
@@ -313,25 +317,23 @@ pub async fn add_handler(
             )
                 .into_response());
         }
-        Some(client) => {
-            match client.get_users(&[login.as_str()]).await {
-                Ok(map) => {
-                    if map.contains_key(&login) {
-                        map.get(&login).map(|u| u.id.clone())
-                    } else {
-                        return Ok((
-                            StatusCode::UNPROCESSABLE_ENTITY,
-                            Json(json!({"ok": false, "error": "unknown_login"})),
-                        )
-                            .into_response());
-                    }
-                }
-                Err(e) => {
-                    tracing::warn!("Helix-Lookup für {login} fehlgeschlagen: {e}");
-                    None
+        Some(client) => match client.get_users(&[login.as_str()]).await {
+            Ok(map) => {
+                if map.contains_key(&login) {
+                    map.get(&login).map(|u| u.id.clone())
+                } else {
+                    return Ok((
+                        StatusCode::UNPROCESSABLE_ENTITY,
+                        Json(json!({"ok": false, "error": "unknown_login"})),
+                    )
+                        .into_response());
                 }
             }
-        }
+            Err(e) => {
+                tracing::warn!("Helix-Lookup für {login} fehlgeschlagen: {e}");
+                None
+            }
+        },
     };
 
     // require_link aus dem Body (Python `_cmd_add(login, require_link)`,
@@ -384,7 +386,10 @@ fn parse_bool_loose(value: Option<&serde_json::Value>) -> bool {
         Some(serde_json::Value::Bool(b)) => *b,
         Some(serde_json::Value::Number(n)) => n.as_i64().unwrap_or(0) != 0,
         Some(serde_json::Value::String(s)) => {
-            matches!(s.trim().to_lowercase().as_str(), "true" | "1" | "yes" | "on")
+            matches!(
+                s.trim().to_lowercase().as_str(),
+                "true" | "1" | "yes" | "on"
+            )
         }
         _ => false,
     }
@@ -393,8 +398,9 @@ fn parse_bool_loose(value: Option<&serde_json::Value>) -> bool {
 /// `POST /internal/twitch/v1/streamers/monitoring`
 ///
 /// Body: `{"login": "..."}`, optional `"twitch_user_id": "..."`
-/// Legt einen `is_monitored_only = 1`-Eintrag an (Clip-Fetcher, Cron-Jobs).
-/// Kein Helix-Lookup, kein Partner-Eintrag. Idempotent.
+/// Legt einen Monitoring-Eintrag an (Clip-Fetcher, Cron-Jobs).
+/// Kein Helix-Lookup, kein Partner-Eintrag; monitored-only wird daraus abgeleitet.
+/// Idempotent.
 pub async fn add_monitored_handler(
     auth: AuthLevel,
     State(pool): State<PgPool>,
@@ -429,7 +435,10 @@ pub async fn add_monitored_handler(
             ApiError::internal()
         })?;
 
-    Ok((StatusCode::OK, Json(serde_json::json!({"ok": true, "login": login}))))
+    Ok((
+        StatusCode::OK,
+        Json(serde_json::json!({"ok": true, "login": login})),
+    ))
 }
 
 /// `DELETE /internal/twitch/v1/streamers/:login`
@@ -437,16 +446,15 @@ pub async fn add_monitored_handler(
 /// Voller Departner-Lifecycle (Parität Python `_cmd_remove`, `admin.py:256`):
 /// 1. Aktiven Partner departnern (`departner_active_partner`): Status →
 ///    `departnered`, Identity-Upsert, Raid-Auth-Disable.
-/// 2. War kein aktiver Partner da: Streamer-Zeile archivieren/löschen wie bisher.
+/// 2. War kein aktiver Partner da: Streamer-Zeile löschen wie bisher.
 /// 3. `twitch_live_state`-Zeile löschen (idempotent).
 /// 4. Bei departnertem Partner mit Discord-ID: Streamer-Rolle entfernen
 ///    (best-effort über [`DiscordRolePort`]) und Meldung
 ///    `"{login} operativ deaktiviert (Streamer-Rolle entfernt)"`.
 ///
-/// Migrations-Bug-Fix (vorher 1:1 mitgeschleppt): der alte Pfad setzte nur
-/// `twitch_streamers.archived_at` und ließ `twitch_partners` aktiv — ein
-/// entfernter Partner blieb in der Partner-Wahrheit aktiv (Raid-Bot lief weiter,
-/// Discord-Rolle blieb). Test `remove_departnert_aktiven_partner` lockt das ein.
+/// Migrations-Bug-Fix (vorher 1:1 mitgeschleppt): ein alter Pfad ließ
+/// `twitch_partners` aktiv — ein entfernter Partner blieb in der Partner-Wahrheit
+/// aktiv (Raid-Bot lief weiter, Discord-Rolle blieb).
 pub async fn remove_handler(
     auth: AuthLevel,
     State(pool): State<PgPool>,
@@ -484,10 +492,12 @@ pub async fn remove_handler(
     } else {
         // remove_streamer löscht twitch_live_state mit; im Departner-Pfad
         // holen wir das separat nach (Python: explizites DELETE in _cmd_remove).
-        lifecycle::clear_live_state(&pool, &login).await.map_err(|e| {
-            tracing::error!("clear_live_state DB-Fehler: {e}");
-            ApiError::internal()
-        })?;
+        lifecycle::clear_live_state(&pool, &login)
+            .await
+            .map_err(|e| {
+                tracing::error!("clear_live_state DB-Fehler: {e}");
+                ApiError::internal()
+            })?;
         true
     };
 
@@ -561,7 +571,11 @@ pub async fn verify_handler(
         .and_then(|b| b.mode.clone())
         .map(|m| {
             let m = m.trim().to_lowercase();
-            if m.is_empty() { "permanent".to_string() } else { m }
+            if m.is_empty() {
+                "permanent".to_string()
+            } else {
+                m
+            }
         })
         .unwrap_or_else(|| "permanent".to_string());
 
@@ -581,8 +595,8 @@ pub async fn verify_handler(
 
     match mode.as_str() {
         "permanent" | "temp" => {
-            let payload = lifecycle::VerificationPayload::for_mode(&mode)
-                .ok_or_else(ApiError::internal)?; // permanent/temp sind immer Some
+            let payload =
+                lifecycle::VerificationPayload::for_mode(&mode).ok_or_else(ApiError::internal)?; // permanent/temp sind immer Some
             let source = lifecycle::load_verify_source(&pool, &login, helix.as_ref().as_ref())
                 .await
                 .map_err(|e| internal(e, "load_verify_source"))?;
@@ -596,7 +610,11 @@ pub async fn verify_handler(
                 &source.twitch_user_id,
                 source.discord_user_id.as_deref(),
                 source.discord_display_name.as_deref(),
-                if source.discord_user_id.is_some() { 1 } else { 0 },
+                if source.discord_user_id.is_some() {
+                    1
+                } else {
+                    0
+                },
                 &payload,
             )
             .await
@@ -619,11 +637,8 @@ pub async fn verify_handler(
             if let (Some(did), Some(port)) =
                 (source.discord_user_id.as_deref(), role_ext.0.as_ref())
             {
-                port.grant_streamer_role(
-                    did,
-                    "Streamer-Verifizierung über Dashboard bestätigt",
-                )
-                .await;
+                port.grant_streamer_role(did, "Streamer-Verifizierung über Dashboard bestätigt")
+                    .await;
                 notes.push("(Streamer-Rolle vergeben)".to_string());
             }
             let merged = notes.join(" ");
@@ -642,9 +657,8 @@ pub async fn verify_handler(
                 "Streamer-Verifizierung über Dashboard entfernt",
             )
             .await;
-            let msg = format!(
-                "Verifizierung für {login} zurückgesetzt (keine DM versendet) {role_note}"
-            );
+            let msg =
+                format!("Verifizierung für {login} zurückgesetzt (keine DM versendet) {role_note}");
             Ok(ok_message(msg.trim().to_string()))
         }
         "failed" => {
@@ -712,7 +726,11 @@ pub async fn archive_handler(
         .and_then(|b| b.mode.clone())
         .map(|m| {
             let m = m.trim().to_lowercase();
-            if m.is_empty() { "toggle".to_string() } else { m }
+            if m.is_empty() {
+                "toggle".to_string()
+            } else {
+                m
+            }
         })
         .unwrap_or_else(|| "toggle".to_string());
 
@@ -803,10 +821,11 @@ pub async fn discord_flag_handler(
     // Identity nicht (0 Rows), wodurch der Handler fälschlich 404 lieferte. Bei
     // No-Op fragen wir daher gezielt nach, ob ein aktiver Partner existiert, und
     // melden dann denselben Erfolg wie Python.
-    let succeeded = updated || active_partner_exists(&pool, &login).await.map_err(|e| {
-        tracing::error!("active_partner_exists DB-Fehler: {e}");
-        ApiError::internal()
-    })?;
+    let succeeded = updated
+        || active_partner_exists(&pool, &login).await.map_err(|e| {
+            tracing::error!("active_partner_exists DB-Fehler: {e}");
+            ApiError::internal()
+        })?;
 
     if succeeded {
         Ok(Json(OkLoginMessageResponse {
@@ -1036,12 +1055,10 @@ pub async fn analytics_comparison_handler(
 
     let days = params.days.unwrap_or(30).max(1);
 
-    let (category, tracked, top) = db::analytics_comparison(&pool, days)
-        .await
-        .map_err(|e| {
-            tracing::error!("analytics_comparison DB-Fehler: {e}");
-            ApiError::internal()
-        })?;
+    let (category, tracked, top) = db::analytics_comparison(&pool, days).await.map_err(|e| {
+        tracing::error!("analytics_comparison DB-Fehler: {e}");
+        ApiError::internal()
+    })?;
 
     // Python-Shape exakt: KEIN ok/days-Wrapper (Payload von `_comparison`
     // wird in streamers.py:436 unverändert durchgereicht).
@@ -1109,9 +1126,7 @@ mod tests {
                 Some(d) => d,
                 None => {
                     if std::env::var("TB_TEST_REQUIRE_DB").as_deref() == Ok("1") {
-                        panic!(
-                            "TB_TEST_REQUIRE_DB=1 ist gesetzt, aber TB_TEST_DATABASE_URL fehlt"
-                        );
+                        panic!("TB_TEST_REQUIRE_DB=1 ist gesetzt, aber TB_TEST_DATABASE_URL fehlt");
                     }
                     eprintln!("SKIP: TB_TEST_DATABASE_URL nicht gesetzt");
                     return;
@@ -1147,15 +1162,7 @@ mod tests {
             CREATE TABLE IF NOT EXISTS twitch_streamers (
                 twitch_login        TEXT PRIMARY KEY,
                 twitch_user_id      TEXT,
-                discord_user_id     TEXT,
-                discord_display_name TEXT,
-                is_on_discord       INTEGER DEFAULT 0,
-                is_verified         INTEGER DEFAULT 0,
-                is_monitored_only   INTEGER DEFAULT 0,
-                require_discord_link INTEGER DEFAULT 0,
-                next_link_check_at  TEXT,
-                created_at          TIMESTAMPTZ DEFAULT NOW(),
-                archived_at         TIMESTAMPTZ
+                created_at          TIMESTAMPTZ DEFAULT NOW()
             )
             "#,
         )
@@ -1363,7 +1370,10 @@ mod tests {
         let j = json_body(resp).await;
         // B10-VERIFY (`streamers-crud-6`): bewusste Abweichung vom Python-
         // Vertrag — Objekt-Wrapper `{ok, streamers}`, KEINE blanke Top-Level-Liste.
-        assert!(j.is_object(), "Antwort ist Objekt-Wrapper, keine blanke Liste");
+        assert!(
+            j.is_object(),
+            "Antwort ist Objekt-Wrapper, keine blanke Liste"
+        );
         assert_eq!(j["ok"], true);
         assert!(j["streamers"].is_array());
     }
@@ -1423,13 +1433,21 @@ mod tests {
         seed_active_partner(&pool, "drag", "42").await;
         let app = make_router(pool.clone(), "secret");
         let base = INTERNAL_API_BASE_PATH;
-        let req = loopback_req("DELETE", &format!("{base}/streamers/drag"), "", Some("secret"));
+        let req = loopback_req(
+            "DELETE",
+            &format!("{base}/streamers/drag"),
+            "",
+            Some("secret"),
+        );
         let resp = app.oneshot(req).await.unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
         let j = json_body(resp).await;
         assert_eq!(j["ok"], true);
         assert!(
-            j["message"].as_str().unwrap().contains("operativ deaktiviert"),
+            j["message"]
+                .as_str()
+                .unwrap()
+                .contains("operativ deaktiviert"),
             "Python-Meldung _cmd_remove, war='{}'",
             j["message"]
         );
@@ -1461,7 +1479,11 @@ mod tests {
             Some("secret"),
         );
         let resp = app.oneshot(req).await.unwrap();
-        assert_eq!(resp.status(), StatusCode::OK, "clear ist nativ, kein 503 mehr");
+        assert_eq!(
+            resp.status(),
+            StatusCode::OK,
+            "clear ist nativ, kein 503 mehr"
+        );
         let j = json_body(resp).await;
         assert!(
             j["message"].as_str().unwrap().contains("zurückgesetzt"),
@@ -1485,10 +1507,12 @@ mod tests {
         let dsn = db_dsn_or_skip!();
         let pool = make_pool(&dsn, "test_sh_verify_promote").await;
         // Nicht-Partner in twitch_streamers mit twitch_user_id.
-        sqlx::query("INSERT INTO twitch_streamers (twitch_login, twitch_user_id) VALUES ('newbie', '321')")
-            .execute(&pool)
-            .await
-            .unwrap();
+        sqlx::query(
+            "INSERT INTO twitch_streamers (twitch_login, twitch_user_id) VALUES ('newbie', '321')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
         let app = make_router(pool.clone(), "secret");
         let base = INTERNAL_API_BASE_PATH;
         let req = loopback_req(
@@ -1501,7 +1525,10 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::OK);
         let j = json_body(resp).await;
         assert!(
-            j["message"].as_str().unwrap().contains("dauerhaft verifiziert"),
+            j["message"]
+                .as_str()
+                .unwrap()
+                .contains("dauerhaft verifiziert"),
             "war='{}'",
             j["message"]
         );

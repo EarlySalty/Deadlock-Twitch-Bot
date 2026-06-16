@@ -54,16 +54,18 @@ impl TrackedStore {
               FROM twitch_streamers_partner_state
             UNION ALL
             -- Monitored-only Kanäle sind keine Partner: Partner-Config als
-            -- Spalten-Default, archived_at bleibt echtes Monitoring-Feld.
+            -- Spalten-Default, Archive-Status ist partner-spezifisch.
             SELECT s.twitch_login, s.twitch_user_id, 0 AS require_discord_link,
-                   s.archived_at::text AS archived_at, 0 AS is_partner_active, s.discord_user_id,
-                   NULL AS live_ping_role_id, 1 AS live_ping_enabled
+                   NULL::text AS archived_at, 0 AS is_partner_active, i.discord_user_id,
+                   NULL::bigint AS live_ping_role_id, 1 AS live_ping_enabled
               FROM twitch_streamers s
-             WHERE COALESCE(s.is_monitored_only, 0) = 1
-               AND NOT EXISTS (
+              LEFT JOIN twitch_streamer_identities i
+                ON i.twitch_user_id = s.twitch_user_id
+             WHERE NOT EXISTS (
                    SELECT 1
-                     FROM twitch_streamers_partner_state ps
-                    WHERE LOWER(ps.twitch_login) = LOWER(s.twitch_login)
+                     FROM twitch_partners p
+                    WHERE p.twitch_user_id = s.twitch_user_id
+                       OR LOWER(p.twitch_login) = LOWER(s.twitch_login)
                )
             "#,
         )

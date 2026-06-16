@@ -140,7 +140,6 @@ fn share_pct(part: f64, total: f64) -> f64 {
     }
 }
 
-
 /// `GET /internal/twitch/v1/market-share?days=7&scope=all|german`
 pub async fn market_share_handler(
     auth: AuthLevel,
@@ -298,9 +297,7 @@ mod tests {
                 Some(d) => d,
                 None => {
                     if std::env::var("TB_TEST_REQUIRE_DB").as_deref() == Ok("1") {
-                        panic!(
-                            "TB_TEST_REQUIRE_DB=1 ist gesetzt, aber TB_TEST_DATABASE_URL fehlt"
-                        );
+                        panic!("TB_TEST_REQUIRE_DB=1 ist gesetzt, aber TB_TEST_DATABASE_URL fehlt");
                     }
                     eprintln!("SKIP: TB_TEST_DATABASE_URL nicht gesetzt");
                     return;
@@ -333,7 +330,7 @@ mod tests {
                 ts_utc       TIMESTAMPTZ NOT NULL,
                 streamer     TEXT NOT NULL,
                 viewer_count INTEGER,
-                is_partner   INTEGER DEFAULT 0,
+                is_partner   BOOLEAN DEFAULT FALSE,
                 game_name    TEXT,
                 stream_title TEXT,
                 tags         TEXT,
@@ -380,7 +377,10 @@ mod tests {
     async fn returns_401_without_auth() {
         let dsn = db_dsn_or_skip!();
         let pool = make_pool(&dsn, "test_handler_market_unauth").await;
-        let res = make_router(pool, "tok").oneshot(req(None, "")).await.unwrap();
+        let res = make_router(pool, "tok")
+            .oneshot(req(None, ""))
+            .await
+            .unwrap();
         assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
     }
 
@@ -393,8 +393,8 @@ mod tests {
             INSERT INTO twitch_stats_category
                 (ts_utc, streamer, viewer_count, is_partner, tags, language)
             VALUES
-                (NOW(), 'partner_a', 25, 1, '["Deutsch"]', 'de'),
-                (NOW(), 'big_intl',  75, 0, '["English"]', 'en')
+                (NOW(), 'partner_a', 25, true,  '["Deutsch"]', 'de'),
+                (NOW(), 'big_intl',  75, false, '["English"]', 'en')
             "#,
         )
         .execute(&pool)
@@ -406,7 +406,9 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(res.status(), StatusCode::OK);
-        let b = axum::body::to_bytes(res.into_body(), 64 * 1024).await.unwrap();
+        let b = axum::body::to_bytes(res.into_body(), 64 * 1024)
+            .await
+            .unwrap();
         let v: serde_json::Value = serde_json::from_slice(&b).unwrap();
         assert_eq!(v["scope"], "all");
         assert_eq!(v["current"]["totalViewers"], 100);

@@ -328,8 +328,11 @@ impl CommandEngine {
                 if event.is_mod_or_broadcaster() {
                     self.cmd_silentban(event).await;
                 } else {
-                    self.reply(event, "Nur der Broadcaster oder Mods können den Bot steuern.")
-                        .await;
+                    self.reply(
+                        event,
+                        "Nur der Broadcaster oder Mods können den Bot steuern.",
+                    )
+                    .await;
                 }
                 true
             }
@@ -337,8 +340,11 @@ impl CommandEngine {
                 if event.is_mod_or_broadcaster() {
                     self.cmd_silentraid(event).await;
                 } else {
-                    self.reply(event, "Nur der Broadcaster oder Mods können den Bot steuern.")
-                        .await;
+                    self.reply(
+                        event,
+                        "Nur der Broadcaster oder Mods können den Bot steuern.",
+                    )
+                    .await;
                 }
                 true
             }
@@ -392,9 +398,7 @@ impl CommandEngine {
 
     /// `bot.py:2165` — `(name or "").lower().lstrip("#")`
     fn normalize_channel_login(name: &str) -> String {
-        name.to_lowercase()
-            .trim_start_matches('#')
-            .to_string()
+        name.to_lowercase().trim_start_matches('#').to_string()
     }
 
     /// `bot.py:2144` — SELECT aus `twitch_streamers_partner_state` WHERE
@@ -437,7 +441,11 @@ impl CommandEngine {
               AND NOT EXISTS (
                   SELECT 1 FROM twitch_streamers s
                   WHERE LOWER(s.twitch_login) = LOWER(ps.twitch_login)
-                    AND COALESCE(s.is_monitored_only, 0) = 1
+                    AND NOT EXISTS (
+                        SELECT 1 FROM twitch_partners pp
+                        WHERE pp.twitch_user_id = s.twitch_user_id
+                           OR LOWER(pp.twitch_login) = LOWER(s.twitch_login)
+                    )
               )
             "#,
         )
@@ -467,7 +475,11 @@ impl CommandEngine {
     /// Sendet eine Antwort mit `@<chatter>`-Prefix.
     async fn reply(&self, event: &ChatMessageEvent, text: &str) {
         let msg = format!("@{} {}", event.chatter_user_login, text);
-        if let Err(e) = self.api.send_message(&event.broadcaster_user_id, &msg).await {
+        if let Err(e) = self
+            .api
+            .send_message(&event.broadcaster_user_id, &msg)
+            .await
+        {
             tracing::warn!(
                 channel = %event.broadcaster_user_login,
                 err = %e,
@@ -505,20 +517,27 @@ impl CommandEngine {
         }
         let raw_args = args.trim();
         if raw_args.is_empty() {
-            self.reply_plain(event, "Verwendung: !title <keywords>  — z.B.: !title ranked solo grind")
-                .await;
+            self.reply_plain(
+                event,
+                "Verwendung: !title <keywords>  — z.B.: !title ranked solo grind",
+            )
+            .await;
             return;
         }
         let include_live = raw_args.contains("--live");
         let keywords = raw_args.replace("--live", "");
         let keywords = keywords.trim().to_string();
         if keywords.is_empty() {
-            self.reply_plain(event, "Bitte Keywords angeben, z.B.: !title ranked solo grind")
-                .await;
+            self.reply_plain(
+                event,
+                "Bitte Keywords angeben, z.B.: !title ranked solo grind",
+            )
+            .await;
             return;
         }
 
-        self.reply_plain(event, "Generiere deinen Titel, einen Moment...").await;
+        self.reply_plain(event, "Generiere deinen Titel, einen Moment...")
+            .await;
 
         let pool = self.pool.clone();
         let api = Arc::clone(&self.api);
@@ -531,7 +550,10 @@ impl CommandEngine {
             // twitch_user_id des Streamers (= der Kanal). Python sucht über den
             // Login; hier direkt über die schon bekannte ID.
             let row: Option<(Option<String>,)> = sqlx::query_as(
-                "SELECT discord_user_id::text FROM twitch_streamers WHERE twitch_user_id = $1 LIMIT 1",
+                "SELECT discord_user_id::text \
+                 FROM twitch_streamer_identities \
+                 WHERE twitch_user_id = $1 \
+                 LIMIT 1",
             )
             .bind(&streamer_id)
             .fetch_optional(&pool)
@@ -540,14 +562,18 @@ impl CommandEngine {
             .flatten();
             let Some((discord_raw,)) = row else {
                 let _ = api
-                    .send_message(&streamer_id, "Streamer nicht gefunden – bitte Onboarding prüfen.")
+                    .send_message(
+                        &streamer_id,
+                        "Streamer nicht gefunden – bitte Onboarding prüfen.",
+                    )
                     .await;
                 return;
             };
             let discord_id = discord_raw.and_then(|s| s.trim().parse::<i64>().ok());
 
             // title_db: History + eigener AVG + Community-Knowledge.
-            let history = crate::title_db::get_streamer_title_history(&pool, &streamer_id, 30).await;
+            let history =
+                crate::title_db::get_streamer_title_history(&pool, &streamer_id, 30).await;
             let own_avg = crate::title_db::get_streamer_avg_viewers(&pool, &streamer_id).await;
             let knowledge = crate::title_db::get_top_knowledge_titles(&pool, 30).await;
 
@@ -688,14 +714,19 @@ impl CommandEngine {
         .unwrap_or_default();
 
         if rows.is_empty() {
-            self.reply_plain(event, "Noch keine Raids durchgeführt.").await;
+            self.reply_plain(event, "Noch keine Raids durchgeführt.")
+                .await;
             return;
         }
 
         let parts: Vec<String> = rows
             .iter()
             .map(|r| {
-                let icon = if r.success.unwrap_or(false) { "✅" } else { "❌" };
+                let icon = if r.success.unwrap_or(false) {
+                    "✅"
+                } else {
+                    "❌"
+                };
                 // executed_at[:10] = YYYY-MM-DD — commands.py:162
                 let date = r
                     .executed_at
@@ -752,16 +783,21 @@ impl CommandEngine {
 
         // Letzter Raid — commands.py:125
         // executed_at[:16] = "YYYY-MM-DD HH:MM" — commands.py:125
-        let last_part =
-            if let (Some(login), Some(viewers), Some(at)) =
-                (&info.last_raid_login, info.last_raid_viewers, info.last_raid_at)
-            {
-                let icon = if info.successful_raids > 0 { "✅" } else { "❌" };
-                let formatted = at.format("%Y-%m-%d %H:%M").to_string();
-                format!(" | Letzter Raid {icon}: {login} ({viewers} Viewer) am {formatted}")
+        let last_part = if let (Some(login), Some(viewers), Some(at)) = (
+            &info.last_raid_login,
+            info.last_raid_viewers,
+            info.last_raid_at,
+        ) {
+            let icon = if info.successful_raids > 0 {
+                "✅"
             } else {
-                String::new()
+                "❌"
             };
+            let formatted = at.format("%Y-%m-%d %H:%M").to_string();
+            format!(" | Letzter Raid {icon}: {login} ({viewers} Viewer) am {formatted}")
+        } else {
+            String::new()
+        };
 
         let msg = format!("{status}{stats_part}{last_part}");
         self.reply_plain(event, &msg).await;
@@ -792,7 +828,8 @@ impl CommandEngine {
         };
 
         if entry.user_id.is_empty() {
-            self.reply(event, "Kein Nutzer gespeichert für Unban.").await;
+            self.reply(event, "Kein Nutzer gespeichert für Unban.")
+                .await;
             return;
         }
 
@@ -872,11 +909,8 @@ impl CommandEngine {
                     err = %e,
                     "manual_raid Trait-Call fehlgeschlagen"
                 );
-                self.reply(
-                    event,
-                    &format!("Raid fehlgeschlagen: {e}"),
-                )
-                .await;
+                self.reply(event, &format!("Raid fehlgeschlagen: {e}"))
+                    .await;
             }
         }
     }
@@ -1181,7 +1215,11 @@ impl CommandEngine {
             cooldowns.insert(key, Instant::now());
         }
 
-        match self.invite.invite_line(&channel_login, &chatter_login).await {
+        match self
+            .invite
+            .invite_line(&channel_login, &chatter_login)
+            .await
+        {
             Ok(Some(reply)) if !reply.is_empty() => {
                 self.reply_plain(event, &reply).await;
             }
@@ -1415,16 +1453,16 @@ impl CommandEngine {
             return;
         }
 
-        let result = sqlx::query(
-            "DELETE FROM twitch_user_engagement_optout WHERE twitch_user_id = $1",
-        )
-        .bind(user_id.as_str())
-        .execute(&self.pool)
-        .await;
+        let result =
+            sqlx::query("DELETE FROM twitch_user_engagement_optout WHERE twitch_user_id = $1")
+                .bind(user_id.as_str())
+                .execute(&self.pool)
+                .await;
 
         match result {
             Ok(_) => {
-                self.reply(event, "OK, AI berücksichtigt dich wieder.").await;
+                self.reply(event, "OK, AI berücksichtigt dich wieder.")
+                    .await;
             }
             Err(e) => {
                 tracing::error!(user_id = %user_id, err = %e, "engagement_remember_me fehlgeschlagen");
@@ -1454,7 +1492,9 @@ impl CommandEngine {
 mod tests {
     use super::*;
     use crate::api::BanOutcome;
-    use crate::types::{ChatBadge, ChatMessageBody, ChatMessageEvent, MessageFragment, SendOutcome};
+    use crate::types::{
+        ChatBadge, ChatMessageBody, ChatMessageEvent, MessageFragment, SendOutcome,
+    };
 
     // -----------------------------------------------------------------------
     // Mock-Implementierungen
@@ -1493,20 +1533,10 @@ mod tests {
                 .push((broadcaster_id.to_string(), message.to_string()));
             Ok(SendOutcome::Sent)
         }
-        async fn send_announcement(
-            &self,
-            _: &str,
-            _: &str,
-            _: &str,
-        ) -> Result<bool, String> {
+        async fn send_announcement(&self, _: &str, _: &str, _: &str) -> Result<bool, String> {
             Ok(true)
         }
-        async fn ban_user(
-            &self,
-            _: &str,
-            _: &str,
-            _: &str,
-        ) -> Result<BanOutcome, String> {
+        async fn ban_user(&self, _: &str, _: &str, _: &str) -> Result<BanOutcome, String> {
             Ok(BanOutcome::Banned)
         }
         async fn timeout_user(
@@ -1524,10 +1554,7 @@ mod tests {
         async fn delete_message(&self, _: &str, _: &str) -> Result<bool, String> {
             Ok(true)
         }
-        async fn user_created_at(
-            &self,
-            _: &str,
-        ) -> Result<Option<DateTime<Utc>>, String> {
+        async fn user_created_at(&self, _: &str) -> Result<Option<DateTime<Utc>>, String> {
             Ok(None)
         }
         async fn resolve_user_id(&self, _: &str) -> Result<Option<String>, String> {
@@ -1722,7 +1749,10 @@ mod tests {
         // !title / !titel → handle() gibt false zurück (in der match-Tabelle explizit)
         let cmd = "!title";
         let is_unimplemented = matches!(cmd, "!title" | "!titel");
-        assert!(is_unimplemented, "!title muss als nicht-portiert markiert sein");
+        assert!(
+            is_unimplemented,
+            "!title muss als nicht-portiert markiert sein"
+        );
     }
 
     #[test]
@@ -2009,8 +2039,12 @@ mod tests {
         let api = MockApi::new();
         let engine = make_engine_with_pool(pool.clone(), api.clone());
 
-        engine.handle(&make_event("!engagement_on", true, false)).await;
-        engine.handle(&make_event("!engagement_off", true, false)).await;
+        engine
+            .handle(&make_event("!engagement_on", true, false))
+            .await;
+        engine
+            .handle(&make_event("!engagement_off", true, false))
+            .await;
 
         let row = sqlx::query_as::<_, (bool,)>(
             "SELECT enabled FROM twitch_engagement_settings WHERE channel_login = 'testchannel'",
@@ -2053,12 +2087,10 @@ mod tests {
         let api = MockApi::new();
         let engine = make_engine_with_pool(pool.clone(), api.clone());
 
-        sqlx::query(
-            "INSERT INTO twitch_user_engagement_optout (twitch_user_id) VALUES ('u999')",
-        )
-        .execute(&pool)
-        .await
-        .unwrap();
+        sqlx::query("INSERT INTO twitch_user_engagement_optout (twitch_user_id) VALUES ('u999')")
+            .execute(&pool)
+            .await
+            .unwrap();
 
         let event = make_event("!engagement_remember_me", false, false);
         engine.handle(&event).await;
@@ -2147,7 +2179,10 @@ mod tests {
         engine.handle(&event).await;
 
         let msg = api.last_message().await.unwrap();
-        assert!(msg.contains("nicht als Partner registriert"), "Meldung: {msg}");
+        assert!(
+            msg.contains("nicht als Partner registriert"),
+            "Meldung: {msg}"
+        );
     }
 
     // !raid_enable / !raidbot entfällt (Grillme Block 8 — „in oder raus"). Die
@@ -2293,7 +2328,10 @@ mod tests {
 
         let event = make_event("!lurkersteuer_off", false, true);
         let handled = engine.handle(&event).await;
-        assert!(handled, "!lurkersteuer_off muss als Command behandelt werden");
+        assert!(
+            handled,
+            "!lurkersteuer_off muss als Command behandelt werden"
+        );
 
         let enabled: i32 = sqlx::query_scalar(
             "SELECT lurker_tax_enabled FROM streamer_plans WHERE twitch_user_id = 'bc123'",
@@ -2315,7 +2353,9 @@ mod tests {
         let engine = make_engine_with_pool(pool.clone(), api.clone());
         seed_lurker_partner(&pool, 1, true).await;
 
-        let handled = engine.handle(&make_event("!lurker_tax_off", false, true)).await;
+        let handled = engine
+            .handle(&make_event("!lurker_tax_off", false, true))
+            .await;
         assert!(handled, "Alias !lurker_tax_off muss greifen");
 
         let enabled: i32 = sqlx::query_scalar(
@@ -2336,7 +2376,9 @@ mod tests {
         seed_lurker_partner(&pool, 1, true).await;
 
         // Mod, aber nicht Broadcaster → Ablehnung, Flag bleibt 1.
-        let handled = engine.handle(&make_event("!lurkersteuer_off", true, false)).await;
+        let handled = engine
+            .handle(&make_event("!lurkersteuer_off", true, false))
+            .await;
         assert!(handled);
 
         let enabled: i32 = sqlx::query_scalar(
@@ -2360,7 +2402,9 @@ mod tests {
         // raid_free → kein chat.lurker_tax → Ablehnung.
         seed_lurker_partner(&pool, 1, false).await;
 
-        let handled = engine.handle(&make_event("!lurkersteuer_off", false, true)).await;
+        let handled = engine
+            .handle(&make_event("!lurkersteuer_off", false, true))
+            .await;
         assert!(handled);
 
         let enabled: i32 = sqlx::query_scalar(

@@ -1,8 +1,8 @@
 //! Scout-Chat-Sink-Adapter (B17-SCOUT-PRIME).
 //!
 //! Brücke zwischen dem `ScoutTask` (tb-monitoring) und der Chat-Runtime. Der
-//! Scout entdeckt live Deadlock-Streamer und registriert sie als
-//! `is_monitored_only = 1`; danach ruft er über den [`ScoutChatSink`]-Port
+//! Scout entdeckt live Deadlock-Streamer und registriert sie ohne Partner-Eintrag
+//! in `twitch_streamers`; danach ruft er über den [`ScoutChatSink`]-Port
 //! `set_monitored_channels` → `join_channels` (neu + heal) → `part_channels`
 //! (entfernt) und beantwortet die Heal-Prüfungen `is_monitored_only` /
 //! `is_subscription_ready`.
@@ -120,7 +120,10 @@ impl ScoutChatSink for ScoutChatAdapter {
         // Adapter-Prädikaten. Für monitoring-only Scout-Kanäle ist das immer
         // `false`, also kein Heal-Versuch (1:1 zu `base.py:1135`).
         let heal_due = logins.iter().any(|login| {
-            Self::wants_runtime_heal(self.is_monitored_only(login), self.is_subscription_ready(login))
+            Self::wants_runtime_heal(
+                self.is_monitored_only(login),
+                self.is_subscription_ready(login),
+            )
         });
         if heal_due {
             tracing::debug!("scout-chat: Runtime-Heal-Gate offen für mindestens einen Kanal");

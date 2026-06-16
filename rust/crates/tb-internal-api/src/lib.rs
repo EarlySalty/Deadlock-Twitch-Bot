@@ -24,9 +24,7 @@ pub use handlers::eventsub::EventSubDispatcherExt;
 pub use handlers::legacy_proxy::{LegacyProxy, LegacyProxyExt};
 pub use handlers::raid::{ManualRaidExt, ManualRaidPort};
 pub use handlers::raid_oauth::{RaidOAuthExt, RaidOAuthPort};
-pub use handlers::stats_native::{
-    EventSubCurrentSnapshot, EventSubStatsExt, EventSubStatsSource,
-};
+pub use handlers::stats_native::{EventSubCurrentSnapshot, EventSubStatsExt, EventSubStatsSource};
 pub use handlers::streamers::{
     ChatActionExt, ChatActionPort, ChatActionResult, DiscordRoleExt, DiscordRolePort,
 };
@@ -87,10 +85,7 @@ pub fn build_internal_router(
             &format!("{base}/streamer-invites"),
             get(discord_invite::list_all_handler),
         )
-        .route(
-            &format!("{base}/chat/command"),
-            post(chat_command::handler),
-        )
+        .route(&format!("{base}/chat/command"), post(chat_command::handler))
         .route(&format!("{base}/globalban"), get(global_ban::list_handler))
         .route(
             &format!("{base}/globalban/add"),
@@ -133,7 +128,7 @@ pub fn build_internal_router(
             get(streamer_link::list_handler),
         )
         // Monitoring-only Streamer anlegen (Clip-Fetcher, Cron-Jobs).
-        // is_monitored_only=1, kein Helix-Lookup, kein Partner-Eintrag.
+        // Kein Helix-Lookup, kein Partner-Eintrag.
         .route(
             &format!("{base}/streamers/monitoring"),
             post(streamers::add_monitored_handler),

@@ -35,7 +35,6 @@
 
 mod auto_raid;
 mod chat_wiring;
-mod streamer_link;
 mod confirm_resolver;
 mod eventsub_hooks;
 mod eventsub_stats_adapter;
@@ -50,6 +49,7 @@ mod reauth_reminder;
 mod score_refresh;
 mod scout_chat;
 mod shadow_review_wiring;
+mod streamer_link;
 mod token_lifecycle_wiring;
 mod wiring;
 
@@ -82,13 +82,13 @@ use auto_raid::OfflineRaidHandler;
 use eventsub_hooks::{
     BlacklistRaidGuard, RaidArrivalCoordinator, RaidEventSubHooks, RaidTrackingResolverAdapter,
 };
-use reauth_reminder::ReauthReminder;
 use offline_side_effects::OfflineSideEffects;
 use raid_adapters::{
     HelixFallbackStreams, HelixRaidApi, HelixTokenClient, ManagerArrivalReadiness,
     ManualRaidAdapter,
 };
 use raid_arrival_wiring::RaidArrivalSinkImpl;
+use reauth_reminder::ReauthReminder;
 use score_refresh::ScoreRefreshResolver;
 use wiring::{
     BrokerAnnouncementTransport, HelixFollowerSource, HelixStreamSource,
@@ -135,11 +135,9 @@ impl PollHooks for SubscriptionPollHooks {
 
     /// Inaktiver Partner (> N Tage kein Deadlock-Stream) → archivieren.
     /// Mirror von Python `set_streamer_archive_state(archived=True)`:
-    /// `admin_archived_at` im aktiven `twitch_partners`-Eintrag + `archived_at`
-    /// in `twitch_streamers`. Ohne diesen Sink blieben Karteileichen sichtbar.
+    /// `admin_archived_at` im aktiven `twitch_partners`-Eintrag.
     async fn on_auto_archive(&self, login: &str) -> bool {
-        let mut changed = false;
-        match sqlx::query(
+        let changed = match sqlx::query(
             "UPDATE twitch_partners SET admin_archived_at = NOW() \
              WHERE LOWER(twitch_login) = LOWER($1) AND admin_archived_at IS NULL",
         )
@@ -147,23 +145,12 @@ impl PollHooks for SubscriptionPollHooks {
         .execute(&self.pool)
         .await
         {
-            Ok(r) => changed |= r.rows_affected() > 0,
+            Ok(r) => r.rows_affected() > 0,
             Err(e) => {
                 tracing::warn!(login, "auto-archive (twitch_partners) fehlgeschlagen: {e}");
                 return false;
             }
-        }
-        match sqlx::query(
-            "UPDATE twitch_streamers SET archived_at = NOW() \
-             WHERE LOWER(twitch_login) = LOWER($1) AND archived_at IS NULL",
-        )
-        .bind(login)
-        .execute(&self.pool)
-        .await
-        {
-            Ok(r) => changed |= r.rows_affected() > 0,
-            Err(e) => tracing::warn!(login, "auto-archive (twitch_streamers) fehlgeschlagen: {e}"),
-        }
+        };
         if changed {
             tracing::info!(login, "Partner automatisch archiviert (inaktiv)");
         }
@@ -173,8 +160,7 @@ impl PollHooks for SubscriptionPollHooks {
     /// Archivierter Partner streamt wieder Deadlock → entarchivieren
     /// (`set_streamer_archive_state(archived=False)`).
     async fn on_auto_unarchive(&self, login: &str) -> bool {
-        let mut changed = false;
-        match sqlx::query(
+        let changed = match sqlx::query(
             "UPDATE twitch_partners SET admin_archived_at = NULL \
              WHERE LOWER(twitch_login) = LOWER($1) AND admin_archived_at IS NOT NULL",
         )
@@ -182,25 +168,20 @@ impl PollHooks for SubscriptionPollHooks {
         .execute(&self.pool)
         .await
         {
-            Ok(r) => changed |= r.rows_affected() > 0,
+            Ok(r) => r.rows_affected() > 0,
             Err(e) => {
-                tracing::warn!(login, "auto-unarchive (twitch_partners) fehlgeschlagen: {e}");
+                tracing::warn!(
+                    login,
+                    "auto-unarchive (twitch_partners) fehlgeschlagen: {e}"
+                );
                 return false;
             }
-        }
-        match sqlx::query(
-            "UPDATE twitch_streamers SET archived_at = NULL \
-             WHERE LOWER(twitch_login) = LOWER($1) AND archived_at IS NOT NULL",
-        )
-        .bind(login)
-        .execute(&self.pool)
-        .await
-        {
-            Ok(r) => changed |= r.rows_affected() > 0,
-            Err(e) => tracing::warn!(login, "auto-unarchive (twitch_streamers) fehlgeschlagen: {e}"),
-        }
+        };
         if changed {
-            tracing::info!(login, "Partner automatisch entarchiviert (wieder Deadlock live)");
+            tracing::info!(
+                login,
+                "Partner automatisch entarchiviert (wieder Deadlock live)"
+            );
         }
         changed
     }
@@ -520,7 +501,10 @@ async fn main() {
                     tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
                     loop {
                         tick.tick().await;
-                        match maintenance_refresher.refresh_all_due(chrono::Utc::now()).await {
+                        match maintenance_refresher
+                            .refresh_all_due(chrono::Utc::now())
+                            .await
+                        {
                             Ok(refreshed) if refreshed > 0 => tracing::info!(
                                 refreshed,
                                 "Proaktiver Token-Refresh: Tokens erneuert"
@@ -792,8 +776,10 @@ async fn main() {
                 .ok()
                 .and_then(|v| v.parse().ok())
                 .unwrap_or(8786);
-            let receiver =
-                Arc::new(tb_monitoring::WebhookReceiver::new(secret, dispatcher.clone()));
+            let receiver = Arc::new(tb_monitoring::WebhookReceiver::new(
+                secret,
+                dispatcher.clone(),
+            ));
             let router = receiver.router();
             tokio::spawn(async move {
                 let addr = SocketAddr::from(([127, 0, 0, 1], receiver_port));
@@ -850,7 +836,9 @@ async fn main() {
         );
         let hc_worker = tb_highlight::worker::HighlightClipperWorker::new(
             pool.clone(),
-            Arc::new(HelixVodSource { helix: helix_client }),
+            Arc::new(HelixVodSource {
+                helix: helix_client,
+            }),
             hc_config,
         );
         tokio::spawn(async move {
@@ -886,8 +874,9 @@ async fn main() {
         // entfernt (B15-OFF-transcription: OpenAI-Whisper raus, kein Ersatz) —
         // der Enrichment-Worker läuft ohne Transcriber, die Transkriptions-Stage
         // wird übersprungen (None-Pfad).
-        let llm: Arc<dyn tb_social_media::enrich_pipeline::EnrichmentLlm> =
-            Arc::new(tb_social_media::llm_dispatch::LlmDispatcher::new(pool.clone()));
+        let llm: Arc<dyn tb_social_media::enrich_pipeline::EnrichmentLlm> = Arc::new(
+            tb_social_media::llm_dispatch::LlmDispatcher::new(pool.clone()),
+        );
         let enrichment =
             tb_social_media::enrichment_worker::EnrichmentWorker::new(pool.clone(), llm);
         tokio::spawn(async move { enrichment.run().await });
@@ -898,19 +887,16 @@ async fn main() {
         match tb_crypto::FieldCipher::from_env() {
             Ok(cipher) => {
                 let cipher = Arc::new(cipher);
-                let cwd =
-                    std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+                let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
                 let upload_creds = tb_social_media::credentials::CredentialManager::new(
                     pool.clone(),
                     cipher.clone(),
                 );
                 // yt-dlp wie beim Highlight-Clipper aus dem venv (systemd-PATH
                 // enthält ~/.local/bin nicht); clips_dir = Python-Default data/clips.
-                let upload = tb_social_media::upload_worker::UploadWorker::new(
-                    pool.clone(),
-                    upload_creds,
-                )
-                .with_yt_dlp(cwd.join(".venv/bin/yt-dlp").to_string_lossy().into_owned());
+                let upload =
+                    tb_social_media::upload_worker::UploadWorker::new(pool.clone(), upload_creds)
+                        .with_yt_dlp(cwd.join(".venv/bin/yt-dlp").to_string_lossy().into_owned());
                 tokio::spawn(async move { upload.run().await });
 
                 let insights_creds =
@@ -1048,7 +1034,8 @@ async fn main() {
     // (ohne Helix keine Clip-Reads). Auto-Uploads bleiben datengetrieben über
     // social_media_settings (Consent + Auto-Approve) gegated, 1:1 zu Python.
     if let Some(ref h) = *helix {
-        tb_social_media::build_clip_fetch_task(pool.clone(), std::sync::Arc::new(h.clone())).start();
+        tb_social_media::build_clip_fetch_task(pool.clone(), std::sync::Arc::new(h.clone()))
+            .start();
     } else {
         tracing::warn!("clip_fetch: kein HelixClient — Clip-Fetcher nicht gestartet");
     }
@@ -1097,11 +1084,7 @@ async fn main() {
         let sl_base = format!("http://127.0.0.1:{port}");
         let sl_token = settings.internal_api.token.clone();
         tokio::spawn(streamer_link::streamer_link_task(
-            sl_pool,
-            sl_relay,
-            sl_config,
-            sl_base,
-            sl_token,
+            sl_pool, sl_relay, sl_config, sl_base, sl_token,
         ));
     }
 
@@ -1242,7 +1225,12 @@ async fn subscription_maintenance_loop(
              UNION \
              SELECT LOWER(twitch_login), twitch_user_id, 0 AS is_partner \
              FROM twitch_streamers \
-             WHERE COALESCE(is_monitored_only, 0) = 1 AND COALESCE(twitch_user_id, '') <> ''",
+             WHERE NOT EXISTS ( \
+                     SELECT 1 FROM twitch_partners p \
+                 WHERE p.twitch_user_id = twitch_streamers.twitch_user_id \
+                    OR LOWER(p.twitch_login) = LOWER(twitch_streamers.twitch_login) \
+                 ) \
+               AND COALESCE(twitch_user_id, '') <> ''",
         )
         .fetch_all(&pool)
         .await

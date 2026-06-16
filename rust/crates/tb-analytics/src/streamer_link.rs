@@ -14,7 +14,7 @@ pub struct UnlinkedStreamer {
     pub twitch_login: String,
     /// NULL wenn weder `s.twitch_user_id` noch `i.twitch_user_id` gesetzt ist.
     pub twitch_user_id: Option<String>,
-    /// `COALESCE(s.is_monitored_only, 0)` — immer 0 oder 1, nie NULL.
+    /// Berechnet aus fehlendem `twitch_partners`-Eintrag — immer 0 oder 1.
     pub is_monitored_only: i32,
 }
 
@@ -30,7 +30,11 @@ pub async fn list_unlinked(pool: &PgPool) -> Result<Vec<UnlinkedStreamer>, sqlx:
         r#"
         SELECT s.twitch_login,
                COALESCE(NULLIF(s.twitch_user_id, ''), i.twitch_user_id) AS twitch_user_id,
-               COALESCE(s.is_monitored_only, 0)                         AS is_monitored_only
+               CASE WHEN NOT EXISTS (
+                    SELECT 1 FROM twitch_partners p
+                    WHERE p.twitch_user_id = s.twitch_user_id
+                       OR LOWER(p.twitch_login) = LOWER(s.twitch_login)
+               ) THEN 1 ELSE 0 END                                      AS is_monitored_only
           FROM twitch_streamers s
          INNER JOIN twitch_partners tp
             ON tp.twitch_login = s.twitch_login
@@ -38,9 +42,7 @@ pub async fn list_unlinked(pool: &PgPool) -> Result<Vec<UnlinkedStreamer>, sqlx:
            AND tp.admin_archived_at IS NULL
           LEFT JOIN twitch_streamer_identities i
             ON i.twitch_user_id = s.twitch_user_id
-         WHERE (s.discord_user_id IS NULL OR s.discord_user_id = '')
-           AND (i.discord_user_id IS NULL OR i.discord_user_id = '')
-           AND s.archived_at IS NULL
+         WHERE (i.discord_user_id IS NULL OR i.discord_user_id = '')
          ORDER BY s.twitch_login
         "#,
     )
@@ -101,12 +103,7 @@ mod tests {
             CREATE TABLE twitch_streamers (
                 twitch_login        TEXT PRIMARY KEY,
                 twitch_user_id      TEXT,
-                discord_user_id     TEXT,
-                discord_display_name TEXT,
-                is_on_discord       INTEGER DEFAULT 0,
-                created_at          TEXT DEFAULT CURRENT_TIMESTAMP,
-                archived_at         TEXT,
-                is_monitored_only   INTEGER DEFAULT 0
+                created_at          TEXT DEFAULT CURRENT_TIMESTAMP
             )
             "#,
         )
@@ -137,6 +134,7 @@ mod tests {
             r#"
             CREATE TABLE twitch_partners (
                 twitch_login      TEXT PRIMARY KEY,
+                twitch_user_id    TEXT,
                 departnered_at    TEXT,
                 admin_archived_at TEXT
             )
@@ -152,11 +150,14 @@ mod tests {
     /// Markiert `login` als aktiven Partner (departnered/archived = NULL), damit
     /// der INNER JOIN den Streamer als Kandidaten durchlässt.
     async fn insert_active_partner(pool: &PgPool, login: &str) {
-        sqlx::query("INSERT INTO twitch_partners (twitch_login) VALUES ($1)")
-            .bind(login)
-            .execute(pool)
-            .await
-            .expect("insert active partner");
+        sqlx::query(
+            "INSERT INTO twitch_partners (twitch_login, twitch_user_id) \
+             SELECT twitch_login, twitch_user_id FROM twitch_streamers WHERE twitch_login = $1",
+        )
+        .bind(login)
+        .execute(pool)
+        .await
+        .expect("insert active partner");
     }
 
     #[tokio::test]
@@ -172,14 +173,12 @@ mod tests {
         let dsn = db_dsn_or_skip!();
         let pool = make_pool(&dsn, "test_sl_erscheint").await;
 
-        sqlx::query(
-            "INSERT INTO twitch_streamers (twitch_login, twitch_user_id) VALUES ($1, $2)",
-        )
-        .bind("streamer_a")
-        .bind("uid_a")
-        .execute(&pool)
-        .await
-        .expect("insert");
+        sqlx::query("INSERT INTO twitch_streamers (twitch_login, twitch_user_id) VALUES ($1, $2)")
+            .bind("streamer_a")
+            .bind("uid_a")
+            .execute(&pool)
+            .await
+            .expect("insert");
         insert_active_partner(&pool, "streamer_a").await;
 
         let rows = list_unlinked(&pool).await.expect("list_unlinked");
@@ -190,25 +189,34 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn mit_discord_id_in_streamers_wird_ausgeblendet() {
+    async fn mit_discord_id_in_identities_wird_ausgeblendet() {
         let dsn = db_dsn_or_skip!();
         let pool = make_pool(&dsn, "test_sl_discord_in_streamers").await;
 
+        sqlx::query("INSERT INTO twitch_streamers (twitch_login, twitch_user_id) VALUES ($1, $2)")
+            .bind("verknuepft")
+            .bind("uid_v")
+            .execute(&pool)
+            .await
+            .expect("insert streamer");
         sqlx::query(
-            "INSERT INTO twitch_streamers (twitch_login, twitch_user_id, discord_user_id) VALUES ($1, $2, $3)",
+            "INSERT INTO twitch_streamer_identities (twitch_user_id, twitch_login, discord_user_id) VALUES ($1, $2, $3)",
         )
-        .bind("verknuepft")
         .bind("uid_v")
+        .bind("verknuepft")
         .bind("discord_123")
         .execute(&pool)
         .await
-        .expect("insert");
-        // Aktiver Partner: der Streamer wird NUR durch die discord_user_id
+        .expect("insert identity");
+        // Aktiver Partner: der Streamer wird durch die discord_user_id in identities
         // ausgeblendet, nicht durch ein fehlendes Partner-Match.
         insert_active_partner(&pool, "verknuepft").await;
 
         let rows = list_unlinked(&pool).await.expect("list_unlinked");
-        assert!(rows.is_empty(), "verknüpfter Streamer darf nicht erscheinen");
+        assert!(
+            rows.is_empty(),
+            "verknüpfter Streamer darf nicht erscheinen"
+        );
     }
 
     #[tokio::test]
@@ -216,14 +224,12 @@ mod tests {
         let dsn = db_dsn_or_skip!();
         let pool = make_pool(&dsn, "test_sl_discord_in_identities").await;
 
-        sqlx::query(
-            "INSERT INTO twitch_streamers (twitch_login, twitch_user_id) VALUES ($1, $2)",
-        )
-        .bind("identity_linked")
-        .bind("uid_il")
-        .execute(&pool)
-        .await
-        .expect("insert streamer");
+        sqlx::query("INSERT INTO twitch_streamers (twitch_login, twitch_user_id) VALUES ($1, $2)")
+            .bind("identity_linked")
+            .bind("uid_il")
+            .execute(&pool)
+            .await
+            .expect("insert streamer");
 
         sqlx::query(
             "INSERT INTO twitch_streamer_identities (twitch_user_id, twitch_login, discord_user_id) VALUES ($1, $2, $3)",
@@ -248,62 +254,57 @@ mod tests {
         let dsn = db_dsn_or_skip!();
         let pool = make_pool(&dsn, "test_sl_archiviert").await;
 
+        sqlx::query("INSERT INTO twitch_streamers (twitch_login) VALUES ($1)")
+            .bind("alt_archiv")
+            .execute(&pool)
+            .await
+            .expect("insert archiviert");
         sqlx::query(
-            "INSERT INTO twitch_streamers (twitch_login, archived_at) VALUES ($1, $2)",
+            "INSERT INTO twitch_partners (twitch_login, admin_archived_at) VALUES ($1, $2)",
         )
         .bind("alt_archiv")
         .bind("2026-01-01 00:00:00")
         .execute(&pool)
         .await
-        .expect("insert archiviert");
-        // Aktiver Partner: nur archived_at blendet aus, nicht das Partner-Gate.
-        insert_active_partner(&pool, "alt_archiv").await;
+        .expect("insert archived partner");
 
         let rows = list_unlinked(&pool).await.expect("list_unlinked");
-        assert!(rows.is_empty(), "archivierter Streamer darf nicht erscheinen");
-    }
-
-    #[tokio::test]
-    async fn is_monitored_only_default_null_wird_zu_null() {
-        let dsn = db_dsn_or_skip!();
-        let pool = make_pool(&dsn, "test_sl_monitored").await;
-
-        // is_monitored_only explizit NULL setzen (override Default)
-        sqlx::query(
-            "INSERT INTO twitch_streamers (twitch_login, is_monitored_only) VALUES ($1, NULL)",
-        )
-        .bind("monitor_streamer")
-        .execute(&pool)
-        .await
-        .expect("insert monitored");
-        insert_active_partner(&pool, "monitor_streamer").await;
-
-        let rows = list_unlinked(&pool).await.expect("list_unlinked");
-        assert_eq!(rows.len(), 1);
-        // COALESCE(NULL, 0) = 0
-        assert_eq!(
-            rows[0].is_monitored_only, 0,
-            "NULL is_monitored_only muss zu 0 werden"
+        assert!(
+            rows.is_empty(),
+            "archivierter Streamer darf nicht erscheinen"
         );
     }
 
     #[tokio::test]
-    async fn is_monitored_only_1_wird_weitergegeben() {
+    async fn partner_kandidat_ist_nicht_monitored_only() {
         let dsn = db_dsn_or_skip!();
-        let pool = make_pool(&dsn, "test_sl_monitored_1").await;
+        let pool = make_pool(&dsn, "test_sl_monitored").await;
 
-        sqlx::query(
-            "INSERT INTO twitch_streamers (twitch_login, is_monitored_only) VALUES ($1, 1)",
-        )
-        .bind("nur_monitor")
-        .execute(&pool)
-        .await
-        .expect("insert is_monitored_only=1");
-        insert_active_partner(&pool, "nur_monitor").await;
+        sqlx::query("INSERT INTO twitch_streamers (twitch_login) VALUES ($1)")
+            .bind("monitor_streamer")
+            .execute(&pool)
+            .await
+            .expect("insert streamer");
+        insert_active_partner(&pool, "monitor_streamer").await;
 
         let rows = list_unlinked(&pool).await.expect("list_unlinked");
         assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0].is_monitored_only, 1);
+        assert_eq!(rows[0].is_monitored_only, 0);
+    }
+
+    #[tokio::test]
+    async fn ohne_partner_wird_ausgeblendet_statt_monitored_only_gelistet() {
+        let dsn = db_dsn_or_skip!();
+        let pool = make_pool(&dsn, "test_sl_monitored_1").await;
+
+        sqlx::query("INSERT INTO twitch_streamers (twitch_login) VALUES ($1)")
+            .bind("nur_monitor")
+            .execute(&pool)
+            .await
+            .expect("insert streamer");
+
+        let rows = list_unlinked(&pool).await.expect("list_unlinked");
+        assert!(rows.is_empty());
     }
 
     #[tokio::test]
@@ -312,19 +313,20 @@ mod tests {
         let pool = make_pool(&dsn, "test_sl_null_uid").await;
 
         // Streamer ohne user_id, keine identity
-        sqlx::query(
-            "INSERT INTO twitch_streamers (twitch_login) VALUES ($1)",
-        )
-        .bind("kein_uid")
-        .execute(&pool)
-        .await
-        .expect("insert ohne uid");
+        sqlx::query("INSERT INTO twitch_streamers (twitch_login) VALUES ($1)")
+            .bind("kein_uid")
+            .execute(&pool)
+            .await
+            .expect("insert ohne uid");
         insert_active_partner(&pool, "kein_uid").await;
 
         let rows = list_unlinked(&pool).await.expect("list_unlinked");
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].twitch_login, "kein_uid");
-        assert!(rows[0].twitch_user_id.is_none(), "twitch_user_id muss None sein");
+        assert!(
+            rows[0].twitch_user_id.is_none(),
+            "twitch_user_id muss None sein"
+        );
     }
 
     #[tokio::test]
@@ -353,19 +355,30 @@ mod tests {
         let dsn = db_dsn_or_skip!();
         let pool = make_pool(&dsn, "test_sl_leer_discord").await;
 
-        // discord_user_id = '' soll als unverknüpft gelten (Parität zu Python: OR = '')
+        // discord_user_id = '' soll als unverknüpft gelten.
+        sqlx::query("INSERT INTO twitch_streamers (twitch_login, twitch_user_id) VALUES ($1, $2)")
+            .bind("leer_discord")
+            .bind("uid_empty")
+            .execute(&pool)
+            .await
+            .expect("insert streamer");
         sqlx::query(
-            "INSERT INTO twitch_streamers (twitch_login, discord_user_id) VALUES ($1, $2)",
+            "INSERT INTO twitch_streamer_identities (twitch_user_id, twitch_login, discord_user_id) VALUES ($1, $2, $3)",
         )
+        .bind("uid_empty")
         .bind("leer_discord")
         .bind("")
         .execute(&pool)
         .await
-        .expect("insert leer discord_user_id");
+        .expect("insert empty discord_user_id");
         insert_active_partner(&pool, "leer_discord").await;
 
         let rows = list_unlinked(&pool).await.expect("list_unlinked");
-        assert_eq!(rows.len(), 1, "leerer discord_user_id-String gilt als unverknüpft");
+        assert_eq!(
+            rows.len(),
+            1,
+            "leerer discord_user_id-String gilt als unverknüpft"
+        );
     }
 
     #[tokio::test]
@@ -380,16 +393,17 @@ mod tests {
             .execute(&pool)
             .await
             .expect("insert streamer");
-        sqlx::query(
-            "INSERT INTO twitch_partners (twitch_login, departnered_at) VALUES ($1, $2)",
-        )
-        .bind("kein_partner")
-        .bind("2026-01-01 00:00:00")
-        .execute(&pool)
-        .await
-        .expect("insert departnerter partner");
+        sqlx::query("INSERT INTO twitch_partners (twitch_login, departnered_at) VALUES ($1, $2)")
+            .bind("kein_partner")
+            .bind("2026-01-01 00:00:00")
+            .execute(&pool)
+            .await
+            .expect("insert departnerter partner");
 
         let rows = list_unlinked(&pool).await.expect("list_unlinked");
-        assert!(rows.is_empty(), "Streamer ohne aktiven Partner darf nicht erscheinen");
+        assert!(
+            rows.is_empty(),
+            "Streamer ohne aktiven Partner darf nicht erscheinen"
+        );
     }
 }

@@ -67,8 +67,7 @@ async fn apply_ddl(pool: &PgPool) {
     sqlx::query(
         "CREATE TABLE IF NOT EXISTS twitch_streamers (
             twitch_login TEXT PRIMARY KEY,
-            twitch_user_id TEXT,
-            is_monitored_only INTEGER DEFAULT 0
+            twitch_user_id TEXT
         )",
     )
     .execute(pool)
@@ -299,7 +298,10 @@ async fn erstmalige_nachricht_legt_session_und_rollup_an() {
     .await
     .unwrap();
     let msg_at = msg_at.expect("message_at gesetzt");
-    assert!(msg_at.ends_with("+00:00") && msg_at.len() == 25, "ISO-Sekunden: {msg_at}");
+    assert!(
+        msg_at.ends_with("+00:00") && msg_at.len() == 25,
+        "ISO-Sekunden: {msg_at}"
+    );
     assert!(ok_at.is_some(), "insert_ok_at gesetzt");
     assert!(err.is_none(), "kein Fehler");
 }

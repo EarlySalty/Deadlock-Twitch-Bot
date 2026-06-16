@@ -5,8 +5,8 @@
 //! # Aufgabe
 //!
 //! Entdeckt live Streamer der Ziel-Kategorie (Deadlock, Sprache "de") und
-//! registriert sie als `is_monitored_only = 1` in `twitch_streamers`. Streamer,
-//! die 2 aufeinanderfolgende Zyklen abwesend sind, werden wieder entfernt
+//! registriert sie in `twitch_streamers` ohne Partner-Eintrag. Streamer, die 2
+//! aufeinanderfolgende Zyklen abwesend sind, werden wieder entfernt
 //! (Sessions geschlossen, Live-State gelöscht, Datenbankzeile weg).
 //!
 //! Für **frisch entdeckte** Kanäle wird zusätzlich
@@ -112,10 +112,16 @@ impl ScoutRepository {
         Self { pool }
     }
 
-    /// Gibt alle aktuell als `is_monitored_only = 1` markierten Logins zurück.
+    /// Gibt alle aktuell nur beobachteten Logins ohne Partner-Eintrag zurück.
     pub async fn load_monitored_only_logins(&self) -> Result<Vec<String>, sqlx::Error> {
         sqlx::query_scalar(
-            "SELECT twitch_login FROM twitch_streamers WHERE COALESCE(is_monitored_only, 0) = 1",
+            "SELECT twitch_login \
+             FROM twitch_streamers \
+             WHERE NOT EXISTS ( \
+                 SELECT 1 FROM twitch_partners p \
+                 WHERE p.twitch_user_id = twitch_streamers.twitch_user_id \
+                    OR LOWER(p.twitch_login) = LOWER(twitch_streamers.twitch_login) \
+             )",
         )
         .fetch_all(&self.pool)
         .await
@@ -137,8 +143,8 @@ impl ScoutRepository {
 
         sqlx::query(
             r#"
-            INSERT INTO twitch_streamers (twitch_login, twitch_user_id, is_monitored_only)
-            VALUES ($1, $2, 1)
+            INSERT INTO twitch_streamers (twitch_login, twitch_user_id)
+            VALUES ($1, $2)
             ON CONFLICT (twitch_login) DO NOTHING
             "#,
         )
@@ -186,7 +192,7 @@ impl ScoutRepository {
 
     /// Löscht einen Monitoring-only-Streamer und seine kaskadierenden Einträge.
     ///
-    /// Safety-Guard: löscht nur wenn `is_monitored_only = 1` — Partner bleiben
+    /// Safety-Guard: löscht nur wenn kein Partner-Eintrag existiert — Partner bleiben
     /// immer unberührt.
     pub async fn delete_monitored_streamer(&self, login: &str) -> Result<bool, sqlx::Error> {
         // Kaskadierende Clip-Tabellen (meist no-op für monitoring-only Streamer,
@@ -206,7 +212,11 @@ impl ScoutRepository {
 
         let rows = sqlx::query(
             "DELETE FROM twitch_streamers WHERE LOWER(twitch_login) = LOWER($1) \
-             AND COALESCE(is_monitored_only, 0) = 1",
+             AND NOT EXISTS ( \
+                 SELECT 1 FROM twitch_partners p \
+                 WHERE p.twitch_user_id = twitch_streamers.twitch_user_id \
+                    OR LOWER(p.twitch_login) = LOWER(twitch_streamers.twitch_login) \
+             )",
         )
         .bind(login)
         .execute(&self.pool)

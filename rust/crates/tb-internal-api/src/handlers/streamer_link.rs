@@ -126,12 +126,7 @@ mod tests {
             CREATE TABLE twitch_streamers (
                 twitch_login         TEXT PRIMARY KEY,
                 twitch_user_id       TEXT,
-                discord_user_id      TEXT,
-                discord_display_name TEXT,
-                is_on_discord        INTEGER DEFAULT 0,
-                created_at           TEXT DEFAULT CURRENT_TIMESTAMP,
-                archived_at          TEXT,
-                is_monitored_only    INTEGER DEFAULT 0
+                created_at           TEXT DEFAULT CURRENT_TIMESTAMP
             )
             "#,
         )
@@ -162,6 +157,7 @@ mod tests {
             r#"
             CREATE TABLE twitch_partners (
                 twitch_login      TEXT PRIMARY KEY,
+                twitch_user_id    TEXT,
                 departnered_at    TEXT,
                 admin_archived_at TEXT
             )
@@ -177,11 +173,14 @@ mod tests {
     /// Markiert `login` als aktiven Partner (departnered/archived = NULL), damit
     /// der INNER JOIN den Streamer als Link-Kandidaten durchlässt.
     async fn insert_active_partner(pool: &PgPool, login: &str) {
-        sqlx::query("INSERT INTO twitch_partners (twitch_login) VALUES ($1)")
-            .bind(login)
-            .execute(pool)
-            .await
-            .expect("insert active partner");
+        sqlx::query(
+            "INSERT INTO twitch_partners (twitch_login, twitch_user_id) \
+             SELECT twitch_login, twitch_user_id FROM twitch_streamers WHERE twitch_login = $1",
+        )
+        .bind(login)
+        .execute(pool)
+        .await
+        .expect("insert active partner");
     }
 
     fn make_router(pool: PgPool, token: &str) -> Router {
@@ -193,7 +192,10 @@ mod tests {
             )
             .with_state(pool)
             .layer(Extension(ExpectedToken(token.to_string())))
-            .layer(middleware::from_fn_with_state(token.to_string(), internal_auth))
+            .layer(middleware::from_fn_with_state(
+                token.to_string(),
+                internal_auth,
+            ))
             .layer(middleware::from_fn(loopback_only))
     }
 
@@ -201,7 +203,9 @@ mod tests {
         let mut builder = Request::builder()
             .method(method)
             .uri(uri)
-            .extension(ConnectInfo("127.0.0.1:55555".parse::<SocketAddr>().unwrap()));
+            .extension(ConnectInfo(
+                "127.0.0.1:55555".parse::<SocketAddr>().unwrap(),
+            ));
         if let Some(t) = token {
             builder = builder.header("x-internal-token", t);
         }
@@ -219,7 +223,11 @@ mod tests {
         let app = make_router(make_pool(&dsn, "test_h_sl_401").await, "secret");
         let base = INTERNAL_API_BASE_PATH;
         let resp = app
-            .oneshot(req("GET", &format!("{base}/streamers/link-candidates"), None))
+            .oneshot(req(
+                "GET",
+                &format!("{base}/streamers/link-candidates"),
+                None,
+            ))
             .await
             .unwrap();
         assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
@@ -248,15 +256,12 @@ mod tests {
     async fn unverknuepfter_streamer_erscheint_in_entries() {
         let dsn = db_dsn_or_skip!();
         let pool = make_pool(&dsn, "test_h_sl_entry").await;
-        sqlx::query(
-            "INSERT INTO twitch_streamers (twitch_login, twitch_user_id, is_monitored_only) VALUES ($1, $2, $3)",
-        )
-        .bind("nanigami")
-        .bind("uid_1")
-        .bind(0_i32)
-        .execute(&pool)
-        .await
-        .unwrap();
+        sqlx::query("INSERT INTO twitch_streamers (twitch_login, twitch_user_id) VALUES ($1, $2)")
+            .bind("nanigami")
+            .bind("uid_1")
+            .execute(&pool)
+            .await
+            .unwrap();
         insert_active_partner(&pool, "nanigami").await;
 
         let app = make_router(pool, "secret");
@@ -283,9 +288,16 @@ mod tests {
     async fn verknuepfter_streamer_erscheint_nicht() {
         let dsn = db_dsn_or_skip!();
         let pool = make_pool(&dsn, "test_h_sl_verknuepft").await;
+        sqlx::query("INSERT INTO twitch_streamers (twitch_login, twitch_user_id) VALUES ($1, $2)")
+            .bind("already_linked")
+            .bind("uid_linked")
+            .execute(&pool)
+            .await
+            .unwrap();
         sqlx::query(
-            "INSERT INTO twitch_streamers (twitch_login, discord_user_id) VALUES ($1, $2)",
+            "INSERT INTO twitch_streamer_identities (twitch_user_id, twitch_login, discord_user_id) VALUES ($1, $2, $3)",
         )
+        .bind("uid_linked")
         .bind("already_linked")
         .bind("discord_999")
         .execute(&pool)
@@ -345,17 +357,14 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn is_monitored_only_1_wird_serialisiert() {
+    async fn ohne_partner_wird_nicht_als_link_kandidat_gelistet() {
         let dsn = db_dsn_or_skip!();
         let pool = make_pool(&dsn, "test_h_sl_monitored").await;
-        sqlx::query(
-            "INSERT INTO twitch_streamers (twitch_login, is_monitored_only) VALUES ($1, 1)",
-        )
-        .bind("nur_monitor")
-        .execute(&pool)
-        .await
-        .unwrap();
-        insert_active_partner(&pool, "nur_monitor").await;
+        sqlx::query("INSERT INTO twitch_streamers (twitch_login) VALUES ($1)")
+            .bind("nur_monitor")
+            .execute(&pool)
+            .await
+            .unwrap();
 
         let app = make_router(pool, "secret");
         let base = INTERNAL_API_BASE_PATH;
@@ -368,6 +377,6 @@ mod tests {
             .await
             .unwrap();
         let j = json_body(resp).await;
-        assert_eq!(j["entries"][0]["is_monitored_only"], 1);
+        assert_eq!(j["entries"], serde_json::json!([]));
     }
 }

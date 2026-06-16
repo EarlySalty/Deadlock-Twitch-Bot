@@ -8,10 +8,7 @@ use sqlx::FromRow;
 pub struct TwitchStreamerRow {
     pub twitch_login: String,
     pub twitch_user_id: Option<String>,
-    pub discord_user_id: Option<String>,
-    pub is_on_discord: Option<i32>,
     pub created_at: Option<String>,
-    pub is_monitored_only: Option<i32>,
 }
 
 /// Auszug aus `twitch_partners` (PK `id` bigserial).

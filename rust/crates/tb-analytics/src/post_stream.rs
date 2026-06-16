@@ -75,8 +75,15 @@ pub async fn load_session_chat_data(pool: &PgPool, session_id: i64) -> Option<Se
     .ok()
     .flatten()?;
 
-    let (streamer_login, started_at, ended_at, duration_seconds, avg_viewers, peak_viewers, followers_delta) =
-        row;
+    let (
+        streamer_login,
+        started_at,
+        ended_at,
+        duration_seconds,
+        avg_viewers,
+        peak_viewers,
+        followers_delta,
+    ) = row;
     let duration_seconds = duration_seconds.unwrap_or(0);
 
     let messages: Vec<String> = sqlx::query_scalar::<_, String>(
@@ -334,7 +341,9 @@ pub enum AiModel {
 pub async fn plan_ai_model(pool: &PgPool, streamer: &str) -> Option<AiModel> {
     // Nur Login (kein user_id) → der Trial-Auto-Grant in resolve_plan_snapshot
     // bleibt aus (braucht beides), reine Lese-Auflösung.
-    let snapshot = crate::plan::resolve_plan_snapshot(pool, streamer, "").await.ok()?;
+    let snapshot = crate::plan::resolve_plan_snapshot(pool, streamer, "")
+        .await
+        .ok()?;
     if snapshot.entitlements.contains(&"analytics.ai_full") {
         Some(AiModel::Opus)
     } else if snapshot.entitlements.contains(&"analytics.ai_mini") {
@@ -482,13 +491,17 @@ pub async fn generate_word_groups(model: AiModel, messages: &[String]) -> Vec<Wo
             let Some(key) = resolve_minimax_key() else {
                 return Vec::new();
             };
-            call_minimax(MINIMAX_BASE_URL, &key, &prompt).await.unwrap_or_default()
+            call_minimax(MINIMAX_BASE_URL, &key, &prompt)
+                .await
+                .unwrap_or_default()
         }
         AiModel::Opus => {
             let Some(key) = resolve_anthropic_key() else {
                 return Vec::new();
             };
-            call_claude(ANTHROPIC_BASE_URL, &key, &prompt).await.unwrap_or_default()
+            call_claude(ANTHROPIC_BASE_URL, &key, &prompt)
+                .await
+                .unwrap_or_default()
         }
     };
     process_word_group_response(&raw)
@@ -499,8 +512,21 @@ pub async fn generate_word_groups(model: AiModel, messages: &[String]) -> Vec<Wo
 // ---------------------------------------------------------------------------
 
 const POSITIVE_TERMS: [&str; 15] = [
-    "gg", "nice", "pog", "poggers", "insane", "clean", "sick", "geil", "krass", "stark", "super",
-    "amazing", "legendary", "godlike", "wp",
+    "gg",
+    "nice",
+    "pog",
+    "poggers",
+    "insane",
+    "clean",
+    "sick",
+    "geil",
+    "krass",
+    "stark",
+    "super",
+    "amazing",
+    "legendary",
+    "godlike",
+    "wp",
 ];
 const NEGATIVE_TERMS: [&str; 13] = [
     "trash", "boring", "cringe", "bad", "worst", "throw", "mies", "schlecht", "nervig", "dogwater",
@@ -508,11 +534,34 @@ const NEGATIVE_TERMS: [&str; 13] = [
 ];
 /// Topic-Keywords (Reihenfolge wie Python `_TOPIC_KEYWORDS`).
 const TOPIC_KEYWORDS: [(&str, &[&str]); 5] = [
-    ("gameplay", &["play", "build", "item", "tower", "kill", "die", "push", "farm", "fight", "lane"]),
-    ("chat_reactions", &["lol", "lmao", "haha", "omg", "wtf", "xd", "kekw"]),
-    ("questions", &["?", "wie", "was", "wann", "warum", "wieso", "who", "when", "why", "how"]),
-    ("hype", &["gg", "pog", "nice", "insane", "geil", "stark", "krass", "letsgo"]),
-    ("criticism", &["bad", "trash", "throw", "schlecht", "mies", "boring", "cringe"]),
+    (
+        "gameplay",
+        &[
+            "play", "build", "item", "tower", "kill", "die", "push", "farm", "fight", "lane",
+        ],
+    ),
+    (
+        "chat_reactions",
+        &["lol", "lmao", "haha", "omg", "wtf", "xd", "kekw"],
+    ),
+    (
+        "questions",
+        &[
+            "?", "wie", "was", "wann", "warum", "wieso", "who", "when", "why", "how",
+        ],
+    ),
+    (
+        "hype",
+        &[
+            "gg", "pog", "nice", "insane", "geil", "stark", "krass", "letsgo",
+        ],
+    ),
+    (
+        "criticism",
+        &[
+            "bad", "trash", "throw", "schlecht", "mies", "boring", "cringe",
+        ],
+    ),
 ];
 const MAX_CHAT_EXAMPLES: usize = 80;
 
@@ -611,8 +660,9 @@ pub fn chat_digest(
     };
 
     // question_examples: "?" oder Fragewort-Start, max 20.
-    const QUESTION_PREFIXES: [&str; 8] =
-        ["wie ", "was ", "wann ", "warum ", "wieso ", "how ", "why ", "what "];
+    const QUESTION_PREFIXES: [&str; 8] = [
+        "wie ", "was ", "wann ", "warum ", "wieso ", "how ", "why ", "what ",
+    ];
     let question_examples: Vec<String> = texts
         .iter()
         .filter(|t| {
@@ -737,12 +787,18 @@ pub async fn load_session(pool: &PgPool, session_id: i64) -> Option<ReportSessio
 /// `_safe_fetchone_dict` → bei Fehler/keinem Treffer leeres Registry).
 pub async fn load_registry(pool: &PgPool, streamer: &str) -> ReportRegistry {
     sqlx::query_as::<_, ReportRegistry>(
-        "SELECT twitch_user_id::text AS twitch_user_id, \
-                discord_user_id::text AS discord_user_id, \
-                discord_display_name, \
-                is_monitored_only::bool AS is_monitored_only \
-         FROM twitch_streamers \
-         WHERE LOWER(twitch_login) = LOWER($1) \
+        "SELECT s.twitch_user_id::text AS twitch_user_id, \
+                i.discord_user_id::text AS discord_user_id, \
+                i.discord_display_name, \
+                NOT EXISTS ( \
+                    SELECT 1 FROM twitch_partners p \
+                    WHERE p.twitch_user_id = s.twitch_user_id \
+                       OR LOWER(p.twitch_login) = LOWER(s.twitch_login) \
+                ) AS is_monitored_only \
+         FROM twitch_streamers s \
+         LEFT JOIN twitch_streamer_identities i \
+           ON i.twitch_user_id = s.twitch_user_id \
+         WHERE LOWER(s.twitch_login) = LOWER($1) \
          LIMIT 1",
     )
     .bind(streamer)
@@ -1041,7 +1097,11 @@ pub async fn viewer_presence(pool: &PgPool, session_id: i64) -> serde_json::Valu
 /// genullt, wenn er verdächtig aussieht (`followers_end=0 AND followers_start>0`).
 /// `numeric` per `::float8`. Aktuelle Werte = `core_metrics`-Logik (avg gerundet).
 pub async fn comparison_payload(pool: &PgPool, session: &ReportSession) -> serde_json::Value {
-    let streamer = session.streamer_login.as_deref().unwrap_or("").to_lowercase();
+    let streamer = session
+        .streamer_login
+        .as_deref()
+        .unwrap_or("")
+        .to_lowercase();
     let session_id = session.id;
     let agg = sqlx::query_as::<
         _,
@@ -1129,7 +1189,13 @@ pub async fn comparison_payload(pool: &PgPool, session: &ReportSession) -> serde
 
 /// Zähl-/Aggregat-Query mit graceful 0 bei Fehler (Python `_safe_scalar` →
 /// `None` → `_as_int` → 0). Für die Zeitfenster-Events (follows etc.).
-async fn safe_count_between(pool: &PgPool, sql: &str, user_id: &str, start: &str, end: &str) -> i64 {
+async fn safe_count_between(
+    pool: &PgPool,
+    sql: &str,
+    user_id: &str,
+    start: &str,
+    end: &str,
+) -> i64 {
     sqlx::query_scalar::<_, i64>(sql)
         .bind(user_id)
         .bind(start)
@@ -1161,7 +1227,10 @@ pub async fn events_payload(
     .await
     {
         Ok(n) => payload.insert("subscriptions".into(), serde_json::json!(n)),
-        Err(_) => payload.insert("subscriptions".into(), serde_json::json!({"unavailable": true})),
+        Err(_) => payload.insert(
+            "subscriptions".into(),
+            serde_json::json!({"unavailable": true}),
+        ),
     };
 
     // bits_events — count + amount.
@@ -1185,7 +1254,10 @@ pub async fn events_payload(
     .await
     {
         Ok(n) => payload.insert("channel_points".into(), serde_json::json!(n)),
-        Err(_) => payload.insert("channel_points".into(), serde_json::json!({"unavailable": true})),
+        Err(_) => payload.insert(
+            "channel_points".into(),
+            serde_json::json!({"unavailable": true}),
+        ),
     };
 
     // hype_trains — count + max_level.
@@ -1221,7 +1293,10 @@ pub async fn events_payload(
     .await
     {
         Ok(n) => payload.insert("moderation_events".into(), serde_json::json!(n)),
-        Err(_) => payload.insert("moderation_events".into(), serde_json::json!({"unavailable": true})),
+        Err(_) => payload.insert(
+            "moderation_events".into(),
+            serde_json::json!({"unavailable": true}),
+        ),
     };
 
     // Zeitfenster-Events nur bei twitch_user_id UND (nicht-leerem) started_at.
@@ -1505,19 +1580,31 @@ pub async fn build_post_stream_snapshot(
     variant_in: &str,
 ) -> serde_json::Value {
     let full = variant_in.to_lowercase() == REPORT_VARIANT_FULL;
-    let variant = if full { REPORT_VARIANT_FULL } else { REPORT_VARIANT_COMPACT };
+    let variant = if full {
+        REPORT_VARIANT_FULL
+    } else {
+        REPORT_VARIANT_COMPACT
+    };
 
     let Some(session) = load_session(pool, session_id).await else {
         return serde_json::json!({}); // Python: leeres Dict, Aufrufer bricht ab
     };
-    let streamer = session.streamer_login.as_deref().unwrap_or("").trim().to_lowercase();
+    let streamer = session
+        .streamer_login
+        .as_deref()
+        .unwrap_or("")
+        .trim()
+        .to_lowercase();
     let registry = load_registry(pool, &streamer).await;
     let messages = load_messages(pool, session_id).await;
     let minute_buckets = chat_minute_buckets(pool, session_id).await;
     let top = top_chatters(pool, session_id).await;
 
     let mut snapshot = serde_json::Map::new();
-    snapshot.insert("schema_version".into(), serde_json::json!(POST_STREAM_REPORT_SCHEMA_VERSION));
+    snapshot.insert(
+        "schema_version".into(),
+        serde_json::json!(POST_STREAM_REPORT_SCHEMA_VERSION),
+    );
     snapshot.insert("report_variant".into(), serde_json::json!(variant));
     snapshot.insert("session".into(), session_payload(&session, &registry));
     snapshot.insert("metrics".into(), core_metrics(&session));
@@ -1527,8 +1614,14 @@ pub async fn build_post_stream_snapshot(
     );
     snapshot.insert("chat".into(), chat_digest(&messages, &minute_buckets, top));
     snapshot.insert("audience".into(), viewer_presence(pool, session_id).await);
-    snapshot.insert("events".into(), events_payload(pool, &session, &registry).await);
-    snapshot.insert("comparisons".into(), comparison_payload(pool, &session).await);
+    snapshot.insert(
+        "events".into(),
+        events_payload(pool, &session, &registry).await,
+    );
+    snapshot.insert(
+        "comparisons".into(),
+        comparison_payload(pool, &session).await,
+    );
     snapshot.insert(
         "model_input_policy".into(),
         serde_json::json!({
@@ -1546,7 +1639,10 @@ pub async fn build_post_stream_snapshot(
         let mut raw_data = serde_json::Map::new();
         raw_data.insert("chat_messages".into(), raw_chat);
         raw_data.insert("session_chatters".into(), sess_chatters);
-        raw_data.insert("minute_buckets".into(), serde_json::Value::Array(minute_buckets));
+        raw_data.insert(
+            "minute_buckets".into(),
+            serde_json::Value::Array(minute_buckets),
+        );
         raw_data.insert("viewer_curve_full".into(), vc_full);
         raw_data.insert("events".into(), raw_events);
         snapshot.insert("raw_data".into(), serde_json::Value::Object(raw_data));
@@ -1672,8 +1768,14 @@ pub fn build_report_v2_prompt(snapshot: &serde_json::Value) -> String {
 /// parsebar ist (Python `_generate_report_v2`-Fallback). Übernimmt
 /// schema_version/report_variant aus dem Snapshot.
 pub fn report_v2_fallback(snapshot: &serde_json::Value) -> serde_json::Value {
-    let schema_version = snapshot.get("schema_version").cloned().unwrap_or(serde_json::Value::Null);
-    let report_variant = snapshot.get("report_variant").cloned().unwrap_or(serde_json::Value::Null);
+    let schema_version = snapshot
+        .get("schema_version")
+        .cloned()
+        .unwrap_or(serde_json::Value::Null);
+    let report_variant = snapshot
+        .get("report_variant")
+        .cloned()
+        .unwrap_or(serde_json::Value::Null);
     serde_json::json!({
         "schema_version": schema_version,
         "report_variant": report_variant,
@@ -1725,11 +1827,17 @@ pub fn process_report_v2_response(raw: &str, snapshot: &serde_json::Value) -> se
                     .or_insert_with(|| serde_json::json!([]));
                 report.insert(
                     "schema_version".into(),
-                    snapshot.get("schema_version").cloned().unwrap_or(serde_json::Value::Null),
+                    snapshot
+                        .get("schema_version")
+                        .cloned()
+                        .unwrap_or(serde_json::Value::Null),
                 );
                 report.insert(
                     "report_variant".into(),
-                    snapshot.get("report_variant").cloned().unwrap_or(serde_json::Value::Null),
+                    snapshot
+                        .get("report_variant")
+                        .cloned()
+                        .unwrap_or(serde_json::Value::Null),
                 );
                 return serde_json::Value::Object(report);
             }
@@ -1952,7 +2060,9 @@ pub async fn trigger_post_stream_analysis(
     }
 
     // Plan-basiertes Modell (Default Minimax wie Python `or AI_MODEL_MINIMAX`).
-    let model = plan_ai_model(pool, &streamer).await.unwrap_or(AiModel::Minimax);
+    let model = plan_ai_model(pool, &streamer)
+        .await
+        .unwrap_or(AiModel::Minimax);
 
     // Session-Lookup, wenn keine ID übergeben (letzte abgeschlossene Session).
     let session_id = match session_id {
@@ -2033,7 +2143,9 @@ pub async fn trigger_post_stream_analysis(
 
         let _ = ensure_report_ab_columns(pool).await;
         let report_id =
-            match insert_pending_report(pool, session_id, &streamer, model, variant, &snapshot).await {
+            match insert_pending_report(pool, session_id, &streamer, model, variant, &snapshot)
+                .await
+            {
                 Ok(id) => id,
                 Err(e) => {
                     tracing::warn!(error = %e, variant, "PostStream: Report-Insert fehlgeschlagen");
@@ -2137,10 +2249,15 @@ pub async fn retry_failed_reports(pool: &PgPool) {
     .await
     {
         Ok(ids) if !ids.is_empty() => {
-            tracing::info!(count = ids.len(), "PostStream Retry: stuck-pending → failed");
+            tracing::info!(
+                count = ids.len(),
+                "PostStream Retry: stuck-pending → failed"
+            );
         }
         Ok(_) => {}
-        Err(e) => tracing::warn!(error = %e, "PostStream Retry: Stuck-Pending-Cleanup fehlgeschlagen"),
+        Err(e) => {
+            tracing::warn!(error = %e, "PostStream Retry: Stuck-Pending-Cleanup fehlgeschlagen")
+        }
     }
 
     // 2. Sessions mit failed Reports (retry_count<3) + aktivem Partner.
@@ -2154,7 +2271,10 @@ pub async fn retry_failed_reports(pool: &PgPool) {
     .fetch_all(pool)
     .await
     {
-        Ok(rows) => rows.into_iter().map(|(s, id)| (s.trim().to_lowercase(), id)).collect(),
+        Ok(rows) => rows
+            .into_iter()
+            .map(|(s, id)| (s.trim().to_lowercase(), id))
+            .collect(),
         Err(e) => {
             tracing::warn!(error = %e, "PostStream Retry: Session-Lookup fehlgeschlagen");
             return;
@@ -2234,8 +2354,8 @@ mod tests {
         let digest = chat_digest(&messages, &buckets, serde_json::json!([]));
 
         assert_eq!(digest["total_messages"], 4); // leere raus
-        // 2 positive (msg1 gg/nice, msg2 insane/krass) vs 1 negativ (trash/schlecht);
-        // "wie geht der build?" trägt keinen Sentiment-Term.
+                                                 // 2 positive (msg1 gg/nice, msg2 insane/krass) vs 1 negativ (trash/schlecht);
+                                                 // "wie geht der build?" trägt keinen Sentiment-Term.
         assert_eq!(digest["sentiment"]["positive_hits"], 2);
         assert_eq!(digest["sentiment"]["negative_hits"], 1);
         assert_eq!(digest["sentiment"]["label"], "positive"); // 2/3 ≈ 0.667 > 0.6
@@ -2280,7 +2400,9 @@ mod tests {
             .respond_with(ResponseTemplate::new(200).set_body_json(body))
             .mount(&server)
             .await;
-        let out = call_claude(&server.uri(), "secret", "prompt").await.unwrap();
+        let out = call_claude(&server.uri(), "secret", "prompt")
+            .await
+            .unwrap();
         assert_eq!(out, "CLAUDE-ANTWORT");
     }
 
@@ -2357,10 +2479,23 @@ mod tests {
 
     async fn pool_or_skip(schema: &str) -> Option<PgPool> {
         let dsn = std::env::var("TB_TEST_DATABASE_URL").ok()?;
-        let pool = PgPoolOptions::new().max_connections(1).connect(&dsn).await.unwrap();
-        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE")).execute(&pool).await.unwrap();
-        sqlx::query(&format!("CREATE SCHEMA {schema}")).execute(&pool).await.unwrap();
-        sqlx::query(&format!("SET search_path TO {schema}")).execute(&pool).await.unwrap();
+        let pool = PgPoolOptions::new()
+            .max_connections(1)
+            .connect(&dsn)
+            .await
+            .unwrap();
+        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query(&format!("CREATE SCHEMA {schema}"))
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query(&format!("SET search_path TO {schema}"))
+            .execute(&pool)
+            .await
+            .unwrap();
         sqlx::query(
             "CREATE TABLE twitch_stream_sessions (id BIGINT PRIMARY KEY, streamer_login TEXT, \
              started_at TIMESTAMPTZ, ended_at TIMESTAMPTZ, duration_seconds INTEGER, \
@@ -2381,7 +2516,9 @@ mod tests {
 
     #[tokio::test]
     async fn laedt_session_metadaten_und_gefilterte_messages() {
-        let Some(pool) = pool_or_skip("t6e_post_stream").await else { return };
+        let Some(pool) = pool_or_skip("t6e_post_stream").await else {
+            return;
+        };
         sqlx::query(
             "INSERT INTO twitch_stream_sessions \
              (id, streamer_login, started_at, ended_at, duration_seconds, avg_viewers, peak_viewers, follower_delta) \
@@ -2402,15 +2539,20 @@ mod tests {
         .await
         .unwrap();
 
-        let data = load_session_chat_data(&pool, 1).await.expect("session vorhanden");
+        let data = load_session_chat_data(&pool, 1)
+            .await
+            .expect("session vorhanden");
         assert_eq!(data.session.streamer_login, "streamer");
         assert_eq!(data.session.duration_seconds, 7200);
         assert_eq!(data.session.avg_viewers, 12.5);
         assert_eq!(data.session.peak_viewers, 40);
         assert_eq!(data.session.followers_delta, 7);
         assert_eq!(data.duration_min, 120); // 7200/60
-        // Command (!ping), zu kurz (x) und NULL gefiltert → nur 2 echte Nachrichten.
-        assert_eq!(data.messages, vec!["hallo zusammen".to_string(), "gutes spiel".to_string()]);
+                                            // Command (!ping), zu kurz (x) und NULL gefiltert → nur 2 echte Nachrichten.
+        assert_eq!(
+            data.messages,
+            vec!["hallo zusammen".to_string(), "gutes spiel".to_string()]
+        );
         // 4 distinkte Chatter (a,b,c,d).
         assert_eq!(data.unique_chatters, 4);
 
@@ -2420,10 +2562,23 @@ mod tests {
 
     async fn core_pool_or_skip(schema: &str) -> Option<PgPool> {
         let dsn = std::env::var("TB_TEST_DATABASE_URL").ok()?;
-        let pool = PgPoolOptions::new().max_connections(1).connect(&dsn).await.unwrap();
-        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE")).execute(&pool).await.unwrap();
-        sqlx::query(&format!("CREATE SCHEMA {schema}")).execute(&pool).await.unwrap();
-        sqlx::query(&format!("SET search_path TO {schema}")).execute(&pool).await.unwrap();
+        let pool = PgPoolOptions::new()
+            .max_connections(1)
+            .connect(&dsn)
+            .await
+            .unwrap();
+        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query(&format!("CREATE SCHEMA {schema}"))
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query(&format!("SET search_path TO {schema}"))
+            .execute(&pool)
+            .await
+            .unwrap();
         sqlx::query(
             "CREATE TABLE twitch_stream_sessions (\
              id BIGINT PRIMARY KEY, streamer_login TEXT, stream_id TEXT, \
@@ -2440,19 +2595,30 @@ mod tests {
         .execute(&pool)
         .await
         .unwrap();
+        sqlx::query("CREATE TABLE twitch_streamers (twitch_login TEXT, twitch_user_id TEXT)")
+            .execute(&pool)
+            .await
+            .unwrap();
         sqlx::query(
-            "CREATE TABLE twitch_streamers (twitch_login TEXT, twitch_user_id TEXT, \
-             discord_user_id TEXT, discord_display_name TEXT, is_monitored_only BOOLEAN)",
+            "CREATE TABLE twitch_streamer_identities (\
+             twitch_user_id TEXT PRIMARY KEY, twitch_login TEXT, \
+             discord_user_id TEXT, discord_display_name TEXT)",
         )
         .execute(&pool)
         .await
         .unwrap();
+        sqlx::query("CREATE TABLE twitch_partners (twitch_user_id TEXT, twitch_login TEXT)")
+            .execute(&pool)
+            .await
+            .unwrap();
         Some(pool)
     }
 
     #[tokio::test]
     async fn laedt_session_core_und_registry() {
-        let Some(pool) = core_pool_or_skip("t6f_post_stream_core").await else { return };
+        let Some(pool) = core_pool_or_skip("t6f_post_stream_core").await else {
+            return;
+        };
         sqlx::query(
             "INSERT INTO twitch_stream_sessions \
              (id, streamer_login, stream_id, started_at, ended_at, duration_seconds, \
@@ -2469,9 +2635,21 @@ mod tests {
         .await
         .unwrap();
         sqlx::query(
-            "INSERT INTO twitch_streamers (twitch_login, twitch_user_id, discord_user_id, \
-             discord_display_name, is_monitored_only) \
-             VALUES ('streamer','987','555','Anzeigename',FALSE)",
+            "INSERT INTO twitch_streamers (twitch_login, twitch_user_id) \
+             VALUES ('streamer','987')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO twitch_streamer_identities (twitch_user_id, twitch_login, discord_user_id, discord_display_name) \
+             VALUES ('987','streamer','555','Anzeigename')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO twitch_partners (twitch_user_id, twitch_login) VALUES ('987','streamer')",
         )
         .execute(&pool)
         .await
@@ -2501,7 +2679,10 @@ mod tests {
 
         // Unbekannte Session → None, unbekannter Streamer → leeres Registry.
         assert!(load_session(&pool, 999).await.is_none());
-        assert!(load_registry(&pool, "niemand").await.twitch_user_id.is_none());
+        assert!(load_registry(&pool, "niemand")
+            .await
+            .twitch_user_id
+            .is_none());
     }
 
     #[test]
@@ -2559,7 +2740,9 @@ mod tests {
     async fn laedt_chat_loader_und_digest_wiring() {
         // pool_or_skip legt twitch_stream_sessions (mit started_at) +
         // twitch_chat_messages an — genau die zwei Tabellen, die die Chat-Loader brauchen.
-        let Some(pool) = pool_or_skip("t6g_post_stream_chat").await else { return };
+        let Some(pool) = pool_or_skip("t6g_post_stream_chat").await else {
+            return;
+        };
         sqlx::query(
             "INSERT INTO twitch_stream_sessions \
              (id, streamer_login, started_at, ended_at, duration_seconds, avg_viewers, peak_viewers, follower_delta) \
@@ -2611,7 +2794,10 @@ mod tests {
         let digest = chat_digest(&messages, &buckets, top);
         assert_eq!(digest["total_messages"], 3);
         // minute aus der Zeile = None → null im Beispiel.
-        assert_eq!(digest["representative_examples"][0]["minute"], serde_json::Value::Null);
+        assert_eq!(
+            digest["representative_examples"][0]["minute"],
+            serde_json::Value::Null
+        );
         assert_eq!(digest["question_examples"].as_array().unwrap().len(), 1);
         // Peak-Minute nach messages: 2 vor 1.
         assert_eq!(digest["messages_per_minute_peaks"][0]["messages"], 2);
@@ -2619,10 +2805,23 @@ mod tests {
 
     async fn viewer_pool_or_skip(schema: &str) -> Option<PgPool> {
         let dsn = std::env::var("TB_TEST_DATABASE_URL").ok()?;
-        let pool = PgPoolOptions::new().max_connections(1).connect(&dsn).await.unwrap();
-        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE")).execute(&pool).await.unwrap();
-        sqlx::query(&format!("CREATE SCHEMA {schema}")).execute(&pool).await.unwrap();
-        sqlx::query(&format!("SET search_path TO {schema}")).execute(&pool).await.unwrap();
+        let pool = PgPoolOptions::new()
+            .max_connections(1)
+            .connect(&dsn)
+            .await
+            .unwrap();
+        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query(&format!("CREATE SCHEMA {schema}"))
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query(&format!("SET search_path TO {schema}"))
+            .execute(&pool)
+            .await
+            .unwrap();
         sqlx::query(
             "CREATE TABLE twitch_session_viewers (session_id BIGINT, minutes_from_start INTEGER, \
              viewer_count INTEGER, ts_utc TIMESTAMPTZ)",
@@ -2642,7 +2841,9 @@ mod tests {
 
     #[tokio::test]
     async fn viewer_curve_sampling_und_presence() {
-        let Some(pool) = viewer_pool_or_skip("t6h_post_stream_viewer").await else { return };
+        let Some(pool) = viewer_pool_or_skip("t6h_post_stream_viewer").await else {
+            return;
+        };
         sqlx::query(
             "INSERT INTO twitch_session_viewers (session_id, minutes_from_start, viewer_count, ts_utc) VALUES \
              (1,0,10,'2026-06-10T18:00:00+00'), \
@@ -2705,7 +2906,9 @@ mod tests {
 
     #[tokio::test]
     async fn comparison_payload_baseline_und_deltas() {
-        let Some(pool) = core_pool_or_skip("t6i_post_stream_cmp").await else { return };
+        let Some(pool) = core_pool_or_skip("t6i_post_stream_cmp").await else {
+            return;
+        };
         // 3 'x'-Sessions (id4 mit follower_delta-Reset → genullt im Mittel), 1 'y' (anderer Streamer).
         sqlx::query(
             "INSERT INTO twitch_stream_sessions \
@@ -2736,7 +2939,7 @@ mod tests {
         let base = &cmp["recent_5_session_baseline"];
         assert_eq!(base["sessions"], 3); // 'y' ausgeschlossen, current id=10 ausgeschlossen
         assert_eq!(base["avg_viewers"], 15.0); // AVG(10,20,15)
-        // follower_delta: id4 genullt (end=0,start=50>0) → AVG(4,8)=6.0, NICHT (4+8+999)/3.
+                                               // follower_delta: id4 genullt (end=0,start=50>0) → AVG(4,8)=6.0, NICHT (4+8+999)/3.
         assert_eq!(base["follower_delta"], 6.0);
         let delta = &cmp["delta_vs_recent_5"];
         assert_eq!(delta["avg_viewers"], 15.0); // 30-15
@@ -2747,10 +2950,23 @@ mod tests {
 
     async fn events_pool_or_skip(schema: &str) -> Option<PgPool> {
         let dsn = std::env::var("TB_TEST_DATABASE_URL").ok()?;
-        let pool = PgPoolOptions::new().max_connections(1).connect(&dsn).await.unwrap();
-        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE")).execute(&pool).await.unwrap();
-        sqlx::query(&format!("CREATE SCHEMA {schema}")).execute(&pool).await.unwrap();
-        sqlx::query(&format!("SET search_path TO {schema}")).execute(&pool).await.unwrap();
+        let pool = PgPoolOptions::new()
+            .max_connections(1)
+            .connect(&dsn)
+            .await
+            .unwrap();
+        sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query(&format!("CREATE SCHEMA {schema}"))
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query(&format!("SET search_path TO {schema}"))
+            .execute(&pool)
+            .await
+            .unwrap();
         for ddl in [
             "CREATE TABLE twitch_subscription_events (session_id BIGINT)",
             "CREATE TABLE twitch_bits_events (session_id BIGINT, amount INTEGER)",
@@ -2769,13 +2985,30 @@ mod tests {
 
     #[tokio::test]
     async fn events_payload_counts_between_und_unavailable() {
-        let Some(pool) = events_pool_or_skip("t6j_post_stream_events").await else { return };
-        sqlx::query("INSERT INTO twitch_subscription_events (session_id) VALUES (1),(1),(1)").execute(&pool).await.unwrap();
-        sqlx::query("INSERT INTO twitch_bits_events (session_id, amount) VALUES (1,100),(1,50)").execute(&pool).await.unwrap();
-        sqlx::query("INSERT INTO twitch_channel_points_events (session_id) VALUES (1)").execute(&pool).await.unwrap();
-        sqlx::query("INSERT INTO twitch_hype_train_events (session_id, level) VALUES (1,2),(1,5)").execute(&pool).await.unwrap();
+        let Some(pool) = events_pool_or_skip("t6j_post_stream_events").await else {
+            return;
+        };
+        sqlx::query("INSERT INTO twitch_subscription_events (session_id) VALUES (1),(1),(1)")
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO twitch_bits_events (session_id, amount) VALUES (1,100),(1,50)")
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO twitch_channel_points_events (session_id) VALUES (1)")
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO twitch_hype_train_events (session_id, level) VALUES (1,2),(1,5)")
+            .execute(&pool)
+            .await
+            .unwrap();
         sqlx::query("INSERT INTO twitch_ad_break_events (session_id, duration_seconds) VALUES (1,60),(1,30)").execute(&pool).await.unwrap();
-        sqlx::query("INSERT INTO twitch_ban_events (session_id) VALUES (1)").execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO twitch_ban_events (session_id) VALUES (1)")
+            .execute(&pool)
+            .await
+            .unwrap();
         // follows: 2 im Fenster (18:00–20:00), 1 außerhalb (nächster Tag).
         sqlx::query(
             "INSERT INTO twitch_follow_events (twitch_user_id, followed_at) VALUES \
@@ -2794,7 +3027,10 @@ mod tests {
             ended_at: Some("2026-06-10T20:00:00+00".into()),
             ..Default::default()
         };
-        let registry = ReportRegistry { twitch_user_id: Some("42".into()), ..Default::default() };
+        let registry = ReportRegistry {
+            twitch_user_id: Some("42".into()),
+            ..Default::default()
+        };
 
         let ev = events_payload(&pool, &session, &registry).await;
         assert_eq!(ev["subscriptions"], 3);
@@ -2810,7 +3046,10 @@ mod tests {
         assert_eq!(ev["shoutouts"], 1);
 
         // unavailable-Pfad: Tabelle entfernen → {"unavailable": true}.
-        sqlx::query("DROP TABLE twitch_ban_events").execute(&pool).await.unwrap();
+        sqlx::query("DROP TABLE twitch_ban_events")
+            .execute(&pool)
+            .await
+            .unwrap();
         let ev2 = events_payload(&pool, &session, &registry).await;
         assert_eq!(ev2["moderation_events"]["unavailable"], true);
         assert_eq!(ev2["subscriptions"], 3); // andere Queries unbeeinflusst
@@ -2855,7 +3094,9 @@ mod tests {
     async fn build_snapshot_compact_und_full() {
         // Nur sessions+streamers existieren; alle übrigen Loader degradieren
         // graceful (leer/unavailable) — der Test prüft die Orchestrierungs-Struktur.
-        let Some(pool) = core_pool_or_skip("t6k_post_stream_snap").await else { return };
+        let Some(pool) = core_pool_or_skip("t6k_post_stream_snap").await else {
+            return;
+        };
         sqlx::query(
             "INSERT INTO twitch_stream_sessions \
              (id, streamer_login, started_at, ended_at, duration_seconds, avg_viewers, \
@@ -2865,17 +3106,22 @@ mod tests {
         .execute(&pool)
         .await
         .unwrap();
-        sqlx::query("INSERT INTO twitch_streamers (twitch_login, twitch_user_id) VALUES ('streamer','987')")
-            .execute(&pool)
-            .await
-            .unwrap();
+        sqlx::query(
+            "INSERT INTO twitch_streamers (twitch_login, twitch_user_id) VALUES ('streamer','987')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
 
         let compact = build_post_stream_snapshot(&pool, 1, "compact").await;
         assert_eq!(compact["schema_version"], "post_stream_report_v2");
         assert_eq!(compact["report_variant"], "compact");
         assert_eq!(compact["session"]["twitch_user_id"], "987"); // Registry verdrahtet
         assert_eq!(compact["metrics"]["peak_viewers"], 40);
-        assert_eq!(compact["model_input_policy"]["raw_chat_full_dump_sent_to_model"], false);
+        assert_eq!(
+            compact["model_input_policy"]["raw_chat_full_dump_sent_to_model"],
+            false
+        );
         assert!(compact.get("raw_data").is_none());
         // events graceful: Tabellen fehlen → unavailable; follows versucht (user_id da) → 0.
         assert_eq!(compact["events"]["subscriptions"]["unavailable"], true);
@@ -2883,7 +3129,10 @@ mod tests {
 
         let full = build_post_stream_snapshot(&pool, 1, "FULL").await; // case-insensitiv
         assert_eq!(full["report_variant"], "full");
-        assert_eq!(full["model_input_policy"]["raw_chat_full_dump_sent_to_model"], true);
+        assert_eq!(
+            full["model_input_policy"]["raw_chat_full_dump_sent_to_model"],
+            true
+        );
         let raw = &full["raw_data"];
         assert_eq!(raw["chat_messages"]["truncated"], false);
         assert!(raw["chat_messages"]["messages"].is_array());
@@ -2892,7 +3141,10 @@ mod tests {
         assert!(raw["events"]["subscriptions"].is_array()); // [] graceful
 
         // Unbekannte Session → {}.
-        assert_eq!(build_post_stream_snapshot(&pool, 999, "compact").await, serde_json::json!({}));
+        assert_eq!(
+            build_post_stream_snapshot(&pool, 999, "compact").await,
+            serde_json::json!({})
+        );
     }
 
     #[test]
@@ -2941,7 +3193,10 @@ mod tests {
         });
         // Nur Array (kein Objekt) → starts_with('{') false → Fallback.
         let r1 = process_report_v2_response("[1,2,3]", &snapshot);
-        assert_eq!(r1["snapshot"]["ein_satz"], "Report konnte nicht strukturiert erzeugt werden.");
+        assert_eq!(
+            r1["snapshot"]["ein_satz"],
+            "Report konnte nicht strukturiert erzeugt werden."
+        );
         assert_eq!(r1["schema_version"], "post_stream_report_v2"); // aus Snapshot
         assert_eq!(r1["report_variant"], "compact");
         assert_eq!(
@@ -2956,34 +3211,60 @@ mod tests {
 
     #[tokio::test]
     async fn persist_word_groups_idempotent() {
-        let Some(pool) = core_pool_or_skip("t6m_post_stream_wg").await else { return };
+        let Some(pool) = core_pool_or_skip("t6m_post_stream_wg").await else {
+            return;
+        };
         ensure_report_ab_columns(&pool).await.unwrap();
         let groups = vec![
-            WordGroup { group_name: "Lob".into(), keywords: vec!["gg".into(), "nice".into()], message_count: 5 },
-            WordGroup { group_name: "Kritik".into(), keywords: vec!["trash".into()], message_count: 2 },
+            WordGroup {
+                group_name: "Lob".into(),
+                keywords: vec!["gg".into(), "nice".into()],
+                message_count: 5,
+            },
+            WordGroup {
+                group_name: "Kritik".into(),
+                keywords: vec!["trash".into()],
+                message_count: 2,
+            },
         ];
-        persist_word_groups(&pool, 1, "streamer", &groups).await.unwrap();
-        let count: i64 = sqlx::query_scalar("SELECT COUNT(*)::int8 FROM twitch_chat_word_groups WHERE session_id=1")
-            .fetch_one(&pool).await.unwrap();
+        persist_word_groups(&pool, 1, "streamer", &groups)
+            .await
+            .unwrap();
+        let count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*)::int8 FROM twitch_chat_word_groups WHERE session_id=1",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
         assert_eq!(count, 2);
         let (name, kw, mc): (String, Vec<String>, i32) = sqlx::query_as(
             "SELECT group_name, keywords, message_count FROM twitch_chat_word_groups \
              WHERE session_id=1 ORDER BY message_count DESC LIMIT 1",
         )
-        .fetch_one(&pool).await.unwrap();
+        .fetch_one(&pool)
+        .await
+        .unwrap();
         assert_eq!(name, "Lob");
         assert_eq!(kw, vec!["gg".to_string(), "nice".to_string()]); // TEXT[]
         assert_eq!(mc, 5);
         // Erneut → DELETE+INSERT → weiterhin 2 (nicht 4).
-        persist_word_groups(&pool, 1, "streamer", &groups).await.unwrap();
-        let count2: i64 = sqlx::query_scalar("SELECT COUNT(*)::int8 FROM twitch_chat_word_groups WHERE session_id=1")
-            .fetch_one(&pool).await.unwrap();
+        persist_word_groups(&pool, 1, "streamer", &groups)
+            .await
+            .unwrap();
+        let count2: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*)::int8 FROM twitch_chat_word_groups WHERE session_id=1",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
         assert_eq!(count2, 2);
     }
 
     #[tokio::test]
     async fn trigger_persistiert_ab_reports() {
-        let Some(pool) = core_pool_or_skip("t6l_post_stream_trigger").await else { return };
+        let Some(pool) = core_pool_or_skip("t6l_post_stream_trigger").await else {
+            return;
+        };
         sqlx::query(
             "INSERT INTO twitch_stream_sessions \
              (id, streamer_login, started_at, ended_at, duration_seconds, avg_viewers, \
@@ -2993,10 +3274,12 @@ mod tests {
         .execute(&pool)
         .await
         .unwrap();
-        sqlx::query("INSERT INTO twitch_streamers (twitch_login, twitch_user_id) VALUES ('streamer','987')")
-            .execute(&pool)
-            .await
-            .unwrap();
+        sqlx::query(
+            "INSERT INTO twitch_streamers (twitch_login, twitch_user_id) VALUES ('streamer','987')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
 
         trigger_post_stream_analysis(&pool, "Streamer", Some(1)).await;
 
@@ -3022,40 +3305,61 @@ mod tests {
             "SELECT report_json->>'schema_version' FROM twitch_stream_ai_reports \
              WHERE report_variant='full' AND session_id=1",
         )
-        .fetch_one(&pool).await.unwrap();
+        .fetch_one(&pool)
+        .await
+        .unwrap();
         assert_eq!(sv.as_deref(), Some("post_stream_report_v2"));
         // input_snapshot_json + prompt_version gesetzt.
         let (has_snap, pv): (bool, Option<String>) = sqlx::query_as(
             "SELECT input_snapshot_json IS NOT NULL, prompt_version FROM twitch_stream_ai_reports \
              WHERE report_variant='compact' AND session_id=1",
         )
-        .fetch_one(&pool).await.unwrap();
+        .fetch_one(&pool)
+        .await
+        .unwrap();
         assert!(has_snap);
-        assert_eq!(pv.as_deref(), Some("post_stream_report_v3_twitch_2026-05-01"));
+        assert_eq!(
+            pv.as_deref(),
+            Some("post_stream_report_v3_twitch_2026-05-01")
+        );
 
         // Idempotenz: erneut → existing done → skip, weiterhin 2.
         trigger_post_stream_analysis(&pool, "streamer", Some(1)).await;
-        let count2: i64 = sqlx::query_scalar("SELECT COUNT(*)::int8 FROM twitch_stream_ai_reports WHERE session_id=1")
-            .fetch_one(&pool).await.unwrap();
+        let count2: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*)::int8 FROM twitch_stream_ai_reports WHERE session_id=1",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
         assert_eq!(count2, 2);
 
         // None-Pfad: resolved auf letzte ended Session (id 1) → existing → skip, weiterhin 2.
         trigger_post_stream_analysis(&pool, "streamer", None).await;
-        let count3: i64 = sqlx::query_scalar("SELECT COUNT(*)::int8 FROM twitch_stream_ai_reports WHERE session_id=1")
-            .fetch_one(&pool).await.unwrap();
+        let count3: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*)::int8 FROM twitch_stream_ai_reports WHERE session_id=1",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
         assert_eq!(count3, 2);
     }
 
     #[tokio::test]
     async fn backfill_nur_sessions_ohne_done_report() {
-        let Some(pool) = core_pool_or_skip("t6n_post_stream_backfill").await else { return };
+        let Some(pool) = core_pool_or_skip("t6n_post_stream_backfill").await else {
+            return;
+        };
         ensure_report_ab_columns(&pool).await.unwrap();
         sqlx::query("CREATE TABLE twitch_streamers_partner_state (twitch_login TEXT, is_partner_active INTEGER)")
             .execute(&pool).await.unwrap();
         sqlx::query("INSERT INTO twitch_streamers_partner_state (twitch_login, is_partner_active) VALUES ('streamer',1)")
             .execute(&pool).await.unwrap();
-        sqlx::query("INSERT INTO twitch_streamers (twitch_login, twitch_user_id) VALUES ('streamer','987')")
-            .execute(&pool).await.unwrap();
+        sqlx::query(
+            "INSERT INTO twitch_streamers (twitch_login, twitch_user_id) VALUES ('streamer','987')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
         // Session 1 (ohne done-Report) + Session 2 (mit done-Report).
         sqlx::query(
             "INSERT INTO twitch_stream_sessions (id, streamer_login, started_at, ended_at, duration_seconds, avg_viewers, peak_viewers, follower_delta) VALUES \
@@ -3073,21 +3377,31 @@ mod tests {
             .fetch_one(&pool).await.unwrap();
         assert_eq!(s1, 2);
         // Session 2 hatte schon einen done-Report → NOT EXISTS filtert sie → unverändert (1).
-        let s2: i64 = sqlx::query_scalar("SELECT COUNT(*)::int8 FROM twitch_stream_ai_reports WHERE session_id=2")
-            .fetch_one(&pool).await.unwrap();
+        let s2: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*)::int8 FROM twitch_stream_ai_reports WHERE session_id=2",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
         assert_eq!(s2, 1);
     }
 
     #[tokio::test]
     async fn retry_stuck_cleanup_und_requeue() {
-        let Some(pool) = core_pool_or_skip("t6o_post_stream_retry").await else { return };
+        let Some(pool) = core_pool_or_skip("t6o_post_stream_retry").await else {
+            return;
+        };
         ensure_report_ab_columns(&pool).await.unwrap();
         sqlx::query("CREATE TABLE twitch_streamers_partner_state (twitch_login TEXT, is_partner_active INTEGER)")
             .execute(&pool).await.unwrap();
         sqlx::query("INSERT INTO twitch_streamers_partner_state (twitch_login, is_partner_active) VALUES ('streamer',1)")
             .execute(&pool).await.unwrap();
-        sqlx::query("INSERT INTO twitch_streamers (twitch_login, twitch_user_id) VALUES ('streamer','987')")
-            .execute(&pool).await.unwrap();
+        sqlx::query(
+            "INSERT INTO twitch_streamers (twitch_login, twitch_user_id) VALUES ('streamer','987')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
         sqlx::query(
             "INSERT INTO twitch_stream_sessions (id, streamer_login, started_at, ended_at, duration_seconds, avg_viewers, peak_viewers, follower_delta) \
              VALUES (1,'streamer','2026-06-10T18:00:00+00','2026-06-10T20:00:00+00',7200,10.0,30,5)",
@@ -3109,7 +3423,9 @@ mod tests {
         let (ghost_status, ghost_err): (String, Option<String>) = sqlx::query_as(
             "SELECT status, error FROM twitch_stream_ai_reports WHERE session_id=99",
         )
-        .fetch_one(&pool).await.unwrap();
+        .fetch_one(&pool)
+        .await
+        .unwrap();
         assert_eq!(ghost_status, "failed");
         assert!(ghost_err.unwrap().contains("stuck pending"));
 

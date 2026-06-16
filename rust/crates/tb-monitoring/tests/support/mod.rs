@@ -98,12 +98,12 @@ pub async fn pool_in_schema(schema: &str) -> Option<PgPool> {
         )",
         "CREATE TABLE twitch_stats_tracked (
             ts_utc TIMESTAMPTZ, streamer TEXT, viewer_count INTEGER,
-            is_partner INTEGER DEFAULT 0, game_name TEXT, stream_title TEXT, tags TEXT,
+            is_partner BOOLEAN DEFAULT FALSE, game_name TEXT, stream_title TEXT, tags TEXT,
             language TEXT
         )",
         "CREATE TABLE twitch_stats_category (
             ts_utc TIMESTAMPTZ, streamer TEXT, viewer_count INTEGER,
-            is_partner INTEGER DEFAULT 0, game_name TEXT, stream_title TEXT, tags TEXT,
+            is_partner BOOLEAN DEFAULT FALSE, game_name TEXT, stream_title TEXT, tags TEXT,
             language TEXT
         )",
         "CREATE TABLE exp_sessions (
@@ -138,10 +138,14 @@ pub async fn pool_in_schema(schema: &str) -> Option<PgPool> {
         )",
         "CREATE TABLE twitch_streamers (
             twitch_login TEXT PRIMARY KEY,
-            twitch_user_id TEXT,
-            discord_user_id TEXT,
-            is_monitored_only INTEGER DEFAULT 0,
-            archived_at TIMESTAMPTZ
+            twitch_user_id TEXT
+        )",
+        "CREATE TABLE twitch_exclusions (
+            twitch_user_id TEXT PRIMARY KEY,
+            kind TEXT NOT NULL CHECK (kind IN ('opt_out', 'banned')),
+            reason TEXT,
+            excluded_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            reactivated_at TIMESTAMPTZ
         )",
         // Raid-Auth-Store: Existenz einer Zeile = has_raid_auth (B8-07-RECONCILE).
         "CREATE TABLE twitch_raid_auth (
