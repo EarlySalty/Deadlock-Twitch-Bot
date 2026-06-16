@@ -1,6 +1,7 @@
 //! Time-Series-Logging in `twitch_stats_tracked` / `twitch_stats_category`
 //! (PK-lose Insert-only-Tabellen, Schema-Vertrag — kein Dedup, bewusst wie
-//! Python). `ts_utc` ist timestamptz, `is_partner` boolean (prod-verifiziert).
+//! Python). `ts_utc` ist timestamptz, `is_partner` ist INTEGER (0/1, SQLite-Erbe
+//! — Bind als `i32`, nicht bool).
 
 use chrono::{DateTime, Utc};
 use sqlx::PgPool;
@@ -67,7 +68,7 @@ impl StatsStore {
                 .bind(ts)
                 .bind(&row.streamer)
                 .bind(row.viewer_count)
-                .bind(row.is_partner)
+                .bind(i32::from(row.is_partner))
                 .bind(&row.game_name)
                 .bind(&row.stream_title)
                 .bind(&row.tags)
