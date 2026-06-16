@@ -2,8 +2,10 @@
 //! Cleanup nur für eigene Callback-URL + inaktive Ziele, Capacity-Snapshot.
 
 use std::collections::HashSet;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
+use chrono::Utc;
 use tb_monitoring::poller::source::SourceError;
 use tb_monitoring::{
     CapacitySnapshotStore, RemoteSubscription, SubscriptionConfig, SubscriptionManager,
@@ -399,4 +401,107 @@ async fn moderator_telemetry_subs_scope_gefiltert_mit_bot_token_und_moderator_id
             .await,
         0
     );
+}
+
+/// Manuell vorrückbare Test-Uhr (Epoch-Sekunden) für die Capacity-Throttle-Fenster.
+fn fake_clock() -> (Arc<AtomicU64>, tb_monitoring::ClockFn) {
+    let now = Arc::new(AtomicU64::new(0));
+    let handle = now.clone();
+    let clock: tb_monitoring::ClockFn = Arc::new(move || handle.load(Ordering::SeqCst) as f64);
+    (now, clock)
+}
+
+async fn snapshot_count(pool: &sqlx::PgPool) -> i64 {
+    sqlx::query_scalar("SELECT COUNT(*) FROM twitch_eventsub_capacity_snapshot")
+        .fetch_one(pool)
+        .await
+        .unwrap()
+}
+
+#[tokio::test]
+async fn periodic_capacity_snapshot_throttelt_auf_sample_intervall() {
+    let pool = pool_or_skip!("b5_08_capacity_periodic");
+    let transport = Arc::new(StubTransport::default());
+    let (clock_now, clock) = fake_clock();
+    let manager = SubscriptionManager::new(
+        transport.clone(),
+        SubscriptionConfig {
+            callback_url: "https://cb/x".to_string(),
+            secret: "geheim".to_string(),
+        },
+        CapacitySnapshotStore::new(pool.clone()),
+    )
+    .with_clock(clock);
+
+    // Zwei getrackte Subs → used_slots = 2.
+    manager.ensure_offline_subscription("11", "a").await;
+    manager.ensure_offline_subscription("22", "b").await;
+    // ensure_offline_subscription hat bereits zwei "stream_offline_subscribed"-Zeilen
+    // geschrieben; nur die periodischen Zeilen interessieren hier.
+    let base = snapshot_count(&pool).await;
+
+    // Erster periodischer Aufruf bei t=0 schreibt immer.
+    manager.record_capacity_snapshot_periodic("poll_tick").await;
+    assert_eq!(snapshot_count(&pool).await, base + 1);
+
+    // t=299 < 300s Default-Intervall → kein zweiter Snapshot.
+    clock_now.store(299, Ordering::SeqCst);
+    manager.record_capacity_snapshot_periodic("poll_tick").await;
+    assert_eq!(snapshot_count(&pool).await, base + 1);
+
+    // t=300 >= Intervall → neuer Snapshot mit used_slots=2.
+    clock_now.store(300, Ordering::SeqCst);
+    manager.record_capacity_snapshot_periodic("poll_tick").await;
+    assert_eq!(snapshot_count(&pool).await, base + 2);
+
+    let (trigger, used): (String, i32) = sqlx::query_as(
+        "SELECT trigger_reason, used_slots FROM twitch_eventsub_capacity_snapshot
+          WHERE trigger_reason = 'poll_tick' ORDER BY id DESC LIMIT 1",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(trigger, "poll_tick");
+    assert_eq!(used, 2);
+}
+
+#[tokio::test]
+async fn periodic_capacity_snapshot_raeumt_alte_zeilen_ab() {
+    let pool = pool_or_skip!("b5_08_capacity_retention");
+    let transport = Arc::new(StubTransport::default());
+    let (_clock_now, clock) = fake_clock();
+    let manager = SubscriptionManager::new(
+        transport.clone(),
+        SubscriptionConfig {
+            callback_url: "https://cb/x".to_string(),
+            secret: "geheim".to_string(),
+        },
+        CapacitySnapshotStore::new(pool.clone()),
+    )
+    .with_clock(clock);
+
+    // Eine Zeile weit jenseits des Default-Retention-Fensters (45 Tage).
+    let stale_ts = Utc::now() - chrono::Duration::days(90);
+    sqlx::query(
+        "INSERT INTO twitch_eventsub_capacity_snapshot
+            (ts_utc, trigger_reason, listener_count, ready_listeners, failed_listeners,
+             used_slots, total_slots, headroom_slots, listeners_at_limit, utilization_pct, listeners_json)
+         VALUES ($1, 'stale', 0, 0, 0, 0, 0, 0, 0, 0.0, '[]')",
+    )
+    .bind(stale_ts)
+    .execute(&pool)
+    .await
+    .unwrap();
+    assert_eq!(snapshot_count(&pool).await, 1);
+
+    // Erster periodischer Aufruf (t=0): schreibt frische Zeile + läuft Cleanup.
+    manager.record_capacity_snapshot_periodic("poll_tick").await;
+
+    // Stale-Zeile weg, nur die frische bleibt.
+    let remaining: Vec<String> =
+        sqlx::query_scalar("SELECT trigger_reason FROM twitch_eventsub_capacity_snapshot")
+            .fetch_all(&pool)
+            .await
+            .unwrap();
+    assert_eq!(remaining, vec!["poll_tick".to_string()]);
 }

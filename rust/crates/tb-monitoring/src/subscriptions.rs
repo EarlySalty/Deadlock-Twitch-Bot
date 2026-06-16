@@ -11,11 +11,62 @@
 use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
 
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Duration, Utc};
 use serde_json::Value;
 use sqlx::PgPool;
 
+use crate::inbox_runtime::{epoch_clock, ClockFn};
 use crate::poller::source::SourceError;
+
+// ── Capacity-Snapshot-Konfiguration (Env, Python-Clamps) ───────────────────────
+
+/// Default-Sampling-Intervall der Capacity-Zeitreihe (Sekunden).
+/// Python `_eventsub_capacity_sample_interval_seconds`: Default 300, Clamp 30–3600.
+const CAPACITY_SAMPLE_DEFAULT_SECONDS: u64 = 300;
+const CAPACITY_SAMPLE_MIN_SECONDS: u64 = 30;
+const CAPACITY_SAMPLE_MAX_SECONDS: u64 = 3600;
+
+/// Default-Retention der Capacity-Zeitreihe (Tage).
+/// Python `_eventsub_capacity_retention_days`: Default 45, Clamp 7–365.
+const CAPACITY_RETENTION_DEFAULT_DAYS: i64 = 45;
+const CAPACITY_RETENTION_MIN_DAYS: i64 = 7;
+const CAPACITY_RETENTION_MAX_DAYS: i64 = 365;
+
+/// Retention-Cleanup läuft höchstens stündlich (Python: `>= 3600`).
+const CAPACITY_CLEANUP_INTERVAL_SECONDS: f64 = 3600.0;
+
+/// Sample-Intervall aus `TWITCH_EVENTSUB_CAPACITY_SAMPLE_SECONDS`, geclamped.
+fn capacity_sample_interval_seconds() -> u64 {
+    parse_env_clamped(
+        "TWITCH_EVENTSUB_CAPACITY_SAMPLE_SECONDS",
+        CAPACITY_SAMPLE_DEFAULT_SECONDS,
+        CAPACITY_SAMPLE_MIN_SECONDS,
+        CAPACITY_SAMPLE_MAX_SECONDS,
+    )
+}
+
+/// Retention-Fenster aus `TWITCH_EVENTSUB_CAPACITY_RETENTION_DAYS`, geclamped.
+fn capacity_retention_days() -> i64 {
+    parse_env_clamped(
+        "TWITCH_EVENTSUB_CAPACITY_RETENTION_DAYS",
+        CAPACITY_RETENTION_DEFAULT_DAYS,
+        CAPACITY_RETENTION_MIN_DAYS,
+        CAPACITY_RETENTION_MAX_DAYS,
+    )
+}
+
+fn parse_env_clamped<T>(key: &str, default: T, min: T, max: T) -> T
+where
+    T: std::str::FromStr + Ord,
+{
+    match std::env::var(key) {
+        Ok(raw) => match raw.trim().parse::<T>() {
+            Ok(value) => value.clamp(min, max),
+            Err(_) => default,
+        },
+        Err(_) => default,
+    }
+}
 
 /// Core-Subscriptions des Monitorings: (Typ, Version).
 pub const CORE_SUBSCRIPTIONS: [(&str, &str); 3] = [
@@ -109,6 +160,15 @@ pub struct SubscriptionConfig {
     pub secret: String,
 }
 
+/// Throttle-Zustand der periodischen Capacity-Zeitreihe (monotone Epoch-Sek.).
+#[derive(Default)]
+struct CapacityThrottle {
+    /// Zeitpunkt des letzten geschriebenen Snapshots (`None` = noch keiner).
+    last_snapshot: Option<f64>,
+    /// Zeitpunkt des letzten Retention-Cleanups.
+    last_cleanup: Option<f64>,
+}
+
 pub struct SubscriptionManager {
     transport: Arc<dyn SubscriptionTransport>,
     config: SubscriptionConfig,
@@ -119,6 +179,10 @@ pub struct SubscriptionManager {
     /// Permanent-Fehler (Typ, broadcaster_user_id): 403 = Bot gebannt oder
     /// Kanal sperrt externe Subs. Kein Retry bis Neustart.
     perm_failed: Mutex<HashSet<(String, String)>>,
+    /// Drosselung der periodischen Capacity-Zeitreihe (B5-08).
+    capacity_throttle: Mutex<CapacityThrottle>,
+    /// Monotone Uhr (Epoch-Sek.) für die Throttle-Fenster — in Tests injizierbar.
+    clock: ClockFn,
 }
 
 impl SubscriptionManager {
@@ -133,7 +197,16 @@ impl SubscriptionManager {
             capacity,
             tracked: Mutex::new(HashSet::new()),
             perm_failed: Mutex::new(HashSet::new()),
+            capacity_throttle: Mutex::new(CapacityThrottle::default()),
+            clock: Arc::new(epoch_clock),
         }
+    }
+
+    /// Ersetzt die Throttle-Uhr (Tests). Default ist die System-Epoch-Uhr.
+    #[must_use]
+    pub fn with_clock(mut self, clock: ClockFn) -> Self {
+        self.clock = clock;
+        self
     }
 
     fn is_tracked(&self, sub_type: &str, broadcaster_id: &str) -> bool {
@@ -600,6 +673,67 @@ impl SubscriptionManager {
             tracing::debug!(%error, trigger, "Capacity-Snapshot fehlgeschlagen");
         }
     }
+
+    /// Periodischer Capacity-Snapshot im Poll-Tick (B5-08, Port von
+    /// `eventsub_mixin.py:_record_eventsub_capacity_snapshot`). Schreibt höchstens
+    /// alle `TWITCH_EVENTSUB_CAPACITY_SAMPLE_SECONDS` (Default 300s) eine Zeile,
+    /// damit die Admin-Dashboard-Historie der EventSub-Kapazität auch ohne
+    /// Subscription-Ereignisse als gleichmäßige Zeitreihe befüllt wird. Stündlich
+    /// räumt er Zeilen jenseits des Retention-Fensters
+    /// (`TWITCH_EVENTSUB_CAPACITY_RETENTION_DAYS`, Default 45) ab.
+    ///
+    /// Der Tick ruft das jedes Mal auf; die Drosselung passiert intern (monotone
+    /// Uhr). `trigger` landet in `trigger_reason` (z. B. `"poll_tick"`).
+    pub async fn record_capacity_snapshot_periodic(&self, trigger: &str) {
+        let now_monotonic = (self.clock)();
+        let interval = capacity_sample_interval_seconds() as f64;
+
+        // Sample-Throttle: erster Aufruf schreibt immer, danach erst nach `interval`.
+        let due = {
+            let throttle = self
+                .capacity_throttle
+                .lock()
+                .expect("capacity throttle lock");
+            match throttle.last_snapshot {
+                Some(last) => (now_monotonic - last) >= interval,
+                None => true,
+            }
+        };
+        if !due {
+            return;
+        }
+
+        let used = self.tracked.lock().expect("tracked lock").len() as i32;
+        if let Err(error) = self.capacity.record(trigger, used, Utc::now()).await {
+            tracing::debug!(%error, trigger, "periodischer Capacity-Snapshot fehlgeschlagen");
+            return;
+        }
+
+        // Throttle-Stempel setzen + Cleanup-Fälligkeit bestimmen — Guard wird vor
+        // dem nächsten await freigegeben (kein MutexGuard über await-Punkt).
+        let cleanup_due = {
+            let mut throttle = self
+                .capacity_throttle
+                .lock()
+                .expect("capacity throttle lock");
+            throttle.last_snapshot = Some(now_monotonic);
+            let due = throttle
+                .last_cleanup
+                .is_none_or(|last| (now_monotonic - last) >= CAPACITY_CLEANUP_INTERVAL_SECONDS);
+            if due {
+                throttle.last_cleanup = Some(now_monotonic);
+            }
+            due
+        };
+
+        // Retention-Cleanup höchstens stündlich.
+        if cleanup_due {
+            let cutoff = Utc::now() - Duration::days(capacity_retention_days());
+            if let Err(error) = self.capacity.delete_older_than(cutoff).await {
+                tracing::debug!(%error, "Capacity-Retention-Cleanup fehlgeschlagen");
+            }
+        }
+    }
 }
 
 /// Schreibt `twitch_eventsub_capacity_snapshot` (Prod-Typen verifiziert).
@@ -634,5 +768,16 @@ impl CapacitySnapshotStore {
         .execute(&self.pool)
         .await?;
         Ok(())
+    }
+
+    /// Löscht Zeitreihen-Zeilen älter als `cutoff` (Retention, B5-08). Liefert die
+    /// Anzahl gelöschter Zeilen.
+    pub async fn delete_older_than(&self, cutoff: DateTime<Utc>) -> Result<u64, sqlx::Error> {
+        let rows = sqlx::query("DELETE FROM twitch_eventsub_capacity_snapshot WHERE ts_utc < $1")
+            .bind(cutoff)
+            .execute(&self.pool)
+            .await?
+            .rows_affected();
+        Ok(rows)
     }
 }

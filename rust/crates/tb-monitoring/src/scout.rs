@@ -1,6 +1,6 @@
 //! Periodischer Scout-Task für Live-Deadlock-Streams.
 //!
-//! Port von `bot/base.py:_scout_deadlock_channels` (945–1180 Z.).
+//! Port von `bot/base.py:_scout_deadlock_channels` (945–1316 Z.).
 //!
 //! # Aufgabe
 //!
@@ -9,20 +9,35 @@
 //! die 2 aufeinanderfolgende Zyklen abwesend sind, werden wieder entfernt
 //! (Sessions geschlossen, Live-State gelöscht, Datenbankzeile weg).
 //!
+//! Für **frisch entdeckte** Kanäle wird zusätzlich
+//! - eine Stream-Session **geprimt** (bevor der Chat-Bot joint), damit
+//!   Viewer-/Presence-Samples vom ersten Tick an eine Session haben, und
+//! - der **Chat-Bot synchronisiert**: neue Kanäle joinen, entfernte parten,
+//!   Runtime-fehlende heilen (Python „Sync Chat Bot", Z. 1096–1225).
+//!
 //! # Design
 //!
 //! - **Repository** kapselt alle DB-Zugriffe; kennt kein HTTP.
 //! - **ScoutTask** hält den Absent-Cycle-Counter im Arbeitsspeicher (`HashMap`)
 //!   — er ist bewusst transient (kein DB-Overhead, kein Schema-Bloat, verloren bei
 //!   Neustart ist akzeptabel: nach 2 Zyklen wäre der Streamer ohnehin weg).
+//! - **Session-Priming** läuft über den crate-internen [`SessionTracker`];
+//!   **Chat-Bot-Sync** über den [`ScoutChatSink`]-Port (Adapter im
+//!   Composition-Root, Default [`NoopScoutChatSink`] = kein Chat-Effekt).
+//! - Beide Kollaborateure sind **optional** (`with_session_tracker` /
+//!   `with_chat_sink`): ohne sie verhält sich der Task wie der reine DB-Scout.
 //! - Deaktiviert bis `TB_SCOUT_ENABLED=1` gesetzt ist.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::Duration;
 
+use chrono::Utc;
 use sqlx::PgPool;
-use tb_transport_twitch::HelixClient;
+use tb_transport_twitch::{HelixClient, HelixStream};
+
+use crate::sessions::SessionTracker;
+use crate::stream::StreamSnapshot;
 
 // ── Konstanten ─────────────────────────────────────────────────────────────────
 
@@ -35,6 +50,54 @@ const DEFAULT_INTERVAL: Duration = Duration::from_secs(90);
 
 /// Initiale Wartezeit nach Prozessstart (lässt den Bot erst hochfahren).
 const INITIAL_DELAY: Duration = Duration::from_secs(30);
+
+// ── Chat-Sink-Port ───────────────────────────────────────────────────────────
+
+/// Brücke zum Chat-Bot-Runtime (Python `_twitch_chat_bot`). tb-monitoring kennt
+/// den Chat-Prozess nicht direkt — der Adapter im Composition-Root setzt die
+/// monitored-Kanal-Liste, joint/partet Kanäle und beantwortet die
+/// Runtime-Heal-Prüfungen. Default [`NoopScoutChatSink`] = kein Chat-Effekt
+/// (Verhalten des reinen DB-Scouts).
+#[async_trait::async_trait]
+pub trait ScoutChatSink: Send + Sync {
+    /// Spiegelt die zu joinenden Logins in den Monitored-Set des Chat-Bots
+    /// (Python `set_monitored_channels`). Läuft vor [`Self::join_channels`].
+    async fn set_monitored_channels(&self, _logins: &[String]) {}
+
+    /// Joint die gegebenen Kanäle (Python `join_channels`).
+    async fn join_channels(&self, _logins: &[String]) {}
+
+    /// Partet die gegebenen Kanäle (Python `part_channels`).
+    async fn part_channels(&self, _logins: &[String]) {}
+
+    /// Ist der Login bereits monitoring-only im Chat-Runtime (Python
+    /// `_is_monitored_only`)? Monitoring-only-Kanäle sind **keine**
+    /// Runtime-Heal-Ziele. Default `true` (Scout-Kanäle sind per Definition
+    /// monitoring-only) → kein Heal.
+    fn is_monitored_only(&self, _login: &str) -> bool {
+        true
+    }
+
+    /// Ist die Channel-Subscription des Logins runtime-bereit (Python
+    /// `is_channel_subscription_ready`)? Default `true` → kein Heal nötig.
+    fn is_subscription_ready(&self, _login: &str) -> bool {
+        true
+    }
+}
+
+/// Chat-Sink ohne Wirkung (Wiring-Default, Tests).
+pub struct NoopScoutChatSink;
+
+impl ScoutChatSink for NoopScoutChatSink {}
+
+/// Heal-Entscheidung — Port von `bot/chat/lurker_policy.py:should_attempt_runtime_heal`.
+/// Monitoring-only-Lurker-Kanäle sind **keine** Chat-Runtime-Heal-Ziele.
+pub(crate) fn should_attempt_runtime_heal(is_monitored_only: bool, is_ready: bool) -> bool {
+    if is_monitored_only {
+        return false;
+    }
+    !is_ready
+}
 
 // ── Repository ─────────────────────────────────────────────────────────────────
 
@@ -60,11 +123,7 @@ impl ScoutRepository {
 
     /// Trägt einen neuen Monitoring-only-Streamer ein. Gibt `true` zurück wenn
     /// er tatsächlich neu war (nicht nur ein Konflikt-Update).
-    pub async fn upsert_monitored(
-        &self,
-        login: &str,
-        user_id: &str,
-    ) -> Result<bool, sqlx::Error> {
+    pub async fn upsert_monitored(&self, login: &str, user_id: &str) -> Result<bool, sqlx::Error> {
         let existing: Option<i64> = sqlx::query_scalar(
             "SELECT 1 FROM twitch_streamers WHERE LOWER(twitch_login) = LOWER($1) LIMIT 1",
         )
@@ -114,12 +173,11 @@ impl ScoutRepository {
 
     /// Löscht den Live-State-Eintrag eines Streamers.
     pub async fn delete_live_state(&self, login: &str) {
-        let result = sqlx::query(
-            "DELETE FROM twitch_live_state WHERE LOWER(streamer_login) = LOWER($1)",
-        )
-        .bind(login)
-        .execute(&self.pool)
-        .await;
+        let result =
+            sqlx::query("DELETE FROM twitch_live_state WHERE LOWER(streamer_login) = LOWER($1)")
+                .bind(login)
+                .execute(&self.pool)
+                .await;
 
         if let Err(e) = result {
             tracing::debug!("scout: Live-State-Delete für {login} fehlgeschlagen: {e}");
@@ -167,6 +225,30 @@ pub struct ScoutStats {
     pub streams_seen: u32,
     pub new_streamers: u32,
     pub removed_streamers: u32,
+    /// Anzahl frisch geprimter Sessions (neue Kanäle mit Stream-Daten).
+    pub primed_sessions: u32,
+    /// Logins, die runtime-geheilt (rejoint) wurden.
+    pub healed_streamers: u32,
+}
+
+/// HelixStream → crate-eigene Domänensicht. Spiegelt `to_snapshot` im
+/// Composition-Root (wiring.rs); der Scout braucht die volle Sicht fürs
+/// Session-Priming, nicht nur `login`/`user_id`.
+fn to_snapshot(s: HelixStream) -> StreamSnapshot {
+    StreamSnapshot {
+        id: Some(s.id).filter(|v| !v.is_empty()),
+        user_login: s.user_login,
+        user_id: s.user_id,
+        user_name: s.user_name,
+        title: s.title,
+        game_name: s.game_name,
+        language: s.language,
+        viewer_count: i32::try_from(s.viewer_count).unwrap_or(i32::MAX),
+        is_mature: s.is_mature,
+        tags: s.tags.unwrap_or_default(),
+        started_at: Some(s.started_at).filter(|v| !v.is_empty()),
+        thumbnail_url: None,
+    }
 }
 
 // ── Task ───────────────────────────────────────────────────────────────────────
@@ -179,6 +261,10 @@ pub struct ScoutTask {
     language_filters: Vec<String>,
     interval: Duration,
     absent_cycles: HashMap<String, u32>,
+    /// Optional: primt Sessions neuer Kanäle (Python `_prime_monitored_only_sessions`).
+    session_tracker: Option<Arc<SessionTracker>>,
+    /// Optional: synchronisiert den Chat-Bot (join/part/heal).
+    chat: Arc<dyn ScoutChatSink>,
 }
 
 impl ScoutTask {
@@ -195,7 +281,23 @@ impl ScoutTask {
             language_filters,
             interval: DEFAULT_INTERVAL,
             absent_cycles: HashMap::new(),
+            session_tracker: None,
+            chat: Arc::new(NoopScoutChatSink),
         }
+    }
+
+    /// Session-Priming für neu entdeckte Kanäle aktivieren.
+    #[must_use]
+    pub fn with_session_tracker(mut self, tracker: Arc<SessionTracker>) -> Self {
+        self.session_tracker = Some(tracker);
+        self
+    }
+
+    /// Chat-Bot-Synchronisation (join/part/heal) aktivieren.
+    #[must_use]
+    pub fn with_chat_sink(mut self, chat: Arc<dyn ScoutChatSink>) -> Self {
+        self.chat = chat;
+        self
     }
 
     /// Startet den Task wenn `TB_SCOUT_ENABLED=1` gesetzt ist.
@@ -228,13 +330,48 @@ impl ScoutTask {
         loop {
             let stats = self.run_once().await;
             tracing::info!(
-                "scout: Zyklus — {} Streams gesehen, {} neu, {} entfernt",
+                "scout: Zyklus — {} Streams gesehen, {} neu, {} entfernt, {} Sessions geprimt, {} geheilt",
                 stats.streams_seen,
                 stats.new_streamers,
                 stats.removed_streamers,
+                stats.primed_sessions,
+                stats.healed_streamers,
             );
             tokio::time::sleep(self.interval).await;
         }
+    }
+
+    /// Holt die aktuellen Live-Streams der Ziel-Kategorie (deduppt über
+    /// Sprachfilter). `login → StreamSnapshot`.
+    async fn fetch_current_streams(&self, game_id: &str) -> HashMap<String, StreamSnapshot> {
+        let mut current: HashMap<String, StreamSnapshot> = HashMap::new();
+
+        let language_list = if self.language_filters.is_empty() {
+            vec![None]
+        } else {
+            self.language_filters
+                .iter()
+                .map(|l| Some(l.as_str()))
+                .collect::<Vec<_>>()
+        };
+
+        for lang in language_list {
+            match self.helix.get_streams_by_category(game_id, lang, 100).await {
+                Ok(streams) => {
+                    for s in streams {
+                        let snapshot = to_snapshot(s);
+                        let login = snapshot.user_login.to_lowercase();
+                        if !login.is_empty() {
+                            current.entry(login).or_insert(snapshot);
+                        }
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!("scout: Streams-Fetch fehlgeschlagen (lang={lang:?}): {e}");
+                }
+            }
+        }
+        current
     }
 
     async fn run_once(&mut self) -> ScoutStats {
@@ -254,74 +391,51 @@ impl ScoutTask {
         };
 
         // ── Aktuelle Live-Streams holen ───────────────────────────────────────
-        // Mehrere Sprachen werden als separate Requests behandelt (Helix erlaubt
-        // nur einen language-Parameter pro Request).
-        let mut current_logins: HashMap<String, String> = HashMap::new(); // login → user_id
-
-        let language_list = if self.language_filters.is_empty() {
-            vec![None]
-        } else {
-            self.language_filters.iter().map(|l| Some(l.as_str())).collect::<Vec<_>>()
-        };
-
-        for lang in language_list {
-            match self.helix.get_streams_by_category(&game_id, lang, 100).await {
-                Ok(streams) => {
-                    for s in streams {
-                        let login = s.user_login.to_lowercase();
-                        if !login.is_empty() {
-                            current_logins.insert(login, s.user_id.clone());
-                        }
-                    }
-                }
-                Err(e) => {
-                    tracing::warn!("scout: Streams-Fetch fehlgeschlagen (lang={lang:?}): {e}");
-                }
-            }
-        }
-
-        stats.streams_seen = current_logins.len() as u32;
+        let current_streams = self.fetch_current_streams(&game_id).await;
+        stats.streams_seen = current_streams.len() as u32;
 
         // ── Bestehende monitoring-only Einträge laden ─────────────────────────
-        let existing_monitored: std::collections::HashSet<String> =
-            match self.repo.load_monitored_only_logins().await {
-                Ok(v) => v.into_iter().map(|l| l.to_lowercase()).collect(),
-                Err(e) => {
-                    tracing::error!("scout: DB-Fehler beim Laden der monitoring-only Streamer: {e}");
-                    return stats;
-                }
-            };
+        let existing_monitored: HashSet<String> = match self.repo.load_monitored_only_logins().await
+        {
+            Ok(v) => v.into_iter().map(|l| l.to_lowercase()).collect(),
+            Err(e) => {
+                tracing::error!("scout: DB-Fehler beim Laden der monitoring-only Streamer: {e}");
+                return stats;
+            }
+        };
 
         // ── Phase 1: Neue Streamer hinzufügen ─────────────────────────────────
-        for (login, user_id) in &current_logins {
+        let mut new_logins: Vec<String> = Vec::new();
+        for (login, snapshot) in &current_streams {
             if existing_monitored.contains(login.as_str()) {
                 continue;
             }
-            match self.repo.upsert_monitored(login, user_id).await {
+            match self.repo.upsert_monitored(login, &snapshot.user_id).await {
                 Ok(true) => {
                     tracing::debug!("scout: Neuer Monitoring-Streamer: {login}");
                     stats.new_streamers += 1;
+                    new_logins.push(login.clone());
                 }
                 Ok(false) => {} // bereits vorhanden (als Partner oder monitoring)
                 Err(e) => tracing::warn!("scout: DB-Fehler bei upsert für {login}: {e}"),
             }
         }
 
-        // ── Phase 2: Absent-Cycle-Tracking + Remove ───────────────────────────
-        let mut stale_keys: Vec<String> = Vec::new();
+        // ── Phase 1b: Sessions neuer Kanäle primen (vor dem Chat-Join) ────────
+        stats.primed_sessions = self.prime_sessions(&new_logins, &current_streams).await;
 
+        // ── Phase 2: Absent-Cycle-Tracking + Remove ───────────────────────────
+        let mut to_remove: Vec<String> = Vec::new();
         for login in &existing_monitored {
-            if current_logins.contains_key(login.as_str()) {
+            if current_streams.contains_key(login.as_str()) {
                 // Noch live → Zähler zurücksetzen
                 self.absent_cycles.remove(login);
                 continue;
             }
-
             let cycles = self.absent_cycles.entry(login.clone()).or_insert(0);
             *cycles += 1;
-
             if *cycles >= ABSENT_CYCLES_BEFORE_REMOVE {
-                stale_keys.push(login.clone());
+                to_remove.push(login.clone());
             }
         }
 
@@ -329,25 +443,146 @@ impl ScoutTask {
         self.absent_cycles
             .retain(|login, _| existing_monitored.contains(login.as_str()));
 
-        for login in stale_keys {
-            self.absent_cycles.remove(&login);
-            self.repo.close_open_sessions(&login).await;
-            self.repo.delete_live_state(&login).await;
+        for login in &to_remove {
+            self.absent_cycles.remove(login);
+            self.repo.close_open_sessions(login).await;
+            self.repo.delete_live_state(login).await;
 
-            match self.repo.delete_monitored_streamer(&login).await {
+            match self.repo.delete_monitored_streamer(login).await {
                 Ok(true) => {
                     tracing::info!("scout: Monitoring-Streamer entfernt: {login}");
                     stats.removed_streamers += 1;
                 }
                 Ok(false) => {
                     // Safety-Guard hat gegriffen: Login ist Partner → nicht löschen
-                    tracing::debug!("scout: Delete für {login} abgelehnt (kein is_monitored_only=1)");
+                    tracing::debug!(
+                        "scout: Delete für {login} abgelehnt (kein is_monitored_only=1)"
+                    );
                 }
                 Err(e) => tracing::warn!("scout: Delete für {login} fehlgeschlagen: {e}"),
             }
         }
 
+        // ── Phase 3: Chat-Bot synchronisieren ─────────────────────────────────
+        let new_set: HashSet<&str> = new_logins.iter().map(String::as_str).collect();
+        let remove_set: HashSet<&str> = to_remove.iter().map(String::as_str).collect();
+        let healed = self
+            .sync_chat(
+                &current_streams,
+                &existing_monitored,
+                &new_logins,
+                &to_remove,
+                &new_set,
+                &remove_set,
+            )
+            .await;
+        stats.healed_streamers = healed;
+
         stats
+    }
+
+    /// Erstellt Stream-Sessions für frisch entdeckte Kanäle, bevor der Chat-Bot
+    /// joint (Python `_prime_monitored_only_sessions`). Liefert die Anzahl
+    /// geprimter Sessions. Ohne Session-Tracker no-op.
+    async fn prime_sessions(
+        &self,
+        new_logins: &[String],
+        current_streams: &HashMap<String, StreamSnapshot>,
+    ) -> u32 {
+        let Some(tracker) = self.session_tracker.as_ref() else {
+            return 0;
+        };
+        if new_logins.is_empty() {
+            return 0;
+        }
+        let now = Utc::now();
+        let mut primed = 0;
+        for login in new_logins {
+            let Some(stream) = current_streams.get(login.as_str()) else {
+                continue;
+            };
+            let twitch_user_id = Some(stream.user_id.trim()).filter(|v| !v.is_empty());
+            if tracker
+                .ensure_session(login, stream, None, twitch_user_id, now)
+                .await
+                .is_some()
+            {
+                primed += 1;
+            }
+        }
+        if primed > 0 {
+            tracing::debug!("scout: {primed}/{} neue Sessions geprimt", new_logins.len());
+        }
+        primed
+    }
+
+    /// Bestimmt die Heal-Ziele (monitored-only Kanäle, die noch live sind und
+    /// runtime-fehlen) — Port der „Sync Chat Bot"-Heal-Schleife (Z. 1109–1144).
+    /// Monitoring-only-Kanäle sind via [`should_attempt_runtime_heal`] keine
+    /// Heal-Ziele, außer der Chat-Sink markiert sie als nicht-monitoring-only.
+    fn heal_targets(
+        &self,
+        current_streams: &HashMap<String, StreamSnapshot>,
+        existing_monitored: &HashSet<String>,
+        new_set: &HashSet<&str>,
+        remove_set: &HashSet<&str>,
+    ) -> Vec<String> {
+        let mut heal: Vec<String> = existing_monitored
+            .iter()
+            .filter(|login| current_streams.contains_key(login.as_str()))
+            .filter(|login| {
+                !new_set.contains(login.as_str()) && !remove_set.contains(login.as_str())
+            })
+            .filter(|login| {
+                let is_monitored_only = self.chat.is_monitored_only(login);
+                let is_ready = self.chat.is_subscription_ready(login);
+                should_attempt_runtime_heal(is_monitored_only, is_ready)
+            })
+            .cloned()
+            .collect();
+        heal.sort_unstable();
+        heal
+    }
+
+    /// Treibt set_monitored_channels → join_channels (neu + heal) → part_channels
+    /// (entfernt) über den Chat-Sink. Liefert die Anzahl Heal-Ziele.
+    async fn sync_chat(
+        &self,
+        current_streams: &HashMap<String, StreamSnapshot>,
+        existing_monitored: &HashSet<String>,
+        new_logins: &[String],
+        to_remove: &[String],
+        new_set: &HashSet<&str>,
+        remove_set: &HashSet<&str>,
+    ) -> u32 {
+        let heal = self.heal_targets(current_streams, existing_monitored, new_set, remove_set);
+
+        // Join-Ziele = neue ∪ heal (dedupliziert, Reihenfolge: neu zuerst).
+        let mut join_targets: Vec<String> = Vec::new();
+        let mut seen: HashSet<&str> = HashSet::new();
+        for login in new_logins.iter().chain(heal.iter()) {
+            if !login.is_empty() && seen.insert(login.as_str()) {
+                join_targets.push(login.clone());
+            }
+        }
+
+        if !join_targets.is_empty() {
+            self.chat.set_monitored_channels(&join_targets).await;
+            self.chat.join_channels(&join_targets).await;
+            tracing::info!(
+                "scout: {} Kanäle gejoint ({} neu, {} geheilt)",
+                join_targets.len(),
+                new_logins.len(),
+                heal.len(),
+            );
+        }
+
+        if !to_remove.is_empty() {
+            self.chat.part_channels(to_remove).await;
+            tracing::info!("scout: {} Kanäle gepartet", to_remove.len());
+        }
+
+        heal.len() as u32
     }
 }
 
@@ -364,4 +599,187 @@ pub fn build_scout_task(
 ) -> ScoutTask {
     let repo = ScoutRepository::new(pool);
     ScoutTask::new(repo, helix, game_name, language_filters)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Mutex;
+
+    use sqlx::postgres::PgPoolOptions;
+    use tb_transport_twitch::HelixConfig;
+
+    use super::*;
+
+    /// Chat-Sink, der join/part/set aufzeichnet und Heal-Prüfungen steuert.
+    #[derive(Default)]
+    struct RecordingChatSink {
+        set: Mutex<Vec<Vec<String>>>,
+        joined: Mutex<Vec<Vec<String>>>,
+        parted: Mutex<Vec<Vec<String>>>,
+        /// Logins, die NICHT monitoring-only sind (also Heal-fähig).
+        not_monitored_only: HashSet<String>,
+        /// Logins, deren Subscription NICHT runtime-bereit ist (Heal nötig).
+        not_ready: HashSet<String>,
+    }
+
+    #[async_trait::async_trait]
+    impl ScoutChatSink for RecordingChatSink {
+        async fn set_monitored_channels(&self, logins: &[String]) {
+            self.set.lock().unwrap().push(logins.to_vec());
+        }
+        async fn join_channels(&self, logins: &[String]) {
+            self.joined.lock().unwrap().push(logins.to_vec());
+        }
+        async fn part_channels(&self, logins: &[String]) {
+            self.parted.lock().unwrap().push(logins.to_vec());
+        }
+        fn is_monitored_only(&self, login: &str) -> bool {
+            !self.not_monitored_only.contains(login)
+        }
+        fn is_subscription_ready(&self, login: &str) -> bool {
+            !self.not_ready.contains(login)
+        }
+    }
+
+    fn task_with_chat(chat: Arc<dyn ScoutChatSink>) -> ScoutTask {
+        // Lazy-Pool: wird nie verbunden, da sync_chat/heal_targets keine DB nutzen.
+        let pool = PgPoolOptions::new()
+            .connect_lazy("postgres://invalid:invalid@127.0.0.1:1/none")
+            .expect("lazy pool");
+        let helix =
+            Arc::new(HelixClient::new(HelixConfig::new("id", "secret")).expect("helix client"));
+        ScoutTask::new(ScoutRepository::new(pool), helix, "Deadlock", vec![]).with_chat_sink(chat)
+    }
+
+    fn snap(login: &str) -> StreamSnapshot {
+        StreamSnapshot {
+            user_login: login.to_string(),
+            user_id: "1".to_string(),
+            ..Default::default()
+        }
+    }
+
+    #[tokio::test]
+    async fn sync_chat_joint_neue_und_partet_entfernte() {
+        let chat = Arc::new(RecordingChatSink::default());
+        let task = task_with_chat(chat.clone());
+
+        let mut current = HashMap::new();
+        current.insert("neu".to_string(), snap("neu"));
+        current.insert("bleibt".to_string(), snap("bleibt"));
+        let existing: HashSet<String> = ["bleibt".to_string()].into_iter().collect();
+        let new_logins = vec!["neu".to_string()];
+        let to_remove = vec!["weg".to_string()];
+        let new_set: HashSet<&str> = ["neu"].into_iter().collect();
+        let remove_set: HashSet<&str> = ["weg"].into_iter().collect();
+
+        let healed = task
+            .sync_chat(
+                &current,
+                &existing,
+                &new_logins,
+                &to_remove,
+                &new_set,
+                &remove_set,
+            )
+            .await;
+
+        assert_eq!(healed, 0, "monitoring-only Kanäle werden nicht geheilt");
+        // set_monitored_channels läuft vor join, beide mit den neuen Logins.
+        assert_eq!(*chat.set.lock().unwrap(), vec![vec!["neu".to_string()]]);
+        assert_eq!(*chat.joined.lock().unwrap(), vec![vec!["neu".to_string()]]);
+        // entfernte Kanäle werden gepartet.
+        assert_eq!(*chat.parted.lock().unwrap(), vec![vec!["weg".to_string()]]);
+    }
+
+    #[tokio::test]
+    async fn sync_chat_heilt_nicht_monitored_only_kanal() {
+        let chat = Arc::new(RecordingChatSink {
+            // "partner" ist nicht monitoring-only und runtime nicht bereit → Heal.
+            not_monitored_only: ["partner".to_string()].into_iter().collect(),
+            not_ready: ["partner".to_string()].into_iter().collect(),
+            ..Default::default()
+        });
+        let task = task_with_chat(chat.clone());
+
+        let mut current = HashMap::new();
+        current.insert("partner".to_string(), snap("partner"));
+        let existing: HashSet<String> = ["partner".to_string()].into_iter().collect();
+
+        let healed = task
+            .sync_chat(
+                &current,
+                &existing,
+                &[],
+                &[],
+                &HashSet::new(),
+                &HashSet::new(),
+            )
+            .await;
+
+        assert_eq!(healed, 1);
+        // Heal-Ziel wird (re)gejoint.
+        assert_eq!(
+            *chat.joined.lock().unwrap(),
+            vec![vec!["partner".to_string()]]
+        );
+    }
+
+    #[tokio::test]
+    async fn sync_chat_noop_ohne_aenderungen() {
+        let chat = Arc::new(RecordingChatSink::default());
+        let task = task_with_chat(chat.clone());
+        let current: HashMap<String, StreamSnapshot> = HashMap::new();
+        let existing: HashSet<String> = HashSet::new();
+
+        let healed = task
+            .sync_chat(
+                &current,
+                &existing,
+                &[],
+                &[],
+                &HashSet::new(),
+                &HashSet::new(),
+            )
+            .await;
+
+        assert_eq!(healed, 0);
+        assert!(chat.set.lock().unwrap().is_empty());
+        assert!(chat.joined.lock().unwrap().is_empty());
+        assert!(chat.parted.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn heal_policy_skips_monitored_only() {
+        // Monitoring-only Kanäle sind nie Heal-Ziele (lurker_policy.py).
+        assert!(!should_attempt_runtime_heal(true, false));
+        assert!(!should_attempt_runtime_heal(true, true));
+        // Nicht-monitoring-only: heal nur wenn nicht runtime-bereit.
+        assert!(should_attempt_runtime_heal(false, false));
+        assert!(!should_attempt_runtime_heal(false, true));
+    }
+
+    #[test]
+    fn to_snapshot_maps_helix_fields() {
+        let helix = HelixStream {
+            id: "stream1".into(),
+            user_id: "42".into(),
+            user_login: "Dragon".into(),
+            user_name: "Dragon".into(),
+            game_name: "Deadlock".into(),
+            title: "Ranked".into(),
+            language: "de".into(),
+            viewer_count: 1234,
+            is_mature: true,
+            tags: Some(vec!["de".into()]),
+            started_at: "2026-06-16T10:00:00Z".into(),
+            ..Default::default()
+        };
+        let snap = to_snapshot(helix);
+        assert_eq!(snap.id.as_deref(), Some("stream1"));
+        assert_eq!(snap.user_id, "42");
+        assert_eq!(snap.viewer_count, 1234);
+        assert_eq!(snap.started_at.as_deref(), Some("2026-06-16T10:00:00Z"));
+        assert!(snap.is_mature);
+    }
 }

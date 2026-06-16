@@ -284,6 +284,10 @@ impl PollEngine {
                 category_streams,
             })
             .await;
+
+        // EventSub-Capacity-Zeitreihe (B5-08): taktgebend jeden Tick; die
+        // Sample-/Retention-Drosselung sitzt im Hook-Adapter.
+        self.hooks.on_capacity_tick().await;
     }
 
     /// Kern der Transitions (Python `_process_postings`): pro getracktem Kanal
