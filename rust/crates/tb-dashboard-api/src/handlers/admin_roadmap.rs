@@ -26,10 +26,17 @@ fn default_roadmap_body() -> String {
 }
 
 /// Pfad zur Roadmap-Datei (relativ zum Prozess-cwd = Repo-Root, wie Python).
-fn roadmap_path() -> PathBuf {
+pub(crate) fn roadmap_path() -> PathBuf {
     std::env::current_dir()
         .unwrap_or_else(|_| PathBuf::from("."))
         .join(ROADMAP_REL_PATH)
+}
+
+/// Liefert den aktuell gespeicherten Roadmap-Body (oder den Default), für die
+/// öffentliche Anzeige-Seite (B1-ROADMAP-PAGE). Port von Pythons
+/// `build_roadmap_body` (`pages.py`: `load_roadmap_document().get("body")`).
+pub(crate) async fn load_roadmap_body() -> String {
+    load_roadmap_document_at(&roadmap_path()).await.body
 }
 
 /// Geladenes/gespeichertes Roadmap-Dokument.

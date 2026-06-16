@@ -133,14 +133,104 @@ pub fn unauthorized_v2_response() -> Response {
 }
 
 /// 403-Body wie Python `_require_extended_plan` (api_v2.py:656-664).
+///
+/// B16-VERIFY-V2AUTH-SHAPE: Python sendet im 403-Body NICHT nur `error` +
+/// `required_entitlements`, sondern zusätzlich `required_plans` — die sortierte
+/// Liste aller bekannten Billing-Pläne (`KNOWN_PLAN_IDS`), die das Entitlement
+/// `analytics.extended` tragen. Das Frontend nutzt diese Liste, um dem Nutzer die
+/// buchbaren Upgrade-Pläne anzuzeigen. Die frühere Rust-Antwort ließ das Feld weg
+/// (Shape-Divergenz) — hier korrigiert (Test `plan_required_response_*`).
 pub fn plan_required_response() -> Response {
     (
         StatusCode::FORBIDDEN,
         Json(json!({
             "error": "plan_required",
             "required_entitlements": ["analytics.extended"],
+            "required_plans": extended_required_plans(),
         })),
     )
         .into_response()
+}
+
+/// Bekannte Billing-Pläne (Python `KNOWN_PLAN_IDS`), die das Entitlement
+/// `analytics.extended` tragen — alphabetisch sortiert wie Pythons `sorted(...)`.
+///
+/// Spiegelt `_require_extended_plan`s `required_plans`-Generator
+/// (`sorted(p for p in _KNOWN_BILLING_PLAN_IDS if _plan_has_entitlement(p, …))`).
+/// `tb_analytics::plan::plan_is_extended` ist die kanonische Quelle des
+/// Extended-Flags; die Plan-ID-Liste ist hier festgehalten (der Katalog ist in
+/// `tb-analytics` privat) und gegen Drift testgesichert.
+fn extended_required_plans() -> Vec<&'static str> {
+    const KNOWN_BILLING_PLAN_IDS: [&str; 9] = [
+        "raid_free",
+        "chat_quiet",
+        "raid_boost",
+        "bundle_chat_quiet_raid_boost",
+        "analysis_dashboard",
+        "bundle_analysis_raid_boost",
+        "bundle_werbefrei_analyse",
+        "bundle_komplett",
+        "analytics_trial",
+    ];
+    let mut plans: Vec<&'static str> = KNOWN_BILLING_PLAN_IDS
+        .into_iter()
+        .filter(|id| tb_analytics::plan::plan_is_extended(id))
+        .collect();
+    plans.sort_unstable();
+    plans
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::body::to_bytes;
+
+    /// B16-VERIFY-V2AUTH-SHAPE: 403-Body trägt error + required_entitlements UND
+    /// die sortierte required_plans-Liste (vorher gefehlt → Python-Divergenz).
+    #[tokio::test]
+    async fn plan_required_response_traegt_required_plans() {
+        let resp = plan_required_response();
+        assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+        let bytes = to_bytes(resp.into_body(), 1 << 16).await.unwrap();
+        let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(body["error"], "plan_required");
+        assert_eq!(body["required_entitlements"], json!(["analytics.extended"]));
+        // Exakt die extended-Pläne aus KNOWN_PLAN_IDS, alphabetisch sortiert.
+        assert_eq!(
+            body["required_plans"],
+            json!([
+                "analysis_dashboard",
+                "analytics_trial",
+                "bundle_analysis_raid_boost",
+                "bundle_komplett",
+                "bundle_werbefrei_analyse",
+            ])
+        );
+    }
+
+    /// Drift-Gate: jeder gelistete required_plan ist tatsächlich extended, free
+    /// (raid_free) ist nie dabei.
+    #[test]
+    fn extended_required_plans_sind_alle_extended() {
+        let plans = extended_required_plans();
+        assert!(!plans.is_empty());
+        assert!(!plans.contains(&"raid_free"));
+        assert!(plans.iter().all(|p| tb_analytics::plan::plan_is_extended(p)));
+        // sortiert
+        let mut sorted = plans.clone();
+        sorted.sort_unstable();
+        assert_eq!(plans, sorted);
+    }
+
+    /// 401-Body-Shape (Python `_require_v2_auth`): error-Text + loginUrl.
+    #[tokio::test]
+    async fn unauthorized_response_traegt_loginurl() {
+        let resp = unauthorized_v2_response();
+        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+        let bytes = to_bytes(resp.into_body(), 1 << 16).await.unwrap();
+        let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert!(body["error"].as_str().unwrap().contains("Authentication required"));
+        assert_eq!(body["loginUrl"], "/twitch/auth/login?next=%2Fanalyse");
+    }
 }
 

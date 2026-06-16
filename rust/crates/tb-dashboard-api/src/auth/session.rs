@@ -200,6 +200,17 @@ pub const PARTNER_COOKIE_NAME: &str = "twitch_dash_session";
 /// Cookie-Name der Discord-Admin-Session (Python: state_store.py:18).
 pub const ADMIN_COOKIE_NAME: &str = "master_dash_session";
 
+/// Cookie-Name der durablen Partner-Access-Session (B3-9, Python
+/// `services.py:36` — `{base}_partner`, mit `base = "twitch_dash_session"`).
+/// Wird nach einem Partner-Einmal-Login ausgestellt und überdauert die kurzlebige
+/// `twitch_dash_session`. Trägt eine grobe Request-Fingerprint-Bindung
+/// (User-Agent-Familie + Plattform) gegen Cookie-Diebstahl.
+pub const PARTNER_ACCESS_COOKIE_NAME: &str = "twitch_dash_session_partner";
+
+/// Session-Typ der Partner-Access-Session in `dashboard_sessions`
+/// (Python `session["auth_type"] = "partner_token"`, services.py:603/622).
+pub const PARTNER_ACCESS_SESSION_TYPE: &str = "partner_token";
+
 /// Session-Typ der kurzlebigen OAuth-Login-State-Rows in `dashboard_sessions`
 /// (Python: `state_store.py:12`, `_OAUTH_STATE_TYPE_TWITCH = "oauth_state:twitch"`).
 /// Der CSRF-State des Twitch-OAuth-Login-Flows wird als eigene Row mit diesem Typ
@@ -802,6 +813,116 @@ impl DashboardAuthState {
         Ok(Some(partner))
     }
 
+    /// Lädt die durable **Partner-Access-Session** (B3-9, Cookie
+    /// `twitch_dash_session_partner`, Typ `partner_token`).
+    ///
+    /// Port von `PartnerAccessService.load` (services.py:568-615) +
+    /// `PartnerAccessBinding.matches` (services.py:288-310). Kaskade:
+    /// 1. Session-Row laden + Payload entschlüsseln (Typ `partner_token`),
+    ///    `expires_at` prüfen.
+    /// 2. **Fingerprint-Bindung**: die im Payload gespeicherte User-Agent-Familie/
+    ///    -Plattform muss zum aktuellen Request-User-Agent passen (sonst Row löschen
+    ///    + `None` — schützt vor Cookie-Diebstahl auf fremdem Gerät).
+    /// 3. Partner-Gate (`twitch_partners`, identisch zu `load_partner_session`).
+    /// 4. Sliding-Refresh auf `now + 6h`.
+    ///
+    /// `request_user_agent` ist der rohe `User-Agent`-Header (leer erlaubt — dann
+    /// greift die Bindung nicht, wie in Python, wenn beide Seiten leer sind).
+    pub async fn load_partner_access_session(
+        &self,
+        session_id: &str,
+        request_user_agent: &str,
+    ) -> Result<Option<PartnerSession>, sqlx::Error> {
+        let now = unix_now();
+
+        let Some(mut payload) = self
+            .fetch_session_payload(session_id, PARTNER_ACCESS_SESSION_TYPE, now)
+            .await?
+        else {
+            return Ok(None);
+        };
+
+        if payload_expired(&payload, now) {
+            self.delete_session(session_id).await;
+            return Ok(None);
+        }
+
+        // Fingerprint-Bindung prüfen (Python services.py:591-598).
+        let request_fp = RequestFingerprint::capture(request_user_agent);
+        if !request_fp.matches_payload(&payload) {
+            self.delete_session(session_id).await;
+            return Ok(None);
+        }
+
+        // Sliding-Refresh auf now + 6h (Python services.py:600-614).
+        self.maybe_refresh_session(
+            session_id,
+            PARTNER_ACCESS_SESSION_TYPE,
+            &mut payload,
+            PARTNER_SESSION_TTL_SECS,
+            now,
+        )
+        .await;
+
+        let login = payload
+            .get("twitch_login")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .trim()
+            .to_ascii_lowercase();
+        let user_id = payload
+            .get("twitch_user_id")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .trim()
+            .to_string();
+        let display_name = payload
+            .get("display_name")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .trim()
+            .to_string();
+
+        if login.is_empty() && user_id.is_empty() {
+            return Ok(None);
+        }
+
+        // Partner-Gate (auth_mixin.py:741-780) — identisch zu load_partner_session.
+        let partner_row: Option<(String, String)> = sqlx::query_as(
+            r#"
+            SELECT p.twitch_login, p.twitch_user_id
+            FROM twitch_partners p
+            WHERE LOWER(COALESCE(p.technical_pause_reason, '')) <> 'blocked'
+              AND (
+                  LOWER(p.twitch_login) = LOWER($1)
+                  OR ($2 <> '' AND p.twitch_user_id = $2)
+              )
+            ORDER BY CASE
+                WHEN COALESCE(p.status, '') = 'active' THEN 0
+                WHEN COALESCE(p.status, '') = 'archived' THEN 1
+                WHEN COALESCE(p.status, '') = 'departnered' THEN 2
+                ELSE 3
+            END,
+            COALESCE(p.departnered_at, p.admin_archived_at, p.partnered_at) DESC
+            LIMIT 1
+            "#,
+        )
+        .bind(&login)
+        .bind(&user_id)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        let Some((db_login, db_user_id)) = partner_row else {
+            return Ok(None);
+        };
+
+        Ok(Some(PartnerSession {
+            twitch_login: db_login,
+            twitch_user_id: db_user_id,
+            display_name,
+        }))
+    }
+
     /// `true` wenn der Partner **aktiv** geführt ist — Port von Python
     /// `_resolve_partner_active_status` (auth_mixin.py:782-831): active =
     /// `status='active'` UND `manual_partner_opt_out=0` UND
@@ -1013,6 +1134,119 @@ fn unix_now() -> u64 {
         .unwrap_or(0)
 }
 
+/// Grobe, robuste Request-Fingerprint-Bindung für Partner-Access-Sessions (B3-9).
+///
+/// Port von `PartnerAccessBinding` (services.py:275-334): leitet aus dem
+/// User-Agent eine *Familie* (erstes Token-Wort, klein, max 32 Zeichen) und eine
+/// *Plattform* (ios/android/windows/macos/linux) ab. Die Bindung ist absichtlich
+/// grob (übersteht Versions-Bumps), bricht aber bei Geräte-/Browser-Wechsel.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct RequestFingerprint {
+    family: String,
+    platform: String,
+}
+
+impl RequestFingerprint {
+    /// Erfasst Familie + Plattform aus dem rohen `User-Agent`-Header.
+    pub(crate) fn capture(user_agent: &str) -> Self {
+        let ua: String = user_agent.trim().chars().take(256).collect();
+        Self {
+            family: Self::family(&ua),
+            platform: Self::platform(&ua),
+        }
+    }
+
+    /// Erstes `[A-Za-z][A-Za-z0-9_-]{1,31}`-Token, kleingeschrieben (services.py:312-317).
+    fn family(user_agent: &str) -> String {
+        if user_agent.is_empty() {
+            return String::new();
+        }
+        // Iterativer Scan statt Regex-Compile pro Call.
+        let bytes = user_agent.as_bytes();
+        let mut i = 0;
+        while i < bytes.len() {
+            let c = bytes[i];
+            if c.is_ascii_alphabetic() {
+                let start = i;
+                i += 1;
+                while i < bytes.len() {
+                    let d = bytes[i];
+                    if d.is_ascii_alphanumeric() || d == b'_' || d == b'-' {
+                        i += 1;
+                    } else {
+                        break;
+                    }
+                }
+                // Mindestlänge 2 (Regex verlangt {1,31} nach dem ersten Zeichen).
+                if i - start >= 2 {
+                    return user_agent[start..i.min(start + 32)].to_ascii_lowercase();
+                }
+                // Sonst weitersuchen.
+            } else {
+                i += 1;
+            }
+        }
+        String::new()
+    }
+
+    /// Plattform-Klassifikation (services.py:319-334).
+    fn platform(user_agent: &str) -> String {
+        let c = user_agent.to_ascii_lowercase();
+        if c.is_empty() {
+            return String::new();
+        }
+        if c.contains("iphone") || c.contains("ipad") || c.contains("ios") {
+            "ios"
+        } else if c.contains("android") {
+            "android"
+        } else if c.contains("windows") {
+            "windows"
+        } else if c.contains("mac os") || c.contains("macintosh") {
+            "macos"
+        } else if c.contains("linux") {
+            "linux"
+        } else {
+            ""
+        }
+        .to_string()
+    }
+
+    /// Vergleicht gegen die im Session-Payload gespeicherte Bindung
+    /// (services.py:288-310). Sind beide Seiten je Achse gesetzt, reicht ein
+    /// Match auf einer Achse; ist eine Achse leer, wird nur die andere geprüft;
+    /// sind beide leer, gilt es als Match (fail-open auf fehlender Information,
+    /// 1:1 Python).
+    fn matches_payload(&self, payload: &serde_json::Value) -> bool {
+        let expected_family = payload
+            .get("user_agent_family")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .trim();
+        let expected_platform = payload
+            .get("user_agent_platform")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .trim();
+
+        let family_both = !expected_family.is_empty() && !self.family.is_empty();
+        let platform_both = !expected_platform.is_empty() && !self.platform.is_empty();
+        let family_ok = family_both
+            && tb_crypto::constant_time_eq(expected_family.as_bytes(), self.family.as_bytes());
+        let platform_ok = platform_both
+            && tb_crypto::constant_time_eq(expected_platform.as_bytes(), self.platform.as_bytes());
+
+        if family_both && platform_both {
+            family_ok || platform_ok
+        } else if family_both {
+            family_ok
+        } else if platform_both {
+            platform_ok
+        } else {
+            true
+        }
+    }
+}
+
 /// Fernet erwartet base64-urlsafe-String als Eingabe — wir haben BYTEA.
 /// Der BYTEA-Inhalt *ist* schon der rohe Fernet-Token (inklusive base64-Encoding),
 /// wie von Python `_encrypt` erzeugt: `fernet.encrypt()` gibt base64-Bytes zurück,
@@ -1043,6 +1277,53 @@ mod tests {
         // Nach 2020-01-01 (1577836800) und vor 2100-01-01 (4102444800)
         assert!(now > 1_577_836_800);
         assert!(now < 4_102_444_800);
+    }
+
+    // ── B3-9: Partner-Access-Fingerprint ───────────────────────────────────
+    use serde_json::json as sjson;
+
+    #[test]
+    fn fingerprint_family_und_plattform_erkannt() {
+        let fp = RequestFingerprint::capture(
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+        );
+        // Erstes Wort-Token mit >=2 Zeichen = "mozilla".
+        assert_eq!(fp.family, "mozilla");
+        assert_eq!(fp.platform, "windows");
+
+        let ios = RequestFingerprint::capture("Mozilla/5.0 (iPhone; CPU iPhone OS 17_0)");
+        assert_eq!(ios.platform, "ios");
+        let android = RequestFingerprint::capture("Mozilla/5.0 (Linux; Android 14; Pixel)");
+        // android-Check vor linux → android gewinnt.
+        assert_eq!(android.platform, "android");
+        let leer = RequestFingerprint::capture("");
+        assert_eq!(leer.family, "");
+        assert_eq!(leer.platform, "");
+    }
+
+    #[test]
+    fn fingerprint_matches_payload_regeln() {
+        // Beide Achsen gesetzt → ein Treffer reicht.
+        let fp = RequestFingerprint {
+            family: "mozilla".into(),
+            platform: "windows".into(),
+        };
+        // Familie passt, Plattform nicht → ok (OR).
+        assert!(fp.matches_payload(&sjson!({
+            "user_agent_family": "mozilla", "user_agent_platform": "linux"
+        })));
+        // Beide passen nicht → false.
+        assert!(!fp.matches_payload(&sjson!({
+            "user_agent_family": "safari", "user_agent_platform": "linux"
+        })));
+        // Nur Familie im Payload gesetzt → nur Familie zählt.
+        assert!(fp.matches_payload(&sjson!({ "user_agent_family": "mozilla" })));
+        assert!(!fp.matches_payload(&sjson!({ "user_agent_family": "safari" })));
+        // Payload ohne Bindung → fail-open (true), wie Python.
+        assert!(fp.matches_payload(&sjson!({})));
+        // Request ohne UA, Payload mit Bindung → keine beidseitige Achse → true.
+        let empty = RequestFingerprint::default();
+        assert!(empty.matches_payload(&sjson!({ "user_agent_family": "mozilla" })));
     }
 
     #[test]

@@ -74,7 +74,7 @@ pub fn build_public_router(pool: PgPool) -> Router {
 /// Auth-Level wird per Extension eingesetzt — `AuthLevel` als `FromRequestParts`
 /// liest den Token selbst aus der Extension.
 pub fn build_authed_router(pool: PgPool, token: String) -> Router {
-    use handlers::{ads_schedule, ai_analysis, ai_chat, ai_history, audience, audience_demographics, auth_status, billing, category_activity, category_comparison, category_leaderboard, category_timings, chat_analytics, chat_content_analysis, chat_deep_minimax, chat_hype_timeline, chat_social_graph, coaching, engagement_settings, exp_analytics, follower_funnel, internal_home, loyalty_curve, lurker_analysis, lurker_tax_settings, monetization, overview, performance, raid_analytics, rankings, retention_curve, session_detail, silent_settings, social_media, spa, stream_report, streamers, tag_analysis, title_performance, viewer_timeline, viewers, watch_time};
+    use handlers::{ads_schedule, ai_analysis, ai_chat, ai_history, audience, audience_demographics, auth_status, billing, category_activity, category_comparison, category_leaderboard, category_timings, chat_analytics, chat_content_analysis, chat_deep_minimax, chat_hype_timeline, chat_social_graph, coaching, engagement_settings, exp_analytics, follower_funnel, internal_home, leaderboard, loyalty_curve, lurker_analysis, lurker_tax_settings, monetization, overview, performance, raid_analytics, rankings, retention_curve, session_detail, silent_settings, social_media, spa, stream_report, streamers, tag_analysis, title_performance, viewer_timeline, viewers, watch_time};
 
     Router::new()
         .route(
@@ -241,6 +241,11 @@ pub fn build_authed_router(pool: PgPool, token: String) -> Router {
         .route(
             "/twitch/api/v2/rankings",
             get(rankings::rankings_handler),
+        )
+        // B13-2: Web-Leaderboard (Ersatz für den gedroppten Discord-!twl).
+        .route(
+            "/twitch/api/v2/leaderboard",
+            get(leaderboard::leaderboard_handler),
         )
         .route(
             "/twitch/api/v2/follower-funnel",
@@ -600,6 +605,36 @@ pub fn build_partner_login_router(pool: PgPool) -> Router {
         .with_state(pool)
 }
 
+/// Baut den Router für die Admin-Legacy-Form-POST-Writes (B2-P1).
+///
+/// Diese Routen werden vom Legacy-Admin-Client (`submitLegacyAction`,
+/// `admin_dashboard/.../client.ts`) als `application/x-www-form-urlencoded`
+/// aufgerufen — inkl. `csrf_token` IM BODY (nicht im `X-CSRF-Token`-Header). Sie
+/// dürfen daher NICHT durch die Header-basierte `csrf_protect`-Middleware laufen
+/// (die würde sie immer ablehnen); die Handler validieren den Body-CSRF selbst
+/// gegen die Session (Localhost-Bypass), genau wie Pythons `_read_post_with_csrf`.
+///
+/// - `POST /twitch/admin/manual-plan`       — Plan-Override setzen.
+/// - `POST /twitch/admin/manual-plan/clear` — Plan-Override entfernen.
+///
+/// Antwort: `302` auf `/twitch/admin?ok=…`/`?err=…` (der Client folgt dem
+/// Redirect und liest den Status aus dem Query). `DashboardAuthLevel` +
+/// `DashboardAuthState` kommen als globale Extensions aus der `tb-dashboard`-main.
+pub fn build_admin_legacy_forms_router(pool: PgPool) -> Router {
+    use handlers::admin_manual_plan;
+
+    Router::new()
+        .route(
+            "/twitch/admin/manual-plan",
+            post(admin_manual_plan::save_handler),
+        )
+        .route(
+            "/twitch/admin/manual-plan/clear",
+            post(admin_manual_plan::clear_handler),
+        )
+        .with_state(pool)
+}
+
 /// Baut den Router für die Entry-/Redirect-Routen + die Admin-SPA + den
 /// Forward-Auth-Endpoint (B1-ENTRY / B1-ADMIN-SPA / B1-ADMIN-FORWARD-AUTH).
 ///
@@ -685,6 +720,12 @@ pub fn build_billing_page_router(pool: PgPool) -> Router {
             "/twitch/abbo/kündigen",
             get(billing_page::cancel_handler).post(billing_page::cancel_handler),
         )
+        // B2-P1: Rechnungsempfänger-Profil speichern (Legacy-Form-POST, CSRF im
+        // Body → in-handler validiert, daher KEIN Header-CSRF-Layer hier).
+        .route(
+            "/twitch/abbo/rechnungsdaten",
+            post(handlers::billing_profile::profile_save_handler),
+        )
         .route(
             "/twitch/api/billing/catalog",
             get(billing_page::catalog_handler),
@@ -697,6 +738,11 @@ pub fn build_billing_page_router(pool: PgPool) -> Router {
             "/twitch/api/billing/readiness",
             get(billing_page::readiness_handler),
         )
+        // B2-P1: Stripe Product/Price-Sync (Admin-only JSON-API).
+        .route(
+            "/twitch/api/billing/stripe/sync-products",
+            post(handlers::billing_stripe_sync::sync_products_handler),
+        )
         .with_state(pool)
 }
 
@@ -708,15 +754,18 @@ pub fn build_router(pool: PgPool, token: String) -> Router {
     build_public_router(pool.clone())
         .merge(build_auth_router())
         .merge(build_partner_login_router(pool.clone()))
+        .merge(handlers::discord_link::build_discord_link_router(pool.clone()))
         .merge(handlers::demo::build_demo_router())
         .merge(build_entry_admin_router())
         .merge(build_billing_webhook_router(pool.clone()))
         .merge(build_billing_page_router(pool.clone()))
+        .merge(build_admin_legacy_forms_router(pool.clone()))
         .merge(build_authed_router(pool.clone(), token.clone()))
         .merge(build_admin_system_router(pool.clone(), token.clone()))
         .merge(build_admin_streamers_router(pool.clone(), token.clone()))
         .merge(build_admin_config_router(pool, token))
         .merge(handlers::legal::build_legal_router())
+        .merge(handlers::roadmap_page::build_roadmap_page_router())
 }
 
 #[cfg(test)]
