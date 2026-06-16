@@ -525,8 +525,16 @@ mod tests {
     };
     use sqlx::postgres::PgPoolOptions;
     use std::net::SocketAddr;
+    use std::sync::Mutex;
     use tb_http_core::{internal_auth, loopback_only, ExpectedToken, INTERNAL_API_BASE_PATH};
     use tower::ServiceExt;
+
+    /// Serialisiert alle Tests, die prozessglobale Env-Variablen
+    /// (`TWITCH_NOTIFY_CHANNEL_ID`, `ENV_ALLOWED_*`) per `set_var`/`remove_var`
+    /// anfassen. Ohne diesen Lock racen parallele Tests um dieselbe Var
+    /// (Test A entfernt, Test B setzt gleichzeitig) → nicht-deterministisch.
+    /// Konvention wie in `tb-llm` (`keys.rs`/`ledger.rs`).
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
 
     fn test_dsn() -> Option<String> {
         std::env::var("TB_TEST_DATABASE_URL").ok()
@@ -708,6 +716,7 @@ mod tests {
 
     #[tokio::test]
     async fn live_active_announcements_ohne_channel_id_leer() {
+        let _env_guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
         let dsn = db_dsn_or_skip!();
         let app = make_router(make_pool(&dsn, "test_h_ann_nochid").await, "secret");
         let base = INTERNAL_API_BASE_PATH;
@@ -734,6 +743,7 @@ mod tests {
 
     #[tokio::test]
     async fn live_active_announcements_mit_button_label() {
+        let _env_guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
         let dsn = db_dsn_or_skip!();
         let pool = make_pool(&dsn, "test_h_ann_label").await;
         let app = make_router(pool.clone(), "secret");
@@ -774,6 +784,7 @@ mod tests {
 
     #[tokio::test]
     async fn live_active_announcements_fallback_label_wenn_kein_button() {
+        let _env_guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
         let dsn = db_dsn_or_skip!();
         let pool = make_pool(&dsn, "test_h_ann_fallback").await;
         let app = make_router(pool.clone(), "secret");
@@ -815,6 +826,7 @@ mod tests {
 
     #[tokio::test]
     async fn link_click_valide_daten_200() {
+        let _env_guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
         let dsn = db_dsn_or_skip!();
         let app = make_router(make_pool(&dsn, "test_h_lc_200").await, "secret");
         let base = INTERNAL_API_BASE_PATH;
@@ -907,6 +919,7 @@ mod tests {
 
     #[tokio::test]
     async fn link_click_guild_id_ausserhalb_allowlist_403() {
+        let _env_guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
         let dsn = db_dsn_or_skip!();
         let app = make_router(make_pool(&dsn, "test_h_lc_403").await, "secret");
         let base = INTERNAL_API_BASE_PATH;
@@ -942,6 +955,7 @@ mod tests {
 
     #[tokio::test]
     async fn link_click_ref_code_ist_konstant() {
+        let _env_guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
         let dsn = db_dsn_or_skip!();
         let pool = make_pool(&dsn, "test_h_lc_refcode").await;
         let app = make_router(pool.clone(), "secret");
@@ -986,6 +1000,7 @@ mod tests {
 
     #[tokio::test]
     async fn link_click_idempotenz_replay() {
+        let _env_guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
         let dsn = db_dsn_or_skip!();
         let pool = make_pool(&dsn, "test_h_lc_idem").await;
         let app = make_router(pool.clone(), "secret");

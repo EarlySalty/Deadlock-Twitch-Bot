@@ -1840,6 +1840,13 @@ pub async fn oauth_disconnect_handler(auth: DashboardAuthLevel, State(pool): Sta
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Mutex;
+
+    /// Serialisiert die Tests, die `OLLAMA_HOST` per `set_var` auf einen toten
+    /// Port zeigen (erzwingt deterministischen LLM-Fallback). Ohne den Lock
+    /// schreiben parallele Tests gleichzeitig dieselbe Prozess-Env-Var (Race).
+    /// Konvention wie in `tb-llm` (`keys.rs`/`ledger.rs`).
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
 
     fn partner(login: &str) -> DashboardAuthLevel {
         DashboardAuthLevel::Partner { twitch_login: login.to_string(), twitch_user_id: "1".to_string(), display_name: String::new() }
@@ -2464,6 +2471,7 @@ mod tests {
 
     #[tokio::test]
     async fn enrichment_run_skips_without_transcriber_and_llm() {
+        let _env_guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
         let Some(pool) = make_pool("t_dash_sm_enrich_run").await else { return };
         std::env::set_var("OLLAMA_HOST", "127.0.0.1:59999"); // LLM → Fallback (schnell, deterministisch)
 
@@ -2490,6 +2498,7 @@ mod tests {
 
     #[tokio::test]
     async fn reports_run_kinds() {
+        let _env_guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
         let Some(pool) = make_pool("t_dash_sm_reports_run").await else { return };
         std::env::set_var("OLLAMA_HOST", "127.0.0.1:59999"); // LLM → Fallback (schnell)
 
